@@ -1,0 +1,45 @@
+{
+  "actor_tiers": {
+    "anonymous": "anonymous",
+    "authenticated": "authenticated",
+    "creator": "creator",
+    "verified_creator": "verified_creator",
+    "student": "student",
+    "admin": "admin",
+    "vip_platinum": "vip_platinum",
+    "founder_internal": "founder_internal"
+  },
+  "actor_tier_aliases": {
+    "verified creator": "verified_creator",
+    "verified_creator": "verified_creator",
+    "vip/platinum": "vip_platinum",
+    "vip_platinum": "vip_platinum",
+    "founder/internal": "founder_internal",
+    "founder_internal": "founder_internal",
+    "vip": "vip_platinum",
+    "platinum": "vip_platinum"
+  },
+  "role_keys": [
+    "admin",
+    "creator",
+    "founder",
+    "internal",
+    "student"
+  ],
+  "surface_keys": [
+    "upload",
+    "account",
+    "redeem",
+    "student",
+    "admin",
+    "review",
+    "affiliate",
+    "analysis",
+    "submission"
+  ],
+  "deprecated_literals": [
+    "verified creator",
+    "VIP/Platinum",
+    "founder/internal"
+  ]
+}

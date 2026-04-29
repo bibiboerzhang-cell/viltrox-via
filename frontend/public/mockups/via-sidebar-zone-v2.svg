@@ -1,0 +1,165 @@
+<svg width="720" height="1480" viewBox="0 0 720 1480" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="page" x1="90" y1="40" x2="620" y2="1390" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFDFC"/>
+      <stop offset="1" stop-color="#F8F3EC"/>
+    </linearGradient>
+    <linearGradient id="card" x1="104" y1="82" x2="596" y2="1360" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFCF8"/>
+      <stop offset="1" stop-color="#FFF8F1"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="208" y1="496" x2="492" y2="736" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#162033"/>
+      <stop offset="1" stop-color="#29344D"/>
+    </linearGradient>
+    <linearGradient id="nest" x1="144" y1="544" x2="330" y2="766" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFE3C1"/>
+      <stop offset="1" stop-color="#F2C897"/>
+    </linearGradient>
+    <filter id="shadow" x="60" y="38" width="600" height="1400" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="24"/>
+      <feGaussianBlur stdDeviation="18"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.12549 0 0 0 0 0.113725 0 0 0 0 0.0901961 0 0 0 0.10 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_1_1"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_1_1" result="shape"/>
+    </filter>
+  </defs>
+
+  <rect width="720" height="1480" fill="url(#page)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="96" y="70" width="528" height="1320" rx="42" fill="url(#card)"/>
+  </g>
+
+  <text x="138" y="160" fill="#162033" font-family="Inter, Arial, sans-serif" font-size="42" font-weight="800">
+    Via 工作区
+  </text>
+  <rect x="512" y="122" width="74" height="34" rx="17" fill="#FFF0E0"/>
+  <text x="549" y="145" text-anchor="middle" fill="#FE7B1F" font-family="Inter, Arial, sans-serif" font-size="16" font-weight="800">
+    实时
+  </text>
+  <text x="138" y="208" fill="#7B869C" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="600">
+    上传、进度、聊天，都在这里。
+  </text>
+
+  <g>
+    <rect x="138" y="250" width="120" height="96" rx="28" fill="#121826"/>
+    <text x="198" y="309" text-anchor="middle" fill="#FFFFFF" font-family="Inter, Arial, sans-serif" font-size="34" font-weight="800">
+      0%
+    </text>
+    <text x="292" y="302" fill="#162033" font-family="Inter, Arial, sans-serif" font-size="46" font-weight="800">
+      等待提交
+    </text>
+    <text x="292" y="338" fill="#7B869C" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="600">
+      猫还在窝里待命，等你丢视频或链接进来。
+    </text>
+  </g>
+
+  <rect x="138" y="382" width="444" height="12" rx="6" fill="#ECE7DF"/>
+  <rect x="138" y="382" width="62" height="12" rx="6" fill="#FE7B1F"/>
+
+  <g>
+    <rect x="138" y="430" width="76" height="92" rx="26" fill="#FFF1E4" stroke="#F6CFA7" stroke-width="2"/>
+    <circle cx="176" cy="461" r="20" fill="#EFE8E0"/>
+    <text x="176" y="469" text-anchor="middle" fill="#162033" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="800">1</text>
+    <text x="176" y="503" text-anchor="middle" fill="#5E6678" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="700">提交</text>
+  </g>
+  <g>
+    <rect x="226" y="430" width="76" height="92" rx="26" fill="#FFFFFF" stroke="#E8E2D9" stroke-width="2"/>
+    <circle cx="264" cy="461" r="20" fill="#F1F2F4"/>
+    <text x="264" y="469" text-anchor="middle" fill="#162033" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="800">2</text>
+    <text x="264" y="503" text-anchor="middle" fill="#5E6678" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="700">排队</text>
+  </g>
+  <g>
+    <rect x="314" y="430" width="76" height="92" rx="26" fill="#FFFFFF" stroke="#E8E2D9" stroke-width="2"/>
+    <circle cx="352" cy="461" r="20" fill="#F1F2F4"/>
+    <text x="352" y="469" text-anchor="middle" fill="#162033" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="800">3</text>
+    <text x="352" y="503" text-anchor="middle" fill="#5E6678" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="700">分析</text>
+  </g>
+  <g>
+    <rect x="402" y="430" width="76" height="92" rx="26" fill="#FFFFFF" stroke="#E8E2D9" stroke-width="2"/>
+    <circle cx="440" cy="461" r="20" fill="#F1F2F4"/>
+    <text x="440" y="469" text-anchor="middle" fill="#162033" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="800">4</text>
+    <text x="440" y="503" text-anchor="middle" fill="#5E6678" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="700">审核</text>
+  </g>
+  <g>
+    <rect x="490" y="430" width="76" height="92" rx="26" fill="#FFFFFF" stroke="#E8E2D9" stroke-width="2"/>
+    <circle cx="528" cy="461" r="20" fill="#F1F2F4"/>
+    <text x="528" y="469" text-anchor="middle" fill="#162033" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="800">5</text>
+    <text x="528" y="503" text-anchor="middle" fill="#5E6678" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="700">积分</text>
+  </g>
+
+  <g>
+    <rect x="138" y="566" width="444" height="420" rx="34" fill="#FFF8F1" stroke="#F7D9BE" stroke-width="2"/>
+    <text x="172" y="620" fill="#FE7B1F" font-family="Inter, Arial, sans-serif" font-size="16" font-weight="800" letter-spacing="0.14em">
+      VIA 工作通道
+    </text>
+
+    <rect x="172" y="648" width="376" height="236" rx="30" fill="url(#screen)"/>
+    <text x="202" y="690" fill="#B6C4DE" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="800" letter-spacing="0.16em">
+      PAGE PATROL
+    </text>
+    <text x="202" y="748" fill="#FFFFFF" font-family="Inter, Arial, sans-serif" font-size="48" font-weight="800">
+      等待提交
+    </text>
+    <text x="202" y="788" fill="#B5C2D8" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="600">
+      拖视频进来，或者贴一条公开链接。
+    </text>
+
+    <rect x="370" y="760" width="148" height="104" rx="24" fill="#FFF9F1"/>
+    <text x="444" y="802" text-anchor="middle" fill="#FE7B1F" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="800" letter-spacing="0.12em">
+      PAGE PATROL
+    </text>
+    <text x="444" y="846" text-anchor="middle" fill="#162033" font-family="Inter, Arial, sans-serif" font-size="46" font-weight="800">
+      0%
+    </text>
+
+    <rect x="192" y="856" width="306" height="16" rx="8" fill="#D6DEE8"/>
+    <rect x="192" y="856" width="90" height="16" rx="8" fill="#E9B278"/>
+
+    <rect x="198" y="790" width="110" height="72" rx="34" fill="url(#nest)"/>
+    <ellipse cx="248" cy="840" rx="44" ry="28" fill="#2F3239"/>
+    <ellipse cx="248" cy="820" rx="36" ry="30" fill="#2F3239"/>
+    <ellipse cx="248" cy="828" rx="28" ry="22" fill="#FCFCFD"/>
+    <circle cx="236" cy="814" r="5" fill="#111827"/>
+    <circle cx="260" cy="814" r="5" fill="#111827"/>
+    <path d="M242 826C246 823 250 823 254 826" stroke="#EA9184" stroke-width="3" stroke-linecap="round"/>
+    <path d="M238 833C243 838 253 838 258 833" stroke="#111827" stroke-width="2.5" stroke-linecap="round"/>
+    <path d="M225 795L234 778L244 798" fill="#2F3239"/>
+    <path d="M271 795L262 778L252 798" fill="#2F3239"/>
+    <text x="356" y="936" text-anchor="middle" fill="#A7B4C8" font-family="Inter, Arial, sans-serif" font-size="16" font-weight="800" letter-spacing="0.14em">
+      猫在窝里盯着进度
+    </text>
+  </g>
+
+  <g>
+    <rect x="138" y="1024" width="444" height="260" rx="34" fill="#FFFFFF" stroke="#EDE3D7" stroke-width="2"/>
+    <text x="172" y="1078" fill="#162033" font-family="Inter, Arial, sans-serif" font-size="34" font-weight="800">
+      直接问 Via
+    </text>
+    <text x="172" y="1116" fill="#FE7B1F" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="800" letter-spacing="0.16em">
+      上传 / 链接 / 排队状态 都在这里说
+    </text>
+
+    <rect x="172" y="1150" width="376" height="72" rx="24" fill="#F8FAFD" stroke="#DFE6EF" stroke-width="2"/>
+    <text x="200" y="1195" fill="#9AA6B9" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="600">
+      问 Via 上传、VIP、镜头搭配
+    </text>
+
+    <rect x="476" y="1159" width="58" height="54" rx="27" fill="#111827"/>
+    <text x="505" y="1193" text-anchor="middle" fill="#FFFFFF" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="800">
+      发送
+    </text>
+
+    <rect x="172" y="1240" width="180" height="38" rx="19" fill="#FFF3E7"/>
+    <text x="262" y="1265" text-anchor="middle" fill="#6B7280" font-family="Inter, Arial, sans-serif" font-size="17" font-weight="700">
+      Tell me about EPIC
+    </text>
+    <rect x="364" y="1240" width="170" height="38" rx="19" fill="#FFF3E7"/>
+    <text x="449" y="1265" text-anchor="middle" fill="#6B7280" font-family="Inter, Arial, sans-serif" font-size="17" font-weight="700">
+      Build a look
+    </text>
+  </g>
+</svg>

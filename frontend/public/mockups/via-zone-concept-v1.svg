@@ -1,0 +1,136 @@
+<svg width="1600" height="1100" viewBox="0 0 1600 1100" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="180" y1="80" x2="1410" y2="980" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFDF9"/>
+      <stop offset="1" stop-color="#F6F2EB"/>
+    </linearGradient>
+    <linearGradient id="card" x1="220" y1="150" x2="1300" y2="920" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF9F1"/>
+      <stop offset="1" stop-color="#FFFDFB"/>
+    </linearGradient>
+    <linearGradient id="nest" x1="400" y1="510" x2="760" y2="780" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFE7C8"/>
+      <stop offset="1" stop-color="#F7D2A8"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="780" y1="360" x2="1080" y2="620" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#182136"/>
+      <stop offset="1" stop-color="#29344D"/>
+    </linearGradient>
+    <filter id="shadow" x="120" y="70" width="1360" height="960" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="26"/>
+      <feGaussianBlur stdDeviation="30"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.12549 0 0 0 0 0.113725 0 0 0 0 0.0901961 0 0 0 0.12 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_1_1"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_1_1" result="shape"/>
+    </filter>
+    <filter id="soft" x="270" y="250" width="760" height="620" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="BackgroundImageFix" result="shape"/>
+      <feGaussianBlur stdDeviation="18" result="effect1_foregroundBlur_1_1"/>
+    </filter>
+  </defs>
+
+  <rect width="1600" height="1100" fill="url(#bg)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="180" y="120" width="1240" height="860" rx="52" fill="url(#card)"/>
+  </g>
+
+  <text x="260" y="230" fill="#FE7B1F" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="800" letter-spacing="0.18em">
+    VIA WORKSPACE
+  </text>
+  <text x="260" y="315" fill="#162033" font-family="Inter, Arial, sans-serif" font-size="70" font-weight="800">
+    Via 在这里处理一切
+  </text>
+  <text x="260" y="374" fill="#667188" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="500">
+    上传视频、粘贴链接、看排队状态、直接聊天，全都收在一个安静的小区域里。
+  </text>
+
+  <g>
+    <rect x="260" y="430" width="330" height="76" rx="38" fill="#FFFFFF"/>
+    <rect x="268" y="438" width="158" height="60" rx="30" fill="#111827"/>
+    <text x="347" y="477" text-anchor="middle" fill="#FFFFFF" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="800">
+      上传视频
+    </text>
+    <text x="504" y="477" text-anchor="middle" fill="#6A7284" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="700">
+      粘贴链接
+    </text>
+  </g>
+
+  <g>
+    <rect x="260" y="545" width="1090" height="340" rx="42" fill="#FFFDFC" stroke="#F5D6BA" stroke-width="3"/>
+    <g>
+      <rect x="305" y="615" width="360" height="225" rx="36" fill="url(#nest)"/>
+      <ellipse cx="485" cy="794" rx="140" ry="26" fill="#E2B98A"/>
+      <rect x="512" y="672" width="122" height="88" rx="22" fill="#1A2237"/>
+      <rect x="522" y="682" width="102" height="62" rx="16" fill="#D6E6FF"/>
+      <rect x="548" y="751" width="62" height="9" rx="4.5" fill="#1A2237"/>
+      <rect x="536" y="760" width="86" height="10" rx="5" fill="#B98A5A"/>
+      <ellipse cx="430" cy="742" rx="92" ry="58" fill="#2E3138"/>
+      <ellipse cx="430" cy="706" rx="74" ry="64" fill="#2E3138"/>
+      <ellipse cx="430" cy="724" rx="58" ry="48" fill="#FCFCFD"/>
+      <ellipse cx="408" cy="699" rx="10" ry="12" fill="#FFFFFF"/>
+      <ellipse cx="452" cy="699" rx="10" ry="12" fill="#FFFFFF"/>
+      <ellipse cx="408" cy="701" rx="5" ry="6" fill="#121826"/>
+      <ellipse cx="452" cy="701" rx="5" ry="6" fill="#121826"/>
+      <path d="M424 719C430 715 436 715 442 719" stroke="#E58B7F" stroke-width="4" stroke-linecap="round"/>
+      <path d="M420 727C426 733 438 733 444 727" stroke="#1C2232" stroke-width="3" stroke-linecap="round"/>
+      <path d="M389 656L408 628L425 662" fill="#2E3138"/>
+      <path d="M471 656L452 628L435 662" fill="#2E3138"/>
+      <rect x="382" y="740" width="95" height="32" rx="16" fill="#F4C28D"/>
+      <rect x="392" y="747" width="75" height="18" rx="9" fill="#E9A96A"/>
+      <text x="430" y="823" text-anchor="middle" fill="#7B5A39" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="800">
+        趴在窝里待命
+      </text>
+    </g>
+
+    <g>
+      <rect x="715" y="590" width="585" height="120" rx="30" fill="#FFFFFF" stroke="#ECE4D9" stroke-width="2"/>
+      <text x="750" y="635" fill="#A0A8B8" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="800" letter-spacing="0.14em">
+        PAGE PATROL
+      </text>
+      <text x="750" y="680" fill="#182136" font-family="Inter, Arial, sans-serif" font-size="54" font-weight="800">
+        等待提交
+      </text>
+      <rect x="1140" y="615" width="120" height="54" rx="27" fill="#FFF1E3"/>
+      <text x="1200" y="650" text-anchor="middle" fill="#FE7B1F" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="800">
+        实时
+      </text>
+    </g>
+
+    <g>
+      <rect x="715" y="734" width="585" height="84" rx="26" fill="#FFF7EE"/>
+      <rect x="749" y="768" width="218" height="14" rx="7" fill="#F7D8BC"/>
+      <rect x="749" y="768" width="44" height="14" rx="7" fill="#FE7B1F"/>
+      <text x="980" y="780" fill="#5F6779" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="700">
+        0% · 上传入口已就绪
+      </text>
+    </g>
+
+    <g>
+      <rect x="715" y="842" width="585" height="190" rx="34" fill="#FFFFFF"/>
+      <rect x="742" y="869" width="356" height="120" rx="28" fill="#F8FAFD" stroke="#E1E7F0" stroke-width="2"/>
+      <text x="770" y="915" fill="#95A2B6" font-family="Inter, Arial, sans-serif" font-size="20" font-weight="800" letter-spacing="0.16em">
+        VIA
+      </text>
+      <text x="770" y="956" fill="#1A2235" font-family="Inter, Arial, sans-serif" font-size="34" font-weight="700">
+        把链接贴给我，或者直接拖视频进来。
+      </text>
+      <rect x="1118" y="878" width="148" height="92" rx="26" fill="url(#screen)"/>
+      <text x="1192" y="920" text-anchor="middle" fill="#FFFFFF" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="800">
+        发送
+      </text>
+      <text x="1192" y="954" text-anchor="middle" fill="#AFC0E4" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="600">
+        直接对话
+      </text>
+    </g>
+  </g>
+
+  <g opacity="0.36" filter="url(#soft)">
+    <circle cx="1110" cy="280" r="120" fill="#FFD9B8"/>
+    <circle cx="1380" cy="230" r="80" fill="#FFF2E4"/>
+    <circle cx="1320" cy="890" r="90" fill="#FFD6AF"/>
+  </g>
+</svg>

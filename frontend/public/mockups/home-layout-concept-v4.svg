@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1120" viewBox="0 0 1600 1120" fill="none">
+  <defs>
+    <filter id="shadow" x="0" y="0" width="1600" height="1120" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="22" stdDeviation="36" flood-color="#d7dbe6" flood-opacity="0.55"/>
+    </filter>
+    <linearGradient id="bgGlow" x1="270" y1="180" x2="1330" y2="980" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fff4e9"/>
+      <stop offset="0.45" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#fff5e8"/>
+    </linearGradient>
+  </defs>
+  <rect width="1600" height="1120" fill="#f7f5ef"/>
+  <rect x="46" y="18" width="1508" height="1040" rx="40" fill="url(#bgGlow)" filter="url(#shadow)"/>
+
+  <rect x="88" y="36" width="1424" height="104" rx="38" fill="#fffdfa" stroke="#ece7df" stroke-width="2"/>
+  <circle cx="114" cy="88" r="20" fill="#111827"/>
+  <text x="114" y="95" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700" fill="#ffffff">V</text>
+  <text x="150" y="82" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700" fill="#111827">Viltrox Creator Program</text>
+  <text x="150" y="108" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="700" fill="#667085">EN  中文</text>
+
+  <rect x="710" y="53" width="244" height="70" rx="30" fill="#f5f2eb" stroke="#ded8cf" stroke-width="2"/>
+  <rect x="726" y="61" width="104" height="54" rx="26" fill="#ffffff" stroke="#ebe7e0"/>
+  <text x="778" y="95" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700" fill="#111827">上传视频</text>
+  <text x="890" y="95" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700" fill="#4b5563">兑换积分</text>
+
+  <rect x="1288" y="52" width="190" height="70" rx="35" fill="#fffdfa" stroke="#ece7df" stroke-width="2"/>
+  <circle cx="1328" cy="87" r="20" fill="#111827"/>
+  <path d="M1321 87h14M1328 80l7 7-7 7" stroke="#fff" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="1360" y="78" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="700" fill="#4b5563">账号</text>
+  <text x="1360" y="101" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700" fill="#111827">登录</text>
+
+  <text x="92" y="196" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="800" letter-spacing="3.5" fill="#ff7a1a">VIA CREATOR PROGRAM</text>
+  <text x="92" y="282" font-family="Arial, Helvetica, sans-serif" font-size="74" font-weight="800" fill="#111827">提交你的视频</text>
+
+  <rect x="98" y="332" width="862" height="642" rx="34" fill="#fffdfa" stroke="#efe8de" stroke-width="2"/>
+  <text x="120" y="372" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="800" fill="#ff7a1a">选项 A — 直接上传你的视频</text>
+  <text x="120" y="424" font-family="Arial, Helvetica, sans-serif" font-size="38" font-weight="800" fill="#111827">视频投稿</text>
+  <rect x="118" y="468" width="820" height="84" rx="24" fill="#fff6f0" stroke="#ffc9a3" stroke-width="2"/>
+  <text x="140" y="504" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="800" fill="#111827">请先登录</text>
+  <text x="140" y="534" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="500" fill="#475467">先在个人资料里绑定社交账号，可以让归因和验证更快更干净。</text>
+  <rect x="118" y="590" width="820" height="154" rx="30" fill="#fffefe" stroke="#dadde5" stroke-width="2" stroke-dasharray="8 8"/>
+  <text x="528" y="668" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="26" font-weight="800" fill="#111827">点击上传或拖拽到这里</text>
+  <text x="528" y="704" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="500" fill="#667085">MP4 · MOV · WebM · 最大 500 MB</text>
+  <rect x="118" y="782" width="820" height="66" rx="20" fill="#fffdfa" stroke="#e5e7eb" stroke-width="2"/>
+  <text x="144" y="824" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="500" fill="#8a94a6">https://www.tiktok.com/@yourhandle/video/...</text>
+  <rect x="118" y="872" width="372" height="70" rx="20" fill="#fffdfa" stroke="#e5e7eb" stroke-width="2"/>
+  <text x="144" y="915" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="500" fill="#8a94a6">自动识别</text>
+  <rect x="512" y="872" width="426" height="70" rx="20" fill="#fffdfa" stroke="#e5e7eb" stroke-width="2"/>
+  <text x="538" y="915" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="500" fill="#8a94a6">@yourhandle</text>
+
+  <rect x="980" y="332" width="520" height="642" rx="34" fill="#fdfaf5" stroke="#efe8de" stroke-width="2"/>
+  <rect x="1010" y="360" width="460" height="170" rx="28" fill="#fffdfa" stroke="#ece7df" stroke-width="2"/>
+  <text x="1040" y="406" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#111827">你的账号</text>
+  <text x="1240" y="456" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700" fill="#344054">尚未登录</text>
+  <text x="1240" y="492" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="500" fill="#667085">登录后可追踪投稿、绑定平台并解锁积分奖励。</text>
+
+  <rect x="1010" y="556" width="460" height="386" rx="30" fill="#fff8f2" stroke="#ffd7bb" stroke-width="2"/>
+  <text x="1040" y="596" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="800" letter-spacing="2.4" fill="#ff7a1a">VIA 工作区</text>
+  <text x="1040" y="628" font-family="Arial, Helvetica, sans-serif" font-size="32" font-weight="800" fill="#111827">Via</text>
+  <text x="1114" y="628" font-family="Arial, Helvetica, sans-serif" font-size="32" font-weight="700" fill="#667085">陪你把视频送进去</text>
+
+  <rect x="1040" y="650" width="400" height="180" rx="34" fill="#0f1d38"/>
+  <rect x="1070" y="683" width="202" height="112" rx="56" fill="#d9dce4"/>
+  <ellipse cx="1171" cy="800" rx="100" ry="20" fill="#f2c587"/>
+  <text x="1171" y="748" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#ffffff">你的猫在窝里待机</text>
+  <text x="1171" y="778" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="500" fill="#c7d1e5">只有上传或聊天触发时，进度牌和气泡才出现</text>
+
+  <rect x="1040" y="860" width="312" height="46" rx="22" fill="#fffdfa" stroke="#e7dfd3" stroke-width="2"/>
+  <text x="1062" y="889" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="500" fill="#98a2b3">问 Via 上传 / 链接 / 排队状态</text>
+  <rect x="1364" y="860" width="76" height="46" rx="23" fill="#111827"/>
+  <text x="1402" y="889" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="800" fill="#ffffff">发送</text>
+</svg>

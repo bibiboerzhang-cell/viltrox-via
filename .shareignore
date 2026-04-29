@@ -1,0 +1,17 @@
+frontend/node_modules
+frontend/dist
+backend/__pycache__
+backend/app/__pycache__
+.share-stage
+viltrox-2.0-share.tar.gz
+.DS_Store
+frontend/.DS_Store
+frontend/src/.DS_Store
+uploads
+venv
+_tools
+.env
+runtime
+*.db
+*.db-shm
+*.db-wal

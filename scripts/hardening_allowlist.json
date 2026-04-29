@@ -1,0 +1,20 @@
+{
+  "print_allowlist": [
+    "backend/app/services/scraping/**",
+    "backend/app/services/verification/**",
+    "backend/app/services/intelligence/**",
+    "backend/app/services/ai/analyzers/**",
+    "backend/app/services/ai/clients/**",
+    "backend/app/services/audit/learning.py",
+    "backend/app/api/routers/brand_analysis.py",
+    "backend/app/setup_equipment_dirs.py"
+  ],
+  "silent_exception_allowlist": [
+    "backend/app/services/scraping/**",
+    "backend/app/services/intelligence/**",
+    "backend/app/services/ai/**",
+    "backend/app/services/verification/**",
+    "backend/app/services/deepsight/**",
+    "backend/app/db/**"
+  ]
+}

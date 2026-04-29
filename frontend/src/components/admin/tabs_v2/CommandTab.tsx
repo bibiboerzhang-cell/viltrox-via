@@ -1,0 +1,328 @@
+/**
+ * Command tab v2 — command center
+ *
+ * Aggregates commerce + brand + market signals into one operational dashboard.
+ * Uses multiple snapshots in parallel.
+ *
+ * Sections:
+ *   - Commerce (orders, webhook events)
+ *   - Brand (matrix scanning 18+ Viltrox accounts)
+ *   - Market (heatmap across categories)
+ */
+import { useEffect, useMemo, useState } from "react";
+
+import {
+  fetchAdminBrandSnapshot,
+  fetchAdminCommerceSnapshot,
+  fetchAdminMarketSnapshot,
+  type AdminBrandSnapshot,
+  type AdminCommerceSnapshot,
+  type AdminMarketSnapshot,
+} from "../../../services/admin.service";
+import type { AuthUser } from "../../../lib/api";
+import { Icons } from "../Icons";
+import {
+  DataTable,
+  EmptyCard,
+  ErrorCard,
+  KPIGrid,
+  LoadingCard,
+  PageHeader,
+  SegButton,
+  StatusPill,
+  type DataColumn,
+} from "../shared_v2";
+
+interface Props {
+  token: string;
+  user: AuthUser;
+}
+
+type Section = "commerce" | "brand" | "market";
+
+export function CommandTab({ token }: Props) {
+  const [commerce, setCommerce] = useState<AdminCommerceSnapshot | null>(null);
+  const [brand, setBrand] = useState<AdminBrandSnapshot | null>(null);
+  const [market, setMarket] = useState<AdminMarketSnapshot | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [section, setSection] = useState<Section>("commerce");
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    setError(null);
+    Promise.allSettled([
+      fetchAdminCommerceSnapshot(token),
+      fetchAdminBrandSnapshot(token),
+      fetchAdminMarketSnapshot(token),
+    ]).then((results) => {
+      if (!alive) return;
+      if (results[0].status === "fulfilled") setCommerce(results[0].value);
+      if (results[1].status === "fulfilled") setBrand(results[1].value);
+      if (results[2].status === "fulfilled") setMarket(results[2].value);
+      const allFailed = results.every((r) => r.status === "rejected");
+      if (allFailed) {
+        setError("所有 Command 快照拉取失败");
+      }
+      setLoading(false);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [token, tick]);
+
+  const refresh = () => setTick((n) => n + 1);
+
+  const kpis = useMemo(() => {
+    const orders = commerce?.ordersSummary as Record<string, unknown> | undefined;
+    const attribution = commerce?.attributionOverview as Record<string, unknown> | undefined;
+    return [
+      { label: "Orders 30d", value: Number(orders?.total || 0) },
+      { label: "Revenue 30d", value: `$${Number(orders?.revenue || 0).toLocaleString()}` },
+      { label: "Brand accounts", value: (brand?.matrix || []).length },
+      { label: "Market signals", value: (market?.observations || []).length },
+    ];
+  }, [commerce, brand, market]);
+
+  const orderCols: DataColumn<Record<string, unknown>>[] = [
+    {
+      key: "order",
+      label: "Order",
+      width: "1.5fr",
+      render: (r) => (
+        <div>
+          <div className="ax-mono" style={{ fontSize: 10 }}>
+            #{String(r.order_number || r.id || "—")}
+          </div>
+          <div style={{ fontSize: 9, color: "var(--ax-text-1)" }}>
+            {String(r.customer_email || "—")}
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: "amount",
+      label: "Amount",
+      width: "100px",
+      accent: true,
+      render: (r) => (
+        <span className="ax-num" style={{ fontWeight: 600 }}>
+          ${Number(r.total || r.amount || 0).toLocaleString()}
+        </span>
+      ),
+    },
+    {
+      key: "creator",
+      label: "Creator",
+      width: "100px",
+      render: (r) => (
+        <span className="ax-mono" style={{ fontSize: 10 }}>
+          {String(r.creator_code || "—")}
+        </span>
+      ),
+    },
+    {
+      key: "status",
+      label: "状态",
+      width: "100px",
+      render: (r) => {
+        const s = String(r.status || "pending").toLowerCase();
+        const tone =
+          s === "paid" || s === "fulfilled" ? "pass" : s === "cancelled" ? "block" : "review";
+        return <StatusPill tone={tone as never}>{String(r.status || "pending")}</StatusPill>;
+      },
+    },
+    {
+      key: "at",
+      label: "时间",
+      width: "120px",
+      render: (r) => (
+        <span style={{ color: "var(--ax-text-2)", fontSize: 10 }}>
+          {r.created_at ? new Date(String(r.created_at)).toLocaleString() : "—"}
+        </span>
+      ),
+    },
+  ];
+
+  const brandCols: DataColumn<Record<string, unknown>>[] = [
+    {
+      key: "account",
+      label: "Account",
+      width: "1.5fr",
+      render: (r) => (
+        <div>
+          <div style={{ color: "var(--ax-text-5)" }}>
+            @{String(r.handle || r.account || "").replace(/^@/, "")}
+          </div>
+          <div style={{ fontSize: 9, color: "var(--ax-text-1)" }}>
+            {String(r.region || r.market || "—")}
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: "platform",
+      label: "Platform",
+      width: "90px",
+      render: (r) => (
+        <span style={{ color: "var(--ax-text-3)" }}>{String(r.platform || "—")}</span>
+      ),
+    },
+    {
+      key: "followers",
+      label: "Followers",
+      width: "100px",
+      render: (r) => (
+        <span className="ax-num" style={{ fontWeight: 600 }}>
+          {Number(r.followers || 0).toLocaleString()}
+        </span>
+      ),
+    },
+    {
+      key: "posts30d",
+      label: "Posts 30d",
+      width: "90px",
+      render: (r) => <span className="ax-num">{Number(r.posts_30d || 0)}</span>,
+    },
+    {
+      key: "health",
+      label: "Health",
+      width: "80px",
+      render: (r) => {
+        const h = String(r.health || r.status || "ok").toLowerCase();
+        const tone = h === "ok" || h === "healthy" ? "pass" : h === "stale" ? "idle" : "block";
+        return <StatusPill tone={tone as never}>{h.toUpperCase()}</StatusPill>;
+      },
+    },
+  ];
+
+  const marketCols: DataColumn<Record<string, unknown>>[] = [
+    {
+      key: "signal",
+      label: "Signal",
+      width: "2.5fr",
+      render: (r) => (
+        <div>
+          <div style={{ color: "var(--ax-text-5)" }}>
+            {String(r.title || r.label || "—")}
+          </div>
+          <div style={{ fontSize: 9, color: "var(--ax-text-1)" }}>
+            {String(r.source || r.category || "")}
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: "severity",
+      label: "Severity",
+      width: "100px",
+      render: (r) => {
+        const s = String(r.severity || r.tone || "info").toLowerCase();
+        const tone = s === "critical" || s === "high" ? "block" : s === "warning" ? "queue" : "review";
+        return <StatusPill tone={tone as never}>{s.toUpperCase()}</StatusPill>;
+      },
+    },
+    {
+      key: "at",
+      label: "时间",
+      width: "120px",
+      render: (r) => (
+        <span style={{ color: "var(--ax-text-2)", fontSize: 10 }}>
+          {r.created_at ? new Date(String(r.created_at)).toLocaleDateString() : "—"}
+        </span>
+      ),
+    },
+  ];
+
+  const sections: Array<{ key: Section; label: string }> = [
+    { key: "commerce", label: `Commerce (${(commerce?.orders || []).length})` },
+    { key: "brand", label: `Brand Matrix (${(brand?.matrix || []).length})` },
+    { key: "market", label: `Market (${(market?.observations || []).length})` },
+  ];
+
+  return (
+    <div>
+      <PageHeader
+        title="Command Center"
+        subtitle="Commerce · Brand matrix · Market signals — Viltrox 全景"
+        actions={
+          <button type="button" className="ax-btn" onClick={refresh} disabled={loading}>
+            <Icons.trending /> {loading ? "刷新中…" : "刷新"}
+          </button>
+        }
+      />
+
+      {error ? (
+        <div style={{ padding: 16 }}>
+          <ErrorCard detail={error} onRetry={refresh} />
+        </div>
+      ) : null}
+
+      <div style={{ padding: 16 }}>
+        {loading && !commerce && !brand && !market ? (
+          <LoadingCard label="并行加载 Commerce + Brand + Market…" />
+        ) : (
+          <>
+            <div style={{ marginBottom: 16 }}>
+              <KPIGrid items={kpis} columns={4} />
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <SegButton
+                items={sections.map((s) => ({ key: s.key, label: s.label }))}
+                active={section}
+                onChange={(k) => setSection(k as Section)}
+              />
+            </div>
+
+            <div
+              style={{
+                border: "0.5px solid var(--ax-border-2)",
+                borderRadius: 6,
+                overflow: "hidden",
+                background: "var(--ax-bg-1)",
+              }}
+            >
+              {section === "commerce" ? (
+                (commerce?.orders || []).length === 0 ? (
+                  <EmptyCard label="暂无订单" hint="等待 Shopify webhook 注入订单数据" />
+                ) : (
+                  <DataTable
+                    columns={orderCols}
+                    rows={commerce?.orders as Record<string, unknown>[]}
+                    rowKey={(r) => String(r.id || r.order_number)}
+                    showCheckbox={false}
+                  />
+                )
+              ) : section === "brand" ? (
+                (brand?.matrix || []).length === 0 ? (
+                  <EmptyCard label="Brand matrix 为空" hint="DeepSight 尚未扫描" />
+                ) : (
+                  <DataTable
+                    columns={brandCols}
+                    rows={brand?.matrix as Record<string, unknown>[]}
+                    rowKey={(r, i) => `${r.platform}:${r.handle}:${i}`}
+                    showCheckbox={false}
+                  />
+                )
+              ) : (market?.observations || []).length === 0 ? (
+                <EmptyCard label="暂无市场信号" />
+              ) : (
+                <DataTable
+                  columns={marketCols}
+                  rows={market?.observations as Record<string, unknown>[]}
+                  rowKey={(r, i) => String(r.id || i)}
+                  showCheckbox={false}
+                />
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export default CommandTab;

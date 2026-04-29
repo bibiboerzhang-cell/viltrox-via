@@ -1,0 +1,45 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1600" height="900" fill="#040404"/>
+  <rect width="1600" height="900" fill="url(#warmField)"/>
+  <g opacity=".42" filter="url(#softBlur)">
+    <ellipse cx="1040" cy="380" rx="430" ry="220" fill="#FF8A1C" fill-opacity=".34"/>
+    <ellipse cx="1260" cy="514" rx="330" ry="180" fill="#FFE0AE" fill-opacity=".13"/>
+  </g>
+  <path d="M0 712C226 622 405 594 612 643C793 686 949 791 1165 762C1315 742 1427 680 1600 626V900H0V712Z" fill="url(#groundGlow)" opacity=".55"/>
+  <g opacity=".18">
+    <path d="M838 178H1400" stroke="url(#line)" stroke-width="1"/>
+    <path d="M838 248H1480" stroke="url(#line)" stroke-width="1"/>
+    <path d="M838 318H1540" stroke="url(#line)" stroke-width="1"/>
+    <path d="M838 388H1480" stroke="url(#line)" stroke-width="1"/>
+    <path d="M838 458H1400" stroke="url(#line)" stroke-width="1"/>
+  </g>
+  <g transform="translate(955 238)" opacity=".72">
+    <circle cx="246" cy="246" r="232" stroke="#FFFFFF" stroke-opacity=".08" stroke-width="1"/>
+    <circle cx="246" cy="246" r="172" stroke="#FF8A1C" stroke-opacity=".12" stroke-width="1"/>
+    <circle cx="246" cy="246" r="108" stroke="#FFFFFF" stroke-opacity=".08" stroke-width="1"/>
+    <path d="M84 414L407 92" stroke="#FF8A1C" stroke-opacity=".18" stroke-width="2"/>
+    <path d="M112 442L435 120" stroke="#FFFFFF" stroke-opacity=".06" stroke-width="2"/>
+  </g>
+  <text x="1010" y="508" fill="white" fill-opacity=".035" font-family="Helvetica, Arial, sans-serif" font-size="210" font-weight="800" letter-spacing="-18">VIA</text>
+  <rect x="112" y="116" width="1376" height="668" rx="36" stroke="white" stroke-opacity=".06"/>
+  <defs>
+    <radialGradient id="warmField" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1150 360) rotate(155) scale(780 520)">
+      <stop stop-color="#FF8A1C" stop-opacity=".24"/>
+      <stop offset=".42" stop-color="#17100A" stop-opacity=".74"/>
+      <stop offset="1" stop-color="#040404"/>
+    </radialGradient>
+    <linearGradient id="groundGlow" x1="0" y1="720" x2="1600" y2="720" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#050505"/>
+      <stop offset=".5" stop-color="#221205"/>
+      <stop offset="1" stop-color="#050505"/>
+    </linearGradient>
+    <linearGradient id="line" x1="838" y1="0" x2="1540" y2="0" gradientUnits="userSpaceOnUse">
+      <stop stop-color="white" stop-opacity="0"/>
+      <stop offset=".52" stop-color="#FF8A1C"/>
+      <stop offset="1" stop-color="white" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="softBlur" x="520" y="70" width="1120" height="730" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="86"/>
+    </filter>
+  </defs>
+</svg>

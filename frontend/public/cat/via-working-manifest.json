@@ -1,0 +1,323 @@
+{
+  "version": "2026-04-14",
+  "default_activity_id": "monitor-review",
+  "frame_count": 6,
+  "activities": {
+    "page-patrol": {
+      "id": "page-patrol",
+      "label": "Page patrol",
+      "movement_mode": "patrol",
+      "scene_line": "Via is roaming the page like a tiny set cat, chasing light, cables, and the next thing worth commenting on.",
+      "ambient_lines": [
+        "I am doing a slow lap around the page so nobody forgets the lens cap.",
+        "Tiny status update: I am pretending the whole page is my soundstage again.",
+        "I just inspected a suspiciously loose strap. Everything is still adorable and under control.",
+        "If you leave me alone too long, I start scouting corners like I am location managing."
+      ],
+      "keywords": [
+        "patrol",
+        "pet",
+        "cat",
+        "mascot",
+        "play",
+        "cute",
+        "haha",
+        "哈哈"
+      ],
+      "frame_count": 6,
+      "frames": [
+        "/cat/working/page-patrol/frame-00.svg",
+        "/cat/working/page-patrol/frame-01.svg",
+        "/cat/working/page-patrol/frame-02.svg",
+        "/cat/working/page-patrol/frame-03.svg",
+        "/cat/working/page-patrol/frame-04.svg",
+        "/cat/working/page-patrol/frame-05.svg"
+      ],
+      "sheet_url": "/cat/working/page-patrol/sheet.svg"
+    },
+    "shoot-camera": {
+      "id": "shoot-camera",
+      "label": "Shoot camera",
+      "movement_mode": "pace",
+      "scene_line": "Via is actively shooting, pacing between marks with a compact camera rig in paw and a little too much confidence.",
+      "ambient_lines": [
+        "I am stealing a few test frames while the humans argue about the shot list.",
+        "My paws are on camera duty right now, so please imagine a very professional tail flick.",
+        "I keep reframing the room like the next hero shot might be hiding in a corner.",
+        "There is a lens in my paw and an unreasonable amount of confidence in my whiskers."
+      ],
+      "keywords": [
+        "shoot",
+        "camera",
+        "拍摄",
+        "拍片",
+        "photo",
+        "摄影",
+        "creator",
+        "content",
+        "shot"
+      ],
+      "frame_count": 6,
+      "frames": [
+        "/cat/working/shoot-camera/frame-00.svg",
+        "/cat/working/shoot-camera/frame-01.svg",
+        "/cat/working/shoot-camera/frame-02.svg",
+        "/cat/working/shoot-camera/frame-03.svg",
+        "/cat/working/shoot-camera/frame-04.svg",
+        "/cat/working/shoot-camera/frame-05.svg"
+      ],
+      "sheet_url": "/cat/working/shoot-camera/sheet.svg"
+    },
+    "monitor-review": {
+      "id": "monitor-review",
+      "label": "Monitor review",
+      "movement_mode": "anchor",
+      "scene_line": "Via is parked by a monitor and playback station, quietly checking whether the take really landed.",
+      "ambient_lines": [
+        "I am peeking over the monitor like a tiny focus puller who knows something.",
+        "Playback is up. I am doing my serious little review face now.",
+        "I keep rewatching the opening seconds because that is where the rhythm gives itself away.",
+        "My current job is staring at the monitor until the next better idea appears."
+      ],
+      "keywords": [
+        "monitor",
+        "review",
+        "upload",
+        "playback",
+        "video",
+        "critique",
+        "score",
+        "analysis",
+        "投稿"
+      ],
+      "frame_count": 6,
+      "frames": [
+        "/cat/working/monitor-review/frame-00.svg",
+        "/cat/working/monitor-review/frame-01.svg",
+        "/cat/working/monitor-review/frame-02.svg",
+        "/cat/working/monitor-review/frame-03.svg",
+        "/cat/working/monitor-review/frame-04.svg",
+        "/cat/working/monitor-review/frame-05.svg"
+      ],
+      "sheet_url": "/cat/working/monitor-review/sheet.svg"
+    },
+    "push-chapman-cart": {
+      "id": "push-chapman-cart",
+      "label": "Push Chapman cart",
+      "movement_mode": "track",
+      "scene_line": "Via is trotting beside a Chapman cart with an ARRI body and Viltrox long zoom gear riding shotgun.",
+      "ambient_lines": [
+        "I am making a very small but very official Chapman cart lap right now.",
+        "The cart is moving, the wheels are singing, and I am acting like first AC in cat form.",
+        "One paw on the cart, one eye on the glass, zero tolerance for sloppy cable loops.",
+        "I am escorting the cart like the LUNA zoom personally asked for security."
+      ],
+      "keywords": [
+        "chapman",
+        "dolly",
+        "cart",
+        "arri",
+        "luna",
+        "30-300",
+        "42-420",
+        "cine",
+        "cinema",
+        "rental"
+      ],
+      "frame_count": 6,
+      "frames": [
+        "/cat/working/push-chapman-cart/frame-00.svg",
+        "/cat/working/push-chapman-cart/frame-01.svg",
+        "/cat/working/push-chapman-cart/frame-02.svg",
+        "/cat/working/push-chapman-cart/frame-03.svg",
+        "/cat/working/push-chapman-cart/frame-04.svg",
+        "/cat/working/push-chapman-cart/frame-05.svg"
+      ],
+      "sheet_url": "/cat/working/push-chapman-cart/sheet.svg"
+    },
+    "mini-lf-epic": {
+      "id": "mini-lf-epic",
+      "label": "Mini LF plus EPIC",
+      "movement_mode": "anchor",
+      "scene_line": "Via is operating around a Mini LF plus EPIC setup, checking monitor, lens, and the shape of the anamorphic take.",
+      "ambient_lines": [
+        "I am up on tiptoe by the Mini LF, pretending I personally approved the EPIC pairing.",
+        "The EPIC glass is on, the mood is cinematic, and I am taking my tiny playback duties seriously.",
+        "I keep looking from the lens to the monitor like a cat who suddenly works in cinema.",
+        "This is my anamorphic lane now. Please respect the whisker-level concentration."
+      ],
+      "keywords": [
+        "mini lf",
+        "epic",
+        "anamorphic",
+        "pl",
+        "cine prime",
+        "t2.0"
+      ],
+      "frame_count": 6,
+      "frames": [
+        "/cat/working/mini-lf-epic/frame-00.svg",
+        "/cat/working/mini-lf-epic/frame-01.svg",
+        "/cat/working/mini-lf-epic/frame-02.svg",
+        "/cat/working/mini-lf-epic/frame-03.svg",
+        "/cat/working/mini-lf-epic/frame-04.svg",
+        "/cat/working/mini-lf-epic/frame-05.svg"
+      ],
+      "sheet_url": "/cat/working/mini-lf-epic/sheet.svg"
+    },
+    "sony-z-flash": {
+      "id": "sony-z-flash",
+      "label": "Sony with Z1 and Z2 flash",
+      "movement_mode": "burst",
+      "scene_line": "Via is firing quick Sony test frames with Z1 and Z2 flashes nearby, checking punch, falloff, and the fun part.",
+      "ambient_lines": [
+        "I am popping little flash tests until the room agrees to look more glamorous.",
+        "The Sony body is in paw, the Z flashes are sparking, and I feel annoyingly powerful.",
+        "This is my portrait-light goblin hour.",
+        "I just fired another flash test and acted like the lighting plan was obvious all along."
+      ],
+      "keywords": [
+        "sony",
+        "z1",
+        "z2",
+        "flash",
+        "strobe",
+        "ttl",
+        "portrait",
+        "lighting"
+      ],
+      "frame_count": 6,
+      "frames": [
+        "/cat/working/sony-z-flash/frame-00.svg",
+        "/cat/working/sony-z-flash/frame-01.svg",
+        "/cat/working/sony-z-flash/frame-02.svg",
+        "/cat/working/sony-z-flash/frame-03.svg",
+        "/cat/working/sony-z-flash/frame-04.svg",
+        "/cat/working/sony-z-flash/frame-05.svg"
+      ],
+      "sheet_url": "/cat/working/sony-z-flash/sheet.svg"
+    },
+    "sony-air-pack": {
+      "id": "sony-air-pack",
+      "label": "Sony AIR pack",
+      "movement_mode": "pace",
+      "scene_line": "Via is packing and testing a lightweight Sony plus AIR travel kit that still feels ambitious enough to leave the house for.",
+      "ambient_lines": [
+        "I am sorting the tiny Sony travel bag like a cat who has opinions about prime spacing.",
+        "AIR kit check: light bag, quick paws, no wasted glass.",
+        "I am choosing between compact primes and acting like every gram matters.",
+        "This kit is for moving fast and still looking suspiciously prepared."
+      ],
+      "keywords": [
+        "sony air",
+        "air",
+        "travel",
+        "student",
+        "budget",
+        "fe",
+        "e mount"
+      ],
+      "frame_count": 6,
+      "frames": [
+        "/cat/working/sony-air-pack/frame-00.svg",
+        "/cat/working/sony-air-pack/frame-01.svg",
+        "/cat/working/sony-air-pack/frame-02.svg",
+        "/cat/working/sony-air-pack/frame-03.svg",
+        "/cat/working/sony-air-pack/frame-04.svg",
+        "/cat/working/sony-air-pack/frame-05.svg"
+      ],
+      "sheet_url": "/cat/working/sony-air-pack/sheet.svg"
+    },
+    "fujifilm-air-scout": {
+      "id": "fujifilm-air-scout",
+      "label": "Fujifilm AIR scout",
+      "movement_mode": "roam",
+      "scene_line": "Via is wandering with a Fujifilm and AIR lens combo like a tiny street shooter scouting corners and reflections.",
+      "ambient_lines": [
+        "I am doing a little Fujifilm street walk, looking for reflections and excuses.",
+        "The Fuji kit is light, the paws are quick, and I am nosing around for a better frame.",
+        "I keep scouting the page like it is a quiet side street right before golden hour.",
+        "This is my walkaround lane. I may find a composition before you do."
+      ],
+      "keywords": [
+        "fujifilm",
+        "fuji",
+        "xf",
+        "x mount",
+        "street",
+        "walk",
+        "travel"
+      ],
+      "frame_count": 6,
+      "frames": [
+        "/cat/working/fujifilm-air-scout/frame-00.svg",
+        "/cat/working/fujifilm-air-scout/frame-01.svg",
+        "/cat/working/fujifilm-air-scout/frame-02.svg",
+        "/cat/working/fujifilm-air-scout/frame-03.svg",
+        "/cat/working/fujifilm-air-scout/frame-04.svg",
+        "/cat/working/fujifilm-air-scout/frame-05.svg"
+      ],
+      "sheet_url": "/cat/working/fujifilm-air-scout/sheet.svg"
+    },
+    "lab-portrait-bench": {
+      "id": "lab-portrait-bench",
+      "label": "LAB portrait bench",
+      "movement_mode": "anchor",
+      "scene_line": "Via is leaning into a premium portrait bench with LAB glass close by, checking the frame for separation and polish.",
+      "ambient_lines": [
+        "I am giving the LAB setup my most expensive-looking review face.",
+        "The LAB glass is on deck and I am pretending this entire bench belongs to my portfolio.",
+        "This lane is all crisp detail, clean separation, and one very attentive little cat.",
+        "I am monitoring the premium prime like the hero frame owes me rent."
+      ],
+      "keywords": [
+        "lab",
+        "135 lab",
+        "35 lab",
+        "flagship",
+        "premium",
+        "hero portrait"
+      ],
+      "frame_count": 6,
+      "frames": [
+        "/cat/working/lab-portrait-bench/frame-00.svg",
+        "/cat/working/lab-portrait-bench/frame-01.svg",
+        "/cat/working/lab-portrait-bench/frame-02.svg",
+        "/cat/working/lab-portrait-bench/frame-03.svg",
+        "/cat/working/lab-portrait-bench/frame-04.svg",
+        "/cat/working/lab-portrait-bench/frame-05.svg"
+      ],
+      "sheet_url": "/cat/working/lab-portrait-bench/sheet.svg"
+    },
+    "pro-evo-roam": {
+      "id": "pro-evo-roam",
+      "label": "PRO and EVO roam",
+      "movement_mode": "pace",
+      "scene_line": "Via is alternating between PRO and EVO glass, walking the room to feel out whether the job wants fast polish or everyday agility.",
+      "ambient_lines": [
+        "I am toggling between PRO and EVO energy like a tiny camera assistant with taste.",
+        "Fast glass on one side, everyday glass on the other, and I am pacing between both like it matters deeply.",
+        "This is my practical-versus-polished comparison walk.",
+        "I am roaming with the PRO and EVO lane open in both paws."
+      ],
+      "keywords": [
+        "pro",
+        "evo",
+        "f1.4",
+        "85mm f2.0",
+        "everyday rig",
+        "comparison"
+      ],
+      "frame_count": 6,
+      "frames": [
+        "/cat/working/pro-evo-roam/frame-00.svg",
+        "/cat/working/pro-evo-roam/frame-01.svg",
+        "/cat/working/pro-evo-roam/frame-02.svg",
+        "/cat/working/pro-evo-roam/frame-03.svg",
+        "/cat/working/pro-evo-roam/frame-04.svg",
+        "/cat/working/pro-evo-roam/frame-05.svg"
+      ],
+      "sheet_url": "/cat/working/pro-evo-roam/sheet.svg"
+    }
+  }
+}

@@ -1,0 +1,84 @@
+<svg width="1600" height="1200" viewBox="0 0 1600 1200" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="140" y1="40" x2="1460" y2="1130" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFDFC"/>
+      <stop offset="1" stop-color="#F8F3EC"/>
+    </linearGradient>
+    <filter id="shadow" x="40" y="12" width="1520" height="1136" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="24"/>
+      <feGaussianBlur stdDeviation="24"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.12549 0 0 0 0 0.113725 0 0 0 0 0.0901961 0 0 0 0.09 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_1_1"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_1_1" result="shape"/>
+    </filter>
+  </defs>
+
+  <rect width="1600" height="1200" fill="url(#bg)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="84" y="56" width="1432" height="1040" rx="40" fill="#FFFDF9"/>
+  </g>
+
+  <rect x="110" y="84" width="1380" height="100" rx="34" fill="#FFFFFF" stroke="#EFE8DE" stroke-width="2"/>
+  <rect x="134" y="102" width="286" height="64" rx="24" fill="#FBFAF7" stroke="#ECE5DA" stroke-width="2"/>
+  <circle cx="170" cy="134" r="20" fill="#111827"/>
+  <text x="170" y="141" text-anchor="middle" fill="#FFFFFF" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="800">V</text>
+  <text x="204" y="131" fill="#111827" font-family="Inter, Arial, sans-serif" font-size="17" font-weight="800">Viltrox Creator Program</text>
+  <text x="204" y="154" fill="#748095" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="700">ENG  中文</text>
+
+  <rect x="678" y="96" width="246" height="76" rx="38" fill="#F9F8F4" stroke="#E8E0D5" stroke-width="2"/>
+  <rect x="688" y="106" width="112" height="56" rx="28" fill="#FFFFFF" stroke="#ECE4D9" stroke-width="2"/>
+  <text x="744" y="141" text-anchor="middle" fill="#111827" font-family="Inter, Arial, sans-serif" font-size="20" font-weight="800">上传视频</text>
+  <text x="860" y="141" text-anchor="middle" fill="#525D70" font-family="Inter, Arial, sans-serif" font-size="20" font-weight="700">兑换积分</text>
+
+  <rect x="1274" y="102" width="188" height="64" rx="24" fill="#FBFAF7" stroke="#ECE5DA" stroke-width="2"/>
+  <circle cx="1310" cy="134" r="20" fill="#111827"/>
+  <path d="M1303 134H1317M1311 126L1318 134L1311 142" stroke="#FFFFFF" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="1342" y="131" fill="#111827" font-family="Inter, Arial, sans-serif" font-size="15" font-weight="800">账号</text>
+  <text x="1342" y="150" fill="#111827" font-family="Inter, Arial, sans-serif" font-size="15" font-weight="800">登录</text>
+
+  <text x="114" y="246" fill="#FE7B1F" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="800" letter-spacing="0.16em">VIA CREATOR PROGRAM</text>
+  <text x="114" y="330" fill="#162033" font-family="Inter, Arial, sans-serif" font-size="78" font-weight="800">提交你的内容</text>
+  <text x="114" y="392" fill="#707B90" font-family="Inter, Arial, sans-serif" font-size="26" font-weight="600">位置概念：左边主工作区更宽，右边变成更大的账号 + Via 助手区。</text>
+
+  <rect x="124" y="450" width="846" height="690" rx="32" fill="#FFFFFF" stroke="#2AAAF3" stroke-width="6"/>
+  <text x="154" y="494" fill="#2AAAF3" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="800">左侧主工作区 · 约 60%-62%</text>
+  <rect x="154" y="526" width="786" height="566" rx="28" fill="#FBFAF7" stroke="#ECE5DA" stroke-width="2"/>
+  <text x="510" y="826" text-anchor="middle" fill="#B1B9C8" font-family="Inter, Arial, sans-serif" font-size="34" font-weight="700">上传表单 / 链接输入 / 审核提交</text>
+
+  <rect x="986" y="450" width="490" height="690" rx="32" fill="#FFFFFF" stroke="#2AAAF3" stroke-width="6"/>
+  <text x="1016" y="494" fill="#2AAAF3" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="800">右侧辅助区 · 约 38%-40%</text>
+
+  <rect x="1020" y="526" width="422" height="190" rx="28" fill="#FFFFFF" stroke="#FF5A5A" stroke-width="6"/>
+  <text x="1050" y="570" fill="#FF5A5A" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="800">账号区</text>
+  <text x="1231" y="634" text-anchor="middle" fill="#B1B9C8" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">登录状态 / 账户入口</text>
+
+  <rect x="1020" y="744" width="422" height="360" rx="28" fill="#FFF8F1" stroke="#7BD300" stroke-width="6"/>
+  <text x="1050" y="788" fill="#7BD300" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="800">Via 区</text>
+
+  <rect x="1070" y="820" width="322" height="168" rx="26" fill="#1A2338"/>
+  <text x="1102" y="856" fill="#B9C5D8" font-family="Inter, Arial, sans-serif" font-size="16" font-weight="800" letter-spacing="0.16em">VIA 工作通道</text>
+  <text x="1102" y="920" fill="#FFFFFF" font-family="Inter, Arial, sans-serif" font-size="58" font-weight="800">等待提交</text>
+
+  <ellipse cx="1176" cy="972" rx="70" ry="10" fill="#D8DEE7"/>
+  <ellipse cx="1176" cy="972" rx="42" ry="10" fill="#E6AB71"/>
+  <rect x="1118" y="924" width="116" height="44" rx="22" fill="#F2C48F"/>
+  <ellipse cx="1176" cy="940" rx="32" ry="22" fill="#2E3138"/>
+  <ellipse cx="1176" cy="926" rx="26" ry="20" fill="#FFFFFF"/>
+  <path d="M1157 915L1165 900L1174 918" fill="#2E3138"/>
+  <path d="M1195 915L1187 900L1178 918" fill="#2E3138"/>
+  <circle cx="1166" cy="924" r="4.5" fill="#111827"/>
+  <circle cx="1186" cy="924" r="4.5" fill="#111827"/>
+  <path d="M1168 936C1172 932 1180 932 1184 936" stroke="#E79A91" stroke-width="3" stroke-linecap="round"/>
+
+  <rect x="1258" y="872" width="126" height="116" rx="24" fill="#FFF9F1" stroke="#FFC107" stroke-width="6"/>
+  <text x="1321" y="914" text-anchor="middle" fill="#FE7B1F" font-family="Inter, Arial, sans-serif" font-size="15" font-weight="800" letter-spacing="0.12em">PAGE PATROL</text>
+  <text x="1321" y="966" text-anchor="middle" fill="#162033" font-family="Inter, Arial, sans-serif" font-size="50" font-weight="800">0%</text>
+
+  <rect x="1070" y="1012" width="322" height="60" rx="18" fill="#FFFFFF" stroke="#FFC107" stroke-width="6"/>
+  <text x="1231" y="1050" text-anchor="middle" fill="#97A3B5" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="700">猫嘴边气泡 / 简短状态</text>
+
+  <rect x="1070" y="1088" width="322" height="0" rx="18" fill="#FFFFFF" stroke="transparent"/>
+</svg>

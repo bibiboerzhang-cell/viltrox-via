@@ -1,0 +1,26 @@
+[Unit]
+Description=Viltrox 2.0 Worker
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/viltrox-2.0
+EnvironmentFile=/etc/viltrox/viltrox-2.0.env
+Environment=APP_ROLE=worker
+Environment=ENVIRONMENT=production
+Environment=DB_RUNTIME_BACKEND=postgres
+Environment=ENABLE_LOCAL_ORCHESTRATOR=0
+Environment=ENABLE_SCHEDULER=0
+Environment=ENABLE_BROWSER=0
+Environment=ENABLE_UPLOAD_CLEANUP=0
+ExecStart=/bin/bash /opt/viltrox-2.0/scripts/start_worker.sh
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+KillMode=mixed
+User=%i
+Group=%i
+
+[Install]
+WantedBy=multi-user.target
