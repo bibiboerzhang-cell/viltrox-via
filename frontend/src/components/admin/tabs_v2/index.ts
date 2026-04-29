@@ -10,3 +10,7 @@ export { StudentTab } from "./StudentTab";
 export { ViaTab } from "./ViaTab";
 export { CommandTab } from "./CommandTab";
 export { RuntimeTab } from "./RuntimeTab";
+export { IntelligenceTab } from "./IntelligenceTab";
+export { DeepSightTab } from "./DeepSightTab";
+export { SystemTab } from "./SystemTab";
+export { KolOpsTab } from "./KolOpsTab";

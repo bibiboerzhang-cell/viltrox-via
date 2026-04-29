@@ -9,6 +9,8 @@ export interface AuthUser {
   points_total?: number;
   avatar_url?: string;
   bio?: string;
+  permissions?: Record<string, "none" | "read" | "write" | string>;
+  is_owner?: boolean;
 }
 
 export interface LoginResponse {
@@ -597,6 +599,9 @@ export async function apiFetch<T>(
   }
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
+  }
+  if (!headers.has("X-Requested-With")) {
+    headers.set("X-Requested-With", "XMLHttpRequest");
   }
 
   const controller = new AbortController();

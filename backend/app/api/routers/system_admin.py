@@ -22,11 +22,15 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.core.security import require_admin_async as require_admin
+from app.api.dependencies.perms import require_system_permission, require_tab
 from app.services.audit_log import record_admin_action
 from app.services.system import integrations as int_svc
+from app.services.system import provider_health as provider_svc
 from app.services.system import runtime as rt_svc
 from app.services.system import trust_admin as trust_svc
 from app.services.system import staff as staff_svc
+from app.core.model_pricing import PRICING_USD_PER_1M_TOKENS
+from app.core.model_registry import AVAILABLE_MODELS, TASK_MODEL_BINDING, validate_task_model
 
 router = APIRouter(prefix="/api/admin", tags=["system-admin"])
 
@@ -182,6 +186,61 @@ def clear_cache_tier(
 
 
 # =========================================================================
+# System key/model management support
+# =========================================================================
+
+@router.get("/system/providers")
+def provider_status(admin=Depends(require_system_permission("system.api_keys", "read"))):
+    return provider_svc.list_provider_status()
+
+
+@router.post("/system/providers/{provider}/probe")
+async def probe_provider(
+    provider: str,
+    body: dict | None = None,
+    admin=Depends(require_system_permission("system.api_keys", "read")),
+):
+    body = body or {}
+    result = await provider_svc.probe_provider(provider, api_key=body.get("api_key"))
+    provider_svc.record_provider_probe(provider, bool(result.get("ok")), str(result.get("error") or ""))
+    return result
+
+
+@router.get("/system/models")
+def system_models(admin=Depends(require_system_permission("system.models", "read"))):
+    return {
+        "available_models": AVAILABLE_MODELS,
+        "task_model_binding": TASK_MODEL_BINDING,
+        "pricing_usd_per_1m_tokens": PRICING_USD_PER_1M_TOKENS,
+    }
+
+
+@router.post("/system/models/switch")
+def switch_system_model(
+    body: dict,
+    request: Request,
+    admin=Depends(require_admin),
+    _staff=Depends(require_system_permission("system.models", "write")),
+):
+    task = str(body.get("task") or "")
+    model = str(body.get("model") or "")
+    if not validate_task_model(task, model):
+        raise HTTPException(status_code=400, detail="unsupported task/model binding")
+    # The project intentionally keeps model bindings code-reviewed. This endpoint
+    # validates the requested switch and writes audit intent; applying it still
+    # requires a reviewed config change or deployment step.
+    record_admin_action(
+        actor=admin,
+        action="request_model_switch",
+        target_type="model_binding",
+        target_id=task,
+        detail={"model": model},
+        request=request,
+    )
+    return {"ok": True, "requires_deploy": True, "task": task, "model": model}
+
+
+# =========================================================================
 # Trust
 # =========================================================================
 
@@ -328,12 +387,17 @@ def adjust_score(
 # =========================================================================
 
 @router.get("/staff")
-def list_staff(admin=Depends(require_admin)):
+def list_staff(admin=Depends(require_tab("system", "read"))):
     return staff_svc.list_members()
 
 
 @router.post("/staff")
-def add_staff(body: dict, request: Request, admin=Depends(require_admin)):
+def add_staff(
+    body: dict,
+    request: Request,
+    admin=Depends(require_admin),
+    _staff=Depends(require_system_permission("system.members", "write")),
+):
     result = staff_svc.invite(body, inviter_id=admin["id"])
     record_admin_action(
         actor=admin, action="invite_staff",
@@ -344,9 +408,41 @@ def add_staff(body: dict, request: Request, admin=Depends(require_admin)):
     return result
 
 
+@router.post("/staff/invite")
+def invite_staff(
+    body: dict,
+    request: Request,
+    admin=Depends(require_admin),
+    _staff=Depends(require_system_permission("system.members", "write")),
+):
+    result = staff_svc.invite(body, inviter_id=admin["id"])
+    record_admin_action(
+        actor=admin, action="invite_staff",
+        target_type="staff", target_id=str(result.get("id")),
+        detail={"email": body.get("email"), "role": body.get("role")},
+        request=request,
+    )
+    return result
+
+
+@router.post("/staff/accept-invite")
+def accept_staff_invite(body: dict):
+    try:
+        return staff_svc.accept_invite(
+            str(body.get("invite_token") or ""),
+            str(body.get("password") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.patch("/staff/{staff_id}")
 def update_staff(
-    staff_id: int, body: dict, request: Request, admin=Depends(require_admin)
+    staff_id: int,
+    body: dict,
+    request: Request,
+    admin=Depends(require_admin),
+    _staff=Depends(require_system_permission("system.members", "write")),
 ):
     staff_svc.update(staff_id, body)
     record_admin_action(
@@ -357,9 +453,39 @@ def update_staff(
     return {"ok": True}
 
 
+@router.post("/staff/{staff_id}/permissions")
+def update_staff_permissions(
+    staff_id: int,
+    body: dict,
+    request: Request,
+    admin=Depends(require_admin),
+    staff=Depends(require_system_permission("system.members", "write")),
+):
+    try:
+        staff_svc.update_permissions(
+            staff_id,
+            body.get("permissions") or {},
+            actor_is_owner=bool(staff.get("is_owner")),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    record_admin_action(
+        actor=admin, action="update_staff_permissions",
+        target_type="staff", target_id=str(staff_id),
+        detail={"permissions": body.get("permissions") or {}}, request=request,
+    )
+    return {"ok": True}
+
+
 @router.post("/staff/{staff_id}/suspend")
 def suspend_staff(
-    staff_id: int, body: dict, request: Request, admin=Depends(require_admin)
+    staff_id: int,
+    body: dict,
+    request: Request,
+    admin=Depends(require_admin),
+    _staff=Depends(require_system_permission("system.members", "write")),
 ):
     staff_svc.suspend(staff_id, body.get("reason", ""))
     record_admin_action(
@@ -372,7 +498,10 @@ def suspend_staff(
 
 @router.post("/staff/{staff_id}/reactivate")
 def reactivate_staff(
-    staff_id: int, request: Request, admin=Depends(require_admin)
+    staff_id: int,
+    request: Request,
+    admin=Depends(require_admin),
+    _staff=Depends(require_system_permission("system.members", "write")),
 ):
     staff_svc.reactivate(staff_id)
     record_admin_action(
@@ -384,12 +513,12 @@ def reactivate_staff(
 
 
 @router.get("/staff/roles")
-def list_roles(admin=Depends(require_admin)):
+def list_roles(admin=Depends(require_tab("system", "read"))):
     return staff_svc.list_roles()
 
 
 @router.get("/staff/permission-matrix")
-def permission_matrix(admin=Depends(require_admin)):
+def permission_matrix(admin=Depends(require_tab("system", "read"))):
     return staff_svc.permission_matrix()
 
 
@@ -402,7 +531,7 @@ def audit_log(
     from_date: str | None = None,
     to_date: str | None = None,
     limit: int = 100,
-    admin=Depends(require_admin),
+    admin=Depends(require_tab("system", "read")),
 ):
     return staff_svc.get_audit_log(
         actor_id=actor_id, action=action,
@@ -412,12 +541,17 @@ def audit_log(
 
 
 @router.get("/staff/api-tokens")
-def list_tokens(admin=Depends(require_admin)):
+def list_tokens(admin=Depends(require_system_permission("system.api_keys", "read"))):
     return staff_svc.list_api_tokens()
 
 
 @router.post("/staff/api-tokens")
-def create_token(body: dict, request: Request, admin=Depends(require_admin)):
+def create_token(
+    body: dict,
+    request: Request,
+    admin=Depends(require_admin),
+    _staff=Depends(require_system_permission("system.api_keys", "write")),
+):
     """Returns the full token ONLY on creation — prefix thereafter."""
     result = staff_svc.create_api_token(body, created_by=admin["id"])
     record_admin_action(
@@ -430,7 +564,12 @@ def create_token(body: dict, request: Request, admin=Depends(require_admin)):
 
 
 @router.delete("/staff/api-tokens/{token_id}")
-def revoke_token(token_id: int, request: Request, admin=Depends(require_admin)):
+def revoke_token(
+    token_id: int,
+    request: Request,
+    admin=Depends(require_admin),
+    _staff=Depends(require_system_permission("system.api_keys", "write")),
+):
     staff_svc.revoke_api_token(token_id, admin["id"])
     record_admin_action(
         actor=admin, action="revoke_api_token",

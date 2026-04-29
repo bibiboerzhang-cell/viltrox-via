@@ -5,11 +5,12 @@ import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.routers import auth, admin, audit, creator, jobs, leaderboard, media, ops, platform_ingest, sse, student_identity, uploads, verify, via
@@ -48,6 +49,8 @@ from app.services.jobs.queue import build_job_queue
 from app.services.monitoring.runtime import record_request_metric
 from app.services.security.admin_access import apply_admin_security_headers, get_admin_security_response
 from app.services.via import build_via_event_bus
+from app.core.logging import get_logger
+from app.core.security import AUTH_COOKIE_NAME, get_current_user
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_ROOT = PROJECT_ROOT / "frontend"
@@ -63,12 +66,76 @@ PUBLIC_APP_ROLES = {"all", "web", "public-web"}
 ADMIN_APP_ROLES = {"all", "web", "admin-web"}
 IS_PUBLIC_APP = APP_ROLE in PUBLIC_APP_ROLES
 IS_ADMIN_APP = APP_ROLE in ADMIN_APP_ROLES
+logger = get_logger(__name__)
 
 
 def _is_https_request(request) -> bool:
     if str(request.url.scheme).lower() == "https":
         return True
     return str(request.headers.get("x-forwarded-proto", "")).lower() == "https"
+
+
+def _origin_from_url(raw: str) -> str:
+    parsed = urlparse(str(raw or ""))
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+    return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+
+
+def _request_origin(request) -> str:
+    host = str(request.headers.get("host") or "").strip()
+    if not host:
+        return ""
+    scheme = "https" if _is_https_request(request) else str(request.url.scheme or "http")
+    return f"{scheme}://{host}".rstrip("/")
+
+
+def _is_allowed_csrf_origin(candidate: str, request) -> bool:
+    origin = _origin_from_url(candidate)
+    if not origin:
+        return False
+    if origin == _request_origin(request):
+        return True
+    normalized_allowed = {_origin_from_url(item) for item in CORS_ORIGINS if item and item != "*"}
+    return origin in normalized_allowed
+
+
+def _csrf_request_allowed(request) -> bool:
+    if request.method.upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return True
+    has_cookie = bool(request.cookies.get(AUTH_COOKIE_NAME))
+    auth_header = str(request.headers.get("authorization") or "").strip().lower()
+    if not has_cookie and auth_header.startswith("bearer "):
+        return True
+    origin = str(request.headers.get("origin") or "").strip()
+    referer = str(request.headers.get("referer") or "").strip()
+    if origin and _is_allowed_csrf_origin(origin, request):
+        return True
+    if referer and _is_allowed_csrf_origin(referer, request):
+        return True
+    if not origin and not referer and str(request.headers.get("x-requested-with") or "").lower() == "xmlhttprequest":
+        return True
+    logger.warning(
+        "csrf.blocked",
+        extra={
+            "origin": origin,
+            "referer": referer,
+            "path": str(request.url.path),
+            "ip": str(getattr(request.client, "host", "") or ""),
+        },
+    )
+    return False
+
+
+def _can_read_deep_health(request) -> bool:
+    ops_token = str(os.getenv("OPS_HEALTH_TOKEN", "") or "").strip()
+    if ops_token and str(request.headers.get("x-ops-token") or "").strip() == ops_token:
+        return True
+    try:
+        user = get_current_user(request)
+        return bool(user and str(user.get("role") or "").lower() == "admin")
+    except Exception:
+        return False
 
 
 def _build_csp_value() -> str:
@@ -252,6 +319,13 @@ app.add_middleware(GZipMiddleware, minimum_size=RESPONSE_GZIP_MIN_SIZE)
 
 
 @app.middleware("http")
+async def csrf_origin_middleware(request, call_next):
+    if not _csrf_request_allowed(request):
+        return JSONResponse({"detail": "CSRF check failed"}, status_code=403)
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def db_scope_middleware(request, call_next):
     async with db_connection_scope():
         return await call_next(request)
@@ -325,7 +399,7 @@ if IS_PUBLIC_APP:
     app.include_router(sse.router)
     app.include_router(leaderboard.router)
 if IS_ADMIN_APP:
-    from app.api.routers import account_scanner, brand_analysis
+    from app.api.routers import account_scanner, brand_analysis, kol_ops
 
     app.include_router(admin.router)
     app.include_router(commerce.router)
@@ -335,12 +409,17 @@ if IS_ADMIN_APP:
     app.include_router(deepsight.router)
     app.include_router(brand_analysis.router)
     app.include_router(account_scanner.router)
+    app.include_router(kol_ops.router)
     app.include_router(ops.router)
     app.include_router(system_admin.router)
 
 
 @app.get("/health")
-async def health_check(deep: bool = False):
+async def health_check(request, deep: bool = False):
+    if not deep:
+        return {"status": "ok", "service": APP_ROLE}
+    if not _can_read_deep_health(request):
+        raise HTTPException(status_code=403, detail="Deep health requires admin or ops token")
     queue_backend = getattr(getattr(app.state, "job_queue", None), "backend_name", "none")
     via_backend = getattr(getattr(app.state, "via_event_bus", None), "backend_name", "none")
     queue = getattr(app.state, "job_queue", None)

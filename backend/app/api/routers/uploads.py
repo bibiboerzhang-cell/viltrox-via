@@ -28,6 +28,7 @@ from app.db.repositories.assets import (
 from app.services.media.r2 import upload_file as r2_upload, delete_object as r2_delete
 from app.services.media.fingerprints import probe_video_fingerprints
 from app.services.security.rate_limiter import rate_limit
+from app.services.security.mime_check import IMAGE_MIME_TYPES, VIDEO_MIME_TYPES, validate_upload_magic
 from app.core.security import get_current_user, require_admin
 from app.services.trust import enforce_dynamic_submission_guard
 
@@ -80,9 +81,8 @@ async def upload_video(request: Request):
         raise HTTPException(status_code=400, detail="Video file is required.")
     title = str(form.get("title") or "")
     notes = str(form.get("notes") or "")
-    allowed_mime = {"video/mp4", "video/quicktime", "video/webm", "video/x-msvideo", "video/mpeg"}
     content_type = file.content_type or ""
-    if content_type and content_type not in allowed_mime and not content_type.startswith("video/"):
+    if content_type and content_type not in VIDEO_MIME_TYPES and not content_type.startswith("video/"):
         return {"status": "error", "message": f"File type not allowed: {content_type}"}
     ext = Path(file.filename or "video").suffix or ".mp4"
     video_id = f"vid_{uuid.uuid4().hex[:10]}"
@@ -96,6 +96,9 @@ async def upload_video(request: Request):
         save_path.unlink(missing_ok=True)
         logger.exception("upload.video_save_failed", extra={"filename": file.filename or "", "content_type": content_type})
         return {"status": "error", "message": "Could not persist uploaded video"}
+    if not await asyncio.to_thread(validate_upload_magic, save_path, "video"):
+        save_path.unlink(missing_ok=True)
+        return {"status": "error", "message": "File content does not look like an allowed video"}
     size_mb = round(save_path.stat().st_size / (1024 * 1024), 2)
 
     async with _FINGERPRINT_SEMAPHORE:
@@ -176,9 +179,8 @@ async def upload_video(request: Request):
 @rate_limit("admin_mutation", max_requests=30, window_sec=300)
 async def admin_upload_reward_image(request: Request, file: UploadFile = File(...)):
     require_admin(request)
-    allowed = {"image/png", "image/jpeg", "image/webp", "image/gif"}
     content_type = file.content_type or ""
-    if content_type not in allowed:
+    if content_type not in IMAGE_MIME_TYPES:
         return {"status": "error", "message": f"File type not allowed: {content_type}"}
     img_dir = UPLOAD_DIR / "reward_images"
     img_dir.mkdir(parents=True, exist_ok=True)
@@ -194,4 +196,7 @@ async def admin_upload_reward_image(request: Request, file: UploadFile = File(..
         save_path.unlink(missing_ok=True)
         logger.exception("upload.reward_image_save_failed", extra={"filename": file.filename or "", "content_type": content_type})
         return {"status": "error", "message": "Could not persist reward image"}
+    if not await asyncio.to_thread(validate_upload_magic, save_path, "image"):
+        save_path.unlink(missing_ok=True)
+        return {"status": "error", "message": "File content does not look like an allowed image"}
     return {"status": "success", "image_url": f"/uploads/reward_images/{img_id}{ext}"}

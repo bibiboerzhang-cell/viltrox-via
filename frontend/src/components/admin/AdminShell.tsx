@@ -30,6 +30,10 @@ const NAV_ENTRIES: NavEntry[] = [
   { key: "via",        labelKey: "admin.nav.via",        fallback: "Via",        icon: "via",       to: "/admin/via" },
   { key: "command",    labelKey: "admin.nav.command",    fallback: "Command",    icon: "command",   to: "/admin/command" },
   { key: "runtime",    labelKey: "admin.nav.runtime",    fallback: "Runtime",    icon: "runtime",   to: "/admin/runtime", primary: true },
+  { key: "intelligence", labelKey: "admin.nav.intelligence", fallback: "Intelligence", icon: "analytics", to: "/admin/intelligence" },
+  { key: "deepsight", labelKey: "admin.nav.deepsight", fallback: "DeepSight", icon: "via", to: "/admin/deepsight" },
+  { key: "system", labelKey: "admin.nav.system", fallback: "System", icon: "command", to: "/admin/system" },
+  { key: "kol_ops", labelKey: "admin.nav.kol_ops", fallback: "KOL Ops", icon: "users", to: "/admin/kol-ops" },
 ];
 
 const PRIMARY_TABS = NAV_ENTRIES.filter((e) => e.primary);
@@ -52,6 +56,17 @@ function resolvePublicHomeHref(): string {
   }
 
   return "/";
+}
+
+function canReadTab(user: unknown, key: string): boolean {
+  const u = user as { role?: string; is_owner?: boolean; permissions?: Record<string, string> } | null;
+  if (!u) return false;
+  if (u.is_owner) return true;
+  const permissions = u.permissions || {};
+  if (Object.keys(permissions).length === 0) {
+    return String(u.role || "").toLowerCase() === "admin";
+  }
+  return ["read", "write"].includes(String(permissions[key] || "none").toLowerCase());
 }
 
 interface AdminShellProps {
@@ -103,6 +118,8 @@ export function AdminShell({ children, activeKey, badges, onSearch }: AdminShell
 
   const userInitial = (user?.name || user?.email || "A").trim().charAt(0).toUpperCase();
   const langLabel = i18n.language?.startsWith("zh") ? "中" : "EN";
+  const visibleNavEntries = NAV_ENTRIES.filter((entry) => canReadTab(user, entry.key));
+  const visiblePrimaryTabs = PRIMARY_TABS.filter((entry) => canReadTab(user, entry.key));
 
   return (
     <div className={`admin-root${drawerOpen ? " is-drawer-open" : ""}`}>
@@ -180,7 +197,7 @@ export function AdminShell({ children, activeKey, badges, onSearch }: AdminShell
       {/* ─── Body: sidebar + main ─── */}
       <div className="admin-root__body">
         <aside className="admin-root__sidebar" role="navigation">
-          {NAV_ENTRIES.map((entry) => {
+          {visibleNavEntries.map((entry) => {
             const Icon = Icons[entry.icon];
             const isActive = entry.key === resolvedActiveKey;
             const badge = badges?.[entry.key];
@@ -209,7 +226,7 @@ export function AdminShell({ children, activeKey, badges, onSearch }: AdminShell
 
       {/* Mobile bottom tab bar (hidden on desktop via CSS) */}
       <nav className="admin-root__tabbar" role="navigation" aria-label="主导航">
-        {PRIMARY_TABS.map((entry) => {
+        {visiblePrimaryTabs.map((entry) => {
           const Icon = Icons[entry.icon];
           const isActive = entry.key === resolvedActiveKey;
           const badge = badges?.[entry.key];

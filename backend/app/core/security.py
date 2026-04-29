@@ -188,6 +188,14 @@ def get_current_user(request: Request):
     if not user:
         return None
     user_dict = dict(user)
+    try:
+        from app.core.permissions import staff_context_for_user
+
+        staff = staff_context_for_user(user_dict)
+        user_dict["permissions"] = staff.get("permissions", {})
+        user_dict["is_owner"] = bool(staff.get("is_owner"))
+    except Exception:
+        logger.debug("security.staff_context_attach_failed", exc_info=True)
     cache_set(cache_key, user_dict, ttl=int(USER_CACHE_TTL_SEC))
     return user_dict
 

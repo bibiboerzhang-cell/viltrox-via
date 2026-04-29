@@ -8,6 +8,7 @@ from pathlib import Path
 
 from app.core.security import make_token, verify_password
 from app.core.config import DB_PATH, IS_PRODUCTION, PROJECT_ROOT
+from app.core.permissions import staff_context_for_user
 from app.db.connection import get_conn, is_postgres_runtime
 from app.db.repositories.users import creator_code_exists, generate_creator_code
 from app.services.auth.lockout import LOCKOUT_MINUTES, clear_failed, is_locked_out, record_failed_login
@@ -21,6 +22,8 @@ def _row_value(user, key: str, default=None):
 
 
 def build_login_payload(user) -> dict:
+    user_dict = dict(user)
+    staff = staff_context_for_user(user_dict)
     return {
         "status": "success",
         "token": make_token(user["id"], user["role"]),
@@ -39,18 +42,20 @@ def build_login_payload(user) -> dict:
             "tier_status": _row_value(user, "tier_status", "pending"),
             "trust_score": _row_value(user, "trust_score", 30),
             "trust_updated_at": _row_value(user, "trust_updated_at", ""),
+            "permissions": staff.get("permissions", {}),
+            "is_owner": bool(staff.get("is_owner")),
         },
     }
 
 
 def validate_login_credentials(user, password: str, *, client_ip: str = "") -> dict | None:
     if not user:
-        return {"status": "error", "message": "Email not found"}
+        return {"status": "error", "message": "Invalid email or password"}
     if is_locked_out(int(user["id"])):
         return {"status": "error", "message": f"Too many failed attempts, try again in {LOCKOUT_MINUTES} minutes"}
     if not verify_password(password, user["password_hash"]):
         record_failed_login(int(user["id"]), client_ip)
-        return {"status": "error", "message": "Wrong password"}
+        return {"status": "error", "message": "Invalid email or password"}
     clear_failed(int(user["id"]))
     if IS_PRODUCTION and int(_row_value(user, "email_verified", 0) or 0) != 1:
         return {"status": "error", "message": "Please verify your email before signing in"}

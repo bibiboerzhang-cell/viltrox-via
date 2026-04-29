@@ -14,10 +14,23 @@ import secrets
 from datetime import datetime, timedelta
 from typing import Any
 
+from app.core.config import SITE_URL
 from app.core.logging import get_logger
+from app.core.permissions import (
+    OWNER_EMAILS,
+    SYSTEM_PERMISSION_KEYS,
+    TAB_PERMISSION_KEYS,
+    default_permissions_for_role,
+    normalize_permissions,
+)
+from app.core.security import hash_password
 from app.db.connection import get_conn
+from app.services.auth.email import send_email
+from app.services.auth.tokens import create_email_token
 
 logger = get_logger(__name__)
+
+ALLOWED_STAFF_EMAIL_DOMAINS = ["viltrox.com"]
 
 
 # Canonical role → permissions matrix (displayed on UI)
@@ -104,6 +117,11 @@ def list_members() -> dict:
                     extra={"staff_id": m.get("id")},
                     exc_info=True,
                 )
+        m["permissions"] = normalize_permissions(
+            m.get("permissions") or m.get("permissions_json"),
+            str(m.get("role") or "readonly"),
+            owner=bool(m.get("is_owner")),
+        )
         members.append(m)
     if members:
         return {"members": members}
@@ -155,12 +173,13 @@ def invite(body: dict, *, inviter_id: int) -> dict:
       3. Send email with magic link (out of scope — hook in your mailer).
     """
     conn = get_conn()
-    email = body.get("email")
+    email = str(body.get("email") or "").strip().lower()
     role = body.get("role", "readonly")
     if role not in ROLES:
         raise ValueError(f"unknown role: {role}")
     if not email:
         raise ValueError("email required")
+    _validate_staff_email(email)
 
     user = conn.execute(
         "SELECT id FROM users WHERE email = ?", (email,)
@@ -182,21 +201,87 @@ def invite(body: dict, *, inviter_id: int) -> dict:
         )
         user_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
 
+    owner = email in OWNER_EMAILS
+    permissions = normalize_permissions(
+        body.get("permissions") or body.get("permissions_override") or {},
+        role,
+        owner=owner,
+    )
     cur = conn.cursor()
+    columns = _staff_columns(conn)
+    insert_cols = ["user_id", "role", "permissions_json", "mfa_enabled", "active", "invited_by", "invited_at"]
+    values: list[Any] = [user_id, role, json.dumps(permissions), 0, 1, inviter_id, _utcnow()]
+    if "is_owner" in columns:
+        insert_cols.append("is_owner"); values.append(1 if owner else 0)
+    if "email_domain_verified" in columns:
+        insert_cols.append("email_domain_verified"); values.append(1)
+    if "invited_by_staff_id" in columns:
+        insert_cols.append("invited_by_staff_id"); values.append(_staff_id_for_user(conn, inviter_id))
+    placeholders = ",".join(["?"] * len(insert_cols))
     cur.execute(
-        """INSERT INTO staff (user_id, role, permissions_json,
-             mfa_enabled, active, invited_by, invited_at)
-           VALUES (?, ?, ?, 0, 1, ?, datetime('now'))""",
-        (
-            user_id, role,
-            json.dumps(body.get("permissions_override") or {}),
-            inviter_id,
-        ),
+        f"INSERT INTO staff ({', '.join(insert_cols)}) VALUES ({placeholders})",
+        values,
     )
     conn.commit()
 
-    # TODO: send invite email with magic link
-    return {"id": cur.lastrowid, "user_id": user_id, "role": role, "email": email}
+    token = create_email_token(int(user_id), "staff_invite")
+    _send_staff_invite_email(email, token)
+    return {
+        "id": cur.lastrowid,
+        "user_id": user_id,
+        "role": role,
+        "email": email,
+        "invite_sent": True,
+    }
+
+
+def accept_invite(invite_token: str, password: str) -> dict:
+    token = str(invite_token or "").strip()
+    if not token:
+        raise ValueError("invite_token required")
+    if len(str(password or "")) < 8:
+        raise ValueError("password must be at least 8 characters")
+    conn = get_conn()
+    row = conn.execute(
+        """
+        SELECT id, user_id, expires_at, used_at
+        FROM email_tokens
+        WHERE token = ? AND type = 'staff_invite'
+        """,
+        (token,),
+    ).fetchone()
+    if not row:
+        raise ValueError("invalid invite token")
+    if row["used_at"]:
+        raise ValueError("invite token already used")
+    expires_at = str(row["expires_at"] or "")
+    if expires_at and expires_at < _utcnow():
+        raise ValueError("invite token expired")
+    now = _utcnow()
+    user_id = int(row["user_id"])
+    conn.execute(
+        """
+        UPDATE users
+        SET password_hash = ?, email_verified = 1, status = 'active', role = 'admin'
+        WHERE id = ?
+        """,
+        (hash_password(password), user_id),
+    )
+    columns = _staff_columns(conn)
+    fields = ["active = 1", "accepted_at = ?"]
+    values: list[Any] = [now]
+    if "last_login_at" in columns:
+        fields.append("last_login_at = ?"); values.append(now)
+    if "email_domain_verified" in columns:
+        fields.append("email_domain_verified = 1")
+    values.append(user_id)
+    conn.execute(
+        f"UPDATE staff SET {', '.join(fields)} WHERE user_id = ?",
+        values,
+    )
+    conn.execute("UPDATE email_tokens SET used_at = ? WHERE id = ?", (now, int(row["id"])))
+    conn.commit()
+    return {"ok": True, "user_id": user_id}
 
 
 def _unique_placeholder_creator_code(conn, base: str) -> str:
@@ -219,7 +304,10 @@ def update(staff_id: int, body: dict) -> None:
         fields.append("role = ?"); params.append(body["role"])
     if "permissions_override" in body:
         fields.append("permissions_json = ?")
-        params.append(json.dumps(body["permissions_override"]))
+        params.append(json.dumps(normalize_permissions(body["permissions_override"], body.get("role", "readonly"))))
+    if "permissions" in body:
+        fields.append("permissions_json = ?")
+        params.append(json.dumps(normalize_permissions(body["permissions"], body.get("role", "readonly"))))
     if "mfa_enabled" in body:
         fields.append("mfa_enabled = ?")
         params.append(1 if body["mfa_enabled"] else 0)
@@ -227,6 +315,25 @@ def update(staff_id: int, body: dict) -> None:
         return
     params.append(staff_id)
     conn.execute(f"UPDATE staff SET {', '.join(fields)} WHERE id = ?", params)
+    conn.commit()
+
+
+def update_permissions(staff_id: int, permissions: dict[str, str], *, actor_is_owner: bool = False) -> None:
+    if not actor_is_owner:
+        raise PermissionError("only owner can update staff permissions")
+    conn = get_conn()
+    row = conn.execute("SELECT role, is_owner FROM staff WHERE id = ?", (staff_id,)).fetchone()
+    if not row:
+        raise ValueError("staff not found")
+    normalized = normalize_permissions(
+        permissions,
+        str(row["role"] or "readonly"),
+        owner=bool(row["is_owner"]),
+    )
+    conn.execute(
+        "UPDATE staff SET permissions_json = ? WHERE id = ?",
+        (json.dumps(normalized), staff_id),
+    )
     conn.commit()
 
 
@@ -265,9 +372,12 @@ def list_roles() -> dict:
 def permission_matrix() -> dict:
     """Flat matrix display: {role: {module: [permissions]}}."""
     return {
-        "modules": ["content", "creators", "commerce", "intelligence",
-                    "via", "system", "trust", "staff"],
+        "modules": [*TAB_PERMISSION_KEYS, *SYSTEM_PERMISSION_KEYS],
         "roles": {k: v["permissions"] for k, v in ROLES.items()},
+        "defaults": {
+            "admin": default_permissions_for_role("admin"),
+            "readonly": default_permissions_for_role("readonly"),
+        },
     }
 
 
@@ -441,3 +551,45 @@ def _verify_token(raw: str, stored: str) -> bool:
             return False
     except ImportError:
         return False
+
+
+def _validate_staff_email(email: str) -> None:
+    if "@" not in email:
+        raise ValueError("valid email required")
+    domain = email.rsplit("@", 1)[-1].lower()
+    if domain not in ALLOWED_STAFF_EMAIL_DOMAINS:
+        raise ValueError("Only @viltrox.com emails allowed")
+
+
+def _utcnow() -> str:
+    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _staff_columns(conn) -> set[str]:
+    try:
+        rows = conn.execute("PRAGMA table_info(staff)").fetchall()
+        return {str(row["name"]) for row in rows}
+    except Exception:
+        return set()
+
+
+def _staff_id_for_user(conn, user_id: int) -> int | None:
+    try:
+        row = conn.execute("SELECT id FROM staff WHERE user_id = ? ORDER BY id DESC LIMIT 1", (int(user_id),)).fetchone()
+        return int(row["id"]) if row else None
+    except Exception:
+        return None
+
+
+def _send_staff_invite_email(email: str, token: str) -> bool:
+    url = f"{SITE_URL.rstrip('/')}/admin/login?staff_invite={token}"
+    html = (
+        '<div style="font-family:Inter,Arial,sans-serif;max-width:560px;margin:0 auto;padding:32px 24px">'
+        '<p style="font-size:20px;font-weight:900;color:#ff8f2a">V-OS Admin</p>'
+        '<h2 style="font-size:22px;font-weight:800">You have been invited to V-OS Admin</h2>'
+        '<p style="color:#5f6673;font-size:14px">Use the secure link below to set your password and accept the invite.</p>'
+        f'<a href="{url}" style="display:inline-block;padding:13px 28px;background:#1a1d23;color:#fff;'
+        'font-weight:700;font-size:14px;text-decoration:none;border-radius:8px">Accept invite</a>'
+        '<p style="color:#aaa;font-size:12px;margin-top:24px">Link expires automatically.</p></div>'
+    )
+    return send_email(email, "V-OS Admin invitation", html)

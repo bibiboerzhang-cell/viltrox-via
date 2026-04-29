@@ -24,11 +24,15 @@ import {
   AnalyticsTab,
   CommandTab,
   CreatorsTab,
+  DeepSightTab,
+  IntelligenceTab,
+  KolOpsTab,
   OperationsTab,
   OverviewTab,
   ProductsTab,
   RuntimeTab,
   StudentTab,
+  SystemTab,
   ViaTab,
 } from "../../components/admin/tabs_v2";
 import { useAuth } from "../../hooks/useAuth";
@@ -55,6 +59,29 @@ function AdminAuthLoading() {
         </h1>
         <p className="admin-auth-card__subtitle">
           {t("admin.shell.loadingSubtitle", "请稍等，正在校验本地登录态。")}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function hasTabPermission(user: { role?: string; is_owner?: boolean; permissions?: Record<string, string> }, tabKey: string): boolean {
+  if (user.is_owner) return true;
+  const permissions = user.permissions || {};
+  if (Object.keys(permissions).length === 0) {
+    return String(user.role || "").toLowerCase() === "admin";
+  }
+  return ["read", "write"].includes(String(permissions[tabKey] || "none").toLowerCase());
+}
+
+function NoPermissionCard() {
+  const { t } = useTranslation();
+  return (
+    <div style={{ padding: 16 }}>
+      <div className="ax-card">
+        <h2 style={{ marginTop: 0 }}>{t("admin.permissions.no_access", "您没有此板块的访问权限")}</h2>
+        <p style={{ color: "var(--ax-text-2)", marginBottom: 0 }}>
+          {t("admin.permissions.contact_owner", "请联系 owner 申请权限。")}
         </p>
       </div>
     </div>
@@ -126,6 +153,14 @@ export default function AdminRoute() {
   const tokenStr = token ?? "";
 
   const section = location.pathname.replace(/^\/admin\/?/, "").split("/")[0] || "overview";
+  const normalizedSection = section === "kol-ops" ? "kol_ops" : section;
+  if (!hasTabPermission(user, normalizedSection)) {
+    return (
+      <AdminShell activeKey={normalizedSection}>
+        <NoPermissionCard />
+      </AdminShell>
+    );
+  }
   const tab = (() => {
     switch (section) {
       case "overview":
@@ -146,6 +181,14 @@ export default function AdminRoute() {
         return <CommandTab token={tokenStr} user={user} />;
       case "runtime":
         return <RuntimeTab token={tokenStr} user={user} />;
+      case "intelligence":
+        return <IntelligenceTab token={tokenStr} user={user} />;
+      case "deepsight":
+        return <DeepSightTab token={tokenStr} user={user} />;
+      case "system":
+        return <SystemTab token={tokenStr} user={user} />;
+      case "kol-ops":
+        return <KolOpsTab token={tokenStr} user={user} />;
       default:
         return <Navigate to="/admin" replace />;
     }
