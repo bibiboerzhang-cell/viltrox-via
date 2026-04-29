@@ -168,6 +168,14 @@ def _admin_permission_for_request(path: str, method: str) -> tuple[str, str, boo
         return ("kol_ops", level, False)
     if path.startswith("/api/admin/deepsight"):
         return ("deepsight", level, False)
+    if path.startswith("/api/admin/intel/student"):
+        return ("student", level, False)
+    if path.startswith("/api/admin/intel/via"):
+        return ("via", level, False)
+    if path.startswith("/api/admin/intel/system"):
+        return ("runtime", level, False)
+    if path.startswith("/api/intelligence/market") or path.startswith("/api/intelligence/brand"):
+        return ("analytics", level, False)
     if path.startswith("/api/admin/intel") or path.startswith("/api/intelligence"):
         return ("intelligence", level, False)
     if path.startswith("/api/admin/analytics") or path.startswith("/api/admin/insights") or path.startswith("/api/admin/benchmarks") or path.startswith("/api/admin/learning"):
@@ -178,6 +186,14 @@ def _admin_permission_for_request(path: str, method: str) -> tuple[str, str, boo
         return ("products", level, False)
     if path.startswith("/api/admin/creator") or path.startswith("/api/admin/creators"):
         return ("creators", level, False)
+    if path.startswith("/api/admin/users/") and (
+        path.endswith("/block")
+        or path.endswith("/unblock")
+        or path.endswith("/flag")
+        or path.endswith("/clear-flag")
+        or path.endswith("/adjust-score")
+    ):
+        return ("command", level, False)
     if path.startswith("/api/admin/users") or path.startswith("/api/admin/social-accounts") or path.startswith("/api/admin/verifications") or path.startswith("/api/admin/submissions") or path.startswith("/api/admin/approve") or path.startswith("/api/admin/reject") or path.startswith("/api/admin/reanalyze") or path.startswith("/api/admin/redemptions") or path.startswith("/api/verify/queue") or path.startswith("/api/verify/admin") or path.endswith("/scan") or path.endswith("/approve") or path.endswith("/reject"):
         return ("operations", level, False)
     if path.startswith("/api/admin/student") or path.startswith("/api/student/admin"):

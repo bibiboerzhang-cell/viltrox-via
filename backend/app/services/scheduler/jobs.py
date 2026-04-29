@@ -8,6 +8,7 @@ services/scheduler/jobs.py — APScheduler 定时任务定义
   - cache_cleanup                   每 30 分钟清理过期缓存
   - pending_asset_cleanup           每 30 分钟软删除未绑定上传资产
   - rate_limit_cleanup              每 1 小时清理 rate limit 旧 bucket
+  - provider_health_check           每 5 分钟检查 AI/平台 provider key 健康
   - bh_daily_snapshot               每天凌晨 03:00 抓 B&H 快照
 
 启停:
@@ -89,6 +90,17 @@ async def job_rate_limit_cleanup():
             logger.info("scheduler.rate_limit_cleanup", extra={"stale": n})
     except Exception:
         logger.exception("scheduler.rate_limit_cleanup_failed")
+
+
+async def job_provider_health_check():
+    """每 5 分钟做 provider 最小 HTTP probe, 结果供 SystemTab 展示."""
+    try:
+        from app.services.system.provider_health import run_provider_health_check
+
+        result = await run_provider_health_check()
+        logger.info("scheduler.provider_health_check", extra={"ok": result.get("ok")})
+    except Exception:
+        logger.exception("scheduler.provider_health_check_failed")
 
 
 async def job_bh_daily_snapshot():
@@ -204,8 +216,18 @@ async def start_scheduler() -> None:
         max_instances=1,
         coalesce=True,
     )
+
+    # ── Job 5: provider health probe ──
+    _scheduler.add_job(
+        job_provider_health_check,
+        trigger=IntervalTrigger(minutes=5),
+        id="provider_health_check",
+        name="Probe AI/platform providers every 5 min",
+        max_instances=1,
+        coalesce=True,
+    )
     
-    # ── Job 5: B&H daily snapshot ──
+    # ── Job 6: B&H daily snapshot ──
     _scheduler.add_job(
         job_bh_daily_snapshot,
         trigger=CronTrigger(hour=3, minute=0),
@@ -216,7 +238,7 @@ async def start_scheduler() -> None:
     )
     
 
-    # ── Job 6: Via daily learning ──
+    # ── Job 7: Via daily learning ──
     if VIA_ENABLE_DAILY_LEARNING:
         _scheduler.add_job(
             job_via_daily_learning,
@@ -227,7 +249,7 @@ async def start_scheduler() -> None:
             coalesce=True,
         )
 
-    # ── Job 7: confirm partial awards (三阶段发放) ──
+    # ── Job 8: confirm partial awards (三阶段发放) ──
     _scheduler.add_job(
         job_confirm_partial_awards,
         trigger=IntervalTrigger(minutes=10),

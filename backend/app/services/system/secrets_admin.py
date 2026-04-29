@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.logging import get_logger
+from app.core.model_registry import TASK_MODEL_ENV_KEYS, split_binding, validate_task_model
 from app.services.auth.email import send_email
 
 logger = get_logger(__name__)
@@ -101,6 +102,16 @@ def _atomic_write(path: Path, content: str) -> None:
             logger.warning("secrets_admin.tmp_cleanup_failed", exc_info=True)
 
 
+def write_env_values(updates: dict[str, str]) -> None:
+    clean_updates = {str(key).strip(): str(value).strip() for key, value in updates.items() if str(key).strip()}
+    if not clean_updates:
+        return
+    lines = _read_env_lines(ENV_PATH)
+    content = _render_env(lines, clean_updates)
+    _atomic_write(ENV_PATH, content)
+    os.environ.update(clean_updates)
+
+
 def rotate_provider_key(
     provider: str,
     new_key: str,
@@ -120,9 +131,7 @@ def rotate_provider_key(
         updates[previous_key] = current
     content = _render_env(lines, updates)
     _atomic_write(ENV_PATH, content)
-    os.environ[env_key] = clean_key
-    if previous_key in updates:
-        os.environ[previous_key] = updates[previous_key]
+    os.environ.update(updates)
     _notify_rotation(provider, env_key, actor_email)
     return {
         "ok": True,
@@ -130,6 +139,27 @@ def rotate_provider_key(
         "env_key": env_key,
         "key_prefix": mask_secret(clean_key),
         "previous_set": bool(updates.get(previous_key)),
+        "requires_restart": True,
+    }
+
+
+def set_task_model_binding(task: str, binding: str, *, actor_email: str = "") -> dict[str, Any]:
+    if not validate_task_model(task, binding):
+        raise ValueError("unsupported task/model binding")
+    provider, model = split_binding(binding)
+    model_env, provider_env = TASK_MODEL_ENV_KEYS.get(task, ("", None))
+    if not model_env:
+        raise ValueError("model binding is not configurable")
+    updates = {model_env: model}
+    if provider_env:
+        updates[provider_env] = provider
+    write_env_values(updates)
+    _notify_model_switch(task, binding, actor_email)
+    return {
+        "ok": True,
+        "task": task,
+        "model": binding,
+        "env_keys": sorted(updates.keys()),
         "requires_restart": True,
     }
 
@@ -151,3 +181,22 @@ def _notify_rotation(provider: str, env_key: str, actor_email: str) -> None:
         )
     except Exception:
         logger.warning("secrets_admin.rotation_email_failed", exc_info=True)
+
+
+def _notify_model_switch(task: str, binding: str, actor_email: str) -> None:
+    if not SECURITY_NOTIFY_EMAIL:
+        return
+    try:
+        send_email(
+            SECURITY_NOTIFY_EMAIL,
+            f"V-OS model binding changed: {task}",
+            (
+                "<p>Model binding change was requested from V-OS Admin.</p>"
+                f"<p><b>Task:</b> {task}</p>"
+                f"<p><b>Model:</b> {binding}</p>"
+                f"<p><b>Actor:</b> {actor_email or 'unknown'}</p>"
+                "<p>The change is written to the environment file and requires a service restart.</p>"
+            ),
+        )
+    except Exception:
+        logger.warning("secrets_admin.model_switch_email_failed", exc_info=True)
