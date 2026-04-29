@@ -193,6 +193,12 @@ export interface AdminRedemptionRecord {
   creator_code?: string;
   points_cost?: number;
   tracking_number?: string;
+  shipping_carrier?: string;
+  approved_at?: string;
+  packed_at?: string;
+  shipped_at?: string;
+  delivered_at?: string;
+  warehouse_staff_id?: number;
   admin_note?: string;
   created_at?: string;
 }
@@ -652,6 +658,30 @@ export function updateAdminRedemption(
   );
 }
 
+export function fetchAdminRedemptionDetail(token: string, redemptionId: number) {
+  return apiFetch<Record<string, unknown>>(
+    `/api/admin/redemptions/${encodeURIComponent(String(redemptionId))}`,
+    {},
+    token,
+  );
+}
+
+export function transitionAdminRedemption(
+  token: string,
+  redemptionId: number,
+  action: "approve" | "pack" | "ship" | "deliver" | "reject",
+  payload: Record<string, unknown> = {},
+) {
+  return apiFetch<Record<string, unknown>>(
+    `/api/admin/redemptions/${encodeURIComponent(String(redemptionId))}/${action}`,
+    {
+      method: "POST",
+      body: jsonBody(payload),
+    },
+    token,
+  );
+}
+
 export function createAdminReward(
   token: string,
   payload: {
@@ -758,6 +788,42 @@ export function grantAdminPoints(
     {
       method: "POST",
       body: jsonBody(payload),
+    },
+    token,
+  );
+}
+
+export function batchGrantAdminPoints(token: string, payload: { user_ids: number[]; points: number; reason: string }) {
+  return apiFetch<Record<string, unknown>>(
+    "/api/admin/users/batch-grant-points",
+    {
+      method: "POST",
+      body: jsonBody(payload),
+    },
+    token,
+  );
+}
+
+export function grantAdminPointsByRule(
+  token: string,
+  payload: { role?: string; status?: string; points: number; reason: string; limit?: number },
+) {
+  return apiFetch<Record<string, unknown>>(
+    "/api/admin/users/grant-points-by-rule",
+    {
+      method: "POST",
+      body: jsonBody(payload),
+    },
+    token,
+  );
+}
+
+export function updateAdminCreatorCode(token: string, userId: number, creatorCode: string) {
+  return apiFetch<Record<string, unknown>>(
+    `/api/admin/users/${encodeURIComponent(String(userId))}/creator-code`,
+    {
+      method: "PUT",
+      body: jsonBody({ creator_code: creatorCode }),
     },
     token,
   );
@@ -1533,6 +1599,38 @@ export function fetchSystemUsage(token: string, days = 7): Promise<SystemUsageSn
   return apiFetch<SystemUsageSnapshot>(`/api/admin/system/usage?days=${encodeURIComponent(days)}`, {}, token);
 }
 
+export function fetchInsightsOverview(token: string, window = "30d") {
+  return apiFetch<Record<string, unknown>>(`/api/admin/insights/overview?window=${encodeURIComponent(window)}`, {}, token);
+}
+
+export function fetchInsightsUsers(token: string, window = "30d") {
+  return apiFetch<Record<string, unknown>>(`/api/admin/insights/users?window=${encodeURIComponent(window)}`, {}, token);
+}
+
+export function fetchInsightsContent(token: string, window = "30d") {
+  return apiFetch<Record<string, unknown>>(`/api/admin/insights/content?window=${encodeURIComponent(window)}`, {}, token);
+}
+
+export function fetchInsightsCommerce(token: string, window = "30d") {
+  return apiFetch<Record<string, unknown>>(`/api/admin/insights/commerce?window=${encodeURIComponent(window)}`, {}, token);
+}
+
+export function fetchInsightsChannels(token: string, window = "30d") {
+  return apiFetch<Record<string, unknown>>(`/api/admin/insights/channels?window=${encodeURIComponent(window)}`, {}, token);
+}
+
+export function fetchInsightsCohorts(token: string, weeks = 12) {
+  return apiFetch<Record<string, unknown>>(`/api/admin/insights/cohorts?weeks=${encodeURIComponent(String(weeks))}`, {}, token);
+}
+
+export function fetchInsightsHealth(token: string) {
+  return apiFetch<Record<string, unknown>>("/api/admin/insights/health", {}, token);
+}
+
+export function fetchInsightsStaffKpi(token: string, window = "30d") {
+  return apiFetch<Record<string, unknown>>(`/api/admin/insights/staff-kpi?window=${encodeURIComponent(window)}`, {}, token);
+}
+
 export function requestSystemModelSwitch(
   token: string,
   payload: { task: string; model: string; confirm_password: string },
@@ -1603,6 +1701,41 @@ export function updateStaffPermissions(
       method: "POST",
       body: jsonBody({ permissions }),
     },
+    token,
+  );
+}
+
+export function resendStaffInvite(token: string, staffId: number) {
+  return apiFetch<Record<string, unknown>>(
+    `/api/admin/staff/${encodeURIComponent(String(staffId))}/resend-invite`,
+    { method: "POST" },
+    token,
+  );
+}
+
+export function suspendStaffMember(token: string, staffId: number, reason = "owner_suspend") {
+  return apiFetch<Record<string, unknown>>(
+    `/api/admin/staff/${encodeURIComponent(String(staffId))}/suspend`,
+    {
+      method: "POST",
+      body: jsonBody({ reason }),
+    },
+    token,
+  );
+}
+
+export function reactivateStaffMember(token: string, staffId: number) {
+  return apiFetch<Record<string, unknown>>(
+    `/api/admin/staff/${encodeURIComponent(String(staffId))}/reactivate`,
+    { method: "POST" },
+    token,
+  );
+}
+
+export function deleteStaffMember(token: string, staffId: number) {
+  return apiFetch<Record<string, unknown>>(
+    `/api/admin/staff/${encodeURIComponent(String(staffId))}`,
+    { method: "DELETE" },
     token,
   );
 }

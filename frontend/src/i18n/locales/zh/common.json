@@ -891,7 +891,12 @@
       "student": "学生",
       "via": "Via",
       "command": "总控",
-      "runtime": "运行态"
+      "runtime": "运行态",
+      "intelligence": "情报",
+      "deepsight": "DeepSight",
+      "system": "系统",
+      "kol_ops": "KOL 运营",
+      "insights": "Insights"
     },
     "shell": {
       "searchPlaceholder": "搜索 VID / handle / 邮箱…",

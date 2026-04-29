@@ -26,6 +26,7 @@ import {
   CreatorsTab,
   DeepSightTab,
   IntelligenceTab,
+  InsightsTab,
   KolOpsTab,
   OperationsTab,
   OverviewTab,
@@ -189,6 +190,8 @@ export default function AdminRoute() {
         return <SystemTab token={tokenStr} user={user} />;
       case "kol-ops":
         return <KolOpsTab token={tokenStr} user={user} />;
+      case "insights":
+        return <InsightsTab token={tokenStr} user={user} />;
       default:
         return <Navigate to="/admin" replace />;
     }

@@ -36,6 +36,7 @@ from app.services.creator_public import (
     list_creator_shop_heroes,
     upsert_creator_shop_hero,
 )
+from app.services.audit_log import record_admin_action
 from app.services.security.rate_limiter import rate_limit
 
 # ── 1. 统一导入 Schema ──
@@ -124,6 +125,106 @@ def _update_redemption_record(rid: int, status: str, tracking_number: str, admin
     )
     conn.commit()
     return cur.rowcount == 1
+
+
+def _table_columns(conn, table: str) -> set[str]:
+    try:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        return {str(row["name"] if hasattr(row, "keys") else row[1]) for row in rows}
+    except Exception:
+        return set()
+
+
+def _ensure_redemption_ops_schema(conn) -> None:
+    columns = _table_columns(conn, "redemptions")
+    additions = {
+        "approved_at": "TEXT DEFAULT ''",
+        "packed_at": "TEXT DEFAULT ''",
+        "shipped_at": "TEXT DEFAULT ''",
+        "delivered_at": "TEXT DEFAULT ''",
+        "shipping_carrier": "TEXT DEFAULT ''",
+        "warehouse_staff_id": "INTEGER",
+        "notification_log_json": "TEXT DEFAULT '{}'",
+    }
+    changed = False
+    for name, ddl in additions.items():
+        if name in columns:
+            continue
+        try:
+            conn.execute(f"ALTER TABLE redemptions ADD COLUMN {name} {ddl}")
+            changed = True
+        except Exception:
+            logger.debug("admin.redemptions_add_column_failed", extra={"column": name}, exc_info=True)
+    if changed:
+        conn.commit()
+
+
+def _transition_redemption_record(
+    rid: int,
+    new_status: str,
+    *,
+    admin_id: int,
+    note: str = "",
+    tracking_number: str = "",
+    shipping_carrier: str = "",
+) -> dict[str, Any] | None:
+    conn = get_conn()
+    _ensure_redemption_ops_schema(conn)
+    row = conn.execute("SELECT * FROM redemptions WHERE id=?", (int(rid),)).fetchone()
+    if not row:
+        return None
+    current = str(row["status"] or "pending").lower()
+    allowed = {
+        "pending": {"approved", "packed", "rejected"},
+        "approved": {"packed", "rejected"},
+        "packed": {"shipped", "rejected"},
+        "shipped": {"delivered"},
+        "delivered": set(),
+        "rejected": set(),
+        "cancelled": set(),
+        "fulfilled": {"packed", "shipped", "delivered"},
+    }
+    target = str(new_status or "").strip().lower()
+    if target not in {"approved", "packed", "shipped", "delivered", "rejected"}:
+        raise ValueError("unsupported redemption status")
+    if target not in allowed.get(current, {target}) and target != current:
+        raise ValueError(f"invalid transition: {current} -> {target}")
+    now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    fields = ["status = ?", "admin_note = COALESCE(NULLIF(?, ''), admin_note)"]
+    values: list[Any] = [target, note]
+    if target == "approved":
+        fields.append("approved_at = COALESCE(NULLIF(approved_at, ''), ?)")
+        values.append(now)
+    elif target == "packed":
+        fields.append("packed_at = COALESCE(NULLIF(packed_at, ''), ?)")
+        fields.append("warehouse_staff_id = ?")
+        values.extend([now, int(admin_id)])
+    elif target == "shipped":
+        fields.append("shipped_at = COALESCE(NULLIF(shipped_at, ''), ?)")
+        fields.append("tracking_number = COALESCE(NULLIF(?, ''), tracking_number)")
+        fields.append("shipping_carrier = COALESCE(NULLIF(?, ''), shipping_carrier)")
+        values.extend([now, tracking_number, shipping_carrier])
+    elif target == "delivered":
+        fields.append("delivered_at = COALESCE(NULLIF(delivered_at, ''), ?)")
+        values.append(now)
+    elif target == "rejected":
+        fields.append("approved_at = COALESCE(approved_at, '')")
+        points = int(row["points_cost"] or 0) if "points_cost" in row.keys() else 0
+        user_id = int(row["user_id"] or 0) if "user_id" in row.keys() else 0
+        if points > 0 and user_id:
+            user = conn.execute("SELECT points_balance, points_total FROM users WHERE id=?", (user_id,)).fetchone()
+            if user:
+                balance = int(user["points_balance"] or 0) + points
+                total = max(0, int(user["points_total"] or 0))
+                conn.execute("UPDATE users SET points_balance=?, points_total=? WHERE id=?", (balance, total, user_id))
+                conn.execute(
+                    "INSERT INTO points_log (created_at,user_id,delta,reason,balance_after) VALUES (?,?,?,?,?)",
+                    (now, user_id, points, f"Redemption #{rid} rejected refund", balance),
+                )
+    values.append(int(rid))
+    conn.execute(f"UPDATE redemptions SET {', '.join(fields)} WHERE id=?", values)
+    conn.commit()
+    return dict(conn.execute("SELECT * FROM redemptions WHERE id=?", (int(rid),)).fetchone())
 
 
 def _grant_points_to_user(uid: int, points: int, reason: str, now: str):
@@ -1385,6 +1486,114 @@ def admin_points_log(
         limit=limit,
     )
 
+
+@router.post("/api/admin/users/batch-grant-points")
+@rate_limit("admin_mutation", max_requests=60, window_sec=300)
+async def admin_batch_grant_points(request: Request):
+    admin = await require_admin_async(request)
+    body = await request.json()
+    user_ids = [int(x) for x in (body.get("user_ids") or []) if str(x).strip().isdigit()]
+    points = int(body.get("points") or 0)
+    reason = str(body.get("reason") or "Admin batch grant").strip()
+    if not user_ids:
+        raise HTTPException(status_code=400, detail="user_ids required")
+    if points <= 0:
+        raise HTTPException(status_code=400, detail="points must be greater than 0")
+    now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    results = []
+    for uid in sorted(set(user_ids)):
+        new_balance = await db_write(partial(_grant_points_to_user, uid, points, reason, now))
+        if new_balance is not None:
+            _refresh_user_points_state(uid, reason="admin_batch_grant_points")
+            results.append({"user_id": uid, "new_balance": new_balance})
+    record_admin_action(
+        actor=admin,
+        action="batch_grant_points",
+        target_type="users",
+        target_id=",".join(str(r["user_id"]) for r in results[:20]),
+        detail={"points": points, "reason": reason, "count": len(results)},
+        request=request,
+    )
+    _invalidate_admin_cache()
+    return {"status": "success", "count": len(results), "results": results}
+
+
+@router.post("/api/admin/users/grant-points-by-rule")
+@rate_limit("admin_mutation", max_requests=30, window_sec=300)
+async def admin_grant_points_by_rule(request: Request):
+    admin = await require_admin_async(request)
+    body = await request.json()
+    points = int(body.get("points") or 0)
+    reason = str(body.get("reason") or "Admin rule grant").strip()
+    role = str(body.get("role") or "").strip().lower()
+    status = str(body.get("status") or "").strip().lower()
+    limit = min(max(int(body.get("limit") or 100), 1), 1000)
+    if points <= 0:
+        raise HTTPException(status_code=400, detail="points must be greater than 0")
+    where, params = [], []
+    if role:
+        where.append("LOWER(COALESCE(role, '')) = ?")
+        params.append(role)
+    if status:
+        where.append("LOWER(COALESCE(status, '')) = ?")
+        params.append(status)
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+    conn = get_conn()
+    rows = conn.execute(
+        f"SELECT id FROM users {where_sql} ORDER BY id ASC LIMIT ?",
+        [*params, limit],
+    ).fetchall()
+    now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    granted = []
+    for row in rows:
+        uid = int(row["id"])
+        new_balance = await db_write(partial(_grant_points_to_user, uid, points, reason, now))
+        if new_balance is not None:
+            _refresh_user_points_state(uid, reason="admin_rule_grant_points")
+            granted.append({"user_id": uid, "new_balance": new_balance})
+    record_admin_action(
+        actor=admin,
+        action="grant_points_by_rule",
+        target_type="users",
+        target_id=f"rule:{role or '*'}:{status or '*'}",
+        detail={"points": points, "reason": reason, "role": role, "status": status, "count": len(granted)},
+        request=request,
+    )
+    _invalidate_admin_cache()
+    return {"status": "success", "count": len(granted), "results": granted}
+
+
+@router.put("/api/admin/users/{uid}/creator-code")
+@rate_limit("admin_mutation", max_requests=60, window_sec=300)
+async def admin_update_creator_code(uid: int, request: Request):
+    admin = await require_admin_async(request)
+    body = await request.json()
+    new_code = str(body.get("creator_code") or "").strip().upper()
+    if not re.match(r"^[A-Z0-9_-]{3,40}$", new_code):
+        raise HTTPException(status_code=400, detail="creator_code must be 3-40 chars: A-Z, 0-9, _, -")
+    conn = get_conn()
+    user = conn.execute("SELECT id, creator_code FROM users WHERE id=?", (int(uid),)).fetchone()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    taken = conn.execute("SELECT id FROM users WHERE UPPER(creator_code)=UPPER(?) AND id != ?", (new_code, int(uid))).fetchone()
+    if taken:
+        raise HTTPException(status_code=409, detail=f"creator_code {new_code} already taken")
+    old_code = str(user["creator_code"] or "")
+    conn.execute("UPDATE users SET creator_code=? WHERE id=?", (new_code, int(uid)))
+    conn.commit()
+    invalidate_user_cache(int(uid))
+    record_admin_action(
+        actor=admin,
+        action="update_creator_code",
+        target_type="user",
+        target_id=str(uid),
+        detail={"old_creator_code": old_code, "new_creator_code": new_code},
+        request=request,
+    )
+    _invalidate_admin_cache()
+    return {"status": "success", "user_id": uid, "old_creator_code": old_code, "creator_code": new_code}
+
+
 @router.post("/api/admin/users/{uid}/adjust_points")
 @rate_limit("admin_mutation", max_requests=120, window_sec=60)
 async def admin_adjust_points(uid: int, request: Request):
@@ -1650,6 +1859,87 @@ async def admin_update_redemption(rid: int, request: Request):
         raise HTTPException(status_code=404, detail="Redemption not found")
     _invalidate_admin_cache()
     return {"status": "updated"}
+
+
+@router.get("/api/admin/redemptions/{rid}")
+def admin_get_redemption_detail(rid: int, request: Request):
+    require_admin(request)
+    conn = get_conn()
+    _ensure_redemption_ops_schema(conn)
+    row = conn.execute(
+        """
+        SELECT r.*, u.email, u.name AS user_name, u.creator_code
+        FROM redemptions r
+        LEFT JOIN users u ON u.id = r.user_id
+        WHERE r.id = ?
+        """,
+        (int(rid),),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Redemption not found")
+    return {"item": dict(row)}
+
+
+async def _admin_redemption_transition(rid: int, request: Request, status: str):
+    admin = await require_admin_async(request)
+    body = await request.json() if request.method.upper() == "POST" else {}
+    try:
+        item = await db_write(
+            partial(
+                _transition_redemption_record,
+                rid,
+                status,
+                admin_id=int(admin["id"]),
+                note=str(body.get("note") or body.get("reason") or ""),
+                tracking_number=str(body.get("tracking_number") or ""),
+                shipping_carrier=str(body.get("shipping_carrier") or body.get("carrier") or ""),
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not item:
+        raise HTTPException(status_code=404, detail="Redemption not found")
+    record_admin_action(
+        actor=admin,
+        action=f"redemption_{status}",
+        target_type="redemption",
+        target_id=str(rid),
+        detail={"status": status},
+        request=request,
+    )
+    _refresh_user_points_state(int(item.get("user_id") or 0), reason=f"redemption_{status}")
+    _invalidate_admin_cache()
+    return {"status": "success", "item": item}
+
+
+@router.post("/api/admin/redemptions/{rid}/approve")
+@rate_limit("admin_mutation", max_requests=120, window_sec=60)
+async def admin_approve_redemption(rid: int, request: Request):
+    return await _admin_redemption_transition(rid, request, "approved")
+
+
+@router.post("/api/admin/redemptions/{rid}/pack")
+@rate_limit("admin_mutation", max_requests=120, window_sec=60)
+async def admin_pack_redemption(rid: int, request: Request):
+    return await _admin_redemption_transition(rid, request, "packed")
+
+
+@router.post("/api/admin/redemptions/{rid}/ship")
+@rate_limit("admin_mutation", max_requests=120, window_sec=60)
+async def admin_ship_redemption(rid: int, request: Request):
+    return await _admin_redemption_transition(rid, request, "shipped")
+
+
+@router.post("/api/admin/redemptions/{rid}/deliver")
+@rate_limit("admin_mutation", max_requests=120, window_sec=60)
+async def admin_deliver_redemption(rid: int, request: Request):
+    return await _admin_redemption_transition(rid, request, "delivered")
+
+
+@router.post("/api/admin/redemptions/{rid}/reject")
+@rate_limit("admin_mutation", max_requests=120, window_sec=60)
+async def admin_reject_redemption(rid: int, request: Request):
+    return await _admin_redemption_transition(rid, request, "rejected")
 
 
 @router.post("/api/admin/users/{uid}/grant_points")

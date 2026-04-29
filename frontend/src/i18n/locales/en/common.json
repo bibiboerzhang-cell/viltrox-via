@@ -891,7 +891,12 @@
       "student": "Student",
       "via": "Via",
       "command": "Command",
-      "runtime": "Runtime"
+      "runtime": "Runtime",
+      "intelligence": "Intelligence",
+      "deepsight": "DeepSight",
+      "system": "System",
+      "kol_ops": "KOL Ops",
+      "insights": "Insights"
     },
     "shell": {
       "searchPlaceholder": "Search VID / handle / email…",

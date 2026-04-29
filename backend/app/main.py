@@ -168,6 +168,10 @@ def _admin_permission_for_request(path: str, method: str) -> tuple[str, str, boo
         return ("kol_ops", level, False)
     if path.startswith("/api/admin/deepsight"):
         return ("deepsight", level, False)
+    if path.startswith("/api/admin/activities") or path.startswith("/api/public/event"):
+        return ("activities", level, False)
+    if path.startswith("/api/admin/insights/"):
+        return ("insights", level, False)
     if path.startswith("/api/admin/intel/student"):
         return ("student", level, False)
     if path.startswith("/api/admin/intel/via"):
@@ -178,7 +182,7 @@ def _admin_permission_for_request(path: str, method: str) -> tuple[str, str, boo
         return ("analytics", level, False)
     if path.startswith("/api/admin/intel") or path.startswith("/api/intelligence"):
         return ("intelligence", level, False)
-    if path.startswith("/api/admin/analytics") or path.startswith("/api/admin/insights") or path.startswith("/api/admin/benchmarks") or path.startswith("/api/admin/learning"):
+    if path.startswith("/api/admin/analytics") or path.startswith("/api/admin/benchmarks") or path.startswith("/api/admin/learning"):
         return ("analytics", level, False)
     if path.startswith("/api/admin/orders") or path.startswith("/api/admin/payouts") or path.startswith("/api/admin/attribution") or path.startswith("/api/admin/webhook-events") or path.startswith("/api/admin/affiliate"):
         return ("operations", level, False)

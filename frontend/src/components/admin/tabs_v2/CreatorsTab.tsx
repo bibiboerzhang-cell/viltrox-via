@@ -20,6 +20,7 @@ import {
   fetchAdminCreatorShopHeroes,
   fetchAdminCreatorsSnapshot,
   saveAdminCreatorShopHero,
+  updateAdminCreatorCode,
   upsertAdminUserAccount,
   type AdminShopHero,
 } from "../../../services/admin.service";
@@ -822,6 +823,10 @@ function CreatorDetail({ token, row, onClose }: { token: string; row: CreatorRow
       </div>
     );
   }
+  return <CreatorDetailPanel token={token} row={row} onClose={onClose} />;
+}
+
+function CreatorDetailPanel({ token, row, onClose }: { token: string; row: CreatorRow; onClose: () => void }) {
 
   // Determine next tier + progress
   const tierOrder: VipTier[] = ["student", "bronze", "silver", "gold", "platinum"];
@@ -831,6 +836,30 @@ function CreatorDetail({ token, row, onClose }: { token: string; row: CreatorRow
   const videoProgress = nextReq ? Math.min(1, row.submissions / Math.max(1, nextReq.videos)) : 1;
   const pointsProgress = nextReq ? Math.min(1, row.points / Math.max(1, nextReq.points || 1)) : 1;
   const progress = nextReq ? Math.min(videoProgress, pointsProgress) : 1;
+  const [creatorCode, setCreatorCode] = useState(row.vid);
+  const [creatorCodeMessage, setCreatorCodeMessage] = useState("");
+  const [savingCreatorCode, setSavingCreatorCode] = useState(false);
+
+  useEffect(() => {
+    setCreatorCode(row.vid);
+    setCreatorCodeMessage("");
+  }, [row.id, row.vid]);
+
+  async function saveCreatorCode() {
+    const next = creatorCode.trim().toUpperCase();
+    if (!next || next === row.vid) return;
+    if (!window.confirm(`确定修改 VID？\n${row.vid} → ${next}`)) return;
+    setSavingCreatorCode(true);
+    setCreatorCodeMessage("");
+    try {
+      await updateAdminCreatorCode(token, row.id, next);
+      setCreatorCodeMessage("VID 已更新，刷新后列表会同步。");
+    } catch (error) {
+      setCreatorCodeMessage(error instanceof Error ? error.message : "VID 修改失败");
+    } finally {
+      setSavingCreatorCode(false);
+    }
+  }
 
   return (
     <div
@@ -867,6 +896,22 @@ function CreatorDetail({ token, row, onClose }: { token: string; row: CreatorRow
         >
           ×
         </span>
+      </div>
+
+      <div className="ax-card" style={{ padding: 10, marginBottom: 10, display: "grid", gap: 8 }}>
+        <SectionLabel>Creator Code</SectionLabel>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8 }}>
+          <input
+            className="input ax-mono"
+            value={creatorCode}
+            onChange={(event) => setCreatorCode(event.target.value)}
+            placeholder="V_000001"
+          />
+          <button type="button" className="ax-btn ax-btn--sm" onClick={saveCreatorCode} disabled={savingCreatorCode || creatorCode.trim().toUpperCase() === row.vid}>
+            {savingCreatorCode ? "保存中…" : "修改 VID"}
+          </button>
+        </div>
+        {creatorCodeMessage ? <div style={{ color: "var(--ax-text-2)", fontSize: 11 }}>{creatorCodeMessage}</div> : null}
       </div>
 
       {nextTier ? (

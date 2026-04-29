@@ -30,6 +30,8 @@ TAB_PERMISSION_KEYS = [
     "deepsight",
     "system",
     "kol_ops",
+    "activities",
+    "insights",
 ]
 
 SYSTEM_PERMISSION_KEYS = [

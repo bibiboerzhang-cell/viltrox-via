@@ -707,6 +707,51 @@ def reactivate_staff(
     return {"ok": True}
 
 
+@router.post("/staff/{staff_id}/resend-invite")
+def resend_staff_invite(
+    staff_id: int,
+    request: Request,
+    admin=Depends(require_admin),
+    _staff=Depends(require_system_permission("system.members", "write")),
+):
+    try:
+        result = staff_svc.resend_invite(staff_id, inviter_id=admin["id"])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    record_admin_action(
+        actor=admin,
+        action="resend_staff_invite",
+        target_type="staff",
+        target_id=str(staff_id),
+        detail={"email": result.get("email")},
+        request=request,
+    )
+    return result
+
+
+@router.delete("/staff/{staff_id}")
+def delete_staff_member(
+    staff_id: int,
+    request: Request,
+    admin=Depends(require_admin),
+    _staff=Depends(require_system_permission("system.members", "write")),
+):
+    try:
+        staff_svc.delete_member(staff_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    record_admin_action(
+        actor=admin,
+        action="delete_staff",
+        target_type="staff",
+        target_id=str(staff_id),
+        request=request,
+    )
+    return {"ok": True}
+
+
 @router.get("/staff/roles")
 def list_roles(admin=Depends(require_tab("system", "read"))):
     return staff_svc.list_roles()

@@ -34,6 +34,7 @@ const NAV_ENTRIES: NavEntry[] = [
   { key: "deepsight", labelKey: "admin.nav.deepsight", fallback: "DeepSight", icon: "via", to: "/admin/deepsight" },
   { key: "system", labelKey: "admin.nav.system", fallback: "System", icon: "command", to: "/admin/system" },
   { key: "kol_ops", labelKey: "admin.nav.kol_ops", fallback: "KOL Ops", icon: "users", to: "/admin/kol-ops" },
+  { key: "insights", labelKey: "admin.nav.insights", fallback: "Insights", icon: "analytics", to: "/admin/insights" },
 ];
 
 const PRIMARY_TABS = NAV_ENTRIES.filter((e) => e.primary);

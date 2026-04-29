@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 
 import type { AuthUser } from "../../../lib/api";
 import {
@@ -6,11 +6,16 @@ import {
   fetchSystemModels,
   fetchSystemProviders,
   fetchSystemUsage,
+  deleteStaffMember,
   inviteStaffMember,
   probeSystemProvider,
+  reactivateStaffMember,
   requestSystemModelSwitch,
   restartSystemRoles,
   rotateSystemProviderKey,
+  resendStaffInvite,
+  suspendStaffMember,
+  updateAdminStaff,
   updateStaffPermissions,
   type AdminSystemSnapshot,
   type SystemModelsSnapshot,
@@ -51,6 +56,8 @@ const TAB_KEYS = [
   "deepsight",
   "system",
   "kol_ops",
+  "activities",
+  "insights",
 ];
 
 const SYSTEM_KEYS = ["system.api_keys", "system.usage", "system.models", "system.restart", "system.members"];
@@ -99,6 +106,36 @@ function defaultPerms(role: string) {
   return base;
 }
 
+function staffEmail(row: Row) {
+  return str(row.user_email || row.email || row.name, "");
+}
+
+function staffName(row: Row) {
+  return str(row.user_name || row.name || row.user_email || row.email);
+}
+
+function isOwnerRow(row: Row) {
+  return Number(row.is_owner || 0) === 1;
+}
+
+function staffPermissions(row: Row): Record<string, string> {
+  const raw = row.permissions;
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    return { ...(raw as Record<string, string>) };
+  }
+  const fallback = defaultPerms(String(row.role || "readonly"));
+  const rawJson = String(row.permissions_json || "").trim();
+  if (!rawJson) return fallback;
+  try {
+    const parsed = JSON.parse(rawJson);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? { ...fallback, ...(parsed as Record<string, string>) }
+      : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 export function SystemTab({ token, user }: Props) {
   const [section, setSection] = useState<Section>("keys");
   const [system, setSystem] = useState<AdminSystemSnapshot | null>(null);
@@ -110,6 +147,10 @@ export function SystemTab({ token, user }: Props) {
   const [toast, setToast] = useState("");
   const [role, setRole] = useState("readonly");
   const [permissions, setPermissions] = useState<Record<string, string>>(defaultPerms("readonly"));
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [editingStaff, setEditingStaff] = useState<Row | null>(null);
+  const [editRole, setEditRole] = useState("readonly");
+  const [editPermissions, setEditPermissions] = useState<Record<string, string>>(defaultPerms("readonly"));
   const [busy, setBusy] = useState("");
   const [modelSelections, setModelSelections] = useState<Record<string, string>>({});
   const [modelConfirmPassword, setModelConfirmPassword] = useState("");
@@ -183,12 +224,53 @@ export function SystemTab({ token, user }: Props) {
   ];
 
   const staffColumns: DataColumn<Row>[] = [
-    { key: "name", label: "成员", width: "1.2fr", render: (r) => <strong>{str(r.name || r.email)}</strong> },
+    {
+      key: "name",
+      label: "成员",
+      width: "1.25fr",
+      render: (r) => (
+        <div>
+          <strong>{staffName(r)}</strong>
+          <div className="ax-mono" style={{ fontSize: 10, color: "var(--ax-text-2)" }}>{staffEmail(r)}</div>
+        </div>
+      ),
+    },
     { key: "role", label: "角色", width: "0.7fr", render: (r) => str(r.role) },
     { key: "status", label: "状态", width: "0.8fr", render: (r) => <StatusPill tone={statusTone(r.status)}>{str(r.status, "active")}</StatusPill> },
-    { key: "owner", label: "Owner", width: "0.6fr", render: (r) => Number(r.is_owner || 0) === 1 ? "yes" : "—" },
+    { key: "owner", label: "Owner", width: "0.6fr", render: (r) => isOwnerRow(r) ? "yes" : "—" },
     { key: "login", label: "最近登录", width: "1fr", render: (r) => str(r.last_login_at) },
+    {
+      key: "actions",
+      label: "操作",
+      width: "1.8fr",
+      render: (r) => (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <button type="button" className="ax-btn ax-btn--sm" onClick={() => openEditStaff(r)}>改权限</button>
+          {Number(r.active ?? 1) === 1 ? (
+            <button type="button" className="ax-btn ax-btn--sm" onClick={() => runStaffAction(r, "suspend")} disabled={busy === `suspend:${r.id}`}>
+              停用
+            </button>
+          ) : (
+            <button type="button" className="ax-btn ax-btn--sm" onClick={() => runStaffAction(r, "reactivate")} disabled={busy === `reactivate:${r.id}`}>
+              启用
+            </button>
+          )}
+          <button type="button" className="ax-btn ax-btn--sm" onClick={() => runStaffAction(r, "resend")} disabled={busy === `resend:${r.id}`}>
+            重发邀请
+          </button>
+          <button type="button" className="ax-btn ax-btn--sm" onClick={() => runStaffAction(r, "delete")} disabled={busy === `delete:${r.id}` || isOwnerRow(r)}>
+            删除
+          </button>
+        </div>
+      ),
+    },
   ];
+
+  const openEditStaff = (row: Row) => {
+    setEditingStaff(row);
+    setEditRole(String(row.role || "readonly"));
+    setEditPermissions(staffPermissions(row));
+  };
 
   const submitInvite = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -203,6 +285,7 @@ export function SystemTab({ token, user }: Props) {
       await inviteStaffMember(token, { email, role, permissions });
       setToast("邀请已发送");
       event.currentTarget.reset();
+      setInviteOpen(false);
       await load();
     } catch (err) {
       setToast(err instanceof Error ? err.message : String(err));
@@ -211,13 +294,34 @@ export function SystemTab({ token, user }: Props) {
     }
   };
 
-  const saveFirstStaffPermissions = async () => {
-    const first = system?.staffMembers?.[0];
-    if (!first?.id) return;
-    setBusy("permissions");
+  const saveEditingStaffPermissions = async () => {
+    if (!editingStaff?.id) return;
+    setBusy(`permissions:${editingStaff.id}`);
     try {
-      await updateStaffPermissions(token, Number(first.id), permissions);
-      setToast("权限矩阵已保存到第一位成员");
+      await updateAdminStaff(token, Number(editingStaff.id), { role: editRole });
+      await updateStaffPermissions(token, Number(editingStaff.id), editPermissions);
+      setToast(`权限已更新：${staffEmail(editingStaff) || editingStaff.id}`);
+      setEditingStaff(null);
+      await load();
+    } catch (err) {
+      setToast(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const runStaffAction = async (row: Row, action: "suspend" | "reactivate" | "resend" | "delete") => {
+    const id = Number(row.id || 0);
+    if (!id) return;
+    if (action === "delete" && !window.confirm(`确定删除 staff 关系？\n${staffEmail(row) || id}`)) return;
+    if (action === "suspend" && !window.confirm(`确定停用该 staff？\n${staffEmail(row) || id}`)) return;
+    setBusy(`${action}:${id}`);
+    try {
+      if (action === "suspend") await suspendStaffMember(token, id, "owner_suspend");
+      if (action === "reactivate") await reactivateStaffMember(token, id);
+      if (action === "resend") await resendStaffInvite(token, id);
+      if (action === "delete") await deleteStaffMember(token, id);
+      setToast(action === "resend" ? "邀请邮件已重发" : "成员状态已更新");
       await load();
     } catch (err) {
       setToast(err instanceof Error ? err.message : String(err));
@@ -441,23 +545,15 @@ export function SystemTab({ token, user }: Props) {
         {section === "members" ? (
           <div style={{ display: "grid", gap: 12 }}>
             <div className="ax-card">
-              <SectionLabel>邀请成员</SectionLabel>
-              <form onSubmit={submitInvite} style={{ display: "grid", gridTemplateColumns: "1.3fr 0.8fr auto", gap: 8 }}>
-                <input className="input" name="email" type="email" placeholder="name@viltrox.com" required />
-                <select className="input" value={role} onChange={(event) => setRole(event.target.value)}>
-                  <option value="readonly">readonly</option>
-                  <option value="admin">admin</option>
-                </select>
-                <button type="submit" className="ax-btn" disabled={busy === "invite"}><Icons.mail /> Invite</button>
-              </form>
-            </div>
-
-            <div className="ax-card">
-              <SectionLabel>权限矩阵</SectionLabel>
-              <PermissionMatrix permissions={permissions} onChange={setPermissions} />
-              <button type="button" className="ax-btn ax-btn--sm" style={{ marginTop: 10 }} onClick={saveFirstStaffPermissions}>
-                保存到第一位成员
-              </button>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+                <div>
+                  <SectionLabel>成员管理 ({system?.staffMembers?.length || 0})</SectionLabel>
+                  <div style={{ color: "var(--ax-text-2)", fontSize: 12 }}>邀请、权限矩阵、停用/启用和重发邀请都按具体成员操作。</div>
+                </div>
+                <button type="button" className="ax-btn" onClick={() => setInviteOpen(true)}>
+                  <Icons.plus /> 邀请新成员
+                </button>
+              </div>
             </div>
 
             <div className="ax-card" style={{ overflowX: "auto" }}>
@@ -469,9 +565,106 @@ export function SystemTab({ token, user }: Props) {
                 emptyLabel="暂无 staff 成员"
               />
             </div>
+
+            <div className="ax-card">
+              <SectionLabel>最近审计日志</SectionLabel>
+              <div style={{ display: "grid", gap: 6 }}>
+                {(system?.auditLog || []).slice(0, 50).map((entry, index) => (
+                  <div key={`${entry.id || index}`} style={{ display: "grid", gridTemplateColumns: "160px 1fr 120px", gap: 8, fontSize: 12 }}>
+                    <span className="ax-mono">{str(entry.occurred_at || entry.created_at)}</span>
+                    <span>{str(entry.action)}</span>
+                    <span>{str(entry.actor_name || entry.actor_email || entry.actor_id)}</span>
+                  </div>
+                ))}
+                {!(system?.auditLog || []).length ? <div style={{ color: "var(--ax-text-2)", fontSize: 12 }}>暂无审计日志</div> : null}
+              </div>
+            </div>
+
+            {inviteOpen ? (
+              <Drawer title="邀请新成员" onClose={() => setInviteOpen(false)}>
+                <form onSubmit={submitInvite} style={{ display: "grid", gap: 12 }}>
+                  <label style={{ display: "grid", gap: 6 }}>
+                    <SectionLabel>邮箱</SectionLabel>
+                    <input className="input" name="email" type="email" placeholder="name@viltrox.com" required />
+                  </label>
+                  <label style={{ display: "grid", gap: 6 }}>
+                    <SectionLabel>角色</SectionLabel>
+                    <select className="input" value={role} onChange={(event) => setRole(event.target.value)}>
+                      <option value="readonly">readonly</option>
+                      <option value="admin">admin</option>
+                    </select>
+                  </label>
+                  <div>
+                    <SectionLabel>Tab 权限 + System 子权限</SectionLabel>
+                    <PermissionMatrix permissions={permissions} onChange={setPermissions} />
+                  </div>
+                  <button type="submit" className="ax-btn" disabled={busy === "invite"}>
+                    <Icons.mail /> {busy === "invite" ? "发送中…" : "发送邀请"}
+                  </button>
+                </form>
+              </Drawer>
+            ) : null}
+
+            {editingStaff ? (
+              <Drawer title={`编辑权限 · ${staffEmail(editingStaff) || editingStaff.id}`} onClose={() => setEditingStaff(null)}>
+                <div style={{ display: "grid", gap: 12 }}>
+                  <label style={{ display: "grid", gap: 6 }}>
+                    <SectionLabel>角色</SectionLabel>
+                    <select className="input" value={editRole} onChange={(event) => setEditRole(event.target.value)}>
+                      <option value="readonly">readonly</option>
+                      <option value="admin">admin</option>
+                      <option value="operations">operations</option>
+                      <option value="analyst">analyst</option>
+                    </select>
+                  </label>
+                  <div>
+                    <SectionLabel>Tab 权限 + System 子权限</SectionLabel>
+                    <PermissionMatrix permissions={editPermissions} onChange={setEditPermissions} />
+                  </div>
+                  <button
+                    type="button"
+                    className="ax-btn"
+                    onClick={saveEditingStaffPermissions}
+                    disabled={busy === `permissions:${editingStaff.id}`}
+                  >
+                    {busy === `permissions:${editingStaff.id}` ? "保存中…" : "保存权限"}
+                  </button>
+                </div>
+              </Drawer>
+            ) : null}
           </div>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+function Drawer({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 80, display: "flex", justifyContent: "flex-end" }}>
+      <button
+        type="button"
+        aria-label="close"
+        onClick={onClose}
+        style={{ position: "absolute", inset: 0, border: 0, background: "rgba(0,0,0,0.48)" }}
+      />
+      <aside
+        className="ax-card"
+        style={{
+          position: "relative",
+          width: "min(720px, 94vw)",
+          height: "100%",
+          borderRadius: 0,
+          overflow: "auto",
+          padding: 20,
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 16 }}>
+          <h3 style={{ margin: 0 }}>{title}</h3>
+          <button type="button" className="ax-btn ax-btn--sm" onClick={onClose}>关闭</button>
+        </div>
+        {children}
+      </aside>
     </div>
   );
 }

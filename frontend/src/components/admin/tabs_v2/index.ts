@@ -14,3 +14,4 @@ export { IntelligenceTab } from "./IntelligenceTab";
 export { DeepSightTab } from "./DeepSightTab";
 export { SystemTab } from "./SystemTab";
 export { KolOpsTab } from "./KolOpsTab";
+export { InsightsTab } from "./InsightsTab";

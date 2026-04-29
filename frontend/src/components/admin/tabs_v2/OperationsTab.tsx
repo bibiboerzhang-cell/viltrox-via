@@ -17,17 +17,19 @@ import { useTranslation } from "react-i18next";
 import {
   adjustAdminPoints,
   approveAdminSubmission,
+  batchGrantAdminPoints,
   correctAdminSubmissionProduct,
   createManualAdminSubmission,
   deleteAdminSubmission,
   fetchAdminOperationsSnapshot,
+  grantAdminPointsByRule,
   grantAdminPoints,
   reanalyzeAdminSubmission,
   rejectAdminSubmission,
   runAdminSocialAction,
   runAdminUserAction,
   runAdminVerificationAction,
-  updateAdminRedemption,
+  transitionAdminRedemption,
   type AdminOperationsSnapshot,
   type AdminSocialAccountRecord,
   type AdminUserRecord,
@@ -55,7 +57,7 @@ interface Props {
   user: AuthUser;
 }
 
-type SubSection = "review" | "verify" | "users" | "social" | "redemptions";
+type SubSection = "review" | "verify" | "users" | "points" | "social" | "redemptions";
 type AnalysisRecord = Record<string, unknown>;
 type PointMode = "grant" | "adjust" | "deduct";
 
@@ -147,7 +149,7 @@ export function OperationsTab({ token }: Props) {
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const requestedSection = params.get("section");
-    if (requestedSection && ["review", "verify", "users", "social", "redemptions"].includes(requestedSection)) {
+    if (requestedSection && ["review", "verify", "users", "points", "social", "redemptions"].includes(requestedSection)) {
       setSection(requestedSection as SubSection);
     }
     const query = params.get("q") || "";
@@ -317,19 +319,26 @@ export function OperationsTab({ token }: Props) {
     }
   };
 
-  const handleRedemptionAction = async (r: AdminRedemptionRecord, nextStatus: "fulfilled" | "shipped" | "delivered" | "cancelled") => {
+  const handleRedemptionAction = async (r: AdminRedemptionRecord, action: "approve" | "pack" | "ship" | "deliver" | "reject") => {
     if (!r.id) return;
-    const tracking = window.prompt("物流单号 / tracking number", r.tracking_number || "");
-    if (tracking === null) return;
-    const note = window.prompt("后台备注", r.admin_note || `admin marked ${nextStatus}`) || `admin marked ${nextStatus}`;
-    setBusy(`redemption:${r.id}:${nextStatus}`);
+    const payload: Record<string, unknown> = {};
+    if (action === "ship") {
+      const tracking = window.prompt("物流单号 / tracking number", r.tracking_number || "");
+      if (tracking === null) return;
+      payload.tracking_number = tracking;
+      payload.shipping_carrier = window.prompt("承运商 / carrier", String(r.shipping_carrier || "")) || "";
+    }
+    if (action === "reject") {
+      const reason = window.prompt("拒绝原因（会退还积分）", r.admin_note || "admin rejected redemption");
+      if (reason === null) return;
+      payload.reason = reason;
+    } else {
+      payload.note = window.prompt("后台备注", r.admin_note || `admin ${action}`) || `admin ${action}`;
+    }
+    setBusy(`redemption:${r.id}:${action}`);
     try {
-      await updateAdminRedemption(token, r.id, {
-        status: nextStatus,
-        tracking_number: tracking,
-        admin_note: note,
-      });
-      setToast({ tone: "ok", msg: `兑换 #${r.id} 已更新为 ${nextStatus}` });
+      await transitionAdminRedemption(token, r.id, action, payload);
+      setToast({ tone: "ok", msg: `兑换 #${r.id} 已执行 ${action}` });
       refresh();
     } catch (e) {
       setToast({ tone: "err", msg: e instanceof Error ? e.message : String(e) });
@@ -797,7 +806,7 @@ export function OperationsTab({ token }: Props) {
         width: "100px",
         render: (r) => {
           const s = (r.status || "pending").toLowerCase();
-          const tone = s === "fulfilled" ? "pass" : s === "cancelled" ? "block" : "review";
+          const tone = s === "delivered" ? "pass" : s === "rejected" || s === "cancelled" ? "block" : "review";
           return <StatusPill tone={tone as never}>{statusLabel(r.status || "pending")}</StatusPill>;
         },
       },
@@ -820,16 +829,24 @@ export function OperationsTab({ token }: Props) {
             <button
               type="button"
               className="ax-btn ax-btn--sm"
-              disabled={busy === `redemption:${r.id}:fulfilled`}
-              onClick={() => handleRedemptionAction(r, "fulfilled")}
+              disabled={busy === `redemption:${r.id}:approve`}
+              onClick={() => handleRedemptionAction(r, "approve")}
             >
-              履约
+              批准
             </button>
             <button
               type="button"
               className="ax-btn ax-btn--sm"
-              disabled={busy === `redemption:${r.id}:shipped`}
-              onClick={() => handleRedemptionAction(r, "shipped")}
+              disabled={busy === `redemption:${r.id}:pack`}
+              onClick={() => handleRedemptionAction(r, "pack")}
+            >
+              打包
+            </button>
+            <button
+              type="button"
+              className="ax-btn ax-btn--sm"
+              disabled={busy === `redemption:${r.id}:ship`}
+              onClick={() => handleRedemptionAction(r, "ship")}
             >
               发货
             </button>
@@ -837,8 +854,8 @@ export function OperationsTab({ token }: Props) {
               type="button"
               className="ax-btn ax-btn--sm"
               style={{ color: "var(--ax-status-pass)" }}
-              disabled={busy === `redemption:${r.id}:delivered`}
-              onClick={() => handleRedemptionAction(r, "delivered")}
+              disabled={busy === `redemption:${r.id}:deliver`}
+              onClick={() => handleRedemptionAction(r, "deliver")}
             >
               送达
             </button>
@@ -846,10 +863,10 @@ export function OperationsTab({ token }: Props) {
               type="button"
               className="ax-btn ax-btn--sm"
               style={{ color: "var(--ax-status-alert)" }}
-              disabled={busy === `redemption:${r.id}:cancelled`}
-              onClick={() => handleRedemptionAction(r, "cancelled")}
+              disabled={busy === `redemption:${r.id}:reject`}
+              onClick={() => handleRedemptionAction(r, "reject")}
             >
-              取消
+              拒绝
             </button>
           </div>
         ),
@@ -862,6 +879,7 @@ export function OperationsTab({ token }: Props) {
     { key: "review", label: tt("sections.review", "审核队列"), count: data?.reviewQueue.length || 0 },
     { key: "verify", label: tt("sections.verify", "验证队列"), count: data?.verifyQueue.length || 0 },
     { key: "users", label: tt("sections.users", "用户"), count: data?.users.length || 0 },
+    { key: "points", label: "积分发放", count: 0 },
     { key: "social", label: tt("sections.social", "社媒账号"), count: data?.socials.length || 0 },
     { key: "redemptions", label: tt("sections.redemptions", "兑换记录"), count: data?.redemptions.length || 0 },
   ];
@@ -1010,7 +1028,16 @@ export function OperationsTab({ token }: Props) {
                   background: "var(--ax-bg-1)",
                 }}
               >
-                {section === "verify" ? (
+                {section === "points" ? (
+                  <PointsGrantPanel
+                    token={token}
+                    users={visibleUsers}
+                    busy={busy}
+                    setBusy={setBusy}
+                    setToast={setToast}
+                    refresh={refresh}
+                  />
+                ) : section === "verify" ? (
                   <DataTable
                     columns={verifyColumns}
                     rows={data?.verifyQueue ?? []}
@@ -1048,6 +1075,140 @@ export function OperationsTab({ token }: Props) {
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+function PointsGrantPanel({
+  token,
+  users,
+  busy,
+  setBusy,
+  setToast,
+  refresh,
+}: {
+  token: string;
+  users: AdminUserRecord[];
+  busy: string;
+  setBusy: (value: string) => void;
+  setToast: (value: { tone: "ok" | "err"; msg: string } | null) => void;
+  refresh: () => void;
+}) {
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const toggle = (id: number, checked: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
+  const submitBatch = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const points = Number(form.get("points") || 0);
+    const reason = String(form.get("reason") || "").trim();
+    if (!selectedIds.size || !points || !reason) {
+      setToast({ tone: "err", msg: "请选择用户、积分和原因" });
+      return;
+    }
+    setBusy("points:batch");
+    try {
+      const result = await batchGrantAdminPoints(token, { user_ids: Array.from(selectedIds), points, reason });
+      setToast({ tone: "ok", msg: `已发放 ${result.count || selectedIds.size} 个用户` });
+      setSelectedIds(new Set());
+      refresh();
+    } catch (error) {
+      setToast({ tone: "err", msg: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setBusy("");
+    }
+  };
+  const submitRule = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const payload = {
+      role: String(form.get("role") || ""),
+      status: String(form.get("status") || ""),
+      points: Number(form.get("points") || 0),
+      reason: String(form.get("reason") || "").trim(),
+      limit: Number(form.get("limit") || 100),
+    };
+    if (!payload.points || !payload.reason) {
+      setToast({ tone: "err", msg: "积分和原因必填" });
+      return;
+    }
+    if (!window.confirm(`确认按规则发放？\nrole=${payload.role || "*"} status=${payload.status || "*"} points=${payload.points}`)) return;
+    setBusy("points:rule");
+    try {
+      const result = await grantAdminPointsByRule(token, payload);
+      setToast({ tone: "ok", msg: `规则发放完成：${result.count || 0} 个用户` });
+      refresh();
+    } catch (error) {
+      setToast({ tone: "err", msg: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setBusy("");
+    }
+  };
+
+  return (
+    <div style={{ display: "grid", gap: 12, padding: 12 }}>
+      <form className="ax-card" onSubmit={submitBatch} style={{ display: "grid", gap: 10 }}>
+        <SectionLabel>批量发放积分</SectionLabel>
+        <div style={{ color: "var(--ax-text-2)", fontSize: 12 }}>先在下方用户列表勾选，再填积分和原因。</div>
+        <div style={{ display: "grid", gridTemplateColumns: "120px 1fr auto", gap: 8 }}>
+          <input className="input" type="number" name="points" min={1} placeholder="积分" />
+          <input className="input" name="reason" placeholder="原因，如 5/5 活动奖励" />
+          <button className="ax-btn" type="submit" disabled={busy === "points:batch"}>{busy === "points:batch" ? "发放中…" : `发给 ${selectedIds.size} 人`}</button>
+        </div>
+      </form>
+
+      <form className="ax-card" onSubmit={submitRule} style={{ display: "grid", gap: 10 }}>
+        <SectionLabel>按规则发放</SectionLabel>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 100px 1.4fr 90px auto", gap: 8 }}>
+          <select className="input" name="role" defaultValue="creator">
+            <option value="">任意角色</option>
+            <option value="creator">creator</option>
+            <option value="student">student</option>
+            <option value="admin">admin</option>
+          </select>
+          <select className="input" name="status" defaultValue="approved">
+            <option value="">任意状态</option>
+            <option value="approved">approved</option>
+            <option value="pending">pending</option>
+            <option value="active">active</option>
+          </select>
+          <input className="input" type="number" name="points" min={1} placeholder="积分" />
+          <input className="input" name="reason" placeholder="原因" />
+          <input className="input" type="number" name="limit" min={1} max={1000} defaultValue={100} />
+          <button className="ax-btn" type="submit" disabled={busy === "points:rule"}>{busy === "points:rule" ? "执行中…" : "执行"}</button>
+        </div>
+      </form>
+
+      <DataTable
+        columns={[
+          {
+            key: "select",
+            label: "",
+            width: "40px",
+            render: (row) => (
+              <input
+                type="checkbox"
+                checked={selectedIds.has(Number(row.id))}
+                onChange={(event) => toggle(Number(row.id), event.target.checked)}
+              />
+            ),
+          },
+          { key: "user", label: "用户", render: (row) => <span className="ax-mono">{row.creator_code || row.email || row.id}</span> },
+          { key: "email", label: "邮箱", render: (row) => String(row.email || "—") },
+          { key: "points", label: "积分", render: (row) => Number(row.points_balance || 0).toLocaleString() },
+          { key: "status", label: "状态", render: (row) => String(row.status || "—") },
+        ]}
+        rows={users}
+        rowKey={(row) => String(row.id)}
+        showCheckbox={false}
+        emptyLabel="暂无用户"
+      />
     </div>
   );
 }

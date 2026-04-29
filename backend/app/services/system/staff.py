@@ -361,6 +361,67 @@ def reactivate(staff_id: int) -> None:
     conn.commit()
 
 
+def resend_invite(staff_id: int, *, inviter_id: int) -> dict[str, Any]:
+    conn = get_conn()
+    row = conn.execute(
+        """
+        SELECT s.id, s.user_id, s.active, s.accepted_at,
+               u.email AS user_email, u.name AS user_name
+        FROM staff s
+        LEFT JOIN users u ON u.id = s.user_id
+        WHERE s.id = ?
+        """,
+        (int(staff_id),),
+    ).fetchone()
+    if not row:
+        raise ValueError("staff not found")
+    email = str(row["user_email"] or "").strip().lower()
+    if not email:
+        raise ValueError("staff user email missing")
+    _validate_staff_email(email)
+
+    user_id = int(row["user_id"] or 0)
+    if not user_id:
+        raise ValueError("staff user missing")
+
+    conn.execute(
+        """
+        UPDATE email_tokens
+           SET used_at = COALESCE(used_at, ?)
+         WHERE user_id = ? AND type = 'staff_invite' AND used_at IS NULL
+        """,
+        (_utcnow(), user_id),
+    )
+    conn.commit()
+    token = create_email_token(user_id, "staff_invite")
+    sent = _send_staff_invite_email(email, token)
+
+    columns = _staff_columns(conn)
+    fields = ["invited_by = ?", "invited_at = ?"]
+    values: list[Any] = [int(inviter_id), _utcnow()]
+    if "invited_by_staff_id" in columns:
+        fields.append("invited_by_staff_id = ?")
+        values.append(_staff_id_for_user(conn, int(inviter_id)))
+    values.append(int(staff_id))
+    conn.execute(
+        f"UPDATE staff SET {', '.join(fields)} WHERE id = ?",
+        values,
+    )
+    conn.commit()
+    return {"ok": True, "staff_id": staff_id, "email": email, "invite_sent": bool(sent)}
+
+
+def delete_member(staff_id: int) -> None:
+    conn = get_conn()
+    row = conn.execute("SELECT is_owner FROM staff WHERE id = ?", (int(staff_id),)).fetchone()
+    if not row:
+        raise ValueError("staff not found")
+    if int(row["is_owner"] or 0) == 1:
+        raise PermissionError("owner staff cannot be deleted")
+    conn.execute("DELETE FROM staff WHERE id = ?", (int(staff_id),))
+    conn.commit()
+
+
 # =========================================================================
 # Roles + matrix
 # =========================================================================
