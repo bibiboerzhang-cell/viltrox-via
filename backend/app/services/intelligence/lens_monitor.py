@@ -213,6 +213,37 @@ def compute_time_distribution(videos: list[dict]) -> dict:
     }
 
 
+def compute_hourly_distribution(videos: list[dict]) -> dict:
+    """Hour-of-day distribution for best posting-time guidance."""
+    hourly = {str(hour).zfill(2): {"count": 0, "views": 0} for hour in range(24)}
+    weekday = {"weekday": {"count": 0, "views": 0}, "weekend": {"count": 0, "views": 0}}
+    best_hour = {"hour": "", "views": -1, "count": 0}
+    for v in videos:
+        dt = parse_relative_time(v.get("published", ""))
+        if dt is None:
+            continue
+        hour_key = str(dt.hour).zfill(2)
+        views = int(v.get("views") or 0)
+        hourly[hour_key]["count"] += 1
+        hourly[hour_key]["views"] += views
+        day_key = "weekend" if dt.weekday() >= 5 else "weekday"
+        weekday[day_key]["count"] += 1
+        weekday[day_key]["views"] += views
+        if hourly[hour_key]["views"] > best_hour["views"]:
+            best_hour = {"hour": hour_key, "views": hourly[hour_key]["views"], "count": hourly[hour_key]["count"]}
+    if not best_hour["hour"]:
+        recommendation = "Not enough publish-time data"
+    else:
+        start = int(best_hour["hour"])
+        recommendation = f"Best observed posting window: {start:02d}:00-{(start + 2) % 24:02d}:00 UTC"
+    return {
+        "by_hour_utc": hourly,
+        "weekday_vs_weekend": weekday,
+        "best_window": best_hour,
+        "recommendation": recommendation,
+    }
+
+
 # ──────────────────────────────────────────────
 # Viral 检测
 # ──────────────────────────────────────────────
@@ -373,6 +404,7 @@ async def monitor_lens_market(query: str, max_videos: int = 50) -> dict:
             "error": "No videos found",
             "overview": {"total_videos": 0},
             "time_distribution": {},
+            "hourly_distribution": {},
             "categories": {},
             "claude_insights": {},
             "metadata": {"duration_sec": round(time.time() - t0, 1)},
@@ -380,6 +412,7 @@ async def monitor_lens_market(query: str, max_videos: int = 50) -> dict:
     
     # 2. 时间分布
     time_dist = compute_time_distribution(videos)
+    hourly_dist = compute_hourly_distribution(videos)
     
     # 3. Viral 检测
     viral_idxs = detect_viral_videos(videos, multiplier=3.0)
@@ -490,6 +523,7 @@ async def monitor_lens_market(query: str, max_videos: int = 50) -> dict:
         },
         
         "time_distribution": time_dist,
+        "hourly_distribution": hourly_dist,
         
         "categories": categories_summary,
         
