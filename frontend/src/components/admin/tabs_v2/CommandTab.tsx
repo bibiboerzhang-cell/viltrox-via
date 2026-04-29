@@ -15,9 +15,15 @@ import {
   fetchAdminBrandSnapshot,
   fetchAdminCommerceSnapshot,
   fetchAdminMarketSnapshot,
+  attributeAdminOrder,
+  fetchAdminOrderDetail,
   fetchAdminSystemSnapshot,
   fetchTrustDistribution,
   fetchTrustUserDetail,
+  flagAdminOrder,
+  resolvePayoutDispute,
+  runPayoutCycleAction,
+  runPayoutAction,
   runTrustUserAction,
   type AdminBrandSnapshot,
   type AdminCommerceSnapshot,
@@ -46,6 +52,15 @@ interface Props {
 
 type Section = "commerce" | "brand" | "market" | "trust";
 
+function num(value: unknown, digits = 0) {
+  const parsed = Number(value || 0);
+  if (!Number.isFinite(parsed)) return digits ? "0.00" : "0";
+  return parsed.toLocaleString(undefined, {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
+}
+
 export function CommandTab({ token }: Props) {
   const [commerce, setCommerce] = useState<AdminCommerceSnapshot | null>(null);
   const [brand, setBrand] = useState<AdminBrandSnapshot | null>(null);
@@ -53,6 +68,7 @@ export function CommandTab({ token }: Props) {
   const [system, setSystem] = useState<AdminSystemSnapshot | null>(null);
   const [trustDistribution, setTrustDistribution] = useState<Record<string, unknown> | null>(null);
   const [trustDetail, setTrustDetail] = useState<Record<string, unknown> | null>(null);
+  const [commerceDetail, setCommerceDetail] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [section, setSection] = useState<Section>("commerce");
@@ -157,7 +173,112 @@ export function CommandTab({ token }: Props) {
         </span>
       ),
     },
+    {
+      key: "actions",
+      label: "Actions",
+      width: "260px",
+      render: (r) => {
+        const orderId = Number(r.id || r.order_id || 0);
+        return (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <button type="button" className="ax-btn ax-btn--sm" onClick={() => showOrderDetail(orderId)} disabled={!orderId}>Detail</button>
+            <button type="button" className="ax-btn ax-btn--sm" onClick={() => attributeOrder(orderId)} disabled={!orderId}>Attribute</button>
+            <button type="button" className="ax-btn ax-btn--sm" onClick={() => flagOrder(orderId)} disabled={!orderId}>Flag</button>
+          </div>
+        );
+      },
+    },
   ];
+
+  const showOrderDetail = async (orderId: number) => {
+    if (!orderId) return;
+    setError(null);
+    try {
+      setCommerceDetail(await fetchAdminOrderDetail(token, orderId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const attributeOrder = async (orderId: number) => {
+    if (!orderId) return;
+    const creatorHandle = window.prompt("绑定 creator handle / VID", "");
+    if (!creatorHandle) return;
+    const reason = window.prompt("归因原因", "manual admin attribution") || "manual admin attribution";
+    setError(null);
+    try {
+      await attributeAdminOrder(token, orderId, { creator_handle: creatorHandle, reason });
+      refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const flagOrder = async (orderId: number) => {
+    if (!orderId) return;
+    const reason = window.prompt("异常类型: fraud / bot / duplicate", "fraud");
+    if (!["fraud", "bot", "duplicate"].includes(String(reason))) return;
+    setError(null);
+    try {
+      await flagAdminOrder(token, orderId, reason as "fraud" | "bot" | "duplicate");
+      refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const payoutCycleAction = async (cycleId: unknown, action: "approve-all" | "process") => {
+    const id = String(cycleId || "");
+    if (!id) return;
+    if (!window.confirm(`${action} payout cycle ${id}?`)) return;
+    setError(null);
+    try {
+      await runPayoutCycleAction(token, id, action);
+      refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const payoutAction = async (payoutId: unknown, action: "approve" | "hold" | "release" | "adjust") => {
+    const id = Number(payoutId || 0);
+    if (!id) return;
+    const payload: Record<string, unknown> = {};
+    if (action === "hold") {
+      const reason = window.prompt("Hold reason", "");
+      if (!reason) return;
+      payload.reason = reason;
+    }
+    if (action === "adjust") {
+      const amount = Number(window.prompt("New amount USD", "0") || 0);
+      const reason = window.prompt("Adjustment reason", "");
+      if (!reason || !Number.isFinite(amount)) return;
+      payload.new_amount_cents = Math.round(amount * 100);
+      payload.reason = reason;
+    }
+    setError(null);
+    try {
+      await runPayoutAction(token, id, action, payload);
+      refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const resolveDispute = async (disputeId: unknown) => {
+    const id = Number(disputeId || 0);
+    if (!id) return;
+    const resolution = window.prompt("Resolution: uphold / overturn", "uphold");
+    if (!["uphold", "overturn"].includes(String(resolution))) return;
+    const note = window.prompt("Resolution note", "") || "";
+    setError(null);
+    try {
+      await resolvePayoutDispute(token, id, { resolution: resolution as "uphold" | "overturn", note });
+      refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
 
   const brandCols: DataColumn<Record<string, unknown>>[] = [
     {
@@ -368,12 +489,28 @@ export function CommandTab({ token }: Props) {
                 (commerce?.orders || []).length === 0 ? (
                   <EmptyCard label="暂无订单" hint="等待 Shopify webhook 注入订单数据" />
                 ) : (
-                  <DataTable
-                    columns={orderCols}
-                    rows={commerce?.orders as Record<string, unknown>[]}
-                    rowKey={(r) => String(r.id || r.order_number)}
-                    showCheckbox={false}
-                  />
+                  <>
+                    <DataTable
+                      columns={orderCols}
+                      rows={commerce?.orders as Record<string, unknown>[]}
+                      rowKey={(r) => String(r.id || r.order_number)}
+                      showCheckbox={false}
+                    />
+                    {commerceDetail ? (
+                      <div className="ax-card" style={{ margin: 12, background: "rgba(255,255,255,0.03)" }}>
+                        <SectionLabel>Order Detail</SectionLabel>
+                        <pre style={{ whiteSpace: "pre-wrap", fontSize: 11, maxHeight: 280, overflow: "auto" }}>{JSON.stringify(commerceDetail, null, 2)}</pre>
+                      </div>
+                    ) : null}
+                    <CommerceActionPanels
+                      cycles={commerce?.payoutCycles || []}
+                      payouts={Array.isArray(commerce?.payoutCurrentCycle?.payouts) ? commerce?.payoutCurrentCycle?.payouts as Record<string, unknown>[] : []}
+                      disputes={commerce?.payoutDisputes || []}
+                      onCycleAction={payoutCycleAction}
+                      onPayoutAction={payoutAction}
+                      onResolveDispute={resolveDispute}
+                    />
+                  </>
                 )
               ) : section === "brand" ? (
                 (brand?.matrix || []).length === 0 ? (
@@ -416,6 +553,65 @@ export function CommandTab({ token }: Props) {
             </div>
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+function CommerceActionPanels({
+  cycles,
+  payouts,
+  disputes,
+  onCycleAction,
+  onPayoutAction,
+  onResolveDispute,
+}: {
+  cycles: Record<string, unknown>[];
+  payouts: Record<string, unknown>[];
+  disputes: Record<string, unknown>[];
+  onCycleAction: (cycleId: unknown, action: "approve-all" | "process") => void;
+  onPayoutAction: (payoutId: unknown, action: "approve" | "hold" | "release" | "adjust") => void;
+  onResolveDispute: (disputeId: unknown) => void;
+}) {
+  return (
+    <div style={{ margin: 12, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+      <div className="ax-card" style={{ background: "rgba(255,255,255,0.03)" }}>
+        <SectionLabel>Payout Cycles</SectionLabel>
+        {cycles.length ? cycles.slice(0, 5).map((cycle) => (
+          <div key={String(cycle.id || cycle.cycle_id)} style={{ display: "grid", gap: 6, padding: "8px 0", borderBottom: "1px solid var(--ax-border-1)" }}>
+            <strong>{String(cycle.id || cycle.cycle_id || "—")}</strong>
+            <span style={{ fontSize: 12, color: "var(--ax-text-2)" }}>{String(cycle.status || "pending")} · {String(cycle.payout_count || cycle.count || 0)} payouts</span>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button type="button" className="ax-btn ax-btn--sm" onClick={() => onCycleAction(cycle.id || cycle.cycle_id, "approve-all")}>Approve all</button>
+              <button type="button" className="ax-btn ax-btn--sm" onClick={() => onCycleAction(cycle.id || cycle.cycle_id, "process")}>Process</button>
+            </div>
+          </div>
+        )) : <div style={{ color: "var(--ax-text-2)", fontSize: 12 }}>No cycles</div>}
+      </div>
+      <div className="ax-card" style={{ background: "rgba(255,255,255,0.03)" }}>
+        <SectionLabel>Payout State</SectionLabel>
+        {payouts.length ? payouts.slice(0, 5).map((payout) => (
+          <div key={String(payout.id)} style={{ display: "grid", gap: 6, padding: "8px 0", borderBottom: "1px solid var(--ax-border-1)" }}>
+            <strong>#{String(payout.id)} · ${num(Number(payout.amount_cents || payout.amount || 0) / 100, 2)}</strong>
+            <span style={{ fontSize: 12, color: "var(--ax-text-2)" }}>{String(payout.status || "pending")}</span>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <button type="button" className="ax-btn ax-btn--sm" onClick={() => onPayoutAction(payout.id, "approve")}>Approve</button>
+              <button type="button" className="ax-btn ax-btn--sm" onClick={() => onPayoutAction(payout.id, "hold")}>Hold</button>
+              <button type="button" className="ax-btn ax-btn--sm" onClick={() => onPayoutAction(payout.id, "release")}>Release</button>
+              <button type="button" className="ax-btn ax-btn--sm" onClick={() => onPayoutAction(payout.id, "adjust")}>Adjust</button>
+            </div>
+          </div>
+        )) : <div style={{ color: "var(--ax-text-2)", fontSize: 12 }}>Open a payout cycle to see payouts</div>}
+      </div>
+      <div className="ax-card" style={{ background: "rgba(255,255,255,0.03)" }}>
+        <SectionLabel>Disputes</SectionLabel>
+        {disputes.length ? disputes.slice(0, 5).map((dispute) => (
+          <div key={String(dispute.id)} style={{ display: "grid", gap: 6, padding: "8px 0", borderBottom: "1px solid var(--ax-border-1)" }}>
+            <strong>#{String(dispute.id)} · {String(dispute.status || "open")}</strong>
+            <span style={{ fontSize: 12, color: "var(--ax-text-2)" }}>{String(dispute.reason || dispute.note || "—")}</span>
+            <button type="button" className="ax-btn ax-btn--sm" onClick={() => onResolveDispute(dispute.id)}>Resolve</button>
+          </div>
+        )) : <div style={{ color: "var(--ax-text-2)", fontSize: 12 }}>No open disputes</div>}
       </div>
     </div>
   );

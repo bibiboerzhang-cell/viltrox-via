@@ -1346,6 +1346,67 @@ export function backfillAdminOrders(token: string, limit = 500) {
   );
 }
 
+export function fetchAdminOrderDetail(token: string, orderId: number) {
+  return apiFetch<Record<string, unknown>>(`/api/admin/orders/${encodeURIComponent(String(orderId))}`, {}, token);
+}
+
+export function attributeAdminOrder(token: string, orderId: number, payload: { creator_handle: string; reason?: string }) {
+  return apiFetch<Record<string, unknown>>(
+    `/api/admin/orders/${encodeURIComponent(String(orderId))}/attribute`,
+    {
+      method: "POST",
+      body: jsonBody(payload),
+    },
+    token,
+  );
+}
+
+export function flagAdminOrder(token: string, orderId: number, reason: "fraud" | "bot" | "duplicate") {
+  return apiFetch<Record<string, unknown>>(
+    `/api/admin/orders/${encodeURIComponent(String(orderId))}/flag`,
+    {
+      method: "POST",
+      body: jsonBody({ reason }),
+    },
+    token,
+  );
+}
+
+export function runPayoutCycleAction(token: string, cycleId: string, action: "approve-all" | "process") {
+  return apiFetch<Record<string, unknown>>(
+    `/api/admin/payouts/cycle/${encodeURIComponent(cycleId)}/${action}`,
+    { method: "POST" },
+    token,
+  );
+}
+
+export function runPayoutAction(
+  token: string,
+  payoutId: number,
+  action: "approve" | "hold" | "release" | "adjust",
+  payload: Record<string, unknown> = {},
+) {
+  return apiFetch<Record<string, unknown>>(
+    `/api/admin/payouts/${encodeURIComponent(String(payoutId))}/${action}`,
+    {
+      method: "POST",
+      body: jsonBody(payload),
+    },
+    token,
+  );
+}
+
+export function resolvePayoutDispute(token: string, disputeId: number, payload: { resolution: "uphold" | "overturn"; note?: string }) {
+  return apiFetch<Record<string, unknown>>(
+    `/api/admin/payouts/disputes/${encodeURIComponent(String(disputeId))}/resolve`,
+    {
+      method: "POST",
+      body: jsonBody(payload),
+    },
+    token,
+  );
+}
+
 export async function fetchAdminBrandSnapshot(token: string): Promise<AdminBrandSnapshot> {
   const [matrix, posts, insights, voice] = await Promise.all([
     apiFetch<Record<string, unknown>>("/api/intelligence/brand/matrix", {}, token).catch(e => { console.warn("[admin.service] fetch failed:", e); return {} as any; }),
