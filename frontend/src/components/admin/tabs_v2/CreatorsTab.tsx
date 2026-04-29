@@ -20,6 +20,7 @@ import {
   fetchAdminCreatorShopHeroes,
   fetchAdminCreatorsSnapshot,
   saveAdminCreatorShopHero,
+  upsertAdminUserAccount,
   type AdminShopHero,
 } from "../../../services/admin.service";
 import type { AuthUser } from "../../../lib/api";
@@ -80,6 +81,15 @@ interface CreatorRow {
   tags: string[];
   lastActiveDays: number;
   heatmap30: number[];
+}
+
+interface AccountFormState {
+  email: string;
+  name: string;
+  role: "creator" | "admin" | "student";
+  status: "pending" | "approved" | "rejected" | "blocked";
+  password: string;
+  email_verified: boolean;
 }
 
 const STAGE_TO_STATUS_TONE: Record<CreatorRow["stage"], "new" | "active" | "idle" | "churn" | "block"> = {
@@ -169,6 +179,45 @@ export function CreatorsTab({ token }: Props) {
   const [sort, setSort] = useState<DataSort | null>({ key: "score", dir: "desc" });
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [accountSaving, setAccountSaving] = useState(false);
+  const [accountError, setAccountError] = useState("");
+  const [accountForm, setAccountForm] = useState<AccountFormState>({
+    email: "",
+    name: "",
+    role: "creator",
+    status: "approved",
+    password: "",
+    email_verified: true,
+  });
+
+  const submitAccount = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setAccountSaving(true);
+    setAccountError("");
+    try {
+      await upsertAdminUserAccount(token, {
+        ...accountForm,
+        email: accountForm.email.trim(),
+        name: accountForm.name.trim(),
+        password: accountForm.password.trim(),
+      });
+      setAccountOpen(false);
+      setAccountForm({
+        email: "",
+        name: "",
+        role: "creator",
+        status: "approved",
+        password: "",
+        email_verified: true,
+      });
+      await refresh();
+    } catch (err) {
+      setAccountError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAccountSaving(false);
+    }
+  };
 
   // ── Derived: lifecycle counts (before filters) ──
   const stageCounts = useMemo(() => {
@@ -463,8 +512,8 @@ export function CreatorsTab({ token }: Props) {
         subtitle={`${rows.length} total · ${stageCounts.new} new this week`}
         actions={
           <>
-            <button type="button" className="ax-btn">
-              <Icons.plus /> 邀请
+            <button type="button" className="ax-btn" onClick={() => setAccountOpen(true)}>
+              <Icons.plus /> 创建/恢复账号
             </button>
             <button type="button" className="ax-btn">
               <Icons.download /> Export
@@ -475,6 +524,84 @@ export function CreatorsTab({ token }: Props) {
           </>
         }
       />
+
+      {accountOpen ? (
+        <div style={{ padding: "0 16px 12px" }}>
+          <form
+            className="ax-card"
+            onSubmit={submitAccount}
+            style={{ display: "grid", gap: 10, borderColor: "rgba(255,143,42,0.35)" }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+              <div>
+                <SectionLabel>创建 / 恢复用户账号</SectionLabel>
+                <div style={{ color: "var(--ax-text-2)", fontSize: 11 }}>
+                  邮箱已存在时会恢复状态、角色和可选临时密码；邮箱不存在时会创建新账号并生成 VID。
+                </div>
+              </div>
+              <button type="button" className="ax-btn ax-btn--sm" onClick={() => setAccountOpen(false)}>
+                关闭
+              </button>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 0.7fr 0.8fr 1fr auto", gap: 8 }}>
+              <input
+                className="input"
+                type="email"
+                placeholder="email"
+                value={accountForm.email}
+                onChange={(event) => setAccountForm((prev) => ({ ...prev, email: event.target.value }))}
+                required
+              />
+              <input
+                className="input"
+                placeholder="name"
+                value={accountForm.name}
+                onChange={(event) => setAccountForm((prev) => ({ ...prev, name: event.target.value }))}
+              />
+              <select
+                className="input"
+                value={accountForm.role}
+                onChange={(event) => setAccountForm((prev) => ({ ...prev, role: event.target.value as AccountFormState["role"] }))}
+              >
+                <option value="creator">creator</option>
+                <option value="admin">admin</option>
+                <option value="student">student</option>
+              </select>
+              <select
+                className="input"
+                value={accountForm.status}
+                onChange={(event) => setAccountForm((prev) => ({ ...prev, status: event.target.value as AccountFormState["status"] }))}
+              >
+                <option value="approved">approved</option>
+                <option value="pending">pending</option>
+                <option value="blocked">blocked</option>
+                <option value="rejected">rejected</option>
+              </select>
+              <input
+                className="input"
+                type="password"
+                placeholder="临时密码"
+                value={accountForm.password}
+                onChange={(event) => setAccountForm((prev) => ({ ...prev, password: event.target.value }))}
+              />
+              <button type="submit" className="ax-btn ax-btn--primary" disabled={accountSaving}>
+                {accountSaving ? "保存中…" : "保存账号"}
+              </button>
+            </div>
+            <label style={{ display: "inline-flex", gap: 6, alignItems: "center", color: "var(--ax-text-2)", fontSize: 11 }}>
+              <input
+                type="checkbox"
+                checked={accountForm.email_verified}
+                onChange={(event) => setAccountForm((prev) => ({ ...prev, email_verified: event.target.checked }))}
+              />
+              标记邮箱已验证
+            </label>
+            {accountError ? (
+              <div style={{ color: "var(--ax-status-alert)", fontSize: 11 }}>{accountError}</div>
+            ) : null}
+          </form>
+        </div>
+      ) : null}
 
       {error ? (
         <div style={{ padding: 16 }}>

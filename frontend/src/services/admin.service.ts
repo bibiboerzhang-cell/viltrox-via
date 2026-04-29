@@ -153,6 +153,15 @@ export interface AdminUserRecord {
   note?: string;
 }
 
+export interface AdminUserUpsertPayload {
+  email: string;
+  name?: string;
+  role: "creator" | "admin" | "student";
+  status: "pending" | "approved" | "rejected" | "blocked";
+  password?: string;
+  email_verified?: boolean;
+}
+
 export interface AdminSocialAccountRecord {
   id: number;
   user_id?: number;
@@ -572,6 +581,20 @@ export function runAdminUserAction(
     {
       method: "POST",
       body: jsonBody(isModerationAction ? { reason: note } : { note }),
+    },
+    token,
+  );
+}
+
+export function upsertAdminUserAccount(
+  token: string,
+  payload: AdminUserUpsertPayload,
+) {
+  return apiFetch<{ status: string; user: AdminUserRecord }>(
+    "/api/admin/users/upsert",
+    {
+      method: "POST",
+      body: jsonBody(payload),
     },
     token,
   );

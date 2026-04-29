@@ -27,7 +27,7 @@ from app.core.config import (
     UPLOAD_DIR,
     CREATOR_DIR,
 )
-from app.core.security import require_admin, require_admin_async, get_current_user, invalidate_user_cache
+from app.core.security import require_admin, require_admin_async, get_current_user, invalidate_user_cache, hash_password
 from app.services.cache import cache_clear, cache_delete, cache_get, cache_invalidate_admin, cache_set, cached
 from app.db.repositories.users import mark_social_account_verified, refresh_user_social_verified
 from app.services.creator_program import build_affiliate_ops_snapshot, sync_creator_program_state
@@ -203,6 +203,97 @@ def _delete_user_by_id(uid: int) -> bool:
     cur = conn.execute("DELETE FROM users WHERE id=?", (uid,))
     conn.commit()
     return cur.rowcount == 1
+
+
+def _creator_code_for_user_id(uid: int) -> str:
+    return f"V_{int(uid):06d}"
+
+
+def _upsert_admin_user_account(payload: dict[str, Any]) -> dict[str, Any]:
+    email = str(payload.get("email") or "").strip().lower()
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        raise ValueError("valid email required")
+
+    role = str(payload.get("role") or "creator").strip().lower()
+    if role not in {"creator", "admin", "student"}:
+        raise ValueError("role must be creator, admin, or student")
+
+    status = str(payload.get("status") or "approved").strip().lower()
+    if status not in {"pending", "approved", "rejected", "blocked"}:
+        raise ValueError("status must be pending, approved, rejected, or blocked")
+
+    name = str(payload.get("name") or email.split("@", 1)[0]).strip()
+    password = str(payload.get("password") or "").strip()
+    email_verified = 1 if bool(payload.get("email_verified", True)) else 0
+    now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    conn = get_conn()
+    existing = conn.execute("SELECT id, creator_code FROM users WHERE lower(email)=lower(?)", (email,)).fetchone()
+    if existing and password:
+        conn.execute(
+            """
+            UPDATE users
+               SET name=?,
+                   password_hash=?,
+                   status=?,
+                   role=?,
+                   email_verified=?,
+                   creator_code=COALESCE(NULLIF(creator_code, ''), ?)
+             WHERE id=?
+            """,
+            (
+                name,
+                hash_password(password),
+                status,
+                role,
+                email_verified,
+                _creator_code_for_user_id(int(existing["id"])),
+                int(existing["id"]),
+            ),
+        )
+        uid = int(existing["id"])
+    elif existing:
+        conn.execute(
+            """
+            UPDATE users
+               SET name=?,
+                   status=?,
+                   role=?,
+                   email_verified=?,
+                   creator_code=COALESCE(NULLIF(creator_code, ''), ?)
+             WHERE id=?
+            """,
+            (
+                name,
+                status,
+                role,
+                email_verified,
+                _creator_code_for_user_id(int(existing["id"])),
+                int(existing["id"]),
+            ),
+        )
+        uid = int(existing["id"])
+    else:
+        if not password:
+            raise ValueError("password required for new user")
+        cur = conn.execute(
+            """
+            INSERT INTO users
+                (created_at, email, password_hash, name, status, role, email_verified)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (now, email, hash_password(password), name, status, role, email_verified),
+        )
+        uid = int(cur.lastrowid)
+        conn.execute("UPDATE users SET creator_code=? WHERE id=?", (_creator_code_for_user_id(uid), uid))
+    conn.commit()
+    invalidate_user_cache(uid)
+    _refresh_user_points_state(uid, reason="admin_account_upsert")
+    row = conn.execute(
+        "SELECT id, created_at, email, name, creator_code, status, role, email_verified, points_balance, points_total FROM users WHERE id=?",
+        (uid,),
+    ).fetchone()
+    return dict(row) if row else {}
 
 
 def _load_user_delete_dependencies(uid: int) -> dict[str, int]:
@@ -395,6 +486,18 @@ def admin_list_users(request: Request, status: str = Query(default="")):
         ttl=ADMIN_READ_CACHE_TTL_SEC,
         status=status or "all",
     )
+
+@router.post("/api/admin/users/upsert")
+@rate_limit("admin_mutation", max_requests=60, window_sec=300)
+async def admin_upsert_user_account(request: Request):
+    require_admin(request)
+    try:
+        body = await request.json()
+        user = await db_write(partial(_upsert_admin_user_account, body if isinstance(body, dict) else {}))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    _invalidate_admin_cache()
+    return {"status": "success", "user": user}
 
 @router.post("/api/admin/users/{uid}/approve")
 @rate_limit("admin_mutation", max_requests=120, window_sec=60)
