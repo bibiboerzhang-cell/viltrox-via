@@ -449,6 +449,12 @@ export interface AdminSystemSnapshot {
 export interface KolOpsSnapshot {
   items: Array<Record<string, unknown>>;
   summary?: Record<string, unknown>;
+  page?: Record<string, unknown>;
+}
+
+export interface KolCandidateSnapshot {
+  items: Array<Record<string, unknown>>;
+  page?: Record<string, unknown>;
 }
 
 export interface KolDetailSnapshot {
@@ -1379,6 +1385,44 @@ export function fetchKolOpsSnapshot(token: string, query = ""): Promise<KolOpsSn
   return apiFetch<KolOpsSnapshot>(`/api/admin/kol/kols${query}`, {}, token);
 }
 
+export function searchKolPlatform(token: string, payload: Record<string, unknown>) {
+  return apiFetch<Record<string, unknown>>(
+    "/api/admin/kol/search/platform",
+    {
+      method: "POST",
+      timeoutMs: 300000,
+      body: jsonBody(payload),
+    },
+    token,
+  );
+}
+
+export function fetchKolCandidates(token: string, query = ""): Promise<KolCandidateSnapshot> {
+  return apiFetch<KolCandidateSnapshot>(`/api/admin/kol/candidates${query}`, {}, token);
+}
+
+export function updateKolCandidate(token: string, candidateId: number, payload: Record<string, unknown>) {
+  return apiFetch<Record<string, unknown>>(
+    `/api/admin/kol/candidates/${candidateId}`,
+    {
+      method: "PATCH",
+      body: jsonBody(payload),
+    },
+    token,
+  );
+}
+
+export function promoteKolCandidate(token: string, candidateId: number, payload: Record<string, unknown> = {}) {
+  return apiFetch<Record<string, unknown>>(
+    `/api/admin/kol/candidates/${candidateId}/promote`,
+    {
+      method: "POST",
+      body: jsonBody(payload),
+    },
+    token,
+  );
+}
+
 export function fetchKolDetail(token: string, kolId: number): Promise<KolDetailSnapshot> {
   return apiFetch<KolDetailSnapshot>(`/api/admin/kol/kols/${kolId}`, {}, token);
 }
@@ -1496,7 +1540,7 @@ export function scanIntelligenceMatrix(
 
 export function monitorLensMarket(
   token: string,
-  payload: { query: string; max_videos?: number },
+  payload: { query: string; max_videos?: number; platform?: string; market?: string; date_from?: string; date_to?: string },
 ) {
   return apiFetch<Record<string, unknown>>(
     "/api/admin/intel/monitor",
@@ -1511,7 +1555,7 @@ export function monitorLensMarket(
 
 export function compareLensMarket(
   token: string,
-  payload: { lens_a: string; lens_b: string; max_videos?: number },
+  payload: { lens_a: string; lens_b: string; max_videos?: number; platform?: string; market?: string; date_from?: string; date_to?: string },
 ) {
   return apiFetch<Record<string, unknown>>(
     "/api/admin/intel/compare",
@@ -1535,6 +1579,58 @@ export function learnIntelligenceUrl(
       timeoutMs: 60000,
       body: jsonBody(payload),
     },
+    token,
+  );
+}
+
+export function fetchDeepSightHealth(token: string) {
+  return apiFetch<Record<string, unknown>>("/api/admin/deepsight/health", {}, token);
+}
+
+export function runDeepSightEvidencePack(token: string, payload: Record<string, unknown>) {
+  return apiFetch<Record<string, unknown>>(
+    "/api/admin/deepsight/evidence-pack",
+    {
+      method: "POST",
+      timeoutMs: 300000,
+      body: jsonBody(payload),
+    },
+    token,
+  );
+}
+
+export function runDeepSightDiagnose(token: string, payload: Record<string, unknown>) {
+  return apiFetch<Record<string, unknown>>(
+    "/api/admin/deepsight/diagnose",
+    {
+      method: "POST",
+      timeoutMs: 300000,
+      body: jsonBody(payload),
+    },
+    token,
+  );
+}
+
+export function scanDeepSightOfficialMatrix(token: string, payload: Record<string, unknown>) {
+  return apiFetch<Record<string, unknown>>(
+    "/api/admin/deepsight/scan-official-matrix",
+    {
+      method: "POST",
+      timeoutMs: 300000,
+      body: jsonBody(payload),
+    },
+    token,
+  );
+}
+
+export function fetchDeepSightCacheStats(token: string) {
+  return apiFetch<Record<string, unknown>>("/api/admin/deepsight/cache/stats", {}, token);
+}
+
+export function clearDeepSightCache(token: string) {
+  return apiFetch<Record<string, unknown>>(
+    "/api/admin/deepsight/cache/clear",
+    { method: "POST" },
     token,
   );
 }

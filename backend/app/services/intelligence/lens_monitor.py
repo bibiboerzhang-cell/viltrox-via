@@ -38,6 +38,7 @@ from typing import Any, Optional
 
 from app.core.logging import get_logger
 from app.services.ai.retry import call_ai_with_retry
+from app.services.intelligence.account_scan_service import search_platform_content
 
 logger = get_logger(__name__)
 
@@ -60,7 +61,7 @@ except ImportError:
 
 
 # ──────────────────────────────────────────────
-# YouTube 搜索
+# 平台搜索
 # ──────────────────────────────────────────────
 
 async def search_youtube(query: str, max_results: int = 50) -> list[dict]:
@@ -117,6 +118,49 @@ async def search_youtube(query: str, max_results: int = 50) -> list[dict]:
     except Exception as e:
         logger.warning("lens_monitor.youtube_search_failed", extra={"error": str(e)})
         return []
+
+
+async def search_market_videos(query: str, max_results: int = 50, platform: str = "youtube", market: str = "") -> dict:
+    """Search selected platform and return normalized videos plus provider status."""
+    normalized_platform = (platform or "youtube").strip().lower()
+    normalized_market = (market or "").strip().upper()
+    if normalized_platform == "youtube":
+        search_query = f"{query} {normalized_market}".strip() if normalized_market and normalized_market not in {"ALL", "GLOBAL"} else query
+        videos = await search_youtube(search_query, max_results)
+        return {
+            "status": "done" if videos else ("provider_unavailable" if _apify is None else "empty"),
+            "platform": "youtube",
+            "market": normalized_market,
+            "videos": videos,
+        }
+    result = await search_platform_content(normalized_platform, query, market=normalized_market, max_results=max_results)
+    videos = []
+    for index, item in enumerate(result.get("items", [])):
+        videos.append(
+            {
+                "idx": index,
+                "title": str(item.get("sample_title", "") or "")[:250],
+                "views": int(item.get("views", 0) or 0),
+                "likes": int(item.get("likes", 0) or 0),
+                "comments": int(item.get("comments", 0) or 0),
+                "duration": "",
+                "channel": str(item.get("channel_name", "") or "")[:100],
+                "channel_url": str(item.get("channel_url", "") or ""),
+                "url": str(item.get("source_url", "") or ""),
+                "published": str(item.get("published", "") or ""),
+                "description": "",
+                "thumbnail": "",
+                "platform": normalized_platform,
+            }
+        )
+    return {
+        "status": result.get("status", "done"),
+        "platform": normalized_platform,
+        "market": normalized_market,
+        "videos": videos,
+        "message": result.get("message", ""),
+        "metadata": result.get("metadata", {}),
+    }
 
 
 # ──────────────────────────────────────────────
@@ -242,6 +286,37 @@ def compute_hourly_distribution(videos: list[dict]) -> dict:
         "best_window": best_hour,
         "recommendation": recommendation,
     }
+
+
+def filter_videos_by_date(videos: list[dict], date_from: str = "", date_to: str = "") -> list[dict]:
+    """Filter normalized videos by publish date if parseable."""
+    if not date_from and not date_to:
+        return videos
+    lower = None
+    upper = None
+    try:
+        if date_from:
+            lower = datetime.fromisoformat(date_from.replace("Z", "+00:00"))
+            if lower.tzinfo is None:
+                lower = lower.replace(tzinfo=timezone.utc)
+        if date_to:
+            upper = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
+            if upper.tzinfo is None:
+                upper = upper.replace(tzinfo=timezone.utc)
+            upper = upper + timedelta(days=1)
+    except Exception:
+        return videos
+    filtered: list[dict] = []
+    for video in videos:
+        dt = parse_relative_time(video.get("published", ""))
+        if dt is None:
+            continue
+        if lower and dt < lower:
+            continue
+        if upper and dt >= upper:
+            continue
+        filtered.append(video)
+    return filtered
 
 
 # ──────────────────────────────────────────────
@@ -381,7 +456,15 @@ def classify_videos_with_claude(query: str, videos: list[dict]) -> dict:
 # 主入口 — monitor_lens_market
 # ──────────────────────────────────────────────
 
-async def monitor_lens_market(query: str, max_videos: int = 50) -> dict:
+async def monitor_lens_market(
+    query: str,
+    max_videos: int = 50,
+    *,
+    platform: str = "youtube",
+    market: str = "",
+    date_from: str = "",
+    date_to: str = "",
+) -> dict:
     """
     完整的单镜头市场监控.
     
@@ -393,21 +476,33 @@ async def monitor_lens_market(query: str, max_videos: int = 50) -> dict:
         完整的 monitor 数据 (见函数末尾)
     """
     t0 = time.time()
-    logger.info("lens_monitor.run_started", extra={"query": query, "max_videos": max_videos})
+    logger.info(
+        "lens_monitor.run_started",
+        extra={"query": query, "max_videos": max_videos, "platform": platform, "market": market},
+    )
     
-    # 1. YouTube 搜索
-    videos = await search_youtube(query, max_videos)
+    # 1. 平台搜索
+    search_result = await search_market_videos(query, max_videos, platform=platform, market=market)
+    videos = filter_videos_by_date(search_result.get("videos", []), date_from=date_from, date_to=date_to)
     
     if not videos:
         return {
             "query": query,
-            "error": "No videos found",
+            "platform": search_result.get("platform", platform),
+            "market": (market or "").strip().upper(),
+            "error": search_result.get("message") or "No videos found for selected platform/market/time range",
             "overview": {"total_videos": 0},
             "time_distribution": {},
             "hourly_distribution": {},
             "categories": {},
             "claude_insights": {},
-            "metadata": {"duration_sec": round(time.time() - t0, 1)},
+            "metadata": {
+                "duration_sec": round(time.time() - t0, 1),
+                "provider_status": search_result.get("status"),
+                "max_videos": max_videos,
+                "date_from": date_from,
+                "date_to": date_to,
+            },
         }
     
     # 2. 时间分布
@@ -511,6 +606,8 @@ async def monitor_lens_market(query: str, max_videos: int = 50) -> dict:
     
     return {
         "query": query,
+        "platform": search_result.get("platform", platform),
+        "market": (market or "").strip().upper(),
         "scanned_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         
         "overview": {
@@ -533,6 +630,9 @@ async def monitor_lens_market(query: str, max_videos: int = 50) -> dict:
             "duration_sec":  round(elapsed, 1),
             "cost_usd_est":  0.10,
             "max_videos":    max_videos,
+            "provider_status": search_result.get("status"),
+            "date_from": date_from,
+            "date_to": date_to,
         },
     }
 

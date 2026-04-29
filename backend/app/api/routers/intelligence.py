@@ -271,7 +271,14 @@ async def intel_monitor(request: Request, body: dict):
     if max_videos > 50:
         max_videos = 50
     
-    result = await monitor_lens_market(query, max_videos=max_videos)
+    result = await monitor_lens_market(
+        query,
+        max_videos=max_videos,
+        platform=(body.get("platform") or "youtube").strip().lower(),
+        market=(body.get("market") or body.get("region_code") or "").strip().upper(),
+        date_from=(body.get("date_from") or "").strip(),
+        date_to=(body.get("date_to") or "").strip(),
+    )
     return result
 
 
@@ -298,7 +305,15 @@ async def intel_compare(request: Request, body: dict):
     if max_videos > 30:
         max_videos = 30
     
-    result = await compare_two_lenses(lens_a, lens_b, max_videos=max_videos)
+    result = await compare_two_lenses(
+        lens_a,
+        lens_b,
+        max_videos=max_videos,
+        platform=(body.get("platform") or "youtube").strip().lower(),
+        market=(body.get("market") or body.get("region_code") or "").strip().upper(),
+        date_from=(body.get("date_from") or "").strip(),
+        date_to=(body.get("date_to") or "").strip(),
+    )
     return result
 
 

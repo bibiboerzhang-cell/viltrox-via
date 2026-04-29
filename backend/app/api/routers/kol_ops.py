@@ -10,7 +10,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
 
 from app.api.dependencies.perms import require_tab
 from app.core.security import verify_password
-from app.db.connection import get_conn, is_postgres_runtime
+from app.db.connection import db_write, get_conn, is_postgres_runtime
+from app.services.intelligence.account_scan_service import search_platform_content
 from app.services.kol.content_scorer import score_kol_content
 from app.services.kol.metrics import cpv, engagement_rate, roi
 
@@ -105,6 +106,31 @@ def ensure_kol_schema() -> None:
             attributed_at TEXT NOT NULL,
             UNIQUE(content_id, shopify_order_id)
         );
+
+        CREATE TABLE IF NOT EXISTS kol_candidates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform TEXT NOT NULL,
+            channel_name TEXT NOT NULL,
+            channel_url TEXT,
+            handle TEXT,
+            country TEXT,
+            niche TEXT,
+            source_url TEXT,
+            sample_title TEXT,
+            follower_count INTEGER DEFAULT 0,
+            avg_views INTEGER DEFAULT 0,
+            contact_email TEXT,
+            status TEXT DEFAULT 'new',
+            search_query TEXT,
+            market TEXT,
+            reviewed_by_staff_id INTEGER,
+            notes TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_kol_candidates_status ON kol_candidates(status);
+        CREATE INDEX IF NOT EXISTS idx_kol_candidates_platform_market ON kol_candidates(platform, market);
+        CREATE INDEX IF NOT EXISTS idx_kol_candidates_query ON kol_candidates(search_query);
         """
     )
     conn.commit()
@@ -131,6 +157,21 @@ def _int(value, default: int = 0) -> int:
         return int(value or default)
     except (TypeError, ValueError):
         return default
+
+
+def _limit_offset(limit: int = 50, offset: int = 0) -> tuple[int, int]:
+    return max(1, min(int(limit or 50), 200)), max(0, int(offset or 0))
+
+
+def _like(value: str) -> str:
+    return f"%{value.strip().lower()}%"
+
+
+def _scalar(query: str, params: list | tuple | None = None) -> int:
+    row = get_conn().execute(query, params or []).fetchone()
+    if not row:
+        return 0
+    return int(row[0] or 0)
 
 
 def _verify_confirm_password(staff: dict, confirm_password: str | None) -> None:
@@ -182,7 +223,11 @@ def list_kols(
     country: str | None = None,
     platform: str | None = None,
     status: str | None = None,
-    limit: int = 200,
+    q: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
     staff=Depends(require_tab("kol_ops", "read")),
 ):
     conn = get_conn()
@@ -195,7 +240,16 @@ def list_kols(
         where.append("k.platform = ?"); params.append(platform)
     if status:
         where.append("k.contact_status = ?"); params.append(status)
+    if q:
+        where.append("(LOWER(k.channel_name) LIKE ? OR LOWER(k.channel_url) LIKE ? OR LOWER(k.niche) LIKE ? OR LOWER(k.contact_email) LIKE ?)")
+        params.extend([_like(q), _like(q), _like(q), _like(q)])
+    if date_from:
+        where.append("k.updated_at >= ?"); params.append(date_from)
+    if date_to:
+        where.append("k.updated_at <= ?"); params.append(date_to)
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+    safe_limit, safe_offset = _limit_offset(limit, offset)
+    total = _scalar(f"SELECT COUNT(*) FROM kols k {where_sql}", params)
     rows = conn.execute(
         f"""
         SELECT
@@ -217,9 +271,9 @@ def list_kols(
         {where_sql}
         GROUP BY k.id, u.name
         ORDER BY k.updated_at DESC
-        LIMIT ?
+        LIMIT ? OFFSET ?
         """,
-        [*params, max(1, min(int(limit or 200), 500))],
+        [*params, safe_limit, safe_offset],
     ).fetchall()
     items = []
     for row in rows:
@@ -228,7 +282,226 @@ def list_kols(
         item["cpv"] = cpv(item.get("cost_cents", 0), item.get("views", 0))
         item["roi"] = roi(item.get("cost_cents", 0), item.get("revenue_cents", 0))
         items.append(item)
-    return {"items": items, "summary": _content_rollup_sql()}
+    return {
+        "items": items,
+        "summary": _content_rollup_sql(where_sql, params),
+        "page": {
+            "limit": safe_limit,
+            "offset": safe_offset,
+            "total": total,
+            "next_offset": safe_offset + safe_limit if safe_offset + safe_limit < total else None,
+            "prev_offset": max(0, safe_offset - safe_limit) if safe_offset > 0 else None,
+        },
+    }
+
+
+def _candidate_payload_from_item(item: dict, body: dict) -> dict:
+    return {
+        "platform": item.get("platform") or body.get("platform") or "",
+        "channel_name": item.get("channel_name") or "Unknown creator",
+        "channel_url": item.get("channel_url") or "",
+        "handle": item.get("handle") or "",
+        "country": body.get("market") or item.get("market") or "",
+        "niche": body.get("niche") or "",
+        "source_url": item.get("source_url") or "",
+        "sample_title": item.get("sample_title") or "",
+        "follower_count": _int(item.get("follower_count")),
+        "avg_views": _int(item.get("avg_views") or item.get("views")),
+        "contact_email": "",
+        "status": "new",
+        "search_query": body.get("query") or item.get("search_query") or "",
+        "market": body.get("market") or item.get("market") or "",
+        "notes": "",
+    }
+
+
+def _upsert_candidate(conn, payload: dict) -> int:
+    source_url = str(payload.get("source_url") or "").strip()
+    if source_url:
+        existing = conn.execute("SELECT id FROM kol_candidates WHERE source_url = ?", (source_url,)).fetchone()
+        if existing:
+            conn.execute(
+                """
+                UPDATE kol_candidates
+                SET avg_views = ?, sample_title = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (_int(payload.get("avg_views")), payload.get("sample_title", ""), _now(), int(existing["id"])),
+            )
+            return int(existing["id"])
+    cur = conn.execute(
+        """
+        INSERT INTO kol_candidates
+            (platform, channel_name, channel_url, handle, country, niche, source_url, sample_title,
+             follower_count, avg_views, contact_email, status, search_query, market, notes, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            payload.get("platform", ""),
+            payload.get("channel_name", "Unknown creator"),
+            payload.get("channel_url", ""),
+            payload.get("handle", ""),
+            payload.get("country", ""),
+            payload.get("niche", ""),
+            payload.get("source_url", ""),
+            payload.get("sample_title", ""),
+            _int(payload.get("follower_count")),
+            _int(payload.get("avg_views")),
+            payload.get("contact_email", ""),
+            payload.get("status", "new"),
+            payload.get("search_query", ""),
+            payload.get("market", ""),
+            payload.get("notes", ""),
+            _now(),
+            _now(),
+        ),
+    )
+    return int(cur.lastrowid)
+
+
+def _persist_search_candidates(items: list[dict], body: dict, platform: str, market: str) -> list[int]:
+    conn = get_conn()
+    candidate_ids = []
+    for item in items:
+        candidate_ids.append(_upsert_candidate(conn, _candidate_payload_from_item(item, {**body, "platform": platform, "market": market})))
+    conn.commit()
+    return candidate_ids
+
+
+@router.post("/search/platform")
+async def search_kol_platform(body: dict, staff=Depends(require_tab("kol_ops", "write"))):
+    query = str(body.get("query") or "").strip()
+    platform = str(body.get("platform") or "youtube").strip().lower()
+    market = str(body.get("market") or "").strip().upper()
+    if not query:
+        raise HTTPException(status_code=400, detail="query is required")
+    result = await search_platform_content(
+        platform,
+        query,
+        market=market,
+        max_results=_int(body.get("max_results"), 25),
+    )
+    candidate_ids = await db_write(lambda: _persist_search_candidates(result.get("items", []), body, platform, market))
+    return {
+        **result,
+        "candidate_ids": candidate_ids,
+        "saved_candidates": len(candidate_ids),
+    }
+
+
+@router.get("/candidates")
+def list_candidates(
+    q: str | None = None,
+    platform: str | None = None,
+    market: str | None = None,
+    status: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    staff=Depends(require_tab("kol_ops", "read")),
+):
+    where, params = [], []
+    if q:
+        where.append("(LOWER(channel_name) LIKE ? OR LOWER(sample_title) LIKE ? OR LOWER(search_query) LIKE ? OR LOWER(source_url) LIKE ?)")
+        params.extend([_like(q), _like(q), _like(q), _like(q)])
+    if platform:
+        where.append("platform = ?"); params.append(platform)
+    if market:
+        where.append("market = ?"); params.append(market.upper())
+    if status:
+        where.append("status = ?"); params.append(status)
+    if date_from:
+        where.append("updated_at >= ?"); params.append(date_from)
+    if date_to:
+        where.append("updated_at <= ?"); params.append(date_to)
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+    safe_limit, safe_offset = _limit_offset(limit, offset)
+    total = _scalar(f"SELECT COUNT(*) FROM kol_candidates {where_sql}", params)
+    rows = get_conn().execute(
+        f"""
+        SELECT *
+        FROM kol_candidates
+        {where_sql}
+        ORDER BY updated_at DESC
+        LIMIT ? OFFSET ?
+        """,
+        [*params, safe_limit, safe_offset],
+    ).fetchall()
+    return {
+        "items": _items(rows),
+        "page": {
+            "limit": safe_limit,
+            "offset": safe_offset,
+            "total": total,
+            "next_offset": safe_offset + safe_limit if safe_offset + safe_limit < total else None,
+            "prev_offset": max(0, safe_offset - safe_limit) if safe_offset > 0 else None,
+        },
+    }
+
+
+@router.patch("/candidates/{candidate_id}")
+def update_candidate(candidate_id: int, body: dict, staff=Depends(require_tab("kol_ops", "write"))):
+    allowed = ["status", "notes", "niche", "country", "contact_email"]
+    fields, params = [], []
+    for key in allowed:
+        if key in body:
+            fields.append(f"{key} = ?")
+            params.append(body[key])
+    if "status" in body:
+        fields.append("reviewed_by_staff_id = ?")
+        params.append(int(staff.get("id") or 0))
+    if not fields:
+        return {"ok": True}
+    fields.append("updated_at = ?")
+    params.append(_now())
+    params.append(int(candidate_id))
+    get_conn().execute(f"UPDATE kol_candidates SET {', '.join(fields)} WHERE id = ?", params)
+    get_conn().commit()
+    return {"ok": True}
+
+
+@router.post("/candidates/{candidate_id}/promote")
+def promote_candidate(candidate_id: int, body: dict | None = None, staff=Depends(require_tab("kol_ops", "write"))):
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM kol_candidates WHERE id = ?", (int(candidate_id),)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    payload = body or {}
+    cur = conn.execute(
+        """
+        INSERT INTO kols
+            (channel_name, channel_url, platform, country, niche, follower_count, avg_views,
+             contact_email, contact_status, notes, assigned_staff_id, created_by_staff_id, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            row["channel_name"],
+            row["channel_url"],
+            row["platform"],
+            payload.get("country") or row["country"],
+            payload.get("niche") or row["niche"],
+            _int(row["follower_count"]),
+            _int(row["avg_views"]),
+            payload.get("contact_email") or row["contact_email"],
+            "cold",
+            payload.get("notes") or row["notes"] or f"Promoted from candidate #{candidate_id}",
+            payload.get("assigned_staff_id") or staff.get("id"),
+            staff.get("id"),
+            _now(),
+            _now(),
+        ),
+    )
+    conn.execute(
+        """
+        UPDATE kol_candidates
+        SET status = 'imported', reviewed_by_staff_id = ?, updated_at = ?
+        WHERE id = ?
+        """,
+        (int(staff.get("id") or 0), _now(), int(candidate_id)),
+    )
+    conn.commit()
+    return {"id": cur.lastrowid, "candidate_id": int(candidate_id)}
 
 
 @router.get("/kols/{kol_id}")

@@ -58,6 +58,10 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "013_creator_public.sql",
     "014_pending_asset_cleanup.sql",
     "015_v5_commerce_admin_schema.sql",
+    "016_ai_usage_log.sql",
+    "018_staff_permissions.sql",
+    "019_kol_operations.sql",
+    "020_kol_candidates.sql",
 )
 
 try:

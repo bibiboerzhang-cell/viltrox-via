@@ -23,6 +23,7 @@ from typing import Any, Optional
 
 from app.core.logging import get_logger
 from app.services.ai.retry import call_ai_with_retry
+from app.services.intelligence.lens_monitor import filter_videos_by_date, search_market_videos
 
 logger = get_logger(__name__)
 
@@ -297,6 +298,11 @@ async def compare_two_lenses(
     lens_a: str,
     lens_b: str,
     max_videos: int = 15,
+    *,
+    platform: str = "youtube",
+    market: str = "",
+    date_from: str = "",
+    date_to: str = "",
 ) -> dict:
     """
     完整对比两个镜头.
@@ -322,11 +328,16 @@ async def compare_two_lenses(
     t0 = time.time()
     
     # 并行抓 2 个镜头
-    logger.info("lens_compare.run_started", extra={"lens_a": lens_a, "lens_b": lens_b, "max_videos": max_videos})
-    videos_a_task = asyncio.create_task(search_youtube_videos(lens_a, max_videos))
-    videos_b_task = asyncio.create_task(search_youtube_videos(lens_b, max_videos))
-    videos_a = await videos_a_task
-    videos_b = await videos_b_task
+    logger.info(
+        "lens_compare.run_started",
+        extra={"lens_a": lens_a, "lens_b": lens_b, "max_videos": max_videos, "platform": platform, "market": market},
+    )
+    videos_a_task = asyncio.create_task(search_market_videos(lens_a, max_videos, platform=platform, market=market))
+    videos_b_task = asyncio.create_task(search_market_videos(lens_b, max_videos, platform=platform, market=market))
+    search_a = await videos_a_task
+    search_b = await videos_b_task
+    videos_a = filter_videos_by_date(search_a.get("videos", []), date_from=date_from, date_to=date_to)
+    videos_b = filter_videos_by_date(search_b.get("videos", []), date_from=date_from, date_to=date_to)
     
     # 统计
     stats_a = compute_lens_stats(videos_a)
@@ -364,10 +375,12 @@ async def compare_two_lenses(
         "lens_a": {
             "name": lens_a,
             "stats": stats_a,
+            "provider_status": search_a.get("status"),
         },
         "lens_b": {
             "name": lens_b,
             "stats": stats_b,
+            "provider_status": search_b.get("status"),
         },
         "comparison": comparison,
         "claude_analysis": claude_analysis,
@@ -375,6 +388,12 @@ async def compare_two_lenses(
             "duration_sec": round(elapsed, 1),
             "cost_usd_est": 0.07,
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "platform": (platform or "youtube").strip().lower(),
+            "market": (market or "").strip().upper(),
+            "date_from": date_from,
+            "date_to": date_to,
+            "provider_status_a": search_a.get("status"),
+            "provider_status_b": search_b.get("status"),
         },
     }
 

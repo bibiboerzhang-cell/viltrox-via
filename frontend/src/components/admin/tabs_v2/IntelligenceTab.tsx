@@ -42,12 +42,6 @@ function nested(source: Row | null, key: string): Row {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Row : {};
 }
 
-const sampleMatrix = [
-  { platform: "youtube", handle: "viltroxofficial", name: "Viltrox YouTube" },
-  { platform: "instagram", handle: "viltrox.official", name: "Viltrox Instagram" },
-  { platform: "tiktok", handle: "viltrox.global", name: "Viltrox TikTok" },
-];
-
 export function IntelligenceTab({ token }: Props) {
   const [mode, setMode] = useState<Mode>("monitor");
   const [busy, setBusy] = useState("");
@@ -57,7 +51,7 @@ export function IntelligenceTab({ token }: Props) {
   const [monitorResult, setMonitorResult] = useState<Row | null>(null);
   const [compareResult, setCompareResult] = useState<Row | null>(null);
   const [learnResult, setLearnResult] = useState<Row | null>(null);
-  const [matrixText, setMatrixText] = useState(JSON.stringify(sampleMatrix, null, 2));
+  const [matrixText, setMatrixText] = useState("");
 
   const activeResult = { account: accountResult, matrix: matrixResult, monitor: monitorResult, compare: compareResult, learn: learnResult }[mode];
   const monitorOverview = nested(monitorResult, "overview");
@@ -145,6 +139,10 @@ export function IntelligenceTab({ token }: Props) {
       setMonitorResult(await monitorLensMarket(token, {
         query: String(form.get("query") || ""),
         max_videos: Number(form.get("max_videos") || 20),
+        platform: String(form.get("platform") || "youtube"),
+        market: String(form.get("market") || ""),
+        date_from: String(form.get("date_from") || ""),
+        date_to: String(form.get("date_to") || ""),
       }));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -163,6 +161,10 @@ export function IntelligenceTab({ token }: Props) {
         lens_a: String(form.get("lens_a") || ""),
         lens_b: String(form.get("lens_b") || ""),
         max_videos: Number(form.get("max_videos") || 12),
+        platform: String(form.get("platform") || "youtube"),
+        market: String(form.get("market") || ""),
+        date_from: String(form.get("date_from") || ""),
+        date_to: String(form.get("date_to") || ""),
       }));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -237,8 +239,12 @@ export function IntelligenceTab({ token }: Props) {
 
 function MonitorForm({ busy, onSubmit }: { busy: boolean; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
   return (
-    <form className="ax-card" onSubmit={onSubmit} style={{ display: "grid", gridTemplateColumns: "1.5fr 120px auto", gap: 8 }}>
-      <input className="input" name="query" placeholder="viltrox 16mm f1.8" defaultValue="viltrox 16mm f1.8" required />
+    <form className="ax-card" onSubmit={onSubmit} style={{ display: "grid", gridTemplateColumns: "1.4fr 130px 100px 130px 130px 100px auto", gap: 8 }}>
+      <input className="input" name="query" placeholder="产品或关键词，例如 16mm f1.8 / anamorphic" required />
+      <PlatformSelect />
+      <input className="input" name="market" placeholder="US / JP / EU" />
+      <input className="input" name="date_from" type="date" aria-label="date from" />
+      <input className="input" name="date_to" type="date" aria-label="date to" />
       <input className="input" name="max_videos" type="number" min={1} max={50} defaultValue={20} />
       <button className="ax-btn" type="submit" disabled={busy}>{busy ? "Scanning…" : "Run monitor"}</button>
     </form>
@@ -247,9 +253,13 @@ function MonitorForm({ busy, onSubmit }: { busy: boolean; onSubmit: (event: Form
 
 function CompareForm({ busy, onSubmit }: { busy: boolean; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
   return (
-    <form className="ax-card" onSubmit={onSubmit} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 110px auto", gap: 8 }}>
-      <input className="input" name="lens_a" placeholder="viltrox 16mm f1.8" defaultValue="viltrox 16mm f1.8" required />
-      <input className="input" name="lens_b" placeholder="sigma 16mm f1.4" defaultValue="sigma 16mm f1.4" required />
+    <form className="ax-card" onSubmit={onSubmit} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 130px 90px 120px 120px 90px auto", gap: 8 }}>
+      <input className="input" name="lens_a" placeholder="产品 A，例如 Viltrox 16mm F1.8" required />
+      <input className="input" name="lens_b" placeholder="产品 B，例如 Sigma 16mm F1.4" required />
+      <PlatformSelect />
+      <input className="input" name="market" placeholder="US" />
+      <input className="input" name="date_from" type="date" aria-label="date from" />
+      <input className="input" name="date_to" type="date" aria-label="date to" />
       <input className="input" name="max_videos" type="number" min={1} max={30} defaultValue={12} />
       <button className="ax-btn" type="submit" disabled={busy}>{busy ? "Comparing…" : "Compare"}</button>
     </form>
@@ -260,9 +270,9 @@ function AccountForm({ busy, onSubmit }: { busy: boolean; onSubmit: (event: Form
   return (
     <form className="ax-card" onSubmit={onSubmit} style={{ display: "grid", gridTemplateColumns: "140px 1fr 120px auto", gap: 8 }}>
       <select className="input" name="platform" defaultValue="youtube">
-        {["youtube", "instagram", "tiktok", "facebook"].map((platform) => <option key={platform} value={platform}>{platform}</option>)}
+        {["youtube", "tiktok", "instagram", "facebook"].map((platform) => <option key={platform} value={platform}>{platform}</option>)}
       </select>
-      <input className="input" name="handle" placeholder="@handle" defaultValue="viltroxofficial" required />
+      <input className="input" name="handle" placeholder="@handle 或频道名" required />
       <input className="input" name="max_posts" type="number" min={1} max={1000} defaultValue={50} />
       <button className="ax-btn" type="submit" disabled={busy}>{busy ? "Scanning…" : "Scan account"}</button>
     </form>
@@ -272,7 +282,14 @@ function AccountForm({ busy, onSubmit }: { busy: boolean; onSubmit: (event: Form
 function MatrixForm({ busy, value, onChange, onSubmit }: { busy: boolean; value: string; onChange: (next: string) => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
   return (
     <form className="ax-card" onSubmit={onSubmit} style={{ display: "grid", gap: 8 }}>
-      <textarea className="input" rows={7} value={value} onChange={(event) => onChange(event.target.value)} />
+      <textarea
+        className="input"
+        rows={7}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={'粘贴真实账号 JSON，例如 [{"platform":"youtube","handle":"@real_channel","name":"US YouTube"}]'}
+        required
+      />
       <div style={{ display: "grid", gridTemplateColumns: "160px auto", gap: 8 }}>
         <input className="input" name="max_posts_per_account" type="number" min={1} max={1000} defaultValue={30} />
         <button className="ax-btn" type="submit" disabled={busy}>{busy ? "Scanning matrix…" : "Scan matrix"}</button>
@@ -293,6 +310,16 @@ function LearnForm({ busy, onSubmit }: { busy: boolean; onSubmit: (event: FormEv
   );
 }
 
+function PlatformSelect() {
+  return (
+    <select className="input" name="platform" defaultValue="youtube">
+      <option value="youtube">YouTube</option>
+      <option value="tiktok">TikTok</option>
+      <option value="instagram">Instagram</option>
+    </select>
+  );
+}
+
 function MonitorResult({ result }: { result: Row }) {
   const categories = nested(result, "categories");
   const insights = nested(result, "claude_insights");
@@ -301,6 +328,7 @@ function MonitorResult({ result }: { result: Row }) {
     <div style={{ display: "grid", gap: 12 }}>
       <div className="ax-card">
         <SectionLabel>Lens Monitor Insights</SectionLabel>
+        <MetaLine result={result} />
         <p style={{ marginTop: 0 }}>{str(insights.summary, str(result.error, "No written insight yet"))}</p>
         <BulletList label="Topics" items={insights.trending_topics} />
         <BulletList label="Opportunities" items={insights.opportunities} />
@@ -345,6 +373,7 @@ function CompareResult({ result }: { result: Row }) {
       </div>
       <div className="ax-card">
         <SectionLabel>Competitive Analysis</SectionLabel>
+        <MetaLine result={nested(result, "metadata")} />
         <p style={{ marginTop: 0 }}>{str(analysis.summary || analysis.overall_summary || analysis.verdict, "No analysis text returned")}</p>
         <BulletList label="Viltrox angles" items={analysis.viltrox_angles || analysis.opportunities || analysis.recommendations} />
       </div>
@@ -358,6 +387,20 @@ function CompareResult({ result }: { result: Row }) {
           <VideoTable rows={list(statsB.top_videos)} />
         </div>
       </div>
+    </div>
+  );
+}
+
+function MetaLine({ result }: { result: Row }) {
+  const platform = str(result.platform || nested(result, "metadata").platform, "");
+  const market = str(result.market || nested(result, "metadata").market, "");
+  const status = str(result.provider_status || result.provider_status_a || nested(result, "metadata").provider_status, "");
+  if (!platform && !market && !status) return null;
+  return (
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8, fontSize: 11, color: "var(--ax-text-2)" }}>
+      {platform ? <span>Platform: {platform}</span> : null}
+      {market ? <span>Market: {market}</span> : null}
+      {status ? <span>Provider: {status}</span> : null}
     </div>
   );
 }
