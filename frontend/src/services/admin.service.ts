@@ -1463,3 +1463,78 @@ export function fetchKolSuggestions(token: string, kolId: number) {
     token,
   );
 }
+
+export function scanIntelligenceAccount(
+  token: string,
+  payload: { platform: string; handle: string; max_posts?: number; sync?: boolean },
+) {
+  return apiFetch<Record<string, unknown>>(
+    "/api/admin/intel/scan-account",
+    {
+      method: "POST",
+      timeoutMs: 240000,
+      body: jsonBody({ sync: true, max_posts: 100, ...payload }),
+    },
+    token,
+  );
+}
+
+export function scanIntelligenceMatrix(
+  token: string,
+  payload: { accounts: Array<{ platform: string; handle: string; name?: string }>; max_posts_per_account?: number; sync?: boolean },
+) {
+  return apiFetch<Record<string, unknown>>(
+    "/api/admin/intel/scan-matrix",
+    {
+      method: "POST",
+      timeoutMs: 300000,
+      body: jsonBody({ sync: true, max_posts_per_account: 50, ...payload }),
+    },
+    token,
+  );
+}
+
+export function monitorLensMarket(
+  token: string,
+  payload: { query: string; max_videos?: number },
+) {
+  return apiFetch<Record<string, unknown>>(
+    "/api/admin/intel/monitor",
+    {
+      method: "POST",
+      timeoutMs: 300000,
+      body: jsonBody(payload),
+    },
+    token,
+  );
+}
+
+export function compareLensMarket(
+  token: string,
+  payload: { lens_a: string; lens_b: string; max_videos?: number },
+) {
+  return apiFetch<Record<string, unknown>>(
+    "/api/admin/intel/compare",
+    {
+      method: "POST",
+      timeoutMs: 300000,
+      body: jsonBody(payload),
+    },
+    token,
+  );
+}
+
+export function learnIntelligenceUrl(
+  token: string,
+  payload: { url: string; source_platform?: string; note?: string; region_code?: string },
+) {
+  return apiFetch<Record<string, unknown>>(
+    "/api/admin/intel/learn/url",
+    {
+      method: "POST",
+      timeoutMs: 60000,
+      body: jsonBody(payload),
+    },
+    token,
+  );
+}
