@@ -48,6 +48,45 @@ function pct(value: unknown) {
   return `${(num(value) * 100).toFixed(1)}%`;
 }
 
+const COUNTRY_CODES: Record<string, string> = {
+  美国: "US",
+  加拿大: "CA",
+  澳大利亚: "AU",
+  英国: "GB",
+  德国: "DE",
+  法国: "FR",
+  日本: "JP",
+  韩国: "KR",
+  俄罗斯: "RU",
+  西班牙: "ES",
+  意大利: "IT",
+  荷兰: "NL",
+  巴西: "BR",
+  墨西哥: "MX",
+  印度: "IN",
+  新加坡: "SG",
+};
+
+function creatorName(row: Row) {
+  const owner = String(row.owner_name ?? "").trim();
+  let value = String(row.creator_name || row.channel_name || row.media_name || row.project_name || "").trim();
+  if (owner && value.toLowerCase().startsWith(owner.toLowerCase())) {
+    value = value.replace(new RegExp(`^${owner.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*[-_–—]\\s*`, "i"), "").trim();
+  }
+  value = value
+    .replace(/^[\u4e00-\u9fff]{2,8}\s*[-_–—]\s*/, "")
+    .replace(/\s*[-_–—]?\s*【[^】]*(youtube|tiktok|instagram|reddit|twitter|x|yt|tk|ig)[^】]*】\s*$/i, "")
+    .replace(/\s*[-_–—]?\s*\[[^\]]*(youtube|tiktok|instagram|reddit|twitter|x|yt|tk|ig)[^\]]*\]\s*$/i, "")
+    .trim();
+  return value || "—";
+}
+
+function countryCode(row: Row) {
+  const raw = String(row.country_code || row.country || "").trim();
+  if (!raw) return "—";
+  return COUNTRY_CODES[raw] || raw.toUpperCase();
+}
+
 function statusTone(value: unknown): "pass" | "review" | "queue" | "new" | "active" | "idle" | "churn" | "block" | "flag" {
   const raw = String(value || "").toLowerCase();
   if (["active", "agreed", "approved", "imported"].includes(raw)) return "active";
@@ -85,7 +124,7 @@ export function KolOpsTab({ token }: Props) {
   const [activity, setActivity] = useState<{ totals?: Row; items: Row[]; recent: Row[]; window?: Row }>({ items: [], recent: [] });
   const [detail, setDetail] = useState<KolDetailSnapshot | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [filters, setFilters] = useState({ q: "", staff_id: "", country: "", platform: "", status: "", date_from: "", date_to: "", limit: "25", offset: "0" });
+  const [filters, setFilters] = useState({ q: "", product: "", country: "", platform: "", status: "", date_from: "", date_to: "", limit: "25", offset: "0" });
   const [candidateFilters, setCandidateFilters] = useState({ q: "", platform: "", market: "", status: "new", date_from: "", date_to: "", limit: "25", offset: "0" });
   const [activityFilters, setActivityFilters] = useState({ date_from: "", date_to: "" });
   const [loading, setLoading] = useState(true);
@@ -151,14 +190,11 @@ export function KolOpsTab({ token }: Props) {
   ], [items.length, summary]);
 
   const columns: DataColumn<Row>[] = [
-    { key: "project", label: "项目/红人", width: "1.25fr", render: (r) => <strong>{str(r.project_name || r.channel_name)}</strong> },
-    { key: "owner", label: "对接人", width: "0.7fr", render: (r) => str(r.owner_name || r.assigned_staff_name) },
+    { key: "creator", label: "红人", width: "1.25fr", render: (r) => <strong>{creatorName(r)}</strong> },
     { key: "product", label: "推广产品", width: "1fr", render: (r) => str(r.promoted_product) },
-    { key: "media", label: "红人/媒体", width: "1.05fr", render: (r) => str(r.media_name || r.channel_name) },
-    { key: "market", label: "国家/平台", width: "0.8fr", render: (r) => `${str(r.country)} · ${str(r.platform)}` },
-    { key: "scale", label: "量级/粉丝", width: "0.75fr", render: (r) => `${str(r.scale_tier)} · ${num(r.follower_count).toLocaleString()}` },
-    { key: "type", label: "内容类型", width: "0.9fr", render: (r) => str(r.content_type || r.channel_tags) },
-    { key: "status", label: "合作进度", width: "0.75fr", render: (r) => <StatusPill tone={statusTone(r.contact_status)}>{str(r.contact_status, "cold")}</StatusPill> },
+    { key: "country", label: "国家", width: "0.45fr", render: (r) => countryCode(r) },
+    { key: "platform", label: "平台", width: "0.6fr", render: (r) => str(r.platform) },
+    { key: "followers", label: "粉丝数", width: "0.65fr", render: (r) => num(r.follower_count).toLocaleString() },
     { key: "views", label: "观看/互动", width: "0.75fr", render: (r) => `${num(r.views).toLocaleString()} / ${pct(r.engagement_rate)}` },
     { key: "money", label: "预算/收入", width: "0.8fr", render: (r) => `${usd(r.cost_cents)} / ${usd(r.revenue_cents)}` },
     { key: "cpv", label: "CPV", width: "0.55fr", render: (r) => `$${num(r.cpv).toFixed(4)}` },
@@ -212,6 +248,7 @@ export function KolOpsTab({ token }: Props) {
         platform: String(form.get("platform") || "youtube"),
         country: String(form.get("country") || ""),
         niche: String(form.get("niche") || ""),
+        promoted_product: String(form.get("promoted_product") || ""),
         contact_email: String(form.get("contact_email") || ""),
         contact_status: "cold",
       });
@@ -390,12 +427,13 @@ export function KolOpsTab({ token }: Props) {
             <KolFilterBar filters={filters} setFilters={setFilters} onApply={applyFilters} />
             <div className="ax-card">
               <SectionLabel>新增 KOL</SectionLabel>
-              <form onSubmit={handleCreateKol} style={{ display: "grid", gridTemplateColumns: "1.2fr 0.8fr 0.6fr 0.8fr 1fr auto", gap: 8 }}>
-                <input className="input" name="channel_name" placeholder="频道名" required />
+              <form onSubmit={handleCreateKol} style={{ display: "grid", gridTemplateColumns: "1.2fr 0.8fr 0.55fr 1fr 0.9fr 1fr auto", gap: 8 }}>
+                <input className="input" name="channel_name" placeholder="红人名" required />
                 <select className="input" name="platform" defaultValue="youtube">
                   {["youtube", "tiktok", "instagram", "twitter", "reddit"].map((p) => <option key={p} value={p}>{p}</option>)}
                 </select>
                 <input className="input" name="country" placeholder="US" />
+                <input className="input" name="promoted_product" placeholder="推广产品" />
                 <input className="input" name="niche" placeholder="photography" />
                 <input className="input" name="contact_email" placeholder="email" />
                 <button type="submit" className="ax-btn" disabled={busy === "create-kol"}><Icons.plus /> Add</button>
@@ -440,9 +478,9 @@ export function KolOpsTab({ token }: Props) {
 
 function KolFilterBar({ filters, setFilters, onApply }: { filters: Record<string, string>; setFilters: (fn: (prev: any) => any) => void; onApply: () => void }) {
   return (
-    <div className="ax-card" style={{ display: "grid", gridTemplateColumns: "1.35fr repeat(7, minmax(0, 1fr)) auto", gap: 8 }}>
+    <div className="ax-card" style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr 0.7fr 0.85fr 0.85fr 0.85fr 0.85fr 0.7fr auto", gap: 8 }}>
       <input className="input" placeholder="搜索红人/媒体/产品/对接人/标签/URL" value={filters.q} onChange={(event) => setFilters((prev) => ({ ...prev, q: event.target.value }))} />
-      <input className="input" placeholder="staff_id" value={filters.staff_id} onChange={(event) => setFilters((prev) => ({ ...prev, staff_id: event.target.value }))} />
+      <input className="input" placeholder="精准推广产品" value={filters.product} onChange={(event) => setFilters((prev) => ({ ...prev, product: event.target.value, offset: "0" }))} />
       <input className="input" placeholder="US" value={filters.country} onChange={(event) => setFilters((prev) => ({ ...prev, country: event.target.value }))} />
       <select className="input" value={filters.platform} onChange={(event) => setFilters((prev) => ({ ...prev, platform: event.target.value }))}>
         <option value="">all platform</option>

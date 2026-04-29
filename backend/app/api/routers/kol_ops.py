@@ -397,6 +397,113 @@ def _normalize_platform(value: str) -> str:
     return text or "unknown"
 
 
+COUNTRY_CODE_ALIASES = {
+    "美国": "US",
+    "usa": "US",
+    "united states": "US",
+    "us": "US",
+    "加拿大": "CA",
+    "canada": "CA",
+    "ca": "CA",
+    "澳大利亚": "AU",
+    "australia": "AU",
+    "au": "AU",
+    "英国": "GB",
+    "uk": "GB",
+    "united kingdom": "GB",
+    "gb": "GB",
+    "德国": "DE",
+    "germany": "DE",
+    "de": "DE",
+    "法国": "FR",
+    "france": "FR",
+    "fr": "FR",
+    "日本": "JP",
+    "japan": "JP",
+    "jp": "JP",
+    "韩国": "KR",
+    "south korea": "KR",
+    "kr": "KR",
+    "俄罗斯": "RU",
+    "russia": "RU",
+    "ru": "RU",
+    "西班牙": "ES",
+    "spain": "ES",
+    "es": "ES",
+    "意大利": "IT",
+    "italy": "IT",
+    "it": "IT",
+    "荷兰": "NL",
+    "netherlands": "NL",
+    "nl": "NL",
+    "巴西": "BR",
+    "brazil": "BR",
+    "br": "BR",
+    "墨西哥": "MX",
+    "mexico": "MX",
+    "mx": "MX",
+    "印度": "IN",
+    "india": "IN",
+    "in": "IN",
+    "新加坡": "SG",
+    "singapore": "SG",
+    "sg": "SG",
+    "马来西亚": "MY",
+    "malaysia": "MY",
+    "my": "MY",
+    "泰国": "TH",
+    "thailand": "TH",
+    "th": "TH",
+    "越南": "VN",
+    "vietnam": "VN",
+    "vn": "VN",
+    "菲律宾": "PH",
+    "philippines": "PH",
+    "ph": "PH",
+    "印尼": "ID",
+    "印度尼西亚": "ID",
+    "indonesia": "ID",
+    "id": "ID",
+}
+
+
+def _normalize_country_code(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return COUNTRY_CODE_ALIASES.get(text.lower()) or COUNTRY_CODE_ALIASES.get(text) or text.upper()
+
+
+def _country_filter_variants(value: str) -> list[str]:
+    code = _normalize_country_code(value)
+    variants = {str(value or "").strip(), code}
+    for alias, alias_code in COUNTRY_CODE_ALIASES.items():
+        if alias_code == code:
+            variants.add(alias)
+            variants.add(alias.upper())
+    return [item for item in variants if item]
+
+
+def _clean_creator_name(value: str, owner_name: str = "") -> str:
+    text = str(value or "").strip()
+    owner = str(owner_name or "").strip()
+    if owner and text.lower().startswith(owner.lower()):
+        text = re.sub(rf"^{re.escape(owner)}\\s*[-_–—]\\s*", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(r"^[\u4e00-\u9fff]{2,8}\s*[-_–—]\s*", "", text).strip()
+    text = re.sub(r"\s*[-_–—]?\s*【[^】]*(youtube|tiktok|instagram|reddit|twitter|x|yt|tk|ig)[^】]*】\s*$", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*[-_–—]?\s*\[[^\]]*(youtube|tiktok|instagram|reddit|twitter|x|yt|tk|ig)[^\]]*\]\s*$", "", text, flags=re.IGNORECASE)
+    return text.strip(" -_–—") or str(value or "").strip()
+
+
+def _row_contact_status(row: dict[str, str]) -> str:
+    status = str(row.get("contact_status") or "").strip()
+    if status:
+        return status
+    if str(row.get("content_url") or "").strip():
+        return "已回片"
+    return "cold"
+
+
 def _xlsx_rows(raw: bytes) -> list[dict[str, str]]:
     ns = {"a": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
     with zipfile.ZipFile(io.BytesIO(raw)) as zf:
@@ -523,6 +630,7 @@ def list_kols(
     country: str | None = None,
     platform: str | None = None,
     status: str | None = None,
+    product: str | None = None,
     q: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
@@ -535,11 +643,15 @@ def list_kols(
     if staff_id:
         where.append("k.assigned_staff_id = ?"); params.append(staff_id)
     if country:
-        where.append("k.country = ?"); params.append(country)
+        variants = _country_filter_variants(country)
+        where.append("(" + " OR ".join(["LOWER(COALESCE(k.country, '')) = LOWER(?)"] * len(variants)) + ")")
+        params.extend(variants)
     if platform:
         where.append("k.platform = ?"); params.append(platform)
     if status:
         where.append("k.contact_status = ?"); params.append(status)
+    if product:
+        where.append("LOWER(COALESCE(k.promoted_product, '')) LIKE ?"); params.append(_like(product))
     if q:
         where.append(
             "(LOWER(k.channel_name) LIKE ? OR LOWER(k.channel_url) LIKE ? OR LOWER(k.niche) LIKE ? "
@@ -583,6 +695,8 @@ def list_kols(
     items = []
     for row in rows:
         item = dict(row)
+        item["creator_name"] = _clean_creator_name(item.get("media_name") or item.get("channel_name") or item.get("project_name") or "", item.get("owner_name", ""))
+        item["country_code"] = _normalize_country_code(item.get("country", ""))
         item["engagement_rate"] = engagement_rate(item.get("likes", 0), item.get("comments", 0), item.get("shares", 0), item.get("views", 0))
         item["cpv"] = cpv(item.get("cost_cents", 0), item.get("views", 0))
         item["roi"] = roi(item.get("cost_cents", 0), item.get("revenue_cents", 0))
@@ -908,10 +1022,10 @@ def create_kol(body: dict, staff=Depends(require_tab("kol_ops", "write"))):
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
-            body.get("channel_name"),
+            _clean_creator_name(body.get("channel_name", ""), body.get("owner_name", "")),
             body.get("channel_url", ""),
             body.get("platform"),
-            body.get("country", ""),
+            _normalize_country_code(body.get("country", "")),
             body.get("niche", ""),
             int(body.get("follower_count") or 0),
             int(body.get("avg_views") or 0),
@@ -1008,11 +1122,13 @@ def import_kols_csv(request: Request, file: UploadFile = File(...), staff=Depend
     content_count = 0
     skipped = 0
     for row in rows:
-        name = (row.get("channel_name") or row.get("media_name") or row.get("project_name") or "").strip()
+        name = _clean_creator_name(row.get("channel_name") or row.get("media_name") or row.get("project_name") or "", row.get("owner_name", ""))
         platform = _normalize_platform(row.get("platform") or "")
         if not name or not platform:
             skipped += 1
             continue
+        country_code = _normalize_country_code(row.get("country", ""))
+        contact_status = _row_contact_status(row)
         follower_count = _parse_count(row.get("follower_count"))
         views = _parse_count(row.get("views") or row.get("avg_views"))
         likes = _parse_count(row.get("likes"))
@@ -1048,17 +1164,17 @@ def import_kols_csv(request: Request, file: UploadFile = File(...), staff=Depend
                  WHERE id=?
                 """,
                 (
-                    row.get("country", ""),
+                    country_code,
                     row.get("channel_tags") or row.get("content_type") or row.get("niche", ""),
                     follower_count,
                     follower_count,
                     views,
                     views,
                     row.get("contact_email", ""),
-                    row.get("contact_status") or "cold",
+                    contact_status,
                     row.get("project_name", ""),
                     row.get("owner_name", ""),
-                    row.get("media_name", name),
+                    row.get("media_name", ""),
                     row.get("duplicate_flag", ""),
                     row.get("scale_tier", ""),
                     row.get("content_type", ""),
@@ -1090,17 +1206,17 @@ def import_kols_csv(request: Request, file: UploadFile = File(...), staff=Depend
                     name,
                     channel_url,
                     platform,
-                    row.get("country", ""),
+                    country_code,
                     row.get("channel_tags") or row.get("content_type") or row.get("niche", ""),
                     follower_count,
                     views,
                     row.get("contact_email", ""),
-                    row.get("contact_status") or "cold",
+                    contact_status,
                     assigned_staff_id,
                     staff.get("id"),
                     row.get("project_name", ""),
                     row.get("owner_name", ""),
-                    row.get("media_name", name),
+                    row.get("media_name", ""),
                     row.get("duplicate_flag", ""),
                     row.get("scale_tier", ""),
                     row.get("content_type", ""),
@@ -1121,7 +1237,7 @@ def import_kols_csv(request: Request, file: UploadFile = File(...), staff=Depend
             count += 1
         campaign_id = None
         product = str(row.get("promoted_product") or "").strip()
-        if product or budget_spend_cents or row.get("contact_status"):
+        if product or budget_spend_cents or contact_status:
             note_parts = [
                 str(row.get("collaboration_detail") or "").strip(),
                 str(row.get("budget_request") or "").strip(),
@@ -1140,7 +1256,7 @@ def import_kols_csv(request: Request, file: UploadFile = File(...), staff=Depend
                     None,
                     None,
                     budget_spend_cents,
-                    row.get("contact_status") or "planning",
+                    contact_status or "planning",
                     " | ".join(part for part in note_parts if part),
                     _now(),
                 ),
@@ -1278,7 +1394,8 @@ def create_content(body: dict, staff=Depends(require_tab("kol_ops", "write"))):
         raise HTTPException(status_code=400, detail="campaign_id, content_url and platform required")
     conn = get_conn()
     campaign_id = int(body.get("campaign_id"))
-    if not conn.execute("SELECT id FROM kol_campaigns WHERE id = ?", (campaign_id,)).fetchone():
+    campaign = conn.execute("SELECT id, kol_id FROM kol_campaigns WHERE id = ?", (campaign_id,)).fetchone()
+    if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
     views = _int(body.get("views"))
     likes = _int(body.get("likes"))
@@ -1308,6 +1425,8 @@ def create_content(body: dict, staff=Depends(require_tab("kol_ops", "write"))):
             _now(),
         ),
     )
+    conn.execute("UPDATE kol_campaigns SET status = ? WHERE id = ?", ("已回片", campaign_id))
+    conn.execute("UPDATE kols SET contact_status = ?, updated_at = ? WHERE id = ?", ("已回片", _now(), int(campaign["kol_id"])))
     _log_activity(conn, staff, "content_create", target_type="content", target_id=int(cur.lastrowid), result_count=1, metadata={"campaign_id": campaign_id, "views": views})
     conn.commit()
     return {"id": cur.lastrowid}
