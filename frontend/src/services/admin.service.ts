@@ -403,6 +403,14 @@ export interface AdminAnalyticsSnapshot {
   learningStats: Record<string, unknown> | null;
   corrections: Array<Record<string, unknown>>;
   pointsLog: Array<Record<string, unknown>>;
+  trends: Record<string, Array<Record<string, unknown>>>;
+  correlations: Array<Record<string, unknown>>;
+  pipeline: Array<Record<string, unknown>>;
+  pipelineSummary: Record<string, unknown> | null;
+  rejectionReasons: Array<Record<string, unknown>>;
+  seriesPerformance: Array<Record<string, unknown>>;
+  cohorts: Array<Record<string, unknown>>;
+  creatorRankings: Array<Record<string, unknown>>;
 }
 
 export interface AdminCommerceSnapshot {
@@ -477,6 +485,15 @@ export interface SystemModelsSnapshot {
   available_models: Record<string, string[]>;
   task_model_binding: Record<string, string>;
   pricing_usd_per_1m_tokens: Record<string, { input: number; output: number }>;
+}
+
+export interface SystemUsageSnapshot {
+  window_days: number;
+  today: Record<string, unknown>;
+  by_provider: Array<Record<string, unknown>>;
+  by_task: Array<Record<string, unknown>>;
+  daily: Array<Record<string, unknown>>;
+  cost_basis: string;
 }
 
 export async function fetchAdminDashboard(token: string): Promise<AdminSnapshotPayload<AdminDashboardSnapshot>> {
@@ -1035,6 +1052,41 @@ export function updateAdminTrustRule(
   );
 }
 
+export function fetchTrustDistribution(token: string) {
+  return apiFetch<Record<string, unknown>>("/api/admin/trust/distribution", {}, token);
+}
+
+export function fetchTrustUserDetail(token: string, userId: number) {
+  return apiFetch<Record<string, unknown>>(`/api/admin/trust/users/${encodeURIComponent(String(userId))}`, {}, token);
+}
+
+export function updateTrustThresholds(token: string, payload: Record<string, unknown>) {
+  return apiFetch<Record<string, unknown>>(
+    "/api/admin/trust/thresholds",
+    {
+      method: "PUT",
+      body: jsonBody(payload),
+    },
+    token,
+  );
+}
+
+export function runTrustUserAction(
+  token: string,
+  userId: number,
+  action: "block" | "unblock" | "flag" | "clear-flag" | "adjust-score",
+  payload: Record<string, unknown> = {},
+) {
+  return apiFetch<Record<string, unknown>>(
+    `/api/admin/users/${encodeURIComponent(String(userId))}/${action}`,
+    {
+      method: "POST",
+      body: jsonBody(payload),
+    },
+    token,
+  );
+}
+
 export function inviteAdminStaff(
   token: string,
   payload: { email: string; name?: string; role: string },
@@ -1167,7 +1219,26 @@ export async function fetchAdminProductsSnapshot(token: string): Promise<AdminSn
 }
 
 export async function fetchAdminAnalyticsSnapshot(token: string): Promise<AdminAnalyticsSnapshot> {
-  const [insights, benchmarks, leaderboardMonth, leaderboardYear, dashboard, learningStats, corrections, pointsLog] = await Promise.all([
+  const [
+    insights,
+    benchmarks,
+    leaderboardMonth,
+    leaderboardYear,
+    dashboard,
+    learningStats,
+    corrections,
+    pointsLog,
+    trendSubmissions,
+    trendGmv,
+    trendScore,
+    trendActiveCreators,
+    correlations,
+    pipeline,
+    rejectionReasons,
+    seriesPerformance,
+    cohorts,
+    creatorRankings,
+  ] = await Promise.all([
     apiFetch<Record<string, unknown>>("/api/admin/insights", {}, token).catch(e => { console.warn("[admin.service] fetch failed:", e); return {} as any; }),
     apiFetch<Record<string, unknown>>("/api/admin/benchmarks", {}, token).catch(e => { console.warn("[admin.service] fetch failed:", e); return {} as any; }),
     apiFetch<{ items?: Array<Record<string, unknown>> }>("/api/admin/leaderboard?period=month", {}, token).catch(e => { console.warn("[admin.service] fetch failed:", e); return {} as any; }),
@@ -1176,6 +1247,16 @@ export async function fetchAdminAnalyticsSnapshot(token: string): Promise<AdminA
     apiFetch<Record<string, unknown>>("/api/admin/learning/stats", {}, token).catch(e => { console.warn("[admin.service] fetch failed:", e); return {} as any; }),
     apiFetch<{ items?: Array<Record<string, unknown>> }>("/api/admin/learning/corrections", {}, token).catch(e => { console.warn("[admin.service] fetch failed:", e); return {} as any; }),
     apiFetch<{ log?: Array<Record<string, unknown>> }>("/api/admin/points-log", {}, token).catch(e => { console.warn("[admin.service] fetch failed:", e); return {} as any; }),
+    apiFetch<Record<string, unknown>>("/api/admin/analytics/trend?metric=submissions&window_days=30", {}, token).catch(e => { console.warn("[admin.service] analytics trend failed:", e); return {} as any; }),
+    apiFetch<Record<string, unknown>>("/api/admin/analytics/trend?metric=gmv&window_days=30", {}, token).catch(e => { console.warn("[admin.service] analytics trend failed:", e); return {} as any; }),
+    apiFetch<Record<string, unknown>>("/api/admin/analytics/trend?metric=score&window_days=30", {}, token).catch(e => { console.warn("[admin.service] analytics trend failed:", e); return {} as any; }),
+    apiFetch<Record<string, unknown>>("/api/admin/analytics/trend?metric=active_creators&window_days=30", {}, token).catch(e => { console.warn("[admin.service] analytics trend failed:", e); return {} as any; }),
+    apiFetch<Record<string, unknown>>("/api/admin/analytics/correlations", {}, token).catch(e => { console.warn("[admin.service] analytics correlations failed:", e); return {} as any; }),
+    apiFetch<Record<string, unknown>>("/api/admin/analytics/pipeline?window=30d", {}, token).catch(e => { console.warn("[admin.service] analytics pipeline failed:", e); return {} as any; }),
+    apiFetch<Record<string, unknown>>("/api/admin/analytics/rejection-reasons", {}, token).catch(e => { console.warn("[admin.service] analytics rejection reasons failed:", e); return {} as any; }),
+    apiFetch<Record<string, unknown>>("/api/admin/analytics/series-performance", {}, token).catch(e => { console.warn("[admin.service] analytics series failed:", e); return {} as any; }),
+    apiFetch<Record<string, unknown>>("/api/admin/analytics/cohorts", {}, token).catch(e => { console.warn("[admin.service] analytics cohorts failed:", e); return {} as any; }),
+    apiFetch<Record<string, unknown>>("/api/admin/analytics/creator-rankings?metric=combined&limit=50", {}, token).catch(e => { console.warn("[admin.service] analytics creators failed:", e); return {} as any; }),
   ]);
   return {
     insights,
@@ -1186,7 +1267,36 @@ export async function fetchAdminAnalyticsSnapshot(token: string): Promise<AdminA
     learningStats,
     corrections: corrections.items || [],
     pointsLog: pointsLog.log || [],
+    trends: {
+      submissions: Array.isArray(trendSubmissions.series) ? (trendSubmissions.series as Array<Record<string, unknown>>) : [],
+      gmv: Array.isArray(trendGmv.series) ? (trendGmv.series as Array<Record<string, unknown>>) : [],
+      score: Array.isArray(trendScore.series) ? (trendScore.series as Array<Record<string, unknown>>) : [],
+      active_creators: Array.isArray(trendActiveCreators.series) ? (trendActiveCreators.series as Array<Record<string, unknown>>) : [],
+    },
+    correlations: Array.isArray(correlations.correlations) ? (correlations.correlations as Array<Record<string, unknown>>) : [],
+    pipeline: Array.isArray(pipeline.stages) ? (pipeline.stages as Array<Record<string, unknown>>) : [],
+    pipelineSummary: pipeline,
+    rejectionReasons: Array.isArray(rejectionReasons.reasons) ? (rejectionReasons.reasons as Array<Record<string, unknown>>) : [],
+    seriesPerformance: Array.isArray(seriesPerformance.series) ? (seriesPerformance.series as Array<Record<string, unknown>>) : [],
+    cohorts: Array.isArray(cohorts.cohorts) ? (cohorts.cohorts as Array<Record<string, unknown>>) : [],
+    creatorRankings: Array.isArray(creatorRankings.creators) ? (creatorRankings.creators as Array<Record<string, unknown>>) : [],
   };
+}
+
+export function generateMarketGaps(token: string) {
+  return apiFetch<Record<string, unknown>>(
+    "/api/intelligence/market/gaps/generate",
+    { method: "POST" },
+    token,
+  );
+}
+
+export function generateBrandInsights(token: string) {
+  return apiFetch<Record<string, unknown>>(
+    "/api/intelligence/brand/insights/generate",
+    { method: "POST" },
+    token,
+  );
 }
 
 export async function fetchAdminCommerceSnapshot(token: string): Promise<AdminCommerceSnapshot> {
@@ -1310,12 +1420,19 @@ export function fetchSystemModels(token: string): Promise<SystemModelsSnapshot> 
   return apiFetch<SystemModelsSnapshot>("/api/admin/system/models", {}, token);
 }
 
-export function requestSystemModelSwitch(token: string, task: string, model: string) {
+export function fetchSystemUsage(token: string, days = 7): Promise<SystemUsageSnapshot> {
+  return apiFetch<SystemUsageSnapshot>(`/api/admin/system/usage?days=${encodeURIComponent(days)}`, {}, token);
+}
+
+export function requestSystemModelSwitch(
+  token: string,
+  payload: { task: string; model: string; confirm_password: string },
+) {
   return apiFetch<Record<string, unknown>>(
     "/api/admin/system/models/switch",
     {
       method: "POST",
-      body: jsonBody({ task, model }),
+      body: jsonBody(payload),
     },
     token,
   );

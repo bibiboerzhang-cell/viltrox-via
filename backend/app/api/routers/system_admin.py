@@ -28,6 +28,7 @@ from app.db.connection import get_conn
 from app.api.dependencies.perms import require_system_permission, require_tab
 from app.services.audit_log import record_admin_action
 from app.services.system import integrations as int_svc
+from app.services.system import ai_usage as usage_svc
 from app.services.system import provider_health as provider_svc
 from app.services.system import runtime as rt_svc
 from app.services.system import secrets_admin as secrets_svc
@@ -228,6 +229,14 @@ def clear_cache_tier(
 @router.get("/system/providers")
 def provider_status(admin=Depends(require_system_permission("system.api_keys", "read"))):
     return provider_svc.list_provider_status()
+
+
+@router.get("/system/usage")
+def system_usage(
+    days: int = Query(default=7, ge=1, le=90),
+    admin=Depends(require_system_permission("system.usage", "read")),
+):
+    return usage_svc.usage_summary(days=days)
 
 
 @router.post("/system/providers/{provider}/probe")

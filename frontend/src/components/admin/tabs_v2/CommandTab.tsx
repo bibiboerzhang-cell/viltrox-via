@@ -15,9 +15,14 @@ import {
   fetchAdminBrandSnapshot,
   fetchAdminCommerceSnapshot,
   fetchAdminMarketSnapshot,
+  fetchAdminSystemSnapshot,
+  fetchTrustDistribution,
+  fetchTrustUserDetail,
+  runTrustUserAction,
   type AdminBrandSnapshot,
   type AdminCommerceSnapshot,
   type AdminMarketSnapshot,
+  type AdminSystemSnapshot,
 } from "../../../services/admin.service";
 import type { AuthUser } from "../../../lib/api";
 import { Icons } from "../Icons";
@@ -29,6 +34,7 @@ import {
   LoadingCard,
   PageHeader,
   SegButton,
+  SectionLabel,
   StatusPill,
   type DataColumn,
 } from "../shared_v2";
@@ -38,12 +44,15 @@ interface Props {
   user: AuthUser;
 }
 
-type Section = "commerce" | "brand" | "market";
+type Section = "commerce" | "brand" | "market" | "trust";
 
 export function CommandTab({ token }: Props) {
   const [commerce, setCommerce] = useState<AdminCommerceSnapshot | null>(null);
   const [brand, setBrand] = useState<AdminBrandSnapshot | null>(null);
   const [market, setMarket] = useState<AdminMarketSnapshot | null>(null);
+  const [system, setSystem] = useState<AdminSystemSnapshot | null>(null);
+  const [trustDistribution, setTrustDistribution] = useState<Record<string, unknown> | null>(null);
+  const [trustDetail, setTrustDetail] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [section, setSection] = useState<Section>("commerce");
@@ -57,11 +66,15 @@ export function CommandTab({ token }: Props) {
       fetchAdminCommerceSnapshot(token),
       fetchAdminBrandSnapshot(token),
       fetchAdminMarketSnapshot(token),
+      fetchAdminSystemSnapshot(token),
+      fetchTrustDistribution(token),
     ]).then((results) => {
       if (!alive) return;
       if (results[0].status === "fulfilled") setCommerce(results[0].value);
       if (results[1].status === "fulfilled") setBrand(results[1].value);
       if (results[2].status === "fulfilled") setMarket(results[2].value);
+      if (results[3].status === "fulfilled") setSystem(results[3].value);
+      if (results[4].status === "fulfilled") setTrustDistribution(results[4].value);
       const allFailed = results.every((r) => r.status === "rejected");
       if (allFailed) {
         setError("所有 Command 快照拉取失败");
@@ -82,9 +95,9 @@ export function CommandTab({ token }: Props) {
       { label: "Orders 30d", value: Number(orders?.total || 0) },
       { label: "Revenue 30d", value: `$${Number(orders?.revenue || 0).toLocaleString()}` },
       { label: "Brand accounts", value: (brand?.matrix || []).length },
-      { label: "Market signals", value: (market?.observations || []).length },
+      { label: "Trust watch", value: (system?.trustUsers || []).length },
     ];
-  }, [commerce, brand, market]);
+  }, [commerce, brand, system]);
 
   const orderCols: DataColumn<Record<string, unknown>>[] = [
     {
@@ -236,10 +249,76 @@ export function CommandTab({ token }: Props) {
     },
   ];
 
+  const trustCols: DataColumn<Record<string, unknown>>[] = [
+    {
+      key: "user",
+      label: "User",
+      width: "1.3fr",
+      render: (r) => (
+        <div>
+          <strong>{String(r.email || r.handle || r.username || `#${r.user_id || r.id || "—"}`)}</strong>
+          <div className="ax-mono" style={{ fontSize: 10, color: "var(--ax-text-1)" }}>user {String(r.user_id || r.id || "—")}</div>
+        </div>
+      ),
+    },
+    { key: "score", label: "Score", width: "80px", render: (r) => <span className="ax-num">{Number(r.trust_score ?? r.score ?? 0)}</span> },
+    { key: "violations", label: "Signals", width: "80px", render: (r) => <span className="ax-num">{Number(r.violations ?? r.event_count ?? 0)}</span> },
+    {
+      key: "status",
+      label: "Status",
+      width: "110px",
+      render: (r) => {
+        const s = String(r.status || r.trust_status || "watching").toLowerCase();
+        const tone = s === "blocked" ? "block" : s === "flagged" ? "flag" : s === "trusted" ? "pass" : "review";
+        return <StatusPill tone={tone as never}>{s}</StatusPill>;
+      },
+    },
+    {
+      key: "actions",
+      label: "Actions",
+      width: "250px",
+      render: (r) => {
+        const userId = Number(r.user_id || r.id || 0);
+        return (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <button type="button" className="ax-btn ax-btn--sm" onClick={() => showTrustDetail(userId)} disabled={!userId}>Detail</button>
+            <button type="button" className="ax-btn ax-btn--sm" onClick={() => moderateTrustUser(userId, "flag")} disabled={!userId}>Flag</button>
+            <button type="button" className="ax-btn ax-btn--sm" onClick={() => moderateTrustUser(userId, "block")} disabled={!userId}>Block</button>
+            <button type="button" className="ax-btn ax-btn--sm" onClick={() => moderateTrustUser(userId, "clear-flag")} disabled={!userId}>Clear</button>
+          </div>
+        );
+      },
+    },
+  ];
+
+  const showTrustDetail = async (userId: number) => {
+    if (!userId) return;
+    setError(null);
+    try {
+      setTrustDetail(await fetchTrustUserDetail(token, userId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const moderateTrustUser = async (userId: number, action: "block" | "flag" | "clear-flag") => {
+    if (!userId) return;
+    const reason = action === "clear-flag" ? "" : window.prompt("Trust 操作原因", "admin trust review");
+    if (action !== "clear-flag" && !reason) return;
+    setError(null);
+    try {
+      await runTrustUserAction(token, userId, action, reason ? { reason } : {});
+      refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   const sections: Array<{ key: Section; label: string }> = [
     { key: "commerce", label: `Commerce (${(commerce?.orders || []).length})` },
     { key: "brand", label: `Brand Matrix (${(brand?.matrix || []).length})` },
     { key: "market", label: `Market (${(market?.observations || []).length})` },
+    { key: "trust", label: `Trust (${(system?.trustUsers || []).length})` },
   ];
 
   return (
@@ -261,8 +340,8 @@ export function CommandTab({ token }: Props) {
       ) : null}
 
       <div style={{ padding: 16 }}>
-        {loading && !commerce && !brand && !market ? (
-          <LoadingCard label="并行加载 Commerce + Brand + Market…" />
+        {loading && !commerce && !brand && !market && !system ? (
+          <LoadingCard label="并行加载 Commerce + Brand + Market + Trust…" />
         ) : (
           <>
             <div style={{ marginBottom: 16 }}>
@@ -307,7 +386,7 @@ export function CommandTab({ token }: Props) {
                     showCheckbox={false}
                   />
                 )
-              ) : (market?.observations || []).length === 0 ? (
+              ) : section === "market" ? ((market?.observations || []).length === 0 ? (
                 <EmptyCard label="暂无市场信号" />
               ) : (
                 <DataTable
@@ -316,6 +395,23 @@ export function CommandTab({ token }: Props) {
                   rowKey={(r, i) => String(r.id || i)}
                   showCheckbox={false}
                 />
+              )) : (system?.trustUsers || []).length === 0 ? (
+                <EmptyCard label="暂无 Trust 用户数据" hint={`Distribution: ${JSON.stringify(trustDistribution || {})}`} />
+              ) : (
+                <>
+                  <DataTable
+                    columns={trustCols}
+                    rows={system?.trustUsers as Record<string, unknown>[]}
+                    rowKey={(r, i) => String(r.user_id || r.id || i)}
+                    showCheckbox={false}
+                  />
+                  {trustDetail ? (
+                    <div className="ax-card" style={{ margin: 12, background: "rgba(255,255,255,0.03)" }}>
+                      <SectionLabel>Trust Detail</SectionLabel>
+                      <pre style={{ whiteSpace: "pre-wrap", fontSize: 11, maxHeight: 320, overflow: "auto" }}>{JSON.stringify(trustDetail, null, 2)}</pre>
+                    </div>
+                  ) : null}
+                </>
               )}
             </div>
           </>

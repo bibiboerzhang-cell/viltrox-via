@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import json
 import re
+import time
 
 from app.core.logging import get_logger
 from app.services.ai.clients.openai_client import OPENAI_AVAILABLE, openai_client
+from app.services.system.ai_usage import record_ai_usage
 
 logger = get_logger(__name__)
 
@@ -32,6 +34,7 @@ def gpt_prefilter_caption(title: str, caption: str, platform: str) -> dict:
     if not title and not caption:
         return result
 
+    t0 = time.time()
     try:
         text = f"Title: {title}\nCaption: {caption[:800]}\nPlatform: {platform}"
         resp = openai_client.chat.completions.create(
@@ -61,6 +64,16 @@ def gpt_prefilter_caption(title: str, caption: str, platform: str) -> dict:
                 )
             }]
         )
+        usage = getattr(resp, "usage", None)
+        record_ai_usage(
+            provider="openai",
+            model="gpt-4o-mini",
+            tokens_in=int(getattr(usage, "prompt_tokens", 0) or 0),
+            tokens_out=int(getattr(usage, "completion_tokens", 0) or 0),
+            latency_ms=int((time.time() - t0) * 1000),
+            success=True,
+            triggered_by="audit_pre_filter",
+        )
         raw = resp.choices[0].message.content.strip()
         raw = re.sub(r"^```json\s*|```$", "", raw, flags=re.MULTILINE).strip()
         parsed = json.loads(raw)
@@ -74,6 +87,16 @@ def gpt_prefilter_caption(title: str, caption: str, platform: str) -> dict:
             },
         )
     except Exception as e:
+        record_ai_usage(
+            provider="openai",
+            model="gpt-4o-mini",
+            tokens_in=0,
+            tokens_out=0,
+            latency_ms=int((time.time() - t0) * 1000),
+            success=False,
+            error_code=type(e).__name__,
+            triggered_by="audit_pre_filter",
+        )
         result["error"] = str(e)
         logger.warning("gpt_prefilter.failed", extra={"error": str(e)})
     return result
@@ -90,6 +113,7 @@ def gpt_analyze_engagement_anomaly(
     result = {"anomaly": False, "risk_delta": 0, "reasons": [], "error": None}
     if not OPENAI_AVAILABLE or not openai_client:
         return result
+    t0 = time.time()
     try:
         hist_str = json.dumps(history[-5:], ensure_ascii=False) if history else "[]"
         prompt = (
@@ -109,11 +133,31 @@ def gpt_analyze_engagement_anomaly(
                 {"role": "user", "content": prompt}
             ]
         )
+        usage = getattr(resp, "usage", None)
+        record_ai_usage(
+            provider="openai",
+            model="gpt-4o-mini",
+            tokens_in=int(getattr(usage, "prompt_tokens", 0) or 0),
+            tokens_out=int(getattr(usage, "completion_tokens", 0) or 0),
+            latency_ms=int((time.time() - t0) * 1000),
+            success=True,
+            triggered_by="trust_anomaly",
+        )
         raw = resp.choices[0].message.content.strip()
         raw = re.sub(r"^```json\s*|```$", "", raw, flags=re.MULTILINE).strip()
         parsed = json.loads(raw)
         result.update(parsed)
     except Exception as e:
+        record_ai_usage(
+            provider="openai",
+            model="gpt-4o-mini",
+            tokens_in=0,
+            tokens_out=0,
+            latency_ms=int((time.time() - t0) * 1000),
+            success=False,
+            error_code=type(e).__name__,
+            triggered_by="trust_anomaly",
+        )
         result["error"] = str(e)
         logger.warning("gpt_prefilter.anomaly_failed", extra={"error": str(e)})
     return result

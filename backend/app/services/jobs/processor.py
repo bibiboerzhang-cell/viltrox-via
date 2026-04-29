@@ -16,6 +16,7 @@ from app.workers.tasks.ingestion import (
     process_youtube_ingest_job,
 )
 from app.workers.tasks.intelligence import process_scan_account_job, process_scan_matrix_job
+from app.workers.tasks.kol_score import process_score_kol_content_job
 from app.workers.tasks.verification import (
     process_verification_comment_job,
     process_verification_single_scan_job,
@@ -27,6 +28,7 @@ JOB_HANDLERS = {
     "audit_submission": process_audit_submission_job,
     "intel_scan_account": process_scan_account_job,
     "intel_scan_matrix": process_scan_matrix_job,
+    "score_kol_content": process_score_kol_content_job,
     "verification_scan_pending": process_verification_scan_job,
     "verification_scan_single": process_verification_single_scan_job,
     "verification_prepare_comment": process_verification_comment_job,

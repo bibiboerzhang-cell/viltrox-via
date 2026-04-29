@@ -6,7 +6,7 @@ import io
 import json
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, UploadFile, File
 
 from app.api.dependencies.perms import require_tab
 from app.core.security import verify_password
@@ -813,7 +813,18 @@ def update_content(content_id: int, body: dict, staff=Depends(require_tab("kol_o
 
 
 @router.post("/content/{content_id}/score")
-async def score_content(content_id: int, staff=Depends(require_tab("kol_ops", "write"))):
+async def score_content(
+    content_id: int,
+    request: Request,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("kol_ops", "write")),
+):
+    if bool(body.get("async")):
+        queue = getattr(request.app.state, "job_queue", None)
+        if queue is None:
+            raise HTTPException(status_code=503, detail="job queue unavailable")
+        task_id = await queue.enqueue("score_kol_content", {"content_id": int(content_id)})
+        return {"status": "queued", "job_id": task_id, "content_id": int(content_id)}
     try:
         return await score_kol_content(content_id)
     except ValueError as exc:
