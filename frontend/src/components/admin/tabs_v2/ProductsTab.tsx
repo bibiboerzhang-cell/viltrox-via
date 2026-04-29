@@ -6,7 +6,7 @@
  *   - publish / archive / delete existing rewards
  * while keeping the dashboard product summary view.
  */
-import { useMemo, useState, type FormEvent } from "react";
+import { useMemo, useState, type ChangeEvent, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -14,6 +14,7 @@ import {
   fetchAdminProductsSnapshot,
   runAdminRewardAction,
   updateAdminReward,
+  uploadAdminRewardImage,
 } from "../../../services/admin.service";
 import type { AuthUser } from "../../../lib/api";
 import { Icons } from "../Icons";
@@ -228,6 +229,23 @@ export function ProductsTab({ token }: Props) {
       setToast({ tone: "err", msg: err instanceof Error ? err.message : String(err) });
     } finally {
       setBusy("");
+    }
+  }
+
+  async function handleRewardImageFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    if (!file) return;
+    setBusy("reward:image");
+    setToast(null);
+    try {
+      const imageUrl = await uploadAdminRewardImage(token, file);
+      setEditorDraft((current) => ({ ...current, imageUrl }));
+      setToast({ tone: "ok", msg: t("admin.products.v2.messages.imageUploaded", "图片已上传，URL 已自动填入") });
+    } catch (err) {
+      setToast({ tone: "err", msg: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setBusy("");
+      event.currentTarget.value = "";
     }
   }
 
@@ -551,15 +569,48 @@ export function ProductsTab({ token }: Props) {
                     {t("admin.products.v2.editor.status", "当前状态")}
                     <input className="ax-input" value={editorDraft.status} disabled />
                   </label>
-                  <label style={{ display: "grid", gap: 5, color: "var(--ax-text-2)", fontSize: 10, gridColumn: "span 4" }}>
-                    {t("admin.products.v2.editor.imageUrl", "图片 URL")}
-                    <input
-                      className="ax-input"
-                      value={editorDraft.imageUrl}
-                      onChange={(event) => setEditorDraft((current) => ({ ...current, imageUrl: event.target.value }))}
-                      placeholder="https://..."
-                    />
-                  </label>
+                  <div style={{ display: "grid", gap: 8, color: "var(--ax-text-2)", fontSize: 10, gridColumn: "span 4" }}>
+                    <span>{t("admin.products.v2.editor.imageSource", "图片 URL / 文件")}</span>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, alignItems: "center" }}>
+                      <input
+                        className="ax-input"
+                        value={editorDraft.imageUrl}
+                        onChange={(event) => setEditorDraft((current) => ({ ...current, imageUrl: event.target.value }))}
+                        placeholder="https://... 或上传后自动生成 /uploads/reward_images/..."
+                      />
+                      <label className="ax-btn" style={{ cursor: busy === "reward:image" ? "not-allowed" : "pointer", opacity: busy === "reward:image" ? 0.6 : 1 }}>
+                        <Icons.upload />
+                        {busy === "reward:image" ? t("admin.products.v2.actions.uploading", "上传中...") : t("admin.products.v2.actions.uploadImage", "上传图片")}
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp,image/gif"
+                          disabled={busy === "reward:image" || busy === "reward:save"}
+                          onChange={handleRewardImageFile}
+                          style={{ display: "none" }}
+                        />
+                      </label>
+                    </div>
+                    {editorDraft.imageUrl ? (
+                      <div style={{ display: "flex", gap: 10, alignItems: "center", minHeight: 58 }}>
+                        <img
+                          src={editorDraft.imageUrl}
+                          alt=""
+                          style={{
+                            width: 56,
+                            height: 56,
+                            objectFit: "cover",
+                            borderRadius: 6,
+                            border: "0.5px solid var(--ax-border-2)",
+                            background: "var(--ax-bg-2)",
+                          }}
+                          onError={(event) => {
+                            event.currentTarget.style.display = "none";
+                          }}
+                        />
+                        <span className="ax-mono" style={{ color: "var(--ax-text-1)", wordBreak: "break-all" }}>{editorDraft.imageUrl}</span>
+                      </div>
+                    ) : null}
+                  </div>
                   <label style={{ display: "grid", gap: 5, color: "var(--ax-text-2)", fontSize: 10, gridColumn: "span 4" }}>
                     {t("admin.products.v2.editor.description", "描述")}
                     <textarea

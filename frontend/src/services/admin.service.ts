@@ -701,6 +701,24 @@ export function updateAdminReward(
   );
 }
 
+export async function uploadAdminRewardImage(token: string, file: File) {
+  const form = new FormData();
+  form.append("file", file);
+  const response = await apiFetch<{ status?: string; message?: string; image_url?: string }>(
+    "/api/admin/upload/reward-image",
+    {
+      method: "POST",
+      body: form,
+      timeoutMs: 120000,
+    },
+    token,
+  );
+  if (response.status !== "success" || !response.image_url) {
+    throw new Error(response.message || "Image upload failed");
+  }
+  return response.image_url;
+}
+
 export function runAdminRewardAction(
   token: string,
   rewardId: number,
