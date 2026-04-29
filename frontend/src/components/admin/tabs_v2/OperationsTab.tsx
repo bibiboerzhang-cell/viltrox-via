@@ -10,7 +10,8 @@
  *
  * Each section uses DataTable + SegButton for sub-nav.
  */
-import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -124,6 +125,7 @@ function formatItem(value: unknown): string {
 
 export function OperationsTab({ token }: Props) {
   const { t } = useTranslation();
+  const location = useLocation();
   const tt = (key: string, fallback: string, options: Record<string, unknown> = {}) =>
     String(t(`admin.operations.v2.${key}`, { defaultValue: fallback, ...options }));
   const statusLabel = (value: unknown) => {
@@ -136,10 +138,24 @@ export function OperationsTab({ token }: Props) {
     fetchAdminOperationsSnapshot,
   );
   const [section, setSection] = useState<SubSection>("review");
+  const [userSearch, setUserSearch] = useState("");
   const [busy, setBusy] = useState<string>("");
   const [toast, setToast] = useState<{ tone: "ok" | "err"; msg: string } | null>(null);
   const [selectedSubmissionId, setSelectedSubmissionId] = useState<string | null>(null);
   const [manualOpen, setManualOpen] = useState(false);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const requestedSection = params.get("section");
+    if (requestedSection && ["review", "verify", "users", "social", "redemptions"].includes(requestedSection)) {
+      setSection(requestedSection as SubSection);
+    }
+    const query = params.get("q") || "";
+    setUserSearch(query);
+    if (query) {
+      setSection("users");
+    }
+  }, [location.search]);
 
   const handleApprove = async (s: AdminSubmission) => {
     setBusy(`approve:${s.id}`);
@@ -854,6 +870,22 @@ export function OperationsTab({ token }: Props) {
     if (!rows.length || !selectedSubmissionId) return null;
     return rows.find((item) => String(item.id) === selectedSubmissionId) || null;
   }, [data?.reviewQueue, selectedSubmissionId]);
+  const visibleUsers = useMemo(() => {
+    const rows = data?.users ?? [];
+    const query = userSearch.trim().toLowerCase();
+    if (!query) return rows;
+    return rows.filter((row) => {
+      const haystack = [
+        row.id,
+        row.email,
+        row.name,
+        row.creator_code,
+        row.status,
+        row.role,
+      ].map((item) => String(item || "").toLowerCase()).join(" ");
+      return haystack.includes(query);
+    });
+  }, [data?.users, userSearch]);
 
   return (
     <div>
@@ -927,6 +959,15 @@ export function OperationsTab({ token }: Props) {
                 active={section}
                 onChange={(k) => setSection(k as SubSection)}
               />
+              {section === "users" ? (
+                <input
+                  className="input"
+                  value={userSearch}
+                  onChange={(event) => setUserSearch(event.target.value)}
+                  placeholder="搜索用户 VID / handle / 邮箱"
+                  style={{ maxWidth: 280 }}
+                />
+              ) : null}
             </div>
 
             {section === "review" ? (
@@ -980,7 +1021,7 @@ export function OperationsTab({ token }: Props) {
                 ) : section === "users" ? (
                   <DataTable
                     columns={userColumns}
-                    rows={data?.users ?? []}
+                    rows={visibleUsers}
                     rowKey={(r) => String(r.id)}
                     showCheckbox={false}
                     emptyLabel={tt("empty.users", "暂无用户")}

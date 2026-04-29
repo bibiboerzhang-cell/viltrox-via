@@ -348,6 +348,16 @@ function CompareResult({ result }: { result: Row }) {
         <p style={{ marginTop: 0 }}>{str(analysis.summary || analysis.overall_summary || analysis.verdict, "No analysis text returned")}</p>
         <BulletList label="Viltrox angles" items={analysis.viltrox_angles || analysis.opportunities || analysis.recommendations} />
       </div>
+      <div className="ax-card" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <div>
+          <SectionLabel>{str(lensA.name)} top videos</SectionLabel>
+          <VideoTable rows={list(statsA.top_videos)} />
+        </div>
+        <div>
+          <SectionLabel>{str(lensB.name)} top videos</SectionLabel>
+          <VideoTable rows={list(statsB.top_videos)} />
+        </div>
+      </div>
     </div>
   );
 }

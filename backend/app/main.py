@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
@@ -498,7 +498,7 @@ if IS_ADMIN_APP:
 
 
 @app.get("/health")
-async def health_check(request, deep: bool = False):
+async def health_check(request: Request, deep: bool = False):
     if not deep:
         return {"status": "ok", "service": APP_ROLE}
     if not _can_read_deep_health(request):

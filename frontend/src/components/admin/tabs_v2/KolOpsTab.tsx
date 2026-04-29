@@ -184,17 +184,30 @@ export function KolOpsTab({ token }: Props) {
     setBusy(kind);
     try {
       if (kind === "outreach") {
-        await addKolOutreach(token, kolId, { action_type: "email", notes: "Phase A quick outreach note" });
+        const notes = window.prompt("对接备注", "");
+        await addKolOutreach(token, kolId, { action_type: "email", notes: notes || "" });
       } else if (kind === "campaign") {
-        await createKolCampaign(token, kolId, { product_sku: "TBD", status: "planning", cost_cents: 0 });
+        const productSku = window.prompt("推广产品 SKU", "");
+        if (!productSku) throw new Error("请输入真实 product SKU");
+        const costUsd = Number(window.prompt("投入成本 USD", "0") || 0);
+        await createKolCampaign(token, kolId, { product_sku: productSku, status: "planning", cost_cents: Math.round(costUsd * 100) });
       } else if (kind === "content") {
         const campaignId = Number(detail.campaigns?.[0]?.id || 0);
         if (!campaignId) throw new Error("先创建一个 campaign");
+        const contentUrl = window.prompt("内容 URL", "");
+        if (!contentUrl) throw new Error("请输入真实 content URL");
+        const views = Number(window.prompt("播放量", "0") || 0);
+        const likes = Number(window.prompt("点赞", "0") || 0);
+        const comments = Number(window.prompt("评论", "0") || 0);
+        const shares = Number(window.prompt("转发", "0") || 0);
         await createKolContent(token, {
           campaign_id: campaignId,
-          content_url: "https://example.com/content",
+          content_url: contentUrl,
           platform: String(detail.kol.platform || "youtube"),
-          views: 0,
+          views,
+          likes,
+          comments,
+          shares,
         });
       } else if (kind === "score") {
         const contentId = Number(detail.content?.[0]?.id || 0);

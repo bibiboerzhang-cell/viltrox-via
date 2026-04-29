@@ -98,8 +98,7 @@ export function AdminShell({ children, activeKey, badges, onSearch }: AdminShell
     if (onSearch && searchValue.trim()) {
       onSearch(searchValue.trim());
     } else if (searchValue.trim()) {
-      // Default: search in Creators tab (most common search target)
-      navigate(`/admin/creators?q=${encodeURIComponent(searchValue.trim())}`);
+      navigate(`/admin/operations?section=users&q=${encodeURIComponent(searchValue.trim())}`);
     }
   };
 
