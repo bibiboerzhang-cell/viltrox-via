@@ -345,6 +345,9 @@ CORS_ORIGINS = [
     "http://127.0.0.1", "http://localhost",
     "http://127.0.0.1:8001", "http://127.0.0.1:8002",
     "http://localhost:8001", "http://localhost:8002",
+    "http://127.0.0.1:5173", "http://localhost:5173",
+    "http://127.0.0.1:8101", "http://127.0.0.1:8102",
+    "http://localhost:8101", "http://localhost:8102",
     "https://viltroxvia.com", "https://www.viltroxvia.com",
     "https://viltroxtest.com", "https://www.viltroxtest.com",
 ]
