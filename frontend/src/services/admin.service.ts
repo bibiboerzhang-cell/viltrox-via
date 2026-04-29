@@ -1315,6 +1315,37 @@ export function requestSystemModelSwitch(token: string, task: string, model: str
   );
 }
 
+export function rotateSystemProviderKey(
+  token: string,
+  payload: { provider: string; new_key: string; confirm_password: string; move_current_to_previous?: boolean },
+) {
+  return apiFetch<Record<string, unknown>>(
+    "/api/admin/system/keys/rotate",
+    {
+      method: "POST",
+      body: jsonBody({
+        move_current_to_previous: true,
+        ...payload,
+      }),
+    },
+    token,
+  );
+}
+
+export function restartSystemRoles(
+  token: string,
+  payload: { roles: string[]; confirm_password: string },
+) {
+  return apiFetch<Record<string, unknown>>(
+    "/api/admin/system/restart",
+    {
+      method: "POST",
+      body: jsonBody(payload),
+    },
+    token,
+  );
+}
+
 export function inviteStaffMember(
   token: string,
   payload: { email: string; role: string; permissions: Record<string, string> },

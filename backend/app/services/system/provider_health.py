@@ -12,6 +12,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
+from app.services.system.secrets_admin import provider_key_prefix
 
 logger = get_logger(__name__)
 
@@ -54,7 +55,12 @@ def list_provider_status() -> dict[str, Any]:
     try:
         seed_provider_status()
         rows = conn.execute("SELECT * FROM provider_status ORDER BY provider").fetchall()
-        return {"providers": [dict(row) for row in rows]}
+        providers = []
+        for row in rows:
+            item = dict(row)
+            item["key_prefix"] = provider_key_prefix(str(item.get("provider") or ""))
+            providers.append(item)
+        return {"providers": providers}
     except Exception:
         logger.warning("provider_status.read_failed", exc_info=True)
         return {"providers": [{"provider": p, "latest_status": "unknown"} for p in PROVIDERS]}

@@ -8,6 +8,8 @@ import {
   inviteStaffMember,
   probeSystemProvider,
   requestSystemModelSwitch,
+  restartSystemRoles,
+  rotateSystemProviderKey,
   updateStaffPermissions,
   type AdminSystemSnapshot,
   type SystemModelsSnapshot,
@@ -93,6 +95,12 @@ export function SystemTab({ token, user }: Props) {
   const [role, setRole] = useState("readonly");
   const [permissions, setPermissions] = useState<Record<string, string>>(defaultPerms("readonly"));
   const [busy, setBusy] = useState("");
+  const [restartRoles, setRestartRoles] = useState<Record<string, boolean>>({
+    public: true,
+    admin: true,
+    worker: true,
+    scheduler: true,
+  });
 
   const load = async () => {
     setLoading(true);
@@ -180,6 +188,45 @@ export function SystemTab({ token, user }: Props) {
     }
   };
 
+  const submitKeyRotate = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    setBusy("rotate-key");
+    try {
+      const result = await rotateSystemProviderKey(token, {
+        provider: String(form.get("provider") || ""),
+        new_key: String(form.get("new_key") || ""),
+        confirm_password: String(form.get("confirm_password") || ""),
+        move_current_to_previous: true,
+      });
+      setToast(`Key rotated for ${result.provider}; restart required`);
+      event.currentTarget.reset();
+      await load();
+    } catch (err) {
+      setToast(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const submitRestart = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const roles = Object.entries(restartRoles).filter(([, enabled]) => enabled).map(([key]) => key);
+    setBusy("restart");
+    try {
+      const result = await restartSystemRoles(token, {
+        roles,
+        confirm_password: String(form.get("confirm_password") || ""),
+      });
+      setToast(result.enabled ? "Restart requested" : "Dry-run complete; set SYSTEM_RESTART_ENABLED=1 on server to enable");
+    } catch (err) {
+      setToast(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy("");
+    }
+  };
+
   if (loading) return <LoadingCard label="Loading System…" />;
   if (error) return <ErrorCard label="System 加载失败" detail={error} onRetry={load} />;
 
@@ -209,37 +256,47 @@ export function SystemTab({ token, user }: Props) {
         </div>
 
         {section === "keys" ? (
-          <div className="ax-card" style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10 }}>
-            {["anthropic", "openai", "google", "apify", "resend"].map((name) => {
-              const row = providerRows.find((item) => String(item.provider) === name) || {};
-              return (
-                <div key={name} className="ax-card" style={{ background: "rgba(255,255,255,0.03)" }}>
-                  <SectionLabel>{name}</SectionLabel>
-                  <StatusPill tone={statusTone(row.latest_status)}>{str(row.latest_status, "unknown")}</StatusPill>
-                  <div style={{ marginTop: 8, fontSize: 11, color: "var(--ax-text-2)" }}>key: {maskKey(row.key_prefix)}</div>
-                  <div style={{ fontSize: 11, color: "var(--ax-text-2)" }}>last ok: {str(row.last_ok_at)}</div>
-                  <button
-                    type="button"
-                    className="ax-btn ax-btn--sm"
-                    style={{ marginTop: 8 }}
-                    onClick={async () => {
-                      setBusy(`probe:${name}`);
-                      try {
-                        await probeSystemProvider(token, name);
-                        setToast(`${name} probe done`);
-                        await load();
-                      } catch (err) {
-                        setToast(err instanceof Error ? err.message : String(err));
-                      } finally {
-                        setBusy("");
-                      }
-                    }}
-                  >
-                    {busy === `probe:${name}` ? "Probing…" : "Probe"}
-                  </button>
-                </div>
-              );
-            })}
+          <div style={{ display: "grid", gap: 12 }}>
+            <div className="ax-card" style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10 }}>
+              {["anthropic", "openai", "google", "apify", "resend"].map((name) => {
+                const row = providerRows.find((item) => String(item.provider) === name) || {};
+                return (
+                  <div key={name} className="ax-card" style={{ background: "rgba(255,255,255,0.03)" }}>
+                    <SectionLabel>{name}</SectionLabel>
+                    <StatusPill tone={statusTone(row.latest_status)}>{str(row.latest_status, "unknown")}</StatusPill>
+                    <div style={{ marginTop: 8, fontSize: 11, color: "var(--ax-text-2)" }}>key: {maskKey(row.key_prefix)}</div>
+                    <div style={{ fontSize: 11, color: "var(--ax-text-2)" }}>last ok: {str(row.last_ok_at)}</div>
+                    <button
+                      type="button"
+                      className="ax-btn ax-btn--sm"
+                      style={{ marginTop: 8 }}
+                      onClick={async () => {
+                        setBusy(`probe:${name}`);
+                        try {
+                          await probeSystemProvider(token, name);
+                          setToast(`${name} probe done`);
+                          await load();
+                        } catch (err) {
+                          setToast(err instanceof Error ? err.message : String(err));
+                        } finally {
+                          setBusy("");
+                        }
+                      }}
+                    >
+                      {busy === `probe:${name}` ? "Probing…" : "Probe"}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+            <form className="ax-card" onSubmit={submitKeyRotate} style={{ display: "grid", gridTemplateColumns: "0.8fr 1.8fr 1fr auto", gap: 8 }}>
+              <select className="input" name="provider" defaultValue="anthropic">
+                {["anthropic", "openai", "google", "apify", "resend"].map((provider) => <option key={provider} value={provider}>{provider}</option>)}
+              </select>
+              <input className="input" name="new_key" type="password" placeholder="new provider key" required />
+              <input className="input" name="confirm_password" type="password" placeholder="admin password" required />
+              <button className="ax-btn" type="submit" disabled={busy === "rotate-key"}>{busy === "rotate-key" ? "Rotating…" : "Rotate key"}</button>
+            </form>
           </div>
         ) : null}
 
@@ -288,15 +345,26 @@ export function SystemTab({ token, user }: Props) {
         ) : null}
 
         {section === "restart" ? (
-          <div className="ax-card">
+          <form className="ax-card" onSubmit={submitRestart}>
             <SectionLabel>服务重启</SectionLabel>
-            <p style={{ color: "var(--ax-text-2)", fontSize: 12 }}>高危 restart API 还未启用。上线前必须接二次密码、audit log、5 分钟 health probe。</p>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+            <p style={{ color: "var(--ax-text-2)", fontSize: 12 }}>需要二次密码。服务器未设置 SYSTEM_RESTART_ENABLED=1 时只做 dry-run，不会执行 systemctl。</p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 10 }}>
               {["public", "admin", "worker", "scheduler"].map((roleName) => (
-                <button key={roleName} type="button" className="ax-btn" disabled>{roleName}</button>
+                <label key={roleName} className="ax-btn" style={{ justifyContent: "flex-start" }}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(restartRoles[roleName])}
+                    onChange={(event) => setRestartRoles((prev) => ({ ...prev, [roleName]: event.target.checked }))}
+                  />
+                  {roleName}
+                </label>
               ))}
             </div>
-          </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8 }}>
+              <input className="input" name="confirm_password" type="password" placeholder="admin password" required />
+              <button type="submit" className="ax-btn" disabled={busy === "restart"}>{busy === "restart" ? "Restarting…" : "Restart selected"}</button>
+            </div>
+          </form>
         ) : null}
 
         {section === "members" ? (

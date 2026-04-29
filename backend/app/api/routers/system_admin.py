@@ -17,22 +17,42 @@ Existing (reuse from intelligence.py):
 """
 from __future__ import annotations
 
+import os
+import subprocess
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from app.core.security import require_admin_async as require_admin
+from app.core.security import require_admin_async as require_admin, verify_password
+from app.db.connection import get_conn
 from app.api.dependencies.perms import require_system_permission, require_tab
 from app.services.audit_log import record_admin_action
 from app.services.system import integrations as int_svc
 from app.services.system import provider_health as provider_svc
 from app.services.system import runtime as rt_svc
+from app.services.system import secrets_admin as secrets_svc
 from app.services.system import trust_admin as trust_svc
 from app.services.system import staff as staff_svc
 from app.core.model_pricing import PRICING_USD_PER_1M_TOKENS
 from app.core.model_registry import AVAILABLE_MODELS, TASK_MODEL_BINDING, validate_task_model
 
 router = APIRouter(prefix="/api/admin", tags=["system-admin"])
+
+SYSTEM_RESTART_ENABLED = os.environ.get("SYSTEM_RESTART_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+SYSTEMD_SERVICE_NAMES = {
+    "public": os.environ.get("SYSTEMD_PUBLIC_SERVICE", "viltrox-2.0-public"),
+    "admin": os.environ.get("SYSTEMD_ADMIN_SERVICE", "viltrox-2.0-admin"),
+    "worker": os.environ.get("SYSTEMD_WORKER_SERVICE", "viltrox-2.0-worker"),
+    "scheduler": os.environ.get("SYSTEMD_SCHEDULER_SERVICE", "viltrox-2.0-scheduler"),
+}
+
+
+def _confirm_admin_password(admin: dict, confirm_password: str | None) -> None:
+    if not confirm_password:
+        raise HTTPException(status_code=400, detail="confirm_password required")
+    row = get_conn().execute("SELECT password_hash FROM users WHERE id = ?", (int(admin.get("id") or 0),)).fetchone()
+    if not row or not verify_password(str(confirm_password), row["password_hash"]):
+        raise HTTPException(status_code=403, detail="Invalid confirmation password")
 
 
 # =========================================================================
@@ -204,6 +224,97 @@ async def probe_provider(
     result = await provider_svc.probe_provider(provider, api_key=body.get("api_key"))
     provider_svc.record_provider_probe(provider, bool(result.get("ok")), str(result.get("error") or ""))
     return result
+
+
+@router.post("/system/keys/rotate")
+async def rotate_provider_key(
+    body: dict,
+    request: Request,
+    admin=Depends(require_admin),
+    _staff=Depends(require_system_permission("system.api_keys", "write")),
+):
+    _confirm_admin_password(admin, body.get("confirm_password"))
+    provider = str(body.get("provider") or "").strip().lower()
+    new_key = str(body.get("new_key") or "").strip()
+    if not provider or not new_key:
+        raise HTTPException(status_code=400, detail="provider and new_key required")
+    sandbox = await provider_svc.probe_provider(provider, api_key=new_key)
+    provider_svc.record_provider_probe(provider, bool(sandbox.get("ok")), str(sandbox.get("error") or ""))
+    if not sandbox.get("ok"):
+        raise HTTPException(status_code=400, detail=f"sandbox probe failed: {sandbox.get('error') or 'unknown'}")
+    try:
+        result = secrets_svc.rotate_provider_key(
+            provider,
+            new_key,
+            move_current_to_previous=bool(body.get("move_current_to_previous", True)),
+            actor_email=str(admin.get("email") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    record_admin_action(
+        actor=admin,
+        action="rotate_provider_key",
+        target_type="provider_key",
+        target_id=provider,
+        detail={
+            "env_key": result.get("env_key"),
+            "key_prefix": result.get("key_prefix"),
+            "previous_set": result.get("previous_set"),
+            "requires_restart": True,
+        },
+        request=request,
+    )
+    return result
+
+
+@router.post("/system/restart")
+def restart_system_roles(
+    body: dict,
+    request: Request,
+    admin=Depends(require_admin),
+    _staff=Depends(require_system_permission("system.restart", "write")),
+):
+    _confirm_admin_password(admin, body.get("confirm_password"))
+    roles_raw = body.get("roles") or []
+    if not isinstance(roles_raw, list):
+        raise HTTPException(status_code=400, detail="roles must be a list")
+    roles = [str(item).strip().lower() for item in roles_raw if str(item).strip()]
+    if not roles:
+        raise HTTPException(status_code=400, detail="at least one role required")
+    unknown = [role for role in roles if role not in SYSTEMD_SERVICE_NAMES]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"unsupported roles: {', '.join(unknown)}")
+    results = []
+    for role in roles:
+        service_name = SYSTEMD_SERVICE_NAMES[role]
+        if not SYSTEM_RESTART_ENABLED:
+            results.append({"role": role, "service": service_name, "status": "dry_run"})
+            continue
+        completed = subprocess.run(
+            ["systemctl", "restart", service_name],
+            capture_output=True,
+            text=True,
+            timeout=45,
+            check=False,
+        )
+        if completed.returncode != 0:
+            results.append({
+                "role": role,
+                "service": service_name,
+                "status": "failed",
+                "stderr": (completed.stderr or "")[-500:],
+            })
+        else:
+            results.append({"role": role, "service": service_name, "status": "restarted"})
+    record_admin_action(
+        actor=admin,
+        action="restart_system_roles",
+        target_type="systemd",
+        target_id=",".join(roles),
+        detail={"enabled": SYSTEM_RESTART_ENABLED, "results": results},
+        request=request,
+    )
+    return {"ok": all(item["status"] in {"dry_run", "restarted"} for item in results), "enabled": SYSTEM_RESTART_ENABLED, "results": results}
 
 
 @router.get("/system/models")

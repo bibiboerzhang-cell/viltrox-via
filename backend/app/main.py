@@ -51,6 +51,7 @@ from app.services.security.admin_access import apply_admin_security_headers, get
 from app.services.via import build_via_event_bus
 from app.core.logging import get_logger
 from app.core.security import AUTH_COOKIE_NAME, get_current_user
+from app.core.permissions import check_system_permission, check_tab_permission, staff_context_for_user
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_ROOT = PROJECT_ROOT / "frontend"
@@ -136,6 +137,73 @@ def _can_read_deep_health(request) -> bool:
         return bool(user and str(user.get("role") or "").lower() == "admin")
     except Exception:
         return False
+
+
+def _admin_permission_for_request(path: str, method: str) -> tuple[str, str, bool] | None:
+    if method.upper() == "OPTIONS":
+        return None
+    if path == "/api/admin/staff/accept-invite":
+        return None
+    mutating = method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
+    level = "write" if mutating else "read"
+    if path.startswith("/api/admin/system/keys"):
+        return ("system.api_keys", "write", True)
+    if path.startswith("/api/admin/system/restart"):
+        return ("system.restart", "write", True)
+    if path.startswith("/api/admin/system/providers"):
+        return ("system.api_keys", "read", True)
+    if path.startswith("/api/admin/system/models"):
+        return ("system.models", level, True)
+    if path.startswith("/api/admin/staff/api-tokens"):
+        return ("system.api_keys", level, True)
+    if path.startswith("/api/admin/staff"):
+        if mutating:
+            return ("system.members", "write", True)
+        return ("system", "read", False)
+    if path.startswith("/api/admin/runtime") or path.startswith("/api/admin/integrations"):
+        return ("runtime", level, False)
+    if path.startswith("/api/admin/trust"):
+        return ("command", level, False)
+    if path.startswith("/api/admin/kol"):
+        return ("kol_ops", level, False)
+    if path.startswith("/api/admin/deepsight"):
+        return ("deepsight", level, False)
+    if path.startswith("/api/admin/intel") or path.startswith("/api/intelligence"):
+        return ("intelligence", level, False)
+    if path.startswith("/api/admin/analytics") or path.startswith("/api/admin/insights") or path.startswith("/api/admin/benchmarks") or path.startswith("/api/admin/learning"):
+        return ("analytics", level, False)
+    if path.startswith("/api/admin/orders") or path.startswith("/api/admin/payouts") or path.startswith("/api/admin/attribution") or path.startswith("/api/admin/webhook-events") or path.startswith("/api/admin/affiliate"):
+        return ("operations", level, False)
+    if path.startswith("/api/admin/rewards") or path.startswith("/api/admin/product_catalog") or path.startswith("/api/admin/creator-public/shop-heroes") or path.startswith("/api/admin/upload/reward-image"):
+        return ("products", level, False)
+    if path.startswith("/api/admin/creator") or path.startswith("/api/admin/creators"):
+        return ("creators", level, False)
+    if path.startswith("/api/admin/users") or path.startswith("/api/admin/social-accounts") or path.startswith("/api/admin/verifications") or path.startswith("/api/admin/submissions") or path.startswith("/api/admin/approve") or path.startswith("/api/admin/reject") or path.startswith("/api/admin/reanalyze") or path.startswith("/api/admin/redemptions") or path.startswith("/api/verify/queue") or path.startswith("/api/verify/admin") or path.endswith("/scan") or path.endswith("/approve") or path.endswith("/reject"):
+        return ("operations", level, False)
+    if path.startswith("/api/admin/student") or path.startswith("/api/student/admin"):
+        return ("student", level, False)
+    if path.startswith("/api/vios"):
+        return ("analytics", level, False)
+    if path.startswith("/api/admin"):
+        return ("overview", level, False)
+    return None
+
+
+def _admin_rbac_allowed(request) -> bool:
+    path = str(request.url.path)
+    if not (path.startswith("/api/admin") or path.startswith("/api/intelligence") or path.startswith("/api/vios") or path.startswith("/api/verify/")):
+        return True
+    requirement = _admin_permission_for_request(path, request.method)
+    if requirement is None:
+        return True
+    permission_key, level, is_system = requirement
+    user = get_current_user(request)
+    if not user or str(user.get("role") or "").lower() != "admin":
+        return False
+    staff = staff_context_for_user(user)
+    if is_system:
+        return check_system_permission(staff, permission_key, level)
+    return check_tab_permission(staff, permission_key, level)
 
 
 def _build_csp_value() -> str:
@@ -322,6 +390,21 @@ app.add_middleware(GZipMiddleware, minimum_size=RESPONSE_GZIP_MIN_SIZE)
 async def csrf_origin_middleware(request, call_next):
     if not _csrf_request_allowed(request):
         return JSONResponse({"detail": "CSRF check failed"}, status_code=403)
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def admin_rbac_middleware(request, call_next):
+    if not _admin_rbac_allowed(request):
+        logger.warning(
+            "admin_rbac.blocked",
+            extra={
+                "path": str(request.url.path),
+                "method": str(request.method),
+                "ip": str(getattr(request.client, "host", "") or ""),
+            },
+        )
+        return JSONResponse({"detail": "No permission for this admin area"}, status_code=403)
     return await call_next(request)
 
 
