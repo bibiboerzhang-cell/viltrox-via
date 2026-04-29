@@ -7,6 +7,21 @@ CREATE TABLE IF NOT EXISTS kols (
     platform TEXT NOT NULL,
     country TEXT,
     niche TEXT,
+    project_name TEXT,
+    owner_name TEXT,
+    media_name TEXT,
+    duplicate_flag TEXT,
+    scale_tier TEXT,
+    content_type TEXT,
+    approval_note TEXT,
+    channel_tags TEXT,
+    affiliate_id TEXT,
+    affiliate_link TEXT,
+    discount_code TEXT,
+    amazon_link TEXT,
+    short_link TEXT,
+    primary_category TEXT,
+    promoted_product TEXT,
     follower_count INTEGER DEFAULT 0,
     avg_views INTEGER DEFAULT 0,
     contact_email TEXT,
@@ -75,3 +90,23 @@ CREATE TABLE IF NOT EXISTS kol_attribution (
     attributed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(content_id, shopify_order_id)
 );
+
+CREATE TABLE IF NOT EXISTS kol_activity_log (
+    id BIGSERIAL PRIMARY KEY,
+    staff_id BIGINT,
+    user_id BIGINT,
+    staff_name TEXT,
+    action_type TEXT NOT NULL,
+    target_type TEXT,
+    target_id BIGINT,
+    query TEXT,
+    platform TEXT,
+    market TEXT,
+    api_provider TEXT,
+    api_calls INTEGER DEFAULT 0,
+    result_count INTEGER DEFAULT 0,
+    metadata_json TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_kol_activity_created ON kol_activity_log(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_kol_activity_staff ON kol_activity_log(staff_id, created_at DESC);

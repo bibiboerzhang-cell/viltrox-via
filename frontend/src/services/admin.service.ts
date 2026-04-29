@@ -486,6 +486,13 @@ export interface KolDashboardSnapshot {
   items: Array<Record<string, unknown>>;
 }
 
+export interface KolStaffActivitySnapshot {
+  window?: Record<string, unknown>;
+  totals?: Record<string, unknown>;
+  items: Array<Record<string, unknown>>;
+  recent: Array<Record<string, unknown>>;
+}
+
 export interface SystemProvidersSnapshot {
   providers: Array<Record<string, unknown>>;
 }
@@ -1697,6 +1704,10 @@ export function scoreKolContent(token: string, contentId: number) {
 
 export function fetchKolStaffPerformance(token: string): Promise<KolDashboardSnapshot> {
   return apiFetch<KolDashboardSnapshot>("/api/admin/kol/dashboard/staff-performance", {}, token);
+}
+
+export function fetchKolStaffActivity(token: string, query = ""): Promise<KolStaffActivitySnapshot> {
+  return apiFetch<KolStaffActivitySnapshot>(`/api/admin/kol/dashboard/staff-activity${query}`, {}, token);
 }
 
 export function fetchKolSuggestions(token: string, kolId: number) {

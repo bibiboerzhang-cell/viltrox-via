@@ -9,6 +9,7 @@ import {
   fetchKolCandidates,
   fetchKolDetail,
   fetchKolOpsSnapshot,
+  fetchKolStaffActivity,
   fetchKolStaffPerformance,
   fetchKolSuggestions,
   importKolCsv,
@@ -81,10 +82,12 @@ export function KolOpsTab({ token }: Props) {
   const [candidates, setCandidates] = useState<Row[]>([]);
   const [candidatePage, setCandidatePage] = useState<Row>({});
   const [performance, setPerformance] = useState<Row[]>([]);
+  const [activity, setActivity] = useState<{ totals?: Row; items: Row[]; recent: Row[]; window?: Row }>({ items: [], recent: [] });
   const [detail, setDetail] = useState<KolDetailSnapshot | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [filters, setFilters] = useState({ q: "", staff_id: "", country: "", platform: "", status: "", date_from: "", date_to: "", limit: "25", offset: "0" });
   const [candidateFilters, setCandidateFilters] = useState({ q: "", platform: "", market: "", status: "new", date_from: "", date_to: "", limit: "25", offset: "0" });
+  const [activityFilters, setActivityFilters] = useState({ date_from: "", date_to: "" });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
@@ -102,15 +105,18 @@ export function KolOpsTab({ token }: Props) {
     setLoading(true);
     setError("");
     try {
-      const [snapshot, perf, candidateSnapshot] = await Promise.all([
+      const activityQuery = buildQuery(activityFilters);
+      const [snapshot, perf, activitySnapshot, candidateSnapshot] = await Promise.all([
         fetchKolOpsSnapshot(token, buildQuery(nextFilters)),
         fetchKolStaffPerformance(token),
+        fetchKolStaffActivity(token, activityQuery),
         fetchKolCandidates(token, buildQuery(nextCandidateFilters)),
       ]);
       setItems(snapshot.items || []);
       setSummary(snapshot.summary || {});
       setPage(snapshot.page || {});
       setPerformance(perf.items || []);
+      setActivity({ totals: activitySnapshot.totals || {}, items: activitySnapshot.items || [], recent: activitySnapshot.recent || [], window: activitySnapshot.window || {} });
       setCandidates(candidateSnapshot.items || []);
       setCandidatePage(candidateSnapshot.page || {});
     } catch (err) {
@@ -145,18 +151,18 @@ export function KolOpsTab({ token }: Props) {
   ], [items.length, summary]);
 
   const columns: DataColumn<Row>[] = [
-    { key: "channel", label: "频道名", width: "1.35fr", render: (r) => <strong>{str(r.channel_name)}</strong> },
-    { key: "platform", label: "平台", width: "0.65fr", render: (r) => str(r.platform) },
-    { key: "country", label: "市场", width: "0.55fr", render: (r) => str(r.country) },
-    { key: "staff", label: "对接人", width: "0.75fr", render: (r) => str(r.assigned_staff_name) },
-    { key: "status", label: "状态", width: "0.75fr", render: (r) => <StatusPill tone={statusTone(r.contact_status)}>{str(r.contact_status, "cold")}</StatusPill> },
-    { key: "views", label: "播放", width: "0.65fr", render: (r) => num(r.views).toLocaleString() },
-    { key: "engagement", label: "互动", width: "0.65fr", render: (r) => pct(r.engagement_rate) },
-    { key: "cost", label: "成本", width: "0.65fr", render: (r) => usd(r.cost_cents) },
-    { key: "cpv", label: "CPV", width: "0.6fr", render: (r) => `$${num(r.cpv).toFixed(4)}` },
-    { key: "revenue", label: "收入", width: "0.65fr", render: (r) => usd(r.revenue_cents) },
-    { key: "roi", label: "ROI", width: "0.6fr", render: (r) => pct(r.roi) },
-    { key: "ai", label: "AI", width: "0.5fr", render: (r) => Math.round(num(r.avg_ai_quality_score)) || "—" },
+    { key: "project", label: "项目/红人", width: "1.25fr", render: (r) => <strong>{str(r.project_name || r.channel_name)}</strong> },
+    { key: "owner", label: "对接人", width: "0.7fr", render: (r) => str(r.owner_name || r.assigned_staff_name) },
+    { key: "product", label: "推广产品", width: "1fr", render: (r) => str(r.promoted_product) },
+    { key: "media", label: "红人/媒体", width: "1.05fr", render: (r) => str(r.media_name || r.channel_name) },
+    { key: "market", label: "国家/平台", width: "0.8fr", render: (r) => `${str(r.country)} · ${str(r.platform)}` },
+    { key: "scale", label: "量级/粉丝", width: "0.75fr", render: (r) => `${str(r.scale_tier)} · ${num(r.follower_count).toLocaleString()}` },
+    { key: "type", label: "内容类型", width: "0.9fr", render: (r) => str(r.content_type || r.channel_tags) },
+    { key: "status", label: "合作进度", width: "0.75fr", render: (r) => <StatusPill tone={statusTone(r.contact_status)}>{str(r.contact_status, "cold")}</StatusPill> },
+    { key: "views", label: "观看/互动", width: "0.75fr", render: (r) => `${num(r.views).toLocaleString()} / ${pct(r.engagement_rate)}` },
+    { key: "money", label: "预算/收入", width: "0.8fr", render: (r) => `${usd(r.cost_cents)} / ${usd(r.revenue_cents)}` },
+    { key: "cpv", label: "CPV", width: "0.55fr", render: (r) => `$${num(r.cpv).toFixed(4)}` },
+    { key: "roi", label: "ROAS", width: "0.55fr", render: (r) => pct(r.roi) },
   ];
 
   const candidateColumns: DataColumn<Row>[] = [
@@ -186,7 +192,7 @@ export function KolOpsTab({ token }: Props) {
     setBusy("csv");
     try {
       const result = await importKolCsv(token, file);
-      setToast(`已导入 ${result.imported ?? 0} 个 KOL`);
+      setToast(`已导入 ${result.imported ?? 0} 个新 KOL，campaign ${result.campaigns ?? 0}，content ${result.content ?? 0}，跳过 ${result.skipped ?? 0}`);
       await load();
     } catch (err) {
       setToast(err instanceof Error ? err.message : String(err));
@@ -334,6 +340,11 @@ export function KolOpsTab({ token }: Props) {
     await loadCandidates(next);
   };
 
+  const applyActivityFilters = async () => {
+    const snapshot = await fetchKolStaffActivity(token, buildQuery(activityFilters));
+    setActivity({ totals: snapshot.totals || {}, items: snapshot.items || [], recent: snapshot.recent || [], window: snapshot.window || {} });
+  };
+
   const changeCandidatePage = async (nextOffset: unknown) => {
     const next = { ...candidateFilters, offset: String(nextOffset ?? 0) };
     setCandidateFilters(next);
@@ -351,8 +362,8 @@ export function KolOpsTab({ token }: Props) {
         actions={(
           <label className="ax-btn">
             <Icons.download />
-            {busy === "csv" ? "Importing…" : "Import CSV"}
-            <input type="file" accept=".csv,text/csv" onChange={handleCsv} style={{ display: "none" }} />
+            {busy === "csv" ? "Importing…" : "Import CSV/XLSX"}
+            <input type="file" accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={handleCsv} style={{ display: "none" }} />
           </label>
         )}
       />
@@ -366,7 +377,7 @@ export function KolOpsTab({ token }: Props) {
             ["directory", "KOL 名单"],
             ["search", "平台搜索"],
             ["review", "候选审核"],
-            ["staff", "对接人"],
+            ["staff", "员工进度"],
           ] as Array<[View, string]>).map(([key, label]) => (
             <button key={key} type="button" className={`ax-btn ax-btn--sm${view === key ? " is-active" : ""}`} onClick={() => setView(key)}>
               {label}
@@ -413,7 +424,15 @@ export function KolOpsTab({ token }: Props) {
           </>
         ) : null}
 
-        {view === "staff" ? <StaffPerformance rows={performance} /> : null}
+        {view === "staff" ? (
+          <StaffPerformance
+            rows={performance}
+            activity={activity}
+            filters={activityFilters}
+            setFilters={setActivityFilters}
+            onApply={applyActivityFilters}
+          />
+        ) : null}
       </div>
     </div>
   );
@@ -421,8 +440,8 @@ export function KolOpsTab({ token }: Props) {
 
 function KolFilterBar({ filters, setFilters, onApply }: { filters: Record<string, string>; setFilters: (fn: (prev: any) => any) => void; onApply: () => void }) {
   return (
-    <div className="ax-card" style={{ display: "grid", gridTemplateColumns: "1.2fr repeat(6, minmax(0, 1fr)) auto", gap: 8 }}>
-      <input className="input" placeholder="搜索频道/URL/niche/email" value={filters.q} onChange={(event) => setFilters((prev) => ({ ...prev, q: event.target.value }))} />
+    <div className="ax-card" style={{ display: "grid", gridTemplateColumns: "1.35fr repeat(7, minmax(0, 1fr)) auto", gap: 8 }}>
+      <input className="input" placeholder="搜索红人/媒体/产品/对接人/标签/URL" value={filters.q} onChange={(event) => setFilters((prev) => ({ ...prev, q: event.target.value }))} />
       <input className="input" placeholder="staff_id" value={filters.staff_id} onChange={(event) => setFilters((prev) => ({ ...prev, staff_id: event.target.value }))} />
       <input className="input" placeholder="US" value={filters.country} onChange={(event) => setFilters((prev) => ({ ...prev, country: event.target.value }))} />
       <select className="input" value={filters.platform} onChange={(event) => setFilters((prev) => ({ ...prev, platform: event.target.value }))}>
@@ -431,10 +450,13 @@ function KolFilterBar({ filters, setFilters, onApply }: { filters: Record<string
       </select>
       <select className="input" value={filters.status} onChange={(event) => setFilters((prev) => ({ ...prev, status: event.target.value }))}>
         <option value="">all status</option>
-        {["cold", "contacted", "replied", "agreed", "active", "refused", "churned"].map((s) => <option key={s} value={s}>{s}</option>)}
+        {["cold", "contacted", "replied", "agreed", "active", "refused", "churned", "已回片", "寄送中", "确认合作", "待回复"].map((s) => <option key={s} value={s}>{s}</option>)}
       </select>
       <input className="input" type="date" value={filters.date_from} onChange={(event) => setFilters((prev) => ({ ...prev, date_from: event.target.value }))} />
       <input className="input" type="date" value={filters.date_to} onChange={(event) => setFilters((prev) => ({ ...prev, date_to: event.target.value }))} />
+      <select className="input" value={filters.limit} onChange={(event) => setFilters((prev) => ({ ...prev, limit: event.target.value, offset: "0" }))}>
+        {["25", "50", "100"].map((size) => <option key={size} value={size}>每页 {size}</option>)}
+      </select>
       <button type="button" className="ax-btn" onClick={onApply}><Icons.filter /> Apply</button>
     </div>
   );
@@ -509,22 +531,96 @@ function Pager({ page, onPage }: { page: Row; onPage: (offset: unknown) => void 
   );
 }
 
-function StaffPerformance({ rows }: { rows: Row[] }) {
+function StaffPerformance({
+  rows,
+  activity,
+  filters,
+  setFilters,
+  onApply,
+}: {
+  rows: Row[];
+  activity: { totals?: Row; items: Row[]; recent: Row[]; window?: Row };
+  filters: { date_from: string; date_to: string };
+  setFilters: (next: { date_from: string; date_to: string }) => void;
+  onApply: () => void;
+}) {
+  const totals = activity.totals || {};
   return (
-    <div className="ax-card">
-      <SectionLabel>对接人聚合</SectionLabel>
-      <div style={{ display: "grid", gap: 6 }}>
-        {rows.map((row) => (
-          <div key={String(row.staff_id)} style={{ display: "grid", gridTemplateColumns: "1fr repeat(5, 0.7fr)", gap: 8, fontSize: 11 }}>
-            <strong>{str(row.staff_name, `Staff #${row.staff_id}`)}</strong>
-            <span>{num(row.kol_count)} KOL</span>
-            <span>{num(row.campaign_count)} campaigns</span>
-            <span>{usd(row.total_cost_cents)}</span>
-            <span>{usd(row.total_revenue_cents)}</span>
-            <span>{pct(row.roi)}</span>
-          </div>
-        ))}
+    <div style={{ display: "grid", gap: 12 }}>
+      <div className="ax-card">
+        <SectionLabel>今日员工工作进度</SectionLabel>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 8, marginBottom: 12 }}>
+          <Metric label="总动作" value={num(totals.actions).toLocaleString()} />
+          <Metric label="平台搜索" value={num(totals.searches).toLocaleString()} />
+          <Metric label="查看 KOL" value={num(totals.kol_views).toLocaleString()} />
+          <Metric label="候选审核" value={num(totals.reviews).toLocaleString()} />
+          <Metric label="导入" value={num(totals.imports).toLocaleString()} />
+          <Metric label="数据/AI" value={(num(totals.data_updates) + num(totals.ai_actions)).toLocaleString()} />
+          <Metric label="API 接入" value={num(totals.api_calls).toLocaleString()} />
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8, marginBottom: 12 }}>
+          <input className="input" type="date" value={filters.date_from} onChange={(event) => setFilters({ ...filters, date_from: event.target.value })} />
+          <input className="input" type="date" value={filters.date_to} onChange={(event) => setFilters({ ...filters, date_to: event.target.value })} />
+          <button type="button" className="ax-btn" onClick={onApply}><Icons.filter /> 查看</button>
+        </div>
+        <div style={{ display: "grid", gap: 6 }}>
+          {activity.items.map((row) => (
+            <div key={`${row.staff_id}:${row.user_id}:${row.staff_name}`} style={{ display: "grid", gridTemplateColumns: "1.1fr repeat(8, 0.62fr)", gap: 8, fontSize: 11 }}>
+              <strong>{str(row.staff_name, `Staff #${row.staff_id}`)}</strong>
+              <span>{num(row.searches)} 搜索</span>
+              <span>{num(row.kol_views)} 查看</span>
+              <span>{num(row.reviews)} 审核</span>
+              <span>{num(row.imports)} 导入</span>
+              <span>{num(row.data_updates)} 数据</span>
+              <span>{num(row.ai_actions)} AI</span>
+              <span>{num(row.api_calls)} API</span>
+              <span>{str(row.last_action_at)}</span>
+            </div>
+          ))}
+          {activity.items.length === 0 ? <div style={{ color: "var(--ax-text-1)", fontSize: 11 }}>今天还没有员工操作记录。</div> : null}
+        </div>
       </div>
+
+      <div className="ax-card">
+        <SectionLabel>对接产出聚合</SectionLabel>
+        <div style={{ display: "grid", gap: 6 }}>
+          {rows.map((row) => (
+            <div key={String(row.staff_id)} style={{ display: "grid", gridTemplateColumns: "1fr repeat(5, 0.7fr)", gap: 8, fontSize: 11 }}>
+              <strong>{str(row.staff_name, `Staff #${row.staff_id}`)}</strong>
+              <span>{num(row.kol_count)} KOL</span>
+              <span>{num(row.campaign_count)} campaigns</span>
+              <span>{usd(row.total_cost_cents)}</span>
+              <span>{usd(row.total_revenue_cents)}</span>
+              <span>{pct(row.roi)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="ax-card">
+        <SectionLabel>最近操作</SectionLabel>
+        <div style={{ display: "grid", gap: 6 }}>
+          {activity.recent.slice(0, 40).map((row) => (
+            <div key={String(row.id)} style={{ display: "grid", gridTemplateColumns: "150px 120px 1fr 0.8fr 0.6fr", gap: 8, fontSize: 11 }}>
+              <span>{str(row.created_at)}</span>
+              <strong>{str(row.staff_name)}</strong>
+              <span>{str(row.action_type)} · {str(row.query || row.target_type)}</span>
+              <span>{str(row.platform)} {str(row.market, "")}</span>
+              <span>{num(row.api_calls)} API</span>
+            </div>
+          ))}
+          {activity.recent.length === 0 ? <div style={{ color: "var(--ax-text-1)", fontSize: 11 }}>暂无操作明细。</div> : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ border: "1px solid var(--ax-border)", borderRadius: 6, padding: 8, minWidth: 0 }}>
+      <div style={{ color: "var(--ax-text-1)", fontSize: 10 }}>{label}</div>
+      <div className="ax-num" style={{ color: "var(--ax-text-5)", fontSize: 16, fontWeight: 700 }}>{value}</div>
     </div>
   );
 }
