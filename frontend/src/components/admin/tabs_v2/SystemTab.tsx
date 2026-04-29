@@ -1,30 +1,375 @@
+import { useEffect, useMemo, useState, type FormEvent } from "react";
+
 import type { AuthUser } from "../../../lib/api";
+import {
+  fetchAdminSystemSnapshot,
+  fetchSystemModels,
+  fetchSystemProviders,
+  inviteStaffMember,
+  probeSystemProvider,
+  requestSystemModelSwitch,
+  updateStaffPermissions,
+  type AdminSystemSnapshot,
+  type SystemModelsSnapshot,
+  type SystemProvidersSnapshot,
+} from "../../../services/admin.service";
 import { Icons } from "../Icons";
-import { PageHeader, SectionLabel } from "../shared_v2";
+import {
+  DataTable,
+  ErrorCard,
+  KPIGrid,
+  LoadingCard,
+  PageHeader,
+  SectionLabel,
+  StatusPill,
+  type DataColumn,
+} from "../shared_v2";
 
 interface Props {
   token: string;
   user: AuthUser;
 }
 
-export function SystemTab({ token: _token }: Props) {
+type Row = Record<string, unknown>;
+type Section = "keys" | "usage" | "models" | "restart" | "members";
+
+const TAB_KEYS = [
+  "overview",
+  "operations",
+  "creators",
+  "products",
+  "analytics",
+  "student",
+  "via",
+  "command",
+  "runtime",
+  "intelligence",
+  "deepsight",
+  "system",
+  "kol_ops",
+];
+
+const SYSTEM_KEYS = ["system.api_keys", "system.usage", "system.models", "system.restart", "system.members"];
+
+function str(value: unknown, fallback = "—") {
+  const text = String(value ?? "").trim();
+  return text || fallback;
+}
+
+function maskKey(value: unknown) {
+  const text = str(value, "");
+  if (!text) return "not configured";
+  return `${text.slice(0, 15)}...`;
+}
+
+function statusTone(value: unknown): "pass" | "review" | "queue" | "new" | "active" | "idle" | "churn" | "block" | "flag" {
+  const raw = String(value || "").toLowerCase();
+  if (["healthy", "ok", "active"].includes(raw)) return "active";
+  if (["down", "failed", "suspended"].includes(raw)) return "block";
+  if (["unknown", "pending"].includes(raw)) return "review";
+  return "idle";
+}
+
+function defaultPerms(role: string) {
+  const mode = role === "admin" ? "write" : "read";
+  const base: Record<string, string> = {};
+  TAB_KEYS.forEach((key) => { base[key] = mode; });
+  base["system.api_keys"] = "read";
+  base["system.usage"] = "read";
+  base["system.models"] = "read";
+  base["system.restart"] = "none";
+  base["system.members"] = "none";
+  return base;
+}
+
+export function SystemTab({ token, user }: Props) {
+  const [section, setSection] = useState<Section>("keys");
+  const [system, setSystem] = useState<AdminSystemSnapshot | null>(null);
+  const [providers, setProviders] = useState<SystemProvidersSnapshot | null>(null);
+  const [models, setModels] = useState<SystemModelsSnapshot | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [toast, setToast] = useState("");
+  const [role, setRole] = useState("readonly");
+  const [permissions, setPermissions] = useState<Record<string, string>>(defaultPerms("readonly"));
+  const [busy, setBusy] = useState("");
+
+  const load = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const [systemSnapshot, providerSnapshot, modelSnapshot] = await Promise.all([
+        fetchAdminSystemSnapshot(token),
+        fetchSystemProviders(token).catch(() => ({ providers: [] })),
+        fetchSystemModels(token).catch(() => ({
+          available_models: {},
+          task_model_binding: {},
+          pricing_usd_per_1m_tokens: {},
+        })),
+      ]);
+      setSystem(systemSnapshot);
+      setProviders(providerSnapshot);
+      setModels(modelSnapshot);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
+  useEffect(() => {
+    setPermissions(defaultPerms(role));
+  }, [role]);
+
+  const providerRows = providers?.providers || [];
+  const modelRows = useMemo(() => Object.entries(models?.task_model_binding || {}).map(([task, model]) => ({ task, model })), [models]);
+
+  const kpis = [
+    { label: "Providers", value: providerRows.length },
+    { label: "Model tasks", value: modelRows.length },
+    { label: "Staff", value: system?.staffMembers?.length || 0 },
+    { label: "Audit rows", value: system?.auditLog?.length || 0 },
+  ];
+
+  const staffColumns: DataColumn<Row>[] = [
+    { key: "name", label: "成员", width: "1.2fr", render: (r) => <strong>{str(r.name || r.email)}</strong> },
+    { key: "role", label: "角色", width: "0.7fr", render: (r) => str(r.role) },
+    { key: "status", label: "状态", width: "0.8fr", render: (r) => <StatusPill tone={statusTone(r.status)}>{str(r.status, "active")}</StatusPill> },
+    { key: "owner", label: "Owner", width: "0.6fr", render: (r) => Number(r.is_owner || 0) === 1 ? "yes" : "—" },
+    { key: "login", label: "最近登录", width: "1fr", render: (r) => str(r.last_login_at) },
+  ];
+
+  const submitInvite = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const email = String(form.get("email") || "").trim();
+    if (!email.endsWith("@viltrox.com")) {
+      setToast("只能邀请 @viltrox.com 邮箱");
+      return;
+    }
+    setBusy("invite");
+    try {
+      await inviteStaffMember(token, { email, role, permissions });
+      setToast("邀请已发送");
+      event.currentTarget.reset();
+      await load();
+    } catch (err) {
+      setToast(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const saveFirstStaffPermissions = async () => {
+    const first = system?.staffMembers?.[0];
+    if (!first?.id) return;
+    setBusy("permissions");
+    try {
+      await updateStaffPermissions(token, Number(first.id), permissions);
+      setToast("权限矩阵已保存到第一位成员");
+      await load();
+    } catch (err) {
+      setToast(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy("");
+    }
+  };
+
+  if (loading) return <LoadingCard label="Loading System…" />;
+  if (error) return <ErrorCard label="System 加载失败" detail={error} onRetry={load} />;
+
   return (
     <div>
       <PageHeader
         title="System"
         subtitle="API keys · usage · models · restart · members"
-        actions={<button type="button" className="ax-btn"><Icons.command /> System status</button>}
+        actions={<button type="button" className="ax-btn" onClick={load}><Icons.command /> Refresh</button>}
       />
+
       <div style={{ padding: 16, display: "grid", gap: 12 }}>
-        {["API Keys", "Usage", "Models", "Restart", "Members"].map((label) => (
-          <div className="ax-card" key={label}>
-            <SectionLabel>{label}</SectionLabel>
-            <p style={{ margin: 0, color: "var(--ax-text-2)" }}>
-              {label} 管理入口已挂载。高危写操作将走二次密码、audit log 和 owner-only 权限。
-            </p>
+        {toast ? <div className="ax-card" style={{ color: "var(--ax-text-5)" }}>{toast}</div> : null}
+        <KPIGrid items={kpis} />
+
+        <div className="ax-card" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {(["keys", "usage", "models", "restart", "members"] as Section[]).map((item) => (
+            <button
+              key={item}
+              type="button"
+              className={`ax-btn ax-btn--sm${section === item ? " is-active" : ""}`}
+              onClick={() => setSection(item)}
+            >
+              {item}
+            </button>
+          ))}
+        </div>
+
+        {section === "keys" ? (
+          <div className="ax-card" style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10 }}>
+            {["anthropic", "openai", "google", "apify", "resend"].map((name) => {
+              const row = providerRows.find((item) => String(item.provider) === name) || {};
+              return (
+                <div key={name} className="ax-card" style={{ background: "rgba(255,255,255,0.03)" }}>
+                  <SectionLabel>{name}</SectionLabel>
+                  <StatusPill tone={statusTone(row.latest_status)}>{str(row.latest_status, "unknown")}</StatusPill>
+                  <div style={{ marginTop: 8, fontSize: 11, color: "var(--ax-text-2)" }}>key: {maskKey(row.key_prefix)}</div>
+                  <div style={{ fontSize: 11, color: "var(--ax-text-2)" }}>last ok: {str(row.last_ok_at)}</div>
+                  <button
+                    type="button"
+                    className="ax-btn ax-btn--sm"
+                    style={{ marginTop: 8 }}
+                    onClick={async () => {
+                      setBusy(`probe:${name}`);
+                      try {
+                        await probeSystemProvider(token, name);
+                        setToast(`${name} probe done`);
+                        await load();
+                      } catch (err) {
+                        setToast(err instanceof Error ? err.message : String(err));
+                      } finally {
+                        setBusy("");
+                      }
+                    }}
+                  >
+                    {busy === `probe:${name}` ? "Probing…" : "Probe"}
+                  </button>
+                </div>
+              );
+            })}
           </div>
-        ))}
+        ) : null}
+
+        {section === "usage" ? (
+          <div className="ax-card">
+            <SectionLabel>用量看板</SectionLabel>
+            <p style={{ color: "var(--ax-text-2)", fontSize: 12 }}>
+              成本口径使用本地 ai_usage_log × model_pricing.py 估算，不依赖原厂账单。月度对账时再刷新真实账单写差异校准记录。
+            </p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+              <Metric label="今日调用" value="N/A" />
+              <Metric label="今日成本" value="N/A" />
+              <Metric label="7 日趋势" value="N/A" />
+              <Metric label="平均延迟" value="N/A" />
+            </div>
+          </div>
+        ) : null}
+
+        {section === "models" ? (
+          <div className="ax-card" style={{ display: "grid", gap: 10 }}>
+            <SectionLabel>模型配置</SectionLabel>
+            {modelRows.map((row) => (
+              <div key={row.task} style={{ display: "grid", gridTemplateColumns: "1.3fr 1.4fr auto", gap: 8, alignItems: "center", fontSize: 12 }}>
+                <strong>{row.task}</strong>
+                <span>{row.model}</span>
+                <button
+                  type="button"
+                  className="ax-btn ax-btn--sm"
+                  onClick={async () => {
+                    setBusy(`model:${row.task}`);
+                    try {
+                      await requestSystemModelSwitch(token, row.task, row.model);
+                      setToast("模型切换请求已写入 audit；实际切换仍需 reviewed config/deploy");
+                    } catch (err) {
+                      setToast(err instanceof Error ? err.message : String(err));
+                    } finally {
+                      setBusy("");
+                    }
+                  }}
+                >
+                  {busy === `model:${row.task}` ? "Testing…" : "Test"}
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        {section === "restart" ? (
+          <div className="ax-card">
+            <SectionLabel>服务重启</SectionLabel>
+            <p style={{ color: "var(--ax-text-2)", fontSize: 12 }}>高危 restart API 还未启用。上线前必须接二次密码、audit log、5 分钟 health probe。</p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+              {["public", "admin", "worker", "scheduler"].map((roleName) => (
+                <button key={roleName} type="button" className="ax-btn" disabled>{roleName}</button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {section === "members" ? (
+          <div style={{ display: "grid", gap: 12 }}>
+            <div className="ax-card">
+              <SectionLabel>邀请成员</SectionLabel>
+              <form onSubmit={submitInvite} style={{ display: "grid", gridTemplateColumns: "1.3fr 0.8fr auto", gap: 8 }}>
+                <input className="input" name="email" type="email" placeholder="name@viltrox.com" required />
+                <select className="input" value={role} onChange={(event) => setRole(event.target.value)}>
+                  <option value="readonly">readonly</option>
+                  <option value="admin">admin</option>
+                </select>
+                <button type="submit" className="ax-btn" disabled={busy === "invite"}><Icons.mail /> Invite</button>
+              </form>
+            </div>
+
+            <div className="ax-card">
+              <SectionLabel>权限矩阵</SectionLabel>
+              <PermissionMatrix permissions={permissions} onChange={setPermissions} />
+              <button type="button" className="ax-btn ax-btn--sm" style={{ marginTop: 10 }} onClick={saveFirstStaffPermissions}>
+                保存到第一位成员
+              </button>
+            </div>
+
+            <div className="ax-card" style={{ overflowX: "auto" }}>
+              <DataTable
+                columns={staffColumns}
+                rows={system?.staffMembers || []}
+                rowKey={(row, index) => String(row.id || index)}
+                showCheckbox={false}
+                emptyLabel="暂无 staff 成员"
+              />
+            </div>
+          </div>
+        ) : null}
       </div>
+    </div>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="ax-kpi">
+      <div className="ax-kpi__label">{label}</div>
+      <div className="ax-kpi__value">{value}</div>
+    </div>
+  );
+}
+
+function PermissionMatrix({
+  permissions,
+  onChange,
+}: {
+  permissions: Record<string, string>;
+  onChange: (next: Record<string, string>) => void;
+}) {
+  const keys = [...TAB_KEYS, ...SYSTEM_KEYS];
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8 }}>
+      {keys.map((key) => (
+        <label key={key} style={{ display: "grid", gridTemplateColumns: "1fr 110px", gap: 8, alignItems: "center", fontSize: 11 }}>
+          <span>{key}</span>
+          <select
+            className="input"
+            value={permissions[key] || "none"}
+            onChange={(event) => onChange({ ...permissions, [key]: event.target.value })}
+          >
+            <option value="none">none</option>
+            <option value="read">read</option>
+            <option value="write">write</option>
+          </select>
+        </label>
+      ))}
     </div>
   );
 }

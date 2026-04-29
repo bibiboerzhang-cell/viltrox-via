@@ -446,6 +446,33 @@ export interface AdminSystemSnapshot {
   apiTokens: Array<Record<string, unknown>>;
 }
 
+export interface KolOpsSnapshot {
+  items: Array<Record<string, unknown>>;
+  summary?: Record<string, unknown>;
+}
+
+export interface KolDetailSnapshot {
+  kol: Record<string, unknown>;
+  outreach: Array<Record<string, unknown>>;
+  campaigns: Array<Record<string, unknown>>;
+  content: Array<Record<string, unknown>>;
+  attribution: Array<Record<string, unknown>>;
+}
+
+export interface KolDashboardSnapshot {
+  items: Array<Record<string, unknown>>;
+}
+
+export interface SystemProvidersSnapshot {
+  providers: Array<Record<string, unknown>>;
+}
+
+export interface SystemModelsSnapshot {
+  available_models: Record<string, string[]>;
+  task_model_binding: Record<string, string>;
+  pricing_usd_per_1m_tokens: Record<string, { input: number; output: number }>;
+}
+
 export async function fetchAdminDashboard(token: string): Promise<AdminSnapshotPayload<AdminDashboardSnapshot>> {
   const [stats, submissionsResponse, rewardsResponse, health, vios, leaderboardMonth] = await Promise.all([
     settleAdminFetch("dashboard.stats", apiFetch<AdminStats>("/api/admin/stats", {}, token), {} as AdminStats),
@@ -1256,4 +1283,152 @@ export async function fetchAdminSystemSnapshot(token: string): Promise<AdminSyst
     auditLog: Array.isArray(auditLog.entries) ? (auditLog.entries as Array<Record<string, unknown>>) : [],
     apiTokens: Array.isArray(apiTokens.tokens) ? (apiTokens.tokens as Array<Record<string, unknown>>) : [],
   };
+}
+
+export function fetchSystemProviders(token: string): Promise<SystemProvidersSnapshot> {
+  return apiFetch<SystemProvidersSnapshot>("/api/admin/system/providers", {}, token);
+}
+
+export function probeSystemProvider(token: string, provider: string, apiKey = "") {
+  return apiFetch<Record<string, unknown>>(
+    `/api/admin/system/providers/${encodeURIComponent(provider)}/probe`,
+    {
+      method: "POST",
+      body: jsonBody(apiKey ? { api_key: apiKey } : {}),
+    },
+    token,
+  );
+}
+
+export function fetchSystemModels(token: string): Promise<SystemModelsSnapshot> {
+  return apiFetch<SystemModelsSnapshot>("/api/admin/system/models", {}, token);
+}
+
+export function requestSystemModelSwitch(token: string, task: string, model: string) {
+  return apiFetch<Record<string, unknown>>(
+    "/api/admin/system/models/switch",
+    {
+      method: "POST",
+      body: jsonBody({ task, model }),
+    },
+    token,
+  );
+}
+
+export function inviteStaffMember(
+  token: string,
+  payload: { email: string; role: string; permissions: Record<string, string> },
+) {
+  return apiFetch<Record<string, unknown>>(
+    "/api/admin/staff/invite",
+    {
+      method: "POST",
+      body: jsonBody(payload),
+    },
+    token,
+  );
+}
+
+export function updateStaffPermissions(
+  token: string,
+  staffId: number,
+  permissions: Record<string, string>,
+) {
+  return apiFetch<Record<string, unknown>>(
+    `/api/admin/staff/${staffId}/permissions`,
+    {
+      method: "POST",
+      body: jsonBody({ permissions }),
+    },
+    token,
+  );
+}
+
+export function fetchKolOpsSnapshot(token: string, query = ""): Promise<KolOpsSnapshot> {
+  return apiFetch<KolOpsSnapshot>(`/api/admin/kol/kols${query}`, {}, token);
+}
+
+export function fetchKolDetail(token: string, kolId: number): Promise<KolDetailSnapshot> {
+  return apiFetch<KolDetailSnapshot>(`/api/admin/kol/kols/${kolId}`, {}, token);
+}
+
+export function createKol(token: string, payload: Record<string, unknown>) {
+  return apiFetch<Record<string, unknown>>(
+    "/api/admin/kol/kols",
+    {
+      method: "POST",
+      body: jsonBody(payload),
+    },
+    token,
+  );
+}
+
+export function importKolCsv(token: string, file: File) {
+  const form = new FormData();
+  form.append("file", file);
+  return apiFetch<Record<string, unknown>>(
+    "/api/admin/kol/kols/import-csv",
+    {
+      method: "POST",
+      body: form,
+    },
+    token,
+  );
+}
+
+export function addKolOutreach(token: string, kolId: number, payload: Record<string, unknown>) {
+  return apiFetch<Record<string, unknown>>(
+    `/api/admin/kol/kols/${kolId}/outreach`,
+    {
+      method: "POST",
+      body: jsonBody(payload),
+    },
+    token,
+  );
+}
+
+export function createKolCampaign(token: string, kolId: number, payload: Record<string, unknown>) {
+  return apiFetch<Record<string, unknown>>(
+    `/api/admin/kol/kols/${kolId}/campaigns`,
+    {
+      method: "POST",
+      body: jsonBody(payload),
+    },
+    token,
+  );
+}
+
+export function createKolContent(token: string, payload: Record<string, unknown>) {
+  return apiFetch<Record<string, unknown>>(
+    "/api/admin/kol/content",
+    {
+      method: "POST",
+      body: jsonBody(payload),
+    },
+    token,
+  );
+}
+
+export function scoreKolContent(token: string, contentId: number) {
+  return apiFetch<Record<string, unknown>>(
+    `/api/admin/kol/content/${contentId}/score`,
+    {
+      method: "POST",
+    },
+    token,
+  );
+}
+
+export function fetchKolStaffPerformance(token: string): Promise<KolDashboardSnapshot> {
+  return apiFetch<KolDashboardSnapshot>("/api/admin/kol/dashboard/staff-performance", {}, token);
+}
+
+export function fetchKolSuggestions(token: string, kolId: number) {
+  return apiFetch<Record<string, unknown>>(
+    `/api/admin/kol/kols/${kolId}/ai-suggestions`,
+    {
+      method: "POST",
+    },
+    token,
+  );
 }
