@@ -164,6 +164,105 @@ def _log_activity_commit(
     conn.commit()
 
 
+def _candidate_payload_from_item(item: dict, body: dict) -> dict:
+    return {
+        "platform": item.get("platform") or body.get("platform") or "",
+        "channel_name": item.get("channel_name") or "Unknown creator",
+        "channel_url": item.get("channel_url") or "",
+        "handle": item.get("handle") or "",
+        "country": body.get("market") or item.get("market") or "",
+        "niche": body.get("niche") or "",
+        "source_url": item.get("source_url") or "",
+        "sample_title": item.get("sample_title") or "",
+        "follower_count": _int(item.get("follower_count")),
+        "avg_views": _int(item.get("avg_views") or item.get("views")),
+        "contact_email": "",
+        "status": "new",
+        "search_query": body.get("query") or item.get("search_query") or "",
+        "market": body.get("market") or item.get("market") or "",
+        "notes": "",
+    }
+
+
+def _upsert_candidate(conn, payload: dict) -> int:
+    source_url = str(payload.get("source_url") or "").strip()
+    if source_url:
+        existing = conn.execute("SELECT id FROM kol_candidates WHERE source_url = ?", (source_url,)).fetchone()
+        if existing:
+            conn.execute(
+                """
+                UPDATE kol_candidates
+                SET avg_views = ?, sample_title = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (_int(payload.get("avg_views")), payload.get("sample_title", ""), _now(), int(existing["id"])),
+            )
+            return int(existing["id"])
+    cur = conn.execute(
+        """
+        INSERT INTO kol_candidates
+            (platform, channel_name, channel_url, handle, country, niche, source_url, sample_title,
+             follower_count, avg_views, contact_email, status, search_query, market, notes, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            payload.get("platform", ""),
+            payload.get("channel_name", "Unknown creator"),
+            payload.get("channel_url", ""),
+            payload.get("handle", ""),
+            payload.get("country", ""),
+            payload.get("niche", ""),
+            payload.get("source_url", ""),
+            payload.get("sample_title", ""),
+            _int(payload.get("follower_count")),
+            _int(payload.get("avg_views")),
+            payload.get("contact_email", ""),
+            payload.get("status", "new"),
+            payload.get("search_query", ""),
+            payload.get("market", ""),
+            payload.get("notes", ""),
+            _now(),
+            _now(),
+        ),
+    )
+    return _insert_id(conn, cur, "kol_candidates")
+
+
+def _persist_search_candidates(items: list[dict], body: dict, platform: str, market: str) -> list[int]:
+    conn = get_conn()
+    candidate_ids = []
+    for item in items:
+        candidate_ids.append(_upsert_candidate(conn, _candidate_payload_from_item(item, {**body, "platform": platform, "market": market})))
+    conn.commit()
+    return candidate_ids
+
+def _log_kol_system_action(
+    staff: dict,
+    action_type: str,
+    kol_id: int,
+    *,
+    query: str = "",
+    platform: str = "",
+    market: str = "",
+    api_provider: str = "",
+    api_calls: int = 0,
+    result_count: int = 0,
+    metadata: dict | None = None,
+) -> None:
+    _log_activity_commit(
+        staff,
+        action_type,
+        target_type="kol",
+        target_id=int(kol_id),
+        query=query,
+        platform=platform,
+        market=market,
+        api_provider=api_provider,
+        api_calls=api_calls,
+        result_count=result_count,
+        metadata=metadata,
+    )
+
 HEADER_ALIASES = {
     "项目-红人": "project_name",
     "项目红人": "project_name",
