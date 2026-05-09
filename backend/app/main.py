@@ -13,7 +13,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api.routers import auth, admin, audit, creator, jobs, leaderboard, media, ops, platform_ingest, sse, student_identity, uploads, verify, via
+from app.api.routers import activities, auth, admin, audit, creator, jobs, leaderboard, media, ops, platform_ingest, sse, student_identity, uploads, verify, via, vkpi, vkpi_attribution_metrics, vkpi_audit, vkpi_costs, vkpi_dashboard_staff, vkpi_data_quality, vkpi_evidence_assets, vkpi_firewall, vkpi_industry_automation, vkpi_kol_links, vkpi_kol_pool, vkpi_operations, vkpi_product_analysis, vkpi_projects, vkpi_reconciliation, vkpi_reports, vkpi_settings, vkpi_sync, vkpi_workflow_assets
 from app.api.routers import commerce, deepsight, insights, intelligence, intelligence_admin, system_admin
 from app.core.config import (
     APP_ROLE,
@@ -58,10 +58,10 @@ FRONTEND_ROOT = PROJECT_ROOT / "frontend"
 FRONTEND_DIST_DIR = FRONTEND_ROOT / "dist"
 FRONTEND_INDEX = FRONTEND_DIST_DIR / "index.html"
 FRONTEND_ASSETS_DIR = FRONTEND_DIST_DIR / "assets"
-FRONTEND_MOCKUPS_DIR = FRONTEND_DIST_DIR / "mockups"
-CAT_ASSETS_DIR = FRONTEND_ROOT / "public" / "cat"
 PUBLIC_REWARD_UPLOAD_DIR = UPLOAD_DIR / "reward_images"
 PUBLIC_STUDENT_CARD_DIR = UPLOAD_DIR / "student_cards"
+PUBLIC_STAFF_AVATAR_DIR = UPLOAD_DIR / "staff_avatars"
+PUBLIC_VKPI_EVIDENCE_DIR = UPLOAD_DIR / "vkpi_evidence"
 
 PUBLIC_APP_ROLES = {"all", "web", "public-web"}
 ADMIN_APP_ROLES = {"all", "web", "admin-web"}
@@ -102,6 +102,9 @@ def _is_allowed_csrf_origin(candidate: str, request) -> bool:
 
 
 def _csrf_request_allowed(request) -> bool:
+    path = str(request.url.path)
+    if path.startswith("/api/platform-ingest/") or path.startswith("/api/vkpi/webhooks/"):
+        return True
     if request.method.upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
         return True
     has_cookie = bool(request.cookies.get(AUTH_COOKIE_NAME))
@@ -170,6 +173,8 @@ def _admin_permission_for_request(path: str, method: str) -> tuple[str, str, boo
         return ("deepsight", level, False)
     if path.startswith("/api/admin/activities") or path.startswith("/api/public/event"):
         return ("activities", level, False)
+    if path.startswith("/api/admin/vkpi") or path.startswith("/api/marketing"):
+        return ("vkpi", level, False)
     if path.startswith("/api/admin/insights/"):
         return ("insights", level, False)
     if path.startswith("/api/admin/intel/student"):
@@ -211,14 +216,14 @@ def _admin_permission_for_request(path: str, method: str) -> tuple[str, str, boo
 
 def _admin_rbac_allowed(request) -> bool:
     path = str(request.url.path)
-    if not (path.startswith("/api/admin") or path.startswith("/api/intelligence") or path.startswith("/api/vios") or path.startswith("/api/verify/")):
+    if not (path.startswith("/api/admin") or path.startswith("/api/marketing") or path.startswith("/api/intelligence") or path.startswith("/api/vios") or path.startswith("/api/verify/")):
         return True
     requirement = _admin_permission_for_request(path, request.method)
     if requirement is None:
         return True
     permission_key, level, is_system = requirement
     user = get_current_user(request)
-    if not user or str(user.get("role") or "").lower() != "admin":
+    if not user:
         return False
     staff = staff_context_for_user(user)
     if is_system:
@@ -378,7 +383,7 @@ async def lifespan(app: FastAPI):
     await close_db_runtime()
 
 
-app = FastAPI(title="Viltrox 2.0 Platform", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="Viltrox Marketing", version="2.0.0", lifespan=lifespan)
 
 sentry_dsn = os.getenv("SENTRY_DSN", "").strip()
 if sentry_dsn:
@@ -424,14 +429,23 @@ async def admin_rbac_middleware(request, call_next):
                 "ip": str(getattr(request.client, "host", "") or ""),
             },
         )
-        return JSONResponse({"detail": "No permission for this admin area"}, status_code=403)
+        return JSONResponse({"detail": "当前账号没有 Viltrox Marketing 权限"}, status_code=403)
     return await call_next(request)
 
 
 @app.middleware("http")
 async def db_scope_middleware(request, call_next):
     async with db_connection_scope():
-        return await call_next(request)
+        response = await call_next(request)
+        try:
+            from app.services.vkpi import audit as vkpi_audit
+
+            user = get_current_user(request)
+            staff = staff_context_for_user(user) if user else None
+            vkpi_audit.log_request_if_sensitive(request, response.status_code, staff=staff)
+        except Exception:
+            pass
+        return response
 
 
 @app.middleware("http")
@@ -477,18 +491,29 @@ async def security_headers_middleware(request, call_next):
     return response
 
 
+@app.middleware("http")
+async def marketing_api_alias_middleware(request, call_next):
+    path = str(request.scope.get("path") or "")
+    if path == "/api/marketing" or path.startswith("/api/marketing/"):
+        request.scope["path"] = "/api/admin/vkpi" + path.removeprefix("/api/marketing")
+    return await call_next(request)
+
+
 PUBLIC_REWARD_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 PUBLIC_STUDENT_CARD_DIR.mkdir(parents=True, exist_ok=True)
+PUBLIC_STAFF_AVATAR_DIR.mkdir(parents=True, exist_ok=True)
+PUBLIC_VKPI_EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads/reward_images", StaticFiles(directory=PUBLIC_REWARD_UPLOAD_DIR), name="reward-images")
 app.mount("/uploads/student_cards", StaticFiles(directory=PUBLIC_STUDENT_CARD_DIR), name="student-cards")
+app.mount("/uploads/staff_avatars", StaticFiles(directory=PUBLIC_STAFF_AVATAR_DIR), name="staff-avatars")
+app.mount("/uploads/vkpi_evidence", StaticFiles(directory=PUBLIC_VKPI_EVIDENCE_DIR), name="vkpi-evidence")
 if FRONTEND_ASSETS_DIR.exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_ASSETS_DIR), name="frontend-assets")
-if FRONTEND_MOCKUPS_DIR.exists():
-    app.mount("/mockups", StaticFiles(directory=FRONTEND_MOCKUPS_DIR), name="frontend-mockups")
-if CAT_ASSETS_DIR.exists():
-    app.mount("/cat", StaticFiles(directory=CAT_ASSETS_DIR), name="via-cat-assets")
 
 app.include_router(auth.router)
+app.include_router(activities.public_router)
+app.include_router(vkpi.public_router)
+app.include_router(vkpi.webhook_router)
 app.include_router(student_identity.router)
 app.include_router(uploads.router)
 app.include_router(platform_ingest.router)
@@ -507,12 +532,31 @@ if IS_ADMIN_APP:
     app.include_router(admin.router)
     app.include_router(commerce.router)
     app.include_router(insights.router)
+    app.include_router(activities.router)
     app.include_router(intelligence.router)
     app.include_router(intelligence_admin.router)
     app.include_router(deepsight.router)
     app.include_router(brand_analysis.router)
     app.include_router(account_scanner.router)
     app.include_router(kol_ops.router)
+    app.include_router(vkpi.router)
+    app.include_router(vkpi_dashboard_staff.router)
+    app.include_router(vkpi_attribution_metrics.router)
+    app.include_router(vkpi_audit.router)
+    app.include_router(vkpi_costs.router)
+    app.include_router(vkpi_data_quality.router)
+    app.include_router(vkpi_evidence_assets.router)
+    app.include_router(vkpi_firewall.router)
+    app.include_router(vkpi_industry_automation.router)
+    app.include_router(vkpi_kol_links.router)
+    app.include_router(vkpi_kol_pool.router)
+    app.include_router(vkpi_operations.router)
+    app.include_router(vkpi_product_analysis.router)
+    app.include_router(vkpi_projects.router)
+    app.include_router(vkpi_reconciliation.router)
+    app.include_router(vkpi_reports.router)
+    app.include_router(vkpi_settings.router)
+    app.include_router(vkpi_sync.router)
     app.include_router(ops.router)
     app.include_router(system_admin.router)
 

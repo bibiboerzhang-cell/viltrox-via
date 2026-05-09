@@ -30,6 +30,7 @@ from app.db.connection import db_read, db_write, get_conn
 from app.services.security.rate_limiter import rate_limit
 from app.services.trust import enforce_dynamic_submission_guard
 from app.services.jobs.backpressure import enforce_queue_backpressure
+from app.services.activities.attribution import record_submission
 
 # ── 核心业务服务导入 ──
 from app.services.audit.similarity import (
@@ -434,6 +435,14 @@ async def audit_async(
         )
     except Exception:
         logger.debug("phase1 party-layer emit failed for submission (non-fatal)", exc_info=True)
+    try:
+        record_submission(submission_id, current_uid)
+    except Exception:
+        logger.warning(
+            "audit.activity_submission_attribution_failed",
+            extra={"submission_id": submission_id, "user_id": current_uid},
+            exc_info=True,
+        )
 
     if req.uploaded_video:
         asset = await db_write(

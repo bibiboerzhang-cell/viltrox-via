@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 from app.core.config import VIA_ENABLE_DAILY_LEARNING
 from app.core.logging import get_logger
@@ -36,6 +37,7 @@ except ImportError:
 
 
 _scheduler: Optional[Any] = None
+CHINA_TZ = ZoneInfo("Asia/Shanghai")
 
 
 # ──────────────────────────────────────────────
@@ -143,6 +145,79 @@ async def job_via_daily_learning():
             )
     except Exception:
         logger.exception("scheduler.via_learning_failed")
+
+
+async def job_vkpi_lineage_snapshot():
+    """V-KPI metric lineage snapshot for dashboard drilldown evidence."""
+    try:
+        from app.services.vkpi import cron
+
+        result = await cron.run_job("lineage_snapshot", {"period_days": 7})
+        logger.info("scheduler.vkpi_lineage_snapshot", extra={"result": result.get("status")})
+    except Exception:
+        logger.exception("scheduler.vkpi_lineage_snapshot_failed")
+
+
+async def job_vkpi_kpi_rollup():
+    """V-KPI daily staff KPI/workload rollup."""
+    try:
+        from app.services.vkpi import cron
+
+        result = await cron.run_job("kpi_rollup", {})
+        logger.info("scheduler.vkpi_kpi_rollup", extra={"result": result.get("status")})
+    except Exception:
+        logger.exception("scheduler.vkpi_kpi_rollup_failed")
+
+
+async def job_vkpi_alerts():
+    """V-KPI workflow reminders and stalled project alerts."""
+    try:
+        from app.services.vkpi import cron
+
+        result = await cron.run_job("alerts", {})
+        logger.info("scheduler.vkpi_alerts", extra={"result": result.get("status")})
+    except Exception:
+        logger.exception("scheduler.vkpi_alerts_failed")
+
+
+async def job_vkpi_weekly_report():
+    """Generate the manager weekly report from real V-KPI data."""
+    try:
+        from app.services.vkpi import cron
+
+        result = await cron.run_job("weekly_report", {"period_days": 7})
+        logger.info("scheduler.vkpi_weekly_report", extra={"result": result.get("status")})
+    except Exception:
+        logger.exception("scheduler.vkpi_weekly_report_failed")
+
+
+async def job_vkpi_channels_sync():
+    """Mark employee platform channels for sync; no fake metrics are written."""
+    try:
+        from app.services.vkpi import cron
+
+        result = await cron.run_job("channels_sync", {})
+        logger.info("scheduler.vkpi_channels_sync", extra={"synced": result.get("synced")})
+    except Exception:
+        logger.exception("scheduler.vkpi_channels_sync_failed")
+
+
+async def job_vkpi_morning_sync():
+    """Daily 08:00 China sync for channels, product monitor, and per-staff outreach digest."""
+    try:
+        from app.services.vkpi import cron
+
+        result = await cron.run_job("morning_sync", {"limit": 100, "max_videos": 50, "period_days": 1})
+        logger.info(
+            "scheduler.vkpi_morning_sync",
+            extra={
+                "channels_synced": result.get("channels_synced"),
+                "monitor_runs": result.get("monitor_runs"),
+                "digest": result.get("digest", {}).get("items_per_staff"),
+            },
+        )
+    except Exception:
+        logger.exception("scheduler.vkpi_morning_sync_failed")
 
 
 # ──────────────────────────────────────────────
@@ -255,6 +330,48 @@ async def start_scheduler() -> None:
         trigger=IntervalTrigger(minutes=10),
         id="confirm_partial_awards",
         name="Confirm 24h-old partial awards (release remaining 60%)",
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # ── V-KPI internal marketing jobs ──
+    _scheduler.add_job(
+        job_vkpi_lineage_snapshot,
+        trigger=IntervalTrigger(hours=1),
+        id="vkpi_lineage_snapshot",
+        name="V-KPI metric lineage snapshot",
+        max_instances=1,
+        coalesce=True,
+    )
+    _scheduler.add_job(
+        job_vkpi_kpi_rollup,
+        trigger=CronTrigger(hour=1, minute=20),
+        id="vkpi_kpi_rollup",
+        name="V-KPI daily KPI/workload rollup",
+        max_instances=1,
+        coalesce=True,
+    )
+    _scheduler.add_job(
+        job_vkpi_alerts,
+        trigger=IntervalTrigger(minutes=30),
+        id="vkpi_alerts",
+        name="V-KPI stalled workflow alerts",
+        max_instances=1,
+        coalesce=True,
+    )
+    _scheduler.add_job(
+        job_vkpi_weekly_report,
+        trigger=CronTrigger(day_of_week="mon", hour=2, minute=0),
+        id="vkpi_weekly_report",
+        name="V-KPI weekly manager report",
+        max_instances=1,
+        coalesce=True,
+    )
+    _scheduler.add_job(
+        job_vkpi_morning_sync,
+        trigger=CronTrigger(hour=8, minute=0, timezone=CHINA_TZ),
+        id="vkpi_morning_sync",
+        name="V-KPI 08:00 China daily KOL/channel/product sync + staff top-100 digest",
         max_instances=1,
         coalesce=True,
     )

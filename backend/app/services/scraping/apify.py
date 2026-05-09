@@ -31,7 +31,7 @@ logger = get_logger(__name__)
 
 if APIFY_AVAILABLE and APIFY_TOKEN:
     _client = ApifyClient(APIFY_TOKEN)
-    logger.info("apify.client_initialized | token_prefix=%s", APIFY_TOKEN[:15])
+    logger.info("apify.client_initialized")
 else:
     _client = None
     if not APIFY_TOKEN:
@@ -62,6 +62,154 @@ def _apify_available() -> bool:
     return _client is not None
 
 
+def _int(value: Any) -> int:
+    try:
+        return int(float(str(value or "0").replace(",", "")))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _first_nested_int(item: dict[str, Any], keys: tuple[str, ...]) -> int:
+    wanted = {k.lower() for k in keys}
+    stack: list[Any] = [item]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, dict):
+            for key, value in current.items():
+                if str(key).lower() in wanted:
+                    parsed = _int(value)
+                    if parsed:
+                        return parsed
+                if isinstance(value, (dict, list)):
+                    stack.append(value)
+        elif isinstance(current, list):
+            stack.extend(current[:20])
+    return 0
+
+
+def _douyin_actor_id(kind: str) -> str:
+    specific = os.getenv(f"APIFY_DOUYIN_{kind.upper()}_ACTOR_ID", "").strip()
+    return specific or os.getenv("APIFY_DOUYIN_ACTOR_ID", "").strip()
+
+
+def _actor_slug(actor_id: str) -> str:
+    return str(actor_id or "").strip().lower()
+
+
+def _douyin_video_payload(actor_id: str, url: str) -> Dict[str, Any]:
+    actor = _actor_slug(actor_id)
+    if actor == "apple_yang/douyin-video-audio-downloader":
+        return {"videoUrls": [url]}
+    return {
+        "url": url,
+        "urls": [url],
+        "videoUrls": [url],
+        "startUrls": [{"url": url}],
+        "maxItems": 1,
+        "maxResults": 1,
+        "limit": 1,
+        "shouldDownloadVideos": False,
+        "shouldDownloadCovers": False,
+        "proxyConfiguration": {"useApifyProxy": True},
+    }
+
+
+def _douyin_comments_payload(actor_id: str, url: str, max_comments: int = 20) -> Dict[str, Any]:
+    actor = _actor_slug(actor_id)
+    if actor == "natanielsantos/douyin-comments-scraper":
+        return {"postUrls": [url], "maxComments": max(1, min(int(max_comments), 100))}
+    return {
+        "url": url,
+        "urls": [url],
+        "postUrls": [url],
+        "videoUrls": [url],
+        "maxComments": max(1, min(int(max_comments), 100)),
+        "maxItems": max(1, min(int(max_comments), 100)),
+    }
+
+
+def _douyin_metrics_payload(actor_id: str, url: str) -> Dict[str, Any]:
+    actor = _actor_slug(actor_id)
+    if actor == "openclawai/tiktok-douyin-bilibili-scraper":
+        return {
+            "mode": "video_detail",
+            "platform": "douyin",
+            "url": url,
+            "urls": [url],
+            "maxItems": 1,
+            "downloadVideos": False,
+            "includeComments": False,
+            "proxyConfiguration": {"useApifyProxy": True, "apifyProxyGroups": ["RESIDENTIAL"]},
+        }
+    return {
+        "url": url,
+        "urls": [url],
+        "videoUrls": [url],
+        "postUrls": [url],
+        "startUrls": [{"url": url}],
+        "maxItems": 1,
+        "maxResults": 1,
+        "limit": 1,
+        "proxyConfiguration": {"useApifyProxy": True},
+    }
+
+
+def _normalize_douyin_comments(items: list[dict]) -> list[dict]:
+    comments = []
+    for item in items[:100]:
+        text = str(item.get("text") or item.get("comment") or item.get("message") or "").strip()
+        if not text:
+            continue
+        comments.append(
+            {
+                "text": text[:1000],
+                "author": str(item.get("nickname") or item.get("author") or item.get("username") or ""),
+                "likes": _int(item.get("diggCount") or item.get("likeCount") or item.get("likes")),
+                "published": item.get("createTimeISO") or item.get("createTime") or "",
+            }
+        )
+    return comments
+
+
+async def _fetch_douyin_comments(url: str, max_comments: int = 20) -> list[dict]:
+    actor_id = _douyin_actor_id("comments")
+    if not actor_id or not _apify_available():
+        return []
+    try:
+        run_input = _douyin_comments_payload(actor_id, url, max_comments)
+        run = await asyncio.to_thread(lambda: _client.actor(actor_id).call(run_input=run_input))
+        items = list(_client.dataset(run["defaultDatasetId"]).iterate_items())
+        return _normalize_douyin_comments(items)
+    except Exception as e:
+        logger.warning("apify.scrape_douyin.comments_failed | url=%s | actor=%s | error=%s", url, actor_id, e)
+        return []
+
+
+async def _fetch_douyin_metrics(url: str) -> dict[str, int]:
+    actor_id = _douyin_actor_id("metrics") or _douyin_actor_id("detail") or _douyin_actor_id("analytics")
+    if not actor_id or not _apify_available():
+        return {}
+    try:
+        run_input = _douyin_metrics_payload(actor_id, url)
+        run = await asyncio.to_thread(lambda: _client.actor(actor_id).call(run_input=run_input))
+        items = list(_client.dataset(run["defaultDatasetId"]).iterate_items())
+        if not items:
+            return {}
+        item = items[0]
+        if isinstance(item.get("result"), dict):
+            item = item["result"]
+        return {
+            "views": _first_nested_int(item, ("playCount", "play_count", "viewCount", "view_count", "views", "play", "plays")),
+            "likes": _first_nested_int(item, ("diggCount", "likeCount", "like_count", "likes", "digg_count")),
+            "comments": _first_nested_int(item, ("commentCount", "comment_count", "comments")),
+            "shares": _first_nested_int(item, ("shareCount", "share_count", "shares")),
+            "favorites": _first_nested_int(item, ("collectCount", "collect_count", "favorites", "favoriteCount")),
+        }
+    except Exception as e:
+        logger.warning("apify.scrape_douyin.metrics_failed | url=%s | actor=%s | error=%s", url, actor_id, e)
+        return {}
+
+
 async def scrape_youtube(url: str) -> Dict[str, Any]:
     """Fetch YouTube metadata via Apify (no video download)."""
     if not _apify_available():
@@ -87,6 +235,7 @@ async def scrape_youtube(url: str) -> Dict[str, Any]:
 
         item = items[0]
 
+        video = item.get("video") if isinstance(item.get("video"), dict) else {}
         return {
             "scraped_ok": True,
             "title": item.get("title", ""),
@@ -260,6 +409,101 @@ async def scrape_tiktok(url: str) -> Dict[str, Any]:
         return _empty_result(f"apify TikTok error: {e}")
 
 
+async def scrape_douyin(url: str) -> Dict[str, Any]:
+    """Best-effort Douyin scrape via a configured Apify actor.
+
+    Douyin actors are not standardized like the TikTok/YouTube actors. This
+    function only runs when APIFY_DOUYIN_VIDEO_ACTOR_ID or APIFY_DOUYIN_ACTOR_ID
+    is configured, and normalizes whatever public fields the actor returns.
+    """
+    if not _apify_available():
+        return _empty_result("apify not available")
+    actor_id = _douyin_actor_id("video")
+    if not actor_id:
+        return _empty_result("APIFY_DOUYIN_VIDEO_ACTOR_ID or APIFY_DOUYIN_ACTOR_ID is not configured")
+
+    logger.info("apify.scrape_douyin.start | url=%s | actor=%s", url, actor_id)
+    try:
+        run_input = _douyin_video_payload(actor_id, url)
+        run = await asyncio.to_thread(lambda: _client.actor(actor_id).call(run_input=run_input))
+        items = list(_client.dataset(run["defaultDatasetId"]).iterate_items())
+        if not items:
+            return _empty_result("apify returned no items")
+        item = items[0]
+        if isinstance(item.get("result"), dict):
+            item = item["result"]
+        author = item.get("author") if isinstance(item.get("author"), dict) else {}
+        stats = item.get("statistics") if isinstance(item.get("statistics"), dict) else {}
+        if isinstance(item.get("stats"), dict):
+            stats = {**stats, **item["stats"]}
+        title = str(item.get("desc") or item.get("description") or item.get("text") or item.get("title") or "")
+        views = _first_nested_int(item, ("playCount", "play_count", "viewCount", "view_count", "views", "play", "plays"))
+        likes = _first_nested_int(item, ("diggCount", "likeCount", "like_count", "likes", "digg_count"))
+        comments = _first_nested_int(item, ("commentCount", "comment_count", "comments"))
+        shares = _first_nested_int(item, ("shareCount", "share_count", "shares"))
+        favorites = _first_nested_int(item, ("collectCount", "collect_count", "favorites", "favoriteCount"))
+        if not views:
+            detail_metrics = await _fetch_douyin_metrics(url)
+            views = detail_metrics.get("views") or views
+            likes = detail_metrics.get("likes") or likes
+            comments = detail_metrics.get("comments") or comments
+            shares = detail_metrics.get("shares") or shares
+            favorites = detail_metrics.get("favorites") or favorites
+        video = item.get("video") if isinstance(item.get("video"), dict) else {}
+        visible_comments = item.get("comments") if isinstance(item.get("comments"), list) else []
+        if not visible_comments:
+            visible_comments = await _fetch_douyin_comments(url, max_comments=20)
+        video_url = str(item.get("videoUrl") or item.get("downloadUrl") or item.get("downloadAddr") or "")
+        if not video_url:
+            medias = item.get("medias") if isinstance(item.get("medias"), list) else []
+            for media in medias:
+                if isinstance(media, dict) and str(media.get("type") or "").lower() == "video" and media.get("url"):
+                    video_url = str(media.get("url") or "")
+                    break
+        owner_username = str(item.get("unique_id") or item.get("authorUniqueId") or author.get("uniqueId") or author.get("secUid") or author.get("uid") or "")
+        owner_full_name = str(
+            item.get("nickname")
+            or item.get("nickName")
+            or item.get("authorName")
+            or item.get("authorNickname")
+            or author.get("nickname")
+            or author.get("nickName")
+            or author.get("name")
+            or ""
+        )
+        owner_url = f"https://www.douyin.com/user/{owner_username}" if owner_username else ""
+        return {
+            "scraped_ok": True,
+            "title": title[:200],
+            "caption": title,
+            "scraped_text": title,
+            "og_image": str(item.get("thumbnail") or item.get("cover") or item.get("coverUrl") or item.get("dynamicCover") or ""),
+            "metrics": {"views": views, "likes": likes, "comments": comments, "shares": shares, "favorites": favorites},
+            "metrics_available": {"views": views > 0, "likes": likes > 0, "comments": comments > 0, "shares": shares > 0, "favorites": favorites > 0},
+            "visible_comments": visible_comments,
+            "published_at": item.get("createTime") or item.get("create_time") or None,
+            "video_url": video_url,
+            "owner_username": owner_username,
+            "owner_full_name": owner_full_name,
+            "owner": owner_full_name,
+            "author": owner_full_name,
+            "channel_name": owner_full_name,
+            "channel_url": owner_url,
+            "owner_url": owner_url,
+            "avatar_url": str(item.get("avatarUri") or item.get("avatarUrl") or author.get("avatarThumb") or ""),
+            "follower_count": _first_nested_int(item, ("followerCount", "follower_count", "followers", "fansCount")),
+            "total_favorited": _first_nested_int(item, ("totalFavorited", "total_favorited")),
+            "duration": item.get("duration") or video.get("duration") or 0,
+            "hashtags": item.get("hashtags") if isinstance(item.get("hashtags"), list) else [],
+            "error": None,
+            "scraper": "apify_douyin",
+            "metrics_source": {"views": "apify_douyin" if views > 0 else "unavailable"},
+        }
+    except Exception as e:
+        logger.warning("apify.scrape_douyin.failed | url=%s | error=%s", url, e)
+        return _empty_result(f"apify Douyin error: {e}")
+
+
 async def scrape_with_apify(url: str, platform: str) -> Dict[str, Any]:
     """Unified Apify scrape entry. Routes to platform-specific actor."""
     if not _apify_available():
@@ -272,6 +516,8 @@ async def scrape_with_apify(url: str, platform: str) -> Dict[str, Any]:
         return await scrape_instagram(url)
     elif p == "tiktok":
         return await scrape_tiktok(url)
+    elif p == "douyin":
+        return await scrape_douyin(url)
     else:
         return _empty_result(f"apify: platform {platform} not yet supported")
 

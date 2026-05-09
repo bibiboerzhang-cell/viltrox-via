@@ -22,7 +22,7 @@ try:
     _APIFY_TOKEN = os.getenv("APIFY_TOKEN", "")
     _client: Optional[ApifyClient] = ApifyClient(_APIFY_TOKEN) if _APIFY_TOKEN else None
     if _client:
-        logger.info("bh_scraper.client_ready", extra={"token_prefix": _APIFY_TOKEN[:15]})
+        logger.info("bh_scraper.client_ready")
     else:
         logger.warning("bh_scraper.token_missing")
 except ImportError:

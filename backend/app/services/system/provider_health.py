@@ -35,6 +35,25 @@ def utcnow() -> str:
     return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def ensure_provider_status_schema() -> None:
+    conn = get_conn()
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS provider_status (
+            provider TEXT PRIMARY KEY,
+            latest_status TEXT NOT NULL DEFAULT 'unknown',
+            last_ok_at TEXT,
+            last_error TEXT DEFAULT '',
+            consecutive_failures INTEGER NOT NULL DEFAULT 0,
+            alert_sent_at TEXT,
+            quota_json TEXT NOT NULL DEFAULT '{}',
+            updated_at TEXT NOT NULL DEFAULT ''
+        )
+        """
+    )
+    conn.commit()
+
+
 async def probe_provider(provider: str, api_key: str | None = None) -> dict[str, Any]:
     provider_key = _canonical_provider(provider)
     if provider_key not in PROVIDERS:
@@ -98,6 +117,7 @@ async def _probe_provider_http(provider: str, api_key: str) -> dict[str, Any]:
 
 
 def seed_provider_status() -> None:
+    ensure_provider_status_schema()
     conn = get_conn()
     for provider in PROVIDERS:
         conn.execute(
@@ -129,6 +149,7 @@ def list_provider_status() -> dict[str, Any]:
 
 def record_provider_probe(provider: str, ok: bool, error: str = "") -> None:
     provider = _canonical_provider(provider)
+    ensure_provider_status_schema()
     conn = get_conn()
     now = utcnow()
     row = conn.execute("SELECT consecutive_failures, alert_sent_at FROM provider_status WHERE provider = ?", (provider,)).fetchone()
@@ -154,6 +175,7 @@ def record_provider_probe(provider: str, ok: bool, error: str = "") -> None:
 
 def should_send_down_alert(provider: str) -> bool:
     provider = _canonical_provider(provider)
+    ensure_provider_status_schema()
     conn = get_conn()
     row = conn.execute("SELECT latest_status, alert_sent_at FROM provider_status WHERE provider = ?", (provider,)).fetchone()
     if not row or row["latest_status"] != "down":
@@ -169,6 +191,7 @@ def should_send_down_alert(provider: str) -> bool:
 
 
 def mark_alert_sent(provider: str) -> None:
+    ensure_provider_status_schema()
     get_conn().execute(
         "UPDATE provider_status SET alert_sent_at = ?, updated_at = ? WHERE provider = ?",
         (utcnow(), utcnow(), _canonical_provider(provider)),

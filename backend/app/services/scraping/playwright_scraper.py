@@ -269,6 +269,20 @@ async def scrape_with_playwright(url: str) -> Dict[str, Any]:
                 if published_at:
                     logger.info("instagram_publish_date_parsed", extra={"published_at": published_at})
 
+            if platform == "Douyin" and not any([
+                clean_title,
+                og_desc,
+                og_image,
+                visible_comments,
+                any(metrics_available.values()),
+            ]):
+                return {
+                    **EMPTY,
+                    "error": "douyin public page returned no usable metadata; configure a Douyin Apify actor",
+                    "resolved_url": page.url,
+                    "scraper": "playwright",
+                }
+
             return {
                 "scraped_ok": True,
                 "title": clean_title,
@@ -279,7 +293,9 @@ async def scrape_with_playwright(url: str) -> Dict[str, Any]:
                 "metrics_available": metrics_available,
                 "visible_comments": visible_comments,
                 "published_at": published_at,
+                "resolved_url": page.url,
                 "error": None,
+                "scraper": "playwright",
             }
 
         except Exception as e:

@@ -1203,6 +1203,14 @@ def init_db():
         logger.exception("v5 migrations failed during init_db")
         raise
 
+    try:
+        from app.db.migrations_activities import apply_activities_migrations
+
+        apply_activities_migrations()
+    except Exception:
+        logger.exception("activities migrations failed during init_db")
+        raise
+
     # ── PATCH 2026-04-20: trust perf indexes ───────────────────────
     # 见 services/trust.py::_count_paid_shopify_orders
     try:

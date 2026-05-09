@@ -286,12 +286,23 @@ def channels(window: str = "30d", _staff=Depends(require_tab("insights", "read")
         activity_attribution = _rows(
             conn,
             """
-            SELECT a.activity_id, a.title,
+            SELECT a.activity_id, a.title, a.activity_type, a.market, a.platform,
                    COUNT(DISTINCT aa.user_id) AS user_count,
-                   COALESCE(SUM(aa.revenue_cents), 0) AS gmv_cents
+                   COALESCE(SUM(aa.order_count), 0) AS order_count,
+                   COALESCE(SUM(aa.revenue_cents), 0) AS gmv_cents,
+                   COALESCE(SUM(aa.commission_cents), 0) AS commission_cents,
+                   a.actual_spend_cents,
+                   a.planned_budget_cents,
+                   CASE
+                     WHEN COALESCE(NULLIF(a.actual_spend_cents, 0), a.planned_budget_cents, 0) > 0
+                     THEN (COALESCE(SUM(aa.revenue_cents), 0) - COALESCE(NULLIF(a.actual_spend_cents, 0), a.planned_budget_cents, 0)) * 100.0
+                          / COALESCE(NULLIF(a.actual_spend_cents, 0), a.planned_budget_cents, 0)
+                     ELSE NULL
+                   END AS roi_pct
             FROM activities a
             LEFT JOIN activity_attributions aa ON aa.activity_id = a.id
-            GROUP BY a.id, a.activity_id, a.title
+            WHERE a.status IN ('live', 'ended', 'paused')
+            GROUP BY a.id, a.activity_id, a.title, a.activity_type, a.market, a.platform, a.actual_spend_cents, a.planned_budget_cents
             ORDER BY gmv_cents DESC, user_count DESC
             LIMIT 10
             """,

@@ -6,10 +6,12 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 from functools import partial
+import secrets
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, File, Form, Request, Response, UploadFile
 from fastapi.responses import RedirectResponse
 
+from app.core.config import UPLOAD_DIR
 from app.core.config import IS_PRODUCTION
 from app.db.connection import db_read, db_write, get_conn, is_postgres_runtime
 from app.core.logging import get_logger
@@ -19,6 +21,7 @@ from app.core.security import (
     get_current_user,
     get_current_user_async,
     hash_password,
+    invalidate_user_cache,
     needs_password_rehash,
     verify_password,
 )
@@ -28,9 +31,15 @@ from app.services.auth.email import send_verification_email, send_password_reset
 from app.services.auth.service import build_login_payload, import_legacy_user_if_available, validate_login_credentials
 from app.db.repositories.users import creator_code_exists, generate_creator_code, get_user_by_email, touch_user_last_login
 from app.services.student_identity import claim_student_identity_for_user, resolve_student_identity_code, validate_student_identity_email
+from app.services.activities.attribution import EVENT_COOKIE, record_registration
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 logger = get_logger(__name__)
+
+AVATAR_DIR = UPLOAD_DIR / "staff_avatars"
+AVATAR_DIR.mkdir(parents=True, exist_ok=True)
+ALLOWED_AVATAR_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
+MAX_AVATAR_BYTES = 3 * 1024 * 1024
 
 
 def _client_ip(request: Request) -> str:
@@ -61,6 +70,28 @@ def _fetch_user_name_row(email: str):
 def _fetch_user_row(user_id: int):
     conn = get_conn()
     return conn.execute("SELECT * FROM users WHERE id=?", (int(user_id),)).fetchone()
+
+
+def _safe_avatar_url(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("/uploads/staff_avatars/"):
+        return raw
+    if raw.startswith("https://"):
+        return raw
+    raise ValueError("Avatar URL must use HTTPS or /uploads/staff_avatars/")
+
+
+def _update_user_avatar(user_id: int, avatar_url: str) -> dict:
+    conn = get_conn()
+    conn.execute("UPDATE users SET avatar_url=? WHERE id=?", (avatar_url, int(user_id)))
+    conn.commit()
+    invalidate_user_cache(int(user_id))
+    user_row = _fetch_user_row(int(user_id))
+    if not user_row:
+        return {"status": "error", "message": "User not found"}
+    return build_login_payload(user_row)
 
 
 def _fetch_email_token(token: str, token_type: str):
@@ -167,6 +198,14 @@ def auth_register(request: Request, req: RegisterRequest, response: Response):
                 cleanup_conn.execute("DELETE FROM users WHERE id=?", (int(user_id),))
                 cleanup_conn.commit()
                 raise
+        try:
+            record_registration(
+                int(user_id),
+                str(req.event_token or request.cookies.get(EVENT_COOKIE) or ""),
+                request=request,
+            )
+        except Exception:
+            logger.warning("auth.activity_registration_attribution_failed", extra={"user_id": int(user_id)}, exc_info=True)
         if not IS_PRODUCTION:
             user_row = _fetch_user_row(int(user_id))
             payload = build_login_payload(user_row)
@@ -218,6 +257,46 @@ def auth_me(request: Request):
     if not user:
         return {"status": "error", "message": "Not authenticated"}
     return {"status": "success", "user": user}
+
+
+@router.post("/me/avatar")
+async def update_my_avatar(
+    request: Request,
+    response: Response,
+    avatar_url: str = Form(default=""),
+    file: UploadFile | None = File(default=None),
+):
+    user = await get_current_user_async(request)
+    if not user:
+        return {"status": "error", "message": "Not authenticated"}
+    user_id = int(user["id"])
+    if file is not None and file.filename:
+        content_type = str(file.content_type or "").lower()
+        ext = ALLOWED_AVATAR_TYPES.get(content_type)
+        if not ext:
+            return {"status": "error", "message": "Avatar must be JPG, PNG, or WebP"}
+        data = await file.read()
+        if not data:
+            return {"status": "error", "message": "Avatar file is empty"}
+        if len(data) > MAX_AVATAR_BYTES:
+            return {"status": "error", "message": "Avatar file must be under 3MB"}
+        token = secrets.token_hex(8)
+        path = AVATAR_DIR / f"user_{user_id}_{token}{ext}"
+        path.write_bytes(data)
+        payload = _update_user_avatar(user_id, f"/uploads/staff_avatars/{path.name}")
+        if payload.get("token"):
+            apply_auth_cookie(response, str(payload["token"]))
+        return payload
+    try:
+        clean_url = _safe_avatar_url(avatar_url)
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
+    if not clean_url:
+        return {"status": "error", "message": "Avatar file or avatar_url required"}
+    payload = _update_user_avatar(user_id, clean_url)
+    if payload.get("token"):
+        apply_auth_cookie(response, str(payload["token"]))
+    return payload
 
 
 @router.post("/logout")

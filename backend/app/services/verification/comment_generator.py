@@ -35,7 +35,7 @@ try:
     _OPENAI_KEY = os.getenv("OPENAI_API_KEY", "")
     if _OPENAI_KEY:
         _openai_client = OpenAI(api_key=_OPENAI_KEY)
-        logger.info("verify_comment_generator.client_ready", extra={"token_prefix": _OPENAI_KEY[:15]})
+        logger.info("verify_comment_generator.client_ready")
     else:
         logger.warning("verify_comment_generator.key_missing")
 except ImportError:

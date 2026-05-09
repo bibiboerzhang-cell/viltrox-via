@@ -9,6 +9,7 @@ class RegisterRequest(BaseModel):
     password: str
     name: str
     student_id: str = ""
+    event_token: str = ""
 
 
 class LoginRequest(BaseModel):

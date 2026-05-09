@@ -10,6 +10,7 @@ import re
 import subprocess
 import tempfile
 import asyncio
+import urllib.request
 from typing import Dict, List, Any
 from pathlib import Path
 
@@ -43,6 +44,55 @@ from app.services.media.frames import extract_video_frames_with_ts
 
 FRAMES_DIR = Path("uploads")
 logger = get_logger(__name__)
+
+
+def _download_direct_video_url(video_url: str, output_dir: str) -> dict:
+    """Download a platform-provided direct MP4/play URL for Gemini/Claude analysis."""
+    result = {"success": False, "path": None, "duration": 0, "error": None, "platform": "direct"}
+    clean_url = str(video_url or "").strip()
+    if not clean_url.startswith(("http://", "https://")):
+        result["error"] = "direct video url missing"
+        return result
+    try:
+        out_path = Path(output_dir) / "direct_video.mp4"
+        req = urllib.request.Request(
+            clean_url,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Referer": "https://www.douyin.com/",
+            },
+        )
+        max_bytes = 500 * 1024 * 1024
+        read_bytes = 0
+        with urllib.request.urlopen(req, timeout=60) as resp, open(out_path, "wb") as fh:
+            while True:
+                chunk = resp.read(1024 * 1024)
+                if not chunk:
+                    break
+                read_bytes += len(chunk)
+                if read_bytes > max_bytes:
+                    result["error"] = "direct video exceeds 500MB"
+                    return result
+                fh.write(chunk)
+        if not out_path.exists() or out_path.stat().st_size <= 0:
+            result["error"] = "direct video download produced empty file"
+            return result
+        probe = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", str(out_path)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        try:
+            result["duration"] = float(json.loads(probe.stdout)["format"]["duration"])
+        except Exception:
+            pass
+        result["success"] = True
+        result["path"] = str(out_path)
+        return result
+    except Exception as exc:
+        result["error"] = f"direct video download failed: {str(exc)[:200]}"
+        return result
 
 
 def _build_anthropic_client():
@@ -662,7 +712,8 @@ def _merge_analysis(target: dict, source: dict):
 async def analyze_url_content_smart(
     url: str, title: str, caption: str,
     scraped_text: str, og_image: str, platform: str,
-    creator_handle: str = ""
+    creator_handle: str = "",
+    direct_video_url: str = "",
 ) -> dict:
     """
     Smart multi-layer content analysis for URL submissions:
@@ -689,7 +740,7 @@ async def analyze_url_content_smart(
         "quality_summary": "", "reference_value": "",
         "reference_reasons": [], "improvements": [],
         "marketing_potential": "", "marketing_notes": "",
-        "timestamps": [],
+        "timestamps": [], "video_source": "",
     }
 
     if not ANTHROPIC_AVAILABLE and not GEMINI_AVAILABLE:
@@ -765,7 +816,7 @@ async def analyze_url_content_smart(
     # for accurate gear identification. Only skip if Layer 0 (Gemini YouTube) already
     # got a definitive read.
     has_video_platform = platform in (
-        "Instagram", "TikTok", "Facebook", "Bilibili", "Xiaohongshu", "Reddit", "Unknown"
+        "Instagram", "TikTok", "Douyin", "Facebook", "Bilibili", "Xiaohongshu", "Reddit", "Unknown"
     )
     gemini_youtube_complete = (
         platform == "YouTube"
@@ -788,7 +839,17 @@ async def analyze_url_content_smart(
     if should_download:
         logger.info("smart analysis | layer 2 yt-dlp | platform=%s", platform)
         with tempfile.TemporaryDirectory() as tmpdir:
-            dl = download_video_ytdlp(url, tmpdir)
+            dl = _download_direct_video_url(direct_video_url, tmpdir) if direct_video_url else {"success": False, "path": None, "duration": 0, "error": "direct video url missing"}
+            if dl.get("success"):
+                result["video_source"] = "direct_url"
+                logger.info("smart analysis | layer 2 direct video url | platform=%s", platform)
+            else:
+                if direct_video_url:
+                    logger.warning("smart analysis | direct video failed: %s", dl.get("error"))
+                    result["layers_used"].append("direct_video_failed")
+                dl = download_video_ytdlp(url, tmpdir)
+                if dl.get("success"):
+                    result["video_source"] = "ytdlp"
             if dl["success"] and dl["path"]:
                 result["layers_used"].append(f"video({dl['duration']:.0f}s)")
                 video_path = dl["path"]

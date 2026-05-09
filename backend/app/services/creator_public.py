@@ -14,7 +14,7 @@ DEFAULT_SHOP_HERO = {
     "id": "default-viltrox-shop",
     "title": "Shop by Viltrox",
     "subtitle": "Support the gear I use",
-    "imageUrl": "/mockups/viltrox-shop-vintage-z2.png",
+    "imageUrl": "",
     "targetUrl": "https://viltrox.com/collections/all",
     "badge": "Official Store",
     "source": "manual",

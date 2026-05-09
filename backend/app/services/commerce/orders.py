@@ -14,6 +14,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
+from app.services.activities.attribution import lookup_user_id_by_email, record_purchase
 
 logger = get_logger(__name__)
 _MODULE_BACKFILL_CUTOFF_AT = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -237,6 +238,18 @@ def _ingest_order_from_event_sync(event_id: int) -> int | None:
         )
     except Exception:
         logger.exception("phase1 party-layer emit failed for order %s (non-fatal)", order_id)
+
+    try:
+        activity_user_id = attribution_user_id or lookup_user_id_by_email(customer.get("email"))
+        record_purchase(
+            order_id=order_id,
+            user_id=activity_user_id,
+            revenue_cents=subtotal_cents,
+            commission_cents=commission_cents,
+            external_order_id=external_id,
+        )
+    except Exception:
+        logger.warning("orders.activity_purchase_attribution_failed", extra={"order_id": order_id}, exc_info=True)
 
     return order_id
 

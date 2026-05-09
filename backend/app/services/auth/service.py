@@ -44,6 +44,9 @@ def build_login_payload(user) -> dict:
             "trust_updated_at": _row_value(user, "trust_updated_at", ""),
             "permissions": staff.get("permissions", {}),
             "is_owner": bool(staff.get("is_owner")),
+            "staff_id": staff.get("id") or staff.get("staff_id") or staff.get("user_id"),
+            "employee_code": staff.get("employee_code") or user["creator_code"] or str(user["email"]).split("@")[0],
+            "avatar_required": not bool(str(user["avatar_url"] or "").strip()),
         },
     }
 

@@ -593,7 +593,10 @@ def add_staff(
     admin=Depends(require_admin),
     _staff=Depends(require_system_permission("system.members", "write")),
 ):
-    result = staff_svc.invite(body, inviter_id=admin["id"])
+    try:
+        result = staff_svc.invite(body, inviter_id=admin["id"])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     record_admin_action(
         actor=admin, action="invite_staff",
         target_type="staff", target_id=str(result.get("id")),
@@ -610,7 +613,10 @@ def invite_staff(
     admin=Depends(require_admin),
     _staff=Depends(require_system_permission("system.members", "write")),
 ):
-    result = staff_svc.invite(body, inviter_id=admin["id"])
+    try:
+        result = staff_svc.invite(body, inviter_id=admin["id"])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     record_admin_action(
         actor=admin, action="invite_staff",
         target_type="staff", target_id=str(result.get("id")),

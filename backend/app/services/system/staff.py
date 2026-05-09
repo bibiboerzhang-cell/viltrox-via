@@ -24,7 +24,7 @@ from app.core.permissions import (
     normalize_permissions,
 )
 from app.core.security import hash_password
-from app.db.connection import get_conn
+from app.db.connection import get_conn, is_postgres_runtime
 from app.services.auth.email import send_email
 from app.services.auth.tokens import create_email_token
 
@@ -61,6 +61,34 @@ ROLES = {
             "system":      [],
             "trust":       ["view"],
             "staff":       [],
+        },
+    },
+    "employee": {
+        "label": "Marketing Employee",
+        "description": "Viltrox Marketing employee workspace",
+        "permissions": {
+            "content":     ["view"],
+            "creators":    ["view"],
+            "commerce":    [],
+            "intelligence":["view"],
+            "via":         [],
+            "system":      [],
+            "trust":       [],
+            "staff":       [],
+        },
+    },
+    "manager": {
+        "label": "Marketing Manager",
+        "description": "Viltrox Marketing team management",
+        "permissions": {
+            "content":     ["view", "approve", "reject"],
+            "creators":    ["view", "edit", "flag"],
+            "commerce":    ["view"],
+            "intelligence":["view", "generate_insights"],
+            "via":         ["view"],
+            "system":      ["view"],
+            "trust":       ["view"],
+            "staff":       ["view"],
         },
     },
     "analyst": {
@@ -190,16 +218,20 @@ def invite(body: dict, *, inviter_id: int) -> dict:
         # users need a real admin-role account alongside the richer `staff` row.
         base = "".join(ch for ch in email.split("@")[0].lower() if ch.isalnum()) or "staff"
         creator_code = _unique_placeholder_creator_code(conn, base)
-        conn.execute(
-            """
+        placeholder_password = hash_password(f"staff-invite:{email}:{secrets.token_urlsafe(32)}")
+        insert_sql = """
             INSERT INTO users
-                (created_at, email, name, creator_code, status, role, email_verified)
+                (created_at, email, password_hash, name, creator_code, status, role, email_verified)
             VALUES
-                (datetime('now'), ?, ?, ?, 'active', 'admin', 0)
-            """,
-            (email, body.get("name") or email.split("@")[0], creator_code),
-        )
-        user_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+                (?, ?, ?, ?, ?, 'active', 'admin', 0)
+        """
+        params = (_utcnow(), email, placeholder_password, body.get("name") or email.split("@")[0], creator_code)
+        if is_postgres_runtime():
+            user_row = conn.execute(f"{insert_sql} RETURNING id", params).fetchone()
+            user_id = int(user_row["id"])
+        else:
+            conn.execute(insert_sql, params)
+            user_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
 
     owner = email in OWNER_EMAILS
     permissions = normalize_permissions(
@@ -207,8 +239,8 @@ def invite(body: dict, *, inviter_id: int) -> dict:
         role,
         owner=owner,
     )
-    cur = conn.cursor()
     columns = _staff_columns(conn)
+    existing_staff = conn.execute("SELECT id FROM staff WHERE user_id = ? ORDER BY id DESC LIMIT 1", (user_id,)).fetchone()
     insert_cols = ["user_id", "role", "permissions_json", "mfa_enabled", "active", "invited_by", "invited_at"]
     values: list[Any] = [user_id, role, json.dumps(permissions), 0, 1, inviter_id, _utcnow()]
     if "is_owner" in columns:
@@ -217,17 +249,31 @@ def invite(body: dict, *, inviter_id: int) -> dict:
         insert_cols.append("email_domain_verified"); values.append(1)
     if "invited_by_staff_id" in columns:
         insert_cols.append("invited_by_staff_id"); values.append(_staff_id_for_user(conn, inviter_id))
-    placeholders = ",".join(["?"] * len(insert_cols))
-    cur.execute(
-        f"INSERT INTO staff ({', '.join(insert_cols)}) VALUES ({placeholders})",
-        values,
-    )
+    if existing_staff:
+        update_cols = [col for col in insert_cols if col != "user_id"]
+        update_values = [values[insert_cols.index(col)] for col in update_cols]
+        update_values.append(int(existing_staff["id"]))
+        conn.execute(
+            f"UPDATE staff SET {', '.join([f'{col} = ?' for col in update_cols])} WHERE id = ?",
+            update_values,
+        )
+        staff_id = int(existing_staff["id"])
+    else:
+        placeholders = ",".join(["?"] * len(insert_cols))
+        sql = f"INSERT INTO staff ({', '.join(insert_cols)}) VALUES ({placeholders})"
+        if is_postgres_runtime():
+            row = conn.execute(f"{sql} RETURNING id", values).fetchone()
+            staff_id = int(row["id"])
+        else:
+            cur = conn.cursor()
+            cur.execute(sql, values)
+            staff_id = int(cur.lastrowid or 0)
     conn.commit()
 
     token = create_email_token(int(user_id), "staff_invite")
     _send_staff_invite_email(email, token)
     return {
-        "id": cur.lastrowid,
+        "id": staff_id,
         "user_id": user_id,
         "role": role,
         "email": email,
@@ -643,14 +689,14 @@ def _staff_id_for_user(conn, user_id: int) -> int | None:
 
 
 def _send_staff_invite_email(email: str, token: str) -> bool:
-    url = f"{SITE_URL.rstrip('/')}/admin/login?staff_invite={token}"
+    url = f"{SITE_URL.rstrip('/')}/login?staff_invite={token}"
     html = (
         '<div style="font-family:Inter,Arial,sans-serif;max-width:560px;margin:0 auto;padding:32px 24px">'
-        '<p style="font-size:20px;font-weight:900;color:#ff8f2a">V-OS Admin</p>'
-        '<h2 style="font-size:22px;font-weight:800">You have been invited to V-OS Admin</h2>'
+        '<p style="font-size:20px;font-weight:900;color:#0f172a">Viltrox Marketing</p>'
+        '<h2 style="font-size:22px;font-weight:800">You have been invited to Viltrox Marketing</h2>'
         '<p style="color:#5f6673;font-size:14px">Use the secure link below to set your password and accept the invite.</p>'
         f'<a href="{url}" style="display:inline-block;padding:13px 28px;background:#1a1d23;color:#fff;'
         'font-weight:700;font-size:14px;text-decoration:none;border-radius:8px">Accept invite</a>'
         '<p style="color:#aaa;font-size:12px;margin-top:24px">Link expires automatically.</p></div>'
     )
-    return send_email(email, "V-OS Admin invitation", html)
+    return send_email(email, "Viltrox Marketing invitation", html)

@@ -23,6 +23,8 @@ def detect_platform_from_url(url: str) -> str:
     host = (urlparse(url).netloc or "").lower()
     if "tiktok.com" in host:
         return "TikTok"
+    if "douyin.com" in host:
+        return "Douyin"
     if "instagram.com" in host:
         return "Instagram"
     if "youtube.com" in host or "youtu.be" in host:
@@ -48,7 +50,7 @@ async def scrape_url(url: str) -> Dict[str, Any]:
         data.setdefault("source_url", url)
         return data
 
-    APIFY_PLATFORMS = {"YouTube", "Instagram", "TikTok"}
+    APIFY_PLATFORMS = {"YouTube", "Instagram", "TikTok", "Douyin"}
 
     if platform in APIFY_PLATFORMS and _apify_available():
         logger.info("platform_router.apify_primary", extra={"platform": platform})

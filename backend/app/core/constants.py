@@ -38,6 +38,8 @@ When analyzing the visual evidence, strictly match the equipment against this de
 # ──────────────────────────────────────────────
 PLATFORM_MAP = {
     "tiktok.com": "TikTok",
+    "douyin.com": "Douyin",
+    "iesdouyin.com": "Douyin",
     "youtube.com": "YouTube",
     "youtu.be": "YouTube",
     "instagram.com": "Instagram",
@@ -500,4 +502,3 @@ GENRE_TO_VERTICAL: dict[str, str] = {
     "commercial":   "commercial",
     "lifestyle":    "lifestyle",
 }
-

@@ -194,6 +194,9 @@ def get_current_user(request: Request):
         staff = staff_context_for_user(user_dict)
         user_dict["permissions"] = staff.get("permissions", {})
         user_dict["is_owner"] = bool(staff.get("is_owner"))
+        user_dict["staff_id"] = staff.get("id") or staff.get("staff_id") or staff.get("user_id")
+        user_dict["employee_code"] = staff.get("employee_code") or user_dict.get("creator_code") or str(user_dict.get("email") or "").split("@")[0]
+        user_dict["avatar_required"] = not bool(str(user_dict.get("avatar_url") or "").strip())
     except Exception:
         logger.debug("security.staff_context_attach_failed", exc_info=True)
     cache_set(cache_key, user_dict, ttl=int(USER_CACHE_TTL_SEC))

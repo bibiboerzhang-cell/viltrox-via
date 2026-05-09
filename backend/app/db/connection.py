@@ -62,6 +62,34 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "018_staff_permissions.sql",
     "019_kol_operations.sql",
     "020_kol_candidates.sql",
+    "021_activities.sql",
+    "022_kol_account_dossier.sql",
+    "023_vkpi_core.sql",
+    "024_vkpi_metric_lineage.sql",
+    "025_vkpi_product_cost_catalog.sql",
+    "026_vkpi_reports.sql",
+    "027_vkpi_reconciliation.sql",
+    "028_vkpi_audit_logs.sql",
+    "029_vkpi_analytics.sql",
+    "030_vkpi_employee_channels.sql",
+    "031_vkpi_p5_selected.sql",
+    "032_kol_contact_profile.sql",
+    "033_vkpi_daily_outreach_digest.sql",
+    "034_vkpi_shopify_order_snapshots.sql",
+    "035_vkpi_project_evidence_assets.sql",
+    "036_vkpi_cost_lifecycle_audit.sql",
+    "037_vkpi_product_launches.sql",
+    "038_vkpi_market_scan.sql",
+    "039_vkpi_kol_pool.sql",
+    "040_vkpi_kol_recommendations.sql",
+    "041_vkpi_industry_projects.sql",
+    "042_vkpi_industry_accounts.sql",
+    "043_vkpi_industry_snapshots.sql",
+    "044_vkpi_industry_posts.sql",
+    "045_vkpi_automation_outcomes.sql",
+    "046_vkpi_settings.sql",
+    "047_vkpi_user_preferences.sql",
+    "048_vkpi_notification_settings.sql",
 )
 
 try:
@@ -344,13 +372,19 @@ def _translate_sql_dialect(sql: str) -> str:
     )
     translated = re.sub(
         r"GROUP_CONCAT\s*\(\s*DISTINCT\s+([^)]+?)\s*\)",
-        r"STRING_AGG(DISTINCT \1, ',' ORDER BY \1)",
+        r"STRING_AGG(DISTINCT (\1)::text, ',' ORDER BY (\1)::text)",
         translated,
         flags=re.IGNORECASE,
     )
     translated = re.sub(
         r"GROUP_CONCAT\s*\(\s*([^)]+?)\s*\)",
-        r"STRING_AGG(\1, ',')",
+        r"STRING_AGG((\1)::text, ',')",
+        translated,
+        flags=re.IGNORECASE,
+    )
+    translated = re.sub(
+        r"\b((?:[A-Za-z_][A-Za-z0-9_]*\.)?[A-Za-z_][A-Za-z0-9_]*_json)\s+(NOT\s+)?LIKE\b",
+        lambda match: f"CAST({match.group(1)} AS TEXT) {match.group(2) or ''}LIKE",
         translated,
         flags=re.IGNORECASE,
     )
@@ -665,23 +699,41 @@ def _bootstrap_default_admin() -> None:
                     admin_pw_plain,
                 )
             if not admin_pw_plain:
-                return
-            admin_pw = hash_password(admin_pw_plain)
-            cur.execute(
-                """
-                INSERT INTO users (created_at, email, password_hash, name, status, role)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (email) DO NOTHING
-                """,
-                (
-                    datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    "admin@viltrox.com",
-                    admin_pw,
-                    "Admin",
-                    "approved",
-                    "admin",
-                ),
-            )
+                cur.execute("SELECT id FROM users WHERE email = %s LIMIT 1", ("admin@viltrox.com",))
+            else:
+                admin_pw = hash_password(admin_pw_plain)
+                cur.execute(
+                    """
+                    INSERT INTO users (created_at, email, password_hash, name, status, role)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (email) DO UPDATE SET
+                        role = EXCLUDED.role,
+                        status = EXCLUDED.status
+                    RETURNING id
+                    """,
+                    (
+                        datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "admin@viltrox.com",
+                        admin_pw,
+                        "Admin",
+                        "approved",
+                        "admin",
+                    ),
+                )
+            admin_row = cur.fetchone()
+            if admin_row:
+                admin_user_id = int(admin_row[0])
+                cur.execute("SELECT id FROM staff WHERE user_id = %s LIMIT 1", (admin_user_id,))
+                if cur.fetchone() is None:
+                    cur.execute(
+                        """
+                        INSERT INTO staff (
+                            user_id, role, permissions_json, mfa_enabled, active,
+                            invited_by, invited_at, accepted_at, is_owner, email_domain_verified
+                        ) VALUES (%s, 'admin', %s, 0, 1, %s, now(), now(), 1, 1)
+                        """,
+                        (admin_user_id, json.dumps({"vkpi": "write"}), admin_user_id),
+                    )
         conn.commit()
 
 

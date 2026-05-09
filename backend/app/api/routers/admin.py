@@ -245,6 +245,32 @@ def _grant_points_to_user(uid: int, points: int, reason: str, now: str):
     return new_balance
 
 
+def _select_user_ids_for_points_rule(where_sql: str, params: list[Any], limit: int) -> list[int]:
+    conn = get_conn()
+    rows = conn.execute(
+        f"SELECT id FROM users {where_sql} ORDER BY id ASC LIMIT ?",
+        [*params, int(limit)],
+    ).fetchall()
+    return [int(row["id"]) for row in rows]
+
+
+def _update_creator_code_sync(uid: int, new_code: str) -> dict[str, str]:
+    conn = get_conn()
+    user = conn.execute("SELECT id, creator_code FROM users WHERE id=?", (int(uid),)).fetchone()
+    if not user:
+        raise LookupError("User not found")
+    taken = conn.execute(
+        "SELECT id FROM users WHERE UPPER(creator_code)=UPPER(?) AND id != ?",
+        (new_code, int(uid)),
+    ).fetchone()
+    if taken:
+        raise ValueError(f"creator_code {new_code} already taken")
+    old_code = str(user["creator_code"] or "")
+    conn.execute("UPDATE users SET creator_code=? WHERE id=?", (new_code, int(uid)))
+    conn.commit()
+    return {"old_creator_code": old_code, "creator_code": new_code}
+
+
 def _load_submission_product_context(submission_id: int):
     conn = get_conn()
     return conn.execute(
@@ -1538,15 +1564,10 @@ async def admin_grant_points_by_rule(request: Request):
         where.append("LOWER(COALESCE(status, '')) = ?")
         params.append(status)
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
-    conn = get_conn()
-    rows = conn.execute(
-        f"SELECT id FROM users {where_sql} ORDER BY id ASC LIMIT ?",
-        [*params, limit],
-    ).fetchall()
+    user_ids = await db_read(partial(_select_user_ids_for_points_rule, where_sql, params, limit))
     now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
     granted = []
-    for row in rows:
-        uid = int(row["id"])
+    for uid in user_ids:
         new_balance = await db_write(partial(_grant_points_to_user, uid, points, reason, now))
         if new_balance is not None:
             _refresh_user_points_state(uid, reason="admin_rule_grant_points")
@@ -1571,16 +1592,13 @@ async def admin_update_creator_code(uid: int, request: Request):
     new_code = str(body.get("creator_code") or "").strip().upper()
     if not re.match(r"^[A-Z0-9_-]{3,40}$", new_code):
         raise HTTPException(status_code=400, detail="creator_code must be 3-40 chars: A-Z, 0-9, _, -")
-    conn = get_conn()
-    user = conn.execute("SELECT id, creator_code FROM users WHERE id=?", (int(uid),)).fetchone()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    taken = conn.execute("SELECT id FROM users WHERE UPPER(creator_code)=UPPER(?) AND id != ?", (new_code, int(uid))).fetchone()
-    if taken:
-        raise HTTPException(status_code=409, detail=f"creator_code {new_code} already taken")
-    old_code = str(user["creator_code"] or "")
-    conn.execute("UPDATE users SET creator_code=? WHERE id=?", (new_code, int(uid)))
-    conn.commit()
+    try:
+        updated = await db_write(partial(_update_creator_code_sync, int(uid), new_code))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    old_code = updated["old_creator_code"]
     invalidate_user_cache(int(uid))
     record_admin_action(
         actor=admin,

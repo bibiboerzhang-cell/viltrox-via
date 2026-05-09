@@ -4,11 +4,13 @@ from typing import Any
 
 
 VIA_ACTIVITY_VERSION = "2026-04-14"
-VIA_ACTIVITY_FRAME_COUNT = 6
-VIA_ACTIVITY_BASE_URL = "/cat/working"
+VIA_ACTIVITY_FRAME_COUNT = 0
+VIA_ACTIVITY_BASE_URL = ""
 
 
 def _activity_frames(activity_id: str, *, base_url: str = VIA_ACTIVITY_BASE_URL) -> list[str]:
+    if not base_url:
+        return []
     safe_base = base_url.rstrip("/")
     return [f"{safe_base}/{activity_id}/frame-{index:02d}.svg" for index in range(VIA_ACTIVITY_FRAME_COUNT)]
 
@@ -204,7 +206,7 @@ def build_via_activity_pack(*, base_url: str = VIA_ACTIVITY_BASE_URL) -> dict[st
             "anchor_hint": anchor_hint,
             "frame_count": VIA_ACTIVITY_FRAME_COUNT,
             "frames": _activity_frames(item["id"], base_url=base_url),
-            "sheet_url": f"{base_url.rstrip('/')}/{item['id']}/sheet.svg",
+            "sheet_url": f"{base_url.rstrip('/')}/{item['id']}/sheet.svg" if base_url else "",
         }
         activities[item["id"]] = activity
     return {
