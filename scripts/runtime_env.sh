@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# R58E: 加 LOCAL_DATABASE_URL 守门 + 启动可见性
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INSECURE_LOCAL_JWT_SECRET="viltrox2-local-dev-secret-change-me"
@@ -87,8 +88,43 @@ if [[ -d "$LEGACY_TOOLS_BIN" ]]; then
 fi
 
 export DB_RUNTIME_BACKEND="${DB_RUNTIME_BACKEND:-postgres}"
-export DATABASE_URL="${DATABASE_URL:-$LOCAL_DATABASE_URL}"
-export REDIS_URL="${REDIS_URL:-$LOCAL_REDIS_URL}"
+
+# ──────────────────────────────────────────────────────────
+# R58E NEW: LOCAL stack 守门
+# 当 ENVIRONMENT=local 时,强制 DATABASE_URL = LOCAL_DATABASE_URL
+# 防止 .env 里残留旧值导致 server 和 smoke 写读不同库
+# ──────────────────────────────────────────────────────────
+if [[ "${ENVIRONMENT:-local}" == "local" ]]; then
+  # 本地强制覆盖 (除非显式 set RUNTIME_ENV_KEEP_DB_URL=1)
+  if [[ "${RUNTIME_ENV_KEEP_DB_URL:-0}" != "1" ]]; then
+    export DATABASE_URL="$LOCAL_DATABASE_URL"
+    export REDIS_URL="$LOCAL_REDIS_URL"
+  else
+    export DATABASE_URL="${DATABASE_URL:-$LOCAL_DATABASE_URL}"
+    export REDIS_URL="${REDIS_URL:-$LOCAL_REDIS_URL}"
+  fi
+else
+  # 非 local 用环境变量为准 (生产环境)
+  export DATABASE_URL="${DATABASE_URL:-$LOCAL_DATABASE_URL}"
+  export REDIS_URL="${REDIS_URL:-$LOCAL_REDIS_URL}"
+fi
+
 export JWT_SECRET="${JWT_SECRET:-$INSECURE_LOCAL_JWT_SECRET}"
 export ADMIN_PASSWORD="${ADMIN_PASSWORD:-AdminPass123!}"
 export WORKER_CLUSTER_TIER="${WORKER_CLUSTER_TIER:-60}"
+
+# ──────────────────────────────────────────────────────────
+# R58E NEW: 启动可见性 - 打印当前生效的关键环境
+# 让任何调用 runtime_env.sh 的脚本都能看到真实值
+# ──────────────────────────────────────────────────────────
+if [[ "${RUNTIME_ENV_QUIET:-0}" != "1" ]]; then
+  cat >&2 <<EOF
+─── runtime_env.sh loaded ───
+  ENVIRONMENT       = $ENVIRONMENT
+  DATABASE_URL      = ${DATABASE_URL//$POSTGRES_USER:*@/$POSTGRES_USER:****@}
+  REDIS_URL         = $REDIS_URL
+  DB_RUNTIME_BACKEND = $DB_RUNTIME_BACKEND
+  APP_ROLE          = ${APP_ROLE:-(unset)}
+─────────────────────────────
+EOF
+fi

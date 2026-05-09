@@ -63,6 +63,32 @@ def main() -> int:
                 (now, email, password_hash, name),
             )
             row = cur.fetchone()
+            if row is not None:
+                cur.execute("SELECT id FROM staff WHERE user_id = %s ORDER BY id DESC LIMIT 1", (row[0],))
+                staff_row = cur.fetchone()
+                if staff_row:
+                    cur.execute(
+                        """
+                        UPDATE staff
+                        SET role = 'admin',
+                            active = 1,
+                            is_owner = 1,
+                            email_domain_verified = 1
+                        WHERE id = %s
+                        """,
+                        (staff_row[0],),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO staff
+                            (user_id, role, permissions_json, mfa_enabled, active, invited_by, invited_at,
+                             is_owner, email_domain_verified, accepted_at)
+                        VALUES
+                            (%s, 'admin', '{}', 0, 1, %s, %s, 1, 1, %s)
+                        """,
+                        (row[0], row[0], now, now),
+                    )
         conn.commit()
 
     if row is None:
