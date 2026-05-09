@@ -1,0 +1,382 @@
+"""Feature flags, crawl limits, and budget settings for V-KPI v2."""
+from __future__ import annotations
+
+import json
+from datetime import datetime
+from typing import Any
+
+from app.db.connection import get_conn, is_postgres_runtime
+from app.services.vkpi import audit
+from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
+from app.services.vkpi.workflow import staff_id as resolve_staff_id
+
+DEFAULT_FLAGS = {
+    "product_analysis": "产品分析入口",
+    "daily_staff_digest": "每日 8 点员工候选内容同步",
+    "audience_graph_l1": "粉丝图谱 L1 聚合匹配",
+    "audience_graph_l2": "粉丝图谱 L2 相似受众",
+    "audience_graph_l3": "粉丝图谱 L3 明细抓取，默认关闭",
+    "auto_budget_allocation": "预算自动分配，默认关闭",
+    "ml_scoring": "机器学习评分，默认关闭",
+    "llm_summary": "大模型总结润色，默认关闭",
+    "youtube_kpi_reserved": "YouTube KPI 接入预留",
+}
+
+DEFAULT_PLATFORMS = [
+    "youtube",
+    "instagram",
+    "tiktok",
+    "xiaohongshu",
+    "bilibili",
+    "facebook",
+    "reddit",
+    "x",
+    "twitch",
+    "threads",
+    "pinterest",
+    "website",
+    "other",
+]
+
+DEFAULT_BUDGETS = {
+    "apify": 0,
+    "llm": 0,
+    "crawl_total": 0,
+    "audience_graph": 0,
+}
+
+
+def _utcnow() -> str:
+    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _json(value: Any) -> str:
+    return json.dumps(value or {}, ensure_ascii=False, default=str)
+
+
+def _bool(value: Any) -> bool | int:
+    if isinstance(value, str):
+        value = value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
+    value = bool(value)
+    return value if is_postgres_runtime() else (1 if value else 0)
+
+
+def ensure_defaults() -> None:
+    ensure_vkpi_product_industry_schema()
+    conn = get_conn()
+    now = _utcnow()
+    for key, desc in DEFAULT_FLAGS.items():
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO vkpi_feature_flags
+                (flag_key, enabled, description, updated_at, metadata_json)
+            VALUES (?,?,?,?,?)
+            """,
+            (key, _bool(False), desc, now, "{}"),
+        )
+    for platform in DEFAULT_PLATFORMS:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO vkpi_platform_crawl_settings
+                (platform, crawl_enabled, daily_account_limit, posts_per_account, crawl_comments,
+                 crawl_followers, crawl_audience_graph, only_uncontacted_kols, monthly_budget_usd,
+                 last_test_status, updated_at, metadata_json)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (platform, _bool(False), 0, 0, _bool(False), _bool(False), _bool(False), _bool(True), 0, "not_configured", now, "{}"),
+        )
+    for key, limit in DEFAULT_BUDGETS.items():
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO vkpi_budget_settings
+                (budget_key, monthly_limit_usd, current_month_spent, alert_threshold_pct, enabled, updated_at, metadata_json)
+            VALUES (?,?,?,?,?,?,?)
+            """,
+            (key, float(limit), 0, 80, _bool(False), now, "{}"),
+        )
+    conn.commit()
+
+
+def feature_flags() -> dict[str, Any]:
+    ensure_defaults()
+    rows = get_conn().execute("SELECT * FROM vkpi_feature_flags ORDER BY flag_key").fetchall()
+    return {"flags": [dict(row) for row in rows]}
+
+
+def update_feature_flags(payload: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    ensure_defaults()
+    actor = resolve_staff_id(staff)
+    conn = get_conn()
+    now = _utcnow()
+    updates = payload.get("flags") if isinstance(payload.get("flags"), list) else []
+    for item in updates:
+        if not isinstance(item, dict) or not str(item.get("flag_key") or "").strip():
+            continue
+        key = str(item.get("flag_key")).strip()
+        old = conn.execute("SELECT * FROM vkpi_feature_flags WHERE flag_key=?", (key,)).fetchone()
+        conn.execute(
+            """
+            INSERT INTO vkpi_feature_flags
+                (flag_key, enabled, description, updated_by_staff_id, updated_at, metadata_json)
+            VALUES (?,?,?,?,?,?)
+            ON CONFLICT(flag_key) DO UPDATE SET
+                enabled=excluded.enabled,
+                description=COALESCE(NULLIF(excluded.description, ''), vkpi_feature_flags.description),
+                updated_by_staff_id=excluded.updated_by_staff_id,
+                updated_at=excluded.updated_at,
+                metadata_json=excluded.metadata_json
+            """,
+            (
+                key,
+                _bool(item.get("enabled")),
+                str(item.get("description") or ""),
+                actor or None,
+                now,
+                _json(item.get("metadata") or item.get("metadata_json") or {}),
+            ),
+        )
+        if actor:
+            audit.log_settings_change(
+                staff_id=actor,
+                change_type="feature_flag",
+                setting_key=key,
+                old_value_redacted=str(dict(old) if old else {}),
+                new_value_redacted=str({"enabled": _bool(item.get("enabled"))}),
+                metadata={"metadata": item.get("metadata") or item.get("metadata_json") or {}, "flag_key": key},
+            )
+    conn.commit()
+    return feature_flags()
+
+
+def platform_settings() -> dict[str, Any]:
+    ensure_defaults()
+    rows = get_conn().execute("SELECT * FROM vkpi_platform_crawl_settings ORDER BY platform").fetchall()
+    return {"platforms": [dict(row) for row in rows], "daily_sync_time": "08:00", "timezone": "Asia/Shanghai"}
+
+
+def update_platform_settings(payload: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    ensure_defaults()
+    actor = resolve_staff_id(staff)
+    conn = get_conn()
+    now = _utcnow()
+    updates = payload.get("platforms") if isinstance(payload.get("platforms"), list) else []
+    for item in updates:
+        if not isinstance(item, dict) or not str(item.get("platform") or "").strip():
+            continue
+        platform = str(item.get("platform")).strip().lower()
+        old = conn.execute("SELECT * FROM vkpi_platform_crawl_settings WHERE platform=?", (platform,)).fetchone()
+        old_data = dict(old) if old else {}
+
+        def pick(name: str, default: Any = None) -> Any:
+            return item[name] if name in item else old_data.get(name, default)
+
+        metadata_json = _json(item.get("metadata")) if "metadata" in item else str(old_data.get("metadata_json") or "{}")
+
+        conn.execute(
+            """
+            INSERT INTO vkpi_platform_crawl_settings
+                (platform, crawl_enabled, daily_account_limit, posts_per_account, crawl_comments,
+                 crawl_followers, crawl_audience_graph, only_uncontacted_kols, include_company_accounts,
+                 include_competitor_accounts, include_candidate_kols, monthly_budget_usd, failure_threshold,
+                 last_test_status, updated_by_staff_id, updated_at, metadata_json)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(platform) DO UPDATE SET
+                crawl_enabled=excluded.crawl_enabled,
+                daily_account_limit=excluded.daily_account_limit,
+                posts_per_account=excluded.posts_per_account,
+                crawl_comments=excluded.crawl_comments,
+                crawl_followers=excluded.crawl_followers,
+                crawl_audience_graph=excluded.crawl_audience_graph,
+                only_uncontacted_kols=excluded.only_uncontacted_kols,
+                include_company_accounts=excluded.include_company_accounts,
+                include_competitor_accounts=excluded.include_competitor_accounts,
+                include_candidate_kols=excluded.include_candidate_kols,
+                monthly_budget_usd=excluded.monthly_budget_usd,
+                failure_threshold=excluded.failure_threshold,
+                last_test_status=excluded.last_test_status,
+                updated_by_staff_id=excluded.updated_by_staff_id,
+                updated_at=excluded.updated_at,
+                metadata_json=excluded.metadata_json
+            """,
+            (
+                platform,
+                _bool(pick("crawl_enabled", False)),
+                int(pick("daily_account_limit", 0) or 0),
+                int(pick("posts_per_account", 0) or 0),
+                _bool(pick("crawl_comments", False)),
+                _bool(pick("crawl_followers", False)),
+                _bool(pick("crawl_audience_graph", False)),
+                _bool(pick("only_uncontacted_kols", True)),
+                _bool(pick("include_company_accounts", True)),
+                _bool(pick("include_competitor_accounts", True)),
+                _bool(pick("include_candidate_kols", True)),
+                float(pick("monthly_budget_usd", 0) or 0),
+                int(pick("failure_threshold", 5) or 5),
+                str(pick("last_test_status", "not_configured") or "not_configured"),
+                actor or None,
+                now,
+                metadata_json,
+            ),
+        )
+        if actor:
+            new_audit_value = {
+                "crawl_enabled": _bool(pick("crawl_enabled", False)),
+                "daily_account_limit": int(pick("daily_account_limit", 0) or 0),
+                "posts_per_account": int(pick("posts_per_account", 0) or 0),
+                "monthly_budget_usd": float(pick("monthly_budget_usd", 0) or 0),
+            }
+            audit.log_settings_change(
+                staff_id=actor,
+                change_type="platform_crawl",
+                setting_key=platform,
+                old_value_redacted=str(dict(old) if old else {}),
+                new_value_redacted=str(new_audit_value),
+                metadata={"metadata": item.get("metadata") or {}, "platform": platform},
+            )
+    conn.commit()
+    return platform_settings()
+
+
+def budget_settings() -> dict[str, Any]:
+    ensure_defaults()
+    rows = get_conn().execute("SELECT * FROM vkpi_budget_settings ORDER BY budget_key").fetchall()
+    return {"budgets": [dict(row) for row in rows]}
+
+
+def control_status() -> dict[str, Any]:
+    """Return the management control summary for high-cost automation.
+
+    This endpoint is intentionally read-only: it lets management verify which
+    expensive capabilities are enabled without triggering crawls, LLM calls, or
+    budget allocation.
+    """
+    flags = feature_flags().get("flags") or []
+    platforms = platform_settings().get("platforms") or []
+    budgets = budget_settings().get("budgets") or []
+    flag_map = {str(row.get("flag_key")): row for row in flags}
+    high_cost_keys = {
+        "audience_graph_l1",
+        "audience_graph_l2",
+        "audience_graph_l3",
+        "auto_budget_allocation",
+        "ml_scoring",
+        "llm_summary",
+    }
+    high_cost_controls = []
+    for key in sorted(high_cost_keys):
+        row = flag_map.get(key) or {"flag_key": key, "enabled": 0, "description": DEFAULT_FLAGS.get(key, "")}
+        high_cost_controls.append(
+            {
+                "flag_key": key,
+                "enabled": bool(row.get("enabled")),
+                "description": row.get("description") or DEFAULT_FLAGS.get(key, ""),
+                "requires_budget": key in {"audience_graph_l2", "audience_graph_l3", "auto_budget_allocation", "ml_scoring", "llm_summary"},
+            }
+        )
+    enabled_platforms = [row for row in platforms if bool(row.get("crawl_enabled"))]
+    youtube_row = next((row for row in platforms if str(row.get("platform")) == "youtube"), {})
+    budget_total = sum(float(row.get("monthly_limit_usd") or 0) for row in budgets if bool(row.get("enabled")))
+    budget_spent = sum(float(row.get("current_month_spent") or 0) for row in budgets if bool(row.get("enabled")))
+    return {
+        "sync_policy": {
+            "daily_sync_time": "08:00",
+            "timezone": "Asia/Shanghai",
+            "candidate_limit_per_staff": 100,
+            "only_uncontacted_kols": True,
+            "company_accounts_default": "included_for_brand_tracking",
+            "external_crawl_default": "off",
+        },
+        "summary": {
+            "enabled_feature_flags": sum(1 for row in flags if bool(row.get("enabled"))),
+            "enabled_platforms": len(enabled_platforms),
+            "enabled_high_cost_controls": sum(1 for row in high_cost_controls if row["enabled"]),
+            "enabled_budget_usd": budget_total,
+            "current_month_spent_usd": budget_spent,
+            "budget_remaining_usd": max(budget_total - budget_spent, 0),
+            "risk_level": "high" if any(row["enabled"] for row in high_cost_controls if row["requires_budget"]) else "controlled",
+        },
+        "high_cost_controls": high_cost_controls,
+        "platform_controls": [
+            {
+                "platform": row.get("platform"),
+                "crawl_enabled": bool(row.get("crawl_enabled")),
+                "daily_account_limit": int(row.get("daily_account_limit") or 0),
+                "posts_per_account": int(row.get("posts_per_account") or 0),
+                "crawl_followers": bool(row.get("crawl_followers")),
+                "crawl_audience_graph": bool(row.get("crawl_audience_graph")),
+                "only_uncontacted_kols": bool(row.get("only_uncontacted_kols")),
+                "monthly_budget_usd": float(row.get("monthly_budget_usd") or 0),
+                "last_test_status": row.get("last_test_status") or "not_configured",
+            }
+            for row in platforms
+        ],
+        "youtube_kpi": {
+            "reserved": True,
+            "flag_enabled": bool((flag_map.get("youtube_kpi_reserved") or {}).get("enabled")),
+            "platform_enabled": bool(youtube_row.get("crawl_enabled")),
+            "last_test_status": youtube_row.get("last_test_status") or "not_configured",
+            "source": "reserved_slot",
+        },
+        "budgets": budgets,
+    }
+
+
+def update_budget_settings(payload: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    ensure_defaults()
+    actor = resolve_staff_id(staff)
+    conn = get_conn()
+    now = _utcnow()
+    updates = payload.get("budgets") if isinstance(payload.get("budgets"), list) else []
+    for item in updates:
+        if not isinstance(item, dict) or not str(item.get("budget_key") or "").strip():
+            continue
+        key = str(item.get("budget_key")).strip().lower()
+        old = conn.execute("SELECT * FROM vkpi_budget_settings WHERE budget_key=?", (key,)).fetchone()
+        old_data = dict(old) if old else {}
+
+        def pick(name: str, default: Any = None) -> Any:
+            return item[name] if name in item else old_data.get(name, default)
+
+        metadata_json = _json(item.get("metadata")) if "metadata" in item else str(old_data.get("metadata_json") or "{}")
+
+        conn.execute(
+            """
+            INSERT INTO vkpi_budget_settings
+                (budget_key, monthly_limit_usd, current_month_spent, alert_threshold_pct, enabled, updated_by_staff_id, updated_at, metadata_json)
+            VALUES (?,?,?,?,?,?,?,?)
+            ON CONFLICT(budget_key) DO UPDATE SET
+                monthly_limit_usd=excluded.monthly_limit_usd,
+                current_month_spent=excluded.current_month_spent,
+                alert_threshold_pct=excluded.alert_threshold_pct,
+                enabled=excluded.enabled,
+                updated_by_staff_id=excluded.updated_by_staff_id,
+                updated_at=excluded.updated_at,
+                metadata_json=excluded.metadata_json
+            """,
+            (
+                key,
+                float(pick("monthly_limit_usd", 0) or 0),
+                float(pick("current_month_spent", 0) or 0),
+                int(pick("alert_threshold_pct", 80) or 80),
+                _bool(pick("enabled", False)),
+                actor or None,
+                now,
+                metadata_json,
+            ),
+        )
+        if actor:
+            new_audit_value = {
+                "monthly_limit_usd": float(pick("monthly_limit_usd", 0) or 0),
+                "alert_threshold_pct": int(pick("alert_threshold_pct", 80) or 80),
+                "enabled": _bool(pick("enabled", False)),
+            }
+            audit.log_settings_change(
+                staff_id=actor,
+                change_type="budget_setting",
+                setting_key=key,
+                old_value_redacted=str(dict(old) if old else {}),
+                new_value_redacted=str(new_audit_value),
+                metadata={"metadata": item.get("metadata") or {}, "budget_key": key},
+            )
+    conn.commit()
+    return budget_settings()

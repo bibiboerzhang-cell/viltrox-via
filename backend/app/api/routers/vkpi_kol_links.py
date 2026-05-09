@@ -1,0 +1,256 @@
+"""V-KPI KOL lifecycle, claim, and link center routes."""
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+from app.api.dependencies.perms import require_tab
+from app.services.kol.account_dossier import analyze_kol_account, get_kol_dossier, scan_kol_account
+from app.services.vkpi import kol_claims, link_center, scope
+
+router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-kol-links"])
+
+
+def _scope_403(exc: Exception) -> HTTPException:
+    return HTTPException(status_code=403, detail=str(exc) or "scope denied")
+
+
+@router.post("/kols/lookup")
+async def lookup_kol(body: dict, staff=Depends(require_tab("vkpi", "write"))):
+    try:
+        result = kol_claims.lookup(body, staff=staff)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    kol = result.get("kol") or {}
+    kol_id = int(kol.get("id") or 0) if isinstance(kol, dict) else 0
+    if not kol_id:
+        return result
+    try:
+        kol_claims.assert_kol_access(kol_id, staff, allow_unclaimed=True)
+    except scope.ScopeDenied as exc:
+        result["dossier"] = {}
+        result["can_claim"] = False
+        result["access_status"] = "claimed_by_other"
+        result["access_message"] = str(exc) or "kol claimed by another staff"
+        return result
+    scan_result = None
+    analysis_result = None
+    if body.get("scan_account") or body.get("scan_if_missing"):
+        max_posts = max(1, min(int(body.get("max_posts") or 24), 80))
+        scan_result = await scan_kol_account(kol_id, max_posts=max_posts)
+        if int(scan_result.get("content_count") or 0) > 0:
+            analysis_result = await analyze_kol_account(kol_id, product_sku=str(body.get("product_sku") or ""))
+    result["dossier"] = get_kol_dossier(kol_id)
+    if scan_result is not None:
+        result["scan_result"] = scan_result
+    if analysis_result is not None:
+        result["analysis_result"] = analysis_result
+    return result
+
+
+@router.get("/kols")
+def list_kols(
+    search: str = "",
+    platform: str = "",
+    staff_id: int | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    return kol_claims.list_kols(search=search, platform=platform, staff_id=staff_id, limit=limit, staff=staff)
+
+
+@router.get("/kols/{kol_id}/dossier")
+def kol_dossier(kol_id: int, staff=Depends(require_tab("vkpi", "read"))):
+    try:
+        kol_claims.assert_kol_access(int(kol_id), staff, allow_unclaimed=True)
+        return get_kol_dossier(int(kol_id))
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/kols/{kol_id}/profile")
+def kol_profile(kol_id: int, staff=Depends(require_tab("vkpi", "read"))):
+    try:
+        result = kol_claims.profile(int(kol_id), staff=staff)
+        try:
+            result["dossier"] = get_kol_dossier(int(kol_id))
+        except Exception:
+            result["dossier"] = {}
+        return result
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
+@router.patch("/kols/{kol_id}")
+def update_kol(kol_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
+    try:
+        return kol_claims.update_kol_manual(int(kol_id), body, staff=staff)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
+@router.post("/kols/{kol_id}/scan-account")
+async def scan_kol(kol_id: int, body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
+    payload = body or {}
+    try:
+        kol_claims.assert_kol_access(int(kol_id), staff, allow_unclaimed=True)
+        return await scan_kol_account(int(kol_id), max_posts=max(1, min(int(payload.get("max_posts") or 24), 80)))
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
+@router.post("/kols/{kol_id}/analyze-account")
+async def analyze_kol(kol_id: int, body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
+    payload = body or {}
+    try:
+        kol_claims.assert_kol_access(int(kol_id), staff, allow_unclaimed=True)
+        return await analyze_kol_account(int(kol_id), product_sku=str(payload.get("product_sku") or ""), snapshot_id=payload.get("snapshot_id"))
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
+@router.get("/claims")
+def list_claims(
+    status: str = "active",
+    limit: int = Query(default=100, ge=1, le=500),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    return kol_claims.list_claims(status=status, limit=limit, staff=staff)
+
+
+@router.post("/kols/{kol_id}/claim")
+def claim_kol(kol_id: int, body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
+    try:
+        return kol_claims.claim(kol_id, body or {}, staff=staff)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/claims/{claim_id}/release")
+def release_claim(claim_id: int, body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
+    try:
+        return kol_claims.release(claim_id, body or {}, staff=staff)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
+@router.post("/claims/{claim_id}/reassign")
+def reassign_claim(claim_id: int, body: dict, staff=Depends(require_tab("vkpi", "admin"))):
+    try:
+        return kol_claims.reassign(claim_id, body, staff=staff)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/links")
+def links(
+    status: str = "",
+    staff_id: int | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    return link_center.list_links(limit=limit, status=status, staff=staff, staff_id_filter=staff_id)
+
+
+@router.get("/links/{link_id}")
+def link_detail(link_id: int, staff=Depends(require_tab("vkpi", "read"))):
+    try:
+        return link_center.link_detail(link_id, staff=staff)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
+@router.get("/links/{link_id}/clicks")
+def link_clicks(
+    link_id: int,
+    limit: int = Query(default=100, ge=1, le=500),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    try:
+        return link_center.link_clicks(link_id, staff=staff, limit=limit)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
+@router.get("/links/{link_id}/orders")
+def link_orders(
+    link_id: int,
+    limit: int = Query(default=100, ge=1, le=500),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    try:
+        return link_center.link_orders(link_id, staff=staff, limit=limit)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
+@router.post("/links")
+def create_link(body: dict, staff=Depends(require_tab("vkpi", "write"))):
+    try:
+        return link_center.create_link(body, staff=staff)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
+@router.patch("/links/{link_id}")
+def update_link(link_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
+    try:
+        return link_center.update_link(link_id, body, staff=staff)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
+@router.post("/links/{link_id}/pause")
+def pause_link(link_id: int, staff=Depends(require_tab("vkpi", "write"))):
+    try:
+        return link_center.set_status(link_id, "paused", staff=staff)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
+@router.post("/links/{link_id}/archive")
+def archive_link(link_id: int, staff=Depends(require_tab("vkpi", "write"))):
+    try:
+        return link_center.set_status(link_id, "archived", staff=staff)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
+@router.post("/links/{link_id}/health-check")
+def check_link(link_id: int, staff=Depends(require_tab("vkpi", "read"))):
+    try:
+        scope.assert_link_access(link_id, staff)
+        return link_center.health_check(link_id, staff=staff)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc

@@ -1,0 +1,146 @@
+"""V-KPI data-scope enforcement.
+
+Frontend staff_id/view_as_staff_id is only a hint. Backend read/write paths
+must reduce it to the actor's allowed scope before hitting business tables.
+"""
+from __future__ import annotations
+
+from typing import Any
+
+from app.db.connection import get_conn
+
+
+MANAGER_ROLES = {"admin", "owner", "manager", "lead", "marketing_lead", "marketing_manager", "marketing-manager"}
+FINANCE_ROLES = {"finance", "accounting"}
+
+
+class ScopeDenied(PermissionError):
+    """Raised when a staff actor attempts to view or mutate out-of-scope data."""
+
+
+def _int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def actor_staff_id(staff: dict[str, Any] | None) -> int:
+    if not staff:
+        return 0
+    return _int(staff.get("id") or staff.get("staff_id") or staff.get("user_id"))
+
+
+def role_key(staff: dict[str, Any] | None) -> str:
+    return str((staff or {}).get("role") or "").strip().lower()
+
+
+def is_owner(staff: dict[str, Any] | None) -> bool:
+    return bool(staff) and _int((staff or {}).get("is_owner")) == 1
+
+
+def can_view_all(staff: dict[str, Any] | None, *, domain: str = "general") -> bool:
+    role = role_key(staff)
+    if is_owner(staff) or role in MANAGER_ROLES:
+        return True
+    if domain in {"cost", "finance", "export"} and role in FINANCE_ROLES:
+        return True
+    return False
+
+
+def effective_staff_id(staff: dict[str, Any] | None, requested_staff_id: int | None = None, *, domain: str = "general") -> int | None:
+    requested = _int(requested_staff_id)
+    if can_view_all(staff, domain=domain):
+        return requested or None
+    actor = actor_staff_id(staff)
+    return actor or None
+
+
+def staff_filter(column_sql: str, staff: dict[str, Any] | None, requested_staff_id: int | None = None, *, domain: str = "general") -> tuple[str, list[Any]]:
+    scoped_staff_id = effective_staff_id(staff, requested_staff_id, domain=domain)
+    if not scoped_staff_id:
+        return "", []
+    return f"{column_sql} = ?", [scoped_staff_id]
+
+
+def project_filter(alias: str, staff: dict[str, Any] | None, requested_staff_id: int | None = None) -> tuple[str, list[Any]]:
+    scoped_staff_id = effective_staff_id(staff, requested_staff_id)
+    if not scoped_staff_id:
+        return "", []
+    prefix = f"{alias}." if alias else ""
+    return f"({prefix}assigned_staff_id = ? OR {prefix}created_by_staff_id = ?)", [scoped_staff_id, scoped_staff_id]
+
+
+def link_filter(alias: str, staff: dict[str, Any] | None, requested_staff_id: int | None = None) -> tuple[str, list[Any]]:
+    scoped_staff_id = effective_staff_id(staff, requested_staff_id)
+    if not scoped_staff_id:
+        return "", []
+    prefix = f"{alias}." if alias else ""
+    return f"({prefix}staff_id = ? OR {prefix}created_by_staff_id = ?)", [scoped_staff_id, scoped_staff_id]
+
+
+def row_staff_filter(alias: str, staff: dict[str, Any] | None, requested_staff_id: int | None = None, *, column: str = "staff_id", domain: str = "general") -> tuple[str, list[Any]]:
+    scoped_staff_id = effective_staff_id(staff, requested_staff_id, domain=domain)
+    if not scoped_staff_id:
+        return "", []
+    prefix = f"{alias}." if alias else ""
+    return f"{prefix}{column} = ?", [scoped_staff_id]
+
+
+def assert_project_access(project_id: int, staff: dict[str, Any] | None, *, write: bool = False) -> None:
+    if can_view_all(staff):
+        return
+    actor = actor_staff_id(staff)
+    if not actor:
+        raise ScopeDenied("project scope denied")
+    row = get_conn().execute(
+        """
+        SELECT assigned_staff_id, created_by_staff_id
+        FROM vkpi_projects
+        WHERE id=?
+        """,
+        (int(project_id),),
+    ).fetchone()
+    if not row:
+        return
+    item = dict(row)
+    if actor in {_int(item.get("assigned_staff_id")), _int(item.get("created_by_staff_id"))}:
+        return
+    raise ScopeDenied("project scope denied")
+
+
+def assert_link_access(link_id: int, staff: dict[str, Any] | None, *, write: bool = False) -> None:
+    if can_view_all(staff):
+        return
+    actor = actor_staff_id(staff)
+    if not actor:
+        raise ScopeDenied("link scope denied")
+    row = get_conn().execute(
+        """
+        SELECT l.staff_id, l.created_by_staff_id, p.assigned_staff_id, p.created_by_staff_id AS project_creator_id
+        FROM vkpi_links l
+        LEFT JOIN vkpi_projects p ON p.id = l.project_id
+        WHERE l.id=?
+        """,
+        (int(link_id),),
+    ).fetchone()
+    if not row:
+        return
+    item = dict(row)
+    allowed = {
+        _int(item.get("staff_id")),
+        _int(item.get("created_by_staff_id")),
+        _int(item.get("assigned_staff_id")),
+        _int(item.get("project_creator_id")),
+    }
+    if actor in allowed:
+        return
+    raise ScopeDenied("link scope denied")
+
+
+def assert_staff_access(target_staff_id: int | None, staff: dict[str, Any] | None, *, domain: str = "general") -> None:
+    target = _int(target_staff_id)
+    if not target or can_view_all(staff, domain=domain):
+        return
+    if target != actor_staff_id(staff):
+        raise ScopeDenied("staff scope denied")

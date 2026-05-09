@@ -77,6 +77,14 @@ CREATE TABLE IF NOT EXISTS kol_content (
     ai_quality_score INTEGER,
     ai_summary TEXT,
     ai_topics_json TEXT,
+    content_title TEXT DEFAULT '',
+    thumbnail_url TEXT DEFAULT '',
+    scraped_text TEXT DEFAULT '',
+    visible_comments_json TEXT DEFAULT '[]',
+    ai_analysis_json TEXT DEFAULT '{}',
+    analysis_status TEXT DEFAULT 'not_analyzed',
+    analysis_error TEXT DEFAULT '',
+    analysis_method TEXT DEFAULT '',
     last_metric_refresh TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
