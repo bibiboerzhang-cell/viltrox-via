@@ -12,6 +12,7 @@ env/
 
 # ─── Node / Frontend ───────────────────────
 node_modules/
+frontend/node_modules
 dist/
 build/
 .vite/
@@ -53,6 +54,9 @@ tmp/
 .share-stage/
 data/via_qdrant/
 backend/data/job_results/
+backend/runtime/
+backend/uploads/
+frontend/runtime/
 
 # ─── IDE / 系统 ─────────────────────────────
 .idea/
