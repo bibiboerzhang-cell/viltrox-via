@@ -1,20 +1,47 @@
 """KOL Operations admin API."""
 from __future__ import annotations
 
-import csv
-import io
 import json
-import re
-import zipfile
 from datetime import datetime
-from xml.etree import ElementTree as ET
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, UploadFile, File
 
 from app.api.dependencies.perms import require_tab
-from app.core.security import verify_password
+from app.api.routers.kol_ops_helpers import (
+    _clean_creator_name,
+    _content_rollup_sql,
+    _country_filter_variants,
+    _dict,
+    _dossier_rollup,
+    _ensure_sqlite_columns,
+    _insert_id,
+    _int,
+    _items,
+    _like,
+    _limit_offset,
+    _log_activity,
+    _log_activity_commit,
+    _normalize_country_code,
+    _normalize_platform,
+    _now,
+    _parse_cents,
+    _parse_count,
+    _row_contact_status,
+    _scalar,
+    _staff_id_by_owner_name,
+    _uploaded_rows,
+    _verify_confirm_password,
+)
 from app.db.connection import db_write, get_conn, is_postgres_runtime
 from app.services.intelligence.account_scan_service import search_platform_content
+from app.services.kol.account_dossier import (
+    analyze_kol_account,
+    get_kol_dossier,
+    list_kol_comments,
+    list_kol_posts,
+    scan_kol_account,
+)
+from app.services.kol.content_analyzer import analyze_kol_content_url, analyze_kol_url_standalone
 from app.services.kol.content_scorer import score_kol_content
 from app.services.kol.metrics import cpv, engagement_rate, roi
 
@@ -29,11 +56,12 @@ def ensure_kol_schema() -> None:
     been applied.
     """
     global _SCHEMA_READY
-    if _SCHEMA_READY or is_postgres_runtime():
+    if _SCHEMA_READY:
         return
     conn = get_conn()
-    conn.executescript(
-        """
+    if not is_postgres_runtime():
+        conn.executescript(
+            """
         CREATE TABLE IF NOT EXISTS kols (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             channel_name TEXT NOT NULL,
@@ -111,6 +139,14 @@ def ensure_kol_schema() -> None:
             ai_quality_score INTEGER,
             ai_summary TEXT,
             ai_topics_json TEXT,
+            content_title TEXT DEFAULT '',
+            thumbnail_url TEXT DEFAULT '',
+            scraped_text TEXT DEFAULT '',
+            visible_comments_json TEXT DEFAULT '[]',
+            ai_analysis_json TEXT DEFAULT '{}',
+            analysis_status TEXT DEFAULT 'not_analyzed',
+            analysis_error TEXT DEFAULT '',
+            analysis_method TEXT DEFAULT '',
             last_metric_refresh TEXT,
             created_at TEXT NOT NULL
         );
@@ -169,8 +205,91 @@ def ensure_kol_schema() -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_kol_activity_created ON kol_activity_log(created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_kol_activity_staff ON kol_activity_log(staff_id, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS kol_account_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kol_id INTEGER NOT NULL,
+            platform TEXT NOT NULL,
+            handle TEXT DEFAULT '',
+            account_url TEXT DEFAULT '',
+            follower_count INTEGER DEFAULT 0,
+            content_count INTEGER DEFAULT 0,
+            total_views INTEGER DEFAULT 0,
+            total_likes INTEGER DEFAULT 0,
+            total_comments INTEGER DEFAULT 0,
+            total_shares INTEGER DEFAULT 0,
+            avg_views INTEGER DEFAULT 0,
+            engagement_rate REAL DEFAULT 0,
+            brand_mentions_json TEXT DEFAULT '[]',
+            competitor_mentions_json TEXT DEFAULT '[]',
+            comment_count INTEGER DEFAULT 0,
+            scan_status TEXT DEFAULT 'pending',
+            error_message TEXT DEFAULT '',
+            raw_json TEXT DEFAULT '{}',
+            scanned_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_kol_account_snapshots_kol_time ON kol_account_snapshots(kol_id, scanned_at DESC);
+
+        CREATE TABLE IF NOT EXISTS kol_posts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kol_id INTEGER NOT NULL,
+            snapshot_id INTEGER,
+            platform TEXT NOT NULL,
+            post_url TEXT NOT NULL,
+            title TEXT DEFAULT '',
+            thumbnail_url TEXT DEFAULT '',
+            published_at TEXT,
+            content_type TEXT DEFAULT '',
+            views INTEGER DEFAULT 0,
+            likes INTEGER DEFAULT 0,
+            comments INTEGER DEFAULT 0,
+            shares INTEGER DEFAULT 0,
+            brand_mentions_json TEXT DEFAULT '[]',
+            competitor_mentions_json TEXT DEFAULT '[]',
+            comment_sentiment TEXT DEFAULT 'unknown',
+            raw_json TEXT DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            UNIQUE(kol_id, post_url)
+        );
+        CREATE INDEX IF NOT EXISTS idx_kol_posts_kol_views ON kol_posts(kol_id, views DESC);
+
+        CREATE TABLE IF NOT EXISTS kol_comments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kol_id INTEGER NOT NULL,
+            post_id INTEGER,
+            platform TEXT NOT NULL,
+            post_url TEXT DEFAULT '',
+            author_handle TEXT DEFAULT '',
+            comment_text TEXT NOT NULL,
+            like_count INTEGER DEFAULT 0,
+            sentiment TEXT DEFAULT 'unknown',
+            intent_tags_json TEXT DEFAULT '[]',
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_kol_comments_kol_time ON kol_comments(kol_id, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS kol_analysis_reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kol_id INTEGER NOT NULL,
+            snapshot_id INTEGER,
+            report_type TEXT DEFAULT 'account_dossier',
+            account_score INTEGER DEFAULT 0,
+            audience_fit INTEGER DEFAULT 0,
+            product_fit INTEGER DEFAULT 0,
+            risk_level TEXT DEFAULT 'unknown',
+            recommended_action TEXT DEFAULT '',
+            suggested_products_json TEXT DEFAULT '[]',
+            brand_history_json TEXT DEFAULT '{}',
+            comment_insights_json TEXT DEFAULT '{}',
+            summary_zh TEXT DEFAULT '',
+            summary_en TEXT DEFAULT '',
+            raw_json TEXT DEFAULT '{}',
+            method TEXT DEFAULT '',
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_kol_analysis_reports_kol_time ON kol_analysis_reports(kol_id, created_at DESC);
         """
-    )
+        )
     _ensure_sqlite_columns(
         conn,
         "kols",
@@ -192,436 +311,25 @@ def ensure_kol_schema() -> None:
             "promoted_product": "TEXT",
         },
     )
+    _ensure_sqlite_columns(
+        conn,
+        "kol_content",
+        {
+            "content_title": "TEXT DEFAULT ''",
+            "thumbnail_url": "TEXT DEFAULT ''",
+            "scraped_text": "TEXT DEFAULT ''",
+            "visible_comments_json": "TEXT DEFAULT '[]'",
+            "ai_analysis_json": "TEXT DEFAULT '{}'",
+            "analysis_status": "TEXT DEFAULT 'not_analyzed'",
+            "analysis_error": "TEXT DEFAULT ''",
+            "analysis_method": "TEXT DEFAULT ''",
+        },
+    )
     conn.commit()
     _SCHEMA_READY = True
 
 
 router = APIRouter(prefix="/api/admin/kol", tags=["kol-ops"], dependencies=[Depends(ensure_kol_schema)])
-
-
-def _now() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _dict(row) -> dict:
-    return dict(row) if row else {}
-
-
-def _items(rows) -> list[dict]:
-    return [dict(row) for row in rows]
-
-
-def _int(value, default: int = 0) -> int:
-    try:
-        return int(value or default)
-    except (TypeError, ValueError):
-        return default
-
-
-def _limit_offset(limit: int = 50, offset: int = 0) -> tuple[int, int]:
-    return max(1, min(int(limit or 50), 200)), max(0, int(offset or 0))
-
-
-def _like(value: str) -> str:
-    return f"%{value.strip().lower()}%"
-
-
-def _scalar(query: str, params: list | tuple | None = None) -> int:
-    row = get_conn().execute(query, params or []).fetchone()
-    if not row:
-        return 0
-    return int(row[0] or 0)
-
-
-def _ensure_sqlite_columns(conn, table: str, columns: dict[str, str]) -> None:
-    existing = {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
-    for name, ddl in columns.items():
-        if name not in existing:
-            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
-
-
-def _staff_identity(staff: dict) -> dict[str, object]:
-    return {
-        "staff_id": int(staff.get("id") or 0),
-        "user_id": int(staff.get("user_id") or 0),
-        "staff_name": str(staff.get("name") or staff.get("email") or f"staff#{staff.get('id') or staff.get('user_id') or 0}"),
-    }
-
-
-def _log_activity(
-    conn,
-    staff: dict,
-    action_type: str,
-    *,
-    target_type: str = "",
-    target_id: int | None = None,
-    query: str = "",
-    platform: str = "",
-    market: str = "",
-    api_provider: str = "",
-    api_calls: int = 0,
-    result_count: int = 0,
-    metadata: dict | None = None,
-) -> None:
-    ident = _staff_identity(staff)
-    conn.execute(
-        """
-        INSERT INTO kol_activity_log
-            (staff_id, user_id, staff_name, action_type, target_type, target_id, query,
-             platform, market, api_provider, api_calls, result_count, metadata_json, created_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """,
-        (
-            ident["staff_id"],
-            ident["user_id"],
-            ident["staff_name"],
-            action_type,
-            target_type,
-            target_id,
-            query,
-            platform,
-            market,
-            api_provider,
-            int(api_calls or 0),
-            int(result_count or 0),
-            json.dumps(metadata or {}, ensure_ascii=False),
-            _now(),
-        ),
-    )
-
-
-HEADER_ALIASES = {
-    "项目-红人": "project_name",
-    "项目红人": "project_name",
-    "创建日期": "source_created_at",
-    "一级类目": "primary_category",
-    "登记/对接人": "owner_name",
-    "登记对接人": "owner_name",
-    "推广产品": "promoted_product",
-    "红人/媒体": "media_name",
-    "红人媒体": "media_name",
-    "重复": "duplicate_flag",
-    "红人视频链接": "channel_url",
-    "国家": "country",
-    "平台": "platform",
-    "量级": "scale_tier",
-    "粉丝数/访客数": "follower_count",
-    "粉丝数访客数": "follower_count",
-    "内容类型": "content_type",
-    "合作进度": "contact_status",
-    "预算报价": "budget_quote_cents",
-    "审批意见": "approval_note",
-    "频道内容标签": "channel_tags",
-    "合作内容详情": "collaboration_detail",
-    "预算申请": "budget_request",
-    "Affiliate ID": "affiliate_id",
-    "affiliate id": "affiliate_id",
-    "独立站Affiliate Link": "affiliate_link",
-    "独立站affiliate link": "affiliate_link",
-    "折扣码": "discount_code",
-    "亚马逊链": "amazon_link",
-    "短链": "short_link",
-    "回片链接": "content_url",
-    "观看量": "views",
-    "点赞": "likes",
-    "评论": "comments",
-    "转发": "shares",
-    "互动率": "engagement_rate",
-    "产品成本": "product_cost_cents",
-    "预算支出$": "budget_spend_cents",
-    "预算支出": "budget_spend_cents",
-    "直接转化$(独立站)": "direct_conversion_cents",
-    "直接转化独立站": "direct_conversion_cents",
-    "CPV": "cpv",
-    "ROAS": "roas",
-    "channel_name": "channel_name",
-    "channel_url": "channel_url",
-    "platform": "platform",
-    "country": "country",
-    "niche": "niche",
-    "follower_count": "follower_count",
-    "avg_views": "avg_views",
-    "contact_email": "contact_email",
-    "contact_status": "contact_status",
-}
-
-
-def _norm_header(value: str) -> str:
-    text = re.sub(r"\s+", " ", str(value or "").replace("\ufeff", "")).strip()
-    compact = re.sub(r"\s+", "", text)
-    return HEADER_ALIASES.get(text) or HEADER_ALIASES.get(compact) or text.lower().replace(" ", "_")
-
-
-def _parse_count(value) -> int:
-    text = str(value or "").strip().replace(",", "")
-    if not text:
-        return 0
-    multiplier = 1
-    if text.endswith(("W", "w", "万")):
-        multiplier = 10000
-        text = text[:-1]
-    elif text.endswith(("K", "k")):
-        multiplier = 1000
-        text = text[:-1]
-    try:
-        return int(float(text) * multiplier)
-    except ValueError:
-        digits = re.sub(r"[^0-9.]", "", text)
-        return int(float(digits) * multiplier) if digits else 0
-
-
-def _parse_cents(value) -> int:
-    text = str(value or "").strip().replace(",", "")
-    if not text:
-        return 0
-    text = re.sub(r"[$￥¥]", "", text)
-    try:
-        return int(round(float(text) * 100))
-    except ValueError:
-        digits = re.sub(r"[^0-9.]", "", text)
-        return int(round(float(digits) * 100)) if digits else 0
-
-
-def _normalize_platform(value: str) -> str:
-    text = str(value or "").strip().lower()
-    if "youtube" in text or text == "yt":
-        return "youtube"
-    if "tiktok" in text or "抖音" in text or text == "tk":
-        return "tiktok"
-    if "instagram" in text or text == "ig":
-        return "instagram"
-    if "twitter" in text or text == "x":
-        return "twitter"
-    if "reddit" in text:
-        return "reddit"
-    return text or "unknown"
-
-
-COUNTRY_CODE_ALIASES = {
-    "美国": "US",
-    "usa": "US",
-    "united states": "US",
-    "us": "US",
-    "加拿大": "CA",
-    "canada": "CA",
-    "ca": "CA",
-    "澳大利亚": "AU",
-    "australia": "AU",
-    "au": "AU",
-    "英国": "GB",
-    "uk": "GB",
-    "united kingdom": "GB",
-    "gb": "GB",
-    "德国": "DE",
-    "germany": "DE",
-    "de": "DE",
-    "法国": "FR",
-    "france": "FR",
-    "fr": "FR",
-    "日本": "JP",
-    "japan": "JP",
-    "jp": "JP",
-    "韩国": "KR",
-    "south korea": "KR",
-    "kr": "KR",
-    "俄罗斯": "RU",
-    "russia": "RU",
-    "ru": "RU",
-    "西班牙": "ES",
-    "spain": "ES",
-    "es": "ES",
-    "意大利": "IT",
-    "italy": "IT",
-    "it": "IT",
-    "荷兰": "NL",
-    "netherlands": "NL",
-    "nl": "NL",
-    "巴西": "BR",
-    "brazil": "BR",
-    "br": "BR",
-    "墨西哥": "MX",
-    "mexico": "MX",
-    "mx": "MX",
-    "印度": "IN",
-    "india": "IN",
-    "in": "IN",
-    "新加坡": "SG",
-    "singapore": "SG",
-    "sg": "SG",
-    "马来西亚": "MY",
-    "malaysia": "MY",
-    "my": "MY",
-    "泰国": "TH",
-    "thailand": "TH",
-    "th": "TH",
-    "越南": "VN",
-    "vietnam": "VN",
-    "vn": "VN",
-    "菲律宾": "PH",
-    "philippines": "PH",
-    "ph": "PH",
-    "印尼": "ID",
-    "印度尼西亚": "ID",
-    "indonesia": "ID",
-    "id": "ID",
-}
-
-
-def _normalize_country_code(value: str) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    return COUNTRY_CODE_ALIASES.get(text.lower()) or COUNTRY_CODE_ALIASES.get(text) or text.upper()
-
-
-def _country_filter_variants(value: str) -> list[str]:
-    code = _normalize_country_code(value)
-    variants = {str(value or "").strip(), code}
-    for alias, alias_code in COUNTRY_CODE_ALIASES.items():
-        if alias_code == code:
-            variants.add(alias)
-            variants.add(alias.upper())
-    return [item for item in variants if item]
-
-
-def _clean_creator_name(value: str, owner_name: str = "") -> str:
-    text = str(value or "").strip()
-    owner = str(owner_name or "").strip()
-    if owner and text.lower().startswith(owner.lower()):
-        text = re.sub(rf"^{re.escape(owner)}\\s*[-_–—]\\s*", "", text, flags=re.IGNORECASE).strip()
-    text = re.sub(r"^[\u4e00-\u9fff]{2,8}\s*[-_–—]\s*", "", text).strip()
-    text = re.sub(r"\s*[-_–—]?\s*【[^】]*(youtube|tiktok|instagram|reddit|twitter|x|yt|tk|ig)[^】]*】\s*$", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"\s*[-_–—]?\s*\[[^\]]*(youtube|tiktok|instagram|reddit|twitter|x|yt|tk|ig)[^\]]*\]\s*$", "", text, flags=re.IGNORECASE)
-    return text.strip(" -_–—") or str(value or "").strip()
-
-
-def _row_contact_status(row: dict[str, str]) -> str:
-    status = str(row.get("contact_status") or "").strip()
-    if status:
-        return status
-    if str(row.get("content_url") or "").strip():
-        return "已回片"
-    return "cold"
-
-
-def _xlsx_rows(raw: bytes) -> list[dict[str, str]]:
-    ns = {"a": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
-    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
-        shared: list[str] = []
-        if "xl/sharedStrings.xml" in zf.namelist():
-            root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
-            for item in root.findall("a:si", ns):
-                shared.append("".join(t.text or "" for t in item.findall(".//a:t", ns)))
-        sheet_candidates = sorted(name for name in zf.namelist() if name.startswith("xl/worksheets/sheet") and name.endswith(".xml"))
-        if not sheet_candidates:
-            return []
-        sheet_name = sheet_candidates[0]
-        root = ET.fromstring(zf.read(sheet_name))
-        matrix: list[list[str]] = []
-        for row in root.findall(".//a:sheetData/a:row", ns):
-            values: dict[int, str] = {}
-            for cell in row.findall("a:c", ns):
-                ref = str(cell.attrib.get("r") or "")
-                letters = re.sub(r"[^A-Z]", "", ref.upper())
-                col = 0
-                for ch in letters:
-                    col = col * 26 + (ord(ch) - 64)
-                col = max(0, col - 1)
-                ctype = cell.attrib.get("t")
-                value = ""
-                if ctype == "inlineStr":
-                    value = "".join(t.text or "" for t in cell.findall(".//a:t", ns))
-                else:
-                    node = cell.find("a:v", ns)
-                    raw_value = node.text if node is not None else ""
-                    if ctype == "s" and raw_value != "":
-                        idx = int(raw_value)
-                        value = shared[idx] if 0 <= idx < len(shared) else ""
-                    else:
-                        value = raw_value or ""
-                values[col] = str(value).strip()
-            if values:
-                width = max(values) + 1
-                matrix.append([values.get(i, "") for i in range(width)])
-        if not matrix:
-            return []
-        headers = [_norm_header(cell) for cell in matrix[0]]
-        rows: list[dict[str, str]] = []
-        for raw_row in matrix[1:]:
-            row = {headers[i]: (raw_row[i] if i < len(raw_row) else "") for i in range(len(headers)) if headers[i]}
-            if any(str(v).strip() for v in row.values()):
-                rows.append(row)
-        return rows
-
-
-def _uploaded_rows(filename: str, raw: bytes) -> list[dict[str, str]]:
-    lower = filename.lower()
-    if lower.endswith(".xlsx"):
-        return _xlsx_rows(raw)
-    text = raw.decode("utf-8-sig")
-    return [{_norm_header(k): v for k, v in row.items()} for row in csv.DictReader(io.StringIO(text))]
-
-
-def _staff_id_by_owner_name(conn, owner_name: str) -> int | None:
-    owner = str(owner_name or "").strip()
-    if not owner:
-        return None
-    row = conn.execute(
-        """
-        SELECT s.id
-        FROM staff s
-        LEFT JOIN users u ON u.id = s.user_id
-        WHERE lower(COALESCE(u.name, u.email, '')) = lower(?)
-           OR lower(COALESCE(u.email, '')) LIKE lower(?)
-        ORDER BY s.active DESC, s.id DESC
-        LIMIT 1
-        """,
-        (owner, f"{owner}%"),
-    ).fetchone()
-    return int(row["id"]) if row else None
-
-
-def _verify_confirm_password(staff: dict, confirm_password: str | None) -> None:
-    if not confirm_password:
-        raise HTTPException(status_code=400, detail="confirm_password required")
-    row = get_conn().execute("SELECT password_hash FROM users WHERE id = ?", (int(staff.get("user_id") or staff.get("id") or 0),)).fetchone()
-    if not row or not verify_password(confirm_password, row["password_hash"]):
-        raise HTTPException(status_code=403, detail="Invalid confirmation password")
-
-
-def _content_rollup_sql(where_sql: str = "", params: list | None = None) -> dict:
-    params = params or []
-    row = get_conn().execute(
-        f"""
-        SELECT
-            COUNT(DISTINCT k.id) AS kol_count,
-            COUNT(DISTINCT ca.id) AS campaign_count,
-            COUNT(DISTINCT co.id) AS content_count,
-            COALESCE(SUM(ca.cost_cents), 0) AS total_cost_cents,
-            COALESCE(SUM(co.views), 0) AS total_views,
-            COALESCE(SUM(co.likes), 0) AS total_likes,
-            COALESCE(SUM(co.comments), 0) AS total_comments,
-            COALESCE(SUM(co.shares), 0) AS total_shares,
-            COALESCE(SUM(at.attributed_revenue_cents), 0) AS total_revenue_cents,
-            COALESCE(AVG(co.ai_quality_score), 0) AS avg_quality_score
-        FROM kols k
-        LEFT JOIN kol_campaigns ca ON ca.kol_id = k.id
-        LEFT JOIN kol_content co ON co.campaign_id = ca.id
-        LEFT JOIN kol_attribution at ON at.content_id = co.id
-        {where_sql}
-        """,
-        params,
-    ).fetchone()
-    data = _dict(row)
-    data["avg_engagement_rate"] = engagement_rate(
-        data.get("total_likes", 0),
-        data.get("total_comments", 0),
-        data.get("total_shares", 0),
-        data.get("total_views", 0),
-    )
-    data["cpv"] = cpv(data.get("total_cost_cents", 0), data.get("total_views", 0))
-    data["roi"] = roi(data.get("total_cost_cents", 0), data.get("total_revenue_cents", 0))
-    return data
 
 
 @router.get("/kols")
@@ -700,6 +408,7 @@ def list_kols(
         item["engagement_rate"] = engagement_rate(item.get("likes", 0), item.get("comments", 0), item.get("shares", 0), item.get("views", 0))
         item["cpv"] = cpv(item.get("cost_cents", 0), item.get("views", 0))
         item["roi"] = roi(item.get("cost_cents", 0), item.get("revenue_cents", 0))
+        item.update(_dossier_rollup(conn, int(item["id"])))
         items.append(item)
     return {
         "items": items,
@@ -775,7 +484,7 @@ def _upsert_candidate(conn, payload: dict) -> int:
             _now(),
         ),
     )
-    return int(cur.lastrowid)
+    return _insert_id(conn, cur, "kol_candidates")
 
 
 def _persist_search_candidates(items: list[dict], body: dict, platform: str, market: str) -> list[int]:
@@ -801,25 +510,54 @@ async def search_kol_platform(body: dict, staff=Depends(require_tab("kol_ops", "
         max_results=_int(body.get("max_results"), 25),
     )
     candidate_ids = await db_write(lambda: _persist_search_candidates(result.get("items", []), body, platform, market))
-    conn = get_conn()
-    _log_activity(
-        conn,
-        staff,
-        "platform_search",
-        query=query,
-        platform=platform,
-        market=market,
-        api_provider=str(result.get("provider") or result.get("source") or platform),
-        api_calls=1,
-        result_count=len(result.get("items", [])),
-        metadata={"saved_candidates": len(candidate_ids), "niche": body.get("niche", "")},
+    await db_write(
+        lambda: _log_activity_commit(
+            staff,
+            "platform_search",
+            query=query,
+            platform=platform,
+            market=market,
+            api_provider=str(result.get("provider") or result.get("source") or platform),
+            api_calls=1,
+            result_count=len(result.get("items", [])),
+            metadata={"saved_candidates": len(candidate_ids), "niche": body.get("niche", "")},
+        )
     )
-    conn.commit()
     return {
         **result,
         "candidate_ids": candidate_ids,
         "saved_candidates": len(candidate_ids),
     }
+
+
+@router.post("/tools/analyze-url")
+async def analyze_kol_url_tool(body: dict, staff=Depends(require_tab("kol_ops", "write"))):
+    url = str(body.get("url") or "").strip()
+    platform = str(body.get("platform") or "").strip().lower()
+    creator_handle = str(body.get("creator_handle") or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="url is required")
+    result = await analyze_kol_url_standalone(url, platform_hint=platform, creator_handle=creator_handle)
+    providers = result.get("providers") or []
+    await db_write(
+        lambda: _log_activity_commit(
+            staff,
+            "url_analyze",
+            target_type="url",
+            query=url,
+            platform=str((result.get("scrape") or {}).get("platform") or platform),
+            api_provider="+".join(providers) if providers else str(result.get("method") or "scrape"),
+            api_calls=max(1, len(providers)),
+            result_count=1 if result.get("status") != "failed" else 0,
+            metadata={
+                "status": result.get("status"),
+                "quality_score": result.get("quality_score"),
+                "title": (result.get("scrape") or {}).get("title"),
+                "error": result.get("error"),
+            },
+        )
+    )
+    return result
 
 
 @router.get("/candidates")
@@ -935,6 +673,7 @@ def promote_candidate(candidate_id: int, body: dict | None = None, staff=Depends
             _now(),
         ),
     )
+    kol_id = _insert_id(conn, cur, "kols")
     conn.execute(
         """
         UPDATE kol_candidates
@@ -950,10 +689,10 @@ def promote_candidate(candidate_id: int, body: dict | None = None, staff=Depends
         target_type="candidate",
         target_id=int(candidate_id),
         result_count=1,
-        metadata={"kol_id": int(cur.lastrowid)},
+        metadata={"kol_id": kol_id},
     )
     conn.commit()
-    return {"id": cur.lastrowid, "candidate_id": int(candidate_id)}
+    return {"id": kol_id, "candidate_id": int(candidate_id)}
 
 
 @router.get("/kols/{kol_id}")
@@ -1002,13 +741,114 @@ def get_kol(kol_id: int, staff=Depends(require_tab("kol_ops", "read"))):
         "campaigns": _items(campaigns),
         "content": _items(content),
         "attribution": _items(attribution),
+        "dossier": get_kol_dossier(int(kol_id)),
     }
+
+
+def _log_kol_system_action(
+    staff: dict,
+    action_type: str,
+    kol_id: int,
+    *,
+    query: str = "",
+    platform: str = "",
+    market: str = "",
+    api_provider: str = "",
+    api_calls: int = 0,
+    result_count: int = 0,
+    metadata: dict | None = None,
+) -> None:
+    _log_activity_commit(
+        staff,
+        action_type,
+        target_type="kol",
+        target_id=int(kol_id),
+        query=query,
+        platform=platform,
+        market=market,
+        api_provider=api_provider,
+        api_calls=api_calls,
+        result_count=result_count,
+        metadata=metadata,
+    )
+
+
+@router.post("/kols/{kol_id}/scan-account")
+async def scan_kol_account_endpoint(kol_id: int, body: dict = Body(default={}), staff=Depends(require_tab("kol_ops", "write"))):
+    result = await scan_kol_account(int(kol_id), max_posts=_int(body.get("max_posts"), 50))
+    await db_write(
+        lambda: _log_kol_system_action(
+            staff,
+            "account_scan",
+            int(kol_id),
+            query=str(result.get("handle") or ""),
+            platform=str(result.get("platform") or ""),
+            api_provider="apify",
+            api_calls=1,
+            result_count=_int(result.get("content_count")),
+            metadata={"snapshot_id": result.get("snapshot_id"), "status": result.get("status")},
+        )
+    )
+    return result
+
+
+@router.post("/kols/{kol_id}/analyze-account")
+async def analyze_kol_account_endpoint(kol_id: int, body: dict = Body(default={}), staff=Depends(require_tab("kol_ops", "write"))):
+    result = await analyze_kol_account(
+        int(kol_id),
+        product_sku=str(body.get("product_sku") or ""),
+        snapshot_id=_int(body.get("snapshot_id"), 0) or None,
+    )
+    await db_write(
+        lambda: _log_kol_system_action(
+            staff,
+            "account_analyze",
+            int(kol_id),
+            query=str(body.get("product_sku") or ""),
+            api_provider=str(result.get("method") or "metrics"),
+            api_calls=1 if "claude" in str(result.get("method") or "") else 0,
+            result_count=1,
+            metadata={"report_id": result.get("report_id"), "snapshot_id": result.get("snapshot_id")},
+        )
+    )
+    return result
+
+
+@router.get("/kols/{kol_id}/dossier")
+def fetch_kol_dossier(kol_id: int, staff=Depends(require_tab("kol_ops", "read"))):
+    conn = get_conn()
+    row = conn.execute("SELECT platform, country, channel_name FROM kols WHERE id = ?", (int(kol_id),)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="KOL not found")
+    _log_activity(
+        conn,
+        staff,
+        "view_kol_dossier",
+        target_type="kol",
+        target_id=int(kol_id),
+        query=str(row["channel_name"] or ""),
+        platform=str(row["platform"] or ""),
+        market=str(row["country"] or ""),
+    )
+    conn.commit()
+    return get_kol_dossier(int(kol_id))
+
+
+@router.get("/kols/{kol_id}/posts")
+def fetch_kol_posts(kol_id: int, limit: int = 25, offset: int = 0, staff=Depends(require_tab("kol_ops", "read"))):
+    return list_kol_posts(int(kol_id), limit=limit, offset=offset)
+
+
+@router.get("/kols/{kol_id}/comments")
+def fetch_kol_comments(kol_id: int, limit: int = 25, offset: int = 0, staff=Depends(require_tab("kol_ops", "read"))):
+    return list_kol_comments(int(kol_id), limit=limit, offset=offset)
 
 
 @router.post("/kols")
 def create_kol(body: dict, staff=Depends(require_tab("kol_ops", "write"))):
     if not body.get("channel_name") or not body.get("platform"):
         raise HTTPException(status_code=400, detail="channel_name and platform required")
+    platform = _normalize_platform(body.get("platform", ""))
     conn = get_conn()
     cur = conn.execute(
         """
@@ -1024,7 +864,7 @@ def create_kol(body: dict, staff=Depends(require_tab("kol_ops", "write"))):
         (
             _clean_creator_name(body.get("channel_name", ""), body.get("owner_name", "")),
             body.get("channel_url", ""),
-            body.get("platform"),
+            platform,
             _normalize_country_code(body.get("country", "")),
             body.get("niche", ""),
             int(body.get("follower_count") or 0),
@@ -1054,9 +894,10 @@ def create_kol(body: dict, staff=Depends(require_tab("kol_ops", "write"))):
             _now(),
         ),
     )
-    _log_activity(conn, staff, "create_kol", target_type="kol", target_id=int(cur.lastrowid), result_count=1)
+    kol_id = _insert_id(conn, cur, "kols")
+    _log_activity(conn, staff, "create_kol", target_type="kol", target_id=kol_id, result_count=1)
     conn.commit()
-    return {"id": cur.lastrowid}
+    return {"id": kol_id}
 
 
 @router.patch("/kols/{kol_id}")
@@ -1233,7 +1074,7 @@ def import_kols_csv(request: Request, file: UploadFile = File(...), staff=Depend
                     _now(),
                 ),
             )
-            kol_id = int(cur.lastrowid)
+            kol_id = _insert_id(conn, cur, "kols")
             count += 1
         campaign_id = None
         product = str(row.get("promoted_product") or "").strip()
@@ -1261,7 +1102,7 @@ def import_kols_csv(request: Request, file: UploadFile = File(...), staff=Depend
                     _now(),
                 ),
             )
-            campaign_id = int(cur.lastrowid)
+            campaign_id = _insert_id(conn, cur, "kol_campaigns")
             campaigns += 1
         content_url = str(row.get("content_url") or "").strip()
         if content_url and campaign_id:
@@ -1286,6 +1127,7 @@ def import_kols_csv(request: Request, file: UploadFile = File(...), staff=Depend
                     _now(),
                 ),
             )
+            content_id = _insert_id(conn, cur, "kol_content")
             content_count += 1
             if direct_conversion_cents:
                 conn.execute(
@@ -1294,7 +1136,7 @@ def import_kols_csv(request: Request, file: UploadFile = File(...), staff=Depend
                         (content_id, shopify_order_id, attributed_revenue_cents, attributed_at)
                     VALUES (?,?,?,?)
                     """,
-                    (int(cur.lastrowid), f"import:{file.filename}:{content_count}", direct_conversion_cents, _now()),
+                    (content_id, f"import:{file.filename}:{content_count}", direct_conversion_cents, _now()),
                 )
     _log_activity(
         conn,
@@ -1326,7 +1168,7 @@ def create_outreach(kol_id: int, body: dict, staff=Depends(require_tab("kol_ops"
     conn.execute("UPDATE kols SET updated_at = ? WHERE id = ?", (_now(), int(kol_id)))
     _log_activity(conn, staff, "outreach_add", target_type="kol", target_id=int(kol_id), result_count=1, metadata={"action_type": body.get("action_type")})
     conn.commit()
-    return {"id": cur.lastrowid}
+    return {"id": _insert_id(conn, cur, "kol_outreach")}
 
 
 @router.get("/kols/{kol_id}/outreach")
@@ -1359,9 +1201,10 @@ def create_campaign(kol_id: int, body: dict, staff=Depends(require_tab("kol_ops"
         ),
     )
     conn.execute("UPDATE kols SET updated_at = ? WHERE id = ?", (_now(), int(kol_id)))
-    _log_activity(conn, staff, "campaign_create", target_type="kol", target_id=int(kol_id), result_count=1, metadata={"campaign_id": int(cur.lastrowid), "product_sku": body.get("product_sku", "")})
+    campaign_id = _insert_id(conn, cur, "kol_campaigns")
+    _log_activity(conn, staff, "campaign_create", target_type="kol", target_id=int(kol_id), result_count=1, metadata={"campaign_id": campaign_id, "product_sku": body.get("product_sku", "")})
     conn.commit()
-    return {"id": cur.lastrowid}
+    return {"id": campaign_id}
 
 
 @router.patch("/campaigns/{campaign_id}")
@@ -1427,9 +1270,10 @@ def create_content(body: dict, staff=Depends(require_tab("kol_ops", "write"))):
     )
     conn.execute("UPDATE kol_campaigns SET status = ? WHERE id = ?", ("已回片", campaign_id))
     conn.execute("UPDATE kols SET contact_status = ?, updated_at = ? WHERE id = ?", ("已回片", _now(), int(campaign["kol_id"])))
-    _log_activity(conn, staff, "content_create", target_type="content", target_id=int(cur.lastrowid), result_count=1, metadata={"campaign_id": campaign_id, "views": views})
+    content_id = _insert_id(conn, cur, "kol_content")
+    _log_activity(conn, staff, "content_create", target_type="content", target_id=content_id, result_count=1, metadata={"campaign_id": campaign_id, "views": views})
     conn.commit()
-    return {"id": cur.lastrowid}
+    return {"id": content_id}
 
 
 @router.patch("/content/{content_id}")
@@ -1478,15 +1322,74 @@ async def score_content(
         if queue is None:
             raise HTTPException(status_code=503, detail="job queue unavailable")
         task_id = await queue.enqueue("score_kol_content", {"content_id": int(content_id)})
-        conn = get_conn()
-        _log_activity(conn, staff, "ai_score_queue", target_type="content", target_id=int(content_id), api_provider="claude", api_calls=1, result_count=1, metadata={"job_id": task_id})
-        conn.commit()
+        await db_write(
+            lambda: _log_activity_commit(
+                staff,
+                "ai_score_queue",
+                target_type="content",
+                target_id=int(content_id),
+                api_provider="claude",
+                api_calls=1,
+                result_count=1,
+                metadata={"job_id": task_id},
+            )
+        )
         return {"status": "queued", "job_id": task_id, "content_id": int(content_id)}
     try:
         result = await score_kol_content(content_id)
-        conn = get_conn()
-        _log_activity(conn, staff, "ai_score", target_type="content", target_id=int(content_id), api_provider="claude", api_calls=1, result_count=1, metadata={"score": result.get("quality_score")})
-        conn.commit()
+        await db_write(
+            lambda: _log_activity_commit(
+                staff,
+                "ai_score",
+                target_type="content",
+                target_id=int(content_id),
+                api_provider="claude",
+                api_calls=1,
+                result_count=1,
+                metadata={"score": result.get("quality_score")},
+            )
+        )
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/content/{content_id}/analyze-url")
+async def analyze_content_url(
+    content_id: int,
+    staff=Depends(require_tab("kol_ops", "write")),
+):
+    try:
+        result = await analyze_kol_content_url(content_id)
+        providers = []
+        for layer in result.get("layers_used") or []:
+            text = str(layer).lower()
+            if "gpt" in text and "openai" not in providers:
+                providers.append("openai")
+            if "gemini" in text and "gemini" not in providers:
+                providers.append("gemini")
+            if "claude" in text or "text_" in text:
+                if "claude" not in providers:
+                    providers.append("claude")
+        if not providers and result.get("status") == "failed":
+            providers.append("scrape")
+        await db_write(
+            lambda: _log_activity_commit(
+                staff,
+                "content_analyze_url",
+                target_type="content",
+                target_id=int(content_id),
+                api_provider="+".join(providers) if providers else str(result.get("method") or "analysis"),
+                api_calls=max(1, len(providers)),
+                result_count=1 if result.get("status") != "failed" else 0,
+                metadata={
+                    "status": result.get("status"),
+                    "method": result.get("method"),
+                    "quality_score": result.get("quality_score"),
+                    "error": result.get("error"),
+                },
+            )
+        )
         return result
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1513,9 +1416,17 @@ def attribute_content(content_id: int, body: dict, staff=Depends(require_tab("ko
         """,
         (int(content_id), body.get("shopify_order_id"), _int(body.get("attributed_revenue_cents")), _now()),
     )
+    attribution = conn.execute(
+        """
+        SELECT id FROM kol_attribution
+        WHERE content_id = ? AND shopify_order_id = ?
+        LIMIT 1
+        """,
+        (int(content_id), body.get("shopify_order_id")),
+    ).fetchone()
     _log_activity(conn, staff, "attribution_add", target_type="content", target_id=int(content_id), result_count=1, metadata={"shopify_order_id": body.get("shopify_order_id", "")})
     conn.commit()
-    return {"id": cur.lastrowid}
+    return {"id": int(attribution["id"]) if attribution else None}
 
 
 @router.get("/dashboard/staff-performance")
@@ -1570,12 +1481,12 @@ def staff_activity(
             COALESCE(staff_id, 0) AS staff_id,
             COALESCE(user_id, 0) AS user_id,
             COUNT(*) AS actions,
-            SUM(CASE WHEN action_type='platform_search' THEN 1 ELSE 0 END) AS searches,
-            SUM(CASE WHEN action_type='view_kol' THEN 1 ELSE 0 END) AS kol_views,
-            SUM(CASE WHEN action_type IN ('candidate_review','candidate_promote') THEN 1 ELSE 0 END) AS reviews,
-            SUM(CASE WHEN action_type='import_sheet' THEN 1 ELSE 0 END) AS imports,
-            SUM(CASE WHEN action_type IN ('data_update','content_create') THEN 1 ELSE 0 END) AS data_updates,
-            SUM(CASE WHEN action_type LIKE 'ai_%' THEN 1 ELSE 0 END) AS ai_actions,
+            COALESCE(SUM(CASE WHEN action_type='platform_search' THEN 1 ELSE 0 END), 0) AS searches,
+            COALESCE(SUM(CASE WHEN action_type='view_kol' THEN 1 ELSE 0 END), 0) AS kol_views,
+            COALESCE(SUM(CASE WHEN action_type IN ('candidate_review','candidate_promote') THEN 1 ELSE 0 END), 0) AS reviews,
+            COALESCE(SUM(CASE WHEN action_type='import_sheet' THEN 1 ELSE 0 END), 0) AS imports,
+            COALESCE(SUM(CASE WHEN action_type IN ('data_update','content_create') THEN 1 ELSE 0 END), 0) AS data_updates,
+            COALESCE(SUM(CASE WHEN SUBSTR(action_type, 1, 3) = 'ai_' THEN 1 ELSE 0 END), 0) AS ai_actions,
             COALESCE(SUM(api_calls), 0) AS api_calls,
             COALESCE(SUM(result_count), 0) AS result_count,
             MAX(created_at) AS last_action_at
@@ -1600,12 +1511,12 @@ def staff_activity(
         """
         SELECT
             COUNT(*) AS actions,
-            SUM(CASE WHEN action_type='platform_search' THEN 1 ELSE 0 END) AS searches,
-            SUM(CASE WHEN action_type='view_kol' THEN 1 ELSE 0 END) AS kol_views,
-            SUM(CASE WHEN action_type IN ('candidate_review','candidate_promote') THEN 1 ELSE 0 END) AS reviews,
-            SUM(CASE WHEN action_type='import_sheet' THEN 1 ELSE 0 END) AS imports,
-            SUM(CASE WHEN action_type IN ('data_update','content_create') THEN 1 ELSE 0 END) AS data_updates,
-            SUM(CASE WHEN action_type LIKE 'ai_%' THEN 1 ELSE 0 END) AS ai_actions,
+            COALESCE(SUM(CASE WHEN action_type='platform_search' THEN 1 ELSE 0 END), 0) AS searches,
+            COALESCE(SUM(CASE WHEN action_type='view_kol' THEN 1 ELSE 0 END), 0) AS kol_views,
+            COALESCE(SUM(CASE WHEN action_type IN ('candidate_review','candidate_promote') THEN 1 ELSE 0 END), 0) AS reviews,
+            COALESCE(SUM(CASE WHEN action_type='import_sheet' THEN 1 ELSE 0 END), 0) AS imports,
+            COALESCE(SUM(CASE WHEN action_type IN ('data_update','content_create') THEN 1 ELSE 0 END), 0) AS data_updates,
+            COALESCE(SUM(CASE WHEN SUBSTR(action_type, 1, 3) = 'ai_' THEN 1 ELSE 0 END), 0) AS ai_actions,
             COALESCE(SUM(api_calls), 0) AS api_calls,
             COALESCE(SUM(result_count), 0) AS result_count
         FROM kol_activity_log
