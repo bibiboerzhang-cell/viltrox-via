@@ -1,0 +1,9 @@
+import type { VkpiLinkRow } from '../vkpiTypes';
+import { numberFormatter } from '../shared/vkpiFormatters';
+
+export function LinkTable({ links, onSelectLink, onPauseLink, onArchiveLink, onHealthCheckLink }: { links: VkpiLinkRow[]; onSelectLink?: (link: VkpiLinkRow) => void; onPauseLink?: (linkId: string) => Promise<void>; onArchiveLink?: (linkId: string) => Promise<void>; onHealthCheckLink?: (linkId: string) => Promise<void> }) {
+  return (
+    <div className="vkpi-table-wrap"><table className="vkpi-table"><thead><tr><th>Slug</th><th>目标</th><th>项目</th><th>点击</th><th>有效点击</th><th>机器人</th><th>状态</th><th>健康</th><th>更新</th><th>操作</th></tr></thead><tbody>{links.length ? links.map((link) => <tr key={link.id}><td><button className="vkpi-link-button" type="button" onClick={() => onSelectLink?.(link)}><strong>{link.slug}</strong></button></td><td className="vkpi-url-cell">{link.destination}</td><td>{link.projectName || link.projectId || '-'}</td><td>{numberFormatter.format(link.clicks)}</td><td>{numberFormatter.format(link.validClicks)}</td><td>{numberFormatter.format(link.botClicks)}</td><td>{link.status}</td><td>{link.healthStatus}</td><td>{link.updatedAt}</td><td><button className="vkpi-link-button" type="button" onClick={() => onSelectLink?.(link)}>详情</button> <button className="vkpi-link-button" type="button" onClick={() => void onHealthCheckLink?.(link.id)}>检查</button> <button className="vkpi-link-button" type="button" onClick={() => void onPauseLink?.(link.id)} disabled={link.status === 'paused' || link.status === 'archived'}>暂停</button> <button className="vkpi-link-button" type="button" onClick={() => void onArchiveLink?.(link.id)} disabled={link.status === 'archived'}>归档</button></td></tr>) : <tr><td className="vkpi-table-empty" colSpan={10}>暂无短链。请创建真实短链后再查看点击和归因。</td></tr>}</tbody></table></div>
+  );
+}
+

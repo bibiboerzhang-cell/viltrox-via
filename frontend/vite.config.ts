@@ -1,14 +1,12 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig(({ command }) => {
   const isBuild = command === "build";
-  const adminApiTarget = process.env.VITE_ADMIN_API_TARGET || process.env.VITE_API_PROXY_TARGET || "http://127.0.0.1:8102";
-  const publicApiTarget = process.env.VITE_PUBLIC_API_TARGET || "http://127.0.0.1:8101";
+  const apiTarget = process.env.VITE_API_PROXY_TARGET || process.env.VITE_ADMIN_API_TARGET || "http://127.0.0.1:8102";
 
   return {
-    plugins: [react(), tailwindcss()],
+    plugins: [react()],
     esbuild: isBuild
       ? {
           drop: ["console", "debugger"],
@@ -30,40 +28,12 @@ export default defineConfig(({ command }) => {
       host: "0.0.0.0",
       port: 5173,
       proxy: {
-        "/api/admin": {
-          target: adminApiTarget,
-          changeOrigin: true,
-        },
-        "/api/intelligence": {
-          target: adminApiTarget,
-          changeOrigin: true,
-        },
-        "/api/vios": {
-          target: adminApiTarget,
-          changeOrigin: true,
-        },
-        "/api/verify": {
-          target: adminApiTarget,
-          changeOrigin: true,
-        },
         "/api": {
-          target: adminApiTarget,
+          target: apiTarget,
           changeOrigin: true,
         },
         "/uploads": {
-          target: publicApiTarget,
-          changeOrigin: true,
-        },
-        "/frames": {
-          target: publicApiTarget,
-          changeOrigin: true,
-        },
-        "/creator_profiles": {
-          target: publicApiTarget,
-          changeOrigin: true,
-        },
-        "/r": {
-          target: publicApiTarget,
+          target: apiTarget,
           changeOrigin: true,
         },
       },

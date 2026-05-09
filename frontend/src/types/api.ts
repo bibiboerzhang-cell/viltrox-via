@@ -1,1 +1,6 @@
-export * from "../lib/api";
+export type {
+  AuthUser,
+  BasicStatusResponse,
+  LoginResponse,
+  MeResponse,
+} from "../lib/api";

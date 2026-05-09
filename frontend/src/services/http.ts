@@ -2,7 +2,11 @@ export {
   API_BASE,
   apiFetch,
   buildApiUrl,
-  buildEventStreamUrl,
   jsonBody,
-  uploadVideo,
+} from "../lib/api";
+export type {
+  AuthUser,
+  BasicStatusResponse,
+  LoginResponse,
+  MeResponse,
 } from "../lib/api";
