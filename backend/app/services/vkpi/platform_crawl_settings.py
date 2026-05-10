@@ -57,6 +57,16 @@ DEFAULT_BUDGETS = {
     "audience_graph": 0,
 }
 
+APIFY_CRAWL_PLATFORMS = {
+    "instagram",
+    "tiktok",
+    "xiaohongshu",
+    "bilibili",
+    "facebook",
+    "reddit",
+    "x",
+}
+
 
 def _utcnow() -> str:
     return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -83,6 +93,20 @@ def _bool(value: Any) -> bool | int:
         value = value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
     value = bool(value)
     return value if is_postgres_runtime() else (1 if value else 0)
+
+
+def _enabled(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
+    return bool(value)
+
+
+def _budget_available(row: dict[str, Any] | None) -> tuple[bool, float, float, float]:
+    row = row or {}
+    monthly = float(row.get("monthly_limit_usd") or 0)
+    spent = float(row.get("current_month_spent") or 0)
+    remaining = max(monthly - spent, 0)
+    return _enabled(row.get("enabled")) and monthly > 0 and remaining > 0, monthly, spent, remaining
 
 
 def ensure_defaults() -> None:
@@ -347,6 +371,45 @@ def budget_settings() -> dict[str, Any]:
     ensure_defaults()
     rows = get_conn().execute("SELECT * FROM vkpi_budget_settings ORDER BY budget_key").fetchall()
     return {"budgets": [dict(row) for row in rows]}
+
+
+def crawl_budget_gate(platform: str) -> dict[str, Any]:
+    """Return the global budget gate used by live platform crawls.
+
+    A platform-level monthly budget is not enough by itself. Live crawling also
+    needs the global crawl budget enabled, and Apify-backed platforms need the
+    Apify budget enabled. This keeps Settings and Data Analysis refresh behavior
+    aligned with the management budget controls.
+    """
+    platform_key = str(platform or "other").strip().lower()
+    budgets = {str(row.get("budget_key") or "").lower(): dict(row) for row in budget_settings().get("budgets") or []}
+
+    crawl_total_ok, crawl_monthly, crawl_spent, crawl_remaining = _budget_available(budgets.get("crawl_total"))
+    if not crawl_total_ok:
+        return {
+            "allowed": False,
+            "reason": "crawl_total_budget_disabled",
+            "message": "全局 crawl_total 预算未启用或余额为 0，未执行外部抓取。",
+            "budget_key": "crawl_total",
+            "monthly_limit_usd": crawl_monthly,
+            "current_month_spent_usd": crawl_spent,
+            "remaining_usd": crawl_remaining,
+        }
+
+    if platform_key in APIFY_CRAWL_PLATFORMS:
+        apify_ok, apify_monthly, apify_spent, apify_remaining = _budget_available(budgets.get("apify"))
+        if not apify_ok:
+            return {
+                "allowed": False,
+                "reason": "apify_budget_disabled",
+                "message": "该平台走 Apify 链路，apify 预算未启用或余额为 0，未执行外部抓取。",
+                "budget_key": "apify",
+                "monthly_limit_usd": apify_monthly,
+                "current_month_spent_usd": apify_spent,
+                "remaining_usd": apify_remaining,
+            }
+
+    return {"allowed": True, "reason": "passed", "message": "预算闸门通过。"}
 
 
 def control_status() -> dict[str, Any]:

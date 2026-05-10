@@ -33,10 +33,40 @@ interface AccountDrawerProps {
   snapshots: Row[];
   posts: Row[];
   accounts: Row[];
+  platformCrawlSettings?: Row[];
+  budgetSettings?: Row[];
   busy: boolean;
   onClose: () => void;
   onRefresh: (id: string) => void;
   onToggleCrawl: (id: string, enabled: boolean) => void;
+}
+
+const APIFY_CRAWL_PLATFORMS = new Set([
+  'instagram',
+  'tiktok',
+  'xiaohongshu',
+  'bilibili',
+  'facebook',
+  'reddit',
+  'x',
+]);
+
+function enabledValue(value: unknown): boolean {
+  if (typeof value === 'string') {
+    return ['1', 'true', 'yes', 'on', 'enabled'].includes(value.trim().toLowerCase());
+  }
+  return value === true || value === 1;
+}
+
+function numberValue(value: unknown): number {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function budgetReady(row?: Row): boolean {
+  return enabledValue(row?.enabled)
+    && numberValue(row?.monthly_limit_usd) > 0
+    && numberValue(row?.monthly_limit_usd) > numberValue(row?.current_month_spent);
 }
 
 export function AccountDrawer({
@@ -44,6 +74,8 @@ export function AccountDrawer({
   snapshots,
   posts,
   accounts,
+  platformCrawlSettings = [],
+  budgetSettings = [],
   busy,
   onClose,
   onRefresh,
@@ -56,8 +88,74 @@ export function AccountDrawer({
     return <aside className="da-account-drawer" />;
   }
 
-  const crawlEnabled = String(rowString(account, ['crawl_enabled'], '0')) === '1'
-    || rowString(account, ['crawl_enabled'], '') === 'true';
+  const platformKey = rowString(account, ['platform'], 'other').toLowerCase();
+  const crawlEnabled = enabledValue(rowString(account, ['crawl_enabled'], '0'));
+  const platformSettings = platformCrawlSettings.find(
+    (row) => String(row.platform || '').toLowerCase() === platformKey,
+  );
+  const crawlTotalBudget = budgetSettings.find(
+    (row) => String(row.budget_key || '').toLowerCase() === 'crawl_total',
+  );
+  const apifyBudget = budgetSettings.find(
+    (row) => String(row.budget_key || '').toLowerCase() === 'apify',
+  );
+  const platformLimitReady = numberValue(platformSettings?.daily_account_limit) > 0
+    && numberValue(platformSettings?.posts_per_account) > 0;
+  const apiStatus = String(platformSettings?.last_test_status || 'not_configured');
+  const apiReady = !['not_configured', 'failed', 'error'].includes(apiStatus.toLowerCase());
+  const crawlGateItems = [
+    {
+      key: 'account',
+      label: '账号抓取',
+      ok: crawlEnabled,
+      detail: crawlEnabled ? '已开启' : '该账号未开启抓取',
+    },
+    {
+      key: 'platform',
+      label: '平台开关',
+      ok: enabledValue(platformSettings?.crawl_enabled),
+      detail: enabledValue(platformSettings?.crawl_enabled) ? '平台抓取已开启' : `${platformDisplay(platformKey)} 平台抓取关闭`,
+    },
+    {
+      key: 'limit',
+      label: '平台限制',
+      ok: platformLimitReady,
+      detail: platformLimitReady
+        ? `每日 ${numberValue(platformSettings?.daily_account_limit)} 个账号 / 每号 ${numberValue(platformSettings?.posts_per_account)} 条内容`
+        : '每日账号数或每号内容数为 0',
+    },
+    {
+      key: 'platform-budget',
+      label: '平台月预算',
+      ok: numberValue(platformSettings?.monthly_budget_usd) > 0,
+      detail: numberValue(platformSettings?.monthly_budget_usd) > 0
+        ? `$${numberValue(platformSettings?.monthly_budget_usd)}`
+        : '平台月预算为 0',
+    },
+    {
+      key: 'crawl-total',
+      label: '全局 crawl_total',
+      ok: budgetReady(crawlTotalBudget),
+      detail: budgetReady(crawlTotalBudget)
+        ? `$${Math.max(numberValue(crawlTotalBudget?.monthly_limit_usd) - numberValue(crawlTotalBudget?.current_month_spent), 0)} 可用`
+        : 'crawl_total 未启用或余额为 0',
+    },
+    ...(APIFY_CRAWL_PLATFORMS.has(platformKey) ? [{
+      key: 'apify',
+      label: 'Apify 预算',
+      ok: budgetReady(apifyBudget),
+      detail: budgetReady(apifyBudget)
+        ? `$${Math.max(numberValue(apifyBudget?.monthly_limit_usd) - numberValue(apifyBudget?.current_month_spent), 0)} 可用`
+        : 'Apify 预算未启用或余额为 0',
+    }] : []),
+    {
+      key: 'api',
+      label: 'API 状态',
+      ok: apiReady,
+      detail: apiReady ? apiStatus : 'API 未测试或未配置',
+    },
+  ];
+  const firstBlockedGate = crawlGateItems.find((item) => !item.ok);
 
   return (
     <aside className="da-account-drawer da-account-drawer--open">
@@ -121,6 +219,33 @@ export function AccountDrawer({
           )}
         </div>
         
+        {/* P2.24: 预算与抓取闭环,解释为什么开启账号后仍可能不触发外部抓取 */}
+        <section className="da-crawl-gate-panel">
+          <div className="da-crawl-gate-panel__header">
+            <h4>抓取闸门</h4>
+            <span className={firstBlockedGate ? 'is-blocked' : 'is-ok'}>
+              {firstBlockedGate ? '未通过' : '已通过'}
+            </span>
+          </div>
+          <p>
+            {firstBlockedGate
+              ? `当前阻塞: ${firstBlockedGate.detail}`
+              : '账号、平台、预算和 API 状态均通过,可以刷新该账号。'}
+          </p>
+          <div className="da-crawl-gate-grid">
+            {crawlGateItems.map((item) => (
+              <div
+                key={item.key}
+                className={`da-crawl-gate-item${item.ok ? ' is-ok' : ' is-blocked'}`}
+                title={item.detail}
+              >
+                <span>{item.label}</span>
+                <strong>{item.ok ? '通过' : '阻塞'}</strong>
+              </div>
+            ))}
+          </div>
+        </section>
+
         {/* 通用元信息 (所有 tab 共享) */}
         <div className="da-intelligence-list" style={{ marginTop: 16 }}>
           <div><span>角色</span><strong>{rowString(account, ['account_role'], 'reference')}</strong></div>

@@ -39,6 +39,17 @@ def provider_gate(account: dict[str, Any], *, force: bool = False) -> dict[str, 
         return {"allowed": False, "provider_status": "not_configured", "sync_status": "not_configured", "message": "平台抓取开关未开启。"}
     if not force and float(config.get("monthly_budget_usd") or 0) <= 0:
         return {"allowed": False, "provider_status": "budget_disabled", "sync_status": "not_configured", "message": "平台抓取预算为 0，未执行外部抓取。"}
+    if not force:
+        budget_gate = platform_crawl_settings.crawl_budget_gate(platform)
+        if not budget_gate.get("allowed"):
+            return {
+                "allowed": False,
+                "provider_status": "budget_disabled",
+                "sync_status": "not_configured",
+                "reason": budget_gate.get("reason") or "budget_disabled",
+                "message": budget_gate.get("message") or "预算闸门未通过。",
+                "budget_key": budget_gate.get("budget_key"),
+            }
     # R-Phase2-A: 多平台 crawler 注册检查
     from app.services.vkpi.industry_crawlers import get_crawler, is_supported
     if not is_supported(platform):

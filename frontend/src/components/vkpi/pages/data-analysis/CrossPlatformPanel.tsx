@@ -5,9 +5,11 @@ import {
   getIndustryAccount,
   getIndustryCrossPlatform,
   importIndustryApifyHistory,
+  listBudgetSettings,
   listIndustryAccounts,
   listIndustryPosts,
   listIndustryProjects,
+  listPlatformCrawlSettings,
   refreshIndustryAccount,
   updateIndustryAccount,
 } from '../../../../services/vkpi.ui-api';
@@ -45,6 +47,8 @@ export function CrossPlatformPanel({
   const [crossPlatform, setCrossPlatform] = useState<Row[]>([]);
   const [posts, setPosts] = useState<Row[]>([]);
   const [snapshots, setSnapshots] = useState<Row[]>([]);
+  const [platformCrawlSettings, setPlatformCrawlSettings] = useState<Row[]>([]);
+  const [budgetSettings, setBudgetSettings] = useState<Row[]>([]);
   const [selectedAccount, setSelectedAccount] = useState<Row | null>(null);
 
   const [projectName, setProjectName] = useState('');
@@ -62,7 +66,13 @@ export function CrossPlatformPanel({
 
   const refresh = async (nextProjectId = projectId) => {
     if (!apiToken) return;
-    const projectResult = await listIndustryProjects(apiToken).catch(() => ({ projects: [] }));
+    const [projectResult, crawlSettingsResult, budgetSettingsResult] = await Promise.all([
+      listIndustryProjects(apiToken).catch(() => ({ projects: [] })),
+      listPlatformCrawlSettings(apiToken).catch(() => ({ platforms: [] })),
+      listBudgetSettings(apiToken).catch(() => ({ budgets: [] })),
+    ]);
+    setPlatformCrawlSettings(crawlSettingsResult.platforms || []);
+    setBudgetSettings(budgetSettingsResult.budgets || []);
     const loadedProjects = projectResult.projects || [];
     setProjects(loadedProjects);
     const resolvedProjectId = String(nextProjectId || (loadedProjects[0]?.id ?? ''));
@@ -432,6 +442,8 @@ export function CrossPlatformPanel({
         snapshots={snapshots}
         posts={posts}
         accounts={accounts}
+        platformCrawlSettings={platformCrawlSettings}
+        budgetSettings={budgetSettings}
         busy={busy}
         onClose={() => setSelectedAccount(null)}
         onRefresh={(id) => void refreshAccount(id)}
