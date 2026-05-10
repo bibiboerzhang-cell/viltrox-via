@@ -235,7 +235,11 @@ export function ProjectDetailDrawer({
             <article key={`sample-${String(row.__kind)}-${String(row.id || row.tracking_number || row.serial_number || Math.random())}`}>
               <div><strong>{textValue(row.product_sku || row.carrier, '样品/物流')}</strong><span>{textValue(row.status, '-')}</span></div>
               <p>单号 {textValue(row.tracking_number, '-')} · 序列号 {textValue(row.serial_number, '-')}</p>
-              <em>{showFinancials ? `样品成本 ${currencyFormatter.format(safeNumber(row.sample_cost_cents) / 100)} · ` : ''}运费 {currencyFormatter.format(safeNumber(row.shipping_cost_cents) / 100)}</em>
+              <em>
+                {showFinancials ? `样品成本 ${currencyFormatter.format(safeNumber(row.sample_cost_cents) / 100)} · ` : ''}
+                运费 {currencyFormatter.format(safeNumber(row.shipping_cost_cents) / 100)}
+                {row.evidence_url ? ` · 凭证 ${textValue(row.evidence_url, '-')}` : ''}
+              </em>
             </article>
           )}
         </DetailList>

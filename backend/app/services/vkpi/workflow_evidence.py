@@ -119,6 +119,46 @@ def add_project_content(project_id: int, body: dict[str, Any], *, staff: dict[st
     row = conn.execute("SELECT * FROM vkpi_content_posts WHERE project_id=? AND post_url=?", (int(project_id), post_url)).fetchone()
     item = dict(row) if row else {}
     if item:
+        asset_url = str(body.get("asset_url") or body.get("thumbnail_url") or "").strip()
+        if asset_url:
+            existing_asset = conn.execute(
+                "SELECT id FROM vkpi_content_assets WHERE post_id=? AND asset_url=? ORDER BY id DESC LIMIT 1",
+                (int(item["id"]), asset_url),
+            ).fetchone()
+            if not existing_asset:
+                conn.execute(
+                    """
+                    INSERT INTO vkpi_content_assets (
+                        post_id, project_id, asset_url, asset_type, usage_rights, metadata_json, created_at
+                    ) VALUES (?,?,?,?,?,?,?)
+                    """,
+                    (
+                        int(item["id"]),
+                        int(project_id),
+                        asset_url,
+                        str(body.get("asset_type") or body.get("content_type") or "content"),
+                        str(body.get("usage_rights") or body.get("rights_status") or "unknown"),
+                        _json({
+                            "source": "project_detail_form",
+                            "marker": (body.get("metadata") or {}).get("marker") if isinstance(body.get("metadata"), dict) else None,
+                            "content_post_id": item.get("id"),
+                        }),
+                        now,
+                    ),
+                )
+                conn.commit()
+                asset_row = conn.execute(
+                    "SELECT id FROM vkpi_content_assets WHERE post_id=? AND asset_url=? ORDER BY id DESC LIMIT 1",
+                    (int(item["id"]), asset_url),
+                ).fetchone()
+                audit.log_business_event(
+                    staff_id=staff_id(staff),
+                    action_type="content_asset_add",
+                    target_type="content_post",
+                    target_id=item.get("id", ""),
+                    detail=asset_url[:240],
+                    metadata={"project_id": int(project_id), "kol_id": _int(project["kol_id"]) or None, "asset_id": asset_row["id"] if asset_row else None},
+                )
         audit.log_business_event(
             staff_id=staff_id(staff),
             action_type="content_capture",
