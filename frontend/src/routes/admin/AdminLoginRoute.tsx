@@ -72,7 +72,9 @@ export default function AdminLoginRoute() {
             <span>邮箱</span>
             <input
               id="ax-login-email"
-              type="email"
+              type="text"
+              inputMode="email"
+              autoCapitalize="none"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               autoComplete="username"
