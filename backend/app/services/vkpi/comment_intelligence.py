@@ -432,3 +432,120 @@ def retry_run(run_id: int, *, staff: dict | None = None) -> dict[str, Any]:
         triggered_by="retry",
         retry_of_run_id=int(run_id),
     )
+
+
+def overview(*, days: int = 7, recent_limit: int = 8) -> dict[str, Any]:
+    """Return dashboard-ready visibility for the comment intelligence pipeline."""
+    ensure_vkpi_comment_intelligence_schema()
+    comments_collector.ensure_vkpi_comments_schema()
+    sentiment.ensure_vkpi_sentiment_schema()
+    pillars.ensure_vkpi_pillar_schema()
+
+    conn = get_conn()
+    safe_days = max(1, min(180, int(days or 7)))
+    cutoff = (datetime.utcnow() - timedelta(days=safe_days)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    safe_recent = max(1, min(50, int(recent_limit or 8)))
+
+    run_rows = conn.execute(
+        """
+        SELECT status, COUNT(*) AS n
+        FROM vkpi_comment_intelligence_runs
+        WHERE created_at >= ?
+        GROUP BY status
+        """,
+        (cutoff,),
+    ).fetchall()
+    by_status = {str(r["status"]): int(r["n"] or 0) for r in run_rows}
+    total_runs = sum(by_status.values())
+    successful_runs = by_status.get("ok", 0)
+    failure_runs = by_status.get("fail", 0) + by_status.get("partial", 0)
+    success_rate = round(successful_runs / total_runs, 4) if total_runs else None
+
+    recent_runs = conn.execute(
+        """
+        SELECT id, run_uid, post_id, post_table, status, triggered_by,
+               retry_of_run_id, error_message, started_at, finished_at, created_at
+        FROM vkpi_comment_intelligence_runs
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?
+        """,
+        (safe_recent,),
+    ).fetchall()
+
+    recent_failures = conn.execute(
+        """
+        SELECT id, run_uid, post_id, post_table, status, triggered_by,
+               error_message, created_at
+        FROM vkpi_comment_intelligence_runs
+        WHERE status IN ('fail', 'partial')
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?
+        """,
+        (safe_recent,),
+    ).fetchall()
+
+    comment_coverage = conn.execute(
+        """
+        SELECT
+          COUNT(*) AS total_comments,
+          SUM(CASE WHEN sentiment_id IS NOT NULL THEN 1 ELSE 0 END) AS with_sentiment,
+          SUM(CASE WHEN pillar_id IS NOT NULL THEN 1 ELSE 0 END) AS with_pillar
+        FROM vkpi_comments
+        WHERE fetched_at >= ?
+        """,
+        (cutoff,),
+    ).fetchone() or {}
+    total_comments = int(comment_coverage.get("total_comments") or 0)
+    with_sentiment = int(comment_coverage.get("with_sentiment") or 0)
+    with_pillar = int(comment_coverage.get("with_pillar") or 0)
+
+    post_coverage = conn.execute(
+        """
+        SELECT
+          COUNT(DISTINCT p.id) AS total_posts,
+          COUNT(DISTINCT pp.post_id) AS with_primary_pillar
+        FROM vkpi_industry_posts p
+        LEFT JOIN vkpi_post_pillars pp
+          ON pp.post_id = p.id
+          AND pp.post_table = 'industry_posts'
+          AND pp.is_primary = TRUE
+        WHERE p.created_at >= ?
+        """,
+        (cutoff,),
+    ).fetchone() or {}
+    total_posts = int(post_coverage.get("total_posts") or 0)
+    posts_with_pillar = int(post_coverage.get("with_primary_pillar") or 0)
+
+    pending_sentiment = max(total_comments - with_sentiment, 0)
+    pending_pillar_links = max(total_comments - with_pillar, 0)
+    health = "ok"
+    if failure_runs:
+        health = "degraded"
+    if total_runs and successful_runs == 0:
+        health = "attention"
+
+    return {
+        "days": safe_days,
+        "health": health,
+        "runs": {
+            "total": total_runs,
+            "by_status": by_status,
+            "success_rate": success_rate,
+            "recent": [dict(r) for r in recent_runs],
+            "recent_failures": [dict(r) for r in recent_failures],
+        },
+        "coverage": {
+            "comments_total": total_comments,
+            "comments_with_sentiment": with_sentiment,
+            "comments_with_pillar": with_pillar,
+            "sentiment_coverage": round(with_sentiment / total_comments, 4) if total_comments else None,
+            "comment_pillar_coverage": round(with_pillar / total_comments, 4) if total_comments else None,
+            "pending_sentiment": pending_sentiment,
+            "pending_comment_pillar_links": pending_pillar_links,
+            "posts_total": total_posts,
+            "posts_with_primary_pillar": posts_with_pillar,
+            "post_pillar_coverage": round(posts_with_pillar / total_posts, 4) if total_posts else None,
+        },
+    }

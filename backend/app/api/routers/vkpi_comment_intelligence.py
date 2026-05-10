@@ -16,6 +16,16 @@ router = APIRouter(
 )
 
 
+@router.get("/overview")
+def api_overview(
+    days: int = Query(7, ge=1, le=180),
+    recent_limit: int = Query(8, ge=1, le=50),
+    staff: dict = Depends(require_permission("vkpi.comment_intelligence.read")),
+) -> dict[str, Any]:
+    """Dashboard-ready status and coverage summary."""
+    return comment_intelligence.overview(days=days, recent_limit=recent_limit)
+
+
 @router.post("/process-post/{post_id}")
 def api_process_post(
     post_id: int,
