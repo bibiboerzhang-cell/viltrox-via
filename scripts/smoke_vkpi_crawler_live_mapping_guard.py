@@ -8,6 +8,7 @@ are visible. Use --live explicitly to run one real provider request.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import sys
@@ -21,6 +22,7 @@ os.environ.setdefault("ENVIRONMENT", "local")
 from app.services.vkpi import platform_crawl_settings  # noqa: E402
 from app.services.vkpi.industry_crawlers import get_crawler, supported_platforms  # noqa: E402
 from app.services.vkpi.industry_snapshot_collector import calculate_kpis  # noqa: E402
+from app.db.connection import close_db_runtime  # noqa: E402
 
 
 EXPECTED_PLATFORMS = {
@@ -164,18 +166,21 @@ def main() -> None:
     parser.add_argument("--ignore-gates", action="store_true", help="Bypass local crawl_enabled/budget guard for one manual live check")
     args = parser.parse_args()
 
-    readiness = _redacted_readiness()
-    if readiness["missing_expected"]:
-        raise AssertionError(f"missing crawler registrations: {readiness['missing_expected']}")
+    try:
+        readiness = _redacted_readiness()
+        if readiness["missing_expected"]:
+            raise AssertionError(f"missing crawler registrations: {readiness['missing_expected']}")
 
-    if args.live:
-        result = _run_live(args)
-        print(json.dumps({"readiness": readiness, "live_result": result}, ensure_ascii=False, indent=2, default=str))
+        if args.live:
+            result = _run_live(args)
+            print(json.dumps({"readiness": readiness, "live_result": result}, ensure_ascii=False, indent=2, default=str))
+            print("VKPI_CRAWLER_LIVE_MAPPING_GUARD_SMOKE_OK")
+            return
+
+        print(json.dumps(readiness, ensure_ascii=False, indent=2, default=str))
         print("VKPI_CRAWLER_LIVE_MAPPING_GUARD_SMOKE_OK")
-        return
-
-    print(json.dumps(readiness, ensure_ascii=False, indent=2, default=str))
-    print("VKPI_CRAWLER_LIVE_MAPPING_GUARD_SMOKE_OK")
+    finally:
+        asyncio.run(close_db_runtime())
 
 
 if __name__ == "__main__":
