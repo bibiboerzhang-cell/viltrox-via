@@ -2,6 +2,7 @@ import { apiFetch, jsonBody } from "./http";
 export * from "./vkpi";
 import type {
   VkpiAlertItem,
+  VkpiAlertDetail,
   VkpiAuditOverview,
   VkpiAttributionRow,
   VkpiCostRow,
@@ -820,6 +821,7 @@ export async function createSalesAttribution(token: string, payload: VkpiAttribu
 export async function getShopifyOrderEvidence(token: string, orderRef: string) { return apiFetch<Record<string, unknown>>(`/api/marketing/shopify/orders/${encodeURIComponent(orderRef)}`, {}, token); }
 export async function runShopifySync(token: string, payload: Record<string, unknown> = {}) { return apiFetch<Record<string, unknown>>("/api/marketing/shopify/sync", { method: "POST", body: jsonBody(payload) }, token); }
 export async function runShopifyBackfill(token: string, payload: Record<string, unknown> = {}) { return apiFetch<Record<string, unknown>>("/api/marketing/shopify/backfill", { method: "POST", body: jsonBody(payload) }, token); }
+export async function getMarketingAlertDetail(token: string, alertId: string) { return apiFetch<VkpiAlertDetail>(`/api/marketing/alerts/${encodeURIComponent(alertId)}`, {}, token); }
 export async function resolveMarketingAlert(token: string, alertId: string) { return apiFetch<Record<string, unknown>>(`/api/marketing/alerts/${encodeURIComponent(alertId)}/resolve`, { method: "POST", body: jsonBody({}) }, token); }
 export async function importAmazonAttributionRows(token: string, payload: VkpiAmazonImportPayload) { return apiFetch<Record<string, unknown>>("/api/marketing/attribution/amazon/import", { method: "POST", body: jsonBody({ project_id: payload.projectId ? Number(payload.projectId) : undefined, amazon_tag: payload.amazonTag, asin: payload.asin, marketplace: payload.marketplace || "US", report_date: payload.reportDate, rows: payload.rows }) }, token); }
 export async function listAmazonAttributions(token: string, options: { staffId?: string; limit?: number } = {}) {

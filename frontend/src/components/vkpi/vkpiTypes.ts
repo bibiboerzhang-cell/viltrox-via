@@ -143,6 +143,15 @@ export interface VkpiAlertItem {
   windowDays?: number;
 }
 
+export interface VkpiAlertDetail {
+  alert: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  post?: Record<string, unknown> | null;
+  account?: Record<string, unknown> | null;
+  comments: Array<Record<string, unknown>>;
+  sourceSummary?: Record<string, unknown>;
+}
+
 export interface VkpiExportReport {
   id: string;
   title: string;

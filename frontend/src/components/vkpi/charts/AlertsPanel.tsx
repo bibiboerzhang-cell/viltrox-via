@@ -22,9 +22,11 @@ function formatAlertMeta(alert: VkpiAlertItem): string {
 export function AlertsPanel({
   alerts,
   onResolveAlert,
+  onOpenAlert,
 }: {
   alerts: VkpiAlertItem[];
   onResolveAlert?: (alertId: string) => void | Promise<void>;
+  onOpenAlert?: (alertId: string) => void | Promise<void>;
 }) {
   const [filter, setFilter] = useState<AlertFilter>('all');
   const filteredAlerts = useMemo(() => {
@@ -68,6 +70,9 @@ export function AlertsPanel({
               </span>
               <div className="vkpi-alert-actions">
                 <strong>{alert.count}</strong>
+                {onOpenAlert ? (
+                  <button type="button" onClick={() => void onOpenAlert(alert.id)}>详情</button>
+                ) : null}
                 {onResolveAlert ? (
                   <button type="button" onClick={() => void onResolveAlert(alert.id)}>处理</button>
                 ) : null}

@@ -9,10 +9,12 @@ import { EvidenceDrawer } from './drawers/EvidenceDrawer';
 import { ProjectDetailDrawer } from './drawers/ProjectDetailDrawer';
 import { StaffProfileDrawer } from './drawers/StaffProfileDrawer';
 import { KolProfileDrawer } from './drawers/KolProfileDrawer';
+import { AlertDetailDrawer } from './drawers/AlertDetailDrawer';
 import { useMetricEvidence } from './hooks/useMetricEvidence';
 import { useProjectDetailDrawer } from './hooks/useProjectDetailDrawer';
 import { profileToKolDetail, textValue } from './shared/vkpiDataUtils';
 import {
+  getMarketingAlertDetail,
   getKolProfile,
   resolveMarketingAlert,
   getStaffProfile,
@@ -21,6 +23,7 @@ import type {
   VkpiKolProfile,
   VkpiKolLookupResult,
   VkpiDashboardData,
+  VkpiAlertDetail,
   VkpiMetricEvidenceKey,
   VkpiPageKey,
   VkpiProjectRow,
@@ -210,6 +213,10 @@ export function VkpiDashboard({
   const [staffProfileDrawerLoading, setStaffProfileDrawerLoading] = useState(false);
   const [staffProfileDrawerError, setStaffProfileDrawerError] = useState('');
   const [resolvedAlertIds, setResolvedAlertIds] = useState<Set<string>>(() => new Set());
+  const [alertDetailOpen, setAlertDetailOpen] = useState(false);
+  const [alertDetail, setAlertDetail] = useState<VkpiAlertDetail | null>(null);
+  const [alertDetailLoading, setAlertDetailLoading] = useState(false);
+  const [alertDetailError, setAlertDetailError] = useState('');
 
   useEffect(() => {
     if (!selectedProjectId && data.projects[0]?.id) {
@@ -344,6 +351,24 @@ export function VkpiDashboard({
     void onRefreshData?.();
   }, [apiToken, onRefreshData]);
 
+  const handleOpenAlert = useCallback(async (alertId: string) => {
+    setAlertDetailOpen(true);
+    setAlertDetail(null);
+    setAlertDetailError('');
+    if (!apiToken || !alertId) {
+      setAlertDetailError('当前前端没有登录 token，无法读取告警 source rows。');
+      return;
+    }
+    setAlertDetailLoading(true);
+    try {
+      setAlertDetail(await getMarketingAlertDetail(apiToken, alertId));
+    } catch (error) {
+      setAlertDetailError(error instanceof Error ? error.message : '告警详情加载失败');
+    } finally {
+      setAlertDetailLoading(false);
+    }
+  }, [apiToken]);
+
   return (
     <div className="vkpi-app" data-testid="vkpi-dashboard">
       <VkpiSidebar
@@ -397,6 +422,7 @@ export function VkpiDashboard({
 	              onCopyShortLink={onCopyShortLink}
 	              alerts={visibleAlerts}
 	              onResolveAlert={apiToken ? handleResolveAlert : undefined}
+	              onOpenAlert={apiToken ? handleOpenAlert : undefined}
 	              onDownloadReportPDF={onDownloadReportPDF}
 	              onExportPDF={onExportPDF}
 	            />
@@ -498,6 +524,18 @@ export function VkpiDashboard({
               setStaffProfileDrawerMember(null);
               setStaffProfileDrawerProfile(null);
               setStaffProfileDrawerError('');
+            }}
+          />
+        ) : null}
+        {alertDetailOpen ? (
+          <AlertDetailDrawer
+            detail={alertDetail}
+            loading={alertDetailLoading}
+            error={alertDetailError}
+            onClose={() => {
+              setAlertDetailOpen(false);
+              setAlertDetail(null);
+              setAlertDetailError('');
             }}
           />
         ) : null}

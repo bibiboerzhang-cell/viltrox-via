@@ -250,6 +250,16 @@ def generate_alerts(staff=Depends(require_tab("vkpi", "write"))):
     return alerts.generate_alerts()
 
 
+@router.get("/alerts/{alert_id}")
+def get_alert_detail(alert_id: int, staff=Depends(require_tab("vkpi", "read"))):
+    try:
+        return alerts.get_alert_detail(alert_id, staff=staff)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
 @router.post("/alerts/{alert_id}/resolve")
 def resolve_alert(alert_id: int, staff=Depends(require_tab("vkpi", "write"))):
     try:

@@ -40,6 +40,7 @@ interface CommandCenterProps {
   onCopyShortLink?: (slug: string) => void;
   alerts?: VkpiAlertItem[];
   onResolveAlert?: (alertId: string) => void | Promise<void>;
+  onOpenAlert?: (alertId: string) => void | Promise<void>;
   onDownloadReportPDF?: () => void;
   onExportPDF?: () => void;
 }
@@ -66,6 +67,7 @@ export function CommandCenter({
   onCopyShortLink,
   alerts,
   onResolveAlert,
+  onOpenAlert,
   onDownloadReportPDF,
   onExportPDF,
 }: CommandCenterProps) {
@@ -175,7 +177,7 @@ export function CommandCenter({
       </section>
 
       <aside className="vkpi-right-rail" aria-label="提醒和详情">
-        <AlertsPanel alerts={alerts || data.alerts} onResolveAlert={onResolveAlert} />
+        <AlertsPanel alerts={alerts || data.alerts} onResolveAlert={onResolveAlert} onOpenAlert={onOpenAlert} />
         <WeeklySummary summary={data.weeklySummary} />
         <ExportWidget report={data.exportReport} onDownloadPDF={onDownloadReportPDF || onExportPDF} />
         <KolDetailPanel

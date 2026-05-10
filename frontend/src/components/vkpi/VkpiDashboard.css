@@ -2101,3 +2101,11 @@
 .vkpi-icon-button { width: 36px; height: 36px; border: 1px solid var(--vkpi-border); border-radius: 999px; background: #fff; color: var(--vkpi-text); cursor: pointer; font-size: 22px; line-height: 1; }
 .vkpi-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }
 .vkpi-code-block { max-height: 180px; overflow: auto; margin: 10px 0 0; padding: 12px; border: 1px solid var(--vkpi-border); border-radius: 12px; background: #0b1220; color: #e2e8f0; white-space: pre-wrap; word-break: break-word; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+.vkpi-alert-detail-section { margin-bottom: 14px; box-shadow: none; }
+.vkpi-alert-source-list { display: flex; flex-direction: column; gap: 10px; }
+.vkpi-alert-source-list article { padding: 12px; border: 1px solid var(--vkpi-border); border-radius: 14px; background: #f8fafc; }
+.vkpi-alert-source-list header { display: flex; justify-content: space-between; gap: 10px; color: var(--vkpi-muted); font-size: 12px; }
+.vkpi-alert-source-list header strong { color: var(--vkpi-text); }
+.vkpi-alert-source-list p { margin: 10px 0; color: var(--vkpi-text); line-height: 1.55; }
+.vkpi-alert-source-list footer { display: flex; flex-wrap: wrap; gap: 8px; }
+.vkpi-alert-source-list footer span { padding: 4px 8px; border-radius: 999px; background: #fff; color: var(--vkpi-muted); font-size: 11px; font-weight: 800; }
