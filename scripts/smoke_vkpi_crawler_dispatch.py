@@ -25,11 +25,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 # 关键: 确保测试环境没 token (即使 .env 有,也覆盖掉)
 os.environ["APIFY_TOKEN"] = ""
 os.environ["YOUTUBE_API_KEY"] = ""
+os.environ["REDDIT_CLIENT_ID"] = ""
+os.environ["REDDIT_CLIENT_SECRET"] = ""
+os.environ["REDDIT_USER_AGENT"] = ""
 
 from app.services.vkpi.industry_crawlers import (
     YouTubeCrawler,
     InstagramCrawler,
     TikTokCrawler,
+    RedditCrawler,
     get_crawler,
     is_supported,
     supported_platforms,
@@ -53,6 +57,10 @@ def main() -> None:
     tt = get_crawler("tiktok")
     if not isinstance(tt, TikTokCrawler):
         failures.append(f"get_crawler('tiktok') 应返回 TikTokCrawler,实际 {type(tt)}")
+
+    reddit = get_crawler("reddit")
+    if not isinstance(reddit, RedditCrawler):
+        failures.append(f"get_crawler('reddit') 应返回 RedditCrawler,实际 {type(reddit)}")
     
     if not failures:
         print("   PASS: 3 个 crawler 都注册")
@@ -77,7 +85,7 @@ def main() -> None:
         failures.append("is_supported('nonexistent_platform_xyz') 应 False")
     
     platforms = supported_platforms()
-    expected = {"youtube", "instagram", "tiktok", "xiaohongshu", "bilibili", "x", "twitch"}
+    expected = {"youtube", "instagram", "tiktok", "xiaohongshu", "bilibili", "x", "twitch", "reddit"}
     if not expected.issubset(set(platforms)):
         failures.append(f"supported_platforms 缺: {expected - set(platforms)}")
     else:
@@ -100,6 +108,7 @@ def main() -> None:
         ("BilibiliCrawler", bili),
         ("XCrawler", xc),
         ("TwitchCrawler", tw),
+        ("RedditCrawler", reddit),
     ]:
         for attr in required_attrs:
             if not hasattr(crawler, attr):
@@ -119,6 +128,7 @@ def main() -> None:
         ("BilibiliCrawler", bili),
         ("XCrawler", xc),
         ("TwitchCrawler", tw),
+        ("RedditCrawler", reddit),
     ]:
         if crawler.configured:
             print(f"   SKIP: {name} 有 token,跳过 not_configured 测试")

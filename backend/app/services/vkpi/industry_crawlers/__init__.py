@@ -18,6 +18,7 @@ R-Phase2-B: 完整 7 平台 crawler registry
   - bilibili      (Apify scraper) ← R-Phase2-B
   - x             (X API + Apify fallback) ← R-Phase2-B
   - twitch        (Helix API) ← R-Phase2-B
+  - reddit        (PRAW + Apify fallback) ← P1.1
 
 未做 (留下次):
   - weibo         (Apify - 中国监管复杂)
@@ -34,6 +35,7 @@ from .xiaohongshu_crawler import XiaohongshuCrawler
 from .bilibili_crawler import BilibiliCrawler
 from .x_crawler import XCrawler
 from .twitch_crawler import TwitchCrawler
+from .reddit_crawler import RedditCrawler
 
 
 _CRAWLER_REGISTRY: dict[str, type[Any]] = {
@@ -44,6 +46,7 @@ _CRAWLER_REGISTRY: dict[str, type[Any]] = {
     "bilibili": BilibiliCrawler,
     "x": XCrawler,
     "twitch": TwitchCrawler,
+    "reddit": RedditCrawler,
 }
 
 
@@ -71,6 +74,7 @@ __all__ = [
     "BilibiliCrawler",
     "XCrawler",
     "TwitchCrawler",
+    "RedditCrawler",
     "get_crawler",
     "supported_platforms",
     "is_supported",
