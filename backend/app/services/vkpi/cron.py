@@ -26,7 +26,7 @@ async def run_job(job_name: str, payload: dict[str, Any] | None = None) -> dict[
     if name in {"alerts", "alert"}:
         from app.services.vkpi import alerts
 
-        result = await asyncio.to_thread(alerts.generate_stalled_project_alerts)
+        result = await asyncio.to_thread(alerts.generate_alerts)
         return {"job": name, "status": "ok", "result": result, "ran_at": _stamp()}
     if name in {"weekly_report", "report"}:
         from app.services.vkpi import reports

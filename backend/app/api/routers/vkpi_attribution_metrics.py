@@ -247,7 +247,7 @@ def list_alerts(
 @router.post("/alerts/generate")
 def generate_alerts(staff=Depends(require_tab("vkpi", "write"))):
     _require_manager_staff(staff)
-    return alerts.generate_stalled_project_alerts()
+    return alerts.generate_alerts()
 
 
 @router.post("/alerts/{alert_id}/resolve")
