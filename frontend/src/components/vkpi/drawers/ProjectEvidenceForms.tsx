@@ -6,6 +6,7 @@ interface ProjectEvidenceFormsProps {
   onAddContent?: (payload: Record<string, unknown>) => Promise<void>;
   onUpsertTerms?: (payload: Record<string, unknown>) => Promise<void>;
   onAddShipment?: (payload: Record<string, unknown>) => Promise<void>;
+  onUploadEvidenceFile?: (file: File, payload?: { entityType?: string; entityId?: string; purpose?: string }) => Promise<Record<string, unknown>>;
 }
 
 export function ProjectEvidenceForms({
@@ -14,6 +15,7 @@ export function ProjectEvidenceForms({
   onAddContent,
   onUpsertTerms,
   onAddShipment,
+  onUploadEvidenceFile,
 }: ProjectEvidenceFormsProps) {
   const [formBusy, setFormBusy] = useState('');
   const [formError, setFormError] = useState('');
@@ -21,6 +23,10 @@ export function ProjectEvidenceForms({
   const [contentForm, setContentForm] = useState({ postUrl: '', title: '', views: '', likes: '', comments: '', rightsStatus: 'unknown' });
   const [termsForm, setTermsForm] = useState({ cashFeeUsd: '', usageRights: '', sampleTerms: '', dueAt: '', note: '', deliverableType: 'video', deliverableQuantity: '1' });
   const [shipmentForm, setShipmentForm] = useState({ carrier: '', trackingNumber: '', productSku: '', serialNumber: '', shippingCostUsd: '', evidenceUrl: '', note: '' });
+  const [messageEvidenceFile, setMessageEvidenceFile] = useState<File | null>(null);
+  const [contentAssetFile, setContentAssetFile] = useState<File | null>(null);
+  const [termsEvidenceFile, setTermsEvidenceFile] = useState<File | null>(null);
+  const [shipmentEvidenceFile, setShipmentEvidenceFile] = useState<File | null>(null);
   const canWriteEvidence = Boolean(onAddMessage || onAddContent || onUpsertTerms || onAddShipment);
 
   useEffect(() => {
@@ -44,6 +50,15 @@ export function ProjectEvidenceForms({
     }
   };
 
+  const uploadEvidence = async (file: File | null, purpose: string): Promise<string> => {
+    if (!file) return '';
+    if (!onUploadEvidenceFile) {
+      throw new Error('当前页面没有附件上传接口。');
+    }
+    const result = await onUploadEvidenceFile(file, { entityType: 'project', entityId: projectId, purpose });
+    return String(result.file_url || result.fileUrl || result.url || '');
+  };
+
   return (
     <section className="vkpi-detail-forms" aria-label="项目证据写入">
       <div className="vkpi-detail-forms__header">
@@ -55,14 +70,16 @@ export function ProjectEvidenceForms({
         event.preventDefault();
         const body = messageForm.body.trim();
         void runEvidenceAction('message', body ? async () => {
+          const uploadedUrl = await uploadEvidence(messageEvidenceFile, 'message_evidence');
           await onAddMessage?.({
             source: messageForm.source,
             direction: messageForm.direction,
             body,
             snippet: body.slice(0, 240),
-            evidence_url: messageForm.evidenceUrl.trim(),
+            evidence_url: uploadedUrl || messageForm.evidenceUrl.trim(),
           });
           setMessageForm((current) => ({ ...current, body: '', evidenceUrl: '' }));
+          setMessageEvidenceFile(null);
         } : undefined);
       }}>
         <h4>消息记录</h4>
@@ -72,12 +89,14 @@ export function ProjectEvidenceForms({
         </div>
         <textarea value={messageForm.body} onChange={(event) => setMessageForm((current) => ({ ...current, body: event.target.value }))} placeholder="粘贴沟通要点，例如报价、回复、交付承诺。" />
         <input value={messageForm.evidenceUrl} onChange={(event) => setMessageForm((current) => ({ ...current, evidenceUrl: event.target.value }))} placeholder="证据链接 / 邮件链接 / 截图地址（可选）" />
+        <label className="vkpi-upload-row">消息附件 / PDF / 截图<input type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.csv,.xlsx,.xls,.txt,.doc,.docx" onChange={(event) => setMessageEvidenceFile(event.target.files?.[0] || null)} /></label>
         <button className="vkpi-mini-button" type="submit" disabled={!onAddMessage || formBusy === 'message' || !messageForm.body.trim()}>{formBusy === 'message' ? '保存中...' : '保存消息'}</button>
       </form>
       <form className="vkpi-form-stack" onSubmit={(event) => {
         event.preventDefault();
         const postUrl = contentForm.postUrl.trim();
         void runEvidenceAction('content', postUrl ? async () => {
+          const uploadedUrl = await uploadEvidence(contentAssetFile, 'content_asset');
           await onAddContent?.({
             post_url: postUrl,
             title: contentForm.title.trim(),
@@ -85,8 +104,11 @@ export function ProjectEvidenceForms({
             likes: Number(contentForm.likes || 0),
             comments: Number(contentForm.comments || 0),
             rights_status: contentForm.rightsStatus,
+            asset_url: uploadedUrl || undefined,
+            asset_type: contentAssetFile ? 'uploaded_asset' : undefined,
           });
           setContentForm((current) => ({ ...current, postUrl: '', title: '', views: '', likes: '', comments: '' }));
+          setContentAssetFile(null);
         } : undefined);
       }}>
         <h4>发布内容</h4>
@@ -98,23 +120,29 @@ export function ProjectEvidenceForms({
           <input value={contentForm.comments} onChange={(event) => setContentForm((current) => ({ ...current, comments: event.target.value }))} placeholder="评论" inputMode="numeric" />
           <select value={contentForm.rightsStatus} onChange={(event) => setContentForm((current) => ({ ...current, rightsStatus: event.target.value }))}><option value="unknown">权限待确认</option><option value="organic_only">仅自然转发</option><option value="ad_allowed">可广告投放</option><option value="blocked">不可二次使用</option></select>
         </div>
+        <label className="vkpi-upload-row">内容素材 / 截图 / PDF<input type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.mp4,.mov,.csv,.xlsx,.xls,.txt,.doc,.docx" onChange={(event) => setContentAssetFile(event.target.files?.[0] || null)} /></label>
         <button className="vkpi-mini-button" type="submit" disabled={!onAddContent || formBusy === 'content' || !contentForm.postUrl.trim()}>{formBusy === 'content' ? '保存中...' : '保存内容'}</button>
       </form>
       <form className="vkpi-form-stack" onSubmit={(event) => {
         event.preventDefault();
         void runEvidenceAction('terms', async () => {
+          const uploadedUrl = await uploadEvidence(termsEvidenceFile, 'terms_evidence');
+          const note = [termsForm.note.trim(), uploadedUrl ? `附件：${uploadedUrl}` : ''].filter(Boolean).join('\n');
           await onUpsertTerms?.({
             cash_fee_usd: Number(termsForm.cashFeeUsd || 0),
             usage_rights: termsForm.usageRights.trim(),
             sample_terms: termsForm.sampleTerms.trim(),
             due_at: termsForm.dueAt || undefined,
-            note: termsForm.note.trim(),
+            evidence_url: uploadedUrl || undefined,
+            note,
             deliverables: termsForm.deliverableType.trim() ? [{
               deliverable_type: termsForm.deliverableType.trim(),
               quantity: Number(termsForm.deliverableQuantity || 1),
               due_at: termsForm.dueAt || undefined,
+              evidence_url: uploadedUrl || undefined,
             }] : [],
           });
+          setTermsEvidenceFile(null);
         });
       }}>
         <h4>合作条款</h4>
@@ -127,22 +155,25 @@ export function ProjectEvidenceForms({
         <input value={termsForm.sampleTerms} onChange={(event) => setTermsForm((current) => ({ ...current, sampleTerms: event.target.value }))} placeholder="样品条款，例如不退回 / 需退回 / 评测后保留" />
         <input value={termsForm.dueAt} onChange={(event) => setTermsForm((current) => ({ ...current, dueAt: event.target.value }))} placeholder="预计交付时间 ISO 或日期" />
         <input value={termsForm.note} onChange={(event) => setTermsForm((current) => ({ ...current, note: event.target.value }))} placeholder="条款备注" />
+        <label className="vkpi-upload-row">条款附件 / PDF / 报价单<input type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.csv,.xlsx,.xls,.txt,.doc,.docx" onChange={(event) => setTermsEvidenceFile(event.target.files?.[0] || null)} /></label>
         <button className="vkpi-mini-button" type="submit" disabled={!onUpsertTerms || formBusy === 'terms'}>{formBusy === 'terms' ? '保存中...' : '保存条款'}</button>
       </form>
       <form className="vkpi-form-stack" onSubmit={(event) => {
         event.preventDefault();
         const tracking = shipmentForm.trackingNumber.trim();
         void runEvidenceAction('shipment', tracking || shipmentForm.carrier.trim() ? async () => {
+          const uploadedUrl = await uploadEvidence(shipmentEvidenceFile, 'shipment_evidence');
           await onAddShipment?.({
             carrier: shipmentForm.carrier.trim(),
             tracking_number: tracking,
             product_sku: shipmentForm.productSku.trim(),
             serial_number: shipmentForm.serialNumber.trim(),
             shipping_cost_usd: Number(shipmentForm.shippingCostUsd || 0),
-            evidence_url: shipmentForm.evidenceUrl.trim(),
+            evidence_url: uploadedUrl || shipmentForm.evidenceUrl.trim(),
             note: shipmentForm.note.trim(),
           });
           setShipmentForm((current) => ({ ...current, carrier: '', trackingNumber: '', serialNumber: '', shippingCostUsd: '', evidenceUrl: '', note: '' }));
+          setShipmentEvidenceFile(null);
         } : undefined);
       }}>
         <h4>物流 / 样品</h4>
@@ -154,6 +185,7 @@ export function ProjectEvidenceForms({
         </div>
         <input value={shipmentForm.serialNumber} onChange={(event) => setShipmentForm((current) => ({ ...current, serialNumber: event.target.value }))} placeholder="样品序列号（可选）" />
         <input value={shipmentForm.evidenceUrl} onChange={(event) => setShipmentForm((current) => ({ ...current, evidenceUrl: event.target.value }))} placeholder="物流凭证链接（可选）" />
+        <label className="vkpi-upload-row">物流凭证 / PDF / 截图<input type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.csv,.xlsx,.xls,.txt,.doc,.docx" onChange={(event) => setShipmentEvidenceFile(event.target.files?.[0] || null)} /></label>
         <input value={shipmentForm.note} onChange={(event) => setShipmentForm((current) => ({ ...current, note: event.target.value }))} placeholder="物流备注" />
         <button className="vkpi-mini-button" type="submit" disabled={!onAddShipment || formBusy === 'shipment' || !(shipmentForm.trackingNumber.trim() || shipmentForm.carrier.trim())}>{formBusy === 'shipment' ? '保存中...' : '保存物流'}</button>
       </form>

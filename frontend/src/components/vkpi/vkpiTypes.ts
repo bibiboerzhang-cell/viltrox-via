@@ -550,6 +550,16 @@ export interface VkpiProductCostRow {
   updatedAt?: string;
 }
 
+export interface VkpiProductLaunchOption {
+  id: string;
+  productSku: string;
+  productName: string;
+  launchName: string;
+  status?: string;
+  category?: string;
+  updatedAt?: string;
+}
+
 export interface VkpiKolOption {
   id: string;
   name: string;
@@ -588,6 +598,7 @@ export interface VkpiDashboardData {
   staffMembers: VkpiStaffMember[];
   kpiLedger: VkpiKpiLedgerEntry[];
   productCosts: VkpiProductCostRow[];
+  productLaunches: VkpiProductLaunchOption[];
   kolOptions: VkpiKolOption[];
   selectedKol: VkpiKolDetail;
 }

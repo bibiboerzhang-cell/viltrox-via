@@ -20,6 +20,7 @@ import type {
   VkpiMetricCard,
   VkpiPlatform,
   VkpiProductCostRow,
+  VkpiProductLaunchOption,
   VkpiProjectDetail,
   VkpiProductRoiItem,
   VkpiProjectRow,
@@ -529,6 +530,18 @@ function buildProductCosts(rows: Row[]): VkpiProductCostRow[] {
   })).filter((row) => row.productSku);
 }
 
+function buildProductLaunchOptions(rows: Row[]): VkpiProductLaunchOption[] {
+  return rows.map((row) => ({
+    id: String(row.id || row.launch_uid || row.product_sku || ""),
+    productSku: String(row.product_sku || row.sku || ""),
+    productName: String(row.product_name || row.name || row.product_sku || ""),
+    launchName: String(row.name || row.launch_name || row.product_name || row.product_sku || ""),
+    status: String(row.status || ""),
+    category: String(row.category || ""),
+    updatedAt: String(row.updated_at || row.created_at || ""),
+  })).filter((row) => row.productSku || row.productName || row.launchName);
+}
+
 function buildKolOptions(rows: Row[]): VkpiKolOption[] {
   return rows.map((row) => {
     const name = String(row.media_name || row.owner_name || row.channel_name || row.handle || `KOL ${row.id || ""}`).trim();
@@ -607,7 +620,7 @@ function emptyEvidence(): VkpiDashboardData["evidence"] {
 }
 
 function emptyData(filters: VkpiDashboardFilters = {}): VkpiDashboardData {
-  return { rangeLabel: rangeLabel(filters), windowDays: windowDays(filters), dataStatus: "empty", dataNotice: "当前周期还没有真实数据。", metrics: buildMetrics([]), revenueTrend: buildTrend([]), funnel: buildFunnel([]), staffLeaderboard: [], productRoi: [{ product: "暂无项目数据", roi: 0, gmv: 0 }], platformShare: [{ label: "暂无归因", value: 100 }], contentTypePerformance: [{ label: "暂无内容数据", value: 0 }], alerts: [], weeklySummary: "当前还没有生成周报。请在 Shopify、Amazon、短链、成本和项目事件同步后生成。", exportReport: { id: "none", title: "周报尚未生成", generatedAt: "等待数据", status: "Generating" }, projects: [], links: [], attributions: [], unmatchedAttributions: [], costs: [], evidence: emptyEvidence(), staffMembers: [], kpiLedger: [], productCosts: [], kolOptions: [], selectedKol: emptyKol };
+  return { rangeLabel: rangeLabel(filters), windowDays: windowDays(filters), dataStatus: "empty", dataNotice: "当前周期还没有真实数据。", metrics: buildMetrics([]), revenueTrend: buildTrend([]), funnel: buildFunnel([]), staffLeaderboard: [], productRoi: [{ product: "暂无项目数据", roi: 0, gmv: 0 }], platformShare: [{ label: "暂无归因", value: 100 }], contentTypePerformance: [{ label: "暂无内容数据", value: 0 }], alerts: [], weeklySummary: "当前还没有生成周报。请在 Shopify、Amazon、短链、成本和项目事件同步后生成。", exportReport: { id: "none", title: "周报尚未生成", generatedAt: "等待数据", status: "Generating" }, projects: [], links: [], attributions: [], unmatchedAttributions: [], costs: [], evidence: emptyEvidence(), staffMembers: [], kpiLedger: [], productCosts: [], productLaunches: [], kolOptions: [], selectedKol: emptyKol };
 }
 async function optionalFetch<T>(label: string, path: string, token: string, fallback: T): Promise<OptionalResult<T>> { try { return { data: await apiFetch<T>(path, {}, token) }; } catch { return { data: fallback, failed: label }; } }
 function hasAnyDashboardData(summary: Row, projects: Row[], links: VkpiLinkRow[], attributions: VkpiAttributionRow[], costs: VkpiCostRow[], alerts: Row[], rawMetrics: Row[]): boolean {
@@ -627,7 +640,10 @@ export async function fetchVkpiDashboardData(token: string, filters: VkpiDashboa
   const productCostsRequest: Promise<OptionalResult<{ product_costs?: Row[] }>> = selfMode
     ? Promise.resolve({ data: { product_costs: [] } })
     : optionalFetch<{ product_costs?: Row[] }>("SKU 成本", "/api/marketing/product-costs?limit=200", token, { product_costs: [] });
-  const [dashboard, trendResult, productPerformanceResult, projectsResult, linksResult, alertsResult, staffKpiResult, attributionResult, unmatchedResult, costsResult, staffMembersResult, kpiLedgerResult, productCostsResult, kolOptionsResult] = await Promise.all([
+  const productLaunchesRequest: Promise<OptionalResult<{ launches?: Row[] }>> = selfMode
+    ? Promise.resolve({ data: { launches: [] } })
+    : optionalFetch<{ launches?: Row[] }>("产品发布", "/api/admin/vkpi/product-analysis/launches?limit=200", token, { launches: [] });
+  const [dashboard, trendResult, productPerformanceResult, projectsResult, linksResult, alertsResult, staffKpiResult, attributionResult, unmatchedResult, costsResult, staffMembersResult, kpiLedgerResult, productCostsResult, productLaunchesResult, kolOptionsResult] = await Promise.all([
     apiFetch<Row>(dashboardPath, {}, token),
     optionalFetch<{ rows?: Row[] }>("趋势", `/api/marketing/dashboard/revenue-trend?window_days=${days}${staffQuery}`, token, { rows: [] }),
     optionalFetch<{ rows?: Row[] }>("产品表现", `/api/marketing/dashboard/product-performance?window_days=${days}${staffQuery}&limit=20`, token, { rows: [] }),
@@ -641,9 +657,10 @@ export async function fetchVkpiDashboardData(token: string, filters: VkpiDashboa
     staffMembersRequest,
     optionalFetch<{ entries?: Row[] }>("KPI Ledger", `/api/marketing/kpi-ledger?limit=200${staffQuery}`, token, { entries: [] }),
     productCostsRequest,
+    productLaunchesRequest,
     optionalFetch<{ kols?: Row[] }>("红人列表", `/api/marketing/kols?limit=300${staffQuery}`, token, { kols: [] }),
   ]);
-  const failedSections = [trendResult, productPerformanceResult, projectsResult, linksResult, alertsResult, staffKpiResult, attributionResult, unmatchedResult, costsResult, staffMembersResult, kpiLedgerResult, productCostsResult, kolOptionsResult].map((item) => item.failed).filter(Boolean) as string[];
+  const failedSections = [trendResult, productPerformanceResult, projectsResult, linksResult, alertsResult, staffKpiResult, attributionResult, unmatchedResult, costsResult, staffMembersResult, kpiLedgerResult, productCostsResult, productLaunchesResult, kolOptionsResult].map((item) => item.failed).filter(Boolean) as string[];
   const summary = (dashboard.summary || {}) as Row;
   const dashboardMetrics = Array.isArray(dashboard.metrics) ? dashboard.metrics as Row[] : [];
   const projectRows = (selfMode ? dashboard.projects as Row[] | undefined : projectsResult.data.projects) || [];
@@ -657,12 +674,13 @@ export async function fetchVkpiDashboardData(token: string, filters: VkpiDashboa
   const staffMembers = buildStaffMembers(staffMembersResult.data.members || []);
   const kpiLedger = buildKpiLedger(kpiLedgerResult.data.entries || []);
   const productCosts = buildProductCosts(productCostsResult.data.product_costs || []);
+  const productLaunches = buildProductLaunchOptions(productLaunchesResult.data.launches || []);
   const kolOptions = buildKolOptions(kolOptionsResult.data.kols || []);
   const uiProjects = buildProjects(projectRows, linkRows, attributionRows, costRows);
   const hasData = hasAnyDashboardData(summary, projectRows, linkRows, attributionRows, costRows, alertRows, dashboardMetrics);
   const dataStatus = failedSections.length ? "partial" : hasData ? "live" : "empty";
   const dataNotice = failedSections.length ? `部分数据源暂时不可用：${failedSections.join("、")}。当前页面只显示已成功返回的真实数据。` : hasData ? "当前页面来自真实接口数据。" : "当前周期还没有真实数据。";
-  return { ...emptyData(filters), windowDays: days, lastSyncedAt: new Date().toISOString(), dataStatus, dataNotice, metrics: buildMetrics(dashboardMetrics), revenueTrend: buildTrend(trendResult.data.rows || []), funnel: buildFunnel((dashboard.funnel as Row[] | undefined) || (dashboard.by_stage as Row[] | undefined) || []), staffLeaderboard: buildLeaderboard(staffRows, (dashboard.staff_leaderboard as Row[] | undefined) || []), productRoi: buildProductRoi((productPerformanceResult.data.rows || (dashboard.roi_by_project as Row[] | undefined) || [])), platformShare: buildPlatformShare((dashboard.revenue_by_source as Row[] | undefined) || rawAttributionRows), contentTypePerformance: [{ label: "已抓取播放量", value: uiProjects.reduce((sum, row) => sum + row.views, 0) }, { label: "有效点击", value: linkRows.reduce((sum, row) => sum + row.validClicks, 0) }, { label: "已发布内容", value: uiProjects.filter((row) => ["published", "content_published", "measured", "closed"].includes(row.stage)).length }], alerts: buildAlerts(alertRows), weeklySummary: buildWeeklySummary(summary, staffRows, alertRows), exportReport: { id: `weekly-${new Date().toISOString().slice(0, 10)}`, title: `周报（${rangeLabel(filters)}）`, generatedAt: "由 Viltrox Marketing 接口数据生成", status: "Ready" }, projects: uiProjects, links: linkRows, attributions: attributionRows, unmatchedAttributions: unmatchedRows, costs: costRows, evidence: emptyEvidence(), staffMembers, kpiLedger, productCosts, kolOptions, selectedKol: buildKol(uiProjects, linkRows, alertRows) };
+  return { ...emptyData(filters), windowDays: days, lastSyncedAt: new Date().toISOString(), dataStatus, dataNotice, metrics: buildMetrics(dashboardMetrics), revenueTrend: buildTrend(trendResult.data.rows || []), funnel: buildFunnel((dashboard.funnel as Row[] | undefined) || (dashboard.by_stage as Row[] | undefined) || []), staffLeaderboard: buildLeaderboard(staffRows, (dashboard.staff_leaderboard as Row[] | undefined) || []), productRoi: buildProductRoi((productPerformanceResult.data.rows || (dashboard.roi_by_project as Row[] | undefined) || [])), platformShare: buildPlatformShare((dashboard.revenue_by_source as Row[] | undefined) || rawAttributionRows), contentTypePerformance: [{ label: "已抓取播放量", value: uiProjects.reduce((sum, row) => sum + row.views, 0) }, { label: "有效点击", value: linkRows.reduce((sum, row) => sum + row.validClicks, 0) }, { label: "已发布内容", value: uiProjects.filter((row) => ["published", "content_published", "measured", "closed"].includes(row.stage)).length }], alerts: buildAlerts(alertRows), weeklySummary: buildWeeklySummary(summary, staffRows, alertRows), exportReport: { id: `weekly-${new Date().toISOString().slice(0, 10)}`, title: `周报（${rangeLabel(filters)}）`, generatedAt: "由 Viltrox Marketing 接口数据生成", status: "Ready" }, projects: uiProjects, links: linkRows, attributions: attributionRows, unmatchedAttributions: unmatchedRows, costs: costRows, evidence: emptyEvidence(), staffMembers, kpiLedger, productCosts, productLaunches, kolOptions, selectedKol: buildKol(uiProjects, linkRows, alertRows) };
 }
 function buildWeeklySummary(summary: Row, staffRows: Row[], alerts: Row[]): string {
   const sales = centsToUsd(summary.revenue_cents || summary.all_gmv_including_company_cents);

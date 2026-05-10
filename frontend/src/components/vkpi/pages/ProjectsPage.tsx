@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import type { VkpiDashboardData, VkpiProjectRow, VkpiProjectStage, VkpiStaffMember } from '../vkpiTypes';
 import { CardHeader } from '../shared/CardHeader';
 import { ProjectFlowStepper } from '../shared/ProjectFlowStepper';
@@ -45,7 +45,33 @@ export function ProjectsPage({ data, filteredProjects, selectedProjectId, select
   const activeProject = data.projects.find((project) => project.id === stageProjectId) || selectedProject || filteredProjects[0];
   const nextStage = activeProject ? nextProjectStage(activeProject.stage) : null;
   const previousStage = activeProject ? previousProjectStage(activeProject.stage) : null;
-  const productChoices = data.productCosts.filter((item) => item.active !== false);
+  const productChoices = useMemo(() => {
+    const bySku = new Map<string, { id: string; productSku: string; productName: string; active: boolean; sourceLabel: string }>();
+    data.productCosts
+      .filter((item) => item.active !== false)
+      .forEach((item) => {
+        if (!item.productSku) return;
+        bySku.set(item.productSku, {
+          id: item.id || item.productSku,
+          productSku: item.productSku,
+          productName: item.productName || item.productSku,
+          active: item.active,
+          sourceLabel: '成本目录',
+        });
+      });
+    data.productLaunches.forEach((launch) => {
+      const sku = launch.productSku || launch.id;
+      if (!sku || bySku.has(sku)) return;
+      bySku.set(sku, {
+        id: launch.id || sku,
+        productSku: sku,
+        productName: launch.productName || launch.launchName || sku,
+        active: true,
+        sourceLabel: launch.status ? `产品发布 · ${launch.status}` : '产品发布',
+      });
+    });
+    return Array.from(bySku.values()).sort((a, b) => a.productName.localeCompare(b.productName));
+  }, [data.productCosts, data.productLaunches]);
   const selectedProductLabels = selectedProductSkus
     .map((sku) => productChoices.find((item) => item.productSku === sku))
     .filter(Boolean)
@@ -199,7 +225,7 @@ export function ProjectsPage({ data, filteredProjects, selectedProjectId, select
               {productChoices.length ? (
                 <select value={productSku} onChange={(event) => selectPrimaryProduct(event.target.value)}>
                   <option value="">选择产品 SKU</option>
-                  {productChoices.map((product) => <option key={product.id || product.productSku} value={product.productSku}>{product.productName || product.productSku} · {product.productSku}</option>)}
+                  {productChoices.map((product) => <option key={product.id || product.productSku} value={product.productSku}>{product.productName || product.productSku} · {product.productSku} · {product.sourceLabel}</option>)}
                 </select>
               ) : (
                 <input value={productSku} onChange={(event) => setProductSku(event.target.value)} placeholder="产品 SKU" />

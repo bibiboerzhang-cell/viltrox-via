@@ -16,6 +16,7 @@ export function ProjectDetailDrawer({
   onAddContent,
   onUpsertTerms,
   onAddShipment,
+  onUploadEvidenceFile,
   onClose,
 }: {
   detail: VkpiProjectDetail | null;
@@ -28,6 +29,7 @@ export function ProjectDetailDrawer({
   onAddContent?: (payload: Record<string, unknown>) => Promise<void>;
   onUpsertTerms?: (payload: Record<string, unknown>) => Promise<void>;
   onAddShipment?: (payload: Record<string, unknown>) => Promise<void>;
+  onUploadEvidenceFile?: (file: File, payload?: { entityType?: string; entityId?: string; purpose?: string }) => Promise<Record<string, unknown>>;
   onClose: () => void;
 }) {
   const project = detail?.project || (fallbackProject as unknown as Record<string, unknown>) || {};
@@ -106,6 +108,7 @@ export function ProjectDetailDrawer({
           onAddContent={onAddContent}
           onUpsertTerms={onUpsertTerms}
           onAddShipment={onAddShipment}
+          onUploadEvidenceFile={onUploadEvidenceFile}
         />
         <DetailList title="流程时间线" rows={events} empty="暂无流程事件。">
           {(row) => (

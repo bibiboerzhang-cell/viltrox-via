@@ -124,6 +124,7 @@ const emptyDashboardData: VkpiDashboardData = {
   staffMembers: [],
   kpiLedger: [],
   productCosts: [],
+  productLaunches: [],
   kolOptions: [],
   selectedKol: {
     id: 'none',
@@ -494,6 +495,7 @@ export function VkpiDashboard({
             onAddContent={onAddProjectContent ? projectDetailDrawer.addContent : undefined}
             onUpsertTerms={onUpsertProjectTerms ? projectDetailDrawer.upsertTerms : undefined}
             onAddShipment={onAddProjectShipment ? projectDetailDrawer.addShipment : undefined}
+            onUploadEvidenceFile={onUploadEvidenceFile}
             onClose={projectDetailDrawer.closeProjectDetail}
           />
         ) : null}
