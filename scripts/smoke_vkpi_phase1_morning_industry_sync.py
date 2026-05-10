@@ -18,6 +18,8 @@ sys.path.insert(0, str(ROOT / "backend"))
 os.environ.setdefault("ENVIRONMENT", "local")
 os.environ.setdefault("DB_RUNTIME_BACKEND", "sqlite")
 os.environ.setdefault("DATABASE_URL", "")
+os.environ["YOUTUBE_API_KEY"] = ""
+os.environ["GOOGLE_YOUTUBE_API_KEY"] = ""
 
 from app.db.connection import get_conn  # noqa: E402
 from app.services.vkpi import cron, industry_data, industry_snapshot_collector  # noqa: E402
