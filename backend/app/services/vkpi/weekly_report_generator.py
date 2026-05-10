@@ -123,6 +123,82 @@ def _query_section_data(
             return "\n".join(lines)
         return _safe_section(section_key, run)
 
+    if section_key == "comment_intelligence_summary":
+        def run() -> str:
+            run_rows = conn.execute(
+                """
+                SELECT status, COUNT(*) AS n
+                FROM vkpi_comment_intelligence_runs
+                WHERE created_at BETWEEN ? AND ?
+                GROUP BY status
+                """,
+                (period_start_iso, period_end_iso),
+            ).fetchall()
+            sentiment_rows = conn.execute(
+                """
+                SELECT COALESCE(sentiment, 'unknown') AS label, COUNT(*) AS n
+                FROM vkpi_sentiment_results
+                WHERE analyzed_at BETWEEN ? AND ?
+                GROUP BY COALESCE(sentiment, 'unknown')
+                ORDER BY n DESC, label ASC
+                """,
+                (period_start_iso, period_end_iso),
+            ).fetchall()
+            brand_rows = conn.execute(
+                """
+                SELECT COALESCE(brand_attitude, 'unknown') AS label, COUNT(*) AS n
+                FROM vkpi_sentiment_results
+                WHERE analyzed_at BETWEEN ? AND ?
+                GROUP BY COALESCE(brand_attitude, 'unknown')
+                ORDER BY n DESC, label ASC
+                """,
+                (period_start_iso, period_end_iso),
+            ).fetchall()
+            pillar_rows = conn.execute(
+                """
+                SELECT pl.display_name, pl.layer, COUNT(*) AS n
+                FROM vkpi_post_pillars pp
+                JOIN vkpi_pillars pl ON pl.id = pp.pillar_id
+                WHERE pp.classified_at BETWEEN ? AND ?
+                GROUP BY pl.display_name, pl.layer
+                ORDER BY n DESC, pl.display_name ASC
+                LIMIT 5
+                """,
+                (period_start_iso, period_end_iso),
+            ).fetchall()
+            coverage = conn.execute(
+                """
+                SELECT
+                  COUNT(*) AS comments_total,
+                  SUM(CASE WHEN sentiment_id IS NOT NULL THEN 1 ELSE 0 END) AS with_sentiment,
+                  SUM(CASE WHEN pillar_id IS NOT NULL THEN 1 ELSE 0 END) AS with_pillar
+                FROM vkpi_comments
+                WHERE fetched_at BETWEEN ? AND ?
+                """,
+                (period_start_iso, period_end_iso),
+            ).fetchone() or {}
+            total_comments = int(coverage.get("comments_total") or 0)
+            with_sentiment = int(coverage.get("with_sentiment") or 0)
+            with_pillar = int(coverage.get("with_pillar") or 0)
+            if not run_rows and not sentiment_rows and not pillar_rows and not total_comments:
+                return "(no comment intelligence data this period)"
+            total_runs = sum(int(r["n"] or 0) for r in run_rows)
+            ok_runs = sum(int(r["n"] or 0) for r in run_rows if str(r["status"]) == "ok")
+            success_rate = ok_runs / total_runs * 100 if total_runs else 0
+            lines = [
+                "Comment intelligence summary:",
+                f"  - Pipeline runs: {total_runs} total, {ok_runs} ok ({success_rate:.1f}% success)",
+                f"  - Comment coverage: {total_comments} comments, {with_sentiment} with sentiment, {with_pillar} with pillar",
+            ]
+            if sentiment_rows:
+                lines.append("  - Sentiment: " + ", ".join(f"{r['label']}={r['n']}" for r in sentiment_rows))
+            if brand_rows:
+                lines.append("  - Brand attitude: " + ", ".join(f"{r['label']}={r['n']}" for r in brand_rows))
+            if pillar_rows:
+                lines.append("  - Top pillars: " + ", ".join(f"{r['display_name']} L{r['layer']}={r['n']}" for r in pillar_rows))
+            return "\n".join(lines)
+        return _safe_section(section_key, run)
+
     if section_key == "top_kols":
         def run() -> str:
             rows = conn.execute(

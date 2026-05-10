@@ -25,6 +25,7 @@ TEMPLATES: dict[str, dict] = {
         "layer": 1,
         "sections": [
             "weekly_kpi_summary",
+            "comment_intelligence_summary",
             "top_kols",
             "top_events",
             "next_week_focus",
@@ -39,6 +40,7 @@ TEMPLATES: dict[str, dict] = {
         "layer": 2,
         "sections": [
             "weekly_kpi_summary",
+            "comment_intelligence_summary",
             "anomaly_detection",
             "competitor_intel",
             "budget_status",
@@ -67,6 +69,7 @@ TEMPLATES: dict[str, dict] = {
         "layer": 2,
         "sections": [
             "kpi_trends",
+            "comment_intelligence_summary",
             "sentiment_distribution",
             "pillar_distribution",
             "growth_forecast",
@@ -111,6 +114,10 @@ SECTION_PROMPTS: dict[str, str] = {
         "Weekly KPI summary: total followers across platforms, "
         "follower growth, engagement rate change, total content posts, "
         "comparing to previous week."
+    ),
+    "comment_intelligence_summary": (
+        "Comment intelligence health: pipeline run success rate, comment coverage, "
+        "sentiment distribution, brand attitude distribution, and dominant pillars."
     ),
     "top_kols": (
         "Top 5 KOLs by engagement this week (post count × engagement rate)."
