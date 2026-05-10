@@ -28,12 +28,17 @@ os.environ["YOUTUBE_API_KEY"] = ""
 os.environ["REDDIT_CLIENT_ID"] = ""
 os.environ["REDDIT_CLIENT_SECRET"] = ""
 os.environ["REDDIT_USER_AGENT"] = ""
+os.environ["APIFY_FACEBOOK_PAGES_ACTOR_ID"] = ""
+os.environ["APIFY_FACEBOOK_POSTS_ACTOR_ID"] = ""
+os.environ["META_GRAPH_ACCESS_TOKEN"] = ""
+os.environ["META_GRAPH_API_VERSION"] = ""
 
 from app.services.vkpi.industry_crawlers import (
     YouTubeCrawler,
     InstagramCrawler,
     TikTokCrawler,
     RedditCrawler,
+    FacebookCrawler,
     get_crawler,
     is_supported,
     supported_platforms,
@@ -61,6 +66,10 @@ def main() -> None:
     reddit = get_crawler("reddit")
     if not isinstance(reddit, RedditCrawler):
         failures.append(f"get_crawler('reddit') 应返回 RedditCrawler,实际 {type(reddit)}")
+
+    facebook = get_crawler("facebook")
+    if not isinstance(facebook, FacebookCrawler):
+        failures.append(f"get_crawler('facebook') 应返回 FacebookCrawler,实际 {type(facebook)}")
     
     if not failures:
         print("   PASS: 3 个 crawler 都注册")
@@ -85,7 +94,7 @@ def main() -> None:
         failures.append("is_supported('nonexistent_platform_xyz') 应 False")
     
     platforms = supported_platforms()
-    expected = {"youtube", "instagram", "tiktok", "xiaohongshu", "bilibili", "x", "twitch", "reddit"}
+    expected = {"youtube", "instagram", "tiktok", "xiaohongshu", "bilibili", "x", "twitch", "reddit", "facebook"}
     if not expected.issubset(set(platforms)):
         failures.append(f"supported_platforms 缺: {expected - set(platforms)}")
     else:
@@ -109,6 +118,7 @@ def main() -> None:
         ("XCrawler", xc),
         ("TwitchCrawler", tw),
         ("RedditCrawler", reddit),
+        ("FacebookCrawler", facebook),
     ]:
         for attr in required_attrs:
             if not hasattr(crawler, attr):
@@ -129,6 +139,7 @@ def main() -> None:
         ("XCrawler", xc),
         ("TwitchCrawler", tw),
         ("RedditCrawler", reddit),
+        ("FacebookCrawler", facebook),
     ]:
         if crawler.configured:
             print(f"   SKIP: {name} 有 token,跳过 not_configured 测试")
