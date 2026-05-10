@@ -30,6 +30,7 @@ V-KPI 当前是 Viltrox Marketing 内部系统的 v3/P2 硬化版本，重点能
 | P2.18 | 真实 crawler 小样本校准 | `docs/VKPI_P2_18_LIVE_CALIBRATION.md` + live guard |
 | P2.19 | 业务录入体验收口 | `smoke_vkpi_p2_19_business_input_frontend.py` |
 | P2.20 | 浏览器真实 QA: 项目创建 / KOL 选择 / 产品选择 / 项目详情附件入口 | `docs/VKPI_P2_20_BROWSER_QA.md` + browser QA pass |
+| P2.21 | TikTok / Bilibili / Xiaohongshu 真实 crawler 小样本校准 | `docs/VKPI_P2_21_LIVE_CRAWLER_SAMPLES.md` + live mapping guard pass |
 
 最新验证:
 
@@ -40,6 +41,7 @@ V-KPI 当前是 Viltrox Marketing 内部系统的 v3/P2 硬化版本，重点能
 - P2.18 live crawler calibration: Instagram PASS, YouTube PASS
 - P2.19 business input frontend: PASS, 项目创建可合并产品成本目录 + 产品发布；项目详情消息/内容/条款/物流支持附件上传元数据
 - P2.20 browser QA: PASS, 项目创建可选择已有 KOL + 产品发布 SKU；多产品 chip 可选；项目详情 4 类附件入口可见；无 500
+- P2.21 live crawler samples: PASS, TikTok / Bilibili / Xiaohongshu 单账号真实请求均返回 `ok/synced` 且 KPI 可映射；未打开预算 gate
 - 密钥扫描: 未发现新 diff 中包含明文 provider key
 
 ## 本地服务入口
@@ -124,7 +126,7 @@ VKPI_P2_13_PROBE=1 ./scripts/run_smoke.sh smoke_vkpi_ui_api_route_acceptance.py
 
 优先级从高到低:
 
-1. P2.21: 真实 crawler 小样本扩展到 TikTok / Bilibili / Xiaohongshu，每个平台单账号。
-2. P2.22: 轻量 UX 修复，优先处理 KOL drawer 与 Project detail drawer 叠层。
-3. P2.23: Settings、数据分析、红人搜索做浏览器真实 QA 补充。
+1. P2.22: 轻量 UX 修复，优先处理 KOL drawer 与 Project detail drawer 叠层。
+2. P2.23: Settings、数据分析、红人搜索做浏览器真实 QA 补充。
+3. P2.24: 预算与抓取闭环，从 Settings 开关/预算到数据分析刷新状态。
 4. D 系列继续拆分暂缓，除非某个文件已经明确阻塞开发。
