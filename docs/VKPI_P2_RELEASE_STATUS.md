@@ -35,6 +35,7 @@ V-KPI 当前是 Viltrox Marketing 内部系统的 v3/P2 硬化版本，重点能
 | P2.23 | 浏览器真实 QA: Settings / 数据分析 / 红人搜索 + 主导航关闭残留 drawer | `smoke_vkpi_p2_23_navigation_drawers_frontend.py` |
 | P2.24 | 预算与抓取闭环: Settings 预算/平台限制对齐 Data Analysis 刷新闸门 | `smoke_vkpi_p2_24_budget_crawl_loop.py` |
 | P2.26 | 项目详情附件上传闭环: 消息 / 内容素材 / 条款 / 物流真实文件上传读回 | `smoke_vkpi_p2_26_project_attachments.py` |
+| P2.27 | 单账号刷新保护: disabled 不写假数据，真实刷新写入路径可验证 | `smoke_vkpi_p2_27_single_account_refresh.py` |
 
 最新验证:
 
@@ -51,6 +52,7 @@ V-KPI 当前是 Viltrox Marketing 内部系统的 v3/P2 硬化版本，重点能
 - P2.24 budget/crawl loop: PASS, Data Analysis 账号刷新使用 Settings 的平台月预算、全局 `crawl_total` 和 Apify 预算闸门；账号详情显示逐项阻塞原因
 - P2.24 browser QA: PASS, 数据分析页可打开账号详情；`抓取闸门`、`全局 crawl_total`、`Apify 预算` 可见；无 500 / console error
 - P2.26 project attachment QA: PASS, 4 类本地文件上传后通过项目详情 API 读回；内容素材写入 `vkpi_content_assets`；物流凭证在详情抽屉展示
+- P2.27 single account refresh: PASS, disabled account refresh 不写假 snapshot；snapshot/post 写入 seam 可回归；live guard 直接运行默认使用本地 54329；YouTube `@viltroxofficial` live 小样本返回 `synced` 且写入 25 posts
 - 密钥扫描: 未发现新 diff 中包含明文 provider key
 
 ## 本地服务入口
@@ -135,6 +137,6 @@ VKPI_P2_13_PROBE=1 ./scripts/run_smoke.sh smoke_vkpi_ui_api_route_acceptance.py
 
 优先级从高到低:
 
-1. P2.27: 可选单账号真实刷新验证，仅在预算闸门显式开启后执行。
-2. P2.28: 项目详情浏览器人工 QA，重点看文件入口、读回展示和右侧抽屉布局。
+1. P2.28: 项目详情浏览器人工 QA，重点看文件入口、读回展示和右侧抽屉布局。
+2. P2.29: 可选复测其它平台单账号刷新，仅在明确设置 `VKPI_P2_27_LIVE=1` 后执行。
 3. D 系列继续拆分暂缓，除非某个文件已经明确阻塞开发。

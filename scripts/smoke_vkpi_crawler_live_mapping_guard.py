@@ -18,6 +18,8 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 os.environ.setdefault("ENVIRONMENT", "local")
+os.environ.setdefault("DB_RUNTIME_BACKEND", "postgres")
+os.environ.setdefault("DATABASE_URL", os.environ.get("LOCAL_DATABASE_URL", "postgresql://postgres@127.0.0.1:54329/viltrox2"))
 
 from app.services.vkpi import platform_crawl_settings  # noqa: E402
 from app.services.vkpi.industry_crawlers import get_crawler, supported_platforms  # noqa: E402
