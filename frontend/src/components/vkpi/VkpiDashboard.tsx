@@ -281,8 +281,22 @@ export function VkpiDashboard({
     setEvidenceMetricValueId(metricValueId || metricByKey.get(metric)?.metricValueId || null);
   };
 
+  const closeKolProfileDrawer = () => {
+    setKolProfileDrawerProject(null);
+    setKolProfileDrawerProfile(null);
+    setKolProfileDrawerError('');
+  };
+
+  const closeStaffProfileDrawer = () => {
+    setStaffProfileDrawerMember(null);
+    setStaffProfileDrawerProfile(null);
+    setStaffProfileDrawerError('');
+  };
+
   const handleSelectProject = (project: VkpiProjectRow) => {
     setSelectedProjectId(project.id);
+    closeKolProfileDrawer();
+    closeStaffProfileDrawer();
     projectDetailDrawer.openProjectDetail(project);
   };
 
@@ -508,11 +522,7 @@ export function VkpiDashboard({
             loading={kolProfileDrawerLoading}
             error={kolProfileDrawerError}
             onSelectProject={handleSelectProject}
-            onClose={() => {
-              setKolProfileDrawerProject(null);
-              setKolProfileDrawerProfile(null);
-              setKolProfileDrawerError('');
-            }}
+            onClose={closeKolProfileDrawer}
           />
         ) : null}
         {staffProfileDrawerMember ? (
@@ -522,11 +532,7 @@ export function VkpiDashboard({
             loading={staffProfileDrawerLoading}
             error={staffProfileDrawerError}
             onSelectProject={handleSelectProject}
-            onClose={() => {
-              setStaffProfileDrawerMember(null);
-              setStaffProfileDrawerProfile(null);
-              setStaffProfileDrawerError('');
-            }}
+            onClose={closeStaffProfileDrawer}
           />
         ) : null}
         {alertDetailOpen ? (
