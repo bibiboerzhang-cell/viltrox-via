@@ -40,6 +40,11 @@ GATE_STEPS = [
         "label": "Frontend settings entry smoke",
         "command": [sys.executable, "scripts/smoke_vkpi_phase0b_frontend_entries.py"],
     },
+    {
+        "key": "P2.13",
+        "label": "Frontend-facing API route acceptance",
+        "command": [sys.executable, "scripts/smoke_vkpi_ui_api_route_acceptance.py"],
+    },
 ]
 
 
@@ -115,6 +120,7 @@ def main() -> int:
             "C1_user_preferences": "done",
             "C2_notification_settings": "done",
             "C3_settings_page_integration": "done",
+            "P2_13_ui_api_route_acceptance": "done",
             "other_ui_adjustments": "done",
         },
         "results": results,
