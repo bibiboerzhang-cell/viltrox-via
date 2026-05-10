@@ -38,6 +38,7 @@ V-KPI 当前是 Viltrox Marketing 内部系统的 v3/P2 硬化版本，重点能
 | P2.27 | 单账号刷新保护: disabled 不写假数据，真实刷新写入路径可验证 | `smoke_vkpi_p2_27_single_account_refresh.py` |
 | P2.28 | 浏览器真实 QA: 项目创建 -> 选择 KOL -> 多选产品 -> 项目详情证据入口 | `smoke_vkpi_p2_28_project_flow_frontend.py` |
 | P2.29 | 非 YouTube 平台单账号刷新复测: disabled 不写假数据，平台专用 profile URL 写入 seam 可验证 | `smoke_vkpi_p2_29_other_platform_refresh.py` |
+| P2.30 | 纯净代码包刷新 + release notes + 密钥/缓存/大文件扫描 | `docs/VKPI_P2_30_RELEASE_NOTES.md` |
 
 最新验证:
 
@@ -57,6 +58,7 @@ V-KPI 当前是 Viltrox Marketing 内部系统的 v3/P2 硬化版本，重点能
 - P2.27 single account refresh: PASS, disabled account refresh 不写假 snapshot；snapshot/post 写入 seam 可回归；live guard 直接运行默认使用本地 54329；YouTube `@viltroxofficial` live 小样本返回 `synced` 且写入 25 posts
 - P2.28 browser project flow QA: PASS, 项目页可选择已有 KOL、主产品和多产品 chip；项目详情抽屉可打开；4 类附件入口可见；消息记录可浏览器写入读回；无 500 / console error
 - P2.29 other platform refresh QA: PASS, Instagram / TikTok / Bilibili / Xiaohongshu disabled refresh 不写 fake snapshot；平台专用 profile URL + raw fixture 写入 snapshot/post seam 可回归；Instagram `viltrox.cine` live 小样本返回 `synced` 且写入 3 posts
+- P2.30 clean package QA: PASS, 源码级纯净包使用 `git archive HEAD` 生成；包内排除 `.env`、runtime、uploads、node_modules、dist、缓存和本地数据库；密钥/缓存/大文件扫描通过
 - 密钥扫描: 未发现新 diff 中包含明文 provider key
 
 ## 本地服务入口
@@ -141,6 +143,6 @@ VKPI_P2_13_PROBE=1 ./scripts/run_smoke.sh smoke_vkpi_ui_api_route_acceptance.py
 
 优先级从高到低:
 
-1. P2.30: 纯净代码包刷新 + release notes，对外给团队前再做一次密钥/缓存/大文件扫描。
-2. P2.31: 如需要，再对 Instagram / Bilibili / Xiaohongshu 各做一次显式 live 小样本，不作为默认 CI。
+1. P2.31: 如需要，再对 Instagram / Bilibili / Xiaohongshu 各做一次显式 live 小样本，不作为默认 CI。
+2. P3: 团队接手后的部署硬化 / 功能迭代，避免继续无边界拆分。
 3. D 系列继续拆分暂缓，除非某个文件已经明确阻塞开发。
