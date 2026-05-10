@@ -971,6 +971,42 @@ export async function getCommentIntelligenceOverview(
   return apiFetch<VkpiCommentIntelligenceOverview>(`/api/admin/vkpi/comment-intelligence/overview?${params.toString()}`, {}, token);
 }
 
+export async function processRecentCommentIntelligence(
+  token: string,
+  options: {
+    platform?: string;
+    days?: number;
+    limit?: number;
+    collectComments?: boolean;
+    analyzeSentiment?: boolean;
+    classifyPillar?: boolean;
+    forceReprocess?: boolean;
+  } = {},
+) {
+  const params = new URLSearchParams({
+    days: String(options.days || 7),
+    limit: String(options.limit || 10),
+    collect_comments: String(options.collectComments ?? false),
+    analyze_sentiment: String(options.analyzeSentiment ?? true),
+    classify_pillar: String(options.classifyPillar ?? true),
+    force_reprocess: String(options.forceReprocess ?? false),
+  });
+  if (options.platform) params.set("platform", options.platform);
+  return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/comment-intelligence/process-recent?${params.toString()}`, {
+    method: "POST",
+    body: jsonBody({}),
+    timeoutMs: 180000,
+  }, token);
+}
+
+export async function retryCommentIntelligenceRun(token: string, runId: string | number) {
+  return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/comment-intelligence/runs/${encodeURIComponent(String(runId))}/retry`, {
+    method: "POST",
+    body: jsonBody({}),
+    timeoutMs: 180000,
+  }, token);
+}
+
 export async function listFeatureFlags(token: string) {
   return apiFetch<{ flags?: Row[] }>("/api/admin/vkpi/settings/feature-flags", {}, token);
 }

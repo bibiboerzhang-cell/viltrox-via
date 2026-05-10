@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   getCommentIntelligenceOverview,
+  processRecentCommentIntelligence,
+  retryCommentIntelligenceRun,
   type VkpiCommentIntelligenceOverview,
 } from '../../../../../services/vkpi.ui-api';
 import { BigNumberCard } from './BigNumberCard';
@@ -49,6 +51,8 @@ function timeLabel(value: unknown): string {
 export function CommentIntelligencePanel({ apiToken, days = 7 }: CommentIntelligencePanelProps) {
   const [overview, setOverview] = useState<VkpiCommentIntelligenceOverview | null>(null);
   const [loading, setLoading] = useState(false);
+  const [actionRunning, setActionRunning] = useState('');
+  const [actionMessage, setActionMessage] = useState('');
   const [error, setError] = useState('');
 
   const load = async () => {
@@ -69,7 +73,46 @@ export function CommentIntelligencePanel({ apiToken, days = 7 }: CommentIntellig
     void load();
   }, [apiToken, days]);
 
+  const processRecent = async () => {
+    if (!apiToken) return;
+    setActionRunning('process-recent');
+    setActionMessage('');
+    setError('');
+    try {
+      const result = await processRecentCommentIntelligence(apiToken, {
+        days,
+        limit: 10,
+        collectComments: false,
+        analyzeSentiment: true,
+        classifyPillar: true,
+      });
+      setActionMessage(`最近帖子处理完成: ${String(result.processed || 0)} 条。`);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '最近帖子处理失败');
+    } finally {
+      setActionRunning('');
+    }
+  };
+
+  const retryRun = async (runId: unknown) => {
+    if (!apiToken || !runId) return;
+    setActionRunning(`retry-${String(runId)}`);
+    setActionMessage('');
+    setError('');
+    try {
+      await retryCommentIntelligenceRun(apiToken, String(runId));
+      setActionMessage(`Run ${String(runId)} 已重试。`);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '重试失败');
+    } finally {
+      setActionRunning('');
+    }
+  };
+
   const recentRuns = useMemo(() => overview?.runs.recent || [], [overview]);
+  const isActionBusy = Boolean(actionRunning) || loading;
 
   if (!apiToken) {
     return (
@@ -92,10 +135,14 @@ export function CommentIntelligencePanel({ apiToken, days = 7 }: CommentIntellig
           <button className="da-text-button" type="button" disabled={loading} onClick={() => void load()}>
             刷新
           </button>
+          <button className="da-black-button da-ci-compact-button" type="button" disabled={isActionBusy} onClick={() => void processRecent()}>
+            处理最近帖子
+          </button>
         </div>
       }
     >
       {error ? <div className="da-ci-error">{error}</div> : null}
+      {actionMessage ? <div className="da-ci-message">{actionMessage}</div> : null}
       <section className="da-detail-grid">
         <BigNumberCard
           title="Pipeline Runs"
@@ -139,21 +186,38 @@ export function CommentIntelligencePanel({ apiToken, days = 7 }: CommentIntellig
               <th>Trigger</th>
               <th>Started</th>
               <th>Error</th>
+              <th>Action</th>
             </tr>
           </thead>
           <tbody>
-            {recentRuns.length ? recentRuns.map((run) => (
-              <tr key={String(run.id || run.run_uid)}>
-                <td>{String(run.run_uid || run.id || '-')}</td>
-                <td>{String(run.post_table || 'industry_posts')} #{String(run.post_id || '-')}</td>
-                <td>{statusLabel(run.status)}</td>
-                <td>{String(run.triggered_by || '-')}</td>
-                <td>{timeLabel(run.started_at || run.created_at)}</td>
-                <td>{String(run.error_message || '-').slice(0, 80)}</td>
-              </tr>
-            )) : (
+            {recentRuns.length ? recentRuns.map((run) => {
+              const runId = run.id || run.run_uid;
+              const canRetry = ['fail', 'partial'].includes(String(run.status || ''));
+              return (
+                <tr key={String(runId)}>
+                  <td>{String(run.run_uid || run.id || '-')}</td>
+                  <td>{String(run.post_table || 'industry_posts')} #{String(run.post_id || '-')}</td>
+                  <td>{statusLabel(run.status)}</td>
+                  <td>{String(run.triggered_by || '-')}</td>
+                  <td>{timeLabel(run.started_at || run.created_at)}</td>
+                  <td>{String(run.error_message || '-').slice(0, 80)}</td>
+                  <td>
+                    {canRetry ? (
+                      <button
+                        className="da-text-button"
+                        type="button"
+                        disabled={isActionBusy}
+                        onClick={() => void retryRun(runId)}
+                      >
+                        {actionRunning === `retry-${String(runId)}` ? '重试中' : '重试'}
+                      </button>
+                    ) : '-'}
+                  </td>
+                </tr>
+              );
+            }) : (
               <tr>
-                <td className="da-table-empty" colSpan={6}>
+                <td className="da-table-empty" colSpan={7}>
                   暂无评论智能运行记录。采集评论后会在这里显示处理状态。
                 </td>
               </tr>

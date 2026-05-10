@@ -1006,6 +1006,23 @@
   font-weight: 700;
 }
 
+.da-ci-message {
+  margin-bottom: 12px;
+  border: 1px solid var(--da-success-soft);
+  border-radius: 12px;
+  background: var(--da-success-soft);
+  color: var(--da-success);
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.da-ci-compact-button {
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
 .da-ci-runs {
   margin-top: 16px;
 }
