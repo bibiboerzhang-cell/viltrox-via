@@ -215,16 +215,65 @@ class InstagramCrawler:
         *,
         max_results: int = 50,
     ) -> dict[str, Any]:
-        """抓取帖子评论 (用 instagram-comment-scraper 等不同 actor,占位)"""
+        """抓取帖子评论 (Apify instagram-comment-scraper)."""
         if not self.configured:
             return self._not_configured("crawl_video_comments")
-        
-        # IG 评论需要不同 actor (apify/instagram-comment-scraper)
-        # 这里返回占位,等 R-Phase3.2 sentiment 时再实装
-        return {
-            "provider": "instagram",
-            "provider_status": "not_implemented",
-            "sync_status": "not_configured",
-            "items": [],
-            "message": "Instagram 评论抓取留 R-Phase3.2 sentiment 时实装",
-        }
+
+        post_url = self._comment_url(video_id)
+        if not post_url:
+            return {
+                "provider": "instagram",
+                "provider_status": "error",
+                "sync_status": "error",
+                "items": [],
+                "error": "could not construct Instagram post URL",
+            }
+
+        try:
+            from apify_client import ApifyClient  # type: ignore
+        except ImportError:
+            return {
+                "provider": "instagram",
+                "provider_status": "error",
+                "sync_status": "error",
+                "items": [],
+                "error": "apify-client not installed",
+            }
+
+        actor_id = (os.environ.get("APIFY_INSTAGRAM_COMMENT_ACTOR_ID") or "apify~instagram-comment-scraper").replace("/", "~")
+        try:
+            client = ApifyClient(self.api_token)
+            run = client.actor(actor_id).call(
+                run_input={
+                    "directUrls": [post_url],
+                    "resultsLimit": max(1, min(100, int(max_results or 50))),
+                }
+            )
+            dataset_id = run.get("defaultDatasetId")
+            items = list(client.dataset(dataset_id).iterate_items()) if dataset_id else []
+            return {
+                "provider": "instagram",
+                "provider_status": "ok",
+                "sync_status": "synced",
+                "items": items,
+                "raw": {"actor_id": actor_id, "post_url": post_url},
+            }
+        except Exception as exc:  # pragma: no cover - live provider path
+            return {
+                "provider": "instagram",
+                "provider_status": "error",
+                "sync_status": "error",
+                "items": [],
+                "error": str(exc)[:500],
+                "raw": {"actor_id": actor_id, "post_url": post_url},
+            }
+
+    @staticmethod
+    def _comment_url(video_id_or_url: str) -> str:
+        """Normalize Instagram shortcode or URL for comment actor input."""
+        raw = str(video_id_or_url or "").strip()
+        if not raw:
+            return ""
+        if raw.startswith("http://") or raw.startswith("https://"):
+            return raw
+        return f"https://www.instagram.com/p/{raw.strip('/')}/"

@@ -7,7 +7,7 @@ Tests:
   2. Configured property
   3. crawl_page_profile graceful degradation
   4. crawl_brand_mentions returns not_supported in P1.2
-  5. crawl_video_comments returns not_supported (P1.3 work)
+  5. crawl_video_comments returns not_configured without token
   6. _normalize_page_url handles URLs/handles/IDs
   7. V-KPI unified interface
 
@@ -89,13 +89,13 @@ def main():
         )
     print("  ✓ graceful")
 
-    print("[6] crawl_video_comments returns not_supported (P1.3 work)...")
+    print("[6] crawl_video_comments returns not_configured without token...")
     result = crawler.crawl_video_comments("post_id_test", max_results=10)
-    if result.get("provider_status") != "not_supported":
+    if result.get("provider_status") != "not_configured":
         failures.append(
-            f"Expected not_supported, got '{result.get('provider_status')}'"
+            f"Expected not_configured, got '{result.get('provider_status')}'"
         )
-    print("  ✓ not_supported (deferred to P1.3)")
+    print("  ✓ not_configured")
 
     print("[7] _normalize_page_url cases...")
     cases = [

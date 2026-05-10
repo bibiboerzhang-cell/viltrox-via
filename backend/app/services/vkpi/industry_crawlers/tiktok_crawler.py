@@ -210,14 +210,65 @@ class TikTokCrawler:
         *,
         max_results: int = 50,
     ) -> dict[str, Any]:
-        """评论抓取 - 留 R-Phase3.2 sentiment 时实装"""
+        """TikTok comments via Apify comment actor."""
         if not self.configured:
             return self._not_configured("crawl_video_comments")
-        
-        return {
-            "provider": "tiktok",
-            "provider_status": "not_implemented",
-            "sync_status": "not_configured",
-            "items": [],
-            "message": "TikTok 评论抓取留 R-Phase3.2 sentiment 时实装",
-        }
+
+        post_url = self._comment_url(video_id)
+        if not post_url:
+            return {
+                "provider": "tiktok",
+                "provider_status": "error",
+                "sync_status": "error",
+                "items": [],
+                "error": "could not construct TikTok video URL",
+            }
+
+        try:
+            from apify_client import ApifyClient  # type: ignore
+        except ImportError:
+            return {
+                "provider": "tiktok",
+                "provider_status": "error",
+                "sync_status": "error",
+                "items": [],
+                "error": "apify-client not installed",
+            }
+
+        actor_id = (os.environ.get("APIFY_TIKTOK_COMMENT_ACTOR_ID") or "clockworks~tiktok-comments-scraper").replace("/", "~")
+        try:
+            client = ApifyClient(self.api_token)
+            run = client.actor(actor_id).call(
+                run_input={
+                    "postURLs": [post_url],
+                    "commentsPerPost": max(1, min(100, int(max_results or 50))),
+                }
+            )
+            dataset_id = run.get("defaultDatasetId")
+            items = list(client.dataset(dataset_id).iterate_items()) if dataset_id else []
+            return {
+                "provider": "tiktok",
+                "provider_status": "ok",
+                "sync_status": "synced",
+                "items": items,
+                "raw": {"actor_id": actor_id, "post_url": post_url},
+            }
+        except Exception as exc:  # pragma: no cover - live provider path
+            return {
+                "provider": "tiktok",
+                "provider_status": "error",
+                "sync_status": "error",
+                "items": [],
+                "error": str(exc)[:500],
+                "raw": {"actor_id": actor_id, "post_url": post_url},
+            }
+
+    @staticmethod
+    def _comment_url(video_id_or_url: str) -> str:
+        """Normalize TikTok video id or URL for comment actor input."""
+        raw = str(video_id_or_url or "").strip()
+        if not raw:
+            return ""
+        if raw.startswith("http://") or raw.startswith("https://"):
+            return raw
+        return f"https://www.tiktok.com/@/video/{raw.strip('/')}"

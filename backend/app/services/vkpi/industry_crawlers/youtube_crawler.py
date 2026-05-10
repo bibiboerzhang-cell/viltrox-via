@@ -155,6 +155,15 @@ class YouTubeCrawler:
     def crawl_video_comments(self, video_id: str, *, max_results: int = 50) -> dict[str, Any]:
         if not self.configured:
             return self._not_configured("crawl_video_comments")
+        video_id = self._extract_video_id(video_id)
+        if not video_id:
+            return {
+                "provider": "youtube",
+                "provider_status": "error",
+                "sync_status": "error",
+                "items": [],
+                "error": "could not extract video_id",
+            }
         return self._request(
             "commentThreads",
             {
@@ -165,3 +174,22 @@ class YouTubeCrawler:
                 "maxResults": max(1, min(100, int(max_results or 50))),
             },
         )
+
+    @staticmethod
+    def _extract_video_id(url_or_id: str) -> str:
+        """Extract a YouTube video id from URL/Shorts URL/plain id."""
+        raw = str(url_or_id or "").strip()
+        if not raw:
+            return ""
+        if len(raw) == 11 and "/" not in raw and "?" not in raw:
+            return raw
+        parsed = urllib.parse.urlparse(raw if "://" in raw else "")
+        if parsed.netloc:
+            if parsed.netloc.endswith("youtu.be"):
+                return parsed.path.strip("/").split("/")[0]
+            query_video = urllib.parse.parse_qs(parsed.query).get("v", [""])[0]
+            if query_video:
+                return query_video
+            if "/shorts/" in parsed.path:
+                return parsed.path.split("/shorts/", 1)[1].split("/", 1)[0]
+        return ""

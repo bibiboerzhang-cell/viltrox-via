@@ -306,23 +306,67 @@ class FacebookCrawler:
         *,
         max_results: int = 100,
     ) -> dict[str, Any]:
-        """
-        V-KPI unified interface - 'video' = post for Facebook.
-        
-        Note: Page-level comments via Apify are limited. This will return
-        not_supported in P1.2 unless team configures a comments-specific actor.
-        """
-        return {
-            "items": [],
-            "provider_status": "not_supported",
-            "sync_status": "skip",
-            "provider": "apify",
-            "error": (
-                "Post comments not implemented in P1.2 base crawler. "
-                "Use P1.3 (comments extension round) for full comment support."
-            ),
-            "post_ref": video_id_or_url,
-        }
+        """Facebook post comments via Apify comment actor."""
+        if not self.apify_token:
+            return {
+                "items": [],
+                "provider_status": "not_configured",
+                "sync_status": "skip",
+                "provider": "apify",
+            }
+
+        post_url = self._normalize_post_url(video_id_or_url)
+        if not post_url:
+            return {
+                "items": [],
+                "provider_status": "error",
+                "sync_status": "fail",
+                "provider": "apify",
+                "error": "could not construct Facebook post URL",
+            }
+
+        try:
+            from apify_client import ApifyClient  # type: ignore
+        except ImportError:
+            return {
+                "items": [],
+                "provider_status": "error",
+                "sync_status": "fail",
+                "provider": "apify",
+                "error": "apify-client not installed",
+            }
+
+        actor_id = (os.environ.get("APIFY_FACEBOOK_COMMENTS_ACTOR_ID") or "apify~facebook-comments-scraper").replace("/", "~")
+        try:
+            client = ApifyClient(self.apify_token)
+            run = client.actor(actor_id).call(
+                run_input={
+                    "startUrls": [{"url": post_url}],
+                    "resultsLimit": max(1, min(100, int(max_results or 100))),
+                    "proxyConfiguration": {
+                        "useApifyProxy": True,
+                        "apifyProxyGroups": ["RESIDENTIAL"],
+                    },
+                }
+            )
+            dataset_id = run.get("defaultDatasetId")
+            items = list(client.dataset(dataset_id).iterate_items()) if dataset_id else []
+            return {
+                "items": items,
+                "provider_status": "ok",
+                "sync_status": "synced",
+                "provider": "apify",
+                "raw": {"actor_id": actor_id, "post_url": post_url},
+            }
+        except Exception as exc:  # pragma: no cover - live provider path
+            return {
+                "items": [],
+                "provider_status": "error",
+                "sync_status": "fail",
+                "provider": "apify",
+                "error": str(exc)[:500],
+                "raw": {"actor_id": actor_id, "post_url": post_url},
+            }
 
     # ─── Helpers ────────────────────────────────────────────────
 
@@ -348,3 +392,13 @@ class FacebookCrawler:
             # Channel ID treated as Page handle
             return FacebookCrawler._normalize_page_url(channel_id)
         return FacebookCrawler._normalize_page_url(handle)
+
+    @staticmethod
+    def _normalize_post_url(url_or_id: str) -> str:
+        """Normalize Facebook post URL/id for comment actor input."""
+        raw = str(url_or_id or "").strip()
+        if not raw:
+            return ""
+        if raw.startswith("http://") or raw.startswith("https://"):
+            return raw
+        return f"https://www.facebook.com/posts/{raw.strip('/')}"
