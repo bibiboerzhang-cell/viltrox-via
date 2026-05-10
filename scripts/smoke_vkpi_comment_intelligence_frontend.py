@@ -23,6 +23,7 @@ def main() -> None:
 
     assert "VkpiCommentIntelligenceOverview" in api, "overview type missing"
     assert "getCommentIntelligenceOverview" in api, "overview API method missing"
+    assert "distributions" in api and "brand_attitude" in api, "overview distribution types missing"
     assert "processRecentCommentIntelligence" in api, "process-recent API method missing"
     assert "retryCommentIntelligenceRun" in api, "retry API method missing"
     assert "/api/admin/vkpi/comment-intelligence/overview" in api, "overview endpoint missing"
@@ -31,10 +32,12 @@ def main() -> None:
     assert "CommentIntelligencePanel" in panel, "panel component missing"
     assert "Pipeline Runs" in panel and "Post Pillars" in panel, "panel metrics missing"
     assert "recentRuns" in panel and "da-ci-runs" in panel, "recent run table missing"
+    assert "DistributionList" in panel and "Top Pillars" in panel, "distribution chart UI missing"
     assert "处理最近帖子" in panel and "retryCommentIntelligenceRun" in panel, "manual pipeline actions missing"
     assert "CommentIntelligencePanel" in sentiment and "apiToken" in sentiment, "sentiment tab wiring missing"
     assert "<SentimentTab apiToken={apiToken}" in cross_platform, "CrossPlatformPanel must pass token"
     assert ".da-ci-health" in css and ".da-ci-error" in css and ".da-ci-message" in css, "comment intelligence CSS missing"
+    assert ".da-ci-distribution-grid" in css and ".da-ci-bar" in css, "distribution CSS missing"
 
     print("VKPI_COMMENT_INTELLIGENCE_FRONTEND_SMOKE_OK")
 

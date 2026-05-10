@@ -526,6 +526,55 @@ def overview(*, days: int = 7, recent_limit: int = 8) -> dict[str, Any]:
     if total_runs and successful_runs == 0:
         health = "attention"
 
+    sentiment_distribution = conn.execute(
+        """
+        SELECT COALESCE(sentiment, 'unknown') AS label, COUNT(*) AS count
+        FROM vkpi_sentiment_results
+        WHERE analyzed_at >= ?
+        GROUP BY COALESCE(sentiment, 'unknown')
+        ORDER BY count DESC, label ASC
+        """,
+        (cutoff,),
+    ).fetchall()
+    emotion_distribution = conn.execute(
+        """
+        SELECT COALESCE(emotion, 'unknown') AS label, COUNT(*) AS count
+        FROM vkpi_sentiment_results
+        WHERE analyzed_at >= ?
+        GROUP BY COALESCE(emotion, 'unknown')
+        ORDER BY count DESC, label ASC
+        LIMIT 10
+        """,
+        (cutoff,),
+    ).fetchall()
+    brand_attitude_distribution = conn.execute(
+        """
+        SELECT COALESCE(brand_attitude, 'unknown') AS label, COUNT(*) AS count
+        FROM vkpi_sentiment_results
+        WHERE analyzed_at >= ?
+        GROUP BY COALESCE(brand_attitude, 'unknown')
+        ORDER BY count DESC, label ASC
+        """,
+        (cutoff,),
+    ).fetchall()
+    pillar_distribution = conn.execute(
+        """
+        SELECT
+          p.pillar_key,
+          p.display_name,
+          p.layer,
+          COUNT(*) AS count,
+          SUM(CASE WHEN pp.is_primary THEN 1 ELSE 0 END) AS primary_count
+        FROM vkpi_post_pillars pp
+        JOIN vkpi_pillars p ON p.id = pp.pillar_id
+        WHERE pp.classified_at >= ?
+        GROUP BY p.pillar_key, p.display_name, p.layer
+        ORDER BY count DESC, primary_count DESC, p.display_name ASC
+        LIMIT 12
+        """,
+        (cutoff,),
+    ).fetchall()
+
     return {
         "days": safe_days,
         "health": health,
@@ -547,5 +596,11 @@ def overview(*, days: int = 7, recent_limit: int = 8) -> dict[str, Any]:
             "posts_total": total_posts,
             "posts_with_primary_pillar": posts_with_pillar,
             "post_pillar_coverage": round(posts_with_pillar / total_posts, 4) if total_posts else None,
+        },
+        "distributions": {
+            "sentiment": [dict(r) for r in sentiment_distribution],
+            "emotion": [dict(r) for r in emotion_distribution],
+            "brand_attitude": [dict(r) for r in brand_attitude_distribution],
+            "pillars": [dict(r) for r in pillar_distribution],
         },
     }

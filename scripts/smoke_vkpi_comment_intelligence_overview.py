@@ -128,6 +128,13 @@ def main() -> None:
             raise AssertionError(f"overview did not count comment pillar coverage: {overview}")
         if coverage.get("posts_with_primary_pillar", 0) < 1:
             raise AssertionError(f"overview did not count post pillar coverage: {overview}")
+        distributions = overview.get("distributions") or {}
+        if not distributions.get("sentiment"):
+            raise AssertionError(f"overview missing sentiment distribution: {overview}")
+        if not distributions.get("brand_attitude"):
+            raise AssertionError(f"overview missing brand_attitude distribution: {overview}")
+        if not distributions.get("pillars"):
+            raise AssertionError(f"overview missing pillar distribution: {overview}")
 
         print("VKPI_COMMENT_INTELLIGENCE_OVERVIEW_SMOKE_OK")
     finally:
@@ -149,4 +156,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

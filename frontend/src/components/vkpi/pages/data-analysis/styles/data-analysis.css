@@ -1023,8 +1023,77 @@
   font-size: 12px;
 }
 
+.da-ci-distribution-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.da-ci-distribution {
+  border: 1px solid var(--da-border-soft);
+  border-radius: 14px;
+  background: var(--da-bg-soft);
+  padding: 14px;
+}
+
+.da-ci-distribution h4 {
+  margin: 0 0 12px;
+  color: var(--da-text-primary);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.da-ci-bar {
+  display: grid;
+  grid-template-columns: 92px minmax(60px, 1fr) 42px;
+  gap: 8px;
+  align-items: center;
+  margin-top: 9px;
+  font-size: 12px;
+}
+
+.da-ci-bar span {
+  color: var(--da-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.da-ci-bar i {
+  display: block;
+  height: 8px;
+  border-radius: 999px;
+  background: #e5e7eb;
+  overflow: hidden;
+}
+
+.da-ci-bar i b {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--da-primary), var(--da-accent));
+}
+
+.da-ci-bar strong {
+  color: var(--da-text-primary);
+  text-align: right;
+}
+
+.da-ci-muted {
+  margin: 0;
+  color: var(--da-text-muted);
+  font-size: 12px;
+}
+
 .da-ci-runs {
   margin-top: 16px;
+}
+
+@media (max-width: 900px) {
+  .da-ci-distribution-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ===== Cross-Platform Benchmark Tabs ===== */

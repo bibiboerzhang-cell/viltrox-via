@@ -40,12 +40,63 @@ function statusLabel(value: unknown): string {
   return raw || '-';
 }
 
+function displayLabel(value: unknown): string {
+  const raw = String(value || 'unknown');
+  const labels: Record<string, string> = {
+    positive: '正向',
+    neutral: '中性',
+    negative: '负向',
+    mixed: '混合',
+    advocate: '拥护',
+    supportive: '支持',
+    critical: '批评',
+    hostile: '敌意',
+    irrelevant: '无关',
+    joy: '愉悦',
+    surprise: '惊喜',
+    curiosity: '好奇',
+    frustration: '挫败',
+    anger: '愤怒',
+    sadness: '悲伤',
+    disgust: '厌恶',
+    fear: '担忧',
+    unknown: '未知',
+  };
+  return labels[raw] || raw;
+}
+
 function timeLabel(value: unknown): string {
   const raw = String(value || '');
   if (!raw) return '-';
   const date = new Date(raw);
   if (Number.isNaN(date.getTime())) return raw;
   return date.toLocaleString();
+}
+
+function DistributionList({
+  title,
+  rows,
+}: {
+  title: string;
+  rows: Array<{ label?: string; display_name?: string; count?: number }>;
+}) {
+  const max = Math.max(1, ...rows.map((row) => Number(row.count || 0)));
+  return (
+    <div className="da-ci-distribution">
+      <h4>{title}</h4>
+      {rows.length ? rows.slice(0, 6).map((row) => {
+        const count = Number(row.count || 0);
+        const label = row.display_name || displayLabel(row.label);
+        return (
+          <div className="da-ci-bar" key={`${title}-${String(label)}`}>
+            <span>{label}</span>
+            <i><b style={{ width: `${Math.max(4, Math.round((count / max) * 100))}%` }} /></i>
+            <strong>{compact(count)}</strong>
+          </div>
+        );
+      }) : <p className="da-ci-muted">暂无分布数据</p>}
+    </div>
+  );
 }
 
 export function CommentIntelligencePanel({ apiToken, days = 7 }: CommentIntelligencePanelProps) {
@@ -112,6 +163,7 @@ export function CommentIntelligencePanel({ apiToken, days = 7 }: CommentIntellig
   };
 
   const recentRuns = useMemo(() => overview?.runs.recent || [], [overview]);
+  const distributions = overview?.distributions || {};
   const isActionBusy = Boolean(actionRunning) || loading;
 
   if (!apiToken) {
@@ -173,6 +225,19 @@ export function CommentIntelligencePanel({ apiToken, days = 7 }: CommentIntellig
           value={pct(overview?.coverage.post_pillar_coverage)}
           delta={`${compact(overview?.coverage.posts_with_primary_pillar || 0)} / ${compact(overview?.coverage.posts_total || 0)} 帖子`}
           tone={overview?.coverage.post_pillar_coverage ? 'positive' : 'neutral'}
+        />
+      </section>
+
+      <section className="da-ci-distribution-grid">
+        <DistributionList title="Sentiment" rows={distributions.sentiment || []} />
+        <DistributionList title="Brand Attitude" rows={distributions.brand_attitude || []} />
+        <DistributionList
+          title="Top Pillars"
+          rows={(distributions.pillars || []).map((row) => ({
+            label: row.pillar_key,
+            display_name: row.display_name,
+            count: row.count,
+          }))}
         />
       </section>
 

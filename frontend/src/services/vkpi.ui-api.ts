@@ -170,6 +170,18 @@ export interface VkpiCommentIntelligenceOverview {
     posts_with_primary_pillar: number;
     post_pillar_coverage?: number | null;
   };
+  distributions?: {
+    sentiment?: Array<{ label?: string; count?: number }>;
+    emotion?: Array<{ label?: string; count?: number }>;
+    brand_attitude?: Array<{ label?: string; count?: number }>;
+    pillars?: Array<{
+      pillar_key?: string;
+      display_name?: string;
+      layer?: number;
+      count?: number;
+      primary_count?: number;
+    }>;
+  };
 }
 
 type Row = Record<string, unknown>;
