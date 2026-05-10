@@ -412,8 +412,43 @@ function buildAlerts(rows: Row[]): VkpiAlertItem[] {
   return rows.slice(0, 6).map((row) => {
     const severityRaw = String(row.severity || "info").toLowerCase();
     const severity = severityRaw === "critical" || severityRaw === "high" ? "danger" : severityRaw === "warning" ? "warning" : "info";
-    return { id: String(row.id || row.alert_key || `${row.rule_key || "alert"}-${row.created_at || ""}`), label: String(row.title || row.rule_key || "提醒"), count: 1, severity: severity as VkpiAlertItem["severity"], description: String(row.body || row.target_type || "") };
+    const metadata = parseJsonObject(row.metadata_json);
+    const ruleKey = String(row.rule_key || "");
+    const triageGroup = ruleKey.startsWith("comment_intelligence")
+      ? "comment_intelligence"
+      : String(row.target_type || "").includes("project")
+        ? "workflow"
+        : "system";
+    return {
+      id: String(row.id || row.alert_key || `${row.rule_key || "alert"}-${row.created_at || ""}`),
+      alertKey: String(row.alert_key || ""),
+      label: String(row.title || row.rule_key || "提醒"),
+      count: numberValue(metadata.flagged_comments || 1) || 1,
+      severity: severity as VkpiAlertItem["severity"],
+      description: String(row.body || row.target_type || ""),
+      ruleKey,
+      targetType: String(row.target_type || ""),
+      targetId: row.target_id ? String(row.target_id) : undefined,
+      createdAt: String(row.created_at || row.updated_at || ""),
+      platform: String(metadata.platform || row.platform || ""),
+      triageGroup,
+      negativeCount: numberValue(metadata.negative_count),
+      criticalCount: numberValue(metadata.critical_count),
+      hostileCount: numberValue(metadata.hostile_count),
+      flaggedComments: numberValue(metadata.flagged_comments),
+      windowDays: numberValue(metadata.window_days),
+    };
   });
+}
+function parseJsonObject(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
+  if (typeof value !== "string" || !value.trim()) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
 }
 function buildLinks(rows: Row[]): VkpiLinkRow[] {
   return rows.map((row) => ({ id: String(row.id || row.link_uid || row.slug || ""), slug: String(row.slug || ""), destination: String(row.destination_url || ""), platform: platformLabel(row.platform), projectId: row.project_id ? String(row.project_id) : undefined, projectName: String(row.project_name || ""), kolName: String(row.kol_name || ""), ownerName: String(row.staff_name || row.staff_id || ""), clicks: numberValue(row.click_count), validClicks: numberValue(row.valid_click_count || row.click_count), botClicks: numberValue(row.bot_click_count), orders: numberValue(row.order_count || row.orders), gmv: centsToUsd(row.revenue_cents || row.gmv_cents), status: String(row.status || "unknown"), healthStatus: String(row.health_status || "unknown"), updatedAt: String(row.updated_at || row.created_at || "-") })).filter((row) => row.id || row.slug);
@@ -785,6 +820,7 @@ export async function createSalesAttribution(token: string, payload: VkpiAttribu
 export async function getShopifyOrderEvidence(token: string, orderRef: string) { return apiFetch<Record<string, unknown>>(`/api/marketing/shopify/orders/${encodeURIComponent(orderRef)}`, {}, token); }
 export async function runShopifySync(token: string, payload: Record<string, unknown> = {}) { return apiFetch<Record<string, unknown>>("/api/marketing/shopify/sync", { method: "POST", body: jsonBody(payload) }, token); }
 export async function runShopifyBackfill(token: string, payload: Record<string, unknown> = {}) { return apiFetch<Record<string, unknown>>("/api/marketing/shopify/backfill", { method: "POST", body: jsonBody(payload) }, token); }
+export async function resolveMarketingAlert(token: string, alertId: string) { return apiFetch<Record<string, unknown>>(`/api/marketing/alerts/${encodeURIComponent(alertId)}/resolve`, { method: "POST", body: jsonBody({}) }, token); }
 export async function importAmazonAttributionRows(token: string, payload: VkpiAmazonImportPayload) { return apiFetch<Record<string, unknown>>("/api/marketing/attribution/amazon/import", { method: "POST", body: jsonBody({ project_id: payload.projectId ? Number(payload.projectId) : undefined, amazon_tag: payload.amazonTag, asin: payload.asin, marketplace: payload.marketplace || "US", report_date: payload.reportDate, rows: payload.rows }) }, token); }
 export async function listAmazonAttributions(token: string, options: { staffId?: string; limit?: number } = {}) {
   const params = new URLSearchParams({ limit: String(options.limit || 100) });

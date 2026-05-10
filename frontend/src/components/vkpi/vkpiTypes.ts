@@ -125,10 +125,22 @@ export interface VkpiShareItem {
 
 export interface VkpiAlertItem {
   id: string;
+  alertKey?: string;
   label: string;
   count: number;
   severity: 'warning' | 'danger' | 'neutral' | 'info';
   description?: string;
+  ruleKey?: string;
+  targetType?: string;
+  targetId?: string;
+  createdAt?: string;
+  platform?: string;
+  triageGroup?: 'comment_intelligence' | 'workflow' | 'system';
+  negativeCount?: number;
+  criticalCount?: number;
+  hostileCount?: number;
+  flaggedComments?: number;
+  windowDays?: number;
 }
 
 export interface VkpiExportReport {

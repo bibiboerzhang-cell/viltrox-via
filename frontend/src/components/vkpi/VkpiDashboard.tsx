@@ -14,6 +14,7 @@ import { useProjectDetailDrawer } from './hooks/useProjectDetailDrawer';
 import { profileToKolDetail, textValue } from './shared/vkpiDataUtils';
 import {
   getKolProfile,
+  resolveMarketingAlert,
   getStaffProfile,
 } from '../../services/vkpi.ui-api';
 import type {
@@ -208,6 +209,7 @@ export function VkpiDashboard({
   const [staffProfileDrawerProfile, setStaffProfileDrawerProfile] = useState<VkpiStaffProfile | null>(null);
   const [staffProfileDrawerLoading, setStaffProfileDrawerLoading] = useState(false);
   const [staffProfileDrawerError, setStaffProfileDrawerError] = useState('');
+  const [resolvedAlertIds, setResolvedAlertIds] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     if (!selectedProjectId && data.projects[0]?.id) {
@@ -254,6 +256,10 @@ export function VkpiDashboard({
   const visibleProjects = filteredProjects.slice(0, 5);
   const visibleEnd = filteredProjects.length ? Math.min(5, filteredProjects.length) : 0;
   const visibleMetrics = viewMode === 'employee' ? data.metrics.filter((metric) => metric.key !== 'cost') : data.metrics;
+  const visibleAlerts = useMemo(
+    () => data.alerts.filter((alert) => !resolvedAlertIds.has(alert.id)),
+    [data.alerts, resolvedAlertIds],
+  );
   const navItems = viewMode === 'manager' ? MANAGER_NAV_ITEMS : EMPLOYEE_NAV_ITEMS;
   const selectedKolForPanel = useMemo(
     () => profileToKolDetail(projectDetailDrawer.projectKolProfile, data.selectedKol, selectedProject, data.links),
@@ -327,6 +333,17 @@ export function VkpiDashboard({
     }
   }, [apiToken, data.staffMembers]);
 
+  const handleResolveAlert = useCallback(async (alertId: string) => {
+    if (!apiToken || !alertId) return;
+    await resolveMarketingAlert(apiToken, alertId);
+    setResolvedAlertIds((current) => {
+      const next = new Set(current);
+      next.add(alertId);
+      return next;
+    });
+    void onRefreshData?.();
+  }, [apiToken, onRefreshData]);
+
   return (
     <div className="vkpi-app" data-testid="vkpi-dashboard">
       <VkpiSidebar
@@ -378,6 +395,8 @@ export function VkpiDashboard({
 	              onOpenKolProfile={handleOpenKolProfile}
 	              onOpenStaffProfile={handleOpenStaffProfile}
 	              onCopyShortLink={onCopyShortLink}
+	              alerts={visibleAlerts}
+	              onResolveAlert={apiToken ? handleResolveAlert : undefined}
 	              onDownloadReportPDF={onDownloadReportPDF}
 	              onExportPDF={onExportPDF}
 	            />

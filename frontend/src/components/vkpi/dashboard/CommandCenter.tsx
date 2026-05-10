@@ -14,6 +14,7 @@ import { MetricCard } from '../shared/MetricCard';
 import { ProjectTable } from '../tables/ProjectTable';
 import type {
   VkpiDashboardData,
+  VkpiAlertItem,
   VkpiKolDetail,
   VkpiLeaderboardItem,
   VkpiMetricEvidenceKey,
@@ -37,6 +38,8 @@ interface CommandCenterProps {
   onOpenKolProfile: (project: VkpiProjectRow) => void | Promise<void>;
   onOpenStaffProfile: (staffId: string, fallback?: Partial<VkpiStaffMember>) => void | Promise<void>;
   onCopyShortLink?: (slug: string) => void;
+  alerts?: VkpiAlertItem[];
+  onResolveAlert?: (alertId: string) => void | Promise<void>;
   onDownloadReportPDF?: () => void;
   onExportPDF?: () => void;
 }
@@ -61,6 +64,8 @@ export function CommandCenter({
   onOpenKolProfile,
   onOpenStaffProfile,
   onCopyShortLink,
+  alerts,
+  onResolveAlert,
   onDownloadReportPDF,
   onExportPDF,
 }: CommandCenterProps) {
@@ -170,7 +175,7 @@ export function CommandCenter({
       </section>
 
       <aside className="vkpi-right-rail" aria-label="提醒和详情">
-        <AlertsPanel alerts={data.alerts} />
+        <AlertsPanel alerts={alerts || data.alerts} onResolveAlert={onResolveAlert} />
         <WeeklySummary summary={data.weeklySummary} />
         <ExportWidget report={data.exportReport} onDownloadPDF={onDownloadReportPDF || onExportPDF} />
         <KolDetailPanel
