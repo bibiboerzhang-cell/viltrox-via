@@ -13,7 +13,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api.routers import activities, auth, admin, audit, creator, jobs, leaderboard, media, ops, platform_ingest, sse, student_identity, uploads, verify, via, vkpi, vkpi_attribution_metrics, vkpi_audit, vkpi_costs, vkpi_dashboard_staff, vkpi_data_quality, vkpi_evidence_assets, vkpi_firewall, vkpi_industry_automation, vkpi_kol_links, vkpi_kol_pool, vkpi_operations, vkpi_product_analysis, vkpi_projects, vkpi_reconciliation, vkpi_reports, vkpi_settings, vkpi_sync, vkpi_workflow_assets
+from app.api.routers import activities, auth, admin, audit, creator, jobs, leaderboard, media, ops, platform_ingest, sse, student_identity, uploads, verify, via, vkpi, vkpi_attribution_metrics, vkpi_audit, vkpi_comments, vkpi_costs, vkpi_dashboard_staff, vkpi_data_quality, vkpi_evidence_assets, vkpi_firewall, vkpi_industry_automation, vkpi_kol_links, vkpi_kol_pool, vkpi_operations, vkpi_product_analysis, vkpi_projects, vkpi_reconciliation, vkpi_reports, vkpi_settings, vkpi_sync, vkpi_workflow_assets
 from app.api.routers import commerce, deepsight, insights, intelligence, intelligence_admin, system_admin
 from app.core.config import (
     APP_ROLE,
@@ -543,6 +543,7 @@ if IS_ADMIN_APP:
     app.include_router(vkpi_dashboard_staff.router)
     app.include_router(vkpi_attribution_metrics.router)
     app.include_router(vkpi_audit.router)
+    app.include_router(vkpi_comments.router)
     app.include_router(vkpi_costs.router)
     app.include_router(vkpi_data_quality.router)
     app.include_router(vkpi_evidence_assets.router)
