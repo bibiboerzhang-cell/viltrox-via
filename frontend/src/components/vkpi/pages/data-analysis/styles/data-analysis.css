@@ -965,6 +965,51 @@
   }
 }
 
+/* ===== Comment Intelligence ===== */
+
+.da-ci-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.da-ci-health {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 5px 10px;
+  background: var(--da-bg-soft);
+  color: var(--da-text-secondary);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.da-ci-health--ok {
+  background: var(--da-success-soft);
+  color: var(--da-success);
+}
+
+.da-ci-health--degraded,
+.da-ci-health--attention {
+  background: #fff3d8;
+  color: #a15c00;
+}
+
+.da-ci-error {
+  margin-bottom: 12px;
+  border: 1px solid #fecaca;
+  border-radius: 12px;
+  background: #fff1f2;
+  color: #b91c1c;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.da-ci-runs {
+  margin-top: 16px;
+}
+
 /* ===== Cross-Platform Benchmark Tabs ===== */
 
 .da-benchmark-tabs {

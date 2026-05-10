@@ -1,18 +1,21 @@
 import { DaCard } from '../shared/DaCard';
 import { EmptyState } from '../shared/EmptyState';
+import { CommentIntelligencePanel } from '../shared/CommentIntelligencePanel';
 
-export function SentimentTab() {
+interface SentimentTabProps {
+  apiToken?: string;
+}
+
+export function SentimentTab({ apiToken }: SentimentTabProps) {
   return (
     <>
+      <CommentIntelligencePanel apiToken={apiToken} />
+
       <DaCard title="Sentiment Analysis" eyebrow="评论级情感" wide>
         <EmptyState
-          title="情感分析未启用"
-          body={`Phase 3 启用 LLM Gateway + Sentiment Analyzer 后,本页会展示:
-• 帖子级 positive / neutral / negative 比例
-• 评论级情感聚类
-• 30 天情感趋势线
-• 触发负面情感告警 (engagement_rate_drop > 30% 等)
-当前 V-KPI 不抓取或分析评论数据,避免外部 LLM 成本。`}
+          title="情感分析已接入后端"
+          body={`上方概览来自真实评论智能链路:评论采集、sentiment_analyzer、pillar_classifier 和 run history。
+下一步只补图表视图,不再重复建设后端。`}
         />
       </DaCard>
 

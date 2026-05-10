@@ -266,7 +266,7 @@ export function CrossPlatformPanel({
       case 'Pillars':
         return <PillarsTab posts={posts} />;
       case 'Sentiment':
-        return <SentimentTab />;
+        return <SentimentTab apiToken={apiToken} />;
       case 'Topic Tracking':
         return <TopicTrackingTab />;
       default:

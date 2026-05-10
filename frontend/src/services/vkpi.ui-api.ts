@@ -148,6 +148,30 @@ export interface VkpiProductCostPayload {
   note?: string;
 }
 
+export interface VkpiCommentIntelligenceOverview {
+  days: number;
+  health: "ok" | "degraded" | "attention" | string;
+  runs: {
+    total: number;
+    by_status?: Record<string, number>;
+    success_rate?: number | null;
+    recent?: Row[];
+    recent_failures?: Row[];
+  };
+  coverage: {
+    comments_total: number;
+    comments_with_sentiment: number;
+    comments_with_pillar: number;
+    sentiment_coverage?: number | null;
+    comment_pillar_coverage?: number | null;
+    pending_sentiment: number;
+    pending_comment_pillar_links: number;
+    posts_total: number;
+    posts_with_primary_pillar: number;
+    post_pillar_coverage?: number | null;
+  };
+}
+
 type Row = Record<string, unknown>;
 type OptionalResult<T> = { data: T; failed?: string };
 
@@ -934,6 +958,17 @@ export async function getIndustryCrossPlatform(token: string, projectId: string)
 }
 export async function listIndustryPosts(token: string, projectId: string, limit = 100) {
   return apiFetch<{ posts?: Row[] }>(`/api/admin/vkpi/industry-data/projects/${encodeURIComponent(projectId)}/posts?limit=${encodeURIComponent(String(limit))}`, {}, token);
+}
+
+export async function getCommentIntelligenceOverview(
+  token: string,
+  options: { days?: number; recentLimit?: number } = {},
+) {
+  const params = new URLSearchParams({
+    days: String(options.days || 7),
+    recent_limit: String(options.recentLimit || 8),
+  });
+  return apiFetch<VkpiCommentIntelligenceOverview>(`/api/admin/vkpi/comment-intelligence/overview?${params.toString()}`, {}, token);
 }
 
 export async function listFeatureFlags(token: string) {
