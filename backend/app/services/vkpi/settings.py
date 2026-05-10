@@ -17,6 +17,7 @@ PROVIDER_LABELS = {
     "google": "Gemini",
     "openai": "OpenAI",
     "apify": "Apify",
+    "youtube": "YouTube Data API",
     "resend": "Resend",
 }
 
@@ -61,7 +62,7 @@ def provider_statuses() -> dict[str, Any]:
                 "can_probe": True,
             }
         )
-    for provider in ("apify", "anthropic", "google", "openai"):
+    for provider in ("apify", "anthropic", "google", "openai", "youtube"):
         if provider in seen:
             continue
         rows.append(

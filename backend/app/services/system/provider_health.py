@@ -20,7 +20,7 @@ from app.services.system.secrets_admin import provider_env_keys, provider_key_pr
 
 logger = get_logger(__name__)
 
-PROVIDERS = ["anthropic", "openai", "google", "apify", "resend"]
+PROVIDERS = ["anthropic", "openai", "google", "apify", "youtube", "resend"]
 SECURITY_NOTIFY_EMAIL = os.environ.get("SECURITY_NOTIFY_EMAIL", "jianboz@viltrox.com").strip()
 
 
@@ -99,6 +99,11 @@ async def _probe_provider_http(provider: str, api_key: str) -> dict[str, Any]:
             response = await client.get(
                 "https://api.apify.com/v2/users/me",
                 params={"token": api_key},
+            )
+        elif provider == "youtube":
+            response = await client.get(
+                "https://www.googleapis.com/youtube/v3/channels",
+                params={"part": "id", "id": "UC_x5XG1OV2P6uZZ5FSM9Ttw", "key": api_key},
             )
         elif provider == "resend":
             response = await client.get(
