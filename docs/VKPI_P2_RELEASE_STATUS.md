@@ -14,6 +14,7 @@ V-KPI 当前是 Viltrox Marketing 内部系统的 v3/P2 硬化版本，重点能
 - Comments / sentiment / pillars / weekly reports
 - Provider settings / platform crawl budget gates
 - UI-facing API route acceptance gate
+- Browser login compatibility QA
 - v3 release gate
 
 ## 本轮收口状态
@@ -24,12 +25,15 @@ V-KPI 当前是 Viltrox Marketing 内部系统的 v3/P2 硬化版本，重点能
 | P2.13 | 前端关键 API 路由验收 | `smoke_vkpi_ui_api_route_acceptance.py` |
 | P2.14 | 将 P2.13 并入 release gate | `smoke_vkpi_v3_release_gate.py` |
 | P2.15 | 纯净交付包 + 状态文档 | 本文件 + clean archive |
+| P2.16 | 浏览器登录兼容 QA | `docs/VKPI_P2_BROWSER_QA.md` + browser login pass |
+| P2.17 | 更新交付状态 + 纯净包刷新 | 本文件 + clean archive |
 
 最新验证:
 
 - `npm run build`: PASS
 - `./scripts/run_smoke.sh --all`: PASS, 69/69
 - `VKPI_P2_13_PROBE=1 ./scripts/run_smoke.sh smoke_vkpi_ui_api_route_acceptance.py`: PASS
+- Browser QA 登录: PASS, Dashboard 可进入，无 500/权限拦截
 - 密钥扫描: 未发现新 diff 中包含明文 provider key
 
 ## 本地服务入口
@@ -114,7 +118,7 @@ VKPI_P2_13_PROBE=1 ./scripts/run_smoke.sh smoke_vkpi_ui_api_route_acceptance.py
 
 优先级从高到低:
 
-1. P2.16: 浏览器手工 QA 清单，覆盖登录、Settings、数据分析、红人搜索、项目创建。
-2. P2.17: 真实 crawler 小样本校准，只跑 1-2 个账号，不开大批量。
-3. P2.18: 产品/KOL 选择器和附件上传识别链路，解决业务录入体验问题。
+1. P2.18: 真实 crawler 小样本校准，只跑 1-2 个账号，不开大批量。
+2. P2.19: 产品/KOL 选择器和附件上传识别链路，解决业务录入体验问题。
+3. P2.20: 浏览器手工 QA 扩展到 Settings、数据分析、红人搜索、项目创建。
 4. D 系列继续拆分暂缓，除非某个文件已经明确阻塞开发。
