@@ -72,7 +72,17 @@ from app.services.vkpi.platform_crawl_settings import (
 from app.services.vkpi.industry_crawlers import get_crawler, supported_platforms
 
 
-SUPPORTED = {"youtube", "instagram", "tiktok", "xiaohongshu", "bilibili", "x", "twitch"}
+SUPPORTED = {
+    "youtube",
+    "instagram",
+    "tiktok",
+    "xiaohongshu",
+    "bilibili",
+    "x",
+    "twitch",
+    "reddit",
+    "facebook",
+}
 
 
 def list_platforms() -> None:
@@ -149,9 +159,17 @@ def show_diff(platform: str, *, enable: bool | None, disable: bool,
         new_posts = int(posts_per_account)
     
     warnings = []
-    if new_enabled and platform in {"instagram", "tiktok"}:
+    if new_enabled and platform in {"instagram", "tiktok", "xiaohongshu", "bilibili", "facebook"}:
         if not os.environ.get("APIFY_TOKEN"):
             warnings.append(f"开启 {platform} 抓取,但 APIFY_TOKEN 未配置")
+    if new_enabled and platform == "reddit":
+        has_praw = (
+            os.environ.get("REDDIT_CLIENT_ID")
+            and os.environ.get("REDDIT_CLIENT_SECRET")
+            and os.environ.get("REDDIT_USER_AGENT")
+        )
+        if not has_praw and not os.environ.get("APIFY_TOKEN"):
+            warnings.append("开启 reddit 抓取,但 Reddit API 和 APIFY_TOKEN 都未配置")
     if new_enabled and platform == "youtube":
         if not os.environ.get("YOUTUBE_API_KEY"):
             warnings.append("开启 youtube 抓取,但 YOUTUBE_API_KEY 未配置")

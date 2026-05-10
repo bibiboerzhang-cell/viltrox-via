@@ -23,7 +23,17 @@ from app.services.vkpi.industry_crawlers import get_crawler, supported_platforms
 from app.services.vkpi.industry_snapshot_collector import calculate_kpis  # noqa: E402
 
 
-EXPECTED_PLATFORMS = {"youtube", "instagram", "tiktok", "xiaohongshu", "bilibili", "x", "twitch"}
+EXPECTED_PLATFORMS = {
+    "youtube",
+    "instagram",
+    "tiktok",
+    "xiaohongshu",
+    "bilibili",
+    "x",
+    "twitch",
+    "reddit",
+    "facebook",
+}
 KPI_KEYS = ("followers", "posts", "views", "views_30d", "likes", "comments", "shares", "saves")
 
 
