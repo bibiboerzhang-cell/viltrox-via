@@ -147,3 +147,35 @@ export function BudgetSettingsTable({
     </section>
   );
 }
+
+export function CommentAlertThresholdCard({
+  settings,
+  busy,
+  onSave,
+}: {
+  settings: Row;
+  busy: boolean;
+  onSave: (event: React.FormEvent<HTMLFormElement>) => void;
+}) {
+  return (
+    <section className="vkpi-card vkpi-action-card">
+      <div className="vkpi-table-card__header">
+        <div>
+          <h2>评论风险告警</h2>
+          <span>Sentiment → Alert 阈值</span>
+        </div>
+      </div>
+      <form className="vkpi-form-stack" onSubmit={onSave}>
+        <label className="vkpi-checkbox">
+          <input type="checkbox" name="enabled" defaultChecked={settings.enabled !== false} /> 开启评论风险告警
+        </label>
+        <input name="window_days" defaultValue={String(settings.window_days ?? 7)} placeholder="观察窗口天数" inputMode="numeric" />
+        <input name="min_negative" defaultValue={String(settings.min_negative ?? 3)} placeholder="负面评论阈值" inputMode="numeric" />
+        <input name="min_critical" defaultValue={String(settings.min_critical ?? 2)} placeholder="Critical 阈值" inputMode="numeric" />
+        <input name="min_hostile" defaultValue={String(settings.min_hostile ?? 1)} placeholder="Hostile 阈值" inputMode="numeric" />
+        <p className="vkpi-settings-hint">达到任一阈值就生成提醒；Hostile 命中会标记为高风险。</p>
+        <button className="vkpi-button vkpi-button--primary" type="submit" disabled={busy}>保存评论告警阈值</button>
+      </form>
+    </section>
+  );
+}

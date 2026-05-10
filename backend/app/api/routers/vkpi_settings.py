@@ -72,6 +72,18 @@ def control_status(staff=Depends(require_tab("vkpi", "read"))):
     return platform_crawl_settings.control_status()
 
 
+@router.get("/settings/comment-alerts")
+def comment_alert_settings(staff=Depends(require_tab("vkpi", "read"))):
+    _require_manager_staff(staff)
+    return platform_crawl_settings.comment_alert_settings()
+
+
+@router.patch("/settings/comment-alerts")
+def update_comment_alert_settings(body: dict, staff=Depends(require_tab("vkpi", "admin"))):
+    _require_manager_staff(staff)
+    return platform_crawl_settings.update_comment_alert_settings(body, staff=staff)
+
+
 @router.get("/settings/preferences")
 def preference_settings(staff_id: int | None = Query(default=None), staff=Depends(require_tab("vkpi", "read"))):
     try:

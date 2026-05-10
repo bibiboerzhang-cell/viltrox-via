@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
+  getCommentAlertSettings,
   getControlStatus,
   getSyncOverview,
   getNotificationSettings,
@@ -14,6 +15,7 @@ import {
   runVkpiAutomation,
   triggerSync,
   updateBudgetSettings,
+  updateCommentAlertSettings,
   updateFeatureFlags,
   updateNotificationSettings,
   updatePlatformCrawlSettings,
@@ -34,6 +36,7 @@ import {
 } from './settings/SettingsAdminCards';
 import {
   BudgetSettingsTable,
+  CommentAlertThresholdCard,
   FeatureFlagsPanel,
   PlatformCrawlPanel,
 } from './settings/SettingsControlPanels';
@@ -73,6 +76,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
   const [featureFlags, setFeatureFlags] = useState<Array<Record<string, unknown>>>([]);
   const [platformCrawl, setPlatformCrawl] = useState<Array<Record<string, unknown>>>([]);
   const [budgetSettings, setBudgetSettings] = useState<Array<Record<string, unknown>>>([]);
+  const [commentAlertSettings, setCommentAlertSettings] = useState<Record<string, unknown>>({});
   const [controlStatus, setControlStatus] = useState<Record<string, unknown>>({});
   const [preferenceList, setPreferenceList] = useState<Array<Record<string, unknown>>>([]);
   const [notificationList, setNotificationList] = useState<Array<Record<string, unknown>>>([]);
@@ -158,12 +162,13 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
       setProviderError('');
       setSettingsError('');
       try {
-        const [providerResponse, flagsResponse, crawlResponse, budgetResponse, controlResponse, preferenceListResponse, notificationListResponse] = await Promise.all([
+        const [providerResponse, flagsResponse, crawlResponse, budgetResponse, controlResponse, commentAlertResponse, preferenceListResponse, notificationListResponse] = await Promise.all([
           listProviderStatuses(apiToken),
           listFeatureFlags(apiToken),
           listPlatformCrawlSettings(apiToken),
           listBudgetSettings(apiToken),
           getControlStatus(apiToken),
+          getCommentAlertSettings(apiToken),
           listUserPreferences(apiToken),
           listNotificationSettings(apiToken),
         ]);
@@ -173,6 +178,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
           setPlatformCrawl(crawlResponse.platforms || []);
           setBudgetSettings(budgetResponse.budgets || []);
           setControlStatus(controlResponse || {});
+          setCommentAlertSettings(commentAlertResponse.settings || {});
           setPreferenceList(preferenceListResponse.preferences || []);
           setNotificationList(notificationListResponse.notification_settings || []);
         }
@@ -189,16 +195,18 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
   const reloadSystemSettings = async () => {
     if (!apiToken) return;
     setSettingsError('');
-    const [flagsResponse, crawlResponse, budgetResponse, controlResponse] = await Promise.all([
+    const [flagsResponse, crawlResponse, budgetResponse, controlResponse, commentAlertResponse] = await Promise.all([
       listFeatureFlags(apiToken),
       listPlatformCrawlSettings(apiToken),
       listBudgetSettings(apiToken),
       getControlStatus(apiToken),
+      getCommentAlertSettings(apiToken),
     ]);
     setFeatureFlags(flagsResponse.flags || []);
     setPlatformCrawl(crawlResponse.platforms || []);
     setBudgetSettings(budgetResponse.budgets || []);
     setControlStatus(controlResponse || {});
+    setCommentAlertSettings(commentAlertResponse.settings || {});
   };
 
   const reloadProviders = async () => {
@@ -342,6 +350,28 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
       setMessage('预算控制已保存。');
     } catch (error) {
       setSettingsError(error instanceof Error ? error.message : '预算控制保存失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveCommentAlertSettings = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!apiToken) return;
+    const form = new FormData(event.currentTarget);
+    setBusy(true);
+    try {
+      await updateCommentAlertSettings(apiToken, {
+        enabled: form.get('enabled') === 'on',
+        window_days: formNumber(form, 'window_days', numberValue(commentAlertSettings.window_days, 7)),
+        min_negative: formNumber(form, 'min_negative', numberValue(commentAlertSettings.min_negative, 3)),
+        min_critical: formNumber(form, 'min_critical', numberValue(commentAlertSettings.min_critical, 2)),
+        min_hostile: formNumber(form, 'min_hostile', numberValue(commentAlertSettings.min_hostile, 1)),
+      });
+      await reloadSystemSettings();
+      setMessage('评论风险告警阈值已保存。');
+    } catch (error) {
+      setSettingsError(error instanceof Error ? error.message : '评论风险告警阈值保存失败');
     } finally {
       setBusy(false);
     }
@@ -586,6 +616,12 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
           onUnitCostUsdChange={setUnitCostUsd}
           onCostNoteChange={setCostNote}
           onSubmit={submitProductCost}
+        />
+        <CommentAlertThresholdCard
+          key={JSON.stringify(commentAlertSettings)}
+          settings={commentAlertSettings}
+          busy={busy}
+          onSave={(event) => void saveCommentAlertSettings(event)}
         />
         {preferenceCard}
         {notificationCard}

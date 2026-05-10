@@ -13,6 +13,7 @@ from app.services.vkpi.workflow import staff_id as resolve_staff_id
 DEFAULT_FLAGS = {
     "product_analysis": "产品分析入口",
     "daily_staff_digest": "每日 8 点员工候选内容同步",
+    "comment_intelligence_alerts": "评论风险告警阈值和开关",
     "audience_graph_l1": "粉丝图谱 L1 聚合匹配",
     "audience_graph_l2": "粉丝图谱 L2 相似受众",
     "audience_graph_l3": "粉丝图谱 L3 明细抓取，默认关闭",
@@ -20,6 +21,17 @@ DEFAULT_FLAGS = {
     "ml_scoring": "机器学习评分，默认关闭",
     "llm_summary": "大模型总结润色，默认关闭",
     "youtube_kpi_reserved": "YouTube KPI 接入预留",
+}
+
+DEFAULT_FLAG_ENABLED = {
+    "comment_intelligence_alerts": True,
+}
+
+DEFAULT_COMMENT_ALERT_SETTINGS = {
+    "window_days": 7,
+    "min_negative": 3,
+    "min_critical": 2,
+    "min_hostile": 1,
 }
 
 DEFAULT_PLATFORMS = [
@@ -54,6 +66,18 @@ def _json(value: Any) -> str:
     return json.dumps(value or {}, ensure_ascii=False, default=str)
 
 
+def _load_json(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        return {}
+    try:
+        parsed = json.loads(value)
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def _bool(value: Any) -> bool | int:
     if isinstance(value, str):
         value = value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
@@ -72,7 +96,13 @@ def ensure_defaults() -> None:
                 (flag_key, enabled, description, updated_at, metadata_json)
             VALUES (?,?,?,?,?)
             """,
-            (key, _bool(False), desc, now, "{}"),
+            (
+                key,
+                _bool(DEFAULT_FLAG_ENABLED.get(key, False)),
+                desc,
+                now,
+                _json(DEFAULT_COMMENT_ALERT_SETTINGS if key == "comment_intelligence_alerts" else {}),
+            ),
         )
     for platform in DEFAULT_PLATFORMS:
         conn.execute(
@@ -101,6 +131,82 @@ def feature_flags() -> dict[str, Any]:
     ensure_defaults()
     rows = get_conn().execute("SELECT * FROM vkpi_feature_flags ORDER BY flag_key").fetchall()
     return {"flags": [dict(row) for row in rows]}
+
+
+def _comment_alert_payload(row: dict[str, Any] | None) -> dict[str, Any]:
+    metadata = _load_json((row or {}).get("metadata_json"))
+    settings = dict(DEFAULT_COMMENT_ALERT_SETTINGS)
+    for key in settings:
+        if key in metadata:
+            settings[key] = metadata[key]
+    return {
+        "enabled": bool((row or {}).get("enabled", True)),
+        "description": (row or {}).get("description") or DEFAULT_FLAGS["comment_intelligence_alerts"],
+        "window_days": max(1, min(90, int(settings.get("window_days") or DEFAULT_COMMENT_ALERT_SETTINGS["window_days"]))),
+        "min_negative": max(1, min(999, int(settings.get("min_negative") or DEFAULT_COMMENT_ALERT_SETTINGS["min_negative"]))),
+        "min_critical": max(1, min(999, int(settings.get("min_critical") or DEFAULT_COMMENT_ALERT_SETTINGS["min_critical"]))),
+        "min_hostile": max(1, min(999, int(settings.get("min_hostile") or DEFAULT_COMMENT_ALERT_SETTINGS["min_hostile"]))),
+    }
+
+
+def comment_alert_settings() -> dict[str, Any]:
+    ensure_defaults()
+    row = get_conn().execute(
+        "SELECT * FROM vkpi_feature_flags WHERE flag_key='comment_intelligence_alerts'"
+    ).fetchone()
+    return {"settings": _comment_alert_payload(dict(row) if row else None)}
+
+
+def update_comment_alert_settings(payload: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    ensure_defaults()
+    actor = resolve_staff_id(staff)
+    conn = get_conn()
+    old = conn.execute("SELECT * FROM vkpi_feature_flags WHERE flag_key='comment_intelligence_alerts'").fetchone()
+    current = _comment_alert_payload(dict(old) if old else None)
+
+    def pick(name: str) -> Any:
+        return payload[name] if name in payload else current.get(name)
+
+    next_settings = {
+        "window_days": max(1, min(90, int(pick("window_days") or DEFAULT_COMMENT_ALERT_SETTINGS["window_days"]))),
+        "min_negative": max(1, min(999, int(pick("min_negative") or DEFAULT_COMMENT_ALERT_SETTINGS["min_negative"]))),
+        "min_critical": max(1, min(999, int(pick("min_critical") or DEFAULT_COMMENT_ALERT_SETTINGS["min_critical"]))),
+        "min_hostile": max(1, min(999, int(pick("min_hostile") or DEFAULT_COMMENT_ALERT_SETTINGS["min_hostile"]))),
+    }
+    enabled = payload.get("enabled", current.get("enabled", True))
+    now = _utcnow()
+    conn.execute(
+        """
+        INSERT INTO vkpi_feature_flags
+            (flag_key, enabled, description, updated_by_staff_id, updated_at, metadata_json)
+        VALUES (?,?,?,?,?,?)
+        ON CONFLICT(flag_key) DO UPDATE SET
+            enabled=excluded.enabled,
+            description=excluded.description,
+            updated_by_staff_id=excluded.updated_by_staff_id,
+            updated_at=excluded.updated_at,
+            metadata_json=excluded.metadata_json
+        """,
+        (
+            "comment_intelligence_alerts",
+            _bool(enabled),
+            DEFAULT_FLAGS["comment_intelligence_alerts"],
+            actor or None,
+            now,
+            _json(next_settings),
+        ),
+    )
+    if actor:
+        audit.log_settings_change(
+            staff_id=actor,
+            change_type="comment_alert_threshold",
+            setting_key="comment_intelligence_alerts",
+            old_value_redacted=_json(current),
+            new_value_redacted=_json({"enabled": bool(enabled), **next_settings}),
+            metadata={"flag_key": "comment_intelligence_alerts"},
+        )
+    conn.commit()
+    return comment_alert_settings()
 
 
 def update_feature_flags(payload: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:

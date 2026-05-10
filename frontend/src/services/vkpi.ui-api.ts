@@ -1076,6 +1076,12 @@ export async function updateBudgetSettings(token: string, budgets: Row[]) {
 export async function getControlStatus(token: string) {
   return apiFetch<Record<string, unknown>>("/api/admin/vkpi/settings/control-status", {}, token);
 }
+export async function getCommentAlertSettings(token: string) {
+  return apiFetch<{ settings?: Row }>("/api/admin/vkpi/settings/comment-alerts", {}, token);
+}
+export async function updateCommentAlertSettings(token: string, payload: Row) {
+  return apiFetch<{ settings?: Row }>("/api/admin/vkpi/settings/comment-alerts", { method: "PATCH", body: jsonBody(payload) }, token);
+}
 export async function runVkpiAutomation(token: string, job: string, payload: Row = {}) {
   return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/cron/${encodeURIComponent(job)}/run`, { method: "POST", body: jsonBody(payload), timeoutMs: 120000 }, token);
 }

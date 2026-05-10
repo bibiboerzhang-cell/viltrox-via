@@ -138,19 +138,32 @@ def generate_stalled_project_alerts() -> dict[str, Any]:
 
 def generate_comment_intelligence_alerts(
     *,
-    days: int = 7,
-    min_negative: int = 3,
-    min_critical: int = 2,
-    min_hostile: int = 1,
+    days: int | None = None,
+    min_negative: int | None = None,
+    min_critical: int | None = None,
+    min_hostile: int | None = None,
 ) -> dict[str, Any]:
     """Create alerts from analyzed comments without invoking crawlers or LLMs."""
     ensure_vkpi_schema()
-    from app.services.vkpi import comments_collector, sentiment
+    from app.services.vkpi import comments_collector, platform_crawl_settings, sentiment
 
     comments_collector.ensure_vkpi_comments_schema()
     sentiment.ensure_vkpi_sentiment_schema()
 
-    safe_days = max(1, min(90, int(days or 7)))
+    global_settings = (platform_crawl_settings.comment_alert_settings().get("settings") or {})
+    explicit_override = any(value is not None for value in (days, min_negative, min_critical, min_hostile))
+    if not bool(global_settings.get("enabled", True)) and not explicit_override:
+        return {
+            "alerts": [],
+            "count": 0,
+            "disabled": True,
+            "rule_key": "comment_intelligence.negative_or_hostile",
+        }
+
+    safe_days = max(1, min(90, int(days or global_settings.get("window_days") or 7)))
+    min_negative_i = max(1, min(999, int(min_negative or global_settings.get("min_negative") or 3)))
+    min_critical_i = max(1, min(999, int(min_critical or global_settings.get("min_critical") or 2)))
+    min_hostile_i = max(1, min(999, int(min_hostile or global_settings.get("min_hostile") or 1)))
     cutoff = (datetime.utcnow() - timedelta(days=safe_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     conn = get_conn()
     rows = conn.execute(
@@ -180,7 +193,7 @@ def generate_comment_intelligence_alerts(
         ORDER BY hostile_count DESC, critical_count DESC, negative_count DESC, latest_analyzed_at DESC
         LIMIT 100
         """,
-        (cutoff, int(min_negative), int(min_critical), int(min_hostile)),
+        (cutoff, min_negative_i, min_critical_i, min_hostile_i),
     ).fetchall()
 
     created: list[dict[str, Any]] = []
@@ -192,7 +205,7 @@ def generate_comment_intelligence_alerts(
         hostile_count = int(data.get("hostile_count") or 0)
         critical_count = int(data.get("critical_count") or 0)
         negative_count = int(data.get("negative_count") or 0)
-        severity = "danger" if hostile_count >= int(min_hostile) else "warning"
+        severity = "danger" if hostile_count >= min_hostile_i else "warning"
         key_ref = post_id or str(data.get("external_post_id") or "unknown")
         alert_key = f"comment-intelligence-{post_table}-{key_ref}"
         created.append(
@@ -219,6 +232,11 @@ def generate_comment_intelligence_alerts(
                         "hostile_count": hostile_count,
                         "flagged_comments": int(data.get("flagged_comments") or 0),
                         "window_days": safe_days,
+                        "thresholds": {
+                            "min_negative": min_negative_i,
+                            "min_critical": min_critical_i,
+                            "min_hostile": min_hostile_i,
+                        },
                         "latest_analyzed_at": data.get("latest_analyzed_at"),
                     },
                     ensure_ascii=False,
@@ -231,6 +249,11 @@ def generate_comment_intelligence_alerts(
         "alerts": created,
         "count": len(created),
         "window_days": safe_days,
+        "thresholds": {
+            "min_negative": min_negative_i,
+            "min_critical": min_critical_i,
+            "min_hostile": min_hostile_i,
+        },
         "rule_key": "comment_intelligence.negative_or_hostile",
     }
 
