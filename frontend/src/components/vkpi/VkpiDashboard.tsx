@@ -293,6 +293,30 @@ export function VkpiDashboard({
     setStaffProfileDrawerError('');
   };
 
+  const closeAlertDetailDrawer = () => {
+    setAlertDetailOpen(false);
+    setAlertDetail(null);
+    setAlertDetailError('');
+  };
+
+  const closeWorkspaceDrawers = () => {
+    setEvidenceMetric(null);
+    setEvidenceMetricValueId(null);
+    projectDetailDrawer.closeProjectDetail();
+    closeKolProfileDrawer();
+    closeStaffProfileDrawer();
+    closeAlertDetailDrawer();
+  };
+
+  const handleSelectPage = (page: VkpiPageKey) => {
+    setActivePage(page);
+    closeWorkspaceDrawers();
+  };
+
+  useEffect(() => {
+    closeWorkspaceDrawers();
+  }, [activePage]);
+
   const handleSelectProject = (project: VkpiProjectRow) => {
     setSelectedProjectId(project.id);
     closeKolProfileDrawer();
@@ -393,7 +417,7 @@ export function VkpiDashboard({
         userRole={userRole}
         userAvatar={userAvatar}
         avatarRequired={avatarRequired}
-        onSelectPage={setActivePage}
+        onSelectPage={handleSelectPage}
         onUploadAvatar={onUploadAvatar}
         onSignOut={onSignOut}
       />
@@ -541,9 +565,7 @@ export function VkpiDashboard({
             loading={alertDetailLoading}
             error={alertDetailError}
             onClose={() => {
-              setAlertDetailOpen(false);
-              setAlertDetail(null);
-              setAlertDetailError('');
+              closeAlertDetailDrawer();
             }}
           />
         ) : null}
