@@ -37,6 +37,7 @@ def main() -> None:
     detail_panel = "frontend/src/components/vkpi/panels/KolDetailPanel.tsx"
     avatar = "frontend/src/components/vkpi/shared/Avatar.tsx"
     types = "frontend/src/components/vkpi/vkpiTypes.ts"
+    data_quality_page = "frontend/src/components/vkpi/pages/DataQualityPage.tsx"
 
     fake_buttons: list[str] = []
     vkpi_root = ROOT / "frontend/src/components/vkpi"
@@ -73,6 +74,10 @@ def main() -> None:
     assert_not_contains(detail_panel, "aria-label=\"上一个红人\"", "dead previous button should be removed")
     assert_not_contains(detail_panel, "aria-label=\"下一个红人\"", "dead next button should be removed")
     assert_not_contains(detail_panel, ">编辑</button>", "dead edit button should be removed")
+
+    assert_contains(data_quality_page, "vkpi-data-quality-actions", "data quality row actions should use compact grouped controls")
+    assert_contains(data_quality_page, "<summary>更多</summary>", "secondary data-quality actions should collapse under more menu")
+    assert_contains(data_quality_page, "actOnIssue(issue.id, 'resolve')", "data quality primary action must remain wired to the real endpoint")
 
     print("VKPI_P3_2_FULL_QA_AUDIT_SMOKE_OK")
 

@@ -110,12 +110,17 @@ export function DataQualityPage({ apiToken, viewMode }: DataQualityPageProps) {
                   <td>{issue.staff_id || '-'}</td>
                   <td>{issue.detail || '-'}</td>
                   <td>
-                    <div className="vkpi-table-actions">
-                      <button className="vkpi-button vkpi-button--small vkpi-button--ghost" type="button" disabled={loading} onClick={() => void actOnIssue(issue.id, 'assign')}>指派</button>
-                      <button className="vkpi-button vkpi-button--small vkpi-button--ghost" type="button" disabled={loading} onClick={() => void actOnIssue(issue.id, 'rerun')}>重检</button>
-                      <button className="vkpi-button vkpi-button--small vkpi-button--ghost" type="button" disabled={loading} onClick={() => void actOnIssue(issue.id, 'evidence')}>补证据</button>
+                    <div className="vkpi-table-actions vkpi-data-quality-actions">
                       <button className="vkpi-button vkpi-button--small" type="button" disabled={loading} onClick={() => void actOnIssue(issue.id, 'resolve')}>已处理</button>
-                      <button className="vkpi-button vkpi-button--small vkpi-button--ghost" type="button" disabled={loading} onClick={() => void actOnIssue(issue.id, 'ignore')}>忽略</button>
+                      <details className="vkpi-row-action-menu">
+                        <summary>更多</summary>
+                        <div>
+                          <button className="vkpi-button vkpi-button--small vkpi-button--ghost" type="button" disabled={loading} onClick={() => void actOnIssue(issue.id, 'assign')}>指派</button>
+                          <button className="vkpi-button vkpi-button--small vkpi-button--ghost" type="button" disabled={loading} onClick={() => void actOnIssue(issue.id, 'rerun')}>重检</button>
+                          <button className="vkpi-button vkpi-button--small vkpi-button--ghost" type="button" disabled={loading} onClick={() => void actOnIssue(issue.id, 'evidence')}>补证据</button>
+                          <button className="vkpi-button vkpi-button--small vkpi-button--ghost" type="button" disabled={loading} onClick={() => void actOnIssue(issue.id, 'ignore')}>忽略</button>
+                        </div>
+                      </details>
                     </div>
                   </td>
                 </tr>
