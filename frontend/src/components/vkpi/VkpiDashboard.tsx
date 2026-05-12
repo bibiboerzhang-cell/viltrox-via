@@ -43,6 +43,11 @@ export interface VkpiDashboardProps {
   onExportPDF?: () => void;
   onExportCSV?: () => void;
   onGenerateWeeklyReport?: () => void;
+  weeklyReportStatus?: {
+    state: 'idle' | 'loading' | 'success' | 'error';
+    message: string;
+    href?: string;
+  } | null;
   onDownloadReportPDF?: () => void;
   onOpenProject?: (projectId: string) => void;
   onCopyShortLink?: (slug: string) => void;
@@ -52,7 +57,7 @@ export interface VkpiDashboardProps {
   onClaimKol?: (kolId: string) => Promise<void>;
   onUpdateKol?: (kolId: string, payload: { avatarUrl?: string; profileUrl?: string; contactEmail?: string; contactPhone?: string; notes?: string; contactLinks?: Array<{ label?: string; value?: string; url?: string }> }) => Promise<void>;
   onUploadEvidenceFile?: (file: File, payload?: { entityType?: string; entityId?: string; purpose?: string }) => Promise<Record<string, unknown>>;
-  onCreateProject?: (payload: { projectName: string; kolId?: string; productSku?: string; productName?: string; platform?: string; marketplace?: string; note?: string }) => Promise<void>;
+  onCreateProject?: (payload: { projectName: string; kolId?: string; productSku?: string; productName?: string; productSkus?: string[]; products?: Array<{ productSku: string; productName?: string }>; platform?: string; marketplace?: string; note?: string }) => Promise<void>;
   onMoveProjectStage?: (projectId: string, toStage: VkpiProjectStage, note?: string, extras?: { trackingNumber?: string; sampleStatus?: string; sourceRefType?: string; sourceRefId?: string }) => Promise<void>;
   onDeleteProject?: (projectId: string, reason?: string) => Promise<void>;
   onAddProjectCost?: (payload: { projectId: string; costType: string; amountUsd: number; note?: string; sourceRef?: string }) => Promise<void>;
@@ -149,6 +154,37 @@ const emptyDashboardData: VkpiDashboardData = {
   },
 };
 
+const VKPI_PAGE_KEYS = new Set<VkpiPageKey>([
+  'command',
+  'discover',
+  'projects',
+  'links',
+  'attribution',
+  'costs',
+  'productBattle',
+  'industryData',
+  'dataAnalysis',
+  'analytics',
+  'channels',
+  'campaigns',
+  'dataQuality',
+  'reports',
+  'audit',
+  'settings',
+]);
+
+function isVkpiPageKey(value: string): value is VkpiPageKey {
+  return VKPI_PAGE_KEYS.has(value as VkpiPageKey);
+}
+
+function getInitialVkpiPage(): VkpiPageKey {
+  if (typeof window === 'undefined') return 'command';
+  const hashPage = window.location.hash.replace(/^#\/?/, '');
+  const queryPage = new URLSearchParams(window.location.search).get('page') || '';
+  const candidate = hashPage || queryPage;
+  return isVkpiPageKey(candidate) ? candidate : 'command';
+}
+
 export function VkpiDashboard({
   data = emptyDashboardData,
   range = '7d',
@@ -159,6 +195,7 @@ export function VkpiDashboard({
   onExportPDF,
   onExportCSV,
   onGenerateWeeklyReport,
+  weeklyReportStatus,
   onDownloadReportPDF,
   onOpenProject,
   onCopyShortLink,
@@ -202,7 +239,7 @@ export function VkpiDashboard({
 }: VkpiDashboardProps) {
   const [query, setQuery] = useState('');
   const [selectedProjectId, setSelectedProjectId] = useState(data.projects[0]?.id);
-  const [activePage, setActivePage] = useState<VkpiPageKey>('command');
+  const [activePage, setActivePage] = useState<VkpiPageKey>(() => getInitialVkpiPage());
   const [evidenceMetric, setEvidenceMetric] = useState<VkpiMetricEvidenceKey | null>(null);
   const [evidenceMetricValueId, setEvidenceMetricValueId] = useState<number | null>(null);
   const [kolProfileDrawerProject, setKolProfileDrawerProject] = useState<VkpiProjectRow | null>(null);
@@ -310,8 +347,19 @@ export function VkpiDashboard({
 
   const handleSelectPage = (page: VkpiPageKey) => {
     setActivePage(page);
+    if (typeof window !== 'undefined') {
+      window.history.replaceState(null, '', `#${page}`);
+    }
     closeWorkspaceDrawers();
   };
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      setActivePage(getInitialVkpiPage());
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
 
   useEffect(() => {
     closeWorkspaceDrawers();
@@ -439,6 +487,7 @@ export function VkpiDashboard({
           onExportPDF={onExportPDF}
           onExportCSV={onExportCSV}
           onGenerateWeeklyReport={onGenerateWeeklyReport}
+          weeklyReportStatus={weeklyReportStatus}
         />
 
 	        <main className="vkpi-page">

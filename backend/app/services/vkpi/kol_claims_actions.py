@@ -195,7 +195,7 @@ def list_claims(status: str = "active", limit: int = 100, *, staff: dict[str, An
         """,
         (*params, limit_i),
     ).fetchall()
-    return {"claims": [dict(row) for row in rows]}
+    return {"claims": [dict(row) for row in rows], "scope": scope.scope_context(staff, staff_id)}
 
 
 def list_kols(
@@ -269,7 +269,7 @@ def list_kols(
         """,
         (*params, limit_i),
     ).fetchall()
-    return {"kols": [dict(row) for row in rows]}
+    return {"kols": [dict(row) for row in rows], "scope": scope.scope_context(staff, staff_id)}
 
 
 def update_kol_manual(kol_id: int, body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:

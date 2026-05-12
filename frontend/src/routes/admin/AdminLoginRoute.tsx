@@ -10,6 +10,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../../hooks/useAuth";
+import { frontendBuildInfo, shortBuildSha } from "../../lib/buildInfo";
 import "../../styles/admin.css";
 
 export default function AdminLoginRoute() {
@@ -103,6 +104,13 @@ export default function AdminLoginRoute() {
             {submitting ? "登录中…" : "登录"}
           </button>
         </form>
+
+        <div
+          className="admin-auth-card__version"
+          title={`${frontendBuildInfo.gitBranch} · ${frontendBuildInfo.gitSha} · built ${frontendBuildInfo.builtAt}`}
+        >
+          前端版本 {shortBuildSha(frontendBuildInfo.gitSha)}
+        </div>
       </div>
     </div>
   );

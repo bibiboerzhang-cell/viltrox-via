@@ -21,10 +21,16 @@ export function SentimentTab({ apiToken }: SentimentTabProps) {
 
       <section className="da-two-column">
         <DaCard title="Sentiment Distribution" eyebrow="占比">
-          <EmptyState title="待 Phase 3 启用" body="Donut chart 占位,待 sentiment_analyzer 服务上线。" />
+          <EmptyState
+            title="图表视图未接入"
+            body="当前已有评论智能概览和分布列表,但 Donut 图还没有绑定真实 chart renderer；上线前保持明确空态,不伪装成已完成图表。"
+          />
         </DaCard>
         <DaCard title="Sentiment Trend (30d)" eyebrow="时间序列">
-          <EmptyState title="待 Phase 3 启用" body="时序图占位,待累积真实情感数据。" />
+          <EmptyState
+            title="趋势图未接入"
+            body="需要评论情感按日聚合接口后再渲染趋势线；当前不展示模拟曲线。"
+          />
         </DaCard>
       </section>
     </>

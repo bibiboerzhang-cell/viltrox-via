@@ -1,5 +1,3 @@
-import { textValue } from '../shared/vkpiDataUtils';
-
 export function ProviderStatusTable({ rows, busyProvider, onProbe }: { rows: Array<Record<string, unknown>>; busyProvider: string; onProbe: (provider: string) => void }) {
   return (
     <div className="vkpi-table-wrap">
@@ -10,12 +8,11 @@ export function ProviderStatusTable({ rows, busyProvider, onProbe }: { rows: Arr
             const provider = String(row.provider || '');
             const status = String(row.latest_status || row.status || 'unknown');
             const configured = Boolean(row.configured);
-            const keyMask = textValue(row.key_mask || row.key_prefix || row.keyPrefix, configured ? '已配置' : '未配置');
             const displayStatus = configured ? status : 'not_configured';
             return (
               <tr key={provider || String(row.id)}>
                 <td><strong>{providerLabel(provider)}</strong></td>
-                <td>{keyMask}</td>
+                <td>{configured ? '已配置' : '未配置'}</td>
                 <td><span className={`vkpi-status-pill ${providerTone(displayStatus)}`}>{providerStatusLabel(displayStatus)}</span></td>
                 <td>{String(row.last_ok_at || row.updated_at || '-')}</td>
                 <td>{String(row.last_error || '-')}</td>

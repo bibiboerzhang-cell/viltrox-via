@@ -4,6 +4,7 @@ import {
   createProjectFromOutreachSuggestion,
   dismissOutreachSuggestion,
   getDailyOutreachDigestStatus,
+  getKolPoolSummary,
   getProductRecommendationOutcomeSummary,
   listAnalyticsProducts,
   listDailyOutreachDigest,
@@ -33,12 +34,13 @@ export function AnalyticsPage({ apiToken }: AnalyticsPageProps) {
   const [launches, setLaunches] = useState<Row[]>([]);
   const [recommendations, setRecommendations] = useState<Row[]>([]);
   const [recommendationOutcomeSummary, setRecommendationOutcomeSummary] = useState<Row>({});
+  const [kolPoolSummary, setKolPoolSummary] = useState<Row>({});
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
 
   const refresh = async () => {
     if (!apiToken) return;
-    const [productResult, suggestionResult, digestResult, digestStatusResult, launchResult, recommendationResult, outcomeResult] = await Promise.all([
+    const [productResult, suggestionResult, digestResult, digestStatusResult, launchResult, recommendationResult, outcomeResult, kolPoolResult] = await Promise.all([
       listAnalyticsProducts(apiToken).catch(() => ({ products: [] })),
       listOutreachSuggestions(apiToken).catch(() => ({ suggestions: [] })),
       listDailyOutreachDigest(apiToken).catch(() => ({ items: [], digest_date: '' })),
@@ -46,6 +48,7 @@ export function AnalyticsPage({ apiToken }: AnalyticsPageProps) {
       listProductLaunches(apiToken).catch(() => ({ launches: [] })),
       listProductRecommendations(apiToken).catch(() => ({ recommendations: [] })),
       getProductRecommendationOutcomeSummary(apiToken).catch(() => ({ totals: {}, conversion: {}, source_rows: [] })),
+      getKolPoolSummary(apiToken).catch(() => ({})),
     ]);
     setProducts(productResult.products || []);
     setSuggestions(suggestionResult.suggestions || []);
@@ -55,6 +58,7 @@ export function AnalyticsPage({ apiToken }: AnalyticsPageProps) {
     setLaunches(launchResult.launches || []);
     setRecommendations(recommendationResult.recommendations || []);
     setRecommendationOutcomeSummary(outcomeResult as Row);
+    setKolPoolSummary(kolPoolResult as Row);
   };
 
   useEffect(() => {
@@ -97,6 +101,7 @@ export function AnalyticsPage({ apiToken }: AnalyticsPageProps) {
         suggestionsCount={suggestions.length}
         digestCount={digestItems.length}
         digestStatus={digestStatus}
+        kolPoolSummary={kolPoolSummary}
         onBusyChange={setBusy}
         onPlatformChange={setPlatform}
         onMessage={setMessage}

@@ -63,7 +63,33 @@ def list_projects(limit: int = 50, stage: str = "", *, staff: dict[str, Any] | N
         """,
         (*params, limit_i),
     ).fetchall()
-    return {"projects": [dict(row) for row in rows]}
+    return {"projects": [dict(row) for row in rows], "scope": scope.scope_context(staff, staff_id_filter)}
+
+
+def _normalize_project_products(body: dict[str, Any]) -> list[dict[str, str]]:
+    """Normalize selected products from UI without adding a new relation table yet."""
+    products: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def add_product(sku: Any, name: Any = "") -> None:
+        product_sku = str(sku or "").strip()
+        product_name = str(name or "").strip()
+        if not product_sku or product_sku in seen:
+            return
+        seen.add(product_sku)
+        products.append({"product_sku": product_sku, "product_name": product_name})
+
+    for item in body.get("products") or []:
+        if not isinstance(item, dict):
+            continue
+        add_product(item.get("product_sku") or item.get("productSku") or item.get("sku"), item.get("product_name") or item.get("productName") or item.get("name"))
+
+    for sku in body.get("product_skus") or body.get("productSkus") or []:
+        add_product(sku)
+
+    add_product(body.get("product_sku") or body.get("productSku"), body.get("product_name") or body.get("productName"))
+    return products
+
 
 def create_project(body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     ensure_vkpi_schema()
@@ -79,6 +105,11 @@ def create_project(body: dict[str, Any], *, staff: dict[str, Any] | None = None)
         assigned_staff_id = actor_staff_id
     now = utcnow()
     project_uid = str(body.get("project_uid") or f"VKPI-{secrets.token_hex(5).upper()}").strip()
+    products = _normalize_project_products(body)
+    primary_product = products[0] if products else {}
+    metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
+    if products:
+        metadata = {**metadata, "products": products, "product_skus": [item["product_sku"] for item in products]}
     conn = get_conn()
     conn.execute(
         """
@@ -97,8 +128,8 @@ def create_project(body: dict[str, Any], *, staff: dict[str, Any] | None = None)
             _int(body.get("kol_id")) or None,
             assigned_staff_id or None,
             actor_staff_id or None,
-            str(body.get("product_sku") or ""),
-            str(body.get("product_name") or ""),
+            str(primary_product.get("product_sku") or body.get("product_sku") or ""),
+            str(primary_product.get("product_name") or body.get("product_name") or ""),
             str(body.get("platform") or ""),
             str(body.get("marketplace") or ""),
             stage,
@@ -116,7 +147,7 @@ def create_project(body: dict[str, Any], *, staff: dict[str, Any] | None = None)
             body.get("due_at"),
             now,
             now,
-            _json(body.get("metadata")),
+            _json(metadata),
             now,
             now,
         ),

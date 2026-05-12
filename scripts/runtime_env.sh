@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 # R58E: 加 LOCAL_DATABASE_URL 守门 + 启动可见性
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+  SCRIPT_SOURCE="${BASH_SOURCE[0]}"
+elif [[ -n "${ZSH_VERSION:-}" ]]; then
+  SCRIPT_SOURCE="${(%):-%N}"
+else
+  SCRIPT_SOURCE="$0"
+fi
+ROOT="$(cd "$(dirname "$SCRIPT_SOURCE")/.." && pwd)"
 INSECURE_LOCAL_JWT_SECRET="viltrox2-local-dev-secret-change-me"
 LOCAL_ENV_FILE="${LOCAL_ENV_FILE:-$ROOT/.env}"
 ENVIRONMENT="${ENVIRONMENT:-local}"
@@ -61,7 +68,7 @@ load_env_file() {
       export "$key=$value"
     elif [[ "$key" == "JWT_SECRET" && "${JWT_SECRET:-}" == "$INSECURE_LOCAL_JWT_SECRET" && "$value" != "$INSECURE_LOCAL_JWT_SECRET" ]]; then
       export "$key=$value"
-    elif [[ -z "${!key+x}" ]]; then
+    elif eval "[[ -z \"\${$key+x}\" ]]"; then
       export "$key=$value"
     fi
   done < "$file_path"

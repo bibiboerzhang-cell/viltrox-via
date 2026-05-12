@@ -203,12 +203,14 @@ export function lookupResultToKolDetail(result: VkpiKolLookupResult | null, fall
     country: textValue(kol.country, ''),
     claimOwner: textValue(result.claim?.staff_name || result.claim?.staff_email, result.can_claim ? '可由当前员工认领' : '未绑定负责人'),
     claimStatus: result.can_claim ? '可认领' : result.claim ? '已认领' : '未认领',
-    recentContent: posts.slice(0, 6).map((post, index) => {
+    recentContent: posts.slice(0, 24).map((post, index) => {
       const raw = objectValue(post.raw_json);
       const imageUrl = textValue(
         post.thumbnail_url ||
         post.thumbnail ||
         post.thumbnailUrl ||
+        post.cover_url ||
+        post.coverUrl ||
         post.image_url ||
         post.imageUrl ||
         post.display_url ||
@@ -216,22 +218,61 @@ export function lookupResultToKolDetail(result: VkpiKolLookupResult | null, fall
         raw.thumbnail_url ||
         raw.thumbnail ||
         raw.thumbnailUrl ||
+        raw.cover_url ||
+        raw.coverUrl ||
         raw.image_url ||
         raw.imageUrl ||
         raw.display_url ||
         raw.displayUrl,
         '',
       );
+      const url = textValue(
+        post.post_url ||
+        post.postUrl ||
+        post.url ||
+        post.permalink ||
+        post.shortCodeUrl ||
+        raw.post_url ||
+        raw.postUrl ||
+        raw.url ||
+        raw.permalink ||
+        raw.shortCodeUrl ||
+        raw.link,
+        '',
+      );
+      const videoUrl = textValue(
+        post.video_url ||
+        post.videoUrl ||
+        post.video_download_url ||
+        post.videoDownloadUrl ||
+        post.media_url ||
+        post.mediaUrl ||
+        post.play_url ||
+        post.playUrl ||
+        raw.video_url ||
+        raw.videoUrl ||
+        raw.video_download_url ||
+        raw.videoDownloadUrl ||
+        raw.media_url ||
+        raw.mediaUrl ||
+        raw.play_url ||
+        raw.playUrl ||
+        raw.videoUrlNoWaterMark ||
+        raw.video_url_no_watermark,
+        '',
+      );
       return ({
       id: String(post.id || post.post_url || raw.url || index),
       title: textValue(post.title || post.caption || raw.title || raw.caption, '未命名内容'),
       imageUrl,
+      url,
+      videoUrl,
       platform: platformFromRaw(post.platform || platform),
       postedAt: textValue(post.published_at, ''),
       engagementLabel: `播放 ${compactCount(post.views || post.view_count || post.play_count || raw.views || raw.view_count || raw.play_count)} · 赞 ${compactCount(post.likes || post.like_count || raw.likes || raw.like_count)} · 评 ${compactCount(post.comments || post.comment_count || raw.comments || raw.comment_count)}`,
     });
     }),
-    messages: comments.slice(0, 5).map((comment, index) => ({
+    messages: comments.slice(0, 20).map((comment, index) => ({
       id: String(comment.id || index),
       source: platform,
       type: 'Comment reply',
@@ -333,7 +374,7 @@ export function profileToKolDetail(profile: VkpiKolProfile | null, fallback: Vkp
     gmv: linkedShort.gmv,
     roi: selectedProject?.roi || 0,
   } : fallback.shortLink;
-  const profileMessages = (profile.messages || []).slice(0, 5).map((message, index) => ({
+  const profileMessages = (profile.messages || []).slice(0, 20).map((message, index) => ({
     id: String(message.id || index),
     source: platformFromRaw(message.source || message.source_platform || platform),
     type: textValue(message.direction, 'Note') === 'inbound' ? 'DM' as const : 'Note' as const,
@@ -341,12 +382,14 @@ export function profileToKolDetail(profile: VkpiKolProfile | null, fallback: Vkp
     snippet: textValue(message.snippet || message.body, '已记录消息但没有摘要。'),
     evidenceUrl: textValue(message.evidence_url, '') || undefined,
   }));
-  const profileContent = rawPosts.slice(0, 6).map((post, index) => {
+  const profileContent = rawPosts.slice(0, 24).map((post, index) => {
     const raw = objectValue(post.raw_json);
     const imageUrl = textValue(
       post.thumbnail_url ||
       post.thumbnail ||
       post.thumbnailUrl ||
+      post.cover_url ||
+      post.coverUrl ||
       post.image_url ||
       post.imageUrl ||
       post.display_url ||
@@ -354,10 +397,47 @@ export function profileToKolDetail(profile: VkpiKolProfile | null, fallback: Vkp
       raw.thumbnail_url ||
       raw.thumbnail ||
       raw.thumbnailUrl ||
+      raw.cover_url ||
+      raw.coverUrl ||
       raw.image_url ||
       raw.imageUrl ||
       raw.display_url ||
       raw.displayUrl,
+      '',
+    );
+    const url = textValue(
+      post.post_url ||
+      post.postUrl ||
+      post.url ||
+      post.permalink ||
+      post.shortCodeUrl ||
+      raw.post_url ||
+      raw.postUrl ||
+      raw.url ||
+      raw.permalink ||
+      raw.shortCodeUrl ||
+      raw.link,
+      '',
+    );
+    const videoUrl = textValue(
+      post.video_url ||
+      post.videoUrl ||
+      post.video_download_url ||
+      post.videoDownloadUrl ||
+      post.media_url ||
+      post.mediaUrl ||
+      post.play_url ||
+      post.playUrl ||
+      raw.video_url ||
+      raw.videoUrl ||
+      raw.video_download_url ||
+      raw.videoDownloadUrl ||
+      raw.media_url ||
+      raw.mediaUrl ||
+      raw.play_url ||
+      raw.playUrl ||
+      raw.videoUrlNoWaterMark ||
+      raw.video_url_no_watermark,
       '',
     );
     const views = post.views || post.view_count || post.play_count || raw.views || raw.view_count || raw.play_count || raw.videoViewCount || raw.videoPlayCount;
@@ -367,6 +447,8 @@ export function profileToKolDetail(profile: VkpiKolProfile | null, fallback: Vkp
       id: String(post.id || post.post_url || raw.url || index),
       title: textValue(post.title || post.caption || raw.title || raw.caption || post.post_url, '未命名内容'),
       imageUrl,
+      url,
+      videoUrl,
       platform: platformFromRaw(post.platform || platform),
       postedAt: textValue(post.published_at || post.created_at, ''),
       engagementLabel: `播放 ${compactCount(views)} · 赞 ${compactCount(likes)} · 评 ${compactCount(comments)}`,

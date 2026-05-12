@@ -110,12 +110,19 @@ def delete_project(project_id: int, *, staff: dict[str, Any] | None = None) -> d
 
 def add_account(project_id: int, payload: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     ensure_vkpi_product_industry_schema()
-    handle = str(payload.get("handle") or payload.get("username") or "").strip().lstrip("@")
+    raw_handle = str(payload.get("handle") or payload.get("username") or "").strip()
+    raw_profile_url = str(payload.get("profile_url") or payload.get("url") or "").strip()
+    if not raw_profile_url and raw_handle.lower().startswith(("http://", "https://")):
+        raw_profile_url = raw_handle
+    handle = _normalize_handle({**payload, "handle": raw_handle, "profile_url": raw_profile_url}).strip().lstrip("@")
     if not handle:
         raise ValueError("account handle required")
     uid = f"account-{secrets.token_hex(8)}"
     now = _utcnow()
     platform = _platform(payload.get("platform"))
+    profile_url = raw_profile_url
+    if not profile_url:
+        profile_url = _default_profile_url(platform, handle)
     conn = get_conn()
     conn.execute(
         """
@@ -145,7 +152,7 @@ def add_account(project_id: int, payload: dict[str, Any], *, staff: dict[str, An
             handle,
             str(payload.get("display_name") or handle),
             str(payload.get("avatar_url") or ""),
-            str(payload.get("profile_url") or payload.get("url") or ""),
+            profile_url,
             str(payload.get("bio") or ""),
             _bool(payload.get("is_verified")),
             str(payload.get("brand_group") or ""),
@@ -293,8 +300,32 @@ def _handle_from_url(url: str) -> str:
     return parts[0].lstrip("@")
 
 
+def _default_profile_url(platform: str, handle: str) -> str:
+    normalized = str(handle or "").strip().lstrip("@")
+    if not normalized:
+        return ""
+    platform_key = _platform(platform)
+    if platform_key == "instagram":
+        return f"https://www.instagram.com/{normalized}"
+    if platform_key == "tiktok":
+        return f"https://www.tiktok.com/@{normalized}"
+    if platform_key == "youtube":
+        return f"https://www.youtube.com/@{normalized}"
+    if platform_key == "facebook":
+        return f"https://www.facebook.com/{normalized}"
+    if platform_key == "reddit":
+        return f"https://www.reddit.com/user/{normalized}"
+    if platform_key == "x":
+        return f"https://x.com/{normalized}"
+    if platform_key == "bilibili":
+        return f"https://space.bilibili.com/{normalized}"
+    return ""
+
+
 def _normalize_handle(item: dict[str, Any]) -> str:
     handle = str(_first(item, "handle", "username", "userName", "screenName", "channelName", "author", "ownerUsername") or "").strip()
+    if handle.lower().startswith(("http://", "https://")):
+        handle = _handle_from_url(handle)
     if not handle:
         handle = str(_nested_first(item, "authorMeta.name", "authorMeta.username", "owner.username", "user.username") or "").strip()
     if not handle:
@@ -313,13 +344,42 @@ def _normalize_apify_post(post: dict[str, Any]) -> dict[str, Any]:
         _first(post, "thumbnailUrl", "thumbnail_url", "displayUrl", "imageUrl")
         or (((thumbnails.get("high") or thumbnails.get("medium") or thumbnails.get("default") or {}) or {}).get("url") if thumbnails else "")
     )
+    video_url = (
+        _first(
+            post,
+            "video_url",
+            "videoUrl",
+            "videoDownloadUrl",
+            "downloadUrl",
+            "downloadAddr",
+            "playUrl",
+            "play_url",
+            "mediaUrl",
+            "media_url",
+            "url_to_video",
+            "video_url_no_watermark",
+        )
+        or _nested_first(post, "video.url", "video.playAddr", "video.downloadAddr", "media.videoUrl")
+        or ""
+    )
+    duration_seconds = (
+        _first(post, "duration_seconds", "durationSeconds", "duration", "videoDuration")
+        or _nested_first(post, "videoMeta.duration", "video.duration", "contentDetails.duration")
+    )
+    media_type = str(_first(post, "media_type", "mediaType", "type") or "").strip().lower()
+    if media_type not in {"video", "image", "carousel", "reel", "short", "photo"}:
+        media_type = "video" if video_url else ("image" if thumbnail_url else "")
     return {
         "id": str(post_id or secrets.token_hex(8)),
-        "post_url": str(_first(post, "url", "postUrl", "videoUrl", "webVideoUrl") or ""),
+        "post_url": str(_first(post, "url", "postUrl", "webVideoUrl", "permalink", "permalinkUrl") or ""),
         "title": str(title or ""),
         "caption": str(caption or ""),
         "publishedAt": str(_first(post, "publishedAt", "published_at", "timestamp", "takenAt", "createdAt") or ""),
         "thumbnail_url": str(thumbnail_url or ""),
+        "video_url": str(video_url or ""),
+        "media_type": media_type,
+        "duration_seconds": duration_seconds,
+        "video_source": "apify_cdn" if video_url else "",
         "views": _first(post, "views", "viewCount", "videoViewCount", "playCount") or _first(stats, "views", "viewCount"),
         "likes": _first(post, "likes", "likeCount", "likesCount") or _first(stats, "likes", "likeCount"),
         "comments": _first(post, "comments", "commentCount", "commentsCount") or _first(stats, "comments", "commentCount"),
@@ -479,13 +539,51 @@ def importlib_collect_account_snapshot(account_id: int, *, raw_data: dict[str, A
 
 def list_accounts(project_id: int | None = None, limit: int = 300) -> dict[str, Any]:
     ensure_vkpi_product_industry_schema()
-    where = f"WHERE {_active_sql()}"
+    where = f"WHERE {_active_sql('a')}"
     params: list[Any] = []
     if project_id:
-        where += " AND project_id=?"
+        where += " AND a.project_id=?"
         params.append(int(project_id))
     rows = get_conn().execute(
-        f"SELECT * FROM vkpi_industry_accounts {where} ORDER BY discovered_at DESC, id DESC LIMIT ?",
+        f"""
+        SELECT
+            a.*,
+            s.snapshot_date AS latest_snapshot_date,
+            s.followers AS followers,
+            s.followers_growth_24h AS followers_growth_24h,
+            s.followers_growth_30d AS followers_growth_30d,
+            s.followers_growth_pct_30d AS followers_growth_pct_30d,
+            s.posts AS posts,
+            s.posts_30d AS posts_30d,
+            s.avg_posts_per_day AS avg_posts_per_day,
+            s.views AS views,
+            s.views_30d AS views_30d,
+            s.likes AS likes,
+            s.comments AS comments,
+            s.shares AS shares,
+            s.saves AS saves,
+            s.engagement_total_30d AS engagement_total_30d,
+            s.engagement_rate AS engagement_rate,
+            s.avg_engagement_rate_by_followers AS avg_engagement_rate_by_followers,
+            s.avg_engagement_per_day AS avg_engagement_per_day,
+            s.avg_eng_rate_by_views AS avg_eng_rate_by_views,
+            s.reach_total_30d AS reach_total_30d,
+            s.impressions_total_30d AS impressions_total_30d,
+            s.reels_views_30d AS reels_views_30d,
+            s.estimated_organic_value_cents AS estimated_organic_value_cents
+        FROM vkpi_industry_accounts a
+        LEFT JOIN vkpi_industry_account_snapshots s
+          ON s.id = (
+            SELECT s2.id
+            FROM vkpi_industry_account_snapshots s2
+            WHERE s2.account_id = a.id
+            ORDER BY s2.snapshot_date DESC, s2.id DESC
+            LIMIT 1
+          )
+        {where}
+        ORDER BY a.discovered_at DESC, a.id DESC
+        LIMIT ?
+        """,
         (*params, max(1, min(1000, int(limit or 300)))),
     ).fetchall()
     return {"accounts": [dict(row) for row in rows]}

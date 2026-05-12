@@ -1,4 +1,4 @@
-import type { KpiKey, KpiOption } from './types';
+import type { ChartKey, ChartOption, KpiKey, KpiOption } from './types';
 
 export const KPI_OPTIONS: KpiOption[] = [
   { key: 'followers', label: 'Followers', group: 'count' },
@@ -36,4 +36,23 @@ export const KPI_GROUP_LABELS: Record<KpiOption['group'], string> = {
   rate: '比率',
   reach: '触达',
   value: '价值',
+};
+
+export const CHART_OPTIONS: ChartOption[] = [
+  { key: 'top_profiles', label: 'Top Performing Profiles', group: 'summary' },
+  { key: 'top_posts', label: 'Top Posts', group: 'content' },
+  { key: 'posts_distribution', label: 'Posts Distribution', group: 'content' },
+  { key: 'posting_signals', label: 'Posting Signals', group: 'engagement' },
+];
+
+export const DEFAULT_CHARTS: ChartKey[] = [
+  'top_profiles', 'top_posts', 'posts_distribution', 'posting_signals',
+];
+
+export const CHART_GROUP_LABELS: Record<ChartOption['group'], string> = {
+  content: 'Content',
+  engagement: 'Engagement',
+  views: 'Views',
+  audience: 'Audience',
+  summary: 'Executive Summary',
 };

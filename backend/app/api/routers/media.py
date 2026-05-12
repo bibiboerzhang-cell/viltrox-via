@@ -6,13 +6,20 @@ from __future__ import annotations
 import json
 import mimetypes
 import os
+import hashlib
+import re
 import shutil
 import subprocess
 import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse, RedirectResponse, Response
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
 
+from app.core.config import UPLOAD_DIR
 from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.core.security import get_current_user
@@ -23,6 +30,29 @@ from app.services.media.storage import resolve_local_media_path
 FFMPEG_AVAILABLE = shutil.which("ffmpeg") is not None
 router = APIRouter(tags=["media"])
 logger = get_logger(__name__)
+VKPI_IMAGE_PROXY_CACHE_DIR = UPLOAD_DIR / "vkpi_media_cache"
+VKPI_IMAGE_PROXY_MAX_BYTES = 8 * 1024 * 1024
+VKPI_VIDEO_PROXY_MAX_BYTES = int(os.getenv("VKPI_VIDEO_PROXY_MAX_BYTES", str(220 * 1024 * 1024)))
+VKPI_VIDEO_PROXY_CHUNK_BYTES = 512 * 1024
+VKPI_IMAGE_ALLOWED_HOST_SUFFIXES = (
+    ".cdninstagram.com",
+    ".fbcdn.net",
+    ".xx.fbcdn.net",
+    ".ytimg.com",
+    ".googleusercontent.com",
+)
+VKPI_VIDEO_ALLOWED_HOST_SUFFIXES = (
+    ".cdninstagram.com",
+    ".fbcdn.net",
+    ".xx.fbcdn.net",
+    ".tiktokcdn.com",
+    ".tiktokcdn-us.com",
+    ".byteoversea.com",
+    ".akamaized.net",
+    ".googlevideo.com",
+    ".apifyusercontent.com",
+)
+_SAFE_RANGE_RE = re.compile(r"^bytes=\d*-\d*$")
 
 
 def _load_submission_media_row(submission_id: int):
@@ -129,6 +159,93 @@ def resolve_poster_response(row):
     raise HTTPException(status_code=404, detail="No frame available")
 
 
+def _allowed_external_image_url(raw_url: str) -> tuple[str, str]:
+    parsed = urllib.parse.urlparse(str(raw_url or "").strip())
+    if parsed.scheme not in {"https", "http"} or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="invalid image url")
+    host = parsed.hostname or ""
+    if not any(host == suffix.lstrip(".") or host.endswith(suffix) for suffix in VKPI_IMAGE_ALLOWED_HOST_SUFFIXES):
+        raise HTTPException(status_code=400, detail="image host not allowed")
+    return urllib.parse.urlunparse(parsed), host
+
+
+def _allowed_external_video_url(raw_url: str) -> tuple[str, str]:
+    parsed = urllib.parse.urlparse(str(raw_url or "").strip())
+    if parsed.scheme not in {"https", "http"} or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="invalid video url")
+    host = parsed.hostname or ""
+    if not any(host == suffix.lstrip(".") or host.endswith(suffix) for suffix in VKPI_VIDEO_ALLOWED_HOST_SUFFIXES):
+        raise HTTPException(status_code=400, detail="video host not allowed")
+    return urllib.parse.urlunparse(parsed), host
+
+
+def _safe_range_header(raw_range: str | None) -> str:
+    text = str(raw_range or "").strip()
+    return text if _SAFE_RANGE_RE.fullmatch(text) else ""
+
+
+def _upstream_video_headers(host: str, range_header: str = "") -> dict[str, str]:
+    base_host = host.split(".", 1)[-1] if "." in host else host
+    headers = {
+        "Accept": "video/mp4,video/*,*/*;q=0.8",
+        "Referer": f"https://{base_host}/",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+    }
+    if range_header:
+        headers["Range"] = range_header
+    return headers
+
+
+def _header_int(value: str | None) -> int:
+    try:
+        return int(str(value or "").strip())
+    except Exception:
+        return 0
+
+
+def _stream_upstream_response(upstream):
+    try:
+        while True:
+            chunk = upstream.read(VKPI_VIDEO_PROXY_CHUNK_BYTES)
+            if not chunk:
+                break
+            yield chunk
+    finally:
+        upstream.close()
+
+
+def _cached_external_image_path(url: str) -> tuple[Path, Path]:
+    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
+    VKPI_IMAGE_PROXY_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    return VKPI_IMAGE_PROXY_CACHE_DIR / digest, VKPI_IMAGE_PROXY_CACHE_DIR / f"{digest}.content-type"
+
+
+def _fetch_external_image(url: str, host: str) -> tuple[bytes, str]:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            "Referer": f"https://{host.split('.', 1)[-1]}/",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=15) as response:  # nosec B310 - host allowlist above.
+        content_type = str(response.headers.get("content-type") or "image/jpeg").split(";", 1)[0].strip().lower()
+        if not content_type.startswith("image/"):
+            raise HTTPException(status_code=502, detail="upstream is not image")
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = response.read(128 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > VKPI_IMAGE_PROXY_MAX_BYTES:
+                raise HTTPException(status_code=413, detail="image too large")
+            chunks.append(chunk)
+    return b"".join(chunks), content_type
+
+
 @router.get("/api/submissions/{submission_id}/video")
 def serve_submission_video(submission_id: int, request: Request):
     row = _require_submission_media_access(request, submission_id)
@@ -139,3 +256,103 @@ def serve_submission_video(submission_id: int, request: Request):
 def serve_submission_poster(submission_id: int, request: Request):
     row = _require_submission_media_access(request, submission_id)
     return resolve_poster_response(row)
+
+
+@router.get("/api/admin/vkpi/media/image-proxy")
+def serve_vkpi_external_image(request: Request, url: str = Query(..., min_length=8, max_length=4096)):
+    """Proxy and cache allowed external platform images for admin UI rendering.
+
+    Instagram CDN URLs often break when hot-linked directly from localhost. This
+    endpoint keeps the frontend same-origin while still using the real platform
+    image URL. It is intentionally allowlisted to avoid becoming an open proxy.
+    """
+    if not get_current_user(request):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    normalized_url, host = _allowed_external_image_url(url)
+    cache_path, content_type_path = _cached_external_image_path(normalized_url)
+    if cache_path.exists() and content_type_path.exists():
+        return FileResponse(
+            cache_path,
+            media_type=content_type_path.read_text().strip() or "image/jpeg",
+            headers={"Cache-Control": "private, max-age=86400"},
+        )
+    data, content_type = _fetch_external_image(normalized_url, host)
+    cache_path.write_bytes(data)
+    content_type_path.write_text(content_type)
+    return Response(
+        content=data,
+        media_type=content_type,
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
+
+
+@router.get("/api/admin/vkpi/media/video-redirect")
+def redirect_vkpi_external_video(request: Request, url: str = Query(..., min_length=8, max_length=4096)):
+    """Authenticated allowlisted redirect for platform video playback in admin UI.
+
+    Video URLs from Instagram/TikTok/Apify are large and often short-lived. We
+    intentionally redirect instead of caching bytes so the backend does not
+    become a large-file proxy, while still avoiding arbitrary open redirects.
+    """
+    if not get_current_user(request):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    normalized_url, _host = _allowed_external_video_url(url)
+    return RedirectResponse(
+        url=normalized_url,
+        status_code=307,
+        headers={"Cache-Control": "private, max-age=300"},
+    )
+
+
+@router.get("/api/admin/vkpi/media/video-proxy")
+def proxy_vkpi_external_video(request: Request, url: str = Query(..., min_length=8, max_length=4096)):
+    """Stream allowed platform videos through the admin backend.
+
+    Direct CDN playback from Instagram/TikTok often fails in local browser
+    sessions because the browser makes unauthenticated cross-origin media range
+    requests. This endpoint keeps playback same-origin, preserves Range
+    requests, and remains allowlisted so it cannot become an arbitrary proxy.
+    """
+    if not get_current_user(request):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    normalized_url, host = _allowed_external_video_url(url)
+    range_header = _safe_range_header(request.headers.get("range"))
+    upstream_request = urllib.request.Request(
+        normalized_url,
+        headers=_upstream_video_headers(host, range_header),
+    )
+    try:
+        upstream = urllib.request.urlopen(upstream_request, timeout=30)  # nosec B310 - host allowlist above.
+    except urllib.error.HTTPError as exc:
+        raise HTTPException(status_code=exc.code, detail="upstream video unavailable") from exc
+    except Exception as exc:
+        logger.warning("media.video_proxy_fetch_failed", extra={"host": host}, exc_info=True)
+        raise HTTPException(status_code=502, detail="upstream video fetch failed") from exc
+
+    content_type = str(upstream.headers.get("content-type") or "video/mp4").split(";", 1)[0].strip().lower()
+    content_length = _header_int(upstream.headers.get("content-length"))
+    if not range_header and content_length and content_length > VKPI_VIDEO_PROXY_MAX_BYTES:
+        upstream.close()
+        raise HTTPException(status_code=413, detail="video too large for non-range proxy request")
+
+    headers: dict[str, str] = {
+        "Accept-Ranges": upstream.headers.get("accept-ranges") or "bytes",
+        "Cache-Control": "private, max-age=300",
+    }
+    for name in ("content-length", "content-range", "etag", "last-modified"):
+        value = upstream.headers.get(name)
+        if value:
+            headers[name.title()] = value
+
+    status_code = int(getattr(upstream, "status", 200) or 200)
+    if status_code not in {200, 206}:
+        upstream.close()
+        raise HTTPException(status_code=502, detail="upstream video returned invalid status")
+
+    return StreamingResponse(
+        _stream_upstream_response(upstream),
+        status_code=status_code,
+        media_type=content_type or "video/mp4",
+        headers=headers,
+    )

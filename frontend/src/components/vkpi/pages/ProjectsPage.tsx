@@ -17,7 +17,7 @@ interface ProjectsPageProps {
   onSelectProject: (project: VkpiProjectRow) => void;
   onOpenKolProfile?: (project: VkpiProjectRow) => void | Promise<void>;
   onOpenStaffProfile?: (staffId: string, fallback?: Partial<VkpiStaffMember>) => void | Promise<void>;
-  onCreateProject?: (payload: { projectName: string; kolId?: string; productSku?: string; productName?: string; platform?: string; marketplace?: string; note?: string }) => Promise<void>;
+  onCreateProject?: (payload: { projectName: string; kolId?: string; productSku?: string; productName?: string; productSkus?: string[]; products?: Array<{ productSku: string; productName?: string }>; platform?: string; marketplace?: string; note?: string }) => Promise<void>;
   onMoveProjectStage?: (projectId: string, toStage: VkpiProjectStage, note?: string, extras?: { trackingNumber?: string; sampleStatus?: string; sourceRefType?: string; sourceRefId?: string }) => Promise<void>;
   onDeleteProject?: (projectId: string, reason?: string) => Promise<void>;
   onAddProjectCost?: (payload: { projectId: string; costType: string; amountUsd: number; note?: string; sourceRef?: string }) => Promise<void>;
@@ -87,13 +87,20 @@ export function ProjectsPage({ data, filteredProjects, selectedProjectId, select
   const submitProject = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!onCreateProject || !projectName.trim()) return;
+    const primarySku = productSku.trim() || selectedProductSkus[0] || '';
+    const selectedProducts = selectedProductSkus
+      .map((sku) => productChoices.find((item) => item.productSku === sku))
+      .filter((item): item is { id: string; productSku: string; productName: string; active: boolean; sourceLabel: string } => Boolean(item))
+      .map((item) => ({ productSku: item.productSku, productName: item.productName }));
     setBusy(true);
     try {
       await onCreateProject({
         projectName: projectName.trim(),
         kolId: kolId.trim() || undefined,
-        productSku: productSku.trim() || undefined,
-        productName: productName.trim() || undefined,
+        productSku: primarySku || undefined,
+        productName: (productName.trim() || selectedProducts[0]?.productName) || undefined,
+        productSkus: selectedProductSkus.length ? selectedProductSkus : undefined,
+        products: selectedProducts.length ? selectedProducts : undefined,
         note: selectedProductLabels.length > 1 ? `关联产品：${selectedProductLabels.join('、')}` : undefined,
       });
       setProjectName('');
@@ -241,6 +248,7 @@ export function ProjectsPage({ data, filteredProjects, selectedProjectId, select
                 ))}
               </div>
             ) : null}
+            {selectedProductLabels.length ? <span className="vkpi-help-text">已关联：{selectedProductLabels.join('、')}</span> : null}
             <button className="vkpi-button vkpi-button--primary" type="submit" disabled={busy || !onCreateProject}>创建项目</button>
           </form>
         </section>

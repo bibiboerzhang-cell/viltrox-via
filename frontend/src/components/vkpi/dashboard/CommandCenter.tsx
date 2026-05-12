@@ -160,18 +160,9 @@ export function CommandCenter({
           <footer className="vkpi-table-footer">
             <span>显示 {filteredProjects.length ? 1 : 0} - {visibleEnd}，共 {filteredProjects.length} 条</span>
             {filteredProjects.length > 5 ? (
-              <div className="vkpi-pagination" aria-label="表格分页">
-                <button type="button">‹</button>
-                <button className="is-active" type="button">1</button>
-                <button type="button">2</button>
-                <button type="button">3</button>
-                <button type="button">4</button>
-                <span>…</span>
-                <button type="button">{Math.ceil(filteredProjects.length / 5)}</button>
-                <button type="button">›</button>
-              </div>
+              <span className="vkpi-table-footer__note">当前显示前 5 条；完整分页留待下一轮接入。</span>
             ) : <span />}
-            <button className="vkpi-mini-button" type="button">每页 5 条</button>
+            <span className="vkpi-table-footer__note">每页 5 条</span>
           </footer>
         </section>
       </section>

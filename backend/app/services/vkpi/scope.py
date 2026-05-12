@@ -48,6 +48,43 @@ def can_view_all(staff: dict[str, Any] | None, *, domain: str = "general") -> bo
     return False
 
 
+def scope_context(
+    staff: dict[str, Any] | None,
+    requested_staff_id: int | None = None,
+    *,
+    domain: str = "general",
+) -> dict[str, Any]:
+    """Return the actual backend scope used for a list/read request.
+
+    The frontend may request another staff_id, but non-manager actors are
+    always reduced to their own staff id. Returning this context makes that
+    reduction visible to the UI and prevents "view all" assumptions from
+    leaking into new pages.
+    """
+    actor = actor_staff_id(staff)
+    requested = _int(requested_staff_id)
+    can_all = can_view_all(staff, domain=domain)
+    effective = effective_staff_id(staff, requested_staff_id, domain=domain)
+    if not staff:
+        mode = "anonymous"
+    elif can_all and requested:
+        mode = "requested_staff"
+    elif can_all:
+        mode = "all"
+    else:
+        mode = "own"
+    return {
+        "actor_staff_id": actor or None,
+        "requested_staff_id": requested or None,
+        "effective_staff_id": effective or None,
+        "can_view_all": bool(can_all),
+        "scope_mode": mode,
+        "role": role_key(staff),
+        "is_owner": is_owner(staff),
+        "domain": domain,
+    }
+
+
 def effective_staff_id(staff: dict[str, Any] | None, requested_staff_id: int | None = None, *, domain: str = "general") -> int | None:
     requested = _int(requested_staff_id)
     if can_view_all(staff, domain=domain):

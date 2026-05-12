@@ -250,6 +250,10 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
     const raw = form.get(key);
     return numberValue(raw === null ? fallback : String(raw), fallback);
   };
+  const formBool = (form: FormData, key: string, fallback: boolean) => {
+    const raw = form.get(key);
+    return raw === null ? fallback : raw === 'on';
+  };
   const platformBlockedReason = (row: Record<string, unknown>) => {
     if (!rowEnabled(row, 'crawl_enabled')) return '平台抓取开关关闭。';
     if (numberValue(row.daily_account_limit) <= 0) return '每日账号为 0，开启后也不会实际抓取。';
@@ -314,13 +318,13 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
         daily_account_limit: formNumber(form, 'daily_account_limit', numberValue(row.daily_account_limit)),
         posts_per_account: formNumber(form, 'posts_per_account', numberValue(row.posts_per_account)),
         monthly_budget_usd: formNumber(form, 'monthly_budget_usd', numberValue(row.monthly_budget_usd)),
-        crawl_comments: form.get('crawl_comments') === 'on',
-        crawl_followers: form.get('crawl_followers') === 'on',
-        crawl_audience_graph: form.get('crawl_audience_graph') === 'on',
-        only_uncontacted_kols: form.get('only_uncontacted_kols') === 'on',
-        include_company_accounts: form.get('include_company_accounts') === 'on',
-        include_competitor_accounts: form.get('include_competitor_accounts') === 'on',
-        include_candidate_kols: form.get('include_candidate_kols') === 'on',
+        crawl_comments: formBool(form, 'crawl_comments', rowEnabled(row, 'crawl_comments')),
+        crawl_followers: formBool(form, 'crawl_followers', rowEnabled(row, 'crawl_followers')),
+        crawl_audience_graph: formBool(form, 'crawl_audience_graph', rowEnabled(row, 'crawl_audience_graph')),
+        only_uncontacted_kols: formBool(form, 'only_uncontacted_kols', rowEnabled(row, 'only_uncontacted_kols')),
+        include_company_accounts: formBool(form, 'include_company_accounts', rowEnabled(row, 'include_company_accounts')),
+        include_competitor_accounts: formBool(form, 'include_competitor_accounts', rowEnabled(row, 'include_competitor_accounts')),
+        include_candidate_kols: formBool(form, 'include_candidate_kols', rowEnabled(row, 'include_candidate_kols')),
         failure_threshold: formNumber(form, 'failure_threshold', numberValue(row.failure_threshold, 5)),
         last_test_status: row.last_test_status || 'not_configured',
       }]);

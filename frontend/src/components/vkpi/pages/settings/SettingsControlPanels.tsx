@@ -59,47 +59,134 @@ export function PlatformCrawlPanel({
   onSavePlatformCrawl: (event: React.FormEvent<HTMLFormElement>, row: Row) => void;
   onTogglePlatformCrawl: (row: Row) => void;
 }) {
+  const [selectedPlatform, setSelectedPlatform] = React.useState<string>("");
+  const [advancedOpen, setAdvancedOpen] = React.useState(false);
+  const sortedPlatforms = React.useMemo(
+    () => [...platformCrawl].sort((a, b) => String(a.platform || "").localeCompare(String(b.platform || ""))),
+    [platformCrawl],
+  );
+  const selectedRow = React.useMemo(() => {
+    if (!sortedPlatforms.length) return undefined;
+    return sortedPlatforms.find((row) => String(row.platform || "") === selectedPlatform)
+      || sortedPlatforms.find((row) => String(row.platform || "").toLowerCase() === "instagram")
+      || sortedPlatforms[0];
+  }, [selectedPlatform, sortedPlatforms]);
+  React.useEffect(() => {
+    if (!selectedRow) return;
+    const key = String(selectedRow.platform || "");
+    if (key && key !== selectedPlatform) setSelectedPlatform(key);
+  }, [selectedPlatform, selectedRow]);
+  const enabledCount = platformCrawl.filter((row) => rowEnabled(row, "crawl_enabled")).length;
+  const readyCount = platformCrawl.filter((row) => platformBlockedReason(row).includes("具备抓取条件")).length;
+  const blockedCount = Math.max(platformCrawl.length - readyCount, 0);
+
+  const numberText = (value: unknown) => String(value ?? 0);
+  const selectedEnabled = selectedRow ? rowEnabled(selectedRow, "crawl_enabled") : false;
+  const selectedReason = selectedRow ? platformBlockedReason(selectedRow) : "";
+  const selectedReady = selectedReason.includes("具备抓取条件");
+
   return (
     <section className="vkpi-card vkpi-table-card vkpi-action-card--wide vkpi-settings-switch-panel">
-      <div className="vkpi-table-card__header"><div><h2>平台抓取开关</h2><span>{platformCrawl.length} 个平台</span></div></div>
+      <div className="vkpi-table-card__header vkpi-platform-crawl-header">
+        <div>
+          <h2>平台抓取开关</h2>
+          <span>{platformCrawl.length} 个平台 · {enabledCount} 个已开启 · {blockedCount} 个需处理</span>
+        </div>
+        {selectedRow ? (
+          <button
+            className={`vkpi-crawl-primary-toggle ${selectedEnabled ? "is-on" : "is-off"}`}
+            type="button"
+            disabled={busy}
+            onClick={() => onTogglePlatformCrawl(selectedRow)}
+          >
+            {selectedEnabled ? "关闭当前平台" : "开启当前平台"}
+          </button>
+        ) : null}
+      </div>
       {platformCrawl.length ? (
-        <div className="vkpi-settings-card-grid vkpi-settings-card-grid--platforms">
-          {platformCrawl.map((row) => {
-            const enabled = rowEnabled(row, "crawl_enabled");
-            return (
-              <article className={`vkpi-settings-toggle-card ${enabled ? "is-on" : "is-off"}`} key={String(row.platform)}>
-                <header>
-                  <strong>{String(row.platform || "-")}</strong>
-                  <span>{enabled ? "抓取开启" : "抓取关闭"}</span>
-                </header>
-                <div className="vkpi-settings-meta-grid">
-                  <small>每日账号<b>{String(row.daily_account_limit ?? 0)}</b></small>
-                  <small>每账号内容<b>{String(row.posts_per_account ?? 0)}</b></small>
-                  <small>月预算<b>${String(row.monthly_budget_usd ?? 0)}</b></small>
+        <div className="vkpi-platform-crawl-console">
+          <aside className="vkpi-platform-crawl-list" aria-label="平台抓取列表">
+            <div className="vkpi-platform-crawl-kpis">
+              <div><span>已开启</span><strong>{enabledCount}</strong></div>
+              <div><span>可抓取</span><strong>{readyCount}</strong></div>
+              <div><span>阻塞</span><strong>{blockedCount}</strong></div>
+            </div>
+            <div className="vkpi-platform-crawl-list__rows">
+              {sortedPlatforms.map((row) => {
+                const platform = String(row.platform || "-");
+                const enabled = rowEnabled(row, "crawl_enabled");
+                const reason = platformBlockedReason(row);
+                const ready = reason.includes("具备抓取条件");
+                const selected = String(selectedRow?.platform || "") === platform;
+                return (
+                  <button
+                    className={`vkpi-platform-crawl-row ${selected ? "is-selected" : ""} ${enabled ? "is-on" : "is-off"}`}
+                    key={platform}
+                    type="button"
+                    onClick={() => setSelectedPlatform(platform)}
+                  >
+                    <span className="vkpi-platform-crawl-row__name">{platform}</span>
+                    <span className={`vkpi-platform-crawl-row__status ${ready ? "is-ok" : "is-blocked"}`}>{ready ? "可抓取" : enabled ? "需配置" : "关闭"}</span>
+                    <small>{numberText(row.daily_account_limit)} 账号 / {numberText(row.posts_per_account)} 内容 / ${numberText(row.monthly_budget_usd)}</small>
+                  </button>
+                );
+              })}
+            </div>
+          </aside>
+          {selectedRow ? (
+            <article className="vkpi-platform-crawl-detail" key={String(selectedRow.platform)}>
+              <header className="vkpi-platform-crawl-detail__header">
+                <div>
+                  <span>当前平台</span>
+                  <h3>{String(selectedRow.platform || "-")}</h3>
                 </div>
-                <p className={enabled ? "vkpi-settings-hint" : "vkpi-settings-hint is-muted"}>{platformBlockedReason(row)}</p>
-                <form className="vkpi-settings-control-form" onSubmit={(event) => onSavePlatformCrawl(event, row)}>
-                  <div className="vkpi-settings-inline-fields">
-                    <label>每日账号<input name="daily_account_limit" defaultValue={String(row.daily_account_limit ?? 0)} inputMode="numeric" /></label>
-                    <label>每账号内容<input name="posts_per_account" defaultValue={String(row.posts_per_account ?? 0)} inputMode="numeric" /></label>
-                    <label>月预算 USD<input name="monthly_budget_usd" defaultValue={String(row.monthly_budget_usd ?? 0)} inputMode="decimal" /></label>
-                    <label>失败阈值<input name="failure_threshold" defaultValue={String(row.failure_threshold ?? 5)} inputMode="numeric" /></label>
+                <div className="vkpi-platform-crawl-detail__actions">
+                  <span className={`vkpi-platform-crawl-ready ${selectedReady ? "is-ok" : "is-blocked"}`}>
+                    {selectedReady ? "抓取链路通过" : "未通过"}
+                  </span>
+                  <button
+                    className={`vkpi-crawl-primary-toggle ${selectedEnabled ? "is-on" : "is-off"}`}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => onTogglePlatformCrawl(selectedRow)}
+                  >
+                    {selectedEnabled ? "关闭" : "开启"}
+                  </button>
+                </div>
+              </header>
+              <p className={`vkpi-platform-crawl-reason ${selectedReady ? "is-ok" : "is-blocked"}`}>{selectedReason}</p>
+              <form className="vkpi-settings-control-form vkpi-platform-crawl-form" onSubmit={(event) => onSavePlatformCrawl(event, selectedRow)}>
+                <div className="vkpi-settings-inline-fields vkpi-settings-inline-fields--primary">
+                  <label>每日账号<input name="daily_account_limit" defaultValue={String(selectedRow.daily_account_limit ?? 0)} inputMode="numeric" /></label>
+                  <label>每账号内容<input name="posts_per_account" defaultValue={String(selectedRow.posts_per_account ?? 0)} inputMode="numeric" /></label>
+                  <label>月预算 USD<input name="monthly_budget_usd" defaultValue={String(selectedRow.monthly_budget_usd ?? 0)} inputMode="decimal" /></label>
+                  <label>失败阈值<input name="failure_threshold" defaultValue={String(selectedRow.failure_threshold ?? 5)} inputMode="numeric" /></label>
+                </div>
+                <button
+                  className="vkpi-platform-advanced-toggle"
+                  type="button"
+                  onClick={() => setAdvancedOpen((value) => !value)}
+                >
+                  {advancedOpen ? "收起高级范围" : "展开高级范围"}
+                </button>
+                {advancedOpen ? (
+                  <div className="vkpi-settings-check-row vkpi-settings-check-row--panel">
+                    <label><input type="checkbox" name="crawl_comments" defaultChecked={rowEnabled(selectedRow, "crawl_comments")} /> 评论</label>
+                    <label><input type="checkbox" name="crawl_followers" defaultChecked={rowEnabled(selectedRow, "crawl_followers")} /> 粉丝</label>
+                    <label><input type="checkbox" name="crawl_audience_graph" defaultChecked={rowEnabled(selectedRow, "crawl_audience_graph")} /> 图谱</label>
+                    <label><input type="checkbox" name="only_uncontacted_kols" defaultChecked={rowEnabled(selectedRow, "only_uncontacted_kols")} /> 只推未联系</label>
+                    <label><input type="checkbox" name="include_company_accounts" defaultChecked={rowEnabled(selectedRow, "include_company_accounts")} /> 公司账号</label>
+                    <label><input type="checkbox" name="include_competitor_accounts" defaultChecked={rowEnabled(selectedRow, "include_competitor_accounts")} /> 竞品账号</label>
+                    <label><input type="checkbox" name="include_candidate_kols" defaultChecked={rowEnabled(selectedRow, "include_candidate_kols")} /> 候选红人</label>
                   </div>
-                  <div className="vkpi-settings-check-row">
-                    <label><input type="checkbox" name="crawl_comments" defaultChecked={rowEnabled(row, "crawl_comments")} /> 评论</label>
-                    <label><input type="checkbox" name="crawl_followers" defaultChecked={rowEnabled(row, "crawl_followers")} /> 粉丝</label>
-                    <label><input type="checkbox" name="crawl_audience_graph" defaultChecked={rowEnabled(row, "crawl_audience_graph")} /> 图谱</label>
-                    <label><input type="checkbox" name="only_uncontacted_kols" defaultChecked={rowEnabled(row, "only_uncontacted_kols")} /> 只推未联系</label>
-                    <label><input type="checkbox" name="include_company_accounts" defaultChecked={rowEnabled(row, "include_company_accounts")} /> 公司账号</label>
-                    <label><input type="checkbox" name="include_competitor_accounts" defaultChecked={rowEnabled(row, "include_competitor_accounts")} /> 竞品账号</label>
-                    <label><input type="checkbox" name="include_candidate_kols" defaultChecked={rowEnabled(row, "include_candidate_kols")} /> 候选红人</label>
-                  </div>
-                  <button className="vkpi-mini-button" type="submit" disabled={busy}>保存限制</button>
-                </form>
-                <button className="vkpi-mini-button" type="button" disabled={busy} onClick={() => onTogglePlatformCrawl(row)}>{enabled ? "关闭抓取" : "开启抓取"}</button>
-              </article>
-            );
-          })}
+                ) : null}
+                <div className="vkpi-platform-crawl-detail__footer">
+                  <span>日常只需要右上角开启/关闭；只有调整预算和抓取数量时才保存限制。</span>
+                  <button className="vkpi-button vkpi-button--primary" type="submit" disabled={busy}>保存当前平台限制</button>
+                </div>
+              </form>
+            </article>
+          ) : null}
         </div>
       ) : <div className="vkpi-empty-panel">暂无平台抓取设置。默认不抓取、不烧钱。</div>}
     </section>

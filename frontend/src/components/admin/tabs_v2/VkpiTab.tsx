@@ -59,11 +59,19 @@ function downloadUrlFrom(result: Record<string, unknown>): string {
   return String(result.downloadUrl || result.download_url || "").trim();
 }
 
+type WeeklyReportStatus = {
+  state: "idle" | "loading" | "success" | "error";
+  message: string;
+  href?: string;
+};
+
 export function VkpiTab({ token, user, onSignOut }: Props) {
   const { refreshUser } = useAuth();
   const [data, setData] = useState<VkpiDashboardData | undefined>();
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
+  const [actionLink, setActionLink] = useState<{ href: string; label: string } | null>(null);
+  const [weeklyReportStatus, setWeeklyReportStatus] = useState<WeeklyReportStatus | null>(null);
   const [avatarUrl, setAvatarUrl] = useState(user?.avatar_url || "");
   const [viewMode, setViewMode] = useState<"manager" | "employee">("manager");
   const [range, setRange] = useState<VkpiRangeKey>("7d");
@@ -79,6 +87,7 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
   const load = useCallback(async () => {
     setLoading(true);
     setMessage("");
+    setActionLink(null);
     try {
       const nextData = await fetchVkpiDashboardData(token, {
         range,
@@ -100,38 +109,52 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
 
   const handleExportPDF = useCallback(async () => {
     setMessage("正在生成 PDF 导出...");
+    setActionLink(null);
     try {
       const result = await exportVkpiReport(token, { reportType: "weekly", format: "pdf", range, scope, staffId: user?.staff_id ? String(user.staff_id) : undefined });
       const downloadUrl = downloadUrlFrom(result);
       setMessage(downloadUrl ? "PDF 已就绪。" : "PDF 导出任务已提交；当前接口没有返回下载链接。");
+      setActionLink(downloadUrl ? { href: downloadUrl, label: "打开 PDF" } : null);
       if (downloadUrl) window.open(downloadUrl, "_blank", "noopener,noreferrer");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "PDF 导出失败");
+      setActionLink(null);
     }
   }, [range, scope, token, user?.staff_id]);
 
   const handleExportCSV = useCallback(async () => {
     setMessage("正在生成 CSV 导出...");
+    setActionLink(null);
     try {
       const result = await exportVkpiReport(token, { reportType: "weekly", format: "csv", range, scope, staffId: user?.staff_id ? String(user.staff_id) : undefined });
       const downloadUrl = downloadUrlFrom(result);
       setMessage(downloadUrl ? "CSV 已就绪。" : "CSV 导出任务已提交；当前接口没有返回下载链接。");
+      setActionLink(downloadUrl ? { href: downloadUrl, label: "打开 CSV" } : null);
       if (downloadUrl) window.open(downloadUrl, "_blank", "noopener,noreferrer");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "CSV 导出失败");
+      setActionLink(null);
     }
   }, [range, scope, token, user?.staff_id]);
 
   const handleGenerateWeeklyReport = useCallback(async () => {
     setMessage("正在生成周报...");
+    setActionLink(null);
+    setWeeklyReportStatus({ state: "loading", message: "正在生成周报..." });
     try {
       const result = await generateWeeklyReport(token, { range, scope, staffId: user?.staff_id ? String(user.staff_id) : undefined });
       const downloadUrl = downloadUrlFrom(result);
-      setMessage(downloadUrl ? "周报已就绪。" : "周报已生成实时总结，PDF 渲染是下一步后端工作。");
       if (downloadUrl) window.open(downloadUrl, "_blank", "noopener,noreferrer");
       await load();
+      const doneMessage = downloadUrl ? "周报已生成，下载文件已就绪。" : "周报已生成，但当前接口没有返回下载链接。";
+      setMessage(doneMessage);
+      setActionLink(downloadUrl ? { href: downloadUrl, label: "打开周报" } : null);
+      setWeeklyReportStatus({ state: "success", message: doneMessage, href: downloadUrl || undefined });
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "周报生成失败");
+      const errorMessage = error instanceof Error ? error.message : "周报生成失败";
+      setMessage(errorMessage);
+      setActionLink(null);
+      setWeeklyReportStatus({ state: "error", message: errorMessage });
     }
   }, [load, range, scope, token, user?.staff_id]);
 
@@ -360,6 +383,16 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
       {message ? (
         <div style={{ position: "sticky", top: 0, zIndex: 20, padding: "10px 16px", background: "#101828", color: "#fff", fontSize: 12 }}>
           {message}
+          {actionLink ? (
+            <a
+              href={actionLink.href}
+              target="_blank"
+              rel="noreferrer"
+              style={{ color: "#fff", marginLeft: 12, fontWeight: 800, textDecoration: "underline" }}
+            >
+              {actionLink.label}
+            </a>
+          ) : null}
         </div>
       ) : null}
       <VkpiDashboard
@@ -380,6 +413,7 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
         onExportPDF={handleExportPDF}
         onExportCSV={handleExportCSV}
         onGenerateWeeklyReport={handleGenerateWeeklyReport}
+        weeklyReportStatus={weeklyReportStatus}
         onCopyShortLink={(slug) => void copyTextToClipboard(slug)}
         onUploadAvatar={handleUploadAvatar}
         onSignOut={onSignOut}

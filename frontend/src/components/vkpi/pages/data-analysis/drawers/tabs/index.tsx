@@ -1,30 +1,11 @@
-// frontend/src/components/vkpi/pages/data-analysis/drawers/tabs/index.tsx
-//
-// R60: 9 个 Tab 组件统一文件
-//
-// 设计:
-//   - 2 个完整模板 (SummaryTab + ContentTab) - 你 / 团队按这个风格做剩余 7 个
-//   - 7 个骨架 (Engagement / Views / Audience / Pillars / OrganicValue / Posts / Compare)
-//     接收相同的 props,可以直接渲染 placeholder 占位
-//     标记 TODO,留团队按需求填充
-//
-// 共同接口:
-//   - account: 当前账号 Row
-//   - snapshots: 最近 30 天 snapshot
-//   - posts: 最近 50 条 posts
-//   - accounts: 所有账号 (Compare tab 用)
-//
-// 数据来源 (统一,不需要改后端):
-//   GET /api/admin/vkpi/industry-data/accounts/{id}
-//   返回: {account, snapshots[30], posts[50]}
-
+import { useMemo, useState } from 'react';
 import type { Row } from '../../utils/types';
-import { rowNumber, rowString } from '../../utils/rowAccessors';
-import { formatMetric } from '../../utils/metricHelpers';
+import { accountId, accountName, rowNumber, rowString } from '../../utils/rowAccessors';
+import { bestPosting, contentPillars, formatMetric } from '../../utils/metricHelpers';
+import { platformExternalUrl, proxiedImageUrl, proxiedVideoUrl } from '../../utils/mediaProxy';
 import { prettyDate } from '../../utils/platformHelpers';
 import { BigNumberCard } from '../../shared/BigNumberCard';
 
-// 共享 props 接口
 interface BaseTabProps {
   account: Row;
   snapshots?: Row[];
@@ -33,108 +14,145 @@ interface BaseTabProps {
 }
 
 function stablePostKey(post: Row, index: number): string {
-  const id = rowString(post, ['id', 'post_id', 'source_ref', 'url', 'post_url']);
-  return id || `post-${index}`;
+  return rowString(post, ['id', 'post_id', 'source_ref', 'url', 'post_url']) || `post-${index}`;
 }
 
+function postEngagement(post: Row): number {
+  return (rowNumber(post, ['likes', 'like_count']) || 0)
+    + (rowNumber(post, ['comments', 'comment_count']) || 0)
+    + (rowNumber(post, ['shares', 'share_count']) || 0)
+    + (rowNumber(post, ['saves', 'save_count']) || 0);
+}
 
-// ═══════════════════════════════════════════════
-// 完整模板 1: SummaryTab (执行摘要)
-// ═══════════════════════════════════════════════
+function newestSnapshot(snapshots: Row[]): Row | undefined {
+  return snapshots[0];
+}
+
+function currencyFromCents(value: number | null): string {
+  if (value === null) return '$0';
+  return `$${new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value / 100)}`;
+}
+
+function MiniSnapshotTable({ snapshots }: { snapshots: Row[] }) {
+  if (!snapshots.length) return <div className="vkpi-empty">暂无历史快照。</div>;
+  return (
+    <div className="da-table-wrap" style={{ marginTop: 16 }}>
+      <table className="da-table">
+        <thead>
+          <tr>
+            <th>日期</th>
+            <th>Followers</th>
+            <th>Views</th>
+            <th>Engagement</th>
+            <th>Rate</th>
+          </tr>
+        </thead>
+        <tbody>
+          {snapshots.slice(0, 10).map((snapshot, index) => (
+            <tr key={`${rowString(snapshot, ['snapshot_date'])}-${index}`}>
+              <td>{prettyDate(rowString(snapshot, ['snapshot_date']))}</td>
+              <td>{formatMetric(rowNumber(snapshot, ['followers']))}</td>
+              <td>{formatMetric(rowNumber(snapshot, ['views_30d', 'views']))}</td>
+              <td>{formatMetric(rowNumber(snapshot, ['engagement_total_30d', 'engagement']))}</td>
+              <td>{formatMetric(rowNumber(snapshot, ['engagement_rate']), 'avg_eng_rate_followers')}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
 export function SummaryTab({ account, snapshots = [], posts = [] }: BaseTabProps) {
-  const latest = snapshots[0];
+  const latest = newestSnapshot(snapshots);
   const previous = snapshots[1];
-  
   const followers = rowNumber(latest, ['followers', 'follower_count'])
     ?? rowNumber(account, ['followers', 'follower_count']);
-  const followersGrowth = rowNumber(latest, ['followers_growth_30d']);
-  
-  const views = rowNumber(latest, ['views_30d', 'views']);
+  const views = rowNumber(latest, ['views_30d', 'views'])
+    ?? posts.reduce((sum, post) => sum + (rowNumber(post, ['views', 'view_count', 'video_views']) || 0), 0);
   const previousViews = rowNumber(previous, ['views_30d', 'views']);
-  const viewsTrend = previousViews && views
-    ? `${views > previousViews ? '↑' : '↓'} ${Math.abs(((views - previousViews) / previousViews) * 100).toFixed(1)}%`
-    : '—';
-  
-  const engagement = rowNumber(latest, ['engagement_total_30d', 'engagement']);
+  const viewsTrend = previousViews && views !== null
+    ? `${views >= previousViews ? '上升' : '下降'} ${Math.abs(((views - previousViews) / previousViews) * 100).toFixed(1)}%`
+    : '暂无对比';
+  const engagement = rowNumber(latest, ['engagement_total_30d', 'engagement'])
+    ?? posts.reduce((sum, post) => sum + postEngagement(post), 0);
   const engagementRate = rowNumber(latest, ['engagement_rate']);
-  
-  const postsCount = posts.length;
-  const lastSuccess = rowString(account, ['last_successful_at']);
-  
+  const best = bestPosting(posts);
+
   return (
     <div className="da-tab-summary">
       <div className="da-detail-grid">
-        <BigNumberCard
-          title="Followers"
-          value={formatMetric(followers)}
-          delta={followersGrowth ? `+${formatMetric(followersGrowth)} (30d)` : '真实快照'}
-          tone={followersGrowth && followersGrowth > 0 ? 'positive' : 'neutral'}
-        />
-        <BigNumberCard
-          title="Views (30d)"
-          value={formatMetric(views)}
-          delta={viewsTrend}
-          tone={views ? 'positive' : 'neutral'}
-        />
-        <BigNumberCard
-          title="Engagement"
-          value={formatMetric(engagement)}
-          delta={engagementRate ? `${engagementRate.toFixed(2)}%` : '—'}
-          tone={engagement ? 'positive' : 'neutral'}
-        />
-        <BigNumberCard
-          title="Posts (snapshot)"
-          value={String(postsCount)}
-          delta={postsCount > 0 ? `近 ${postsCount} 条` : '待同步'}
-          tone={postsCount > 0 ? 'positive' : 'neutral'}
-        />
+        <BigNumberCard title="Followers" value={formatMetric(followers)} delta={latest ? '真实快照' : '账号字段'} tone="neutral" />
+        <BigNumberCard title="Views (30d)" value={formatMetric(views)} delta={viewsTrend} tone={views ? 'positive' : 'neutral'} />
+        <BigNumberCard title="Engagement" value={formatMetric(engagement)} delta={engagementRate !== null ? `${engagementRate.toFixed(2)}%` : '内容合计'} tone={engagement ? 'positive' : 'neutral'} />
+        <BigNumberCard title="Posts" value={String(posts.length)} delta={posts.length ? '已载入内容' : '待同步'} tone={posts.length ? 'positive' : 'neutral'} />
+        <BigNumberCard title="发布最多日" value={best.day} delta="基于已载入内容" />
+        <BigNumberCard title="发布最多时" value={best.hour} delta="基于已载入内容" />
       </div>
-      
+      <MiniSnapshotTable snapshots={snapshots} />
       <div className="da-summary-footer" style={{ marginTop: 16, fontSize: 13, color: 'var(--vkpi-color-text-muted)' }}>
-        <p>最近成功同步: {prettyDate(lastSuccess)}</p>
-        <p>快照数: {snapshots.length} (近 30 天)</p>
+        <p>最近成功同步: {prettyDate(rowString(account, ['last_successful_at']))}</p>
+        <p>快照数: {snapshots.length} · 已载入帖子: {posts.length}</p>
       </div>
     </div>
   );
 }
 
-
-// ═══════════════════════════════════════════════
-// 完整模板 2: ContentTab (内容列表)
-// ═══════════════════════════════════════════════
-
 export function ContentTab({ posts = [] }: BaseTabProps) {
+  const [showAll, setShowAll] = useState(false);
+  const sortedPosts = useMemo(
+    () => [...posts].sort((a, b) => rowString(b, ['published_at', 'created_at']).localeCompare(rowString(a, ['published_at', 'created_at']))),
+    [posts],
+  );
+  const visiblePosts = showAll ? sortedPosts : sortedPosts.slice(0, 24);
+
   if (posts.length === 0) {
     return <div className="vkpi-empty">暂无 post 数据。需要先抓取或开启平台抓取。</div>;
   }
-  
+
   return (
     <div className="da-tab-content">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <span style={{ fontSize: 13, color: 'var(--vkpi-color-text-muted)' }}>显示 {visiblePosts.length} / {sortedPosts.length} 条内容</span>
+        {sortedPosts.length > 24 ? (
+          <button className="da-text-button" type="button" onClick={() => setShowAll((value) => !value)}>
+            {showAll ? '只看 Top 24' : `显示全部 ${sortedPosts.length} 条`}
+          </button>
+        ) : null}
+      </div>
       <div className="da-content-grid">
-        {posts.slice(0, 24).map((post, index) => {
-          const thumbnail = rowString(post, ['thumbnail_url', 'image_url', 'cover_url']);
+        {visiblePosts.map((post, index) => {
+          const thumbnail = proxiedImageUrl(rowString(post, ['thumbnail_url', 'image_url', 'cover_url', 'displayUrl']));
+          const videoUrl = proxiedVideoUrl(rowString(post, ['video_url', 'videoUrl', 'video_download_url', 'media_url', 'play_url']));
+          const postUrl = platformExternalUrl(rowString(post, ['post_url', 'url', 'permalink_url']));
           const title = rowString(post, ['title', 'caption'], '(无标题)');
-          const views = rowNumber(post, ['views', 'views_count', 'play_count']);
-          const likes = rowNumber(post, ['likes', 'likes_count']);
-          const comments = rowNumber(post, ['comments', 'comments_count']);
+          const views = rowNumber(post, ['views', 'view_count', 'video_views', 'play_count']);
+          const likes = rowNumber(post, ['likes', 'like_count']);
+          const comments = rowNumber(post, ['comments', 'comment_count']);
           const publishedAt = rowString(post, ['published_at', 'created_at']);
-          
+
           return (
             <div key={stablePostKey(post, index)} className="da-post-card">
-              {thumbnail ? (
+              {videoUrl ? (
+                <video className="da-post-thumbnail" src={videoUrl} poster={thumbnail || undefined} controls preload="metadata" playsInline />
+              ) : thumbnail ? (
                 <img src={thumbnail} alt="" className="da-post-thumbnail" loading="lazy" />
               ) : (
-                <div className="da-post-thumbnail da-post-thumbnail--placeholder">📷</div>
+                <div className="da-post-thumbnail da-post-thumbnail--placeholder">Media</div>
               )}
               <div className="da-post-meta">
-                <div className="da-post-title" title={title}>{title.slice(0, 60)}</div>
+                <div className="da-post-title" title={title}>{title.slice(0, 80)}</div>
                 <div className="da-post-stats">
-                  <span>👁 {formatMetric(views)}</span>
-                  <span>👍 {formatMetric(likes)}</span>
-                  <span>💬 {formatMetric(comments)}</span>
+                  <span>Views {formatMetric(views)}</span>
+                  <span>Likes {formatMetric(likes)}</span>
+                  <span>Comments {formatMetric(comments)}</span>
                 </div>
                 <div className="da-post-date">{prettyDate(publishedAt)}</div>
+                {postUrl ? (
+                  <button className="da-link-button" type="button" onClick={() => window.open(postUrl, '_blank', 'noopener,noreferrer')}>
+                    打开平台
+                  </button>
+                ) : null}
               </div>
             </div>
           );
@@ -144,156 +162,122 @@ export function ContentTab({ posts = [] }: BaseTabProps) {
   );
 }
 
-
-// ═══════════════════════════════════════════════
-// 骨架 3: EngagementTab
-// TODO: 加 recharts 折线图,X 轴 snapshot_date,Y 轴 engagement_rate
-// ═══════════════════════════════════════════════
-
-export function EngagementTab({ snapshots = [] }: BaseTabProps) {
-  const recentRate = rowNumber(snapshots[0], ['engagement_rate']);
-  
+export function EngagementTab({ snapshots = [], posts = [] }: BaseTabProps) {
+  const latest = newestSnapshot(snapshots);
+  const engagement = rowNumber(latest, ['engagement_total_30d', 'engagement'])
+    ?? posts.reduce((sum, post) => sum + postEngagement(post), 0);
+  const recentRate = rowNumber(latest, ['engagement_rate']);
+  const avgPerDay = rowNumber(latest, ['avg_engagement_per_day']) ?? (engagement ? engagement / 30 : null);
   return (
     <div className="da-tab-engagement">
       <div className="da-detail-grid">
-        <BigNumberCard
-          title="Engagement Rate"
-          value={recentRate ? `${recentRate.toFixed(2)}%` : '—'}
-          delta="近 30 天"
-          tone="neutral"
-        />
+        <BigNumberCard title="Engagement" value={formatMetric(engagement)} delta="互动总量" tone={engagement ? 'positive' : 'neutral'} />
+        <BigNumberCard title="Engagement Rate" value={formatMetric(recentRate, 'avg_eng_rate_followers')} delta="按粉丝估算" tone={recentRate ? 'positive' : 'neutral'} />
+        <BigNumberCard title="Avg Engagement / Day" value={formatMetric(avgPerDay)} delta="30 天口径" />
       </div>
-      <p className="da-muted-copy" style={{ marginTop: 16 }}>
-        TODO: 折线图 (recharts) - X: snapshot_date, Y: engagement_rate
-      </p>
-      <details>
-        <summary>原始数据 ({snapshots.length} 条 snapshot)</summary>
-        <pre style={{ fontSize: 11, maxHeight: 300, overflow: 'auto' }}>
-          {JSON.stringify(snapshots.slice(0, 5).map((s) => ({
-            date: rowString(s, ['snapshot_date']),
-            engagement_rate: rowNumber(s, ['engagement_rate']),
-            engagement_total_30d: rowNumber(s, ['engagement_total_30d']),
-          })), null, 2)}
-        </pre>
-      </details>
+      <MiniSnapshotTable snapshots={snapshots} />
     </div>
   );
 }
 
-
-// ═══════════════════════════════════════════════
-// 骨架 4: ViewsTab
-// TODO: 折线图 - views_30d / reach_total_30d / impressions_total_30d
-// ═══════════════════════════════════════════════
-
-export function ViewsTab({ snapshots = [] }: BaseTabProps) {
-  const latest = snapshots[0];
-  const views30d = rowNumber(latest, ['views_30d']);
-  const reach30d = rowNumber(latest, ['reach_total_30d']);
-  const impressions30d = rowNumber(latest, ['impressions_total_30d']);
-  
+export function ViewsTab({ snapshots = [], posts = [] }: BaseTabProps) {
+  const latest = newestSnapshot(snapshots);
+  const views30d = rowNumber(latest, ['views_30d', 'views'])
+    ?? posts.reduce((sum, post) => sum + (rowNumber(post, ['views', 'view_count', 'video_views']) || 0), 0);
+  const reach30d = rowNumber(latest, ['reach_total_30d', 'reach_30d']);
+  const impressions30d = rowNumber(latest, ['impressions_total_30d', 'impressions_30d']);
+  const reelsViews = rowNumber(latest, ['reels_views_30d', 'reels_views']);
   return (
     <div className="da-tab-views">
       <div className="da-detail-grid">
-        <BigNumberCard title="Views (30d)" value={formatMetric(views30d)} delta="—" tone="neutral" />
-        <BigNumberCard title="Reach (30d)" value={formatMetric(reach30d)} delta="—" tone="neutral" />
-        <BigNumberCard title="Impressions (30d)" value={formatMetric(impressions30d)} delta="—" tone="neutral" />
+        <BigNumberCard title="Views (30d)" value={formatMetric(views30d)} delta="快照或帖子合计" tone={views30d ? 'positive' : 'neutral'} />
+        <BigNumberCard title="Reach (30d)" value={formatMetric(reach30d)} delta="平台可用时显示" />
+        <BigNumberCard title="Impressions (30d)" value={formatMetric(impressions30d)} delta="平台可用时显示" />
+        <BigNumberCard title="Reels Views" value={formatMetric(reelsViews)} delta="短视频口径" />
       </div>
-      <p className="da-muted-copy" style={{ marginTop: 16 }}>
-        TODO: 折线图 - X: snapshot_date, Y: views/reach/impressions
-      </p>
+      <MiniSnapshotTable snapshots={snapshots} />
     </div>
   );
 }
-
-
-// ═══════════════════════════════════════════════
-// 骨架 5: AudienceTab (受众画像)
-// TODO: 接 audience_graph API (R-Phase3 范围),先占位
-// ═══════════════════════════════════════════════
 
 export function AudienceTab({ account }: BaseTabProps) {
   return (
     <div className="da-tab-audience">
-      <p className="da-muted-copy">
-        TODO: 受众画像 (audience graph)
-      </p>
-      <ul style={{ fontSize: 13, color: 'var(--vkpi-color-text-muted)' }}>
-        <li>地理分布 (国家 / 城市)</li>
-        <li>年龄段</li>
-        <li>性别比例</li>
-        <li>设备类型</li>
-        <li>活跃时段</li>
-      </ul>
-      <p className="da-muted-copy" style={{ fontSize: 12 }}>
-        数据来源: vkpi_audience_estimate 表 (R-Phase3 接入 audience_graph API)
+      <div className="da-detail-grid">
+        <BigNumberCard title="Region" value={rowString(account, ['region'], '—')} delta="账号字段" />
+        <BigNumberCard title="Category" value={rowString(account, ['category'], '—')} delta="账号字段" />
+        <BigNumberCard title="Role" value={rowString(account, ['account_role'], 'reference')} delta="矩阵角色" />
+      </div>
+      <p className="da-muted-copy" style={{ marginTop: 16 }}>
+        当前平台未返回完整受众画像时,只展示公开账号字段。后续 audience API 接入后会在这里显示国家、城市、年龄、性别和活跃时段。
       </p>
     </div>
   );
 }
-
-
-// ═══════════════════════════════════════════════
-// 骨架 6: PillarsTab (内容支柱)
-// TODO: LLM 分类 (R-Phase3 范围) 把 posts 按 pillar 归类
-// ═══════════════════════════════════════════════
 
 export function PillarsTab({ posts = [] }: BaseTabProps) {
+  const pillars = contentPillars(posts);
   return (
     <div className="da-tab-pillars">
-      <p className="da-muted-copy">
-        TODO: Content Pillar 自动归类 (R-Phase3 LLM Gateway)
-      </p>
-      <p style={{ fontSize: 13, color: 'var(--vkpi-color-text-muted)' }}>
-        当前 posts: {posts.length} 条<br />
-        计划: 用 LLM 给每条 post 打 pillar 标签 (educational / lifestyle / comedy / review / vlog / ...),
-        然后按 pillar 聚合统计
-      </p>
+      {pillars.length ? (
+        <div className="da-table-wrap">
+          <table className="da-table">
+            <thead><tr><th>Pillar</th><th>Posts</th><th>占比</th></tr></thead>
+            <tbody>
+              {pillars.map((pillar) => (
+                <tr key={pillar.label}>
+                  <td>{pillar.label}</td>
+                  <td>{pillar.value}</td>
+                  <td>{posts.length ? `${((pillar.value / posts.length) * 100).toFixed(1)}%` : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="vkpi-empty">暂无内容支柱数据。帖子导入后会按已有 pillar/category 字段聚合。</div>
+      )}
     </div>
   );
 }
 
-
-// ═══════════════════════════════════════════════
-// 骨架 7: OrganicValueTab (organic value)
-// ═══════════════════════════════════════════════
-
 export function OrganicValueTab({ snapshots = [] }: BaseTabProps) {
-  const latest = snapshots[0];
+  const latest = newestSnapshot(snapshots);
   const orgValueCents = rowNumber(latest, ['estimated_organic_value_cents']);
-  const orgValueUSD = orgValueCents ? (orgValueCents / 100) : 0;
-  
+  const avgViews = rowNumber(latest, ['avg_views', 'views_30d']);
   return (
     <div className="da-tab-organic-value">
       <div className="da-detail-grid">
-        <BigNumberCard
-          title="Organic Value (USD)"
-          value={`$${orgValueUSD.toFixed(2)}`}
-          delta="估算"
-          tone={orgValueUSD > 0 ? 'positive' : 'neutral'}
-        />
+        <BigNumberCard title="Organic Value" value={currencyFromCents(orgValueCents)} delta="估算值" tone={orgValueCents ? 'positive' : 'neutral'} />
+        <BigNumberCard title="Avg Views" value={formatMetric(avgViews)} delta="估算公式输入" />
       </div>
-      <p className="da-muted-copy" style={{ marginTop: 16 }}>
-        TODO: 折线图历史 organic value 走势 + 拆分公式说明
-      </p>
+      <MiniSnapshotTable snapshots={snapshots} />
     </div>
   );
 }
 
-
-// ═══════════════════════════════════════════════
-// 骨架 8: PostsTab (post 详细列表 + 排序)
-// ContentTab 是网格,PostsTab 是表格 + 排序
-// TODO: 加排序 / 筛选
-// ═══════════════════════════════════════════════
-
 export function PostsTab({ posts = [] }: BaseTabProps) {
+  const [showAll, setShowAll] = useState(false);
+  const sortedPosts = useMemo(
+    () => [...posts].sort((a, b) => rowString(b, ['published_at', 'created_at']).localeCompare(rowString(a, ['published_at', 'created_at']))),
+    [posts],
+  );
+  const visiblePosts = showAll ? sortedPosts : sortedPosts.slice(0, 50);
+
   if (posts.length === 0) {
-    return <div className="vkpi-empty">暂无 post 数据</div>;
+    return <div className="vkpi-empty">暂无 post 数据。</div>;
   }
-  
+
   return (
     <div className="da-tab-posts">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <span style={{ fontSize: 13, color: 'var(--vkpi-color-text-muted)' }}>显示 {visiblePosts.length} / {sortedPosts.length} 条</span>
+        {sortedPosts.length > 50 ? (
+          <button className="da-text-button" type="button" onClick={() => setShowAll((value) => !value)}>
+            {showAll ? '只看前 50' : `显示全部 ${sortedPosts.length} 条`}
+          </button>
+        ) : null}
+      </div>
       <table className="vkpi-table" style={{ fontSize: 13 }}>
         <thead>
           <tr>
@@ -303,43 +287,59 @@ export function PostsTab({ posts = [] }: BaseTabProps) {
             <th>Likes</th>
             <th>Comments</th>
             <th>Engagement</th>
+            <th>平台</th>
           </tr>
         </thead>
         <tbody>
-          {posts.slice(0, 50).map((post, index) => (
-            <tr key={stablePostKey(post, index)}>
-              <td>{rowString(post, ['title', 'caption'], '(无标题)').slice(0, 40)}</td>
-              <td>{prettyDate(rowString(post, ['published_at']))}</td>
-              <td>{formatMetric(rowNumber(post, ['views']))}</td>
-              <td>{formatMetric(rowNumber(post, ['likes']))}</td>
-              <td>{formatMetric(rowNumber(post, ['comments']))}</td>
-              <td>{formatMetric(rowNumber(post, ['engagement_total']))}</td>
-            </tr>
-          ))}
+          {visiblePosts.map((post, index) => {
+            const postUrl = platformExternalUrl(rowString(post, ['post_url', 'url', 'permalink_url']));
+            return (
+              <tr key={stablePostKey(post, index)}>
+                <td>{rowString(post, ['title', 'caption'], '(无标题)').slice(0, 60)}</td>
+                <td>{prettyDate(rowString(post, ['published_at', 'created_at']))}</td>
+                <td>{formatMetric(rowNumber(post, ['views', 'view_count', 'video_views']))}</td>
+                <td>{formatMetric(rowNumber(post, ['likes', 'like_count']))}</td>
+                <td>{formatMetric(rowNumber(post, ['comments', 'comment_count']))}</td>
+                <td>{formatMetric(postEngagement(post))}</td>
+                <td>{postUrl ? <button className="da-link-button" type="button" onClick={() => window.open(postUrl, '_blank', 'noopener,noreferrer')}>打开</button> : '—'}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
   );
 }
 
-
-// ═══════════════════════════════════════════════
-// 骨架 9: CompareTab (账号对比)
-// TODO: 选 1-2 个其他账号对比关键指标
-// ═══════════════════════════════════════════════
-
 export function CompareTab({ account, accounts = [] }: BaseTabProps) {
-  const otherAccounts = accounts.filter((a) => a.id !== account.id).slice(0, 5);
-  
+  const otherAccounts = accounts.filter((a) => accountId(a) !== accountId(account)).slice(0, 8);
   return (
     <div className="da-tab-compare">
-      <p className="da-muted-copy">
-        TODO: 账号对比 (followers / engagement / views 横向对比)
-      </p>
-      <p style={{ fontSize: 13, color: 'var(--vkpi-color-text-muted)' }}>
-        当前账号: {rowString(account, ['account_name'])}<br />
-        可对比账号: {otherAccounts.length} 个
-      </p>
+      {otherAccounts.length ? (
+        <div className="da-table-wrap">
+          <table className="da-table">
+            <thead><tr><th>账号</th><th>平台</th><th>状态</th><th>角色</th></tr></thead>
+            <tbody>
+              <tr className="da-table__benchmark-row">
+                <td>{accountName(account)}</td>
+                <td>{rowString(account, ['platform'])}</td>
+                <td>{rowString(account, ['sync_status'], 'not_configured')}</td>
+                <td>{rowString(account, ['account_role'], 'reference')}</td>
+              </tr>
+              {otherAccounts.map((item) => (
+                <tr key={accountId(item)}>
+                  <td>{accountName(item)}</td>
+                  <td>{rowString(item, ['platform'])}</td>
+                  <td>{rowString(item, ['sync_status'], 'not_configured')}</td>
+                  <td>{rowString(item, ['account_role'], 'reference')}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="vkpi-empty">当前项目内没有可对比账号。添加同平台或竞品账号后会展示横向对比。</div>
+      )}
     </div>
   );
 }

@@ -34,8 +34,8 @@ export function ReportsPage({ data, viewMode, onExportPDF, onExportCSV, onGenera
   return (
     <PageShell title="KPI 工作量 / 报表 / 导出" description="KPI Ledger 用真实 KOL、项目阶段、短链、内容、成本和销售记录计入员工工作量，报表导出不使用假数据。">
       <section className="vkpi-card-grid vkpi-card-grid--forms">
-        <section className="vkpi-card vkpi-action-card"><CardHeader title="管理层周报" /><p className="vkpi-summary-text">{data.weeklySummary}</p><button className="vkpi-button vkpi-button--primary" type="button" onClick={onGenerateWeeklyReport}>生成周报</button></section>
-        <section className="vkpi-card vkpi-action-card"><CardHeader title="文件导出" /><button className="vkpi-button" type="button" onClick={onExportPDF}>导出 PDF</button><button className="vkpi-button" type="button" onClick={onExportCSV}>导出 CSV</button></section>
+        <section className="vkpi-card vkpi-action-card"><CardHeader title="管理层周报" /><p className="vkpi-summary-text">{data.weeklySummary}</p><button className="vkpi-button vkpi-button--primary" type="button" onClick={onGenerateWeeklyReport} disabled={!onGenerateWeeklyReport}>生成周报</button></section>
+        <section className="vkpi-card vkpi-action-card"><CardHeader title="文件导出" /><button className="vkpi-button" type="button" onClick={onExportPDF} disabled={!onExportPDF}>导出 PDF</button><button className="vkpi-button" type="button" onClick={onExportCSV} disabled={!onExportCSV}>导出 CSV</button></section>
         <section className="vkpi-card vkpi-action-card"><CardHeader title="证据下钻" /><button className="vkpi-button" type="button" onClick={() => onOpenEvidence('gmv')}>销售额证据</button>{viewMode === 'manager' ? <button className="vkpi-button" type="button" onClick={() => onOpenEvidence('cost')}>成本证据</button> : null}<span className="vkpi-help-text">{viewMode === 'manager' ? 'ROI 暂不作为一线指标，后续按管理层确认的计算口径再开启。' : '员工视角只展示本人销售、项目、短链和工作量证据，不展示内部成本。'}</span></section>
       </section>
       <section className="vkpi-card vkpi-action-card">

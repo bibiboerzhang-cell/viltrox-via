@@ -229,6 +229,8 @@ export interface VkpiContentAsset {
   title: string;
   duration?: string;
   imageUrl?: string;
+  url?: string;
+  videoUrl?: string;
   platform: VkpiPlatform;
   postedAt?: string;
   engagementLabel?: string;
@@ -573,6 +575,17 @@ export interface VkpiKolOption {
   scanStatus?: string;
 }
 
+export interface VkpiScopeContext {
+  actorStaffId?: string;
+  requestedStaffId?: string;
+  effectiveStaffId?: string;
+  canViewAll: boolean;
+  scopeMode: 'anonymous' | 'own' | 'all' | 'requested_staff' | string;
+  role?: string;
+  isOwner?: boolean;
+  domain?: string;
+}
+
 export interface VkpiDashboardData {
   rangeLabel: string;
   windowDays?: number;
@@ -601,4 +614,8 @@ export interface VkpiDashboardData {
   productLaunches: VkpiProductLaunchOption[];
   kolOptions: VkpiKolOption[];
   selectedKol: VkpiKolDetail;
+  scopes?: {
+    projects?: VkpiScopeContext;
+    kols?: VkpiScopeContext;
+  };
 }

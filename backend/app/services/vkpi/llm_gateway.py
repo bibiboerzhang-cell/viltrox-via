@@ -29,14 +29,14 @@ logger = get_logger(__name__)
 PROVIDER_ORDER = ("openai", "google", "anthropic", "rule_v0")
 PROVIDER_CONFIG: dict[str, dict[str, Any]] = {
     "openai": {
-        "model": os.getenv("VKPI_OPENAI_MODEL", "gpt-4o-mini"),
-        "endpoint": "https://api.openai.com/v1/chat/completions",
-        "input_cents_per_million": 15,
-        "output_cents_per_million": 60,
+        "model": os.getenv("VKPI_OPENAI_MODEL", os.getenv("OPENAI_MODEL", "gpt-5.4-mini")),
+        "endpoint": "https://api.openai.com/v1/responses",
+        "input_cents_per_million": 25,
+        "output_cents_per_million": 200,
         "timeout": 30,
     },
     "google": {
-        "model": os.getenv("VKPI_GEMINI_MODEL", os.getenv("GEMINI_MODEL", "gemini-2.5-flash")),
+        "model": os.getenv("VKPI_GEMINI_MODEL", os.getenv("GEMINI_MODEL", "gemini-flash-latest")),
         "endpoint": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
         "input_cents_per_million": 7,
         "output_cents_per_million": 30,
@@ -159,22 +159,29 @@ def _call_openai(prompt: str, max_output_tokens: int) -> dict[str, Any]:
             str(config["endpoint"]),
             {
                 "model": config["model"],
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": max(1, min(4000, int(max_output_tokens or 800))),
+                "input": prompt,
+                "max_output_tokens": max(1, min(4000, int(max_output_tokens or 800))),
                 "temperature": 0.2,
             },
             {"Authorization": f"Bearer {api_key}"},
             int(config["timeout"]),
         )
-        choice = ((body.get("choices") or [{}])[0] or {}).get("message") or {}
+        output = body.get("output") or []
+        text_parts: list[str] = []
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            for part in item.get("content") or []:
+                if isinstance(part, dict) and part.get("type") in {"output_text", "text"}:
+                    text_parts.append(str(part.get("text") or ""))
         usage = body.get("usage") or {}
-        input_tokens = int(usage.get("prompt_tokens") or 0)
-        output_tokens = int(usage.get("completion_tokens") or 0)
+        input_tokens = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
+        output_tokens = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
         return {
             "status": "success",
             "provider": "openai",
             "model": str(body.get("model") or config["model"]),
-            "text": str(choice.get("content") or "").strip(),
+            "text": (str(body.get("output_text") or "") or "".join(text_parts)).strip(),
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "cost_cents": _estimate_cost_cents("openai", input_tokens, output_tokens),

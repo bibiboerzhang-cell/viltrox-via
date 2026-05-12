@@ -25,6 +25,7 @@ import type {
   VkpiProductRoiItem,
   VkpiProjectRow,
   VkpiProjectStage,
+  VkpiScopeContext,
   VkpiShareItem,
   VkpiStaffProfile,
   VkpiStaffMember,
@@ -76,6 +77,8 @@ export interface VkpiCreateProjectPayload {
   kolId?: string;
   productSku?: string;
   productName?: string;
+  productSkus?: string[];
+  products?: Array<{ productSku: string; productName?: string }>;
   platform?: string;
   marketplace?: string;
   note?: string;
@@ -563,6 +566,26 @@ function buildKolOptions(rows: Row[]): VkpiKolOption[] {
   }).filter((row) => row.id);
 }
 
+function buildScopeContext(row: Row | undefined): VkpiScopeContext | undefined {
+  if (!row || typeof row !== "object") return undefined;
+  const scopeMode = String(row.scope_mode || "");
+  if (!scopeMode) return undefined;
+  const idString = (value: unknown): string | undefined => {
+    const next = numberValue(value);
+    return next ? String(next) : undefined;
+  };
+  return {
+    actorStaffId: idString(row.actor_staff_id),
+    requestedStaffId: idString(row.requested_staff_id),
+    effectiveStaffId: idString(row.effective_staff_id),
+    canViewAll: Boolean(row.can_view_all),
+    scopeMode,
+    role: String(row.role || ""),
+    isOwner: Boolean(row.is_owner),
+    domain: String(row.domain || ""),
+  };
+}
+
 function buildProjects(projects: Row[], links: VkpiLinkRow[], attributions: VkpiAttributionRow[], costs: VkpiCostRow[]): VkpiProjectRow[] {
   const linksByProject = new Map<string, VkpiLinkRow[]>();
   links.forEach((link) => { if (link.projectId) linksByProject.set(link.projectId, [...(linksByProject.get(link.projectId) || []), link]); });
@@ -620,7 +643,7 @@ function emptyEvidence(): VkpiDashboardData["evidence"] {
 }
 
 function emptyData(filters: VkpiDashboardFilters = {}): VkpiDashboardData {
-  return { rangeLabel: rangeLabel(filters), windowDays: windowDays(filters), dataStatus: "empty", dataNotice: "当前周期还没有真实数据。", metrics: buildMetrics([]), revenueTrend: buildTrend([]), funnel: buildFunnel([]), staffLeaderboard: [], productRoi: [{ product: "暂无项目数据", roi: 0, gmv: 0 }], platformShare: [{ label: "暂无归因", value: 100 }], contentTypePerformance: [{ label: "暂无内容数据", value: 0 }], alerts: [], weeklySummary: "当前还没有生成周报。请在 Shopify、Amazon、短链、成本和项目事件同步后生成。", exportReport: { id: "none", title: "周报尚未生成", generatedAt: "等待数据", status: "Generating" }, projects: [], links: [], attributions: [], unmatchedAttributions: [], costs: [], evidence: emptyEvidence(), staffMembers: [], kpiLedger: [], productCosts: [], productLaunches: [], kolOptions: [], selectedKol: emptyKol };
+  return { rangeLabel: rangeLabel(filters), windowDays: windowDays(filters), dataStatus: "empty", dataNotice: "当前周期还没有真实数据。", metrics: buildMetrics([]), revenueTrend: buildTrend([]), funnel: buildFunnel([]), staffLeaderboard: [], productRoi: [{ product: "暂无项目数据", roi: 0, gmv: 0 }], platformShare: [{ label: "暂无归因", value: 100 }], contentTypePerformance: [{ label: "暂无内容数据", value: 0 }], alerts: [], weeklySummary: "当前还没有生成周报。请在 Shopify、Amazon、短链、成本和项目事件同步后生成。", exportReport: { id: "none", title: "周报尚未生成", generatedAt: "等待数据", status: "Generating" }, projects: [], links: [], attributions: [], unmatchedAttributions: [], costs: [], evidence: emptyEvidence(), staffMembers: [], kpiLedger: [], productCosts: [], productLaunches: [], kolOptions: [], selectedKol: emptyKol, scopes: {} };
 }
 async function optionalFetch<T>(label: string, path: string, token: string, fallback: T): Promise<OptionalResult<T>> { try { return { data: await apiFetch<T>(path, {}, token) }; } catch { return { data: fallback, failed: label }; } }
 function hasAnyDashboardData(summary: Row, projects: Row[], links: VkpiLinkRow[], attributions: VkpiAttributionRow[], costs: VkpiCostRow[], alerts: Row[], rawMetrics: Row[]): boolean {
@@ -647,7 +670,7 @@ export async function fetchVkpiDashboardData(token: string, filters: VkpiDashboa
     apiFetch<Row>(dashboardPath, {}, token),
     optionalFetch<{ rows?: Row[] }>("趋势", `/api/marketing/dashboard/revenue-trend?window_days=${days}${staffQuery}`, token, { rows: [] }),
     optionalFetch<{ rows?: Row[] }>("产品表现", `/api/marketing/dashboard/product-performance?window_days=${days}${staffQuery}&limit=20`, token, { rows: [] }),
-    optionalFetch<{ projects?: Row[] }>("项目", "/api/marketing/projects?limit=100", token, { projects: [] }),
+    optionalFetch<{ projects?: Row[]; scope?: Row }>("项目", "/api/marketing/projects?limit=100", token, { projects: [] }),
     optionalFetch<{ links?: Row[] }>("短链", "/api/marketing/links?limit=100", token, { links: [] }),
     optionalFetch<{ alerts?: Row[] }>("提醒", "/api/marketing/alerts?status=open&limit=50", token, { alerts: [] }),
     optionalFetch<Row>("员工 KPI", `/api/marketing/staff-kpi?window=${encodeURIComponent(windowKey)}${staffQuery}`, token, { rows: [] }),
@@ -658,7 +681,7 @@ export async function fetchVkpiDashboardData(token: string, filters: VkpiDashboa
     optionalFetch<{ entries?: Row[] }>("KPI Ledger", `/api/marketing/kpi-ledger?limit=200${staffQuery}`, token, { entries: [] }),
     productCostsRequest,
     productLaunchesRequest,
-    optionalFetch<{ kols?: Row[] }>("红人列表", `/api/marketing/kols?limit=300${staffQuery}`, token, { kols: [] }),
+    optionalFetch<{ kols?: Row[]; scope?: Row }>("红人列表", `/api/marketing/kols?limit=300${staffQuery}`, token, { kols: [] }),
   ]);
   const failedSections = [trendResult, productPerformanceResult, projectsResult, linksResult, alertsResult, staffKpiResult, attributionResult, unmatchedResult, costsResult, staffMembersResult, kpiLedgerResult, productCostsResult, productLaunchesResult, kolOptionsResult].map((item) => item.failed).filter(Boolean) as string[];
   const summary = (dashboard.summary || {}) as Row;
@@ -680,7 +703,7 @@ export async function fetchVkpiDashboardData(token: string, filters: VkpiDashboa
   const hasData = hasAnyDashboardData(summary, projectRows, linkRows, attributionRows, costRows, alertRows, dashboardMetrics);
   const dataStatus = failedSections.length ? "partial" : hasData ? "live" : "empty";
   const dataNotice = failedSections.length ? `部分数据源暂时不可用：${failedSections.join("、")}。当前页面只显示已成功返回的真实数据。` : hasData ? "当前页面来自真实接口数据。" : "当前周期还没有真实数据。";
-  return { ...emptyData(filters), windowDays: days, lastSyncedAt: new Date().toISOString(), dataStatus, dataNotice, metrics: buildMetrics(dashboardMetrics), revenueTrend: buildTrend(trendResult.data.rows || []), funnel: buildFunnel((dashboard.funnel as Row[] | undefined) || (dashboard.by_stage as Row[] | undefined) || []), staffLeaderboard: buildLeaderboard(staffRows, (dashboard.staff_leaderboard as Row[] | undefined) || []), productRoi: buildProductRoi((productPerformanceResult.data.rows || (dashboard.roi_by_project as Row[] | undefined) || [])), platformShare: buildPlatformShare((dashboard.revenue_by_source as Row[] | undefined) || rawAttributionRows), contentTypePerformance: [{ label: "已抓取播放量", value: uiProjects.reduce((sum, row) => sum + row.views, 0) }, { label: "有效点击", value: linkRows.reduce((sum, row) => sum + row.validClicks, 0) }, { label: "已发布内容", value: uiProjects.filter((row) => ["published", "content_published", "measured", "closed"].includes(row.stage)).length }], alerts: buildAlerts(alertRows), weeklySummary: buildWeeklySummary(summary, staffRows, alertRows), exportReport: { id: `weekly-${new Date().toISOString().slice(0, 10)}`, title: `周报（${rangeLabel(filters)}）`, generatedAt: "由 Viltrox Marketing 接口数据生成", status: "Ready" }, projects: uiProjects, links: linkRows, attributions: attributionRows, unmatchedAttributions: unmatchedRows, costs: costRows, evidence: emptyEvidence(), staffMembers, kpiLedger, productCosts, productLaunches, kolOptions, selectedKol: buildKol(uiProjects, linkRows, alertRows) };
+  return { ...emptyData(filters), windowDays: days, lastSyncedAt: new Date().toISOString(), dataStatus, dataNotice, metrics: buildMetrics(dashboardMetrics), revenueTrend: buildTrend(trendResult.data.rows || []), funnel: buildFunnel((dashboard.funnel as Row[] | undefined) || (dashboard.by_stage as Row[] | undefined) || []), staffLeaderboard: buildLeaderboard(staffRows, (dashboard.staff_leaderboard as Row[] | undefined) || []), productRoi: buildProductRoi((productPerformanceResult.data.rows || (dashboard.roi_by_project as Row[] | undefined) || [])), platformShare: buildPlatformShare((dashboard.revenue_by_source as Row[] | undefined) || rawAttributionRows), contentTypePerformance: [{ label: "已抓取播放量", value: uiProjects.reduce((sum, row) => sum + row.views, 0) }, { label: "有效点击", value: linkRows.reduce((sum, row) => sum + row.validClicks, 0) }, { label: "已发布内容", value: uiProjects.filter((row) => ["published", "content_published", "measured", "closed"].includes(row.stage)).length }], alerts: buildAlerts(alertRows), weeklySummary: buildWeeklySummary(summary, staffRows, alertRows), exportReport: { id: `weekly-${new Date().toISOString().slice(0, 10)}`, title: `周报（${rangeLabel(filters)}）`, generatedAt: "由 Viltrox Marketing 接口数据生成", status: "Ready" }, projects: uiProjects, links: linkRows, attributions: attributionRows, unmatchedAttributions: unmatchedRows, costs: costRows, evidence: emptyEvidence(), staffMembers, kpiLedger, productCosts, productLaunches, kolOptions, selectedKol: buildKol(uiProjects, linkRows, alertRows), scopes: { projects: buildScopeContext(projectsResult.data.scope), kols: buildScopeContext(kolOptionsResult.data.scope) } };
 }
 function buildWeeklySummary(summary: Row, staffRows: Row[], alerts: Row[]): string {
   const sales = centsToUsd(summary.revenue_cents || summary.all_gmv_including_company_cents);
@@ -699,7 +722,7 @@ export async function listMarketingKols(token: string, params: { search?: string
   const query = new URLSearchParams({ limit: String(params.limit || 100) });
   if (params.search) query.set("search", params.search);
   if (params.platform) query.set("platform", params.platform);
-  return apiFetch<{ kols?: Row[] }>(`/api/marketing/kols?${query.toString()}`, {}, token);
+  return apiFetch<{ kols?: Row[]; scope?: Row }>(`/api/marketing/kols?${query.toString()}`, {}, token);
 }
 export async function scanKolAccount(token: string, kolId: string, maxPosts = 24) {
   const scan = await apiFetch<Record<string, unknown>>(`/api/marketing/kols/${encodeURIComponent(kolId)}/scan-account`, {
@@ -718,7 +741,22 @@ export async function scanKolAccount(token: string, kolId: string, maxPosts = 24
   return { scan };
 }
 export async function claimKol(token: string, kolId: string, expiresDays = 14) { return apiFetch<Record<string, unknown>>(`/api/marketing/kols/${encodeURIComponent(kolId)}/claim`, { method: "POST", body: jsonBody({ expires_days: expiresDays }) }, token); }
-export async function createProject(token: string, payload: VkpiCreateProjectPayload) { return apiFetch<Record<string, unknown>>("/api/marketing/projects", { method: "POST", body: jsonBody({ project_name: payload.projectName, kol_id: payload.kolId ? Number(payload.kolId) : undefined, product_sku: payload.productSku, product_name: payload.productName, platform: payload.platform, marketplace: payload.marketplace, note: payload.note }) }, token); }
+export async function createProject(token: string, payload: VkpiCreateProjectPayload) {
+  return apiFetch<Record<string, unknown>>("/api/marketing/projects", {
+    method: "POST",
+    body: jsonBody({
+      project_name: payload.projectName,
+      kol_id: payload.kolId ? Number(payload.kolId) : undefined,
+      product_sku: payload.productSku,
+      product_name: payload.productName,
+      product_skus: payload.productSkus,
+      products: payload.products,
+      platform: payload.platform,
+      marketplace: payload.marketplace,
+      note: payload.note,
+    }),
+  }, token);
+}
 export async function getProjectDetail(token: string, projectId: string) { return apiFetch<VkpiProjectDetail>(`/api/marketing/projects/${encodeURIComponent(projectId)}`, {}, token); }
 export async function getKolProfile(token: string, kolId: string) { return apiFetch<VkpiKolProfile>(`/api/marketing/kols/${encodeURIComponent(kolId)}/profile`, {}, token); }
 export async function getStaffProfile(token: string, staffId: string, window = "month") { return apiFetch<VkpiStaffProfile>(`/api/marketing/staff/${encodeURIComponent(staffId)}/profile?window=${encodeURIComponent(window)}&limit=120`, {}, token); }
@@ -973,6 +1011,9 @@ export async function listProductKolPool(token: string, options: { platform?: st
 }
 export async function importProductKolPool(token: string, payload: { platform?: string; source_type?: string; source_ref?: string; items: Row[] }) {
   return apiFetch<Record<string, unknown>>("/api/admin/vkpi/product-analysis/kol-pool/import", { method: "POST", body: jsonBody(payload) }, token);
+}
+export async function getKolPoolSummary(token: string) {
+  return apiFetch<Row>("/api/admin/vkpi/kol-pool/summary", {}, token);
 }
 export async function runProductRecommendations(token: string, payload: Record<string, unknown>) {
   return apiFetch<Record<string, unknown>>("/api/admin/vkpi/product-analysis/recommendations/run", { method: "POST", body: jsonBody(payload), timeoutMs: 120000 }, token);

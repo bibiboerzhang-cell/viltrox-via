@@ -27,6 +27,12 @@ export type KpiKey =
   | 'shares'
   | 'saves';
 
+export type ChartKey =
+  | 'posts_distribution'
+  | 'posting_signals'
+  | 'top_posts'
+  | 'top_profiles';
+
 export type SecondaryTab = 'Home' | 'Benchmarks' | 'Posts' | 'Pillars' | 'Sentiment' | 'Topic Tracking';
 
 export type BenchmarkTab =
@@ -45,6 +51,12 @@ export interface KpiOption {
   label: string;
   group: 'count' | 'growth' | 'engagement' | 'rate' | 'reach' | 'value';
   platforms?: string[];
+}
+
+export interface ChartOption {
+  key: ChartKey;
+  label: string;
+  group: 'content' | 'engagement' | 'views' | 'audience' | 'summary';
 }
 
 export const SECONDARY_TABS: readonly SecondaryTab[] = [

@@ -13,13 +13,15 @@ import secrets
 from datetime import datetime
 from typing import Any
 
-from app.db.connection import get_conn
+from app.db.connection import get_conn, is_postgres_runtime
 from app.services.vkpi import platform_crawl_settings
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
 
 
-from app.services.vkpi.industry_snapshot_kpis import SNAPSHOT_FIELDS, _int, _json, _snippet, _stats, _today, _utcnow, _video_items, calculate_kpis
+from app.services.vkpi.industry_snapshot_kpis import SNAPSHOT_FIELDS, _int, _json, _parse_duration_seconds, _snippet, _stats, _today, _utcnow, _video_items, calculate_kpis
+
+_POST_MEDIA_COLUMNS_READY = False
 
 
 def _platform_config(platform: str) -> dict[str, Any]:
@@ -28,6 +30,181 @@ def _platform_config(platform: str) -> dict[str, Any]:
         if str(item.get("platform") or "").lower() == str(platform or "").lower():
             return dict(item)
     return {}
+
+
+def _record_platform_test_status(platform: str, status: str, metadata: dict[str, Any] | None = None) -> None:
+    """Persist the provider test status used by Settings and account diagnostics."""
+    clean_platform = str(platform or "").strip().lower()
+    clean_status = str(status or "").strip().lower()
+    if not clean_platform or not clean_status:
+        return
+    now = _utcnow()
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT metadata_json FROM vkpi_platform_crawl_settings WHERE platform=?",
+        (clean_platform,),
+    ).fetchone()
+    current_metadata: dict[str, Any] = {}
+    if row:
+        try:
+            current_metadata = json.loads(str(dict(row).get("metadata_json") or "{}"))
+        except Exception:
+            current_metadata = {}
+    if metadata:
+        current_metadata.update(metadata)
+    current_metadata["last_live_status_update"] = now
+    conn.execute(
+        """
+        UPDATE vkpi_platform_crawl_settings
+        SET last_test_status=?, last_test_at=?, metadata_json=?
+        WHERE platform=?
+        """,
+        (clean_status, now, _json(current_metadata), clean_platform),
+    )
+    conn.commit()
+
+
+def _first_text(row: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = row.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def _ensure_post_media_columns(conn: Any) -> None:
+    """Keep older local databases compatible with the new media columns."""
+    global _POST_MEDIA_COLUMNS_READY
+    if _POST_MEDIA_COLUMNS_READY:
+        return
+    columns = {
+        "video_url": "TEXT DEFAULT ''",
+        "media_type": "TEXT DEFAULT ''",
+        "duration_seconds": "INTEGER",
+        "video_source": "TEXT DEFAULT ''",
+    }
+    if is_postgres_runtime():
+        for column, definition in columns.items():
+            conn.execute(f"ALTER TABLE vkpi_industry_posts ADD COLUMN IF NOT EXISTS {column} {definition}")
+    else:
+        existing = {str(row[1]) for row in conn.execute("PRAGMA table_info(vkpi_industry_posts)").fetchall()}
+        for column, definition in columns.items():
+            if column not in existing:
+                conn.execute(f"ALTER TABLE vkpi_industry_posts ADD COLUMN {column} {definition}")
+    conn.commit()
+    _POST_MEDIA_COLUMNS_READY = True
+
+
+def _first_media_url(row: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = row.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    for path in ("video.url", "video.playAddr", "video.downloadAddr", "media.videoUrl", "media.url"):
+        value: Any = row
+        for part in path.split("."):
+            if not isinstance(value, dict):
+                value = None
+                break
+            value = value.get(part)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    for list_key in ("medias", "media", "attachments"):
+        value = row.get(list_key)
+        if not isinstance(value, list):
+            continue
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            media_type = str(item.get("type") or item.get("media_type") or "").lower()
+            url = item.get("videoUrl") or item.get("video_url") or item.get("url") or item.get("downloadUrl")
+            if url and (media_type in {"video", "reel", "short"} or ".mp4" in str(url).lower()):
+                return str(url).strip()
+    return ""
+
+
+def _duration_seconds(value: Any) -> int | None:
+    parsed_int = _int(value)
+    if parsed_int is not None:
+        return parsed_int
+    parsed_iso = _parse_duration_seconds(value)
+    return parsed_iso
+
+
+def _post_duration_value(video: dict[str, Any]) -> Any:
+    for key in ("duration_seconds", "durationSeconds", "duration", "videoDuration"):
+        value = video.get(key)
+        if value not in (None, ""):
+            return value
+    for path in ("videoMeta.duration", "video.duration", "contentDetails.duration"):
+        value: Any = video
+        for part in path.split("."):
+            if not isinstance(value, dict):
+                value = None
+                break
+            value = value.get(part)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _media_type(video: dict[str, Any], *, video_url: str, thumbnail_url: str) -> str:
+    raw = str(video.get("media_type") or video.get("mediaType") or video.get("type") or "").strip().lower()
+    if raw in {"video", "image", "carousel", "reel", "short", "photo"}:
+        return "video" if raw in {"reel", "short"} else ("image" if raw == "photo" else raw)
+    if video_url:
+        return "video"
+    if thumbnail_url:
+        return "image"
+    return ""
+
+
+def _first_profile(raw_data: dict[str, Any]) -> dict[str, Any]:
+    profile = raw_data.get("profile") if isinstance(raw_data, dict) else {}
+    items = profile.get("items") if isinstance(profile, dict) else []
+    if isinstance(items, list) and items and isinstance(items[0], dict):
+        return dict(items[0])
+    if isinstance(profile, dict) and any(key in profile for key in ("username", "profilePicUrl", "profilePicUrlHD")):
+        return profile
+    return {}
+
+
+def _sync_account_profile_fields(account: dict[str, Any], raw_data: dict[str, Any]) -> dict[str, Any]:
+    profile = _first_profile(raw_data)
+    if not profile:
+        return account
+    platform = str(account.get("platform") or "").lower()
+    username = _first_text(profile, "username", "handle")
+    avatar_url = _first_text(profile, "profilePicUrlHD", "profilePicUrl", "profilePictureUrl", "profile_pic_url", "avatar_url")
+    profile_url = _first_text(profile, "url", "inputUrl", "profile_url")
+    if not profile_url and platform == "instagram" and username:
+        profile_url = f"https://www.instagram.com/{username}/"
+    display_name = _first_text(profile, "fullName", "displayName", "name", "username")
+    updates: list[str] = []
+    params: list[Any] = []
+    if avatar_url:
+        updates.append("avatar_url=?")
+        params.append(avatar_url)
+    if profile_url:
+        updates.append("profile_url=?")
+        params.append(profile_url)
+    if display_name:
+        updates.append("display_name=?")
+        params.append(display_name)
+    if not updates:
+        return account
+    params.append(int(account.get("id") or 0))
+    conn = get_conn()
+    conn.execute(f"UPDATE vkpi_industry_accounts SET {', '.join(updates)} WHERE id=?", tuple(params))
+    conn.commit()
+    updated = dict(account)
+    if avatar_url:
+        updated["avatar_url"] = avatar_url
+    if profile_url:
+        updated["profile_url"] = profile_url
+    if display_name:
+        updated["display_name"] = display_name
+    return updated
 
 
 def provider_gate(account: dict[str, Any], *, force: bool = False) -> dict[str, Any]:
@@ -97,6 +274,7 @@ def _insert_posts(account: dict[str, Any], raw_data: dict[str, Any], *, limit: i
     platform = str(account.get("platform") or "youtube")
     account_id = int(account.get("id") or 0)
     conn = get_conn()
+    _ensure_post_media_columns(conn)
     count = 0
     for video in videos:
         stats = _stats(video)
@@ -109,18 +287,40 @@ def _insert_posts(account: dict[str, Any], raw_data: dict[str, Any], *, limit: i
         caption = str(snippet.get("description") or video.get("caption") or "")
         thumbnails = snippet.get("thumbnails") if isinstance(snippet.get("thumbnails"), dict) else {}
         thumbnail_url = str(video.get("thumbnail_url") or video.get("displayUrl") or (((thumbnails.get("high") or thumbnails.get("medium") or thumbnails.get("default") or {}) or {}).get("url") if thumbnails else ""))
+        video_url = _first_media_url(
+            video,
+            "video_url",
+            "videoUrl",
+            "videoDownloadUrl",
+            "downloadUrl",
+            "downloadAddr",
+            "playUrl",
+            "play_url",
+            "mediaUrl",
+            "media_url",
+            "url_to_video",
+            "video_url_no_watermark",
+        )
+        media_type = _media_type(video, video_url=video_url, thumbnail_url=thumbnail_url)
+        duration_seconds = _duration_seconds(_post_duration_value(video))
+        video_source = str(video.get("video_source") or ("apify_cdn" if video_url else "")).strip()
         uid = f"post-{platform}-{account_id}-{platform_post_id}"
         conn.execute(
             """
             INSERT INTO vkpi_industry_posts
                 (post_uid, account_id, platform, platform_post_id, post_url, thumbnail_url,
+                 video_url, media_type, duration_seconds, video_source,
                  title, caption, published_at, views, likes, comments, shares, saves,
                  hashtags_json, mentions_json, detected_products_json, content_pillar,
                  sentiment, raw_platform_data, created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(post_uid) DO UPDATE SET
                 post_url=excluded.post_url,
                 thumbnail_url=excluded.thumbnail_url,
+                video_url=excluded.video_url,
+                media_type=excluded.media_type,
+                duration_seconds=excluded.duration_seconds,
+                video_source=excluded.video_source,
                 title=excluded.title,
                 caption=excluded.caption,
                 published_at=excluded.published_at,
@@ -138,6 +338,10 @@ def _insert_posts(account: dict[str, Any], raw_data: dict[str, Any], *, limit: i
                 platform_post_id,
                 post_url,
                 thumbnail_url,
+                video_url,
+                media_type,
+                duration_seconds,
+                video_source,
                 title,
                 caption,
                 snippet.get("publishedAt") or video.get("published_at") or video.get("timestamp") or "",
@@ -178,6 +382,17 @@ def collect_account_snapshot(
     if raw_data is None:
         gate = provider_gate(account, force=force_local)
         if not gate.get("allowed"):
+            provider_status = str(gate.get("provider_status") or "").strip().lower()
+            message = str(gate.get("message") or "")
+            if provider_status == "not_configured" and any(
+                token in message
+                for token in ("API", "TOKEN", "crawler", "适配器", "未配置")
+            ):
+                _record_platform_test_status(
+                    platform,
+                    "not_configured",
+                    {"last_gate_message": message, "account_id": int(account_id)},
+                )
             conn.execute(
                 "UPDATE vkpi_industry_accounts SET sync_status=?, last_crawled_at=?, crawl_error_count=crawl_error_count+1 WHERE id=?",
                 (gate.get("sync_status") or "not_configured", _utcnow(), int(account_id)),
@@ -221,10 +436,24 @@ def collect_account_snapshot(
                 raw_data["youtube_kpi_status"] = raw_data["kpi_status"]
                 raw_data["source"] = "youtube_api"
 
+    raw_status = str(
+        (raw_data or {}).get("kpi_status")
+        or (raw_data or {}).get("provider_status")
+        or (raw_data or {}).get("youtube_kpi_status")
+        or ""
+    ).strip().lower()
+    if raw_status in {"ok", "configured", "synced", "success"}:
+        _record_platform_test_status(
+            platform,
+            "synced",
+            {"last_live_account_id": int(account_id), "last_live_source": (raw_data or {}).get("source") or ""},
+        )
+
     kpis = calculate_kpis(raw_data or {})
     kpis["snapshot_date"] = str((raw_data or {}).get("snapshot_date") or _today())
     snapshot = _insert_snapshot(int(account_id), kpis)
     posts_written = _insert_posts(account, raw_data or {}, limit=int(_platform_config(platform).get("posts_per_account") or 100))
+    account = _sync_account_profile_fields(account, raw_data or {})
     conn.execute(
         "UPDATE vkpi_industry_accounts SET sync_status=?, last_crawled_at=?, last_successful_at=?, crawl_error_count=0, raw_platform_data=? WHERE id=?",
         ("synced", _utcnow(), _utcnow(), _json(raw_data), int(account_id)),

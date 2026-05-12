@@ -90,6 +90,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "046_vkpi_settings.sql",
     "047_vkpi_user_preferences.sql",
     "048_vkpi_notification_settings.sql",
+    "055_vkpi_industry_post_media.sql",
 )
 
 try:

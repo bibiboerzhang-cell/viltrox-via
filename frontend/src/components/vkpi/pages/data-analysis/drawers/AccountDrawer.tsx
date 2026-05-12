@@ -13,6 +13,7 @@ import { useState } from 'react';
 import type { Row } from '../utils/types';
 import { ACCOUNT_TABS } from '../utils/types';
 import { accountId, accountName, rowString } from '../utils/rowAccessors';
+import { platformExternalUrl, proxiedImageUrl } from '../utils/mediaProxy';
 import { platformClass, platformDisplay, platformInitial, prettyDate } from '../utils/platformHelpers';
 import {
   AudienceTab,
@@ -69,6 +70,19 @@ function budgetReady(row?: Row): boolean {
     && numberValue(row?.monthly_limit_usd) > numberValue(row?.current_month_spent);
 }
 
+function statusReady(value: unknown): boolean {
+  return ['configured', 'ok', 'ready', 'success', 'synced', 'historical_import'].includes(
+    String(value || '').trim().toLowerCase(),
+  );
+}
+
+function accountHasSuccessfulSync(account: Row): boolean {
+  return statusReady(account.provider_status)
+    || statusReady(account.api_status)
+    || statusReady(account.sync_status)
+    || Boolean(rowString(account, ['last_successful_at']));
+}
+
 export function AccountDrawer({
   account,
   snapshots,
@@ -102,7 +116,11 @@ export function AccountDrawer({
   const platformLimitReady = numberValue(platformSettings?.daily_account_limit) > 0
     && numberValue(platformSettings?.posts_per_account) > 0;
   const apiStatus = String(platformSettings?.last_test_status || 'not_configured');
-  const apiReady = !['not_configured', 'failed', 'error'].includes(apiStatus.toLowerCase());
+  const accountSyncReady = accountHasSuccessfulSync(account);
+  const apiReady = accountSyncReady || statusReady(apiStatus);
+  const apiDetail = accountSyncReady
+    ? '最近同步成功'
+    : (apiReady ? apiStatus : 'API 未测试或未配置');
   const crawlGateItems = [
     {
       key: 'account',
@@ -152,21 +170,30 @@ export function AccountDrawer({
       key: 'api',
       label: 'API 状态',
       ok: apiReady,
-      detail: apiReady ? apiStatus : 'API 未测试或未配置',
+      detail: apiDetail,
     },
   ];
   const firstBlockedGate = crawlGateItems.find((item) => !item.ok);
+  const avatarUrl = proxiedImageUrl(rowString(account, ['avatar_url', 'profilePicUrl', 'profile_pic_url']));
+  const profileUrl = platformExternalUrl(rowString(account, ['profile_url', 'url', 'inputUrl']));
 
   return (
     <aside className="da-account-drawer da-account-drawer--open">
       <header className="da-account-drawer__header">
         <div className={`da-account-drawer__avatar ${platformClass(rowString(account, ['platform']))}`}>
-          {platformInitial(rowString(account, ['platform']))}
+          {avatarUrl ? <img src={avatarUrl} alt="" loading="lazy" /> : platformInitial(rowString(account, ['platform']))}
         </div>
         <div>
           <span>账号分析</span>
           <h3>{accountName(account)}</h3>
           <p>{platformDisplay(rowString(account, ['platform']))} · /{accountName(account)}</p>
+          {profileUrl ? (
+            <button
+              className="da-link-button"
+              type="button"
+              onClick={() => window.open(profileUrl, '_blank', 'noopener,noreferrer')}
+            >打开平台主页 ↗</button>
+          ) : null}
         </div>
         <button type="button" onClick={onClose} aria-label="关闭账号详情">×</button>
       </header>

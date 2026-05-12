@@ -100,7 +100,23 @@ def _ratio(numerator: int | float | None, denominator: int | float | None) -> fl
 def _parse_datetime(value: Any) -> datetime | None:
     if not value:
         return None
+    if isinstance(value, (int, float)):
+        timestamp = float(value)
+        if timestamp > 10_000_000_000:
+            timestamp = timestamp / 1000
+        try:
+            return datetime.utcfromtimestamp(timestamp)
+        except Exception:
+            return None
     text = str(value).strip()
+    if text.isdigit():
+        timestamp = float(text)
+        if timestamp > 10_000_000_000:
+            timestamp = timestamp / 1000
+        try:
+            return datetime.utcfromtimestamp(timestamp)
+        except Exception:
+            pass
     for candidate in (text, text.replace("Z", "+00:00")):
         try:
             return datetime.fromisoformat(candidate).replace(tzinfo=None)
@@ -121,10 +137,25 @@ def _parse_duration_seconds(value: Any) -> int | None:
 
 
 def _video_items(raw_data: dict[str, Any]) -> list[dict[str, Any]]:
-    videos = raw_data.get("videos") or raw_data.get("items") or []
-    if isinstance(videos, dict):
-        videos = videos.get("items") or []
-    return [item for item in videos if isinstance(item, dict)]
+    candidates: list[Any] = [raw_data.get("videos"), raw_data.get("items")]
+    profile = raw_data.get("profile")
+    if isinstance(profile, dict):
+        candidates.extend(
+            [
+                profile.get("videos"),
+                profile.get("posts"),
+                profile.get("latestPosts"),
+                profile.get("items"),
+            ]
+        )
+    for videos in candidates:
+        if isinstance(videos, dict):
+            videos = videos.get("items") or []
+        if isinstance(videos, list):
+            items = [item for item in videos if isinstance(item, dict)]
+            if items:
+                return items
+    return []
 
 
 def _profile_item(raw_data: dict[str, Any]) -> dict[str, Any]:
@@ -233,6 +264,7 @@ def calculate_kpis(raw_data: dict[str, Any]) -> dict[str, Any]:
                 video_stats.get("views"),
                 video_stats.get("view"),
                 video_stats.get("view_count"),
+                video_stats.get("play_count"),
                 video_stats.get("play"),
                 video_stats.get("playCount"),
                 video_stats.get("videoViewCount"),
@@ -284,11 +316,27 @@ def calculate_kpis(raw_data: dict[str, Any]) -> dict[str, Any]:
         video_shares.append(share_count)
         video_saves.append(save_count)
         duration = (video.get("contentDetails") or {}).get("duration") if isinstance(video.get("contentDetails"), dict) else video.get("duration")
-        video_durations.append(_parse_duration_seconds(duration))
+        if duration is None and isinstance(video.get("videoMeta"), dict):
+            duration = video["videoMeta"].get("duration")
+        parsed_duration = _parse_duration_seconds(duration)
+        if parsed_duration is None:
+            parsed_duration = _int(duration)
+        video_durations.append(parsed_duration)
 
-        published_at = _parse_datetime(video_snippet.get("publishedAt") or video.get("published_at") or video.get("publishedAt") or video.get("timestamp"))
-        title = str(video_snippet.get("title") or video.get("title") or "")
-        caption = str(video_snippet.get("description") or video.get("caption") or "")
+        published_at = _parse_datetime(
+            _first_present(
+                video_snippet.get("publishedAt"),
+                video.get("published_at"),
+                video.get("publishedAt"),
+                video.get("createTimeISO"),
+                video.get("createTime"),
+                video.get("takenAtTimestamp"),
+                video.get("timestamp"),
+                video.get("createdAt"),
+            )
+        )
+        title = str(_first_present(video_snippet.get("title"), video.get("title"), video.get("text"), video.get("desc")) or "")
+        caption = str(_first_present(video_snippet.get("description"), video.get("caption"), video.get("text"), video.get("desc")) or "")
         hashtag_counts.append(len(re.findall(r"#[\\w\\-\\u4e00-\\u9fff]+", f"{title} {caption}")))
         engagement = sum(value or 0 for value in (like_count, comment_count, share_count, save_count))
         if published_at:
@@ -313,10 +361,11 @@ def calculate_kpis(raw_data: dict[str, Any]) -> dict[str, Any]:
     top_post_views = max([value for value in video_views if value is not None], default=None)
 
     result = _field_dict()
+    posts_count = posts if posts is not None else (len(videos) if videos else None)
     result.update(
         {
             "followers": followers,
-            "posts": posts,
+            "posts": posts_count,
             "posts_30d": recent_posts if videos else None,
             "avg_posts_per_day": (recent_posts / 30) if videos else None,
             "views": views,
@@ -363,4 +412,3 @@ def calculate_kpis(raw_data: dict[str, Any]) -> dict[str, Any]:
         if passthrough in raw:
             result[passthrough] = raw.get(passthrough)
     return result
-

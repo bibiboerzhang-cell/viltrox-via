@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -68,6 +70,39 @@ ADMIN_APP_ROLES = {"all", "web", "admin-web"}
 IS_PUBLIC_APP = APP_ROLE in PUBLIC_APP_ROLES
 IS_ADMIN_APP = APP_ROLE in ADMIN_APP_ROLES
 logger = get_logger(__name__)
+
+
+def _read_git_value(*args: str) -> str:
+    try:
+        return (
+            subprocess.check_output(["git", *args], cwd=PROJECT_ROOT, stderr=subprocess.DEVNULL, text=True)
+            .strip()
+        )
+    except Exception:
+        return ""
+
+
+APP_VERSION = "2.0.0"
+APP_GIT_SHA = os.getenv("APP_GIT_SHA", "").strip() or _read_git_value("rev-parse", "HEAD")
+APP_GIT_SHORT_SHA = (APP_GIT_SHA[:8] if APP_GIT_SHA else "unknown")
+APP_GIT_BRANCH = os.getenv("APP_GIT_BRANCH", "").strip() or _read_git_value("rev-parse", "--abbrev-ref", "HEAD")
+APP_BUILD_TIME = (
+    os.getenv("APP_BUILD_TIME", "").strip()
+    or datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+)
+
+
+def _build_info(client_build: str = "") -> dict[str, str | bool]:
+    client = str(client_build or "").strip()
+    return {
+        "version": APP_VERSION,
+        "git_sha": APP_GIT_SHA or "unknown",
+        "git_short_sha": APP_GIT_SHORT_SHA,
+        "git_branch": APP_GIT_BRANCH or "unknown",
+        "build_time": APP_BUILD_TIME,
+        "client_build": client,
+        "client_matches_server": bool(client and APP_GIT_SHA and client == APP_GIT_SHA),
+    }
 
 
 def _is_https_request(request) -> bool:
@@ -264,7 +299,12 @@ GLOBAL_CSP_VALUE = _build_csp_value()
 
 def _serve_frontend():
     if FRONTEND_INDEX.exists():
-        return FileResponse(FRONTEND_INDEX)
+        response = FileResponse(FRONTEND_INDEX)
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        response.headers["X-VKPI-Build-SHA"] = APP_GIT_SHORT_SHA
+        return response
     raise HTTPException(status_code=404, detail="Frontend build not found")
 
 
@@ -568,8 +608,9 @@ if IS_ADMIN_APP:
 
 @app.get("/health")
 async def health_check(request: Request, deep: bool = False):
+    build = _build_info(str(request.query_params.get("client_build", "") or ""))
     if not deep:
-        return {"status": "ok", "service": APP_ROLE}
+        return {"status": "ok", "service": APP_ROLE, "version": APP_VERSION, "build": build}
     if not _can_read_deep_health(request):
         raise HTTPException(status_code=403, detail="Deep health requires admin or ops token")
     queue_backend = getattr(getattr(app.state, "job_queue", None), "backend_name", "none")
@@ -602,7 +643,8 @@ async def health_check(request: Request, deep: bool = False):
         postgres = await asyncio.to_thread(probe_postgres_connectivity)
     return {
         "status": "ok",
-        "version": "2.0.0",
+        "version": APP_VERSION,
+        "build": build,
         "deep": deep,
         "app_role": APP_ROLE,
         "production_mode": IS_PRODUCTION,

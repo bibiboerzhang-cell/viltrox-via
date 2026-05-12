@@ -19,6 +19,7 @@ interface AnalyticsMonitorPanelProps {
   suggestionsCount: number;
   digestCount: number;
   digestStatus: Record<string, unknown>;
+  kolPoolSummary?: Record<string, unknown>;
   onBusyChange: (busy: boolean) => void;
   onPlatformChange: (platform: string) => void;
   onMessage: (message: string) => void;
@@ -33,6 +34,7 @@ export function AnalyticsMonitorPanel({
   suggestionsCount,
   digestCount,
   digestStatus,
+  kolPoolSummary = {},
   onBusyChange,
   onPlatformChange,
   onMessage,
@@ -93,8 +95,12 @@ export function AnalyticsMonitorPanel({
     onBusyChange(true);
     try {
       const response = await generateDailyOutreachDigest(apiToken);
-      const digest = (response.digest || {}) as Record<string, unknown>;
-      onMessage(`今日未联系 KOL 清单已生成：${String(digest.items_per_staff || 0)} 条/人。`);
+      const generated = safeNumber(response.items_total ?? response.items_per_staff);
+      const eligible = safeNumber(response.eligible_staff_count ?? response.staff_count);
+      const owned = safeNumber(response.owned_assignment_count);
+      const fallback = safeNumber(response.fallback_assignment_count);
+      const duplicates = safeNumber(response.duplicate_suggestion_count);
+      onMessage(`今日未联系 KOL 清单已生成：${numberFormatter.format(generated)} 条，覆盖 ${numberFormatter.format(eligible)} 名有效员工；负责人分配 ${numberFormatter.format(owned)}，兜底分配 ${numberFormatter.format(fallback)}，重复 ${numberFormatter.format(duplicates)}。`);
       await onRefresh();
     } catch (error) {
       onMessage(error instanceof Error ? error.message : '生成今日清单失败');
@@ -114,13 +120,26 @@ export function AnalyticsMonitorPanel({
   const totalLikes = safeNumber(resultOverview.total_likes);
   const totalComments = safeNumber(resultOverview.total_comments);
   const suggestionsCreated = safeNumber(resultSummary.suggestions_created);
-  const digestStaffCount = safeNumber(digestStatus.staff_count);
+  const digestStaffCount = safeNumber(digestStatus.eligible_staff_count ?? digestStatus.staff_count);
+  const digestActiveStaffCount = safeNumber(digestStatus.active_staff_count);
+  const digestExcludedStaffCount = safeNumber(digestStatus.excluded_staff_count);
+  const digestGeneratedStaffCount = safeNumber(digestStatus.generated_staff_count ?? digestStatus.ready_staff_count);
   const digestReadyStaffCount = safeNumber(digestStatus.ready_staff_count);
+  const digestEmptyStaffCount = safeNumber(digestStatus.empty_staff_count);
   const digestUncontactedCount = safeNumber(digestStatus.uncontacted_count);
+  const digestBridgeSeededCount = safeNumber(digestStatus.bridge_seeded_count);
+  const digestCandidateSource = String(digestStatus.candidate_source || 'none');
+  const digestDuplicateSuggestionCount = safeNumber(digestStatus.duplicate_suggestion_count);
+  const digestAssignmentStrategy = String(digestStatus.assignment_strategy || '未返回');
+  const digestOwnedAssignmentCount = safeNumber(digestStatus.owned_assignment_count);
+  const digestFallbackAssignmentCount = safeNumber(digestStatus.fallback_assignment_count);
   const digestScheduledTime = String(digestStatus.scheduled_time || '08:00');
   const digestTimezone = String(digestStatus.timezone || 'Asia/Shanghai');
   const digestFeatureEnabled = Boolean(digestStatus.feature_enabled);
   const digestLastGeneratedAt = String(digestStatus.last_generated_at || '未生成');
+  const kolPoolTotal = safeNumber(kolPoolSummary.total);
+  const kolHistoricalCount = safeNumber(kolPoolSummary.historical_collaboration_count);
+  const kolLinkedCount = safeNumber(kolPoolSummary.linked_main_kol_count);
 
   return (
     <>
@@ -147,8 +166,18 @@ export function AnalyticsMonitorPanel({
           <CardHeader title="每日 Top100 候选" />
           <InfoBlock label="自动同步" value={`${digestScheduledTime} ${digestTimezone}`} />
           <InfoBlock label="开关状态" value={digestFeatureEnabled ? '已开启' : '未开启'} tone={digestFeatureEnabled ? 'good' : 'warn'} />
-          <InfoBlock label="员工覆盖" value={`${digestReadyStaffCount}/${digestStaffCount}`} />
+          <InfoBlock label="有效员工" value={`${digestStaffCount}/${digestActiveStaffCount || digestStaffCount}`} />
+          <InfoBlock label="生成覆盖" value={`${digestGeneratedStaffCount}/${digestStaffCount}`} />
+          <InfoBlock label="有候选员工" value={`${digestReadyStaffCount}/${digestStaffCount}`} />
+          <InfoBlock label="无候选员工" value={`${digestEmptyStaffCount}/${digestStaffCount}`} />
+          <InfoBlock label="排除测试/系统" value={numberFormatter.format(digestExcludedStaffCount)} />
           <InfoBlock label="未联系候选" value={numberFormatter.format(digestUncontactedCount)} />
+          <InfoBlock label="候选来源" value={digestCandidateSource === 'kol_pool_bridge' ? 'KOL Pool 桥接' : digestCandidateSource} />
+          <InfoBlock label="桥接新增" value={numberFormatter.format(digestBridgeSeededCount)} />
+          <InfoBlock label="分配策略" value={digestAssignmentStrategy === 'owner_first_then_round_robin' ? '负责人优先 + 兜底轮询' : digestAssignmentStrategy} />
+          <InfoBlock label="负责人分配" value={numberFormatter.format(digestOwnedAssignmentCount)} tone={digestOwnedAssignmentCount > 0 ? 'good' : undefined} />
+          <InfoBlock label="兜底分配" value={numberFormatter.format(digestFallbackAssignmentCount)} tone={digestFallbackAssignmentCount > 0 ? 'warn' : undefined} />
+          <InfoBlock label="重复分发" value={numberFormatter.format(digestDuplicateSuggestionCount)} tone={digestDuplicateSuggestionCount > 0 ? 'warn' : 'good'} />
           <InfoBlock label="上次生成" value={digestLastGeneratedAt} />
           <button className="vkpi-button vkpi-button--secondary" disabled={busy || !apiToken} type="button" onClick={() => void generateDigest()}>手动生成 Top100</button>
         </section>
@@ -158,6 +187,14 @@ export function AnalyticsMonitorPanel({
           <InfoBlock label="待联系建议" value={String(suggestionsCount)} />
           <InfoBlock label="今日清单" value={`${digestCount}/100`} />
           <InfoBlock label="当前平台" value={platformDisplay(platform)} />
+        </section>
+        <section className="vkpi-card vkpi-action-card">
+          <CardHeader title="数据池口径" />
+          <InfoBlock label="历史合作名录" value={numberFormatter.format(kolHistoricalCount)} />
+          <InfoBlock label="KOL 资产池" value={numberFormatter.format(kolPoolTotal)} />
+          <InfoBlock label="Daily 新候选" value={numberFormatter.format(digestUncontactedCount)} />
+          <InfoBlock label="已绑定主 KOL" value={numberFormatter.format(kolLinkedCount)} />
+          <span className="vkpi-help-text">历史名录来自局部推广表，只补充资产画像；Daily Top100 只读取真实未联系候选。</span>
         </section>
       </section>
       {result ? (

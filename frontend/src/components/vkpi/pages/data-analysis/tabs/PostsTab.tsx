@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { Row } from '../utils/types';
-import { postKey, rowNumber, rowString } from '../utils/rowAccessors';
+import { findAccountForPost, postKey, rowNumber, rowString } from '../utils/rowAccessors';
 import { normalizePlatform } from '../utils/platformHelpers';
 import { DaCard } from '../shared/DaCard';
 import { EmptyState } from '../shared/EmptyState';
@@ -18,6 +18,7 @@ export function PostsTab({ accounts, posts, onSetSelectedAccount }: PostsTabProp
   const [filterPlatform, setFilterPlatform] = useState<string>('all');
   const [sortBy, setSortBy] = useState<SortKey>('recent');
   const [keyword, setKeyword] = useState('');
+  const [showAll, setShowAll] = useState(false);
 
   const filtered = posts.filter((post) => {
     if (filterPlatform !== 'all') {
@@ -44,10 +45,15 @@ export function PostsTab({ accounts, posts, onSetSelectedAccount }: PostsTabProp
       return (rowNumber(b, ['likes', 'like_count']) || 0) - (rowNumber(a, ['likes', 'like_count']) || 0);
     }
     // engagement
-    const eA = (rowNumber(a, ['likes']) || 0) + (rowNumber(a, ['comments']) || 0) + (rowNumber(a, ['shares']) || 0);
-    const eB = (rowNumber(b, ['likes']) || 0) + (rowNumber(b, ['comments']) || 0) + (rowNumber(b, ['shares']) || 0);
+    const eA = (rowNumber(a, ['likes', 'like_count']) || 0)
+      + (rowNumber(a, ['comments', 'comment_count']) || 0)
+      + (rowNumber(a, ['shares', 'share_count']) || 0);
+    const eB = (rowNumber(b, ['likes', 'like_count']) || 0)
+      + (rowNumber(b, ['comments', 'comment_count']) || 0)
+      + (rowNumber(b, ['shares', 'share_count']) || 0);
     return eB - eA;
   });
+  const visiblePosts = showAll ? sorted : sorted.slice(0, 30);
 
   const platforms = Array.from(new Set(posts.map((p) => normalizePlatform(rowString(p, ['platform'])))));
 
@@ -92,17 +98,25 @@ export function PostsTab({ accounts, posts, onSetSelectedAccount }: PostsTabProp
           <option value="likes">点赞</option>
           <option value="engagement">互动总和</option>
         </select>
+        {sorted.length > 30 ? (
+          <button className="da-text-button" type="button" onClick={() => setShowAll((value) => !value)}>
+            {showAll ? '只看前 30' : `显示全部 ${sorted.length} 条`}
+          </button>
+        ) : null}
       </div>
       {sorted.length ? (
         <div className="da-post-grid">
-          {sorted.slice(0, 30).map((post, idx) => (
-            <PostCard
-              key={postKey(post, idx)}
-              post={post}
-              accounts={accounts}
-              onViewAnalytics={() => onSetSelectedAccount(accounts[0] || null)}
-            />
-          ))}
+          {visiblePosts.map((post, idx) => {
+            const matchedAccount = findAccountForPost(post, accounts);
+            return (
+              <PostCard
+                key={postKey(post, idx)}
+                post={post}
+                accounts={accounts}
+                onViewAnalytics={() => onSetSelectedAccount(matchedAccount || accounts[0] || null)}
+              />
+            );
+          })}
         </div>
       ) : (
         <EmptyState
@@ -110,10 +124,10 @@ export function PostsTab({ accounts, posts, onSetSelectedAccount }: PostsTabProp
           body={posts.length ? '试试切换平台或清空搜索关键词。' : '暂无真实帖子,导入 Apify 历史或开启平台同步后展示。'}
         />
       )}
-      {sorted.length > 30 ? (
+      {sorted.length > 30 && !showAll ? (
         <p style={{
           textAlign: 'center', marginTop: 16, color: 'var(--da-text-muted)', fontSize: 12,
-        }}>显示前 30 条 · 累积更多真实数据后启用分页</p>
+        }}>当前显示前 30 条,可点击上方按钮查看全部。</p>
       ) : null}
     </DaCard>
   );

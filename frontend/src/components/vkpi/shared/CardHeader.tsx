@@ -1,8 +1,8 @@
-export function CardHeader({ title, action }: { title: string; action?: string }) {
+export function CardHeader({ title, action, onAction }: { title: string; action?: string; onAction?: () => void }) {
   return (
     <div className="vkpi-card__header">
       <h2>{title}</h2>
-      {action ? <button className="vkpi-mini-button" type="button">{action}⌄</button> : null}
+      {action && onAction ? <button className="vkpi-mini-button" type="button" onClick={onAction}>{action}⌄</button> : null}
     </div>
   );
 }

@@ -90,9 +90,9 @@ USER_CACHE_TTL_SEC = max(5, _env_int("USER_CACHE_TTL_SEC", "30"))
 # ── AI 模型配置（改 .env 就能换模型，不用动代码）──
 CLAUDE_MODEL       = os.environ.get("CLAUDE_MODEL",       "claude-sonnet-4-6")
 CLAUDE_HAIKU_MODEL = os.environ.get("CLAUDE_HAIKU_MODEL", "claude-haiku-4-5-20251001")
-GEMINI_MODEL       = os.environ.get("GEMINI_MODEL",       "gemini-2.5-flash")
-OPENAI_MODEL       = os.environ.get("OPENAI_MODEL",       "gpt-4o-mini")
-DEFAULT_VIA_DIALOGUE_MODEL = "gpt-5-nano"
+GEMINI_MODEL       = os.environ.get("GEMINI_MODEL",       "gemini-flash-latest")
+OPENAI_MODEL       = os.environ.get("OPENAI_MODEL",       "gpt-5.4-mini")
+DEFAULT_VIA_DIALOGUE_MODEL = "gpt-5.4-mini"
 
 # ── API Keys ──
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")

@@ -8,7 +8,7 @@ import { InfoBlock } from '../shared/InfoBlock';
 import { creatorPlatformOptions } from '../shared/vkpiConstants';
 import { lookupResultToKolDetail, safeNumber, textValue } from '../shared/vkpiDataUtils';
 import { PageShell } from './PageShell';
-import { linkKolPoolToMain, listKolPool } from '../../../services/vkpi.ui-api';
+import { batchEnrichKolPool, enrichKolPoolItem, getKolPoolItem, linkKolPoolToMain, listKolPool, promoteKolPoolToMain } from '../../../services/vkpi.ui-api';
 
 interface DiscoverPageProps {
   data: VkpiDashboardData;
@@ -78,7 +78,7 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
     setMessage('');
     try {
       const basePayload = { platform, handleOrUrl: handleOrUrl.trim(), createIfMissing, email: email.trim() || undefined };
-      const next = await onLookupKol({ ...basePayload, scanAccount: false, maxPosts: 1 });
+      const next = await onLookupKol({ ...basePayload, scanAccount: false, maxPosts: 24 });
       setLookupResult(next || null);
       const nextKolId = next?.kol?.id ? String(next.kol.id) : '';
       if (scanAccount && nextKolId && onScanKolAccount) {
@@ -87,7 +87,7 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
         setMessage('查重完成，正在抓取账号数据和生成评估报告。Apify / AI 通常需要 30-90 秒。');
         try {
           await onScanKolAccount(nextKolId, 24);
-          const refreshed = await onLookupKol({ ...basePayload, createIfMissing: false, scanAccount: false, maxPosts: 1 });
+          const refreshed = await onLookupKol({ ...basePayload, createIfMissing: false, scanAccount: false, maxPosts: 24 });
           setLookupResult(refreshed || next || null);
           const scanStatus = String(refreshed?.dossier?.snapshot?.scan_status || refreshed?.scan_result?.status || 'done');
           setMessage(`账号数据抓取完成。状态：${scanStatus}。`);
@@ -135,7 +135,7 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
       });
       setMessage('红人资料已补录。');
       if (onLookupKol && handleOrUrl.trim()) {
-        const refreshed = await onLookupKol({ platform, handleOrUrl: handleOrUrl.trim(), createIfMissing: false, scanAccount: false });
+        const refreshed = await onLookupKol({ platform, handleOrUrl: handleOrUrl.trim(), createIfMissing: false, scanAccount: false, maxPosts: 24 });
         setLookupResult(refreshed || lookupResult);
       }
     } catch (error) {
@@ -175,9 +175,25 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
             if (!apiToken) return Promise.reject(new Error('未登录'));
             return listKolPool(apiToken, params);
           }}
+          onGetItem={(kolPoolId) => {
+            if (!apiToken) return Promise.reject(new Error('未登录'));
+            return getKolPoolItem(apiToken, kolPoolId);
+          }}
+          onEnrichItem={(kolPoolId, maxPosts) => {
+            if (!apiToken) return Promise.reject(new Error('未登录'));
+            return enrichKolPoolItem(apiToken, kolPoolId, maxPosts);
+          }}
+          onBatchEnrich={(payload) => {
+            if (!apiToken) return Promise.reject(new Error('未登录'));
+            return batchEnrichKolPool(apiToken, payload);
+          }}
           onLinkToMain={async (kolPoolId, mainKolId) => {
             if (!apiToken) throw new Error('未登录');
             await linkKolPoolToMain(apiToken, kolPoolId, mainKolId);
+          }}
+          onPromoteToMain={(kolPoolId) => {
+            if (!apiToken) return Promise.reject(new Error('未登录'));
+            return promoteKolPoolToMain(apiToken, kolPoolId);
           }}
           onOpenImport={() => setActiveDiscoverTab('lookup')}
         />

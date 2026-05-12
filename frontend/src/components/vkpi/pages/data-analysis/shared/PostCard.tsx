@@ -1,7 +1,9 @@
+import { useState } from 'react';
 import type { Row } from '../utils/types';
 import {
-  postAccountName, postPlatform, postTitle, postUrl, rowNumber, rowString,
+  findAccountForPost, postAccountName, postPlatform, postTitle, postUrl, rowNumber, rowString,
 } from '../utils/rowAccessors';
+import { proxiedImageUrl, proxiedVideoUrl, redirectedVideoUrl } from '../utils/mediaProxy';
 import { compact, platformClass, platformDisplay, platformInitial, prettyDate } from '../utils/platformHelpers';
 
 interface PostCardProps {
@@ -13,19 +15,28 @@ interface PostCardProps {
 export function PostCard({ post, accounts, onViewAnalytics }: PostCardProps) {
   const platform = postPlatform(post, accounts);
   const caption = postTitle(post);
-  const thumb = rowString(post, ['thumbnail_url', 'cover_url', 'image_url']);
+  const thumb = proxiedImageUrl(rowString(post, ['thumbnail_url', 'cover_url', 'image_url', 'displayUrl']));
+  const rawVideoUrl = rowString(post, ['video_url', 'videoUrl', 'video_download_url', 'media_url', 'play_url']);
+  const primaryVideoUrl = proxiedVideoUrl(rawVideoUrl);
+  const fallbackVideoUrl = redirectedVideoUrl(rawVideoUrl);
+  const [useVideoFallback, setUseVideoFallback] = useState(false);
+  const videoUrl = useVideoFallback && fallbackVideoUrl ? fallbackVideoUrl : primaryVideoUrl;
   const url = postUrl(post);
   const views = rowNumber(post, ['views', 'view_count', 'video_views']);
   const likes = rowNumber(post, ['likes', 'like_count']);
   const comments = rowNumber(post, ['comments', 'comment_count']);
+  const matchedAccount = findAccountForPost(post, accounts);
   const account = postAccountName(post, accounts);
-  const followers = rowNumber(post, ['followers', 'follower_count']);
+  const accountAvatar = proxiedImageUrl(rowString(matchedAccount, ['avatar_url', 'profile_pic_url', 'profilePicUrl', 'profile_image_url']));
+  const followers = rowNumber(post, ['followers', 'follower_count'])
+    ?? rowNumber(matchedAccount, ['followers', 'follower_count']);
+  const captionIsTruncated = caption.length > 130;
 
   return (
     <article className="da-post-card">
       <header className="da-post-card__header">
         <div className={`da-post-card__avatar ${platformClass(platform)}`}>
-          {platformInitial(platform)}
+          {accountAvatar ? <img src={accountAvatar} alt="" loading="lazy" /> : platformInitial(platform)}
           <span className="da-post-card__avatar-platform">{platformInitial(platform)}</span>
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -46,21 +57,42 @@ export function PostCard({ post, accounts, onViewAnalytics }: PostCardProps) {
         >↗</button>
       </header>
       <div className="da-post-card__media">
-        <span className="da-post-card__media-icon">▶</span>
-        {thumb ? (
+        {videoUrl ? (
+          <video
+            src={videoUrl}
+            poster={thumb || undefined}
+            controls
+            preload="metadata"
+            playsInline
+            onError={() => {
+              if (!useVideoFallback && fallbackVideoUrl && fallbackVideoUrl !== videoUrl) {
+                setUseVideoFallback(true);
+              }
+            }}
+          />
+        ) : thumb ? (
           <img src={thumb} alt="post thumbnail" loading="lazy" />
         ) : (
           <div className={`da-post-card__media-fallback ${platformClass(platform)}`}>
             {platformInitial(platform)}
           </div>
         )}
+        {!videoUrl ? <span className="da-post-card__media-icon">▶</span> : null}
       </div>
       <p className="da-post-card__caption">
-        {caption.length > 130 ? `${caption.slice(0, 130)}… ` : caption}
-        <span className="da-post-card__see-more">查看更多</span>
+        {captionIsTruncated ? `${caption.slice(0, 130)}… ` : caption}
+        {captionIsTruncated && url ? (
+          <button
+            className="da-post-card__see-more"
+            type="button"
+            onClick={() => window.open(url, '_blank', 'noopener,noreferrer')}
+          >打开原帖</button>
+        ) : null}
       </p>
       <div className="da-post-card__tags">
-        <button type="button" className="da-post-card__manual-tag">Tag post ▾</button>
+        <span className="da-post-card__manual-tag">
+          {rowString(post, ['manual_tag', 'tag_label'], '未手动标注')}
+        </span>
         <span className="da-post-card__ai-tag">
           ✨ {rowString(post, ['content_pillar', 'pillar', 'ai_tag'], '内容信号')}
         </span>
@@ -71,7 +103,7 @@ export function PostCard({ post, accounts, onViewAnalytics }: PostCardProps) {
         <div className="da-post-card__metric"><span>Comments</span><strong>{compact(comments)}</strong></div>
       </div>
       <button className="da-post-card__view-analytics" type="button" onClick={onViewAnalytics}>
-        📈 查看分析
+        📈 打开账号分析
       </button>
     </article>
   );

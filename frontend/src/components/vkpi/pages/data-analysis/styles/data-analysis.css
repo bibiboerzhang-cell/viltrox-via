@@ -68,6 +68,10 @@
   box-sizing: border-box;
 }
 
+.da-main--profile {
+  max-width: 1500px;
+}
+
 /* ===== Hero ===== */
 
 .da-hero {
@@ -159,6 +163,75 @@
   flex-wrap: wrap;
   gap: 10px;
   margin-top: 14px;
+}
+
+/* ===== reference-dashboard style quick controls ===== */
+
+.da-analysis-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  background: var(--da-bg-card);
+  border: 1px solid var(--da-border-soft);
+  border-radius: 16px;
+  padding: 12px;
+  margin: -8px 0 20px;
+  box-shadow: var(--da-shadow-card);
+}
+
+.da-analysis-toolbar__field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  border: 1px solid var(--da-border);
+  border-radius: 12px;
+  padding: 0 10px;
+  background: #fff;
+}
+
+.da-analysis-toolbar__field span {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--da-text-muted);
+}
+
+.da-analysis-toolbar__field select {
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--da-text-primary);
+  font-size: 13px;
+  font-weight: 800;
+  min-width: 112px;
+}
+
+.da-toolbar-button {
+  min-height: 42px;
+  border: 1px solid #161225;
+  background: #161225;
+  color: #fff;
+  border-radius: 12px;
+  padding: 0 14px;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.da-analysis-toolbar__summary {
+  margin-left: auto;
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--da-text-secondary);
+  background: var(--da-bg-soft);
+  border-radius: 12px;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 /* ===== 横向二级 Tab 取代 240px 侧栏 ===== */
@@ -452,6 +525,8 @@
 .da-account-card__avatar {
   width: 40px;
   height: 40px;
+  min-width: 40px;
+  aspect-ratio: 1 / 1;
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -460,6 +535,16 @@
   font-size: 14px;
   color: #fff;
   flex-shrink: 0;
+  overflow: hidden;
+}
+
+.da-account-card__avatar img,
+.da-account-drawer__avatar img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  border-radius: inherit;
 }
 
 .da-account-card__top h4 {
@@ -580,6 +665,14 @@
   position: relative;
 }
 
+.da-post-card__avatar img {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+  display: block;
+}
+
 .da-post-card__avatar-platform {
   position: absolute;
   bottom: -2px;
@@ -644,6 +737,14 @@
   display: block;
 }
 
+.da-post-card__media video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  background: #050505;
+}
+
 .da-post-card__media-icon {
   position: absolute;
   top: 10px;
@@ -684,10 +785,15 @@
 }
 
 .da-post-card__see-more {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
   color: var(--da-primary);
   font-weight: 600;
   margin-left: 4px;
   cursor: pointer;
+  font: inherit;
 }
 
 .da-post-card__tags {
@@ -1333,7 +1439,7 @@
 }
 
 .da-filter-toggle.is-open {
-  right: 404px;
+  right: min(544px, calc(94vw + 24px));
 }
 
 .da-filter-drawer,
@@ -1342,7 +1448,7 @@
   top: 0;
   right: 0;
   height: 100vh;
-  width: 380px;
+  width: min(520px, 94vw);
   background: var(--da-bg-card);
   border-left: 1px solid var(--da-border);
   box-shadow: var(--da-shadow-drawer);
@@ -1411,6 +1517,24 @@
   font-weight: 800;
   color: #fff;
   flex-shrink: 0;
+  overflow: hidden;
+}
+
+.da-link-button {
+  margin-top: 6px;
+  border: 0;
+  background: transparent;
+  color: var(--da-primary);
+  padding: 0;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  text-align: left;
+}
+
+.da-link-button:hover {
+  color: var(--da-primary);
+  text-decoration: underline;
 }
 
 .da-filter-drawer__header button,
@@ -1435,6 +1559,24 @@
   color: var(--da-text-primary);
 }
 
+.da-account-drawer__header .da-link-button {
+  width: auto;
+  height: auto;
+  padding: 0;
+  margin-top: 6px;
+  justify-content: flex-start;
+  border-radius: 0;
+  color: var(--da-primary);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.da-account-drawer__header .da-link-button:hover {
+  background: transparent;
+  color: var(--da-primary);
+  text-decoration: underline;
+}
+
 .da-filter-drawer__body,
 .da-account-drawer__body {
   flex: 1;
@@ -1446,6 +1588,11 @@
   margin-bottom: 20px;
   padding-bottom: 20px;
   border-bottom: 1px solid var(--da-border-soft);
+}
+
+.da-filter-group--intro {
+  padding-bottom: 12px;
+  margin-bottom: 12px;
 }
 
 .da-filter-group:last-of-type {
@@ -1461,6 +1608,40 @@
   display: inline-block;
   margin: 0 0 12px;
   border-radius: 6px;
+}
+
+.da-filter-accordion {
+  border: 1px solid var(--da-border-soft);
+  border-radius: 12px;
+  background: var(--da-bg-hover);
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+
+.da-filter-accordion summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--da-text-primary);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.da-filter-accordion summary::-webkit-details-marker {
+  display: none;
+}
+
+.da-filter-accordion summary::after {
+  content: '⌄';
+  color: var(--da-text-muted);
+  font-weight: 900;
+  transition: transform 0.15s ease;
+}
+
+.da-filter-accordion[open] summary::after {
+  transform: rotate(180deg);
 }
 
 .da-filter-checkbox {
@@ -1482,7 +1663,7 @@
 .da-filter-checkbox__label {
   font-size: 14px;
   color: var(--da-text-primary);
-  background: var(--da-primary-50);
+  background: transparent;
   padding: 2px 8px;
   border-radius: 4px;
 }
@@ -1797,6 +1978,347 @@
 .da-import-box__body textarea:focus {
   outline: 2px solid var(--da-primary-soft);
   border-color: var(--da-primary);
+}
+
+/* ===== Profile Dashboard (account analytics workspace) ===== */
+
+.da-profile-shell {
+  display: grid;
+  gap: 18px;
+}
+
+.da-profile-header {
+  background: var(--da-bg-card);
+  border: 1px solid var(--da-border-soft);
+  border-radius: 22px;
+  padding: 20px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  box-shadow: var(--da-shadow-card);
+}
+
+.da-profile-back {
+  border: 1px solid var(--da-border);
+  background: var(--da-bg-card);
+  color: var(--da-text-primary);
+  border-radius: var(--da-radius-pill);
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.da-profile-back:hover {
+  border-color: var(--da-primary);
+  color: var(--da-primary);
+}
+
+.da-profile-identity {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.da-profile-avatar {
+  width: 72px;
+  height: 72px;
+  min-width: 72px;
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 24px;
+  font-weight: 900;
+  box-shadow: 0 12px 28px rgba(16, 24, 40, 0.12);
+}
+
+.da-profile-avatar img,
+.da-account-drawer__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  border-radius: inherit;
+}
+
+.da-kicker--profile {
+  background: var(--da-primary-50);
+  color: var(--da-primary);
+}
+
+.da-profile-identity h1 {
+  margin: 6px 0 4px;
+  color: var(--da-text-primary);
+  font-size: clamp(26px, 4vw, 42px);
+  line-height: 1;
+  letter-spacing: -0.04em;
+}
+
+.da-profile-identity p {
+  margin: 0;
+  color: var(--da-text-secondary);
+  font-size: 13px;
+}
+
+.da-profile-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.da-danger-button {
+  border: 1px solid rgba(217, 45, 32, 0.24);
+  background: var(--da-danger-soft);
+  color: var(--da-danger);
+  border-radius: 12px;
+  padding: 11px 16px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.da-danger-button:disabled,
+.da-black-button:disabled,
+.da-white-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.da-profile-status-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.da-profile-status-row > div {
+  background: var(--da-bg-card);
+  border: 1px solid var(--da-border-soft);
+  border-radius: 18px;
+  padding: 18px 20px;
+}
+
+.da-profile-status-row span {
+  display: block;
+  color: var(--da-text-muted);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.da-profile-status-row strong {
+  display: block;
+  margin-top: 8px;
+  color: var(--da-text-primary);
+  font-size: 32px;
+  font-weight: 900;
+  letter-spacing: -0.04em;
+}
+
+.da-profile-gate-summary {
+  border: 1px solid var(--da-border-soft);
+  border-radius: 16px;
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  background: var(--da-bg-card);
+}
+
+.da-profile-gate-summary strong {
+  font-size: 14px;
+  font-weight: 900;
+  color: var(--da-text-primary);
+}
+
+.da-profile-gate-summary span {
+  color: var(--da-text-secondary);
+  font-size: 13px;
+}
+
+.da-profile-gate-summary.is-ok {
+  border-color: rgba(9, 146, 80, 0.22);
+  background: var(--da-success-soft);
+}
+
+.da-profile-gate-summary.is-blocked {
+  border-color: rgba(217, 45, 32, 0.22);
+  background: var(--da-danger-soft);
+}
+
+.da-profile-gate-summary.is-blocked strong,
+.da-profile-gate-summary.is-blocked span {
+  color: var(--da-danger);
+}
+
+.da-profile-tabs {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--da-border-soft);
+  background: var(--da-bg-card);
+  border-radius: 16px 16px 0 0;
+  padding: 0 12px;
+}
+
+.da-profile-tabs button {
+  border: 0;
+  background: transparent;
+  color: var(--da-text-secondary);
+  padding: 16px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
+  position: relative;
+}
+
+.da-profile-tabs button.is-active {
+  color: var(--da-primary);
+}
+
+.da-profile-tabs button.is-active::after {
+  content: '';
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 0;
+  height: 3px;
+  border-radius: 3px 3px 0 0;
+  background: var(--da-primary);
+}
+
+.da-profile-content {
+  background: var(--da-bg-card);
+  border: 1px solid var(--da-border-soft);
+  border-top: 0;
+  border-radius: 0 0 20px 20px;
+  padding: 22px;
+  min-height: 440px;
+}
+
+.da-profile-advanced {
+  background: var(--da-bg-card);
+  border: 1px solid var(--da-border-soft);
+  border-radius: 16px;
+  padding: 0;
+}
+
+.da-profile-advanced summary {
+  cursor: pointer;
+  padding: 14px 18px;
+  color: var(--da-text-primary);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.da-profile-advanced .da-crawl-gate-grid {
+  padding: 0 18px 18px;
+}
+
+.da-crawl-gate-grid--compact {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.da-crawl-gate-item em {
+  display: block;
+  margin-top: 3px;
+  color: var(--da-text-secondary);
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.da-content-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.da-post-thumbnail {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  display: block;
+  background: #0b1220;
+}
+
+.da-post-thumbnail--placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 28px;
+}
+
+.da-post-meta {
+  padding: 12px 14px 14px;
+}
+
+.da-post-title {
+  min-height: 38px;
+  color: var(--da-text-primary);
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.da-post-stats {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  color: var(--da-text-secondary);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.da-post-date {
+  margin-top: 8px;
+  color: var(--da-text-muted);
+  font-size: 12px;
+}
+
+@media (max-width: 980px) {
+  .da-profile-header {
+    grid-template-columns: 1fr;
+  }
+
+  .da-profile-actions {
+    width: 100%;
+  }
+
+  .da-profile-actions button {
+    flex: 1;
+  }
+
+  .da-profile-status-row,
+  .da-crawl-gate-grid--compact {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .da-profile-identity {
+    align-items: flex-start;
+  }
+
+  .da-profile-avatar {
+    width: 56px;
+    height: 56px;
+    min-width: 56px;
+  }
+
+  .da-profile-status-row,
+  .da-crawl-gate-grid--compact {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ===== 平台头像配色 (内嵌) ===== */

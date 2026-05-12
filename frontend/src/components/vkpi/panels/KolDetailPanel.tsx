@@ -6,6 +6,7 @@ import { PlatformDot } from '../shared/PlatformDot';
 import { PlatformPill } from '../shared/PlatformPill';
 import { StageBadge } from '../shared/StageBadge';
 import { currencyFormatter, numberFormatter } from '../shared/vkpiFormatters';
+import { platformExternalUrl, proxiedImageUrl, proxiedVideoUrl } from '../pages/data-analysis/utils/mediaProxy';
 
 const messageTypeLabels: Record<string, string> = {
   DM: '私信',
@@ -14,15 +15,29 @@ const messageTypeLabels: Record<string, string> = {
   Note: '备注',
 };
 
-function ContentThumbnail({ src, index, title }: { src?: string; index: number; title: string }) {
+function ContentThumbnail({ src, videoUrl, index, title }: { src?: string; videoUrl?: string; index: number; title: string }) {
   const [failed, setFailed] = useState(false);
   const markFailed = () => setFailed(true);
-  if (!src || failed) {
+  const resolvedVideo = proxiedVideoUrl(videoUrl);
+  const resolvedImage = proxiedImageUrl(src);
+  if (resolvedVideo && !failed) {
+    return (
+      <video
+        src={resolvedVideo}
+        poster={resolvedImage || undefined}
+        controls
+        preload="metadata"
+        playsInline
+        onError={markFailed}
+      />
+    );
+  }
+  if (!resolvedImage || failed) {
     return <div className={`vkpi-content-preview__thumb thumb-${(index % 3) + 1}`}><i>{title.slice(0, 1).toUpperCase() || 'V'}</i></div>;
   }
   return (
     <img
-      src={src}
+      src={resolvedImage}
       alt=""
       loading="lazy"
       referrerPolicy="no-referrer"
@@ -43,16 +58,13 @@ export function KolDetailPanel({
   selectedProject?: VkpiProjectRow;
   onCopyShortLink?: (slug: string) => void;
 }) {
+  const [showAllContent, setShowAllContent] = useState(false);
+  const [showAllMessages, setShowAllMessages] = useState(false);
+  const visibleContent = showAllContent ? kol.recentContent : kol.recentContent.slice(0, 6);
+  const visibleMessages = showAllMessages ? kol.messages : kol.messages.slice(0, 5);
+
   return (
     <section className="vkpi-card vkpi-detail-panel">
-      <div className="vkpi-detail-panel__chrome">
-        <button type="button" aria-label="关闭详情面板">×</button>
-        <div>
-          <button type="button" aria-label="上一个红人">‹</button>
-          <button type="button" aria-label="下一个红人">›</button>
-        </div>
-      </div>
-
       <div className="vkpi-profile-card">
         <Avatar name={kol.name} src={kol.avatar} size="lg" />
         <div>
@@ -129,27 +141,39 @@ export function KolDetailPanel({
         </div>
       ) : null}
 
-      <DetailSection title="近期内容" action="查看全部">
+      <DetailSection
+        title="近期内容"
+        action={kol.recentContent.length > 6 ? (showAllContent ? '收起' : `查看全部 ${kol.recentContent.length} 条`) : undefined}
+        onAction={() => setShowAllContent((value) => !value)}
+      >
         {kol.recentContent.length ? (
           <div className="vkpi-content-preview-grid">
-            {kol.recentContent.map((content, index) => (
+            {visibleContent.map((content, index) => {
+              const contentUrl = platformExternalUrl(content.url || content.videoUrl);
+              return (
               <article className="vkpi-content-preview" key={content.id}>
-                <ContentThumbnail src={content.imageUrl} index={index} title={content.title} />
+                <ContentThumbnail src={content.imageUrl} videoUrl={content.videoUrl} index={index} title={content.title} />
                 {content.duration ? <span>{content.duration}</span> : null}
                 <strong>{content.title}</strong>
                 {content.engagementLabel ? <small>{content.engagementLabel}</small> : null}
+                {contentUrl ? <a className="vkpi-content-preview__open" href={contentUrl} target="_blank" rel="noreferrer">打开平台内容 ↗</a> : null}
               </article>
-            ))}
+              );
+            })}
           </div>
         ) : (
           <div className="vkpi-empty-state">暂无已抓取内容。</div>
         )}
       </DetailSection>
 
-      <DetailSection title="消息记录" action="查看全部">
+      <DetailSection
+        title="消息记录"
+        action={kol.messages.length > 5 ? (showAllMessages ? '收起' : `查看全部 ${kol.messages.length} 条`) : undefined}
+        onAction={() => setShowAllMessages((value) => !value)}
+      >
         <div className="vkpi-message-capture">
           {kol.messages.length ? (
-            kol.messages.map((message) => (
+            visibleMessages.map((message) => (
               <article key={message.id}>
                 <PlatformDot platform={message.source as VkpiPlatform} />
                 <div>
@@ -183,7 +207,6 @@ export function KolDetailPanel({
       <DetailSection title="跟进备注">
         <div className="vkpi-note-card">
           <p>{kol.followUpNote}</p>
-          <button className="vkpi-mini-button" type="button">编辑</button>
         </div>
       </DetailSection>
     </section>

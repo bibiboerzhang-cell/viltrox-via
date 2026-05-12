@@ -54,6 +54,25 @@ export function accountName(row: Row | null | undefined): string {
   return rowString(row, ['display_name', 'name', 'handle', 'username', 'profile_name'], '-').replace(/^@/, '');
 }
 
+function normalizedHandle(row: Row | null | undefined): string {
+  return rowString(row, ['handle', 'account_handle', 'username', 'display_name', 'name', 'profile_name'])
+    .toLowerCase()
+    .replace(/^@/, '')
+    .trim();
+}
+
+export function findAccountForPost(post: Row, accounts: Row[]): Row | undefined {
+  const postAccount = rowString(post, ['account_id', 'industry_account_id', 'profile_id', 'accountId']);
+  const postHandle = normalizedHandle(post);
+  return accounts.find((account) => {
+    const id = accountId(account);
+    const rawId = rowString(account, ['id', 'account_id', 'profile_id']);
+    const handle = normalizedHandle(account);
+    return (postAccount && (postAccount === id || postAccount === rawId))
+      || (postHandle && handle && postHandle === handle);
+  });
+}
+
 export function postUrl(row: Row): string {
   return rowString(row, ['post_url', 'permalink_url', 'video_url', 'external_url'], '');
 }
@@ -63,13 +82,11 @@ export function postTitle(row: Row): string {
 }
 
 export function postAccountName(row: Row, accounts: Row[]): string {
-  const accountKey = rowString(row, ['account_id', 'industry_account_id']);
-  const account = accounts.find((item) => accountId(item) === accountKey || String(item.id || '') === accountKey);
+  const account = findAccountForPost(row, accounts);
   return rowString(row, ['display_name', 'account_handle', 'handle', 'username'], account ? accountName(account) : 'tracked.profile');
 }
 
 export function postPlatform(row: Row, accounts: Row[]): string {
-  const accountKey = rowString(row, ['account_id', 'industry_account_id']);
-  const account = accounts.find((item) => accountId(item) === accountKey || String(item.id || '') === accountKey);
+  const account = findAccountForPost(row, accounts);
   return rowString(row, ['platform'], account ? rowString(account, ['platform'], 'other') : 'other');
 }

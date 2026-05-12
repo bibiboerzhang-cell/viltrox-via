@@ -5,6 +5,69 @@ import { coerceProjectStage, formatMoneyCents, safeNumber, textValue } from '../
 import { stageLabels } from '../shared/vkpiConstants';
 import { ProjectEvidenceForms } from './ProjectEvidenceForms';
 
+function parseProjectMetadata(value: unknown): Record<string, unknown> {
+  if (!value) return {};
+  if (typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+  if (typeof value !== 'string') return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+function selectedProjectProducts(project: Record<string, unknown>, fallbackProject?: VkpiProjectRow): Array<{ sku: string; name: string }> {
+  const metadata = parseProjectMetadata(project.metadata_json || project.metadata);
+  const rawProducts = Array.isArray(metadata.products) ? metadata.products : [];
+  const products = rawProducts
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      const row = item as Record<string, unknown>;
+      const sku = textValue(row.product_sku || row.productSku || row.sku, '');
+      if (!sku) return null;
+      return {
+        sku,
+        name: textValue(row.product_name || row.productName || row.name, sku),
+      };
+    })
+    .filter((item): item is { sku: string; name: string } => Boolean(item));
+  if (products.length) return products;
+  const sku = textValue(project.product_sku || fallbackProject?.campaign, '');
+  const name = textValue(project.product_name || project.productName, sku);
+  return sku ? [{ sku, name: name || sku }] : [];
+}
+
+function evidenceHref(value: unknown): string {
+  const text = textValue(value, '').trim();
+  if (!text) return '';
+  if (text.startsWith('/uploads/')) return text;
+  if (/^https?:\/\//i.test(text)) return text;
+  return '';
+}
+
+function firstEvidenceUrlFromText(value: unknown): string {
+  const text = textValue(value, '');
+  const match = text.match(/(https?:\/\/[^\s，。),;]+|\/uploads\/[^\s，。),;]+)/i);
+  return match ? match[1] : '';
+}
+
+function firstEvidenceUrlFromRows(rows: Array<Record<string, unknown>>): string {
+  for (const row of rows) {
+    const direct = evidenceHref(row.evidence_url || row.asset_url || row.thumbnail_url || row.file_path);
+    if (direct) return direct;
+    const nested = firstEvidenceUrlFromText(row.note || row.description || row.metadata_json);
+    if (nested) return nested;
+  }
+  return '';
+}
+
+function EvidenceLink({ value, label = '打开证据' }: { value: unknown; label?: string }) {
+  const href = evidenceHref(value) || firstEvidenceUrlFromText(value);
+  if (!href) return <>{textValue(value, '-')}</>;
+  return <a className="vkpi-evidence-link" href={href} target="_blank" rel="noreferrer">{label}</a>;
+}
+
 export function ProjectDetailDrawer({
   detail,
   kolProfile,
@@ -60,6 +123,8 @@ export function ProjectDetailDrawer({
   const revenue = safeNumber(roi.revenue_cents || project.revenue_cents || (fallbackProject?.gmv || 0) * 100) / 100;
   const cost = safeNumber(roi.cost_cents || project.cost_cents || (fallbackProject?.cost || 0) * 100) / 100;
   const roiValue = roi.roi == null ? (cost ? revenue / cost : null) : Number(roi.roi);
+  const selectedProducts = selectedProjectProducts(project, fallbackProject);
+  const termsEvidenceUrl = firstEvidenceUrlFromText(terms.note) || firstEvidenceUrlFromRows(deliverables);
 
   return (
     <aside className="vkpi-evidence-drawer vkpi-project-detail-drawer" role="dialog" aria-label="项目详情">
@@ -78,6 +143,19 @@ export function ProjectDetailDrawer({
           <div><strong>项目概览</strong><span>{textValue(project.updated_at || fallbackProject?.updatedAt, '-')}</span></div>
           <p>产品：{textValue(project.product_sku || fallbackProject?.campaign, '-')} · 平台：{textValue(project.platform || fallbackProject?.platform, '-')}</p>
           <em>总耗时 {fallbackProject?.totalDurationLabel || '-'} · 当前阶段 {fallbackProject?.stageDurationLabel || '-'}</em>
+        </article>
+        <article>
+          <div><strong>关联产品</strong><span>{selectedProducts.length ? `${selectedProducts.length} 个` : '未选择'}</span></div>
+          {selectedProducts.length ? (
+            <div className="vkpi-chip-row">
+              {selectedProducts.map((item) => (
+                <span className="vkpi-chip is-selected" key={`${item.sku}-${item.name}`}>{item.name || item.sku}</span>
+              ))}
+            </div>
+          ) : (
+            <p>暂无关联产品。新建项目时可从产品列表单选或多选。</p>
+          )}
+          <em>主产品仍写入项目主字段，多产品保存在项目 metadata，后续可升级为项目-产品关系表。</em>
         </article>
         <article>
           <div><strong>{showFinancials ? '销售 / 成本 / ROI' : '销售 / 项目进度'}</strong><span>来自项目详情接口</span></div>
@@ -190,7 +268,7 @@ export function ProjectDetailDrawer({
             <article key={`message-${String(row.id || row.created_at || Math.random())}`}>
               <div><strong>{textValue(row.source, 'manual')}</strong><span>{textValue(row.captured_at || row.created_at, '-')}</span></div>
               <p>{textValue(row.snippet || row.body, '无内容')}</p>
-              <em>{textValue(row.direction, '-')} · {textValue(row.evidence_url, '无证据链接')}</em>
+              <em>{textValue(row.direction, '-')} · {row.evidence_url ? <EvidenceLink value={row.evidence_url} /> : '无证据链接'}</em>
             </article>
           )}
         </DetailList>
@@ -207,7 +285,7 @@ export function ProjectDetailDrawer({
           {(row) => (
             <article key={`asset-${String(row.id || row.asset_url || Math.random())}`}>
               <div><strong>{textValue(row.asset_type, 'asset')}</strong><span>{textValue(row.rights_status, '-')}</span></div>
-              <p>{textValue(row.asset_url || row.thumbnail_url || row.file_path, '-')}</p>
+              <p><EvidenceLink value={row.asset_url || row.thumbnail_url || row.file_path} label="打开素材" /></p>
               <em>{textValue(row.usage_rights || row.note, '-')}</em>
             </article>
           )}
@@ -218,6 +296,7 @@ export function ProjectDetailDrawer({
             <>
               <p>{showFinancials ? `现金费用 ${currencyFormatter.format(safeNumber(terms.cash_fee_cents) / 100)} · ` : ''}使用权 {textValue(terms.usage_rights, '-')}</p>
               <em>{textValue(terms.sample_terms || terms.note, '-')}</em>
+              {termsEvidenceUrl ? <p className="vkpi-detail-subline"><EvidenceLink value={termsEvidenceUrl} label="打开条款附件" /></p> : null}
             </>
           ) : <p>暂无合作条款。</p>}
         </article>
@@ -226,7 +305,7 @@ export function ProjectDetailDrawer({
             <article key={`deliverable-${String(row.id || Math.random())}`}>
               <div><strong>{textValue(row.deliverable_type, 'deliverable')}</strong><span>{textValue(row.status, '-')}</span></div>
               <p>数量 {numberFormatter.format(safeNumber(row.quantity))} · 截止 {textValue(row.due_at, '-')}</p>
-              <em>{textValue(row.evidence_url || row.note, '-')}</em>
+              <em><EvidenceLink value={row.evidence_url || row.note} label="打开交付证据" /></em>
             </article>
           )}
         </DetailList>
@@ -238,7 +317,7 @@ export function ProjectDetailDrawer({
               <em>
                 {showFinancials ? `样品成本 ${currencyFormatter.format(safeNumber(row.sample_cost_cents) / 100)} · ` : ''}
                 运费 {currencyFormatter.format(safeNumber(row.shipping_cost_cents) / 100)}
-                {row.evidence_url ? ` · 凭证 ${textValue(row.evidence_url, '-')}` : ''}
+                {row.evidence_url ? <> · <EvidenceLink value={row.evidence_url} label="打开物流凭证" /></> : ''}
               </em>
             </article>
           )}

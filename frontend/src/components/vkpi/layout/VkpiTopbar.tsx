@@ -1,7 +1,19 @@
+import { useEffect, useMemo, useState } from 'react';
+
+import { buildApiUrl } from '../../../lib/api';
+import { frontendBuildInfo, shortBuildSha } from '../../../lib/buildInfo';
 import { DataStatusBadge } from '../shared/DataStatusBadge';
 import { Icon } from '../shared/Icon';
 import type { VkpiDataStatus, VkpiRangeKey } from '../vkpiTypes';
 import { rangeOptions } from './vkpiLayoutConstants';
+
+interface BackendBuildInfo {
+  git_sha?: string;
+  git_short_sha?: string;
+  git_branch?: string;
+  build_time?: string;
+  client_matches_server?: boolean;
+}
 
 interface VkpiTopbarProps {
   query: string;
@@ -19,6 +31,11 @@ interface VkpiTopbarProps {
   onExportPDF?: () => void;
   onExportCSV?: () => void;
   onGenerateWeeklyReport?: () => void;
+  weeklyReportStatus?: {
+    state: 'idle' | 'loading' | 'success' | 'error';
+    message: string;
+    href?: string;
+  } | null;
 }
 
 export function VkpiTopbar({
@@ -37,7 +54,55 @@ export function VkpiTopbar({
   onExportPDF,
   onExportCSV,
   onGenerateWeeklyReport,
+  weeklyReportStatus,
 }: VkpiTopbarProps) {
+  const [backendBuild, setBackendBuild] = useState<BackendBuildInfo | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 5000);
+
+    fetch(buildApiUrl(`/health?client_build=${encodeURIComponent(frontendBuildInfo.gitSha)}`), {
+      credentials: 'same-origin',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      signal: controller.signal,
+    })
+      .then((response) => response.ok ? response.json() : null)
+      .then((payload) => {
+        if (!cancelled && payload?.build) {
+          setBackendBuild(payload.build as BackendBuildInfo);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setBackendBuild(null);
+      })
+      .finally(() => window.clearTimeout(timer));
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, []);
+
+  const versionState = useMemo(() => {
+    const frontendSha = frontendBuildInfo.gitSha;
+    const backendSha = backendBuild?.git_sha || '';
+    const mismatch = Boolean(
+      backendSha &&
+      frontendSha &&
+      backendSha !== 'unknown' &&
+      frontendSha !== 'unknown' &&
+      backendSha !== frontendSha,
+    );
+    return {
+      mismatch,
+      frontendLabel: shortBuildSha(frontendSha),
+      backendLabel: backendBuild ? shortBuildSha(backendSha) : 'checking',
+    };
+  }, [backendBuild]);
+
   return (
     <header className="vkpi-topbar">
       <label className="vkpi-search">
@@ -74,6 +139,14 @@ export function VkpiTopbar({
         onRefresh={onRefreshData}
       />
 
+      <div
+        className={`vkpi-version-chip ${versionState.mismatch ? 'is-mismatch' : ''}`}
+        title={`Frontend ${versionState.frontendLabel} · Backend ${versionState.backendLabel} · ${frontendBuildInfo.gitBranch} · built ${frontendBuildInfo.builtAt}`}
+      >
+        <span>FE {versionState.frontendLabel}</span>
+        <span>BE {versionState.backendLabel}</span>
+      </div>
+
       {canSwitchView ? (
         <button className="vkpi-button" type="button" onClick={onToggleView}>
           {viewMode === 'manager' ? '切换员工视角' : '返回管理主控'}
@@ -81,18 +154,67 @@ export function VkpiTopbar({
       ) : null}
 
       <div className="vkpi-topbar__actions">
-        <button className="vkpi-button" type="button" onClick={onExportPDF}>
+        <button
+          className="vkpi-button"
+          type="button"
+          onClick={onExportPDF}
+          disabled={!onExportPDF}
+          title={onExportPDF ? '导出当前报表 PDF' : '当前页面未接入 PDF 导出'}
+        >
           <Icon name="file" />
           导出 PDF
         </button>
-        <button className="vkpi-button" type="button" onClick={onExportCSV}>
+        <button
+          className="vkpi-button"
+          type="button"
+          onClick={onExportCSV}
+          disabled={!onExportCSV}
+          title={onExportCSV ? '导出当前数据 CSV' : '当前页面未接入 CSV 导出'}
+        >
           <Icon name="table" />
           导出 CSV
         </button>
-        <button className="vkpi-button vkpi-button--primary" type="button" onClick={onGenerateWeeklyReport}>
+        <button
+          className="vkpi-button vkpi-button--primary"
+          type="button"
+          onClick={onGenerateWeeklyReport}
+          disabled={!onGenerateWeeklyReport}
+          title={onGenerateWeeklyReport ? '生成真实周报' : '当前页面未接入周报生成'}
+        >
           <Icon name="spark" />
           生成周报
         </button>
+        {weeklyReportStatus?.message ? (
+          <span
+            className={`vkpi-topbar__action-status is-${weeklyReportStatus.state}`}
+            style={{
+              alignItems: 'center',
+              border: weeklyReportStatus.state === 'error' ? '1px solid #fecaca' : '1px solid #bbf7d0',
+              borderRadius: 999,
+              color: weeklyReportStatus.state === 'error' ? '#b91c1c' : '#047857',
+              display: 'inline-flex',
+              fontSize: 12,
+              fontWeight: 800,
+              gap: 8,
+              maxWidth: 280,
+              minHeight: 36,
+              padding: '0 12px',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {weeklyReportStatus.message}
+            {weeklyReportStatus.href ? (
+              <a
+                href={weeklyReportStatus.href}
+                target="_blank"
+                rel="noreferrer"
+                style={{ color: 'inherit', textDecoration: 'underline' }}
+              >
+                打开
+              </a>
+            ) : null}
+          </span>
+        ) : null}
       </div>
     </header>
   );

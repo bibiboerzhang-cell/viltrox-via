@@ -16,11 +16,16 @@ export function ExportWidget({ report, onDownloadPDF }: { report: VkpiDashboardD
         </div>
         <em className={`is-${report.status.toLowerCase()}`}>{statusLabel}</em>
       </div>
-      <button className="vkpi-button" type="button" onClick={onDownloadPDF}>
+      <button
+        className="vkpi-button"
+        type="button"
+        onClick={onDownloadPDF}
+        disabled={!onDownloadPDF}
+        title={onDownloadPDF ? '下载真实生成的 PDF' : '当前报表尚未接入 PDF 下载'}
+      >
         <Icon name="download" />
         下载 PDF
       </button>
-      <button className="vkpi-link-button" type="button">查看全部报表</button>
     </section>
   );
 }

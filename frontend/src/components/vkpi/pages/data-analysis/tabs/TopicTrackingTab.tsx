@@ -19,10 +19,16 @@ export function TopicTrackingTab() {
 
       <section className="da-two-column">
         <DaCard title="Trending Topics" eyebrow="热门话题">
-          <EmptyState title="待 Phase 2 启用" body="Top 10 话题排行占位,待 topic_tracking 服务上线。" />
+          <EmptyState
+            title="话题排行未接入"
+            body="需要 topic_tracking 服务写入真实话题统计后展示；当前不放假榜单。"
+          />
         </DaCard>
         <DaCard title="Hashtag Growth (30d)" eyebrow="标签增长">
-          <EmptyState title="待 Phase 2 启用" body="时序图占位,待多平台爬虫累积真实数据。" />
+          <EmptyState
+            title="标签趋势未接入"
+            body="需要多平台 hashtag 历史快照后展示增长曲线；当前不放模拟趋势。"
+          />
         </DaCard>
       </section>
     </>

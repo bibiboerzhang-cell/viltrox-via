@@ -1,6 +1,6 @@
 import type { KpiKey, Row } from './types';
-import { accountId, accountName, postTitle, rowNumber, rowString } from './rowAccessors';
-import { normalizePlatform, shortDate } from './platformHelpers';
+import { accountId, accountName, findAccountForPost, postTitle, rowNumber, rowString } from './rowAccessors';
+import { shortDate } from './platformHelpers';
 
 /** 数字格式化 - 按 KPI 类型决定单位 */
 export function formatMetric(value: number | null, key?: KpiKey): string {
@@ -22,21 +22,19 @@ export function postsForAccount(posts: Row[], account: Row): Row[] {
   const id = accountId(account);
   const handle = accountName(account).toLowerCase();
   return posts.filter((post) => {
-    const postAccount = rowString(post, ['account_id', 'industry_account_id']);
+    const postAccount = rowString(post, ['account_id', 'industry_account_id', 'profile_id']);
     const postHandle = rowString(post, ['handle', 'account_handle', 'username', 'display_name']).toLowerCase().replace(/^@/, '');
-    return postAccount === id || postHandle === handle;
+    return Boolean(findAccountForPost(post, [account])) || postAccount === id || postHandle === handle;
   });
 }
 
 export function crossPlatformFor(crossPlatform: Row[], account: Row): Row | undefined {
-  const platform = normalizePlatform(rowString(account, ['platform']));
   const id = accountId(account);
   const handle = accountName(account).toLowerCase();
   return crossPlatform.find((row) => {
-    const rowPlatform = normalizePlatform(rowString(row, ['platform']));
     const rowAccount = rowString(row, ['account_id', 'id', 'profile_id']);
     const rowHandle = rowString(row, ['handle', 'display_name', 'name']).toLowerCase().replace(/^@/, '');
-    return rowAccount === id || rowHandle === handle || rowPlatform === platform;
+    return rowAccount === id || rowHandle === handle;
   });
 }
 
@@ -47,38 +45,46 @@ export function metricForAccount(account: Row, crossPlatform: Row[], posts: Row[
   const postSum = (keys: string[]) => accountPosts.reduce((sum, post) => sum + (rowNumber(post, keys) || 0), 0);
   const postCount = accountPosts.length;
   const followers = rowNumber(account, ['followers', 'follower_count', 'subscribers', 'subscriber_count'])
-    || rowNumber(platformSummary, ['followers', 'followers_total']);
-  const views = rowNumber(platformSummary, ['views_30d', 'views', 'video_views', 'reels_views'])
+    ?? rowNumber(platformSummary, ['followers', 'followers_total']);
+  const views = rowNumber(account, ['views_30d', 'views', 'video_views', 'reels_views'])
+    ?? rowNumber(platformSummary, ['views_30d', 'views', 'video_views', 'reels_views'])
     ?? postSum(['views', 'view_count', 'video_views']);
-  const likes = rowNumber(platformSummary, ['likes', 'likes_30d']) ?? postSum(['likes', 'like_count']);
-  const comments = rowNumber(platformSummary, ['comments', 'comments_30d']) ?? postSum(['comments', 'comment_count']);
-  const shares = rowNumber(platformSummary, ['shares', 'shares_30d']) ?? postSum(['shares', 'share_count']);
-  const saves = rowNumber(platformSummary, ['saves', 'saves_30d']) ?? postSum(['saves', 'save_count']);
-  const engagement = rowNumber(platformSummary, ['engagement', 'engagement_total_30d']) ?? likes + comments + shares + saves;
+  const likes = rowNumber(account, ['likes', 'likes_30d']) ?? rowNumber(platformSummary, ['likes', 'likes_30d']) ?? postSum(['likes', 'like_count']);
+  const comments = rowNumber(account, ['comments', 'comments_30d']) ?? rowNumber(platformSummary, ['comments', 'comments_30d']) ?? postSum(['comments', 'comment_count']);
+  const shares = rowNumber(account, ['shares', 'shares_30d']) ?? rowNumber(platformSummary, ['shares', 'shares_30d']) ?? postSum(['shares', 'share_count']);
+  const saves = rowNumber(account, ['saves', 'saves_30d']) ?? rowNumber(platformSummary, ['saves', 'saves_30d']) ?? postSum(['saves', 'save_count']);
+  const engagement = rowNumber(account, ['engagement_total_30d', 'engagement'])
+    ?? rowNumber(platformSummary, ['engagement', 'engagement_total_30d'])
+    ?? likes + comments + shares + saves;
 
   switch (key) {
     case 'followers': return followers;
     case 'followers_today': return rowNumber(account, ['followers_today']) ?? followers;
-    case 'followers_growth': return rowNumber(platformSummary, ['followers_growth', 'followers_growth_30d']);
-    case 'followers_growth_percent': return rowNumber(platformSummary, ['followers_growth_percent', 'followers_growth_pct']);
-    case 'posts': return rowNumber(platformSummary, ['posts', 'post_count', 'posts_30d']) ?? postCount;
-    case 'views': return views || null;
-    case 'likes': return likes || null;
-    case 'comments': return comments || null;
-    case 'shares': return shares || null;
-    case 'saves': return saves || null;
-    case 'engagement': return engagement || null;
-    case 'avg_engagement': return postCount && engagement ? engagement / postCount : rowNumber(platformSummary, ['avg_engagement']);
-    case 'avg_engagement_per_day': return rowNumber(platformSummary, ['avg_engagement_per_day']) ?? (engagement ? engagement / 30 : null);
-    case 'avg_posts_per_day': return rowNumber(platformSummary, ['avg_posts_per_day']) ?? (postCount ? postCount / 30 : null);
-    case 'avg_eng_rate_followers': return rowNumber(platformSummary, ['avg_eng_rate_followers', 'engagement_rate_followers']) ?? (followers && engagement ? (engagement / followers) * 100 : null);
-    case 'avg_eng_rate_views': return rowNumber(platformSummary, ['avg_eng_rate_views', 'engagement_rate_views']) ?? (views && engagement ? (engagement / views) * 100 : null);
-    case 'reels_views': return rowNumber(platformSummary, ['reels_views']) ?? postSum(['reels_views']);
-    case 'avg_eng_rate_impressions': return rowNumber(platformSummary, ['avg_eng_rate_impressions']);
-    case 'avg_eng_rate_reach': return rowNumber(platformSummary, ['avg_eng_rate_reach']);
-    case 'reach': return rowNumber(platformSummary, ['reach', 'reach_30d']);
-    case 'posts_impressions': return rowNumber(platformSummary, ['posts_impressions', 'impressions', 'impressions_30d']);
-    case 'organic_value': return rowNumber(platformSummary, ['organic_value']);
+    case 'followers_growth': return rowNumber(account, ['followers_growth', 'followers_growth_30d']) ?? rowNumber(platformSummary, ['followers_growth', 'followers_growth_30d']);
+    case 'followers_growth_percent': return rowNumber(account, ['followers_growth_percent', 'followers_growth_pct', 'followers_growth_pct_30d']) ?? rowNumber(platformSummary, ['followers_growth_percent', 'followers_growth_pct']);
+    case 'posts': return rowNumber(account, ['posts', 'post_count', 'posts_30d']) ?? rowNumber(platformSummary, ['posts', 'post_count', 'posts_30d']) ?? postCount;
+    case 'views': return views ?? null;
+    case 'likes': return likes ?? null;
+    case 'comments': return comments ?? null;
+    case 'shares': return shares ?? null;
+    case 'saves': return saves ?? null;
+    case 'engagement': return engagement ?? null;
+    case 'avg_engagement': return rowNumber(account, ['avg_engagement']) ?? (postCount && engagement ? engagement / postCount : rowNumber(platformSummary, ['avg_engagement']));
+    case 'avg_engagement_per_day': return rowNumber(account, ['avg_engagement_per_day']) ?? rowNumber(platformSummary, ['avg_engagement_per_day']) ?? (engagement ? engagement / 30 : null);
+    case 'avg_posts_per_day': return rowNumber(account, ['avg_posts_per_day']) ?? rowNumber(platformSummary, ['avg_posts_per_day']) ?? (postCount ? postCount / 30 : null);
+    case 'avg_eng_rate_followers': return rowNumber(account, ['avg_eng_rate_followers', 'avg_engagement_rate_by_followers', 'engagement_rate_followers']) ?? rowNumber(platformSummary, ['avg_eng_rate_followers', 'engagement_rate_followers']) ?? (followers && engagement ? (engagement / followers) * 100 : null);
+    case 'avg_eng_rate_views': return rowNumber(account, ['avg_eng_rate_views', 'engagement_rate_views']) ?? rowNumber(platformSummary, ['avg_eng_rate_views', 'engagement_rate_views']) ?? (views && engagement ? (engagement / views) * 100 : null);
+    case 'reels_views': return rowNumber(account, ['reels_views', 'reels_views_30d']) ?? rowNumber(platformSummary, ['reels_views']) ?? postSum(['reels_views']);
+    case 'avg_eng_rate_impressions': return rowNumber(account, ['avg_eng_rate_impressions']) ?? rowNumber(platformSummary, ['avg_eng_rate_impressions']);
+    case 'avg_eng_rate_reach': return rowNumber(account, ['avg_eng_rate_reach']) ?? rowNumber(platformSummary, ['avg_eng_rate_reach']);
+    case 'reach': return rowNumber(account, ['reach', 'reach_30d', 'reach_total_30d']) ?? rowNumber(platformSummary, ['reach', 'reach_30d']);
+    case 'posts_impressions': return rowNumber(account, ['posts_impressions', 'impressions', 'impressions_30d']) ?? rowNumber(platformSummary, ['posts_impressions', 'impressions', 'impressions_30d']);
+    case 'organic_value': {
+      const dollars = rowNumber(account, ['organic_value']) ?? rowNumber(platformSummary, ['organic_value']);
+      if (dollars !== null) return dollars;
+      const cents = rowNumber(account, ['estimated_organic_value_cents']);
+      return cents !== null ? cents / 100 : null;
+    }
     default: return null;
   }
 }

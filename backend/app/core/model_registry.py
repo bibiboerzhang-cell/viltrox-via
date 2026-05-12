@@ -13,27 +13,35 @@ AVAILABLE_MODELS = {
         "claude-opus-4-7",
         "claude-sonnet-4-6",
         "claude-haiku-4-5",
+        "claude-haiku-4-5-20251001",
     ],
     "openai": [
+        "gpt-5.5",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.4-nano",
         "gpt-4o",
         "gpt-4o-mini",
     ],
     "google": [
+        "gemini-flash-latest",
+        "gemini-pro-latest",
+        "gemini-3.1-flash-lite",
         "gemini-2.5-flash",
         "gemini-2.5-pro",
     ],
 }
 
 TASK_MODEL_BINDING = {
-    "audit_pre_filter": "openai/gpt-4o-mini",
-    "audit_video_analysis": "google/gemini-2.5-flash",
+    "audit_pre_filter": "openai/gpt-5.4-mini",
+    "audit_video_analysis": "google/gemini-flash-latest",
     "audit_vision_fallback": "anthropic/claude-sonnet-4-6",
     "audit_deep_score": "anthropic/claude-sonnet-4-6",
     "deepsight_strategy": "anthropic/claude-opus-4-7",
-    "deepsight_market_empath": "openai/gpt-4o",
+    "deepsight_market_empath": "openai/gpt-5.5",
     "deepsight_opportunity": "google/gemini-2.5-pro",
-    "via_chat": "anthropic/claude-sonnet-4-6",
-    "via_persona_summary": "anthropic/claude-haiku-4-5",
+    "via_chat": "openai/gpt-5.4-mini",
+    "via_persona_summary": "anthropic/claude-haiku-4-5-20251001",
 }
 
 TASK_MODEL_ENV_KEYS = {
