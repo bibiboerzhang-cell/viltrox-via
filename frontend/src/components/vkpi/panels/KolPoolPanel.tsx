@@ -465,7 +465,7 @@ export function KolPoolPanel({ apiToken, onListPool, onGetItem, onEnrichItem, on
           onClose={() => setSelectedItem(null)}
           onEnrich={onEnrichItem && canEnrich(selectedItem) ? () => void handleEnrich(selectedItem, 24) : undefined}
           enriching={enrichingId === selectedItem.id}
-          onLinkToMain={onPromoteToMain ? () => void handlePromoteToMain(selectedItem) : undefined}
+          onPromoteToMain={onPromoteToMain ? () => void handlePromoteToMain(selectedItem) : undefined}
           linking={linkingId === selectedItem.id}
         />
       )}
@@ -479,7 +479,7 @@ function KolPoolDetailDrawer({
   onClose,
   onEnrich,
   enriching,
-  onLinkToMain,
+  onPromoteToMain,
   linking,
 }: {
   item: KolPoolItem;
@@ -487,7 +487,7 @@ function KolPoolDetailDrawer({
   onClose: () => void;
   onEnrich?: () => void;
   enriching?: boolean;
-  onLinkToMain?: () => void;
+  onPromoteToMain?: () => void;
   linking?: boolean;
 }) {
   const raw = parseMaybeJson(item.raw_platform_data);
@@ -613,7 +613,7 @@ function KolPoolDetailDrawer({
 
       <div className="vkpi-kol-pool-drawer-actions">
         {onEnrich && <button className="vkpi-button vkpi-button--primary" type="button" onClick={onEnrich} disabled={enriching}>{enriching ? '真实补齐中…' : '补齐头像 / 指标'}</button>}
-        {onLinkToMain && !item.linked_main_kol_id && <button className="vkpi-button vkpi-button--primary" type="button" onClick={onLinkToMain} disabled={linking}>{linking ? '处理中…' : '自动创建/链接主表'}</button>}
+        {onPromoteToMain && !item.linked_main_kol_id && <button className="vkpi-button vkpi-button--primary" type="button" onClick={onPromoteToMain} disabled={linking}>{linking ? '处理中…' : '自动创建/链接主表'}</button>}
         <button className="vkpi-button" type="button" onClick={onClose}>关闭</button>
       </div>
     </aside>
