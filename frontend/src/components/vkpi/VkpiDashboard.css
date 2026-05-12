@@ -1122,6 +1122,10 @@
 .vkpi-roi { color: var(--vkpi-green); }
 .vkpi-row-arrow { color: var(--vkpi-subtle) !important; font-size: 20px !important; }
 .vkpi-row-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
   text-align: right !important;
   white-space: nowrap;
 }

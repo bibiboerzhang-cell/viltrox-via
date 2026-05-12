@@ -129,6 +129,9 @@ export function ProjectTable({
                   </div>
                 </td>
                 <td className="vkpi-row-actions" onClick={(event) => event.stopPropagation()}>
+                  <button className="vkpi-mini-button" type="button" onClick={() => onSelectProject(project)}>
+                    详情
+                  </button>
                   {onDeleteProject ? (
                     <button className="vkpi-mini-button vkpi-mini-button--danger" type="button" onClick={() => void onDeleteProject(project)}>
                       删除
@@ -151,4 +154,3 @@ export function ProjectTable({
     </div>
   );
 }
-
