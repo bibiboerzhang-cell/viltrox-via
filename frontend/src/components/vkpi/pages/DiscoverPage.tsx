@@ -8,7 +8,7 @@ import { InfoBlock } from '../shared/InfoBlock';
 import { creatorPlatformOptions } from '../shared/vkpiConstants';
 import { lookupResultToKolDetail, safeNumber, textValue } from '../shared/vkpiDataUtils';
 import { PageShell } from './PageShell';
-import { batchEnrichKolPool, enrichKolPoolItem, getKolPoolItem, linkKolPoolToMain, listKolPool, promoteKolPoolToMain } from '../../../services/vkpi.ui-api';
+import { batchEnrichKolPool, enrichKolPoolItem, getKolPoolItem, listKolPool, promoteKolPoolToMain } from '../../../services/vkpi.ui-api';
 
 interface DiscoverPageProps {
   data: VkpiDashboardData;
@@ -186,10 +186,6 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
           onBatchEnrich={(payload) => {
             if (!apiToken) return Promise.reject(new Error('未登录'));
             return batchEnrichKolPool(apiToken, payload);
-          }}
-          onLinkToMain={async (kolPoolId, mainKolId) => {
-            if (!apiToken) throw new Error('未登录');
-            await linkKolPoolToMain(apiToken, kolPoolId, mainKolId);
           }}
           onPromoteToMain={(kolPoolId) => {
             if (!apiToken) return Promise.reject(new Error('未登录'));

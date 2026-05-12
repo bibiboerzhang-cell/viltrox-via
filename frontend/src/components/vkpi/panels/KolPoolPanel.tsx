@@ -74,7 +74,6 @@ interface KolPoolPanelProps {
     items?: KolPoolItem[];
     capped?: boolean;
   }>;
-  onLinkToMain?: (kolPoolId: number, mainKolId: number) => Promise<void>;
   onPromoteToMain?: (kolPoolId: number) => Promise<{
     linked?: boolean;
     mode?: string;
@@ -95,7 +94,7 @@ const ENRICHABLE_PLATFORMS = new Set([
   'reddit',
 ]);
 
-export function KolPoolPanel({ apiToken, onListPool, onGetItem, onEnrichItem, onBatchEnrich, onLinkToMain, onPromoteToMain, onOpenImport }: KolPoolPanelProps) {
+export function KolPoolPanel({ apiToken, onListPool, onGetItem, onEnrichItem, onBatchEnrich, onPromoteToMain, onOpenImport }: KolPoolPanelProps) {
   const [items, setItems] = useState<KolPoolItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -152,29 +151,6 @@ export function KolPoolPanel({ apiToken, onListPool, onGetItem, onEnrichItem, on
       setError((err as Error).message || '详情加载失败');
     } finally {
       setDetailLoading(false);
-    }
-  }
-
-  async function handleLinkToMain(item: KolPoolItem) {
-    if (!onLinkToMain) {
-      setError('链接功能未配置');
-      return;
-    }
-    const input = window.prompt(`输入主 KOL ID(链接 ${item.handle} 到 kols 表):`);
-    if (!input) return;
-    const mainId = Number(input);
-    if (!mainId || isNaN(mainId)) {
-      setError('无效的主 KOL ID');
-      return;
-    }
-    setLinkingId(item.id);
-    try {
-      await onLinkToMain(item.id, mainId);
-      await loadList();
-    } catch (err) {
-      setError((err as Error).message || '链接失败');
-    } finally {
-      setLinkingId(null);
     }
   }
 
@@ -467,7 +443,7 @@ export function KolPoolPanel({ apiToken, onListPool, onGetItem, onEnrichItem, on
                           </button>
                         )}
                         {onEnrichItem && !enrichable && <span className="vkpi-chip vkpi-chip--muted">暂不支持补齐</span>}
-                        {!item.linked_main_kol_id && (onPromoteToMain || onLinkToMain) && (
+                        {!item.linked_main_kol_id && onPromoteToMain && (
                           <button className="vkpi-button vkpi-button--small" type="button" onClick={() => void handlePromoteToMain(item)} disabled={linkingId === item.id}>
                             {linkingId === item.id ? '处理中…' : '自动入主表'}
                           </button>
@@ -489,7 +465,7 @@ export function KolPoolPanel({ apiToken, onListPool, onGetItem, onEnrichItem, on
           onClose={() => setSelectedItem(null)}
           onEnrich={onEnrichItem && canEnrich(selectedItem) ? () => void handleEnrich(selectedItem, 24) : undefined}
           enriching={enrichingId === selectedItem.id}
-          onLinkToMain={(onPromoteToMain || onLinkToMain) ? () => void handlePromoteToMain(selectedItem) : undefined}
+          onLinkToMain={onPromoteToMain ? () => void handlePromoteToMain(selectedItem) : undefined}
           linking={linkingId === selectedItem.id}
         />
       )}

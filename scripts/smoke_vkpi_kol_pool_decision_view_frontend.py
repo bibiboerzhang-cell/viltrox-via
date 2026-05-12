@@ -29,6 +29,9 @@ def main() -> None:
     require_contains(PANEL, "决策优先级")
     require_contains(PANEL, "自动入主表")
     require_contains(PANEL, "点击查看")
+    text = PANEL.read_text(encoding="utf-8")
+    if "window.prompt" in text or "主 KOL ID" in text:
+        raise AssertionError("KOL Pool must not expose manual main KOL ID prompt")
 
     require_contains(CSS, ".vkpi-kol-pool-decision-cell")
     require_contains(CSS, ".vkpi-kol-pool-readiness-card")
