@@ -29,7 +29,8 @@ def main() -> None:
 
     assert "data.kolOptions.length" in projects, "ProjectsPage must prefer existing KOL selector"
     assert "选择已有红人" in projects, "existing KOL selector placeholder missing"
-    assert "暂无红人列表，可临时输入 KOL ID" in projects, "manual KOL fallback missing"
+    assert "输入已有 KOL ID（临时兜底）" in projects, "manual KOL fallback input missing"
+    assert "优先从红人搜索认领/导入" in projects, "manual KOL fallback must guide users to import/claim first"
 
     assert "data.productCosts" in projects and "data.productLaunches" in projects, "product choices must merge cost catalog and launches"
     assert "selectedProductSkus" in projects, "multi-product selected state missing"

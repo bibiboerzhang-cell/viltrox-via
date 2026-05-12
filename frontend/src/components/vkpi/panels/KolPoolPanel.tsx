@@ -179,26 +179,22 @@ export function KolPoolPanel({ apiToken, onListPool, onGetItem, onEnrichItem, on
   }
 
   async function handlePromoteToMain(item: KolPoolItem) {
-    if (!onPromoteToMain && !onLinkToMain) {
-      setError('主表链接功能未配置');
+    if (!onPromoteToMain) {
+      setError('自动创建/链接主表功能未配置；请从红人搜索认领或重新加载最新前端。');
       return;
     }
     setLinkingId(item.id);
     setError('');
     setMessage('');
     try {
-      if (onPromoteToMain) {
-        const result = await onPromoteToMain(item.id);
-        if (result.item) {
-          setItems((current) => current.map((row) => (row.id === item.id ? { ...row, ...result.item } : row)));
-          setSelectedItem((current) => (current?.id === item.id ? { ...current, ...result.item } : current));
-        }
-        const action = result.mode === 'matched' ? '匹配并链接' : result.mode === 'created' ? '创建并链接' : '链接';
-        setMessage(`${action}主表完成：#${result.main_kol_id || result.item?.linked_main_kol_id || '-'}`);
-        await loadList();
-        return;
+      const result = await onPromoteToMain(item.id);
+      if (result.item) {
+        setItems((current) => current.map((row) => (row.id === item.id ? { ...row, ...result.item } : row)));
+        setSelectedItem((current) => (current?.id === item.id ? { ...current, ...result.item } : current));
       }
-      await handleLinkToMain(item);
+      const action = result.mode === 'matched' ? '匹配并链接' : result.mode === 'created' ? '创建并链接' : '链接';
+      setMessage(`${action}主表完成：#${result.main_kol_id || result.item?.linked_main_kol_id || '-'}`);
+      await loadList();
     } catch (err) {
       setError((err as Error).message || '创建/链接主表失败');
     } finally {

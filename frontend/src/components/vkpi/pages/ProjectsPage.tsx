@@ -225,7 +225,10 @@ export function ProjectsPage({ data, filteredProjects, selectedProjectId, select
                   {data.kolOptions.map((kol) => <option key={kol.id} value={kol.id}>{kol.name} · {kol.handle} · {kol.platform}</option>)}
                 </select>
               ) : (
-                <input value={kolId} onChange={(event) => setKolId(event.target.value)} placeholder="暂无红人列表，可临时输入 KOL ID" />
+                <>
+                  <input value={kolId} onChange={(event) => setKolId(event.target.value)} placeholder="输入已有 KOL ID（临时兜底）" />
+                  <span className="vkpi-help-text">当前没有可选红人。优先从红人搜索认领/导入；临时测试才填写真实 KOL ID。</span>
+                </>
               )}
             </label>
             <label>主产品
