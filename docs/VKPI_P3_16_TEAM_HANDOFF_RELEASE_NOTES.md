@@ -35,6 +35,18 @@ needed before Viltrox team members use the system.
   - the handoff zip is regenerated from the current worktree;
   - package script blocks secrets, caches, build output, uploads, local DB files,
     Excel files, and oversized artifacts.
+- P3.23 runtime version consistency:
+  - frontend build emits `dist/build-info.json`;
+  - backend `/health` reads the frontend build metadata when no explicit
+    `client_build` query is supplied;
+  - `/health` now reports `client_build_source=frontend_dist` and
+    `client_matches_server=true` after a clean build/restart from the same
+    source snapshot.
+- P3.24 release freeze:
+  - final package generated from clean worktree;
+  - package scan reports zero dirty files, zero forbidden entries, zero secret
+    hits, and zero oversized files;
+  - final handoff state is documented in `docs/VKPI_P3_24_RELEASE_FREEZE.md`.
 
 ## Verification Commands
 
@@ -85,9 +97,15 @@ P3 is considered closing when the system is team-usable:
 - settings are configurable without dense card sprawl;
 - monitoring and backup readiness are covered.
 
-## Current Caution
+## Current Runtime Identity
 
-`/health` may still show `client_matches_server=false` in a local dev session if
-the server is serving an older frontend build. This is a deployment/cache
-consistency signal, not a feedback API failure. Refresh the frontend bundle
-before a formal handoff demo.
+The P3.23 fix removes the previous local-dev ambiguity around
+`client_matches_server=false`.
+
+Expected `/health` build fields after `npm --prefix frontend run build` and a
+backend restart from the same source snapshot:
+
+- `git_sha` equals the current package commit SHA
+- `client_build` equals the same current package commit SHA
+- `client_build_source=frontend_dist`
+- `client_matches_server=true`
