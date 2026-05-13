@@ -101,7 +101,7 @@ export function SummaryTab({ account, snapshots = [], posts = [] }: BaseTabProps
 
 export function ContentTab({ posts = [] }: BaseTabProps) {
   const [showAll, setShowAll] = useState(false);
-  const [videoFallbackPosts, setVideoFallbackPosts] = useState<Record<string, boolean>>({});
+  const [videoFallbackPosts, setVideoFallbackPosts] = useState<Record<string, 'redirect' | 'unavailable'>>({});
   const sortedPosts = useMemo(
     () => [...posts].sort((a, b) => rowString(b, ['published_at', 'created_at']).localeCompare(rowString(a, ['published_at', 'created_at']))),
     [posts],
@@ -129,7 +129,8 @@ export function ContentTab({ posts = [] }: BaseTabProps) {
           const proxiedUrl = proxiedVideoUrl(rawVideoUrl);
           const fallbackUrl = redirectedVideoUrl(rawVideoUrl);
           const postKey = stablePostKey(post, index);
-          const videoUrl = videoFallbackPosts[postKey] && fallbackUrl ? fallbackUrl : proxiedUrl;
+          const videoStatus = videoFallbackPosts[postKey];
+          const videoUrl = videoStatus === 'unavailable' ? '' : (videoStatus === 'redirect' && fallbackUrl ? fallbackUrl : proxiedUrl);
           const postUrl = platformExternalUrl(postPlatformUrl(post));
           const title = rowString(post, ['title', 'caption'], '(无标题)');
           const views = rowNumber(post, ['views', 'view_count', 'video_views', 'play_count']);
@@ -148,8 +149,10 @@ export function ContentTab({ posts = [] }: BaseTabProps) {
                   preload="metadata"
                   playsInline
                   onError={() => {
-                    if (fallbackUrl && fallbackUrl !== videoUrl) {
-                      setVideoFallbackPosts((state) => ({ ...state, [postKey]: true }));
+                    if (videoStatus !== 'redirect' && fallbackUrl && fallbackUrl !== videoUrl) {
+                      setVideoFallbackPosts((state) => ({ ...state, [postKey]: 'redirect' }));
+                    } else {
+                      setVideoFallbackPosts((state) => ({ ...state, [postKey]: 'unavailable' }));
                     }
                   }}
                 />
@@ -158,6 +161,15 @@ export function ContentTab({ posts = [] }: BaseTabProps) {
               ) : (
                 <div className="da-post-thumbnail da-post-thumbnail--placeholder">Media</div>
               )}
+              {videoStatus === 'unavailable' && postUrl ? (
+                <button
+                  className="da-post-card__media-warning da-post-card__media-warning--compact"
+                  type="button"
+                  onClick={() => window.open(postUrl, '_blank', 'noopener,noreferrer')}
+                >
+                  视频链接失效，打开原帖
+                </button>
+              ) : null}
               <div className="da-post-meta">
                 <div className="da-post-title" title={title}>{title.slice(0, 80)}</div>
                 <div className="da-post-stats">

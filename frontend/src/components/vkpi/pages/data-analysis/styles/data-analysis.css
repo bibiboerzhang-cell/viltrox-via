@@ -761,6 +761,32 @@
   z-index: 2;
 }
 
+.da-post-card__media-warning {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  max-width: calc(100% - 20px);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.86);
+  color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 8px 10px;
+  z-index: 3;
+}
+
+.da-post-card__media-warning:hover {
+  background: rgba(37, 99, 235, 0.92);
+}
+
+.da-post-card__media-warning--compact {
+  bottom: auto;
+  top: 10px;
+}
+
 .da-post-card__media-fallback {
   width: 100%;
   height: 100%;

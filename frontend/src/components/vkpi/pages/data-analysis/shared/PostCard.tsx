@@ -21,7 +21,8 @@ export function PostCard({ post, accounts, onViewAnalytics }: PostCardProps) {
   const primaryVideoUrl = proxiedVideoUrl(rawVideoUrl);
   const fallbackVideoUrl = redirectedVideoUrl(rawVideoUrl);
   const [useVideoFallback, setUseVideoFallback] = useState(false);
-  const videoUrl = useVideoFallback && fallbackVideoUrl ? fallbackVideoUrl : primaryVideoUrl;
+  const [videoUnavailable, setVideoUnavailable] = useState(false);
+  const videoUrl = videoUnavailable ? '' : (useVideoFallback && fallbackVideoUrl ? fallbackVideoUrl : primaryVideoUrl);
   const url = postUrl(post);
   const views = rowNumber(post, ['views', 'view_count', 'video_views']);
   const likes = rowNumber(post, ['likes', 'like_count']);
@@ -68,6 +69,8 @@ export function PostCard({ post, accounts, onViewAnalytics }: PostCardProps) {
             onError={() => {
               if (!useVideoFallback && fallbackVideoUrl && fallbackVideoUrl !== videoUrl) {
                 setUseVideoFallback(true);
+              } else {
+                setVideoUnavailable(true);
               }
             }}
           />
@@ -79,6 +82,15 @@ export function PostCard({ post, accounts, onViewAnalytics }: PostCardProps) {
           </div>
         )}
         {!videoUrl ? <span className="da-post-card__media-icon">▶</span> : null}
+        {videoUnavailable && url ? (
+          <button
+            className="da-post-card__media-warning"
+            type="button"
+            onClick={() => window.open(url, '_blank', 'noopener,noreferrer')}
+          >
+            视频链接失效，打开原帖
+          </button>
+        ) : null}
       </div>
       <p className="da-post-card__caption">
         {captionIsTruncated ? `${caption.slice(0, 130)}… ` : caption}

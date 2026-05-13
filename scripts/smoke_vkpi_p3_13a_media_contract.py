@@ -48,6 +48,8 @@ def main() -> None:
     require(post_card, "postVideoUrl(post)", "post cards must use unified video mapping")
     require(post_card, "accountAvatarUrl(matchedAccount)", "post cards must use unified avatar mapping")
     require(post_card, "redirectedVideoUrl(rawVideoUrl)", "post cards must have redirect fallback")
+    require(post_card, "videoUnavailable", "post cards must stop rendering broken expired videos")
+    require(post_card, "视频链接失效，打开原帖", "post cards must show expired-video recovery action")
     require(post_card, "打开原帖", "post cards must expose original post link")
 
     require(home_tab, "accountAvatarUrl(account)", "home account cards must use unified avatar mapping")
@@ -59,6 +61,8 @@ def main() -> None:
     require(drawer_tabs, "postThumbnailUrl(post)", "drawer content tab must use unified thumbnail mapping")
     require(drawer_tabs, "postVideoUrl(post)", "drawer content tab must use unified video mapping")
     require(drawer_tabs, "redirectedVideoUrl(rawVideoUrl)", "drawer content tab must have redirect fallback")
+    require(drawer_tabs, "'unavailable'", "drawer content tab must stop rendering broken expired videos")
+    require(drawer_tabs, "视频链接失效，打开原帖", "drawer content tab must show expired-video recovery action")
     require(drawer_tabs, "显示全部", "drawer content/posts tabs must not be hard-capped to top-only")
     require(drawer_tabs, "postPlatformUrl(post)", "drawer posts table must use unified platform URL mapping")
 
