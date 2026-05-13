@@ -82,12 +82,23 @@ def _read_git_value(*args: str) -> str:
         return ""
 
 
+def _read_build_file(name: str) -> str:
+    try:
+        path = PROJECT_ROOT / name
+        if path.is_file():
+            return path.read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+    return ""
+
+
 APP_VERSION = "2.0.0"
-APP_GIT_SHA = os.getenv("APP_GIT_SHA", "").strip() or _read_git_value("rev-parse", "HEAD")
+APP_GIT_SHA = os.getenv("APP_GIT_SHA", "").strip() or _read_build_file("BUILD_GIT_SHA") or _read_git_value("rev-parse", "HEAD")
 APP_GIT_SHORT_SHA = (APP_GIT_SHA[:8] if APP_GIT_SHA else "unknown")
 APP_GIT_BRANCH = os.getenv("APP_GIT_BRANCH", "").strip() or _read_git_value("rev-parse", "--abbrev-ref", "HEAD")
 APP_BUILD_TIME = (
     os.getenv("APP_BUILD_TIME", "").strip()
+    or _read_build_file("BUILD_TIME")
     or datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 )
 

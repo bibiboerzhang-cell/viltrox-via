@@ -151,3 +151,17 @@ bash -lc 'source scripts/runtime_env.sh >/tmp/vkpi-runtime-env-audit.log && PYTH
 - scope audit: PASS, 252 endpoints, 0 unexpected unguarded
 - runtime audit: PASS with 2 warnings
 - scope smoke: PASS=1 / FAIL=0
+
+## P3.10D 补充实现: build metadata 固化
+
+新增/调整:
+
+- `backend/app/main.py`: `/health` 的 git sha 读取顺序改为 `APP_GIT_SHA` -> `BUILD_GIT_SHA` -> `.git rev-parse`。
+- `scripts/start_admin.sh`: 启动时自动导出 `APP_GIT_SHA` 和 `APP_BUILD_TIME`，并在启动横幅中打印。
+- `scripts/make_vkpi_clean_package.sh`: 使用 `git archive HEAD` 生成源码级纯净包，同时写入 `BUILD_GIT_SHA`、`BUILD_TIME`、`BUILD_METADATA.json`，并执行 archive integrity / forbidden path / high-confidence secret scan。
+
+目的:
+
+- 本地启动: 通过 `.git` 自动注入当前 commit。
+- 干净包启动: 通过包内 `BUILD_GIT_SHA` 保留版本号，不再依赖 `.git`。
+- 团队排查: `/health` 和启动日志能直接对齐当前运行版本。

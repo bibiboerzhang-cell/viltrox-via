@@ -32,6 +32,21 @@ export ENABLE_SCHEDULER="${ENABLE_SCHEDULER:-0}"
 export ENABLE_BROWSER="${ENABLE_BROWSER:-0}"
 export ENABLE_UPLOAD_CLEANUP="${ENABLE_UPLOAD_CLEANUP:-0}"
 
+if [[ -z "${APP_GIT_SHA:-}" ]]; then
+  if [[ -f "$ROOT/BUILD_GIT_SHA" ]]; then
+    export APP_GIT_SHA="$(tr -d '[:space:]' < "$ROOT/BUILD_GIT_SHA")"
+  elif command -v git >/dev/null 2>&1 && git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    export APP_GIT_SHA="$(git -C "$ROOT" rev-parse HEAD)"
+  fi
+fi
+if [[ -z "${APP_BUILD_TIME:-}" ]]; then
+  if [[ -f "$ROOT/BUILD_TIME" ]]; then
+    export APP_BUILD_TIME="$(tr -d '[:space:]' < "$ROOT/BUILD_TIME")"
+  else
+    export APP_BUILD_TIME="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  fi
+fi
+
 # ──────────────────────────────────────────────────────────
 # R58E NEW: LOCAL_RUNTIME_FORCE_STACK 默认开启
 # 历史行为: 默认 0,需要手动 export LOCAL_RUNTIME_FORCE_STACK=1
@@ -86,6 +101,8 @@ cat >&2 <<EOF
   DATABASE_URL         = $DATABASE_URL
   REDIS_URL            = $REDIS_URL
   DB_RUNTIME_BACKEND   = $DB_RUNTIME_BACKEND
+  APP_GIT_SHA          = ${APP_GIT_SHA:-unknown}
+  APP_BUILD_TIME       = ${APP_BUILD_TIME:-unknown}
   LOCAL_FORCE_STACK    = $LOCAL_RUNTIME_FORCE_STACK
   ADMIN_DAEMON         = $ADMIN_DAEMON
 ═══════════════════════════════════════════════════════
