@@ -52,6 +52,12 @@ needed before Viltrox team members use the system.
   - local `.env` and verification expectations are explicit;
   - remote push remains a manual operations step because this checkout has no
     configured Git remote.
+- P3.28 P4 transition:
+  - P3 close standard is frozen against internal team usability, not
+    Socialinsider-level parity;
+  - P4 entry modules are separated from the P3 handoff package;
+  - the next operational decision is either remote push or direct zip handoff
+    plus a real staff observation window.
 
 ## Verification Commands
 
