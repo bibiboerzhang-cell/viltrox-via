@@ -76,6 +76,12 @@ Acceptance:
 - manager view can intentionally switch scope where allowed;
 - any leaked endpoint is fixed with a targeted patch.
 
+Readiness gate:
+
+- `docs/VKPI_P4_2_ROLE_SCOPE_AUDIT.md`
+- `scripts/vkpi_scope_audit.py`
+- `scripts/smoke_vkpi_p4_2_scope_audit.py`
+
 ### P4.3 Daily Top100 Candidate Source Stabilization
 
 Goal: make Daily Top100 useful only if the upstream candidate source is alive.
