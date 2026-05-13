@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import subprocess
 import time
@@ -60,6 +61,7 @@ FRONTEND_ROOT = PROJECT_ROOT / "frontend"
 FRONTEND_DIST_DIR = FRONTEND_ROOT / "dist"
 FRONTEND_INDEX = FRONTEND_DIST_DIR / "index.html"
 FRONTEND_ASSETS_DIR = FRONTEND_DIST_DIR / "assets"
+FRONTEND_BUILD_INFO = FRONTEND_DIST_DIR / "build-info.json"
 PUBLIC_REWARD_UPLOAD_DIR = UPLOAD_DIR / "reward_images"
 PUBLIC_STUDENT_CARD_DIR = UPLOAD_DIR / "student_cards"
 PUBLIC_STAFF_AVATAR_DIR = UPLOAD_DIR / "staff_avatars"
@@ -103,8 +105,18 @@ APP_BUILD_TIME = (
 )
 
 
+def _read_frontend_build_sha() -> str:
+    try:
+        parsed = json.loads(FRONTEND_BUILD_INFO.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    value = parsed.get("gitSha") or parsed.get("git_sha") or ""
+    return str(value or "").strip()
+
+
 def _build_info(client_build: str = "") -> dict[str, str | bool]:
-    client = str(client_build or "").strip()
+    explicit_client = str(client_build or "").strip()
+    client = explicit_client or _read_frontend_build_sha()
     return {
         "version": APP_VERSION,
         "git_sha": APP_GIT_SHA or "unknown",
@@ -112,6 +124,7 @@ def _build_info(client_build: str = "") -> dict[str, str | bool]:
         "git_branch": APP_GIT_BRANCH or "unknown",
         "build_time": APP_BUILD_TIME,
         "client_build": client,
+        "client_build_source": "query" if explicit_client else ("frontend_dist" if client else ""),
         "client_matches_server": bool(client and APP_GIT_SHA and client == APP_GIT_SHA),
     }
 

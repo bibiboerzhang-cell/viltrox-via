@@ -132,6 +132,9 @@ class Smoke:
         repo_sha = _repo_sha()
         if repo_sha and server_sha:
             assert server_sha.startswith(repo_sha[:12]), {"repo_sha": repo_sha, "server_sha": server_sha}
+        if (ROOT / "frontend/dist/build-info.json").exists():
+            assert build.get("client_build_source") == "frontend_dist", build
+            assert build.get("client_matches_server") is True, build
 
         status, client_health = _request_json(f"/health?client_build={server_sha}")
         assert status == 200, client_health

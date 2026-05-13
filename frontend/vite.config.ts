@@ -38,7 +38,19 @@ export default defineConfig(({ command }) => {
   };
 
   return {
-    plugins: [react()],
+    plugins: [
+      react(),
+      {
+        name: "vkpi-build-info",
+        generateBundle() {
+          this.emitFile({
+            type: "asset",
+            fileName: "build-info.json",
+            source: `${JSON.stringify(buildInfo, null, 2)}\n`,
+          });
+        },
+      },
+    ],
     define: {
       __VKPI_BUILD_INFO__: JSON.stringify(buildInfo),
     },
