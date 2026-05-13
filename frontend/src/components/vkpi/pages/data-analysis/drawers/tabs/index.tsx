@@ -163,13 +163,14 @@ export function ContentTab({ posts = [], onOpenPost }: BaseTabProps) {
                 <div className="da-post-thumbnail da-post-thumbnail--placeholder">Media</div>
               )}
               {videoStatus === 'unavailable' && postUrl ? (
-                <button
+                <a
                   className="da-post-card__media-warning da-post-card__media-warning--compact"
-                  type="button"
-                  onClick={() => window.open(postUrl, '_blank', 'noopener,noreferrer')}
+                  href={postUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
                 >
                   视频链接失效，打开原帖
-                </button>
+                </a>
               ) : null}
               <div className="da-post-meta">
                 <div className="da-post-title" title={title}>{title.slice(0, 80)}</div>
@@ -180,9 +181,9 @@ export function ContentTab({ posts = [], onOpenPost }: BaseTabProps) {
                 </div>
                 <div className="da-post-date">{prettyDate(publishedAt)}</div>
                 {postUrl ? (
-                  <button className="da-link-button" type="button" onClick={() => window.open(postUrl, '_blank', 'noopener,noreferrer')}>
+                  <a className="da-link-button" href={postUrl} target="_blank" rel="noopener noreferrer">
                     打开平台
-                  </button>
+                  </a>
                 ) : null}
                 {onOpenPost ? (
                   <button className="da-link-button" type="button" onClick={() => onOpenPost(post)}>
@@ -339,7 +340,7 @@ export function PostsTab({ posts = [], onOpenPost }: BaseTabProps) {
                 <td>{formatMetric(postEngagement(post))}</td>
                 <td>
                   {onOpenPost ? <button className="da-link-button" type="button" onClick={() => onOpenPost(post)}>详情</button> : null}
-                  {postUrl ? <button className="da-link-button" type="button" onClick={() => window.open(postUrl, '_blank', 'noopener,noreferrer')}>原帖</button> : null}
+                  {postUrl ? <a className="da-link-button" href={postUrl} target="_blank" rel="noopener noreferrer">原帖</a> : null}
                   {!onOpenPost && !postUrl ? '—' : null}
                 </td>
               </tr>

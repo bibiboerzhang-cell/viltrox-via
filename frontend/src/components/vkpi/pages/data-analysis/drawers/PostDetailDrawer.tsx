@@ -117,12 +117,16 @@ export function PostDetailDrawer({
         </div>
 
         <div className="da-post-detail__actions">
-          <button
-            className="da-black-button"
-            type="button"
-            disabled={!originalUrl}
-            onClick={() => { if (originalUrl) window.open(originalUrl, '_blank', 'noopener,noreferrer'); }}
-          >打开原帖</button>
+          {originalUrl ? (
+            <a
+              className="da-black-button"
+              href={originalUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+            >打开原帖</a>
+          ) : (
+            <button className="da-black-button" type="button" disabled>打开原帖</button>
+          )}
           <button
             className="da-white-button"
             type="button"

@@ -189,11 +189,12 @@ export function AccountDrawer({
           <h3>{accountName(account)}</h3>
           <p>{platformDisplay(rowString(account, ['platform']))} · /{accountName(account)}</p>
           {profileUrl ? (
-            <button
+            <a
               className="da-link-button"
-              type="button"
-              onClick={() => window.open(profileUrl, '_blank', 'noopener,noreferrer')}
-            >打开平台主页 ↗</button>
+              href={profileUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+            >打开平台主页 ↗</a>
           ) : null}
         </div>
         <button type="button" onClick={onClose} aria-label="关闭账号详情">×</button>

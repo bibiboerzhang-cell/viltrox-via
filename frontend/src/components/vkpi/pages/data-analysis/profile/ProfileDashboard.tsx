@@ -199,9 +199,9 @@ export function ProfileDashboard({
             <h1>{handle}</h1>
             <p>
               {profileUrl ? (
-                <button type="button" className="da-link-button" onClick={() => window.open(profileUrl, '_blank', 'noopener,noreferrer')}>
+                <a className="da-link-button" href={profileUrl} target="_blank" rel="noopener noreferrer">
                   打开平台主页 ↗
-                </button>
+                </a>
               ) : '平台主页待补充'}
               <span> · 最近成功: {prettyDate(lastSuccess)}</span>
             </p>

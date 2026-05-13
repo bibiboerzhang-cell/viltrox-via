@@ -255,7 +255,8 @@ class Smoke:
         if int(rollup.get("inserted") or 0) < 1:
             raise AssertionError(f"KPI rollup did not insert source rows: {rollup}")
         payload = {"period_days": 7, "staff_id": self.staff_id, "marker": self.marker}
-        report = self.request_json("POST", "/api/admin/vkpi/reports/weekly/generate", payload)
+        # Use the same public alias that the topbar buttons call from the UI.
+        report = self.request_json("POST", "/api/marketing/reports/weekly/generate", payload)
         self.report_run_id = int(report.get("report_run_id") or report.get("reportRunId") or 0)
         if not self.report_run_id:
             raise AssertionError(f"missing report_run_id: {report}")
@@ -279,7 +280,10 @@ class Smoke:
             raise AssertionError(f"KPI ledger missing workload formula: {formulas}")
         if "workload_score + max(net_contribution_cents, 0) / 10000" not in formulas:
             raise AssertionError(f"KPI ledger missing KPI credit formula: {formulas}")
-        pdf = self.request_bytes(f"/api/admin/vkpi/reports/files/{self.report_run_id}/download?format=pdf")
+        report_download_url = str(report.get("download_url") or report.get("downloadUrl") or "")
+        if not report_download_url:
+            raise AssertionError(f"weekly report response missing download url: {report}")
+        pdf = self.request_bytes(report_download_url)
         if not pdf.startswith(b"%PDF") or len(pdf) < 5000:
             raise AssertionError("weekly PDF download is not a valid PDF")
         file_row = self.conn.execute("SELECT download_count, last_downloaded_by_staff_id FROM vkpi_report_files WHERE report_run_id=? ORDER BY id DESC LIMIT 1", (self.report_run_id,)).fetchone()
@@ -292,11 +296,14 @@ class Smoke:
         if report_business < 1:
             raise AssertionError("report_download business audit missing")
 
-        export = self.request_json("POST", "/api/admin/vkpi/exports/csv", {"report_type": "projects", "staff_id": self.staff_id, "marker": self.marker})
+        export = self.request_json("POST", "/api/marketing/exports/csv", {"report_type": "projects", "staff_id": self.staff_id, "marker": self.marker})
         self.export_id = int(export.get("export_id") or export.get("exportId") or 0)
         if not self.export_id:
             raise AssertionError(f"missing export id: {export}")
-        csv_bytes = self.request_bytes(f"/api/admin/vkpi/exports/{self.export_id}/download")
+        export_download_url = str(export.get("download_url") or export.get("downloadUrl") or "")
+        if not export_download_url:
+            raise AssertionError(f"csv export response missing download url: {export}")
+        csv_bytes = self.request_bytes(export_download_url)
         if b"project_name" not in csv_bytes and b"project_uid" not in csv_bytes:
             raise AssertionError("csv export did not contain project fields")
         export_audit = int(self.conn.execute("SELECT COUNT(*) AS n FROM vkpi_sensitive_access_logs WHERE action_type='download_export' AND resource_type='export' AND resource_id=?", (str(self.export_id),)).fetchone()["n"])

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { VkpiDashboardData, VkpiMetricEvidenceKey } from '../vkpiTypes';
+import type { VkpiDashboardData, VkpiMetricEvidenceKey, VkpiProjectRow } from '../vkpiTypes';
 import { CardHeader } from '../shared/CardHeader';
 import { KpiLedgerTable } from '../tables/KpiLedgerTable';
 import { ProjectTable } from '../tables/ProjectTable';
@@ -11,11 +11,12 @@ interface ReportsPageProps {
   onExportPDF?: () => void;
   onExportCSV?: () => void;
   onGenerateWeeklyReport?: () => void;
+  onSelectProject: (project: VkpiProjectRow) => void;
   onOpenEvidence: (metric: VkpiMetricEvidenceKey, metricValueId?: number | null) => void;
   onRunKpiRollup?: (ledgerDate?: string) => Promise<void>;
 }
 
-export function ReportsPage({ data, viewMode, onExportPDF, onExportCSV, onGenerateWeeklyReport, onOpenEvidence, onRunKpiRollup }: ReportsPageProps) {
+export function ReportsPage({ data, viewMode, onExportPDF, onExportCSV, onGenerateWeeklyReport, onSelectProject, onOpenEvidence, onRunKpiRollup }: ReportsPageProps) {
   const [ledgerDate, setLedgerDate] = useState(new Date().toISOString().slice(0, 10));
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
@@ -47,7 +48,7 @@ export function ReportsPage({ data, viewMode, onExportPDF, onExportCSV, onGenera
         {message ? <div className="vkpi-inline-message">{message}</div> : null}
       </section>
       <section className="vkpi-card vkpi-table-card"><div className="vkpi-table-card__header"><div><h2>KPI Ledger 明细</h2><span>{data.kpiLedger.length} 条</span></div></div><KpiLedgerTable rows={data.kpiLedger} /></section>
-      <section className="vkpi-card vkpi-table-card"><div className="vkpi-table-card__header"><div><h2>导出基础明细</h2><span>项目 {data.projects.length} / 短链 {data.links.length} / 归因 {data.attributions.length} / 成本 {data.costs.length}</span></div></div><ProjectTable projects={data.projects} selectedProjectId={data.projects[0]?.id} viewMode={viewMode} onSelectProject={() => undefined} /></section>
+      <section className="vkpi-card vkpi-table-card"><div className="vkpi-table-card__header"><div><h2>导出基础明细</h2><span>项目 {data.projects.length} / 短链 {data.links.length} / 归因 {data.attributions.length} / 成本 {data.costs.length}</span></div></div><ProjectTable projects={data.projects} selectedProjectId={data.projects[0]?.id} viewMode={viewMode} onSelectProject={onSelectProject} /></section>
     </PageShell>
   );
 }

@@ -10,6 +10,7 @@ import { ProjectDetailDrawer } from './drawers/ProjectDetailDrawer';
 import { StaffProfileDrawer } from './drawers/StaffProfileDrawer';
 import { KolProfileDrawer } from './drawers/KolProfileDrawer';
 import { AlertDetailDrawer } from './drawers/AlertDetailDrawer';
+import { FeedbackWidget } from './shared/FeedbackWidget';
 import { useMetricEvidence } from './hooks/useMetricEvidence';
 import { useProjectDetailDrawer } from './hooks/useProjectDetailDrawer';
 import { profileToKolDetail, textValue } from './shared/vkpiDataUtils';
@@ -618,6 +619,7 @@ export function VkpiDashboard({
             }}
           />
         ) : null}
+        <FeedbackWidget apiToken={apiToken} activePage={activePage} userName={userName} />
       </div>
     </div>
   );

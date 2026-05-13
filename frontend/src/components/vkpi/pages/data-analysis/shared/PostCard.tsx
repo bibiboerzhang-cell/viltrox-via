@@ -3,7 +3,7 @@ import type { Row } from '../utils/types';
 import {
   findAccountForPost, postAccountName, postPlatform, postTitle, postUrl, rowNumber, rowString,
 } from '../utils/rowAccessors';
-import { proxiedImageUrl, proxiedVideoUrl, redirectedVideoUrl } from '../utils/mediaProxy';
+import { platformExternalUrl, proxiedImageUrl, proxiedVideoUrl, redirectedVideoUrl } from '../utils/mediaProxy';
 import { accountAvatarUrl, postThumbnailUrl, postVideoUrl } from '../utils/mediaFields';
 import { compact, platformClass, platformDisplay, platformInitial, prettyDate } from '../utils/platformHelpers';
 
@@ -25,6 +25,7 @@ export function PostCard({ post, accounts, onViewAnalytics, onOpenPost }: PostCa
   const [videoUnavailable, setVideoUnavailable] = useState(false);
   const videoUrl = videoUnavailable ? '' : (useVideoFallback && fallbackVideoUrl ? fallbackVideoUrl : primaryVideoUrl);
   const url = postUrl(post);
+  const originalUrl = platformExternalUrl(url);
   const views = rowNumber(post, ['views', 'view_count', 'video_views']);
   const likes = rowNumber(post, ['likes', 'like_count']);
   const comments = rowNumber(post, ['comments', 'comment_count']);
@@ -51,13 +52,17 @@ export function PostCard({ post, accounts, onViewAnalytics, onOpenPost }: PostCa
             {prettyDate(rowString(post, ['published_at', 'posted_at', 'created_at']))}
           </div>
         </div>
-        <button
-          className="da-post-card__external"
-          type="button"
-          disabled={!url}
-          onClick={() => { if (url) window.open(url, '_blank', 'noopener,noreferrer'); }}
-          aria-label="打开原帖"
-        >↗</button>
+        {originalUrl ? (
+          <a
+            className="da-post-card__external"
+            href={originalUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="打开原帖"
+          >↗</a>
+        ) : (
+          <button className="da-post-card__external" type="button" disabled aria-label="打开原帖">↗</button>
+        )}
       </header>
       <div className="da-post-card__media">
         {videoUrl ? (
@@ -83,24 +88,26 @@ export function PostCard({ post, accounts, onViewAnalytics, onOpenPost }: PostCa
           </div>
         )}
         {!videoUrl ? <span className="da-post-card__media-icon">▶</span> : null}
-        {videoUnavailable && url ? (
-          <button
+        {videoUnavailable && originalUrl ? (
+          <a
             className="da-post-card__media-warning"
-            type="button"
-            onClick={() => window.open(url, '_blank', 'noopener,noreferrer')}
+            href={originalUrl}
+            target="_blank"
+            rel="noopener noreferrer"
           >
             视频链接失效，打开原帖
-          </button>
+          </a>
         ) : null}
       </div>
       <p className="da-post-card__caption">
         {captionIsTruncated ? `${caption.slice(0, 130)}… ` : caption}
-        {captionIsTruncated && url ? (
-          <button
+        {captionIsTruncated && originalUrl ? (
+          <a
             className="da-post-card__see-more"
-            type="button"
-            onClick={() => window.open(url, '_blank', 'noopener,noreferrer')}
-          >打开原帖</button>
+            href={originalUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+          >打开原帖</a>
         ) : null}
       </p>
       <div className="da-post-card__tags">

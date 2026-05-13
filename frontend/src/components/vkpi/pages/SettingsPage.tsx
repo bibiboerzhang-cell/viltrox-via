@@ -46,6 +46,7 @@ import {
   TeamNotificationTable,
   TeamPreferenceTable,
 } from './settings/SettingsPreferencePanels';
+import { SettingsFeedbackPanel } from './settings/SettingsFeedbackPanel';
 
 interface SettingsPageProps {
   data: VkpiDashboardData;
@@ -647,6 +648,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
           claudeStatus={claudeStatus}
         />
       </section>
+      <SettingsFeedbackPanel apiToken={apiToken} />
       <section className="vkpi-card-grid vkpi-card-grid--forms">
         <FeatureFlagsPanel
           featureFlags={featureFlags}
