@@ -40,11 +40,21 @@ tsc --noEmit && vite build
 PASS
 ```
 
+Smoke evidence from the 2026-05-13 re-check:
+
+```text
+PYTHONPATH=backend .venv/bin/python scripts/smoke_vkpi_p3_1d_settings_crawl_ui.py
+VKPI_P3_1D_SETTINGS_CRAWL_UI_SMOKE_OK
+
+./scripts/run_smoke.sh smoke_vkpi_phase0b_control_status.py
+PASS=1 FAIL=0 TOTAL=1
+```
+
 Runtime evidence:
 
 ```text
 GET /health
-git_sha=b3d3a8cf2f59cdff2978f4565d774055292da891
+git_sha=9e70ca7f008310efc1b9d021213aa72697a017e5
 git_branch=codex/vkpi-cleanup-d7
 ```
 
@@ -77,6 +87,8 @@ The current repository already contains the compact Settings platform crawl UI.
 - Code path exists: PASS
 - CSS path exists: PASS
 - Production build: PASS
+- Settings crawl UI contract smoke: PASS
+- Control status smoke: PASS
 - Backend runtime version current after restart: PASS
 - Browser visual verification: BLOCKED by local browser tooling, not by app runtime
 
