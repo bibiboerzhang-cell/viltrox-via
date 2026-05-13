@@ -60,6 +60,7 @@ SECRET_COUNT="$(
       --exclude-dir=.git \
       --exclude='*.lock' \
       --exclude='BUILD_METADATA.json' \
+      --exclude='make_vkpi_clean_package.sh' \
       '(sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{20,}|apify_api_[A-Za-z0-9_-]{20,}|ANTHROPIC_API_KEY=.+|OPENAI_API_KEY=.+|GEMINI_API_KEY=.+|YOUTUBE_API_KEY=.+|APIFY_TOKEN=.+)' \
       "$TMP/$PROJECT_DIR_NAME" \
       | grep -vE '\.env\.example|example|placeholder|your_|CHANGE_ME|dummy|test_' \
