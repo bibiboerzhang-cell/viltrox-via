@@ -740,6 +740,22 @@ export async function scanKolAccount(token: string, kolId: string, maxPosts = 24
   }
   return { scan };
 }
+
+export async function analyzeDataAnalysisPostUrl(
+  token: string,
+  payload: { url: string; platform?: string; creatorHandle?: string },
+) {
+  return apiFetch<Record<string, unknown>>("/api/admin/kol/tools/analyze-url", {
+    method: "POST",
+    body: jsonBody({
+      url: payload.url,
+      platform: payload.platform || "",
+      creator_handle: payload.creatorHandle || "",
+    }),
+    timeoutMs: 180000,
+  }, token);
+}
+
 export async function claimKol(token: string, kolId: string, expiresDays = 14) { return apiFetch<Record<string, unknown>>(`/api/marketing/kols/${encodeURIComponent(kolId)}/claim`, { method: "POST", body: jsonBody({ expires_days: expiresDays }) }, token); }
 export async function createProject(token: string, payload: VkpiCreateProjectPayload) {
   return apiFetch<Record<string, unknown>>("/api/marketing/projects", {

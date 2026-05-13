@@ -12,6 +12,7 @@ interface BaseTabProps {
   snapshots?: Row[];
   posts?: Row[];
   accounts?: Row[];
+  onOpenPost?: (post: Row) => void;
 }
 
 function stablePostKey(post: Row, index: number): string {
@@ -99,7 +100,7 @@ export function SummaryTab({ account, snapshots = [], posts = [] }: BaseTabProps
   );
 }
 
-export function ContentTab({ posts = [] }: BaseTabProps) {
+export function ContentTab({ posts = [], onOpenPost }: BaseTabProps) {
   const [showAll, setShowAll] = useState(false);
   const [videoFallbackPosts, setVideoFallbackPosts] = useState<Record<string, 'redirect' | 'unavailable'>>({});
   const sortedPosts = useMemo(
@@ -181,6 +182,11 @@ export function ContentTab({ posts = [] }: BaseTabProps) {
                 {postUrl ? (
                   <button className="da-link-button" type="button" onClick={() => window.open(postUrl, '_blank', 'noopener,noreferrer')}>
                     打开平台
+                  </button>
+                ) : null}
+                {onOpenPost ? (
+                  <button className="da-link-button" type="button" onClick={() => onOpenPost(post)}>
+                    单帖详情 / 分析
                   </button>
                 ) : null}
               </div>
@@ -286,7 +292,7 @@ export function OrganicValueTab({ snapshots = [] }: BaseTabProps) {
   );
 }
 
-export function PostsTab({ posts = [] }: BaseTabProps) {
+export function PostsTab({ posts = [], onOpenPost }: BaseTabProps) {
   const [showAll, setShowAll] = useState(false);
   const sortedPosts = useMemo(
     () => [...posts].sort((a, b) => rowString(b, ['published_at', 'created_at']).localeCompare(rowString(a, ['published_at', 'created_at']))),
@@ -317,7 +323,7 @@ export function PostsTab({ posts = [] }: BaseTabProps) {
             <th>Likes</th>
             <th>Comments</th>
             <th>Engagement</th>
-            <th>平台</th>
+            <th>操作</th>
           </tr>
         </thead>
         <tbody>
@@ -331,7 +337,11 @@ export function PostsTab({ posts = [] }: BaseTabProps) {
                 <td>{formatMetric(rowNumber(post, ['likes', 'like_count']))}</td>
                 <td>{formatMetric(rowNumber(post, ['comments', 'comment_count']))}</td>
                 <td>{formatMetric(postEngagement(post))}</td>
-                <td>{postUrl ? <button className="da-link-button" type="button" onClick={() => window.open(postUrl, '_blank', 'noopener,noreferrer')}>打开</button> : '—'}</td>
+                <td>
+                  {onOpenPost ? <button className="da-link-button" type="button" onClick={() => onOpenPost(post)}>详情</button> : null}
+                  {postUrl ? <button className="da-link-button" type="button" onClick={() => window.open(postUrl, '_blank', 'noopener,noreferrer')}>原帖</button> : null}
+                  {!onOpenPost && !postUrl ? '—' : null}
+                </td>
               </tr>
             );
           })}

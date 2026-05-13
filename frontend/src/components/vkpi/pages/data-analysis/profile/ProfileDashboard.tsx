@@ -33,6 +33,7 @@ interface ProfileDashboardProps {
   onBack: () => void;
   onRefresh: (id: string) => void;
   onToggleCrawl: (id: string, enabled: boolean) => void;
+  onOpenPost: (post: Row) => void;
 }
 
 const PAID_CRAWL_PLATFORMS = new Set([
@@ -107,6 +108,7 @@ export function ProfileDashboard({
   onBack,
   onRefresh,
   onToggleCrawl,
+  onOpenPost,
 }: ProfileDashboardProps) {
   const [activeTab, setActiveTab] = useState<AccountTabKey>('执行摘要');
   const accountKey = accountId(account);
@@ -159,7 +161,7 @@ export function ProfileDashboard({
   }, [account, budgetSettings, crawlEnabled, platform, platformCrawlSettings]);
 
   const renderTab = () => {
-    const props = { account, snapshots, posts, accounts };
+    const props = { account, snapshots, posts, accounts, onOpenPost };
     switch (activeTab) {
       case '执行摘要':
         return <SummaryTab {...props} />;

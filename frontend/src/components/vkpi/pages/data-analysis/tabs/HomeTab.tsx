@@ -23,6 +23,7 @@ interface HomeTabProps {
   onRefreshAccount: (id: string) => void;
   onOpenFilter: () => void;
   onSetSelectedAccount: (account: Row | null) => void;
+  onOpenPost: (post: Row) => void;
   selectedAccount: Row | null;
   selectedCharts: ChartKey[];
 }
@@ -30,7 +31,7 @@ interface HomeTabProps {
 export function HomeTab({
   accounts, crossPlatform, posts, busy,
   onOpenAccount, onRefreshAccount, onOpenFilter,
-  onSetSelectedAccount, selectedAccount, selectedCharts,
+  onSetSelectedAccount, onOpenPost, selectedAccount, selectedCharts,
 }: HomeTabProps) {
   const [showAllPosts, setShowAllPosts] = useState(false);
   const visibleTopPosts = showAllPosts ? posts : posts.slice(0, 3);
@@ -173,6 +174,7 @@ export function HomeTab({
                   key={postKey(post, idx)}
                   post={post}
                   accounts={accounts}
+                  onOpenPost={onOpenPost}
                   onViewAnalytics={() => onSetSelectedAccount(matchedAccount || selectedAccount || accounts[0] || null)}
                 />
                 );

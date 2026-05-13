@@ -12,6 +12,7 @@ import {
   listPlatformCrawlSettings,
   refreshIndustryAccount,
   updateIndustryAccount,
+  analyzeDataAnalysisPostUrl,
 } from '../../../../services/vkpi.ui-api';
 import { creatorPlatformOptions } from '../../shared/vkpiConstants';
 
@@ -23,6 +24,7 @@ import { compact, normalizePlatform, platformClass, platformDisplay, platformIni
 import { metricForAccount, postsForAccount } from './utils/metricHelpers';
 
 import { FilterDrawer } from './drawers/FilterDrawer';
+import { PostDetailDrawer } from './drawers/PostDetailDrawer';
 import { ProfileDashboard } from './profile/ProfileDashboard';
 
 import { HomeTab } from './tabs/HomeTab';
@@ -140,6 +142,10 @@ export function CrossPlatformPanel({
   const [platformCrawlSettings, setPlatformCrawlSettings] = useState<Row[]>([]);
   const [budgetSettings, setBudgetSettings] = useState<Row[]>([]);
   const [selectedAccount, setSelectedAccount] = useState<Row | null>(null);
+  const [selectedPost, setSelectedPost] = useState<Row | null>(null);
+  const [postAnalysis, setPostAnalysis] = useState<Row | null>(null);
+  const [postAnalysisBusy, setPostAnalysisBusy] = useState(false);
+  const [postAnalysisError, setPostAnalysisError] = useState('');
 
   const [projectName, setProjectName] = useState('');
   const [projectId, setProjectId] = useState('');
@@ -356,6 +362,45 @@ export function CrossPlatformPanel({
     setSelectedAccount(account);
     void loadAccount(accountId(account));
   };
+  const openPost = (post: Row) => {
+    setSelectedPost(post);
+    setPostAnalysis(null);
+    setPostAnalysisError('');
+  };
+  const analyzePost = async (post: Row) => {
+    if (!apiToken) return;
+    const matchedAccount = accounts.find((account) => {
+      const id = accountId(account);
+      const postAccount = rowString(post, ['account_id', 'industry_account_id', 'profile_id']);
+      const postHandle = rowString(post, ['handle', 'account_handle', 'username', 'display_name'])
+        .toLowerCase()
+        .replace(/^@/, '');
+      const accountHandle = accountName(account).toLowerCase().replace(/^@/, '');
+      return (postAccount && postAccount === id) || (postHandle && accountHandle && postHandle === accountHandle);
+    });
+    const url = rowString(post, ['post_url', 'permalink_url', 'webVideoUrl', 'external_url', 'url']);
+    if (!url) {
+      setPostAnalysisError('该内容没有原帖 URL，无法运行真实单帖分析。');
+      return;
+    }
+    setPostAnalysisBusy(true);
+    setPostAnalysisError('');
+    try {
+      const result = await analyzeDataAnalysisPostUrl(apiToken, {
+        url,
+        platform: normalizePlatform(rowString(post, ['platform'], rowString(matchedAccount, ['platform']))),
+        creatorHandle: rowString(post, ['handle', 'account_handle', 'username'], accountName(matchedAccount || {})),
+      });
+      setPostAnalysis(result as Row);
+      onMessage('单帖分析完成。');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '单帖分析失败';
+      setPostAnalysisError(message);
+      onMessage(message);
+    } finally {
+      setPostAnalysisBusy(false);
+    }
+  };
   const selectAccountForAnalysis = (account: Row | null) => {
     if (account) {
       openAccount(account);
@@ -406,6 +451,7 @@ export function CrossPlatformPanel({
             posts={visiblePosts}
             busy={busy}
             onOpenAccount={openAccount}
+            onOpenPost={openPost}
             onRefreshAccount={refreshAccount}
             onOpenFilter={() => setFilterOpen(true)}
             onSetSelectedAccount={selectAccountForAnalysis}
@@ -427,7 +473,14 @@ export function CrossPlatformPanel({
           />
         );
       case 'Posts':
-        return <PostsTab accounts={visibleAccounts} posts={visiblePosts} onSetSelectedAccount={selectAccountForAnalysis} />;
+        return (
+          <PostsTab
+            accounts={visibleAccounts}
+            posts={visiblePosts}
+            onSetSelectedAccount={selectAccountForAnalysis}
+            onOpenPost={openPost}
+          />
+        );
       case 'Pillars':
         return <PillarsTab posts={visiblePosts} />;
       case 'Sentiment':
@@ -451,6 +504,7 @@ export function CrossPlatformPanel({
             platformCrawlSettings={platformCrawlSettings}
             budgetSettings={budgetSettings}
             busy={busy}
+            onOpenPost={openPost}
             onBack={() => setSelectedAccount(null)}
             onRefresh={(id) => void refreshAccount(id)}
             onToggleCrawl={(id, enabled) => void toggleAccountCrawl(id, enabled)}
@@ -646,6 +700,16 @@ export function CrossPlatformPanel({
         onChartToggle={toggleChart}
         onBenchmarkToggle={() => setIncludeBenchmark((value) => !value)}
         onUpdate={() => { setFilterOpen(false); onMessage('筛选已更新。'); }}
+      />
+
+      <PostDetailDrawer
+        post={selectedPost}
+        accounts={accounts}
+        analysis={postAnalysis}
+        analysisBusy={postAnalysisBusy}
+        analysisError={postAnalysisError}
+        onClose={() => setSelectedPost(null)}
+        onAnalyze={(post) => void analyzePost(post)}
       />
 
     </div>

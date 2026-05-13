@@ -11,9 +11,10 @@ interface PostCardProps {
   post: Row;
   accounts: Row[];
   onViewAnalytics: () => void;
+  onOpenPost?: (post: Row) => void;
 }
 
-export function PostCard({ post, accounts, onViewAnalytics }: PostCardProps) {
+export function PostCard({ post, accounts, onViewAnalytics, onOpenPost }: PostCardProps) {
   const platform = postPlatform(post, accounts);
   const caption = postTitle(post);
   const thumb = proxiedImageUrl(postThumbnailUrl(post));
@@ -115,9 +116,14 @@ export function PostCard({ post, accounts, onViewAnalytics }: PostCardProps) {
         <div className="da-post-card__metric"><span>Likes</span><strong>{compact(likes)}</strong></div>
         <div className="da-post-card__metric"><span>Comments</span><strong>{compact(comments)}</strong></div>
       </div>
-      <button className="da-post-card__view-analytics" type="button" onClick={onViewAnalytics}>
-        📈 打开账号分析
-      </button>
+      <div className="da-post-card__actions">
+        <button className="da-post-card__view-analytics" type="button" onClick={() => onOpenPost?.(post)}>
+          单帖详情
+        </button>
+        <button className="da-post-card__view-analytics" type="button" onClick={onViewAnalytics}>
+          账号分析
+        </button>
+      </div>
     </article>
   );
 }

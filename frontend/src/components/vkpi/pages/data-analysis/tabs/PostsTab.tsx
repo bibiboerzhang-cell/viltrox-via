@@ -10,11 +10,12 @@ interface PostsTabProps {
   accounts: Row[];
   posts: Row[];
   onSetSelectedAccount: (account: Row | null) => void;
+  onOpenPost: (post: Row) => void;
 }
 
 type SortKey = 'recent' | 'views' | 'likes' | 'engagement';
 
-export function PostsTab({ accounts, posts, onSetSelectedAccount }: PostsTabProps) {
+export function PostsTab({ accounts, posts, onSetSelectedAccount, onOpenPost }: PostsTabProps) {
   const [filterPlatform, setFilterPlatform] = useState<string>('all');
   const [sortBy, setSortBy] = useState<SortKey>('recent');
   const [keyword, setKeyword] = useState('');
@@ -113,6 +114,7 @@ export function PostsTab({ accounts, posts, onSetSelectedAccount }: PostsTabProp
                 key={postKey(post, idx)}
                 post={post}
                 accounts={accounts}
+                onOpenPost={onOpenPost}
                 onViewAnalytics={() => onSetSelectedAccount(matchedAccount || accounts[0] || null)}
               />
             );
