@@ -43,6 +43,60 @@ If the printed rows are all stale smoke accounts, clean them:
 PYTHONPATH=backend .venv/bin/python scripts/vkpi_staff_observation_hygiene.py --apply
 ```
 
+## Staff Provisioning Gate
+
+P4.1B cleaned stale smoke staff. P4.1C adds a safe way to enable real employee
+accounts for observation.
+
+The provisioning script is dry-run by default:
+
+```bash
+cd /Users/bibiboer/Documents/V-KPI——marketing
+PYTHONPATH=backend .venv/bin/python scripts/vkpi_provision_observation_staff.py \
+  --staff wanghua@viltrox.com,"Wang Hua",employee
+```
+
+For real Viltrox employees, use `@viltrox.com` emails. Non-Viltrox emails are
+blocked unless `--allow-external` is explicitly passed.
+
+Recommended CSV format:
+
+```csv
+email,name,role
+wanghua@viltrox.com,Wang Hua,employee
+wangshaoyuan@viltrox.com,Wang Shaoyuan,employee
+marketing.manager@viltrox.com,Marketing Manager,manager
+```
+
+Dry-run first:
+
+```bash
+PYTHONPATH=backend .venv/bin/python scripts/vkpi_provision_observation_staff.py \
+  --csv /path/to/observation_staff.csv
+```
+
+Apply only after review. Put the temporary password in an environment variable;
+do not write it into docs or commit it:
+
+```bash
+VKPI_OBSERVATION_DEFAULT_PASSWORD='change-this-in-private' \
+PYTHONPATH=backend .venv/bin/python scripts/vkpi_provision_observation_staff.py \
+  --csv /path/to/observation_staff.csv \
+  --apply
+```
+
+If an existing user must be reset, add `--reset-password`. Otherwise existing
+users keep their current password.
+
+Provisioning smoke:
+
+```bash
+./scripts/run_smoke.sh smoke_vkpi_p4_1c_staff_provisioning.py
+```
+
+The smoke creates three temporary `@viltrox.com` staff accounts, verifies real
+`/api/auth/login` and `/api/auth/me`, and cleans the rows.
+
 The smoke verifies:
 
 - `/health` returns a known `git_sha`;
@@ -52,6 +106,7 @@ The smoke verifies:
 - an admin user can list and triage feedback through `GET/PATCH /feedback`;
 - feedback create/update audit records are written;
 - active staff and admin staff counts are reported.
+- P4.1C provisioning smoke verifies real login for manager and employee roles.
 
 ## Readiness vs Completion
 
@@ -101,6 +156,7 @@ P4.1 can move to P4.2 when:
 
 - readiness smoke passes;
 - stale smoke staff rows are cleaned or explicitly explained;
+- staff provisioning smoke passes;
 - at least one admin triage flow is verified;
 - real staff account count is known;
 - the P4 observation log has at least one real user entry or an explicit note
