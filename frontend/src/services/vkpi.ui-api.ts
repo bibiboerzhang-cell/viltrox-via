@@ -979,11 +979,15 @@ export async function listDailyOutreachDigest(token: string, staffId?: string) {
   if (staffId) params.set("staff_id", staffId);
   return apiFetch<{ digest?: Row | null; items?: Row[]; digest_date?: string }>(`/api/admin/vkpi/analytics/daily-digest?${params.toString()}`, {}, token);
 }
-export async function getDailyOutreachDigestStatus(token: string) {
-  return apiFetch<Row>("/api/admin/vkpi/analytics/daily-digest/status?limit=100", {}, token);
+export async function getDailyOutreachDigestStatus(token: string, productSku = "") {
+  const params = new URLSearchParams({ limit: "100" });
+  if (productSku.trim()) params.set("product_sku", productSku.trim());
+  return apiFetch<Row>(`/api/admin/vkpi/analytics/daily-digest/status?${params.toString()}`, {}, token);
 }
-export async function generateDailyOutreachDigest(token: string) {
-  return apiFetch<Record<string, unknown>>("/api/admin/vkpi/analytics/daily-digest/generate", { method: "POST", body: jsonBody({ limit: 100 }) }, token);
+export async function generateDailyOutreachDigest(token: string, productSku = "") {
+  const body: Record<string, unknown> = { limit: 100 };
+  if (productSku.trim()) body.product_sku = productSku.trim();
+  return apiFetch<Record<string, unknown>>("/api/admin/vkpi/analytics/daily-digest/generate", { method: "POST", body: jsonBody(body) }, token);
 }
 export async function claimOutreachSuggestion(token: string, suggestionId: string) {
   return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/analytics/suggestions/${encodeURIComponent(suggestionId)}/claim`, { method: "POST", body: jsonBody({}) }, token);

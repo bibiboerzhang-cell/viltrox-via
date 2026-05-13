@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import {
   generateDailyOutreachDigest,
+  getDailyOutreachDigestStatus,
   runProductCompare,
   runProductMonitor,
   upsertAnalyticsProduct,
@@ -43,6 +44,8 @@ export function AnalyticsMonitorPanel({
   const [productA, setProductA] = useState('');
   const [productB, setProductB] = useState('');
   const [monitorSku, setMonitorSku] = useState('');
+  const [digestProductSku, setDigestProductSku] = useState('');
+  const [digestStatusOverride, setDigestStatusOverride] = useState<Record<string, unknown> | null>(null);
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
 
   const submitCompare = async (event: React.FormEvent) => {
@@ -81,6 +84,8 @@ export function AnalyticsMonitorPanel({
         max_videos: 30,
       });
       setResult(response);
+      setDigestProductSku(monitorSku.trim());
+      setDigestStatusOverride(null);
       onMessage('产品日监控已执行，新增建议联系会进入下方队列。');
       await onRefresh();
     } catch (error) {
@@ -94,16 +99,33 @@ export function AnalyticsMonitorPanel({
     if (!apiToken) return;
     onBusyChange(true);
     try {
-      const response = await generateDailyOutreachDigest(apiToken);
+      const productSku = digestProductSku.trim();
+      const response = await generateDailyOutreachDigest(apiToken, productSku);
+      setDigestStatusOverride(response);
       const generated = safeNumber(response.items_total ?? response.items_per_staff);
       const eligible = safeNumber(response.eligible_staff_count ?? response.staff_count);
       const owned = safeNumber(response.owned_assignment_count);
       const fallback = safeNumber(response.fallback_assignment_count);
       const duplicates = safeNumber(response.duplicate_suggestion_count);
-      onMessage(`今日未联系 KOL 清单已生成：${numberFormatter.format(generated)} 条，覆盖 ${numberFormatter.format(eligible)} 名有效员工；负责人分配 ${numberFormatter.format(owned)}，兜底分配 ${numberFormatter.format(fallback)}，重复 ${numberFormatter.format(duplicates)}。`);
+      onMessage(`今日未联系 KOL 清单已生成：${numberFormatter.format(generated)} 条，口径 ${productSku || '全部产品'}，覆盖 ${numberFormatter.format(eligible)} 名符合分发员工；负责人分配 ${numberFormatter.format(owned)}，兜底分配 ${numberFormatter.format(fallback)}，重复 ${numberFormatter.format(duplicates)}。`);
       await onRefresh();
     } catch (error) {
       onMessage(error instanceof Error ? error.message : '生成今日清单失败');
+    } finally {
+      onBusyChange(false);
+    }
+  };
+
+  const refreshDigestScope = async () => {
+    if (!apiToken) return;
+    onBusyChange(true);
+    try {
+      const productSku = digestProductSku.trim();
+      const response = await getDailyOutreachDigestStatus(apiToken, productSku);
+      setDigestStatusOverride(response);
+      onMessage(`Daily Top100 口径已刷新：${productSku || '全部产品'}。`);
+    } catch (error) {
+      onMessage(error instanceof Error ? error.message : '刷新 Daily Top100 口径失败');
     } finally {
       onBusyChange(false);
     }
@@ -120,23 +142,34 @@ export function AnalyticsMonitorPanel({
   const totalLikes = safeNumber(resultOverview.total_likes);
   const totalComments = safeNumber(resultOverview.total_comments);
   const suggestionsCreated = safeNumber(resultSummary.suggestions_created);
-  const digestStaffCount = safeNumber(digestStatus.eligible_staff_count ?? digestStatus.staff_count);
-  const digestActiveStaffCount = safeNumber(digestStatus.active_staff_count);
-  const digestExcludedStaffCount = safeNumber(digestStatus.excluded_staff_count);
-  const digestGeneratedStaffCount = safeNumber(digestStatus.generated_staff_count ?? digestStatus.ready_staff_count);
-  const digestReadyStaffCount = safeNumber(digestStatus.ready_staff_count);
-  const digestEmptyStaffCount = safeNumber(digestStatus.empty_staff_count);
-  const digestUncontactedCount = safeNumber(digestStatus.uncontacted_count);
-  const digestBridgeSeededCount = safeNumber(digestStatus.bridge_seeded_count);
-  const digestCandidateSource = String(digestStatus.candidate_source || 'none');
-  const digestDuplicateSuggestionCount = safeNumber(digestStatus.duplicate_suggestion_count);
-  const digestAssignmentStrategy = String(digestStatus.assignment_strategy || '未返回');
-  const digestOwnedAssignmentCount = safeNumber(digestStatus.owned_assignment_count);
-  const digestFallbackAssignmentCount = safeNumber(digestStatus.fallback_assignment_count);
-  const digestScheduledTime = String(digestStatus.scheduled_time || '08:00');
-  const digestTimezone = String(digestStatus.timezone || 'Asia/Shanghai');
-  const digestFeatureEnabled = Boolean(digestStatus.feature_enabled);
-  const digestLastGeneratedAt = String(digestStatus.last_generated_at || '未生成');
+  const currentDigestStatus = digestStatusOverride || digestStatus;
+  const digestStaffCount = safeNumber(currentDigestStatus.eligible_staff_count ?? currentDigestStatus.staff_count);
+  const digestActiveStaffCount = safeNumber(currentDigestStatus.active_staff_count);
+  const digestExcludedStaffCount = safeNumber(currentDigestStatus.excluded_staff_count);
+  const digestGeneratedStaffCount = safeNumber(currentDigestStatus.generated_staff_count ?? currentDigestStatus.ready_staff_count);
+  const digestReadyStaffCount = safeNumber(currentDigestStatus.ready_staff_count);
+  const digestEmptyStaffCount = safeNumber(currentDigestStatus.empty_staff_count);
+  const digestUncontactedCount = safeNumber(currentDigestStatus.uncontacted_count);
+  const digestBridgeSeededCount = safeNumber(currentDigestStatus.bridge_seeded_count);
+  const digestCandidateSource = String(currentDigestStatus.candidate_source || 'none');
+  const digestTotalCandidates = safeNumber(currentDigestStatus.total_candidates ?? currentDigestStatus.candidate_count);
+  const digestItemsTotal = safeNumber(currentDigestStatus.items_total ?? currentDigestStatus.item_count);
+  const digestDuplicateSuggestionCount = safeNumber(currentDigestStatus.duplicate_suggestion_count);
+  const digestAssignmentStrategy = String(currentDigestStatus.assignment_strategy || '未返回');
+  const digestOwnedAssignmentCount = safeNumber(currentDigestStatus.owned_assignment_count);
+  const digestFallbackAssignmentCount = safeNumber(currentDigestStatus.fallback_assignment_count);
+  const digestScheduledTime = String(currentDigestStatus.scheduled_time || '08:00');
+  const digestTimezone = String(currentDigestStatus.timezone || 'Asia/Shanghai');
+  const digestFeatureEnabled = Boolean(currentDigestStatus.feature_enabled);
+  const digestLastGeneratedAt = String(currentDigestStatus.last_generated_at || '未生成');
+  const digestProductLabel = digestProductSku.trim() || '全部产品';
+  const digestCandidateSourceLabel = digestCandidateSource === 'outreach_suggestions'
+    ? '产品监控候选'
+    : digestCandidateSource === 'kol_pool_bridge'
+      ? 'KOL Pool 桥接'
+      : digestCandidateSource === 'none'
+        ? '暂无候选源'
+        : digestCandidateSource;
   const kolPoolTotal = safeNumber(kolPoolSummary.total);
   const kolHistoricalCount = safeNumber(kolPoolSummary.historical_collaboration_count);
   const kolLinkedCount = safeNumber(kolPoolSummary.linked_main_kol_count);
@@ -164,22 +197,50 @@ export function AnalyticsMonitorPanel({
         </section>
         <section className="vkpi-card vkpi-action-card">
           <CardHeader title="每日 Top100 候选" />
-          <InfoBlock label="自动同步" value={`${digestScheduledTime} ${digestTimezone}`} />
-          <InfoBlock label="开关状态" value={digestFeatureEnabled ? '已开启' : '未开启'} tone={digestFeatureEnabled ? 'good' : 'warn'} />
-          <InfoBlock label="有效员工" value={`${digestStaffCount}/${digestActiveStaffCount || digestStaffCount}`} />
-          <InfoBlock label="生成覆盖" value={`${digestGeneratedStaffCount}/${digestStaffCount}`} />
-          <InfoBlock label="有候选员工" value={`${digestReadyStaffCount}/${digestStaffCount}`} />
-          <InfoBlock label="无候选员工" value={`${digestEmptyStaffCount}/${digestStaffCount}`} />
-          <InfoBlock label="排除测试/系统" value={numberFormatter.format(digestExcludedStaffCount)} />
-          <InfoBlock label="未联系候选" value={numberFormatter.format(digestUncontactedCount)} />
-          <InfoBlock label="候选来源" value={digestCandidateSource === 'kol_pool_bridge' ? 'KOL Pool 桥接' : digestCandidateSource} />
-          <InfoBlock label="桥接新增" value={numberFormatter.format(digestBridgeSeededCount)} />
-          <InfoBlock label="分配策略" value={digestAssignmentStrategy === 'owner_first_then_round_robin' ? '负责人优先 + 兜底轮询' : digestAssignmentStrategy} />
-          <InfoBlock label="负责人分配" value={numberFormatter.format(digestOwnedAssignmentCount)} tone={digestOwnedAssignmentCount > 0 ? 'good' : undefined} />
-          <InfoBlock label="兜底分配" value={numberFormatter.format(digestFallbackAssignmentCount)} tone={digestFallbackAssignmentCount > 0 ? 'warn' : undefined} />
-          <InfoBlock label="重复分发" value={numberFormatter.format(digestDuplicateSuggestionCount)} tone={digestDuplicateSuggestionCount > 0 ? 'warn' : 'good'} />
-          <InfoBlock label="上次生成" value={digestLastGeneratedAt} />
-          <button className="vkpi-button vkpi-button--secondary" disabled={busy || !apiToken} type="button" onClick={() => void generateDigest()}>手动生成 Top100</button>
+          <div className="vkpi-digest-scope">
+            <label>
+              <span>候选产品口径</span>
+              <input
+                value={digestProductSku}
+                onChange={(event) => {
+                  setDigestProductSku(event.target.value);
+                  setDigestStatusOverride(null);
+                }}
+                placeholder="留空=全部产品；可填 AF-35-55-F1.8-EVO-FE-Z"
+              />
+            </label>
+            <button className="vkpi-mini-button" disabled={busy || !apiToken} type="button" onClick={() => void refreshDigestScope()}>刷新口径</button>
+          </div>
+          <div className="vkpi-digest-status-grid">
+            <InfoBlock label="活跃员工" value={numberFormatter.format(digestActiveStaffCount)} />
+            <InfoBlock label="符合分发" value={numberFormatter.format(digestStaffCount)} tone={digestStaffCount > 0 ? 'good' : 'warn'} />
+            <InfoBlock label="已生成清单" value={`${numberFormatter.format(digestGeneratedStaffCount)} / ${numberFormatter.format(digestStaffCount)}`} />
+            <InfoBlock label="有候选员工" value={`${numberFormatter.format(digestReadyStaffCount)} / ${numberFormatter.format(digestStaffCount)}`} tone={digestReadyStaffCount > 0 ? 'good' : undefined} />
+            <InfoBlock label="无候选员工" value={numberFormatter.format(digestEmptyStaffCount)} tone={digestEmptyStaffCount > 0 ? 'warn' : undefined} />
+            <InfoBlock label="已排除" value={numberFormatter.format(digestExcludedStaffCount)} />
+          </div>
+          <div className="vkpi-digest-source-strip">
+            <span>口径: <strong>{digestProductLabel}</strong></span>
+            <span>候选来源: <strong>{digestCandidateSourceLabel}</strong></span>
+            <span>产品级候选: <strong>{numberFormatter.format(digestTotalCandidates)}</strong></span>
+            <span>已分发: <strong>{numberFormatter.format(digestItemsTotal)}</strong></span>
+            <span>重复分发: <strong className={digestDuplicateSuggestionCount > 0 ? 'is-warn' : ''}>{numberFormatter.format(digestDuplicateSuggestionCount)}</strong></span>
+          </div>
+          <details className="vkpi-digest-details">
+            <summary>查看分发细节</summary>
+            <div className="vkpi-result-grid">
+              <InfoBlock label="自动同步" value={`${digestScheduledTime} ${digestTimezone}`} />
+              <InfoBlock label="开关状态" value={digestFeatureEnabled ? '已开启' : '未开启'} tone={digestFeatureEnabled ? 'good' : 'warn'} />
+              <InfoBlock label="未联系候选" value={numberFormatter.format(digestUncontactedCount)} />
+              <InfoBlock label="桥接新增" value={numberFormatter.format(digestBridgeSeededCount)} />
+              <InfoBlock label="分配策略" value={digestAssignmentStrategy === 'owner_first_then_round_robin' ? '负责人优先 + 兜底轮询' : digestAssignmentStrategy} />
+              <InfoBlock label="负责人分配" value={numberFormatter.format(digestOwnedAssignmentCount)} tone={digestOwnedAssignmentCount > 0 ? 'good' : undefined} />
+              <InfoBlock label="兜底分配" value={numberFormatter.format(digestFallbackAssignmentCount)} tone={digestFallbackAssignmentCount > 0 ? 'warn' : undefined} />
+              <InfoBlock label="上次生成" value={digestLastGeneratedAt} />
+            </div>
+          </details>
+          <p className="vkpi-help-text">活跃员工是启用账号；符合分发已排除测试、系统和不可分发账号；已生成清单才代表今日真正分到候选的人数。</p>
+          <button className="vkpi-button vkpi-button--secondary" disabled={busy || !apiToken} type="button" onClick={() => void generateDigest()}>按当前口径生成 Top100</button>
         </section>
         <section className="vkpi-card vkpi-action-card">
           <CardHeader title="监控概览" />
