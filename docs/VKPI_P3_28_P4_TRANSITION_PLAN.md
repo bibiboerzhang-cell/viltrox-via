@@ -13,9 +13,9 @@ Socialinsider-level analytics work before the team has used the current system.
 
 - Branch: `codex/vkpi-cleanup-d7`
 - Current P3 package:
-  `/Users/bibiboer/Downloads/vkpi-team-handoff-p3-20260514-052052-1efd40b6.zip`
+  `/Users/bibiboer/Downloads/vkpi-team-handoff-p3-20260514-053014-f3466726.zip`
 - Current local release tag:
-  `p3-team-handoff-20260514-1efd40b6`
+  `p3-to-p4-transition-20260514-f3466726`
 - Git remote: not configured in this checkout.
 
 ## P3 Close Standard
@@ -59,6 +59,11 @@ Acceptance:
 - feedback is submitted through the in-app feedback widget;
 - feedback admin page can triage issues by status;
 - issues are classified as blocker / workflow friction / enhancement.
+
+Readiness gate:
+
+- `docs/VKPI_P4_1_REAL_TEAM_OBSERVATION.md`
+- `scripts/smoke_vkpi_p4_1_observation_readiness.py`
 
 ### P4.2 Role and Scope Audit Follow-Up
 
