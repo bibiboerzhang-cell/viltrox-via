@@ -47,6 +47,11 @@ needed before Viltrox team members use the system.
   - package scan reports zero dirty files, zero forbidden entries, zero secret
     hits, and zero oversized files;
   - final handoff state is documented in `docs/VKPI_P3_24_RELEASE_FREEZE.md`.
+- P3.26 team distribution:
+  - receiver-side package checklist is documented;
+  - local `.env` and verification expectations are explicit;
+  - remote push remains a manual operations step because this checkout has no
+    configured Git remote.
 
 ## Verification Commands
 
