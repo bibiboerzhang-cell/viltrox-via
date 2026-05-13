@@ -31,6 +31,18 @@ cd /Users/bibiboer/Documents/V-KPI——marketing
 ./scripts/run_smoke.sh smoke_vkpi_p4_1_observation_readiness.py
 ```
 
+Before the observation window, run the staff hygiene check:
+
+```bash
+PYTHONPATH=backend .venv/bin/python scripts/vkpi_staff_observation_hygiene.py
+```
+
+If the printed rows are all stale smoke accounts, clean them:
+
+```bash
+PYTHONPATH=backend .venv/bin/python scripts/vkpi_staff_observation_hygiene.py --apply
+```
+
 The smoke verifies:
 
 - `/health` returns a known `git_sha`;
@@ -88,6 +100,7 @@ Admin should perform this path:
 P4.1 can move to P4.2 when:
 
 - readiness smoke passes;
+- stale smoke staff rows are cleaned or explicitly explained;
 - at least one admin triage flow is verified;
 - real staff account count is known;
 - the P4 observation log has at least one real user entry or an explicit note
