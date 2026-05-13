@@ -16,12 +16,13 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+import asyncio
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 os.environ.setdefault("ENVIRONMENT", "local")
 
-from app.db.connection import get_conn  # noqa: E402
+from app.db.connection import close_db_runtime, get_conn  # noqa: E402
 from app.services.vkpi import analytics  # noqa: E402
 from app.services.vkpi.schema_analytics import ensure_vkpi_analytics_schema  # noqa: E402
 
@@ -320,4 +321,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    finally:
+        asyncio.run(close_db_runtime())

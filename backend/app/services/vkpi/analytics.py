@@ -384,12 +384,11 @@ async def monitor_product(body: dict[str, Any], *, staff: dict[str, Any] | None 
             suggestions = _upsert_suggestions(run_id, product_sku, platform, raw)
         summary["suggestions_created"] = len(suggestions)
         _update_run(run_id, "success", summary=summary, raw=raw)
-        if not raw.get("metadata", {}).get("provider_status"):
-            get_conn().execute(
-                "UPDATE vkpi_monitored_products SET last_monitored_at=?, last_run_id=? WHERE product_sku=?",
-                (_utcnow(), int(run_id), product_sku),
-            )
-            get_conn().commit()
+        get_conn().execute(
+            "UPDATE vkpi_monitored_products SET last_monitored_at=?, last_run_id=? WHERE product_sku=?",
+            (_utcnow(), int(run_id), product_sku),
+        )
+        get_conn().commit()
         return {"run_id": run_id, "status": "success", "summary": summary, "result": raw, "suggestions": suggestions}
     except Exception as exc:
         _update_run(run_id, "failed", error=str(exc))
