@@ -47,22 +47,24 @@ EOF
 unzip -tq "$OUT" >/dev/null
 
 FORBIDDEN_COUNT="$(
-  unzip -Z1 "$OUT" \
-    | grep -E '(^|/)(\.git/|\.venv/|node_modules/|frontend/dist/|runtime/|uploads/|__pycache__/|\.pytest_cache/|\.mypy_cache/|\.ruff_cache/|\.DS_Store$)|\.(db|sqlite|sqlite3)$' \
-    | wc -l \
-    | tr -d ' '
+  {
+    unzip -Z1 "$OUT" \
+      | grep -E '(^|/)(\.git/|\.venv/|node_modules/|frontend/dist/|runtime/|uploads/|__pycache__/|\.pytest_cache/|\.mypy_cache/|\.ruff_cache/|\.DS_Store$)|\.(db|sqlite|sqlite3)$' \
+      || true
+  } | wc -l | tr -d ' '
 )"
 
 SECRET_COUNT="$(
-  grep -RIE \
-    --exclude-dir=.git \
-    --exclude='*.lock' \
-    --exclude='BUILD_METADATA.json' \
-    '(sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{20,}|apify_api_[A-Za-z0-9_-]{20,}|ANTHROPIC_API_KEY=.+|OPENAI_API_KEY=.+|GEMINI_API_KEY=.+|YOUTUBE_API_KEY=.+|APIFY_TOKEN=.+)' \
-    "$TMP/$PROJECT_DIR_NAME" \
-    | grep -vE '\.env\.example|example|placeholder|your_|CHANGE_ME|dummy|test_' \
-    | wc -l \
-    | tr -d ' '
+  {
+    grep -RIE \
+      --exclude-dir=.git \
+      --exclude='*.lock' \
+      --exclude='BUILD_METADATA.json' \
+      '(sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{20,}|apify_api_[A-Za-z0-9_-]{20,}|ANTHROPIC_API_KEY=.+|OPENAI_API_KEY=.+|GEMINI_API_KEY=.+|YOUTUBE_API_KEY=.+|APIFY_TOKEN=.+)' \
+      "$TMP/$PROJECT_DIR_NAME" \
+      | grep -vE '\.env\.example|example|placeholder|your_|CHANGE_ME|dummy|test_' \
+      || true
+  } | wc -l | tr -d ' '
 )"
 
 if [[ "$FORBIDDEN_COUNT" != "0" ]]; then
