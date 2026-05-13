@@ -215,6 +215,8 @@ export function lookupResultToKolDetail(result: VkpiKolLookupResult | null, fall
         post.imageUrl ||
         post.display_url ||
         post.displayUrl ||
+        post.preview_url ||
+        post.previewUrl ||
         raw.thumbnail_url ||
         raw.thumbnail ||
         raw.thumbnailUrl ||
@@ -223,7 +225,9 @@ export function lookupResultToKolDetail(result: VkpiKolLookupResult | null, fall
         raw.image_url ||
         raw.imageUrl ||
         raw.display_url ||
-        raw.displayUrl,
+        raw.displayUrl ||
+        raw.preview_url ||
+        raw.previewUrl,
         '',
       );
       const url = textValue(
@@ -243,8 +247,12 @@ export function lookupResultToKolDetail(result: VkpiKolLookupResult | null, fall
       const videoUrl = textValue(
         post.video_url ||
         post.videoUrl ||
+        post.videoUrlNoWaterMark ||
+        post.video_url_no_watermark ||
         post.video_download_url ||
         post.videoDownloadUrl ||
+        post.downloadUrl ||
+        post.downloadAddr ||
         post.media_url ||
         post.mediaUrl ||
         post.play_url ||
@@ -394,6 +402,8 @@ export function profileToKolDetail(profile: VkpiKolProfile | null, fallback: Vkp
       post.imageUrl ||
       post.display_url ||
       post.displayUrl ||
+      post.preview_url ||
+      post.previewUrl ||
       raw.thumbnail_url ||
       raw.thumbnail ||
       raw.thumbnailUrl ||
@@ -402,7 +412,9 @@ export function profileToKolDetail(profile: VkpiKolProfile | null, fallback: Vkp
       raw.image_url ||
       raw.imageUrl ||
       raw.display_url ||
-      raw.displayUrl,
+      raw.displayUrl ||
+      raw.preview_url ||
+      raw.previewUrl,
       '',
     );
     const url = textValue(
@@ -422,8 +434,12 @@ export function profileToKolDetail(profile: VkpiKolProfile | null, fallback: Vkp
     const videoUrl = textValue(
       post.video_url ||
       post.videoUrl ||
+      post.videoUrlNoWaterMark ||
+      post.video_url_no_watermark ||
       post.video_download_url ||
       post.videoDownloadUrl ||
+      post.downloadUrl ||
+      post.downloadAddr ||
       post.media_url ||
       post.mediaUrl ||
       post.play_url ||

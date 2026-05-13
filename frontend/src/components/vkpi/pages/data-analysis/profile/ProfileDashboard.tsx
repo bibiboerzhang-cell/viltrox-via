@@ -4,6 +4,7 @@ import type { Row } from '../utils/types';
 import { ACCOUNT_TABS } from '../utils/types';
 import { accountId, accountName, rowNumber, rowString } from '../utils/rowAccessors';
 import { platformExternalUrl, proxiedImageUrl } from '../utils/mediaProxy';
+import { accountAvatarUrl, accountProfileUrl } from '../utils/mediaFields';
 import {
   compact, normalizePlatform, platformClass, platformDisplay, platformInitial, prettyDate,
 } from '../utils/platformHelpers';
@@ -111,19 +112,8 @@ export function ProfileDashboard({
   const accountKey = accountId(account);
   const platform = normalizePlatform(rowString(account, ['platform']));
   const handle = accountName(account);
-  const avatarUrl = proxiedImageUrl(rowString(account, [
-    'avatar_url',
-    'profile_pic_url',
-    'profilePicUrl',
-    'profile_image_url',
-    'image_url',
-  ]));
-  const profileUrl = platformExternalUrl(rowString(account, [
-    'profile_url',
-    'platform_url',
-    'url',
-    'homepage_url',
-  ])) || platformHomeUrl(platform, handle);
+  const avatarUrl = proxiedImageUrl(accountAvatarUrl(account));
+  const profileUrl = platformExternalUrl(accountProfileUrl(account)) || platformHomeUrl(platform, handle);
   const latest = snapshots[0] || {};
   const followers = rowNumber(latest, ['followers', 'follower_count'])
     ?? rowNumber(account, ['followers', 'follower_count']);

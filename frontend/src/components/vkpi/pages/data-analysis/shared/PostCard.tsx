@@ -4,6 +4,7 @@ import {
   findAccountForPost, postAccountName, postPlatform, postTitle, postUrl, rowNumber, rowString,
 } from '../utils/rowAccessors';
 import { proxiedImageUrl, proxiedVideoUrl, redirectedVideoUrl } from '../utils/mediaProxy';
+import { accountAvatarUrl, postThumbnailUrl, postVideoUrl } from '../utils/mediaFields';
 import { compact, platformClass, platformDisplay, platformInitial, prettyDate } from '../utils/platformHelpers';
 
 interface PostCardProps {
@@ -15,8 +16,8 @@ interface PostCardProps {
 export function PostCard({ post, accounts, onViewAnalytics }: PostCardProps) {
   const platform = postPlatform(post, accounts);
   const caption = postTitle(post);
-  const thumb = proxiedImageUrl(rowString(post, ['thumbnail_url', 'cover_url', 'image_url', 'displayUrl']));
-  const rawVideoUrl = rowString(post, ['video_url', 'videoUrl', 'video_download_url', 'media_url', 'play_url']);
+  const thumb = proxiedImageUrl(postThumbnailUrl(post));
+  const rawVideoUrl = postVideoUrl(post);
   const primaryVideoUrl = proxiedVideoUrl(rawVideoUrl);
   const fallbackVideoUrl = redirectedVideoUrl(rawVideoUrl);
   const [useVideoFallback, setUseVideoFallback] = useState(false);
@@ -27,7 +28,7 @@ export function PostCard({ post, accounts, onViewAnalytics }: PostCardProps) {
   const comments = rowNumber(post, ['comments', 'comment_count']);
   const matchedAccount = findAccountForPost(post, accounts);
   const account = postAccountName(post, accounts);
-  const accountAvatar = proxiedImageUrl(rowString(matchedAccount, ['avatar_url', 'profile_pic_url', 'profilePicUrl', 'profile_image_url']));
+  const accountAvatar = proxiedImageUrl(accountAvatarUrl(matchedAccount));
   const followers = rowNumber(post, ['followers', 'follower_count'])
     ?? rowNumber(matchedAccount, ['followers', 'follower_count']);
   const captionIsTruncated = caption.length > 130;

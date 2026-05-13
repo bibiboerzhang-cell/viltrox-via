@@ -14,6 +14,7 @@ import type { Row } from '../utils/types';
 import { ACCOUNT_TABS } from '../utils/types';
 import { accountId, accountName, rowString } from '../utils/rowAccessors';
 import { platformExternalUrl, proxiedImageUrl } from '../utils/mediaProxy';
+import { accountAvatarUrl, accountProfileUrl } from '../utils/mediaFields';
 import { platformClass, platformDisplay, platformInitial, prettyDate } from '../utils/platformHelpers';
 import {
   AudienceTab,
@@ -174,8 +175,8 @@ export function AccountDrawer({
     },
   ];
   const firstBlockedGate = crawlGateItems.find((item) => !item.ok);
-  const avatarUrl = proxiedImageUrl(rowString(account, ['avatar_url', 'profilePicUrl', 'profile_pic_url']));
-  const profileUrl = platformExternalUrl(rowString(account, ['profile_url', 'url', 'inputUrl']));
+  const avatarUrl = proxiedImageUrl(accountAvatarUrl(account));
+  const profileUrl = platformExternalUrl(accountProfileUrl(account));
 
   return (
     <aside className="da-account-drawer da-account-drawer--open">

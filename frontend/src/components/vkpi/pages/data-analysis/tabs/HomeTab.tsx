@@ -12,6 +12,7 @@ import { EmptyState } from '../shared/EmptyState';
 import { TimeSeriesChart } from '../shared/TimeSeriesChart';
 import { PostCard } from '../shared/PostCard';
 import { proxiedImageUrl } from '../utils/mediaProxy';
+import { accountAvatarUrl } from '../utils/mediaFields';
 
 interface HomeTabProps {
   accounts: Row[];
@@ -99,7 +100,7 @@ export function HomeTab({
               {accounts.map((account) => {
                 const followers = metricForAccount(account, crossPlatform, posts, 'followers');
                 const accountPostCount = postsForAccount(posts, account).length;
-                const avatarUrl = proxiedImageUrl(rowString(account, ['avatar_url', 'profilePicUrl', 'profile_pic_url']));
+                const avatarUrl = proxiedImageUrl(accountAvatarUrl(account));
                 return (
                   <article
                     className="da-account-card"

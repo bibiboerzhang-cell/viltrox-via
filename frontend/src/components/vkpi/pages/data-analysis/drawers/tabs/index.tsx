@@ -2,7 +2,8 @@ import { useMemo, useState } from 'react';
 import type { Row } from '../../utils/types';
 import { accountId, accountName, rowNumber, rowString } from '../../utils/rowAccessors';
 import { bestPosting, contentPillars, formatMetric } from '../../utils/metricHelpers';
-import { platformExternalUrl, proxiedImageUrl, proxiedVideoUrl } from '../../utils/mediaProxy';
+import { platformExternalUrl, proxiedImageUrl, proxiedVideoUrl, redirectedVideoUrl } from '../../utils/mediaProxy';
+import { postPlatformUrl, postThumbnailUrl, postVideoUrl } from '../../utils/mediaFields';
 import { prettyDate } from '../../utils/platformHelpers';
 import { BigNumberCard } from '../../shared/BigNumberCard';
 
@@ -100,6 +101,7 @@ export function SummaryTab({ account, snapshots = [], posts = [] }: BaseTabProps
 
 export function ContentTab({ posts = [] }: BaseTabProps) {
   const [showAll, setShowAll] = useState(false);
+  const [videoFallbackPosts, setVideoFallbackPosts] = useState<Record<string, boolean>>({});
   const sortedPosts = useMemo(
     () => [...posts].sort((a, b) => rowString(b, ['published_at', 'created_at']).localeCompare(rowString(a, ['published_at', 'created_at']))),
     [posts],
@@ -122,9 +124,13 @@ export function ContentTab({ posts = [] }: BaseTabProps) {
       </div>
       <div className="da-content-grid">
         {visiblePosts.map((post, index) => {
-          const thumbnail = proxiedImageUrl(rowString(post, ['thumbnail_url', 'image_url', 'cover_url', 'displayUrl']));
-          const videoUrl = proxiedVideoUrl(rowString(post, ['video_url', 'videoUrl', 'video_download_url', 'media_url', 'play_url']));
-          const postUrl = platformExternalUrl(rowString(post, ['post_url', 'url', 'permalink_url']));
+          const thumbnail = proxiedImageUrl(postThumbnailUrl(post));
+          const rawVideoUrl = postVideoUrl(post);
+          const proxiedUrl = proxiedVideoUrl(rawVideoUrl);
+          const fallbackUrl = redirectedVideoUrl(rawVideoUrl);
+          const postKey = stablePostKey(post, index);
+          const videoUrl = videoFallbackPosts[postKey] && fallbackUrl ? fallbackUrl : proxiedUrl;
+          const postUrl = platformExternalUrl(postPlatformUrl(post));
           const title = rowString(post, ['title', 'caption'], '(无标题)');
           const views = rowNumber(post, ['views', 'view_count', 'video_views', 'play_count']);
           const likes = rowNumber(post, ['likes', 'like_count']);
@@ -132,9 +138,21 @@ export function ContentTab({ posts = [] }: BaseTabProps) {
           const publishedAt = rowString(post, ['published_at', 'created_at']);
 
           return (
-            <div key={stablePostKey(post, index)} className="da-post-card">
+            <div key={postKey} className="da-post-card">
               {videoUrl ? (
-                <video className="da-post-thumbnail" src={videoUrl} poster={thumbnail || undefined} controls preload="metadata" playsInline />
+                <video
+                  className="da-post-thumbnail"
+                  src={videoUrl}
+                  poster={thumbnail || undefined}
+                  controls
+                  preload="metadata"
+                  playsInline
+                  onError={() => {
+                    if (fallbackUrl && fallbackUrl !== videoUrl) {
+                      setVideoFallbackPosts((state) => ({ ...state, [postKey]: true }));
+                    }
+                  }}
+                />
               ) : thumbnail ? (
                 <img src={thumbnail} alt="" className="da-post-thumbnail" loading="lazy" />
               ) : (
@@ -292,7 +310,7 @@ export function PostsTab({ posts = [] }: BaseTabProps) {
         </thead>
         <tbody>
           {visiblePosts.map((post, index) => {
-            const postUrl = platformExternalUrl(rowString(post, ['post_url', 'url', 'permalink_url']));
+            const postUrl = platformExternalUrl(postPlatformUrl(post));
             return (
               <tr key={stablePostKey(post, index)}>
                 <td>{rowString(post, ['title', 'caption'], '(无标题)').slice(0, 60)}</td>
