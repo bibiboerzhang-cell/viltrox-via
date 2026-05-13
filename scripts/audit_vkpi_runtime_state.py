@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import asyncio
 import subprocess
 import sys
 import urllib.error
@@ -22,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "backend") not in sys.path:
     sys.path.insert(0, str(ROOT / "backend"))
 
-from app.db.connection import get_conn  # noqa: E402
+from app.db.connection import close_db_runtime, get_conn  # noqa: E402
 
 
 def _git_sha() -> str:
@@ -130,7 +131,8 @@ def audit() -> dict[str, Any]:
                 }
             )
 
-    backend_sha = str((health.get("build") or {}).get("git_sha") or health.get("git_sha") or "")
+    health_build = health.get("build") or {}
+    backend_sha = str(health_build.get("git_sha") or health.get("git_sha") or "")
     result = {
         "repo": {
             "cwd": str(ROOT),
@@ -142,7 +144,7 @@ def audit() -> dict[str, Any]:
         "version": {
             "server_git_sha": backend_sha,
             "server_matches_repo": bool(backend_sha and repo_sha and backend_sha.startswith(repo_sha[:12])),
-            "client_matches_server": bool(health.get("client_matches_server")) if isinstance(health, dict) else False,
+            "client_matches_server": bool(health_build.get("client_matches_server")),
             "app_git_sha_env_present": bool(os.environ.get("APP_GIT_SHA")),
         },
         "database": {
@@ -176,25 +178,28 @@ def audit() -> dict[str, Any]:
 
 
 def main() -> int:
-    result = audit()
-    if "--json" in sys.argv:
-        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+    try:
+        result = audit()
+        if "--json" in sys.argv:
+            print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+            return 0
+        print(f"cwd={result['repo']['cwd']}")
+        print(f"git_sha={result['repo']['git_short_sha']}")
+        print(f"dirty_count={result['repo']['dirty_count']}")
+        print(f"database={result['database']['current_database']}")
+        print(f"server_matches_repo={result['version']['server_matches_repo']}")
+        print(f"client_matches_server={result['version']['client_matches_server']}")
+        print(f"staff_active={result['database']['staff_active']}/{result['database']['staff_total']}")
+        print(f"monitored_products={result['database']['monitored_products']}")
+        print(f"outreach_suggestions_new={result['database']['outreach_suggestions_new']}")
+        print(f"status_conflicts={len(result['status_conflicts'])}")
+        if result["warnings"]:
+            print("warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
         return 0
-    print(f"cwd={result['repo']['cwd']}")
-    print(f"git_sha={result['repo']['git_short_sha']}")
-    print(f"dirty_count={result['repo']['dirty_count']}")
-    print(f"database={result['database']['current_database']}")
-    print(f"server_matches_repo={result['version']['server_matches_repo']}")
-    print(f"client_matches_server={result['version']['client_matches_server']}")
-    print(f"staff_active={result['database']['staff_active']}/{result['database']['staff_total']}")
-    print(f"monitored_products={result['database']['monitored_products']}")
-    print(f"outreach_suggestions_new={result['database']['outreach_suggestions_new']}")
-    print(f"status_conflicts={len(result['status_conflicts'])}")
-    if result["warnings"]:
-        print("warnings:")
-        for warning in result["warnings"]:
-            print(f"- {warning}")
-    return 0
+    finally:
+        asyncio.run(close_db_runtime())
 
 
 if __name__ == "__main__":
