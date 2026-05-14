@@ -87,6 +87,8 @@ Readiness gate:
 
 Goal: make Daily Top100 useful only if the upstream candidate source is alive.
 
+Status: source gate added in `docs/VKPI_P4_3_DAILY_TOP100_SOURCE.md`.
+
 Acceptance:
 
 - monitored product source exists or empty-state reason is explicit;
