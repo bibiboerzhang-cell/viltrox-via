@@ -81,6 +81,7 @@ Readiness gate:
 - `docs/VKPI_P4_2_ROLE_SCOPE_AUDIT.md`
 - `scripts/vkpi_scope_audit.py`
 - `scripts/smoke_vkpi_p4_2_scope_audit.py`
+- `scripts/smoke_vkpi_p4_2b_multi_account_scope.py`
 
 ### P4.3 Daily Top100 Candidate Source Stabilization
 

@@ -27,6 +27,14 @@ The first gate is therefore audit, not reimplementation.
   - asserts the structural audit runs;
   - asserts there are zero unguarded admin V-KPI endpoints.
 
+## Delivered In P4.2B
+
+- `scripts/smoke_vkpi_p4_2b_multi_account_scope.py`
+  - seeds one manager and two employee accounts;
+  - creates employee-owned KOL and project rows through HTTP;
+  - verifies employee A cannot list or open employee B private project/KOL data;
+  - verifies manager can see all rows and intentionally filter by `staff_id`.
+
 ## Current Acceptance Status
 
 P4.2A is satisfied when:
@@ -42,6 +50,10 @@ P4.2 is not fully closed until P4.2B adds real multi-account E2E:
 - employee A cannot see employee B private KOL/project data;
 - manager can intentionally switch scope where allowed;
 - any leaked endpoint is fixed with a targeted patch.
+
+After P4.2B, the remaining P4.2 risk is not the core project/KOL scope path. It
+is the 15 advisory service reads emitted by `vkpi_scope_audit.py`; those should
+be reviewed opportunistically when their modules are touched.
 
 ## Why This Scope
 
@@ -68,4 +80,6 @@ PYTHONPATH=backend .venv/bin/python -m py_compile \
 PYTHONPATH=backend .venv/bin/python scripts/vkpi_scope_audit.py --json
 
 ./scripts/run_smoke.sh smoke_vkpi_p4_2_scope_audit.py
+
+./scripts/run_smoke.sh smoke_vkpi_p4_2b_multi_account_scope.py
 ```
