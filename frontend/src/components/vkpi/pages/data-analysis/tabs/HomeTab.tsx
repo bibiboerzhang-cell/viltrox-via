@@ -22,16 +22,16 @@ interface HomeTabProps {
   onOpenAccount: (account: Row) => void;
   onRefreshAccount: (id: string) => void;
   onOpenFilter: () => void;
+  onOpenPostsTab: () => void;
   onSetSelectedAccount: (account: Row | null) => void;
   onOpenPost: (post: Row) => void;
-  selectedAccount: Row | null;
   selectedCharts: ChartKey[];
 }
 
 export function HomeTab({
   accounts, crossPlatform, posts, busy,
-  onOpenAccount, onRefreshAccount, onOpenFilter,
-  onSetSelectedAccount, onOpenPost, selectedAccount, selectedCharts,
+  onOpenAccount, onRefreshAccount, onOpenFilter, onOpenPostsTab,
+  onSetSelectedAccount, onOpenPost, selectedCharts,
 }: HomeTabProps) {
   const [showAllPosts, setShowAllPosts] = useState(false);
   const visibleTopPosts = showAllPosts ? posts : posts.slice(0, 3);
@@ -155,14 +155,25 @@ export function HomeTab({
           title={showAllPosts ? 'All Posts' : 'Top Posts'}
           eyebrow="内容信号"
           wide
-          side={posts.length > 3 ? (
-            <button
-              className="da-text-button"
-              type="button"
-              onClick={() => setShowAllPosts((value) => !value)}
-            >
-              {showAllPosts ? '只看 Top 3' : `显示全部 ${posts.length} 条`}
-            </button>
+          side={posts.length ? (
+            <div className="da-inline-actions">
+              {posts.length > 3 ? (
+                <button
+                  className="da-text-button"
+                  type="button"
+                  onClick={() => setShowAllPosts((value) => !value)}
+                >
+                  {showAllPosts ? '只看 Top 3' : `显示全部 ${posts.length} 条`}
+                </button>
+              ) : null}
+              <button
+                className="da-text-button"
+                type="button"
+                onClick={onOpenPostsTab}
+              >
+                打开完整帖子库
+              </button>
+            </div>
           ) : null}
         >
           {posts.length ? (
@@ -175,7 +186,7 @@ export function HomeTab({
                   post={post}
                   accounts={accounts}
                   onOpenPost={onOpenPost}
-                  onViewAnalytics={() => onSetSelectedAccount(matchedAccount || selectedAccount || accounts[0] || null)}
+                  onViewAnalytics={matchedAccount ? () => onSetSelectedAccount(matchedAccount) : undefined}
                 />
                 );
               })}

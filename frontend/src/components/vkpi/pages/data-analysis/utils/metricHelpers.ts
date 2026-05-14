@@ -1,5 +1,7 @@
 import type { KpiKey, Row } from './types';
-import { accountId, accountName, findAccountForPost, postTitle, rowNumber, rowString } from './rowAccessors';
+import {
+  accountHandle, explicitAccountId, findAccountForPost, normalizeLookupValue, postTitle, rowNumber, rowString,
+} from './rowAccessors';
 import { shortDate } from './platformHelpers';
 
 /** 数字格式化 - 按 KPI 类型决定单位 */
@@ -19,22 +21,16 @@ export function latestSnapshotValue(accounts: Row[], keyCandidates: string[]): n
 }
 
 export function postsForAccount(posts: Row[], account: Row): Row[] {
-  const id = accountId(account);
-  const handle = accountName(account).toLowerCase();
-  return posts.filter((post) => {
-    const postAccount = rowString(post, ['account_id', 'industry_account_id', 'profile_id']);
-    const postHandle = rowString(post, ['handle', 'account_handle', 'username', 'display_name']).toLowerCase().replace(/^@/, '');
-    return Boolean(findAccountForPost(post, [account])) || postAccount === id || postHandle === handle;
-  });
+  return posts.filter((post) => findAccountForPost(post, [account]) === account);
 }
 
 export function crossPlatformFor(crossPlatform: Row[], account: Row): Row | undefined {
-  const id = accountId(account);
-  const handle = accountName(account).toLowerCase();
+  const id = rowString(account, ['id', 'account_id', 'industry_account_id', 'profile_id', 'platform_user_id']) || explicitAccountId(account);
+  const handle = accountHandle(account);
   return crossPlatform.find((row) => {
-    const rowAccount = rowString(row, ['account_id', 'id', 'profile_id']);
-    const rowHandle = rowString(row, ['handle', 'display_name', 'name']).toLowerCase().replace(/^@/, '');
-    return rowAccount === id || rowHandle === handle;
+    const rowAccount = rowString(row, ['account_id', 'industry_account_id', 'profile_id', 'platform_user_id', 'accountId']);
+    const rowHandle = normalizeLookupValue(rowString(row, ['handle', 'account_handle', 'username', 'platform_username']));
+    return Boolean((rowAccount && id && rowAccount === id) || (rowHandle && handle && rowHandle === handle));
   });
 }
 

@@ -10,7 +10,7 @@ import { compact, platformClass, platformDisplay, platformInitial, prettyDate } 
 interface PostCardProps {
   post: Row;
   accounts: Row[];
-  onViewAnalytics: () => void;
+  onViewAnalytics?: () => void;
   onOpenPost?: (post: Row) => void;
 }
 
@@ -30,6 +30,7 @@ export function PostCard({ post, accounts, onViewAnalytics, onOpenPost }: PostCa
   const likes = rowNumber(post, ['likes', 'like_count']);
   const comments = rowNumber(post, ['comments', 'comment_count']);
   const matchedAccount = findAccountForPost(post, accounts);
+  const canOpenAccount = Boolean(matchedAccount && onViewAnalytics);
   const account = postAccountName(post, accounts);
   const accountAvatar = proxiedImageUrl(accountAvatarUrl(matchedAccount));
   const followers = rowNumber(post, ['followers', 'follower_count'])
@@ -124,10 +125,24 @@ export function PostCard({ post, accounts, onViewAnalytics, onOpenPost }: PostCa
         <div className="da-post-card__metric"><span>Comments</span><strong>{compact(comments)}</strong></div>
       </div>
       <div className="da-post-card__actions">
-        <button className="da-post-card__view-analytics" type="button" onClick={() => onOpenPost?.(post)}>
+        <button
+          className="da-post-card__view-analytics"
+          type="button"
+          disabled={!onOpenPost}
+          title={onOpenPost ? '打开单帖详情与分析' : '单帖详情暂不可用'}
+          onClick={() => onOpenPost?.(post)}
+        >
           单帖详情
         </button>
-        <button className="da-post-card__view-analytics" type="button" onClick={onViewAnalytics}>
+        <button
+          className="da-post-card__view-analytics"
+          type="button"
+          disabled={!canOpenAccount}
+          title={canOpenAccount ? '打开该帖所属账号分析' : '该帖子未匹配到账号，不能跳转账号分析'}
+          onClick={() => {
+            if (canOpenAccount) onViewAnalytics?.();
+          }}
+        >
           账号分析
         </button>
       </div>

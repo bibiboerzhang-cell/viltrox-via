@@ -1,4 +1,5 @@
 import type { Row } from './types';
+import { normalizePlatform } from './platformHelpers';
 
 /** 从 row 中按多 key 优先级取字符串 */
 export function rowString(row: Row | null | undefined, keys: string[], fallback = ''): string {
@@ -54,22 +55,61 @@ export function accountName(row: Row | null | undefined): string {
   return rowString(row, ['display_name', 'name', 'handle', 'username', 'profile_name'], '-').replace(/^@/, '');
 }
 
-function normalizedHandle(row: Row | null | undefined): string {
-  return rowString(row, ['handle', 'account_handle', 'username', 'display_name', 'name', 'profile_name'])
+export function normalizeLookupValue(value: unknown): string {
+  return String(value || '')
     .toLowerCase()
     .replace(/^@/, '')
     .trim();
 }
 
+export function explicitAccountId(row: Row | null | undefined): string {
+  return rowString(row, [
+    'account_id',
+    'industry_account_id',
+    'profile_id',
+    'accountId',
+    'industryAccountId',
+    'platform_user_id',
+  ]);
+}
+
+export function accountHandle(row: Row | null | undefined): string {
+  return normalizeLookupValue(rowString(row, [
+    'handle',
+    'account_handle',
+    'username',
+    'platform_username',
+    'screen_name',
+  ]));
+}
+
+function postHandle(row: Row | null | undefined): string {
+  return normalizeLookupValue(rowString(row, [
+    'handle',
+    'account_handle',
+    'username',
+    'ownerUsername',
+    'owner_username',
+    'authorUsername',
+    'author_username',
+    'profile_username',
+    'profile_handle',
+  ]));
+}
+
 export function findAccountForPost(post: Row, accounts: Row[]): Row | undefined {
-  const postAccount = rowString(post, ['account_id', 'industry_account_id', 'profile_id', 'accountId']);
-  const postHandle = normalizedHandle(post);
+  const postAccount = explicitAccountId(post);
+  const postHandleValue = postHandle(post);
+  const postPlatform = normalizePlatform(rowString(post, ['platform']));
   return accounts.find((account) => {
-    const id = accountId(account);
-    const rawId = rowString(account, ['id', 'account_id', 'profile_id']);
-    const handle = normalizedHandle(account);
-    return (postAccount && (postAccount === id || postAccount === rawId))
-      || (postHandle && handle && postHandle === handle);
+    const accountRawId = rowString(account, ['id', 'account_id', 'industry_account_id', 'profile_id', 'platform_user_id']);
+    const accountExplicitId = explicitAccountId(account);
+    const accountHandleValue = accountHandle(account);
+    const accountPlatform = normalizePlatform(rowString(account, ['platform']));
+    const platformMatches = !postPlatform || postPlatform === 'other' || !accountPlatform || accountPlatform === 'other' || postPlatform === accountPlatform;
+    const idMatches = Boolean(postAccount && (postAccount === accountRawId || postAccount === accountExplicitId));
+    const handleMatches = Boolean(platformMatches && postHandleValue && accountHandleValue && postHandleValue === accountHandleValue);
+    return idMatches || handleMatches;
   });
 }
 

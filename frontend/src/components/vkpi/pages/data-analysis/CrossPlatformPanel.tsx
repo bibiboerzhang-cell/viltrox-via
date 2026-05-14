@@ -454,8 +454,8 @@ export function CrossPlatformPanel({
             onOpenPost={openPost}
             onRefreshAccount={refreshAccount}
             onOpenFilter={() => setFilterOpen(true)}
+            onOpenPostsTab={() => setActiveSecondaryTab('Posts')}
             onSetSelectedAccount={selectAccountForAnalysis}
-            selectedAccount={selectedAccount}
             selectedCharts={selectedCharts}
           />
         );

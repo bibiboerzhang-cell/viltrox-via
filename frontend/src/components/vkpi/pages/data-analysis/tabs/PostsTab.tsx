@@ -115,7 +115,7 @@ export function PostsTab({ accounts, posts, onSetSelectedAccount, onOpenPost }: 
                 post={post}
                 accounts={accounts}
                 onOpenPost={onOpenPost}
-                onViewAnalytics={() => onSetSelectedAccount(matchedAccount || accounts[0] || null)}
+                onViewAnalytics={matchedAccount ? () => onSetSelectedAccount(matchedAccount) : undefined}
               />
             );
           })}

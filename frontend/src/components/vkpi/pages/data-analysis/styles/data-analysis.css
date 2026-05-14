@@ -900,6 +900,18 @@
   color: var(--da-primary);
 }
 
+.da-post-card__view-analytics:disabled {
+  color: var(--da-text-muted);
+  background: var(--da-bg-soft);
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.da-post-card__view-analytics:disabled:hover {
+  color: var(--da-text-muted);
+  background: var(--da-bg-soft);
+}
+
 .da-post-card__actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1453,6 +1465,14 @@
 
 .da-text-button:hover {
   background: var(--da-primary-50);
+}
+
+.da-inline-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 /* ===== Filter Drawer + Account Drawer ===== */
