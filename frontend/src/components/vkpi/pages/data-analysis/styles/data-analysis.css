@@ -1832,6 +1832,78 @@
   font-weight: 800;
 }
 
+.da-post-detail__busy {
+  margin-bottom: 12px !important;
+  padding: 10px 12px;
+  border: 1px solid rgba(37, 99, 235, 0.2);
+  border-radius: 12px;
+  background: rgba(37, 99, 235, 0.08);
+  color: var(--da-primary) !important;
+  font-weight: 800;
+}
+
+.da-post-analysis {
+  display: grid;
+  gap: 12px;
+}
+
+.da-post-analysis__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.da-post-analysis__meta span {
+  padding: 6px 9px;
+  border-radius: 999px;
+  background: #eef4ff;
+  color: var(--da-primary);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.da-post-analysis__card {
+  padding: 12px;
+  border: 1px solid var(--da-border-soft);
+  border-radius: 14px;
+  background: #fff;
+}
+
+.da-post-analysis__card span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--da-text-muted);
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.da-post-analysis__raw {
+  border: 1px dashed var(--da-border);
+  border-radius: 14px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.da-post-analysis__raw summary {
+  padding: 10px 12px;
+  color: var(--da-text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.da-post-analysis__raw pre {
+  margin: 0;
+  padding: 0 12px 12px;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  color: var(--da-text-secondary);
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
 .da-filter-group {
   margin-bottom: 20px;
   padding-bottom: 20px;

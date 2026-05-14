@@ -31,16 +31,54 @@ function postEngagement(post: Row): number {
     + (rowNumber(post, ['saves', 'save_count']) || 0);
 }
 
-function analysisText(analysis?: Row | null): string {
+interface AnalysisView {
+  status: string;
+  qualityScore: number | null;
+  method: string;
+  providers: string[];
+  title: string;
+  summary: string;
+  error: string;
+  raw: string;
+}
+
+function stringifyAnalysis(analysis?: Row | null): string {
   if (!analysis) return '';
+  return JSON.stringify(analysis, null, 2).slice(0, 1800);
+}
+
+function analysisProviders(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 5);
+  }
+  if (typeof value === 'string') {
+    return value.split(/[,+]/).map((item) => item.trim()).filter(Boolean).slice(0, 5);
+  }
+  return [];
+}
+
+function analysisView(analysis?: Row | null): AnalysisView | null {
+  if (!analysis) return null;
   const scrape = (analysis.scrape || {}) as Row;
-  const fields = [
-    rowString(analysis, ['summary', 'recommendation', 'reasoning']),
-    rowString(scrape, ['title', 'description']),
-    rowString(analysis, ['status']) ? `status: ${rowString(analysis, ['status'])}` : '',
-    rowNumber(analysis, ['quality_score']) !== null ? `quality_score: ${rowNumber(analysis, ['quality_score'])}` : '',
-  ].filter(Boolean);
-  return fields.length ? fields.join('\n') : JSON.stringify(analysis, null, 2).slice(0, 1200);
+  const summary = rowString(analysis, [
+    'summary',
+    'analysis_summary',
+    'recommendation',
+    'reasoning',
+    'insight',
+    'result',
+    'message',
+  ]);
+  return {
+    status: rowString(analysis, ['status', 'state']) || 'done',
+    qualityScore: rowNumber(analysis, ['quality_score', 'score']),
+    method: rowString(analysis, ['method', 'source', 'model']) || '',
+    providers: analysisProviders(analysis.providers),
+    title: rowString(scrape, ['title', 'description']) || rowString(analysis, ['title']),
+    summary: summary || rowString(scrape, ['description']),
+    error: rowString(analysis, ['error', 'detail']),
+    raw: stringifyAnalysis(analysis),
+  };
 }
 
 export function PostDetailDrawer({
@@ -75,7 +113,7 @@ export function PostDetailDrawer({
   const shares = rowNumber(post, ['shares', 'share_count']);
   const saves = rowNumber(post, ['saves', 'save_count']);
   const publishedAt = rowString(post, ['published_at', 'posted_at', 'created_at']);
-  const analysisSummary = analysisText(analysis);
+  const structuredAnalysis = analysisView(analysis);
 
   return (
     <aside className="da-post-detail da-post-detail--open" aria-label="单帖详情">
@@ -152,8 +190,39 @@ export function PostDetailDrawer({
         <section className="da-post-detail__section">
           <h4>单帖分析结果</h4>
           {analysisError ? <p className="da-post-detail__error">{analysisError}</p> : null}
-          {analysisSummary ? (
-            <pre>{analysisSummary}</pre>
+          {analysisBusy ? (
+            <p className="da-post-detail__busy">
+              真实 URL 分析处理中。视频或 Instagram 链路可能需要 30-90 秒；超过接口上限会显示失败原因。
+            </p>
+          ) : null}
+          {structuredAnalysis ? (
+            <div className="da-post-analysis">
+              <div className="da-post-analysis__meta">
+                <span>Status: {structuredAnalysis.status}</span>
+                {structuredAnalysis.qualityScore !== null ? <span>Score: {structuredAnalysis.qualityScore}</span> : null}
+                {structuredAnalysis.method ? <span>Method: {structuredAnalysis.method}</span> : null}
+                {structuredAnalysis.providers.length ? <span>Providers: {structuredAnalysis.providers.join(' + ')}</span> : null}
+              </div>
+              {structuredAnalysis.summary ? (
+                <article className="da-post-analysis__card">
+                  <span>Summary</span>
+                  <p>{structuredAnalysis.summary}</p>
+                </article>
+              ) : null}
+              {structuredAnalysis.title && structuredAnalysis.title !== structuredAnalysis.summary ? (
+                <article className="da-post-analysis__card">
+                  <span>Source Text</span>
+                  <p>{structuredAnalysis.title}</p>
+                </article>
+              ) : null}
+              {structuredAnalysis.error ? <p className="da-post-detail__error">{structuredAnalysis.error}</p> : null}
+              {structuredAnalysis.raw ? (
+                <details className="da-post-analysis__raw">
+                  <summary>查看原始返回</summary>
+                  <pre>{structuredAnalysis.raw}</pre>
+                </details>
+              ) : null}
+            </div>
           ) : (
             <p className="da-muted-copy">点击“运行单帖分析”后，将调用真实 URL 分析链路并展示结果；不会展示假分析。</p>
           )}
