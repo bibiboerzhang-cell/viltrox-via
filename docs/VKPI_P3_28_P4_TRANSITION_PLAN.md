@@ -101,6 +101,10 @@ Acceptance:
 
 Goal: make account/post media usable enough for daily KOL decision work.
 
+Status: P4.4A completed the media action contract. Media accessors now fall
+back to raw platform JSON when normalized fields are missing, and both profile
+and legacy account drawers can open the single-post detail/analyze drawer.
+
 Acceptance:
 
 - avatar/image/video cards show real media when available;

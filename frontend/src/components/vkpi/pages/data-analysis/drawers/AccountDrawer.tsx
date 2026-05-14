@@ -41,6 +41,7 @@ interface AccountDrawerProps {
   onClose: () => void;
   onRefresh: (id: string) => void;
   onToggleCrawl: (id: string, enabled: boolean) => void;
+  onOpenPost?: (post: Row) => void;
 }
 
 const APIFY_CRAWL_PLATFORMS = new Set([
@@ -95,6 +96,7 @@ export function AccountDrawer({
   onClose,
   onRefresh,
   onToggleCrawl,
+  onOpenPost,
 }: AccountDrawerProps) {
   // R60: tab state
   const [activeTab, setActiveTab] = useState<TabKey>('执行摘要');
@@ -223,7 +225,7 @@ export function AccountDrawer({
             <SummaryTab account={account} snapshots={snapshots} posts={posts} />
           )}
           {activeTab === 'Content' && (
-            <ContentTab account={account} posts={posts} />
+            <ContentTab account={account} posts={posts} onOpenPost={onOpenPost} />
           )}
           {activeTab === 'Engagement' && (
             <EngagementTab account={account} snapshots={snapshots} />
@@ -241,7 +243,7 @@ export function AccountDrawer({
             <OrganicValueTab account={account} snapshots={snapshots} />
           )}
           {activeTab === 'Posts' && (
-            <PostsTab account={account} posts={posts} />
+            <PostsTab account={account} posts={posts} onOpenPost={onOpenPost} />
           )}
           {activeTab === 'Compare' && (
             <CompareTab account={account} accounts={accounts} snapshots={snapshots} />
