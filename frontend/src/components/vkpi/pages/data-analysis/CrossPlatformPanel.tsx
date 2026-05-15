@@ -260,9 +260,13 @@ export function CrossPlatformPanel({
   const refreshAccount = async (accountIdValue: string) => {
     if (!apiToken || !accountIdValue) return;
     onBusyChange(true);
+    onMessage('正在刷新该账号,真实抓取可能需要 10-60 秒。');
     try {
       const response = await refreshIndustryAccount(apiToken, accountIdValue);
-      onMessage(String(response.message || `账号刷新状态: ${response.sync_status || 'not_configured'}`));
+      const accountPayload = (response.account || {}) as Row;
+      if (accountPayload.id) setSelectedAccount(accountPayload);
+      const nextStatus = rowString(accountPayload, ['sync_status'], String(response.sync_status || 'not_configured'));
+      onMessage(String(response.message || `账号刷新完成: ${nextStatus}`));
       await loadAccount(accountIdValue);
       await refresh(projectId);
     } catch (error) {
@@ -275,6 +279,15 @@ export function CrossPlatformPanel({
   const toggleAccountCrawl = async (accountIdValue: string, enabled: boolean) => {
     if (!apiToken || !accountIdValue) return;
     onBusyChange(true);
+    const previousAccount = selectedAccount && accountId(selectedAccount) === accountIdValue ? selectedAccount : null;
+    if (previousAccount) {
+      setSelectedAccount({
+        ...previousAccount,
+        crawl_enabled: enabled ? 1 : 0,
+        sync_status: enabled ? 'queued' : 'not_configured',
+      });
+    }
+    onMessage(enabled ? '正在开启账号抓取...' : '正在关闭账号抓取...');
     try {
       const response = await updateIndustryAccount(apiToken, accountIdValue, {
         crawl_enabled: enabled,
@@ -285,6 +298,7 @@ export function CrossPlatformPanel({
       await loadAccount(accountIdValue);
       await refresh(projectId);
     } catch (error) {
+      if (previousAccount) setSelectedAccount(previousAccount);
       onMessage(error instanceof Error ? error.message : '账号抓取开关更新失败');
     } finally {
       onBusyChange(false);
