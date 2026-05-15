@@ -273,6 +273,6 @@ async def cron_run(job_name: str, body: dict | None = None, staff=Depends(requir
     payload = body or {}
     payload["staff"] = staff
     try:
-        return await cron.run_job(job_name, payload)
+        return await cron.run_manual_job(job_name, payload, staff=staff)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

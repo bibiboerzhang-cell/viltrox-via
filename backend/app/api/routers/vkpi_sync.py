@@ -50,18 +50,6 @@ def get_industry_failures(
 # ─── Write endpoints (admin 权限 + 审计) ──────
 
 
-_ALLOWED_JOBS = {
-    "morning_sync",
-    "kpi_rollup",
-    "lineage_snapshot",
-    "channels_sync",
-    "weekly_report",
-    "alerts",
-    "analytics_monitor",
-    "daily_outreach_digest_only",
-}
-
-
 @router.post("/trigger/{job_name}")
 @audit_action(
     action_type="sync_trigger",
@@ -77,26 +65,28 @@ async def trigger_sync(
     """
     手动触发 cron job (admin 权限).
     
-    URL: job_name 路径参数,必须在 _ALLOWED_JOBS 内
-    Body: 任意 cron payload 参数 (period_days / max_videos 等)
+    URL: job_name 路径参数,必须在 cron.manual_job_names() 内.
+    Body: 任意 cron payload 参数,但必须包含 confirm="RUN {job}".
     """
-    if job_name not in _ALLOWED_JOBS:
+    if job_name not in cron.manual_job_names():
         raise HTTPException(
             status_code=400,
-            detail=f"job '{job_name}' not allowed. Allowed: {sorted(_ALLOWED_JOBS)}",
+            detail=f"job '{job_name}' not allowed. Allowed: {cron.manual_job_names()}",
         )
     
     payload = body or {}
     payload["staff"] = staff
     
     try:
-        result = await cron.run_job(job_name, payload)
+        result = await cron.run_manual_job(job_name, payload, staff=staff)
         # 装饰器记录的 audit log,这里加入 result 状态
         return {
             "job": job_name,
             "status": "ok",
             "result_summary": _safe_summary(result),
         }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"job failed: {exc}") from exc
 

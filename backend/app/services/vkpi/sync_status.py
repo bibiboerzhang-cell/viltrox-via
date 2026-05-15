@@ -235,12 +235,25 @@ def _cron_status() -> dict[str, Any]:
                 """
                 SELECT created_at, metadata_json, detail
                 FROM vkpi_business_audit_logs
-                WHERE action_type = ?
+                WHERE action_type = 'cron_run_completed'
+                  AND target_type = 'cron_job'
+                  AND target_id = ?
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
-                (f"cron_run_{job}",),
+                (job,),
             ).fetchone()
+            if not row:
+                row = conn.execute(
+                    """
+                    SELECT created_at, metadata_json, detail
+                    FROM vkpi_business_audit_logs
+                    WHERE action_type = ?
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (f"cron_run_{job}",),
+                ).fetchone()
             
             if row:
                 row_dict = dict(row)
@@ -251,7 +264,7 @@ def _cron_status() -> dict[str, Any]:
                     pass
                 result[job] = {
                     "last_run_at": row_dict.get("created_at"),
-                    "status": metadata.get("action_status") or "unknown",
+                    "status": metadata.get("action_status") or metadata.get("result", {}).get("status") or "unknown",
                     "detail": row_dict.get("detail") or "",
                 }
             else:

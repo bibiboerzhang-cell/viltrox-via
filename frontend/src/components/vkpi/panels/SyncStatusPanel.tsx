@@ -44,7 +44,7 @@ interface SyncStatusPanelProps {
   apiToken: string;
   isAdmin?: boolean;  // 是否显示手动触发按钮 (admin only)
   onLoadOverview: () => Promise<SyncOverview>;
-  onTriggerSync?: (jobName: string) => Promise<void>;
+  onTriggerSync?: (jobName: string, payload: Record<string, unknown>) => Promise<void>;
 }
 
 export function SyncStatusPanel({ apiToken, isAdmin = false, onLoadOverview, onTriggerSync }: SyncStatusPanelProps) {
@@ -77,9 +77,17 @@ export function SyncStatusPanel({ apiToken, isAdmin = false, onLoadOverview, onT
 
   async function handleTrigger(jobName: string) {
     if (!onTriggerSync) return;
+    const confirmText = `RUN ${jobName}`;
+    const confirmed = window.confirm([
+      `确认手动触发 cron job: ${jobName}`,
+      '',
+      '该操作会进入后端 cron 安全闸门并写入业务审计日志。',
+      `后端确认文本: ${confirmText}`,
+    ].join('\n'));
+    if (!confirmed) return;
     setTriggering(jobName);
     try {
-      await onTriggerSync(jobName);
+      await onTriggerSync(jobName, { confirm: confirmText });
       // 等 2 秒让 cron 启动,再刷新
       setTimeout(() => void loadOverview(), 2000);
     } catch (err) {

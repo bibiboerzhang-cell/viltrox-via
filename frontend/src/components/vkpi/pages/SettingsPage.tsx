@@ -692,7 +692,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
           apiToken={apiToken || ''}
           isAdmin={isManager}
           onLoadOverview={() => getSyncOverview(apiToken || '')}
-          onTriggerSync={async (jobName: string) => { await triggerSync(apiToken || '', jobName); }}
+          onTriggerSync={async (jobName: string, payload: Record<string, unknown>) => { await triggerSync(apiToken || '', jobName, payload); }}
         />
         <SystemSummaryCards
           controlSummary={controlSummary}
