@@ -6,9 +6,13 @@ import secrets
 from datetime import datetime
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
+from app.services.vkpi import audit
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
+
+logger = get_logger(__name__)
 
 
 def _utcnow() -> str:
@@ -17,6 +21,30 @@ def _utcnow() -> str:
 
 def _json(value: Any) -> str:
     return json.dumps(value or {}, ensure_ascii=False, default=str)
+
+
+def _log_business_audit(
+    *,
+    actor_staff_id: int,
+    action_type: str,
+    target_type: str,
+    target_id: str | int,
+    detail: str = "",
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    if not actor_staff_id:
+        return
+    try:
+        audit.log_business_event(
+            staff_id=int(actor_staff_id),
+            action_type=action_type,
+            target_type=target_type,
+            target_id=target_id,
+            detail=detail,
+            metadata=metadata or {},
+        )
+    except Exception:
+        logger.warning("V-KPI business audit write failed", exc_info=True)
 
 
 def list_experiments(limit: int = 100) -> dict[str, Any]:
@@ -87,14 +115,33 @@ def activate_model(model_version: str, *, staff: dict[str, Any] | None = None) -
         raise ValueError("model_version required")
     conn = get_conn()
     now = _utcnow()
+    actor_staff_id = resolve_staff_id(staff) or 0
+    previous_active = [
+        dict(row)
+        for row in conn.execute(
+            "SELECT id, model_version, model_type, activated_at, metadata_json FROM vkpi_model_registry WHERE status='active' ORDER BY id"
+        ).fetchall()
+    ]
     conn.execute("UPDATE vkpi_model_registry SET status='registered' WHERE status='active'")
     conn.execute(
         """
         INSERT INTO vkpi_model_registry (model_version, model_type, status, activated_at, metadata_json, created_at)
         VALUES (?,?,?,?,?,?)
-        ON CONFLICT(model_version) DO UPDATE SET status='active', activated_at=excluded.activated_at
+        ON CONFLICT(model_version) DO UPDATE SET status='active', activated_at=excluded.activated_at, metadata_json=excluded.metadata_json
         """,
-        (version, "rule" if version.startswith("rule") else "ml", "active", now, _json({"activated_by": resolve_staff_id(staff) or None}), now),
+        (version, "rule" if version.startswith("rule") else "ml", "active", now, _json({"activated_by": actor_staff_id or None}), now),
     )
     conn.commit()
+    _log_business_audit(
+        actor_staff_id=actor_staff_id,
+        action_type="automation_model_activate",
+        target_type="model_registry",
+        target_id=version,
+        detail=f"Activated scoring model {version}",
+        metadata={
+            "previous_active_models": previous_active,
+            "new_model_version": version,
+            "activated_at": now,
+        },
+    )
     return models()
