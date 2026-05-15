@@ -1,12 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import type { VkpiDashboardData, VkpiKolLookupResult } from '../vkpiTypes';
+import type { VkpiDashboardData, VkpiKolLookupResult, VkpiKolOption } from '../vkpiTypes';
 import { KolDetailPanel } from '../panels/KolDetailPanel';
 import { KolPoolPanel } from '../panels/KolPoolPanel';
 import { Avatar } from '../shared/Avatar';
 import { CardHeader } from '../shared/CardHeader';
 import { InfoBlock } from '../shared/InfoBlock';
 import { creatorPlatformOptions } from '../shared/vkpiConstants';
-import { lookupResultToKolDetail, safeNumber, textValue } from '../shared/vkpiDataUtils';
+import { lookupResultToKolDetail, objectValue, safeNumber, textValue } from '../shared/vkpiDataUtils';
 import { PageShell } from './PageShell';
 import { batchEnrichKolPool, enrichKolPoolItem, getKolPoolItem, listKolPool, promoteKolPoolToMain } from '../../../services/vkpi.ui-api';
 
@@ -24,6 +24,46 @@ function platformInputValue(platformLabel: string): string {
   return creatorPlatformOptions.find((option) => option.value === normalized || option.label.toLowerCase() === normalized)?.value || normalized || 'other';
 }
 
+function searchNeedle(value: string): string {
+  const raw = value.trim().toLowerCase();
+  if (!raw) return '';
+  try {
+    const parsed = new URL(raw.startsWith('http') ? raw : `https://placeholder/${raw}`);
+    const parts = parsed.pathname.split('/').filter(Boolean);
+    return (parts[parts.length - 1] || parsed.hostname || raw).replace(/^@/, '');
+  } catch {
+    const parts = raw.split('/').filter(Boolean);
+    return (parts[parts.length - 1] || raw).replace(/^@/, '');
+  }
+}
+
+function existingKolToLookupResult(kol: VkpiKolOption): VkpiKolLookupResult {
+  return {
+    query: { platform: platformInputValue(kol.platform), handle: kol.handle.replace(/^@/, '') },
+    kol: {
+      id: kol.id,
+      media_name: kol.name,
+      channel_name: kol.handle.replace(/^@/, ''),
+      platform: platformInputValue(kol.platform),
+      avatar_url: kol.avatar || '',
+      contact_email: kol.contactEmail || '',
+      follower_count: kol.followerLabel,
+      content_count: kol.contentCountLabel,
+    },
+    created: false,
+    claim: kol.claimOwner ? { staff_name: kol.claimOwner } : {},
+    can_claim: !kol.claimOwner,
+    dossier: {
+      snapshot: {
+        scan_status: kol.scanStatus || 'known_profile',
+      },
+      posts: [],
+      comments: [],
+      report: {},
+    },
+  };
+}
+
 export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, onUpdateKol, apiToken }: DiscoverPageProps) {
   const [activeDiscoverTab, setActiveDiscoverTab] = useState<'lookup' | 'pool'>('lookup');
   const [platform, setPlatform] = useState('youtube');
@@ -35,6 +75,7 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
   const [busy, setBusy] = useState(false);
   const [scanBusy, setScanBusy] = useState(false);
   const [message, setMessage] = useState('');
+  const [messageTone, setMessageTone] = useState<'info' | 'warn' | 'error'>('info');
   const [manualAvatarUrl, setManualAvatarUrl] = useState('');
   const [manualProfileUrl, setManualProfileUrl] = useState('');
   const [manualEmail, setManualEmail] = useState('');
@@ -50,12 +91,12 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
   const posts = result?.dossier?.posts || [];
   const existingKols = useMemo(() => {
     const platformFilter = platformInputValue(platform);
-    const query = handleOrUrl.trim().toLowerCase();
+    const query = searchNeedle(handleOrUrl);
     return data.kolOptions
       .filter((kol) => {
         const platformMatch = !platformFilter || platformInputValue(kol.platform) === platformFilter;
         if (!query) return platformMatch;
-        return platformMatch && [kol.name, kol.handle, kol.contactEmail].join(' ').toLowerCase().includes(query.replace(/^@/, ''));
+        return platformMatch && [kol.name, kol.handle, kol.contactEmail].join(' ').toLowerCase().includes(query);
       })
       .slice(0, 10);
   }, [data.kolOptions, handleOrUrl, platform]);
@@ -71,36 +112,57 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
     setManualNotes(detailKol.followUpNote || '');
   }, [detailKol.avatar, detailKol.contactEmail, detailKol.contactLinks, detailKol.contactPhone, detailKol.followUpNote, detailKol.profileUrl, email, kolId]);
 
+  const setNotice = (text: string, tone: 'info' | 'warn' | 'error' = 'info') => {
+    setMessage(text);
+    setMessageTone(tone);
+  };
+
   const handleLookup = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!onLookupKol || !handleOrUrl.trim()) return;
     setBusy(true);
-    setMessage('');
+    setNotice('');
     try {
       const basePayload = { platform, handleOrUrl: handleOrUrl.trim(), createIfMissing, email: email.trim() || undefined };
       const next = await onLookupKol({ ...basePayload, scanAccount: false, maxPosts: 24 });
       setLookupResult(next || null);
       const nextKolId = next?.kol?.id ? String(next.kol.id) : '';
+      if (!nextKolId) {
+        setNotice(
+          scanAccount && !createIfMissing
+            ? '未找到已建档红人；当前未勾选“新红人自动建档”，系统不会创建档案或抓取平台数据。勾选后可继续抓取。'
+            : '未找到可展示的红人档案；如果平台返回为空或权限不足，系统不会生成假数据。',
+          'warn',
+        );
+        return;
+      }
       if (scanAccount && nextKolId && onScanKolAccount) {
         setBusy(false);
         setScanBusy(true);
-        setMessage('查重完成，正在抓取账号数据和生成评估报告。Apify / AI 通常需要 30-90 秒。');
+        setNotice('查重完成，正在抓取账号数据和生成评估报告。Apify / AI 通常需要 30-90 秒。');
         try {
-          await onScanKolAccount(nextKolId, 24);
+          const scanResponse = await onScanKolAccount(nextKolId, 24);
           const refreshed = await onLookupKol({ ...basePayload, createIfMissing: false, scanAccount: false, maxPosts: 24 });
           setLookupResult(refreshed || next || null);
-          const scanStatus = String(refreshed?.dossier?.snapshot?.scan_status || refreshed?.scan_result?.status || 'done');
-          setMessage(`账号数据抓取完成。状态：${scanStatus}。`);
+          const scanPayload = objectValue(scanResponse.scan || scanResponse);
+          const scanStatus = String(refreshed?.dossier?.snapshot?.scan_status || scanPayload.status || refreshed?.scan_result?.status || 'done');
+          const contentCount = safeNumber(scanPayload.content_count || refreshed?.dossier?.snapshot?.content_count);
+          setNotice(
+            contentCount
+              ? `账号数据抓取完成。状态：${scanStatus}，已抓取 ${contentCount} 条内容。`
+              : `账号抓取已返回。状态：${scanStatus}；平台未返回内容时不会展示假头像或假帖子。`,
+            contentCount ? 'info' : 'warn',
+          );
         } catch (scanError) {
-          setMessage(`查重已完成，但账号抓取失败或超时：${scanError instanceof Error ? scanError.message : '未知错误'}`);
+          setNotice(`查重已完成，但账号抓取失败或超时：${scanError instanceof Error ? scanError.message : '未知错误'}`, 'error');
         } finally {
           setScanBusy(false);
         }
         return;
       }
-      setMessage(scanAccount && !onScanKolAccount ? '红人查重完成；当前前端未接入账号抓取接口。' : '红人查重完成。');
+      setNotice(scanAccount && !onScanKolAccount ? '红人查重完成；当前前端未接入账号抓取接口。' : '红人查重完成。');
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '红人搜索失败');
+      setNotice(error instanceof Error ? error.message : '红人搜索失败', 'error');
     } finally {
       setBusy(false);
     }
@@ -109,12 +171,12 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
   const handleClaim = async () => {
     if (!kolId || !onClaimKol) return;
     setBusy(true);
-    setMessage('');
+    setNotice('');
     try {
       await onClaimKol(kolId);
-      setMessage('红人已绑定到当前员工账号。');
+      setNotice('红人已绑定到当前员工账号。');
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '认领失败');
+      setNotice(error instanceof Error ? error.message : '认领失败', 'error');
     } finally {
       setBusy(false);
     }
@@ -123,7 +185,7 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
   const handleManualSave = async () => {
     if (!kolId || !onUpdateKol) return;
     setBusy(true);
-    setMessage('');
+    setNotice('');
     try {
       await onUpdateKol(kolId, {
         avatarUrl: manualAvatarUrl.trim() || undefined,
@@ -133,22 +195,45 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
         notes: manualNotes.trim() || undefined,
         contactLinks: manualLink.trim() ? [{ label: '补录链接', value: manualLink.trim(), url: manualLink.trim() }] : undefined,
       });
-      setMessage('红人资料已补录。');
+      setNotice('红人资料已补录。');
       if (onLookupKol && handleOrUrl.trim()) {
         const refreshed = await onLookupKol({ platform, handleOrUrl: handleOrUrl.trim(), createIfMissing: false, scanAccount: false, maxPosts: 24 });
         setLookupResult(refreshed || lookupResult);
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '红人资料保存失败');
+      setNotice(error instanceof Error ? error.message : '红人资料保存失败', 'error');
     } finally {
       setBusy(false);
     }
   };
 
-  const chooseExistingKol = (kol: { handle: string; platform: string }) => {
+  const chooseExistingKol = async (kol: VkpiKolOption) => {
     setPlatform(platformInputValue(kol.platform));
-    setHandleOrUrl(kol.handle && kol.handle !== '-' ? kol.handle : '');
+    const nextHandle = kol.handle && kol.handle !== '-' ? kol.handle : '';
+    setHandleOrUrl(nextHandle);
     setCreateIfMissing(false);
+    setLookupResult(existingKolToLookupResult(kol));
+    if (!onLookupKol || !nextHandle) {
+      setNotice('已选中已有红人；当前没有可用的详情刷新接口。', 'warn');
+      return;
+    }
+    setBusy(true);
+    setNotice('正在加载已有红人档案和最近抓取数据。');
+    try {
+      const next = await onLookupKol({
+        platform: platformInputValue(kol.platform),
+        handleOrUrl: nextHandle,
+        createIfMissing: false,
+        scanAccount: false,
+        maxPosts: 24,
+      });
+      setLookupResult(next || existingKolToLookupResult(kol));
+      setNotice('已加载已有红人档案。');
+    } catch (error) {
+      setNotice(error instanceof Error ? `已有红人档案加载失败：${error.message}` : '已有红人档案加载失败', 'error');
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -206,7 +291,7 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
             {scanAccount ? '查重并抓取' : '搜索并查重'}
           </button>
         </form>
-        {message ? <div className="vkpi-inline-message">{message}</div> : null}
+        {message ? <div className={`vkpi-inline-message ${messageTone === 'error' ? 'is-error' : messageTone === 'warn' ? 'is-warn' : ''}`}>{message}</div> : null}
         {scanBusy ? <div className="vkpi-inline-message">正在后台抓取粉丝、内容、互动、联系方式和账号评估；查重结果已经先返回，不是卡死。</div> : null}
       </section>
 
@@ -215,7 +300,7 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
         {existingKols.length ? (
           <div className="vkpi-existing-kol-list">
             {existingKols.map((kol) => (
-              <button className="vkpi-existing-kol-row" type="button" key={kol.id} onClick={() => chooseExistingKol(kol)}>
+              <button className="vkpi-existing-kol-row" type="button" key={kol.id} onClick={() => void chooseExistingKol(kol)}>
                 <Avatar name={kol.name || kol.handle || 'KOL'} src={kol.avatar} size="sm" />
                 <strong>{kol.name}</strong>
                 <em>{kol.handle}</em>
