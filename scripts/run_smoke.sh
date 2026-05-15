@@ -30,6 +30,11 @@ export DATABASE_URL="$LOCAL_DATABASE_URL"
 export DB_RUNTIME_BACKEND=postgres
 export PYTHONPATH=backend
 
+# Python urllib on macOS may pick up system proxy settings even when the shell
+# has no HTTP_PROXY env. Keep local smoke HTTP calls on loopback.
+export NO_PROXY="${NO_PROXY:-127.0.0.1,localhost,::1}"
+export no_proxy="${no_proxy:-127.0.0.1,localhost,::1}"
+
 # 连接池调小,避免批量跑超时
 export POSTGRES_POOL_MIN_SIZE="${POSTGRES_POOL_MIN_SIZE:-1}"
 export POSTGRES_POOL_MAX_SIZE="${POSTGRES_POOL_MAX_SIZE:-4}"

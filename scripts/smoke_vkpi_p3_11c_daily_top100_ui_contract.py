@@ -34,6 +34,9 @@ missing = [term for term in required_panel_terms if term not in panel]
 if missing:
     raise SystemExit(f"missing Daily Top100 UI terms: {missing}")
 
+if "const refreshedStatus = await getDailyOutreachDigestStatus(apiToken, productSku)" not in panel:
+    raise SystemExit("Daily Top100 generate flow must refresh status after mutation")
+
 if "有效员工" in panel:
     raise SystemExit("ambiguous label remains: 有效员工")
 

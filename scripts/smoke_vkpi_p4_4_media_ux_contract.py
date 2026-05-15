@@ -66,8 +66,8 @@ def main() -> None:
         assert_contains(profile_dashboard, needle, profile_dashboard_path)
 
     for needle in [
-        "proxiedVideoUrl(rawVideoUrl)",
-        "redirectedVideoUrl(rawVideoUrl)",
+        "playbackVideoCandidates(postVideoUrls(post))",
+        "videoCandidateIndex < videoCandidates.length - 1",
         "打开原帖",
         "运行单帖分析",
         "analysisError",
@@ -75,8 +75,8 @@ def main() -> None:
         assert_contains(post_detail, needle, post_detail_path)
 
     for needle in [
-        "proxiedVideoUrl(rawVideoUrl)",
-        "redirectedVideoUrl(rawVideoUrl)",
+        "playbackVideoCandidates(postVideoUrls(post))",
+        "videoCandidateIndex < videoCandidates.length - 1",
         "onOpenPost?.(post)",
         "视频链接失效，打开原帖",
     ]:
