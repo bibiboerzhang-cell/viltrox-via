@@ -1,0 +1,10 @@
+area,item,status,evidence,risk,next_action
+frontend,media field extraction,PASS,7/7 markers present,raw payload media may not surface if extractor regresses,Keep this as a contract smoke gate for crawler field changes.
+frontend,post card real actions,PASS,6/6 markers present,cards may become visual-only or lose original-post fallback,"P4.4B should add browser spot checks for card actions, not more static checks."
+frontend,single post drawer,PASS,6/6 markers present,single-post analysis can look stuck or fake if busy/result states regress,P4.4B should live-click one low-risk post and record provider output.
+backend,authenticated media proxy,PASS,7/7 markers present,open proxy or broken Range playback would affect media trust,Keep host allowlist and auth checks; P4.4B should only test one known video URL.
+data,account avatar coverage,PASS,2/3 accounts have avatar_url,blank avatars make selection hard even when data exists,P4.4B should prioritize missing-avatar accounts only if they are active/synced.
+data,original post link coverage,PASS,10/10 posts have post_url,users cannot verify or open platform source for posts missing URLs,Backfill post_url during crawler normalization before adding more UI.
+data,thumbnail coverage,PASS,10/10 posts have thumbnail_url,tables and cards become hard to choose from without visual preview,"P4.4B should render thumbnail fallback reason, not initials only."
+data,video coverage,PASS,4/10 posts have video_url,in-app playback cannot be expected for non-video or missing-video rows,Treat video playback as best-effort; original post remains required fallback.
+data,metric coverage,PASS,10/10 posts have non-zero metrics,analytics looks empty if crawlers store posts without metrics,P4.4B should compare displayed top cards against these stored counts.
