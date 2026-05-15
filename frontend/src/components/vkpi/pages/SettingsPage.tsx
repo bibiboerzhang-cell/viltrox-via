@@ -264,6 +264,25 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
     if (['not_configured', 'failed', 'error'].includes(status)) return `API 状态为 ${status}，需要先配置并测试通过。`;
     return '平台侧已具备抓取条件；单个账号仍需在数据分析页开启监控。';
   };
+  const boolLabel = (value: boolean) => (value ? '开启' : '关闭');
+  const moneyLabel = (value: unknown) => `$${numberValue(value).toLocaleString('en-US')}`;
+  const settingChangeLine = (label: string, before: string | number, after: string | number) => (
+    `${label}: ${before} -> ${after}`
+  );
+  const confirmHighRiskSettingChange = (title: string, lines: string[]) => {
+    if (typeof window === 'undefined') return true;
+    return window.confirm([
+      title,
+      '',
+      ...lines,
+      '',
+      '该操作会写入系统设置并影响抓取、预算或外部 API 调用。确认继续？',
+    ].join('\n'));
+  };
+  const summarizeSettingChange = (prefix: string, lines: string[]) => {
+    const changed = lines.filter((line) => line.includes('->')).slice(0, 4);
+    return `${prefix}: ${changed.join('；') || '已写入'}`;
+  };
   const controlSummary = (controlStatus.summary || {}) as Record<string, unknown>;
   const syncPolicy = (controlStatus.sync_policy || {}) as Record<string, unknown>;
   const youtubeKpi = (controlStatus.youtube_kpi || {}) as Record<string, unknown>;
@@ -287,19 +306,31 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
 
   const togglePlatformCrawl = async (row: Record<string, unknown>) => {
     if (!apiToken) return;
+    setSettingsError('');
+    const nextEnabled = !rowEnabled(row, 'crawl_enabled');
+    const payload = {
+      platform: row.platform,
+      crawl_enabled: nextEnabled,
+      daily_account_limit: row.daily_account_limit,
+      posts_per_account: row.posts_per_account,
+      crawl_evening: row.crawl_evening,
+      crawl_followers: row.crawl_followers,
+      monthly_budget_usd: row.monthly_budget_usd,
+    };
+    const lines = [
+      `平台: ${String(row.platform || '-')}`,
+      settingChangeLine('抓取开关', boolLabel(rowEnabled(row, 'crawl_enabled')), boolLabel(nextEnabled)),
+      `当前闸门: ${platformBlockedReason({ ...row, crawl_enabled: nextEnabled })}`,
+      `每日账号: ${numberValue(row.daily_account_limit)}`,
+      `每账号内容: ${numberValue(row.posts_per_account)}`,
+      `月预算 USD: ${moneyLabel(row.monthly_budget_usd)}`,
+    ];
+    if (!confirmHighRiskSettingChange('确认更新平台抓取开关', lines)) return;
     setBusy(true);
     try {
-      await updatePlatformCrawlSettings(apiToken, [{
-        platform: row.platform,
-        crawl_enabled: !rowEnabled(row, 'crawl_enabled'),
-        daily_account_limit: row.daily_account_limit,
-        posts_per_account: row.posts_per_account,
-        crawl_evening: row.crawl_evening,
-        crawl_followers: row.crawl_followers,
-        monthly_budget_usd: row.monthly_budget_usd,
-      }]);
+      await updatePlatformCrawlSettings(apiToken, [payload]);
       await reloadSystemSettings();
-      setMessage('平台抓取开关已更新。');
+      setMessage(summarizeSettingChange('平台抓取开关已更新', lines));
     } catch (error) {
       setSettingsError(error instanceof Error ? error.message : '平台抓取更新失败');
     } finally {
@@ -311,26 +342,39 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
     event.preventDefault();
     if (!apiToken) return;
     const form = new FormData(event.currentTarget);
+    setSettingsError('');
+    const payload = {
+      platform: row.platform,
+      crawl_enabled: rowEnabled(row, 'crawl_enabled'),
+      daily_account_limit: formNumber(form, 'daily_account_limit', numberValue(row.daily_account_limit)),
+      posts_per_account: formNumber(form, 'posts_per_account', numberValue(row.posts_per_account)),
+      monthly_budget_usd: formNumber(form, 'monthly_budget_usd', numberValue(row.monthly_budget_usd)),
+      crawl_comments: formBool(form, 'crawl_comments', rowEnabled(row, 'crawl_comments')),
+      crawl_followers: formBool(form, 'crawl_followers', rowEnabled(row, 'crawl_followers')),
+      crawl_audience_graph: formBool(form, 'crawl_audience_graph', rowEnabled(row, 'crawl_audience_graph')),
+      only_uncontacted_kols: formBool(form, 'only_uncontacted_kols', rowEnabled(row, 'only_uncontacted_kols')),
+      include_company_accounts: formBool(form, 'include_company_accounts', rowEnabled(row, 'include_company_accounts')),
+      include_competitor_accounts: formBool(form, 'include_competitor_accounts', rowEnabled(row, 'include_competitor_accounts')),
+      include_candidate_kols: formBool(form, 'include_candidate_kols', rowEnabled(row, 'include_candidate_kols')),
+      failure_threshold: formNumber(form, 'failure_threshold', numberValue(row.failure_threshold, 5)),
+      last_test_status: row.last_test_status || 'not_configured',
+    };
+    const lines = [
+      `平台: ${String(row.platform || '-')}`,
+      settingChangeLine('每日账号', numberValue(row.daily_account_limit), payload.daily_account_limit),
+      settingChangeLine('每账号内容', numberValue(row.posts_per_account), payload.posts_per_account),
+      settingChangeLine('月预算 USD', moneyLabel(row.monthly_budget_usd), moneyLabel(payload.monthly_budget_usd)),
+      settingChangeLine('失败阈值', numberValue(row.failure_threshold, 5), payload.failure_threshold),
+      settingChangeLine('评论抓取', boolLabel(rowEnabled(row, 'crawl_comments')), boolLabel(payload.crawl_comments)),
+      settingChangeLine('粉丝抓取', boolLabel(rowEnabled(row, 'crawl_followers')), boolLabel(payload.crawl_followers)),
+      settingChangeLine('只推未联系', boolLabel(rowEnabled(row, 'only_uncontacted_kols')), boolLabel(payload.only_uncontacted_kols)),
+    ];
+    if (!confirmHighRiskSettingChange('确认保存平台抓取限制', lines)) return;
     setBusy(true);
     try {
-      await updatePlatformCrawlSettings(apiToken, [{
-        platform: row.platform,
-        crawl_enabled: rowEnabled(row, 'crawl_enabled'),
-        daily_account_limit: formNumber(form, 'daily_account_limit', numberValue(row.daily_account_limit)),
-        posts_per_account: formNumber(form, 'posts_per_account', numberValue(row.posts_per_account)),
-        monthly_budget_usd: formNumber(form, 'monthly_budget_usd', numberValue(row.monthly_budget_usd)),
-        crawl_comments: formBool(form, 'crawl_comments', rowEnabled(row, 'crawl_comments')),
-        crawl_followers: formBool(form, 'crawl_followers', rowEnabled(row, 'crawl_followers')),
-        crawl_audience_graph: formBool(form, 'crawl_audience_graph', rowEnabled(row, 'crawl_audience_graph')),
-        only_uncontacted_kols: formBool(form, 'only_uncontacted_kols', rowEnabled(row, 'only_uncontacted_kols')),
-        include_company_accounts: formBool(form, 'include_company_accounts', rowEnabled(row, 'include_company_accounts')),
-        include_competitor_accounts: formBool(form, 'include_competitor_accounts', rowEnabled(row, 'include_competitor_accounts')),
-        include_candidate_kols: formBool(form, 'include_candidate_kols', rowEnabled(row, 'include_candidate_kols')),
-        failure_threshold: formNumber(form, 'failure_threshold', numberValue(row.failure_threshold, 5)),
-        last_test_status: row.last_test_status || 'not_configured',
-      }]);
+      await updatePlatformCrawlSettings(apiToken, [payload]);
       await reloadSystemSettings();
-      setMessage('平台抓取限制已保存。');
+      setMessage(summarizeSettingChange('平台抓取限制已保存', lines));
     } catch (error) {
       setSettingsError(error instanceof Error ? error.message : '平台抓取限制保存失败');
     } finally {
@@ -342,17 +386,27 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
     event.preventDefault();
     if (!apiToken) return;
     const form = new FormData(event.currentTarget);
+    setSettingsError('');
+    const payload = {
+      budget_key: row.budget_key,
+      enabled: form.get('enabled') === 'on',
+      monthly_limit_usd: formNumber(form, 'monthly_limit_usd', numberValue(row.monthly_limit_usd)),
+      current_month_spent: numberValue(row.current_month_spent),
+      alert_threshold_pct: formNumber(form, 'alert_threshold_pct', numberValue(row.alert_threshold_pct, 80)),
+    };
+    const lines = [
+      `预算项: ${String(row.budget_key || '-')}`,
+      settingChangeLine('启用状态', boolLabel(rowEnabled(row)), boolLabel(payload.enabled)),
+      settingChangeLine('月度上限 USD', moneyLabel(row.monthly_limit_usd), moneyLabel(payload.monthly_limit_usd)),
+      `当前月已花费: ${moneyLabel(row.current_month_spent)}`,
+      settingChangeLine('告警阈值', `${numberValue(row.alert_threshold_pct, 80)}%`, `${payload.alert_threshold_pct}%`),
+    ];
+    if (!confirmHighRiskSettingChange('确认保存预算控制', lines)) return;
     setBusy(true);
     try {
-      await updateBudgetSettings(apiToken, [{
-        budget_key: row.budget_key,
-        enabled: form.get('enabled') === 'on',
-        monthly_limit_usd: formNumber(form, 'monthly_limit_usd', numberValue(row.monthly_limit_usd)),
-        current_month_spent: numberValue(row.current_month_spent),
-        alert_threshold_pct: formNumber(form, 'alert_threshold_pct', numberValue(row.alert_threshold_pct, 80)),
-      }]);
+      await updateBudgetSettings(apiToken, [payload]);
       await reloadSystemSettings();
-      setMessage('预算控制已保存。');
+      setMessage(summarizeSettingChange('预算控制已保存', lines));
     } catch (error) {
       setSettingsError(error instanceof Error ? error.message : '预算控制保存失败');
     } finally {
