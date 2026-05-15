@@ -166,7 +166,23 @@ def upsert_product_cost(body: dict[str, Any], *, staff: dict[str, Any] | None = 
     )
     conn.commit()
     row = conn.execute("SELECT * FROM vkpi_product_cost_catalog WHERE product_sku=?", (sku,)).fetchone()
-    return {"product_cost": dict(row) if row else {}}
+    product_cost = dict(row) if row else {}
+    audit.log_business_event(
+        staff_id=actor_staff_id,
+        action_type="product_cost_upsert",
+        target_type="product_cost",
+        target_id=sku,
+        detail=f"{sku}:{unit_cost_cents}",
+        metadata={
+            "product_cost_id": product_cost.get("id"),
+            "product_sku": sku,
+            "unit_cost_cents": unit_cost_cents,
+            "currency": product_cost.get("currency") or str(body.get("currency") or "USD"),
+            "active": bool(active),
+            "note": product_cost.get("note") or str(body.get("note") or ""),
+        },
+    )
+    return {"product_cost": product_cost}
 
 
 def list_product_costs(limit: int = 200, include_inactive: bool = False) -> dict[str, Any]:
@@ -260,7 +276,29 @@ def record_shipped_product_cost(project_id: int, *, staff: dict[str, Any] | None
     )
     conn.commit()
     row = conn.execute("SELECT * FROM vkpi_cost_ledger WHERE source_ref=? ORDER BY id DESC LIMIT 1", (source_ref,)).fetchone()
-    return {"status": "recorded", "cost": dict(row) if row else {}, "product_cost": product_cost}
+    cost = dict(row) if row else {}
+    audit.log_business_event(
+        staff_id=actor_staff_id,
+        action_type="cost_add",
+        target_type="cost",
+        target_id=cost.get("id", ""),
+        detail=f"auto_product_cost:{sku}:{_int(product_cost.get('unit_cost_cents'))}",
+        metadata={
+            "project_id": int(project_id),
+            "project_uid": project.get("project_uid"),
+            "kol_id": project["kol_id"],
+            "staff_id": project["assigned_staff_id"],
+            "cost_id": cost.get("id"),
+            "cost_type": "product",
+            "amount_cents": _int(product_cost.get("unit_cost_cents")),
+            "source_ref": source_ref,
+            "product_sku": sku,
+            "product_cost_id": product_cost.get("id"),
+            "auto": True,
+            "trigger": "shipped",
+        },
+    )
+    return {"status": "recorded", "cost": cost, "product_cost": product_cost}
 
 
 def add_cost(body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:

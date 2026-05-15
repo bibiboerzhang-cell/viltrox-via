@@ -91,9 +91,13 @@ def industry_import_apify_history(project_id: int, body: dict, staff=Depends(req
 
 
 @router.get("/industry-data/accounts/{account_id}")
-def industry_get_account(account_id: int, staff=Depends(require_tab("vkpi", "read"))):
+def industry_get_account(
+    account_id: int,
+    limit: int = Query(default=500, ge=1, le=500),
+    staff=Depends(require_tab("vkpi", "read")),
+):
     try:
-        return industry_data.get_account(account_id)
+        return industry_data.get_account(account_id, post_limit=limit)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

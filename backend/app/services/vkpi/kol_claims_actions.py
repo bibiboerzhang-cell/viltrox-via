@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from app.db.connection import get_conn
-from app.services.vkpi import scope
+from app.services.vkpi import audit, scope
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.workflow import staff_id
 from app.services.vkpi.kol_claims_common import (
@@ -22,6 +22,30 @@ from app.services.vkpi.kol_claims_common import (
     normalize_platform,
     utcnow,
 )
+
+
+def _log_kol_audit(
+    *,
+    actor_staff_id: int,
+    action_type: str,
+    kol_id: int,
+    detail: str = "",
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    if not actor_staff_id:
+        return
+    try:
+        audit.log_business_event(
+            staff_id=int(actor_staff_id),
+            action_type=action_type,
+            target_type="kol",
+            target_id=int(kol_id),
+            detail=detail,
+            metadata=metadata or {},
+        )
+    except Exception:
+        # Audit must not break KOL lifecycle actions; failures are surfaced by audit QA.
+        return
 
 
 def _staff_scope_where(staff: dict[str, Any] | None, staff_id: int | None = None) -> tuple[str, list[Any]]:
@@ -64,6 +88,14 @@ def lookup(body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict
         kol = _create_kol(platform, handle, body, actor_staff_id)
         created = True
         conn.commit()
+        if kol:
+            _log_kol_audit(
+                actor_staff_id=actor_staff_id,
+                action_type="kol_lookup_create",
+                kol_id=_int(kol.get("id")),
+                detail=f"{platform}:{handle}",
+                metadata={"platform": platform, "handle": handle, "source": "lookup_create_if_missing"},
+            )
     active_claim = None
     if kol:
         active_claim = conn.execute(
@@ -128,6 +160,18 @@ def claim(kol_id: int, body: dict[str, Any] | None = None, *, staff: dict[str, A
     conn.execute("UPDATE kols SET assigned_staff_id=?, updated_at=? WHERE id=?", (actor_staff_id, now, _int(kol_id)))
     conn.commit()
     row = conn.execute("SELECT * FROM vkpi_kol_claims WHERE kol_id=? AND status='active'", (_int(kol_id),)).fetchone()
+    claim_id = _int(dict(row).get("id")) if row else 0
+    _log_kol_audit(
+        actor_staff_id=actor_staff_id,
+        action_type="kol_claim_create",
+        kol_id=_int(kol_id),
+        detail=f"claim_id={claim_id}",
+        metadata={
+            "claim_id": claim_id,
+            "project_id": _int(payload.get("project_id")) or None,
+            "expires_at": expires_at,
+        },
+    )
     return {"claim": _claim_payload(row)}
 
 def release(claim_id: int, body: dict[str, Any] | None = None, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -155,6 +199,13 @@ def release(claim_id: int, body: dict[str, Any] | None = None, *, staff: dict[st
     )
     conn.execute("UPDATE kols SET assigned_staff_id=NULL, updated_at=? WHERE id=?", (now, _int(row_data["kol_id"])))
     conn.commit()
+    _log_kol_audit(
+        actor_staff_id=actor_staff_id,
+        action_type="kol_claim_release",
+        kol_id=_int(row_data["kol_id"]),
+        detail=reason,
+        metadata={"claim_id": _int(claim_id), "reason": reason},
+    )
     return {"id": _int(claim_id), "status": "released", "release_reason": reason}
 
 def reassign(claim_id: int, body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -166,8 +217,27 @@ def reassign(claim_id: int, body: dict[str, Any], *, staff: dict[str, Any] | Non
     row = conn.execute("SELECT * FROM vkpi_kol_claims WHERE id=?", (_int(claim_id),)).fetchone()
     if not row:
         raise LookupError("claim not found")
+    actor_staff_id = staff_id(staff)
+    previous_staff_id = _int(row["staff_id"])
     release(claim_id, {"reason": str(body.get("reason") or "reassigned")}, staff=staff)
-    return claim(_int(row["kol_id"]), {"staff_id": next_staff_id, "project_id": row["project_id"], "metadata": {"reassigned_from_claim_id": claim_id}}, staff=None)
+    result = claim(
+        _int(row["kol_id"]),
+        {"staff_id": next_staff_id, "project_id": row["project_id"], "metadata": {"reassigned_from_claim_id": claim_id}},
+        staff=None,
+    )
+    _log_kol_audit(
+        actor_staff_id=actor_staff_id,
+        action_type="kol_claim_reassign",
+        kol_id=_int(row["kol_id"]),
+        detail=str(body.get("reason") or "reassigned"),
+        metadata={
+            "from_claim_id": _int(claim_id),
+            "from_staff_id": previous_staff_id,
+            "to_staff_id": next_staff_id,
+            "new_claim_id": _int((result.get("claim") or {}).get("id")),
+        },
+    )
+    return result
 
 def list_claims(status: str = "active", limit: int = 100, *, staff: dict[str, Any] | None = None, staff_id: int | None = None) -> dict[str, Any]:
     ensure_vkpi_schema()
@@ -275,6 +345,7 @@ def list_kols(
 def update_kol_manual(kol_id: int, body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     ensure_vkpi_schema()
     assert_kol_access(int(kol_id), staff, allow_unclaimed=True)
+    actor_staff_id = staff_id(staff)
     allowed = {
         "avatar_url": "avatar_url",
         "profile_url": "profile_url",
@@ -318,4 +389,16 @@ def update_kol_manual(kol_id: int, body: dict[str, Any], *, staff: dict[str, Any
     conn.execute(f"UPDATE kols SET {', '.join(updates)} WHERE id=?", params)
     conn.commit()
     row = conn.execute("SELECT * FROM kols WHERE id=?", (int(kol_id),)).fetchone()
+    changed_fields = [allowed[key] for key in allowed if key in body]
+    if "contact_links" in body:
+        changed_fields.append("contact_links_json")
+    if "contact_raw" in body:
+        changed_fields.append("contact_raw_json")
+    _log_kol_audit(
+        actor_staff_id=actor_staff_id,
+        action_type="kol_manual_update",
+        kol_id=int(kol_id),
+        detail=",".join(changed_fields),
+        metadata={"changed_fields": changed_fields},
+    )
     return {"kol": dict(row) if row else {}}

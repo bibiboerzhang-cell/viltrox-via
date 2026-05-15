@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import secrets
+import logging
 from typing import Any
 
 from app.db.connection import get_conn
-from app.services.vkpi import scope
+from app.services.vkpi import audit, scope
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.workflow_common import (
     PROJECT_STAGES,
@@ -18,6 +19,31 @@ from app.services.vkpi.workflow_common import (
     staff_id,
     utcnow,
 )
+
+logger = logging.getLogger(__name__)
+
+
+def _log_project_audit(
+    *,
+    staff: dict[str, Any] | None,
+    action_type: str,
+    project_id: int,
+    detail: str = "",
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Best-effort business audit for project lifecycle actions."""
+    try:
+        audit.log_business_event(
+            staff_id=staff_id(staff),
+            action_type=action_type,
+            target_type="project",
+            target_id=int(project_id),
+            detail=detail,
+            metadata=metadata or {},
+        )
+    except Exception as exc:  # pragma: no cover - audit must not block workflow actions
+        logger.warning("vkpi.workflow_project_audit_failed", extra={"action_type": action_type, "project_id": project_id, "error": str(exc)})
+
 
 def list_projects(limit: int = 50, stage: str = "", *, staff: dict[str, Any] | None = None, staff_id_filter: int | None = None) -> dict[str, Any]:
     ensure_vkpi_schema()
@@ -189,6 +215,21 @@ def create_project(body: dict[str, Any], *, staff: dict[str, Any] | None = None)
                     ),
                 )
     conn.commit()
+    if project_id:
+        _log_project_audit(
+            staff=staff,
+            action_type="project_create",
+            project_id=project_id,
+            detail=name,
+            metadata={
+                "project_uid": project_uid,
+                "stage": stage,
+                "kol_id": _int(body.get("kol_id")) or None,
+                "assigned_staff_id": assigned_staff_id or None,
+                "product_skus": [item["product_sku"] for item in products],
+                "source_type": str(body.get("source_type") or "manual"),
+            },
+        )
     return {"id": project_id, "project_uid": project_uid, "stage": stage}
 
 def transition_project(project_id: int, body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -251,6 +292,23 @@ def transition_project(project_id: int, body: dict[str, Any], *, staff: dict[str
         except Exception as exc:  # cost catalog issues must not block workflow progress
             auto_cost_result = {"status": "error", "reason": str(exc)}
     conn.commit()
+    _log_project_audit(
+        staff=staff,
+        action_type="project_stage_transition",
+        project_id=int(project_id),
+        detail=f"{from_stage} -> {to_stage}",
+        metadata={
+            "from_stage": from_stage,
+            "to_stage": to_stage,
+            "stage_status": stage_status,
+            "event_type": str(body.get("event_type") or "stage_change"),
+            "sample_status": sample_status,
+            "tracking_number": tracking_number,
+            "source_ref_type": str(body.get("source_ref_type") or ""),
+            "source_ref_id": str(body.get("source_ref_id") or ""),
+            "auto_product_cost": auto_cost_result,
+        },
+    )
     return {"id": int(project_id), "from_stage": from_stage, "to_stage": to_stage, "auto_product_cost": auto_cost_result}
 
 def delete_project(project_id: int, body: dict[str, Any] | None = None, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -312,4 +370,16 @@ def delete_project(project_id: int, body: dict[str, Any] | None = None, *, staff
         (now, int(project_id)),
     )
     conn.commit()
+    _log_project_audit(
+        staff=staff,
+        action_type="project_delete",
+        project_id=int(project_id),
+        detail=reason,
+        metadata={
+            "previous_stage": from_stage,
+            "previous_stage_status": project.get("stage_status"),
+            "reason": reason,
+            "paused_live_links": True,
+        },
+    )
     return {"id": int(project_id), "status": "deleted", "previous_stage": from_stage}

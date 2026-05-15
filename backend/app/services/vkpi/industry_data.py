@@ -589,13 +589,17 @@ def list_accounts(project_id: int | None = None, limit: int = 300) -> dict[str, 
     return {"accounts": [dict(row) for row in rows]}
 
 
-def get_account(account_id: int) -> dict[str, Any]:
+def get_account(account_id: int, *, post_limit: int = 500) -> dict[str, Any]:
     ensure_vkpi_product_industry_schema()
     row = get_conn().execute("SELECT * FROM vkpi_industry_accounts WHERE id=?", (int(account_id),)).fetchone()
     if not row:
         raise LookupError("industry account not found")
     snapshots = get_conn().execute("SELECT * FROM vkpi_industry_account_snapshots WHERE account_id=? ORDER BY snapshot_date DESC LIMIT 30", (int(account_id),)).fetchall()
-    posts = get_conn().execute("SELECT * FROM vkpi_industry_posts WHERE account_id=? ORDER BY published_at DESC, id DESC LIMIT 50", (int(account_id),)).fetchall()
+    safe_post_limit = max(1, min(500, int(post_limit or 500)))
+    posts = get_conn().execute(
+        "SELECT * FROM vkpi_industry_posts WHERE account_id=? ORDER BY published_at DESC, id DESC LIMIT ?",
+        (int(account_id), safe_post_limit),
+    ).fetchall()
     return {"account": dict(row), "snapshots": [dict(item) for item in snapshots], "posts": [dict(item) for item in posts]}
 
 
