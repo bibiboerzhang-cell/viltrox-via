@@ -1,0 +1,9 @@
+endpoint,p4_2c_result,existing_evidence,required_before_launch,rollback_compensation,assigned_batch
+PATCH /settings/platform-crawl,PASS,vkpi_settings_change_logs=1,"Browser confirmation when enabling crawl or raising limits; visible before/after state","Re-apply previous settings from audit log/manual old state",P4.3A
+PATCH /settings/budgets,PASS,vkpi_settings_change_logs=1,"Browser confirmation for budget changes; visible old/new budget","Re-apply previous budget from settings audit",P4.3A
+POST /automation/models/{model_version}/activate,PASS,"marker model activated/restored; no business audit observed","Business audit with old/new model; confirm text","Re-activate old model captured before activation",P4.3B
+POST /budget-pools,PASS,"marker pool created/deleted; no business audit observed","Business audit with pool_uid amount period owner; confirm when amount > 0","Archive/close pool or delete if no allocations",P4.3B+P4.3D
+POST /budget-pools/{pool_id}/allocate,PASS,"marker allocation created/deleted; no business audit observed","Business audit with pool/project/staff/amount; confirm amount and target","Void/reverse allocation endpoint or manual playbook",P4.3B+P4.3D
+POST /staff/{staff_id}/offboard/initiate,PASS,"pending run created/deleted; no business audit observed","Business audit with target staff new owner counts; confirm target staff","Cancel/delete pending run if not executed",P4.3B
+POST /offboarding/{run_id}/execute,PASS,"completed run result_json; no explicit business audit observed","Double-confirm; business audit with result summary","No full automatic rollback; compensation playbook required",P4.3B+P4.3D
+POST /cron/{job_name}/run,PASS on unsupported-job negative path,"unsupported job returned 400; no real job triggered","Allow-list; confirm token for broad/provider jobs; business audit on start/result","Job-specific rollback only; compensation playbook required",P4.3C+P4.3D
