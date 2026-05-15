@@ -2382,6 +2382,24 @@
 .vkpi-evidence-list em { display: block; margin-top: 6px; color: var(--vkpi-muted); font-style: normal; font-size: 11px; word-break: break-word; }
 .vkpi-evidence-link { color: var(--vkpi-blue) !important; font-weight: 900 !important; text-decoration: none !important; border-bottom: 1px solid rgba(37, 99, 235, 0.35); }
 .vkpi-evidence-link:hover { border-bottom-color: var(--vkpi-blue); }
+.vkpi-traffic-breakdown { overflow: auto; display: flex; flex-direction: column; gap: 14px; }
+.vkpi-traffic-summary { border: 1px solid #bfdbfe; border-radius: 18px; padding: 16px; background: linear-gradient(135deg, #eff6ff, #fff); }
+.vkpi-traffic-summary span { color: var(--vkpi-blue); font-size: 11px; font-weight: 900; letter-spacing: 0.08em; text-transform: uppercase; }
+.vkpi-traffic-summary strong { display: block; margin-top: 8px; color: var(--vkpi-text); font-size: 34px; line-height: 1; }
+.vkpi-traffic-summary p { margin: 10px 0 0; color: #475467; font-size: 13px; line-height: 1.6; }
+.vkpi-traffic-group { border: 1px solid var(--vkpi-border); border-radius: 18px; padding: 14px; background: #fff; }
+.vkpi-traffic-group-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.vkpi-traffic-group-head h3 { margin: 0; color: var(--vkpi-text); font-size: 16px; }
+.vkpi-traffic-group-head p { margin: 5px 0 0; color: var(--vkpi-muted); font-size: 12px; line-height: 1.5; }
+.vkpi-traffic-group-head strong { color: var(--vkpi-blue); font-size: 22px; white-space: nowrap; }
+.vkpi-traffic-rows { display: flex; flex-direction: column; gap: 10px; }
+.vkpi-traffic-rows article { border: 1px solid #e4e7ec; border-radius: 14px; padding: 12px; background: #f8fafc; }
+.vkpi-traffic-rows article > div { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.vkpi-traffic-rows strong { display: block; color: var(--vkpi-text); font-size: 13px; }
+.vkpi-traffic-rows span { display: block; color: var(--vkpi-muted); font-size: 12px; margin-top: 5px; }
+.vkpi-traffic-rows b { color: var(--vkpi-blue); font-size: 16px; white-space: nowrap; }
+.vkpi-traffic-rows p { margin: 8px 0 0; color: #344054; font-size: 12px; }
+.vkpi-traffic-rows em { display: block; margin-top: 5px; color: var(--vkpi-muted); font-style: normal; font-size: 11px; word-break: break-word; }
 
 @media (max-width: 1180px) {
   .vkpi-card-grid--forms { grid-template-columns: 1fr; }
