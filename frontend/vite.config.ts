@@ -75,6 +75,10 @@ export default defineConfig(({ command }) => {
       host: "0.0.0.0",
       port: 5173,
       proxy: {
+        "/health": {
+          target: apiTarget,
+          changeOrigin: true,
+        },
         "/api": {
           target: apiTarget,
           changeOrigin: true,

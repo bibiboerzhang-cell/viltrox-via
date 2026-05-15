@@ -101,13 +101,14 @@ export function AnalyticsMonitorPanel({
     try {
       const productSku = digestProductSku.trim();
       const response = await generateDailyOutreachDigest(apiToken, productSku);
-      setDigestStatusOverride(response);
       const generated = safeNumber(response.items_total ?? response.items_per_staff);
       const eligible = safeNumber(response.eligible_staff_count ?? response.staff_count);
       const owned = safeNumber(response.owned_assignment_count);
       const fallback = safeNumber(response.fallback_assignment_count);
       const duplicates = safeNumber(response.duplicate_suggestion_count);
       onMessage(`今日未联系 KOL 清单已生成：${numberFormatter.format(generated)} 条，口径 ${productSku || '全部产品'}，覆盖 ${numberFormatter.format(eligible)} 名符合分发员工；负责人分配 ${numberFormatter.format(owned)}，兜底分配 ${numberFormatter.format(fallback)}，重复 ${numberFormatter.format(duplicates)}。`);
+      const refreshedStatus = await getDailyOutreachDigestStatus(apiToken, productSku);
+      setDigestStatusOverride(refreshedStatus);
       await onRefresh();
     } catch (error) {
       onMessage(error instanceof Error ? error.message : '生成今日清单失败');

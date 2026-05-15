@@ -117,6 +117,23 @@ function findNestedString(value: unknown, keys: string[], depth = 0): string {
   return '';
 }
 
+function collectNestedStrings(value: unknown, keys: string[], results: string[], depth = 0): void {
+  if (!value || depth > 5 || results.length >= 12) return;
+  if (Array.isArray(value)) {
+    for (const item of value) collectNestedStrings(item, keys, results, depth + 1);
+    return;
+  }
+  if (typeof value !== 'object') return;
+  const row = value as Row;
+  for (const key of keys) {
+    const direct = row[key];
+    if (direct !== null && direct !== undefined && String(direct).trim() !== '') {
+      results.push(String(direct).trim());
+    }
+  }
+  for (const item of Object.values(row)) collectNestedStrings(item, keys, results, depth + 1);
+}
+
 function mediaString(row: Row | null | undefined, keys: string[]): string {
   const direct = rowString(row, keys);
   if (direct || !row) return direct;
@@ -128,12 +145,32 @@ function mediaString(row: Row | null | undefined, keys: string[]): string {
   return '';
 }
 
+function mediaStrings(row: Row | null | undefined, keys: string[]): string[] {
+  if (!row) return [];
+  const results: string[] = [];
+  for (const key of keys) {
+    const value = row[key];
+    if (value !== null && value !== undefined && String(value).trim() !== '') {
+      results.push(String(value).trim());
+    }
+  }
+  for (const key of RAW_JSON_KEYS) {
+    const parsed = parseRawValue(row[key]);
+    collectNestedStrings(parsed, keys, results);
+  }
+  return Array.from(new Set(results)).slice(0, 12);
+}
+
 export function postThumbnailUrl(post: Row | null | undefined): string {
   return mediaString(post, POST_THUMBNAIL_KEYS);
 }
 
 export function postVideoUrl(post: Row | null | undefined): string {
   return mediaString(post, POST_VIDEO_KEYS);
+}
+
+export function postVideoUrls(post: Row | null | undefined): string[] {
+  return mediaStrings(post, POST_VIDEO_KEYS);
 }
 
 export function postPlatformUrl(post: Row | null | undefined): string {

@@ -19,6 +19,7 @@ import {
   SummaryTab,
   ViewsTab,
 } from '../drawers/tabs';
+import { SourceTooltip } from '../shared/SourceTooltip';
 
 type AccountTabKey = typeof ACCOUNT_TABS[number];
 
@@ -117,6 +118,7 @@ export function ProfileDashboard({
   const avatarUrl = proxiedImageUrl(accountAvatarUrl(account));
   const profileUrl = platformExternalUrl(accountProfileUrl(account)) || platformHomeUrl(platform, handle);
   const latest = snapshots[0] || {};
+  const snapshotAt = rowString(latest, ['snapshot_date', 'captured_at', 'scanned_at', 'created_at', 'updated_at']);
   const followers = rowNumber(latest, ['followers', 'follower_count'])
     ?? rowNumber(account, ['followers', 'follower_count']);
   const views = rowNumber(latest, ['views_30d', 'views', 'video_views']);
@@ -159,6 +161,16 @@ export function ProfileDashboard({
       ready: !blocked,
     };
   }, [account, budgetSettings, crawlEnabled, platform, platformCrawlSettings]);
+  const crawlActionLabel = crawlEnabled ? '关闭账号抓取' : '开启账号抓取';
+  const crawlActionTitle = crawlEnabled
+    ? (crawlConfig.ready ? '关闭该账号的抓取开关。' : `账号开关已开启，但实际抓取仍被阻塞：${crawlConfig.blockedReason}`)
+    : '开启该账号抓取；平台开关、预算和 API 状态仍需通过才会实际抓取。';
+  const gateTitle = crawlConfig.ready
+    ? '抓取链路已通过'
+    : (crawlEnabled ? '账号开关已开，但链路未通过' : '抓取链路未通过');
+  const gateMessage = crawlConfig.ready
+    ? '平台开关、预算、API 与账号抓取均可用。'
+    : `实际不会抓取 · 当前阻塞: ${crawlConfig.blockedReason}`;
 
   const renderTab = () => {
     const props = { account, snapshots, posts, accounts, onOpenPost };
@@ -218,21 +230,70 @@ export function ProfileDashboard({
             className={crawlEnabled ? 'da-danger-button' : 'da-black-button'}
             type="button"
             disabled={busy}
+            title={crawlActionTitle}
             onClick={() => onToggleCrawl(accountKey, !crawlEnabled)}
-          >{crawlEnabled ? '关闭抓取' : '开启抓取'}</button>
+          >{crawlActionLabel}</button>
         </div>
       </header>
 
       <div className="da-profile-status-row">
-        <div><span>Followers</span><strong>{compact(followers)}</strong></div>
-        <div><span>Posts</span><strong>{compact(posts.length)}</strong></div>
-        <div><span>Views</span><strong>{compact(views)}</strong></div>
-        <div><span>Engagement</span><strong>{engagementRate !== null && engagementRate !== undefined ? `${engagementRate.toFixed(2)}%` : '—'}</strong></div>
+        <div>
+          <span>
+            Followers
+            <SourceTooltip
+              status={followers ? (snapshots.length ? 'real' : 'fallback') : 'missing'}
+              source={snapshots.length ? 'vkpi_industry_snapshots.followers' : 'vkpi_industry_accounts.followers'}
+              detail="优先使用最新快照；无快照时回退账号档案字段。"
+              capturedAt={snapshotAt ? prettyDate(snapshotAt) : prettyDate(lastSuccess)}
+              drilldown="Summary > 历史快照表"
+            />
+          </span>
+          <strong>{compact(followers)}</strong>
+        </div>
+        <div>
+          <span>
+            Posts
+            <SourceTooltip
+              status={posts.length ? 'real' : 'missing'}
+              source="vkpi_industry_posts"
+              detail="当前账号已载入的真实帖子数量。"
+              capturedAt={prettyDate(lastSuccess)}
+              drilldown="Posts"
+            />
+          </span>
+          <strong>{compact(posts.length)}</strong>
+        </div>
+        <div>
+          <span>
+            Views
+            <SourceTooltip
+              status={views ? 'real' : 'missing'}
+              source="vkpi_industry_snapshots.views_30d"
+              detail="优先使用平台快照 30 天播放量字段。"
+              capturedAt={snapshotAt ? prettyDate(snapshotAt) : prettyDate(lastSuccess)}
+              drilldown="Views"
+            />
+          </span>
+          <strong>{compact(views)}</strong>
+        </div>
+        <div>
+          <span>
+            Engagement
+            <SourceTooltip
+              status={engagementRate !== null && engagementRate !== undefined ? 'real' : 'missing'}
+              source="vkpi_industry_snapshots.engagement_rate"
+              detail="账号级互动率快照；没有快照时不伪造百分比。"
+              capturedAt={snapshotAt ? prettyDate(snapshotAt) : prettyDate(lastSuccess)}
+              drilldown="Engagement"
+            />
+          </span>
+          <strong>{engagementRate !== null && engagementRate !== undefined ? `${engagementRate.toFixed(2)}%` : '—'}</strong>
+        </div>
       </div>
 
       <div className={`da-profile-gate-summary${crawlConfig.ready ? ' is-ok' : ' is-blocked'}`}>
-        <strong>{crawlConfig.ready ? '抓取链路已通过' : '抓取链路未通过'}</strong>
-        <span>{crawlConfig.ready ? '平台开关、预算、API 与账号抓取均可用。' : `当前阻塞: ${crawlConfig.blockedReason}`}</span>
+        <strong>{gateTitle}</strong>
+        <span>{gateMessage}</span>
       </div>
 
       <nav className="da-profile-tabs" aria-label="账号分析模块">

@@ -11,6 +11,7 @@ import { DaCard } from '../shared/DaCard';
 import { EmptyState } from '../shared/EmptyState';
 import { TimeSeriesChart } from '../shared/TimeSeriesChart';
 import { PostCard } from '../shared/PostCard';
+import { SourceTooltip } from '../shared/SourceTooltip';
 import { proxiedImageUrl } from '../utils/mediaProxy';
 import { accountAvatarUrl } from '../utils/mediaFields';
 
@@ -51,6 +52,9 @@ export function HomeTab({
     0,
   ) || null;
   const best = bestPosting(posts);
+  const loadWindowNote = posts.length >= 500
+    ? '已加载 500 条上限；更多历史需要分页'
+    : `已加载 ${posts.length} 条内容`;
 
   return (
     <>
@@ -61,30 +65,70 @@ export function HomeTab({
           value={accounts.length ? compact(accounts.length) : '—'}
           delta={accounts.length ? `${accounts.length} 个账号` : '请先添加账号'}
           tone={accounts.length ? 'positive' : 'neutral'}
+          source={(
+            <SourceTooltip
+              status={accounts.length ? 'real' : 'missing'}
+              source="vkpi_industry_accounts"
+              detail="当前项目/账号矩阵返回的真实账号数量。"
+              drilldown="Top Performing Profiles"
+            />
+          )}
         />
         <BigNumberCard
           title="Followers"
           value={formatMetric(totalFollowers)}
           delta={totalFollowers ? '真实快照' : '待同步'}
           tone={totalFollowers ? 'positive' : 'neutral'}
+          source={(
+            <SourceTooltip
+              status={totalFollowers ? 'real' : 'missing'}
+              source="vkpi_industry_snapshots.followers"
+              detail="按账号最新快照聚合；缺快照时不展示假 0。"
+              drilldown="账号详情 > Summary"
+            />
+          )}
         />
         <BigNumberCard
           title="Posts"
           value={posts.length ? compact(posts.length) : '—'}
           delta={posts.length ? '内容库已就位' : '不展示假内容'}
           tone={posts.length ? 'positive' : 'neutral'}
+          source={(
+            <SourceTooltip
+              status={posts.length ? 'real' : 'missing'}
+              source="vkpi_industry_posts"
+              detail="当前已载入的真实帖子数量。"
+              drilldown="Posts / Top Posts"
+            />
+          )}
         />
         <BigNumberCard
           title="Engagement"
           value={formatMetric(totalEngagement)}
           delta={totalEngagement ? '内容信号' : '待同步'}
           tone={totalEngagement ? 'positive' : 'neutral'}
+          source={(
+            <SourceTooltip
+              status={totalEngagement ? 'local' : 'missing'}
+              source="vkpi_industry_posts.likes/comments/shares"
+              detail="前端按已载入帖子本地求和，属于可解释 Beta 口径。"
+              drilldown="Engagement / Posts"
+            />
+          )}
         />
         <BigNumberCard
           title="Views"
           value={formatMetric(totalViews)}
           delta={totalViews ? '来自帖子' : '待同步'}
           tone={totalViews ? 'positive' : 'neutral'}
+          source={(
+            <SourceTooltip
+              status={totalViews ? 'local' : 'missing'}
+              source="vkpi_industry_posts.views"
+              detail="按已载入帖子的视频/播放字段本地求和。"
+              drilldown="Views / Posts"
+            />
+          )}
         />
       </section>
 
@@ -157,6 +201,7 @@ export function HomeTab({
           wide
           side={posts.length ? (
             <div className="da-inline-actions">
+              <span className="da-load-window-note">{loadWindowNote}</span>
               {posts.length > 3 ? (
                 <button
                   className="da-text-button"

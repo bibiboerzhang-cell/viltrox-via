@@ -55,6 +55,9 @@ export function PostsTab({ accounts, posts, onSetSelectedAccount, onOpenPost }: 
     return eB - eA;
   });
   const visiblePosts = showAll ? sorted : sorted.slice(0, 30);
+  const loadWindowNote = posts.length >= 500
+    ? '已加载 500 条上限；更多历史需要分页'
+    : `已加载 ${posts.length} 条内容`;
 
   const platforms = Array.from(new Set(posts.map((p) => normalizePlatform(rowString(p, ['platform'])))));
 
@@ -64,8 +67,8 @@ export function PostsTab({ accounts, posts, onSetSelectedAccount, onOpenPost }: 
       eyebrow="内容库"
       wide
       side={
-        <span style={{ fontSize: 12, color: 'var(--da-text-muted)' }}>
-          共 {sorted.length} 条 / 全部 {posts.length}
+        <span className="da-load-window-note">
+          共 {sorted.length} 条 / 全部 {posts.length} · {loadWindowNote}
         </span>
       }
     >
@@ -127,9 +130,7 @@ export function PostsTab({ accounts, posts, onSetSelectedAccount, onOpenPost }: 
         />
       )}
       {sorted.length > 30 && !showAll ? (
-        <p style={{
-          textAlign: 'center', marginTop: 16, color: 'var(--da-text-muted)', fontSize: 12,
-        }}>当前显示前 30 条,可点击上方按钮查看全部。</p>
+        <p className="da-load-window-hint">当前显示前 30 条,可点击上方按钮查看全部已加载内容。</p>
       ) : null}
     </DaCard>
   );

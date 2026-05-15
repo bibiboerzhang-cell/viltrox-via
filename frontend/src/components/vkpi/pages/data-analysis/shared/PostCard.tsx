@@ -3,8 +3,8 @@ import type { Row } from '../utils/types';
 import {
   findAccountForPost, postAccountName, postPlatform, postTitle, postUrl, rowNumber, rowString,
 } from '../utils/rowAccessors';
-import { platformExternalUrl, proxiedImageUrl, proxiedVideoUrl, redirectedVideoUrl } from '../utils/mediaProxy';
-import { accountAvatarUrl, postThumbnailUrl, postVideoUrl } from '../utils/mediaFields';
+import { platformExternalUrl, playbackVideoCandidates, proxiedImageUrl } from '../utils/mediaProxy';
+import { accountAvatarUrl, postThumbnailUrl, postVideoUrls } from '../utils/mediaFields';
 import { compact, platformClass, platformDisplay, platformInitial, prettyDate } from '../utils/platformHelpers';
 
 interface PostCardProps {
@@ -18,12 +18,10 @@ export function PostCard({ post, accounts, onViewAnalytics, onOpenPost }: PostCa
   const platform = postPlatform(post, accounts);
   const caption = postTitle(post);
   const thumb = proxiedImageUrl(postThumbnailUrl(post));
-  const rawVideoUrl = postVideoUrl(post);
-  const primaryVideoUrl = proxiedVideoUrl(rawVideoUrl);
-  const fallbackVideoUrl = redirectedVideoUrl(rawVideoUrl);
-  const [useVideoFallback, setUseVideoFallback] = useState(false);
+  const videoCandidates = playbackVideoCandidates(postVideoUrls(post));
+  const [videoCandidateIndex, setVideoCandidateIndex] = useState(0);
   const [videoUnavailable, setVideoUnavailable] = useState(false);
-  const videoUrl = videoUnavailable ? '' : (useVideoFallback && fallbackVideoUrl ? fallbackVideoUrl : primaryVideoUrl);
+  const videoUrl = videoUnavailable ? '' : (videoCandidates[videoCandidateIndex] || '');
   const url = postUrl(post);
   const originalUrl = platformExternalUrl(url);
   const views = rowNumber(post, ['views', 'view_count', 'video_views']);
@@ -74,8 +72,8 @@ export function PostCard({ post, accounts, onViewAnalytics, onOpenPost }: PostCa
             preload="metadata"
             playsInline
             onError={() => {
-              if (!useVideoFallback && fallbackVideoUrl && fallbackVideoUrl !== videoUrl) {
-                setUseVideoFallback(true);
+              if (videoCandidateIndex < videoCandidates.length - 1) {
+                setVideoCandidateIndex((value) => value + 1);
               } else {
                 setVideoUnavailable(true);
               }

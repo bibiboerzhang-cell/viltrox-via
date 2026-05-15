@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import type { Row } from '../utils/types';
 import {
@@ -10,8 +10,8 @@ import {
   rowNumber,
   rowString,
 } from '../utils/rowAccessors';
-import { platformExternalUrl, proxiedImageUrl, proxiedVideoUrl, redirectedVideoUrl } from '../utils/mediaProxy';
-import { accountAvatarUrl, postPlatformUrl, postThumbnailUrl, postVideoUrl } from '../utils/mediaFields';
+import { platformExternalUrl, playbackVideoCandidates, proxiedImageUrl } from '../utils/mediaProxy';
+import { accountAvatarUrl, postPlatformUrl, postThumbnailUrl, postVideoUrls } from '../utils/mediaFields';
 import { compact, platformClass, platformDisplay, platformInitial, prettyDate } from '../utils/platformHelpers';
 
 interface PostDetailDrawerProps {
@@ -90,8 +90,13 @@ export function PostDetailDrawer({
   onClose,
   onAnalyze,
 }: PostDetailDrawerProps) {
-  const [useVideoFallback, setUseVideoFallback] = useState(false);
+  const [videoCandidateIndex, setVideoCandidateIndex] = useState(0);
   const [videoUnavailable, setVideoUnavailable] = useState(false);
+
+  useEffect(() => {
+    setVideoCandidateIndex(0);
+    setVideoUnavailable(false);
+  }, [post]);
 
   if (!post) return null;
 
@@ -103,10 +108,8 @@ export function PostDetailDrawer({
   const rawOriginalUrl = postUrl(post) || postPlatformUrl(post);
   const originalUrl = platformExternalUrl(rawOriginalUrl);
   const thumbnail = proxiedImageUrl(postThumbnailUrl(post));
-  const rawVideoUrl = postVideoUrl(post);
-  const proxiedUrl = proxiedVideoUrl(rawVideoUrl);
-  const fallbackUrl = redirectedVideoUrl(rawVideoUrl);
-  const videoUrl = videoUnavailable ? '' : (useVideoFallback && fallbackUrl ? fallbackUrl : proxiedUrl);
+  const videoCandidates = playbackVideoCandidates(postVideoUrls(post));
+  const videoUrl = videoUnavailable ? '' : (videoCandidates[videoCandidateIndex] || '');
   const views = rowNumber(post, ['views', 'view_count', 'video_views', 'play_count']);
   const likes = rowNumber(post, ['likes', 'like_count']);
   const comments = rowNumber(post, ['comments', 'comment_count']);
@@ -139,8 +142,8 @@ export function PostDetailDrawer({
               preload="metadata"
               playsInline
               onError={() => {
-                if (!useVideoFallback && fallbackUrl && fallbackUrl !== videoUrl) {
-                  setUseVideoFallback(true);
+                if (videoCandidateIndex < videoCandidates.length - 1) {
+                  setVideoCandidateIndex((value) => value + 1);
                 } else {
                   setVideoUnavailable(true);
                 }
@@ -192,7 +195,7 @@ export function PostDetailDrawer({
           {analysisError ? <p className="da-post-detail__error">{analysisError}</p> : null}
           {analysisBusy ? (
             <p className="da-post-detail__busy">
-              真实 URL 分析处理中。视频或 Instagram 链路可能需要 30-90 秒；超过接口上限会显示失败原因。
+              真实 URL 分析处理中：读取原帖 → 解析媒体 → 上传 Gemini File API → 多模型总结。视频或 Instagram 链路可能需要 30-90 秒；超过接口上限会显示失败原因。
             </p>
           ) : null}
           {structuredAnalysis ? (

@@ -1048,6 +1048,30 @@
   width: 100%;
 }
 
+.vkpi-row-action-menu > .vkpi-dq-action-menu {
+  min-width: 220px;
+  gap: 10px;
+}
+
+.vkpi-dq-action-group {
+  display: grid;
+  gap: 6px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #eef2f7;
+}
+
+.vkpi-dq-action-group:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.vkpi-dq-action-group > span {
+  color: var(--vkpi-muted);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
 .vkpi-table-empty {
   color: var(--vkpi-muted) !important;
   font-size: 13px !important;

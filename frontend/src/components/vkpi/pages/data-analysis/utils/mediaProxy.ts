@@ -63,6 +63,25 @@ export function redirectedVideoUrl(rawUrl: unknown): string {
   return url;
 }
 
+export function playbackVideoCandidates(rawUrls: unknown[]): string[] {
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  const push = (value: unknown) => {
+    const url = String(value || '').trim();
+    if (!url || seen.has(url)) return;
+    seen.add(url);
+    candidates.push(url);
+  };
+
+  for (const rawUrl of rawUrls) {
+    const primary = proxiedVideoUrl(rawUrl);
+    const fallback = redirectedVideoUrl(rawUrl);
+    push(primary);
+    push(fallback);
+  }
+  return candidates;
+}
+
 export function platformExternalUrl(rawUrl: unknown): string {
   const url = String(rawUrl || '').trim();
   return /^https?:\/\//i.test(url) ? url : '';

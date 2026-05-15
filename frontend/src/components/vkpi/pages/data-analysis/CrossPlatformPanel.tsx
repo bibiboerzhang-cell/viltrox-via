@@ -185,7 +185,7 @@ export function CrossPlatformPanel({
     const [accountResult, crossResult, postResult] = await Promise.all([
       listIndustryAccounts(apiToken, resolvedProjectId).catch(() => ({ accounts: [] })),
       getIndustryCrossPlatform(apiToken, resolvedProjectId).catch(() => ({ platforms: [] })),
-      listIndustryPosts(apiToken, resolvedProjectId, 100).catch(() => ({ posts: [] })),
+      listIndustryPosts(apiToken, resolvedProjectId, 500).catch(() => ({ posts: [] })),
     ]);
     const loadedAccounts = accountResult.accounts || [];
     const loadedPosts = postResult.posts || [];

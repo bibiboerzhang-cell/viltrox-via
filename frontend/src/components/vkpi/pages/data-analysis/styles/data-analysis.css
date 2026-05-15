@@ -381,13 +381,24 @@
   overflow: hidden;
 }
 
+.da-big-card__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
 .da-big-card__title {
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--da-text-muted);
-  margin-bottom: 10px;
+}
+
+.da-big-card__source {
+  flex: 0 0 auto;
 }
 
 .da-big-card__value {
@@ -417,6 +428,90 @@
 
 .da-big-card__delta--neutral {
   color: var(--da-text-muted);
+}
+
+.da-source-tooltip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  vertical-align: middle;
+  text-transform: none;
+  letter-spacing: normal;
+  z-index: 4;
+}
+
+.da-source-tooltip__button {
+  width: 18px;
+  height: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  border-radius: 999px;
+  background: rgba(248, 250, 252, 0.95);
+  color: var(--da-text-muted);
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1;
+  cursor: help;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.da-source-tooltip__button:hover,
+.da-source-tooltip__button:focus-visible {
+  border-color: rgba(37, 99, 235, 0.5);
+  color: var(--da-accent);
+  outline: none;
+}
+
+.da-source-tooltip__panel {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  width: min(280px, 72vw);
+  background: var(--da-text-primary);
+  color: #fff;
+  border-radius: 12px;
+  padding: 10px 12px;
+  box-shadow: 0 20px 45px rgba(15, 23, 42, 0.22);
+  font-size: 12px;
+  line-height: 1.45;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(4px);
+  transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s ease;
+  pointer-events: none;
+  z-index: 40;
+}
+
+.da-source-tooltip__panel strong,
+.da-source-tooltip__panel span {
+  display: block;
+}
+
+.da-source-tooltip__panel strong {
+  margin-bottom: 4px;
+  color: #fff;
+}
+
+.da-source-tooltip:hover .da-source-tooltip__panel,
+.da-source-tooltip:focus-within .da-source-tooltip__panel {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.da-source-tooltip--local .da-source-tooltip__button,
+.da-source-tooltip--beta .da-source-tooltip__button {
+  background: rgba(255, 247, 237, 0.96);
+  border-color: rgba(251, 146, 60, 0.35);
+  color: #c2410c;
+}
+
+.da-source-tooltip--missing .da-source-tooltip__button {
+  background: rgba(241, 245, 249, 0.96);
+  color: #64748b;
 }
 
 /* ===== DaCard 通用卡片 ===== */
@@ -1475,6 +1570,21 @@
   flex-wrap: wrap;
 }
 
+.da-load-window-note,
+.da-load-window-hint {
+  font-size: 12px;
+  color: var(--da-text-muted);
+}
+
+.da-load-window-note {
+  font-weight: 700;
+}
+
+.da-load-window-hint {
+  text-align: center;
+  margin-top: 16px;
+}
+
 /* ===== Filter Drawer + Account Drawer ===== */
 
 .da-filter-toggle {
@@ -2442,7 +2552,7 @@
   padding: 18px 20px;
 }
 
-.da-profile-status-row span {
+.da-profile-status-row > div > span {
   display: block;
   color: var(--da-text-muted);
   font-size: 11px;
@@ -2595,6 +2705,38 @@
   justify-content: center;
   color: rgba(255, 255, 255, 0.55);
   font-size: 28px;
+}
+
+.da-post-table-media {
+  width: 72px;
+  height: 44px;
+  border: 1px solid var(--da-border-soft);
+  border-radius: 10px;
+  background: #0b1220;
+  padding: 0;
+  overflow: hidden;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--da-text-muted);
+  font-weight: 900;
+}
+
+.da-post-table-media:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.da-post-table-media img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.da-post-table-media--empty {
+  background: var(--da-bg-soft);
 }
 
 .da-post-meta {

@@ -2,10 +2,11 @@ import { useMemo, useState } from 'react';
 import type { Row } from '../../utils/types';
 import { accountId, accountName, rowNumber, rowString } from '../../utils/rowAccessors';
 import { bestPosting, contentPillars, formatMetric } from '../../utils/metricHelpers';
-import { platformExternalUrl, proxiedImageUrl, proxiedVideoUrl, redirectedVideoUrl } from '../../utils/mediaProxy';
-import { postPlatformUrl, postThumbnailUrl, postVideoUrl } from '../../utils/mediaFields';
+import { platformExternalUrl, playbackVideoCandidates, proxiedImageUrl } from '../../utils/mediaProxy';
+import { postPlatformUrl, postThumbnailUrl, postVideoUrls } from '../../utils/mediaFields';
 import { prettyDate } from '../../utils/platformHelpers';
 import { BigNumberCard } from '../../shared/BigNumberCard';
+import { SourceTooltip } from '../../shared/SourceTooltip';
 
 interface BaseTabProps {
   account: Row;
@@ -79,17 +80,85 @@ export function SummaryTab({ account, snapshots = [], posts = [] }: BaseTabProps
   const engagement = rowNumber(latest, ['engagement_total_30d', 'engagement'])
     ?? posts.reduce((sum, post) => sum + postEngagement(post), 0);
   const engagementRate = rowNumber(latest, ['engagement_rate']);
+  const snapshotAt = rowString(latest, ['snapshot_date', 'captured_at', 'scanned_at', 'created_at', 'updated_at']);
+  const capturedAt = prettyDate(snapshotAt || rowString(account, ['last_successful_at', 'last_crawled_at', 'updated_at']));
   const best = bestPosting(posts);
 
   return (
     <div className="da-tab-summary">
       <div className="da-detail-grid">
-        <BigNumberCard title="Followers" value={formatMetric(followers)} delta={latest ? '真实快照' : '账号字段'} tone="neutral" />
-        <BigNumberCard title="Views (30d)" value={formatMetric(views)} delta={viewsTrend} tone={views ? 'positive' : 'neutral'} />
-        <BigNumberCard title="Engagement" value={formatMetric(engagement)} delta={engagementRate !== null ? `${engagementRate.toFixed(2)}%` : '内容合计'} tone={engagement ? 'positive' : 'neutral'} />
-        <BigNumberCard title="Posts" value={String(posts.length)} delta={posts.length ? '已载入内容' : '待同步'} tone={posts.length ? 'positive' : 'neutral'} />
-        <BigNumberCard title="发布最多日" value={best.day} delta="基于已载入内容" />
-        <BigNumberCard title="发布最多时" value={best.hour} delta="基于已载入内容" />
+        <BigNumberCard
+          title="Followers"
+          value={formatMetric(followers)}
+          delta={latest ? '真实快照' : '账号字段'}
+          tone="neutral"
+          source={(
+            <SourceTooltip
+              status={latest ? 'real' : 'fallback'}
+              source={latest ? 'vkpi_industry_snapshots.followers' : 'vkpi_industry_accounts.followers'}
+              detail="优先使用最新快照；没有快照时回退账号字段。"
+              capturedAt={capturedAt}
+              drilldown="历史快照表"
+            />
+          )}
+        />
+        <BigNumberCard
+          title="Views (30d)"
+          value={formatMetric(views)}
+          delta={viewsTrend}
+          tone={views ? 'positive' : 'neutral'}
+          source={(
+            <SourceTooltip
+              status={views ? (latest ? 'real' : 'local') : 'missing'}
+              source={latest ? 'vkpi_industry_snapshots.views_30d' : 'vkpi_industry_posts.views'}
+              detail="快照优先；缺失时按已载入帖子本地聚合。"
+              capturedAt={capturedAt}
+              drilldown="Views / Posts"
+            />
+          )}
+        />
+        <BigNumberCard
+          title="Engagement"
+          value={formatMetric(engagement)}
+          delta={engagementRate !== null ? `${engagementRate.toFixed(2)}%` : '内容合计'}
+          tone={engagement ? 'positive' : 'neutral'}
+          source={(
+            <SourceTooltip
+              status={engagement ? (latest ? 'real' : 'local') : 'missing'}
+              source={latest ? 'vkpi_industry_snapshots.engagement_total_30d' : 'vkpi_industry_posts.likes/comments/shares'}
+              detail="快照优先；缺失时按帖子互动字段求和。"
+              capturedAt={capturedAt}
+              drilldown="Engagement / Posts"
+            />
+          )}
+        />
+        <BigNumberCard
+          title="Posts"
+          value={String(posts.length)}
+          delta={posts.length ? '已载入内容' : '待同步'}
+          tone={posts.length ? 'positive' : 'neutral'}
+          source={(
+            <SourceTooltip
+              status={posts.length ? 'real' : 'missing'}
+              source="vkpi_industry_posts"
+              detail="当前账号已载入的真实内容列表。"
+              capturedAt={capturedAt}
+              drilldown="Posts"
+            />
+          )}
+        />
+        <BigNumberCard
+          title="发布最多日"
+          value={best.day}
+          delta="基于已载入内容"
+          source={<SourceTooltip status="local" source="vkpi_industry_posts.published_at" detail="按已载入帖子发布时间本地统计。" drilldown="Posts Distribution" />}
+        />
+        <BigNumberCard
+          title="发布最多时"
+          value={best.hour}
+          delta="基于已载入内容"
+          source={<SourceTooltip status="local" source="vkpi_industry_posts.published_at" detail="按已载入帖子发布时间本地统计。" drilldown="Posting Signals" />}
+        />
       </div>
       <MiniSnapshotTable snapshots={snapshots} />
       <div className="da-summary-footer" style={{ marginTop: 16, fontSize: 13, color: 'var(--vkpi-color-text-muted)' }}>
@@ -102,12 +171,15 @@ export function SummaryTab({ account, snapshots = [], posts = [] }: BaseTabProps
 
 export function ContentTab({ posts = [], onOpenPost }: BaseTabProps) {
   const [showAll, setShowAll] = useState(false);
-  const [videoFallbackPosts, setVideoFallbackPosts] = useState<Record<string, 'redirect' | 'unavailable'>>({});
+  const [videoFallbackPosts, setVideoFallbackPosts] = useState<Record<string, number | 'unavailable'>>({});
   const sortedPosts = useMemo(
     () => [...posts].sort((a, b) => rowString(b, ['published_at', 'created_at']).localeCompare(rowString(a, ['published_at', 'created_at']))),
     [posts],
   );
   const visiblePosts = showAll ? sortedPosts : sortedPosts.slice(0, 24);
+  const loadWindowNote = sortedPosts.length >= 500
+    ? '已加载 500 条上限；更多历史需要分页'
+    : `已加载 ${sortedPosts.length} 条内容`;
 
   if (posts.length === 0) {
     return <div className="vkpi-empty">暂无 post 数据。需要先抓取或开启平台抓取。</div>;
@@ -116,7 +188,7 @@ export function ContentTab({ posts = [], onOpenPost }: BaseTabProps) {
   return (
     <div className="da-tab-content">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <span style={{ fontSize: 13, color: 'var(--vkpi-color-text-muted)' }}>显示 {visiblePosts.length} / {sortedPosts.length} 条内容</span>
+        <span className="da-load-window-note">显示 {visiblePosts.length} / {sortedPosts.length} 条内容 · {loadWindowNote}</span>
         {sortedPosts.length > 24 ? (
           <button className="da-text-button" type="button" onClick={() => setShowAll((value) => !value)}>
             {showAll ? '只看 Top 24' : `显示全部 ${sortedPosts.length} 条`}
@@ -126,12 +198,11 @@ export function ContentTab({ posts = [], onOpenPost }: BaseTabProps) {
       <div className="da-content-grid">
         {visiblePosts.map((post, index) => {
           const thumbnail = proxiedImageUrl(postThumbnailUrl(post));
-          const rawVideoUrl = postVideoUrl(post);
-          const proxiedUrl = proxiedVideoUrl(rawVideoUrl);
-          const fallbackUrl = redirectedVideoUrl(rawVideoUrl);
+          const videoCandidates = playbackVideoCandidates(postVideoUrls(post));
           const postKey = stablePostKey(post, index);
           const videoStatus = videoFallbackPosts[postKey];
-          const videoUrl = videoStatus === 'unavailable' ? '' : (videoStatus === 'redirect' && fallbackUrl ? fallbackUrl : proxiedUrl);
+          const videoCandidateIndex = typeof videoStatus === 'number' ? videoStatus : 0;
+          const videoUrl = videoStatus === 'unavailable' ? '' : (videoCandidates[videoCandidateIndex] || '');
           const postUrl = platformExternalUrl(postPlatformUrl(post));
           const title = rowString(post, ['title', 'caption'], '(无标题)');
           const views = rowNumber(post, ['views', 'view_count', 'video_views', 'play_count']);
@@ -150,8 +221,8 @@ export function ContentTab({ posts = [], onOpenPost }: BaseTabProps) {
                   preload="metadata"
                   playsInline
                   onError={() => {
-                    if (videoStatus !== 'redirect' && fallbackUrl && fallbackUrl !== videoUrl) {
-                      setVideoFallbackPosts((state) => ({ ...state, [postKey]: 'redirect' }));
+                    if (videoCandidateIndex < videoCandidates.length - 1) {
+                      setVideoFallbackPosts((state) => ({ ...state, [postKey]: videoCandidateIndex + 1 }));
                     } else {
                       setVideoFallbackPosts((state) => ({ ...state, [postKey]: 'unavailable' }));
                     }
@@ -318,6 +389,7 @@ export function PostsTab({ posts = [], onOpenPost }: BaseTabProps) {
       <table className="vkpi-table" style={{ fontSize: 13 }}>
         <thead>
           <tr>
+            <th>Media</th>
             <th>标题</th>
             <th>发布时间</th>
             <th>Views</th>
@@ -330,9 +402,34 @@ export function PostsTab({ posts = [], onOpenPost }: BaseTabProps) {
         <tbody>
           {visiblePosts.map((post, index) => {
             const postUrl = platformExternalUrl(postPlatformUrl(post));
+            const thumbnail = proxiedImageUrl(postThumbnailUrl(post));
+            const title = rowString(post, ['title', 'caption'], '(无标题)');
             return (
               <tr key={stablePostKey(post, index)}>
-                <td>{rowString(post, ['title', 'caption'], '(无标题)').slice(0, 60)}</td>
+                <td>
+                  {thumbnail ? (
+                    <button
+                      className="da-post-table-media"
+                      type="button"
+                      onClick={() => onOpenPost?.(post)}
+                      title="打开单帖详情"
+                      disabled={!onOpenPost}
+                    >
+                      <img src={thumbnail} alt="" loading="lazy" />
+                    </button>
+                  ) : (
+                    <button
+                      className="da-post-table-media da-post-table-media--empty"
+                      type="button"
+                      onClick={() => onOpenPost?.(post)}
+                      title={onOpenPost ? '打开单帖详情' : '暂无媒体'}
+                      disabled={!onOpenPost}
+                    >
+                      —
+                    </button>
+                  )}
+                </td>
+                <td>{title.slice(0, 60)}</td>
                 <td>{prettyDate(rowString(post, ['published_at', 'created_at']))}</td>
                 <td>{formatMetric(rowNumber(post, ['views', 'view_count', 'video_views']))}</td>
                 <td>{formatMetric(rowNumber(post, ['likes', 'like_count']))}</td>

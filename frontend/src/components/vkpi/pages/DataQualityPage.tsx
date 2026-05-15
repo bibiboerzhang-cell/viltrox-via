@@ -49,6 +49,12 @@ export function DataQualityPage({ apiToken, viewMode }: DataQualityPageProps) {
 
   const actOnIssue = async (issueId: string, action: VkpiDataQualityAction) => {
     if (!apiToken) return;
+    if (action === 'resolve' || action === 'ignore') {
+      const confirmed = window.confirm(action === 'resolve'
+        ? '确认将该数据质量问题标记为已处理？该动作会写入审计记录。'
+        : '确认忽略该数据质量问题？该动作会写入审计记录, 后续可用“重新打开”恢复。');
+      if (!confirmed) return;
+    }
     setLoading(true);
     setMessage('');
     try {
@@ -111,14 +117,24 @@ export function DataQualityPage({ apiToken, viewMode }: DataQualityPageProps) {
                   <td>{issue.detail || '-'}</td>
                   <td>
                     <div className="vkpi-table-actions vkpi-data-quality-actions">
-                      <button className="vkpi-button vkpi-button--small" type="button" disabled={loading} onClick={() => void actOnIssue(issue.id, 'resolve')}>已处理</button>
                       <details className="vkpi-row-action-menu">
-                        <summary>更多</summary>
-                        <div>
-                          <button className="vkpi-button vkpi-button--small vkpi-button--ghost" type="button" disabled={loading} onClick={() => void actOnIssue(issue.id, 'assign')}>指派</button>
-                          <button className="vkpi-button vkpi-button--small vkpi-button--ghost" type="button" disabled={loading} onClick={() => void actOnIssue(issue.id, 'rerun')}>重检</button>
-                          <button className="vkpi-button vkpi-button--small vkpi-button--ghost" type="button" disabled={loading} onClick={() => void actOnIssue(issue.id, 'evidence')}>补证据</button>
-                          <button className="vkpi-button vkpi-button--small vkpi-button--ghost" type="button" disabled={loading} onClick={() => void actOnIssue(issue.id, 'ignore')}>忽略</button>
+                        <summary>处理动作</summary>
+                        <div className="vkpi-dq-action-menu">
+                          <div className="vkpi-dq-action-group">
+                            <span>处理</span>
+                            <button className="vkpi-button vkpi-button--small" type="button" disabled={loading} onClick={() => void actOnIssue(issue.id, 'resolve')}>已处理</button>
+                            <button className="vkpi-button vkpi-button--small vkpi-button--ghost" type="button" disabled={loading} onClick={() => void actOnIssue(issue.id, 'ignore')}>忽略</button>
+                          </div>
+                          <div className="vkpi-dq-action-group">
+                            <span>分派</span>
+                            <button className="vkpi-button vkpi-button--small vkpi-button--ghost" type="button" disabled={loading} onClick={() => void actOnIssue(issue.id, 'assign')}>指派当前管理层</button>
+                          </div>
+                          <div className="vkpi-dq-action-group">
+                            <span>补救</span>
+                            <button className="vkpi-button vkpi-button--small vkpi-button--ghost" title="当前只记录重检请求, 不会自动修复数据。" type="button" disabled={loading} onClick={() => void actOnIssue(issue.id, 'rerun')}>记录重检</button>
+                            <button className="vkpi-button vkpi-button--small vkpi-button--ghost" title="当前只记录补证据动作, 证据上传仍需到项目/红人详情里完成。" type="button" disabled={loading} onClick={() => void actOnIssue(issue.id, 'evidence')}>记录补证据</button>
+                            <button className="vkpi-button vkpi-button--small vkpi-button--ghost" type="button" disabled={loading} onClick={() => void actOnIssue(issue.id, 'reopen')}>重新打开</button>
+                          </div>
                         </div>
                       </details>
                     </div>

@@ -1073,8 +1073,8 @@ export async function addIndustryAccount(token: string, projectId: string, paylo
 export async function importIndustryApifyHistory(token: string, projectId: string, payload: { source_type?: string; source_ref?: string; items: Row[] }) {
   return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/industry-data/projects/${encodeURIComponent(projectId)}/apify/import`, { method: "POST", body: jsonBody(payload), timeoutMs: 120000 }, token);
 }
-export async function getIndustryAccount(token: string, accountId: string) {
-  return apiFetch<{ account?: Row; snapshots?: Row[]; posts?: Row[] }>(`/api/admin/vkpi/industry-data/accounts/${encodeURIComponent(accountId)}`, {}, token);
+export async function getIndustryAccount(token: string, accountId: string, limit = 500) {
+  return apiFetch<{ account?: Row; snapshots?: Row[]; posts?: Row[] }>(`/api/admin/vkpi/industry-data/accounts/${encodeURIComponent(accountId)}?limit=${encodeURIComponent(String(limit))}`, {}, token);
 }
 export async function refreshIndustryAccount(token: string, accountId: string) {
   return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/industry-data/accounts/${encodeURIComponent(accountId)}/refresh`, { method: "POST", body: jsonBody({}), timeoutMs: 120000 }, token);
@@ -1085,7 +1085,7 @@ export async function updateIndustryAccount(token: string, accountId: string, pa
 export async function getIndustryCrossPlatform(token: string, projectId: string) {
   return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/industry-data/projects/${encodeURIComponent(projectId)}/cross-platform`, {}, token);
 }
-export async function listIndustryPosts(token: string, projectId: string, limit = 100) {
+export async function listIndustryPosts(token: string, projectId: string, limit = 500) {
   return apiFetch<{ posts?: Row[] }>(`/api/admin/vkpi/industry-data/projects/${encodeURIComponent(projectId)}/posts?limit=${encodeURIComponent(String(limit))}`, {}, token);
 }
 
