@@ -355,12 +355,12 @@ export function CrossPlatformPanel({
     });
   }, [datePreset, posts, selectedProfileIds.length, visibleAccounts]);
   const accountCountByPlatform = useMemo(
-    () => accounts.reduce<Record<string, number>>((acc, account) => {
+    () => visibleAccounts.reduce<Record<string, number>>((acc, account) => {
       const key = normalizePlatform(rowString(account, ['platform']));
       acc[key] = (acc[key] || 0) + 1;
       return acc;
     }, {}),
-    [accounts],
+    [visibleAccounts],
   );
 
   const toggleProfile = (id: string) => setSelectedProfileIds(

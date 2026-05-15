@@ -30,9 +30,19 @@ export function platformDisplay(value: unknown): string {
 
 /** 平台图标首字母(用于头像 fallback) */
 export function platformInitial(value: unknown): string {
-  const display = platformDisplay(value);
-  if (display === '小红书') return '红';
-  return display.slice(0, 1).toUpperCase();
+  const normalized = normalizePlatform(value);
+  const marks: Record<string, string> = {
+    instagram: '◎',
+    youtube: '▶',
+    tiktok: '♪',
+    facebook: 'f',
+    x: '𝕏',
+    xhs: '红',
+    bilibili: 'b',
+    reddit: 'r',
+    threads: '@',
+  };
+  return marks[normalized] || platformDisplay(value).slice(0, 1).toUpperCase();
 }
 
 /** 平台 CSS 类名 */
