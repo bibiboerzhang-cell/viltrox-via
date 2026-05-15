@@ -1,4 +1,5 @@
-import { platformDisplay, safeNumber } from '../../shared/vkpiDataUtils';
+import { Avatar } from '../../shared/Avatar';
+import { compactCount, platformDisplay, platformFromRaw, safeNumber } from '../../shared/vkpiDataUtils';
 import { numberFormatter } from '../../shared/vkpiFormatters';
 
 type Row = Record<string, unknown>;
@@ -16,6 +17,22 @@ function externalUrl(value: unknown): string {
   return /^https?:\/\//i.test(url) ? url : '';
 }
 
+function firstText(...values: unknown[]): string {
+  for (const value of values) {
+    const text = String(value ?? '').trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+function avatarUrl(row: Row): string {
+  return externalUrl(row.avatar_url || row.profile_image_url || row.thumbnail_url || row.source_thumbnail_url);
+}
+
+function platformClass(value: unknown): string {
+  return String(platformFromRaw(value)).toLowerCase().replace(/[^a-z0-9]+/g, '-');
+}
+
 function LinkActions({ row }: { row: Row }) {
   const profileUrl = externalUrl(row.profile_url);
   const sourceUrl = externalUrl(row.source_video_url);
@@ -25,6 +42,46 @@ function LinkActions({ row }: { row: Row }) {
       {profileUrl ? <a className="vkpi-mini-button" href={profileUrl} rel="noreferrer" target="_blank">主页</a> : null}
       {sourceUrl ? <a className="vkpi-mini-button" href={sourceUrl} rel="noreferrer" target="_blank">原帖</a> : null}
     </div>
+  );
+}
+
+function SuggestionCard({ row, busy, onUpdateSuggestion }: { row: Row; busy: boolean; onUpdateSuggestion: OutreachTablesProps['onUpdateSuggestion'] }) {
+  const displayName = firstText(row.channel_name, row.display_name, row.handle, 'Unknown KOL');
+  const handle = firstText(row.handle, row.platform_user_id);
+  const title = firstText(row.source_video_title, row.bio, row.description, '暂无内容摘要');
+  const product = firstText(row.source_product_sku, row.product_sku, '未关联产品');
+  const platformLabel = platformDisplay(row.platform);
+  const sourceViewCount = safeNumber(row.source_view_count);
+  const score = firstText(row.score, row.quality_score, '-');
+
+  return (
+    <article className="vkpi-suggestion-card">
+      <div className="vkpi-suggestion-card__top">
+        <Avatar name={displayName} src={avatarUrl(row)} size="lg" />
+        <div className="vkpi-suggestion-card__identity">
+          <span className="vkpi-platform-pill">
+            <span className={`vkpi-platform-dot is-${platformClass(row.platform)}`} />
+            {platformLabel}
+          </span>
+          <strong>{displayName}</strong>
+          {handle ? <small>@{handle.replace(/^@/, '')}</small> : <small>未写入 handle</small>}
+        </div>
+      </div>
+      <div className="vkpi-suggestion-card__content">{title}</div>
+      <div className="vkpi-suggestion-card__meta">
+        <span><small>来源产品</small><strong>{product}</strong></span>
+        <span><small>播放</small><strong>{sourceViewCount ? compactCount(sourceViewCount) : '-'}</strong></span>
+        <span><small>评分</small><strong>{score}</strong></span>
+      </div>
+      <div className="vkpi-suggestion-card__footer">
+        <LinkActions row={row} />
+        <div className="vkpi-button-row">
+          <button className="vkpi-mini-button" type="button" disabled={busy} onClick={() => void onUpdateSuggestion(row.id, 'claim')}>认领</button>
+          <button className="vkpi-mini-button" type="button" disabled={busy} onClick={() => void onUpdateSuggestion(row.id, 'create_project')}>建项目</button>
+          <button className="vkpi-mini-button" type="button" disabled={busy} onClick={() => void onUpdateSuggestion(row.id, 'dismiss')}>忽略</button>
+        </div>
+      </div>
+    </article>
   );
 }
 
@@ -76,29 +133,13 @@ export function OutreachTables({ busy, suggestions, digestItems, digestDate, onU
     <>
       <section className="vkpi-card vkpi-table-card">
         <div className="vkpi-table-card__header"><div><h2>建议联系</h2><span>{suggestions.length} 条</span></div></div>
-        <div className="vkpi-table-wrap">
-          <table className="vkpi-table">
-            <thead><tr><th>平台</th><th>红人 / Handle</th><th>来源产品</th><th>内容</th><th>链接</th><th>播放</th><th>评分</th><th>操作</th></tr></thead>
-            <tbody>
-              {suggestions.length ? suggestions.map((row) => (
-                <tr key={String(row.id)}>
-                  <td>{platformDisplay(row.platform)}</td>
-                  <td>{String(row.channel_name || row.handle || '-')}</td>
-                  <td>{String(row.source_product_sku || '-')}</td>
-                  <td>{String(row.source_video_title || '-')}</td>
-                  <td><LinkActions row={row} /></td>
-                  <td>{numberFormatter.format(safeNumber(row.source_view_count))}</td>
-                  <td>{String(row.score || '-')}</td>
-                  <td>
-                    <button className="vkpi-mini-button" type="button" disabled={busy} onClick={() => void onUpdateSuggestion(row.id, 'claim')}>认领</button>
-                    <button className="vkpi-mini-button" type="button" disabled={busy} onClick={() => void onUpdateSuggestion(row.id, 'create_project')}>建项目+短链</button>
-                    <button className="vkpi-mini-button" type="button" disabled={busy} onClick={() => void onUpdateSuggestion(row.id, 'dismiss')}>忽略</button>
-                  </td>
-                </tr>
-              )) : <tr><td className="vkpi-table-empty" colSpan={8}>暂无真实建议联系。平台未配置或没有抓取结果时不会显示假 KOL。</td></tr>}
-            </tbody>
-          </table>
-        </div>
+        {suggestions.length ? (
+          <div className="vkpi-suggestion-grid">
+            {suggestions.map((row) => <SuggestionCard key={String(row.id)} row={row} busy={busy} onUpdateSuggestion={onUpdateSuggestion} />)}
+          </div>
+        ) : (
+          <div className="vkpi-table-empty">暂无真实建议联系。平台未配置或没有抓取结果时不会显示假 KOL。</div>
+        )}
       </section>
       <section className="vkpi-card vkpi-table-card">
         <div className="vkpi-table-card__header">
