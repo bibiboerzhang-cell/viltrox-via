@@ -34,16 +34,19 @@ function mapLineageRowToEvidence(row: VkpiDrilldownRow, metric: VkpiMetricEviden
         : 'number';
   const amount = amountUnit === 'currency' ? rawAmount / 100 : rawAmount;
   const orderLabel = textValue(orderSnapshot.order_name || orderSnapshot.order_number || orderSnapshot.shopify_order_id, '');
+  const contentTitle = textValue(snapshot.title, '');
+  const contentPlatform = textValue(snapshot.platform, '');
+  const contentRef = textValue(row.evidence_ref, '');
   const fallbackLabel = sourceMetric ? `${sourceMetric.toUpperCase()} 输入` : row.source_type;
   const label = textValue(
-    orderLabel || row.evidence_ref || snapshot.note || snapshot.cost_type || fallbackLabel,
+    orderLabel || contentTitle || contentRef || snapshot.note || snapshot.cost_type || fallbackLabel,
     '证据行',
   );
   return {
     id: String(row.id || row.source_id),
     metric,
     label,
-    source: textValue(orderLabel ? 'Shopify Order' : row.evidence_type || row.source_type, 'lineage'),
+    source: textValue(orderLabel ? 'Shopify Order' : contentPlatform || row.evidence_type || row.source_type, 'lineage'),
     amount,
     amountUnit,
     projectId: row.project?.id ? String(row.project.id) : undefined,
@@ -51,7 +54,7 @@ function mapLineageRowToEvidence(row: VkpiDrilldownRow, metric: VkpiMetricEviden
     ownerName: row.staff?.name || row.staff?.email,
     confidence: textValue(snapshot.confidence || orderSnapshot.financial_status || orderSnapshot.fulfillment_status, '') || undefined,
     occurredAt: row.occurred_at || textValue(orderSnapshot.processed_at, '') || undefined,
-    rawRef: textValue(orderSnapshot.shopify_order_id || row.evidence_ref, '') || undefined,
+    rawRef: textValue(orderSnapshot.shopify_order_id || contentRef, '') || undefined,
   };
 }
 

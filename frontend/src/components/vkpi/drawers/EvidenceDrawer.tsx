@@ -3,6 +3,17 @@ import type { VkpiEvidenceRow, VkpiMetricEvidenceKey } from '../vkpiTypes';
 import { currencyFormatter, numberFormatter } from '../shared/vkpiFormatters';
 
 const OWNED_TRAFFIC_KEYWORDS = ['viltrox', 'official', 'brand', 'company', 'owned', 'self', '自营', '官方', '品牌', '公司'];
+const PLATFORM_TRAFFIC_LABELS: Record<string, string> = {
+  instagram: 'Instagram',
+  youtube: 'YouTube',
+  tiktok: 'TikTok',
+  facebook: 'Facebook',
+  x: 'X',
+  twitter: 'X',
+  bilibili: 'Bilibili',
+  xiaohongshu: 'XHS',
+  xhs: 'XHS',
+};
 
 function rowSearchText(row: VkpiEvidenceRow) {
   return `${row.label} ${row.source} ${row.rawRef || ''}`.toLowerCase();
@@ -15,6 +26,29 @@ function isOwnedTrafficRow(row: VkpiEvidenceRow) {
 
 function isKolTrafficRow(row: VkpiEvidenceRow) {
   return Boolean(row.kolName || row.ownerName || row.projectId);
+}
+
+function platformLabel(row: VkpiEvidenceRow) {
+  const source = String(row.source || '').trim().toLowerCase();
+  return PLATFORM_TRAFFIC_LABELS[source] || row.source || '未知平台';
+}
+
+function rowGroupKey(row: VkpiEvidenceRow, fallback: string) {
+  return String(row.ownerName || row.kolName || row.projectId || platformLabel(row) || fallback).trim();
+}
+
+function groupedRows(rows: VkpiEvidenceRow[], fallback: string) {
+  const groups = new Map<string, VkpiEvidenceRow[]>();
+  rows.forEach((row) => {
+    const key = rowGroupKey(row, fallback);
+    groups.set(key, [...(groups.get(key) || []), row]);
+  });
+  return Array.from(groups.entries()).map(([label, groupRows]) => ({
+    label,
+    rows: groupRows,
+    total: groupRows.reduce((sum, row) => sum + (row.amount || 0), 0),
+    platforms: Array.from(new Set(groupRows.map(platformLabel))).filter(Boolean),
+  }));
 }
 
 export function EvidenceDrawer({
@@ -59,12 +93,30 @@ export function EvidenceDrawer({
       : '';
   const renderEvidenceRow = (row: VkpiEvidenceRow) => (
     <article key={`${row.metric}-${row.id}`}>
-      <div><strong>{row.label}</strong><span>{row.source} · {row.occurredAt || '-'}</span></div>
+      <div><strong>{row.label}</strong><span>{platformLabel(row)} · {row.occurredAt || '-'}</span></div>
       <b>{formatEvidenceAmount(row)}</b>
       <p>项目：{row.projectId || '-'} · 红人：{row.kolName || '-'} · 负责人：{row.ownerName || '-'}</p>
-      <em>{row.confidence || '-'} {row.rawRef ? `· ${row.rawRef}` : ''}</em>
+      <em>{row.confidence || '-'} {row.rawRef && !row.rawRef.startsWith('http') ? `· ${row.rawRef}` : ''}</em>
+      {row.rawRef?.startsWith('http') ? <a href={row.rawRef} target="_blank" rel="noreferrer">打开原帖 ↗</a> : null}
     </article>
   );
+  const renderGroupedTrafficRows = (groupRows: VkpiEvidenceRow[], fallback: string) => {
+    const groups = groupedRows(groupRows, fallback);
+    return (
+      <div className="vkpi-traffic-accounts">
+        {groups.map((group) => (
+          <details key={group.label} className="vkpi-traffic-account" open={groups.length === 1}>
+            <summary>
+              <span>{group.label}</span>
+              <small>{group.platforms.join(' / ') || '未知平台'} · {group.rows.length} 条证据</small>
+              <strong>{group.total ? numberFormatter.format(group.total) : '-'}</strong>
+            </summary>
+            <div className="vkpi-traffic-rows">{group.rows.map(renderEvidenceRow)}</div>
+          </details>
+        ))}
+      </div>
+    );
+  };
   const renderTrafficGroup = (title: string, subtitle: string, groupRows: VkpiEvidenceRow[], emptyText: string) => {
     const hasAmount = groupRows.some((row) => row.amount != null);
     const total = groupRows.reduce((sum, row) => sum + (row.amount || 0), 0);
@@ -77,7 +129,7 @@ export function EvidenceDrawer({
           </div>
           <strong>{hasAmount ? numberFormatter.format(total) : '-'}</strong>
         </div>
-        {groupRows.length ? <div className="vkpi-traffic-rows">{groupRows.map(renderEvidenceRow)}</div> : <div className="vkpi-empty-state">{emptyText}</div>}
+        {groupRows.length ? renderGroupedTrafficRows(groupRows, title) : <div className="vkpi-empty-state">{emptyText}</div>}
       </section>
     );
   };
