@@ -1,0 +1,122 @@
+# P4 Mutation Rollback / Compensation Playbook
+
+- Generated: 2026-05-15
+- Scope: P4.3D high-risk mutation rollback and compensation guidance.
+- Backup before change: `/Users/bibiboer/Documents/V-KPI-backups/before-p4-3d-rollback-playbook-20260515-143139.tar.gz`
+- Source evidence: P4.2B/P4.2D/P4.3B/P4.3C audit reports.
+- This runbook is operator guidance. It does not add one-click undo endpoints.
+
+## Rule Of Operation
+
+1. Stop the repeated trigger first. Do not attempt rollback while the same user/job can keep mutating state.
+2. Identify the exact actor, target, timestamp, and audit row before touching data.
+3. Prefer compensating actions over hard deletes for finance, HR/offboarding, and provider jobs.
+4. Never erase business audit rows. Add correction notes instead.
+5. For production, execute manual SQL only after exporting the affected rows and receiving owner/manager approval.
+
+## Coverage Matrix
+
+| Domain | Endpoint | Undo Level | Rollback / Compensation Summary | Launch Status |
+|---|---|---|---|---|
+| model | `POST /api/admin/vkpi/automation/models/{model_version}/activate` | manual-safe | Read automation_model_activate audit metadata.previous_active_models, then re-activate the previous model_version using the same endpoint with confirmation. If multiple previous active rows existed, restore the expected single active model and mark unexpected rows registered. | launch-before documented; one-click rollback deferred |
+| finance | `POST /api/admin/vkpi/budget-pools` | manual-safe-if-unallocated | If the pool has no allocations, archive it by setting status='archived' and write a business audit note. If allocations exist, do not hard-delete; close/archive and handle allocations separately. | launch-before documented; archive endpoint launch-after |
+| finance | `POST /api/admin/vkpi/budget-pools/{pool_id}/allocate` | manual-sensitive | Before financial close or cost use, delete the erroneous allocation only after matching the budget_pool_allocate audit metadata. After close or after dependent reports, create a corrective allocation/adjustment note and keep the original row for traceability until a void endpoint exists. | launch-before documented; void/reverse endpoint launch-after |
+| offboarding | `POST /api/admin/vkpi/staff/{staff_id}/offboard/initiate` | manual-safe-while-pending | If status is pending, cancel the run by setting status='cancelled' with result_json reason. Do not delete the row because it is a sensitive HR/admin action. | launch-before documented; cancel endpoint launch-after |
+| offboarding | `POST /api/admin/vkpi/offboarding/{run_id}/execute` | compensation-only | No one-click rollback exists. Use result_json and the pre-run counts in vkpi_offboarding_runs to compensate: reassign open projects back if wrong, re-create channel bindings, and re-claim/release KOL claims case-by-case. Historical actual costs must not be voided automatically. | launch-before documented; automatic rollback deferred by design |
+| cron | `POST /api/admin/vkpi/cron/{job_name}/run and POST /api/admin/vkpi/sync/trigger/{job_name}` | job-specific-compensation | Cron triggers are now allow-listed and confirmed. For accidental runs, use cron_run_requested/completed audit metadata to identify job and payload, then apply the job-specific compensation table. Never bulk-delete by timestamp without checking job output tables. | launch-before documented; job-level undo endpoints launch-after only if usage demands |
+
+## Detailed Operator Steps
+
+### 1. Model - `POST /api/admin/vkpi/automation/models/{model_version}/activate`
+
+- Tables: `vkpi_model_registry, vkpi_business_audit_logs`
+- Blast radius: all scoring and model-backed recommendations until another model is activated
+- Undo level: `manual-safe`
+- Rollback summary: Read automation_model_activate audit metadata.previous_active_models, then re-activate the previous model_version using the same endpoint with confirmation. If multiple previous active rows existed, restore the expected single active model and mark unexpected rows registered.
+- Operator steps: 1. Stop further scoring jobs. 2. Query latest automation_model_activate audit row. 3. Confirm previous_active_models. 4. Activate prior model. 5. Verify exactly one active model. 6. Add business audit note with incident id.
+- Probe SQL: `SELECT model_version,status,activated_at,metadata_json FROM vkpi_model_registry ORDER BY status DESC, id DESC;`
+- Launch status: launch-before documented; one-click rollback deferred
+
+### 2. Finance - `POST /api/admin/vkpi/budget-pools`
+
+- Tables: `vkpi_budget_pools, vkpi_budget_allocations, vkpi_business_audit_logs`
+- Blast radius: budget pool visibility and future allocations; no spend is created by pool creation alone
+- Undo level: `manual-safe-if-unallocated`
+- Rollback summary: If the pool has no allocations, archive it by setting status='archived' and write a business audit note. If allocations exist, do not hard-delete; close/archive and handle allocations separately.
+- Operator steps: 1. Query pool by pool_uid/id from budget_pool_create audit. 2. Count allocations. 3. If zero allocations, set status archived and updated_at. 4. If allocations exist, freeze pool and review each allocation. 5. Record compensation decision in audit/logbook.
+- Probe SQL: `SELECT * FROM vkpi_budget_pools WHERE id=?; SELECT COALESCE(SUM(allocated_cents),0) AS allocated_cents FROM vkpi_budget_allocations WHERE budget_pool_id=?;`
+- Launch status: launch-before documented; archive endpoint launch-after
+
+### 3. Finance - `POST /api/admin/vkpi/budget-pools/{pool_id}/allocate`
+
+- Tables: `vkpi_budget_allocations, vkpi_budget_pools, vkpi_business_audit_logs`
+- Blast radius: manager budget availability and project/staff/campaign budget reporting
+- Undo level: `manual-sensitive`
+- Rollback summary: Before financial close or cost use, delete the erroneous allocation only after matching the budget_pool_allocate audit metadata. After close or after dependent reports, create a corrective allocation/adjustment note and keep the original row for traceability until a void endpoint exists.
+- Operator steps: 1. Locate allocation_id in budget_pool_allocate audit metadata. 2. Confirm no dependent cost/report has consumed the allocation. 3. If safe, delete the allocation row and record an audit note. 4. If not safe, add corrective allocation/admin note and update reporting notes. 5. Verify budget pool available_cents.
+- Probe SQL: `SELECT * FROM vkpi_budget_allocations WHERE id=?; SELECT * FROM vkpi_business_audit_logs WHERE action_type='budget_pool_allocate' AND metadata_json LIKE ?;`
+- Launch status: launch-before documented; void/reverse endpoint launch-after
+
+### 4. Offboarding - `POST /api/admin/vkpi/staff/{staff_id}/offboard/initiate`
+
+- Tables: `vkpi_offboarding_runs, vkpi_business_audit_logs`
+- Blast radius: pending HR/business workflow only until execute is called
+- Undo level: `manual-safe-while-pending`
+- Rollback summary: If status is pending, cancel the run by setting status='cancelled' with result_json reason. Do not delete the row because it is a sensitive HR/admin action.
+- Operator steps: 1. Query run by id/run_uid. 2. Confirm status pending and executed_at is null. 3. Set status cancelled and result_json reason. 4. Add business audit note. 5. Verify execute endpoint skips non-pending status.
+- Probe SQL: `SELECT * FROM vkpi_offboarding_runs WHERE id=?;`
+- Launch status: launch-before documented; cancel endpoint launch-after
+
+### 5. Offboarding - `POST /api/admin/vkpi/offboarding/{run_id}/execute`
+
+- Tables: `vkpi_offboarding_runs, vkpi_kol_claims, vkpi_projects, vkpi_employee_channels, vkpi_business_audit_logs`
+- Blast radius: active KOL claims, open project assignment, employee channel bindings; historical costs are intentionally preserved
+- Undo level: `compensation-only`
+- Rollback summary: No one-click rollback exists. Use result_json and the pre-run counts in vkpi_offboarding_runs to compensate: reassign open projects back if wrong, re-create channel bindings, and re-claim/release KOL claims case-by-case. Historical actual costs must not be voided automatically.
+- Operator steps: 1. Freeze the target staff/project workflow. 2. Read offboarding run result_json and staff/new_owner. 3. Restore project assigned_staff_id for wrongly transferred open projects. 4. Rebind channels only after token/security review. 5. Re-create or activate KOL claims only after owner approval. 6. Add incident audit note and mark run reviewed.
+- Probe SQL: `SELECT result_json FROM vkpi_offboarding_runs WHERE id=?; SELECT * FROM vkpi_projects WHERE assigned_staff_id IN (?,?); SELECT * FROM vkpi_kol_claims WHERE staff_id IN (?,?);`
+- Launch status: launch-before documented; automatic rollback deferred by design
+
+### 6. Cron - `POST /api/admin/vkpi/cron/{job_name}/run and POST /api/admin/vkpi/sync/trigger/{job_name}`
+
+- Tables: `vkpi_business_audit_logs plus job-specific tables`
+- Blast radius: depends on job: alerts, lineage, KPI rollup, reports, provider monitor, channel sync, Daily Top100, morning sync
+- Undo level: `job-specific-compensation`
+- Rollback summary: Cron triggers are now allow-listed and confirmed. For accidental runs, use cron_run_requested/completed audit metadata to identify job and payload, then apply the job-specific compensation table. Never bulk-delete by timestamp without checking job output tables.
+- Operator steps: 1. Query cron_run_requested and cron_run_completed audit rows by target_id/job. 2. Identify job payload and result summary. 3. For validate_only, no action. 4. For real run, follow job-specific compensation. 5. Record completion and owner decision.
+- Probe SQL: `SELECT * FROM vkpi_business_audit_logs WHERE target_type='cron_job' AND target_id=? ORDER BY id DESC LIMIT 5;`
+- Launch status: launch-before documented; job-level undo endpoints launch-after only if usage demands
+
+## Cron Job Compensation Table
+
+| Job | Compensation |
+|---|---|
+| `alerts` | Review generated alert rows; close/dismiss false positives manually, keep audit trail. |
+| `lineage_snapshot` | Keep extra lineage run; mark/report superseded if dashboards show duplicate run. |
+| `kpi_rollup` | Regenerate for same date after source correction; do not delete unless duplicate date/scope is confirmed. |
+| `weekly_report` | Archive mistaken report/export and regenerate with correct period/staff. |
+| `analytics_monitor` | Review outreach suggestions created by run; dismiss bad suggestions; keep monitor run for traceability. |
+| `channels_sync` | Review channel sync status/errors; re-sync affected channel after token/config fix. |
+| `daily_outreach_digest_only` | Regenerate target date after clearing bad suggestions; avoid manually editing assignment rows unless duplicate root cause is known. |
+| `morning_sync` | Treat as composite job: inspect channel sync, industry sync, monitor runs, and digest separately. |
+
+## DB Structure Check
+
+| Table | Check | Required Columns | Missing |
+|---|---|---|---|
+| `vkpi_budget_pools` | PASS | id, pool_uid, status, total_budget_cents | - |
+| `vkpi_budget_allocations` | PASS | id, budget_pool_id, allocated_cents, created_by_staff_id | - |
+| `vkpi_offboarding_runs` | PASS | id, run_uid, staff_id, new_owner_staff_id, status, result_json | - |
+| `vkpi_model_registry` | PASS | id, model_version, status, metadata_json | - |
+| `vkpi_business_audit_logs` | PASS | id, staff_id, action_type, target_type, target_id, metadata_json | - |
+| `vkpi_kol_claims` | PASS | id, kol_id, staff_id, status, release_reason | - |
+| `vkpi_projects` | PASS | id, assigned_staff_id, stage, stage_status | - |
+| `vkpi_employee_channels` | PASS | id, staff_id, platform, status, deleted_at | - |
+
+## Launch Decision
+
+P4.3A-C closed the immediate confirmation/audit/cron guard gaps. P4.3D keeps the remaining undo work explicit:
+
+- Launch-before: this playbook must exist and be referenced from the launch risk note.
+- Launch-after: implement one-click archive/void/cancel endpoints only if real team usage shows these paths are frequent.
+- Not recommended before launch: broad automatic offboarding rollback, because token/channel security and historical financial evidence require human review.
