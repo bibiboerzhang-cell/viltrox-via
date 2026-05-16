@@ -10,6 +10,7 @@ import { DaCard } from '../shared/DaCard';
 import { EmptyState } from '../shared/EmptyState';
 import { TimeSeriesChart } from '../shared/TimeSeriesChart';
 import { PostCard } from '../shared/PostCard';
+import { BigNumberCard } from '../shared/BigNumberCard';
 import { proxiedImageUrl } from '../utils/mediaProxy';
 import { accountAvatarUrl } from '../utils/mediaFields';
 
