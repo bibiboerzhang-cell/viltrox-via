@@ -1,8 +1,8 @@
 import type { VkpiKolProfile, VkpiProjectDetail, VkpiProjectRow } from '../vkpiTypes';
 import { DetailList } from '../shared/DetailList';
 import { currencyFormatter, numberFormatter } from '../shared/vkpiFormatters';
-import { coerceProjectStage, formatMoneyCents, safeNumber, textValue } from '../shared/vkpiDataUtils';
-import { stageLabels } from '../shared/vkpiConstants';
+import { coerceProjectStage, safeNumber, textValue } from '../shared/vkpiDataUtils';
+import { primaryStageFlow, stageLabels } from '../shared/vkpiConstants';
 import { ProjectEvidenceForms } from './ProjectEvidenceForms';
 
 function parseProjectMetadata(value: unknown): Record<string, unknown> {
@@ -60,6 +60,23 @@ function firstEvidenceUrlFromRows(rows: Array<Record<string, unknown>>): string 
     if (nested) return nested;
   }
   return '';
+}
+
+function detailStageIndex(stage: ReturnType<typeof coerceProjectStage>) {
+  if (stage === 'content_published') return primaryStageFlow.indexOf('published');
+  const index = primaryStageFlow.indexOf(stage);
+  if (stage === 'closed' || stage === 'released' || stage === 'cancelled' || stage === 'lost') return primaryStageFlow.length - 1;
+  return index >= 0 ? index : 0;
+}
+
+function detailHealthScore(stage: ReturnType<typeof coerceProjectStage>, revenue: number, cost: number, projectEvents: Array<Record<string, unknown>>) {
+  const index = detailStageIndex(stage);
+  const roiBonus = cost ? Math.min(16, Math.max(-10, ((revenue / cost) - 1) * 8)) : 0;
+  const score = Math.round(Math.min(96, Math.max(34, 50 + index * 5 + roiBonus + Math.min(8, projectEvents.length))));
+  if (stage === 'cancelled' || stage === 'lost' || stage === 'stalled') return { score: Math.min(score, 45), label: '阻塞', className: 'is-bad' };
+  if (score >= 78) return { score, label: '健康', className: 'is-good' };
+  if (score >= 58) return { score, label: '注意', className: 'is-mid' };
+  return { score, label: '待推进', className: 'is-bad' };
 }
 
 function EvidenceLink({ value, label = '打开证据' }: { value: unknown; label?: string }) {
@@ -125,12 +142,26 @@ export function ProjectDetailDrawer({
   const roiValue = roi.roi == null ? (cost ? revenue / cost : null) : Number(roi.roi);
   const selectedProducts = selectedProjectProducts(project, fallbackProject);
   const termsEvidenceUrl = firstEvidenceUrlFromText(terms.note) || firstEvidenceUrlFromRows(deliverables);
+  const currentStageIndex = detailStageIndex(stage);
+  const health = detailHealthScore(stage, revenue, cost, events);
+  const clickCount = safeNumber(linkSummary.valid_click_count || linkSummary.click_count || fallbackProject?.clicks);
+  const orderCount = safeNumber(linkSummary.order_count || fallbackProject?.orders);
+  const contentCount = contentPosts.length || safeNumber(project.content_count || project.contentCount);
+  const tabLinks = [
+    ['overview', '总览'],
+    ['messages', 'KOL与沟通'],
+    ['content', '内容'],
+    ['shipment', '物流样品'],
+    ['costs', '费用'],
+    ['attribution', '短链归因'],
+    ['terms', '条款证据'],
+  ];
 
   return (
-    <aside className="vkpi-evidence-drawer vkpi-project-detail-drawer" role="dialog" aria-label="项目详情">
+    <aside className="vkpi-evidence-drawer vkpi-project-detail-drawer vkpi-project-detail-campaign" role="dialog" aria-label="项目详情">
       <header>
         <div>
-          <span>Project Detail</span>
+          <span>Campaign Detail</span>
           <h2>{projectName}</h2>
           <small>负责人 {owner} · KOL {kolName} · 当前阶段 {stageLabels[stage] || stage}</small>
         </div>
@@ -139,12 +170,53 @@ export function ProjectDetailDrawer({
       <div className="vkpi-evidence-list">
         {loading ? <div className="vkpi-empty-state">正在加载项目详情...</div> : null}
         {error ? <div className="vkpi-empty-state">{error}</div> : null}
-        <article>
+        <section className="vkpi-project-detail-hero" id="project-detail-overview">
+          <div>
+            <span className="vkpi-project-detail-eyebrow">项目作战卡</span>
+            <h3>{projectName}</h3>
+            <p>{textValue(project.product_sku || fallbackProject?.campaign, '-')} · {textValue(project.platform || fallbackProject?.platform, '-')} · {kolName}</p>
+            <div className="vkpi-project-detail-meta">
+              <span>负责人 {owner}</span>
+              <span>总耗时 {fallbackProject?.totalDurationLabel || '-'}</span>
+              <span>阶段停留 {fallbackProject?.stageDurationLabel || '-'}</span>
+            </div>
+          </div>
+          <div className={`vkpi-project-detail-score ${health.className}`}>
+            <span>健康分</span>
+            <strong>{health.score}</strong>
+            <em>{health.label}</em>
+          </div>
+        </section>
+        <section className="vkpi-project-detail-kpis">
+          <div><span>播放</span><strong>{numberFormatter.format(safeNumber(project.views || fallbackProject?.views))}</strong></div>
+          <div><span>点击</span><strong>{numberFormatter.format(clickCount)}</strong></div>
+          <div><span>订单</span><strong>{numberFormatter.format(orderCount)}</strong></div>
+          <div><span>内容</span><strong>{numberFormatter.format(contentCount)}</strong></div>
+          <div><span>销售</span><strong>{currencyFormatter.format(revenue)}</strong></div>
+          {showFinancials ? <div><span>成本</span><strong>{currencyFormatter.format(cost)}</strong></div> : null}
+          <div><span>ROI</span><strong>{roiValue == null ? '-' : `${roiValue.toFixed(2)}x`}</strong></div>
+        </section>
+        <section className="vkpi-project-detail-flow" aria-label="项目阶段漏斗">
+          {primaryStageFlow.map((flowStage, index) => {
+            const state = index < currentStageIndex ? 'done' : index === currentStageIndex ? 'now' : 'todo';
+            return (
+              <div className={`vkpi-project-detail-stage is-${state}`} key={flowStage}>
+                <strong>{index + 1}</strong>
+                <span>{stageLabels[flowStage]}</span>
+                <em>{state === 'done' ? '已完成' : state === 'now' ? '当前阶段' : '待推进'}</em>
+              </div>
+            );
+          })}
+        </section>
+        <nav className="vkpi-project-detail-tabs" aria-label="项目详情分区">
+          {tabLinks.map(([id, label]) => <a key={id} href={`#project-detail-${id}`}>{label}</a>)}
+        </nav>
+        <article id="project-detail-overview-card">
           <div><strong>项目概览</strong><span>{textValue(project.updated_at || fallbackProject?.updatedAt, '-')}</span></div>
           <p>产品：{textValue(project.product_sku || fallbackProject?.campaign, '-')} · 平台：{textValue(project.platform || fallbackProject?.platform, '-')}</p>
           <em>总耗时 {fallbackProject?.totalDurationLabel || '-'} · 当前阶段 {fallbackProject?.stageDurationLabel || '-'}</em>
         </article>
-        <article>
+        <article id="project-detail-products">
           <div><strong>关联产品</strong><span>{selectedProducts.length ? `${selectedProducts.length} 个` : '未选择'}</span></div>
           {selectedProducts.length ? (
             <div className="vkpi-chip-row">
@@ -157,7 +229,7 @@ export function ProjectDetailDrawer({
           )}
           <em>主产品仍写入项目主字段，多产品保存在项目 metadata，后续可升级为项目-产品关系表。</em>
         </article>
-        <article>
+        <article id="project-detail-attribution">
           <div><strong>{showFinancials ? '销售 / 成本 / ROI' : '销售 / 项目进度'}</strong><span>来自项目详情接口</span></div>
           <p>
             销售 {currencyFormatter.format(revenue)}
@@ -165,7 +237,7 @@ export function ProjectDetailDrawer({
           </p>
           <em>{showFinancials ? '管理层可复核成本、订单和 ROI 证据。' : '员工视角隐藏内部镜头单价和成本明细。'}</em>
         </article>
-        <article>
+        <article id="project-detail-messages">
           <div><strong>KOL Profile</strong><span>{kolProfile ? '真实档案' : '未加载'}</span></div>
           {kolProfile ? (
             <>
@@ -197,6 +269,7 @@ export function ProjectDetailDrawer({
             </article>
           )}
         </DetailList>
+        <div id="project-detail-attribution-links" />
         <DetailList title="短链" rows={links} empty="暂无短链。">
           {(row) => (
             <article key={`link-${String(row.id || row.slug || Math.random())}`}>
@@ -252,16 +325,19 @@ export function ProjectDetailDrawer({
             </article>
           )}
         </DetailList>
+        <div id="project-detail-costs" />
         {showFinancials ? (
-          <DetailList title="成本" rows={costsRows} empty="暂无成本记录。">
-            {(row) => (
-              <article key={`cost-${String(row.id || row.source_ref || Math.random())}`}>
-                <div><strong>{currencyFormatter.format(safeNumber(row.amount_cents) / 100)}</strong><span>{textValue(row.cost_type, '-')}</span></div>
-                <p>{textValue(row.note, '无备注')}</p>
-                <em>{textValue(row.status, '-')} · {textValue(row.incurred_at || row.created_at, '-')}</em>
-              </article>
-            )}
-          </DetailList>
+          <>
+            <DetailList title="成本" rows={costsRows} empty="暂无成本记录。">
+              {(row) => (
+                <article key={`cost-${String(row.id || row.source_ref || Math.random())}`}>
+                  <div><strong>{currencyFormatter.format(safeNumber(row.amount_cents) / 100)}</strong><span>{textValue(row.cost_type, '-')}</span></div>
+                  <p>{textValue(row.note, '无备注')}</p>
+                  <em>{textValue(row.status, '-')} · {textValue(row.incurred_at || row.created_at, '-')}</em>
+                </article>
+              )}
+            </DetailList>
+          </>
         ) : null}
         <DetailList title="消息记录" rows={messages} empty="暂无消息记录。">
           {(row) => (
@@ -272,6 +348,7 @@ export function ProjectDetailDrawer({
             </article>
           )}
         </DetailList>
+        <div id="project-detail-content" />
         <DetailList title="内容资产" rows={contentPosts} empty="暂无发布内容。">
           {(row) => (
             <article key={`content-${String(row.id || row.post_url || Math.random())}`}>
@@ -290,7 +367,7 @@ export function ProjectDetailDrawer({
             </article>
           )}
         </DetailList>
-        <article>
+        <article id="project-detail-terms">
           <div><strong>合作条款</strong><span>{terms && Object.keys(terms).length ? '已记录' : '0 条'}</span></div>
           {terms && Object.keys(terms).length ? (
             <>
@@ -309,6 +386,7 @@ export function ProjectDetailDrawer({
             </article>
           )}
         </DetailList>
+        <div id="project-detail-shipment" />
         <DetailList title="样品 / 物流" rows={[...samples.map((row) => ({ ...row, __kind: 'sample' })), ...shipments.map((row) => ({ ...row, __kind: 'shipment' }))]} empty="暂无样品或物流记录。">
           {(row) => (
             <article key={`sample-${String(row.__kind)}-${String(row.id || row.tracking_number || row.serial_number || Math.random())}`}>

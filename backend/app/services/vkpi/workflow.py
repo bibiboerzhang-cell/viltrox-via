@@ -33,6 +33,7 @@ from app.services.vkpi.workflow_projects import (
     delete_project,
     list_projects,
     transition_project,
+    update_project,
 )
 
 __all__ = [
@@ -56,6 +57,7 @@ __all__ = [
     "architecture_summary",
     "list_projects",
     "create_project",
+    "update_project",
     "transition_project",
     "delete_project",
     "add_project_message",

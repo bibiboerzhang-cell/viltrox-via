@@ -1,12 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import type { VkpiDashboardData, VkpiProjectRow, VkpiProjectStage, VkpiStaffMember } from '../vkpiTypes';
-import { CardHeader } from '../shared/CardHeader';
-import { ProjectFlowStepper } from '../shared/ProjectFlowStepper';
-import { ProjectSelect } from '../shared/ProjectSelect';
-import { stageLabels } from '../shared/vkpiConstants';
-import { nextProjectStage, previousProjectStage } from '../shared/vkpiDataUtils';
-import { ProjectTable } from '../tables/ProjectTable';
+import React, { useMemo, useState } from 'react';
+import type { VkpiDashboardData, VkpiKolOption, VkpiProjectRow, VkpiProjectStage, VkpiStaffMember } from '../vkpiTypes';
+import { useProjectDetail } from '../hooks/useProjectDetail';
 import { PageShell } from './PageShell';
+import { ProjectCampaignBoard } from './projects/ProjectCampaignBoard';
+import { ProjectDetailView } from './projects/ProjectDetailView';
+import './projects/projectBoard.css';
 
 interface ProjectsPageProps {
   data: VkpiDashboardData;
@@ -17,36 +15,58 @@ interface ProjectsPageProps {
   onSelectProject: (project: VkpiProjectRow) => void;
   onOpenKolProfile?: (project: VkpiProjectRow) => void | Promise<void>;
   onOpenStaffProfile?: (staffId: string, fallback?: Partial<VkpiStaffMember>) => void | Promise<void>;
+  onLookupKol?: (payload: { platform: string; handleOrUrl: string; createIfMissing?: boolean; email?: string; contactEmail?: string; notes?: string; scanAccount?: boolean; maxPosts?: number; productSku?: string }) => Promise<{ kol?: Record<string, unknown> | null; created?: boolean }>;
   onCreateProject?: (payload: { projectName: string; kolId?: string; productSku?: string; productName?: string; productSkus?: string[]; products?: Array<{ productSku: string; productName?: string }>; platform?: string; marketplace?: string; note?: string }) => Promise<void>;
+  onUpdateProject?: (projectId: string, payload: { projectName?: string; productSku?: string; productName?: string; products?: Array<{ productSku: string; productName?: string }>; platform?: string; marketplace?: string; priority?: string; shopifyLink?: string; targetPostDate?: string; dueAt?: string; note?: string }) => Promise<void>;
   onMoveProjectStage?: (projectId: string, toStage: VkpiProjectStage, note?: string, extras?: { trackingNumber?: string; sampleStatus?: string; sourceRefType?: string; sourceRefId?: string }) => Promise<void>;
   onDeleteProject?: (projectId: string, reason?: string) => Promise<void>;
   onAddProjectCost?: (payload: { projectId: string; costType: string; amountUsd: number; note?: string; sourceRef?: string }) => Promise<void>;
+  onUpsertProjectTerms?: (projectId: string, payload: Record<string, unknown>) => Promise<void>;
+  onAddProjectShipment?: (projectId: string, payload: Record<string, unknown>) => Promise<void>;
   onUploadEvidenceFile?: (file: File, payload?: { entityType?: string; entityId?: string; purpose?: string }) => Promise<Record<string, unknown>>;
+  apiToken?: string;
 }
 
-export function ProjectsPage({ data, filteredProjects, selectedProjectId, selectedProject, viewMode, onSelectProject, onOpenKolProfile, onOpenStaffProfile, onCreateProject, onMoveProjectStage, onDeleteProject, onAddProjectCost, onUploadEvidenceFile }: ProjectsPageProps) {
+const campaignStatusOptions = ['规划中', '进行中', '收尾中', '已结束', '已取消'];
+
+export function ProjectsPage({
+  data,
+  filteredProjects,
+  selectedProjectId,
+  selectedProject,
+  viewMode,
+  onOpenKolProfile,
+  onOpenStaffProfile,
+  onLookupKol,
+  onCreateProject,
+  onUpdateProject,
+  onMoveProjectStage,
+  onDeleteProject,
+  onUpsertProjectTerms,
+  onAddProjectShipment,
+  onUploadEvidenceFile,
+  apiToken,
+}: ProjectsPageProps) {
+  const [createOpen, setCreateOpen] = useState(false);
   const [projectName, setProjectName] = useState('');
   const [kolId, setKolId] = useState('');
-  const [productSku, setProductSku] = useState('');
   const [productName, setProductName] = useState('');
-  const [selectedProductSkus, setSelectedProductSkus] = useState<string[]>([]);
-  const [stageProjectId, setStageProjectId] = useState(selectedProjectId || '');
-  const [stageNote, setStageNote] = useState('');
-  const [stageEvidenceFile, setStageEvidenceFile] = useState<File | null>(null);
-  const [trackingNumber, setTrackingNumber] = useState('');
-  const [contentUrl, setContentUrl] = useState('');
-  const [costProjectId, setCostProjectId] = useState(selectedProjectId || '');
-  const [shippingAmount, setShippingAmount] = useState('');
-  const [promotionAmount, setPromotionAmount] = useState('');
-  const [costNote, setCostNote] = useState('');
-  const [costEvidenceFile, setCostEvidenceFile] = useState<File | null>(null);
+  const [price, setPrice] = useState('');
+  const [campaignStatus, setCampaignStatus] = useState('规划中');
+  const [targetKolCount, setTargetKolCount] = useState('10');
+  const [budgetUsd, setBudgetUsd] = useState('0');
+  const [spentUsd, setSpentUsd] = useState('0');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [ownerName, setOwnerName] = useState(selectedProject?.ownerName || data.staffMembers[0]?.name || '');
+  const [campaignType, setCampaignType] = useState('上市推广');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
-  const activeProject = data.projects.find((project) => project.id === stageProjectId) || selectedProject || filteredProjects[0];
-  const nextStage = activeProject ? nextProjectStage(activeProject.stage) : null;
-  const previousStage = activeProject ? previousProjectStage(activeProject.stage) : null;
+  const [detailProjectId, setDetailProjectId] = useState<string | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
+
   const productChoices = useMemo(() => {
-    const bySku = new Map<string, { id: string; productSku: string; productName: string; active: boolean; sourceLabel: string }>();
+    const bySku = new Map<string, { id: string; productSku: string; productName: string; sourceLabel: string }>();
     data.productCosts
       .filter((item) => item.active !== false)
       .forEach((item) => {
@@ -55,7 +75,6 @@ export function ProjectsPage({ data, filteredProjects, selectedProjectId, select
           id: item.id || item.productSku,
           productSku: item.productSku,
           productName: item.productName || item.productSku,
-          active: item.active,
           sourceLabel: '成本目录',
         });
       });
@@ -66,223 +85,443 @@ export function ProjectsPage({ data, filteredProjects, selectedProjectId, select
         id: launch.id || sku,
         productSku: sku,
         productName: launch.productName || launch.launchName || sku,
-        active: true,
         sourceLabel: launch.status ? `产品发布 · ${launch.status}` : '产品发布',
       });
     });
     return Array.from(bySku.values()).sort((a, b) => a.productName.localeCompare(b.productName));
   }, [data.productCosts, data.productLaunches]);
-  const selectedProductLabels = selectedProductSkus
-    .map((sku) => productChoices.find((item) => item.productSku === sku))
-    .filter(Boolean)
-    .map((item) => `${item?.productName || item?.productSku} (${item?.productSku})`);
 
-  useEffect(() => {
-    if (selectedProjectId) {
-      setStageProjectId(selectedProjectId);
-      setCostProjectId(selectedProjectId);
-    }
-  }, [selectedProjectId]);
+  const matchedProduct = useMemo(() => {
+    const normalized = productName.trim().toLowerCase();
+    if (!normalized) return undefined;
+    return productChoices.find((item) => (
+      item.productName.toLowerCase() === normalized ||
+      item.productSku.toLowerCase() === normalized
+    ));
+  }, [productChoices, productName]);
+
+  const closeCreateModal = () => {
+    if (busy) return;
+    setCreateOpen(false);
+  };
+
+  const resetCreateForm = () => {
+    setProjectName('');
+    setKolId('');
+    setProductName('');
+    setPrice('');
+    setCampaignStatus('规划中');
+    setTargetKolCount('10');
+    setBudgetUsd('0');
+    setSpentUsd('0');
+    setStartDate('');
+    setEndDate('');
+    setOwnerName(selectedProject?.ownerName || data.staffMembers[0]?.name || '');
+    setCampaignType('上市推广');
+  };
 
   const submitProject = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!onCreateProject || !projectName.trim()) return;
-    const primarySku = productSku.trim() || selectedProductSkus[0] || '';
-    const selectedProducts = selectedProductSkus
-      .map((sku) => productChoices.find((item) => item.productSku === sku))
-      .filter((item): item is { id: string; productSku: string; productName: string; active: boolean; sourceLabel: string } => Boolean(item))
-      .map((item) => ({ productSku: item.productSku, productName: item.productName }));
+    const noteLines = [
+      campaignStatus ? `状态：${campaignStatus}` : '',
+      campaignType.trim() ? `推广类型：${campaignType.trim()}` : '',
+      price.trim() ? `价格：${price.trim()}` : '',
+      targetKolCount.trim() ? `目标 KOL 数：${targetKolCount.trim()}` : '',
+      budgetUsd.trim() ? `预算 USD：${budgetUsd.trim()}` : '',
+      spentUsd.trim() ? `已花 USD：${spentUsd.trim()}` : '',
+      startDate ? `开始时间：${startDate}` : '',
+      endDate ? `计划结束：${endDate}` : '',
+      ownerName.trim() ? `负责人：${ownerName.trim()}` : '',
+    ].filter(Boolean);
     setBusy(true);
     try {
       await onCreateProject({
         projectName: projectName.trim(),
         kolId: kolId.trim() || undefined,
-        productSku: primarySku || undefined,
-        productName: (productName.trim() || selectedProducts[0]?.productName) || undefined,
-        productSkus: selectedProductSkus.length ? selectedProductSkus : undefined,
-        products: selectedProducts.length ? selectedProducts : undefined,
-        note: selectedProductLabels.length > 1 ? `关联产品：${selectedProductLabels.join('、')}` : undefined,
+        productSku: matchedProduct?.productSku,
+        productName: productName.trim() || matchedProduct?.productName,
+        products: matchedProduct ? [{ productSku: matchedProduct.productSku, productName: matchedProduct.productName }] : undefined,
+        note: noteLines.length ? noteLines.join('\n') : undefined,
       });
-      setProjectName('');
-      setKolId('');
-      setProductSku('');
-      setProductName('');
-      setSelectedProductSkus([]);
-      setMessage('项目已创建。');
+      resetCreateForm();
+      setCreateOpen(false);
+      setMessage('推广项目已创建。后续阶段推进、费用、物流和证据请在项目详情里处理。');
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '项目创建失败');
+      setMessage(error instanceof Error ? error.message : '推广项目创建失败');
     } finally {
       setBusy(false);
     }
   };
 
-  const selectPrimaryProduct = (sku: string) => {
-    setProductSku(sku);
-    const product = productChoices.find((item) => item.productSku === sku);
-    setProductName(product?.productName || '');
-    setSelectedProductSkus((current) => sku && !current.includes(sku) ? [...current, sku] : current);
-  };
-
-  const toggleProduct = (sku: string) => {
-    setSelectedProductSkus((current) => current.includes(sku) ? current.filter((item) => item !== sku) : [...current, sku]);
-  };
-
-  const moveStage = async (toStage: VkpiProjectStage | null, direction: 'next' | 'prev') => {
-    if (!toStage || !onMoveProjectStage || !stageProjectId) return;
-    if (toStage === 'shipped' && !trackingNumber.trim()) {
-      setMessage('发货阶段需要填写物流单号。');
-      return;
-    }
-    if (toStage === 'published' && !contentUrl.trim()) {
-      setMessage('验收视频阶段需要填写视频链接。');
-      return;
-    }
-    setBusy(true);
-    try {
-      let evidenceUrl = '';
-      if (stageEvidenceFile && onUploadEvidenceFile) {
-        const upload = await onUploadEvidenceFile(stageEvidenceFile, { entityType: 'project_stage', entityId: stageProjectId, purpose: 'stage_note' });
-        evidenceUrl = String(upload.file_url || upload.fileUrl || '');
-      }
-      const nextNote = [stageNote.trim(), evidenceUrl ? `附件：${evidenceUrl}` : ''].filter(Boolean).join('\n') || undefined;
-      await onMoveProjectStage(stageProjectId, toStage, nextNote, {
-        trackingNumber: trackingNumber.trim() || undefined,
-        sampleStatus: toStage === 'shipped' ? 'shipped' : undefined,
-        sourceRefType: toStage === 'published' ? 'content_url' : undefined,
-        sourceRefId: toStage === 'published' ? (contentUrl.trim() || evidenceUrl || undefined) : evidenceUrl || undefined,
-      });
-      setMessage(direction === 'next' ? `已推进到：${stageLabels[toStage]}` : `已回退到：${stageLabels[toStage]}`);
-      setStageNote('');
-      setStageEvidenceFile(null);
-      if (toStage !== 'shipped') setTrackingNumber('');
-      if (toStage !== 'published') setContentUrl('');
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : '阶段更新失败');
-    } finally {
-      setBusy(false);
-    }
-  };
-  const submitCost = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!onAddProjectCost || !costProjectId) return;
-    const shipping = Number(shippingAmount || 0);
-    const promotion = Number(promotionAmount || 0);
-    if (!shipping && !promotion) {
-      setMessage('请填写快递费或推广费。');
-      return;
-    }
-    setBusy(true);
-    try {
-      let evidenceUrl = '';
-      if (costEvidenceFile && onUploadEvidenceFile) {
-        const upload = await onUploadEvidenceFile(costEvidenceFile, { entityType: 'project_cost', entityId: costProjectId, purpose: 'cost_receipt' });
-        evidenceUrl = String(upload.file_url || upload.fileUrl || '');
-      }
-      const noteWithEvidence = [costNote.trim(), evidenceUrl ? `附件：${evidenceUrl}` : ''].filter(Boolean).join('\n') || undefined;
-      if (shipping > 0) {
-        await onAddProjectCost({ projectId: costProjectId, costType: 'shipping', amountUsd: shipping, note: noteWithEvidence || '快递费', sourceRef: evidenceUrl || undefined });
-      }
-      if (promotion > 0) {
-        await onAddProjectCost({ projectId: costProjectId, costType: 'cash_fee', amountUsd: promotion, note: noteWithEvidence || '推广费用', sourceRef: evidenceUrl || undefined });
-      }
-      setShippingAmount('');
-      setPromotionAmount('');
-      setCostNote('');
-      setCostEvidenceFile(null);
-      setMessage('快递费 / 推广费已计入项目。样品成本由系统在发货阶段自动处理。');
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : '成本添加失败');
-    } finally {
-      setBusy(false);
-    }
-  };
-  const deleteProjectRow = async (project: VkpiProjectRow) => {
+  const deleteProjectRow = async (project: VkpiProjectRow, reason?: string, actionLabel = '删除项目') => {
     if (!onDeleteProject) return;
-    const confirmed = window.confirm(`确认删除项目「${project.campaign}」？\n\n项目会从列表隐藏，相关 live 短链会暂停；历史成本、归因、阶段记录会保留。`);
-    if (!confirmed) return;
     setBusy(true);
     try {
-      await onDeleteProject(project.id, `删除项目：${project.campaign}`);
-      setMessage('项目已删除，历史记录已保留。');
+      await onDeleteProject(project.id, reason || `${actionLabel}：${project.campaign}`);
+      setMessage(actionLabel === '取消推广' ? '推广已取消，历史记录已保留。' : '项目已删除，历史记录已保留。');
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '项目删除失败');
+      setMessage(error instanceof Error ? error.message : `${actionLabel}失败`);
+      throw error;
     } finally {
       setBusy(false);
     }
   };
+
+  const addKolsToCampaign = async (targetProject: VkpiProjectRow, kols: VkpiKolOption[]) => {
+    if (!onCreateProject) throw new Error('当前没有项目创建接口，不能追加 KOL。');
+    for (const kol of kols) {
+      await onCreateProject({
+        projectName: targetProject.campaign || `KOL 合作 · ${kol.handle || kol.name}`,
+        kolId: kol.id,
+        platform: kol.platform,
+        note: [
+          `从项目详情追加 KOL：${kol.handle || kol.name}`,
+          `来源项目：${targetProject.id}`,
+          targetProject.campaign ? `推广名称：${targetProject.campaign}` : '',
+        ].filter(Boolean).join('\n'),
+      });
+    }
+    setMessage(`已追加 ${kols.length} 个 KOL 到「${targetProject.campaign}」。`);
+  };
+
+  const importKolRows = async (targetProject: VkpiProjectRow, rows: ImportKolRow[]) => {
+    if (!onLookupKol || !onCreateProject) throw new Error('当前缺少查重或项目创建接口，不能导入 KOL 名单。');
+    setBusy(true);
+    try {
+      for (const row of rows) {
+        const lookup = await onLookupKol({
+          platform: row.platform,
+          handleOrUrl: row.handle,
+          createIfMissing: true,
+          email: row.email || undefined,
+          contactEmail: row.email || undefined,
+          notes: row.name ? `项目名单导入：${row.name}` : '项目名单导入',
+          scanAccount: false,
+          productSku: targetProject.productSku,
+        });
+        const kolId = String(lookup.kol?.id || lookup.kol?.kol_id || '').trim();
+        if (!kolId) throw new Error(`KOL 查重后没有返回 ID：${row.handle}`);
+        await onCreateProject({
+          projectName: targetProject.campaign || `KOL 合作 · ${row.handle}`,
+          kolId,
+          productSku: targetProject.productSku,
+          productName: targetProject.productName,
+          platform: row.platform,
+          marketplace: targetProject.marketplace,
+          note: [
+            `名单导入 KOL：${row.handle}`,
+            row.name ? `名称：${row.name}` : '',
+            row.email ? `邮箱：${row.email}` : '',
+            `来源项目：${targetProject.id}`,
+          ].filter(Boolean).join('\n'),
+        });
+      }
+      setImportOpen(false);
+      setMessage(`已导入 ${rows.length} 个 KOL 到「${targetProject.campaign}」。`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'KOL 名单导入失败');
+      throw error;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const detailProject = useMemo(() => {
+    if (!detailProjectId) return undefined;
+    return filteredProjects.find((project) => project.id === detailProjectId);
+  }, [detailProjectId, filteredProjects]);
+  const projectDetailState = useProjectDetail({
+    apiToken,
+    projectId: detailProjectId,
+    fallbackProject: detailProject,
+  });
+
+  if (detailProjectId) {
+    const detailProjectForView = projectDetailState.project;
+    return (
+      <PageShell title="项目详情" description="按项目维度查看 KOL 阶段、数据、物流、证据和今日提醒。">
+        {projectDetailState.loading ? (
+          <ProjectDetailSkeleton onBack={() => setDetailProjectId(null)} />
+        ) : null}
+        {!projectDetailState.loading && projectDetailState.error ? (
+          <ProjectDetailError
+            message={projectDetailState.notFound ? '项目不存在' : projectDetailState.error}
+            onBack={() => setDetailProjectId(null)}
+          />
+        ) : null}
+        {!projectDetailState.loading && !projectDetailState.error && detailProjectForView ? (
+          <ProjectDetailView
+            key={detailProjectForView.id}
+            project={detailProjectForView}
+            projects={filteredProjects.map((project) => (project.id === detailProjectForView.id ? detailProjectForView : project))}
+            viewMode={viewMode}
+            onBack={() => setDetailProjectId(null)}
+            onOpenKolProfile={onOpenKolProfile}
+            onOpenStaffProfile={onOpenStaffProfile}
+            onMoveProjectStage={onMoveProjectStage}
+            onUpdateProject={onUpdateProject}
+            onUpsertProjectTerms={onUpsertProjectTerms}
+            onAddProjectShipment={onAddProjectShipment}
+            onUploadEvidenceFile={onUploadEvidenceFile}
+            kolOptions={data.kolOptions}
+            onAddKolsToCampaign={onCreateProject ? addKolsToCampaign : undefined}
+            onProjectUpdated={projectDetailState.refresh}
+            onDeleteProject={onDeleteProject ? deleteProjectRow : undefined}
+          />
+        ) : null}
+        {message ? <div className="vkpi-inline-message">{message}</div> : null}
+      </PageShell>
+    );
+  }
 
   return (
     <PageShell title="项目跟进" description="创建项目、按流程一键推进，系统自动记录从开始到完成的耗时。">
-      <section className="vkpi-card-grid vkpi-card-grid--forms">
-        <section className="vkpi-card vkpi-action-card">
-          <CardHeader title="新建项目" />
-          <form className="vkpi-form-stack" onSubmit={submitProject}>
-            <input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="项目名称，例如 35mm F1.2 Instagram 合作" />
-            <label>合作红人
-              {data.kolOptions.length ? (
-                <select value={kolId} onChange={(event) => setKolId(event.target.value)}>
-                  <option value="">选择已有红人</option>
-                  {data.kolOptions.map((kol) => <option key={kol.id} value={kol.id}>{kol.name} · {kol.handle} · {kol.platform}</option>)}
-                </select>
-              ) : (
-                <>
-                  <input value={kolId} onChange={(event) => setKolId(event.target.value)} placeholder="输入已有 KOL ID（临时兜底）" />
-                  <span className="vkpi-help-text">当前没有可选红人。优先从红人搜索认领/导入；临时测试才填写真实 KOL ID。</span>
-                </>
-              )}
-            </label>
-            <label>主产品
-              {productChoices.length ? (
-                <select value={productSku} onChange={(event) => selectPrimaryProduct(event.target.value)}>
-                  <option value="">选择产品 SKU</option>
-                  {productChoices.map((product) => <option key={product.id || product.productSku} value={product.productSku}>{product.productName || product.productSku} · {product.productSku} · {product.sourceLabel}</option>)}
-                </select>
-              ) : (
-                <input value={productSku} onChange={(event) => setProductSku(event.target.value)} placeholder="产品 SKU" />
-              )}
-            </label>
-            {!productChoices.length ? <input value={productName} onChange={(event) => setProductName(event.target.value)} placeholder="产品名称" /> : null}
-            {productChoices.length ? (
-              <div className="vkpi-chip-list" aria-label="可关联产品">
-                {productChoices.slice(0, 8).map((product) => (
-                  <button className={`vkpi-chip ${selectedProductSkus.includes(product.productSku) ? 'is-selected' : ''}`} type="button" key={product.id || product.productSku} onClick={() => toggleProduct(product.productSku)}>
-                    {product.productName || product.productSku}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-            {selectedProductLabels.length ? <span className="vkpi-help-text">已关联：{selectedProductLabels.join('、')}</span> : null}
-            <button className="vkpi-button vkpi-button--primary" type="submit" disabled={busy || !onCreateProject}>创建项目</button>
-          </form>
-        </section>
-        <section className="vkpi-card vkpi-action-card vkpi-action-card--wide">
-          <CardHeader title="自动推进流程" />
-          <div className="vkpi-form-stack">
-            <ProjectSelect projects={data.projects} value={stageProjectId} onChange={setStageProjectId} />
-            {activeProject ? (
-              <>
-                <ProjectFlowStepper project={activeProject} />
-                <div className="vkpi-stage-current">
-                  <div><span>当前阶段</span><strong>{stageLabels[activeProject.stage]}</strong></div>
-                  <div><span>项目总耗时</span><strong>{activeProject.totalDurationLabel || '-'}</strong></div>
-                  <div><span>本阶段停留</span><strong>{activeProject.stageDurationLabel || '-'}</strong></div>
-                </div>
-              </>
-            ) : <div className="vkpi-empty-state">暂无可推进项目。</div>}
-            {nextStage === 'shipped' ? <input value={trackingNumber} onChange={(event) => setTrackingNumber(event.target.value)} placeholder="物流单号（发货必填）" /> : null}
-            {nextStage === 'published' ? <input value={contentUrl} onChange={(event) => setContentUrl(event.target.value)} placeholder="验收视频 / 内容链接（发布必填）" /> : null}
-            <input value={stageNote} onChange={(event) => setStageNote(event.target.value)} placeholder="备注，例如已邮件联系 / KOL 回复 / 发货说明" />
-            <label className="vkpi-upload-row">阶段附件 / PDF / 截图<input type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.csv,.xlsx,.xls,.txt,.doc,.docx" onChange={(event) => setStageEvidenceFile(event.target.files?.[0] || null)} /></label>
-            <div className="vkpi-stage-actions">
-              <button className="vkpi-button" type="button" onClick={() => void moveStage(previousStage, 'prev')} disabled={busy || !previousStage || !onMoveProjectStage}>返回上一步{previousStage ? `：${stageLabels[previousStage]}` : ''}</button>
-              <button className="vkpi-button vkpi-button--primary" type="button" onClick={() => void moveStage(nextStage, 'next')} disabled={busy || !nextStage || !onMoveProjectStage}>完成当前步，进入{nextStage ? `：${stageLabels[nextStage]}` : '下一步'}</button>
-            </div>
-          </div>
-        </section>
-        <section className="vkpi-card vkpi-action-card"><CardHeader title="登记快递 / 推广费" /><form className="vkpi-form-stack" onSubmit={submitCost}><ProjectSelect projects={data.projects} value={costProjectId} onChange={setCostProjectId} /><input value={shippingAmount} onChange={(event) => setShippingAmount(event.target.value)} placeholder="快递费 USD" inputMode="decimal" /><input value={promotionAmount} onChange={(event) => setPromotionAmount(event.target.value)} placeholder="推广费用 USD（可选）" inputMode="decimal" /><input value={costNote} onChange={(event) => setCostNote(event.target.value)} placeholder="备注 / 单号 / 凭证" /><label className="vkpi-upload-row">凭证附件<input type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.csv,.xlsx,.xls,.txt,.doc,.docx" onChange={(event) => setCostEvidenceFile(event.target.files?.[0] || null)} /></label><span className="vkpi-help-text">员工只登记快递费和推广费；样品内部成本由系统在发货后自动处理。</span><button className="vkpi-button vkpi-button--primary" type="submit" disabled={busy || !onAddProjectCost}>计入快递 / 推广费</button></form></section>
-      </section>
+      <ProjectCampaignBoard
+        projects={filteredProjects}
+        selectedProjectId={selectedProjectId}
+        viewMode={viewMode}
+        onOpenProjectDetail={(project) => setDetailProjectId(project.id)}
+        onOpenStaffProfile={onOpenStaffProfile}
+        onOpenCreateProject={() => setCreateOpen(true)}
+        onOpenImportKols={onLookupKol && onCreateProject && filteredProjects.length > 0 ? () => setImportOpen(true) : undefined}
+      />
       {message ? <div className="vkpi-inline-message">{message}</div> : null}
-      <section className="vkpi-card vkpi-table-card"><div className="vkpi-table-card__header"><div><h2>项目列表</h2><span>{filteredProjects.length} 条真实项目</span></div></div><ProjectTable projects={filteredProjects} selectedProjectId={selectedProjectId} viewMode={viewMode} onSelectProject={onSelectProject} onOpenKolProfile={onOpenKolProfile} onOpenStaffProfile={onOpenStaffProfile} onDeleteProject={onDeleteProject ? deleteProjectRow : undefined} /></section>
+      {importOpen ? (
+        <ImportKolListModal
+          projects={filteredProjects}
+          selectedProject={selectedProject || filteredProjects[0]}
+          busy={busy}
+          onClose={() => setImportOpen(false)}
+          onSubmit={importKolRows}
+        />
+      ) : null}
+      {createOpen ? (
+        <div className="vkpi-project-modal-backdrop" role="presentation">
+          <form className="vkpi-project-create-modal" onSubmit={submitProject} role="dialog" aria-label="新建推广">
+            <header>
+              <div>
+                <h2>新建推广</h2>
+                <p>提交后写入现有项目接口；阶段、费用、物流和证据在项目详情继续处理。</p>
+              </div>
+              <button type="button" onClick={closeCreateModal}>关闭</button>
+            </header>
+            <div className="vkpi-project-create-grid">
+              <label className="is-full">推广名称
+                <input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="例：AF 35mm F1.2 LAB FE 上市推广" />
+              </label>
+              <label>主推产品
+                <input list="vkpi-project-product-options" value={productName} onChange={(event) => setProductName(event.target.value)} placeholder="35mm F1.2 LAB FE" />
+                <datalist id="vkpi-project-product-options">
+                  {productChoices.map((product) => <option key={product.id || product.productSku} value={product.productName}>{product.productSku} · {product.sourceLabel}</option>)}
+                </datalist>
+              </label>
+              <label>价格
+                <input value={price} onChange={(event) => setPrice(event.target.value)} placeholder="$999" />
+              </label>
+              <label>状态
+                <select value={campaignStatus} onChange={(event) => setCampaignStatus(event.target.value)}>
+                  {campaignStatusOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                </select>
+              </label>
+              <label>目标 KOL 数
+                <input value={targetKolCount} onChange={(event) => setTargetKolCount(event.target.value)} inputMode="numeric" placeholder="10" />
+              </label>
+              <label>预算 USD
+                <input value={budgetUsd} onChange={(event) => setBudgetUsd(event.target.value)} inputMode="decimal" placeholder="0" />
+              </label>
+              <label>已花 USD
+                <input value={spentUsd} onChange={(event) => setSpentUsd(event.target.value)} inputMode="decimal" placeholder="0" />
+              </label>
+              <label>开始时间
+                <input value={startDate} onChange={(event) => setStartDate(event.target.value)} type="date" />
+              </label>
+              <label>计划结束
+                <input value={endDate} onChange={(event) => setEndDate(event.target.value)} type="date" />
+              </label>
+              <label>负责人
+                <input value={ownerName} onChange={(event) => setOwnerName(event.target.value)} placeholder="Jianbo" />
+              </label>
+              <label>推广类型
+                <input value={campaignType} onChange={(event) => setCampaignType(event.target.value)} placeholder="上市推广" />
+              </label>
+              {data.kolOptions.length ? (
+                <label className="is-full">合作 KOL（可选）
+                  <select value={kolId} onChange={(event) => setKolId(event.target.value)}>
+                    <option value="">稍后从项目详情或 KOL 库添加</option>
+                    {data.kolOptions.map((kol) => <option key={kol.id} value={kol.id}>{kol.name} · {kol.handle} · {kol.platform}</option>)}
+                  </select>
+                </label>
+              ) : null}
+            </div>
+            <footer>
+              <button className="vkpi-project-modal-button" type="button" onClick={closeCreateModal} disabled={busy}>取消</button>
+              <button className="vkpi-project-modal-button is-primary" type="submit" disabled={busy || !onCreateProject || !projectName.trim()}>
+                创建推广
+              </button>
+            </footer>
+          </form>
+        </div>
+      ) : null}
     </PageShell>
+  );
+}
+
+interface ImportKolRow {
+  platform: string;
+  handle: string;
+  name?: string;
+  email?: string;
+}
+
+function parseKolImportRows(raw: string, fallbackPlatform: string): ImportKolRow[] {
+  const rows: ImportKolRow[] = [];
+  const seen = new Set<string>();
+  raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .forEach((line, index) => {
+      const cells = line.split(/\t|,/).map((cell) => cell.trim()).filter(Boolean);
+      const normalizedHeaderCells = cells.map((cell) => cell.toLowerCase());
+      const looksLikeHeader = index === 0 && normalizedHeaderCells.some((cell) => ['platform', '平台'].includes(cell))
+        && normalizedHeaderCells.some((cell) => ['handle', '账号', 'kol', 'email', '邮箱', 'name', '名称'].includes(cell));
+      if (looksLikeHeader) return;
+      if (!cells.length) return;
+      let platform = fallbackPlatform;
+      let handle = cells[0] || '';
+      let name = '';
+      let email = '';
+      if (cells.length >= 2 && /instagram|youtube|tiktok|facebook|reddit|twitter|^x$|other/i.test(cells[0])) {
+        platform = cells[0];
+        handle = cells[1] || '';
+        name = cells[2] || '';
+        email = cells[3] || '';
+      } else {
+        name = cells[1] || '';
+        email = cells[2] || '';
+      }
+      handle = handle.trim();
+      if (!handle) return;
+      const dedupeKey = `${platform.toLowerCase()}::${handle.toLowerCase()}`;
+      if (seen.has(dedupeKey)) return;
+      seen.add(dedupeKey);
+      rows.push({ platform, handle, name, email });
+    });
+  return rows.slice(0, 50);
+}
+
+function ImportKolListModal({
+  projects,
+  selectedProject,
+  busy,
+  onClose,
+  onSubmit,
+}: {
+  projects: VkpiProjectRow[];
+  selectedProject?: VkpiProjectRow;
+  busy: boolean;
+  onClose: () => void;
+  onSubmit: (project: VkpiProjectRow, rows: ImportKolRow[]) => Promise<void>;
+}) {
+  const [projectId, setProjectId] = useState(selectedProject?.id || projects[0]?.id || '');
+  const [fallbackPlatform, setFallbackPlatform] = useState<string>(selectedProject?.platform || projects[0]?.platform || 'Instagram');
+  const [rawText, setRawText] = useState('Instagram, @creator.handle, Creator Name, creator@email.com');
+  const [error, setError] = useState('');
+  const targetProject = projects.find((project) => project.id === projectId) || projects[0];
+  const parsedRows = useMemo(() => parseKolImportRows(rawText, fallbackPlatform), [fallbackPlatform, rawText]);
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!targetProject) {
+      setError('请先选择目标推广。');
+      return;
+    }
+    if (!parsedRows.length) {
+      setError('没有解析到可导入的 KOL 行。');
+      return;
+    }
+    setError('');
+    await onSubmit(targetProject, parsedRows);
+  };
+
+  return (
+    <div className="vkpi-project-modal-backdrop" role="presentation">
+      <form className="vkpi-project-import-modal" onSubmit={submit} role="dialog" aria-label="导入 KOL 名单">
+        <header>
+          <div>
+            <h2>导入 KOL 名单</h2>
+            <p>每行先查重/创建 KOL，再追加到目标推广；最多 50 行。</p>
+          </div>
+          <button type="button" onClick={onClose} disabled={busy}>关闭</button>
+        </header>
+        <div className="vkpi-project-import-grid">
+          <label>目标推广
+            <select value={projectId} onChange={(event) => setProjectId(event.target.value)}>
+              {projects.map((project) => <option key={project.id} value={project.id}>{project.campaign} · {project.kolHandle || project.kolName}</option>)}
+            </select>
+          </label>
+          <label>默认平台
+            <select value={fallbackPlatform} onChange={(event) => setFallbackPlatform(event.target.value)}>
+              {['Instagram', 'YouTube', 'TikTok', 'Facebook', 'Reddit', 'X', 'Other'].map((item) => <option key={item}>{item}</option>)}
+            </select>
+          </label>
+          <label className="is-full">名单内容
+            <textarea
+              value={rawText}
+              onChange={(event) => setRawText(event.target.value)}
+              placeholder={`支持格式：\nInstagram, @handle, Name, email@example.com\n@handle, Name, email@example.com`}
+            />
+          </label>
+        </div>
+        <div className="vkpi-project-import-preview">
+          <strong>预览 {parsedRows.length} 行</strong>
+          <div>
+            {parsedRows.slice(0, 6).map((row) => <span key={`${row.platform}-${row.handle}`}>{row.platform} · {row.handle}</span>)}
+            {parsedRows.length > 6 ? <span>还有 {parsedRows.length - 6} 行</span> : null}
+          </div>
+        </div>
+        {error ? <div className="vkpi-campaign-upload-error">{error}</div> : null}
+        <footer>
+          <button className="vkpi-project-modal-button" type="button" onClick={onClose} disabled={busy}>取消</button>
+          <button className="vkpi-project-modal-button is-primary" type="submit" disabled={busy || !parsedRows.length}>
+            {busy ? '导入中' : `导入 ${parsedRows.length} 个 KOL`}
+          </button>
+        </footer>
+      </form>
+    </div>
+  );
+}
+
+function ProjectDetailSkeleton({ onBack }: { onBack: () => void }) {
+  return (
+    <section className="vkpi-campaign-detail" aria-label="项目详情加载中">
+      <button className="vkpi-campaign-back" type="button" onClick={onBack}>← 返回项目列表</button>
+      <div className="vkpi-campaign-detail-hero vkpi-campaign-skeleton">
+        <div>
+          <span />
+          <strong />
+          <p />
+          <p />
+        </div>
+        <div />
+      </div>
+      <div className="vkpi-campaign-kpis vkpi-campaign-skeleton-kpis">
+        {Array.from({ length: 6 }).map((_, index) => <div key={index} />)}
+      </div>
+      <div className="vkpi-campaign-panel vkpi-campaign-skeleton-panel" />
+    </section>
+  );
+}
+
+function ProjectDetailError({ message, onBack }: { message: string; onBack: () => void }) {
+  return (
+    <section className="vkpi-campaign-detail" aria-label="项目详情错误">
+      <button className="vkpi-campaign-back" type="button" onClick={onBack}>← 返回项目列表</button>
+      <div className="vkpi-campaign-placeholder is-error">
+        <h3>{message}</h3>
+        <p>请返回项目列表后刷新数据，或确认该项目仍在当前账号权限范围内。</p>
+      </div>
+    </section>
   );
 }

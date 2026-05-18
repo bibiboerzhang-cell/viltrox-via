@@ -144,6 +144,20 @@ export interface VkpiCreateProjectPayload {
   note?: string;
 }
 
+export interface VkpiUpdateProjectPayload {
+  projectName?: string;
+  productSku?: string;
+  productName?: string;
+  products?: Array<{ productSku: string; productName?: string }>;
+  platform?: string;
+  marketplace?: string;
+  priority?: string;
+  shopifyLink?: string;
+  targetPostDate?: string;
+  dueAt?: string;
+  note?: string;
+}
+
 export interface VkpiStagePayload {
   toStage: VkpiProjectStage;
   note?: string;
@@ -754,6 +768,11 @@ function buildProjects(projects: Row[], links: VkpiLinkRow[], attributions: Vkpi
       roi: cost ? Number((gmv / cost).toFixed(2)) : null,
       ownerId: project.assigned_staff_id ? String(project.assigned_staff_id) : project.created_by_staff_id ? String(project.created_by_staff_id) : undefined,
       ownerName: String(project.staff_name || project.assigned_staff_id || "未分配"),
+      productSku: String(project.product_sku || ""),
+      productName: String(project.product_name || ""),
+      marketplace: String(project.marketplace || ""),
+      priority: String(project.priority || ""),
+      shopifyLink: String(project.shopify_link || ""),
       createdAt: String(project.created_at || ""),
       startedAt,
       closedAt,
@@ -912,6 +931,24 @@ export async function createProject(token: string, payload: VkpiCreateProjectPay
       products: payload.products,
       platform: payload.platform,
       marketplace: payload.marketplace,
+      note: payload.note,
+    }),
+  }, token);
+}
+export async function updateProject(token: string, projectId: string, payload: VkpiUpdateProjectPayload) {
+  return apiFetch<Record<string, unknown>>(`/api/marketing/projects/${encodeURIComponent(projectId)}`, {
+    method: "PATCH",
+    body: jsonBody({
+      project_name: payload.projectName,
+      product_sku: payload.productSku,
+      product_name: payload.productName,
+      products: payload.products,
+      platform: payload.platform,
+      marketplace: payload.marketplace,
+      priority: payload.priority,
+      shopify_link: payload.shopifyLink,
+      target_post_date: payload.targetPostDate,
+      due_at: payload.dueAt,
       note: payload.note,
     }),
   }, token);

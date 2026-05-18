@@ -60,6 +60,7 @@ export interface VkpiDashboardProps {
   onUpdateKol?: (kolId: string, payload: { avatarUrl?: string; profileUrl?: string; contactEmail?: string; contactPhone?: string; notes?: string; contactLinks?: Array<{ label?: string; value?: string; url?: string }> }) => Promise<void>;
   onUploadEvidenceFile?: (file: File, payload?: { entityType?: string; entityId?: string; purpose?: string }) => Promise<Record<string, unknown>>;
   onCreateProject?: (payload: { projectName: string; kolId?: string; productSku?: string; productName?: string; productSkus?: string[]; products?: Array<{ productSku: string; productName?: string }>; platform?: string; marketplace?: string; note?: string }) => Promise<void>;
+  onUpdateProject?: (projectId: string, payload: { projectName?: string; productSku?: string; productName?: string; products?: Array<{ productSku: string; productName?: string }>; platform?: string; marketplace?: string; priority?: string; shopifyLink?: string; targetPostDate?: string; dueAt?: string; note?: string }) => Promise<void>;
   onMoveProjectStage?: (projectId: string, toStage: VkpiProjectStage, note?: string, extras?: { trackingNumber?: string; sampleStatus?: string; sourceRefType?: string; sourceRefId?: string }) => Promise<void>;
   onDeleteProject?: (projectId: string, reason?: string) => Promise<void>;
   onAddProjectCost?: (payload: { projectId: string; costType: string; amountUsd: number; note?: string; sourceRef?: string }) => Promise<void>;
@@ -208,6 +209,7 @@ export function VkpiDashboard({
   onUpdateKol,
   onUploadEvidenceFile,
   onCreateProject,
+  onUpdateProject,
   onMoveProjectStage,
   onDeleteProject,
   onAddProjectCost,
@@ -535,12 +537,15 @@ export function VkpiDashboard({
               onUpdateKol={onUpdateKol}
               onUploadEvidenceFile={onUploadEvidenceFile}
               onCreateProject={onCreateProject}
+              onUpdateProject={onUpdateProject}
               onMoveProjectStage={onMoveProjectStage}
               onDeleteProject={onDeleteProject}
               onAddProjectCost={onAddProjectCost}
               onUpdateCost={onUpdateCost}
               onApproveCost={onApproveCost}
               onVoidCost={onVoidCost}
+              onUpsertProjectTerms={onUpsertProjectTerms}
+              onAddProjectShipment={onAddProjectShipment}
               onCreateLink={onCreateLink}
               onPauseLink={onPauseLink}
               onArchiveLink={onArchiveLink}
@@ -552,12 +557,13 @@ export function VkpiDashboard({
               onCreateAttribution={onCreateAttribution}
               onImportAmazonRows={onImportAmazonRows}
               onUploadAmazonReport={onUploadAmazonReport}
-              onExportPDF={onExportPDF}
-              onExportCSV={onExportCSV}
-              onGenerateWeeklyReport={onGenerateWeeklyReport}
-              onOpenEvidence={openMetricEvidence}
-              apiToken={apiToken}
-            />
+	              onExportPDF={onExportPDF}
+	              onExportCSV={onExportCSV}
+	              onGenerateWeeklyReport={onGenerateWeeklyReport}
+	              onRefreshData={onRefreshData}
+	              onOpenEvidence={openMetricEvidence}
+	              apiToken={apiToken}
+	            />
           )}
         </main>
         {evidenceMetric ? (

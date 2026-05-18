@@ -177,6 +177,12 @@ def upsert_project_terms(project_id: int, body: dict[str, Any], *, staff: dict[s
         raise LookupError("project not found")
     now = utcnow()
     actor = staff_id(staff) or None
+    shopify_link = str(body.get("shopify_url") or body.get("shopify_link") or "").strip()
+    if shopify_link:
+        conn.execute(
+            "UPDATE vkpi_projects SET shopify_link=?, updated_at=? WHERE id=?",
+            (shopify_link, now, int(project_id)),
+        )
     conn.execute(
         """
         INSERT INTO vkpi_project_terms (
@@ -219,8 +225,8 @@ def upsert_project_terms(project_id: int, body: dict[str, Any], *, staff: dict[s
             action_type="terms_upsert",
             target_type="project",
             target_id=int(project_id),
-            detail=str(body.get("note") or item.get("sample_terms") or "")[:240],
-            metadata={"project_id": int(project_id), "terms_id": item.get("id")},
+            detail=str(body.get("note") or shopify_link or item.get("sample_terms") or "")[:240],
+            metadata={"project_id": int(project_id), "terms_id": item.get("id"), "shopify_link_updated": bool(shopify_link)},
         )
     return item
 

@@ -232,6 +232,88 @@ def create_project(body: dict[str, Any], *, staff: dict[str, Any] | None = None)
         )
     return {"id": project_id, "project_uid": project_uid, "stage": stage}
 
+
+def update_project(project_id: int, body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Update editable project profile fields without touching stage transitions."""
+    ensure_vkpi_schema()
+    scope.assert_project_access(project_id, staff, write=True)
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM vkpi_projects WHERE id=?", (int(project_id),)).fetchone()
+    if not row:
+        raise LookupError("project not found")
+    now = utcnow()
+    updates: dict[str, Any] = {}
+
+    field_map = {
+        "project_name": ("project_name", "name", "projectName"),
+        "product_sku": ("product_sku", "productSku"),
+        "product_name": ("product_name", "productName"),
+        "platform": ("platform",),
+        "marketplace": ("marketplace",),
+        "priority": ("priority",),
+        "source_type": ("source_type", "sourceType"),
+        "shopify_discount_code": ("shopify_discount_code", "shopifyDiscountCode"),
+        "shopify_link": ("shopify_link", "shopifyLink", "shopify_url"),
+        "amazon_asin": ("amazon_asin", "amazonAsin"),
+        "amazon_attribution_link": ("amazon_attribution_link", "amazonAttributionLink"),
+        "amazon_associates_link": ("amazon_associates_link", "amazonAssociatesLink"),
+        "sample_status": ("sample_status", "sampleStatus"),
+        "tracking_number": ("tracking_number", "trackingNumber"),
+        "target_post_date": ("target_post_date", "targetPostDate"),
+        "due_at": ("due_at", "dueAt"),
+    }
+    for column, keys in field_map.items():
+        for key in keys:
+            if key in body:
+                updates[column] = str(body.get(key) or "").strip()
+                break
+
+    if "project_name" in updates and not updates["project_name"]:
+        raise ValueError("project_name required")
+
+    if "assigned_staff_id" in body or "assignedStaffId" in body:
+        assigned_staff_id = _int(body.get("assigned_staff_id") or body.get("assignedStaffId"))
+        if scope.can_view_all(staff):
+            updates["assigned_staff_id"] = assigned_staff_id or None
+
+    products = _normalize_project_products(body)
+    metadata = _loads(row["metadata_json"])
+    metadata_changed = False
+    if products:
+        primary_product = products[0]
+        updates["product_sku"] = primary_product.get("product_sku") or updates.get("product_sku") or ""
+        updates["product_name"] = primary_product.get("product_name") or updates.get("product_name") or ""
+        metadata["products"] = products
+        metadata["product_skus"] = [item["product_sku"] for item in products]
+        metadata_changed = True
+    if isinstance(body.get("metadata"), dict):
+        metadata.update(body["metadata"])
+        metadata_changed = True
+    if metadata_changed:
+        updates["metadata_json"] = _json(metadata)
+
+    if not updates:
+        return {"id": int(project_id), "status": "unchanged"}
+
+    updates["updated_at"] = now
+    assignments = ", ".join(f"{column}=?" for column in updates)
+    conn.execute(
+        f"UPDATE vkpi_projects SET {assignments} WHERE id=?",
+        (*updates.values(), int(project_id)),
+    )
+    conn.commit()
+    _log_project_audit(
+        staff=staff,
+        action_type="project_update",
+        project_id=int(project_id),
+        detail=str(updates.get("project_name") or row["project_name"] or "")[:240],
+        metadata={
+            "updated_fields": sorted(updates.keys()),
+            "product_skus": [item["product_sku"] for item in products],
+        },
+    )
+    return {"id": int(project_id), "status": "updated", "updated_fields": sorted(updates.keys())}
+
 def transition_project(project_id: int, body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     ensure_vkpi_schema()
     scope.assert_project_access(project_id, staff, write=True)

@@ -214,6 +214,11 @@ export interface VkpiProjectRow {
   ownerId?: string;
   ownerName: string;
   ownerAvatar?: string;
+  productSku?: string;
+  productName?: string;
+  marketplace?: string;
+  priority?: string;
+  shopifyLink?: string;
   createdAt?: string;
   startedAt?: string;
   closedAt?: string;
