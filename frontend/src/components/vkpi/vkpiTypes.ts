@@ -565,6 +565,18 @@ export interface VkpiProductCostRow {
   updatedAt?: string;
 }
 
+export interface VkpiProductCatalogItem {
+  sku: string;
+  categoryMain: string;
+  categoryDetail?: string;
+  modelName: string;
+  marketingName?: string;
+  priceUsd?: number | null;
+  status: string;
+  description?: string;
+  sourceFile?: string;
+}
+
 export interface VkpiProductLaunchOption {
   id: string;
   productSku: string;

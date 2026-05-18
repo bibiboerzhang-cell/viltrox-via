@@ -37,12 +37,15 @@ export interface WorkspacePageProps {
   onUpdateKol?: VkpiDashboardProps['onUpdateKol'];
   onUploadEvidenceFile?: VkpiDashboardProps['onUploadEvidenceFile'];
   onCreateProject?: VkpiDashboardProps['onCreateProject'];
+  onUpdateProject?: VkpiDashboardProps['onUpdateProject'];
   onMoveProjectStage?: (projectId: string, toStage: VkpiProjectStage, note?: string, extras?: { trackingNumber?: string; sampleStatus?: string; sourceRefType?: string; sourceRefId?: string }) => Promise<void>;
   onDeleteProject?: VkpiDashboardProps['onDeleteProject'];
   onAddProjectCost?: VkpiDashboardProps['onAddProjectCost'];
   onUpdateCost?: VkpiDashboardProps['onUpdateCost'];
   onApproveCost?: VkpiDashboardProps['onApproveCost'];
   onVoidCost?: VkpiDashboardProps['onVoidCost'];
+  onUpsertProjectTerms?: VkpiDashboardProps['onUpsertProjectTerms'];
+  onAddProjectShipment?: VkpiDashboardProps['onAddProjectShipment'];
   onCreateLink?: VkpiDashboardProps['onCreateLink'];
   onPauseLink?: VkpiDashboardProps['onPauseLink'];
   onArchiveLink?: VkpiDashboardProps['onArchiveLink'];
@@ -57,6 +60,7 @@ export interface WorkspacePageProps {
   onExportPDF?: () => void;
   onExportCSV?: () => void;
   onGenerateWeeklyReport?: () => void;
+  onRefreshData?: () => void;
   onOpenEvidence: (metric: VkpiMetricEvidenceKey, metricValueId?: number | null) => void;
   onOpenKolProfile?: (project: VkpiProjectRow) => void | Promise<void>;
   onOpenStaffProfile?: (staffId: string, fallback?: Partial<VkpiStaffMember>) => void | Promise<void>;

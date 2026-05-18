@@ -20,6 +20,7 @@ import type {
   VkpiLinkRow,
   VkpiMetricCard,
   VkpiPlatform,
+  VkpiProductCatalogItem,
   VkpiProductCostRow,
   VkpiProductLaunchOption,
   VkpiProjectDetail,
@@ -675,6 +676,20 @@ function buildProductCosts(rows: Row[]): VkpiProductCostRow[] {
   })).filter((row) => row.productSku);
 }
 
+function buildProductCatalog(rows: Row[]): VkpiProductCatalogItem[] {
+  return rows.map((row) => ({
+    sku: String(row.sku || row.product_sku || ""),
+    categoryMain: String(row.category_main || ""),
+    categoryDetail: String(row.category_detail || ""),
+    modelName: String(row.model_name || row.product_name || ""),
+    marketingName: String(row.marketing_name || ""),
+    priceUsd: row.price_usd === null || row.price_usd === undefined || row.price_usd === "" ? null : numberValue(row.price_usd),
+    status: String(row.status || ""),
+    description: String(row.description || ""),
+    sourceFile: String(row.source_file || ""),
+  })).filter((row) => row.sku);
+}
+
 function buildProductLaunchOptions(rows: Row[]): VkpiProductLaunchOption[] {
   return rows.map((row) => ({
     id: String(row.id || row.launch_uid || row.product_sku || ""),
@@ -1089,6 +1104,18 @@ export async function listMarketingSamples(token: string, params: { projectId?: 
   return apiFetch<{ samples?: Row[]; count?: number }>(`/api/marketing/samples?${query.toString()}`, {}, token);
 }
 export async function upsertProductCost(token: string, payload: VkpiProductCostPayload) { return apiFetch<Record<string, unknown>>("/api/marketing/product-costs", { method: "POST", body: jsonBody({ product_sku: payload.productSku, product_name: payload.productName, unit_cost_usd: payload.unitCostUsd, currency: payload.currency || "USD", active: payload.active ?? true, note: payload.note }) }, token); }
+export async function listProductCatalog(token: string, params: { categories?: string[]; status?: string; query?: string; limit?: number } = {}) {
+  const query = new URLSearchParams({ limit: String(params.limit || 300) });
+  if (params.categories?.length) query.set("categories", params.categories.join(","));
+  if (params.status) query.set("status", params.status);
+  if (params.query) query.set("query", params.query);
+  const response = await apiFetch<{ products?: Row[]; summary?: Row[]; count?: number }>(`/api/marketing/product-catalog?${query.toString()}`, {}, token);
+  return {
+    products: buildProductCatalog(response.products || []),
+    summary: response.summary || [],
+    count: Number(response.count ?? 0),
+  };
+}
 export async function createMarketingLink(token: string, payload: VkpiCreateLinkPayload) { return apiFetch<Record<string, unknown>>("/api/marketing/links", { method: "POST", body: jsonBody({ destination_url: payload.destinationUrl, slug: payload.slug, project_id: payload.projectId ? Number(payload.projectId) : undefined, kol_id: payload.kolId ? Number(payload.kolId) : undefined, platform: payload.platform, product_sku: payload.productSku, campaign_name: payload.campaignName, utm_source: payload.utmSource, utm_medium: payload.utmMedium, utm_campaign: payload.utmCampaign, utm_content: payload.utmContent }) }, token); }
 export async function getMarketingLinkDetail(token: string, linkId: string) { return apiFetch<VkpiLinkDetail>(`/api/marketing/links/${encodeURIComponent(linkId)}`, {}, token); }
 export async function getMarketingLinkClicks(token: string, linkId: string, limit = 100) { return apiFetch<Record<string, unknown>>(`/api/marketing/links/${encodeURIComponent(linkId)}/clicks?limit=${encodeURIComponent(String(limit))}`, {}, token); }

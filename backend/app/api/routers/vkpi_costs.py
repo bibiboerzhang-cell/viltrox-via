@@ -88,6 +88,19 @@ def list_product_costs(
     return costs.list_product_costs(limit=limit, include_inactive=include_inactive)
 
 
+@router.get("/product-catalog")
+def list_product_catalog(
+    limit: int = Query(default=300, ge=1, le=500),
+    categories: str = "",
+    query: str = "",
+    status: str = "",
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    _require_manager_staff(staff)
+    category_list = [item.strip() for item in str(categories or "").split(",") if item.strip()]
+    return costs.list_product_catalog(limit=limit, categories=category_list, query=query, status=status)
+
+
 @router.post("/product-costs")
 def upsert_product_cost(body: dict, staff=Depends(require_tab("vkpi", "write"))):
     _require_manager_staff(staff)

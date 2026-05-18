@@ -9,6 +9,7 @@ import {
   listFeatureFlags,
   listNotificationSettings,
   listPlatformCrawlSettings,
+  listProductCatalog,
   listProviderStatuses,
   listUserPreferences,
   probeProviderStatus,
@@ -21,7 +22,7 @@ import {
   updatePlatformCrawlSettings,
   updateUserPreferences,
 } from '../../../services/vkpi.ui-api';
-import type { VkpiDashboardData, VkpiStaffMember } from '../vkpiTypes';
+import type { VkpiDashboardData, VkpiProductCatalogItem, VkpiStaffMember } from '../vkpiTypes';
 import { CardHeader } from '../shared/CardHeader';
 import { InfoBlock } from '../shared/InfoBlock';
 import { ProductCostTable } from '../tables/ProductCostTable';
@@ -30,6 +31,7 @@ import { SyncStatusPanel } from '../panels/SyncStatusPanel';
 import { PageShell } from './PageShell';
 import {
   ProductCostFormCard,
+  ProductCatalogPreviewCard,
   ProviderHealthCard,
   StaffInviteCard,
   SystemSummaryCards,
@@ -69,6 +71,9 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
   const [costProductName, setCostProductName] = useState('');
   const [unitCostUsd, setUnitCostUsd] = useState('');
   const [costNote, setCostNote] = useState('');
+  const [productCatalog, setProductCatalog] = useState<VkpiProductCatalogItem[]>([]);
+  const [productCatalogLoading, setProductCatalogLoading] = useState(false);
+  const [productCatalogError, setProductCatalogError] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [providers, setProviders] = useState<Array<Record<string, unknown>>>([]);
@@ -193,6 +198,30 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
     };
   }, [apiToken, isManager]);
 
+  useEffect(() => {
+    if (!isManager || !apiToken) return;
+    let cancelled = false;
+    const loadProductCatalog = async () => {
+      setProductCatalogLoading(true);
+      setProductCatalogError('');
+      try {
+        const response = await listProductCatalog(apiToken, {
+          categories: ['Lens', 'Cine Lens', 'Lighting/Flash', 'Adapter'],
+          limit: 300,
+        });
+        if (!cancelled) setProductCatalog(response.products || []);
+      } catch (error) {
+        if (!cancelled) setProductCatalogError(error instanceof Error ? error.message : '产品目录读取失败');
+      } finally {
+        if (!cancelled) setProductCatalogLoading(false);
+      }
+    };
+    void loadProductCatalog();
+    return () => {
+      cancelled = true;
+    };
+  }, [apiToken, isManager]);
+
   const reloadSystemSettings = async () => {
     if (!apiToken) return;
     setSettingsError('');
@@ -289,6 +318,11 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
   const claudeProvider = providers.find((row) => ['anthropic', 'claude'].includes(String(row.provider || '').toLowerCase())) || {};
   const claudeConfigured = boolValue(claudeProvider.configured, false);
   const claudeStatus = claudeConfigured ? String(claudeProvider.latest_status || claudeProvider.status || 'unknown') : 'not_configured';
+  const selectCatalogProduct = (product: VkpiProductCatalogItem) => {
+    setCostSku(product.sku);
+    setCostProductName(product.marketingName || product.modelName);
+    setMessage(`已填入 ${product.sku}。内部成本仍需手动填写。`);
+  };
 
   const toggleFeatureFlag = async (row: Record<string, unknown>) => {
     if (!apiToken) return;
@@ -663,19 +697,27 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
           onPermissionChange={setPermission}
           onSubmit={submitInvite}
         />
-        <ProductCostFormCard
-          costSku={costSku}
-          costProductName={costProductName}
-          unitCostUsd={unitCostUsd}
-          costNote={costNote}
-          busy={busy}
-          canUpsert={Boolean(onUpsertProductCost)}
-          onCostSkuChange={setCostSku}
-          onCostProductNameChange={setCostProductName}
-          onUnitCostUsdChange={setUnitCostUsd}
-          onCostNoteChange={setCostNote}
-          onSubmit={submitProductCost}
-        />
+        <section className="vkpi-settings-product-row">
+          <ProductCostFormCard
+            costSku={costSku}
+            costProductName={costProductName}
+            unitCostUsd={unitCostUsd}
+            costNote={costNote}
+            busy={busy}
+            canUpsert={Boolean(onUpsertProductCost)}
+            onCostSkuChange={setCostSku}
+            onCostProductNameChange={setCostProductName}
+            onUnitCostUsdChange={setUnitCostUsd}
+            onCostNoteChange={setCostNote}
+            onSubmit={submitProductCost}
+          />
+          <ProductCatalogPreviewCard
+            products={productCatalog}
+            loading={productCatalogLoading}
+            error={productCatalogError}
+            onSelectProduct={selectCatalogProduct}
+          />
+        </section>
         <CommentAlertThresholdCard
           key={JSON.stringify(commentAlertSettings)}
           settings={commentAlertSettings}

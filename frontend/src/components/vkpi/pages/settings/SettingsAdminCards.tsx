@@ -1,4 +1,5 @@
 import React from "react";
+import type { VkpiProductCatalogItem } from "../../vkpiTypes";
 import { CardHeader } from "../../shared/CardHeader";
 import { InfoBlock } from "../../shared/InfoBlock";
 import { ProviderStatusTable } from "../../tables/ProviderStatusTable";
@@ -104,6 +105,59 @@ export function ProductCostFormCard({
         <input value={costNote} onChange={(event) => onCostNoteChange(event.target.value)} placeholder="备注（可选）" />
         <button className="vkpi-button vkpi-button--primary" type="submit" disabled={busy || !canUpsert}>保存 SKU</button>
       </form>
+    </section>
+  );
+}
+
+const PRODUCT_GROUPS = [
+  { key: "lens", title: "镜头", categories: ["Lens", "Cine Lens"] },
+  { key: "lighting", title: "闪光灯", categories: ["Lighting/Flash"] },
+  { key: "adapter", title: "转接环", categories: ["Adapter"] },
+];
+
+function productLabel(product: VkpiProductCatalogItem) {
+  return product.marketingName || product.modelName || product.sku;
+}
+
+export function ProductCatalogPreviewCard({
+  products,
+  loading,
+  error,
+  onSelectProduct,
+}: {
+  products: VkpiProductCatalogItem[];
+  loading: boolean;
+  error: string;
+  onSelectProduct: (product: VkpiProductCatalogItem) => void;
+}) {
+  const priceLabel = (value: number | null | undefined) => (
+    value === null || value === undefined ? "未定价" : `$${value.toLocaleString("en-US")}`
+  );
+  return (
+    <section className="vkpi-card vkpi-action-card vkpi-product-catalog-card">
+      <div className="vkpi-table-card__header">
+        <div><h2>现有产品</h2><span>{loading ? "读取中" : `${products.length} 个 SKU`}</span></div>
+      </div>
+      {error ? <div className="vkpi-inline-message is-error">{error}</div> : null}
+      <div className="vkpi-product-catalog-groups">
+        {PRODUCT_GROUPS.map((group) => {
+          const rows = products.filter((product) => group.categories.includes(product.categoryMain));
+          return (
+            <section className="vkpi-product-catalog-group" key={group.key}>
+              <header><strong>{group.title}</strong><span>{rows.length}</span></header>
+              <div className="vkpi-product-catalog-list">
+                {rows.length ? rows.map((product) => (
+                  <button className="vkpi-product-catalog-row" key={product.sku} type="button" onClick={() => onSelectProduct(product)}>
+                    <strong>{productLabel(product)}</strong>
+                    <span>{product.sku}</span>
+                    <em>{priceLabel(product.priceUsd)} · {product.status || "unknown"}</em>
+                  </button>
+                )) : <div className="vkpi-empty-panel">{loading ? "正在读取产品目录" : "暂无产品"}</div>}
+              </div>
+            </section>
+          );
+        })}
+      </div>
     </section>
   );
 }

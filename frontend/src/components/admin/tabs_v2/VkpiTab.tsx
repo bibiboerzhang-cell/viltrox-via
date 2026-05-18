@@ -25,6 +25,7 @@ import {
   runKpiRollup,
   scanKolAccount,
   transitionProjectStage,
+  updateProject,
   updateMarketingKol,
   updateStaffMarketingPermission,
   updateMarketingCost,
@@ -214,6 +215,13 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
     setMessage("正在创建项目...");
     await createProject(token, payload);
     setMessage("项目已创建。");
+    await load();
+  }, [load, token]);
+
+  const handleUpdateProject = useCallback(async (projectId: string, payload: Parameters<typeof updateProject>[2]) => {
+    setMessage("正在更新项目...");
+    await updateProject(token, projectId, payload);
+    setMessage("项目已更新。");
     await load();
   }, [load, token]);
 
@@ -423,6 +431,7 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
         onUpdateKol={handleUpdateKol}
         onUploadEvidenceFile={handleUploadEvidenceFile}
         onCreateProject={handleCreateProject}
+        onUpdateProject={handleUpdateProject}
         onMoveProjectStage={handleMoveProjectStage}
         onDeleteProject={handleDeleteProject}
         onAddProjectCost={handleAddProjectCost}
