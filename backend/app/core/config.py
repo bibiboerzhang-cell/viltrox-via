@@ -339,6 +339,7 @@ ENABLE_UPLOAD_CLEANUP = _env_flag(
     "1" if APP_ROLE == "all" else "0",
 )
 USE_REDIS_JOBS = bool(REDIS_URL)
+VKPI_ASYNC_ENABLED = _env_flag("VKPI_ASYNC_ENABLED", "0")
 
 # ── CORS Origins ──
 CORS_ORIGINS = [

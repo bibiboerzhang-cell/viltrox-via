@@ -17,6 +17,7 @@ from app.workers.tasks.ingestion import (
 )
 from app.workers.tasks.intelligence import process_scan_account_job, process_scan_matrix_job
 from app.workers.tasks.kol_score import process_score_kol_content_job
+from app.workers.tasks.vkpi import process_vkpi_official_channel_sync_job
 from app.workers.tasks.verification import (
     process_verification_comment_job,
     process_verification_single_scan_job,
@@ -41,6 +42,7 @@ JOB_HANDLERS = {
     "platform_ingest_bh": process_bh_ingest_job,
     "platform_ingest_reddit": process_reddit_ingest_job,
     "platform_ingest_web": process_web_ingest_job,
+    "vkpi_official_channel_sync": process_vkpi_official_channel_sync_job,
 }
 
 

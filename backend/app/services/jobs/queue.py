@@ -86,6 +86,8 @@ TERMINAL_JOB_STATUSES = {
     TaskStatus.PARTIAL.value,
     TaskStatus.FAILED.value,
     "prefilter_rejected",
+    "cancelled",
+    "timeout",
 }
 
 TRANSIENT_JOB_STATUSES = {
@@ -99,7 +101,16 @@ TRANSIENT_JOB_STATUSES = {
 class BaseJobQueue:
     backend_name = "unknown"
 
-    async def enqueue(self, job_type: str, payload: Any, submission_id: Optional[int] = None) -> str:
+    async def enqueue(
+        self,
+        job_type: str,
+        payload: Any,
+        submission_id: Optional[int] = None,
+        *,
+        priority: int | None = None,
+        lock_key: str | None = None,
+        timeout_seconds: int | None = None,
+    ) -> str:
         raise NotImplementedError
 
     async def get_status(self, task_id: str) -> Optional[Dict[str, Any]]:
@@ -140,7 +151,16 @@ class InProcessJobQueue(BaseJobQueue):
         for queue in list(self._queues.get(task_id, [])):
             await queue.put(event)
 
-    async def enqueue(self, job_type: str, payload: Any, submission_id: Optional[int] = None) -> str:
+    async def enqueue(
+        self,
+        job_type: str,
+        payload: Any,
+        submission_id: Optional[int] = None,
+        *,
+        priority: int | None = None,
+        lock_key: str | None = None,
+        timeout_seconds: int | None = None,
+    ) -> str:
         if job_type == "audit_submission":
             if isinstance(payload, dict):
                 payload = VideoJobInput(**payload)
@@ -149,6 +169,11 @@ class InProcessJobQueue(BaseJobQueue):
 
         task_id = str(uuid.uuid4())
         normalized_payload = _normalize_payload(payload)
+        normalized_lock_key = str(lock_key or "").strip()
+        if normalized_lock_key:
+            for existing_task_id, item in self._generic_status.items():
+                if item.get("lock_key") == normalized_lock_key and str(item.get("status") or "") in TRANSIENT_JOB_STATUSES:
+                    return existing_task_id
         now = _utcnow()
         raw_job = {
             "task_id": task_id,
@@ -166,6 +191,9 @@ class InProcessJobQueue(BaseJobQueue):
             "created_at": now,
             "updated_at": now,
             "payload_json": json.dumps(normalized_payload, ensure_ascii=False),
+            "priority": str(priority if priority is not None else 5),
+            "lock_key": normalized_lock_key,
+            "timeout_seconds": str(timeout_seconds if timeout_seconds is not None else 300),
         }
         await self._publish(task_id, {"event_type": "queued", "task_id": task_id, "status": TaskStatus.QUEUED.value, "created_at": now})
         # Keep the heavy worker/AI stack out of queue module import time. This
@@ -293,34 +321,79 @@ class RedisJobQueue(BaseJobQueue):
             data.setdefault(key, value)
         return {key: ("" if value is None else str(value) if isinstance(value, (int, float)) and key.endswith("_id") else value) for key, value in data.items()}
 
+    def _find_active_lock_job(self, lock_key: str) -> Optional[str]:
+        lock_key = str(lock_key or "").strip()
+        if not lock_key:
+            return None
+        conn = get_conn()
+        row = conn.execute(
+            """
+            SELECT task_id
+            FROM job_execution_ledger
+            WHERE lock_key=?
+              AND status IN ('queued', 'retrying', 'processing', 'running')
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (lock_key,),
+        ).fetchone()
+        return str(row["task_id"]) if row else None
+
     def _insert_job_ledger(self, job: Dict[str, Any]) -> None:
         conn = get_conn()
         now = _utcnow()
         payload_json = json.dumps(job["payload"], ensure_ascii=False)
         user_id = int(job["payload"].get("user_id") or 0)
+        columns = [
+            "task_id",
+            "job_type",
+            "submission_id",
+            "user_id",
+            "status",
+            "payload_json",
+            "retry_count",
+            "created_at",
+            "updated_at",
+            "stage",
+            "extra_json",
+        ]
+        values: list[Any] = [
+            job["task_id"],
+            job["job_type"],
+            int(job.get("submission_id") or 0),
+            user_id,
+            TaskStatus.QUEUED.value,
+            payload_json,
+            0,
+            now,
+            now,
+            "ingest",
+            json.dumps({}, ensure_ascii=False),
+        ]
+        if job.get("priority") is not None:
+            columns.append("priority")
+            values.append(int(job.get("priority") or 5))
+        if job.get("lock_key"):
+            columns.append("lock_key")
+            values.append(str(job.get("lock_key") or ""))
+        if job.get("timeout_seconds") is not None:
+            columns.append("timeout_seconds")
+            values.append(int(job.get("timeout_seconds") or 300))
+        placeholders = ", ".join("?" for _ in columns)
         conn.execute(
-            """
-            INSERT INTO job_execution_ledger (
-                task_id, job_type, submission_id, user_id, status, payload_json, retry_count,
-                created_at, updated_at, stage, extra_json
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            f"""
+            INSERT INTO job_execution_ledger ({", ".join(columns)})
+            VALUES ({placeholders})
             """,
-            (
-                job["task_id"],
-                job["job_type"],
-                int(job.get("submission_id") or 0),
-                user_id,
-                TaskStatus.QUEUED.value,
-                payload_json,
-                0,
-                now,
-                now,
-                "ingest",
-                json.dumps({}, ensure_ascii=False),
-            ),
+            tuple(values),
         )
         conn.commit()
+
+    def _rollback_job_ledger_insert(self) -> None:
+        try:
+            get_conn().rollback()
+        except Exception:
+            return
 
     def _update_job_ledger(self, task_id: str, status: str, **extra: Any) -> Optional[Dict[str, Any]]:
         conn = get_conn()
@@ -336,7 +409,7 @@ class RedisJobQueue(BaseJobQueue):
             return None
         current_status = str(row["status"] or "").lower()
         incoming_status = str(status or "").lower()
-        if current_status in TERMINAL_JOB_STATUSES and incoming_status in TRANSIENT_JOB_STATUSES:
+        if current_status in TERMINAL_JOB_STATUSES and incoming_status != current_status:
             metadata_updates = []
             metadata_params = []
             if extra.get("stream_id"):
@@ -368,7 +441,7 @@ class RedisJobQueue(BaseJobQueue):
             SET status=?,
                 updated_at=?,
                 started_at=CASE WHEN ?='processing' AND started_at IS NULL THEN ? ELSE started_at END,
-                finished_at=CASE WHEN ? IN ('done','partial_done','failed') THEN ? ELSE finished_at END,
+                finished_at=CASE WHEN ? IN ('done','partial_done','failed','prefilter_rejected','cancelled','timeout') THEN ? ELSE finished_at END,
                 retry_count=?,
                 error_message=?,
                 summary=?,
@@ -435,7 +508,7 @@ class RedisJobQueue(BaseJobQueue):
         waiting_statuses = {TaskStatus.QUEUED.value, TaskStatus.RETRYING.value}
         processing_statuses = {TaskStatus.PROCESSING.value, "running"}
         failed_statuses = {TaskStatus.FAILED.value}
-        completed_statuses = {TaskStatus.DONE.value, TaskStatus.PARTIAL.value}
+        completed_statuses = {TaskStatus.DONE.value, TaskStatus.PARTIAL.value, "cancelled", "timeout", "prefilter_rejected"}
         counts = {"waiting": 0, "processing": 0, "failed": 0, "completed": 0}
         by_type: Dict[str, Dict[str, int]] = {}
         oldest_waiting_age: Optional[int] = None
@@ -537,11 +610,73 @@ class RedisJobQueue(BaseJobQueue):
         if user_id:
             await self._client.publish(self._user_channel(user_id), json.dumps(payload, ensure_ascii=False))
 
-    async def enqueue(self, job_type: str, payload: Any, submission_id: Optional[int] = None) -> str:
+    def _mark_timed_out_jobs(self, limit: int = 100) -> int:
+        conn = get_conn()
+        try:
+            rows = conn.execute(
+                """
+                SELECT task_id, created_at, started_at, timeout_seconds
+                FROM job_execution_ledger
+                WHERE status IN ('queued', 'retrying', 'processing', 'running')
+                  AND job_type LIKE ?
+                  AND COALESCE(timeout_seconds, 0) > 0
+                ORDER BY id ASC
+                LIMIT ?
+                """,
+                ("vkpi_%", max(1, min(500, int(limit or 100)))),
+            ).fetchall()
+        except Exception:
+            return 0
+        now = datetime.now(timezone.utc)
+        timed_out = 0
+        for row in rows:
+            baseline = _parse_ts(row["started_at"] or row["created_at"])
+            if not baseline:
+                continue
+            timeout_seconds = int(row["timeout_seconds"] or 0)
+            if timeout_seconds <= 0:
+                continue
+            if (now - baseline).total_seconds() <= timeout_seconds:
+                continue
+            self._update_job_ledger(
+                str(row["task_id"]),
+                "timeout",
+                error_message=f"job exceeded timeout_seconds={timeout_seconds}",
+                stage="timeout",
+            )
+            try:
+                conn.execute(
+                    """
+                    UPDATE vkpi_async_task_items
+                    SET status='failed',
+                        error=?,
+                        updated_at=?
+                    WHERE task_id=?
+                      AND status IN ('pending', 'running')
+                    """,
+                    (f"job exceeded timeout_seconds={timeout_seconds}", _utcnow(), str(row["task_id"])),
+                )
+                conn.commit()
+            except Exception:
+                pass
+            timed_out += 1
+        return timed_out
+
+    async def enqueue(
+        self,
+        job_type: str,
+        payload: Any,
+        submission_id: Optional[int] = None,
+        *,
+        priority: int | None = None,
+        lock_key: str | None = None,
+        timeout_seconds: int | None = None,
+    ) -> str:
         await self._ensure_ready()
         payload_dict = _normalize_payload(payload)
         user_id = int(payload_dict.get("user_id") or 0)
         effective_submission_id = int(submission_id or payload_dict.get("submission_id") or 0)
+        normalized_lock_key = str(lock_key or "").strip()
         if job_type == "audit_submission" and effective_submission_id:
             async with db_connection_scope():
                 existing_task_id = await asyncio.to_thread(
@@ -551,6 +686,11 @@ class RedisJobQueue(BaseJobQueue):
                 )
             if existing_task_id:
                 return existing_task_id
+        if normalized_lock_key:
+            async with db_connection_scope():
+                existing_task_id = await asyncio.to_thread(self._find_active_lock_job, normalized_lock_key)
+            if existing_task_id:
+                return existing_task_id
 
         task_id = str(uuid.uuid4())
         job = {
@@ -558,9 +698,21 @@ class RedisJobQueue(BaseJobQueue):
             "job_type": job_type,
             "submission_id": effective_submission_id,
             "payload": payload_dict,
+            "priority": priority,
+            "lock_key": normalized_lock_key,
+            "timeout_seconds": timeout_seconds,
         }
         async with db_connection_scope():
-            await asyncio.to_thread(self._insert_job_ledger, job)
+            try:
+                await asyncio.to_thread(self._insert_job_ledger, job)
+            except Exception:
+                if not normalized_lock_key:
+                    raise
+                await asyncio.to_thread(self._rollback_job_ledger_insert)
+                existing_task_id = await asyncio.to_thread(self._find_active_lock_job, normalized_lock_key)
+                if existing_task_id:
+                    return existing_task_id
+                raise
         stream_id = await self._client.xadd(
             REDIS_JOB_STREAM_KEY,
             {
@@ -625,7 +777,29 @@ class RedisJobQueue(BaseJobQueue):
             count=count,
             idle=REDIS_JOB_CLAIM_IDLE_MS,
         )
-        message_ids = [entry["message_id"] for entry in pending if entry.get("time_since_delivered", 0) >= REDIS_JOB_CLAIM_IDLE_MS]
+        now = datetime.now(timezone.utc)
+        message_ids = []
+        for entry in pending:
+            if entry.get("time_since_delivered", 0) < REDIS_JOB_CLAIM_IDLE_MS:
+                continue
+            message_id = entry["message_id"]
+            stream_rows = await self._client.xrange(REDIS_JOB_STREAM_KEY, min=message_id, max=message_id, count=1)
+            if not stream_rows:
+                continue
+            _, fields = stream_rows[0]
+            task_id = str(fields.get("task_id") or "")
+            job_type = str(fields.get("job_type") or "")
+            current = await self.get_status(task_id)
+            current_status = str((current or {}).get("status") or "").lower()
+            if current_status in TERMINAL_JOB_STATUSES:
+                await self._client.xack(REDIS_JOB_STREAM_KEY, self._group, message_id)
+                continue
+            if job_type.startswith("vkpi_") and current_status in {"processing", "running"}:
+                started = _parse_ts((current or {}).get("started_at") or (current or {}).get("updated_at") or (current or {}).get("created_at"))
+                timeout_seconds = int((current or {}).get("timeout_seconds") or 0)
+                if started and timeout_seconds > 0 and (now - started).total_seconds() < timeout_seconds:
+                    continue
+            message_ids.append(message_id)
         if not message_ids:
             return claimed
         batches = await self._client.xclaim(
@@ -643,7 +817,10 @@ class RedisJobQueue(BaseJobQueue):
                 "submission_id": int(fields.get("submission_id") or 0),
                 "payload": _decode_json(fields.get("payload_json"), {}),
             }
-            claimed.append(raw_job)
+            current = await self.get_status(raw_job["task_id"])
+            if str((current or {}).get("status") or "").lower() in TERMINAL_JOB_STATUSES:
+                await self.ack(raw_job)
+                continue
             await self.set_status(
                 raw_job["task_id"],
                 TaskStatus.RETRYING.value,
@@ -652,10 +829,17 @@ class RedisJobQueue(BaseJobQueue):
                 consumer_name=consumer_name,
                 retry_count=int((await self.get_status(raw_job["task_id"]) or {}).get("retry_count") or 0) + 1,
             )
+            current = await self.get_status(raw_job["task_id"])
+            if str((current or {}).get("status") or "").lower() in TERMINAL_JOB_STATUSES:
+                await self.ack(raw_job)
+                continue
+            claimed.append(raw_job)
         return claimed
 
     async def pop_job(self, consumer_name: str, timeout: int = 5) -> Optional[Dict[str, Any]]:
         await self._ensure_ready()
+        async with db_connection_scope():
+            await asyncio.to_thread(self._mark_timed_out_jobs)
         batches = await self._client.xreadgroup(
             self._group,
             consumer_name,
@@ -683,6 +867,10 @@ class RedisJobQueue(BaseJobQueue):
             stream_id=str(stream_id),
             consumer_name=consumer_name,
         )
+        current = await self.get_status(raw_job["task_id"])
+        if str((current or {}).get("status") or "").lower() in TERMINAL_JOB_STATUSES:
+            await self.ack(raw_job)
+            return None
         return raw_job
 
     async def ack(self, raw_job: Dict[str, Any]) -> None:

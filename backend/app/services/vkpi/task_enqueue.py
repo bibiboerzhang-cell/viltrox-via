@@ -1,0 +1,415 @@
+"""V-KPI async task facade over the shared job queue."""
+from __future__ import annotations
+
+import hashlib
+import json
+from datetime import datetime
+from typing import Any
+
+from app.db.connection import get_conn, is_postgres_runtime
+from app.services.vkpi import channels, scope
+
+
+VKPI_TASK_SOURCE = "vkpi"
+VKPI_OFFICIAL_CHANNEL_SYNC = "vkpi_official_channel_sync"
+SUPPORTED_TASK_TYPES = {VKPI_OFFICIAL_CHANNEL_SYNC}
+ACTIVE_STATUSES = {"queued", "retrying", "processing", "running"}
+TERMINAL_RETRY_STATUSES = {"failed", "timeout", "cancelled"}
+_SCHEMA_READY = False
+
+
+def _utcnow() -> str:
+    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _json(value: Any) -> str:
+    return json.dumps(value or {}, ensure_ascii=False, default=str)
+
+
+def _loads(raw: Any, default: Any) -> Any:
+    if raw in (None, "", b""):
+        return default
+    if isinstance(raw, (dict, list)):
+        return raw
+    try:
+        return json.loads(str(raw))
+    except Exception:
+        return default
+
+
+def _int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def _table_columns(table_name: str) -> set[str]:
+    try:
+        rows = get_conn().execute(f"PRAGMA table_info({table_name})").fetchall()
+    except Exception:
+        return set()
+    columns: set[str] = set()
+    for row in rows:
+        try:
+            columns.add(str(row["name"]))
+        except Exception:
+            columns.add(str(row[1]))
+    return columns
+
+
+def _add_column_if_missing(table_name: str, column_name: str, column_def: str) -> None:
+    if column_name in _table_columns(table_name):
+        return
+    get_conn().execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_def}")
+
+
+def ensure_vkpi_task_schema() -> None:
+    """Create local runtime guards for SQLite and old Postgres deployments.
+
+    The canonical Postgres path is migration 056. This guard keeps local SQLite
+    and partially migrated dev databases usable for API smoke tests.
+    """
+    global _SCHEMA_READY
+    if _SCHEMA_READY:
+        return
+    conn = get_conn()
+    timestamp_type = "TIMESTAMPTZ" if is_postgres_runtime() else "TEXT"
+    _add_column_if_missing("job_execution_ledger", "priority", "INTEGER NOT NULL DEFAULT 5")
+    _add_column_if_missing("job_execution_ledger", "lock_key", "TEXT DEFAULT ''")
+    _add_column_if_missing("job_execution_ledger", "timeout_seconds", "INTEGER NOT NULL DEFAULT 300")
+    _add_column_if_missing("job_execution_ledger", "heartbeat_at", timestamp_type)
+    _add_column_if_missing("job_execution_ledger", "cancel_requested_at", timestamp_type)
+    _add_column_if_missing("job_execution_ledger", "estimated_cost", "NUMERIC(10,4)")
+    _add_column_if_missing("job_execution_ledger", "actual_cost", "NUMERIC(10,4)")
+    try:
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS uniq_job_active_lock
+              ON job_execution_ledger(lock_key)
+              WHERE lock_key <> ''
+                AND status IN ('queued', 'retrying', 'processing', 'running')
+            """
+        )
+    except Exception:
+        # Some SQLite builds can be stricter about partial indexes in old local
+        # DBs. Locking still works through the pre-insert lookup in queue.py.
+        pass
+    if is_postgres_runtime():
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vkpi_async_task_items (
+              id BIGSERIAL PRIMARY KEY,
+              task_id TEXT NOT NULL REFERENCES job_execution_ledger(task_id) ON DELETE CASCADE,
+              item_key TEXT NOT NULL,
+              status TEXT NOT NULL DEFAULT 'pending',
+              attempt INTEGER NOT NULL DEFAULT 0,
+              result_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+              error TEXT DEFAULT '',
+              updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+              UNIQUE(task_id, item_key)
+            )
+            """
+        )
+    else:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vkpi_async_task_items (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              task_id TEXT NOT NULL,
+              item_key TEXT NOT NULL,
+              status TEXT NOT NULL DEFAULT 'pending',
+              attempt INTEGER NOT NULL DEFAULT 0,
+              result_json TEXT NOT NULL DEFAULT '{}',
+              error TEXT DEFAULT '',
+              updated_at TEXT NOT NULL,
+              UNIQUE(task_id, item_key)
+            )
+            """
+        )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_task_items_task ON vkpi_async_task_items(task_id, status)")
+    conn.commit()
+    _SCHEMA_READY = True
+
+
+def _staff_payload(staff: dict[str, Any] | None) -> dict[str, Any]:
+    staff = dict(staff or {})
+    return {
+        "id": _int(staff.get("id") or staff.get("staff_id") or staff.get("user_id")),
+        "staff_id": _int(staff.get("id") or staff.get("staff_id") or staff.get("user_id")),
+        "user_id": _int(staff.get("user_id")),
+        "role": str(staff.get("role") or ""),
+        "is_owner": _int(staff.get("is_owner")),
+        "email": str(staff.get("email") or ""),
+    }
+
+
+def _created_user_id(staff: dict[str, Any] | None) -> int:
+    payload = _staff_payload(staff)
+    return _int(payload.get("user_id")) or _int(payload.get("staff_id"))
+
+
+def lock_key_for_task(task_type: str, params: dict[str, Any]) -> str:
+    if task_type == VKPI_OFFICIAL_CHANNEL_SYNC:
+        return f"{task_type}:channel:{_int(params.get('channel_id'))}"
+    if task_type == "vkpi_official_weekly_deep_refresh":
+        return f"{task_type}:channel:{_int(params.get('channel_id'))}"
+    if task_type == "vkpi_video_cache":
+        return f"{task_type}:media:{str(params.get('platform') or '').strip().lower()}:{str(params.get('video_id') or '').strip()}"
+    if task_type == "vkpi_apify_kol_scrape":
+        raw = _json(params)
+        return f"{task_type}:query:{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:24]}"
+    if task_type == "vkpi_product_recommendation_run":
+        return f"{task_type}:launch:{_int(params.get('launch_id'))}"
+    if task_type == "vkpi_ai_analysis":
+        scope_id = str(params.get("scope_id") or params.get("target_scope") or "default").strip()
+        analysis_type = str(params.get("analysis_type") or "generic").strip()
+        return f"{task_type}:scope:{scope_id}:{analysis_type}"
+    raise ValueError(f"unsupported V-KPI task type: {task_type}")
+
+
+def _default_priority(task_type: str) -> int:
+    if task_type == VKPI_OFFICIAL_CHANNEL_SYNC:
+        return 1
+    return 5
+
+
+def _default_timeout(task_type: str) -> int:
+    if task_type == VKPI_OFFICIAL_CHANNEL_SYNC:
+        return 300
+    return 300
+
+
+async def enqueue_vkpi_task(
+    queue: Any,
+    task_type: str,
+    params: dict[str, Any],
+    *,
+    staff: dict[str, Any] | None = None,
+    priority: int | None = None,
+    timeout_seconds: int | None = None,
+) -> dict[str, Any]:
+    ensure_vkpi_task_schema()
+    if queue is None:
+        raise RuntimeError("job queue unavailable")
+    task_type = str(task_type or "").strip()
+    if task_type not in SUPPORTED_TASK_TYPES:
+        raise ValueError(f"unsupported V-KPI task type: {task_type}")
+    params = dict(params or {})
+    if task_type == VKPI_OFFICIAL_CHANNEL_SYNC:
+        channel_id = _int(params.get("channel_id"))
+        if not channel_id:
+            raise ValueError("channel_id required")
+        channels.get_channel(channel_id, staff=staff)
+        params["channel_id"] = channel_id
+        params["max_posts"] = max(1, min(1000, _int(params.get("max_posts"), 12)))
+    user_id = _created_user_id(staff)
+    staff_id = scope.actor_staff_id(staff)
+    payload = {
+        **params,
+        "user_id": user_id,
+        "staff_id": staff_id,
+        "created_by_user_id": user_id,
+        "source": VKPI_TASK_SOURCE,
+        "task_class": task_type,
+        "staff": _staff_payload(staff),
+    }
+    lock_key = lock_key_for_task(task_type, params)
+    task_id = await queue.enqueue(
+        task_type,
+        payload,
+        priority=max(1, int(priority if priority is not None else _default_priority(task_type))),
+        lock_key=lock_key,
+        timeout_seconds=max(1, int(timeout_seconds if timeout_seconds is not None else _default_timeout(task_type))),
+    )
+    return {"task_id": task_id, "status": "queued", "task_type": task_type, "lock_key": lock_key}
+
+
+async def enqueue_official_channel_sync(
+    queue: Any,
+    channel_id: int,
+    *,
+    max_posts: int = 12,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return await enqueue_vkpi_task(
+        queue,
+        VKPI_OFFICIAL_CHANNEL_SYNC,
+        {"channel_id": int(channel_id), "max_posts": max_posts},
+        staff=staff,
+        priority=1,
+        timeout_seconds=300,
+    )
+
+
+def _row_payload(row: Any) -> dict[str, Any]:
+    return _loads(dict(row).get("payload_json") if row else None, {})
+
+
+def _can_manage_all(staff: dict[str, Any] | None) -> bool:
+    return scope.can_view_all(staff)
+
+
+def _can_access_row(row: Any, staff: dict[str, Any] | None) -> bool:
+    if row is None:
+        return False
+    if _can_manage_all(staff):
+        return True
+    actor_user_id = _created_user_id(staff)
+    if actor_user_id and _int(dict(row).get("user_id")) == actor_user_id:
+        return True
+    payload = _row_payload(row)
+    return bool(actor_user_id and _int(payload.get("created_by_user_id")) == actor_user_id)
+
+
+def _task_row(task_id: str) -> Any | None:
+    ensure_vkpi_task_schema()
+    return get_conn().execute(
+        "SELECT * FROM job_execution_ledger WHERE task_id=? AND job_type LIKE ?",
+        (str(task_id), "vkpi_%"),
+    ).fetchone()
+
+
+def _items(task_id: str, limit: int = 100) -> list[dict[str, Any]]:
+    rows = get_conn().execute(
+        "SELECT * FROM vkpi_async_task_items WHERE task_id=? ORDER BY id ASC LIMIT ?",
+        (str(task_id), max(1, min(500, int(limit or 100)))),
+    ).fetchall()
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        item["result"] = _loads(item.get("result_json"), {})
+        items.append(item)
+    return items
+
+
+def _progress_from_items(items: list[dict[str, Any]]) -> int:
+    if not items:
+        return 0
+    terminal = sum(1 for item in items if str(item.get("status") or "") in {"done", "failed", "skipped", "cancelled"})
+    return int(round((terminal / max(1, len(items))) * 100))
+
+
+def serialize_task(row: Any, *, include_items: bool = False) -> dict[str, Any]:
+    data = dict(row)
+    payload = _loads(data.get("payload_json"), {})
+    extra = _loads(data.get("extra_json"), {})
+    result = _loads(data.get("result_json"), {})
+    items = _items(str(data.get("task_id"))) if include_items else []
+    progress_pct = _int(extra.get("progress_pct"))
+    if not progress_pct and items:
+        progress_pct = _progress_from_items(items)
+    return {
+        "task_id": data.get("task_id"),
+        "task_type": data.get("job_type"),
+        "status": data.get("status"),
+        "progress_pct": progress_pct,
+        "progress_text": extra.get("progress_text") or data.get("summary") or data.get("stage") or "",
+        "result": result,
+        "error": data.get("error_message") or "",
+        "items": items,
+        "estimated_cost": data.get("estimated_cost"),
+        "actual_cost": data.get("actual_cost"),
+        "created_at": data.get("created_at"),
+        "started_at": data.get("started_at"),
+        "finished_at": data.get("finished_at"),
+        "cancel_requested_at": data.get("cancel_requested_at"),
+        "payload": payload,
+    }
+
+
+def get_task(task_id: str, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    row = _task_row(task_id)
+    if not row or not _can_access_row(row, staff):
+        raise LookupError("task not found")
+    return serialize_task(row, include_items=True)
+
+
+def list_tasks(
+    *,
+    status: str = "",
+    task_type: str = "",
+    user_id: int | None = None,
+    limit: int = 50,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    ensure_vkpi_task_schema()
+    where = ["job_type LIKE ?"]
+    params: list[Any] = ["vkpi_%"]
+    if status:
+        where.append("status=?")
+        params.append(status)
+    if task_type:
+        where.append("job_type=?")
+        params.append(task_type)
+    if _can_manage_all(staff):
+        if user_id:
+            where.append("user_id=?")
+            params.append(int(user_id))
+    else:
+        where.append("user_id=?")
+        params.append(_created_user_id(staff))
+    rows = get_conn().execute(
+        f"SELECT * FROM job_execution_ledger WHERE {' AND '.join(where)} ORDER BY id DESC LIMIT ?",
+        (*params, max(1, min(200, int(limit or 50)))),
+    ).fetchall()
+    return {"tasks": [serialize_task(row, include_items=False) for row in rows]}
+
+
+def cancel_task(task_id: str, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    row = _task_row(task_id)
+    if not row or not _can_access_row(row, staff):
+        raise LookupError("task not found")
+    status = str(dict(row).get("status") or "").lower()
+    if status not in ACTIVE_STATUSES:
+        return serialize_task(row, include_items=True)
+    now = _utcnow()
+    get_conn().execute("UPDATE job_execution_ledger SET cancel_requested_at=?, updated_at=? WHERE task_id=?", (now, now, str(task_id)))
+    get_conn().commit()
+    return get_task(task_id, staff=staff)
+
+
+async def retry_task(queue: Any, task_id: str, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    row = _task_row(task_id)
+    if not row or not _can_access_row(row, staff):
+        raise LookupError("task not found")
+    data = dict(row)
+    status = str(data.get("status") or "").lower()
+    if status not in TERMINAL_RETRY_STATUSES:
+        raise ValueError("task is not retryable")
+    payload = _row_payload(row)
+    task_type = str(data.get("job_type") or "")
+    if task_type == VKPI_OFFICIAL_CHANNEL_SYNC:
+        return await enqueue_official_channel_sync(
+            queue,
+            _int(payload.get("channel_id")),
+            max_posts=_int(payload.get("max_posts"), 12),
+            staff=staff,
+        )
+    raise ValueError(f"unsupported retry task type: {task_type}")
+
+
+def upsert_task_item(task_id: str, item_key: str, *, status: str, result: dict[str, Any] | None = None, error: str = "") -> None:
+    ensure_vkpi_task_schema()
+    now = _utcnow()
+    conn = get_conn()
+    conn.execute(
+        """
+        INSERT INTO vkpi_async_task_items (task_id, item_key, status, attempt, result_json, error, updated_at)
+        VALUES (?, ?, ?, 1, ?, ?, ?)
+        ON CONFLICT(task_id, item_key) DO UPDATE SET
+            status=excluded.status,
+            attempt=vkpi_async_task_items.attempt + CASE WHEN excluded.status='running' THEN 1 ELSE 0 END,
+            result_json=excluded.result_json,
+            error=excluded.error,
+            updated_at=excluded.updated_at
+        """,
+        (str(task_id), str(item_key), status, _json(result or {}), str(error or ""), now),
+    )
+    conn.commit()
+
+
+def task_cancel_requested(task_id: str) -> bool:
+    ensure_vkpi_task_schema()
+    row = get_conn().execute("SELECT cancel_requested_at FROM job_execution_ledger WHERE task_id=?", (str(task_id),)).fetchone()
+    return bool(row and dict(row).get("cancel_requested_at"))

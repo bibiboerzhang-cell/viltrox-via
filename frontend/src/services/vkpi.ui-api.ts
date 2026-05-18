@@ -1197,7 +1197,11 @@ export async function bindEmployeeChannel(token: string, payload: Record<string,
   return apiFetch<Record<string, unknown>>(`/api/marketing/channels${suffix}`, { method: "POST", body: jsonBody(payload) }, token);
 }
 export async function syncEmployeeChannel(token: string, channelId: string) {
-  return apiFetch<Record<string, unknown>>(`/api/marketing/channels/${encodeURIComponent(channelId)}/sync-now`, { method: "POST", body: jsonBody({}) }, token);
+  const response = await apiFetch<Record<string, unknown>>(`/api/marketing/channels/${encodeURIComponent(channelId)}/sync-now`, { method: "POST", body: jsonBody({}) }, token);
+  if (response.task_id && !response.message) {
+    return { ...response, message: "同步任务已加入队列。" };
+  }
+  return response;
 }
 export async function listTeamChannels(token: string) {
   return apiFetch<{ rows?: Row[] }>("/api/marketing/channels/team-overview", {}, token);

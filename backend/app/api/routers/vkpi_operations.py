@@ -1,10 +1,11 @@
 """V-KPI analytics, channel, campaign, budget, offboarding, and cron routes."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+from app.core.config import VKPI_ASYNC_ENABLED
 from app.api.dependencies.perms import require_tab
-from app.services.vkpi import analytics, channels, cron, p5_selected, scope
+from app.services.vkpi import analytics, channels, cron, p5_selected, scope, task_enqueue
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-operations"])
@@ -174,9 +175,21 @@ def unbind_channel(channel_id: int, staff=Depends(require_tab("vkpi", "write")))
 
 
 @router.post("/channels/{channel_id}/sync-now")
-def sync_channel(channel_id: int, staff=Depends(require_tab("vkpi", "write"))):
+async def sync_channel(
+    request: Request,
+    channel_id: int,
+    max_posts: int = Query(default=12, ge=1, le=1000),
+    staff=Depends(require_tab("vkpi", "write")),
+):
     try:
-        return channels.sync_now(channel_id, staff=staff)
+        if VKPI_ASYNC_ENABLED:
+            queue = getattr(request.app.state, "job_queue", None)
+            return await task_enqueue.enqueue_official_channel_sync(queue, channel_id, max_posts=max_posts, staff=staff)
+        return channels.sync_now(channel_id, staff=staff, max_posts=max_posts)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
