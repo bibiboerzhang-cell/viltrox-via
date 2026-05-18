@@ -122,6 +122,41 @@ export interface VkpiInviteStaffPayload {
   vkpiPermission: "none" | "read" | "write";
 }
 
+export type AsyncTaskStatus =
+  | "queued"
+  | "running"
+  | "processing"
+  | "retrying"
+  | "done"
+  | "failed"
+  | "cancelled"
+  | "timeout"
+  | "partial_done"
+  | "prefilter_rejected";
+
+export interface AsyncTask {
+  task_id: string;
+  task_type: string;
+  status: AsyncTaskStatus;
+  progress_pct?: number;
+  progress_text?: string;
+  result_json?: Record<string, unknown>;
+  result?: Record<string, unknown>;
+  error?: string;
+  created_at: string;
+  started_at?: string;
+  finished_at?: string;
+}
+
+export const TERMINAL_STATUSES = [
+  "done",
+  "failed",
+  "cancelled",
+  "timeout",
+  "partial_done",
+  "prefilter_rejected",
+] as const;
+
 export interface VkpiAttributionPayload {
   sourcePlatform: "shopify" | "amazon" | "manual" | "custom";
   sourceRef: string;
@@ -1202,6 +1237,102 @@ export async function syncEmployeeChannel(token: string, channelId: string) {
     return { ...response, message: "同步任务已加入队列。" };
   }
   return response;
+}
+
+const DEFAULT_TASK_STATUSES: AsyncTaskStatus[] = [
+  "queued",
+  "running",
+  "processing",
+  "retrying",
+  ...TERMINAL_STATUSES,
+];
+
+const ONE_HOUR_MS = 60 * 60 * 1000;
+
+function normalizeAsyncTask(raw: Record<string, unknown>): AsyncTask | null {
+  const taskId = String(raw.task_id || "");
+  if (!taskId) return null;
+  const result = (raw.result_json || raw.result || {}) as Record<string, unknown>;
+  return {
+    task_id: taskId,
+    task_type: String(raw.task_type || raw.job_type || ""),
+    status: String(raw.status || "queued") as AsyncTaskStatus,
+    progress_pct: typeof raw.progress_pct === "number" ? raw.progress_pct : Number(raw.progress_pct || 0),
+    progress_text: String(raw.progress_text || ""),
+    result_json: result,
+    result,
+    error: String(raw.error || raw.error_message || ""),
+    created_at: String(raw.created_at || ""),
+    started_at: raw.started_at ? String(raw.started_at) : undefined,
+    finished_at: raw.finished_at ? String(raw.finished_at) : undefined,
+  };
+}
+
+function isRecentTask(task: AsyncTask): boolean {
+  if (!TERMINAL_STATUSES.includes(task.status as (typeof TERMINAL_STATUSES)[number])) return true;
+  if (!task.finished_at) return false;
+  const finishedAt = new Date(task.finished_at).getTime();
+  return Number.isFinite(finishedAt) && Date.now() - finishedAt < ONE_HOUR_MS;
+}
+
+export async function listTasks(token: string, filters: { status?: AsyncTaskStatus[] } = {}) {
+  const statuses = filters.status?.length ? filters.status : DEFAULT_TASK_STATUSES;
+  const uniqueStatuses = Array.from(new Set(statuses));
+  const responses = await Promise.all(
+    uniqueStatuses.map((status) =>
+      apiFetch<{ tasks?: Record<string, unknown>[]; items?: Record<string, unknown>[] }>(
+        `/api/marketing/tasks?status=${encodeURIComponent(status)}`,
+        {},
+        token,
+      ),
+    ),
+  );
+  const tasksById = new Map<string, AsyncTask>();
+  responses.forEach((response) => {
+    const rows = response.tasks || response.items || [];
+    rows.forEach((row) => {
+      const task = normalizeAsyncTask(row);
+      if (task && isRecentTask(task)) tasksById.set(task.task_id, task);
+    });
+  });
+  return Array.from(tasksById.values()).sort((a, b) => {
+    const aTime = new Date(a.created_at || a.finished_at || 0).getTime();
+    const bTime = new Date(b.created_at || b.finished_at || 0).getTime();
+    return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
+  });
+}
+
+export async function cancelTask(token: string, taskId: string) {
+  await apiFetch<Record<string, unknown>>(
+    `/api/marketing/tasks/${encodeURIComponent(taskId)}/cancel`,
+    { method: "POST", body: jsonBody({}) },
+    token,
+  );
+}
+
+export async function retryTask(token: string, taskId: string) {
+  const response = await apiFetch<Record<string, unknown>>(
+    `/api/marketing/tasks/${encodeURIComponent(taskId)}/retry`,
+    { method: "POST", body: jsonBody({}) },
+    token,
+  );
+  return { task_id: String(response.task_id || "") };
+}
+
+export async function lookupCachedVideoUrl(token: string, platform: string, videoId: string) {
+  const qs = new URLSearchParams();
+  qs.set("platform", platform);
+  qs.set("video_id", videoId);
+  try {
+    const response = await apiFetch<{ hit?: boolean; cached_url?: string; cachedUrl?: string }>(
+      `/api/marketing/media/video-cache/lookup?${qs.toString()}`,
+      {},
+      token,
+    );
+    return response.hit ? String(response.cached_url || response.cachedUrl || "") : "";
+  } catch {
+    return "";
+  }
 }
 export async function listTeamChannels(token: string) {
   return apiFetch<{ rows?: Row[] }>("/api/marketing/channels/team-overview", {}, token);

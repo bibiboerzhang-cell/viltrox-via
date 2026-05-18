@@ -4,6 +4,7 @@ import { CommandCenter } from './dashboard/CommandCenter';
 import { EMPLOYEE_NAV_ITEMS, MANAGER_NAV_ITEMS } from './layout/vkpiLayoutConstants';
 import { VkpiSidebar } from './layout/VkpiSidebar';
 import { VkpiTopbar } from './layout/VkpiTopbar';
+import { TaskCenter, TaskCenterProvider } from '../tasks/TaskCenter';
 import { WorkspacePage } from './pages/WorkspacePage';
 import { EvidenceDrawer } from './drawers/EvidenceDrawer';
 import { ProjectDetailDrawer } from './drawers/ProjectDetailDrawer';
@@ -458,6 +459,7 @@ export function VkpiDashboard({
   }, [apiToken]);
 
   return (
+    <TaskCenterProvider apiToken={apiToken}>
     <div className="vkpi-app" data-testid="vkpi-dashboard">
       <VkpiSidebar
         navItems={navItems}
@@ -620,8 +622,10 @@ export function VkpiDashboard({
           />
         ) : null}
         <FeedbackWidget apiToken={apiToken} activePage={activePage} userName={userName} />
+        <TaskCenter />
       </div>
     </div>
+    </TaskCenterProvider>
   );
 }
 

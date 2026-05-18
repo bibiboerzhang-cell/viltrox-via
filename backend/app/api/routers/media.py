@@ -7,6 +7,7 @@ import json
 import mimetypes
 import os
 import hashlib
+import html
 import re
 import shutil
 import subprocess
@@ -25,6 +26,7 @@ from app.db.connection import get_conn
 from app.core.security import get_current_user
 from app.db.repositories.assets import get_submission_asset
 from app.services.media.storage import resolve_local_media_path
+from app.services.vkpi.media_cache import cached_image_file, cached_video_file, cached_video_url_for_item
 
 
 FFMPEG_AVAILABLE = shutil.which("ffmpeg") is not None
@@ -40,6 +42,13 @@ VKPI_IMAGE_ALLOWED_HOST_SUFFIXES = (
     ".xx.fbcdn.net",
     ".ytimg.com",
     ".googleusercontent.com",
+    ".tiktokcdn.com",
+    ".tiktokcdn-us.com",
+    ".byteoversea.com",
+    ".apifyusercontent.com",
+    ".redd.it",
+    ".redditmedia.com",
+    ".twimg.com",
 )
 VKPI_VIDEO_ALLOWED_HOST_SUFFIXES = (
     ".cdninstagram.com",
@@ -51,6 +60,9 @@ VKPI_VIDEO_ALLOWED_HOST_SUFFIXES = (
     ".akamaized.net",
     ".googlevideo.com",
     ".apifyusercontent.com",
+    ".redd.it",
+    ".redditmedia.com",
+    ".twimg.com",
 )
 _SAFE_RANGE_RE = re.compile(r"^bytes=\d*-\d*$")
 
@@ -160,7 +172,7 @@ def resolve_poster_response(row):
 
 
 def _allowed_external_image_url(raw_url: str) -> tuple[str, str]:
-    parsed = urllib.parse.urlparse(str(raw_url or "").strip())
+    parsed = urllib.parse.urlparse(html.unescape(str(raw_url or "").strip()))
     if parsed.scheme not in {"https", "http"} or not parsed.netloc:
         raise HTTPException(status_code=400, detail="invalid image url")
     host = parsed.hostname or ""
@@ -170,7 +182,7 @@ def _allowed_external_image_url(raw_url: str) -> tuple[str, str]:
 
 
 def _allowed_external_video_url(raw_url: str) -> tuple[str, str]:
-    parsed = urllib.parse.urlparse(str(raw_url or "").strip())
+    parsed = urllib.parse.urlparse(html.unescape(str(raw_url or "").strip()))
     if parsed.scheme not in {"https", "http"} or not parsed.netloc:
         raise HTTPException(status_code=400, detail="invalid video url")
     host = parsed.hostname or ""
@@ -283,6 +295,70 @@ def serve_vkpi_external_image(request: Request, url: str = Query(..., min_length
         content=data,
         media_type=content_type,
         headers={"Cache-Control": "private, max-age=86400"},
+    )
+
+
+@router.get("/api/admin/vkpi/media/image-cache/{digest}")
+def serve_vkpi_cached_image(digest: str):
+    cached = cached_image_file(digest)
+    if not cached:
+        raise HTTPException(status_code=404, detail="cached image not found")
+    cache_path, content_type = cached
+    return FileResponse(
+        cache_path,
+        media_type=content_type,
+        headers={"Cache-Control": "public, max-age=604800, immutable"},
+    )
+
+
+@router.get("/api/vkpi-media/image-cache/{digest}")
+def serve_public_vkpi_cached_image(digest: str):
+    cached = cached_image_file(digest)
+    if not cached:
+        raise HTTPException(status_code=404, detail="cached image not found")
+    cache_path, content_type = cached
+    return FileResponse(
+        cache_path,
+        media_type=content_type,
+        headers={"Cache-Control": "public, max-age=604800, immutable"},
+    )
+
+
+@router.get("/api/admin/vkpi/media/video-cache/lookup")
+def lookup_vkpi_cached_video(
+    request: Request,
+    platform: str = Query(..., min_length=1, max_length=40),
+    video_id: str = Query(..., min_length=1, max_length=240),
+):
+    if not get_current_user(request):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    cached_url = cached_video_url_for_item(platform, video_id)
+    return {"hit": bool(cached_url), "cached_url": cached_url or ""}
+
+
+@router.get("/api/admin/vkpi/media/video-cache/{digest}")
+def serve_vkpi_cached_video(digest: str):
+    cached = cached_video_file(digest)
+    if not cached:
+        raise HTTPException(status_code=404, detail="cached video not found")
+    cache_path, content_type = cached
+    return FileResponse(
+        cache_path,
+        media_type=content_type,
+        headers={"Cache-Control": "public, max-age=604800, immutable"},
+    )
+
+
+@router.get("/api/vkpi-media/video-cache/{digest}")
+def serve_public_vkpi_cached_video(digest: str):
+    cached = cached_video_file(digest)
+    if not cached:
+        raise HTTPException(status_code=404, detail="cached video not found")
+    cache_path, content_type = cached
+    return FileResponse(
+        cache_path,
+        media_type=content_type,
+        headers={"Cache-Control": "public, max-age=604800, immutable"},
     )
 
 

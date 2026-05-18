@@ -64,6 +64,10 @@ def _env_int(name: str, default: str) -> int:
     return int(os.environ.get(name, default).strip() or default)
 
 
+def _env_float(name: str, default: str) -> float:
+    return float(os.environ.get(name, default).strip() or default)
+
+
 def _env_csv(name: str) -> list[str]:
     return [item.strip() for item in os.environ.get(name, "").split(",") if item.strip()]
 
@@ -340,6 +344,8 @@ ENABLE_UPLOAD_CLEANUP = _env_flag(
 )
 USE_REDIS_JOBS = bool(REDIS_URL)
 VKPI_ASYNC_ENABLED = _env_flag("VKPI_ASYNC_ENABLED", "0")
+VKPI_VIDEO_CACHE_MAX_FILE_MB = max(1.0, _env_float("VKPI_VIDEO_CACHE_MAX_FILE_MB", "50"))
+VKPI_VIDEO_CACHE_MAX_TOTAL_GB = max(0.01, _env_float("VKPI_VIDEO_CACHE_MAX_TOTAL_GB", "20"))
 
 # ── CORS Origins ──
 CORS_ORIGINS = [

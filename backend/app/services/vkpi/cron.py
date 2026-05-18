@@ -5,6 +5,7 @@ import asyncio
 from datetime import datetime
 from typing import Any
 
+from app.core.config import VKPI_ASYNC_ENABLED
 from app.core.logging import get_logger
 from app.services.vkpi import audit
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
@@ -26,6 +27,8 @@ _JOB_ALIASES: dict[str, str] = {
     "product_monitor": "analytics_monitor",
     "channels_sync": "channels_sync",
     "channel_sync": "channels_sync",
+    "official_full_baseline": "official_full_baseline",
+    "full_baseline": "official_full_baseline",
     "daily_outreach_digest_only": "daily_outreach_digest_only",
     "outreach_digest_only": "daily_outreach_digest_only",
     "morning_sync": "morning_sync",
@@ -56,7 +59,11 @@ _MANUAL_JOB_POLICIES: dict[str, dict[str, Any]] = {
     },
     "channels_sync": {
         "risk": "high",
-        "description": "Sync all bound channels.",
+        "description": "Sync all bound channels with the configured recent-content limit.",
+    },
+    "official_full_baseline": {
+        "risk": "high",
+        "description": "Run the first full official-account baseline with higher per-platform limits.",
     },
     "daily_outreach_digest_only": {
         "risk": "medium",
@@ -110,6 +117,9 @@ def _payload_summary(payload: dict[str, Any]) -> dict[str, Any]:
         "product_sku",
         "limit",
         "max_videos",
+        "max_posts",
+        "channel_max_posts",
+        "platforms",
         "industry_account_limit",
         "validate_only",
     }
@@ -126,7 +136,9 @@ def _result_summary(result: dict[str, Any] | None) -> dict[str, Any]:
         "ran_at",
         "runs",
         "synced",
+        "failed",
         "channels_synced",
+        "channels_enqueued",
         "industry_accounts_synced",
         "industry_accounts_skipped",
         "industry_accounts_failed",
@@ -143,6 +155,73 @@ def _result_summary(result: dict[str, Any] | None) -> dict[str, Any]:
             "staff_count": digest.get("staff_count"),
         }
     return summary
+
+
+def _system_staff() -> dict[str, Any]:
+    return {
+        "id": 0,
+        "staff_id": 0,
+        "user_id": 0,
+        "role": "admin",
+        "is_owner": 1,
+        "email": "",
+    }
+
+
+async def _queue_channel_syncs(
+    rows: list[dict[str, Any]],
+    *,
+    payload: dict[str, Any],
+    staff: dict[str, Any] | None,
+    queue: Any | None,
+) -> dict[str, Any]:
+    owned_queue = None
+    effective_queue = queue
+    if effective_queue is None:
+        from app.services.jobs.queue import build_job_queue
+
+        owned_queue = build_job_queue()
+        effective_queue = owned_queue
+    if effective_queue is None:
+        raise RuntimeError("job queue unavailable")
+
+    from app.services.vkpi import task_enqueue
+
+    enqueue_staff = staff or _system_staff()
+    max_posts = int(payload.get("max_posts") or payload.get("limit") or 12)
+    task_ids: list[str] = []
+    failed: list[dict[str, Any]] = []
+    try:
+        for row in rows:
+            channel_id = int(row.get("id") or 0)
+            if not channel_id:
+                continue
+            try:
+                queued = await task_enqueue.enqueue_official_channel_sync(
+                    effective_queue,
+                    channel_id,
+                    max_posts=max_posts,
+                    staff=enqueue_staff,
+                    priority=5,
+                )
+                task_ids.append(str(queued.get("task_id") or ""))
+            except Exception as exc:  # Continue enqueueing other channels.
+                failed.append({"channel_id": channel_id, "error": f"{type(exc).__name__}: {str(exc)[:300]}"})
+    finally:
+        if owned_queue is not None:
+            close_fn = getattr(owned_queue, "close", None)
+            if close_fn is not None:
+                result = close_fn()
+                if hasattr(result, "__await__"):
+                    await result
+    unique_task_ids = [item for item in dict.fromkeys(task_ids) if item]
+    return {
+        "channels_enqueued": len(unique_task_ids),
+        "channels_requested": len(rows),
+        "channels_failed_to_enqueue": len(failed),
+        "task_ids": unique_task_ids[:20],
+        "failed": failed[:20],
+    }
 
 
 def _log_cron_audit(
@@ -169,7 +248,7 @@ def _log_cron_audit(
         logger.warning("cron business audit failed for %s/%s: %s", action_type, job_name, exc)
 
 
-async def run_manual_job(job_name: str, payload: dict[str, Any] | None = None, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+async def run_manual_job(job_name: str, payload: dict[str, Any] | None = None, *, staff: dict[str, Any] | None = None, queue: Any | None = None) -> dict[str, Any]:
     """Run a cron job from an admin endpoint with allow-list, confirm text, and audit."""
     payload = dict(payload or {})
     staff = staff or payload.get("staff") or {}
@@ -204,7 +283,7 @@ async def run_manual_job(job_name: str, payload: dict[str, Any] | None = None, *
             }
         else:
             payload["staff"] = staff
-            result = await run_job(canonical, payload)
+            result = await run_job(canonical, payload, queue=queue)
         _log_cron_audit(
             staff=staff,
             action_type="cron_run_completed",
@@ -224,7 +303,7 @@ async def run_manual_job(job_name: str, payload: dict[str, Any] | None = None, *
         raise
 
 
-async def run_job(job_name: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+async def run_job(job_name: str, payload: dict[str, Any] | None = None, *, queue: Any | None = None) -> dict[str, Any]:
     payload = payload or {}
     name = normalize_job_name(job_name)
     if name == "lineage_snapshot":
@@ -269,10 +348,58 @@ async def run_job(job_name: str, payload: dict[str, Any] | None = None) -> dict[
         from app.services.vkpi import channels
 
         rows = channels.list_channels(staff={}, limit=300).get("channels") or []
+        max_posts = int(payload.get("channel_max_posts") or payload.get("max_posts") or 12)
+        if VKPI_ASYNC_ENABLED:
+            queued = await _queue_channel_syncs(
+                rows,
+                payload={**payload, "max_posts": max_posts},
+                staff=payload.get("staff"),
+                queue=queue,
+            )
+            return {"job": name, "status": "queued", **queued, "ran_at": _stamp()}
         results = []
         for row in rows:
-            results.append(channels.sync_now(int(row["id"])))
+            results.append(channels.sync_now(int(row["id"]), staff=payload.get("staff"), max_posts=max_posts))
         return {"job": name, "status": "ok", "synced": len(results), "results": results[:20], "ran_at": _stamp()}
+    if name == "official_full_baseline":
+        from app.services.vkpi import channels
+
+        platform_limits = {
+            "youtube": 1000,
+            "instagram": 1000,
+            "tiktok": 300,
+            "facebook": 250,
+            "reddit": 150,
+            "x": 200,
+        }
+        requested_platforms = payload.get("platforms")
+        if isinstance(requested_platforms, str):
+            platform_filter = {item.strip().lower() for item in requested_platforms.split(",") if item.strip()}
+        elif isinstance(requested_platforms, list):
+            platform_filter = {str(item).strip().lower() for item in requested_platforms if str(item).strip()}
+        else:
+            platform_filter = set(platform_limits)
+        rows = [
+            row for row in channels.list_channels(staff={}, limit=300).get("channels") or []
+            if str(row.get("platform") or "").lower() in platform_filter
+        ]
+        max_override = int(payload.get("max_posts") or 0)
+        results = []
+        for row in rows:
+            platform_key = str(row.get("platform") or "").lower()
+            max_posts = max_override or platform_limits.get(platform_key, 100)
+            results.append(channels.sync_now(int(row["id"]), staff=payload.get("staff"), max_posts=max_posts))
+        failed = [item for item in results if str(item.get("sync_status") or "") not in {"synced"}]
+        return {
+            "job": name,
+            "status": "ok",
+            "synced": len(results) - len(failed),
+            "failed": len(failed),
+            "platforms": sorted(platform_filter),
+            "limits": {key: platform_limits[key] for key in sorted(platform_limits) if key in platform_filter},
+            "results": results[:30],
+            "ran_at": _stamp(),
+        }
     if name == "daily_outreach_digest_only":
         from app.services.vkpi import analytics
 
@@ -288,8 +415,18 @@ async def run_job(job_name: str, payload: dict[str, Any] | None = None) -> dict[
 
         channel_rows = channels.list_channels(staff={}, limit=300).get("channels") or []
         channel_results = []
-        for row in channel_rows:
-            channel_results.append(channels.sync_now(int(row["id"])))
+        channel_enqueue: dict[str, Any] = {}
+        channel_max_posts = int(payload.get("channel_max_posts") or payload.get("max_posts") or 12)
+        if VKPI_ASYNC_ENABLED:
+            channel_enqueue = await _queue_channel_syncs(
+                channel_rows,
+                payload={**payload, "max_posts": channel_max_posts},
+                staff=payload.get("staff"),
+                queue=queue,
+            )
+        else:
+            for row in channel_rows:
+                channel_results.append(channels.sync_now(int(row["id"]), staff=payload.get("staff"), max_posts=channel_max_posts))
 
         industry_sync = industry_snapshot_collector.sync_enabled_accounts(
             limit=int(payload.get("industry_account_limit") or 100),
@@ -331,6 +468,9 @@ async def run_job(job_name: str, payload: dict[str, Any] | None = None) -> dict[
             "job": name,
             "status": "ok",
             "channels_synced": len(channel_results),
+            "channels_enqueued": channel_enqueue.get("channels_enqueued", 0),
+            "channels_failed_to_enqueue": channel_enqueue.get("channels_failed_to_enqueue", 0),
+            "channel_task_ids": channel_enqueue.get("task_ids", []),
             "industry_accounts_synced": industry_sync.get("synced", 0),
             "industry_accounts_skipped": industry_sync.get("skipped", 0),
             "industry_accounts_failed": industry_sync.get("failed", 0),

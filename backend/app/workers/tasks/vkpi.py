@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from app.services.vkpi import channels, task_enqueue
+from app.services.vkpi import channel_refill, channels, media_cache, task_enqueue
 
 
 TERMINAL_STATUSES = {"done", "partial_done", "failed", "prefilter_rejected", "cancelled", "timeout"}
@@ -28,7 +28,7 @@ async def process_vkpi_official_channel_sync_job(queue, raw_job: dict) -> None:
     channel_id = _int(payload.get("channel_id"))
     max_posts = max(1, min(1000, _int(payload.get("max_posts"), 12)))
     staff = payload.get("staff") if isinstance(payload.get("staff"), dict) else {}
-    item_key = str(channel_id or "unknown")
+    item_key = f"channel:{channel_id or 'unknown'}"
 
     if not task_id or not channel_id:
         await queue.set_status(task_id, "failed", error_message="channel_id required", stage="vkpi_official_channel_sync")
@@ -42,6 +42,7 @@ async def process_vkpi_official_channel_sync_job(queue, raw_job: dict) -> None:
         await queue.set_status(task_id, "cancelled", summary="任务已取消", stage="cancelled")
         return
 
+    task_enqueue.upsert_task_item(task_id, item_key, status="pending")
     task_enqueue.upsert_task_item(task_id, item_key, status="running")
     await queue.set_status(
         task_id,
@@ -52,8 +53,46 @@ async def process_vkpi_official_channel_sync_job(queue, raw_job: dict) -> None:
         progress_text="正在同步官方账号快照",
     )
 
+    loop = asyncio.get_running_loop()
+
+    def progress_callback(pct: int, text: str) -> None:
+        future = asyncio.run_coroutine_threadsafe(
+            queue.set_status(
+                task_id,
+                "running",
+                stage="vkpi_official_channel_sync",
+                summary=text,
+                progress_pct=pct,
+                progress_text=text,
+            ),
+            loop,
+        )
+        future.result(timeout=10)
+
+    def cancel_check() -> bool:
+        return task_enqueue.task_cancel_requested(task_id)
+
     try:
-        result = await asyncio.to_thread(channels.sync_now, channel_id, staff=staff, max_posts=max_posts)
+        channel = channels.get_channel(channel_id, staff=staff)["channel"]
+        result = await asyncio.to_thread(
+            channel_refill.sync_channel_snapshot,
+            channel,
+            staff=staff,
+            max_posts=max_posts,
+            progress_callback=progress_callback,
+            cancel_check=cancel_check,
+        )
+    except channel_refill.CancelledException:
+        task_enqueue.upsert_task_item(task_id, item_key, status="cancelled")
+        await queue.set_status(
+            task_id,
+            "cancelled",
+            summary="任务已取消",
+            stage="cancelled",
+            progress_pct=100,
+            progress_text="官方账号同步已取消",
+        )
+        return
     except Exception as exc:
         if await _is_terminal(queue, task_id):
             return
@@ -86,4 +125,139 @@ async def process_vkpi_official_channel_sync_job(queue, raw_job: dict) -> None:
         result_json=result,
         progress_pct=100,
         progress_text="官方账号同步完成",
+    )
+
+
+async def process_vkpi_video_cache_job(queue, raw_job: dict) -> None:
+    task_id = str(raw_job.get("task_id") or "")
+    payload = raw_job.get("payload") or {}
+    platform = str(payload.get("platform") or "").strip().lower()
+    video_id = str(payload.get("video_id") or "").strip()
+    source_url = str(payload.get("source_url") or payload.get("url") or "").strip()
+    force_refresh = bool(payload.get("force_refresh"))
+    item_key = f"video:{platform or 'unknown'}:{video_id or 'unknown'}"
+
+    if not task_id or not platform or not video_id:
+        await queue.set_status(task_id, "failed", error_message="platform and video_id required", stage="vkpi_video_cache")
+        return
+
+    if await _is_terminal(queue, task_id):
+        return
+
+    if task_enqueue.task_cancel_requested(task_id):
+        task_enqueue.upsert_task_item(task_id, item_key, status="cancelled")
+        await queue.set_status(task_id, "cancelled", summary="任务已取消", stage="cancelled")
+        return
+
+    task_enqueue.upsert_task_item(task_id, item_key, status="pending")
+    task_enqueue.upsert_task_item(task_id, item_key, status="running")
+    await queue.set_status(
+        task_id,
+        "running",
+        stage="vkpi_video_cache",
+        summary=f"缓存视频 {platform}:{video_id}",
+        progress_pct=10,
+        progress_text="视频缓存任务启动",
+    )
+
+    loop = asyncio.get_running_loop()
+
+    def progress_callback(pct: int, text: str) -> None:
+        future = asyncio.run_coroutine_threadsafe(
+            queue.set_status(
+                task_id,
+                "running",
+                stage="vkpi_video_cache",
+                summary=text,
+                progress_pct=pct,
+                progress_text=text,
+            ),
+            loop,
+        )
+        future.result(timeout=10)
+
+    def cancel_check() -> bool:
+        return task_enqueue.task_cancel_requested(task_id)
+
+    try:
+        result = await asyncio.to_thread(
+            media_cache.cache_video_for_item,
+            platform,
+            video_id,
+            source_url,
+            force_refresh,
+            progress_callback=progress_callback,
+            cancel_check=cancel_check,
+        )
+    except media_cache.VideoCacheCancelled:
+        task_enqueue.upsert_task_item(task_id, item_key, status="cancelled")
+        await queue.set_status(
+            task_id,
+            "cancelled",
+            summary="视频缓存已取消",
+            stage="cancelled",
+            progress_pct=100,
+            progress_text="视频缓存已取消",
+        )
+        return
+    except Exception as exc:
+        if await _is_terminal(queue, task_id):
+            return
+        message = f"{type(exc).__name__}: {str(exc)[:500]}"
+        task_enqueue.upsert_task_item(task_id, item_key, status="failed", error=message)
+        await queue.set_status(
+            task_id,
+            "failed",
+            error_message=message,
+            stage="vkpi_video_cache",
+            progress_pct=100,
+            progress_text="视频缓存失败",
+        )
+        return
+
+    if await _is_terminal(queue, task_id):
+        return
+
+    if task_enqueue.task_cancel_requested(task_id):
+        task_enqueue.upsert_task_item(task_id, item_key, status="cancelled", result=result)
+        await queue.set_status(task_id, "cancelled", summary="视频缓存已取消", stage="cancelled", result_json=result)
+        return
+
+    status = str(result.get("status") or "").lower()
+    if status == "failed":
+        message = str(result.get("error") or result.get("reason") or "video cache failed")
+        task_enqueue.upsert_task_item(task_id, item_key, status="failed", result=result, error=message)
+        await queue.set_status(
+            task_id,
+            "failed",
+            error_message=message,
+            stage="vkpi_video_cache",
+            result_json=result,
+            progress_pct=100,
+            progress_text="视频缓存失败",
+        )
+        return
+
+    if result.get("skipped"):
+        task_enqueue.upsert_task_item(task_id, item_key, status="skipped", result=result)
+        await queue.set_status(
+            task_id,
+            "done",
+            summary=str(result.get("skip_reason") or "视频缓存已跳过"),
+            stage="vkpi_video_cache",
+            result_json=result,
+            progress_pct=100,
+            progress_text="视频缓存已跳过",
+        )
+        return
+
+    task_enqueue.upsert_task_item(task_id, item_key, status="done", result=result)
+    await queue.set_status(
+        task_id,
+        "done",
+        summary="视频缓存完成",
+        stage="vkpi_video_cache",
+        result_json=result,
+        progress_pct=100,
+        progress_text="视频缓存完成",
     )

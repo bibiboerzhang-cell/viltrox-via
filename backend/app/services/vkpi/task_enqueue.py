@@ -12,7 +12,8 @@ from app.services.vkpi import channels, scope
 
 VKPI_TASK_SOURCE = "vkpi"
 VKPI_OFFICIAL_CHANNEL_SYNC = "vkpi_official_channel_sync"
-SUPPORTED_TASK_TYPES = {VKPI_OFFICIAL_CHANNEL_SYNC}
+VKPI_VIDEO_CACHE = "vkpi_video_cache"
+SUPPORTED_TASK_TYPES = {VKPI_OFFICIAL_CHANNEL_SYNC, VKPI_VIDEO_CACHE}
 ACTIVE_STATUSES = {"queued", "retrying", "processing", "running"}
 TERMINAL_RETRY_STATUSES = {"failed", "timeout", "cancelled"}
 _SCHEMA_READY = False
@@ -42,6 +43,14 @@ def _int(value: Any, default: int = 0) -> int:
         return int(value or default)
     except (TypeError, ValueError):
         return default
+
+
+def _bool(value: Any, default: bool = False) -> bool:
+    if value in (None, ""):
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return bool(value)
 
 
 def _table_columns(table_name: str) -> set[str]:
@@ -171,11 +180,15 @@ def lock_key_for_task(task_type: str, params: dict[str, Any]) -> str:
 def _default_priority(task_type: str) -> int:
     if task_type == VKPI_OFFICIAL_CHANNEL_SYNC:
         return 1
+    if task_type == VKPI_VIDEO_CACHE:
+        return 3
     return 5
 
 
 def _default_timeout(task_type: str) -> int:
     if task_type == VKPI_OFFICIAL_CHANNEL_SYNC:
+        return 300
+    if task_type == VKPI_VIDEO_CACHE:
         return 300
     return 300
 
@@ -203,6 +216,20 @@ async def enqueue_vkpi_task(
         channels.get_channel(channel_id, staff=staff)
         params["channel_id"] = channel_id
         params["max_posts"] = max(1, min(1000, _int(params.get("max_posts"), 12)))
+    if task_type == VKPI_VIDEO_CACHE:
+        platform = str(params.get("platform") or "").strip().lower()
+        video_id = str(params.get("video_id") or "").strip()
+        source_url = str(params.get("source_url") or params.get("url") or "").strip()
+        if not platform or not video_id:
+            raise ValueError("platform and video_id required")
+        if platform in {"instagram", "tiktok"} and not source_url:
+            raise ValueError("source_url required")
+        params["platform"] = platform
+        params["video_id"] = video_id
+        params["source_url"] = source_url
+        params["force_refresh"] = _bool(params.get("force_refresh"))
+        if _int(params.get("channel_id")):
+            params["channel_id"] = _int(params.get("channel_id"))
     user_id = _created_user_id(staff)
     staff_id = scope.actor_staff_id(staff)
     payload = {
@@ -231,13 +258,43 @@ async def enqueue_official_channel_sync(
     *,
     max_posts: int = 12,
     staff: dict[str, Any] | None = None,
+    priority: int | None = None,
 ) -> dict[str, Any]:
     return await enqueue_vkpi_task(
         queue,
         VKPI_OFFICIAL_CHANNEL_SYNC,
         {"channel_id": int(channel_id), "max_posts": max_posts},
         staff=staff,
-        priority=1,
+        priority=priority if priority is not None else 1,
+        timeout_seconds=300,
+    )
+
+
+async def enqueue_video_cache(
+    queue: Any,
+    *,
+    platform: str,
+    video_id: str,
+    source_url: str,
+    channel_id: int | None = None,
+    force_refresh: bool = False,
+    staff: dict[str, Any] | None = None,
+    priority: int | None = None,
+) -> dict[str, Any]:
+    params: dict[str, Any] = {
+        "platform": platform,
+        "video_id": video_id,
+        "source_url": source_url,
+        "force_refresh": force_refresh,
+    }
+    if channel_id:
+        params["channel_id"] = int(channel_id)
+    return await enqueue_vkpi_task(
+        queue,
+        VKPI_VIDEO_CACHE,
+        params,
+        staff=staff,
+        priority=priority if priority is not None else 3,
         timeout_seconds=300,
     )
 
@@ -386,6 +443,16 @@ async def retry_task(queue: Any, task_id: str, *, staff: dict[str, Any] | None =
             max_posts=_int(payload.get("max_posts"), 12),
             staff=staff,
         )
+    if task_type == VKPI_VIDEO_CACHE:
+        return await enqueue_video_cache(
+            queue,
+            platform=str(payload.get("platform") or ""),
+            video_id=str(payload.get("video_id") or ""),
+            source_url=str(payload.get("source_url") or ""),
+            channel_id=_int(payload.get("channel_id")) or None,
+            force_refresh=_bool(payload.get("force_refresh")),
+            staff=staff,
+        )
     raise ValueError(f"unsupported retry task type: {task_type}")
 
 
@@ -393,10 +460,11 @@ def upsert_task_item(task_id: str, item_key: str, *, status: str, result: dict[s
     ensure_vkpi_task_schema()
     now = _utcnow()
     conn = get_conn()
+    initial_attempt = 0 if str(status or "").lower() == "pending" else 1
     conn.execute(
         """
         INSERT INTO vkpi_async_task_items (task_id, item_key, status, attempt, result_json, error, updated_at)
-        VALUES (?, ?, ?, 1, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(task_id, item_key) DO UPDATE SET
             status=excluded.status,
             attempt=vkpi_async_task_items.attempt + CASE WHEN excluded.status='running' THEN 1 ELSE 0 END,
@@ -404,7 +472,7 @@ def upsert_task_item(task_id: str, item_key: str, *, status: str, result: dict[s
             error=excluded.error,
             updated_at=excluded.updated_at
         """,
-        (str(task_id), str(item_key), status, _json(result or {}), str(error or ""), now),
+        (str(task_id), str(item_key), status, initial_attempt, _json(result or {}), str(error or ""), now),
     )
     conn.commit()
 

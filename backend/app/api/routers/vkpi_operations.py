@@ -282,10 +282,10 @@ def offboarding_runs(limit: int = Query(default=100, ge=1, le=200), staff=Depend
 
 
 @router.post("/cron/{job_name}/run")
-async def cron_run(job_name: str, body: dict | None = None, staff=Depends(require_tab("vkpi", "admin"))):
+async def cron_run(request: Request, job_name: str, body: dict | None = None, staff=Depends(require_tab("vkpi", "admin"))):
     payload = body or {}
     payload["staff"] = staff
     try:
-        return await cron.run_manual_job(job_name, payload, staff=staff)
+        return await cron.run_manual_job(job_name, payload, staff=staff, queue=getattr(request.app.state, "job_queue", None))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
