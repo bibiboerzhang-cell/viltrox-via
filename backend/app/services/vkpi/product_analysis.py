@@ -31,6 +31,62 @@ def _loads(value: Any, default: Any = None) -> Any:
         return default
 
 
+def _platform_key(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    return {"ig": "instagram", "yt": "youtube", "tt": "tiktok", "twitter": "x", "小红书": "xiaohongshu"}.get(raw, raw)
+
+
+def _target_platforms(launch: dict[str, Any]) -> list[str]:
+    raw = launch.get("target_platforms")
+    if raw is None:
+        raw = _loads(launch.get("target_platforms_json"), [])
+    if not isinstance(raw, list):
+        return []
+    platforms: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        platform = _platform_key(item)
+        if platform and platform not in seen:
+            seen.add(platform)
+            platforms.append(platform)
+    return platforms
+
+
+def _pool_identity(item: dict[str, Any]) -> str:
+    if item.get("id") is not None:
+        return f"id:{item.get('id')}"
+    return f"{_platform_key(item.get('platform'))}:{str(item.get('handle') or '').strip().lower()}"
+
+
+def _pool_sort_key(item: dict[str, Any]) -> tuple[float, str]:
+    try:
+        fit_score = float(item.get("viltrox_fit_score") or 0)
+    except (TypeError, ValueError):
+        fit_score = 0.0
+    return fit_score, str(item.get("updated_at") or "")
+
+
+def _candidate_pool(payload: dict[str, Any], launch: dict[str, Any], limit: int) -> tuple[list[dict[str, Any]], list[str]]:
+    query = str(payload.get("query") or "")
+    target_platforms = _target_platforms(launch)
+    if not target_platforms:
+        pool = kol_pool.list_pool(limit=limit, platform=str(payload.get("platform") or ""), query=query).get("items") or []
+        return pool, []
+
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for platform in target_platforms:
+        items = kol_pool.list_pool(limit=limit, platform=platform, query=query).get("items") or []
+        for item in items:
+            key = _pool_identity(item)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(item)
+    merged.sort(key=_pool_sort_key, reverse=True)
+    return merged[:limit], target_platforms
+
+
 def _last_by_uid(table: str, uid_col: str, uid: str) -> dict[str, Any]:
     row = get_conn().execute(f"SELECT * FROM {table} WHERE {uid_col}=?", (uid,)).fetchone()
     return dict(row) if row else {}
@@ -163,7 +219,11 @@ def run_recommendations(payload: dict[str, Any], *, staff: dict[str, Any] | None
     strategy_version = str(payload.get("strategy_version") or "rule_v0")
     strategy = ScoringRegistry.get(strategy_version)
     limit = max(1, min(200, int(payload.get("limit") or 50)))
-    pool = kol_pool.list_pool(limit=limit, platform=str(payload.get("platform") or ""), query=str(payload.get("query") or "")).get("items") or []
+    pool, effective_platforms = _candidate_pool(payload, launch, limit)
+    run_filters = dict(payload)
+    if effective_platforms:
+        run_filters["effective_platforms"] = effective_platforms
+        run_filters["platform_filter_source"] = "launch.target_platforms"
     run_uid = f"recrun-{secrets.token_hex(8)}"
     now = _utcnow()
     conn = get_conn()
@@ -174,7 +234,7 @@ def run_recommendations(payload: dict[str, Any], *, staff: dict[str, Any] | None
              created_by_staff_id, created_at, completed_at)
         VALUES (?,?,?,?,?,?,?,?,?,?)
         """,
-        (run_uid, launch_id or None, strategy_version, "completed", len(pool), 0, _json(payload), resolve_staff_id(staff) or None, now, now),
+        (run_uid, launch_id or None, strategy_version, "completed", len(pool), 0, _json(run_filters), resolve_staff_id(staff) or None, now, now),
     )
     conn.commit()
     run = _last_by_uid("vkpi_kol_recommendation_runs", "run_uid", run_uid)

@@ -568,9 +568,14 @@ export interface VkpiKolOption {
   handle: string;
   platform: VkpiPlatform;
   avatar?: string;
+  profileUrl?: string;
   contactEmail?: string;
+  contactPhone?: string;
+  contactLinks?: VkpiContactLink[];
   followerLabel?: string;
   contentCountLabel?: string;
+  activeClaimId?: string;
+  claimStaffId?: string;
   claimOwner?: string;
   scanStatus?: string;
 }

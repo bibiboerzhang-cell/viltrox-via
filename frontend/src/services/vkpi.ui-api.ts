@@ -5,6 +5,7 @@ import type {
   VkpiAlertDetail,
   VkpiAuditOverview,
   VkpiAttributionRow,
+  VkpiContactLink,
   VkpiCostRow,
   VkpiCostDetail,
   VkpiDashboardData,
@@ -70,6 +71,65 @@ export interface VkpiKolManualUpdatePayload {
   contactPhone?: string;
   notes?: string;
   contactLinks?: Array<{ label?: string; value?: string; url?: string }>;
+}
+
+export interface VkpiKolAssessmentResponse {
+  kol_id?: number;
+  score?: number;
+  grade?: string;
+  method?: string;
+  dimensions?: Record<string, { score?: number; source?: string; reason?: string; status?: string }>;
+  risk_flags?: Row[];
+  recommended_action?: string;
+  source_tables?: string[];
+}
+
+export interface VkpiKolProductFitResponse {
+  kol_id?: number;
+  items?: Array<{
+    launch_id?: number | null;
+    product_sku?: string;
+    product_name?: string;
+    launch_name?: string;
+    score?: number;
+    method?: string;
+    status?: string;
+    reasons?: string[];
+    evidence?: string[];
+  }>;
+}
+
+export interface VkpiKolContactsResponse {
+  kol_id?: number;
+  contacts?: Array<{
+    id?: string;
+    contact_type?: string;
+    contact_value?: string;
+    layer?: number;
+    source?: string;
+    confidence?: number;
+    evidence?: string;
+    verified?: boolean;
+    status?: string;
+  }>;
+  summary?: Row;
+}
+
+export interface VkpiAddKolContactPayload {
+  contactType: string;
+  contactValue: string;
+  evidence?: string;
+  layer?: number;
+  source?: string;
+}
+
+export interface VkpiNaturalKolSearchResponse {
+  query?: string;
+  parsed?: Row;
+  items?: Row[];
+  method?: string;
+  degraded?: boolean;
+  notes?: string[];
 }
 
 export interface VkpiCreateProjectPayload {
@@ -253,6 +313,39 @@ function centsToUsd(value: unknown): number { return numberValue(value) / 100; }
 function money(value: number): string { return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value); }
 function percent(value: number): string { return `${(value * 100).toFixed(1)}%`; }
 function compact(value: number): string { return new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value); }
+function parseContactLinks(value: unknown): VkpiContactLink[] {
+  const source = Array.isArray(value)
+    ? value
+    : (() => {
+      const text = String(value || "").trim();
+      if (!text) return [];
+      try {
+        const parsed = JSON.parse(text);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    })();
+  const links: VkpiContactLink[] = [];
+  source.forEach((item) => {
+    if (typeof item === "string") {
+      const text = item.trim();
+      if (text) links.push({ label: text.includes("@") && !text.startsWith("http") ? "Email" : "链接", value: text, url: text.startsWith("http") || text.startsWith("mailto:") ? text : undefined });
+      return;
+    }
+    if (!item || typeof item !== "object") return;
+    const row = item as Record<string, unknown>;
+    const url = String(row.url || row.href || "").trim();
+    const valueText = String(row.value || row.label || url || "").trim();
+    if (!valueText && !url) return;
+    links.push({
+      label: String(row.label || (url.includes("mailto:") ? "Email" : "链接")).trim() || "链接",
+      value: valueText || url,
+      url: url || undefined,
+    });
+  });
+  return links;
+}
 function dateValue(value: unknown): Date | null {
   const raw = String(value || "").trim();
   if (!raw) return null;
@@ -592,9 +685,14 @@ function buildKolOptions(rows: Row[]): VkpiKolOption[] {
       handle: handle ? (handle.startsWith("@") ? handle : `@${handle}`) : "-",
       platform: platformLabel(row.platform),
       avatar: String(row.avatar_url || ""),
+      profileUrl: String(row.profile_url || row.channel_url || ""),
       contactEmail: String(row.contact_email || ""),
+      contactPhone: String(row.contact_phone || ""),
+      contactLinks: parseContactLinks(row.contact_links_json),
       followerLabel: compact(followerCount),
       contentCountLabel: compact(contentCount),
+      activeClaimId: row.active_claim_id ? String(row.active_claim_id) : undefined,
+      claimStaffId: row.claim_staff_id ? String(row.claim_staff_id) : undefined,
       claimOwner: String(row.claim_staff_name || row.claim_staff_email || row.assigned_staff_id || ""),
       scanStatus: String(row.snapshot_scan_status || row.contact_status || ""),
     };
@@ -759,6 +857,16 @@ export async function listMarketingKols(token: string, params: { search?: string
   if (params.platform) query.set("platform", params.platform);
   return apiFetch<{ kols?: Row[]; scope?: Row }>(`/api/marketing/kols?${query.toString()}`, {}, token);
 }
+export async function searchMarketingKolsNatural(token: string, payload: { query: string; platform?: string; limit?: number }) {
+  return apiFetch<VkpiNaturalKolSearchResponse>("/api/marketing/kol/search/natural", {
+    method: "POST",
+    body: jsonBody({
+      query: payload.query,
+      platform: payload.platform,
+      limit: payload.limit || 100,
+    }),
+  }, token);
+}
 export async function scanKolAccount(token: string, kolId: string, maxPosts = 24) {
   const scan = await apiFetch<Record<string, unknown>>(`/api/marketing/kols/${encodeURIComponent(kolId)}/scan-account`, {
     method: "POST",
@@ -810,6 +918,41 @@ export async function createProject(token: string, payload: VkpiCreateProjectPay
 }
 export async function getProjectDetail(token: string, projectId: string) { return apiFetch<VkpiProjectDetail>(`/api/marketing/projects/${encodeURIComponent(projectId)}`, {}, token); }
 export async function getKolProfile(token: string, kolId: string) { return apiFetch<VkpiKolProfile>(`/api/marketing/kols/${encodeURIComponent(kolId)}/profile`, {}, token); }
+export async function getKolAssessment(token: string, kolId: string) {
+  return apiFetch<VkpiKolAssessmentResponse>(`/api/marketing/kols/${encodeURIComponent(kolId)}/assessment`, {}, token);
+}
+export async function getKolProductFit(token: string, kolId: string, limit = 5) {
+  return apiFetch<VkpiKolProductFitResponse>(`/api/marketing/kols/${encodeURIComponent(kolId)}/product-fit?limit=${encodeURIComponent(String(limit))}`, {}, token);
+}
+export async function listKolContacts(token: string, kolId: string, includeWrong = false) {
+  return apiFetch<VkpiKolContactsResponse>(`/api/marketing/kols/${encodeURIComponent(kolId)}/contacts?include_wrong=${includeWrong ? "true" : "false"}`, {}, token);
+}
+export async function addKolContact(token: string, kolId: string, payload: VkpiAddKolContactPayload) {
+  return apiFetch<VkpiKolContactsResponse>(`/api/marketing/kols/${encodeURIComponent(kolId)}/contacts`, {
+    method: "POST",
+    body: jsonBody({
+      contact_type: payload.contactType,
+      contact_value: payload.contactValue,
+      evidence: payload.evidence,
+      layer: payload.layer,
+      source: payload.source,
+    }),
+  }, token);
+}
+export async function getKolPosts(token: string, kolId: string, params: { limit?: number; offset?: number } = {}) {
+  const query = new URLSearchParams({
+    limit: String(params.limit || 100),
+    offset: String(params.offset || 0),
+  });
+  return apiFetch<{ items?: Row[]; page?: Row }>(`/api/marketing/kols/${encodeURIComponent(kolId)}/posts?${query.toString()}`, {}, token);
+}
+export async function getKolComments(token: string, kolId: string, params: { limit?: number; offset?: number } = {}) {
+  const query = new URLSearchParams({
+    limit: String(params.limit || 100),
+    offset: String(params.offset || 0),
+  });
+  return apiFetch<{ items?: Row[]; page?: Row }>(`/api/marketing/kols/${encodeURIComponent(kolId)}/comments?${query.toString()}`, {}, token);
+}
 export async function getStaffProfile(token: string, staffId: string, window = "month") { return apiFetch<VkpiStaffProfile>(`/api/marketing/staff/${encodeURIComponent(staffId)}/profile?window=${encodeURIComponent(window)}&limit=120`, {}, token); }
 export async function transitionProjectStage(token: string, projectId: string, payload: VkpiStagePayload) { return apiFetch<Record<string, unknown>>(`/api/marketing/projects/${encodeURIComponent(projectId)}/stage`, { method: "POST", body: jsonBody({ to_stage: payload.toStage, note: payload.note, tracking_number: payload.trackingNumber, sample_status: payload.sampleStatus, source_ref_type: payload.sourceRefType, source_ref_id: payload.sourceRefId }) }, token); }
 export async function deleteProject(token: string, projectId: string, reason = "前端删除项目") { return apiFetch<Record<string, unknown>>(`/api/marketing/projects/${encodeURIComponent(projectId)}`, { method: "DELETE", body: jsonBody({ reason }) }, token); }
