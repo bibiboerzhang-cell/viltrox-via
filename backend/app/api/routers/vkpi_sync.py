@@ -12,7 +12,7 @@ R60: Sync 状态监控路由
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 
 from app.api.dependencies.perms import require_tab
 from app.services.vkpi import sync_status, cron
@@ -58,6 +58,7 @@ def get_industry_failures(
     detail_extractor=lambda result, kwargs: f"manual trigger {kwargs.get('job_name')}",
 )
 async def trigger_sync(
+    request: Request,
     job_name: str,
     body: dict | None = Body(default=None),
     staff=Depends(require_tab("vkpi", "admin")),
@@ -78,7 +79,7 @@ async def trigger_sync(
     payload["staff"] = staff
     
     try:
-        result = await cron.run_manual_job(job_name, payload, staff=staff)
+        result = await cron.run_manual_job(job_name, payload, staff=staff, queue=getattr(request.app.state, "job_queue", None))
         # 装饰器记录的 audit log,这里加入 result 状态
         return {
             "job": job_name,

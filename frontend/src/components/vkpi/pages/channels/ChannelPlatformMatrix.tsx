@@ -1,0 +1,107 @@
+import type { OfficialChannelPlatform } from './channelTypes';
+import { proxiedImageUrl } from '../../shared/mediaProxy';
+import { PlatformLogo } from './PlatformLogo';
+
+const formatter = new Intl.NumberFormat('en-US');
+
+function compact(value: number) {
+  if (!value) return '0';
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 1 : 2)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}K`;
+  return formatter.format(value);
+}
+
+export function ChannelPlatformMatrix({
+  platforms,
+  selectedPlatform,
+  loading,
+  error,
+  accountCount,
+  postCount,
+  totalViews,
+  onSelectPlatform,
+  onOpenBindings,
+  bindingCount,
+}: {
+  platforms: OfficialChannelPlatform[];
+  selectedPlatform: string;
+  loading?: boolean;
+  error?: string;
+  accountCount: number;
+  postCount: number;
+  totalViews: number;
+  onSelectPlatform: (platform: string) => void;
+  onOpenBindings?: () => void;
+  bindingCount?: number;
+}) {
+  const totalFollowers = platforms.reduce((sum, platform) => sum + platform.totalFollowers, 0);
+  const syncedAccounts = platforms.reduce(
+    (sum, platform) => sum + platform.accounts.filter((account) => account.syncStatus === 'synced').length,
+    0,
+  );
+  const averageViews = postCount ? Math.round(totalViews / postCount) : 0;
+  const summaryMetrics = [
+    { label: '账号', value: formatter.format(accountCount) },
+    { label: '已同步', value: formatter.format(syncedAccounts) },
+    { label: '平台', value: formatter.format(platforms.length) },
+    { label: '内容', value: formatter.format(postCount) },
+    { label: '粉丝', value: compact(totalFollowers) },
+    { label: '播放', value: compact(totalViews), primary: true },
+    { label: '篇均播放', value: compact(averageViews) },
+  ];
+  return (
+    <section className="vkpi-channel-matrix">
+      <div className="vkpi-channel-matrix__header">
+        <div>
+          <button className="vkpi-channel-matrix-trigger" type="button" onClick={onOpenBindings}>
+            <span>官方账号矩阵</span>
+            <h2>平台总览</h2>
+            <em>{formatter.format(bindingCount ?? accountCount)} 条绑定</em>
+          </button>
+          {selectedPlatform ? (
+            <button className="vkpi-channel-filter-reset" type="button" onClick={() => onSelectPlatform('')}>
+              查看全部平台
+            </button>
+          ) : null}
+        </div>
+        <div className="vkpi-channel-matrix__totals">
+          {summaryMetrics.map((metric) => (
+            <span className={`vkpi-channel-summary-metric${metric.primary ? ' is-primary' : ''}`} key={metric.label}>
+              <strong>{metric.value}</strong>
+              <span>{metric.label}</span>
+            </span>
+          ))}
+        </div>
+      </div>
+      {error ? <div className="vkpi-inline-message">{error}</div> : null}
+      <div className="vkpi-channel-platforms">
+        {loading && !platforms.length ? <div className="vkpi-empty-state">平台数据加载中。</div> : null}
+        {platforms.map((platform) => {
+          const active = selectedPlatform === platform.platform;
+          const avatars = platform.accounts.map((account) => proxiedImageUrl(account.avatarUrl)).filter(Boolean).slice(0, 4);
+          return (
+            <button
+              type="button"
+              className={`vkpi-channel-platform-card${active ? ' is-active' : ''}`}
+              key={platform.platform}
+              onClick={() => onSelectPlatform(platform.platform)}
+            >
+              <PlatformLogo platform={platform.platform} label={platform.label} />
+              <div className="vkpi-channel-platform-card__body">
+                <h3>{platform.label}</h3>
+                <p>{formatter.format(platform.accounts.length)} 账号 · {formatter.format(platform.totalPosts)} 内容</p>
+                <div className="vkpi-channel-avatar-stack" aria-label={`${platform.label} 账号头像`}>
+                  {avatars.length ? avatars.map((avatar, index) => <img key={`${platform.platform}-${index}`} src={avatar} alt="" loading="lazy" />) : <span>暂无头像</span>}
+                </div>
+              </div>
+              <div className="vkpi-channel-platform-card__metrics">
+                <strong>{compact(platform.totalViews)}</strong>
+                <span>{compact(platform.totalFollowers)} 粉丝</span>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}

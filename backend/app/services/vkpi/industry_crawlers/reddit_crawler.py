@@ -31,9 +31,13 @@ Environment:
 
 from __future__ import annotations
 
+import json
 import os
+import time
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 # PRAW import is optional - graceful degradation
 try:
@@ -61,24 +65,23 @@ class RedditCrawler:
         self.apify_actor = (
             os.environ.get("APIFY_REDDIT_ACTOR_ID") or DEFAULT_APIFY_REDDIT_ACTOR
         ).replace("/", "~")  # Apify uses ~ for namespace
+        self.run_timeout_seconds = max(60, min(900, int(os.environ.get("APIFY_REDDIT_RUN_TIMEOUT_SECONDS") or 240)))
 
         self._praw_client = None  # lazy init
 
     @property
     def configured(self) -> bool:
-        """True if either PRAW or Apify is configured."""
+        """True if PRAW, Apify, or Reddit's public JSON listing is usable."""
         praw_ok = bool(self.client_id and self.client_secret) and _PRAW_AVAILABLE
         apify_ok = bool(self.apify_token)
-        return praw_ok or apify_ok
+        return praw_ok or apify_ok or True
 
     @property
     def primary_path(self) -> str:
         """Which path will be used: 'praw' / 'apify' / 'none'."""
         if self.client_id and self.client_secret and _PRAW_AVAILABLE:
             return "praw"
-        if self.apify_token:
-            return "apify"
-        return "none"
+        return "json"
 
     def provider_status(self) -> dict[str, Any]:
         """Return provider readiness without exposing tokens."""
@@ -88,6 +91,7 @@ class RedditCrawler:
             "provider_status": "configured" if self.configured else "not_configured",
             "primary_path": self.primary_path,
             "praw_available": _PRAW_AVAILABLE,
+            "json_listing": True,
             "apify_actor": self.apify_actor,
             "key_visible": False,
         }
@@ -300,6 +304,165 @@ class RedditCrawler:
 
     # ─── Apify Fallback Path ────────────────────────────────────
 
+    def _reddit_get_json(self, url: str) -> dict[str, Any]:
+        request = Request(
+            url,
+            headers={
+                "User-Agent": self.user_agent,
+                "Accept": "application/json",
+            },
+        )
+        with urlopen(request, timeout=30) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    @staticmethod
+    def _clean_media_url(value: Any) -> str:
+        url = str(value or "").replace("&amp;", "&").strip()
+        if url.startswith("//"):
+            url = f"https:{url}"
+        return url if url.startswith(("http://", "https://")) else ""
+
+    def _push_media_url(self, urls: list[str], value: Any) -> None:
+        url = self._clean_media_url(value)
+        if url and url not in urls:
+            urls.append(url)
+
+    @staticmethod
+    def _reddit_video_url(data: dict[str, Any]) -> str:
+        for key in ("secure_media", "media"):
+            media = data.get(key) if isinstance(data.get(key), dict) else {}
+            video = media.get("reddit_video") if isinstance(media.get("reddit_video"), dict) else {}
+            fallback = str(video.get("fallback_url") or "").replace("&amp;", "&").strip()
+            if fallback.startswith(("http://", "https://")):
+                return fallback
+        return ""
+
+    def _json_post_to_dict(self, data: dict[str, Any]) -> dict[str, Any]:
+        created = data.get("created_utc")
+        created_at = ""
+        if created is not None:
+            try:
+                created_at = datetime.utcfromtimestamp(float(created)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            except Exception:
+                created_at = ""
+        media_urls: list[str] = []
+        preview = data.get("preview") if isinstance(data.get("preview"), dict) else {}
+        images = preview.get("images") if isinstance(preview.get("images"), list) else []
+        for image in images:
+            source = image.get("source") if isinstance(image, dict) and isinstance(image.get("source"), dict) else {}
+            self._push_media_url(media_urls, source.get("url"))
+        gallery = data.get("gallery_data") if isinstance(data.get("gallery_data"), dict) else {}
+        gallery_items = gallery.get("items") if isinstance(gallery.get("items"), list) else []
+        media_metadata = data.get("media_metadata") if isinstance(data.get("media_metadata"), dict) else {}
+        for gallery_item in gallery_items:
+            media_id = gallery_item.get("media_id") if isinstance(gallery_item, dict) else ""
+            metadata = media_metadata.get(str(media_id)) if isinstance(media_metadata.get(str(media_id)), dict) else {}
+            source = metadata.get("s") if isinstance(metadata.get("s"), dict) else {}
+            self._push_media_url(media_urls, source.get("u"))
+        direct_url = data.get("url_overridden_by_dest") or data.get("url")
+        if str(data.get("post_hint") or "").lower() == "image":
+            self._push_media_url(media_urls, direct_url)
+        video_url = self._reddit_video_url(data)
+        return {
+            "dataType": "post",
+            "type": "post",
+            "id": data.get("name") or f"t3_{data.get('id')}",
+            "parsedId": data.get("id"),
+            "name": data.get("name"),
+            "title": data.get("title"),
+            "body": data.get("selftext"),
+            "author": data.get("author"),
+            "username": data.get("author"),
+            "subreddit": data.get("subreddit"),
+            "communityName": data.get("subreddit"),
+            "url": f"https://www.reddit.com{data.get('permalink')}" if data.get("permalink") else data.get("url"),
+            "permalink": f"https://www.reddit.com{data.get('permalink')}" if data.get("permalink") else "",
+            "externalUrl": data.get("url_overridden_by_dest") or data.get("url"),
+            "thumbnailUrl": data.get("thumbnail") if str(data.get("thumbnail") or "").startswith("http") else (media_urls[0] if media_urls else ""),
+            "images": media_urls,
+            "videoUrl": video_url,
+            "flair": data.get("link_flair_text"),
+            "linkFlairText": data.get("link_flair_text"),
+            "createdAt": created_at,
+            "created_utc": created,
+            "score": data.get("score"),
+            "upVotes": data.get("ups"),
+            "ups": data.get("ups"),
+            "downs": data.get("downs"),
+            "upvoteRatio": data.get("upvote_ratio"),
+            "upvote_ratio": data.get("upvote_ratio"),
+            "numberOfComments": data.get("num_comments"),
+            "num_comments": data.get("num_comments"),
+            "isVideo": data.get("is_video"),
+            "isSelf": data.get("is_self"),
+            "over18": data.get("over_18"),
+            "pinned": data.get("stickied"),
+            "stickied": data.get("stickied"),
+            "locked": data.get("locked"),
+            "removed": bool(data.get("removed_by_category")),
+            "removedByCategory": data.get("removed_by_category"),
+        }
+
+    def _crawl_subreddit_via_json_api(self, subreddit: str, limit: int) -> dict[str, Any]:
+        """Public Reddit listing path: newest subreddit posts via after pagination."""
+        max_items = max(1, min(5000, int(limit or 100)))
+        items: list[dict[str, Any]] = []
+        after = ""
+        try:
+            about = self._reddit_get_json(f"https://www.reddit.com/r/{subreddit}/about.json")
+            data = about.get("data") if isinstance(about.get("data"), dict) else {}
+            items.append(
+                {
+                    "dataType": "community",
+                    "type": "subreddit_profile",
+                    "id": data.get("id"),
+                    "display_name": data.get("display_name") or subreddit,
+                    "title": data.get("title"),
+                    "description": data.get("public_description"),
+                    "subscribers": data.get("subscribers"),
+                    "numberOfMembers": data.get("subscribers"),
+                    "accounts_active": data.get("active_user_count"),
+                    "createdAt": datetime.utcfromtimestamp(float(data.get("created_utc") or 0)).strftime("%Y-%m-%dT%H:%M:%SZ") if data.get("created_utc") else "",
+                    "url": f"https://www.reddit.com/r/{data.get('display_name') or subreddit}/",
+                    "iconUrl": data.get("community_icon") or data.get("icon_img"),
+                    "bannerUrl": data.get("banner_background_image") or data.get("banner_img"),
+                }
+            )
+            while len(items) - 1 < max_items:
+                remaining = max_items - (len(items) - 1)
+                params = {"limit": min(100, remaining), "raw_json": 1}
+                if after:
+                    params["after"] = after
+                listing = self._reddit_get_json(f"https://www.reddit.com/r/{subreddit}/new.json?{urlencode(params)}")
+                listing_data = listing.get("data") if isinstance(listing.get("data"), dict) else {}
+                children = listing_data.get("children") if isinstance(listing_data.get("children"), list) else []
+                if not children:
+                    break
+                for child in children:
+                    if not isinstance(child, dict) or child.get("kind") != "t3":
+                        continue
+                    post_data = child.get("data") if isinstance(child.get("data"), dict) else {}
+                    if post_data:
+                        items.append(self._json_post_to_dict(post_data))
+                after = str(listing_data.get("after") or "")
+                if not after:
+                    break
+                time.sleep(0.25)
+            return {
+                "items": items,
+                "provider_status": "ok",
+                "sync_status": "ok",
+                "provider": "reddit_json",
+            }
+        except Exception as exc:
+            return {
+                "items": [],
+                "provider_status": "error",
+                "sync_status": "fail",
+                "provider": "reddit_json",
+                "error": str(exc)[:500],
+            }
+
     def _crawl_subreddit_via_apify(
         self, subreddit: str, limit: int
     ) -> dict[str, Any]:
@@ -332,7 +495,19 @@ class RedditCrawler:
                 "type": "posts",
                 "sort": "hot",
             }
-            run = client.actor(self.apify_actor).call(run_input=run_input)
+            run = client.actor(self.apify_actor).call(
+                run_input=run_input,
+                timeout_secs=self.run_timeout_seconds,
+                wait_secs=self.run_timeout_seconds,
+            )
+            if not run or str(run.get("status") or "").upper() != "SUCCEEDED":
+                return {
+                    "items": [],
+                    "provider_status": "error",
+                    "sync_status": "fail",
+                    "provider": "apify",
+                    "error": f"Reddit actor did not finish: {str((run or {}).get('status') or 'unknown')}",
+                }
             dataset_id = run.get("defaultDatasetId")
             items = list(client.dataset(dataset_id).iterate_items())
 
@@ -373,11 +548,16 @@ class RedditCrawler:
             result = self._crawl_subreddit_via_praw(subreddit, limit)
             if result.get("provider_status") == "ok":
                 return result
-            # PRAW failed, try Apify if available
+            json_result = self._crawl_subreddit_via_json_api(subreddit, limit)
+            if json_result.get("provider_status") == "ok":
+                return json_result
             if self.apify_token:
                 return self._crawl_subreddit_via_apify(subreddit, limit)
             return result
-        elif path == "apify":
+        elif path == "json":
+            result = self._crawl_subreddit_via_json_api(subreddit, limit)
+            if result.get("provider_status") == "ok" or not self.apify_token:
+                return result
             return self._crawl_subreddit_via_apify(subreddit, limit)
         else:
             return {

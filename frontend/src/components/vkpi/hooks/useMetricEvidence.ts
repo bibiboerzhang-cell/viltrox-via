@@ -2,8 +2,11 @@ import { useEffect, useState } from 'react';
 import {
   drilldownByValueId,
   drilldownLatestByMetric,
+  getOfficialViewsEvidence,
   type VkpiDrilldownResponse,
   type VkpiDrilldownRow,
+  type VkpiOfficialViewsPlatform,
+  type VkpiOfficialViewsEvidenceRow,
 } from '../../../services/vkpi.lineage-api';
 import type { VkpiDashboardData, VkpiEvidenceRow, VkpiMetricEvidenceKey } from '../vkpiTypes';
 import { objectValue, safeNumber, textValue } from '../shared/vkpiDataUtils';
@@ -58,6 +61,40 @@ function mapLineageRowToEvidence(row: VkpiDrilldownRow, metric: VkpiMetricEviden
   };
 }
 
+function mapOfficialRowToEvidence(row: VkpiOfficialViewsEvidenceRow): VkpiEvidenceRow {
+  return {
+    id: row.id,
+    metric: 'views',
+    label: row.label,
+    source: row.source || row.platformLabel || 'Viltrox 自营账号',
+    amount: safeNumber(row.amount),
+    amountUnit: 'number',
+    ownerName: row.staffName || row.ownerName || row.accountHandle,
+    accountName: row.accountName || row.ownerName || row.accountHandle,
+    accountHandle: row.accountHandle,
+    accountUrl: row.accountUrl,
+    staffName: row.staffName,
+    platform: row.platform,
+    platformLabel: row.platformLabel,
+    attributionType: row.attributionType || 'owned_official',
+    mediaUrl: row.mediaUrl,
+    kolName: row.kolName,
+    confidence: row.confidence,
+    occurredAt: row.occurredAt,
+    rawRef: row.rawRef || row.accountUrl,
+  };
+}
+
+function uniqueEvidenceRows(rows: VkpiEvidenceRow[]) {
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    const key = `${row.source}|${row.ownerName || ''}|${row.rawRef || ''}|${row.label}|${row.amount}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export function useMetricEvidence({
   apiToken,
   metric,
@@ -68,6 +105,7 @@ export function useMetricEvidence({
   const [lineageInfo, setLineageInfo] = useState<VkpiDrilldownResponse['run'] | null>(null);
   const [loading, setLoading] = useState(false);
   const [usedFallback, setUsedFallback] = useState(true);
+  const [officialViewsMatrix, setOfficialViewsMatrix] = useState<VkpiOfficialViewsPlatform[]>([]);
 
   useEffect(() => {
     if (!metric) {
@@ -75,6 +113,7 @@ export function useMetricEvidence({
       setLineageInfo(null);
       setUsedFallback(false);
       setLoading(false);
+      setOfficialViewsMatrix([]);
       return;
     }
     if (!apiToken) {
@@ -82,26 +121,53 @@ export function useMetricEvidence({
       setLineageInfo(null);
       setUsedFallback(true);
       setLoading(false);
+      setOfficialViewsMatrix([]);
       return;
     }
 
     let cancelled = false;
     setLoading(true);
     setUsedFallback(false);
+    if (metric !== 'views') setOfficialViewsMatrix([]);
     const request = metricValueId
       ? drilldownByValueId(apiToken, metricValueId, { limit: 200 })
       : drilldownLatestByMetric(apiToken, metric, { scopeType: 'all', limit: 200 });
+    const officialViewsRequest =
+      metric === 'views' ? getOfficialViewsEvidence(apiToken, { limit: 200 }).catch(() => null) : Promise.resolve(null);
 
-    request
-      .then((response) => {
+    Promise.all([
+      request.then((response) => ({ ok: true as const, response })).catch(() => ({ ok: false as const, response: null })),
+      officialViewsRequest,
+    ])
+      .then(([lineageResult, officialViews]) => {
         if (cancelled) return;
-        if (response.empty_reason || !response.value || !response.rows.length) {
+        const officialRows = officialViews?.rows?.map(mapOfficialRowToEvidence) || [];
+        setOfficialViewsMatrix(metric === 'views' ? officialViews?.platforms || [] : []);
+        if (!lineageResult.ok || !lineageResult.response) {
+          if (officialRows.length) {
+            setRows(uniqueEvidenceRows(officialRows));
+            setLineageInfo(null);
+            setUsedFallback(false);
+            return;
+          }
+          setRows(fallbackRows(metric, fallbackEvidence));
+          setLineageInfo(null);
+          setUsedFallback(true);
+          return;
+        }
+        const response = lineageResult.response;
+        const lineageRows =
+          response.empty_reason || !response.value || !response.rows.length
+            ? []
+            : response.rows.map((row) => mapLineageRowToEvidence(row, metric));
+        const combinedRows = metric === 'views' ? uniqueEvidenceRows([...officialRows, ...lineageRows]) : lineageRows;
+        if (!combinedRows.length) {
           setRows(fallbackRows(metric, fallbackEvidence));
           setLineageInfo(response.run);
           setUsedFallback(true);
           return;
         }
-        setRows(response.rows.map((row) => mapLineageRowToEvidence(row, metric)));
+        setRows(combinedRows);
         setLineageInfo(response.run);
         setUsedFallback(false);
       })
@@ -110,6 +176,7 @@ export function useMetricEvidence({
         setRows(fallbackRows(metric, fallbackEvidence));
         setLineageInfo(null);
         setUsedFallback(true);
+        setOfficialViewsMatrix([]);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -125,5 +192,6 @@ export function useMetricEvidence({
     lineageInfo,
     loading,
     usedFallback,
+    officialViewsMatrix,
   };
 }

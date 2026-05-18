@@ -495,7 +495,7 @@ export function VkpiDashboard({
           weeklyReportStatus={weeklyReportStatus}
         />
 
-	        <main className="vkpi-page">
+	        <main className={`vkpi-page vkpi-page--${activePage}`}>
 	          {activePage === 'command' ? (
 	            <CommandCenter
 	              data={data}
@@ -573,6 +573,7 @@ export function VkpiDashboard({
             lineageInfo={metricEvidence.lineageInfo}
             usedFallback={metricEvidence.usedFallback}
             loading={metricEvidence.loading}
+            officialViewsMatrix={metricEvidence.officialViewsMatrix}
             onClose={() => {
               setEvidenceMetric(null);
               setEvidenceMetricValueId(null);

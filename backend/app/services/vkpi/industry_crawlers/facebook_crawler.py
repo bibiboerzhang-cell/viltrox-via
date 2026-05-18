@@ -60,6 +60,7 @@ class FacebookCrawler:
         # Long-term Meta Graph hook (P1.2 doesn't use)
         self.meta_token = os.environ.get("META_GRAPH_ACCESS_TOKEN", "")
         self.meta_version = os.environ.get("META_GRAPH_API_VERSION") or "v18.0"
+        self.run_timeout_seconds = max(60, min(900, int(os.environ.get("APIFY_FACEBOOK_RUN_TIMEOUT_SECONDS") or 420)))
 
     @property
     def configured(self) -> bool:
@@ -127,7 +128,19 @@ class FacebookCrawler:
                     "apifyProxyGroups": ["RESIDENTIAL"],
                 },
             }
-            run = client.actor(self.pages_actor).call(run_input=pages_input)
+            run = client.actor(self.pages_actor).call(
+                run_input=pages_input,
+                timeout_secs=self.run_timeout_seconds,
+                wait_secs=self.run_timeout_seconds,
+            )
+            if not run or str(run.get("status") or "").upper() != "SUCCEEDED":
+                return {
+                    "items": [],
+                    "provider_status": "error",
+                    "sync_status": "fail",
+                    "provider": "apify",
+                    "error": f"Facebook page actor did not finish: {str((run or {}).get('status') or 'unknown')}",
+                }
             dataset_id = run.get("defaultDatasetId")
             page_items = list(client.dataset(dataset_id).iterate_items())
 
@@ -150,8 +163,18 @@ class FacebookCrawler:
                 },
             }
             posts_run = client.actor(self.posts_actor).call(
-                run_input=posts_input
+                run_input=posts_input,
+                timeout_secs=self.run_timeout_seconds,
+                wait_secs=self.run_timeout_seconds,
             )
+            if not posts_run or str(posts_run.get("status") or "").upper() != "SUCCEEDED":
+                return {
+                    "items": page_items,
+                    "provider_status": "error",
+                    "sync_status": "fail",
+                    "provider": "apify",
+                    "error": f"Facebook posts actor did not finish: {str((posts_run or {}).get('status') or 'unknown')}",
+                }
             posts_dataset_id = posts_run.get("defaultDatasetId")
             post_items = list(
                 client.dataset(posts_dataset_id).iterate_items()
@@ -347,7 +370,9 @@ class FacebookCrawler:
                         "useApifyProxy": True,
                         "apifyProxyGroups": ["RESIDENTIAL"],
                     },
-                }
+                },
+                timeout_secs=self.run_timeout_seconds,
+                wait_secs=self.run_timeout_seconds,
             )
             dataset_id = run.get("defaultDatasetId")
             items = list(client.dataset(dataset_id).iterate_items()) if dataset_id else []

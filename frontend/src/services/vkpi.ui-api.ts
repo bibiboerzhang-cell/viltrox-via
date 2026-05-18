@@ -919,6 +919,7 @@ export async function analyzeDataAnalysisPostUrl(
 }
 
 export async function claimKol(token: string, kolId: string, expiresDays = 14) { return apiFetch<Record<string, unknown>>(`/api/marketing/kols/${encodeURIComponent(kolId)}/claim`, { method: "POST", body: jsonBody({ expires_days: expiresDays }) }, token); }
+export async function releaseKolClaim(token: string, claimId: string, reason = "employee_unfollow") { return apiFetch<Record<string, unknown>>(`/api/marketing/claims/${encodeURIComponent(claimId)}/release`, { method: "POST", body: jsonBody({ reason }) }, token); }
 export async function createProject(token: string, payload: VkpiCreateProjectPayload) {
   return apiFetch<Record<string, unknown>>("/api/marketing/projects", {
     method: "POST",
@@ -1406,6 +1407,83 @@ export async function listNotificationSettings(token: string, limit = 200) {
 export async function listEmployeeChannels(token: string, viewAsStaffId?: string) {
   const suffix = viewAsStaffId ? `?view_as_staff_id=${encodeURIComponent(viewAsStaffId)}` : "";
   return apiFetch<{ channels?: Row[] }>(`/api/marketing/channels${suffix}`, {}, token);
+}
+export async function getOfficialChannelMatrix(token: string, filters: { limit?: number; viewAsStaffId?: string } = {}) {
+  const qs = new URLSearchParams();
+  qs.set("limit", String(filters.limit ?? 20));
+  if (filters.viewAsStaffId) qs.set("view_as_staff_id", filters.viewAsStaffId);
+  return apiFetch<{ platforms?: Row[]; account_count?: number; post_count?: number; total_views?: number }>(
+    `/api/marketing/channels/official-matrix?${qs.toString()}`,
+    {},
+    token,
+  );
+}
+export async function getOfficialChannelGapReport(token: string, filters: { limit?: number; viewAsStaffId?: string } = {}) {
+  const qs = new URLSearchParams();
+  qs.set("limit", String(filters.limit ?? 50));
+  if (filters.viewAsStaffId) qs.set("view_as_staff_id", filters.viewAsStaffId);
+  return apiFetch<{ summary?: Row; accounts?: Row[]; platforms?: Row[] }>(
+    `/api/marketing/channels/official-gap-report?${qs.toString()}`,
+    {},
+    token,
+  );
+}
+export async function getOfficialChannelPosts(
+  token: string,
+  channelId: number | string,
+  filters: { page?: number; limit?: number; sort?: string; direction?: string; window?: string } = {},
+) {
+  const qs = new URLSearchParams();
+  qs.set("page", String(filters.page ?? 1));
+  qs.set("limit", String(filters.limit ?? 10));
+  qs.set("sort", filters.sort || "latest");
+  qs.set("direction", filters.direction || "desc");
+  qs.set("window", filters.window || "all");
+  return apiFetch<{ account?: Row; posts?: Row[]; pagination?: Row; sort?: string; source?: string }>(
+    `/api/marketing/channels/${encodeURIComponent(String(channelId))}/posts?${qs.toString()}`,
+    {},
+    token,
+  );
+}
+export async function getChannelPostComments(
+  token: string,
+  channelId: number | string,
+  filters: { postId?: string; url?: string; limit?: number } = {},
+) {
+  const qs = new URLSearchParams();
+  qs.set("post_id", filters.postId || "");
+  if (filters.url) qs.set("url", filters.url);
+  qs.set("limit", String(filters.limit ?? 50));
+  return apiFetch<Row>(
+    `/api/marketing/channels/${encodeURIComponent(String(channelId))}/post-comments?${qs.toString()}`,
+    {},
+    token,
+  );
+}
+export async function collectChannelPostComments(
+  token: string,
+  channelId: number | string,
+  payload: { postId?: string; url?: string; limit?: number } = {},
+) {
+  return apiFetch<Row>(
+    `/api/marketing/channels/${encodeURIComponent(String(channelId))}/post-comments/collect`,
+    {
+      method: "POST",
+      body: jsonBody({
+        post_id: payload.postId || "",
+        url: payload.url || "",
+        limit: payload.limit ?? 100,
+      }),
+    },
+    token,
+  );
+}
+export async function getRedditChannelAssessment(token: string, channelId: number | string) {
+  return apiFetch<Row>(
+    `/api/marketing/channels/${encodeURIComponent(String(channelId))}/reddit-assessment`,
+    {},
+    token,
+  );
 }
 export async function bindEmployeeChannel(token: string, payload: Record<string, unknown>, viewAsStaffId?: string) {
   const suffix = viewAsStaffId ? `?view_as_staff_id=${encodeURIComponent(viewAsStaffId)}` : "";

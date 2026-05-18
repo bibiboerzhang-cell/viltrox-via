@@ -11,6 +11,7 @@
 // middleware so they match the rest of the V-KPI frontend conventions.
 
 const API_PREFIX = "/api/marketing/lineage";
+const VKPI_API_PREFIX = "/api/marketing";
 
 type Row = Record<string, unknown>;
 
@@ -124,6 +125,89 @@ export interface VkpiDrilldownResponse {
   empty_reason?: "no_run_yet" | "source_rows_deleted_or_void";
 }
 
+export interface VkpiOfficialViewsEvidenceRow {
+  id: string;
+  metric: "views";
+  label: string;
+  source: string;
+  amount: number;
+  amountUnit: "number";
+  ownerName?: string;
+  kolName?: string;
+  confidence?: string;
+  occurredAt?: string;
+  rawRef?: string;
+  platform?: string;
+  platformLabel?: string;
+  attributionType?: string;
+  accountId?: number;
+  accountName?: string;
+  accountHandle?: string;
+  accountUrl?: string;
+  staffId?: number;
+  staffName?: string;
+  staffEmail?: string;
+  staffRole?: string;
+  postId?: string | number;
+  mediaUrl?: string;
+}
+
+export interface VkpiOfficialViewsPost {
+  id?: string | number;
+  title?: string;
+  url?: string;
+  media_url?: string;
+  posted_at?: string;
+  views?: number;
+  likes?: number;
+  comments?: number;
+  shares?: number;
+  account_level?: boolean;
+}
+
+export interface VkpiOfficialViewsAccount {
+  id: number;
+  platform: string;
+  platform_label?: string;
+  staff_id?: number;
+  staff_name?: string;
+  staff_email?: string;
+  staff_role?: string;
+  staff_avatar_url?: string;
+  handle?: string;
+  display_name?: string;
+  account_url?: string;
+  avatar_url?: string;
+  sync_status?: string;
+  last_sync_at?: string;
+  followers?: number;
+  posts_count?: number;
+  total_views?: number;
+  total_likes?: number;
+  total_comments?: number;
+  engagement_rate?: number;
+  posts?: VkpiOfficialViewsPost[];
+}
+
+export interface VkpiOfficialViewsPlatform {
+  platform: string;
+  label: string;
+  total_views: number;
+  total_posts: number;
+  total_followers: number;
+  accounts: VkpiOfficialViewsAccount[];
+}
+
+export interface VkpiOfficialViewsEvidenceResponse {
+  rows: VkpiOfficialViewsEvidenceRow[];
+  account_count: number;
+  post_count: number;
+  total_views: number;
+  evidence_views?: number;
+  returned_rows?: number;
+  platforms: VkpiOfficialViewsPlatform[];
+}
+
 // ---------------------------------------------------------------------------
 // API functions
 // ---------------------------------------------------------------------------
@@ -213,6 +297,20 @@ export async function drilldownLatestByMetric(
   qs.set("limit", String(filters.limit ?? 200));
   return apiFetch<VkpiDrilldownResponse>(
     `${API_PREFIX}/metrics/${encodeURIComponent(metricKey)}/drilldown?${qs.toString()}`,
+    {},
+    token,
+  );
+}
+
+export async function getOfficialViewsEvidence(
+  token: string,
+  filters: { limit?: number; viewAsStaffId?: number | null } = {},
+) {
+  const qs = new URLSearchParams();
+  qs.set("limit", String(filters.limit ?? 120));
+  if (filters.viewAsStaffId) qs.set("view_as_staff_id", String(filters.viewAsStaffId));
+  return apiFetch<VkpiOfficialViewsEvidenceResponse>(
+    `${VKPI_API_PREFIX}/channels/official-views-evidence?${qs.toString()}`,
     {},
     token,
   );

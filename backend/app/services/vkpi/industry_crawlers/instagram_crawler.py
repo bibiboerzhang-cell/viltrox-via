@@ -20,19 +20,24 @@ Apify Actor 选型:
 """
 from __future__ import annotations
 
-import json
 import os
 import re
-import time
 import urllib.parse
-import urllib.request
 from typing import Any
 
 
-APIFY_API_BASE = "https://api.apify.com/v2"
 DEFAULT_ACTOR_ID = "apify~instagram-profile-scraper"
+DEFAULT_POSTS_ACTOR_ID = "apify~instagram-scraper"
 DEFAULT_RUN_TIMEOUT_SECONDS = 120
 DEFAULT_DATASET_LIMIT = 50
+DEFAULT_MAX_POST_RESULTS = 5000
+
+
+def _max_post_results() -> int:
+    try:
+        return max(1, min(10000, int(os.environ.get("VKPI_INSTAGRAM_MAX_POST_RESULTS") or DEFAULT_MAX_POST_RESULTS)))
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_POST_RESULTS
 
 
 class InstagramCrawler:
@@ -48,8 +53,9 @@ class InstagramCrawler:
     ) -> None:
         self.api_token = (api_token or os.environ.get("APIFY_TOKEN") or "").strip()
         self.actor_id = (actor_id or os.environ.get("APIFY_INSTAGRAM_ACTOR_ID") or DEFAULT_ACTOR_ID).strip()
+        self.posts_actor_id = (os.environ.get("APIFY_INSTAGRAM_POSTS_ACTOR_ID") or DEFAULT_POSTS_ACTOR_ID).strip()
         self.timeout_seconds = max(3, min(60, int(timeout_seconds or 30)))
-        self.run_timeout_seconds = max(30, min(300, int(run_timeout_seconds or DEFAULT_RUN_TIMEOUT_SECONDS)))
+        self.run_timeout_seconds = max(30, min(1800, int(run_timeout_seconds or DEFAULT_RUN_TIMEOUT_SECONDS)))
 
     @property
     def configured(self) -> bool:
@@ -102,38 +108,47 @@ class InstagramCrawler:
 
     # ─── Apify 调用 ──────────────────────────────────
 
-    def _start_run(self, input_payload: dict[str, Any]) -> dict[str, Any]:
+    def _start_run(self, input_payload: dict[str, Any], *, actor_id: str | None = None) -> dict[str, Any]:
         """启动 Apify run,等待完成,返回 dataset items"""
         if not self.configured:
             return self._not_configured("apify_run")
-        
-        actor_path = self.actor_id.replace("/", "~")
-        url = f"{APIFY_API_BASE}/acts/{actor_path}/run-sync-get-dataset-items?token={self.api_token}"
-        
+
         try:
-            data = json.dumps(input_payload).encode("utf-8")
-            request = urllib.request.Request(
-                url,
-                data=data,
-                method="POST",
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                    "User-Agent": "ViltroxMarketing/1.0",
-                },
+            from apify_client import ApifyClient  # type: ignore
+
+            selected_actor_id = actor_id or self.actor_id
+            actor_path = selected_actor_id.replace("/", "~")
+            client = ApifyClient(self.api_token)
+            run = client.actor(actor_path).call(
+                run_input=input_payload,
+                timeout_secs=self.run_timeout_seconds,
+                wait_secs=self.run_timeout_seconds,
             )
-            with urllib.request.urlopen(request, timeout=self.run_timeout_seconds) as response:  # nosec B310
-                body = response.read().decode("utf-8")
-            
-            payload = json.loads(body or "[]")
-            # Apify run-sync-get-dataset-items 直接返回 items 数组
-            items = payload if isinstance(payload, list) else (payload.get("items") or [])
+            if not run or str(run.get("status") or "").upper() != "SUCCEEDED":
+                return {
+                    "provider": "instagram",
+                    "provider_status": "error",
+                    "sync_status": "error",
+                    "items": [],
+                    "error": f"Instagram actor did not finish: {str((run or {}).get('status') or 'unknown')}",
+                    "raw": {"actor_id": selected_actor_id, "input": input_payload},
+                }
+            items = list(client.dataset(run.get("defaultDatasetId")).iterate_items())
             return {
                 "provider": "instagram",
                 "provider_status": "ok",
                 "sync_status": "synced",
                 "items": items,
-                "raw": {"actor_id": self.actor_id, "input": input_payload},
+                "raw": {"actor_id": selected_actor_id, "input": input_payload},
+            }
+        except ImportError:
+            return {
+                "provider": "instagram",
+                "provider_status": "error",
+                "sync_status": "error",
+                "items": [],
+                "error": "apify-client not installed",
+                "raw": {"actor_id": actor_id or self.actor_id},
             }
         except Exception as exc:  # pragma: no cover - 实际调用才会触发
             return {
@@ -142,9 +157,8 @@ class InstagramCrawler:
                 "sync_status": "error",
                 "items": [],
                 "error": str(exc),
-                "raw": {"actor_id": self.actor_id},
+                "raw": {"actor_id": actor_id or self.actor_id},
             }
-
     # ─── 公开接口 (与 YouTubeCrawler 对齐) ─────────
 
     def crawl_channel_profile(
@@ -171,7 +185,7 @@ class InstagramCrawler:
         # Apify input 格式 (instagram-profile-scraper)
         input_payload: dict[str, Any] = {
             "usernames": [ref["value"]] if ref["kind"] == "handle" else [],
-            "resultsLimit": max(1, min(50, int(max_posts or 12))),
+            "resultsLimit": max(1, min(12, int(max_posts or 12))),
             "addParentData": False,
         }
         if ref["kind"] == "query":
@@ -189,7 +203,7 @@ class InstagramCrawler:
         *,
         max_results: int = 25,
     ) -> dict[str, Any]:
-        """抓取最近视频/帖子. 对 IG 来说 channel_id 就是 username."""
+        """抓取最近视频/帖子. 对 IG 来说 channel_id 可以是 username 或 profile URL."""
         if not self.configured:
             return self._not_configured("crawl_channel_videos")
         
@@ -202,12 +216,18 @@ class InstagramCrawler:
                 "message": "channel_id (username) 为空",
             }
         
+        ref = self.normalize_handle_ref(channel_id)
+        if ref["kind"] == "handle":
+            direct_url = f"https://www.instagram.com/{ref['value'].lstrip('@')}/"
+        else:
+            direct_url = str(channel_id or "").strip()
         input_payload = {
-            "usernames": [channel_id.lstrip("@")],
-            "resultsLimit": max(1, min(100, int(max_results or 25))),
-            "addParentData": True,  # 包含父帖元数据
+            "directUrls": [direct_url],
+            "resultsType": "posts",
+            "resultsLimit": max(1, min(_max_post_results(), int(max_results or 25))),
+            "addParentData": False,
         }
-        return self._start_run(input_payload)
+        return self._start_run(input_payload, actor_id=self.posts_actor_id)
 
     def crawl_video_comments(
         self,
@@ -247,7 +267,9 @@ class InstagramCrawler:
                 run_input={
                     "directUrls": [post_url],
                     "resultsLimit": max(1, min(100, int(max_results or 50))),
-                }
+                },
+                timeout_secs=self.run_timeout_seconds,
+                wait_secs=self.run_timeout_seconds,
             )
             dataset_id = run.get("defaultDatasetId")
             items = list(client.dataset(dataset_id).iterate_items()) if dataset_id else []

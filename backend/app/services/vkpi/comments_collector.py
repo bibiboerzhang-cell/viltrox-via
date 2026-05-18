@@ -38,6 +38,7 @@ PLATFORM_DEFAULTS = {
     "tiktok": 30,     # Apify cost
     "reddit": 100,    # PRAW free, includes nested
     "facebook": 30,   # Apify cost
+    "x": 50,           # X API / optional Apify replies actor
 }
 
 # Monthly budget for paid platforms (Apify)
@@ -181,6 +182,18 @@ def _standardize_comment(
             "reply_count": ["repliesCount"],
             "created_at": ["createdTime", "created_at", "timestamp"],
             "is_op": [],
+        },
+        "x": {
+            "external_comment_id": ["id", "replyId", "tweetId"],
+            "comment_text": ["fullText", "text", "body"],
+            "author_handle": ["author.username", "author.userName", "author.name", "user.username", "username"],
+            "author_id": ["author.id", "user.id", "author_id", "authorId"],
+            "likes_count": ["public_metrics.like_count", "likeCount", "favoriteCount", "likes"],
+            "reply_count": ["public_metrics.reply_count", "replyCount", "replies"],
+            "created_at": ["created_at", "createdAt"],
+            "is_op": [],
+            "parent_comment_id": ["in_reply_to_user_id", "parent_id", "parentId"],
+            "depth": ["depth"],
         },
     }
     

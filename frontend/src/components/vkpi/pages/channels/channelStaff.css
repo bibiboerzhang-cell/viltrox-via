@@ -1,0 +1,215 @@
+.vkpi-channel-staff {
+  border: 1px solid var(--vkpi-border);
+  border-radius: 18px;
+  background: #fff;
+  padding: 18px;
+  box-shadow: var(--vkpi-shadow-soft);
+}
+
+.vkpi-channel-staff__header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, max-content);
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.vkpi-channel-staff__header > div:first-child > span {
+  color: var(--vkpi-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.vkpi-channel-staff__header h2 {
+  margin: 4px 0 0;
+  color: var(--vkpi-text);
+  font-size: 19px;
+}
+
+.vkpi-channel-staff__totals {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 620px;
+  min-width: 0;
+}
+
+.vkpi-channel-staff-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.vkpi-channel-staff-card {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 96px;
+  border: 1px solid #e4e7ec;
+  border-radius: 16px;
+  background: #f8fafc;
+  padding: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.vkpi-channel-staff-card:hover,
+.vkpi-channel-staff-card.is-active {
+  border-color: var(--vkpi-blue);
+  background: #eff6ff;
+}
+
+.vkpi-channel-staff-card__avatar {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 15px;
+  overflow: hidden;
+  background: #111827;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.vkpi-channel-staff-card__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.vkpi-channel-staff-card__avatar span {
+  font-size: 20px;
+}
+
+.vkpi-channel-staff-card__main {
+  min-width: 0;
+}
+
+.vkpi-channel-staff-card h3 {
+  margin: 0;
+  color: var(--vkpi-text);
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vkpi-channel-staff-card p {
+  margin: 4px 0;
+  color: var(--vkpi-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.vkpi-channel-staff-card small {
+  display: block;
+  overflow: hidden;
+  color: #475467;
+  font-size: 11px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vkpi-channel-staff-card > strong {
+  color: var(--vkpi-blue);
+  font-size: 20px;
+  white-space: nowrap;
+}
+
+.vkpi-action-card--team {
+  min-height: 0;
+}
+
+.vkpi-channel-staff--compact {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  box-shadow: none;
+}
+
+.vkpi-channel-staff--compact .vkpi-channel-staff__header {
+  grid-template-columns: 1fr;
+  row-gap: 8px;
+  margin-bottom: 12px;
+}
+
+.vkpi-channel-staff--compact .vkpi-channel-staff__header h2 {
+  font-size: 17px;
+}
+
+.vkpi-channel-staff--compact .vkpi-channel-staff__totals {
+  gap: 4px;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+  max-width: none;
+  min-width: 0;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.vkpi-channel-staff--compact .vkpi-channel-summary-metric {
+  flex-basis: 82px;
+  width: 82px;
+  height: 30px;
+  font-size: 10px;
+}
+
+.vkpi-channel-staff--compact .vkpi-channel-summary-metric strong {
+  font-size: 13px;
+}
+
+.vkpi-channel-staff--compact .vkpi-channel-summary-metric.is-primary strong {
+  font-size: 13px;
+}
+
+.vkpi-channel-staff--compact .vkpi-channel-staff-grid {
+  grid-template-columns: 1fr;
+  gap: 8px;
+  max-height: 234px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.vkpi-channel-staff--compact .vkpi-channel-staff-card {
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  min-height: 66px;
+  border-radius: 12px;
+  padding: 8px;
+}
+
+.vkpi-channel-staff--compact .vkpi-channel-staff-card__avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  font-size: 11px;
+}
+
+.vkpi-channel-staff--compact .vkpi-channel-staff-card h3 {
+  font-size: 13px;
+}
+
+.vkpi-channel-staff--compact .vkpi-channel-staff-card p,
+.vkpi-channel-staff--compact .vkpi-channel-staff-card small {
+  font-size: 10px;
+}
+
+.vkpi-channel-staff--compact .vkpi-channel-staff-card > strong {
+  font-size: 16px;
+}
+
+@media (max-width: 980px) {
+  .vkpi-channel-staff__header,
+  .vkpi-channel-staff--compact .vkpi-channel-staff__header {
+    grid-template-columns: 1fr;
+  }
+
+  .vkpi-channel-staff__totals {
+    justify-content: flex-start;
+    max-width: none;
+  }
+}

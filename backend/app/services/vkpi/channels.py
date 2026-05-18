@@ -2,17 +2,21 @@
 from __future__ import annotations
 
 import base64
+import csv
 import hashlib
 import json
 import os
 import secrets
-from datetime import date, datetime
+import urllib.parse
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from cryptography.fernet import Fernet
 
 from app.db.connection import get_conn
 from app.services.vkpi import scope
+from app.services.vkpi.media_cache import cached_image_url, cached_video_url
 from app.services.vkpi.schema_channels import ensure_vkpi_channels_schema
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
 
@@ -32,6 +36,51 @@ def _int(value: Any, default: int = 0) -> int:
         return int(value or default)
     except (TypeError, ValueError):
         return default
+
+
+def _float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def _bool(value: Any, default: bool = False) -> bool:
+    if value in (None, ""):
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return bool(value)
+
+
+def _count(value: Any) -> int:
+    return max(0, _int(value))
+
+
+def _text(*values: Any) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _parse_json(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(str(value))
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def _items(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
 
 
 def _actor(staff: dict[str, Any] | None) -> int:
@@ -212,20 +261,13 @@ def unbind_channel(channel_id: int, *, staff: dict[str, Any] | None = None) -> d
     return {"status": "revoked", "channel_id": int(channel_id)}
 
 
-def sync_now(channel_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Do not return zero metrics when official API adapters are not configured."""
+def sync_now(channel_id: int, *, staff: dict[str, Any] | None = None, max_posts: int = 12) -> dict[str, Any]:
+    """Sync a bound official channel through configured providers."""
     ensure_vkpi_channels_schema()
     channel = get_channel(channel_id, staff=staff)["channel"]
-    status = "not_configured"
-    message = "平台官方 API / OAuth 尚未配置，未同步真实粉丝或播放数据。"
-    now = _utcnow()
-    get_conn().execute(
-        "UPDATE vkpi_employee_channels SET last_sync_at=?, last_sync_status=?, last_sync_error=?, sync_failure_count=sync_failure_count+1, updated_at=? WHERE id=?",
-        (now, status, message, now, int(channel_id)),
-    )
-    get_conn().execute("INSERT INTO vkpi_channel_audit (channel_id, staff_id, action, detail, occurred_at) VALUES (?,?,?,?,?)", (int(channel_id), _actor(staff) or channel.get("staff_id"), "sync_skipped", message, now))
-    get_conn().commit()
-    return {"channel_id": int(channel_id), "sync_status": status, "message": message, "metrics": None}
+    from app.services.vkpi import channel_refill
+
+    return channel_refill.sync_channel_snapshot(channel, staff=staff, max_posts=max(1, min(1000, int(max_posts or 12))))
 
 
 def metrics(channel_id: int, limit: int = 30, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -255,3 +297,873 @@ def team_overview() -> dict[str, Any]:
 
 def team_detail(staff_id: int) -> dict[str, Any]:
     return list_channels(staff={"id": int(staff_id)}, limit=200)
+
+
+def _latest_official_channel_rows(staff: dict[str, Any] | None = None, view_as_staff_id: int | None = None) -> list[dict[str, Any]]:
+    ensure_vkpi_channels_schema()
+    target = _visible_staff_id(staff, view_as_staff_id) if view_as_staff_id or not scope.can_view_all(staff) else None
+    where = "WHERE c.deleted_at IS NULL AND c.status='active'"
+    params: list[Any] = []
+    if target:
+        where += " AND c.staff_id=?"
+        params.append(target)
+    rows = get_conn().execute(
+        f"""
+        SELECT c.*,
+               COALESCE(u.name, u.email, 'Staff ' || c.staff_id) AS staff_name,
+               COALESCE(u.email, '') AS staff_email,
+               COALESCE(u.avatar_url, '') AS staff_avatar_url,
+               COALESCE(st.role, '') AS staff_role,
+               COALESCE(st.active, 1) AS staff_active,
+               m.snapshot_date,
+               m.followers AS metric_followers,
+               m.posts_count AS metric_posts,
+               m.total_views AS metric_views,
+               m.total_likes AS metric_likes,
+               m.total_comments AS metric_comments,
+               m.total_shares AS metric_shares,
+               m.engagement_rate AS metric_engagement_rate,
+               m.raw_payload_json AS metric_raw_payload_json,
+               m.captured_at AS metric_captured_at
+        FROM vkpi_employee_channels c
+        LEFT JOIN vkpi_channel_metrics m ON m.id = (
+            SELECT id FROM vkpi_channel_metrics mm
+            WHERE mm.channel_id = c.id
+            ORDER BY mm.snapshot_date DESC, mm.captured_at DESC, mm.id DESC
+            LIMIT 1
+        )
+        LEFT JOIN staff st ON st.id = c.staff_id
+        LEFT JOIN users u ON u.id = st.user_id
+        {where}
+        ORDER BY c.platform ASC, c.account_handle ASC, c.id ASC
+        """,
+        tuple(params),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _platform_label(platform: str) -> str:
+    labels = {
+        "instagram": "Instagram",
+        "tiktok": "TikTok",
+        "youtube": "YouTube",
+        "facebook": "Facebook",
+        "x": "X",
+        "reddit": "Reddit",
+    }
+    return labels.get(str(platform or "").lower(), str(platform or "Other").title())
+
+
+def _raw_sample(row: dict[str, Any]) -> dict[str, Any]:
+    raw = _parse_json(row.get("metric_raw_payload_json"))
+    sample = raw.get("raw_sample") if isinstance(raw.get("raw_sample"), dict) else raw
+    return sample if isinstance(sample, dict) else {}
+
+
+def _account_name(row: dict[str, Any]) -> str:
+    return _text(row.get("account_display_name"), row.get("account_handle"), "官方账号")
+
+
+def _account_url(row: dict[str, Any]) -> str:
+    return _text(row.get("account_url"))
+
+
+def _cached_media_url(raw_url: Any) -> str:
+    text = _text(raw_url)
+    return cached_image_url(text) or text
+
+
+def _cached_video_media_url(raw_url: Any) -> str:
+    text = _text(raw_url)
+    return cached_video_url(text) or text
+
+
+def _looks_like_image_media_url(url: str, *, key_hint: str = "") -> bool:
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or "").lower()
+    path = parsed.path.lower()
+    if not host or host.startswith("v.redd.it") or host in {"facebook.com", "www.facebook.com", "m.facebook.com"}:
+        return False
+    image_hosts = (
+        "cdninstagram.com",
+        "fbcdn.net",
+        "xx.fbcdn.net",
+        "ytimg.com",
+        "googleusercontent.com",
+        "tiktokcdn.com",
+        "byteoversea.com",
+        "apifyusercontent.com",
+        "redd.it",
+        "redditmedia.com",
+        "twimg.com",
+    )
+    if any(part in host for part in image_hosts):
+        return True
+    if path.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif")):
+        return True
+    return key_hint not in {"url", "permalink", "postUrl", "topLevelUrl", "facebookUrl"}
+
+
+def _image_url(value: Any, *, key_hint: str = "", depth: int = 0) -> str:
+    if depth > 5:
+        return ""
+    if isinstance(value, str):
+        text = _text(value)
+        if not text.startswith(("http://", "https://")):
+            return ""
+        host = urllib.parse.urlparse(text).hostname or ""
+        if key_hint == "url" and not any(part in host for part in ["fbcdn", "cdninstagram", "ytimg", "redd.it", "redditmedia"]):
+            return ""
+        return text
+    if isinstance(value, list):
+        for item in value:
+            found = _image_url(item, depth=depth + 1)
+            if found:
+                return found
+        return ""
+    if isinstance(value, dict):
+        for key in ["thumbnailUrl", "thumbnail", "displayUrl", "imageUrl", "picture", "uri", "photo_image", "thumbnailImage", "image", "media"]:
+            found = _image_url(value.get(key), key_hint=key, depth=depth + 1)
+            if found:
+                return found
+        return _image_url(value.get("url"), key_hint="url", depth=depth + 1)
+    return ""
+
+
+def _post_from_instagram(item: dict[str, Any], row: dict[str, Any]) -> list[dict[str, Any]]:
+    posts: list[dict[str, Any]] = []
+    direct_posts = _items(item.get("posts")) or ([item] if _text(item.get("dedupe_key"), item.get("shortCode"), item.get("url")) else [])
+    for post in direct_posts:
+        posts.append(
+            {
+                "id": _text(post.get("id"), post.get("source_id"), post.get("shortCode"), post.get("short_code"), post.get("url")),
+                "title": _text(post.get("caption"), post.get("title"), post.get("alt"), "Instagram 内容"),
+                "url": _text(post.get("url"), post.get("shortCodeUrl"), post.get("displayUrl")),
+                "media_url": _cached_media_url(_text(post.get("media_url"), post.get("displayUrl"), post.get("imageUrl"), post.get("videoUrl"))),
+                "posted_at": _text(post.get("timestamp"), post.get("createdAt"), post.get("posted_at")),
+                "views": _int(post.get("views"), _int(post.get("videoViewCount"), _int(post.get("videoPlayCount")))),
+                "likes": _int(post.get("likes"), _int(post.get("likesCount"))),
+                "comments": _int(post.get("comments"), _int(post.get("commentsCount"))),
+                "shares": _int(post.get("shares"), _int(post.get("shareCount"))),
+            }
+        )
+    for post in _items(item.get("latestPosts")):
+        posts.append(
+            {
+                "id": _text(post.get("id"), post.get("shortCode"), post.get("url")),
+                "title": _text(post.get("caption"), post.get("alt"), "Instagram 内容"),
+                "url": _text(post.get("url"), post.get("displayUrl")),
+                "media_url": _cached_media_url(_text(post.get("displayUrl"), post.get("imageUrl"), post.get("videoUrl"))),
+                "posted_at": _text(post.get("timestamp"), post.get("createdAt")),
+                "views": _int(post.get("videoViewCount"), _int(post.get("videoPlayCount"))),
+                "likes": _int(post.get("likesCount"), _int(post.get("likes"))),
+                "comments": _int(post.get("commentsCount"), _int(post.get("comments"))),
+                "shares": _int(post.get("shareCount")),
+            }
+        )
+    if not posts and _int(row.get("metric_views")):
+        posts.append(_account_level_post(row))
+    return posts
+
+
+def _post_from_tiktok(item: dict[str, Any]) -> dict[str, Any]:
+    media = _items(item.get("mediaUrls"))
+    video_meta = item.get("videoMeta") if isinstance(item.get("videoMeta"), dict) else {}
+    media_url = _text(
+        media[0].get("url") if media else "",
+        video_meta.get("coverUrl"),
+        video_meta.get("originalCoverUrl"),
+        item.get("coverUrl"),
+        item.get("thumbnailUrl"),
+        item.get("dynamicCover"),
+        item.get("webVideoUrl"),
+    )
+    return {
+        "id": _text(item.get("id"), item.get("webVideoUrl")),
+        "title": _text(item.get("text"), "TikTok 内容"),
+        "url": _text(item.get("webVideoUrl"), item.get("url")),
+        "media_url": _cached_media_url(media_url),
+        "posted_at": _text(item.get("createTimeISO"), item.get("createTime")),
+        "views": _int(item.get("playCount")),
+        "likes": _int(item.get("diggCount")),
+        "comments": _int(item.get("commentCount")),
+        "shares": _int(item.get("shareCount")),
+    }
+
+
+def _post_from_youtube(item: dict[str, Any]) -> dict[str, Any]:
+    snippet = item.get("snippet") if isinstance(item.get("snippet"), dict) else {}
+    stats = item.get("statistics") if isinstance(item.get("statistics"), dict) else {}
+    thumbnails = snippet.get("thumbnails") if isinstance(snippet.get("thumbnails"), dict) else {}
+    thumb = {}
+    for key in ["maxres", "standard", "high", "medium", "default"]:
+        if isinstance(thumbnails.get(key), dict):
+            thumb = thumbnails[key]
+            break
+    video_id = _text(item.get("id"))
+    if isinstance(item.get("id"), dict):
+        video_id = _text(item["id"].get("videoId"), item["id"].get("channelId"))
+    return {
+        "id": video_id,
+        "title": _text(snippet.get("title"), "YouTube 内容"),
+        "url": f"https://www.youtube.com/watch?v={video_id}" if video_id else "",
+        "media_url": _cached_media_url(thumb.get("url")),
+        "posted_at": _text(snippet.get("publishedAt")),
+        "views": _int(stats.get("viewCount")),
+        "likes": _int(stats.get("likeCount")),
+        "comments": _int(stats.get("commentCount")),
+        "shares": 0,
+    }
+
+
+def _post_from_facebook(item: dict[str, Any]) -> dict[str, Any] | None:
+    if item.get("error"):
+        return None
+    url = _text(item.get("url"), item.get("postUrl"), item.get("topLevelUrl"))
+    if not url or not _text(item.get("postId"), item.get("text"), item.get("media"), item.get("isVideo")):
+        return None
+    return {
+        "id": _text(item.get("postId"), item.get("id"), url),
+        "title": _text(item.get("text"), item.get("message"), "Facebook 内容"),
+        "url": url,
+        "media_url": _cached_media_url(_text(_image_url(item.get("media")), _image_url(item.get("image")), _image_url(item.get("picture")))),
+        "posted_at": _text(item.get("time"), item.get("timestamp"), item.get("createdAt")),
+        "views": _int(item.get("views"), _int(item.get("videoViews"), _int(item.get("videoViewCount"), _int(item.get("viewsCount"))))),
+        "likes": _int(item.get("likes"), _int(item.get("reactions"), _int(item.get("reactionLikeCount"), _int(item.get("topReactionsCount"))))),
+        "comments": _int(item.get("comments"), _int(item.get("commentsCount"))),
+        "shares": _int(item.get("shares"), _int(item.get("sharesCount"))),
+    }
+
+
+def _post_from_x(item: dict[str, Any]) -> dict[str, Any]:
+    image_urls = _media_urls(item.get("extendedEntities"), item.get("entities"), item.get("media"), item.get("photos"))
+    video_url = _video_url(item.get("extendedEntities")) or _video_url(item.get("entities")) or _video_url(item.get("media")) or _video_url(item.get("video"))
+    return {
+        "id": _text(item.get("id"), item.get("url"), item.get("twitterUrl")),
+        "title": _text(item.get("fullText"), item.get("text"), "X 内容"),
+        "url": _text(item.get("twitterUrl"), item.get("url")),
+        "media_url": _cached_media_url(_text(image_urls[0] if image_urls else "", video_url)),
+        "video_url": _cached_video_media_url(video_url),
+        "image_urls": image_urls[:12],
+        "media_kind": "video" if video_url else ("image" if image_urls else "post"),
+        "posted_at": _text(item.get("createdAt")),
+        "views": _int(item.get("viewCount")),
+        "likes": _int(item.get("likeCount")),
+        "comments": _int(item.get("replyCount")),
+        "shares": _int(item.get("retweetCount")),
+    }
+
+
+def _post_from_reddit(item: dict[str, Any]) -> dict[str, Any] | None:
+    data_type = str(item.get("dataType") or "").lower()
+    if data_type in {"community", "subreddit", "comment"} or item.get("numberOfMembers"):
+        return None
+    url = _text(item.get("url"), item.get("permalink"))
+    if not url:
+        return None
+    return {
+        "id": _text(item.get("id"), item.get("name"), url),
+        "title": _text(item.get("title"), item.get("body"), "Reddit 内容"),
+        "url": url,
+        "media_url": _cached_media_url(item.get("thumbnailUrl")),
+        "posted_at": _text(item.get("createdAt")),
+        "views": _int(item.get("views")),
+        "likes": _int(item.get("upVotes"), _int(item.get("score"))),
+        "comments": _int(item.get("numberOfComments"), _int(item.get("comments"))),
+        "shares": 0,
+    }
+
+
+def _account_level_post(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": f"channel-{row.get('id')}",
+        "title": f"{_account_name(row)} 账号快照",
+        "url": _account_url(row),
+        "media_url": _cached_media_url(row.get("avatar_url")),
+        "posted_at": _text(row.get("metric_captured_at"), row.get("last_sync_at")),
+        "views": _int(row.get("metric_views")),
+        "likes": _int(row.get("metric_likes")),
+        "comments": _int(row.get("metric_comments")),
+        "shares": _int(row.get("metric_shares")),
+        "account_level": True,
+    }
+
+
+def _extract_posts(row: dict[str, Any], *, per_account_limit: int) -> list[dict[str, Any]]:
+    platform = str(row.get("platform") or "").lower()
+    sample = _raw_sample(row)
+    posts: list[dict[str, Any]] = []
+    if platform == "instagram":
+        posts.extend(_post_from_instagram({"posts": _items(sample.get("posts"))}, row))
+        for item in _items(sample.get("items")):
+            posts.extend(_post_from_instagram(item, row))
+    elif platform == "tiktok":
+        posts.extend(_post_from_tiktok(item) for item in _items(sample.get("items")))
+    elif platform == "youtube":
+        posts.extend(_post_from_youtube(item) for item in _items(sample.get("videos")))
+    elif platform == "facebook":
+        for item in _items(sample.get("items")):
+            post = _post_from_facebook(item)
+            if post:
+                posts.append(post)
+    elif platform == "x":
+        posts.extend(_post_from_x(item) for item in _items(sample.get("items")))
+    elif platform == "reddit":
+        reddit_items = _items(sample.get("items")) or _items(sample.get("posts"))
+        for item in reddit_items:
+            post = _post_from_reddit(item)
+            if post:
+                posts.append(post)
+    posts = [post for post in posts if post.get("id") or post.get("url")]
+    seen: set[str] = set()
+    unique_posts: list[dict[str, Any]] = []
+    for post in posts:
+        key = _text(post.get("url"), post.get("id"))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_posts.append(post)
+    posts = unique_posts
+    if not posts and _int(row.get("metric_views")):
+        posts = [_account_level_post(row)]
+    return posts[: max(1, min(50, int(per_account_limit or 10)))]
+
+
+def official_account_matrix(*, staff: dict[str, Any] | None = None, view_as_staff_id: int | None = None, limit: int = 50) -> dict[str, Any]:
+    """Return platform -> official account -> post hierarchy for data-analysis UI."""
+    rows = _latest_official_channel_rows(staff=staff, view_as_staff_id=view_as_staff_id)
+    platforms: dict[str, dict[str, Any]] = {}
+    total_views = 0
+    total_posts = 0
+    for row in rows:
+        platform = str(row.get("platform") or "other").lower()
+        platform_entry = platforms.setdefault(
+            platform,
+            {
+                "platform": platform,
+                "label": _platform_label(platform),
+                "total_views": 0,
+                "total_posts": 0,
+                "total_followers": 0,
+                "accounts": [],
+            },
+        )
+        sample_limit = max(1, min(50, int(limit or 10)))
+        raw_payload = _parse_json(row.get("metric_raw_payload_json"))
+        package_posts = _posts_from_package(_text(raw_payload.get("package_dir")))
+        posts = package_posts[:sample_limit] if package_posts else _extract_posts(row, per_account_limit=limit)
+        account_views = _int(row.get("metric_views"))
+        account_posts = _int(row.get("metric_posts"), len(posts))
+        account_followers = _int(row.get("metric_followers"))
+        platform_entry["total_views"] += account_views
+        platform_entry["total_posts"] += account_posts
+        platform_entry["total_followers"] += account_followers
+        total_views += account_views
+        total_posts += account_posts
+        platform_entry["accounts"].append(
+            {
+                "id": int(row.get("id") or 0),
+                "staff_id": _int(row.get("staff_id")),
+                "staff_name": _text(row.get("staff_name"), row.get("staff_email"), f"Staff {_int(row.get('staff_id'))}"),
+                "staff_email": _text(row.get("staff_email")),
+                "staff_avatar_url": _text(row.get("staff_avatar_url")),
+                "staff_role": _text(row.get("staff_role")),
+                "staff_active": bool(_int(row.get("staff_active"), 1)),
+                "platform": platform,
+                "platform_label": _platform_label(platform),
+                "handle": str(row.get("account_handle") or ""),
+                "display_name": _account_name(row),
+                "account_url": _account_url(row),
+                "avatar_url": _cached_media_url(row.get("avatar_url")),
+                "sync_status": row.get("last_sync_status") or "not_configured",
+                "last_sync_at": row.get("last_sync_at"),
+                "last_sync_error": _text(row.get("last_sync_error")),
+                "followers": account_followers,
+                "posts_count": account_posts,
+                "total_views": account_views,
+                "total_likes": _int(row.get("metric_likes")),
+                "total_comments": _int(row.get("metric_comments")),
+                "total_shares": _int(row.get("metric_shares")),
+                "engagement_rate": _float(row.get("metric_engagement_rate")),
+                "posts": posts,
+            }
+        )
+    return {
+        "platforms": sorted(platforms.values(), key=lambda item: item["label"]),
+        "account_count": len(rows),
+        "post_count": total_posts,
+        "total_views": total_views,
+    }
+
+
+def _latest_channel_row(channel_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    ensure_vkpi_channels_schema()
+    _assert_channel_access(channel_id, staff)
+    row = get_conn().execute(
+        """
+        SELECT c.*,
+               COALESCE(u.name, u.email, 'Staff ' || c.staff_id) AS staff_name,
+               COALESCE(u.email, '') AS staff_email,
+               COALESCE(u.avatar_url, '') AS staff_avatar_url,
+               COALESCE(st.role, '') AS staff_role,
+               COALESCE(st.active, 1) AS staff_active,
+               m.snapshot_date,
+               m.followers AS metric_followers,
+               m.posts_count AS metric_posts,
+               m.total_views AS metric_views,
+               m.total_likes AS metric_likes,
+               m.total_comments AS metric_comments,
+               m.total_shares AS metric_shares,
+               m.engagement_rate AS metric_engagement_rate,
+               m.raw_payload_json AS metric_raw_payload_json,
+               m.captured_at AS metric_captured_at
+        FROM vkpi_employee_channels c
+        LEFT JOIN vkpi_channel_metrics m ON m.id = (
+            SELECT id FROM vkpi_channel_metrics mm
+            WHERE mm.channel_id = c.id
+            ORDER BY mm.snapshot_date DESC, mm.captured_at DESC, mm.id DESC
+            LIMIT 1
+        )
+        LEFT JOIN staff st ON st.id = c.staff_id
+        LEFT JOIN users u ON u.id = st.user_id
+        WHERE c.id=? AND c.deleted_at IS NULL
+        LIMIT 1
+        """,
+        (int(channel_id),),
+    ).fetchone()
+    if not row:
+        raise LookupError("channel not found")
+    return dict(row)
+
+
+def _media_type_kind(value: Any) -> str:
+    text = _text(value).lower()
+    if text in {"video", "reel", "reels", "clips"}:
+        return "video"
+    if text in {"sidecar", "carousel", "album"}:
+        return "carousel"
+    if text in {"image", "photo"}:
+        return "image"
+    return text
+
+
+def _media_urls(*values: Any) -> list[str]:
+    urls: list[str] = []
+    seen: set[str] = set()
+
+    def push(value: Any, *, key_hint: str = "") -> None:
+        if isinstance(value, dict):
+            for key in (
+                "displayUrl",
+                "imageUrl",
+                "thumbnailUrl",
+                "thumbnail",
+                "uri",
+                "picture",
+                "photo_image",
+        "thumbnailImage",
+        "profilePictureUrl",
+        "profilePicUrlHD",
+        "profilePicUrl",
+        "displayResources",
+        "sidecarChildren",
+        "edge_sidecar_to_children",
+        "coverPhotoUrl",
+        "coverUrl",
+        "media_url",
+                "media_url_https",
+                "preview_image_url",
+                "url",
+            ):
+                push(value.get(key), key_hint=key)
+            return
+        if isinstance(value, list):
+            for item in value:
+                push(item, key_hint=key_hint)
+            return
+        url = _text(value)
+        if url.startswith("["):
+            try:
+                push(json.loads(url), key_hint=key_hint)
+            except Exception:
+                pass
+            return
+        if not url or not url.startswith(("http://", "https://")) or url in seen:
+            return
+        if not _looks_like_image_media_url(url, key_hint=key_hint):
+            return
+        seen.add(url)
+        urls.append(_cached_media_url(url))
+
+    for value in values:
+        push(value)
+    return urls
+
+
+def _video_url(value: Any, *, depth: int = 0) -> str:
+    if depth > 7:
+        return ""
+    if isinstance(value, str):
+        url = _text(value)
+        if not url.startswith(("http://", "https://")):
+            return ""
+        parsed = urllib.parse.urlparse(url)
+        host = parsed.hostname or ""
+        if ".mp4" in parsed.path.lower() or "googlevideo.com" in host or host.endswith("v.redd.it") or host.endswith("video.twimg.com") or "video-" in host:
+            return url
+        return ""
+    if isinstance(value, list):
+        for item in value:
+            found = _video_url(item, depth=depth + 1)
+            if found:
+                return found
+        return ""
+    if isinstance(value, dict):
+        for key in ("videoUrl", "browser_native_hd_url", "browser_native_sd_url", "playable_url", "fallback_url", "url"):
+            found = _video_url(value.get(key), depth=depth + 1)
+            if found:
+                return found
+        for item in value.values():
+            found = _video_url(item, depth=depth + 1)
+            if found:
+                return found
+    return ""
+
+
+def _raw_package_posts(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    posts = raw.get("posts") if isinstance(raw.get("posts"), dict) else {}
+    profile = raw.get("profile") if isinstance(raw.get("profile"), dict) else {}
+    profile_items = _items(profile.get("items"))
+    latest = _items(profile_items[0].get("latestPosts")) if profile_items else []
+    profile_posts = [
+        item for item in profile_items
+        if _text(item.get("dataType"), item.get("type")).lower() not in {"community", "subreddit_profile", "comment"}
+        and (_text(item.get("title")) or _text(item.get("url"), item.get("permalink")))
+    ]
+    return [*_items(posts.get("items")), *latest, *profile_posts]
+
+
+def _raw_post_index(raw: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    index: dict[str, dict[str, Any]] = {}
+    for item in _raw_package_posts(raw):
+        for key in (
+            _text(item.get("id")),
+            _text(item.get("name")),
+            _text(item.get("postId")),
+            _text(item.get("parsedId")),
+            _text(item.get("shortCode"), item.get("code")),
+            _text(item.get("url")),
+            _text(item.get("postUrl")),
+            _text(item.get("topLevelUrl")),
+            _text(item.get("facebookUrl")),
+            _text(item.get("permalink")),
+        ):
+            if key and key not in index:
+                index[key] = item
+    return index
+
+
+def _enrich_package_post(post: dict[str, Any], raw_index: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    raw = raw_index.get(_text(post.get("source_id"))) or raw_index.get(_text(post.get("short_code"))) or raw_index.get(_text(post.get("url"))) or {}
+    child_posts = _items(raw.get("childPosts"))
+    video_url = _text(raw.get("videoUrl"), _video_url(raw.get("media")), _video_url(raw))
+    image_urls = _media_urls(
+        raw.get("images"),
+        raw.get("media"),
+        raw.get("image"),
+        raw.get("picture"),
+        raw.get("thumbnailUrl"),
+        raw.get("thumbnail"),
+        raw.get("coverUrl"),
+        raw.get("coverPhotoUrl"),
+        raw.get("displayResources"),
+        raw.get("sidecarChildren"),
+        raw.get("edge_sidecar_to_children"),
+        [child.get("displayUrl") or child.get("imageUrl") for child in child_posts],
+        raw.get("displayUrl"),
+        raw.get("imageUrl"),
+        raw.get("media_url"),
+        raw.get("media_url_https"),
+        raw.get("preview_image_url"),
+    )
+    media_kind = _media_type_kind(post.get("media_type") or raw.get("type") or raw.get("productType"))
+    if video_url:
+        post["video_url"] = _cached_video_media_url(video_url)
+    if image_urls:
+        post["image_urls"] = image_urls[:12]
+    post["media_kind"] = "video" if video_url or media_kind == "video" else ("carousel" if len(image_urls) > 1 or media_kind == "carousel" else media_kind or "image")
+    platform = _text(post.get("platform")).lower()
+    post["views_unavailable"] = platform == "instagram" and post["media_kind"] in {"image", "carousel"} and _int(post.get("views")) <= 0
+    if platform == "reddit":
+        post["score"] = _int(raw.get("score"), _int(post.get("likes")))
+        post["upvote_ratio"] = _float(raw.get("upvoteRatio"), _float(raw.get("upvote_ratio")))
+        post["author"] = _text(raw.get("author"), raw.get("authorName"), raw.get("username"))
+        post["subreddit"] = _text(raw.get("subreddit"), raw.get("subredditName"), raw.get("communityName"))
+        post["flair"] = _text(raw.get("flair"), raw.get("linkFlairText"), raw.get("postFlair"))
+        post["is_locked"] = _bool(raw.get("locked"), _bool(raw.get("isLocked")))
+        post["is_pinned"] = _bool(raw.get("stickied"), _bool(raw.get("pinned"), _bool(raw.get("isPinned"))))
+        post["is_removed"] = _bool(raw.get("removed"), _bool(raw.get("isRemoved"))) or bool(_text(raw.get("removedByCategory")))
+    return post
+
+
+def _post_from_package_row(row: dict[str, Any]) -> dict[str, Any]:
+    post = {
+        "id": _text(row.get("source_id"), row.get("short_code"), row.get("url"), row.get("dedupe_key")),
+        "source_id": _text(row.get("source_id")),
+        "short_code": _text(row.get("short_code")),
+        "platform": _text(row.get("platform")),
+        "title": _text(row.get("title"), "内容"),
+        "url": _text(row.get("url")),
+        "media_url": _cached_media_url(row.get("media_url")),
+        "video_url": _cached_video_media_url(row.get("video_url")),
+        "media_type": _text(row.get("media_type")),
+        "posted_at": _text(row.get("posted_at")),
+        "views": _count(row.get("views")),
+        "likes": _count(row.get("likes")),
+        "comments": _count(row.get("comments")),
+        "shares": _count(row.get("shares")),
+        "reaction_total": _count(row.get("reaction_total")),
+        "reaction_like": _count(row.get("reaction_like")),
+        "reaction_love": _count(row.get("reaction_love")),
+        "reaction_care": _count(row.get("reaction_care")),
+        "reaction_haha": _count(row.get("reaction_haha")),
+        "reaction_wow": _count(row.get("reaction_wow")),
+        "reaction_sad": _count(row.get("reaction_sad")),
+        "reaction_angry": _count(row.get("reaction_angry")),
+        "dedupe_key": _text(row.get("dedupe_key")),
+    }
+    image_urls = _media_urls(_parse_json(row.get("image_urls")), row.get("image_urls"))
+    if image_urls:
+        post["image_urls"] = image_urls[:12]
+    return post
+
+
+def _posts_from_package(package_dir: str) -> list[dict[str, Any]]:
+    if not package_dir:
+        return []
+    path = Path(package_dir).expanduser() / "posts.csv"
+    if not path.exists() or not path.is_file():
+        return []
+    raw_index: dict[str, dict[str, Any]] = {}
+    raw_path = Path(package_dir).expanduser() / "raw.json"
+    if raw_path.exists() and raw_path.is_file():
+        raw_index = _raw_post_index(_parse_json(raw_path.read_text(encoding="utf-8")))
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        return [_enrich_package_post(_post_from_package_row(dict(row)), raw_index) for row in csv.DictReader(handle)]
+
+
+def _raw_package(package_dir: str) -> dict[str, Any]:
+    if not package_dir:
+        return {}
+    raw_path = Path(package_dir).expanduser() / "raw.json"
+    if not raw_path.exists() or not raw_path.is_file():
+        return {}
+    return _parse_json(raw_path.read_text(encoding="utf-8"))
+
+
+def _raw_package_items(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    profile = raw.get("profile") if isinstance(raw.get("profile"), dict) else {}
+    return _items(profile.get("items")) or _items(raw.get("items"))
+
+
+def _post_datetime(post: dict[str, Any]) -> datetime | None:
+    raw = _text(post.get("posted_at"))
+    if not raw:
+        return None
+    try:
+        value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _filter_posts_by_window(posts: list[dict[str, Any]], window: str) -> list[dict[str, Any]]:
+    key = str(window or "all").lower()
+    days_by_key = {"7d": 7, "30d": 30, "90d": 90, "180d": 180, "365d": 365}
+    if key == "all":
+        return posts
+    now = datetime.now(timezone.utc)
+    if key == "year":
+        return [post for post in posts if (posted_at := _post_datetime(post)) and posted_at.year == now.year]
+    days = days_by_key.get(key)
+    if not days:
+        return posts
+    cutoff = now - timedelta(days=days)
+    return [post for post in posts if (posted_at := _post_datetime(post)) and posted_at >= cutoff]
+
+
+def _sort_posts(posts: list[dict[str, Any]], sort: str, direction: str) -> list[dict[str, Any]]:
+    sort_key = str(sort or "latest").lower()
+    reverse = str(direction or "desc").lower() != "asc"
+    metric_keys = {"views", "likes", "comments", "shares"}
+    if sort_key in metric_keys:
+        if sort_key == "views":
+            available = [post for post in posts if not post.get("views_unavailable")]
+            unavailable = [post for post in posts if post.get("views_unavailable")]
+            unavailable.sort(key=lambda post: _post_datetime(post) or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+            return [
+                *sorted(available, key=lambda post: (_int(post.get(sort_key)), _post_datetime(post) or datetime.min.replace(tzinfo=timezone.utc)), reverse=reverse),
+                *unavailable,
+            ]
+        return sorted(posts, key=lambda post: (_int(post.get(sort_key)), _post_datetime(post) or datetime.min.replace(tzinfo=timezone.utc)), reverse=reverse)
+    return sorted(posts, key=lambda post: _post_datetime(post) or datetime.min.replace(tzinfo=timezone.utc), reverse=reverse)
+
+
+def channel_posts(
+    channel_id: int,
+    *,
+    page: int = 1,
+    limit: int = 10,
+    sort: str = "latest",
+    direction: str = "desc",
+    window: str = "all",
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    row = _latest_channel_row(channel_id, staff=staff)
+    raw = _parse_json(row.get("metric_raw_payload_json"))
+    package_dir = _text(raw.get("package_dir"))
+    posts = _posts_from_package(package_dir)
+    source = "package_csv" if posts else "snapshot_sample"
+    if not posts:
+        posts = _extract_posts(row, per_account_limit=50)
+    posts = [post for post in posts if _text(post.get("id"), post.get("url"))]
+    posts = _filter_posts_by_window(posts, window)
+    posts = _sort_posts(posts, sort, direction)
+    page_i = max(1, int(page or 1))
+    limit_i = max(1, min(50, int(limit or 10)))
+    total = len(posts)
+    offset = (page_i - 1) * limit_i
+    items = posts[offset : offset + limit_i]
+    return {
+        "channel_id": int(channel_id),
+        "account": {
+            "id": int(row.get("id") or 0),
+            "platform": str(row.get("platform") or ""),
+            "handle": str(row.get("account_handle") or ""),
+            "display_name": _account_name(row),
+            "account_url": _account_url(row),
+            "followers": _int(row.get("metric_followers")),
+            "posts_count": _int(row.get("metric_posts")),
+            "total_views": _int(row.get("metric_views")),
+            "total_likes": _int(row.get("metric_likes")),
+            "total_comments": _int(row.get("metric_comments")),
+            "total_shares": _int(row.get("metric_shares")),
+            "captured_at": _text(row.get("metric_captured_at")),
+        },
+        "posts": items,
+        "pagination": {
+            "page": page_i,
+            "limit": limit_i,
+            "total": total,
+            "pages": (total + limit_i - 1) // limit_i if total else 0,
+            "has_next": offset + limit_i < total,
+            "has_prev": page_i > 1,
+        },
+        "sort": sort if sort in {"latest", "views", "likes", "comments", "shares"} else "latest",
+        "direction": direction if direction in {"asc", "desc"} else "desc",
+        "window": window if window in {"all", "7d", "30d", "90d", "180d", "365d", "year"} else "all",
+        "source": source,
+        "package_dir": package_dir,
+    }
+
+
+def _all_posts_for_channel(row: dict[str, Any]) -> tuple[list[dict[str, Any]], str, str]:
+    raw = _parse_json(row.get("metric_raw_payload_json"))
+    package_dir = _text(raw.get("package_dir"))
+    posts = _posts_from_package(package_dir)
+    source = "package_csv" if posts else "snapshot_sample"
+    if not posts:
+        posts = _extract_posts(row, per_account_limit=50)
+    posts = [post for post in posts if _text(post.get("id"), post.get("url"))]
+    return posts, source, package_dir
+
+
+def _reddit_external_id(value: str) -> str:
+    text = _text(value)
+    if "/comments/" in text:
+        return text.split("/comments/", 1)[1].split("/", 1)[0]
+    return text.replace("t3_", "")
+
+
+def _match_post(row: dict[str, Any], post_id: str, url: str = "") -> dict[str, Any] | None:
+    posts, _, _ = _all_posts_for_channel(row)
+    candidates = {_text(post_id), _text(url), _reddit_external_id(post_id), _reddit_external_id(url)}
+    candidates = {candidate for candidate in candidates if candidate}
+    for post in posts:
+        keys = {
+            _text(post.get("id")),
+            _text(post.get("source_id")),
+            _text(post.get("short_code")),
+            _text(post.get("url")),
+            _reddit_external_id(_text(post.get("id"))),
+            _reddit_external_id(_text(post.get("url"))),
+        }
+        if candidates & {key for key in keys if key}:
+            return post
+    return None
+
+
+def official_views_evidence(*, staff: dict[str, Any] | None = None, view_as_staff_id: int | None = None, limit: int = 120) -> dict[str, Any]:
+    """Map official-account channel data into metric evidence rows for views."""
+    matrix = official_account_matrix(staff=staff, view_as_staff_id=view_as_staff_id, limit=limit)
+    rows: list[dict[str, Any]] = []
+    max_rows = max(1, min(300, int(limit or 120)))
+    for platform in matrix["platforms"]:
+        platform_label = platform.get("label") or _platform_label(platform.get("platform"))
+        for account in platform.get("accounts", []):
+            account_name = account.get("display_name") or account.get("handle") or "官方账号"
+            posts = account.get("posts") or []
+            if not posts and _int(account.get("total_views")):
+                posts = [
+                    {
+                        "id": f"account-{account.get('id')}",
+                        "title": f"{account_name} 账号播放量快照",
+                        "url": account.get("account_url"),
+                        "posted_at": account.get("last_sync_at"),
+                        "views": account.get("total_views"),
+                    }
+                ]
+            for post in posts:
+                amount = _int(post.get("views"))
+                if amount <= 0:
+                    continue
+                rows.append(
+                    {
+                        "id": f"official-{account.get('id')}-{post.get('id') or len(rows)}",
+                        "metric": "views",
+                        "label": _text(post.get("title"), f"{account_name} 内容"),
+                        "source": f"Viltrox 自营账号 · {platform_label}",
+                        "amount": amount,
+                        "amountUnit": "number",
+                        "ownerName": account_name,
+                        "kolName": "",
+                        "confidence": _text(account.get("sync_status"), "synced"),
+                        "occurredAt": _text(post.get("posted_at"), account.get("last_sync_at")),
+                        "rawRef": _text(post.get("url"), account.get("account_url")),
+                        "platform": account.get("platform"),
+                        "platformLabel": platform_label,
+                        "attributionType": "owned_official",
+                        "accountId": account.get("id"),
+                        "accountName": account_name,
+                        "accountHandle": account.get("handle"),
+                        "accountUrl": account.get("account_url"),
+                        "staffId": account.get("staff_id"),
+                        "staffName": account.get("staff_name"),
+                        "staffEmail": account.get("staff_email"),
+                        "staffRole": account.get("staff_role"),
+                        "postId": post.get("id"),
+                        "mediaUrl": post.get("media_url"),
+                    }
+                )
+    rows.sort(key=lambda item: (item.get("occurredAt") or ""), reverse=True)
+    return {
+        "rows": rows[:max_rows],
+        "account_count": matrix["account_count"],
+        "post_count": matrix["post_count"],
+        "total_views": matrix["total_views"],
+        "evidence_views": sum(_int(row.get("amount")) for row in rows),
+        "returned_rows": min(len(rows), max_rows),
+        "platforms": matrix["platforms"],
+    }

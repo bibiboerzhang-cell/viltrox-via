@@ -17,17 +17,15 @@ Apify Actor 选型:
 """
 from __future__ import annotations
 
-import json
 import os
 import re
 import urllib.parse
-import urllib.request
 from typing import Any
 
 
-APIFY_API_BASE = "https://api.apify.com/v2"
 DEFAULT_ACTOR_ID = "clockworks~tiktok-scraper"
 DEFAULT_RUN_TIMEOUT_SECONDS = 180  # TikTok 抓取慢,timeout 长一点
+DEFAULT_MAX_PROFILE_RESULTS = 10000
 
 
 class TikTokCrawler:
@@ -49,6 +47,16 @@ class TikTokCrawler:
     @property
     def configured(self) -> bool:
         return bool(self.api_token)
+
+    @staticmethod
+    def _max_profile_results(value: int) -> int:
+        env_limit = os.environ.get("VKPI_TIKTOK_MAX_PROFILE_RESULTS")
+        try:
+            upper = int(env_limit or DEFAULT_MAX_PROFILE_RESULTS)
+        except (TypeError, ValueError):
+            upper = DEFAULT_MAX_PROFILE_RESULTS
+        upper = max(1, min(1_000_000, upper))
+        return max(1, min(upper, int(value or 1)))
 
     def provider_status(self) -> dict[str, Any]:
         return {
@@ -99,33 +107,42 @@ class TikTokCrawler:
         """启动 Apify run,等待完成,返回 dataset items"""
         if not self.configured:
             return self._not_configured("apify_run")
-        
-        actor_path = self.actor_id.replace("/", "~")
-        url = f"{APIFY_API_BASE}/acts/{actor_path}/run-sync-get-dataset-items?token={self.api_token}"
-        
+
         try:
-            data = json.dumps(input_payload).encode("utf-8")
-            request = urllib.request.Request(
-                url,
-                data=data,
-                method="POST",
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                    "User-Agent": "ViltroxMarketing/1.0",
-                },
+            from apify_client import ApifyClient  # type: ignore
+
+            actor_path = self.actor_id.replace("/", "~")
+            client = ApifyClient(self.api_token)
+            run = client.actor(actor_path).call(
+                run_input=input_payload,
+                timeout_secs=self.run_timeout_seconds,
+                wait_secs=self.run_timeout_seconds,
             )
-            with urllib.request.urlopen(request, timeout=self.run_timeout_seconds) as response:  # nosec B310
-                body = response.read().decode("utf-8")
-            
-            payload = json.loads(body or "[]")
-            items = payload if isinstance(payload, list) else (payload.get("items") or [])
+            if not run or str(run.get("status") or "").upper() != "SUCCEEDED":
+                return {
+                    "provider": "tiktok",
+                    "provider_status": "error",
+                    "sync_status": "error",
+                    "items": [],
+                    "error": f"TikTok actor did not finish: {str((run or {}).get('status') or 'unknown')}",
+                    "raw": {"actor_id": self.actor_id, "input": input_payload},
+                }
+            items = list(client.dataset(run.get("defaultDatasetId")).iterate_items())
             return {
                 "provider": "tiktok",
                 "provider_status": "ok",
                 "sync_status": "synced",
                 "items": items,
                 "raw": {"actor_id": self.actor_id, "input": input_payload},
+            }
+        except ImportError:
+            return {
+                "provider": "tiktok",
+                "provider_status": "error",
+                "sync_status": "error",
+                "items": [],
+                "error": "apify-client not installed",
+                "raw": {"actor_id": self.actor_id},
             }
         except Exception as exc:  # pragma: no cover
             return {
@@ -163,7 +180,7 @@ class TikTokCrawler:
         # Apify clockworks/tiktok-scraper input
         input_payload: dict[str, Any] = {
             "profiles": [ref["value"]] if ref["kind"] == "handle" else [],
-            "resultsPerPage": max(1, min(50, int(max_posts or 12))),
+            "resultsPerPage": self._max_profile_results(int(max_posts or 12)),
             "shouldDownloadVideos": False,
             "shouldDownloadCovers": False,
             "shouldDownloadSubtitles": False,
@@ -198,7 +215,7 @@ class TikTokCrawler:
         
         input_payload = {
             "profiles": [channel_id.lstrip("@")],
-            "resultsPerPage": max(1, min(100, int(max_results or 25))),
+            "resultsPerPage": self._max_profile_results(int(max_results or 25)),
             "shouldDownloadVideos": False,
             "shouldDownloadCovers": False,
         }
@@ -242,7 +259,9 @@ class TikTokCrawler:
                 run_input={
                     "postURLs": [post_url],
                     "commentsPerPost": max(1, min(100, int(max_results or 50))),
-                }
+                },
+                timeout_secs=self.run_timeout_seconds,
+                wait_secs=self.run_timeout_seconds,
             )
             dataset_id = run.get("defaultDatasetId")
             items = list(client.dataset(dataset_id).iterate_items()) if dataset_id else []

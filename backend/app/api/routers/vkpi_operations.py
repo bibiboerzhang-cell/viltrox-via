@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.core.config import VKPI_ASYNC_ENABLED
 from app.api.dependencies.perms import require_tab
-from app.services.vkpi import analytics, channels, cron, p5_selected, scope, task_enqueue
+from app.services.vkpi import analytics, channel_comments, channel_gaps, channels, cron, p5_selected, reddit_channel_insights, scope, task_enqueue
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-operations"])
@@ -194,6 +194,100 @@ async def sync_channel(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
+
+
+@router.get("/channels/official-matrix")
+def official_channel_matrix(
+    view_as_staff_id: int | None = None,
+    limit: int = Query(default=20, ge=1, le=50),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    return channels.official_account_matrix(staff=staff, view_as_staff_id=view_as_staff_id, limit=limit)
+
+
+@router.get("/channels/official-views-evidence")
+def official_channel_views_evidence(
+    view_as_staff_id: int | None = None,
+    limit: int = Query(default=120, ge=1, le=300),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    return channels.official_views_evidence(staff=staff, view_as_staff_id=view_as_staff_id, limit=limit)
+
+
+@router.get("/channels/{channel_id}/posts")
+def channel_posts(
+    channel_id: int,
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=10, ge=1, le=50),
+    sort: str = Query(default="latest", pattern="^(latest|views|likes|comments|shares)$"),
+    direction: str = Query(default="desc", pattern="^(asc|desc)$"),
+    window: str = Query(default="all", pattern="^(all|7d|30d|90d|180d|365d|year)$"),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    try:
+        return channels.channel_posts(channel_id, page=page, limit=limit, sort=sort, direction=direction, window=window, staff=staff)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
+@router.get("/channels/{channel_id}/post-comments")
+def channel_post_comments(
+    channel_id: int,
+    post_id: str = Query(default=""),
+    url: str = Query(default=""),
+    limit: int = Query(default=50, ge=1, le=300),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    try:
+        return channel_comments.channel_post_comments(channel_id, post_id=post_id, url=url, limit=limit, staff=staff)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
+@router.post("/channels/{channel_id}/post-comments/collect")
+def collect_channel_post_comments(
+    channel_id: int,
+    body: dict | None = None,
+    staff=Depends(require_tab("vkpi", "write")),
+):
+    payload = body or {}
+    try:
+        return channel_comments.collect_channel_post_comments(
+            channel_id,
+            post_id=str(payload.get("post_id") or ""),
+            url=str(payload.get("url") or ""),
+            limit=int(payload.get("limit") or 100),
+            staff=staff,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
+@router.get("/channels/{channel_id}/reddit-assessment")
+def reddit_channel_assessment(channel_id: int, staff=Depends(require_tab("vkpi", "read"))):
+    try:
+        return reddit_channel_insights.reddit_channel_assessment(channel_id, staff=staff)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
+@router.get("/channels/official-gap-report")
+def official_channel_gap_report(
+    view_as_staff_id: int | None = None,
+    limit: int = Query(default=50, ge=1, le=100),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    return channel_gaps.official_gap_report(staff=staff, view_as_staff_id=view_as_staff_id, limit=limit)
 
 
 @router.get("/channels/{channel_id}/metrics")

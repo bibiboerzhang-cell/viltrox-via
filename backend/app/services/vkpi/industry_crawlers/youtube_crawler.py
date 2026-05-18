@@ -15,6 +15,7 @@ from typing import Any
 
 
 YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3"
+DEFAULT_MAX_CHANNEL_VIDEOS = 10000
 
 
 class YouTubeCrawler:
@@ -35,6 +36,15 @@ class YouTubeCrawler:
             "provider_status": "configured" if self.configured else "not_configured",
             "key_visible": False,
         }
+
+    @staticmethod
+    def _max_channel_videos(value: int) -> int:
+        try:
+            upper = int(os.environ.get("VKPI_YOUTUBE_MAX_CHANNEL_VIDEOS", str(DEFAULT_MAX_CHANNEL_VIDEOS)))
+        except (TypeError, ValueError):
+            upper = DEFAULT_MAX_CHANNEL_VIDEOS
+        upper = max(1, min(50_000, upper))
+        return max(1, min(upper, int(value or 1)))
 
     def _not_configured(self, operation: str) -> dict[str, Any]:
         return {
@@ -124,33 +134,114 @@ class YouTubeCrawler:
     def crawl_channel_videos(self, channel_id: str, *, max_results: int = 25) -> dict[str, Any]:
         if not self.configured:
             return self._not_configured("crawl_channel_videos")
-        search = self._request(
-            "search",
-            {
-                "part": "snippet",
-                "channelId": channel_id,
-                "type": "video",
-                "order": "date",
-                "maxResults": max(1, min(50, int(max_results or 25))),
-            },
-        )
-        video_ids = [
-            str(((item.get("id") or {}).get("videoId")) or "")
-            for item in (search.get("items") or [])
-            if ((item.get("id") or {}).get("videoId"))
-        ]
+        target = self._max_channel_videos(int(max_results or 25))
+        upload_playlist_id = self._upload_playlist_id(channel_id)
+        if upload_playlist_id:
+            return self._crawl_upload_playlist(upload_playlist_id, target)
+        return self._crawl_channel_videos_by_search(channel_id, target)
+
+    def _upload_playlist_id(self, channel_id: str) -> str:
+        profile = self._request("channels", {"part": "contentDetails", "id": channel_id})
+        items = profile.get("items") or []
+        if not items:
+            return ""
+        content_details = items[0].get("contentDetails") if isinstance(items[0], dict) else {}
+        playlists = content_details.get("relatedPlaylists") if isinstance(content_details, dict) else {}
+        return str((playlists or {}).get("uploads") or "").strip()
+
+    def _crawl_upload_playlist(self, playlist_id: str, target: int) -> dict[str, Any]:
+        video_ids: list[str] = []
+        pages: list[dict[str, Any]] = []
+        page_token = ""
+        while len(video_ids) < target:
+            page = self._request(
+                "playlistItems",
+                {
+                    "part": "contentDetails",
+                    "playlistId": playlist_id,
+                    "maxResults": min(50, target - len(video_ids)),
+                    "pageToken": page_token,
+                },
+            )
+            page_items = page.get("items") or []
+            pages.append(
+                {
+                    "provider_status": page.get("provider_status"),
+                    "sync_status": page.get("sync_status"),
+                    "items": len(page_items),
+                    "nextPageToken": bool(page.get("nextPageToken")),
+                }
+            )
+            if str(page.get("provider_status") or "") == "error":
+                break
+            for item in page_items:
+                video_id = str(((item.get("contentDetails") or {}).get("videoId")) or "")
+                if video_id and video_id not in video_ids:
+                    video_ids.append(video_id)
+            page_token = str(page.get("nextPageToken") or "")
+            if not page_token or not page_items:
+                break
+        return self._video_details(video_ids, {"mode": "uploads_playlist", "pages": pages, "video_count": len(video_ids)})
+
+    def _crawl_channel_videos_by_search(self, channel_id: str, target: int) -> dict[str, Any]:
+        video_ids: list[str] = []
+        search_pages: list[dict[str, Any]] = []
+        page_token = ""
+        while len(video_ids) < target:
+            search = self._request(
+                "search",
+                {
+                    "part": "snippet",
+                    "channelId": channel_id,
+                    "type": "video",
+                    "order": "date",
+                    "maxResults": min(50, target - len(video_ids)),
+                    "pageToken": page_token,
+                },
+            )
+            search_pages.append(
+                {
+                    "provider_status": search.get("provider_status"),
+                    "sync_status": search.get("sync_status"),
+                    "items": len(search.get("items") or []),
+                    "nextPageToken": bool(search.get("nextPageToken")),
+                }
+            )
+            if str(search.get("provider_status") or "") == "error":
+                break
+            page_items = search.get("items") or []
+            for item in page_items:
+                video_id = str(((item.get("id") or {}).get("videoId")) or "")
+                if video_id and video_id not in video_ids:
+                    video_ids.append(video_id)
+            page_token = str(search.get("nextPageToken") or "")
+            if not page_token or not page_items:
+                break
+        return self._video_details(video_ids, {"mode": "search", "pages": search_pages, "video_count": len(video_ids)})
+
+    def _video_details(self, video_ids: list[str], raw: dict[str, Any]) -> dict[str, Any]:
         if not video_ids:
-            return {"provider": "youtube", "provider_status": search.get("provider_status") or "no_results", "sync_status": search.get("sync_status") or "no_results", "items": [], "raw": {"search": search}}
-        videos = self._request(
-            "videos",
-            {
-                "part": "snippet,statistics,contentDetails",
-                "id": ",".join(video_ids),
-                "maxResults": len(video_ids),
-            },
-        )
-        videos["search_raw"] = search
-        return videos
+            last_page = (raw.get("pages") or [{}])[-1] if isinstance(raw.get("pages"), list) else {}
+            return {"provider": "youtube", "provider_status": last_page.get("provider_status") or "no_results", "sync_status": last_page.get("sync_status") or "no_results", "items": [], "raw": raw}
+        video_items: list[dict[str, Any]] = []
+        for index in range(0, len(video_ids), 50):
+            chunk = video_ids[index : index + 50]
+            videos = self._request(
+                "videos",
+                {
+                    "part": "snippet,statistics,contentDetails",
+                    "id": ",".join(chunk),
+                    "maxResults": len(chunk),
+                },
+            )
+            video_items.extend(videos.get("items") or [])
+        return {
+            "provider": "youtube",
+            "provider_status": "ok",
+            "sync_status": "synced",
+            "items": video_items,
+            "search_raw": raw,
+        }
 
     def crawl_video_comments(self, video_id: str, *, max_results: int = 50) -> dict[str, Any]:
         if not self.configured:

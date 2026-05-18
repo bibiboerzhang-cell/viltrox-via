@@ -1,15 +1,25 @@
 import React from 'react';
 
-export function PageShell({ title, description, children, side }: { title: string; description: string; children: React.ReactNode; side?: React.ReactNode }) {
+interface PageShellProps {
+  title: string;
+  description?: string;
+  children: React.ReactNode;
+  side?: React.ReactNode;
+  eyebrow?: string | null;
+  headingExtra?: React.ReactNode;
+}
+
+export function PageShell({ title, description, children, side, eyebrow = 'VILTROX MARKETING', headingExtra }: PageShellProps) {
   return (
     <>
       <section className="vkpi-main-column vkpi-workspace">
-        <div className="vkpi-page-heading">
+        <div className={`vkpi-page-heading${headingExtra ? ' vkpi-page-heading--split' : ''}`}>
           <div>
-            <span>VILTROX MARKETING</span>
+            {eyebrow ? <span>{eyebrow}</span> : null}
             <h1>{title}</h1>
-            <p>{description}</p>
+            {description ? <p>{description}</p> : null}
           </div>
+          {headingExtra ? <div className="vkpi-page-heading__extra">{headingExtra}</div> : null}
         </div>
         {children}
       </section>

@@ -314,6 +314,14 @@ export interface VkpiEvidenceRow {
   projectId?: string;
   kolName?: string;
   ownerName?: string;
+  accountName?: string;
+  accountHandle?: string;
+  accountUrl?: string;
+  staffName?: string;
+  platform?: string;
+  platformLabel?: string;
+  attributionType?: string;
+  mediaUrl?: string;
   confidence?: string;
   occurredAt?: string;
   rawRef?: string;
