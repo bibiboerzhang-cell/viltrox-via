@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   getCommentAlertSettings,
   getControlStatus,
+  getRbacStatus,
   getSyncOverview,
   getNotificationSettings,
   getUserPreferences,
@@ -33,6 +34,7 @@ import {
   ProductCostFormCard,
   ProductCatalogPreviewCard,
   ProviderHealthCard,
+  RbacStatusCard,
   StaffInviteCard,
   SystemSummaryCards,
 } from './settings/SettingsAdminCards';
@@ -79,6 +81,9 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
   const [providers, setProviders] = useState<Array<Record<string, unknown>>>([]);
   const [providerBusy, setProviderBusy] = useState('');
   const [providerError, setProviderError] = useState('');
+  const [rbacStatus, setRbacStatus] = useState<Record<string, unknown>>({});
+  const [rbacStatusError, setRbacStatusError] = useState('');
+  const [rbacStatusLoading, setRbacStatusLoading] = useState(false);
   const [featureFlags, setFeatureFlags] = useState<Array<Record<string, unknown>>>([]);
   const [platformCrawl, setPlatformCrawl] = useState<Array<Record<string, unknown>>>([]);
   const [budgetSettings, setBudgetSettings] = useState<Array<Record<string, unknown>>>([]);
@@ -168,8 +173,12 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
       setProviderError('');
       setSettingsError('');
       try {
-        const [providerResponse, flagsResponse, crawlResponse, budgetResponse, controlResponse, commentAlertResponse, preferenceListResponse, notificationListResponse] = await Promise.all([
+        const [providerResponse, rbacResponse, flagsResponse, crawlResponse, budgetResponse, controlResponse, commentAlertResponse, preferenceListResponse, notificationListResponse] = await Promise.all([
           listProviderStatuses(apiToken),
+          getRbacStatus(apiToken).catch((error) => {
+            setRbacStatusError(error instanceof Error ? error.message : 'RBAC 状态读取失败');
+            return {};
+          }),
           listFeatureFlags(apiToken),
           listPlatformCrawlSettings(apiToken),
           listBudgetSettings(apiToken),
@@ -180,6 +189,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
         ]);
         if (!cancelled) {
           setProviders(providerResponse.providers || []);
+          setRbacStatus(rbacResponse || {});
           setFeatureFlags(flagsResponse.flags || []);
           setPlatformCrawl(crawlResponse.platforms || []);
           setBudgetSettings(budgetResponse.budgets || []);
@@ -250,6 +260,20 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
       setProviderError(error instanceof Error ? error.message : 'API 状态读取失败');
     } finally {
       setProviderBusy('');
+    }
+  };
+
+  const reloadRbacStatus = async () => {
+    if (!apiToken) return;
+    setRbacStatusLoading(true);
+    setRbacStatusError('');
+    try {
+      const response = await getRbacStatus(apiToken);
+      setRbacStatus(response || {});
+    } catch (error) {
+      setRbacStatusError(error instanceof Error ? error.message : 'RBAC 状态读取失败');
+    } finally {
+      setRbacStatusLoading(false);
     }
   };
 
@@ -742,6 +766,12 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
           youtubeKpi={youtubeKpi}
           claudeConfigured={claudeConfigured}
           claudeStatus={claudeStatus}
+        />
+        <RbacStatusCard
+          status={rbacStatus}
+          loading={rbacStatusLoading}
+          error={rbacStatusError}
+          onReload={() => void reloadRbacStatus()}
         />
       </section>
       <SettingsFeedbackPanel apiToken={apiToken} />

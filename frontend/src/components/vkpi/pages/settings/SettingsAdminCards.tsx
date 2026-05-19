@@ -70,6 +70,76 @@ export function StaffInviteCard({
   );
 }
 
+function numberValue(value: unknown): number {
+  const next = Number(value ?? 0);
+  return Number.isFinite(next) ? next : 0;
+}
+
+function recordValue(row: Row, key: string): Row {
+  const value = row[key];
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Row : {};
+}
+
+function countLine(row: Row, key: string): string {
+  return numberValue(row[key]).toLocaleString("en-US");
+}
+
+export function RbacStatusCard({
+  status,
+  loading,
+  error,
+  onReload,
+}: {
+  status: Row;
+  loading: boolean;
+  error: string;
+  onReload: () => void;
+}) {
+  const staff = recordValue(status, "staff");
+  const access = recordValue(status, "effective_access");
+  const inviteTokens = recordValue(status, "invite_tokens");
+  const permissions = recordValue(status, "active_vkpi_permissions");
+  const gaps = Array.isArray(status.gaps) ? status.gaps.map(String) : [];
+  const writeDb = String(Boolean(status.write_db));
+  const providerCalls = String(Boolean(status.provider_calls));
+  return (
+    <section className="vkpi-card vkpi-action-card">
+      <div className="vkpi-table-card__header">
+        <div><h2>V-KPI 权限状态</h2><span>{loading ? "读取中" : `${countLine(staff, "active")} active`}</span></div>
+        <button className="vkpi-button" type="button" disabled={loading} onClick={onReload}>{loading ? "刷新中" : "刷新"}</button>
+      </div>
+      <InfoBlock label="Owner / Admin" value={`${countLine(staff, "active_owners")} / ${countLine(access, "active_can_admin_vkpi")}`} />
+      <InfoBlock label="V-KPI read / write" value={`${countLine(access, "active_can_read_vkpi")} / ${countLine(access, "active_can_write_vkpi")}`} />
+      <InfoBlock label="Invite tokens" value={`${countLine(inviteTokens, "active")} active · ${countLine(inviteTokens, "expired_unused")} expired`} />
+      <InfoBlock label="RBAC write / provider" value={`${writeDb} / ${providerCalls}`} />
+      <div className="vkpi-table-wrap">
+        <table className="vkpi-table">
+          <thead>
+            <tr>
+              <th>Permission</th>
+              <th>Active Staff</th>
+            </tr>
+          </thead>
+          <tbody>
+            {["admin", "write", "read", "none"].map((key) => (
+              <tr key={key}>
+                <td>{key}</td>
+                <td>{countLine(permissions, key)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {gaps.length ? (
+        <div className="vkpi-inline-message is-error">{gaps.join(" / ")}</div>
+      ) : (
+        <div className="vkpi-inline-message">RBAC gaps: none</div>
+      )}
+      {error ? <div className="vkpi-inline-message is-error">{error}</div> : null}
+    </section>
+  );
+}
+
 export function ProductCostFormCard({
   costSku,
   costProductName,

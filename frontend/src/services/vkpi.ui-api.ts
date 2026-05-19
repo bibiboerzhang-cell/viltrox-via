@@ -1125,6 +1125,10 @@ export async function archiveMarketingLink(token: string, linkId: string) { retu
 export async function healthCheckMarketingLink(token: string, linkId: string) { return apiFetch<Record<string, unknown>>(`/api/marketing/links/${encodeURIComponent(linkId)}/health-check`, { method: "POST", body: jsonBody({}) }, token); }
 export async function inviteMarketingStaff(token: string, payload: VkpiInviteStaffPayload) { return apiFetch<Record<string, unknown>>("/api/admin/staff/invite", { method: "POST", body: jsonBody({ email: payload.email, name: payload.name, role: payload.role, permissions: { vkpi: payload.vkpiPermission } }) }, token); }
 export async function updateStaffMarketingPermission(token: string, staffId: string, permission: "none" | "read" | "write") { return apiFetch<Record<string, unknown>>(`/api/admin/staff/${encodeURIComponent(staffId)}/permissions`, { method: "POST", body: jsonBody({ permissions: { vkpi: permission } }) }, token); }
+export async function getRbacStatus(token: string, includeStaff = false) {
+  const suffix = includeStaff ? "?include_staff=true" : "";
+  return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/access/rbac-status${suffix}`, {}, token);
+}
 export async function listProviderStatuses(token: string) {
   return apiFetch<{ providers?: Row[]; full_key_readable?: boolean }>("/api/marketing/settings/providers", {}, token);
 }
