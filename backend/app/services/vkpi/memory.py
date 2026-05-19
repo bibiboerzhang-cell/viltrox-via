@@ -1859,6 +1859,11 @@ def readiness() -> dict[str, Any]:
         ).fetchall()
     }
     market_counts = _market_signal_counts()
+    budget_caps_count = int(
+        conn.execute("SELECT COUNT(*) AS n FROM vkpi_provider_budget_caps").fetchone()["n"]
+        if _table_exists("vkpi_provider_budget_caps")
+        else 0
+    )
     gates = [
         _readiness_gate("kol_memory", entity_counts.get("kol", 0), 1000, "critical"),
         _readiness_gate("product_family_memory", entity_counts.get("product_family", 0), 1, "critical"),
@@ -1868,6 +1873,7 @@ def readiness() -> dict[str, Any]:
         _readiness_gate("official_content_signals", market_counts.get("official_content", 0), 1, "warning"),
         _readiness_gate("voc_signals", market_counts.get("voc_alert", 0), 1, "warning"),
         _readiness_gate("budget_guard_tables", 1 if _table_exists("vkpi_provider_budget_caps") else 0, 1, "warning"),
+        _readiness_gate("budget_guard_caps", budget_caps_count, 5, "warning"),
     ]
     blockers = [gate for gate in gates if gate["severity"] == "critical" and gate["status"] != "pass"]
     warnings = [gate for gate in gates if gate["severity"] == "warning" and gate["status"] != "pass"]

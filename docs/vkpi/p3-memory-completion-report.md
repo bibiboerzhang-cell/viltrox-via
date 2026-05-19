@@ -431,6 +431,7 @@ gate.launch_signals=pass actual=52 expected_min=1
 gate.official_content_signals=pass actual=2168 expected_min=1
 gate.voc_signals=pass actual=37 expected_min=1
 gate.budget_guard_tables=pass actual=1 expected_min=1
+gate.budget_guard_caps=pass actual=7 expected_min=5
 ```
 
 Feedback queue 当前结果：

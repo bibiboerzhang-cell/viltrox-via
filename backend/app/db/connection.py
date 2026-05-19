@@ -102,6 +102,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "058f_vkpi_legacy_kol_entities_decisions.sql",
     "058g_vkpi_legacy_commit_attempts.sql",
     "059_vkpi_memory_tables.sql",
+    "060_vkpi_budget_caps_defaults.sql",
 )
 
 try:
