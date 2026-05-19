@@ -7,6 +7,7 @@ from app.api.dependencies.perms import require_tab
 from app.services.vkpi import (
     ab_experiments,
     audience_graph,
+    competitor_brain,
     content_brain,
     industry_data,
     llm_gateway,
@@ -145,6 +146,29 @@ def industry_content_brain_posts(
 ):
     del staff
     return content_brain.list_content_brain_posts(status=status, platform=platform, query=query, limit=limit)
+
+
+@router.get("/industry-data/competitor-brain/status")
+def industry_competitor_brain_status(staff=Depends(require_tab("vkpi", "read"))):
+    del staff
+    return competitor_brain.get_competitor_brain_status()
+
+
+@router.get("/industry-data/competitor-brain/signals")
+def industry_competitor_brain_signals(
+    review_status: str = "",
+    brand: str = "",
+    signal_type: str = "",
+    limit: int = Query(default=100, ge=1, le=500),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    del staff
+    return competitor_brain.list_competitor_signals(
+        review_status=review_status,
+        brand=brand,
+        signal_type=signal_type,
+        limit=limit,
+    )
 
 
 @router.get("/audience-graph/status")

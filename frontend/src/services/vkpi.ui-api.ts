@@ -1362,6 +1362,16 @@ export async function listContentBrainPosts(token: string, options: { status?: s
   if (options.query) params.set("query", options.query);
   return apiFetch<{ posts?: Row[]; count?: number; schema_ready?: boolean }>(`/api/admin/vkpi/industry-data/content-brain/posts?${params.toString()}`, {}, token);
 }
+export async function getCompetitorBrainStatus(token: string) {
+  return apiFetch<Record<string, unknown>>("/api/admin/vkpi/industry-data/competitor-brain/status", {}, token);
+}
+export async function listCompetitorBrainSignals(token: string, options: { reviewStatus?: string; brand?: string; signalType?: string; limit?: number } = {}) {
+  const params = new URLSearchParams({ limit: String(options.limit || 100) });
+  if (options.reviewStatus) params.set("review_status", options.reviewStatus);
+  if (options.brand) params.set("brand", options.brand);
+  if (options.signalType) params.set("signal_type", options.signalType);
+  return apiFetch<{ signals?: Row[]; count?: number; schema_ready?: boolean }>(`/api/admin/vkpi/industry-data/competitor-brain/signals?${params.toString()}`, {}, token);
+}
 
 export async function getCommentIntelligenceOverview(
   token: string,

@@ -496,6 +496,115 @@ def commit_competitor_signals(
     }
 
 
+def get_competitor_brain_status() -> dict[str, Any]:
+    """Return read-only P8 competitor signal coverage."""
+    if not _table_exists("vkpi_competitor_signals"):
+        return {
+            "schema_ready": False,
+            "run_count": 0,
+            "signal_count": 0,
+            "review_status_counts": {},
+            "brand_distribution": {},
+            "signal_type_distribution": {},
+        }
+    conn = get_conn()
+    run_count = int(conn.execute("SELECT COUNT(*) AS count FROM vkpi_competitor_signal_runs").fetchone()["count"] or 0)
+    signal_count = int(conn.execute("SELECT COUNT(*) AS count FROM vkpi_competitor_signals").fetchone()["count"] or 0)
+    status_rows = conn.execute(
+        """
+        SELECT COALESCE(NULLIF(review_status, ''), 'pending_review') AS status,
+               COUNT(*) AS count
+        FROM vkpi_competitor_signals
+        GROUP BY COALESCE(NULLIF(review_status, ''), 'pending_review')
+        ORDER BY count DESC, status
+        """
+    ).fetchall()
+    brand_rows = conn.execute(
+        """
+        SELECT COALESCE(NULLIF(normalized_brand, ''), brand) AS brand,
+               COUNT(*) AS count
+        FROM vkpi_competitor_signals
+        GROUP BY COALESCE(NULLIF(normalized_brand, ''), brand)
+        ORDER BY count DESC, brand
+        LIMIT 20
+        """
+    ).fetchall()
+    type_rows = conn.execute(
+        """
+        SELECT COALESCE(NULLIF(signal_type, ''), 'unknown') AS signal_type,
+               COUNT(*) AS count
+        FROM vkpi_competitor_signals
+        GROUP BY COALESCE(NULLIF(signal_type, ''), 'unknown')
+        ORDER BY count DESC, signal_type
+        LIMIT 20
+        """
+    ).fetchall()
+    latest_run = conn.execute(
+        """
+        SELECT *
+        FROM vkpi_competitor_signal_runs
+        ORDER BY committed_at DESC, created_at DESC, id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    return {
+        "schema_ready": True,
+        "run_count": run_count,
+        "signal_count": signal_count,
+        "review_status_counts": {str(row["status"]): int(row["count"] or 0) for row in status_rows},
+        "brand_distribution": {str(row["brand"]): int(row["count"] or 0) for row in brand_rows},
+        "signal_type_distribution": {str(row["signal_type"]): int(row["count"] or 0) for row in type_rows},
+        "latest_run": dict(latest_run) if latest_run else None,
+    }
+
+
+def list_competitor_signals(
+    *,
+    review_status: str = "",
+    brand: str = "",
+    signal_type: str = "",
+    limit: int = 100,
+) -> dict[str, Any]:
+    """Return committed competitor signals for read-only review."""
+    if not _table_exists("vkpi_competitor_signals"):
+        return {"schema_ready": False, "signals": [], "count": 0}
+    safe_limit = _safe_limit(limit, default=100, ceiling=500)
+    where: list[str] = []
+    params: list[Any] = []
+    if review_status:
+        where.append("COALESCE(NULLIF(s.review_status, ''), 'pending_review')=?")
+        params.append(review_status)
+    if brand:
+        where.append("(LOWER(s.normalized_brand)=LOWER(?) OR LOWER(s.brand)=LOWER(?))")
+        params.extend([brand, brand])
+    if signal_type:
+        where.append("LOWER(s.signal_type)=LOWER(?)")
+        params.append(signal_type)
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+    rows = get_conn().execute(
+        f"""
+        SELECT s.*, r.run_uid, r.status AS run_status, r.committed_at
+        FROM vkpi_competitor_signals s
+        LEFT JOIN vkpi_competitor_signal_runs r ON r.id = s.run_id
+        {where_sql}
+        ORDER BY
+          CASE s.review_status WHEN 'pending_review' THEN 0 ELSE 1 END,
+          s.score DESC,
+          s.created_at DESC,
+          s.id DESC
+        LIMIT ?
+        """,
+        (*params, safe_limit),
+    ).fetchall()
+    signals = []
+    for row in rows:
+        data = dict(row)
+        data["product_hints"] = _loads(data.get("product_hints_json"), [])
+        data["evidence"] = _loads(data.get("evidence_json"), {})
+        signals.append(data)
+    return {"schema_ready": True, "signals": signals, "count": len(signals)}
+
+
 def format_preview_summary(payload: dict[str, Any]) -> str:
     summary = payload.get("summary") or {}
     lines = [
