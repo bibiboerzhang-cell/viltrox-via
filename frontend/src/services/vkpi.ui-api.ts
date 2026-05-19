@@ -1433,6 +1433,15 @@ export async function retryCommentIntelligenceRun(token: string, runId: string |
 export async function getOperatingReviewStatus(token: string, limit = 25) {
   return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/operating-review/status?limit=${encodeURIComponent(String(limit))}`, {}, token);
 }
+export async function getRecommendationFeedbackBacklog(token: string, limit = 25, runUid = "") {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (runUid) params.set("run_uid", runUid);
+  return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/learning/recommendation-feedback-backlog?${params.toString()}`, {}, token);
+}
+export async function getMemoryFeedbackBacklog(token: string, limit = 25, entityType = "kol") {
+  const params = new URLSearchParams({ limit: String(limit), entity_type: entityType });
+  return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/learning/memory-feedback-backlog?${params.toString()}`, {}, token);
+}
 
 export async function listFeatureFlags(token: string) {
   return apiFetch<{ flags?: Row[] }>("/api/admin/vkpi/settings/feature-flags", {}, token);

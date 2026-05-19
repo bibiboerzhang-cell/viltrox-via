@@ -1,5 +1,9 @@
 import React from "react";
-import { getOperatingReviewStatus } from "../../../../services/vkpi.ui-api";
+import {
+  getMemoryFeedbackBacklog,
+  getOperatingReviewStatus,
+  getRecommendationFeedbackBacklog,
+} from "../../../../services/vkpi.ui-api";
 
 type Row = Record<string, unknown>;
 
@@ -33,6 +37,8 @@ function priorityClass(priority: string): string {
 
 export function SettingsOperatingReviewPanel({ apiToken }: { apiToken?: string }) {
   const [payload, setPayload] = React.useState<Row>({});
+  const [recommendationBacklog, setRecommendationBacklog] = React.useState<Row>({});
+  const [memoryBacklog, setMemoryBacklog] = React.useState<Row>({});
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState("");
 
@@ -41,7 +47,14 @@ export function SettingsOperatingReviewPanel({ apiToken }: { apiToken?: string }
     setLoading(true);
     setError("");
     try {
-      setPayload(await getOperatingReviewStatus(apiToken, 25));
+      const [review, recommendations, memory] = await Promise.all([
+        getOperatingReviewStatus(apiToken, 25),
+        getRecommendationFeedbackBacklog(apiToken, 12),
+        getMemoryFeedbackBacklog(apiToken, 12, "kol"),
+      ]);
+      setPayload(review);
+      setRecommendationBacklog(recommendations);
+      setMemoryBacklog(memory);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : "Operating review 读取失败");
     } finally {
@@ -58,6 +71,10 @@ export function SettingsOperatingReviewPanel({ apiToken }: { apiToken?: string }
   const gaps = Array.isArray(payload.gaps) ? payload.gaps.map(String) : [];
   const alertRules = recordValue(payload, "alert_rules_open");
   const competitorBrands = recordValue(payload, "competitor_brands_pending");
+  const recommendationSummary = recordValue(recommendationBacklog, "summary");
+  const memorySummary = recordValue(memoryBacklog, "summary");
+  const recommendationItems = listValue(recommendationBacklog, "items").slice(0, 8);
+  const memoryItems = listValue(memoryBacklog, "items").slice(0, 8);
   const hasPayload = Object.keys(payload).length > 0;
 
   return (
@@ -84,6 +101,8 @@ export function SettingsOperatingReviewPanel({ apiToken }: { apiToken?: string }
         <span className="vkpi-chip">write_db={String(Boolean(payload.write_db))}</span>
         <span className="vkpi-chip">outcomes={countText(counts, "recommendation_outcomes")}</span>
         <span className="vkpi-chip">scenario={text(payload, "scenario", "vkpi_operating_review")}</span>
+        <span className="vkpi-chip">推荐待反馈={countText(recommendationSummary, "missing_feedback_rows")}</span>
+        <span className="vkpi-chip">Memory 待核查={countText(memorySummary, "backlog_candidates")}</span>
       </div>
 
       {error ? <div className="vkpi-inline-message is-error">{error}</div> : null}
@@ -131,6 +150,76 @@ export function SettingsOperatingReviewPanel({ apiToken }: { apiToken?: string }
               );
             }) : (
               <tr><td className="vkpi-table-empty" colSpan={4}>{loading ? "正在读取 Operating Review" : "当前没有待处理事项。"}</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="vkpi-settings-card-grid">
+        <article className="vkpi-settings-toggle-card is-off">
+          <header><strong>推荐反馈 backlog</strong><span>{countText(recommendationSummary, "missing_feedback_rows")}</span></header>
+          <p>returned={recommendationItems.length.toLocaleString("en-US")} / with_feedback={countText(recommendationSummary, "with_feedback_rows")}</p>
+        </article>
+        <article className="vkpi-settings-toggle-card is-off">
+          <header><strong>Memory 核查 backlog</strong><span>{countText(memorySummary, "backlog_candidates")}</span></header>
+          <p>high_priority={countText(recordValue(memoryBacklog, "severity_counts"), "high")} / feedback_rows={countText(memorySummary, "memory_feedback_rows")}</p>
+        </article>
+      </div>
+
+      <div className="vkpi-table-wrap">
+        <table className="vkpi-table">
+          <thead>
+            <tr>
+              <th>推荐</th>
+              <th>Run</th>
+              <th>建议</th>
+              <th>原因</th>
+            </tr>
+          </thead>
+          <tbody>
+            {recommendationItems.length ? recommendationItems.map((item) => {
+              const kol = recordValue(item, "kol");
+              const suggestion = recordValue(item, "suggestion");
+              const reasons = Array.isArray(suggestion.reasons) ? suggestion.reasons.map(String).join(", ") : "";
+              return (
+                <tr key={`rec-feedback-${text(item, "recommendation_id")}`}>
+                  <td><strong>{text(kol, "platform")}:{text(kol, "handle")}</strong><br /><small>rank={text(item, "rank")} score={text(item, "score")}</small></td>
+                  <td>{text(item, "run_uid")}</td>
+                  <td><span className="vkpi-chip vkpi-chip--warn">{text(suggestion, "suggested_action")}</span></td>
+                  <td>{reasons || "-"}</td>
+                </tr>
+              );
+            }) : (
+              <tr><td className="vkpi-table-empty" colSpan={4}>{loading ? "正在读取推荐反馈 backlog" : "没有推荐反馈 backlog。"}</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="vkpi-table-wrap">
+        <table className="vkpi-table">
+          <thead>
+            <tr>
+              <th>Memory 实体</th>
+              <th>信号</th>
+              <th>建议</th>
+              <th>优先级</th>
+            </tr>
+          </thead>
+          <tbody>
+            {memoryItems.length ? memoryItems.map((item) => {
+              const signals = recordValue(item, "signals");
+              const suggestion = recordValue(item, "suggestion");
+              return (
+                <tr key={`memory-feedback-${text(item, "entity_uid")}`}>
+                  <td><strong>{text(item, "display_name", text(item, "identity_key"))}</strong><br /><small>{text(item, "entity_uid")}</small></td>
+                  <td>sync={text(signals, "sync_status")} / weak={text(signals, "weak_label")} / risk={Array.isArray(signals.risk_flags) ? signals.risk_flags.length : 0}</td>
+                  <td><span className={`vkpi-chip ${priorityClass(text(suggestion, "severity"))}`}>{text(suggestion, "suggested_action")}</span></td>
+                  <td>{text(suggestion, "severity")} · {text(suggestion, "priority_score")}</td>
+                </tr>
+              );
+            }) : (
+              <tr><td className="vkpi-table-empty" colSpan={4}>{loading ? "正在读取 Memory backlog" : "没有 Memory backlog。"}</td></tr>
             )}
           </tbody>
         </table>
