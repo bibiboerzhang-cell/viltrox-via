@@ -48,15 +48,18 @@ def _state(batch_uid: str) -> dict[str, Any]:
     batch_id = int(batch["id"])
     ref_rows = conn.execute(
         """
-        SELECT commit_action, rollback_status, COUNT(*) AS n
+        SELECT commit_attempt, commit_action, rollback_status, COUNT(*) AS n
         FROM vkpi_legacy_import_committed_refs
         WHERE import_batch_id=?
-        GROUP BY commit_action, rollback_status
-        ORDER BY commit_action, rollback_status
+        GROUP BY commit_attempt, commit_action, rollback_status
+        ORDER BY commit_attempt, commit_action, rollback_status
         """,
         (batch_id,),
     ).fetchall()
-    refs = {f"{row['commit_action']}.{row['rollback_status']}": int(row["n"]) for row in ref_rows}
+    refs = {
+        f"attempt_{row['commit_attempt']}.{row['commit_action']}.{row['rollback_status']}": int(row["n"])
+        for row in ref_rows
+    }
     return {
         "batch_status": batch["status"],
         "committed_rows": int(batch["committed_rows"] or 0),
@@ -78,6 +81,7 @@ def _verify_update_restore(batch_uid: str) -> dict[str, int]:
         SELECT target_id, previous_snapshot_json
         FROM vkpi_legacy_import_committed_refs
         WHERE import_batch_id=? AND commit_action='update' AND rollback_status='rolled_back'
+        ORDER BY commit_attempt DESC
         """,
         (batch_id,),
     ).fetchall()

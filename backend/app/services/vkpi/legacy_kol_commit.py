@@ -297,6 +297,18 @@ def _committed_refs_count(import_batch_id: int, *, active_only: bool = True) -> 
     )
 
 
+def _next_commit_attempt(import_batch_id: int) -> int:
+    row = get_conn().execute(
+        """
+        SELECT COALESCE(MAX(commit_attempt), 0) + 1 AS next_attempt
+        FROM vkpi_legacy_import_committed_refs
+        WHERE import_batch_id=?
+        """,
+        (import_batch_id,),
+    ).fetchone()
+    return int(row["next_attempt"] or 1)
+
+
 def _summarize_plans(plans: list[dict[str, Any]], *, sample_limit: int) -> dict[str, Any]:
     action_counts: Counter[str] = Counter()
     skip_counts: Counter[str] = Counter()
@@ -447,6 +459,7 @@ def _update_pool_item(pool_id: int, payload: dict[str, Any], *, now: str) -> dic
 def _insert_committed_ref(
     *,
     import_batch_id: int,
+    commit_attempt: int,
     entity: dict[str, Any],
     target_id: int,
     commit_action: str,
@@ -457,12 +470,12 @@ def _insert_committed_ref(
     get_conn().execute(
         """
         INSERT INTO vkpi_legacy_import_committed_refs (
-          import_batch_id, pipeline, staging_table, staging_id, target_table,
+          import_batch_id, commit_attempt, pipeline, staging_table, staging_id, target_table,
           target_id, commit_action, previous_snapshot_json, new_snapshot_json,
           rollback_status, committed_by_staff_id, metadata_json
-        ) VALUES (?, 'kol_entities', 'vkpi_legacy_kol_entities', ?, 'vkpi_kol_pool',
+        ) VALUES (?, ?, 'kol_entities', 'vkpi_legacy_kol_entities', ?, 'vkpi_kol_pool',
           ?, ?, ?, ?, 'not_rolled_back', ?, ?)
-        ON CONFLICT(import_batch_id, pipeline, staging_table, staging_id, target_table, target_id)
+        ON CONFLICT(import_batch_id, commit_attempt, pipeline, staging_table, staging_id, target_table, target_id)
         DO UPDATE SET
           commit_action=excluded.commit_action,
           previous_snapshot_json=excluded.previous_snapshot_json,
@@ -476,6 +489,7 @@ def _insert_committed_ref(
         """,
         (
             import_batch_id,
+            int(commit_attempt),
             int(entity["id"]),
             str(target_id),
             commit_action,
@@ -488,6 +502,7 @@ def _insert_committed_ref(
                     "weak_label": entity.get("weak_label"),
                     "resolution_decision": entity.get("resolution_decision") or "",
                     "identity": _identity(entity),
+                    "commit_attempt": int(commit_attempt),
                 }
             ),
         ),
@@ -521,6 +536,7 @@ def commit_kol_pool_batch(
     now = _format_ts(now_dt) or _utcnow()
     rollback_policy = _text(batch.get("rollback_policy")) or "manual_30m"
     rollback_until = _format_ts(_rollback_until_for_policy(now_dt, rollback_policy))
+    commit_attempt = _next_commit_attempt(import_batch_id)
     committed_samples: list[dict[str, Any]] = []
     try:
         conn.execute(
@@ -543,6 +559,7 @@ def commit_kol_pool_batch(
                 commit_action = "insert"
             _insert_committed_ref(
                 import_batch_id=import_batch_id,
+                commit_attempt=commit_attempt,
                 entity=entity,
                 target_id=int(new_snapshot["id"]),
                 commit_action=commit_action,
@@ -556,6 +573,7 @@ def commit_kol_pool_batch(
                         "entity_uid": entity.get("entity_uid"),
                         "identity": _identity(entity),
                         "commit_action": commit_action,
+                        "commit_attempt": commit_attempt,
                         "target_id": int(new_snapshot["id"]),
                     }
                 )
@@ -601,6 +619,7 @@ def commit_kol_pool_batch(
         "batch_id": import_batch_id,
         "mode": "commit",
         "include_blocked": include_blocked,
+        "commit_attempt": commit_attempt,
         "committed_refs_count": _committed_refs_count(import_batch_id, active_only=True),
         "committed_refs_total": _committed_refs_count(import_batch_id, active_only=False),
         "rollback_policy": rollback_policy,
@@ -622,7 +641,7 @@ def preview_kol_pool_rollback(batch_uid: str, *, sample_limit: int = 20, force: 
             SELECT *
             FROM vkpi_legacy_import_committed_refs
             WHERE import_batch_id=? AND target_table='vkpi_kol_pool' AND rollback_status='not_rolled_back'
-            ORDER BY id DESC
+            ORDER BY commit_attempt DESC, id DESC
             """,
             (import_batch_id,),
         ).fetchall()
@@ -643,6 +662,7 @@ def preview_kol_pool_rollback(batch_uid: str, *, sample_limit: int = 20, force: 
         "samples": [
             {
                 "ref_id": int(row["id"]),
+                "commit_attempt": int(row.get("commit_attempt") or 1),
                 "commit_action": row["commit_action"],
                 "target_id": row["target_id"],
                 "metadata": _load_json(row.get("metadata_json") or "{}", {}),
@@ -697,7 +717,7 @@ def rollback_kol_pool_commit(
                 SELECT *
                 FROM vkpi_legacy_import_committed_refs
                 WHERE import_batch_id=? AND target_table='vkpi_kol_pool' AND rollback_status='not_rolled_back'
-                ORDER BY id DESC
+                ORDER BY commit_attempt DESC, id DESC
                 """,
                 (import_batch_id,),
             ).fetchall()
@@ -771,6 +791,8 @@ def format_kol_pool_commit_plan(result: dict[str, Any]) -> str:
     ]
     if "committed_refs_total" in result:
         lines.append(f"committed_refs_total={int(result.get('committed_refs_total', 0))}")
+    if "commit_attempt" in result:
+        lines.append(f"commit_attempt={int(result.get('commit_attempt', 0))}")
     if result.get("rollback_policy"):
         lines.append(f"rollback_policy={result.get('rollback_policy', '')}")
     if result.get("rollback_until"):
@@ -800,6 +822,7 @@ def format_kol_pool_commit_plan(result: dict[str, Any]) -> str:
         lines.append(
             f"committed_sample.{index}="
             f"{sample.get('commit_action')} "
+            f"attempt={sample.get('commit_attempt', '')} "
             f"{sample.get('entity_uid')} "
             f"identity={sample.get('identity')} "
             f"target_id={sample.get('target_id')}"
@@ -827,6 +850,7 @@ def format_kol_pool_rollback(result: dict[str, Any]) -> str:
         lines.append(
             f"sample.{index}="
             f"{sample.get('commit_action')} "
+            f"attempt={sample.get('commit_attempt', '')} "
             f"target_id={sample.get('target_id')} "
             f"entity_uid={metadata.get('entity_uid', '')} "
             f"identity={metadata.get('identity', '')}"

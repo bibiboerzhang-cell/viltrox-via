@@ -100,6 +100,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "058d_vkpi_legacy_official_materials.sql",
     "058e_vkpi_legacy_entity_resolution.sql",
     "058f_vkpi_legacy_kol_entities_decisions.sql",
+    "058g_vkpi_legacy_commit_attempts.sql",
     "059_vkpi_memory_tables.sql",
 )
 

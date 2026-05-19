@@ -312,8 +312,8 @@ rollback 后状态：
 after_rollback.batch_status=rolled_back
 after_rollback.pool_total=90
 after_rollback.pool_legacy_source=0
-after_rollback.refs.insert.rolled_back=933
-after_rollback.refs.update.rolled_back=79
+after_rollback.refs.attempt_2.insert.rolled_back=933
+after_rollback.refs.attempt_2.update.rolled_back=79
 after_rollback.update_restore_checked=79
 after_rollback.update_restore_mismatches=0
 ```
@@ -332,7 +332,8 @@ rollback 后重新 commit 成功：
 
 ```text
 recommit.committed_refs_count=1012
-recommit.committed_refs_total=1945
+recommit.committed_refs_total=2024
+commit_attempt=2
 ```
 
 最终主表状态：
@@ -343,17 +344,18 @@ final.pool_total=1023
 final.pool_legacy_source=1012
 final.pool_imported=969
 final.pool_needs_human_review=43
-final.refs.insert.not_rolled_back=933
-final.refs.insert.rolled_back=933
-final.refs.update.not_rolled_back=79
+final.refs.attempt_1.insert.rolled_back=933
+final.refs.attempt_1.update.rolled_back=79
+final.refs.attempt_2.insert.not_rolled_back=933
+final.refs.attempt_2.update.not_rolled_back=79
 ```
 
-`committed_refs_total=1945` 是预期结果：
+`committed_refs_total=2024` 是预期结果：
 
 ```text
 第一轮 insert refs 回滚后保留 933 条 rolled_back 审计记录。
-第二轮 recommit 生成新的 933 条 insert active refs。
-79 条 update refs 因 target_id 不变，使用 upsert 从 rolled_back 重新置为 not_rolled_back。
+第一轮 update refs 回滚后保留 79 条 rolled_back 审计记录。
+第二轮 recommit 生成 1012 条 attempt=2 active refs。
 当前有效 refs 仍然是 1012。
 ```
 
