@@ -37,7 +37,7 @@ python3 scripts/p7_alert_status.py --limit 10
 Current output:
 
 ```text
-open_total=18
+open_total=2
 p7_open_total=2
 ai_cost_calls=0
 ai_cost_spend=0.0000
@@ -50,7 +50,7 @@ By rule:
 ```text
 content_brain.analysis_backlog  open warning  count=1
 recommendation.review_gap       open danger   count=1
-project.stalled_review          open warning  count=16
+project.stalled_review          resolved warning count=16
 ```
 
 The two P7 open alerts are real current-state alerts:
@@ -93,6 +93,20 @@ write_db=false
 ```
 
 The apply endpoint writes only when the request body includes `confirm=true`.
+
+Post-apply verification on 2026-05-19:
+
+```text
+apply_suggestions.confirm=true
+candidate_count=16
+applied_count=16
+error_count=0
+provider_calls=false
+open_total=2
+project.stalled_review.resolved=16
+remaining_open=content_brain.analysis_backlog,recommendation.review_gap
+vkpi_ai_cost_ledger.count=0
+```
 
 ## Guarantees
 
