@@ -250,6 +250,28 @@ def generate_alerts(staff=Depends(require_tab("vkpi", "write"))):
     return alerts.generate_alerts()
 
 
+@router.get("/alerts/triage-suggestions")
+def alert_triage_suggestions(
+    status: str = "open",
+    limit: int = Query(default=100, ge=1, le=200),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    del staff
+    return alerts.build_alert_triage_suggestions(status=status, limit=limit)
+
+
+@router.post("/alerts/triage-suggestions/apply")
+def alert_triage_suggestions_apply(body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
+    payload = body or {}
+    return alerts.apply_alert_triage_suggestions(
+        status=str(payload.get("status") or "open"),
+        suggested_action=str(payload.get("suggested_action") or "resolve"),
+        limit=int(payload.get("limit") or 100),
+        staff=staff,
+        dry_run=not bool(payload.get("confirm")),
+    )
+
+
 @router.get("/alerts/{alert_id}")
 def get_alert_detail(alert_id: int, staff=Depends(require_tab("vkpi", "read"))):
     try:

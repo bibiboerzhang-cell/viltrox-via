@@ -11,12 +11,14 @@ P7-1  budget guard warning / hard-stop alert rule
 P7-2  content brain analysis backlog alert rule
 P7-3  recommendation review gap alert rule
 P7-4  read-only alert status report CLI
+P7-5  post-v5.3.1 alert triage suggestions
 ```
 
 ## Files
 
 ```text
 backend/app/services/vkpi/alerts.py
+backend/app/api/routers/vkpi_attribution_metrics.py
 scripts/p7_alert_status.py
 docs/vkpi/p7-1-budget-guard-alert-rule.md
 docs/vkpi/p7-2-content-brain-backlog-alert.md
@@ -61,6 +63,37 @@ recommendation.review_gap:
   completed run recrun-af0053af53b32e1a has 75 recommendations and 0 feedback rows.
 ```
 
+## Post-v5.3.1 Triage
+
+Triage suggestions are deterministic and dry-run by default:
+
+```bash
+python3 scripts/p7_alert_status.py --triage-suggestions --limit 100
+python3 scripts/p7_alert_status.py --apply-suggestions --limit 100
+python3 scripts/p7_alert_status.py --apply-suggestions --limit 100 --confirm
+```
+
+API:
+
+```text
+GET  /api/admin/vkpi/alerts/triage-suggestions
+POST /api/admin/vkpi/alerts/triage-suggestions/apply
+```
+
+Current dry-run result:
+
+```text
+count=18
+suggested.resolve=16
+suggested.keep_open=2
+resolve target: project.stalled_review smoke fixture alerts
+keep_open targets: recommendation.review_gap, content_brain.analysis_backlog
+provider_calls=false
+write_db=false
+```
+
+The apply endpoint writes only when the request body includes `confirm=true`.
+
 ## Guarantees
 
 ```text
@@ -82,6 +115,8 @@ P7-1 create/clear smoke passed
 P7-2 quiet/default smoke passed
 P7-3 default/all-runs smoke passed
 scripts/p7_alert_status.py --json passed
+scripts/p7_alert_status.py --triage-suggestions --limit 100 passed
+scripts/p7_alert_status.py --apply-suggestions --limit 100 passed as dry-run
 ```
 
 ## Next

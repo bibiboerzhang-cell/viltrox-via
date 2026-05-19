@@ -16,6 +16,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.db.connection import close_db_runtime, get_conn  # noqa: E402
+from app.services.vkpi.alerts import apply_alert_triage_suggestions, build_alert_triage_suggestions  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -23,6 +24,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=20, help="Open alert detail limit")
     parser.add_argument("--json", action="store_true", help="Print JSON output")
     parser.add_argument("--md-out", default="", help="Write Markdown report to this path")
+    parser.add_argument("--triage-suggestions", action="store_true", help="Print deterministic alert triage suggestions without writing")
+    parser.add_argument("--apply-suggestions", action="store_true", help="Apply alert triage suggestions; dry-run unless --confirm")
+    parser.add_argument("--suggested-action", default="resolve", help="Suggested action filter for --apply-suggestions")
+    parser.add_argument("--status", default="open", help="Alert status filter for suggestions")
+    parser.add_argument("--confirm", action="store_true", help="Write --apply-suggestions decisions")
     return parser.parse_args()
 
 
@@ -132,9 +138,92 @@ def format_markdown(payload: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def format_triage_suggestions(payload: dict[str, Any]) -> str:
+    lines = [
+        "# P7 Alert Triage Suggestions",
+        "",
+        "```text",
+        f"scenario={payload.get('scenario', '')}",
+        f"provider_calls={str(bool(payload.get('provider_calls'))).lower()}",
+        f"write_db={str(bool(payload.get('write_db'))).lower()}",
+        f"count={int(payload.get('count') or 0)}",
+    ]
+    for action, count in sorted((payload.get("suggested_actions") or {}).items()):
+        lines.append(f"suggested.{action}={int(count or 0)}")
+    lines.extend(["```", "", "## Suggestions", ""])
+    for item in payload.get("suggestions") or []:
+        lines.append(
+            f"- alert_id={item.get('alert_id')} action={item.get('suggested_action')} "
+            f"confidence={float(item.get('confidence') or 0):.2f} "
+            f"rule={item.get('rule_key')} reasons={','.join(item.get('reasons') or [])}"
+        )
+    if not payload.get("suggestions"):
+        lines.append("- none")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def format_apply_suggestions(payload: dict[str, Any]) -> str:
+    lines = [
+        "# P7 Alert Apply Suggestions",
+        "",
+        "```text",
+        f"scenario={payload.get('scenario', '')}",
+        f"provider_calls={str(bool(payload.get('provider_calls'))).lower()}",
+        f"write_db={str(bool(payload.get('write_db'))).lower()}",
+        f"dry_run={str(bool(payload.get('dry_run'))).lower()}",
+        f"candidate_count={int(payload.get('candidate_count') or 0)}",
+        f"applied_count={int(payload.get('applied_count') or 0)}",
+        f"error_count={int(payload.get('error_count') or 0)}",
+        "```",
+        "",
+        "## Applied",
+        "",
+    ]
+    for item in payload.get("applied") or []:
+        lines.append(
+            f"- alert_id={item.get('alert_id')} action={item.get('suggested_action')} "
+            f"rule={item.get('rule_key')} dry_run={str(bool(item.get('dry_run'))).lower()}"
+        )
+    if not payload.get("applied"):
+        lines.append("- none")
+    if payload.get("errors"):
+        lines.extend(["", "## Errors", ""])
+        for item in payload.get("errors") or []:
+            lines.append(f"- alert_id={item.get('alert_id')} error={item.get('error')}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def main() -> int:
     args = parse_args()
     try:
+        if args.triage_suggestions:
+            payload = build_alert_triage_suggestions(status=args.status, limit=args.limit)
+            markdown = format_triage_suggestions(payload)
+            if args.md_out:
+                Path(args.md_out).write_text(markdown, encoding="utf-8")
+            if args.json:
+                print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+            else:
+                print(markdown)
+            return 0
+        if args.apply_suggestions:
+            payload = apply_alert_triage_suggestions(
+                status=args.status,
+                suggested_action=args.suggested_action,
+                limit=args.limit,
+                actor="cli",
+                dry_run=not args.confirm,
+            )
+            markdown = format_apply_suggestions(payload)
+            if args.md_out:
+                Path(args.md_out).write_text(markdown, encoding="utf-8")
+            if args.json:
+                print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+            else:
+                print(markdown)
+                if payload.get("dry_run"):
+                    print("Add --confirm to write these decisions.")
+            return 0
         payload = build_status(limit=args.limit)
         markdown = format_markdown(payload)
         if args.md_out:
