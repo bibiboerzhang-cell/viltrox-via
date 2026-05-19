@@ -35,6 +35,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--json-out", default="", help="Write JSON preview to this path")
     parser.add_argument("--md-out", default="", help="Write Markdown report to this path")
     parser.add_argument("--dry-run", action="store_true", default=True, help="P4-6 is always dry-run")
+    parser.add_argument(
+        "--with-llm-reasons",
+        action="store_true",
+        help="P4-7: attach budget-gated recommendation reasons to the top product-family candidates",
+    )
+    parser.add_argument(
+        "--reason-limit",
+        type=int,
+        default=10,
+        help="Maximum number of returned product-family candidates to enrich with recommendation reasons",
+    )
     parser.add_argument("--json", action="store_true", help="Print full JSON payload to stdout")
     return parser.parse_args()
 
@@ -60,6 +71,8 @@ def main() -> int:
             include_low_evidence=args.include_low_evidence,
             json_out=args.json_out,
             md_out=args.md_out,
+            with_llm_reasons=args.with_llm_reasons,
+            reason_limit=args.reason_limit,
         )
         if args.json:
             print(json.dumps({key: value for key, value in payload.items() if key != "markdown_items"}, ensure_ascii=False, indent=2, default=str))

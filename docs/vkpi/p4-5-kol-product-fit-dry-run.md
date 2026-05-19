@@ -305,6 +305,8 @@ Optional:
 --primary-markets "Germany,United States"
 --secondary-markets "Japan,United Kingdom"
 --include-low-evidence
+--with-llm-reasons
+--reason-limit 10
 ```
 
 Default must be dry-run and must not write database rows.
@@ -312,8 +314,6 @@ Default must be dry-run and must not write database rows.
 Deferred flags for later packages:
 
 ```text
---with-llm-reasons   P4.7
---reason-limit 10    P4.7
 --persist-run        P4.8
 ```
 
@@ -354,7 +354,7 @@ Offline or blocked provider paths must fall back to deterministic reason text an
 5. Each returned row has at least 3 evidence items unless --include-low-evidence is passed.
 6. Default run writes no recommendation rows.
 7. P4.6 does not expose --persist-run yet.
-8. P4.6 does not expose --with-llm-reasons yet.
+8. P4.7 optional reason fallback writes no AI cost ledger rows.
 9. Forbidden write/provider flags are rejected.
 10. Frontend/API work is out of scope for the first code package.
 ```
