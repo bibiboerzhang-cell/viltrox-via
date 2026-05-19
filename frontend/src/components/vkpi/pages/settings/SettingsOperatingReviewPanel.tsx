@@ -1,5 +1,6 @@
 import React from "react";
 import {
+  createMemoryFeedback,
   getMemoryFeedbackBacklog,
   getOperatingReviewStatus,
   getRecommendationFeedbackBacklog,
@@ -86,6 +87,27 @@ export function SettingsOperatingReviewPanel({ apiToken }: { apiToken?: string }
       await loadReview();
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : "推荐反馈写入失败");
+    } finally {
+      setActionBusyId("");
+    }
+  }, [apiToken, loadReview]);
+
+  const handleMemoryFeedback = React.useCallback(async (entityUid: string, suggestion: Row) => {
+    if (!apiToken || !entityUid) return;
+    setActionBusyId(`memory:${entityUid}`);
+    setError("");
+    try {
+      await createMemoryFeedback(apiToken, {
+        entity_uid: entityUid,
+        feedback_type: text(suggestion, "suggested_feedback_type", "entity_review"),
+        note: "Operating Review 标记需核查",
+        source: "operating_review_memory_backlog",
+        suggested_action: text(suggestion, "suggested_action", ""),
+        reasons: Array.isArray(suggestion.reasons) ? suggestion.reasons : [],
+      });
+      await loadReview();
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "Memory 反馈写入失败");
     } finally {
       setActionBusyId("");
     }
@@ -259,22 +281,34 @@ export function SettingsOperatingReviewPanel({ apiToken }: { apiToken?: string }
               <th>信号</th>
               <th>建议</th>
               <th>优先级</th>
+              <th>操作</th>
             </tr>
           </thead>
           <tbody>
             {memoryItems.length ? memoryItems.map((item) => {
               const signals = recordValue(item, "signals");
               const suggestion = recordValue(item, "suggestion");
+              const entityUid = text(item, "entity_uid", "");
               return (
-                <tr key={`memory-feedback-${text(item, "entity_uid")}`}>
-                  <td><strong>{text(item, "display_name", text(item, "identity_key"))}</strong><br /><small>{text(item, "entity_uid")}</small></td>
+                <tr key={`memory-feedback-${entityUid}`}>
+                  <td><strong>{text(item, "display_name", text(item, "identity_key"))}</strong><br /><small>{entityUid}</small></td>
                   <td>sync={text(signals, "sync_status")} / weak={text(signals, "weak_label")} / risk={Array.isArray(signals.risk_flags) ? signals.risk_flags.length : 0}</td>
                   <td><span className={`vkpi-chip ${priorityClass(text(suggestion, "severity"))}`}>{text(suggestion, "suggested_action")}</span></td>
                   <td>{text(suggestion, "severity")} · {text(suggestion, "priority_score")}</td>
+                  <td>
+                    <button
+                      className="vkpi-mini-button"
+                      type="button"
+                      disabled={!apiToken || Boolean(actionBusyId)}
+                      onClick={() => void handleMemoryFeedback(entityUid, suggestion)}
+                    >
+                      记录核查
+                    </button>
+                  </td>
                 </tr>
               );
             }) : (
-              <tr><td className="vkpi-table-empty" colSpan={4}>{loading ? "正在读取 Memory backlog" : "没有 Memory backlog。"}</td></tr>
+              <tr><td className="vkpi-table-empty" colSpan={5}>{loading ? "正在读取 Memory backlog" : "没有 Memory backlog。"}</td></tr>
             )}
           </tbody>
         </table>

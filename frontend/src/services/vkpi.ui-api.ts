@@ -1442,6 +1442,9 @@ export async function getMemoryFeedbackBacklog(token: string, limit = 25, entity
   const params = new URLSearchParams({ limit: String(limit), entity_type: entityType });
   return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/learning/memory-feedback-backlog?${params.toString()}`, {}, token);
 }
+export async function createMemoryFeedback(token: string, payload: Row) {
+  return apiFetch<Record<string, unknown>>("/api/admin/vkpi/memory/feedback", { method: "POST", body: jsonBody(payload) }, token);
+}
 
 export async function listFeatureFlags(token: string) {
   return apiFetch<{ flags?: Row[] }>("/api/admin/vkpi/settings/feature-flags", {}, token);

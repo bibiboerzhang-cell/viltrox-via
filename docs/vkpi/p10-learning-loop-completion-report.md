@@ -17,6 +17,7 @@ P10-4  Memory feedback backlog snapshot
 P10-5  recommendation action feedback bridge
 P10-6  Operating Review recommendation feedback actions
 P10-7  explicit recommendation feedback CLI
+P10-8  Operating Review Memory feedback action
 ```
 
 ## Current Snapshot
@@ -204,6 +205,15 @@ verified:
   explicit feedback action writes vkpi_recommendation_feedback
   next recommendation review-gap alert pass resolves the alert
   smoke cleanup leaves no temporary alert or feedback row
+```
+
+Memory feedback UI:
+
+```text
+Settings -> Operating Review Memory backlog rows expose 记录核查.
+Clicking writes one explicit vkpi_memory_feedback row through POST /memory/feedback.
+Page load and refresh remain read-only.
+No Memory fact is rewritten automatically.
 ```
 
 ## Guarantees
