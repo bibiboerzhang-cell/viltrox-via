@@ -108,6 +108,28 @@ remaining_open=content_brain.analysis_backlog,recommendation.review_gap
 vkpi_ai_cost_ledger.count=0
 ```
 
+Content brain backlog closure on 2026-05-19:
+
+```text
+command=scripts/p6_content_brain.py --limit 20 --commit-analysis --confirm
+scenario=p6_content_brain_commit_analysis
+provider_calls=false
+writes_enabled=true
+posts_evaluated=10
+posts_updated=7
+skipped_done=3
+
+content_brain.post_count=10
+content_brain.analyzed_count=10
+content_brain.pending_count=0
+content_brain.coverage_ratio=1.0
+content_brain.analysis_backlog.status=resolved
+
+open_total=1
+remaining_open=recommendation.review_gap
+vkpi_ai_cost_ledger.count=0
+```
+
 ## Guarantees
 
 ```text

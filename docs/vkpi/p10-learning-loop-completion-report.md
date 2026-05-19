@@ -116,6 +116,27 @@ no vkpi_memory_feedback row is auto-created
 existing Memory facts are used only to rank review priority
 ```
 
+Verified backlog shape on 2026-05-19:
+
+```text
+recommendation_feedback_backlog:
+  recommendation_rows=84
+  missing_feedback_rows=84
+  with_feedback_rows=0
+  run_count=4
+
+memory_feedback_backlog:
+  entity_type=kol
+  entity_rows=1012
+  backlog_candidates=567
+  high_priority=43
+  review_risk_memory=7
+  verify_memory_entity=36
+  memory_feedback_rows=0
+
+vkpi_ai_cost_ledger.count=0
+```
+
 ## Guarantees
 
 ```text
