@@ -1817,6 +1817,193 @@ def entity_facts(entity_uid: str, *, limit: int = 200) -> dict[str, Any]:
     return {"entity": _public_entity(entity_row), "facts": facts, "links": [_public_link(row) for row in links]}
 
 
+def readiness() -> dict[str, Any]:
+    """Return a deterministic P4 dry-run readiness check for Memory."""
+
+    ensure_memory_schema()
+    conn = get_conn()
+    entity_counts = {
+        row["entity_type"]: int(row["n"])
+        for row in conn.execute(
+            "SELECT entity_type, COUNT(*) AS n FROM vkpi_memory_entities GROUP BY entity_type"
+        ).fetchall()
+    }
+    fact_counts = {
+        row["fact_type"]: int(row["n"])
+        for row in conn.execute(
+            "SELECT fact_type, COUNT(*) AS n FROM vkpi_memory_facts GROUP BY fact_type"
+        ).fetchall()
+    }
+    link_counts = {
+        row["link_type"]: int(row["n"])
+        for row in conn.execute(
+            "SELECT link_type, COUNT(*) AS n FROM vkpi_memory_links GROUP BY link_type"
+        ).fetchall()
+    }
+    feedback_counts = {
+        row["status"]: int(row["n"])
+        for row in conn.execute(
+            "SELECT status, COUNT(*) AS n FROM vkpi_memory_feedback GROUP BY status"
+        ).fetchall()
+    }
+    normalization_counts = {
+        row["fact_value_text"]: int(row["n"])
+        for row in conn.execute(
+            """
+            SELECT fact_value_text, COUNT(*) AS n
+            FROM vkpi_memory_facts
+            WHERE fact_type='product_normalization'
+              AND fact_key='status'
+            GROUP BY fact_value_text
+            """
+        ).fetchall()
+    }
+    market_counts = _market_signal_counts()
+    gates = [
+        _readiness_gate("kol_memory", entity_counts.get("kol", 0), 1000, "critical"),
+        _readiness_gate("product_family_memory", entity_counts.get("product_family", 0), 1, "critical"),
+        _readiness_gate("historical_product_links", link_counts.get("worked_on_product", 0), 1, "critical"),
+        _readiness_gate("market_signals", fact_counts.get("market_signal", 0), 1, "critical"),
+        _readiness_gate("launch_signals", market_counts.get("launch_plan", 0), 1, "critical"),
+        _readiness_gate("official_content_signals", market_counts.get("official_content", 0), 1, "warning"),
+        _readiness_gate("voc_signals", market_counts.get("voc_alert", 0), 1, "warning"),
+        _readiness_gate("budget_guard_tables", 1 if _table_exists("vkpi_provider_budget_caps") else 0, 1, "warning"),
+    ]
+    blockers = [gate for gate in gates if gate["severity"] == "critical" and gate["status"] != "pass"]
+    warnings = [gate for gate in gates if gate["severity"] == "warning" and gate["status"] != "pass"]
+    open_feedback = int(feedback_counts.get("open", 0) or 0)
+    if open_feedback:
+        warnings.append(
+            {
+                "key": "open_memory_feedback",
+                "status": "warn",
+                "severity": "warning",
+                "actual": open_feedback,
+                "expected_min": 0,
+                "detail": "open feedback should be reviewed before using Memory for production recommendation writes",
+            }
+        )
+    return {
+        "status": "ready_for_p4_dry_run" if not blockers else "blocked",
+        "provider_calls_allowed": False,
+        "provider_gate": "P4 dry-run may read Memory without provider calls; provider calls still require Budget Guard integration",
+        "gates": gates,
+        "blockers": blockers,
+        "warnings": warnings,
+        "counts": {
+            "entities": entity_counts,
+            "facts": fact_counts,
+            "links": link_counts,
+            "feedback": feedback_counts,
+            "product_normalization_status": normalization_counts,
+            "market_signals": market_counts,
+        },
+    }
+
+
+def list_feedback(
+    *,
+    status: str = "",
+    entity_uid: str = "",
+    feedback_type: str = "",
+    limit: int = 100,
+) -> dict[str, Any]:
+    ensure_memory_schema()
+    safe_limit = _safe_limit(limit, default=100, max_limit=500)
+    where: list[str] = []
+    params: list[Any] = []
+    if _text(status):
+        where.append("fb.status=?")
+        params.append(_text(status))
+    if _text(feedback_type):
+        where.append("fb.feedback_type=?")
+        params.append(_text(feedback_type))
+    if _text(entity_uid):
+        where.append("e.entity_uid=?")
+        params.append(_text(entity_uid))
+    clause = "WHERE " + " AND ".join(where) if where else ""
+    rows = [
+        _row_to_dict(row)
+        for row in get_conn().execute(
+            f"""
+            SELECT fb.*, e.entity_uid, e.entity_type, e.identity_key,
+                   e.display_name, e.status AS entity_status,
+                   e.confidence_score AS entity_confidence_score,
+                   e.identity_json, e.metadata_json AS entity_metadata_json,
+                   e.updated_at AS entity_updated_at
+            FROM vkpi_memory_feedback fb
+            LEFT JOIN vkpi_memory_entities e ON e.id=fb.entity_id
+            {clause}
+            ORDER BY fb.created_at DESC, fb.id DESC
+            LIMIT ?
+            """,
+            (*params, safe_limit),
+        ).fetchall()
+    ]
+    counts = {
+        row["status"]: int(row["n"])
+        for row in get_conn().execute(
+            "SELECT status, COUNT(*) AS n FROM vkpi_memory_feedback GROUP BY status ORDER BY status"
+        ).fetchall()
+    }
+    return {
+        "filters": {"status": _text(status), "entity_uid": _text(entity_uid), "feedback_type": _text(feedback_type)},
+        "counts": counts,
+        "items": [_public_feedback(row) for row in rows],
+    }
+
+
+def update_feedback(
+    feedback_uid: str,
+    body: dict[str, Any],
+    *,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    ensure_memory_schema()
+    uid = _text(feedback_uid)
+    if not uid:
+        raise ValueError("feedback_uid is required")
+    current = get_conn().execute("SELECT * FROM vkpi_memory_feedback WHERE feedback_uid=?", (uid,)).fetchone()
+    if not current:
+        raise LookupError("memory feedback not found")
+    status = _text(body.get("status") or body.get("feedback_status") or current["status"])
+    allowed = {"open", "triaged", "resolved", "dismissed"}
+    if status not in allowed:
+        raise ValueError(f"status must be one of: {', '.join(sorted(allowed))}")
+    resolution = {
+        "status": status,
+        "action": _text(body.get("resolution_action")),
+        "note": _text(body.get("resolution_note") or body.get("note")),
+        "updated_at": _utcnow(),
+    }
+    staff_id = None
+    if staff:
+        staff_id = staff.get("id") or staff.get("staff_id")
+    resolved_at = _utcnow() if status in {"resolved", "dismissed"} else None
+    row = get_conn().execute(
+        """
+        UPDATE vkpi_memory_feedback
+        SET status=?,
+            resolved_by_staff_id=?,
+            resolution_json=?,
+            resolved_at=?,
+            updated_at=?
+        WHERE feedback_uid=?
+        RETURNING *
+        """,
+        (
+            status,
+            int(staff_id) if staff_id else None,
+            json_dumps(resolution),
+            resolved_at,
+            _utcnow(),
+            uid,
+        ),
+    ).fetchone()
+    get_conn().commit()
+    return {"item": _public_feedback(_row_to_dict(row))}
+
+
 def record_feedback(body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     ensure_memory_schema()
     entity_uid = _text(body.get("entity_uid"))
@@ -1858,6 +2045,43 @@ def _safe_limit(value: int | str | None, *, default: int, max_limit: int) -> int
     except Exception:
         parsed = default
     return max(1, min(max_limit, parsed))
+
+
+def _readiness_gate(key: str, actual: int, expected_min: int, severity: str) -> dict[str, Any]:
+    return {
+        "key": key,
+        "status": "pass" if int(actual or 0) >= int(expected_min) else "fail",
+        "severity": severity,
+        "actual": int(actual or 0),
+        "expected_min": int(expected_min),
+    }
+
+
+def _market_signal_counts() -> dict[str, int]:
+    counts: Counter[str] = Counter()
+    rows = get_conn().execute(
+        """
+        SELECT fact_key, fact_json
+        FROM vkpi_memory_facts
+        WHERE fact_type='market_signal'
+        """
+    ).fetchall()
+    for row in rows:
+        payload = _load_json(row["fact_json"] or "{}", {})
+        signal_type = _text(payload.get("signal_type") if isinstance(payload, dict) else "")
+        if not signal_type:
+            signal_type = _text(row["fact_key"]).split(":")[0]
+        if signal_type:
+            counts[signal_type] += 1
+    return dict(sorted(counts.items()))
+
+
+def _table_exists(table_name: str) -> bool:
+    row = get_conn().execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (_text(table_name),),
+    ).fetchone()
+    return bool(row)
 
 
 def _memory_entity_by_uid(entity_uid: str) -> dict[str, Any] | None:
@@ -2079,12 +2303,30 @@ def _public_market_signal(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _public_feedback(row: dict[str, Any]) -> dict[str, Any]:
+    entity_uid = row.get("entity_uid") or ""
+    entity = None
+    if entity_uid:
+        entity = {
+            "entity_uid": entity_uid,
+            "entity_type": row.get("entity_type") or "",
+            "identity_key": row.get("identity_key") or "",
+            "display_name": row.get("display_name") or "",
+            "status": row.get("entity_status") or "",
+            "confidence_score": float(row.get("entity_confidence_score") or 0),
+            "identity": _load_json(row.get("identity_json") or "{}", {}),
+            "metadata": _load_json(row.get("entity_metadata_json") or "{}", {}),
+            "updated_at": row.get("entity_updated_at"),
+        }
     return {
         "feedback_uid": row["feedback_uid"],
         "entity_id": row.get("entity_id"),
+        "entity": entity,
         "feedback_type": row.get("feedback_type") or "",
         "rating": row.get("rating"),
         "status": row.get("status") or "",
         "feedback": _load_json(row.get("feedback_json") or "{}", {}),
+        "resolution": _load_json(row.get("resolution_json") or "{}", {}),
+        "metadata": _load_json(row.get("metadata_json") or "{}", {}),
+        "resolved_at": row.get("resolved_at"),
         "created_at": row.get("created_at"),
     }

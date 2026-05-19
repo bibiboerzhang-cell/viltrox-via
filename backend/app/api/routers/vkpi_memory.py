@@ -19,6 +19,14 @@ def memory_summary(
     return memory.summary(source_ref=source_ref)
 
 
+@router.get("/memory/readiness")
+def memory_readiness(
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    del staff
+    return memory.readiness()
+
+
 @router.get("/memory/entities")
 def memory_entities(
     entity_type: str = Query(default=""),
@@ -75,6 +83,18 @@ def memory_market_signals(
 ) -> dict:
     del staff
     return memory.market_signals(query=query, signal_type=signal_type, limit=limit)
+
+
+@router.get("/memory/feedback")
+def memory_feedback_list(
+    status: str = Query(default=""),
+    entity_uid: str = Query(default=""),
+    feedback_type: str = Query(default=""),
+    limit: int = Query(default=100, ge=1, le=500),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    del staff
+    return memory.list_feedback(status=status, entity_uid=entity_uid, feedback_type=feedback_type, limit=limit)
 
 
 @router.get("/memory/entities/{entity_uid}/product-memory")
@@ -148,3 +168,17 @@ def memory_feedback(
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict:
     return memory.record_feedback(body, staff=staff)
+
+
+@router.patch("/memory/feedback/{feedback_uid}")
+def memory_feedback_update(
+    feedback_uid: str,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    try:
+        return memory.update_feedback(feedback_uid, body, staff=staff)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

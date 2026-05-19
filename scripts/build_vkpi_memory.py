@@ -32,6 +32,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--product-families", nargs="?", const="", default=None, help="List normalized product families")
     parser.add_argument("--market-signals", nargs="?", const="", default=None, help="List Market Memory signals")
     parser.add_argument("--signal-type", default="", help="Optional signal type filter for --market-signals")
+    parser.add_argument("--readiness", action="store_true", help="Print Memory readiness for P4 dry-run")
+    parser.add_argument("--feedback-list", action="store_true", help="List Memory feedback queue")
+    parser.add_argument("--feedback-status", default="", help="Filter or update feedback status")
+    parser.add_argument("--feedback-type", default="", help="Filter feedback type")
+    parser.add_argument("--entity-uid", default="", help="Filter feedback by memory entity_uid")
+    parser.add_argument("--resolve-feedback", default="", help="Update a feedback item by feedback_uid")
+    parser.add_argument("--resolution-action", default="", help="Resolution action for --resolve-feedback")
+    parser.add_argument("--resolution-note", default="", help="Resolution note for --resolve-feedback")
+    parser.add_argument("--commit", action="store_true", help="Apply state-changing CLI operations")
     parser.add_argument("--product-kol-candidates", default="", help="List KOL memory evidence for a product query")
     parser.add_argument("--kol-product-memory", default="", help="Show product memory for a KOL memory entity_uid")
     parser.add_argument("--fit-features", default="", help="Extract deterministic fit features for a KOL memory entity_uid")
@@ -120,6 +129,42 @@ def _print_market_signals(result: dict) -> None:
         )
 
 
+def _print_readiness(result: dict) -> None:
+    print(f"status={result.get('status', '')}")
+    print(f"provider_calls_allowed={str(bool(result.get('provider_calls_allowed'))).lower()}")
+    for gate in result.get("gates") or []:
+        print(
+            f"gate.{gate.get('key', '')}={gate.get('status', '')} "
+            f"severity={gate.get('severity', '')} "
+            f"actual={int(gate.get('actual') or 0)} "
+            f"expected_min={int(gate.get('expected_min') or 0)}"
+        )
+    counts = result.get("counts") or {}
+    for group in ("entities", "facts", "links", "feedback", "product_normalization_status", "market_signals"):
+        for key, value in sorted((counts.get(group) or {}).items()):
+            print(f"{group}.{key}={int(value)}")
+
+
+def _print_feedback(result: dict) -> None:
+    filters = result.get("filters") or {}
+    print(f"status_filter={filters.get('status', '')}")
+    print(f"entity_uid_filter={filters.get('entity_uid', '')}")
+    print(f"feedback_type_filter={filters.get('feedback_type', '')}")
+    for key, value in sorted((result.get("counts") or {}).items()):
+        print(f"feedback.{key}={int(value)}")
+    items = result.get("items") or []
+    print(f"returned={len(items)}")
+    for idx, item in enumerate(items, start=1):
+        entity = item.get("entity") or {}
+        print(
+            f"{idx}. feedback_uid={item.get('feedback_uid', '')} "
+            f"status={item.get('status', '')} "
+            f"type={item.get('feedback_type', '')} "
+            f"entity={entity.get('entity_uid', '')} "
+            f"created_at={item.get('created_at', '')}"
+        )
+
+
 def _print_kol_memory(result: dict) -> None:
     entity = result.get("entity") or {}
     features = result.get("features") or {}
@@ -169,6 +214,33 @@ def main() -> int:
             result = memory.build_product_family_memory()
         elif args.build_market_memory:
             result = memory.build_market_memory_from_legacy_batch(args.batch_uid)
+        elif args.readiness:
+            result = memory.readiness()
+        elif args.feedback_list:
+            result = memory.list_feedback(
+                status=args.feedback_status,
+                entity_uid=args.entity_uid,
+                feedback_type=args.feedback_type,
+                limit=args.limit,
+            )
+        elif args.resolve_feedback:
+            if not args.commit:
+                result = {
+                    "dry_run": True,
+                    "feedback_uid": args.resolve_feedback,
+                    "would_set_status": args.feedback_status or "resolved",
+                    "resolution_action": args.resolution_action,
+                    "resolution_note": args.resolution_note,
+                }
+            else:
+                result = memory.update_feedback(
+                    args.resolve_feedback,
+                    {
+                        "status": args.feedback_status or "resolved",
+                        "resolution_action": args.resolution_action,
+                        "resolution_note": args.resolution_note,
+                    },
+                )
         elif args.product_families is not None:
             result = memory.product_family_summary(query=args.product_families, limit=args.limit)
         elif args.market_signals is not None:
@@ -188,6 +260,20 @@ def main() -> int:
             result = memory.summary(source_ref=source_ref)
         if args.json:
             print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        elif args.readiness:
+            _print_readiness(result)
+        elif args.feedback_list:
+            _print_feedback(result)
+        elif args.resolve_feedback:
+            if result.get("dry_run"):
+                print("[DRY-RUN] Feedback update not applied.")
+                print(f"feedback_uid={result.get('feedback_uid', '')}")
+                print(f"would_set_status={result.get('would_set_status', '')}")
+                print(f"resolution_action={result.get('resolution_action', '')}")
+                print(f"resolution_note={result.get('resolution_note', '')}")
+                print("Add --commit to apply.")
+            else:
+                _print_feedback({"items": [result.get("item")], "counts": {}, "filters": {}})
         elif args.build_product_families or args.product_families is not None:
             _print_product_families(result)
             if result.get("build_counts"):
