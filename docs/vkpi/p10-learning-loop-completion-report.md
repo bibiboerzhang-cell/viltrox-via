@@ -194,6 +194,18 @@ scripts/p10_recommendation_feedback_backlog.py \
   --confirm
 ```
 
+Alert lifecycle smoke:
+
+```text
+scripts/smoke_vkpi_recommendation_review_gap_alert.py
+
+verified:
+  no-feedback recommendation run creates recommendation.review_gap
+  explicit feedback action writes vkpi_recommendation_feedback
+  next recommendation review-gap alert pass resolves the alert
+  smoke cleanup leaves no temporary alert or feedback row
+```
+
 ## Guarantees
 
 ```text

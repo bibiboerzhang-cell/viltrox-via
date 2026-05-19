@@ -130,6 +130,20 @@ remaining_open=recommendation.review_gap
 vkpi_ai_cost_ledger.count=0
 ```
 
+Recommendation review-gap lifecycle smoke on 2026-05-19:
+
+```text
+script=scripts/smoke_vkpi_recommendation_review_gap_alert.py
+result=VKPI_RECOMMENDATION_REVIEW_GAP_ALERT_SMOKE_OK
+
+temporary run with 1 recommendation and 0 feedback opened recommendation.review_gap
+explicit recommendation feedback action inserted feedback
+generate_recommendation_review_gap_alerts resolved the temporary alert
+cleanup left smoke_alerts=0
+real recommendation_feedback remained 0
+post-smoke open_total remained 1
+```
+
 ## Guarantees
 
 ```text
