@@ -765,6 +765,104 @@ def format_review_suggestions(payload: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def apply_competitor_signal_review_suggestions(
+    *,
+    review_status: str = "pending_review",
+    suggested_action: str = "ready",
+    limit: int = 100,
+    staff: dict[str, Any] | None = None,
+    actor: str = "cli",
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    """Apply or preview deterministic review suggestions."""
+    suggestion_payload = build_competitor_signal_review_suggestions(review_status=review_status, limit=limit)
+    clean_action = _lower(suggested_action or "ready")
+    target_status = REVIEW_STATUS_ACTIONS.get(clean_action)
+    if not target_status:
+        raise ValueError("suggested_action must map to ready, rejected, ignored, or pending_review")
+    candidates = [
+        item
+        for item in suggestion_payload.get("suggestions") or []
+        if str(item.get("suggested_action") or "") == target_status
+    ]
+    applied: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    for item in candidates:
+        signal_id = int(item.get("signal_id") or 0)
+        if not signal_id:
+            continue
+        try:
+            result = review_competitor_signal(
+                signal_id,
+                action=target_status,
+                note=f"bulk_suggestion:{','.join(item.get('reasons') or [])}",
+                staff=staff,
+                actor=actor,
+                dry_run=dry_run,
+            )
+            applied.append(
+                {
+                    "signal_id": signal_id,
+                    "brand": item.get("brand"),
+                    "signal_type": item.get("signal_type"),
+                    "suggested_action": target_status,
+                    "confidence": item.get("confidence"),
+                    "dry_run": result.get("dry_run"),
+                    "write_db": result.get("write_db"),
+                }
+            )
+        except Exception as exc:
+            errors.append({"signal_id": signal_id, "error": str(exc)})
+    return {
+        "scenario": "p8_competitor_signal_apply_suggestions",
+        "provider_calls": False,
+        "write_db": not bool(dry_run),
+        "dry_run": bool(dry_run),
+        "filters": {
+            "review_status": review_status,
+            "suggested_action": target_status,
+            "limit": _safe_limit(limit, default=100, ceiling=500),
+        },
+        "candidate_count": len(candidates),
+        "applied_count": len(applied),
+        "error_count": len(errors),
+        "applied": applied,
+        "errors": errors,
+    }
+
+
+def format_apply_suggestions(payload: dict[str, Any]) -> str:
+    lines = [
+        "# P8 Competitor Signal Apply Suggestions",
+        "",
+        "```text",
+        f"scenario={payload.get('scenario', '')}",
+        f"provider_calls={str(bool(payload.get('provider_calls'))).lower()}",
+        f"write_db={str(bool(payload.get('write_db'))).lower()}",
+        f"dry_run={str(bool(payload.get('dry_run'))).lower()}",
+        f"candidate_count={int(payload.get('candidate_count') or 0)}",
+        f"applied_count={int(payload.get('applied_count') or 0)}",
+        f"error_count={int(payload.get('error_count') or 0)}",
+        "```",
+        "",
+        "## Applied",
+        "",
+    ]
+    for item in payload.get("applied") or []:
+        lines.append(
+            f"- signal_id={item.get('signal_id')} action={item.get('suggested_action')} "
+            f"brand={item.get('brand')} type={item.get('signal_type')} "
+            f"dry_run={str(bool(item.get('dry_run'))).lower()}"
+        )
+    if not payload.get("applied"):
+        lines.append("- none")
+    if payload.get("errors"):
+        lines.extend(["", "## Errors", ""])
+        for item in payload.get("errors") or []:
+            lines.append(f"- signal_id={item.get('signal_id')} error={item.get('error')}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def review_competitor_signal(
     signal_id: int,
     *,

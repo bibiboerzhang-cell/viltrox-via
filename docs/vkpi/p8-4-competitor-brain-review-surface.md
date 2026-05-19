@@ -26,6 +26,7 @@ write AI cost ledger
 GET /api/admin/vkpi/industry-data/competitor-brain/status
 GET /api/admin/vkpi/industry-data/competitor-brain/signals
 GET /api/admin/vkpi/industry-data/competitor-brain/review-suggestions
+POST /api/admin/vkpi/industry-data/competitor-brain/review-suggestions/apply
 POST /api/admin/vkpi/industry-data/competitor-brain/signals/{signal_id}/review
 ```
 
@@ -55,7 +56,16 @@ Review suggestions are deterministic and read-only:
 python3 scripts/p8_competitor_brain.py --review-suggestions
 ```
 
-They do not apply decisions. Suggested `ready` rows still require CLI `--apply-review` or the frontend per-row action.
+They do not apply decisions. Suggested `ready` rows still require CLI `--apply-suggestions --confirm`, CLI `--apply-review`, or the frontend per-row action.
+
+Bulk apply also defaults to dry-run:
+
+```bash
+python3 scripts/p8_competitor_brain.py --apply-suggestions
+python3 scripts/p8_competitor_brain.py --apply-suggestions --confirm
+```
+
+The API equivalent only writes when the JSON body contains `confirm=true`.
 
 ## Frontend
 
@@ -97,6 +107,7 @@ python3 -m py_compile backend/app/services/vkpi/competitor_brain.py passed
 python3 -m py_compile backend/app/api/routers/vkpi_industry_automation.py passed
 python3 scripts/p8_competitor_brain.py --review-signal <id> --action ready passed as dry-run
 python3 scripts/p8_competitor_brain.py --review-suggestions passed as read-only
+python3 scripts/p8_competitor_brain.py --apply-suggestions passed as dry-run
 npm run build passed
 git diff --check passed
 ```

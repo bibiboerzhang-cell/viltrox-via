@@ -184,6 +184,21 @@ def industry_competitor_brain_review_suggestions(
     )
 
 
+@router.post("/industry-data/competitor-brain/review-suggestions/apply")
+def industry_competitor_brain_apply_review_suggestions(body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
+    payload = body or {}
+    try:
+        return competitor_brain.apply_competitor_signal_review_suggestions(
+            review_status=str(payload.get("review_status") or "pending_review"),
+            suggested_action=str(payload.get("suggested_action") or "ready"),
+            limit=int(payload.get("limit") or 100),
+            staff=staff,
+            dry_run=not bool(payload.get("confirm")),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/industry-data/competitor-brain/signals/{signal_id}/review")
 def industry_competitor_brain_review_signal(signal_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
     try:
