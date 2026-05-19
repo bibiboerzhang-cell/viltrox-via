@@ -36,6 +36,7 @@ PIPELINE_ORDER = [
     "cooperations",
     "launch_plans",
     "official_content",
+    "official_materials",
     "product_costs",
     "risk_watchlist",
     "voc_alerts",
@@ -46,6 +47,7 @@ PIPELINE_TABLES = {
     "cooperations": "vkpi_legacy_cooperations_staging",
     "launch_plans": "vkpi_legacy_launch_plans_staging",
     "official_content": "vkpi_legacy_official_content_staging",
+    "official_materials": "vkpi_legacy_official_materials_staging",
     "product_costs": "vkpi_legacy_product_costs_staging",
     "risk_watchlist": "vkpi_legacy_risk_watchlist_staging",
     "voc_alerts": "vkpi_legacy_voc_alerts_staging",
@@ -150,6 +152,40 @@ STAGING_COLUMNS = {
         "link",
         "status",
         "owner",
+        "notes",
+        "review_status",
+        "review_reason_json",
+        "import_action",
+        "row_hash",
+        "raw_row_json",
+        "validation_json",
+    ],
+    "official_materials": [
+        "import_batch_id",
+        "row_uid",
+        "source_sheet",
+        "source_row",
+        "launch_ref",
+        "product_sku",
+        "product_name",
+        "owner",
+        "production_status",
+        "project",
+        "content_type",
+        "content_description",
+        "reference_doc",
+        "content_format",
+        "request_date",
+        "target_delivery_date",
+        "asset_link",
+        "size_spec",
+        "publish_status",
+        "product_publish_date",
+        "production_team",
+        "budget_amount",
+        "budget_currency",
+        "official_usage_ref",
+        "parent_ref",
         "notes",
         "review_status",
         "review_reason_json",
@@ -292,6 +328,26 @@ PIPELINE_DEFAULTS = {
         "owner": "",
         "notes": "",
     },
+    "official_materials": {
+        "launch_ref": "",
+        "product_sku": "",
+        "product_name": "",
+        "owner": "",
+        "production_status": "",
+        "project": "",
+        "content_type": "",
+        "content_description": "",
+        "reference_doc": "",
+        "content_format": "",
+        "asset_link": "",
+        "size_spec": "",
+        "publish_status": "",
+        "production_team": "",
+        "budget_currency": "",
+        "official_usage_ref": "",
+        "parent_ref": "",
+        "notes": "",
+    },
     "product_costs": {
         "sku": "",
         "product_name": "",
@@ -378,14 +434,14 @@ def classify_legacy_sheet(sheet_name: str) -> str:
         return "launch_plans"
     if name == "官媒运营排片表":
         return "official_content"
+    if name == "官方物料排期表":
+        return "official_materials"
     if name == "产品成本信息表":
         return "product_costs"
     if name == "【红人媒体观察名单】":
         return "risk_watchlist"
     if name == "海外舆情监控表":
         return "voc_alerts"
-    if name == "官方物料排期表":
-        return ""
     return "cooperations" if name else ""
 
 
@@ -672,6 +728,41 @@ def _build_official_content(item: dict[str, Any]) -> StageRecord:
     return StageRecord("official_content", item["sheet"], int(item["row_number"]), raw, values, reasons)
 
 
+def _build_official_material(item: dict[str, Any]) -> StageRecord:
+    raw = item["raw"]
+    budget_amount, budget_currency = _parse_amount(_pick(raw, "预算"))
+    values = {
+        "launch_ref": _pick(raw, "上市时间-产品型号/项目名称"),
+        "product_sku": _pick(raw, "产品型号"),
+        "product_name": _pick(raw, "产品型号"),
+        "owner": _pick(raw, "对接/协作人"),
+        "production_status": _pick(raw, "制作进度"),
+        "project": _pick(raw, "所属项目"),
+        "content_type": _pick(raw, "内容类型"),
+        "content_description": _pick(raw, "内容描述"),
+        "reference_doc": _pick(raw, "参考文档"),
+        "content_format": _pick(raw, "内容格式"),
+        "request_date": _parse_excel_date(_pick(raw, "提需时间")),
+        "target_delivery_date": _parse_excel_date(_pick(raw, "目标交付时间")),
+        "asset_link": _pick(raw, "下载/预览链接"),
+        "size_spec": _pick(raw, "尺寸规格"),
+        "publish_status": _pick(raw, "发布状态"),
+        "product_publish_date": _parse_excel_date(_pick(raw, "产品发布时间")),
+        "production_team": _pick(raw, "制作团队"),
+        "budget_amount": budget_amount,
+        "budget_currency": budget_currency,
+        "official_usage_ref": _pick(raw, "官媒使用记录"),
+        "parent_ref": _pick(raw, "父记录"),
+        "notes": _pick(raw, "备注", "参考文档"),
+    }
+    reasons = []
+    if not values["product_name"] and not values["launch_ref"]:
+        reasons.append("missing_product_identity")
+    if not values["content_description"] and not values["asset_link"]:
+        reasons.append("missing_material_content")
+    return StageRecord("official_materials", item["sheet"], int(item["row_number"]), raw, values, reasons)
+
+
 def _build_product_cost(item: dict[str, Any]) -> StageRecord:
     raw = item["raw"]
     cost_raw = _pick(raw, "采购成本(CNY)", "成本", "cost")
@@ -751,6 +842,7 @@ BUILDERS = {
     "cooperations": _build_cooperation,
     "launch_plans": _build_launch_plan,
     "official_content": _build_official_content,
+    "official_materials": _build_official_material,
     "product_costs": _build_product_cost,
     "risk_watchlist": _build_risk_watchlist,
     "voc_alerts": _build_voc_alert,

@@ -97,6 +97,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "058a_vkpi_legacy_import_launch_plan.sql",
     "058b_vkpi_legacy_import_dedupe.sql",
     "058c_vkpi_legacy_import_batch_column_compat.sql",
+    "058d_vkpi_legacy_official_materials.sql",
 )
 
 try:

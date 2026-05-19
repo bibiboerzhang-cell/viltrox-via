@@ -1,0 +1,1 @@
+DROP TABLE IF EXISTS vkpi_legacy_official_materials_staging;
