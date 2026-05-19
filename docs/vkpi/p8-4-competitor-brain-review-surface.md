@@ -100,6 +100,20 @@ signals_returned=5
 top_signal_brand=godox
 ```
 
+Post-apply verification on 2026-05-19:
+
+```text
+apply_suggestions.confirm=true
+candidate_count=25
+applied_count=25
+error_count=0
+provider_calls=false
+vkpi_competitor_signals.ready=25
+vkpi_competitor_signals.pending_review=0
+p10.readiness.competitor_review_ready=true
+vkpi_ai_cost_ledger.count=0
+```
+
 ## Acceptance
 
 ```text
