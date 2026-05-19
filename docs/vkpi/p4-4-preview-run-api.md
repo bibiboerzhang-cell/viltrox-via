@@ -13,7 +13,7 @@ GET /api/admin/vkpi/product-analysis/recommendation-runs
 Query parameters:
 
 ```text
-strategy_version   optional, e.g. new_launch_match_v1
+strategy_version   optional, e.g. new_launch_match_v1 or kol_product_fit_v1
 status             optional, e.g. previewed
 limit              default 100, max 300
 ```
@@ -59,6 +59,37 @@ listProductRecommendationRuns(token, { strategyVersion, status, limit })
 
 No page-level UI is changed in P4-4.
 
+## P4-9 Two-Scenario Verification
+
+After P4-8, the same run API can list both persisted P4 preview strategies:
+
+```text
+new_launch_match_v1
+kol_product_fit_v1
+```
+
+Verified rows:
+
+```text
+new_launch_match_v1:
+  run_uid=p4nlm-d8091029270e3230
+  status=previewed
+  candidate_count=1012
+  recommendation_count=3
+  filters.scenario=new_launch_match
+  recommendation_status_counts.previewed=3
+
+kol_product_fit_v1:
+  run_uid=p4kpf-b6b5445fea4dca44
+  status=previewed
+  candidate_count=659
+  recommendation_count=3
+  filters.scenario=kol_product_fit
+  recommendation_status_counts.previewed=3
+```
+
+No API change is required for P4-9 because the existing `strategy_version` filter is sufficient.
+
 ## Acceptance Gates
 
 ```text
@@ -68,4 +99,5 @@ No page-level UI is changed in P4-4.
 4. Each run includes recommendation_status_counts.
 5. Existing recommendation list and evidence endpoints remain unchanged.
 6. No frontend route or layout changes are included.
+7. P4-9 confirms both P4 preview strategies are discoverable through the same run API.
 ```
