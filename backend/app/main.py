@@ -16,7 +16,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api.routers import activities, auth, admin, audit, creator, jobs, leaderboard, media, ops, platform_ingest, sse, student_identity, uploads, verify, via, vkpi, vkpi_attribution_metrics, vkpi_comment_intelligence, vkpi_audit, vkpi_budgets, vkpi_comments, vkpi_costs, vkpi_dashboard_staff, vkpi_data_quality, vkpi_evidence_assets, vkpi_feedback, vkpi_firewall, vkpi_industry_automation, vkpi_kol_links, vkpi_kol_pool, vkpi_memory, vkpi_operations, vkpi_pillars, vkpi_product_analysis, vkpi_projects, vkpi_reconciliation, vkpi_reports, vkpi_settings, vkpi_sentiment, vkpi_sync, vkpi_tasks, vkpi_weekly_reports, vkpi_workflow_assets
+from app.api.routers import activities, auth, admin, audit, creator, jobs, leaderboard, media, ops, platform_ingest, sse, student_identity, uploads, verify, via, vkpi, vkpi_attribution_metrics, vkpi_comment_intelligence, vkpi_audit, vkpi_budgets, vkpi_comments, vkpi_costs, vkpi_dashboard_staff, vkpi_data_quality, vkpi_evidence_assets, vkpi_feedback, vkpi_firewall, vkpi_industry_automation, vkpi_kol_links, vkpi_kol_pool, vkpi_memory, vkpi_operations, vkpi_pillars, vkpi_product_analysis, vkpi_projects, vkpi_reconciliation, vkpi_reports, vkpi_search, vkpi_settings, vkpi_sentiment, vkpi_sync, vkpi_tasks, vkpi_weekly_reports, vkpi_workflow_assets
 from app.api.routers import commerce, deepsight, insights, intelligence, intelligence_admin, system_admin
 from app.core.config import (
     APP_ROLE,
@@ -625,6 +625,7 @@ if IS_ADMIN_APP:
     app.include_router(vkpi_projects.router)
     app.include_router(vkpi_reconciliation.router)
     app.include_router(vkpi_reports.router)
+    app.include_router(vkpi_search.router)
     app.include_router(vkpi_settings.router)
     app.include_router(vkpi_sentiment.router)
     app.include_router(vkpi_sync.router)
