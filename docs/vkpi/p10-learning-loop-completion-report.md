@@ -12,6 +12,7 @@ Scoring changes are intentionally blocked because current feedback data is not r
 P10-0  read-only learning boundary design
 P10-1  service + CLI snapshot
 P10-2  read-only API
+P10-3  recommendation feedback backlog snapshot
 ```
 
 ## Current Snapshot
@@ -55,6 +56,34 @@ scripts/p10_learning_snapshot.py
 
 ```text
 GET /api/admin/vkpi/learning/snapshot
+GET /api/admin/vkpi/learning/recommendation-feedback-backlog
+```
+
+## Recommendation Feedback Backlog
+
+P10-3 adds a read-only backlog for recommendation rows that have no explicit human feedback yet.
+
+```bash
+scripts/p10_recommendation_feedback_backlog.py --limit 100
+scripts/p10_recommendation_feedback_backlog.py --run-uid recrun-af0053af53b32e1a --json
+```
+
+Output guarantees:
+
+```text
+provider_calls=false
+write_db=false
+recommendation outcomes are shown only as context
+no recommendation feedback rows are auto-created
+```
+
+The backlog separates four states:
+
+```text
+capture_rejection_feedback       outcome/status already shows rejection; still requires human write action
+capture_shortlist_feedback       outcome/status already shows shortlist; still requires human write action
+review_positive_business_signal  downstream business outcome exists; requires human interpretation
+needs_human_review               no explicit action or outcome exists
 ```
 
 ## Guarantees
