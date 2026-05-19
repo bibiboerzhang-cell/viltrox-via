@@ -105,6 +105,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "060_vkpi_budget_caps_defaults.sql",
     "061_vkpi_llm_budget_scopes.sql",
     "062_vkpi_content_brain_fields.sql",
+    "063_vkpi_content_brain_budget_scope.sql",
 )
 
 try:
