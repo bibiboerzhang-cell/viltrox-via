@@ -51,6 +51,7 @@ import {
   TeamPreferenceTable,
 } from './settings/SettingsPreferencePanels';
 import { SettingsFeedbackPanel } from './settings/SettingsFeedbackPanel';
+import { SettingsOperatingReviewPanel } from './settings/SettingsOperatingReviewPanel';
 
 interface SettingsPageProps {
   data: VkpiDashboardData;
@@ -774,6 +775,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
           onReload={() => void reloadRbacStatus()}
         />
       </section>
+      <SettingsOperatingReviewPanel apiToken={apiToken} />
       <SettingsFeedbackPanel apiToken={apiToken} />
       <section className="vkpi-card-grid vkpi-card-grid--forms">
         <FeatureFlagsPanel

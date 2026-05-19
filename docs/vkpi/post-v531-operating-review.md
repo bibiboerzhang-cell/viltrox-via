@@ -34,6 +34,18 @@ GET /api/admin/vkpi/operating-review/status?limit=25
 
 Access is gated by `require_tab("vkpi", "read")`.
 
+## Frontend Entry
+
+Managers can read the same snapshot from the System Settings page through the `Operating Review` panel.
+
+The panel is intentionally read-only. It shows:
+
+- Open alert count.
+- Pending competitor signal count.
+- Recommendation and Memory feedback gaps.
+- Current `provider_calls` and `write_db` safety flags.
+- Top work items with source table and source id.
+
 ## Output Contract
 
 ```json

@@ -1427,6 +1427,9 @@ export async function retryCommentIntelligenceRun(token: string, runId: string |
     timeoutMs: 180000,
   }, token);
 }
+export async function getOperatingReviewStatus(token: string, limit = 25) {
+  return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/operating-review/status?limit=${encodeURIComponent(String(limit))}`, {}, token);
+}
 
 export async function listFeatureFlags(token: string) {
   return apiFetch<{ flags?: Row[] }>("/api/admin/vkpi/settings/feature-flags", {}, token);
