@@ -26,6 +26,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from app.core.security import require_admin_async as require_admin, verify_password
 from app.db.connection import get_conn
 from app.api.dependencies.perms import require_system_permission, require_tab
+from app.services.auth.email import email_service_available
 from app.services.audit_log import record_admin_action
 from app.services.system import integrations as int_svc
 from app.services.system import ai_usage as usage_svc
@@ -584,6 +585,20 @@ def adjust_score(
 @router.get("/staff")
 def list_staff(admin=Depends(require_tab("system", "read"))):
     return staff_svc.list_members()
+
+
+@router.get("/staff/invite/capabilities")
+def staff_invite_capabilities(admin=Depends(require_tab("system", "read"))):
+    email_available = email_service_available()
+    allowed_domains = list(getattr(staff_svc, "ALLOWED_STAFF_EMAIL_DOMAINS", ["viltrox.com"]))
+    return {
+        "email_available": email_available,
+        "external_emails_allowed": False,
+        "allowed_domains": allowed_domains,
+        "token_ttl_hours": 1,
+        "manual_activation_link_available": False,
+        "delivery_methods": ["email_magic_link"] if email_available else [],
+    }
 
 
 @router.post("/staff")

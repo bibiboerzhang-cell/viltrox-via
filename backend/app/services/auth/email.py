@@ -15,11 +15,16 @@ from app.services.auth.tokens import create_email_token
 logger = get_logger(__name__)
 
 
+def email_service_available() -> bool:
+    """Return whether SMTP is configured for real email delivery."""
+    return bool(SMTP_HOST and SMTP_USER and SMTP_PASS)
+
+
 def send_email(to: str, subject: str, html_body: str) -> bool:
-    if not SMTP_HOST or not SMTP_USER or not SMTP_PASS:
+    if not email_service_available():
         plain = re.sub(r'<[^>]+>', '', html_body)
         logger.info("EMAIL DEV preview | to=%s | subject=%s | body=%s", to, subject, plain[:500])
-        return True
+        return False
     try:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
