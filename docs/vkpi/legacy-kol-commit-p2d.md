@@ -11,13 +11,13 @@ P2D 第一阶段只做 KOL entity 到 `vkpi_kol_pool` 的写入预演。
 
 ```text
 P2D-1 dry-run planner
+P2D-2 actual commit + rollback refs
 ```
 
 当前未实现：
 
 ```text
-P2D-2 actual commit
-P2D-3 main-table rollback
+P2D-3 rollback execution verification package
 ```
 
 P2D-1 不写：
@@ -28,6 +28,15 @@ vkpi_legacy_import_committed_refs
 kols
 vkpi_projects
 vkpi_cost_ledger
+```
+
+P2D-2 只写：
+
+```text
+vkpi_kol_pool
+vkpi_legacy_import_committed_refs
+vkpi_legacy_import_batches.status / committed_rows / committed_at
+vkpi_legacy_import_logs
 ```
 
 ## 2. 输入
@@ -111,6 +120,31 @@ python3 scripts/audit_vkpi_legacy_excel.py \
 
 当前 `blocked_risk` 未做 admin 决策，即使 include 也不会直接进入普通写入流。
 
+真实 commit 必须显式加 `--commit`：
+
+```bash
+python3 scripts/audit_vkpi_legacy_excel.py \
+  --commit-kol-pool-batch vkpi_20260519033921_b36c6f28ec8d \
+  --commit
+```
+
+不加 `--commit` 时只输出同 dry-run 计划，并提示 `Add --commit to apply P2D commit.`。
+
+回滚预览：
+
+```bash
+python3 scripts/audit_vkpi_legacy_excel.py \
+  --rollback-kol-pool-commit vkpi_20260519033921_b36c6f28ec8d
+```
+
+真实回滚也必须显式加 `--commit`：
+
+```bash
+python3 scripts/audit_vkpi_legacy_excel.py \
+  --rollback-kol-pool-commit vkpi_20260519033921_b36c6f28ec8d \
+  --commit
+```
+
 ## 6. 当前 Dry-run 结果
 
 ```text
@@ -163,7 +197,7 @@ vkpi_kol_pool source_type='legacy_excel_p2d'=0
 
 ## 7. P2D-2 要求
 
-实际 commit 前必须补齐：
+实际 commit 已补齐：
 
 ```text
 1. 单事务写 vkpi_kol_pool + vkpi_legacy_import_committed_refs
@@ -171,5 +205,70 @@ vkpi_kol_pool source_type='legacy_excel_p2d'=0
 3. batch 状态 staged -> committing -> committed
 4. P2D rollback 按 committed_refs 反向恢复
 5. blocked_risk 默认禁止 commit，只有 admin override 后才能处理
-6. commit 后再次 dry-run 应显示 committed_refs_count > 0 并拒绝重复提交
+6. commit 后再次 dry-run 显示 committed_refs_count > 0
+7. 重复 commit 被拒绝
+```
+
+## 8. 当前 Commit 结果
+
+对 batch `vkpi_20260519033921_b36c6f28ec8d` 已执行真实 commit：
+
+```text
+mode=commit
+entity_count=1018
+planned_writes=1012
+insert_count=933
+update_count=79
+skip_count=6
+committed_refs_count=1012
+```
+
+batch 状态：
+
+```text
+batch_status=committed
+committed_rows=1012
+rolled_back_rows=0
+```
+
+committed refs：
+
+```text
+refs.insert.not_rolled_back=933
+refs.update.not_rolled_back=79
+```
+
+主池状态：
+
+```text
+vkpi_kol_pool source_type='legacy_excel_p2d'=1012
+sync_status='needs_human_review'=43
+sync_status='imported'=969
+```
+
+重复提交保护：
+
+```text
+ERROR: batch already has committed refs; rollback before committing again
+```
+
+回滚预览：
+
+```text
+rollback_refs_count=1012
+insert_refs=933
+update_refs=79
+```
+
+## 9. 下一步
+
+P2D-3 应只做回滚演练和验收，不再改 commit 规则：
+
+```text
+1. 在测试 batch 或当前 batch 的备份环境执行 rollback
+2. 验证 insert refs 对应的 vkpi_kol_pool 行删除
+3. 验证 update refs 按 previous_snapshot_json 恢复
+4. 验证 committed_refs rollback_status 全部变 rolled_back
+5. 验证 batch status 变 rolled_back
+6. 再次导入同 file hash 应被 partial unique index 允许
 ```
