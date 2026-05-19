@@ -25,8 +25,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build V-KPI Memory v0 from P2D committed data.")
     parser.add_argument("--batch-uid", default=DEFAULT_BATCH_UID)
     parser.add_argument("--build-legacy", action="store_true", help="Build memory facts from the legacy batch")
+    parser.add_argument("--build-product-families", action="store_true", help="Normalize product memory into product_family entities")
     parser.add_argument("--summary", action="store_true", help="Print memory summary")
     parser.add_argument("--source-ref", default="", help="Optional source_ref prefix for summary")
+    parser.add_argument("--product-families", nargs="?", const="", default=None, help="List normalized product families")
     parser.add_argument("--product-kol-candidates", default="", help="List KOL memory evidence for a product query")
     parser.add_argument("--kol-product-memory", default="", help="Show product memory for a KOL memory entity_uid")
     parser.add_argument("--fit-features", default="", help="Extract deterministic fit features for a KOL memory entity_uid")
@@ -55,6 +57,7 @@ def _print_summary(result: dict) -> None:
 def _print_candidate_result(result: dict) -> None:
     print(f"product_query={result.get('product_query', '')}")
     print(f"matched_products={len(result.get('matched_products') or [])}")
+    print(f"matched_families={len(result.get('matched_families') or [])}")
     print(f"total_candidates={int(result.get('total') or 0)}")
     for idx, item in enumerate(result.get("items") or [], start=1):
         entity = item.get("entity") or {}
@@ -69,6 +72,21 @@ def _print_candidate_result(result: dict) -> None:
             f"risk_flags={int(features.get('risk_flag_count') or 0)} "
             f"sync_status={features.get('sync_status', '')}"
         )
+
+
+def _print_product_families(result: dict) -> None:
+    print(f"query={result.get('query', '')}")
+    print(f"total_families={int(result.get('total_families') or 0)}")
+    print(f"matched_families={int(result.get('matched_families') or 0)}")
+    for idx, item in enumerate(result.get("items") or [], start=1):
+        print(
+            f"{idx}. family_uid={item.get('entity_uid', '')} "
+            f"name={item.get('display_name', '')} "
+            f"members={int(item.get('member_count') or 0)} "
+            f"cooperations={int(item.get('cooperation_count') or 0)}"
+        )
+        for member in (item.get("members") or [])[:3]:
+            print(f"   - product={member.get('display_name', '')} links={int(member.get('link_count') or 0)}")
 
 
 def _print_kol_memory(result: dict) -> None:
@@ -116,7 +134,11 @@ def _print_fit_features(result: dict) -> None:
 def main() -> int:
     args = parse_args()
     try:
-        if args.product_kol_candidates:
+        if args.build_product_families:
+            result = memory.build_product_family_memory()
+        elif args.product_families is not None:
+            result = memory.product_family_summary(query=args.product_families, limit=args.limit)
+        elif args.product_kol_candidates:
             result = memory.product_kol_candidates(product_query=args.product_kol_candidates, limit=args.limit)
         elif args.kol_product_memory:
             result = memory.kol_product_memory(args.kol_product_memory, limit=args.limit)
@@ -131,6 +153,11 @@ def main() -> int:
             result = memory.summary(source_ref=source_ref)
         if args.json:
             print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        elif args.build_product_families or args.product_families is not None:
+            _print_product_families(result)
+            if result.get("build_counts"):
+                for key, value in sorted((result.get("build_counts") or {}).items()):
+                    print(f"build.{key}={int(value)}")
         elif args.product_kol_candidates:
             _print_candidate_result(result)
         elif args.kol_product_memory:

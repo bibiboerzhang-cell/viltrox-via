@@ -56,6 +56,16 @@ def memory_product_kol_candidates(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get("/memory/product-families")
+def memory_product_families(
+    query: str = Query(default=""),
+    limit: int = Query(default=100, ge=1, le=500),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    del staff
+    return memory.product_family_summary(query=query, limit=limit)
+
+
 @router.get("/memory/entities/{entity_uid}/product-memory")
 def memory_entity_product_memory(
     entity_uid: str,
@@ -94,6 +104,17 @@ def build_from_legacy(
     del staff
     try:
         return memory.build_memory_from_legacy_batch(batch_uid)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/memory/build-product-families")
+def build_product_families(
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    del staff
+    try:
+        return memory.build_product_family_memory()
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
