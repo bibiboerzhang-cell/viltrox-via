@@ -351,14 +351,133 @@ top_score=93
 
 这一步仍然不是推荐。它只是把同一产品的历史合作证据合并成更稳定的 Memory 输入。
 
-## 9. P3 后续
+## 9. P3-4 Market Memory v0
 
-P3-4 可以继续做：
+P3-4 已把 legacy staging 里的市场信号写入 Memory，不写主业务表，不生成推荐结果。
+
+输入：
+
+```text
+vkpi_legacy_launch_plans_staging
+vkpi_legacy_official_content_staging
+vkpi_legacy_official_materials_staging
+vkpi_legacy_voc_alerts_staging
+```
+
+新增 Memory entity：
+
+```text
+entity_type=market_topic
+entity_type=official_account
+```
+
+新增 fact：
+
+```text
+fact_type=market_signal
+signal_type=launch_plan
+signal_type=official_content
+signal_type=official_material
+signal_type=voc_alert
+```
+
+新增 link：
+
+```text
+link_type=official_account_published_product
+source_entity=official_account
+target_entity=product_family
+```
+
+落点规则：
+
+```text
+能归一到 product_family 的信号挂 product_family。
+不能归一的活动 / VOC / 模糊产品信号挂 market_topic。
+官媒账号单独成为 official_account，并通过 link 回连 product_family。
+review_status != ready 的行不写入 Market Memory。
+```
+
+新增 API：
+
+```text
+GET  /api/admin/vkpi/memory/market-signals
+POST /api/admin/vkpi/memory/build-market-memory/{batch_uid}
+```
+
+新增 CLI：
+
+```bash
+python3 scripts/build_vkpi_memory.py \
+  --build-market-memory \
+  --batch-uid vkpi_20260519033921_b36c6f28ec8d
+
+python3 scripts/build_vkpi_memory.py \
+  --market-signals "AF 35mm" \
+  --limit 8
+
+python3 scripts/build_vkpi_memory.py \
+  --market-signals "产品相关" \
+  --signal-type voc_alert \
+  --limit 5
+```
+
+构建结果：
+
+```text
+total_signals=2486
+signals.launch_plan=52
+signals.official_content=2168
+signals.official_material=229
+signals.voc_alert=37
+targets.product_family=1840
+targets.market_topic=646
+links.official_account_published_product=1557
+entities.official_account=63
+```
+
+解释：
+
+```text
+official_content staging 总行数 2202，其中 2168 行 ready 写入 Market Memory。
+official_materials staging 总行数 241，其中 229 行 ready 写入 Market Memory。
+剩余 review / validation_error 行继续留在 P2B review queue，不强行进入 Memory。
+```
+
+查询验证：
+
+```text
+query=AF 35mm
+total_returned=8
+target=product_family:AF 35mm F1.2 LAB
+target=product_family:AF 35mm F1.8 EVO
+
+query=产品相关
+signal_type=voc_alert
+target=market_topic:voc_alert: 产品相关
+target=product_family:AF 85mm F1.8
+target=product_family:AF 135mm F1.8
+```
+
+P3-4 后，P4 可以同时读取：
+
+```text
+KOL 历史合作 Memory
+Product Family Memory
+Launch / Official Content / Official Material / VOC Market Signal
+Risk / review 降权信号
+```
+
+这一步仍然不是推荐，只是把市场环境和产品动作纳入 Memory。
+
+## 10. P3 后续
+
+P3-5 可以继续做：
 
 ```text
 1. Memory feedback 后台列表和处理状态
-2. Market memory v0，从 launch_plan / VOC / official content 读市场信号
-3. Product family 人工 override 表或配置，处理 97 条 unclassified
+2. Product family 人工 override 表或配置，处理 97 条 unclassified
+3. P4 推荐 v0 dry-run，只读 Memory + Budget Guard，不直接跑 provider
 ```
 
 P4 推荐前必须坚持：
