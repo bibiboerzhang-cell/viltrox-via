@@ -260,15 +260,111 @@ insert_refs=933
 update_refs=79
 ```
 
-## 9. 下一步
+## 9. P2D-3 Rollback Drill
 
-P2D-3 应只做回滚演练和验收，不再改 commit 规则：
+P2D-3 已完成真实 rollback -> recommit 演练。演练入口：
+
+```bash
+python3 scripts/verify_vkpi_p2d_rollback_drill.py
+```
+
+默认只检查当前状态和 rollback preview。真实执行必须显式：
+
+```bash
+python3 scripts/verify_vkpi_p2d_rollback_drill.py \
+  --execute \
+  --commit \
+  --force-rollback
+```
+
+### 9.1 Window / Force
+
+当前 batch 首次 commit 的 `rollback_until` 已经过期。普通 rollback 被拒绝：
 
 ```text
-1. 在测试 batch 或当前 batch 的备份环境执行 rollback
-2. 验证 insert refs 对应的 vkpi_kol_pool 行删除
-3. 验证 update refs 按 previous_snapshot_json 恢复
-4. 验证 committed_refs rollback_status 全部变 rolled_back
-5. 验证 batch status 变 rolled_back
-6. 再次导入同 file hash 应被 partial unique index 允许
+ERROR: rollback not allowed: rollback_window_expired
+```
+
+使用 `--force-rollback` 完成应急回滚演练：
+
+```text
+mode=rollback
+rollback_refs_count=1012
+insert_refs=933
+update_refs=79
+rollback_allowed=true
+rollback_forced=true
+rolled_back_refs=1012
+```
+
+P2D 时间戳已修正为 UTC offset 写入，避免 TIMESTAMPTZ 被 Postgres 按本地时区解释：
+
+```text
+rollback_until=2026-05-19T04:53:19Z
+rollback_window_reason=ok
+```
+
+### 9.2 Rollback 验收
+
+rollback 后状态：
+
+```text
+after_rollback.batch_status=rolled_back
+after_rollback.pool_total=90
+after_rollback.pool_legacy_source=0
+after_rollback.refs.insert.rolled_back=933
+after_rollback.refs.update.rolled_back=79
+after_rollback.update_restore_checked=79
+after_rollback.update_restore_mismatches=0
+```
+
+解释：
+
+```text
+933 个 insert refs 对应的 vkpi_kol_pool 行已删除。
+79 个 update refs 已按 previous_snapshot_json 还原。
+source_type='legacy_excel_p2d' 回到 0。
+```
+
+### 9.3 Recommit 验收
+
+rollback 后重新 commit 成功：
+
+```text
+recommit.committed_refs_count=1012
+recommit.committed_refs_total=1945
+```
+
+最终主表状态：
+
+```text
+final.batch_status=committed
+final.pool_total=1023
+final.pool_legacy_source=1012
+final.pool_imported=969
+final.pool_needs_human_review=43
+final.refs.insert.not_rolled_back=933
+final.refs.insert.rolled_back=933
+final.refs.update.not_rolled_back=79
+```
+
+`committed_refs_total=1945` 是预期结果：
+
+```text
+第一轮 insert refs 回滚后保留 933 条 rolled_back 审计记录。
+第二轮 recommit 生成新的 933 条 insert active refs。
+79 条 update refs 因 target_id 不变，使用 upsert 从 rolled_back 重新置为 not_rolled_back。
+当前有效 refs 仍然是 1012。
+```
+
+### 9.4 最终状态
+
+P2D 最终应保持：
+
+```text
+vkpi_kol_pool count=1023
+source_type='legacy_excel_p2d'=1012
+batch.status=committed
+active committed_refs=1012
+rollback preview 可用
 ```
