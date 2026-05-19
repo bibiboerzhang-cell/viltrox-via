@@ -200,6 +200,7 @@ PLATFORM_ALIASES = {
     "facebook": "facebook",
     "fb": "facebook",
     "reddit": "reddit",
+    "discord": "discord",
     "twitter": "x",
     "x": "x",
     "weibo": "weibo",

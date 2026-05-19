@@ -434,6 +434,41 @@ def _split_name_platform(value: str) -> tuple[str, str]:
     return "", _text(bracket.group(1)) if bracket else ""
 
 
+def _is_placeholder_token(value: str) -> bool:
+    raw = _text(value)
+    return not raw or raw.startswith("<|") or raw.endswith("|>")
+
+
+def _split_product_platform_account(value: str) -> tuple[str, str, str]:
+    parts = [part.strip() for part in _text(value).split("-") if part.strip()]
+    if not parts:
+        return "", "", ""
+
+    platform = ""
+    platform_index = -1
+    for index, part in enumerate(parts):
+        candidate = _stage_platform(part)
+        if candidate:
+            platform = candidate
+            platform_index = index
+            break
+
+    account = ""
+    for index in range(len(parts) - 1, -1, -1):
+        if index == platform_index or _is_placeholder_token(parts[index]):
+            continue
+        account = parts[index]
+        break
+
+    product = ""
+    for index, part in enumerate(parts):
+        if index == platform_index or part == account or _is_placeholder_token(part):
+            continue
+        product = part
+        break
+    return product, platform, account
+
+
 def _stage_platform(value: str, fallback_text: str = "") -> str:
     normalized = _normalize_platform(value, fallback_text)
     if normalized:
@@ -613,9 +648,9 @@ def _build_launch_plan(item: dict[str, Any]) -> StageRecord:
 def _build_official_content(item: dict[str, Any]) -> StageRecord:
     raw = item["raw"]
     product_platform_account = _pick(raw, "产品-平台-账号")
-    parts = [part.strip() for part in product_platform_account.split("-") if part.strip()]
-    account = _first_nonempty(_pick(raw, "账号名称", "官方账号"), parts[-1] if len(parts) >= 3 else "")
-    platform = _stage_platform(_first_nonempty(_pick(raw, "发布平台", "平台"), parts[-2] if len(parts) >= 3 else ""), product_platform_account)
+    product_hint, platform_hint, account_hint = _split_product_platform_account(product_platform_account)
+    account = _first_nonempty(_pick(raw, "账号名称", "官方账号"), account_hint)
+    platform = _stage_platform(_first_nonempty(_pick(raw, "发布平台", "平台"), platform_hint), product_platform_account)
     values = {
         "official_account": account,
         "platform": platform,
@@ -623,7 +658,7 @@ def _build_official_content(item: dict[str, Any]) -> StageRecord:
         "publish_date": _parse_excel_date(_pick(raw, "预计/实际发布时间", "发布时间", "产品发布时间"), datetime_value=True),
         "content_type": _pick(raw, "内容类型", "内容格式"),
         "title": _pick(raw, "内容概述", "内容描述", "标题"),
-        "product": _first_nonempty(_pick(raw, "产品型号"), parts[0] if parts else ""),
+        "product": _first_nonempty(_pick(raw, "产品型号"), product_hint),
         "link": _pick(raw, "发布链接", "下载/预览链接"),
         "status": _pick(raw, "状态", "发布状态", "制作进度"),
         "owner": _pick(raw, "运营人/发帖人", "对接/协作人", "负责人"),
@@ -678,6 +713,10 @@ def _build_risk_watchlist(item: dict[str, Any]) -> StageRecord:
     if not identity["platform"] or not identity["normalized_handle"]:
         reasons.append("missing_kol_identity")
     return StageRecord("risk_watchlist", item["sheet"], int(item["row_number"]), raw, values, reasons)
+
+
+def _is_risk_marker_row(raw: dict[str, str]) -> bool:
+    return not _pick(raw, "红人姓名/账号名") and not _pick(raw, "频道/主页链接")
 
 
 def _build_voc_alert(item: dict[str, Any]) -> StageRecord:
@@ -737,6 +776,8 @@ def _prepare_records(path: Path, *, sheet_name: str = "", max_rows: int = 0) -> 
             continue
         builder = BUILDERS[pipeline]
         for item in rows:
+            if pipeline == "risk_watchlist" and _is_risk_marker_row(item.get("raw") or {}):
+                continue
             try:
                 records.append(builder(item))
             except Exception as exc:
