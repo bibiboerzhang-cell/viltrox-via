@@ -138,3 +138,105 @@ profile_missing_review 先补主档或人工确认。
 risk_review            只能带风险提示进入候选，不自动合作。
 blocked_risk           默认不 commit，需要 admin override。
 ```
+
+## 7. P2C-2 Review Decisions
+
+P2C-2 在 `vkpi_legacy_kol_entities` 上记录人工或批量 review 决策。决策只写字段，不移动 `vkpi_legacy_kol_entity_refs`：
+
+```text
+resolution_decision      merge_with / keep_separate / drop / escalate
+merge_target_entity_id   merge_with 的目标 entity id
+merge_target_uid         merge_with 的目标 entity_uid
+decision_reason          drop 必填
+decision_note            escalate 必填
+decided_by               cli 或 bulk 来源
+decided_at               决策时间
+```
+
+`merge_with` 只记录目标，不物理转移 refs。P2D dry-run/commit 时再折叠 merge 决策，这样 staging 层仍可回退、可审计。
+
+## 8. Review CLI
+
+列待处理项：
+
+```bash
+python3 scripts/audit_vkpi_legacy_excel.py \
+  --list-pending-reviews vkpi_20260519033921_b36c6f28ec8d
+```
+
+查看单个 entity：
+
+```bash
+python3 scripts/audit_vkpi_legacy_excel.py \
+  --show-entity legacy_kol_xxxxx
+```
+
+单条决策默认 dry-run，必须加 `--commit` 才落库：
+
+```bash
+python3 scripts/audit_vkpi_legacy_excel.py \
+  --decide-resolution legacy_kol_xxxxx \
+  --action keep_separate
+
+python3 scripts/audit_vkpi_legacy_excel.py \
+  --decide-resolution legacy_kol_xxxxx \
+  --action merge_with \
+  --target legacy_kol_yyyyy \
+  --commit
+```
+
+批量决策同样默认 dry-run：
+
+```bash
+python3 scripts/audit_vkpi_legacy_excel.py \
+  --bulk-decide vkpi_20260519033921_b36c6f28ec8d \
+  --weak-label profile_only_review \
+  --action keep_separate
+```
+
+查看进度：
+
+```bash
+python3 scripts/audit_vkpi_legacy_excel.py \
+  --review-progress vkpi_20260519033921_b36c6f28ec8d
+```
+
+## 9. blocked_risk 通道
+
+默认 `--list-pending-reviews` 不包含 `blocked_risk`。必须显式查看：
+
+```bash
+python3 scripts/audit_vkpi_legacy_excel.py \
+  --list-pending-reviews vkpi_20260519033921_b36c6f28ec8d \
+  --weak-label blocked_risk
+```
+
+`blocked_risk` 只能 `drop` 或 `escalate`，不能 `keep_separate`，也不能 `merge_with`。这是 P2D 前的硬规则，避免高风险 KOL 被普通 review 流程误放行。
+
+## 10. 当前 Review 决策结果
+
+对 batch `vkpi_20260519033921_b36c6f28ec8d` 已执行：
+
+```text
+profile_only_review       keep_separate   294
+profile_missing_review    escalate         36
+risk_review               escalate          7
+blocked_risk              NULL              6
+ready                     NULL            675
+```
+
+验收状态：
+
+```text
+Pending (excluding blocked_risk): 0
+Blocked pending: 6
+```
+
+说明：
+
+```text
+profile_only_review 作为独立 KOL 保留，P2D 可进入候选池。
+profile_missing_review 缺主档，先 escalate，P2D 需要单独标记。
+risk_review 无业务逐条判断时先 escalate，保留风险确认入口。
+blocked_risk 6 条暂不决策，后续只能 admin drop/escalate。
+```
