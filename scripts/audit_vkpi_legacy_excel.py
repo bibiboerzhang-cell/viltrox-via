@@ -38,7 +38,14 @@ from app.services.vkpi.legacy_import_staging import (  # noqa: E402
     rollback_staging_batch,
     stage_legacy_file,
 )
-from app.services.vkpi.legacy_kol_commit import dry_run_kol_pool_commit, format_kol_pool_commit_plan  # noqa: E402
+from app.services.vkpi.legacy_kol_commit import (  # noqa: E402
+    commit_kol_pool_batch,
+    dry_run_kol_pool_commit,
+    format_kol_pool_commit_plan,
+    format_kol_pool_rollback,
+    preview_kol_pool_rollback,
+    rollback_kol_pool_commit,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -64,6 +71,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bulk-decide", default="", help="Record one decision for all pending entities with --weak-label in a batch_uid")
     parser.add_argument("--review-progress", default="", help="Print P2C review-decision progress for a batch_uid")
     parser.add_argument("--dry-run-kol-pool-commit", default="", help="Plan P2D writes into vkpi_kol_pool without mutating main tables")
+    parser.add_argument("--commit-kol-pool-batch", default="", help="Commit P2D writes into vkpi_kol_pool; requires --commit")
+    parser.add_argument("--rollback-kol-pool-commit", default="", help="Rollback P2D vkpi_kol_pool writes; requires --commit")
     parser.add_argument("--action", default="", help="Decision action: merge_with, keep_separate, drop, or escalate")
     parser.add_argument("--target", default="", help="Target entity_uid for merge_with decisions")
     parser.add_argument("--reason", default="", help="Decision reason; required for drop")
@@ -86,6 +95,8 @@ def main() -> int:
         or args.bulk_decide
         or args.review_progress
         or args.dry_run_kol_pool_commit
+        or args.commit_kol_pool_batch
+        or args.rollback_kol_pool_commit
     ):
         try:
             ensure_legacy_staging_schema()
@@ -144,6 +155,33 @@ def main() -> int:
                         )
                     )
                 )
+            elif args.commit_kol_pool_batch:
+                if not args.commit:
+                    print(
+                        format_kol_pool_commit_plan(
+                            dry_run_kol_pool_commit(
+                                args.commit_kol_pool_batch,
+                                include_blocked=bool(args.include_blocked),
+                                sample_limit=max(0, int(args.limit or 0)),
+                            )
+                        )
+                    )
+                    print("Add --commit to apply P2D commit.")
+                else:
+                    print(
+                        format_kol_pool_commit_plan(
+                            commit_kol_pool_batch(
+                                args.commit_kol_pool_batch,
+                                include_blocked=bool(args.include_blocked),
+                                sample_limit=max(0, int(args.limit or 0)),
+                            )
+                        )
+                    )
+            elif args.rollback_kol_pool_commit:
+                if not args.commit:
+                    print(format_kol_pool_rollback(preview_kol_pool_rollback(args.rollback_kol_pool_commit, sample_limit=max(0, int(args.limit or 0)))))
+                else:
+                    print(format_kol_pool_rollback(rollback_kol_pool_commit(args.rollback_kol_pool_commit, sample_limit=max(0, int(args.limit or 0)))))
             elif args.inspect_batch:
                 print(format_batch_summary(inspect_batch(args.inspect_batch)))
             else:
