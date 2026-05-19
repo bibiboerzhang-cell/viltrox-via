@@ -32,7 +32,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=50, help="Preview item limit, default 50, max 500")
     parser.add_argument("--json-out", default="", help="Write JSON preview to this path")
     parser.add_argument("--md-out", default="", help="Write Markdown report to this path")
-    parser.add_argument("--dry-run", action="store_true", default=True, help="P6-2 is always dry-run")
+    parser.add_argument("--dry-run", action="store_true", default=True, help="Default mode; no analysis fields are written")
+    parser.add_argument("--commit-analysis", action="store_true", help="P6-4: write deterministic analysis fields to posts/media")
+    parser.add_argument("--confirm", action="store_true", help="Required with --commit-analysis")
+    parser.add_argument("--force", action="store_true", help="Re-analyze rows already marked done")
     parser.add_argument("--json", action="store_true", help="Print full JSON payload to stdout")
     return parser.parse_args()
 
@@ -47,6 +50,8 @@ def main() -> int:
     try:
         _reject_forbidden_flags(sys.argv[1:])
         args = parse_args()
+        if args.commit_analysis and not args.confirm:
+            raise ValueError("--commit-analysis requires --confirm")
         payload = build_content_brain_preview(
             platform=args.platform,
             account_id=args.account_id,
@@ -56,6 +61,8 @@ def main() -> int:
             limit=args.limit,
             json_out=args.json_out,
             md_out=args.md_out,
+            commit_analysis=args.commit_analysis,
+            force=args.force,
         )
         if args.json:
             print(json.dumps({key: value for key, value in payload.items() if key != "markdown"}, ensure_ascii=False, indent=2, default=str))

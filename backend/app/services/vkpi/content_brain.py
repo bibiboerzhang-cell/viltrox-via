@@ -279,6 +279,7 @@ def _analyze_post(post: dict[str, Any], media_items: list[dict[str, Any]]) -> di
         "account_display_name": post.get("account_display_name"),
         "post_url": post.get("post_url"),
         "published_at": post.get("published_at"),
+        "source_analysis_status": post.get("analysis_status") or "pending",
         "analysis_version": ANALYSIS_VERSION,
         "analysis_status": "previewed",
         "confidence": round(confidence, 3),
@@ -301,6 +302,95 @@ def _analyze_post(post: dict[str, Any], media_items: list[dict[str, Any]]) -> di
     }
 
 
+def _persist_analysis(items: list[dict[str, Any]], *, force: bool = False) -> dict[str, Any]:
+    conn = get_conn()
+    now = _utcnow()
+    posts_updated = 0
+    media_updated = 0
+    skipped_done = 0
+    try:
+        for item in items:
+            post_id = _safe_int(item.get("post_id"))
+            if not post_id:
+                continue
+            source_status = _text(item.get("source_analysis_status")).lower()
+            if source_status == "done" and not force:
+                skipped_done += 1
+                continue
+            conn.execute(
+                """
+                UPDATE vkpi_industry_posts
+                SET content_tags_json=?,
+                    product_intents_json=?,
+                    risk_flags_json=?,
+                    brand_mentions_json=?,
+                    ai_summary=?,
+                    analyzed_at=?,
+                    analysis_version=?,
+                    analysis_status=?,
+                    analysis_error=?
+                WHERE id=?
+                """,
+                (
+                    json.dumps(item.get("content_tags_json") or [], ensure_ascii=False, default=str),
+                    json.dumps(item.get("product_intents_json") or [], ensure_ascii=False, default=str),
+                    json.dumps(item.get("risk_flags_json") or [], ensure_ascii=False, default=str),
+                    json.dumps(item.get("brand_mentions_json") or [], ensure_ascii=False, default=str),
+                    item.get("ai_summary") or "",
+                    now,
+                    ANALYSIS_VERSION,
+                    "done",
+                    "",
+                    post_id,
+                ),
+            )
+            posts_updated += 1
+            for media in item.get("media_preview") or []:
+                media_id = _safe_int(media.get("media_id"))
+                if not media_id:
+                    continue
+                conn.execute(
+                    """
+                    UPDATE vkpi_industry_post_media
+                    SET content_tags_json=?,
+                        product_intents_json=?,
+                        risk_flags_json=?,
+                        brand_mentions_json=?,
+                        ai_summary=?,
+                        analyzed_at=?,
+                        analysis_version=?,
+                        analysis_status=?,
+                        analysis_error=?,
+                        updated_at=?
+                    WHERE id=?
+                    """,
+                    (
+                        json.dumps(item.get("content_tags_json") or [], ensure_ascii=False, default=str),
+                        json.dumps(item.get("product_intents_json") or [], ensure_ascii=False, default=str),
+                        json.dumps(item.get("risk_flags_json") or [], ensure_ascii=False, default=str),
+                        json.dumps(item.get("brand_mentions_json") or [], ensure_ascii=False, default=str),
+                        f"Media asset under post #{post_id}: {item.get('ai_summary') or ''}"[:1000],
+                        now,
+                        ANALYSIS_VERSION,
+                        "done",
+                        "",
+                        now,
+                        media_id,
+                    ),
+                )
+                media_updated += 1
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return {
+        "posts_updated": posts_updated,
+        "media_updated": media_updated,
+        "skipped_done": skipped_done,
+        "applied_at": now,
+    }
+
+
 def _write_outputs(payload: dict[str, Any], *, json_out: str = "", md_out: str = "") -> None:
     if json_out:
         Path(json_out).write_text(_json({key: value for key, value in payload.items() if key != "markdown"}), encoding="utf-8")
@@ -319,6 +409,7 @@ def _markdown(payload: dict[str, Any]) -> str:
         f"Budget allowed: {str(bool((payload.get('budget_guard') or {}).get('allowed'))).lower()}",
         f"Provider calls: {str(bool(payload.get('provider_calls'))).lower()}",
         f"Writes enabled: {str(bool(payload.get('writes_enabled'))).lower()}",
+        f"Write mode: {(payload.get('write_result') or {}).get('mode', 'dry_run')}",
         "",
         "## Tag Distribution",
         "",
@@ -358,6 +449,8 @@ def build_content_brain_preview(
     limit: int = 50,
     json_out: str = "",
     md_out: str = "",
+    commit_analysis: bool = False,
+    force: bool = False,
 ) -> dict[str, Any]:
     safe_limit = _safe_limit(limit)
     cost_ok = check_budget(BUDGET_SCOPE, 0.0)
@@ -376,8 +469,12 @@ def build_content_brain_preview(
         risk_counts.update(flag.get("flag_key") for flag in item.get("risk_flags_json") or [] if flag.get("flag_key"))
         brand_counts.update(brand.get("brand") for brand in item.get("brand_mentions_json") or [] if brand.get("brand"))
 
+    write_result = {"mode": "dry_run", "posts_updated": 0, "media_updated": 0, "skipped_done": 0}
+    if commit_analysis:
+        write_result = {"mode": "commit_analysis", **_persist_analysis(items, force=force)}
+
     payload = {
-        "scenario": "p6_content_brain_dry_run",
+        "scenario": "p6_content_brain_commit_analysis" if commit_analysis else "p6_content_brain_dry_run",
         "analysis_version": ANALYSIS_VERSION,
         "generated_at": _utcnow(),
         "filters": {
@@ -387,6 +484,7 @@ def build_content_brain_preview(
             "query": query,
             "include_media": bool(include_media),
             "limit": safe_limit,
+            "force": bool(force),
         },
         "budget_guard": {
             "scope": BUDGET_SCOPE,
@@ -395,8 +493,9 @@ def build_content_brain_preview(
             "estimated_cost_usd": 0.0,
             "recorded_cost": False,
         },
-        "writes_enabled": False,
+        "writes_enabled": bool(commit_analysis),
         "provider_calls": False,
+        "write_result": write_result,
         "posts_evaluated": len(posts),
         "items": items,
         "tag_distribution": dict(sorted(tag_counts.items())),
@@ -419,6 +518,10 @@ def format_preview_summary(payload: dict[str, Any]) -> str:
         f"budget_allowed={str(bool(budget.get('allowed'))).lower()}",
         f"provider_calls={str(bool(payload.get('provider_calls'))).lower()}",
         f"writes_enabled={str(bool(payload.get('writes_enabled'))).lower()}",
+        f"write_mode={(payload.get('write_result') or {}).get('mode', 'dry_run')}",
+        f"posts_updated={int((payload.get('write_result') or {}).get('posts_updated') or 0)}",
+        f"media_updated={int((payload.get('write_result') or {}).get('media_updated') or 0)}",
+        f"skipped_done={int((payload.get('write_result') or {}).get('skipped_done') or 0)}",
         f"tag_types={len(payload.get('tag_distribution') or {})}",
         f"risk_types={len(payload.get('risk_distribution') or {})}",
     ])
