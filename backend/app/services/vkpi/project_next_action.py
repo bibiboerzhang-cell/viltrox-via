@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from app.db.connection import get_conn
+from app.services.vkpi import llm_gateway
 from app.services.vkpi.budget_guard import check_budget, get_budget_status
 from app.services.vkpi.new_launch_match import (
     BUDGET_SCOPE,
@@ -22,6 +23,7 @@ from app.services.vkpi.new_launch_match import (
 
 
 SCENARIO = "project_next_action"
+REASON_BUDGET_SCOPE = "cron:p4_recommendation_reasons"
 
 
 def _utcnow() -> datetime:
@@ -218,6 +220,96 @@ def _risk_or_blocker(project: dict[str, Any], counts: dict[str, int]) -> tuple[i
     return min(10, score), blockers
 
 
+def _deterministic_reason(item: dict[str, Any]) -> dict[str, str]:
+    pro = item.get("evidence_pro") or []
+    con = item.get("evidence_con") or []
+    strongest = pro[0].get("detail") if pro else item.get("reason") or "Project has reviewable workflow evidence"
+    concern = con[0].get("detail") if con else "No major blocker in current workflow evidence"
+    return {
+        "short_reason": f"Next action is {item.get('suggested_action')} because {strongest}.",
+        "execution_note": "Open the project and confirm the evidence before taking action.",
+        "caution_note": concern,
+    }
+
+
+def _reason_prompt(item: dict[str, Any]) -> str:
+    compact = {
+        "scenario": SCENARIO,
+        "project": {
+            "project_id": item.get("project_id"),
+            "project_name": item.get("project_name"),
+            "current_stage": item.get("current_stage"),
+            "assigned_staff_id": item.get("assigned_staff_id"),
+            "suggested_action": item.get("suggested_action"),
+            "priority": item.get("priority"),
+            "score": item.get("score"),
+        },
+        "score_breakdown": item.get("score_breakdown"),
+        "workflow_counts": item.get("workflow_counts"),
+        "evidence_pro": [
+            {"type": row.get("type"), "detail": row.get("detail"), "source_id": row.get("source_id")}
+            for row in (item.get("evidence_pro") or [])[:5]
+        ],
+        "evidence_con": [
+            {"type": row.get("type"), "detail": row.get("detail"), "severity": row.get("severity")}
+            for row in (item.get("evidence_con") or [])[:5]
+        ],
+    }
+    return (
+        "Write a concise V-KPI project next-action reason as strict JSON with keys "
+        "short_reason, execution_note, caution_note. Do not invent facts or imply an action was executed. "
+        "Use only the evidence below. No markdown.\n\n"
+        + json.dumps(compact, ensure_ascii=False, default=_json_default)
+    )
+
+
+def _parse_reason_text(text: str) -> dict[str, str] | None:
+    raw = _text(text)
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return {
+        "short_reason": _text(parsed.get("short_reason")),
+        "execution_note": _text(parsed.get("execution_note")),
+        "caution_note": _text(parsed.get("caution_note")),
+    }
+
+
+def _attach_reason(item: dict[str, Any]) -> None:
+    response = llm_gateway.invoke(
+        _reason_prompt(item),
+        purpose="p4_recommendation_reasons",
+        max_output_tokens=220,
+        cost_tag=REASON_BUDGET_SCOPE,
+        metadata={
+            "scenario": SCENARIO,
+            "project_id": item.get("project_id"),
+            "suggested_action": item.get("suggested_action"),
+            "rank": item.get("rank"),
+        },
+    )
+    parsed = _parse_reason_text(str(response.get("text") or "")) if response.get("status") == "success" else None
+    if parsed and all(parsed.values()):
+        reason = parsed
+        mode = "llm"
+    else:
+        reason = _deterministic_reason(item)
+        mode = "deterministic_fallback"
+    item["recommendation_reason"] = {
+        "mode": mode,
+        "provider": response.get("provider") or "rule_v0",
+        "model": response.get("model") or "rule_v0",
+        "status": response.get("status") or "",
+        "fallback_reason": response.get("reason") or "",
+        **reason,
+    }
+
+
 def build_project_next_action_preview(
     *,
     project_id: int = 0,
@@ -229,6 +321,8 @@ def build_project_next_action_preview(
     limit: int = 50,
     json_out: str = "",
     md_out: str = "",
+    with_llm_reasons: bool = False,
+    reason_limit: int = 10,
 ) -> dict[str, Any]:
     safe_limit = _safe_limit(limit)
     cost_ok = check_budget(BUDGET_SCOPE, 0.0)
@@ -385,6 +479,8 @@ def build_project_next_action_preview(
         "markdown_display_count": len(markdown_display),
         "top_score": returned[0]["score"] if returned else 0,
         "median_score": median,
+        "llm_reasons_requested": bool(with_llm_reasons),
+        "reasons_attached": 0,
     }
     payload = {
         "scenario": SCENARIO,
@@ -410,6 +506,12 @@ def build_project_next_action_preview(
         "items": returned,
         "markdown_items": markdown_display,
     }
+    if with_llm_reasons:
+        reasons_attached = 0
+        for item in returned[: max(0, min(int(reason_limit or 0), len(returned)))]:
+            _attach_reason(item)
+            reasons_attached += 1
+        summary["reasons_attached"] = reasons_attached
     _json_write(json_out, {key: value for key, value in payload.items() if key != "markdown_items"})
     _markdown_write(md_out, payload)
     return payload
@@ -435,6 +537,7 @@ def render_markdown(payload: dict[str, Any]) -> str:
         f"- Excluded low evidence: {summary.get('excluded_low_evidence', 0)}",
         f"- Top score: {summary.get('top_score', 0)}",
         f"- Median score: {summary.get('median_score', 0)}",
+        f"- Recommendation reasons attached: {summary.get('reasons_attached', 0)}",
         "",
         "## Score Distribution",
         "",
@@ -468,6 +571,18 @@ def render_markdown(payload: dict[str, Any]) -> str:
                 lines.append(f"- {evidence.get('type', '')}: {evidence.get('detail', '')} (severity={evidence.get('severity', '')})")
         else:
             lines.append("- None")
+        reason = item.get("recommendation_reason") or {}
+        if reason:
+            lines.extend(
+                [
+                    "",
+                    "**Recommendation reason:**",
+                    f"- Short reason: {reason.get('short_reason', '')}",
+                    f"- Execution note: {reason.get('execution_note', '')}",
+                    f"- Caution note: {reason.get('caution_note', '')}",
+                    f"- Reason mode: {reason.get('mode', '')} ({reason.get('provider', '')}/{reason.get('status', '')})",
+                ]
+            )
         lines.extend(
             [
                 "",
@@ -508,6 +623,8 @@ def format_preview_summary(payload: dict[str, Any]) -> str:
         f"excluded_low_evidence={summary.get('excluded_low_evidence', 0)}",
         f"top_score={summary.get('top_score', 0)}",
         f"median_score={summary.get('median_score', 0)}",
+        f"llm_reasons_requested={str(bool(summary.get('llm_reasons_requested'))).lower()}",
+        f"reasons_attached={summary.get('reasons_attached', 0)}",
     ]
     for idx, item in enumerate((payload.get("items") or [])[:5], start=1):
         lines.append(
