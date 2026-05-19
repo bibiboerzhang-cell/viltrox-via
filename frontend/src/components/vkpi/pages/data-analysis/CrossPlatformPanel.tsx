@@ -27,6 +27,7 @@ import { FilterDrawer } from './drawers/FilterDrawer';
 import { PostDetailDrawer } from './drawers/PostDetailDrawer';
 import { CompetitorBrainPanel } from './CompetitorBrainPanel';
 import { ContentBrainPanel } from './ContentBrainPanel';
+import { NaturalSearchPanel } from './NaturalSearchPanel';
 import { ProfileDashboard } from './profile/ProfileDashboard';
 
 import { HomeTab } from './tabs/HomeTab';
@@ -664,6 +665,7 @@ export function CrossPlatformPanel({
             {/* === Tab 内容 === */}
             {renderTab()}
 
+            <NaturalSearchPanel apiToken={apiToken} onMessage={onMessage} />
             <ContentBrainPanel apiToken={apiToken} onMessage={onMessage} />
             <CompetitorBrainPanel apiToken={apiToken} onMessage={onMessage} />
 

@@ -1372,6 +1372,10 @@ export async function listCompetitorBrainSignals(token: string, options: { revie
   if (options.signalType) params.set("signal_type", options.signalType);
   return apiFetch<{ signals?: Row[]; count?: number; schema_ready?: boolean }>(`/api/admin/vkpi/industry-data/competitor-brain/signals?${params.toString()}`, {}, token);
 }
+export async function searchVkpi(token: string, query: string, limit = 20) {
+  const params = new URLSearchParams({ q: query, limit: String(limit) });
+  return apiFetch<{ items?: Row[]; total?: number; provider_calls?: boolean; write_db?: boolean; tokens?: string[] }>(`/api/admin/vkpi/search?${params.toString()}`, {}, token);
+}
 
 export async function getCommentIntelligenceOverview(
   token: string,
