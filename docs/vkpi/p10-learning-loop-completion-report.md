@@ -15,6 +15,7 @@ P10-2  read-only API
 P10-3  recommendation feedback backlog snapshot
 P10-4  Memory feedback backlog snapshot
 P10-5  recommendation action feedback bridge
+P10-6  Operating Review recommendation feedback actions
 ```
 
 ## Current Snapshot
@@ -167,6 +168,15 @@ scripts/smoke_vkpi_product_industry_phase0.py
 
 frontend npm run build passed
 vkpi_ai_cost_ledger.count=0
+```
+
+Operating Review UI:
+
+```text
+Settings -> Operating Review now shows recommendation feedback backlog rows.
+Each row exposes explicit 入选 / 拒绝 actions.
+Buttons call the existing recommendation action endpoint.
+No action runs on page load or refresh.
 ```
 
 ## Guarantees

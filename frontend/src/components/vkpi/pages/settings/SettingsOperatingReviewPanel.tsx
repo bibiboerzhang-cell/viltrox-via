@@ -3,6 +3,7 @@ import {
   getMemoryFeedbackBacklog,
   getOperatingReviewStatus,
   getRecommendationFeedbackBacklog,
+  productRecommendationAction,
 } from "../../../../services/vkpi.ui-api";
 
 type Row = Record<string, unknown>;
@@ -40,6 +41,7 @@ export function SettingsOperatingReviewPanel({ apiToken }: { apiToken?: string }
   const [recommendationBacklog, setRecommendationBacklog] = React.useState<Row>({});
   const [memoryBacklog, setMemoryBacklog] = React.useState<Row>({});
   const [loading, setLoading] = React.useState(false);
+  const [actionBusyId, setActionBusyId] = React.useState("");
   const [error, setError] = React.useState("");
 
   const loadReview = React.useCallback(async () => {
@@ -65,6 +67,27 @@ export function SettingsOperatingReviewPanel({ apiToken }: { apiToken?: string }
   React.useEffect(() => {
     void loadReview();
   }, [loadReview]);
+
+  const handleRecommendationAction = React.useCallback(async (recommendationId: string, action: "shortlist" | "reject") => {
+    if (!apiToken || !recommendationId) return;
+    setActionBusyId(`${recommendationId}:${action}`);
+    setError("");
+    try {
+      await productRecommendationAction(
+        apiToken,
+        recommendationId,
+        action,
+        action === "reject"
+          ? { reason: "Operating Review 手动拒绝", source: "operating_review_backlog" }
+          : { note: "Operating Review 手动入选", source: "operating_review_backlog" },
+      );
+      await loadReview();
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "推荐反馈写入失败");
+    } finally {
+      setActionBusyId("");
+    }
+  }, [apiToken, loadReview]);
 
   const counts = recordValue(payload, "counts");
   const workItems = listValue(payload, "top_work_items").slice(0, 12);
@@ -174,6 +197,7 @@ export function SettingsOperatingReviewPanel({ apiToken }: { apiToken?: string }
               <th>Run</th>
               <th>建议</th>
               <th>原因</th>
+              <th>操作</th>
             </tr>
           </thead>
           <tbody>
@@ -181,16 +205,37 @@ export function SettingsOperatingReviewPanel({ apiToken }: { apiToken?: string }
               const kol = recordValue(item, "kol");
               const suggestion = recordValue(item, "suggestion");
               const reasons = Array.isArray(suggestion.reasons) ? suggestion.reasons.map(String).join(", ") : "";
+              const recommendationId = text(item, "recommendation_id", "");
               return (
-                <tr key={`rec-feedback-${text(item, "recommendation_id")}`}>
+                <tr key={`rec-feedback-${recommendationId}`}>
                   <td><strong>{text(kol, "platform")}:{text(kol, "handle")}</strong><br /><small>rank={text(item, "rank")} score={text(item, "score")}</small></td>
                   <td>{text(item, "run_uid")}</td>
                   <td><span className="vkpi-chip vkpi-chip--warn">{text(suggestion, "suggested_action")}</span></td>
                   <td>{reasons || "-"}</td>
+                  <td>
+                    <div className="vkpi-row-actions">
+                      <button
+                        className="vkpi-mini-button"
+                        type="button"
+                        disabled={!apiToken || Boolean(actionBusyId)}
+                        onClick={() => void handleRecommendationAction(recommendationId, "shortlist")}
+                      >
+                        入选
+                      </button>
+                      <button
+                        className="vkpi-mini-button"
+                        type="button"
+                        disabled={!apiToken || Boolean(actionBusyId)}
+                        onClick={() => void handleRecommendationAction(recommendationId, "reject")}
+                      >
+                        拒绝
+                      </button>
+                    </div>
+                  </td>
                 </tr>
               );
             }) : (
-              <tr><td className="vkpi-table-empty" colSpan={4}>{loading ? "正在读取推荐反馈 backlog" : "没有推荐反馈 backlog。"}</td></tr>
+              <tr><td className="vkpi-table-empty" colSpan={5}>{loading ? "正在读取推荐反馈 backlog" : "没有推荐反馈 backlog。"}</td></tr>
             )}
           </tbody>
         </table>
