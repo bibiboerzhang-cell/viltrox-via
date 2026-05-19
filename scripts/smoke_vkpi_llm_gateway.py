@@ -10,6 +10,7 @@ import json
 import os
 import sys
 import time
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +20,7 @@ os.environ.setdefault("ENVIRONMENT", "local")
 os.environ["VKPI_LLM_GATEWAY_FORCE_OFFLINE"] = "1"
 os.environ["LLM_MONTHLY_BUDGET_USD"] = "0"
 
-from app.db.connection import get_conn  # noqa: E402
+from app.db.connection import close_db_runtime, get_conn  # noqa: E402
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema  # noqa: E402
 from app.services.vkpi import llm_gateway  # noqa: E402
 
@@ -55,6 +56,7 @@ def main() -> None:
         "Summarize this smoke test.",
         purpose=f"{MARKER}-budget",
         max_output_tokens=50,
+        cost_tag="cron:p4_recommendation_reasons",
     )
     _assert(budget_result.get("provider") == "rule_v0", "budget fallback provider", budget_result)
     _assert(budget_result.get("reason") == "budget_disabled", "budget fallback reason", budget_result)
@@ -66,6 +68,7 @@ def main() -> None:
         max_output_tokens=50,
         skip_budget_check=True,
         preferred_provider="openai",
+        cost_tag="cron:p4_recommendation_reasons",
     )
     _assert(forced_offline.get("provider") == "rule_v0", "offline fallback provider", forced_offline)
     _assert(forced_offline.get("reason") == "all_providers_failed", "offline fallback reason", forced_offline)
@@ -92,4 +95,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        asyncio.run(close_db_runtime())

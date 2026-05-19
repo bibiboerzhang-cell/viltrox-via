@@ -138,6 +138,51 @@ def _estimate_cost_cents(provider: str, input_tokens: int, output_tokens: int) -
     return int(input_tokens or 0) * int(config.get("input_cents_per_million") or 0) // 1_000_000 + int(output_tokens or 0) * int(config.get("output_cents_per_million") or 0) // 1_000_000
 
 
+def _estimate_prompt_tokens(prompt: str) -> int:
+    # Conservative deterministic estimate; avoids provider calls just to count.
+    return max(1, len(str(prompt or "")) // 4)
+
+
+def _provider_budget_scope(provider: str) -> str:
+    provider_key = str(provider or "").strip().lower()
+    if provider_key == "google":
+        provider_key = "gemini"
+    if provider_key == "anthropic":
+        provider_key = "claude"
+    return f"provider:{provider_key}" if provider_key else ""
+
+
+def _cost_scope_for_purpose(purpose: str = "", cost_tag: str | None = None) -> str:
+    explicit = str(cost_tag or "").strip()
+    if explicit:
+        return explicit
+    purpose_key = str(purpose or "").strip().lower().replace(" ", "_")
+    return f"cron:{purpose_key}" if purpose_key else ""
+
+
+def _estimated_cost_usd(provider: str, *, prompt: str, max_output_tokens: int) -> float:
+    cents = _estimate_cost_cents(provider, _estimate_prompt_tokens(prompt), int(max_output_tokens or 0))
+    if cents <= 0 and provider in PROVIDER_CONFIG:
+        cents = 1
+    return float(cents) / 100
+
+
+def _budget_scopes_for_provider(provider: str, cost_scope: str) -> list[str]:
+    scopes = ["monthly_total", _provider_budget_scope(provider), cost_scope]
+    return [scope for scope in scopes if scope]
+
+
+def _budget_allows_provider(provider: str, *, cost_scope: str, estimated_cost_usd: float) -> tuple[bool, list[dict[str, Any]]]:
+    checks: list[dict[str, Any]] = []
+    allowed = True
+    for scope in _budget_scopes_for_provider(provider, cost_scope):
+        scope_allowed = budget_guard.check_budget(scope, estimated_cost_usd, require_configured=True)
+        checks.append({"scope": scope, "allowed": bool(scope_allowed), "estimated_cost_usd": estimated_cost_usd})
+        if not scope_allowed:
+            allowed = False
+    return allowed, checks
+
+
 def _request_json(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: int) -> dict[str, Any]:
     request = urllib.request.Request(
         url,
@@ -335,9 +380,10 @@ def invoke(
         )
         return result
 
-    if cost_tag:
+    cost_scope = _cost_scope_for_purpose(purpose, cost_tag)
+    if cost_scope:
         try:
-            if not budget_guard.check_budget(cost_tag, 0):
+            if not budget_guard.check_budget(cost_scope, 0, require_configured=True):
                 result = _rule_fallback(safe_prompt, purpose=purpose, reason="ai_budget_hard_stop")
                 record_call(
                     provider="rule_v0",
@@ -346,9 +392,9 @@ def invoke(
                     prompt=safe_prompt,
                     status="ai_budget_hard_stop",
                     fallback_used=True,
-                    cost_tag=cost_tag,
+                    cost_tag=cost_scope,
                     triggered_by=triggered_by,
-                    metadata={**(metadata or {}), "cost_tag": cost_tag},
+                    metadata={**(metadata or {}), "cost_tag": cost_scope},
                     staff=staff,
                 )
                 return result
@@ -368,7 +414,7 @@ def invoke(
                 prompt=safe_prompt,
                 status=reason,
                 fallback_used=True,
-                cost_tag=cost_tag,
+                cost_tag=cost_scope,
                 triggered_by=triggered_by,
                 metadata={**(metadata or {}), "monthly_budget_cents": monthly_budget, "remaining_cents": remaining},
                 staff=staff,
@@ -386,6 +432,11 @@ def invoke(
         if caller is None:
             errors.append({"provider": provider, "status": "not_implemented"})
             continue
+        estimated_cost = _estimated_cost_usd(provider, prompt=safe_prompt, max_output_tokens=max_output_tokens)
+        provider_allowed, budget_checks = _budget_allows_provider(provider, cost_scope=cost_scope, estimated_cost_usd=estimated_cost)
+        if not provider_allowed:
+            errors.append({"provider": provider, "status": "budget_blocked", "budget_checks": budget_checks})
+            continue
         result = caller(safe_prompt, max_output_tokens)
         status = str(result.get("status") or "")
         if status == "success" and str(result.get("text") or "").strip():
@@ -399,9 +450,15 @@ def invoke(
                 cost_cents=int(result.get("cost_cents") or 0),
                 status="success",
                 fallback_used=bool(errors),
-                cost_tag=cost_tag,
+                cost_tag=cost_scope,
                 triggered_by=triggered_by,
-                metadata={**(metadata or {}), "latency_ms": result.get("latency_ms"), "attempt_errors": errors},
+                metadata={
+                    **(metadata or {}),
+                    "latency_ms": result.get("latency_ms"),
+                    "attempt_errors": errors,
+                    "budget_checks": budget_checks,
+                    "estimated_cost_usd": estimated_cost,
+                },
                 staff=staff,
             )
             result["fallback_used"] = bool(errors)
@@ -417,7 +474,7 @@ def invoke(
         prompt=safe_prompt,
         status="all_providers_failed",
         fallback_used=True,
-        cost_tag=cost_tag,
+        cost_tag=cost_scope,
         triggered_by=triggered_by,
         metadata={**(metadata or {}), "errors": errors},
         staff=staff,
@@ -505,8 +562,9 @@ def record_call(
         ),
     )
     conn.commit()
-    if cost_tag:
+    if cost_tag and (status == "success" or int(cost_cents or 0) > 0):
         try:
+            provider_scope = _provider_budget_scope(provider)
             budget_guard.record_cost(
                 scope=cost_tag,
                 cron_task=purpose,
@@ -524,6 +582,7 @@ def record_call(
                     "fallback_used": bool(fallback_used),
                 },
                 triggered_by=triggered_by if triggered_by is not None else staff,
+                extra_scopes=[scope for scope in ("monthly_total", provider_scope) if scope],
             )
         except Exception:
             logger.warning("vkpi.llm_gateway.ai_cost_record_failed", exc_info=True)

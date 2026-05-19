@@ -150,15 +150,15 @@ def _budget_payload(row: dict[str, Any], *, estimated_cost: float = 0.0) -> dict
     }
 
 
-def check_budget(scope: str, estimated_cost: float) -> bool:
+def check_budget(scope: str, estimated_cost: float, *, require_configured: bool = False) -> bool:
     """Return whether a call can proceed for the given budget scope."""
     scope_key = _normalize_scope(scope)
     if not scope_key:
-        return True
+        return not require_configured
     ensure_budget_schema()
     row = get_conn().execute("SELECT * FROM vkpi_provider_budget_caps WHERE scope=?", (scope_key,)).fetchone()
     if not row:
-        return True
+        return not require_configured
     return bool(_budget_payload(_clean_row(row), estimated_cost=float(estimated_cost or 0)).get("allowed"))
 
 
@@ -248,6 +248,7 @@ def record_cost(
     task_item_id: int | None = None,
     metadata: dict[str, Any] | None = None,
     triggered_by: Any = None,
+    extra_scopes: list[str] | tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     ensure_budget_schema()
     scope_key = _normalize_scope(scope)
@@ -277,19 +278,21 @@ def record_cost(
             now,
         ),
     )
-    if scope_key:
+    scopes_to_update = [scope for scope in [scope_key, *(_normalize_scope(scope) for scope in (extra_scopes or []))] if scope]
+    for budget_scope in dict.fromkeys(scopes_to_update):
         conn.execute(
             """
             UPDATE vkpi_provider_budget_caps
             SET current_spend=COALESCE(current_spend, 0) + ?
             WHERE scope=?
             """,
-            (cost, scope_key),
+            (cost, budget_scope),
         )
     conn.commit()
     return {
         "recorded": True,
         "scope": scope_key,
+        "scopes_updated": list(dict.fromkeys(scopes_to_update)),
         "ai_provider": provider,
         "model_name": str(model_name or ""),
         "cost_usd": cost,
