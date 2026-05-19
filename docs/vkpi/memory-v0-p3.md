@@ -185,13 +185,94 @@ memory_snapshots_total=1
 
 ## 7. P3 下一步
 
-P3-2 可以继续做：
+P3-2 已补 Memory 查询/特征层，给 P4 推荐提供可解释输入，但本身不做推荐、不写推荐结果。
+
+新增只读查询：
 
 ```text
-1. Memory query helpers for P4 推荐
-2. KOL/product fit feature extractor
-3. needs_human_review 降权规则
-4. memory feedback 后台列表和处理状态
+product_kol_candidates(product_query, limit)
+kol_product_memory(entity_uid, limit)
+fit_features(entity_uid, product_query)
+```
+
+新增 API：
+
+```text
+GET /api/admin/vkpi/memory/product-kol-candidates
+GET /api/admin/vkpi/memory/entities/{entity_uid}/product-memory
+GET /api/admin/vkpi/memory/entities/{entity_uid}/fit-features
+```
+
+新增 CLI：
+
+```bash
+python3 scripts/build_vkpi_memory.py \
+  --product-kol-candidates "AF 35mm" \
+  --limit 5
+
+python3 scripts/build_vkpi_memory.py \
+  --kol-product-memory mem_kol_ef5c281120406d1bf9ee \
+  --limit 5
+
+python3 scripts/build_vkpi_memory.py \
+  --fit-features mem_kol_ef5c281120406d1bf9ee \
+  --product-query "AF 35mm"
+```
+
+当前真实数据验证：
+
+```text
+product_query=AF 35mm
+matched_products=10
+total_candidates=152
+top_candidate=mem_kol_ef5c281120406d1bf9ee
+top_score=79
+top_matched_cooperations=4
+```
+
+风险样本验证：
+
+```text
+entity_uid=mem_kol_4b1b26211f1103264289
+sync_status=needs_human_review
+weak_label=risk_review
+risk_flag_count=1
+memory_score=0
+warnings=needs_human_review,risk_flags=1
+```
+
+P3-2 输出字段：
+
+```text
+memory_score
+score_breakdown
+reasons
+warnings
+features.platform
+features.handle
+features.country
+features.sync_status
+features.weak_label
+features.review_state
+features.contact_status
+features.cooperation_count
+features.product_count
+features.matched_product_count
+features.matched_product_cooperation_count
+features.risk_flag_count
+features.evidence_count
+```
+
+`memory_score` 只是历史证据强弱分，不是推荐分。P4 推荐可以读取它，但仍需要单独的推荐策略、预算守门和结果审计。
+
+## 8. P3 后续
+
+P3-3 可以继续做：
+
+```text
+1. Memory feedback 后台列表和处理状态
+2. Product memory 归一化，减少 FE/E/Z 这类卡口名噪声
+3. Market memory v0，从 launch_plan / VOC / official content 读市场信号
 ```
 
 P4 推荐前必须坚持：
