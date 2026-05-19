@@ -98,6 +98,16 @@ def product_analysis_recommendations(
     return product_analysis.list_recommendations(launch_id=launch_id, run_id=run_id, limit=limit)
 
 
+@router.get("/product-analysis/recommendation-runs")
+def product_analysis_recommendation_runs(
+    strategy_version: str = "",
+    status: str = "",
+    limit: int = Query(default=100, ge=1, le=300),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    return product_analysis.list_recommendation_runs(strategy_version=strategy_version, status=status, limit=limit)
+
+
 @router.get("/product-analysis/recommendations/{recommendation_id}/evidence")
 def product_analysis_recommendation_evidence(
     recommendation_id: int,

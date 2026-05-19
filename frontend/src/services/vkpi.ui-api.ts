@@ -1287,6 +1287,12 @@ export async function listProductRecommendations(token: string, options: { launc
   if (options.runId) params.set("run_id", options.runId);
   return apiFetch<{ recommendations?: Row[] }>(`/api/admin/vkpi/product-analysis/recommendations?${params.toString()}`, {}, token);
 }
+export async function listProductRecommendationRuns(token: string, options: { strategyVersion?: string; status?: string; limit?: number } = {}) {
+  const params = new URLSearchParams({ limit: String(options.limit || 100) });
+  if (options.strategyVersion) params.set("strategy_version", options.strategyVersion);
+  if (options.status) params.set("status", options.status);
+  return apiFetch<{ runs?: Row[] }>(`/api/admin/vkpi/product-analysis/recommendation-runs?${params.toString()}`, {}, token);
+}
 export async function getProductRecommendationOutcomeSummary(token: string, options: { launchId?: string; runId?: string; limit?: number } = {}) {
   const params = new URLSearchParams({ limit: String(options.limit || 50) });
   if (options.launchId) params.set("launch_id", options.launchId);

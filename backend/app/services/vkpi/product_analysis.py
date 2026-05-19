@@ -335,6 +335,45 @@ def list_recommendations(launch_id: int | None = None, run_id: int | None = None
     return {"recommendations": [dict(row) for row in rows]}
 
 
+def list_recommendation_runs(
+    *,
+    strategy_version: str = "",
+    status: str = "",
+    limit: int = 100,
+) -> dict[str, Any]:
+    ensure_vkpi_product_industry_schema()
+    where: list[str] = []
+    params: list[Any] = []
+    if strategy_version:
+        where.append("strategy_version=?")
+        params.append(str(strategy_version))
+    if status:
+        where.append("status=?")
+        params.append(str(status))
+    clause = "WHERE " + " AND ".join(where) if where else ""
+    rows = get_conn().execute(
+        f"SELECT * FROM vkpi_kol_recommendation_runs {clause} ORDER BY created_at DESC, id DESC LIMIT ?",
+        (*params, max(1, min(300, int(limit or 100)))),
+    ).fetchall()
+    runs: list[dict[str, Any]] = []
+    for raw in rows:
+        run = dict(raw)
+        run_id = int(run.get("id") or 0)
+        counts = get_conn().execute(
+            """
+            SELECT status, COUNT(*) AS count
+            FROM vkpi_kol_recommendations
+            WHERE run_id=?
+            GROUP BY status
+            """,
+            (run_id,),
+        ).fetchall()
+        run["filters"] = _loads(run.get("filters_json"), {})
+        run["recommendation_status_counts"] = {str(row["status"]): int(row["count"] or 0) for row in counts}
+        runs.append(run)
+    return {"runs": runs}
+
+
 def get_recommendation_evidence(recommendation_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     return product_analysis_evidence.get_recommendation_evidence(recommendation_id, staff=staff)
 
