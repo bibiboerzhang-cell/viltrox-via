@@ -183,7 +183,7 @@ memory_snapshots_total=1
 6 条 blocked_risk 未进入主池，因此不进入普通 memory。
 ```
 
-## 7. P3 下一步
+## 7. P3-2 查询与特征层
 
 P3-2 已补 Memory 查询/特征层，给 P4 推荐提供可解释输入，但本身不做推荐、不写推荐结果。
 
@@ -265,14 +265,100 @@ features.evidence_count
 
 `memory_score` 只是历史证据强弱分，不是推荐分。P4 推荐可以读取它，但仍需要单独的推荐策略、预算守门和结果审计。
 
-## 8. P3 后续
+## 8. P3-3 产品归一化
 
-P3-3 可以继续做：
+P3-3 已补 product family 归一化，解决历史 Excel 里同一产品多种写法的问题。
+
+新增 Memory entity：
+
+```text
+entity_type=product_family
+```
+
+新增 Memory link：
+
+```text
+link_type=normalized_to_product_family
+source_entity=raw product
+target_entity=product_family
+```
+
+新增 fact：
+
+```text
+fact_type=product_normalization
+```
+
+新增 API：
+
+```text
+GET  /api/admin/vkpi/memory/product-families
+POST /api/admin/vkpi/memory/build-product-families
+```
+
+新增 CLI：
+
+```bash
+python3 scripts/build_vkpi_memory.py --build-product-families
+python3 scripts/build_vkpi_memory.py --product-families "AF 35mm" --limit 3
+```
+
+构建结果：
+
+```text
+total_families=597
+build.normalized_products=782
+build.skipped_ambiguous_mount_only=5
+build.skipped_empty=1
+build.skipped_unclassified=97
+facts.product_normalization=885
+links.normalized_to_product_family=782
+```
+
+典型归一化结果：
+
+```text
+AF 35mm F1.7 Air
+  members=5
+  cooperations=289
+  - AF 35mm/1.7 Air XF/E/Z
+  - AF 35mm F1.7 Air E+XF+Z
+  - AF 35mm/1.7 Air E
+
+AF 50mm F2
+  members=7
+  cooperations=88
+  - AF 50/F2.0 FE
+  - AF 50/F2.0 Z
+  - AF 50/2 FE
+```
+
+`FE` / `E` / `Z` / `X` 这类纯卡口名不强行归一到产品，标记为：
+
+```text
+ambiguous_mount_only
+```
+
+P3-3 后，产品候选查询会同时读取 raw product 和 product_family：
+
+```text
+product_query=AF 35mm
+matched_products=30
+matched_families=8
+total_candidates=201
+top_score=93
+```
+
+这一步仍然不是推荐。它只是把同一产品的历史合作证据合并成更稳定的 Memory 输入。
+
+## 9. P3 后续
+
+P3-4 可以继续做：
 
 ```text
 1. Memory feedback 后台列表和处理状态
-2. Product memory 归一化，减少 FE/E/Z 这类卡口名噪声
-3. Market memory v0，从 launch_plan / VOC / official content 读市场信号
+2. Market memory v0，从 launch_plan / VOC / official content 读市场信号
+3. Product family 人工 override 表或配置，处理 97 条 unclassified
 ```
 
 P4 推荐前必须坚持：
