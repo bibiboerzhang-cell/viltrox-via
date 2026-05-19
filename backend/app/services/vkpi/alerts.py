@@ -498,6 +498,131 @@ def generate_content_brain_backlog_alerts(
     }
 
 
+def generate_recommendation_review_gap_alerts(
+    *,
+    min_age_hours: int = 1,
+) -> dict[str, Any]:
+    """Create or clear alerts for recommendation runs that have not received feedback."""
+    ensure_vkpi_schema()
+    rule_key = "recommendation.review_gap"
+    conn = get_conn()
+    required_tables = (
+        "vkpi_kol_recommendation_runs",
+        "vkpi_kol_recommendations",
+        "vkpi_recommendation_feedback",
+    )
+    if not all(_table_exists(table_name) for table_name in required_tables):
+        open_rows = conn.execute(
+            "SELECT alert_key FROM vkpi_alerts WHERE rule_key=? AND status='open'",
+            (rule_key,),
+        ).fetchall()
+        cleared = []
+        for row in open_rows:
+            alert_key = str(row["alert_key"] or "")
+            if alert_key and _resolve_open_alert(conn, alert_key):
+                cleared.append(alert_key)
+        conn.commit()
+        return {
+            "alerts": [],
+            "count": 0,
+            "cleared": cleared,
+            "cleared_count": len(cleared),
+            "schema_ready": False,
+            "rule_key": rule_key,
+        }
+
+    cutoff = (datetime.utcnow() - timedelta(hours=max(0, int(min_age_hours)))).strftime("%Y-%m-%dT%H:%M:%SZ")
+    rows = conn.execute(
+        """
+        SELECT
+          r.id,
+          r.run_uid,
+          r.strategy_version,
+          r.status,
+          r.candidate_count,
+          r.recommendation_count,
+          r.created_at,
+          r.completed_at,
+          COUNT(DISTINCT rec.id) AS recommendation_rows,
+          COUNT(DISTINCT fb.id) AS feedback_rows
+        FROM vkpi_kol_recommendation_runs r
+        LEFT JOIN vkpi_kol_recommendations rec ON rec.run_id = r.id
+        LEFT JOIN vkpi_recommendation_feedback fb ON fb.recommendation_id = rec.id
+        WHERE r.status IN ('previewed', 'completed')
+          AND r.created_at <= ?
+        GROUP BY
+          r.id, r.run_uid, r.strategy_version, r.status, r.candidate_count,
+          r.recommendation_count, r.created_at, r.completed_at
+        HAVING COUNT(DISTINCT rec.id) > 0
+           AND COUNT(DISTINCT fb.id) = 0
+        ORDER BY r.created_at ASC
+        LIMIT 100
+        """,
+        (cutoff,),
+    ).fetchall()
+    active_keys: set[str] = set()
+    created: list[dict[str, Any]] = []
+    for row in rows:
+        data = dict(row)
+        run_uid = str(data.get("run_uid") or data.get("id") or "").strip()
+        if not run_uid:
+            continue
+        recommendation_rows = int(data.get("recommendation_rows") or 0)
+        alert_key = f"recommendation-review-gap-{run_uid}"
+        active_keys.add(alert_key)
+        severity = "danger" if recommendation_rows >= 50 else "warning"
+        created.append(
+            upsert_alert(
+                alert_key=alert_key,
+                severity=severity,
+                target_type="recommendation_run",
+                target_id=int(data["id"]),
+                title=f"Recommendation run needs feedback: {run_uid}",
+                body=(
+                    f"{recommendation_rows} recommendations from {data.get('strategy_version') or 'unknown'} "
+                    "have no review feedback yet. Capture accept/reject feedback before using this run as learning data."
+                ),
+                rule_key=rule_key,
+                metadata_json=json.dumps(
+                    {
+                        "run_id": int(data["id"]),
+                        "run_uid": run_uid,
+                        "strategy_version": data.get("strategy_version"),
+                        "status": data.get("status"),
+                        "candidate_count": int(data.get("candidate_count") or 0),
+                        "recommendation_count": int(data.get("recommendation_count") or 0),
+                        "recommendation_rows": recommendation_rows,
+                        "feedback_rows": int(data.get("feedback_rows") or 0),
+                        "created_at": data.get("created_at"),
+                        "completed_at": data.get("completed_at"),
+                        "min_age_hours": int(min_age_hours),
+                    },
+                    ensure_ascii=False,
+                    default=str,
+                ),
+            )
+        )
+
+    open_rows = conn.execute(
+        "SELECT alert_key FROM vkpi_alerts WHERE rule_key=? AND status='open'",
+        (rule_key,),
+    ).fetchall()
+    cleared: list[str] = []
+    for row in open_rows:
+        alert_key = str(row["alert_key"] or "")
+        if alert_key and alert_key not in active_keys and _resolve_open_alert(conn, alert_key):
+            cleared.append(alert_key)
+    conn.commit()
+    return {
+        "alerts": created,
+        "count": len(created),
+        "cleared": cleared,
+        "cleared_count": len(cleared),
+        "min_age_hours": int(min_age_hours),
+        "rule_key": rule_key,
+    }
+
+
 def generate_budget_guard_alerts() -> dict[str, Any]:
     """Create or clear alerts for AI/provider budget warning and hard-stop scopes."""
     ensure_vkpi_schema()
@@ -576,11 +701,13 @@ def generate_alerts() -> dict[str, Any]:
     stalled = generate_stalled_project_alerts()
     comment_intelligence = generate_comment_intelligence_alerts()
     content_brain = generate_content_brain_backlog_alerts()
+    recommendation_review = generate_recommendation_review_gap_alerts()
     budget_guard = generate_budget_guard_alerts()
     alerts = (
         (stalled.get("alerts") or [])
         + (comment_intelligence.get("alerts") or [])
         + (content_brain.get("alerts") or [])
+        + (recommendation_review.get("alerts") or [])
         + (budget_guard.get("alerts") or [])
     )
     return {
@@ -589,5 +716,6 @@ def generate_alerts() -> dict[str, Any]:
         "stalled_projects": stalled,
         "comment_intelligence": comment_intelligence,
         "content_brain": content_brain,
+        "recommendation_review": recommendation_review,
         "budget_guard": budget_guard,
     }
