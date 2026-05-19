@@ -63,7 +63,10 @@ brand distribution
 signal type distribution
 review status distribution
 filtered signal table
+per-row ready/rejected/ignored/pending_review actions
 ```
+
+Frontend review actions call the review endpoint directly. The confirmation copy states that the action only updates `review_status` and does not write canonical competitor products.
 
 ## Current Data
 
@@ -90,4 +93,4 @@ git diff --check passed
 
 ## Next
 
-Frontend action buttons can call the review endpoint after the team confirms the ready/rejected workflow.
+Next package can batch-review low-risk signals after the team confirms the manual workflow on a few rows.
