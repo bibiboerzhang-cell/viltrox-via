@@ -10,6 +10,7 @@ Domains:
 from __future__ import annotations
 
 import json
+import os
 import secrets
 from datetime import datetime, timedelta
 from typing import Any
@@ -30,7 +31,25 @@ from app.services.auth.tokens import create_email_token
 
 logger = get_logger(__name__)
 
-ALLOWED_STAFF_EMAIL_DOMAINS = ["viltrox.com"]
+
+def _load_allowed_domains() -> list[str]:
+    """Load staff email domain allowlist from environment."""
+    domains = ["viltrox.com"]
+    extra = os.environ.get("ALLOWED_EXTERNAL_STAFF_DOMAINS", "").strip()
+    if extra:
+        for domain in extra.split(","):
+            normalized = domain.strip().lower().lstrip("@")
+            if normalized and normalized not in domains:
+                domains.append(normalized)
+    return domains
+
+
+def _allow_any_external() -> bool:
+    """Return whether any external staff email domain is allowed."""
+    return os.environ.get("ALLOW_EXTERNAL_STAFF_EMAILS", "").strip().lower() in {"1", "true", "yes"}
+
+
+ALLOWED_STAFF_EMAIL_DOMAINS = _load_allowed_domains()
 
 
 # Canonical role → permissions matrix (displayed on UI)
@@ -664,8 +683,19 @@ def _validate_staff_email(email: str) -> None:
     if "@" not in email:
         raise ValueError("valid email required")
     domain = email.rsplit("@", 1)[-1].lower()
-    if domain not in ALLOWED_STAFF_EMAIL_DOMAINS:
-        raise ValueError("Only @viltrox.com emails allowed")
+    allowed = _load_allowed_domains()
+    if domain in allowed or _allow_any_external():
+        return
+    raise ValueError(
+        f"Email domain '{domain}' not in allowed list. "
+        f"Allowed: {', '.join(allowed)}. "
+        "Set ALLOW_EXTERNAL_STAFF_EMAILS=1 or "
+        "ALLOWED_EXTERNAL_STAFF_DOMAINS=domain1,domain2 to allow others."
+    )
+
+
+def _validate_email_domain(email: str) -> None:
+    _validate_staff_email(email)
 
 
 def _utcnow() -> str:

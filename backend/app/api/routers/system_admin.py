@@ -590,10 +590,11 @@ def list_staff(admin=Depends(require_tab("system", "read"))):
 @router.get("/staff/invite/capabilities")
 def staff_invite_capabilities(admin=Depends(require_tab("system", "read"))):
     email_available = email_service_available()
-    allowed_domains = list(getattr(staff_svc, "ALLOWED_STAFF_EMAIL_DOMAINS", ["viltrox.com"]))
+    allowed_domains = staff_svc._load_allowed_domains()
+    external_emails_allowed = staff_svc._allow_any_external()
     return {
         "email_available": email_available,
-        "external_emails_allowed": False,
+        "external_emails_allowed": external_emails_allowed,
         "allowed_domains": allowed_domains,
         "token_ttl_hours": 1,
         "manual_activation_link_available": False,
