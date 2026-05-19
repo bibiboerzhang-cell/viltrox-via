@@ -16,6 +16,11 @@ if str(BACKEND) not in sys.path:
 
 from app.db.connection import close_db_runtime  # noqa: E402
 from app.services.vkpi.legacy_import_audit import audit_legacy_file, write_reports  # noqa: E402
+from app.services.vkpi.legacy_entity_resolution import (  # noqa: E402
+    format_resolution_summary,
+    inspect_resolution,
+    resolve_batch,
+)
 from app.services.vkpi.legacy_import_staging import (  # noqa: E402
     ensure_legacy_staging_schema,
     format_batch_summary,
@@ -38,15 +43,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-label", default="", help="Optional label recorded on a staging batch")
     parser.add_argument("--inspect-batch", default="", help="Print staging summary for an existing batch_uid")
     parser.add_argument("--rollback-batch", default="", help="Clear staging rows for a batch that has not been committed")
+    parser.add_argument("--resolve-batch", default="", help="Run P2C canonical KOL resolution for a staged batch_uid")
+    parser.add_argument("--inspect-resolution", default="", help="Print P2C resolution summary for a batch_uid")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    if args.inspect_batch or args.rollback_batch:
+    if args.inspect_batch or args.rollback_batch or args.resolve_batch or args.inspect_resolution:
         try:
             ensure_legacy_staging_schema()
-            if args.inspect_batch:
+            if args.resolve_batch:
+                print(format_resolution_summary(resolve_batch(args.resolve_batch)))
+            elif args.inspect_resolution:
+                print(format_resolution_summary(inspect_resolution(args.inspect_resolution)))
+            elif args.inspect_batch:
                 print(format_batch_summary(inspect_batch(args.inspect_batch)))
             else:
                 result = rollback_staging_batch(args.rollback_batch)
@@ -61,7 +72,7 @@ def main() -> int:
         return 0
 
     if not args.input:
-        print("ERROR: input is required unless --inspect-batch or --rollback-batch is used", file=sys.stderr)
+        print("ERROR: input is required unless a batch command is used", file=sys.stderr)
         return 2
 
     try:
