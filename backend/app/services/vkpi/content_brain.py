@@ -1,0 +1,424 @@
+"""P6 content brain deterministic dry-run preview."""
+from __future__ import annotations
+
+import json
+import re
+from collections import Counter
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from app.db.connection import get_conn
+from app.services.vkpi.budget_guard import check_budget, get_budget_status
+
+
+BUDGET_SCOPE = "cron:p6_content_brain_analysis"
+ANALYSIS_VERSION = "p6_content_brain_rule_v0"
+FORBIDDEN_WRITE_FLAGS = {
+    "--commit",
+    "--write",
+    "--persist",
+    "--save",
+    "--apply",
+    "--with-llm",
+    "--provider",
+    "--record-cost",
+}
+
+VILTROX_TERMS = {"viltrox", "weeylite"}
+COMPETITOR_BRANDS = {
+    "sony",
+    "canon",
+    "nikon",
+    "sigma",
+    "tamron",
+    "fujifilm",
+    "fuji",
+    "godox",
+    "zeiss",
+    "leica",
+    "panasonic",
+    "lumix",
+    "blackmagic",
+    "dji",
+    "sirui",
+    "ttartisan",
+    "laowa",
+}
+
+TAG_KEYWORDS = {
+    "review": ("review", "hands-on", "hands on", "测试", "评测"),
+    "tutorial": ("tutorial", "how to", "tips", "technique", "技巧", "教程"),
+    "unboxing": ("unboxing", "开箱"),
+    "comparison": ("comparison", "versus", " vs ", "compare", "对比"),
+    "launch": ("launch", "new release", "released", "新品", "发布"),
+    "cinematic": ("cinematic", "cinema", "filmmaking", "video applications"),
+    "portrait": ("portrait", "人像"),
+    "street": ("street", "街拍"),
+    "event": ("nab", "show", "booth", "expo", "event", "展会"),
+    "giveaway": ("giveaway", "抽奖"),
+    "lighting": ("light", "lighting", "flash", "led"),
+}
+
+RISK_KEYWORDS = {
+    "negative_sentiment": ("bad", "worst", "terrible", "scam", "fake", "broken", "差评", "翻车"),
+    "pricing_sensitive": ("price", "rrp", "usd", "tax", "vat", "budget", "折扣", "价格"),
+    "competitor_focus": tuple(sorted(COMPETITOR_BRANDS)),
+}
+
+
+def _utcnow() -> str:
+    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, indent=2, default=str)
+
+
+def _loads(value: Any, default: Any) -> Any:
+    if isinstance(value, (dict, list)):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        return default
+    try:
+        return json.loads(value)
+    except Exception:
+        return default
+
+
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _safe_limit(value: int, *, default: int = 50, ceiling: int = 500) -> int:
+    try:
+        parsed = int(value or default)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(1, min(ceiling, parsed))
+
+
+def _row_to_dict(row: Any) -> dict[str, Any]:
+    return dict(row) if row else {}
+
+
+def _table_exists(table_name: str) -> bool:
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,)).fetchone()
+        return bool(row)
+    except Exception:
+        row = conn.execute(
+            "SELECT table_name FROM information_schema.tables WHERE table_name=? LIMIT 1",
+            (table_name,),
+        ).fetchone()
+        return bool(row)
+
+
+def _list_posts(*, platform: str = "", account_id: int = 0, post_id: int = 0, query: str = "", limit: int = 50) -> list[dict[str, Any]]:
+    where: list[str] = []
+    params: list[Any] = []
+    if platform:
+        where.append("LOWER(p.platform)=LOWER(?)")
+        params.append(platform)
+    if account_id:
+        where.append("p.account_id=?")
+        params.append(int(account_id))
+    if post_id:
+        where.append("p.id=?")
+        params.append(int(post_id))
+    if query:
+        where.append("(LOWER(p.title) LIKE ? OR LOWER(p.caption) LIKE ? OR LOWER(p.post_url) LIKE ?)")
+        token = f"%{query.lower()}%"
+        params.extend([token, token, token])
+    clause = "WHERE " + " AND ".join(where) if where else ""
+    rows = get_conn().execute(
+        f"""
+        SELECT p.*,
+               a.handle AS account_handle,
+               a.display_name AS account_display_name,
+               a.brand_group AS account_brand_group,
+               a.account_role AS account_role,
+               a.region AS account_region,
+               a.category AS account_category
+        FROM vkpi_industry_posts p
+        LEFT JOIN vkpi_industry_accounts a ON a.id=p.account_id
+        {clause}
+        ORDER BY p.published_at DESC, p.id DESC
+        LIMIT ?
+        """,
+        (*params, _safe_limit(limit)),
+    ).fetchall()
+    return [_row_to_dict(row) for row in rows]
+
+
+def _media_for_posts(post_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
+    if not post_ids or not _table_exists("vkpi_industry_post_media"):
+        return {}
+    placeholders = ",".join("?" for _ in post_ids)
+    rows = get_conn().execute(
+        f"SELECT * FROM vkpi_industry_post_media WHERE post_id IN ({placeholders}) ORDER BY post_id, id",
+        tuple(post_ids),
+    ).fetchall()
+    grouped: dict[int, list[dict[str, Any]]] = {}
+    for row in rows:
+        item = _row_to_dict(row)
+        grouped.setdefault(_safe_int(item.get("post_id")), []).append(item)
+    return grouped
+
+
+def _combined_text(post: dict[str, Any]) -> str:
+    pieces = [
+        post.get("title"),
+        post.get("caption"),
+        " ".join(_loads(post.get("hashtags_json"), [])),
+        json.dumps(_loads(post.get("raw_platform_data"), {}), ensure_ascii=False)[:2000],
+    ]
+    return " ".join(_text(piece) for piece in pieces if _text(piece))
+
+
+def _extract_products(text: str, detected_products: list[Any]) -> list[dict[str, Any]]:
+    products: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in detected_products:
+        value = _text(raw if not isinstance(raw, dict) else raw.get("name") or raw.get("product"))
+        if value and value.lower() not in seen:
+            seen.add(value.lower())
+            products.append({"product": value, "source": "detected_products_json", "confidence": 0.8})
+    patterns = [
+        r"\b(?:AF|XF|Z|FE|RF)?\s*\d{1,3}\s*mm\s*(?:F|f)?\s*/?\s*\d(?:\.\d)?\b",
+        r"\b\d{1,3}\s*mm\b",
+        r"\bFL\d{2}[A-Za-z]*\b",
+    ]
+    for pattern in patterns:
+        for match in re.findall(pattern, text, flags=re.IGNORECASE):
+            value = re.sub(r"\s+", " ", match).strip()
+            key = value.lower()
+            if key and key not in seen:
+                seen.add(key)
+                products.append({"product": value, "source": "text_regex", "confidence": 0.6})
+    return products[:12]
+
+
+def _keyword_hits(text_lower: str, mapping: dict[str, tuple[str, ...]]) -> list[dict[str, Any]]:
+    hits: list[dict[str, Any]] = []
+    for key, keywords in mapping.items():
+        matched = sorted({keyword for keyword in keywords if keyword in text_lower})
+        if matched:
+            hits.append({"tag": key, "matched_terms": matched[:6], "confidence": min(0.95, 0.55 + len(matched) * 0.1)})
+    return hits
+
+
+def _brand_mentions(text_lower: str) -> list[dict[str, Any]]:
+    brands: list[dict[str, Any]] = []
+    for brand in sorted(VILTROX_TERMS | COMPETITOR_BRANDS):
+        if brand in text_lower:
+            brands.append({
+                "brand": brand,
+                "brand_type": "own_brand" if brand in VILTROX_TERMS else "competitor",
+                "confidence": 0.8,
+            })
+    return brands
+
+
+def _risk_flags(text_lower: str, brands: list[dict[str, Any]], post: dict[str, Any]) -> list[dict[str, Any]]:
+    flags: list[dict[str, Any]] = []
+    for item in _keyword_hits(text_lower, RISK_KEYWORDS):
+        severity = "medium"
+        if item["tag"] == "negative_sentiment":
+            severity = "high"
+        if item["tag"] == "competitor_focus" and any(brand.get("brand_type") == "own_brand" for brand in brands):
+            severity = "low"
+        flags.append({
+            "flag_key": item["tag"],
+            "severity": severity,
+            "matched_terms": item["matched_terms"],
+            "source": "rule_v0",
+        })
+    if not _text(post.get("post_url")):
+        flags.append({"flag_key": "missing_post_url", "severity": "low", "source": "rule_v0"})
+    if len(_combined_text(post)) < 80:
+        flags.append({"flag_key": "low_text_context", "severity": "low", "source": "rule_v0"})
+    return flags
+
+
+def _summary(post: dict[str, Any], tags: list[dict[str, Any]], products: list[dict[str, Any]], brands: list[dict[str, Any]]) -> str:
+    title = _text(post.get("title")) or _text(post.get("caption"))[:90] or "Untitled post"
+    tag_text = ", ".join(item["tag"] for item in tags[:3]) or "general content"
+    product_text = ", ".join(item["product"] for item in products[:3]) or "no explicit product"
+    brand_text = ", ".join(item["brand"] for item in brands[:3]) or "no explicit brand"
+    return f"{title[:120]} | tags: {tag_text}; products: {product_text}; brands: {brand_text}."
+
+
+def _analyze_post(post: dict[str, Any], media_items: list[dict[str, Any]]) -> dict[str, Any]:
+    text = _combined_text(post)
+    text_lower = text.lower()
+    products = _extract_products(text, _loads(post.get("detected_products_json"), []))
+    tags = _keyword_hits(text_lower, TAG_KEYWORDS)
+    brands = _brand_mentions(text_lower)
+    risks = _risk_flags(text_lower, brands, post)
+    evidence = [
+        {"type": "source_post", "source_table": "vkpi_industry_posts", "source_id": post.get("id"), "detail": _text(post.get("post_url")) or "no url"},
+        {"type": "text_context", "detail": f"{len(text)} characters evaluated"},
+        {"type": "media_count", "detail": f"{len(media_items)} media rows linked"},
+    ]
+    confidence = min(0.95, 0.4 + len(tags) * 0.08 + len(products) * 0.08 + len(brands) * 0.05)
+    return {
+        "post_id": post.get("id"),
+        "post_uid": post.get("post_uid"),
+        "platform": post.get("platform"),
+        "account_id": post.get("account_id"),
+        "account_handle": post.get("account_handle"),
+        "account_display_name": post.get("account_display_name"),
+        "post_url": post.get("post_url"),
+        "published_at": post.get("published_at"),
+        "analysis_version": ANALYSIS_VERSION,
+        "analysis_status": "previewed",
+        "confidence": round(confidence, 3),
+        "content_tags_json": tags,
+        "product_intents_json": products,
+        "risk_flags_json": risks,
+        "brand_mentions_json": brands,
+        "ai_summary": _summary(post, tags, products, brands),
+        "evidence": evidence,
+        "media_preview": [
+            {
+                "media_id": item.get("id"),
+                "media_uid": item.get("media_uid"),
+                "media_url": item.get("media_url"),
+                "media_type": item.get("media_type"),
+                "analysis_status": "previewed",
+            }
+            for item in media_items[:6]
+        ],
+    }
+
+
+def _write_outputs(payload: dict[str, Any], *, json_out: str = "", md_out: str = "") -> None:
+    if json_out:
+        Path(json_out).write_text(_json({key: value for key, value in payload.items() if key != "markdown"}), encoding="utf-8")
+    if md_out:
+        Path(md_out).write_text(payload.get("markdown") or "", encoding="utf-8")
+
+
+def _markdown(payload: dict[str, Any]) -> str:
+    lines = [
+        "# P6 Content Brain Dry-Run",
+        "",
+        f"Generated at: {payload.get('generated_at')}",
+        f"Posts evaluated: {payload.get('posts_evaluated')}",
+        f"Returned: {len(payload.get('items') or [])}",
+        f"Budget scope: {(payload.get('budget_guard') or {}).get('scope', '')}",
+        f"Budget allowed: {str(bool((payload.get('budget_guard') or {}).get('allowed'))).lower()}",
+        f"Provider calls: {str(bool(payload.get('provider_calls'))).lower()}",
+        f"Writes enabled: {str(bool(payload.get('writes_enabled'))).lower()}",
+        "",
+        "## Tag Distribution",
+        "",
+    ]
+    tag_counts = payload.get("tag_distribution") or {}
+    if tag_counts:
+        for tag, count in sorted(tag_counts.items(), key=lambda item: (-int(item[1]), item[0])):
+            lines.append(f"- {tag}: {count}")
+    else:
+        lines.append("- none")
+    lines.extend(["", "## Preview Items", ""])
+    for item in payload.get("items") or []:
+        tags = ", ".join(tag.get("tag", "") for tag in item.get("content_tags_json") or []) or "-"
+        products = ", ".join(product.get("product", "") for product in item.get("product_intents_json") or []) or "-"
+        risks = ", ".join(flag.get("flag_key", "") for flag in item.get("risk_flags_json") or []) or "-"
+        lines.extend([
+            f"### Post #{item.get('post_id')} {item.get('platform') or ''}",
+            "",
+            f"- Account: {item.get('account_display_name') or item.get('account_handle') or '-'}",
+            f"- URL: {item.get('post_url') or '-'}",
+            f"- Tags: {tags}",
+            f"- Products: {products}",
+            f"- Risks: {risks}",
+            f"- Summary: {item.get('ai_summary') or '-'}",
+            "",
+        ])
+    return "\n".join(lines).strip() + "\n"
+
+
+def build_content_brain_preview(
+    *,
+    platform: str = "",
+    account_id: int = 0,
+    post_id: int = 0,
+    query: str = "",
+    include_media: bool = False,
+    limit: int = 50,
+    json_out: str = "",
+    md_out: str = "",
+) -> dict[str, Any]:
+    safe_limit = _safe_limit(limit)
+    cost_ok = check_budget(BUDGET_SCOPE, 0.0)
+    budget_status = get_budget_status(BUDGET_SCOPE, estimated_cost=0.0)
+    if not cost_ok:
+        raise RuntimeError("budget_guard_blocked")
+
+    posts = _list_posts(platform=platform, account_id=account_id, post_id=post_id, query=query, limit=safe_limit)
+    media_map = _media_for_posts([_safe_int(post.get("id")) for post in posts]) if include_media else {}
+    items = [_analyze_post(post, media_map.get(_safe_int(post.get("id")), [])) for post in posts]
+    tag_counts: Counter[str] = Counter()
+    risk_counts: Counter[str] = Counter()
+    brand_counts: Counter[str] = Counter()
+    for item in items:
+        tag_counts.update(tag.get("tag") for tag in item.get("content_tags_json") or [] if tag.get("tag"))
+        risk_counts.update(flag.get("flag_key") for flag in item.get("risk_flags_json") or [] if flag.get("flag_key"))
+        brand_counts.update(brand.get("brand") for brand in item.get("brand_mentions_json") or [] if brand.get("brand"))
+
+    payload = {
+        "scenario": "p6_content_brain_dry_run",
+        "analysis_version": ANALYSIS_VERSION,
+        "generated_at": _utcnow(),
+        "filters": {
+            "platform": platform,
+            "account_id": int(account_id or 0),
+            "post_id": int(post_id or 0),
+            "query": query,
+            "include_media": bool(include_media),
+            "limit": safe_limit,
+        },
+        "budget_guard": {
+            "scope": BUDGET_SCOPE,
+            "allowed": bool(cost_ok),
+            "status": budget_status,
+            "estimated_cost_usd": 0.0,
+            "recorded_cost": False,
+        },
+        "writes_enabled": False,
+        "provider_calls": False,
+        "posts_evaluated": len(posts),
+        "items": items,
+        "tag_distribution": dict(sorted(tag_counts.items())),
+        "risk_distribution": dict(sorted(risk_counts.items())),
+        "brand_distribution": dict(sorted(brand_counts.items())),
+    }
+    payload["markdown"] = _markdown(payload)
+    _write_outputs(payload, json_out=json_out, md_out=md_out)
+    return payload
+
+
+def format_preview_summary(payload: dict[str, Any]) -> str:
+    budget = payload.get("budget_guard") or {}
+    return "\n".join([
+        f"scenario={payload.get('scenario', '')}",
+        f"analysis_version={payload.get('analysis_version', '')}",
+        f"posts_evaluated={int(payload.get('posts_evaluated') or 0)}",
+        f"returned={len(payload.get('items') or [])}",
+        f"budget_scope={budget.get('scope', '')}",
+        f"budget_allowed={str(bool(budget.get('allowed'))).lower()}",
+        f"provider_calls={str(bool(payload.get('provider_calls'))).lower()}",
+        f"writes_enabled={str(bool(payload.get('writes_enabled'))).lower()}",
+        f"tag_types={len(payload.get('tag_distribution') or {})}",
+        f"risk_types={len(payload.get('risk_distribution') or {})}",
+    ])
