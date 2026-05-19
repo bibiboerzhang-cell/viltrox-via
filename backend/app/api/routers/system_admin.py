@@ -27,6 +27,7 @@ from app.core.security import require_admin_async as require_admin, verify_passw
 from app.db.connection import get_conn
 from app.api.dependencies.perms import require_system_permission, require_tab
 from app.services.auth.email import email_service_available
+from app.services.auth.tokens import _token_ttl
 from app.services.audit_log import record_admin_action
 from app.services.system import integrations as int_svc
 from app.services.system import ai_usage as usage_svc
@@ -596,7 +597,7 @@ def staff_invite_capabilities(admin=Depends(require_tab("system", "read"))):
         "email_available": email_available,
         "external_emails_allowed": external_emails_allowed,
         "allowed_domains": allowed_domains,
-        "token_ttl_hours": 1,
+        "token_ttl_hours": int(_token_ttl("staff_invite") / 3600),
         "manual_activation_link_available": False,
         "delivery_methods": ["email_magic_link"] if email_available else [],
     }
