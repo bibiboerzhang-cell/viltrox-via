@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
+import hashlib
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -111,6 +113,14 @@ def _is_recent_90d(value: Any) -> bool:
     return 0 <= age_days <= 90
 
 
+def _utcnow() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
 def _find_competitor_terms(text: str) -> list[str]:
     lowered = _lower(text)
     matches = []
@@ -154,6 +164,13 @@ def _append_signal(bucket: dict[str, Any], signal: dict[str, Any]) -> None:
     for product in signal.get("product_hints") or []:
         if product:
             bucket["product_hints"][product] += 1
+
+
+def _signal_score(signal: dict[str, Any]) -> int:
+    score = SIGNAL_WEIGHTS.get(str(signal.get("signal_type") or ""), 0)
+    if signal.get("recent_90d"):
+        score += SIGNAL_WEIGHTS["recent_90d"]
+    return int(score)
 
 
 def _new_bucket(brand: str) -> dict[str, Any]:
@@ -385,6 +402,98 @@ def build_competitor_brain_preview(
     if md_out:
         Path(md_out).write_text(markdown, encoding="utf-8")
     return payload
+
+
+def commit_competitor_signals(
+    *,
+    limit: int = 200,
+    committed_by: str = "cli",
+) -> dict[str, Any]:
+    """Persist deterministic P8 preview signals for review."""
+    safe_limit = _safe_limit(limit, default=200, ceiling=1000)
+    content_signals = _content_brain_signals(1000)
+    voc_signals = _voc_signals()
+    risk_watch_signals = _risk_watch_signals()
+    all_signals = (content_signals + voc_signals + risk_watch_signals)[:safe_limit]
+    run_uid = f"p8sig-{secrets.token_hex(8)}"
+    now = _utcnow()
+    conn = get_conn()
+    source_summary = {
+        "scenario": SCENARIO,
+        "provider_calls": False,
+        "write_db": True,
+        "content_signals": len(content_signals),
+        "voc_signals": len(voc_signals),
+        "risk_watch_signals": len(risk_watch_signals),
+        "committed_signals": len(all_signals),
+    }
+    conn.execute(
+        """
+        INSERT INTO vkpi_competitor_signal_runs (
+          run_uid, status, source_summary_json, signal_count,
+          committed_by, created_at, committed_at
+        ) VALUES (?,?,?,?,?,?,?)
+        """,
+        (run_uid, "committed", _json(source_summary), len(all_signals), committed_by, now, now),
+    )
+    run_row = conn.execute("SELECT id FROM vkpi_competitor_signal_runs WHERE run_uid=?", (run_uid,)).fetchone()
+    run_id = int(run_row["id"])
+    inserted = 0
+    for signal in all_signals:
+        basis = _json(
+            {
+                "run_uid": run_uid,
+                "brand": signal.get("brand"),
+                "signal_type": signal.get("signal_type"),
+                "source_table": signal.get("source_table"),
+                "source_id": signal.get("source_id"),
+                "source_sheet": signal.get("source_sheet"),
+                "source_row": signal.get("source_row"),
+                "detail": signal.get("detail"),
+            }
+        )
+        signal_uid = f"p8sig-{hashlib.sha256(basis.encode('utf-8')).hexdigest()[:16]}"
+        conn.execute(
+            """
+            INSERT INTO vkpi_competitor_signals (
+              signal_uid, run_id, brand, normalized_brand, signal_type, severity, score,
+              product_hints_json, source_table, source_id, source_sheet, source_row,
+              source_url, platform, detail, evidence_json, review_status, created_at, updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                signal_uid,
+                run_id,
+                _text(signal.get("brand")),
+                _normalize_brand(signal.get("brand")),
+                _text(signal.get("signal_type")),
+                _text(signal.get("severity")) or "medium",
+                _signal_score(signal),
+                _json(signal.get("product_hints") or []),
+                _text(signal.get("source_table")),
+                signal.get("source_id"),
+                _text(signal.get("source_sheet")),
+                signal.get("source_row"),
+                _text(signal.get("source_url")),
+                _text(signal.get("platform")),
+                _text(signal.get("detail")),
+                _json(signal),
+                "pending_review",
+                now,
+                now,
+            ),
+        )
+        inserted += 1
+    conn.commit()
+    return {
+        "scenario": "p8_competitor_signal_commit",
+        "run_uid": run_uid,
+        "run_id": run_id,
+        "inserted_signals": inserted,
+        "source_summary": source_summary,
+        "provider_calls": False,
+        "write_db": True,
+    }
 
 
 def format_preview_summary(payload: dict[str, Any]) -> str:

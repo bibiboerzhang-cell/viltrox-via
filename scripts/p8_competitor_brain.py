@@ -18,6 +18,7 @@ from app.db.connection import close_db_runtime  # noqa: E402
 from app.services.vkpi.competitor_brain import (  # noqa: E402
     FORBIDDEN_WRITE_FLAGS,
     build_competitor_brain_preview,
+    commit_competitor_signals,
     format_preview_summary,
 )
 
@@ -28,6 +29,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--json-out", default="", help="Write JSON preview to this path")
     parser.add_argument("--md-out", default="", help="Write Markdown report to this path")
     parser.add_argument("--dry-run", action="store_true", default=True, help="P8-1 is always dry-run")
+    parser.add_argument("--commit-signals", action="store_true", help="P8-3: persist preview signals for review")
+    parser.add_argument("--confirm", action="store_true", help="Required with --commit-signals")
+    parser.add_argument("--committed-by", default="cli", help="Commit actor label for --commit-signals")
     parser.add_argument("--json", action="store_true", help="Print full JSON payload to stdout")
     return parser.parse_args()
 
@@ -42,6 +46,20 @@ def main() -> int:
     try:
         _reject_forbidden_flags(sys.argv[1:])
         args = parse_args()
+        if args.commit_signals:
+            if not args.confirm:
+                raise ValueError("--commit-signals requires --confirm")
+            result = commit_competitor_signals(limit=args.limit, committed_by=args.committed_by)
+            if args.json:
+                print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+            else:
+                print(f"scenario={result.get('scenario', '')}")
+                print(f"run_uid={result.get('run_uid', '')}")
+                print(f"run_id={int(result.get('run_id') or 0)}")
+                print(f"inserted_signals={int(result.get('inserted_signals') or 0)}")
+                print(f"provider_calls={str(bool(result.get('provider_calls'))).lower()}")
+                print(f"write_db={str(bool(result.get('write_db'))).lower()}")
+            return 0
         payload = build_competitor_brain_preview(
             limit=args.limit,
             json_out=args.json_out,
