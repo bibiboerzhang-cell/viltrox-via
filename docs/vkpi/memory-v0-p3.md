@@ -470,14 +470,87 @@ Risk / review 降权信号
 
 这一步仍然不是推荐，只是把市场环境和产品动作纳入 Memory。
 
-## 10. P3 后续
+## 10. P3.5 Readiness / Feedback Queue
 
-P3-5 可以继续做：
+P3.5 已补 P4 dry-run 前的 Memory 可用性检查和反馈处理入口。
+
+新增只读 readiness：
 
 ```text
-1. Memory feedback 后台列表和处理状态
-2. Product family 人工 override 表或配置，处理 97 条 unclassified
-3. P4 推荐 v0 dry-run，只读 Memory + Budget Guard，不直接跑 provider
+readiness()
+```
+
+新增 feedback helpers：
+
+```text
+list_feedback(status, entity_uid, feedback_type, limit)
+update_feedback(feedback_uid, status, resolution_action, resolution_note)
+```
+
+新增 API：
+
+```text
+GET   /api/admin/vkpi/memory/readiness
+GET   /api/admin/vkpi/memory/feedback
+PATCH /api/admin/vkpi/memory/feedback/{feedback_uid}
+```
+
+新增 CLI：
+
+```bash
+python3 scripts/build_vkpi_memory.py --readiness
+python3 scripts/build_vkpi_memory.py --feedback-list --limit 20
+
+# 默认 dry-run，不会改库
+python3 scripts/build_vkpi_memory.py \
+  --resolve-feedback mem_feedback_xxx \
+  --feedback-status resolved \
+  --resolution-note "checked"
+
+# 真正落库必须显式加 --commit
+python3 scripts/build_vkpi_memory.py \
+  --resolve-feedback mem_feedback_xxx \
+  --feedback-status resolved \
+  --resolution-note "checked" \
+  --commit
+```
+
+Readiness 验收：
+
+```text
+status=ready_for_p4_dry_run
+provider_calls_allowed=false
+gate.kol_memory=pass actual=1012 expected_min=1000
+gate.product_family_memory=pass actual=659 expected_min=1
+gate.historical_product_links=pass actual=2358 expected_min=1
+gate.market_signals=pass actual=2486 expected_min=1
+gate.launch_signals=pass actual=52 expected_min=1
+gate.official_content_signals=pass actual=2168 expected_min=1
+gate.voc_signals=pass actual=37 expected_min=1
+gate.budget_guard_tables=pass actual=1 expected_min=1
+```
+
+当前 feedback queue：
+
+```text
+returned=0
+```
+
+P3.5 的边界：
+
+```text
+readiness 只证明 P4 dry-run 可以读 Memory。
+provider_calls_allowed=false 表示仍不允许 P4 直接调用 LLM provider。
+feedback update 是人工处理流，不会自动改 Memory facts。
+```
+
+## 11. P3 后续
+
+P3 后续可选项：
+
+```text
+1. Product family 人工 override 表或配置，处理 97 条 unclassified
+2. P4 推荐 v0 dry-run，只读 Memory + Budget Guard，不直接跑 provider
 ```
 
 P4 推荐前必须坚持：

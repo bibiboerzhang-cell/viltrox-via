@@ -2,7 +2,7 @@
 
 生成日期：2026-05-19  
 输入 batch：`vkpi_20260519033921_b36c6f28ec8d`  
-当前阶段：P3 Memory 主体完成，可进入 P4 dry-run 设计
+当前阶段：P3 Memory 主体完成，P3.5 readiness 通过，可进入 P4 dry-run 设计
 
 ## 1. 总结
 
@@ -45,6 +45,7 @@ b99f459 docs(vkpi): document P3 memory query helpers
 2df69e7 docs(vkpi): document P3 product family normalization
 d3c0b09 feat(vkpi): build market memory signals from legacy staging
 036dc89 docs(vkpi): document P3 market memory signals
+b2b35cc docs(vkpi): add P3 memory completion report
 ```
 
 ## 3. P3-1 Memory v0
@@ -362,17 +363,20 @@ target=product_family:AF 135mm F1.8
 
 ```text
 GET  /api/admin/vkpi/memory/summary
+GET  /api/admin/vkpi/memory/readiness
 GET  /api/admin/vkpi/memory/entities
 GET  /api/admin/vkpi/memory/entities/{entity_uid}/facts
 GET  /api/admin/vkpi/memory/product-kol-candidates
 GET  /api/admin/vkpi/memory/product-families
 GET  /api/admin/vkpi/memory/market-signals
+GET  /api/admin/vkpi/memory/feedback
 GET  /api/admin/vkpi/memory/entities/{entity_uid}/product-memory
 GET  /api/admin/vkpi/memory/entities/{entity_uid}/fit-features
 POST /api/admin/vkpi/memory/build-from-legacy/{batch_uid}
 POST /api/admin/vkpi/memory/build-product-families
 POST /api/admin/vkpi/memory/build-market-memory/{batch_uid}
 POST /api/admin/vkpi/memory/feedback
+PATCH /api/admin/vkpi/memory/feedback/{feedback_uid}
 ```
 
 权限：
@@ -382,7 +386,69 @@ read endpoints  -> require_tab("vkpi", "read")
 write endpoints -> require_tab("vkpi", "write")
 ```
 
-## 8. 验收命令
+## 8. P3.5 Readiness / Feedback Queue
+
+P3.5 补了 P4 dry-run 前的可用性检查和 Memory feedback 处理入口。
+
+新增 API：
+
+```text
+GET   /api/admin/vkpi/memory/readiness
+GET   /api/admin/vkpi/memory/feedback
+PATCH /api/admin/vkpi/memory/feedback/{feedback_uid}
+```
+
+新增 CLI：
+
+```bash
+python3 scripts/build_vkpi_memory.py --readiness
+python3 scripts/build_vkpi_memory.py --feedback-list --limit 20
+
+# 默认 dry-run，不改库
+python3 scripts/build_vkpi_memory.py \
+  --resolve-feedback mem_feedback_xxx \
+  --feedback-status resolved \
+  --resolution-note "checked"
+
+# 真正落库必须显式加 --commit
+python3 scripts/build_vkpi_memory.py \
+  --resolve-feedback mem_feedback_xxx \
+  --feedback-status resolved \
+  --resolution-note "checked" \
+  --commit
+```
+
+Readiness 当前结果：
+
+```text
+status=ready_for_p4_dry_run
+provider_calls_allowed=false
+gate.kol_memory=pass actual=1012 expected_min=1000
+gate.product_family_memory=pass actual=659 expected_min=1
+gate.historical_product_links=pass actual=2358 expected_min=1
+gate.market_signals=pass actual=2486 expected_min=1
+gate.launch_signals=pass actual=52 expected_min=1
+gate.official_content_signals=pass actual=2168 expected_min=1
+gate.voc_signals=pass actual=37 expected_min=1
+gate.budget_guard_tables=pass actual=1 expected_min=1
+```
+
+Feedback queue 当前结果：
+
+```text
+returned=0
+```
+
+解释：
+
+```text
+P4 dry-run 可以读取 Memory。
+provider_calls_allowed=false，表示 P4 仍不允许直接调用 LLM provider。
+feedback queue 目前没有未处理项。
+feedback update 是人工处理流，不会自动重写 Memory facts。
+```
+
+## 9. 验收命令
 
 ```bash
 python3 -m py_compile \
@@ -410,6 +476,9 @@ python3 scripts/build_vkpi_memory.py \
   --market-signals "AF 35mm" \
   --limit 3
 
+python3 scripts/build_vkpi_memory.py --readiness
+python3 scripts/build_vkpi_memory.py --feedback-list --limit 20
+
 git diff --check
 ```
 
@@ -421,9 +490,11 @@ git diff --check: pass
 product-kol-candidates AF 35mm: total_candidates=201
 market-signals AF 35mm: returned product_family signals
 market-signals 产品相关/voc_alert: returned market_topic + product_family VOC signals
+readiness: ready_for_p4_dry_run
+feedback-list: returned=0
 ```
 
-## 9. 当前限制
+## 10. 当前限制
 
 P3 仍有几个明确限制，不能当成 P4 已完成：
 
@@ -432,11 +503,11 @@ P3 仍有几个明确限制，不能当成 P4 已完成：
 2. product_family 有 97 条 unclassified，后续需要人工 override 或规则补丁。
 3. Market Memory 只写 ready 行，review queue 里的 validation_error 未进入 Memory。
 4. official_content / official_material 只形成历史信号，还没有效果回流。
-5. Memory feedback 表已建，但后台处理流还没做。
+5. Memory feedback 已有处理入口，但还没有前端页面。
 6. P3 没有接 LLM provider，也没有新增成本消耗。
 ```
 
-## 10. 进入 P4 的建议门槛
+## 11. 进入 P4 的建议门槛
 
 P4 推荐 v0 可以开始，但建议只做 dry-run：
 
@@ -471,7 +542,7 @@ Contact availability signals
   risk_flag + needs_human_review + contact_missing
 ```
 
-## 11. 结论
+## 12. 结论
 
 P3 主体目标已经完成：
 
@@ -480,6 +551,7 @@ P2D 的历史 KOL 主表数据已转成 Memory。
 产品历史写法已收敛到 product_family。
 官媒、物料、上市计划、VOC 已转成 market_signal。
 P4 推荐已有可解释、可查询、可审计的输入层。
+P3.5 readiness 已通过，可以进入 P4 dry-run。
 ```
 
 下一步不是继续堆 Memory 表，而是进入 P4 dry-run，把 Memory 读出来形成可解释推荐预览，并保持 Budget Guard 前置。
