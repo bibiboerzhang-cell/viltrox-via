@@ -14,6 +14,7 @@ P10-1  service + CLI snapshot
 P10-2  read-only API
 P10-3  recommendation feedback backlog snapshot
 P10-4  Memory feedback backlog snapshot
+P10-5  recommendation action feedback bridge
 ```
 
 ## Current Snapshot
@@ -134,6 +135,37 @@ memory_feedback_backlog:
   verify_memory_entity=36
   memory_feedback_rows=0
 
+vkpi_ai_cost_ledger.count=0
+```
+
+## Recommendation Action Feedback Bridge
+
+P10-5 fixes the write-side bridge so real operator actions create learning feedback rows.
+
+```text
+shortlist action      -> vkpi_recommendation_feedback.feedback_type='shortlist'
+reject action         -> vkpi_recommendation_feedback.feedback_type='reject'
+claim action          -> vkpi_recommendation_feedback.feedback_type='claim'
+create_project action -> already writes feedback_type='create_project'
+```
+
+Guardrails:
+
+```text
+same recommendation_id + feedback_type is written once
+repeat clicks update outcome/status but do not duplicate feedback rows
+no feedback row is created by backlog snapshots
+no feedback row is created without an explicit product recommendation action
+```
+
+Smoke verification:
+
+```text
+scripts/smoke_vkpi_product_industry_phase0.py
+  shortlist action created exactly 1 recommendation feedback row
+  cleanup returned vkpi_recommendation_feedback to 0 in local verification
+
+frontend npm run build passed
 vkpi_ai_cost_ledger.count=0
 ```
 

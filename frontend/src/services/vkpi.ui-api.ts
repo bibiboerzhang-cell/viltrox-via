@@ -1306,7 +1306,7 @@ export async function getProductRecommendationOutcomeSummary(token: string, opti
 export async function getProductRecommendationEvidence(token: string, recommendationId: string) {
   return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/product-analysis/recommendations/${encodeURIComponent(recommendationId)}/evidence`, {}, token);
 }
-export async function productRecommendationAction(token: string, recommendationId: string, action: "shortlist" | "reject" | "claim" | "create_project", payload: Row = {}) {
+export async function productRecommendationAction(token: string, recommendationId: string, action: "shortlist" | "reject" | "feedback" | "claim" | "create_project", payload: Row = {}) {
   return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/product-analysis/recommendations/${encodeURIComponent(recommendationId)}/${encodeURIComponent(action)}`, { method: "POST", body: jsonBody(payload) }, token);
 }
 

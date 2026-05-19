@@ -310,6 +310,50 @@ def _create_project_from_recommendation(recommendation_id: int, payload: dict[st
     updated = get_conn().execute("SELECT * FROM vkpi_kol_recommendations WHERE id=?", (int(recommendation_id),)).fetchone()
     return {"recommendation": dict(updated) if updated else {}, "kol": kol, "claim": claimed.get("claim") or {}, "project": project, "link": link, "link_error": link_error, "adapter_status": "executed", "external_side_effect": True}
 
+
+def _record_action_feedback_once(
+    recommendation_id: int,
+    feedback_type: str,
+    payload: dict[str, Any],
+    *,
+    staff: dict[str, Any] | None = None,
+    note: str = "",
+) -> bool:
+    """Record a real operator action as feedback without duplicating repeat clicks."""
+
+    clean_type = str(feedback_type or "").strip().lower()
+    if not clean_type:
+        return False
+    existing = get_conn().execute(
+        """
+        SELECT id
+        FROM vkpi_recommendation_feedback
+        WHERE recommendation_id=? AND feedback_type=?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (int(recommendation_id), clean_type),
+    ).fetchone()
+    if existing:
+        return False
+    get_conn().execute(
+        """
+        INSERT INTO vkpi_recommendation_feedback
+            (recommendation_id, feedback_type, note, created_by_staff_id, created_at, metadata_json)
+        VALUES (?,?,?,?,?,?)
+        """,
+        (
+            int(recommendation_id),
+            clean_type,
+            note,
+            resolve_staff_id(staff) or None,
+            _utcnow(),
+            _json({"source_action": clean_type, **(payload or {})}),
+        ),
+    )
+    return True
+
+
 def action_recommendation(recommendation_id: int, action: str, payload: dict[str, Any] | None = None, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     ensure_vkpi_product_industry_schema()
     payload = payload or {}
@@ -317,8 +361,16 @@ def action_recommendation(recommendation_id: int, action: str, payload: dict[str
     _recommendation_context(recommendation_id)
     if clean == "claim":
         claimed = _claim_recommendation_kol(recommendation_id, staff=staff, note=str(payload.get("note") or ""))
+        feedback_inserted = _record_action_feedback_once(
+            recommendation_id,
+            "claim",
+            payload,
+            staff=staff,
+            note=str(payload.get("note") or ""),
+        )
+        get_conn().commit()
         audit.log_business_event(staff_id=resolve_staff_id(staff), action_type="recommendation_claim", target_type="recommendation", target_id=recommendation_id, metadata={"kol_id": (claimed.get("kol") or {}).get("id"), "claim_id": (claimed.get("claim") or {}).get("id"), **payload})
-        return {**claimed, "adapter_status": "executed", "external_side_effect": True}
+        return {**claimed, "feedback_inserted": feedback_inserted, "adapter_status": "executed", "external_side_effect": True}
     if clean == "create_project":
         return _create_project_from_recommendation(recommendation_id, payload, staff=staff)
 
@@ -329,12 +381,20 @@ def action_recommendation(recommendation_id: int, action: str, payload: dict[str
     if clean in {"shortlist", "reject"}:
         get_conn().execute("UPDATE vkpi_kol_recommendations SET status=?, updated_at=? WHERE id=?", (status_map[clean], now, int(recommendation_id)))
         outcome_collector.record(int(recommendation_id), "shortlisted" if clean == "shortlist" else "rejected", note=str(payload.get("reason") or ""), context=payload)
+        feedback_inserted = _record_action_feedback_once(
+            recommendation_id,
+            clean,
+            payload,
+            staff=staff,
+            note=str(payload.get("note") or payload.get("reason") or ""),
+        )
     else:
         get_conn().execute(
             "INSERT INTO vkpi_recommendation_feedback (recommendation_id, feedback_type, note, created_by_staff_id, created_at, metadata_json) VALUES (?,?,?,?,?,?)",
             (int(recommendation_id), clean, str(payload.get("note") or payload.get("reason") or ""), resolve_staff_id(staff) or None, now, _json(payload)),
         )
+        feedback_inserted = True
     get_conn().commit()
     audit.log_business_event(staff_id=resolve_staff_id(staff), action_type=f"recommendation_{clean}", target_type="recommendation", target_id=recommendation_id, metadata=payload)
     updated = get_conn().execute("SELECT * FROM vkpi_kol_recommendations WHERE id=?", (int(recommendation_id),)).fetchone()
-    return {"recommendation": dict(updated) if updated else {}, "adapter_status": "recorded", "external_side_effect": False}
+    return {"recommendation": dict(updated) if updated else {}, "feedback_inserted": feedback_inserted, "adapter_status": "recorded", "external_side_effect": False}

@@ -84,6 +84,11 @@ def main() -> None:
         for rec in rec_result["recommendations"]:
             created["recommendation_ids"].append(rec["id"])
         product_analysis.action_recommendation(rec_result["recommendations"][0]["id"], "shortlist", {"note": "smoke"}, staff=staff)
+        feedback_count = get_conn().execute(
+            "SELECT COUNT(*) AS n FROM vkpi_recommendation_feedback WHERE recommendation_id=? AND feedback_type='shortlist'",
+            (rec_result["recommendations"][0]["id"],),
+        ).fetchone()["n"]
+        assert int(feedback_count or 0) == 1
         outcome_summary = product_analysis.recommendation_outcome_summary(launch_id=launch["id"])
         assert int(outcome_summary["totals"]["recommendations"] or 0) >= 1
         assert int(outcome_summary["totals"]["shortlisted"] or 0) >= 1
