@@ -42,6 +42,11 @@ def parse_args() -> argparse.Namespace:
         default=20,
         help="Maximum number of returned candidates to enrich with recommendation reasons",
     )
+    parser.add_argument(
+        "--persist-run",
+        action="store_true",
+        help="P4-3: persist this preview into recommendation run/item/evidence tables with status=previewed",
+    )
     parser.add_argument("--json", action="store_true", help="Print full JSON payload to stdout")
     return parser.parse_args()
 
@@ -65,6 +70,7 @@ def main() -> int:
             md_out=args.md_out,
             with_llm_reasons=args.with_llm_reasons,
             reason_limit=args.reason_limit,
+            persist_run=args.persist_run,
         )
         if args.json:
             print(json.dumps({key: value for key, value in payload.items() if key != "markdown_items"}, ensure_ascii=False, indent=2, default=str))
