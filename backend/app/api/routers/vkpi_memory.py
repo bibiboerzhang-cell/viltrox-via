@@ -66,6 +66,17 @@ def memory_product_families(
     return memory.product_family_summary(query=query, limit=limit)
 
 
+@router.get("/memory/market-signals")
+def memory_market_signals(
+    query: str = Query(default=""),
+    signal_type: str = Query(default=""),
+    limit: int = Query(default=100, ge=1, le=500),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    del staff
+    return memory.market_signals(query=query, signal_type=signal_type, limit=limit)
+
+
 @router.get("/memory/entities/{entity_uid}/product-memory")
 def memory_entity_product_memory(
     entity_uid: str,
@@ -115,6 +126,18 @@ def build_product_families(
     del staff
     try:
         return memory.build_product_family_memory()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/memory/build-market-memory/{batch_uid}")
+def build_market_memory(
+    batch_uid: str,
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    del staff
+    try:
+        return memory.build_market_memory_from_legacy_batch(batch_uid)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -26,9 +26,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-uid", default=DEFAULT_BATCH_UID)
     parser.add_argument("--build-legacy", action="store_true", help="Build memory facts from the legacy batch")
     parser.add_argument("--build-product-families", action="store_true", help="Normalize product memory into product_family entities")
+    parser.add_argument("--build-market-memory", action="store_true", help="Build Market Memory v0 from legacy launch/VOC/official content")
     parser.add_argument("--summary", action="store_true", help="Print memory summary")
     parser.add_argument("--source-ref", default="", help="Optional source_ref prefix for summary")
     parser.add_argument("--product-families", nargs="?", const="", default=None, help="List normalized product families")
+    parser.add_argument("--market-signals", nargs="?", const="", default=None, help="List Market Memory signals")
+    parser.add_argument("--signal-type", default="", help="Optional signal type filter for --market-signals")
     parser.add_argument("--product-kol-candidates", default="", help="List KOL memory evidence for a product query")
     parser.add_argument("--kol-product-memory", default="", help="Show product memory for a KOL memory entity_uid")
     parser.add_argument("--fit-features", default="", help="Extract deterministic fit features for a KOL memory entity_uid")
@@ -89,6 +92,34 @@ def _print_product_families(result: dict) -> None:
             print(f"   - product={member.get('display_name', '')} links={int(member.get('link_count') or 0)}")
 
 
+def _print_market_signals(result: dict) -> None:
+    print(f"query={result.get('query', '')}")
+    print(f"signal_type={result.get('signal_type', '')}")
+    if "total_signals" in result:
+        print(f"total_signals={int(result.get('total_signals') or 0)}")
+    if result.get("signals"):
+        for key, value in sorted((result.get("signals") or {}).items()):
+            print(f"signals.{key}={int(value)}")
+    if result.get("target_entity_types"):
+        for key, value in sorted((result.get("target_entity_types") or {}).items()):
+            print(f"targets.{key}={int(value)}")
+    if result.get("attachment"):
+        for key, value in sorted((result.get("attachment") or {}).items()):
+            print(f"attachment.{key}={int(value)}")
+    if "total_returned" in result:
+        print(f"total_returned={int(result.get('total_returned') or 0)}")
+    for idx, item in enumerate(result.get("items") or [], start=1):
+        entity = item.get("entity") or {}
+        fact = item.get("fact") or {}
+        print(
+            f"{idx}. type={item.get('signal_type', '')} "
+            f"date={item.get('signal_date', '')} "
+            f"target={entity.get('entity_type', '')}:{entity.get('display_name', '')} "
+            f"value={item.get('value', '')} "
+            f"source={fact.get('source_sheet', '')}:{fact.get('source_row', '')}"
+        )
+
+
 def _print_kol_memory(result: dict) -> None:
     entity = result.get("entity") or {}
     features = result.get("features") or {}
@@ -136,8 +167,12 @@ def main() -> int:
     try:
         if args.build_product_families:
             result = memory.build_product_family_memory()
+        elif args.build_market_memory:
+            result = memory.build_market_memory_from_legacy_batch(args.batch_uid)
         elif args.product_families is not None:
             result = memory.product_family_summary(query=args.product_families, limit=args.limit)
+        elif args.market_signals is not None:
+            result = memory.market_signals(query=args.market_signals, signal_type=args.signal_type, limit=args.limit)
         elif args.product_kol_candidates:
             result = memory.product_kol_candidates(product_query=args.product_kol_candidates, limit=args.limit)
         elif args.kol_product_memory:
@@ -158,6 +193,13 @@ def main() -> int:
             if result.get("build_counts"):
                 for key, value in sorted((result.get("build_counts") or {}).items()):
                     print(f"build.{key}={int(value)}")
+        elif args.build_market_memory:
+            _print_market_signals(result)
+            if result.get("build_counts"):
+                for key, value in sorted((result.get("build_counts") or {}).items()):
+                    print(f"build.{key}={int(value)}")
+        elif args.market_signals is not None:
+            _print_market_signals(result)
         elif args.product_kol_candidates:
             _print_candidate_result(result)
         elif args.kol_product_memory:
