@@ -171,6 +171,19 @@ def industry_competitor_brain_signals(
     )
 
 
+@router.get("/industry-data/competitor-brain/review-suggestions")
+def industry_competitor_brain_review_suggestions(
+    review_status: str = "pending_review",
+    limit: int = Query(default=100, ge=1, le=500),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    del staff
+    return competitor_brain.build_competitor_signal_review_suggestions(
+        review_status=review_status,
+        limit=limit,
+    )
+
+
 @router.post("/industry-data/competitor-brain/signals/{signal_id}/review")
 def industry_competitor_brain_review_signal(signal_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
     try:

@@ -626,6 +626,145 @@ def list_competitor_signals(
     return {"schema_ready": True, "signals": signals, "count": len(signals)}
 
 
+def _review_suggestion_for_signal(signal: dict[str, Any]) -> dict[str, Any]:
+    brand = _text(signal.get("normalized_brand") or signal.get("brand"))
+    signal_type = _text(signal.get("signal_type"))
+    severity = _lower(signal.get("severity") or "medium")
+    score = float(signal.get("score") or 0)
+    product_hints = signal.get("product_hints")
+    if not isinstance(product_hints, list):
+        product_hints = _loads(signal.get("product_hints_json"), [])
+    evidence = signal.get("evidence")
+    if not isinstance(evidence, dict):
+        evidence = _loads(signal.get("evidence_json"), {})
+    source_table = _text(signal.get("source_table"))
+    source_id = signal.get("source_id")
+    detail = _text((evidence or {}).get("detail") or signal.get("detail"))
+    reasons: list[str] = []
+
+    if not brand or brand == "unknown":
+        reasons.append("missing_brand")
+        return {"suggested_action": "pending_review", "confidence": 0.35, "reasons": reasons}
+    if not source_table and not source_id:
+        reasons.append("missing_source")
+        return {"suggested_action": "pending_review", "confidence": 0.4, "reasons": reasons}
+    if not detail:
+        reasons.append("missing_evidence_detail")
+        return {"suggested_action": "pending_review", "confidence": 0.45, "reasons": reasons}
+
+    if severity in {"critical", "danger", "high"}:
+        reasons.append(f"severity:{severity}")
+        return {"suggested_action": "ready", "confidence": 0.9, "reasons": reasons}
+    if signal_type in {"competitor_focus", "pricing_sensitive", "product_comparison", "voc_issue", "risk_watch"}:
+        reasons.append(f"signal_type:{signal_type}")
+        if product_hints:
+            reasons.append("has_product_hints")
+        return {"suggested_action": "ready", "confidence": 0.82 if product_hints else 0.72, "reasons": reasons}
+    if score >= 25:
+        reasons.append(f"score:{score:g}")
+        return {"suggested_action": "ready", "confidence": 0.75, "reasons": reasons}
+    if signal_type == "competitor_mention" and not product_hints and score <= 20:
+        reasons.append("generic_competitor_mention_without_product")
+        return {"suggested_action": "ignored", "confidence": 0.68, "reasons": reasons}
+
+    reasons.append("valid_but_low_context")
+    return {"suggested_action": "pending_review", "confidence": 0.55, "reasons": reasons}
+
+
+def build_competitor_signal_review_suggestions(
+    *,
+    review_status: str = "pending_review",
+    limit: int = 100,
+) -> dict[str, Any]:
+    """Return deterministic review suggestions without mutating competitor signals."""
+    if not _table_exists("vkpi_competitor_signals"):
+        return {
+            "scenario": "p8_competitor_signal_review_suggestions",
+            "schema_ready": False,
+            "provider_calls": False,
+            "write_db": False,
+            "suggestions": [],
+            "count": 0,
+            "suggested_actions": {},
+        }
+    result = list_competitor_signals(review_status=review_status, limit=limit)
+    suggestions: list[dict[str, Any]] = []
+    action_counts: Counter[str] = Counter()
+    brand_counts: Counter[str] = Counter()
+    type_counts: Counter[str] = Counter()
+    for signal in result.get("signals") or []:
+        suggestion = _review_suggestion_for_signal(signal)
+        action = str(suggestion.get("suggested_action") or "pending_review")
+        action_counts[action] += 1
+        brand = _text(signal.get("normalized_brand") or signal.get("brand") or "unknown")
+        signal_type = _text(signal.get("signal_type") or "unknown")
+        brand_counts[brand] += 1
+        type_counts[signal_type] += 1
+        suggestions.append(
+            {
+                "signal_id": signal.get("id"),
+                "signal_uid": signal.get("signal_uid"),
+                "brand": brand,
+                "signal_type": signal_type,
+                "severity": signal.get("severity"),
+                "score": signal.get("score"),
+                "review_status": signal.get("review_status") or "pending_review",
+                "suggested_action": action,
+                "confidence": suggestion.get("confidence"),
+                "reasons": suggestion.get("reasons") or [],
+                "source_table": signal.get("source_table"),
+                "source_id": signal.get("source_id"),
+                "source_row": signal.get("source_row"),
+                "detail": _text((signal.get("evidence") or {}).get("detail") or signal.get("detail"))[:240],
+            }
+        )
+    suggestions.sort(
+        key=lambda item: (
+            {"ready": 0, "pending_review": 1, "ignored": 2, "rejected": 3}.get(str(item.get("suggested_action")), 9),
+            -float(item.get("confidence") or 0),
+            -float(item.get("score") or 0),
+            str(item.get("brand") or ""),
+        )
+    )
+    return {
+        "scenario": "p8_competitor_signal_review_suggestions",
+        "schema_ready": True,
+        "provider_calls": False,
+        "write_db": False,
+        "filters": {"review_status": review_status, "limit": _safe_limit(limit, default=100, ceiling=500)},
+        "count": len(suggestions),
+        "suggested_actions": dict(action_counts),
+        "brand_distribution": dict(brand_counts),
+        "signal_type_distribution": dict(type_counts),
+        "suggestions": suggestions,
+    }
+
+
+def format_review_suggestions(payload: dict[str, Any]) -> str:
+    lines = [
+        "# P8 Competitor Signal Review Suggestions",
+        "",
+        "```text",
+        f"scenario={payload.get('scenario', '')}",
+        f"provider_calls={str(bool(payload.get('provider_calls'))).lower()}",
+        f"write_db={str(bool(payload.get('write_db'))).lower()}",
+        f"count={int(payload.get('count') or 0)}",
+    ]
+    for action, count in sorted((payload.get("suggested_actions") or {}).items()):
+        lines.append(f"suggested.{action}={int(count or 0)}")
+    lines.extend(["```", "", "## Suggestions", ""])
+    for item in payload.get("suggestions") or []:
+        lines.append(
+            f"- signal_id={item.get('signal_id')} action={item.get('suggested_action')} "
+            f"confidence={float(item.get('confidence') or 0):.2f} "
+            f"brand={item.get('brand')} type={item.get('signal_type')} "
+            f"reasons={','.join(item.get('reasons') or [])}"
+        )
+    if not payload.get("suggestions"):
+        lines.append("- none")
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def review_competitor_signal(
     signal_id: int,
     *,

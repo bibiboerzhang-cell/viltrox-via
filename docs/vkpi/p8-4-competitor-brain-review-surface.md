@@ -25,6 +25,7 @@ write AI cost ledger
 ```text
 GET /api/admin/vkpi/industry-data/competitor-brain/status
 GET /api/admin/vkpi/industry-data/competitor-brain/signals
+GET /api/admin/vkpi/industry-data/competitor-brain/review-suggestions
 POST /api/admin/vkpi/industry-data/competitor-brain/signals/{signal_id}/review
 ```
 
@@ -47,6 +48,14 @@ pending_review    -> review_status='pending_review'
 ```
 
 The review endpoint updates only `vkpi_competitor_signals.review_status` and stores the decision trail in `evidence_json.review_history`. It does not write canonical competitor product tables.
+
+Review suggestions are deterministic and read-only:
+
+```bash
+python3 scripts/p8_competitor_brain.py --review-suggestions
+```
+
+They do not apply decisions. Suggested `ready` rows still require CLI `--apply-review` or the frontend per-row action.
 
 ## Frontend
 
@@ -87,6 +96,7 @@ top_signal_brand=godox
 python3 -m py_compile backend/app/services/vkpi/competitor_brain.py passed
 python3 -m py_compile backend/app/api/routers/vkpi_industry_automation.py passed
 python3 scripts/p8_competitor_brain.py --review-signal <id> --action ready passed as dry-run
+python3 scripts/p8_competitor_brain.py --review-suggestions passed as read-only
 npm run build passed
 git diff --check passed
 ```

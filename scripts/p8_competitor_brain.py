@@ -18,7 +18,9 @@ from app.db.connection import close_db_runtime  # noqa: E402
 from app.services.vkpi.competitor_brain import (  # noqa: E402
     FORBIDDEN_WRITE_FLAGS,
     build_competitor_brain_preview,
+    build_competitor_signal_review_suggestions,
     commit_competitor_signals,
+    format_review_suggestions,
     format_preview_summary,
     review_competitor_signal,
 )
@@ -34,6 +36,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--confirm", action="store_true", help="Required with --commit-signals")
     parser.add_argument("--committed-by", default="cli", help="Commit actor label for --commit-signals")
     parser.add_argument("--review-signal", type=int, default=0, help="Review one committed competitor signal by id")
+    parser.add_argument("--review-suggestions", action="store_true", help="Print deterministic review suggestions without writing")
+    parser.add_argument("--review-status", default="pending_review", help="Review status filter for --review-suggestions")
+    parser.add_argument("--suggestion-limit", type=int, default=100, help="Signal limit for --review-suggestions")
     parser.add_argument("--action", default="", help="Review action: ready/approve/reject/ignore/pending_review")
     parser.add_argument("--note", default="", help="Review note for --review-signal")
     parser.add_argument("--apply-review", action="store_true", help="Write --review-signal decision; default is dry-run")
@@ -51,6 +56,16 @@ def main() -> int:
     try:
         _reject_forbidden_flags(sys.argv[1:])
         args = parse_args()
+        if args.review_suggestions:
+            payload = build_competitor_signal_review_suggestions(
+                review_status=args.review_status,
+                limit=args.suggestion_limit,
+            )
+            if args.json:
+                print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+            else:
+                print(format_review_suggestions(payload))
+            return 0
         if args.review_signal:
             result = review_competitor_signal(
                 args.review_signal,
