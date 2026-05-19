@@ -17,7 +17,7 @@ P2B 不能做“一键导入 KOL”。正确路径是：
 
 ## 2. Pipeline 拆分
 
-P2B 使用 7 条 pipeline。Excel 里的新品立项是产品维度，不是 KOL 维度，必须从合作历史里拆出来。
+P2B 使用 8 条 pipeline。Excel 里的新品立项是产品维度，不是 KOL 维度，必须从合作历史里拆出来。`官方物料排期表` 是官方素材制作/资产排期，不是官媒发布排片，也不能继续作为 skipped sheet 丢失行级审计。
 
 ### 2.1 KOL 主档 Staging
 
@@ -185,7 +185,55 @@ vkpi_legacy_official_content_staging
 备注 / 关键词/tag         -> notes
 ```
 
-### 2.5 产品成本 Staging
+### 2.5 官方物料 Staging
+
+来源 sheet：
+
+```text
+官方物料排期表
+```
+
+目标 staging：
+
+```text
+vkpi_legacy_official_materials_staging
+```
+
+用途：承载官方素材制作、交付、下载/预览资产和官媒使用引用，不进入 KOL pool，也不直接写正式 official content。
+
+字段映射：
+
+```text
+上市时间-产品型号/项目名称 -> launch_ref
+产品型号                 -> product_sku / product_name
+对接/协作人              -> owner
+制作进度                 -> production_status
+所属项目                 -> project
+内容类型                 -> content_type
+内容描述                 -> content_description
+参考文档                 -> reference_doc
+内容格式                 -> content_format
+提需时间                 -> request_date
+目标交付时间             -> target_delivery_date
+下载/预览链接             -> asset_link
+尺寸规格                 -> size_spec
+发布状态                 -> publish_status
+产品发布时间             -> product_publish_date
+制作团队                 -> production_team
+预算                     -> budget_amount / budget_currency
+官媒使用记录             -> official_usage_ref
+父记录                   -> parent_ref
+```
+
+校验规则：
+
+```text
+缺 product_name 且缺 launch_ref -> review queue。
+缺 content_description 且缺 asset_link -> review queue。
+所有行保留 source_sheet + source_row，不再整体 skipped。
+```
+
+### 2.6 产品成本 Staging
 
 来源 sheet：
 
@@ -212,7 +260,7 @@ vkpi_legacy_product_costs_staging
 备注           -> notes
 ```
 
-### 2.6 风险名单 Staging
+### 2.7 风险名单 Staging
 
 来源 sheet：
 
@@ -247,7 +295,14 @@ vkpi_legacy_risk_watchlist_staging
 不得自动创建合作项目。
 ```
 
-### 2.7 舆情 / VOC Staging
+分组标题行处理：
+
+```text
+红人姓名/账号名 为空且频道/主页链接 为空的行视为 Excel 分组 marker。
+这类行不进入 risk_watchlist staging，也不进入 review_queue。
+```
+
+### 2.8 舆情 / VOC Staging
 
 来源 sheet：
 
@@ -278,7 +333,65 @@ vkpi_legacy_voc_alerts_staging
 舆情反馈人         -> owner
 ```
 
-## 3. Review Queue 设计
+## 3. P2B-2 数据质量留痕
+
+最终验证 batch：
+
+```text
+batch_uid=vkpi_20260519033921_b36c6f28ec8d
+batch_id=6
+```
+
+Pipeline 行数：
+
+```text
+kol_profiles=1039
+cooperations=2423
+launch_plans=52
+official_content=2202
+official_materials=241
+product_costs=834
+risk_watchlist=13
+voc_alerts=37
+skipped=0 rows / 0 sheets
+committed_refs=0
+```
+
+关键修复：
+
+```text
+official_content:
+  DISCORD 已归一化为 discord。
+  产品-平台-账号 字段支持 account/platform fallback。
+  validation_error 从 465 降到 34，剩余主要为 missing_official_account。
+
+risk_watchlist:
+  当前 Excel 17 行中有 4 行为空分组 marker。
+  parser 已跳过 marker。
+  实际进入 staging 的风险业务行为 13 行。
+
+official_materials:
+  官方物料排期表 241 行已进入 vkpi_legacy_official_materials_staging。
+  12 行进入 review_queue，主要是 missing_material_content / missing_product_identity。
+
+cooperations:
+  total_rows=2423
+  unique_handles=715
+  unique_urls=689
+  no_identifier=38
+  has_handle=2385
+  has_url=2360
+```
+
+P2C 去重输入结论：
+
+```text
+cooperations 侧 handle 提取质量可以进入 P2C。
+P2C 应优先使用 dedup_key = normalized_platform || ':' || lower(normalized_handle)。
+content_link 只能作为辅助证据，因为当前字段混有主页链接和内容链接。
+```
+
+## 4. Review Queue 设计
 
 统一 review queue：
 
@@ -328,7 +441,7 @@ committed
 rolled_back
 ```
 
-## 4. RBAC 权限设计
+## 5. RBAC 权限设计
 
 导入页面需要分级权限：
 
@@ -379,7 +492,7 @@ action_type：
 view_kol_contact
 ```
 
-## 5. 前端导入预览 UI
+## 6. 前端导入预览 UI
 
 建议页面：
 
@@ -398,6 +511,7 @@ frontend/src/components/admin/vkpi/pages/LegacyImportPage.tsx
    合作历史
    新品立项
    官方内容
+   官方物料
    产品成本
    风险名单
    VOC / 舆情
@@ -424,7 +538,7 @@ frontend/src/components/admin/vkpi/pages/LegacyImportPage.tsx
 
 P2B 第一版只需要后端 staging + 预览接口；页面可以 P2B-UI 包再实现。
 
-## 6. 后端 API 设计
+## 7. 后端 API 设计
 
 建议 router：
 
@@ -450,7 +564,7 @@ GET  /api/admin/vkpi/legacy-import/batches/{batch_id}/logs
 
 P2B 当前包只建表，不实现这些 endpoint。
 
-## 7. 导入日志与回滚
+## 8. 导入日志与回滚
 
 日志表：
 
@@ -525,18 +639,18 @@ no_rollback  标记不可逆导入，原则上 P2D 不应默认开放。
 
 `auto_rollback_at` 只用于容灾：如果 commit worker 中途死亡，batch 长时间卡在 `committing`，P2D 可以按该字段触发自动回滚。第一版可以只写字段，不主动调度。
 
-## 8. P2B 验收
+## 9. P2B 验收
 
 本包验收：
 
 ```bash
-rg "CREATE TABLE IF NOT EXISTS vkpi_legacy" migrations/058_vkpi_legacy_import.sql migrations/058a_vkpi_legacy_import_launch_plan.sql
-rg "source_sheet" migrations/058_vkpi_legacy_import.sql migrations/058a_vkpi_legacy_import_launch_plan.sql
-rg "source_row" migrations/058_vkpi_legacy_import.sql migrations/058a_vkpi_legacy_import_launch_plan.sql
-rg "import_batch_id" migrations/058_vkpi_legacy_import.sql migrations/058a_vkpi_legacy_import_launch_plan.sql
+rg "CREATE TABLE IF NOT EXISTS vkpi_legacy" migrations/058_vkpi_legacy_import.sql migrations/058a_vkpi_legacy_import_launch_plan.sql migrations/058d_vkpi_legacy_official_materials.sql
+rg "source_sheet" migrations/058_vkpi_legacy_import.sql migrations/058a_vkpi_legacy_import_launch_plan.sql migrations/058d_vkpi_legacy_official_materials.sql
+rg "source_row" migrations/058_vkpi_legacy_import.sql migrations/058a_vkpi_legacy_import_launch_plan.sql migrations/058d_vkpi_legacy_official_materials.sql
+rg "import_batch_id" migrations/058_vkpi_legacy_import.sql migrations/058a_vkpi_legacy_import_launch_plan.sql migrations/058d_vkpi_legacy_official_materials.sql
 rg "rollback_until|rollback_policy|auto_rollback_at" migrations/058a_vkpi_legacy_import_launch_plan.sql
 ls migrations/058*_down.sql
-rg "INSERT INTO|UPDATE .*vkpi_|DELETE FROM" migrations/058_vkpi_legacy_import.sql migrations/058a_vkpi_legacy_import_launch_plan.sql
+rg "INSERT INTO|UPDATE .*vkpi_|DELETE FROM" migrations/058_vkpi_legacy_import.sql migrations/058a_vkpi_legacy_import_launch_plan.sql migrations/058d_vkpi_legacy_official_materials.sql
 ```
 
 预期：
@@ -545,6 +659,7 @@ rg "INSERT INTO|UPDATE .*vkpi_|DELETE FROM" migrations/058_vkpi_legacy_import.sq
 只有 CREATE TABLE / CREATE INDEX / COMMENT，不出现正式表写入语句。
 每个 staging 表都有 source_sheet 和 source_row。
 每个 staging 表都通过 import_batch_id 关联到 vkpi_legacy_import_batches。
-058 / 058a 都有 down migration。
+058 / 058a / 058d 都有 down migration。
 launch_plan 不混入 cooperation / kol_project。
+官方物料不再 skipped，进入 official_materials staging。
 ```
