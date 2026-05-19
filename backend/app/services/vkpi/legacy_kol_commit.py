@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.db.connection import get_conn
@@ -49,15 +49,19 @@ def _fetch_batch(batch_uid: str) -> dict[str, Any]:
 
 
 def _utcnow() -> str:
-    return datetime.utcnow().isoformat(timespec="seconds")
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def _utcnow_dt() -> datetime:
-    return datetime.utcnow()
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _format_ts(value: datetime | None) -> str | None:
-    return value.isoformat(timespec="seconds") if value else None
+    if not value:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.isoformat(timespec="seconds")
 
 
 def _parse_ts(value: Any) -> datetime | None:
@@ -71,9 +75,12 @@ def _parse_ts(value: Any) -> datetime | None:
     if text.endswith("Z"):
         text = text[:-1]
     try:
-        return datetime.fromisoformat(text).replace(tzinfo=None)
+        parsed = datetime.fromisoformat(text)
     except ValueError:
         return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
 
 
 def _rollback_until_for_policy(now: datetime, policy: str) -> datetime | None:
