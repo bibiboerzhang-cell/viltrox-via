@@ -537,10 +537,10 @@ def _market_signal_score(signals: list[dict[str, Any]], *, now: datetime) -> tup
     return score, evidence_rows
 
 
-def _percentile(index: int, total: int) -> int:
+def _percentile(index: int, total: int) -> float:
     if total <= 1:
-        return 100
-    return int(round(100 * (total - 1 - index) / (total - 1)))
+        return 100.0
+    return round(100 * (total - 1 - index) / (total - 1), 1)
 
 
 def _median_score(items: list[dict[str, Any]]) -> float:
