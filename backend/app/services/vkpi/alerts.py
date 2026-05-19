@@ -111,6 +111,36 @@ def _parse_metadata(value: Any) -> dict[str, Any]:
         return {}
 
 
+def _table_exists(table_name: str) -> bool:
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,)).fetchone()
+        return bool(row)
+    except Exception:
+        row = conn.execute(
+            "SELECT table_name FROM information_schema.tables WHERE table_name=? LIMIT 1",
+            (table_name,),
+        ).fetchone()
+        return bool(row)
+
+
+def _resolve_open_alert(conn: Any, alert_key: str) -> bool:
+    now = utcnow()
+    existing_open = conn.execute(
+        "SELECT id FROM vkpi_alerts WHERE alert_key=? AND status='open'",
+        (alert_key,),
+    ).fetchone()
+    conn.execute(
+        """
+        UPDATE vkpi_alerts
+        SET status='resolved', resolved_at=?, updated_at=?
+        WHERE alert_key=? AND status='open'
+        """,
+        (now, now, alert_key),
+    )
+    return bool(existing_open)
+
+
 def get_alert_detail(alert_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     """Return source rows behind an alert for evidence-first drilldown."""
     ensure_vkpi_schema()
@@ -371,6 +401,103 @@ def generate_comment_intelligence_alerts(
     }
 
 
+def generate_content_brain_backlog_alerts(
+    *,
+    min_pending: int = 5,
+    coverage_warning: float = 0.8,
+) -> dict[str, Any]:
+    """Create or clear an alert when P6 content brain analysis has pending backlog."""
+    ensure_vkpi_schema()
+    alert_key = "content-brain-analysis-backlog"
+    rule_key = "content_brain.analysis_backlog"
+    conn = get_conn()
+    if not _table_exists("vkpi_industry_posts"):
+        cleared = _resolve_open_alert(conn, alert_key)
+        conn.commit()
+        return {
+            "alerts": [],
+            "count": 0,
+            "cleared": [alert_key] if cleared else [],
+            "cleared_count": 1 if cleared else 0,
+            "schema_ready": False,
+            "rule_key": rule_key,
+        }
+
+    rows = conn.execute(
+        """
+        SELECT COALESCE(NULLIF(analysis_status, ''), 'pending') AS status,
+               COUNT(*) AS count
+        FROM vkpi_industry_posts
+        GROUP BY COALESCE(NULLIF(analysis_status, ''), 'pending')
+        """
+    ).fetchall()
+    status_counts = {str(row["status"]): int(row["count"] or 0) for row in rows}
+    post_count = sum(status_counts.values())
+    done_count = status_counts.get("done", 0)
+    pending_count = post_count - done_count
+    coverage_ratio = round(done_count / post_count, 4) if post_count else 1.0
+    pending_row = conn.execute(
+        """
+        SELECT MIN(published_at) AS oldest_pending_at,
+               MAX(published_at) AS newest_pending_at
+        FROM vkpi_industry_posts
+        WHERE COALESCE(NULLIF(analysis_status, ''), 'pending') != 'done'
+        """
+    ).fetchone()
+    should_alert = bool(post_count) and (pending_count >= int(min_pending) or coverage_ratio < float(coverage_warning))
+    if not should_alert:
+        cleared = _resolve_open_alert(conn, alert_key)
+        conn.commit()
+        return {
+            "alerts": [],
+            "count": 0,
+            "cleared": [alert_key] if cleared else [],
+            "cleared_count": 1 if cleared else 0,
+            "post_count": post_count,
+            "pending_count": pending_count,
+            "coverage_ratio": coverage_ratio,
+            "rule_key": rule_key,
+        }
+
+    severity = "danger" if pending_count >= max(10, int(min_pending) * 2) or coverage_ratio < 0.25 else "warning"
+    alert = upsert_alert(
+        alert_key=alert_key,
+        severity=severity,
+        target_type="content_brain",
+        target_id=None,
+        title=f"Content brain analysis backlog: {pending_count} pending posts",
+        body=(
+            f"{pending_count} of {post_count} industry posts are not analyzed. "
+            f"Coverage is {coverage_ratio:.0%}; warning threshold is {float(coverage_warning):.0%}."
+        ),
+        rule_key=rule_key,
+        metadata_json=json.dumps(
+            {
+                "post_count": post_count,
+                "done_count": done_count,
+                "pending_count": pending_count,
+                "coverage_ratio": coverage_ratio,
+                "status_counts": status_counts,
+                "min_pending": int(min_pending),
+                "coverage_warning": float(coverage_warning),
+                "oldest_pending_at": (dict(pending_row) if pending_row else {}).get("oldest_pending_at"),
+                "newest_pending_at": (dict(pending_row) if pending_row else {}).get("newest_pending_at"),
+            },
+            ensure_ascii=False,
+            default=str,
+        ),
+    )
+    return {
+        "alerts": [alert],
+        "count": 1,
+        "post_count": post_count,
+        "pending_count": pending_count,
+        "coverage_ratio": coverage_ratio,
+        "severity": severity,
+        "rule_key": rule_key,
+    }
+
+
 def generate_budget_guard_alerts() -> dict[str, Any]:
     """Create or clear alerts for AI/provider budget warning and hard-stop scopes."""
     ensure_vkpi_schema()
@@ -399,20 +526,7 @@ def generate_budget_guard_alerts() -> dict[str, Any]:
         warning = cap > 0 and ratio >= warning_at
         alert_key = f"budget-guard-{scope_key}"
         if not hard_stopped and not warning:
-            now = utcnow()
-            existing_open = conn.execute(
-                "SELECT id FROM vkpi_alerts WHERE alert_key=? AND status='open'",
-                (alert_key,),
-            ).fetchone()
-            conn.execute(
-                """
-                UPDATE vkpi_alerts
-                SET status='resolved', resolved_at=?, updated_at=?
-                WHERE alert_key=? AND status='open'
-                """,
-                (now, now, alert_key),
-            )
-            if existing_open:
+            if _resolve_open_alert(conn, alert_key):
                 cleared.append(alert_key)
             continue
         severity = "danger" if hard_stopped else "warning"
@@ -461,10 +575,12 @@ def generate_alerts() -> dict[str, Any]:
     """Run all currently enabled alert rules."""
     stalled = generate_stalled_project_alerts()
     comment_intelligence = generate_comment_intelligence_alerts()
+    content_brain = generate_content_brain_backlog_alerts()
     budget_guard = generate_budget_guard_alerts()
     alerts = (
         (stalled.get("alerts") or [])
         + (comment_intelligence.get("alerts") or [])
+        + (content_brain.get("alerts") or [])
         + (budget_guard.get("alerts") or [])
     )
     return {
@@ -472,5 +588,6 @@ def generate_alerts() -> dict[str, Any]:
         "count": len(alerts),
         "stalled_projects": stalled,
         "comment_intelligence": comment_intelligence,
+        "content_brain": content_brain,
         "budget_guard": budget_guard,
     }
