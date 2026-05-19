@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from typing import Any
 
 from app.db.connection import get_conn
+from app.services.vkpi._utils import utcnow_iso
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 
@@ -23,7 +23,7 @@ NODE_COLUMNS = {
 
 
 def _utcnow() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    return utcnow_iso()
 
 
 def _json(value: Any) -> str:

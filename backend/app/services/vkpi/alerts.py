@@ -3,15 +3,16 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from app.db.connection import get_conn
+from app.services.vkpi._utils import json_dumps, utcnow_iso
 from app.services.vkpi import scope
 from app.services.vkpi.schema import ensure_vkpi_schema
 
 
 def utcnow() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    return utcnow_iso()
 
 
 def list_alerts(status: str = "open", limit: int = 50, *, staff: dict[str, Any] | None = None, staff_id: int | None = None) -> dict[str, Any]:
@@ -49,7 +50,7 @@ def _safe_limit(value: int, *, default: int = 50, ceiling: int = 200) -> int:
 
 
 def _json(value: Any) -> str:
-    return json.dumps(value or {}, ensure_ascii=False, default=str)
+    return json_dumps(value or {})
 
 
 def _alert_text(row: dict[str, Any]) -> str:
@@ -718,7 +719,7 @@ def generate_recommendation_review_gap_alerts(
             "rule_key": rule_key,
         }
 
-    cutoff = (datetime.utcnow() - timedelta(hours=max(0, int(min_age_hours)))).strftime("%Y-%m-%dT%H:%M:%SZ")
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=max(0, int(min_age_hours)))).strftime("%Y-%m-%dT%H:%M:%SZ")
     rows = conn.execute(
         """
         SELECT

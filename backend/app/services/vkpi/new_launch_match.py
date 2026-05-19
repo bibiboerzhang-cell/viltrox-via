@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from app.db.connection import get_conn
+from app.services.vkpi._utils import json_loads, row_to_dict, to_float, to_int, to_text
 from app.services.vkpi import memory
 from app.services.vkpi import llm_gateway
 from app.services.vkpi.budget_guard import check_budget, get_budget_status
@@ -29,11 +30,11 @@ FORBIDDEN_WRITE_FLAGS = {"--commit", "--write-db", "--provider-call"}
 
 
 def _row_to_dict(row: Any) -> dict[str, Any]:
-    return dict(row.items()) if hasattr(row, "items") else dict(row)
+    return row_to_dict(row)
 
 
 def _text(value: Any) -> str:
-    return str(value or "").strip()
+    return to_text(value)
 
 
 def _lower(value: Any) -> str:
@@ -41,13 +42,7 @@ def _lower(value: Any) -> str:
 
 
 def _load_json(value: Any, default: Any) -> Any:
-    if isinstance(value, (dict, list)):
-        return value
-    try:
-        parsed = json.loads(value or "")
-    except Exception:
-        return default
-    return parsed
+    return json_loads(value, default)
 
 
 def _json_default(value: Any) -> str:
@@ -90,17 +85,11 @@ def _within_days(value: Any, days: int, *, now: datetime) -> bool:
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
+    return to_int(value, default)
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
+    return to_float(value, default)
 
 
 def _safe_limit(limit: int) -> int:
