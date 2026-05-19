@@ -38,6 +38,7 @@ from app.services.vkpi.legacy_import_staging import (  # noqa: E402
     rollback_staging_batch,
     stage_legacy_file,
 )
+from app.services.vkpi.legacy_kol_commit import dry_run_kol_pool_commit, format_kol_pool_commit_plan  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -62,6 +63,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--decide-resolution", default="", help="Record a decision for one entity_uid; dry-run unless --commit is set")
     parser.add_argument("--bulk-decide", default="", help="Record one decision for all pending entities with --weak-label in a batch_uid")
     parser.add_argument("--review-progress", default="", help="Print P2C review-decision progress for a batch_uid")
+    parser.add_argument("--dry-run-kol-pool-commit", default="", help="Plan P2D writes into vkpi_kol_pool without mutating main tables")
     parser.add_argument("--action", default="", help="Decision action: merge_with, keep_separate, drop, or escalate")
     parser.add_argument("--target", default="", help="Target entity_uid for merge_with decisions")
     parser.add_argument("--reason", default="", help="Decision reason; required for drop")
@@ -83,6 +85,7 @@ def main() -> int:
         or args.decide_resolution
         or args.bulk_decide
         or args.review_progress
+        or args.dry_run_kol_pool_commit
     ):
         try:
             ensure_legacy_staging_schema()
@@ -131,6 +134,16 @@ def main() -> int:
                 )
             elif args.review_progress:
                 print(format_review_progress(review_progress(args.review_progress)))
+            elif args.dry_run_kol_pool_commit:
+                print(
+                    format_kol_pool_commit_plan(
+                        dry_run_kol_pool_commit(
+                            args.dry_run_kol_pool_commit,
+                            include_blocked=bool(args.include_blocked),
+                            sample_limit=max(0, int(args.limit or 0)),
+                        )
+                    )
+                )
             elif args.inspect_batch:
                 print(format_batch_summary(inspect_batch(args.inspect_batch)))
             else:
