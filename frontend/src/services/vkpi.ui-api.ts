@@ -1,4 +1,4 @@
-import { apiFetch, jsonBody } from "./http";
+import { apiFetch, buildApiUrl, jsonBody } from "./http";
 export * from "./vkpi";
 import type {
   VkpiAlertItem,
@@ -1634,6 +1634,14 @@ export async function listTasks(token: string, filters: { status?: AsyncTaskStat
     const bTime = new Date(b.created_at || b.finished_at || 0).getTime();
     return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
   });
+}
+
+export async function getTaskRealtimeStatus(token: string) {
+  return apiFetch<Row>("/api/admin/vkpi/tasks/realtime-status", {}, token);
+}
+
+export function buildTaskEventStreamUrl(taskId: string) {
+  return buildApiUrl(`/api/audit/stream/${encodeURIComponent(taskId)}`);
 }
 
 export async function cancelTask(token: string, taskId: string) {

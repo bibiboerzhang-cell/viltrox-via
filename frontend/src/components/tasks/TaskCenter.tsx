@@ -9,7 +9,9 @@ import React, {
 } from 'react';
 import {
   type AsyncTask,
+  buildTaskEventStreamUrl,
   cancelTask as cancelAsyncTask,
+  getTaskRealtimeStatus,
   listTasks,
   retryTask as retryAsyncTask,
   TERMINAL_STATUSES,
@@ -90,8 +92,10 @@ function progressValue(task: AsyncTask) {
 export function TaskCenterProvider({ apiToken, children }: { apiToken?: string; children: React.ReactNode }) {
   const [tasks, setTasks] = useState<AsyncTask[]>([]);
   const [intervalMs, setIntervalMs] = useState(() => (typeof document !== 'undefined' && document.hidden ? 30000 : 3000));
+  const [realtimeReady, setRealtimeReady] = useState(false);
   const watchersRef = useRef<Map<string, Set<WatcherCallbacks>>>(new Map());
   const previousTasksRef = useRef<Map<string, AsyncTask>>(new Map());
+  const eventSourcesRef = useRef<Map<string, EventSource>>(new Map());
   const inFlightRef = useRef(false);
 
   const activeTasks = useMemo(() => tasks.filter((task) => !isTerminalTask(task)), [tasks]);
@@ -126,6 +130,13 @@ export function TaskCenterProvider({ apiToken, children }: { apiToken?: string; 
     }
   }, [apiToken, triggerWatchers]);
 
+  const closeEventSource = useCallback((taskId: string) => {
+    const source = eventSourcesRef.current.get(taskId);
+    if (!source) return;
+    source.close();
+    eventSourcesRef.current.delete(taskId);
+  }, []);
+
   useEffect(() => {
     const onVisibilityChange = () => {
       setIntervalMs(document.hidden ? 30000 : 3000);
@@ -137,8 +148,33 @@ export function TaskCenterProvider({ apiToken, children }: { apiToken?: string; 
 
   useEffect(() => {
     if (!apiToken) {
+      setRealtimeReady(false);
+      return undefined;
+    }
+    let cancelled = false;
+    getTaskRealtimeStatus(apiToken)
+      .then((status) => {
+        if (cancelled) return;
+        setRealtimeReady(Boolean(
+          status.sse_available
+          && status.job_queue_present
+          && status.task_event_subscription_available,
+        ));
+      })
+      .catch(() => {
+        if (!cancelled) setRealtimeReady(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [apiToken]);
+
+  useEffect(() => {
+    if (!apiToken) {
       setTasks([]);
       previousTasksRef.current = new Map();
+      eventSourcesRef.current.forEach((source) => source.close());
+      eventSourcesRef.current.clear();
       return undefined;
     }
     void refreshTasks();
@@ -151,8 +187,44 @@ export function TaskCenterProvider({ apiToken, children }: { apiToken?: string; 
   }, [apiToken, intervalMs, refreshTasks]);
 
   useEffect(() => {
+    if (!realtimeReady || typeof EventSource === 'undefined') {
+      eventSourcesRef.current.forEach((source) => source.close());
+      eventSourcesRef.current.clear();
+      return;
+    }
+    const activeIds = new Set(activeTasks.map((task) => task.task_id).filter(Boolean));
+    eventSourcesRef.current.forEach((source, taskId) => {
+      if (!activeIds.has(taskId)) {
+        source.close();
+        eventSourcesRef.current.delete(taskId);
+      }
+    });
+    activeIds.forEach((taskId) => {
+      if (eventSourcesRef.current.has(taskId)) return;
+      const source = new EventSource(buildTaskEventStreamUrl(taskId), { withCredentials: true });
+      const refresh = () => {
+        void refreshTasks();
+      };
+      const refreshAndClose = () => {
+        void refreshTasks();
+        closeEventSource(taskId);
+      };
+      source.addEventListener('status_update', refresh);
+      source.addEventListener('result_ready', refreshAndClose);
+      source.addEventListener('failed', refreshAndClose);
+      source.addEventListener('final_result', refreshAndClose);
+      source.onerror = () => {
+        closeEventSource(taskId);
+      };
+      eventSourcesRef.current.set(taskId, source);
+    });
+  }, [activeTasks, closeEventSource, realtimeReady, refreshTasks]);
+
+  useEffect(() => {
     return () => {
       watchersRef.current.clear();
+      eventSourcesRef.current.forEach((source) => source.close());
+      eventSourcesRef.current.clear();
     };
   }, []);
 
