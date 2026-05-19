@@ -148,7 +148,8 @@ ROLES = {
 def list_members() -> dict:
     conn = get_conn()
     rows = conn.execute(
-        """SELECT s.*, u.creator_code AS user_handle, u.email AS user_email, u.name AS user_name
+        """SELECT s.*, u.creator_code AS user_handle, u.email AS user_email, u.name AS user_name,
+                  u.email_verified AS user_email_verified
            FROM staff s LEFT JOIN users u ON s.user_id = u.id
            ORDER BY s.active DESC, s.id"""
     ).fetchall()
@@ -169,6 +170,7 @@ def list_members() -> dict:
             str(m.get("role") or "readonly"),
             owner=bool(m.get("is_owner")),
         )
+        _augment_member_invite_status(conn, m)
         members.append(m)
     if members:
         return {"members": members}
@@ -195,7 +197,8 @@ def list_members() -> dict:
             NULL AS suspended_reason,
             u.creator_code AS user_handle,
             u.email AS user_email,
-            u.name AS user_name
+            u.name AS user_name,
+            u.email_verified AS user_email_verified
         FROM users u
         WHERE LOWER(COALESCE(u.role, '')) IN ('admin', 'ops', 'operations', 'analyst', 'readonly')
         ORDER BY
@@ -209,7 +212,12 @@ def list_members() -> dict:
             u.created_at ASC
         """
     ).fetchall()
-    return {"members": [dict(row) for row in bootstrap_rows]}
+    bootstrap_members = []
+    for row in bootstrap_rows:
+        m = dict(row)
+        _augment_member_invite_status(conn, m)
+        bootstrap_members.append(m)
+    return {"members": bootstrap_members}
 
 
 def invite(body: dict, *, inviter_id: int) -> dict:
@@ -767,6 +775,71 @@ def _permissions_from_invite_body(body: dict) -> dict[str, Any]:
             logger.debug("staff.permissions_json_payload_parse_failed", exc_info=True)
             return {}
     return raw if isinstance(raw, dict) else {}
+
+
+def _augment_member_invite_status(conn, member: dict[str, Any]) -> None:
+    member.setdefault("email", member.get("user_email"))
+    member.setdefault("full_name", member.get("user_name"))
+    active_token = _get_active_invite_token(conn, int(member.get("user_id") or 0))
+    member["invite_token_active"] = bool(active_token)
+    member["verification_status"] = _compute_verification_status(member, active_token)
+    member["delivery_method"] = _compute_delivery_method(member, active_token)
+
+
+def _get_active_invite_token(conn, user_id: int) -> dict[str, Any] | None:
+    if not user_id:
+        return None
+    try:
+        row = conn.execute(
+            """
+            SELECT token, expires_at, used_at
+            FROM email_tokens
+            WHERE user_id = ? AND type = 'staff_invite' AND used_at IS NULL
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (int(user_id),),
+        ).fetchone()
+    except Exception:
+        logger.debug("staff.active_invite_token_lookup_failed", extra={"user_id": user_id}, exc_info=True)
+        return None
+    if not row:
+        return None
+    token = dict(row)
+    expires_at = str(token.get("expires_at") or "")
+    if expires_at and expires_at < _utcnow():
+        return None
+    return token
+
+
+def _compute_verification_status(member: dict[str, Any], active_token: dict[str, Any] | None) -> str:
+    try:
+        if _truthy(member.get("user_email_verified")):
+            return "verified"
+        if member.get("accepted_at"):
+            return "activated"
+        if member.get("invited_at"):
+            return "pending" if active_token else "expired"
+        return "draft"
+    except Exception:
+        logger.debug("staff.verification_status_compute_failed", extra={"staff_id": member.get("id")}, exc_info=True)
+        return "unknown"
+
+
+def _compute_delivery_method(member: dict[str, Any], active_token: dict[str, Any] | None) -> str:
+    if member.get("invited_at") and not member.get("accepted_at"):
+        return "pending_invite" if active_token else "unknown"
+    if member.get("accepted_at") and _truthy(member.get("user_email_verified")):
+        return "email"
+    if member.get("accepted_at"):
+        return "manual_link"
+    return "unknown"
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
 
 
 def _staff_activation_url(token: str) -> str:
