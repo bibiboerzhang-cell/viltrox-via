@@ -17,6 +17,8 @@ P2B 不能做“一键导入 KOL”。正确路径是：
 
 ## 2. Pipeline 拆分
 
+P2B 使用 7 条 pipeline。Excel 里的新品立项是产品维度，不是 KOL 维度，必须从合作历史里拆出来。
+
 ### 2.1 KOL 主档 Staging
 
 来源 sheet：
@@ -113,7 +115,47 @@ Excel row number              -> source_row
 只有 source_sheet + source_row 重复才视为同一源行重复。
 ```
 
-### 2.3 官方内容 Staging
+### 2.3 新品立项 Staging
+
+来源 sheet：
+
+```text
+新品立项时间表
+```
+
+目标 staging：
+
+```text
+vkpi_legacy_launch_plans_staging
+```
+
+用途：承载产品上市和推广立项计划，不进入 KOL 项目表。
+
+字段映射：
+
+```text
+推广项目名称       -> launch_name
+产品型号           -> product_name / product_sku
+一级产品类目       -> category_primary
+二级产品类目       -> category_secondary
+产品发布日期       -> launch_date
+目标区域 / 市场     -> target_region
+官媒运营排期        -> official_material_ref
+红人推广计划        -> kol_plan_ref
+网页链接 / 产品链接  -> product_page_url
+负责人 / 对接人      -> campaign_owner
+备注               -> notes
+```
+
+下游用途：
+
+```text
+P3 product / market memory 的产品上市输入。
+P4 新品上市匹配推荐的触发源。
+官方内容、合作历史、成本数据按 product_name / product_sku 回连 launch_plan。
+```
+
+### 2.4 官方内容 Staging
 
 来源 sheet：
 
@@ -143,7 +185,7 @@ vkpi_legacy_official_content_staging
 备注 / 关键词/tag         -> notes
 ```
 
-### 2.4 产品成本 Staging
+### 2.5 产品成本 Staging
 
 来源 sheet：
 
@@ -170,7 +212,7 @@ vkpi_legacy_product_costs_staging
 备注           -> notes
 ```
 
-### 2.5 风险名单 Staging
+### 2.6 风险名单 Staging
 
 来源 sheet：
 
@@ -205,7 +247,7 @@ vkpi_legacy_risk_watchlist_staging
 不得自动创建合作项目。
 ```
 
-### 2.6 舆情 / VOC Staging
+### 2.7 舆情 / VOC Staging
 
 来源 sheet：
 
@@ -247,7 +289,7 @@ vkpi_legacy_import_review_queue
 每条 review item 必须保留：
 
 ```text
-batch_id
+import_batch_id
 pipeline
 staging_table
 staging_id
@@ -354,6 +396,7 @@ frontend/src/components/admin/vkpi/pages/LegacyImportPage.tsx
 2. Pipeline tabs
    KOL 主档
    合作历史
+   新品立项
    官方内容
    产品成本
    风险名单
@@ -439,7 +482,7 @@ vkpi_legacy_import_committed_refs
 每个正式写入动作必须记录：
 
 ```text
-batch_id
+import_batch_id
 pipeline
 staging_table
 staging_id
@@ -451,17 +494,49 @@ new_snapshot_json
 rollback_status
 ```
 
+`rollback_status` 建议状态：
+
+```text
+not_rolled_back
+rolled_back
+rollback_failed
+rollback_skipped
+manual_required
+```
+
 Rollback 只能按 batch 或 pipeline 维度执行。回滚前必须先 dry-run，显示将删除/恢复哪些目标行。
+
+Batch 级 rollback 策略字段由 `058a_vkpi_legacy_import_launch_plan.sql` 追加：
+
+```text
+rollback_until TIMESTAMPTZ
+rollback_policy TEXT DEFAULT 'manual_30m'
+auto_rollback_at TIMESTAMPTZ
+```
+
+`rollback_policy` 枚举：
+
+```text
+manual_30m   默认：30 分钟内允许触发 rollback。
+manual_24h   长窗口：24 小时内允许触发 rollback，后续可限制为 lead/admin。
+admin_only   只有 admin 可以 rollback，无固定时限。
+no_rollback  标记不可逆导入，原则上 P2D 不应默认开放。
+```
+
+`auto_rollback_at` 只用于容灾：如果 commit worker 中途死亡，batch 长时间卡在 `committing`，P2D 可以按该字段触发自动回滚。第一版可以只写字段，不主动调度。
 
 ## 8. P2B 验收
 
 本包验收：
 
 ```bash
-rg "CREATE TABLE IF NOT EXISTS vkpi_legacy" migrations/058_vkpi_legacy_import.sql
-rg "source_sheet" migrations/058_vkpi_legacy_import.sql
-rg "source_row" migrations/058_vkpi_legacy_import.sql
-rg "INSERT INTO|UPDATE .*vkpi_|DELETE FROM" migrations/058_vkpi_legacy_import.sql
+rg "CREATE TABLE IF NOT EXISTS vkpi_legacy" migrations/058_vkpi_legacy_import.sql migrations/058a_vkpi_legacy_import_launch_plan.sql
+rg "source_sheet" migrations/058_vkpi_legacy_import.sql migrations/058a_vkpi_legacy_import_launch_plan.sql
+rg "source_row" migrations/058_vkpi_legacy_import.sql migrations/058a_vkpi_legacy_import_launch_plan.sql
+rg "import_batch_id" migrations/058_vkpi_legacy_import.sql migrations/058a_vkpi_legacy_import_launch_plan.sql
+rg "rollback_until|rollback_policy|auto_rollback_at" migrations/058a_vkpi_legacy_import_launch_plan.sql
+ls migrations/058*_down.sql
+rg "INSERT INTO|UPDATE .*vkpi_|DELETE FROM" migrations/058_vkpi_legacy_import.sql migrations/058a_vkpi_legacy_import_launch_plan.sql
 ```
 
 预期：
@@ -469,4 +544,7 @@ rg "INSERT INTO|UPDATE .*vkpi_|DELETE FROM" migrations/058_vkpi_legacy_import.sq
 ```text
 只有 CREATE TABLE / CREATE INDEX / COMMENT，不出现正式表写入语句。
 每个 staging 表都有 source_sheet 和 source_row。
+每个 staging 表都通过 import_batch_id 关联到 vkpi_legacy_import_batches。
+058 / 058a 都有 down migration。
+launch_plan 不混入 cooperation / kol_project。
 ```

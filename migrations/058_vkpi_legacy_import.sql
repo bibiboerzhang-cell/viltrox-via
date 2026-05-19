@@ -37,7 +37,7 @@ CREATE INDEX IF NOT EXISTS idx_vkpi_legacy_batches_file_sha
 
 CREATE TABLE IF NOT EXISTS vkpi_legacy_kol_profiles_staging (
   id BIGSERIAL PRIMARY KEY,
-  batch_id BIGINT NOT NULL REFERENCES vkpi_legacy_import_batches(id) ON DELETE CASCADE,
+  import_batch_id BIGINT NOT NULL REFERENCES vkpi_legacy_import_batches(id) ON DELETE CASCADE,
   row_uid TEXT NOT NULL UNIQUE,
   source_sheet TEXT NOT NULL,
   source_row INTEGER NOT NULL,
@@ -68,11 +68,11 @@ CREATE TABLE IF NOT EXISTS vkpi_legacy_kol_profiles_staging (
   validation_json TEXT NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(batch_id, source_sheet, source_row)
+  UNIQUE(import_batch_id, source_sheet, source_row)
 );
 
 CREATE INDEX IF NOT EXISTS idx_vkpi_legacy_kol_stage_batch
-  ON vkpi_legacy_kol_profiles_staging(batch_id, review_status);
+  ON vkpi_legacy_kol_profiles_staging(import_batch_id, review_status);
 
 CREATE INDEX IF NOT EXISTS idx_vkpi_legacy_kol_stage_dedup
   ON vkpi_legacy_kol_profiles_staging(dedup_key);
@@ -82,7 +82,7 @@ CREATE INDEX IF NOT EXISTS idx_vkpi_legacy_kol_stage_source
 
 CREATE TABLE IF NOT EXISTS vkpi_legacy_cooperations_staging (
   id BIGSERIAL PRIMARY KEY,
-  batch_id BIGINT NOT NULL REFERENCES vkpi_legacy_import_batches(id) ON DELETE CASCADE,
+  import_batch_id BIGINT NOT NULL REFERENCES vkpi_legacy_import_batches(id) ON DELETE CASCADE,
   row_uid TEXT NOT NULL UNIQUE,
   source_sheet TEXT NOT NULL,
   source_row INTEGER NOT NULL,
@@ -113,11 +113,11 @@ CREATE TABLE IF NOT EXISTS vkpi_legacy_cooperations_staging (
   validation_json TEXT NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(batch_id, source_sheet, source_row)
+  UNIQUE(import_batch_id, source_sheet, source_row)
 );
 
 CREATE INDEX IF NOT EXISTS idx_vkpi_legacy_coop_stage_batch
-  ON vkpi_legacy_cooperations_staging(batch_id, review_status);
+  ON vkpi_legacy_cooperations_staging(import_batch_id, review_status);
 
 CREATE INDEX IF NOT EXISTS idx_vkpi_legacy_coop_stage_dedup
   ON vkpi_legacy_cooperations_staging(dedup_key);
@@ -127,7 +127,7 @@ CREATE INDEX IF NOT EXISTS idx_vkpi_legacy_coop_stage_product
 
 CREATE TABLE IF NOT EXISTS vkpi_legacy_official_content_staging (
   id BIGSERIAL PRIMARY KEY,
-  batch_id BIGINT NOT NULL REFERENCES vkpi_legacy_import_batches(id) ON DELETE CASCADE,
+  import_batch_id BIGINT NOT NULL REFERENCES vkpi_legacy_import_batches(id) ON DELETE CASCADE,
   row_uid TEXT NOT NULL UNIQUE,
   source_sheet TEXT NOT NULL,
   source_row INTEGER NOT NULL,
@@ -150,18 +150,18 @@ CREATE TABLE IF NOT EXISTS vkpi_legacy_official_content_staging (
   validation_json TEXT NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(batch_id, source_sheet, source_row)
+  UNIQUE(import_batch_id, source_sheet, source_row)
 );
 
 CREATE INDEX IF NOT EXISTS idx_vkpi_legacy_official_stage_batch
-  ON vkpi_legacy_official_content_staging(batch_id, review_status);
+  ON vkpi_legacy_official_content_staging(import_batch_id, review_status);
 
 CREATE INDEX IF NOT EXISTS idx_vkpi_legacy_official_stage_account
   ON vkpi_legacy_official_content_staging(normalized_platform, official_account);
 
 CREATE TABLE IF NOT EXISTS vkpi_legacy_product_costs_staging (
   id BIGSERIAL PRIMARY KEY,
-  batch_id BIGINT NOT NULL REFERENCES vkpi_legacy_import_batches(id) ON DELETE CASCADE,
+  import_batch_id BIGINT NOT NULL REFERENCES vkpi_legacy_import_batches(id) ON DELETE CASCADE,
   row_uid TEXT NOT NULL UNIQUE,
   source_sheet TEXT NOT NULL,
   source_row INTEGER NOT NULL,
@@ -180,18 +180,18 @@ CREATE TABLE IF NOT EXISTS vkpi_legacy_product_costs_staging (
   validation_json TEXT NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(batch_id, source_sheet, source_row)
+  UNIQUE(import_batch_id, source_sheet, source_row)
 );
 
 CREATE INDEX IF NOT EXISTS idx_vkpi_legacy_product_cost_stage_batch
-  ON vkpi_legacy_product_costs_staging(batch_id, review_status);
+  ON vkpi_legacy_product_costs_staging(import_batch_id, review_status);
 
 CREATE INDEX IF NOT EXISTS idx_vkpi_legacy_product_cost_stage_sku
   ON vkpi_legacy_product_costs_staging(sku, region, effective_date);
 
 CREATE TABLE IF NOT EXISTS vkpi_legacy_risk_watchlist_staging (
   id BIGSERIAL PRIMARY KEY,
-  batch_id BIGINT NOT NULL REFERENCES vkpi_legacy_import_batches(id) ON DELETE CASCADE,
+  import_batch_id BIGINT NOT NULL REFERENCES vkpi_legacy_import_batches(id) ON DELETE CASCADE,
   row_uid TEXT NOT NULL UNIQUE,
   source_sheet TEXT NOT NULL,
   source_row INTEGER NOT NULL,
@@ -218,18 +218,18 @@ CREATE TABLE IF NOT EXISTS vkpi_legacy_risk_watchlist_staging (
   validation_json TEXT NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(batch_id, source_sheet, source_row)
+  UNIQUE(import_batch_id, source_sheet, source_row)
 );
 
 CREATE INDEX IF NOT EXISTS idx_vkpi_legacy_risk_stage_batch
-  ON vkpi_legacy_risk_watchlist_staging(batch_id, review_status);
+  ON vkpi_legacy_risk_watchlist_staging(import_batch_id, review_status);
 
 CREATE INDEX IF NOT EXISTS idx_vkpi_legacy_risk_stage_dedup
   ON vkpi_legacy_risk_watchlist_staging(dedup_key, severity);
 
 CREATE TABLE IF NOT EXISTS vkpi_legacy_voc_alerts_staging (
   id BIGSERIAL PRIMARY KEY,
-  batch_id BIGINT NOT NULL REFERENCES vkpi_legacy_import_batches(id) ON DELETE CASCADE,
+  import_batch_id BIGINT NOT NULL REFERENCES vkpi_legacy_import_batches(id) ON DELETE CASCADE,
   row_uid TEXT NOT NULL UNIQUE,
   source_sheet TEXT NOT NULL,
   source_row INTEGER NOT NULL,
@@ -254,18 +254,18 @@ CREATE TABLE IF NOT EXISTS vkpi_legacy_voc_alerts_staging (
   validation_json TEXT NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(batch_id, source_sheet, source_row)
+  UNIQUE(import_batch_id, source_sheet, source_row)
 );
 
 CREATE INDEX IF NOT EXISTS idx_vkpi_legacy_voc_stage_batch
-  ON vkpi_legacy_voc_alerts_staging(batch_id, review_status);
+  ON vkpi_legacy_voc_alerts_staging(import_batch_id, review_status);
 
 CREATE INDEX IF NOT EXISTS idx_vkpi_legacy_voc_stage_product
   ON vkpi_legacy_voc_alerts_staging(product, issue_type, severity);
 
 CREATE TABLE IF NOT EXISTS vkpi_legacy_import_review_queue (
   id BIGSERIAL PRIMARY KEY,
-  batch_id BIGINT NOT NULL REFERENCES vkpi_legacy_import_batches(id) ON DELETE CASCADE,
+  import_batch_id BIGINT NOT NULL REFERENCES vkpi_legacy_import_batches(id) ON DELETE CASCADE,
   pipeline TEXT NOT NULL,
   staging_table TEXT NOT NULL,
   staging_id BIGINT,
@@ -285,7 +285,7 @@ CREATE TABLE IF NOT EXISTS vkpi_legacy_import_review_queue (
 );
 
 CREATE INDEX IF NOT EXISTS idx_vkpi_legacy_review_batch
-  ON vkpi_legacy_import_review_queue(batch_id, status, severity);
+  ON vkpi_legacy_import_review_queue(import_batch_id, status, severity);
 
 CREATE INDEX IF NOT EXISTS idx_vkpi_legacy_review_source
   ON vkpi_legacy_import_review_queue(source_sheet, source_row);
@@ -295,7 +295,7 @@ CREATE INDEX IF NOT EXISTS idx_vkpi_legacy_review_pipeline
 
 CREATE TABLE IF NOT EXISTS vkpi_legacy_import_logs (
   id BIGSERIAL PRIMARY KEY,
-  batch_id BIGINT REFERENCES vkpi_legacy_import_batches(id) ON DELETE CASCADE,
+  import_batch_id BIGINT REFERENCES vkpi_legacy_import_batches(id) ON DELETE CASCADE,
   actor_staff_id BIGINT REFERENCES staff(id) ON DELETE SET NULL,
   action TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'ok',
@@ -306,14 +306,14 @@ CREATE TABLE IF NOT EXISTS vkpi_legacy_import_logs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_vkpi_legacy_logs_batch
-  ON vkpi_legacy_import_logs(batch_id, occurred_at DESC);
+  ON vkpi_legacy_import_logs(import_batch_id, occurred_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_vkpi_legacy_logs_action
   ON vkpi_legacy_import_logs(action, status, occurred_at DESC);
 
 CREATE TABLE IF NOT EXISTS vkpi_legacy_import_committed_refs (
   id BIGSERIAL PRIMARY KEY,
-  batch_id BIGINT NOT NULL REFERENCES vkpi_legacy_import_batches(id) ON DELETE CASCADE,
+  import_batch_id BIGINT NOT NULL REFERENCES vkpi_legacy_import_batches(id) ON DELETE CASCADE,
   pipeline TEXT NOT NULL,
   staging_table TEXT NOT NULL,
   staging_id BIGINT NOT NULL,
@@ -328,11 +328,11 @@ CREATE TABLE IF NOT EXISTS vkpi_legacy_import_committed_refs (
   committed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   rolled_back_at TIMESTAMPTZ,
   metadata_json TEXT NOT NULL DEFAULT '{}',
-  UNIQUE(batch_id, pipeline, staging_table, staging_id, target_table, target_id)
+  UNIQUE(import_batch_id, pipeline, staging_table, staging_id, target_table, target_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_vkpi_legacy_committed_batch
-  ON vkpi_legacy_import_committed_refs(batch_id, rollback_status);
+  ON vkpi_legacy_import_committed_refs(import_batch_id, rollback_status);
 
 CREATE INDEX IF NOT EXISTS idx_vkpi_legacy_committed_target
   ON vkpi_legacy_import_committed_refs(target_table, target_id);

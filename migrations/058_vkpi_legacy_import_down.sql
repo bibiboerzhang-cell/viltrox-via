@@ -1,0 +1,10 @@
+DROP TABLE IF EXISTS vkpi_legacy_import_committed_refs;
+DROP TABLE IF EXISTS vkpi_legacy_import_logs;
+DROP TABLE IF EXISTS vkpi_legacy_import_review_queue;
+DROP TABLE IF EXISTS vkpi_legacy_voc_alerts_staging;
+DROP TABLE IF EXISTS vkpi_legacy_risk_watchlist_staging;
+DROP TABLE IF EXISTS vkpi_legacy_product_costs_staging;
+DROP TABLE IF EXISTS vkpi_legacy_official_content_staging;
+DROP TABLE IF EXISTS vkpi_legacy_cooperations_staging;
+DROP TABLE IF EXISTS vkpi_legacy_kol_profiles_staging;
+DROP TABLE IF EXISTS vkpi_legacy_import_batches;
