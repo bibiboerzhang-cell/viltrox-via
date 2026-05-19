@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import Any
 
 from app.db.connection import get_conn
+from app.services.vkpi import audit
 from app.services.vkpi.content_brain import COMPETITOR_BRANDS, VILTROX_TERMS
+from app.services.vkpi.workflow import staff_id as resolve_staff_id
 
 
 SCENARIO = "p8_competitor_brain_preview"
@@ -25,6 +27,18 @@ SIGNAL_WEIGHTS = {
     "voc_issue": 15,
     "risk_watch": 10,
     "recent_90d": 5,
+}
+
+REVIEW_STATUS_ACTIONS = {
+    "ready": "ready",
+    "approve": "ready",
+    "approved": "ready",
+    "reject": "rejected",
+    "rejected": "rejected",
+    "ignore": "ignored",
+    "ignored": "ignored",
+    "pending": "pending_review",
+    "pending_review": "pending_review",
 }
 
 BRAND_ALIASES = {
@@ -119,6 +133,13 @@ def _utcnow() -> str:
 
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str)
+
+
+def _actor_label(staff: dict[str, Any] | None, fallback: str = "cli") -> str:
+    actor_id = resolve_staff_id(staff) if staff else 0
+    if actor_id:
+        return f"staff:{actor_id}"
+    return fallback
 
 
 def _find_competitor_terms(text: str) -> list[str]:
@@ -603,6 +624,81 @@ def list_competitor_signals(
         data["evidence"] = _loads(data.get("evidence_json"), {})
         signals.append(data)
     return {"schema_ready": True, "signals": signals, "count": len(signals)}
+
+
+def review_competitor_signal(
+    signal_id: int,
+    *,
+    action: str,
+    note: str = "",
+    staff: dict[str, Any] | None = None,
+    actor: str = "cli",
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    """Mark a committed competitor signal as ready/rejected/ignored without changing source rows."""
+    if not _table_exists("vkpi_competitor_signals"):
+        raise LookupError("competitor signal table not found")
+    clean_action = _lower(action)
+    next_status = REVIEW_STATUS_ACTIONS.get(clean_action)
+    if not next_status:
+        raise ValueError("action must be one of ready, approve, reject, ignore, pending_review")
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM vkpi_competitor_signals WHERE id=?", (int(signal_id),)).fetchone()
+    if not row:
+        raise LookupError("competitor signal not found")
+    data = dict(row)
+    previous_status = _text(data.get("review_status")) or "pending_review"
+    now = _utcnow()
+    reviewer = _actor_label(staff, fallback=actor or "cli")
+    decision = {
+        "status": next_status,
+        "action": clean_action,
+        "note": _text(note),
+        "reviewed_at": now,
+        "reviewed_by": reviewer,
+        "previous_status": previous_status,
+    }
+    result = {
+        "id": int(signal_id),
+        "signal_uid": data.get("signal_uid"),
+        "brand": data.get("normalized_brand") or data.get("brand"),
+        "previous_status": previous_status,
+        "review_status": next_status,
+        "dry_run": bool(dry_run),
+        "write_db": not bool(dry_run),
+        "provider_calls": False,
+        "decision": decision,
+    }
+    if dry_run:
+        return result
+
+    evidence = _loads(data.get("evidence_json"), {})
+    if not isinstance(evidence, dict):
+        evidence = {"original_evidence": evidence}
+    history = evidence.get("review_history")
+    if not isinstance(history, list):
+        history = []
+    history.append(decision)
+    evidence["review_decision"] = decision
+    evidence["review_history"] = history[-20:]
+    conn.execute(
+        """
+        UPDATE vkpi_competitor_signals
+        SET review_status=?, evidence_json=?, updated_at=?
+        WHERE id=?
+        """,
+        (next_status, _json(evidence), now, int(signal_id)),
+    )
+    conn.commit()
+    audit.log_business_event(
+        staff_id=resolve_staff_id(staff) or 0,
+        action_type="competitor_signal_review",
+        target_type="competitor_signal",
+        target_id=int(signal_id),
+        detail=f"{previous_status} -> {next_status}",
+        metadata=decision,
+    )
+    return result
 
 
 def format_preview_summary(payload: dict[str, Any]) -> str:

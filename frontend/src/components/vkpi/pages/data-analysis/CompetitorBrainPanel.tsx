@@ -117,8 +117,9 @@ export function CompetitorBrainPanel({ apiToken, onMessage }: CompetitorBrainPan
         <select value={reviewStatus} onChange={(event) => setReviewStatus(event.target.value)}>
           <option value="">全部状态</option>
           <option value="pending_review">pending_review</option>
-          <option value="approved">approved</option>
+          <option value="ready">ready</option>
           <option value="rejected">rejected</option>
+          <option value="ignored">ignored</option>
         </select>
         <select value={signalType} onChange={(event) => setSignalType(event.target.value)}>
           <option value="">全部类型</option>

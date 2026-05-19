@@ -171,6 +171,22 @@ def industry_competitor_brain_signals(
     )
 
 
+@router.post("/industry-data/competitor-brain/signals/{signal_id}/review")
+def industry_competitor_brain_review_signal(signal_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
+    try:
+        return competitor_brain.review_competitor_signal(
+            signal_id,
+            action=str(body.get("action") or ""),
+            note=str(body.get("note") or body.get("reason") or ""),
+            staff=staff,
+            dry_run=False,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/audience-graph/status")
 def audience_graph_status(staff=Depends(require_tab("vkpi", "read"))):
     return audience_graph.status()

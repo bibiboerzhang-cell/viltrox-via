@@ -14,7 +14,6 @@ vkpi_competitor_signals
 It does not:
 
 ```text
-approve/reject signals
 write canonical competitor products
 call providers
 run crawlers
@@ -26,6 +25,7 @@ write AI cost ledger
 ```text
 GET /api/admin/vkpi/industry-data/competitor-brain/status
 GET /api/admin/vkpi/industry-data/competitor-brain/signals
+POST /api/admin/vkpi/industry-data/competitor-brain/signals/{signal_id}/review
 ```
 
 Signal filters:
@@ -36,6 +36,17 @@ brand
 signal_type
 limit
 ```
+
+Review actions:
+
+```text
+ready / approve   -> review_status='ready'
+reject            -> review_status='rejected'
+ignore            -> review_status='ignored'
+pending_review    -> review_status='pending_review'
+```
+
+The review endpoint updates only `vkpi_competitor_signals.review_status` and stores the decision trail in `evidence_json.review_history`. It does not write canonical competitor product tables.
 
 ## Frontend
 
@@ -72,10 +83,11 @@ top_signal_brand=godox
 ```text
 python3 -m py_compile backend/app/services/vkpi/competitor_brain.py passed
 python3 -m py_compile backend/app/api/routers/vkpi_industry_automation.py passed
+python3 scripts/p8_competitor_brain.py --review-signal <id> --action ready passed as dry-run
 npm run build passed
 git diff --check passed
 ```
 
 ## Next
 
-P8 completion can be documented after deciding whether to stop at review surface or add approve/reject actions.
+Frontend action buttons can call the review endpoint after the team confirms the ready/rejected workflow.

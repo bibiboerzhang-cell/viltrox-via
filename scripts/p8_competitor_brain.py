@@ -20,6 +20,7 @@ from app.services.vkpi.competitor_brain import (  # noqa: E402
     build_competitor_brain_preview,
     commit_competitor_signals,
     format_preview_summary,
+    review_competitor_signal,
 )
 
 
@@ -32,6 +33,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--commit-signals", action="store_true", help="P8-3: persist preview signals for review")
     parser.add_argument("--confirm", action="store_true", help="Required with --commit-signals")
     parser.add_argument("--committed-by", default="cli", help="Commit actor label for --commit-signals")
+    parser.add_argument("--review-signal", type=int, default=0, help="Review one committed competitor signal by id")
+    parser.add_argument("--action", default="", help="Review action: ready/approve/reject/ignore/pending_review")
+    parser.add_argument("--note", default="", help="Review note for --review-signal")
+    parser.add_argument("--apply-review", action="store_true", help="Write --review-signal decision; default is dry-run")
     parser.add_argument("--json", action="store_true", help="Print full JSON payload to stdout")
     return parser.parse_args()
 
@@ -46,6 +51,26 @@ def main() -> int:
     try:
         _reject_forbidden_flags(sys.argv[1:])
         args = parse_args()
+        if args.review_signal:
+            result = review_competitor_signal(
+                args.review_signal,
+                action=args.action,
+                note=args.note,
+                actor="cli",
+                dry_run=not args.apply_review,
+            )
+            if args.json:
+                print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+            else:
+                print(f"signal_id={int(result.get('id') or 0)}")
+                print(f"brand={result.get('brand') or ''}")
+                print(f"previous_status={result.get('previous_status') or ''}")
+                print(f"review_status={result.get('review_status') or ''}")
+                print(f"dry_run={str(bool(result.get('dry_run'))).lower()}")
+                print(f"write_db={str(bool(result.get('write_db'))).lower()}")
+                if result.get("dry_run"):
+                    print("Add --apply-review to write this decision.")
+            return 0
         if args.commit_signals:
             if not args.confirm:
                 raise ValueError("--commit-signals requires --confirm")
