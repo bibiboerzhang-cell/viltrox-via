@@ -1306,6 +1306,21 @@ export async function productRecommendationAction(token: string, recommendationI
   return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/product-analysis/recommendations/${encodeURIComponent(recommendationId)}/${encodeURIComponent(action)}`, { method: "POST", body: jsonBody(payload) }, token);
 }
 
+export async function getAiBudgetStatus(token: string) {
+  return apiFetch<{ budgets?: Row[]; summary?: Row }>("/api/admin/vkpi/budgets", {}, token);
+}
+export async function updateAiBudgetScope(token: string, scope: string, payload: Row) {
+  return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/budgets/${encodeURIComponent(scope)}/update`, { method: "POST", body: jsonBody(payload) }, token);
+}
+export async function getAiBudgetUsageByProvider(token: string, options: { limit?: number } = {}) {
+  const params = new URLSearchParams({ limit: String(options.limit || 50) });
+  return apiFetch<{ rows?: Row[] }>(`/api/admin/vkpi/budgets/usage-by-provider?${params.toString()}`, {}, token);
+}
+export async function getAiBudgetUsageByCron(token: string, options: { limit?: number } = {}) {
+  const params = new URLSearchParams({ limit: String(options.limit || 50) });
+  return apiFetch<{ rows?: Row[] }>(`/api/admin/vkpi/budgets/usage-by-cron?${params.toString()}`, {}, token);
+}
+
 export async function listIndustryProjects(token: string, options: { activeOnly?: boolean; limit?: number } = {}) {
   const params = new URLSearchParams({ limit: String(options.limit || 100), active_only: String(options.activeOnly ?? true) });
   return apiFetch<{ projects?: Row[] }>(`/api/admin/vkpi/industry-data/projects?${params.toString()}`, {}, token);

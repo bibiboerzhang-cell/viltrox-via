@@ -953,6 +953,32 @@
   min-width: 160px;
 }
 
+.vkpi-budget-state {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 76px;
+  border-radius: 999px;
+  padding: 4px 9px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.vkpi-budget-state.is-ok {
+  color: #067647;
+  background: #ecfdf3;
+}
+
+.vkpi-budget-state.is-warning {
+  color: #b54708;
+  background: #fffaeb;
+}
+
+.vkpi-budget-state.is-danger {
+  color: #b42318;
+  background: #fef3f2;
+}
+
 .vkpi-suggestion-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(260px, 1fr));

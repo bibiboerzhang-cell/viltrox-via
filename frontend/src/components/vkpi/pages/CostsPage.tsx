@@ -6,6 +6,7 @@ import { currencyFormatter } from '../shared/vkpiFormatters';
 import { PageShell } from './PageShell';
 import { getMarketingCostDetail } from '../../../services/vkpi.ui-api';
 import { safeNumber, textValue } from '../shared/vkpiDataUtils';
+import { BudgetMonitorPanel } from './costs/BudgetMonitorPanel';
 
 interface CostsPageProps {
   data: VkpiDashboardData;
@@ -156,6 +157,7 @@ export function CostsPage({ data, viewMode, onUpdateCost, onApproveCost, onVoidC
         <div className="vkpi-table-card__header"><div><h2>成本明细</h2><span>{visibleCosts.length} 条</span></div></div>
         <CostLedgerTable rows={visibleCosts} onSelect={setCostId} />
       </section>
+      <BudgetMonitorPanel apiToken={apiToken} />
     </PageShell>
   );
 }
