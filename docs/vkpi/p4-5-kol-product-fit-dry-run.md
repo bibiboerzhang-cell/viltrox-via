@@ -307,17 +307,12 @@ Optional:
 --include-low-evidence
 --with-llm-reasons
 --reason-limit 10
+--persist-run
 ```
 
 Default must be dry-run and must not write database rows.
 
-Deferred flags for later packages:
-
-```text
---persist-run        P4.8
-```
-
-`--persist-run` will be the only allowed write switch when P4.8 adds persistence. It will store `status=previewed`.
+`--persist-run` is the only allowed write switch. It stores `status=previewed`.
 
 Rejected flags:
 
@@ -353,7 +348,7 @@ Offline or blocked provider paths must fall back to deterministic reason text an
 4. Returned rows include score_breakdown, evidence_pro, and evidence_con.
 5. Each returned row has at least 3 evidence items unless --include-low-evidence is passed.
 6. Default run writes no recommendation rows.
-7. P4.6 does not expose --persist-run yet.
+7. P4.8 optional --persist-run writes one previewed run and N previewed items.
 8. P4.7 optional reason fallback writes no AI cost ledger rows.
 9. Forbidden write/provider flags are rejected.
 10. Frontend/API work is out of scope for the first code package.
