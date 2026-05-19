@@ -57,6 +57,7 @@ backend/data/job_results/
 backend/runtime/
 backend/uploads/
 frontend/runtime/
+Excel/
 
 # ─── IDE / 系统 ─────────────────────────────
 .idea/

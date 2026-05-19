@@ -94,6 +94,8 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "056_vkpi_job_runtime_extensions.sql",
     "057_vkpi_ai_cost_budget.sql",
     "058_vkpi_legacy_import.sql",
+    "058a_vkpi_legacy_import_launch_plan.sql",
+    "058b_vkpi_legacy_import_dedupe.sql",
 )
 
 try:
