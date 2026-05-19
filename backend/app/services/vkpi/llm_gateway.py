@@ -20,6 +20,7 @@ from typing import Any, Callable
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
+from app.services.vkpi import budget_guard
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
 
@@ -307,6 +308,8 @@ def invoke(
     max_output_tokens: int = 800,
     preferred_provider: str | None = None,
     skip_budget_check: bool = False,
+    cost_tag: str | None = None,
+    triggered_by: Any = None,
     metadata: dict[str, Any] | None = None,
     staff: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -318,8 +321,39 @@ def invoke(
     safe_prompt = str(prompt or "")
     if not safe_prompt.strip():
         result = _rule_fallback(safe_prompt, purpose=purpose, reason="empty_prompt")
-        record_call(provider="rule_v0", model="rule_v0", purpose=purpose, prompt=safe_prompt, status="empty_prompt", fallback_used=True, metadata={**(metadata or {}), "reason": result["reason"]}, staff=staff)
+        record_call(
+            provider="rule_v0",
+            model="rule_v0",
+            purpose=purpose,
+            prompt=safe_prompt,
+            status="empty_prompt",
+            fallback_used=True,
+            cost_tag=cost_tag,
+            triggered_by=triggered_by,
+            metadata={**(metadata or {}), "reason": result["reason"]},
+            staff=staff,
+        )
         return result
+
+    if cost_tag:
+        try:
+            if not budget_guard.check_budget(cost_tag, 0):
+                result = _rule_fallback(safe_prompt, purpose=purpose, reason="ai_budget_hard_stop")
+                record_call(
+                    provider="rule_v0",
+                    model="rule_v0",
+                    purpose=purpose,
+                    prompt=safe_prompt,
+                    status="ai_budget_hard_stop",
+                    fallback_used=True,
+                    cost_tag=cost_tag,
+                    triggered_by=triggered_by,
+                    metadata={**(metadata or {}), "cost_tag": cost_tag},
+                    staff=staff,
+                )
+                return result
+        except Exception:
+            logger.warning("vkpi.llm_gateway.ai_budget_check_failed", exc_info=True)
 
     if not skip_budget_check:
         monthly_budget = _monthly_budget_cents()
@@ -327,7 +361,18 @@ def invoke(
         if monthly_budget <= 0 or remaining <= 0:
             reason = "budget_disabled" if monthly_budget <= 0 else "budget_exhausted"
             result = _rule_fallback(safe_prompt, purpose=purpose, reason=reason)
-            record_call(provider="rule_v0", model="rule_v0", purpose=purpose, prompt=safe_prompt, status=reason, fallback_used=True, metadata={**(metadata or {}), "monthly_budget_cents": monthly_budget, "remaining_cents": remaining}, staff=staff)
+            record_call(
+                provider="rule_v0",
+                model="rule_v0",
+                purpose=purpose,
+                prompt=safe_prompt,
+                status=reason,
+                fallback_used=True,
+                cost_tag=cost_tag,
+                triggered_by=triggered_by,
+                metadata={**(metadata or {}), "monthly_budget_cents": monthly_budget, "remaining_cents": remaining},
+                staff=staff,
+            )
             return result
 
     errors: list[dict[str, Any]] = []
@@ -354,6 +399,8 @@ def invoke(
                 cost_cents=int(result.get("cost_cents") or 0),
                 status="success",
                 fallback_used=bool(errors),
+                cost_tag=cost_tag,
+                triggered_by=triggered_by,
                 metadata={**(metadata or {}), "latency_ms": result.get("latency_ms"), "attempt_errors": errors},
                 staff=staff,
             )
@@ -363,8 +410,54 @@ def invoke(
         errors.append({"provider": provider, "status": status or "failed", "error": str(result.get("error") or "")[:300]})
 
     fallback = _rule_fallback(safe_prompt, purpose=purpose, reason="all_providers_failed", errors=errors)
-    record_call(provider="rule_v0", model="rule_v0", purpose=purpose, prompt=safe_prompt, status="all_providers_failed", fallback_used=True, metadata={**(metadata or {}), "errors": errors}, staff=staff)
+    record_call(
+        provider="rule_v0",
+        model="rule_v0",
+        purpose=purpose,
+        prompt=safe_prompt,
+        status="all_providers_failed",
+        fallback_used=True,
+        cost_tag=cost_tag,
+        triggered_by=triggered_by,
+        metadata={**(metadata or {}), "errors": errors},
+        staff=staff,
+    )
     return fallback
+
+
+def chat(
+    messages: list[dict[str, Any]] | str,
+    *,
+    purpose: str = "",
+    max_output_tokens: int = 800,
+    preferred_provider: str | None = None,
+    skip_budget_check: bool = False,
+    cost_tag: str | None = None,
+    triggered_by: Any = None,
+    metadata: dict[str, Any] | None = None,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if isinstance(messages, str):
+        prompt = messages
+    else:
+        parts: list[str] = []
+        for item in messages or []:
+            if isinstance(item, dict):
+                parts.append(f"{str(item.get('role') or 'user')}: {item.get('content')}")
+            else:
+                parts.append(f"user: {item}")
+        prompt = "\n".join(parts)
+    return invoke(
+        prompt,
+        purpose=purpose,
+        max_output_tokens=max_output_tokens,
+        preferred_provider=preferred_provider,
+        skip_budget_check=skip_budget_check,
+        cost_tag=cost_tag,
+        triggered_by=triggered_by,
+        metadata=metadata,
+        staff=staff,
+    )
 
 
 def record_call(
@@ -378,6 +471,8 @@ def record_call(
     cost_cents: int = 0,
     status: str = "not_configured",
     fallback_used: bool = True,
+    cost_tag: str | None = None,
+    triggered_by: Any = None,
     metadata: dict[str, Any] | None = None,
     staff: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -410,6 +505,28 @@ def record_call(
         ),
     )
     conn.commit()
+    if cost_tag:
+        try:
+            budget_guard.record_cost(
+                scope=cost_tag,
+                cron_task=purpose,
+                ai_provider=provider or "unknown",
+                model_name=model or "",
+                cost_usd=float(cost_cents or 0) / 100,
+                tokens_in=int(input_tokens or 0),
+                tokens_out=int(output_tokens or 0),
+                staff_id=resolve_staff_id(staff) or None,
+                metadata={
+                    **(metadata or {}),
+                    "llm_call_uid": uid,
+                    "purpose": purpose,
+                    "status": status,
+                    "fallback_used": bool(fallback_used),
+                },
+                triggered_by=triggered_by if triggered_by is not None else staff,
+            )
+        except Exception:
+            logger.warning("vkpi.llm_gateway.ai_cost_record_failed", exc_info=True)
     row = conn.execute("SELECT * FROM vkpi_llm_calls WHERE call_uid=?", (uid,)).fetchone()
     return {"call": dict(row) if row else {"call_uid": uid}}
 
