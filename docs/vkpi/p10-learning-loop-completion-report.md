@@ -16,6 +16,7 @@ P10-3  recommendation feedback backlog snapshot
 P10-4  Memory feedback backlog snapshot
 P10-5  recommendation action feedback bridge
 P10-6  Operating Review recommendation feedback actions
+P10-7  explicit recommendation feedback CLI
 ```
 
 ## Current Snapshot
@@ -174,9 +175,23 @@ Operating Review UI:
 
 ```text
 Settings -> Operating Review now shows recommendation feedback backlog rows.
-Each row exposes explicit 入选 / 拒绝 actions.
+Each row exposes explicit 入选 / 需复核 / 拒绝 actions.
 Buttons call the existing recommendation action endpoint.
 No action runs on page load or refresh.
+```
+
+Explicit CLI:
+
+```bash
+# dry-run only
+scripts/p10_recommendation_feedback_backlog.py --recommendation-id 705 --action feedback
+
+# write only with explicit confirm
+scripts/p10_recommendation_feedback_backlog.py \
+  --recommendation-id 705 \
+  --action feedback \
+  --note "needs product owner review" \
+  --confirm
 ```
 
 ## Guarantees

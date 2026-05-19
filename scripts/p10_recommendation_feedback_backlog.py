@@ -19,6 +19,7 @@ from app.services.vkpi.recommendation_feedback_backlog import (  # noqa: E402
     build_recommendation_feedback_backlog,
     format_recommendation_feedback_backlog,
 )
+from app.services.vkpi import product_analysis  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -28,12 +29,73 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--json-out", default="", help="Write JSON output to this path")
     parser.add_argument("--md-out", default="", help="Write Markdown output to this path")
     parser.add_argument("--json", action="store_true", help="Print JSON output")
+    parser.add_argument("--recommendation-id", type=int, default=0, help="Explicit recommendation id to write feedback for")
+    parser.add_argument("--action", choices=["shortlist", "reject", "feedback"], default="feedback", help="Action for --recommendation-id")
+    parser.add_argument("--note", default="", help="Feedback note")
+    parser.add_argument("--reason", default="", help="Reject reason")
+    parser.add_argument("--confirm", action="store_true", help="Required to write --recommendation-id action")
     return parser.parse_args()
+
+
+def _action_payload(args: argparse.Namespace) -> dict:
+    payload = {
+        "source": "p10_recommendation_feedback_backlog_cli",
+    }
+    if args.note:
+        payload["note"] = args.note
+    if args.reason:
+        payload["reason"] = args.reason
+    if args.action == "feedback" and not args.note:
+        payload["note"] = "P10 CLI marked this recommendation for human review."
+    if args.action == "reject" and not args.reason:
+        payload["reason"] = "P10 CLI manual rejection."
+    return payload
 
 
 def main() -> int:
     try:
         args = parse_args()
+        if args.recommendation_id:
+            payload = _action_payload(args)
+            if not args.confirm:
+                result = {
+                    "scenario": "p10_recommendation_feedback_action",
+                    "dry_run": True,
+                    "write_db": False,
+                    "provider_calls": False,
+                    "recommendation_id": args.recommendation_id,
+                    "action": args.action,
+                    "payload": payload,
+                    "message": "Add --confirm to write this recommendation action.",
+                }
+            else:
+                result = {
+                    "scenario": "p10_recommendation_feedback_action",
+                    "dry_run": False,
+                    "write_db": True,
+                    "provider_calls": False,
+                    "action": args.action,
+                    **product_analysis.action_recommendation(
+                        args.recommendation_id,
+                        args.action,
+                        payload,
+                        staff={"id": None, "name": "p10-cli"},
+                    ),
+                }
+            if args.json:
+                print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+            else:
+                print(f"scenario={result.get('scenario', '')}")
+                print(f"dry_run={str(bool(result.get('dry_run'))).lower()}")
+                print(f"write_db={str(bool(result.get('write_db'))).lower()}")
+                print(f"provider_calls={str(bool(result.get('provider_calls'))).lower()}")
+                print(f"recommendation_id={args.recommendation_id}")
+                print(f"action={args.action}")
+                if result.get("feedback_inserted") is not None:
+                    print(f"feedback_inserted={str(bool(result.get('feedback_inserted'))).lower()}")
+                if result.get("message"):
+                    print(result["message"])
+            return 0
         payload = build_recommendation_feedback_backlog(
             run_uid=args.run_uid,
             limit=args.limit,

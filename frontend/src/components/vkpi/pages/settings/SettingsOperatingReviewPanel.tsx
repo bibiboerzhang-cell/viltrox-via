@@ -68,7 +68,7 @@ export function SettingsOperatingReviewPanel({ apiToken }: { apiToken?: string }
     void loadReview();
   }, [loadReview]);
 
-  const handleRecommendationAction = React.useCallback(async (recommendationId: string, action: "shortlist" | "reject") => {
+  const handleRecommendationAction = React.useCallback(async (recommendationId: string, action: "shortlist" | "reject" | "feedback") => {
     if (!apiToken || !recommendationId) return;
     setActionBusyId(`${recommendationId}:${action}`);
     setError("");
@@ -79,7 +79,9 @@ export function SettingsOperatingReviewPanel({ apiToken }: { apiToken?: string }
         action,
         action === "reject"
           ? { reason: "Operating Review 手动拒绝", source: "operating_review_backlog" }
-          : { note: "Operating Review 手动入选", source: "operating_review_backlog" },
+          : action === "feedback"
+            ? { note: "Operating Review 标记需复核", source: "operating_review_backlog" }
+            : { note: "Operating Review 手动入选", source: "operating_review_backlog" },
       );
       await loadReview();
     } catch (exc) {
@@ -221,6 +223,14 @@ export function SettingsOperatingReviewPanel({ apiToken }: { apiToken?: string }
                         onClick={() => void handleRecommendationAction(recommendationId, "shortlist")}
                       >
                         入选
+                      </button>
+                      <button
+                        className="vkpi-mini-button"
+                        type="button"
+                        disabled={!apiToken || Boolean(actionBusyId)}
+                        onClick={() => void handleRecommendationAction(recommendationId, "feedback")}
+                      >
+                        需复核
                       </button>
                       <button
                         className="vkpi-mini-button"
