@@ -1,6 +1,8 @@
+import { useState } from 'react';
 import { RecommendationCandidateTable } from './RecommendationCandidateTable';
 import { RecommendationDetailDrawer } from './RecommendationDetailDrawer';
 import { RecommendationOutcomeTable } from './RecommendationOutcomeTable';
+import { RecommendationRunReviewPanel } from './RecommendationRunReviewPanel';
 import { RecommendationSetupForms } from './RecommendationSetupForms';
 import { useProductRecommendationPanel } from './useProductRecommendationPanel';
 
@@ -42,6 +44,12 @@ export function ProductRecommendationPanel({
     onRefresh,
     onRecommendationsChange,
   });
+  const [activePreviewRun, setActivePreviewRun] = useState<Row | null>(null);
+
+  const runRecommendations = async () => {
+    setActivePreviewRun(null);
+    await panel.runRecommendations();
+  };
 
   return (
     <>
@@ -74,12 +82,21 @@ export function ProductRecommendationPanel({
         onSubmitLaunch={panel.submitLaunch}
         onImportPoolItem={panel.importPoolItem}
         onImportPoolJson={panel.importPoolJson}
-        onRunRecommendations={panel.runRecommendations}
+        onRunRecommendations={runRecommendations}
+      />
+      <RecommendationRunReviewPanel
+        apiToken={apiToken}
+        busy={busy}
+        onBusyChange={onBusyChange}
+        onMessage={onMessage}
+        onRecommendationsChange={onRecommendationsChange}
+        onRunLoaded={setActivePreviewRun}
       />
       <RecommendationOutcomeTable outcomeSummary={outcomeSummary} />
       <RecommendationCandidateTable
         busy={busy}
         recommendations={recommendations}
+        readOnly={Boolean(activePreviewRun)}
         onSelect={panel.setSelectedRecommendation}
         onAction={panel.updateRecommendation}
       />

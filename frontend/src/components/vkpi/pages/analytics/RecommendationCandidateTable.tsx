@@ -6,6 +6,7 @@ type RecommendationAction = 'shortlist' | 'reject' | 'claim' | 'create_project';
 interface RecommendationCandidateTableProps {
   busy: boolean;
   recommendations: Row[];
+  readOnly?: boolean;
   onSelect: (row: Row) => void;
   onAction: (id: unknown, action: RecommendationAction) => void | Promise<void>;
 }
@@ -13,6 +14,7 @@ interface RecommendationCandidateTableProps {
 export function RecommendationCandidateTable({
   busy,
   recommendations,
+  readOnly = false,
   onSelect,
   onAction,
 }: RecommendationCandidateTableProps) {
@@ -33,10 +35,16 @@ export function RecommendationCandidateTable({
                 <td>rule_v0</td>
                 <td>{row.linked_main_kol_id ? `#${String(row.linked_main_kol_id)}` : '未落库'}</td>
                 <td>
-                  <button className="vkpi-mini-button" type="button" disabled={busy} onClick={() => void onAction(row.id, 'shortlist')}>入选</button>
-                  <button className="vkpi-mini-button" type="button" disabled={busy} onClick={() => void onAction(row.id, 'claim')}>认领</button>
-                  <button className="vkpi-mini-button" type="button" disabled={busy} onClick={() => void onAction(row.id, 'create_project')}>建项目</button>
-                  <button className="vkpi-mini-button" type="button" disabled={busy} onClick={() => void onAction(row.id, 'reject')}>忽略</button>
+                  {readOnly ? (
+                    <span className="vkpi-help-text">Preview only</span>
+                  ) : (
+                    <>
+                      <button className="vkpi-mini-button" type="button" disabled={busy} onClick={() => void onAction(row.id, 'shortlist')}>入选</button>
+                      <button className="vkpi-mini-button" type="button" disabled={busy} onClick={() => void onAction(row.id, 'claim')}>认领</button>
+                      <button className="vkpi-mini-button" type="button" disabled={busy} onClick={() => void onAction(row.id, 'create_project')}>建项目</button>
+                      <button className="vkpi-mini-button" type="button" disabled={busy} onClick={() => void onAction(row.id, 'reject')}>忽略</button>
+                    </>
+                  )}
                 </td>
               </tr>
             )) : <tr><td className="vkpi-table-empty" colSpan={8}>暂无推荐候选。先创建发布项目并导入真实 KOL 池。</td></tr>}

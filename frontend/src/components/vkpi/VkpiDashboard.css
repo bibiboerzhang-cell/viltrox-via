@@ -941,6 +941,18 @@
   font-weight: 700;
 }
 
+.vkpi-run-toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 240px;
+}
+
+.vkpi-run-toolbar select {
+  min-height: 34px;
+  min-width: 160px;
+}
+
 .vkpi-suggestion-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(260px, 1fr));
