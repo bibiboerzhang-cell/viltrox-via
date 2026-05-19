@@ -305,12 +305,19 @@ Optional:
 --primary-markets "Germany,United States"
 --secondary-markets "Japan,United Kingdom"
 --include-low-evidence
---with-llm-reasons
---reason-limit 10
---persist-run
 ```
 
-Default must be dry-run and must not write database rows. `--persist-run` is the only allowed write switch and stores `status=previewed`.
+Default must be dry-run and must not write database rows.
+
+Deferred flags for later packages:
+
+```text
+--with-llm-reasons   P4.7
+--reason-limit 10    P4.7
+--persist-run        P4.8
+```
+
+`--persist-run` will be the only allowed write switch when P4.8 adds persistence. It will store `status=previewed`.
 
 Rejected flags:
 
@@ -346,8 +353,8 @@ Offline or blocked provider paths must fall back to deterministic reason text an
 4. Returned rows include score_breakdown, evidence_pro, and evidence_con.
 5. Each returned row has at least 3 evidence items unless --include-low-evidence is passed.
 6. Default run writes no recommendation rows.
-7. Optional --persist-run writes one previewed run and N previewed items.
-8. Offline reason fallback writes no AI cost ledger rows.
+7. P4.6 does not expose --persist-run yet.
+8. P4.6 does not expose --with-llm-reasons yet.
 9. Forbidden write/provider flags are rejected.
 10. Frontend/API work is out of scope for the first code package.
 ```
@@ -356,7 +363,8 @@ Offline or blocked provider paths must fall back to deterministic reason text an
 
 ```text
 P4.6 implement kol_product_fit dry-run CLI
-P4.7 persist kol_product_fit preview runs
-P4.8 expose/list both P4 scenarios from the same run API
-P4.9 design project/staff next-action suggestions
+P4.7 add optional budget-gated reasons for kol_product_fit
+P4.8 persist kol_product_fit preview runs
+P4.9 expose/list both P4 scenarios from the same run API
+P4.10 design project/staff next-action suggestions
 ```
