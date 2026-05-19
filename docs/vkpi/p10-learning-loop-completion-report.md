@@ -13,6 +13,7 @@ P10-0  read-only learning boundary design
 P10-1  service + CLI snapshot
 P10-2  read-only API
 P10-3  recommendation feedback backlog snapshot
+P10-4  Memory feedback backlog snapshot
 ```
 
 ## Current Snapshot
@@ -57,6 +58,7 @@ scripts/p10_learning_snapshot.py
 ```text
 GET /api/admin/vkpi/learning/snapshot
 GET /api/admin/vkpi/learning/recommendation-feedback-backlog
+GET /api/admin/vkpi/learning/memory-feedback-backlog
 ```
 
 ## Recommendation Feedback Backlog
@@ -84,6 +86,34 @@ capture_rejection_feedback       outcome/status already shows rejection; still r
 capture_shortlist_feedback       outcome/status already shows shortlist; still requires human write action
 review_positive_business_signal  downstream business outcome exists; requires human interpretation
 needs_human_review               no explicit action or outcome exists
+```
+
+## Memory Feedback Backlog
+
+P10-4 adds a read-only backlog for Memory entities that are most likely to need human verification.
+
+```bash
+scripts/p10_memory_feedback_backlog.py --entity-type kol --limit 100
+```
+
+Current signals used:
+
+```text
+risk_flag
+sync_status=needs_human_review
+review_state=needs_human_review
+weak_label=profile_missing_review / risk_review
+contact_status=missing / unknown
+low evidence_count
+```
+
+Output guarantees:
+
+```text
+provider_calls=false
+write_db=false
+no vkpi_memory_feedback row is auto-created
+existing Memory facts are used only to rank review priority
 ```
 
 ## Guarantees
