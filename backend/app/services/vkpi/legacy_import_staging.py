@@ -1092,7 +1092,11 @@ def inspect_batch(batch_uid: str) -> dict[str, Any]:
     )
     committed_refs_count = int(
         conn.execute(
-            "SELECT COUNT(*) AS n FROM vkpi_legacy_import_committed_refs WHERE import_batch_id=?",
+            """
+            SELECT COUNT(*) AS n
+            FROM vkpi_legacy_import_committed_refs
+            WHERE import_batch_id=? AND rollback_status='not_rolled_back'
+            """,
             (import_batch_id,),
         ).fetchone()["n"]
     )

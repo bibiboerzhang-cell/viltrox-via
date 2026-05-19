@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from app.db.connection import get_conn
@@ -50,6 +50,77 @@ def _fetch_batch(batch_uid: str) -> dict[str, Any]:
 
 def _utcnow() -> str:
     return datetime.utcnow().isoformat(timespec="seconds")
+
+
+def _utcnow_dt() -> datetime:
+    return datetime.utcnow()
+
+
+def _format_ts(value: datetime | None) -> str | None:
+    return value.isoformat(timespec="seconds") if value else None
+
+
+def _parse_ts(value: Any) -> datetime | None:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None)
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1]
+    try:
+        return datetime.fromisoformat(text).replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
+def _rollback_until_for_policy(now: datetime, policy: str) -> datetime | None:
+    if policy == "manual_24h":
+        return now + timedelta(hours=24)
+    if policy == "admin_only":
+        return None
+    if policy == "no_rollback":
+        return None
+    return now + timedelta(minutes=30)
+
+
+def _rollback_window(batch: dict[str, Any], *, force: bool = False) -> dict[str, Any]:
+    policy = _text(batch.get("rollback_policy")) or "manual_30m"
+    rollback_until = _parse_ts(batch.get("rollback_until"))
+    now = _utcnow_dt()
+    if force:
+        return {
+            "allowed": True,
+            "forced": True,
+            "policy": policy,
+            "rollback_until": _format_ts(rollback_until),
+            "reason": "force_rollback",
+        }
+    if policy == "no_rollback":
+        return {
+            "allowed": False,
+            "forced": False,
+            "policy": policy,
+            "rollback_until": _format_ts(rollback_until),
+            "reason": "no_rollback_policy",
+        }
+    if rollback_until and now > rollback_until:
+        return {
+            "allowed": False,
+            "forced": False,
+            "policy": policy,
+            "rollback_until": _format_ts(rollback_until),
+            "reason": "rollback_window_expired",
+        }
+    return {
+        "allowed": True,
+        "forced": False,
+        "policy": policy,
+        "rollback_until": _format_ts(rollback_until),
+        "reason": "ok" if rollback_until else "no_window_configured",
+    }
 
 
 def _identity(entity: dict[str, Any]) -> str:
@@ -207,11 +278,12 @@ def _build_commit_plans(batch_uid: str, import_batch_id: int, *, include_blocked
     return plans
 
 
-def _committed_refs_count(import_batch_id: int) -> int:
+def _committed_refs_count(import_batch_id: int, *, active_only: bool = True) -> int:
+    clause = " AND rollback_status='not_rolled_back'" if active_only else ""
     return int(
         get_conn()
         .execute(
-            "SELECT COUNT(*) AS n FROM vkpi_legacy_import_committed_refs WHERE import_batch_id=?",
+            f"SELECT COUNT(*) AS n FROM vkpi_legacy_import_committed_refs WHERE import_batch_id=?{clause}",
             (import_batch_id,),
         )
         .fetchone()["n"]
@@ -383,6 +455,17 @@ def _insert_committed_ref(
           rollback_status, committed_by_staff_id, metadata_json
         ) VALUES (?, 'kol_entities', 'vkpi_legacy_kol_entities', ?, 'vkpi_kol_pool',
           ?, ?, ?, ?, 'not_rolled_back', ?, ?)
+        ON CONFLICT(import_batch_id, pipeline, staging_table, staging_id, target_table, target_id)
+        DO UPDATE SET
+          commit_action=excluded.commit_action,
+          previous_snapshot_json=excluded.previous_snapshot_json,
+          new_snapshot_json=excluded.new_snapshot_json,
+          rollback_status='not_rolled_back',
+          committed_by_staff_id=excluded.committed_by_staff_id,
+          rolled_back_by_staff_id=NULL,
+          committed_at=NOW(),
+          rolled_back_at=NULL,
+          metadata_json=excluded.metadata_json
         """,
         (
             import_batch_id,
@@ -417,9 +500,9 @@ def commit_kol_pool_batch(
     conn = get_conn()
     batch = _fetch_batch(batch_uid)
     import_batch_id = int(batch["id"])
-    if _committed_refs_count(import_batch_id):
+    if _committed_refs_count(import_batch_id, active_only=True):
         raise RuntimeError("batch already has committed refs; rollback before committing again")
-    if _text(batch.get("status")) not in {"staged", "committing"}:
+    if _text(batch.get("status")) not in {"staged", "committing", "rolled_back"}:
         raise RuntimeError(f"batch status must be staged before P2D commit, got: {batch.get('status')}")
 
     plans = _build_commit_plans(batch_uid, import_batch_id, include_blocked=include_blocked)
@@ -427,7 +510,10 @@ def commit_kol_pool_batch(
     if int(summary["planned_writes"]) <= 0:
         raise RuntimeError("no P2D writes planned")
 
-    now = _utcnow()
+    now_dt = _utcnow_dt()
+    now = _format_ts(now_dt) or _utcnow()
+    rollback_policy = _text(batch.get("rollback_policy")) or "manual_30m"
+    rollback_until = _format_ts(_rollback_until_for_policy(now_dt, rollback_policy))
     committed_samples: list[dict[str, Any]] = []
     try:
         conn.execute(
@@ -475,10 +561,14 @@ def commit_kol_pool_batch(
                 committed_rows=?,
                 committed_by_staff_id=?,
                 committed_at=?,
+                rolled_back_rows=0,
+                rolled_back_by_staff_id=NULL,
+                rolled_back_at=NULL,
+                rollback_until=?,
                 updated_at=?
             WHERE id=?
             """,
-            (committed_rows, actor_staff_id, now, now, import_batch_id),
+            (committed_rows, actor_staff_id, now, rollback_until, now, import_batch_id),
         )
         conn.execute(
             """
@@ -504,16 +594,20 @@ def commit_kol_pool_batch(
         "batch_id": import_batch_id,
         "mode": "commit",
         "include_blocked": include_blocked,
-        "committed_refs_count": _committed_refs_count(import_batch_id),
+        "committed_refs_count": _committed_refs_count(import_batch_id, active_only=True),
+        "committed_refs_total": _committed_refs_count(import_batch_id, active_only=False),
+        "rollback_policy": rollback_policy,
+        "rollback_until": rollback_until or "",
         "committed_samples": committed_samples,
         **summary,
     }
 
 
-def preview_kol_pool_rollback(batch_uid: str, *, sample_limit: int = 20) -> dict[str, Any]:
+def preview_kol_pool_rollback(batch_uid: str, *, sample_limit: int = 20, force: bool = False) -> dict[str, Any]:
     ensure_legacy_staging_schema()
     batch = _fetch_batch(batch_uid)
     import_batch_id = int(batch["id"])
+    window = _rollback_window(batch, force=force)
     rows = [
         _row_to_dict(row)
         for row in get_conn().execute(
@@ -534,6 +628,11 @@ def preview_kol_pool_rollback(batch_uid: str, *, sample_limit: int = 20) -> dict
         "rollback_refs_count": len(rows),
         "insert_refs": int(counts["insert"]),
         "update_refs": int(counts["update"]),
+        "rollback_allowed": bool(window["allowed"]),
+        "rollback_forced": bool(window["forced"]),
+        "rollback_policy": window["policy"],
+        "rollback_until": window["rollback_until"] or "",
+        "rollback_window_reason": window["reason"],
         "samples": [
             {
                 "ref_id": int(row["id"]),
@@ -561,14 +660,21 @@ def rollback_kol_pool_commit(
     *,
     actor_staff_id: int | None = None,
     sample_limit: int = 20,
+    force: bool = False,
 ) -> dict[str, Any]:
     ensure_legacy_staging_schema()
     conn = get_conn()
     batch = _fetch_batch(batch_uid)
     import_batch_id = int(batch["id"])
-    preview = preview_kol_pool_rollback(batch_uid, sample_limit=sample_limit)
+    preview = preview_kol_pool_rollback(batch_uid, sample_limit=sample_limit, force=force)
     if int(preview["rollback_refs_count"]) <= 0:
         raise RuntimeError("no committed vkpi_kol_pool refs to roll back")
+    if not bool(preview.get("rollback_allowed")):
+        raise RuntimeError(
+            f"rollback not allowed: {preview.get('rollback_window_reason')} "
+            f"(policy={preview.get('rollback_policy')}, rollback_until={preview.get('rollback_until')}); "
+            "rerun with --force-rollback for emergency rollback"
+        )
 
     now = _utcnow()
     rolled_back = 0
@@ -634,7 +740,7 @@ def rollback_kol_pool_commit(
                 actor_staff_id,
                 f"rolled back {rolled_back} vkpi_kol_pool refs",
                 rolled_back,
-                json_dumps({"batch_uid": batch_uid, "preview": preview}),
+                json_dumps({"batch_uid": batch_uid, "preview": preview, "force_rollback": force}),
             ),
         )
         conn.commit()
@@ -656,6 +762,12 @@ def format_kol_pool_commit_plan(result: dict[str, Any]) -> str:
         f"skip_count={int(result.get('skip_count', 0))}",
         f"committed_refs_count={int(result.get('committed_refs_count', 0))}",
     ]
+    if "committed_refs_total" in result:
+        lines.append(f"committed_refs_total={int(result.get('committed_refs_total', 0))}")
+    if result.get("rollback_policy"):
+        lines.append(f"rollback_policy={result.get('rollback_policy', '')}")
+    if result.get("rollback_until"):
+        lines.append(f"rollback_until={result.get('rollback_until', '')}")
     if result.get("mode") == "commit":
         lines.append(f"committed_refs_written={int(result.get('committed_refs_count', 0))}")
     for key, value in result.get("weak_label_counts", {}).items():
@@ -695,6 +807,11 @@ def format_kol_pool_rollback(result: dict[str, Any]) -> str:
         f"rollback_refs_count={int(result.get('rollback_refs_count', 0))}",
         f"insert_refs={int(result.get('insert_refs', 0))}",
         f"update_refs={int(result.get('update_refs', 0))}",
+        f"rollback_allowed={str(bool(result.get('rollback_allowed'))).lower()}",
+        f"rollback_forced={str(bool(result.get('rollback_forced'))).lower()}",
+        f"rollback_policy={result.get('rollback_policy', '')}",
+        f"rollback_until={result.get('rollback_until', '')}",
+        f"rollback_window_reason={result.get('rollback_window_reason', '')}",
     ]
     if result.get("mode") == "rollback":
         lines.append(f"rolled_back_refs={int(result.get('rolled_back_refs', 0))}")

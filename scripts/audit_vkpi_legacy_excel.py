@@ -73,6 +73,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dry-run-kol-pool-commit", default="", help="Plan P2D writes into vkpi_kol_pool without mutating main tables")
     parser.add_argument("--commit-kol-pool-batch", default="", help="Commit P2D writes into vkpi_kol_pool; requires --commit")
     parser.add_argument("--rollback-kol-pool-commit", default="", help="Rollback P2D vkpi_kol_pool writes; requires --commit")
+    parser.add_argument("--force-rollback", action="store_true", help="Force P2D rollback when rollback window has expired")
     parser.add_argument("--action", default="", help="Decision action: merge_with, keep_separate, drop, or escalate")
     parser.add_argument("--target", default="", help="Target entity_uid for merge_with decisions")
     parser.add_argument("--reason", default="", help="Decision reason; required for drop")
@@ -179,9 +180,25 @@ def main() -> int:
                     )
             elif args.rollback_kol_pool_commit:
                 if not args.commit:
-                    print(format_kol_pool_rollback(preview_kol_pool_rollback(args.rollback_kol_pool_commit, sample_limit=max(0, int(args.limit or 0)))))
+                    print(
+                        format_kol_pool_rollback(
+                            preview_kol_pool_rollback(
+                                args.rollback_kol_pool_commit,
+                                sample_limit=max(0, int(args.limit or 0)),
+                                force=bool(args.force_rollback),
+                            )
+                        )
+                    )
                 else:
-                    print(format_kol_pool_rollback(rollback_kol_pool_commit(args.rollback_kol_pool_commit, sample_limit=max(0, int(args.limit or 0)))))
+                    print(
+                        format_kol_pool_rollback(
+                            rollback_kol_pool_commit(
+                                args.rollback_kol_pool_commit,
+                                sample_limit=max(0, int(args.limit or 0)),
+                                force=bool(args.force_rollback),
+                            )
+                        )
+                    )
             elif args.inspect_batch:
                 print(format_batch_summary(inspect_batch(args.inspect_batch)))
             else:
