@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""P4-1 new launch match dry-run CLI."""
+"""P4 new launch match dry-run CLI."""
 from __future__ import annotations
 
 import argparse
@@ -23,7 +23,7 @@ from app.services.vkpi.new_launch_match import (  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build a P4-1 new launch match dry-run preview.")
+    parser = argparse.ArgumentParser(description="Build a P4 new launch match dry-run preview.")
     parser.add_argument("--product", required=True, help="Product or launch query, e.g. AF 35mm F1.2 LAB FE")
     parser.add_argument("--limit", type=int, default=100, help="Preview item limit, default 100, max 500")
     parser.add_argument("--primary-markets", default="", help="Comma-separated primary target markets")
@@ -31,6 +31,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--json-out", default="", help="Write JSON preview to this path")
     parser.add_argument("--md-out", default="", help="Write Markdown report to this path")
     parser.add_argument("--dry-run", action="store_true", default=True, help="P4-1 is always dry-run")
+    parser.add_argument(
+        "--with-llm-reasons",
+        action="store_true",
+        help="Attach budget-gated P4-2 recommendation reasons to the top candidates",
+    )
+    parser.add_argument(
+        "--reason-limit",
+        type=int,
+        default=20,
+        help="Maximum number of returned candidates to enrich with recommendation reasons",
+    )
     parser.add_argument("--json", action="store_true", help="Print full JSON payload to stdout")
     return parser.parse_args()
 
@@ -52,6 +63,8 @@ def main() -> int:
             secondary_markets=args.secondary_markets,
             json_out=args.json_out,
             md_out=args.md_out,
+            with_llm_reasons=args.with_llm_reasons,
+            reason_limit=args.reason_limit,
         )
         if args.json:
             print(json.dumps({key: value for key, value in payload.items() if key != "markdown_items"}, ensure_ascii=False, indent=2, default=str))

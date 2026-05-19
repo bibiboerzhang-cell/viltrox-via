@@ -1,7 +1,9 @@
-"""P4-1 deterministic new-launch match dry-run.
+"""P4 deterministic new-launch match dry-run.
 
-This module reads raw Memory rows directly. It does not call P3 candidate
-helpers, does not call providers, and does not write recommendation tables.
+P4-1 reads raw Memory rows directly. It does not call P3 candidate helpers,
+does not call providers, and does not write recommendation tables. P4-2 may
+attach budget-gated recommendation reasons after ranking without changing the
+deterministic score.
 """
 from __future__ import annotations
 
@@ -15,10 +17,12 @@ from typing import Any
 
 from app.db.connection import get_conn
 from app.services.vkpi import memory
+from app.services.vkpi import llm_gateway
 from app.services.vkpi.budget_guard import check_budget, get_budget_status
 
 
 BUDGET_SCOPE = "cron:p4_recommendations_daily"
+REASON_BUDGET_SCOPE = "cron:p4_recommendation_reasons"
 SCENARIO = "new_launch_match"
 FORBIDDEN_WRITE_FLAGS = {"--commit", "--write-db", "--provider-call"}
 
@@ -590,6 +594,105 @@ def _market_detail(signal: dict[str, Any]) -> str:
     return f"{signal_type} {product} {date_value}".strip()
 
 
+def _deterministic_reason(item: dict[str, Any]) -> dict[str, str]:
+    pro = item.get("evidence_pro") or []
+    con = item.get("evidence_con") or []
+    strongest = pro[0].get("detail") if pro else "Has usable Memory evidence for this launch"
+    concern = con[0].get("detail") if con else "No major concern in current Memory"
+    handle = item.get("handle") or item.get("display_name") or item.get("kol_entity_uid")
+    return {
+        "short_reason": f"{handle} is a candidate because {strongest}.",
+        "pitch_angle": "Use the historical product-family evidence as the first outreach angle.",
+        "caution_note": concern,
+    }
+
+
+def _reason_prompt(payload: dict[str, Any], item: dict[str, Any]) -> str:
+    pro = [
+        {"type": row.get("type"), "detail": row.get("detail"), "source_ref": row.get("source_ref")}
+        for row in (item.get("evidence_pro") or [])[:5]
+    ]
+    con = [
+        {"type": row.get("type"), "detail": row.get("detail"), "severity": row.get("severity")}
+        for row in (item.get("evidence_con") or [])[:5]
+    ]
+    compact = {
+        "scenario": SCENARIO,
+        "product": payload.get("product_query"),
+        "target_family": payload.get("target_family_name"),
+        "kol": {
+            "platform": item.get("platform"),
+            "handle": item.get("handle"),
+            "display_name": item.get("display_name"),
+            "country": item.get("country"),
+            "score": item.get("score"),
+            "review_required": item.get("review_required"),
+        },
+        "score_breakdown": item.get("score_breakdown"),
+        "evidence_pro": pro,
+        "evidence_con": con,
+    }
+    return (
+        "Write a concise V-KPI recommendation reason as strict JSON with keys "
+        "short_reason, pitch_angle, caution_note. Do not invent facts. "
+        "Use only the evidence below. No markdown.\n\n"
+        + json.dumps(compact, ensure_ascii=False, default=_json_default)
+    )
+
+
+def _parse_reason_text(text: str) -> dict[str, str] | None:
+    raw = _text(text)
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
+        if not match:
+            return None
+        try:
+            parsed = json.loads(match.group(0))
+        except Exception:
+            return None
+    if not isinstance(parsed, dict):
+        return None
+    return {
+        "short_reason": _text(parsed.get("short_reason")),
+        "pitch_angle": _text(parsed.get("pitch_angle")),
+        "caution_note": _text(parsed.get("caution_note")),
+    }
+
+
+def _attach_reason(payload: dict[str, Any], item: dict[str, Any]) -> None:
+    response = llm_gateway.invoke(
+        _reason_prompt(payload, item),
+        purpose="p4_recommendation_reasons",
+        max_output_tokens=220,
+        cost_tag=REASON_BUDGET_SCOPE,
+        metadata={
+            "scenario": SCENARIO,
+            "kol_entity_uid": item.get("kol_entity_uid"),
+            "rank": item.get("rank"),
+            "product_query": payload.get("product_query"),
+        },
+    )
+    parsed = _parse_reason_text(str(response.get("text") or "")) if response.get("status") == "success" else None
+    if parsed and all(parsed.values()):
+        reason = parsed
+        mode = "llm"
+    else:
+        reason = _deterministic_reason(item)
+        mode = "deterministic_fallback"
+    item["recommendation_reason"] = {
+        "mode": mode,
+        "provider": response.get("provider") or "rule_v0",
+        "model": response.get("model") or "rule_v0",
+        "status": response.get("status") or "",
+        "fallback_reason": response.get("reason") or "",
+        **reason,
+    }
+
+
 def build_new_launch_match_preview(
     *,
     product_query: str,
@@ -598,6 +701,8 @@ def build_new_launch_match_preview(
     secondary_markets: str = "",
     json_out: str = "",
     md_out: str = "",
+    with_llm_reasons: bool = False,
+    reason_limit: int = 20,
 ) -> dict[str, Any]:
     """Build a deterministic P4-1 dry-run preview from raw Memory rows."""
 
@@ -897,6 +1002,7 @@ def build_new_launch_match_preview(
     returned = eligible[:safe_limit]
     median = _median_score(returned)
     markdown_display = [item for item in returned if float(item["score"]) >= median]
+    reasons_attached = 0
     summary = {
         "total_candidates_evaluated": len(kol_rows),
         "eligible_after_hard_filters": len(eligible),
@@ -906,6 +1012,8 @@ def build_new_launch_match_preview(
         "markdown_display_count": len(markdown_display),
         "top_score": returned[0]["score"] if returned else 0,
         "median_score": median,
+        "llm_reasons_requested": bool(with_llm_reasons),
+        "reasons_attached": 0,
     }
     payload = {
         "scenario": SCENARIO,
@@ -927,6 +1035,11 @@ def build_new_launch_match_preview(
         "items": returned,
         "markdown_items": markdown_display,
     }
+    if with_llm_reasons:
+        for item in returned[: max(0, min(int(reason_limit or 0), len(returned)))]:
+            _attach_reason(payload, item)
+            reasons_attached += 1
+        summary["reasons_attached"] = reasons_attached
     _json_write(json_out, {key: value for key, value in payload.items() if key != "markdown_items"})
     _markdown_write(md_out, payload)
     return payload
@@ -955,6 +1068,7 @@ def render_markdown(payload: dict[str, Any]) -> str:
         f"- Excluded low evidence: {summary.get('excluded_low_evidence', 0)}",
         f"- Top score: {summary.get('top_score', 0)}",
         f"- Median score: {summary.get('median_score', 0)}",
+        f"- Recommendation reasons attached: {summary.get('reasons_attached', 0)}",
         "",
         "## Score Distribution",
         "",
@@ -993,6 +1107,18 @@ def render_markdown(payload: dict[str, Any]) -> str:
                 )
         else:
             lines.append("- None")
+        reason = item.get("recommendation_reason") or {}
+        if reason:
+            lines.extend(
+                [
+                    "",
+                    "**Recommendation reason:**",
+                    f"- Short reason: {reason.get('short_reason', '')}",
+                    f"- Pitch angle: {reason.get('pitch_angle', '')}",
+                    f"- Caution note: {reason.get('caution_note', '')}",
+                    f"- Reason mode: {reason.get('mode', '')} ({reason.get('provider', '')}/{reason.get('status', '')})",
+                ]
+            )
         lines.extend(
             [
                 "",
@@ -1036,6 +1162,8 @@ def format_preview_summary(payload: dict[str, Any]) -> str:
         f"excluded_low_evidence={summary.get('excluded_low_evidence', 0)}",
         f"top_score={summary.get('top_score', 0)}",
         f"median_score={summary.get('median_score', 0)}",
+        f"llm_reasons_requested={str(bool(summary.get('llm_reasons_requested'))).lower()}",
+        f"reasons_attached={summary.get('reasons_attached', 0)}",
     ]
     for idx, item in enumerate((payload.get("items") or [])[:5], start=1):
         lines.append(
