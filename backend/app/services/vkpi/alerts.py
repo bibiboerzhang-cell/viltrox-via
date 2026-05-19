@@ -371,14 +371,106 @@ def generate_comment_intelligence_alerts(
     }
 
 
+def generate_budget_guard_alerts() -> dict[str, Any]:
+    """Create or clear alerts for AI/provider budget warning and hard-stop scopes."""
+    ensure_vkpi_schema()
+    conn = get_conn()
+    rows = conn.execute(
+        """
+        SELECT scope, cap_usd, current_spend, warning_at, hard_stop_at,
+               reset_at, fallback_action, metadata_json
+        FROM vkpi_provider_budget_caps
+        ORDER BY scope
+        """
+    ).fetchall()
+    created: list[dict[str, Any]] = []
+    cleared: list[str] = []
+    for row in rows:
+        data = dict(row)
+        scope_key = str(data.get("scope") or "").strip()
+        if not scope_key:
+            continue
+        cap = float(data.get("cap_usd") or 0)
+        spend = float(data.get("current_spend") or 0)
+        warning_at = float(data.get("warning_at") or 0.8)
+        hard_stop_at = float(data.get("hard_stop_at") or 1.0)
+        ratio = (spend / cap) if cap > 0 else 0.0
+        hard_stopped = cap > 0 and ratio >= hard_stop_at
+        warning = cap > 0 and ratio >= warning_at
+        alert_key = f"budget-guard-{scope_key}"
+        if not hard_stopped and not warning:
+            now = utcnow()
+            existing_open = conn.execute(
+                "SELECT id FROM vkpi_alerts WHERE alert_key=? AND status='open'",
+                (alert_key,),
+            ).fetchone()
+            conn.execute(
+                """
+                UPDATE vkpi_alerts
+                SET status='resolved', resolved_at=?, updated_at=?
+                WHERE alert_key=? AND status='open'
+                """,
+                (now, now, alert_key),
+            )
+            if existing_open:
+                cleared.append(alert_key)
+            continue
+        severity = "danger" if hard_stopped else "warning"
+        state = "hard stop" if hard_stopped else "warning"
+        created.append(
+            upsert_alert(
+                alert_key=alert_key,
+                severity=severity,
+                target_type="budget_scope",
+                target_id=None,
+                title=f"Budget Guard {state}: {scope_key}",
+                body=(
+                    f"{scope_key} spend is ${spend:.4f} of ${cap:.2f} "
+                    f"({ratio:.0%}). Fallback action: {data.get('fallback_action') or '-'}."
+                ),
+                rule_key="budget_guard.warning_or_hard_stop",
+                metadata_json=json.dumps(
+                    {
+                        "scope": scope_key,
+                        "cap_usd": cap,
+                        "current_spend": spend,
+                        "usage_ratio": ratio,
+                        "warning_at": warning_at,
+                        "hard_stop_at": hard_stop_at,
+                        "hard_stopped": hard_stopped,
+                        "warning": warning,
+                        "reset_at": data.get("reset_at"),
+                        "fallback_action": data.get("fallback_action"),
+                    },
+                    ensure_ascii=False,
+                    default=str,
+                ),
+            )
+        )
+    conn.commit()
+    return {
+        "alerts": created,
+        "count": len(created),
+        "cleared": cleared,
+        "cleared_count": len(cleared),
+        "rule_key": "budget_guard.warning_or_hard_stop",
+    }
+
+
 def generate_alerts() -> dict[str, Any]:
     """Run all currently enabled alert rules."""
     stalled = generate_stalled_project_alerts()
     comment_intelligence = generate_comment_intelligence_alerts()
-    alerts = (stalled.get("alerts") or []) + (comment_intelligence.get("alerts") or [])
+    budget_guard = generate_budget_guard_alerts()
+    alerts = (
+        (stalled.get("alerts") or [])
+        + (comment_intelligence.get("alerts") or [])
+        + (budget_guard.get("alerts") or [])
+    )
     return {
         "alerts": alerts,
         "count": len(alerts),
         "stalled_projects": stalled,
         "comment_intelligence": comment_intelligence,
+        "budget_guard": budget_guard,
     }
