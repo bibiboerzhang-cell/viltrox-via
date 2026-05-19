@@ -592,6 +592,249 @@ def list_entities(*, entity_type: str = "", query: str = "", limit: int = 100) -
     return {"items": [_public_entity(row) for row in rows]}
 
 
+def product_kol_candidates(*, product_query: str, limit: int = 50) -> dict[str, Any]:
+    """Return explainable KOL memory evidence for a product query.
+
+    This is not a recommendation engine. It exposes historical product links and
+    risk/review signals so P4 can consume a deterministic feature surface.
+    """
+
+    ensure_memory_schema()
+    query = _text(product_query)
+    if not query:
+        raise ValueError("product_query is required")
+    safe_limit = _safe_limit(limit, default=50, max_limit=200)
+    conn = get_conn()
+    like = f"%{query.lower()}%"
+    product_rows = [
+        _row_to_dict(row)
+        for row in conn.execute(
+            """
+            SELECT p.*,
+                   (
+                     SELECT COUNT(*)
+                     FROM vkpi_memory_links l
+                     WHERE l.target_entity_id=p.id
+                       AND l.link_type='worked_on_product'
+                   ) AS link_count
+            FROM vkpi_memory_entities p
+            WHERE p.entity_type='product'
+              AND (lower(p.display_name) LIKE ? OR lower(p.identity_key) LIKE ?)
+            ORDER BY link_count DESC, p.updated_at DESC, p.id DESC
+            LIMIT 20
+            """,
+            (like, like),
+        ).fetchall()
+    ]
+
+    candidates_by_id: dict[int, dict[str, Any]] = {}
+    for product in product_rows:
+        product_id = int(product["id"])
+        kol_rows = [
+            _row_to_dict(row)
+            for row in conn.execute(
+                """
+                SELECT k.*,
+                       (
+                         SELECT COUNT(*)
+                         FROM vkpi_memory_links l2
+                         WHERE l2.source_entity_id=k.id
+                           AND l2.target_entity_id=?
+                           AND l2.link_type='worked_on_product'
+                       ) AS cooperation_count,
+                       (
+                         SELECT MAX(l3.observed_at)
+                         FROM vkpi_memory_links l3
+                         WHERE l3.source_entity_id=k.id
+                           AND l3.target_entity_id=?
+                           AND l3.link_type='worked_on_product'
+                       ) AS last_observed_at
+                FROM vkpi_memory_entities k
+                WHERE k.entity_type='kol'
+                  AND k.id IN (
+                    SELECT DISTINCT source_entity_id
+                    FROM vkpi_memory_links
+                    WHERE target_entity_id=?
+                      AND link_type='worked_on_product'
+                  )
+                ORDER BY cooperation_count DESC, k.updated_at DESC, k.id DESC
+                LIMIT 300
+                """,
+                (product_id, product_id, product_id),
+            ).fetchall()
+        ]
+        public_product = _public_entity(product)
+        for kol in kol_rows:
+            kol_id = int(kol["id"])
+            item = candidates_by_id.setdefault(
+                kol_id,
+                {
+                    "entity": _public_entity(kol),
+                    "matched_products": [],
+                    "matched_product_count": 0,
+                    "matched_cooperation_count": 0,
+                    "last_observed_at": kol.get("last_observed_at"),
+                },
+            )
+            item["matched_products"].append(
+                {
+                    "entity_uid": public_product["entity_uid"],
+                    "display_name": public_product["display_name"],
+                    "identity_key": public_product["identity_key"],
+                    "link_count": int(product.get("link_count") or 0),
+                    "cooperation_count": int(kol.get("cooperation_count") or 0),
+                }
+            )
+            item["matched_product_count"] = len(item["matched_products"])
+            item["matched_cooperation_count"] += int(kol.get("cooperation_count") or 0)
+            if kol.get("last_observed_at"):
+                item["last_observed_at"] = kol.get("last_observed_at")
+
+    items: list[dict[str, Any]] = []
+    for kol_id, item in candidates_by_id.items():
+        features = _kol_feature_summary(kol_id)
+        score = _memory_candidate_score(
+            cooperation_count=int(item["matched_cooperation_count"]),
+            matched_product_count=int(item["matched_product_count"]),
+            risk_flag_count=int(features["risk_flag_count"]),
+            evidence_count=int(features["evidence_count"]),
+            review_state=str(features["review_state"]),
+            sync_status=str(features["sync_status"]),
+            contact_status=str(features["contact_status"]),
+        )
+        items.append(
+            {
+                **item,
+                "features": features,
+                "memory_score": score["score"],
+                "score_breakdown": score["breakdown"],
+                "reasons": score["reasons"],
+                "warnings": score["warnings"],
+            }
+        )
+
+    items.sort(
+        key=lambda item: (
+            int(item["memory_score"]),
+            int(item["matched_cooperation_count"]),
+            int(item["matched_product_count"]),
+        ),
+        reverse=True,
+    )
+    return {
+        "product_query": query,
+        "matched_products": [_public_entity(row) | {"link_count": int(row.get("link_count") or 0)} for row in product_rows],
+        "items": items[:safe_limit],
+        "total": len(items),
+    }
+
+
+def kol_product_memory(entity_uid: str, *, limit: int = 50) -> dict[str, Any]:
+    ensure_memory_schema()
+    entity = _memory_entity_by_uid(entity_uid)
+    if not entity:
+        raise LookupError("memory entity not found")
+    if entity.get("entity_type") != "kol":
+        raise ValueError("entity is not a KOL memory entity")
+    safe_limit = _safe_limit(limit, default=50, max_limit=300)
+    conn = get_conn()
+    links = [
+        _row_to_dict(row)
+        for row in conn.execute(
+            """
+            SELECT l.*, t.entity_uid AS target_uid, t.entity_type AS target_type,
+                   t.identity_key AS target_identity_key,
+                   t.display_name AS target_display_name,
+                   t.identity_json AS target_identity_json,
+                   t.metadata_json AS target_metadata_json
+            FROM vkpi_memory_links l
+            JOIN vkpi_memory_entities t ON t.id=l.target_entity_id
+            WHERE l.source_entity_id=?
+              AND l.link_type='worked_on_product'
+            ORDER BY l.observed_at DESC, l.id DESC
+            LIMIT ?
+            """,
+            (int(entity["id"]), safe_limit),
+        ).fetchall()
+    ]
+    facts = _kol_feature_summary(int(entity["id"]))
+    cooperation_facts = [
+        _public_fact(_row_to_dict(row))
+        for row in conn.execute(
+            """
+            SELECT *
+            FROM vkpi_memory_facts
+            WHERE entity_id=?
+              AND fact_type='cooperation'
+            ORDER BY observed_at DESC, id DESC
+            LIMIT ?
+            """,
+            (int(entity["id"]), safe_limit),
+        ).fetchall()
+    ]
+    return {
+        "entity": _public_entity(entity),
+        "features": facts,
+        "product_links": [_public_product_link(row) for row in links],
+        "cooperation_facts": cooperation_facts,
+    }
+
+
+def fit_features(entity_uid: str, *, product_query: str = "") -> dict[str, Any]:
+    ensure_memory_schema()
+    entity = _memory_entity_by_uid(entity_uid)
+    if not entity:
+        raise LookupError("memory entity not found")
+    if entity.get("entity_type") != "kol":
+        raise ValueError("entity is not a KOL memory entity")
+
+    query = _text(product_query)
+    product_match_count = 0
+    product_cooperation_count = 0
+    if query:
+        like = f"%{query.lower()}%"
+        row = get_conn().execute(
+            """
+            SELECT COUNT(DISTINCT t.id) AS product_count,
+                   COUNT(l.id) AS cooperation_count
+            FROM vkpi_memory_links l
+            JOIN vkpi_memory_entities t ON t.id=l.target_entity_id
+            WHERE l.source_entity_id=?
+              AND l.link_type='worked_on_product'
+              AND t.entity_type='product'
+              AND (lower(t.display_name) LIKE ? OR lower(t.identity_key) LIKE ?)
+            """,
+            (int(entity["id"]), like, like),
+        ).fetchone()
+        if row:
+            product_match_count = int(row["product_count"] or 0)
+            product_cooperation_count = int(row["cooperation_count"] or 0)
+
+    features = _kol_feature_summary(int(entity["id"]))
+    score = _memory_candidate_score(
+        cooperation_count=product_cooperation_count,
+        matched_product_count=product_match_count,
+        risk_flag_count=int(features["risk_flag_count"]),
+        evidence_count=int(features["evidence_count"]),
+        review_state=str(features["review_state"]),
+        sync_status=str(features["sync_status"]),
+        contact_status=str(features["contact_status"]),
+    )
+    return {
+        "entity": _public_entity(entity),
+        "product_query": query,
+        "features": {
+            **features,
+            "matched_product_count": product_match_count,
+            "matched_product_cooperation_count": product_cooperation_count,
+        },
+        "memory_score": score["score"],
+        "score_breakdown": score["breakdown"],
+        "reasons": score["reasons"],
+        "warnings": score["warnings"],
+    }
+
+
 def entity_facts(entity_uid: str, *, limit: int = 200) -> dict[str, Any]:
     ensure_memory_schema()
     entity = get_conn().execute("SELECT * FROM vkpi_memory_entities WHERE entity_uid=?", (entity_uid,)).fetchone()
@@ -664,6 +907,137 @@ def record_feedback(body: dict[str, Any], *, staff: dict[str, Any] | None = None
     return {"item": _public_feedback(_row_to_dict(row))}
 
 
+def _safe_limit(value: int | str | None, *, default: int, max_limit: int) -> int:
+    try:
+        parsed = int(value or default)
+    except Exception:
+        parsed = default
+    return max(1, min(max_limit, parsed))
+
+
+def _memory_entity_by_uid(entity_uid: str) -> dict[str, Any] | None:
+    row = get_conn().execute("SELECT * FROM vkpi_memory_entities WHERE entity_uid=?", (_text(entity_uid),)).fetchone()
+    return _row_to_dict(row) if row else None
+
+
+def _kol_feature_summary(entity_id: int) -> dict[str, Any]:
+    conn = get_conn()
+    entity_row = conn.execute("SELECT * FROM vkpi_memory_entities WHERE id=?", (int(entity_id),)).fetchone()
+    if not entity_row:
+        raise LookupError("memory entity not found")
+    entity = _row_to_dict(entity_row)
+    identity = _load_json(entity.get("identity_json") or "{}", {})
+    metadata = _load_json(entity.get("metadata_json") or "{}", {})
+    fact_rows = [
+        _row_to_dict(row)
+        for row in conn.execute(
+            """
+            SELECT *
+            FROM vkpi_memory_facts
+            WHERE entity_id=?
+            ORDER BY observed_at DESC, id DESC
+            """,
+            (int(entity_id),),
+        ).fetchall()
+    ]
+    link_stats = conn.execute(
+        """
+        SELECT COUNT(*) AS cooperation_count,
+               COUNT(DISTINCT target_entity_id) AS product_count
+        FROM vkpi_memory_links
+        WHERE source_entity_id=?
+          AND link_type='worked_on_product'
+        """,
+        (int(entity_id),),
+    ).fetchone()
+
+    latest: dict[str, str] = {}
+    evidence_count = 0
+    risk_flag_count = 0
+    for fact in fact_rows:
+        fact_type = _text(fact.get("fact_type"))
+        if fact_type and fact_type not in latest:
+            latest[fact_type] = _text(fact.get("fact_value_text"))
+        if fact_type == "risk_flag":
+            risk_flag_count += 1
+        if fact_type == "evidence_count" and _text(fact.get("fact_key")) == "evidence_count":
+            payload = _load_json(fact.get("fact_json") or "{}", {})
+            try:
+                evidence_count = int(payload.get("count") if isinstance(payload, dict) else fact.get("fact_value_text") or 0)
+            except Exception:
+                evidence_count = 0
+
+    return {
+        "platform": identity.get("platform") or "",
+        "handle": identity.get("handle") or "",
+        "country": latest.get("country") or identity.get("country") or "",
+        "sync_status": latest.get("sync_status") or entity.get("status") or "",
+        "weak_label": latest.get("weak_label") or metadata.get("weak_label") or "",
+        "review_state": latest.get("review_state") or metadata.get("review_state") or "",
+        "contact_status": latest.get("contact_status") or "",
+        "cooperation_count": int(link_stats["cooperation_count"] or 0) if link_stats else 0,
+        "product_count": int(link_stats["product_count"] or 0) if link_stats else 0,
+        "risk_flag_count": risk_flag_count,
+        "evidence_count": evidence_count,
+        "confidence_score": float(entity.get("confidence_score") or 0),
+    }
+
+
+def _memory_candidate_score(
+    *,
+    cooperation_count: int,
+    matched_product_count: int,
+    risk_flag_count: int,
+    evidence_count: int,
+    review_state: str,
+    sync_status: str,
+    contact_status: str,
+) -> dict[str, Any]:
+    cooperation_bonus = min(30, max(0, int(cooperation_count)) * 7)
+    product_bonus = min(20, max(0, int(matched_product_count)) * 8)
+    evidence_bonus = min(10, max(0, int(evidence_count)))
+    review_penalty = 15 if _text(review_state) == "needs_human_review" else 0
+    sync_penalty = 15 if _text(sync_status) == "needs_human_review" else 0
+    risk_penalty = min(30, max(0, int(risk_flag_count)) * 12)
+    contact_penalty = 8 if _text(contact_status) == "contact_missing" else 0
+    raw_score = 35 + cooperation_bonus + product_bonus + evidence_bonus
+    raw_score -= review_penalty + sync_penalty + risk_penalty + contact_penalty
+    score = max(0, min(100, int(raw_score)))
+
+    reasons: list[str] = []
+    warnings: list[str] = []
+    if cooperation_count:
+        reasons.append(f"historical_product_cooperations={int(cooperation_count)}")
+    if matched_product_count:
+        reasons.append(f"matched_product_memory={int(matched_product_count)}")
+    if evidence_count:
+        reasons.append(f"legacy_evidence_rows={int(evidence_count)}")
+    if sync_penalty or review_penalty:
+        warnings.append("needs_human_review")
+    if risk_flag_count:
+        warnings.append(f"risk_flags={int(risk_flag_count)}")
+    if contact_penalty:
+        warnings.append("contact_missing")
+    if not reasons:
+        reasons.append("no_direct_product_memory")
+
+    return {
+        "score": score,
+        "breakdown": {
+            "base": 35,
+            "cooperation_bonus": cooperation_bonus,
+            "product_bonus": product_bonus,
+            "evidence_bonus": evidence_bonus,
+            "review_penalty": review_penalty,
+            "sync_penalty": sync_penalty,
+            "risk_penalty": risk_penalty,
+            "contact_penalty": contact_penalty,
+        },
+        "reasons": reasons,
+        "warnings": warnings,
+    }
+
+
 def _public_entity(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": int(row["id"]),
@@ -705,6 +1079,27 @@ def _public_link(row: dict[str, Any]) -> dict[str, Any]:
         "confidence_score": float(row.get("confidence_score") or 0),
         "source_ref": row.get("source_ref") or "",
         "metadata": _load_json(row.get("metadata_json") or "{}", {}),
+    }
+
+
+def _public_product_link(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "link_uid": row["link_uid"],
+        "link_type": row["link_type"],
+        "weight": float(row.get("weight") or 0),
+        "confidence_score": float(row.get("confidence_score") or 0),
+        "source_ref": row.get("source_ref") or "",
+        "source": _load_json(row.get("source_json") or "{}", {}),
+        "metadata": _load_json(row.get("metadata_json") or "{}", {}),
+        "observed_at": row.get("observed_at"),
+        "product": {
+            "entity_uid": row.get("target_uid") or "",
+            "entity_type": row.get("target_type") or "",
+            "identity_key": row.get("target_identity_key") or "",
+            "display_name": row.get("target_display_name") or "",
+            "identity": _load_json(row.get("target_identity_json") or "{}", {}),
+            "metadata": _load_json(row.get("target_metadata_json") or "{}", {}),
+        },
     }
 
 
