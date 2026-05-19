@@ -18,6 +18,14 @@ from app.services.vkpi.legacy_import_staging import (
 
 
 KOL_ENTITY_PIPELINES = ("kol_profiles", "cooperations", "risk_watchlist")
+DECISION_ACTIONS = {"merge_with", "keep_separate", "drop", "escalate"}
+DECISION_STATUS = {
+    "merge_with": "resolved_merge",
+    "keep_separate": "resolved_separate",
+    "drop": "dropped",
+    "escalate": "escalated",
+}
+BLOCKED_WEAK_LABELS = {"blocked_risk"}
 
 
 def _row_to_dict(row: Any) -> dict[str, Any]:
@@ -59,6 +67,71 @@ def _fetch_batch_id(batch_uid: str) -> int:
     if not row:
         raise ValueError(f"batch not found: {batch_uid}")
     return int(row["id"])
+
+
+def _fetch_entity_by_uid(entity_uid: str) -> dict[str, Any]:
+    row = get_conn().execute(
+        """
+        SELECT e.*, b.batch_uid
+        FROM vkpi_legacy_kol_entities e
+        JOIN vkpi_legacy_import_batches b ON b.id=e.import_batch_id
+        WHERE e.entity_uid=?
+        """,
+        (entity_uid,),
+    ).fetchone()
+    if not row:
+        raise ValueError(f"entity not found: {entity_uid}")
+    return _row_to_dict(row)
+
+
+def _identity_label(row: dict[str, Any]) -> str:
+    platform = _text(row.get("normalized_platform"))
+    handle = _text(row.get("normalized_handle"))
+    display_name = _text(row.get("display_name"))
+    if platform and handle:
+        return f"{platform}:{handle}"
+    if handle:
+        return handle
+    if display_name:
+        return display_name
+    return _text(row.get("canonical_key")) or _text(row.get("entity_uid"))
+
+
+def _is_blocked_entity(row: dict[str, Any]) -> bool:
+    return _text(row.get("weak_label")) in BLOCKED_WEAK_LABELS
+
+
+def _validate_decision(
+    entity: dict[str, Any],
+    *,
+    action: str,
+    target_entity_uid: str = "",
+    reason: str = "",
+    note: str = "",
+) -> dict[str, Any]:
+    if action not in DECISION_ACTIONS:
+        raise ValueError(f"unsupported decision action: {action}")
+    if _is_blocked_entity(entity) and action in {"merge_with", "keep_separate"}:
+        raise ValueError("blocked_risk entities cannot be keep_separate or merge_with; use drop or escalate")
+    if action == "drop" and not _text(reason):
+        raise ValueError("drop decisions require --reason")
+    if action == "escalate" and not _text(note):
+        raise ValueError("escalate decisions require --note")
+
+    target: dict[str, Any] = {}
+    if action == "merge_with":
+        if not _text(target_entity_uid):
+            raise ValueError("merge_with decisions require --target")
+        target = _fetch_entity_by_uid(target_entity_uid)
+        if int(target["id"]) == int(entity["id"]):
+            raise ValueError("merge_with target must be a different entity")
+        if int(target["import_batch_id"]) != int(entity["import_batch_id"]):
+            raise ValueError("merge_with target must be in the same import batch")
+        if _is_blocked_entity(target):
+            raise ValueError("merge_with target cannot be blocked_risk")
+        if _text(target.get("resolution_decision")) == "drop":
+            raise ValueError("merge_with target cannot be a dropped entity")
+    return target
 
 
 def _fetch_staging_rows(import_batch_id: int) -> list[dict[str, Any]]:
@@ -442,6 +515,301 @@ def inspect_resolution(batch_uid: str) -> dict[str, Any]:
     }
 
 
+def list_pending_reviews(
+    batch_uid: str,
+    *,
+    weak_label: str = "",
+    include_blocked: bool = False,
+    limit: int = 50,
+) -> dict[str, Any]:
+    ensure_legacy_staging_schema()
+    conn = get_conn()
+    import_batch_id = _fetch_batch_id(batch_uid)
+    where = [
+        "import_batch_id=?",
+        "weak_label <> 'ready'",
+        "resolution_decision IS NULL",
+    ]
+    params: list[Any] = [import_batch_id]
+    label = _text(weak_label)
+    if label:
+        where.append("weak_label=?")
+        params.append(label)
+    elif not include_blocked:
+        where.append("weak_label <> 'blocked_risk'")
+
+    where_sql = " AND ".join(where)
+    total = conn.execute(
+        f"SELECT COUNT(*) AS n FROM vkpi_legacy_kol_entities WHERE {where_sql}",
+        params,
+    ).fetchone()
+    query = f"""
+        SELECT id, entity_uid, weak_label, resolution_status, normalized_platform,
+               normalized_handle, display_name, evidence_count, kol_profile_rows,
+               cooperation_rows, risk_rows, resolution_decision
+        FROM vkpi_legacy_kol_entities
+        WHERE {where_sql}
+        ORDER BY weak_label, normalized_platform, normalized_handle, id
+    """
+    query_params = list(params)
+    if limit > 0:
+        query += " LIMIT ?"
+        query_params.append(int(limit))
+    rows = [_row_to_dict(row) for row in conn.execute(query, query_params).fetchall()]
+    return {
+        "batch_uid": batch_uid,
+        "pending_count": int(total["n"] if total else 0),
+        "shown_count": len(rows),
+        "include_blocked": include_blocked,
+        "weak_label": label,
+        "rows": rows,
+    }
+
+
+def show_entity(entity_uid: str, *, ref_limit: int = 100) -> dict[str, Any]:
+    ensure_legacy_staging_schema()
+    conn = get_conn()
+    entity = _fetch_entity_by_uid(entity_uid)
+    refs = []
+    for ref_row in conn.execute(
+        """
+        SELECT *
+        FROM vkpi_legacy_kol_entity_refs
+        WHERE entity_id=?
+        ORDER BY pipeline, source_sheet, source_row, id
+        LIMIT ?
+        """,
+        (int(entity["id"]), int(ref_limit)),
+    ).fetchall():
+        ref = _row_to_dict(ref_row)
+        table = PIPELINE_TABLES.get(_text(ref.get("pipeline")), "")
+        raw_row_json = "{}"
+        if table:
+            raw_row = conn.execute(f"SELECT raw_row_json FROM {table} WHERE id=?", (int(ref["staging_id"]),)).fetchone()
+            if raw_row:
+                raw_row_json = raw_row["raw_row_json"] or "{}"
+        ref["raw_row_json"] = raw_row_json
+        refs.append(ref)
+
+    return {
+        "batch_uid": entity.get("batch_uid", ""),
+        "entity": entity,
+        "refs": refs,
+        "ref_count": len(refs),
+    }
+
+
+def decide_resolution(
+    entity_uid: str,
+    *,
+    action: str,
+    target_entity_uid: str = "",
+    reason: str = "",
+    note: str = "",
+    actor: str = "cli",
+    commit: bool = False,
+) -> dict[str, Any]:
+    ensure_legacy_staging_schema()
+    conn = get_conn()
+    entity = _fetch_entity_by_uid(entity_uid)
+    action = _text(action)
+    target = _validate_decision(
+        entity,
+        action=action,
+        target_entity_uid=target_entity_uid,
+        reason=reason,
+        note=note,
+    )
+    result = {
+        "committed": bool(commit),
+        "mode": "commit" if commit else "dry_run",
+        "entity_uid": entity_uid,
+        "identity": _identity_label(entity),
+        "weak_label": entity.get("weak_label", ""),
+        "previous_decision": entity.get("resolution_decision"),
+        "action": action,
+        "target_entity_uid": target.get("entity_uid", ""),
+        "target_identity": _identity_label(target) if target else "",
+        "reason": _text(reason),
+        "note": _text(note),
+    }
+    if not commit:
+        return result
+
+    try:
+        conn.execute(
+            """
+            UPDATE vkpi_legacy_kol_entities
+            SET resolution_decision=?,
+                merge_target_entity_id=?,
+                merge_target_uid=?,
+                decision_reason=?,
+                decision_note=?,
+                decided_by=?,
+                decided_at=?,
+                resolution_status=?
+            WHERE id=?
+            """,
+            (
+                action,
+                int(target["id"]) if target else None,
+                target.get("entity_uid", "") if target else "",
+                _text(reason),
+                _text(note),
+                _text(actor) or "cli",
+                datetime.utcnow().isoformat(timespec="seconds"),
+                DECISION_STATUS[action],
+                int(entity["id"]),
+            ),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return result
+
+
+def bulk_decide(
+    batch_uid: str,
+    *,
+    weak_label: str,
+    action: str,
+    reason: str = "",
+    note: str = "",
+    actor: str = "",
+    commit: bool = False,
+    sample_limit: int = 5,
+) -> dict[str, Any]:
+    ensure_legacy_staging_schema()
+    label = _text(weak_label)
+    if not label:
+        raise ValueError("bulk decisions require --weak-label")
+    action = _text(action)
+    if action == "merge_with":
+        raise ValueError("bulk merge_with is not supported; decide merges one entity at a time")
+    fake_entity = {"weak_label": label}
+    _validate_decision(fake_entity, action=action, reason=reason, note=note)
+
+    conn = get_conn()
+    import_batch_id = _fetch_batch_id(batch_uid)
+    rows = [
+        _row_to_dict(row)
+        for row in conn.execute(
+            """
+            SELECT id, entity_uid, weak_label, normalized_platform, normalized_handle,
+                   display_name, evidence_count, kol_profile_rows, cooperation_rows, risk_rows
+            FROM vkpi_legacy_kol_entities
+            WHERE import_batch_id=?
+              AND weak_label=?
+              AND weak_label <> 'ready'
+              AND resolution_decision IS NULL
+            ORDER BY normalized_platform, normalized_handle, id
+            """,
+            (import_batch_id, label),
+        ).fetchall()
+    ]
+    sample = rows[: max(0, int(sample_limit))]
+    result = {
+        "batch_uid": batch_uid,
+        "committed": bool(commit),
+        "mode": "commit" if commit else "dry_run",
+        "weak_label": label,
+        "action": action,
+        "count": len(rows),
+        "sample": sample,
+        "reason": _text(reason),
+        "note": _text(note),
+    }
+    if not commit or not rows:
+        return result
+
+    decided_by = _text(actor) or f"bulk:{label}:{action}"
+    try:
+        conn.execute(
+            """
+            UPDATE vkpi_legacy_kol_entities
+            SET resolution_decision=?,
+                merge_target_entity_id=NULL,
+                merge_target_uid='',
+                decision_reason=?,
+                decision_note=?,
+                decided_by=?,
+                decided_at=?,
+                resolution_status=?
+            WHERE import_batch_id=?
+              AND weak_label=?
+              AND weak_label <> 'ready'
+              AND resolution_decision IS NULL
+            """,
+            (
+                action,
+                _text(reason),
+                _text(note),
+                decided_by,
+                datetime.utcnow().isoformat(timespec="seconds"),
+                DECISION_STATUS[action],
+                import_batch_id,
+                label,
+            ),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return result
+
+
+def review_progress(batch_uid: str) -> dict[str, Any]:
+    ensure_legacy_staging_schema()
+    conn = get_conn()
+    import_batch_id = _fetch_batch_id(batch_uid)
+    rows = [
+        _row_to_dict(row)
+        for row in conn.execute(
+            """
+            SELECT weak_label, resolution_decision, resolution_status, COUNT(*) AS n
+            FROM vkpi_legacy_kol_entities
+            WHERE import_batch_id=?
+            GROUP BY weak_label, resolution_decision, resolution_status
+            ORDER BY weak_label, resolution_decision, resolution_status
+            """,
+            (import_batch_id,),
+        ).fetchall()
+    ]
+    totals = _resolution_counts(import_batch_id)
+    pending = conn.execute(
+        """
+        SELECT COUNT(*) AS n
+        FROM vkpi_legacy_kol_entities
+        WHERE import_batch_id=?
+          AND weak_label <> 'ready'
+          AND weak_label <> 'blocked_risk'
+          AND resolution_decision IS NULL
+        """,
+        (import_batch_id,),
+    ).fetchone()
+    blocked_pending = conn.execute(
+        """
+        SELECT COUNT(*) AS n
+        FROM vkpi_legacy_kol_entities
+        WHERE import_batch_id=?
+          AND weak_label='blocked_risk'
+          AND resolution_decision IS NULL
+        """,
+        (import_batch_id,),
+    ).fetchone()
+    return {
+        "batch_uid": batch_uid,
+        "entity_count": totals["entity_count"],
+        "ready_count": totals["ready_count"],
+        "review_count": totals["review_count"],
+        "blocked_count": totals["blocked_count"],
+        "pending_count": int(pending["n"] if pending else 0),
+        "blocked_pending_count": int(blocked_pending["n"] if blocked_pending else 0),
+        "rows": rows,
+    }
+
+
 def format_resolution_summary(result: dict[str, Any]) -> str:
     lines = [
         f"batch_uid={result.get('batch_uid', '')}",
@@ -457,4 +825,118 @@ def format_resolution_summary(result: dict[str, Any]) -> str:
         lines.append(f"weak_label.{label}={int(count)}")
     for pipeline, count in sorted((result.get("pipeline_ref_counts") or {}).items()):
         lines.append(f"refs.{pipeline}={int(count)}")
+    return "\n".join(lines)
+
+
+def format_pending_reviews(result: dict[str, Any]) -> str:
+    label = result.get("weak_label") or "all"
+    lines = [
+        f"batch_uid={result.get('batch_uid', '')}",
+        f"weak_label={label}",
+        f"include_blocked={str(bool(result.get('include_blocked'))).lower()}",
+        f"pending_reviews={int(result.get('pending_count', 0))}",
+        f"shown={int(result.get('shown_count', 0))}",
+    ]
+    for row in result.get("rows") or []:
+        lines.append(
+            "entity="
+            f"{row.get('entity_uid', '')} "
+            f"weak_label={row.get('weak_label', '')} "
+            f"identity={_identity_label(row)} "
+            f"refs={int(row.get('evidence_count') or 0)} "
+            f"profiles={int(row.get('kol_profile_rows') or 0)} "
+            f"cooperations={int(row.get('cooperation_rows') or 0)} "
+            f"risks={int(row.get('risk_rows') or 0)}"
+        )
+    return "\n".join(lines)
+
+
+def _truncate(value: str, *, max_chars: int = 1200) -> str:
+    text = _text(value)
+    return text if len(text) <= max_chars else text[:max_chars] + "...[truncated]"
+
+
+def format_entity_detail(result: dict[str, Any]) -> str:
+    entity = result.get("entity") or {}
+    lines = [
+        f"batch_uid={result.get('batch_uid', '')}",
+        f"entity_uid={entity.get('entity_uid', '')}",
+        f"identity={_identity_label(entity)}",
+        f"weak_label={entity.get('weak_label', '')}",
+        f"resolution_status={entity.get('resolution_status', '')}",
+        f"resolution_decision={entity.get('resolution_decision') or ''}",
+        f"merge_target_uid={entity.get('merge_target_uid') or ''}",
+        f"decision_reason={entity.get('decision_reason') or ''}",
+        f"decision_note={entity.get('decision_note') or ''}",
+        f"ref_count={int(result.get('ref_count', 0))}",
+    ]
+    for idx, ref in enumerate(result.get("refs") or [], start=1):
+        lines.extend(
+            [
+                f"ref.{idx}.pipeline={ref.get('pipeline', '')}",
+                f"ref.{idx}.staging={ref.get('staging_table', '')}:{ref.get('staging_id', '')}",
+                f"ref.{idx}.source={ref.get('source_sheet', '')}:{ref.get('source_row', '')}",
+                f"ref.{idx}.raw_row_json={_truncate(ref.get('raw_row_json') or '{}')}",
+            ]
+        )
+    return "\n".join(lines)
+
+
+def format_decision_result(result: dict[str, Any]) -> str:
+    prefix = "[COMMIT]" if result.get("committed") else "[DRY-RUN]"
+    lines = [
+        f"{prefix} entity_uid={result.get('entity_uid', '')}",
+        f"identity={result.get('identity', '')}",
+        f"weak_label={result.get('weak_label', '')}",
+        f"action={result.get('action', '')}",
+    ]
+    if result.get("target_entity_uid"):
+        lines.append(f"target={result.get('target_entity_uid')} identity={result.get('target_identity', '')}")
+    if result.get("reason"):
+        lines.append(f"reason={result.get('reason')}")
+    if result.get("note"):
+        lines.append(f"note={result.get('note')}")
+    if not result.get("committed"):
+        lines.append("Add --commit to apply.")
+    return "\n".join(lines)
+
+
+def format_bulk_decision_result(result: dict[str, Any]) -> str:
+    prefix = "[COMMIT]" if result.get("committed") else "[DRY-RUN]"
+    verb = "Decided" if result.get("committed") else "Would decide"
+    lines = [
+        f"{prefix} {verb} {int(result.get('count', 0))} entities as {result.get('action', '')}.",
+        f"batch_uid={result.get('batch_uid', '')}",
+        f"weak_label={result.get('weak_label', '')}",
+    ]
+    if result.get("reason"):
+        lines.append(f"reason={result.get('reason')}")
+    if result.get("note"):
+        lines.append(f"note={result.get('note')}")
+    for idx, row in enumerate(result.get("sample") or [], start=1):
+        lines.append(f"sample.{idx}={row.get('entity_uid', '')} identity={_identity_label(row)}")
+    if not result.get("committed"):
+        lines.append("Add --commit to apply.")
+    return "\n".join(lines)
+
+
+def format_review_progress(result: dict[str, Any]) -> str:
+    lines = [
+        f"Batch: {result.get('batch_uid', '')}",
+        f"Total entities: {int(result.get('entity_count', 0))}",
+        "",
+        "Decision distribution:",
+    ]
+    for row in result.get("rows") or []:
+        label = row.get("weak_label") or ""
+        decision = row.get("resolution_decision") or "NULL"
+        status = row.get("resolution_status") or ""
+        lines.append(f"  {label} | {decision} | {status}: {int(row.get('n') or 0)}")
+    lines.extend(
+        [
+            "",
+            f"Pending (excluding blocked_risk): {int(result.get('pending_count', 0))}",
+            f"Blocked pending: {int(result.get('blocked_pending_count', 0))}",
+        ]
+    )
     return "\n".join(lines)

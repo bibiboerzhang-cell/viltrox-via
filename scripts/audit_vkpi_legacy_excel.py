@@ -17,9 +17,19 @@ if str(BACKEND) not in sys.path:
 from app.db.connection import close_db_runtime  # noqa: E402
 from app.services.vkpi.legacy_import_audit import audit_legacy_file, write_reports  # noqa: E402
 from app.services.vkpi.legacy_entity_resolution import (  # noqa: E402
+    bulk_decide,
+    decide_resolution,
+    format_bulk_decision_result,
+    format_decision_result,
+    format_entity_detail,
+    format_pending_reviews,
     format_resolution_summary,
+    format_review_progress,
     inspect_resolution,
+    list_pending_reviews,
+    review_progress,
     resolve_batch,
+    show_entity,
 )
 from app.services.vkpi.legacy_import_staging import (  # noqa: E402
     ensure_legacy_staging_schema,
@@ -45,18 +55,82 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rollback-batch", default="", help="Clear staging rows for a batch that has not been committed")
     parser.add_argument("--resolve-batch", default="", help="Run P2C canonical KOL resolution for a staged batch_uid")
     parser.add_argument("--inspect-resolution", default="", help="Print P2C resolution summary for a batch_uid")
+    parser.add_argument("--list-pending-reviews", default="", help="List P2C entities that still need review for a batch_uid")
+    parser.add_argument("--weak-label", default="", help="Filter review decisions by weak_label")
+    parser.add_argument("--include-blocked", action="store_true", help="Include blocked_risk entities in review listing")
+    parser.add_argument("--show-entity", default="", help="Show one P2C entity with its staging refs")
+    parser.add_argument("--decide-resolution", default="", help="Record a decision for one entity_uid; dry-run unless --commit is set")
+    parser.add_argument("--bulk-decide", default="", help="Record one decision for all pending entities with --weak-label in a batch_uid")
+    parser.add_argument("--review-progress", default="", help="Print P2C review-decision progress for a batch_uid")
+    parser.add_argument("--action", default="", help="Decision action: merge_with, keep_separate, drop, or escalate")
+    parser.add_argument("--target", default="", help="Target entity_uid for merge_with decisions")
+    parser.add_argument("--reason", default="", help="Decision reason; required for drop")
+    parser.add_argument("--note", default="", help="Decision note; required for escalate")
+    parser.add_argument("--commit", action="store_true", help="Apply a decision command; default is dry-run")
+    parser.add_argument("--limit", type=int, default=50, help="Maximum rows shown for list/show commands")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    if args.inspect_batch or args.rollback_batch or args.resolve_batch or args.inspect_resolution:
+    if (
+        args.inspect_batch
+        or args.rollback_batch
+        or args.resolve_batch
+        or args.inspect_resolution
+        or args.list_pending_reviews
+        or args.show_entity
+        or args.decide_resolution
+        or args.bulk_decide
+        or args.review_progress
+    ):
         try:
             ensure_legacy_staging_schema()
             if args.resolve_batch:
                 print(format_resolution_summary(resolve_batch(args.resolve_batch)))
             elif args.inspect_resolution:
                 print(format_resolution_summary(inspect_resolution(args.inspect_resolution)))
+            elif args.list_pending_reviews:
+                print(
+                    format_pending_reviews(
+                        list_pending_reviews(
+                            args.list_pending_reviews,
+                            weak_label=args.weak_label,
+                            include_blocked=bool(args.include_blocked),
+                            limit=max(0, int(args.limit or 0)),
+                        )
+                    )
+                )
+            elif args.show_entity:
+                print(format_entity_detail(show_entity(args.show_entity, ref_limit=max(1, int(args.limit or 50)))))
+            elif args.decide_resolution:
+                print(
+                    format_decision_result(
+                        decide_resolution(
+                            args.decide_resolution,
+                            action=args.action,
+                            target_entity_uid=args.target,
+                            reason=args.reason,
+                            note=args.note,
+                            commit=bool(args.commit),
+                        )
+                    )
+                )
+            elif args.bulk_decide:
+                print(
+                    format_bulk_decision_result(
+                        bulk_decide(
+                            args.bulk_decide,
+                            weak_label=args.weak_label,
+                            action=args.action,
+                            reason=args.reason,
+                            note=args.note,
+                            commit=bool(args.commit),
+                        )
+                    )
+                )
+            elif args.review_progress:
+                print(format_review_progress(review_progress(args.review_progress)))
             elif args.inspect_batch:
                 print(format_batch_summary(inspect_batch(args.inspect_batch)))
             else:
