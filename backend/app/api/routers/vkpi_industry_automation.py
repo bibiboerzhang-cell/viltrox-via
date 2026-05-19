@@ -7,6 +7,7 @@ from app.api.dependencies.perms import require_tab
 from app.services.vkpi import (
     ab_experiments,
     audience_graph,
+    content_brain,
     industry_data,
     llm_gateway,
     outcome_collector,
@@ -126,6 +127,24 @@ def industry_cross_platform(project_id: int, staff=Depends(require_tab("vkpi", "
 @router.get("/industry-data/projects/{project_id}/posts")
 def industry_posts(project_id: int, limit: int = Query(default=100, ge=1, le=500), staff=Depends(require_tab("vkpi", "read"))):
     return industry_data.posts(project_id, limit=limit)
+
+
+@router.get("/industry-data/content-brain/status")
+def industry_content_brain_status(staff=Depends(require_tab("vkpi", "read"))):
+    del staff
+    return content_brain.get_content_brain_status()
+
+
+@router.get("/industry-data/content-brain/posts")
+def industry_content_brain_posts(
+    status: str = "",
+    platform: str = "",
+    query: str = "",
+    limit: int = Query(default=100, ge=1, le=500),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    del staff
+    return content_brain.list_content_brain_posts(status=status, platform=platform, query=query, limit=limit)
 
 
 @router.get("/audience-graph/status")

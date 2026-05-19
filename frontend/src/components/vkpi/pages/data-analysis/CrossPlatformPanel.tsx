@@ -25,6 +25,7 @@ import { metricForAccount, postsForAccount } from './utils/metricHelpers';
 
 import { FilterDrawer } from './drawers/FilterDrawer';
 import { PostDetailDrawer } from './drawers/PostDetailDrawer';
+import { ContentBrainPanel } from './ContentBrainPanel';
 import { ProfileDashboard } from './profile/ProfileDashboard';
 
 import { HomeTab } from './tabs/HomeTab';
@@ -661,6 +662,8 @@ export function CrossPlatformPanel({
 
             {/* === Tab 内容 === */}
             {renderTab()}
+
+            <ContentBrainPanel apiToken={apiToken} onMessage={onMessage} />
 
             {/* === Apify 历史导入 (Advanced 折叠区,所有 Tab 都可见) === */}
             <details className="da-import-box">

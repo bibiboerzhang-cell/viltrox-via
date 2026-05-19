@@ -1352,6 +1352,16 @@ export async function getIndustryCrossPlatform(token: string, projectId: string)
 export async function listIndustryPosts(token: string, projectId: string, limit = 500) {
   return apiFetch<{ posts?: Row[] }>(`/api/admin/vkpi/industry-data/projects/${encodeURIComponent(projectId)}/posts?limit=${encodeURIComponent(String(limit))}`, {}, token);
 }
+export async function getContentBrainStatus(token: string) {
+  return apiFetch<Record<string, unknown>>("/api/admin/vkpi/industry-data/content-brain/status", {}, token);
+}
+export async function listContentBrainPosts(token: string, options: { status?: string; platform?: string; query?: string; limit?: number } = {}) {
+  const params = new URLSearchParams({ limit: String(options.limit || 100) });
+  if (options.status) params.set("status", options.status);
+  if (options.platform) params.set("platform", options.platform);
+  if (options.query) params.set("query", options.query);
+  return apiFetch<{ posts?: Row[]; count?: number; schema_ready?: boolean }>(`/api/admin/vkpi/industry-data/content-brain/posts?${params.toString()}`, {}, token);
+}
 
 export async function getCommentIntelligenceOverview(
   token: string,

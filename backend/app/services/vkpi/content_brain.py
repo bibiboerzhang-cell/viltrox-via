@@ -525,3 +525,147 @@ def format_preview_summary(payload: dict[str, Any]) -> str:
         f"tag_types={len(payload.get('tag_distribution') or {})}",
         f"risk_types={len(payload.get('risk_distribution') or {})}",
     ])
+
+
+def _distribution_from_rows(rows: list[dict[str, Any]], column: str, key_name: str) -> dict[str, int]:
+    counter: Counter[str] = Counter()
+    for row in rows:
+        values = _loads(row.get(column), [])
+        if not isinstance(values, list):
+            continue
+        for item in values:
+            if isinstance(item, dict):
+                value = _text(item.get(key_name) or item.get("tag") or item.get("flag_key") or item.get("brand") or item.get("product"))
+            else:
+                value = _text(item)
+            if value:
+                counter[value] += 1
+    return dict(sorted(counter.items(), key=lambda item: (-item[1], item[0])))
+
+
+def get_content_brain_status() -> dict[str, Any]:
+    """Return read-only P6 analysis coverage and distributions."""
+    if not _table_exists("vkpi_industry_posts"):
+        return {
+            "schema_ready": False,
+            "post_count": 0,
+            "status_counts": {},
+            "tag_distribution": {},
+            "risk_distribution": {},
+            "brand_distribution": {},
+            "budget_guard": get_budget_status(BUDGET_SCOPE, estimated_cost=0.0),
+        }
+    conn = get_conn()
+    status_rows = conn.execute(
+        """
+        SELECT COALESCE(NULLIF(analysis_status, ''), 'pending') AS status,
+               COUNT(*) AS count
+        FROM vkpi_industry_posts
+        GROUP BY COALESCE(NULLIF(analysis_status, ''), 'pending')
+        ORDER BY count DESC, status
+        """
+    ).fetchall()
+    status_counts = {str(row["status"]): int(row["count"] or 0) for row in status_rows}
+    analyzed_rows = [
+        _row_to_dict(row)
+        for row in conn.execute(
+            """
+            SELECT content_tags_json, risk_flags_json, brand_mentions_json, product_intents_json
+            FROM vkpi_industry_posts
+            WHERE COALESCE(NULLIF(analysis_status, ''), 'pending')='done'
+            ORDER BY analyzed_at DESC, id DESC
+            LIMIT 1000
+            """
+        ).fetchall()
+    ]
+    media_count = 0
+    if _table_exists("vkpi_industry_post_media"):
+        media_row = conn.execute("SELECT COUNT(*) AS count FROM vkpi_industry_post_media").fetchone()
+        media_count = int(media_row["count"] or 0) if media_row else 0
+    total = sum(status_counts.values())
+    done = status_counts.get("done", 0)
+    return {
+        "schema_ready": True,
+        "analysis_version": ANALYSIS_VERSION,
+        "budget_scope": BUDGET_SCOPE,
+        "budget_guard": get_budget_status(BUDGET_SCOPE, estimated_cost=0.0),
+        "post_count": total,
+        "media_count": media_count,
+        "analyzed_count": done,
+        "coverage_ratio": round(done / total, 4) if total else 0.0,
+        "status_counts": status_counts,
+        "tag_distribution": _distribution_from_rows(analyzed_rows, "content_tags_json", "tag"),
+        "risk_distribution": _distribution_from_rows(analyzed_rows, "risk_flags_json", "flag_key"),
+        "brand_distribution": _distribution_from_rows(analyzed_rows, "brand_mentions_json", "brand"),
+        "product_distribution": _distribution_from_rows(analyzed_rows, "product_intents_json", "product"),
+    }
+
+
+def list_content_brain_posts(
+    *,
+    status: str = "",
+    platform: str = "",
+    query: str = "",
+    limit: int = 100,
+) -> dict[str, Any]:
+    """List post-level content brain analysis rows for review surfaces."""
+    if not _table_exists("vkpi_industry_posts"):
+        return {"posts": [], "count": 0, "schema_ready": False}
+    where: list[str] = []
+    params: list[Any] = []
+    if status:
+        where.append("COALESCE(NULLIF(p.analysis_status, ''), 'pending')=?")
+        params.append(status)
+    if platform:
+        where.append("LOWER(p.platform)=LOWER(?)")
+        params.append(platform)
+    if query:
+        token = f"%{query.lower()}%"
+        where.append("(LOWER(p.title) LIKE ? OR LOWER(p.caption) LIKE ? OR LOWER(p.post_url) LIKE ? OR LOWER(a.handle) LIKE ?)")
+        params.extend([token, token, token, token])
+    clause = "WHERE " + " AND ".join(where) if where else ""
+    rows = get_conn().execute(
+        f"""
+        SELECT p.id, p.post_uid, p.account_id, p.platform, p.platform_post_id,
+               p.post_url, p.thumbnail_url, p.media_type, p.title, p.caption,
+               p.published_at, p.views, p.likes, p.comments, p.shares,
+               COALESCE(NULLIF(p.analysis_status, ''), 'pending') AS analysis_status,
+               p.analysis_version, p.analyzed_at, p.analysis_error,
+               p.content_tags_json, p.product_intents_json, p.risk_flags_json,
+               p.brand_mentions_json, p.ai_summary,
+               a.handle AS account_handle,
+               a.display_name AS account_display_name,
+               a.brand_group AS account_brand_group,
+               a.account_role AS account_role
+        FROM vkpi_industry_posts p
+        LEFT JOIN vkpi_industry_accounts a ON a.id=p.account_id
+        {clause}
+        ORDER BY
+          CASE WHEN p.analyzed_at IS NULL THEN 1 ELSE 0 END,
+          p.analyzed_at DESC,
+          CASE WHEN p.published_at IS NULL THEN 1 ELSE 0 END,
+          p.published_at DESC,
+          p.id DESC
+        LIMIT ?
+        """,
+        (*params, _safe_limit(limit, default=100, ceiling=500)),
+    ).fetchall()
+    posts: list[dict[str, Any]] = []
+    for row in rows:
+        item = _row_to_dict(row)
+        item["content_tags"] = _loads(item.get("content_tags_json"), [])
+        item["product_intents"] = _loads(item.get("product_intents_json"), [])
+        item["risk_flags"] = _loads(item.get("risk_flags_json"), [])
+        item["brand_mentions"] = _loads(item.get("brand_mentions_json"), [])
+        posts.append(item)
+    return {
+        "posts": posts,
+        "count": len(posts),
+        "schema_ready": True,
+        "filters": {
+            "status": status,
+            "platform": platform,
+            "query": query,
+            "limit": _safe_limit(limit, default=100, ceiling=500),
+        },
+    }
