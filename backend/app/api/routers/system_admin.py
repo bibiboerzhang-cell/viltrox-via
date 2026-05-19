@@ -593,13 +593,17 @@ def staff_invite_capabilities(admin=Depends(require_tab("system", "read"))):
     email_available = email_service_available()
     allowed_domains = staff_svc._load_allowed_domains()
     external_emails_allowed = staff_svc._allow_any_external()
+    delivery_methods = ["manual_link"]
+    if email_available:
+        delivery_methods.insert(0, "email_magic_link")
     return {
         "email_available": email_available,
         "external_emails_allowed": external_emails_allowed,
         "allowed_domains": allowed_domains,
         "token_ttl_hours": int(_token_ttl("staff_invite") / 3600),
-        "manual_activation_link_available": False,
-        "delivery_methods": ["email_magic_link"] if email_available else [],
+        "manual_activation_link_available": True,
+        "delivery_methods": delivery_methods,
+        "site_url_configured": bool(os.environ.get("SITE_URL", "").strip()),
     }
 
 
@@ -638,6 +642,33 @@ def invite_staff(
         actor=admin, action="invite_staff",
         target_type="staff", target_id=str(result.get("id")),
         detail={"email": body.get("email"), "role": body.get("role")},
+        request=request,
+    )
+    return result
+
+
+@router.post("/staff/invite/activation-link")
+def create_activation_link(
+    body: dict,
+    request: Request,
+    admin=Depends(require_admin),
+    _staff=Depends(require_system_permission("system.members", "write")),
+):
+    try:
+        result = staff_svc.create_activation_link(body, inviter_id=admin["id"])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    record_admin_action(
+        actor=admin,
+        action="create_staff_activation_link",
+        target_type="staff",
+        target_id=str(result.get("staff_id")),
+        detail={
+            "email": result.get("email"),
+            "role": result.get("role"),
+            "delivery_method": result.get("delivery_method"),
+            "token_hint": result.get("token_hint"),
+        },
         request=request,
     )
     return result

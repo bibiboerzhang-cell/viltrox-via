@@ -219,13 +219,52 @@ def invite(body: dict, *, inviter_id: int) -> dict:
       2. Else create a placeholder user (not implemented here) and link.
       3. Send email with magic link (out of scope — hook in your mailer).
     """
+    created = _create_staff_with_token(body, inviter_id=inviter_id)
+    sent = _send_staff_invite_email(created["email"], created["token"])
+    if not sent:
+        raise ValueError(
+            "Email delivery unavailable. Use /api/admin/staff/invite/activation-link "
+            "to generate a manual activation link."
+        )
+    return {
+        "id": created["staff_id"],
+        "user_id": created["user_id"],
+        "role": created["role"],
+        "email": created["email"],
+        "invite_sent": True,
+    }
+
+
+def create_activation_link(body: dict, *, inviter_id: int) -> dict[str, Any]:
+    created = _create_staff_with_token(body, inviter_id=inviter_id)
+    token = str(created["token"])
+    activation_url = _staff_activation_url(token)
+    return {
+        "staff_id": created["staff_id"],
+        "user_id": created["user_id"],
+        "email": created["email"],
+        "full_name": created["full_name"],
+        "role": created["role"],
+        "activation_url": activation_url,
+        "token_hint": _token_hint(token),
+        "expires_at": created["expires_at"],
+        "expires_in_hours": 48,
+        "delivery_method": "manual_link",
+    }
+
+
+def _create_staff_with_token(body: dict, *, inviter_id: int) -> dict[str, Any]:
+    """Create or refresh pending staff, then issue a staff invite token."""
     conn = get_conn()
     email = str(body.get("email") or "").strip().lower()
+    full_name = str(body.get("full_name") or body.get("name") or email.split("@")[0]).strip()
     role = body.get("role", "readonly")
     if role not in ROLES:
         raise ValueError(f"unknown role: {role}")
     if not email:
         raise ValueError("email required")
+    if not full_name:
+        raise ValueError("full_name required")
     _validate_staff_email(email)
 
     user = conn.execute(
@@ -244,17 +283,19 @@ def invite(body: dict, *, inviter_id: int) -> dict:
             VALUES
                 (?, ?, ?, ?, ?, 'active', 'admin', 0)
         """
-        params = (_utcnow(), email, placeholder_password, body.get("name") or email.split("@")[0], creator_code)
+        params = (_utcnow(), email, placeholder_password, full_name, creator_code)
         if is_postgres_runtime():
             user_row = conn.execute(f"{insert_sql} RETURNING id", params).fetchone()
             user_id = int(user_row["id"])
         else:
             conn.execute(insert_sql, params)
             user_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+    else:
+        conn.execute("UPDATE users SET name = COALESCE(NULLIF(name, ''), ?) WHERE id = ?", (full_name, user_id))
 
     owner = email in OWNER_EMAILS
     permissions = normalize_permissions(
-        body.get("permissions") or body.get("permissions_override") or {},
+        _permissions_from_invite_body(body),
         role,
         owner=owner,
     )
@@ -287,16 +328,29 @@ def invite(body: dict, *, inviter_id: int) -> dict:
             cur = conn.cursor()
             cur.execute(sql, values)
             staff_id = int(cur.lastrowid or 0)
+    conn.execute(
+        """
+        UPDATE email_tokens
+           SET used_at = COALESCE(used_at, ?)
+         WHERE user_id = ? AND type = 'staff_invite' AND used_at IS NULL
+        """,
+        (_utcnow(), int(user_id)),
+    )
     conn.commit()
 
     token = create_email_token(int(user_id), "staff_invite")
-    _send_staff_invite_email(email, token)
+    expires_row = conn.execute(
+        "SELECT expires_at FROM email_tokens WHERE token = ? AND type = 'staff_invite'",
+        (token,),
+    ).fetchone()
     return {
-        "id": staff_id,
-        "user_id": user_id,
+        "staff_id": staff_id,
+        "user_id": int(user_id),
         "role": role,
         "email": email,
-        "invite_sent": True,
+        "full_name": full_name,
+        "token": token,
+        "expires_at": str(expires_row["expires_at"] if expires_row else ""),
     }
 
 
@@ -696,6 +750,34 @@ def _validate_staff_email(email: str) -> None:
 
 def _validate_email_domain(email: str) -> None:
     _validate_staff_email(email)
+
+
+def _permissions_from_invite_body(body: dict) -> dict[str, Any]:
+    raw = (
+        body.get("permissions")
+        or body.get("permissions_override")
+        or body.get("permissions_json")
+        or {}
+    )
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            logger.debug("staff.permissions_json_payload_parse_failed", exc_info=True)
+            return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _staff_activation_url(token: str) -> str:
+    site_url = os.environ.get("SITE_URL", "http://localhost:5173").strip() or "http://localhost:5173"
+    return f"{site_url.rstrip('/')}/activate?token={token}"
+
+
+def _token_hint(token: str) -> str:
+    if len(token) <= 8:
+        return "..." if token else ""
+    return f"{token[:4]}...{token[-4:]}"
 
 
 def _utcnow() -> str:
