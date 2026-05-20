@@ -91,7 +91,10 @@ def r2_readiness() -> dict[str, Any]:
     script = ROOT / "scripts" / "ops" / "check_vkpi_r2_readiness.py"
     if not script.exists():
         return {"available": False}
-    result = run([str(script), "--remote", "viltrox", "--remote-root", "/opt/viltrox-2.0"], timeout=30)
+    command = [str(script)]
+    if ROOT != Path("/opt/viltrox-2.0"):
+        command.extend(["--remote", "viltrox", "--remote-root", "/opt/viltrox-2.0"])
+    result = run(command, timeout=30)
     try:
         payload = parse_json_blob(result.stdout or result.stderr)
     except Exception as exc:
@@ -226,10 +229,10 @@ def build_items(sync: dict[str, Any], r2: dict[str, Any], snapshot: dict[str, An
                 "post-sync R2 migration guard exists" if exists("scripts/ops/migrate_vkpi_media_cache_to_r2_after_sync.sh") else "R2 migration guard missing",
                 f"storage_mode={r2.get('storage_mode', 'unknown')}",
                 f"readiness_source={r2.get('source', '-')}",
-                f"remote_ready={r2.get('remote_ready', '-')}",
+                f"runtime_ready={r2.get('ready', '-')}",
                 f"missing_required={', '.join(r2.get('missing_required') or []) or '-'}",
             ],
-            "R2 远程已 ready；继续按 limit 分批迁移旧缓存，并复测播放/图片签名 URL。" if r2_ready else "先配置 R2 env；未 ready 前继续本地 fallback，不执行旧缓存迁移。",
+            "R2 runtime 已 ready；继续按 limit 分批迁移旧缓存，并复测播放/图片签名 URL。" if r2_ready else "先配置 R2 env；未 ready 前继续本地 fallback，不执行旧缓存迁移。",
         ),
         status_item(
             "prod_snapshot",
