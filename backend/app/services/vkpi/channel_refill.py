@@ -56,6 +56,10 @@ def _float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _bounded_rate(value: Any) -> float:
+    return max(0.0, min(99.9999, _float(value)))
+
+
 def _text(*values: Any) -> str:
     for value in values:
         text = str(value or "").strip()
@@ -210,7 +214,7 @@ def _write_snapshot(channel: dict[str, Any], metrics: dict[str, Any], raw_payloa
     channel_id = int(channel.get("id") or 0)
     previous = conn.execute(
         """
-        SELECT followers, posts_count, total_views, total_likes
+        SELECT followers, posts_count, total_views, total_likes, total_comments, total_shares
         FROM vkpi_channel_metrics
         WHERE channel_id=? AND snapshot_date < ?
         ORDER BY snapshot_date DESC, captured_at DESC, id DESC
@@ -226,10 +230,42 @@ def _write_snapshot(channel: dict[str, Any], metrics: dict[str, Any], raw_payloa
     total_likes = _int(metrics.get("total_likes"))
     total_comments = _int(metrics.get("total_comments"))
     total_shares = _int(metrics.get("total_shares"))
+    if not raw_payload.get("allow_cumulative_regression"):
+        cumulative_floor: dict[str, dict[str, int]] = {}
+        for key, current in (
+            ("posts_count", posts_count),
+            ("total_views", total_views),
+            ("total_likes", total_likes),
+            ("total_comments", total_comments),
+            ("total_shares", total_shares),
+        ):
+            previous_value = _int(previous_row.get(key))
+            if previous_value > current:
+                cumulative_floor[key] = {"provider_value": current, "kept_value": previous_value}
+                if key == "posts_count":
+                    posts_count = previous_value
+                elif key == "total_views":
+                    total_views = previous_value
+                elif key == "total_likes":
+                    total_likes = previous_value
+                elif key == "total_comments":
+                    total_comments = previous_value
+                elif key == "total_shares":
+                    total_shares = previous_value
+        if cumulative_floor:
+            raw_payload["cumulative_floor"] = {
+                "reason": "provider returned a narrower sample than the previous official-account baseline",
+                "previous_snapshot_date_before": snapshot_date,
+                "fields": cumulative_floor,
+            }
     followers_delta = followers - _int(previous_row.get("followers"), followers)
     posts_delta = posts_count - _int(previous_row.get("posts_count"), posts_count)
     views_delta = total_views - _int(previous_row.get("total_views"), total_views)
     likes_delta = total_likes - _int(previous_row.get("total_likes"), total_likes)
+    engagement_rate = _float(metrics.get("engagement_rate"))
+    if not engagement_rate and total_views:
+        engagement_rate = ((total_likes + total_comments + total_shares) / total_views) * 100.0
+    engagement_rate = _bounded_rate(engagement_rate)
     conn.execute(
         """
         INSERT INTO vkpi_channel_metrics
@@ -267,7 +303,7 @@ def _write_snapshot(channel: dict[str, Any], metrics: dict[str, Any], raw_payloa
             posts_delta,
             views_delta,
             likes_delta,
-            _float(metrics.get("engagement_rate")),
+            engagement_rate,
             _json(raw_payload),
             now,
         ),

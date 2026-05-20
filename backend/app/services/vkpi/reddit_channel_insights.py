@@ -36,8 +36,13 @@ def reddit_channel_assessment(channel_id: int, *, staff: dict[str, Any] | None =
     platform = str(row.get("platform") or "").lower()
     if platform != "reddit":
         raise ValueError("reddit assessment only supports reddit channels")
-    posts, source, package_dir = channels._all_posts_for_channel(row)
-    posts = channels._sort_posts(posts, "latest", "desc")
+    record_posts, source, package_dir = channels._all_posts_for_channel(row)
+    record_posts = channels._sort_posts(record_posts, "latest", "desc")
+    posts = channels._filter_posts_by_window(record_posts, "year")
+    analysis_window = "year"
+    if not posts:
+        posts = record_posts
+        analysis_window = "all_records_fallback"
     distribution = {
         "excellent": {"key": "excellent", "label": "优质", "count": 0},
         "good": {"key": "good", "label": "良好", "count": 0},
@@ -85,7 +90,10 @@ def reddit_channel_assessment(channel_id: int, *, staff: dict[str, Any] | None =
         },
         "summary": {
             "posts": len(posts),
+            "records_total": len(record_posts),
+            "analysis_window": analysis_window,
             "comments": sum(channels._int(item.get("comments")) for item in posts),
+            "record_comments": sum(channels._int(item.get("comments")) for item in record_posts),
             "score": sum(channels._int(item.get("score"), channels._int(item.get("likes"))) for item in posts),
             "quality_count": len(quality),
             "attention_count": len(attention),

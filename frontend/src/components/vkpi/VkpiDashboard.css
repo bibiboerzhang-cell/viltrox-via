@@ -2259,6 +2259,10 @@
 .vkpi-settings-module.is-open .vkpi-settings-module__head { border-bottom: 1px solid var(--vkpi-border); }
 .vkpi-settings-module__body { padding: 18px 22px 22px; }
 .vkpi-settings-status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.vkpi-settings-version-panel { margin-top: 12px; border: 1px solid var(--vkpi-border); border-radius: 16px; background: #fbfcff; padding: 14px; display: grid; gap: 12px; }
+.vkpi-settings-version-panel .vkpi-table-card__header { padding: 0; border-bottom: 0; }
+.vkpi-settings-version-panel .vkpi-table-card__header h2 { margin: 0; font-size: 15px; }
+.vkpi-settings-version-panel .vkpi-table-card__header span { color: var(--vkpi-muted); font-size: 12px; }
 .vkpi-settings-two-column { display: grid; grid-template-columns: minmax(300px, 0.85fr) minmax(520px, 1.35fr); gap: 14px; align-items: start; }
 .vkpi-settings-rules { display: grid; gap: 14px; }
 .vkpi-settings-tabs { display: inline-flex; flex-wrap: wrap; gap: 8px; justify-content: center; }

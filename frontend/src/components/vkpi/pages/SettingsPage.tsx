@@ -1,4 +1,6 @@
 import React, { useEffect, useState } from 'react';
+import { buildApiUrl } from '../../../lib/api';
+import { frontendBuildInfo, shortBuildSha } from '../../../lib/buildInfo';
 import {
   getCommentAlertSettings,
   getControlStatus,
@@ -56,6 +58,15 @@ interface SettingsPageProps {
   onRefreshData?: () => void | Promise<void>;
 }
 
+interface BackendBuildInfo {
+  git_sha?: string;
+  git_short_sha?: string;
+  git_branch?: string;
+  build_time?: string;
+  client_matches_server?: boolean;
+  client_build_source?: string;
+}
+
 export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsertProductCost, onRefreshData }: SettingsPageProps) {
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
@@ -91,6 +102,9 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
   const [activationLink, setActivationLink] = useState<VkpiStaffActivationLinkResponse | null>(null);
   const [activationCopied, setActivationCopied] = useState(false);
   const [selectedStaffForPermissions, setSelectedStaffForPermissions] = useState<VkpiStaffMember | null>(null);
+  const [backendBuild, setBackendBuild] = useState<BackendBuildInfo | null>(null);
+  const [versionCheckedAt, setVersionCheckedAt] = useState('');
+  const [frontendAsset, setFrontendAsset] = useState('');
   const isManager = viewMode === 'manager';
 
   const boolValue = (value: unknown, fallback = false) => {
@@ -98,6 +112,33 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
     if (typeof value === 'string') return ['1', 'true', 'yes', 'on', 'enabled'].includes(value.toLowerCase());
     return Boolean(value);
   };
+
+  const currentFrontendAsset = () => {
+    if (typeof document === 'undefined') return '';
+    const src = Array.from(document.scripts)
+      .map((script) => script.src)
+      .find((srcValue) => srcValue.includes('/assets/app-'));
+    return src ? src.split('/').pop() || src : '';
+  };
+
+  const reloadVersionStatus = async () => {
+    setFrontendAsset(currentFrontendAsset());
+    setVersionCheckedAt(new Date().toISOString());
+    try {
+      const response = await fetch(buildApiUrl(`/health?client_build=${encodeURIComponent(frontendBuildInfo.gitSha)}`), {
+        credentials: 'same-origin',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      });
+      const payload = response.ok ? await response.json() : null;
+      setBackendBuild(payload?.build || null);
+    } catch {
+      setBackendBuild(null);
+    }
+  };
+
+  useEffect(() => {
+    void reloadVersionStatus();
+  }, []);
 
   useEffect(() => {
     if (!isManager || !apiToken) return;
@@ -243,6 +284,20 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
   );
   const boolLabel = (value: boolean) => (value ? '开启' : '关闭');
   const moneyLabel = (value: unknown) => `$${numberValue(value).toLocaleString('en-US')}`;
+  const timeLabel = (value: unknown) => {
+    const raw = String(value || '').trim();
+    if (!raw || raw === 'unknown') return '-';
+    const date = new Date(raw);
+    if (Number.isNaN(date.getTime())) return raw;
+    return new Intl.DateTimeFormat('zh-CN', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).format(date);
+  };
   const settingChangeLine = (label: string, before: string | number, after: string | number) => (
     `${label}: ${before} -> ${after}`
   );
@@ -537,6 +592,9 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
   const adapterCount = productCatalog.filter((product) => product.categoryMain === 'Adapter').length;
   const syncTime = String(syncPolicy.daily_sync_time || '08:00');
   const systemHealth = settingsError || providerError || rbacStatusError ? '需要处理' : 'healthy';
+  const versionSummary = frontendAsset
+    ? `${frontendAsset} · ${timeLabel(versionCheckedAt)}`
+    : `${shortBuildSha(frontendBuildInfo.gitSha)} · ${timeLabel(frontendBuildInfo.builtAt)}`;
   const inviteMode = inviteCapabilities?.email_available ? 'email' : 'manual_link';
   const canInviteStaff = inviteMode === 'email'
     ? Boolean(onInviteStaff)
@@ -594,7 +652,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
       {message ? <div className="vkpi-inline-message">{message}</div> : null}
       {settingsError ? <div className="vkpi-inline-message">{settingsError}</div> : null}
       <div className="vkpi-settings-clean">
-        {renderSettingsModule('status', `${apiStatusText} · 同步 ${syncTime} · ${systemHealth}`, (
+        {renderSettingsModule('status', `${apiStatusText} · 同步 ${syncTime} · ${systemHealth} · 版本 ${versionSummary}`, (
           <>
             <div className="vkpi-settings-status-grid">
               <InfoBlock label="API 服务" value={apiStatusText} />
@@ -603,6 +661,20 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
               <InfoBlock label="本月成本" value={`$${totalSpentUsd.toLocaleString('en-US')} / $${totalBudgetUsd.toLocaleString('en-US')}`} />
               <InfoBlock label="系统" value={systemHealth} />
             </div>
+            <section className="vkpi-settings-version-panel">
+              <div className="vkpi-table-card__header">
+                <div><h2>版本状态</h2><span>{versionCheckedAt ? `检查 ${timeLabel(versionCheckedAt)}` : '读取中'}</span></div>
+                <button className="vkpi-button" type="button" onClick={() => void reloadVersionStatus()}>刷新版本</button>
+              </div>
+              <div className="vkpi-settings-status-grid">
+                <InfoBlock label="页面资源" value={frontendAsset || '-'} />
+                <InfoBlock label="前端版本" value={`${shortBuildSha(frontendBuildInfo.gitSha)} · ${frontendBuildInfo.gitBranch}`} />
+                <InfoBlock label="前端构建时间" value={timeLabel(frontendBuildInfo.builtAt)} />
+                <InfoBlock label="后端版本" value={backendBuild ? `${shortBuildSha(backendBuild.git_sha)} · ${backendBuild.git_branch || '-'}` : '读取中'} />
+                <InfoBlock label="后端构建时间" value={timeLabel(backendBuild?.build_time)} />
+                <InfoBlock label="检查时间" value={timeLabel(versionCheckedAt)} />
+              </div>
+            </section>
             <div className="vkpi-settings-api-grid">
               {providers.map((row) => {
                 const configured = boolValue(row.configured, false);

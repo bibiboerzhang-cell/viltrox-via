@@ -1,19 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
-
-import { buildApiUrl } from '../../../lib/api';
-import { frontendBuildInfo, shortBuildSha } from '../../../lib/buildInfo';
 import { DataStatusBadge } from '../shared/DataStatusBadge';
 import { Icon } from '../shared/Icon';
 import type { VkpiDataStatus, VkpiRangeKey } from '../vkpiTypes';
 import { rangeOptions } from './vkpiLayoutConstants';
-
-interface BackendBuildInfo {
-  git_sha?: string;
-  git_short_sha?: string;
-  git_branch?: string;
-  build_time?: string;
-  client_matches_server?: boolean;
-}
 
 interface VkpiTopbarProps {
   query: string;
@@ -56,53 +44,6 @@ export function VkpiTopbar({
   onGenerateWeeklyReport,
   weeklyReportStatus,
 }: VkpiTopbarProps) {
-  const [backendBuild, setBackendBuild] = useState<BackendBuildInfo | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), 5000);
-
-    fetch(buildApiUrl(`/health?client_build=${encodeURIComponent(frontendBuildInfo.gitSha)}`), {
-      credentials: 'same-origin',
-      headers: { 'X-Requested-With': 'XMLHttpRequest' },
-      signal: controller.signal,
-    })
-      .then((response) => response.ok ? response.json() : null)
-      .then((payload) => {
-        if (!cancelled && payload?.build) {
-          setBackendBuild(payload.build as BackendBuildInfo);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setBackendBuild(null);
-      })
-      .finally(() => window.clearTimeout(timer));
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, []);
-
-  const versionState = useMemo(() => {
-    const frontendSha = frontendBuildInfo.gitSha;
-    const backendSha = backendBuild?.git_sha || '';
-    const mismatch = Boolean(
-      backendSha &&
-      frontendSha &&
-      backendSha !== 'unknown' &&
-      frontendSha !== 'unknown' &&
-      backendSha !== frontendSha,
-    );
-    return {
-      mismatch,
-      frontendLabel: shortBuildSha(frontendSha),
-      backendLabel: backendBuild ? shortBuildSha(backendSha) : 'checking',
-    };
-  }, [backendBuild]);
-
   return (
     <header className="vkpi-topbar">
       <label className="vkpi-search">
@@ -138,14 +79,6 @@ export function VkpiTopbar({
         isRefreshing={isRefreshing}
         onRefresh={onRefreshData}
       />
-
-      <div
-        className={`vkpi-version-chip ${versionState.mismatch ? 'is-mismatch' : ''}`}
-        title={`Frontend ${versionState.frontendLabel} · Backend ${versionState.backendLabel} · ${frontendBuildInfo.gitBranch} · built ${frontendBuildInfo.builtAt}`}
-      >
-        <span>FE {versionState.frontendLabel}</span>
-        <span>BE {versionState.backendLabel}</span>
-      </div>
 
       {canSwitchView ? (
         <button className="vkpi-button" type="button" onClick={onToggleView}>

@@ -34,6 +34,10 @@ function deltaTone(delta = 0) {
   return '';
 }
 
+function deltaText(delta = 0) {
+  return delta ? `${delta > 0 ? '+' : ''}${compact(delta)}` : '基线';
+}
+
 function initial(summary: StaffSummary) {
   return (summary.staffName || summary.staffEmail || 'S').slice(0, 1).toUpperCase();
 }
@@ -133,7 +137,7 @@ export function ChannelStaffProgress({
                 <strong>{metric.value}</strong>
                 <span>{metric.label}</span>
               </span>
-              {'delta' in metric ? <small className={deltaTone(metric.delta)}>{metric.delta ? `${metric.delta > 0 ? '+' : ''}${compact(metric.delta)}` : '+0'}</small> : null}
+              {'delta' in metric ? <small className={deltaTone(metric.delta)}>{deltaText(metric.delta)}</small> : null}
             </span>
           ))}
         </div>
@@ -158,7 +162,7 @@ export function ChannelStaffProgress({
               </div>
               <div className="vkpi-channel-staff-card__value">
                 <strong>{compact(row.views)}</strong>
-                <small className={deltaTone(row.viewsDelta)}>{row.viewsDelta ? `${row.viewsDelta > 0 ? '+' : ''}${compact(row.viewsDelta)}` : '+0'}</small>
+                <small className={deltaTone(row.viewsDelta)}>{deltaText(row.viewsDelta)}</small>
               </div>
             </button>
           );

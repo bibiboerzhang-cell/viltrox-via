@@ -953,14 +953,32 @@ def _post_from_package_row(row: dict[str, Any]) -> dict[str, Any]:
     return post
 
 
-def _posts_from_package(package_dir: str) -> list[dict[str, Any]]:
+def _resolve_package_dir(package_dir: str) -> Path | None:
     if not package_dir:
+        return None
+    path = Path(package_dir).expanduser()
+    if (path / "posts.csv").exists():
+        return path
+    marker = "tmp/vkpi_channel_packages/"
+    raw = str(package_dir)
+    if marker in raw:
+        suffix = raw.split(marker, 1)[1]
+        for base in (Path.cwd(), Path("/opt/viltrox-2.0")):
+            candidate = base / "tmp" / "vkpi_channel_packages" / suffix
+            if (candidate / "posts.csv").exists():
+                return candidate
+    return None
+
+
+def _posts_from_package(package_dir: str) -> list[dict[str, Any]]:
+    resolved = _resolve_package_dir(package_dir)
+    if not resolved:
         return []
-    path = Path(package_dir).expanduser() / "posts.csv"
+    path = resolved / "posts.csv"
     if not path.exists() or not path.is_file():
         return []
     raw_index: dict[str, dict[str, Any]] = {}
-    raw_path = Path(package_dir).expanduser() / "raw.json"
+    raw_path = resolved / "raw.json"
     if raw_path.exists() and raw_path.is_file():
         raw_index = _raw_post_index(_parse_json(raw_path.read_text(encoding="utf-8")))
     with path.open("r", encoding="utf-8", newline="") as handle:
@@ -968,9 +986,10 @@ def _posts_from_package(package_dir: str) -> list[dict[str, Any]]:
 
 
 def _raw_package(package_dir: str) -> dict[str, Any]:
-    if not package_dir:
+    resolved = _resolve_package_dir(package_dir)
+    if not resolved:
         return {}
-    raw_path = Path(package_dir).expanduser() / "raw.json"
+    raw_path = resolved / "raw.json"
     if not raw_path.exists() or not raw_path.is_file():
         return {}
     return _parse_json(raw_path.read_text(encoding="utf-8"))

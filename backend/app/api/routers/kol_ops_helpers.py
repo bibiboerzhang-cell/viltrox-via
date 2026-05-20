@@ -164,12 +164,30 @@ def _log_activity_commit(
     conn.commit()
 
 
+def _known_candidate_text(*values) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text and text.lower() != "unknown creator":
+            return text
+    return ""
+
+
 def _candidate_payload_from_item(item: dict, body: dict) -> dict:
+    channel_name = _known_candidate_text(
+        item.get("channel_name"),
+        item.get("display_name"),
+        item.get("ownerFullName"),
+        item.get("owner_name"),
+        item.get("handle"),
+        item.get("username"),
+        body.get("query"),
+    ) or "Unknown creator"
+    handle = _known_candidate_text(item.get("handle"), item.get("username"), item.get("ownerUsername"), channel_name)
     return {
         "platform": item.get("platform") or body.get("platform") or "",
-        "channel_name": item.get("channel_name") or "Unknown creator",
+        "channel_name": channel_name,
         "channel_url": item.get("channel_url") or "",
-        "handle": item.get("handle") or "",
+        "handle": handle,
         "country": body.get("market") or item.get("market") or "",
         "niche": body.get("niche") or "",
         "source_url": item.get("source_url") or "",
@@ -659,5 +677,3 @@ def _dossier_rollup(conn, kol_id: int) -> dict:
         "latest_risk_level": rep.get("risk_level") if rep else None,
         "latest_analyzed_at": rep.get("created_at") if rep else None,
     }
-
-

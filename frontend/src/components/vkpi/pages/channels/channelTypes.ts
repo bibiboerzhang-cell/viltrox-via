@@ -120,7 +120,10 @@ export interface RedditAssessmentResponse {
   };
   summary: {
     posts: number;
+    recordsTotal: number;
+    analysisWindow: string;
     comments: number;
+    recordComments: number;
     score: number;
     qualityCount: number;
     attentionCount: number;

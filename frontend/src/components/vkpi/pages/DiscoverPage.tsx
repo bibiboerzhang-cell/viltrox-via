@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { VkpiDashboardData, VkpiKolLookupResult, VkpiKolOption, VkpiKolProfile, VkpiPlatform, VkpiProjectRow } from '../vkpiTypes';
 import { KolPoolPanel } from '../panels/KolPoolPanel';
 import { Avatar } from '../shared/Avatar';
@@ -39,6 +39,31 @@ interface DiscoverPageProps {
 
 type DiscoverTab = 'search' | 'recommendations' | 'pool';
 type MessageTone = 'info' | 'warn' | 'error';
+type SearchStepStatus = 'pending' | 'active' | 'done' | 'error';
+
+interface SearchProgressStep {
+  key: string;
+  label: string;
+  detail: string;
+  status: SearchStepStatus;
+}
+
+interface SearchProgressState {
+  visible: boolean;
+  title: string;
+  percent: number;
+  steps: SearchProgressStep[];
+}
+
+interface SearchHistoryItem {
+  id: string;
+  query: string;
+  platform: string;
+  mode: string;
+  resultCount: number;
+  status: string;
+  searchedAt: string;
+}
 
 interface UiKol {
   id: string;
@@ -64,7 +89,7 @@ interface UiKol {
   projectCount: number;
   hasCollaboration: boolean;
   riskLabel: string;
-  sourceKind?: 'kol' | 'platform_search';
+  sourceKind?: 'kol' | 'platform_search' | 'kol_pool';
   raw: Record<string, unknown>;
 }
 
@@ -119,9 +144,95 @@ const dimensionLabels = [
   { key: 'authenticity', label: '真实', source: 'backend Module 1' },
 ];
 
+const searchStepDefinitions = [
+  { key: 'candidate', label: '推荐方向', detail: '先确认搜索意图' },
+  { key: 'source', label: '数据源', detail: '平台搜索 / 已有档案' },
+  { key: 'profile', label: '账号资料', detail: '头像、粉丝、链接' },
+  { key: 'posts', label: '最近内容', detail: '样本内容或 posts' },
+  { key: 'decision', label: '可分析', detail: '建档 / 抓取 / 产品适配' },
+];
+
+const SEARCH_HISTORY_STORAGE_KEY = 'vkpi.discover.searchHistory.v1';
+const MAX_SEARCH_HISTORY = 12;
+
+const idleSearchProgress: SearchProgressState = {
+  visible: false,
+  title: '',
+  percent: 0,
+  steps: searchStepDefinitions.map((step) => ({ ...step, status: 'pending' })),
+};
+
+function searchProgressState(
+  title: string,
+  percent: number,
+  activeKey: string,
+  doneKeys: string[] = [],
+  errorKey = '',
+): SearchProgressState {
+  const done = new Set(doneKeys);
+  return {
+    visible: true,
+    title,
+    percent: Math.max(0, Math.min(100, Math.round(percent))),
+    steps: searchStepDefinitions.map((step) => ({
+      ...step,
+      status: errorKey === step.key ? 'error' : done.has(step.key) ? 'done' : activeKey === step.key ? 'active' : 'pending',
+    })),
+  };
+}
+
 function platformInputValue(platformLabel: string): string {
   const normalized = String(platformLabel || '').toLowerCase();
   return creatorPlatformOptions.find((option) => option.value === normalized || option.label.toLowerCase() === normalized)?.value || normalized || 'other';
+}
+
+function loadSearchHistory(): SearchHistoryItem[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(SEARCH_HISTORY_STORAGE_KEY) || '[]');
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((item) => {
+      const row = objectValue(item);
+      const query = textValue(row.query, '');
+      if (!query) return null;
+      return {
+        id: textValue(row.id, `${textValue(row.platform, 'all')}:${query.toLowerCase()}`),
+        query,
+        platform: textValue(row.platform, 'all'),
+        mode: textValue(row.mode, 'search'),
+        resultCount: safeNumber(row.resultCount),
+        status: textValue(row.status, ''),
+        searchedAt: textValue(row.searchedAt, new Date().toISOString()),
+      };
+    }).filter(Boolean).slice(0, MAX_SEARCH_HISTORY) as SearchHistoryItem[];
+  } catch {
+    return [];
+  }
+}
+
+function saveSearchHistory(items: SearchHistoryItem[]) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(SEARCH_HISTORY_STORAGE_KEY, JSON.stringify(items.slice(0, MAX_SEARCH_HISTORY)));
+  } catch {
+    // Ignore private-mode storage failures; search itself should still work.
+  }
+}
+
+function formatHistoryTime(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '';
+  const deltaSeconds = Math.max(0, Math.floor((Date.now() - parsed.getTime()) / 1000));
+  if (deltaSeconds < 60) return '刚刚';
+  const minutes = Math.floor(deltaSeconds / 60);
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  return `${parsed.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })} ${parsed.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`;
+}
+
+function searchHistoryPlatformLabel(value: string): string {
+  return value === 'all' ? '全部平台' : platformLabels[platformFromRaw(value)] || value;
 }
 
 function normalizeHandle(value: unknown): string {
@@ -159,6 +270,27 @@ function scoreFromRaw(raw: Record<string, unknown>): number {
 function compactLabel(value: unknown, fallback = '-'): string {
   const parsed = safeNumber(value);
   return parsed ? compactCount(parsed) : fallback;
+}
+
+function usableCandidateText(...values: unknown[]): string {
+  for (const value of values) {
+    const text = textValue(value, '');
+    if (text && !/^unknown\s+creator$/i.test(text)) return text;
+  }
+  return '';
+}
+
+function candidateKey(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9@._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'candidate';
+}
+
+function queryHandleSeed(term: string): string {
+  const clean = term.trim();
+  if (!clean) return 'candidate';
+  const withoutProtocol = clean.replace(/^https?:\/\//i, '').replace(/^www\./i, '');
+  const urlParts = withoutProtocol.split(/[/?#]/).filter(Boolean);
+  const lastPart = urlParts[urlParts.length - 1] || withoutProtocol;
+  return lastPart.replace(/^@/, '') || clean.replace(/^@/, '');
 }
 
 function contactCountFromRaw(raw: Record<string, unknown>): number {
@@ -221,11 +353,15 @@ function kolOptionToUiKol(kol: VkpiKolOption): UiKol {
 }
 
 function rawToUiKol(raw: Record<string, unknown>): UiKol {
-  const score = scoreFromRaw(raw);
+  const historyMatch = objectValue(raw.historical_match || raw.history_match);
+  const historyCooperationCount = safeNumber(historyMatch.cooperation_count || raw.cooperation_count || raw.history_cooperation_count);
+  const sourceKind = textValue(raw.source_kind, '') === 'kol_pool' ? 'kol_pool' : undefined;
+  const score = Math.max(scoreFromRaw(raw), historyCooperationCount ? 70 : 0);
   const snapshotFollowers = raw.snapshot_follower_count || raw.follower_count || raw.followers || raw.subscriber_count;
   const snapshotContent = raw.snapshot_content_count || raw.content_count || raw.video_count || raw.posts_count;
   const platform = platformFromRaw(raw.platform);
-  const handle = normalizeHandle(raw.channel_name || raw.handle || raw.username || raw.owner_name || raw.media_name);
+  const handle = normalizeHandle(sourceKind === 'kol_pool' ? raw.handle || raw.channel_name : raw.channel_name || raw.handle || raw.username || raw.owner_name || raw.media_name);
+  const projectCount = safeNumber(raw.project_count || raw.campaign_count || raw.cooperation_count || historyCooperationCount);
   return {
     id: String(raw.id || raw.kol_id || raw.linked_main_kol_id || handle),
     name: textValue(raw.media_name || raw.creator_name || raw.display_name || raw.owner_name || handle, handle),
@@ -244,12 +380,15 @@ function rawToUiKol(raw: Record<string, unknown>): UiKol {
     country: textValue(raw.country || raw.country_code || raw.region, '-'),
     topic: topicFromRaw(raw),
     claimOwner: textValue(raw.claim_staff_name || raw.assigned_staff_name || raw.staff_name, ''),
-    status: textValue(raw.snapshot_scan_status || raw.scan_status || raw.sync_status || raw.contact_status, 'known_profile'),
+    status: sourceKind === 'kol_pool'
+      ? (historyCooperationCount ? `历史合作 ${historyCooperationCount} 条` : '历史档案 / 待深扫')
+      : textValue(raw.snapshot_scan_status || raw.scan_status || raw.sync_status || raw.contact_status, 'known_profile'),
     freshness: textValue(raw.snapshot_scanned_at || raw.scanned_at || raw.updated_at, '待刷新'),
     contactCount: contactCountFromRaw(raw),
-    projectCount: safeNumber(raw.project_count || raw.campaign_count),
-    hasCollaboration: safeNumber(raw.project_count || raw.campaign_count) > 0 || safeNumber(raw.revenue_cents) > 0,
-    riskLabel: textValue(raw.risk_level || raw.risk_label, ''),
+    projectCount,
+    hasCollaboration: projectCount > 0 || safeNumber(raw.revenue_cents) > 0,
+    riskLabel: textValue(raw.risk_level || raw.risk_label, safeNumber(historyMatch.risk_rows) ? '历史风险待核' : ''),
+    sourceKind,
     raw,
   };
 }
@@ -265,42 +404,211 @@ function lookupToUiKol(result: VkpiKolLookupResult): UiKol | null {
   return rawToUiKol(merged);
 }
 
+function candidatePostsFromRaw(raw: Record<string, unknown>): Array<Record<string, unknown>> {
+  const rows = [
+    ...arrayValue(raw.posts),
+    ...arrayValue(raw.items),
+    ...arrayValue(raw.videos),
+    ...arrayValue(raw.latest_posts),
+    ...arrayValue(raw.latestPosts),
+  ].map(objectValue);
+  const sampleTitle = textValue(raw.sample_title || raw.title || raw.caption || raw.text, '');
+  const sampleUrl = textValue(raw.source_url || raw.post_url || raw.url || raw.content_url, '');
+  const sampleViews = safeNumber(raw.views || raw.avg_views || raw.view_count || raw.play_count);
+  if (sampleTitle || sampleUrl) {
+    rows.unshift({
+      id: textValue(raw.source_url || raw.url || raw.candidate_id || raw.search_query, 'platform-sample'),
+      title: sampleTitle || '平台搜索样本内容',
+      post_url: sampleUrl,
+      url: sampleUrl,
+      views: sampleViews,
+      likes: safeNumber(raw.likes || raw.like_count),
+      comments: safeNumber(raw.comments || raw.comment_count),
+      published: textValue(raw.published || raw.searched_at, ''),
+      source_kind: 'platform_search_sample',
+    });
+  }
+  const seen = new Set<string>();
+  return rows
+    .map((row, index) => {
+      const url = textValue(row.source_url || row.post_url || row.url || row.content_url || row.permalink, '');
+      const title = textValue(row.sample_title || row.title || row.caption || row.text || url, '');
+      return {
+        ...row,
+        id: textValue(row.id || row.post_uid || row.shortCode || row.shortcode || url || title, `candidate-post-${index}`),
+        title,
+        post_url: url,
+        url,
+        views: safeNumber(row.views || row.avg_views || row.view_count || row.play_count),
+      };
+    })
+    .filter((row) => {
+      const key = textValue(row.post_url || row.url || row.title || row.id, '');
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 6);
+}
+
 function platformSearchItemToUiKol(raw: Record<string, unknown>, index: number, candidateId?: number): UiKol {
-  const handleSource = textValue(raw.channel_name || raw.handle || raw.username || raw.ownerUsername, `candidate-${index + 1}`);
+  const historyMatch = objectValue(raw.historical_match || raw.history_match);
+  const historyCooperationCount = safeNumber(historyMatch.cooperation_count || raw.history_cooperation_count);
+  const hasHistoryMatch = Boolean(historyMatch.matched || historyMatch.kol_pool_id || raw.history_kol_pool_id);
+  const searchQuery = usableCandidateText(raw.search_query);
+  const handleSource = usableCandidateText(
+    raw.handle,
+    raw.username,
+    raw.ownerUsername,
+    raw.channel_name,
+    raw.display_name,
+    raw.ownerFullName,
+    searchQuery,
+  ) || `candidate-${index + 1}`;
+  const displayName = usableCandidateText(
+    raw.channel_name,
+    raw.display_name,
+    raw.media_name,
+    raw.creator_name,
+    raw.ownerFullName,
+    raw.owner_name,
+    handleSource,
+    searchQuery,
+  ) || handleSource;
   const platform = platformFromRaw(raw.platform);
   const views = safeNumber(raw.views || raw.avg_views);
-  const score = Math.max(35, Math.min(78, Math.round(35 + Math.log10(Math.max(views, 1)) * 8)));
+  const baseScore = Math.max(35, Math.min(78, Math.round(35 + Math.log10(Math.max(views, 1)) * 8)));
+  const score = Math.max(baseScore, historyCooperationCount ? 76 : hasHistoryMatch ? 64 : 0);
+  const samplePosts = candidatePostsFromRaw(raw);
+  const contentCount = safeNumber(raw.content_count || raw.post_count || raw.posts_count) || samplePosts.length || 1;
+  const followerSource = raw.follower_count || raw.followers || historyMatch.followers;
   return {
-    id: `candidate:${candidateId || index}:${platform}:${handleSource}`,
-    name: handleSource,
+    id: `candidate:${candidateId || index}:${platform}:${candidateKey(handleSource)}`,
+    name: displayName,
     handle: normalizeHandle(handleSource),
     platform,
-    avatar: textValue(raw.avatar_url || raw.profile_pic_url, ''),
-    profileUrl: textValue(raw.channel_url || raw.profile_url || raw.url, ''),
+    avatar: textValue(
+      raw.avatar_url ||
+        raw.profile_pic_url ||
+        raw.profilePicUrl ||
+        raw.profilePictureUrl ||
+        raw.ownerProfilePicUrl ||
+        raw.thumbnail_url ||
+        raw.thumbnail ||
+	        raw.thumbnailUrl ||
+	        raw.image ||
+	        raw.picture ||
+	        historyMatch.avatar_url,
+	      '',
+	    ),
+    profileUrl: textValue(raw.channel_url || raw.profile_url || historyMatch.profile_url || raw.url, ''),
     contactEmail: '',
     contactPhone: '',
-    followerCount: safeNumber(raw.follower_count || raw.followers),
-    followerLabel: compactLabel(raw.follower_count || raw.followers),
-    contentCount: safeNumber(raw.content_count || raw.post_count || raw.posts_count) || 1,
-    contentCountLabel: compactLabel(raw.content_count || raw.post_count || raw.posts_count, '1'),
+    followerCount: safeNumber(followerSource),
+    followerLabel: compactLabel(followerSource),
+    contentCount,
+    contentCountLabel: compactCount(contentCount),
     score,
     grade: scoreToGrade(score),
     country: textValue(raw.market || raw.country, '-'),
     topic: textValue(raw.sample_title || raw.search_query, '平台实时搜索结果'),
     claimOwner: '',
-    status: 'platform_search_result',
+    status: historyCooperationCount ? `已合作历史 ${historyCooperationCount} 条 / 可复用` : hasHistoryMatch ? '历史档案 / 未深扫 / 可分析' : '候选 / 未深扫 / 可分析',
     freshness: textValue(raw.published || raw.searched_at, '刚搜索'),
     contactCount: 0,
-    projectCount: 0,
-    hasCollaboration: false,
-    riskLabel: '',
+    projectCount: historyCooperationCount,
+    hasCollaboration: historyCooperationCount > 0,
+    riskLabel: safeNumber(historyMatch.risk_rows) ? '历史风险待核' : '',
     sourceKind: 'platform_search',
     raw: { ...raw, candidate_id: candidateId, source_kind: 'platform_search' },
   };
 }
 
+function instantCandidateToUiKol(term: string, selectedPlatform: string): UiKol {
+  const seed = queryHandleSeed(term);
+  const platform = platformFromRaw(selectedPlatform === 'all' ? '' : selectedPlatform);
+  const handle = normalizeHandle(seed);
+  return {
+    id: `candidate:instant:${platform}:${candidateKey(seed)}`,
+    name: term.trim() || handle,
+    handle,
+    platform,
+    avatar: '',
+    profileUrl: '',
+    contactEmail: '',
+    contactPhone: '',
+    followerCount: 0,
+    followerLabel: '读取中',
+    contentCount: 0,
+    contentCountLabel: '读取中',
+    score: 0,
+    grade: '-',
+    country: '-',
+    topic: '搜索候选 / 等待平台返回',
+    claimOwner: '',
+    status: '候选生成中',
+    freshness: '刚开始',
+    contactCount: 0,
+    projectCount: 0,
+    hasCollaboration: false,
+    riskLabel: '',
+    sourceKind: 'platform_search',
+    raw: { source_kind: 'instant_candidate', search_query: term.trim(), platform: selectedPlatform },
+  };
+}
+
 function isCandidateKol(kol?: UiKol) {
-  return Boolean(kol?.sourceKind === 'platform_search' || String(kol?.id || '').startsWith('candidate:'));
+  return Boolean(kol?.sourceKind === 'platform_search' || kol?.sourceKind === 'kol_pool' || String(kol?.id || '').startsWith('candidate:') || String(kol?.id || '').startsWith('pool:'));
+}
+
+function searchKolMergeKey(kol: UiKol): string {
+  const handle = normalizeHandle(kol.handle || kol.profileUrl || kol.name);
+  if (handle) return `${platformInputValue(kol.platform)}:${handle}`;
+  return `${platformInputValue(kol.platform)}:${candidateKey(kol.id || kol.name)}`;
+}
+
+function mergeSearchKols(...groups: UiKol[][]): UiKol[] {
+  const merged = new Map<string, UiKol>();
+  groups.flat().forEach((kol) => {
+    const key = searchKolMergeKey(kol);
+    const current = merged.get(key);
+    if (!current) {
+      merged.set(key, kol);
+      return;
+    }
+    const raw = { ...current.raw, ...kol.raw };
+    const projectCount = Math.max(current.projectCount || 0, kol.projectCount || 0);
+    const next: UiKol = {
+      ...current,
+      ...kol,
+      id: kol.sourceKind === 'platform_search' ? kol.id : current.id,
+      avatar: kol.avatar || current.avatar,
+      profileUrl: kol.profileUrl || current.profileUrl,
+      contactEmail: kol.contactEmail || current.contactEmail,
+      contactPhone: kol.contactPhone || current.contactPhone,
+      followerCount: Math.max(current.followerCount || 0, kol.followerCount || 0),
+      followerLabel: kol.followerCount ? kol.followerLabel : current.followerLabel,
+      contentCount: Math.max(current.contentCount || 0, kol.contentCount || 0),
+      contentCountLabel: kol.contentCount ? kol.contentCountLabel : current.contentCountLabel,
+      score: Math.max(current.score || 0, kol.score || 0),
+      projectCount,
+      hasCollaboration: current.hasCollaboration || kol.hasCollaboration || projectCount > 0,
+      riskLabel: kol.riskLabel || current.riskLabel,
+      status: projectCount ? `已合作历史 ${projectCount} 条 / 可复用` : (kol.status || current.status),
+      sourceKind: kol.sourceKind === 'platform_search' ? kol.sourceKind : current.sourceKind,
+      raw,
+    };
+    merged.set(key, next);
+  });
+  return Array.from(merged.values()).sort((a, b) => {
+    const collabDelta = Number(b.hasCollaboration) - Number(a.hasCollaboration);
+    if (collabDelta) return collabDelta;
+    const sourceDelta = Number(b.sourceKind === 'kol_pool') - Number(a.sourceKind === 'kol_pool');
+    if (sourceDelta) return sourceDelta;
+    const scoreDelta = (b.score || 0) - (a.score || 0);
+    if (scoreDelta) return scoreDelta;
+    return (b.followerCount || 0) - (a.followerCount || 0);
+  });
 }
 
 function formatAssessmentMethod(method?: string) {
@@ -321,6 +629,24 @@ function cleanProductLabel(value: unknown) {
   label = label.replace(/^viltrox\s+/i, '').replace(/\s+/g, ' ').trim();
   label = label.replace(/\s+(FE|E|Z|X|L|RF)$/i, ' ($1)');
   return label;
+}
+
+function searchIntentTags(query: unknown): Array<{ label: string; detail: string }> {
+  const raw = textValue(query, '').trim();
+  if (!raw) return [];
+  const lower = raw.toLowerCase();
+  const tags: Array<{ label: string; detail: string }> = [];
+  const add = (label: string, detail: string) => {
+    if (!tags.some((item) => item.label === label)) tags.push({ label, detail });
+  };
+  if (/35\s*mm|35mm|evo|f1[.\s]?8|1[.\s]?8/.test(lower)) add('35mm EVO / F1.8', '镜头样片、街拍、人像、测评优先');
+  if (/街拍|street/.test(raw) || lower.includes('street')) add('街拍内容', '看真实外拍频率和画面风格');
+  if (/测评|评测|review|test/.test(lower)) add('测评账号', '优先看近期评测样片和器材可信度');
+  if (/youtube|视频|video|拍摄|creator/.test(lower)) add('视频创作者', '重点看近期内容、播放和频道匹配');
+  if (/人像|portrait/.test(lower)) add('人像方向', '检查肤色、人像样片和镜头表达');
+  if (/旅行|travel|vlog/.test(lower)) add('旅行 / Vlog', '检查轻量化设备和连续更新能力');
+  if (!tags.length) add('搜索关键词', raw.length > 28 ? `${raw.slice(0, 28)}...` : raw);
+  return tags.slice(0, 5);
 }
 
 function filterKols(kols: UiKol[], filters: { platform: string; level: string; grade: string; collab: string; risk: string; freshness: string }, query: string): UiKol[] {
@@ -421,11 +747,12 @@ function profileProjects(profile: VkpiKolProfile | null, data: VkpiDashboardData
   return data.projects.filter((project) => [project.kolHandle, project.kolName].join(' ').toLowerCase().includes(handle)).slice(0, 5);
 }
 
-function recentPosts(profile: VkpiKolProfile | null, fallbackPosts: Array<Record<string, unknown>>) {
+function recentPosts(profile: VkpiKolProfile | null, fallbackPosts: Array<Record<string, unknown>>, selected?: UiKol) {
   const rows = [
     ...arrayValue(profile?.posts).map(objectValue),
     ...arrayValue(profile?.content_posts).map(objectValue),
     ...fallbackPosts,
+    ...(selected && isCandidateKol(selected) ? candidatePostsFromRaw(selected.raw) : []),
   ];
   return rows.filter((row, index) => row.id || index < 6).slice(0, 6);
 }
@@ -569,6 +896,7 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
   const [scanAccount, setScanAccount] = useState(true);
   const [filters, setFilters] = useState({ platform: 'all', level: 'all', grade: 'all', collab: 'all', risk: 'all', freshness: 'all' });
   const [searchKols, setSearchKols] = useState<UiKol[]>([]);
+  const [activeSearchQuery, setActiveSearchQuery] = useState('');
   const [selectedKolId, setSelectedKolId] = useState('');
   const [lookupResult, setLookupResult] = useState<VkpiKolLookupResult | null>(null);
   const [selectedProfile, setSelectedProfile] = useState<VkpiKolProfile | null>(null);
@@ -582,6 +910,8 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
   const [profileLoading, setProfileLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [scanBusy, setScanBusy] = useState(false);
+  const [searchProgress, setSearchProgress] = useState<SearchProgressState>(idleSearchProgress);
+  const [searchHistory, setSearchHistory] = useState<SearchHistoryItem[]>(loadSearchHistory);
   const [message, setMessage] = useState('');
   const [messageTone, setMessageTone] = useState<MessageTone>('info');
   const [contactModalOpen, setContactModalOpen] = useState(false);
@@ -592,6 +922,7 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
   const [projectProductSku, setProjectProductSku] = useState('');
   const [projectNote, setProjectNote] = useState('');
   const [internalNote, setInternalNote] = useState('');
+  const searchRunRef = useRef(0);
 
   const combinedKols = useMemo(() => {
     const map = new Map<string, UiKol>();
@@ -601,17 +932,22 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
     return Array.from(map.values());
   }, [baseKols, searchKols]);
 
-  const visibleKols = useMemo(() => filterKols(combinedKols, filters, localQuery), [combinedKols, filters, localQuery]);
-  const selectedKol = useMemo(() => combinedKols.find((kol) => kol.id === selectedKolId) || visibleKols[0] || combinedKols[0], [combinedKols, selectedKolId, visibleKols]);
+  const searchOnly = Boolean(activeSearchQuery || searchProgress.visible);
+  const displayedKols = useMemo(() => searchOnly ? searchKols : combinedKols, [combinedKols, searchKols, searchOnly]);
+  const visibleKols = useMemo(() => filterKols(displayedKols, filters, localQuery), [displayedKols, filters, localQuery]);
+  const selectedKol = useMemo(
+    () => displayedKols.find((kol) => kol.id === selectedKolId) || visibleKols[0] || (searchOnly ? undefined : combinedKols[0]),
+    [combinedKols, displayedKols, searchOnly, selectedKolId, visibleKols],
+  );
   const selectedProjects = useMemo(() => profileProjects(selectedProfile, data, selectedKol), [data, selectedKol, selectedProfile]);
   const contacts = useMemo(() => selectedContacts.length ? selectedContacts : contactsFromProfile(selectedProfile, selectedKol), [selectedContacts, selectedProfile, selectedKol]);
   const dimensions = useMemo(() => dimensionsFromProfile(selectedProfile, selectedKol, selectedAssessment), [selectedAssessment, selectedProfile, selectedKol]);
-  const posts = useMemo(() => recentPosts(selectedProfile, profilePosts), [profilePosts, selectedProfile]);
+  const posts = useMemo(() => recentPosts(selectedProfile, profilePosts, selectedKol), [profilePosts, selectedKol, selectedProfile]);
   const localCandidateRecommendations = useMemo(() => visibleKols.filter((kol) => kol.score >= 65 || kol.contactCount || kol.hasCollaboration).slice(0, 8), [visibleKols]);
 
   useEffect(() => {
-    if (!selectedKolId && combinedKols[0]?.id) setSelectedKolId(combinedKols[0].id);
-  }, [combinedKols, selectedKolId]);
+    if (!selectedKolId && visibleKols[0]?.id) setSelectedKolId(visibleKols[0].id);
+  }, [selectedKolId, visibleKols]);
 
   useEffect(() => {
     if (!selectedKol?.id || !apiToken) {
@@ -664,25 +1000,38 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
     setMessageTone(tone);
   };
 
-  const loadKols = async (searchText: string, platformFilter = filters.platform) => {
+  const revealSearchKols = async (items: UiKol[], runId: number) => {
+    if (!items.length || searchRunRef.current !== runId) return;
+    setSearchKols([items[0]]);
+    setSelectedKolId(items[0].id);
+    for (let index = 1; index < items.length; index += 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, index < 8 ? 80 : 45));
+      if (searchRunRef.current !== runId) return;
+      setSearchKols(items.slice(0, index + 1));
+    }
+  };
+
+  const loadKols = async (searchText: string, platformFilter = filters.platform): Promise<number> => {
     if (!apiToken) {
       setNotice('当前未登录，列表使用已加载的本地真实数据。', 'warn');
-      return;
+      return 0;
     }
     const result = await listMarketingKols(apiToken, {
       search: searchText || undefined,
       platform: platformFilter !== 'all' ? platformFilter : undefined,
       limit: 100,
     });
-    setSearchKols((result.kols || []).map(rawToUiKol));
+    const rows = (result.kols || []).map(rawToUiKol);
+    setSearchKols(rows);
+    return rows.length;
   };
 
-  const runNaturalSearch = async (searchText: string, platformFilter = filters.platform) => {
+  const runNaturalSearch = async (searchText: string, platformFilter = filters.platform): Promise<number> => {
     const clean = searchText.trim();
     if (!apiToken) {
-      await loadKols(clean, platformFilter);
+      const count = await loadKols(clean, platformFilter);
       setLocalQuery(clean);
-      return;
+      return count;
     }
     const result = await searchMarketingKolsNatural(apiToken, {
       query: clean,
@@ -703,6 +1052,7 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
     setNotice(nextKols.length
       ? `已用真实规则解析搜索命中 ${nextKols.length} 个红人${parsedBits.length ? `：${parsedBits.join(' · ')}` : ''}。`
       : '规则解析搜索没有命中真实红人；没有伪造结果，可放宽关键词或先补候选池。', nextKols.length ? 'info' : 'warn');
+    return nextKols.length;
   };
 
   const loadSmartRecommendations = async (silent = false) => {
@@ -772,34 +1122,113 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
     }
   };
 
-  const handleSearch = async (event?: React.FormEvent) => {
-    event?.preventDefault();
-    const term = query.trim();
+  const recordSearchHistory = (entry: Omit<SearchHistoryItem, 'id' | 'searchedAt'>) => {
+    const cleanQuery = entry.query.trim();
+    if (!cleanQuery) return;
+    const normalizedPlatform = entry.platform || 'all';
+    const nextItem: SearchHistoryItem = {
+      ...entry,
+      id: `${normalizedPlatform}:${cleanQuery.toLowerCase()}`,
+      query: cleanQuery,
+      platform: normalizedPlatform,
+      searchedAt: new Date().toISOString(),
+    };
+    setSearchHistory((previous) => {
+      const next = [nextItem, ...previous.filter((item) => item.id !== nextItem.id)].slice(0, MAX_SEARCH_HISTORY);
+      saveSearchHistory(next);
+      return next;
+    });
+  };
+
+  const runSearch = async (termInput = query, platformInput = platform) => {
+    const term = termInput.trim();
+    const selectedPlatform = platformInput || platform;
+    setQuery(term);
+    setPlatform(selectedPlatform);
     if (!term) {
+      setActiveSearchQuery('');
+      setSearchProgress(idleSearchProgress);
       await loadKols('', filters.platform);
       setNotice('已刷新红人列表。');
       return;
     }
+    const looksLikeHandle = term.startsWith('@') || term.includes('instagram.com') || term.includes('youtube.com') || term.includes('tiktok.com') || term.includes('/');
+    const shouldUsePlatformSearch = !looksLikeHandle && selectedPlatform !== 'all' && scanAccount && Boolean(apiToken);
+    const instantCandidate = shouldUsePlatformSearch ? null : instantCandidateToUiKol(term, selectedPlatform);
+    const runId = searchRunRef.current + 1;
+    searchRunRef.current = runId;
+    setActiveTab('search');
+    setActiveSearchQuery(term);
+    setLocalQuery('');
+    if (instantCandidate) {
+      setSearchKols((previous) => [instantCandidate, ...previous.filter((kol) => kol.id !== instantCandidate.id)]);
+      setSelectedKolId(instantCandidate.id);
+      setSearchProgress(searchProgressState('已生成账号候选，正在进入真实数据源。', 18, 'source', ['candidate']));
+    } else {
+      setSearchKols([]);
+      setSelectedKolId('');
+      setSearchProgress(searchProgressState(`正在按「${term}」推荐候选账号。`, 24, 'source', ['candidate']));
+    }
     setBusy(true);
     setNotice('');
     try {
-      const looksLikeHandle = term.startsWith('@') || term.includes('instagram.com') || term.includes('youtube.com') || term.includes('tiktok.com') || term.includes('/');
-      const shouldUsePlatformSearch = !looksLikeHandle && platform !== 'all' && scanAccount && apiToken;
-      if (shouldUsePlatformSearch) {
-        setNotice('正在调用平台真实搜索；不会用本地库伪造结果。');
-        const result = await searchPlatformKols(apiToken, { query: term, platform, maxResults: 25 });
+      if (shouldUsePlatformSearch && apiToken) {
+        let warmKols: UiKol[] = [];
+        setSearchProgress(searchProgressState('先检索已有 KOL 和 1012 历史合作池。', 30, 'source', ['candidate']));
+        try {
+          const warmResult = await searchMarketingKolsNatural(apiToken, {
+            query: term,
+            platform: selectedPlatform,
+            limit: 30,
+          });
+          warmKols = (warmResult.items || []).map(rawToUiKol);
+          if (warmKols.length && searchRunRef.current === runId) {
+            setSearchKols(warmKols);
+            setSelectedKolId(warmKols[0].id);
+            setNotice(`先命中 ${warmKols.length} 个已有/历史档案；平台实时搜索继续补头像、最近内容和新候选。`);
+          }
+        } catch (error) {
+          console.warn('warm natural search failed', error);
+        }
+        setSearchProgress(searchProgressState(
+          warmKols.length ? '已有档案已先显示；平台实时搜索继续补新候选。' : '平台实时搜索中；结果会逐条变成候选卡片。',
+          warmKols.length ? 48 : 38,
+          'source',
+          ['candidate'],
+        ));
+        if (!warmKols.length) setNotice('正在调用平台真实搜索；不会把输入文字伪造成账号。');
+        const result = await searchPlatformKols(apiToken, { query: term, platform: selectedPlatform, maxResults: 25 });
+        setSearchProgress(searchProgressState('平台已返回，正在整理头像、账号资料和样本内容。', 68, 'profile', ['candidate', 'source']));
         const candidateIds = Array.isArray(result.candidate_ids) ? result.candidate_ids : [];
         const nextKols = (result.items || []).map((item, index) => platformSearchItemToUiKol(objectValue(item), index, candidateIds[index]));
-        setSearchKols(nextKols);
+        const mergedKols = mergeSearchKols(warmKols, nextKols);
+        const hasCandidatePosts = mergedKols.some((kol) => candidatePostsFromRaw(kol.raw).length > 0);
         setLocalQuery('');
-        if (nextKols[0]?.id) setSelectedKolId(nextKols[0].id);
-        const message = result.message || (nextKols.length
-          ? `平台真实搜索返回 ${nextKols.length} 条候选；这些还不是 KOL 主档，需要点具体账号后建档/深度抓取。`
-          : '平台真实搜索没有返回候选；未用本地库伪造结果。');
-        setNotice(message, nextKols.length ? 'info' : 'warn');
+        if (!mergedKols.length) {
+          setSearchKols([]);
+          setSelectedKolId('');
+          setSearchProgress(searchProgressState('平台没有返回候选；没有生成假账号，可换关键词或平台重试。', 100, 'decision', ['candidate', 'source', 'profile', 'decision']));
+          setNotice(result.message || '平台真实搜索和历史池都没有返回候选；未用本地库伪造结果。', 'warn');
+          recordSearchHistory({ query: term, platform: selectedPlatform, mode: 'platform_search', resultCount: 0, status: '无候选' });
+          return;
+        }
+        setSearchProgress(searchProgressState('平台已返回，正在合并历史档案并逐条显示推荐候选。', hasCandidatePosts ? 84 : 76, 'posts', ['candidate', 'source', 'profile']));
+        await revealSearchKols(mergedKols, runId);
+        if (searchRunRef.current !== runId) return;
+        setSearchProgress(searchProgressState(
+          hasCandidatePosts ? '已回填候选和最近内容；可以选择账号后建档或深扫。' : '已返回候选；最近内容需要建档抓取后补齐。',
+          hasCandidatePosts ? 100 : 82,
+          hasCandidatePosts ? 'decision' : 'posts',
+          hasCandidatePosts ? ['candidate', 'source', 'profile', 'posts', 'decision'] : ['candidate', 'source', 'profile'],
+        ));
+        const historyCount = warmKols.length;
+        const message = result.message || `已合并 ${historyCount} 个历史/已有档案 + ${nextKols.length} 个平台实时候选；历史合作会优先标出。`;
+        setNotice(message, mergedKols.length ? 'info' : 'warn');
+        recordSearchHistory({ query: term, platform: selectedPlatform, mode: 'platform_search', resultCount: mergedKols.length, status: hasCandidatePosts ? '含最近内容' : (historyCount ? '含历史档案' : '候选已返回') });
       } else if (looksLikeHandle && onLookupKol) {
+        setSearchProgress(searchProgressState('正在查重或建档账号，先保留即时候选。', 45, 'profile', ['candidate', 'source']));
         const result = await onLookupKol({
-          platform,
+          platform: selectedPlatform,
           handleOrUrl: term,
           createIfMissing,
           scanAccount: false,
@@ -815,10 +1244,11 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
         if (scanAccount && kolId && onScanKolAccount) {
           setBusy(false);
           setScanBusy(true);
+          setSearchProgress(searchProgressState('账号已建档，正在抓取最近内容。', 76, 'posts', ['candidate', 'source', 'profile']));
           setNotice('查重完成，正在用真实接口抓取账号数据。');
           await onScanKolAccount(kolId, 24);
           if (onLookupKol) {
-            const refreshed = await onLookupKol({ platform, handleOrUrl: term, createIfMissing: false, scanAccount: false, maxPosts: 24 });
+            const refreshed = await onLookupKol({ platform: selectedPlatform, handleOrUrl: term, createIfMissing: false, scanAccount: false, maxPosts: 24 });
             setLookupResult(refreshed || result);
             const refreshedKol = refreshed ? lookupToUiKol(refreshed) : null;
             if (refreshedKol) {
@@ -826,19 +1256,49 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
               setSelectedKolId(refreshedKol.id);
             }
           }
+          setSearchProgress(searchProgressState('账号抓取完成；右侧画像和最近内容会刷新。', 100, 'decision', ['candidate', 'source', 'profile', 'posts', 'decision']));
           setNotice('账号抓取完成；右侧画像会读取最新 profile / posts。');
+          recordSearchHistory({ query: term, platform: selectedPlatform, mode: 'account_lookup', resultCount: 1, status: '已抓取' });
         } else {
+          setSearchProgress(searchProgressState(
+            found ? '已命中已有档案；可继续抓取或加入项目。' : '查重完成，但没有可展示档案。',
+            found ? 100 : 72,
+            found ? 'decision' : 'profile',
+            found ? ['candidate', 'source', 'profile', 'decision'] : ['candidate', 'source'],
+          ));
           setNotice(found ? '查重完成，已打开红人画像。' : '查重完成，但没有返回可展示的红人档案。', found ? 'info' : 'warn');
+          recordSearchHistory({ query: term, platform: selectedPlatform, mode: 'account_lookup', resultCount: found ? 1 : 0, status: found ? '已命中' : '未命中' });
         }
       } else {
-        await runNaturalSearch(term, filters.platform);
+        setSearchProgress(searchProgressState('正在检索已有 KOL 档案。', 46, 'source', ['candidate']));
+        const count = await runNaturalSearch(term, filters.platform);
+        setSearchProgress(searchProgressState('已有档案检索完成；未命中时不会伪造数据。', 100, 'decision', ['candidate', 'source', 'profile', 'decision']));
+        recordSearchHistory({ query: term, platform: filters.platform, mode: 'local_rules', resultCount: count, status: count ? '已有档案' : '未命中' });
       }
     } catch (error) {
+      setSearchProgress(searchProgressState(
+        instantCandidate ? '搜索失败；已保留账号候选，方便换词重试。' : '搜索失败；没有生成假账号，换关键词或平台重试。',
+        100,
+        'source',
+        ['candidate'],
+        'source',
+      ));
       setNotice(error instanceof Error ? error.message : '红人搜索失败', 'error');
+      recordSearchHistory({ query: term, platform: selectedPlatform, mode: shouldUsePlatformSearch ? 'platform_search' : looksLikeHandle ? 'account_lookup' : 'local_rules', resultCount: 0, status: '失败' });
     } finally {
       setBusy(false);
       setScanBusy(false);
     }
+  };
+
+  const handleSearch = async (event?: React.FormEvent) => {
+    event?.preventDefault();
+    await runSearch();
+  };
+
+  const rerunHistorySearch = (item: SearchHistoryItem) => {
+    setActiveTab('search');
+    void runSearch(item.query, item.platform);
   };
 
   const handleClaim = async () => {
@@ -967,15 +1427,15 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
         <div className="vkpi-discover-intent-chips" aria-label="数据搜索方向">
           <span className="vkpi-discover-intent-chips__label">数据方向</span>
           {directionChips.map((chip) => (
-            <button
-              key={chip.label}
-              type="button"
-              title={chip.source}
-              onClick={() => {
-                setQuery(chip.query);
-                void runNaturalSearch(chip.query, filters.platform);
-              }}
-            >
+	            <button
+	              key={chip.label}
+	              type="button"
+	              title={chip.source}
+	              onClick={() => {
+	                setQuery(chip.query);
+	                void runSearch(chip.query, platform);
+	              }}
+	            >
               {chip.label}
             </button>
           ))}
@@ -1004,9 +1464,22 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
           <div className="vkpi-discover-command__actions">
             <label><input type="checkbox" checked={createIfMissing} onChange={(event) => setCreateIfMissing(event.target.checked)} /> 自动建档</label>
             <label><input type="checkbox" checked={scanAccount} onChange={(event) => setScanAccount(event.target.checked)} /> 抓取账号</label>
-            <button className="vkpi-discover-btn" type="button" onClick={() => void loadKols('', filters.platform)} disabled={!apiToken || busy}>刷新</button>
+	            <button
+	              className="vkpi-discover-btn"
+	              type="button"
+	              onClick={() => {
+	                setActiveSearchQuery('');
+	                setSearchProgress(idleSearchProgress);
+	                void loadKols('', filters.platform);
+	              }}
+	              disabled={!apiToken || busy}
+	            >
+	              刷新
+	            </button>
           </div>
         </section>
+
+        <SearchProgress progress={searchProgress} />
 
         {activeTab === 'pool' ? (
           <KolPoolPanel
@@ -1042,10 +1515,13 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
                   setLocalQuery={setLocalQuery}
                   filters={filters}
                   setFilters={setFilters}
-                  visibleKols={visibleKols}
-                  selectedKolId={selectedKol?.id || ''}
-                  onSelect={setSelectedKolId}
-                />
+	                  visibleKols={visibleKols}
+	                  selectedKolId={selectedKol?.id || ''}
+	                  searchProgress={searchProgress}
+	                  searchHistory={searchHistory}
+	                  onSelect={setSelectedKolId}
+	                  onHistorySelect={rerunHistorySearch}
+	                />
               ) : (
                 <RecommendationPanel
                   recommendations={smartRecommendations}
@@ -1141,6 +1617,27 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
   );
 }
 
+function SearchProgress({ progress }: { progress: SearchProgressState }) {
+  if (!progress.visible) return null;
+  return (
+    <section className="vkpi-discover-search-progress" aria-live="polite">
+      <div className="vkpi-discover-search-progress__head">
+        <strong>{progress.title}</strong>
+        <span>{progress.percent}%</span>
+      </div>
+      <div className="vkpi-discover-search-progress__bar"><i style={{ width: `${progress.percent}%` }} /></div>
+      <div className="vkpi-discover-search-progress__steps">
+        {progress.steps.map((step) => (
+          <span className={`is-${step.status}`} key={step.key} title={step.detail}>
+            <b>{step.label}</b>
+            <em>{step.detail}</em>
+          </span>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function SearchPanel({
   localQuery,
   setLocalQuery,
@@ -1148,7 +1645,10 @@ function SearchPanel({
   setFilters,
   visibleKols,
   selectedKolId,
+  searchProgress,
+  searchHistory,
   onSelect,
+  onHistorySelect,
 }: {
   localQuery: string;
   setLocalQuery: (value: string) => void;
@@ -1156,17 +1656,37 @@ function SearchPanel({
   setFilters: React.Dispatch<React.SetStateAction<{ platform: string; level: string; grade: string; collab: string; risk: string; freshness: string }>>;
   visibleKols: UiKol[];
   selectedKolId: string;
+  searchProgress: SearchProgressState;
+  searchHistory: SearchHistoryItem[];
   onSelect: (kolId: string) => void;
+  onHistorySelect: (item: SearchHistoryItem) => void;
 }) {
   const setFilter = (key: keyof typeof filters, value: string) => setFilters((previous) => ({ ...previous, [key]: value }));
+  const runningSearch = searchProgress.visible && searchProgress.percent < 100;
   return (
     <section className="vkpi-discover-panel">
       <div className="vkpi-discover-panel__header">
         <div>
           <h3>主动搜索结果</h3>
-          <span>{visibleKols.length} 个档案/候选；平台搜索结果需建档后才有完整画像</span>
+          <span>{runningSearch ? '平台搜索运行中，候选会逐条出现。' : `${visibleKols.length} 个档案/候选；平台搜索结果需建档后才有完整画像`}</span>
         </div>
       </div>
+      {searchHistory.length ? (
+        <div className="vkpi-discover-search-history" aria-label="搜索历史">
+          <div className="vkpi-discover-search-history__head">
+            <strong>搜索历史</strong>
+            <span>点一下复搜</span>
+          </div>
+          <div className="vkpi-discover-search-history__items">
+            {searchHistory.slice(0, 6).map((item) => (
+              <button key={item.id} type="button" onClick={() => onHistorySelect(item)} title={item.query}>
+                <b>{item.query}</b>
+                <span>{searchHistoryPlatformLabel(item.platform)} · {item.resultCount} 条 · {formatHistoryTime(item.searchedAt)}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
       <div className="vkpi-discover-searchbox">
         <input value={localQuery} onChange={(event) => setLocalQuery(event.target.value)} placeholder="在当前结果内筛选 handle / 国家 / 主题" />
         <div className="vkpi-discover-quick">
@@ -1208,7 +1728,7 @@ function SearchPanel({
       <div className="vkpi-discover-list">
         {visibleKols.length ? visibleKols.map((kol) => (
           <KolCard key={kol.id} kol={kol} active={selectedKolId === kol.id} onClick={() => onSelect(kol.id)} />
-        )) : <div className="vkpi-discover-empty">当前筛选下没有红人。请用顶部搜索从真实接口加载，或切到候选池。</div>}
+        )) : <div className="vkpi-discover-empty">{runningSearch ? '正在从平台推荐候选；返回后会逐条出现在这里。' : '当前筛选下没有红人。请用顶部搜索从真实接口加载，或切到候选池。'}</div>}
       </div>
     </section>
   );
@@ -1292,9 +1812,9 @@ function KolCard({ kol, active, onClick }: { kol: UiKol; active: boolean; onClic
         <strong>{kol.handle}</strong>
         <span>{platformLabels[kol.platform] || kol.platform} · {kol.followerLabel} 粉 · {kol.country} · {kol.topic}</span>
         <div>
-          <em>{level}</em>
-          {isCandidateKol(kol) ? <em className="is-good">平台搜索</em> : null}
-          <em>{kol.status}</em>
+	          <em>{level}</em>
+	          {kol.sourceKind === 'kol_pool' ? <em className="is-purple">历史档案</em> : isCandidateKol(kol) ? <em className="is-good">平台搜索</em> : null}
+	          <em>{kol.status}</em>
           {kol.hasCollaboration ? <em className="is-good">合作过</em> : <em>未合作</em>}
           {kol.contactCount ? <em className="is-purple">联系方式 {kol.contactCount}</em> : null}
           {kol.riskLabel ? <em className="is-warn">{kol.riskLabel}</em> : null}
@@ -1361,10 +1881,22 @@ function ProfilePanel({
   const summary = selectedProfile?.summary || {};
   const assessmentScore = safeNumber(selectedAssessment?.score) || selectedKol.score;
   const assessmentGrade = textValue(selectedAssessment?.grade, selectedKol.grade);
-  const decision = textValue(selectedAssessment?.recommended_action || summary.recommended_action, assessmentScore >= 80 ? '优先合作；建议补齐产品适配和联系方式证据。' : assessmentScore ? '可观察；先补齐近期内容与联系方式。' : '待评估；请先运行真实抓取。');
-  const productFitScore = safeNumber(summary.product_fit || selectedKol.raw.product_fit);
   const candidateOnly = isCandidateKol(selectedKol);
-  const profileStatus = candidateOnly ? '平台实时搜索候选' : profileLoading ? '画像加载中' : selectedProfile ? '真实 profile 已加载' : lookupResult ? '查重结果已加载' : '列表档案';
+  const historicalMatch = objectValue(selectedKol.raw.historical_match || selectedKol.raw.history_match);
+  const historicalCooperationCount = safeNumber(historicalMatch.cooperation_count || selectedKol.raw.cooperation_count || selectedKol.raw.history_cooperation_count);
+  const historicalRecentCooperations = arrayValue(historicalMatch.recent_cooperations).map(objectValue);
+  const candidateIntentTags = searchIntentTags(selectedKol.raw.search_query || selectedKol.topic || selectedKol.raw.sample_title);
+  const candidateFocus = candidateIntentTags.length ? candidateIntentTags.map((item) => item.label).join(' / ') : '近期内容';
+  const candidateSampleCount = candidatePostsFromRaw(selectedKol.raw).length;
+  const decision = candidateOnly
+    ? (historicalCooperationCount
+      ? `历史合作命中 ${historicalCooperationCount} 条；优先核对最近内容、负责人和产品线后复用。`
+      : candidateSampleCount
+      ? `可观察；平台已返回样本内容，先围绕 ${candidateFocus} 建档抓取。`
+      : `待抓取；这是平台候选，建议先抓取账号再评估 ${candidateFocus}。`)
+    : textValue(selectedAssessment?.recommended_action || summary.recommended_action, assessmentScore >= 80 ? '优先合作；建议补齐产品适配和联系方式证据。' : assessmentScore ? '可观察；先补齐近期内容与联系方式。' : '待评估；请先运行真实抓取。');
+  const productFitScore = safeNumber(summary.product_fit || selectedKol.raw.product_fit);
+  const profileStatus = historicalCooperationCount ? `历史合作 ${historicalCooperationCount} 条` : candidateOnly ? '候选 / 未深扫 / 可分析' : profileLoading ? '画像加载中' : selectedProfile ? '真实 profile 已加载' : lookupResult ? '查重结果已加载' : '列表档案';
   const productRows: Array<Record<string, unknown>> = productFits.length ? productFits as unknown as Array<Record<string, unknown>> : [];
   const productFitMethod = textValue(productRows[0]?.method, '');
   return (
@@ -1421,7 +1953,15 @@ function ProfilePanel({
             </div>
             <b>{safeNumber(product.score) || productFitScore || '待接'}</b>
           </div>
-        )) : <div className="vkpi-discover-empty is-compact">暂无真实产品适配。先建档并运行深度评估，再选择具体产品方向。</div>}
+        )) : candidateOnly && candidateIntentTags.length ? (
+          <div className="vkpi-discover-fit is-query">
+            <div>
+              <strong>搜索方向</strong>
+              <span>{candidateIntentTags.map((item) => `${item.label}：${item.detail}`).join(' / ')}</span>
+            </div>
+            <b>待抓取</b>
+          </div>
+        ) : <div className="vkpi-discover-empty is-compact">暂无真实产品适配。先建档并运行深度评估，再选择具体产品方向。</div>}
       </section>
 
       <section className="vkpi-discover-card">
@@ -1454,24 +1994,40 @@ function ProfilePanel({
       </section>
 
       <section className="vkpi-discover-card">
-        <div className="vkpi-discover-card__title"><b>Viltrox 合作历史</b><span>{projects.length} 个项目</span></div>
+        <div className="vkpi-discover-card__title"><b>Viltrox 合作历史</b><span>{projects.length || historicalCooperationCount} 个记录</span></div>
         {projects.length ? projects.slice(0, 4).map((project) => (
           <div className="vkpi-discover-history" key={project.id}>
             <strong>{project.campaign}</strong>
             <span>{stageLabels[project.stage] || project.stage} · {project.productName || project.productSku || '未绑定产品'} · ROI {project.roi ?? '-'}</span>
           </div>
-        )) : <div className="vkpi-discover-empty is-compact">暂无合作历史。首次合作建议先走小预算测试。</div>}
+        )) : historicalCooperationCount ? (
+          <div className="vkpi-discover-history is-legacy">
+            <div>
+              <strong>{textValue(historicalMatch.display_name || selectedKol.name || selectedKol.handle, selectedKol.handle)}</strong>
+              <span>
+                {textValue(historicalMatch.source_type, 'vkpi_kol_pool')} · {historicalCooperationCount} 条历史合作
+                {safeNumber(historicalMatch.profile_rows) ? ` · ${safeNumber(historicalMatch.profile_rows)} 条档案证据` : ''}
+              </span>
+              {historicalRecentCooperations.length ? (
+                <small>
+                  {historicalRecentCooperations.slice(0, 2).map((row) => textValue(row.product || row.project || row.status, '')).filter(Boolean).join(' / ')}
+                </small>
+              ) : null}
+            </div>
+            <b>可复用</b>
+          </div>
+        ) : <div className="vkpi-discover-empty is-compact">暂无合作历史。首次合作建议先走小预算测试。</div>}
       </section>
 
       <section className="vkpi-discover-card">
-        <div className="vkpi-discover-card__title"><b>最近内容</b><span>{posts.length} 条</span></div>
+        <div className="vkpi-discover-card__title"><b>最近内容</b><span>{posts.length} 条{candidateOnly && posts.length ? ' · 平台样本' : ''}</span></div>
         {posts.length ? posts.slice(0, 5).map((post, index) => (
           <div className="vkpi-discover-post" key={String(post.id || post.post_url || post.url || index)}>
             <div>▶</div>
             <span><strong>{textValue(post.title || post.caption || post.post_url || post.url, '未命名内容')}</strong><em>{textValue(post.post_url || post.url || post.content_url, '-')}</em></span>
             <b>{compactLabel(post.views || post.view_count || post.play_count)}</b>
           </div>
-        )) : <div className="vkpi-discover-empty is-compact">暂无最近内容。需要先抓取账号或等待平台数据返回。</div>}
+        )) : <div className="vkpi-discover-empty is-compact">暂无最近内容。平台未返回样本时，先建档并运行抓取账号。</div>}
       </section>
 
       <section className="vkpi-discover-card">

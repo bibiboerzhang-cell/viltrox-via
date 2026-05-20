@@ -1,6 +1,6 @@
 # Viltrox 2.0 Operations Runbook
 
-Last updated: 2026-04-28
+Last updated: 2026-05-20
 
 ## 1. Incident levels
 
@@ -135,6 +135,114 @@ For load-test smoke:
 ```bash
 bash ./scripts/run_loadtest_smoke_ci.sh
 ```
+
+## 4.1 V-KPI production backup and local/cloud sync
+
+Run these commands from the local repo root unless noted otherwise.
+
+### Backup first
+
+Before any production sync, baseline refill, data import, or deploy:
+
+```bash
+scripts/ops/backup_prod_vkpi.sh
+```
+
+This creates a remote backup under `/opt/viltrox-2.0/backups/ops/<UTC_STAMP>` and downloads a local copy under `runtime/prod-sync/<UTC_STAMP>`.
+
+The backup includes:
+- Postgres `pg_dump` custom-format DB dump.
+- DB dump SHA256.
+- `uploads/vkpi_media_cache` size and file-count snapshot.
+- `uploads/vkpi_media_cache` file manifest.
+- Runtime state, service status, and current frontend asset name.
+
+Large media archive is off by default. Use it only when there is enough disk and transfer time:
+
+```bash
+BACKUP_MEDIA_ARCHIVE=1 scripts/ops/backup_prod_vkpi.sh
+```
+
+### Pull production snapshot to local
+
+Use this to make the local machine hold the latest production snapshot without overwriting any local database:
+
+```bash
+scripts/ops/sync_prod_snapshot_to_local.sh
+```
+
+By default this downloads only. It does not restore into a local DB.
+
+Restore into an explicit local Postgres QA database only with all guards set:
+
+```bash
+RESTORE_LOCAL=1 \
+ALLOW_LOCAL_DB_RESTORE=1 \
+LOCAL_DATABASE_URL='postgresql://...' \
+scripts/ops/sync_prod_snapshot_to_local.sh
+```
+
+Do not restore into production, and do not treat this as automatic two-way DB sync. Production remains the source of truth for runtime data.
+
+### Deploy local code to cloud
+
+Use the guarded deploy script:
+
+```bash
+scripts/ops/deploy_local_to_cloud.sh
+```
+
+The script:
+- Refuses dirty worktrees unless `ALLOW_DIRTY_DEPLOY=1`.
+- Builds frontend unless `SKIP_BUILD=1`.
+- Takes a production backup unless `SKIP_BACKUP=1`.
+- Rsyncs code while excluding `.git`, `.env`, virtualenvs, node modules, uploads, runtime files, backups, and local DB files.
+- Restarts `viltrox-2.0-test.service`.
+- Checks `/health`.
+- Verifies the local and remote `app-*.js` asset names match.
+
+Use `RSYNC_DELETE=1` only for an intentional clean package deploy after reviewing excluded paths.
+
+### Run a production V-KPI job
+
+Generic guarded runner:
+
+```bash
+JOB_NAME=official_full_baseline PAYLOAD_JSON='{}' scripts/ops/run_prod_vkpi_job.sh
+```
+
+This takes a backup by default, runs the job on `viltrox`, and writes a remote log under `/opt/viltrox-2.0/runtime/ops/`.
+
+Current safe company-owned account baseline entrypoint:
+
+```bash
+JOB_NAME=official_full_baseline PAYLOAD_JSON='{}' scripts/ops/run_prod_vkpi_job.sh
+```
+
+Current state audit:
+
+```bash
+scripts/ops/audit_prod_vkpi_state.sh
+```
+
+Tonight batch wrapper:
+
+```bash
+scripts/ops/tonight_vkpi_data_run.sh
+```
+
+The wrapper runs a preflight audit, backs up production, runs `official_full_baseline`, then audits again. It intentionally does not start an unverified 1012 provider/deep-scan job. The current production-safe 1012 surface is `vkpi_kol_pool` state verification until a concrete provider job entrypoint is implemented and accepted.
+
+### Current 2026-05-20 V-KPI sync gate
+
+As of the 2026-05-20 state check:
+- `vkpi_employee_channels`: 18 active official accounts.
+- `vkpi_kol_pool`: 1023 total, 1012 from `legacy_excel_p2d`.
+- Active queued/running V-KPI jobs: 0.
+- 2026-05-20 official-channel metrics now have 18 rows, `posts_delta=43`, `views_delta=613067`, `followers_delta=4804`.
+- Search can use the 1012-row historical KOL pool for existing/cooperation matches before platform live search returns.
+
+Do not start a 1012 provider/deep-scan run from this wrapper. Keep historical KOL pool matching separate from provider refresh until the lightweight 1012 job entrypoint is implemented and accepted.
 
 ## 5. Secrets and key rotation
 

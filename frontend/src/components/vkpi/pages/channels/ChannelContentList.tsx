@@ -13,13 +13,13 @@ const SORT_OPTIONS = [
   { value: 'shares', label: '分享' },
 ];
 const WINDOW_OPTIONS = [
-  { value: 'all', label: '全部时间' },
+  { value: 'year', label: '今年分析' },
   { value: '7d', label: '近 7 天' },
   { value: '30d', label: '近 30 天' },
   { value: '90d', label: '近 90 天' },
   { value: '180d', label: '近 180 天' },
   { value: '365d', label: '近 1 年' },
-  { value: 'year', label: '今年' },
+  { value: 'all', label: '全部记录' },
 ];
 const COMMENT_PLATFORMS = new Set(['youtube', 'instagram', 'tiktok', 'facebook', 'reddit', 'x']);
 
@@ -445,7 +445,7 @@ function mapPagination(row?: Row): ChannelPostPagination {
 export function ChannelContentList({ account, apiToken }: { account?: OfficialChannelAccount; apiToken?: string }) {
   const [sort, setSort] = useState('latest');
   const [direction, setDirection] = useState('desc');
-  const [windowKey, setWindowKey] = useState('all');
+  const [windowKey, setWindowKey] = useState('year');
   const [page, setPage] = useState(1);
   const [remotePosts, setRemotePosts] = useState<ChannelContentPost[]>([]);
   const [pagination, setPagination] = useState<ChannelPostPagination>({ page: 1, limit: PAGE_SIZE, total: 0, pages: 0, hasNext: false, hasPrev: false });

@@ -41,6 +41,7 @@ from app.services.kol.account_dossier import (
 )
 from app.services.kol.content_analyzer import analyze_kol_url_standalone
 from app.services.kol.metrics import cpv, engagement_rate, roi
+from app.services.vkpi import kol_history_match
 
 from app.api.routers.kol_ops_schema import ensure_kol_schema
 from app.api.routers.kol_ops_dashboard import router as dashboard_router
@@ -156,7 +157,10 @@ async def search_kol_platform(body: dict, staff=Depends(require_tab("kol_ops", "
         market=market,
         max_results=_int(body.get("max_results"), 25),
     )
-    candidate_ids = await db_write(lambda: _persist_search_candidates(result.get("items", []), body, platform, market))
+    result_items = [dict(item or {}) for item in (result.get("items", []) or [])]
+    enriched_items = await db_write(lambda: kol_history_match.annotate_platform_items(result_items, platform=platform))
+    result["items"] = enriched_items
+    candidate_ids = await db_write(lambda: _persist_search_candidates(enriched_items, body, platform, market))
     await db_write(
         lambda: _log_activity_commit(
             staff,
@@ -166,8 +170,12 @@ async def search_kol_platform(body: dict, staff=Depends(require_tab("kol_ops", "
             market=market,
             api_provider=str(result.get("provider") or result.get("source") or platform),
             api_calls=1,
-            result_count=len(result.get("items", [])),
-            metadata={"saved_candidates": len(candidate_ids), "niche": body.get("niche", "")},
+            result_count=len(enriched_items),
+            metadata={
+                "saved_candidates": len(candidate_ids),
+                "history_matches": sum(1 for item in enriched_items if item.get("historical_match")),
+                "niche": body.get("niche", ""),
+            },
         )
     )
     return {

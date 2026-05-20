@@ -785,6 +785,14 @@ def _source_key(item: Dict[str, Any], *keys: str) -> str:
     return ""
 
 
+def _known_text(*values: Any) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text and text.lower() != "unknown creator":
+            return text
+    return ""
+
+
 def _published_value(item: Dict[str, Any]) -> str:
     return _source_key(item, "date", "uploadDate", "published", "timestamp", "createTimeISO", "time")
 
@@ -912,9 +920,15 @@ async def search_platform_content(
     raw_items = await _run_actor(actor_id, payload, timeout=timeout)
     items: List[Dict[str, Any]] = []
     for item in raw_items[:safe_limit]:
+        handle = ""
+        avatar_url = ""
+        thumbnail_url = ""
         if normalized_platform == "youtube":
             channel_name = _source_key(item, "channelName", "channelTitle", "author")
             channel_url = _source_key(item, "channelUrl", "channelURL")
+            handle = _source_key(item, "channelHandle", "channelUsername", "handle", "author")
+            avatar_url = _clean_url(_source_key(item, "channelAvatar", "channelThumbnail", "channelImage", "avatarUrl", "authorThumbnail"))
+            thumbnail_url = _clean_url(_source_key(item, "thumbnailUrl", "thumbnail", "image", "cover"))
             source_url = _source_key(item, "url", "link")
             title = _source_key(item, "title", "text")
             views = _normalize_int(item.get("viewCount") or item.get("views"))
@@ -925,6 +939,8 @@ async def search_platform_content(
             channel_name = _source_key(author, "nickName", "name") or _source_key(item, "authorName", "author")
             handle = _source_key(author, "name") or _source_key(item, "author")
             channel_url = f"https://www.tiktok.com/@{handle}" if handle else ""
+            avatar_url = _clean_url(_source_key(author, "avatar", "avatarThumb", "avatarMedium", "avatarLarger", "profilePicture"))
+            thumbnail_url = _clean_url(_source_key(item, "videoMeta.coverUrl", "cover", "coverUrl", "thumbnail"))
             source_url = _source_key(item, "webVideoUrl", "url")
             title = _source_key(item, "text", "desc", "title")
             stats = item.get("stats") if isinstance(item.get("stats"), dict) else {}
@@ -934,7 +950,10 @@ async def search_platform_content(
         elif normalized_platform == "douyin":
             post = _normalize_douyin_item(item)
             channel_name = str(post.get("channel") or "Unknown creator")
+            handle = str(post.get("handle") or channel_name)
             channel_url = str(post.get("channel_url") or "")
+            avatar_url = str(post.get("avatar_url") or "")
+            thumbnail_url = str(post.get("thumbnail") or "")
             source_url = str(post.get("url") or "")
             title = str(post.get("title") or "")
             views = _normalize_int(post.get("views"))
@@ -942,17 +961,24 @@ async def search_platform_content(
             comments = _normalize_int(post.get("comments"))
         else:
             channel_name = _source_key(item, "ownerUsername", "username", "ownerFullName")
+            handle = _source_key(item, "ownerUsername", "username")
             channel_url = f"https://www.instagram.com/{channel_name}/" if channel_name else _source_key(item, "ownerProfileUrl")
+            avatar_url = _clean_url(_source_key(item, "ownerProfilePicUrl", "profilePicUrl", "profilePictureUrl", "displayProfilePicUrl", "avatarUrl"))
+            thumbnail_url = _clean_url(_source_key(item, "displayUrl", "imageUrl", "thumbnailUrl", "thumbnail", "image"))
             source_url = _source_key(item, "url", "shortCode")
             title = _source_key(item, "caption", "title", "text")
             views = _normalize_int(item.get("videoViewCount") or item.get("videoPlayCount"))
             likes = _normalize_int(item.get("likesCount"))
             comments = _normalize_int(item.get("commentsCount"))
 
+        clean_channel_name = _known_text(channel_name, handle, normalized_query) or "Unknown creator"
         items.append(
             {
                 "platform": normalized_platform,
-                "channel_name": channel_name or "Unknown creator",
+                "channel_name": clean_channel_name,
+                "handle": _known_text(handle, channel_name, normalized_query),
+                "avatar_url": avatar_url or thumbnail_url,
+                "thumbnail_url": thumbnail_url,
                 "channel_url": channel_url,
                 "source_url": source_url,
                 "sample_title": title[:300],

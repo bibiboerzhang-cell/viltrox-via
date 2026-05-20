@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.api.dependencies.perms import require_tab
 from app.db.connection import get_conn
 from app.services.kol.account_dossier import analyze_kol_account, get_kol_dossier, scan_kol_account
-from app.services.vkpi import kol_claims, link_center, scope
+from app.services.vkpi import kol_claims, kol_history_match, link_center, scope
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-kol-links"])
@@ -455,7 +455,7 @@ def _parse_natural_query(query: str, platform_hint: str = "") -> dict[str, Any]:
         "level": level,
         "requires_contact": any(item in q for item in ("联系方式", "email", "邮箱", "contact", "可联系")),
         "requires_low_risk": any(item in q for item in ("无风险", "低风险", "安全", "clean risk", "low risk")),
-        "requires_collaboration": any(item in q for item in ("合作过", "历史合作", "roi", "复用")),
+        "requires_collaboration": any(item in q for item in ("合作过", "已合作", "之前合作", "历史合作", "合作历史", "roi", "复用")),
         "keywords": sorted(keyword_set),
     }
 
@@ -577,8 +577,25 @@ def _natural_search_payload(body: dict[str, Any], staff: dict[str, Any] | None =
         row["natural_match_reasons"] = reasons
         row["score"] = max(_clamp_score(row.get("score") or row.get("account_score") or row.get("product_fit")), score)
         rows.append(row)
+    pool_rows = kol_history_match.search_pool_for_natural(query, parsed, limit=limit)
+    seen_keys = {
+        (
+            str(row.get("platform") or "").lower(),
+            kol_history_match.normalize_history_handle(row.get("handle") or row.get("channel_name") or ""),
+        )
+        for row in rows
+    }
+    for row in pool_rows:
+        key = (
+            str(row.get("platform") or "").lower(),
+            kol_history_match.normalize_history_handle(row.get("handle") or row.get("channel_name") or ""),
+        )
+        if key in seen_keys:
+            continue
+        rows.append(row)
+        seen_keys.add(key)
     rows.sort(key=lambda item: (_int(item.get("natural_match_score")), _int(item.get("snapshot_follower_count"), _int(item.get("follower_count")))), reverse=True)
-    notes = ["规则解析版，复用现有 kols / snapshots / reports 字段；未新增后端表。"]
+    notes = ["规则解析版，复用现有 kols / snapshots / reports / vkpi_kol_pool 字段；未新增后端表。"]
     if not rows:
         notes.append("没有命中时不会伪造推荐，请先补候选池或放宽关键词。")
     return {

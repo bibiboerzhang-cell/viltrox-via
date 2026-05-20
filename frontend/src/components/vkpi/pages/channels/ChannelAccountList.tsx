@@ -20,6 +20,11 @@ function deltaText(delta = 0) {
   return delta ? `${delta > 0 ? '+' : ''}${compact(delta)}` : '+0';
 }
 
+function viewsDeltaText(totalViews: number, delta = 0) {
+  if (delta) return `播放 ${deltaText(delta)}`;
+  return totalViews > 0 ? '播放已同步' : '无公开播放';
+}
+
 function fallbackInitial(account: OfficialChannelAccount) {
   return (account.displayName || account.handle || account.platformLabel || 'V').slice(0, 1).toUpperCase();
 }
@@ -76,7 +81,7 @@ export function ChannelAccountList({
                   <h3>{account.displayName}</h3>
                   <span className="vkpi-channel-account-card__value">
                     <strong>{compact(account.totalViews)}</strong>
-                    <small className={deltaTone(account.viewsDelta)}>播放 {deltaText(account.viewsDelta)}</small>
+                    <small className={deltaTone(account.viewsDelta)}>{viewsDeltaText(account.totalViews, account.viewsDelta)}</small>
                   </span>
                 </div>
                 <p>

@@ -70,7 +70,10 @@ function mapResponse(row: Row): RedditAssessmentResponse {
     },
     summary: {
       posts: numberValue(summary.posts),
+      recordsTotal: numberValue(summary.records_total || summary.recordsTotal || summary.posts),
+      analysisWindow: text(summary.analysis_window || summary.analysisWindow || 'year'),
       comments: numberValue(summary.comments),
+      recordComments: numberValue(summary.record_comments || summary.recordComments || summary.comments),
       score: numberValue(summary.score),
       qualityCount: numberValue(summary.quality_count || summary.qualityCount),
       attentionCount: numberValue(summary.attention_count || summary.attentionCount),
@@ -122,6 +125,10 @@ export function RedditAssessmentPanel({ account, apiToken }: { account?: Officia
   }, [account?.id, account?.platform, apiToken]);
 
   if (!account || account.platform.toLowerCase() !== 'reddit') return null;
+  const assessedPosts = payload?.summary.posts || account.postsCount;
+  const recordPosts = payload?.summary.recordsTotal || account.postsCount;
+  const assessedComments = payload?.summary.comments || account.totalComments;
+  const recordLabel = recordPosts > assessedPosts ? `今年 ${formatter.format(assessedPosts)} 帖 · 记录 ${formatter.format(recordPosts)} 条` : `${formatter.format(assessedPosts)} 帖`;
 
   return (
     <section className="vkpi-reddit-assessment">
@@ -129,7 +136,7 @@ export function RedditAssessmentPanel({ account, apiToken }: { account?: Officia
         <div>
           <span>Reddit 站内评估</span>
           <h2>r/{account.handle || payload?.account.handle || 'VILTROX_GLOBAL'}</h2>
-          <p>{loading ? '评估加载中' : error || `${compact(payload?.account.subscribers || account.followers)} 订阅 · ${formatter.format(payload?.summary.posts || account.postsCount)} 帖 · ${formatter.format(payload?.summary.comments || account.totalComments)} 评论`}</p>
+          <p>{loading ? '评估加载中' : error || `${compact(payload?.account.subscribers || account.followers)} 订阅 · ${recordLabel} · ${formatter.format(assessedComments)} 评论`}</p>
         </div>
         <div className="vkpi-reddit-assessment__chips">
           {(payload?.distribution || []).map((item) => <span key={item.key}>{item.label} {formatter.format(item.count)}</span>)}
@@ -146,7 +153,7 @@ export function RedditAssessmentPanel({ account, apiToken }: { account?: Officia
               <button type="button" onClick={() => setOpen(false)} aria-label="关闭">×</button>
             </header>
             <div className="vkpi-reddit-modal__stats">
-              <span>{formatter.format(payload?.summary.posts || 0)} 帖</span>
+              <span>{recordLabel}</span>
               <span>{formatter.format(payload?.summary.comments || 0)} 评论</span>
               <span>{compact(payload?.summary.score || 0)} score</span>
               <span>{payload?.account.lastSyncAt || account.lastSyncAt || '-'}</span>

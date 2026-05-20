@@ -25,6 +25,15 @@ function deltaLabel(current: number, delta = 0) {
   return `较上次 ${direction} ${percent || compact(Math.abs(delta))}`;
 }
 
+function deltaText(delta = 0) {
+  return delta ? `${delta > 0 ? '+' : ''}${compact(delta)}` : '基线';
+}
+
+function viewsDeltaLabel(totalViews: number, delta = 0) {
+  if (delta) return `播放 ${delta > 0 ? '+' : ''}${compact(delta)}`;
+  return totalViews > 0 ? '播放已同步' : '无公开播放';
+}
+
 function deltaTone(delta = 0) {
   if (delta > 0) return 'is-up';
   if (delta < 0) return 'is-down';
@@ -94,7 +103,7 @@ export function ChannelPlatformMatrix({
                 <strong>{metric.value}</strong>
                 <span>{metric.label}</span>
               </span>
-              {'delta' in metric ? <small className={deltaTone(metric.delta)}>{metric.delta ? `${metric.delta > 0 ? '+' : ''}${compact(metric.delta)}` : '+0'}</small> : null}
+              {'delta' in metric ? <small className={deltaTone(metric.delta)}>{deltaText(metric.delta)}</small> : null}
             </span>
           ))}
         </div>
@@ -126,7 +135,7 @@ export function ChannelPlatformMatrix({
                 <strong>{compact(platform.totalViews)}</strong>
                 <span>{compact(platform.totalFollowers)} 粉丝</span>
                 <em className={deltaTone(followerDelta)}>{deltaLabel(platform.totalFollowers, followerDelta)}</em>
-                <small className={deltaTone(viewsDelta)}>播放 {viewsDelta > 0 ? '+' : ''}{compact(viewsDelta)}</small>
+                <small className={deltaTone(viewsDelta)}>{viewsDeltaLabel(platform.totalViews, viewsDelta)}</small>
               </div>
             </button>
           );
