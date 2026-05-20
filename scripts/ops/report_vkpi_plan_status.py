@@ -190,6 +190,7 @@ def build_items(sync: dict[str, Any], r2: dict[str, Any], snapshot: dict[str, An
             "blocked" if not r2_ready else "ready",
             [
                 "media cache adapter and migration dry-run exist",
+                "post-sync R2 migration guard exists" if exists("scripts/ops/migrate_vkpi_media_cache_to_r2_after_sync.sh") else "R2 migration guard missing",
                 f"storage_mode={r2.get('storage_mode', 'unknown')}",
                 f"missing_required={', '.join(r2.get('missing_required') or []) or '-'}",
             ],

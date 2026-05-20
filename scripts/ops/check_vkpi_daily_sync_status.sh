@@ -91,6 +91,14 @@ def apify_summary(lines: list[str]) -> dict:
     }
 
 
+def is_failure_line(line: str) -> bool:
+    if any(pattern in line for pattern in ("Traceback", "ERROR", "FAILED")):
+        return True
+    if re.search(r"\bfailed\b", line, flags=re.IGNORECASE):
+        return not re.search(r'"failed"\s*:\s*0\b', line)
+    return False
+
+
 service = os.environ.get("SYNC_SERVICE") or "vkpi-sync-daily.service"
 log_path = Path(os.environ.get("LOG_PATH") or "/var/log/vkpi/sync_daily.log")
 lines = tail_lines(log_path)
@@ -112,7 +120,7 @@ progress_lines = [
 apify = apify_summary(lines)
 failure_lines = [
     line for line in lines
-    if any(pattern in line for pattern in ("Traceback", "ERROR", "FAILED", "failed"))
+    if is_failure_line(line)
 ]
 inferred_stage = ""
 if apify.get("last_platform"):
