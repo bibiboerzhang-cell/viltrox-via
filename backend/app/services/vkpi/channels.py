@@ -15,16 +15,51 @@ from typing import Any
 from cryptography.fernet import Fernet
 
 from app.db.connection import get_conn
+from app.services.cache import cache_clear, cache_get, cache_set
 from app.services.vkpi import scope
 from app.services.vkpi.media_cache import cached_image_url, cached_video_url
 from app.services.vkpi.schema_channels import ensure_vkpi_channels_schema
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
 
 SUPPORTED_PLATFORMS = {"youtube", "instagram", "tiktok", "xhs", "xiaohongshu", "bilibili", "facebook", "reddit", "x", "threads", "twitch", "pinterest", "vimeo", "website", "other"}
+CHANNEL_READ_CACHE_TTL_SEC = 300
 
 
 def _utcnow() -> str:
     return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _channel_cache_scope(staff: dict[str, Any] | None = None, view_as_staff_id: int | None = None) -> str:
+    if view_as_staff_id:
+        return f"staff:{int(view_as_staff_id)}"
+    if scope.can_view_all(staff):
+        return "all"
+    return f"staff:{resolve_staff_id(staff) or 0}"
+
+
+def _channel_cache_key(name: str, *, staff: dict[str, Any] | None = None, view_as_staff_id: int | None = None, limit: int = 0) -> str:
+    return f"vkpi:channels:{name}:{_channel_cache_scope(staff, view_as_staff_id)}:limit:{int(limit or 0)}"
+
+
+def _clear_channel_read_cache() -> None:
+    try:
+        cache_clear(prefix="vkpi:channels:")
+    except Exception:
+        pass
+
+
+def _channel_cache_hit(payload: Any) -> Any:
+    if isinstance(payload, dict):
+        result = dict(payload)
+        result["cache"] = {"hit": True, "ttl_sec": CHANNEL_READ_CACHE_TTL_SEC}
+        return result
+    return payload
+
+
+def _channel_cache_store(key: str, payload: dict[str, Any]) -> dict[str, Any]:
+    result = {**payload, "cache": {"hit": False, "ttl_sec": CHANNEL_READ_CACHE_TTL_SEC}}
+    cache_set(key, result, ttl=CHANNEL_READ_CACHE_TTL_SEC)
+    return result
 
 
 def _json(value: Any) -> str:
@@ -179,6 +214,7 @@ def bind_channel(body: dict[str, Any], *, staff: dict[str, Any] | None = None, v
     channel_id = int(row["id"]) if row else 0
     conn.execute("INSERT INTO vkpi_channel_audit (channel_id, staff_id, action, detail, occurred_at) VALUES (?,?,?,?,?)", (channel_id or None, actor or target_staff_id, "bind", f"{platform}:{handle}", now))
     conn.commit()
+    _clear_channel_read_cache()
     return {"channel": get_channel(channel_id, staff=staff).get("channel", {})}
 
 
@@ -258,6 +294,7 @@ def unbind_channel(channel_id: int, *, staff: dict[str, Any] | None = None) -> d
     get_conn().execute("UPDATE vkpi_employee_channels SET status='revoked', deleted_at=?, updated_at=? WHERE id=?", (now, now, int(channel_id)))
     get_conn().execute("INSERT INTO vkpi_channel_audit (channel_id, staff_id, action, detail, occurred_at) VALUES (?,?,?,?,?)", (int(channel_id), actor or None, "unbind", "manual unbind", now))
     get_conn().commit()
+    _clear_channel_read_cache()
     return {"status": "revoked", "channel_id": int(channel_id)}
 
 
@@ -267,7 +304,9 @@ def sync_now(channel_id: int, *, staff: dict[str, Any] | None = None, max_posts:
     channel = get_channel(channel_id, staff=staff)["channel"]
     from app.services.vkpi import channel_refill
 
-    return channel_refill.sync_channel_snapshot(channel, staff=staff, max_posts=max(1, min(1000, int(max_posts or 12))))
+    result = channel_refill.sync_channel_snapshot(channel, staff=staff, max_posts=max(1, min(1000, int(max_posts or 12))))
+    _clear_channel_read_cache()
+    return result
 
 
 def metrics(channel_id: int, limit: int = 30, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -634,6 +673,11 @@ def _extract_posts(row: dict[str, Any], *, per_account_limit: int) -> list[dict[
 
 def official_account_matrix(*, staff: dict[str, Any] | None = None, view_as_staff_id: int | None = None, limit: int = 50) -> dict[str, Any]:
     """Return platform -> official account -> post hierarchy for data-analysis UI."""
+    safe_limit = max(1, min(50, int(limit or 50)))
+    cache_key = _channel_cache_key("official_matrix", staff=staff, view_as_staff_id=view_as_staff_id, limit=safe_limit)
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return _channel_cache_hit(cached)
     rows = _latest_official_channel_rows(staff=staff, view_as_staff_id=view_as_staff_id)
     platforms: dict[str, dict[str, Any]] = {}
     total_views = 0
@@ -654,7 +698,7 @@ def official_account_matrix(*, staff: dict[str, Any] | None = None, view_as_staf
                 "accounts": [],
             },
         )
-        sample_limit = max(1, min(50, int(limit or 10)))
+        sample_limit = safe_limit
         raw_payload = _parse_json(row.get("metric_raw_payload_json"))
         package_posts = _posts_from_package(_text(raw_payload.get("package_dir")))
         posts = package_posts[:sample_limit] if package_posts else _extract_posts(row, per_account_limit=limit)
@@ -703,12 +747,12 @@ def official_account_matrix(*, staff: dict[str, Any] | None = None, view_as_staf
                 "posts": posts,
             }
         )
-    return {
+    return _channel_cache_store(cache_key, {
         "platforms": sorted(platforms.values(), key=lambda item: item["label"]),
         "account_count": len(rows),
         "post_count": total_posts,
         "total_views": total_views,
-    }
+    })
 
 
 def _latest_channel_row(channel_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1141,9 +1185,14 @@ def _match_post(row: dict[str, Any], post_id: str, url: str = "") -> dict[str, A
 
 def official_views_evidence(*, staff: dict[str, Any] | None = None, view_as_staff_id: int | None = None, limit: int = 120) -> dict[str, Any]:
     """Map official-account channel data into metric evidence rows for views."""
-    matrix = official_account_matrix(staff=staff, view_as_staff_id=view_as_staff_id, limit=limit)
+    safe_limit = max(1, min(300, int(limit or 120)))
+    cache_key = _channel_cache_key("official_views_evidence", staff=staff, view_as_staff_id=view_as_staff_id, limit=safe_limit)
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return _channel_cache_hit(cached)
+    matrix = official_account_matrix(staff=staff, view_as_staff_id=view_as_staff_id, limit=safe_limit)
     rows: list[dict[str, Any]] = []
-    max_rows = max(1, min(300, int(limit or 120)))
+    max_rows = safe_limit
     for platform in matrix["platforms"]:
         platform_label = platform.get("label") or _platform_label(platform.get("platform"))
         for account in platform.get("accounts", []):
@@ -1192,7 +1241,7 @@ def official_views_evidence(*, staff: dict[str, Any] | None = None, view_as_staf
                     }
                 )
     rows.sort(key=lambda item: (item.get("occurredAt") or ""), reverse=True)
-    return {
+    return _channel_cache_store(cache_key, {
         "rows": rows[:max_rows],
         "account_count": matrix["account_count"],
         "post_count": matrix["post_count"],
@@ -1200,4 +1249,4 @@ def official_views_evidence(*, staff: dict[str, Any] | None = None, view_as_staf
         "evidence_views": sum(_int(row.get("amount")) for row in rows),
         "returned_rows": min(len(rows), max_rows),
         "platforms": matrix["platforms"],
-    }
+    })
