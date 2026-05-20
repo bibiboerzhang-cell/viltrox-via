@@ -144,6 +144,18 @@ payload = {
           SUM(CASE WHEN analysis_scope='current_year' THEN 1 ELSE 0 END) AS current_year_count
         FROM vkpi_brand_signal
     """),
+    "competitor_relation": count_table("vkpi_competitor_relation"),
+    "competitor_relation_summary": one("""
+        SELECT
+          COUNT(*) AS total,
+          COUNT(DISTINCT kol_pool_id) AS kol_count,
+          SUM(CASE WHEN risk_tier='avoid' THEN 1 ELSE 0 END) AS avoid_count,
+          SUM(CASE WHEN risk_tier='caution' THEN 1 ELSE 0 END) AS caution_count,
+          SUM(CASE WHEN risk_tier='safe' THEN 1 ELSE 0 END) AS safe_count,
+          SUM(CASE WHEN risk_tier='opportunity' THEN 1 ELSE 0 END) AS opportunity_count,
+          MAX(computed_at) AS latest_computed_at
+        FROM vkpi_competitor_relation
+    """),
     "media_cache_assets": rows("""
         SELECT storage_backend, COUNT(*) AS count, COALESCE(SUM(size_bytes), 0) AS size_bytes
         FROM vkpi_media_cache_assets
@@ -160,6 +172,7 @@ payload["acceptance"] = {
     "legacy_1012_present": int(kol_pool.get("legacy_excel_p2d") or 0) >= 1012,
     "reddit_record_present": any(not row.get("error") for row in payload.get("reddit") or []),
     "brand_signal_table_ready": bool(payload.get("brand_signal", {}).get("exists")),
+    "competitor_relation_table_ready": bool(payload.get("competitor_relation", {}).get("exists")),
 }
 print(json.dumps(payload, ensure_ascii=False, default=str, indent=2, sort_keys=True))
 

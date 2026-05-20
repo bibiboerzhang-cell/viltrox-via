@@ -135,6 +135,11 @@ def build_items(sync: dict[str, Any], r2: dict[str, Any], snapshot: dict[str, An
     r2_ready = bool(r2.get("ready"))
     snapshot_loaded = bool(snapshot.get("loaded"))
     latest_snapshot = snapshot.get("latest_snapshot") if isinstance(snapshot.get("latest_snapshot"), dict) else {}
+    competitor_relation_ready = (
+        exists("migrations/069_vkpi_competitor_relation.sql")
+        and exists("scripts/ops/backfill_vkpi_competitor_relations_after_sync.sh")
+        and contains("backend/app/services/vkpi/kol_competitor_detector.py", "vkpi_competitor_relation", "prefer_persisted")
+    )
     return [
         status_item(
             "current_release",
@@ -190,13 +195,16 @@ def build_items(sync: dict[str, Any], r2: dict[str, Any], snapshot: dict[str, An
         status_item(
             "competitor_b",
             "B 竞品识别",
-            "partial_ui",
+            "backfill_ready" if competitor_relation_ready else "partial_ui",
             [
                 "kol_competitor_detector.py exists" if exists("backend/app/services/vkpi/kol_competitor_detector.py") else "detector missing",
                 "competitor API exists" if contains("backend/app/api/routers/vkpi_kol_pool.py", "/competitors") else "competitor API missing",
+                "competitor relation migration exists" if exists("migrations/069_vkpi_competitor_relation.sql") else "competitor relation migration missing",
+                "remote backfill guard exists" if exists("scripts/ops/backfill_vkpi_competitor_relations_after_sync.sh") else "backfill guard missing",
+                "API can prefer persisted relation" if contains("backend/app/services/vkpi/kol_competitor_detector.py", "prefer_persisted") else "persisted relation read missing",
                 "Discover competitor block exists" if contains("frontend/src/components/vkpi/pages/DiscoverPage.tsx", "竞品关系") else "Discover competitor block missing",
             ],
-            "等待 A2 数据稳定后再批量评估和写入长期 relation 表。",
+            "等 A2 完成并部署后，运行远端 backfill guard 写入 1012 历史池竞品关系快照。",
         ),
         status_item(
             "brand_signal_c",
