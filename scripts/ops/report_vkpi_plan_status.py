@@ -186,6 +186,16 @@ def build_items(sync: dict[str, Any], r2: dict[str, Any], snapshot: dict[str, An
         and exists("scripts/ops/backfill_vkpi_dimensions11_after_sync.sh")
         and contains("backend/app/services/vkpi/eleven_dimensions.py", "backfill_existing_profile_deep_dimensions11")
     )
+    dimensions_confidence_ready = contains(
+        "backend/app/services/vkpi/eleven_dimensions.py",
+        "product_fit_confidence",
+        '"confidence"',
+        '"evidence"',
+    ) and contains(
+        "frontend/src/components/vkpi/pages/DiscoverPage.tsx",
+        "pendingByConfidence",
+        "product_fit_confidence",
+    )
     return [
         status_item(
             "current_release",
@@ -293,10 +303,11 @@ def build_items(sync: dict[str, Any], r2: dict[str, Any], snapshot: dict[str, An
                 "eleven_dimensions.py exists" if exists("backend/app/services/vkpi/eleven_dimensions.py") else "dimension service missing",
                 "profile_deep update guard exists" if exists("scripts/ops/backfill_vkpi_dimensions11_after_sync.sh") else "dimensions backfill guard missing",
                 "updates existing profile_deep only" if contains("backend/app/services/vkpi/eleven_dimensions.py", "backfill_existing_profile_deep_dimensions11") else "dimensions write path missing",
+                "confidence/evidence guards exist" if dimensions_confidence_ready else "confidence/evidence guards missing",
                 "dimensions11 API exists" if contains("backend/app/api/routers/vkpi_kol_pool.py", "dimensions11") else "dimensions API missing",
                 "Discover 11维 UI exists" if contains("frontend/src/components/vkpi/pages/DiscoverPage.tsx", "11维") else "11维 UI missing",
             ],
-            "等 A2 完成并部署后，守卫脚本只更新已有 profile_deep 行；表缺失时安全跳过。",
+            "11维规则画像已带 confidence/evidence；profile_deep 表未建时守卫脚本安全跳过，不插假画像。",
         ),
         status_item(
             "search_ui",
