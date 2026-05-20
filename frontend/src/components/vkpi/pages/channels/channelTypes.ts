@@ -73,8 +73,11 @@ export interface OfficialChannelAccount {
   lastSyncAt: string;
   lastSyncError: string;
   followers: number;
+  followersDelta?: number;
   postsCount: number;
+  postsDelta?: number;
   totalViews: number;
+  viewsDelta?: number;
   totalLikes: number;
   totalComments: number;
   engagementRate: number;
@@ -87,6 +90,9 @@ export interface OfficialChannelPlatform {
   totalViews: number;
   totalPosts: number;
   totalFollowers: number;
+  followersDelta?: number;
+  postsDelta?: number;
+  viewsDelta?: number;
   accounts: OfficialChannelAccount[];
 }
 

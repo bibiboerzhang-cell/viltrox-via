@@ -11,6 +11,20 @@ function compact(value: number) {
   return formatter.format(value);
 }
 
+function deltaPercent(current: number, delta = 0) {
+  const previous = current - delta;
+  if (!delta || previous <= 0) return '';
+  const percent = Math.abs(delta / previous) * 100;
+  return `${percent >= 10 ? percent.toFixed(1) : percent.toFixed(2)}%`;
+}
+
+function deltaLabel(current: number, delta = 0) {
+  if (!delta) return '较上次 0';
+  const direction = delta > 0 ? '↑' : '↓';
+  const percent = deltaPercent(current, delta);
+  return `较上次 ${direction} ${percent || compact(Math.abs(delta))}`;
+}
+
 export function ChannelPlatformMatrix({
   platforms,
   selectedPlatform,
@@ -79,6 +93,8 @@ export function ChannelPlatformMatrix({
         {platforms.map((platform) => {
           const active = selectedPlatform === platform.platform;
           const avatars = platform.accounts.map((account) => proxiedImageUrl(account.avatarUrl)).filter(Boolean).slice(0, 4);
+          const followerDelta = platform.followersDelta || platform.accounts.reduce((sum, account) => sum + (account.followersDelta || 0), 0);
+          const viewsDelta = platform.viewsDelta || platform.accounts.reduce((sum, account) => sum + (account.viewsDelta || 0), 0);
           return (
             <button
               type="button"
@@ -97,6 +113,8 @@ export function ChannelPlatformMatrix({
               <div className="vkpi-channel-platform-card__metrics">
                 <strong>{compact(platform.totalViews)}</strong>
                 <span>{compact(platform.totalFollowers)} 粉丝</span>
+                <em className={followerDelta >= 0 ? 'is-up' : 'is-down'}>{deltaLabel(platform.totalFollowers, followerDelta)}</em>
+                {viewsDelta ? <small className={viewsDelta >= 0 ? 'is-up' : 'is-down'}>播放 {viewsDelta > 0 ? '+' : ''}{compact(viewsDelta)}</small> : null}
               </div>
             </button>
           );

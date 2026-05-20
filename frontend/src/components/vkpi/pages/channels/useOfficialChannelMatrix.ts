@@ -81,8 +81,11 @@ function mapAccount(row: Row): OfficialChannelAccount {
     lastSyncAt: text(row.last_sync_at || row.lastSyncAt),
     lastSyncError: text(row.last_sync_error || row.lastSyncError),
     followers: numberValue(row.followers),
+    followersDelta: numberValue(row.followers_delta ?? row.followersDelta),
     postsCount: numberValue(row.posts_count || row.postsCount),
+    postsDelta: numberValue(row.posts_delta ?? row.postsDelta),
     totalViews: numberValue(row.total_views || row.totalViews),
+    viewsDelta: numberValue(row.views_delta ?? row.viewsDelta),
     totalLikes: numberValue(row.total_likes || row.totalLikes),
     totalComments: numberValue(row.total_comments || row.totalComments),
     engagementRate: numberValue(row.engagement_rate || row.engagementRate),
@@ -97,6 +100,9 @@ function mapPlatform(row: Row): OfficialChannelPlatform {
     totalViews: numberValue(row.total_views || row.totalViews),
     totalPosts: numberValue(row.total_posts || row.totalPosts),
     totalFollowers: numberValue(row.total_followers || row.totalFollowers),
+    followersDelta: numberValue(row.followers_delta ?? row.followersDelta),
+    postsDelta: numberValue(row.posts_delta ?? row.postsDelta),
+    viewsDelta: numberValue(row.views_delta ?? row.viewsDelta),
     accounts: rows(row.accounts).map(mapAccount),
   };
 }

@@ -133,6 +133,17 @@ export interface VkpiNaturalKolSearchResponse {
   notes?: string[];
 }
 
+export interface VkpiPlatformSearchResponse {
+  status?: string;
+  platform?: string;
+  query?: string;
+  items?: Row[];
+  candidate_ids?: number[];
+  saved_candidates?: number;
+  message?: string;
+  metadata?: Row;
+}
+
 export interface VkpiCreateProjectPayload {
   projectName: string;
   kolId?: string;
@@ -941,6 +952,17 @@ export async function searchMarketingKolsNatural(token: string, payload: { query
       platform: payload.platform,
       limit: payload.limit || 100,
     }),
+  }, token);
+}
+export async function searchPlatformKols(token: string, payload: { query: string; platform: string; maxResults?: number }) {
+  return apiFetch<VkpiPlatformSearchResponse>("/api/admin/kol/search/platform", {
+    method: "POST",
+    body: jsonBody({
+      query: payload.query,
+      platform: payload.platform,
+      max_results: payload.maxResults || 25,
+    }),
+    timeoutMs: 300000,
   }, token);
 }
 export async function scanKolAccount(token: string, kolId: string, maxPosts = 24) {

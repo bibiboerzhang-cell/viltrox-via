@@ -207,12 +207,36 @@ def _write_snapshot(channel: dict[str, Any], metrics: dict[str, Any], raw_payloa
     raw_payload = dict(raw_payload or {})
     raw_payload["media_cache"] = prewarm_official_media_cache(metrics, raw_payload)
     conn = get_conn()
+    channel_id = int(channel.get("id") or 0)
+    previous = conn.execute(
+        """
+        SELECT followers, posts_count, total_views, total_likes
+        FROM vkpi_channel_metrics
+        WHERE channel_id=? AND snapshot_date < ?
+        ORDER BY snapshot_date DESC, captured_at DESC, id DESC
+        LIMIT 1
+        """,
+        (channel_id, snapshot_date),
+    ).fetchone()
+    previous_row = dict(previous) if previous else {}
+    followers = _int(metrics.get("followers"))
+    following = _int(metrics.get("following"))
+    posts_count = _int(metrics.get("posts_count"))
+    total_views = _int(metrics.get("total_views"))
+    total_likes = _int(metrics.get("total_likes"))
+    total_comments = _int(metrics.get("total_comments"))
+    total_shares = _int(metrics.get("total_shares"))
+    followers_delta = followers - _int(previous_row.get("followers"), followers)
+    posts_delta = posts_count - _int(previous_row.get("posts_count"), posts_count)
+    views_delta = total_views - _int(previous_row.get("total_views"), total_views)
+    likes_delta = total_likes - _int(previous_row.get("total_likes"), total_likes)
     conn.execute(
         """
         INSERT INTO vkpi_channel_metrics
             (channel_id, snapshot_date, followers, following, posts_count, total_views,
-             total_likes, total_comments, total_shares, engagement_rate, raw_payload_json, captured_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+             total_likes, total_comments, total_shares, followers_delta, posts_delta, views_delta_24h,
+             likes_delta_24h, engagement_rate, raw_payload_json, captured_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(channel_id, snapshot_date) DO UPDATE SET
             followers=excluded.followers,
             following=excluded.following,
@@ -221,20 +245,28 @@ def _write_snapshot(channel: dict[str, Any], metrics: dict[str, Any], raw_payloa
             total_likes=excluded.total_likes,
             total_comments=excluded.total_comments,
             total_shares=excluded.total_shares,
+            followers_delta=excluded.followers_delta,
+            posts_delta=excluded.posts_delta,
+            views_delta_24h=excluded.views_delta_24h,
+            likes_delta_24h=excluded.likes_delta_24h,
             engagement_rate=excluded.engagement_rate,
             raw_payload_json=excluded.raw_payload_json,
             captured_at=excluded.captured_at
         """,
         (
-            int(channel.get("id") or 0),
+            channel_id,
             snapshot_date,
-            _int(metrics.get("followers")),
-            _int(metrics.get("following")),
-            _int(metrics.get("posts_count")),
-            _int(metrics.get("total_views")),
-            _int(metrics.get("total_likes")),
-            _int(metrics.get("total_comments")),
-            _int(metrics.get("total_shares")),
+            followers,
+            following,
+            posts_count,
+            total_views,
+            total_likes,
+            total_comments,
+            total_shares,
+            followers_delta,
+            posts_delta,
+            views_delta,
+            likes_delta,
             _float(metrics.get("engagement_rate")),
             _json(raw_payload),
             now,

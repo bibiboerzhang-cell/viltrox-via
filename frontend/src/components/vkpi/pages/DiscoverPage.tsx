@@ -22,6 +22,7 @@ import {
   productRecommendationAction,
   runProductRecommendations,
   searchMarketingKolsNatural,
+  searchPlatformKols,
 } from '../../../services/vkpi.ui-api';
 import type { VkpiKolAssessmentResponse, VkpiKolProductFitResponse } from '../../../services/vkpi.ui-api';
 import './discover/discoverDecision.css';
@@ -63,6 +64,7 @@ interface UiKol {
   projectCount: number;
   hasCollaboration: boolean;
   riskLabel: string;
+  sourceKind?: 'kol' | 'platform_search';
   raw: Record<string, unknown>;
 }
 
@@ -263,6 +265,64 @@ function lookupToUiKol(result: VkpiKolLookupResult): UiKol | null {
   return rawToUiKol(merged);
 }
 
+function platformSearchItemToUiKol(raw: Record<string, unknown>, index: number, candidateId?: number): UiKol {
+  const handleSource = textValue(raw.channel_name || raw.handle || raw.username || raw.ownerUsername, `candidate-${index + 1}`);
+  const platform = platformFromRaw(raw.platform);
+  const views = safeNumber(raw.views || raw.avg_views);
+  const score = Math.max(35, Math.min(78, Math.round(35 + Math.log10(Math.max(views, 1)) * 8)));
+  return {
+    id: `candidate:${candidateId || index}:${platform}:${handleSource}`,
+    name: handleSource,
+    handle: normalizeHandle(handleSource),
+    platform,
+    avatar: textValue(raw.avatar_url || raw.profile_pic_url, ''),
+    profileUrl: textValue(raw.channel_url || raw.profile_url || raw.url, ''),
+    contactEmail: '',
+    contactPhone: '',
+    followerCount: safeNumber(raw.follower_count || raw.followers),
+    followerLabel: compactLabel(raw.follower_count || raw.followers),
+    contentCount: safeNumber(raw.content_count || raw.post_count || raw.posts_count) || 1,
+    contentCountLabel: compactLabel(raw.content_count || raw.post_count || raw.posts_count, '1'),
+    score,
+    grade: scoreToGrade(score),
+    country: textValue(raw.market || raw.country, '-'),
+    topic: textValue(raw.sample_title || raw.search_query, '平台实时搜索结果'),
+    claimOwner: '',
+    status: 'platform_search_result',
+    freshness: textValue(raw.published || raw.searched_at, '刚搜索'),
+    contactCount: 0,
+    projectCount: 0,
+    hasCollaboration: false,
+    riskLabel: '',
+    sourceKind: 'platform_search',
+    raw: { ...raw, candidate_id: candidateId, source_kind: 'platform_search' },
+  };
+}
+
+function isCandidateKol(kol?: UiKol) {
+  return Boolean(kol?.sourceKind === 'platform_search' || String(kol?.id || '').startsWith('candidate:'));
+}
+
+function formatAssessmentMethod(method?: string) {
+  const clean = String(method || '').trim();
+  if (!clean) return '等待深度评估';
+  if (clean.includes('local_assessment')) return '本地旧评估；建议刷新';
+  return clean.replace(/_/g, ' ');
+}
+
+function formatProductFitSource(hasFits: boolean, method?: string) {
+  if (!hasFits) return '等待产品适配';
+  if (String(method || '').includes('local_product_fit')) return '本地规则估算';
+  return String(method || '产品适配').replace(/_/g, ' ');
+}
+
+function cleanProductLabel(value: unknown) {
+  let label = textValue(value, '未命名产品');
+  label = label.replace(/^viltrox\s+/i, '').replace(/\s+/g, ' ').trim();
+  label = label.replace(/\s+(FE|E|Z|X|L|RF)$/i, ' ($1)');
+  return label;
+}
+
 function filterKols(kols: UiKol[], filters: { platform: string; level: string; grade: string; collab: string; risk: string; freshness: string }, query: string): UiKol[] {
   const needle = query.trim().toLowerCase().replace(/^@/, '');
   return kols.filter((kol) => {
@@ -435,7 +495,7 @@ function addDirection(chips: DirectionChip[], chip: DirectionChip) {
 function buildDirectionChips(kols: UiKol[], productLaunches: VkpiDashboardData['productLaunches']): DirectionChip[] {
   const chips: DirectionChip[] = [];
   const products = productLaunches
-    .map((product) => textValue(product.productName || product.productSku || product.launchName, ''))
+    .map((product) => cleanProductLabel(product.productName || product.productSku || product.launchName))
     .filter(Boolean);
   const topics = rankedValues(kols.flatMap((kol) => kol.topic.split(/[\/,，;；|]/)).filter((topic) => !['待归类', '已建档红人'].includes(topic.trim())));
   const countries = rankedValues(kols.map((kol) => kol.country).filter((country) => country !== '-'));
@@ -560,6 +620,15 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
       setSelectedProductFits([]);
       setSelectedContacts([]);
       setProfilePosts([]);
+      return;
+    }
+    if (isCandidateKol(selectedKol)) {
+      setSelectedProfile(null);
+      setSelectedAssessment(null);
+      setSelectedProductFits([]);
+      setSelectedContacts([]);
+      setProfilePosts([]);
+      setProfileLoading(false);
       return;
     }
     let cancelled = false;
@@ -715,7 +784,20 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
     setNotice('');
     try {
       const looksLikeHandle = term.startsWith('@') || term.includes('instagram.com') || term.includes('youtube.com') || term.includes('tiktok.com') || term.includes('/');
-      if (looksLikeHandle && onLookupKol) {
+      const shouldUsePlatformSearch = !looksLikeHandle && platform !== 'all' && scanAccount && apiToken;
+      if (shouldUsePlatformSearch) {
+        setNotice('正在调用平台真实搜索；不会用本地库伪造结果。');
+        const result = await searchPlatformKols(apiToken, { query: term, platform, maxResults: 25 });
+        const candidateIds = Array.isArray(result.candidate_ids) ? result.candidate_ids : [];
+        const nextKols = (result.items || []).map((item, index) => platformSearchItemToUiKol(objectValue(item), index, candidateIds[index]));
+        setSearchKols(nextKols);
+        setLocalQuery('');
+        if (nextKols[0]?.id) setSelectedKolId(nextKols[0].id);
+        const message = result.message || (nextKols.length
+          ? `平台真实搜索返回 ${nextKols.length} 条候选；这些还不是 KOL 主档，需要点具体账号后建档/深度抓取。`
+          : '平台真实搜索没有返回候选；未用本地库伪造结果。');
+        setNotice(message, nextKols.length ? 'info' : 'warn');
+      } else if (looksLikeHandle && onLookupKol) {
         const result = await onLookupKol({
           platform,
           handleOrUrl: term,
@@ -1009,10 +1091,10 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
                 onDeepScan={handleDeepScan}
                 onOpenContact={() => setContactModalOpen(true)}
                 onOpenProject={() => setProjectModalOpen(true)}
-                canClaim={Boolean(onClaimKol && selectedKol && !selectedKol.claimOwner)}
-                canScan={Boolean(onScanKolAccount && selectedKol)}
-                canUpdate={Boolean((apiToken || onUpdateKol) && selectedKol)}
-                canCreateProject={Boolean(onCreateProject && selectedKol)}
+                canClaim={Boolean(onClaimKol && selectedKol && !selectedKol.claimOwner && !isCandidateKol(selectedKol))}
+                canScan={Boolean(onScanKolAccount && selectedKol && !isCandidateKol(selectedKol))}
+                canUpdate={Boolean((apiToken || onUpdateKol) && selectedKol && !isCandidateKol(selectedKol))}
+                canCreateProject={Boolean(onCreateProject && selectedKol && !isCandidateKol(selectedKol))}
               />
             </aside>
           </section>
@@ -1082,7 +1164,7 @@ function SearchPanel({
       <div className="vkpi-discover-panel__header">
         <div>
           <h3>主动搜索结果</h3>
-          <span>{visibleKols.length} 个真实档案 / 搜索后由接口刷新</span>
+          <span>{visibleKols.length} 个档案/候选；平台搜索结果需建档后才有完整画像</span>
         </div>
       </div>
       <div className="vkpi-discover-searchbox">
@@ -1211,6 +1293,7 @@ function KolCard({ kol, active, onClick }: { kol: UiKol; active: boolean; onClic
         <span>{platformLabels[kol.platform] || kol.platform} · {kol.followerLabel} 粉 · {kol.country} · {kol.topic}</span>
         <div>
           <em>{level}</em>
+          {isCandidateKol(kol) ? <em className="is-good">平台搜索</em> : null}
           <em>{kol.status}</em>
           {kol.hasCollaboration ? <em className="is-good">合作过</em> : <em>未合作</em>}
           {kol.contactCount ? <em className="is-purple">联系方式 {kol.contactCount}</em> : null}
@@ -1280,12 +1363,10 @@ function ProfilePanel({
   const assessmentGrade = textValue(selectedAssessment?.grade, selectedKol.grade);
   const decision = textValue(selectedAssessment?.recommended_action || summary.recommended_action, assessmentScore >= 80 ? '优先合作；建议补齐产品适配和联系方式证据。' : assessmentScore ? '可观察；先补齐近期内容与联系方式。' : '待评估；请先运行真实抓取。');
   const productFitScore = safeNumber(summary.product_fit || selectedKol.raw.product_fit);
-  const profileStatus = profileLoading ? '画像加载中' : selectedProfile ? '真实 profile 已加载' : lookupResult ? '查重结果已加载' : '列表档案';
-  const productRows: Array<Record<string, unknown>> = productFits.length
-    ? productFits as unknown as Array<Record<string, unknown>>
-    : (productLaunches.length
-      ? productLaunches.slice(0, 5)
-      : [{ id: 'p1', productSku: 'AF 35mm F1.2 LAB FE', productName: 'AF 35mm F1.2 LAB FE', launchName: '默认产品' }]) as unknown as Array<Record<string, unknown>>;
+  const candidateOnly = isCandidateKol(selectedKol);
+  const profileStatus = candidateOnly ? '平台实时搜索候选' : profileLoading ? '画像加载中' : selectedProfile ? '真实 profile 已加载' : lookupResult ? '查重结果已加载' : '列表档案';
+  const productRows: Array<Record<string, unknown>> = productFits.length ? productFits as unknown as Array<Record<string, unknown>> : [];
+  const productFitMethod = textValue(productRows[0]?.method, '');
   return (
     <div className="vkpi-discover-profile__stack">
       <section className="vkpi-discover-profile-head">
@@ -1318,7 +1399,7 @@ function ProfilePanel({
       ) : null}
 
       <section className="vkpi-discover-card">
-        <div className="vkpi-discover-card__title"><b>8 维评估</b><span>{selectedAssessment?.method || '旧 profile fallback'}</span></div>
+        <div className="vkpi-discover-card__title"><b>8 维评估</b><span>{formatAssessmentMethod(selectedAssessment?.method)}</span></div>
         <div className="vkpi-discover-bars">
           {dimensions.map((dimension) => (
             <div className={`vkpi-discover-bar ${dimension.pending ? 'is-pending' : ''}`} key={dimension.key}>
@@ -1331,16 +1412,16 @@ function ProfilePanel({
       </section>
 
       <section className="vkpi-discover-card">
-        <div className="vkpi-discover-card__title"><b>Top 5 产品适配</b><span>{productFits.length ? '本地规则接口' : '旧产品库 fallback'}</span></div>
-        {productRows.map((product, index) => (
+        <div className="vkpi-discover-card__title"><b>Top 5 产品适配</b><span>{formatProductFitSource(Boolean(productRows.length), productFitMethod)}</span></div>
+        {productRows.length ? productRows.map((product, index) => (
           <div className="vkpi-discover-fit" key={String(product.launch_id || product.id || product.product_sku || product.productSku || index)}>
             <div>
-              <strong>{textValue(product.product_name || product.productName || product.product_sku || product.productSku, '未命名产品')}</strong>
+              <strong>{cleanProductLabel(product.product_name || product.productName || product.product_sku || product.productSku)}</strong>
               <span>{Array.isArray(product.reasons) && product.reasons.length ? textValue(product.reasons[0], '') : textValue(product.launch_name || product.launchName || product.category, 'Viltrox 产品')}</span>
             </div>
             <b>{safeNumber(product.score) || productFitScore || '待接'}</b>
           </div>
-        ))}
+        )) : <div className="vkpi-discover-empty is-compact">暂无真实产品适配。先建档并运行深度评估，再选择具体产品方向。</div>}
       </section>
 
       <section className="vkpi-discover-card">

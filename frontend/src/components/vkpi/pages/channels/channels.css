@@ -359,6 +359,24 @@
   font-weight: 800;
 }
 
+.vkpi-channel-platform-card__metrics em,
+.vkpi-channel-platform-card__metrics small {
+  display: block;
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.vkpi-channel-platform-card__metrics .is-up {
+  color: #0f9f6e;
+}
+
+.vkpi-channel-platform-card__metrics .is-down {
+  color: #dc2626;
+}
+
 .vkpi-channel-kol-matrix {
   border: 1px solid var(--vkpi-border);
   border-radius: 18px;

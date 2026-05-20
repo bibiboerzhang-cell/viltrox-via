@@ -322,6 +322,9 @@ def _latest_official_channel_rows(staff: dict[str, Any] | None = None, view_as_s
                m.total_likes AS metric_likes,
                m.total_comments AS metric_comments,
                m.total_shares AS metric_shares,
+               m.followers_delta AS metric_followers_delta,
+               m.posts_delta AS metric_posts_delta,
+               m.views_delta_24h AS metric_views_delta,
                m.engagement_rate AS metric_engagement_rate,
                m.raw_payload_json AS metric_raw_payload_json,
                m.captured_at AS metric_captured_at
@@ -645,6 +648,9 @@ def official_account_matrix(*, staff: dict[str, Any] | None = None, view_as_staf
                 "total_views": 0,
                 "total_posts": 0,
                 "total_followers": 0,
+                "followers_delta": 0,
+                "posts_delta": 0,
+                "views_delta": 0,
                 "accounts": [],
             },
         )
@@ -655,9 +661,15 @@ def official_account_matrix(*, staff: dict[str, Any] | None = None, view_as_staf
         account_views = _int(row.get("metric_views"))
         account_posts = _int(row.get("metric_posts"), len(posts))
         account_followers = _int(row.get("metric_followers"))
+        account_followers_delta = _int(row.get("metric_followers_delta"))
+        account_posts_delta = _int(row.get("metric_posts_delta"))
+        account_views_delta = _int(row.get("metric_views_delta"))
         platform_entry["total_views"] += account_views
         platform_entry["total_posts"] += account_posts
         platform_entry["total_followers"] += account_followers
+        platform_entry["followers_delta"] += account_followers_delta
+        platform_entry["posts_delta"] += account_posts_delta
+        platform_entry["views_delta"] += account_views_delta
         total_views += account_views
         total_posts += account_posts
         platform_entry["accounts"].append(
@@ -679,8 +691,11 @@ def official_account_matrix(*, staff: dict[str, Any] | None = None, view_as_staf
                 "last_sync_at": row.get("last_sync_at"),
                 "last_sync_error": _text(row.get("last_sync_error")),
                 "followers": account_followers,
+                "followers_delta": account_followers_delta,
                 "posts_count": account_posts,
+                "posts_delta": account_posts_delta,
                 "total_views": account_views,
+                "views_delta": account_views_delta,
                 "total_likes": _int(row.get("metric_likes")),
                 "total_comments": _int(row.get("metric_comments")),
                 "total_shares": _int(row.get("metric_shares")),
