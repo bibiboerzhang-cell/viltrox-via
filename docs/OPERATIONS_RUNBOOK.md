@@ -271,6 +271,17 @@ New runs also emit `cron_daily_sync_started`, `cron_daily_sync_finished`, or
 `cron_daily_sync_failed` JSON lines so the status check has durable boundaries
 even when provider logs are noisy.
 
+After the daily sync completes, run the read-only data acceptance audit:
+
+```bash
+scripts/ops/audit_vkpi_post_sync_state.py
+```
+
+It checks official channel counts, latest platform metrics/deltas, Reddit
+records, legacy `1012` KOL pool presence, brand-signal table readiness, and
+media-cache asset backends. It skips while `vkpi-sync-daily.service` is active
+or activating unless `--allow-during-sync` is passed.
+
 The script:
 - Refuses dirty worktrees unless `ALLOW_DIRTY_DEPLOY=1`.
 - Builds frontend unless `SKIP_BUILD=1`.
