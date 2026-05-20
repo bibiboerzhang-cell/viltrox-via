@@ -13,6 +13,7 @@ from typing import Any
 
 from app.core.config import UPLOAD_DIR, VKPI_VIDEO_CACHE_MAX_FILE_MB, VKPI_VIDEO_CACHE_MAX_TOTAL_GB
 from app.core.logging import get_logger
+from app.db.connection import get_conn, is_postgres_runtime
 
 
 logger = get_logger(__name__)
@@ -27,6 +28,13 @@ VIDEO_CACHE_GC_RESERVE_BYTES = 200 * 1024 * 1024
 PUBLIC_IMAGE_CACHE_PREFIX = "/api/vkpi-media/image-cache"
 PUBLIC_VIDEO_CACHE_PREFIX = "/api/vkpi-media/video-cache"
 ITEM_VIDEO_CACHE_PLATFORMS = {"instagram", "tiktok"}
+MEDIA_R2_PREFIX = os.getenv("VKPI_MEDIA_CACHE_R2_PREFIX", "vkpi/media-cache").strip().strip("/") or "vkpi/media-cache"
+MEDIA_R2_PUBLIC_BASE_URL = (
+    os.getenv("VKPI_MEDIA_CACHE_R2_PUBLIC_BASE_URL")
+    or os.getenv("R2_PUBLIC_BASE_URL")
+    or ""
+).strip().rstrip("/")
+MEDIA_CACHE_STORAGE = os.getenv("VKPI_MEDIA_CACHE_STORAGE", "local").strip().lower() or "local"
 ALLOWED_IMAGE_HOST_SUFFIXES = (
     ".cdninstagram.com",
     ".fbcdn.net",
@@ -82,6 +90,259 @@ IMAGE_KEYS = {
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _json(value: Any) -> str:
+    return json.dumps(value or {}, ensure_ascii=False, default=str)
+
+
+def _media_cache_r2_enabled() -> bool:
+    if MEDIA_CACHE_STORAGE not in {"r2", "hybrid", "cloud"}:
+        return False
+    required = ("R2_ENDPOINT", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET_NAME")
+    return all(os.getenv(key, "").strip() for key in required)
+
+
+def _r2_public_url(r2_key: str) -> str:
+    key = _text(r2_key).lstrip("/")
+    if not key or not MEDIA_R2_PUBLIC_BASE_URL:
+        return ""
+    return f"{MEDIA_R2_PUBLIC_BASE_URL}/{urllib.parse.quote(key, safe='/-_.~')}"
+
+
+def _content_type_ext(content_type: str) -> str:
+    normalized = str(content_type or "").split(";", 1)[0].strip().lower()
+    if normalized == "video/webm":
+        return ".webm"
+    if normalized in {"video/quicktime", "video/mov"}:
+        return ".mov"
+    if normalized == "image/png":
+        return ".png"
+    if normalized == "image/webp":
+        return ".webp"
+    if normalized == "image/gif":
+        return ".gif"
+    if normalized.startswith("image/"):
+        return ".jpg"
+    return ".mp4"
+
+
+def _asset_uid(media_kind: str, platform: str, external_id: str, source_url: str, digest: str) -> str:
+    seed = "|".join([media_kind, platform, external_id, source_url, digest])
+    return hashlib.sha256(seed.encode("utf-8")).hexdigest()
+
+
+def _source_url_hash(source_url: str) -> str:
+    return hashlib.sha256(_text(source_url).encode("utf-8")).hexdigest() if _text(source_url) else ""
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+_MEDIA_CACHE_SCHEMA_READY = False
+
+
+def ensure_vkpi_media_cache_schema() -> None:
+    global _MEDIA_CACHE_SCHEMA_READY
+    if _MEDIA_CACHE_SCHEMA_READY:
+        return
+    conn = get_conn()
+    if is_postgres_runtime():
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vkpi_media_cache_assets (
+                id BIGSERIAL PRIMARY KEY,
+                asset_uid TEXT NOT NULL UNIQUE,
+                media_kind TEXT NOT NULL DEFAULT 'video',
+                platform TEXT NOT NULL DEFAULT '',
+                external_id TEXT NOT NULL DEFAULT '',
+                source_url TEXT NOT NULL DEFAULT '',
+                source_url_hash TEXT NOT NULL DEFAULT '',
+                digest TEXT NOT NULL DEFAULT '',
+                checksum TEXT NOT NULL DEFAULT '',
+                content_type TEXT NOT NULL DEFAULT '',
+                size_bytes BIGINT NOT NULL DEFAULT 0,
+                storage_backend TEXT NOT NULL DEFAULT 'local',
+                local_path TEXT NOT NULL DEFAULT '',
+                r2_key TEXT NOT NULL DEFAULT '',
+                cache_url TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'cached',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+    else:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vkpi_media_cache_assets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                asset_uid TEXT NOT NULL UNIQUE,
+                media_kind TEXT NOT NULL DEFAULT 'video',
+                platform TEXT NOT NULL DEFAULT '',
+                external_id TEXT NOT NULL DEFAULT '',
+                source_url TEXT NOT NULL DEFAULT '',
+                source_url_hash TEXT NOT NULL DEFAULT '',
+                digest TEXT NOT NULL DEFAULT '',
+                checksum TEXT NOT NULL DEFAULT '',
+                content_type TEXT NOT NULL DEFAULT '',
+                size_bytes INTEGER NOT NULL DEFAULT 0,
+                storage_backend TEXT NOT NULL DEFAULT 'local',
+                local_path TEXT NOT NULL DEFAULT '',
+                r2_key TEXT NOT NULL DEFAULT '',
+                cache_url TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'cached',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_media_cache_assets_digest ON vkpi_media_cache_assets (media_kind, digest)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_media_cache_assets_external ON vkpi_media_cache_assets (platform, external_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_media_cache_assets_r2 ON vkpi_media_cache_assets (storage_backend, r2_key)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_media_cache_assets_source_hash ON vkpi_media_cache_assets (source_url_hash)")
+    conn.commit()
+    _MEDIA_CACHE_SCHEMA_READY = True
+
+
+def _record_media_cache_asset(payload: dict[str, Any]) -> None:
+    try:
+        ensure_vkpi_media_cache_schema()
+        conn = get_conn()
+        media_kind = _text(payload.get("media_kind")) or "video"
+        platform = _text(payload.get("platform")).lower()
+        external_id = _text(payload.get("external_id"))
+        source_url = _text(payload.get("source_url"))
+        digest = _text(payload.get("digest"))
+        asset_uid = _text(payload.get("asset_uid")) or _asset_uid(media_kind, platform, external_id, source_url, digest)
+        conn.execute(
+            """
+            INSERT INTO vkpi_media_cache_assets (
+                asset_uid, media_kind, platform, external_id, source_url, source_url_hash,
+                digest, checksum, content_type, size_bytes, storage_backend, local_path,
+                r2_key, cache_url, status, metadata_json, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(asset_uid) DO UPDATE SET
+                source_url=excluded.source_url,
+                source_url_hash=excluded.source_url_hash,
+                digest=excluded.digest,
+                checksum=excluded.checksum,
+                content_type=excluded.content_type,
+                size_bytes=excluded.size_bytes,
+                storage_backend=excluded.storage_backend,
+                local_path=excluded.local_path,
+                r2_key=excluded.r2_key,
+                cache_url=excluded.cache_url,
+                status=excluded.status,
+                metadata_json=excluded.metadata_json,
+                updated_at=CURRENT_TIMESTAMP
+            """,
+            (
+                asset_uid,
+                media_kind,
+                platform,
+                external_id,
+                source_url,
+                _source_url_hash(source_url),
+                digest,
+                _text(payload.get("checksum")),
+                _text(payload.get("content_type")),
+                int(payload.get("size_bytes") or 0),
+                _text(payload.get("storage_backend")) or "local",
+                _text(payload.get("local_path")),
+                _text(payload.get("r2_key")),
+                _text(payload.get("cache_url")),
+                _text(payload.get("status")) or "cached",
+                _json(payload.get("metadata")),
+            ),
+        )
+        conn.commit()
+    except Exception as exc:
+        logger.warning("vkpi media cache asset record failed: %s", exc)
+
+
+def _cached_asset_url_by_digest(media_kind: str, digest: str) -> str:
+    digest = _text(digest).lower()
+    if len(digest) != 64:
+        return ""
+    try:
+        ensure_vkpi_media_cache_schema()
+        row = get_conn().execute(
+            """
+            SELECT cache_url, r2_key
+            FROM vkpi_media_cache_assets
+            WHERE media_kind=? AND digest=? AND storage_backend='r2' AND status='cached'
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (media_kind, digest),
+        ).fetchone()
+    except Exception:
+        return ""
+    if not row:
+        return ""
+    cache_url = _text(row["cache_url"])
+    if cache_url and not cache_url.startswith("/api/"):
+        return cache_url
+    r2_key = _text(row["r2_key"])
+    public_url = _r2_public_url(r2_key)
+    if public_url:
+        return public_url
+    if r2_key and _media_cache_r2_enabled():
+        try:
+            from app.services.media.r2 import get_presigned_url
+
+            return get_presigned_url(r2_key)
+        except Exception as exc:
+            logger.warning("vkpi media cache r2 presign failed: %s", exc)
+    return ""
+
+
+def _upload_to_r2_if_enabled(
+    *,
+    media_kind: str,
+    digest: str,
+    cache_path: Path,
+    content_type: str,
+    source_url: str,
+    platform: str = "",
+    external_id: str = "",
+) -> dict[str, Any]:
+    if not _media_cache_r2_enabled():
+        return {}
+    try:
+        from app.services.media.r2 import upload_file
+
+        r2_key = f"{MEDIA_R2_PREFIX}/{media_kind}s/{digest}{_content_type_ext(content_type)}"
+        upload_file(str(cache_path), r2_key, content_type)
+        cache_url = _r2_public_url(r2_key)
+        payload = {
+            "media_kind": media_kind,
+            "platform": platform,
+            "external_id": external_id,
+            "source_url": source_url,
+            "digest": digest,
+            "checksum": _sha256_file(cache_path),
+            "content_type": content_type,
+            "size_bytes": cache_path.stat().st_size,
+            "storage_backend": "r2",
+            "local_path": str(cache_path),
+            "r2_key": r2_key,
+            "cache_url": cache_url,
+            "status": "cached",
+        }
+        _record_media_cache_asset(payload)
+        return {"storage_backend": "r2", "r2_key": r2_key, "cache_url": cache_url}
+    except Exception as exc:
+        logger.warning("vkpi media cache r2 upload failed: %s", exc)
+        return {"r2_status": "failed", "r2_error": exc.__class__.__name__}
 
 
 class VideoCacheCancelled(Exception):
@@ -284,6 +545,9 @@ def cached_video_url(raw_url: Any) -> str:
     digest, cache_path, content_type_path = _video_cache_paths(normalized[0])
     if cache_path.exists() and content_type_path.exists():
         return f"{PUBLIC_VIDEO_CACHE_PREFIX}/{digest}"
+    r2_url = _cached_asset_url_by_digest("video", digest)
+    if r2_url:
+        return r2_url
     return ""
 
 
@@ -369,8 +633,35 @@ def cache_video(raw_url: Any, *, timeout: int = 12, max_bytes: int | None = None
         return {"status": "failed", "reason": exc.__class__.__name__}
 
     tmp_path.replace(cache_path)
-    content_type_path.write_text(content_type if content_type.startswith("video/") else "video/mp4")
-    return {"status": "cached", "url": f"{PUBLIC_VIDEO_CACHE_PREFIX}/{digest}"}
+    content_type = content_type if content_type.startswith("video/") else "video/mp4"
+    content_type_path.write_text(content_type)
+    cache_url = f"{PUBLIC_VIDEO_CACHE_PREFIX}/{digest}"
+    r2_result = _upload_to_r2_if_enabled(
+        media_kind="video",
+        digest=digest,
+        cache_path=cache_path,
+        content_type=content_type,
+        source_url=url,
+    )
+    if r2_result.get("cache_url"):
+        cache_url = str(r2_result["cache_url"])
+    _record_media_cache_asset(
+        {
+            "media_kind": "video",
+            "source_url": url,
+            "digest": digest,
+            "checksum": _sha256_file(cache_path),
+            "content_type": content_type,
+            "size_bytes": cache_path.stat().st_size,
+            "storage_backend": r2_result.get("storage_backend") or "local",
+            "local_path": str(cache_path),
+            "r2_key": r2_result.get("r2_key") or "",
+            "cache_url": cache_url,
+            "status": "cached",
+            "metadata": {"r2_status": r2_result.get("r2_status"), "r2_error": r2_result.get("r2_error")},
+        }
+    )
+    return {"status": "cached", "url": cache_url, "r2_key": r2_result.get("r2_key") or "", "storage_backend": r2_result.get("storage_backend") or "local"}
 
 
 def cached_image_file(digest: str) -> tuple[Path, str] | None:
@@ -393,6 +684,12 @@ def cached_video_file(digest: str) -> tuple[Path, str] | None:
     return cache_path, content_type_path.read_text().strip() or "video/mp4"
 
 
+def cached_video_redirect_url(digest: str) -> str:
+    if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest.lower()):
+        return ""
+    return _cached_asset_url_by_digest("video", digest.lower())
+
+
 def cached_video_url_for_item(platform: str, video_id: str) -> str | None:
     sidecar_path = _video_item_sidecar_path(platform, video_id)
     if not sidecar_path.exists():
@@ -405,6 +702,11 @@ def cached_video_url_for_item(platform: str, video_id: str) -> str | None:
     if not digest or not cached_url:
         return None
     if not (VIDEO_CACHE_DIR / digest).exists():
+        sidecar_url = _text(sidecar.get("cache_url"))
+        r2_url = sidecar_url if sidecar_url and not sidecar_url.startswith("/api/") else ""
+        r2_url = r2_url or _cached_asset_url_by_digest("video", digest) or _r2_public_url(_text(sidecar.get("r2_key")))
+        if _text(sidecar.get("storage_backend")) == "r2" and r2_url:
+            return r2_url
         return None
     return cached_url
 
@@ -474,6 +776,8 @@ def cache_video_for_item(
             "cached_url": existing,
             "size_bytes": int(sidecar.get("size_bytes") or 0),
             "digest": _text(sidecar.get("digest")),
+            "storage_backend": _text(sidecar.get("storage_backend")) or "local",
+            "r2_key": _text(sidecar.get("r2_key")),
         }
 
     normalized = _normalize_video_url(url)
@@ -513,16 +817,48 @@ def cache_video_for_item(
     if cache_path.exists() and content_type_path.exists() and not force_refresh:
         content_type = content_type_path.read_text(encoding="utf-8").strip() or "video/mp4"
         size_bytes = cache_path.stat().st_size
+        cache_url = f"{PUBLIC_VIDEO_CACHE_PREFIX}/{digest}"
+        r2_result = _upload_to_r2_if_enabled(
+            media_kind="video",
+            digest=digest,
+            cache_path=cache_path,
+            content_type=content_type,
+            source_url=normalized_url,
+            platform=platform_key,
+            external_id=video_key,
+        )
+        if r2_result.get("cache_url"):
+            cache_url = str(r2_result["cache_url"])
         sidecar = {
             "platform": platform_key,
             "video_id": video_key,
             "source_url": normalized_url,
             "digest": digest,
-            "cached_url": f"{PUBLIC_VIDEO_CACHE_PREFIX}/{digest}",
+            "cached_url": cache_url,
             "content_type": content_type,
             "size_bytes": size_bytes,
+            "storage_backend": r2_result.get("storage_backend") or "local",
+            "r2_key": r2_result.get("r2_key") or "",
             "updated_at": _utcnow(),
         }
+        _record_media_cache_asset(
+            {
+                "media_kind": "video",
+                "platform": platform_key,
+                "external_id": video_key,
+                "source_url": normalized_url,
+                "digest": digest,
+                "checksum": _sha256_file(cache_path),
+                "content_type": content_type,
+                "size_bytes": size_bytes,
+                "storage_backend": sidecar["storage_backend"],
+                "local_path": str(cache_path),
+                "r2_key": sidecar["r2_key"],
+                "cache_url": cache_url,
+                "status": "cached",
+                "metadata": {"gc": gc_result, "r2_status": r2_result.get("r2_status"), "r2_error": r2_result.get("r2_error")},
+            }
+        )
         _atomic_write_json(sidecar_path, sidecar)
         return {"status": "cached", "cached": True, **sidecar, "gc": gc_result}
 
@@ -561,16 +897,48 @@ def cache_video_for_item(
         tmp_path.replace(cache_path)
         content_type = content_type if content_type.startswith("video/") else "video/mp4"
         _atomic_write_text(content_type_path, content_type)
+        cache_url = f"{PUBLIC_VIDEO_CACHE_PREFIX}/{digest}"
+        r2_result = _upload_to_r2_if_enabled(
+            media_kind="video",
+            digest=digest,
+            cache_path=cache_path,
+            content_type=content_type,
+            source_url=normalized_url,
+            platform=platform_key,
+            external_id=video_key,
+        )
+        if r2_result.get("cache_url"):
+            cache_url = str(r2_result["cache_url"])
         sidecar = {
             "platform": platform_key,
             "video_id": video_key,
             "source_url": normalized_url,
             "digest": digest,
-            "cached_url": f"{PUBLIC_VIDEO_CACHE_PREFIX}/{digest}",
+            "cached_url": cache_url,
             "content_type": content_type,
             "size_bytes": cache_path.stat().st_size,
+            "storage_backend": r2_result.get("storage_backend") or "local",
+            "r2_key": r2_result.get("r2_key") or "",
             "updated_at": _utcnow(),
         }
+        _record_media_cache_asset(
+            {
+                "media_kind": "video",
+                "platform": platform_key,
+                "external_id": video_key,
+                "source_url": normalized_url,
+                "digest": digest,
+                "checksum": _sha256_file(cache_path),
+                "content_type": content_type,
+                "size_bytes": cache_path.stat().st_size,
+                "storage_backend": sidecar["storage_backend"],
+                "local_path": str(cache_path),
+                "r2_key": sidecar["r2_key"],
+                "cache_url": cache_url,
+                "status": "cached",
+                "metadata": {"gc": gc_result, "r2_status": r2_result.get("r2_status"), "r2_error": r2_result.get("r2_error")},
+            }
+        )
         _maybe_progress(80, "写入视频 sidecar")
         _atomic_write_json(sidecar_path, sidecar)
         return {"status": "cached", "cached": True, **sidecar, "gc": gc_result}

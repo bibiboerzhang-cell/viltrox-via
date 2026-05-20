@@ -26,7 +26,7 @@ from app.db.connection import get_conn
 from app.core.security import get_current_user
 from app.db.repositories.assets import get_submission_asset
 from app.services.media.storage import resolve_local_media_path
-from app.services.vkpi.media_cache import cached_image_file, cached_video_file, cached_video_url_for_item
+from app.services.vkpi.media_cache import cached_image_file, cached_video_file, cached_video_redirect_url, cached_video_url_for_item
 
 
 FFMPEG_AVAILABLE = shutil.which("ffmpeg") is not None
@@ -340,6 +340,9 @@ def lookup_vkpi_cached_video(
 def serve_vkpi_cached_video(digest: str):
     cached = cached_video_file(digest)
     if not cached:
+        redirect_url = cached_video_redirect_url(digest)
+        if redirect_url:
+            return RedirectResponse(url=redirect_url, status_code=307, headers={"Cache-Control": "private, max-age=300"})
         raise HTTPException(status_code=404, detail="cached video not found")
     cache_path, content_type = cached
     return FileResponse(
@@ -353,6 +356,9 @@ def serve_vkpi_cached_video(digest: str):
 def serve_public_vkpi_cached_video(digest: str):
     cached = cached_video_file(digest)
     if not cached:
+        redirect_url = cached_video_redirect_url(digest)
+        if redirect_url:
+            return RedirectResponse(url=redirect_url, status_code=307, headers={"Cache-Control": "private, max-age=300"})
         raise HTTPException(status_code=404, detail="cached video not found")
     cache_path, content_type = cached
     return FileResponse(

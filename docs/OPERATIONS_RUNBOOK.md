@@ -157,6 +157,26 @@ The backup includes:
 - `uploads/vkpi_media_cache` file manifest.
 - Runtime state, service status, and current frontend asset name.
 
+### Optional R2 media cache
+
+V-KPI official-account media cache is local by default. To let newly cached
+official-account videos upload to Cloudflare R2 after local download, configure
+these env vars and restart the app:
+
+```bash
+VKPI_MEDIA_CACHE_STORAGE=hybrid
+VKPI_MEDIA_CACHE_R2_PREFIX=vkpi/media-cache
+VKPI_MEDIA_CACHE_R2_PUBLIC_BASE_URL=https://<cdn-host>
+R2_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
+R2_ACCESS_KEY_ID=<key>
+R2_SECRET_ACCESS_KEY=<secret>
+R2_BUCKET_NAME=<bucket>
+```
+
+The fallback is deliberate: if R2 is not configured or upload fails, playback
+continues through the local `/api/vkpi-media/video-cache/...` URL. Old local
+cache migration remains a separate operation.
+
 Large media archive is off by default. Use it only when there is enough disk and transfer time:
 
 ```bash
