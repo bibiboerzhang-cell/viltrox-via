@@ -3,6 +3,7 @@ import { Navigate, createBrowserRouter } from "react-router-dom";
 
 const AdminRoute = lazy(() => import("../routes/admin/AdminRoute"));
 const AdminLoginRoute = lazy(() => import("../routes/admin/AdminLoginRoute"));
+const StaffActivateRoute = lazy(() => import("../routes/admin/StaffActivateRoute"));
 const RouteErrorBoundary = lazy(() => import("../routes/system/RouteErrorBoundary"));
 
 function RouteLoading() {
@@ -26,6 +27,7 @@ function buildRoute(path: string, node: React.ReactNode) {
 export const router = createBrowserRouter([
   buildRoute("/", <AdminRoute />),
   buildRoute("/login", <AdminLoginRoute />),
+  buildRoute("/activate", <StaffActivateRoute />),
   buildRoute("/admin", <Navigate to="/" replace />),
   buildRoute("/admin/login", <Navigate to="/login" replace />),
   buildRoute("/admin/*", <Navigate to="/" replace />),

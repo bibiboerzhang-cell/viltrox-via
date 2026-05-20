@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   getCommentAlertSettings,
   getControlStatus,
+  getStaffInviteCapabilities,
   getRbacStatus,
   getSyncOverview,
   listBudgetSettings,
@@ -16,8 +17,14 @@ import {
   updateCommentAlertSettings,
   updateFeatureFlags,
   updatePlatformCrawlSettings,
+  createStaffActivationLink,
 } from '../../../services/vkpi.ui-api';
-import type { VkpiDashboardData, VkpiProductCatalogItem, VkpiStaffMember } from '../vkpiTypes';
+import type { VkpiStaffActivationLinkResponse, VkpiStaffInviteCapabilities } from '../../../services/vkpi.ui-api';
+import type {
+  VkpiDashboardData,
+  VkpiProductCatalogItem,
+  VkpiStaffMember,
+} from '../vkpiTypes';
 import { CardHeader } from '../shared/CardHeader';
 import { InfoBlock } from '../shared/InfoBlock';
 import { StaffTable } from '../tables/StaffTable';
@@ -42,9 +49,10 @@ interface SettingsPageProps {
   onUpdateStaffPermission?: (staffId: string, permission: 'none' | 'read' | 'write') => Promise<void>;
   onUpsertProductCost?: (payload: { productSku: string; productName?: string; unitCostUsd: number; note?: string; active?: boolean }) => Promise<void>;
   onOpenStaffProfile?: (staffId: string, fallback?: Partial<VkpiStaffMember>) => void | Promise<void>;
+  onRefreshData?: () => void | Promise<void>;
 }
 
-export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdateStaffPermission, onUpsertProductCost, onOpenStaffProfile }: SettingsPageProps) {
+export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdateStaffPermission, onUpsertProductCost, onOpenStaffProfile, onRefreshData }: SettingsPageProps) {
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
   const [role, setRole] = useState('employee');
@@ -76,6 +84,10 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
   const [rulesTab, setRulesTab] = useState<'core' | 'platform' | 'alerts' | 'sync'>('platform');
   const [productSearch, setProductSearch] = useState('');
   const [selectedCatalogProduct, setSelectedCatalogProduct] = useState<VkpiProductCatalogItem | null>(null);
+  const [inviteCapabilities, setInviteCapabilities] = useState<VkpiStaffInviteCapabilities | null>(null);
+  const [inviteCapabilitiesError, setInviteCapabilitiesError] = useState('');
+  const [activationLink, setActivationLink] = useState<VkpiStaffActivationLinkResponse | null>(null);
+  const [activationCopied, setActivationCopied] = useState(false);
   const isManager = viewMode === 'manager';
 
   const boolValue = (value: unknown, fallback = false) => {
@@ -91,7 +103,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
       setProviderError('');
       setSettingsError('');
       try {
-        const [providerResponse, rbacResponse, flagsResponse, crawlResponse, budgetResponse, controlResponse, commentAlertResponse] = await Promise.all([
+        const [providerResponse, rbacResponse, flagsResponse, crawlResponse, budgetResponse, controlResponse, commentAlertResponse, inviteCapabilitiesResponse] = await Promise.all([
           listProviderStatuses(apiToken),
           getRbacStatus(apiToken).catch((error) => {
             setRbacStatusError(error instanceof Error ? error.message : 'RBAC 状态读取失败');
@@ -102,6 +114,10 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
           listBudgetSettings(apiToken),
           getControlStatus(apiToken),
           getCommentAlertSettings(apiToken),
+          getStaffInviteCapabilities(apiToken).catch((error) => {
+            setInviteCapabilitiesError(error instanceof Error ? error.message : '邀请能力读取失败');
+            return null;
+          }),
         ]);
         if (!cancelled) {
           setProviders(providerResponse.providers || []);
@@ -111,6 +127,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
           setBudgetSettings(budgetResponse.budgets || []);
           setControlStatus(controlResponse || {});
           setCommentAlertSettings(commentAlertResponse.settings || {});
+          setInviteCapabilities(inviteCapabilitiesResponse);
         }
       } catch (error) {
         if (!cancelled) setSettingsError(error instanceof Error ? error.message : '系统设置读取失败');
@@ -361,19 +378,62 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
     }
   };
 
+  const createManualActivationLink = async () => {
+    if (!apiToken || !email.trim()) return null;
+    const response = await createStaffActivationLink(apiToken, {
+      email: email.trim(),
+      name: name.trim() || undefined,
+      role,
+      vkpiPermission: permission,
+    });
+    setActivationLink(response);
+    setActivationCopied(false);
+    setEmail('');
+    setName('');
+    setMessage('激活链接已生成，复制后发给员工。');
+    await onRefreshData?.();
+    return response;
+  };
+
   const submitInvite = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!onInviteStaff || !email.trim()) return;
+    if (!email.trim()) return;
     setBusy(true);
     try {
-      await onInviteStaff({ email: email.trim(), name: name.trim() || undefined, role, vkpiPermission: permission });
-      setEmail('');
-      setName('');
-      setMessage('授权账户已写入。');
+      setActivationLink(null);
+      setActivationCopied(false);
+      const shouldSendEmail = Boolean(inviteCapabilities?.email_available && onInviteStaff);
+      if (shouldSendEmail && onInviteStaff) {
+        try {
+          await onInviteStaff({ email: email.trim(), name: name.trim() || undefined, role, vkpiPermission: permission });
+          setEmail('');
+          setName('');
+          setMessage('员工邀请已发送。');
+        } catch (error) {
+          const rawMessage = error instanceof Error ? error.message : String(error);
+          if (!rawMessage.includes('Email delivery unavailable')) throw error;
+          await createManualActivationLink();
+        }
+      } else {
+        await createManualActivationLink();
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '员工邀请失败');
     } finally {
       setBusy(false);
+    }
+  };
+
+  const copyActivationLink = async () => {
+    const url = String(activationLink?.activation_url || '');
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      setActivationCopied(true);
+      setMessage('激活链接已复制。');
+    } catch {
+      setActivationCopied(false);
+      setMessage('浏览器不允许自动复制，请手动选中链接复制。');
     }
   };
 
@@ -435,6 +495,10 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
   const adapterCount = productCatalog.filter((product) => product.categoryMain === 'Adapter').length;
   const syncTime = String(syncPolicy.daily_sync_time || '08:00');
   const systemHealth = settingsError || providerError || rbacStatusError ? '需要处理' : 'healthy';
+  const inviteMode = inviteCapabilities?.email_available ? 'email' : 'manual_link';
+  const canInviteStaff = inviteMode === 'email'
+    ? Boolean(onInviteStaff)
+    : Boolean(apiToken && (inviteCapabilities?.manual_activation_link_available ?? true));
   const moduleTitle = {
     status: '当前状态',
     sku: 'SKU 录入',
@@ -532,11 +596,17 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
               role={role}
               permission={permission}
               busy={busy}
-              canInvite={Boolean(onInviteStaff)}
+              canInvite={canInviteStaff}
+              inviteMode={inviteMode}
+              inviteCapabilities={inviteCapabilities}
+              inviteCapabilitiesError={inviteCapabilitiesError}
+              activationLink={activationLink}
+              activationCopied={activationCopied}
               onEmailChange={setEmail}
               onNameChange={setName}
               onRoleChange={setRole}
               onPermissionChange={setPermission}
+              onCopyActivationLink={() => void copyActivationLink()}
               onSubmit={submitInvite}
             />
             <section className="vkpi-card vkpi-table-card">

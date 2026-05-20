@@ -197,6 +197,29 @@ export interface VkpiInviteStaffPayload {
   vkpiPermission: "none" | "read" | "write";
 }
 
+export interface VkpiStaffInviteCapabilities {
+  email_available?: boolean;
+  external_emails_allowed?: boolean;
+  allowed_domains?: string[];
+  token_ttl_hours?: number;
+  manual_activation_link_available?: boolean;
+  delivery_methods?: string[];
+  site_url_configured?: boolean;
+}
+
+export interface VkpiStaffActivationLinkResponse {
+  staff_id?: number;
+  user_id?: number;
+  email?: string;
+  full_name?: string;
+  role?: string;
+  activation_url?: string;
+  token_hint?: string;
+  expires_at?: string;
+  expires_in_hours?: number;
+  delivery_method?: string;
+}
+
 export type AsyncTaskStatus =
   | "queued"
   | "running"
@@ -1123,7 +1146,28 @@ export async function getMarketingLinkOrders(token: string, linkId: string, limi
 export async function pauseMarketingLink(token: string, linkId: string) { return apiFetch<Record<string, unknown>>(`/api/marketing/links/${encodeURIComponent(linkId)}/pause`, { method: "POST", body: jsonBody({}) }, token); }
 export async function archiveMarketingLink(token: string, linkId: string) { return apiFetch<Record<string, unknown>>(`/api/marketing/links/${encodeURIComponent(linkId)}/archive`, { method: "POST", body: jsonBody({}) }, token); }
 export async function healthCheckMarketingLink(token: string, linkId: string) { return apiFetch<Record<string, unknown>>(`/api/marketing/links/${encodeURIComponent(linkId)}/health-check`, { method: "POST", body: jsonBody({}) }, token); }
-export async function inviteMarketingStaff(token: string, payload: VkpiInviteStaffPayload) { return apiFetch<Record<string, unknown>>("/api/admin/staff/invite", { method: "POST", body: jsonBody({ email: payload.email, name: payload.name, role: payload.role, permissions: { vkpi: payload.vkpiPermission } }) }, token); }
+export async function getStaffInviteCapabilities(token: string) {
+  return apiFetch<VkpiStaffInviteCapabilities>("/api/admin/staff/invite/capabilities", {}, token);
+}
+export async function inviteMarketingStaff(token: string, payload: VkpiInviteStaffPayload) { return apiFetch<Record<string, unknown>>("/api/admin/staff/invite", { method: "POST", body: jsonBody({ email: payload.email, name: payload.name, full_name: payload.name, role: payload.role, permissions: { vkpi: payload.vkpiPermission } }) }, token); }
+export async function createStaffActivationLink(token: string, payload: VkpiInviteStaffPayload) {
+  return apiFetch<VkpiStaffActivationLinkResponse>("/api/admin/staff/invite/activation-link", {
+    method: "POST",
+    body: jsonBody({
+      email: payload.email,
+      name: payload.name,
+      full_name: payload.name,
+      role: payload.role,
+      permissions: { vkpi: payload.vkpiPermission },
+    }),
+  }, token);
+}
+export async function acceptStaffInvite(inviteToken: string, password: string) {
+  return apiFetch<Record<string, unknown>>("/api/admin/staff/accept-invite", {
+    method: "POST",
+    body: jsonBody({ invite_token: inviteToken, password }),
+  });
+}
 export async function updateStaffMarketingPermission(token: string, staffId: string, permission: "none" | "read" | "write") { return apiFetch<Record<string, unknown>>(`/api/admin/staff/${encodeURIComponent(staffId)}/permissions`, { method: "POST", body: jsonBody({ permissions: { vkpi: permission } }) }, token); }
 export async function getRbacStatus(token: string, includeStaff = false) {
   const suffix = includeStaff ? "?include_staff=true" : "";

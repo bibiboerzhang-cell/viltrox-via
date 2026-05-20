@@ -767,6 +767,13 @@ def read_login():
     return _serve_frontend()
 
 
+@app.get("/activate")
+def read_activate():
+    if not IS_PUBLIC_APP:
+        raise HTTPException(status_code=404, detail="Public surface is disabled on this instance")
+    return _serve_frontend()
+
+
 @app.get("/student-signup")
 def read_student_signup():
     if not IS_PUBLIC_APP:

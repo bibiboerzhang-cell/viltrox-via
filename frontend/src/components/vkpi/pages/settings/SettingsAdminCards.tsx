@@ -1,4 +1,5 @@
 import React from "react";
+import type { VkpiStaffActivationLinkResponse, VkpiStaffInviteCapabilities } from "../../../../services/vkpi.ui-api";
 import type { VkpiProductCatalogItem } from "../../vkpiTypes";
 import { CardHeader } from "../../shared/CardHeader";
 import { InfoBlock } from "../../shared/InfoBlock";
@@ -38,10 +39,16 @@ export function StaffInviteCard({
   permission,
   busy,
   canInvite,
+  inviteMode,
+  inviteCapabilities,
+  inviteCapabilitiesError,
+  activationLink,
+  activationCopied,
   onEmailChange,
   onNameChange,
   onRoleChange,
   onPermissionChange,
+  onCopyActivationLink,
   onSubmit,
 }: {
   email: string;
@@ -50,12 +57,22 @@ export function StaffInviteCard({
   permission: "none" | "read" | "write";
   busy: boolean;
   canInvite: boolean;
+  inviteMode: "email" | "manual_link";
+  inviteCapabilities?: VkpiStaffInviteCapabilities | null;
+  inviteCapabilitiesError?: string;
+  activationLink?: VkpiStaffActivationLinkResponse | null;
+  activationCopied?: boolean;
   onEmailChange: (value: string) => void;
   onNameChange: (value: string) => void;
   onRoleChange: (value: string) => void;
   onPermissionChange: (value: "none" | "read" | "write") => void;
+  onCopyActivationLink: () => void;
   onSubmit: React.FormEventHandler;
 }) {
+  const allowedDomains = inviteCapabilities?.allowed_domains?.length
+    ? inviteCapabilities.allowed_domains.join(" / ")
+    : "viltrox.com";
+  const submitLabel = inviteMode === "email" ? "发送邀请" : "生成激活链接";
   return (
     <section className="vkpi-card vkpi-action-card">
       <CardHeader title="授权账户" />
@@ -64,8 +81,23 @@ export function StaffInviteCard({
         <input value={name} onChange={(event) => onNameChange(event.target.value)} placeholder="员工姓名 / 拼音 ID" />
         <select value={role} onChange={(event) => onRoleChange(event.target.value)}><option value="employee">员工 / 运营</option><option value="manager">管理层</option><option value="analyst">数据分析</option><option value="readonly">只读</option><option value="admin">管理员</option></select>
         <select value={permission} onChange={(event) => onPermissionChange(event.target.value as "none" | "read" | "write")}><option value="write">可操作 Viltrox Marketing</option><option value="read">只读 Viltrox Marketing</option><option value="none">无 Viltrox Marketing 权限</option></select>
-        <button className="vkpi-button vkpi-button--primary" type="submit" disabled={busy || !canInvite}>发送邀请</button>
+        <div className="vkpi-invite-mode-row">
+          <span>{inviteMode === "email" ? "邮件邀请" : "激活链接"}</span>
+          <em>{inviteMode === "email" ? "SMTP 已配置" : `允许域名 ${allowedDomains}`}</em>
+        </div>
+        {inviteCapabilitiesError ? <div className="vkpi-inline-message is-warn">{inviteCapabilitiesError}</div> : null}
+        <button className="vkpi-button vkpi-button--primary" type="submit" disabled={busy || !canInvite}>{busy ? "处理中" : submitLabel}</button>
       </form>
+      {activationLink?.activation_url ? (
+        <div className="vkpi-activation-link-panel">
+          <div>
+            <strong>激活链接</strong>
+            <span>{activationLink.expires_in_hours || inviteCapabilities?.token_ttl_hours || 48} 小时内有效</span>
+          </div>
+          <input readOnly value={activationLink.activation_url} onFocus={(event) => event.currentTarget.select()} />
+          <button className="vkpi-button" type="button" onClick={onCopyActivationLink}>{activationCopied ? "已复制" : "复制链接"}</button>
+        </div>
+      ) : null}
     </section>
   );
 }

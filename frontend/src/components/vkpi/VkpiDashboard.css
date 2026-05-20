@@ -2383,6 +2383,14 @@
 .vkpi-selected-sku-price span { color: #067647; font-size: 11px; font-weight: 900; }
 .vkpi-selected-sku-price strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .vkpi-selected-sku-price em { font-style: normal; font-size: 13px; font-weight: 950; }
+.vkpi-invite-mode-row { border: 1px solid var(--vkpi-border); border-radius: 14px; background: #f8fafc; padding: 10px 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px; color: #344054; }
+.vkpi-invite-mode-row span { font-size: 12px; font-weight: 950; color: var(--vkpi-text); }
+.vkpi-invite-mode-row em { font-style: normal; color: var(--vkpi-muted); font-size: 12px; font-weight: 800; text-align: right; }
+.vkpi-activation-link-panel { margin-top: 12px; border: 1px solid #abefc6; border-radius: 16px; background: #ecfdf3; padding: 12px; display: grid; gap: 10px; }
+.vkpi-activation-link-panel > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.vkpi-activation-link-panel strong { color: #067647; font-size: 13px; font-weight: 950; }
+.vkpi-activation-link-panel span { color: #087443; font-size: 12px; font-weight: 850; }
+.vkpi-activation-link-panel input { width: 100%; border: 1px solid #75e0a7; border-radius: 12px; padding: 10px 12px; background: #fff; color: #064e3b; font-size: 12px; font-weight: 750; }
 .vkpi-existing-kol-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .vkpi-existing-kol-row { border: 1px solid var(--vkpi-border); border-radius: 14px; background: #fff; padding: 10px; display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 4px 10px; text-align: left; align-items: center; color: var(--vkpi-text); cursor: pointer; min-width: 0; }
 .vkpi-existing-kol-row:hover { border-color: rgba(21, 93, 252, 0.35); box-shadow: 0 10px 26px rgba(16, 24, 40, 0.08); }
