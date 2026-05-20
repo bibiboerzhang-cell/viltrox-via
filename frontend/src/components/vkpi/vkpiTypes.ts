@@ -3,6 +3,7 @@ export type VkpiDataStatus = 'live' | 'partial' | 'empty';
 export type VkpiRangeKey = 'today' | '7d' | '30d' | 'mtd' | 'qtd';
 export type VkpiPageKey =
   | 'command'
+  | 'glass-demo'
   | 'discover'
   | 'projects'
   | 'links'

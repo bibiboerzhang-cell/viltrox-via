@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import './VkpiDashboard.css';
 import { CommandCenter } from './dashboard/CommandCenter';
+import { GlassDemoPage } from './pages/GlassDemoPage';
 import { EMPLOYEE_NAV_ITEMS, MANAGER_NAV_ITEMS } from './layout/vkpiLayoutConstants';
 import { VkpiSidebar } from './layout/VkpiSidebar';
 import { VkpiTopbar } from './layout/VkpiTopbar';
@@ -175,6 +176,12 @@ const VKPI_PAGE_KEYS = new Set<VkpiPageKey>([
   'audit',
   'settings',
 ]);
+
+const importMetaEnv = (import.meta as { env?: { DEV?: boolean } }).env;
+
+if (importMetaEnv?.DEV) {
+  VKPI_PAGE_KEYS.add('glass-demo');
+}
 
 function isVkpiPageKey(value: string): value is VkpiPageKey {
   return VKPI_PAGE_KEYS.has(value as VkpiPageKey);
@@ -459,6 +466,10 @@ export function VkpiDashboard({
       setAlertDetailLoading(false);
     }
   }, [apiToken]);
+
+  if (activePage === 'glass-demo') {
+    return <GlassDemoPage userName={userName} userRole={userRole} />;
+  }
 
   return (
     <TaskCenterProvider apiToken={apiToken}>

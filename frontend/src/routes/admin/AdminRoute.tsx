@@ -7,9 +7,12 @@
  *   - Signed-in users enter a role-scoped Marketing view.
  */
 import { VkpiTab } from "../../components/admin/tabs_v2/VkpiTab";
+import { VkpiDashboard } from "../../components/vkpi";
 import { useAuth } from "../../hooks/useAuth";
 import AdminLoginRoute from "./AdminLoginRoute";
 import "../../styles/admin.css";
+
+const importMetaEnv = (import.meta as { env?: { DEV?: boolean } }).env;
 
 function AdminAuthLoading() {
   return (
@@ -47,8 +50,17 @@ function hasMarketingPermission(user: { role?: string; is_owner?: boolean; permi
   return ["read", "write"].includes(String(permissions.vkpi || permissions.marketing || "none").toLowerCase());
 }
 
+function isGlassDemoRequest(): boolean {
+  if (!importMetaEnv?.DEV || typeof window === "undefined") return false;
+  return window.location.hash.replace(/^#\/?/, "") === "glass-demo";
+}
+
 export default function AdminRoute() {
   const { status, token, user, signOut } = useAuth();
+
+  if (isGlassDemoRequest()) {
+    return <VkpiDashboard userName="Jianbo" userRole="Marketing Director" />;
+  }
 
   if (status === "loading") {
     return <AdminAuthLoading />;
