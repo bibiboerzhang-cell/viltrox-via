@@ -6,6 +6,7 @@ const IMAGE_PROXY_HOSTS = [
   'fbcdn.net',
   'xx.fbcdn.net',
   'ytimg.com',
+  'ggpht.com',
   'googleusercontent.com',
   'tiktokcdn.com',
   'tiktokcdn-us.com',

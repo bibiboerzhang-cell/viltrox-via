@@ -145,3 +145,69 @@ def test_platform_annotation_uses_history_recent_posts_when_provider_has_none():
         assert annotated[0]["latest_posts"][0]["title"] == "Recent cached post"
     finally:
         _cleanup()
+
+
+def test_history_search_uses_cached_profile_avatar_when_column_is_empty():
+    ensure_vkpi_product_industry_schema()
+    _cleanup()
+    conn = get_conn()
+    now = "2026-05-20T10:00:00Z"
+    try:
+        conn.execute(
+            """
+            INSERT INTO vkpi_kol_pool
+              (pool_uid, platform, handle, profile_url, display_name, avatar_url, bio, email,
+               followers, following, posts_count, avg_views, avg_likes, avg_comments,
+               engagement_rate, source_type, source_ref, raw_platform_data, created_by_staff_id,
+               last_seen_at, created_at, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                f"{MARKER}-avatar-uid",
+                "youtube",
+                "historyavatar",
+                "https://youtube.com/@historyavatar",
+                "History Avatar",
+                "",
+                "",
+                "",
+                500,
+                None,
+                1,
+                321,
+                4,
+                2,
+                0.012,
+                "legacy_excel_p2d",
+                MARKER,
+                json.dumps(
+                    {
+                        "profile": {
+                            "snippet": {
+                                "thumbnails": {
+                                    "high": {"url": "https://yt3.ggpht.com/history-avatar=s800-c-k-c0x00ffffff-no-rj"}
+                                }
+                            }
+                        },
+                        "videos": [{"id": "avatar-video", "snippet": {"title": "Avatar sample"}}],
+                    }
+                ),
+                None,
+                now,
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+
+        results = kol_history_match.search_pool_for_natural(
+            "historyavatar",
+            {"platform": "youtube", "keywords": ["historyavatar"]},
+            limit=5,
+        )
+
+        assert results
+        assert results[0]["avatar_url"] == "https://yt3.ggpht.com/history-avatar=s800-c-k-c0x00ffffff-no-rj"
+        assert results[0]["historical_match"]["avatar_url"] == "https://yt3.ggpht.com/history-avatar=s800-c-k-c0x00ffffff-no-rj"
+    finally:
+        _cleanup()

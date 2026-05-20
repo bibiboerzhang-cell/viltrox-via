@@ -159,12 +159,79 @@ def _raw_post_items(raw: dict[str, Any]) -> list[dict[str, Any]]:
     return posts
 
 
+def _raw_profile_candidates(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for key in ("profile", "channel", "author", "authorMeta", "owner", "user", "account"):
+        value = raw.get(key)
+        if isinstance(value, dict):
+            candidates.append(value)
+    candidates.append(raw)
+    nested_raw = raw.get("raw")
+    if isinstance(nested_raw, dict):
+        candidates.extend(_raw_profile_candidates(nested_raw))
+    return candidates
+
+
 def _nested_dict(source: dict[str, Any], *keys: str) -> dict[str, Any]:
     for key in keys:
         value = source.get(key)
         if isinstance(value, dict):
             return value
     return {}
+
+
+def _nested_text(source: dict[str, Any], *path: str) -> str:
+    value: Any = source
+    for key in path:
+        if not isinstance(value, dict):
+            return ""
+        value = value.get(key)
+    return _text(value)
+
+
+def _thumb_from_profile(profile: dict[str, Any]) -> str:
+    snippet = _nested_dict(profile, "snippet")
+    thumbnails = profile.get("thumbnails") if isinstance(profile.get("thumbnails"), dict) else snippet.get("thumbnails")
+    if isinstance(thumbnails, dict):
+        for key in ("high", "medium", "standard", "default"):
+            candidate = thumbnails.get(key)
+            if isinstance(candidate, dict):
+                url = _text(candidate.get("url"))
+                if url:
+                    return url
+    author = _nested_dict(profile, "authorMeta", "author", "owner", "user")
+    return _first_text(
+        profile.get("avatar_url"),
+        profile.get("avatarUrl"),
+        profile.get("profilePicUrlHD"),
+        profile.get("profilePicUrl"),
+        profile.get("profilePictureUrl"),
+        profile.get("profile_image_url"),
+        profile.get("channelAvatar"),
+        profile.get("channelThumbnail"),
+        profile.get("avatar"),
+        profile.get("image"),
+        profile.get("thumbnailUrl"),
+        profile.get("thumbnail"),
+        author.get("avatar"),
+        author.get("avatarUrl"),
+        author.get("avatarThumb"),
+        author.get("avatarMedium"),
+        author.get("profilePicUrl"),
+        author.get("profilePictureUrl"),
+        author.get("profile_image_url"),
+        _nested_text(profile, "snippet", "thumbnails", "high", "url"),
+        _nested_text(profile, "snippet", "thumbnails", "medium", "url"),
+        _nested_text(profile, "snippet", "thumbnails", "default", "url"),
+    )
+
+
+def _avatar_from_raw(raw: dict[str, Any]) -> str:
+    for profile in _raw_profile_candidates(raw):
+        avatar = _thumb_from_profile(profile)
+        if avatar:
+            return avatar
+    return ""
 
 
 def _post_summary_fields(post: dict[str, Any]) -> dict[str, Any]:
@@ -281,6 +348,7 @@ def _cooperation_summary(conn, pool_id: int, raw: dict[str, Any]) -> dict[str, A
 def _history_payload(conn, row: dict[str, Any], *, match_type: str, confidence: float) -> dict[str, Any]:
     raw = _pool_raw(row)
     summary = _cooperation_summary(conn, int(row.get("id") or 0), raw)
+    avatar_url = _text(row.get("avatar_url")) or _avatar_from_raw(raw)
     return {
         "matched": True,
         "source": "vkpi_kol_pool",
@@ -292,7 +360,7 @@ def _history_payload(conn, row: dict[str, Any], *, match_type: str, confidence: 
         "handle": _text(row.get("handle")),
         "display_name": _text(row.get("display_name")),
         "profile_url": _text(row.get("profile_url")),
-        "avatar_url": _text(row.get("avatar_url")),
+        "avatar_url": avatar_url,
         "followers": _int(row.get("followers")),
         "avg_views": _int(row.get("avg_views")),
         "source_type": _text(row.get("source_type")),
@@ -478,7 +546,7 @@ def search_pool_for_natural(query: str, parsed: dict[str, Any], *, limit: int = 
                 "display_name": data.get("display_name") or data.get("handle"),
                 "media_name": data.get("display_name") or data.get("handle"),
                 "profile_url": data.get("profile_url"),
-                "avatar_url": data.get("avatar_url"),
+                "avatar_url": data.get("avatar_url") or history.get("avatar_url"),
                 "follower_count": data.get("followers"),
                 "snapshot_follower_count": data.get("followers"),
                 "content_count": data.get("posts_count"),
