@@ -120,6 +120,21 @@ def prod_snapshot_status() -> dict[str, Any]:
     return payload
 
 
+def post_sync_audit() -> dict[str, Any]:
+    script = ROOT / "scripts" / "ops" / "audit_vkpi_post_sync_state.py"
+    if not script.exists():
+        return {"available": False}
+    result = run([str(script)], timeout=60)
+    try:
+        payload = parse_json_blob(result.stdout or result.stderr)
+    except Exception as exc:
+        return {"available": True, "loaded": False, "error": f"invalid audit output: {exc}", "returncode": result.returncode}
+    payload["available"] = True
+    payload["loaded"] = result.returncode == 0
+    payload["returncode"] = result.returncode
+    return payload
+
+
 def status_item(key: str, title: str, status: str, evidence: list[str], next_step: str) -> dict[str, Any]:
     return {
         "key": key,
@@ -130,11 +145,16 @@ def status_item(key: str, title: str, status: str, evidence: list[str], next_ste
     }
 
 
-def build_items(sync: dict[str, Any], r2: dict[str, Any], snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+def build_items(sync: dict[str, Any], r2: dict[str, Any], snapshot: dict[str, Any], audit: dict[str, Any]) -> list[dict[str, Any]]:
     sync_active = str(sync.get("service_state") or "") in {"active", "activating"}
     r2_ready = bool(r2.get("ready"))
     snapshot_loaded = bool(snapshot.get("loaded"))
     latest_snapshot = snapshot.get("latest_snapshot") if isinstance(snapshot.get("latest_snapshot"), dict) else {}
+    acceptance = audit.get("acceptance") if isinstance(audit.get("acceptance"), dict) else {}
+    competitor_summary = audit.get("competitor_relation_summary") if isinstance(audit.get("competitor_relation_summary"), dict) else {}
+    brand_signal_summary = audit.get("brand_signal_summary") if isinstance(audit.get("brand_signal_summary"), dict) else {}
+    competitor_total = int(competitor_summary.get("total") or 0)
+    brand_signal_total = int(brand_signal_summary.get("total") or 0)
     competitor_relation_ready = (
         exists("migrations/069_vkpi_competitor_relation.sql")
         and exists("scripts/ops/backfill_vkpi_competitor_relations_after_sync.sh")
@@ -182,7 +202,7 @@ def build_items(sync: dict[str, Any], r2: dict[str, Any], snapshot: dict[str, An
                 f"last_apify_line={sync.get('last_apify_line', '')}",
                 f"failure_tail_count={len(sync.get('failure_tail') or [])}",
             ],
-            "当前运行不打断；完成后部署本地 HEAD，再检查 18 官方 + 1012 轻量刷新结果。",
+            "已完成本轮同步；后续保持 timer，下一轮只跑轻量刷新，不开 deep scan。" if sync.get("result") == "success" else "当前运行不打断；完成后部署本地 HEAD，再检查 18 官方 + 1012 轻量刷新结果。",
         ),
         status_item(
             "a1_r2",
@@ -210,7 +230,7 @@ def build_items(sync: dict[str, Any], r2: dict[str, Any], snapshot: dict[str, An
         status_item(
             "competitor_b",
             "B 竞品识别",
-            "backfill_ready" if competitor_relation_ready else "partial_ui",
+            "done" if competitor_total > 0 else ("backfill_ready" if competitor_relation_ready else "partial_ui"),
             [
                 "kol_competitor_detector.py exists" if exists("backend/app/services/vkpi/kol_competitor_detector.py") else "detector missing",
                 "competitor API exists" if contains("backend/app/api/routers/vkpi_kol_pool.py", "/competitors") else "competitor API missing",
@@ -218,21 +238,29 @@ def build_items(sync: dict[str, Any], r2: dict[str, Any], snapshot: dict[str, An
                 "remote backfill guard exists" if exists("scripts/ops/backfill_vkpi_competitor_relations_after_sync.sh") else "backfill guard missing",
                 "API can prefer persisted relation" if contains("backend/app/services/vkpi/kol_competitor_detector.py", "prefer_persisted") else "persisted relation read missing",
                 "Discover competitor block exists" if contains("frontend/src/components/vkpi/pages/DiscoverPage.tsx", "竞品关系") else "Discover competitor block missing",
+                f"persisted_relations={competitor_total}",
+                f"kol_count={competitor_summary.get('kol_count', '-')}",
+                f"avoid={competitor_summary.get('avoid_count', '-')}",
+                f"caution={competitor_summary.get('caution_count', '-')}",
             ],
-            "等 A2 完成并部署后，运行远端 backfill guard 写入 1012 历史池竞品关系快照。",
+            "已写入 1012 历史池竞品关系；下一步接前端推荐过滤和详情页复测。" if competitor_total > 0 else "等 A2 完成并部署后，运行远端 backfill guard 写入 1012 历史池竞品关系快照。",
         ),
         status_item(
             "brand_signal_c",
             "C Viltrox brand signal",
-            "scan_ready" if brand_signal_ready else "partial_live",
+            "done" if brand_signal_total > 0 else ("scan_ready" if brand_signal_ready else "partial_live"),
             [
                 "brand_signal_detector.py exists" if exists("backend/app/services/vkpi/brand_signal_detector.py") else "detector missing",
                 "post-sync brand signal guard exists" if exists("scripts/ops/scan_vkpi_brand_signals_after_sync.sh") else "brand signal guard missing",
                 "cached scan can write_db" if contains("backend/app/services/vkpi/brand_signal_detector.py", "scan_cached_brand_signals", "write_db") else "brand signal write path missing",
                 "DataQuality signal queue exists" if contains("frontend/src/components/vkpi/pages/DataQualityPage.tsx", "Viltrox / 竞品信号") else "signal queue missing",
                 "Command Center signal card exists" if contains("frontend/src/components/vkpi/dashboard/CommandCenter.tsx", "品牌信号") else "command signal card missing",
+                f"persisted_signals={brand_signal_total}",
+                f"current_year={brand_signal_summary.get('current_year_count', '-')}",
+                f"competitor={brand_signal_summary.get('competitor_count', '-')}",
+                f"new={brand_signal_summary.get('new_count', '-')}",
             ],
-            "等 A2 完成并部署后，运行远端 brand signal guard，从缓存内容写入真实未处理信号。",
+            "已写入缓存品牌信号；下一步复测 Dashboard/DataQuality 是否按真实新信号展示。" if brand_signal_total > 0 else "等 A2 完成并部署后，运行远端 brand signal guard，从缓存内容写入真实未处理信号。",
         ),
         status_item(
             "dimensions_d",
@@ -255,6 +283,7 @@ def build_items(sync: dict[str, Any], r2: dict[str, Any], snapshot: dict[str, An
                 "search progress exists" if contains("frontend/src/components/vkpi/pages/DiscoverPage.tsx", "SearchProgress") else "progress missing",
                 "search history exists" if contains("frontend/src/components/vkpi/pages/DiscoverPage.tsx", "搜索历史") else "history missing",
                 "1012 history merge exists" if contains("frontend/src/components/vkpi/pages/DiscoverPage.tsx", "1012 历史合作池") else "history merge missing",
+                f"legacy_1012_present={acceptance.get('legacy_1012_present', '-')}",
             ],
             "部署后用真实关键词复测头像、候选逐条出现和最近内容回填。",
         ),
@@ -293,13 +322,15 @@ def main() -> int:
     sync = daily_sync_status()
     r2 = r2_readiness()
     snapshot = prod_snapshot_status()
+    audit = post_sync_audit()
     report = {
         "generated_at": utcnow(),
         "git": git,
         "daily_sync": sync,
         "r2": r2,
         "prod_snapshot": snapshot,
-        "items": build_items(sync, r2, snapshot),
+        "post_sync_audit": audit,
+        "items": build_items(sync, r2, snapshot, audit),
     }
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
