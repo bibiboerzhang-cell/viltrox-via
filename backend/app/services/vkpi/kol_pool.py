@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any
 
 from app.db.connection import get_conn, is_postgres_runtime
+from app.services.cache import cache_clear, cache_get, cache_set
 from app.services.system import staff as staff_service
 from app.services.vkpi.industry_crawlers import get_crawler
 from app.services.vkpi.industry_snapshot_kpis import calculate_kpis
@@ -18,10 +19,37 @@ from app.services.vkpi.workflow import staff_id as resolve_staff_id
 ENRICHABLE_PLATFORMS = {"youtube", "instagram", "tiktok", "xiaohongshu", "x", "bilibili", "facebook", "reddit"}
 OWNER_NAME_KEYS = ("owner_name", "owner", "responsible_owner", "responsible_name", "assignee", "登记/对接人")
 OWNER_ID_KEYS = ("responsible_staff_id", "owner_staff_id", "assigned_staff_id", "source_staff_id")
+KOL_POOL_READ_CACHE_TTL_SEC = 300
 
 
 def _utcnow() -> str:
     return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _kol_pool_cache_key(name: str, **params: Any) -> str:
+    parts = [f"{key}:{params[key]}" for key in sorted(params)]
+    return f"vkpi:kol_pool:{name}:{':'.join(parts)}"
+
+
+def _clear_kol_pool_read_cache() -> None:
+    try:
+        cache_clear(prefix="vkpi:kol_pool:")
+    except Exception:
+        pass
+
+
+def _kol_pool_cache_hit(payload: Any) -> Any:
+    if isinstance(payload, dict):
+        result = dict(payload)
+        result["cache"] = {"hit": True, "ttl_sec": KOL_POOL_READ_CACHE_TTL_SEC}
+        return result
+    return payload
+
+
+def _kol_pool_cache_store(key: str, payload: dict[str, Any]) -> dict[str, Any]:
+    result = {**payload, "cache": {"hit": False, "ttl_sec": KOL_POOL_READ_CACHE_TTL_SEC}}
+    cache_set(key, result, ttl=KOL_POOL_READ_CACHE_TTL_SEC)
+    return result
 
 
 def _json(value: Any) -> str:
@@ -520,6 +548,7 @@ def import_items(items: list[dict[str, Any]], *, source_type: str = "manual", so
         if row:
             rows.append(dict(row))
     conn.commit()
+    _clear_kol_pool_read_cache()
     return {"imported": imported, "skipped": skipped, "items": rows}
 
 
@@ -532,6 +561,19 @@ def list_pool(
     enrichable: bool | None = None,
 ) -> dict[str, Any]:
     ensure_vkpi_product_industry_schema()
+    safe_limit = max(1, min(500, int(limit or 100)))
+    cache_key = _kol_pool_cache_key(
+        "list",
+        limit=safe_limit,
+        platform=_platform(platform) if platform else "",
+        query=str(query or "").strip().lower(),
+        data_status=str(data_status or "").strip().lower(),
+        sort_by=str(sort_by or "fit").strip().lower(),
+        enrichable="any" if enrichable is None else str(bool(enrichable)).lower(),
+    )
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return _kol_pool_cache_hit(cached)
     where: list[str] = []
     params: list[Any] = []
     if platform:
@@ -574,9 +616,9 @@ def list_pool(
     order_clause = _sort_clause(sort_by)
     rows = get_conn().execute(
         f"SELECT * FROM vkpi_kol_pool {clause} ORDER BY {order_clause} LIMIT ?",
-        (*params, max(1, min(500, int(limit or 100)))),
+        (*params, safe_limit),
     ).fetchall()
-    return {"items": [dict(row) for row in rows]}
+    return _kol_pool_cache_store(cache_key, {"items": [dict(row) for row in rows]})
 
 
 def main_candidates(kol_pool_id: int, *, limit: int = 5) -> dict[str, Any]:
@@ -729,6 +771,7 @@ def promote_to_main(
         (main_kol_id, now, int(kol_pool_id)),
     )
     conn.commit()
+    _clear_kol_pool_read_cache()
     updated = conn.execute("SELECT * FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)).fetchone()
     return {
         "linked": True,
@@ -814,6 +857,10 @@ def _create_main_kol_from_pool(conn, item: dict[str, Any], *, staff: dict[str, A
 
 def summary() -> dict[str, Any]:
     ensure_vkpi_product_industry_schema()
+    cache_key = _kol_pool_cache_key("summary")
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return _kol_pool_cache_hit(cached)
     conn = get_conn()
     total = conn.execute("SELECT COUNT(*) AS n FROM vkpi_kol_pool").fetchone()
     linked = conn.execute("SELECT COUNT(*) AS n FROM vkpi_kol_pool WHERE linked_main_kol_id IS NOT NULL").fetchone()
@@ -824,7 +871,7 @@ def summary() -> dict[str, Any]:
     by_source = conn.execute(
         "SELECT source_type, COUNT(*) AS n FROM vkpi_kol_pool GROUP BY source_type ORDER BY n DESC, source_type ASC"
     ).fetchall()
-    return {
+    return _kol_pool_cache_store(cache_key, {
         "total": int(total["n"] if total else 0),
         "linked_main_kol_count": int(linked["n"] if linked else 0),
         "historical_collaboration_count": int(historical["n"] if historical else 0),
@@ -833,7 +880,7 @@ def summary() -> dict[str, Any]:
         "by_platform": [dict(row) for row in by_platform],
         "by_source": [dict(row) for row in by_source],
         "note": "KOL Pool 是资产池；source_type=promo_plan_xlsx 表示局部历史/计划名录，不等于 Daily Top100 新候选。",
-    }
+    })
 
 
 def get_item(kol_pool_id: int) -> dict[str, Any]:
@@ -873,6 +920,7 @@ def enrich_item(
             ("not_configured", now, int(kol_pool_id)),
         )
         conn.commit()
+        _clear_kol_pool_read_cache()
         updated = conn.execute("SELECT * FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)).fetchone()
         return {
             "item": dict(updated) if updated else item,
@@ -1001,6 +1049,7 @@ def enrich_item(
         ),
     )
     conn.commit()
+    _clear_kol_pool_read_cache()
     updated = conn.execute("SELECT * FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)).fetchone()
     return {
         "item": dict(updated) if updated else {},

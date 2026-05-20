@@ -264,6 +264,11 @@ def get_channel(channel_id: int, *, staff: dict[str, Any] | None = None) -> dict
 
 def list_channels(*, staff: dict[str, Any] | None = None, view_as_staff_id: int | None = None, limit: int = 100) -> dict[str, Any]:
     ensure_vkpi_channels_schema()
+    safe_limit = max(1, min(300, int(limit or 100)))
+    cache_key = _channel_cache_key("list", staff=staff, view_as_staff_id=view_as_staff_id, limit=safe_limit)
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return _channel_cache_hit(cached)
     target = _visible_staff_id(staff, view_as_staff_id)
     where = "WHERE deleted_at IS NULL"
     params: list[Any] = []
@@ -281,9 +286,9 @@ def list_channels(*, staff: dict[str, Any] | None = None, view_as_staff_id: int 
         ORDER BY c.updated_at DESC, c.id DESC
         LIMIT ?
         """,
-        (*params, max(1, min(300, int(limit or 100)))),
+        (*params, safe_limit),
     ).fetchall()
-    return {"channels": [_channel_row_to_dict(row) for row in rows]}
+    return _channel_cache_store(cache_key, {"channels": [_channel_row_to_dict(row) for row in rows]})
 
 
 def unbind_channel(channel_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -318,9 +323,13 @@ def metrics(channel_id: int, limit: int = 30, *, staff: dict[str, Any] | None = 
 
 def team_overview() -> dict[str, Any]:
     ensure_vkpi_channels_schema()
+    cache_key = _channel_cache_key("team_overview", limit=200)
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return _channel_cache_hit(cached)
     try:
         rows = get_conn().execute("SELECT * FROM vkpi_team_channels_overview LIMIT 200").fetchall()
-        return {"rows": [dict(row) for row in rows]}
+        return _channel_cache_store(cache_key, {"rows": [dict(row) for row in rows]})
     except Exception:
         rows = get_conn().execute(
             """
@@ -331,7 +340,7 @@ def team_overview() -> dict[str, Any]:
             ORDER BY active_channels DESC
             """
         ).fetchall()
-        return {"rows": [dict(row) for row in rows]}
+        return _channel_cache_store(cache_key, {"rows": [dict(row) for row in rows]})
 
 
 def team_detail(staff_id: int) -> dict[str, Any]:
