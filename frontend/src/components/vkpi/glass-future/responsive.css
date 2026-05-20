@@ -1,0 +1,31 @@
+@media (max-width: 1380px) {
+  .vkpi-glass-shell .kpis {
+    grid-template-columns: repeat(3,1fr);
+  }
+
+  .vkpi-glass-shell .content-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .vkpi-glass-shell .rail {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .vkpi-glass-shell .left-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .vkpi-glass-shell .lower,
+  .vkpi-glass-shell .latest {
+    grid-column: auto;
+  }
+
+  .vkpi-glass-shell .lower {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .vkpi-glass-shell .app {
+    grid-template-columns: 228px 1fr;
+  }
+}

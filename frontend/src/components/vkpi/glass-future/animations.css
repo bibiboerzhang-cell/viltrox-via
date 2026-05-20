@@ -1,0 +1,15 @@
+.vkpi-glass-shell .glass-card:hover {
+  transform: translateY(-2px);
+  transition: .22s;
+  box-shadow: 0 24px 60px rgba(32,64,128,.15),var(--inner);
+}
+
+.vkpi-glass-shell .glass-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 18px 42px rgba(32,64,128,.14),var(--inner);
+}
+
+.vkpi-glass-shell .toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}

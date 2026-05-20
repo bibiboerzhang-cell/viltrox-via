@@ -1,0 +1,25 @@
+.vkpi-glass-shell {
+  --bg0: #eef5ff;
+  --bg1: #f8fbff;
+  --ink: #101828;
+  --muted: #667085;
+  --sub: #98a2b3;
+  --line: rgba(255,255,255,.62);
+  --line2: rgba(32,70,130,.12);
+  --glass: rgba(255,255,255,.46);
+  --glass-strong: rgba(255,255,255,.62);
+  --glass-deep: rgba(255,255,255,.34);
+  --blue: #1b6cff;
+  --blue2: #6aa6ff;
+  --cyan: #18d5ff;
+  --violet: #8b5cf6;
+  --green: #18c784;
+  --amber: #ff9f2e;
+  --red: #ff3b5f;
+  --pink: #ff4da6;
+  --shadow: 0 26px 80px rgba(32,64,128,.18);
+  --shadow-soft: 0 12px 38px rgba(32,64,128,.10);
+  --inner: inset 0 1px 0 rgba(255,255,255,.85), inset 0 -1px 0 rgba(255,255,255,.28);
+  --r: 26px;
+  --r2: 18px;
+}

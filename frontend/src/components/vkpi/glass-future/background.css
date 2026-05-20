@@ -1,0 +1,45 @@
+.vkpi-glass-shell {
+  position: relative;
+  isolation: isolate;
+  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "PingFang SC", "Hiragino Sans GB", Arial, sans-serif;
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  background:
+    radial-gradient(900px 520px at 16% 6%, rgba(44,128,255,.24), transparent 58%),
+    radial-gradient(760px 460px at 86% 8%, rgba(139,92,246,.20), transparent 56%),
+    radial-gradient(720px 420px at 62% 90%, rgba(24,213,255,.16), transparent 56%),
+    linear-gradient(135deg,#f8fbff 0%,#eef5ff 48%,#f8fbff 100%);
+}
+
+.vkpi-glass-shell *,
+.vkpi-glass-shell *::before,
+.vkpi-glass-shell *::after {
+  box-sizing: border-box;
+}
+
+.vkpi-glass-shell:before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image:
+    linear-gradient(rgba(27,108,255,.045) 1px, transparent 1px),
+    linear-gradient(90deg,rgba(27,108,255,.04) 1px, transparent 1px);
+  background-size: 46px 46px;
+  mask-image: radial-gradient(circle at 50% 20%, black 0 36%, transparent 76%);
+}
+
+.vkpi-glass-shell:after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  opacity: .36;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140' viewBox='0 0 140 140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='.2'/%3E%3C/svg%3E");
+  mix-blend-mode: soft-light;
+}
