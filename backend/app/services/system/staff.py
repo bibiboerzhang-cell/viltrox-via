@@ -26,7 +26,7 @@ from app.core.permissions import (
 )
 from app.core.security import hash_password
 from app.db.connection import get_conn, is_postgres_runtime
-from app.services.auth.email import send_email
+from app.services.auth.email import email_service_available, send_email
 from app.services.auth.tokens import create_email_token
 
 logger = get_logger(__name__)
@@ -227,6 +227,11 @@ def invite(body: dict, *, inviter_id: int) -> dict:
       2. Else create a placeholder user (not implemented here) and link.
       3. Send email with magic link (out of scope — hook in your mailer).
     """
+    if not email_service_available():
+        raise ValueError(
+            "Email delivery unavailable. Use /api/admin/staff/invite/activation-link "
+            "to generate a manual activation link."
+        )
     created = _create_staff_with_token(body, inviter_id=inviter_id)
     sent = _send_staff_invite_email(created["email"], created["token"])
     if not sent:
