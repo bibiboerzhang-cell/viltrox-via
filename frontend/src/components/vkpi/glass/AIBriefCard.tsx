@@ -11,7 +11,7 @@ interface AIBriefCardProps {
 }
 
 export function AIBriefCard({
-  label = 'AI BRIEF',
+  label = 'AI BRIEF · 示例',
   title = '今天优先处理 35mm LAB 项目补人和 Sigma 风险。',
   body = '系统判断当前不是数据缺失，而是项目转化瓶颈：3→4 阶段偏低，同时德国 / 北美中腰部 KOL 有补人机会。',
   primaryAction = '查看证据链',

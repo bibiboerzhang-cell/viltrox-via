@@ -481,10 +481,6 @@ export function VkpiDashboard({
     return <GlassDemoPage apiToken={apiToken} userName={userName} userRole={userRole} />;
   }
 
-  if (activePage === 'dashboardPremium') {
-    return <DashboardPremium apiToken={apiToken} userName={userName} userRole={userRole} onSelectPage={handleSelectPage} />;
-  }
-
   return (
     <TaskCenterProvider apiToken={apiToken}>
     <div className="vkpi-app" data-testid="vkpi-dashboard">
@@ -521,7 +517,9 @@ export function VkpiDashboard({
         />
 
 	        <main className={`vkpi-page vkpi-page--${activePage}`}>
-	          {activePage === 'command' ? (
+	          {activePage === 'dashboardPremium' ? (
+	            <DashboardPremium apiToken={apiToken} userName={userName} userRole={userRole} embedded onSelectPage={handleSelectPage} />
+	          ) : activePage === 'command' ? (
 	            <CommandCenter
 	              data={data}
 	              visibleMetrics={visibleMetrics}

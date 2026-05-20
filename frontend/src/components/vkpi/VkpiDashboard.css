@@ -452,6 +452,11 @@
   justify-content: center;
 }
 
+.vkpi-page--dashboardPremium {
+  grid-template-columns: minmax(0, 1fr);
+  padding: 20px;
+}
+
 .vkpi-page--settings {
   grid-template-columns: minmax(0, min(1480px, 100%));
   justify-content: center;

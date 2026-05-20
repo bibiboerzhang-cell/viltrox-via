@@ -9,7 +9,7 @@ import {
 } from '../glass';
 import { apiFetch } from '../../../services/http';
 import { listKolPool, type VkpiKolPoolItem } from '../../../services/vkpi/kolPool-api';
-import { getKolPoolCompetitorDashboard, getKolPoolSummary, listBrandSignals } from '../../../services/vkpi.ui-api';
+import { getKolPoolCompetitorDashboard, getKolPoolSummary, getOfficialChannelMatrix, listBrandSignals } from '../../../services/vkpi.ui-api';
 import type { VkpiPageKey } from '../vkpiTypes';
 import '../glass-future/tokens.css';
 import '../glass-future/background.css';
@@ -23,6 +23,7 @@ export interface DashboardPremiumProps {
   userRole?: string;
   testId?: string;
   windowDays?: number;
+  embedded?: boolean;
   onSelectPage?: (page: VkpiPageKey) => void;
 }
 
@@ -108,6 +109,7 @@ interface PremiumSnapshot {
   trendRows: Row[];
   productRows: Row[];
   kolSummary: Row;
+  officialMatrix: Row;
   competitorDashboard: Row;
   brandSignals: Row[];
   loadedAt?: string;
@@ -208,6 +210,7 @@ const EMPTY_PREMIUM_SNAPSHOT: PremiumSnapshot = {
   trendRows: [],
   productRows: [],
   kolSummary: {},
+  officialMatrix: {},
   competitorDashboard: {},
   brandSignals: [],
 };
@@ -231,8 +234,11 @@ function objectValue(value: unknown): Row {
 
 function compact(value: number): string {
   const abs = Math.abs(value);
-  if (abs >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)}B`;
-  if (abs >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
+  const trim = (input: string) => input.replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1');
+  if (abs >= 1_000_000_000) return `${trim((value / 1_000_000_000).toFixed(abs >= 10_000_000_000 ? 1 : 2))}B`;
+  if (abs >= 1_000_000) return `${trim((value / 1_000_000).toFixed(abs >= 100_000_000 ? 1 : 2))}M`;
+  if (abs >= 100_000) return `${trim((value / 1_000).toFixed(0))}K`;
+  if (abs >= 10_000) return `${trim((value / 1_000).toFixed(1))}K`;
   if (abs >= 1_000) return `${Math.round(value).toLocaleString('en-US')}`;
   return `${Math.round(value).toLocaleString('en-US')}`;
 }
@@ -249,9 +255,57 @@ function metricNumber(metrics: Map<string, Row>, key: string): number {
   return row ? numberValue(row.value_numeric ?? row.value ?? 0) : 0;
 }
 
+function badgeText(value?: string): string {
+  if (!value) return '示例';
+  if (value.includes('Shopify')) return '待接入';
+  if (value.includes('待')) return '待数据';
+  return '示例';
+}
+
 function rowsFrom(value: unknown): Row[] {
   if (Array.isArray(value)) return value as Row[];
   return [];
+}
+
+function pendingKpis(): PremiumKpi[] {
+  return mockKpis.map((item) => ({
+    ...item,
+    value: '--',
+    meta: item.label === 'GMV' || item.label === '订单量' || item.label === '平均 ROI' ? '待 Shopify 接入' : '等待真实 API',
+    trend: 'up',
+    isMock: true,
+    mockLabel: item.label === 'GMV' || item.label === '订单量' || item.label === '平均 ROI' ? '待 Shopify 接入' : '待真实数据',
+  }));
+}
+
+function officialPlatformRows(matrix: Row): Row[] {
+  return rowsFrom(matrix.platforms);
+}
+
+function officialAccountRows(matrix: Row): Row[] {
+  return officialPlatformRows(matrix).flatMap((platform) => rowsFrom(platform.accounts));
+}
+
+function officialTotals(matrix: Row) {
+  const platforms = officialPlatformRows(matrix);
+  const accounts = officialAccountRows(matrix);
+  const platformTotal = (key: string) => platforms.reduce((sum, row) => sum + numberValue(row[key]), 0);
+  const accountTotal = (key: string) => accounts.reduce((sum, row) => sum + numberValue(row[key]), 0);
+  const views = numberValue(matrix.total_views) || platformTotal('total_views');
+  const posts = numberValue(matrix.post_count) || platformTotal('total_posts');
+  const followers = platformTotal('total_followers') || accountTotal('followers');
+  const likes = accountTotal('total_likes');
+  const comments = accountTotal('total_comments');
+  const viewsDelta = platformTotal('views_delta') || accountTotal('views_delta');
+  return {
+    views,
+    posts,
+    followers,
+    likes,
+    comments,
+    viewsDelta,
+    accountCount: numberValue(matrix.account_count) || accounts.length,
+  };
 }
 
 function latestTrendValue(rows: Row[], key: string): number {
@@ -259,9 +313,10 @@ function latestTrendValue(rows: Row[], key: string): number {
   return numberValue(last[key] ?? last.total_views ?? last.play_count ?? last.impressions);
 }
 
-function buildPremiumKpis(snapshot: PremiumSnapshot): PremiumKpi[] {
-  if (snapshot.source === 'mock') return mockKpis;
+function buildPremiumKpis(snapshot: PremiumSnapshot, allowMockFallback: boolean): PremiumKpi[] {
+  if (snapshot.source === 'mock') return allowMockFallback ? mockKpis : pendingKpis();
   const metrics = metricMap(rowsFrom(snapshot.dashboard.metrics));
+  const official = officialTotals(snapshot.officialMatrix);
   const trendTotals = snapshot.trendRows.reduce<{ views: number; likes: number; comments: number; published: number }>(
     (acc, row) => {
       acc.views += numberValue(row.views || row.total_views || row.play_count || row.impressions);
@@ -272,20 +327,34 @@ function buildPremiumKpis(snapshot: PremiumSnapshot): PremiumKpi[] {
     },
     { views: 0, likes: 0, comments: 0, published: 0 },
   );
-  const views = metricNumber(metrics, 'views') || trendTotals.views;
-  const publishedContent = metricNumber(metrics, 'published_content') || trendTotals.published;
-  const engagementRate = trendTotals.views ? ((trendTotals.likes + trendTotals.comments) / trendTotals.views) * 100 : 0;
+  const views = official.views || metricNumber(metrics, 'views') || trendTotals.views;
+  const gmvCents = metricNumber(metrics, 'gmv');
+  const orders = snapshot.trendRows.reduce((sum, row) => sum + numberValue(row.orders), 0);
+  const productRois = snapshot.productRows
+    .map((row) => {
+      const sales = numberValue(row.sales_cents || row.revenue_cents || row.gmv_cents);
+      const cost = numberValue(row.cost_cents);
+      return numberValue(row.roi) || (cost ? sales / cost : 0);
+    })
+    .filter((value) => value > 0);
+  const averageRoi = productRois.length ? productRois.reduce((sum, value) => sum + value, 0) / productRois.length : 0;
+  const publishedContent = official.posts || metricNumber(metrics, 'published_content') || trendTotals.published;
+  const engagementRate = official.views && (official.likes || official.comments)
+    ? ((official.likes + official.comments) / official.views) * 100
+    : trendTotals.views
+      ? ((trendTotals.likes + trendTotals.comments) / trendTotals.views) * 100
+      : 0;
   return [
-    { ...mockKpis[0], value: compact(views), meta: `真实 API · 近 ${snapshot.dashboard.window_days || 30} 天`, trend: 'up', isMock: false, mockLabel: undefined },
-    { ...mockKpis[1], meta: 'Mock · 等 Shopify', isMock: true, mockLabel: 'Mock · 等 Shopify' },
-    { ...mockKpis[2], value: compact(publishedContent), meta: '真实 API · 内容表', trend: 'up', isMock: false, mockLabel: undefined },
+    { ...mockKpis[0], value: views ? compact(views) : '--', meta: views ? `真实 API · 官方矩阵${official.viewsDelta ? ` · +${compact(official.viewsDelta)}` : ''}` : '等待真实 API', trend: 'up', isMock: !views, mockLabel: views ? undefined : '待真实数据' },
+    { ...mockKpis[1], value: gmvCents ? `$${compact(gmvCents / 100)}` : '--', meta: gmvCents ? '真实 API · 归因销售' : '待 Shopify 接入', trend: 'up', isMock: !gmvCents, mockLabel: gmvCents ? undefined : '待 Shopify 接入' },
+    { ...mockKpis[2], value: publishedContent ? compact(publishedContent) : '--', meta: publishedContent ? '真实 API · 官方矩阵' : '等待真实 API', trend: 'up', isMock: !publishedContent, mockLabel: publishedContent ? undefined : '待真实数据' },
     { ...mockKpis[3], value: `${engagementRate.toFixed(2)}%`, meta: '真实 API · likes/comments/views', trend: engagementRate ? 'up' : 'down', isMock: false, mockLabel: undefined },
-    { ...mockKpis[4], meta: 'Mock · 等 Shopify', isMock: true, mockLabel: 'Mock · 等 Shopify' },
-    { ...mockKpis[5], meta: 'Mock · 等 Shopify', isMock: true, mockLabel: 'Mock · 等 Shopify' },
+    { ...mockKpis[4], value: orders ? compact(orders) : '--', meta: orders ? '真实 API · 归因订单' : '待 Shopify 接入', trend: 'up', isMock: !orders, mockLabel: orders ? undefined : '待 Shopify 接入' },
+    { ...mockKpis[5], value: averageRoi ? `${averageRoi.toFixed(2)}x` : '--', meta: averageRoi ? '真实 API · 产品表现' : '待成本 / Shopify 接入', trend: 'up', isMock: !averageRoi, mockLabel: averageRoi ? undefined : '待成本 / Shopify 接入' },
   ];
 }
 
-function buildProductRows(rows: Row[]): PremiumProductRow[] {
+function buildProductRows(rows: Row[], allowMockFallback: boolean): PremiumProductRow[] {
   const candidates = rows.slice(0, 4).map((row, index) => {
     const sales = numberValue(row.sales_cents || row.revenue_cents || row.gmv_cents);
     const cost = numberValue(row.cost_cents);
@@ -299,7 +368,11 @@ function buildProductRows(rows: Row[]): PremiumProductRow[] {
       isMock: false,
     };
   }).filter((row) => row.roi > 0);
-  if (!candidates.length) return mockProductRows;
+  if (!candidates.length) {
+    return allowMockFallback
+      ? mockProductRows
+      : [{ rank: 1, name: '暂无真实 ROI 数据', width: '0%', value: '--', isMock: true, mockLabel: '待成本 / Shopify 接入' }];
+  }
   const max = Math.max(1, ...candidates.map((row) => row.roi));
   return candidates.map(({ roi, ...row }) => ({
     ...row,
@@ -320,8 +393,8 @@ function signalBody(signal: Row): string {
   return `${platform} · ${role || 'signal'} · ${strength}`;
 }
 
-function buildAlerts(signals: Row[]): PremiumAlert[] {
-  if (!signals.length) return mockAlerts;
+function buildAlerts(signals: Row[], allowMockFallback: boolean): PremiumAlert[] {
+  if (!signals.length) return allowMockFallback ? mockAlerts : [];
   return signals.slice(0, 3).map((signal) => {
     const competitor = String(signal.brand_role || '') === 'competitor';
     return {
@@ -336,7 +409,7 @@ function buildAlerts(signals: Row[]): PremiumAlert[] {
   });
 }
 
-function buildPremiumRegions(kolSummary: Row): PremiumRegion[] {
+function buildPremiumRegions(kolSummary: Row, allowMockFallback: boolean): PremiumRegion[] {
   const distribution = rowsFrom(kolSummary.country_distribution);
   const total = distribution.reduce((sum, row) => sum + numberValue(row.kol_count), 0);
   const regionRows = distribution
@@ -355,10 +428,40 @@ function buildPremiumRegions(kolSummary: Row): PremiumRegion[] {
     })
     .filter((region) => Boolean(region.countryCode) && (region.kolCount || 0) > 0)
     .slice(0, 5);
-  return regionRows.length ? regionRows : regions;
+  if (regionRows.length) return regionRows;
+  return allowMockFallback
+    ? regions
+    : [{ label: '暂无国家分布', value: '--', color: '#cfe0ff', isMock: true, mockLabel: '待 KOL 国家数据' }];
 }
 
-function buildPremiumPlatforms(kolSummary: Row): PremiumPlatform[] {
+function buildPremiumPlatforms(kolSummary: Row, officialMatrix: Row, allowMockFallback: boolean): PremiumPlatform[] {
+  const officialRows = officialPlatformRows(officialMatrix)
+    .map((row) => {
+      const key = String(row.platform || '').trim().toLowerCase();
+      const views = numberValue(row.total_views);
+      const posts = numberValue(row.total_posts);
+      return { key, views, posts };
+    })
+    .filter((row) => Boolean(row.key) && (row.views > 0 || row.posts > 0))
+    .sort((a, b) => b.views - a.views || b.posts - a.posts)
+    .slice(0, 5);
+  if (officialRows.length) {
+    const max = Math.max(1, ...officialRows.map((row) => row.views || row.posts));
+    return officialRows.map((row): PremiumPlatform => {
+      const style = platformStyles[row.key] || {
+        icon: row.key.slice(0, 2).toUpperCase(),
+        label: row.key.charAt(0).toUpperCase() + row.key.slice(1),
+        background: '#1b6cff',
+      };
+      const value = row.views ? compact(row.views) : `${compact(row.posts)} 内容`;
+      return {
+        ...style,
+        width: `${Math.max(8, Math.round(((row.views || row.posts) / max) * 100))}%`,
+        value,
+        isMock: false,
+      };
+    });
+  }
   const rows = rowsFrom(kolSummary.by_platform)
     .map((row) => {
       const key = String(row.platform || '').trim().toLowerCase();
@@ -368,7 +471,11 @@ function buildPremiumPlatforms(kolSummary: Row): PremiumPlatform[] {
     .filter((row) => Boolean(row.key) && row.count > 0)
     .sort((a, b) => b.count - a.count)
     .slice(0, 4);
-  if (!rows.length) return platforms;
+  if (!rows.length) {
+    return allowMockFallback
+      ? platforms
+      : [{ icon: '--', label: '暂无平台分布', width: '0%', value: '--', background: '#cfe0ff', isMock: true, mockLabel: '待真实数据' }];
+  }
   const max = Math.max(1, ...rows.map((row) => row.count));
   return rows.map((row): PremiumPlatform => {
     const style = platformStyles[row.key] || {
@@ -385,9 +492,32 @@ function buildPremiumPlatforms(kolSummary: Row): PremiumPlatform[] {
   });
 }
 
-function trendChart(rows: Row[]) {
+function recentDateLabels(days = 6): string[] {
+  const labels: string[] = [];
+  const now = new Date();
+  for (let index = days - 1; index >= 0; index -= 1) {
+    const date = new Date(now);
+    date.setDate(now.getDate() - index);
+    labels.push(`${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')}`);
+  }
+  return labels;
+}
+
+function trendChart(rows: Row[], allowMockFallback: boolean) {
   const fallbackPath = 'M34 196 C82 162 121 164 166 134 S235 102 285 101 363 76 411 51 458 25 500 32';
   if (!rows.length) {
+    if (!allowMockFallback) {
+      const emptyPath = 'M34 196 L126 196 L218 196 L310 196 L402 196 L500 196';
+      return {
+        path: emptyPath,
+        areaPath: `${emptyPath} L500 222 L34 222 Z`,
+        labels: recentDateLabels(),
+        tipDate: '无数据',
+        tipValue: '--',
+        pointX: 500,
+        pointY: 196,
+      };
+    }
     return {
       path: fallbackPath,
       areaPath: `${fallbackPath} L500 222 L34 222 Z`,
@@ -428,13 +558,38 @@ function settledValue<T>(result: PromiseSettledResult<T>, fallback: T, failed: s
   return fallback;
 }
 
+function latestContentRows(officialMatrix: Row): Row[] {
+  return officialAccountRows(officialMatrix)
+    .flatMap((account) => rowsFrom(account.posts).map((post): Row => ({
+      ...post,
+      account_handle: account.handle,
+      account_display_name: account.display_name,
+      platform: account.platform_label || account.platform,
+    })))
+    .sort((a, b) => String(b.posted_at || b.published_at || '').localeCompare(String(a.posted_at || a.published_at || '')))
+    .slice(0, 5);
+}
+
+function postedLabel(row: Row): string {
+  const raw = String(row.posted_at || row.published_at || '');
+  return raw ? raw.slice(0, 10) : '-';
+}
+
+function engagementLabel(row: Row): string {
+  const views = numberValue(row.views);
+  if (!views) return '--';
+  const interactions = numberValue(row.likes) + numberValue(row.comments) + numberValue(row.shares);
+  return `${((interactions / views) * 100).toFixed(2)}%`;
+}
+
 async function fetchPremiumSnapshot(apiToken: string, windowDays: number): Promise<PremiumSnapshot> {
   const failedSections: string[] = [];
-  const [dashboardResult, trendResult, productResult, kolSummaryResult, competitorResult, brandSignalsResult] = await Promise.allSettled([
+  const [dashboardResult, trendResult, productResult, kolSummaryResult, officialMatrixResult, competitorResult, brandSignalsResult] = await Promise.allSettled([
     apiFetch<Row>(`/api/admin/vkpi/dashboard?window_days=${windowDays}`, {}, apiToken),
     apiFetch<{ rows?: Row[] }>(`/api/admin/vkpi/dashboard/revenue-trend?window_days=7`, {}, apiToken),
     apiFetch<{ rows?: Row[] }>(`/api/admin/vkpi/dashboard/product-performance?window_days=${windowDays}&limit=20`, {}, apiToken),
     getKolPoolSummary(apiToken),
+    getOfficialChannelMatrix(apiToken, { limit: 20 }),
     getKolPoolCompetitorDashboard(apiToken),
     listBrandSignals(apiToken, { status: 'new', limit: 10 }),
   ]);
@@ -442,6 +597,7 @@ async function fetchPremiumSnapshot(apiToken: string, windowDays: number): Promi
   const trend = settledValue(trendResult, { rows: [] }, failedSections, 'revenue-trend');
   const products = settledValue(productResult, { rows: [] }, failedSections, 'product-performance');
   const kolSummary = settledValue(kolSummaryResult, {}, failedSections, 'kol-pool-summary');
+  const officialMatrix = settledValue(officialMatrixResult, {}, failedSections, 'official-channel-matrix');
   const competitorDashboard = settledValue(competitorResult, {}, failedSections, 'competitors-dashboard');
   const brandSignals = settledValue(brandSignalsResult, { signals: [] }, failedSections, 'brand-signals');
   return {
@@ -451,6 +607,7 @@ async function fetchPremiumSnapshot(apiToken: string, windowDays: number): Promi
     trendRows: rowsFrom(trend.rows),
     productRows: rowsFrom(products.rows),
     kolSummary,
+    officialMatrix,
     competitorDashboard,
     brandSignals: rowsFrom(brandSignals.signals),
     loadedAt: new Date().toISOString(),
@@ -460,7 +617,7 @@ async function fetchPremiumSnapshot(apiToken: string, windowDays: number): Promi
 function PremiumKpiCard({ item }: { item: PremiumKpi }) {
   return (
     <div className="glass-card kpi" style={glassVarStyle({ '--ig': item.ig, '--ic': item.ic })} title={item.mockLabel}>
-      <div className="topline"><div className="icon">{item.icon}</div>{item.isMock ? <span className="tag">示例</span> : null}</div>
+      <div className="topline"><div className="icon">{item.icon}</div>{item.isMock ? <span className="tag">{badgeText(item.mockLabel)}</span> : null}</div>
       <div className="label">{item.label}</div>
       <div className="value">{item.value}</div>
       <div className={`meta ${item.trend}`}>{item.meta}</div>
@@ -469,7 +626,7 @@ function PremiumKpiCard({ item }: { item: PremiumKpi }) {
   );
 }
 
-export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Marketing Director', testId = 'vkpi-dashboard-premium', windowDays = 30, onSelectPage }: DashboardPremiumProps) {
+export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Marketing Director', testId = 'vkpi-dashboard-premium', windowDays = 30, embedded = false, onSelectPage }: DashboardPremiumProps) {
   const [toast, setToast] = useState('已触发');
   const [toastVisible, setToastVisible] = useState(false);
   const [activeNav, setActiveNav] = useState('Dashboard');
@@ -503,24 +660,32 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
     };
   }, [apiToken, windowDays]);
 
-  const premiumKpis = useMemo(() => buildPremiumKpis(snapshot), [snapshot]);
-  const premiumProductRows = useMemo(() => buildProductRows(snapshot.productRows), [snapshot.productRows]);
-  const premiumAlerts = useMemo(() => buildAlerts(snapshot.brandSignals), [snapshot.brandSignals]);
-  const premiumTrend = useMemo(() => trendChart(snapshot.trendRows), [snapshot.trendRows]);
-  const premiumRegions = useMemo(() => buildPremiumRegions(snapshot.kolSummary), [snapshot.kolSummary]);
-  const premiumPlatforms = useMemo(() => buildPremiumPlatforms(snapshot.kolSummary), [snapshot.kolSummary]);
+  const allowMockFallback = !embedded;
+  const premiumKpis = useMemo(() => buildPremiumKpis(snapshot, allowMockFallback), [allowMockFallback, snapshot]);
+  const premiumProductRows = useMemo(() => buildProductRows(snapshot.productRows, allowMockFallback), [allowMockFallback, snapshot.productRows]);
+  const premiumAlerts = useMemo(() => buildAlerts(snapshot.brandSignals, allowMockFallback), [allowMockFallback, snapshot.brandSignals]);
+  const premiumTrend = useMemo(() => trendChart(snapshot.trendRows, allowMockFallback), [allowMockFallback, snapshot.trendRows]);
+  const premiumRegions = useMemo(() => buildPremiumRegions(snapshot.kolSummary, allowMockFallback), [allowMockFallback, snapshot.kolSummary]);
+  const premiumPlatforms = useMemo(() => buildPremiumPlatforms(snapshot.kolSummary, snapshot.officialMatrix, allowMockFallback), [allowMockFallback, snapshot.kolSummary, snapshot.officialMatrix]);
+  const contentRows = useMemo(() => latestContentRows(snapshot.officialMatrix), [snapshot.officialMatrix]);
+  const official = useMemo(() => officialTotals(snapshot.officialMatrix), [snapshot.officialMatrix]);
+  const contentTypeRows = allowMockFallback
+    ? contentTypes
+    : official.posts
+      ? [{ label: '未分类', value: compact(official.posts), color: '#1b6cff' }]
+      : [{ label: '暂无', value: '--', color: '#cfe0ff' }];
   const competitorTiers = objectValue(snapshot.competitorDashboard.tier_counts);
   const riskCount = numberValue(competitorTiers.avoid) + numberValue(competitorTiers.caution);
   const kolTotal = numberValue(snapshot.kolSummary.total || snapshot.kolSummary.candidate_asset_count);
   const heroMissions = useMemo(() => [
-    { value: snapshot.source === 'mock' ? '7' : String(Math.max(1, riskCount || snapshot.failedSections.length || 1)), suffix: snapshot.source === 'mock' ? 'actions' : 'signals', label: snapshot.source === 'mock' ? '今日关键动作' : '竞品 / 风险信号' },
-    { value: snapshot.source === 'mock' ? '3' : String(snapshot.failedSections.length), suffix: snapshot.source === 'mock' ? 'risks' : 'failed', label: snapshot.source === 'mock' ? '项目 / 竞品风险' : 'API 分区失败' },
-    { value: snapshot.source === 'mock' ? '12' : compact(kolTotal), suffix: 'KOL', label: snapshot.source === 'mock' ? '新候选待评估' : 'KOL 池总量' },
-  ], [kolTotal, riskCount, snapshot.failedSections.length, snapshot.source]);
+    { value: snapshot.source === 'mock' && allowMockFallback ? '7' : compact(official.accountCount), suffix: snapshot.source === 'mock' && allowMockFallback ? 'actions' : 'accounts', label: snapshot.source === 'mock' && allowMockFallback ? '今日关键动作' : '官方账号' },
+    { value: snapshot.source === 'mock' && allowMockFallback ? '3' : compact(official.posts), suffix: snapshot.source === 'mock' && allowMockFallback ? 'risks' : 'contents', label: snapshot.source === 'mock' && allowMockFallback ? '项目 / 竞品风险' : '已抓取内容' },
+    { value: snapshot.source === 'mock' && allowMockFallback ? '12' : compact(kolTotal), suffix: 'KOL', label: snapshot.source === 'mock' && allowMockFallback ? '新候选待评估' : 'KOL 池总量' },
+  ], [allowMockFallback, kolTotal, official.accountCount, official.posts, snapshot.source]);
   const syncLabel = loadingData
     ? '加载真实 API…'
     : snapshot.source === 'mock'
-      ? '示例 · 待接入真实状态'
+      ? allowMockFallback ? '示例 · 待接入真实状态' : '等待真实 API'
       : snapshot.failedSections.length
         ? `部分真实 · ${snapshot.failedSections.length} 项失败`
         : '真实 API 已接入';
@@ -562,20 +727,18 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
     showToast(`切换：${key}`);
   };
 
-  return (
-    <div className="vkpi-glass-shell" data-testid={testId}>
-      <div className="browser"><div className="traffic"><span className="t-dot red"></span><span className="t-dot yellow"></span><span className="t-dot green"></span></div><div className="browser-title">viltroxtest.com · V-KPI Glass Intelligence</div><div className="browser-icons">◉ ⇧</div></div>
-      <div className="app">
-        <GlassSidebar activeKey={activeNav} onSelectNav={handleNavSelect} profileInitial={userName.slice(0, 1).toUpperCase()} profileName={userName} profileRole={userRole} />
-        <main className="main">
-          <GlassTopBar
+  const dashboardContent = (
+    <>
+      {!embedded ? (
+        <GlassTopBar
             actions={[
               { label: localDateISO(), onClick: () => showToast('今日日期 · 本地时区') },
               { label: syncLabel, variant: 'sync', onClick: () => showToast(snapshot.source === 'mock' ? '同步状态 · 开发占位' : `数据源：${snapshot.source}`) },
               { label: '导出', onClick: () => showToast('原型交互 · 可接真实路由') },
               { label: '生成周报', variant: 'primary', onClick: () => showToast('原型交互 · 可接真实路由') },
             ]}
-          />
+        />
+      ) : null}
           <HeroSection missions={heroMissions} />
           <section className="kpis">
             {premiumKpis.map((item) => <PremiumKpiCard key={item.label} item={item} />)}
@@ -607,7 +770,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
                     </svg>
                   </div>
                   <div className="region-list">
-                    {premiumRegions.map((region) => <div className="region" style={glassVarStyle({ '--c': region.color })} key={region.label} role="button" tabIndex={0} title={region.mockLabel || `${region.kolCount || 0} KOL`} onClick={() => openCountryDrawer(region)} onKeyDown={(event) => { if (event.key === 'Enter') openCountryDrawer(region); }}><span><i></i>{region.label}{region.isMock ? <em>示例</em> : null}</span><b>{region.value}</b></div>)}
+                    {premiumRegions.map((region) => <div className="region" style={glassVarStyle({ '--c': region.color })} key={region.label} role="button" tabIndex={0} title={region.mockLabel || `${region.kolCount || 0} KOL`} onClick={() => openCountryDrawer(region)} onKeyDown={(event) => { if (event.key === 'Enter') openCountryDrawer(region); }}><span><i></i>{region.label}{region.isMock ? <em>{badgeText(region.mockLabel)}</em> : null}</span><b>{region.value}</b></div>)}
                   </div>
                 </div>
                 <div className="glass-card panel">
@@ -617,30 +780,44 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
                 <div className="lower">
                   <div className="glass-card mini">
                     <div className="panel-head"><h3>产品 ROI 排行</h3><span className="link" onClick={() => showToast('原型交互 · 可接真实路由')}>查看全部</span></div>
-                    {premiumProductRows.map((row) => <div className="row" title={row.mockLabel} key={row.rank}><span className="rank">{row.rank}</span><div><b>{row.name}{row.isMock ? <span className="tag">示例</span> : null}</b><div className="bar"><span style={glassVarStyle({ '--w': row.width })}></span></div></div><small>{row.value}</small></div>)}
+                    {premiumProductRows.map((row) => <div className="row" title={row.mockLabel} key={row.rank}><span className="rank">{row.rank}</span><div><b>{row.name}{row.isMock ? <span className="tag">{badgeText(row.mockLabel)}</span> : null}</b><div className="bar"><span style={glassVarStyle({ '--w': row.width })}></span></div></div><small>{row.value}</small></div>)}
                   </div>
                   <div className="glass-card mini">
-                    <div className="panel-head"><h3>内容类型分布</h3><span className="tag">示例</span></div>
-                    <div className="donut-wrap"><div className="donut"></div><div className="donut-label"><span>总内容</span><b>2,847</b></div></div>
-                    <div className="region-list" style={{ gridTemplateColumns: 'repeat(3,1fr)' }}>{contentTypes.map((item) => <div className="region" style={glassVarStyle({ '--c': item.color })} key={item.label}><span><i></i>{item.label}</span><b>{item.value}</b></div>)}</div>
+                    <div className="panel-head"><h3>内容类型分布</h3><span className="tag">{allowMockFallback ? '示例' : '官方矩阵'}</span></div>
+                    <div className="donut-wrap"><div className="donut"></div><div className="donut-label"><span>总内容</span><b>{official.posts ? compact(official.posts) : '--'}</b></div></div>
+                    <div className="region-list" style={{ gridTemplateColumns: 'repeat(3,1fr)' }}>{contentTypeRows.map((item) => <div className="region" style={glassVarStyle({ '--c': item.color })} key={item.label}><span><i></i>{item.label}</span><b>{item.value}</b></div>)}</div>
                   </div>
                   <div className="glass-card mini">
                     <div className="panel-head"><h3>KOL 平台分布</h3><span className="link" onClick={() => showToast('原型交互 · 可接真实路由')}>查看全部</span></div>
-                    {premiumPlatforms.map((platform) => <div className="platform" title={platform.mockLabel} key={platform.label}><span className="picon" style={{ background: platform.background }}>{platform.icon}</span><div><b>{platform.label}{platform.isMock ? <span className="tag">示例</span> : null}</b><div className="bar"><span style={glassVarStyle({ '--w': platform.width })}></span></div></div><small>{platform.value}</small></div>)}
+                    {premiumPlatforms.map((platform) => <div className="platform" title={platform.mockLabel} key={platform.label}><span className="picon" style={{ background: platform.background }}>{platform.icon}</span><div><b>{platform.label}{platform.isMock ? <span className="tag">{badgeText(platform.mockLabel)}</span> : null}</b><div className="bar"><span style={glassVarStyle({ '--w': platform.width })}></span></div></div><small>{platform.value}</small></div>)}
                   </div>
                 </div>
               </div>
-              <div className="glass-card latest"><div className="panel-head"><h3>最新内容表现</h3><span className="link" onClick={() => showToast('原型交互 · 可接真实路由')}>进入内容中心</span></div><table className="table"><thead><tr><th>内容</th><th>KOL / 平台</th><th>发布平台</th><th>发布于</th><th>曝光量</th><th>互动率</th><th>操作</th></tr></thead><tbody><tr><td><div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}><div className="thumb"></div><div><b>Viltrox 35mm F1.2 LAB Real World Review</b><br /><span className="tag">视频</span> <span className="tag">测评</span> <span className="tag">示例</span></div></div></td><td>@vor_ject<br /><span style={{ color: '#667085' }}>Instagram</span></td><td>Instagram</td><td>2 小时前</td><td><b>1.24M</b></td><td>4.62%</td><td><button type="button" onClick={() => showToast('原型交互 · 可接真实路由')}>⌁</button> <button type="button" onClick={() => showToast('原型交互 · 可接真实路由')}>↗</button> <button type="button" onClick={() => showToast('原型交互 · 可接真实路由')}>…</button></td></tr></tbody></table></div>
+              <div className="glass-card latest"><div className="panel-head"><h3>最新内容表现</h3><span className="link" onClick={() => showToast('原型交互 · 可接真实路由')}>进入内容中心</span></div><table className="table"><thead><tr><th>内容</th><th>账号 / 平台</th><th>发布平台</th><th>发布于</th><th>曝光量</th><th>互动率</th><th>操作</th></tr></thead><tbody>{contentRows.length ? contentRows.map((row, index) => <tr key={`${row.id || row.url || index}`}><td><div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}><div className="thumb"></div><div><b>{String(row.title || '官方内容')}</b><br /><span className="tag">真实</span></div></div></td><td>@{String(row.account_handle || row.account_display_name || '-')}<br /><span style={{ color: '#667085' }}>{String(row.platform || '-')}</span></td><td>{String(row.platform || '-')}</td><td>{postedLabel(row)}</td><td><b>{compact(numberValue(row.views))}</b></td><td>{engagementLabel(row)}</td><td><button type="button" onClick={() => showToast('原型交互 · 可接真实路由')}>⌁</button> <button type="button" onClick={() => showToast(String(row.url || '暂无内容链接'))}>↗</button> <button type="button" onClick={() => showToast('原型交互 · 可接真实路由')}>…</button></td></tr>) : <tr><td colSpan={7}><div className="empty-real">暂无真实最新内容明细</div></td></tr>}</tbody></table></div>
             </div>
             <aside className="rail">
               <div className="glass-card rail-card copilot"><div className="ai-kicker">V-KPI Copilot</div><h3>系统正在把推荐、风险、任务压缩成 7 张行动卡。</h3><p>今日重点：处理 4 条推荐反馈、补齐 35mm LAB 项目 KOL 缺口、检查 Sigma 竞品内容。</p><div className="insight">示例 · 置信度 91% · 证据 18 条 · 数据新鲜度 4h</div></div>
-              <div className="glass-card rail-card"><div className="panel-head"><h3>重要提醒</h3><span className="link" onClick={() => showToast('原型交互 · 可接真实路由')}>查看全部</span></div>{premiumAlerts.map((alert) => <div className="alert" title={alert.mockLabel} key={alert.title}><div className="alert-ic" style={glassVarStyle({ '--bgc': alert.bgc, '--col': alert.col })}>{alert.icon}</div><div><b>{alert.title}{alert.isMock ? <span className="tag">示例</span> : null}</b><p>{alert.body}</p></div><span className="time">{alert.time}</span></div>)}</div>
+              <div className="glass-card rail-card"><div className="panel-head"><h3>重要提醒</h3><span className="link" onClick={() => showToast('原型交互 · 可接真实路由')}>查看全部</span></div>{premiumAlerts.length ? premiumAlerts.map((alert) => <div className="alert" title={alert.mockLabel} key={alert.title}><div className="alert-ic" style={glassVarStyle({ '--bgc': alert.bgc, '--col': alert.col })}>{alert.icon}</div><div><b>{alert.title}{alert.isMock ? <span className="tag">{badgeText(alert.mockLabel)}</span> : null}</b><p>{alert.body}</p></div><span className="time">{alert.time}</span></div>) : <div className="empty-real">暂无真实品牌信号</div>}</div>
               <div className="glass-card rail-card"><div className="panel-head"><h3>本周关键任务</h3><span className="link" onClick={() => showToast('原型交互 · 可接真实路由')}>查看全部</span></div>{tasks.map((task) => <div className="task" title={task.mockLabel} key={task.title}><div className="task-head"><b>{task.title}{task.isMock ? <span className="tag">示例</span> : null}</b><span className={`priority ${task.priority}`}>{task.priorityLabel}</span></div><p>{task.body}</p><div className="progress"><span style={glassVarStyle({ '--w': task.width })}></span></div></div>)}</div>
               <div className="glass-card rail-card"><div className="panel-head"><h3>快捷入口</h3></div><div className="quick">{quickActions.map((action) => <div key={action.label} onClick={() => showToast('原型交互 · 可接真实路由')}><b>{action.icon}</b><span>{action.label}</span></div>)}</div></div>
             </aside>
           </div>
-        </main>
-      </div>
+    </>
+  );
+
+  return (
+    <div className={`vkpi-glass-shell${embedded ? ' vkpi-glass-shell--embedded' : ''}`} data-testid={testId}>
+      {embedded ? (
+        <main className="main">{dashboardContent}</main>
+      ) : (
+        <>
+          <div className="browser"><div className="traffic"><span className="t-dot red"></span><span className="t-dot yellow"></span><span className="t-dot green"></span></div><div className="browser-title">viltroxtest.com · V-KPI Glass Intelligence</div><div className="browser-icons">◉ ⇧</div></div>
+          <div className="app">
+            <GlassSidebar activeKey={activeNav} onSelectNav={handleNavSelect} profileInitial={userName.slice(0, 1).toUpperCase()} profileName={userName} profileRole={userRole} />
+            <main className="main">{dashboardContent}</main>
+          </div>
+        </>
+      )}
       {countryDrawer ? (
         <div className="country-drawer" role="dialog" aria-label={`${countryDrawer.region.label} KOL`}>
           <div className="country-drawer-head">
@@ -666,7 +843,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
           ) : null}
         </div>
       ) : null}
-      <GlassFAB onClick={() => showToast('原型交互 · 可接真实路由')} />
+      {embedded ? null : <GlassFAB onClick={() => showToast('原型交互 · 可接真实路由')} />}
       <GlassToast show={toastVisible}>{toast}</GlassToast>
     </div>
   );
