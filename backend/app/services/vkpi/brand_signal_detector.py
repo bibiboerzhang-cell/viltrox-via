@@ -135,6 +135,20 @@ def _parse_date(value: Any) -> datetime | None:
     raw = _text(value)
     if not raw:
         return None
+    normalized = raw.replace(",", "").strip()
+    if re.fullmatch(r"\d+(?:\.\d+)?", normalized):
+        try:
+            timestamp = float(normalized)
+        except ValueError:
+            timestamp = 0
+        if timestamp > 10_000_000_000:
+            timestamp = timestamp / 1000
+        try:
+            parsed_epoch = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        except (OSError, OverflowError, ValueError):
+            parsed_epoch = None
+        if parsed_epoch and 1970 <= parsed_epoch.year <= 2100:
+            return parsed_epoch
     try:
         parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
@@ -145,6 +159,13 @@ def _parse_date(value: Any) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _date_for_db(value: Any) -> str:
+    parsed = _parse_date(value)
+    if not parsed:
+        return ""
+    return parsed.isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def _current_year_scope(value: Any) -> str:
@@ -304,6 +325,7 @@ def _build_signal(
     signal_strength: str,
     evidence: dict[str, Any],
 ) -> dict[str, Any]:
+    published_at = _date_for_db(published_at)
     signal = {
         "kol_entity_uid": _text(context.get("kol_entity_uid")),
         "post_uid": post_uid,
