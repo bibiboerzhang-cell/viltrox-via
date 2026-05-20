@@ -12,8 +12,11 @@ interface StaffSummary {
   accountCount: number;
   platformCount: number;
   followers: number;
+  followersDelta: number;
   posts: number;
+  postsDelta: number;
   views: number;
+  viewsDelta: number;
   platforms: string[];
   topAccount?: OfficialChannelAccount;
 }
@@ -23,6 +26,12 @@ function compact(value: number) {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 1 : 2)}M`;
   if (value >= 1_000) return `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}K`;
   return formatter.format(value);
+}
+
+function deltaTone(delta = 0) {
+  if (delta > 0) return 'is-up';
+  if (delta < 0) return 'is-down';
+  return '';
 }
 
 function initial(summary: StaffSummary) {
@@ -43,15 +52,21 @@ function buildStaffRows(platforms: OfficialChannelPlatform[]) {
         accountCount: 0,
         platformCount: 0,
         followers: 0,
+        followersDelta: 0,
         posts: 0,
+        postsDelta: 0,
         views: 0,
+        viewsDelta: 0,
         platforms: [],
         platformSet: new Set<string>(),
       };
       row.accountCount += 1;
       row.followers += account.followers;
+      row.followersDelta += account.followersDelta || 0;
       row.posts += account.postsCount;
+      row.postsDelta += account.postsDelta || 0;
       row.views += account.totalViews;
+      row.viewsDelta += account.viewsDelta || 0;
       row.platformSet.add(account.platformLabel || platform.label);
       if (!row.topAccount || account.totalViews > row.topAccount.totalViews) {
         row.topAccount = account;
@@ -80,10 +95,13 @@ export function ChannelStaffProgress({
     (acc, row) => ({
       accounts: acc.accounts + row.accountCount,
       followers: acc.followers + row.followers,
+      followersDelta: acc.followersDelta + row.followersDelta,
       posts: acc.posts + row.posts,
+      postsDelta: acc.postsDelta + row.postsDelta,
       views: acc.views + row.views,
+      viewsDelta: acc.viewsDelta + row.viewsDelta,
     }),
-    { accounts: 0, followers: 0, posts: 0, views: 0 },
+    { accounts: 0, followers: 0, followersDelta: 0, posts: 0, postsDelta: 0, views: 0, viewsDelta: 0 },
   );
   const totalPlatforms = new Set(platforms.map((platform) => platform.label || platform.platform)).size;
   const averageViews = totals.posts ? Math.round(totals.views / totals.posts) : 0;
@@ -91,9 +109,9 @@ export function ChannelStaffProgress({
     { label: '账号', value: formatter.format(totals.accounts) },
     { label: '负责人', value: formatter.format(rows.length) },
     { label: '平台', value: formatter.format(totalPlatforms) },
-    { label: '内容', value: formatter.format(totals.posts) },
-    { label: '粉丝', value: compact(totals.followers) },
-    { label: '播放', value: compact(totals.views), primary: true },
+    { label: '内容', value: formatter.format(totals.posts), delta: totals.postsDelta },
+    { label: '粉丝', value: compact(totals.followers), delta: totals.followersDelta },
+    { label: '播放', value: compact(totals.views), delta: totals.viewsDelta, primary: true },
     { label: '篇均播放', value: compact(averageViews) },
   ];
   return (
@@ -111,8 +129,11 @@ export function ChannelStaffProgress({
         <div className="vkpi-channel-staff__totals">
           {summaryMetrics.map((metric) => (
             <span className={`vkpi-channel-summary-metric${metric.primary ? ' is-primary' : ''}`} key={metric.label}>
-              <strong>{metric.value}</strong>
-              <span>{metric.label}</span>
+              <span className="vkpi-channel-summary-metric__main">
+                <strong>{metric.value}</strong>
+                <span>{metric.label}</span>
+              </span>
+              {'delta' in metric ? <small className={deltaTone(metric.delta)}>{metric.delta ? `${metric.delta > 0 ? '+' : ''}${compact(metric.delta)}` : '+0'}</small> : null}
             </span>
           ))}
         </div>
@@ -135,7 +156,10 @@ export function ChannelStaffProgress({
                 <p>{row.staffRole || 'staff'} · {formatter.format(row.accountCount)} 账号 · {formatter.format(row.platformCount)} 平台</p>
                 <small>{row.platforms.join(' / ') || '-'} · Top {row.topAccount?.displayName || '-'}</small>
               </div>
-              <strong>{compact(row.views)}</strong>
+              <div className="vkpi-channel-staff-card__value">
+                <strong>{compact(row.views)}</strong>
+                <small className={deltaTone(row.viewsDelta)}>{row.viewsDelta ? `${row.viewsDelta > 0 ? '+' : ''}${compact(row.viewsDelta)}` : '+0'}</small>
+              </div>
             </button>
           );
         })}

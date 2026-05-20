@@ -10,6 +10,16 @@ function compact(value: number) {
   return formatter.format(value);
 }
 
+function deltaTone(delta = 0) {
+  if (delta > 0) return 'is-up';
+  if (delta < 0) return 'is-down';
+  return '';
+}
+
+function deltaText(delta = 0) {
+  return delta ? `${delta > 0 ? '+' : ''}${compact(delta)}` : '+0';
+}
+
 function fallbackInitial(account: OfficialChannelAccount) {
   return (account.displayName || account.handle || account.platformLabel || 'V').slice(0, 1).toUpperCase();
 }
@@ -64,9 +74,18 @@ export function ChannelAccountList({
               <div className="vkpi-channel-account-card__main">
                 <div className="vkpi-channel-account-card__title">
                   <h3>{account.displayName}</h3>
-                  <strong>{compact(account.totalViews)}</strong>
+                  <span className="vkpi-channel-account-card__value">
+                    <strong>{compact(account.totalViews)}</strong>
+                    <small className={deltaTone(account.viewsDelta)}>播放 {deltaText(account.viewsDelta)}</small>
+                  </span>
                 </div>
-                <p>@{account.handle || '-'} · {formatter.format(account.followers)} 粉丝 · {formatter.format(account.postsCount)} 内容</p>
+                <p>
+                  @{account.handle || '-'} · {formatter.format(account.followers)} 粉丝
+                  <em className={deltaTone(account.followersDelta)}> {deltaText(account.followersDelta)}</em>
+                  {' · '}
+                  {formatter.format(account.postsCount)} 内容
+                  <em className={deltaTone(account.postsDelta)}> {deltaText(account.postsDelta)}</em>
+                </p>
                 <div className="vkpi-channel-account-card__metrics">
                   <span>赞 {formatter.format(account.totalLikes)}</span>
                   <span>评论 {formatter.format(account.totalComments)}</span>

@@ -164,12 +164,13 @@
 
 .vkpi-channel-summary-metric {
   display: inline-flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 2px;
   flex: 0 0 112px;
   width: 112px;
-  height: 32px;
+  height: 42px;
   border: 1px solid rgba(148, 163, 184, 0.24);
   border-radius: 999px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.74), rgba(248, 250, 252, 0.42));
@@ -182,6 +183,14 @@
   backdrop-filter: blur(16px) saturate(1.15);
 }
 
+.vkpi-channel-summary-metric__main {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  line-height: 1;
+}
+
 .vkpi-channel-summary-metric strong {
   color: var(--vkpi-blue);
   font-size: 16px;
@@ -191,6 +200,21 @@
 
 .vkpi-channel-summary-metric span {
   line-height: 1;
+}
+
+.vkpi-channel-summary-metric small {
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.vkpi-channel-summary-metric small.is-up {
+  color: #0f9f6e;
+}
+
+.vkpi-channel-summary-metric small.is-down {
+  color: #dc2626;
 }
 
 .vkpi-channel-summary-metric.is-primary {

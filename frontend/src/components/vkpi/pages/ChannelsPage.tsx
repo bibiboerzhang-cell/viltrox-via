@@ -83,6 +83,9 @@ export function ChannelsPage({ apiToken, viewMode, data, onRefreshData }: Channe
       totalViews: accounts.reduce((sum, account) => sum + account.totalViews, 0),
       totalPosts: accounts.reduce((sum, account) => sum + account.postsCount, 0),
       totalFollowers: accounts.reduce((sum, account) => sum + account.followers, 0),
+      followersDelta: accounts.reduce((sum, account) => sum + (account.followersDelta || 0), 0),
+      postsDelta: accounts.reduce((sum, account) => sum + (account.postsDelta || 0), 0),
+      viewsDelta: accounts.reduce((sum, account) => sum + (account.viewsDelta || 0), 0),
     };
   }, [selectedPlatformData, selectedStaffId]);
   const selectedAccount = useMemo(() => {

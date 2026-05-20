@@ -88,10 +88,33 @@
   font-size: 17px;
 }
 
-.vkpi-channel-account-card__title strong {
+.vkpi-channel-account-card__value {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.vkpi-channel-account-card__value strong {
+  display: block;
   color: var(--vkpi-blue);
   font-size: 24px;
-  white-space: nowrap;
+}
+
+.vkpi-channel-account-card__value small {
+  display: block;
+  margin-top: 3px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.vkpi-channel-account-card__value small.is-up,
+.vkpi-channel-account-card p em.is-up {
+  color: #0f9f6e;
+}
+
+.vkpi-channel-account-card__value small.is-down,
+.vkpi-channel-account-card p em.is-down {
+  color: #dc2626;
 }
 
 .vkpi-channel-account-card p {
@@ -99,6 +122,13 @@
   color: var(--vkpi-muted);
   font-size: 13px;
   font-weight: 800;
+}
+
+.vkpi-channel-account-card p em {
+  color: #64748b;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
 }
 
 .vkpi-channel-account-card__metrics {

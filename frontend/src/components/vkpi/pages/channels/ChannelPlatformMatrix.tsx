@@ -25,6 +25,12 @@ function deltaLabel(current: number, delta = 0) {
   return `较上次 ${direction} ${percent || compact(Math.abs(delta))}`;
 }
 
+function deltaTone(delta = 0) {
+  if (delta > 0) return 'is-up';
+  if (delta < 0) return 'is-down';
+  return '';
+}
+
 export function ChannelPlatformMatrix({
   platforms,
   selectedPlatform,
@@ -49,6 +55,9 @@ export function ChannelPlatformMatrix({
   bindingCount?: number;
 }) {
   const totalFollowers = platforms.reduce((sum, platform) => sum + platform.totalFollowers, 0);
+  const totalFollowersDelta = platforms.reduce((sum, platform) => sum + (platform.followersDelta || 0), 0);
+  const totalPostsDelta = platforms.reduce((sum, platform) => sum + (platform.postsDelta || 0), 0);
+  const totalViewsDelta = platforms.reduce((sum, platform) => sum + (platform.viewsDelta || 0), 0);
   const syncedAccounts = platforms.reduce(
     (sum, platform) => sum + platform.accounts.filter((account) => account.syncStatus === 'synced').length,
     0,
@@ -58,9 +67,9 @@ export function ChannelPlatformMatrix({
     { label: '账号', value: formatter.format(accountCount) },
     { label: '已同步', value: formatter.format(syncedAccounts) },
     { label: '平台', value: formatter.format(platforms.length) },
-    { label: '内容', value: formatter.format(postCount) },
-    { label: '粉丝', value: compact(totalFollowers) },
-    { label: '播放', value: compact(totalViews), primary: true },
+    { label: '内容', value: formatter.format(postCount), delta: totalPostsDelta },
+    { label: '粉丝', value: compact(totalFollowers), delta: totalFollowersDelta },
+    { label: '播放', value: compact(totalViews), delta: totalViewsDelta, primary: true },
     { label: '篇均播放', value: compact(averageViews) },
   ];
   return (
@@ -81,8 +90,11 @@ export function ChannelPlatformMatrix({
         <div className="vkpi-channel-matrix__totals">
           {summaryMetrics.map((metric) => (
             <span className={`vkpi-channel-summary-metric${metric.primary ? ' is-primary' : ''}`} key={metric.label}>
-              <strong>{metric.value}</strong>
-              <span>{metric.label}</span>
+              <span className="vkpi-channel-summary-metric__main">
+                <strong>{metric.value}</strong>
+                <span>{metric.label}</span>
+              </span>
+              {'delta' in metric ? <small className={deltaTone(metric.delta)}>{metric.delta ? `${metric.delta > 0 ? '+' : ''}${compact(metric.delta)}` : '+0'}</small> : null}
             </span>
           ))}
         </div>
@@ -113,8 +125,8 @@ export function ChannelPlatformMatrix({
               <div className="vkpi-channel-platform-card__metrics">
                 <strong>{compact(platform.totalViews)}</strong>
                 <span>{compact(platform.totalFollowers)} 粉丝</span>
-                <em className={followerDelta >= 0 ? 'is-up' : 'is-down'}>{deltaLabel(platform.totalFollowers, followerDelta)}</em>
-                {viewsDelta ? <small className={viewsDelta >= 0 ? 'is-up' : 'is-down'}>播放 {viewsDelta > 0 ? '+' : ''}{compact(viewsDelta)}</small> : null}
+                <em className={deltaTone(followerDelta)}>{deltaLabel(platform.totalFollowers, followerDelta)}</em>
+                <small className={deltaTone(viewsDelta)}>播放 {viewsDelta > 0 ? '+' : ''}{compact(viewsDelta)}</small>
               </div>
             </button>
           );
