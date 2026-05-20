@@ -145,6 +145,11 @@ def build_items(sync: dict[str, Any], r2: dict[str, Any], snapshot: dict[str, An
         and exists("scripts/ops/scan_vkpi_brand_signals_after_sync.sh")
         and contains("backend/app/services/vkpi/brand_signal_detector.py", "scan_cached_brand_signals", "write_db")
     )
+    dimensions_guard_ready = (
+        exists("backend/app/services/vkpi/eleven_dimensions.py")
+        and exists("scripts/ops/backfill_vkpi_dimensions11_after_sync.sh")
+        and contains("backend/app/services/vkpi/eleven_dimensions.py", "backfill_existing_profile_deep_dimensions11")
+    )
     return [
         status_item(
             "current_release",
@@ -227,13 +232,15 @@ def build_items(sync: dict[str, Any], r2: dict[str, Any], snapshot: dict[str, An
         status_item(
             "dimensions_d",
             "D 11 维评估",
-            "preview_ui",
+            "guard_ready" if dimensions_guard_ready else "preview_ui",
             [
                 "eleven_dimensions.py exists" if exists("backend/app/services/vkpi/eleven_dimensions.py") else "dimension service missing",
+                "profile_deep update guard exists" if exists("scripts/ops/backfill_vkpi_dimensions11_after_sync.sh") else "dimensions backfill guard missing",
+                "updates existing profile_deep only" if contains("backend/app/services/vkpi/eleven_dimensions.py", "backfill_existing_profile_deep_dimensions11") else "dimensions write path missing",
                 "dimensions11 API exists" if contains("backend/app/api/routers/vkpi_kol_pool.py", "dimensions11") else "dimensions API missing",
                 "Discover 11维 UI exists" if contains("frontend/src/components/vkpi/pages/DiscoverPage.tsx", "11维") else "11维 UI missing",
             ],
-            "等竞品风险和 profile_deep 表稳定后，再做 batch backfill，不直接跑 1012 deep scan。",
+            "等 A2 完成并部署后，守卫脚本只更新已有 profile_deep 行；表缺失时安全跳过。",
         ),
         status_item(
             "search_ui",

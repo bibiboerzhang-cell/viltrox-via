@@ -50,6 +50,10 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def _json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
 def _clamp(value: float | int, lo: int = 0, hi: int = 100) -> int:
     return max(lo, min(hi, int(round(value))))
 
@@ -65,6 +69,22 @@ def _table_exists(table_name: str) -> bool:
             (table_name,),
         ).fetchone()
         return bool(row)
+
+
+def _table_columns(table_name: str) -> set[str]:
+    if not _table_exists(table_name):
+        return set()
+    try:
+        rows = get_conn().execute(f"PRAGMA table_info({table_name})").fetchall()
+    except Exception:
+        return set()
+    columns: set[str] = set()
+    for row in rows:
+        item = dict(row)
+        name = item.get("name")
+        if name:
+            columns.add(str(name))
+    return columns
 
 
 def _kol_pool_row(kol_pool_id: int) -> dict[str, Any]:
@@ -197,7 +217,7 @@ def compute_block3_business(kol_pool_id: int) -> dict[str, Any]:
         contact_reachability += 70
     if isinstance(contact_links, list) and contact_links:
         contact_reachability += min(30, len(contact_links) * 10)
-    competitor_summary = evaluate_kol_competitors(kol_pool_id).get("summary") or {}
+    competitor_summary = evaluate_kol_competitors(kol_pool_id, prefer_persisted=True).get("summary") or {}
     competitor_risk = _clamp(float(competitor_summary.get("risk_score") or 0) * 10)
     return {
         "cooperation_history_score": cooperation_history,
@@ -285,4 +305,96 @@ def batch_preview_dimensions11(*, limit: int = 20, source_type: str = "legacy_ex
         "source_type": source_type,
         "count": len(items),
         "items": items,
+    }
+
+
+def _profile_deep_match(row: dict[str, Any], columns: set[str]) -> tuple[str, tuple[Any, ...], str] | None:
+    if "kol_pool_id" in columns:
+        return "kol_pool_id=?", (int(row["id"]),), "kol_pool_id"
+    if "kol_entity_uid" in columns and _text(row.get("pool_uid")):
+        return "kol_entity_uid=?", (_text(row.get("pool_uid")),), "kol_entity_uid"
+    if {"platform", "handle"}.issubset(columns):
+        return "LOWER(platform)=LOWER(?) AND LOWER(handle)=LOWER(?)", (
+            _text(row.get("platform")),
+            _text(row.get("handle")),
+        ), "platform_handle"
+    return None
+
+
+def backfill_existing_profile_deep_dimensions11(*, limit: int = 200, source_type: str = "legacy_excel_p2d") -> dict[str, Any]:
+    columns = _table_columns("vkpi_kol_profile_deep")
+    if not columns:
+        return {
+            "provider_calls": False,
+            "llm_calls": False,
+            "write_db": False,
+            "skipped": True,
+            "reason": "vkpi_kol_profile_deep table is not available",
+        }
+    if "dimensions_11_json" not in columns:
+        return {
+            "provider_calls": False,
+            "llm_calls": False,
+            "write_db": False,
+            "skipped": True,
+            "reason": "vkpi_kol_profile_deep.dimensions_11_json column is not available",
+            "columns": sorted(columns),
+        }
+    safe_limit = max(1, min(1200, int(limit or 200)))
+    params: list[Any] = []
+    where = "WHERE 1=1"
+    if source_type:
+        where += " AND source_type=?"
+        params.append(source_type)
+    rows = get_conn().execute(
+        f"""
+        SELECT id, pool_uid, platform, handle
+        FROM vkpi_kol_pool
+        {where}
+        ORDER BY COALESCE(last_seen_at, updated_at, created_at) DESC, id DESC
+        LIMIT ?
+        """,
+        (*params, safe_limit),
+    ).fetchall()
+    conn = get_conn()
+    attempted = 0
+    updated = 0
+    skipped = 0
+    match_modes: Counter[str] = Counter()
+    now = _utcnow()
+    set_clause = "dimensions_11_json=?"
+    include_updated_at = "updated_at" in columns
+    if include_updated_at:
+        set_clause += ", updated_at=?"
+    for raw_row in rows:
+        row = dict(raw_row)
+        match = _profile_deep_match(row, columns)
+        if not match:
+            skipped += 1
+            continue
+        attempted += 1
+        where_clause, where_params, match_mode = match
+        match_modes[match_mode] += 1
+        payload = compose_dimensions_11(int(row["id"]))
+        update_params: list[Any] = [_json(payload)]
+        if include_updated_at:
+            update_params.append(now)
+        cursor = conn.execute(
+            f"UPDATE vkpi_kol_profile_deep SET {set_clause} WHERE {where_clause}",
+            (*update_params, *where_params),
+        )
+        updated += max(0, int(getattr(cursor, "rowcount", 0) or 0))
+    conn.commit()
+    return {
+        "provider_calls": False,
+        "llm_calls": False,
+        "write_db": True,
+        "skipped": False,
+        "source_type": source_type,
+        "limit": safe_limit,
+        "kol_rows": len(rows),
+        "attempted_updates": attempted,
+        "updated_rows": updated,
+        "skipped_rows": skipped,
+        "match_modes": dict(match_modes),
     }
