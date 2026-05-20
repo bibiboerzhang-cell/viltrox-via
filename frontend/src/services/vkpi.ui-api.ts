@@ -1388,6 +1388,14 @@ export async function getKolPoolSummary(token: string) {
 export async function getKolPoolCompetitors(token: string, kolPoolId: string | number) {
   return apiFetch<Row>(`/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/competitors`, {}, token);
 }
+export async function getKolPoolDimensions11(token: string, kolPoolId: string | number) {
+  return apiFetch<Row>(`/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/dimensions11`, {}, token);
+}
+export async function previewKolPoolDimensions11(token: string, options: { limit?: number; sourceType?: string } = {}) {
+  const params = new URLSearchParams({ limit: String(options.limit || 20) });
+  if (options.sourceType !== undefined) params.set("source_type", options.sourceType);
+  return apiFetch<Row>(`/api/admin/vkpi/kol-pool-dimensions11/preview?${params.toString()}`, {}, token);
+}
 export async function getKolPoolCompetitorDashboard(token: string, options: { brand?: string; limit?: number; sourceType?: string } = {}) {
   const params = new URLSearchParams({ limit: String(options.limit || 1200) });
   if (options.brand) params.set("brand", options.brand);

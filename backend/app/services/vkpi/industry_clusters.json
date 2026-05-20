@@ -1,0 +1,17 @@
+{
+  "photography": ["photography", "photo", "camera", "portrait", "street", "landscape", "fotografie", "摄影", "人像", "街拍"],
+  "filmmaking": ["filmmaking", "cinematic", "cinema", "film", "video", "videography", "filmmaker", "拍摄", "电影感"],
+  "wedding": ["wedding", "bride", "groom", "婚礼", "婚纱"],
+  "review": ["review", "hands-on", "hands on", "test", "comparison", "vs", "评测", "测试", "对比"],
+  "tutorial": ["tutorial", "how to", "tips", "guide", "教程", "技巧"],
+  "travel": ["travel", "trip", "outdoor", "旅行", "户外"],
+  "commercial": ["commercial", "brand", "advertising", "campaign", "广告", "商业"],
+  "lighting": ["lighting", "light", "flash", "led", "godox", "weeylite", "灯光", "补光"],
+  "drone": ["drone", "dji", "aerial", "航拍", "无人机"],
+  "mobile": ["iphone", "mobile", "phone", "smartphone", "手机"],
+  "gear": ["gear", "lens", "lenses", "adapter", "mount", "镜头", "器材", "转接环"],
+  "creator": ["creator", "content creator", "influencer", "创作者", "博主"],
+  "event": ["event", "expo", "nab", "show", "展会", "活动"],
+  "education": ["course", "class", "workshop", "training", "课程", "培训"],
+  "retail": ["store", "shop", "deal", "discount", "buy", "零售", "折扣"]
+}

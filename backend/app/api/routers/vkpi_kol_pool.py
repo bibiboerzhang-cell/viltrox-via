@@ -21,7 +21,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
-from app.services.vkpi import kol_competitor_detector, kol_pool
+from app.services.vkpi import eleven_dimensions, kol_competitor_detector, kol_pool
 from app.services.vkpi.audit_decorator import audit_action
 from app.services.vkpi.firewall_decorator import firewall_check
 
@@ -144,6 +144,29 @@ def get_pool_item_competitors(
         return kol_competitor_detector.evaluate_kol_competitors(int(kol_pool_id))
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/kol-pool/{kol_pool_id}/dimensions11")
+def get_pool_item_dimensions11(
+    kol_pool_id: int,
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """返回 KOL Pool 项的规则版 11 维画像；只读、不调 provider、不写库。"""
+    try:
+        return eleven_dimensions.compose_dimensions_11(int(kol_pool_id))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/kol-pool-dimensions11/preview")
+def get_pool_dimensions11_preview(
+    limit: int = Query(default=20, ge=1, le=200),
+    source_type: str = Query(default="legacy_excel_p2d"),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """批量预览规则版 11 维画像；只读、不调 provider、不写库。"""
+    del staff
+    return eleven_dimensions.batch_preview_dimensions11(limit=limit, source_type=source_type)
 
 
 @router.post("/kol-pool/{kol_pool_id}/promote")
