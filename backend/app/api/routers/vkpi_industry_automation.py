@@ -1,12 +1,13 @@
 """V-KPI industry data, audience graph, and automation routes."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
 from app.services.vkpi import (
     ab_experiments,
     audience_graph,
+    brand_signal_detector,
     competitor_brain,
     content_brain,
     industry_data,
@@ -208,6 +209,64 @@ def industry_competitor_brain_review_signal(signal_id: int, body: dict, staff=De
             note=str(body.get("note") or body.get("reason") or ""),
             staff=staff,
             dry_run=False,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/brand-signals/preview")
+def brand_signals_preview(
+    source: str = Query(default="all"),
+    since: str = Query(default=""),
+    limit: int = Query(default=200, ge=1, le=1000),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    del staff
+    return brand_signal_detector.scan_cached_brand_signals(
+        source=source,
+        since=since,
+        limit=limit,
+        write_db=False,
+    )
+
+
+@router.get("/brand-signals")
+def brand_signals_list(
+    status: str = Query(default="new"),
+    signal_type: str = Query(default=""),
+    brand_role: str = Query(default=""),
+    limit: int = Query(default=100, ge=1, le=500),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    del staff
+    return brand_signal_detector.list_brand_signals(
+        status=status,
+        signal_type=signal_type,
+        brand_role=brand_role,
+        limit=limit,
+    )
+
+
+@router.post("/brand-signals/scan")
+def brand_signals_scan(body: dict = Body(default_factory=dict), staff=Depends(require_tab("vkpi", "write"))):
+    _require_manager_staff(staff)
+    return brand_signal_detector.scan_cached_brand_signals(
+        source=str(body.get("source") or "all"),
+        since=str(body.get("since") or ""),
+        limit=int(body.get("limit") or 200),
+        write_db=bool(body.get("write_db")),
+    )
+
+
+@router.post("/brand-signals/{signal_id}/action")
+def brand_signal_action(signal_id: int, body: dict = Body(default_factory=dict), staff=Depends(require_tab("vkpi", "write"))):
+    try:
+        return brand_signal_detector.review_brand_signal(
+            signal_id,
+            action=str(body.get("action") or ""),
+            staff=staff,
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

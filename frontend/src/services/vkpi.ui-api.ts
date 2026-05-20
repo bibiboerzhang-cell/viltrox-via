@@ -1491,6 +1491,25 @@ export async function listCompetitorBrainSignals(token: string, options: { revie
 export async function reviewCompetitorBrainSignal(token: string, signalId: string | number, payload: { action: string; note?: string }) {
   return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/industry-data/competitor-brain/signals/${encodeURIComponent(String(signalId))}/review`, { method: "POST", body: jsonBody(payload) }, token);
 }
+export async function previewBrandSignals(token: string, options: { source?: string; since?: string; limit?: number } = {}) {
+  const params = new URLSearchParams({ limit: String(options.limit || 200) });
+  if (options.source) params.set("source", options.source);
+  if (options.since) params.set("since", options.since);
+  return apiFetch<Row>(`/api/admin/vkpi/brand-signals/preview?${params.toString()}`, {}, token);
+}
+export async function listBrandSignals(token: string, options: { status?: string; signalType?: string; brandRole?: string; limit?: number } = {}) {
+  const params = new URLSearchParams({ limit: String(options.limit || 100) });
+  if (options.status) params.set("status", options.status);
+  if (options.signalType) params.set("signal_type", options.signalType);
+  if (options.brandRole) params.set("brand_role", options.brandRole);
+  return apiFetch<{ signals?: Row[]; count?: number; schema_ready?: boolean }>(`/api/admin/vkpi/brand-signals?${params.toString()}`, {}, token);
+}
+export async function scanBrandSignals(token: string, payload: { source?: string; since?: string; limit?: number; write_db?: boolean }) {
+  return apiFetch<Row>("/api/admin/vkpi/brand-signals/scan", { method: "POST", body: jsonBody(payload), timeoutMs: 120000 }, token);
+}
+export async function reviewBrandSignal(token: string, signalId: string | number, payload: { action: "contact" | "ignore" | "flag" | "compete" }) {
+  return apiFetch<Row>(`/api/admin/vkpi/brand-signals/${encodeURIComponent(String(signalId))}/action`, { method: "POST", body: jsonBody(payload) }, token);
+}
 export async function searchVkpi(token: string, query: string, limit = 20) {
   const params = new URLSearchParams({ q: query, limit: String(limit) });
   return apiFetch<{ items?: Row[]; total?: number; provider_calls?: boolean; write_db?: boolean; tokens?: string[] }>(`/api/admin/vkpi/search?${params.toString()}`, {}, token);
