@@ -529,6 +529,10 @@ export interface VkpiStaffMember {
   avatarUrl?: string;
   employeeCode?: string;
   vkpiPermission: string;
+  permissions?: Record<string, string>;
+  verificationStatus?: string;
+  deliveryMethod?: string;
+  inviteTokenActive?: boolean;
   lastActiveAt?: string;
   invitedAt?: string;
   acceptedAt?: string;

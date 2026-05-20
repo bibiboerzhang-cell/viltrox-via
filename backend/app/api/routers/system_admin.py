@@ -783,6 +783,59 @@ def resend_staff_invite(
     return result
 
 
+@router.post("/staff/{staff_id}/activation-link")
+def create_existing_staff_activation_link(
+    staff_id: int,
+    request: Request,
+    admin=Depends(require_admin),
+    _staff=Depends(require_system_permission("system.members", "write")),
+):
+    try:
+        result = staff_svc.create_existing_activation_link(staff_id, inviter_id=admin["id"])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    record_admin_action(
+        actor=admin,
+        action="create_existing_staff_activation_link",
+        target_type="staff",
+        target_id=str(staff_id),
+        detail={
+            "email": result.get("email"),
+            "delivery_method": result.get("delivery_method"),
+            "token_hint": result.get("token_hint"),
+        },
+        request=request,
+    )
+    return result
+
+
+@router.post("/staff/{staff_id}/reset-password-link")
+def create_staff_password_reset_link(
+    staff_id: int,
+    request: Request,
+    admin=Depends(require_admin),
+    _staff=Depends(require_system_permission("system.members", "write")),
+):
+    try:
+        result = staff_svc.create_password_reset_link(staff_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    record_admin_action(
+        actor=admin,
+        action="create_staff_password_reset_link",
+        target_type="staff",
+        target_id=str(staff_id),
+        detail={
+            "email": result.get("email"),
+            "email_sent": result.get("email_sent"),
+            "delivery_method": result.get("delivery_method"),
+            "token_hint": result.get("token_hint"),
+        },
+        request=request,
+    )
+    return result
+
+
 @router.delete("/staff/{staff_id}")
 def delete_staff_member(
     staff_id: int,

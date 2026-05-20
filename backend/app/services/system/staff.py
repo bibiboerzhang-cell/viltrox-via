@@ -266,6 +266,112 @@ def create_activation_link(body: dict, *, inviter_id: int) -> dict[str, Any]:
     }
 
 
+def create_password_reset_link(staff_id: int) -> dict[str, Any]:
+    """Create a one-time password reset link for an existing staff account."""
+    conn = get_conn()
+    row = conn.execute(
+        """
+        SELECT s.id AS staff_id, s.user_id, s.active,
+               u.email AS user_email, u.name AS user_name
+        FROM staff s
+        LEFT JOIN users u ON u.id = s.user_id
+        WHERE s.id = ?
+        """,
+        (int(staff_id),),
+    ).fetchone()
+    if not row:
+        raise ValueError("staff not found")
+    user_id = int(row["user_id"] or 0)
+    email = str(row["user_email"] or "").strip().lower()
+    if not user_id or not email:
+        raise ValueError("staff user email missing")
+
+    token = create_email_token(user_id, "reset_password")
+    reset_url = _password_reset_url(token)
+    expires_row = conn.execute(
+        "SELECT expires_at FROM email_tokens WHERE token = ? AND type = 'reset_password'",
+        (token,),
+    ).fetchone()
+    email_sent = _send_staff_password_reset_email(
+        email,
+        str(row["user_name"] or email.split("@")[0]),
+        reset_url,
+    )
+    return {
+        "ok": True,
+        "staff_id": int(row["staff_id"]),
+        "user_id": user_id,
+        "email": email,
+        "reset_url": reset_url,
+        "token_hint": _token_hint(token),
+        "expires_at": str(expires_row["expires_at"] if expires_row else ""),
+        "expires_in_hours": 1,
+        "email_sent": bool(email_sent),
+        "delivery_method": "email" if email_sent else "manual_link",
+    }
+
+
+def create_existing_activation_link(staff_id: int, *, inviter_id: int) -> dict[str, Any]:
+    """Issue a fresh staff invite token for an existing staff row without changing permissions."""
+    conn = get_conn()
+    row = conn.execute(
+        """
+        SELECT s.id, s.user_id, s.role, s.active,
+               u.email AS user_email, u.name AS user_name
+        FROM staff s
+        LEFT JOIN users u ON u.id = s.user_id
+        WHERE s.id = ?
+        """,
+        (int(staff_id),),
+    ).fetchone()
+    if not row:
+        raise ValueError("staff not found")
+    user_id = int(row["user_id"] or 0)
+    email = str(row["user_email"] or "").strip().lower()
+    if not user_id or not email:
+        raise ValueError("staff user email missing")
+    _validate_staff_email(email)
+
+    conn.execute(
+        """
+        UPDATE email_tokens
+           SET used_at = COALESCE(used_at, ?)
+         WHERE user_id = ? AND type = 'staff_invite' AND used_at IS NULL
+        """,
+        (_utcnow(), user_id),
+    )
+    columns = _staff_columns(conn)
+    fields = ["invited_by = ?", "invited_at = ?"]
+    values: list[Any] = [int(inviter_id), _utcnow()]
+    if "invited_by_staff_id" in columns:
+        fields.append("invited_by_staff_id = ?")
+        values.append(_staff_id_for_user(conn, int(inviter_id)))
+    values.append(int(staff_id))
+    conn.execute(
+        f"UPDATE staff SET {', '.join(fields)} WHERE id = ?",
+        values,
+    )
+    conn.commit()
+
+    token = create_email_token(user_id, "staff_invite")
+    expires_row = conn.execute(
+        "SELECT expires_at FROM email_tokens WHERE token = ? AND type = 'staff_invite'",
+        (token,),
+    ).fetchone()
+    return {
+        "staff_id": int(staff_id),
+        "user_id": user_id,
+        "email": email,
+        "full_name": str(row["user_name"] or email.split("@")[0]),
+        "role": str(row["role"] or "readonly"),
+        "activation_url": _staff_activation_url(token),
+        "token_hint": _token_hint(token),
+        "expires_at": str(expires_row["expires_at"] if expires_row else ""),
+        "expires_in_hours": 48,
+        "delivery_method": "manual_link",
+    }
+
+
 def _create_staff_with_token(body: dict, *, inviter_id: int) -> dict[str, Any]:
     """Create or refresh pending staff, then issue a staff invite token."""
     conn = get_conn()
@@ -852,6 +958,11 @@ def _staff_activation_url(token: str) -> str:
     return f"{site_url.rstrip('/')}/activate?token={token}"
 
 
+def _password_reset_url(token: str) -> str:
+    site_url = os.environ.get("SITE_URL", "http://localhost:5173").strip() or "http://localhost:5173"
+    return f"{site_url.rstrip('/')}?reset_token={token}"
+
+
 def _token_hint(token: str) -> str:
     if len(token) <= 8:
         return "..." if token else ""
@@ -890,3 +1001,16 @@ def _send_staff_invite_email(email: str, token: str) -> bool:
         '<p style="color:#aaa;font-size:12px;margin-top:24px">Link expires automatically.</p></div>'
     )
     return send_email(email, "Viltrox Marketing invitation", html)
+
+
+def _send_staff_password_reset_email(email: str, name: str, reset_url: str) -> bool:
+    html = (
+        '<div style="font-family:Inter,Arial,sans-serif;max-width:560px;margin:0 auto;padding:32px 24px">'
+        '<p style="font-size:20px;font-weight:900;color:#0f172a">Viltrox Marketing</p>'
+        '<h2 style="font-size:22px;font-weight:800">Reset your password</h2>'
+        f'<p style="color:#5f6673;font-size:14px">Hi {name}, use the secure link below to reset your password.</p>'
+        f'<a href="{reset_url}" style="display:inline-block;padding:13px 28px;background:#1a1d23;color:#fff;'
+        'font-weight:700;font-size:14px;text-decoration:none;border-radius:8px">Reset password</a>'
+        '<p style="color:#aaa;font-size:12px;margin-top:24px">Link expires in 1 hour.</p></div>'
+    )
+    return send_email(email, "Reset your Viltrox Marketing password", html)

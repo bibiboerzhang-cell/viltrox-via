@@ -17,9 +17,12 @@ import {
   updateCommentAlertSettings,
   updateFeatureFlags,
   updatePlatformCrawlSettings,
+  updateStaffPermissions,
   createStaffActivationLink,
+  createExistingStaffActivationLink,
+  createStaffPasswordResetLink,
 } from '../../../services/vkpi.ui-api';
-import type { VkpiStaffActivationLinkResponse, VkpiStaffInviteCapabilities } from '../../../services/vkpi.ui-api';
+import type { VkpiPermissionLevel, VkpiStaffActivationLinkResponse, VkpiStaffInviteCapabilities, VkpiStaffPasswordResetLinkResponse } from '../../../services/vkpi.ui-api';
 import type {
   VkpiDashboardData,
   VkpiProductCatalogItem,
@@ -34,6 +37,7 @@ import {
   ProductCatalogPreviewCard,
   StaffInviteCard,
 } from './settings/SettingsAdminCards';
+import { StaffPermissionDrawer } from './settings/StaffPermissionDrawer';
 import {
   BudgetSettingsTable,
   CommentAlertThresholdCard,
@@ -52,13 +56,11 @@ interface SettingsPageProps {
   onRefreshData?: () => void | Promise<void>;
 }
 
-export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdateStaffPermission, onUpsertProductCost, onOpenStaffProfile, onRefreshData }: SettingsPageProps) {
+export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsertProductCost, onRefreshData }: SettingsPageProps) {
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
   const [role, setRole] = useState('employee');
   const [permission, setPermission] = useState<'none' | 'read' | 'write'>('write');
-  const [targetStaffId, setTargetStaffId] = useState('');
-  const [targetPermission, setTargetPermission] = useState<'none' | 'read' | 'write'>('write');
   const [costSku, setCostSku] = useState('');
   const [costProductName, setCostProductName] = useState('');
   const [unitCostUsd, setUnitCostUsd] = useState('');
@@ -88,6 +90,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
   const [inviteCapabilitiesError, setInviteCapabilitiesError] = useState('');
   const [activationLink, setActivationLink] = useState<VkpiStaffActivationLinkResponse | null>(null);
   const [activationCopied, setActivationCopied] = useState(false);
+  const [selectedStaffForPermissions, setSelectedStaffForPermissions] = useState<VkpiStaffMember | null>(null);
   const isManager = viewMode === 'manager';
 
   const boolValue = (value: unknown, fallback = false) => {
@@ -437,15 +440,54 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
     }
   };
 
-  const submitPermission = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!onUpdateStaffPermission || !targetStaffId) return;
+  const openStaffPermissionDrawer = (staffId: string, fallback?: Partial<VkpiStaffMember>) => {
+    const member = data.staffMembers.find((item) => item.id === staffId) || (fallback as VkpiStaffMember | undefined);
+    if (member) setSelectedStaffForPermissions(member);
+  };
+
+  const saveStaffPermissionMatrix = async (staffId: string, permissions: Record<string, VkpiPermissionLevel>) => {
+    if (!apiToken) throw new Error('当前没有登录 token，无法保存权限。');
     setBusy(true);
     try {
-      await onUpdateStaffPermission(targetStaffId, targetPermission);
-      setMessage('员工权限已更新。');
+      await updateStaffPermissions(apiToken, staffId, permissions);
+      setMessage('员工深度权限已保存。');
+      await onRefreshData?.();
+      const refreshedMember = data.staffMembers.find((item) => item.id === staffId);
+      if (refreshedMember) setSelectedStaffForPermissions({ ...refreshedMember, permissions });
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '权限更新失败');
+      setMessage(error instanceof Error ? error.message : '员工深度权限保存失败');
+      throw error;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const createSelectedStaffActivationLink = async (member: VkpiStaffMember): Promise<VkpiStaffActivationLinkResponse | null> => {
+    if (!apiToken || !member.id) throw new Error('缺少账号 ID 或登录 token。');
+    setBusy(true);
+    try {
+      const response = await createExistingStaffActivationLink(apiToken, member.id);
+      setMessage('激活链接已生成。');
+      await onRefreshData?.();
+      return response;
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '激活链接生成失败');
+      throw error;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const createSelectedStaffPasswordResetLink = async (staffId: string): Promise<VkpiStaffPasswordResetLinkResponse | null> => {
+    if (!apiToken) throw new Error('当前没有登录 token，无法重置密码。');
+    setBusy(true);
+    try {
+      const response = await createStaffPasswordResetLink(apiToken, staffId);
+      setMessage(response.email_sent ? '密码重置邮件已发送。' : '密码重置链接已生成，请复制给员工。');
+      return response;
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '密码重置链接生成失败');
+      throw error;
     } finally {
       setBusy(false);
     }
@@ -631,7 +673,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
             />
             <section className="vkpi-card vkpi-table-card">
               <div className="vkpi-table-card__header"><div><h2>授权账号</h2><span>{data.staffMembers.length} 人</span></div></div>
-              <StaffTable members={data.staffMembers} onSelectStaff={onOpenStaffProfile} />
+              <StaffTable members={data.staffMembers} onSelectStaff={openStaffPermissionDrawer} />
             </section>
           </section>
         ))}
@@ -692,6 +734,16 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
           </section>
         ))}
       </div>
+      {selectedStaffForPermissions ? (
+        <StaffPermissionDrawer
+          member={data.staffMembers.find((item) => item.id === selectedStaffForPermissions.id) || selectedStaffForPermissions}
+          busy={busy}
+          onClose={() => setSelectedStaffForPermissions(null)}
+          onSavePermissions={saveStaffPermissionMatrix}
+          onCreateActivationLink={createSelectedStaffActivationLink}
+          onCreatePasswordResetLink={createSelectedStaffPasswordResetLink}
+        />
+      ) : null}
     </PageShell>
   );
 }

@@ -197,6 +197,8 @@ export interface VkpiInviteStaffPayload {
   vkpiPermission: "none" | "read" | "write";
 }
 
+export type VkpiPermissionLevel = "none" | "read" | "write" | "admin";
+
 export interface VkpiStaffInviteCapabilities {
   email_available?: boolean;
   external_emails_allowed?: boolean;
@@ -217,6 +219,19 @@ export interface VkpiStaffActivationLinkResponse {
   token_hint?: string;
   expires_at?: string;
   expires_in_hours?: number;
+  delivery_method?: string;
+}
+
+export interface VkpiStaffPasswordResetLinkResponse {
+  ok?: boolean;
+  staff_id?: number;
+  user_id?: number;
+  email?: string;
+  reset_url?: string;
+  token_hint?: string;
+  expires_at?: string;
+  expires_in_hours?: number;
+  email_sent?: boolean;
   delivery_method?: string;
 }
 
@@ -657,6 +672,10 @@ function buildStaffMembers(rows: Row[]): VkpiStaffMember[] {
       avatarUrl: String(row.avatar_url || ""),
       employeeCode: String(row.user_handle || row.employee_code || ""),
       vkpiPermission: String(permissions.vkpi || row.vkpi_permission || "none"),
+      permissions: Object.fromEntries(Object.entries(permissions).map(([key, value]) => [key, String(value)])),
+      verificationStatus: String(row.verification_status || ""),
+      deliveryMethod: String(row.delivery_method || ""),
+      inviteTokenActive: Boolean(row.invite_token_active),
       lastActiveAt: String(row.last_active_at || row.last_login || ""),
       invitedAt: String(row.invited_at || ""),
       acceptedAt: String(row.accepted_at || ""),
@@ -1162,6 +1181,12 @@ export async function createStaffActivationLink(token: string, payload: VkpiInvi
     }),
   }, token);
 }
+export async function createExistingStaffActivationLink(token: string, staffId: string) {
+  return apiFetch<VkpiStaffActivationLinkResponse>(`/api/admin/staff/${encodeURIComponent(staffId)}/activation-link`, {
+    method: "POST",
+    body: jsonBody({}),
+  }, token);
+}
 export async function acceptStaffInvite(inviteToken: string, password: string) {
   return apiFetch<Record<string, unknown>>("/api/admin/staff/accept-invite", {
     method: "POST",
@@ -1169,6 +1194,18 @@ export async function acceptStaffInvite(inviteToken: string, password: string) {
   });
 }
 export async function updateStaffMarketingPermission(token: string, staffId: string, permission: "none" | "read" | "write") { return apiFetch<Record<string, unknown>>(`/api/admin/staff/${encodeURIComponent(staffId)}/permissions`, { method: "POST", body: jsonBody({ permissions: { vkpi: permission } }) }, token); }
+export async function updateStaffPermissions(token: string, staffId: string, permissions: Record<string, VkpiPermissionLevel | string>) {
+  return apiFetch<Record<string, unknown>>(`/api/admin/staff/${encodeURIComponent(staffId)}/permissions`, {
+    method: "POST",
+    body: jsonBody({ permissions }),
+  }, token);
+}
+export async function createStaffPasswordResetLink(token: string, staffId: string) {
+  return apiFetch<VkpiStaffPasswordResetLinkResponse>(`/api/admin/staff/${encodeURIComponent(staffId)}/reset-password-link`, {
+    method: "POST",
+    body: jsonBody({}),
+  }, token);
+}
 export async function getRbacStatus(token: string, includeStaff = false) {
   const suffix = includeStaff ? "?include_staff=true" : "";
   return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/access/rbac-status${suffix}`, {}, token);
