@@ -175,6 +175,10 @@ def build_items(sync: dict[str, Any], r2: dict[str, Any], snapshot: dict[str, An
             "running" if sync_active else ("done" if sync.get("result") == "success" else "needs_check"),
             [
                 f"service_state={sync.get('service_state', 'unknown')}",
+                f"inferred_stage={sync.get('inferred_stage', '-')}",
+                f"last_activity_at={sync.get('last_activity_at', '-')}",
+                f"actor_run_count={sync.get('actor_run_count', '-')}",
+                f"dataset_fetch_count={sync.get('dataset_fetch_count', '-')}",
                 f"last_apify_line={sync.get('last_apify_line', '')}",
                 f"failure_tail_count={len(sync.get('failure_tail') or [])}",
             ],
