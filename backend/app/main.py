@@ -290,9 +290,29 @@ def _admin_rbac_allowed(request) -> bool:
     return check_tab_permission(staff, permission_key, level)
 
 
-def _build_csp_value() -> str:
+def _host_without_port(raw: str) -> str:
+    host = str(raw or "").strip().lower()
+    if not host:
+        return ""
+    if host.startswith("[") and "]" in host:
+        return host[1:host.index("]")]
+    return host.split(":", 1)[0]
+
+
+def _is_local_host(raw: str) -> bool:
+    host = _host_without_port(raw)
+    return host in {"localhost", "127.0.0.1", "::1"} or host.endswith(".localhost")
+
+
+def _request_uses_public_host(request) -> bool:
+    return bool(request.headers.get("host")) and not _is_local_host(str(request.headers.get("host") or ""))
+
+
+def _build_csp_value(*, include_dev_connect: bool | None = None) -> str:
     connect_src = ["'self'"]
-    if not IS_PRODUCTION:
+    if include_dev_connect is None:
+        include_dev_connect = not IS_PRODUCTION
+    if include_dev_connect:
         connect_src.extend(
             [
                 "http://127.0.0.1:5173",
@@ -320,6 +340,16 @@ def _build_csp_value() -> str:
 
 
 GLOBAL_CSP_VALUE = _build_csp_value()
+
+
+def _csp_value_for_request(request) -> str:
+    # Test deployments may intentionally keep ENVIRONMENT=local while still
+    # serving a public hostname. Never expose local dev origins on public hosts.
+    return _build_csp_value(include_dev_connect=(not IS_PRODUCTION and not _request_uses_public_host(request)))
+
+
+def _should_send_hsts(request) -> bool:
+    return _request_uses_public_host(request)
 
 def _serve_frontend():
     if FRONTEND_INDEX.exists():
@@ -549,9 +579,9 @@ async def security_headers_middleware(request, call_next):
         "Permissions-Policy",
         "camera=(), microphone=(), geolocation=(), browsing-topics=()",
     )
-    response.headers.setdefault("Content-Security-Policy", GLOBAL_CSP_VALUE)
-    if IS_PRODUCTION and _is_https_request(request):
-        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
+    response.headers.setdefault("Content-Security-Policy", _csp_value_for_request(request))
+    if _should_send_hsts(request):
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
     return response
 
 
