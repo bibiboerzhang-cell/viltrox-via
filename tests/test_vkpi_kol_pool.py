@@ -97,6 +97,57 @@ def test_normalize_item_preserves_zero_metric_values():
     assert item["engagement_rate"] == 0
 
 
+def test_list_pool_omits_heavy_raw_platform_data_but_detail_keeps_it(seeded_staff):
+    conn = get_conn()
+    now = "2026-05-01T10:00:00Z"
+    handle = f"{MARKER}-raw-list"
+    raw_json = '{"profile":{"items":[{"description":"large raw payload"}]},"videos":[{"title":"sample"}]}'
+    conn.execute(
+        """
+        INSERT INTO vkpi_kol_pool
+          (pool_uid, platform, handle, profile_url, display_name, avatar_url, bio, email,
+           followers, following, posts_count, avg_views, avg_likes, avg_comments,
+           engagement_rate, source_type, source_ref, raw_platform_data, created_by_staff_id,
+           last_seen_at, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            f"{MARKER}-raw-list-uid",
+            "youtube",
+            handle,
+            "https://youtube.com/@raw-list",
+            "Raw List",
+            "",
+            "list row should stay light",
+            "",
+            100,
+            None,
+            3,
+            50,
+            5,
+            1,
+            0.1,
+            "unit",
+            MARKER,
+            raw_json,
+            seeded_staff["staff_id"],
+            now,
+            now,
+            now,
+        ),
+    )
+    conn.commit()
+    kol_pool._clear_kol_pool_read_cache()
+
+    listed = kol_pool.list_pool(query=handle, limit=10)
+    assert listed["items"]
+    assert "raw_platform_data" not in listed["items"][0]
+
+    row_id = int(listed["items"][0]["id"])
+    detail = kol_pool.get_item(row_id)["item"]
+    assert detail["raw_platform_data"] == raw_json
+
+
 def test_import_items_dedups_by_platform_handle_and_updates_row(seeded_staff):
     staff = _staff_context(seeded_staff["staff_id"])
 
@@ -223,4 +274,3 @@ def test_promote_to_main_creates_then_reuses_linked_kol(seeded_staff):
     assert reused["linked"] is True
     assert reused["mode"] == "already_linked"
     assert int(reused["main_kol_id"]) == int(created["main_kol_id"])
-

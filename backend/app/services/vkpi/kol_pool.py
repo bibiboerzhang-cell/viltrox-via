@@ -20,6 +20,46 @@ ENRICHABLE_PLATFORMS = {"youtube", "instagram", "tiktok", "xiaohongshu", "x", "b
 OWNER_NAME_KEYS = ("owner_name", "owner", "responsible_owner", "responsible_name", "assignee", "登记/对接人")
 OWNER_ID_KEYS = ("responsible_staff_id", "owner_staff_id", "assigned_staff_id", "source_staff_id")
 KOL_POOL_READ_CACHE_TTL_SEC = 300
+KOL_POOL_LIST_COLUMNS = (
+    "id",
+    "pool_uid",
+    "platform",
+    "handle",
+    "profile_url",
+    "display_name",
+    "avatar_url",
+    "bio",
+    "country",
+    "language",
+    "email",
+    "other_contacts_json",
+    "followers",
+    "following",
+    "posts_count",
+    "avg_views",
+    "avg_likes",
+    "avg_comments",
+    "avg_shares",
+    "engagement_rate",
+    "primary_topic",
+    "secondary_topics_json",
+    "content_style",
+    "production_quality",
+    "audience_estimated_json",
+    "brand_collaborations_json",
+    "viltrox_fit_score",
+    "viltrox_fit_reason",
+    "potential_concerns_json",
+    "recommended_product_lines_json",
+    "linked_main_kol_id",
+    "sync_status",
+    "source_type",
+    "source_ref",
+    "created_by_staff_id",
+    "last_seen_at",
+    "created_at",
+    "updated_at",
+)
 
 
 def _utcnow() -> str:
@@ -614,8 +654,12 @@ def list_pool(
         params.extend(sorted(ENRICHABLE_PLATFORMS))
     clause = "WHERE " + " AND ".join(where) if where else ""
     order_clause = _sort_clause(sort_by)
-    rows = get_conn().execute(
-        f"SELECT * FROM vkpi_kol_pool {clause} ORDER BY {order_clause} LIMIT ?",
+    conn = get_conn()
+    table_columns = _table_columns(conn, "vkpi_kol_pool")
+    select_columns = [column for column in KOL_POOL_LIST_COLUMNS if column in table_columns]
+    select_clause = ", ".join(select_columns) if "id" in select_columns else "*"
+    rows = conn.execute(
+        f"SELECT {select_clause} FROM vkpi_kol_pool {clause} ORDER BY {order_clause} LIMIT ?",
         (*params, safe_limit),
     ).fetchall()
     return _kol_pool_cache_store(cache_key, {"items": [dict(row) for row in rows]})
