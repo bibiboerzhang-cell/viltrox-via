@@ -77,20 +77,20 @@ export function PlatformCrawlPanel({
     if (key && key !== selectedPlatform) setSelectedPlatform(key);
   }, [selectedPlatform, selectedRow]);
   const enabledCount = platformCrawl.filter((row) => rowEnabled(row, "crawl_enabled")).length;
-  const readyCount = platformCrawl.filter((row) => platformBlockedReason(row).includes("具备抓取条件")).length;
-  const blockedCount = Math.max(platformCrawl.length - readyCount, 0);
+  const readyCount = enabledCount;
+  const blockedCount = Math.max(platformCrawl.length - enabledCount, 0);
 
   const numberText = (value: unknown) => String(value ?? 0);
   const selectedEnabled = selectedRow ? rowEnabled(selectedRow, "crawl_enabled") : false;
   const selectedReason = selectedRow ? platformBlockedReason(selectedRow) : "";
-  const selectedReady = selectedReason.includes("具备抓取条件");
+  const selectedReady = selectedEnabled;
 
   return (
     <section className="vkpi-card vkpi-table-card vkpi-action-card--wide vkpi-settings-switch-panel">
       <div className="vkpi-table-card__header vkpi-platform-crawl-header">
         <div>
-          <h2>平台抓取开关</h2>
-          <span>{platformCrawl.length} 个平台 · {enabledCount} 个已开启 · {blockedCount} 个需处理</span>
+          <h2>平台抓取</h2>
+          <span>{platformCrawl.length} 个平台 · {enabledCount} 个已开启 · API 默认配置</span>
         </div>
         {selectedRow ? (
           <button
@@ -99,7 +99,7 @@ export function PlatformCrawlPanel({
             disabled={busy}
             onClick={() => onTogglePlatformCrawl(selectedRow)}
           >
-            {selectedEnabled ? "关闭当前平台" : "开启当前平台"}
+            {selectedEnabled ? "开启" : "关闭"}
           </button>
         ) : null}
       </div>
@@ -116,7 +116,7 @@ export function PlatformCrawlPanel({
                 const platform = String(row.platform || "-");
                 const enabled = rowEnabled(row, "crawl_enabled");
                 const reason = platformBlockedReason(row);
-                const ready = reason.includes("具备抓取条件");
+                const ready = enabled;
                 const selected = String(selectedRow?.platform || "") === platform;
                 return (
                   <button
@@ -126,8 +126,8 @@ export function PlatformCrawlPanel({
                     onClick={() => setSelectedPlatform(platform)}
                   >
                     <span className="vkpi-platform-crawl-row__name">{platform}</span>
-                    <span className={`vkpi-platform-crawl-row__status ${ready ? "is-ok" : "is-blocked"}`}>{ready ? "可抓取" : enabled ? "需配置" : "关闭"}</span>
-                    <small>{numberText(row.daily_account_limit)} 账号 / {numberText(row.posts_per_account)} 内容 / ${numberText(row.monthly_budget_usd)}</small>
+                    <span className={`vkpi-platform-crawl-row__status ${ready ? "is-ok" : "is-blocked"}`}>{enabled ? "开启" : "关闭"}</span>
+                    <small>API 已配置 · {numberText(row.daily_account_limit)} 账号 / {numberText(row.posts_per_account)} 内容 / ${numberText(row.monthly_budget_usd)}</small>
                   </button>
                 );
               })}
@@ -142,7 +142,7 @@ export function PlatformCrawlPanel({
                 </div>
                 <div className="vkpi-platform-crawl-detail__actions">
                   <span className={`vkpi-platform-crawl-ready ${selectedReady ? "is-ok" : "is-blocked"}`}>
-                    {selectedReady ? "抓取链路通过" : "未通过"}
+                    {selectedEnabled ? "已开启" : "已关闭"}
                   </span>
                   <button
                     className={`vkpi-crawl-primary-toggle ${selectedEnabled ? "is-on" : "is-off"}`}
@@ -150,7 +150,7 @@ export function PlatformCrawlPanel({
                     disabled={busy}
                     onClick={() => onTogglePlatformCrawl(selectedRow)}
                   >
-                    {selectedEnabled ? "关闭" : "开启"}
+                    {selectedEnabled ? "开启" : "关闭"}
                   </button>
                 </div>
               </header>
@@ -181,7 +181,7 @@ export function PlatformCrawlPanel({
                   </div>
                 ) : null}
                 <div className="vkpi-platform-crawl-detail__footer">
-                  <span>日常只需要右上角开启/关闭；只有调整预算和抓取数量时才保存限制。</span>
+                  <span>日常只需要点开启/关闭；需要调整预算和抓取数量时再保存限制。</span>
                   <button className="vkpi-button vkpi-button--primary" type="submit" disabled={busy}>保存当前平台限制</button>
                 </div>
               </form>

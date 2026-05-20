@@ -145,6 +145,7 @@ export function ProductCostFormCard({
   costProductName,
   unitCostUsd,
   costNote,
+  selectedProduct,
   busy,
   canUpsert,
   onCostSkuChange,
@@ -157,6 +158,7 @@ export function ProductCostFormCard({
   costProductName: string;
   unitCostUsd: string;
   costNote: string;
+  selectedProduct?: VkpiProductCatalogItem | null;
   busy: boolean;
   canUpsert: boolean;
   onCostSkuChange: (value: string) => void;
@@ -173,6 +175,13 @@ export function ProductCostFormCard({
         <input value={costProductName} onChange={(event) => onCostProductNameChange(event.target.value)} placeholder="产品名称，例如 AF 35mm F1.2" />
         <input value={unitCostUsd} onChange={(event) => onUnitCostUsdChange(event.target.value)} placeholder="镜头内部成本 USD" inputMode="decimal" />
         <input value={costNote} onChange={(event) => onCostNoteChange(event.target.value)} placeholder="备注（可选）" />
+        {selectedProduct ? (
+          <div className="vkpi-selected-sku-price">
+            <span>当前 SKU</span>
+            <strong>{selectedProduct.sku}</strong>
+            <em>{selectedProduct.priceUsd == null ? "未定价" : `$${selectedProduct.priceUsd.toLocaleString("en-US")}`}</em>
+          </div>
+        ) : null}
         <button className="vkpi-button vkpi-button--primary" type="submit" disabled={busy || !canUpsert}>保存 SKU</button>
       </form>
     </section>
@@ -193,31 +202,58 @@ export function ProductCatalogPreviewCard({
   products,
   loading,
   error,
+  query,
+  selectedSku,
+  onQueryChange,
   onSelectProduct,
 }: {
   products: VkpiProductCatalogItem[];
   loading: boolean;
   error: string;
+  query: string;
+  selectedSku?: string;
+  onQueryChange: (value: string) => void;
   onSelectProduct: (product: VkpiProductCatalogItem) => void;
 }) {
   const priceLabel = (value: number | null | undefined) => (
     value === null || value === undefined ? "未定价" : `$${value.toLocaleString("en-US")}`
   );
+  const needle = query.trim().toLowerCase();
+  const visibleProducts = needle
+    ? products.filter((product) => [
+      product.sku,
+      product.modelName,
+      product.marketingName,
+      product.categoryMain,
+      product.categoryDetail,
+    ].filter(Boolean).join(" ").toLowerCase().includes(needle))
+    : products;
   return (
     <section className="vkpi-card vkpi-action-card vkpi-product-catalog-card">
       <div className="vkpi-table-card__header">
-        <div><h2>现有产品</h2><span>{loading ? "读取中" : `${products.length} 个 SKU`}</span></div>
+        <div><h2>现有产品</h2><span>{loading ? "读取中" : `${visibleProducts.length} / ${products.length} 个 SKU`}</span></div>
       </div>
+      <input
+        className="vkpi-product-search-input"
+        value={query}
+        onChange={(event) => onQueryChange(event.target.value)}
+        placeholder="搜索 SKU / 产品名 / 分类"
+      />
       {error ? <div className="vkpi-inline-message is-error">{error}</div> : null}
       <div className="vkpi-product-catalog-groups">
         {PRODUCT_GROUPS.map((group) => {
-          const rows = products.filter((product) => group.categories.includes(product.categoryMain));
+          const rows = visibleProducts.filter((product) => group.categories.includes(product.categoryMain));
           return (
             <section className="vkpi-product-catalog-group" key={group.key}>
               <header><strong>{group.title}</strong><span>{rows.length}</span></header>
               <div className="vkpi-product-catalog-list">
                 {rows.length ? rows.map((product) => (
-                  <button className="vkpi-product-catalog-row" key={product.sku} type="button" onClick={() => onSelectProduct(product)}>
+                  <button
+                    className={`vkpi-product-catalog-row ${selectedSku === product.sku ? "is-selected" : ""}`}
+                    key={product.sku}
+                    type="button"
+                    onClick={() => onSelectProduct(product)}
+                  >
                     <strong>{productLabel(product)}</strong>
                     <span>{product.sku}</span>
                     <em>{priceLabel(product.priceUsd)} · {product.status || "unknown"}</em>

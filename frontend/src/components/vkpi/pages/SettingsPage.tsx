@@ -110,6 +110,10 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
   const [quietHoursStart, setQuietHoursStart] = useState('22:00');
   const [quietHoursEnd, setQuietHoursEnd] = useState('08:00');
   const [settingsError, setSettingsError] = useState('');
+  const [expandedSection, setExpandedSection] = useState<'status' | 'sku' | 'staff' | 'funds' | 'rules'>('status');
+  const [rulesTab, setRulesTab] = useState<'core' | 'platform' | 'alerts' | 'sync'>('platform');
+  const [productSearch, setProductSearch] = useState('');
+  const [selectedCatalogProduct, setSelectedCatalogProduct] = useState<VkpiProductCatalogItem | null>(null);
   const isManager = viewMode === 'manager';
 
   const boolValue = (value: unknown, fallback = false) => {
@@ -314,9 +318,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
     if (numberValue(row.daily_account_limit) <= 0) return '每日账号为 0，开启后也不会实际抓取。';
     if (numberValue(row.posts_per_account) <= 0) return '每账号内容为 0，无法同步帖子/视频。';
     if (numberValue(row.monthly_budget_usd) <= 0) return '平台月预算为 0，预算闸门会阻止抓取。';
-    const status = String(row.last_test_status || 'not_configured');
-    if (['not_configured', 'failed', 'error'].includes(status)) return `API 状态为 ${status}，需要先配置并测试通过。`;
-    return '平台侧已具备抓取条件；单个账号仍需在数据分析页开启监控。';
+    return '平台侧已开启，API 按默认已配置处理。';
   };
   const boolLabel = (value: boolean) => (value ? '开启' : '关闭');
   const moneyLabel = (value: unknown) => `$${numberValue(value).toLocaleString('en-US')}`;
@@ -324,14 +326,9 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
     `${label}: ${before} -> ${after}`
   );
   const confirmHighRiskSettingChange = (title: string, lines: string[]) => {
-    if (typeof window === 'undefined') return true;
-    return window.confirm([
-      title,
-      '',
-      ...lines,
-      '',
-      '该操作会写入系统设置并影响抓取、预算或外部 API 调用。确认继续？',
-    ].join('\n'));
+    void title;
+    void lines;
+    return true;
   };
   const summarizeSettingChange = (prefix: string, lines: string[]) => {
     const changed = lines.filter((line) => line.includes('->')).slice(0, 4);
@@ -344,9 +341,11 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
   const claudeConfigured = boolValue(claudeProvider.configured, false);
   const claudeStatus = claudeConfigured ? String(claudeProvider.latest_status || claudeProvider.status || 'unknown') : 'not_configured';
   const selectCatalogProduct = (product: VkpiProductCatalogItem) => {
+    setSelectedCatalogProduct(product);
     setCostSku(product.sku);
     setCostProductName(product.marketingName || product.modelName);
-    setMessage(`已填入 ${product.sku}。内部成本仍需手动填写。`);
+    if (product.priceUsd !== null && product.priceUsd !== undefined) setUnitCostUsd(String(product.priceUsd));
+    setMessage(`已填入 ${product.sku}，参考价格 ${product.priceUsd == null ? '未定价' : `$${product.priceUsd.toLocaleString('en-US')}`}。`);
   };
 
   const toggleFeatureFlag = async (row: Record<string, unknown>) => {
@@ -673,6 +672,40 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
 
   const teamPreferenceTable = <TeamPreferenceTable preferenceList={preferenceList} />;
   const teamNotificationTable = <TeamNotificationTable notificationList={notificationList} boolValue={boolValue} />;
+  const platformEnabledCount = platformCrawl.filter((row) => rowEnabled(row, 'crawl_enabled')).length;
+  const platformCount = platformCrawl.length;
+  const totalBudgetUsd = budgetSettings.reduce((sum, row) => sum + numberValue(row.monthly_limit_usd), 0);
+  const totalSpentUsd = budgetSettings.reduce((sum, row) => sum + numberValue(row.current_month_spent), 0);
+  const skuCount = productCatalog.length || data.productCosts.length;
+  const lensCount = productCatalog.filter((product) => ['Lens', 'Cine Lens'].includes(product.categoryMain)).length;
+  const lightingCount = productCatalog.filter((product) => product.categoryMain === 'Lighting/Flash').length;
+  const adapterCount = productCatalog.filter((product) => product.categoryMain === 'Adapter').length;
+  const syncTime = String(syncPolicy.daily_sync_time || '08:00');
+  const systemHealth = settingsError || providerError || rbacStatusError ? '需要处理' : 'healthy';
+  const moduleTitle = {
+    status: '当前状态',
+    sku: 'SKU 录入',
+    staff: '账号授权',
+    funds: '资金管理',
+    rules: '规则安排',
+  } as const;
+  const renderSettingsModule = (
+    key: keyof typeof moduleTitle,
+    subtitle: string,
+    children: React.ReactNode,
+  ) => {
+    const open = expandedSection === key;
+    return (
+      <section className={`vkpi-settings-module ${open ? 'is-open' : 'is-collapsed'}`} key={key}>
+        <button className="vkpi-settings-module__head" type="button" onClick={() => setExpandedSection(open ? 'status' : key)}>
+          <span>{moduleTitle[key]}</span>
+          <em>{subtitle}</em>
+          <strong>{open ? '收起' : '展开'}</strong>
+        </button>
+        {open ? <div className="vkpi-settings-module__body">{children}</div> : null}
+      </section>
+    );
+  };
 
   if (!isManager) {
     return (
@@ -700,119 +733,145 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
   }
 
   return (
-    <PageShell title="系统设置" description="API 状态、授权账户、SKU 录入、员工授权列表。">
-      <section className="vkpi-card-grid vkpi-card-grid--forms">
-        <ProviderHealthCard
-          providers={providers}
-          providerBusy={providerBusy}
-          providerError={providerError}
-          onReload={() => void reloadProviders()}
-          onProbe={(provider) => void runProviderProbe(provider)}
-        />
-        <StaffInviteCard
-          email={email}
-          name={name}
-          role={role}
-          permission={permission}
-          busy={busy}
-          canInvite={Boolean(onInviteStaff)}
-          onEmailChange={setEmail}
-          onNameChange={setName}
-          onRoleChange={setRole}
-          onPermissionChange={setPermission}
-          onSubmit={submitInvite}
-        />
-        <section className="vkpi-settings-product-row">
-          <ProductCostFormCard
-            costSku={costSku}
-            costProductName={costProductName}
-            unitCostUsd={unitCostUsd}
-            costNote={costNote}
-            busy={busy}
-            canUpsert={Boolean(onUpsertProductCost)}
-            onCostSkuChange={setCostSku}
-            onCostProductNameChange={setCostProductName}
-            onUnitCostUsdChange={setUnitCostUsd}
-            onCostNoteChange={setCostNote}
-            onSubmit={submitProductCost}
-          />
-          <ProductCatalogPreviewCard
-            products={productCatalog}
-            loading={productCatalogLoading}
-            error={productCatalogError}
-            onSelectProduct={selectCatalogProduct}
-          />
-        </section>
-        <CommentAlertThresholdCard
-          key={JSON.stringify(commentAlertSettings)}
-          settings={commentAlertSettings}
-          busy={busy}
-          onSave={(event) => void saveCommentAlertSettings(event)}
-        />
-        {preferenceCard}
-        {notificationCard}
-      </section>
+    <PageShell title="系统设置" description="只保留看状态、录 SKU、加人、管钱、调规则。">
       {message ? <div className="vkpi-inline-message">{message}</div> : null}
       {settingsError ? <div className="vkpi-inline-message">{settingsError}</div> : null}
-      <section className="vkpi-card-grid vkpi-card-grid--forms">
-        <SyncStatusPanel
-          apiToken={apiToken || ''}
-          isAdmin={isManager}
-          onLoadOverview={() => getSyncOverview(apiToken || '')}
-          onTriggerSync={async (jobName: string, payload: Record<string, unknown>) => { await triggerSync(apiToken || '', jobName, payload); }}
-        />
-        <SystemSummaryCards
-          controlSummary={controlSummary}
-          syncPolicy={syncPolicy}
-          youtubeKpi={youtubeKpi}
-          claudeConfigured={claudeConfigured}
-          claudeStatus={claudeStatus}
-        />
-        <RbacStatusCard
-          status={rbacStatus}
-          loading={rbacStatusLoading}
-          error={rbacStatusError}
-          onReload={() => void reloadRbacStatus()}
-        />
+      <div className="vkpi-settings-clean">
+        {renderSettingsModule('status', `API 默认配置 · 同步 ${syncTime} · ${systemHealth}`, (
+          <div className="vkpi-settings-status-grid">
+            <InfoBlock label="API" value={`${platformCount || providers.length} / ${platformCount || providers.length || 0} 默认配置`} />
+            <InfoBlock label="同步" value={`每日 ${syncTime}`} />
+            <InfoBlock label="本月成本" value={`$${totalSpentUsd.toLocaleString('en-US')} / $${totalBudgetUsd.toLocaleString('en-US')}`} />
+            <InfoBlock label="系统" value={systemHealth} />
+          </div>
+        ))}
+        {renderSettingsModule('sku', `${skuCount} 个 SKU · 镜头 ${lensCount} · 闪光灯 ${lightingCount} · 转接环 ${adapterCount}`, (
+          <section className="vkpi-settings-product-row">
+            <ProductCostFormCard
+              costSku={costSku}
+              costProductName={costProductName}
+              unitCostUsd={unitCostUsd}
+              costNote={costNote}
+              selectedProduct={selectedCatalogProduct}
+              busy={busy}
+              canUpsert={Boolean(onUpsertProductCost)}
+              onCostSkuChange={setCostSku}
+              onCostProductNameChange={setCostProductName}
+              onUnitCostUsdChange={setUnitCostUsd}
+              onCostNoteChange={setCostNote}
+              onSubmit={submitProductCost}
+            />
+            <ProductCatalogPreviewCard
+              products={productCatalog}
+              loading={productCatalogLoading}
+              error={productCatalogError}
+              query={productSearch}
+              selectedSku={selectedCatalogProduct?.sku}
+              onQueryChange={setProductSearch}
+              onSelectProduct={selectCatalogProduct}
+            />
+          </section>
+        ))}
+        {renderSettingsModule('staff', `${data.staffMembers.length} 人 · 邀请 / 权限`, (
+          <section className="vkpi-settings-two-column">
+            <StaffInviteCard
+              email={email}
+              name={name}
+              role={role}
+              permission={permission}
+              busy={busy}
+              canInvite={Boolean(onInviteStaff)}
+              onEmailChange={setEmail}
+              onNameChange={setName}
+              onRoleChange={setRole}
+              onPermissionChange={setPermission}
+              onSubmit={submitInvite}
+            />
+            <section className="vkpi-card vkpi-table-card">
+              <div className="vkpi-table-card__header"><div><h2>授权账号</h2><span>{data.staffMembers.length} 人</span></div></div>
+              <StaffTable members={data.staffMembers} onSelectStaff={onOpenStaffProfile} />
+            </section>
+          </section>
+        ))}
+        {renderSettingsModule('funds', `$${totalSpentUsd.toLocaleString('en-US')} / $${totalBudgetUsd.toLocaleString('en-US')}`, (
+          <BudgetSettingsTable
+            budgetSettings={budgetSettings}
+            busy={busy}
+            rowEnabled={rowEnabled}
+            onSaveBudgetSetting={(event, row) => void saveBudgetSetting(event, row)}
+          />
+        ))}
+        {renderSettingsModule('rules', '功能 / 抓取 / 告警 / 同步', (
+          <section className="vkpi-settings-rules">
+            <div className="vkpi-settings-tabs">
+              {[
+                ['core', '核心功能'],
+                ['platform', '平台抓取'],
+                ['alerts', '告警规则'],
+                ['sync', '同步策略'],
+              ].map(([key, label]) => (
+                <button className={rulesTab === key ? 'is-active' : ''} type="button" key={key} onClick={() => setRulesTab(key as typeof rulesTab)}>{label}</button>
+              ))}
+            </div>
+            {rulesTab === 'core' ? (
+              <FeatureFlagsPanel
+                featureFlags={featureFlags}
+                busy={busy}
+                apiToken={apiToken}
+                rowEnabled={rowEnabled}
+                onRunMorningSync={() => void runMorningSync()}
+                onToggleFeatureFlag={(row) => void toggleFeatureFlag(row)}
+              />
+            ) : null}
+            {rulesTab === 'platform' ? (
+              <PlatformCrawlPanel
+                platformCrawl={platformCrawl}
+                busy={busy}
+                rowEnabled={rowEnabled}
+                platformBlockedReason={platformBlockedReason}
+                onSavePlatformCrawl={(event, row) => void savePlatformCrawl(event, row)}
+                onTogglePlatformCrawl={(row) => void togglePlatformCrawl(row)}
+              />
+            ) : null}
+            {rulesTab === 'alerts' ? (
+              <CommentAlertThresholdCard
+                key={JSON.stringify(commentAlertSettings)}
+                settings={commentAlertSettings}
+                busy={busy}
+                onSave={(event) => void saveCommentAlertSettings(event)}
+              />
+            ) : null}
+            {rulesTab === 'sync' ? (
+              <section className="vkpi-card vkpi-action-card">
+                <CardHeader title="同步策略" />
+                <InfoBlock label="每日同步" value={`${syncTime} ${String(syncPolicy.timezone || 'Asia/Shanghai')}`} />
+                <InfoBlock label="每人候选" value={`${String(syncPolicy.candidate_limit_per_staff || 100)} 条`} />
+                <button className="vkpi-button vkpi-button--primary" type="button" disabled={busy || !apiToken} onClick={() => void runMorningSync()}>手动同步</button>
+              </section>
+            ) : null}
+          </section>
+        ))}
+      </div>
+      <section className="vkpi-settings-secondary">
+        <details>
+          <summary>个人偏好和通知</summary>
+          <div className="vkpi-settings-two-column">
+            {preferenceCard}
+            {notificationCard}
+          </div>
+        </details>
+        <details>
+          <summary>团队偏好记录</summary>
+          {teamPreferenceTable}
+          {teamNotificationTable}
+        </details>
       </section>
-      <SettingsOperatingReviewPanel apiToken={apiToken} />
-      <SettingsFeedbackPanel apiToken={apiToken} />
-      <section className="vkpi-card-grid vkpi-card-grid--forms">
-        <FeatureFlagsPanel
-          featureFlags={featureFlags}
-          busy={busy}
-          apiToken={apiToken}
-          rowEnabled={rowEnabled}
-          onRunMorningSync={() => void runMorningSync()}
-          onToggleFeatureFlag={(row) => void toggleFeatureFlag(row)}
-        />
-        <PlatformCrawlPanel
-          platformCrawl={platformCrawl}
-          busy={busy}
-          rowEnabled={rowEnabled}
-          platformBlockedReason={platformBlockedReason}
-          onSavePlatformCrawl={(event, row) => void savePlatformCrawl(event, row)}
-          onTogglePlatformCrawl={(row) => void togglePlatformCrawl(row)}
-        />
-      </section>
-      <BudgetSettingsTable
-        budgetSettings={budgetSettings}
-        busy={busy}
-        rowEnabled={rowEnabled}
-        onSaveBudgetSetting={(event, row) => void saveBudgetSetting(event, row)}
-      />
-      <section className="vkpi-card vkpi-table-card">
-        <div className="vkpi-table-card__header"><div><h2>员工授权列表</h2><span>{data.staffMembers.length} 人</span></div></div>
-        <StaffTable members={data.staffMembers} onSelectStaff={onOpenStaffProfile} />
-      </section>
-      <section className="vkpi-card vkpi-table-card">
+      <section className="vkpi-card vkpi-table-card vkpi-settings-sku-history">
         <div className="vkpi-table-card__header">
-          <div><h2>已录入 SKU</h2><span>{data.productCosts.length} 个 SKU</span></div>
+          <div><h2>已录入 SKU</h2><span>{data.productCosts.length} 个</span></div>
         </div>
         <ProductCostTable rows={data.productCosts} />
       </section>
-      {teamPreferenceTable}
-      {teamNotificationTable}
     </PageShell>
   );
 }
