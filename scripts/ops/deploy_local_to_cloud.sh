@@ -11,6 +11,8 @@ SERVICE_NAME="${SERVICE_NAME:-viltrox-2.0-test.service}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8001/health}"
 SYNC_SERVICE="${SYNC_SERVICE:-vkpi-sync-daily.service}"
 ALLOW_DURING_SYNC="${ALLOW_DURING_SYNC:-0}"
+REMOTE_APP_USER="${REMOTE_APP_USER:-viltrox}"
+REMOTE_APP_GROUP="${REMOTE_APP_GROUP:-viltrox}"
 
 sync_state="$(ssh "${SSH_TARGET}" "systemctl is-active '${SYNC_SERVICE}' 2>/dev/null || true")"
 if [ "${ALLOW_DURING_SYNC}" != "1" ] && { [ "${sync_state}" = "active" ] || [ "${sync_state}" = "activating" ]; }; then
@@ -32,12 +34,19 @@ if [ "${SKIP_BACKUP:-0}" != "1" ]; then
   "${SCRIPT_DIR}/backup_prod_vkpi.sh"
 fi
 
+LOCAL_GIT_SHA="$(git rev-parse HEAD)"
+LOCAL_GIT_BRANCH="$(git branch --show-current)"
+LOCAL_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
 RSYNC_DELETE_FLAG=""
 if [ "${RSYNC_DELETE:-0}" = "1" ]; then
   RSYNC_DELETE_FLAG="--delete"
 fi
 
 rsync -az ${RSYNC_DELETE_FLAG} \
+  --no-owner \
+  --no-group \
+  --chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r \
   --exclude '.git/' \
   --exclude '.venv/' \
   --exclude 'frontend/node_modules/' \
@@ -51,6 +60,8 @@ rsync -az ${RSYNC_DELETE_FLAG} \
   --exclude '.env.*' \
   --exclude 'submissions.db' \
   ./ "${SSH_TARGET}:${REMOTE_ROOT}/"
+
+ssh "${SSH_TARGET}" "cd '${REMOTE_ROOT}' && printf '%s\n' '${LOCAL_GIT_SHA}' > BUILD_GIT_SHA && printf '%s\n' '${LOCAL_GIT_BRANCH}' > BUILD_GIT_BRANCH && printf '%s\n' '${LOCAL_BUILD_TIME}' > BUILD_TIME && sudo chown -R '${REMOTE_APP_USER}:${REMOTE_APP_GROUP}' '${REMOTE_ROOT}'"
 
 ssh "${SSH_TARGET}" "sudo systemctl restart '${SERVICE_NAME}' && systemctl is-active '${SERVICE_NAME}' && for attempt in \$(seq 1 30); do if curl -fsS '${HEALTH_URL}' >/tmp/vkpi-health.json; then cat /tmp/vkpi-health.json; exit 0; fi; sleep 1; done; echo 'health check failed: ${HEALTH_URL}' >&2; exit 1"
 
