@@ -61,6 +61,82 @@ KOL_POOL_LIST_COLUMNS = (
     "updated_at",
 )
 
+COUNTRY_CODE_ALIASES = {
+    "us": "US",
+    "usa": "US",
+    "u.s.": "US",
+    "u.s.a.": "US",
+    "united states": "US",
+    "united states of america": "US",
+    "america": "US",
+    "美国": "US",
+    "uk": "GB",
+    "gb": "GB",
+    "great britain": "GB",
+    "united kingdom": "GB",
+    "england": "GB",
+    "英国": "GB",
+    "canada": "CA",
+    "加拿大": "CA",
+    "germany": "DE",
+    "deutschland": "DE",
+    "德国": "DE",
+    "france": "FR",
+    "法国": "FR",
+    "italy": "IT",
+    "意大利": "IT",
+    "spain": "ES",
+    "西班牙": "ES",
+    "netherlands": "NL",
+    "holland": "NL",
+    "荷兰": "NL",
+    "japan": "JP",
+    "日本": "JP",
+    "south korea": "KR",
+    "korea": "KR",
+    "韩国": "KR",
+    "china": "CN",
+    "中国": "CN",
+    "australia": "AU",
+    "澳大利亚": "AU",
+    "brazil": "BR",
+    "巴西": "BR",
+    "mexico": "MX",
+    "墨西哥": "MX",
+    "india": "IN",
+    "印度": "IN",
+    "thailand": "TH",
+    "泰国": "TH",
+    "vietnam": "VN",
+    "越南": "VN",
+    "philippines": "PH",
+    "菲律宾": "PH",
+    "indonesia": "ID",
+    "印度尼西亚": "ID",
+}
+
+COUNTRY_NAMES = {
+    "US": "United States",
+    "GB": "United Kingdom",
+    "CA": "Canada",
+    "DE": "Germany",
+    "FR": "France",
+    "IT": "Italy",
+    "ES": "Spain",
+    "NL": "Netherlands",
+    "JP": "Japan",
+    "KR": "South Korea",
+    "CN": "China",
+    "AU": "Australia",
+    "BR": "Brazil",
+    "MX": "Mexico",
+    "IN": "India",
+    "TH": "Thailand",
+    "VN": "Vietnam",
+    "PH": "Philippines",
+    "ID": "Indonesia",
+}
+
 
 def _utcnow() -> str:
     return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -103,6 +179,80 @@ def _loads(value: Any, default: Any = None) -> Any:
         return json.loads(str(value or ""))
     except Exception:
         return default
+
+
+def _country_code(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    lowered = re.sub(r"\s+", " ", text.lower())
+    if lowered in COUNTRY_CODE_ALIASES:
+        return COUNTRY_CODE_ALIASES[lowered]
+    upper = text.upper()
+    if upper in COUNTRY_NAMES:
+        return upper
+    return upper if len(upper) <= 3 else text
+
+
+def _country_name(value: Any, code: str = "") -> str:
+    text = str(value or "").strip()
+    normalized = str(code or _country_code(text)).upper()
+    if normalized in COUNTRY_NAMES:
+        return COUNTRY_NAMES[normalized]
+    return text or normalized
+
+
+def _country_filter_variants(value: Any) -> list[str]:
+    text = str(value or "").strip()
+    code = _country_code(text)
+    variants = {text, code, _country_name(text, code)}
+    for alias, alias_code in COUNTRY_CODE_ALIASES.items():
+        if alias_code == code:
+            variants.add(alias)
+            variants.add(alias.upper())
+    return sorted({item for item in variants if item})
+
+
+def _country_distribution(conn, *, limit: int = 30) -> list[dict[str, Any]]:
+    if "country" not in _table_columns(conn, "vkpi_kol_pool"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT country, COUNT(*) AS n
+        FROM vkpi_kol_pool
+        WHERE country IS NOT NULL AND TRIM(country) != ''
+        GROUP BY country
+        ORDER BY n DESC, country ASC
+        """
+    ).fetchall()
+    buckets: dict[str, dict[str, Any]] = {}
+    total = 0
+    for row in rows:
+        raw_country = str(row["country"] or "").strip()
+        count = int(row["n"] or 0)
+        code = _country_code(raw_country)
+        if not code or count <= 0:
+            continue
+        item = buckets.setdefault(
+            code,
+            {
+                "country_code": code,
+                "country_name": _country_name(raw_country, code),
+                "kol_count": 0,
+                "raw_values": [],
+            },
+        )
+        item["kol_count"] += count
+        if raw_country not in item["raw_values"]:
+            item["raw_values"].append(raw_country)
+        total += count
+    distribution = sorted(
+        buckets.values(),
+        key=lambda item: (-int(item["kol_count"] or 0), str(item["country_code"])),
+    )
+    for item in distribution:
+        item["share"] = round((int(item["kol_count"] or 0) / total) * 100, 2) if total else 0
+    return distribution[: max(1, int(limit or 30))]
 
 
 def _owner_key(value: Any) -> str:
@@ -596,6 +746,7 @@ def list_pool(
     limit: int = 100,
     platform: str = "",
     query: str = "",
+    country: str = "",
     data_status: str = "",
     sort_by: str = "fit",
     enrichable: bool | None = None,
@@ -607,6 +758,7 @@ def list_pool(
         limit=safe_limit,
         platform=_platform(platform) if platform else "",
         query=str(query or "").strip().lower(),
+        country=_country_code(country) if country else "",
         data_status=str(data_status or "").strip().lower(),
         sort_by=str(sort_by or "fit").strip().lower(),
         enrichable="any" if enrichable is None else str(bool(enrichable)).lower(),
@@ -623,6 +775,12 @@ def list_pool(
         where.append("(handle LIKE ? OR display_name LIKE ? OR bio LIKE ?)")
         like = f"%{query}%"
         params.extend([like, like, like])
+    if country:
+        variants = [variant.lower() for variant in _country_filter_variants(country)]
+        if variants:
+            placeholders = ",".join(["?"] * len(variants))
+            where.append(f"LOWER(COALESCE(country, '')) IN ({placeholders})")
+            params.extend(variants)
     status = str(data_status or "").strip().lower()
     if status == "missing":
         where.append(
@@ -915,6 +1073,7 @@ def summary() -> dict[str, Any]:
     by_source = conn.execute(
         "SELECT source_type, COUNT(*) AS n FROM vkpi_kol_pool GROUP BY source_type ORDER BY n DESC, source_type ASC"
     ).fetchall()
+    country_distribution = _country_distribution(conn)
     return _kol_pool_cache_store(cache_key, {
         "total": int(total["n"] if total else 0),
         "linked_main_kol_count": int(linked["n"] if linked else 0),
@@ -923,6 +1082,7 @@ def summary() -> dict[str, Any]:
         "source_scope": "partial" if historical and int(historical["n"] or 0) else "mixed",
         "by_platform": [dict(row) for row in by_platform],
         "by_source": [dict(row) for row in by_source],
+        "country_distribution": country_distribution,
         "note": "KOL Pool 是资产池；source_type=promo_plan_xlsx 表示局部历史/计划名录，不等于 Daily Top100 新候选。",
     })
 

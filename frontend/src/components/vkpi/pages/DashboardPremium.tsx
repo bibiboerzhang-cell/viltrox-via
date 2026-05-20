@@ -8,6 +8,7 @@ import {
   glassVarStyle,
 } from '../glass';
 import { apiFetch } from '../../../services/http';
+import { listKolPool, type VkpiKolPoolItem } from '../../../services/vkpi/kolPool-api';
 import { getKolPoolCompetitorDashboard, getKolPoolSummary, listBrandSignals } from '../../../services/vkpi.ui-api';
 import type { VkpiPageKey } from '../vkpiTypes';
 import '../glass-future/tokens.css';
@@ -73,6 +74,23 @@ interface PremiumTask {
   mockLabel?: string;
 }
 
+interface PremiumRegion {
+  label: string;
+  value: string;
+  color: string;
+  isMock: boolean;
+  countryCode?: string;
+  kolCount?: number;
+  mockLabel?: string;
+}
+
+interface CountryDrawerState {
+  region: PremiumRegion;
+  items: VkpiKolPoolItem[];
+  loading: boolean;
+  error?: string;
+}
+
 interface PremiumSnapshot {
   source: PremiumSource;
   failedSections: string[];
@@ -94,12 +112,22 @@ const mockKpis: PremiumKpi[] = [
   { icon: '¥', label: '平均 ROI', value: '5.21x', meta: '较上周 ↑ 0.7x', trend: 'up', ig: 'rgba(255,77,166,.13)', ic: '#ff4da6', sparkPath: 'M2 12 C20 10 29 14 44 13 S65 19 76 17 96 12 118 9', isMock: true, mockLabel: '示例 KPI' },
 ];
 
-const regions = [
-  { label: '北美', value: '67.2%', color: '#1b6cff' },
-  { label: '欧洲', value: '21.8%', color: '#6aa6ff' },
-  { label: '亚太', value: '8.6%', color: '#18d5ff' },
-  { label: '南美', value: '1.6%', color: '#8b5cf6' },
-  { label: '其他', value: '0.8%', color: '#cfe0ff' },
+const regionColors = ['#1b6cff', '#6aa6ff', '#18d5ff', '#8b5cf6', '#cfe0ff'];
+
+const mapPointPositions = [
+  { x: 170, y: 106, r: 8 },
+  { x: 332, y: 123, r: 7 },
+  { x: 486, y: 166, r: 6 },
+  { x: 250, y: 165, r: 6 },
+  { x: 424, y: 92, r: 5 },
+];
+
+const regions: PremiumRegion[] = [
+  { label: '北美', value: '67.2%', color: '#1b6cff', isMock: true, mockLabel: '示例地区' },
+  { label: '欧洲', value: '21.8%', color: '#6aa6ff', isMock: true, mockLabel: '示例地区' },
+  { label: '亚太', value: '8.6%', color: '#18d5ff', isMock: true, mockLabel: '示例地区' },
+  { label: '南美', value: '1.6%', color: '#8b5cf6', isMock: true, mockLabel: '示例地区' },
+  { label: '其他', value: '0.8%', color: '#cfe0ff', isMock: true, mockLabel: '示例地区' },
 ];
 
 const mockProductRows: PremiumProductRow[] = [
@@ -289,6 +317,28 @@ function buildAlerts(signals: Row[]): PremiumAlert[] {
   });
 }
 
+function buildPremiumRegions(kolSummary: Row): PremiumRegion[] {
+  const distribution = rowsFrom(kolSummary.country_distribution);
+  const total = distribution.reduce((sum, row) => sum + numberValue(row.kol_count), 0);
+  const regionRows = distribution
+    .map((row, index): PremiumRegion => {
+      const count = numberValue(row.kol_count);
+      const share = numberValue(row.share) || (total ? (count / total) * 100 : 0);
+      const countryCode = String(row.country_code || '').trim();
+      return {
+        label: String(row.country_name || countryCode || `国家 ${index + 1}`),
+        value: share ? `${share.toFixed(1)}%` : compact(count),
+        color: regionColors[index % regionColors.length],
+        isMock: false,
+        countryCode,
+        kolCount: count,
+      };
+    })
+    .filter((region) => Boolean(region.countryCode) && (region.kolCount || 0) > 0)
+    .slice(0, 5);
+  return regionRows.length ? regionRows : regions;
+}
+
 function trendChart(rows: Row[]) {
   const fallbackPath = 'M34 196 C82 162 121 164 166 134 S235 102 285 101 363 76 411 51 458 25 500 32';
   if (!rows.length) {
@@ -380,6 +430,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
   const [activeSegment, setActiveSegment] = useState('曝光量');
   const [snapshot, setSnapshot] = useState<PremiumSnapshot>(EMPTY_PREMIUM_SNAPSHOT);
   const [loadingData, setLoadingData] = useState(false);
+  const [countryDrawer, setCountryDrawer] = useState<CountryDrawerState | null>(null);
 
   useEffect(() => {
     if (!apiToken) {
@@ -410,6 +461,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
   const premiumProductRows = useMemo(() => buildProductRows(snapshot.productRows), [snapshot.productRows]);
   const premiumAlerts = useMemo(() => buildAlerts(snapshot.brandSignals), [snapshot.brandSignals]);
   const premiumTrend = useMemo(() => trendChart(snapshot.trendRows), [snapshot.trendRows]);
+  const premiumRegions = useMemo(() => buildPremiumRegions(snapshot.kolSummary), [snapshot.kolSummary]);
   const competitorTiers = objectValue(snapshot.competitorDashboard.tier_counts);
   const riskCount = numberValue(competitorTiers.avoid) + numberValue(competitorTiers.caution);
   const kolTotal = numberValue(snapshot.kolSummary.total || snapshot.kolSummary.candidate_asset_count);
@@ -432,6 +484,21 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
     window.clearTimeout(glassToastTimer);
     glassToastTimer = window.setTimeout(() => setToastVisible(false), 1600);
   }, []);
+
+  const openCountryDrawer = useCallback((region: PremiumRegion) => {
+    if (region.isMock || !region.countryCode) {
+      showToast('地区分布 · 示例数据');
+      return;
+    }
+    if (!apiToken) {
+      showToast('登录后查看国家 KOL 列表');
+      return;
+    }
+    setCountryDrawer({ region, items: [], loading: true });
+    listKolPool(apiToken, { country: region.countryCode, limit: 20 })
+      .then((response) => setCountryDrawer({ region, items: response.items || [], loading: false }))
+      .catch(() => setCountryDrawer({ region, items: [], loading: false, error: '国家 KOL 列表加载失败' }));
+  }, [apiToken, showToast]);
 
   const handleNavSelect = (key: string) => {
     setActiveNav(key);
@@ -473,10 +540,27 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
                   <div className="panel-head"><h3>全球曝光分布</h3><span className="link" onClick={() => showToast('原型交互 · 可接真实路由')}>Market Map</span></div>
                   <div className="holo-map">
                     <div className="zoom"><span>+</span><span>−</span></div>
-                    <svg viewBox="0 0 620 240" preserveAspectRatio="none"><defs><linearGradient id="mg" x1="0" x2="1"><stop offset="0" stopColor="#1b6cff" /><stop offset="1" stopColor="#18d5ff" /></linearGradient><filter id="gl"><feGaussianBlur stdDeviation="5" result="b" /><feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge></filter></defs><path d="M92 82c40-22 94-9 121 2 27 11 68 3 92 15 30 15 9 39-28 40-58 3-125 15-161-2-35-16-61-39-24-55z" fill="url(#mg)" opacity=".93" filter="url(#gl)" /><path d="M272 82c68-32 128-19 184-4 42 11 77 30 120 21 34-7 65 13 62 35-4 22-49 30-91 24-57-8-99-3-148 16-52 20-120 7-136-30-8-18-14-43 9-62z" fill="#9dc4ff" opacity=".66" /><path d="M184 154c50-14 87 1 119 13 44 17 86 9 121 23 27 11 25 33-5 41-42 12-88-2-126-10-47-10-91 6-124-14-30-17-34-48 15-53z" fill="#6aa6ff" opacity=".50" /><path d="M457 150c43-10 86 4 110 23 24 19 9 41-35 39-50-2-98-14-111-35-10-15 7-23 36-27z" fill="#cfe0ff" opacity=".70" /><circle cx="170" cy="106" r="8" fill="#1b6cff" /><circle cx="170" cy="106" r="28" fill="#1b6cff" opacity=".11" /><circle cx="332" cy="123" r="7" fill="#18d5ff" /><circle cx="332" cy="123" r="24" fill="#18d5ff" opacity=".13" /><circle cx="486" cy="166" r="6" fill="#8b5cf6" /><circle cx="486" cy="166" r="21" fill="#8b5cf6" opacity=".12" /></svg>
+                    <svg viewBox="0 0 620 240" preserveAspectRatio="none">
+                      <defs><linearGradient id="mg" x1="0" x2="1"><stop offset="0" stopColor="#1b6cff" /><stop offset="1" stopColor="#18d5ff" /></linearGradient><filter id="gl"><feGaussianBlur stdDeviation="5" result="b" /><feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge></filter></defs>
+                      <path d="M92 82c40-22 94-9 121 2 27 11 68 3 92 15 30 15 9 39-28 40-58 3-125 15-161-2-35-16-61-39-24-55z" fill="url(#mg)" opacity=".93" filter="url(#gl)" />
+                      <path d="M272 82c68-32 128-19 184-4 42 11 77 30 120 21 34-7 65 13 62 35-4 22-49 30-91 24-57-8-99-3-148 16-52 20-120 7-136-30-8-18-14-43 9-62z" fill="#9dc4ff" opacity=".66" />
+                      <path d="M184 154c50-14 87 1 119 13 44 17 86 9 121 23 27 11 25 33-5 41-42 12-88-2-126-10-47-10-91 6-124-14-30-17-34-48 15-53z" fill="#6aa6ff" opacity=".50" />
+                      <path d="M457 150c43-10 86 4 110 23 24 19 9 41-35 39-50-2-98-14-111-35-10-15 7-23 36-27z" fill="#cfe0ff" opacity=".70" />
+                      {premiumRegions.slice(0, 5).map((region, index) => {
+                        const point = mapPointPositions[index % mapPointPositions.length];
+                        const label = region.countryCode || region.label.slice(0, 2);
+                        return (
+                          <g className="map-point" key={region.label} role="button" tabIndex={0} onClick={() => openCountryDrawer(region)} onKeyDown={(event) => { if (event.key === 'Enter') openCountryDrawer(region); }}>
+                            <circle cx={point.x} cy={point.y} r={point.r} fill={region.color} />
+                            <circle cx={point.x} cy={point.y} r={point.r * 3.4} fill={region.color} opacity=".12" />
+                            <text x={point.x + 12} y={point.y + 4} fill="#344054" fontSize="11" fontWeight="800">{label}</text>
+                          </g>
+                        );
+                      })}
+                    </svg>
                   </div>
                   <div className="region-list">
-                    {regions.map((region) => <div className="region" style={glassVarStyle({ '--c': region.color })} key={region.label}><span><i></i>{region.label}</span><b>{region.value}</b></div>)}
+                    {premiumRegions.map((region) => <div className="region" style={glassVarStyle({ '--c': region.color })} key={region.label} role="button" tabIndex={0} title={region.mockLabel || `${region.kolCount || 0} KOL`} onClick={() => openCountryDrawer(region)} onKeyDown={(event) => { if (event.key === 'Enter') openCountryDrawer(region); }}><span><i></i>{region.label}{region.isMock ? <em>示例</em> : null}</span><b>{region.value}</b></div>)}
                   </div>
                 </div>
                 <div className="glass-card panel">
@@ -510,6 +594,31 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
           </div>
         </main>
       </div>
+      {countryDrawer ? (
+        <div className="country-drawer" role="dialog" aria-label={`${countryDrawer.region.label} KOL`}>
+          <div className="country-drawer-head">
+            <div><span>国家 KOL</span><b>{countryDrawer.region.label}</b></div>
+            <button type="button" onClick={() => setCountryDrawer(null)}>×</button>
+          </div>
+          <div className="country-drawer-meta">
+            <span>{countryDrawer.region.countryCode || '-'}</span>
+            <span>{compact(countryDrawer.region.kolCount || countryDrawer.items.length)} KOL</span>
+          </div>
+          {countryDrawer.loading ? <div className="country-drawer-empty">加载中…</div> : null}
+          {!countryDrawer.loading && countryDrawer.error ? <div className="country-drawer-empty">{countryDrawer.error}</div> : null}
+          {!countryDrawer.loading && !countryDrawer.error && countryDrawer.items.length === 0 ? <div className="country-drawer-empty">暂无 KOL</div> : null}
+          {!countryDrawer.loading && !countryDrawer.error ? (
+            <div className="country-drawer-list">
+              {countryDrawer.items.slice(0, 12).map((item) => (
+                <div className="country-kol" key={item.id}>
+                  <b>{item.display_name || item.handle || `KOL ${item.id}`}</b>
+                  <span>{item.platform || '-'} · {compact(numberValue(item.followers))} followers</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       <GlassFAB onClick={() => showToast('原型交互 · 可接真实路由')} />
       <GlassToast show={toastVisible}>{toast}</GlassToast>
     </div>

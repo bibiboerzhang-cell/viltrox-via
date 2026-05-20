@@ -9,6 +9,7 @@ export interface VkpiKolPoolItem {
   display_name?: string;
   avatar_url?: string;
   bio?: string;
+  country?: string;
   email?: string;
   followers?: number;
   following?: number;
@@ -37,11 +38,12 @@ export interface VkpiKolPoolItem {
 
 export async function listKolPool(
   token: string,
-  params: { search?: string; platform?: string; limit?: number; dataStatus?: string; sortBy?: string; enrichable?: boolean } = {},
+  params: { search?: string; platform?: string; country?: string; limit?: number; dataStatus?: string; sortBy?: string; enrichable?: boolean } = {},
 ): Promise<{ items?: VkpiKolPoolItem[] }> {
   const query = new URLSearchParams({ limit: String(params.limit || 100) });
   if (params.search) query.set("query", params.search);
   if (params.platform) query.set("platform", params.platform);
+  if (params.country) query.set("country", params.country);
   if (params.dataStatus) query.set("data_status", params.dataStatus);
   if (params.sortBy) query.set("sort_by", params.sortBy);
   if (typeof params.enrichable === "boolean") query.set("enrichable", String(params.enrichable));
