@@ -179,6 +179,8 @@ const VKPI_PAGE_KEYS = new Set<VkpiPageKey>([
   'settings',
 ]);
 
+const DEFAULT_VKPI_PAGE: VkpiPageKey = 'dashboardPremium';
+
 const importMetaEnv = (import.meta as { env?: { DEV?: boolean } }).env;
 
 if (importMetaEnv?.DEV) {
@@ -190,11 +192,11 @@ function isVkpiPageKey(value: string): value is VkpiPageKey {
 }
 
 function getInitialVkpiPage(): VkpiPageKey {
-  if (typeof window === 'undefined') return 'command';
+  if (typeof window === 'undefined') return DEFAULT_VKPI_PAGE;
   const hashPage = window.location.hash.replace(/^#\/?/, '');
   const queryPage = new URLSearchParams(window.location.search).get('page') || '';
   const candidate = hashPage || queryPage;
-  return isVkpiPageKey(candidate) ? candidate : 'command';
+  return isVkpiPageKey(candidate) ? candidate : DEFAULT_VKPI_PAGE;
 }
 
 export function VkpiDashboard({
