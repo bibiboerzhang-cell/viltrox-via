@@ -1,5 +1,11 @@
 import { useEffect, useState } from 'react';
-import { actOnDataQualityIssue, getDataQuality, type VkpiDataQualityAction } from '../../../services/vkpi.ui-api';
+import {
+  actOnDataQualityIssue,
+  getDataQuality,
+  listBrandSignals,
+  reviewBrandSignal,
+  type VkpiDataQualityAction,
+} from '../../../services/vkpi.ui-api';
 import type { VkpiDataQualityResponse } from '../vkpiTypes';
 import { CardHeader } from '../shared/CardHeader';
 import { InfoBlock } from '../shared/InfoBlock';
@@ -11,13 +17,76 @@ interface DataQualityPageProps {
   viewMode: 'manager' | 'employee';
 }
 
+function textValue(value: unknown, fallback = '') {
+  const text = String(value ?? '').trim();
+  return text || fallback;
+}
+
+function formatDateTime(value: unknown) {
+  const text = textValue(value);
+  if (!text) return '-';
+  const date = new Date(text);
+  if (Number.isNaN(date.getTime())) return text;
+  return date.toLocaleString('zh-CN', { hour12: false });
+}
+
+function brandRoleLabel(value: unknown) {
+  const role = textValue(value).toLowerCase();
+  if (role === 'self') return 'Viltrox';
+  if (role === 'competitor') return '竞品';
+  return role || '-';
+}
+
+function brandSignalTypeLabel(value: unknown) {
+  const type = textValue(value).toLowerCase();
+  if (type === 'mention_viltrox') return '提到 Viltrox';
+  if (type === 'show_product') return '产品 / SKU';
+  if (type === 'comment_mention') return '评论提及';
+  if (type === 'mention_competitor') return '提到竞品';
+  return type || '-';
+}
+
+function brandSignalSeverity(signal: Record<string, unknown>) {
+  const strength = textValue(signal.signal_strength).toLowerCase();
+  const role = textValue(signal.brand_role).toLowerCase();
+  if (strength === 'high' && role === 'competitor') return 'critical';
+  if (strength === 'high') return 'high';
+  if (strength === 'medium') return 'medium';
+  return 'low';
+}
+
+function brandSignalActionLabel(action: 'contact' | 'ignore' | 'flag' | 'compete') {
+  if (action === 'contact') return '联系';
+  if (action === 'ignore') return '忽略';
+  if (action === 'flag') return '标记';
+  return '竞品处理';
+}
+
+function brandSignalEvidence(signal: Record<string, unknown>) {
+  const raw = textValue(signal.evidence_json);
+  if (!raw) return textValue(signal.post_uid || signal.source_id, '-');
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return textValue(parsed.match_text || parsed.match_context || parsed.match_source || signal.post_uid || signal.source_id, '-');
+  } catch {
+    return raw.slice(0, 120);
+  }
+}
+
 export function DataQualityPage({ apiToken, viewMode }: DataQualityPageProps) {
   const [quality, setQuality] = useState<VkpiDataQualityResponse | null>(null);
+  const [brandSignals, setBrandSignals] = useState<Array<Record<string, unknown>>>([]);
+  const [brandSignalCount, setBrandSignalCount] = useState(0);
+  const [brandSignalSchemaReady, setBrandSignalSchemaReady] = useState(true);
+  const [brandSignalStatus, setBrandSignalStatus] = useState<'new' | 'reviewed' | 'all'>('new');
+  const [brandSignalRole, setBrandSignalRole] = useState<'all' | 'self' | 'competitor'>('all');
+  const [brandSignalType, setBrandSignalType] = useState('');
+  const [brandSignalLoading, setBrandSignalLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
 
   const refresh = async () => {
-    if (!apiToken) return;
+    if (!apiToken || viewMode !== 'manager') return;
     setLoading(true);
     setMessage('');
     try {
@@ -26,6 +95,27 @@ export function DataQualityPage({ apiToken, viewMode }: DataQualityPageProps) {
       setMessage(error instanceof Error ? error.message : '数据质量检查失败');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const refreshBrandSignals = async () => {
+    if (!apiToken || viewMode !== 'manager') return;
+    setBrandSignalLoading(true);
+    setMessage('');
+    try {
+      const response = await listBrandSignals(apiToken, {
+        status: brandSignalStatus,
+        brandRole: brandSignalRole === 'all' ? '' : brandSignalRole,
+        signalType: brandSignalType,
+        limit: 100,
+      });
+      setBrandSignals(response.signals || []);
+      setBrandSignalCount(Number(response.count || 0));
+      setBrandSignalSchemaReady(response.schema_ready !== false);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '品牌信号读取失败');
+    } finally {
+      setBrandSignalLoading(false);
     }
   };
 
@@ -68,7 +158,23 @@ export function DataQualityPage({ apiToken, viewMode }: DataQualityPageProps) {
     }
   };
 
-  useEffect(() => { void refresh(); }, [apiToken]);
+  const actOnBrandSignal = async (signalId: unknown, action: 'contact' | 'ignore' | 'flag' | 'compete') => {
+    if (!apiToken || !signalId) return;
+    setBrandSignalLoading(true);
+    setMessage('');
+    try {
+      await reviewBrandSignal(apiToken, String(signalId), { action });
+      setMessage(`品牌信号已标记为${brandSignalActionLabel(action)}。`);
+      await refreshBrandSignals();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '品牌信号处理失败');
+    } finally {
+      setBrandSignalLoading(false);
+    }
+  };
+
+  useEffect(() => { void refresh(); }, [apiToken, viewMode]);
+  useEffect(() => { void refreshBrandSignals(); }, [apiToken, viewMode, brandSignalStatus, brandSignalRole, brandSignalType]);
 
   if (viewMode !== 'manager') {
     return (
@@ -99,6 +205,71 @@ export function DataQualityPage({ apiToken, viewMode }: DataQualityPageProps) {
         </section>
       </section>
       {message ? <div className="vkpi-inline-message">{message}</div> : null}
+      <section className="vkpi-card vkpi-table-card">
+        <div className="vkpi-table-card__header">
+          <div><h2>Viltrox / 竞品信号</h2><span>{brandSignalSchemaReady ? `${brandSignalCount} 条` : '未建表'}</span></div>
+          <div className="vkpi-table-actions">
+            <select value={brandSignalStatus} onChange={(event) => setBrandSignalStatus(event.target.value as typeof brandSignalStatus)} aria-label="信号状态">
+              <option value="new">未处理</option>
+              <option value="reviewed">已处理</option>
+              <option value="all">全部</option>
+            </select>
+            <select value={brandSignalRole} onChange={(event) => setBrandSignalRole(event.target.value as typeof brandSignalRole)} aria-label="品牌角色">
+              <option value="all">全部品牌</option>
+              <option value="self">Viltrox</option>
+              <option value="competitor">竞品</option>
+            </select>
+            <select value={brandSignalType} onChange={(event) => setBrandSignalType(event.target.value)} aria-label="信号类型">
+              <option value="">全部类型</option>
+              <option value="mention_viltrox">提到 Viltrox</option>
+              <option value="show_product">产品 / SKU</option>
+              <option value="comment_mention">评论提及</option>
+              <option value="mention_competitor">提到竞品</option>
+            </select>
+            <button className="vkpi-button vkpi-button--small" type="button" disabled={brandSignalLoading || !apiToken} onClick={() => void refreshBrandSignals()}>
+              {brandSignalLoading ? '读取中' : '刷新'}
+            </button>
+          </div>
+        </div>
+        <div className="vkpi-table-wrap">
+          <table className="vkpi-table">
+            <thead><tr><th>强度</th><th>品牌</th><th>平台</th><th>证据</th><th>时间</th><th>处理</th></tr></thead>
+            <tbody>
+              {!brandSignalSchemaReady ? (
+                <tr><td className="vkpi-table-empty" colSpan={6}>品牌信号表还没有创建；先运行 brand signal 扫描或迁移。</td></tr>
+              ) : brandSignals.length ? brandSignals.map((signal) => (
+                <tr key={String(signal.id || signal.signal_uid)}>
+                  <td><SeverityBadge severity={brandSignalSeverity(signal)} /></td>
+                  <td>
+                    <strong>{textValue(signal.brand_name || signal.brand || '-')}</strong><br />
+                    <small>{brandSignalTypeLabel(signal.signal_type)} · {brandRoleLabel(signal.brand_role)}</small>
+                  </td>
+                  <td>
+                    {textValue(signal.platform || '-')}<br />
+                    <small>{textValue(signal.kol_entity_uid || signal.source_table || '-')}</small>
+                  </td>
+                  <td>
+                    {signal.post_url ? <a href={String(signal.post_url)} target="_blank" rel="noreferrer">打开原帖</a> : '-'}
+                    <br />
+                    <small>{brandSignalEvidence(signal)}</small>
+                  </td>
+                  <td>{formatDateTime(signal.detected_at || signal.published_at)}</td>
+                  <td>
+                    <div className="vkpi-table-actions vkpi-data-quality-actions">
+                      <button className="vkpi-button vkpi-button--small" type="button" disabled={brandSignalLoading} onClick={() => void actOnBrandSignal(signal.id, 'contact')}>联系</button>
+                      <button className="vkpi-button vkpi-button--small vkpi-button--ghost" type="button" disabled={brandSignalLoading} onClick={() => void actOnBrandSignal(signal.id, 'flag')}>标记</button>
+                      <button className="vkpi-button vkpi-button--small vkpi-button--ghost" type="button" disabled={brandSignalLoading} onClick={() => void actOnBrandSignal(signal.id, 'compete')}>竞品处理</button>
+                      <button className="vkpi-button vkpi-button--small vkpi-button--ghost" type="button" disabled={brandSignalLoading} onClick={() => void actOnBrandSignal(signal.id, 'ignore')}>忽略</button>
+                    </div>
+                  </td>
+                </tr>
+              )) : (
+                <tr><td className="vkpi-table-empty" colSpan={6}>{brandSignalLoading ? '正在读取品牌信号...' : '当前筛选下没有品牌信号。'}</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
       <section className="vkpi-card vkpi-table-card">
         <div className="vkpi-table-card__header">
           <div><h2>问题队列</h2><span>{issues.length} 条</span></div>
