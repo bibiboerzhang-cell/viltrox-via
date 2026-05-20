@@ -91,17 +91,22 @@ def r2_readiness() -> dict[str, Any]:
     script = ROOT / "scripts" / "ops" / "check_vkpi_r2_readiness.py"
     if not script.exists():
         return {"available": False}
-    result = run([str(script)], timeout=20)
+    result = run([str(script), "--remote", "viltrox", "--remote-root", "/opt/viltrox-2.0"], timeout=30)
     try:
         payload = parse_json_blob(result.stdout or result.stderr)
     except Exception as exc:
         return {"available": True, "ready": False, "error": f"invalid readiness output: {exc}", "returncode": result.returncode}
     local = payload.get("local") if isinstance(payload, dict) else {}
+    remote = payload.get("remote") if isinstance(payload, dict) else {}
+    source = remote if isinstance(remote, dict) and not remote.get("error") else local
     return {
         "available": True,
-        "ready": bool(isinstance(local, dict) and local.get("ready_for_new_uploads")),
-        "storage_mode": local.get("storage_mode") if isinstance(local, dict) else "",
-        "missing_required": local.get("missing_required") if isinstance(local, dict) else [],
+        "ready": bool(isinstance(source, dict) and source.get("ready_for_new_uploads")),
+        "storage_mode": source.get("storage_mode") if isinstance(source, dict) else "",
+        "missing_required": source.get("missing_required") if isinstance(source, dict) else [],
+        "source": source.get("source") if isinstance(source, dict) else "",
+        "local_ready": bool(isinstance(local, dict) and local.get("ready_for_new_uploads")),
+        "remote_ready": bool(isinstance(remote, dict) and remote.get("ready_for_new_uploads")),
         "returncode": result.returncode,
     }
 
@@ -220,6 +225,8 @@ def build_items(sync: dict[str, Any], r2: dict[str, Any], snapshot: dict[str, An
                 "media cache adapter and migration dry-run exist",
                 "post-sync R2 migration guard exists" if exists("scripts/ops/migrate_vkpi_media_cache_to_r2_after_sync.sh") else "R2 migration guard missing",
                 f"storage_mode={r2.get('storage_mode', 'unknown')}",
+                f"readiness_source={r2.get('source', '-')}",
+                f"remote_ready={r2.get('remote_ready', '-')}",
                 f"missing_required={', '.join(r2.get('missing_required') or []) or '-'}",
             ],
             "先配置 R2 env；未 ready 前继续本地 fallback，不执行旧缓存迁移。",
