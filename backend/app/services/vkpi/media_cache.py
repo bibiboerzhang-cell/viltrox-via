@@ -784,7 +784,7 @@ def migrate_local_video_cache_to_r2(
 ) -> dict[str, Any]:
     """Migrate existing item sidecar video cache files to R2 when explicitly enabled."""
 
-    safe_limit = max(1, min(5000, int(limit or 100)))
+    safe_limit = max(1, min(100000, int(limit or 100)))
     platform_filter = _text(platform).lower()
     entries = _sidecar_entries()
     scanned = 0
