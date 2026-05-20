@@ -118,6 +118,12 @@ python scripts/smoke_real_video_upload_audit_300.py
 
 ## 4. Deployment preflight
 
+Generate a current V-KPI execution status table before deciding the next package:
+
+```bash
+scripts/ops/report_vkpi_plan_status.py --out runtime/vkpi-plan-status/latest.md
+```
+
 Before deploy:
 
 ```bash
