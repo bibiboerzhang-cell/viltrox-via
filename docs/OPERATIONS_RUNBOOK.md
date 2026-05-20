@@ -211,6 +211,13 @@ Use this to make the local machine hold the latest production snapshot without o
 scripts/ops/sync_prod_snapshot_to_local.sh
 ```
 
+Check whether the local scheduled pull is loaded and what the latest downloaded
+snapshot is:
+
+```bash
+scripts/ops/check_prod_snapshot_sync_status.sh
+```
+
 By default this downloads only. It does not restore into a local DB.
 It also checks `vkpi-sync-daily.service` first and skips safely while the remote
 daily sync is `active` or `activating`. Override only for an intentional ops run:
