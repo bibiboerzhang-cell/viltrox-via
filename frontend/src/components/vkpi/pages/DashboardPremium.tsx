@@ -9,6 +9,7 @@ import {
 } from '../glass';
 import { apiFetch } from '../../../services/http';
 import { getKolPoolCompetitorDashboard, getKolPoolSummary, listBrandSignals } from '../../../services/vkpi.ui-api';
+import type { VkpiPageKey } from '../vkpiTypes';
 import '../glass-future/tokens.css';
 import '../glass-future/background.css';
 import '../glass-future/components.css';
@@ -21,6 +22,7 @@ export interface DashboardPremiumProps {
   userRole?: string;
   testId?: string;
   windowDays?: number;
+  onSelectPage?: (page: VkpiPageKey) => void;
 }
 
 let glassToastTimer: number | undefined;
@@ -140,6 +142,17 @@ const quickActions = [
   { icon: '▦', label: '产品管理' },
   { icon: '▥', label: '数据报表' },
 ];
+
+const premiumNavTarget: Record<string, VkpiPageKey> = {
+  Dashboard: 'dashboardPremium',
+  Mission: 'command',
+  KOL: 'channels',
+  Campaign: 'projects',
+  Product: 'productBattle',
+  Market: 'dataAnalysis',
+  Data: 'dataAnalysis',
+  Settings: 'settings',
+};
 
 const EMPTY_PREMIUM_SNAPSHOT: PremiumSnapshot = {
   source: 'mock',
@@ -360,7 +373,7 @@ function PremiumKpiCard({ item }: { item: PremiumKpi }) {
   );
 }
 
-export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Marketing Director', testId = 'vkpi-dashboard-premium', windowDays = 30 }: DashboardPremiumProps) {
+export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Marketing Director', testId = 'vkpi-dashboard-premium', windowDays = 30, onSelectPage }: DashboardPremiumProps) {
   const [toast, setToast] = useState('已触发');
   const [toastVisible, setToastVisible] = useState(false);
   const [activeNav, setActiveNav] = useState('Dashboard');
@@ -422,6 +435,11 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
 
   const handleNavSelect = (key: string) => {
     setActiveNav(key);
+    const target = premiumNavTarget[key];
+    if (target && target !== 'dashboardPremium' && onSelectPage) {
+      onSelectPage(target);
+      return;
+    }
     showToast(`${key} · 高级玻璃方向占位`);
   };
 

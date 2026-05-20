@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import './VkpiDashboard.css';
 import { CommandCenter } from './dashboard/CommandCenter';
+import { DashboardPremium } from './pages/DashboardPremium';
 import { GlassDemoPage } from './pages/GlassDemoPage';
 import { EMPLOYEE_NAV_ITEMS, MANAGER_NAV_ITEMS } from './layout/vkpiLayoutConstants';
 import { VkpiSidebar } from './layout/VkpiSidebar';
@@ -160,6 +161,7 @@ const emptyDashboardData: VkpiDashboardData = {
 
 const VKPI_PAGE_KEYS = new Set<VkpiPageKey>([
   'command',
+  'dashboardPremium',
   'discover',
   'projects',
   'links',
@@ -469,6 +471,10 @@ export function VkpiDashboard({
 
   if (activePage === 'glass-demo') {
     return <GlassDemoPage apiToken={apiToken} userName={userName} userRole={userRole} />;
+  }
+
+  if (activePage === 'dashboardPremium') {
+    return <DashboardPremium apiToken={apiToken} userName={userName} userRole={userRole} onSelectPage={handleSelectPage} />;
   }
 
   return (

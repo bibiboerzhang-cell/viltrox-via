@@ -15,6 +15,7 @@ export const rangeOptions: Array<{ key: VkpiRangeKey; label: string }> = [
 ];
 
 export const MANAGER_NAV_ITEMS: VkpiNavItem[] = [
+  { key: 'dashboardPremium', label: '决策驾驶舱', icon: 'spark' },
   { key: 'command', label: '管理主控', icon: 'grid' },
   { key: 'channels', label: 'KOL/账号管理', icon: 'grid' },
   { key: 'discover', label: '红人搜索', icon: 'discover' },
@@ -32,6 +33,7 @@ export const MANAGER_NAV_ITEMS: VkpiNavItem[] = [
 ];
 
 export const EMPLOYEE_NAV_ITEMS: VkpiNavItem[] = [
+  { key: 'dashboardPremium', label: '我的驾驶舱', icon: 'spark' },
   { key: 'command', label: '我的工作台', icon: 'grid' },
   { key: 'channels', label: '我的平台', icon: 'grid' },
   { key: 'discover', label: '搜索红人', icon: 'discover' },

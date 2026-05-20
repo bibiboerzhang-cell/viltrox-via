@@ -6,13 +6,20 @@
  *   - Anonymous users see the shared login.
  *   - Signed-in users enter a role-scoped Marketing view.
  */
+import { useEffect, useState } from "react";
 import { VkpiTab } from "../../components/admin/tabs_v2/VkpiTab";
 import { VkpiDashboard } from "../../components/vkpi";
+import { GlassDemoPage } from "../../components/vkpi/pages/GlassDemoPage";
 import { useAuth } from "../../hooks/useAuth";
 import AdminLoginRoute from "./AdminLoginRoute";
 import "../../styles/admin.css";
 
 const importMetaEnv = (import.meta as { env?: { DEV?: boolean } }).env;
+
+function getHashPage(): string {
+  if (typeof window === "undefined") return "";
+  return window.location.hash.replace(/^#\/?/, "");
+}
 
 function AdminAuthLoading() {
   return (
@@ -50,16 +57,23 @@ function hasMarketingPermission(user: { role?: string; is_owner?: boolean; permi
   return ["read", "write"].includes(String(permissions.vkpi || permissions.marketing || "none").toLowerCase());
 }
 
-function isGlassDemoRequest(): boolean {
-  if (!importMetaEnv?.DEV || typeof window === "undefined") return false;
-  return window.location.hash.replace(/^#\/?/, "") === "glass-demo";
+function isGlassDemoRequest(hashPage: string): boolean {
+  if (!importMetaEnv?.DEV) return false;
+  return hashPage === "glass-demo";
 }
 
 export default function AdminRoute() {
   const { status, token, user, signOut } = useAuth();
+  const [hashPage, setHashPage] = useState(() => getHashPage());
 
-  if (isGlassDemoRequest()) {
-    return <VkpiDashboard userName="Jianbo" userRole="Marketing Director" />;
+  useEffect(() => {
+    const handleHashChange = () => setHashPage(getHashPage());
+    window.addEventListener("hashchange", handleHashChange);
+    return () => window.removeEventListener("hashchange", handleHashChange);
+  }, []);
+
+  if (isGlassDemoRequest(hashPage)) {
+    return <GlassDemoPage userName="Jianbo" userRole="Marketing Director" />;
   }
 
   if (status === "loading") {
