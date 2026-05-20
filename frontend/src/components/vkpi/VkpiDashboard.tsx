@@ -191,12 +191,17 @@ function isVkpiPageKey(value: string): value is VkpiPageKey {
   return VKPI_PAGE_KEYS.has(value as VkpiPageKey);
 }
 
-function getInitialVkpiPage(): VkpiPageKey {
+function normalizeVkpiPage(value: string, viewMode: 'manager' | 'employee'): VkpiPageKey {
+  if (viewMode === 'manager' && (value === 'command' || value === 'dashboard')) return 'dashboardPremium';
+  return isVkpiPageKey(value) ? value : DEFAULT_VKPI_PAGE;
+}
+
+function getInitialVkpiPage(viewMode: 'manager' | 'employee'): VkpiPageKey {
   if (typeof window === 'undefined') return DEFAULT_VKPI_PAGE;
   const hashPage = window.location.hash.replace(/^#\/?/, '');
   const queryPage = new URLSearchParams(window.location.search).get('page') || '';
   const candidate = hashPage || queryPage;
-  return isVkpiPageKey(candidate) ? candidate : DEFAULT_VKPI_PAGE;
+  return normalizeVkpiPage(candidate, viewMode);
 }
 
 export function VkpiDashboard({
@@ -254,7 +259,7 @@ export function VkpiDashboard({
 }: VkpiDashboardProps) {
   const [query, setQuery] = useState('');
   const [selectedProjectId, setSelectedProjectId] = useState(data.projects[0]?.id);
-  const [activePage, setActivePage] = useState<VkpiPageKey>(() => getInitialVkpiPage());
+  const [activePage, setActivePage] = useState<VkpiPageKey>(() => getInitialVkpiPage(viewMode));
   const [evidenceMetric, setEvidenceMetric] = useState<VkpiMetricEvidenceKey | null>(null);
   const [evidenceMetricValueId, setEvidenceMetricValueId] = useState<number | null>(null);
   const [kolProfileDrawerProject, setKolProfileDrawerProject] = useState<VkpiProjectRow | null>(null);
@@ -361,20 +366,21 @@ export function VkpiDashboard({
   };
 
   const handleSelectPage = (page: VkpiPageKey) => {
-    setActivePage(page);
+    const nextPage = normalizeVkpiPage(page, viewMode);
+    setActivePage(nextPage);
     if (typeof window !== 'undefined') {
-      window.history.replaceState(null, '', `#${page}`);
+      window.history.replaceState(null, '', `#${nextPage}`);
     }
     closeWorkspaceDrawers();
   };
 
   useEffect(() => {
     const handleHashChange = () => {
-      setActivePage(getInitialVkpiPage());
+      setActivePage(getInitialVkpiPage(viewMode));
     };
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
-  }, []);
+  }, [viewMode]);
 
   useEffect(() => {
     closeWorkspaceDrawers();
