@@ -479,6 +479,46 @@ def _sidecar_entries() -> list[dict[str, Any]]:
     return sorted(entries, key=lambda item: item.get("updated_at") or 0)
 
 
+def _legacy_bare_cache_entries() -> list[dict[str, Any]]:
+    """Return legacy root media-cache files that predate DB/sidecar tracking."""
+
+    if not CACHE_DIR.exists():
+        return []
+    entries: list[dict[str, Any]] = []
+    for cache_path in CACHE_DIR.iterdir():
+        if not cache_path.is_file():
+            continue
+        digest = cache_path.name.lower()
+        if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+            continue
+        content_type_path = CACHE_DIR / f"{digest}.content-type"
+        if not content_type_path.exists():
+            continue
+        content_type = content_type_path.read_text(encoding="utf-8", errors="ignore").strip().lower()
+        if content_type.startswith("image/"):
+            media_kind = "image"
+        elif content_type.startswith("video/"):
+            media_kind = "video"
+        else:
+            continue
+        try:
+            stat = cache_path.stat()
+        except OSError:
+            continue
+        entries.append(
+            {
+                "cache_path": cache_path,
+                "content_type_path": content_type_path,
+                "content_type": content_type,
+                "digest": digest,
+                "media_kind": media_kind,
+                "size_bytes": stat.st_size,
+                "updated_at": stat.st_mtime,
+            }
+        )
+    return sorted(entries, key=lambda item: item.get("updated_at") or 0)
+
+
 def _delete_video_entry(entry: dict[str, Any]) -> int:
     freed = 0
     for key in ("cache_path", "content_type_path", "sidecar_path"):
@@ -752,6 +792,9 @@ def migrate_local_video_cache_to_r2(
     migrated = 0
     skipped = 0
     failed = 0
+    legacy_scanned = 0
+    legacy_eligible = 0
+    legacy_migrated = 0
     sample: list[dict[str, Any]] = []
     if execute and not _media_cache_r2_enabled():
         return {
@@ -820,6 +863,55 @@ def migrate_local_video_cache_to_r2(
             if len(sample) < 8:
                 sample.append({"status": "failed", "platform": platform_key, "video_id": _text(sidecar.get("video_id")), "reason": result.get("r2_error") or result.get("r2_status") or "unknown"})
 
+    for entry in _legacy_bare_cache_entries():
+        if scanned >= safe_limit:
+            break
+        if platform_filter:
+            continue
+        cache_path = entry.get("cache_path")
+        if not isinstance(cache_path, Path):
+            continue
+        scanned += 1
+        legacy_scanned += 1
+        media_kind = _text(entry.get("media_kind"))
+        digest = _text(entry.get("digest")).lower()
+        if media_kind not in {"image", "video"} or not digest:
+            skipped += 1
+            continue
+        if _cached_asset_url_by_digest(media_kind, digest):
+            skipped += 1
+            continue
+        eligible += 1
+        legacy_eligible += 1
+        content_type = _text(entry.get("content_type")) or "application/octet-stream"
+        if not execute:
+            if len(sample) < 8:
+                sample.append(
+                    {
+                        "status": "would_migrate_legacy",
+                        "media_kind": media_kind,
+                        "size_bytes": int(entry.get("size_bytes") or 0),
+                        "digest": digest,
+                    }
+                )
+            continue
+        result = _upload_to_r2_if_enabled(
+            media_kind=media_kind,
+            digest=digest,
+            cache_path=cache_path,
+            content_type=content_type,
+            source_url="",
+        )
+        if result.get("storage_backend") == "r2":
+            migrated += 1
+            legacy_migrated += 1
+            if len(sample) < 8:
+                sample.append({"status": "migrated_legacy", "media_kind": media_kind, "digest": digest, "r2_key": result.get("r2_key")})
+        else:
+            failed += 1
+            if len(sample) < 8:
+                sample.append({"status": "failed_legacy", "media_kind": media_kind, "digest": digest, "reason": result.get("r2_error") or result.get("r2_status") or "unknown"})
+
     return {
         "execute": bool(execute),
         "storage": MEDIA_CACHE_STORAGE,
@@ -829,6 +921,9 @@ def migrate_local_video_cache_to_r2(
         "migrated": migrated,
         "skipped": skipped,
         "failed": failed,
+        "legacy_scanned": legacy_scanned,
+        "legacy_eligible": legacy_eligible,
+        "legacy_migrated": legacy_migrated,
         "limit": safe_limit,
         "platform": platform_filter or "all",
         "sample": sample,
