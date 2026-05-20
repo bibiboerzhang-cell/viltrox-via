@@ -379,7 +379,9 @@ export function KolPoolPanel({ apiToken, onListPool, onGetItem, onEnrichItem, on
               </tr>
             </thead>
             <tbody>
-              {items.map((item) => {
+              {loading && !items.length ? (
+                <KolPoolSkeletonRows />
+              ) : items.map((item) => {
                 const gaps = getDataGaps(item);
                 const enrichable = canEnrich(item);
                 const decision = decisionProfile(item);
@@ -470,6 +472,33 @@ export function KolPoolPanel({ apiToken, onListPool, onGetItem, onEnrichItem, on
         />
       )}
     </div>
+  );
+}
+
+function KolPoolSkeletonRows() {
+  return (
+    <>
+      {[0, 1, 2, 3, 4, 5].map((item) => (
+        <tr className="vkpi-kol-pool-skeleton-row" key={item} aria-hidden="true">
+          <td><span className="vkpi-skeleton vkpi-skeleton-avatar" /></td>
+          <td><span className="vkpi-skeleton vkpi-skeleton-pill" /></td>
+          <td>
+            <span className="vkpi-skeleton vkpi-skeleton-line is-medium" />
+            <span className="vkpi-skeleton vkpi-skeleton-line is-long" />
+          </td>
+          <td><span className="vkpi-skeleton vkpi-skeleton-line is-medium" /></td>
+          <td><span className="vkpi-skeleton vkpi-skeleton-pill" /></td>
+          <td><span className="vkpi-skeleton vkpi-skeleton-line is-short" /></td>
+          <td><span className="vkpi-skeleton vkpi-skeleton-line is-short" /></td>
+          <td><span className="vkpi-skeleton vkpi-skeleton-line is-short" /></td>
+          <td><span className="vkpi-skeleton vkpi-skeleton-line is-short" /></td>
+          <td><span className="vkpi-skeleton vkpi-skeleton-pill" /></td>
+          <td><span className="vkpi-skeleton vkpi-skeleton-pill" /></td>
+          <td><span className="vkpi-skeleton vkpi-skeleton-line is-medium" /></td>
+          <td><span className="vkpi-skeleton vkpi-skeleton-line is-long" /></td>
+        </tr>
+      ))}
+    </>
   );
 }
 
