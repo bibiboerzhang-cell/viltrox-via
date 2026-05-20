@@ -11,6 +11,7 @@ import {
   enrichKolPoolItem,
   getKolAssessment,
   getKolPoolCompetitors,
+  getKolPoolDimensions11,
   getKolPoolItem,
   getKolPosts,
   getKolProductFit,
@@ -108,6 +109,7 @@ interface ContactItem {
 type ProductFitItem = NonNullable<VkpiKolProductFitResponse['items']>[number];
 type RecommendationAction = 'shortlist' | 'reject' | 'claim';
 type CompetitorRelation = Record<string, unknown>;
+type Dimensions11Payload = Record<string, unknown>;
 
 interface DirectionChip {
   label: string;
@@ -655,6 +657,7 @@ function formatAssessmentMethod(method?: string) {
 function formatProductFitSource(hasFits: boolean, method?: string) {
   if (!hasFits) return '等待产品适配';
   if (String(method || '').includes('local_product_fit')) return '本地规则估算';
+  if (String(method || '').includes('rule_dimensions_11')) return '11维规则产品适配';
   return String(method || '产品适配').replace(/_/g, ' ');
 }
 
@@ -701,7 +704,55 @@ function filterKols(kols: UiKol[], filters: { platform: string; level: string; g
   });
 }
 
-function dimensionsFromProfile(profile: VkpiKolProfile | null, selected: UiKol | undefined, assessment: VkpiKolAssessmentResponse | null) {
+function dimensions11Bars(payload: Dimensions11Payload | null) {
+  if (!payload) return [];
+  const block1 = objectValue(payload.block1_content);
+  const block2 = objectValue(payload.block2_performance);
+  const block3 = objectValue(payload.block3_business);
+  const block4 = objectValue(payload.block4_specialty);
+  if (!Object.keys(block1).length && !Object.keys(block2).length && !Object.keys(block3).length && !Object.keys(block4).length) return [];
+  const specialty = objectValue(block1.content_specialty);
+  const productFit = objectValue(block4.product_fit);
+  const specialtyScore = Math.max(0, ...Object.values(specialty).map(safeNumber));
+  const productFitScore = Math.max(0, ...Object.values(productFit).map(safeNumber));
+  const clusters = arrayValue(block4.industry_cluster).filter(Boolean);
+  return [
+    { key: 'posting_frequency', label: '发布活跃', source: textValue(block1.source, '11维规则'), value: clampScore(block1.posting_frequency_score), pending: false },
+    { key: 'content_diversity', label: '内容多样', source: textValue(block1.source, '11维规则'), value: clampScore(block1.content_diversity_score), pending: false },
+    { key: 'content_specialty', label: '内容特长', source: Object.keys(specialty).slice(0, 3).join(' / ') || '11维规则', value: clampScore(specialtyScore), pending: false },
+    { key: 'followers_tier', label: '粉丝规模', source: textValue(block2.source, '11维规则'), value: clampScore(block2.followers_tier_score), pending: false },
+    { key: 'engagement_quality', label: '互动质量', source: textValue(block2.source, '11维规则'), value: clampScore(block2.engagement_quality_score), pending: false },
+    { key: 'growth_velocity', label: '增长趋势', source: textValue(block2.source, '11维规则'), value: clampScore(block2.growth_velocity_score), pending: false },
+    { key: 'cooperation_history', label: '合作历史', source: textValue(block3.source, '11维规则'), value: clampScore(block3.cooperation_history_score), pending: false },
+    { key: 'contact_reachability', label: '联系可达', source: textValue(block3.source, '11维规则'), value: clampScore(block3.contact_reachability_score), pending: false },
+    { key: 'competitor_risk', label: '竞品风险', source: textValue(block3.competitor_risk_tier, 'opportunity'), value: clampScore(block3.competitor_risk_score), pending: false },
+    { key: 'industry_cluster', label: '行业归属', source: clusters.join(' / ') || '11维规则', value: clusters.length ? 82 : 0, pending: !clusters.length },
+    { key: 'product_fit', label: '产品适配', source: textValue(block4.source, '11维规则'), value: clampScore(productFitScore), pending: !productFitScore },
+  ];
+}
+
+function productFitsFromDimensions11(payload: Dimensions11Payload | null): ProductFitItem[] {
+  if (!payload) return [];
+  const block4 = objectValue(payload.block4_specialty);
+  const productFit = objectValue(block4.product_fit);
+  const clusters = arrayValue(block4.industry_cluster).map((item) => textValue(item, '')).filter(Boolean);
+  return Object.entries(productFit)
+    .map(([sku, score]) => ({
+      product_sku: sku,
+      product_name: cleanProductLabel(sku),
+      score: safeNumber(score),
+      method: textValue(payload.method, 'rule_dimensions_11_v0'),
+      reasons: clusters.length ? [`行业 ${clusters.slice(0, 3).join(' / ')}`] : ['来自 11 维规则画像'],
+      evidence: ['vkpi_kol_pool cached profile/posts'],
+    }))
+    .filter((item) => item.score)
+    .sort((a, b) => safeNumber(b.score) - safeNumber(a.score))
+    .slice(0, 5);
+}
+
+function dimensionsFromProfile(profile: VkpiKolProfile | null, selected: UiKol | undefined, assessment: VkpiKolAssessmentResponse | null, dimensions11: Dimensions11Payload | null) {
+  const ruleDimensions = dimensions11Bars(dimensions11);
+  if (ruleDimensions.length) return ruleDimensions;
   const assessmentDimensions = objectValue(assessment?.dimensions);
   if (Object.keys(assessmentDimensions).length) {
     return dimensionLabels.map((item) => {
@@ -939,6 +990,8 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
   const [selectedContacts, setSelectedContacts] = useState<ContactItem[]>([]);
   const [selectedCompetitors, setSelectedCompetitors] = useState<CompetitorRelation[]>([]);
   const [competitorLoading, setCompetitorLoading] = useState(false);
+  const [selectedDimensions11, setSelectedDimensions11] = useState<Dimensions11Payload | null>(null);
+  const [dimensions11Loading, setDimensions11Loading] = useState(false);
   const [smartRecommendations, setSmartRecommendations] = useState<SmartRecommendation[]>([]);
   const [recommendationLoading, setRecommendationLoading] = useState(false);
   const [recommendationMessage, setRecommendationMessage] = useState('');
@@ -977,7 +1030,7 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
   );
   const selectedProjects = useMemo(() => profileProjects(selectedProfile, data, selectedKol), [data, selectedKol, selectedProfile]);
   const contacts = useMemo(() => selectedContacts.length ? selectedContacts : contactsFromProfile(selectedProfile, selectedKol), [selectedContacts, selectedProfile, selectedKol]);
-  const dimensions = useMemo(() => dimensionsFromProfile(selectedProfile, selectedKol, selectedAssessment), [selectedAssessment, selectedProfile, selectedKol]);
+  const dimensions = useMemo(() => dimensionsFromProfile(selectedProfile, selectedKol, selectedAssessment, selectedDimensions11), [selectedAssessment, selectedDimensions11, selectedProfile, selectedKol]);
   const posts = useMemo(() => recentPosts(selectedProfile, profilePosts, selectedKol), [profilePosts, selectedKol, selectedProfile]);
   const localCandidateRecommendations = useMemo(() => visibleKols.filter((kol) => kol.score >= 65 || kol.contactCount || kol.hasCollaboration).slice(0, 8), [visibleKols]);
   const selectedKolPoolId = useMemo(() => kolPoolIdForCompetitors(selectedKol), [selectedKol]);
@@ -1036,10 +1089,13 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
     if (!apiToken || !selectedKolPoolId) {
       setSelectedCompetitors([]);
       setCompetitorLoading(false);
+      setSelectedDimensions11(null);
+      setDimensions11Loading(false);
       return;
     }
     let cancelled = false;
     setCompetitorLoading(true);
+    setDimensions11Loading(true);
     void getKolPoolCompetitors(apiToken, selectedKolPoolId)
       .then((result) => {
         if (cancelled) return;
@@ -1050,6 +1106,17 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
       })
       .finally(() => {
         if (!cancelled) setCompetitorLoading(false);
+      });
+    void getKolPoolDimensions11(apiToken, selectedKolPoolId)
+      .then((result) => {
+        if (cancelled) return;
+        setSelectedDimensions11(objectValue(result));
+      })
+      .catch(() => {
+        if (!cancelled) setSelectedDimensions11(null);
+      })
+      .finally(() => {
+        if (!cancelled) setDimensions11Loading(false);
       });
     return () => {
       cancelled = true;
@@ -1612,11 +1679,13 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
                 selectedKol={selectedKol}
                 selectedProfile={selectedProfile}
                 selectedAssessment={selectedAssessment}
+                selectedDimensions11={selectedDimensions11}
                 lookupResult={lookupResult}
                 contacts={contacts}
                 dimensions={dimensions}
                 competitorRelations={selectedCompetitors}
                 competitorLoading={competitorLoading}
+                dimensions11Loading={dimensions11Loading}
                 productFits={selectedProductFits}
                 posts={posts}
                 projects={selectedProjects}
@@ -1946,11 +2015,13 @@ function ProfilePanel({
   selectedKol,
   selectedProfile,
   selectedAssessment,
+  selectedDimensions11,
   lookupResult,
   contacts,
   dimensions,
   competitorRelations,
   competitorLoading,
+  dimensions11Loading,
   productFits,
   posts,
   projects,
@@ -1972,11 +2043,13 @@ function ProfilePanel({
   selectedKol?: UiKol;
   selectedProfile: VkpiKolProfile | null;
   selectedAssessment: VkpiKolAssessmentResponse | null;
+  selectedDimensions11: Dimensions11Payload | null;
   lookupResult: VkpiKolLookupResult | null;
   contacts: ContactItem[];
   dimensions: Array<{ key: string; label: string; source: string; value: number; pending: boolean }>;
   competitorRelations: CompetitorRelation[];
   competitorLoading: boolean;
+  dimensions11Loading: boolean;
   productFits: ProductFitItem[];
   posts: Array<Record<string, unknown>>;
   projects: VkpiProjectRow[];
@@ -2015,8 +2088,11 @@ function ProfilePanel({
     : textValue(selectedAssessment?.recommended_action || summary.recommended_action, assessmentScore >= 80 ? '优先合作；建议补齐产品适配和联系方式证据。' : assessmentScore ? '可观察；先补齐近期内容与联系方式。' : '待评估；请先运行真实抓取。');
   const productFitScore = safeNumber(summary.product_fit || selectedKol.raw.product_fit);
   const profileStatus = historicalCooperationCount ? `历史合作 ${historicalCooperationCount} 条` : candidateOnly ? '候选 / 未深扫 / 可分析' : profileLoading ? '画像加载中' : selectedProfile ? '真实 profile 已加载' : lookupResult ? '查重结果已加载' : '列表档案';
-  const productRows: Array<Record<string, unknown>> = productFits.length ? productFits as unknown as Array<Record<string, unknown>> : [];
+  const dimensions11ProductFits = productFitsFromDimensions11(selectedDimensions11);
+  const productRows: Array<Record<string, unknown>> = productFits.length ? productFits as unknown as Array<Record<string, unknown>> : dimensions11ProductFits as unknown as Array<Record<string, unknown>>;
   const productFitMethod = textValue(productRows[0]?.method, '');
+  const hasDimensions11 = Boolean(selectedDimensions11 && textValue(selectedDimensions11.method, ''));
+  const overallDimensionsScore = safeNumber(selectedDimensions11?.overall_score);
   const competitorRows = visibleCompetitorRelations(competitorRelations);
   return (
     <div className="vkpi-discover-profile__stack">
@@ -2090,7 +2166,10 @@ function ProfilePanel({
       ) : null}
 
       <section className="vkpi-discover-card">
-        <div className="vkpi-discover-card__title"><b>8 维评估</b><span>{formatAssessmentMethod(selectedAssessment?.method)}</span></div>
+        <div className="vkpi-discover-card__title">
+          <b>{hasDimensions11 ? '11 维评估' : '8 维评估'}</b>
+          <span>{dimensions11Loading ? '读取规则画像' : hasDimensions11 ? `规则画像 ${overallDimensionsScore || '-'} · ${formatAssessmentMethod(textValue(selectedDimensions11?.method, ''))}` : formatAssessmentMethod(selectedAssessment?.method)}</span>
+        </div>
         <div className="vkpi-discover-bars">
           {dimensions.map((dimension) => (
             <div className={`vkpi-discover-bar ${dimension.pending ? 'is-pending' : ''}`} key={dimension.key}>
