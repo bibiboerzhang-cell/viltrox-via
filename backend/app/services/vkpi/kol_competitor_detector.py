@@ -184,6 +184,17 @@ def _last_evidence_at(relation: dict[str, Any]) -> str | None:
     return max(dates).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def _relation_table_exists() -> bool:
+    try:
+        row = get_conn().execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+            ("vkpi_competitor_relation",),
+        ).fetchone()
+    except Exception:
+        return False
+    return bool(row)
+
+
 def load_competitor_brands() -> dict[str, dict[str, Any]]:
     try:
         parsed = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
@@ -536,7 +547,60 @@ def persist_competitor_relations(relations: list[dict[str, Any]]) -> int:
     return committed
 
 
-def evaluate_kol_competitors(kol_pool_id: int, *, write_db: bool = False) -> dict[str, Any]:
+def _relation_from_row(row: Any) -> dict[str, Any]:
+    item = dict(row)
+    return {
+        "kol_pool_id": int(item.get("kol_pool_id") or 0),
+        "kol_entity_uid": _text(item.get("kol_entity_uid")),
+        "platform": _text(item.get("platform")),
+        "handle": _text(item.get("handle")),
+        "display_name": _text(item.get("display_name")),
+        "competitor_brand": _text(item.get("competitor_brand")),
+        "collaboration_depth": _text(item.get("collaboration_depth")) or "none",
+        "collaboration_recency_days": item.get("collaboration_recency_days"),
+        "collaboration_count_90d": int(item.get("collaboration_count_90d") or 0),
+        "collaboration_count_total": int(item.get("collaboration_count_total") or 0),
+        "sentiment": _text(item.get("sentiment")) or "neutral",
+        "risk_score": float(item.get("risk_score") or 0),
+        "risk_tier": _text(item.get("risk_tier")) or "opportunity",
+        "evidence_post_uids": _loads(item.get("evidence_post_uids_json"), []),
+        "evidence": _loads(item.get("evidence_json"), []),
+        "last_evidence_at": _text(item.get("last_evidence_at")),
+        "computed_at": _text(item.get("computed_at")),
+        "source": "vkpi_competitor_relation",
+        "provider_calls": False,
+    }
+
+
+def get_persisted_kol_competitors(kol_pool_id: int) -> dict[str, Any]:
+    if not _relation_table_exists():
+        return {"persisted": False, "relations": []}
+    rows = get_conn().execute(
+        """
+        SELECT *
+        FROM vkpi_competitor_relation
+        WHERE kol_pool_id=?
+        ORDER BY risk_score DESC, competitor_brand ASC
+        """,
+        (int(kol_pool_id),),
+    ).fetchall()
+    relations = [_relation_from_row(row) for row in rows]
+    strongest = max(relations, key=lambda item: float(item.get("risk_score") or 0), default=None)
+    return {
+        "kol_pool_id": int(kol_pool_id),
+        "provider_calls": False,
+        "write_db": False,
+        "persisted": bool(relations),
+        "relations": relations,
+        "summary": strongest or {},
+    }
+
+
+def evaluate_kol_competitors(kol_pool_id: int, *, write_db: bool = False, prefer_persisted: bool = False) -> dict[str, Any]:
+    if prefer_persisted and not write_db:
+        persisted = get_persisted_kol_competitors(kol_pool_id)
+        if persisted.get("persisted"):
+            return persisted
     brands = sorted(load_competitor_brands())
     relations = [evaluate_kol_competitor_relation(kol_pool_id, brand) for brand in brands]
     committed = persist_competitor_relations(relations) if write_db else 0
@@ -551,7 +615,59 @@ def evaluate_kol_competitors(kol_pool_id: int, *, write_db: bool = False) -> dic
     }
 
 
-def batch_evaluate_kol_pool(*, brand: str = "", limit: int = 100, source_type: str = "legacy_excel_p2d", write_db: bool = False) -> dict[str, Any]:
+def persisted_competitor_dashboard(*, brand: str = "", limit: int = 1200) -> dict[str, Any]:
+    if not _relation_table_exists():
+        return {"persisted": False, "relations_evaluated": 0}
+    safe_limit = max(1, min(1200, int(limit or 1200)))
+    target_brand = brand.strip().lower()
+    rows = get_conn().execute(
+        """
+        SELECT *
+        FROM vkpi_competitor_relation
+        WHERE (? = '' OR competitor_brand = ?)
+        ORDER BY risk_score DESC, computed_at DESC, id DESC
+        LIMIT ?
+        """,
+        (target_brand, target_brand, safe_limit * max(1, len(load_competitor_brands()))),
+    ).fetchall()
+    tier_counts = {"avoid": 0, "caution": 0, "safe": 0, "opportunity": 0}
+    brand_counts: dict[str, dict[str, int]] = {}
+    samples: list[dict[str, Any]] = []
+    for row in rows:
+        relation = _relation_from_row(row)
+        relation_brand = str(relation.get("competitor_brand") or "")
+        tier = str(relation.get("risk_tier") or "opportunity")
+        brand_counts.setdefault(relation_brand, dict(tier_counts))
+        brand_counts[relation_brand][tier] = brand_counts[relation_brand].get(tier, 0) + 1
+        tier_counts[tier] = tier_counts.get(tier, 0) + 1
+        if relation.get("risk_score") and len(samples) < 20:
+            samples.append(relation)
+    return {
+        "provider_calls": False,
+        "write_db": False,
+        "persisted": bool(rows),
+        "source_type": "vkpi_competitor_relation",
+        "kol_rows": len({int(row["kol_pool_id"]) for row in rows if row["kol_pool_id"]}),
+        "relations_evaluated": len(rows),
+        "brands": sorted(brand_counts),
+        "tier_counts": tier_counts,
+        "brand_counts": brand_counts,
+        "samples": samples,
+    }
+
+
+def batch_evaluate_kol_pool(
+    *,
+    brand: str = "",
+    limit: int = 100,
+    source_type: str = "legacy_excel_p2d",
+    write_db: bool = False,
+    prefer_persisted: bool = False,
+) -> dict[str, Any]:
+    if prefer_persisted and not write_db:
+        persisted = persisted_competitor_dashboard(brand=brand, limit=limit)
+        if persisted.get("persisted"):
+            return persisted
     safe_limit = max(1, min(1200, int(limit or 100)))
     brands = [brand.strip().lower()] if brand.strip() else sorted(load_competitor_brands())
     rows = get_conn().execute(

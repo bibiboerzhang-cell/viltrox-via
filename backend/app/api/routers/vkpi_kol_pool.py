@@ -66,13 +66,15 @@ def get_pool_competitor_dashboard(
     brand: str = Query(default=""),
     limit: int = Query(default=1200, ge=1, le=1200),
     source_type: str = Query(default="legacy_excel_p2d"),
+    source: str = Query(default="auto", pattern="^(auto|computed)$"),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
-    """按 1012 历史池已有资料计算竞品风险概览；只读、不调 provider、不写库。"""
+    """按 1012 历史池已有资料返回竞品风险概览；默认优先读已落库关系。"""
     return kol_competitor_detector.batch_evaluate_kol_pool(
         brand=brand,
         limit=limit,
         source_type=source_type,
+        prefer_persisted=source == "auto",
     )
 
 
@@ -137,11 +139,15 @@ def get_main_candidates(
 @router.get("/kol-pool/{kol_pool_id}/competitors")
 def get_pool_item_competitors(
     kol_pool_id: int,
+    source: str = Query(default="auto", pattern="^(auto|computed)$"),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
-    """返回单个 KOL Pool 项与 6 个竞品的规则关系；只读、不调 provider、不写库。"""
+    """返回单个 KOL Pool 项与 6 个竞品的关系；默认优先读已落库关系。"""
     try:
-        return kol_competitor_detector.evaluate_kol_competitors(int(kol_pool_id))
+        return kol_competitor_detector.evaluate_kol_competitors(
+            int(kol_pool_id),
+            prefer_persisted=source == "auto",
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
