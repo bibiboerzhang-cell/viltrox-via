@@ -80,7 +80,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
   const [commentAlertSettings, setCommentAlertSettings] = useState<Record<string, unknown>>({});
   const [controlStatus, setControlStatus] = useState<Record<string, unknown>>({});
   const [settingsError, setSettingsError] = useState('');
-  const [expandedSection, setExpandedSection] = useState<'status' | 'sku' | 'staff' | 'funds' | 'rules'>('status');
+  const [expandedSection, setExpandedSection] = useState<'status' | 'sku' | 'staff' | 'funds' | 'rules' | null>('status');
   const [rulesTab, setRulesTab] = useState<'core' | 'platform' | 'alerts' | 'sync'>('platform');
   const [productSearch, setProductSearch] = useState('');
   const [selectedCatalogProduct, setSelectedCatalogProduct] = useState<VkpiProductCatalogItem | null>(null);
@@ -480,9 +480,9 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
   const providerCount = providers.length;
   const providerConfiguredCount = providers.filter((row) => boolValue(row.configured, false)).length;
   const providerNames = providers
-    .map((row) => String(row.provider || row.name || '').trim())
+    .map((row) => String(row.label || row.provider || row.name || '').trim())
     .filter(Boolean)
-    .slice(0, 5);
+    .slice(0, 6);
   const apiStatusText = providerCount
     ? `${providerConfiguredCount} / ${providerCount} 已配置`
     : '读取中';
@@ -514,7 +514,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
     const open = expandedSection === key;
     return (
       <section className={`vkpi-settings-module ${open ? 'is-open' : 'is-collapsed'}`} key={key}>
-        <button className="vkpi-settings-module__head" type="button" onClick={() => setExpandedSection(open ? 'status' : key)}>
+        <button className="vkpi-settings-module__head" type="button" onClick={() => setExpandedSection(open ? null : key)}>
           <span>{moduleTitle[key]}</span>
           <em>{subtitle}</em>
           <strong>{open ? '收起' : '展开'}</strong>
@@ -553,13 +553,33 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpdate
       {settingsError ? <div className="vkpi-inline-message">{settingsError}</div> : null}
       <div className="vkpi-settings-clean">
         {renderSettingsModule('status', `${apiStatusText} · 同步 ${syncTime} · ${systemHealth}`, (
-          <div className="vkpi-settings-status-grid">
-            <InfoBlock label="API 服务" value={apiStatusText} />
-            <InfoBlock label="服务范围" value={apiStatusDetail} />
-            <InfoBlock label="同步" value={`每日 ${syncTime}`} />
-            <InfoBlock label="本月成本" value={`$${totalSpentUsd.toLocaleString('en-US')} / $${totalBudgetUsd.toLocaleString('en-US')}`} />
-            <InfoBlock label="系统" value={systemHealth} />
-          </div>
+          <>
+            <div className="vkpi-settings-status-grid">
+              <InfoBlock label="API 服务" value={apiStatusText} />
+              <InfoBlock label="服务范围" value={apiStatusDetail} />
+              <InfoBlock label="同步" value={`每日 ${syncTime}`} />
+              <InfoBlock label="本月成本" value={`$${totalSpentUsd.toLocaleString('en-US')} / $${totalBudgetUsd.toLocaleString('en-US')}`} />
+              <InfoBlock label="系统" value={systemHealth} />
+            </div>
+            <div className="vkpi-settings-api-grid">
+              {providers.map((row) => {
+                const configured = boolValue(row.configured, false);
+                const ok = boolValue(row.ok, false);
+                const keyMask = String(row.key_mask || '').trim();
+                const status = String(row.latest_status || row.status || (ok ? 'healthy' : 'not_configured'));
+                return (
+                  <article className={`vkpi-settings-api-card ${configured ? 'is-configured' : 'is-empty'}`} key={String(row.provider || row.label)}>
+                    <header>
+                      <strong>{String(row.label || row.provider || '-')}</strong>
+                      <span>{configured ? '已配置' : '未配置'}</span>
+                    </header>
+                    <p>{keyMask || '未读取到 key'}</p>
+                    <em>{status}</em>
+                  </article>
+                );
+              })}
+            </div>
+          </>
         ))}
         {renderSettingsModule('sku', `${skuCount} 个 SKU · 镜头 ${lensCount} · 闪光灯 ${lightingCount} · 转接环 ${adapterCount}`, (
           <section className="vkpi-settings-product-row">

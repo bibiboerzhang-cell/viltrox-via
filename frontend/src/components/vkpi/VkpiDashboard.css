@@ -2264,6 +2264,14 @@
 .vkpi-settings-tabs { display: inline-flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
 .vkpi-settings-tabs button { min-height: 40px; border: 1px solid var(--vkpi-border); border-radius: 999px; background: #fff; color: #344054; padding: 0 16px; font: inherit; font-size: 13px; font-weight: 950; cursor: pointer; }
 .vkpi-settings-tabs button.is-active { border-color: rgba(21,93,252,.42); background: #eef4ff; color: var(--vkpi-blue); box-shadow: 0 0 0 4px rgba(21,93,252,.08); }
+.vkpi-settings-api-grid { margin-top: 12px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.vkpi-settings-api-card { border: 1px solid var(--vkpi-border); border-radius: 14px; background: #fff; padding: 12px; display: grid; gap: 8px; min-width: 0; }
+.vkpi-settings-api-card header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.vkpi-settings-api-card strong { color: var(--vkpi-text); font-size: 13px; font-weight: 950; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vkpi-settings-api-card header span { flex: 0 0 auto; border-radius: 999px; padding: 4px 8px; background: #f2f4f7; color: #667085; font-size: 11px; font-weight: 950; }
+.vkpi-settings-api-card.is-configured header span { background: #ecfdf3; color: #067647; }
+.vkpi-settings-api-card p { margin: 0; color: #344054; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vkpi-settings-api-card em { color: var(--vkpi-muted); font-size: 11px; font-weight: 800; font-style: normal; }
 .vkpi-settings-secondary { max-width: 1480px; width: 100%; margin: 0 auto; display: grid; gap: 10px; }
 .vkpi-settings-secondary details { border: 1px solid var(--vkpi-border); border-radius: 16px; background: #fff; padding: 12px 14px; }
 .vkpi-settings-secondary summary { cursor: pointer; color: var(--vkpi-muted); font-size: 13px; font-weight: 900; }
@@ -2542,6 +2550,7 @@
   .vkpi-product-catalog-groups { grid-template-columns: 1fr; }
   .vkpi-settings-card-grid,
   .vkpi-settings-card-grid--platforms { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .vkpi-settings-api-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .vkpi-platform-crawl-console { grid-template-columns: 1fr; }
   .vkpi-platform-crawl-list__rows { max-height: 360px; }
   .vkpi-settings-inline-fields--primary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -2555,6 +2564,7 @@
 @media (max-width: 760px) {
   .vkpi-settings-card-grid,
   .vkpi-settings-card-grid--platforms,
+  .vkpi-settings-api-grid,
   .vkpi-settings-meta-grid,
   .vkpi-settings-inline-fields--primary,
   .vkpi-platform-crawl-kpis { grid-template-columns: 1fr; }
