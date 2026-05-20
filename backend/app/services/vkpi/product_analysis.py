@@ -13,6 +13,13 @@ from app.services.vkpi.schema_product_industry import ensure_vkpi_product_indust
 from app.services.vkpi.scoring import ScoringRegistry
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
 
+COMPETITOR_SCORE_ADJUSTMENTS = {
+    "avoid": -999.0,
+    "caution": -8.0,
+    "safe": 0.0,
+    "opportunity": 5.0,
+}
+
 
 def _utcnow() -> str:
     return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -90,6 +97,76 @@ def _candidate_pool(payload: dict[str, Any], launch: dict[str, Any], limit: int)
 def _last_by_uid(table: str, uid_col: str, uid: str) -> dict[str, Any]:
     row = get_conn().execute(f"SELECT * FROM {table} WHERE {uid_col}=?", (uid,)).fetchone()
     return dict(row) if row else {}
+
+
+def _table_exists(table_name: str) -> bool:
+    try:
+        row = get_conn().execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+            (table_name,),
+        ).fetchone()
+        return bool(row)
+    except Exception:
+        row = get_conn().execute(
+            "SELECT table_name FROM information_schema.tables WHERE table_name=? LIMIT 1",
+            (table_name,),
+        ).fetchone()
+        return bool(row)
+
+
+def _strongest_competitor_relation(kol_pool_id: int) -> dict[str, Any]:
+    if not kol_pool_id or not _table_exists("vkpi_competitor_relation"):
+        return {}
+    row = get_conn().execute(
+        """
+        SELECT competitor_brand, collaboration_depth, collaboration_count_90d,
+               collaboration_count_total, sentiment, risk_score, risk_tier, computed_at
+        FROM vkpi_competitor_relation
+        WHERE kol_pool_id=?
+        ORDER BY risk_score DESC, competitor_brand ASC
+        LIMIT 1
+        """,
+        (int(kol_pool_id),),
+    ).fetchone()
+    return dict(row) if row else {}
+
+
+def _competitor_context(kol_pool_id: int) -> dict[str, Any]:
+    relation = _strongest_competitor_relation(kol_pool_id)
+    tier = str(relation.get("risk_tier") or "opportunity").strip().lower() if relation else "opportunity"
+    if tier not in COMPETITOR_SCORE_ADJUSTMENTS:
+        tier = "opportunity"
+    risk_score = float(relation.get("risk_score") or 0) if relation else 0.0
+    brand = str(relation.get("competitor_brand") or "").strip().lower()
+    adjustment = COMPETITOR_SCORE_ADJUSTMENTS[tier]
+    return {
+        "brand": brand,
+        "risk_tier": tier,
+        "risk_score": risk_score,
+        "score_adjustment": adjustment,
+        "relation": relation,
+        "source": "vkpi_competitor_relation" if relation else "no_persisted_relation",
+    }
+
+
+def _adjust_score_for_competitor(base_score: float, context: dict[str, Any]) -> float:
+    adjustment = float(context.get("score_adjustment") or 0)
+    if adjustment <= -900:
+        return 0.0
+    return max(0.0, min(100.0, round(float(base_score or 0) + adjustment, 3)))
+
+
+def _competitor_reason(context: dict[str, Any]) -> str:
+    tier = str(context.get("risk_tier") or "opportunity")
+    brand = str(context.get("brand") or "").upper()
+    score = float(context.get("risk_score") or 0)
+    if tier == "avoid":
+        return f"竞品强绑定 {brand or 'competitor'} risk {score:.1f}"
+    if tier == "caution":
+        return f"竞品谨慎 {brand or 'competitor'} risk {score:.1f}"
+    if tier == "safe":
+        return f"竞品弱关联 {brand or 'competitor'} risk {score:.1f}"
+    return "未发现强竞品绑定"
 
 
 def create_launch(payload: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -219,8 +296,10 @@ def run_recommendations(payload: dict[str, Any], *, staff: dict[str, Any] | None
     strategy_version = str(payload.get("strategy_version") or "rule_v0")
     strategy = ScoringRegistry.get(strategy_version)
     limit = max(1, min(200, int(payload.get("limit") or 50)))
-    pool, effective_platforms = _candidate_pool(payload, launch, limit)
+    pool, effective_platforms = _candidate_pool(payload, launch, min(500, limit * 3))
     run_filters = dict(payload)
+    include_avoid_competitors = str(payload.get("include_avoid_competitors") or "").lower() in {"1", "true", "yes", "on"}
+    run_filters["competitor_filter"] = "include_avoid" if include_avoid_competitors else "exclude_avoid"
     if effective_platforms:
         run_filters["effective_platforms"] = effective_platforms
         run_filters["platform_filter_source"] = "launch.target_platforms"
@@ -245,14 +324,39 @@ def run_recommendations(payload: dict[str, Any], *, staff: dict[str, Any] | None
         "category": launch.get("category"),
         "target_platforms": _loads(launch.get("target_platforms_json"), []),
     }
-    scored: list[tuple[float, dict[str, Any], dict[str, Any], Any]] = []
+    scored: list[tuple[float, dict[str, Any], dict[str, Any], Any, dict[str, Any]]] = []
+    filtered_competitor_avoid = 0
     for item in pool:
-        features = feature_store.snapshot_features(kol_pool_id=int(item.get("id") or 0), launch_id=launch_id or None)
+        kol_pool_id = int(item.get("id") or 0)
+        features = feature_store.snapshot_features(kol_pool_id=kol_pool_id, launch_id=launch_id or None)
         result = strategy.score(features, brief)
-        scored.append((float(result.score), item, features, result))
+        competitor = _competitor_context(kol_pool_id)
+        features["competitor_risk_tier"] = competitor.get("risk_tier")
+        features["competitor_risk_score"] = competitor.get("risk_score")
+        features["competitor_brand"] = competitor.get("brand")
+        if competitor.get("risk_tier") == "avoid" and not include_avoid_competitors:
+            filtered_competitor_avoid += 1
+            continue
+        adjusted_score = _adjust_score_for_competitor(float(result.score), competitor)
+        scored.append((adjusted_score, item, features, result, competitor))
     scored.sort(key=lambda row: row[0], reverse=True)
-    for idx, (_score, item, features, result) in enumerate(scored, start=1):
+    for idx, (score, item, features, result, competitor) in enumerate(scored[:limit], start=1):
         rec_uid = f"rec-{secrets.token_hex(8)}"
+        breakdown = dict(result.breakdown or {})
+        breakdown["competitor"] = {
+            "brand": competitor.get("brand"),
+            "risk_tier": competitor.get("risk_tier"),
+            "risk_score": competitor.get("risk_score"),
+            "score_adjustment": competitor.get("score_adjustment"),
+            "source": competitor.get("source"),
+        }
+        strengths = list(result.strengths)
+        concerns = list(result.concerns)
+        competitor_note = _competitor_reason(competitor)
+        if competitor.get("risk_tier") in {"avoid", "caution"}:
+            concerns.append(competitor_note)
+        else:
+            strengths.append(competitor_note)
         conn.execute(
             """
             INSERT INTO vkpi_kol_recommendations
@@ -270,12 +374,12 @@ def run_recommendations(payload: dict[str, Any], *, staff: dict[str, Any] | None
                 item.get("platform") or "",
                 item.get("handle") or "",
                 item.get("display_name") or item.get("handle") or "",
-                result.score,
+                score,
                 idx,
                 "recommended",
                 _json(features),
-                _json(result.breakdown),
-                _json({"strengths": result.strengths, "concerns": result.concerns, "version": result.version}),
+                _json(breakdown),
+                _json({"strengths": strengths, "concerns": concerns, "version": result.version, "competitor": breakdown["competitor"]}),
                 now,
                 now,
             ),
@@ -291,9 +395,9 @@ def run_recommendations(payload: dict[str, Any], *, staff: dict[str, Any] | None
             (
                 int(rec.get("id") or 0),
                 "rule",
-                "规则评分，未启用大模型或机器学习。",
-                _json(result.strengths),
-                _json(result.concerns),
+                "规则评分，未启用大模型或机器学习；已接入竞品风险过滤。",
+                _json(strengths),
+                _json(concerns),
                 result.version,
                 now,
             ),
@@ -304,17 +408,26 @@ def run_recommendations(payload: dict[str, Any], *, staff: dict[str, Any] | None
             kol_pool_id=item.get("id"),
             launch_id=launch_id or None,
             feature_snapshot=features,
-            scoring_breakdown=result.breakdown,
+            scoring_breakdown=breakdown,
             model_version=result.version,
             display_position=idx,
-            display_context={"rank": idx, "score": result.score, "run_id": run.get("id")},
+            display_context={"rank": idx, "score": score, "run_id": run.get("id"), "competitor": breakdown["competitor"]},
         )
         rows.append(rec)
     conn.execute("UPDATE vkpi_kol_recommendation_runs SET recommendation_count=? WHERE id=?", (len(rows), int(run.get("id") or 0)))
     conn.commit()
     run = _last_by_uid("vkpi_kol_recommendation_runs", "run_uid", run_uid)
     audit.log_business_event(staff_id=resolve_staff_id(staff), action_type="recommendation_run", target_type="product_launch", target_id=launch_id, detail=f"{len(rows)} recommendations")
-    return {"run": run, "recommendations": rows, "provider_status": "local_rule_only"}
+    return {
+        "run": run,
+        "recommendations": rows,
+        "provider_status": "local_rule_only",
+        "competitor_filter": {
+            "mode": run_filters["competitor_filter"],
+            "filtered_avoid": filtered_competitor_avoid,
+            "provider_calls": False,
+        },
+    }
 
 
 def list_recommendations(launch_id: int | None = None, run_id: int | None = None, limit: int = 100) -> dict[str, Any]:

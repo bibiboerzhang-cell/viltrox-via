@@ -128,6 +128,9 @@ interface SmartRecommendation {
   status: string;
   reason: string;
   source: string;
+  competitorRiskTier: string;
+  competitorRiskScore: number;
+  competitorBrand: string;
   raw: Record<string, unknown>;
 }
 
@@ -854,6 +857,8 @@ function jsonObjectValue(value: unknown): Record<string, unknown> {
 
 function recommendationToSmart(row: Record<string, unknown>, index: number): SmartRecommendation {
   const explanation = jsonObjectValue(row.explanation_json);
+  const scoringBreakdown = jsonObjectValue(row.scoring_breakdown_json);
+  const competitor = objectValue(explanation.competitor || scoringBreakdown.competitor);
   const strengths = arrayValue(explanation.strengths).map((item) => String(item || '').trim()).filter(Boolean);
   const concerns = arrayValue(explanation.concerns).map((item) => String(item || '').trim()).filter(Boolean);
   const score = clampScore(row.score);
@@ -874,6 +879,9 @@ function recommendationToSmart(row: Record<string, unknown>, index: number): Sma
     status: textValue(row.status, 'recommended'),
     reason: reasonParts.join(' · ') || '规则推荐已生成；解释证据可在后端 evidence 接口继续展开。',
     source: textValue(row.recommendation_uid || row.kol_pool_id || row.run_id, 'product-analysis'),
+    competitorRiskTier: textValue(competitor.risk_tier, ''),
+    competitorRiskScore: safeNumber(competitor.risk_score),
+    competitorBrand: textValue(competitor.brand, ''),
     raw: row,
   };
 }
@@ -1955,9 +1963,13 @@ function RecommendationPanel({
         {message ? <div className="vkpi-discover-empty is-compact">{message}</div> : null}
         {recommendations.length ? recommendations.map((recommendation) => {
           const activeId = recommendation.kolId || recommendationToUiKol(recommendation).id;
+          const competitorTier = recommendation.competitorRiskTier;
+          const competitorLabel = competitorTier
+            ? `${recommendation.competitorBrand ? recommendation.competitorBrand.toUpperCase() : '竞品'} ${competitorTier}${recommendation.competitorRiskScore ? ` ${recommendation.competitorRiskScore.toFixed(1)}` : ''}`
+            : '';
           return (
           <div
-            className={`vkpi-discover-rec ${selectedKolId === activeId ? 'is-active' : ''}`}
+            className={`vkpi-discover-rec ${selectedKolId === activeId ? 'is-active' : ''} ${competitorTier ? `is-risk-${competitorTier}` : ''}`}
             role="button"
             tabIndex={0}
             key={recommendation.id}
@@ -1969,6 +1981,7 @@ function RecommendationPanel({
             <div>
               <strong>{recommendation.rank}. {recommendation.handle}</strong>
               <p>{platformLabels[platformFromRaw(recommendation.platform)] || recommendation.platform} · {recommendation.status} · {recommendation.source}</p>
+              {competitorLabel ? <span className={`vkpi-discover-rec__risk is-${competitorTier}`}>{competitorLabel}</span> : null}
               <em>{recommendation.reason}</em>
               <div className="vkpi-discover-rec__actions" onClick={(event) => event.stopPropagation()}>
                 <button type="button" onClick={() => onAction(recommendation, 'shortlist')} disabled={loading}>入选</button>
