@@ -239,6 +239,15 @@ during a data write. Override only for a deliberate incident run:
 ALLOW_DURING_SYNC=1 scripts/ops/deploy_local_to_cloud.sh
 ```
 
+To check the daily sync without reading noisy Apify/httpx logs by hand:
+
+```bash
+scripts/ops/check_vkpi_daily_sync_status.sh
+```
+
+It prints the systemd state, the current log path, the latest progress marker,
+the latest Apify request line, and any recent failure markers.
+
 The script:
 - Refuses dirty worktrees unless `ALLOW_DIRTY_DEPLOY=1`.
 - Builds frontend unless `SKIP_BUILD=1`.
