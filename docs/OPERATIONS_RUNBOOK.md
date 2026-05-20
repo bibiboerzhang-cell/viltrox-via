@@ -177,6 +177,13 @@ The fallback is deliberate: if R2 is not configured or upload fails, playback
 continues through the local `/api/vkpi-media/video-cache/...` URL. Old local
 cache migration remains a separate operation.
 
+Check local and server R2 readiness without uploading files or printing secret
+values:
+
+```bash
+python scripts/ops/check_vkpi_r2_readiness.py --remote viltrox --remote-root /opt/viltrox-2.0
+```
+
 Dry-run old local video-cache migration first:
 
 ```bash
