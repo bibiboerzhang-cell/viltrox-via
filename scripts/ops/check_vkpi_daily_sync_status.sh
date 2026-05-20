@@ -37,6 +37,7 @@ service = os.environ.get("SYNC_SERVICE") or "vkpi-sync-daily.service"
 log_path = Path(os.environ.get("LOG_PATH") or "/var/log/vkpi/sync_daily.log")
 lines = tail_lines(log_path)
 marker_patterns = (
+    "cron_daily_sync_",
     "daily sync stage",
     "daily sync official",
     "daily sync kol light",

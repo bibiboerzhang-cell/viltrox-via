@@ -247,6 +247,9 @@ scripts/ops/check_vkpi_daily_sync_status.sh
 
 It prints the systemd state, the current log path, the latest progress marker,
 the latest Apify request line, and any recent failure markers.
+New runs also emit `cron_daily_sync_started`, `cron_daily_sync_finished`, or
+`cron_daily_sync_failed` JSON lines so the status check has durable boundaries
+even when provider logs are noisy.
 
 The script:
 - Refuses dirty worktrees unless `ALLOW_DIRTY_DEPLOY=1`.

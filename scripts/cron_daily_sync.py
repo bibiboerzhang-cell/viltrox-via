@@ -12,6 +12,7 @@ import argparse
 import asyncio
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -22,6 +23,33 @@ if str(BACKEND) not in sys.path:
 
 from app.db.connection import close_db_runtime  # noqa: E402
 from app.services.vkpi.cron import run_job  # noqa: E402
+
+
+def utcnow() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def emit_event(event: str, **payload: object) -> None:
+    print(json.dumps({"event": event, "at": utcnow(), **payload}, ensure_ascii=False, default=str), flush=True)
+
+
+def result_summary(result: dict[str, object]) -> dict[str, object]:
+    inner = result.get("result") if isinstance(result, dict) else {}
+    if not isinstance(inner, dict):
+        return {}
+    official = inner.get("official") if isinstance(inner.get("official"), dict) else {}
+    kol = inner.get("kol_pool_light") if isinstance(inner.get("kol_pool_light"), dict) else {}
+    return {
+        "official_requested": official.get("requested"),
+        "official_synced": official.get("synced"),
+        "official_failed": official.get("failed"),
+        "kol_requested": kol.get("requested"),
+        "kol_refreshed": kol.get("refreshed"),
+        "kol_partial": kol.get("partial"),
+        "kol_errors": kol.get("errors"),
+        "started_at": inner.get("started_at"),
+        "finished_at": inner.get("finished_at"),
+    }
 
 
 def parse_args() -> argparse.Namespace:
@@ -53,7 +81,18 @@ async def main() -> int:
         "staff": {"id": 0, "staff_id": 0, "user_id": 0, "role": "admin", "is_owner": 1},
     }
     try:
+        emit_event(
+            "cron_daily_sync_started",
+            dry_run=payload["dry_run"],
+            official_max_posts=payload["official_max_posts"],
+            skip_official=payload["skip_official"],
+            kol_limit=payload["kol_limit"],
+            kol_max_posts=payload["kol_max_posts"],
+            skip_kol=payload["skip_kol"],
+            kol_source_type=payload["kol_source_type"],
+        )
         result = await run_job("daily_incremental_sync", payload)
+        emit_event("cron_daily_sync_finished", summary=result_summary(result))
         print(json.dumps(result, ensure_ascii=False, default=str, indent=2))
         inner = result.get("result") if isinstance(result, dict) else {}
         if isinstance(inner, dict):
@@ -62,6 +101,9 @@ async def main() -> int:
             if int(official.get("failed") or 0) or int(kol.get("errors") or 0):
                 return 2
         return 0
+    except Exception as exc:
+        emit_event("cron_daily_sync_failed", error=f"{type(exc).__name__}: {str(exc)[:500]}")
+        raise
     finally:
         await close_db_runtime()
 
