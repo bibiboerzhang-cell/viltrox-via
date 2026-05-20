@@ -5,10 +5,19 @@ SSH_TARGET="${SSH_TARGET:-viltrox}"
 REMOTE_ROOT="${REMOTE_ROOT:-/opt/viltrox-2.0}"
 PYTHON_BIN="${PYTHON_BIN:-.venv/bin/python}"
 RUNS="${RUNS:-5}"
+SYNC_SERVICE="${SYNC_SERVICE:-vkpi-sync-daily.service}"
+ALLOW_DURING_SYNC="${ALLOW_DURING_SYNC:-0}"
 
-ssh "${SSH_TARGET}" "REMOTE_ROOT='${REMOTE_ROOT}' RUNS='${RUNS}' PYTHON_BIN='${PYTHON_BIN}' bash -s" <<'REMOTE'
+ssh "${SSH_TARGET}" "REMOTE_ROOT='${REMOTE_ROOT}' RUNS='${RUNS}' PYTHON_BIN='${PYTHON_BIN}' SYNC_SERVICE='${SYNC_SERVICE}' ALLOW_DURING_SYNC='${ALLOW_DURING_SYNC}' bash -s" <<'REMOTE'
 set -euo pipefail
 cd "${REMOTE_ROOT}"
+
+sync_state="$(systemctl is-active "${SYNC_SERVICE}" 2>/dev/null || true)"
+if [ "${ALLOW_DURING_SYNC}" != "1" ] && [ "${sync_state}" = "active" -o "${sync_state}" = "activating" ]; then
+  echo "{\"skipped\":true,\"reason\":\"${SYNC_SERVICE} is ${sync_state}; set ALLOW_DURING_SYNC=1 to override\"}"
+  exit 0
+fi
+
 RUNS="${RUNS}" PYTHONPATH=backend "${PYTHON_BIN}" - <<'PY'
 import json
 import os
