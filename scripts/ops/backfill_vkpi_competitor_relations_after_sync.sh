@@ -7,7 +7,11 @@ cd "${PROJECT_ROOT}"
 
 SYNC_STATUS_SCRIPT="${SYNC_STATUS_SCRIPT:-${SCRIPT_DIR}/check_vkpi_daily_sync_status.sh}"
 PYTHON_BIN="${PYTHON_BIN:-${PROJECT_ROOT}/.venv/bin/python}"
+REMOTE_PYTHON_BIN="${REMOTE_PYTHON_BIN:-.venv/bin/python}"
 COMPETITOR_SCRIPT="${COMPETITOR_SCRIPT:-${PROJECT_ROOT}/scripts/vkpi_kol_competitor_dry_run.py}"
+SSH_TARGET="${SSH_TARGET:-viltrox}"
+REMOTE_ROOT="${REMOTE_ROOT:-/opt/viltrox-2.0}"
+RUN_REMOTE="${RUN_REMOTE:-1}"
 LIMIT="${LIMIT:-1200}"
 SOURCE_TYPE="${SOURCE_TYPE:-legacy_excel_p2d}"
 BRAND="${BRAND:-}"
@@ -58,4 +62,16 @@ if [ -n "${BRAND}" ]; then
   args+=( "--brand" "${BRAND}" )
 fi
 
-"${PYTHON_BIN}" "${args[@]}"
+if [ "${RUN_REMOTE}" = "1" ]; then
+  quote() { printf "%q" "$1"; }
+  ssh "${SSH_TARGET}" "cd $(quote "${REMOTE_ROOT}") && LIMIT=$(quote "${LIMIT}") SOURCE_TYPE=$(quote "${SOURCE_TYPE}") BRAND=$(quote "${BRAND}") PYTHON_BIN=$(quote "${REMOTE_PYTHON_BIN}") bash -s" <<'SH'
+set -euo pipefail
+args=( "scripts/vkpi_kol_competitor_dry_run.py" "--limit" "${LIMIT}" "--source-type" "${SOURCE_TYPE}" "--write-db" )
+if [ -n "${BRAND}" ]; then
+  args+=( "--brand" "${BRAND}" )
+fi
+PYTHONPATH=backend "${PYTHON_BIN}" "${args[@]}"
+SH
+else
+  "${PYTHON_BIN}" "${args[@]}"
+fi
