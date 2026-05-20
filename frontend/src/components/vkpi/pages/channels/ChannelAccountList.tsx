@@ -47,11 +47,47 @@ export function ChannelAccountList({
   platform,
   selectedAccountId,
   onSelectAccount,
+  loading = false,
 }: {
   platform?: OfficialChannelPlatform;
   selectedAccountId?: number | null;
   onSelectAccount: (account: OfficialChannelAccount) => void;
+  loading?: boolean;
 }) {
+  if (!platform && !loading) return null;
+  if (!platform && loading) {
+    return (
+      <section className="vkpi-channel-accounts" aria-live="polite">
+        <div className="vkpi-channel-accounts__header">
+          <div>
+            <span>账号层</span>
+            <h2>官方账号读取中</h2>
+          </div>
+          <strong>读取中</strong>
+        </div>
+        <div className="vkpi-channel-account-grid" aria-hidden="true">
+          {[0, 1, 2].map((item) => (
+            <article className="vkpi-channel-account-card vkpi-channel-account-card--skeleton" key={item}>
+              <span className="vkpi-skeleton vkpi-skeleton-avatar" />
+              <div className="vkpi-channel-account-card__main">
+                <div className="vkpi-channel-account-card__title">
+                  <span className="vkpi-skeleton vkpi-skeleton-line is-medium" />
+                  <span className="vkpi-skeleton vkpi-skeleton-pill" />
+                </div>
+                <span className="vkpi-skeleton vkpi-skeleton-line is-long" />
+                <div className="vkpi-channel-account-card__metrics">
+                  <span className="vkpi-skeleton vkpi-skeleton-pill" />
+                  <span className="vkpi-skeleton vkpi-skeleton-pill" />
+                  <span className="vkpi-skeleton vkpi-skeleton-pill" />
+                </div>
+                <span className="vkpi-skeleton vkpi-skeleton-line is-short" />
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+    );
+  }
   if (!platform) return null;
   return (
     <section className="vkpi-channel-accounts">

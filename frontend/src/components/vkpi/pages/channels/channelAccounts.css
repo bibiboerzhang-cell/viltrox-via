@@ -154,3 +154,24 @@
   font-size: 11px;
   font-weight: 800;
 }
+
+.vkpi-channel-account-card--skeleton {
+  pointer-events: none;
+  cursor: default;
+}
+
+.vkpi-channel-account-card--skeleton .vkpi-channel-account-card__title {
+  min-height: 26px;
+}
+
+.vkpi-channel-account-card--skeleton .vkpi-skeleton-avatar {
+  width: 58px;
+  height: 58px;
+  border-radius: 16px;
+}
+
+.vkpi-channel-account-card--skeleton .vkpi-channel-account-card__metrics .vkpi-skeleton-pill {
+  width: 74px;
+  height: 24px;
+  padding: 0;
+}

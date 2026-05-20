@@ -265,6 +265,7 @@ export function ChannelsPage({ apiToken, viewMode, data, onRefreshData }: Channe
         platform={visiblePlatformData}
         selectedAccountId={selectedAccountId}
         onSelectAccount={selectAccount}
+        loading={matrix.loading && !matrix.platforms.length}
       />
       <RedditAssessmentPanel account={selectedAccount} apiToken={apiToken} />
       <ChannelContentList account={selectedAccount} apiToken={apiToken} />

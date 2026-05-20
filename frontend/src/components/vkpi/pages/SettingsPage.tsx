@@ -84,6 +84,24 @@ function SettingsApiSkeletonGrid() {
   );
 }
 
+function SettingsLoadingStrip({ settingsLoading, catalogLoading }: { settingsLoading: boolean; catalogLoading: boolean }) {
+  if (!settingsLoading && !catalogLoading) return null;
+  const label = settingsLoading && catalogLoading
+    ? '正在读取系统状态和 SKU 目录'
+    : settingsLoading
+      ? '正在读取 API / 权限 / 规则状态'
+      : '正在读取 SKU 目录';
+  return (
+    <div className="vkpi-settings-loading-strip" aria-live="polite">
+      <div>
+        <strong>{label}</strong>
+        <span>{settingsLoading ? '系统配置' : '系统配置已就绪'} · {catalogLoading ? '产品目录' : '产品目录已就绪'}</span>
+      </div>
+      <div className="vkpi-settings-loading-strip__bar" aria-hidden="true"><span /></div>
+    </div>
+  );
+}
+
 export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsertProductCost, onRefreshData }: SettingsPageProps) {
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
@@ -672,6 +690,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
     <PageShell title="系统设置">
       {message ? <div className="vkpi-inline-message">{message}</div> : null}
       {settingsError ? <div className="vkpi-inline-message">{settingsError}</div> : null}
+      <SettingsLoadingStrip settingsLoading={settingsLoading} catalogLoading={productCatalogLoading} />
       <div className="vkpi-settings-clean">
         {renderSettingsModule('status', `${apiStatusText} · 同步 ${syncTime} · ${systemHealth} · 版本 ${versionSummary}`, (
           <>
