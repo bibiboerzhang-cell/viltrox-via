@@ -251,6 +251,18 @@ Use the guarded deploy script:
 scripts/ops/deploy_local_to_cloud.sh
 ```
 
+To let the script decide safely after A2 daily sync, use the wrapper:
+
+```bash
+scripts/ops/deploy_after_vkpi_sync.sh
+```
+
+It prints the daily-sync status first. If `vkpi-sync-daily.service` is still
+active or activating, it exits without deployment. After a completed successful
+sync, it runs deploy, then the post-sync acceptance audit, and refreshes the
+plan-status report. Set `RUN_BENCHMARK=1` to run the performance benchmark after
+deployment.
+
 The deploy script refuses to run while `vkpi-sync-daily.service` is `active` or
 `activating`, because it would rebuild, back up, rsync, and restart the app
 during a data write. Override only for a deliberate incident run:
