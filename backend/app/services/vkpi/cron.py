@@ -29,6 +29,9 @@ _JOB_ALIASES: dict[str, str] = {
     "channel_sync": "channels_sync",
     "official_full_baseline": "official_full_baseline",
     "full_baseline": "official_full_baseline",
+    "daily_incremental_sync": "daily_incremental_sync",
+    "vkpi_daily_incremental": "daily_incremental_sync",
+    "official_kol_daily": "daily_incremental_sync",
     "daily_outreach_digest_only": "daily_outreach_digest_only",
     "outreach_digest_only": "daily_outreach_digest_only",
     "morning_sync": "morning_sync",
@@ -64,6 +67,10 @@ _MANUAL_JOB_POLICIES: dict[str, dict[str, Any]] = {
     "official_full_baseline": {
         "risk": "high",
         "description": "Run the first full official-account baseline with higher per-platform limits.",
+    },
+    "daily_incremental_sync": {
+        "risk": "high",
+        "description": "Run 18 official-account recent refresh plus lightweight KOL Pool refresh without LLM/deep scan.",
     },
     "daily_outreach_digest_only": {
         "risk": "medium",
@@ -119,7 +126,16 @@ def _payload_summary(payload: dict[str, Any]) -> dict[str, Any]:
         "max_videos",
         "max_posts",
         "channel_max_posts",
+        "dry_run",
+        "kol_limit",
+        "kol_max_posts",
+        "kol_platforms",
+        "kol_source_type",
         "platforms",
+        "official_max_posts",
+        "official_platforms",
+        "skip_kol",
+        "skip_official",
         "industry_account_limit",
         "validate_only",
     }
@@ -400,6 +416,11 @@ async def run_job(job_name: str, payload: dict[str, Any] | None = None, *, queue
             "results": results[:30],
             "ran_at": _stamp(),
         }
+    if name == "daily_incremental_sync":
+        from app.services.vkpi import daily_sync
+
+        result = await asyncio.to_thread(daily_sync.run_daily_incremental, payload)
+        return {"job": name, "status": "ok", "result": result, "ran_at": _stamp()}
     if name == "daily_outreach_digest_only":
         from app.services.vkpi import analytics
 
