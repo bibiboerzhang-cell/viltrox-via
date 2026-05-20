@@ -191,9 +191,14 @@ function isVkpiPageKey(value: string): value is VkpiPageKey {
   return VKPI_PAGE_KEYS.has(value as VkpiPageKey);
 }
 
+function cleanVkpiPageCandidate(value: string): string {
+  return value.trim().replace(/^#\/?/, '').split(/[?#]/)[0];
+}
+
 function normalizeVkpiPage(value: string, viewMode: 'manager' | 'employee'): VkpiPageKey {
-  if (viewMode === 'manager' && (value === 'command' || value === 'dashboard')) return 'dashboardPremium';
-  return isVkpiPageKey(value) ? value : DEFAULT_VKPI_PAGE;
+  const page = cleanVkpiPageCandidate(value);
+  if (viewMode === 'manager' && (page === 'command' || page === 'dashboard')) return 'dashboardPremium';
+  return isVkpiPageKey(page) ? page : DEFAULT_VKPI_PAGE;
 }
 
 function getInitialVkpiPage(viewMode: 'manager' | 'employee'): VkpiPageKey {
@@ -202,6 +207,16 @@ function getInitialVkpiPage(viewMode: 'manager' | 'employee'): VkpiPageKey {
   const queryPage = new URLSearchParams(window.location.search).get('page') || '';
   const candidate = hashPage || queryPage;
   return normalizeVkpiPage(candidate, viewMode);
+}
+
+function writeVkpiHash(page: VkpiPageKey) {
+  if (typeof window === 'undefined') return;
+  const nextHash = `#${page}`;
+  if (window.location.hash !== nextHash) {
+    window.history.replaceState(null, '', nextHash);
+  }
+  const event = typeof HashChangeEvent === 'function' ? new HashChangeEvent('hashchange') : new Event('hashchange');
+  window.dispatchEvent(event);
 }
 
 export function VkpiDashboard({
@@ -368,9 +383,7 @@ export function VkpiDashboard({
   const handleSelectPage = (page: VkpiPageKey) => {
     const nextPage = normalizeVkpiPage(page, viewMode);
     setActivePage(nextPage);
-    if (typeof window !== 'undefined') {
-      window.history.replaceState(null, '', `#${nextPage}`);
-    }
+    writeVkpiHash(nextPage);
     closeWorkspaceDrawers();
   };
 
@@ -378,9 +391,30 @@ export function VkpiDashboard({
     const handleHashChange = () => {
       setActivePage(getInitialVkpiPage(viewMode));
     };
+    handleHashChange();
     window.addEventListener('hashchange', handleHashChange);
-    return () => window.removeEventListener('hashchange', handleHashChange);
+    window.addEventListener('popstate', handleHashChange);
+    return () => {
+      window.removeEventListener('hashchange', handleHashChange);
+      window.removeEventListener('popstate', handleHashChange);
+    };
   }, [viewMode]);
+
+  useEffect(() => {
+    const handleInternalHashLink = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const anchor = target.closest<HTMLAnchorElement>('a[href^="#"]');
+      if (!anchor) return;
+      const href = anchor.getAttribute('href') || '';
+      const page = cleanVkpiPageCandidate(href);
+      if (!page || !isVkpiPageKey(page)) return;
+      event.preventDefault();
+      handleSelectPage(normalizeVkpiPage(page, viewMode));
+    };
+    document.addEventListener('click', handleInternalHashLink);
+    return () => document.removeEventListener('click', handleInternalHashLink);
+  }, [handleSelectPage, viewMode]);
 
   useEffect(() => {
     closeWorkspaceDrawers();
