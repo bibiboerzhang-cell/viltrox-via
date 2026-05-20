@@ -10,6 +10,7 @@ import {
   batchEnrichKolPool,
   enrichKolPoolItem,
   getKolAssessment,
+  getKolPoolCompetitors,
   getKolPoolItem,
   getKolPosts,
   getKolProductFit,
@@ -106,6 +107,7 @@ interface ContactItem {
 
 type ProductFitItem = NonNullable<VkpiKolProductFitResponse['items']>[number];
 type RecommendationAction = 'shortlist' | 'reject' | 'claim';
+type CompetitorRelation = Record<string, unknown>;
 
 interface DirectionChip {
   label: string;
@@ -233,6 +235,38 @@ function formatHistoryTime(value: string): string {
 
 function searchHistoryPlatformLabel(value: string): string {
   return value === 'all' ? '全部平台' : platformLabels[platformFromRaw(value)] || value;
+}
+
+function kolPoolIdForCompetitors(kol?: UiKol): string {
+  if (!kol) return '';
+  const raw = objectValue(kol.raw);
+  const historyMatch = objectValue(raw.historical_match || raw.history_match);
+  const id = raw.kol_pool_id || raw.history_kol_pool_id || historyMatch.kol_pool_id || historyMatch.id;
+  if (id) return String(id);
+  return kol.sourceKind === 'kol_pool' && /^\d+$/.test(kol.id) ? kol.id : '';
+}
+
+function competitorTierLabel(value: unknown): string {
+  const tier = textValue(value, 'opportunity');
+  if (tier === 'avoid') return '高风险';
+  if (tier === 'caution') return '谨慎';
+  if (tier === 'safe') return '可合作';
+  return '机会';
+}
+
+function competitorTone(value: unknown): string {
+  const tier = textValue(value, 'opportunity');
+  if (tier === 'avoid') return 'is-risk-avoid';
+  if (tier === 'caution') return 'is-risk-caution';
+  if (tier === 'safe') return 'is-risk-safe';
+  return 'is-risk-opportunity';
+}
+
+function visibleCompetitorRelations(relations: CompetitorRelation[]): CompetitorRelation[] {
+  return relations
+    .filter((relation) => safeNumber(relation.risk_score) > 0 || textValue(relation.collaboration_depth, 'none') !== 'none')
+    .sort((a, b) => safeNumber(b.risk_score) - safeNumber(a.risk_score))
+    .slice(0, 4);
 }
 
 function normalizeHandle(value: unknown): string {
@@ -903,6 +937,8 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
   const [selectedAssessment, setSelectedAssessment] = useState<VkpiKolAssessmentResponse | null>(null);
   const [selectedProductFits, setSelectedProductFits] = useState<ProductFitItem[]>([]);
   const [selectedContacts, setSelectedContacts] = useState<ContactItem[]>([]);
+  const [selectedCompetitors, setSelectedCompetitors] = useState<CompetitorRelation[]>([]);
+  const [competitorLoading, setCompetitorLoading] = useState(false);
   const [smartRecommendations, setSmartRecommendations] = useState<SmartRecommendation[]>([]);
   const [recommendationLoading, setRecommendationLoading] = useState(false);
   const [recommendationMessage, setRecommendationMessage] = useState('');
@@ -944,6 +980,7 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
   const dimensions = useMemo(() => dimensionsFromProfile(selectedProfile, selectedKol, selectedAssessment), [selectedAssessment, selectedProfile, selectedKol]);
   const posts = useMemo(() => recentPosts(selectedProfile, profilePosts, selectedKol), [profilePosts, selectedKol, selectedProfile]);
   const localCandidateRecommendations = useMemo(() => visibleKols.filter((kol) => kol.score >= 65 || kol.contactCount || kol.hasCollaboration).slice(0, 8), [visibleKols]);
+  const selectedKolPoolId = useMemo(() => kolPoolIdForCompetitors(selectedKol), [selectedKol]);
 
   useEffect(() => {
     if (!selectedKolId && visibleKols[0]?.id) setSelectedKolId(visibleKols[0].id);
@@ -994,6 +1031,30 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
       cancelled = true;
     };
   }, [apiToken, selectedKol?.id]);
+
+  useEffect(() => {
+    if (!apiToken || !selectedKolPoolId) {
+      setSelectedCompetitors([]);
+      setCompetitorLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setCompetitorLoading(true);
+    void getKolPoolCompetitors(apiToken, selectedKolPoolId)
+      .then((result) => {
+        if (cancelled) return;
+        setSelectedCompetitors(arrayValue(result.relations).map(objectValue));
+      })
+      .catch(() => {
+        if (!cancelled) setSelectedCompetitors([]);
+      })
+      .finally(() => {
+        if (!cancelled) setCompetitorLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [apiToken, selectedKolPoolId]);
 
   const setNotice = (text: string, tone: MessageTone = 'info') => {
     setMessage(text);
@@ -1554,6 +1615,8 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
                 lookupResult={lookupResult}
                 contacts={contacts}
                 dimensions={dimensions}
+                competitorRelations={selectedCompetitors}
+                competitorLoading={competitorLoading}
                 productFits={selectedProductFits}
                 posts={posts}
                 projects={selectedProjects}
@@ -1886,6 +1949,8 @@ function ProfilePanel({
   lookupResult,
   contacts,
   dimensions,
+  competitorRelations,
+  competitorLoading,
   productFits,
   posts,
   projects,
@@ -1910,6 +1975,8 @@ function ProfilePanel({
   lookupResult: VkpiKolLookupResult | null;
   contacts: ContactItem[];
   dimensions: Array<{ key: string; label: string; source: string; value: number; pending: boolean }>;
+  competitorRelations: CompetitorRelation[];
+  competitorLoading: boolean;
   productFits: ProductFitItem[];
   posts: Array<Record<string, unknown>>;
   projects: VkpiProjectRow[];
@@ -1950,6 +2017,7 @@ function ProfilePanel({
   const profileStatus = historicalCooperationCount ? `历史合作 ${historicalCooperationCount} 条` : candidateOnly ? '候选 / 未深扫 / 可分析' : profileLoading ? '画像加载中' : selectedProfile ? '真实 profile 已加载' : lookupResult ? '查重结果已加载' : '列表档案';
   const productRows: Array<Record<string, unknown>> = productFits.length ? productFits as unknown as Array<Record<string, unknown>> : [];
   const productFitMethod = textValue(productRows[0]?.method, '');
+  const competitorRows = visibleCompetitorRelations(competitorRelations);
   return (
     <div className="vkpi-discover-profile__stack">
       <section className="vkpi-discover-profile-head">
@@ -1971,6 +2039,32 @@ function ProfilePanel({
       <section className="vkpi-discover-card is-decision">
         <b>建议：{decision}</b>
         <span>产品适配 {productFitScore ? `${productFitScore}/100` : '待接 Product Fit'} · 风险 {textValue(summary.risk_level || selectedKol.riskLabel, '暂无高风险')}</span>
+      </section>
+
+      <section className="vkpi-discover-card">
+        <div className="vkpi-discover-card__title">
+          <b>竞品关系</b>
+          <span>{competitorLoading ? '读取历史池' : competitorRows.length ? `${competitorRows.length} 条命中` : '历史池规则检测'}</span>
+        </div>
+        {competitorLoading ? (
+          <>
+            <span className="vkpi-skeleton vkpi-skeleton-line is-long" />
+            <span className="vkpi-skeleton vkpi-skeleton-line is-medium" />
+          </>
+        ) : competitorRows.length ? competitorRows.map((relation) => (
+          <div className={`vkpi-discover-fit is-competitor-risk ${competitorTone(relation.risk_tier)}`} key={`${relation.competitor_brand}-${relation.risk_score}`}>
+            <div>
+              <strong>{textValue(relation.competitor_brand, 'competitor').toUpperCase()} · {competitorTierLabel(relation.risk_tier)}</strong>
+              <span>
+                {textValue(relation.collaboration_depth, 'mentioned')} · 90 天 {safeNumber(relation.collaboration_count_90d)} 条 ·
+                历史 {safeNumber(relation.collaboration_count_total)} 条
+              </span>
+            </div>
+            <b>{safeNumber(relation.risk_score).toFixed(1)}</b>
+          </div>
+        )) : (
+          <div className="vkpi-discover-empty is-compact">1012 历史池和已缓存资料暂无竞品证据；后续 deep scan 会补最近内容。</div>
+        )}
       </section>
 
       {scanBusy ? (

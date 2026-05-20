@@ -1553,6 +1553,51 @@
   color: #a05a00;
 }
 
+.vkpi-discover-fit.is-competitor-risk {
+  align-items: center;
+}
+
+.vkpi-discover-fit.is-competitor-risk b {
+  min-width: 44px;
+  text-align: right;
+}
+
+.vkpi-discover-fit.is-risk-avoid {
+  border-color: rgba(239, 68, 68, 0.28);
+  background: #fef2f2;
+}
+
+.vkpi-discover-fit.is-risk-avoid b {
+  color: #b91c1c;
+}
+
+.vkpi-discover-fit.is-risk-caution {
+  border-color: rgba(245, 158, 11, 0.3);
+  background: #fffbeb;
+}
+
+.vkpi-discover-fit.is-risk-caution b {
+  color: #b45309;
+}
+
+.vkpi-discover-fit.is-risk-safe {
+  border-color: rgba(37, 99, 235, 0.18);
+  background: #eff6ff;
+}
+
+.vkpi-discover-fit.is-risk-safe b {
+  color: #075bd8;
+}
+
+.vkpi-discover-fit.is-risk-opportunity {
+  border-color: rgba(18, 183, 106, 0.2);
+  background: #f0fdf4;
+}
+
+.vkpi-discover-fit.is-risk-opportunity b {
+  color: #15803d;
+}
+
 .vkpi-discover-post > div {
   background: linear-gradient(135deg, #1d1d1f, #4a4a4f);
 }

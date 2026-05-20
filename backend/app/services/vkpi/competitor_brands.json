@@ -1,0 +1,26 @@
+{
+  "sigma": {
+    "keywords": ["sigma", "sigmaphoto", "@sigmaphoto"],
+    "priority": "tier1"
+  },
+  "tamron": {
+    "keywords": ["tamron", "@tamronusa", "tamronlens"],
+    "priority": "tier1"
+  },
+  "samyang": {
+    "keywords": ["samyang", "samyanglens", "@samyangoptics", "rokinon"],
+    "priority": "tier2"
+  },
+  "yongnuo": {
+    "keywords": ["yongnuo", "@yongnuo", "yn lens", "yn "],
+    "priority": "tier3"
+  },
+  "meike": {
+    "keywords": ["meike", "@meike_global"],
+    "priority": "tier3"
+  },
+  "godox": {
+    "keywords": ["godox", "@godox_photo"],
+    "priority": "tier2"
+  }
+}

@@ -21,7 +21,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
-from app.services.vkpi import kol_pool
+from app.services.vkpi import kol_competitor_detector, kol_pool
 from app.services.vkpi.audit_decorator import audit_action
 from app.services.vkpi.firewall_decorator import firewall_check
 
@@ -59,6 +59,21 @@ def get_pool_summary(
 ) -> dict:
     """KOL Pool 资产池口径统计；不等于 Daily Top100 新候选。"""
     return kol_pool.summary()
+
+
+@router.get("/kol-pool/competitors/dashboard")
+def get_pool_competitor_dashboard(
+    brand: str = Query(default=""),
+    limit: int = Query(default=1200, ge=1, le=1200),
+    source_type: str = Query(default="legacy_excel_p2d"),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """按 1012 历史池已有资料计算竞品风险概览；只读、不调 provider、不写库。"""
+    return kol_competitor_detector.batch_evaluate_kol_pool(
+        brand=brand,
+        limit=limit,
+        source_type=source_type,
+    )
 
 
 @router.post("/kol-pool/batch-enrich")
@@ -115,6 +130,18 @@ def get_main_candidates(
     """查找 KOL Pool 项可能对应的 kols 主表记录。"""
     try:
         return kol_pool.main_candidates(int(kol_pool_id), limit=limit)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/kol-pool/{kol_pool_id}/competitors")
+def get_pool_item_competitors(
+    kol_pool_id: int,
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """返回单个 KOL Pool 项与 6 个竞品的规则关系；只读、不调 provider、不写库。"""
+    try:
+        return kol_competitor_detector.evaluate_kol_competitors(int(kol_pool_id))
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

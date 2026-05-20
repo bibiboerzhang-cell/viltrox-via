@@ -1385,6 +1385,15 @@ export async function importProductKolPool(token: string, payload: { platform?: 
 export async function getKolPoolSummary(token: string) {
   return apiFetch<Row>("/api/admin/vkpi/kol-pool/summary", {}, token);
 }
+export async function getKolPoolCompetitors(token: string, kolPoolId: string | number) {
+  return apiFetch<Row>(`/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/competitors`, {}, token);
+}
+export async function getKolPoolCompetitorDashboard(token: string, options: { brand?: string; limit?: number; sourceType?: string } = {}) {
+  const params = new URLSearchParams({ limit: String(options.limit || 1200) });
+  if (options.brand) params.set("brand", options.brand);
+  if (options.sourceType !== undefined) params.set("source_type", options.sourceType);
+  return apiFetch<Row>(`/api/admin/vkpi/kol-pool/competitors/dashboard?${params.toString()}`, {}, token);
+}
 export async function runProductRecommendations(token: string, payload: Record<string, unknown>) {
   return apiFetch<Record<string, unknown>>("/api/admin/vkpi/product-analysis/recommendations/run", { method: "POST", body: jsonBody(payload), timeoutMs: 120000 }, token);
 }
