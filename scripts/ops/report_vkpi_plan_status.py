@@ -140,6 +140,11 @@ def build_items(sync: dict[str, Any], r2: dict[str, Any], snapshot: dict[str, An
         and exists("scripts/ops/backfill_vkpi_competitor_relations_after_sync.sh")
         and contains("backend/app/services/vkpi/kol_competitor_detector.py", "vkpi_competitor_relation", "prefer_persisted")
     )
+    brand_signal_ready = (
+        exists("backend/app/services/vkpi/brand_signal_detector.py")
+        and exists("scripts/ops/scan_vkpi_brand_signals_after_sync.sh")
+        and contains("backend/app/services/vkpi/brand_signal_detector.py", "scan_cached_brand_signals", "write_db")
+    )
     return [
         status_item(
             "current_release",
@@ -209,13 +214,15 @@ def build_items(sync: dict[str, Any], r2: dict[str, Any], snapshot: dict[str, An
         status_item(
             "brand_signal_c",
             "C Viltrox brand signal",
-            "partial_live",
+            "scan_ready" if brand_signal_ready else "partial_live",
             [
                 "brand_signal_detector.py exists" if exists("backend/app/services/vkpi/brand_signal_detector.py") else "detector missing",
+                "post-sync brand signal guard exists" if exists("scripts/ops/scan_vkpi_brand_signals_after_sync.sh") else "brand signal guard missing",
+                "cached scan can write_db" if contains("backend/app/services/vkpi/brand_signal_detector.py", "scan_cached_brand_signals", "write_db") else "brand signal write path missing",
                 "DataQuality signal queue exists" if contains("frontend/src/components/vkpi/pages/DataQualityPage.tsx", "Viltrox / 竞品信号") else "signal queue missing",
                 "Command Center signal card exists" if contains("frontend/src/components/vkpi/dashboard/CommandCenter.tsx", "品牌信号") else "command signal card missing",
             ],
-            "部署后运行一次 scan dry-run/commit 决策，再让 Dashboard 读取真实未处理信号。",
+            "等 A2 完成并部署后，运行远端 brand signal guard，从缓存内容写入真实未处理信号。",
         ),
         status_item(
             "dimensions_d",
