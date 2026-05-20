@@ -61,7 +61,37 @@ rsync -az ${RSYNC_DELETE_FLAG} \
   --exclude 'submissions.db' \
   ./ "${SSH_TARGET}:${REMOTE_ROOT}/"
 
-ssh "${SSH_TARGET}" "cd '${REMOTE_ROOT}' && printf '%s\n' '${LOCAL_GIT_SHA}' > BUILD_GIT_SHA && printf '%s\n' '${LOCAL_GIT_BRANCH}' > BUILD_GIT_BRANCH && printf '%s\n' '${LOCAL_BUILD_TIME}' > BUILD_TIME && sudo chown -R '${REMOTE_APP_USER}:${REMOTE_APP_GROUP}' '${REMOTE_ROOT}'"
+ssh "${SSH_TARGET}" "cd '${REMOTE_ROOT}' && printf '%s\n' '${LOCAL_GIT_SHA}' > BUILD_GIT_SHA && printf '%s\n' '${LOCAL_GIT_BRANCH}' > BUILD_GIT_BRANCH && printf '%s\n' '${LOCAL_BUILD_TIME}' > BUILD_TIME && APP_GIT_SHA='${LOCAL_GIT_SHA}' APP_GIT_SHORT_SHA='${LOCAL_GIT_SHA:0:8}' APP_GIT_BRANCH='${LOCAL_GIT_BRANCH}' APP_BUILD_TIME='${LOCAL_BUILD_TIME}' python3 - <<'PY'
+import os
+from pathlib import Path
+
+path = Path('.env')
+updates = {
+    'APP_GIT_SHA': os.environ['APP_GIT_SHA'],
+    'APP_GIT_SHORT_SHA': os.environ['APP_GIT_SHORT_SHA'],
+    'APP_GIT_BRANCH': os.environ['APP_GIT_BRANCH'],
+    'APP_BUILD_TIME': os.environ['APP_BUILD_TIME'],
+}
+if path.exists():
+    lines = path.read_text(encoding='utf-8', errors='ignore').splitlines()
+else:
+    lines = []
+seen = set()
+out = []
+for line in lines:
+    if '=' in line and not line.lstrip().startswith('#'):
+        key = line.split('=', 1)[0].strip()
+        if key in updates:
+            out.append(f'{key}={updates[key]}')
+            seen.add(key)
+            continue
+    out.append(line)
+for key, value in updates.items():
+    if key not in seen:
+        out.append(f'{key}={value}')
+path.write_text('\\n'.join(out) + '\\n', encoding='utf-8')
+PY
+sudo chown -R '${REMOTE_APP_USER}:${REMOTE_APP_GROUP}' '${REMOTE_ROOT}'"
 
 ssh "${SSH_TARGET}" "sudo systemctl restart '${SERVICE_NAME}' && systemctl is-active '${SERVICE_NAME}' && for attempt in \$(seq 1 30); do if curl -fsS '${HEALTH_URL}' >/tmp/vkpi-health.json; then cat /tmp/vkpi-health.json; exit 0; fi; sleep 1; done; echo 'health check failed: ${HEALTH_URL}' >&2; exit 1"
 
