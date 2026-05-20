@@ -206,6 +206,11 @@ def remote_service_state(target: str, service: str) -> str:
     return result.stdout.strip() or "unknown"
 
 
+def local_service_state(service: str) -> str:
+    result = run(["bash", "-lc", f"systemctl is-active {shlex.quote(service)} 2>/dev/null || true"], timeout=20)
+    return result.stdout.strip() or "unknown"
+
+
 def audit_remote(target: str, root: str) -> dict[str, Any]:
     command = f"cd {shlex.quote(root)} && .venv/bin/python - <<'PY'\n{REMOTE_AUDIT}\nPY"
     result = run(["ssh", target, command], timeout=90)
@@ -222,18 +227,35 @@ def audit_remote(target: str, root: str) -> dict[str, Any]:
     return payload
 
 
+def audit_local(root: str) -> dict[str, Any]:
+    command = f"cd {shlex.quote(root)} && .venv/bin/python - <<'PY'\n{REMOTE_AUDIT}\nPY"
+    result = run(["bash", "-lc", command], timeout=90)
+    if result.returncode != 0:
+        return {
+            "checked_at": utcnow(),
+            "target": "local",
+            "remote_root": root,
+            "error": result.stderr.strip() or result.stdout.strip() or f"local audit exited {result.returncode}",
+        }
+    payload = parse_json_blob(result.stdout)
+    payload["target"] = "local"
+    payload["remote_root"] = root
+    return payload
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Read-only post-sync V-KPI data audit")
     parser.add_argument("--remote", default="viltrox", help="SSH target")
     parser.add_argument("--remote-root", default="/opt/viltrox-2.0", help="Remote app root")
     parser.add_argument("--service", default="vkpi-sync-daily.service", help="Sync systemd service name")
     parser.add_argument("--allow-during-sync", action="store_true", help="Run DB audit even if sync service is active/activating")
+    parser.add_argument("--local", action="store_true", help="Audit the current machine/root directly instead of SSH")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    service_state = remote_service_state(args.remote, args.service)
+    service_state = local_service_state(args.service) if args.local else remote_service_state(args.remote, args.service)
     if service_state in {"active", "activating"} and not args.allow_during_sync:
         print(json.dumps({
             "checked_at": utcnow(),
@@ -241,11 +263,11 @@ def main() -> int:
             "reason": f"{args.service} is {service_state}; rerun after completion or pass --allow-during-sync for read-only inspection",
             "service": args.service,
             "service_state": service_state,
-            "target": args.remote,
+            "target": "local" if args.local else args.remote,
             "remote_root": args.remote_root,
         }, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
-    payload = audit_remote(args.remote, args.remote_root)
+    payload = audit_local(args.remote_root) if args.local else audit_remote(args.remote, args.remote_root)
     payload["service"] = args.service
     payload["service_state"] = service_state
     print(json.dumps(payload, ensure_ascii=False, default=str, indent=2, sort_keys=True))

@@ -124,7 +124,10 @@ def post_sync_audit() -> dict[str, Any]:
     script = ROOT / "scripts" / "ops" / "audit_vkpi_post_sync_state.py"
     if not script.exists():
         return {"available": False}
-    result = run([str(script)], timeout=60)
+    command = [str(script)]
+    if ROOT == Path("/opt/viltrox-2.0"):
+        command.append("--local")
+    result = run(command, timeout=60)
     try:
         payload = parse_json_blob(result.stdout or result.stderr)
     except Exception as exc:
