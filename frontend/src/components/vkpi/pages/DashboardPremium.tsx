@@ -183,13 +183,13 @@ const tasks: PremiumTask[] = [
   { title: 'Cinegear 物料准备', priority: 'low', priorityLabel: '低', body: '剩余 4 天截止，目前进行中。', width: '55%', isMock: true, mockLabel: '示例任务' },
 ];
 
-const quickActions = [
-  { icon: '⌁', label: '内容发布' },
-  { icon: '⌕', label: 'KOL 寻找' },
-  { icon: '▣', label: '舆情监控' },
-  { icon: '◎', label: '竞品监控' },
-  { icon: '▦', label: '产品管理' },
-  { icon: '▥', label: '数据报表' },
+const quickActions: Array<{ icon: string; label: string; page: VkpiPageKey }> = [
+  { icon: '⌁', label: '内容发布', page: 'channels' },
+  { icon: '⌕', label: 'KOL 寻找', page: 'discover' },
+  { icon: '▣', label: '舆情监控', page: 'dataQuality' },
+  { icon: '◎', label: '竞品监控', page: 'dataQuality' },
+  { icon: '▦', label: '产品管理', page: 'productBattle' },
+  { icon: '▥', label: '数据报表', page: 'reports' },
 ];
 
 const premiumNavTarget: Record<string, VkpiPageKey> = {
@@ -804,11 +804,13 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
   const handleNavSelect = (key: string) => {
     setActiveNav(key);
     const target = premiumNavTarget[key];
-    if (target && target !== 'dashboardPremium' && onSelectPage) {
-      onSelectPage(target);
+    if (target) {
+      if (target !== 'dashboardPremium' && onSelectPage) {
+        onSelectPage(target);
+      }
       return;
     }
-    showToast(`${key} · 高级玻璃方向占位`);
+    showToast(`${key} · 暂无可用页面`);
   };
 
   const handleSegmentSelect = (key: string) => {
@@ -824,6 +826,15 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
     showToast(`${fallbackLabel} · 可接真实路由`);
   }, [onSelectPage, showToast]);
 
+  const openContentUrl = useCallback((url: unknown) => {
+    const href = typeof url === 'string' ? url.trim() : '';
+    if (!href) {
+      showToast('暂无内容链接');
+      return;
+    }
+    window.open(href, '_blank', 'noopener,noreferrer');
+  }, [showToast]);
+
   const dashboardContent = (
     <>
       {!embedded ? (
@@ -831,8 +842,8 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
             actions={[
               { label: localDateISO(), onClick: () => showToast('今日日期 · 本地时区') },
               { label: syncLabel, variant: 'sync', onClick: () => showToast(snapshot.source === 'mock' ? '同步状态 · 开发占位' : `数据源：${snapshot.source}`) },
-              { label: '导出', onClick: () => showToast('原型交互 · 可接真实路由') },
-              { label: '生成周报', variant: 'primary', onClick: () => showToast('原型交互 · 可接真实路由') },
+              { label: '导出', onClick: () => goToWorkspacePage('reports', '报表导出') },
+              { label: '生成周报', variant: 'primary', onClick: () => goToWorkspacePage('reports', '生成周报') },
             ]}
         />
       ) : null}
@@ -849,7 +860,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
             <div>
               <div className="left-grid">
                 <div className="glass-card panel">
-                  <div className="panel-head"><h3>全球 KOL 分布</h3><span className="link" onClick={() => showToast('原型交互 · 可接真实路由')}>Country Map</span></div>
+                  <div className="panel-head"><h3>全球 KOL 分布</h3><button className="link" type="button" onClick={() => goToWorkspacePage('dataAnalysis', 'Country Map')}>Country Map</button></div>
                   <div className="holo-map">
                     <div className="zoom"><span>+</span><span>−</span></div>
                     <svg viewBox="0 0 620 240" preserveAspectRatio="none">
@@ -881,7 +892,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
                 </div>
                 <div className="lower">
                   <div className="glass-card mini">
-                    <div className="panel-head"><h3>产品 ROI 排行</h3><span className="link" onClick={() => goToWorkspacePage('productBattle', '产品 ROI')}>查看全部</span></div>
+                    <div className="panel-head"><h3>产品 ROI 排行</h3><button className="link" type="button" onClick={() => goToWorkspacePage('productBattle', '产品 ROI')}>查看全部</button></div>
                     {premiumProductRows.map((row) => <div className="row" title={row.mockLabel} key={row.rank}><span className="rank">{row.rank}</span><div><b>{row.name}{row.isMock ? <span className="tag">{badgeText(row.mockLabel)}</span> : null}</b><div className="bar"><span style={glassVarStyle({ '--w': row.width })}></span></div></div><small>{row.value}</small></div>)}
                   </div>
                   <div className="glass-card mini">
@@ -890,18 +901,18 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
                     <div className="region-list" style={{ gridTemplateColumns: 'repeat(3,1fr)' }}>{contentTypeRows.map((item) => <div className="region" style={glassVarStyle({ '--c': item.color })} key={item.label}><span><i></i>{item.label}</span><b>{item.value}</b></div>)}</div>
                   </div>
                   <div className="glass-card mini">
-                    <div className="panel-head"><h3>KOL 平台分布</h3><span className="link" onClick={() => goToWorkspacePage('channels', 'KOL 平台分布')}>查看全部</span></div>
+                    <div className="panel-head"><h3>KOL 平台分布</h3><button className="link" type="button" onClick={() => goToWorkspacePage('channels', 'KOL 平台分布')}>查看全部</button></div>
                     {premiumPlatforms.map((platform) => <div className="platform" title={platform.mockLabel} key={platform.label}><span className="picon" style={{ background: platform.background }}>{platform.icon}</span><div><b>{platform.label}{platform.isMock ? <span className="tag">{badgeText(platform.mockLabel)}</span> : null}</b><div className="bar"><span style={glassVarStyle({ '--w': platform.width })}></span></div></div><small>{platform.value}</small></div>)}
                   </div>
                 </div>
               </div>
-              <div className="glass-card latest"><div className="panel-head"><h3>最新内容表现</h3><span className="link" onClick={() => goToWorkspacePage('channels', '内容中心')}>进入内容中心</span></div><table className="table"><thead><tr><th>内容</th><th>账号 / 平台</th><th>发布平台</th><th>发布于</th><th>曝光量</th><th>互动率</th><th>操作</th></tr></thead><tbody>{contentRows.length ? contentRows.map((row, index) => <tr key={`${row.id || row.url || index}`}><td><div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}><div className="thumb"></div><div><b>{String(row.title || '官方内容')}</b><br /><span className="tag">真实</span></div></div></td><td>@{String(row.account_handle || row.account_display_name || '-')}<br /><span style={{ color: '#667085' }}>{String(row.platform || '-')}</span></td><td>{String(row.platform || '-')}</td><td>{postedLabel(row)}</td><td><b>{compact(numberValue(row.views))}</b></td><td>{engagementLabel(row)}</td><td><button type="button" onClick={() => showToast('原型交互 · 可接真实路由')}>⌁</button> <button type="button" onClick={() => showToast(String(row.url || '暂无内容链接'))}>↗</button> <button type="button" onClick={() => showToast('原型交互 · 可接真实路由')}>…</button></td></tr>) : <tr><td colSpan={7}><div className="empty-real">暂无真实最新内容明细</div></td></tr>}</tbody></table></div>
+              <div className="glass-card latest"><div className="panel-head"><h3>最新内容表现</h3><button className="link" type="button" onClick={() => goToWorkspacePage('channels', '内容中心')}>进入内容中心</button></div><table className="table"><thead><tr><th>内容</th><th>账号 / 平台</th><th>发布平台</th><th>发布于</th><th>曝光量</th><th>互动率</th><th>操作</th></tr></thead><tbody>{contentRows.length ? contentRows.map((row, index) => <tr key={`${row.id || row.url || index}`}><td><div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}><div className="thumb"></div><div><b>{String(row.title || '官方内容')}</b><br /><span className="tag">真实</span></div></div></td><td>@{String(row.account_handle || row.account_display_name || '-')}<br /><span style={{ color: '#667085' }}>{String(row.platform || '-')}</span></td><td>{String(row.platform || '-')}</td><td>{postedLabel(row)}</td><td><b>{compact(numberValue(row.views))}</b></td><td>{engagementLabel(row)}</td><td><button type="button" title="查看账号矩阵" onClick={() => goToWorkspacePage('channels', '内容中心')}>⌁</button> <button type="button" title="打开原始内容" onClick={() => openContentUrl(row.url)}>↗</button> <button type="button" title="查看数据分析" onClick={() => goToWorkspacePage('dataAnalysis', '内容分析')}>…</button></td></tr>) : <tr><td colSpan={7}><div className="empty-real">暂无真实最新内容明细</div></td></tr>}</tbody></table></div>
             </div>
             <aside className="rail">
               <div className="glass-card rail-card copilot"><div className="ai-kicker">V-KPI Copilot</div><h3>系统正在把推荐、风险、任务压缩成 7 张行动卡。</h3><p>今日重点：处理 4 条推荐反馈、补齐 35mm LAB 项目 KOL 缺口、检查 Sigma 竞品内容。</p><div className="insight">示例 · 置信度 91% · 证据 18 条 · 数据新鲜度 4h</div></div>
-              <div className="glass-card rail-card"><div className="panel-head"><h3>重要提醒</h3><span className="link" onClick={() => goToWorkspacePage('dataQuality', '重要提醒')}>查看全部</span></div>{premiumAlerts.length ? premiumAlerts.map((alert) => <div className="alert" title={alert.mockLabel} key={alert.title}><div className="alert-ic" style={glassVarStyle({ '--bgc': alert.bgc, '--col': alert.col })}>{alert.icon}</div><div><b>{alert.title}{alert.isMock ? <span className="tag">{badgeText(alert.mockLabel)}</span> : null}</b><p>{alert.body}</p></div><span className="time">{alert.time}</span></div>) : <div className="empty-real">暂无真实品牌信号</div>}</div>
-              <div className="glass-card rail-card"><div className="panel-head"><h3>本周关键任务</h3><span className="link" onClick={() => showToast('原型交互 · 可接真实路由')}>查看全部</span></div>{tasks.map((task) => <div className="task" title={task.mockLabel} key={task.title}><div className="task-head"><b>{task.title}{task.isMock ? <span className="tag">示例</span> : null}</b><span className={`priority ${task.priority}`}>{task.priorityLabel}</span></div><p>{task.body}</p><div className="progress"><span style={glassVarStyle({ '--w': task.width })}></span></div></div>)}</div>
-              <div className="glass-card rail-card"><div className="panel-head"><h3>快捷入口</h3></div><div className="quick">{quickActions.map((action) => <div key={action.label} onClick={() => showToast('原型交互 · 可接真实路由')}><b>{action.icon}</b><span>{action.label}</span></div>)}</div></div>
+              <div className="glass-card rail-card"><div className="panel-head"><h3>重要提醒</h3><button className="link" type="button" onClick={() => goToWorkspacePage('dataQuality', '重要提醒')}>查看全部</button></div>{premiumAlerts.length ? premiumAlerts.map((alert) => <div className="alert" title={alert.mockLabel} key={alert.title}><div className="alert-ic" style={glassVarStyle({ '--bgc': alert.bgc, '--col': alert.col })}>{alert.icon}</div><div><b>{alert.title}{alert.isMock ? <span className="tag">{badgeText(alert.mockLabel)}</span> : null}</b><p>{alert.body}</p></div><span className="time">{alert.time}</span></div>) : <div className="empty-real">暂无真实品牌信号</div>}</div>
+              <div className="glass-card rail-card"><div className="panel-head"><h3>本周关键任务</h3><button className="link" type="button" onClick={() => goToWorkspacePage('projects', '本周关键任务')}>查看全部</button></div>{tasks.map((task) => <div className="task" title={task.mockLabel} key={task.title}><div className="task-head"><b>{task.title}{task.isMock ? <span className="tag">示例</span> : null}</b><span className={`priority ${task.priority}`}>{task.priorityLabel}</span></div><p>{task.body}</p><div className="progress"><span style={glassVarStyle({ '--w': task.width })}></span></div></div>)}</div>
+              <div className="glass-card rail-card"><div className="panel-head"><h3>快捷入口</h3></div><div className="quick">{quickActions.map((action) => <button key={action.label} type="button" onClick={() => goToWorkspacePage(action.page, action.label)}><b>{action.icon}</b><span>{action.label}</span></button>)}</div></div>
             </aside>
 	          </div>
 	          )}
@@ -946,7 +957,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
           ) : null}
         </div>
       ) : null}
-      {embedded ? null : <GlassFAB onClick={() => showToast('原型交互 · 可接真实路由')} />}
+      {embedded ? null : <GlassFAB onClick={() => goToWorkspacePage('dataQuality', '反馈 / 报错')} />}
       <GlassToast show={toastVisible}>{toast}</GlassToast>
     </div>
   );
