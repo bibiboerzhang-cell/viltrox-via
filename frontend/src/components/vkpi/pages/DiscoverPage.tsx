@@ -1913,9 +1913,14 @@ function SearchPanel({
         </select>
       </div>
       <div className="vkpi-discover-list">
-        {visibleKols.length ? visibleKols.map((kol) => (
-          <KolCard key={kol.id} kol={kol} active={selectedKolId === kol.id} onClick={() => onSelect(kol.id)} />
-        )) : runningSearch ? (
+        {visibleKols.length ? (
+          <>
+            {visibleKols.map((kol) => (
+              <KolCard key={kol.id} kol={kol} active={selectedKolId === kol.id} onClick={() => onSelect(kol.id)} />
+            ))}
+            {runningSearch ? <DiscoverCandidateSkeletons count={Math.max(1, Math.min(3, 5 - visibleKols.length))} /> : null}
+          </>
+        ) : runningSearch ? (
           <DiscoverCandidateSkeletons />
         ) : <div className="vkpi-discover-empty">当前筛选下没有红人。请用顶部搜索从真实接口加载，或切到候选池。</div>}
       </div>

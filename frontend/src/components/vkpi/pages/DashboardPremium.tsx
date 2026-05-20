@@ -626,6 +626,95 @@ function PremiumKpiCard({ item }: { item: PremiumKpi }) {
   );
 }
 
+function PremiumKpiSkeletons() {
+  return (
+    <>
+      {Array.from({ length: 6 }).map((_, index) => (
+        <div className="glass-card kpi vkpi-premium-kpi-skeleton" key={index} aria-hidden="true">
+          <div className="topline">
+            <span className="vkpi-skeleton vkpi-skeleton-avatar" />
+            <span className="vkpi-skeleton vkpi-skeleton-pill" />
+          </div>
+          <span className="vkpi-skeleton vkpi-skeleton-line is-medium" />
+          <span className="vkpi-skeleton vkpi-skeleton-line is-short" />
+          <span className="vkpi-skeleton vkpi-skeleton-line is-long" />
+        </div>
+      ))}
+    </>
+  );
+}
+
+function PremiumDashboardSkeleton() {
+  return (
+    <div className="content-grid vkpi-premium-loading-skeleton" aria-hidden="true">
+      <div>
+        <div className="left-grid">
+          <div className="glass-card panel">
+            <div className="panel-head">
+              <span className="vkpi-skeleton vkpi-skeleton-line is-medium" />
+              <span className="vkpi-skeleton vkpi-skeleton-pill" />
+            </div>
+            <div className="vkpi-premium-skeleton-map">
+              <span className="vkpi-skeleton vkpi-skeleton-line is-long" />
+              <span className="vkpi-skeleton vkpi-skeleton-line is-medium" />
+            </div>
+            <div className="vkpi-premium-skeleton-regions">
+              {Array.from({ length: 5 }).map((_, index) => <span className="vkpi-skeleton vkpi-skeleton-pill" key={index} />)}
+            </div>
+          </div>
+          <div className="glass-card panel">
+            <div className="panel-head">
+              <span className="vkpi-skeleton vkpi-skeleton-line is-medium" />
+              <span className="vkpi-skeleton vkpi-skeleton-pill" />
+            </div>
+            <div className="vkpi-premium-skeleton-chart">
+              <span />
+              <span />
+              <span />
+              <span />
+            </div>
+          </div>
+          <div className="lower">
+            {Array.from({ length: 3 }).map((_, index) => (
+              <div className="glass-card mini vkpi-premium-mini-skeleton" key={index}>
+                <span className="vkpi-skeleton vkpi-skeleton-line is-medium" />
+                <span className="vkpi-skeleton vkpi-skeleton-line is-long" />
+                <span className="vkpi-skeleton vkpi-skeleton-line is-long" />
+                <span className="vkpi-skeleton vkpi-skeleton-line is-short" />
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="glass-card latest">
+          <div className="panel-head">
+            <span className="vkpi-skeleton vkpi-skeleton-line is-medium" />
+            <span className="vkpi-skeleton vkpi-skeleton-pill" />
+          </div>
+          <div className="vkpi-premium-table-skeleton">
+            {Array.from({ length: 5 }).map((_, index) => (
+              <div key={index}>
+                <span className="vkpi-skeleton vkpi-skeleton-avatar" />
+                <span className="vkpi-skeleton vkpi-skeleton-line is-long" />
+                <span className="vkpi-skeleton vkpi-skeleton-line is-medium" />
+                <span className="vkpi-skeleton vkpi-skeleton-pill" />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <aside className="rail">
+        {Array.from({ length: 4 }).map((_, index) => (
+          <div className="glass-card rail-card vkpi-premium-rail-skeleton" key={index}>
+            <span className="vkpi-skeleton vkpi-skeleton-line is-medium" />
+            <span className="vkpi-skeleton vkpi-skeleton-line is-long" />
+            <span className="vkpi-skeleton vkpi-skeleton-line is-long" />
+          </div>
+        ))}
+      </aside>
+    </div>
+  );
+}
+
 export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Marketing Director', testId = 'vkpi-dashboard-premium', windowDays = 30, embedded = false, onSelectPage }: DashboardPremiumProps) {
   const [toast, setToast] = useState('已触发');
   const [toastVisible, setToastVisible] = useState(false);
@@ -739,11 +828,16 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
             ]}
         />
       ) : null}
-          <HeroSection missions={heroMissions} />
-          <section className="kpis">
-            {premiumKpis.map((item) => <PremiumKpiCard key={item.label} item={item} />)}
-          </section>
-          <div className="content-grid">
+	          <HeroSection missions={heroMissions} />
+	          <section className="kpis">
+	            {loadingData && snapshot.source === 'mock' && !snapshot.loadedAt
+	              ? <PremiumKpiSkeletons />
+	              : premiumKpis.map((item) => <PremiumKpiCard key={item.label} item={item} />)}
+	          </section>
+	          {loadingData && snapshot.source === 'mock' && !snapshot.loadedAt ? (
+	            <PremiumDashboardSkeleton />
+	          ) : (
+	          <div className="content-grid">
             <div>
               <div className="left-grid">
                 <div className="glass-card panel">
@@ -801,9 +895,10 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
               <div className="glass-card rail-card"><div className="panel-head"><h3>本周关键任务</h3><span className="link" onClick={() => showToast('原型交互 · 可接真实路由')}>查看全部</span></div>{tasks.map((task) => <div className="task" title={task.mockLabel} key={task.title}><div className="task-head"><b>{task.title}{task.isMock ? <span className="tag">示例</span> : null}</b><span className={`priority ${task.priority}`}>{task.priorityLabel}</span></div><p>{task.body}</p><div className="progress"><span style={glassVarStyle({ '--w': task.width })}></span></div></div>)}</div>
               <div className="glass-card rail-card"><div className="panel-head"><h3>快捷入口</h3></div><div className="quick">{quickActions.map((action) => <div key={action.label} onClick={() => showToast('原型交互 · 可接真实路由')}><b>{action.icon}</b><span>{action.label}</span></div>)}</div></div>
             </aside>
-          </div>
-    </>
-  );
+	          </div>
+	          )}
+	    </>
+	  );
 
   return (
     <div className={`vkpi-glass-shell${embedded ? ' vkpi-glass-shell--embedded' : ''}`} data-testid={testId}>

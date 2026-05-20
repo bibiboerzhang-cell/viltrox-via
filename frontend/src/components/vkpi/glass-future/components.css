@@ -75,6 +75,18 @@
 .vkpi-glass-shell .glass-card { position: relative; border-radius: var(--r); background: linear-gradient(135deg,rgba(255,255,255,.58),rgba(255,255,255,.28)); border: 1px solid rgba(255,255,255,.78); box-shadow: var(--shadow-soft),var(--inner); backdrop-filter: blur(30px) saturate(1.45); overflow: hidden; }
 .vkpi-glass-shell .glass-card:before { content: ""; position: absolute; inset: 0; background: linear-gradient(135deg,rgba(255,255,255,.62),transparent 38%,rgba(255,255,255,.16)); pointer-events: none; }
 .vkpi-glass-shell .glass-card:hover { transform: translateY(-2px); transition: .22s; box-shadow: 0 24px 60px rgba(32,64,128,.15),var(--inner); }
+.vkpi-glass-shell .vkpi-skeleton { position: relative; display: block; overflow: hidden; border-radius: 999px; background: rgba(27,108,255,.10); }
+.vkpi-glass-shell .vkpi-skeleton:after { content: ""; position: absolute; inset: 0; transform: translateX(-110%); background: linear-gradient(90deg,transparent,rgba(255,255,255,.70),transparent); animation: vkpi-premium-skeleton-shimmer 1.35s ease-in-out infinite; }
+.vkpi-glass-shell .vkpi-skeleton-line { height: 12px; width: 100%; }
+.vkpi-glass-shell .vkpi-skeleton-line.is-short { width: 42%; }
+.vkpi-glass-shell .vkpi-skeleton-line.is-medium { width: 66%; }
+.vkpi-glass-shell .vkpi-skeleton-line.is-long { width: 88%; }
+.vkpi-glass-shell .vkpi-skeleton-avatar { width: 44px; height: 44px; border-radius: 16px; }
+.vkpi-glass-shell .vkpi-skeleton-avatar.is-round { border-radius: 50%; }
+.vkpi-glass-shell .vkpi-skeleton-pill { width: 72px; height: 24px; }
+@keyframes vkpi-premium-skeleton-shimmer {
+  100% { transform: translateX(110%); }
+}
 .vkpi-glass-shell .kpi { min-height: 136px; padding: 18px; }
 .vkpi-glass-shell .kpi .topline { position: relative; display: flex; justify-content: space-between; align-items: center; }
 .vkpi-glass-shell .kpi .icon { width: 44px; height: 44px; border-radius: 17px; background: var(--ig); display: grid; place-items: center; color: var(--ic); box-shadow: inset 0 1px 0 rgba(255,255,255,.85); font-size: 22px; }
@@ -84,7 +96,19 @@
 .vkpi-glass-shell .kpi .up { color: #079455; }
 .vkpi-glass-shell .kpi .down { color: #d92d20; }
 .vkpi-glass-shell .spark { position: relative; width: 100%; height: 28px; margin-top: 8px; }
+.vkpi-glass-shell .vkpi-premium-kpi-skeleton { display: grid; align-content: start; gap: 12px; pointer-events: none; }
 .vkpi-glass-shell .content-grid { display: grid; grid-template-columns: minmax(720px,1fr) 380px; gap: 18px; }
+.vkpi-glass-shell .vkpi-premium-loading-skeleton { pointer-events: none; }
+.vkpi-glass-shell .vkpi-premium-loading-skeleton .panel-head { min-height: 30px; }
+.vkpi-glass-shell .vkpi-premium-skeleton-map { position: relative; height: 222px; border: 1px solid rgba(255,255,255,.72); border-radius: 22px; background: linear-gradient(135deg,rgba(27,108,255,.08),rgba(255,255,255,.22)); display: grid; align-content: center; gap: 16px; padding: 34px; }
+.vkpi-glass-shell .vkpi-premium-skeleton-regions { margin-top: 14px; display: grid; grid-template-columns: repeat(5,1fr); gap: 8px; }
+.vkpi-glass-shell .vkpi-premium-skeleton-regions .vkpi-skeleton-pill { width: 100%; height: 38px; border-radius: 14px; }
+.vkpi-glass-shell .vkpi-premium-skeleton-chart { height: 250px; border-radius: 22px; background: linear-gradient(180deg,rgba(255,255,255,.24),rgba(27,108,255,.04)); display: grid; align-content: end; gap: 28px; padding: 24px; }
+.vkpi-glass-shell .vkpi-premium-skeleton-chart span { height: 1px; background: rgba(92,130,190,.18); }
+.vkpi-glass-shell .vkpi-premium-mini-skeleton,
+.vkpi-glass-shell .vkpi-premium-rail-skeleton { display: grid; align-content: start; gap: 12px; }
+.vkpi-glass-shell .vkpi-premium-table-skeleton { display: grid; gap: 9px; }
+.vkpi-glass-shell .vkpi-premium-table-skeleton > div { min-height: 64px; display: grid; grid-template-columns: auto minmax(0,1fr) 160px 76px; gap: 12px; align-items: center; padding: 10px; border-radius: 16px; background: rgba(255,255,255,.34); border: 1px solid rgba(255,255,255,.64); }
 .vkpi-glass-shell .left-grid { display: grid; grid-template-columns: 1.08fr .92fr; gap: 18px; }
 .vkpi-glass-shell .panel { padding: 20px; min-height: 302px; }
 .vkpi-glass-shell .panel-head { position: relative; display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
