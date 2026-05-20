@@ -507,7 +507,22 @@ def commit_brand_signals(signals: list[dict[str, Any]]) -> int:
     conn = get_conn()
     committed = 0
     for signal in signals:
-        existing = conn.execute("SELECT id FROM vkpi_brand_signal WHERE signal_uid=?", (signal["signal_uid"],)).fetchone()
+        existing = conn.execute(
+            """
+            SELECT id
+            FROM vkpi_brand_signal
+            WHERE signal_uid=?
+               OR (kol_entity_uid=? AND post_uid=? AND signal_type=? AND brand_name=?)
+            LIMIT 1
+            """,
+            (
+                signal["signal_uid"],
+                signal["kol_entity_uid"],
+                signal["post_uid"],
+                signal["signal_type"],
+                signal["brand_name"],
+            ),
+        ).fetchone()
         params = (
             signal["signal_uid"],
             signal["kol_entity_uid"],
@@ -529,12 +544,12 @@ def commit_brand_signals(signals: list[dict[str, Any]]) -> int:
             conn.execute(
                 """
                 UPDATE vkpi_brand_signal
-                SET kol_entity_uid=?, post_uid=?, source_table=?, source_id=?, post_url=?, platform=?,
+                SET signal_uid=?, kol_entity_uid=?, post_uid=?, source_table=?, source_id=?, post_url=?, platform=?,
                     published_at=?, analysis_scope=?, signal_type=?, brand_name=?, brand_role=?,
                     signal_strength=?, evidence_json=?, detected_at=?
-                WHERE signal_uid=?
+                WHERE id=?
                 """,
-                params[1:] + (signal["signal_uid"],),
+                params + (existing["id"],),
             )
         else:
             conn.execute(
