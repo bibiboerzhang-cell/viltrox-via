@@ -158,15 +158,15 @@ def cache_clear(prefix: str = "") -> int:
 
 
 def get_cache_stats() -> dict:
+    client = _get_redis()
     total = _stats["hits"] + _stats["misses"]
     hit_rate = _stats["hits"] / total if total > 0 else 0
     data = {
         **_stats,
-        "size": len(_cache) if _get_redis() is None else None,
+        "size": len(_cache) if client is None else None,
         "hit_rate": round(hit_rate, 3),
         "prefix": REDIS_CACHE_PREFIX,
     }
-    client = _get_redis()
     if client is not None:
         try:
             data["redis_info"] = {

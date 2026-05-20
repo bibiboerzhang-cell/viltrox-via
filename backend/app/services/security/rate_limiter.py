@@ -243,6 +243,7 @@ def rate_limit(bucket: str, max_requests: int = 60, window_sec: int = 60):
 
 
 def get_rate_limit_stats() -> dict:
+    client = _get_redis()
     total = _stats["checks"]
     block_rate = _stats["blocks"] / total if total else 0
     data = {
@@ -250,7 +251,6 @@ def get_rate_limit_stats() -> dict:
         "block_rate": round(block_rate, 3),
         "prefix": REDIS_RATE_LIMIT_PREFIX,
     }
-    client = _get_redis()
     if client is not None:
         try:
             data["redis_keys"] = sum(1 for _ in client.scan_iter(match=f"{REDIS_RATE_LIMIT_PREFIX}:*"))
