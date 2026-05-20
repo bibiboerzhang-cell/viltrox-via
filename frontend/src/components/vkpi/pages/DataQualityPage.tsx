@@ -110,7 +110,7 @@ export function DataQualityPage({ apiToken, viewMode }: DataQualityPageProps) {
         limit: 100,
       });
       setBrandSignals(response.signals || []);
-      setBrandSignalCount(Number(response.count || 0));
+      setBrandSignalCount(Number(response.total_count || response.count || 0));
       setBrandSignalSchemaReady(response.schema_ready !== false);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '品牌信号读取失败');

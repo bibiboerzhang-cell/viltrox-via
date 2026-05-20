@@ -1510,7 +1510,7 @@ export async function listBrandSignals(token: string, options: { status?: string
   if (options.status) params.set("status", options.status);
   if (options.signalType) params.set("signal_type", options.signalType);
   if (options.brandRole) params.set("brand_role", options.brandRole);
-  return apiFetch<{ signals?: Row[]; count?: number; schema_ready?: boolean }>(`/api/admin/vkpi/brand-signals?${params.toString()}`, {}, token);
+  return apiFetch<{ signals?: Row[]; count?: number; total_count?: number; schema_ready?: boolean }>(`/api/admin/vkpi/brand-signals?${params.toString()}`, {}, token);
 }
 export async function scanBrandSignals(token: string, payload: { source?: string; since?: string; limit?: number; write_db?: boolean }) {
   return apiFetch<Row>("/api/admin/vkpi/brand-signals/scan", { method: "POST", body: jsonBody(payload), timeoutMs: 120000 }, token);

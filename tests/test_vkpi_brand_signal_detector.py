@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from app.services.vkpi.brand_signal_detector import detect_viltrox_signals
+from app.db.connection import get_conn
+from app.services.vkpi.brand_signal_detector import commit_brand_signals, detect_viltrox_signals, list_brand_signals
 
 
 def test_numeric_epoch_published_at_is_normalized_for_db():
@@ -35,3 +36,41 @@ def test_unparseable_published_at_is_not_sent_to_timestamp_column():
     assert signals
     assert {signal["published_at"] for signal in signals} == {""}
     assert {signal["analysis_scope"] for signal in signals} == {"unknown_date"}
+
+
+def test_list_brand_signals_returns_total_count_separate_from_page_count():
+    conn = get_conn()
+    try:
+        conn.execute("DELETE FROM vkpi_brand_signal WHERE signal_type=?", ("unit_signal",))
+        conn.commit()
+    except Exception:
+        pass
+    signals = []
+    for index in range(2):
+        signals.append(
+            {
+                "signal_uid": f"unit-signal-{index}",
+                "kol_entity_uid": f"unit-kol-{index}",
+                "post_uid": f"unit-post-{index}",
+                "source_table": "unit",
+                "source_id": index,
+                "post_url": "",
+                "platform": "youtube",
+                "published_at": "2026-05-20T00:00:00Z",
+                "analysis_scope": "current_year",
+                "signal_type": "unit_signal",
+                "brand_name": "unit-brand",
+                "brand_role": "self",
+                "signal_strength": "medium",
+                "evidence_json": "{}",
+                "detected_at": "2026-05-20T00:00:00Z",
+            }
+        )
+    try:
+        assert commit_brand_signals(signals) == 2
+        result = list_brand_signals(status="all", signal_type="unit_signal", limit=1)
+        assert result["count"] == 1
+        assert result["total_count"] == 2
+    finally:
+        conn.execute("DELETE FROM vkpi_brand_signal WHERE signal_type=?", ("unit_signal",))
+        conn.commit()

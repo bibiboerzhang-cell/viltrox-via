@@ -593,7 +593,16 @@ def list_brand_signals(*, status: str = "new", signal_type: str = "", brand_role
         """,
         (*params, _safe_limit(limit, default=100, ceiling=500)),
     ).fetchall()
-    return {"schema_ready": True, "signals": [dict(row) for row in rows], "count": len(rows)}
+    count_row = get_conn().execute(
+        f"""
+        SELECT COUNT(*) AS n
+        FROM vkpi_brand_signal
+        {clause}
+        """,
+        tuple(params),
+    ).fetchone()
+    total_count = int(count_row["n"] if count_row else 0)
+    return {"schema_ready": True, "signals": [dict(row) for row in rows], "count": len(rows), "total_count": total_count}
 
 
 def review_brand_signal(signal_id: int, *, action: str, staff: dict[str, Any] | None = None) -> dict[str, Any]:
