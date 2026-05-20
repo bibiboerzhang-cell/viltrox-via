@@ -1,6 +1,7 @@
 import { DashboardPremium } from './DashboardPremium';
 
 interface GlassDemoPageProps {
+  apiToken?: string;
   userName?: string;
   userRole?: string;
 }

@@ -1,8 +1,15 @@
 import { GlassButton } from './GlassButton';
 import type { GlassTopAction } from './tokens';
 
+function localDateISO(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 const defaultActions: GlassTopAction[] = [
-  { label: new Date().toISOString().slice(0, 10) },
+  { label: localDateISO() },
   { label: '示例 · 待接入真实状态', variant: 'sync' },
   { label: '导出' },
   { label: '生成周报', variant: 'primary' },

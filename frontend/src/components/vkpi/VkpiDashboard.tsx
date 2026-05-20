@@ -468,7 +468,7 @@ export function VkpiDashboard({
   }, [apiToken]);
 
   if (activePage === 'glass-demo') {
-    return <GlassDemoPage userName={userName} userRole={userRole} />;
+    return <GlassDemoPage apiToken={apiToken} userName={userName} userRole={userRole} />;
   }
 
   return (
