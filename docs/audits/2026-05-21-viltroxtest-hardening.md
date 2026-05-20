@@ -69,3 +69,51 @@ Dashboard smoke after hardening:
 
 - `REDIS_URL` is not configured on the test deployment, so the rate limiter currently uses in-process memory. Do not treat this as shared multi-process/global rate limiting until Redis is enabled.
 - The local git checkout still has no configured remote, so commits are local-only unless a remote is added.
+
+## 2026-05-20 22:27 UTC Follow-Up: Origin Shield
+
+Purpose:
+
+- Keep `viltroxtest.com` public through Cloudflare while blocking direct source-IP access to the Hetzner origin.
+- Avoid touching SSH, business data, provider calls, Apify, KOL sync, or LLM settings.
+
+Backups created before mutation:
+
+- `/root/vkpi-hardening-backups/20260520T222617Z/nginx.conf`
+- `/root/vkpi-hardening-backups/20260520T222617Z/viltroxtest.com`
+- `/root/vkpi-hardening-backups/20260520T222617Z/ufw.tgz`
+- `/root/vkpi-hardening-backups/20260520T222617Z/ufw-status-before.txt`
+- `/root/vkpi-hardening-backups/20260520T222617Z/ufw-status-after.txt`
+- `/root/vkpi-hardening-backups/20260520T222617Z/cloudflare-ips-v4.txt`
+- `/root/vkpi-hardening-backups/20260520T222617Z/cloudflare-ips-v6.txt`
+
+Remote config changes:
+
+- Enabled `server_tokens off;` in `/etc/nginx/nginx.conf`.
+- Added UFW allow rules for the official Cloudflare IPv4 and IPv6 ranges on ports `80/tcp` and `443/tcp`.
+- Removed broad `80/tcp ALLOW IN Anywhere` and `443/tcp ALLOW IN Anywhere` rules.
+- Kept `22/tcp` SSH access unchanged.
+
+Verification:
+
+- `https://viltroxtest.com/health` returned `HTTP/2 200` through Cloudflare.
+- `/health` still reports `git_short_sha=99bb554e` and `client_matches_server=true`.
+- Direct source-IP probe was blocked:
+  - `curl http://5.78.200.75/health -H 'Host: viltroxtest.com'`
+  - result: timeout, `direct-origin-blocked`
+- Local origin loopback still works for Nginx-to-app routing:
+  - `curl http://127.0.0.1/health -H 'Host: viltroxtest.com'`
+  - result: `HTTP/1.1 200 OK`
+- Nginx no longer exposes package version on origin loopback:
+  - before: `Server: nginx/1.24.0 (Ubuntu)`
+  - after: `Server: nginx`
+
+Current UFW shape after change:
+
+- `22/tcp` allowed from anywhere.
+- `80/tcp` and `443/tcp` allowed only from Cloudflare ranges.
+- Default incoming policy remains `deny`.
+
+Operational note:
+
+- If Cloudflare proxying is disabled or the DNS record is switched to DNS-only, the site will stop responding publicly until broad 80/443 access is restored or a new origin access path is configured.
