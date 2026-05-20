@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useState } from 'react';
 import { AlertsPanel } from '../charts/AlertsPanel';
 import { ContentPerformance } from '../charts/ContentPerformance';
 import { DonutChart } from '../charts/DonutChart';
@@ -12,6 +13,7 @@ import { ExportWidget } from '../shared/ExportWidget';
 import { Icon } from '../shared/Icon';
 import { MetricCard } from '../shared/MetricCard';
 import { ProjectTable } from '../tables/ProjectTable';
+import { listBrandSignals } from '../../../services/vkpi.ui-api';
 import type {
   VkpiDashboardData,
   VkpiAlertItem,
@@ -43,10 +45,102 @@ interface CommandCenterProps {
   onOpenAlert?: (alertId: string) => void | Promise<void>;
   onDownloadReportPDF?: () => void;
   onExportPDF?: () => void;
+  apiToken?: string;
 }
 
 function isEvidenceMetric(key: string): key is VkpiMetricEvidenceKey {
   return ['gmv', 'cost', 'roi', 'new_kol', 'published_content', 'valid_clicks', 'net_contribution', 'views', 'active_projects', 'alerts'].includes(key);
+}
+
+function text(value: unknown, fallback = ''): string {
+  const next = String(value ?? '').trim();
+  return next || fallback;
+}
+
+function signalTypeLabel(value: unknown): string {
+  const key = text(value).toLowerCase();
+  if (key === 'mention_viltrox') return 'Viltrox 提及';
+  if (key === 'show_product') return '产品 / SKU';
+  if (key === 'comment_mention') return '评论提及';
+  if (key === 'mention_competitor') return '竞品提及';
+  return key || '品牌信号';
+}
+
+function BrandSignalSummary({ apiToken }: { apiToken?: string }) {
+  const [signals, setSignals] = useState<Array<Record<string, unknown>>>([]);
+  const [schemaReady, setSchemaReady] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!apiToken) return undefined;
+    const load = async () => {
+      setLoading(true);
+      setError('');
+      try {
+        const response = await listBrandSignals(apiToken, { status: 'new', limit: 6 });
+        if (!cancelled) {
+          setSignals(response.signals || []);
+          setSchemaReady(response.schema_ready !== false);
+        }
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : '品牌信号读取失败');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [apiToken]);
+
+  const competitorCount = useMemo(() => signals.filter((item) => text(item.brand_role).toLowerCase() === 'competitor').length, [signals]);
+  const selfCount = signals.length - competitorCount;
+
+  if (!apiToken) return null;
+
+  return (
+    <section className="vkpi-card vkpi-panel-card vkpi-brand-signal-panel">
+      <div className="vkpi-card__header">
+        <div>
+          <h2>品牌信号</h2>
+          <span>{loading ? '读取中' : schemaReady ? `${signals.length} 条未处理` : '未建表'}</span>
+        </div>
+        <a className="vkpi-link-button" href="#dataQuality">查看详情</a>
+      </div>
+      {error ? (
+        <div className="vkpi-empty-state">{error}</div>
+      ) : !schemaReady ? (
+        <div className="vkpi-empty-state">品牌信号表还没有创建；先运行扫描或迁移。</div>
+      ) : signals.length ? (
+        <>
+          <div className="vkpi-brand-signal-panel__summary">
+            <span className="is-self">机会 {selfCount}</span>
+            <span className={competitorCount ? 'is-risk' : ''}>竞品 {competitorCount}</span>
+          </div>
+          <div className="vkpi-alert-list">
+            {signals.slice(0, 3).map((signal) => {
+              const isCompetitor = text(signal.brand_role).toLowerCase() === 'competitor';
+              return (
+                <article className={`vkpi-alert ${isCompetitor ? 'is-danger' : 'is-info'}`} key={String(signal.id || signal.signal_uid)}>
+                  <i />
+                  <span>
+                    {text(signal.brand_name, 'brand')}
+                    <small>{signalTypeLabel(signal.signal_type)} · {text(signal.platform, '-')}</small>
+                  </span>
+                  <div className="vkpi-alert-actions"><strong>{text(signal.signal_strength, '-')}</strong></div>
+                </article>
+              );
+            })}
+          </div>
+        </>
+      ) : (
+        <div className="vkpi-empty-state">当前没有未处理 Viltrox / 竞品信号。</div>
+      )}
+    </section>
+  );
 }
 
 export function CommandCenter({
@@ -70,6 +164,7 @@ export function CommandCenter({
   onOpenAlert,
   onDownloadReportPDF,
   onExportPDF,
+  apiToken,
 }: CommandCenterProps) {
   const handleOpenStaffFromLeaderboard = viewMode === 'manager'
     ? (item: VkpiLeaderboardItem) => {
@@ -168,6 +263,7 @@ export function CommandCenter({
       </section>
 
       <aside className="vkpi-right-rail" aria-label="提醒和详情">
+        <BrandSignalSummary apiToken={viewMode === 'manager' ? apiToken : undefined} />
         <AlertsPanel alerts={alerts || data.alerts} onResolveAlert={onResolveAlert} onOpenAlert={onOpenAlert} />
         <WeeklySummary summary={data.weeklySummary} />
         <ExportWidget report={data.exportReport} onDownloadPDF={onDownloadReportPDF || onExportPDF} />

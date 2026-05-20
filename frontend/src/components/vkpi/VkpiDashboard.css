@@ -1620,6 +1620,35 @@
 .vkpi-alert.is-neutral i { background: #fffaeb; border-color: #fdb022; }
 .vkpi-alert.is-info i { background: #eef4ff; border-color: #528bff; }
 
+.vkpi-brand-signal-panel__summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 0 10px;
+}
+
+.vkpi-brand-signal-panel__summary span {
+  border: 1px solid var(--vkpi-border);
+  border-radius: 12px;
+  background: #f8fafc;
+  color: var(--vkpi-muted);
+  font-size: 12px;
+  font-weight: 900;
+  padding: 9px 10px;
+}
+
+.vkpi-brand-signal-panel__summary .is-self {
+  background: #ecfdf3;
+  border-color: #abefc6;
+  color: #067647;
+}
+
+.vkpi-brand-signal-panel__summary .is-risk {
+  background: #fff8f7;
+  border-color: #fecdca;
+  color: #b42318;
+}
+
 .vkpi-ai-badge {
   color: var(--vkpi-blue);
   background: #edf3ff;

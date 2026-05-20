@@ -518,6 +518,7 @@ export function VkpiDashboard({
 	              onOpenAlert={apiToken ? handleOpenAlert : undefined}
 	              onDownloadReportPDF={onDownloadReportPDF}
 	              onExportPDF={onExportPDF}
+	              apiToken={apiToken}
 	            />
 	          ) : (
             <WorkspacePage
