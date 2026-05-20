@@ -160,6 +160,11 @@ def build_items(sync: dict[str, Any], r2: dict[str, Any], snapshot: dict[str, An
         and exists("scripts/ops/backfill_vkpi_competitor_relations_after_sync.sh")
         and contains("backend/app/services/vkpi/kol_competitor_detector.py", "vkpi_competitor_relation", "prefer_persisted")
     )
+    competitor_recommendation_ready = (
+        contains("backend/app/services/vkpi/product_analysis.py", "COMPETITOR_SCORE_ADJUSTMENTS", "filtered_avoid")
+        and contains("frontend/src/components/vkpi/pages/DiscoverPage.tsx", "competitorRiskTier", "vkpi-discover-rec__risk")
+        and exists("tests/test_vkpi_product_analysis_competitor.py")
+    )
     brand_signal_ready = (
         exists("backend/app/services/vkpi/brand_signal_detector.py")
         and exists("scripts/ops/scan_vkpi_brand_signals_after_sync.sh")
@@ -238,12 +243,17 @@ def build_items(sync: dict[str, Any], r2: dict[str, Any], snapshot: dict[str, An
                 "remote backfill guard exists" if exists("scripts/ops/backfill_vkpi_competitor_relations_after_sync.sh") else "backfill guard missing",
                 "API can prefer persisted relation" if contains("backend/app/services/vkpi/kol_competitor_detector.py", "prefer_persisted") else "persisted relation read missing",
                 "Discover competitor block exists" if contains("frontend/src/components/vkpi/pages/DiscoverPage.tsx", "竞品关系") else "Discover competitor block missing",
+                "recommendation filter exists" if competitor_recommendation_ready else "recommendation filter missing",
                 f"persisted_relations={competitor_total}",
                 f"kol_count={competitor_summary.get('kol_count', '-')}",
                 f"avoid={competitor_summary.get('avoid_count', '-')}",
                 f"caution={competitor_summary.get('caution_count', '-')}",
             ],
-            "已写入 1012 历史池竞品关系；下一步接前端推荐过滤和详情页复测。" if competitor_total > 0 else "等 A2 完成并部署后，运行远端 backfill guard 写入 1012 历史池竞品关系快照。",
+            (
+                "推荐过滤已接入；下一步复测详情页竞品区和推荐列表 risk pill。"
+                if competitor_recommendation_ready
+                else "已写入 1012 历史池竞品关系；下一步接前端推荐过滤和详情页复测。"
+            ) if competitor_total > 0 else "等 A2 完成并部署后，运行远端 backfill guard 写入 1012 历史池竞品关系快照。",
         ),
         status_item(
             "brand_signal_c",
