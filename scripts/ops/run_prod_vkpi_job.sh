@@ -11,6 +11,8 @@ JOB_ARG="${1:-}"
 PAYLOAD_ARG="${2:-}"
 JOB_NAME="${JOB_NAME:-${JOB_ARG}}"
 PAYLOAD_JSON="${PAYLOAD_JSON:-${PAYLOAD_ARG}}"
+SYNC_SERVICE="${SYNC_SERVICE:-vkpi-sync-daily.service}"
+ALLOW_DURING_SYNC="${ALLOW_DURING_SYNC:-0}"
 if [ -z "${PAYLOAD_JSON}" ]; then
   PAYLOAD_JSON="{}"
 fi
@@ -23,6 +25,12 @@ if [ -z "${JOB_NAME}" ]; then
 fi
 
 python3 -m json.tool >/dev/null <<<"${PAYLOAD_JSON}"
+
+sync_state="$(ssh "${SSH_TARGET}" "systemctl is-active '${SYNC_SERVICE}' 2>/dev/null || true")"
+if [ "${ALLOW_DURING_SYNC}" != "1" ] && { [ "${sync_state}" = "active" ] || [ "${sync_state}" = "activating" ]; }; then
+  echo "Refusing production job while ${SYNC_SERVICE} is ${sync_state}. Set ALLOW_DURING_SYNC=1 only for an intentional ops override." >&2
+  exit 1
+fi
 
 if [ "${REQUIRE_BACKUP:-1}" = "1" ]; then
   STAMP="${STAMP}" "${SCRIPT_DIR}/backup_prod_vkpi.sh"

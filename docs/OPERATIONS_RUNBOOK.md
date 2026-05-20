@@ -231,6 +231,14 @@ Use the guarded deploy script:
 scripts/ops/deploy_local_to_cloud.sh
 ```
 
+The deploy script refuses to run while `vkpi-sync-daily.service` is `active` or
+`activating`, because it would rebuild, back up, rsync, and restart the app
+during a data write. Override only for a deliberate incident run:
+
+```bash
+ALLOW_DURING_SYNC=1 scripts/ops/deploy_local_to_cloud.sh
+```
+
 The script:
 - Refuses dirty worktrees unless `ALLOW_DIRTY_DEPLOY=1`.
 - Builds frontend unless `SKIP_BUILD=1`.

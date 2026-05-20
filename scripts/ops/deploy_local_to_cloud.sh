@@ -9,6 +9,14 @@ SSH_TARGET="${SSH_TARGET:-viltrox}"
 REMOTE_ROOT="${REMOTE_ROOT:-/opt/viltrox-2.0}"
 SERVICE_NAME="${SERVICE_NAME:-viltrox-2.0-test.service}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8001/health}"
+SYNC_SERVICE="${SYNC_SERVICE:-vkpi-sync-daily.service}"
+ALLOW_DURING_SYNC="${ALLOW_DURING_SYNC:-0}"
+
+sync_state="$(ssh "${SSH_TARGET}" "systemctl is-active '${SYNC_SERVICE}' 2>/dev/null || true")"
+if [ "${ALLOW_DURING_SYNC}" != "1" ] && { [ "${sync_state}" = "active" ] || [ "${sync_state}" = "activating" ]; }; then
+  echo "Refusing deploy while ${SYNC_SERVICE} is ${sync_state}. Set ALLOW_DURING_SYNC=1 only for an intentional ops override." >&2
+  exit 1
+fi
 
 if [ -n "$(git status --short)" ] && [ "${ALLOW_DIRTY_DEPLOY:-0}" != "1" ]; then
   echo "Refusing deploy from dirty worktree. Set ALLOW_DIRTY_DEPLOY=1 only for an intentional package deploy." >&2
