@@ -129,6 +129,65 @@ def _pool_raw(row: dict[str, Any]) -> dict[str, Any]:
     return _json_loads(row.get("raw_platform_data"), {}) or {}
 
 
+def _first_text(*values: Any) -> str:
+    for value in values:
+        text = _text(value)
+        if text:
+            return text
+    return ""
+
+
+def _raw_post_items(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    posts: list[dict[str, Any]] = []
+    for key in ("posts", "videos", "items", "latest_posts", "latestPosts"):
+        value = raw.get(key)
+        if isinstance(value, dict):
+            value = value.get("items") or []
+        if isinstance(value, list):
+            posts.extend(item for item in value if isinstance(item, dict))
+    profile = raw.get("profile")
+    if isinstance(profile, dict):
+        for key in ("posts", "videos", "items", "latest_posts", "latestPosts"):
+            value = profile.get(key)
+            if isinstance(value, dict):
+                value = value.get("items") or []
+            if isinstance(value, list):
+                posts.extend(item for item in value if isinstance(item, dict))
+        nested_raw = profile.get("raw")
+        if isinstance(nested_raw, dict):
+            posts.extend(_raw_post_items(nested_raw))
+    return posts
+
+
+def _recent_post_summary(raw: dict[str, Any], *, limit: int = 6) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, post in enumerate(_raw_post_items(raw)):
+        url = _first_text(post.get("post_url"), post.get("url"), post.get("webVideoUrl"), post.get("permalink"), post.get("content_url"))
+        title = _first_text(post.get("title"), post.get("caption"), post.get("text"), url)
+        post_uid = _first_text(post.get("id"), post.get("post_uid"), post.get("shortCode"), post.get("shortcode"), url, title)
+        key = post_uid or url or title
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        rows.append(
+            {
+                "id": post_uid or f"history-post-{index}",
+                "title": title[:280],
+                "post_url": url,
+                "url": url,
+                "published_at": _first_text(post.get("published_at"), post.get("publishedAt"), post.get("timestamp"), post.get("createTimeISO"), post.get("date")),
+                "views": _int(_first_text(post.get("views"), post.get("view_count"), post.get("play_count"), post.get("playCount"))),
+                "likes": _int(_first_text(post.get("likes"), post.get("like_count"), post.get("diggCount"))),
+                "comments": _int(_first_text(post.get("comments"), post.get("comment_count"), post.get("commentCount"))),
+                "source_kind": "history_pool_sample",
+            }
+        )
+        if len(rows) >= limit:
+            break
+    return rows
+
+
 def _cooperation_summary(conn, pool_id: int, raw: dict[str, Any]) -> dict[str, Any]:
     evidence = raw.get("evidence_summary") if isinstance(raw.get("evidence_summary"), dict) else {}
     cooperation_count = _int(evidence.get("cooperation_rows"))
@@ -189,6 +248,7 @@ def _history_payload(conn, row: dict[str, Any], *, match_type: str, confidence: 
         "source_type": _text(row.get("source_type")),
         "source_ref": _text(row.get("source_ref")),
         "sync_status": _text(row.get("sync_status")),
+        "recent_posts": _recent_post_summary(raw),
         **summary,
     }
 
@@ -296,6 +356,8 @@ def annotate_platform_items(items: list[dict[str, Any]], *, platform: str = "") 
                 row["avatar_url"] = match.get("avatar_url")
             if not _int(row.get("follower_count")) and match.get("followers"):
                 row["follower_count"] = match.get("followers")
+            if match.get("recent_posts") and not row.get("latest_posts"):
+                row["latest_posts"] = match.get("recent_posts")
         annotated.append(row)
     return annotated
 
@@ -384,6 +446,8 @@ def search_pool_for_natural(query: str, parsed: dict[str, Any], *, limit: int = 
                 "history_match_confidence": history.get("match_confidence"),
                 "sync_status": data.get("sync_status"),
                 "source_type": data.get("source_type"),
+                "latest_posts": history.get("recent_posts"),
+                "posts": history.get("recent_posts"),
                 "historical_match": history,
             }
         )
