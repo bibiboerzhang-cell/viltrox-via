@@ -371,6 +371,23 @@
   white-space: nowrap;
 }
 
+.vkpi-channel-content-card--skeleton {
+  pointer-events: none;
+}
+
+.vkpi-channel-content-card--skeleton .vkpi-channel-content-card__media {
+  cursor: default;
+}
+
+.vkpi-channel-content-card--skeleton .vkpi-channel-content-card__body {
+  display: grid;
+  gap: 10px;
+}
+
+.vkpi-channel-content-card--skeleton .vkpi-channel-content-card__footer > .vkpi-skeleton-line {
+  width: 30%;
+}
+
 .vkpi-media-lightbox {
   position: fixed;
   inset: 0;

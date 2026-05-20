@@ -61,6 +61,33 @@ function fallbackInitial(account: OfficialChannelAccount) {
   return (account.displayName || account.handle || account.platformLabel || 'V').slice(0, 1).toUpperCase();
 }
 
+function ChannelContentSkeletons() {
+  return (
+    <div className="vkpi-channel-content-list" aria-hidden="true">
+      {[0, 1, 2, 3].map((item) => (
+        <article className="vkpi-channel-content-card vkpi-channel-content-card--skeleton" key={item}>
+          <div className="vkpi-channel-content-card__media">
+            <span className="vkpi-skeleton vkpi-skeleton-pill" />
+          </div>
+          <div className="vkpi-channel-content-card__body">
+            <span className="vkpi-skeleton vkpi-skeleton-line is-long" />
+            <span className="vkpi-skeleton vkpi-skeleton-line is-medium" />
+            <div className="vkpi-channel-content-card__metrics">
+              <span className="vkpi-skeleton vkpi-skeleton-pill" />
+              <span className="vkpi-skeleton vkpi-skeleton-pill" />
+              <span className="vkpi-skeleton vkpi-skeleton-pill" />
+            </div>
+          </div>
+          <footer className="vkpi-channel-content-card__footer">
+            <span className="vkpi-skeleton vkpi-skeleton-line is-short" />
+            <span className="vkpi-skeleton vkpi-skeleton-line is-short" />
+          </footer>
+        </article>
+      ))}
+    </div>
+  );
+}
+
 type Row = Record<string, unknown>;
 
 function text(value: unknown, fallback = '') {
@@ -611,8 +638,10 @@ export function ChannelContentList({ account, apiToken }: { account?: OfficialCh
             );
           })}
         </div>
+      ) : loading ? (
+        <ChannelContentSkeletons />
       ) : (
-        <div className="vkpi-empty-state">{loading ? '内容加载中。' : '当前账号暂无内容级明细。'}</div>
+        <div className="vkpi-empty-state">当前账号暂无内容级明细。</div>
       )}
       {previewPost ? <MediaLightbox post={previewPost} account={account} apiToken={apiToken} onClose={() => setPreviewPost(null)} /> : null}
       {commentPost ? (

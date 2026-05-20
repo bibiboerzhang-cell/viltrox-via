@@ -40,6 +40,32 @@ function deltaTone(delta = 0) {
   return '';
 }
 
+function PlatformSkeletons() {
+  return (
+    <>
+      {['fb', 'ig', 'rd', 'tt', 'x', 'yt'].map((item) => (
+        <div className="vkpi-channel-platform-card vkpi-channel-platform-card--skeleton" key={item} aria-hidden="true">
+          <span className="vkpi-skeleton vkpi-skeleton-avatar" />
+          <div className="vkpi-channel-platform-card__body">
+            <span className="vkpi-skeleton vkpi-skeleton-line is-medium" />
+            <span className="vkpi-skeleton vkpi-skeleton-line is-long" />
+            <div className="vkpi-channel-avatar-stack">
+              <span className="vkpi-skeleton vkpi-skeleton-avatar is-round" />
+              <span className="vkpi-skeleton vkpi-skeleton-avatar is-round" />
+              <span className="vkpi-skeleton vkpi-skeleton-avatar is-round" />
+            </div>
+          </div>
+          <div className="vkpi-channel-platform-card__metrics">
+            <span className="vkpi-skeleton vkpi-skeleton-line is-short" />
+            <span className="vkpi-skeleton vkpi-skeleton-line is-medium" />
+            <span className="vkpi-skeleton vkpi-skeleton-line is-medium" />
+          </div>
+        </div>
+      ))}
+    </>
+  );
+}
+
 export function ChannelPlatformMatrix({
   platforms,
   selectedPlatform,
@@ -110,7 +136,7 @@ export function ChannelPlatformMatrix({
       </div>
       {error ? <div className="vkpi-inline-message">{error}</div> : null}
       <div className="vkpi-channel-platforms">
-        {loading && !platforms.length ? <div className="vkpi-empty-state">平台数据加载中。</div> : null}
+        {loading && !platforms.length ? <PlatformSkeletons /> : null}
         {platforms.map((platform) => {
           const active = selectedPlatform === platform.platform;
           const avatars = platform.accounts.map((account) => proxiedImageUrl(account.avatarUrl)).filter(Boolean).slice(0, 4);

@@ -401,6 +401,31 @@
   color: #dc2626;
 }
 
+.vkpi-channel-platform-card--skeleton {
+  cursor: default;
+  pointer-events: none;
+}
+
+.vkpi-channel-platform-card--skeleton .vkpi-channel-platform-card__body,
+.vkpi-channel-platform-card--skeleton .vkpi-channel-platform-card__metrics {
+  display: grid;
+  gap: 8px;
+}
+
+.vkpi-channel-platform-card--skeleton .vkpi-channel-avatar-stack {
+  gap: 0;
+}
+
+.vkpi-channel-platform-card--skeleton .vkpi-skeleton-avatar.is-round {
+  width: 28px;
+  height: 28px;
+  border: 2px solid #fff;
+}
+
+.vkpi-channel-platform-card--skeleton .vkpi-skeleton-avatar.is-round + .vkpi-skeleton-avatar.is-round {
+  margin-left: -8px;
+}
+
 .vkpi-channel-kol-matrix {
   border: 1px solid var(--vkpi-border);
   border-radius: 18px;

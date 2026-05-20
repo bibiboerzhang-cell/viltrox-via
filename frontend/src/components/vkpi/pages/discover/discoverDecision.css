@@ -553,6 +553,28 @@
   transform: translateY(-1px);
 }
 
+.vkpi-discover-kol--skeleton,
+.vkpi-discover-rec--skeleton {
+  cursor: default;
+  pointer-events: none;
+}
+
+.vkpi-discover-kol--skeleton .vkpi-discover-kol__main,
+.vkpi-discover-rec--skeleton > div {
+  display: grid;
+  gap: 8px;
+}
+
+.vkpi-discover-kol--skeleton .vkpi-discover-kol__main div {
+  margin-top: 0;
+}
+
+.vkpi-discover-kol--skeleton .vkpi-discover-kol__score {
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+}
+
 .vkpi-discover-kol__main {
   min-width: 0;
 }
@@ -765,6 +787,15 @@
 .vkpi-discover-card {
   display: grid;
   gap: 10px;
+}
+
+.vkpi-discover-profile-loading {
+  pointer-events: none;
+}
+
+.vkpi-discover-profile-loading .vkpi-discover-mini-grid .vkpi-skeleton-line {
+  height: 34px;
+  border-radius: 12px;
 }
 
 .vkpi-discover-card.is-decision {

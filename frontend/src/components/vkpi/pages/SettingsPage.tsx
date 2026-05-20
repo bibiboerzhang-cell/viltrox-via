@@ -67,6 +67,23 @@ interface BackendBuildInfo {
   client_build_source?: string;
 }
 
+function SettingsApiSkeletonGrid() {
+  return (
+    <div className="vkpi-settings-api-grid" aria-hidden="true">
+      {['apify', 'openai', 'anthropic', 'google', 'resend', 'storage'].map((item) => (
+        <article className="vkpi-settings-api-card vkpi-settings-api-card--skeleton" key={item}>
+          <header>
+            <span className="vkpi-skeleton vkpi-skeleton-line is-medium" />
+            <span className="vkpi-skeleton vkpi-skeleton-pill" />
+          </header>
+          <span className="vkpi-skeleton vkpi-skeleton-line is-long" />
+          <span className="vkpi-skeleton vkpi-skeleton-line is-short" />
+        </article>
+      ))}
+    </div>
+  );
+}
+
 export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsertProductCost, onRefreshData }: SettingsPageProps) {
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
@@ -93,6 +110,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
   const [commentAlertSettings, setCommentAlertSettings] = useState<Record<string, unknown>>({});
   const [controlStatus, setControlStatus] = useState<Record<string, unknown>>({});
   const [settingsError, setSettingsError] = useState('');
+  const [settingsLoading, setSettingsLoading] = useState(false);
   const [expandedSection, setExpandedSection] = useState<'status' | 'sku' | 'staff' | 'funds' | 'rules' | null>('status');
   const [rulesTab, setRulesTab] = useState<'core' | 'platform' | 'alerts' | 'sync'>('platform');
   const [productSearch, setProductSearch] = useState('');
@@ -144,6 +162,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
     if (!isManager || !apiToken) return;
     let cancelled = false;
     const load = async () => {
+      setSettingsLoading(true);
       setProviderError('');
       setSettingsError('');
       try {
@@ -175,6 +194,8 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
         }
       } catch (error) {
         if (!cancelled) setSettingsError(error instanceof Error ? error.message : '系统设置读取失败');
+      } finally {
+        if (!cancelled) setSettingsLoading(false);
       }
     };
     void load();
@@ -675,24 +696,28 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
                 <InfoBlock label="检查时间" value={timeLabel(versionCheckedAt)} />
               </div>
             </section>
-            <div className="vkpi-settings-api-grid">
-              {providers.map((row) => {
-                const configured = boolValue(row.configured, false);
-                const ok = boolValue(row.ok, false);
-                const keyMask = String(row.key_mask || '').trim();
-                const status = String(row.latest_status || row.status || (ok ? 'healthy' : 'not_configured'));
-                return (
-                  <article className={`vkpi-settings-api-card ${configured ? 'is-configured' : 'is-empty'}`} key={String(row.provider || row.label)}>
-                    <header>
-                      <strong>{String(row.label || row.provider || '-')}</strong>
-                      <span>{configured ? '已配置' : '未配置'}</span>
-                    </header>
-                    <p>{keyMask || '未读取到 key'}</p>
-                    <em>{status}</em>
-                  </article>
-                );
-              })}
-            </div>
+            {settingsLoading && !providers.length ? (
+              <SettingsApiSkeletonGrid />
+            ) : (
+              <div className="vkpi-settings-api-grid">
+                {providers.map((row) => {
+                  const configured = boolValue(row.configured, false);
+                  const ok = boolValue(row.ok, false);
+                  const keyMask = String(row.key_mask || '').trim();
+                  const status = String(row.latest_status || row.status || (ok ? 'healthy' : 'not_configured'));
+                  return (
+                    <article className={`vkpi-settings-api-card ${configured ? 'is-configured' : 'is-empty'}`} key={String(row.provider || row.label)}>
+                      <header>
+                        <strong>{String(row.label || row.provider || '-')}</strong>
+                        <span>{configured ? '已配置' : '未配置'}</span>
+                      </header>
+                      <p>{keyMask || '未读取到 key'}</p>
+                      <em>{status}</em>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
           </>
         ))}
         {renderSettingsModule('sku', `${skuCount} 个 SKU · 镜头 ${lensCount} · 闪光灯 ${lightingCount} · 转接环 ${adapterCount}`, (

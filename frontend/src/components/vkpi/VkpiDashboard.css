@@ -1403,6 +1403,60 @@
   padding: 12px;
 }
 
+.vkpi-skeleton {
+  position: relative;
+  overflow: hidden;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #eef2f7 0%, #f8fafc 42%, #e8edf5 72%);
+  color: transparent;
+}
+
+.vkpi-skeleton::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.72), transparent);
+  content: "";
+  transform: translateX(-100%);
+  animation: vkpi-skeleton-shimmer 1.35s ease-in-out infinite;
+}
+
+.vkpi-skeleton-line {
+  display: block;
+  width: 100%;
+  height: 12px;
+}
+
+.vkpi-skeleton-line.is-short { width: 44%; }
+.vkpi-skeleton-line.is-medium { width: 68%; }
+.vkpi-skeleton-line.is-long { width: 88%; }
+
+.vkpi-skeleton-avatar {
+  display: block;
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+}
+
+.vkpi-skeleton-avatar.is-round {
+  border-radius: 50%;
+}
+
+.vkpi-skeleton-pill {
+  display: inline-block;
+  width: 58px;
+  height: 24px;
+}
+
+@keyframes vkpi-skeleton-shimmer {
+  100% { transform: translateX(100%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vkpi-skeleton::after {
+    animation: none;
+  }
+}
+
 .vkpi-alert-list {
   display: flex;
   flex-direction: column;
@@ -2276,6 +2330,9 @@
 .vkpi-settings-api-card.is-configured header span { background: #ecfdf3; color: #067647; }
 .vkpi-settings-api-card p { margin: 0; color: #344054; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vkpi-settings-api-card em { color: var(--vkpi-muted); font-size: 11px; font-weight: 800; font-style: normal; }
+.vkpi-settings-api-card--skeleton { pointer-events: none; }
+.vkpi-settings-api-card--skeleton header span:first-child { flex: 1 1 auto; }
+.vkpi-settings-api-card--skeleton header span:last-child { flex: 0 0 58px; padding: 0; }
 .vkpi-table tr.is-clickable-row { cursor: pointer; }
 .vkpi-table tr.is-clickable-row:hover td { background: #f8fbff; }
 .vkpi-staff-permission-drawer { position: fixed; inset: 0 0 0 auto; z-index: 80; width: min(720px, calc(100vw - 24px)); height: 100vh; overflow-y: auto; background: rgba(255,255,255,.98); border-left: 1px solid var(--vkpi-border); box-shadow: -24px 0 70px rgba(16,24,40,.14); padding: 22px; display: grid; align-content: start; gap: 16px; }

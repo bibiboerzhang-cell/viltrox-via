@@ -1638,6 +1638,53 @@ function SearchProgress({ progress }: { progress: SearchProgressState }) {
   );
 }
 
+function DiscoverCandidateSkeletons({ count = 5 }: { count?: number }) {
+  return (
+    <>
+      {Array.from({ length: count }).map((_, index) => (
+        <div className="vkpi-discover-kol vkpi-discover-kol--skeleton" key={index} aria-hidden="true">
+          <span className="vkpi-skeleton vkpi-skeleton-avatar is-round" />
+          <div className="vkpi-discover-kol__main">
+            <span className="vkpi-skeleton vkpi-skeleton-line is-medium" />
+            <span className="vkpi-skeleton vkpi-skeleton-line is-long" />
+            <div>
+              <span className="vkpi-skeleton vkpi-skeleton-pill" />
+              <span className="vkpi-skeleton vkpi-skeleton-pill" />
+              <span className="vkpi-skeleton vkpi-skeleton-pill" />
+            </div>
+          </div>
+          <div className="vkpi-discover-kol__score">
+            <span className="vkpi-skeleton vkpi-skeleton-line is-short" />
+            <span className="vkpi-skeleton vkpi-skeleton-pill" />
+          </div>
+        </div>
+      ))}
+    </>
+  );
+}
+
+function DiscoverRecommendationSkeletons() {
+  return (
+    <>
+      {[0, 1, 2].map((item) => (
+        <div className="vkpi-discover-rec vkpi-discover-rec--skeleton" key={item} aria-hidden="true">
+          <div>
+            <span className="vkpi-skeleton vkpi-skeleton-line is-medium" />
+            <span className="vkpi-skeleton vkpi-skeleton-line is-long" />
+            <span className="vkpi-skeleton vkpi-skeleton-line is-long" />
+            <div className="vkpi-discover-rec__actions">
+              <span className="vkpi-skeleton vkpi-skeleton-pill" />
+              <span className="vkpi-skeleton vkpi-skeleton-pill" />
+              <span className="vkpi-skeleton vkpi-skeleton-pill" />
+            </div>
+          </div>
+          <span className="vkpi-skeleton vkpi-skeleton-line is-short" />
+        </div>
+      ))}
+    </>
+  );
+}
+
 function SearchPanel({
   localQuery,
   setLocalQuery,
@@ -1728,7 +1775,9 @@ function SearchPanel({
       <div className="vkpi-discover-list">
         {visibleKols.length ? visibleKols.map((kol) => (
           <KolCard key={kol.id} kol={kol} active={selectedKolId === kol.id} onClick={() => onSelect(kol.id)} />
-        )) : <div className="vkpi-discover-empty">{runningSearch ? '正在从平台推荐候选；返回后会逐条出现在这里。' : '当前筛选下没有红人。请用顶部搜索从真实接口加载，或切到候选池。'}</div>}
+        )) : runningSearch ? (
+          <DiscoverCandidateSkeletons />
+        ) : <div className="vkpi-discover-empty">当前筛选下没有红人。请用顶部搜索从真实接口加载，或切到候选池。</div>}
       </div>
     </section>
   );
@@ -1797,7 +1846,9 @@ function RecommendationPanel({
             </div>
             <b>{recommendation.score || '-'}</b>
           </div>
-        );}) : <div className="vkpi-discover-empty">推荐表暂无真实记录。本地候选可推荐 {localFallbackCount} 个，但这里不再用前端排序冒充智能推荐。</div>}
+        );}) : loading ? (
+          <DiscoverRecommendationSkeletons />
+        ) : <div className="vkpi-discover-empty">推荐表暂无真实记录。本地候选可推荐 {localFallbackCount} 个，但这里不再用前端排序冒充智能推荐。</div>}
       </div>
     </section>
   );
@@ -1927,6 +1978,20 @@ function ProfilePanel({
           <b>真实抓取运行中</b>
           <span>后端接口同步返回前不伪造 6 步进度。完成后会刷新 profile / posts。</span>
           <div className="vkpi-discover-progress"><i /></div>
+        </section>
+      ) : null}
+
+      {profileLoading ? (
+        <section className="vkpi-discover-card vkpi-discover-profile-loading" aria-live="polite">
+          <div className="vkpi-discover-card__title"><b>正在读取画像</b><span>资料 / 近期内容 / 历史合作</span></div>
+          <span className="vkpi-skeleton vkpi-skeleton-line is-long" />
+          <span className="vkpi-skeleton vkpi-skeleton-line is-medium" />
+          <div className="vkpi-discover-mini-grid">
+            <span className="vkpi-skeleton vkpi-skeleton-line" />
+            <span className="vkpi-skeleton vkpi-skeleton-line" />
+            <span className="vkpi-skeleton vkpi-skeleton-line" />
+            <span className="vkpi-skeleton vkpi-skeleton-line" />
+          </div>
         </section>
       ) : null}
 
