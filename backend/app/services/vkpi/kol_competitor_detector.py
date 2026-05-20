@@ -12,9 +12,12 @@ from pathlib import Path
 from typing import Any
 
 from app.db.connection import get_conn, is_postgres_runtime
+from app.services.cache import cache_clear, cache_get, cache_set
 
 
 CONFIG_PATH = Path(__file__).with_name("competitor_brands.json")
+COMPETITOR_DASHBOARD_CACHE_TTL_SEC = 300
+CACHE_PREFIX_COMPETITOR_DASHBOARD = "vkpi:competitors:dashboard:"
 DEFAULT_BRANDS: dict[str, dict[str, Any]] = {
     "sigma": {"keywords": ["sigma", "sigmaphoto", "@sigmaphoto"], "priority": "tier1"},
     "tamron": {"keywords": ["tamron", "@tamronusa", "tamronlens"], "priority": "tier1"},
@@ -544,6 +547,8 @@ def persist_competitor_relations(relations: list[dict[str, Any]]) -> int:
         )
         committed += 1
     conn.commit()
+    if committed:
+        cache_clear(CACHE_PREFIX_COMPETITOR_DASHBOARD)
     return committed
 
 
@@ -616,10 +621,17 @@ def evaluate_kol_competitors(kol_pool_id: int, *, write_db: bool = False, prefer
 
 
 def persisted_competitor_dashboard(*, brand: str = "", limit: int = 1200) -> dict[str, Any]:
-    if not _relation_table_exists():
-        return {"persisted": False, "relations_evaluated": 0}
     safe_limit = max(1, min(1200, int(limit or 1200)))
     target_brand = brand.strip().lower()
+    cache_key = f"{CACHE_PREFIX_COMPETITOR_DASHBOARD}{target_brand or 'all'}:limit:{safe_limit}"
+    cached = cache_get(cache_key)
+    if isinstance(cached, dict):
+        return {
+            **cached,
+            "cache": {"hit": True, "ttl_sec": COMPETITOR_DASHBOARD_CACHE_TTL_SEC},
+        }
+    if not _relation_table_exists():
+        return {"persisted": False, "relations_evaluated": 0}
     rows = get_conn().execute(
         """
         SELECT *
@@ -642,7 +654,7 @@ def persisted_competitor_dashboard(*, brand: str = "", limit: int = 1200) -> dic
         tier_counts[tier] = tier_counts.get(tier, 0) + 1
         if relation.get("risk_score") and len(samples) < 20:
             samples.append(relation)
-    return {
+    result = {
         "provider_calls": False,
         "write_db": False,
         "persisted": bool(rows),
@@ -653,7 +665,10 @@ def persisted_competitor_dashboard(*, brand: str = "", limit: int = 1200) -> dic
         "tier_counts": tier_counts,
         "brand_counts": brand_counts,
         "samples": samples,
+        "cache": {"hit": False, "ttl_sec": COMPETITOR_DASHBOARD_CACHE_TTL_SEC},
     }
+    cache_set(cache_key, result, ttl=COMPETITOR_DASHBOARD_CACHE_TTL_SEC)
+    return result
 
 
 def batch_evaluate_kol_pool(
