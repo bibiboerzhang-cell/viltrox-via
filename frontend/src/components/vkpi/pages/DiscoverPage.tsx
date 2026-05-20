@@ -294,6 +294,18 @@ function clampScore(value: unknown): number {
   return Math.max(0, Math.min(100, Math.round(parsed)));
 }
 
+function confidenceValue(block: Record<string, unknown>, key: string, fallback = 0): number {
+  const confidence = objectValue(block.confidence);
+  const parsed = safeNumber(confidence[key]);
+  if (parsed) return Math.max(0, Math.min(1, parsed));
+  return Math.max(0, Math.min(1, fallback));
+}
+
+function pendingByConfidence(value: number, confidence: number): boolean {
+  if (confidence >= 0.35) return false;
+  return !value || confidence === 0;
+}
+
 function scoreFromRaw(raw: Record<string, unknown>): number {
   return clampScore(
     raw.account_score ||
@@ -716,21 +728,37 @@ function dimensions11Bars(payload: Dimensions11Payload | null) {
   if (!Object.keys(block1).length && !Object.keys(block2).length && !Object.keys(block3).length && !Object.keys(block4).length) return [];
   const specialty = objectValue(block1.content_specialty);
   const productFit = objectValue(block4.product_fit);
+  const productFitConfidence = objectValue(block4.product_fit_confidence);
   const specialtyScore = Math.max(0, ...Object.values(specialty).map(safeNumber));
-  const productFitScore = Math.max(0, ...Object.values(productFit).map(safeNumber));
+  const productFitScore = Math.max(
+    0,
+    ...Object.entries(productFit)
+      .filter(([sku]) => confidenceValue({ confidence: productFitConfidence }, sku) >= 0.35)
+      .map(([, score]) => safeNumber(score)),
+  );
   const clusters = arrayValue(block4.industry_cluster).filter(Boolean);
+  const postingFrequency = clampScore(block1.posting_frequency_score);
+  const contentDiversity = clampScore(block1.content_diversity_score);
+  const followersTier = clampScore(block2.followers_tier_score);
+  const engagementQuality = clampScore(block2.engagement_quality_score);
+  const growthVelocity = clampScore(block2.growth_velocity_score);
+  const cooperationHistory = clampScore(block3.cooperation_history_score);
+  const contactReachability = clampScore(block3.contact_reachability_score);
+  const competitorRisk = clampScore(block3.competitor_risk_score);
+  const industryConfidence = confidenceValue(block4, 'industry_cluster');
+  const productFitBlockConfidence = confidenceValue(block4, 'product_fit');
   return [
-    { key: 'posting_frequency', label: '发布活跃', source: textValue(block1.source, '11维规则'), value: clampScore(block1.posting_frequency_score), pending: false },
-    { key: 'content_diversity', label: '内容多样', source: textValue(block1.source, '11维规则'), value: clampScore(block1.content_diversity_score), pending: false },
-    { key: 'content_specialty', label: '内容特长', source: Object.keys(specialty).slice(0, 3).join(' / ') || '11维规则', value: clampScore(specialtyScore), pending: false },
-    { key: 'followers_tier', label: '粉丝规模', source: textValue(block2.source, '11维规则'), value: clampScore(block2.followers_tier_score), pending: false },
-    { key: 'engagement_quality', label: '互动质量', source: textValue(block2.source, '11维规则'), value: clampScore(block2.engagement_quality_score), pending: false },
-    { key: 'growth_velocity', label: '增长趋势', source: textValue(block2.source, '11维规则'), value: clampScore(block2.growth_velocity_score), pending: false },
-    { key: 'cooperation_history', label: '合作历史', source: textValue(block3.source, '11维规则'), value: clampScore(block3.cooperation_history_score), pending: false },
-    { key: 'contact_reachability', label: '联系可达', source: textValue(block3.source, '11维规则'), value: clampScore(block3.contact_reachability_score), pending: false },
-    { key: 'competitor_risk', label: '竞品风险', source: textValue(block3.competitor_risk_tier, 'opportunity'), value: clampScore(block3.competitor_risk_score), pending: false },
-    { key: 'industry_cluster', label: '行业归属', source: clusters.join(' / ') || '11维规则', value: clusters.length ? 82 : 0, pending: !clusters.length },
-    { key: 'product_fit', label: '产品适配', source: textValue(block4.source, '11维规则'), value: clampScore(productFitScore), pending: !productFitScore },
+    { key: 'posting_frequency', label: '发布活跃', source: textValue(block1.source, '11维规则'), value: postingFrequency, pending: pendingByConfidence(postingFrequency, confidenceValue(block1, 'posting_frequency_score')) },
+    { key: 'content_diversity', label: '内容多样', source: textValue(block1.source, '11维规则'), value: contentDiversity, pending: pendingByConfidence(contentDiversity, confidenceValue(block1, 'content_diversity_score')) },
+    { key: 'content_specialty', label: '内容特长', source: Object.keys(specialty).slice(0, 3).join(' / ') || '待接内容证据', value: clampScore(specialtyScore), pending: pendingByConfidence(clampScore(specialtyScore), confidenceValue(block1, 'content_specialty')) },
+    { key: 'followers_tier', label: '粉丝规模', source: textValue(block2.source, '11维规则'), value: followersTier, pending: pendingByConfidence(followersTier, confidenceValue(block2, 'followers_tier_score')) },
+    { key: 'engagement_quality', label: '互动质量', source: textValue(block2.source, '11维规则'), value: engagementQuality, pending: pendingByConfidence(engagementQuality, confidenceValue(block2, 'engagement_quality_score')) },
+    { key: 'growth_velocity', label: '增长趋势', source: textValue(block2.source, '11维规则'), value: growthVelocity, pending: pendingByConfidence(growthVelocity, confidenceValue(block2, 'growth_velocity_score')) },
+    { key: 'cooperation_history', label: '合作历史', source: textValue(block3.source, '11维规则'), value: cooperationHistory, pending: pendingByConfidence(cooperationHistory, confidenceValue(block3, 'cooperation_history_score')) },
+    { key: 'contact_reachability', label: '联系可达', source: textValue(block3.source, '11维规则'), value: contactReachability, pending: pendingByConfidence(contactReachability, confidenceValue(block3, 'contact_reachability_score')) },
+    { key: 'competitor_risk', label: '竞品风险', source: textValue(block3.competitor_risk_tier, 'opportunity'), value: competitorRisk, pending: confidenceValue(block3, 'competitor_risk_score') < 0.35 },
+    { key: 'industry_cluster', label: '行业归属', source: clusters.join(' / ') || '待接行业证据', value: clusters.length ? 82 : 0, pending: pendingByConfidence(clusters.length ? 82 : 0, industryConfidence) },
+    { key: 'product_fit', label: '产品适配', source: textValue(block4.source, '11维规则'), value: clampScore(productFitScore), pending: pendingByConfidence(clampScore(productFitScore), productFitBlockConfidence) },
   ];
 }
 
@@ -738,8 +766,10 @@ function productFitsFromDimensions11(payload: Dimensions11Payload | null): Produ
   if (!payload) return [];
   const block4 = objectValue(payload.block4_specialty);
   const productFit = objectValue(block4.product_fit);
+  const productFitConfidence = objectValue(block4.product_fit_confidence);
   const clusters = arrayValue(block4.industry_cluster).map((item) => textValue(item, '')).filter(Boolean);
   return Object.entries(productFit)
+    .filter(([sku]) => confidenceValue({ confidence: productFitConfidence }, sku) >= 0.35)
     .map(([sku, score]) => ({
       product_sku: sku,
       product_name: cleanProductLabel(sku),

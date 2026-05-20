@@ -58,6 +58,21 @@ def _clamp(value: float | int, lo: int = 0, hi: int = 100) -> int:
     return max(lo, min(hi, int(round(value))))
 
 
+def _confidence(value: float | int | None) -> float:
+    try:
+        parsed = float(value if value is not None else 0)
+    except (TypeError, ValueError):
+        parsed = 0.0
+    return round(max(0.0, min(1.0, parsed)), 2)
+
+
+def _mean_confidence(values: list[float | int | None]) -> float:
+    clean = [_confidence(value) for value in values if value is not None]
+    if not clean:
+        return 0.0
+    return _confidence(sum(clean) / len(clean))
+
+
 def _table_exists(table_name: str) -> bool:
     conn = get_conn()
     try:
@@ -156,7 +171,7 @@ def _keyword_counts(text: str, mapping: dict[str, list[str] | tuple[str, ...]]) 
     return counts
 
 
-def _content_specialty(text: str) -> dict[str, int]:
+def _content_specialty(text: str) -> tuple[dict[str, int], int]:
     mapping = {
         "review": ("review", "hands-on", "test", "comparison", " vs ", "评测", "测试", "对比"),
         "tutorial": ("tutorial", "how to", "guide", "tips", "教程", "技巧"),
@@ -167,9 +182,9 @@ def _content_specialty(text: str) -> dict[str, int]:
     }
     counts = _keyword_counts(text, mapping)
     if not counts:
-        return {"review": 34, "photography": 33, "creator": 33}
+        return {}, 0
     total = sum(counts.values()) or 1
-    return {key: _clamp(value / total * 100) for key, value in counts.most_common(3)}
+    return {key: _clamp(value / total * 100) for key, value in counts.most_common(3)}, total
 
 
 def compute_block1_content(kol_pool_id: int) -> dict[str, Any]:
@@ -177,13 +192,32 @@ def compute_block1_content(kol_pool_id: int) -> dict[str, Any]:
     posts = _posts(row)
     text = _text_blob(row, posts)
     content_count = int(row.get("posts_count") or len(posts) or 0)
-    posting_frequency = _clamp(min(100, math.log10(max(content_count, 1)) * 34))
-    specialty = _content_specialty(text)
-    diversity = _clamp(35 + min(55, (len(specialty) - 1) * 18 + len(set(specialty)) * 8))
+    posting_frequency = _clamp(min(100, math.log10(max(content_count, 1)) * 34)) if content_count else 0
+    specialty, specialty_evidence_count = _content_specialty(text)
+    diversity = _clamp(35 + min(55, (len(specialty) - 1) * 18 + len(set(specialty)) * 8)) if specialty else 0
+    posting_confidence = 0.85 if content_count >= 25 else 0.65 if content_count >= 5 else 0.35 if content_count else 0.0
+    specialty_confidence = (
+        0.85
+        if specialty_evidence_count >= 8
+        else 0.65
+        if specialty_evidence_count >= 3
+        else 0.4
+        if specialty_evidence_count
+        else 0.0
+    )
     return {
         "posting_frequency_score": posting_frequency,
         "content_diversity_score": diversity,
         "content_specialty": specialty,
+        "confidence": {
+            "posting_frequency_score": _confidence(posting_confidence),
+            "content_diversity_score": _confidence(specialty_confidence),
+            "content_specialty": _confidence(specialty_confidence),
+        },
+        "evidence": {
+            "posts_count": content_count,
+            "specialty_keyword_hits": specialty_evidence_count,
+        },
         "source": "vkpi_kol_pool.raw_platform_data",
     }
 
@@ -195,13 +229,26 @@ def compute_block2_performance(kol_pool_id: int) -> dict[str, Any]:
     engagement = float(row.get("engagement_rate") or 0)
     followers_tier = _clamp(math.log10(max(followers, 1)) * 16)
     engagement_quality = _clamp((engagement * 100) if engagement <= 1 else engagement)
+    engagement_confidence = 0.75 if engagement_quality else 0.0
     if not engagement_quality and followers and avg_views:
         engagement_quality = _clamp((avg_views / max(followers, 1)) * 100)
+        engagement_confidence = 0.6
     growth_velocity = 50 if row.get("last_seen_at") else 30
     return {
         "followers_tier_score": followers_tier,
         "engagement_quality_score": engagement_quality,
         "growth_velocity_score": growth_velocity,
+        "confidence": {
+            "followers_tier_score": _confidence(0.9 if followers else 0.0),
+            "engagement_quality_score": _confidence(engagement_confidence),
+            "growth_velocity_score": _confidence(0.35 if row.get("last_seen_at") else 0.0),
+        },
+        "evidence": {
+            "followers": followers,
+            "avg_views": avg_views,
+            "engagement_rate": engagement,
+            "last_seen_at": _text(row.get("last_seen_at")),
+        },
         "source": "vkpi_kol_pool.followers_avg_views",
     }
 
@@ -211,19 +258,33 @@ def compute_block3_business(kol_pool_id: int) -> dict[str, Any]:
     collaborations = _loads(row.get("brand_collaborations_json"), [])
     contact_links = _loads(row.get("other_contacts_json"), [])
     has_email = bool(_text(row.get("email")))
-    cooperation_history = _clamp(45 + min(45, len(collaborations) * 12)) if collaborations else 35
+    cooperation_history = _clamp(45 + min(45, len(collaborations) * 12)) if collaborations else 0
     contact_reachability = 0
     if has_email:
         contact_reachability += 70
     if isinstance(contact_links, list) and contact_links:
         contact_reachability += min(30, len(contact_links) * 10)
-    competitor_summary = evaluate_kol_competitors(kol_pool_id, prefer_persisted=True).get("summary") or {}
+    competitor_result = evaluate_kol_competitors(kol_pool_id, prefer_persisted=True)
+    competitor_summary = competitor_result.get("summary") or {}
     competitor_risk = _clamp(float(competitor_summary.get("risk_score") or 0) * 10)
+    contact_count = (1 if has_email else 0) + (len(contact_links) if isinstance(contact_links, list) else 0)
+    competitor_relations = competitor_result.get("relations") or []
     return {
         "cooperation_history_score": cooperation_history,
         "contact_reachability_score": _clamp(contact_reachability),
         "competitor_risk_score": competitor_risk,
         "competitor_risk_tier": competitor_summary.get("risk_tier") or "opportunity",
+        "confidence": {
+            "cooperation_history_score": _confidence(0.85 if collaborations else 0.0),
+            "contact_reachability_score": _confidence(0.9 if contact_count else 0.25 if row.get("profile_url") else 0.0),
+            "competitor_risk_score": _confidence(0.9 if competitor_result.get("persisted") and competitor_relations else 0.55 if competitor_relations else 0.0),
+        },
+        "evidence": {
+            "collaboration_count": len(collaborations) if isinstance(collaborations, list) else 0,
+            "contact_count": contact_count,
+            "competitor_relation_count": len(competitor_relations) if isinstance(competitor_relations, list) else 0,
+            "competitor_relation_persisted": bool(competitor_result.get("persisted")),
+        },
         "source": "vkpi_kol_pool + rule_competitor_detector",
     }
 
@@ -233,22 +294,36 @@ def compute_block4_specialty(kol_pool_id: int) -> dict[str, Any]:
     posts = _posts(row)
     text = _text_blob(row, posts)
     cluster_counts = _keyword_counts(text, _load_clusters())
-    clusters = [key for key, _ in cluster_counts.most_common(3)] or ["creator"]
+    clusters = [key for key, _ in cluster_counts.most_common(3)]
     product_counts = _keyword_counts(text, PRODUCT_FIT_KEYWORDS)
     product_fit: dict[str, int] = {}
+    product_fit_confidence: dict[str, float] = {}
     for sku, _terms in PRODUCT_FIT_KEYWORDS.items():
-        base = 35
-        if sku in product_counts:
-            base += min(55, product_counts[sku] * 14)
+        hit_count = product_counts.get(sku, 0)
+        if not hit_count:
+            continue
+        base = 45 + min(45, hit_count * 14)
         if "review" in clusters and sku.startswith("AF-"):
             base += 5
         if "filmmaking" in clusters and sku.startswith(("EPIC", "NEXUS")):
             base += 15
         product_fit[sku] = _clamp(base)
+        product_fit_confidence[sku] = _confidence(0.45 + min(0.45, hit_count * 0.15))
     product_fit = dict(sorted(product_fit.items(), key=lambda item: item[1], reverse=True)[:8])
+    product_fit_confidence = {sku: product_fit_confidence[sku] for sku in product_fit}
+    cluster_hits = sum(cluster_counts.values())
     return {
         "industry_cluster": clusters,
         "product_fit": product_fit,
+        "product_fit_confidence": product_fit_confidence,
+        "confidence": {
+            "industry_cluster": _confidence(0.85 if cluster_hits >= 8 else 0.65 if cluster_hits >= 3 else 0.35 if cluster_hits else 0.0),
+            "product_fit": _mean_confidence(list(product_fit_confidence.values())),
+        },
+        "evidence": {
+            "industry_keyword_hits": cluster_hits,
+            "product_keyword_hits": dict(product_counts),
+        },
         "source": "industry_clusters.json + cached text",
     }
 
@@ -265,17 +340,28 @@ def compose_dimensions_11(kol_pool_id: int) -> dict[str, Any]:
         "block3_business": compute_block3_business(kol_pool_id),
         "block4_specialty": compute_block4_specialty(kol_pool_id),
     }
-    scores = [
-        payload["block1_content"]["posting_frequency_score"],
-        payload["block1_content"]["content_diversity_score"],
-        payload["block2_performance"]["followers_tier_score"],
-        payload["block2_performance"]["engagement_quality_score"],
-        payload["block2_performance"]["growth_velocity_score"],
-        payload["block3_business"]["cooperation_history_score"],
-        payload["block3_business"]["contact_reachability_score"],
-        100 - payload["block3_business"]["competitor_risk_score"],
+    confidence = {
+        "block1_content": _mean_confidence(list((payload["block1_content"].get("confidence") or {}).values())),
+        "block2_performance": _mean_confidence(list((payload["block2_performance"].get("confidence") or {}).values())),
+        "block3_business": _mean_confidence(list((payload["block3_business"].get("confidence") or {}).values())),
+        "block4_specialty": _mean_confidence(list((payload["block4_specialty"].get("confidence") or {}).values())),
+    }
+    score_items = [
+        (payload["block1_content"]["posting_frequency_score"], payload["block1_content"]["confidence"]["posting_frequency_score"]),
+        (payload["block1_content"]["content_diversity_score"], payload["block1_content"]["confidence"]["content_diversity_score"]),
+        (payload["block2_performance"]["followers_tier_score"], payload["block2_performance"]["confidence"]["followers_tier_score"]),
+        (payload["block2_performance"]["engagement_quality_score"], payload["block2_performance"]["confidence"]["engagement_quality_score"]),
+        (payload["block2_performance"]["growth_velocity_score"], payload["block2_performance"]["confidence"]["growth_velocity_score"]),
+        (payload["block3_business"]["cooperation_history_score"], payload["block3_business"]["confidence"]["cooperation_history_score"]),
+        (payload["block3_business"]["contact_reachability_score"], payload["block3_business"]["confidence"]["contact_reachability_score"]),
+        (100 - payload["block3_business"]["competitor_risk_score"], payload["block3_business"]["confidence"]["competitor_risk_score"]),
     ]
-    payload["overall_score"] = _clamp(sum(scores) / len(scores))
+    weighted = [(float(score), _confidence(conf)) for score, conf in score_items if _confidence(conf) > 0]
+    payload["confidence"] = {**confidence, "overall": _mean_confidence(list(confidence.values()))}
+    if weighted:
+        payload["overall_score"] = _clamp(sum(score * conf for score, conf in weighted) / sum(conf for _score, conf in weighted))
+    else:
+        payload["overall_score"] = 0
     return payload
 
 
