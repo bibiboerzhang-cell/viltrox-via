@@ -177,6 +177,19 @@ The fallback is deliberate: if R2 is not configured or upload fails, playback
 continues through the local `/api/vkpi-media/video-cache/...` URL. Old local
 cache migration remains a separate operation.
 
+Dry-run old local video-cache migration first:
+
+```bash
+python scripts/migrate_vkpi_media_cache_to_r2.py --limit 200
+```
+
+Only after env is verified, execute in bounded batches:
+
+```bash
+VKPI_MEDIA_CACHE_STORAGE=hybrid \
+python scripts/migrate_vkpi_media_cache_to_r2.py --execute --limit 200
+```
+
 Large media archive is off by default. Use it only when there is enough disk and transfer time:
 
 ```bash
