@@ -84,6 +84,16 @@ interface PremiumRegion {
   mockLabel?: string;
 }
 
+interface PremiumPlatform {
+  icon: string;
+  label: string;
+  width: string;
+  value: string;
+  background: string;
+  isMock: boolean;
+  mockLabel?: string;
+}
+
 interface CountryDrawerState {
   region: PremiumRegion;
   items: VkpiKolPoolItem[];
@@ -143,11 +153,20 @@ const contentTypes = [
   { label: '图文', value: '13.6%', color: '#8b5cf6' },
 ];
 
-const platforms = [
-  { icon: 'IG', label: 'Instagram', width: '100%', value: '56.57M', background: '#e1306c' },
-  { icon: 'YT', label: 'YouTube', width: '35%', value: '19.80M', background: '#ff0000' },
-  { icon: 'TT', label: 'TikTok', width: '11%', value: '6.21M', background: '#111827' },
-  { icon: 'FB', label: 'Facebook', width: '5%', value: '2.41M', background: '#1877f2' },
+const platformStyles: Record<string, { icon: string; label: string; background: string }> = {
+  instagram: { icon: 'IG', label: 'Instagram', background: '#e1306c' },
+  youtube: { icon: 'YT', label: 'YouTube', background: '#ff0000' },
+  tiktok: { icon: 'TT', label: 'TikTok', background: '#111827' },
+  facebook: { icon: 'FB', label: 'Facebook', background: '#1877f2' },
+  x: { icon: 'X', label: 'X', background: '#111827' },
+  media: { icon: 'MD', label: 'Media', background: '#1b6cff' },
+};
+
+const platforms: PremiumPlatform[] = [
+  { icon: 'IG', label: 'Instagram', width: '100%', value: '56.57M', background: '#e1306c', isMock: true, mockLabel: '示例平台' },
+  { icon: 'YT', label: 'YouTube', width: '35%', value: '19.80M', background: '#ff0000', isMock: true, mockLabel: '示例平台' },
+  { icon: 'TT', label: 'TikTok', width: '11%', value: '6.21M', background: '#111827', isMock: true, mockLabel: '示例平台' },
+  { icon: 'FB', label: 'Facebook', width: '5%', value: '2.41M', background: '#1877f2', isMock: true, mockLabel: '示例平台' },
 ];
 
 const mockAlerts: PremiumAlert[] = [
@@ -339,6 +358,33 @@ function buildPremiumRegions(kolSummary: Row): PremiumRegion[] {
   return regionRows.length ? regionRows : regions;
 }
 
+function buildPremiumPlatforms(kolSummary: Row): PremiumPlatform[] {
+  const rows = rowsFrom(kolSummary.by_platform)
+    .map((row) => {
+      const key = String(row.platform || '').trim().toLowerCase();
+      const count = numberValue(row.n ?? row.count ?? row.total);
+      return { key, count };
+    })
+    .filter((row) => Boolean(row.key) && row.count > 0)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 4);
+  if (!rows.length) return platforms;
+  const max = Math.max(1, ...rows.map((row) => row.count));
+  return rows.map((row): PremiumPlatform => {
+    const style = platformStyles[row.key] || {
+      icon: row.key.slice(0, 2).toUpperCase(),
+      label: row.key.charAt(0).toUpperCase() + row.key.slice(1),
+      background: '#1b6cff',
+    };
+    return {
+      ...style,
+      width: `${Math.max(8, Math.round((row.count / max) * 100))}%`,
+      value: `${compact(row.count)} KOL`,
+      isMock: false,
+    };
+  });
+}
+
 function trendChart(rows: Row[]) {
   const fallbackPath = 'M34 196 C82 162 121 164 166 134 S235 102 285 101 363 76 411 51 458 25 500 32';
   if (!rows.length) {
@@ -462,6 +508,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
   const premiumAlerts = useMemo(() => buildAlerts(snapshot.brandSignals), [snapshot.brandSignals]);
   const premiumTrend = useMemo(() => trendChart(snapshot.trendRows), [snapshot.trendRows]);
   const premiumRegions = useMemo(() => buildPremiumRegions(snapshot.kolSummary), [snapshot.kolSummary]);
+  const premiumPlatforms = useMemo(() => buildPremiumPlatforms(snapshot.kolSummary), [snapshot.kolSummary]);
   const competitorTiers = objectValue(snapshot.competitorDashboard.tier_counts);
   const riskCount = numberValue(competitorTiers.avoid) + numberValue(competitorTiers.caution);
   const kolTotal = numberValue(snapshot.kolSummary.total || snapshot.kolSummary.candidate_asset_count);
@@ -537,7 +584,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
             <div>
               <div className="left-grid">
                 <div className="glass-card panel">
-                  <div className="panel-head"><h3>全球曝光分布</h3><span className="link" onClick={() => showToast('原型交互 · 可接真实路由')}>Market Map</span></div>
+                  <div className="panel-head"><h3>全球 KOL 分布</h3><span className="link" onClick={() => showToast('原型交互 · 可接真实路由')}>Country Map</span></div>
                   <div className="holo-map">
                     <div className="zoom"><span>+</span><span>−</span></div>
                     <svg viewBox="0 0 620 240" preserveAspectRatio="none">
@@ -573,13 +620,13 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
                     {premiumProductRows.map((row) => <div className="row" title={row.mockLabel} key={row.rank}><span className="rank">{row.rank}</span><div><b>{row.name}{row.isMock ? <span className="tag">示例</span> : null}</b><div className="bar"><span style={glassVarStyle({ '--w': row.width })}></span></div></div><small>{row.value}</small></div>)}
                   </div>
                   <div className="glass-card mini">
-                    <div className="panel-head"><h3>内容类型分布</h3></div>
+                    <div className="panel-head"><h3>内容类型分布</h3><span className="tag">示例</span></div>
                     <div className="donut-wrap"><div className="donut"></div><div className="donut-label"><span>总内容</span><b>2,847</b></div></div>
                     <div className="region-list" style={{ gridTemplateColumns: 'repeat(3,1fr)' }}>{contentTypes.map((item) => <div className="region" style={glassVarStyle({ '--c': item.color })} key={item.label}><span><i></i>{item.label}</span><b>{item.value}</b></div>)}</div>
                   </div>
                   <div className="glass-card mini">
-                    <div className="panel-head"><h3>平台表现</h3><span className="link" onClick={() => showToast('原型交互 · 可接真实路由')}>查看全部</span></div>
-                    {platforms.map((platform) => <div className="platform" key={platform.label}><span className="picon" style={{ background: platform.background }}>{platform.icon}</span><div><b>{platform.label}</b><div className="bar"><span style={glassVarStyle({ '--w': platform.width })}></span></div></div><small>{platform.value}</small></div>)}
+                    <div className="panel-head"><h3>KOL 平台分布</h3><span className="link" onClick={() => showToast('原型交互 · 可接真实路由')}>查看全部</span></div>
+                    {premiumPlatforms.map((platform) => <div className="platform" title={platform.mockLabel} key={platform.label}><span className="picon" style={{ background: platform.background }}>{platform.icon}</span><div><b>{platform.label}{platform.isMock ? <span className="tag">示例</span> : null}</b><div className="bar"><span style={glassVarStyle({ '--w': platform.width })}></span></div></div><small>{platform.value}</small></div>)}
                   </div>
                 </div>
               </div>
