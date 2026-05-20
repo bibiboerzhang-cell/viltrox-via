@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from app.db.connection import get_conn
+from app.db.connection import get_conn, is_postgres_runtime
 
 
 CONFIG_PATH = Path(__file__).with_name("competitor_brands.json")
@@ -55,6 +55,7 @@ EVALUATED_PATTERNS = (
 )
 POSITIVE_PATTERNS = ("best", "love", "amazing", "excellent", "great", "10/10", "sharp", "favorite")
 NEGATIVE_PATTERNS = ("disappointed", "poor", "issue", "issues", "bad", "worst", "broken", "terrible")
+_RELATION_SCHEMA_READY = False
 
 
 def _text(value: Any) -> str:
@@ -73,6 +74,78 @@ def _loads(value: Any, default: Any) -> Any:
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _json(value: Any) -> str:
+    return json.dumps(value or [], ensure_ascii=False, default=str)
+
+
+def ensure_competitor_relation_schema() -> None:
+    global _RELATION_SCHEMA_READY
+    if _RELATION_SCHEMA_READY:
+        return
+    conn = get_conn()
+    if is_postgres_runtime():
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vkpi_competitor_relation (
+                id BIGSERIAL PRIMARY KEY,
+                kol_pool_id BIGINT REFERENCES vkpi_kol_pool(id) ON DELETE CASCADE,
+                kol_entity_uid TEXT NOT NULL DEFAULT '',
+                platform TEXT NOT NULL DEFAULT '',
+                handle TEXT NOT NULL DEFAULT '',
+                display_name TEXT DEFAULT '',
+                competitor_brand TEXT NOT NULL,
+                collaboration_depth TEXT NOT NULL DEFAULT 'none',
+                collaboration_recency_days INTEGER,
+                collaboration_count_90d INTEGER NOT NULL DEFAULT 0,
+                collaboration_count_total INTEGER NOT NULL DEFAULT 0,
+                sentiment TEXT NOT NULL DEFAULT 'neutral',
+                risk_score NUMERIC(3,1) NOT NULL DEFAULT 0,
+                risk_tier TEXT NOT NULL DEFAULT 'opportunity',
+                evidence_post_uids_json TEXT NOT NULL DEFAULT '[]',
+                evidence_json TEXT NOT NULL DEFAULT '[]',
+                last_evidence_at TIMESTAMPTZ,
+                computed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE(kol_pool_id, competitor_brand)
+            )
+            """
+        )
+    else:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vkpi_competitor_relation (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kol_pool_id INTEGER,
+                kol_entity_uid TEXT NOT NULL DEFAULT '',
+                platform TEXT NOT NULL DEFAULT '',
+                handle TEXT NOT NULL DEFAULT '',
+                display_name TEXT DEFAULT '',
+                competitor_brand TEXT NOT NULL,
+                collaboration_depth TEXT NOT NULL DEFAULT 'none',
+                collaboration_recency_days INTEGER,
+                collaboration_count_90d INTEGER NOT NULL DEFAULT 0,
+                collaboration_count_total INTEGER NOT NULL DEFAULT 0,
+                sentiment TEXT NOT NULL DEFAULT 'neutral',
+                risk_score NUMERIC NOT NULL DEFAULT 0,
+                risk_tier TEXT NOT NULL DEFAULT 'opportunity',
+                evidence_post_uids_json TEXT NOT NULL DEFAULT '[]',
+                evidence_json TEXT NOT NULL DEFAULT '[]',
+                last_evidence_at TEXT,
+                computed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(kol_pool_id, competitor_brand)
+            )
+            """
+        )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_competitor_relation_kol ON vkpi_competitor_relation(kol_pool_id, risk_score DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_competitor_relation_risk ON vkpi_competitor_relation(risk_tier, risk_score DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_competitor_relation_brand ON vkpi_competitor_relation(competitor_brand, risk_tier, risk_score DESC)")
+    conn.commit()
+    _RELATION_SCHEMA_READY = True
 
 
 def _parse_datetime(value: Any) -> datetime | None:
@@ -96,6 +169,19 @@ def _days_since(value: Any) -> int | None:
     if not parsed:
         return None
     return max(0, (datetime.now(timezone.utc) - parsed).days)
+
+
+def _last_evidence_at(relation: dict[str, Any]) -> str | None:
+    dates: list[datetime] = []
+    for item in relation.get("evidence") or []:
+        if not isinstance(item, dict):
+            continue
+        parsed = _parse_datetime(item.get("published_at"))
+        if parsed:
+            dates.append(parsed)
+    if not dates:
+        return None
+    return max(dates).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def load_competitor_brands() -> dict[str, dict[str, Any]]:
@@ -367,6 +453,7 @@ def evaluate_kol_competitor_relation(kol_pool_id: int, brand: str) -> dict[str, 
     score = _risk_score(depth, recency_days, count_90d, len(mentions), sentiment)
     return {
         "kol_pool_id": int(kol_pool_id),
+        "kol_entity_uid": _first_text(row.get("pool_uid"), f"kol_pool:{kol_pool_id}"),
         "platform": platform,
         "handle": _text(row.get("handle")),
         "display_name": _text(row.get("display_name")),
@@ -386,19 +473,85 @@ def evaluate_kol_competitor_relation(kol_pool_id: int, brand: str) -> dict[str, 
     }
 
 
-def evaluate_kol_competitors(kol_pool_id: int) -> dict[str, Any]:
+def persist_competitor_relations(relations: list[dict[str, Any]]) -> int:
+    if not relations:
+        return 0
+    ensure_competitor_relation_schema()
+    conn = get_conn()
+    committed = 0
+    for relation in relations:
+        kol_pool_id = int(relation.get("kol_pool_id") or 0)
+        brand = _text(relation.get("competitor_brand")).lower()
+        if not kol_pool_id or not brand:
+            continue
+        conn.execute(
+            """
+            INSERT INTO vkpi_competitor_relation (
+                kol_pool_id, kol_entity_uid, platform, handle, display_name,
+                competitor_brand, collaboration_depth, collaboration_recency_days,
+                collaboration_count_90d, collaboration_count_total, sentiment,
+                risk_score, risk_tier, evidence_post_uids_json, evidence_json,
+                last_evidence_at, computed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(kol_pool_id, competitor_brand) DO UPDATE SET
+                kol_entity_uid=excluded.kol_entity_uid,
+                platform=excluded.platform,
+                handle=excluded.handle,
+                display_name=excluded.display_name,
+                collaboration_depth=excluded.collaboration_depth,
+                collaboration_recency_days=excluded.collaboration_recency_days,
+                collaboration_count_90d=excluded.collaboration_count_90d,
+                collaboration_count_total=excluded.collaboration_count_total,
+                sentiment=excluded.sentiment,
+                risk_score=excluded.risk_score,
+                risk_tier=excluded.risk_tier,
+                evidence_post_uids_json=excluded.evidence_post_uids_json,
+                evidence_json=excluded.evidence_json,
+                last_evidence_at=excluded.last_evidence_at,
+                computed_at=excluded.computed_at,
+                updated_at=CURRENT_TIMESTAMP
+            """,
+            (
+                kol_pool_id,
+                _first_text(relation.get("kol_entity_uid"), f"kol_pool:{kol_pool_id}"),
+                _text(relation.get("platform")).lower(),
+                _text(relation.get("handle")),
+                _text(relation.get("display_name")),
+                brand,
+                _text(relation.get("collaboration_depth")) or "none",
+                relation.get("collaboration_recency_days"),
+                int(relation.get("collaboration_count_90d") or 0),
+                int(relation.get("collaboration_count_total") or 0),
+                _text(relation.get("sentiment")) or "neutral",
+                float(relation.get("risk_score") or 0),
+                _text(relation.get("risk_tier")) or "opportunity",
+                _json(relation.get("evidence_post_uids") or []),
+                _json(relation.get("evidence") or []),
+                _last_evidence_at(relation),
+                _text(relation.get("computed_at")) or _utcnow(),
+            ),
+        )
+        committed += 1
+    conn.commit()
+    return committed
+
+
+def evaluate_kol_competitors(kol_pool_id: int, *, write_db: bool = False) -> dict[str, Any]:
     brands = sorted(load_competitor_brands())
     relations = [evaluate_kol_competitor_relation(kol_pool_id, brand) for brand in brands]
+    committed = persist_competitor_relations(relations) if write_db else 0
     strongest = max(relations, key=lambda item: float(item.get("risk_score") or 0), default=None)
     return {
         "kol_pool_id": int(kol_pool_id),
         "provider_calls": False,
+        "write_db": bool(write_db),
+        "committed_relations": committed,
         "relations": relations,
         "summary": strongest or {},
     }
 
 
-def batch_evaluate_kol_pool(*, brand: str = "", limit: int = 100, source_type: str = "legacy_excel_p2d") -> dict[str, Any]:
+def batch_evaluate_kol_pool(*, brand: str = "", limit: int = 100, source_type: str = "legacy_excel_p2d", write_db: bool = False) -> dict[str, Any]:
     safe_limit = max(1, min(1200, int(limit or 100)))
     brands = [brand.strip().lower()] if brand.strip() else sorted(load_competitor_brands())
     rows = get_conn().execute(
@@ -415,11 +568,14 @@ def batch_evaluate_kol_pool(*, brand: str = "", limit: int = 100, source_type: s
     tier_counts = {"avoid": 0, "caution": 0, "safe": 0, "opportunity": 0}
     brand_counts: dict[str, dict[str, int]] = {item: dict(tier_counts) for item in brands}
     samples: list[dict[str, Any]] = []
+    relations_to_write: list[dict[str, Any]] = []
     evaluated = 0
     for row in rows:
         kol_id = int(row["id"])
         for target_brand in brands:
             relation = evaluate_kol_competitor_relation(kol_id, target_brand)
+            if write_db:
+                relations_to_write.append(relation)
             evaluated += 1
             tier = str(relation.get("risk_tier") or "opportunity")
             brand_counts.setdefault(target_brand, dict(tier_counts))
@@ -427,9 +583,11 @@ def batch_evaluate_kol_pool(*, brand: str = "", limit: int = 100, source_type: s
             tier_counts[tier] = tier_counts.get(tier, 0) + 1
             if relation.get("risk_score") and len(samples) < 20:
                 samples.append(relation)
+    committed = persist_competitor_relations(relations_to_write) if write_db else 0
     return {
         "provider_calls": False,
-        "write_db": False,
+        "write_db": bool(write_db),
+        "committed_relations": committed,
         "source_type": source_type,
         "kol_rows": len(rows),
         "relations_evaluated": evaluated,

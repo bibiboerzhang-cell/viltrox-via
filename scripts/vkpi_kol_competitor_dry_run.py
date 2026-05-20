@@ -28,6 +28,11 @@ def parse_args() -> argparse.Namespace:
         default="legacy_excel_p2d",
         help="KOL pool source_type filter. Use empty string to scan all sources.",
     )
+    parser.add_argument(
+        "--write-db",
+        action="store_true",
+        help="Persist relation snapshots to vkpi_competitor_relation. Omit for read-only dry-run.",
+    )
     return parser.parse_args()
 
 
@@ -35,12 +40,13 @@ def main() -> int:
     args = parse_args()
     try:
         if args.kol_pool_id:
-            result = evaluate_kol_competitors(args.kol_pool_id)
+            result = evaluate_kol_competitors(args.kol_pool_id, write_db=args.write_db)
         else:
             result = batch_evaluate_kol_pool(
                 brand=args.brand,
                 limit=args.limit,
                 source_type=args.source_type,
+                write_db=args.write_db,
             )
         print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
         return 0

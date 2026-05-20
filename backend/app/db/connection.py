@@ -111,6 +111,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "066_vkpi_media_cache_assets.sql",
     "067_vkpi_brand_signal.sql",
     "068_vkpi_profile_deep_dimensions11.sql",
+    "069_vkpi_competitor_relation.sql",
 )
 
 try:
