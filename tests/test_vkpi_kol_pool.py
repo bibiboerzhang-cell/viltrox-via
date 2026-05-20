@@ -224,6 +224,64 @@ def test_missing_and_complete_filters_use_real_pool_columns(seeded_staff):
     assert {row["handle"] for row in complete} == {f"{MARKER}-complete"}
 
 
+def test_country_distribution_and_country_filter_normalize_variants(seeded_staff):
+    conn = get_conn()
+    now = "2026-05-01T10:00:00Z"
+    rows = [
+        (f"{MARKER}-country-us-cn", "instagram", "美国", "Country US CN"),
+        (f"{MARKER}-country-us-code", "youtube", "US", "Country US Code"),
+        (f"{MARKER}-country-be-cn", "instagram", "比利时", "Country Belgium CN"),
+    ]
+    for handle, platform, country, display_name in rows:
+        conn.execute(
+            """
+            INSERT INTO vkpi_kol_pool
+              (pool_uid, platform, handle, profile_url, display_name, avatar_url, bio, email,
+               country, followers, following, posts_count, avg_views, avg_likes, avg_comments,
+               engagement_rate, source_type, source_ref, raw_platform_data, created_by_staff_id,
+               last_seen_at, created_at, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                f"{handle}-uid",
+                platform,
+                handle,
+                f"https://example.com/{handle}",
+                display_name,
+                "",
+                "",
+                "",
+                country,
+                100,
+                None,
+                1,
+                10,
+                1,
+                0,
+                1.0,
+                "unit",
+                MARKER,
+                "{}",
+                seeded_staff["staff_id"],
+                now,
+                now,
+                now,
+            ),
+        )
+    conn.commit()
+    kol_pool._clear_kol_pool_read_cache()
+
+    summary = kol_pool.summary()
+    distribution = {row["country_code"]: row for row in summary["country_distribution"]}
+    us_rows = kol_pool.list_pool(query=MARKER, country="United States", limit=10)["items"]
+    be_rows = kol_pool.list_pool(query=MARKER, country="Belgium", limit=10)["items"]
+
+    assert distribution["US"]["country_name"] == "United States"
+    assert distribution["BE"]["country_name"] == "Belgium"
+    assert {row["handle"] for row in us_rows} == {f"{MARKER}-country-us-cn", f"{MARKER}-country-us-code"}
+    assert {row["handle"] for row in be_rows} == {f"{MARKER}-country-be-cn"}
+
+
 def test_batch_enrich_is_capped_and_skips_unsupported_platforms(seeded_staff):
     staff = _staff_context(seeded_staff["staff_id"])
     imported = kol_pool.import_items(
