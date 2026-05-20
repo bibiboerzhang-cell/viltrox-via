@@ -205,6 +205,12 @@ scripts/ops/sync_prod_snapshot_to_local.sh
 ```
 
 By default this downloads only. It does not restore into a local DB.
+It also checks `vkpi-sync-daily.service` first and skips safely while the remote
+daily sync is `active` or `activating`. Override only for an intentional ops run:
+
+```bash
+ALLOW_DURING_SYNC=1 scripts/ops/sync_prod_snapshot_to_local.sh
+```
 
 Restore into an explicit local Postgres QA database only with all guards set:
 
