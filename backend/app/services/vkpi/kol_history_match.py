@@ -159,13 +159,63 @@ def _raw_post_items(raw: dict[str, Any]) -> list[dict[str, Any]]:
     return posts
 
 
+def _nested_dict(source: dict[str, Any], *keys: str) -> dict[str, Any]:
+    for key in keys:
+        value = source.get(key)
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def _post_summary_fields(post: dict[str, Any]) -> dict[str, Any]:
+    snippet = _nested_dict(post, "snippet")
+    localized = _nested_dict(snippet, "localized")
+    stats = _nested_dict(post, "statistics", "stats")
+    title = _first_text(
+        post.get("title"),
+        post.get("caption"),
+        post.get("text"),
+        snippet.get("title"),
+        localized.get("title"),
+        post.get("description"),
+        snippet.get("description"),
+    )
+    post_uid = _first_text(post.get("id"), post.get("post_uid"), post.get("shortCode"), post.get("shortcode"))
+    url = _first_text(post.get("post_url"), post.get("url"), post.get("webVideoUrl"), post.get("permalink"), post.get("content_url"))
+    if not url and _text(post.get("kind")).lower() == "youtube#video" and post_uid:
+        url = f"https://www.youtube.com/watch?v={post_uid}"
+    return {
+        "post_uid": post_uid,
+        "title": title,
+        "url": url,
+        "published_at": _first_text(post.get("published_at"), post.get("publishedAt"), post.get("timestamp"), post.get("createTimeISO"), post.get("date"), snippet.get("publishedAt")),
+        "views": _int(_first_text(post.get("views"), post.get("view_count"), post.get("play_count"), post.get("playCount"), stats.get("viewCount"), stats.get("playCount"))),
+        "likes": _int(_first_text(post.get("likes"), post.get("like_count"), post.get("diggCount"), stats.get("likeCount"))),
+        "comments": _int(_first_text(post.get("comments"), post.get("comment_count"), post.get("commentCount"), stats.get("commentCount"))),
+    }
+
+
+def _looks_like_post(post: dict[str, Any], summary: dict[str, Any]) -> bool:
+    kind = _text(post.get("kind")).lower()
+    if "channel" in kind and "video" not in kind:
+        return False
+    if summary.get("url"):
+        return True
+    if summary.get("title") and any(_int(summary.get(key)) for key in ("views", "likes", "comments")):
+        return True
+    return any(key in post for key in ("webVideoUrl", "playCount", "diggCount", "commentCount", "shortCode", "permalink"))
+
+
 def _recent_post_summary(raw: dict[str, Any], *, limit: int = 6) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
     for index, post in enumerate(_raw_post_items(raw)):
-        url = _first_text(post.get("post_url"), post.get("url"), post.get("webVideoUrl"), post.get("permalink"), post.get("content_url"))
-        title = _first_text(post.get("title"), post.get("caption"), post.get("text"), url)
-        post_uid = _first_text(post.get("id"), post.get("post_uid"), post.get("shortCode"), post.get("shortcode"), url, title)
+        summary = _post_summary_fields(post)
+        if not _looks_like_post(post, summary):
+            continue
+        url = _text(summary.get("url"))
+        title = _first_text(summary.get("title"), url)
+        post_uid = _first_text(summary.get("post_uid"), url, title)
         key = post_uid or url or title
         if not key or key in seen:
             continue
@@ -176,10 +226,10 @@ def _recent_post_summary(raw: dict[str, Any], *, limit: int = 6) -> list[dict[st
                 "title": title[:280],
                 "post_url": url,
                 "url": url,
-                "published_at": _first_text(post.get("published_at"), post.get("publishedAt"), post.get("timestamp"), post.get("createTimeISO"), post.get("date")),
-                "views": _int(_first_text(post.get("views"), post.get("view_count"), post.get("play_count"), post.get("playCount"))),
-                "likes": _int(_first_text(post.get("likes"), post.get("like_count"), post.get("diggCount"))),
-                "comments": _int(_first_text(post.get("comments"), post.get("comment_count"), post.get("commentCount"))),
+                "published_at": summary.get("published_at"),
+                "views": summary.get("views"),
+                "likes": summary.get("likes"),
+                "comments": summary.get("comments"),
                 "source_kind": "history_pool_sample",
             }
         )

@@ -24,13 +24,17 @@ def test_natural_history_search_includes_light_recent_posts():
     raw = {
         "videos": [
             {
+                "kind": "youtube#video",
                 "id": "video-1",
-                "title": "Viltrox 35mm field test",
-                "url": "https://example.com/video-1",
-                "playCount": 1234,
-                "diggCount": 56,
-                "commentCount": 7,
-                "publishedAt": "2026-05-19T10:00:00Z",
+                "snippet": {
+                    "title": "Viltrox 35mm field test",
+                    "publishedAt": "2026-05-19T10:00:00Z",
+                },
+                "statistics": {
+                    "viewCount": "1234",
+                    "likeCount": "56",
+                    "commentCount": "7",
+                },
                 "large_unused_field": "x" * 5000,
             }
         ]
@@ -82,9 +86,10 @@ def test_natural_history_search_includes_light_recent_posts():
         latest_posts = results[0]["latest_posts"]
         assert latest_posts == results[0]["posts"]
         assert latest_posts[0]["title"] == "Viltrox 35mm field test"
+        assert latest_posts[0]["post_url"] == "https://www.youtube.com/watch?v=video-1"
         assert latest_posts[0]["views"] == 1234
         assert "large_unused_field" not in latest_posts[0]
-        assert results[0]["historical_match"]["recent_posts"][0]["post_url"] == "https://example.com/video-1"
+        assert results[0]["historical_match"]["recent_posts"][0]["post_url"] == "https://www.youtube.com/watch?v=video-1"
     finally:
         _cleanup()
 
