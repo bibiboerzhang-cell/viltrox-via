@@ -59,6 +59,8 @@ function mapPost(row: Row): ChannelContentPost {
     shares: numberValue(row.shares),
     accountLevel: Boolean(row.account_level || row.accountLevel),
     viewsUnavailable: Boolean(row.views_unavailable || row.viewsUnavailable),
+    viewsMetricLabel: text(row.views_metric_label || row.viewsMetricLabel),
+    viewsUnavailableReason: text(row.views_unavailable_reason || row.viewsUnavailableReason),
   };
 }
 

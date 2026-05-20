@@ -10,9 +10,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.services.vkpi import channels, kol_pool
 
+
+logger = get_logger(__name__)
 
 ENRICHABLE_KOL_PLATFORMS = {"youtube", "instagram", "tiktok", "facebook", "reddit", "x"}
 
@@ -57,6 +60,12 @@ def _system_staff() -> dict[str, Any]:
 
 def _status_ok(status: Any) -> bool:
     return str(status or "").strip().lower() in {"ok", "synced", "success"}
+
+
+def _row_label(row: dict[str, Any]) -> str:
+    platform = str(row.get("platform") or "-")
+    handle = str(row.get("account_handle") or row.get("handle") or row.get("display_name") or "-")
+    return f"{platform}:{handle}"
 
 
 def _kol_light_rows(*, limit: int, platforms: set[str], source_type: str) -> list[dict[str, Any]]:
@@ -148,13 +157,32 @@ def run_official_incremental(payload: dict[str, Any]) -> dict[str, Any]:
     staff = payload.get("staff") if isinstance(payload.get("staff"), dict) else _system_staff()
     results: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
-    for row in selected:
+    logger.info(
+        "daily sync official start requested=%s max_posts=%s platforms=%s",
+        len(selected),
+        max_posts,
+        ",".join(sorted(platforms)) if platforms else "all",
+    )
+    for index, row in enumerate(selected, start=1):
         channel_id = _int(row.get("id"))
         if not channel_id:
             continue
+        label = _row_label(row)
+        logger.info("daily sync official %s/%s start channel_id=%s %s", index, len(selected), channel_id, label)
         try:
             result = channels.sync_now(channel_id, staff=staff, max_posts=max_posts)
             results.append(result)
+            logger.info(
+                "daily sync official %s/%s done channel_id=%s %s status=%s posts=%s followers=%s views=%s",
+                index,
+                len(selected),
+                channel_id,
+                label,
+                result.get("sync_status"),
+                result.get("posts_count") or result.get("total_posts"),
+                result.get("followers"),
+                result.get("total_views") or result.get("views"),
+            )
             if not _status_ok(result.get("sync_status")):
                 failures.append({
                     "channel_id": channel_id,
@@ -164,12 +192,19 @@ def run_official_incremental(payload: dict[str, Any]) -> dict[str, Any]:
                     "message": result.get("message"),
                 })
         except Exception as exc:
+            logger.exception("daily sync official %s/%s failed channel_id=%s %s", index, len(selected), channel_id, label)
             failures.append({
                 "channel_id": channel_id,
                 "platform": row.get("platform"),
                 "handle": row.get("account_handle"),
                 "error": f"{type(exc).__name__}: {str(exc)[:400]}",
             })
+    logger.info(
+        "daily sync official finish requested=%s synced=%s failed=%s",
+        len(selected),
+        sum(1 for item in results if _status_ok(item.get("sync_status"))),
+        len(failures),
+    )
     return {
         "dry_run": False,
         "requested": len(selected),
@@ -210,10 +245,21 @@ def run_kol_pool_light_refresh(payload: dict[str, Any]) -> dict[str, Any]:
     partial = 0
     skipped: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
-    for row in rows:
+    logger.info(
+        "daily sync kol light start requested=%s source_total=%s refreshable=%s max_posts=%s source_type=%s platforms=%s",
+        len(rows),
+        source_counts.get("source_total"),
+        len(rows),
+        max_posts,
+        source_type,
+        ",".join(sorted(platforms)) if platforms else "all",
+    )
+    for index, row in enumerate(rows, start=1):
         kol_pool_id = _int(row.get("id"))
         if not kol_pool_id:
             continue
+        label = _row_label(row)
+        logger.info("daily sync kol light %s/%s start kol_pool_id=%s %s", index, len(rows), kol_pool_id, label)
         try:
             result = kol_pool.enrich_item(kol_pool_id, max_posts=max_posts, staff=staff)
             status = str(result.get("sync_status") or result.get("provider_status") or "").strip().lower()
@@ -228,13 +274,32 @@ def run_kol_pool_light_refresh(payload: dict[str, Any]) -> dict[str, Any]:
                     "status": status or "unknown",
                     "message": result.get("message"),
                 })
+            if index == len(rows) or index % 10 == 0 or not _status_ok(status):
+                logger.info(
+                    "daily sync kol light progress %s/%s refreshed=%s partial=%s errors=%s last_id=%s status=%s",
+                    index,
+                    len(rows),
+                    refreshed,
+                    partial,
+                    len(errors),
+                    kol_pool_id,
+                    status or "unknown",
+                )
         except Exception as exc:
+            logger.exception("daily sync kol light %s/%s failed kol_pool_id=%s %s", index, len(rows), kol_pool_id, label)
             errors.append({
                 "id": kol_pool_id,
                 "platform": row.get("platform"),
                 "handle": row.get("handle"),
                 "error": f"{type(exc).__name__}: {str(exc)[:400]}",
             })
+    logger.info(
+        "daily sync kol light finish requested=%s refreshed=%s partial=%s errors=%s",
+        len(rows),
+        refreshed,
+        partial,
+        len(errors),
+    )
     return {
         "dry_run": False,
         "requested": len(rows),
@@ -261,11 +326,15 @@ def run_daily_incremental(payload: dict[str, Any] | None = None) -> dict[str, An
         "started_at": started_at,
     }
     if not _bool(payload.get("skip_official")):
+        logger.info("daily sync stage official begin")
         result["official"] = run_official_incremental(payload)
+        logger.info("daily sync stage official end summary=%s", result["official"])
     else:
         result["official"] = {"skipped": True}
     if not _bool(payload.get("skip_kol")):
+        logger.info("daily sync stage kol_pool_light begin")
         result["kol_pool_light"] = run_kol_pool_light_refresh(payload)
+        logger.info("daily sync stage kol_pool_light end summary=%s", result["kol_pool_light"])
     else:
         result["kol_pool_light"] = {"skipped": True}
     result["finished_at"] = _utcnow()

@@ -16,6 +16,8 @@ export interface ChannelContentPost {
   shares: number;
   accountLevel?: boolean;
   viewsUnavailable?: boolean;
+  viewsMetricLabel?: string;
+  viewsUnavailableReason?: string;
 }
 
 export interface ChannelCommentItem {

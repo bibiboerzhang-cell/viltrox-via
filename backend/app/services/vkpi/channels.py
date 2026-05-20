@@ -613,6 +613,9 @@ def _post_from_reddit(item: dict[str, Any]) -> dict[str, Any] | None:
         "likes": _int(item.get("upVotes"), _int(item.get("score"))),
         "comments": _int(item.get("numberOfComments"), _int(item.get("comments"))),
         "shares": 0,
+        "views_unavailable": True,
+        "views_metric_label": "公开播放",
+        "views_unavailable_reason": "Reddit 不公开帖子播放量；今年分析使用点赞、评论和站内评分。",
     }
 
 
@@ -952,7 +955,15 @@ def _enrich_package_post(post: dict[str, Any], raw_index: dict[str, dict[str, An
         post["image_urls"] = image_urls[:12]
     post["media_kind"] = "video" if video_url or media_kind == "video" else ("carousel" if len(image_urls) > 1 or media_kind == "carousel" else media_kind or "image")
     platform = _text(post.get("platform")).lower()
-    post["views_unavailable"] = platform == "instagram" and post["media_kind"] in {"image", "carousel"} and _int(post.get("views")) <= 0
+    instagram_image_views_unavailable = platform == "instagram" and post["media_kind"] in {"image", "carousel"} and _int(post.get("views")) <= 0
+    post["views_unavailable"] = instagram_image_views_unavailable or platform == "reddit"
+    if post["views_unavailable"]:
+        post["views_metric_label"] = "公开播放"
+        post["views_unavailable_reason"] = (
+            "Reddit 不公开帖子播放量；今年分析使用点赞、评论和站内评分。"
+            if platform == "reddit"
+            else "IG 图文/轮播没有公开视频播放量，需要后台 Insights 才能补齐。"
+        )
     if platform == "reddit":
         post["score"] = _int(raw.get("score"), _int(post.get("likes")))
         post["upvote_ratio"] = _float(raw.get("upvoteRatio"), _float(raw.get("upvote_ratio")))

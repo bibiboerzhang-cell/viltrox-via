@@ -235,6 +235,18 @@ function viewsLabel(post: ChannelContentPost) {
   return post.viewsUnavailable ? '--' : compact(post.views);
 }
 
+function viewsMetricLabel(post: ChannelContentPost, account: OfficialChannelAccount) {
+  if (post.viewsMetricLabel) return post.viewsMetricLabel;
+  if (post.viewsUnavailable || account.platform.toLowerCase() === 'reddit') return '公开播放';
+  return '播放';
+}
+
+function viewsUnavailableText(post: ChannelContentPost, account: OfficialChannelAccount) {
+  if (post.viewsUnavailableReason) return post.viewsUnavailableReason;
+  if (account.platform.toLowerCase() === 'reddit') return 'Reddit 不公开帖子播放量；今年分析使用点赞、评论和站内评分。';
+  return '图文无公开播放，需后台 Insights 才能补齐。';
+}
+
 function mediaBadge(post: ChannelContentPost, account: OfficialChannelAccount) {
   if ((post.imageUrls || []).length > 1) return `1/${post.imageUrls?.length}`;
   const media = mediaState(post, account);
@@ -351,7 +363,7 @@ function MediaLightbox({ post, account, apiToken, onClose }: { post: ChannelCont
           )}
         </div>
         <footer className="vkpi-media-lightbox__footer">
-          <span>播放 {viewsLabel(post)}</span>
+          <span>{viewsMetricLabel(post, account)} {viewsLabel(post)}</span>
           <span>点赞 {formatter.format(post.likes)}</span>
           <span>评论 {formatter.format(post.comments)}</span>
           <span>分享 {formatter.format(post.shares)}</span>
@@ -455,6 +467,8 @@ function mapPost(row: Row): ChannelContentPost {
     shares: numberValue(row.shares),
     accountLevel: Boolean(row.account_level || row.accountLevel),
     viewsUnavailable: Boolean(row.views_unavailable || row.viewsUnavailable),
+    viewsMetricLabel: text(row.views_metric_label || row.viewsMetricLabel),
+    viewsUnavailableReason: text(row.views_unavailable_reason || row.viewsUnavailableReason),
   };
 }
 
@@ -597,6 +611,7 @@ export function ChannelContentList({ account, apiToken }: { account?: OfficialCh
             const copy = contentCopy(post);
             const status = post.viewsUnavailable ? 'pending insights' : (post.accountLevel ? 'snapshot' : account.syncStatus || 'synced');
             const date = compactDate(post.postedAt || account.lastSyncAt || '');
+            const primaryMetric = viewsMetricLabel(post, account);
             return (
               <article className="vkpi-channel-content-card" key={`${account.id}-${post.id || index}`}>
                 <div
@@ -620,12 +635,12 @@ export function ChannelContentList({ account, apiToken }: { account?: OfficialCh
                   <h3 title={title}>{copy.headline}</h3>
                   <p title={title}>{copy.excerpt || title}</p>
                   <div className="vkpi-channel-content-card__metrics">
-                    <span title={post.viewsUnavailable ? 'IG 图文/轮播无公开播放量' : undefined}>播放 <strong>{viewsLabel(post)}</strong></span>
+                    <span title={post.viewsUnavailable ? viewsUnavailableText(post, account) : undefined}>{primaryMetric} <strong>{viewsLabel(post)}</strong></span>
                     <span>点赞 <strong>{formatter.format(post.likes)}</strong></span>
                     <button type="button" onClick={() => openComments(post)}>评论 <strong>{formatter.format(post.comments)}</strong></button>
                     <span>分享 <strong>{formatter.format(post.shares)}</strong></span>
                   </div>
-                  {post.viewsUnavailable ? <p className="vkpi-channel-content-card__note">图文无公开播放，需后台 Insights 才能补齐。</p> : null}
+                  {post.viewsUnavailable ? <p className="vkpi-channel-content-card__note">{viewsUnavailableText(post, account)}</p> : null}
                 </div>
                 <footer className="vkpi-channel-content-card__footer">
                   <small>{date}</small>
