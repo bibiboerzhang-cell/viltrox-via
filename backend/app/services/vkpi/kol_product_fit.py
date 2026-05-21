@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import secrets
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -40,6 +41,7 @@ from app.services.vkpi.new_launch_match import (
     _pool_by_source_ref,
     _product_family_maps,
     _risk_count,
+    _safe_float,
     _row_to_dict,
     _safe_int,
     _safe_limit,
@@ -264,6 +266,81 @@ def _official_family_links() -> dict[int, list[dict[str, Any]]]:
 
 def _render_family_detail(family: dict[str, Any]) -> str:
     return _text(family.get("display_name") or family.get("identity_key") or family.get("entity_uid"))
+
+
+def _normalize_product_fit_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", _lower(value))
+
+
+def _load_dimensions11_product_fit(kol_pool_id: int) -> dict[str, dict[str, Any]]:
+    if not int(kol_pool_id or 0):
+        return {}
+    row = get_conn().execute(
+        """
+        SELECT id, dimensions_11_json
+        FROM vkpi_kol_profile_deep
+        WHERE kol_pool_id=?
+        LIMIT 1
+        """,
+        (int(kol_pool_id),),
+    ).fetchone()
+    if not row:
+        return {}
+    profile_id = _safe_int(row["id"])
+    payload = _load_json(row["dimensions_11_json"] or "{}", {})
+    if not isinstance(payload, dict):
+        return {}
+    block4 = payload.get("block4_specialty") if isinstance(payload.get("block4_specialty"), dict) else {}
+    raw_fit = block4.get("product_fit") if isinstance(block4.get("product_fit"), dict) else {}
+    raw_conf = block4.get("product_fit_confidence") if isinstance(block4.get("product_fit_confidence"), dict) else {}
+    result: dict[str, dict[str, Any]] = {}
+    for sku, score in raw_fit.items():
+        sku_text = _text(sku)
+        normalized = _normalize_product_fit_key(sku_text)
+        if not sku_text or not normalized:
+            continue
+        numeric_score = max(0.0, min(100.0, _safe_float(score, 0.0)))
+        confidence = max(0.0, min(1.0, _safe_float(raw_conf.get(sku_text), 0.0)))
+        if numeric_score <= 0 or confidence <= 0:
+            continue
+        result[sku_text] = {
+            "sku": sku_text,
+            "normalized": normalized,
+            "score": numeric_score,
+            "confidence": confidence,
+            "profile_deep_id": profile_id,
+            "method": _text(payload.get("method")),
+            "computed_at": _text(payload.get("computed_at")),
+        }
+    return result
+
+
+def _dimensions11_product_fit_for_family(
+    family: dict[str, Any],
+    dimensions_fit: dict[str, dict[str, Any]],
+) -> tuple[float, dict[str, Any] | None]:
+    if not dimensions_fit:
+        return 0.0, None
+    family_name = _render_family_detail(family)
+    family_key = _text(family.get("identity_key"))
+    family_blob = _normalize_product_fit_key(f"{family_name} {family_key}")
+    if not family_blob:
+        return 0.0, None
+    best: dict[str, Any] | None = None
+    best_component = 0.0
+    for item in dimensions_fit.values():
+        sku_norm = _text(item.get("normalized"))
+        if not sku_norm:
+            continue
+        if sku_norm not in family_blob and family_blob not in sku_norm:
+            continue
+        score = max(0.0, min(100.0, _safe_float(item.get("score"), 0.0)))
+        confidence = max(0.0, min(1.0, _safe_float(item.get("confidence"), 0.0)))
+        component = round((score / 100.0) * confidence * 20.0, 1)
+        if component > best_component:
+            best_component = component
+            best = {**item, "match_type": "sku_family_exact", "family_name": family_name}
+    return best_component, best
 
 
 def _json(value: Any) -> str:
@@ -547,10 +624,13 @@ def build_kol_product_fit_preview(
     contact_score, contact_label = _contact_score(contact_status, pool)
     primary = _split_csv(primary_markets)
     secondary = _split_csv(secondary_markets)
+    kol_pool_id_value = _safe_int((pool or {}).get("id"))
+    dimensions11_product_fit = _load_dimensions11_product_fit(kol_pool_id_value)
 
     eligible: list[dict[str, Any]] = []
     hard_excluded = 0
     low_evidence = 0
+    dimensions11_matched = 0
     for family in _candidate_product_families():
         family_id = int(family["id"])
         if member_counts.get(family_id, 0) <= 0:
@@ -559,6 +639,7 @@ def build_kol_product_fit_preview(
 
         historical_score, historical_type, historical_link = _historical_fit(family, links, product_to_family)
         adjacent_score, adjacent_type, adjacent_family = _adjacent_fit(family, proved_families)
+        dimensions11_score, dimensions11_match = _dimensions11_product_fit_for_family(family, dimensions11_product_fit)
         cooperation_score = _cooperation_depth(cooperation_count)
         signals = _target_market_signals(family_id)
         market_score, market_evidence = _market_signal_score(signals, now=now)
@@ -567,6 +648,7 @@ def build_kol_product_fit_preview(
         base_score = (
             historical_score
             + adjacent_score
+            + dimensions11_score
             + cooperation_score
             + market_score
             + contact_score
@@ -615,6 +697,31 @@ def build_kol_product_fit_preview(
                     detail=f"{adjacent_type.replace('_', ' ')} from {_render_family_detail(adjacent_family)}",
                     score_component="adjacent_product_fit",
                     row=adjacent_family,
+                )
+            )
+        if dimensions11_match:
+            dimensions11_matched += 1
+            evidence_pro.append(
+                _evidence(
+                    evidence_type="dimensions11_product_fit",
+                    polarity="pro",
+                    severity="info",
+                    detail=(
+                        f"11D product fit matched {dimensions11_match.get('sku')} "
+                        f"score={dimensions11_match.get('score')}/100 "
+                        f"confidence={dimensions11_match.get('confidence')}"
+                    ),
+                    score_component="dimensions11_product_fit",
+                    row={
+                        "source_table": "vkpi_kol_profile_deep",
+                        "source_id": dimensions11_match.get("profile_deep_id"),
+                        "confidence_score": dimensions11_match.get("confidence"),
+                    },
+                    payload={
+                        "source_ref": f"vkpi_kol_profile_deep:{dimensions11_match.get('profile_deep_id')}",
+                        "source_sheet": "dimensions_11_json.block4_specialty.product_fit",
+                        "source_id": dimensions11_match.get("sku"),
+                    },
                 )
             )
         if cooperation_count:
@@ -775,6 +882,7 @@ def build_kol_product_fit_preview(
                 "score_breakdown": {
                     "historical_fit": historical_score,
                     "adjacent_product_fit": adjacent_score,
+                    "dimensions11_product_fit": dimensions11_score,
                     "cooperation_depth": cooperation_score,
                     "market_activity": market_score,
                     "contact_readiness": contact_score,
@@ -822,12 +930,15 @@ def build_kol_product_fit_preview(
         "resolution_decision": decision,
         "sync_status": sync_status,
         "review_state": review_state,
+        "dimensions11_product_fit_ready": bool(dimensions11_product_fit),
     }
     summary = {
         "total_families_evaluated": len(_candidate_product_families()),
         "eligible_after_hard_filters": len(eligible),
         "excluded_inactive_or_empty_family": hard_excluded,
         "excluded_low_evidence": low_evidence,
+        "dimensions11_product_fit_candidates": len(dimensions11_product_fit),
+        "dimensions11_product_fit_matched": dimensions11_matched,
         "returned": len(returned),
         "markdown_display_count": len(markdown_display),
         "top_score": returned[0]["score"] if returned else 0,
@@ -889,6 +1000,8 @@ def render_markdown(payload: dict[str, Any]) -> str:
         f"- Displayed in Markdown: {summary.get('markdown_display_count', 0)}",
         f"- Excluded inactive/empty family: {summary.get('excluded_inactive_or_empty_family', 0)}",
         f"- Excluded low evidence: {summary.get('excluded_low_evidence', 0)}",
+        f"- 11D product-fit candidates: {summary.get('dimensions11_product_fit_candidates', 0)}",
+        f"- 11D product-fit matched families: {summary.get('dimensions11_product_fit_matched', 0)}",
         f"- Top score: {summary.get('top_score', 0)}",
         f"- Median score: {summary.get('median_score', 0)}",
         f"- Recommendation reasons attached: {summary.get('reasons_attached', 0)}",
@@ -945,6 +1058,7 @@ def render_markdown(payload: dict[str, Any]) -> str:
                 "**Score breakdown:** "
                 f"historical={breakdown.get('historical_fit', 0)} "
                 f"adjacent={breakdown.get('adjacent_product_fit', 0)} "
+                f"dimensions11={breakdown.get('dimensions11_product_fit', 0)} "
                 f"cooperation={breakdown.get('cooperation_depth', 0)} "
                 f"market={breakdown.get('market_activity', 0)} "
                 f"contact={breakdown.get('contact_readiness', 0)} "
@@ -985,6 +1099,8 @@ def format_preview_summary(payload: dict[str, Any]) -> str:
         f"markdown_display_count={summary.get('markdown_display_count', 0)}",
         f"excluded_inactive_or_empty_family={summary.get('excluded_inactive_or_empty_family', 0)}",
         f"excluded_low_evidence={summary.get('excluded_low_evidence', 0)}",
+        f"dimensions11_product_fit_candidates={summary.get('dimensions11_product_fit_candidates', 0)}",
+        f"dimensions11_product_fit_matched={summary.get('dimensions11_product_fit_matched', 0)}",
         f"top_score={summary.get('top_score', 0)}",
         f"median_score={summary.get('median_score', 0)}",
         f"llm_reasons_requested={str(bool(summary.get('llm_reasons_requested'))).lower()}",
