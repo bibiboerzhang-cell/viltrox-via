@@ -21,7 +21,7 @@ interface GlassTopBarProps {
 }
 
 export function GlassTopBar({
-  placeholder = '问 V-KPI：找德国适合 35mm LAB 的红人 / 今天哪些项目有风险…',
+  placeholder = '搜索红人 / 项目 / 消息',
   actions = defaultActions,
 }: GlassTopBarProps) {
   return (

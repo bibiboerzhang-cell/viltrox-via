@@ -18,7 +18,7 @@ interface HeroSectionProps {
 export function HeroSection({
   eyebrow = 'V-KPI MISSION CONTROL',
   title = '全球营销情报中枢',
-  body = '把红人、内容、产品、竞品、市场五个智能脑压缩成一个每日作战界面：今天该做什么、为什么做、证据是什么、做完如何回流。',
+  body = '今日重点、风险、证据和任务汇总在这里。',
   missions = defaultMissions,
 }: HeroSectionProps) {
   return (

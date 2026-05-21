@@ -76,10 +76,10 @@
 .vkpi-sidebar {
   position: sticky;
   z-index: 3;
-  background: linear-gradient(180deg, rgba(255,255,255,.62), rgba(255,255,255,.36));
+  background: linear-gradient(180deg, rgba(255,255,255,.46), rgba(255,255,255,.20));
   border-right: 1px solid var(--vkpi-glass-border);
   backdrop-filter: blur(34px) saturate(1.35);
-  box-shadow: 16px 0 60px rgba(24,55,110,.08);
+  box-shadow: 16px 0 60px rgba(24,55,110,.05);
   padding: 28px 16px 18px;
   display: flex;
   flex-direction: column;
@@ -96,7 +96,7 @@
   inset: 0;
   z-index: -1;
   background:
-    linear-gradient(90deg, rgba(255,255,255,.58), transparent 45%),
+    linear-gradient(90deg, rgba(255,255,255,.42), transparent 45%),
     radial-gradient(240px 240px at -30px -40px, rgba(27,108,255,.20), transparent 68%);
   pointer-events: none;
 }
@@ -262,10 +262,10 @@
 
 .vkpi-topbar {
   min-height: 76px;
-  background: rgba(255, 255, 255, 0.58);
+  background: linear-gradient(180deg, rgba(255,255,255,.42), rgba(255,255,255,.22));
   backdrop-filter: blur(28px) saturate(1.35);
-  border-bottom: 1px solid var(--vkpi-glass-border);
-  box-shadow: 0 1px 0 rgba(15,35,80,.04), 0 18px 60px rgba(24,55,110,.06);
+  border-bottom: 1px solid rgba(255,255,255,.58);
+  box-shadow: 0 1px 0 rgba(15,35,80,.03);
   display: grid;
   grid-template-columns: minmax(280px, 1fr) auto auto auto auto max-content;
   align-items: center;

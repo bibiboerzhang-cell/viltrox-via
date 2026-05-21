@@ -126,13 +126,37 @@ const mockKpis: PremiumKpi[] = [
 
 const regionColors = ['#1b6cff', '#6aa6ff', '#18d5ff', '#8b5cf6', '#cfe0ff'];
 
-const mapPointPositions = [
-  { x: 170, y: 106, r: 8 },
-  { x: 332, y: 123, r: 7 },
-  { x: 486, y: 166, r: 6 },
-  { x: 250, y: 165, r: 6 },
-  { x: 424, y: 92, r: 5 },
+const worldMapLandPaths = [
+  'M60 70 L91 49 L139 38 L181 42 L217 58 L246 83 L234 105 L207 113 L182 100 L162 118 L132 111 L111 91 L82 90 Z',
+  'M224 127 L250 145 L260 174 L247 211 L225 228 L205 205 L192 174 L200 145 Z',
+  'M302 71 L325 61 L352 70 L346 91 L321 91 L305 82 Z',
+  'M316 103 L354 100 L382 132 L370 181 L339 213 L308 177 L300 132 Z',
+  'M360 76 L417 57 L491 69 L548 101 L528 132 L473 130 L441 151 L397 126 L357 113 Z',
+  'M477 171 L524 165 L552 188 L533 209 L484 202 Z',
+  'M257 78 L279 75 L285 91 L268 100 L248 92 Z',
+  'M510 126 L526 132 L519 148 L499 145 Z',
 ];
+
+const countryCoordinates: Record<string, { lon: number; lat: number }> = {
+  US: { lon: -98.5, lat: 39.8 },
+  CA: { lon: -106.3, lat: 56.1 },
+  MX: { lon: -102.5, lat: 23.6 },
+  BR: { lon: -51.9, lat: -14.2 },
+  AR: { lon: -63.6, lat: -38.4 },
+  GB: { lon: -3.4, lat: 55.4 },
+  UK: { lon: -3.4, lat: 55.4 },
+  DE: { lon: 10.5, lat: 51.2 },
+  FR: { lon: 2.2, lat: 46.2 },
+  ES: { lon: -3.7, lat: 40.4 },
+  IT: { lon: 12.6, lat: 42.9 },
+  NL: { lon: 5.3, lat: 52.1 },
+  CN: { lon: 104.2, lat: 35.9 },
+  JP: { lon: 138.3, lat: 36.2 },
+  KR: { lon: 127.8, lat: 35.9 },
+  IN: { lon: 78.9, lat: 20.6 },
+  ID: { lon: 113.9, lat: -0.8 },
+  AU: { lon: 133.8, lat: -25.3 },
+};
 
 const regions: PremiumRegion[] = [
   { label: '北美', value: '67.2%', color: '#1b6cff', isMock: true, mockLabel: '示例地区' },
@@ -432,6 +456,22 @@ function buildPremiumRegions(kolSummary: Row, allowMockFallback: boolean): Premi
   return allowMockFallback
     ? regions
     : [{ label: '暂无国家分布', value: '--', color: '#cfe0ff', isMock: true, mockLabel: '待 KOL 国家数据' }];
+}
+
+function projectCountryPoint(countryCode: string, index: number) {
+  const upperCode = countryCode.trim().toUpperCase();
+  const fallback = [
+    { lon: -98, lat: 40 },
+    { lon: -3, lat: 54 },
+    { lon: 105, lat: 34 },
+    { lon: 10, lat: 51 },
+    { lon: 134, lat: -25 },
+  ][index % 5];
+  const coord = countryCoordinates[upperCode] || fallback;
+  return {
+    x: Math.round(((coord.lon + 180) / 360) * 620),
+    y: Math.round(((90 - coord.lat) / 180) * 240),
+  };
 }
 
 function buildPremiumPlatforms(kolSummary: Row, officialMatrix: Row, allowMockFallback: boolean): PremiumPlatform[] {
@@ -863,19 +903,26 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
                   <div className="panel-head"><h3>全球 KOL 分布</h3><button className="link" type="button" onClick={() => goToWorkspacePage('dataAnalysis', 'Country Map')}>Country Map</button></div>
                   <div className="holo-map">
                     <div className="zoom"><span>+</span><span>−</span></div>
-                    <svg viewBox="0 0 620 240" preserveAspectRatio="none">
-                      <defs><linearGradient id="mg" x1="0" x2="1"><stop offset="0" stopColor="#1b6cff" /><stop offset="1" stopColor="#18d5ff" /></linearGradient><filter id="gl"><feGaussianBlur stdDeviation="5" result="b" /><feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge></filter></defs>
-                      <path d="M92 82c40-22 94-9 121 2 27 11 68 3 92 15 30 15 9 39-28 40-58 3-125 15-161-2-35-16-61-39-24-55z" fill="url(#mg)" opacity=".93" filter="url(#gl)" />
-                      <path d="M272 82c68-32 128-19 184-4 42 11 77 30 120 21 34-7 65 13 62 35-4 22-49 30-91 24-57-8-99-3-148 16-52 20-120 7-136-30-8-18-14-43 9-62z" fill="#9dc4ff" opacity=".66" />
-                      <path d="M184 154c50-14 87 1 119 13 44 17 86 9 121 23 27 11 25 33-5 41-42 12-88-2-126-10-47-10-91 6-124-14-30-17-34-48 15-53z" fill="#6aa6ff" opacity=".50" />
-                      <path d="M457 150c43-10 86 4 110 23 24 19 9 41-35 39-50-2-98-14-111-35-10-15 7-23 36-27z" fill="#cfe0ff" opacity=".70" />
+                    <svg viewBox="0 0 620 240" preserveAspectRatio="xMidYMid meet" aria-label="KOL 国家分布地图">
+                      <defs>
+                        <linearGradient id="land" x1="0" x2="1"><stop offset="0" stopColor="#bfd7ff" /><stop offset="1" stopColor="#e8f1ff" /></linearGradient>
+                        <filter id="point-glow"><feGaussianBlur stdDeviation="4" result="blur" /><feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge></filter>
+                      </defs>
+                      <g className="world-map-grid">
+                        {[70, 150, 230, 310, 390, 470, 550].map((x) => <line key={`x-${x}`} x1={x} y1="24" x2={x} y2="220" />)}
+                        {[54, 92, 130, 168, 206].map((y) => <line key={`y-${y}`} x1="34" y1={y} x2="586" y2={y} />)}
+                      </g>
+                      <g className="world-map-land">
+                        {worldMapLandPaths.map((path, index) => <path d={path} key={index} />)}
+                      </g>
                       {premiumRegions.slice(0, 5).map((region, index) => {
-                        const point = mapPointPositions[index % mapPointPositions.length];
-                        const label = region.countryCode || region.label.slice(0, 2);
+                        const point = projectCountryPoint(region.countryCode || '', index);
+                        const label = (region.countryCode || region.label.slice(0, 2)).toUpperCase();
+                        const radius = Math.max(5, Math.min(13, 5 + Math.sqrt(region.kolCount || 1) / 2.6));
                         return (
                           <g className="map-point" key={region.label} role="button" tabIndex={0} onClick={() => openCountryDrawer(region)} onKeyDown={(event) => { if (event.key === 'Enter') openCountryDrawer(region); }}>
-                            <circle cx={point.x} cy={point.y} r={point.r} fill={region.color} />
-                            <circle cx={point.x} cy={point.y} r={point.r * 3.4} fill={region.color} opacity=".12" />
+                            <circle cx={point.x} cy={point.y} r={radius * 3.1} fill={region.color} opacity=".13" />
+                            <circle cx={point.x} cy={point.y} r={radius} fill={region.color} filter="url(#point-glow)" />
                             <text x={point.x + 12} y={point.y + 4} fill="#344054" fontSize="11" fontWeight="800">{label}</text>
                           </g>
                         );
@@ -909,7 +956,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
               <div className="glass-card latest"><div className="panel-head"><h3>最新内容表现</h3><button className="link" type="button" onClick={() => goToWorkspacePage('channels', '内容中心')}>进入内容中心</button></div><table className="table"><thead><tr><th>内容</th><th>账号 / 平台</th><th>发布平台</th><th>发布于</th><th>曝光量</th><th>互动率</th><th>操作</th></tr></thead><tbody>{contentRows.length ? contentRows.map((row, index) => <tr key={`${row.id || row.url || index}`}><td><div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}><div className="thumb"></div><div><b>{String(row.title || '官方内容')}</b><br /><span className="tag">真实</span></div></div></td><td>@{String(row.account_handle || row.account_display_name || '-')}<br /><span style={{ color: '#667085' }}>{String(row.platform || '-')}</span></td><td>{String(row.platform || '-')}</td><td>{postedLabel(row)}</td><td><b>{compact(numberValue(row.views))}</b></td><td>{engagementLabel(row)}</td><td><button type="button" title="查看账号矩阵" onClick={() => goToWorkspacePage('channels', '内容中心')}>⌁</button> <button type="button" title="打开原始内容" onClick={() => openContentUrl(row.url)}>↗</button> <button type="button" title="查看数据分析" onClick={() => goToWorkspacePage('dataAnalysis', '内容分析')}>…</button></td></tr>) : <tr><td colSpan={7}><div className="empty-real">暂无真实最新内容明细</div></td></tr>}</tbody></table></div>
             </div>
             <aside className="rail">
-              <div className="glass-card rail-card copilot"><div className="ai-kicker">V-KPI Copilot</div><h3>系统正在把推荐、风险、任务压缩成 7 张行动卡。</h3><p>今日重点：处理 4 条推荐反馈、补齐 35mm LAB 项目 KOL 缺口、检查 Sigma 竞品内容。</p><div className="insight">示例 · 置信度 91% · 证据 18 条 · 数据新鲜度 4h</div></div>
+              <div className="glass-card rail-card copilot"><div className="ai-kicker">V-KPI Copilot</div><h3>行动卡</h3><p>推荐、风险、任务已汇总。</p><div className="insight">示例 · 待接 LLM</div></div>
               <div className="glass-card rail-card"><div className="panel-head"><h3>重要提醒</h3><button className="link" type="button" onClick={() => goToWorkspacePage('dataQuality', '重要提醒')}>查看全部</button></div>{premiumAlerts.length ? premiumAlerts.map((alert) => <div className="alert" title={alert.mockLabel} key={alert.title}><div className="alert-ic" style={glassVarStyle({ '--bgc': alert.bgc, '--col': alert.col })}>{alert.icon}</div><div><b>{alert.title}{alert.isMock ? <span className="tag">{badgeText(alert.mockLabel)}</span> : null}</b><p>{alert.body}</p></div><span className="time">{alert.time}</span></div>) : <div className="empty-real">暂无真实品牌信号</div>}</div>
               <div className="glass-card rail-card"><div className="panel-head"><h3>本周关键任务</h3><button className="link" type="button" onClick={() => goToWorkspacePage('projects', '本周关键任务')}>查看全部</button></div>{tasks.map((task) => <div className="task" title={task.mockLabel} key={task.title}><div className="task-head"><b>{task.title}{task.isMock ? <span className="tag">示例</span> : null}</b><span className={`priority ${task.priority}`}>{task.priorityLabel}</span></div><p>{task.body}</p><div className="progress"><span style={glassVarStyle({ '--w': task.width })}></span></div></div>)}</div>
               <div className="glass-card rail-card"><div className="panel-head"><h3>快捷入口</h3></div><div className="quick">{quickActions.map((action) => <button key={action.label} type="button" onClick={() => goToWorkspacePage(action.page, action.label)}><b>{action.icon}</b><span>{action.label}</span></button>)}</div></div>
