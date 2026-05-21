@@ -181,6 +181,109 @@ def _tokenize(text: str) -> set[str]:
     return {part for part in re.split(r"[^a-z0-9\u4e00-\u9fff]+", str(text or "").lower()) if len(part) >= 2}
 
 
+def _normalize_product_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+
+def _display_product_sku(sku: str) -> str:
+    text = str(sku or "").strip()
+    replacements = {
+        "F12": "F1.2",
+        "F17": "F1.7",
+        "F18": "F1.8",
+        "F35": "F3.5",
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    return text.replace("-", " ")
+
+
+def _normalize_handle_for_match(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    raw = re.sub(r"^https?://", "", raw)
+    raw = raw.replace("www.", "")
+    parts = [part for part in re.split(r"[/?#]", raw) if part]
+    if parts:
+        raw = parts[-1]
+    return raw.lstrip("@")
+
+
+def _kol_pool_profile_deep_for_kol(kol: dict[str, Any]) -> dict[str, Any]:
+    conn = get_conn()
+    row = conn.execute(
+        """
+        SELECT kp.id AS kol_pool_id, kp.pool_uid, kp.platform, kp.handle,
+               pd.id AS profile_deep_id, pd.dimensions_11_json
+        FROM vkpi_kol_pool kp
+        JOIN vkpi_kol_profile_deep pd ON pd.kol_pool_id=kp.id
+        WHERE kp.linked_main_kol_id=?
+        ORDER BY kp.updated_at DESC, kp.id DESC
+        LIMIT 1
+        """,
+        (int(kol.get("id") or 0),),
+    ).fetchone()
+    if row:
+        return dict(row)
+
+    platform = str(kol.get("platform") or "").strip().lower()
+    handle = _normalize_handle_for_match(kol.get("channel_url") or kol.get("profile_url") or kol.get("channel_name") or kol.get("media_name"))
+    if platform == "ig":
+        platform = "instagram"
+    if not platform or not handle:
+        return {}
+    row = conn.execute(
+        """
+        SELECT kp.id AS kol_pool_id, kp.pool_uid, kp.platform, kp.handle,
+               pd.id AS profile_deep_id, pd.dimensions_11_json
+        FROM vkpi_kol_pool kp
+        JOIN vkpi_kol_profile_deep pd ON pd.kol_pool_id=kp.id
+        WHERE LOWER(kp.platform)=LOWER(?) AND LOWER(kp.handle)=LOWER(?)
+        ORDER BY kp.updated_at DESC, kp.id DESC
+        LIMIT 1
+        """,
+        (platform, handle),
+    ).fetchone()
+    return dict(row) if row else {}
+
+
+def _dimensions11_product_fit_items(profile_deep: dict[str, Any]) -> list[dict[str, Any]]:
+    payload = _json_loads(profile_deep.get("dimensions_11_json"), {})
+    block4 = payload.get("block4_specialty") if isinstance(payload, dict) and isinstance(payload.get("block4_specialty"), dict) else {}
+    raw_fit = block4.get("product_fit") if isinstance(block4.get("product_fit"), dict) else {}
+    raw_conf = block4.get("product_fit_confidence") if isinstance(block4.get("product_fit_confidence"), dict) else {}
+    items: list[dict[str, Any]] = []
+    for sku, score in raw_fit.items():
+        sku_text = str(sku or "").strip()
+        normalized = _normalize_product_key(sku_text)
+        confidence = max(0.0, min(1.0, _float(raw_conf.get(sku_text), 0.0)))
+        fit_score = _clamp_score(score)
+        if not sku_text or not normalized or not fit_score or confidence < 0.35:
+            continue
+        items.append(
+            {
+                "sku": sku_text,
+                "normalized": normalized,
+                "score": fit_score,
+                "confidence": confidence,
+                "profile_deep_id": profile_deep.get("profile_deep_id"),
+                "kol_pool_id": profile_deep.get("kol_pool_id"),
+                "method": str(payload.get("method") or "rule_dimensions_11_v0"),
+            }
+        )
+    return sorted(items, key=lambda item: (int(item["score"]), float(item["confidence"])), reverse=True)
+
+
+def _dimensions11_match_for_product(product_text: str, items: list[dict[str, Any]]) -> dict[str, Any] | None:
+    normalized = _normalize_product_key(product_text)
+    if not normalized:
+        return None
+    for item in items:
+        sku_norm = str(item.get("normalized") or "")
+        if sku_norm and (sku_norm in normalized or normalized in sku_norm):
+            return item
+    return None
+
+
 def _product_fit_payload(kol_id: int, limit: int = 5) -> dict[str, Any]:
     ensure_vkpi_product_industry_schema()
     ctx = _latest_kol_context(kol_id)
@@ -203,6 +306,8 @@ def _product_fit_payload(kol_id: int, limit: int = 5) -> dict[str, Any]:
     )
     kol_tokens = _tokenize(kol_text)
     base = _int(report.get("product_fit"), _int(report.get("account_score"), 45))
+    profile_deep = _kol_pool_profile_deep_for_kol(kol)
+    dimensions11_items = _dimensions11_product_fit_items(profile_deep) if profile_deep else []
     launches = get_conn().execute(
         """
         SELECT *
@@ -213,6 +318,7 @@ def _product_fit_payload(kol_id: int, limit: int = 5) -> dict[str, Any]:
         """
     ).fetchall()
     rows: list[dict[str, Any]] = []
+    matched_dimension_skus: set[str] = set()
     for launch in launches:
         item = dict(launch)
         product_text = " ".join(
@@ -234,7 +340,24 @@ def _product_fit_payload(kol_id: int, limit: int = 5) -> dict[str, Any]:
         target_platforms = _json_loads(item.get("target_platforms_json"), [])
         if isinstance(target_platforms, list) and str(kol.get("platform") or "").lower() in {str(v).lower() for v in target_platforms}:
             platform_bonus = 8
-        score = _clamp_score(base + min(18, len(overlap) * 4) + platform_bonus + (6 if snapshot else 0))
+        dimensions_match = _dimensions11_match_for_product(product_text, dimensions11_items)
+        dimensions_bonus = round((int(dimensions_match.get("score") or 0) / 100) * float(dimensions_match.get("confidence") or 0) * 20) if dimensions_match else 0
+        local_score = _clamp_score(base + min(18, len(overlap) * 4) + platform_bonus + (6 if snapshot else 0) + dimensions_bonus)
+        score = max(local_score, _clamp_score(dimensions_match.get("score") if dimensions_match else 0))
+        reasons = [
+            "基于账号报告 product_fit / account_score。",
+            "匹配 KOL 主题与产品/目标受众关键词。",
+            "平台命中产品目标平台时加权。",
+        ]
+        evidence = overlap[:8]
+        method = "local_product_fit_v1_existing_tables"
+        status = "estimated"
+        if dimensions_match:
+            matched_dimension_skus.add(str(dimensions_match.get("sku") or ""))
+            reasons.insert(0, f"11维规则画像匹配 {dimensions_match.get('sku')}，confidence={dimensions_match.get('confidence')}")
+            evidence.insert(0, f"vkpi_kol_profile_deep:{dimensions_match.get('profile_deep_id')}")
+            method = "local_product_fit_v1_plus_dimensions11"
+            status = "ready"
         rows.append(
             {
                 "launch_id": item.get("id"),
@@ -242,14 +365,29 @@ def _product_fit_payload(kol_id: int, limit: int = 5) -> dict[str, Any]:
                 "product_name": item.get("product_name") or item.get("name") or item.get("product_sku"),
                 "launch_name": item.get("name"),
                 "score": score,
-                "method": "local_product_fit_v1_existing_tables",
-                "status": "estimated",
-                "reasons": [
-                    "基于账号报告 product_fit / account_score。",
-                    "匹配 KOL 主题与产品/目标受众关键词。",
-                    "平台命中产品目标平台时加权。",
-                ],
-                "evidence": overlap[:8],
+                "method": method,
+                "status": status,
+                "reasons": reasons,
+                "evidence": evidence,
+            }
+        )
+    existing_skus = {_normalize_product_key(row.get("product_sku") or row.get("product_name")) for row in rows}
+    for item in dimensions11_items:
+        if item["sku"] in matched_dimension_skus:
+            continue
+        if item["normalized"] in existing_skus:
+            continue
+        rows.append(
+            {
+                "launch_id": None,
+                "product_sku": item["sku"],
+                "product_name": _display_product_sku(item["sku"]),
+                "launch_name": "11维规则画像",
+                "score": _clamp_score(item["score"]),
+                "method": item["method"],
+                "status": "ready",
+                "reasons": [f"来自 11 维规则产品适配，confidence={item['confidence']}"],
+                "evidence": [f"vkpi_kol_profile_deep:{item.get('profile_deep_id')}"],
             }
         )
     if not rows:
