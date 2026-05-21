@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
+import os
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -146,6 +149,64 @@ def post_sync_audit() -> dict[str, Any]:
     return payload
 
 
+def _load_env_for_backend() -> None:
+    env_path = ROOT / ".env"
+    if not env_path.exists():
+        return
+    for raw in env_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip("\"").strip("'"))
+
+
+def dimensions11_runtime_status() -> dict[str, Any]:
+    """Best-effort local DB coverage check for persisted profile_deep dimensions."""
+
+    try:
+        _load_env_for_backend()
+        backend_path = ROOT / "backend"
+        if str(backend_path) not in sys.path:
+            sys.path.insert(0, str(backend_path))
+        from app.db.connection import close_db_runtime, get_conn  # type: ignore
+
+        conn = get_conn()
+        total_row = conn.execute(
+            """
+            SELECT COUNT(*) AS total,
+                   COUNT(dimensions_11_json) AS with_dims,
+                   COUNT(*) FILTER (WHERE dimensions_11_json IS NULL) AS without_dims
+            FROM vkpi_kol_profile_deep
+            """
+        ).fetchone()
+        source_rows = conn.execute(
+            """
+            SELECT kp.source_type,
+                   COUNT(*) AS pool_rows,
+                   COUNT(pd.dimensions_11_json) AS with_dims
+            FROM vkpi_kol_pool kp
+            LEFT JOIN vkpi_kol_profile_deep pd ON pd.kol_pool_id = kp.id
+            GROUP BY kp.source_type
+            ORDER BY kp.source_type
+            """
+        ).fetchall()
+        payload = {
+            "available": True,
+            "profile_total": int(total_row["total"] or 0),
+            "with_dims": int(total_row["with_dims"] or 0),
+            "without_dims": int(total_row["without_dims"] or 0),
+            "by_source_type": [dict(row) for row in source_rows],
+        }
+        try:
+            asyncio.run(close_db_runtime())
+        except Exception:
+            pass
+        return payload
+    except Exception as exc:
+        return {"available": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
 def status_item(key: str, title: str, status: str, evidence: list[str], next_step: str) -> dict[str, Any]:
     return {
         "key": key,
@@ -164,6 +225,7 @@ def build_items(sync: dict[str, Any], r2: dict[str, Any], snapshot: dict[str, An
     acceptance = audit.get("acceptance") if isinstance(audit.get("acceptance"), dict) else {}
     competitor_summary = audit.get("competitor_relation_summary") if isinstance(audit.get("competitor_relation_summary"), dict) else {}
     brand_signal_summary = audit.get("brand_signal_summary") if isinstance(audit.get("brand_signal_summary"), dict) else {}
+    dimensions_runtime = dimensions11_runtime_status()
     competitor_total = int(competitor_summary.get("total") or 0)
     brand_signal_total = int(brand_signal_summary.get("total") or 0)
     competitor_relation_ready = (
@@ -195,6 +257,15 @@ def build_items(sync: dict[str, Any], r2: dict[str, Any], snapshot: dict[str, An
         "frontend/src/components/vkpi/pages/DiscoverPage.tsx",
         "pendingByConfidence",
         "product_fit_confidence",
+    )
+    dimensions_profile_total = int(dimensions_runtime.get("profile_total") or 0)
+    dimensions_with_dims = int(dimensions_runtime.get("with_dims") or 0)
+    dimensions_without_dims = int(dimensions_runtime.get("without_dims") or 0)
+    dimensions_persisted_ready = (
+        dimensions_runtime.get("available")
+        and dimensions_profile_total > 0
+        and dimensions_with_dims == dimensions_profile_total
+        and dimensions_without_dims == 0
     )
     return [
         status_item(
@@ -298,16 +369,20 @@ def build_items(sync: dict[str, Any], r2: dict[str, Any], snapshot: dict[str, An
         status_item(
             "dimensions_d",
             "D 11 维评估",
-            "guard_ready" if dimensions_guard_ready else "preview_ui",
+            "done" if dimensions_persisted_ready else "guard_ready" if dimensions_guard_ready else "preview_ui",
             [
                 "eleven_dimensions.py exists" if exists("backend/app/services/vkpi/eleven_dimensions.py") else "dimension service missing",
+                "profile_deep base migration exists" if exists("migrations/070_vkpi_kol_profile_deep_base.sql") else "profile_deep base migration missing",
+                f"profile_deep_total={dimensions_profile_total}" if dimensions_runtime.get("available") else f"profile_deep_status_error={dimensions_runtime.get('error', 'unavailable')}",
+                f"dimensions_11_json_present={dimensions_with_dims}",
+                f"dimensions_11_json_missing={dimensions_without_dims}",
                 "profile_deep update guard exists" if exists("scripts/ops/backfill_vkpi_dimensions11_after_sync.sh") else "dimensions backfill guard missing",
                 "updates existing profile_deep only" if contains("backend/app/services/vkpi/eleven_dimensions.py", "backfill_existing_profile_deep_dimensions11") else "dimensions write path missing",
                 "confidence/evidence guards exist" if dimensions_confidence_ready else "confidence/evidence guards missing",
                 "dimensions11 API exists" if contains("backend/app/api/routers/vkpi_kol_pool.py", "dimensions11") else "dimensions API missing",
                 "Discover 11维 UI exists" if contains("frontend/src/components/vkpi/pages/DiscoverPage.tsx", "11维") else "11维 UI missing",
             ],
-            "11维规则画像已带 confidence/evidence；profile_deep 表未建时守卫脚本安全跳过，不插假画像。",
+            "1023 条 KOL Pool 已写入 profile_deep.dimensions_11_json；下一步复测搜索/详情页读取 11 维与 Product Fit。" if dimensions_persisted_ready else "11维规则画像已带 confidence/evidence；profile_deep 表未建时守卫脚本安全跳过，不插假画像。",
         ),
         status_item(
             "search_ui",
