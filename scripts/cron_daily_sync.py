@@ -23,6 +23,7 @@ if str(BACKEND) not in sys.path:
 
 from app.db.connection import close_db_runtime  # noqa: E402
 from app.services.vkpi.cron import run_job  # noqa: E402
+from app.services.vkpi.daily_sync import SyncFailFast  # noqa: E402
 
 
 def utcnow() -> str:
@@ -107,6 +108,25 @@ async def main() -> int:
             if int(official.get("failed") or 0) or int(kol.get("errors") or 0):
                 return 2
         return 0
+    except SyncFailFast as exc:
+        emit_event(
+            "cron_daily_sync_interrupted",
+            exit_code=exc.exit_code,
+            run_id=exc.run_id,
+            stage=exc.stage,
+            summary=exc.summary,
+            error=f"{type(exc).__name__}: {str(exc)[:500]}",
+        )
+        print(json.dumps({
+            "job": "daily_incremental_sync",
+            "status": "interrupted",
+            "exit_code": exc.exit_code,
+            "run_id": exc.run_id,
+            "stage": exc.stage,
+            "summary": exc.summary,
+            "error": str(exc),
+        }, ensure_ascii=False, default=str, indent=2))
+        return exc.exit_code
     except Exception as exc:
         emit_event("cron_daily_sync_failed", error=f"{type(exc).__name__}: {str(exc)[:500]}")
         raise

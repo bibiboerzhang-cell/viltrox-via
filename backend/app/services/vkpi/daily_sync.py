@@ -7,17 +7,84 @@ This job is intentionally provider-only and rule-only:
 """
 from __future__ import annotations
 
+import json
+import sys
+import time
+import traceback
+import uuid
+import asyncio
+import concurrent.futures
 from datetime import datetime, timezone
 from typing import Any
 
 from app.core.logging import get_logger
-from app.db.connection import get_conn
+from app.db.connection import close_standalone_conn, get_conn, open_standalone_conn
 from app.services.vkpi import channels, kol_pool
 
 
 logger = get_logger(__name__)
 
 ENRICHABLE_KOL_PLATFORMS = {"youtube", "instagram", "tiktok", "facebook", "reddit", "x"}
+SYNC_FAIL_FAST_EXIT_CODE = 75
+TRACEBACK_MAX_CHARS = 4096
+TRACEBACK_MAX_LINES = 50
+INTERRUPT_RECORD_RETRY_DELAYS_SEC = (0.2, 0.5, 1.0, 2.0, 5.0)
+
+# PostgreSQL SQLSTATE reference:
+# https://www.postgresql.org/docs/current/errcodes-appendix.html
+DB_LOST_SQLSTATES = {
+    "57P01",  # admin_shutdown
+    "57P02",  # crash_shutdown
+    "57P03",  # cannot_connect_now
+    "08000",  # connection_exception
+    "08001",  # sqlclient_unable_to_establish_sqlconnection
+    "08003",  # connection_does_not_exist
+    "08004",  # sqlserver_rejected_establishment_of_sqlconnection
+    "08006",  # connection_failure
+    "08007",  # transaction_resolution_unknown
+}
+DB_LOST_MESSAGE_TOKENS = (
+    "connection is closed",
+    "server closed the connection",
+    "terminating connection due to administrator command",
+    "consuming input failed",
+    "ssl connection has been closed",
+    "connection has been closed",
+)
+try:  # requests is present in production, but keep sync importable without it.
+    from requests import Timeout as RequestsTimeout
+except Exception:  # pragma: no cover - only for minimal local test envs.
+    RequestsTimeout = ()  # type: ignore[assignment]
+
+PROVIDER_TIMEOUT_EXCEPTIONS = tuple(
+    item
+    for item in (
+        TimeoutError,
+        asyncio.TimeoutError,
+        concurrent.futures.TimeoutError,
+        RequestsTimeout,
+    )
+    if isinstance(item, type)
+)
+
+
+class SyncFailFast(RuntimeError):
+    """Raised when daily sync must stop immediately and let systemd mark failure."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        exit_code: int = SYNC_FAIL_FAST_EXIT_CODE,
+        run_id: str = "",
+        stage: str = "",
+        summary: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.exit_code = int(exit_code)
+        self.run_id = run_id
+        self.stage = stage
+        self.summary = dict(summary or {})
 
 
 def _utcnow() -> str:
@@ -66,6 +133,222 @@ def _row_label(row: dict[str, Any]) -> str:
     platform = str(row.get("platform") or "-")
     handle = str(row.get("account_handle") or row.get("handle") or row.get("display_name") or "-")
     return f"{platform}:{handle}"
+
+
+def _json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
+def _unwrap_db_exception(exc: BaseException) -> BaseException:
+    orig = getattr(exc, "orig", None)
+    if isinstance(orig, BaseException):
+        return orig
+    return exc
+
+
+def _sqlstate(exc: BaseException) -> str:
+    try:
+        value = getattr(exc, "sqlstate", None)
+        if value:
+            return str(value)
+        diag = getattr(exc, "diag", None)
+        diag_value = getattr(diag, "sqlstate", None) if diag is not None else None
+        return str(diag_value or "")
+    except Exception:
+        return ""
+
+
+def _is_db_connection_lost(exc: BaseException) -> bool:
+    raw = _unwrap_db_exception(exc)
+    if _sqlstate(raw) in DB_LOST_SQLSTATES:
+        return True
+    message = str(raw).lower()
+    return any(token in message for token in DB_LOST_MESSAGE_TOKENS)
+
+
+def _classify_sync_error(exc: BaseException) -> tuple[str, str]:
+    raw = _unwrap_db_exception(exc)
+    sqlstate = _sqlstate(raw)
+    message = str(raw).lower()
+    if sqlstate in {"57P01", "57P02"} or "terminating connection due to administrator command" in message:
+        return "db_connection_lost", "admin_shutdown"
+    if _is_db_connection_lost(raw):
+        if "ssl connection has been closed" in message:
+            return "db_connection_lost", "ssl_connection_closed"
+        if "server closed the connection" in message:
+            return "db_connection_lost", "server_closed_connection"
+        if "consuming input failed" in message:
+            return "db_connection_lost", "consuming_input_failed"
+        return "db_connection_lost", "connection_closed"
+    if isinstance(raw, PROVIDER_TIMEOUT_EXCEPTIONS) or "timeout" in message or "timed out" in message:
+        return "provider_timeout", "provider_timeout"
+    if isinstance(raw, (KeyError, TypeError, ValueError, AttributeError)):
+        return "data_field_missing", "data_field_missing"
+    return "other", "other"
+
+
+def _traceback_text(exc: BaseException) -> str:
+    lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
+    text = "".join(lines[-TRACEBACK_MAX_LINES:])
+    if len(text) > TRACEBACK_MAX_CHARS:
+        return text[-TRACEBACK_MAX_CHARS:]
+    return text
+
+
+def _new_run_id(job_name: str = "daily_incremental_sync", stage: str = "kol_pool_light") -> str:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return f"{job_name}_{stage}_{stamp}_{uuid.uuid4().hex[:8]}"
+
+
+def _write_sync_run(sql: str, params: tuple[Any, ...]) -> None:
+    conn = None
+    try:
+        conn = open_standalone_conn()
+        conn.execute(sql, params)
+        conn.commit()
+    finally:
+        close_standalone_conn(conn)
+
+
+def start_sync_run(
+    *,
+    run_id: str,
+    job_name: str,
+    stage: str,
+    total_targets: int,
+    payload: dict[str, Any],
+) -> None:
+    now = _utcnow()
+    _write_sync_run(
+        """
+        INSERT INTO vkpi_sync_runs
+          (run_id, job_name, stage, started_at, status, total_targets, last_success_index, payload_json, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (run_id) DO UPDATE SET
+          status=excluded.status,
+          total_targets=excluded.total_targets,
+          payload_json=excluded.payload_json,
+          updated_at=excluded.updated_at
+        """,
+        (run_id, job_name, stage, now, "running", int(total_targets or 0), 0, _json(payload), now),
+    )
+
+
+def finish_sync_run(
+    *,
+    run_id: str,
+    status: str,
+    last_success_index: int,
+    summary: dict[str, Any],
+    reason: str | None = None,
+    error_type: str | None = None,
+) -> None:
+    now = _utcnow()
+    _write_sync_run(
+        """
+        UPDATE vkpi_sync_runs
+        SET finished_at=?,
+            status=?,
+            last_success_index=?,
+            reason=?,
+            error_type=?,
+            summary_json=?,
+            updated_at=?
+        WHERE run_id=?
+        """,
+        (now, status, int(last_success_index or 0), reason, error_type, _json(summary), now, run_id),
+    )
+
+
+def _emit_interrupt_stderr(event: dict[str, Any]) -> None:
+    print(_json({"event": "vkpi_sync_interrupt_record_failed", "at": _utcnow(), **event}), file=sys.stderr, flush=True)
+
+
+def record_sync_interrupt(
+    *,
+    run_id: str,
+    job_name: str,
+    stage: str,
+    total_targets: int,
+    last_success_index: int,
+    interrupted_at_index: int,
+    interrupted_kol_pool_id: int,
+    reason: str,
+    error_type: str,
+    error_class: str,
+    error_message: str,
+    traceback_text: str,
+    payload: dict[str, Any],
+    summary: dict[str, Any],
+) -> bool:
+    now = _utcnow()
+    sql = """
+        INSERT INTO vkpi_sync_runs
+          (run_id, job_name, stage, started_at, finished_at, status, total_targets, last_success_index,
+           interrupted_at_index, interrupted_kol_pool_id, reason, error_type, error_class, error_message,
+           traceback_text, payload_json, summary_json, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (run_id) DO UPDATE SET
+          finished_at=excluded.finished_at,
+          status=excluded.status,
+          total_targets=excluded.total_targets,
+          last_success_index=excluded.last_success_index,
+          interrupted_at_index=excluded.interrupted_at_index,
+          interrupted_kol_pool_id=excluded.interrupted_kol_pool_id,
+          reason=excluded.reason,
+          error_type=excluded.error_type,
+          error_class=excluded.error_class,
+          error_message=excluded.error_message,
+          traceback_text=excluded.traceback_text,
+          payload_json=excluded.payload_json,
+          summary_json=excluded.summary_json,
+          updated_at=excluded.updated_at
+    """
+    params = (
+        run_id,
+        job_name,
+        stage,
+        now,
+        now,
+        "interrupted",
+        int(total_targets or 0),
+        int(last_success_index or 0),
+        int(interrupted_at_index or 0),
+        int(interrupted_kol_pool_id or 0),
+        reason,
+        error_type,
+        error_class,
+        error_message[:1000],
+        traceback_text,
+        _json(payload),
+        _json(summary),
+        now,
+    )
+    started = time.monotonic()
+    last_exc: BaseException | None = None
+    for attempt, delay in enumerate((0.0, *INTERRUPT_RECORD_RETRY_DELAYS_SEC), start=1):
+        if delay:
+            time.sleep(delay)
+        try:
+            _write_sync_run(sql, params)
+            return True
+        except Exception as exc:
+            last_exc = exc
+            if time.monotonic() - started >= 10.0:
+                break
+            logger.warning("daily sync interrupt record attempt %s failed: %s", attempt, exc)
+    _emit_interrupt_stderr({
+        "run_id": run_id,
+        "job_name": job_name,
+        "stage": stage,
+        "interrupted_at_index": interrupted_at_index,
+        "interrupted_kol_pool_id": interrupted_kol_pool_id,
+        "reason": reason,
+        "error_type": error_type,
+        "error_class": error_class,
+        "record_error": f"{type(last_exc).__name__}: {str(last_exc)[:500]}" if last_exc else "unknown",
+    })
+    return False
 
 
 def _kol_light_rows(*, limit: int, offset: int, stale_before: str, platforms: set[str], source_type: str) -> list[dict[str, Any]]:
@@ -220,6 +503,8 @@ def run_official_incremental(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def run_kol_pool_light_refresh(payload: dict[str, Any]) -> dict[str, Any]:
+    job_name = "daily_incremental_sync"
+    stage = "kol_pool_light"
     dry_run = _bool(payload.get("dry_run"))
     limit = max(1, min(1200, _int(payload.get("kol_limit"), 1200)))
     offset = max(0, min(5000, _int(payload.get("kol_offset"), 0)))
@@ -249,12 +534,22 @@ def run_kol_pool_light_refresh(payload: dict[str, Any]) -> dict[str, Any]:
         }
 
     staff = payload.get("staff") if isinstance(payload.get("staff"), dict) else _system_staff()
+    run_id = str(payload.get("run_id") or _new_run_id(job_name, stage))
     refreshed = 0
     partial = 0
+    last_success_index = 0
     skipped: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
+    start_sync_run(
+        run_id=run_id,
+        job_name=job_name,
+        stage=stage,
+        total_targets=len(rows),
+        payload={**payload, "run_id": run_id},
+    )
     logger.info(
-        "daily sync kol light start requested=%s source_total=%s refreshable=%s offset=%s stale_before=%s max_posts=%s source_type=%s platforms=%s",
+        "daily sync kol light start run_id=%s requested=%s source_total=%s refreshable=%s offset=%s stale_before=%s max_posts=%s source_type=%s platforms=%s",
+        run_id,
         len(rows),
         source_counts.get("source_total"),
         len(rows),
@@ -279,11 +574,13 @@ def run_kol_pool_light_refresh(payload: dict[str, Any]) -> dict[str, Any]:
                 partial += 1
                 skipped.append({
                     "id": kol_pool_id,
+                    "kol_pool_id": kol_pool_id,
                     "platform": row.get("platform"),
                     "handle": row.get("handle"),
                     "status": status or "unknown",
                     "message": result.get("message"),
                 })
+            last_success_index = index
             if index == len(rows) or index % 10 == 0 or not _status_ok(status):
                 logger.info(
                     "daily sync kol light progress %s/%s refreshed=%s partial=%s errors=%s last_id=%s status=%s",
@@ -296,12 +593,75 @@ def run_kol_pool_light_refresh(payload: dict[str, Any]) -> dict[str, Any]:
                     status or "unknown",
                 )
         except Exception as exc:
+            error_type, reason = _classify_sync_error(exc)
+            raw_exc = _unwrap_db_exception(exc)
+            error_class = type(raw_exc).__name__
+            if error_type == "db_connection_lost":
+                summary = {
+                    "dry_run": False,
+                    "requested": len(rows),
+                    "refreshed": refreshed,
+                    "partial": partial,
+                    "errors": len(errors) + 1,
+                    "limit": limit,
+                    "offset": offset,
+                    "stale_before": stale_before,
+                    "max_posts": max_posts,
+                    "source_type": source_type,
+                    **source_counts,
+                    "refreshable_total": len(rows),
+                    "last_success_index": last_success_index,
+                    "interrupted_at_index": index,
+                    "interrupted_kol_pool_id": kol_pool_id,
+                    "reason": reason,
+                    "error_type": error_type,
+                    "error_class": error_class,
+                }
+                logger.exception("daily sync kol light %s/%s interrupted kol_pool_id=%s %s", index, len(rows), kol_pool_id, label)
+                try:
+                    record_sync_interrupt(
+                        run_id=run_id,
+                        job_name=job_name,
+                        stage=stage,
+                        total_targets=len(rows),
+                        last_success_index=last_success_index,
+                        interrupted_at_index=index,
+                        interrupted_kol_pool_id=kol_pool_id,
+                        reason=reason,
+                        error_type=error_type,
+                        error_class=error_class,
+                        error_message=str(raw_exc),
+                        traceback_text=_traceback_text(exc),
+                        payload={**payload, "run_id": run_id},
+                        summary=summary,
+                    )
+                except Exception as record_exc:
+                    _emit_interrupt_stderr({
+                        "run_id": run_id,
+                        "job_name": job_name,
+                        "stage": stage,
+                        "interrupted_at_index": index,
+                        "interrupted_kol_pool_id": kol_pool_id,
+                        "reason": reason,
+                        "error_type": error_type,
+                        "error_class": error_class,
+                        "record_error": f"{type(record_exc).__name__}: {str(record_exc)[:500]}",
+                    })
+                raise SyncFailFast(
+                    f"daily sync interrupted: {reason}",
+                    run_id=run_id,
+                    stage=stage,
+                    summary=summary,
+                ) from exc
             logger.exception("daily sync kol light %s/%s failed kol_pool_id=%s %s", index, len(rows), kol_pool_id, label)
             errors.append({
                 "id": kol_pool_id,
+                "kol_pool_id": kol_pool_id,
                 "platform": row.get("platform"),
                 "handle": row.get("handle"),
                 "error": f"{type(exc).__name__}: {str(exc)[:400]}",
+                "error_class": type(exc).__name__,
+                "error_type": error_type,
             })
     logger.info(
         "daily sync kol light finish requested=%s refreshed=%s partial=%s errors=%s",
@@ -310,8 +670,9 @@ def run_kol_pool_light_refresh(payload: dict[str, Any]) -> dict[str, Any]:
         partial,
         len(errors),
     )
-    return {
+    summary = {
         "dry_run": False,
+        "run_id": run_id,
         "requested": len(rows),
         "refreshed": refreshed,
         "partial": partial,
@@ -326,15 +687,24 @@ def run_kol_pool_light_refresh(payload: dict[str, Any]) -> dict[str, Any]:
         "skipped": skipped[:30],
         "error_sample": errors[:30],
     }
+    finish_sync_run(
+        run_id=run_id,
+        status="completed",
+        last_success_index=last_success_index,
+        summary=summary,
+    )
+    return summary
 
 
 def run_daily_incremental(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     payload = dict(payload or {})
     started_at = _utcnow()
+    payload.setdefault("run_id", _new_run_id("daily_incremental_sync", "kol_pool_light"))
     result: dict[str, Any] = {
         "job": "daily_incremental_sync",
         "status": "ok",
         "dry_run": _bool(payload.get("dry_run")),
+        "run_id": payload.get("run_id"),
         "started_at": started_at,
     }
     if not _bool(payload.get("skip_official")):

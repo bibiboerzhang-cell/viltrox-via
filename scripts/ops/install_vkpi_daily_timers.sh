@@ -20,9 +20,12 @@ After=network-online.target viltrox-2.0-test.service
 
 [Service]
 Type=oneshot
+RestartPreventExitStatus=75
 WorkingDirectory=${REMOTE_ROOT}
 Environment=PYTHONPATH=backend
 ExecStart=/bin/bash -lc 'mkdir -p /var/log/vkpi && .venv/bin/python scripts/cron_daily_sync.py --official-max-posts 50 --kol-limit 1200 --kol-max-posts 1 >> /var/log/vkpi/sync_daily_\$(date -u +%%Y%%m%%d).log 2>&1'
+# TODO: Consider lowering to 2h. Current sync averages 30-60min; 6h releases resources slowly on real hangs.
+# Confirm deep scan or other long-running jobs will not be cut before changing this value.
 TimeoutStartSec=6h
 Nice=10
 IOSchedulingClass=best-effort
