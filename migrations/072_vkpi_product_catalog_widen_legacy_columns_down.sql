@@ -1,0 +1,2 @@
+-- Width expansion is intentionally not reverted automatically. Existing data
+-- may exceed the old VARCHAR limits after the official product import.

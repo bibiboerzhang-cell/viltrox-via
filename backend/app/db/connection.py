@@ -114,6 +114,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "069_vkpi_competitor_relation.sql",
     "070_vkpi_kol_profile_deep_base.sql",
     "071_vkpi_product_catalog_official_specs.sql",
+    "072_vkpi_product_catalog_widen_legacy_columns.sql",
 )
 
 try:

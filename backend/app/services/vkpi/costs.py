@@ -155,6 +155,16 @@ def ensure_product_catalog_schema() -> None:
             "source_confidence": "NUMERIC(4,2) NOT NULL DEFAULT 0",
         }.items():
             conn.execute(f"ALTER TABLE vkpi_products ADD COLUMN IF NOT EXISTS {column} {ddl}")
+        for column in (
+            "sku",
+            "category_main",
+            "category_detail",
+            "model_name",
+            "marketing_name",
+            "status",
+            "source_file",
+        ):
+            conn.execute(f"ALTER TABLE vkpi_products ALTER COLUMN {column} TYPE TEXT")
     else:
         conn.execute(
             """
