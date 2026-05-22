@@ -245,10 +245,11 @@ def _catalog_product_fit_keywords() -> dict[str, tuple[str, ...]]:
                    series, mount, specs_json, fit_tags_json
             FROM vkpi_products
             WHERE LOWER(COALESCE(category_main, '')) IN ('lens', 'cine lens')
-               OR LOWER(COALESCE(category_detail, '')) LIKE '%lens%'
+               OR LOWER(COALESCE(category_detail, '')) LIKE ?
             ORDER BY source_confidence DESC, updated_at DESC, sku ASC
             LIMIT 300
-            """
+            """,
+            ("%lens%",),
         ).fetchall()
     except Exception:
         rows = []
