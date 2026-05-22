@@ -698,6 +698,54 @@ def gpt_analyze_engagement_anomaly(
 # ──────────────────────────────────────────────
 # yt-dlp Video Downloader
 # ──────────────────────────────────────────────
+def _probe_downloaded_media(path: str) -> dict:
+    """Return basic media facts and whether the file contains a video stream."""
+    result = {"has_video": False, "duration": 0.0, "streams": []}
+    try:
+        probe = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_streams",
+                "-show_format",
+                path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if probe.returncode != 0 or not probe.stdout.strip():
+            return result
+        payload = json.loads(probe.stdout)
+        streams = payload.get("streams") if isinstance(payload, dict) else []
+        if isinstance(streams, list):
+            result["streams"] = [
+                {
+                    "codec_type": stream.get("codec_type"),
+                    "codec_name": stream.get("codec_name"),
+                    "width": stream.get("width"),
+                    "height": stream.get("height"),
+                }
+                for stream in streams
+                if isinstance(stream, dict)
+            ]
+            result["has_video"] = any(stream.get("codec_type") == "video" for stream in streams if isinstance(stream, dict))
+        duration = (payload.get("format") or {}).get("duration")
+        if duration is None:
+            for stream in streams or []:
+                if isinstance(stream, dict) and stream.get("duration"):
+                    duration = stream.get("duration")
+                    break
+        if duration is not None:
+            result["duration"] = float(duration)
+    except Exception:
+        return result
+    return result
+
+
 def download_video_ytdlp(url: str, output_dir: str, max_seconds: int = 120) -> dict:
     """
     Download video using yt-dlp for full-video analysis.
@@ -729,7 +777,7 @@ def download_video_ytdlp(url: str, output_dir: str, max_seconds: int = 120) -> d
             YTDLP_BIN,
             "--no-playlist",
             "--max-filesize", "500m",
-            "-f", "best[ext=mp4][height<=720]/18/best[height<=720]/best",
+            "-f", "bv*[ext=mp4][height<=720]+ba[ext=m4a]/bv*[height<=720]+ba/b[ext=mp4][height<=720]/b[height<=720]",
             "--merge-output-format", "mp4",
             "-o", out_template,
             "--no-warnings",
@@ -763,21 +811,38 @@ def download_video_ytdlp(url: str, output_dir: str, max_seconds: int = 120) -> d
             result["error"] = f"Download failed: {proc.stderr[:200] if proc.stderr else 'no output file'}"
             return result
 
-        video_path = str(found[0])
+        found = sorted(
+            found,
+            key=lambda path: (
+                0 if path.suffix.lower() in {".mp4", ".mov", ".m4v", ".webm"} else 1,
+                -path.stat().st_size if path.exists() else 0,
+            ),
+        )
+        probed_files = []
+        video_path = None
+        video_probe = None
+        for candidate in found:
+            probe_info = _probe_downloaded_media(str(candidate))
+            probed_files.append(
+                {
+                    "file": candidate.name,
+                    "has_video": probe_info.get("has_video"),
+                    "streams": probe_info.get("streams"),
+                    "size": candidate.stat().st_size if candidate.exists() else 0,
+                }
+            )
+            if probe_info.get("has_video"):
+                video_path = str(candidate)
+                video_probe = probe_info
+                break
+
+        if not video_path:
+            result["error"] = f"Download produced no video stream: {json.dumps(probed_files, ensure_ascii=False)[:500]}"
+            return result
+
         result["path"] = video_path
         result["success"] = True
-
-        # Get duration
-        probe = subprocess.run(
-            ["ffprobe", "-v", "quiet", "-print_format", "json",
-             "-show_format", video_path],
-            capture_output=True, text=True, timeout=10
-        )
-        try:
-            dur = float(json.loads(probe.stdout)["format"]["duration"])
-            result["duration"] = dur
-        except Exception:
-            pass
+        result["duration"] = float((video_probe or {}).get("duration") or 0)
 
         logger.info(
             "ytdlp_download_complete",
