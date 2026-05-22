@@ -255,16 +255,76 @@ class YouTubeCrawler:
                 "items": [],
                 "error": "could not extract video_id",
             }
-        return self._request(
+        limit = max(1, min(100, int(max_results or 50)))
+        threads = self._request(
             "commentThreads",
             {
-                "part": "snippet",
+                "part": "snippet,replies",
                 "videoId": video_id,
                 "order": "relevance",
                 "textFormat": "plainText",
-                "maxResults": max(1, min(100, int(max_results or 50))),
+                "maxResults": limit,
             },
         )
+        if threads.get("provider_status") != "ok":
+            return threads
+        return {
+            **threads,
+            "items": self._flatten_comment_threads(threads.get("items") or [], limit),
+            "raw": {"video_id": video_id, "thread_count": len(threads.get("items") or [])},
+        }
+
+    def _flatten_comment_threads(self, threads: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+        comments: list[dict[str, Any]] = []
+        for thread in threads:
+            if not isinstance(thread, dict) or len(comments) >= limit:
+                continue
+            snippet = thread.get("snippet") if isinstance(thread.get("snippet"), dict) else {}
+            top_comment = snippet.get("topLevelComment") if isinstance(snippet.get("topLevelComment"), dict) else None
+            top_comment_id = str((top_comment or {}).get("id") or thread.get("id") or "").strip()
+            if top_comment:
+                top_payload = dict(top_comment)
+                top_payload["depth"] = 0
+                top_payload["reply_count"] = snippet.get("totalReplyCount") or 0
+                comments.append(top_payload)
+            if len(comments) >= limit:
+                break
+            replies = []
+            replies_payload = thread.get("replies") if isinstance(thread.get("replies"), dict) else {}
+            if isinstance(replies_payload.get("comments"), list):
+                replies.extend([item for item in replies_payload.get("comments") or [] if isinstance(item, dict)])
+            total_replies = int(snippet.get("totalReplyCount") or 0)
+            if top_comment_id and total_replies > len(replies) and len(comments) < limit:
+                replies.extend(self._fetch_comment_replies(top_comment_id, max_results=limit - len(comments)))
+            for reply in replies:
+                if len(comments) >= limit:
+                    break
+                item = dict(reply)
+                item["depth"] = 1
+                comments.append(item)
+        return comments[:limit]
+
+    def _fetch_comment_replies(self, parent_id: str, *, max_results: int) -> list[dict[str, Any]]:
+        replies: list[dict[str, Any]] = []
+        page_token = ""
+        while len(replies) < max_results:
+            payload = self._request(
+                "comments",
+                {
+                    "part": "snippet",
+                    "parentId": parent_id,
+                    "textFormat": "plainText",
+                    "maxResults": max(1, min(100, max_results - len(replies))),
+                    "pageToken": page_token,
+                },
+            )
+            if payload.get("provider_status") != "ok":
+                break
+            replies.extend([item for item in payload.get("items") or [] if isinstance(item, dict)])
+            page_token = str(payload.get("nextPageToken") or "")
+            if not page_token:
+                break
+        return replies[:max_results]
 
     @staticmethod
     def _extract_video_id(url_or_id: str) -> str:

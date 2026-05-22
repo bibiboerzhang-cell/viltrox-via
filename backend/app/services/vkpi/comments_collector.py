@@ -133,13 +133,15 @@ def _standardize_comment(
     mapping = {
         "youtube": {
             "external_comment_id": ["id"],
-            "comment_text": ["snippet.topLevelComment.snippet.textDisplay", "text"],
-            "author_handle": ["snippet.topLevelComment.snippet.authorDisplayName", "author"],
-            "author_id": ["snippet.topLevelComment.snippet.authorChannelId.value"],
-            "likes_count": ["snippet.topLevelComment.snippet.likeCount", "likes"],
+            "comment_text": ["snippet.topLevelComment.snippet.textDisplay", "snippet.textDisplay", "text"],
+            "author_handle": ["snippet.topLevelComment.snippet.authorDisplayName", "snippet.authorDisplayName", "author"],
+            "author_id": ["snippet.topLevelComment.snippet.authorChannelId.value", "snippet.authorChannelId.value"],
+            "likes_count": ["snippet.topLevelComment.snippet.likeCount", "snippet.likeCount", "likes"],
             "reply_count": ["snippet.totalReplyCount", "reply_count"],
-            "created_at": ["snippet.topLevelComment.snippet.publishedAt", "created_at"],
+            "created_at": ["snippet.topLevelComment.snippet.publishedAt", "snippet.publishedAt", "created_at"],
             "is_op": [],
+            "parent_comment_id": ["snippet.parentId"],
+            "depth": ["depth"],
         },
         "instagram": {
             "external_comment_id": ["id"],
