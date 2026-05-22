@@ -56,6 +56,7 @@ from app.services.vkpi.new_launch_match import (
 SCENARIO = "kol_product_fit"
 REASON_BUDGET_SCOPE = "cron:p4_recommendation_reasons"
 _CATALOG_PRODUCT_BY_SKU: dict[str, dict[str, Any] | None] = {}
+_CATALOG_PRODUCTS: list[dict[str, Any]] | None = None
 
 
 def _utcnow() -> datetime:
@@ -316,28 +317,7 @@ def _load_dimensions11_product_fit(kol_pool_id: int) -> dict[str, dict[str, Any]
     return result
 
 
-def _catalog_product_for_sku(sku: Any) -> dict[str, Any] | None:
-    sku_text = _text(sku).upper()
-    if not sku_text:
-        return None
-    if sku_text in _CATALOG_PRODUCT_BY_SKU:
-        return _CATALOG_PRODUCT_BY_SKU[sku_text]
-    try:
-        row = get_conn().execute(
-            """
-            SELECT sku, category_main, category_detail, model_name, marketing_name,
-                   price_usd, series, mount, product_url, specs_json, source_confidence
-            FROM vkpi_products
-            WHERE sku=?
-            LIMIT 1
-            """,
-            (sku_text,),
-        ).fetchone()
-    except Exception:
-        row = None
-    if not row:
-        _CATALOG_PRODUCT_BY_SKU[sku_text] = None
-        return None
+def _compact_catalog_product(row: dict[str, Any]) -> dict[str, Any]:
     item = _row_to_dict(row)
     specs = _load_json(item.get("specs_json") or "{}", {})
     if not isinstance(specs, dict):
@@ -360,8 +340,91 @@ def _catalog_product_for_sku(sku: Any) -> dict[str, Any] | None:
         "source_confidence": _safe_float(item.get("source_confidence"), 0.0),
         "specs": compact_specs,
     }
+    return result
+
+
+def _catalog_product_for_sku(sku: Any) -> dict[str, Any] | None:
+    sku_text = _text(sku).upper()
+    if not sku_text:
+        return None
+    if sku_text in _CATALOG_PRODUCT_BY_SKU:
+        return _CATALOG_PRODUCT_BY_SKU[sku_text]
+    try:
+        row = get_conn().execute(
+            """
+            SELECT sku, category_main, category_detail, model_name, marketing_name,
+                   price_usd, series, mount, product_url, specs_json, source_confidence
+            FROM vkpi_products
+            WHERE sku=?
+            LIMIT 1
+            """,
+            (sku_text,),
+        ).fetchone()
+    except Exception:
+        row = None
+    if not row:
+        _CATALOG_PRODUCT_BY_SKU[sku_text] = None
+        return None
+    result = _compact_catalog_product(_row_to_dict(row))
     _CATALOG_PRODUCT_BY_SKU[sku_text] = result
     return result
+
+
+def _catalog_products() -> list[dict[str, Any]]:
+    global _CATALOG_PRODUCTS
+    if _CATALOG_PRODUCTS is not None:
+        return _CATALOG_PRODUCTS
+    try:
+        rows = get_conn().execute(
+            """
+            SELECT sku, category_main, category_detail, model_name, marketing_name,
+                   price_usd, series, mount, product_url, specs_json, source_confidence
+            FROM vkpi_products
+            WHERE LOWER(COALESCE(category_main, '')) IN ('lens', 'cine lens')
+               OR LOWER(COALESCE(category_detail, '')) LIKE ?
+            ORDER BY source_confidence DESC, sku ASC
+            LIMIT 500
+            """,
+            ("%lens%",),
+        ).fetchall()
+    except Exception:
+        rows = []
+    products: list[dict[str, Any]] = []
+    for row in rows:
+        product = _compact_catalog_product(_row_to_dict(row))
+        normalized = _normalize_product_fit_key(
+            f"{product.get('sku')} {product.get('model_name')} {product.get('marketing_name')}"
+        )
+        products.append({**product, "normalized": normalized})
+    _CATALOG_PRODUCTS = products
+    return products
+
+
+def _catalog_products_for_match(match: dict[str, Any] | None, family: dict[str, Any], *, limit: int = 6) -> list[dict[str, Any]]:
+    if not match:
+        return []
+    needles = [
+        _normalize_product_fit_key(match.get("sku")),
+        _normalize_product_fit_key(_render_family_detail(family)),
+        _normalize_product_fit_key(family.get("identity_key")),
+    ]
+    needles = [needle for needle in needles if needle]
+    if not needles:
+        return []
+    results: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for product in _catalog_products():
+        haystack = _text(product.get("normalized"))
+        sku = _text(product.get("sku"))
+        if not haystack or not sku or sku in seen:
+            continue
+        if any(needle in haystack or haystack.startswith(needle) for needle in needles):
+            clean = {key: value for key, value in product.items() if key != "normalized"}
+            results.append(clean)
+            seen.add(sku)
+        if len(results) >= limit:
+            break
+    return results
 
 
 def _dimensions11_product_fit_for_family(
@@ -750,7 +813,8 @@ def build_kol_product_fit_preview(
             )
         if dimensions11_match:
             dimensions11_matched += 1
-            matched_catalog_product = _catalog_product_for_sku(dimensions11_match.get("sku"))
+            matched_catalog_products = _catalog_products_for_match(dimensions11_match, family)
+            matched_catalog_product = matched_catalog_products[0] if matched_catalog_products else _catalog_product_for_sku(dimensions11_match.get("sku"))
             evidence_pro.append(
                 _evidence(
                     evidence_type="dimensions11_product_fit",
@@ -772,10 +836,12 @@ def build_kol_product_fit_preview(
                         "source_sheet": "dimensions_11_json.block4_specialty.product_fit",
                         "source_id": dimensions11_match.get("sku"),
                         "catalog_product": matched_catalog_product or {},
+                        "catalog_products": matched_catalog_products,
                     },
                 )
             )
         else:
+            matched_catalog_products = []
             matched_catalog_product = None
         if cooperation_count:
             evidence_pro.append(
@@ -950,6 +1016,7 @@ def build_kol_product_fit_preview(
                 "evidence_con": evidence_con,
                 "links": {"open_in_vkpi": f"/products/{family.get('entity_uid')}"},
                 "matched_catalog_product": matched_catalog_product,
+                "matched_catalog_products": matched_catalog_products,
                 "debug": {
                     "family_id": family_id,
                     "product_ids": sorted(family_products.get(family_id, set()))[:20],

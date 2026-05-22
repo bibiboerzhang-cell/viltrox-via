@@ -6,6 +6,7 @@ import json
 from app.services.vkpi import kol_product_fit
 from app.services.vkpi.kol_product_fit import (
     _catalog_product_for_sku,
+    _catalog_products_for_match,
     _dimensions11_product_fit_for_family,
     _normalize_product_fit_key,
 )
@@ -95,3 +96,37 @@ def test_catalog_product_for_sku_returns_compact_specs(monkeypatch):
     assert product["specs"]["focal_length"] == "f=35mm"
     assert product["specs"]["filter_size"] == "Φ58mm"
     assert "ignored" not in product["specs"]
+
+
+def test_catalog_products_for_match_returns_mount_variants(monkeypatch):
+    class _Result:
+        def fetchall(self):
+            base = {
+                "category_main": "Lens",
+                "category_detail": "camera lens",
+                "marketing_name": "",
+                "price_usd": "999.00",
+                "series": "LAB",
+                "product_url": "https://viltrox.com/products/af-35mm-f1-2-fe",
+                "source_confidence": "1.00",
+                "specs_json": json.dumps({"focal_length": "f=35mm", "aperture": "F1.2-F16"}),
+            }
+            return [
+                {**base, "sku": "AF-35MM-F12-LAB-FE", "model_name": "AF 35mm F1.2 LAB FE", "mount": "FE-mount"},
+                {**base, "sku": "AF-35MM-F12-LAB-Z", "model_name": "AF 35mm F1.2 LAB Z", "mount": "Z-mount"},
+            ]
+
+    class _Conn:
+        def execute(self, *_args, **_kwargs):
+            return _Result()
+
+    monkeypatch.setattr(kol_product_fit, "_CATALOG_PRODUCTS", None)
+    monkeypatch.setattr(kol_product_fit, "get_conn", lambda: _Conn())
+
+    products = _catalog_products_for_match(
+        {"sku": "AF-35MM-F12-LAB"},
+        {"display_name": "AF 35mm F1.2 LAB", "identity_key": "af 35mm f1.2 lab"},
+    )
+
+    assert [product["sku"] for product in products] == ["AF-35MM-F12-LAB-FE", "AF-35MM-F12-LAB-Z"]
+    assert {product["mount"] for product in products} == {"FE-mount", "Z-mount"}
