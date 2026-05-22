@@ -2128,6 +2128,10 @@ function ProfilePanel({
   const candidateIntentTags = searchIntentTags(selectedKol.raw.search_query || selectedKol.topic || selectedKol.raw.sample_title);
   const candidateFocus = candidateIntentTags.length ? candidateIntentTags.map((item) => item.label).join(' / ') : '近期内容';
   const candidateSampleCount = candidatePostsFromRaw(selectedKol.raw).length;
+  const dimensions11ProductFits = productFitsFromDimensions11(selectedDimensions11);
+  const productRows: Array<Record<string, unknown>> = productFits.length ? productFits as unknown as Array<Record<string, unknown>> : dimensions11ProductFits as unknown as Array<Record<string, unknown>>;
+  const productFitMethod = textValue(productRows[0]?.method, '');
+  const productFitScore = safeNumber(summary.product_fit || selectedKol.raw.product_fit) || safeNumber(productRows[0]?.score);
   const decision = candidateOnly
     ? (historicalCooperationCount
       ? `历史合作命中 ${historicalCooperationCount} 条；优先核对最近内容、负责人和产品线后复用。`
@@ -2135,11 +2139,7 @@ function ProfilePanel({
       ? `可观察；平台已返回样本内容，先围绕 ${candidateFocus} 建档抓取。`
       : `待抓取；这是平台候选，建议先抓取账号再评估 ${candidateFocus}。`)
     : textValue(selectedAssessment?.recommended_action || summary.recommended_action, assessmentScore >= 80 ? '优先合作；建议补齐产品适配和联系方式证据。' : assessmentScore ? '可观察；先补齐近期内容与联系方式。' : '待评估；请先运行真实抓取。');
-  const productFitScore = safeNumber(summary.product_fit || selectedKol.raw.product_fit);
   const profileStatus = historicalCooperationCount ? `历史合作 ${historicalCooperationCount} 条` : candidateOnly ? '候选 / 未深扫 / 可分析' : profileLoading ? '画像加载中' : selectedProfile ? '真实 profile 已加载' : lookupResult ? '查重结果已加载' : '列表档案';
-  const dimensions11ProductFits = productFitsFromDimensions11(selectedDimensions11);
-  const productRows: Array<Record<string, unknown>> = productFits.length ? productFits as unknown as Array<Record<string, unknown>> : dimensions11ProductFits as unknown as Array<Record<string, unknown>>;
-  const productFitMethod = textValue(productRows[0]?.method, '');
   const hasDimensions11 = Boolean(selectedDimensions11 && textValue(selectedDimensions11.method, ''));
   const overallDimensionsScore = safeNumber(selectedDimensions11?.overall_score);
   const competitorRows = visibleCompetitorRelations(competitorRelations);
