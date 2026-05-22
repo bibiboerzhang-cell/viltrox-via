@@ -354,7 +354,7 @@ def _save_channel_comments(
                 channels._text(standardized.get("language_detected"), raw.get("language")),
                 channels._text(standardized.get("author_handle")),
                 channels._text(standardized.get("author_id")),
-                1 if channels._bool(standardized.get("is_op")) else 0,
+                channels._bool(standardized.get("is_op")),
                 channels._text(standardized.get("parent_comment_id")),
                 channels._int(standardized.get("depth")),
                 channels._int(standardized.get("likes_count")),
