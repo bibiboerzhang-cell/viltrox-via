@@ -773,11 +773,22 @@ def download_video_ytdlp(url: str, output_dir: str, max_seconds: int = 120) -> d
         result["platform"] = platform
 
         # Build yt-dlp command
+        # Prefer bounded 720p media, but keep an unconstrained fallback for
+        # platforms like TikTok whose extractor formats sometimes lack height
+        # metadata. Without the final b/best fallback yt-dlp can reject a valid
+        # public video as "Requested format is not available".
+        format_selector = (
+            "bv*[ext=mp4][height<=720]+ba[ext=m4a]/"
+            "bv*[height<=720]+ba/"
+            "b[ext=mp4][height<=720]/"
+            "b[height<=720]/"
+            "b/best"
+        )
         cmd = [
             YTDLP_BIN,
             "--no-playlist",
             "--max-filesize", "500m",
-            "-f", "bv*[ext=mp4][height<=720]+ba[ext=m4a]/bv*[height<=720]+ba/b[ext=mp4][height<=720]/b[height<=720]",
+            "-f", format_selector,
             "--merge-output-format", "mp4",
             "-o", out_template,
             "--no-warnings",
