@@ -1,7 +1,11 @@
 """Tests for dimensions_11_json bridge into KOL product-fit scoring."""
 from __future__ import annotations
 
+import json
+
+from app.services.vkpi import kol_product_fit
 from app.services.vkpi.kol_product_fit import (
+    _catalog_product_for_sku,
     _dimensions11_product_fit_for_family,
     _normalize_product_fit_key,
 )
@@ -47,3 +51,47 @@ def test_dimensions11_product_fit_for_family_does_not_broad_match_unrelated_fami
 
     assert component == 0
     assert match is None
+
+
+def test_catalog_product_for_sku_returns_compact_specs(monkeypatch):
+    class _Result:
+        def fetchone(self):
+            return {
+                "sku": "AF-35MM-F18-EVO-FE",
+                "category_main": "Lens",
+                "category_detail": "camera lens",
+                "model_name": "Viltrox AF 35mm F1.8 EVO Full-Frame Lens for Sony E-Mount",
+                "marketing_name": "AF 35mm F1.8 EVO FE",
+                "price_usd": "395.00",
+                "series": "EVO",
+                "mount": "FE-mount",
+                "product_url": "https://viltrox.com/products/af-35mm-f1-8-fe",
+                "source_confidence": "1.00",
+                "specs_json": json.dumps(
+                    {
+                        "lens_mount": "E-mount",
+                        "focal_length": "f=35mm",
+                        "aperture": "F1.8-F16",
+                        "weight": "≈355g",
+                        "filter_size": "Φ58mm",
+                        "ignored": "not returned",
+                    }
+                ),
+            }
+
+    class _Conn:
+        def execute(self, *_args, **_kwargs):
+            return _Result()
+
+    monkeypatch.setattr(kol_product_fit, "_CATALOG_PRODUCT_BY_SKU", {})
+    monkeypatch.setattr(kol_product_fit, "get_conn", lambda: _Conn())
+
+    product = _catalog_product_for_sku("af-35mm-f18-evo-fe")
+
+    assert product
+    assert product["sku"] == "AF-35MM-F18-EVO-FE"
+    assert product["mount"] == "FE-mount"
+    assert product["price_usd"] == 395.0
+    assert product["specs"]["focal_length"] == "f=35mm"
+    assert product["specs"]["filter_size"] == "Φ58mm"
+    assert "ignored" not in product["specs"]

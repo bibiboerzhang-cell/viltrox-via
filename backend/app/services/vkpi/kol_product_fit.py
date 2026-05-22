@@ -55,6 +55,7 @@ from app.services.vkpi.new_launch_match import (
 
 SCENARIO = "kol_product_fit"
 REASON_BUDGET_SCOPE = "cron:p4_recommendation_reasons"
+_CATALOG_PRODUCT_BY_SKU: dict[str, dict[str, Any] | None] = {}
 
 
 def _utcnow() -> datetime:
@@ -312,6 +313,54 @@ def _load_dimensions11_product_fit(kol_pool_id: int) -> dict[str, dict[str, Any]
             "method": _text(payload.get("method")),
             "computed_at": _text(payload.get("computed_at")),
         }
+    return result
+
+
+def _catalog_product_for_sku(sku: Any) -> dict[str, Any] | None:
+    sku_text = _text(sku).upper()
+    if not sku_text:
+        return None
+    if sku_text in _CATALOG_PRODUCT_BY_SKU:
+        return _CATALOG_PRODUCT_BY_SKU[sku_text]
+    try:
+        row = get_conn().execute(
+            """
+            SELECT sku, category_main, category_detail, model_name, marketing_name,
+                   price_usd, series, mount, product_url, specs_json, source_confidence
+            FROM vkpi_products
+            WHERE sku=?
+            LIMIT 1
+            """,
+            (sku_text,),
+        ).fetchone()
+    except Exception:
+        row = None
+    if not row:
+        _CATALOG_PRODUCT_BY_SKU[sku_text] = None
+        return None
+    item = _row_to_dict(row)
+    specs = _load_json(item.get("specs_json") or "{}", {})
+    if not isinstance(specs, dict):
+        specs = {}
+    compact_specs = {
+        key: specs.get(key)
+        for key in ("lens_mount", "focal_length", "aperture", "lens_elements", "weight", "filter_size")
+        if _text(specs.get(key))
+    }
+    result = {
+        "sku": _text(item.get("sku")),
+        "model_name": _text(item.get("model_name")),
+        "marketing_name": _text(item.get("marketing_name")),
+        "category_main": _text(item.get("category_main")),
+        "category_detail": _text(item.get("category_detail")),
+        "series": _text(item.get("series")),
+        "mount": _text(item.get("mount")),
+        "price_usd": _safe_float(item.get("price_usd"), 0.0) or None,
+        "product_url": _text(item.get("product_url")),
+        "source_confidence": _safe_float(item.get("source_confidence"), 0.0),
+        "specs": compact_specs,
+    }
+    _CATALOG_PRODUCT_BY_SKU[sku_text] = result
     return result
 
 
@@ -701,6 +750,7 @@ def build_kol_product_fit_preview(
             )
         if dimensions11_match:
             dimensions11_matched += 1
+            matched_catalog_product = _catalog_product_for_sku(dimensions11_match.get("sku"))
             evidence_pro.append(
                 _evidence(
                     evidence_type="dimensions11_product_fit",
@@ -721,9 +771,12 @@ def build_kol_product_fit_preview(
                         "source_ref": f"vkpi_kol_profile_deep:{dimensions11_match.get('profile_deep_id')}",
                         "source_sheet": "dimensions_11_json.block4_specialty.product_fit",
                         "source_id": dimensions11_match.get("sku"),
+                        "catalog_product": matched_catalog_product or {},
                     },
                 )
             )
+        else:
+            matched_catalog_product = None
         if cooperation_count:
             evidence_pro.append(
                 _evidence(
@@ -896,6 +949,7 @@ def build_kol_product_fit_preview(
                 "evidence_pro": evidence_pro,
                 "evidence_con": evidence_con,
                 "links": {"open_in_vkpi": f"/products/{family.get('entity_uid')}"},
+                "matched_catalog_product": matched_catalog_product,
                 "debug": {
                     "family_id": family_id,
                     "product_ids": sorted(family_products.get(family_id, set()))[:20],
