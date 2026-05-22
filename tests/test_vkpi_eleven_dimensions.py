@@ -128,7 +128,6 @@ def test_product_fit_keywords_extend_from_official_catalog(monkeypatch):
     assert "AF-55MM-F18-EVO-Z" in keywords
     assert "55mm" in keywords["AF-55MM-F18-EVO-Z"]
     assert "f1.8" in keywords["AF-55MM-F18-EVO-Z"]
-    assert "z-mount" in keywords["AF-55MM-F18-EVO-Z"]
     assert "af 55mm f1.8" in keywords["AF-55MM-F18-EVO-Z"]
     assert "af 55mm f1" not in keywords["AF-55MM-F18-EVO-Z"]
     assert "evo" not in keywords["AF-55MM-F18-EVO-Z"]

@@ -198,6 +198,8 @@ def _add_product_term(terms: set[str], value: Any) -> None:
     term = _product_term(value)
     if not term or term in GENERIC_PRODUCT_TERMS or len(term) < 3:
         return
+    if not re.search(r"\d", term):
+        return
     terms.add(term)
 
 
@@ -276,21 +278,9 @@ def _catalog_product_fit_keywords() -> dict[str, tuple[str, ...]]:
                 "lens_mount",
                 "focal_length",
                 "aperture",
-                "lens_elements",
-                "viewing_angle",
-                "filter_size",
-                "official_handle",
                 "variant_title",
             ):
                 terms.update(_terms_from_product_text(specs.get(key)))
-            for value in specs.get("official_tags") or []:
-                terms.update(_terms_from_product_text(value))
-            for value in specs.get("highlights") or []:
-                terms.update(_terms_from_product_text(value))
-        fit_tags = _loads(row.get("fit_tags_json"), [])
-        if isinstance(fit_tags, list):
-            for value in fit_tags:
-                terms.update(_terms_from_product_text(value))
     _CATALOG_PRODUCT_FIT_KEYWORDS = {
         sku: tuple(sorted(term for term in terms if term and term not in GENERIC_PRODUCT_TERMS))
         for sku, terms in mapping.items()
