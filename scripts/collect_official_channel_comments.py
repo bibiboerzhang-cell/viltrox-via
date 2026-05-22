@@ -86,7 +86,8 @@ def _candidate_posts(
                 staff=staff,
             )
             cached_count = int(existing.get("comment_count") or 0)
-            if cached_count > 0 and not force:
+            comment_gap = max(0, declared_comments - cached_count)
+            if comment_gap <= 0 and not force:
                 continue
             taken_for_channel += 1
             candidates.append(
@@ -99,6 +100,7 @@ def _candidate_posts(
                     "title": str(post.get("title") or "")[:120],
                     "declared_comments": declared_comments,
                     "cached_comments": cached_count,
+                    "comment_gap_min": comment_gap,
                 }
             )
     return candidates
@@ -126,6 +128,9 @@ def run(
         "candidate_posts": len(candidates),
         "max_comments": max(1, min(300, int(max_comments or 50))),
         "by_status": {},
+        "declared_comments": sum(int(item.get("declared_comments") or 0) for item in candidates),
+        "cached_comments": sum(int(item.get("cached_comments") or 0) for item in candidates),
+        "comment_gap_min": sum(int(item.get("comment_gap_min") or 0) for item in candidates),
         "fetched_count": 0,
         "new_count": 0,
         "sample": candidates[:10],
