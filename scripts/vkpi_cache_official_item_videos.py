@@ -165,6 +165,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     "status": result.get("status"),
                     "cached": result.get("cached"),
                     "reason": result.get("reason") or result.get("skip_reason") or "",
+                    "error": result.get("error") or "",
                     "cached_url": result.get("cached_url") or "",
                     "storage_backend": result.get("storage_backend") or "",
                     "size_bytes": result.get("size_bytes") or 0,
