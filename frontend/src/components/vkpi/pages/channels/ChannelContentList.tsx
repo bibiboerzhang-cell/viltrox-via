@@ -206,6 +206,7 @@ function canQueueVideoCache(post: ChannelContentPost, account: OfficialChannelAc
   if (!VIDEO_CACHE_PLATFORMS.has(platform)) return false;
   if (!postVideoId(post) || !postVideoSourceUrl(post, account)) return false;
   const media = mediaState(post, account);
+  if (media.videoUrl) return false;
   const explicitKind = text(post.mediaKind || post.mediaType).toLowerCase();
   return media.kind === 'video-poster' || media.kind === 'video' || ['video', 'reel', 'reels', 'clip', 'clips'].includes(explicitKind);
 }

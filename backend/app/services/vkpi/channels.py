@@ -17,7 +17,7 @@ from cryptography.fernet import Fernet
 from app.db.connection import get_conn
 from app.services.cache import cache_clear, cache_get, cache_set
 from app.services.vkpi import scope
-from app.services.vkpi.media_cache import cached_image_url, cached_video_url
+from app.services.vkpi.media_cache import cached_image_url, cached_video_url, cached_video_url_for_item
 from app.services.vkpi.schema_channels import ensure_vkpi_channels_schema
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
 
@@ -462,6 +462,20 @@ def _cached_media_url(raw_url: Any) -> str:
 def _cached_video_media_url(raw_url: Any) -> str:
     text = _text(raw_url)
     return cached_video_url(text) or text
+
+
+def _cached_item_video_url(platform: Any, *candidates: Any) -> str:
+    platform_key = _text(platform).lower()
+    if not platform_key:
+        return ""
+    for candidate in candidates:
+        video_id = _text(candidate)
+        if not video_id:
+            continue
+        cached = cached_video_url_for_item(platform_key, video_id)
+        if cached:
+            return cached
+    return ""
 
 
 def _looks_like_image_media_url(url: str, *, key_hint: str = "") -> bool:
@@ -1132,6 +1146,14 @@ def _post_from_package_row(row: dict[str, Any]) -> dict[str, Any]:
     image_urls = _media_urls(_parse_json(row.get("image_urls")), row.get("image_urls"))
     if image_urls:
         post["image_urls"] = image_urls[:12]
+    if not post["video_url"]:
+        post["video_url"] = _cached_item_video_url(
+            post["platform"],
+            post.get("source_id"),
+            post.get("short_code"),
+            post.get("id"),
+            post.get("url"),
+        )
     return post
 
 
