@@ -39,7 +39,7 @@ Description=Write V-KPI daily sync failure alert for %i
 
 [Service]
 Type=oneshot
-ExecStart=/bin/bash -lc 'mkdir -p /var/log/vkpi && python3 -c "import datetime,json; print(json.dumps({\"event\":\"vkpi_sync_systemd_failure\",\"unit\":\"%i\",\"at\":datetime.datetime.now(datetime.timezone.utc).strftime(\"%%Y-%%m-%%dT%%H:%%M:%%SZ\")}))" >> /var/log/vkpi/sync_failure_alert.log'
+ExecStart=/bin/bash -lc 'mkdir -p /var/log/vkpi && printf '\''{"event":"vkpi_sync_systemd_failure","unit":"%%s","at":"%%s"}\n'\'' "%i" "$(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ)" >> /var/log/vkpi/sync_failure_alert.log'
 ALERTSERVICE
 
   ssh "${SSH_TARGET}" "cat > /etc/systemd/system/${REMOTE_TIMER}" <<TIMER
