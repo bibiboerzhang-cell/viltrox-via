@@ -42,6 +42,10 @@ GENERIC_PRODUCT_TERMS = {
     "aps-c",
     "default title",
     "official",
+    "pro",
+    "air",
+    "evo",
+    "lab",
     "viltrox",
 }
 _CATALOG_PRODUCT_FIT_KEYWORDS: dict[str, tuple[str, ...]] | None = None
@@ -203,7 +207,7 @@ def _focal_terms(text: str) -> set[str]:
 
 def _aperture_terms(text: str) -> set[str]:
     terms: set[str] = set()
-    for raw in re.findall(r"\bf\s*[=/]?\s*(\d(?:[._]\d)?)", text.lower()):
+    for raw in re.findall(r"\bf\s*[=/]?\s*(\d(?:[._]?\d)?)", text.lower()):
         normalized = raw.replace("_", ".")
         if "." not in normalized and len(normalized) == 2:
             normalized = f"{normalized[0]}.{normalized[1]}"
@@ -225,8 +229,11 @@ def _terms_from_product_text(value: Any) -> set[str]:
         for aperture in aperture_terms:
             terms.add(f"{focal} {aperture}")
             terms.add(f"{focal}{aperture}")
-    for phrase in re.findall(r"\b(?:af|mf)\s+\d{1,3}mm\s+f\s*[=/]?\s*\d(?:[._]\d)?(?:\s+\w+)?", text):
-        _add_product_term(terms, phrase)
+    for prefix, focal, aperture in re.findall(r"\b(af|mf)\s+(\d{1,3})mm\s+f\s*[=/]?\s*(\d(?:[._]?\d)?)", text):
+        normalized = aperture.replace("_", ".")
+        if "." not in normalized and len(normalized) == 2:
+            normalized = f"{normalized[0]}.{normalized[1]}"
+        _add_product_term(terms, f"{prefix} {focal}mm f{normalized}")
     return terms
 
 
