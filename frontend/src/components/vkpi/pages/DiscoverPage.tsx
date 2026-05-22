@@ -1621,6 +1621,7 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
             <span>⌘K</span>
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="粘贴 URL / @handle / 关键词，例如：美国 35mm 街拍 IG 红人" />
             <select value={platform} onChange={(event) => setPlatform(event.target.value)} aria-label="搜索平台">
+              <option value="all">全部平台</option>
               {creatorPlatformOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
             <button className="vkpi-discover-btn is-primary" type="submit" disabled={busy || scanBusy || (!apiToken && !onLookupKol)}>
