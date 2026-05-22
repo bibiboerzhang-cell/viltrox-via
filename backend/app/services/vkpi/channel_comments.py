@@ -196,7 +196,9 @@ def _comment_external_post_id(platform: str, post_id: str, url: str, post: dict[
     post = post or {}
     if platform == "reddit":
         return channels._reddit_external_id(channels._text(post.get("url"), url, post.get("source_id"), post_id))
-    if platform in {"instagram", "facebook", "youtube", "tiktok", "x"}:
+    if platform in {"facebook", "youtube", "tiktok", "x"}:
+        return channels._text(post.get("source_id"), post.get("id"), post_id, post.get("url"), url)
+    if platform == "instagram":
         return channels._text(post.get("url"), url, post.get("source_id"), post.get("short_code"), post.get("id"), post_id)
     return channels._text(post.get("source_id"), post.get("url"), url, post_id)
 
@@ -341,7 +343,13 @@ def _save_channel_comments(
               ?, ?, ?, ?, ?,
               ?, ?, ?, ?, ?
             )
-            ON CONFLICT (platform, external_comment_id) DO NOTHING
+            ON CONFLICT (platform, external_comment_id) DO UPDATE SET
+              account_id = EXCLUDED.account_id,
+              post_id = EXCLUDED.post_id,
+              post_table = EXCLUDED.post_table,
+              external_post_id = EXCLUDED.external_post_id,
+              fetched_at = EXCLUDED.fetched_at,
+              raw_data_json = EXCLUDED.raw_data_json
             """,
             (
                 int(channel_id),
@@ -397,7 +405,8 @@ def collect_channel_post_comments(
     if not crawler.configured:
         existing = channel_post_comments(channel_id, post_id=external_post_id, url=url, limit=limit, staff=staff)
         return {**existing, "status": "not_configured", "message": config_message}
-    result = crawler.crawl_video_comments(external_post_id, max_results=max(1, min(300, int(limit or 100))))
+    crawl_ref = url or channels._text(post.get("url")) or external_post_id
+    result = crawler.crawl_video_comments(crawl_ref, max_results=max(1, min(300, int(limit or 100))))
     raw_comments = [item for item in result.get("items") or [] if isinstance(item, dict)]
     new_count = _save_channel_comments(channel_id=int(channel_id), platform=platform, external_post_id=external_post_id, comments=raw_comments)
     payload = channel_post_comments(channel_id, post_id=external_post_id, url=url, limit=limit, staff=staff)
