@@ -567,6 +567,84 @@ class RedditCrawler:
                 "error": str(exc)[:500],
             }
 
+    def _crawl_post_comments_via_apify(
+        self,
+        post_id: str,
+        *,
+        max_results: int = 100,
+    ) -> dict[str, Any]:
+        """Apify fallback for post comments when Reddit public JSON is blocked."""
+        if not self.apify_token:
+            return {
+                "items": [],
+                "provider_status": "not_configured",
+                "sync_status": "skip",
+                "provider": "apify",
+                "error": "APIFY_TOKEN not configured",
+            }
+        try:
+            from apify_client import ApifyClient  # type: ignore
+        except ImportError:
+            return {
+                "items": [],
+                "provider_status": "error",
+                "sync_status": "fail",
+                "provider": "apify",
+                "error": "apify-client not installed",
+            }
+
+        clean_post_id = post_id.replace("t3_", "").strip()
+        post_url = f"https://www.reddit.com/comments/{clean_post_id}/"
+        limit = max(1, min(300, int(max_results or 100)))
+        try:
+            client = ApifyClient(self.apify_token)
+            run = client.actor(self.apify_actor).call(
+                run_input={
+                    "startUrls": [{"url": post_url}],
+                    "skipComments": False,
+                    "maxComments": limit,
+                    "maxItems": limit + 1,
+                    "proxy": {
+                        "useApifyProxy": True,
+                        "apifyProxyGroups": ["RESIDENTIAL"],
+                    },
+                },
+                timeout_secs=self.run_timeout_seconds,
+                wait_secs=self.run_timeout_seconds,
+            )
+            if not run or str(run.get("status") or "").upper() != "SUCCEEDED":
+                return {
+                    "items": [],
+                    "provider_status": "error",
+                    "sync_status": "fail",
+                    "provider": "apify",
+                    "error": f"Reddit comment actor did not finish: {str((run or {}).get('status') or 'unknown')}",
+                }
+            dataset_id = run.get("defaultDatasetId")
+            items = list(client.dataset(dataset_id).iterate_items()) if dataset_id else []
+            comments = [
+                item
+                for item in items
+                if isinstance(item, dict) and str(item.get("dataType") or "").lower() == "comment"
+            ]
+            return {
+                "items": comments,
+                "provider_status": "ok",
+                "sync_status": "ok",
+                "provider": "apify",
+                "post_id": clean_post_id,
+                "raw": {"actor_id": self.apify_actor, "post_url": post_url},
+            }
+        except Exception as exc:
+            return {
+                "items": [],
+                "provider_status": "error",
+                "sync_status": "fail",
+                "provider": "apify",
+                "post_id": clean_post_id,
+                "error": str(exc)[:500],
+            }
+
     def _crawl_subreddit_via_apify(
         self, subreddit: str, limit: int
     ) -> dict[str, Any]:
@@ -694,7 +772,7 @@ class RedditCrawler:
         }
 
     def crawl_post_comments(
-        self, post_id: str, *, max_depth: int = 3
+        self, post_id: str, *, max_depth: int = 3, max_results: int = 100
     ) -> dict[str, Any]:
         """Crawl nested comments of a post."""
         if not post_id.strip():
@@ -710,7 +788,10 @@ class RedditCrawler:
             result = self._crawl_post_comments_via_praw(post_id, max_depth)
             if result.get("provider_status") == "ok":
                 return result
-        return self._crawl_post_comments_via_json_api(post_id, max_depth)
+        result = self._crawl_post_comments_via_json_api(post_id, max_depth)
+        if result.get("provider_status") == "ok" or not self.apify_token:
+            return result
+        return self._crawl_post_comments_via_apify(post_id, max_results=max_results)
 
     # ─── V-KPI Unified Interface ────────────────────────────────
 
@@ -747,7 +828,7 @@ class RedditCrawler:
     ) -> dict[str, Any]:
         """V-KPI unified interface - 'video' = post for Reddit."""
         post_id = self._normalize_post_id(video_id_or_url)
-        return self.crawl_post_comments(post_id, max_depth=3)
+        return self.crawl_post_comments(post_id, max_depth=3, max_results=max_results)
 
     @staticmethod
     def _normalize_subreddit_name(handle: str, channel_id: str = "") -> str:

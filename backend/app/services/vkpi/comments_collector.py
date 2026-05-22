@@ -162,15 +162,15 @@ def _standardize_comment(
             "is_op": [],
         },
         "reddit": {
-            "external_comment_id": ["id"],
+            "external_comment_id": ["id", "parsedId", "url"],
             "comment_text": ["body"],
-            "author_handle": ["author"],
-            "author_id": [],
-            "likes_count": ["score", "ups"],
-            "reply_count": [],  # Reddit nested via depth
-            "created_at": ["created_utc", "created_at"],
-            "is_op": ["is_submitter"],
-            "parent_comment_id": ["parent_id"],
+            "author_handle": ["author", "username"],
+            "author_id": ["userId"],
+            "likes_count": ["score", "ups", "upVotes"],
+            "reply_count": ["numberOfreplies", "reply_count"],  # Reddit nested via depth
+            "created_at": ["created_utc", "created_at", "createdAt"],
+            "is_op": ["is_submitter", "isSubmitter"],
+            "parent_comment_id": ["parent_id", "parentId"],
             "depth": ["depth"],
         },
         "facebook": {
