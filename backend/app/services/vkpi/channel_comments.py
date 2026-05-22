@@ -65,6 +65,112 @@ def _package_reddit_comments(package_dir: str, external_ids: set[str]) -> list[d
     return comments
 
 
+def _instagram_inline_comment(comment: dict[str, Any]) -> dict[str, Any]:
+    owner = comment.get("owner") if isinstance(comment.get("owner"), dict) else {}
+    return {
+        "id": channels._text(comment.get("id")),
+        "text": channels._text(comment.get("text"), comment.get("comment_text")),
+        "owner": {
+            "username": channels._text(owner.get("username"), comment.get("ownerUsername"), comment.get("username"), comment.get("author")),
+            "id": channels._text(owner.get("id"), comment.get("ownerId"), comment.get("author_id")),
+        },
+        "likes": channels._int(comment.get("likes"), channels._int(comment.get("likesCount"), channels._int(comment.get("like_count")))),
+        "repliesCount": channels._int(comment.get("repliesCount"), channels._int(comment.get("reply_count"))),
+        "timestamp": channels._text(comment.get("timestamp"), comment.get("created_at"), comment.get("createdAt")),
+        "raw_inline": comment,
+    }
+
+
+def _reddit_inline_comment(comment: dict[str, Any]) -> dict[str, Any]:
+    parent_id = channels._text(comment.get("parentId"), comment.get("parent_id"))
+    return {
+        "id": channels._text(comment.get("id"), comment.get("parsedId"), comment.get("url")),
+        "body": channels._text(comment.get("body"), comment.get("html")),
+        "author": channels._text(comment.get("username"), comment.get("author"), "匿名"),
+        "score": channels._int(comment.get("upVotes"), channels._int(comment.get("score"))),
+        "created_at": channels._text(comment.get("createdAt"), comment.get("created_utc")),
+        "parent_id": parent_id,
+        "depth": 1 if parent_id.startswith("t1_") else 0,
+        "is_submitter": channels._bool(comment.get("isSubmitter"), channels._bool(comment.get("is_submitter"))),
+        "raw_inline": comment,
+    }
+
+
+def _inline_comment_groups_from_row(row: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """Extract comment bodies already present in the latest official-channel snapshot."""
+
+    platform = str(row.get("platform") or "").lower()
+    sample = channels._raw_sample(row)
+    groups: dict[str, list[dict[str, Any]]] = {}
+
+    def add(external_post_id: str, raw_comment: dict[str, Any]) -> None:
+        key = channels._text(external_post_id)
+        if not key or not raw_comment:
+            return
+        groups.setdefault(key, []).append(raw_comment)
+
+    if platform == "instagram":
+        posts = channels._items(sample.get("posts"))
+        if not posts:
+            for item in channels._items(sample.get("items")):
+                posts.extend(channels._items(item.get("latestPosts")))
+        for post in posts:
+            external_post_id = channels._text(post.get("url"), post.get("shortCode"), post.get("id"))
+            for comment in channels._items(post.get("latestComments")):
+                add(external_post_id, _instagram_inline_comment(comment))
+    elif platform == "reddit":
+        for item in channels._items(sample.get("items")):
+            if str(item.get("dataType") or "").lower() != "comment":
+                continue
+            external_post_id = channels._reddit_external_id(channels._text(item.get("postId"), item.get("url")))
+            add(external_post_id, _reddit_inline_comment(item))
+    return groups
+
+
+def cache_inline_channel_comments(
+    channel_id: int,
+    *,
+    staff: dict[str, Any] | None = None,
+    execute: bool = False,
+    limit_per_post: int = 300,
+) -> dict[str, Any]:
+    """Persist comment bodies already embedded in the latest channel snapshot."""
+
+    row = channels._latest_channel_row(channel_id, staff=staff)
+    platform = str(row.get("platform") or "").lower()
+    groups = _inline_comment_groups_from_row(row)
+    limit = max(1, min(300, int(limit_per_post or 300)))
+    saved_posts = 0
+    new_count = 0
+    comments_seen = 0
+    sample: list[dict[str, Any]] = []
+    for external_post_id, comments in groups.items():
+        clipped = comments[:limit]
+        comments_seen += len(clipped)
+        if len(sample) < 8:
+            sample.append({"external_post_id": external_post_id, "comments": len(clipped)})
+        if not execute:
+            continue
+        saved_posts += 1
+        new_count += _save_channel_comments(
+            channel_id=int(channel_id),
+            platform=platform,
+            external_post_id=external_post_id,
+            comments=clipped,
+        )
+    return {
+        "channel_id": int(channel_id),
+        "platform": platform,
+        "handle": channels._text(row.get("account_handle")),
+        "execute": bool(execute),
+        "posts_with_inline_comments": len(groups),
+        "comments_seen": comments_seen,
+        "saved_posts": saved_posts,
+        "new_count": new_count,
+        "sample": sample,
+    }
+
+
 def _comment_payload(row: Any) -> dict[str, Any]:
     data = dict(row)
     raw = channels._parse_json(data.get("raw_data_json"))
