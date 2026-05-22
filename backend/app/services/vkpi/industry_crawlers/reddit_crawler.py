@@ -463,6 +463,110 @@ class RedditCrawler:
                 "error": str(exc)[:500],
             }
 
+    def _json_comment_to_dict(
+        self,
+        data: dict[str, Any],
+        *,
+        depth: int,
+        parent_id: str | None,
+        post_id: str,
+    ) -> dict[str, Any]:
+        created = data.get("created_utc")
+        created_at = ""
+        if created is not None:
+            try:
+                created_at = datetime.utcfromtimestamp(float(created)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            except Exception:
+                created_at = ""
+        return {
+            "id": data.get("id"),
+            "parent_id": parent_id or data.get("parent_id"),
+            "postId": post_id,
+            "depth": depth,
+            "author": data.get("author"),
+            "body": data.get("body"),
+            "score": data.get("score"),
+            "ups": data.get("ups"),
+            "created_utc": created,
+            "created_at": created_at,
+            "is_submitter": data.get("is_submitter"),
+        }
+
+    def _flatten_json_comments(
+        self,
+        children: list[Any],
+        out: list[dict[str, Any]],
+        *,
+        depth: int,
+        max_depth: int,
+        parent_id: str | None,
+        post_id: str,
+    ) -> None:
+        if depth > max_depth:
+            return
+        for child in children:
+            if not isinstance(child, dict) or child.get("kind") != "t1":
+                continue
+            data = child.get("data") if isinstance(child.get("data"), dict) else {}
+            comment_id = str(data.get("id") or "").strip()
+            body = str(data.get("body") or "").strip()
+            if not comment_id or not body:
+                continue
+            out.append(self._json_comment_to_dict(data, depth=depth, parent_id=parent_id, post_id=post_id))
+            replies = data.get("replies")
+            if depth >= max_depth or not isinstance(replies, dict):
+                continue
+            replies_data = replies.get("data") if isinstance(replies.get("data"), dict) else {}
+            reply_children = replies_data.get("children") if isinstance(replies_data.get("children"), list) else []
+            self._flatten_json_comments(
+                reply_children,
+                out,
+                depth=depth + 1,
+                max_depth=max_depth,
+                parent_id=comment_id,
+                post_id=post_id,
+            )
+
+    def _crawl_post_comments_via_json_api(
+        self,
+        post_id: str,
+        max_depth: int = 3,
+    ) -> dict[str, Any]:
+        """Public Reddit JSON comments path used when PRAW is not configured."""
+        clean_post_id = post_id.replace("t3_", "").strip()
+        try:
+            payload = self._reddit_get_json(
+                f"https://www.reddit.com/comments/{clean_post_id}.json?limit=500&raw_json=1"
+            )
+            listing = payload[1] if isinstance(payload, list) and len(payload) > 1 else {}
+            data = listing.get("data") if isinstance(listing, dict) and isinstance(listing.get("data"), dict) else {}
+            children = data.get("children") if isinstance(data.get("children"), list) else []
+            comments: list[dict[str, Any]] = []
+            self._flatten_json_comments(
+                children,
+                comments,
+                depth=0,
+                max_depth=max(0, min(8, int(max_depth or 3))),
+                parent_id=None,
+                post_id=clean_post_id,
+            )
+            return {
+                "items": comments,
+                "provider_status": "ok",
+                "sync_status": "ok",
+                "provider": "reddit_json",
+                "post_id": clean_post_id,
+            }
+        except Exception as exc:
+            return {
+                "items": [],
+                "provider_status": "error",
+                "sync_status": "fail",
+                "provider": "reddit_json",
+                "post_id": clean_post_id,
+                "error": str(exc)[:500],
+            }
+
     def _crawl_subreddit_via_apify(
         self, subreddit: str, limit: int
     ) -> dict[str, Any]:
@@ -603,13 +707,10 @@ class RedditCrawler:
         # Strip prefix if any
         post_id = post_id.replace("t3_", "")
         if self.primary_path == "praw":
-            return self._crawl_post_comments_via_praw(post_id, max_depth)
-        return {
-            "items": [],
-            "provider_status": "not_configured",
-            "sync_status": "skip",
-            "error": "comments require PRAW configuration",
-        }
+            result = self._crawl_post_comments_via_praw(post_id, max_depth)
+            if result.get("provider_status") == "ok":
+                return result
+        return self._crawl_post_comments_via_json_api(post_id, max_depth)
 
     # ─── V-KPI Unified Interface ────────────────────────────────
 
