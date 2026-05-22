@@ -115,12 +115,18 @@ function mapPlatform(row: Row): OfficialChannelPlatform {
   const platform = text(row.platform, 'other');
   const accounts = rows(row.accounts).map(mapAccount);
   const viewsUnavailable = Boolean(row.views_unavailable || row.viewsUnavailable || isRedditPlatform(platform) || (accounts.length > 0 && accounts.every((account) => account.viewsUnavailable)));
+  const latestSyncAt = accounts
+    .map((account) => account.lastSyncAt)
+    .filter(Boolean)
+    .sort();
+  const platformLastSyncAt = latestSyncAt.length ? latestSyncAt[latestSyncAt.length - 1] : text(row.last_sync_at || row.lastSyncAt);
   return {
     platform,
     label: text(row.label || row.platform, 'Other'),
     totalViews: numberValue(row.total_views || row.totalViews),
     totalPosts: numberValue(row.total_posts || row.totalPosts),
     totalFollowers: numberValue(row.total_followers || row.totalFollowers),
+    lastSyncAt: platformLastSyncAt,
     followersDelta: numberValue(row.followers_delta ?? row.followersDelta),
     postsDelta: numberValue(row.posts_delta ?? row.postsDelta),
     viewsDelta: numberValue(row.views_delta ?? row.viewsDelta),

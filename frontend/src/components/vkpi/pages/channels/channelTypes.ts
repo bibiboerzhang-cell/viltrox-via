@@ -95,6 +95,7 @@ export interface OfficialChannelPlatform {
   totalViews: number;
   totalPosts: number;
   totalFollowers: number;
+  lastSyncAt?: string;
   followersDelta?: number;
   postsDelta?: number;
   viewsDelta?: number;

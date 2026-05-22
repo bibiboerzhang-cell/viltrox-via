@@ -3,6 +3,13 @@ import { proxiedImageUrl } from '../../shared/mediaProxy';
 import { PlatformLogo } from './PlatformLogo';
 
 const formatter = new Intl.NumberFormat('en-US');
+const syncTimeFormatter = new Intl.DateTimeFormat('zh-CN', {
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+});
 
 function compact(value: number) {
   if (!value) return '0';
@@ -43,6 +50,13 @@ function deltaTone(delta = 0) {
   if (delta > 0) return 'is-up';
   if (delta < 0) return 'is-down';
   return '';
+}
+
+function syncTimeLabel(value?: string) {
+  if (!value) return '本次未同步';
+  const date = new Date(value);
+  if (!Number.isNaN(date.getTime())) return `本次 ${syncTimeFormatter.format(date)}`;
+  return `本次 ${value.slice(0, 16).replace('T', ' ')}`;
 }
 
 function PlatformSkeletons() {
@@ -167,6 +181,7 @@ export function ChannelPlatformMatrix({
                 <strong title={viewsUnavailable ? platform.viewsUnavailableReason : undefined}>{viewsValue(platform.totalViews, viewsUnavailable)}</strong>
                 <span>{compact(platform.totalFollowers)} 粉丝</span>
                 <em className={deltaTone(followerDelta)}>{deltaLabel(platform.totalFollowers, followerDelta)}</em>
+                <small title={platform.lastSyncAt}>{syncTimeLabel(platform.lastSyncAt)}</small>
                 <small className={deltaTone(viewsUnavailable ? 0 : viewsDelta)} title={platform.viewsUnavailableReason}>
                   {viewsDeltaLabel(platform.totalViews, viewsDelta, viewsUnavailable)}
                 </small>

@@ -232,6 +232,10 @@ def _write_snapshot(channel: dict[str, Any], metrics: dict[str, Any], raw_payloa
     total_shares = _int(metrics.get("total_shares"))
     if not raw_payload.get("allow_cumulative_regression"):
         cumulative_floor: dict[str, dict[str, int]] = {}
+        previous_followers = _int(previous_row.get("followers"))
+        if previous_followers > 0 and followers <= 0:
+            cumulative_floor["followers"] = {"provider_value": followers, "kept_value": previous_followers}
+            followers = previous_followers
         for key, current in (
             ("posts_count", posts_count),
             ("total_views", total_views),
@@ -254,7 +258,7 @@ def _write_snapshot(channel: dict[str, Any], metrics: dict[str, Any], raw_payloa
                     total_shares = previous_value
         if cumulative_floor:
             raw_payload["cumulative_floor"] = {
-                "reason": "provider returned a narrower sample than the previous official-account baseline",
+                "reason": "provider returned a narrower sample or missing cumulative value than the previous official-account baseline",
                 "previous_snapshot_date_before": snapshot_date,
                 "fields": cumulative_floor,
             }
