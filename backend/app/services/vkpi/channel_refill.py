@@ -6,6 +6,7 @@ from datetime import date, datetime
 from typing import Any, Callable
 
 from app.db.connection import get_conn
+from app.services.cache import cache_clear
 from app.services.vkpi.channel_post_metrics import record_channel_post_metrics
 from app.services.vkpi.media_cache import prewarm_official_media_cache
 from app.services.vkpi.schema_channels import ensure_vkpi_channels_schema
@@ -67,6 +68,13 @@ def _text(*values: Any) -> str:
         if text:
             return text
     return ""
+
+
+def _clear_channel_read_cache() -> None:
+    try:
+        cache_clear(prefix="vkpi:channels:")
+    except Exception:
+        pass
 
 
 def _profile_url(*values: Any) -> str:
@@ -187,6 +195,7 @@ def _mark(channel: dict[str, Any], *, status: str, message: str, staff: dict[str
         (int(channel.get("id") or 0), _audit_staff_id(channel, staff), "sync_skipped", message, now),
     )
     conn.commit()
+    _clear_channel_read_cache()
     return {"channel_id": int(channel.get("id") or 0), "sync_status": status, "message": message, "metrics": None}
 
 
@@ -351,6 +360,7 @@ def _write_snapshot(channel: dict[str, Any], metrics: dict[str, Any], raw_payloa
         (int(channel.get("id") or 0), _audit_staff_id(channel, staff), "sync_provider", str(raw_payload.get("provider") or ""), now),
     )
     conn.commit()
+    _clear_channel_read_cache()
     return {"channel_id": int(channel.get("id") or 0), "sync_status": "synced", "message": "平台数据已同步。", "metrics": metrics}
 
 
