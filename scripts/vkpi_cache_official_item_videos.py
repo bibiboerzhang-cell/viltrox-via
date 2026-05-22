@@ -22,7 +22,7 @@ if str(BACKEND) not in sys.path:
 
 from app.db.connection import close_db_runtime, get_conn  # noqa: E402
 from app.services.vkpi import channels  # noqa: E402
-from app.services.vkpi.media_cache import cache_video_for_item, cached_video_url_for_item  # noqa: E402
+from app.services.vkpi.media_cache import cache_video_for_item, cached_video_url_for_item, video_cache_item_state  # noqa: E402
 
 
 STAFF = {"id": 1, "role": "admin", "is_owner": 1}
@@ -144,6 +144,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     "cached_url": cached_url,
                 }
                 report["summary"]["existing"] += 1
+            elif not args.force_refresh and (blocked_state := video_cache_item_state(candidate["platform"], candidate["post_id"])).get("blocked"):
+                result = {
+                    "status": "skipped",
+                    "cached": False,
+                    "skipped": True,
+                    "platform": candidate["platform"],
+                    "post_id": candidate["post_id"],
+                    "skip_reason": blocked_state.get("skip_reason") or "recent_failed_source",
+                    "reason": blocked_state.get("reason") or "recent_failed_source",
+                    "error": blocked_state.get("error") or "",
+                    "retry_after_seconds": blocked_state.get("retry_after_seconds") or 0,
+                    "resolver": blocked_state.get("resolver") or "",
+                }
+                report["summary"]["skipped"] += 1
             elif args.dry_run:
                 result = {"status": "would_cache", "cached": False, **candidate}
             else:

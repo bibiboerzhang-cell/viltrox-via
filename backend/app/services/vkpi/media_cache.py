@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import tempfile
+import time
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
@@ -31,6 +32,7 @@ VIDEO_CACHE_GC_RESERVE_BYTES = 200 * 1024 * 1024
 PUBLIC_IMAGE_CACHE_PREFIX = "/api/vkpi-media/image-cache"
 PUBLIC_VIDEO_CACHE_PREFIX = "/api/vkpi-media/video-cache"
 ITEM_VIDEO_CACHE_PLATFORMS = {"instagram", "tiktok"}
+VIDEO_CACHE_FAILURE_RETRY_HOURS = 168
 MEDIA_R2_PREFIX = os.getenv("VKPI_MEDIA_CACHE_R2_PREFIX", "vkpi/media-cache").strip().strip("/") or "vkpi/media-cache"
 MEDIA_R2_PUBLIC_BASE_URL = (
     os.getenv("VKPI_MEDIA_CACHE_R2_PUBLIC_BASE_URL")
@@ -384,6 +386,15 @@ def _video_item_sidecar_path(platform: str, video_id: str) -> Path:
     return VIDEO_ITEM_CACHE_DIR / f"{_video_item_digest(platform, video_id)}.json"
 
 
+def _video_failure_retry_seconds() -> int:
+    value = os.getenv("VKPI_VIDEO_CACHE_FAILURE_RETRY_HOURS", str(VIDEO_CACHE_FAILURE_RETRY_HOURS))
+    try:
+        hours = max(0.0, float(value))
+    except (TypeError, ValueError):
+        hours = float(VIDEO_CACHE_FAILURE_RETRY_HOURS)
+    return int(hours * 60 * 60)
+
+
 def _read_json_file(path: Path) -> dict[str, Any] | None:
     try:
         parsed = json.loads(path.read_text(encoding="utf-8"))
@@ -415,6 +426,65 @@ def _parse_ts(value: Any) -> float:
         return datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
     except ValueError:
         return 0.0
+
+
+def _video_item_failure_sidecar(
+    *,
+    platform_key: str,
+    video_key: str,
+    source_url: str,
+    status: str,
+    reason: str,
+    error: str = "",
+    resolver: str = "",
+    retryable: bool = True,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = {
+        "platform": platform_key,
+        "video_id": video_key,
+        "source_url": source_url,
+        "status": status,
+        "cached": False,
+        "reason": reason,
+        "error": error[:500],
+        "resolver": resolver,
+        "retryable": bool(retryable),
+        "updated_at": _utcnow(),
+    }
+    if metadata:
+        payload["metadata"] = metadata
+    _atomic_write_json(_video_item_sidecar_path(platform_key, video_key), payload)
+    return payload
+
+
+def video_cache_item_state(platform: str, video_id: str) -> dict[str, Any]:
+    sidecar_path = _video_item_sidecar_path(platform, video_id)
+    if not sidecar_path.exists():
+        return {}
+    sidecar = _read_json_file(sidecar_path) or {}
+    status = _text(sidecar.get("status"))
+    if status not in {"failed", "skipped"}:
+        return {}
+    retryable = bool(sidecar.get("retryable", True))
+    retry_seconds = _video_failure_retry_seconds()
+    updated_ts = _parse_ts(sidecar.get("updated_at"))
+    age_seconds = max(0, time.time() - updated_ts) if updated_ts else 0
+    blocked = (not retryable) or (retry_seconds > 0 and updated_ts > 0 and age_seconds < retry_seconds)
+    reason = _text(sidecar.get("reason")) or _text(sidecar.get("skip_reason"))
+    return {
+        "status": status,
+        "cached": False,
+        "skip_reason": "recent_failed_source" if blocked else "",
+        "reason": reason,
+        "error": _text(sidecar.get("error")),
+        "resolver": _text(sidecar.get("resolver")),
+        "retryable": retryable,
+        "blocked": blocked,
+        "age_seconds": int(age_seconds),
+        "retry_after_seconds": max(0, retry_seconds - int(age_seconds)) if blocked and retry_seconds else 0,
+        "updated_at": _text(sidecar.get("updated_at")),
+    }
 
 
 def _video_cache_total_bytes() -> int:
@@ -1016,6 +1086,19 @@ def _cache_video_for_item_via_ytdlp(
             result = download_video_ytdlp(page_url, tmpdir, max_seconds=max(30, min(180, int(timeout or 30) * 4)))
             _maybe_cancel()
             if not result.get("success") or not result.get("path"):
+                error = _text(result.get("error"))[:300]
+                no_video_source = "no video stream" in error.lower() or "no video formats found" in error.lower()
+                if no_video_source:
+                    _video_item_failure_sidecar(
+                        platform_key=platform_key,
+                        video_key=video_key,
+                        source_url=page_url,
+                        status="failed",
+                        reason="yt_dlp_no_video_stream",
+                        error=error,
+                        resolver="yt-dlp",
+                        retryable=False,
+                    )
                 return {
                     "status": "failed",
                     "cached": False,
@@ -1023,13 +1106,23 @@ def _cache_video_for_item_via_ytdlp(
                     "video_id": video_key,
                     "reason": "yt_dlp_failed",
                     "resolver": "yt-dlp",
-                    "error": _text(result.get("error"))[:300],
+                    "error": error,
                 }
             downloaded = Path(str(result["path"]))
             if not downloaded.exists():
                 return {"status": "failed", "cached": False, "platform": platform_key, "video_id": video_key, "reason": "yt_dlp_missing_file", "resolver": "yt-dlp"}
             size_bytes = downloaded.stat().st_size
             if size_bytes > max_file_bytes:
+                _video_item_failure_sidecar(
+                    platform_key=platform_key,
+                    video_key=video_key,
+                    source_url=page_url,
+                    status="skipped",
+                    reason="too_large",
+                    resolver="yt-dlp",
+                    retryable=False,
+                    metadata={"content_length": size_bytes, "max_file_bytes": max_file_bytes},
+                )
                 return {
                     "status": "skipped",
                     "cached": False,
@@ -1096,7 +1189,20 @@ def _cache_video_for_item_via_ytdlp(
         raise
     except Exception as exc:
         sidecar_path.with_suffix(sidecar_path.suffix + ".tmp").unlink(missing_ok=True)
-        return {"status": "failed", "cached": False, "platform": platform_key, "video_id": video_key, "reason": exc.__class__.__name__, "resolver": "yt-dlp", "error": str(exc)[:300]}
+        error = str(exc)[:300]
+        no_video_source = "no video stream" in error.lower() or "no video formats found" in error.lower()
+        if no_video_source:
+            _video_item_failure_sidecar(
+                platform_key=platform_key,
+                video_key=video_key,
+                source_url=page_url,
+                status="failed",
+                reason="yt_dlp_no_video_stream",
+                error=error,
+                resolver="yt-dlp",
+                retryable=False,
+            )
+        return {"status": "failed", "cached": False, "platform": platform_key, "video_id": video_key, "reason": exc.__class__.__name__, "resolver": "yt-dlp", "error": error}
 
 
 def cache_video_for_item(
@@ -1142,6 +1248,21 @@ def cache_video_for_item(
             "storage_backend": _text(sidecar.get("storage_backend")) or "local",
             "r2_key": _text(sidecar.get("r2_key")),
         }
+    if not force_refresh:
+        previous_state = video_cache_item_state(platform_key, video_key)
+        if previous_state.get("blocked"):
+            return {
+                "status": "skipped",
+                "cached": False,
+                "skipped": True,
+                "platform": platform_key,
+                "video_id": video_key,
+                "skip_reason": previous_state.get("skip_reason") or "recent_failed_source",
+                "reason": previous_state.get("reason") or "recent_failed_source",
+                "error": previous_state.get("error") or "",
+                "resolver": previous_state.get("resolver") or "",
+                "retry_after_seconds": previous_state.get("retry_after_seconds") or 0,
+            }
 
     normalized = _normalize_video_url(url)
     page_url = _public_video_page_url(url, platform_key) if not normalized else ""
