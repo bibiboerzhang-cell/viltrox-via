@@ -1287,6 +1287,15 @@ def cache_video_for_item(
 
     content_length, head_content_type = _head_content_length(normalized_url, host, timeout=timeout)
     if content_length and content_length > max_file_bytes:
+        _video_item_failure_sidecar(
+            platform_key=platform_key,
+            video_key=video_key,
+            source_url=normalized_url,
+            status="skipped",
+            reason="too_large",
+            retryable=False,
+            metadata={"content_length": content_length, "max_file_bytes": max_file_bytes},
+        )
         return {
             "status": "skipped",
             "cached": False,
@@ -1373,9 +1382,27 @@ def cache_video_for_item(
         with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310 - host allowlist above.
             content_type = str(response.headers.get("content-type") or head_content_type or "video/mp4").split(";", 1)[0].strip().lower()
             if not content_type.startswith("video/") and content_type != "application/octet-stream":
+                _video_item_failure_sidecar(
+                    platform_key=platform_key,
+                    video_key=video_key,
+                    source_url=normalized_url,
+                    status="failed",
+                    reason="not_video",
+                    retryable=False,
+                    metadata={"content_type": content_type},
+                )
                 return {"status": "failed", "cached": False, "platform": platform_key, "video_id": video_key, "reason": "not_video"}
             response_length = int(str(response.headers.get("content-length") or "0") or 0)
             if response_length and response_length > max_file_bytes:
+                _video_item_failure_sidecar(
+                    platform_key=platform_key,
+                    video_key=video_key,
+                    source_url=normalized_url,
+                    status="skipped",
+                    reason="too_large",
+                    retryable=False,
+                    metadata={"content_length": response_length, "max_file_bytes": max_file_bytes},
+                )
                 return {"status": "skipped", "cached": False, "skipped": True, "skip_reason": "too_large", "platform": platform_key, "video_id": video_key, "content_length": response_length}
             total = 0
             with tmp_path.open("wb") as handle:
@@ -1387,6 +1414,15 @@ def cache_video_for_item(
                     total += len(chunk)
                     if total > max_file_bytes:
                         tmp_path.unlink(missing_ok=True)
+                        _video_item_failure_sidecar(
+                            platform_key=platform_key,
+                            video_key=video_key,
+                            source_url=normalized_url,
+                            status="skipped",
+                            reason="too_large",
+                            retryable=False,
+                            metadata={"content_length": total, "max_file_bytes": max_file_bytes},
+                        )
                         return {"status": "skipped", "cached": False, "skipped": True, "skip_reason": "too_large", "platform": platform_key, "video_id": video_key, "content_length": total}
                     handle.write(chunk)
         _maybe_cancel()
