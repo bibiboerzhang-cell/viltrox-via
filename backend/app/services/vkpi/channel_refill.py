@@ -6,6 +6,7 @@ from datetime import date, datetime
 from typing import Any, Callable
 
 from app.db.connection import get_conn
+from app.services.vkpi.channel_post_metrics import record_channel_post_metrics
 from app.services.vkpi.media_cache import prewarm_official_media_cache
 from app.services.vkpi.schema_channels import ensure_vkpi_channels_schema
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
@@ -214,7 +215,7 @@ def _write_snapshot(channel: dict[str, Any], metrics: dict[str, Any], raw_payloa
     channel_id = int(channel.get("id") or 0)
     previous = conn.execute(
         """
-        SELECT followers, posts_count, total_views, total_likes, total_comments, total_shares
+        SELECT followers, posts_count, total_views, total_likes, total_comments, total_shares, captured_at
         FROM vkpi_channel_metrics
         WHERE channel_id=? AND snapshot_date < ?
         ORDER BY snapshot_date DESC, captured_at DESC, id DESC
@@ -230,6 +231,15 @@ def _write_snapshot(channel: dict[str, Any], metrics: dict[str, Any], raw_payloa
     total_likes = _int(metrics.get("total_likes"))
     total_comments = _int(metrics.get("total_comments"))
     total_shares = _int(metrics.get("total_shares"))
+    post_delta = record_channel_post_metrics(
+        channel_id=channel_id,
+        platform=_text(channel.get("platform")),
+        snapshot_date=snapshot_date,
+        captured_at=now,
+        raw_payload=raw_payload,
+        previous_captured_at=_text(previous_row.get("captured_at")),
+    )
+    raw_payload["post_level_delta"] = post_delta
     if not raw_payload.get("allow_cumulative_regression"):
         cumulative_floor: dict[str, dict[str, int]] = {}
         previous_followers = _int(previous_row.get("followers"))
@@ -266,6 +276,9 @@ def _write_snapshot(channel: dict[str, Any], metrics: dict[str, Any], raw_payloa
     posts_delta = posts_count - _int(previous_row.get("posts_count"), posts_count)
     views_delta = total_views - _int(previous_row.get("total_views"), total_views)
     likes_delta = total_likes - _int(previous_row.get("total_likes"), total_likes)
+    posts_delta = max(posts_delta, _int(post_delta.get("new_posts")))
+    views_delta = max(views_delta, _int(post_delta.get("views_delta")))
+    likes_delta = max(likes_delta, _int(post_delta.get("likes_delta")))
     engagement_rate = _float(metrics.get("engagement_rate"))
     if not engagement_rate and total_views:
         engagement_rate = ((total_likes + total_comments + total_shares) / total_views) * 100.0

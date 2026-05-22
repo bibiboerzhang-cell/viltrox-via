@@ -87,6 +87,36 @@ def ensure_vkpi_channels_schema() -> None:
             ON vkpi_channel_audit(channel_id, occurred_at DESC);
         CREATE INDEX IF NOT EXISTS idx_vkpi_channel_audit_staff
             ON vkpi_channel_audit(staff_id, occurred_at DESC);
+
+        CREATE TABLE IF NOT EXISTS vkpi_channel_post_metrics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_id INTEGER NOT NULL,
+            snapshot_date TEXT NOT NULL,
+            platform TEXT NOT NULL DEFAULT '',
+            post_uid TEXT NOT NULL,
+            post_url TEXT DEFAULT '',
+            title TEXT DEFAULT '',
+            posted_at TEXT,
+            views INTEGER NOT NULL DEFAULT 0,
+            likes INTEGER NOT NULL DEFAULT 0,
+            comments INTEGER NOT NULL DEFAULT 0,
+            shares INTEGER NOT NULL DEFAULT 0,
+            views_delta INTEGER NOT NULL DEFAULT 0,
+            likes_delta INTEGER NOT NULL DEFAULT 0,
+            comments_delta INTEGER NOT NULL DEFAULT 0,
+            shares_delta INTEGER NOT NULL DEFAULT 0,
+            delta_method TEXT NOT NULL DEFAULT 'post_metric_delta_v1',
+            raw_post_json TEXT NOT NULL DEFAULT '{}',
+            first_seen_at TEXT NOT NULL,
+            captured_at TEXT NOT NULL,
+            UNIQUE(channel_id, post_uid, snapshot_date)
+        );
+        CREATE INDEX IF NOT EXISTS idx_vkpi_channel_post_metrics_latest
+            ON vkpi_channel_post_metrics(channel_id, post_uid, snapshot_date DESC, captured_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_vkpi_channel_post_metrics_channel_date
+            ON vkpi_channel_post_metrics(channel_id, snapshot_date DESC);
+        CREATE INDEX IF NOT EXISTS idx_vkpi_channel_post_metrics_platform_date
+            ON vkpi_channel_post_metrics(platform, snapshot_date DESC);
         """
     )
     conn.commit()
