@@ -581,6 +581,14 @@ export interface VkpiProductCatalogItem {
   status: string;
   description?: string;
   sourceFile?: string;
+  series?: string;
+  mount?: string;
+  productUrl?: string;
+  specs?: Record<string, unknown>;
+  fitTags?: string[];
+  sourceUrl?: string;
+  sourceCheckedAt?: string;
+  sourceConfidence?: number;
 }
 
 export interface VkpiProductLaunchOption {

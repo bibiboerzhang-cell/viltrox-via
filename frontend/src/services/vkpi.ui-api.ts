@@ -373,6 +373,22 @@ function numberValue(value: unknown): number {
   const next = Number(value || 0);
   return Number.isFinite(next) ? next : 0;
 }
+function parseJsonValue(value: unknown): unknown {
+  if (Array.isArray(value) || (value && typeof value === "object")) return value;
+  const text = String(value || "").trim();
+  if (!text) return undefined;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+function objectValue(value: unknown, fallback: Record<string, unknown> = {}): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : fallback;
+}
+function arrayValue(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
 function centsToUsd(value: unknown): number { return numberValue(value) / 100; }
 function money(value: number): string { return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value); }
 function percent(value: number): string { return `${(value * 100).toFixed(1)}%`; }
@@ -740,6 +756,14 @@ function buildProductCatalog(rows: Row[]): VkpiProductCatalogItem[] {
     status: String(row.status || ""),
     description: String(row.description || ""),
     sourceFile: String(row.source_file || ""),
+    series: String(row.series || ""),
+    mount: String(row.mount || ""),
+    productUrl: String(row.product_url || ""),
+    specs: objectValue(parseJsonValue(row.specs_json), {}),
+    fitTags: arrayValue(parseJsonValue(row.fit_tags_json)).map(String),
+    sourceUrl: String(row.source_url || ""),
+    sourceCheckedAt: String(row.source_checked_at || ""),
+    sourceConfidence: numberValue(row.source_confidence),
   })).filter((row) => row.sku);
 }
 

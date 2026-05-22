@@ -1,0 +1,44 @@
+[
+  {
+    "sku": "AF-35MM-F18-EVO-FE",
+    "category_main": "Lens",
+    "category_detail": "Camera Lens",
+    "model_name": "Viltrox AF 35mm F1.8 EVO Full-Frame Lens for Sony E-Mount",
+    "marketing_name": "AF 35mm F1.8 EVO FE",
+    "series": "EVO",
+    "mount": "E-mount",
+    "price_usd": 395.0,
+    "status": "verified",
+    "description": "Full-frame 35mm F1.8 APO prime for street, travel, environmental portraits, vlogging, and everyday scenes.",
+    "product_url": "https://viltrox.com/products/af-35mm-f1-8-fe",
+    "source_url": "https://viltrox.com/products/af-35mm-f1-8-fe",
+    "source_file": "official:viltrox.com/products/af-35mm-f1-8-fe",
+    "source_confidence": 1.0,
+    "fit_tags": [
+      "35mm",
+      "street",
+      "travel",
+      "portrait",
+      "vlog",
+      "photography",
+      "full-frame",
+      "sony-e"
+    ],
+    "specs": {
+      "lens_mount": "E-mount",
+      "lens_elements": "13/10",
+      "focal_length": "f=35mm",
+      "viewing_angle": "63 deg",
+      "aperture": "F1.8-F16",
+      "aperture_blades": "9",
+      "shooting_distance": "0.34m-infinity",
+      "focus_mechanism": "internal focusing",
+      "focus_motor": "STM+Lead screw",
+      "focus_mode": "MF,AF",
+      "max_magnification": "0.15x",
+      "lens_size": "Phi 69x76mm",
+      "weight": "approx 355g (bare lens)",
+      "filter_size": "Phi 58mm"
+    }
+  }
+]

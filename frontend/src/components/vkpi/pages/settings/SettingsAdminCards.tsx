@@ -230,6 +230,14 @@ function productLabel(product: VkpiProductCatalogItem) {
   return product.marketingName || product.modelName || product.sku;
 }
 
+function productMetaLine(product: VkpiProductCatalogItem) {
+  return [
+    product.series,
+    product.mount,
+    product.categoryDetail,
+  ].filter(Boolean).join(" · ") || product.status || "unknown";
+}
+
 export function ProductCatalogPreviewCard({
   products,
   loading,
@@ -288,7 +296,7 @@ export function ProductCatalogPreviewCard({
                   >
                     <strong>{productLabel(product)}</strong>
                     <span>{product.sku}</span>
-                    <em>{priceLabel(product.priceUsd)} · {product.status || "unknown"}</em>
+                    <em>{priceLabel(product.priceUsd)} · {productMetaLine(product)}</em>
                   </button>
                 )) : <div className="vkpi-empty-panel">{loading ? "正在读取产品目录" : "暂无产品"}</div>}
               </div>
