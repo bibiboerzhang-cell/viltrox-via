@@ -512,6 +512,8 @@ def _persist_preview_run(payload: dict[str, Any]) -> dict[str, Any]:
                 "product_family_uid": item.get("product_family_uid"),
                 "product_family_name": item.get("product_family_name"),
                 "product_member_count": item.get("product_member_count"),
+                "matched_catalog_product": item.get("matched_catalog_product"),
+                "matched_catalog_products": item.get("matched_catalog_products") or [],
                 "links": item.get("links") or {},
             }
             explanation = {

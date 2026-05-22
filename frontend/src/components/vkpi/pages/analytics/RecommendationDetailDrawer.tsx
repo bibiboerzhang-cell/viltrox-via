@@ -19,6 +19,28 @@ function prettyJson(value: unknown, fallback: unknown = {}) {
   }
 }
 
+function recordValue(value: unknown): Row {
+  if (!value) return {};
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value || '{}');
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Row : {};
+    } catch {
+      return {};
+    }
+  }
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Row : {};
+}
+
+function arrayValue(value: unknown): Row[] {
+  return Array.isArray(value) ? value.filter((item): item is Row => Boolean(item) && typeof item === 'object' && !Array.isArray(item)) : [];
+}
+
+function money(value: unknown): string {
+  const amount = Number(value || 0);
+  return Number.isFinite(amount) && amount > 0 ? `$${amount.toLocaleString('en-US')}` : '-';
+}
+
 export function RecommendationDetailDrawer({
   recommendation,
   evidence,
@@ -36,6 +58,8 @@ export function RecommendationDetailDrawer({
   const selectedCosts = ((evidence?.costs || []) as Row[]);
   const selectedOrders = ((evidence?.shopify_orders || []) as Row[]);
   const costCents = selectedCosts.reduce((sum, row) => sum + safeNumber(row.amount_cents), 0);
+  const featureSnapshot = recordValue(evidence?.feature_snapshot || recommendation.feature_snapshot_json);
+  const catalogProducts = arrayValue(featureSnapshot.matched_catalog_products);
 
   return (
     <aside className="vkpi-drawer">
@@ -55,6 +79,35 @@ export function RecommendationDetailDrawer({
         <InfoBlock label="来源行" value={loading ? '读取中' : String(safeNumber(evidence?.source_count))} />
         <InfoBlock label="Outcome" value={safeNumber(selectedOutcome.project_created) ? '已建项' : safeNumber(selectedOutcome.was_shortlisted) ? '已入选' : '已冻结'} />
       </div>
+      <section className="vkpi-detail-section">
+        <h3>官方 SKU / Specs</h3>
+        {catalogProducts.length ? (
+          <div className="vkpi-rec-product-grid">
+            {catalogProducts.map((product) => {
+              const specs = recordValue(product.specs);
+              return (
+                <article key={String(product.sku || product.model_name)}>
+                  <header>
+                    <strong>{String(product.sku || product.model_name || '-')}</strong>
+                    <span>{String(product.mount || '-')} · {money(product.price_usd)}</span>
+                  </header>
+                  <p>{String(product.model_name || product.marketing_name || '-')}</p>
+                  <div>
+                    {String(specs.focal_length || '') ? <em>{String(specs.focal_length)}</em> : null}
+                    {String(specs.aperture || '') ? <em>{String(specs.aperture)}</em> : null}
+                    {String(specs.lens_elements || '') ? <em>{String(specs.lens_elements)}</em> : null}
+                    {String(specs.weight || '') ? <em>{String(specs.weight)}</em> : null}
+                    {String(specs.filter_size || '') ? <em>{String(specs.filter_size)}</em> : null}
+                  </div>
+                  {String(product.product_url || '') ? <a href={String(product.product_url)} target="_blank" rel="noreferrer">打开官网</a> : null}
+                </article>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="vkpi-help-text">暂无官方 SKU 变体。旧推荐仍会显示产品线；新 Product Fit 运行会写入 FE / Z / X / L 等卡口和美元价格。</p>
+        )}
+      </section>
       <section className="vkpi-detail-section">
         <h3>Evidence Source Rows</h3>
         <div className="vkpi-table-wrap">
@@ -103,7 +156,7 @@ export function RecommendationDetailDrawer({
       </section>
       <section className="vkpi-detail-section">
         <h3>Feature Snapshot</h3>
-        <pre className="vkpi-code-block">{prettyJson(evidence?.feature_snapshot || recommendation.feature_snapshot_json)}</pre>
+        <pre className="vkpi-code-block">{prettyJson(featureSnapshot)}</pre>
       </section>
       <section className="vkpi-detail-section">
         <h3>Scoring Breakdown</h3>
