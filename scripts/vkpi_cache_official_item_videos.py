@@ -77,9 +77,21 @@ def _post_id(post: dict[str, Any]) -> str:
     return _first_text(post.get("source_id"), post.get("id"), post.get("short_code"), post.get("url"))
 
 
+def _post_sort_key(post: dict[str, Any]) -> tuple[int, str]:
+    posted_at = _text(post.get("posted_at"))
+    if posted_at:
+        try:
+            parsed = datetime.fromisoformat(posted_at.replace("Z", "+00:00"))
+            return (int(parsed.timestamp()), posted_at)
+        except ValueError:
+            return (0, posted_at)
+    return (0, "")
+
+
 def _collect_candidates(channel_id: int, *, max_videos: int) -> tuple[dict[str, Any], list[dict[str, Any]], str, int]:
     row = channels._latest_channel_row(channel_id, staff=STAFF)
     posts, source, _package_dir = channels._all_posts_for_channel(row)
+    posts = sorted(posts, key=_post_sort_key, reverse=True)
     platform = _text(row.get("platform")).lower()
     candidates: list[dict[str, Any]] = []
     seen: set[str] = set()
