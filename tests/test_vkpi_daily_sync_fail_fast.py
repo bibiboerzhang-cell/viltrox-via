@@ -252,3 +252,13 @@ def test_record_daily_sync_summary_persists_failed_status_for_high_failure(monke
     assert params[5] == "failed"
     assert params[8] == "failure_rate_threshold_exceeded"
     assert params[9] == "other"
+
+
+def test_daily_sync_dry_run_does_not_persist_summary(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(daily_sync, "record_daily_sync_summary", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("dry-run wrote summary")))
+
+    result = daily_sync.run_daily_incremental({"dry_run": True, "skip_official": True, "skip_kol": True})
+
+    assert result["dry_run"] is True
+    assert result["health"]["total_errors"] == 0
+    assert result["health"]["blocked_next_run"] is False

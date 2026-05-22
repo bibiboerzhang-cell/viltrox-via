@@ -969,6 +969,9 @@ def run_daily_incremental(payload: dict[str, Any] | None = None) -> dict[str, An
     else:
         result["kol_pool_light"] = {"skipped": True}
     result["finished_at"] = _utcnow()
-    health = record_daily_sync_summary(str(result.get("run_id") or payload.get("run_id") or ""), result)
+    if _bool(payload.get("dry_run")):
+        health = _sync_health_from_summary(result)
+    else:
+        health = record_daily_sync_summary(str(result.get("run_id") or payload.get("run_id") or ""), result)
     result["health"] = health
     return result
