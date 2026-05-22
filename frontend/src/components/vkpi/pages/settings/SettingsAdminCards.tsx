@@ -199,6 +199,17 @@ export function ProductCostFormCard({
   onCostNoteChange: (value: string) => void;
   onSubmit: React.FormEventHandler;
 }) {
+  const selectedSpecs = selectedProduct?.specs || {};
+  const specRows = [
+    ["卡口", selectedProduct?.mount || selectedSpecs.lens_mount],
+    ["焦段", selectedSpecs.focal_length],
+    ["光圈", selectedSpecs.aperture],
+    ["结构", selectedSpecs.lens_elements],
+    ["重量", selectedSpecs.weight],
+    ["滤镜", selectedSpecs.filter_size],
+  ]
+    .map(([label, value]) => ({ label: String(label), value: String(value || "").trim() }))
+    .filter((row) => row.value);
   return (
     <section className="vkpi-card vkpi-action-card">
       <CardHeader title="SKU 录入" />
@@ -208,10 +219,28 @@ export function ProductCostFormCard({
         <input value={unitCostUsd} onChange={(event) => onUnitCostUsdChange(event.target.value)} placeholder="镜头内部成本 USD" inputMode="decimal" />
         <input value={costNote} onChange={(event) => onCostNoteChange(event.target.value)} placeholder="备注（可选）" />
         {selectedProduct ? (
-          <div className="vkpi-selected-sku-price">
-            <span>当前 SKU</span>
-            <strong>{selectedProduct.sku}</strong>
-            <em>{selectedProduct.priceUsd == null ? "未定价" : `$${selectedProduct.priceUsd.toLocaleString("en-US")}`}</em>
+          <div className="vkpi-selected-product-detail">
+            <div className="vkpi-selected-sku-price">
+              <span>当前 SKU</span>
+              <strong>{selectedProduct.sku}</strong>
+              <em>{selectedProduct.priceUsd == null ? "未定价" : `$${selectedProduct.priceUsd.toLocaleString("en-US")}`}</em>
+            </div>
+            <p>{selectedProduct.modelName || selectedProduct.marketingName || selectedProduct.sku}</p>
+            {specRows.length ? (
+              <dl>
+                {specRows.map((row) => (
+                  <div key={row.label}>
+                    <dt>{row.label}</dt>
+                    <dd>{row.value}</dd>
+                  </div>
+                ))}
+              </dl>
+            ) : (
+              <small>官网规格未解析；已保留产品链接和基础价格。</small>
+            )}
+            {selectedProduct.productUrl ? (
+              <a href={selectedProduct.productUrl} target="_blank" rel="noreferrer">打开官网产品页</a>
+            ) : null}
           </div>
         ) : null}
         <button className="vkpi-button vkpi-button--primary" type="submit" disabled={busy || !canUpsert}>保存 SKU</button>
