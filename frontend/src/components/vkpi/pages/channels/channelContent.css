@@ -232,9 +232,10 @@
 .vkpi-channel-content-card__media iframe {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
 }
 
+.vkpi-channel-content-card__media img,
 .vkpi-channel-content-card__media video {
   background: #0b1220;
 }
