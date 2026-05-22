@@ -29,7 +29,12 @@ function deltaText(delta = 0) {
   return delta ? `${delta > 0 ? '+' : ''}${compact(delta)}` : '基线';
 }
 
-function viewsDeltaLabel(totalViews: number, delta = 0) {
+function viewsValue(totalViews: number, unavailable?: boolean) {
+  return unavailable ? '-' : compact(totalViews);
+}
+
+function viewsDeltaLabel(totalViews: number, delta = 0, unavailable?: boolean) {
+  if (unavailable) return '公开播放不可用';
   if (delta) return `播放 ${delta > 0 ? '+' : ''}${compact(delta)}`;
   return totalViews > 0 ? '播放已同步' : '无公开播放';
 }
@@ -142,6 +147,7 @@ export function ChannelPlatformMatrix({
           const avatars = platform.accounts.map((account) => proxiedImageUrl(account.avatarUrl)).filter(Boolean).slice(0, 4);
           const followerDelta = platform.followersDelta || platform.accounts.reduce((sum, account) => sum + (account.followersDelta || 0), 0);
           const viewsDelta = platform.viewsDelta || platform.accounts.reduce((sum, account) => sum + (account.viewsDelta || 0), 0);
+          const viewsUnavailable = Boolean(platform.viewsUnavailable);
           return (
             <button
               type="button"
@@ -158,10 +164,12 @@ export function ChannelPlatformMatrix({
                 </div>
               </div>
               <div className="vkpi-channel-platform-card__metrics">
-                <strong>{compact(platform.totalViews)}</strong>
+                <strong title={viewsUnavailable ? platform.viewsUnavailableReason : undefined}>{viewsValue(platform.totalViews, viewsUnavailable)}</strong>
                 <span>{compact(platform.totalFollowers)} 粉丝</span>
                 <em className={deltaTone(followerDelta)}>{deltaLabel(platform.totalFollowers, followerDelta)}</em>
-                <small className={deltaTone(viewsDelta)}>{viewsDeltaLabel(platform.totalViews, viewsDelta)}</small>
+                <small className={deltaTone(viewsUnavailable ? 0 : viewsDelta)} title={platform.viewsUnavailableReason}>
+                  {viewsDeltaLabel(platform.totalViews, viewsDelta, viewsUnavailable)}
+                </small>
               </div>
             </button>
           );

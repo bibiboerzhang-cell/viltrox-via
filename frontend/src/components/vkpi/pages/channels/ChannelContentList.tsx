@@ -243,8 +243,13 @@ function viewsMetricLabel(post: ChannelContentPost, account: OfficialChannelAcco
 
 function viewsUnavailableText(post: ChannelContentPost, account: OfficialChannelAccount) {
   if (post.viewsUnavailableReason) return post.viewsUnavailableReason;
+  if (account.viewsUnavailableReason) return account.viewsUnavailableReason;
   if (account.platform.toLowerCase() === 'reddit') return 'Reddit 不公开帖子播放量；今年分析使用点赞、评论和站内评分。';
   return '图文无公开播放，需后台 Insights 才能补齐。';
+}
+
+function accountViewsValue(account: OfficialChannelAccount) {
+  return account.viewsUnavailable ? '-' : compact(account.totalViews);
 }
 
 function mediaBadge(post: ChannelContentPost, account: OfficialChannelAccount) {
@@ -579,7 +584,7 @@ export function ChannelContentList({ account, apiToken }: { account?: OfficialCh
             <p>@{account.handle || '-'} · {formatter.format(account.followers)} 粉丝 · {formatter.format(account.postsCount)} 内容</p>
           </div>
         </div>
-        <strong>{compact(account.totalViews)}</strong>
+        <strong title={account.viewsUnavailable ? account.viewsUnavailableReason : undefined}>{accountViewsValue(account)}</strong>
       </header>
       <div className="vkpi-channel-content-toolbar">
         <div className="vkpi-channel-content-toolbar__sort" aria-label="内容排序">

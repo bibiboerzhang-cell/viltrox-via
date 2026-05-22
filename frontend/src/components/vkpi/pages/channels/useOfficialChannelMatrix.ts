@@ -40,6 +40,17 @@ function textList(value: unknown): string[] {
   return [];
 }
 
+function isRedditPlatform(value: unknown) {
+  return text(value).toLowerCase() === 'reddit';
+}
+
+function viewsUnavailableReason(platform: unknown, fallback: unknown) {
+  const explicit = text(fallback);
+  if (explicit) return explicit;
+  if (isRedditPlatform(platform)) return 'Reddit 不公开帖子播放量；今年分析使用点赞、评论和站内评分。';
+  return '';
+}
+
 function mapPost(row: Row): ChannelContentPost {
   return {
     id: text(row.id || row.url),
@@ -65,6 +76,8 @@ function mapPost(row: Row): ChannelContentPost {
 }
 
 function mapAccount(row: Row): OfficialChannelAccount {
+  const platform = text(row.platform);
+  const viewsUnavailable = Boolean(row.views_unavailable || row.viewsUnavailable || isRedditPlatform(platform));
   return {
     id: numberValue(row.id),
     staffId: numberValue(row.staff_id ?? row.staffId),
@@ -73,7 +86,7 @@ function mapAccount(row: Row): OfficialChannelAccount {
     staffAvatarUrl: text(row.staff_avatar_url ?? row.staffAvatarUrl),
     staffRole: text(row.staff_role ?? row.staffRole),
     staffActive: boolValue(row.staff_active ?? row.staffActive),
-    platform: text(row.platform),
+    platform,
     platformLabel: text(row.platform_label || row.platformLabel || row.platform),
     handle: text(row.handle),
     displayName: text(row.display_name || row.displayName || row.handle, '官方账号'),
@@ -88,6 +101,9 @@ function mapAccount(row: Row): OfficialChannelAccount {
     postsDelta: numberValue(row.posts_delta ?? row.postsDelta),
     totalViews: numberValue(row.total_views || row.totalViews),
     viewsDelta: numberValue(row.views_delta ?? row.viewsDelta),
+    viewsUnavailable,
+    viewsMetricLabel: text(row.views_metric_label || row.viewsMetricLabel, viewsUnavailable ? '公开播放' : '播放'),
+    viewsUnavailableReason: viewsUnavailableReason(platform, row.views_unavailable_reason || row.viewsUnavailableReason),
     totalLikes: numberValue(row.total_likes || row.totalLikes),
     totalComments: numberValue(row.total_comments || row.totalComments),
     engagementRate: numberValue(row.engagement_rate || row.engagementRate),
@@ -96,8 +112,11 @@ function mapAccount(row: Row): OfficialChannelAccount {
 }
 
 function mapPlatform(row: Row): OfficialChannelPlatform {
+  const platform = text(row.platform, 'other');
+  const accounts = rows(row.accounts).map(mapAccount);
+  const viewsUnavailable = Boolean(row.views_unavailable || row.viewsUnavailable || isRedditPlatform(platform) || (accounts.length > 0 && accounts.every((account) => account.viewsUnavailable)));
   return {
-    platform: text(row.platform, 'other'),
+    platform,
     label: text(row.label || row.platform, 'Other'),
     totalViews: numberValue(row.total_views || row.totalViews),
     totalPosts: numberValue(row.total_posts || row.totalPosts),
@@ -105,7 +124,10 @@ function mapPlatform(row: Row): OfficialChannelPlatform {
     followersDelta: numberValue(row.followers_delta ?? row.followersDelta),
     postsDelta: numberValue(row.posts_delta ?? row.postsDelta),
     viewsDelta: numberValue(row.views_delta ?? row.viewsDelta),
-    accounts: rows(row.accounts).map(mapAccount),
+    viewsUnavailable,
+    viewsMetricLabel: text(row.views_metric_label || row.viewsMetricLabel, viewsUnavailable ? '公开播放' : '播放'),
+    viewsUnavailableReason: viewsUnavailableReason(platform, row.views_unavailable_reason || row.viewsUnavailableReason),
+    accounts,
   };
 }
 

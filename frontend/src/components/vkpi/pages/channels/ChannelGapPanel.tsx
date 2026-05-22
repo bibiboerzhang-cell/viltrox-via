@@ -39,6 +39,10 @@ function providerLabel(account: ChannelGapAccount) {
   return account.providerReady ? `${account.provider} 已就绪` : `${account.provider} 未就绪`;
 }
 
+function viewsValue(account: ChannelGapAccount) {
+  return account.platform.toLowerCase() === 'reddit' ? '-' : compact(account.totalViews);
+}
+
 export function ChannelGapPanel({
   accounts,
   summary,
@@ -103,7 +107,7 @@ export function ChannelGapPanel({
                           <h3>{account.displayName}</h3>
                           <p>{account.platformLabel} · @{account.handle || '-'} · {account.staffName}</p>
                         </div>
-                        <strong>{compact(account.totalViews)}</strong>
+                        <strong title={account.platform.toLowerCase() === 'reddit' ? 'Reddit 不公开帖子播放量；今年分析使用点赞、评论和站内评分。' : undefined}>{viewsValue(account)}</strong>
                       </div>
                       <div className="vkpi-channel-gap-card__issues">
                         {account.issues.slice(0, 3).map((issue) => <span key={issue.key}>{issue.label}</span>)}
@@ -157,7 +161,7 @@ export function ChannelGapPanel({
                   <h3>{account.displayName}</h3>
                   <p>{account.platformLabel} · @{account.handle || '-'} · {account.staffName}</p>
                 </div>
-                <strong>{compact(account.totalViews)}</strong>
+                <strong title={account.platform.toLowerCase() === 'reddit' ? 'Reddit 不公开帖子播放量；今年分析使用点赞、评论和站内评分。' : undefined}>{viewsValue(account)}</strong>
               </div>
               <div className="vkpi-channel-gap-card__issues">
                 {account.issues.slice(0, 2).map((issue) => <span key={issue.key}>{issue.label}</span>)}

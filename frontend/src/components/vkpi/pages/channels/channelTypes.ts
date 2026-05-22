@@ -80,6 +80,9 @@ export interface OfficialChannelAccount {
   postsDelta?: number;
   totalViews: number;
   viewsDelta?: number;
+  viewsUnavailable?: boolean;
+  viewsMetricLabel?: string;
+  viewsUnavailableReason?: string;
   totalLikes: number;
   totalComments: number;
   engagementRate: number;
@@ -95,6 +98,9 @@ export interface OfficialChannelPlatform {
   followersDelta?: number;
   postsDelta?: number;
   viewsDelta?: number;
+  viewsUnavailable?: boolean;
+  viewsMetricLabel?: string;
+  viewsUnavailableReason?: string;
   accounts: OfficialChannelAccount[];
 }
 

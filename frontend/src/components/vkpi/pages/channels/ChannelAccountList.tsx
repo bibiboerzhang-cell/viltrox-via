@@ -20,9 +20,15 @@ function deltaText(delta = 0) {
   return delta ? `${delta > 0 ? '+' : ''}${compact(delta)}` : '+0';
 }
 
-function viewsDeltaText(totalViews: number, delta = 0) {
+function viewsValue(account: OfficialChannelAccount) {
+  return account.viewsUnavailable ? '-' : compact(account.totalViews);
+}
+
+function viewsDeltaText(account: OfficialChannelAccount) {
+  if (account.viewsUnavailable) return '公开播放不可用';
+  const delta = account.viewsDelta || 0;
   if (delta) return `播放 ${deltaText(delta)}`;
-  return totalViews > 0 ? '播放已同步' : '无公开播放';
+  return account.totalViews > 0 ? '播放已同步' : '无公开播放';
 }
 
 function fallbackInitial(account: OfficialChannelAccount) {
@@ -116,8 +122,10 @@ export function ChannelAccountList({
                 <div className="vkpi-channel-account-card__title">
                   <h3>{account.displayName}</h3>
                   <span className="vkpi-channel-account-card__value">
-                    <strong>{compact(account.totalViews)}</strong>
-                    <small className={deltaTone(account.viewsDelta)}>{viewsDeltaText(account.totalViews, account.viewsDelta)}</small>
+                    <strong title={account.viewsUnavailable ? account.viewsUnavailableReason : undefined}>{viewsValue(account)}</strong>
+                    <small className={deltaTone(account.viewsUnavailable ? 0 : account.viewsDelta)} title={account.viewsUnavailableReason}>
+                      {viewsDeltaText(account)}
+                    </small>
                   </span>
                 </div>
                 <p>
