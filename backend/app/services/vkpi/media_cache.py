@@ -1155,8 +1155,7 @@ def cache_video_for_item(
             progress_callback=progress_callback,
             cancel_check=cancel_check,
         )
-        if ytdlp_result.get("status") != "failed" or ytdlp_result.get("reason") != "yt_dlp_failed":
-            return ytdlp_result
+        return ytdlp_result
     if not normalized:
         return {"status": "skipped", "cached": False, "skipped": True, "skip_reason": "not_allowlisted", "platform": platform_key, "video_id": video_key}
     normalized_url, host = normalized
