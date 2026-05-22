@@ -478,6 +478,27 @@ def _cached_item_video_url(platform: Any, *candidates: Any) -> str:
     return ""
 
 
+def _attach_cached_item_videos(posts: list[dict[str, Any]], platform: Any) -> list[dict[str, Any]]:
+    platform_key = _text(platform).lower()
+    if not platform_key:
+        return posts
+    for post in posts:
+        if _text(post.get("video_url")):
+            continue
+        cached = _cached_item_video_url(
+            platform_key,
+            post.get("source_id"),
+            post.get("short_code"),
+            post.get("id"),
+            post.get("url"),
+        )
+        if cached:
+            post["video_url"] = cached
+            if _text(post.get("media_kind")).lower() in {"", "image", "pending"}:
+                post["media_kind"] = "video"
+    return posts
+
+
 def _looks_like_image_media_url(url: str, *, key_hint: str = "") -> bool:
     parsed = urllib.parse.urlparse(url)
     host = (parsed.hostname or "").lower()
@@ -1266,6 +1287,7 @@ def channel_posts(
     source = "package_csv" if posts else "snapshot_sample"
     if not posts:
         posts = _extract_posts(row, per_account_limit=50)
+    posts = _attach_cached_item_videos(posts, row.get("platform"))
     posts = [post for post in posts if _text(post.get("id"), post.get("url"))]
     posts = _filter_posts_by_window(posts, window)
     posts = _sort_posts(posts, sort, direction)
@@ -1314,6 +1336,7 @@ def _all_posts_for_channel(row: dict[str, Any]) -> tuple[list[dict[str, Any]], s
     source = "package_csv" if posts else "snapshot_sample"
     if not posts:
         posts = _extract_posts(row, per_account_limit=50)
+    posts = _attach_cached_item_videos(posts, row.get("platform"))
     posts = [post for post in posts if _text(post.get("id"), post.get("url"))]
     return posts, source, package_dir
 
