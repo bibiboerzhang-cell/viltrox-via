@@ -16,6 +16,22 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def _prefer_project_venv() -> None:
+    """Avoid false SQLite reports when system Python lacks Postgres drivers."""
+    if os.environ.get("VKPI_REPORT_ALLOW_SYSTEM_PYTHON") == "1":
+        return
+    venv_python = ROOT / ".venv" / "bin" / "python"
+    if not venv_python.exists():
+        return
+    current = Path(sys.executable).resolve()
+    target = venv_python.resolve()
+    if current != target:
+        os.execv(str(target), [str(target), *sys.argv])
+
+
+_prefer_project_venv()
+
+
 def utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
