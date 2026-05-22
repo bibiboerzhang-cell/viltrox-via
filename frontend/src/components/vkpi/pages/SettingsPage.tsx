@@ -25,6 +25,7 @@ import {
   createStaffPasswordResetLink,
 } from '../../../services/vkpi.ui-api';
 import type { VkpiPermissionLevel, VkpiStaffActivationLinkResponse, VkpiStaffInviteCapabilities, VkpiStaffPasswordResetLinkResponse } from '../../../services/vkpi.ui-api';
+import type { VkpiSyncOverview } from '../../../services/vkpi/sync-api';
 import type {
   VkpiDashboardData,
   VkpiProductCatalogItem,
@@ -127,6 +128,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
   const [budgetSettings, setBudgetSettings] = useState<Array<Record<string, unknown>>>([]);
   const [commentAlertSettings, setCommentAlertSettings] = useState<Record<string, unknown>>({});
   const [controlStatus, setControlStatus] = useState<Record<string, unknown>>({});
+  const [syncOverview, setSyncOverview] = useState<VkpiSyncOverview | null>(null);
   const [settingsError, setSettingsError] = useState('');
   const [settingsLoading, setSettingsLoading] = useState(false);
   const [expandedSection, setExpandedSection] = useState<'status' | 'sku' | 'staff' | 'funds' | 'rules' | null>('status');
@@ -184,7 +186,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
       setProviderError('');
       setSettingsError('');
       try {
-        const [providerResponse, rbacResponse, flagsResponse, crawlResponse, budgetResponse, controlResponse, commentAlertResponse, inviteCapabilitiesResponse] = await Promise.all([
+        const [providerResponse, rbacResponse, flagsResponse, crawlResponse, budgetResponse, controlResponse, commentAlertResponse, inviteCapabilitiesResponse, syncOverviewResponse] = await Promise.all([
           listProviderStatuses(apiToken),
           getRbacStatus(apiToken).catch((error) => {
             setRbacStatusError(error instanceof Error ? error.message : 'RBAC 状态读取失败');
@@ -199,6 +201,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
             setInviteCapabilitiesError(error instanceof Error ? error.message : '邀请能力读取失败');
             return null;
           }),
+          getSyncOverview(apiToken).catch(() => null),
         ]);
         if (!cancelled) {
           setProviders(providerResponse.providers || []);
@@ -209,6 +212,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
           setControlStatus(controlResponse || {});
           setCommentAlertSettings(commentAlertResponse.settings || {});
           setInviteCapabilities(inviteCapabilitiesResponse);
+          setSyncOverview(syncOverviewResponse);
         }
       } catch (error) {
         if (!cancelled) setSettingsError(error instanceof Error ? error.message : '系统设置读取失败');
@@ -249,18 +253,20 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
   const reloadSystemSettings = async () => {
     if (!apiToken) return;
     setSettingsError('');
-    const [flagsResponse, crawlResponse, budgetResponse, controlResponse, commentAlertResponse] = await Promise.all([
+    const [flagsResponse, crawlResponse, budgetResponse, controlResponse, commentAlertResponse, syncOverviewResponse] = await Promise.all([
       listFeatureFlags(apiToken),
       listPlatformCrawlSettings(apiToken),
       listBudgetSettings(apiToken),
       getControlStatus(apiToken),
       getCommentAlertSettings(apiToken),
+      getSyncOverview(apiToken).catch(() => null),
     ]);
     setFeatureFlags(flagsResponse.flags || []);
     setPlatformCrawl(crawlResponse.platforms || []);
     setBudgetSettings(budgetResponse.budgets || []);
     setControlStatus(controlResponse || {});
     setCommentAlertSettings(commentAlertResponse.settings || {});
+    setSyncOverview(syncOverviewResponse);
   };
 
   const reloadProviders = async () => {
@@ -323,6 +329,10 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
   );
   const boolLabel = (value: boolean) => (value ? '开启' : '关闭');
   const moneyLabel = (value: unknown) => `$${numberValue(value).toLocaleString('en-US')}`;
+  const percentLabel = (value: unknown) => {
+    const next = numberValue(value, 0);
+    return `${(next * 100).toFixed(next > 0 && next < 0.01 ? 2 : 1)}%`;
+  };
   const timeLabel = (value: unknown) => {
     const raw = String(value || '').trim();
     if (!raw || raw === 'unknown') return '-';
@@ -625,12 +635,22 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
   const apiStatusDetail = providerNames.length ? providerNames.join(' / ') : 'Claude / Gemini / OpenAI / Apify / YouTube';
   const totalBudgetUsd = budgetSettings.reduce((sum, row) => sum + numberValue(row.monthly_limit_usd), 0);
   const totalSpentUsd = budgetSettings.reduce((sum, row) => sum + numberValue(row.current_month_spent), 0);
+  const dailySync = syncOverview?.daily_sync || null;
+  const syncHealth = dailySync?.latest_summary?.health || dailySync?.latest_run?.health || {};
+  const syncRequested = numberValue(syncHealth.total_requested);
+  const syncErrors = numberValue(syncHealth.total_errors);
+  const syncFailureRate = numberValue(syncHealth.failure_rate);
+  const syncGuardText = dailySync?.ack_required ? '需 ack' : dailySync?.error ? '状态异常' : '可运行';
+  const syncLastRun = dailySync?.latest_summary || dailySync?.latest_run || null;
+  const syncLastRunStatus = String(syncLastRun?.status || (dailySync ? 'never_run' : '读取中'));
+  const syncAck = dailySync?.latest_ack || null;
+  const syncAckReason = String(syncAck?.reason || '');
   const skuCount = productCatalog.length || data.productCosts.length;
   const lensCount = productCatalog.filter((product) => ['Lens', 'Cine Lens'].includes(product.categoryMain)).length;
   const lightingCount = productCatalog.filter((product) => product.categoryMain === 'Lighting/Flash').length;
   const adapterCount = productCatalog.filter((product) => product.categoryMain === 'Adapter').length;
   const syncTime = String(syncPolicy.daily_sync_time || '08:00');
-  const systemHealth = settingsError || providerError || rbacStatusError ? '需要处理' : 'healthy';
+  const systemHealth = settingsError || providerError || rbacStatusError || dailySync?.ack_required ? '需要处理' : 'healthy';
   const versionSummary = frontendAsset
     ? `${frontendAsset} · ${timeLabel(versionCheckedAt)}`
     : `${shortBuildSha(frontendBuildInfo.gitSha)} · ${timeLabel(frontendBuildInfo.builtAt)}`;
@@ -692,15 +712,35 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
       {settingsError ? <div className="vkpi-inline-message">{settingsError}</div> : null}
       <SettingsLoadingStrip settingsLoading={settingsLoading} catalogLoading={productCatalogLoading} />
       <div className="vkpi-settings-clean">
-        {renderSettingsModule('status', `${apiStatusText} · 同步 ${syncTime} · ${systemHealth} · 版本 ${versionSummary}`, (
+        {renderSettingsModule('status', `${apiStatusText} · 同步 ${syncTime} / ${syncGuardText} · ${systemHealth} · 版本 ${versionSummary}`, (
           <>
             <div className="vkpi-settings-status-grid">
               <InfoBlock label="API 服务" value={apiStatusText} />
               <InfoBlock label="服务范围" value={apiStatusDetail} />
-              <InfoBlock label="同步" value={`每日 ${syncTime}`} />
+              <InfoBlock label="同步" value={`每日 ${syncTime} · ${syncGuardText}`} />
               <InfoBlock label="本月成本" value={`$${totalSpentUsd.toLocaleString('en-US')} / $${totalBudgetUsd.toLocaleString('en-US')}`} />
               <InfoBlock label="系统" value={systemHealth} />
             </div>
+            <section className="vkpi-settings-version-panel">
+              <div className="vkpi-table-card__header">
+                <div><h2>每日同步 Guard</h2><span>{syncLastRun ? `最近 ${timeLabel(syncLastRun.finished_at || syncLastRun.started_at)}` : '暂无运行记录'}</span></div>
+              </div>
+              {dailySync?.ack_required ? (
+                <div className="vkpi-inline-message is-error">
+                  同步已暂停，需要 CLI ack 后才允许下次运行：{String(dailySync.blocking_run?.run_id || '-')}
+                </div>
+              ) : dailySync?.error ? (
+                <div className="vkpi-inline-message is-warn">同步状态读取异常：{dailySync.error}</div>
+              ) : null}
+              <div className="vkpi-settings-status-grid">
+                <InfoBlock label="Guard 状态" value={syncGuardText} />
+                <InfoBlock label="最近状态" value={syncLastRunStatus} />
+                <InfoBlock label="失败率" value={`${percentLabel(syncFailureRate)} / 阈值 ${percentLabel(dailySync?.failure_rate_threshold ?? syncHealth.failure_rate_threshold ?? 0.1)}`} />
+                <InfoBlock label="目标 / 错误" value={`${syncRequested.toLocaleString('en-US')} / ${syncErrors.toLocaleString('en-US')}`} />
+                <InfoBlock label="KOL 错误" value={String(syncHealth.kol_errors ?? 0)} />
+                <InfoBlock label="最近 ack" value={syncAckReason ? `${syncAckReason} · ${timeLabel(syncAck?.acknowledged_at)}` : '-'} />
+              </div>
+            </section>
             <section className="vkpi-settings-version-panel">
               <div className="vkpi-table-card__header">
                 <div><h2>版本状态</h2><span>{versionCheckedAt ? `检查 ${timeLabel(versionCheckedAt)}` : '读取中'}</span></div>
@@ -843,6 +883,8 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
               <section className="vkpi-card vkpi-action-card">
                 <CardHeader title="同步策略" />
                 <InfoBlock label="每日同步" value={`${syncTime} ${String(syncPolicy.timezone || 'Asia/Shanghai')}`} />
+                <InfoBlock label="Guard" value={syncGuardText} />
+                <InfoBlock label="失败率阈值" value={percentLabel(dailySync?.failure_rate_threshold ?? 0.1)} />
                 <InfoBlock label="每人候选" value={`${String(syncPolicy.candidate_limit_per_staff || 100)} 条`} />
                 <button className="vkpi-button vkpi-button--primary" type="button" disabled={busy || !apiToken} onClick={() => void runMorningSync()}>手动同步</button>
               </section>

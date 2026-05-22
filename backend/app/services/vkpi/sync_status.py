@@ -22,7 +22,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
-from app.services.vkpi import platform_crawl_settings
+from app.services.vkpi import daily_sync, platform_crawl_settings
 
 
 logger = get_logger(__name__)
@@ -65,6 +65,7 @@ def get_overview() -> dict[str, Any]:
         "industry": _industry_status(),
         "shopify": _shopify_status(),
         "cron_jobs": _cron_status(),
+        "daily_sync": _daily_sync_status(),
         "platform_settings": _platform_settings_status(),
         "summary": _summary_health(),
     }
@@ -276,6 +277,88 @@ def _cron_status() -> dict[str, Any]:
         return {"error": str(exc)}
 
 
+# ─── daily sync guard 状态 ───────────────────────
+
+
+def _json_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(str(value))
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _serialize_run(row: dict[str, Any]) -> dict[str, Any]:
+    summary = _json_dict(row.get("summary_json"))
+    health = summary.get("health") if isinstance(summary.get("health"), dict) else {}
+    if not health:
+        health = daily_sync._sync_health_from_summary(summary)
+    return {
+        "run_id": row.get("run_id"),
+        "job_name": row.get("job_name"),
+        "stage": row.get("stage"),
+        "started_at": row.get("started_at"),
+        "finished_at": row.get("finished_at"),
+        "status": row.get("status"),
+        "total_targets": int(row.get("total_targets") or 0),
+        "last_success_index": int(row.get("last_success_index") or 0),
+        "interrupted_at_index": row.get("interrupted_at_index"),
+        "interrupted_kol_pool_id": row.get("interrupted_kol_pool_id"),
+        "reason": row.get("reason") or "",
+        "error_type": row.get("error_type") or "",
+        "error_class": row.get("error_class") or "",
+        "error_message": row.get("error_message") or "",
+        "health": health,
+    }
+
+
+def _daily_sync_status() -> dict[str, Any]:
+    """Expose daily sync guard state without mutating the guard ledger."""
+    try:
+        conn = get_conn()
+        rows = conn.execute(
+            """
+            SELECT run_id, job_name, stage, started_at, finished_at, status,
+                   total_targets, last_success_index, interrupted_at_index,
+                   interrupted_kol_pool_id, reason, error_type, error_class,
+                   error_message, summary_json
+            FROM vkpi_sync_runs
+            WHERE job_name = ?
+            ORDER BY started_at DESC
+            LIMIT 10
+            """,
+            ("daily_incremental_sync",),
+        ).fetchall()
+        recent_runs = [_serialize_run(dict(row)) for row in rows]
+        latest_summary = next((row for row in recent_runs if row.get("stage") == "daily_summary"), None)
+        latest_run = recent_runs[0] if recent_runs else None
+        latest_ack = daily_sync._latest_sync_ack("daily_incremental_sync")
+        blocking_run = daily_sync._blocking_sync_run("daily_incremental_sync")
+        return {
+            "guard_allowed": blocking_run is None,
+            "ack_required": blocking_run is not None,
+            "failure_rate_threshold": daily_sync.SYNC_FAILURE_RATE_THRESHOLD,
+            "blocking_run": blocking_run,
+            "latest_ack": latest_ack,
+            "latest_summary": latest_summary,
+            "latest_run": latest_run,
+            "recent_runs": recent_runs,
+        }
+    except Exception as exc:
+        logger.warning("sync_status._daily_sync_status failed: %s", exc)
+        return {
+            "error": str(exc),
+            "guard_allowed": True,
+            "ack_required": False,
+            "failure_rate_threshold": daily_sync.SYNC_FAILURE_RATE_THRESHOLD,
+            "recent_runs": [],
+        }
+
+
 # ─── 平台设置 + budget 状态 ──────────────────
 
 
@@ -340,6 +423,15 @@ def _summary_health() -> dict[str, Any]:
                 "severity": "warning",
                 "category": "industry",
                 "message": f"Industry 同步过去 24h 有 {last_24h_failed} 次失败",
+            })
+
+        daily = _daily_sync_status()
+        if daily.get("ack_required"):
+            run = daily.get("blocking_run") if isinstance(daily.get("blocking_run"), dict) else {}
+            issues.append({
+                "severity": "critical",
+                "category": "daily_sync",
+                "message": f"Daily sync 已被 guard 暂停，需要 ack：{run.get('run_id') or 'unknown'}",
             })
         
         # 检查平台 budget 是否快用完
