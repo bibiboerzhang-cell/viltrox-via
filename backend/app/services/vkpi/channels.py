@@ -485,12 +485,31 @@ def _post_from_instagram(item: dict[str, Any], row: dict[str, Any]) -> list[dict
     posts: list[dict[str, Any]] = []
     direct_posts = _items(item.get("posts")) or ([item] if _text(item.get("dedupe_key"), item.get("shortCode"), item.get("url")) else [])
     for post in direct_posts:
+        child_posts = _items(post.get("childPosts"))
+        video_url = _text(post.get("videoUrl"), _video_url(post.get("video")), _video_url(post.get("media")), _video_url(post))
+        image_urls = _media_urls(
+            post.get("images"),
+            post.get("media"),
+            post.get("displayResources"),
+            post.get("sidecarChildren"),
+            post.get("edge_sidecar_to_children"),
+            [child.get("displayUrl") or child.get("imageUrl") for child in child_posts],
+            post.get("displayUrl"),
+            post.get("imageUrl"),
+            post.get("thumbnailUrl"),
+            post.get("media_url"),
+        )
+        media_kind = _media_type_kind(post.get("type") or post.get("productType") or post.get("mediaType"))
         posts.append(
             {
                 "id": _text(post.get("id"), post.get("source_id"), post.get("shortCode"), post.get("short_code"), post.get("url")),
+                "source_id": _text(post.get("shortCode"), post.get("id"), post.get("source_id")),
                 "title": _text(post.get("caption"), post.get("title"), post.get("alt"), "Instagram 内容"),
                 "url": _text(post.get("url"), post.get("shortCodeUrl"), post.get("displayUrl")),
-                "media_url": _cached_media_url(_text(post.get("media_url"), post.get("displayUrl"), post.get("imageUrl"), post.get("videoUrl"))),
+                "media_url": _cached_media_url(_text(image_urls[0] if image_urls else "", post.get("displayUrl"), post.get("imageUrl"), post.get("media_url"), post.get("videoUrl"))),
+                "video_url": _cached_video_media_url(video_url),
+                "image_urls": image_urls[:12],
+                "media_kind": "video" if video_url or media_kind == "video" else ("carousel" if len(image_urls) > 1 or media_kind == "carousel" else media_kind or "image"),
                 "posted_at": _text(post.get("timestamp"), post.get("createdAt"), post.get("posted_at")),
                 "views": _int(post.get("views"), _int(post.get("videoViewCount"), _int(post.get("videoPlayCount")))),
                 "likes": _int(post.get("likes"), _int(post.get("likesCount"))),
@@ -499,12 +518,30 @@ def _post_from_instagram(item: dict[str, Any], row: dict[str, Any]) -> list[dict
             }
         )
     for post in _items(item.get("latestPosts")):
+        child_posts = _items(post.get("childPosts"))
+        video_url = _text(post.get("videoUrl"), _video_url(post.get("video")), _video_url(post.get("media")), _video_url(post))
+        image_urls = _media_urls(
+            post.get("images"),
+            post.get("media"),
+            post.get("displayResources"),
+            post.get("sidecarChildren"),
+            post.get("edge_sidecar_to_children"),
+            [child.get("displayUrl") or child.get("imageUrl") for child in child_posts],
+            post.get("displayUrl"),
+            post.get("imageUrl"),
+            post.get("thumbnailUrl"),
+        )
+        media_kind = _media_type_kind(post.get("type") or post.get("productType") or post.get("mediaType"))
         posts.append(
             {
                 "id": _text(post.get("id"), post.get("shortCode"), post.get("url")),
+                "source_id": _text(post.get("shortCode"), post.get("id")),
                 "title": _text(post.get("caption"), post.get("alt"), "Instagram 内容"),
                 "url": _text(post.get("url"), post.get("displayUrl")),
-                "media_url": _cached_media_url(_text(post.get("displayUrl"), post.get("imageUrl"), post.get("videoUrl"))),
+                "media_url": _cached_media_url(_text(image_urls[0] if image_urls else "", post.get("displayUrl"), post.get("imageUrl"), post.get("videoUrl"))),
+                "video_url": _cached_video_media_url(video_url),
+                "image_urls": image_urls[:12],
+                "media_kind": "video" if video_url or media_kind == "video" else ("carousel" if len(image_urls) > 1 or media_kind == "carousel" else media_kind or "image"),
                 "posted_at": _text(post.get("timestamp"), post.get("createdAt")),
                 "views": _int(post.get("videoViewCount"), _int(post.get("videoPlayCount"))),
                 "likes": _int(post.get("likesCount"), _int(post.get("likes"))),
@@ -520,20 +557,30 @@ def _post_from_instagram(item: dict[str, Any], row: dict[str, Any]) -> list[dict
 def _post_from_tiktok(item: dict[str, Any]) -> dict[str, Any]:
     media = _items(item.get("mediaUrls"))
     video_meta = item.get("videoMeta") if isinstance(item.get("videoMeta"), dict) else {}
-    media_url = _text(
-        media[0].get("url") if media else "",
+    video_url = _text(
+        _video_url(media),
+        _video_url(video_meta),
+        _video_url(item.get("video")),
+        _video_url(item),
+    )
+    image_urls = _media_urls(
+        video_meta.get("coverUrl"),
+        video_meta.get("originalCoverUrl"),
         video_meta.get("coverUrl"),
         video_meta.get("originalCoverUrl"),
         item.get("coverUrl"),
         item.get("thumbnailUrl"),
         item.get("dynamicCover"),
-        item.get("webVideoUrl"),
     )
     return {
         "id": _text(item.get("id"), item.get("webVideoUrl")),
+        "source_id": _text(item.get("id")),
         "title": _text(item.get("text"), "TikTok 内容"),
         "url": _text(item.get("webVideoUrl"), item.get("url")),
-        "media_url": _cached_media_url(media_url),
+        "media_url": _cached_media_url(_text(image_urls[0] if image_urls else "", media[0].get("url") if media else "", item.get("coverUrl"), item.get("thumbnailUrl"), item.get("webVideoUrl"))),
+        "video_url": _cached_video_media_url(video_url),
+        "image_urls": image_urls[:12],
+        "media_kind": "video" if video_url else "image",
         "posted_at": _text(item.get("createTimeISO"), item.get("createTime")),
         "views": _int(item.get("playCount")),
         "likes": _int(item.get("diggCount")),
@@ -612,11 +659,26 @@ def _post_from_reddit(item: dict[str, Any]) -> dict[str, Any] | None:
     url = _text(item.get("url"), item.get("permalink"))
     if not url:
         return None
+    image_urls = _media_urls(
+        item.get("imageUrls"),
+        item.get("link"),
+        item.get("preview"),
+        item.get("media"),
+        item.get("secureMedia"),
+        item.get("image"),
+        item.get("thumbnailUrl"),
+        item.get("url"),
+    )
+    video_url = _text(_video_url(item.get("media")), _video_url(item.get("secureMedia")), _video_url(item))
     return {
         "id": _text(item.get("id"), item.get("name"), url),
+        "source_id": _text(item.get("parsedId"), item.get("id"), item.get("name")),
         "title": _text(item.get("title"), item.get("body"), "Reddit 内容"),
         "url": url,
-        "media_url": _cached_media_url(item.get("thumbnailUrl")),
+        "media_url": _cached_media_url(_text(image_urls[0] if image_urls else "", item.get("thumbnailUrl"))),
+        "video_url": _cached_video_media_url(video_url),
+        "image_urls": image_urls[:12],
+        "media_kind": "video" if video_url or _bool(item.get("isVideo")) else ("image" if image_urls else "post"),
         "posted_at": _text(item.get("createdAt")),
         "views": _int(item.get("views")),
         "likes": _int(item.get("upVotes"), _int(item.get("score"))),
@@ -648,9 +710,12 @@ def _extract_posts(row: dict[str, Any], *, per_account_limit: int) -> list[dict[
     sample = _raw_sample(row)
     posts: list[dict[str, Any]] = []
     if platform == "instagram":
-        posts.extend(_post_from_instagram({"posts": _items(sample.get("posts"))}, row))
-        for item in _items(sample.get("items")):
-            posts.extend(_post_from_instagram(item, row))
+        sample_posts = _items(sample.get("posts"))
+        if sample_posts:
+            posts.extend(_post_from_instagram({"posts": sample_posts}, row))
+        else:
+            for item in _items(sample.get("items")):
+                posts.extend(_post_from_instagram(item, row))
     elif platform == "tiktok":
         posts.extend(_post_from_tiktok(item) for item in _items(sample.get("items")))
     elif platform == "youtube":
