@@ -117,6 +117,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "072_vkpi_product_catalog_widen_legacy_columns.sql",
     "073_vkpi_channel_post_metrics.sql",
     "074_vkpi_sync_runs.sql",
+    "075_vkpi_sync_acknowledgements.sql",
 )
 
 try:

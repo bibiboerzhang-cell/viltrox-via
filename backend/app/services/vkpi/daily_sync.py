@@ -26,6 +26,8 @@ logger = get_logger(__name__)
 
 ENRICHABLE_KOL_PLATFORMS = {"youtube", "instagram", "tiktok", "facebook", "reddit", "x"}
 SYNC_FAIL_FAST_EXIT_CODE = 75
+SYNC_GUARD_BLOCKED_EXIT_CODE = 76
+SYNC_FAILURE_RATE_THRESHOLD = 0.10
 TRACEBACK_MAX_CHARS = 4096
 TRACEBACK_MAX_LINES = 50
 INTERRUPT_RECORD_RETRY_DELAYS_SEC = (0.2, 0.5, 1.0, 2.0, 5.0)
@@ -87,6 +89,23 @@ class SyncFailFast(RuntimeError):
         self.summary = dict(summary or {})
 
 
+class SyncGuardBlocked(RuntimeError):
+    """Raised before provider calls when the previous sync requires manual ack."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        exit_code: int = SYNC_GUARD_BLOCKED_EXIT_CODE,
+        blocking_run_id: str = "",
+        summary: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.exit_code = int(exit_code)
+        self.blocking_run_id = blocking_run_id
+        self.summary = dict(summary or {})
+
+
 def _utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -137,6 +156,18 @@ def _row_label(row: dict[str, Any]) -> str:
 
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str)
+
+
+def _load_json(value: Any, default: Any) -> Any:
+    if isinstance(value, (dict, list)):
+        return value
+    if not value:
+        return default
+    try:
+        parsed = json.loads(str(value))
+        return parsed if parsed is not None else default
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return default
 
 
 def _unwrap_db_exception(exc: BaseException) -> BaseException:
@@ -258,6 +289,223 @@ def finish_sync_run(
         """,
         (now, status, int(last_success_index or 0), reason, error_type, _json(summary), now, run_id),
     )
+
+
+def _sync_health_from_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    """Classify sync summary health for alerts and next-run guard decisions."""
+    official = summary.get("official") if isinstance(summary.get("official"), dict) else {}
+    kol = summary.get("kol_pool_light") if isinstance(summary.get("kol_pool_light"), dict) else summary
+    official_requested = _int(official.get("requested"))
+    official_failed = _int(official.get("failed"))
+    kol_requested = _int(kol.get("requested"))
+    kol_errors = _int(kol.get("errors"))
+    total_requested = official_requested + kol_requested
+    total_errors = official_failed + kol_errors
+    failure_rate = (float(total_errors) / float(total_requested)) if total_requested > 0 else 0.0
+    threshold_exceeded = total_requested > 0 and failure_rate > SYNC_FAILURE_RATE_THRESHOLD
+    return {
+        "official_requested": official_requested,
+        "official_failed": official_failed,
+        "kol_requested": kol_requested,
+        "kol_errors": kol_errors,
+        "total_requested": total_requested,
+        "total_errors": total_errors,
+        "failure_rate": round(failure_rate, 6),
+        "failure_rate_threshold": SYNC_FAILURE_RATE_THRESHOLD,
+        "has_errors": total_errors > 0,
+        "blocked_next_run": bool(threshold_exceeded),
+        "block_reason": "failure_rate_threshold_exceeded" if threshold_exceeded else "",
+    }
+
+
+def _row_after_ack(row: dict[str, Any], ack: dict[str, Any] | None) -> bool:
+    if not ack:
+        return True
+    target_run_id = str(ack.get("target_run_id") or "")
+    if target_run_id and target_run_id == str(row.get("run_id") or ""):
+        return False
+    ack_at = str(ack.get("acknowledged_at") or "")
+    started_at = str(row.get("started_at") or "")
+    return bool(started_at and ack_at and started_at > ack_at)
+
+
+def _latest_sync_ack(scope: str = "daily_incremental_sync") -> dict[str, Any] | None:
+    try:
+        row = get_conn().execute(
+            """
+            SELECT *
+            FROM vkpi_sync_acknowledgements
+            WHERE scope=?
+              AND (expires_at IS NULL OR expires_at > ?)
+            ORDER BY acknowledged_at DESC
+            LIMIT 1
+            """,
+            (scope, _utcnow()),
+        ).fetchone()
+        return dict(row) if row else None
+    except Exception:
+        logger.debug("daily sync guard ack lookup unavailable", exc_info=True)
+        return None
+
+
+def _blocking_sync_run(scope: str = "daily_incremental_sync") -> dict[str, Any] | None:
+    ack = _latest_sync_ack(scope)
+    try:
+        rows = get_conn().execute(
+            """
+            SELECT run_id, job_name, stage, started_at, finished_at, status, reason,
+                   error_type, error_class, error_message, summary_json
+            FROM vkpi_sync_runs
+            WHERE job_name=?
+            ORDER BY started_at DESC
+            LIMIT 30
+            """,
+            (scope,),
+        ).fetchall()
+    except Exception:
+        logger.debug("daily sync guard run lookup unavailable", exc_info=True)
+        return None
+    for raw_row in rows:
+        row = dict(raw_row)
+        if not _row_after_ack(row, ack):
+            continue
+        status = str(row.get("status") or "").strip().lower()
+        error_type = str(row.get("error_type") or "").strip().lower()
+        summary = _load_json(row.get("summary_json"), {})
+        health = _sync_health_from_summary(summary if isinstance(summary, dict) else {})
+        blocked = status in {"interrupted", "failed"} or error_type == "db_connection_lost" or bool(health.get("blocked_next_run"))
+        if blocked:
+            return {
+                "run_id": row.get("run_id"),
+                "stage": row.get("stage"),
+                "status": status,
+                "started_at": row.get("started_at"),
+                "finished_at": row.get("finished_at"),
+                "reason": row.get("reason") or health.get("block_reason") or "sync_guard_blocked",
+                "error_type": error_type,
+                "error_class": row.get("error_class"),
+                "error_message": row.get("error_message"),
+                "health": health,
+                "ack_required": True,
+                "ack_scope": scope,
+            }
+    return None
+
+
+def check_daily_sync_guard(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    payload = dict(payload or {})
+    if _bool(payload.get("dry_run")) or _bool(payload.get("skip_sync_guard")):
+        return {"allowed": True, "skipped": True}
+    blocking = _blocking_sync_run("daily_incremental_sync")
+    if not blocking:
+        return {"allowed": True}
+    blocking = {**blocking, "ack_required": True, "ack_scope": "daily_incremental_sync"}
+    raise SyncGuardBlocked(
+        f"daily sync blocked; manual ack required for {blocking.get('run_id')}",
+        blocking_run_id=str(blocking.get("run_id") or ""),
+        summary=blocking,
+    )
+
+
+def ack_daily_sync_guard(
+    *,
+    reason: str,
+    acknowledged_by: str = "cli",
+    scope: str = "daily_incremental_sync",
+    target_run_id: str = "",
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    clean_reason = str(reason or "").strip()
+    if not clean_reason:
+        raise ValueError("ack reason is required")
+    now = _utcnow()
+    ack_id = f"sync_ack_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}"
+    get_conn().execute(
+        """
+        INSERT INTO vkpi_sync_acknowledgements
+          (ack_id, scope, target_run_id, reason, acknowledged_by, acknowledged_at, metadata_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (ack_id, scope, target_run_id or None, clean_reason, str(acknowledged_by or "cli"), now, _json(metadata or {})),
+    )
+    get_conn().commit()
+    return {
+        "ack_id": ack_id,
+        "scope": scope,
+        "target_run_id": target_run_id,
+        "reason": clean_reason,
+        "acknowledged_by": acknowledged_by or "cli",
+        "acknowledged_at": now,
+    }
+
+
+def _upsert_sync_health_alert(*, run_id: str, health: dict[str, Any], summary: dict[str, Any]) -> None:
+    if not health.get("has_errors") and not health.get("blocked_next_run"):
+        return
+    try:
+        from app.services.vkpi import alerts
+
+        severity = "danger" if health.get("blocked_next_run") else "warning"
+        title = "Daily sync requires acknowledgement" if health.get("blocked_next_run") else "Daily sync completed with provider errors"
+        body = (
+            f"official_failed={health.get('official_failed')} "
+            f"kol_errors={health.get('kol_errors')} "
+            f"failure_rate={health.get('failure_rate')}"
+        )
+        alerts.upsert_alert(
+            alert_key=f"sync.daily.{run_id}",
+            title=title,
+            body=body,
+            severity=severity,
+            target_type="vkpi_sync_run",
+            target_id=None,
+            rule_key="sync.daily_failure_rate" if health.get("blocked_next_run") else "sync.daily_errors",
+            metadata_json=_json({"run_id": run_id, "health": health, "summary": summary}),
+        )
+    except Exception:
+        logger.warning("daily sync health alert write failed", exc_info=True)
+
+
+def record_daily_sync_summary(run_id: str, result: dict[str, Any]) -> dict[str, Any]:
+    summary = dict(result or {})
+    health = _sync_health_from_summary(summary)
+    summary["health"] = health
+    now = _utcnow()
+    status = "failed" if health.get("blocked_next_run") else "completed"
+    reason = str(health.get("block_reason") or ("sync_errors_present" if health.get("has_errors") else ""))
+    _write_sync_run(
+        """
+        INSERT INTO vkpi_sync_runs
+          (run_id, job_name, stage, started_at, finished_at, status, total_targets, last_success_index,
+           reason, error_type, summary_json, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (run_id) DO UPDATE SET
+          finished_at=excluded.finished_at,
+          status=excluded.status,
+          total_targets=excluded.total_targets,
+          last_success_index=excluded.last_success_index,
+          reason=excluded.reason,
+          error_type=excluded.error_type,
+          summary_json=excluded.summary_json,
+          updated_at=excluded.updated_at
+        """,
+        (
+            f"{run_id}_summary",
+            "daily_incremental_sync",
+            "daily_summary",
+            str(result.get("started_at") or now),
+            now,
+            status,
+            int(health.get("total_requested") or 0),
+            int(health.get("total_requested") or 0),
+            reason or None,
+            "other" if health.get("has_errors") else None,
+            _json(summary),
+            now,
+        ),
+    )
+    _upsert_sync_health_alert(run_id=run_id, health=health, summary=summary)
+    return health
 
 
 def _emit_interrupt_stderr(event: dict[str, Any]) -> None:
@@ -698,6 +946,7 @@ def run_kol_pool_light_refresh(payload: dict[str, Any]) -> dict[str, Any]:
 
 def run_daily_incremental(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     payload = dict(payload or {})
+    check_daily_sync_guard(payload)
     started_at = _utcnow()
     payload.setdefault("run_id", _new_run_id("daily_incremental_sync", "kol_pool_light"))
     result: dict[str, Any] = {
@@ -720,4 +969,6 @@ def run_daily_incremental(payload: dict[str, Any] | None = None) -> dict[str, An
     else:
         result["kol_pool_light"] = {"skipped": True}
     result["finished_at"] = _utcnow()
+    health = record_daily_sync_summary(str(result.get("run_id") or payload.get("run_id") or ""), result)
+    result["health"] = health
     return result

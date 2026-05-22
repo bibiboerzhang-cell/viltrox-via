@@ -23,7 +23,7 @@ if str(BACKEND) not in sys.path:
 
 from app.db.connection import close_db_runtime  # noqa: E402
 from app.services.vkpi.cron import run_job  # noqa: E402
-from app.services.vkpi.daily_sync import SyncFailFast  # noqa: E402
+from app.services.vkpi.daily_sync import SyncFailFast, SyncGuardBlocked  # noqa: E402
 
 
 def utcnow() -> str:
@@ -123,6 +123,23 @@ async def main() -> int:
             "exit_code": exc.exit_code,
             "run_id": exc.run_id,
             "stage": exc.stage,
+            "summary": exc.summary,
+            "error": str(exc),
+        }, ensure_ascii=False, default=str, indent=2))
+        return exc.exit_code
+    except SyncGuardBlocked as exc:
+        emit_event(
+            "cron_daily_sync_blocked",
+            exit_code=exc.exit_code,
+            blocking_run_id=exc.blocking_run_id,
+            summary=exc.summary,
+            error=f"{type(exc).__name__}: {str(exc)[:500]}",
+        )
+        print(json.dumps({
+            "job": "daily_incremental_sync",
+            "status": "blocked",
+            "exit_code": exc.exit_code,
+            "blocking_run_id": exc.blocking_run_id,
             "summary": exc.summary,
             "error": str(exc),
         }, ensure_ascii=False, default=str, indent=2))

@@ -172,3 +172,83 @@ def test_kol_light_refresh_interrupt_record_failure_emits_stderr_json_and_exits_
     assert event["interrupted_kol_pool_id"] == 2
     assert event["error_type"] == "db_connection_lost"
     assert "interrupt table unavailable" in event["record_error"]
+
+
+def test_sync_health_blocks_next_run_when_failure_rate_exceeds_threshold() -> None:
+    health = daily_sync._sync_health_from_summary(
+        {
+            "official": {"requested": 18, "failed": 0},
+            "kol_pool_light": {"requested": 10, "errors": 2},
+        }
+    )
+
+    assert health["total_requested"] == 28
+    assert health["total_errors"] == 2
+    assert health["has_errors"] is True
+    assert health["blocked_next_run"] is False
+
+    blocked = daily_sync._sync_health_from_summary(
+        {
+            "official": {"requested": 0, "failed": 0},
+            "kol_pool_light": {"requested": 10, "errors": 2},
+        }
+    )
+
+    assert blocked["failure_rate"] == 0.2
+    assert blocked["blocked_next_run"] is True
+    assert blocked["block_reason"] == "failure_rate_threshold_exceeded"
+
+
+def test_daily_sync_guard_blocks_after_unacked_failed_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    blocking = {
+        "run_id": "daily-summary-bad",
+        "stage": "daily_summary",
+        "status": "failed",
+        "reason": "failure_rate_threshold_exceeded",
+        "health": {"blocked_next_run": True},
+    }
+    monkeypatch.setattr(daily_sync, "_blocking_sync_run", lambda _scope: blocking)
+
+    with pytest.raises(daily_sync.SyncGuardBlocked) as exc_info:
+        daily_sync.check_daily_sync_guard({})
+
+    assert exc_info.value.exit_code == 76
+    assert exc_info.value.blocking_run_id == "daily-summary-bad"
+    assert exc_info.value.summary["ack_required"] is True
+
+
+def test_daily_sync_guard_ignores_dry_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(daily_sync, "_blocking_sync_run", lambda _scope: {"run_id": "bad"})
+
+    result = daily_sync.check_daily_sync_guard({"dry_run": True})
+
+    assert result["allowed"] is True
+    assert result["skipped"] is True
+
+
+def test_record_daily_sync_summary_persists_failed_status_for_high_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    writes: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        daily_sync,
+        "_write_sync_run",
+        lambda sql, params: writes.append({"sql": sql, "params": params}),
+    )
+    monkeypatch.setattr(daily_sync, "_upsert_sync_health_alert", lambda **_kwargs: None)
+
+    health = daily_sync.record_daily_sync_summary(
+        "unit-run",
+        {
+            "run_id": "unit-run",
+            "started_at": "2026-05-22T00:00:00Z",
+            "official": {"requested": 0, "failed": 0},
+            "kol_pool_light": {"requested": 10, "errors": 2},
+        },
+    )
+
+    assert health["blocked_next_run"] is True
+    assert writes
+    params = writes[0]["params"]
+    assert params[0] == "unit-run_summary"
+    assert params[5] == "failed"
+    assert params[8] == "failure_rate_threshold_exceeded"
+    assert params[9] == "other"

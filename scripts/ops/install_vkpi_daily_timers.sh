@@ -17,10 +17,11 @@ install_remote_timer() {
 Description=V-KPI daily official + KOL lightweight sync
 Wants=network-online.target
 After=network-online.target viltrox-2.0-test.service
+OnFailure=vkpi-sync-daily-alert@%n.service
 
 [Service]
 Type=oneshot
-RestartPreventExitStatus=75
+RestartPreventExitStatus=75 76
 WorkingDirectory=${REMOTE_ROOT}
 Environment=PYTHONPATH=backend
 ExecStart=/bin/bash -lc 'mkdir -p /var/log/vkpi && .venv/bin/python scripts/cron_daily_sync.py --official-max-posts 50 --kol-limit 1200 --kol-max-posts 1 >> /var/log/vkpi/sync_daily_\$(date -u +%%Y%%m%%d).log 2>&1'
@@ -31,6 +32,15 @@ Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
 SERVICE
+
+  ssh "${SSH_TARGET}" "cat > /etc/systemd/system/vkpi-sync-daily-alert@.service" <<'ALERTSERVICE'
+[Unit]
+Description=Write V-KPI daily sync failure alert for %i
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -lc 'mkdir -p /var/log/vkpi && printf "{\"event\":\"vkpi_sync_systemd_failure\",\"unit\":\"%i\",\"at\":\"%s\"}\n" "$(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ)" >> /var/log/vkpi/sync_failure_alert.log'
+ALERTSERVICE
 
   ssh "${SSH_TARGET}" "cat > /etc/systemd/system/${REMOTE_TIMER}" <<TIMER
 [Unit]
