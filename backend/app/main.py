@@ -334,6 +334,8 @@ def _build_csp_value(*, include_dev_connect: bool | None = None) -> str:
             "img-src 'self' data: blob: https:",
             "font-src 'self' data: https:",
             "media-src 'self' data: blob: https:",
+            "frame-src 'self' https://www.youtube.com https://www.youtube-nocookie.com",
+            "child-src 'self' https://www.youtube.com https://www.youtube-nocookie.com",
             f"connect-src {' '.join(connect_src)}",
         ]
     )

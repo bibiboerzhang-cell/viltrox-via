@@ -5,9 +5,6 @@ const IMAGE_PROXY_HOSTS = [
   'cdninstagram.com',
   'fbcdn.net',
   'xx.fbcdn.net',
-  'ytimg.com',
-  'ggpht.com',
-  'googleusercontent.com',
   'tiktokcdn.com',
   'tiktokcdn-us.com',
   'byteoversea.com',
@@ -15,6 +12,12 @@ const IMAGE_PROXY_HOSTS = [
   'redd.it',
   'redditmedia.com',
   'twimg.com',
+];
+
+const DIRECT_IMAGE_HOSTS = [
+  'ytimg.com',
+  'ggpht.com',
+  'googleusercontent.com',
 ];
 
 const VIDEO_PROXY_HOSTS = [
@@ -63,7 +66,11 @@ export function proxiedImageUrl(rawUrl: unknown): string {
   if (!url || localOrBlobUrl(url)) return url;
   try {
     const parsed = new URL(url);
-    if (hostMatches(parsed.hostname.toLowerCase(), IMAGE_PROXY_HOSTS)) {
+    const host = parsed.hostname.toLowerCase();
+    if (hostMatches(host, DIRECT_IMAGE_HOSTS)) {
+      return url;
+    }
+    if (hostMatches(host, IMAGE_PROXY_HOSTS)) {
       return `/api/admin/vkpi/media/image-proxy?url=${encodeURIComponent(url)}`;
     }
   } catch {
