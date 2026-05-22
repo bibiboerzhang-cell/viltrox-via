@@ -829,8 +829,7 @@ class RedditCrawler:
         max_results: int = 100,
     ) -> dict[str, Any]:
         """V-KPI unified interface - 'video' = post for Reddit."""
-        post_id = self._normalize_post_id(video_id_or_url)
-        return self.crawl_post_comments(post_id, max_depth=3, max_results=max_results)
+        return self.crawl_post_comments(video_id_or_url, max_depth=3, max_results=max_results)
 
     @staticmethod
     def _normalize_subreddit_name(handle: str, channel_id: str = "") -> str:
