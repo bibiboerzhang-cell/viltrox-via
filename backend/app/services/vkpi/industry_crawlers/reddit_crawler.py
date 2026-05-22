@@ -593,8 +593,9 @@ class RedditCrawler:
                 "error": "apify-client not installed",
             }
 
-        clean_post_id = post_id.replace("t3_", "").strip()
-        post_url = f"https://www.reddit.com/comments/{clean_post_id}/"
+        raw_ref = str(post_id or "").strip()
+        clean_post_id = self._normalize_post_id(raw_ref).replace("t3_", "").strip()
+        post_url = raw_ref if raw_ref.startswith(("http://", "https://")) else f"https://www.reddit.com/comments/{clean_post_id}/"
         limit = max(1, min(300, int(max_results or 100)))
         try:
             client = ApifyClient(self.apify_token)
@@ -782,8 +783,9 @@ class RedditCrawler:
                 "sync_status": "fail",
                 "error": "empty post_id",
             }
+        raw_ref = post_id.strip()
         # Strip prefix if any
-        post_id = post_id.replace("t3_", "")
+        post_id = self._normalize_post_id(raw_ref).replace("t3_", "")
         if self.primary_path == "praw":
             result = self._crawl_post_comments_via_praw(post_id, max_depth)
             if result.get("provider_status") == "ok":
@@ -791,7 +793,7 @@ class RedditCrawler:
         result = self._crawl_post_comments_via_json_api(post_id, max_depth)
         if result.get("provider_status") == "ok" or not self.apify_token:
             return result
-        return self._crawl_post_comments_via_apify(post_id, max_results=max_results)
+        return self._crawl_post_comments_via_apify(raw_ref, max_results=max_results)
 
     # ─── V-KPI Unified Interface ────────────────────────────────
 
