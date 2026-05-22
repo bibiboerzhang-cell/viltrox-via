@@ -359,7 +359,7 @@ def _save_channel_comments(
                 channels._int(standardized.get("depth")),
                 channels._int(standardized.get("likes_count")),
                 channels._int(standardized.get("reply_count")),
-                channels._text(standardized.get("created_at")),
+                channels._text(standardized.get("created_at")) or None,
                 channels._utcnow(),
                 channels._json(raw),
             ),
