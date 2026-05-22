@@ -23,10 +23,9 @@ def _prefer_project_venv() -> None:
     venv_python = ROOT / ".venv" / "bin" / "python"
     if not venv_python.exists():
         return
-    current = Path(sys.executable).resolve()
-    target = venv_python.resolve()
-    if current != target:
-        os.execv(str(target), [str(target), *sys.argv])
+    venv_root = (ROOT / ".venv").resolve()
+    if Path(sys.prefix).resolve() != venv_root:
+        os.execv(str(venv_python), [str(venv_python), *sys.argv])
 
 
 _prefer_project_venv()
