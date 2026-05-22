@@ -332,6 +332,7 @@ function commentsResponse(row: Row): ChannelCommentsResponse {
     platform: text(row.platform),
     status: text(row.status),
     message: text(row.message),
+    commentCount: numberValue(row.comment_count || row.commentCount || comments.length),
     fetchedCount: numberValue(row.fetched_count || row.fetchedCount),
     newCount: numberValue(row.new_count || row.newCount),
     collectSupported: row.collect_supported === false || row.collectSupported === false ? false : Boolean(row.collect_supported || row.collectSupported),
@@ -355,9 +356,32 @@ function commentEmptyText(post: ChannelContentPost, account: OfficialChannelAcco
 
 function commentActionLabel(post: ChannelContentPost, comments: ChannelCommentItem[], canCollect: boolean) {
   if (!canCollect) return '未接入';
+  if (comments.length && post.comments > comments.length) return '继续补齐';
   if (comments.length) return '刷新明细';
   if (post.comments > 0) return '补齐明细';
   return '尝试获取';
+}
+
+function commentCoverage(post: ChannelContentPost, account: OfficialChannelAccount, payload: ChannelCommentsResponse | null) {
+  const declared = Math.max(0, post.comments);
+  const cached = payload ? Math.max(0, payload.commentCount ?? payload.comments.length) : 0;
+  const supported = canCollectComments(account, payload);
+  if (!payload) {
+    return { label: declared ? `正文待读取 / 平台显示 ${formatter.format(declared)}` : '平台暂无评论', tone: 'neutral' };
+  }
+  if (!supported) {
+    return { label: declared ? `正文未接入 / 平台显示 ${formatter.format(declared)}` : '平台暂无评论', tone: 'blocked' };
+  }
+  if (declared <= 0) {
+    return { label: cached ? `已缓存正文 ${formatter.format(cached)}` : '平台暂无评论', tone: cached ? 'ok' : 'neutral' };
+  }
+  if (cached >= declared) {
+    return { label: `已缓存正文 ${formatter.format(cached)} / 平台显示 ${formatter.format(declared)}`, tone: 'ok' };
+  }
+  if (cached > 0) {
+    return { label: `已缓存正文 ${formatter.format(cached)} / 平台显示 ${formatter.format(declared)}`, tone: 'partial' };
+  }
+  return { label: `正文未缓存 / 平台显示 ${formatter.format(declared)}`, tone: 'blocked' };
 }
 
 function MediaLightbox({ post, account, apiToken, refreshKey = 0, onClose }: { post: ChannelContentPost; account: OfficialChannelAccount; apiToken?: string; refreshKey?: number; onClose: () => void }) {
@@ -452,6 +476,7 @@ function CommentModal({
   }, [onClose]);
   const comments = payload?.comments || [];
   const canCollect = canCollectComments(account, payload);
+  const coverage = commentCoverage(post, account, payload);
   return (
     <div className="vkpi-comment-modal" role="dialog" aria-modal="true" aria-label="内容评论" onClick={onClose}>
       <section className="vkpi-comment-modal__panel" onClick={(event) => event.stopPropagation()}>
@@ -463,9 +488,11 @@ function CommentModal({
           <button type="button" onClick={onClose} aria-label="关闭">×</button>
         </header>
         <div className="vkpi-comment-modal__meta">
-          <span>评论 {formatter.format(post.comments)}</span>
+          <span className={`vkpi-comment-modal__coverage is-${coverage.tone}`}>{coverage.label}</span>
           <span>点赞 {formatter.format(post.likes)}</span>
           <span>{post.postedAt || account.lastSyncAt || '-'}</span>
+          {payload?.newCount ? <span>本次新增 {formatter.format(payload.newCount)}</span> : null}
+          {payload?.fetchedCount ? <span>本次读取 {formatter.format(payload.fetchedCount)}</span> : null}
         </div>
         <div className="vkpi-comment-modal__body">
           {loading ? <div className="vkpi-comment-modal__empty">评论加载中。</div> : null}
@@ -600,8 +627,8 @@ export function ChannelContentList({ account, apiToken }: { account?: OfficialCh
     setCommentsError('');
     try {
       const response = collect
-        ? await collectChannelPostComments(apiToken, account.id, { postId: post.sourceId || post.id, url: post.url, limit: 100 })
-        : await getChannelPostComments(apiToken, account.id, { postId: post.sourceId || post.id, url: post.url, limit: 80 });
+        ? await collectChannelPostComments(apiToken, account.id, { postId: post.sourceId || post.id, url: post.url, limit: 300 })
+        : await getChannelPostComments(apiToken, account.id, { postId: post.sourceId || post.id, url: post.url, limit: 300 });
       setCommentPayload(commentsResponse(response));
     } catch (requestError) {
       setCommentPayload(null);

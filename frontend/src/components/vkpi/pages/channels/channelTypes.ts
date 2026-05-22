@@ -42,6 +42,7 @@ export interface ChannelCommentsResponse {
   platform: string;
   status: string;
   message?: string;
+  commentCount?: number;
   fetchedCount?: number;
   newCount?: number;
   collectSupported?: boolean;
