@@ -1842,6 +1842,38 @@ export async function retryTask(token: string, taskId: string) {
   return { task_id: String(response.task_id || "") };
 }
 
+export async function enqueueVideoCacheTask(
+  token: string,
+  payload: {
+    platform: string;
+    videoId: string;
+    sourceUrl: string;
+    channelId?: string | number;
+    forceRefresh?: boolean;
+  },
+) {
+  const response = await apiFetch<Record<string, unknown>>(
+    "/api/admin/vkpi/tasks",
+    {
+      method: "POST",
+      body: jsonBody({
+        task_type: "vkpi_video_cache",
+        params: {
+          platform: payload.platform,
+          video_id: payload.videoId,
+          source_url: payload.sourceUrl,
+          channel_id: payload.channelId,
+          force_refresh: Boolean(payload.forceRefresh),
+        },
+        priority: 3,
+        timeout_seconds: 300,
+      }),
+    },
+    token,
+  );
+  return { task_id: String(response.task_id || "") };
+}
+
 export async function lookupCachedVideoUrl(token: string, platform: string, videoId: string) {
   const qs = new URLSearchParams();
   qs.set("platform", platform);

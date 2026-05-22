@@ -86,7 +86,14 @@ export function proxiedVideoUrl(rawUrl: unknown): string {
   return url;
 }
 
-export function useCachedVideoUrl(apiToken: string | undefined, platform: string, videoId: string, rawFallbackUrl: unknown): string {
+export function invalidateCachedVideoUrl(platform: string, videoId: string) {
+  const normalizedPlatform = String(platform || '').trim().toLowerCase();
+  const normalizedVideoId = String(videoId || '').trim();
+  if (!normalizedPlatform || !normalizedVideoId) return;
+  videoLookupCache.delete(cachedVideoLookupKey(normalizedPlatform, normalizedVideoId));
+}
+
+export function useCachedVideoUrl(apiToken: string | undefined, platform: string, videoId: string, rawFallbackUrl: unknown, refreshKey = 0): string {
   const fallbackUrl = useMemo(() => proxiedVideoUrl(rawFallbackUrl), [rawFallbackUrl]);
   const normalizedPlatform = String(platform || '').trim().toLowerCase();
   const normalizedVideoId = String(videoId || '').trim();
@@ -96,7 +103,7 @@ export function useCachedVideoUrl(apiToken: string | undefined, platform: string
   useEffect(() => {
     let cancelled = false;
     setResolvedUrl(fallbackUrl);
-    if (!apiToken || !fallbackUrl || !shouldLookupCachedVideo(normalizedPlatform, normalizedVideoId)) {
+    if (!apiToken || !shouldLookupCachedVideo(normalizedPlatform, normalizedVideoId)) {
       return () => {
         cancelled = true;
       };
@@ -133,7 +140,7 @@ export function useCachedVideoUrl(apiToken: string | undefined, platform: string
     return () => {
       cancelled = true;
     };
-  }, [apiToken, fallbackUrl, lookupKey, normalizedPlatform, normalizedVideoId]);
+  }, [apiToken, fallbackUrl, lookupKey, normalizedPlatform, normalizedVideoId, refreshKey]);
 
   return resolvedUrl;
 }

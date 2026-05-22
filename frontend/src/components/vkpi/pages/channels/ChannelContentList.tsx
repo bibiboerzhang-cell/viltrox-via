@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { collectChannelPostComments, getChannelPostComments, getOfficialChannelPosts } from '../../../../services/vkpi.ui-api';
+import { collectChannelPostComments, enqueueVideoCacheTask, getChannelPostComments, getOfficialChannelPosts } from '../../../../services/vkpi.ui-api';
 import type { ChannelCommentItem, ChannelCommentsResponse, ChannelContentPost, ChannelPostPagination, OfficialChannelAccount } from './channelTypes';
-import { likelyVideoUrl, platformExternalUrl, proxiedImageUrl, proxiedVideoUrl, useCachedVideoUrl } from '../../shared/mediaProxy';
+import { useTaskCenter } from '../../../tasks/TaskCenter';
+import { invalidateCachedVideoUrl, likelyVideoUrl, platformExternalUrl, proxiedImageUrl, proxiedVideoUrl, useCachedVideoUrl } from '../../shared/mediaProxy';
 
 const formatter = new Intl.NumberFormat('en-US');
 const PAGE_SIZE = 10;
@@ -22,6 +23,7 @@ const WINDOW_OPTIONS = [
   { value: 'all', label: '全部记录' },
 ];
 const COMMENT_PLATFORMS = new Set(['youtube', 'instagram', 'tiktok', 'facebook', 'reddit', 'x']);
+const VIDEO_CACHE_PLATFORMS = new Set(['instagram', 'tiktok']);
 
 function compact(value: number) {
   if (!value) return '0';
@@ -181,7 +183,43 @@ function mediaState(post: ChannelContentPost, account: OfficialChannelAccount) {
   };
 }
 
-function MediaSlot({ post, account, apiToken, compact = false }: { post: ChannelContentPost; account: OfficialChannelAccount; apiToken?: string; compact?: boolean }) {
+function postVideoId(post: ChannelContentPost) {
+  return text(post.sourceId || post.id || post.url);
+}
+
+function postVideoSourceUrl(post: ChannelContentPost, account: OfficialChannelAccount) {
+  const platformUrl = platformExternalUrl(post.url);
+  if (platformUrl) return platformUrl;
+  const videoUrl = text(post.videoUrl);
+  if (videoUrl) return videoUrl;
+  const mediaUrl = text(post.mediaUrl);
+  if (likelyVideoUrl(mediaUrl, account.platform)) return mediaUrl;
+  return mediaUrl;
+}
+
+function videoCacheKey(post: ChannelContentPost, account: OfficialChannelAccount) {
+  return `${account.platform.toLowerCase()}:${postVideoId(post)}`;
+}
+
+function canQueueVideoCache(post: ChannelContentPost, account: OfficialChannelAccount) {
+  const platform = account.platform.toLowerCase();
+  if (!VIDEO_CACHE_PLATFORMS.has(platform)) return false;
+  if (!postVideoId(post) || !postVideoSourceUrl(post, account)) return false;
+  const media = mediaState(post, account);
+  const explicitKind = text(post.mediaKind || post.mediaType).toLowerCase();
+  return media.kind === 'video-poster' || media.kind === 'video' || ['video', 'reel', 'reels', 'clip', 'clips'].includes(explicitKind);
+}
+
+function taskResultText(task: { result_json?: Record<string, unknown>; result?: Record<string, unknown>; progress_text?: string; error?: string }) {
+  const result = task.result_json || task.result || {};
+  for (const key of ['summary', 'message', 'skip_reason', 'reason', 'cached_url']) {
+    const value = result[key];
+    if (value != null && value !== '') return String(value);
+  }
+  return task.error || task.progress_text || '';
+}
+
+function MediaSlot({ post, account, apiToken, compact = false, refreshKey = 0 }: { post: ChannelContentPost; account: OfficialChannelAccount; apiToken?: string; compact?: boolean; refreshKey?: number }) {
   const [active, setActive] = useState(0);
   const [failedImages, setFailedImages] = useState<Set<string>>(() => new Set());
   useEffect(() => {
@@ -189,8 +227,9 @@ function MediaSlot({ post, account, apiToken, compact = false }: { post: Channel
     setFailedImages(new Set());
   }, [post.id, post.mediaUrl, post.videoUrl, (post.imageUrls || []).join('|'), (post.mediaUrls || []).join('|')]);
   const media = mediaState(post, account);
-  const resolvedVideoUrl = useCachedVideoUrl(apiToken, account.platform, text(post.sourceId || post.id), media.videoUrl);
-  if (!media.renderable) {
+  const resolvedVideoUrl = useCachedVideoUrl(apiToken, account.platform, postVideoId(post), media.videoUrl, refreshKey);
+  const hasPlayableVideo = Boolean(media.embedUrl || resolvedVideoUrl);
+  if (!media.renderable && !hasPlayableVideo) {
     return <span className="vkpi-channel-content-card__pending">待缓存</span>;
   }
   const imageUrls = media.imageUrls.filter((url) => !failedImages.has(url));
@@ -203,7 +242,7 @@ function MediaSlot({ post, account, apiToken, compact = false }: { post: Channel
   if (media.kind === 'video' && media.embedUrl && !compact) {
     return <iframe src={media.embedUrl} title={conciseTitle(post)} allow="autoplay; encrypted-media; picture-in-picture" allowFullScreen />;
   }
-  if (media.kind === 'video' && (!compact || !current)) {
+  if ((media.kind === 'video' || media.kind === 'video-poster' || (!media.renderable && hasPlayableVideo)) && hasPlayableVideo && (!compact || !current)) {
     return (
       <>
         <video
@@ -224,7 +263,7 @@ function MediaSlot({ post, account, apiToken, compact = false }: { post: Channel
   return (
     <div className="vkpi-channel-content-card__carousel">
       <img src={current} alt="" loading="lazy" onError={() => markFailed(current)} />
-      {media.kind === 'video' ? <span className="vkpi-channel-content-card__play">▶</span> : null}
+      {hasPlayableVideo ? <span className="vkpi-channel-content-card__play">▶</span> : null}
       {media.kind === 'video-poster' ? <span className="vkpi-channel-content-card__video-pending">视频待缓存</span> : null}
       {imageUrls.length > 1 ? (
         <>
@@ -321,12 +360,12 @@ function commentActionLabel(post: ChannelContentPost, comments: ChannelCommentIt
   return '尝试获取';
 }
 
-function MediaLightbox({ post, account, apiToken, onClose }: { post: ChannelContentPost; account: OfficialChannelAccount; apiToken?: string; onClose: () => void }) {
+function MediaLightbox({ post, account, apiToken, refreshKey = 0, onClose }: { post: ChannelContentPost; account: OfficialChannelAccount; apiToken?: string; refreshKey?: number; onClose: () => void }) {
   const [active, setActive] = useState(0);
   const media = mediaState(post, account);
-  const resolvedVideoUrl = useCachedVideoUrl(apiToken, account.platform, text(post.sourceId || post.id), media.videoUrl);
+  const resolvedVideoUrl = useCachedVideoUrl(apiToken, account.platform, postVideoId(post), media.videoUrl, refreshKey);
   const title = conciseTitle(post);
-  const isVideo = media.kind === 'video' && Boolean(media.videoUrl || media.embedUrl);
+  const isVideo = Boolean(media.embedUrl || resolvedVideoUrl) && ['video', 'video-poster', 'pending'].includes(media.kind);
 
   useEffect(() => {
     setActive(0);
@@ -496,6 +535,7 @@ function mapPagination(row?: Row): ChannelPostPagination {
 }
 
 export function ChannelContentList({ account, apiToken }: { account?: OfficialChannelAccount; apiToken?: string }) {
+  const { waitForTask } = useTaskCenter();
   const [sort, setSort] = useState('latest');
   const [direction, setDirection] = useState('desc');
   const [windowKey, setWindowKey] = useState('year');
@@ -508,11 +548,16 @@ export function ChannelContentList({ account, apiToken }: { account?: OfficialCh
   const [commentPayload, setCommentPayload] = useState<ChannelCommentsResponse | null>(null);
   const [commentsLoading, setCommentsLoading] = useState(false);
   const [commentsError, setCommentsError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [videoCachePending, setVideoCachePending] = useState<Set<string>>(() => new Set());
+  const [mediaRefreshKey, setMediaRefreshKey] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
     setPage(1);
+    setNotice('');
+    setVideoCachePending(new Set());
   }, [account?.id, sort, direction, windowKey]);
 
   useEffect(() => {
@@ -572,6 +617,64 @@ export function ChannelContentList({ account, apiToken }: { account?: OfficialCh
     void loadComments(post);
   };
 
+  const runVideoCache = async (post: ChannelContentPost) => {
+    if (!apiToken || !account) return;
+    const videoId = postVideoId(post);
+    const sourceUrl = postVideoSourceUrl(post, account);
+    if (!videoId || !sourceUrl) {
+      setNotice('缺少视频缓存所需的帖子 ID 或来源链接。');
+      return;
+    }
+    const key = videoCacheKey(post, account);
+    setNotice('视频缓存任务已提交，完成后会自动刷新卡片。');
+    setVideoCachePending((prev) => new Set(prev).add(key));
+    try {
+      const response = await enqueueVideoCacheTask(apiToken, {
+        platform: account.platform,
+        videoId,
+        sourceUrl,
+        channelId: account.id,
+      });
+      if (!response.task_id) throw new Error('视频缓存任务创建失败');
+      waitForTask(response.task_id, {
+        onDone: (task) => {
+          invalidateCachedVideoUrl(account.platform, videoId);
+          setMediaRefreshKey((value) => value + 1);
+          setVideoCachePending((prev) => {
+            const next = new Set(prev);
+            next.delete(key);
+            return next;
+          });
+          const summary = taskResultText(task);
+          setNotice(summary ? `视频缓存完成：${summary}` : '视频缓存完成，卡片已刷新。');
+        },
+        onFailed: (task) => {
+          setVideoCachePending((prev) => {
+            const next = new Set(prev);
+            next.delete(key);
+            return next;
+          });
+          setNotice(`视频缓存失败：${taskResultText(task) || '任务未完成'}`);
+        },
+        onCancelled: () => {
+          setVideoCachePending((prev) => {
+            const next = new Set(prev);
+            next.delete(key);
+            return next;
+          });
+          setNotice('视频缓存任务已取消。');
+        },
+      });
+    } catch (requestError) {
+      setVideoCachePending((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+      setNotice(requestError instanceof Error ? `视频缓存提交失败：${requestError.message}` : '视频缓存提交失败');
+    }
+  };
+
   const fallbackPosts = useMemo(() => (account?.posts || []).slice(0, PAGE_SIZE), [account?.posts]);
   if (!account) return null;
   const posts = remotePosts.length || apiToken ? remotePosts : fallbackPosts;
@@ -616,6 +719,7 @@ export function ChannelContentList({ account, apiToken }: { account?: OfficialCh
         <span>{pagination.total ? `${formatter.format(start)}-${formatter.format(end)} / ${formatter.format(pagination.total)}` : source === 'snapshot_sample' ? '快照样本' : '暂无内容'}</span>
       </div>
       {error ? <div className="vkpi-inline-message">{error}</div> : null}
+      {notice ? <div className="vkpi-inline-message">{notice}</div> : null}
       {posts.length ? (
         <div className="vkpi-channel-content-list">
           {posts.map((post, index) => {
@@ -624,6 +728,9 @@ export function ChannelContentList({ account, apiToken }: { account?: OfficialCh
             const status = post.viewsUnavailable ? 'pending insights' : (post.accountLevel ? 'snapshot' : account.syncStatus || 'synced');
             const date = compactDate(post.postedAt || account.lastSyncAt || '');
             const primaryMetric = viewsMetricLabel(post, account);
+            const canCacheVideo = canQueueVideoCache(post, account);
+            const cacheKey = videoCacheKey(post, account);
+            const cachePending = videoCachePending.has(cacheKey);
             return (
               <article className="vkpi-channel-content-card" key={`${account.id}-${post.id || index}`}>
                 <div
@@ -641,7 +748,7 @@ export function ChannelContentList({ account, apiToken }: { account?: OfficialCh
                 >
                   <span className="vkpi-channel-content-card__badge is-sync">{status}</span>
                   <span className="vkpi-channel-content-card__badge is-kind">{mediaBadge(post, account)}</span>
-                  <MediaSlot post={post} account={account} apiToken={apiToken} compact />
+                  <MediaSlot post={post} account={account} apiToken={apiToken} compact refreshKey={mediaRefreshKey} />
                 </div>
                 <div className="vkpi-channel-content-card__body">
                   <h3 title={title}>{copy.headline}</h3>
@@ -658,6 +765,7 @@ export function ChannelContentList({ account, apiToken }: { account?: OfficialCh
                   <small>{date}</small>
                   <div>
                     {platformExternalUrl(post.url) ? <a href={platformExternalUrl(post.url)} target="_blank" rel="noreferrer">打开原帖</a> : null}
+                    {canCacheVideo ? <button type="button" disabled={cachePending} onClick={() => void runVideoCache(post)}>{cachePending ? '缓存中' : '缓存视频'}</button> : null}
                     <button type="button" onClick={() => setPreviewPost(post)}>详情</button>
                   </div>
                 </footer>
@@ -670,7 +778,7 @@ export function ChannelContentList({ account, apiToken }: { account?: OfficialCh
       ) : (
         <div className="vkpi-empty-state">当前账号暂无内容级明细。</div>
       )}
-      {previewPost ? <MediaLightbox post={previewPost} account={account} apiToken={apiToken} onClose={() => setPreviewPost(null)} /> : null}
+      {previewPost ? <MediaLightbox post={previewPost} account={account} apiToken={apiToken} refreshKey={mediaRefreshKey} onClose={() => setPreviewPost(null)} /> : null}
       {commentPost ? (
         <CommentModal
           post={commentPost}
