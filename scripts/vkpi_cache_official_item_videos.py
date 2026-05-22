@@ -86,6 +86,8 @@ def _collect_candidates(channel_id: int, *, max_videos: int) -> tuple[dict[str, 
     for post in posts:
         video_url = _text(post.get("video_url"))
         post_id = _post_id(post)
+        if not video_url and platform == "tiktok" and _text(post.get("media_kind")).lower() == "video":
+            video_url = _text(post.get("url"))
         if not video_url or not post_id:
             continue
         key = f"{platform}:{post_id}"

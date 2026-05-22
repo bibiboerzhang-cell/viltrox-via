@@ -607,15 +607,16 @@ def _post_from_tiktok(item: dict[str, Any]) -> dict[str, Any]:
         item.get("thumbnailUrl"),
         item.get("dynamicCover"),
     )
+    web_video_url = _text(item.get("webVideoUrl"), item.get("url"))
     return {
         "id": _text(item.get("id"), item.get("webVideoUrl")),
         "source_id": _text(item.get("id")),
         "title": _text(item.get("text"), "TikTok 内容"),
-        "url": _text(item.get("webVideoUrl"), item.get("url")),
+        "url": web_video_url,
         "media_url": _cached_media_url(_text(image_urls[0] if image_urls else "", media[0].get("url") if media else "", item.get("coverUrl"), item.get("thumbnailUrl"), item.get("webVideoUrl"))),
         "video_url": _cached_video_media_url(video_url),
         "image_urls": image_urls[:12],
-        "media_kind": "video" if video_url else "image",
+        "media_kind": "video" if video_url or web_video_url else "image",
         "posted_at": _text(item.get("createTimeISO"), item.get("createTime")),
         "views": _int(item.get("playCount")),
         "likes": _int(item.get("diggCount")),

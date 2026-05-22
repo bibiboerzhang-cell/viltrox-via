@@ -5,6 +5,8 @@ import hashlib
 import html
 import json
 import os
+import shutil
+import tempfile
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
@@ -14,6 +16,7 @@ from typing import Any
 from app.core.config import UPLOAD_DIR, VKPI_VIDEO_CACHE_MAX_FILE_MB, VKPI_VIDEO_CACHE_MAX_TOTAL_GB
 from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime
+from app.services.scraping.ytdlp import download_video_ytdlp
 
 
 logger = get_logger(__name__)
@@ -568,6 +571,17 @@ def _video_cache_paths(normalized_url: str) -> tuple[str, Path, Path]:
     return digest, VIDEO_CACHE_DIR / digest, VIDEO_CACHE_DIR / f"{digest}.content-type"
 
 
+def _public_video_page_url(value: Any, platform_key: str) -> str:
+    url = _text(value)
+    if not url:
+        return ""
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if platform_key == "tiktok" and host.endswith("tiktok.com") and "/video/" in parsed.path:
+        return url
+    return ""
+
+
 def cached_image_url(raw_url: Any) -> str:
     normalized = _normalize_image_url(raw_url)
     if not normalized:
@@ -930,6 +944,161 @@ def migrate_local_video_cache_to_r2(
     }
 
 
+def _cache_video_for_item_via_ytdlp(
+    *,
+    platform_key: str,
+    video_key: str,
+    page_url: str,
+    force_refresh: bool,
+    timeout: int,
+    progress_callback: Any | None,
+    cancel_check: Any | None,
+) -> dict[str, Any]:
+    def _maybe_cancel() -> None:
+        if cancel_check is not None and cancel_check():
+            raise VideoCacheCancelled("video cache cancelled")
+
+    def _maybe_progress(pct: int, text: str) -> None:
+        if progress_callback is not None:
+            progress_callback(max(0, min(100, int(pct))), text)
+
+    _maybe_cancel()
+    digest, cache_path, content_type_path = _video_cache_paths(page_url)
+    sidecar_path = _video_item_sidecar_path(platform_key, video_key)
+    if cache_path.exists() and content_type_path.exists() and not force_refresh:
+        content_type = content_type_path.read_text(encoding="utf-8").strip() or "video/mp4"
+        cache_url = f"{PUBLIC_VIDEO_CACHE_PREFIX}/{digest}"
+        r2_result = _upload_to_r2_if_enabled(
+            media_kind="video",
+            digest=digest,
+            cache_path=cache_path,
+            content_type=content_type,
+            source_url=page_url,
+            platform=platform_key,
+            external_id=video_key,
+        )
+        if r2_result.get("cache_url"):
+            cache_url = str(r2_result["cache_url"])
+        sidecar = {
+            "platform": platform_key,
+            "video_id": video_key,
+            "source_url": page_url,
+            "digest": digest,
+            "cached_url": cache_url,
+            "content_type": content_type,
+            "size_bytes": cache_path.stat().st_size,
+            "storage_backend": r2_result.get("storage_backend") or "local",
+            "r2_key": r2_result.get("r2_key") or "",
+            "updated_at": _utcnow(),
+            "resolver": "yt-dlp",
+        }
+        _atomic_write_json(sidecar_path, sidecar)
+        return {"status": "cached", "cached": True, **sidecar}
+
+    max_file_bytes = _video_max_file_bytes()
+    gc_result = run_video_cache_gc(target_free_bytes=max(VIDEO_CACHE_GC_RESERVE_BYTES, max_file_bytes))
+    if gc_result.get("free_bytes", 0) < min(max_file_bytes, VIDEO_CACHE_GC_RESERVE_BYTES):
+        return {
+            "status": "skipped",
+            "cached": False,
+            "skipped": True,
+            "skip_reason": "global_cache_full",
+            "platform": platform_key,
+            "video_id": video_key,
+            "resolver": "yt-dlp",
+            "gc": gc_result,
+        }
+
+    try:
+        _maybe_progress(20, "yt-dlp 解析视频")
+        VIDEO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="vkpi-ytdlp-", dir=str(VIDEO_CACHE_DIR)) as tmpdir:
+            result = download_video_ytdlp(page_url, tmpdir, max_seconds=max(30, min(180, int(timeout or 30) * 4)))
+            _maybe_cancel()
+            if not result.get("success") or not result.get("path"):
+                return {
+                    "status": "failed",
+                    "cached": False,
+                    "platform": platform_key,
+                    "video_id": video_key,
+                    "reason": "yt_dlp_failed",
+                    "resolver": "yt-dlp",
+                    "error": _text(result.get("error"))[:300],
+                }
+            downloaded = Path(str(result["path"]))
+            if not downloaded.exists():
+                return {"status": "failed", "cached": False, "platform": platform_key, "video_id": video_key, "reason": "yt_dlp_missing_file", "resolver": "yt-dlp"}
+            size_bytes = downloaded.stat().st_size
+            if size_bytes > max_file_bytes:
+                return {
+                    "status": "skipped",
+                    "cached": False,
+                    "skipped": True,
+                    "skip_reason": "too_large",
+                    "platform": platform_key,
+                    "video_id": video_key,
+                    "content_length": size_bytes,
+                    "resolver": "yt-dlp",
+                }
+            _maybe_progress(55, "写入视频缓存")
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(downloaded, cache_path)
+        content_type = "video/mp4"
+        _atomic_write_text(content_type_path, content_type)
+        cache_url = f"{PUBLIC_VIDEO_CACHE_PREFIX}/{digest}"
+        r2_result = _upload_to_r2_if_enabled(
+            media_kind="video",
+            digest=digest,
+            cache_path=cache_path,
+            content_type=content_type,
+            source_url=page_url,
+            platform=platform_key,
+            external_id=video_key,
+        )
+        if r2_result.get("cache_url"):
+            cache_url = str(r2_result["cache_url"])
+        sidecar = {
+            "platform": platform_key,
+            "video_id": video_key,
+            "source_url": page_url,
+            "digest": digest,
+            "cached_url": cache_url,
+            "content_type": content_type,
+            "size_bytes": cache_path.stat().st_size,
+            "storage_backend": r2_result.get("storage_backend") or "local",
+            "r2_key": r2_result.get("r2_key") or "",
+            "updated_at": _utcnow(),
+            "resolver": "yt-dlp",
+        }
+        _record_media_cache_asset(
+            {
+                "media_kind": "video",
+                "platform": platform_key,
+                "external_id": video_key,
+                "source_url": page_url,
+                "digest": digest,
+                "checksum": _sha256_file(cache_path),
+                "content_type": content_type,
+                "size_bytes": cache_path.stat().st_size,
+                "storage_backend": sidecar["storage_backend"],
+                "local_path": str(cache_path),
+                "r2_key": sidecar["r2_key"],
+                "cache_url": cache_url,
+                "status": "cached",
+                "metadata": {"gc": gc_result, "resolver": "yt-dlp", "r2_status": r2_result.get("r2_status"), "r2_error": r2_result.get("r2_error")},
+            }
+        )
+        _maybe_progress(80, "写入视频 sidecar")
+        _atomic_write_json(sidecar_path, sidecar)
+        return {"status": "cached", "cached": True, **sidecar, "gc": gc_result}
+    except VideoCacheCancelled:
+        sidecar_path.with_suffix(sidecar_path.suffix + ".tmp").unlink(missing_ok=True)
+        raise
+    except Exception as exc:
+        sidecar_path.with_suffix(sidecar_path.suffix + ".tmp").unlink(missing_ok=True)
+        return {"status": "failed", "cached": False, "platform": platform_key, "video_id": video_key, "reason": exc.__class__.__name__, "resolver": "yt-dlp", "error": str(exc)[:300]}
+
+
 def cache_video_for_item(
     platform: str,
     video_id: str,
@@ -975,6 +1144,19 @@ def cache_video_for_item(
         }
 
     normalized = _normalize_video_url(url)
+    page_url = _public_video_page_url(url, platform_key) if not normalized else ""
+    if page_url:
+        ytdlp_result = _cache_video_for_item_via_ytdlp(
+            platform_key=platform_key,
+            video_key=video_key,
+            page_url=page_url,
+            force_refresh=force_refresh,
+            timeout=timeout,
+            progress_callback=progress_callback,
+            cancel_check=cancel_check,
+        )
+        if ytdlp_result.get("status") != "failed" or ytdlp_result.get("reason") != "yt_dlp_failed":
+            return ytdlp_result
     if not normalized:
         return {"status": "skipped", "cached": False, "skipped": True, "skip_reason": "not_allowlisted", "platform": platform_key, "video_id": video_key}
     normalized_url, host = normalized
