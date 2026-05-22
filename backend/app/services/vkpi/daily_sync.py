@@ -68,7 +68,7 @@ def _row_label(row: dict[str, Any]) -> str:
     return f"{platform}:{handle}"
 
 
-def _kol_light_rows(*, limit: int, offset: int, platforms: set[str], source_type: str) -> list[dict[str, Any]]:
+def _kol_light_rows(*, limit: int, offset: int, stale_before: str, platforms: set[str], source_type: str) -> list[dict[str, Any]]:
     where = ["platform IN (" + ",".join(["?"] * len(ENRICHABLE_KOL_PLATFORMS)) + ")"]
     params: list[Any] = sorted(ENRICHABLE_KOL_PLATFORMS)
     if platforms:
@@ -77,6 +77,9 @@ def _kol_light_rows(*, limit: int, offset: int, platforms: set[str], source_type
     if source_type:
         where.append("source_type=?")
         params.append(source_type)
+    if stale_before:
+        where.append("COALESCE(last_seen_at, updated_at, created_at) < ?")
+        params.append(stale_before)
     clause = " AND ".join(where)
     rows = get_conn().execute(
         f"""
@@ -220,11 +223,12 @@ def run_kol_pool_light_refresh(payload: dict[str, Any]) -> dict[str, Any]:
     dry_run = _bool(payload.get("dry_run"))
     limit = max(1, min(1200, _int(payload.get("kol_limit"), 1200)))
     offset = max(0, min(5000, _int(payload.get("kol_offset"), 0)))
+    stale_before = str(payload.get("kol_stale_before") or "").strip()
     max_posts = max(1, min(3, _int(payload.get("kol_max_posts") or payload.get("max_posts"), 1)))
     platforms = _platform_filter(payload.get("kol_platforms") or payload.get("platforms"))
     source_type = str(payload.get("kol_source_type") or "legacy_excel_p2d").strip()
     source_counts = _kol_source_counts(platforms=platforms, source_type=source_type)
-    rows = _kol_light_rows(limit=limit, offset=offset, platforms=platforms, source_type=source_type)
+    rows = _kol_light_rows(limit=limit, offset=offset, stale_before=stale_before, platforms=platforms, source_type=source_type)
     if dry_run:
         by_platform: dict[str, int] = {}
         for row in rows:
@@ -235,6 +239,7 @@ def run_kol_pool_light_refresh(payload: dict[str, Any]) -> dict[str, Any]:
             "requested": len(rows),
             "limit": limit,
             "offset": offset,
+            "stale_before": stale_before,
             "max_posts": max_posts,
             "source_type": source_type,
             **source_counts,
@@ -249,11 +254,12 @@ def run_kol_pool_light_refresh(payload: dict[str, Any]) -> dict[str, Any]:
     skipped: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
     logger.info(
-        "daily sync kol light start requested=%s source_total=%s refreshable=%s offset=%s max_posts=%s source_type=%s platforms=%s",
+        "daily sync kol light start requested=%s source_total=%s refreshable=%s offset=%s stale_before=%s max_posts=%s source_type=%s platforms=%s",
         len(rows),
         source_counts.get("source_total"),
         len(rows),
         offset,
+        stale_before or "-",
         max_posts,
         source_type,
         ",".join(sorted(platforms)) if platforms else "all",
@@ -312,6 +318,7 @@ def run_kol_pool_light_refresh(payload: dict[str, Any]) -> dict[str, Any]:
         "errors": len(errors),
         "limit": limit,
         "offset": offset,
+        "stale_before": stale_before,
         "max_posts": max_posts,
         "source_type": source_type,
         **source_counts,

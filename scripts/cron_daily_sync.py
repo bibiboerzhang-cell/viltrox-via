@@ -60,6 +60,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-official", action="store_true", help="Skip 18 official-account refresh")
     parser.add_argument("--kol-limit", type=int, default=1200, help="Max KOL pool rows to refresh")
     parser.add_argument("--kol-offset", type=int, default=0, help="Skip the first N selected KOL rows for bounded retries")
+    parser.add_argument("--kol-stale-before", default="", help="Only refresh selected KOL rows last seen/updated before this timestamp")
     parser.add_argument("--kol-max-posts", type=int, default=1, help="Latest post sample per KOL pool row")
     parser.add_argument("--kol-platforms", default="", help="Comma-separated KOL platforms to run")
     parser.add_argument("--kol-source-type", default="legacy_excel_p2d", help="KOL pool source_type scope")
@@ -76,6 +77,7 @@ async def main() -> int:
         "skip_official": bool(args.skip_official),
         "kol_limit": max(1, min(1200, int(args.kol_limit or 1200))),
         "kol_offset": max(0, min(5000, int(args.kol_offset or 0))),
+        "kol_stale_before": args.kol_stale_before.strip(),
         "kol_max_posts": max(1, min(3, int(args.kol_max_posts or 1))),
         "kol_platforms": args.kol_platforms,
         "kol_source_type": args.kol_source_type,
@@ -90,6 +92,7 @@ async def main() -> int:
             skip_official=payload["skip_official"],
             kol_limit=payload["kol_limit"],
             kol_offset=payload["kol_offset"],
+            kol_stale_before=payload["kol_stale_before"],
             kol_max_posts=payload["kol_max_posts"],
             skip_kol=payload["skip_kol"],
             kol_source_type=payload["kol_source_type"],
