@@ -1,6 +1,8 @@
 """Tests for rule-only V-KPI 11-dimension scoring honesty guards."""
 from __future__ import annotations
 
+import json
+
 from app.services.vkpi import eleven_dimensions
 
 
@@ -87,3 +89,43 @@ def test_dimensions11_marks_rule_evidence_with_confidence(monkeypatch):
     assert payload["block3_business"]["confidence"]["competitor_risk_score"] == 0.9
     assert 0 < payload["overall_score"] <= 100
     assert payload["confidence"]["overall"] > 0
+
+
+def test_product_fit_keywords_extend_from_official_catalog(monkeypatch):
+    class _Result:
+        def fetchall(self):
+            return [
+                {
+                    "sku": "AF-55MM-F18-EVO-Z",
+                    "category_main": "Lens",
+                    "category_detail": "Autofocus Lens",
+                    "model_name": "Viltrox AF 55mm F1.8 EVO Z",
+                    "marketing_name": "AF 55mm F1.8 EVO Z",
+                    "series": "EVO",
+                    "mount": "Z-mount",
+                    "specs_json": json.dumps(
+                        {
+                            "lens_mount": "Z-mount",
+                            "focal_length": "f=55mm",
+                            "aperture": "F1.8-F16",
+                            "variant_title": "Viltrox AF 55mm F1.8 EVO Full-Frame Lens for Nikon Z",
+                        }
+                    ),
+                    "fit_tags_json": json.dumps(["portrait", "full frame"]),
+                }
+            ]
+
+    class _Conn:
+        def execute(self, *_args, **_kwargs):
+            return _Result()
+
+    monkeypatch.setattr(eleven_dimensions, "_CATALOG_PRODUCT_FIT_KEYWORDS", None)
+    monkeypatch.setattr(eleven_dimensions, "_table_exists", lambda table: table == "vkpi_products")
+    monkeypatch.setattr(eleven_dimensions, "get_conn", lambda: _Conn())
+
+    keywords = eleven_dimensions._catalog_product_fit_keywords()
+
+    assert "AF-55MM-F18-EVO-Z" in keywords
+    assert "55mm" in keywords["AF-55MM-F18-EVO-Z"]
+    assert "f1.8" in keywords["AF-55MM-F18-EVO-Z"]
+    assert "z-mount" in keywords["AF-55MM-F18-EVO-Z"]

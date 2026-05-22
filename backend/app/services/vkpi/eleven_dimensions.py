@@ -30,6 +30,21 @@ PRODUCT_FIT_KEYWORDS = {
     "EPIC-MAESTRO": ("cinema", "filmmaking", "anamorphic", "commercial", "电影", "视频"),
     "NEXUSFOCUS-F1": ("adapter", "pl mount", "cinema", "filmmaking", "转接", "电影"),
 }
+GENERIC_PRODUCT_TERMS = {
+    "af",
+    "mf",
+    "lens",
+    "lenses",
+    "camera lens",
+    "cine lenses",
+    "full frame",
+    "full-frame",
+    "aps-c",
+    "default title",
+    "official",
+    "viltrox",
+}
+_CATALOG_PRODUCT_FIT_KEYWORDS: dict[str, tuple[str, ...]] | None = None
 
 
 def _text(value: Any) -> str:
@@ -171,6 +186,110 @@ def _keyword_counts(text: str, mapping: dict[str, list[str] | tuple[str, ...]]) 
     return counts
 
 
+def _product_term(value: Any) -> str:
+    return re.sub(r"\s+", " ", _text(value).lower().replace("_", " ")).strip()
+
+
+def _add_product_term(terms: set[str], value: Any) -> None:
+    term = _product_term(value)
+    if not term or term in GENERIC_PRODUCT_TERMS or len(term) < 3:
+        return
+    terms.add(term)
+
+
+def _focal_terms(text: str) -> set[str]:
+    return {f"{match}mm" for match in re.findall(r"\b(\d{1,3})\s*mm\b", text.lower())}
+
+
+def _aperture_terms(text: str) -> set[str]:
+    terms: set[str] = set()
+    for raw in re.findall(r"\bf\s*[=/]?\s*(\d(?:[._]\d)?)", text.lower()):
+        normalized = raw.replace("_", ".")
+        if "." not in normalized and len(normalized) == 2:
+            normalized = f"{normalized[0]}.{normalized[1]}"
+        terms.add(f"f{normalized}")
+    return terms
+
+
+def _terms_from_product_text(value: Any) -> set[str]:
+    text = _product_term(value)
+    terms: set[str] = set()
+    if not text:
+        return terms
+    _add_product_term(terms, text)
+    focal_terms = _focal_terms(text)
+    aperture_terms = _aperture_terms(text)
+    terms.update(focal_terms)
+    terms.update(aperture_terms)
+    for focal in focal_terms:
+        for aperture in aperture_terms:
+            terms.add(f"{focal} {aperture}")
+            terms.add(f"{focal}{aperture}")
+    for phrase in re.findall(r"\b(?:af|mf)\s+\d{1,3}mm\s+f\s*[=/]?\s*\d(?:[._]\d)?(?:\s+\w+)?", text):
+        _add_product_term(terms, phrase)
+    return terms
+
+
+def _catalog_product_fit_keywords() -> dict[str, tuple[str, ...]]:
+    global _CATALOG_PRODUCT_FIT_KEYWORDS
+    if _CATALOG_PRODUCT_FIT_KEYWORDS is not None:
+        return _CATALOG_PRODUCT_FIT_KEYWORDS
+    mapping: dict[str, set[str]] = {sku: set(terms) for sku, terms in PRODUCT_FIT_KEYWORDS.items()}
+    if not _table_exists("vkpi_products"):
+        _CATALOG_PRODUCT_FIT_KEYWORDS = {sku: tuple(sorted(terms)) for sku, terms in mapping.items()}
+        return _CATALOG_PRODUCT_FIT_KEYWORDS
+    try:
+        rows = get_conn().execute(
+            """
+            SELECT sku, category_main, category_detail, model_name, marketing_name,
+                   series, mount, specs_json, fit_tags_json
+            FROM vkpi_products
+            WHERE LOWER(COALESCE(category_main, '')) IN ('lens', 'cine lens')
+               OR LOWER(COALESCE(category_detail, '')) LIKE '%lens%'
+            ORDER BY source_confidence DESC, updated_at DESC, sku ASC
+            LIMIT 300
+            """
+        ).fetchall()
+    except Exception:
+        rows = []
+    for raw in rows:
+        row = dict(raw)
+        sku = _text(row.get("sku")).upper()
+        if not sku:
+            continue
+        terms = mapping.setdefault(sku, set())
+        for key in ("sku", "model_name", "marketing_name", "series", "mount", "category_detail"):
+            terms.update(_terms_from_product_text(row.get(key)))
+        sku_spaced = sku.replace("-", " ").lower()
+        terms.update(_terms_from_product_text(sku_spaced))
+        specs = _loads(row.get("specs_json"), {})
+        if isinstance(specs, dict):
+            for key in (
+                "lens_mount",
+                "focal_length",
+                "aperture",
+                "lens_elements",
+                "viewing_angle",
+                "filter_size",
+                "official_handle",
+                "variant_title",
+            ):
+                terms.update(_terms_from_product_text(specs.get(key)))
+            for value in specs.get("official_tags") or []:
+                terms.update(_terms_from_product_text(value))
+            for value in specs.get("highlights") or []:
+                terms.update(_terms_from_product_text(value))
+        fit_tags = _loads(row.get("fit_tags_json"), [])
+        if isinstance(fit_tags, list):
+            for value in fit_tags:
+                terms.update(_terms_from_product_text(value))
+    _CATALOG_PRODUCT_FIT_KEYWORDS = {
+        sku: tuple(sorted(term for term in terms if term and term not in GENERIC_PRODUCT_TERMS))
+        for sku, terms in mapping.items()
+    }
+    return _CATALOG_PRODUCT_FIT_KEYWORDS
+
+
 def _content_specialty(text: str) -> tuple[dict[str, int], int]:
     mapping = {
         "review": ("review", "hands-on", "test", "comparison", " vs ", "评测", "测试", "对比"),
@@ -295,10 +414,11 @@ def compute_block4_specialty(kol_pool_id: int) -> dict[str, Any]:
     text = _text_blob(row, posts)
     cluster_counts = _keyword_counts(text, _load_clusters())
     clusters = [key for key, _ in cluster_counts.most_common(3)]
-    product_counts = _keyword_counts(text, PRODUCT_FIT_KEYWORDS)
+    product_keywords = _catalog_product_fit_keywords()
+    product_counts = _keyword_counts(text, product_keywords)
     product_fit: dict[str, int] = {}
     product_fit_confidence: dict[str, float] = {}
-    for sku, _terms in PRODUCT_FIT_KEYWORDS.items():
+    for sku, _terms in product_keywords.items():
         hit_count = product_counts.get(sku, 0)
         if not hit_count:
             continue
@@ -324,7 +444,7 @@ def compute_block4_specialty(kol_pool_id: int) -> dict[str, Any]:
             "industry_keyword_hits": cluster_hits,
             "product_keyword_hits": dict(product_counts),
         },
-        "source": "industry_clusters.json + cached text",
+        "source": "industry_clusters.json + vkpi_products + cached text",
     }
 
 
