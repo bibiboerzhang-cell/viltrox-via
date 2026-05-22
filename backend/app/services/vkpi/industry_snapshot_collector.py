@@ -422,10 +422,14 @@ def collect_account_snapshot(
             if platform == "youtube" and channel_id:
                 videos_payload = crawler.crawl_channel_videos(channel_id, max_results=max_posts)
                 videos_items = videos_payload.get("items") or []
+                if not videos_items and isinstance(profile_payload.get("videos"), list):
+                    videos_items = profile_payload.get("videos") or []
             else:
                 if profile_items:
                     first_profile = profile_items[0] or {}
                     videos_items = first_profile.get("latestPosts") or first_profile.get("posts") or first_profile.get("videos") or []
+                if not videos_items and isinstance(profile_payload.get("videos"), list):
+                    videos_items = profile_payload.get("videos") or []
             raw_data = {
                 "source": f"{platform}_crawler",
                 "profile": profile_payload,
@@ -434,7 +438,12 @@ def collect_account_snapshot(
             }
             if platform == "youtube":
                 raw_data["youtube_kpi_status"] = raw_data["kpi_status"]
-                raw_data["source"] = "youtube_api"
+                youtube_source = str(profile_payload.get("provider_source") or (videos_payload.get("provider_source") if "videos_payload" in locals() and isinstance(videos_payload, dict) else "") or "").strip()
+                raw_data["source"] = "youtube_apify" if youtube_source == "apify" else "youtube_api"
+                raw_data["youtube_provider_source"] = youtube_source or "youtube_api"
+                youtube_fallback_from = profile_payload.get("fallback_from") or (videos_payload.get("fallback_from") if "videos_payload" in locals() and isinstance(videos_payload, dict) else "")
+                if youtube_fallback_from:
+                    raw_data["youtube_fallback_from"] = youtube_fallback_from
 
     raw_status = str(
         (raw_data or {}).get("kpi_status")

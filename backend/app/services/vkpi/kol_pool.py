@@ -1159,11 +1159,16 @@ def enrich_item(
             or ""
         )
 
+    videos_payload: dict[str, Any] = {}
     videos_items: list[dict[str, Any]] = []
     if platform == "youtube" and channel_id and hasattr(crawler, "crawl_channel_videos"):
         videos_payload = crawler.crawl_channel_videos(channel_id, max_results=max_posts_i)
         videos = videos_payload.get("items") if isinstance(videos_payload, dict) else []
         videos_items = [video for video in videos if isinstance(video, dict)] if isinstance(videos, list) else []
+        if not videos_items and isinstance(profile_payload, dict):
+            fallback_videos = profile_payload.get("videos")
+            if isinstance(fallback_videos, list):
+                videos_items = [video for video in fallback_videos if isinstance(video, dict)]
     elif isinstance(profile_payload, dict):
         payload_items = _content_items_from_payload(profile_payload)
         if payload_items and _looks_like_content_item(payload_items[0]):
@@ -1179,7 +1184,12 @@ def enrich_item(
         "source_ref": f"kol_pool:{kol_pool_id}",
     }
     if platform == "youtube":
-        raw_data["source"] = "youtube_api"
+        youtube_source = str(profile_payload.get("provider_source") or videos_payload.get("provider_source") or "").strip()
+        raw_data["source"] = "youtube_apify" if youtube_source == "apify" else "youtube_api"
+        raw_data["youtube_provider_source"] = youtube_source or "youtube_api"
+        youtube_fallback_from = profile_payload.get("fallback_from") or videos_payload.get("fallback_from")
+        if youtube_fallback_from:
+            raw_data["youtube_fallback_from"] = youtube_fallback_from
         raw_data["youtube_kpi_status"] = raw_data["kpi_status"]
 
     kpis = calculate_kpis(raw_data)
