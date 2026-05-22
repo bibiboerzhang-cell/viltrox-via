@@ -155,6 +155,7 @@ function mediaState(post: ChannelContentPost, account: OfficialChannelAccount) {
   const rawVideoUrl = text(post.videoUrl);
   const embedUrl = youtubeEmbedUrl(post, account);
   const explicitKind = text(post.mediaKind || post.mediaType).toLowerCase();
+  const explicitlyVideo = ['video', 'reel', 'reels', 'clip', 'clips'].includes(explicitKind);
   const fallbackLooksVideo = likelyVideoUrl(fallbackUrl, account.platform);
   const shouldUseFallbackAsVideo = !rawVideoUrl && fallbackLooksVideo;
   const videoUrl = rawVideoUrl || (shouldUseFallbackAsVideo ? fallbackUrl : '');
@@ -166,7 +167,11 @@ function mediaState(post: ChannelContentPost, account: OfficialChannelAccount) {
   const imageUrls = Array.from(new Set(imageCandidates.map((url) => proxiedImageUrl(url)).filter((url) => renderableUrl(url, account.platform))));
   const resolvedVideoUrl = videoUrl ? proxiedVideoUrl(videoUrl) : '';
   const videoRenderable = Boolean(embedUrl) || renderableUrl(resolvedVideoUrl, account.platform);
-  const kind = videoRenderable ? 'video' : (imageUrls.length > 1 || explicitKind === 'carousel' || explicitKind === 'sidecar' ? 'carousel' : imageUrls.length ? 'image' : 'pending');
+  const kind = videoRenderable
+    ? 'video'
+    : explicitlyVideo && imageUrls.length
+      ? 'video-poster'
+      : (imageUrls.length > 1 || explicitKind === 'carousel' || explicitKind === 'sidecar' ? 'carousel' : imageUrls.length ? 'image' : 'pending');
   return {
     kind,
     embedUrl,
@@ -220,6 +225,7 @@ function MediaSlot({ post, account, apiToken, compact = false }: { post: Channel
     <div className="vkpi-channel-content-card__carousel">
       <img src={current} alt="" loading="lazy" onError={() => markFailed(current)} />
       {media.kind === 'video' ? <span className="vkpi-channel-content-card__play">▶</span> : null}
+      {media.kind === 'video-poster' ? <span className="vkpi-channel-content-card__video-pending">视频待缓存</span> : null}
       {imageUrls.length > 1 ? (
         <>
           <button type="button" className="is-prev" onClick={(event) => { event.stopPropagation(); setActive((value) => (value + imageUrls.length - 1) % imageUrls.length); }} aria-label="上一张">‹</button>
@@ -256,6 +262,7 @@ function mediaBadge(post: ChannelContentPost, account: OfficialChannelAccount) {
   if ((post.imageUrls || []).length > 1) return `1/${post.imageUrls?.length}`;
   const media = mediaState(post, account);
   if (media.kind === 'video') return 'video';
+  if (media.kind === 'video-poster') return 'video 待缓存';
   if (media.kind === 'image' || media.kind === 'carousel') return 'image';
   return 'pending';
 }

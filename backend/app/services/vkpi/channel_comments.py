@@ -415,5 +415,5 @@ def collect_channel_post_comments(
         "status": result.get("provider_status") or payload.get("status"),
         "fetched_count": len(raw_comments),
         "new_count": new_count,
-        "message": result.get("error", ""),
+        "message": channels._text(result.get("error"), result.get("message")),
     }
