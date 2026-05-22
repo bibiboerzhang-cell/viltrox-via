@@ -73,6 +73,7 @@ def test_catalog_product_for_sku_returns_compact_specs(monkeypatch):
                         "lens_mount": "E-mount",
                         "focal_length": "f=35mm",
                         "aperture": "F1.8-F16",
+                        "focus_motor": "STM+Lead screw",
                         "weight": "≈355g",
                         "filter_size": "Φ58mm",
                         "ignored": "not returned",
@@ -94,6 +95,7 @@ def test_catalog_product_for_sku_returns_compact_specs(monkeypatch):
     assert product["mount"] == "FE-mount"
     assert product["price_usd"] == 395.0
     assert product["specs"]["focal_length"] == "f=35mm"
+    assert product["specs"]["focus_motor"] == "STM+Lead screw"
     assert product["specs"]["filter_size"] == "Φ58mm"
     assert "ignored" not in product["specs"]
 
@@ -130,3 +132,36 @@ def test_catalog_products_for_match_returns_mount_variants(monkeypatch):
 
     assert [product["sku"] for product in products] == ["AF-35MM-F12-LAB-FE", "AF-35MM-F12-LAB-Z"]
     assert {product["mount"] for product in products} == {"FE-mount", "Z-mount"}
+
+
+def test_catalog_products_for_match_uses_family_when_no_dimensions11_match(monkeypatch):
+    class _Result:
+        def fetchall(self):
+            base = {
+                "category_main": "Lens",
+                "category_detail": "camera lens",
+                "marketing_name": "",
+                "price_usd": "395.00",
+                "series": "EVO",
+                "product_url": "https://viltrox.com/products/af-35mm-f1-8-fe",
+                "source_confidence": "1.00",
+                "specs_json": json.dumps({"focal_length": "f=35mm", "aperture": "F1.8-F16"}),
+            }
+            return [
+                {**base, "sku": "AF-35MM-F18-EVO-FE", "model_name": "AF 35mm F1.8 EVO FE", "mount": "FE-mount"},
+                {**base, "sku": "AF-35MM-F18-EVO-Z", "model_name": "AF 35mm F1.8 EVO Z", "mount": "Z-mount"},
+            ]
+
+    class _Conn:
+        def execute(self, *_args, **_kwargs):
+            return _Result()
+
+    monkeypatch.setattr(kol_product_fit, "_CATALOG_PRODUCTS", None)
+    monkeypatch.setattr(kol_product_fit, "get_conn", lambda: _Conn())
+
+    products = _catalog_products_for_match(
+        None,
+        {"display_name": "AF 35mm F1.8 EVO", "identity_key": "af 35mm f1.8 evo"},
+    )
+
+    assert [product["sku"] for product in products] == ["AF-35MM-F18-EVO-FE", "AF-35MM-F18-EVO-Z"]

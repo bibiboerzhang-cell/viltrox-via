@@ -324,7 +324,22 @@ def _compact_catalog_product(row: dict[str, Any]) -> dict[str, Any]:
         specs = {}
     compact_specs = {
         key: specs.get(key)
-        for key in ("lens_mount", "focal_length", "aperture", "lens_elements", "weight", "filter_size")
+        for key in (
+            "lens_mount",
+            "lens_elements",
+            "focal_length",
+            "viewing_angle",
+            "aperture",
+            "aperture_blades",
+            "shooting_distance",
+            "focus_mechanism",
+            "focus_motor",
+            "focus_mode",
+            "max_magnification",
+            "lens_size",
+            "weight",
+            "filter_size",
+        )
         if _text(specs.get(key))
     }
     result = {
@@ -380,12 +395,9 @@ def _catalog_products() -> list[dict[str, Any]]:
             SELECT sku, category_main, category_detail, model_name, marketing_name,
                    price_usd, series, mount, product_url, specs_json, source_confidence
             FROM vkpi_products
-            WHERE LOWER(COALESCE(category_main, '')) IN ('lens', 'cine lens')
-               OR LOWER(COALESCE(category_detail, '')) LIKE ?
             ORDER BY source_confidence DESC, sku ASC
             LIMIT 500
-            """,
-            ("%lens%",),
+            """
         ).fetchall()
     except Exception:
         rows = []
@@ -401,10 +413,8 @@ def _catalog_products() -> list[dict[str, Any]]:
 
 
 def _catalog_products_for_match(match: dict[str, Any] | None, family: dict[str, Any], *, limit: int = 6) -> list[dict[str, Any]]:
-    if not match:
-        return []
     needles = [
-        _normalize_product_fit_key(match.get("sku")),
+        _normalize_product_fit_key((match or {}).get("sku")),
         _normalize_product_fit_key(_render_family_detail(family)),
         _normalize_product_fit_key(family.get("identity_key")),
     ]
@@ -843,8 +853,8 @@ def build_kol_product_fit_preview(
                 )
             )
         else:
-            matched_catalog_products = []
-            matched_catalog_product = None
+            matched_catalog_products = _catalog_products_for_match(None, family)
+            matched_catalog_product = matched_catalog_products[0] if matched_catalog_products else None
         if cooperation_count:
             evidence_pro.append(
                 _evidence(

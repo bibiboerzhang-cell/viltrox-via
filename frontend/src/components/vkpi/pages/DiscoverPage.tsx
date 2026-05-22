@@ -323,6 +323,21 @@ function compactLabel(value: unknown, fallback = '-'): string {
   return parsed ? compactCount(parsed) : fallback;
 }
 
+function productFitMetaLine(product: Record<string, unknown>): string {
+  const catalog = objectValue(product.catalog_product || product.matched_catalog_product);
+  const specs = objectValue(product.specs || catalog.specs);
+  const mount = textValue(product.mount || catalog.mount, '');
+  const price = safeNumber(product.price_usd || catalog.price_usd);
+  const focal = textValue(specs.focal_length, '');
+  const aperture = textValue(specs.aperture, '');
+  return [
+    mount,
+    price ? `$${price.toLocaleString('en-US')}` : '',
+    focal,
+    aperture,
+  ].filter(Boolean).join(' · ');
+}
+
 function usableCandidateText(...values: unknown[]): string {
   for (const value of values) {
     const text = textValue(value, '');
@@ -610,6 +625,10 @@ function instantCandidateToUiKol(term: string, selectedPlatform: string): UiKol 
 
 function isCandidateKol(kol?: UiKol) {
   return Boolean(kol?.sourceKind === 'platform_search' || kol?.sourceKind === 'kol_pool' || String(kol?.id || '').startsWith('candidate:') || String(kol?.id || '').startsWith('pool:'));
+}
+
+function isPlatformSearchCandidate(kol?: UiKol) {
+  return Boolean(kol?.sourceKind === 'platform_search' || String(kol?.id || '').startsWith('candidate:'));
 }
 
 function searchKolMergeKey(kol: UiKol): string {
@@ -1086,7 +1105,7 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
       setProfilePosts([]);
       return;
     }
-    if (isCandidateKol(selectedKol)) {
+    if (isPlatformSearchCandidate(selectedKol)) {
       setSelectedProfile(null);
       setSelectedAssessment(null);
       setSelectedProductFits([]);
@@ -2121,7 +2140,7 @@ function ProfilePanel({
   const summary = selectedProfile?.summary || {};
   const assessmentScore = safeNumber(selectedAssessment?.score) || selectedKol.score;
   const assessmentGrade = textValue(selectedAssessment?.grade, selectedKol.grade);
-  const candidateOnly = isCandidateKol(selectedKol);
+  const candidateOnly = isPlatformSearchCandidate(selectedKol);
   const historicalMatch = objectValue(selectedKol.raw.historical_match || selectedKol.raw.history_match);
   const historicalCooperationCount = safeNumber(historicalMatch.cooperation_count || selectedKol.raw.cooperation_count || selectedKol.raw.history_cooperation_count);
   const historicalRecentCooperations = arrayValue(historicalMatch.recent_cooperations).map(objectValue);
@@ -2232,15 +2251,19 @@ function ProfilePanel({
 
       <section className="vkpi-discover-card">
         <div className="vkpi-discover-card__title"><b>Top 5 产品适配</b><span>{formatProductFitSource(Boolean(productRows.length), productFitMethod)}</span></div>
-        {productRows.length ? productRows.map((product, index) => (
-          <div className="vkpi-discover-fit" key={String(product.launch_id || product.id || product.product_sku || product.productSku || index)}>
-            <div>
-              <strong>{cleanProductLabel(product.product_name || product.productName || product.product_sku || product.productSku)}</strong>
-              <span>{Array.isArray(product.reasons) && product.reasons.length ? textValue(product.reasons[0], '') : textValue(product.launch_name || product.launchName || product.category, 'Viltrox 产品')}</span>
+        {productRows.length ? productRows.map((product, index) => {
+          const metaLine = productFitMetaLine(product);
+          return (
+            <div className="vkpi-discover-fit" key={String(product.launch_id || product.id || product.product_sku || product.productSku || index)}>
+              <div>
+                <strong>{cleanProductLabel(product.product_name || product.productName || product.product_sku || product.productSku)}</strong>
+                <span>{Array.isArray(product.reasons) && product.reasons.length ? textValue(product.reasons[0], '') : textValue(product.launch_name || product.launchName || product.category, 'Viltrox 产品')}</span>
+                {metaLine ? <small>{metaLine}</small> : null}
+              </div>
+              <b>{safeNumber(product.score) || productFitScore || '待接'}</b>
             </div>
-            <b>{safeNumber(product.score) || productFitScore || '待接'}</b>
-          </div>
-        )) : candidateOnly && candidateIntentTags.length ? (
+          );
+        }) : candidateOnly && candidateIntentTags.length ? (
           <div className="vkpi-discover-fit is-query">
             <div>
               <strong>搜索方向</strong>

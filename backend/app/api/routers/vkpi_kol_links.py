@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.api.dependencies.perms import require_tab
 from app.db.connection import get_conn
 from app.services.kol.account_dossier import analyze_kol_account, get_kol_dossier, scan_kol_account
-from app.services.vkpi import kol_claims, kol_history_match, link_center, scope
+from app.services.vkpi import kol_claims, kol_history_match, kol_product_fit as kol_product_fit_service, link_center, scope
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-kol-links"])
@@ -284,12 +284,80 @@ def _dimensions11_match_for_product(product_text: str, items: list[dict[str, Any
     return None
 
 
+def _product_fit_preview_payload_for_pool(kol_pool_id: int, limit: int = 5, *, kol_id: int | None = None) -> dict[str, Any]:
+    safe_limit = max(1, min(20, int(limit or 5)))
+    preview = kol_product_fit_service.build_kol_product_fit_preview(
+        kol_pool_id=int(kol_pool_id),
+        limit=safe_limit,
+    )
+    items: list[dict[str, Any]] = []
+    for item in preview.get("items") or []:
+        catalog = item.get("matched_catalog_product") or {}
+        catalog_products = item.get("matched_catalog_products") or []
+        evidence_pro = item.get("evidence_pro") or []
+        evidence_con = item.get("evidence_con") or []
+        top_catalog = catalog or (catalog_products[0] if catalog_products else {})
+        product_label = str(
+            top_catalog.get("marketing_name")
+            or top_catalog.get("model_name")
+            or item.get("product_family_name")
+            or ""
+        )
+        items.append(
+            {
+                "launch_id": None,
+                "product_family_uid": item.get("product_family_uid"),
+                "product_family_name": item.get("product_family_name"),
+                "product_sku": top_catalog.get("sku") or item.get("product_family_name"),
+                "product_name": product_label,
+                "launch_name": "Product Fit 规则引擎",
+                "score": item.get("score"),
+                "rank": item.get("rank"),
+                "percentile_rank": item.get("percentile_rank"),
+                "method": "kol_product_fit_v1",
+                "status": "ready" if top_catalog else "estimated_no_catalog_match",
+                "reasons": [str(row.get("detail") or "") for row in evidence_pro[:3] if row.get("detail")],
+                "concerns": [str(row.get("detail") or "") for row in evidence_con[:3] if row.get("detail")],
+                "evidence": [
+                    f"{row.get('source_table', '')}:{row.get('source_id', '')}".strip(":")
+                    for row in evidence_pro[:5]
+                    if row.get("source_table") or row.get("source_id")
+                ],
+                "catalog_product": top_catalog,
+                "matched_catalog_product": catalog,
+                "matched_catalog_products": catalog_products,
+                "mount": top_catalog.get("mount"),
+                "price_usd": top_catalog.get("price_usd"),
+                "product_url": top_catalog.get("product_url"),
+                "specs": top_catalog.get("specs") or {},
+                "source_confidence": top_catalog.get("source_confidence"),
+                "score_breakdown": item.get("score_breakdown") or {},
+            }
+        )
+    return {
+        "kol_id": int(kol_id or kol_pool_id),
+        "kol_pool_id": int(kol_pool_id),
+        "method": "kol_product_fit_v1",
+        "summary": preview.get("summary") or {},
+        "items": items[:safe_limit],
+    }
+
+
 def _product_fit_payload(kol_id: int, limit: int = 5) -> dict[str, Any]:
     ensure_vkpi_product_industry_schema()
     ctx = _latest_kol_context(kol_id)
     kol = ctx["kol"]
     snapshot = ctx["snapshot"]
     report = ctx["report"]
+    profile_deep = _kol_pool_profile_deep_for_kol(kol)
+    safe_limit = max(1, min(20, int(limit or 5)))
+    if profile_deep.get("kol_pool_id"):
+        try:
+            return _product_fit_preview_payload_for_pool(int(profile_deep["kol_pool_id"]), safe_limit, kol_id=int(kol_id))
+        except Exception as exc:
+            fit_engine_error = str(exc)
+    else:
+        fit_engine_error = "missing_kol_pool_profile_deep"
     raw_report = _json_loads(report.get("raw_json"), {})
     kol_text = " ".join(
         str(value or "")
@@ -306,7 +374,6 @@ def _product_fit_payload(kol_id: int, limit: int = 5) -> dict[str, Any]:
     )
     kol_tokens = _tokenize(kol_text)
     base = _int(report.get("product_fit"), _int(report.get("account_score"), 45))
-    profile_deep = _kol_pool_profile_deep_for_kol(kol)
     dimensions11_items = _dimensions11_product_fit_items(profile_deep) if profile_deep else []
     launches = get_conn().execute(
         """
@@ -405,7 +472,12 @@ def _product_fit_payload(kol_id: int, limit: int = 5) -> dict[str, Any]:
             }
         )
     rows.sort(key=lambda row: int(row.get("score") or 0), reverse=True)
-    return {"kol_id": int(kol_id), "items": rows[: max(1, min(20, int(limit or 5)))]}
+    return {
+        "kol_id": int(kol_id),
+        "method": "local_product_fit_v1_fallback",
+        "fit_engine_error": fit_engine_error,
+        "items": rows[:safe_limit],
+    }
 
 
 def _contact_rows(kol_id: int, include_wrong: bool = False) -> dict[str, Any]:
@@ -839,7 +911,10 @@ def kol_product_fit(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     try:
-        kol_claims.assert_kol_access(int(kol_id), staff, allow_unclaimed=True)
+        try:
+            kol_claims.assert_kol_access(int(kol_id), staff, allow_unclaimed=True)
+        except LookupError:
+            return _product_fit_preview_payload_for_pool(int(kol_id), limit)
         return _product_fit_payload(int(kol_id), limit=limit)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

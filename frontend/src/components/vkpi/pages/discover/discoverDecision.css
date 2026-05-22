@@ -917,16 +917,23 @@
 
 .vkpi-discover-fit strong,
 .vkpi-discover-fit span,
+.vkpi-discover-fit small,
 .vkpi-discover-history strong,
 .vkpi-discover-history span {
   display: block;
 }
 
 .vkpi-discover-fit span,
+.vkpi-discover-fit small,
 .vkpi-discover-history span {
   margin-top: 3px;
   color: var(--vkpi-muted);
   font-size: 11px;
+}
+
+.vkpi-discover-fit small {
+  color: #0f6b52;
+  font-weight: 700;
 }
 
 .vkpi-discover-fit b {
