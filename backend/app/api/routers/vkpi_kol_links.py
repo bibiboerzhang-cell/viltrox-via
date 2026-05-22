@@ -226,9 +226,14 @@ def _kol_pool_profile_deep_for_kol(kol: dict[str, Any]) -> dict[str, Any]:
         return dict(row)
 
     platform = str(kol.get("platform") or "").strip().lower()
+    platform = {
+        "ig": "instagram",
+        "tt": "tiktok",
+        "yt": "youtube",
+        "fb": "facebook",
+        "twitter": "x",
+    }.get(platform, platform)
     handle = _normalize_handle_for_match(kol.get("channel_url") or kol.get("profile_url") or kol.get("channel_name") or kol.get("media_name"))
-    if platform == "ig":
-        platform = "instagram"
     if not platform or not handle:
         return {}
     row = conn.execute(
