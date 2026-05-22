@@ -204,12 +204,21 @@ export function ProductCostFormCard({
     ["卡口", selectedProduct?.mount || selectedSpecs.lens_mount],
     ["焦段", selectedSpecs.focal_length],
     ["光圈", selectedSpecs.aperture],
+    ["视角", selectedSpecs.viewing_angle],
     ["结构", selectedSpecs.lens_elements],
+    ["叶片", selectedSpecs.aperture_blades],
+    ["最近对焦", selectedSpecs.shooting_distance],
+    ["对焦机构", selectedSpecs.focus_mechanism],
+    ["对焦马达", selectedSpecs.focus_motor],
+    ["对焦方式", selectedSpecs.focus_mode],
+    ["放大倍率", selectedSpecs.max_magnification],
+    ["尺寸", selectedSpecs.lens_size],
     ["重量", selectedSpecs.weight],
     ["滤镜", selectedSpecs.filter_size],
   ]
     .map(([label, value]) => ({ label: String(label), value: String(value || "").trim() }))
     .filter((row) => row.value);
+  const sourceConfidence = Number(selectedProduct?.sourceConfidence || 0);
   return (
     <section className="vkpi-card vkpi-action-card">
       <CardHeader title="SKU 录入" />
@@ -241,6 +250,9 @@ export function ProductCostFormCard({
             {selectedProduct.productUrl ? (
               <a href={selectedProduct.productUrl} target="_blank" rel="noreferrer">打开官网产品页</a>
             ) : null}
+            {sourceConfidence > 0 && sourceConfidence < 1 ? (
+              <small>官网规格未完整结构化，已保留价格、分类、产品链接和可解析字段。</small>
+            ) : null}
           </div>
         ) : null}
         <button className="vkpi-button vkpi-button--primary" type="submit" disabled={busy || !canUpsert}>保存 SKU</button>
@@ -251,8 +263,10 @@ export function ProductCostFormCard({
 
 const PRODUCT_GROUPS = [
   { key: "lens", title: "镜头", categories: ["Lens", "Cine Lens"] },
-  { key: "lighting", title: "闪光灯", categories: ["Lighting/Flash"] },
-  { key: "adapter", title: "转接环", categories: ["Adapter"] },
+  { key: "lighting", title: "灯光 / 闪光灯", categories: ["Lighting", "Lighting/Flash"] },
+  { key: "adapter", title: "转接 / 配件", categories: ["Adapter", "Macro Extension Tube", "Accessories", "Uv Filter"] },
+  { key: "monitor", title: "监视器 / 电池", categories: ["Monitor", "Battery"] },
+  { key: "other", title: "其他", categories: ["Product"] },
 ];
 
 function productLabel(product: VkpiProductCatalogItem) {

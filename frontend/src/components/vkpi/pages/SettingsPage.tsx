@@ -230,8 +230,8 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
       setProductCatalogError('');
       try {
         const response = await listProductCatalog(apiToken, {
-          categories: ['Lens', 'Cine Lens', 'Lighting/Flash', 'Adapter'],
-          limit: 300,
+          categories: ['Lens', 'Cine Lens', 'Lighting', 'Lighting/Flash', 'Adapter', 'Macro Extension Tube', 'Accessories', 'Uv Filter', 'Monitor', 'Battery', 'Product'],
+          limit: 500,
         });
         if (!cancelled) setProductCatalog(response.products || []);
       } catch (error) {
