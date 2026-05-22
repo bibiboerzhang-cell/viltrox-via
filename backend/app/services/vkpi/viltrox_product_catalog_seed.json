@@ -2,43 +2,5137 @@
   {
     "sku": "AF-35MM-F18-EVO-FE",
     "category_main": "Lens",
-    "category_detail": "Camera Lens",
-    "model_name": "Viltrox AF 35mm F1.8 EVO Full-Frame Lens for Sony E-Mount",
-    "marketing_name": "AF 35mm F1.8 EVO FE",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 35mm F1.8 EVO Full- Frame Lens for Sony E-Mount",
+    "marketing_name": "AF 35mm F1.8 EVO Full- Frame Lens for Sony E-Mount",
     "series": "EVO",
-    "mount": "E-mount",
+    "mount": "FE-mount",
     "price_usd": 395.0,
-    "status": "verified",
-    "description": "Full-frame 35mm F1.8 APO prime for street, travel, environmental portraits, vlogging, and everyday scenes.",
+    "status": "official",
+    "description": "APO Design for True-to-Life Color",
     "product_url": "https://viltrox.com/products/af-35mm-f1-8-fe",
     "source_url": "https://viltrox.com/products/af-35mm-f1-8-fe",
-    "source_file": "official:viltrox.com/products/af-35mm-f1-8-fe",
+    "source_file": "official:viltrox.com/products.json",
     "source_confidence": 1.0,
+    "source_checked_at": "2026-05-22T06:37:42Z",
     "fit_tags": [
+      "af",
+      "evo",
+      "fe-mount",
+      "full frame",
       "35mm",
-      "street",
-      "travel",
-      "portrait",
-      "vlog",
-      "photography",
-      "full-frame",
-      "sony-e"
+      "f=35mm",
+      "f1.8-f16"
     ],
     "specs": {
+      "official_product_id": 8095895945282,
+      "official_handle": "af-35mm-f1-8-fe",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "EVO",
+        "FE-mount",
+        "Full Frame"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 43507051987010,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 355,
+      "highlights": [
+        "APO Design for True-to-Life Color",
+        "Full-Frame 35mm Prime for Storytelling & Everyday Scenes",
+        "Bright F1.8 Aperture for Soft Bokeh and Low-Light Clarity",
+        "Precision Optics: 13/10 Elements (2ED, 3HR, 1UA)",
+        "Fast, Accurate STM Autofocus for Still and Video",
+        "0.34m Minimum Focusing Distance for Close-Up Detail",
+        "Compact 355g Design with Comfortable Handling",
+        "Durable Build with a Rubber-Sealed Mount",
+        "58mm Filter Thread and USB-C Firmware Upgrade Port"
+      ],
       "lens_mount": "E-mount",
       "lens_elements": "13/10",
       "focal_length": "f=35mm",
-      "viewing_angle": "63 deg",
+      "viewing_angle": "63°",
       "aperture": "F1.8-F16",
       "aperture_blades": "9",
-      "shooting_distance": "0.34m-infinity",
+      "shooting_distance": "0.34m-∞",
       "focus_mechanism": "internal focusing",
       "focus_motor": "STM+Lead screw",
       "focus_mode": "MF,AF",
       "max_magnification": "0.15x",
-      "lens_size": "Phi 69x76mm",
-      "weight": "approx 355g (bare lens)",
-      "filter_size": "Phi 58mm"
+      "lens_size": "Φ69x76mm",
+      "weight": "≈355g(bare lens)",
+      "filter_size": "Φ58mm"
+    }
+  },
+  {
+    "sku": "AF-55MM-F18-EVO-Z",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 55mm F1.8 EVO Full- Frame Lens for Nikon Z-Mount",
+    "marketing_name": "AF 55mm F1.8 EVO Full- Frame Lens for Nikon Z-Mount",
+    "series": "EVO",
+    "mount": "Z-mount",
+    "price_usd": 370.0,
+    "status": "official",
+    "description": "APO Design for True-to-Life Color",
+    "product_url": "https://viltrox.com/products/af-55mm-f1-8-z",
+    "source_url": "https://viltrox.com/products/af-55mm-f1-8-z",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 1.0,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "evo",
+      "full frame",
+      "z-mount",
+      "55mm",
+      "f=55mm",
+      "f1.8-f16"
+    ],
+    "specs": {
+      "official_product_id": 8096215498818,
+      "official_handle": "af-55mm-f1-8-z",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "EVO",
+        "Full Frame",
+        "Z-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 43507373834306,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 390,
+      "highlights": [
+        "APO Design for True-to-Life Color",
+        "Full-Frame 55mm Prime for Natural Portraits",
+        "Bright F1.8 Aperture for Soft Bokeh and Low-Light Clarity",
+        "Precision Optics: 13/9 Elements (2ED, 2HR, 1UA)",
+        "Fast, Accurate STM Autofocus for Still and Video",
+        "0.43m Minimum Focusing Distance for Close-Up Detail",
+        "Compact 390g Design with Comfortable Handling",
+        "Durable Build with a Rubber-Sealed Mount",
+        "58mm Filter Thread and USB-C Firmware Upgrade Port"
+      ],
+      "lens_mount": "Z-mount",
+      "lens_elements": "13/9",
+      "focal_length": "f=55mm",
+      "viewing_angle": "43°",
+      "aperture": "F1.8-F16",
+      "aperture_blades": "9",
+      "shooting_distance": "0.43m-∞",
+      "focus_mechanism": "internal focusing",
+      "focus_motor": "STM+Lead screw",
+      "focus_mode": "MF,AF",
+      "max_magnification": "0.16x",
+      "lens_size": "Φ69x78mm",
+      "weight": "≈390g(bare lens)",
+      "filter_size": "Φ58mm"
+    }
+  },
+  {
+    "sku": "AF-35MM-F18-EVO-Z",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 35mm F1.8 EVO Full- Frame Lens for Nikon Z-Mount",
+    "marketing_name": "AF 35mm F1.8 EVO Full- Frame Lens for Nikon Z-Mount",
+    "series": "EVO",
+    "mount": "Z-mount",
+    "price_usd": 395.0,
+    "status": "official",
+    "description": "APO Design for True-to-Life Color",
+    "product_url": "https://viltrox.com/products/af-35mm-f1-8-z",
+    "source_url": "https://viltrox.com/products/af-35mm-f1-8-z",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 1.0,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "evo",
+      "full frame",
+      "z-mount",
+      "35mm",
+      "f=35mm",
+      "f1.8-f16"
+    ],
+    "specs": {
+      "official_product_id": 8096179716162,
+      "official_handle": "af-35mm-f1-8-z",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "EVO",
+        "Full Frame",
+        "Z-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 43507338018882,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 375,
+      "highlights": [
+        "APO Design for True-to-Life Color",
+        "Full-Frame 35mm Prime for Storytelling & Everyday Scenes",
+        "Bright F1.8 Aperture for Soft Bokeh and Low-Light Clarity",
+        "Precision Optics: 13/10 Elements (2ED, 3HR, 1UA)",
+        "Fast, Accurate STM Autofocus for Still and Video",
+        "0.34m Minimum Focusing Distance for Close-Up Detail",
+        "Compact 375g Design with Comfortable Handling",
+        "Durable Build with a Rubber-Sealed Mount",
+        "58mm Filter Thread and USB-C Firmware Upgrade Port"
+      ],
+      "lens_mount": "Z-mount",
+      "lens_elements": "13/10",
+      "focal_length": "f=35mm",
+      "viewing_angle": "63°",
+      "aperture": "F1.8-F16",
+      "aperture_blades": "9",
+      "shooting_distance": "0.34m-∞",
+      "focus_mechanism": "internal focusing",
+      "focus_motor": "STM+Lead screw",
+      "focus_mode": "MF,AF",
+      "max_magnification": "0.15x",
+      "lens_size": "Φ69x78mm",
+      "weight": "≈375g(bare lens)",
+      "filter_size": "Φ58mm"
+    }
+  },
+  {
+    "sku": "AF-55MM-F18-EVO-FE",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 55mm F1.8 EVO Full- Frame Lens for Sony E-Mount",
+    "marketing_name": "AF 55mm F1.8 EVO Full- Frame Lens for Sony E-Mount",
+    "series": "EVO",
+    "mount": "FE-mount",
+    "price_usd": 370.0,
+    "status": "official",
+    "description": "APO Design for True-to-Life Color",
+    "product_url": "https://viltrox.com/products/af-55mm-f1-8-fe",
+    "source_url": "https://viltrox.com/products/af-55mm-f1-8-fe",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 1.0,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "evo",
+      "fe-mount",
+      "full frame",
+      "55mm",
+      "f=55mm",
+      "f1.8-f16"
+    ],
+    "specs": {
+      "official_product_id": 8096075939906,
+      "official_handle": "af-55mm-f1-8-fe",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "EVO",
+        "FE-mount",
+        "Full Frame"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 43507233783874,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 370,
+      "highlights": [
+        "APO Design for True-to-Life Color",
+        "Full-Frame 55mm Prime for Natural Portraits",
+        "Bright F1.8 Aperture for Soft Bokeh and Low-Light Clarity",
+        "Precision Optics: 13/9 Elements (2ED, 2HR, 1UA)",
+        "Fast, Accurate STM Autofocus for Still and Video",
+        "0.43m Minimum Focusing Distance for Close-Up Detail",
+        "Compact 370g Design with Comfortable Handling",
+        "Durable Build with a Rubber-Sealed Mount",
+        "58mm Filter Thread and USB-C Firmware Upgrade Port"
+      ],
+      "lens_mount": "FE-mount",
+      "lens_elements": "13/9",
+      "focal_length": "f=55mm",
+      "viewing_angle": "43°",
+      "aperture": "F1.8-F16",
+      "aperture_blades": "9",
+      "shooting_distance": "0.43m-∞",
+      "focus_mechanism": "internal focusing",
+      "focus_motor": "STM+Lead screw",
+      "focus_mode": "MF,AF",
+      "max_magnification": "0.16x",
+      "lens_size": "Φ69x76mm",
+      "weight": "≈370g(bare lens)",
+      "filter_size": "Φ58mm"
+    }
+  },
+  {
+    "sku": "AF-50MM-F14-PRO-Z",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 50mm F1.4 Pro Full-Frame Lens for Nikon Z-Mount",
+    "marketing_name": "AF 50mm F1.4 Pro Full-Frame Lens for Nikon Z-Mount",
+    "series": "Pro",
+    "mount": "Z-mount",
+    "price_usd": 549.0,
+    "status": "official",
+    "description": "Full-Frame 50mm Standard Prime",
+    "product_url": "https://viltrox.com/products/af-50mm-f1-4-z",
+    "source_url": "https://viltrox.com/products/af-50mm-f1-4-z",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 1.0,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "full frame",
+      "pro",
+      "z-mount",
+      "50mm",
+      "f=50mm",
+      "f1.4-f16"
+    ],
+    "specs": {
+      "official_product_id": 7682952659010,
+      "official_handle": "af-50mm-f1-4-z",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "Full Frame",
+        "Pro",
+        "Z-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 42936859885634,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 595,
+      "highlights": [
+        "Full-Frame 50mm Standard Prime",
+        "Pro-Grade Edge-to-Edge Image Quality",
+        "Bright F1.4 Aperture for Portrait & Low-Light",
+        "Viltrox Dual HyperVCM Fast & Accurate Autofocus",
+        "Minimal Focus Breathing for Video",
+        "0.45m Close Focus for Detailed Shots",
+        "Durable Weather-Sealed Metal Build"
+      ],
+      "lens_mount": "-mount",
+      "lens_elements": "15/11",
+      "focal_length": "f=50mm",
+      "viewing_angle": "46.6°",
+      "aperture": "F1.4-F16",
+      "aperture_blades": "11",
+      "shooting_distance": "0.45m-∞",
+      "focus_mechanism": "internal focusing system",
+      "focus_motor": "VCM",
+      "focus_mode": "MF,AF",
+      "max_magnification": "0.145x",
+      "lens_size": "Φ84.5x113mm",
+      "weight": "≈830g(bare lens)",
+      "filter_size": "Φ77mm"
+    }
+  },
+  {
+    "sku": "AF-16MM-F18-L",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 16mm F1.8 Full-Frame Lens for Leica L-Mount",
+    "marketing_name": "AF 16mm F1.8 Full-Frame Lens for Leica L-Mount",
+    "series": "",
+    "mount": "L-mount",
+    "price_usd": 580.0,
+    "status": "official",
+    "description": "Full-Frame 16mm F1.8 Wide-Angle Prime",
+    "product_url": "https://viltrox.com/products/af-16mm-f1-8-l",
+    "source_url": "https://viltrox.com/products/af-16mm-f1-8-l",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 1.0,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "full frame",
+      "l-mount",
+      "16mm",
+      "f=16mm",
+      "f1.8-f22"
+    ],
+    "specs": {
+      "official_product_id": 7682768142402,
+      "official_handle": "af-16mm-f1-8-l",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "Full Frame",
+        "L-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 42936579686466,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 550,
+      "highlights": [
+        "Full-Frame 16mm F1.8 Wide-Angle Prime",
+        "Precision Optics: 15/12 Elements (4 ED, 3 Aspherical)",
+        "Fast, Accurate STM Autofocus for Photo and Video",
+        "Durable Build with High-Grade Weather Sealed",
+        "Excellent D istortion and Coma Control",
+        "Smooth Focus Switching with Minimal Focus Breathing",
+        "77mm Filter Thread and Non-Bulb-Shaped design"
+      ],
+      "lens_mount": "L-mount",
+      "lens_elements": "15/12",
+      "focal_length": "f=16mm",
+      "viewing_angle": "105.6°",
+      "aperture": "F1.8-F22",
+      "aperture_blades": "9",
+      "shooting_distance": "0.27m-∞",
+      "focus_mechanism": "Ultralight internal focusing",
+      "focus_motor": "STM+Lead screw",
+      "focus_mode": "MF,AF",
+      "max_magnification": "0.1x",
+      "lens_size": "Φ85.2x103mm",
+      "weight": "≈550g",
+      "filter_size": "Φ77mm"
+    }
+  },
+  {
+    "sku": "AF-56MM-F12-PRO-Z",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 56mm F1.2 Pro APS-C Lens for Nikon Z-Mount",
+    "marketing_name": "AF 56mm F1.2 Pro APS-C Lens for Nikon Z-Mount",
+    "series": "Pro",
+    "mount": "Z-mount",
+    "price_usd": 580.0,
+    "status": "official",
+    "description": "56mm APS-C Prime (85mm Full-Frame Equivalent)",
+    "product_url": "https://viltrox.com/products/af-56mm-f1-2-z",
+    "source_url": "https://viltrox.com/products/af-56mm-f1-2-z",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 1.0,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "aps-c",
+      "pro",
+      "z-mount",
+      "56mm",
+      "f=56mm (85mm)",
+      "f1.2-f16"
+    ],
+    "specs": {
+      "official_product_id": 7635652804674,
+      "official_handle": "af-56mm-f1-2-z",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "APS-C",
+        "Pro",
+        "Z-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 42865047011394,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 595,
+      "highlights": [
+        "56mm APS-C Prime (85mm Full-Frame Equivalent)",
+        "Ultra-Bright F1.2 Aperture for Portraits & Low-Light",
+        "Pro-Grade Optics: 13/8 Elements (1 UA, 1 ED, 3 HR)",
+        "Viltrox Dual HyperVCM Motor for Fast, Silent Autofocus",
+        "0.5 m Minimum Focusing Distance",
+        "Durable Full-Metal, Weather-Sealed Body",
+        "67mm Standard Filter Thread",
+        "USB-C Firmware Upgrade Port"
+      ],
+      "lens_mount": "Z-mount",
+      "lens_elements": "13/8",
+      "focal_length": "f=56mm (85mm)",
+      "viewing_angle": "28°",
+      "aperture": "F1.2-F16",
+      "aperture_blades": "11",
+      "shooting_distance": "0.5m-∞",
+      "focus_mechanism": "Ultralight internal focus",
+      "focus_motor": "VCM",
+      "focus_mode": "MF,AF",
+      "max_magnification": "0.13x",
+      "lens_size": "Φ78.4x94.1mm",
+      "weight": "≈595g(bare lens)",
+      "filter_size": "Φ67mm"
+    }
+  },
+  {
+    "sku": "AF-35MM-F12-LAB-Z",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 35mm F1.2 LAB Full-Frame Lens for Nikon Z-Mount",
+    "marketing_name": "AF 35mm F1.2 LAB Full-Frame Lens for Nikon Z-Mount",
+    "series": "LAB",
+    "mount": "Z-mount",
+    "price_usd": 999.0,
+    "status": "official",
+    "description": "Large F1.2 Aperture for Dreamy Bokeh and Low-Light Clarity",
+    "product_url": "https://viltrox.com/products/af-35mm-f1-2-z",
+    "source_url": "https://viltrox.com/products/af-35mm-f1-2-z",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 1.0,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "full frame",
+      "lab",
+      "z-mount",
+      "35mm",
+      "f=35mm",
+      "f1.2-f16"
+    ],
+    "specs": {
+      "official_product_id": 7621380014146,
+      "official_handle": "af-35mm-f1-2-z",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "Full Frame",
+        "LAB",
+        "Z-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 42739316228162,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 970,
+      "highlights": [
+        "Large F1.2 Aperture for Dreamy Bokeh and Low-Light Clarity",
+        "Precision Optics: 15/10 Elements (5 ED, 3 HR & 2 UA)",
+        "Fast, Accurate HyperVCM Autofocus for Photo and Video",
+        "0.34m Minimum Focusing Distance for Close-Up Detail",
+        "All-Metal Weather-Sealed Durable Build",
+        "Comprehensive Control Button and Integrated LED Lens Display"
+      ],
+      "lens_mount": "Z-mount",
+      "lens_elements": "15/10",
+      "focal_length": "f=35mm",
+      "viewing_angle": "64.2°",
+      "aperture": "F1.2-F16",
+      "aperture_blades": "11",
+      "shooting_distance": "0.34m-∞",
+      "focus_mechanism": "Dual floating internal focusing system",
+      "focus_motor": "VCM",
+      "focus_mode": "MF,AF",
+      "max_magnification": "0.17x",
+      "lens_size": "Φ89.2x123.5mm",
+      "weight": "≈970g",
+      "filter_size": "Φ77mm"
+    }
+  },
+  {
+    "sku": "AF-14MM-F40-AIR-Z",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 14mm F4.0 Air Full-Frame Lens for Nikon Z-mount",
+    "marketing_name": "AF 14mm F4.0 Air Full-Frame Lens for Nikon Z-mount",
+    "series": "Air",
+    "mount": "Z-mount",
+    "price_usd": 199.0,
+    "status": "official",
+    "description": "112.6° Field of View for Landscapes, Interiors & Group Shots",
+    "product_url": "https://viltrox.com/products/af-14mm-f4-0-z",
+    "source_url": "https://viltrox.com/products/af-14mm-f4-0-z",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 1.0,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "air",
+      "full frame",
+      "z-mount",
+      "14mm",
+      "f=14mm",
+      "f4.0-f16"
+    ],
+    "specs": {
+      "official_product_id": 7608587386946,
+      "official_handle": "af-14mm-f4-0-z",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "Air",
+        "Full Frame",
+        "Z-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 42674598871106,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 185,
+      "highlights": [
+        "112.6° Field of View for Landscapes, Interiors & Group Shots",
+        "MOD at 0.13m for Creative Angles",
+        "12/9 Optical Design with 2 Aspherical, 4 ED & 2 HR Elements",
+        "Advanced Multi-Layer Coating Eye & Face AF for Fast, Silent Autofocus",
+        "Minimal Focus Breathing for Smooth Video",
+        "Compact & Lightweight Design — Only 185g",
+        "58mm Filter Thread, USB-C Firmware Upgrade Port"
+      ],
+      "lens_mount": "Z-mount",
+      "lens_elements": "12/9",
+      "focal_length": "f=14mm",
+      "viewing_angle": "112.6°",
+      "aperture": "F4.0-F16",
+      "aperture_blades": "7",
+      "shooting_distance": "0.13m-∞",
+      "focus_mechanism": "Internal focus",
+      "focus_motor": "STM+Lead screw",
+      "focus_mode": "MF,AF",
+      "max_magnification": "0.23x",
+      "lens_size": "Φ68x58.4mm",
+      "weight": "≈185g(bare lens)",
+      "filter_size": "Φ58mm"
+    }
+  },
+  {
+    "sku": "AF-9MM-F28-AIR-X",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 9mm F2.8 Air APS-C Lens for Fujifilm X-Mount",
+    "marketing_name": "AF 9mm F2.8 Air APS-C Lens for Fujifilm X-Mount",
+    "series": "Air",
+    "mount": "X-mount",
+    "price_usd": 199.0,
+    "status": "official",
+    "description": "113.8° Ultra-Wide View (13.5mm Full-Frame Equivalent)",
+    "product_url": "https://viltrox.com/products/af-9mm-f2-8-xf",
+    "source_url": "https://viltrox.com/products/af-9mm-f2-8-xf",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 1.0,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "air",
+      "aps-c",
+      "x-mount",
+      "9mm",
+      "f=9mm (15mm)",
+      "f2.8-f16"
+    ],
+    "specs": {
+      "official_product_id": 7601977393218,
+      "official_handle": "af-9mm-f2-8-xf",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "Air",
+        "APS-C",
+        "X-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 42647278911554,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 175,
+      "highlights": [
+        "113.8° Ultra-Wide View (13.5mm Full-Frame Equivalent)",
+        "Lightweight Pocket Design: ~175g",
+        "Bright F2.8 Aperture for Low-Light and Creative Shots",
+        "13/11 Optical Design with 2 Aspherical, 3 ED, 3 HR",
+        "0.13 m Minimum Focusing Distance",
+        "Fast, Accurate Autofocus",
+        "Sealed Lens Body with Durable Metal Mount",
+        "Standard 58mm Filter Thread, USB-C Firmware Upgrade"
+      ],
+      "lens_mount": "X-mount",
+      "lens_elements": "13/11",
+      "focal_length": "f=9mm (15mm)",
+      "viewing_angle": "113.8°",
+      "aperture": "F2.8-F16",
+      "aperture_blades": "7",
+      "shooting_distance": "0.13m-∞",
+      "focus_mechanism": "internal focus",
+      "focus_motor": "STM+Lead screw",
+      "focus_mode": "MF,AF",
+      "max_magnification": "0.15x",
+      "lens_size": "Φ65x56.7mm",
+      "weight": "≈175g(bare lens)",
+      "filter_size": "Φ58mm"
+    }
+  },
+  {
+    "sku": "AF-85MM-F14-PRO-Z",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 85mm F1.4 Pro Full-Frame Lens for Nikon Z-mount",
+    "marketing_name": "AF 85mm F1.4 Pro Full-Frame Lens for Nikon Z-mount",
+    "series": "Pro",
+    "mount": "Z-mount",
+    "price_usd": 598.0,
+    "status": "official",
+    "description": "Ultra-Large F1.4 Aperture for Dreamy bokeh and Low-Light Mastery",
+    "product_url": "https://viltrox.com/products/af-85mm-f1-4-z",
+    "source_url": "https://viltrox.com/products/af-85mm-f1-4-z",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "full frame",
+      "pro",
+      "z-mount",
+      "85mm"
+    ],
+    "specs": {
+      "official_product_id": 7591106347074,
+      "official_handle": "af-85mm-f1-4-z",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "Full Frame",
+        "Pro",
+        "Z-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 42602410115138,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 800,
+      "highlights": [
+        "Ultra-Large F1.4 Aperture for Dreamy bokeh and Low-Light Mastery",
+        "Pro-Level Optics: 15/11 Elements (3 ED, 9 HR, and 1 UA)",
+        "Patented Fast Viltrox HyperVCM Autofocus for Photos and Videos",
+        "Classic Portrait Perspective with Sharpness and Natural Compression",
+        "Robust, All-Weather-Sealed Build",
+        "Professional Physical Controls for Efficient Operation"
+      ]
+    }
+  },
+  {
+    "sku": "AF-85MM-F20-EVO-Z",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 85mm F2.0 EVO Full- Frame Lens for Nikon Z-Mount",
+    "marketing_name": "AF 85mm F2.0 EVO Full- Frame Lens for Nikon Z-Mount",
+    "series": "EVO",
+    "mount": "Z-mount",
+    "price_usd": 275.0,
+    "status": "official",
+    "description": "Full-Frame 85mm Portrait Prime for Every Creator",
+    "product_url": "https://viltrox.com/products/af-85mm-f2-0-z",
+    "source_url": "https://viltrox.com/products/af-85mm-f2-0-z",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 1.0,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "evo",
+      "full frame",
+      "z-mount",
+      "85mm",
+      "f=85mm",
+      "f2.0-f16"
+    ],
+    "specs": {
+      "official_product_id": 7586923216962,
+      "official_handle": "af-85mm-f2-0-z",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "EVO",
+        "Full Frame",
+        "Z-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 42574977171522,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 360,
+      "highlights": [
+        "Full-Frame 85mm Portrait Prime for Every Creator",
+        "Bright F2.0 Aperture for Soft Bokeh and Low-Light Clarity",
+        "Precision Optics: 10/8 Elements (2 ED, 2 HR)",
+        "Fast, Accurate STM Autofocus for Photo and Video",
+        "0.74m Minimum Focusing Distance for Close-Up Detail",
+        "Compact 360g Design with Comfortable Handling",
+        "Durable Build with Dust and Moisture Protection",
+        "58 mm Filter Thread and USB-C Firmware Upgrade Port"
+      ],
+      "lens_mount": "Z-mount",
+      "lens_elements": "10/8",
+      "focal_length": "f=85mm",
+      "viewing_angle": "29.09°",
+      "aperture": "F2.0-F16",
+      "aperture_blades": "9",
+      "shooting_distance": "0.74m-∞",
+      "focus_mechanism": "internal focusing",
+      "focus_motor": "STM+Lead screw",
+      "focus_mode": "MF,AF",
+      "max_magnification": "0.13x",
+      "lens_size": "Φ69x78mm",
+      "weight": "≈360g(bare lens)",
+      "filter_size": "Φ58mm"
+    }
+  },
+  {
+    "sku": "AF-85MM-F20-EVO-FE",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 85mm F2.0 EVO Full- Frame Lens for Sony E-Mount",
+    "marketing_name": "AF 85mm F2.0 EVO Full- Frame Lens for Sony E-Mount",
+    "series": "EVO",
+    "mount": "FE-mount",
+    "price_usd": 275.0,
+    "status": "official",
+    "description": "Full-Frame 85mm Portrait Prime for Every Creator",
+    "product_url": "https://viltrox.com/products/af-85mm-f2-0-fe",
+    "source_url": "https://viltrox.com/products/af-85mm-f2-0-fe",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 1.0,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "evo",
+      "fe-mount",
+      "full frame",
+      "85mm",
+      "f=85mm",
+      "f2.0-f16"
+    ],
+    "specs": {
+      "official_product_id": 7561207644226,
+      "official_handle": "af-85mm-f2-0-fe",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "EVO",
+        "FE-mount",
+        "Full Frame"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 42508336791618,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 340,
+      "highlights": [
+        "Full-Frame 85mm Portrait Prime for Every Creator",
+        "Bright F2.0 Aperture for Soft Bokeh and Low-Light Clarity",
+        "Precision Optics: 10/8 Elements (2 ED, 2 HR)",
+        "Fast, Accurate STM Autofocus for Photo and Video",
+        "0.74m Minimum Focusing Distance for Close-Up Detail",
+        "Compact 340g Design with Comfortable Handling",
+        "Durable Build with Dust and Moisture Protection",
+        "58 mm Filter Thread and USB-C Firmware Upgrade Port"
+      ],
+      "lens_mount": "E-mount",
+      "lens_elements": "10/8",
+      "focal_length": "f=85mm",
+      "viewing_angle": "29.09°",
+      "aperture": "F2.0-F16",
+      "aperture_blades": "9",
+      "shooting_distance": "0.74m-∞",
+      "focus_mechanism": "internal focusing",
+      "focus_motor": "STM+Lead screw",
+      "focus_mode": "MF,AF",
+      "max_magnification": "0.13x",
+      "lens_size": "Φ69x76mm",
+      "weight": "≈340g(bare lens)",
+      "filter_size": "Φ58mm"
+    }
+  },
+  {
+    "sku": "AF-50MM-F14-PRO-FE",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 50mm F1.4 Pro Full- Frame Lens for Sony E-Mount",
+    "marketing_name": "AF 50mm F1.4 Pro Full- Frame Lens for Sony E-Mount",
+    "series": "Pro",
+    "mount": "FE-mount",
+    "price_usd": 549.0,
+    "status": "official",
+    "description": "Full-Frame Standard Prime for Every Scene",
+    "product_url": "https://viltrox.com/products/af-50mm-f1-4-fe",
+    "source_url": "https://viltrox.com/products/af-50mm-f1-4-fe",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 1.0,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "fe-mount",
+      "full frame",
+      "pro",
+      "50mm",
+      "f=50mm",
+      "f1.4-f16"
+    ],
+    "specs": {
+      "official_product_id": 7561205186626,
+      "official_handle": "af-50mm-f1-4-fe",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "FE-mount",
+        "Full Frame",
+        "Pro"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 42508334137410,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 800,
+      "highlights": [
+        "Full-Frame Standard Prime for Every Scene",
+        "Bright F1.4 Aperture for Portraits & Low-Light",
+        "Pro-Grade Optics: 15/11 Elements (1 UA, 3 ED, 8 HR)",
+        "Dual Viltrox HyperVCM Motor for Fast, Silent Autofocus",
+        "0.45m Minimum Focusing Distance",
+        "All-Metal, Weather-Sealed Construction",
+        "77 mm Standard Filter Thread",
+        "USB-C Firmware Upgrade Port",
+        "Firmware Upgrade Notice: Please upgrade to the latest firmware v1.14 to optimize the focusing performance"
+      ],
+      "lens_mount": "E-mount",
+      "lens_elements": "15/11",
+      "focal_length": "f=50mm",
+      "viewing_angle": "46.6°",
+      "aperture": "F1.4-F16",
+      "aperture_blades": "11",
+      "shooting_distance": "0.45m-∞",
+      "focus_mechanism": "internal focusing system",
+      "focus_motor": "VCM",
+      "focus_mode": "MF,AF",
+      "max_magnification": "0.145x",
+      "lens_size": "Φ84.5x111mm",
+      "weight": "≈800g(bare lens)",
+      "filter_size": "Φ77mm"
+    }
+  },
+  {
+    "sku": "AF-9MM-F28-AIR-FE",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 9mm F2.8 Air APS-C Lens for Sony E-Mount",
+    "marketing_name": "AF 9mm F2.8 Air APS-C Lens for Sony E-Mount",
+    "series": "Air",
+    "mount": "FE-mount",
+    "price_usd": 199.0,
+    "status": "official",
+    "description": "113.8° Ultra-Wide View (13.5mm Full-Frame Equivalent)",
+    "product_url": "https://viltrox.com/products/af-9mm-f2-8-e",
+    "source_url": "https://viltrox.com/products/af-9mm-f2-8-e",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 1.0,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "air",
+      "aps-c",
+      "e-mount",
+      "9mm",
+      "fe-mount",
+      "f=9mm (13.5mm)",
+      "f2.8-f16"
+    ],
+    "specs": {
+      "official_product_id": 7543749607490,
+      "official_handle": "af-9mm-f2-8-e",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "Air",
+        "APS-C",
+        "E-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 42449822580802,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 180,
+      "highlights": [
+        "113.8° Ultra-Wide View (13.5mm Full-Frame Equivalent)",
+        "Lightweight Pocket Design: ~175g",
+        "Bright F2.8 Aperture for Low-Light and Creative Shots",
+        "13/11 Optical Design with 2 Aspherical, 3 ED, 3 HR",
+        "0.13 m Minimum Focusing Distance",
+        "Fast, Accurate Autofocus",
+        "Sealed Lens Body with Durable Metal Mount",
+        "Standard 58mm Filter Thread, USB-C Firmware Upgrade"
+      ],
+      "lens_mount": "E-mount",
+      "lens_elements": "13/11",
+      "focal_length": "f=9mm (13.5mm)",
+      "viewing_angle": "113.8°",
+      "aperture": "F2.8-F16",
+      "aperture_blades": "7",
+      "shooting_distance": "0.13m-∞",
+      "focus_mechanism": "internal focus",
+      "focus_motor": "STM+Lead screw",
+      "focus_mode": "MF,AF",
+      "max_magnification": "0.15x",
+      "lens_size": "Φ65x56.4mm",
+      "weight": "≈175g(bare lens)",
+      "filter_size": "Φ58mm"
+    }
+  },
+  {
+    "sku": "AF-9MM-F28-AIR-Z",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 9mm F2.8 Air APS-C Lens for Nikon Z-Mount",
+    "marketing_name": "AF 9mm F2.8 Air APS-C Lens for Nikon Z-Mount",
+    "series": "Air",
+    "mount": "Z-mount",
+    "price_usd": 199.0,
+    "status": "official",
+    "description": "113.8° Ultra-Wide View (13.5mm Full-Frame Equivalent)",
+    "product_url": "https://viltrox.com/products/af-9mm-f2-8-z",
+    "source_url": "https://viltrox.com/products/af-9mm-f2-8-z",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 1.0,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "air",
+      "aps-c",
+      "z-mount",
+      "9mm",
+      "f=9mm (13.5mm)",
+      "f2.8-f16"
+    ],
+    "specs": {
+      "official_product_id": 7543795253314,
+      "official_handle": "af-9mm-f2-8-z",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "Air",
+        "APS-C",
+        "Z-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 42460784721986,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 195,
+      "highlights": [
+        "113.8° Ultra-Wide View (13.5mm Full-Frame Equivalent)",
+        "Lightweight Pocket Design: ~190g",
+        "Bright F2.8 Aperture for Low-Light and Creative Shots",
+        "13/11 Optical Design with 2 Aspherical, 3 ED, 3 HR",
+        "0.13 m Minimum Focusing Distance",
+        "Fast, Accurate Autofocus",
+        "Sealed Lens Body with Durable Metal Mount",
+        "Standard 58mm Filter Thread, USB-C Firmware Upgrade"
+      ],
+      "lens_mount": "Z-mount",
+      "lens_elements": "13/11",
+      "focal_length": "f=9mm (13.5mm)",
+      "viewing_angle": "113.8°",
+      "aperture": "F2.8-F16",
+      "aperture_blades": "7",
+      "shooting_distance": "0.13m-∞",
+      "focus_mechanism": "internal focus",
+      "focus_motor": "STM+Lead screw",
+      "focus_mode": "MF,AF",
+      "max_magnification": "0.15x",
+      "lens_size": "Φ65x58.4mm",
+      "weight": "≈190g(bare lens)",
+      "filter_size": "Φ58mm"
+    }
+  },
+  {
+    "sku": "AF-14MM-F40-AIR-FE",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 14mm F4.0 Air Full-Frame Lens for Sony E-mount",
+    "marketing_name": "AF 14mm F4.0 Air Full-Frame Lens for Sony E-mount",
+    "series": "Air",
+    "mount": "FE-mount",
+    "price_usd": 199.0,
+    "status": "official",
+    "description": "112.6° Field of View for Landscapes, Interiors & Group Shots",
+    "product_url": "https://viltrox.com/products/af-14mm-f4-0-fe",
+    "source_url": "https://viltrox.com/products/af-14mm-f4-0-fe",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 1.0,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "air",
+      "fe-mount",
+      "full frame",
+      "14mm",
+      "f=14mm",
+      "f4.0-f16"
+    ],
+    "specs": {
+      "official_product_id": 7543900373058,
+      "official_handle": "af-14mm-f4-0-fe",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "Air",
+        "FE-mount",
+        "Full Frame"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 42460751429698,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 170,
+      "highlights": [
+        "112.6° Field of View for Landscapes, Interiors & Group Shots",
+        "MOD at 0.13m for Creative Angles",
+        "12/9 Optical Design with 2 Aspherical, 4 ED & 2 HR Elements",
+        "Advanced Multi-Layer Coating Eye & Face AF for Fast, Silent Autofocus",
+        "Minimal Focus Breathing for Smooth Video",
+        "Compact & Lightweight Design — Only 170g",
+        "58mm Filter Thread, USB-C Firmware Upgrade Port"
+      ],
+      "lens_mount": "Z-mount",
+      "lens_elements": "12/9",
+      "focal_length": "f=14mm",
+      "viewing_angle": "112.6°",
+      "aperture": "F4.0-F16",
+      "aperture_blades": "7",
+      "shooting_distance": "0.13m-∞",
+      "focus_mechanism": "Internal focus",
+      "focus_motor": "STM+Lead screw",
+      "focus_mode": "MF,AF",
+      "max_magnification": "0.23x",
+      "lens_size": "Φ68x58.4mm",
+      "weight": "≈185g(bare lens)",
+      "filter_size": "Φ58mm"
+    }
+  },
+  {
+    "sku": "AF-56MM-F12-PRO-FE",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 56mm F1.2 Pro APS-C Lens for Sony E-Mount",
+    "marketing_name": "AF 56mm F1.2 Pro APS-C Lens for Sony E-Mount",
+    "series": "Pro",
+    "mount": "FE-mount",
+    "price_usd": 580.0,
+    "status": "official",
+    "description": "56mm APS-C Prime (85mm Full-Frame Equivalent)",
+    "product_url": "https://viltrox.com/products/af-56mm-f1-2-e",
+    "source_url": "https://viltrox.com/products/af-56mm-f1-2-e",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 1.0,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "aps-c",
+      "e-mount",
+      "pro",
+      "56mm",
+      "fe-mount",
+      "f=56mm (85mm)",
+      "f1.2-f16"
+    ],
+    "specs": {
+      "official_product_id": 7533323288642,
+      "official_handle": "af-56mm-f1-2-e",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "APS-C",
+        "E-mount",
+        "Pro"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 42428563554370,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 570,
+      "highlights": [
+        "56mm APS-C Prime (85mm Full-Frame Equivalent)",
+        "Ultra-Bright F1.2 Aperture for Portraits & Low-Light",
+        "Pro-Grade Optics: 13/8 Elements (1 UA, 1 ED, 3 HR)",
+        "Dual HyperVCM Motor for Fast, Silent Autofocus",
+        "0.5 m Minimum Focusing Distance",
+        "Durable Full-Metal, Weather-Sealed Body",
+        "67mm Standard Filter Thread",
+        "USB-C Firmware Upgrade Port"
+      ],
+      "lens_mount": "E-mount",
+      "lens_elements": "13/8",
+      "focal_length": "f=56mm (85mm)",
+      "viewing_angle": "28°",
+      "aperture": "F1.2-F16",
+      "aperture_blades": "11",
+      "shooting_distance": "0.5m-∞",
+      "focus_mechanism": "Ultralight internal focus",
+      "focus_motor": "VCM",
+      "focus_mode": "MF,AF",
+      "max_magnification": "0.13x",
+      "lens_size": "Φ78.4x91.7mm",
+      "weight": "≈570g(bare lens)",
+      "filter_size": "Φ67mm"
+    }
+  },
+  {
+    "sku": "AF-56MM-F12-PRO-X",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 56mm F1.2 Pro APS-C Lens for Fujifilm X-Mount",
+    "marketing_name": "AF 56mm F1.2 Pro APS-C Lens for Fujifilm X-Mount",
+    "series": "Pro",
+    "mount": "X-mount",
+    "price_usd": 580.0,
+    "status": "official",
+    "description": "56mm APS-C Prime (85mm Full-Frame Equivalent)",
+    "product_url": "https://viltrox.com/products/af-56mm-f1-2-xf",
+    "source_url": "https://viltrox.com/products/af-56mm-f1-2-xf",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 1.0,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "aps-c",
+      "pro",
+      "x-mount",
+      "56mm",
+      "f=56mm (85mm)",
+      "f1.2-f16"
+    ],
+    "specs": {
+      "official_product_id": 7533323616322,
+      "official_handle": "af-56mm-f1-2-xf",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "APS-C",
+        "Pro",
+        "X-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 42405940232258,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 575,
+      "highlights": [
+        "56mm APS-C Prime (85mm Full-Frame Equivalent)",
+        "Ultra-Bright F1.2 Aperture for Portraits & Low-Light",
+        "Pro-Grade Optics: 13/8 Elements (1 UA, 1 ED, 3 HR)",
+        "Dual HyperVCM Motor for Fast, Silent Autofocus",
+        "0.5 m Minimum Focusing Distance",
+        "Durable Full-Metal, Weather-Sealed Body",
+        "67mm Standard Filter Thread",
+        "USB-C Firmware Upgrade Port"
+      ],
+      "lens_mount": "X-mount",
+      "lens_elements": "13/8",
+      "focal_length": "f=56mm (85mm)",
+      "viewing_angle": "28°",
+      "aperture": "F1.2-F16",
+      "aperture_blades": "11",
+      "shooting_distance": "0.5m-∞",
+      "focus_mechanism": "Ultralight internal focus",
+      "focus_motor": "VCM",
+      "focus_mode": "MF,AF",
+      "max_magnification": "0.13x",
+      "lens_size": "Φ78.4x92mm",
+      "weight": "≈575g(bare lens)",
+      "filter_size": "Φ67mm"
+    }
+  },
+  {
+    "sku": "AF-90MM-F3-5-DL-MOUNT-CINE-L",
+    "category_main": "Lens",
+    "category_detail": "Cine Lenses",
+    "model_name": "Viltrox AF 90mm F3.5 Full-Frame Lens DL Mount for DJI",
+    "marketing_name": "AF 90mm F3.5 Full-Frame Lens DL Mount for DJI",
+    "series": "Cine",
+    "mount": "L-mount",
+    "price_usd": 499.0,
+    "status": "official",
+    "description": "90mm View with Cinematic Compression Native DL Mount, Compatible with Ronin 4D, DJI Inspire 2/Inspire 3/Zenmuse X7 12/9 Optical Structure for 8K Aerial Clarity Ultra-Lightweight 170g Payload Design F3.5 Aperture for High Dynamic Range Precision Aluminum Alloy Mount Type-C Firmware Upgrade Port Dustproof Rubber Seal Front Lens with Water-Repellent and Anti-Fouling Coating",
+    "product_url": "https://viltrox.com/products/af-90mm-f3-5-dl",
+    "source_url": "https://viltrox.com/products/af-90mm-f3-5-dl",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 1.0,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "cine lens",
+      "dl-mount",
+      "90mm",
+      "l-mount",
+      "cine",
+      "f3.5-f16"
+    ],
+    "specs": {
+      "official_product_id": 7514829094978,
+      "official_handle": "af-90mm-f3-5-dl",
+      "official_product_type": "Cine Lenses",
+      "official_tags": [
+        "Cine Lens",
+        "DL-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 42317929349186,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 170,
+      "highlights": [
+        "90mm View with Cinematic Compression Native DL Mount, Compatible with Ronin 4D, DJI Inspire 2/Inspire 3/Zenmuse X7 12/9 Optical Structure for 8K Aerial Clarity Ultra-Lightweight 170g Payload Design F3.5 Aperture for High Dynamic Range Precision Aluminum Alloy Mount Type-C Firmware Upgrade Port Dustproof Rubber Seal Front Lens with Water-Repellent and Anti-Fouling Coating"
+      ],
+      "lens_mount": "DL-mount",
+      "lens_elements": "12/9",
+      "focal_length": "90mm",
+      "viewing_angle": "28°",
+      "aperture": "F3.5-F16",
+      "aperture_blades": "9",
+      "shooting_distance": "0.8m-∞",
+      "focus_mechanism": "internal focus",
+      "focus_motor": "STM+Lead screw",
+      "focus_mode": "MF,AF",
+      "max_magnification": "0.114x",
+      "lens_size": "Φ65x63mm",
+      "weight": "≈170g(bare lens)",
+      "filter_size": "Φ52mm"
+    }
+  },
+  {
+    "sku": "AF-85MM-F14-PRO-FE",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 85mm F1.4 Pro Full-Frame Lens for Sony E-Mount",
+    "marketing_name": "AF 85mm F1.4 Pro Full-Frame Lens for Sony E-Mount",
+    "series": "Pro",
+    "mount": "FE-mount",
+    "price_usd": 598.0,
+    "status": "official",
+    "description": "Ultra-Large F1.4 Aperture for Dreamy bokeh and Low-Light Mastery",
+    "product_url": "https://viltrox.com/products/af-85mm-f1-4-fe",
+    "source_url": "https://viltrox.com/products/af-85mm-f1-4-fe",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "e-mount",
+      "fe-mount",
+      "full frame",
+      "pro",
+      "85mm"
+    ],
+    "specs": {
+      "official_product_id": 7486531928130,
+      "official_handle": "af-85mm-f1-4-fe",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "E-mount",
+        "FE-mount",
+        "Full Frame",
+        "Pro"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 42180863623234,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 800,
+      "highlights": [
+        "Ultra-Large F1.4 Aperture for Dreamy bokeh and Low-Light Mastery",
+        "Pro-Level Optics: 15/11 Elements (3 ED, 9 HR, and 1 UA)",
+        "Patented Fast Viltrox HyperVCM Autofocus for Photos and Videos",
+        "Classic Portrait Perspective with Sharpness and Natural Compression",
+        "Robust, All-Weather-Sealed Build",
+        "Professional Physical Controls for Efficient Operation"
+      ]
+    }
+  },
+  {
+    "sku": "EPIC-MEMENTO-25MM-35MM-50MM-65MM-75MM-100MM-135MM-1-33X-PL-ANAMORPHIC-CINE-SET-L",
+    "category_main": "Lens",
+    "category_detail": "Cine Lenses",
+    "model_name": "Viltrox EPIC Memento 25mm/35mm/50mm/65mm/75mm/100mm/135mm 1.33X PL Full-Frame Anamorphic Cine Lens Set",
+    "marketing_name": "EPIC Memento 25mm/35mm/50mm/65mm/75mm/100mm/135mm 1.33X PL Full-Frame Anamorphic Cine Lens Set",
+    "series": "Cine",
+    "mount": "L-mount",
+    "price_usd": 25800.0,
+    "status": "official",
+    "description": "· Silver Flares, Futuristic Look Striking silver flare delivers a clean, modern aesthetic with industrial-grade light character",
+    "product_url": "https://viltrox.com/products/epic-memento-1-33x-pl-set",
+    "source_url": "https://viltrox.com/products/epic-memento-1-33x-pl-set",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "pl-mount",
+      "25mm",
+      "35mm",
+      "50mm",
+      "65mm",
+      "75mm",
+      "100mm",
+      "135mm",
+      "l-mount",
+      "cine"
+    ],
+    "specs": {
+      "official_product_id": 7492402282562,
+      "official_handle": "epic-memento-1-33x-pl-set",
+      "official_product_type": "Cine Lenses",
+      "official_tags": [
+        "PL-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Model",
+          "position": 1,
+          "values": [
+            "Silver Flares"
+          ]
+        }
+      ],
+      "official_variant_id": 42949003575362,
+      "variant_title": "Silver Flares",
+      "variant_weight_grams": 11500,
+      "highlights": [
+        "· Silver Flares, Futuristic Look Striking silver flare delivers a clean, modern aesthetic with industrial-grade light character",
+        "· Wide Aperture, Creative Control T2.0 across most lenses; 65mm (T2.8) and 135mm (T2.4) tailored for macro and telephoto expression",
+        "· Retro Pure Color Reproduction Soft yet vivid, it renders skin tones with organic warmth and achieves refined, cinematic color accuracy",
+        "· Unified Design, Seamless Workflow Consistent color tone and matched gear positions ensure smooth lens swaps and effortless post",
+        "· 1.33X Squeeze, True Proportions Constant compression across all focal lengths preserves cinematic ratio and natural facial shape",
+        "· Min Focus Breathing, Stable Framing Minimized angle-of-view shifts during focus pulls enable precise control in dynamic scenes"
+      ]
+    }
+  },
+  {
+    "sku": "EPIC-25MM-35MM-50MM-65MM-75MM-100MM-135MM-1-33X-PL-ANAMORPHIC-CINE-SET-L",
+    "category_main": "Lens",
+    "category_detail": "Cine Lenses",
+    "model_name": "Viltrox EPIC 25mm/35mm/50mm/65mm/75mm/100mm/135mm 1.33X PL Full-Frame Anamorphic Cine Lens Set",
+    "marketing_name": "EPIC 25mm/35mm/50mm/65mm/75mm/100mm/135mm 1.33X PL Full-Frame Anamorphic Cine Lens Set",
+    "series": "Cine",
+    "mount": "L-mount",
+    "price_usd": 25800.0,
+    "status": "official",
+    "description": "· Blue Flares, Cinematic Character Signature blue flare add a classic anamorphic look—visually striking yet always controlled",
+    "product_url": "https://viltrox.com/products/epic-1-33x-pl-set",
+    "source_url": "https://viltrox.com/products/epic-1-33x-pl-set",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "pl-mount",
+      "25mm",
+      "35mm",
+      "50mm",
+      "65mm",
+      "75mm",
+      "100mm",
+      "135mm",
+      "l-mount",
+      "cine"
+    ],
+    "specs": {
+      "official_product_id": 7493145985090,
+      "official_handle": "epic-1-33x-pl-set",
+      "official_product_type": "Cine Lenses",
+      "official_tags": [
+        "PL-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Model",
+          "position": 1,
+          "values": [
+            "Blue Flares"
+          ]
+        }
+      ],
+      "official_variant_id": 42949003247682,
+      "variant_title": "Blue Flares",
+      "variant_weight_grams": 0,
+      "highlights": [
+        "· Blue Flares, Cinematic Character Signature blue flare add a classic anamorphic look—visually striking yet always controlled",
+        "· Wide Aperture, Creative Control T2.0 across most lenses; 65mm (T2.8) and 135mm (T2.4) tailored for macro and telephoto expression",
+        "· Retro Pure Color Reproduction Soft yet vivid, it renders skin tones with organic warmth and achieves refined, cinematic color accuracy",
+        "· Unified Design, Seamless Workflow Consistent color tone and matched gear positions ensure smooth lens swaps and effortless post",
+        "· 1.33X Squeeze, True Proportions Constant compression across all focal lengths preserves cinematic ratio and natural facial shape",
+        "· Min Focus Breathing, Stable Framing Minimized angle-of-view shifts during focus pulls enable precise control in dynamic scenes"
+      ]
+    }
+  },
+  {
+    "sku": "EPIC-MAESTRO-25MM-35MM-50MM-65MM-75MM-100MM-135MM-1-33X-PL-ANAMORPHIC-CINE-SET-L",
+    "category_main": "Lens",
+    "category_detail": "Cine Lenses",
+    "model_name": "Viltrox EPIC Maestro 25mm/35mm/50mm/65mm/75mm/100mm/135mm 1.33X PL Full-Frame Anamorphic Cine Lens Set",
+    "marketing_name": "EPIC Maestro 25mm/35mm/50mm/65mm/75mm/100mm/135mm 1.33X PL Full-Frame Anamorphic Cine Lens Set",
+    "series": "Cine",
+    "mount": "L-mount",
+    "price_usd": 25800.0,
+    "status": "official",
+    "description": "· No Flares, Pure Vision Eliminates distracting flare for clean, focused imagery—ideal for VFX-heavy or high-contrast scenes",
+    "product_url": "https://viltrox.com/products/epic-maestro-1-33x-pl-set",
+    "source_url": "https://viltrox.com/products/epic-maestro-1-33x-pl-set",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "pl-mount",
+      "25mm",
+      "35mm",
+      "50mm",
+      "65mm",
+      "75mm",
+      "100mm",
+      "135mm",
+      "l-mount",
+      "cine"
+    ],
+    "specs": {
+      "official_product_id": 7492404150338,
+      "official_handle": "epic-maestro-1-33x-pl-set",
+      "official_product_type": "Cine Lenses",
+      "official_tags": [
+        "PL-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Model",
+          "position": 1,
+          "values": [
+            "No Flares"
+          ]
+        }
+      ],
+      "official_variant_id": 42949003542594,
+      "variant_title": "No Flares",
+      "variant_weight_grams": 0,
+      "highlights": [
+        "· No Flares, Pure Vision Eliminates distracting flare for clean, focused imagery—ideal for VFX-heavy or high-contrast scenes",
+        "· Timeless Texture, Modern Clarity Advanced coatings balance sharpness and a film-like grain structure for rich cinematic atmosphere",
+        "· Wide Aperture, Creative Control T2.0 across most lenses; 65mm (T2.8) and 135mm (T2.4) tailored for macro and telephoto expression",
+        "· Unified Design, Seamless Workflow Consistent color tone and matched gear positions ensure smooth lens swaps and effortless post",
+        "· 1.33X Squeeze, True Proportions Constant compression across all focal lengths preserves cinematic ratio and natural facial shape",
+        "· Min Breathing, Stable Framing Minimized angle-of-view shifts during focus pulls enable precise control in dynamic scenes"
+      ]
+    }
+  },
+  {
+    "sku": "EPIC-135MM-T2-4-1-33X-PL-ANAMORPHIC-CINE-L",
+    "category_main": "Lens",
+    "category_detail": "Cine Lenses",
+    "model_name": "Viltrox EPIC 135mm T2.4 1.33X PL Full-Frame Anamorphic Cine Lens",
+    "marketing_name": "EPIC 135mm T2.4 1.33X PL Full-Frame Anamorphic Cine Lens",
+    "series": "Cine",
+    "mount": "L-mount",
+    "price_usd": 4299.0,
+    "status": "official",
+    "description": "· Cinematic Compression, Bold Subject Isolation 135mm telephoto delivers dramatic spatial compression, separating subjects with striking visual depth",
+    "product_url": "https://viltrox.com/products/epic-135mm-t2-4-1-33x-pl",
+    "source_url": "https://viltrox.com/products/epic-135mm-t2-4-1-33x-pl",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "pl-mount",
+      "135mm",
+      "l-mount",
+      "cine"
+    ],
+    "specs": {
+      "official_product_id": 7492398022722,
+      "official_handle": "epic-135mm-t2-4-1-33x-pl",
+      "official_product_type": "Cine Lenses",
+      "official_tags": [
+        "PL-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Model",
+          "position": 1,
+          "values": [
+            "EPIC 135mm T2.4 1.33X PL (Blue Flare)",
+            "EPIC Memento 135mm T2.4 1.33X PL (Silver Flare)",
+            "EPIC Maestro 135mm T2.4 1.33X PL (No Flare)"
+          ]
+        }
+      ],
+      "official_variant_id": 42202884112450,
+      "variant_title": "EPIC 135mm T2.4 1.33X PL (Blue Flare)",
+      "variant_weight_grams": 11500,
+      "highlights": [
+        "· Cinematic Compression, Bold Subject Isolation 135mm telephoto delivers dramatic spatial compression, separating subjects with striking visual depth",
+        "· T2.4 Aperture, Artful Control Balances light intake and detail precision, offering rich bokeh without sacrificing clarity",
+        "· 1.33X Constant Squeeze, True-to-Life Proportions Maintains consistent image ratio from near to far, avoiding facial distortion common in anamorphic shots",
+        "· Retro Pure Color Reproduction Soft yet vivid, it renders skin tones with organic warmth and achieves refined, cinematic color accuracy",
+        "· Three Flare Styles, Signature Expression Choose from Clean, Silver, or Blue flares to match your visual tone—from modern minimalism to classic cinema",
+        "· Seamless System Integration Unified gear and color design across the EPIC series ensures effortless lens swaps and post-production grading"
+      ]
+    }
+  },
+  {
+    "sku": "EPIC-65MM-T2-8-MACRO-1-33X-PL-ANAMORPHIC-CINE-L",
+    "category_main": "Lens",
+    "category_detail": "Cine Lenses",
+    "model_name": "Viltrox EPIC 65mm T2.8 Macro 1.33X PL Full-Frame Anamorphic Cine Lens",
+    "marketing_name": "EPIC 65mm T2.8 Macro 1.33X PL Full-Frame Anamorphic Cine Lens",
+    "series": "Cine",
+    "mount": "L-mount",
+    "price_usd": 4299.0,
+    "status": "official",
+    "description": "T2.8 constant aperture",
+    "product_url": "https://viltrox.com/products/epic-65mm-t2-8-1-33x-pl",
+    "source_url": "https://viltrox.com/products/epic-65mm-t2-8-1-33x-pl",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "pl-mount",
+      "65mm",
+      "l-mount",
+      "cine"
+    ],
+    "specs": {
+      "official_product_id": 7492373839938,
+      "official_handle": "epic-65mm-t2-8-1-33x-pl",
+      "official_product_type": "Cine Lenses",
+      "official_tags": [
+        "PL-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Model",
+          "position": 1,
+          "values": [
+            "EPIC (Blue Flare)",
+            "EPIC Memento(Silver Flare)",
+            "EPIC Maestro(No Flare)"
+          ]
+        }
+      ],
+      "official_variant_id": 42202885521474,
+      "variant_title": "EPIC (Blue Flare)",
+      "variant_weight_grams": 0,
+      "highlights": [
+        "T2.8 constant aperture",
+        "1.33X Constant Squeeze Ratio: Ensures consistent image distortion from far to near",
+        "Beautiful bokeh and oval light spots are vividly rendered",
+        "Front end compatible with 95mm matte box",
+        "Color Saturation: Retro pure color restoration",
+        "Consistent Optical Performance: Uniform character and gear position design"
+      ]
+    }
+  },
+  {
+    "sku": "AF-28MM-F4-5-Z",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 28mm F4.5 Full-Frame Lens for Nikon Z-Mount",
+    "marketing_name": "AF 28mm F4.5 Full-Frame Lens for Nikon Z-Mount",
+    "series": "",
+    "mount": "Z-mount",
+    "price_usd": 99.0,
+    "status": "official",
+    "description": "Pocket-Sized Power The lightest full-frame Z-mount lens from Viltrox—only 80g",
+    "product_url": "https://viltrox.com/products/af-28mm-f4-5-z",
+    "source_url": "https://viltrox.com/products/af-28mm-f4-5-z",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "full frame",
+      "z-mount",
+      "28mm"
+    ],
+    "specs": {
+      "official_product_id": 7482709540930,
+      "official_handle": "af-28mm-f4-5-z",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "Full Frame",
+        "Z-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 42161141448770,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 60,
+      "highlights": [
+        "Pocket-Sized Power The lightest full-frame Z-mount lens from Viltrox—only 80g",
+        "Slip it on, shoot anywhere, no burden",
+        "Slide to Snap, Cap to Close A playful slide-to-open design transforms your lens cap into a real lens",
+        "Click, shoot, and seal it shut in one move",
+        "Autofocus That Keeps Up Fast, quiet, and precise autofocus in a form this compact",
+        "No more manual fuss, just point and capture",
+        "Sweet Spot for Street Photography The 28mm focal length delivers dynamic depth and storytelling power—ideal for travel and street shots",
+        "Sharp Optics, Artistic Touch 6-element design with 2 ED and 2 aspherical lenses ensures clarity and contrast",
+        "Plus, enjoy dazzling starbursts when shooting against backlight"
+      ]
+    }
+  },
+  {
+    "sku": "AF-35MM-F12-LAB-FE",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 35mm F1.2 LAB Full-Frame Lens for Sony E-Mount",
+    "marketing_name": "AF 35mm F1.2 LAB Full-Frame Lens for Sony E-Mount",
+    "series": "LAB",
+    "mount": "FE-mount",
+    "price_usd": 999.0,
+    "status": "official",
+    "description": "EU /US Orders Shipping Notice(Non-Display Version Only): Orders will be shipped from US/EU warehouses in approximately 14 days",
+    "product_url": "https://viltrox.com/products/af-35mm-f1-2-fe",
+    "source_url": "https://viltrox.com/products/af-35mm-f1-2-fe",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 1.0,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "e-mount",
+      "fe-mount",
+      "full frame",
+      "lab",
+      "35mm",
+      "f1.2-f16"
+    ],
+    "specs": {
+      "official_product_id": 7464930017346,
+      "official_handle": "af-35mm-f1-2-fe",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "E-mount",
+        "FE-mount",
+        "Full Frame",
+        "LAB"
+      ],
+      "official_options": [
+        {
+          "name": "Model",
+          "position": 1,
+          "values": [
+            "AF 35mm F1.2 LAB FE",
+            "AF 35mm F1.2 LAB N FE (Non-Display)"
+          ]
+        }
+      ],
+      "official_variant_id": 43671923195970,
+      "variant_title": "AF 35mm F1.2 LAB FE",
+      "variant_weight_grams": 910,
+      "highlights": [
+        "EU /US Orders Shipping Notice(Non-Display Version Only): Orders will be shipped from US/EU warehouses in approximately 14 days",
+        "Full-Frame 35mm Prime Engineered for Ultimate Image Quality",
+        "Large F1.2 Aperture for Dreamy Bokeh and Low-Light Clarity",
+        "Precision Optics: 15/10 Elements (5 ED, 3 HR &amp; 2 UA)",
+        "Fast, Accurate HyperVCM Autofocus for Photo and Video",
+        "0.34m Minimum Focusing Distance for Close-Up Detail",
+        "All-Metal Weather-Sealed Durable Build",
+        "Comprehensive Control Button and Integrated LED Lens Display"
+      ],
+      "lens_mount": "E-mount",
+      "lens_elements": "15/10",
+      "focal_length": "35mm",
+      "viewing_angle": "64.2°",
+      "aperture": "F1.2-F16",
+      "aperture_blades": "11",
+      "shooting_distance": "0.34m-∞",
+      "focus_mechanism": "Dual floating internal focusing system",
+      "focus_motor": "Viltrox HyperVCM",
+      "focus_mode": "MF,AF",
+      "max_magnification": "0.17x",
+      "lens_size": "Φ89.2x121.8mm",
+      "filter_size": "Φ77mm"
+    }
+  },
+  {
+    "sku": "AF-50MM-F20-AIR-FE",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 50mm F2.0 Air Full-Frame Lens for Sony E-Mount",
+    "marketing_name": "AF 50mm F2.0 Air Full-Frame Lens for Sony E-Mount",
+    "series": "Air",
+    "mount": "FE-mount",
+    "price_usd": 199.0,
+    "status": "official",
+    "description": "Ultra-Light Build : Only 205g , exceptionally compact design for effortless portability",
+    "product_url": "https://viltrox.com/products/af-50mm-f2-fe",
+    "source_url": "https://viltrox.com/products/af-50mm-f2-fe",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "air",
+      "e-mount",
+      "full frame",
+      "50mm",
+      "fe-mount"
+    ],
+    "specs": {
+      "official_product_id": 7457559740482,
+      "official_handle": "af-50mm-f2-fe",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "Air",
+        "E-mount",
+        "Full Frame"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 42065665458242,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 205,
+      "highlights": [
+        "Ultra-Light Build : Only 205g , exceptionally compact design for effortless portability",
+        "Versatile 50mm Focal Length : A true all-rounder—ideal for portraits, street shots, landscapes, and daily moments",
+        "A must-have for any level of photographer",
+        "Exceptional Optical Design : 3 ED lenses, 4 high-refractive elements, and 1 aspherical element with HD nano-coating for vivid, distortion-free images",
+        "F2.0 Aperture with Edge-to-Edge Sharpness: It creates stunning bokeh and excels in low-light conditions",
+        "Consistent high resolution from center to corners",
+        "Reliable Autofocus: Silent STM motor with eye/face detection ensures fast, precise focusing",
+        "Reliable for Video : Lightweight with minimal focus breathing—great for handheld shooting and vlogging"
+      ]
+    }
+  },
+  {
+    "sku": "AF-50MM-F20-AIR-Z",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 50mm F2.0 Air Full-Frame Lens for Nikon Z-Mount",
+    "marketing_name": "AF 50mm F2.0 Air Full-Frame Lens for Nikon Z-Mount",
+    "series": "Air",
+    "mount": "Z-mount",
+    "price_usd": 199.0,
+    "status": "official",
+    "description": "Ultra-Light Build : Only 220g , exceptionally compact design for effortless portability",
+    "product_url": "https://viltrox.com/products/af-50mm-f2-z",
+    "source_url": "https://viltrox.com/products/af-50mm-f2-z",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "air",
+      "full frame",
+      "z-mount",
+      "50mm"
+    ],
+    "specs": {
+      "official_product_id": 7457609809986,
+      "official_handle": "af-50mm-f2-z",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "Air",
+        "Full Frame",
+        "Z-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 42065813635138,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 220,
+      "highlights": [
+        "Ultra-Light Build : Only 220g , exceptionally compact design for effortless portability",
+        "Versatile 50mm Focal Length : A true all-rounder—ideal for portraits, street shots, landscapes, and daily moments",
+        "A must-have for any level of photographer",
+        "Exceptional Optical Design : 3 ED lenses, 4 high-refractive elements, and 1 aspherical element with HD nano-coating for vivid, distortion-free images",
+        "F2.0 Aperture with Edge-to-Edge Sharpness: It creates stunning bokeh and excels in low-light conditions",
+        "Consistent high resolution from center to corners",
+        "Reliable Autofocus: Silent STM motor with eye/face detection ensures fast, precise focusing",
+        "Reliable for Video : Lightweight with minimal focus breathing—great for handheld shooting and vlogging"
+      ]
+    }
+  },
+  {
+    "sku": "AF-135MM-F18-LAB-Z",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 135mm F1.8 LAB Full-Frame Lens for Nikon Z-mount",
+    "marketing_name": "AF 135mm F1.8 LAB Full-Frame Lens for Nikon Z-mount",
+    "series": "LAB",
+    "mount": "Z-mount",
+    "price_usd": 899.0,
+    "status": "official",
+    "description": "Outstanding Resolution Maintains sharpness from center to edges across the focal range, capturing fine textures even at maximum aperture",
+    "product_url": "https://viltrox.com/products/af-135mm-f1-8-lab-z",
+    "source_url": "https://viltrox.com/products/af-135mm-f1-8-lab-z",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "full frame",
+      "lab",
+      "z-mount",
+      "135mm"
+    ],
+    "specs": {
+      "official_product_id": 7451473346626,
+      "official_handle": "af-135mm-f1-8-lab-z",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "Full Frame",
+        "LAB",
+        "Z-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 42042507952194,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 1346,
+      "highlights": [
+        "Outstanding Resolution Maintains sharpness from center to edges across the focal range, capturing fine textures even at maximum aperture",
+        "Efficient Autofocus Equipped with a patented HyperVCM motor for fast, precise, and quiet autofocus perfect for capturing fleeting moments",
+        "F1.8 Aperture & Dreamy Bokeh The 11-blade aperture creates soft, beautiful background bokeh, with excellent low-light clarity",
+        "Professional Control Features Includes a focus limiter, dual customizable Fn buttons, and multi-function ring for flexible adjustments",
+        "Rugged and Durable Design Multi-coated front element resists dust, splashes, stains, and water, built to perform in any environmental conditions"
+      ]
+    }
+  },
+  {
+    "sku": "RAZE-AF-SET-DL-MOUNT-CINE-L",
+    "category_main": "Lens",
+    "category_detail": "Cine Lenses",
+    "model_name": "Viltrox Raze AF Full-Frame Lens Set DL Mount For Ronin 4D",
+    "marketing_name": "Raze AF Full-Frame Lens Set DL Mount For Ronin 4D",
+    "series": "Cine",
+    "mount": "L-mount",
+    "price_usd": 3699.0,
+    "status": "official",
+    "description": "Viltrox Raze lens set, crafted for the Ronin 4D camera system, features DL mount full-frame F1.8 large aperture autofocus lenses, covering focal lengths of 16/24/28/35/50/85mm",
+    "product_url": "https://viltrox.com/products/af-full-frame-lens-set-dl-mount-for-ronin-4d",
+    "source_url": "https://viltrox.com/products/af-full-frame-lens-set-dl-mount-for-ronin-4d",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "cine lens",
+      "dl-mount",
+      "l-mount",
+      "cine"
+    ],
+    "specs": {
+      "official_product_id": 7450740326466,
+      "official_handle": "af-full-frame-lens-set-dl-mount-for-ronin-4d",
+      "official_product_type": "Cine Lenses",
+      "official_tags": [
+        "Cine Lens",
+        "DL-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 42039250812994,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 0,
+      "highlights": [
+        "Viltrox Raze lens set, crafted for the Ronin 4D camera system, features DL mount full-frame F1.8 large aperture autofocus lenses, covering focal lengths of 16/24/28/35/50/85mm",
+        "The lightweight and compact lens design simplifies complexity while showcasing sharp precision",
+        "It seamlessly adapts to DJI's professional-grade filmmaking system, the Ronin 4D, and integrates perfectly with the DL mount ecosystem, capturing dynamic shots with swift and precise motion"
+      ]
+    }
+  },
+  {
+    "sku": "AF-25MM-F17-AIR-Z",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 25mm F1.7 Air APS-C Lens for Nikon Z-Mount",
+    "marketing_name": "AF 25mm F1.7 Air APS-C Lens for Nikon Z-Mount",
+    "series": "Air",
+    "mount": "Z-mount",
+    "price_usd": 176.0,
+    "status": "official",
+    "description": "F1.7 Large Aperture : Delivers dreamy bokeh and excels in low-light conditions",
+    "product_url": "https://viltrox.com/products/af-25mm-f1-7-z",
+    "source_url": "https://viltrox.com/products/af-25mm-f1-7-z",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "air",
+      "aps-c",
+      "z-mount",
+      "25mm"
+    ],
+    "specs": {
+      "official_product_id": 7440430727234,
+      "official_handle": "af-25mm-f1-7-z",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "Air",
+        "APS-C",
+        "Z-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 42015932022850,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 0,
+      "highlights": [
+        "F1.7 Large Aperture : Delivers dreamy bokeh and excels in low-light conditions",
+        "Lightweight Design : Compact and portable at just 180g, perfect for on-the-go shooting",
+        "APS-C Compatibility : Optimized for APS-C cameras, 38mm equivalent focal length for full-frame camera",
+        "Reliable Autofocus : Silent STM motor with eye and face detection for fast, accurate focusing",
+        "High-Quality Optics : 1 ED, 2 aspherical and 2 high-refractive lenses and nano-coat ensure sharp, vibrant, and true-to-life images"
+      ]
+    }
+  },
+  {
+    "sku": "AF-25MM-F17-AIR-FE",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 25mm F1.7 Air APS-C Lens for Sony E-Mount",
+    "marketing_name": "AF 25mm F1.7 Air APS-C Lens for Sony E-Mount",
+    "series": "Air",
+    "mount": "FE-mount",
+    "price_usd": 176.0,
+    "status": "official",
+    "description": "F1.7 Large Aperture : Delivers dreamy bokeh and excels in low-light conditions",
+    "product_url": "https://viltrox.com/products/af-25mm-f1-7-e",
+    "source_url": "https://viltrox.com/products/af-25mm-f1-7-e",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "air",
+      "aps-c",
+      "e-mount",
+      "25mm",
+      "fe-mount"
+    ],
+    "specs": {
+      "official_product_id": 7440431382594,
+      "official_handle": "af-25mm-f1-7-e",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "Air",
+        "APS-C",
+        "E-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 42015922487362,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 0,
+      "highlights": [
+        "F1.7 Large Aperture : Delivers dreamy bokeh and excels in low-light conditions",
+        "Lightweight Design : Compact and portable at just 170g, perfect for on-the-go shooting",
+        "APS-C Compatibility : Optimized for APS-C cameras with a versatile 38mm equivalent focal length",
+        "Reliable Autofocus : Silent STM motor with eye and face detection for fast, accurate focusing",
+        "High-Quality Optics : ED and nano-coated lenses ensure sharp, vibrant, and true-to-life images"
+      ]
+    }
+  },
+  {
+    "sku": "AF-25MM-F17-AIR-X",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 25mm F1.7 Air APS-C Lens for Fujifilm X-Mount",
+    "marketing_name": "AF 25mm F1.7 Air APS-C Lens for Fujifilm X-Mount",
+    "series": "Air",
+    "mount": "X-mount",
+    "price_usd": 176.0,
+    "status": "official",
+    "description": "F1.7 Large Aperture : Delivers dreamy bokeh and excels in low-light conditions",
+    "product_url": "https://viltrox.com/products/af-25mm-f1-7-x",
+    "source_url": "https://viltrox.com/products/af-25mm-f1-7-x",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "air",
+      "aps-c",
+      "x-mount",
+      "25mm"
+    ],
+    "specs": {
+      "official_product_id": 7440431710274,
+      "official_handle": "af-25mm-f1-7-x",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "Air",
+        "APS-C",
+        "X-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 41997708329026,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 170,
+      "highlights": [
+        "F1.7 Large Aperture : Delivers dreamy bokeh and excels in low-light conditions",
+        "Lightweight Design : Compact and portable at just 170g, perfect for on-the-go shooting",
+        "APS-C Compatibility : Optimized for APS-C cameras with a versatile 38mm equivalent focal length",
+        "Reliable Autofocus : Silent STM motor with eye and face detection for fast, accurate focusing",
+        "High-Quality Optics : ED and nano-coated lenses ensure sharp, vibrant, and true-to-life images"
+      ]
+    }
+  },
+  {
+    "sku": "AF-28MM-F4-5-X",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 28mm F4.5 Lens for Fujifilm X-Mount",
+    "marketing_name": "AF 28mm F4.5 Lens for Fujifilm X-Mount",
+    "series": "",
+    "mount": "X-mount",
+    "price_usd": 99.0,
+    "status": "official",
+    "description": "Ultra-Light and Slim: Weighing just 60g and only 15.25mm thick, this AF 28mm f/4.5 XF lens is designed for effortless, on-the-go shooting with your Fujifilm X-series",
+    "product_url": "https://viltrox.com/products/af-28mm-f4-5-x",
+    "source_url": "https://viltrox.com/products/af-28mm-f4-5-x",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "x-mount",
+      "28mm"
+    ],
+    "specs": {
+      "official_product_id": 7430059622466,
+      "official_handle": "af-28mm-f4-5-x",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "X-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 41977720111170,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 60,
+      "highlights": [
+        "Ultra-Light and Slim: Weighing just 60g and only 15.25mm thick, this AF 28mm f/4.5 XF lens is designed for effortless, on-the-go shooting with your Fujifilm X-series",
+        "Efficient Autofocus: Its compact build paired with precise autofocus delivers quick, reliable performance—perfect for capturing spontaneous moments",
+        "Full-Frame Optics, APS‑C Perspective: Engineered with full-frame optics, it transforms to an effective 42mm lens with 52.07°on Fujifilm’s APS‑C sensors, offering a classic, natural perspective",
+        "Innovative Slide Cap Design: A clever slide lever converts the cap into a protective cover, shielding your lens from dust and dirt while adding a touch of fun",
+        "Exceptional Image Quality: Featuring 6 elements in 6 groups with 2 ED and 2 aspherical lenses, it delivers sharp, vibrant images with stunning starburst effects that bring your Fujifilm photography to life"
+      ]
+    }
+  },
+  {
+    "sku": "AF-35MM-F17-AIR-FE",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 35mm F1.7 Air APS-C Lens for Sony E-Mount",
+    "marketing_name": "AF 35mm F1.7 Air APS-C Lens for Sony E-Mount",
+    "series": "Air",
+    "mount": "FE-mount",
+    "price_usd": 179.0,
+    "status": "official",
+    "description": "F1.7 Large Aperture : Delivers dreamy bokeh and excels in low-light conditions",
+    "product_url": "https://viltrox.com/products/viltrox-af-35mm-f1-7-aps-c-lens-for-sony-e-mount",
+    "source_url": "https://viltrox.com/products/viltrox-af-35mm-f1-7-aps-c-lens-for-sony-e-mount",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "air",
+      "aps-c",
+      "e-mount",
+      "35mm",
+      "fe-mount"
+    ],
+    "specs": {
+      "official_product_id": 7393991852098,
+      "official_handle": "viltrox-af-35mm-f1-7-aps-c-lens-for-sony-e-mount",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "Air",
+        "APS-C",
+        "E-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 41849189761090,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 0,
+      "highlights": [
+        "F1.7 Large Aperture : Delivers dreamy bokeh and excels in low-light conditions",
+        "Lightweight Design : Compact and portable at just 170g, perfect for on-the-go shooting",
+        "APS-C Compatibility : Optimized for APS-C cameras with a versatile 53mm equivalent focal length",
+        "Reliable Autofocus : Silent STM motor with eye and face detection for fast, accurate focusing",
+        "High-Quality Optics : ED and nano-coated lenses ensure sharp, vibrant, and true-to-life images"
+      ]
+    }
+  },
+  {
+    "sku": "AF-35MM-F17-AIR-Z",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 35mm F1.7 Air APS-C Lens for Nikon Z-Mount",
+    "marketing_name": "AF 35mm F1.7 Air APS-C Lens for Nikon Z-Mount",
+    "series": "Air",
+    "mount": "Z-mount",
+    "price_usd": 179.0,
+    "status": "official",
+    "description": "F1.7 Large Aperture : Delivers dreamy bokeh and excels in low-light conditions",
+    "product_url": "https://viltrox.com/products/viltrox-af-35mm-f1-7-aps-c-lens-for-nikon-z-mount",
+    "source_url": "https://viltrox.com/products/viltrox-af-35mm-f1-7-aps-c-lens-for-nikon-z-mount",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "air",
+      "aps-c",
+      "z-mount",
+      "35mm"
+    ],
+    "specs": {
+      "official_product_id": 7394055848002,
+      "official_handle": "viltrox-af-35mm-f1-7-aps-c-lens-for-nikon-z-mount",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "Air",
+        "APS-C",
+        "Z-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 41849313296450,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 0,
+      "highlights": [
+        "F1.7 Large Aperture : Delivers dreamy bokeh and excels in low-light conditions",
+        "Lightweight Design : Compact and portable at just 180g, perfect for on-the-go shooting",
+        "APS-C Compatibility : Optimized for APS-C cameras, 53mm equivalent focal length for full-frame camera",
+        "Reliable Autofocus : Silent STM motor with eye and face detection for fast, accurate focusing",
+        "High-Quality Optics : 1 ED, 1 aspherical and 2 high-refractive lenses and nano-coat ensure sharp, vibrant, and true-to-life images"
+      ]
+    }
+  },
+  {
+    "sku": "AF-35MM-F17-AIR-X",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 35mm F1.7 Air APS-C Lens for Fujifilm X-Mount",
+    "marketing_name": "AF 35mm F1.7 Air APS-C Lens for Fujifilm X-Mount",
+    "series": "Air",
+    "mount": "X-mount",
+    "price_usd": 179.0,
+    "status": "official",
+    "description": "APS-C 35mm Prime Lens (53mm Full-Frame Equivalent)",
+    "product_url": "https://viltrox.com/products/viltrox-af-35mm-f1-7-aps-c-lens-for-fujifilm-x-mount",
+    "source_url": "https://viltrox.com/products/viltrox-af-35mm-f1-7-aps-c-lens-for-fujifilm-x-mount",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "air",
+      "aps-c",
+      "x-mount",
+      "35mm"
+    ],
+    "specs": {
+      "official_product_id": 7393988706370,
+      "official_handle": "viltrox-af-35mm-f1-7-aps-c-lens-for-fujifilm-x-mount",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "Air",
+        "APS-C",
+        "X-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Color",
+          "position": 1,
+          "values": [
+            "Black",
+            "Silver"
+          ]
+        }
+      ],
+      "official_variant_id": 41849183993922,
+      "variant_title": "Black",
+      "variant_weight_grams": 170,
+      "highlights": [
+        "APS-C 35mm Prime Lens (53mm Full-Frame Equivalent)",
+        "Bright F1.7 Aperture for Soft Bokeh & Low-Light Clarity",
+        "Precision Optics: 11/9 Elements (1 ED, 2 HR, 1 Aspherical)",
+        "Fast, Accurate STM Autofocus for Photo and Video",
+        "Compact 170g Design with Comfortable Handling",
+        "52mm Filter Thread and USB-C Firmware Upgrade Port"
+      ]
+    }
+  },
+  {
+    "sku": "AF-135MM-F18-LAB-FE",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 135mm F1.8 LAB Full-Frame Lens for Sony E-Mount",
+    "marketing_name": "AF 135mm F1.8 LAB Full-Frame Lens for Sony E-Mount",
+    "series": "LAB",
+    "mount": "FE-mount",
+    "price_usd": 899.0,
+    "status": "official",
+    "description": "Outstanding Resolution Maintains sharpness from center to edges across the focal range, capturing fine textures even at maximum aperture",
+    "product_url": "https://viltrox.com/products/af-135mm-f1-8-lab-fe",
+    "source_url": "https://viltrox.com/products/af-135mm-f1-8-lab-fe",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "e-mount",
+      "fe-mount",
+      "full frame",
+      "lab",
+      "135mm"
+    ],
+    "specs": {
+      "official_product_id": 7377756225602,
+      "official_handle": "af-135mm-f1-8-lab-fe",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "E-mount",
+        "FE-mount",
+        "Full Frame",
+        "LAB"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 41778452725826,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 1346,
+      "highlights": [
+        "Outstanding Resolution Maintains sharpness from center to edges across the focal range, capturing fine textures even at maximum aperture",
+        "Efficient Autofocus Equipped with a patented HyperVCM motor for fast, precise, and quiet autofocus perfect for capturing fleeting moments",
+        "F1.8 Aperture & Dreamy Bokeh The 11-blade aperture creates soft, beautiful background bokeh, with excellent low-light clarity",
+        "Professional Control Features Includes a focus limiter, dual customizable Fn buttons, and multi-function ring for flexible adjustments",
+        "Rugged and Durable Design Multi-coated front element resists dust, splashes, stains, and water, built to perform in any environmental conditions"
+      ]
+    }
+  },
+  {
+    "sku": "AF-28MM-F4-5-FE",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 28mm F4.5 Full-Frame Lens for Sony E-Mount",
+    "marketing_name": "AF 28mm F4.5 Full-Frame Lens for Sony E-Mount",
+    "series": "",
+    "mount": "FE-mount",
+    "price_usd": 99.0,
+    "status": "official",
+    "description": "Ultra-Light and Slim : Weighs only 60g and measures 15.3mm, making it the lightest and thinnest Viltrox lens, perfect for easy, on-the-go shooting",
+    "product_url": "https://viltrox.com/products/28mm-f4-5-fe",
+    "source_url": "https://viltrox.com/products/28mm-f4-5-fe",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "e-mount",
+      "fe-mount",
+      "full frame",
+      "28mm"
+    ],
+    "specs": {
+      "official_product_id": 7364117987394,
+      "official_handle": "28mm-f4-5-fe",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "E-mount",
+        "FE-mount",
+        "Full Frame"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 41724192981058,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 60,
+      "highlights": [
+        "Ultra-Light and Slim : Weighs only 60g and measures 15.3mm, making it the lightest and thinnest Viltrox lens, perfect for easy, on-the-go shooting",
+        "Efficient Autofocus : Compact design with precise autofocus ensures quick and effortless shooting without complex setup",
+        "Full-Frame Compatibility : Compact yet powerful, designed for a wide range of full-frame cameras",
+        "Innovative Slide Cap Design : Slide lever transforms the cap into a lens, protecting it from dust and dirt while adding fun to your shooting experience",
+        "Exceptional Image Quality: 6 elements in 6 groups with 2 ED and 2 aspherical lenses deliver sharp images, vibrant colors, and stunning starburst effects"
+      ]
+    }
+  },
+  {
+    "sku": "AF-40MM-F2-5-AIR-FE",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 40mm F2.5 Air Full-Frame Lens for Sony E-mount",
+    "marketing_name": "AF 40mm F2.5 Air Full-Frame Lens for Sony E-mount",
+    "series": "Air",
+    "mount": "FE-mount",
+    "price_usd": 168.0,
+    "status": "official",
+    "description": "Lightweight and Portable : With an ultra-light 167g design, it's easy to carry anywhere, making it ideal for travel and street photography",
+    "product_url": "https://viltrox.com/products/af-40mm-f2-5-full-frame-lens-for-sony-fe-mount",
+    "source_url": "https://viltrox.com/products/af-40mm-f2-5-full-frame-lens-for-sony-fe-mount",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "air",
+      "e-mount",
+      "fe-mount",
+      "full frame",
+      "40mm"
+    ],
+    "specs": {
+      "official_product_id": 7333898453058,
+      "official_handle": "af-40mm-f2-5-full-frame-lens-for-sony-fe-mount",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "Air",
+        "E-mount",
+        "FE-mount",
+        "Full Frame"
+      ],
+      "official_options": [
+        {
+          "name": "Color",
+          "position": 1,
+          "values": [
+            "Black",
+            "White"
+          ]
+        }
+      ],
+      "official_variant_id": 41872030236738,
+      "variant_title": "Black",
+      "variant_weight_grams": 167,
+      "highlights": [
+        "Lightweight and Portable : With an ultra-light 167g design, it's easy to carry anywhere, making it ideal for travel and street photography",
+        "Advanced Optical Performance : Featuring an F2.5 aperture, 10 elements in 6 groups, including 1 ED, 3 HR and 1 aspherical element, it delivers sharp, clear images with beautiful bokeh",
+        "Fast and Quiet Autofocus : The STM motor ensures quick, silent focusing, allowing even beginners to achieve precise shots effortlessly",
+        "Durable and Reliable : The STM motor ensures quick, silent focusing, allowing even beginners to achieve precise shots effortlessly",
+        "Versatile Compatibility : Preserve all shooting information with EXIF data transfer; the Type-C interface allows for easy firmware updates, ensuring your lens continues to perform at its best",
+        "Compatible with All Scenes : Perfect for portraits, landscapes, and street photography, the 40mm focal length offers a perspective similar to what you see with your naked eyes"
+      ]
+    }
+  },
+  {
+    "sku": "AF-56MM-F17-AIR-FE",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 56mm F1.7 Air APS-C Lens for Sony E-mount",
+    "marketing_name": "AF 56mm F1.7 Air APS-C Lens for Sony E-mount",
+    "series": "Air",
+    "mount": "FE-mount",
+    "price_usd": 180.0,
+    "status": "official",
+    "description": "Lightweight and Portable : Ultra-light 170g design, easy to carry anywhere, making it ideal for travel and street photography",
+    "product_url": "https://viltrox.com/products/af-56mm-f1-7-aps-c-lens-for-sony-e-mount",
+    "source_url": "https://viltrox.com/products/af-56mm-f1-7-aps-c-lens-for-sony-e-mount",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "air",
+      "aps-c",
+      "e-mount",
+      "56mm",
+      "fe-mount"
+    ],
+    "specs": {
+      "official_product_id": 7330240102466,
+      "official_handle": "af-56mm-f1-7-aps-c-lens-for-sony-e-mount",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "Air",
+        "APS-C",
+        "E-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Color",
+          "position": 1,
+          "values": [
+            "Black",
+            "White"
+          ]
+        }
+      ],
+      "official_variant_id": 41652122615874,
+      "variant_title": "Black",
+      "variant_weight_grams": 170,
+      "highlights": [
+        "Lightweight and Portable : Ultra-light 170g design, easy to carry anywhere, making it ideal for travel and street photography",
+        "Advanced Optical Performance : 56mm F1.7 aperture, 9 groups, 11 elements, with 4 ED and 3 high-refractive elements for sharp, clear images and beautiful bokeh",
+        "Fast and Quiet Autofocus : STM motor ensures quick, silent focusing; even beginners can achieve precise shots effortlessly",
+        "Durable and Reliable : Waterproof and anti-fouling coating on the front lens, robust metal mount, built to withstand daily use and challenging environments",
+        "Versatile Compatibility : 52mm diameter supports standard filters; Type-C interface allows easy firmware updates to keep your lens performing at its best",
+        "Optimized for Video : Minimal focus breathing, internal focus design, and stable performance make it a reliable choice for creators"
+      ]
+    }
+  },
+  {
+    "sku": "EPIC-25MM-35MM-50MM-75MM-100MM-1-33X-PL-ANAMORPHIC-CINE-SET-L",
+    "category_main": "Lens",
+    "category_detail": "Cine Lenses",
+    "model_name": "Viltrox EPIC 25mm/35mm/50mm/75mm/100mm 1.33X PL Full-Frame Anamorphic Cine Lens Set",
+    "marketing_name": "EPIC 25mm/35mm/50mm/75mm/100mm 1.33X PL Full-Frame Anamorphic Cine Lens Set",
+    "series": "Cine",
+    "mount": "L-mount",
+    "price_usd": 17299.0,
+    "status": "official",
+    "description": "T2.0 constant aperture",
+    "product_url": "https://viltrox.com/products/epic-t2-0-1-33x-pl-set",
+    "source_url": "https://viltrox.com/products/epic-t2-0-1-33x-pl-set",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "pl-mount",
+      "25mm",
+      "35mm",
+      "50mm",
+      "75mm",
+      "100mm",
+      "l-mount",
+      "cine"
+    ],
+    "specs": {
+      "official_product_id": 7288422989890,
+      "official_handle": "epic-t2-0-1-33x-pl-set",
+      "official_product_type": "Cine Lenses",
+      "official_tags": [
+        "PL-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Focus Length",
+          "position": 1,
+          "values": [
+            "EPIC 25/35/50/75/100 T2.0 1.33X PL (Blue Flares)"
+          ]
+        }
+      ],
+      "official_variant_id": 41465625051202,
+      "variant_title": "EPIC 25/35/50/75/100 T2.0 1.33X PL (Blue Flares)",
+      "variant_weight_grams": 0,
+      "highlights": [
+        "T2.0 constant aperture",
+        "1.33X Constant Squeeze Ratio: Ensures consistent image distortion from far to near",
+        "Beautiful bokeh and oval light spots are vividly rendered",
+        "Front end compatible with 95mm matte box",
+        "Color Saturation: Retro pure color restoration",
+        "Consistent Optical Performance: Uniform character and gear position design"
+      ]
+    }
+  },
+  {
+    "sku": "AF-F18-LENSES-KIT-PRO-FE",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF F1.8 Full-Frame Lenses Kit for Sony E-Mount With Protective Case",
+    "marketing_name": "AF F1.8 Full-Frame Lenses Kit for Sony E-Mount With Protective Case",
+    "series": "Pro",
+    "mount": "FE-mount",
+    "price_usd": 2999.0,
+    "status": "official",
+    "description": "Versatile focal lengths (16mm, 24mm, 28mm, 35mm, 50mm, 85mm) for diverse shooting needs",
+    "product_url": "https://viltrox.com/products/viltrox-af-e-mount-f1-8-full-frame-lenses-kit-protective-case",
+    "source_url": "https://viltrox.com/products/viltrox-af-e-mount-f1-8-full-frame-lenses-kit-protective-case",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "e-mount",
+      "fe-mount",
+      "full frame",
+      "pro"
+    ],
+    "specs": {
+      "official_product_id": 7265076215874,
+      "official_handle": "viltrox-af-e-mount-f1-8-full-frame-lenses-kit-protective-case",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "E-mount",
+        "FE-mount",
+        "Full Frame"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 41377840824386,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 6558,
+      "highlights": [
+        "Versatile focal lengths (16mm, 24mm, 28mm, 35mm, 50mm, 85mm) for diverse shooting needs",
+        "Fast F1.8 aperture for stunning bokeh and low-light performance",
+        "Exceptional image quality with sharp details and vivid colors",
+        "Durable, lightweight full metal lens body",
+        "Protective case for safe and convenient storage and transport"
+      ]
+    }
+  },
+  {
+    "sku": "EPIC-75MM-T2-0-1-33X-PL-ANAMORPHIC-CINE-L",
+    "category_main": "Lens",
+    "category_detail": "Cine Lenses",
+    "model_name": "Viltrox EPIC 75mm T2.0 1.33X PL Full-Frame Anamorphic Cine Lens",
+    "marketing_name": "EPIC 75mm T2.0 1.33X PL Full-Frame Anamorphic Cine Lens",
+    "series": "Cine",
+    "mount": "L-mount",
+    "price_usd": 3299.0,
+    "status": "official",
+    "description": "· T2.0 constant aperture",
+    "product_url": "https://viltrox.com/products/viltrox-epic-anamorphic-75mm-t2-0-1-33x-cine-lens-pl-mount",
+    "source_url": "https://viltrox.com/products/viltrox-epic-anamorphic-75mm-t2-0-1-33x-cine-lens-pl-mount",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "pl-mount",
+      "75mm",
+      "l-mount",
+      "cine"
+    ],
+    "specs": {
+      "official_product_id": 7211125702722,
+      "official_handle": "viltrox-epic-anamorphic-75mm-t2-0-1-33x-cine-lens-pl-mount",
+      "official_product_type": "Cine Lenses",
+      "official_tags": [
+        "PL-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Model",
+          "position": 1,
+          "values": [
+            "EPIC 75mm T2.0 1.33X PL (Blue Flare)",
+            "EPIC Memento 75mm T2.0 1.33X PL (Silver Flare)",
+            "EPIC Maestro 75mm T2.0 1.33X PL (No Flare)"
+          ]
+        }
+      ],
+      "official_variant_id": 41230952693826,
+      "variant_title": "EPIC 75mm T2.0 1.33X PL (Blue Flare)",
+      "variant_weight_grams": 11500,
+      "highlights": [
+        "· T2.0 constant aperture",
+        "· 1.33X Constant Squeeze Ratio: Ensures consistent image distortion from far to near",
+        "· Beautiful bokeh and oval light spots are vividly rendered",
+        "· Front end compatible with 95mm matte box",
+        "· Color Saturation: Retro pure color restoration",
+        "· Consistent Optical Performance: Uniform character and gear position design"
+      ]
+    }
+  },
+  {
+    "sku": "EPIC-50MM-T2-0-1-33X-PL-ANAMORPHIC-CINE-L",
+    "category_main": "Lens",
+    "category_detail": "Cine Lenses",
+    "model_name": "Viltrox EPIC 50mm T2.0 1.33X PL Full-Frame Anamorphic Cine Lens",
+    "marketing_name": "EPIC 50mm T2.0 1.33X PL Full-Frame Anamorphic Cine Lens",
+    "series": "Cine",
+    "mount": "L-mount",
+    "price_usd": 3299.0,
+    "status": "official",
+    "description": "· Human-Centric Perspective, Emotional Focus This standard focal length mirrors the natural field of view, making it perfect for character-driven shots and expressive framing",
+    "product_url": "https://viltrox.com/products/viltrox-epic-anamorphic-50mm-t2-0-1-33x-cine-lens-pl-mount-1",
+    "source_url": "https://viltrox.com/products/viltrox-epic-anamorphic-50mm-t2-0-1-33x-cine-lens-pl-mount-1",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "pl-mount",
+      "50mm",
+      "l-mount",
+      "cine"
+    ],
+    "specs": {
+      "official_product_id": 7211141922882,
+      "official_handle": "viltrox-epic-anamorphic-50mm-t2-0-1-33x-cine-lens-pl-mount-1",
+      "official_product_type": "Cine Lenses",
+      "official_tags": [
+        "PL-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Model",
+          "position": 1,
+          "values": [
+            "EPIC 50mm T2.0 1.33X PL (Blue Flare)",
+            "EPIC Memento 50mm T2.0 1.33X PL (Silver Flare)",
+            "EPIC Maestro 50mm T2.0 1.33X PL (No Flare)"
+          ]
+        }
+      ],
+      "official_variant_id": 41231031566402,
+      "variant_title": "EPIC 50mm T2.0 1.33X PL (Blue Flare)",
+      "variant_weight_grams": 11500,
+      "highlights": [
+        "· Human-Centric Perspective, Emotional Focus This standard focal length mirrors the natural field of view, making it perfect for character-driven shots and expressive framing",
+        "· T2.0 Aperture, Expressive Control Delivers smooth subject separation with refined detail, offering emotional nuance through light and depth transitions",
+        "· 1.33X Constant Squeeze, True-to-Life Proportions Maintains consistent image ratio from near to far, avoiding facial distortion common in anamorphic shots",
+        "· Retro Pure Color Reproduction Soft yet vivid, it renders skin tones with organic warmth and achieves refined, cinematic color accuracy",
+        "· Three Flare Styles, Signature Expression Choose from Clean, Silver, or Blue flares to match your visual tone—from modern minimalism to classic cinema",
+        "· Seamless System Integration Unified gear and color design across the EPIC series ensures effortless lens swaps and post-production grading"
+      ]
+    }
+  },
+  {
+    "sku": "EPIC-35MM-T2-0-1-33X-PL-ANAMORPHIC-CINE-L",
+    "category_main": "Lens",
+    "category_detail": "Cine Lenses",
+    "model_name": "Viltrox EPIC 35mm T2.0 1.33X PL Full-Frame Anamorphic Cine Lens",
+    "marketing_name": "EPIC 35mm T2.0 1.33X PL Full-Frame Anamorphic Cine Lens",
+    "series": "Cine",
+    "mount": "L-mount",
+    "price_usd": 3299.0,
+    "status": "official",
+    "description": "T2.0 constant aperture",
+    "product_url": "https://viltrox.com/products/epic-35mm-t2-0-1-33x-pl",
+    "source_url": "https://viltrox.com/products/epic-35mm-t2-0-1-33x-pl",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "pl-mount",
+      "35mm",
+      "l-mount",
+      "cine"
+    ],
+    "specs": {
+      "official_product_id": 7211112529986,
+      "official_handle": "epic-35mm-t2-0-1-33x-pl",
+      "official_product_type": "Cine Lenses",
+      "official_tags": [
+        "PL-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Mount",
+          "position": 1,
+          "values": [
+            "EPIC 35mm T2.0 1.33X PL (Blue Flare)",
+            "EPIC Memento 35mm T2.0 1.33X PL (Silver Flare)",
+            "EPIC Maestro 35mm T2.0 1.33X PL (No Flare)"
+          ]
+        }
+      ],
+      "official_variant_id": 41230895022146,
+      "variant_title": "EPIC 35mm T2.0 1.33X PL (Blue Flare)",
+      "variant_weight_grams": 11500,
+      "highlights": [
+        "T2.0 constant aperture",
+        "1.33X Constant Squeeze Ratio: Ensures consistent image distortion from far to near",
+        "Beautiful bokeh and oval light spots are vividly rendered",
+        "Front end compatible with 95mm matte box",
+        "Color Saturation: Retro pure color restoration",
+        "Consistent Optical Performance: Uniform character and gear position design"
+      ]
+    }
+  },
+  {
+    "sku": "EPIC-25MM-T2-0-1-33X-PL-ANAMORPHIC-CINE-L",
+    "category_main": "Lens",
+    "category_detail": "Cine Lenses",
+    "model_name": "Viltrox EPIC 25mm T2.0 1.33X PL Full-Frame Anamorphic Cine Lens",
+    "marketing_name": "EPIC 25mm T2.0 1.33X PL Full-Frame Anamorphic Cine Lens",
+    "series": "Cine",
+    "mount": "L-mount",
+    "price_usd": 3999.0,
+    "status": "official",
+    "description": "T2.0 constant aperture",
+    "product_url": "https://viltrox.com/products/viltrox-epic-anamorphic-25mm-t2-0-1-33x-cine-lens-pl-e-l-mount",
+    "source_url": "https://viltrox.com/products/viltrox-epic-anamorphic-25mm-t2-0-1-33x-cine-lens-pl-e-l-mount",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "pl-mount",
+      "25mm",
+      "l-mount",
+      "cine"
+    ],
+    "specs": {
+      "official_product_id": 7186018205762,
+      "official_handle": "viltrox-epic-anamorphic-25mm-t2-0-1-33x-cine-lens-pl-e-l-mount",
+      "official_product_type": "Cine Lenses",
+      "official_tags": [
+        "PL-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Model",
+          "position": 1,
+          "values": [
+            "EPIC 25mm T2.0 1.33X PL (Blue Flare)",
+            "EPIC Memento 25mm T2.0 1.33X PL (Silver Flare)",
+            "EPIC Maestro 25mm T2.0 1.33X PL (No Flare)"
+          ]
+        }
+      ],
+      "official_variant_id": 41167825895490,
+      "variant_title": "EPIC 25mm T2.0 1.33X PL (Blue Flare)",
+      "variant_weight_grams": 0,
+      "highlights": [
+        "T2.0 constant aperture",
+        "1.33X Constant Squeeze Ratio: Ensures consistent image distortion from far to near",
+        "Beautiful bokeh and oval light spots are vividly rendered",
+        "Front end compatible with 95mm matte box",
+        "Color Saturation: Retro pure color restoration",
+        "Consistent Optical Performance: Uniform character and gear position design"
+      ]
+    }
+  },
+  {
+    "sku": "EPIC-100MM-T2-0-1-33X-PL-ANAMORPHIC-CINE-L",
+    "category_main": "Lens",
+    "category_detail": "Cine Lenses",
+    "model_name": "Viltrox EPIC 100mm T2.0 1.33X PL Full-Frame Anamorphic Cine Lens",
+    "marketing_name": "EPIC 100mm T2.0 1.33X PL Full-Frame Anamorphic Cine Lens",
+    "series": "Cine",
+    "mount": "L-mount",
+    "price_usd": 3999.0,
+    "status": "official",
+    "description": "T2.0 constant aperture",
+    "product_url": "https://viltrox.com/products/viltrox-epic-anamorphic-100mm-t2-0-1-33x-cine-lens-pl-e-l-mount",
+    "source_url": "https://viltrox.com/products/viltrox-epic-anamorphic-100mm-t2-0-1-33x-cine-lens-pl-e-l-mount",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "pl-mount",
+      "100mm",
+      "l-mount",
+      "cine"
+    ],
+    "specs": {
+      "official_product_id": 7186022203458,
+      "official_handle": "viltrox-epic-anamorphic-100mm-t2-0-1-33x-cine-lens-pl-e-l-mount",
+      "official_product_type": "Cine Lenses",
+      "official_tags": [
+        "PL-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Model",
+          "position": 1,
+          "values": [
+            "EPIC 100mm T2.0 1.33X PL (Blue Flare)",
+            "EPIC Memento 100mm T2.0 1.33X PL (Silver Flare)",
+            "EPIC Maestro 100mm T2.0 1.33X PL (No Flare)"
+          ]
+        }
+      ],
+      "official_variant_id": 41167851356226,
+      "variant_title": "EPIC 100mm T2.0 1.33X PL (Blue Flare)",
+      "variant_weight_grams": 0,
+      "highlights": [
+        "T2.0 constant aperture",
+        "1.33X Constant Squeeze Ratio: Ensures consistent image distortion from far to near",
+        "Beautiful bokeh and oval light spots are vividly rendered",
+        "Front end compatible with 95mm matte box",
+        "Color Saturation: Retro pure color restoration",
+        "Consistent Optical Performance: Uniform character and gear position design"
+      ]
+    }
+  },
+  {
+    "sku": "AF-16MM-F18-Z",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 16mm F1.8 Full-Frame Lens for Nikon Z-Mount",
+    "marketing_name": "AF 16mm F1.8 Full-Frame Lens for Nikon Z-Mount",
+    "series": "",
+    "mount": "Z-mount",
+    "price_usd": 580.0,
+    "status": "official",
+    "description": "The Viltrox AF 16mm F1.8 lens is ideal for cameras, boasting 15 elements in 12 groups",
+    "product_url": "https://viltrox.com/products/viltrox-af-16mm-f1-8-z",
+    "source_url": "https://viltrox.com/products/viltrox-af-16mm-f1-8-z",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "full frame",
+      "z-mount",
+      "16mm"
+    ],
+    "specs": {
+      "official_product_id": 7205237784642,
+      "official_handle": "viltrox-af-16mm-f1-8-z",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "Full Frame",
+        "Z-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 41215430918210,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 565,
+      "highlights": [
+        "The Viltrox AF 16mm F1.8 lens is ideal for cameras, boasting 15 elements in 12 groups",
+        "With a close focus distance of 0.27m and infinity, noiseless STM focus motor technology ensures precise movement and smooth focusing"
+      ]
+    }
+  },
+  {
+    "sku": "AF-56MM-F14-Z",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 56mm F1.4 APS-C Lens for Nikon Z-Mount",
+    "marketing_name": "AF 56mm F1.4 APS-C Lens for Nikon Z-Mount",
+    "series": "",
+    "mount": "Z-mount",
+    "price_usd": 239.0,
+    "status": "official",
+    "description": "The AF 56mm F1.4 APS-C Portrait Prime Lens adopts strict design standards, it has both high resolution and soft bokeh",
+    "product_url": "https://viltrox.com/products/viltrox-af-56mm-f1-4-aps-c-lens-for-nikon-z-mount",
+    "source_url": "https://viltrox.com/products/viltrox-af-56mm-f1-4-aps-c-lens-for-nikon-z-mount",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "aps-c",
+      "z-mount",
+      "56mm"
+    ],
+    "specs": {
+      "official_product_id": 7185088413762,
+      "official_handle": "viltrox-af-56mm-f1-4-aps-c-lens-for-nikon-z-mount",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "APS-C",
+        "Z-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Size",
+          "position": 1,
+          "values": [
+            "AF 56/1.4 Z"
+          ]
+        }
+      ],
+      "official_variant_id": 41165892321346,
+      "variant_title": "AF 56/1.4 Z",
+      "variant_weight_grams": 300,
+      "highlights": [
+        "The AF 56mm F1.4 APS-C Portrait Prime Lens adopts strict design standards, it has both high resolution and soft bokeh",
+        "Experience the perfect combination of sharpness and artistic bokeh with this meticulously designed lens"
+      ]
+    }
+  },
+  {
+    "sku": "AF-20MM-F28-AIR-Z",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 20mm F2.8 Air Full-Frame Lens for Nikon Z-Mount",
+    "marketing_name": "AF 20mm F2.8 Air Full-Frame Lens for Nikon Z-Mount",
+    "series": "Air",
+    "mount": "Z-mount",
+    "price_usd": 176.0,
+    "status": "official",
+    "description": "Viltrox AF 20mm F2.8 is an autofocus lens designed for Sony E-mount / Nikon Z-mount camera models",
+    "product_url": "https://viltrox.com/products/viltrox-af-20mm-f2-8-full-frame-lens-for-nikon-z-mount",
+    "source_url": "https://viltrox.com/products/viltrox-af-20mm-f2-8-full-frame-lens-for-nikon-z-mount",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "air",
+      "full frame",
+      "z-mount",
+      "20mm"
+    ],
+    "specs": {
+      "official_product_id": 7191923949634,
+      "official_handle": "viltrox-af-20mm-f2-8-full-frame-lens-for-nikon-z-mount",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "Air",
+        "Full Frame",
+        "Z-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 41185062060098,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 157,
+      "highlights": [
+        "Viltrox AF 20mm F2.8 is an autofocus lens designed for Sony E-mount / Nikon Z-mount camera models",
+        "With 10 elements in 8 groups, it offers outstanding optical performance",
+        "The minimum focusing distance of about 0.19m produces beautiful close-ups",
+        "And the quiet STM focus motor can accurately control the moving position and bring accurate and smooth focusing",
+        "Great choice for portrait, landscape, close-up and vlogging!"
+      ]
+    }
+  },
+  {
+    "sku": "MF-33MM-T1-5-CINE-M4-3-MOUNT-M43",
+    "category_main": "Lens",
+    "category_detail": "Cine Lenses",
+    "model_name": "Viltrox MF 33mm T1.5 Cine Lens M4/3 Mount",
+    "marketing_name": "MF 33mm T1.5 Cine Lens M4/3 Mount",
+    "series": "Cine",
+    "mount": "M43",
+    "price_usd": 415.0,
+    "status": "official",
+    "description": "The Viltrox M43 mount series cine lenses share the same size, lens diameter, focus ring, and aperture ring position, making them compatible with various accessories",
+    "product_url": "https://viltrox.com/products/viltrox-mf-33mm-t1-5-cine-lens-m4-3-mount",
+    "source_url": "https://viltrox.com/products/viltrox-mf-33mm-t1-5-cine-lens-m4-3-mount",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "cine series",
+      "m4/3",
+      "mft-mount",
+      "spherical",
+      "33mm",
+      "m43",
+      "cine"
+    ],
+    "specs": {
+      "official_product_id": 7185678598210,
+      "official_handle": "viltrox-mf-33mm-t1-5-cine-lens-m4-3-mount",
+      "official_product_type": "Cine Lenses",
+      "official_tags": [
+        "Cine Series",
+        "M4/3",
+        "MFT-mount",
+        "Spherical"
+      ],
+      "official_options": [
+        {
+          "name": "Model",
+          "position": 1,
+          "values": [
+            "S 33mmT1.5 M43"
+          ]
+        }
+      ],
+      "official_variant_id": 41167087501378,
+      "variant_title": "S 33mmT1.5 M43",
+      "variant_weight_grams": 226796,
+      "highlights": [
+        "The Viltrox M43 mount series cine lenses share the same size, lens diameter, focus ring, and aperture ring position, making them compatible with various accessories",
+        "They feature a T1.5 large aperture for low-light situations, providing a cinematic look with sharpness and minimal distortion"
+      ]
+    }
+  },
+  {
+    "sku": "MF-56MM-T1-5-CINE-M4-3-MOUNT-M43",
+    "category_main": "Lens",
+    "category_detail": "Cine Lenses",
+    "model_name": "Viltrox MF 56mm T1.5 Cine Lens M4/3 Mount",
+    "marketing_name": "MF 56mm T1.5 Cine Lens M4/3 Mount",
+    "series": "Cine",
+    "mount": "M43",
+    "price_usd": 415.0,
+    "status": "official",
+    "description": "The Viltrox M43 mount series cine lenses share the same size, lens diameter, focus ring, and aperture ring position, making them compatible with various accessories",
+    "product_url": "https://viltrox.com/products/viltrox-mf-56mm-t1-5-cine-lens-m4-3-mount",
+    "source_url": "https://viltrox.com/products/viltrox-mf-56mm-t1-5-cine-lens-m4-3-mount",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "cine series",
+      "m4/3",
+      "mft-mount",
+      "spherical",
+      "56mm",
+      "m43",
+      "cine"
+    ],
+    "specs": {
+      "official_product_id": 7185678958658,
+      "official_handle": "viltrox-mf-56mm-t1-5-cine-lens-m4-3-mount",
+      "official_product_type": "Cine Lenses",
+      "official_tags": [
+        "Cine Series",
+        "M4/3",
+        "MFT-mount",
+        "Spherical"
+      ],
+      "official_options": [
+        {
+          "name": "Model",
+          "position": 1,
+          "values": [
+            "S 56mmT1.5 M43"
+          ]
+        }
+      ],
+      "official_variant_id": 41167089434690,
+      "variant_title": "S 56mmT1.5 M43",
+      "variant_weight_grams": 226796,
+      "highlights": [
+        "The Viltrox M43 mount series cine lenses share the same size, lens diameter, focus ring, and aperture ring position, making them compatible with various accessories",
+        "They feature a T1.5 large aperture for low-light situations, providing a cinematic look with sharpness and minimal distortion"
+      ]
+    }
+  },
+  {
+    "sku": "MF-23MM-T1-5-CINE-M4-3-MOUNT-M43",
+    "category_main": "Lens",
+    "category_detail": "Cine Lenses",
+    "model_name": "Viltrox MF 23mm T1.5 Cine Lens M4/3 Mount",
+    "marketing_name": "MF 23mm T1.5 Cine Lens M4/3 Mount",
+    "series": "Cine",
+    "mount": "M43",
+    "price_usd": 415.0,
+    "status": "official",
+    "description": "The Viltrox M43 mount series cine lenses share the same size, lens diameter, focus ring, and aperture ring position, making them compatible with various accessories",
+    "product_url": "https://viltrox.com/products/viltrox-mf-23mm-t1-5-cine-lens-m4-3-mount",
+    "source_url": "https://viltrox.com/products/viltrox-mf-23mm-t1-5-cine-lens-m4-3-mount",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "cine series",
+      "m4/3",
+      "mft-mount",
+      "spherical",
+      "23mm",
+      "m43",
+      "cine"
+    ],
+    "specs": {
+      "official_product_id": 7185678139458,
+      "official_handle": "viltrox-mf-23mm-t1-5-cine-lens-m4-3-mount",
+      "official_product_type": "Cine Lenses",
+      "official_tags": [
+        "Cine Series",
+        "M4/3",
+        "MFT-mount",
+        "Spherical"
+      ],
+      "official_options": [
+        {
+          "name": "Model",
+          "position": 1,
+          "values": [
+            "S 23mmT1.5 M43"
+          ]
+        }
+      ],
+      "official_variant_id": 41167084388418,
+      "variant_title": "S 23mmT1.5 M43",
+      "variant_weight_grams": 226796,
+      "highlights": [
+        "The Viltrox M43 mount series cine lenses share the same size, lens diameter, focus ring, and aperture ring position, making them compatible with various accessories",
+        "They feature a T1.5 large aperture for low-light situations, providing a cinematic look with sharpness and minimal distortion"
+      ]
+    }
+  },
+  {
+    "sku": "AF-33MM-F14-Z",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 33mm F1.4 APS-C Lens for Nikon Z-Mount",
+    "marketing_name": "AF 33mm F1.4 APS-C Lens for Nikon Z-Mount",
+    "series": "",
+    "mount": "Z-mount",
+    "price_usd": 239.0,
+    "status": "official",
+    "description": "Viltrox AF 33mm F1.4 is a wide-angle large aperture lens specially designed for Nikon Z-Mount cameras and provides a 50mm equivalent focal length",
+    "product_url": "https://viltrox.com/products/viltrox-af-33mm-f1-4-aps-c-lens-for-nikon-z-mount",
+    "source_url": "https://viltrox.com/products/viltrox-af-33mm-f1-4-aps-c-lens-for-nikon-z-mount",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "aps-c",
+      "z-mount",
+      "33mm"
+    ],
+    "specs": {
+      "official_product_id": 7184984309826,
+      "official_handle": "viltrox-af-33mm-f1-4-aps-c-lens-for-nikon-z-mount",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "APS-C",
+        "Z-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Size",
+          "position": 1,
+          "values": [
+            "AF 33/1.4 Z"
+          ]
+        }
+      ],
+      "official_variant_id": 41165099696194,
+      "variant_title": "AF 33/1.4 Z",
+      "variant_weight_grams": 310,
+      "highlights": [
+        "Viltrox AF 33mm F1.4 is a wide-angle large aperture lens specially designed for Nikon Z-Mount cameras and provides a 50mm equivalent focal length",
+        "Support autofocus, camera multiple shooting modes, EXIF information record, and firmware upgrade"
+      ]
+    }
+  },
+  {
+    "sku": "AF-23MM-F14-Z",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 23mm F1.4 APS-C Lens for Nikon Z-Mount",
+    "marketing_name": "AF 23mm F1.4 APS-C Lens for Nikon Z-Mount",
+    "series": "",
+    "mount": "Z-mount",
+    "price_usd": 239.0,
+    "status": "official",
+    "description": "Viltrox 23mm F1.4 Lens features STM stepping motor, F1.4 aperture for defocusing effects, 11 elements with HD Nano coating, durable metal body, 0.57lb weight, and micro-USB port for updates",
+    "product_url": "https://viltrox.com/products/viltrox-af-23mm-f1-4-aps-c-lens-for-nikon-z-mount",
+    "source_url": "https://viltrox.com/products/viltrox-af-23mm-f1-4-aps-c-lens-for-nikon-z-mount",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "aps-c",
+      "z-mount",
+      "23mm"
+    ],
+    "specs": {
+      "official_product_id": 7184973561922,
+      "official_handle": "viltrox-af-23mm-f1-4-aps-c-lens-for-nikon-z-mount",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "APS-C",
+        "Z-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Color",
+          "position": 1,
+          "values": [
+            "Black",
+            "Silver"
+          ]
+        }
+      ],
+      "official_variant_id": 41165023215682,
+      "variant_title": "Black",
+      "variant_weight_grams": 300,
+      "highlights": [
+        "Viltrox 23mm F1.4 Lens features STM stepping motor, F1.4 aperture for defocusing effects, 11 elements with HD Nano coating, durable metal body, 0.57lb weight, and micro-USB port for updates"
+      ]
+    }
+  },
+  {
+    "sku": "AF-75MM-F12-PRO-Z",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 75mm F1.2 Pro APS-C Lens for Nikon Z-Mount",
+    "marketing_name": "AF 75mm F1.2 Pro APS-C Lens for Nikon Z-Mount",
+    "series": "Pro",
+    "mount": "Z-mount",
+    "price_usd": 580.0,
+    "status": "official",
+    "description": "The AF 75mm F1.2 Pro Z lens by Viltrox is the first high-end Pro series, showcasing Viltrox's optical technology expertise",
+    "product_url": "https://viltrox.com/products/viltrox-af-75mm-f1-2-aps-c-lens-for-nikon-z-mount",
+    "source_url": "https://viltrox.com/products/viltrox-af-75mm-f1-2-aps-c-lens-for-nikon-z-mount",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "aps-c",
+      "pro",
+      "z-mount",
+      "75mm"
+    ],
+    "specs": {
+      "official_product_id": 7184969007170,
+      "official_handle": "viltrox-af-75mm-f1-2-aps-c-lens-for-nikon-z-mount",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "APS-C",
+        "Pro",
+        "Z-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Model",
+          "position": 1,
+          "values": [
+            "AF 75/1.2 Pro for Nikon Z-mount"
+          ]
+        }
+      ],
+      "official_variant_id": 41164959481922,
+      "variant_title": "AF 75/1.2 Pro for Nikon Z-mount",
+      "variant_weight_grams": 670,
+      "highlights": [
+        "The AF 75mm F1.2 Pro Z lens by Viltrox is the first high-end Pro series, showcasing Viltrox's optical technology expertise",
+        "It utilizes HOYA special nitrate material from Japan and boasts a super large F1.2 aperture, advanced autofocus, and professional reliability for improved image quality"
+      ]
+    }
+  },
+  {
+    "sku": "AF-28MM-F18-FE",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 28mm F1.8 Full-Frame Lens for Sony E-Mount",
+    "marketing_name": "AF 28mm F1.8 Full-Frame Lens for Sony E-Mount",
+    "series": "",
+    "mount": "FE-mount",
+    "price_usd": 379.0,
+    "status": "official",
+    "description": "The lens is compact and lightweight, with high resolution and soft bokeheffects",
+    "product_url": "https://viltrox.com/products/viltrox-af-28mm-f1-8-full-frame-lens-for-sony-e-mount",
+    "source_url": "https://viltrox.com/products/viltrox-af-28mm-f1-8-full-frame-lens-for-sony-e-mount",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "e-mount",
+      "fe-mount",
+      "full frame",
+      "28mm"
+    ],
+    "specs": {
+      "official_product_id": 7184862838850,
+      "official_handle": "viltrox-af-28mm-f1-8-full-frame-lens-for-sony-e-mount",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "E-mount",
+        "FE-mount",
+        "Full Frame"
+      ],
+      "official_options": [
+        {
+          "name": "Mount",
+          "position": 1,
+          "values": [
+            "FE-Mount For Sony"
+          ]
+        }
+      ],
+      "official_variant_id": 41164648153154,
+      "variant_title": "FE-Mount For Sony",
+      "variant_weight_grams": 376,
+      "highlights": [
+        "The lens is compact and lightweight, with high resolution and soft bokeheffects",
+        "It can easily be used for shooting landscape,starry sky,architecture,and portraits"
+      ]
+    }
+  },
+  {
+    "sku": "AF-27MM-F12-PRO-Z",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 27mm F1.2 Pro APS-C Lens for Nikon Z-Mount",
+    "marketing_name": "AF 27mm F1.2 Pro APS-C Lens for Nikon Z-Mount",
+    "series": "Pro",
+    "mount": "Z-mount",
+    "price_usd": 578.0,
+    "status": "official",
+    "description": "The AF 27mm F1.2 Pro lens is part of Viltrox's Pro flagship series, offering an ultra-large F1.2 aperture",
+    "product_url": "https://viltrox.com/products/viltrox-af-27mm-f1-2-aps-c-lens-for-nikno-z-mount",
+    "source_url": "https://viltrox.com/products/viltrox-af-27mm-f1-2-aps-c-lens-for-nikno-z-mount",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "aps-c",
+      "pro",
+      "z-mount",
+      "27mm"
+    ],
+    "specs": {
+      "official_product_id": 7184853499970,
+      "official_handle": "viltrox-af-27mm-f1-2-aps-c-lens-for-nikno-z-mount",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "APS-C",
+        "Pro",
+        "Z-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Mount",
+          "position": 1,
+          "values": [
+            "Nikon Z-mount"
+          ]
+        }
+      ],
+      "official_variant_id": 41164608405570,
+      "variant_title": "Nikon Z-mount",
+      "variant_weight_grams": 605,
+      "highlights": [
+        "The AF 27mm F1.2 Pro lens is part of Viltrox's Pro flagship series, offering an ultra-large F1.2 aperture",
+        "This lens delivers exceptional resolution and creates stunning bokeh, making it perfect for portrait and low-light photography",
+        "With its superior optical performance and beautiful background blur, it is designed to meet the demands of professionals looking for high-quality imaging"
+      ]
+    }
+  },
+  {
+    "sku": "AF-40MM-F2-5-AIR-Z",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 40mm F2.5 Air Full-Frame Lens for Nikon Z-Mount",
+    "marketing_name": "AF 40mm F2.5 Air Full-Frame Lens for Nikon Z-Mount",
+    "series": "Air",
+    "mount": "Z-mount",
+    "price_usd": 168.0,
+    "status": "official",
+    "description": "AF 40mm F2.5, Viltrox Air series lightweight full-frame series introduces a 40mm focal length, efficient and precise autofocus system to capture wonderful moments, so that everyone can enjoy the fun of photography",
+    "product_url": "https://viltrox.com/products/viltrox-af-40mm-f2-5-z",
+    "source_url": "https://viltrox.com/products/viltrox-af-40mm-f2-5-z",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "air",
+      "full frame",
+      "z-mount",
+      "40mm"
+    ],
+    "specs": {
+      "official_product_id": 7178969907266,
+      "official_handle": "viltrox-af-40mm-f2-5-z",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "Air",
+        "Full Frame",
+        "Z-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 41143121051714,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 180,
+      "highlights": [
+        "AF 40mm F2.5, Viltrox Air series lightweight full-frame series introduces a 40mm focal length, efficient and precise autofocus system to capture wonderful moments, so that everyone can enjoy the fun of photography",
+        "Covers the full-frame image field and matches more models",
+        "Compact and lightweight lens body, easy to carry",
+        "The versatile 40mm focal length is ideal for daily shooting and travel"
+      ]
+    }
+  },
+  {
+    "sku": "AF-56MM-F17-AIR-Z",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 56mm F1.7 Air APS-C Lens for Nikon Z-Mount",
+    "marketing_name": "AF 56mm F1.7 Air APS-C Lens for Nikon Z-Mount",
+    "series": "Air",
+    "mount": "Z-mount",
+    "price_usd": 180.0,
+    "status": "official",
+    "description": "AF 56mm F1.7 is an autofocus lens suitable for X-mount/Z-mount, with 11 elements in 9 groups.The focus distance is about 0.55m, and noiseless STM focus motor can accurately control the moving position and bring accurate and smooth focusing",
+    "product_url": "https://viltrox.com/products/viltrox-af-56mm-f1-7-aps-c-lens-for-nikno-z-mount",
+    "source_url": "https://viltrox.com/products/viltrox-af-56mm-f1-7-aps-c-lens-for-nikno-z-mount",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "air",
+      "aps-c",
+      "z-mount",
+      "56mm"
+    ],
+    "specs": {
+      "official_product_id": 7182917697602,
+      "official_handle": "viltrox-af-56mm-f1-7-aps-c-lens-for-nikno-z-mount",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "Air",
+        "APS-C",
+        "Z-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 41157826707522,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 187,
+      "highlights": [
+        "AF 56mm F1.7 is an autofocus lens suitable for X-mount/Z-mount, with 11 elements in 9 groups.The focus distance is about 0.55m, and noiseless STM focus motor can accurately control the moving position and bring accurate and smooth focusing"
+      ]
+    }
+  },
+  {
+    "sku": "EPIC-25MM-100MM-T2-0-1-33X-PL-ANAMORPHIC-CINE-L",
+    "category_main": "Lens",
+    "category_detail": "Cine Lenses",
+    "model_name": "Viltrox EPIC 25mm/100mm T2.0 1.33X PL Full-Frame Anamorphic Cine Lens",
+    "marketing_name": "EPIC 25mm/100mm T2.0 1.33X PL Full-Frame Anamorphic Cine Lens",
+    "series": "Cine",
+    "mount": "L-mount",
+    "price_usd": 3999.0,
+    "status": "official",
+    "description": "T2.0 constant aperture",
+    "product_url": "https://viltrox.com/products/viltrox-epic-25-35-50-75-100mm-t2-0-1-33x-pl-mount",
+    "source_url": "https://viltrox.com/products/viltrox-epic-25-35-50-75-100mm-t2-0-1-33x-pl-mount",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "pl-mount",
+      "25mm",
+      "100mm",
+      "l-mount",
+      "cine"
+    ],
+    "specs": {
+      "official_product_id": 7141518311490,
+      "official_handle": "viltrox-epic-25-35-50-75-100mm-t2-0-1-33x-pl-mount",
+      "official_product_type": "Cine Lenses",
+      "official_tags": [
+        "PL-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Focus Length",
+          "position": 1,
+          "values": [
+            "25mm T2.0 1.33X PL",
+            "100mm T2.0 1.33X PL",
+            "25/100mm T2.0 1.33X PL Kit",
+            "25/35/50/75/100 T2.0 1.33X PL"
+          ]
+        }
+      ],
+      "official_variant_id": 41020887695426,
+      "variant_title": "25mm T2.0 1.33X PL",
+      "variant_weight_grams": 0,
+      "highlights": [
+        "T2.0 constant aperture",
+        "1.33X Constant Squeeze Ratio: Ensures consistent image distortion from far to near",
+        "Beautiful bokeh and oval light spots are vividly rendered",
+        "Front end compatible with 95mm matte box",
+        "Color Saturation: Retro pure color restoration",
+        "Consistent Optical Performance: Uniform character and gear position design"
+      ]
+    }
+  },
+  {
+    "sku": "AF-56MM-F17-AIR-X",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 56mm F1.7 Air APS-C Lens for Fujifilm X-Mount",
+    "marketing_name": "AF 56mm F1.7 Air APS-C Lens for Fujifilm X-Mount",
+    "series": "Air",
+    "mount": "X-mount",
+    "price_usd": 180.0,
+    "status": "official",
+    "description": "Precision Optics: 9/11 Elements (4 ED, 3 High-Refractive)",
+    "product_url": "https://viltrox.com/products/viltrox-af-56mm-f1-7-xf-z",
+    "source_url": "https://viltrox.com/products/viltrox-af-56mm-f1-7-xf-z",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "air",
+      "aps-c",
+      "x-mount",
+      "56mm"
+    ],
+    "specs": {
+      "official_product_id": 7128867045442,
+      "official_handle": "viltrox-af-56mm-f1-7-xf-z",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "Air",
+        "APS-C",
+        "X-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Color",
+          "position": 1,
+          "values": [
+            "Black",
+            "Silver"
+          ]
+        }
+      ],
+      "official_variant_id": 42976830324802,
+      "variant_title": "Black",
+      "variant_weight_grams": 171,
+      "highlights": [
+        "Precision Optics: 9/11 Elements (4 ED, 3 High-Refractive)",
+        "Fast, Accurate STM Autofocus for Photo and Video",
+        "Electronic Aperture with Inner Focusing System",
+        "Durable Aluminum Alloy Metal Mount",
+        "Quiet & Responsive STM Motor for Smooth Focus",
+        "Compact and Lightweight Design",
+        "Supports Multiple Shooting Modes with EXIF Data Recording"
+      ]
+    }
+  },
+  {
+    "sku": "AF-27MM-F12-PRO-FE",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 27mm F1.2 Pro APS-C Lens for Sony E-Mount",
+    "marketing_name": "AF 27mm F1.2 Pro APS-C Lens for Sony E-Mount",
+    "series": "Pro",
+    "mount": "FE-mount",
+    "price_usd": 578.0,
+    "status": "official",
+    "description": "The AF 27mm F1.2 Pro lens is the second ultra-large aperture prime lens of the Pro series launched by Viltrox following the AF 27mm F1.2 Pro",
+    "product_url": "https://viltrox.com/products/viltrox-27mm-f1-2-e-z",
+    "source_url": "https://viltrox.com/products/viltrox-27mm-f1-2-e-z",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "aps-c",
+      "e-mount",
+      "pro",
+      "27mm",
+      "fe-mount"
+    ],
+    "specs": {
+      "official_product_id": 7071190319170,
+      "official_handle": "viltrox-27mm-f1-2-e-z",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "APS-C",
+        "E-mount",
+        "Pro"
+      ],
+      "official_options": [
+        {
+          "name": "Mount",
+          "position": 1,
+          "values": [
+            "Sony E-mount"
+          ]
+        }
+      ],
+      "official_variant_id": 40796532834370,
+      "variant_title": "Sony E-mount",
+      "variant_weight_grams": 565,
+      "highlights": [
+        "The AF 27mm F1.2 Pro lens is the second ultra-large aperture prime lens of the Pro series launched by Viltrox following the AF 27mm F1.2 Pro",
+        "It continues the amazing ultra-high resolution of the Pro series and F1.2 super large aperture for extremely pleasant bokeh"
+      ]
+    }
+  },
+  {
+    "sku": "AF-20MM-F28-AIR-FE",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 20mm F2.8 Air Full-Frame Lens for Sony E-Mount White/Black",
+    "marketing_name": "AF 20mm F2.8 Air Full-Frame Lens for Sony E-Mount White/Black",
+    "series": "Air",
+    "mount": "FE-mount",
+    "price_usd": 176.0,
+    "status": "official",
+    "description": "Viltrox AF 20mm F2.8 is an autofocus lens designed for Sony E-mount / Nikon Z-mount camera models",
+    "product_url": "https://viltrox.com/products/viltrox-af-20mm-f2-8",
+    "source_url": "https://viltrox.com/products/viltrox-af-20mm-f2-8",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "air",
+      "e-mount",
+      "fe-mount",
+      "full frame",
+      "20mm"
+    ],
+    "specs": {
+      "official_product_id": 6988855115842,
+      "official_handle": "viltrox-af-20mm-f2-8",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "Air",
+        "E-mount",
+        "FE-mount",
+        "Full Frame"
+      ],
+      "official_options": [
+        {
+          "name": "Color",
+          "position": 1,
+          "values": [
+            "Black",
+            "White (Limited 100 pcs)"
+          ]
+        }
+      ],
+      "official_variant_id": 40740368285762,
+      "variant_title": "Black",
+      "variant_weight_grams": 157,
+      "highlights": [
+        "Viltrox AF 20mm F2.8 is an autofocus lens designed for Sony E-mount / Nikon Z-mount camera models",
+        "With 10 elements in 8 groups, it offers outstanding optical performance",
+        "The minimum focusing distance of about 0.19m produces beautiful close-ups",
+        "And the quiet STM focus motor can accurately control the moving position and bring accurate and smooth focusing",
+        "Great choice for portrait, landscape, close-up and vlogging!"
+      ]
+    }
+  },
+  {
+    "sku": "AF-27MM-F12-PRO-X",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 27mm F1.2 Pro APS-C Lens for Fujifilm X-Mount",
+    "marketing_name": "AF 27mm F1.2 Pro APS-C Lens for Fujifilm X-Mount",
+    "series": "Pro",
+    "mount": "X-mount",
+    "price_usd": 578.0,
+    "status": "official",
+    "description": "The AF 27mm F1.2 Pro lens is part of Viltrox's Pro flagship series, offering an ultra-large F1.2 aperture",
+    "product_url": "https://viltrox.com/products/viltrox-af-27mm-f-1-2-pro-xf-mount",
+    "source_url": "https://viltrox.com/products/viltrox-af-27mm-f-1-2-pro-xf-mount",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "aps-c",
+      "pro",
+      "x-mount",
+      "27mm"
+    ],
+    "specs": {
+      "official_product_id": 6953351741506,
+      "official_handle": "viltrox-af-27mm-f-1-2-pro-xf-mount",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "APS-C",
+        "Pro",
+        "X-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 40402397954114,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 560,
+      "highlights": [
+        "The AF 27mm F1.2 Pro lens is part of Viltrox's Pro flagship series, offering an ultra-large F1.2 aperture",
+        "This lens delivers exceptional resolution and creates stunning bokeh, making it perfect for portrait and low-light photography",
+        "With its superior optical performance and beautiful background blur, it is designed to meet the demands of professionals looking for high-quality imaging"
+      ]
+    }
+  },
+  {
+    "sku": "AF-28MM-F18-Z",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 28mm F1.8 Full-Frame Lens for Nikon Z-Mount",
+    "marketing_name": "AF 28mm F1.8 Full-Frame Lens for Nikon Z-Mount",
+    "series": "",
+    "mount": "Z-mount",
+    "price_usd": 379.0,
+    "status": "official",
+    "description": "The lens is compact and lightweight, with high resolution and soft bokeheffects",
+    "product_url": "https://viltrox.com/products/viltrox-af-28mm-f1-8",
+    "source_url": "https://viltrox.com/products/viltrox-af-28mm-f1-8",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "full frame",
+      "z-mount",
+      "28mm"
+    ],
+    "specs": {
+      "official_product_id": 6914322006082,
+      "official_handle": "viltrox-af-28mm-f1-8",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "Full Frame",
+        "Z-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Mount",
+          "position": 1,
+          "values": [
+            "Z-Mount For Nikon"
+          ]
+        }
+      ],
+      "official_variant_id": 40411540586562,
+      "variant_title": "Z-Mount For Nikon",
+      "variant_weight_grams": 0,
+      "highlights": [
+        "The lens is compact and lightweight, with high resolution and soft bokeheffects",
+        "It can easily be used for shooting landscape,starry sky,architecture,and portraits"
+      ]
+    }
+  },
+  {
+    "sku": "AF-75MM-F12-PRO-FE",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 75mm F1.2 Pro APS-C Lens for Sony E-Mount",
+    "marketing_name": "AF 75mm F1.2 Pro APS-C Lens for Sony E-Mount",
+    "series": "Pro",
+    "mount": "FE-mount",
+    "price_usd": 580.0,
+    "status": "official",
+    "description": "The AF 75mm F1.2 Pro E lens by Viltrox is the first high-end Pro series, showcasing Viltrox's optical technology expertise",
+    "product_url": "https://viltrox.com/products/viltrox-75mm-f1-2-e-z-pro-lens",
+    "source_url": "https://viltrox.com/products/viltrox-75mm-f1-2-e-z-pro-lens",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "aps-c",
+      "e-mount",
+      "pro",
+      "75mm",
+      "fe-mount"
+    ],
+    "specs": {
+      "official_product_id": 6942771871810,
+      "official_handle": "viltrox-75mm-f1-2-e-z-pro-lens",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "APS-C",
+        "E-mount",
+        "Pro"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 40376196530242,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 670,
+      "highlights": [
+        "The AF 75mm F1.2 Pro E lens by Viltrox is the first high-end Pro series, showcasing Viltrox's optical technology expertise",
+        "It utilizes HOYA special nitrate material from Japan and boasts a super large F1.2 aperture, advanced autofocus, and professional reliability for improved image quality"
+      ]
+    }
+  },
+  {
+    "sku": "AF-16MM-F18-FE",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 16mm F1.8 Full-Frame Lens for Sony E-Mount",
+    "marketing_name": "AF 16mm F1.8 Full-Frame Lens for Sony E-Mount",
+    "series": "",
+    "mount": "FE-mount",
+    "price_usd": 580.0,
+    "status": "official",
+    "description": "The Viltrox AF 16mm F1.8 lens is ideal for Portrait, boasting 15 elements in 12 groups",
+    "product_url": "https://viltrox.com/products/viltrox-af-16mm-f1-8-fe",
+    "source_url": "https://viltrox.com/products/viltrox-af-16mm-f1-8-fe",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "e-mount",
+      "fe-mount",
+      "full frame",
+      "16mm"
+    ],
+    "specs": {
+      "official_product_id": 6924478382146,
+      "official_handle": "viltrox-af-16mm-f1-8-fe",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "E-mount",
+        "FE-mount",
+        "Full Frame"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 40320543195202,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 550,
+      "highlights": [
+        "The Viltrox AF 16mm F1.8 lens is ideal for Portrait, boasting 15 elements in 12 groups",
+        "With a close focus distance of 0.27m and infinity, noiseless STM focus motor technology ensures precise movement and smooth focusing"
+      ]
+    }
+  },
+  {
+    "sku": "EPIC-35MM-50MM-75MM-T2-0-1-33X-ANAMORPHIC-CINE-FE",
+    "category_main": "Lens",
+    "category_detail": "Cine Lenses",
+    "model_name": "Viltrox EPIC 35mm/50mm/75mm T2.0 1.33X Full-Frame Anamorphic Cine Lens",
+    "marketing_name": "EPIC 35mm/50mm/75mm T2.0 1.33X Full-Frame Anamorphic Cine Lens",
+    "series": "Cine",
+    "mount": "FE-mount",
+    "price_usd": 9600.0,
+    "status": "official",
+    "description": "T2.0 Ultra-Large Constant Aperture 1.33X Constant Squeeze Ratio: Ensures consistent image distortion from far to near",
+    "product_url": "https://viltrox.com/products/anamorphic-35-50-75mm-t20-1-33x-pl-mount-cine-lens",
+    "source_url": "https://viltrox.com/products/anamorphic-35-50-75mm-t20-1-33x-pl-mount-cine-lens",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "e-mount",
+      "l-mount",
+      "pl-mount",
+      "35mm",
+      "50mm",
+      "75mm",
+      "fe-mount",
+      "cine"
+    ],
+    "specs": {
+      "official_product_id": 6869196439618,
+      "official_handle": "anamorphic-35-50-75mm-t20-1-33x-pl-mount-cine-lens",
+      "official_product_type": "Cine Lenses",
+      "official_tags": [
+        "E-mount",
+        "L-mount",
+        "PL-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Model",
+          "position": 1,
+          "values": [
+            "35mm+50mm+75mm T2.0 1.33X RF-mount Kit",
+            "35mm T2.0 1.33X E-mount",
+            "50mm T2.0 1.33X E-mount",
+            "75mm T2.0 1.33X E-mount",
+            "35mm+50mm+75mm T2.0 1.33X E-mount Kit",
+            "35mm T2.0 1.33X L-mount",
+            "50mm T2.0 1.33X L-mount",
+            "75mm T2.0 1.33X L-mount",
+            "35mm+50mm+75mm T2.0 1.33X L-mount Kit",
+            "35mm T2.0 1.33X PL-mount",
+            "50mm T2.0 1.33X PL-mount",
+            "75mm T2.0 1.33X PL-mount",
+            "35mm+50mm+75mm T2.0 1.33X PL-mount Kit"
+          ]
+        }
+      ],
+      "official_variant_id": 42759777779778,
+      "variant_title": "35mm+50mm+75mm T2.0 1.33X RF-mount Kit",
+      "variant_weight_grams": 11500,
+      "highlights": [
+        "T2.0 Ultra-Large Constant Aperture 1.33X Constant Squeeze Ratio: Ensures consistent image distortion from far to near",
+        "Beautiful bokeh and oval light spots are vividly rendered",
+        "Front end compatible with 95mm matte box",
+        "Color Saturation: Retro pure color restoration",
+        "Consistent Optical Performance: Uniform character and gear position design"
+      ]
+    }
+  },
+  {
+    "sku": "AF-75MM-F12-PRO-X",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 75mm F1.2 Pro APS-C Lens for Fujifilm X-Mount",
+    "marketing_name": "AF 75mm F1.2 Pro APS-C Lens for Fujifilm X-Mount",
+    "series": "Pro",
+    "mount": "X-mount",
+    "price_usd": 580.0,
+    "status": "official",
+    "description": "The AF 75mm F1.2 Pro XF lens by Viltrox is the first high-end Pro series, showcasing Viltrox's optical technology expertise",
+    "product_url": "https://viltrox.com/products/75mm-f12-xf-lens",
+    "source_url": "https://viltrox.com/products/75mm-f12-xf-lens",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "aps-c",
+      "pro",
+      "x-mount",
+      "75mm"
+    ],
+    "specs": {
+      "official_product_id": 6868395950146,
+      "official_handle": "75mm-f12-xf-lens",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "APS-C",
+        "Pro",
+        "X-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 40145490182210,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 1500,
+      "highlights": [
+        "The AF 75mm F1.2 Pro XF lens by Viltrox is the first high-end Pro series, showcasing Viltrox's optical technology expertise",
+        "It utilizes HOYA special nitrate material from Japan and boasts a super large F1.2 aperture, advanced autofocus, and professional reliability for improved image quality"
+      ]
+    }
+  },
+  {
+    "sku": "AF-13MM-F14-FE",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 13mm F1.4 APS-C Lens for Sony E-Mount",
+    "marketing_name": "AF 13mm F1.4 APS-C Lens for Sony E-Mount",
+    "series": "",
+    "mount": "FE-mount",
+    "price_usd": 486.0,
+    "status": "official",
+    "description": "Viltrox 13mm F1.4 lenses are compatible with Fujifilm, Nikon, and Sony APS-C systems",
+    "product_url": "https://viltrox.com/products/auto-focus-13mmf14-e-mount-aps-c-prime-lens",
+    "source_url": "https://viltrox.com/products/auto-focus-13mmf14-e-mount-aps-c-prime-lens",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "aps-c",
+      "e-mount",
+      "13mm",
+      "fe-mount"
+    ],
+    "specs": {
+      "official_product_id": 6772374143042,
+      "official_handle": "auto-focus-13mmf14-e-mount-aps-c-prime-lens",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "APS-C",
+        "E-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 39843475259458,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 415,
+      "highlights": [
+        "Viltrox 13mm F1.4 lenses are compatible with Fujifilm, Nikon, and Sony APS-C systems",
+        "Features include Eye-AF, EXIF data transfer, and USB firmware updates",
+        "Perfect for vlogging, night cityscapes, and more"
+      ]
+    }
+  },
+  {
+    "sku": "AF-13MM-F14-Z",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 13mm F1.4 APS-C Lens for Nikon Z-Mount",
+    "marketing_name": "AF 13mm F1.4 APS-C Lens for Nikon Z-Mount",
+    "series": "",
+    "mount": "Z-mount",
+    "price_usd": 486.0,
+    "status": "official",
+    "description": "Viltrox 13mm F1.4 lenses are compatible with Fujifilm, Nikon, and Sony APS-C systems",
+    "product_url": "https://viltrox.com/products/af-13mmf14-z-mount-aps-c-prime-lens-for-nikon-z",
+    "source_url": "https://viltrox.com/products/af-13mmf14-z-mount-aps-c-prime-lens-for-nikon-z",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "aps-c",
+      "z-mount",
+      "13mm"
+    ],
+    "specs": {
+      "official_product_id": 6772380827714,
+      "official_handle": "af-13mmf14-z-mount-aps-c-prime-lens-for-nikon-z",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "APS-C",
+        "Z-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 39843492233282,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 455,
+      "highlights": [
+        "Viltrox 13mm F1.4 lenses are compatible with Fujifilm, Nikon, and Sony APS-C systems",
+        "Features include Eye-AF, EXIF data transfer, and USB firmware updates",
+        "Perfect for vlogging, night cityscapes, and more"
+      ]
+    }
+  },
+  {
+    "sku": "AF-13MM-F14-X",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 13mm F1.4 APS-C Lens for Fujifilm X-Mount",
+    "marketing_name": "AF 13mm F1.4 APS-C Lens for Fujifilm X-Mount",
+    "series": "",
+    "mount": "X-mount",
+    "price_usd": 486.0,
+    "status": "official",
+    "description": "Viltrox 13mm F1.4 lenses are compatible with Fujifilm, Nikon, and Sony APS-C systems",
+    "product_url": "https://viltrox.com/products/13mm-f14-af-lens-for-fujifilm-x-mount-camera-models",
+    "source_url": "https://viltrox.com/products/13mm-f14-af-lens-for-fujifilm-x-mount-camera-models",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "aps-c",
+      "x-mount",
+      "13mm"
+    ],
+    "specs": {
+      "official_product_id": 6732328435778,
+      "official_handle": "13mm-f14-af-lens-for-fujifilm-x-mount-camera-models",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "APS-C",
+        "X-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 39747011412034,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 420,
+      "highlights": [
+        "Viltrox 13mm F1.4 lenses are compatible with Fujifilm, Nikon, and Sony APS-C systems",
+        "Features include Eye-AF, EXIF data transfer, and USB firmware updates",
+        "Perfect for vlogging, night cityscapes, and more"
+      ]
+    }
+  },
+  {
+    "sku": "AF-24MM-F18-Z",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 24mm F1.8 Full-Frame Lens for Nikon Z-Mount",
+    "marketing_name": "AF 24mm F1.8 Full-Frame Lens for Nikon Z-Mount",
+    "series": "",
+    "mount": "Z-mount",
+    "price_usd": 379.0,
+    "status": "official",
+    "description": "Viltrox 24mm F1.8 lens is a wide-angle prime lens with autofocus for full frame mirrorless cameras",
+    "product_url": "https://viltrox.com/products/viltrox-af-24mm-f18-z-mount-full-frame-prime-lens",
+    "source_url": "https://viltrox.com/products/viltrox-af-24mm-f18-z-mount-full-frame-prime-lens",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "full frame",
+      "z-mount",
+      "24mm"
+    ],
+    "specs": {
+      "official_product_id": 6626175811650,
+      "official_handle": "viltrox-af-24mm-f18-z-mount-full-frame-prime-lens",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "Full Frame",
+        "Z-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 39457164623938,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 370,
+      "highlights": [
+        "Viltrox 24mm F1.8 lens is a wide-angle prime lens with autofocus for full frame mirrorless cameras",
+        "It EXIF information transmission, and USB upgrade"
+      ]
+    }
+  },
+  {
+    "sku": "AF-56MM-F14-FE",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 56mm F1.4 APS-C Lens for Sony E-Mount",
+    "marketing_name": "AF 56mm F1.4 APS-C Lens for Sony E-Mount",
+    "series": "",
+    "mount": "FE-mount",
+    "price_usd": 239.0,
+    "status": "official",
+    "description": "The AF 56mm F1.4 APS-C Portrait Prime Lens adopts strict design standards, it has both high resolution and soft bokeh Experience",
+    "product_url": "https://viltrox.com/products/viltrox-autofocus-56mm-f1-4-e-mount-prime-lens",
+    "source_url": "https://viltrox.com/products/viltrox-autofocus-56mm-f1-4-e-mount-prime-lens",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "aps-c",
+      "e-mount",
+      "56mm",
+      "fe-mount"
+    ],
+    "specs": {
+      "official_product_id": 4740291788866,
+      "official_handle": "viltrox-autofocus-56mm-f1-4-e-mount-prime-lens",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "APS-C",
+        "E-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 39854465450050,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 290,
+      "highlights": [
+        "The AF 56mm F1.4 APS-C Portrait Prime Lens adopts strict design standards, it has both high resolution and soft bokeh Experience",
+        "The perfect combination of sharpness and artistic bokeh with this meticulously designed lens"
+      ]
+    }
+  },
+  {
+    "sku": "AF-33MM-F14-FE",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 33mm F1.4 APS-C Lens for Sony E-Mount",
+    "marketing_name": "AF 33mm F1.4 APS-C Lens for Sony E-Mount",
+    "series": "",
+    "mount": "FE-mount",
+    "price_usd": 239.0,
+    "status": "official",
+    "description": "Viltrox AF 33mm F1.4 is a wide-angle large aperture lens specially designed for Sony E-Mount cameras and provides a 50mm equivalent focal length",
+    "product_url": "https://viltrox.com/products/viltrox-33mm-f1-4-e-mount-autofocus-prime-lens",
+    "source_url": "https://viltrox.com/products/viltrox-33mm-f1-4-e-mount-autofocus-prime-lens",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "aps-c",
+      "e-mount",
+      "33mm",
+      "fe-mount"
+    ],
+    "specs": {
+      "official_product_id": 4740289986626,
+      "official_handle": "viltrox-33mm-f1-4-e-mount-autofocus-prime-lens",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "APS-C",
+        "E-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 39854461976642,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 270,
+      "highlights": [
+        "Viltrox AF 33mm F1.4 is a wide-angle large aperture lens specially designed for Sony E-Mount cameras and provides a 50mm equivalent focal length",
+        "Support autofocus, camera multiple shooting modes, EXIF information record, and firmware upgrade"
+      ]
+    }
+  },
+  {
+    "sku": "AF-56MM-F14",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 56mm F1.4 APS-C Lens for Canon M-Mount",
+    "marketing_name": "AF 56mm F1.4 APS-C Lens for Canon M-Mount",
+    "series": "",
+    "mount": "",
+    "price_usd": 239.0,
+    "status": "official",
+    "description": "Viltrox AF 56/f1.4 M is an APS-C prime portrait lens with equivalent focal length of 90mm for Canon EOS M series cameras",
+    "product_url": "https://viltrox.com/products/viltrox-56mm-f1_4-ef-m-lens-for-canon-eos-m",
+    "source_url": "https://viltrox.com/products/viltrox-56mm-f1_4-ef-m-lens-for-canon-eos-m",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "aps-c",
+      "m-mount",
+      "56mm"
+    ],
+    "specs": {
+      "official_product_id": 4725436350530,
+      "official_handle": "viltrox-56mm-f1_4-ef-m-lens-for-canon-eos-m",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "APS-C",
+        "M-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Color",
+          "position": 1,
+          "values": [
+            "BLACK"
+          ]
+        }
+      ],
+      "official_variant_id": 40255885606978,
+      "variant_title": "BLACK",
+      "variant_weight_grams": 290,
+      "highlights": [
+        "Viltrox AF 56/f1.4 M is an APS-C prime portrait lens with equivalent focal length of 90mm for Canon EOS M series cameras",
+        "It features excellent sharpness, nice bokeh, Eye AF support, and USB upgrades, making it a great choice for portrait, landscape, and architectural photography"
+      ]
+    }
+  },
+  {
+    "sku": "AF-33MM-F14",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 33mm F1.4 APS-C Lens for Canon M-Mount",
+    "marketing_name": "AF 33mm F1.4 APS-C Lens for Canon M-Mount",
+    "series": "",
+    "mount": "",
+    "price_usd": 239.0,
+    "status": "official",
+    "description": "Viltrox AF 33mm F1.4 is a wide-angle large aperture lens specially designed for Canon M-Mount cameras and provides a 50mm equivalent focal length",
+    "product_url": "https://viltrox.com/products/viltrox-ef-m-mount-33mm-f1-4-autofocus-aps-c-prime-lens",
+    "source_url": "https://viltrox.com/products/viltrox-ef-m-mount-33mm-f1-4-autofocus-aps-c-prime-lens",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "aps-c",
+      "m-mount",
+      "33mm"
+    ],
+    "specs": {
+      "official_product_id": 4703911673922,
+      "official_handle": "viltrox-ef-m-mount-33mm-f1-4-autofocus-aps-c-prime-lens",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "APS-C",
+        "M-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 42701336477762,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 270,
+      "highlights": [
+        "Viltrox AF 33mm F1.4 is a wide-angle large aperture lens specially designed for Canon M-Mount cameras and provides a 50mm equivalent focal length",
+        "Support autofocus, camera multiple shooting modes, EXIF information record, and firmware upgrade"
+      ]
+    }
+  },
+  {
+    "sku": "AF-56MM-F14-X",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 56mm F1.4 APS-C Lens for Fujifilm X-Mount",
+    "marketing_name": "AF 56mm F1.4 APS-C Lens for Fujifilm X-Mount",
+    "series": "",
+    "mount": "X-mount",
+    "price_usd": 239.0,
+    "status": "official",
+    "description": "Viltrox AF 56mm F1.4 is a standard APS-C portrait lens with equivalent focal length of 85mm for Fujifilm X -series cameras, It features excellent sharpness, nice bokeh, Eye AF support, and USB upgrades, making it a great choice for portrait, landscape, and architectural photography",
+    "product_url": "https://viltrox.com/products/viltrox-af-56mm-f14-x-mount-lens",
+    "source_url": "https://viltrox.com/products/viltrox-af-56mm-f14-x-mount-lens",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "aps-c",
+      "x-mount",
+      "56mm"
+    ],
+    "specs": {
+      "official_product_id": 4686795407426,
+      "official_handle": "viltrox-af-56mm-f14-x-mount-lens",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "APS-C",
+        "X-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Color",
+          "position": 1,
+          "values": [
+            "Black",
+            "Silver"
+          ]
+        }
+      ],
+      "official_variant_id": 39285987770434,
+      "variant_title": "Black",
+      "variant_weight_grams": 290,
+      "highlights": [
+        "Viltrox AF 56mm F1.4 is a standard APS-C portrait lens with equivalent focal length of 85mm for Fujifilm X -series cameras, It features excellent sharpness, nice bokeh, Eye AF support, and USB upgrades, making it a great choice for portrait, landscape, and architectural photography"
+      ]
+    }
+  },
+  {
+    "sku": "AF-85MM-F18-II-X",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 85mm F1.8 II APS-C Lens for Fujifilm X-Mount",
+    "marketing_name": "AF 85mm F1.8 II APS-C Lens for Fujifilm X-Mount",
+    "series": "",
+    "mount": "X-mount",
+    "price_usd": 329.0,
+    "status": "official",
+    "description": "85mm focal length F1.8 wide aperture 10 elements in 7 groups, including 1 ED lens and 4 HD lenses Nano multilayer coating Electronic aperture Internal focusing Constant length Quiet focusing motor Precision metal construction",
+    "product_url": "https://viltrox.com/products/viltrox-85mm-f1-8-lens-of-lighter-weight-for-fuji-x-mount",
+    "source_url": "https://viltrox.com/products/viltrox-85mm-f1-8-lens-of-lighter-weight-for-fuji-x-mount",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "aps-c",
+      "x-mount",
+      "85mm"
+    ],
+    "specs": {
+      "official_product_id": 4620925567042,
+      "official_handle": "viltrox-85mm-f1-8-lens-of-lighter-weight-for-fuji-x-mount",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "APS-C",
+        "X-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 32252525674562,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 1000,
+      "highlights": [
+        "85mm focal length F1.8 wide aperture 10 elements in 7 groups, including 1 ED lens and 4 HD lenses Nano multilayer coating Electronic aperture Internal focusing Constant length Quiet focusing motor Precision metal construction"
+      ]
+    }
+  },
+  {
+    "sku": "MF-20MM-T2-0-CINE-FE",
+    "category_main": "Lens",
+    "category_detail": "Cine Lenses",
+    "model_name": "Viltrox MF 20mm T2.0 Full-Frame Cine Lens for Sony E-Mount",
+    "marketing_name": "MF 20mm T2.0 Full-Frame Cine Lens for Sony E-Mount",
+    "series": "Cine",
+    "mount": "FE-mount",
+    "price_usd": 499.0,
+    "status": "official",
+    "description": "The lens consists of 12 elements in 9 groups, including 1 AA(Adavanced Aspheric) lens and 4ED(Extra-low dispersion) lenses which effectively suppress chromatic aberration.With T2.0 light transmission, it achieve excellent resolution from the center to the edge",
+    "product_url": "https://viltrox.com/products/viltrox-s-20mm-t2-0-fe-prime-cinematic-mf-wide-lens-for-sony-e-mount-camera",
+    "source_url": "https://viltrox.com/products/viltrox-s-20mm-t2-0-fe-prime-cinematic-mf-wide-lens-for-sony-e-mount-camera",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "cine series",
+      "spherical",
+      "20mm",
+      "fe-mount",
+      "cine"
+    ],
+    "specs": {
+      "official_product_id": 4604327919682,
+      "official_handle": "viltrox-s-20mm-t2-0-fe-prime-cinematic-mf-wide-lens-for-sony-e-mount-camera",
+      "official_product_type": "Cine Lenses",
+      "official_tags": [
+        "Cine Series",
+        "Spherical"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 32193152450626,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 808,
+      "highlights": [
+        "The lens consists of 12 elements in 9 groups, including 1 AA(Adavanced Aspheric) lens and 4ED(Extra-low dispersion) lenses which effectively suppress chromatic aberration.With T2.0 light transmission, it achieve excellent resolution from the center to the edge"
+      ]
+    }
+  },
+  {
+    "sku": "AF-85MM-F18-II-FE",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 85mm F1.8 II Full-Frame Lens for Sony E-Mount",
+    "marketing_name": "AF 85mm F1.8 II Full-Frame Lens for Sony E-Mount",
+    "series": "",
+    "mount": "FE-mount",
+    "price_usd": 329.0,
+    "status": "official",
+    "description": "85mm focal length F1.8 wide aperture 10 elements in 7 groups, including 1 ED lens and 4 HD lenses Nano multilayer coating Electronic aperture Internal focusing Constant length Quiet focusing motor Precision metal construction",
+    "product_url": "https://viltrox.com/products/viltrox-85mm-f18-e-mount-sony-markii",
+    "source_url": "https://viltrox.com/products/viltrox-85mm-f18-e-mount-sony-markii",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "e-mount",
+      "fe-mount",
+      "full frame",
+      "85mm"
+    ],
+    "specs": {
+      "official_product_id": 4548310663234,
+      "official_handle": "viltrox-85mm-f18-e-mount-sony-markii",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "E-mount",
+        "FE-mount",
+        "Full Frame"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 31985259905090,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 484000,
+      "highlights": [
+        "85mm focal length F1.8 wide aperture 10 elements in 7 groups, including 1 ED lens and 4 HD lenses Nano multilayer coating Electronic aperture Internal focusing Constant length Quiet focusing motor Precision metal construction"
+      ]
+    }
+  },
+  {
+    "sku": "AF-23MM-F14-X",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 23mm F1.4 APS-C Lens for Fujifilm X-Mount",
+    "marketing_name": "AF 23mm F1.4 APS-C Lens for Fujifilm X-Mount",
+    "series": "",
+    "mount": "X-mount",
+    "price_usd": 239.0,
+    "status": "official",
+    "description": "Viltrox 23mm F1.4 Lens features STM stepping motor, F1.4 aperture for defocusing effects, 11 elements with HD Nano coating, durable metal body, 0.57lb weight, and micro-USB port for updates",
+    "product_url": "https://viltrox.com/products/viltrox-23mm-f14-xf-mount",
+    "source_url": "https://viltrox.com/products/viltrox-23mm-f14-xf-mount",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "aps-c",
+      "x-mount",
+      "23mm"
+    ],
+    "specs": {
+      "official_product_id": 4529584701506,
+      "official_handle": "viltrox-23mm-f14-xf-mount",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "APS-C",
+        "X-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 39285978890306,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 260,
+      "highlights": [
+        "Viltrox 23mm F1.4 Lens features STM stepping motor, F1.4 aperture for defocusing effects, 11 elements with HD Nano coating, durable metal body, 0.57lb weight, and micro-USB port for updates"
+      ]
+    }
+  },
+  {
+    "sku": "MF-20MM-T2-0-CINE-L",
+    "category_main": "Lens",
+    "category_detail": "Cine Lenses",
+    "model_name": "Viltrox MF 20mm T2.0 Full-Frame Cine Lens for Panasonic/Leica L-Mount",
+    "marketing_name": "MF 20mm T2.0 Full-Frame Cine Lens for Panasonic/Leica L-Mount",
+    "series": "Cine",
+    "mount": "L-mount",
+    "price_usd": 499.0,
+    "status": "official",
+    "description": "The lens consists of 12 elements in 9 groups, including 1 AA(Adavanced Aspheric) lens and 4ED(Extra-low dispersion) lenses which effectively suppress chromatic aberration.With T2.0 light transmission, it achieve excellent resolution from the center to the edge",
+    "product_url": "https://viltrox.com/products/viltrox-s-20mm-t2-0-asph-manual-focus-prime-wide-angle-cinematic-lens-for-panasonic-l-mount-camera",
+    "source_url": "https://viltrox.com/products/viltrox-s-20mm-t2-0-asph-manual-focus-prime-wide-angle-cinematic-lens-for-panasonic-l-mount-camera",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "cine series",
+      "l-mount",
+      "spherical",
+      "20mm",
+      "cine"
+    ],
+    "specs": {
+      "official_product_id": 4512197574722,
+      "official_handle": "viltrox-s-20mm-t2-0-asph-manual-focus-prime-wide-angle-cinematic-lens-for-panasonic-l-mount-camera",
+      "official_product_type": "Cine Lenses",
+      "official_tags": [
+        "Cine Series",
+        "L-mount",
+        "Spherical"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 31839808880706,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 808,
+      "highlights": [
+        "The lens consists of 12 elements in 9 groups, including 1 AA(Adavanced Aspheric) lens and 4ED(Extra-low dispersion) lenses which effectively suppress chromatic aberration.With T2.0 light transmission, it achieve excellent resolution from the center to the edge"
+      ]
+    }
+  },
+  {
+    "sku": "AF-33MM-F14-X",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox AF 33mm F1.4 APS-C Lens for Fujifilm X-Mount",
+    "marketing_name": "AF 33mm F1.4 APS-C Lens for Fujifilm X-Mount",
+    "series": "",
+    "mount": "X-mount",
+    "price_usd": 239.0,
+    "status": "official",
+    "description": "Viltrox AF 33mm F1.4 is a wide-angle large aperture lens specially designed for Fujifilm X-Mount cameras and provides a 50mm equivalent focal length",
+    "product_url": "https://viltrox.com/products/viltrox-af-33mm-f14-xf-aps-c-lens",
+    "source_url": "https://viltrox.com/products/viltrox-af-33mm-f14-xf-aps-c-lens",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "af",
+      "aps-c",
+      "x-mount",
+      "33mm"
+    ],
+    "specs": {
+      "official_product_id": 4509250224194,
+      "official_handle": "viltrox-af-33mm-f14-xf-aps-c-lens",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "AF",
+        "APS-C",
+        "X-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Color",
+          "position": 1,
+          "values": [
+            "Black",
+            "Silver"
+          ]
+        }
+      ],
+      "official_variant_id": 42740343439426,
+      "variant_title": "Black",
+      "variant_weight_grams": 536,
+      "highlights": [
+        "Viltrox AF 33mm F1.4 is a wide-angle large aperture lens specially designed for Fujifilm X-Mount cameras and provides a 50mm equivalent focal length",
+        "Support autofocus, camera multiple shooting modes, EXIF information record, and firmware upgrade"
+      ]
+    }
+  },
+  {
+    "sku": "MF-20MM-F18-FE",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox MF 20mm F1.8 Full-Frame Lens for Sony E-Mount",
+    "marketing_name": "MF 20mm F1.8 Full-Frame Lens for Sony E-Mount",
+    "series": "",
+    "mount": "FE-mount",
+    "price_usd": 399.0,
+    "status": "official",
+    "description": "20mm large aperture portrait lens",
+    "product_url": "https://viltrox.com/products/viltrox-20mm-f-1-8-wide-angle-full-frame-manual-focus-prime-lens-for-sony-e-mount",
+    "source_url": "https://viltrox.com/products/viltrox-20mm-f-1-8-wide-angle-full-frame-manual-focus-prime-lens-for-sony-e-mount",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "e-mount",
+      "fe-mount",
+      "full frame",
+      "mf",
+      "20mm"
+    ],
+    "specs": {
+      "official_product_id": 4405595865154,
+      "official_handle": "viltrox-20mm-f-1-8-wide-angle-full-frame-manual-focus-prime-lens-for-sony-e-mount",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "E-mount",
+        "FE-mount",
+        "Full Frame",
+        "MF"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 31448215584834,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 77,
+      "highlights": [
+        "20mm large aperture portrait lens",
+        "Four ED lenses (fluorite glass), for phase difference dispersion correction",
+        "12 elements in 9 groups construction",
+        "Full metal body ensures accuracy and durability"
+      ]
+    }
+  },
+  {
+    "sku": "MF-20MM-F18-Z",
+    "category_main": "Lens",
+    "category_detail": "camera lens",
+    "model_name": "Viltrox MF 20mm F1.8 Full-Frame Lens for Nikon Z-Mount",
+    "marketing_name": "MF 20mm F1.8 Full-Frame Lens for Nikon Z-Mount",
+    "series": "",
+    "mount": "Z-mount",
+    "price_usd": 399.0,
+    "status": "official",
+    "description": "20mm large aperture portrait lens",
+    "product_url": "https://viltrox.com/products/viltrox-20mm-f1-8-full-frame-wide-angle-fixed-prime-lens-for-nikon-z-mount-mirrorless",
+    "source_url": "https://viltrox.com/products/viltrox-20mm-f1-8-full-frame-wide-angle-fixed-prime-lens-for-nikon-z-mount-mirrorless",
+    "source_file": "official:viltrox.com/products.json",
+    "source_confidence": 0.72,
+    "source_checked_at": "2026-05-22T06:37:42Z",
+    "fit_tags": [
+      "full frame",
+      "mf",
+      "z-mount",
+      "20mm"
+    ],
+    "specs": {
+      "official_product_id": 4405591900226,
+      "official_handle": "viltrox-20mm-f1-8-full-frame-wide-angle-fixed-prime-lens-for-nikon-z-mount-mirrorless",
+      "official_product_type": "camera lens",
+      "official_tags": [
+        "Full Frame",
+        "MF",
+        "Z-mount"
+      ],
+      "official_options": [
+        {
+          "name": "Title",
+          "position": 1,
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "official_variant_id": 31448203493442,
+      "variant_title": "Default Title",
+      "variant_weight_grams": 80,
+      "highlights": [
+        "20mm large aperture portrait lens",
+        "Four ED lenses (fluorite glass) for phase difference dispersion correction",
+        "12 elements in 9 groups construction",
+        "Full metal body ensures accuracy and durability"
+      ]
     }
   }
 ]
