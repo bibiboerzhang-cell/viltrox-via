@@ -1108,10 +1108,23 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
     if (isPlatformSearchCandidate(selectedKol)) {
       setSelectedProfile(null);
       setSelectedAssessment(null);
-      setSelectedProductFits([]);
       setSelectedContacts([]);
       setProfilePosts([]);
       setProfileLoading(false);
+      if (selectedKolPoolId) {
+        let cancelled = false;
+        void getKolProductFit(apiToken, selectedKolPoolId, 5)
+          .then((result) => {
+            if (!cancelled) setSelectedProductFits(result.items || []);
+          })
+          .catch(() => {
+            if (!cancelled) setSelectedProductFits([]);
+          });
+        return () => {
+          cancelled = true;
+        };
+      }
+      setSelectedProductFits([]);
       return;
     }
     let cancelled = false;
@@ -1140,7 +1153,7 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
     return () => {
       cancelled = true;
     };
-  }, [apiToken, selectedKol?.id]);
+  }, [apiToken, selectedKol?.id, selectedKolPoolId]);
 
   useEffect(() => {
     if (!apiToken || !selectedKolPoolId) {
@@ -2150,7 +2163,7 @@ function ProfilePanel({
   const dimensions11ProductFits = productFitsFromDimensions11(selectedDimensions11);
   const productRows: Array<Record<string, unknown>> = productFits.length ? productFits as unknown as Array<Record<string, unknown>> : dimensions11ProductFits as unknown as Array<Record<string, unknown>>;
   const productFitMethod = textValue(productRows[0]?.method, '');
-  const productFitScore = safeNumber(summary.product_fit || selectedKol.raw.product_fit) || safeNumber(productRows[0]?.score);
+  const productFitScore = safeNumber(productRows[0]?.score) || safeNumber(summary.product_fit || selectedKol.raw.product_fit);
   const decision = candidateOnly
     ? (historicalCooperationCount
       ? `历史合作命中 ${historicalCooperationCount} 条；优先核对最近内容、负责人和产品线后复用。`
