@@ -25,7 +25,7 @@ from app.services.vkpi.media_cache import cache_image, cache_video  # noqa: E402
 
 
 STAFF = {"id": 1, "role": "admin", "is_owner": 1}
-DEFAULT_PLATFORMS = ("facebook", "instagram", "reddit")
+DEFAULT_PLATFORMS = ("facebook", "instagram", "reddit", "tiktok", "x", "youtube")
 
 
 def _utc_stamp() -> str:

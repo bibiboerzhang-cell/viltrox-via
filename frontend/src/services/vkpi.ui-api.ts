@@ -1848,7 +1848,7 @@ export async function lookupCachedVideoUrl(token: string, platform: string, vide
   qs.set("video_id", videoId);
   try {
     const response = await apiFetch<{ hit?: boolean; cached_url?: string; cachedUrl?: string }>(
-      `/api/marketing/media/video-cache/lookup?${qs.toString()}`,
+      `/api/admin/vkpi/media/video-cache/lookup?${qs.toString()}`,
       {},
       token,
     );
