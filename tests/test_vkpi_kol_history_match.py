@@ -211,3 +211,81 @@ def test_history_search_uses_cached_profile_avatar_when_column_is_empty():
         assert results[0]["historical_match"]["avatar_url"] == "https://yt3.ggpht.com/history-avatar=s800-c-k-c0x00ffffff-no-rj"
     finally:
         _cleanup()
+
+
+def test_natural_history_search_prioritizes_richer_cached_candidates():
+    ensure_vkpi_product_industry_schema()
+    _cleanup()
+    conn = get_conn()
+    now = "2026-05-20T10:00:00Z"
+    try:
+        for suffix, followers, raw in (
+            (
+                "empty",
+                900000,
+                {"profile": {"snippet": {"thumbnails": {"high": {"url": "https://example.com/empty.jpg"}}}}},
+            ),
+            (
+                "rich",
+                1000,
+                {
+                    "profile": {"snippet": {"thumbnails": {"high": {"url": "https://example.com/rich.jpg"}}}},
+                    "videos": [
+                        {
+                            "kind": "youtube#video",
+                            "id": "rich-video",
+                            "snippet": {"title": "Shared Topic cached field test"},
+                            "statistics": {"viewCount": "456"},
+                        }
+                    ],
+                },
+            ),
+        ):
+            conn.execute(
+                """
+                INSERT INTO vkpi_kol_pool
+                  (pool_uid, platform, handle, profile_url, display_name, avatar_url, bio, email,
+                   followers, following, posts_count, avg_views, avg_likes, avg_comments,
+                   engagement_rate, source_type, source_ref, raw_platform_data, created_by_staff_id,
+                   last_seen_at, created_at, updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    f"{MARKER}-rank-{suffix}",
+                    "youtube",
+                    f"sharedtopic{suffix}",
+                    f"https://youtube.com/@sharedtopic{suffix}",
+                    f"Shared Topic {suffix}",
+                    "",
+                    "sharedtopic viltrox",
+                    "",
+                    followers,
+                    None,
+                    1,
+                    100,
+                    5,
+                    1,
+                    0.01,
+                    "legacy_excel_p2d",
+                    MARKER,
+                    json.dumps(raw),
+                    None,
+                    now,
+                    now,
+                    now,
+                ),
+            )
+        conn.commit()
+
+        results = kol_history_match.search_pool_for_natural(
+            "sharedtopic",
+            {"platform": "youtube", "keywords": ["sharedtopic"]},
+            limit=2,
+        )
+
+        assert len(results) >= 2
+        assert results[0]["handle"] == "sharedtopicrich"
+        assert results[0]["latest_posts"]
+        assert any("最近内容" in reason for reason in results[0]["natural_match_reasons"])
+    finally:
+        _cleanup()

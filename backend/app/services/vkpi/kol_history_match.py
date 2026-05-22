@@ -495,6 +495,8 @@ def search_pool_for_natural(query: str, parsed: dict[str, Any], *, limit: int = 
     conn = get_conn()
     platform = _platform(parsed.get("platform"))
     tokens = _tokens(query, parsed)
+    safe_limit = max(1, min(500, int(limit or 100)))
+    fetch_limit = max(safe_limit, min(500, safe_limit * 4, 80))
     where: list[str] = []
     params: list[Any] = []
     if platform:
@@ -520,7 +522,7 @@ def search_pool_for_natural(query: str, parsed: dict[str, Any], *, limit: int = 
           id DESC
         LIMIT ?
         """,
-        (*params, max(1, min(500, int(limit or 100)))),
+        (*params, fetch_limit),
     ).fetchall()
     results: list[dict[str, Any]] = []
     for row in rows:
@@ -528,11 +530,16 @@ def search_pool_for_natural(query: str, parsed: dict[str, Any], *, limit: int = 
         history = _history_payload(conn, data, match_type="natural_pool_search", confidence=0.7)
         if parsed.get("requires_collaboration") and not _int(history.get("cooperation_count")):
             continue
+        recent_posts = history.get("recent_posts") or []
+        avatar_url = _text(data.get("avatar_url")) or _text(history.get("avatar_url"))
         base_score = _int(data.get("viltrox_fit_score"), 42)
-        score = min(100, max(base_score, 42) + min(24, _int(history.get("cooperation_count")) * 6))
+        evidence_boost = min(8, len(recent_posts) * 3) + (2 if avatar_url else 0)
+        score = min(100, max(base_score, 42) + min(24, _int(history.get("cooperation_count")) * 6) + evidence_boost)
         reasons = []
         if history.get("cooperation_count"):
             reasons.append(f"历史合作 {history.get('cooperation_count')} 条")
+        if recent_posts:
+            reasons.append(f"最近内容 {len(recent_posts)} 条")
         if data.get("source_type"):
             reasons.append(f"来源 {data.get('source_type')}")
         results.append(
@@ -546,7 +553,7 @@ def search_pool_for_natural(query: str, parsed: dict[str, Any], *, limit: int = 
                 "display_name": data.get("display_name") or data.get("handle"),
                 "media_name": data.get("display_name") or data.get("handle"),
                 "profile_url": data.get("profile_url"),
-                "avatar_url": data.get("avatar_url") or history.get("avatar_url"),
+                "avatar_url": avatar_url,
                 "follower_count": data.get("followers"),
                 "snapshot_follower_count": data.get("followers"),
                 "content_count": data.get("posts_count"),
@@ -564,9 +571,18 @@ def search_pool_for_natural(query: str, parsed: dict[str, Any], *, limit: int = 
                 "history_match_confidence": history.get("match_confidence"),
                 "sync_status": data.get("sync_status"),
                 "source_type": data.get("source_type"),
-                "latest_posts": history.get("recent_posts"),
-                "posts": history.get("recent_posts"),
+                "latest_posts": recent_posts,
+                "posts": recent_posts,
                 "historical_match": history,
             }
         )
-    return results[:limit]
+    results.sort(
+        key=lambda item: (
+            _int(item.get("natural_match_score")),
+            len(item.get("latest_posts") or []),
+            1 if _text(item.get("avatar_url")) else 0,
+            _int(item.get("follower_count")),
+        ),
+        reverse=True,
+    )
+    return results[:safe_limit]
