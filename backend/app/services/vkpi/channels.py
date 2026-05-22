@@ -112,6 +112,41 @@ def _parse_json(value: Any) -> dict[str, Any]:
         return {}
 
 
+def _cumulative_floor_status(raw_payload: dict[str, Any], *, sample_count: int = 0) -> dict[str, Any]:
+    floor = raw_payload.get("cumulative_floor") if isinstance(raw_payload, dict) else {}
+    if not isinstance(floor, dict):
+        floor = {}
+    fields = floor.get("fields") if isinstance(floor.get("fields"), dict) else {}
+    protected_fields = sorted(str(key) for key, value in fields.items() if value is not None)
+    if not protected_fields:
+        return {
+            "baseline_protected": False,
+            "baseline_protected_fields": [],
+            "baseline_protected_detail": {},
+        }
+    details: dict[str, Any] = {}
+    for key, value in fields.items():
+        if isinstance(value, dict):
+            details[str(key)] = {
+                "provider_value": _int(value.get("provider_value")),
+                "kept_value": _int(value.get("kept_value")),
+            }
+    if sample_count:
+        label = f"本轮样本 {sample_count} 条 < 历史累计，沿用历史值"
+    else:
+        label = "本轮样本小于历史累计，沿用历史值"
+    return {
+        "baseline_protected": True,
+        "baseline_protected_label": label,
+        "baseline_protected_reason": _text(
+            floor.get("reason"),
+            "provider returned a narrower sample or missing cumulative value than the previous official-account baseline",
+        ),
+        "baseline_protected_fields": protected_fields,
+        "baseline_protected_detail": details,
+    }
+
+
 def _items(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
@@ -772,6 +807,10 @@ def official_account_matrix(*, staff: dict[str, Any] | None = None, view_as_staf
                 "followers_delta": 0,
                 "posts_delta": 0,
                 "views_delta": 0,
+                "baseline_protected": False,
+                "baseline_protected_accounts": 0,
+                "baseline_protected_fields": [],
+                "baseline_protected_detail": {},
                 "accounts": [],
             },
         )
@@ -779,6 +818,7 @@ def official_account_matrix(*, staff: dict[str, Any] | None = None, view_as_staf
         raw_payload = _parse_json(row.get("metric_raw_payload_json"))
         package_posts = _posts_from_package(_text(raw_payload.get("package_dir")))
         posts = package_posts[:sample_limit] if package_posts else _extract_posts(row, per_account_limit=limit)
+        floor_status = _cumulative_floor_status(raw_payload, sample_count=len(posts))
         account_views = _int(row.get("metric_views"))
         account_posts = _int(row.get("metric_posts"), len(posts))
         account_followers = _int(row.get("metric_followers"))
@@ -791,6 +831,17 @@ def official_account_matrix(*, staff: dict[str, Any] | None = None, view_as_staf
         platform_entry["followers_delta"] += account_followers_delta
         platform_entry["posts_delta"] += account_posts_delta
         platform_entry["views_delta"] += account_views_delta
+        if floor_status.get("baseline_protected"):
+            platform_entry["baseline_protected"] = True
+            platform_entry["baseline_protected_accounts"] += 1
+            field_set = set(platform_entry.get("baseline_protected_fields") or [])
+            field_set.update(floor_status.get("baseline_protected_fields") or [])
+            platform_entry["baseline_protected_fields"] = sorted(field_set)
+            detail = platform_entry.get("baseline_protected_detail") if isinstance(platform_entry.get("baseline_protected_detail"), dict) else {}
+            detail[str(row.get("id") or "")] = floor_status.get("baseline_protected_detail") or {}
+            platform_entry["baseline_protected_detail"] = detail
+            platform_entry["baseline_protected_label"] = f"{platform_entry['baseline_protected_accounts']} 个账号基线保护"
+            platform_entry["baseline_protected_reason"] = "部分账号本轮样本小于历史累计，沿用历史值。"
         total_views += account_views
         total_posts += account_posts
         platform_entry["accounts"].append(
@@ -821,6 +872,7 @@ def official_account_matrix(*, staff: dict[str, Any] | None = None, view_as_staf
                 "total_comments": _int(row.get("metric_comments")),
                 "total_shares": _int(row.get("metric_shares")),
                 "engagement_rate": _float(row.get("metric_engagement_rate")),
+                **floor_status,
                 "posts": posts,
             }
         )

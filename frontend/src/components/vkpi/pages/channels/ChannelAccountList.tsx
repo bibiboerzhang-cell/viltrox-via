@@ -16,7 +16,29 @@ function deltaTone(delta = 0) {
   return '';
 }
 
-function deltaText(delta = 0) {
+function protectedTitle(account: OfficialChannelAccount) {
+  return account.baselineProtectedLabel || account.baselineProtectedReason || '本轮样本小于历史累计，沿用历史值';
+}
+
+function hasProtectedField(account: OfficialChannelAccount, field: 'followers' | 'posts' | 'views') {
+  if (!account.baselineProtected) return false;
+  const fields = account.baselineProtectedFields || [];
+  if (!fields.length) return true;
+  const aliases = {
+    followers: ['followers'],
+    posts: ['posts_count'],
+    views: ['total_views'],
+  }[field];
+  return aliases.some((alias) => fields.includes(alias));
+}
+
+function metricTone(delta = 0, baselineProtected = false) {
+  if (baselineProtected && !delta) return 'is-protected';
+  return deltaTone(delta);
+}
+
+function deltaText(delta = 0, baselineProtected = false) {
+  if (baselineProtected && !delta) return '基线保护';
   return delta ? `${delta > 0 ? '+' : ''}${compact(delta)}` : '+0';
 }
 
@@ -27,6 +49,7 @@ function viewsValue(account: OfficialChannelAccount) {
 function viewsDeltaText(account: OfficialChannelAccount) {
   if (account.viewsUnavailable) return '公开播放不可用';
   const delta = account.viewsDelta || 0;
+  if (hasProtectedField(account, 'views') && !delta) return '基线保护';
   if (delta) return `播放 ${deltaText(delta)}`;
   return account.totalViews > 0 ? '播放已同步' : '无公开播放';
 }
@@ -108,6 +131,10 @@ export function ChannelAccountList({
         {platform.accounts.map((account) => {
           const active = selectedAccountId === account.id;
           const avatarUrl = proxiedImageUrl(account.avatarUrl);
+          const followerProtected = hasProtectedField(account, 'followers') && !(account.followersDelta || 0);
+          const postsProtected = hasProtectedField(account, 'posts') && !(account.postsDelta || 0);
+          const viewsProtected = hasProtectedField(account, 'views') && !(account.viewsDelta || 0);
+          const protectionTitle = protectedTitle(account);
           return (
             <button
               key={account.id || `${account.platform}-${account.handle}`}
@@ -123,17 +150,17 @@ export function ChannelAccountList({
                   <h3>{account.displayName}</h3>
                   <span className="vkpi-channel-account-card__value">
                     <strong title={account.viewsUnavailable ? account.viewsUnavailableReason : undefined}>{viewsValue(account)}</strong>
-                    <small className={deltaTone(account.viewsUnavailable ? 0 : account.viewsDelta)} title={account.viewsUnavailableReason}>
+                    <small className={metricTone(account.viewsUnavailable ? 0 : account.viewsDelta, viewsProtected)} title={viewsProtected ? protectionTitle : account.viewsUnavailableReason}>
                       {viewsDeltaText(account)}
                     </small>
                   </span>
                 </div>
                 <p>
                   @{account.handle || '-'} · {formatter.format(account.followers)} 粉丝
-                  <em className={deltaTone(account.followersDelta)}> {deltaText(account.followersDelta)}</em>
+                  <em className={metricTone(account.followersDelta, followerProtected)} title={followerProtected ? protectionTitle : undefined}> {deltaText(account.followersDelta, followerProtected)}</em>
                   {' · '}
                   {formatter.format(account.postsCount)} 内容
-                  <em className={deltaTone(account.postsDelta)}> {deltaText(account.postsDelta)}</em>
+                  <em className={metricTone(account.postsDelta, postsProtected)} title={postsProtected ? protectionTitle : undefined}> {deltaText(account.postsDelta, postsProtected)}</em>
                 </p>
                 <div className="vkpi-channel-account-card__metrics">
                   <span>赞 {formatter.format(account.totalLikes)}</span>

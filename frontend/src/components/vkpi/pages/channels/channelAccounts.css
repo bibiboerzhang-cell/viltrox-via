@@ -117,6 +117,11 @@
   color: #dc2626;
 }
 
+.vkpi-channel-account-card__value small.is-protected,
+.vkpi-channel-account-card p em.is-protected {
+  color: #7c3aed;
+}
+
 .vkpi-channel-account-card p {
   margin: 5px 0 10px;
   color: var(--vkpi-muted);

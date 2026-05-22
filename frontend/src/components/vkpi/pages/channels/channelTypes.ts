@@ -86,6 +86,11 @@ export interface OfficialChannelAccount {
   totalLikes: number;
   totalComments: number;
   engagementRate: number;
+  baselineProtected?: boolean;
+  baselineProtectedLabel?: string;
+  baselineProtectedReason?: string;
+  baselineProtectedFields?: string[];
+  baselineProtectedDetail?: Record<string, unknown>;
   posts: ChannelContentPost[];
 }
 
@@ -102,6 +107,12 @@ export interface OfficialChannelPlatform {
   viewsUnavailable?: boolean;
   viewsMetricLabel?: string;
   viewsUnavailableReason?: string;
+  baselineProtected?: boolean;
+  baselineProtectedLabel?: string;
+  baselineProtectedReason?: string;
+  baselineProtectedAccounts?: number;
+  baselineProtectedFields?: string[];
+  baselineProtectedDetail?: Record<string, unknown>;
   accounts: OfficialChannelAccount[];
 }
 

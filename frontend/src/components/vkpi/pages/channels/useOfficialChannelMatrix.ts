@@ -40,6 +40,10 @@ function textList(value: unknown): string[] {
   return [];
 }
 
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
 function isRedditPlatform(value: unknown) {
   return text(value).toLowerCase() === 'reddit';
 }
@@ -107,6 +111,11 @@ function mapAccount(row: Row): OfficialChannelAccount {
     totalLikes: numberValue(row.total_likes || row.totalLikes),
     totalComments: numberValue(row.total_comments || row.totalComments),
     engagementRate: numberValue(row.engagement_rate || row.engagementRate),
+    baselineProtected: boolValue(row.baseline_protected ?? row.baselineProtected, false),
+    baselineProtectedLabel: text(row.baseline_protected_label || row.baselineProtectedLabel),
+    baselineProtectedReason: text(row.baseline_protected_reason || row.baselineProtectedReason),
+    baselineProtectedFields: textList(row.baseline_protected_fields || row.baselineProtectedFields),
+    baselineProtectedDetail: recordValue(row.baseline_protected_detail || row.baselineProtectedDetail),
     posts: rows(row.posts).map(mapPost),
   };
 }
@@ -133,6 +142,12 @@ function mapPlatform(row: Row): OfficialChannelPlatform {
     viewsUnavailable,
     viewsMetricLabel: text(row.views_metric_label || row.viewsMetricLabel, viewsUnavailable ? '公开播放' : '播放'),
     viewsUnavailableReason: viewsUnavailableReason(platform, row.views_unavailable_reason || row.viewsUnavailableReason),
+    baselineProtected: boolValue(row.baseline_protected ?? row.baselineProtected, false) || accounts.some((account) => account.baselineProtected),
+    baselineProtectedLabel: text(row.baseline_protected_label || row.baselineProtectedLabel),
+    baselineProtectedReason: text(row.baseline_protected_reason || row.baselineProtectedReason),
+    baselineProtectedAccounts: numberValue(row.baseline_protected_accounts || row.baselineProtectedAccounts),
+    baselineProtectedFields: textList(row.baseline_protected_fields || row.baselineProtectedFields),
+    baselineProtectedDetail: recordValue(row.baseline_protected_detail || row.baselineProtectedDetail),
     accounts,
   };
 }

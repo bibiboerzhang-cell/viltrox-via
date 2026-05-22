@@ -25,14 +25,32 @@ function deltaPercent(current: number, delta = 0) {
   return `${percent >= 10 ? percent.toFixed(1) : percent.toFixed(2)}%`;
 }
 
-function deltaLabel(current: number, delta = 0) {
+function protectedTitle(item?: Pick<OfficialChannelPlatform, 'baselineProtectedLabel' | 'baselineProtectedReason'>) {
+  return item?.baselineProtectedLabel || item?.baselineProtectedReason || '本轮样本小于历史累计，沿用历史值';
+}
+
+function hasProtectedField(item: Pick<OfficialChannelPlatform, 'baselineProtected' | 'baselineProtectedFields'>, field: 'followers' | 'posts' | 'views') {
+  if (!item.baselineProtected) return false;
+  const fields = item.baselineProtectedFields || [];
+  if (!fields.length) return true;
+  const aliases = {
+    followers: ['followers'],
+    posts: ['posts_count'],
+    views: ['total_views'],
+  }[field];
+  return aliases.some((alias) => fields.includes(alias));
+}
+
+function deltaLabel(current: number, delta = 0, baselineProtected = false) {
+  if (baselineProtected && !delta) return '基线保护';
   if (!delta) return '较上次 0';
   const direction = delta > 0 ? '↑' : '↓';
   const percent = deltaPercent(current, delta);
   return `较上次 ${direction} ${percent || compact(Math.abs(delta))}`;
 }
 
-function deltaText(delta = 0) {
+function deltaText(delta = 0, baselineProtected = false) {
+  if (baselineProtected && !delta) return '保护';
   return delta ? `${delta > 0 ? '+' : ''}${compact(delta)}` : '基线';
 }
 
@@ -40,13 +58,15 @@ function viewsValue(totalViews: number, unavailable?: boolean) {
   return unavailable ? '-' : compact(totalViews);
 }
 
-function viewsDeltaLabel(totalViews: number, delta = 0, unavailable?: boolean) {
+function viewsDeltaLabel(totalViews: number, delta = 0, unavailable?: boolean, baselineProtected = false) {
   if (unavailable) return '公开播放不可用';
+  if (baselineProtected && !delta) return '基线保护';
   if (delta) return `播放 ${delta > 0 ? '+' : ''}${compact(delta)}`;
   return totalViews > 0 ? '播放已同步' : '无公开播放';
 }
 
-function deltaTone(delta = 0) {
+function deltaTone(delta = 0, baselineProtected = false) {
+  if (baselineProtected && !delta) return 'is-protected';
   if (delta > 0) return 'is-up';
   if (delta < 0) return 'is-down';
   return '';
@@ -112,6 +132,9 @@ export function ChannelPlatformMatrix({
   const totalFollowersDelta = platforms.reduce((sum, platform) => sum + (platform.followersDelta || 0), 0);
   const totalPostsDelta = platforms.reduce((sum, platform) => sum + (platform.postsDelta || 0), 0);
   const totalViewsDelta = platforms.reduce((sum, platform) => sum + (platform.viewsDelta || 0), 0);
+  const totalFollowersProtected = !totalFollowersDelta && platforms.some((platform) => hasProtectedField(platform, 'followers'));
+  const totalPostsProtected = !totalPostsDelta && platforms.some((platform) => hasProtectedField(platform, 'posts'));
+  const totalViewsProtected = !totalViewsDelta && platforms.some((platform) => hasProtectedField(platform, 'views'));
   const syncedAccounts = platforms.reduce(
     (sum, platform) => sum + platform.accounts.filter((account) => account.syncStatus === 'synced').length,
     0,
@@ -121,9 +144,9 @@ export function ChannelPlatformMatrix({
     { label: '账号', value: formatter.format(accountCount) },
     { label: '已同步', value: formatter.format(syncedAccounts) },
     { label: '平台', value: formatter.format(platforms.length) },
-    { label: '内容', value: formatter.format(postCount), delta: totalPostsDelta },
-    { label: '粉丝', value: compact(totalFollowers), delta: totalFollowersDelta },
-    { label: '播放', value: compact(totalViews), delta: totalViewsDelta, primary: true },
+    { label: '内容', value: formatter.format(postCount), delta: totalPostsDelta, protected: totalPostsProtected },
+    { label: '粉丝', value: compact(totalFollowers), delta: totalFollowersDelta, protected: totalFollowersProtected },
+    { label: '播放', value: compact(totalViews), delta: totalViewsDelta, protected: totalViewsProtected, primary: true },
     { label: '篇均播放', value: compact(averageViews) },
   ];
   return (
@@ -148,7 +171,7 @@ export function ChannelPlatformMatrix({
                 <strong>{metric.value}</strong>
                 <span>{metric.label}</span>
               </span>
-              {'delta' in metric ? <small className={deltaTone(metric.delta)}>{deltaText(metric.delta)}</small> : null}
+              {'delta' in metric ? <small className={deltaTone(metric.delta, metric.protected)}>{deltaText(metric.delta, metric.protected)}</small> : null}
             </span>
           ))}
         </div>
@@ -162,6 +185,9 @@ export function ChannelPlatformMatrix({
           const followerDelta = platform.followersDelta || platform.accounts.reduce((sum, account) => sum + (account.followersDelta || 0), 0);
           const viewsDelta = platform.viewsDelta || platform.accounts.reduce((sum, account) => sum + (account.viewsDelta || 0), 0);
           const viewsUnavailable = Boolean(platform.viewsUnavailable);
+          const followerProtected = !followerDelta && hasProtectedField(platform, 'followers');
+          const viewsProtected = !viewsDelta && hasProtectedField(platform, 'views');
+          const platformProtectedTitle = protectedTitle(platform);
           return (
             <button
               type="button"
@@ -172,7 +198,10 @@ export function ChannelPlatformMatrix({
               <PlatformLogo platform={platform.platform} label={platform.label} />
               <div className="vkpi-channel-platform-card__body">
                 <h3>{platform.label}</h3>
-                <p>{formatter.format(platform.accounts.length)} 账号 · {formatter.format(platform.totalPosts)} 内容</p>
+                <p>
+                  {formatter.format(platform.accounts.length)} 账号 · {formatter.format(platform.totalPosts)} 内容
+                  {platform.baselineProtected ? <span className="vkpi-channel-baseline-pill" title={platformProtectedTitle}>基线保护</span> : null}
+                </p>
                 <div className="vkpi-channel-avatar-stack" aria-label={`${platform.label} 账号头像`}>
                   {avatars.length ? avatars.map((avatar, index) => <img key={`${platform.platform}-${index}`} src={avatar} alt="" loading="lazy" />) : <span>暂无头像</span>}
                 </div>
@@ -180,10 +209,12 @@ export function ChannelPlatformMatrix({
               <div className="vkpi-channel-platform-card__metrics">
                 <strong title={viewsUnavailable ? platform.viewsUnavailableReason : undefined}>{viewsValue(platform.totalViews, viewsUnavailable)}</strong>
                 <span>{compact(platform.totalFollowers)} 粉丝</span>
-                <em className={deltaTone(followerDelta)}>{deltaLabel(platform.totalFollowers, followerDelta)}</em>
+                <em className={deltaTone(followerDelta, followerProtected)} title={followerProtected ? platformProtectedTitle : undefined}>
+                  {deltaLabel(platform.totalFollowers, followerDelta, followerProtected)}
+                </em>
                 <small title={platform.lastSyncAt}>{syncTimeLabel(platform.lastSyncAt)}</small>
-                <small className={deltaTone(viewsUnavailable ? 0 : viewsDelta)} title={platform.viewsUnavailableReason}>
-                  {viewsDeltaLabel(platform.totalViews, viewsDelta, viewsUnavailable)}
+                <small className={deltaTone(viewsUnavailable ? 0 : viewsDelta, viewsProtected)} title={viewsProtected ? platformProtectedTitle : platform.viewsUnavailableReason}>
+                  {viewsDeltaLabel(platform.totalViews, viewsDelta, viewsUnavailable, viewsProtected)}
                 </small>
               </div>
             </button>
