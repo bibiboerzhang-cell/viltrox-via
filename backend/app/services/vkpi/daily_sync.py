@@ -2,7 +2,7 @@
 
 This job is intentionally provider-only and rule-only:
 - official accounts refresh recent public metrics/content samples;
-- legacy KOL pool rows refresh lightweight profile/latest-post samples;
+- legacy KOL pool rows are skipped unless an operator explicitly opts in;
 - no LLM calls and no deep-scan profile generation.
 """
 from __future__ import annotations
@@ -28,6 +28,7 @@ ENRICHABLE_KOL_PLATFORMS = {"youtube", "instagram", "tiktok", "facebook", "reddi
 SYNC_FAIL_FAST_EXIT_CODE = 75
 SYNC_GUARD_BLOCKED_EXIT_CODE = 76
 SYNC_FAILURE_RATE_THRESHOLD = 0.10
+LEGACY_KOL_REFRESH_GUARD_REASON = "legacy_kol_daily_refresh_disabled_until_tier_selector"
 TRACEBACK_MAX_CHARS = 4096
 TRACEBACK_MAX_LINES = 50
 INTERRUPT_RECORD_RETRY_DELAYS_SEC = (0.2, 0.5, 1.0, 2.0, 5.0)
@@ -962,10 +963,18 @@ def run_daily_incremental(payload: dict[str, Any] | None = None) -> dict[str, An
         logger.info("daily sync stage official end summary=%s", result["official"])
     else:
         result["official"] = {"skipped": True}
-    if not _bool(payload.get("skip_kol")):
+    allow_legacy_kol = _bool(payload.get("allow_legacy_kol_full_refresh")) or _bool(payload.get("include_legacy_kol"))
+    if not _bool(payload.get("skip_kol")) and allow_legacy_kol:
         logger.info("daily sync stage kol_pool_light begin")
         result["kol_pool_light"] = run_kol_pool_light_refresh(payload)
         logger.info("daily sync stage kol_pool_light end summary=%s", result["kol_pool_light"])
+    elif not _bool(payload.get("skip_kol")):
+        logger.warning("daily sync legacy kol_pool_light skipped: %s", LEGACY_KOL_REFRESH_GUARD_REASON)
+        result["kol_pool_light"] = {
+            "skipped": True,
+            "reason": LEGACY_KOL_REFRESH_GUARD_REASON,
+            "requires": "allow_legacy_kol_full_refresh",
+        }
     else:
         result["kol_pool_light"] = {"skipped": True}
     result["finished_at"] = _utcnow()

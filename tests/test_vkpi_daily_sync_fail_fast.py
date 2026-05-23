@@ -262,3 +262,31 @@ def test_daily_sync_dry_run_does_not_persist_summary(monkeypatch: pytest.MonkeyP
     assert result["dry_run"] is True
     assert result["health"]["total_errors"] == 0
     assert result["health"]["blocked_next_run"] is False
+
+
+def test_daily_sync_skips_legacy_kol_refresh_without_explicit_allow(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(daily_sync, "run_kol_pool_light_refresh", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("legacy kol refresh ran")))
+
+    result = daily_sync.run_daily_incremental({"dry_run": True, "skip_official": True, "skip_kol": False})
+
+    assert result["kol_pool_light"]["skipped"] is True
+    assert result["kol_pool_light"]["reason"] == daily_sync.LEGACY_KOL_REFRESH_GUARD_REASON
+    assert result["kol_pool_light"]["requires"] == "allow_legacy_kol_full_refresh"
+
+
+def test_daily_sync_runs_legacy_kol_refresh_when_explicitly_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        daily_sync,
+        "run_kol_pool_light_refresh",
+        lambda payload: {"requested": 1, "refreshed": 1, "errors": 0, "allow": payload.get("allow_legacy_kol_full_refresh")},
+    )
+
+    result = daily_sync.run_daily_incremental({
+        "dry_run": True,
+        "skip_official": True,
+        "skip_kol": False,
+        "allow_legacy_kol_full_refresh": True,
+    })
+
+    assert result["kol_pool_light"]["requested"] == 1
+    assert result["kol_pool_light"]["allow"] is True

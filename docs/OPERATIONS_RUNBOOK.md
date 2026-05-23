@@ -283,6 +283,16 @@ New runs also emit `cron_daily_sync_started`, `cron_daily_sync_finished`, or
 `cron_daily_sync_failed` JSON lines so the status check has durable boundaries
 even when provider logs are noisy.
 
+The daily sync now skips legacy KOL pool refresh by default. Until P1.X.A tier
+selection is deployed, the old KOL pool path requires an explicit operator opt-in:
+
+```bash
+scripts/cron_daily_sync.py --include-legacy-kol --kol-limit 50 --kol-max-posts 1
+```
+
+Do not use that opt-in for daily full-pool refresh. It exists only for bounded
+manual retries with a known target scope.
+
 After the daily sync completes, run the read-only data acceptance audit:
 
 ```bash

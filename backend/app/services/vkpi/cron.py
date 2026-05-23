@@ -70,7 +70,7 @@ _MANUAL_JOB_POLICIES: dict[str, dict[str, Any]] = {
     },
     "daily_incremental_sync": {
         "risk": "high",
-        "description": "Run 18 official-account recent refresh plus lightweight KOL Pool refresh without LLM/deep scan.",
+        "description": "Run 18 official-account recent refresh; legacy KOL Pool refresh is skipped unless explicitly allowed.",
     },
     "daily_outreach_digest_only": {
         "risk": "medium",
@@ -135,6 +135,7 @@ def _payload_summary(payload: dict[str, Any]) -> dict[str, Any]:
         "official_max_posts",
         "official_platforms",
         "skip_kol",
+        "allow_legacy_kol_full_refresh",
         "skip_official",
         "industry_account_limit",
         "validate_only",

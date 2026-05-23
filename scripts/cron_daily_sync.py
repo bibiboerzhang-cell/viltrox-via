@@ -3,7 +3,7 @@
 
 Default behavior:
 - refresh official channels with recent public data only;
-- refresh legacy KOL pool rows with max 1 latest post sample;
+- skip legacy KOL pool rows unless an operator explicitly opts in;
 - do not call LLM or deep-scan pipelines.
 """
 from __future__ import annotations
@@ -66,6 +66,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--kol-platforms", default="", help="Comma-separated KOL platforms to run")
     parser.add_argument("--kol-source-type", default="legacy_excel_p2d", help="KOL pool source_type scope")
     parser.add_argument("--skip-kol", action="store_true", help="Skip KOL pool lightweight refresh")
+    parser.add_argument(
+        "--include-legacy-kol",
+        action="store_true",
+        help="Explicitly run the legacy KOL pool lightweight refresh. Use only for bounded retries until the tier selector replaces it.",
+    )
+    parser.set_defaults(skip_kol=True)
     return parser.parse_args()
 
 
@@ -82,7 +88,8 @@ async def main() -> int:
         "kol_max_posts": max(1, min(3, int(args.kol_max_posts or 1))),
         "kol_platforms": args.kol_platforms,
         "kol_source_type": args.kol_source_type,
-        "skip_kol": bool(args.skip_kol),
+        "skip_kol": bool(args.skip_kol) and not bool(args.include_legacy_kol),
+        "allow_legacy_kol_full_refresh": bool(args.include_legacy_kol),
         "staff": {"id": 0, "staff_id": 0, "user_id": 0, "role": "admin", "is_owner": 1},
     }
     try:
