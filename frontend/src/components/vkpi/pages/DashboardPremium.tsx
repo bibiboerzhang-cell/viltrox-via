@@ -115,10 +115,12 @@ interface CountryDrawerState {
   error?: string;
 }
 
-interface TrendDrawerState {
+interface PanelDrawerState {
   title: string;
   sourceLabel: string;
   rows: Array<{ label: string; value: string }>;
+  actionLabel: string;
+  actionPage: VkpiPageKey;
 }
 
 interface PremiumSnapshot {
@@ -775,7 +777,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
   const [snapshot, setSnapshot] = useState<PremiumSnapshot>(EMPTY_PREMIUM_SNAPSHOT);
   const [loadingData, setLoadingData] = useState(false);
   const [countryDrawer, setCountryDrawer] = useState<CountryDrawerState | null>(null);
-  const [trendDrawer, setTrendDrawer] = useState<TrendDrawerState | null>(null);
+  const [panelDrawer, setPanelDrawer] = useState<PanelDrawerState | null>(null);
   const [expandedKpi, setExpandedKpi] = useState<string | null>(null);
 
   useEffect(() => {
@@ -903,7 +905,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
   }, [goToWorkspacePage, showToast]);
 
   const openTrendDrawer = useCallback(() => {
-    setTrendDrawer({
+    setPanelDrawer({
       title: '曝光趋势',
       sourceLabel: snapshot.source === 'mock' ? '示例趋势' : 'revenue-trend API',
       rows: [
@@ -912,8 +914,23 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
         { label: '最新值', value: premiumTrend.tipValue },
         { label: '样本点', value: `${premiumTrend.labels.filter(Boolean).length} 天` },
       ],
+      actionLabel: '查看完整趋势',
+      actionPage: 'dataAnalysis',
     });
   }, [activeSegment, premiumTrend.labels, premiumTrend.tipDate, premiumTrend.tipValue, snapshot.source]);
+
+  const openProductDrawer = useCallback(() => {
+    setPanelDrawer({
+      title: '产品 ROI 排行',
+      sourceLabel: premiumProductRows.some((row) => !row.isMock) ? 'product-performance API' : '待成本 / Shopify',
+      rows: premiumProductRows.map((row) => ({
+        label: `#${row.rank} ${row.name}`,
+        value: row.value,
+      })),
+      actionLabel: '进入产品作战',
+      actionPage: 'productBattle',
+    });
+  }, [premiumProductRows]);
 
   const openContentUrl = useCallback((url: unknown) => {
     const href = typeof url === 'string' ? url.trim() : '';
@@ -977,7 +994,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
                 <div className="lower">
                   <div className="glass-card mini">
                     <div className="panel-head"><h3>产品 ROI 排行</h3><button className="link" type="button" onClick={() => goToWorkspacePage('productBattle', '产品 ROI')}>查看全部</button></div>
-                    {premiumProductRows.map((row) => <div className="row" title={row.mockLabel} key={row.rank}><span className="rank">{row.rank}</span><div><b>{row.name}{row.isMock ? <span className="tag">{badgeText(row.mockLabel)}</span> : null}</b><div className="bar"><span style={glassVarStyle({ '--w': row.width })}></span></div></div><small>{row.value}</small></div>)}
+                    {premiumProductRows.map((row) => <div className="row" title={row.mockLabel} key={row.rank} role="button" tabIndex={0} onClick={openProductDrawer} onKeyDown={(event) => { if (event.key === 'Enter') openProductDrawer(); }}><span className="rank">{row.rank}</span><div><b>{row.name}{row.isMock ? <span className="tag">{badgeText(row.mockLabel)}</span> : null}</b><div className="bar"><span style={glassVarStyle({ '--w': row.width })}></span></div></div><small>{row.value}</small></div>)}
                   </div>
                   <div className="glass-card mini">
                     <div className="panel-head"><h3>内容类型分布</h3><span className="tag">{allowMockFallback ? '示例' : '官方矩阵'}</span></div>
@@ -1058,22 +1075,22 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
           ) : null}
         </div>
       ) : null}
-      {trendDrawer ? (
-        <div className="panel-drawer" role="dialog" aria-label={trendDrawer.title}>
+      {panelDrawer ? (
+        <div className="panel-drawer" role="dialog" aria-label={panelDrawer.title}>
           <div className="country-drawer-head">
-            <div><span>{trendDrawer.sourceLabel}</span><b>{trendDrawer.title}</b></div>
-            <button type="button" onClick={() => setTrendDrawer(null)}>×</button>
+            <div><span>{panelDrawer.sourceLabel}</span><b>{panelDrawer.title}</b></div>
+            <button type="button" onClick={() => setPanelDrawer(null)}>×</button>
           </div>
           <div className="panel-drawer-list">
-            {trendDrawer.rows.map((row) => (
+            {panelDrawer.rows.map((row) => (
               <div className="panel-drawer-row" key={row.label}>
                 <span>{row.label}</span>
                 <b>{row.value}</b>
               </div>
             ))}
           </div>
-          <button className="panel-drawer-action" type="button" onClick={() => goToWorkspacePage('dataAnalysis', trendDrawer.title)}>
-            查看完整趋势
+          <button className="panel-drawer-action" type="button" onClick={() => goToWorkspacePage(panelDrawer.actionPage, panelDrawer.title)}>
+            {panelDrawer.actionLabel}
           </button>
         </div>
       ) : null}

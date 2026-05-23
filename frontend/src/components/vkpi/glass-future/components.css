@@ -152,6 +152,8 @@
 .vkpi-glass-shell .lower { grid-column: 1/3; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 18px; }
 .vkpi-glass-shell .mini { padding: 18px; min-height: 236px; }
 .vkpi-glass-shell .row { position: relative; display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; margin: 12px 0; }
+.vkpi-glass-shell .row[role="button"] { cursor: pointer; outline: none; border-radius: 14px; }
+.vkpi-glass-shell .row[role="button"]:focus-visible { box-shadow: 0 0 0 3px rgba(27,108,255,.16); }
 .vkpi-glass-shell .rank { width: 22px; height: 22px; border-radius: 9px; background: rgba(27,108,255,.10); color: #1b6cff; display: grid; place-items: center; font-weight: 900; font-size: 12px; }
 .vkpi-glass-shell .lens { width: 28px; height: 32px; border-radius: 9px; background: linear-gradient(180deg,#0f172a,#3b4256); box-shadow: inset 0 4px 7px rgba(255,255,255,.18); }
 .vkpi-glass-shell .row b { font-size: 12px; }
