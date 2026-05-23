@@ -97,6 +97,29 @@ ENABLE_QUALIFIED_KOL_TIMER=1 scripts/ops/install_vkpi_daily_timers.sh remote-qua
 The install script backs up existing systemd unit files under
 `runtime/ops/systemd-unit-backups/` before writing remote unit config.
 
+## On-Demand Refresh
+
+P1.X.C uses stale-while-revalidate:
+
+- `GET /api/admin/vkpi/kol-pool/{id}` returns the current stored row first.
+- The same detail call records a search touch in `vkpi_kol_refresh_tier`.
+- If `refresh_if_stale=true` and the row is stale, the API enqueues
+  `vkpi_kol_pool_on_demand_refresh` instead of blocking on Apify/YouTube.
+- `GET /api/admin/vkpi/kol-pool?...&refresh_if_stale=true` may enqueue only
+  the first matching row, so a search results page cannot fan out into dozens of
+  provider calls.
+- `POST /api/admin/vkpi/kol-pool/{id}/refresh` is the explicit manual enqueue
+  path for staff.
+
+Freshness thresholds:
+
+- `hot`: 2 days
+- `warm`: 14 days
+- `cold`: 30 days
+
+The queue lock key is `vkpi_kol_pool_on_demand_refresh:kol_pool:{id}`, so
+repeated detail opens reuse the active task instead of creating duplicate runs.
+
 Legacy full refresh remains separately guarded and still requires `--include-legacy-kol`.
 
 ## Acceptance

@@ -127,6 +127,58 @@ def test_qualified_refresh_rows_stale_cutoff_includes_never_refreshed(monkeypatc
     assert cutoff in conn.params
 
 
+def test_record_kol_search_preserves_existing_hot_evidence(monkeypatch) -> None:
+    class Row(dict):
+        def keys(self):
+            return super().keys()
+
+    class Cursor:
+        def __init__(self, row=None) -> None:
+            self.row = row
+
+        def fetchone(self):
+            return self.row
+
+        def fetchall(self) -> list[dict[str, Any]]:
+            return []
+
+    class Conn:
+        def __init__(self) -> None:
+            self.statements: list[str] = []
+            self.commits = 0
+
+        def execute(self, sql: str, params: tuple[object, ...] = ()):
+            self.statements.append(sql)
+            if "FROM vkpi_kol_pool" in sql:
+                return Cursor(Row({"id": 42, "platform": "youtube", "handle": "unit"}))
+            if "FROM vkpi_kol_refresh_tier" in sql:
+                return Cursor(Row({
+                    "kol_pool_id": 42,
+                    "tier": "hot",
+                    "tier_reason": "viltrox_mention_60d",
+                    "tier_reason_json": '{"viltrox_mentions": 1}',
+                    "search_count_30d": 2,
+                    "last_searched_at": "2026-05-23T00:00:00Z",
+                }))
+            return Cursor()
+
+        def commit(self) -> None:
+            self.commits += 1
+
+    conn = Conn()
+    monkeypatch.setattr(refresh_tier, "get_conn", lambda: conn)
+    monkeypatch.setattr(refresh_tier, "ensure_refresh_tier_schema", lambda: None)
+    monkeypatch.setattr(refresh_tier, "_table_exists", lambda table: table == "vkpi_kol_refresh_tier")
+
+    result = refresh_tier.record_kol_search(42)
+
+    insert_sql = next(sql for sql in conn.statements if "ON CONFLICT(kol_pool_id)" in sql)
+    assert "tier_reason_json=CASE WHEN vkpi_kol_refresh_tier.tier='cold'" in insert_sql
+    assert result["tier"] == "hot"
+    assert result["tier_reason"] == "viltrox_mention_60d"
+    assert conn.commits == 1
+
+
 def test_mark_kol_refreshed_commits(monkeypatch) -> None:
     class Conn:
         def __init__(self) -> None:

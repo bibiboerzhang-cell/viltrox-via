@@ -36,10 +36,32 @@ export interface VkpiKolPoolItem {
   last_seen_at?: string;
 }
 
+export interface VkpiKolPoolFreshness {
+  kol_pool_id: number;
+  tier: string;
+  tier_reason?: string;
+  last_refresh_at?: string;
+  last_refresh_status?: string;
+  threshold_days?: number;
+  days_old?: number | null;
+  needs_refresh?: boolean;
+  reason?: string;
+}
+
+export interface VkpiKolPoolRefreshState {
+  triggered: boolean;
+  reason: string;
+  task_id?: string;
+  task_type?: string;
+  lock_key?: string;
+  freshness?: VkpiKolPoolFreshness;
+  message?: string;
+}
+
 export async function listKolPool(
   token: string,
-  params: { search?: string; platform?: string; country?: string; limit?: number; dataStatus?: string; sortBy?: string; enrichable?: boolean } = {},
-): Promise<{ items?: VkpiKolPoolItem[] }> {
+  params: { search?: string; platform?: string; country?: string; limit?: number; dataStatus?: string; sortBy?: string; enrichable?: boolean; refreshIfStale?: boolean } = {},
+): Promise<{ items?: VkpiKolPoolItem[]; refresh?: VkpiKolPoolRefreshState }> {
   const query = new URLSearchParams({ limit: String(params.limit || 100) });
   if (params.search) query.set("query", params.search);
   if (params.platform) query.set("platform", params.platform);
@@ -47,17 +69,30 @@ export async function listKolPool(
   if (params.dataStatus) query.set("data_status", params.dataStatus);
   if (params.sortBy) query.set("sort_by", params.sortBy);
   if (typeof params.enrichable === "boolean") query.set("enrichable", String(params.enrichable));
-  return apiFetch<{ items?: VkpiKolPoolItem[] }>(
+  if (typeof params.refreshIfStale === "boolean") query.set("refresh_if_stale", String(params.refreshIfStale));
+  return apiFetch<{ items?: VkpiKolPoolItem[]; refresh?: VkpiKolPoolRefreshState }>(
     `/api/admin/vkpi/kol-pool?${query.toString()}`,
     {},
     token,
   );
 }
 
-export async function getKolPoolItem(token: string, kolPoolId: number) {
-  return apiFetch<{ item: VkpiKolPoolItem }>(
-    `/api/admin/vkpi/kol-pool/${kolPoolId}`,
+export async function getKolPoolItem(token: string, kolPoolId: number, refreshIfStale = true) {
+  const query = new URLSearchParams({ refresh_if_stale: String(refreshIfStale) });
+  return apiFetch<{ item: VkpiKolPoolItem; freshness?: VkpiKolPoolFreshness; refresh?: VkpiKolPoolRefreshState }>(
+    `/api/admin/vkpi/kol-pool/${kolPoolId}?${query.toString()}`,
     {},
+    token,
+  );
+}
+
+export async function refreshKolPoolItem(token: string, kolPoolId: number, force = false) {
+  return apiFetch<VkpiKolPoolRefreshState>(
+    `/api/admin/vkpi/kol-pool/${kolPoolId}/refresh`,
+    {
+      method: "POST",
+      body: jsonBody({ force }),
+    },
     token,
   );
 }

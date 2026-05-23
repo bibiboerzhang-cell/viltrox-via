@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from app.services.vkpi import channel_refill, channels, media_cache, task_enqueue
+from app.services.vkpi import channel_refill, channels, kol_pool, media_cache, refresh_tier, task_enqueue
 
 
 TERMINAL_STATUSES = {"done", "partial_done", "failed", "prefilter_rejected", "cancelled", "timeout"}
@@ -15,6 +15,10 @@ def _int(value: Any, default: int = 0) -> int:
         return int(value or default)
     except (TypeError, ValueError):
         return default
+
+
+def _status_ok(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"ok", "success", "done", "synced"}
 
 
 async def _is_terminal(queue, task_id: str) -> bool:
@@ -125,6 +129,78 @@ async def process_vkpi_official_channel_sync_job(queue, raw_job: dict) -> None:
         result_json=result,
         progress_pct=100,
         progress_text="官方账号同步完成",
+    )
+
+
+async def process_vkpi_kol_pool_on_demand_refresh_job(queue, raw_job: dict) -> None:
+    task_id = str(raw_job.get("task_id") or "")
+    payload = raw_job.get("payload") or {}
+    kol_pool_id = _int(payload.get("kol_pool_id"))
+    max_posts = max(1, min(3, _int(payload.get("max_posts"), 1)))
+    staff = payload.get("staff") if isinstance(payload.get("staff"), dict) else {}
+    item_key = f"kol_pool:{kol_pool_id or 'unknown'}"
+
+    if not task_id or not kol_pool_id:
+        await queue.set_status(task_id, "failed", error_message="kol_pool_id required", stage="vkpi_kol_pool_on_demand_refresh")
+        return
+
+    if await _is_terminal(queue, task_id):
+        return
+
+    if task_enqueue.task_cancel_requested(task_id):
+        task_enqueue.upsert_task_item(task_id, item_key, status="cancelled")
+        await queue.set_status(task_id, "cancelled", summary="任务已取消", stage="cancelled")
+        return
+
+    task_enqueue.upsert_task_item(task_id, item_key, status="pending")
+    task_enqueue.upsert_task_item(task_id, item_key, status="running")
+    await queue.set_status(
+        task_id,
+        "running",
+        stage="vkpi_kol_pool_on_demand_refresh",
+        summary=f"按需刷新 KOL Pool {kol_pool_id}",
+        progress_pct=10,
+        progress_text="KOL 按需刷新任务启动",
+    )
+
+    try:
+        result = await asyncio.to_thread(kol_pool.enrich_item, kol_pool_id, max_posts=max_posts, staff=staff)
+        status = str(result.get("sync_status") or result.get("provider_status") or "unknown").strip().lower()
+        refresh_tier.mark_kol_refreshed(kol_pool_id, status=status or "unknown")
+    except Exception as exc:
+        if await _is_terminal(queue, task_id):
+            return
+        message = f"{type(exc).__name__}: {str(exc)[:500]}"
+        refresh_tier.mark_kol_refreshed(kol_pool_id, status="error")
+        task_enqueue.upsert_task_item(task_id, item_key, status="failed", error=message)
+        await queue.set_status(
+            task_id,
+            "failed",
+            error_message=message,
+            stage="vkpi_kol_pool_on_demand_refresh",
+            progress_pct=100,
+            progress_text="KOL 按需刷新失败",
+        )
+        return
+
+    if await _is_terminal(queue, task_id):
+        return
+
+    if task_enqueue.task_cancel_requested(task_id):
+        task_enqueue.upsert_task_item(task_id, item_key, status="cancelled", result=result)
+        await queue.set_status(task_id, "cancelled", summary="任务已取消", stage="cancelled", result_json=result)
+        return
+
+    terminal_status = "done" if _status_ok(result.get("sync_status") or result.get("provider_status")) else "partial_done"
+    task_enqueue.upsert_task_item(task_id, item_key, status=terminal_status, result=result)
+    await queue.set_status(
+        task_id,
+        terminal_status,
+        summary=str(result.get("message") or "KOL 按需刷新完成"),
+        stage="vkpi_kol_pool_on_demand_refresh",
+        result_json=result,
+        progress_pct=100,
+        progress_text="KOL 按需刷新完成",
     )
 
 

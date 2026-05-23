@@ -18,10 +18,10 @@ R59: 独立 KOL Pool 路由 + 防火墙 + 审计装饰器集成示范.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 
 from app.api.dependencies.perms import require_tab
-from app.services.vkpi import eleven_dimensions, kol_competitor_detector, kol_pool
+from app.services.vkpi import eleven_dimensions, kol_competitor_detector, kol_pool, refresh_tier, task_enqueue
 from app.services.vkpi.audit_decorator import audit_action
 from app.services.vkpi.firewall_decorator import firewall_check
 
@@ -32,8 +32,40 @@ router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-kol-pool"])
 # ─── Read endpoints (无装饰器) ──────────────────────
 
 
+async def _maybe_enqueue_refresh(
+    request: Request,
+    kol_pool_id: int,
+    *,
+    staff: dict,
+    enabled: bool,
+    force: bool = False,
+    reason: str = "stale_while_revalidate",
+) -> dict:
+    freshness = refresh_tier.freshness_for_kol(int(kol_pool_id))
+    search_marker = refresh_tier.record_kol_search(int(kol_pool_id))
+    if not enabled:
+        return {"triggered": False, "reason": "not_requested", "freshness": freshness, "search_marker": search_marker}
+    if not force and not freshness.get("needs_refresh"):
+        return {"triggered": False, "reason": "fresh", "freshness": freshness, "search_marker": search_marker}
+    queue = getattr(request.app.state, "job_queue", None)
+    if queue is None:
+        return {"triggered": False, "reason": "job_queue_unavailable", "freshness": freshness, "search_marker": search_marker}
+    try:
+        queued = await task_enqueue.enqueue_kol_pool_on_demand_refresh(
+            queue,
+            int(kol_pool_id),
+            reason=reason,
+            max_posts=1,
+            staff=staff,
+        )
+    except ValueError as exc:
+        return {"triggered": False, "reason": "not_enqueueable", "message": str(exc), "freshness": freshness, "search_marker": search_marker}
+    return {"triggered": True, "reason": reason, "freshness": freshness, "search_marker": search_marker, **queued}
+
+
 @router.get("/kol-pool")
-def list_pool(
+async def list_pool(
+    request: Request,
     limit: int = Query(default=100, ge=1, le=500),
     platform: str = Query(default=""),
     query: str = Query(default=""),
@@ -41,10 +73,11 @@ def list_pool(
     data_status: str = Query(default=""),
     sort_by: str = Query(default="fit"),
     enrichable: bool | None = Query(default=None),
+    refresh_if_stale: bool = Query(default=False),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
     """列出 KOL Pool"""
-    return kol_pool.list_pool(
+    result = kol_pool.list_pool(
         limit=limit,
         platform=platform,
         query=query,
@@ -53,6 +86,21 @@ def list_pool(
         sort_by=sort_by,
         enrichable=enrichable,
     )
+    refresh_state = None
+    items = result.get("items") if isinstance(result, dict) else []
+    if refresh_if_stale and query and isinstance(items, list) and items:
+        first_id = int(items[0].get("id") or 0)
+        if first_id:
+            refresh_state = await _maybe_enqueue_refresh(
+                request,
+                first_id,
+                staff=staff,
+                enabled=True,
+                reason="search_stale_while_revalidate",
+            )
+    if refresh_state:
+        result["refresh"] = refresh_state
+    return result
 
 
 @router.get("/kol-pool/summary")
@@ -114,13 +162,47 @@ def batch_enrich_pool_items(
 
 
 @router.get("/kol-pool/{kol_pool_id}")
-def get_item(
+async def get_item(
+    request: Request,
     kol_pool_id: int,
+    refresh_if_stale: bool = Query(default=True),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
     """获取单个 KOL Pool 项"""
     try:
-        return kol_pool.get_item(int(kol_pool_id))
+        result = kol_pool.get_item(int(kol_pool_id))
+        refresh_state = await _maybe_enqueue_refresh(
+            request,
+            int(kol_pool_id),
+            staff=staff,
+            enabled=bool(refresh_if_stale),
+            reason="detail_stale_while_revalidate",
+        )
+        result["freshness"] = refresh_state.get("freshness")
+        result["refresh"] = refresh_state
+        return result
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/kol-pool/{kol_pool_id}/refresh")
+async def refresh_pool_item(
+    request: Request,
+    kol_pool_id: int,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """Queue a stale-while-revalidate KOL Pool refresh; does not block on providers."""
+    try:
+        kol_pool.get_item(int(kol_pool_id))
+        return await _maybe_enqueue_refresh(
+            request,
+            int(kol_pool_id),
+            staff=staff,
+            enabled=True,
+            force=bool(body.get("force")),
+            reason=str(body.get("reason") or "manual_on_demand_refresh"),
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

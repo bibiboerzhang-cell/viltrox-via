@@ -14,7 +14,8 @@ from app.services.vkpi import channels, scope
 VKPI_TASK_SOURCE = "vkpi"
 VKPI_OFFICIAL_CHANNEL_SYNC = "vkpi_official_channel_sync"
 VKPI_VIDEO_CACHE = "vkpi_video_cache"
-SUPPORTED_TASK_TYPES = {VKPI_OFFICIAL_CHANNEL_SYNC, VKPI_VIDEO_CACHE}
+VKPI_KOL_POOL_ON_DEMAND_REFRESH = "vkpi_kol_pool_on_demand_refresh"
+SUPPORTED_TASK_TYPES = {VKPI_OFFICIAL_CHANNEL_SYNC, VKPI_VIDEO_CACHE, VKPI_KOL_POOL_ON_DEMAND_REFRESH}
 ACTIVE_STATUSES = {"queued", "retrying", "processing", "running"}
 TERMINAL_RETRY_STATUSES = {"failed", "timeout", "cancelled"}
 _SCHEMA_READY = False
@@ -167,6 +168,8 @@ def lock_key_for_task(task_type: str, params: dict[str, Any]) -> str:
         return f"{task_type}:channel:{_int(params.get('channel_id'))}"
     if task_type == "vkpi_video_cache":
         return f"{task_type}:media:{str(params.get('platform') or '').strip().lower()}:{str(params.get('video_id') or '').strip()}"
+    if task_type == VKPI_KOL_POOL_ON_DEMAND_REFRESH:
+        return f"{task_type}:kol_pool:{_int(params.get('kol_pool_id'))}"
     if task_type == "vkpi_apify_kol_scrape":
         raw = _json(params)
         return f"{task_type}:query:{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:24]}"
@@ -184,6 +187,8 @@ def _default_priority(task_type: str) -> int:
         return 1
     if task_type == VKPI_VIDEO_CACHE:
         return 3
+    if task_type == VKPI_KOL_POOL_ON_DEMAND_REFRESH:
+        return 4
     return 5
 
 
@@ -191,6 +196,8 @@ def _default_timeout(task_type: str) -> int:
     if task_type == VKPI_OFFICIAL_CHANNEL_SYNC:
         return 300
     if task_type == VKPI_VIDEO_CACHE:
+        return 300
+    if task_type == VKPI_KOL_POOL_ON_DEMAND_REFRESH:
         return 300
     return 300
 
@@ -232,6 +239,21 @@ async def enqueue_vkpi_task(
         params["force_refresh"] = _bool(params.get("force_refresh"))
         if _int(params.get("channel_id")):
             params["channel_id"] = _int(params.get("channel_id"))
+    if task_type == VKPI_KOL_POOL_ON_DEMAND_REFRESH:
+        from app.services.vkpi import kol_pool
+
+        kol_pool_id = _int(params.get("kol_pool_id"))
+        if not kol_pool_id:
+            raise ValueError("kol_pool_id required")
+        item = kol_pool.get_item(kol_pool_id)["item"]
+        platform = str(item.get("platform") or "").strip().lower()
+        if platform not in kol_pool.ENRICHABLE_PLATFORMS:
+            raise ValueError(f"{platform or 'unknown'} is not enrichable")
+        params["kol_pool_id"] = kol_pool_id
+        params["platform"] = platform
+        params["handle"] = str(item.get("handle") or "")
+        params["max_posts"] = max(1, min(3, _int(params.get("max_posts"), 1)))
+        params["reason"] = str(params.get("reason") or "stale_while_revalidate")[:80]
     user_id = _created_user_id(staff)
     staff_id = scope.actor_staff_id(staff)
     payload = {
@@ -297,6 +319,25 @@ async def enqueue_video_cache(
         params,
         staff=staff,
         priority=priority if priority is not None else 3,
+        timeout_seconds=300,
+    )
+
+
+async def enqueue_kol_pool_on_demand_refresh(
+    queue: Any,
+    kol_pool_id: int,
+    *,
+    reason: str = "stale_while_revalidate",
+    max_posts: int = 1,
+    staff: dict[str, Any] | None = None,
+    priority: int | None = None,
+) -> dict[str, Any]:
+    return await enqueue_vkpi_task(
+        queue,
+        VKPI_KOL_POOL_ON_DEMAND_REFRESH,
+        {"kol_pool_id": int(kol_pool_id), "reason": reason, "max_posts": max_posts},
+        staff=staff,
+        priority=priority if priority is not None else 4,
         timeout_seconds=300,
     )
 
@@ -453,6 +494,14 @@ async def retry_task(queue: Any, task_id: str, *, staff: dict[str, Any] | None =
             source_url=str(payload.get("source_url") or ""),
             channel_id=_int(payload.get("channel_id")) or None,
             force_refresh=_bool(payload.get("force_refresh")),
+            staff=staff,
+        )
+    if task_type == VKPI_KOL_POOL_ON_DEMAND_REFRESH:
+        return await enqueue_kol_pool_on_demand_refresh(
+            queue,
+            _int(payload.get("kol_pool_id")),
+            reason=str(payload.get("reason") or "retry"),
+            max_posts=_int(payload.get("max_posts"), 1),
             staff=staff,
         )
     raise ValueError(f"unsupported retry task type: {task_type}")

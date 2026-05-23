@@ -21,6 +21,7 @@ VALID_TIERS = {"hot", "warm", "cold"}
 DEFAULT_REFRESH_TIERS = {"hot"}
 ACTIVE_PROJECT_EXCLUDED_STATUSES = {"closed", "completed", "cancelled", "canceled", "archived", "inactive"}
 ACTIVE_PROJECT_EXCLUDED_STAGES = {"closed", "completed", "cancelled", "canceled", "archived"}
+FRESHNESS_THRESHOLDS_DAYS = {"hot": 2, "warm": 14, "cold": 30}
 
 
 def _utcnow_dt() -> datetime:
@@ -29,6 +30,19 @@ def _utcnow_dt() -> datetime:
 
 def _utcnow() -> str:
     return _utcnow_dt().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_dt(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
 
 
 def _cutoff(days: int) -> str:
@@ -357,6 +371,91 @@ def upsert_kol_tier(result: dict[str, Any]) -> None:
             now,
         ),
     )
+
+
+def record_kol_search(kol_pool_id: int) -> dict[str, Any]:
+    """Record a user search/detail touch without calling providers."""
+    ensure_refresh_tier_schema()
+    kol = _load_kol_row(int(kol_pool_id))
+    now = _utcnow()
+    existing = _existing_tier(int(kol_pool_id))
+    if existing:
+        current_tier = str(existing.get("tier") or "cold")
+        current_reason = str(existing.get("tier_reason") or "cold_default")
+    else:
+        current_tier = "cold"
+        current_reason = "cold_default"
+    next_tier = "warm" if current_tier == "cold" else current_tier
+    next_reason = "search_30d" if current_tier == "cold" else current_reason
+    get_conn().execute(
+        """
+        INSERT INTO vkpi_kol_refresh_tier
+          (kol_pool_id, tier, tier_reason, tier_reason_json, tier_assigned_at,
+           search_count_30d, last_searched_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
+        ON CONFLICT(kol_pool_id) DO UPDATE SET
+          tier=CASE WHEN vkpi_kol_refresh_tier.tier='cold' THEN excluded.tier ELSE vkpi_kol_refresh_tier.tier END,
+          tier_reason=CASE WHEN vkpi_kol_refresh_tier.tier='cold' THEN excluded.tier_reason ELSE vkpi_kol_refresh_tier.tier_reason END,
+          tier_reason_json=CASE WHEN vkpi_kol_refresh_tier.tier='cold' THEN excluded.tier_reason_json ELSE vkpi_kol_refresh_tier.tier_reason_json END,
+          search_count_30d=COALESCE(vkpi_kol_refresh_tier.search_count_30d, 0) + 1,
+          last_searched_at=excluded.last_searched_at,
+          updated_at=excluded.updated_at
+        """,
+        (
+            int(kol_pool_id),
+            next_tier,
+            next_reason,
+            _json({"search_30d": 1, "source": "on_demand_search"}),
+            now,
+            now,
+            now,
+            now,
+        ),
+    )
+    get_conn().commit()
+    row = _existing_tier(int(kol_pool_id))
+    return {
+        "kol_pool_id": int(kol_pool_id),
+        "platform": str(kol.get("platform") or ""),
+        "handle": str(kol.get("handle") or ""),
+        "tier": str(row.get("tier") or next_tier),
+        "tier_reason": str(row.get("tier_reason") or next_reason),
+        "search_count_30d": _int(row.get("search_count_30d")),
+        "last_searched_at": row.get("last_searched_at"),
+    }
+
+
+def freshness_for_kol(kol_pool_id: int, *, now: datetime | None = None) -> dict[str, Any]:
+    """Return stale-while-revalidate state for one KOL pool row."""
+    ensure_refresh_tier_schema()
+    kol = _load_kol_row(int(kol_pool_id))
+    tier_row = _existing_tier(int(kol_pool_id))
+    tier = str(tier_row.get("tier") or "cold").lower()
+    if tier not in VALID_TIERS:
+        tier = "cold"
+    threshold_days = FRESHNESS_THRESHOLDS_DAYS.get(tier, 30)
+    last_refresh_at = str(tier_row.get("last_refresh_at") or "").strip()
+    status = str(tier_row.get("last_refresh_status") or kol.get("sync_status") or "").strip()
+    now_dt = now or _utcnow_dt()
+    last_dt = _parse_dt(last_refresh_at)
+    days_old = None
+    if last_dt:
+        days_old = max(0, int((now_dt - last_dt).total_seconds() // 86400))
+    needs_refresh = last_dt is None or (days_old is not None and days_old > threshold_days)
+    reason = "never_refreshed" if last_dt is None else f"stale_{days_old}d" if needs_refresh else "fresh"
+    return {
+        "kol_pool_id": int(kol_pool_id),
+        "tier": tier,
+        "tier_reason": str(tier_row.get("tier_reason") or "cold_default"),
+        "last_refresh_at": last_refresh_at,
+        "last_refresh_status": status,
+        "threshold_days": threshold_days,
+        "days_old": days_old,
+        "needs_refresh": bool(needs_refresh),
+        "reason": reason,
+        "last_searched_at": tier_row.get("last_searched_at"),
+        "search_count_30d": _int(tier_row.get("search_count_30d")),
+    }
 
 
 def _all_kol_ids(*, limit: int = 0) -> list[int]:
