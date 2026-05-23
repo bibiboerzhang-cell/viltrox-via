@@ -69,6 +69,73 @@ def _artifact_mtime_iso(path: Path | None) -> str | None:
     return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def _recent_content_sort_key(row: dict[str, Any]) -> str:
+    return str(
+        row.get("posted_at")
+        or row.get("published_at")
+        or row.get("detected_at")
+        or row.get("captured_at")
+        or row.get("created_at")
+        or ""
+    )
+
+
+def _dashboard_recent_official_content(limit: int) -> list[dict[str, Any]]:
+    from app.db.repositories.viltrox_matrix import get_latest_viltrox_scan_bundle
+
+    bundle = get_latest_viltrox_scan_bundle()
+    rows: list[dict[str, Any]] = []
+    for post in bundle.get("posts") or []:
+        rows.append(
+            {
+                "content_kind": "official",
+                "title": post.get("title") or "官方内容",
+                "url": post.get("post_url") or "",
+                "platform": post.get("platform") or "",
+                "account_handle": post.get("handle") or "",
+                "account_display_name": post.get("name") or post.get("handle") or "",
+                "posted_at": post.get("published_at") or "",
+                "views": int(post.get("views") or 0),
+                "likes": int(post.get("likes") or 0),
+                "comments": int(post.get("comments") or 0),
+                "shares": int(post.get("shares") or 0),
+                "media_type": post.get("content_type") or "",
+                "source_table": "viltrox_matrix_scan_posts",
+                "source_id": post.get("post_url") or f"{post.get('account_id')}:{post.get('published_at')}",
+            }
+        )
+    return sorted(rows, key=_recent_content_sort_key, reverse=True)[:limit]
+
+
+def _dashboard_recent_ugc_content(limit: int) -> list[dict[str, Any]]:
+    from app.services.vkpi import brand_signal_detector
+
+    payload = brand_signal_detector.list_brand_signals(status="new", limit=limit)
+    rows: list[dict[str, Any]] = []
+    for signal in payload.get("signals") or []:
+        source_url = str(signal.get("source_url") or signal.get("post_url") or "").strip()
+        if not source_url:
+            continue
+        rows.append(
+            {
+                "content_kind": "ugc",
+                "title": signal.get("title") or signal.get("signal_type") or signal.get("match_context") or "品牌提及",
+                "url": source_url,
+                "platform": signal.get("platform") or signal.get("source_platform") or "",
+                "account_handle": signal.get("author_handle") or signal.get("handle") or signal.get("kol_entity_uid") or "",
+                "posted_at": signal.get("published_at") or signal.get("detected_at") or "",
+                "views": int(signal.get("views") or signal.get("view_count") or signal.get("impressions") or 0),
+                "likes": int(signal.get("likes") or signal.get("like_count") or 0),
+                "comments": int(signal.get("comments") or signal.get("comment_count") or 0),
+                "shares": int(signal.get("shares") or signal.get("share_count") or 0),
+                "media_type": signal.get("content_type") or "",
+                "source_table": "vkpi_brand_signal",
+                "source_id": signal.get("id"),
+            }
+        )
+    return sorted(rows, key=_recent_content_sort_key, reverse=True)[:limit]
+
+
 def _agent_summary(agent_id: str, payload: dict[str, Any], kol_pool_total: int) -> str:
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     if agent_id == "recommendation":
@@ -435,6 +502,29 @@ def dashboard_agents_inbox(
     """Return read-only inbox items from existing runtime/ops agent artifacts."""
     del staff
     return _build_dashboard_agents_inbox(limit=limit, agent_id=agent_id)
+
+
+@router.get("/dashboard/recent-content")
+def dashboard_recent_content(
+    limit: int = Query(default=12, ge=1, le=30),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """Return recent content rows for the glass dashboard content panel."""
+    del staff
+    official = _dashboard_recent_official_content(limit=limit)
+    ugc = _dashboard_recent_ugc_content(limit=limit)
+    items = sorted([*official, *ugc], key=_recent_content_sort_key, reverse=True)[:limit]
+    counts: dict[str, int] = {}
+    for item in items:
+        kind = str(item.get("content_kind") or "unknown")
+        counts[kind] = counts.get(kind, 0) + 1
+    return {
+        "items": items,
+        "count": len(items),
+        "kind_counts": counts,
+        "sources": ["viltrox_matrix_scan_posts", "vkpi_brand_signal"],
+        "is_real": True,
+    }
 
 
 @router.get("/staff-directory")

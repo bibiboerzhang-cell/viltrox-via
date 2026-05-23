@@ -165,6 +165,7 @@ interface PremiumSnapshot {
   officialMatrix: Row;
   competitorDashboard: Row;
   brandSignals: Row[];
+  recentContent: Row[];
   agentsStatus: Row;
   copilotBrief: Row;
   tasksStatus: Row;
@@ -266,6 +267,7 @@ const EMPTY_PREMIUM_SNAPSHOT: PremiumSnapshot = {
   officialMatrix: {},
   competitorDashboard: {},
   brandSignals: [],
+  recentContent: [],
   agentsStatus: {},
   copilotBrief: {},
   tasksStatus: {},
@@ -675,6 +677,12 @@ function settledValue<T>(result: PromiseSettledResult<T>, fallback: T, failed: s
 }
 
 function latestContentRows(snapshot: PremiumSnapshot): Row[] {
+  const recent = rowsFrom(snapshot.recentContent);
+  if (recent.length) {
+    return recent
+      .sort((a, b) => contentTimestamp(b) - contentTimestamp(a))
+      .slice(0, 8);
+  }
   const officialRows = officialAccountRows(snapshot.officialMatrix)
     .flatMap((account) => rowsFrom(account.posts).map((post): Row => ({
       ...post,
@@ -831,7 +839,7 @@ function countrySyncRows(items: VkpiKolPoolItem[]): Array<{ label: string; count
 
 async function fetchPremiumSnapshot(apiToken: string, windowDays: number): Promise<PremiumSnapshot> {
   const failedSections: string[] = [];
-  const [dashboardResult, trendResult, productResult, kolSummaryResult, kolDistributionResult, officialMatrixResult, competitorResult, brandSignalsResult, agentsStatusResult, copilotBriefResult, tasksStatusResult] = await Promise.allSettled([
+  const [dashboardResult, trendResult, productResult, kolSummaryResult, kolDistributionResult, officialMatrixResult, competitorResult, brandSignalsResult, recentContentResult, agentsStatusResult, copilotBriefResult, tasksStatusResult] = await Promise.allSettled([
     apiFetch<Row>(`/api/admin/vkpi/dashboard?window_days=${windowDays}`, {}, apiToken),
     apiFetch<{ rows?: Row[] }>(`/api/admin/vkpi/dashboard/revenue-trend?window_days=7`, {}, apiToken),
     apiFetch<{ rows?: Row[] }>(`/api/admin/vkpi/dashboard/product-performance?window_days=${windowDays}&limit=20`, {}, apiToken),
@@ -840,6 +848,7 @@ async function fetchPremiumSnapshot(apiToken: string, windowDays: number): Promi
     getOfficialChannelMatrix(apiToken, { limit: 20 }),
     getKolPoolCompetitorDashboard(apiToken),
     listBrandSignals(apiToken, { status: 'new', limit: 10 }),
+    apiFetch<{ items?: Row[] }>('/api/admin/vkpi/dashboard/recent-content?limit=12', {}, apiToken),
     apiFetch<Row>('/api/admin/vkpi/dashboard/agents-status', {}, apiToken),
     apiFetch<Row>('/api/admin/vkpi/dashboard/copilot-brief', {}, apiToken),
     apiFetch<Row>('/api/admin/vkpi/dashboard/tasks?limit=6', {}, apiToken),
@@ -852,6 +861,7 @@ async function fetchPremiumSnapshot(apiToken: string, windowDays: number): Promi
   const officialMatrix = settledValue(officialMatrixResult, {}, failedSections, 'official-channel-matrix');
   const competitorDashboard = settledValue(competitorResult, {}, failedSections, 'competitors-dashboard');
   const brandSignals = settledValue(brandSignalsResult, { signals: [] }, failedSections, 'brand-signals');
+  const recentContent = settledValue(recentContentResult, { items: [] }, failedSections, 'recent-content');
   const agentsStatus = settledValue(agentsStatusResult, {}, failedSections, 'agents-status');
   const copilotBrief = settledValue(copilotBriefResult, {}, failedSections, 'copilot-brief');
   const tasksStatus = settledValue(tasksStatusResult, {}, failedSections, 'tasks');
@@ -866,6 +876,7 @@ async function fetchPremiumSnapshot(apiToken: string, windowDays: number): Promi
     officialMatrix,
     competitorDashboard,
     brandSignals: rowsFrom(brandSignals.signals),
+    recentContent: rowsFrom(recentContent.items),
     agentsStatus,
     copilotBrief,
     tasksStatus,
