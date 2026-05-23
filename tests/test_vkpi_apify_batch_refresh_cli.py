@@ -56,6 +56,7 @@ def test_cli_run_blocks_provider_calls_by_default(monkeypatch) -> None:
         "missing_provider_platforms": ["instagram"],
         "execution_preflight_status": "provider_not_configured",
         "can_execute_if_authorized": False,
+        "can_execute_by_windows": False,
         "safe_window_count": 1,
         "oversized_batch_count": 0,
         "requires_replan_for_full_live": False,
@@ -98,6 +99,7 @@ def test_cli_requires_both_execute_and_allow_provider_calls(monkeypatch) -> None
     assert execute_allowed["provider_gate"]["reason"] == "allowed"
     assert execute_allowed["execution_preflight"]["status"] == "ready"
     assert execute_allowed["operator_summary"]["can_execute_if_authorized"] is True
+    assert execute_allowed["operator_summary"]["can_execute_by_windows"] is True
 
 
 def test_cli_writes_operator_artifact(monkeypatch, tmp_path, capsys) -> None:
@@ -163,6 +165,8 @@ def test_cli_blocks_live_execution_above_target_cap(monkeypatch) -> None:
     assert result["provider_calls_allowed"] is False
     assert result["execution"]["reason"] == "live_target_cap_exceeded"
     assert result["operator_summary"]["readiness"] == "live_target_cap_exceeded"
+    assert result["execution_preflight"]["status"] == "live_target_cap_exceeded"
+    assert result["execution_preflight"]["can_execute_by_windows"] is False
     assert result["safe_live_windows"]["oversized_batch_count"] == 1
     assert result["safe_live_windows"]["recommended_chunk_sizes_arg"] == "youtube=25"
 
@@ -261,6 +265,7 @@ def test_execution_preflight_reports_ready_without_request(monkeypatch) -> None:
 
     assert preflight["status"] == "ready"
     assert preflight["can_execute_if_authorized"] is True
+    assert preflight["can_execute_by_windows"] is True
     assert preflight["checks"]["provider_configured"] is True
 
 
@@ -284,3 +289,28 @@ def test_safe_live_windows_packs_small_batches_and_flags_oversized() -> None:
     assert windows["oversized_batch_count"] == 2
     assert windows["recommended_chunk_overrides"] == {"instagram": 25, "youtube": 25}
     assert windows["recommended_chunk_sizes_arg"] == "instagram=25,youtube=25"
+
+
+def test_execution_preflight_reports_windowed_execution_after_replan(monkeypatch) -> None:
+    monkeypatch.setenv("APIFY_TOKEN", "test-token")
+    args = vkpi_apify_batch_refresh.parse_args(["--max-live-targets", "25"])
+    plan = {
+        "selector_ready": True,
+        "total_targets": 38,
+        "batch_count": 2,
+        "platforms": {"youtube": 38},
+        "batches": [
+            {"batch_key": "youtube-1", "platform": "youtube", "target_count": 25, "kol_pool_ids": list(range(1, 26))},
+            {"batch_key": "youtube-2", "platform": "youtube", "target_count": 13, "kol_pool_ids": list(range(26, 39))},
+        ],
+        "skipped": [],
+    }
+    provider_config = vkpi_apify_batch_refresh.provider_config_summary(plan)
+    windows = vkpi_apify_batch_refresh.safe_live_windows(args, plan)
+
+    preflight = vkpi_apify_batch_refresh.execution_preflight(args, plan, provider_config, windows)
+
+    assert preflight["status"] == "requires_windowed_execution"
+    assert preflight["can_execute_if_authorized"] is False
+    assert preflight["can_execute_by_windows"] is True
+    assert preflight["checks"]["windowed_execution_available"] is True

@@ -109,19 +109,28 @@ def provider_config_summary(plan: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def execution_preflight(args: argparse.Namespace, plan: dict[str, Any], provider_config: dict[str, Any]) -> dict[str, Any]:
+def execution_preflight(
+    args: argparse.Namespace,
+    plan: dict[str, Any],
+    provider_config: dict[str, Any],
+    window_summary: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     target_count = _safe_int(plan.get("total_targets"))
     batch_count = _safe_int(plan.get("batch_count"))
     skipped = [item for item in (plan.get("skipped") or []) if isinstance(item, dict)]
     live_target_cap = max(1, min(100, _safe_int(args.max_live_targets) or 25))
     selector_ready = bool(plan.get("selector_ready"))
     provider_configured = bool(provider_config.get("configured"))
+    windows = window_summary if isinstance(window_summary, dict) else {}
+    window_count = _safe_int(windows.get("window_count"))
+    windowed_execution_available = bool(window_count and not windows.get("requires_replan_for_full_live"))
     checks = {
         "selector_ready": selector_ready,
         "has_targets": target_count > 0,
         "within_live_target_cap": target_count <= live_target_cap,
         "provider_configured": provider_configured,
         "no_skipped_targets": not skipped,
+        "windowed_execution_available": windowed_execution_available,
     }
     warnings: list[str] = []
     if skipped:
@@ -132,7 +141,11 @@ def execution_preflight(args: argparse.Namespace, plan: dict[str, Any], provider
     elif target_count <= 0:
         status = "no_targets_to_execute"
     elif target_count > live_target_cap:
-        status = "live_target_cap_exceeded"
+        if provider_configured and not skipped and windowed_execution_available:
+            status = "requires_windowed_execution"
+            warnings.append("requires_windowed_execution")
+        else:
+            status = "live_target_cap_exceeded"
     elif not provider_configured:
         status = "provider_not_configured"
     elif skipped:
@@ -143,6 +156,7 @@ def execution_preflight(args: argparse.Namespace, plan: dict[str, Any], provider
     return {
         "status": status,
         "can_execute_if_authorized": status == "ready",
+        "can_execute_by_windows": status in {"ready", "requires_windowed_execution"},
         "target_count": target_count,
         "batch_count": batch_count,
         "live_target_cap": live_target_cap,
@@ -271,6 +285,7 @@ def operator_summary(result: dict[str, Any]) -> dict[str, Any]:
         "missing_provider_platforms": provider_config.get("missing_platforms") if isinstance(provider_config.get("missing_platforms"), list) else [],
         "execution_preflight_status": str(preflight.get("status") or ""),
         "can_execute_if_authorized": bool(preflight.get("can_execute_if_authorized")),
+        "can_execute_by_windows": bool(preflight.get("can_execute_by_windows")),
         "safe_window_count": _safe_int(windows.get("window_count")),
         "oversized_batch_count": _safe_int(windows.get("oversized_batch_count")),
         "requires_replan_for_full_live": bool(windows.get("requires_replan_for_full_live")),
@@ -334,8 +349,8 @@ def provider_gate(args: argparse.Namespace, plan: dict[str, Any], provider_confi
 async def run_from_args(args: argparse.Namespace) -> dict[str, Any]:
     plan = build_plan(args)
     provider_config = provider_config_summary(plan)
-    preflight = execution_preflight(args, plan, provider_config)
     windows = safe_live_windows(args, plan)
+    preflight = execution_preflight(args, plan, provider_config, windows)
     gate = provider_gate(args, plan, provider_config)
     execution = await apify_batch_refresh.execute_apify_batch_plan(
         plan,
