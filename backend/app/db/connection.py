@@ -119,6 +119,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "074_vkpi_sync_runs.sql",
     "075_vkpi_sync_acknowledgements.sql",
     "076_vkpi_kol_refresh_tier.sql",
+    "077_vkpi_llm_gateway_hard_caps.sql",
 )
 
 try:

@@ -118,6 +118,12 @@ def ensure_budget_schema() -> None:
           fallback_action TEXT,
           metadata_json TEXT NOT NULL DEFAULT '{}'
         );
+
+        INSERT OR IGNORE INTO vkpi_provider_budget_caps
+            (scope, cap_usd, current_spend, warning_at, hard_stop_at, reset_at, fallback_action, metadata_json)
+        VALUES
+            ('single_call', 0.50, 0, 0.80, 1.00, NULL, 'fallback_to_rule_v0', '{"seeded_by":"budget_guard_sqlite","tier":"hard_stop"}'),
+            ('cron:p4_evidence_summary', 10.00, 0, 0.80, 1.00, NULL, 'fallback_to_evidence_only', '{"seeded_by":"budget_guard_sqlite","tier":"cron","package":"P4"}');
         """
     )
     conn.commit()
@@ -164,6 +170,45 @@ def check_budget(scope: str, estimated_cost: float, *, require_configured: bool 
     if not row:
         return not require_configured
     return bool(_budget_payload(_clean_row(row), estimated_cost=float(estimated_cost or 0)).get("allowed"))
+
+
+def check_budget_scopes(
+    scopes: list[str] | tuple[str, ...],
+    estimated_cost: float,
+    *,
+    require_configured: bool = True,
+) -> dict[str, Any]:
+    """Return a read-only hard-gate plan across multiple budget scopes."""
+
+    ensure_budget_schema()
+    clean_scopes = [scope for scope in dict.fromkeys(_normalize_scope(scope) for scope in (scopes or [])) if scope]
+    checks: list[dict[str, Any]] = []
+    allowed = True
+    for scope in clean_scopes:
+        status = get_budget_status(scope, estimated_cost=estimated_cost)
+        configured = bool(status.get("configured", False))
+        scope_allowed = bool(status.get("allowed", True))
+        if require_configured and not configured:
+            scope_allowed = False
+        check = {
+            **status,
+            "scope": scope,
+            "configured": configured,
+            "allowed": scope_allowed,
+            "required": bool(require_configured),
+        }
+        checks.append(check)
+        if not scope_allowed:
+            allowed = False
+    if require_configured and not clean_scopes:
+        allowed = False
+    return {
+        "allowed": allowed,
+        "estimated_cost_usd": max(0.0, float(estimated_cost or 0)),
+        "require_configured": bool(require_configured),
+        "scopes": clean_scopes,
+        "checks": checks,
+    }
 
 
 def get_budget_status(scope: str | None = None, *, estimated_cost: float = 0.0) -> dict[str, Any]:

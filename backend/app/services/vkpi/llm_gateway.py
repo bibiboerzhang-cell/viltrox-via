@@ -28,6 +28,7 @@ from app.services.vkpi.workflow import staff_id as resolve_staff_id
 logger = get_logger(__name__)
 
 PROVIDER_ORDER = ("openai", "google", "anthropic", "rule_v0")
+SINGLE_CALL_BUDGET_SCOPE = "single_call"
 PROVIDER_CONFIG: dict[str, dict[str, Any]] = {
     "openai": {
         "model": os.getenv("VKPI_OPENAI_MODEL", os.getenv("OPENAI_MODEL", "gpt-5.4-mini")),
@@ -168,19 +169,126 @@ def _estimated_cost_usd(provider: str, *, prompt: str, max_output_tokens: int) -
 
 
 def _budget_scopes_for_provider(provider: str, cost_scope: str) -> list[str]:
-    scopes = ["monthly_total", _provider_budget_scope(provider), cost_scope]
+    scopes = ["monthly_total", SINGLE_CALL_BUDGET_SCOPE, _provider_budget_scope(provider), cost_scope]
     return [scope for scope in scopes if scope]
 
 
 def _budget_allows_provider(provider: str, *, cost_scope: str, estimated_cost_usd: float) -> tuple[bool, list[dict[str, Any]]]:
-    checks: list[dict[str, Any]] = []
-    allowed = True
-    for scope in _budget_scopes_for_provider(provider, cost_scope):
-        scope_allowed = budget_guard.check_budget(scope, estimated_cost_usd, require_configured=True)
-        checks.append({"scope": scope, "allowed": bool(scope_allowed), "estimated_cost_usd": estimated_cost_usd})
-        if not scope_allowed:
-            allowed = False
-    return allowed, checks
+    plan = budget_guard.check_budget_scopes(
+        _budget_scopes_for_provider(provider, cost_scope),
+        estimated_cost_usd,
+        require_configured=True,
+    )
+    return bool(plan.get("allowed")), plan.get("checks") if isinstance(plan.get("checks"), list) else []
+
+
+def _record_budget_blocked_attempt(
+    provider: str,
+    *,
+    purpose: str,
+    prompt: str,
+    cost_scope: str,
+    estimated_cost_usd: float,
+    budget_checks: list[dict[str, Any]],
+    triggered_by: Any = None,
+    metadata: dict[str, Any] | None = None,
+    staff: dict[str, Any] | None = None,
+) -> None:
+    """Append a zero-cost ledger row for denied provider attempts."""
+
+    try:
+        provider_scope = _provider_budget_scope(provider)
+        budget_guard.record_cost(
+            scope=cost_scope or SINGLE_CALL_BUDGET_SCOPE,
+            cron_task=purpose or "manual_llm",
+            ai_provider=provider or "unknown",
+            model_name=str((PROVIDER_CONFIG.get(provider) or {}).get("model") or ""),
+            cost_usd=0.0,
+            tokens_in=_estimate_prompt_tokens(prompt),
+            tokens_out=0,
+            staff_id=resolve_staff_id(staff) or None,
+            metadata={
+                **(metadata or {}),
+                "status": "budget_blocked",
+                "estimated_cost_usd": estimated_cost_usd,
+                "budget_checks": budget_checks,
+            },
+            triggered_by=triggered_by if triggered_by is not None else staff,
+            extra_scopes=[scope for scope in ("monthly_total", SINGLE_CALL_BUDGET_SCOPE, provider_scope) if scope],
+        )
+    except Exception:
+        logger.warning("vkpi.llm_gateway.budget_block_ledger_failed", exc_info=True)
+
+
+def budget_preflight(
+    prompt: str,
+    *,
+    purpose: str = "",
+    max_output_tokens: int = 800,
+    preferred_provider: str | None = None,
+    cost_tag: str | None = None,
+    skip_monthly_env_check: bool = False,
+) -> dict[str, Any]:
+    """Read-only provider-call budget preflight for operators and tests."""
+
+    safe_prompt = str(prompt or "")
+    cost_scope = _cost_scope_for_purpose(purpose, cost_tag)
+    monthly_budget = _monthly_budget_cents()
+    monthly_remaining = _budget_remaining_cents()
+    forced_offline = _truthy_env("VKPI_LLM_GATEWAY_FORCE_OFFLINE")
+    providers: list[dict[str, Any]] = []
+    for provider in _ordered_providers(preferred_provider):
+        if provider == "rule_v0":
+            continue
+        estimated_cost = _estimated_cost_usd(provider, prompt=safe_prompt, max_output_tokens=max_output_tokens)
+        scopes = _budget_scopes_for_provider(provider, cost_scope)
+        plan = budget_guard.check_budget_scopes(scopes, estimated_cost, require_configured=True)
+        env_allowed = bool(skip_monthly_env_check) or monthly_budget > 0 and monthly_remaining > 0
+        configured = _is_provider_configured(provider)
+        provider_allowed = bool(plan.get("allowed")) and configured and env_allowed and not forced_offline
+        providers.append(
+            {
+                "provider": provider,
+                "model": str((PROVIDER_CONFIG.get(provider) or {}).get("model") or ""),
+                "configured": configured,
+                "estimated_cost_usd": estimated_cost,
+                "budget_allowed": bool(plan.get("allowed")),
+                "env_monthly_allowed": env_allowed,
+                "provider_calls_allowed": provider_allowed,
+                "scopes": scopes,
+                "checks": plan.get("checks") if isinstance(plan.get("checks"), list) else [],
+            }
+        )
+    provider_calls_allowed = any(bool(item.get("provider_calls_allowed")) for item in providers)
+    if forced_offline:
+        reason = "force_offline"
+    elif not (bool(skip_monthly_env_check) or monthly_budget > 0):
+        reason = "monthly_env_budget_disabled"
+    elif not providers:
+        reason = "no_provider_candidates"
+    elif not any(bool(item.get("configured")) for item in providers):
+        reason = "providers_not_configured"
+    elif not any(bool(item.get("budget_allowed")) for item in providers):
+        reason = "budget_hard_stop"
+    elif not provider_calls_allowed:
+        reason = "provider_calls_blocked"
+    else:
+        reason = "provider_calls_allowed"
+    return {
+        "mode": "llm_gateway_budget_preflight_v0",
+        "provider_calls_allowed": provider_calls_allowed,
+        "provider_gate_reason": reason,
+        "purpose": purpose,
+        "cost_scope": cost_scope,
+        "max_output_tokens": max(1, min(4000, int(max_output_tokens or 800))),
+        "prompt_tokens_estimate": _estimate_prompt_tokens(safe_prompt),
+        "monthly_env_budget_usd": monthly_budget / 100,
+        "monthly_env_spent_usd": _current_month_spent_cents() / 100,
+        "monthly_env_remaining_usd": max(0, monthly_remaining) / 100,
+        "force_offline": forced_offline,
+        "single_call_scope": SINGLE_CALL_BUDGET_SCOPE,
+        "providers": providers,
+    }
 
 
 def _request_json(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: int) -> dict[str, Any]:
@@ -435,6 +543,17 @@ def invoke(
         estimated_cost = _estimated_cost_usd(provider, prompt=safe_prompt, max_output_tokens=max_output_tokens)
         provider_allowed, budget_checks = _budget_allows_provider(provider, cost_scope=cost_scope, estimated_cost_usd=estimated_cost)
         if not provider_allowed:
+            _record_budget_blocked_attempt(
+                provider,
+                purpose=purpose,
+                prompt=safe_prompt,
+                cost_scope=cost_scope,
+                estimated_cost_usd=estimated_cost,
+                budget_checks=budget_checks,
+                triggered_by=triggered_by,
+                metadata=metadata,
+                staff=staff,
+            )
             errors.append({"provider": provider, "status": "budget_blocked", "budget_checks": budget_checks})
             continue
         result = caller(safe_prompt, max_output_tokens)
