@@ -66,6 +66,51 @@ def _compact_plan(plan: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _safe_int(value: Any) -> int:
+    try:
+        return int(float(str(value or "").strip()))
+    except (TypeError, ValueError):
+        return 0
+
+
+def operator_summary(result: dict[str, Any]) -> dict[str, Any]:
+    plan = result.get("plan") if isinstance(result.get("plan"), dict) else {}
+    execution = result.get("execution") if isinstance(result.get("execution"), dict) else {}
+    execution_summary = execution.get("summary") if isinstance(execution.get("summary"), dict) else {}
+    skipped = [item for item in (plan.get("skipped") or []) if isinstance(item, dict)]
+    skipped_reasons: dict[str, int] = {}
+    for item in skipped:
+        reason = str(item.get("reason") or "unknown")
+        skipped_reasons[reason] = skipped_reasons.get(reason, 0) + 1
+
+    provider_calls_allowed = bool(result.get("provider_calls_allowed"))
+    failed_batches = _safe_int(execution_summary.get("failed_batches") or execution.get("failed_batches"))
+    retry_count = _safe_int(execution_summary.get("retry_count"))
+    if not provider_calls_allowed:
+        readiness = "blocked_provider_calls"
+    elif failed_batches or retry_count:
+        readiness = "review_required"
+    else:
+        readiness = "ready"
+
+    return {
+        "readiness": readiness,
+        "mode": result.get("mode"),
+        "provider_calls_allowed": provider_calls_allowed,
+        "selector_ready": bool(plan.get("selector_ready")),
+        "source_total": _safe_int(plan.get("source_total")),
+        "target_count": _safe_int(plan.get("total_targets")),
+        "batch_count": _safe_int(plan.get("batch_count")),
+        "platforms": plan.get("platforms") if isinstance(plan.get("platforms"), dict) else {},
+        "skipped_count": len(skipped),
+        "skipped_reasons": skipped_reasons,
+        "executed": bool(execution.get("executed")),
+        "execution_reason": str(execution.get("reason") or ""),
+        "retry_count": retry_count,
+        "failed_batches": failed_batches,
+    }
+
+
 def build_plan(args: argparse.Namespace) -> dict[str, Any]:
     return apify_batch_refresh.qualified_apify_batch_plan(
         limit=max(1, min(1200, int(args.limit or 50))),
@@ -87,12 +132,14 @@ async def run_from_args(args: argparse.Namespace) -> dict[str, Any]:
         allow_provider_calls=bool(args.execute and args.allow_provider_calls),
         timeout_secs=max(30, min(1800, int(args.timeout_seconds or apify_batch_refresh.DEFAULT_RUN_TIMEOUT_SECONDS))),
     )
-    return {
+    result = {
         "mode": "execute" if args.execute else "plan_with_blocked_executor",
         "provider_calls_allowed": bool(args.execute and args.allow_provider_calls),
         "plan": _compact_plan(plan) if args.compact else plan,
         "execution": execution,
     }
+    result["operator_summary"] = operator_summary(result)
+    return result
 
 
 def _artifact_path(args: argparse.Namespace) -> Path:

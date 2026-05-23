@@ -11,11 +11,26 @@ def test_cli_run_blocks_provider_calls_by_default(monkeypatch) -> None:
 
     def fake_plan(**kwargs):
         calls["plan"] = kwargs
-        return {"strategy": "apify_batch_first", "max_concurrent_runs": 2, "batches": [{"batch_key": "instagram-1", "platform": "instagram", "targets": [{"kol_pool_id": 1}]}]}
+        return {
+            "strategy": "apify_batch_first",
+            "max_concurrent_runs": 2,
+            "selector_ready": True,
+            "source_total": 3,
+            "total_targets": 1,
+            "batch_count": 1,
+            "platforms": {"instagram": 1},
+            "skipped": [{"reason": "unsupported_platform"}],
+            "batches": [{"batch_key": "instagram-1", "platform": "instagram", "targets": [{"kol_pool_id": 1}]}],
+        }
 
     async def fake_execute(plan, **kwargs):
         calls["execute"] = kwargs
-        return {"executed": False, "reason": "provider_calls_not_allowed", "batch_count": len(plan["batches"])}
+        return {
+            "executed": False,
+            "reason": "provider_calls_not_allowed",
+            "batch_count": len(plan["batches"]),
+            "summary": {"retry_count": 0, "failed_batches": 0},
+        }
 
     monkeypatch.setattr(vkpi_apify_batch_refresh.apify_batch_refresh, "qualified_apify_batch_plan", fake_plan)
     monkeypatch.setattr(vkpi_apify_batch_refresh.apify_batch_refresh, "execute_apify_batch_plan", fake_execute)
@@ -30,6 +45,22 @@ def test_cli_run_blocks_provider_calls_by_default(monkeypatch) -> None:
     assert calls["plan"]["limit"] == 10
     assert calls["plan"]["platforms"] == {"instagram"}
     assert result["plan"]["batches"][0] == {"batch_key": "instagram-1", "platform": "instagram", "target_count": None, "actor_id": None, "kol_pool_ids": None}
+    assert result["operator_summary"] == {
+        "readiness": "blocked_provider_calls",
+        "mode": "plan_with_blocked_executor",
+        "provider_calls_allowed": False,
+        "selector_ready": True,
+        "source_total": 3,
+        "target_count": 1,
+        "batch_count": 1,
+        "platforms": {"instagram": 1},
+        "skipped_count": 1,
+        "skipped_reasons": {"unsupported_platform": 1},
+        "executed": False,
+        "execution_reason": "provider_calls_not_allowed",
+        "retry_count": 0,
+        "failed_batches": 0,
+    }
 
 
 def test_cli_requires_both_execute_and_allow_provider_calls(monkeypatch) -> None:
@@ -81,4 +112,20 @@ def test_cli_writes_operator_artifact(monkeypatch, tmp_path, capsys) -> None:
     printed = json.loads(capsys.readouterr().out)
     assert payload["artifact"]["path"] == str(artifact)
     assert payload["provider_calls_allowed"] is False
+    assert payload["operator_summary"]["readiness"] == "blocked_provider_calls"
     assert printed["artifact"]["path"] == str(artifact)
+
+
+def test_operator_summary_requires_review_for_retryable_execution() -> None:
+    result = {
+        "mode": "execute",
+        "provider_calls_allowed": True,
+        "plan": {"selector_ready": True, "source_total": 2, "total_targets": 2, "batch_count": 1, "platforms": {"youtube": 2}, "skipped": []},
+        "execution": {"executed": True, "summary": {"retry_count": 1, "failed_batches": 0}},
+    }
+
+    summary = vkpi_apify_batch_refresh.operator_summary(result)
+
+    assert summary["readiness"] == "review_required"
+    assert summary["retry_count"] == 1
+    assert summary["provider_calls_allowed"] is True
