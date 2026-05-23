@@ -261,8 +261,8 @@ def get_voice_guidelines() -> dict:
         ).fetchone()
         if row and row["value"]:
             return json.loads(row["value"])
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("brand voice guidelines fallback used: %s", exc)
     return _DEFAULT_VOICE
 
 

@@ -194,8 +194,8 @@ def parse_relative_time(s: str) -> Optional[datetime]:
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
             return dt
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("lens monitor date parse failed", extra={"value": s, "error": str(exc)})
     
     # 相对时间
     for pat, unit in _RELATIVE_PATTERNS:

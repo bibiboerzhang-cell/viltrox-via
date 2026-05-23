@@ -34,7 +34,7 @@ def _safe_json(raw: Any) -> dict:
         return raw
     try:
         return json.loads(raw)
-    except Exception:
+    except (TypeError, json.JSONDecodeError):
         return {}
 
 

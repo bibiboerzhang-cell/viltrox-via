@@ -83,8 +83,8 @@ async def _stop_browser() -> None:
         if _playwright_instance:
             await _playwright_instance.stop()
         logger.info("playwright_scraper.browser_stopped")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("playwright_scraper.browser_stop_failed", extra={"error": str(exc)})
     finally:
         _browser = None
         _playwright_instance = None
@@ -106,8 +106,8 @@ def parse_instagram_publish_date(html: str, body_text: str):
         try:
             raw = m.group(1).replace("Z", "").split(".")[0]
             return datetime.fromisoformat(raw).strftime("%Y-%m-%dT%H:%M:%SZ")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("instagram datetime parse failed", extra={"value": m.group(1), "error": str(exc)})
 
     # 方法2: JSON-LD
     m = re.search(r'"(?:uploadDate|datePublished)"\s*:\s*"(\d{4}-\d{2}-\d{2}[^"]{0,20})"', html or "", re.I)
@@ -115,8 +115,8 @@ def parse_instagram_publish_date(html: str, body_text: str):
         try:
             raw = m.group(1).replace("Z", "").split(".")[0]
             return datetime.fromisoformat(raw).strftime("%Y-%m-%dT%H:%M:%SZ")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("instagram json date parse failed", extra={"value": m.group(1), "error": str(exc)})
 
     # 方法3: 相对时间
     def _parse_rel(text: str):
@@ -183,8 +183,8 @@ async def extract_visible_comments(page: Any, platform: str) -> List[str]:
                 txt = (await loc.nth(i).inner_text()).strip()
                 if txt:
                     comments.append(txt)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("visible comment extraction failed", extra={"platform": platform, "error": str(exc)})
     return comments
 
 
@@ -235,8 +235,8 @@ async def scrape_with_playwright(url: str) -> Dict[str, Any]:
             og_image = ""
             try:
                 og_desc = await page.locator('meta[property="og:description"]').get_attribute("content") or ""
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("og description extraction failed", extra={"url": url, "error": str(exc)})
             try:
                 og_image = await page.evaluate("""() => {
                     const og = document.querySelector('meta[property="og:image"]');
@@ -245,8 +245,8 @@ async def scrape_with_playwright(url: str) -> Dict[str, Any]:
                     if (tw) return tw.getAttribute('content') || '';
                     return '';
                 }""") or ""
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("og image extraction failed", extra={"url": url, "error": str(exc)})
 
             visible_comments = await extract_visible_comments(page, platform)
 
