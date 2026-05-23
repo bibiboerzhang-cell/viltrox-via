@@ -114,6 +114,28 @@ export interface VkpiKolPoolGeminiPreflight {
   checks?: Record<string, unknown>;
 }
 
+export interface VkpiKolPoolGeminiGoNoGo {
+  mode: string;
+  generated_at: string;
+  kol_pool_id: number;
+  decision: string;
+  decision_reason?: string;
+  blockers?: string[];
+  provider_calls: boolean;
+  llm_calls: boolean;
+  write_db: boolean;
+  sync_triggered?: boolean;
+  task_enqueued?: boolean;
+  summary?: Record<string, unknown>;
+  budget_gate?: Record<string, unknown>;
+  operator_gates?: Record<string, unknown>;
+  risks?: Array<Record<string, unknown>>;
+  next_steps?: string[];
+  checks?: Record<string, unknown>;
+  passed?: boolean;
+  preflight?: VkpiKolPoolGeminiPreflight;
+}
+
 export async function listKolPool(
   token: string,
   params: { search?: string; platform?: string; country?: string; limit?: number; dataStatus?: string; sortBy?: string; enrichable?: boolean; refreshIfStale?: boolean } = {},
@@ -175,6 +197,15 @@ export async function getKolPoolGeminiPreflight(token: string, kolPoolId: number
   const query = new URLSearchParams({ candidate_limit: String(candidateLimit), include_budget_preflight: "true" });
   return apiFetch<VkpiKolPoolGeminiPreflight>(
     `/api/admin/vkpi/kol-pool/${kolPoolId}/gemini-preflight?${query.toString()}`,
+    {},
+    token,
+  );
+}
+
+export async function getKolPoolGeminiGoNoGo(token: string, kolPoolId: number, candidateLimit = 24) {
+  const query = new URLSearchParams({ candidate_limit: String(candidateLimit) });
+  return apiFetch<VkpiKolPoolGeminiGoNoGo>(
+    `/api/admin/vkpi/kol-pool/${kolPoolId}/gemini-go-no-go?${query.toString()}`,
     {},
     token,
   );

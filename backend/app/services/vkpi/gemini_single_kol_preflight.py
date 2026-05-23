@@ -439,6 +439,147 @@ def build_kol_pool_gemini_preflight(kol_pool_id: int, *, candidate_limit: int = 
     }
 
 
+def _budget_gate_summary(preflight: dict[str, Any]) -> dict[str, Any]:
+    budget = preflight.get("budget_preflight") if isinstance(preflight.get("budget_preflight"), dict) else {}
+    google = _google_budget_provider(budget)
+    checks = google.get("checks") if isinstance(google.get("checks"), list) else []
+    failed_scopes = [str(item.get("scope") or "") for item in checks if isinstance(item, dict) and not bool(item.get("allowed"))]
+    return {
+        "provider_gate_reason": _text(budget.get("provider_gate_reason")),
+        "required_provider": "google",
+        "provider_configured": bool(google.get("configured")),
+        "provider_calls_allowed": bool(google.get("provider_calls_allowed")),
+        "estimated_cost_usd": _google_estimated_cost(budget),
+        "scopes": google.get("scopes") if isinstance(google.get("scopes"), list) else [],
+        "failed_scopes": [scope for scope in failed_scopes if scope],
+        "monthly_env_budget_usd": budget.get("monthly_env_budget_usd"),
+        "monthly_env_remaining_usd": budget.get("monthly_env_remaining_usd"),
+        "force_offline": bool(budget.get("force_offline")),
+    }
+
+
+def _gemini_decision(preflight: dict[str, Any]) -> tuple[str, str, list[str]]:
+    strategy = preflight.get("candidate_strategy") if isinstance(preflight.get("candidate_strategy"), dict) else {}
+    readiness = preflight.get("url_readiness") if isinstance(preflight.get("url_readiness"), dict) else {}
+    go_no_go = preflight.get("go_no_go") if isinstance(preflight.get("go_no_go"), dict) else {}
+    budget = _budget_gate_summary(preflight)
+    blockers: list[str] = []
+    if _int(strategy.get("candidate_count")) <= 0:
+        blockers.append("no_cached_video_candidates")
+    if not bool(readiness.get("valid_video_url")):
+        blockers.append(str(readiness.get("blocked_reason") or "invalid_video_url"))
+    if blockers:
+        return "no_go_for_this_kol", "candidate_not_ready", list(dict.fromkeys(blockers))
+    if not bool(go_no_go.get("provider_calls_allowed")):
+        reason = str(go_no_go.get("blocked_reason") or budget.get("provider_gate_reason") or "provider_gate_blocked")
+        blockers.append(reason)
+        for scope in budget.get("failed_scopes") or []:
+            blockers.append(f"budget_scope_blocked:{scope}")
+        return "hold", "provider_or_budget_gate_not_ready", list(dict.fromkeys(blockers))
+    return "go_manual_single_call", "ready_for_one_explicit_paid_call", []
+
+
+def build_kol_pool_gemini_go_no_go(kol_pool_id: int, *, candidate_limit: int = 24) -> dict[str, Any]:
+    """Build a read-only P4.56 go/no-go report for the next Gemini step."""
+
+    preflight = build_kol_pool_gemini_preflight(
+        int(kol_pool_id),
+        candidate_limit=candidate_limit,
+        include_budget_preflight=True,
+    )
+    decision, reason, blockers = _gemini_decision(preflight)
+    readiness = preflight.get("url_readiness") if isinstance(preflight.get("url_readiness"), dict) else {}
+    strategy = preflight.get("candidate_strategy") if isinstance(preflight.get("candidate_strategy"), dict) else {}
+    go_no_go = preflight.get("go_no_go") if isinstance(preflight.get("go_no_go"), dict) else {}
+    budget = _budget_gate_summary(preflight)
+    operator_gates = {
+        "requires_execute_flag": True,
+        "requires_allow_provider_calls_flag": True,
+        "requires_budget_gate": True,
+        "requires_single_kol_only": True,
+        "batch_allowed": False,
+        "business_write_db_allowed": False,
+        "sync_allowed": False,
+        "task_enqueue_allowed": False,
+    }
+    risks = [
+        {
+            "risk": "analyzer_model_order_unverified",
+            "severity": "medium",
+            "mitigation": "Before a paid call, verify the concrete Gemini model names in runtime config or update the analyzer model list.",
+        },
+        {
+            "risk": "youtube_availability_not_network_checked",
+            "severity": "low" if readiness.get("valid_video_url") else "high",
+            "mitigation": "The preflight only validates URL shape. The paid call remains the first real availability check.",
+        },
+        {
+            "risk": "actual_provider_cost_unknown_until_call",
+            "severity": "medium",
+            "mitigation": "Ledger records the budget preflight estimate and marks actual_cost_unknown for the first live run.",
+        },
+    ]
+    next_steps: list[str]
+    if decision == "go_manual_single_call":
+        next_steps = [
+            "Run exactly one KOL with --execute --allow-provider-calls after operator approval.",
+            "Record cost, latency, analyzed status, returned fields, and error if any.",
+            "Do not start batch design until the single live result is reviewed.",
+        ]
+    elif decision == "hold":
+        next_steps = [
+            "Keep provider calls disabled.",
+            "Resolve budget/provider blockers listed in this report.",
+            "Re-run this go/no-go report before any paid call.",
+        ]
+    else:
+        next_steps = [
+            "Pick a different KOL with a cached YouTube video candidate or refresh cache only under approved policy.",
+            "Do not call Gemini for this KOL in the current state.",
+        ]
+    checks = {
+        "preflight_completed": bool((preflight.get("checks") or {}).get("preflight_completed")),
+        "candidate_evaluated": bool((preflight.get("checks") or {}).get("candidate_evaluated")),
+        "budget_gate_checked": bool(preflight.get("budget_preflight")),
+        "decision_recorded": bool(decision),
+        "no_provider_calls": True,
+        "no_llm_calls": True,
+        "no_write_db": True,
+        "no_sync_triggered": True,
+        "no_task_enqueued": True,
+        "batch_still_blocked": True,
+    }
+    return {
+        "mode": "read_only_p4_56_gemini_go_no_go_report",
+        "generated_at": _utcnow(),
+        "kol_pool_id": int(kol_pool_id),
+        "decision": decision,
+        "decision_reason": reason,
+        "blockers": blockers,
+        "provider_calls": False,
+        "llm_calls": False,
+        "write_db": False,
+        "sync_triggered": False,
+        "task_enqueued": False,
+        "summary": {
+            "candidate_count": _int(strategy.get("candidate_count")),
+            "valid_video_url": bool(readiness.get("valid_video_url")),
+            "provider_path": readiness.get("provider_path") or "",
+            "top_video_url": (preflight.get("top_candidate") or {}).get("video_url") or (preflight.get("top_candidate") or {}).get("url") or "",
+            "provider_calls_allowed": bool(go_no_go.get("provider_calls_allowed")),
+            "ready_for_manual_live_test": bool(go_no_go.get("ready_for_manual_live_test")),
+            "provider_gate_reason": budget.get("provider_gate_reason") or "",
+        },
+        "budget_gate": budget,
+        "operator_gates": operator_gates,
+        "risks": risks,
+        "next_steps": next_steps,
+        "checks": checks,
+        "passed": all(bool(value) for value in checks.values()),
+        "preflight": preflight,
+    }
+
+
 async def run_kol_pool_gemini_single(
     kol_pool_id: int,
     *,

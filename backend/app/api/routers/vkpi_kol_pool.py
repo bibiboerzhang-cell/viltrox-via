@@ -372,6 +372,23 @@ def get_pool_item_gemini_preflight(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.get("/kol-pool/{kol_pool_id}/gemini-go-no-go")
+def get_pool_item_gemini_go_no_go(
+    kol_pool_id: int,
+    candidate_limit: int = Query(default=24, ge=1, le=100),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """Return P4.56 Gemini go/no-go report; read-only and no provider call."""
+    del staff
+    try:
+        return gemini_single_kol_preflight.build_kol_pool_gemini_go_no_go(
+            int(kol_pool_id),
+            candidate_limit=int(candidate_limit),
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.get("/kol-pool-dimensions11/preview")
 def get_pool_dimensions11_preview(
     limit: int = Query(default=20, ge=1, le=200),

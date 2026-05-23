@@ -1457,6 +1457,10 @@ export async function getKolPoolGeminiPreflight(token: string, kolPoolId: string
   const params = new URLSearchParams({ candidate_limit: String(candidateLimit), include_budget_preflight: "true" });
   return apiFetch<Row>(`/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/gemini-preflight?${params.toString()}`, {}, token);
 }
+export async function getKolPoolGeminiGoNoGo(token: string, kolPoolId: string | number, candidateLimit = 24) {
+  const params = new URLSearchParams({ candidate_limit: String(candidateLimit) });
+  return apiFetch<Row>(`/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/gemini-go-no-go?${params.toString()}`, {}, token);
+}
 export async function previewKolPoolDimensions11(token: string, options: { limit?: number; sourceType?: string } = {}) {
   const params = new URLSearchParams({ limit: String(options.limit || 20) });
   if (options.sourceType !== undefined) params.set("source_type", options.sourceType);

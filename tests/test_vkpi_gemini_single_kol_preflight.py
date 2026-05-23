@@ -4,6 +4,7 @@ import asyncio
 
 from app.services.vkpi import gemini_single_kol_preflight
 from scripts import vkpi_gemini_single_kol_preflight as preflight_script
+from scripts import vkpi_gemini_go_no_go_report
 
 
 def _fake_item(raw_platform_data: dict) -> dict:
@@ -232,3 +233,95 @@ def test_gemini_single_kol_live_run_requires_explicit_flags_and_records_ledger(m
     assert payload["checks"]["ledger_recorded"] is True
     assert recorded["payload"]["scope"] == gemini_single_kol_preflight.GEMINI_SINGLE_KOL_SCOPE
     assert recorded["payload"]["ai_provider"] == "gemini"
+
+
+def test_gemini_go_no_go_holds_when_budget_blocks(monkeypatch) -> None:
+    raw = {"videos": [{"id": "top123456", "kind": "youtube#video", "title": "Viltrox lens review"}]}
+    monkeypatch.setattr(gemini_single_kol_preflight.kol_pool, "get_item", lambda *_args, **_kwargs: {"item": _fake_item(raw)})
+    monkeypatch.setattr(gemini_single_kol_preflight.llm_gateway, "budget_preflight", _fake_budget)
+
+    payload = gemini_single_kol_preflight.build_kol_pool_gemini_go_no_go(123)
+
+    assert payload["decision"] == "hold"
+    assert payload["provider_calls"] is False
+    assert payload["llm_calls"] is False
+    assert payload["write_db"] is False
+    assert payload["summary"]["valid_video_url"] is True
+    assert payload["summary"]["ready_for_manual_live_test"] is False
+    assert "provider_gate:force_offline" in payload["blockers"]
+
+
+def test_gemini_go_no_go_rejects_kol_without_video(monkeypatch) -> None:
+    monkeypatch.setattr(gemini_single_kol_preflight.kol_pool, "get_item", lambda *_args, **_kwargs: {"item": _fake_item({"profile": {"title": "Creator"}})})
+    monkeypatch.setattr(gemini_single_kol_preflight.llm_gateway, "budget_preflight", _fake_budget_allowed)
+
+    payload = gemini_single_kol_preflight.build_kol_pool_gemini_go_no_go(123)
+
+    assert payload["decision"] == "no_go_for_this_kol"
+    assert payload["decision_reason"] == "candidate_not_ready"
+    assert "no_cached_video_candidates" in payload["blockers"]
+    assert payload["provider_calls"] is False
+
+
+def test_gemini_go_no_go_allows_manual_single_call_when_ready(monkeypatch) -> None:
+    raw = {"videos": [{"id": "top123456", "kind": "youtube#video", "title": "Viltrox lens review"}]}
+    monkeypatch.setattr(gemini_single_kol_preflight.kol_pool, "get_item", lambda *_args, **_kwargs: {"item": _fake_item(raw)})
+    monkeypatch.setattr(gemini_single_kol_preflight.llm_gateway, "budget_preflight", _fake_budget_allowed)
+
+    payload = gemini_single_kol_preflight.build_kol_pool_gemini_go_no_go(123)
+
+    assert payload["decision"] == "go_manual_single_call"
+    assert payload["summary"]["ready_for_manual_live_test"] is True
+    assert payload["operator_gates"]["batch_allowed"] is False
+    assert payload["provider_calls"] is False
+
+
+def test_gemini_go_no_go_acceptance_script_is_readonly(monkeypatch) -> None:
+    monkeypatch.setattr(
+        vkpi_gemini_go_no_go_report.natural_search,
+        "search",
+        lambda *_args, **_kwargs: {
+            "provider_calls": False,
+            "write_db": False,
+            "total": 1,
+            "items": [{"source_table": "vkpi_kol_pool", "source_id": 123, "title": "Creator One"}],
+        },
+    )
+    monkeypatch.setattr(
+        vkpi_gemini_go_no_go_report.gemini_single_kol_preflight,
+        "build_kol_pool_gemini_go_no_go",
+        lambda *_args, **_kwargs: {
+            "decision": "hold",
+            "decision_reason": "provider_or_budget_gate_not_ready",
+            "blockers": ["provider_gate:force_offline"],
+            "provider_calls": False,
+            "llm_calls": False,
+            "write_db": False,
+            "sync_triggered": False,
+            "task_enqueued": False,
+            "summary": {
+                "candidate_count": 1,
+                "valid_video_url": True,
+                "provider_path": "youtube_direct_url_preflight",
+                "top_video_url": "https://www.youtube.com/watch?v=top123456",
+                "provider_gate_reason": "force_offline",
+                "ready_for_manual_live_test": False,
+            },
+            "checks": {
+                "preflight_completed": True,
+                "candidate_evaluated": True,
+                "budget_gate_checked": True,
+                "decision_recorded": True,
+                "batch_still_blocked": True,
+            },
+        },
+    )
+
+    report = vkpi_gemini_go_no_go_report.build_report(query="viltrox")
+
+    assert report["passed"] is True
+    assert report["provider_calls"] is False
+    assert report["llm_calls"] is False
+    assert report["write_db"] is False
+    assert report["summary"]["decision"] == "hold"
+    assert "Gemini Go/No-Go" in vkpi_gemini_go_no_go_report.render_markdown(report)
