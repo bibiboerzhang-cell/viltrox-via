@@ -1,0 +1,299 @@
+"""Planning helpers for qualified KOL Apify batch refreshes.
+
+This module intentionally does not start Apify runs. P1.X.B first locks the
+chunking, actor input, and dataset-to-KOL mapping contracts so later execution
+cannot accidentally fall back to the old full-pool refresh path.
+"""
+from __future__ import annotations
+
+import os
+import re
+import urllib.parse
+from typing import Any
+
+
+SUPPORTED_BATCH_PLATFORMS = {"instagram", "youtube", "facebook", "reddit", "x", "tiktok"}
+DEFAULT_CHUNK_SIZES = {
+    "instagram": 50,
+    "youtube": 50,
+    "facebook": 50,
+    "reddit": 50,
+    "x": 50,
+    "tiktok": 25,
+}
+DEFAULT_MAX_CONCURRENT_RUNS = 2
+HARD_MAX_CONCURRENT_RUNS = 3
+
+DEFAULT_ACTORS = {
+    "instagram": "apify~instagram-scraper",
+    "youtube": "streamers~youtube-scraper",
+    "facebook": "apify~facebook-posts-scraper",
+    "reddit": "trudax~reddit-scraper-lite",
+    "x": "apidojo~tweet-scraper",
+    "tiktok": "clockworks~tiktok-scraper",
+}
+
+ACTOR_ENV_KEYS = {
+    "instagram": "APIFY_INSTAGRAM_POSTS_ACTOR_ID",
+    "youtube": "APIFY_YOUTUBE_ACTOR_ID",
+    "facebook": "APIFY_FACEBOOK_POSTS_ACTOR_ID",
+    "reddit": "APIFY_REDDIT_ACTOR_ID",
+    "x": "APIFY_X_ACTOR_ID",
+    "tiktok": "APIFY_TIKTOK_ACTOR_ID",
+}
+
+
+def _int(value: Any, default: int = 0) -> int:
+    try:
+        return int(float(str(value or "").strip()))
+    except (TypeError, ValueError):
+        return default
+
+
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def normalize_platform(value: Any) -> str:
+    raw = _text(value).lower()
+    if raw in {"twitter", "twitter/x"}:
+        return "x"
+    return raw
+
+
+def max_concurrent_runs(value: Any = None) -> int:
+    configured = _int(value, DEFAULT_MAX_CONCURRENT_RUNS)
+    return max(1, min(HARD_MAX_CONCURRENT_RUNS, configured))
+
+
+def chunk_size_for_platform(platform: str, overrides: dict[str, int] | None = None) -> int:
+    platform_key = normalize_platform(platform)
+    configured = (overrides or {}).get(platform_key, DEFAULT_CHUNK_SIZES.get(platform_key, 25))
+    return max(1, min(100, _int(configured, 25)))
+
+
+def actor_id_for_platform(platform: str) -> str:
+    platform_key = normalize_platform(platform)
+    env_key = ACTOR_ENV_KEYS.get(platform_key, "")
+    configured = os.environ.get(env_key, "").strip() if env_key else ""
+    return (configured or DEFAULT_ACTORS.get(platform_key) or "").replace("/", "~")
+
+
+def _strip_handle(value: Any) -> str:
+    raw = _text(value)
+    if not raw:
+        return ""
+    if raw.startswith("@"):
+        raw = raw[1:]
+    return raw.strip().strip("/")
+
+
+def _canonical_url(value: Any) -> str:
+    raw = _text(value)
+    if not raw:
+        return ""
+    if raw.startswith("http://") or raw.startswith("https://"):
+        parsed = urllib.parse.urlparse(raw)
+        path = re.sub(r"/+", "/", parsed.path).rstrip("/")
+        return urllib.parse.urlunparse((parsed.scheme.lower(), parsed.netloc.lower(), path, "", "", ""))
+    return raw.lower().strip("/")
+
+
+def _url_for_target(platform: str, handle: str, profile_url: str) -> str:
+    if profile_url.startswith("http://") or profile_url.startswith("https://"):
+        return profile_url
+    handle = _strip_handle(handle)
+    if not handle:
+        return ""
+    if platform == "instagram":
+        return f"https://www.instagram.com/{handle}/"
+    if platform == "tiktok":
+        return f"https://www.tiktok.com/@{handle}"
+    if platform == "youtube":
+        if handle.startswith("UC"):
+            return f"https://www.youtube.com/channel/{handle}"
+        return f"https://www.youtube.com/@{handle.lstrip('@')}"
+    if platform == "facebook":
+        return f"https://www.facebook.com/{handle}"
+    if platform == "x":
+        return f"https://x.com/{handle}"
+    if platform == "reddit":
+        return f"https://www.reddit.com/user/{handle}"
+    return profile_url
+
+
+def build_refresh_target(row: dict[str, Any]) -> dict[str, Any]:
+    platform = normalize_platform(row.get("platform"))
+    kol_pool_id = _int(row.get("kol_pool_id") or row.get("id"))
+    handle = _strip_handle(row.get("handle"))
+    profile_url = _text(row.get("profile_url"))
+    url = _url_for_target(platform, handle, profile_url)
+    if platform not in SUPPORTED_BATCH_PLATFORMS:
+        return {"ok": False, "reason": "unsupported_platform", "platform": platform, "kol_pool_id": kol_pool_id}
+    if not kol_pool_id:
+        return {"ok": False, "reason": "missing_kol_pool_id", "platform": platform}
+    if not url:
+        return {"ok": False, "reason": "missing_profile_url", "platform": platform, "kol_pool_id": kol_pool_id}
+    return {
+        "ok": True,
+        "kol_pool_id": kol_pool_id,
+        "platform": platform,
+        "handle": handle,
+        "profile_url": url,
+        "refresh_tier": _text(row.get("refresh_tier")),
+        "refresh_reason": _text(row.get("refresh_reason")),
+    }
+
+
+def build_actor_input(platform: str, targets: list[dict[str, Any]], *, max_posts: int = 1) -> dict[str, Any]:
+    platform_key = normalize_platform(platform)
+    urls = [_text(target.get("profile_url")) for target in targets if _text(target.get("profile_url"))]
+    handles = [_strip_handle(target.get("handle")) for target in targets if _strip_handle(target.get("handle"))]
+    limit = max(1, min(50, _int(max_posts, 1)))
+    if platform_key == "instagram":
+        return {"directUrls": urls, "resultsType": "posts", "resultsLimit": limit, "addParentData": False}
+    if platform_key == "tiktok":
+        return {
+            "profiles": handles,
+            "resultsPerPage": limit,
+            "shouldDownloadVideos": False,
+            "shouldDownloadCovers": False,
+            "shouldDownloadSubtitles": False,
+            "shouldDownloadSlideshowImages": False,
+        }
+    if platform_key == "youtube":
+        return {"startUrls": [{"url": url} for url in urls], "maxResults": limit, "maxResultsShorts": 0, "maxResultStreams": 0}
+    if platform_key == "facebook":
+        return {
+            "startUrls": [{"url": url} for url in urls],
+            "resultsLimit": limit,
+            "proxyConfiguration": {"useApifyProxy": True, "apifyProxyGroups": ["RESIDENTIAL"]},
+        }
+    if platform_key in {"reddit", "x"}:
+        return {"startUrls": [{"url": url} for url in urls], "maxItems": limit}
+    return {"directUrls": urls, "maxResults": limit}
+
+
+def plan_apify_batches(
+    rows: list[dict[str, Any]],
+    *,
+    max_posts: int = 1,
+    chunk_overrides: dict[str, int] | None = None,
+    max_concurrent: int | None = None,
+) -> dict[str, Any]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    skipped: list[dict[str, Any]] = []
+    for row in rows:
+        target = build_refresh_target(row)
+        if not target.get("ok"):
+            skipped.append(target)
+            continue
+        grouped.setdefault(str(target["platform"]), []).append(target)
+
+    batches: list[dict[str, Any]] = []
+    for platform in sorted(grouped):
+        targets = grouped[platform]
+        chunk_size = chunk_size_for_platform(platform, chunk_overrides)
+        for index in range(0, len(targets), chunk_size):
+            chunk = targets[index : index + chunk_size]
+            chunk_index = index // chunk_size + 1
+            batches.append(
+                {
+                    "batch_key": f"{platform}-{chunk_index}",
+                    "platform": platform,
+                    "chunk_index": chunk_index,
+                    "chunk_size": chunk_size,
+                    "target_count": len(chunk),
+                    "kol_pool_ids": [int(target["kol_pool_id"]) for target in chunk],
+                    "urls": [str(target["profile_url"]) for target in chunk],
+                    "actor_id": actor_id_for_platform(platform),
+                    "run_input": build_actor_input(platform, chunk, max_posts=max_posts),
+                    "targets": chunk,
+                }
+            )
+
+    return {
+        "strategy": "apify_batch_first",
+        "max_concurrent_runs": max_concurrent_runs(max_concurrent),
+        "total_targets": sum(len(items) for items in grouped.values()),
+        "batch_count": len(batches),
+        "batches": batches,
+        "skipped": skipped,
+        "platforms": {platform: len(items) for platform, items in sorted(grouped.items())},
+    }
+
+
+def _candidate_keys(value: Any) -> set[str]:
+    raw = _text(value)
+    if not raw:
+        return set()
+    keys = {raw.lower().lstrip("@")}
+    canonical = _canonical_url(raw)
+    if canonical:
+        keys.add(canonical)
+        parsed = urllib.parse.urlparse(raw)
+        path = parsed.path.strip("/")
+        if path:
+            first = path.split("/", 1)[0].lstrip("@").lower()
+            if first:
+                keys.add(first)
+    return {key for key in keys if key}
+
+
+def _item_candidate_values(item: dict[str, Any]) -> list[Any]:
+    author = item.get("authorMeta") if isinstance(item.get("authorMeta"), dict) else {}
+    channel = item.get("channel") if isinstance(item.get("channel"), dict) else {}
+    owner = item.get("owner") if isinstance(item.get("owner"), dict) else {}
+    return [
+        item.get("inputUrl"),
+        item.get("url"),
+        item.get("profileUrl"),
+        item.get("profile_url"),
+        item.get("channelUrl"),
+        item.get("channelName"),
+        item.get("username"),
+        item.get("userName"),
+        item.get("handle"),
+        item.get("name"),
+        item.get("screenName"),
+        author.get("name"),
+        author.get("username"),
+        author.get("profileUrl"),
+        channel.get("url"),
+        channel.get("name"),
+        owner.get("username"),
+    ]
+
+
+def build_target_lookup(targets: list[dict[str, Any]]) -> dict[str, int]:
+    lookup: dict[str, int] = {}
+    for target in targets:
+        kol_pool_id = _int(target.get("kol_pool_id"))
+        if not kol_pool_id:
+            continue
+        for value in (target.get("handle"), target.get("profile_url")):
+            for key in _candidate_keys(value):
+                lookup.setdefault(key, kol_pool_id)
+    return lookup
+
+
+def map_dataset_items_to_targets(items: list[dict[str, Any]], targets: list[dict[str, Any]]) -> dict[str, Any]:
+    lookup = build_target_lookup(targets)
+    matched: list[dict[str, Any]] = []
+    unmatched: list[dict[str, Any]] = []
+    for item in items:
+        match_key = ""
+        kol_pool_id = 0
+        for value in _item_candidate_values(item):
+            for key in _candidate_keys(value):
+                if key in lookup:
+                    match_key = key
+                    kol_pool_id = lookup[key]
+                    break
+            if kol_pool_id:
+                break
+        if kol_pool_id:
+            matched.append({"kol_pool_id": kol_pool_id, "match_key": match_key, "item": item})
+        else:
+            unmatched.append(item)
+    return {"matched": matched, "unmatched": unmatched, "matched_count": len(matched), "unmatched_count": len(unmatched)}

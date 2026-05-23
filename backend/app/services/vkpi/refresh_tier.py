@@ -592,7 +592,7 @@ def qualified_refresh_rows(
         where.append("rt.last_refresh_at IS NULL")
     rows = get_conn().execute(
         f"""
-        SELECT kp.id, kp.platform, kp.handle, kp.display_name, kp.followers, kp.posts_count,
+        SELECT kp.id, kp.platform, kp.handle, kp.profile_url, kp.display_name, kp.followers, kp.posts_count,
                kp.sync_status, kp.last_seen_at, kp.updated_at,
                rt.tier AS refresh_tier, rt.tier_reason AS refresh_reason,
                rt.last_refresh_at, rt.last_refresh_status

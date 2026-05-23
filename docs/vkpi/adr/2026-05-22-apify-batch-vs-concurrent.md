@@ -69,6 +69,13 @@ P1.X.B may implement:
 - dataset-to-`kol_pool_id` mapping
 - chunk-level failure tracking and retry queueing
 
+First implementation package:
+
+- `backend/app/services/vkpi/apify_batch_refresh.py`
+- Provides offline planning only: platform chunking, actor input payloads, bounded concurrency caps, and dataset item mapping.
+- Does not call Apify, does not write refreshed KOL rows, and is not connected to a timer.
+- `qualified_refresh_rows()` now includes `profile_url` so future batch execution can avoid reconstructing URLs from handles when the source already has a canonical profile URL.
+
 P1.X.B must not implement:
 
 - per-KOL single runs as the default path
