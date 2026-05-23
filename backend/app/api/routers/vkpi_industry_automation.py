@@ -15,6 +15,7 @@ from app.services.vkpi import (
     market_intelligence_v0,
     new_launch_acceptance_v0,
     outcome_collector,
+    prediction_calibration_v0,
     product_campaign_card,
     training_data_export,
     trend_detection_v0,
@@ -273,6 +274,21 @@ def industry_new_launch_acceptance_v0(
         kol_limit=kol_limit,
         top_n=top_n,
         lookback_days=lookback_days,
+    )
+
+
+@router.get("/industry-data/prediction-calibration/v0")
+def industry_prediction_calibration_v0(
+    prediction_json: str = Query(default=""),
+    truth_json: str = Query(default=""),
+    top_n: int = Query(default=12, ge=1, le=50),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    del staff
+    return prediction_calibration_v0.build_prediction_calibration_v0(
+        prediction_json=prediction_json,
+        truth_json=truth_json,
+        top_n=top_n,
     )
 
 
