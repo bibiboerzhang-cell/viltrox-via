@@ -17,6 +17,8 @@ interface StaffSummary {
   postsDelta: number;
   views: number;
   viewsDelta: number;
+  protectedFields: Set<'followers' | 'posts' | 'views'>;
+  protectedReasons: Set<string>;
   platforms: string[];
   topAccount?: OfficialChannelAccount;
 }
@@ -28,14 +30,31 @@ function compact(value: number) {
   return formatter.format(value);
 }
 
-function deltaTone(delta = 0) {
+function deltaTone(delta = 0, baselineProtected = false) {
+  if (baselineProtected && !delta) return 'is-protected';
   if (delta > 0) return 'is-up';
   if (delta < 0) return 'is-down';
   return '';
 }
 
-function deltaText(delta = 0) {
+function deltaText(delta = 0, baselineProtected = false) {
+  if (baselineProtected && !delta) return '基线保护';
   return delta ? `${delta > 0 ? '+' : ''}${compact(delta)}` : '基线';
+}
+
+function protectedTitle(reasons: Set<string>) {
+  return Array.from(reasons).filter(Boolean).join('；') || '本轮样本小于历史累计，沿用历史值';
+}
+
+function protectedFields(account: OfficialChannelAccount) {
+  if (!account.baselineProtected) return [];
+  const fields = account.baselineProtectedFields || [];
+  if (!fields.length) return ['followers', 'posts', 'views'] as const;
+  const result: Array<'followers' | 'posts' | 'views'> = [];
+  if (fields.includes('followers')) result.push('followers');
+  if (fields.includes('posts_count')) result.push('posts');
+  if (fields.includes('total_views')) result.push('views');
+  return result;
 }
 
 function initial(summary: StaffSummary) {
@@ -61,6 +80,8 @@ function buildStaffRows(platforms: OfficialChannelPlatform[]) {
         postsDelta: 0,
         views: 0,
         viewsDelta: 0,
+        protectedFields: new Set<'followers' | 'posts' | 'views'>(),
+        protectedReasons: new Set<string>(),
         platforms: [],
         platformSet: new Set<string>(),
       };
@@ -71,6 +92,10 @@ function buildStaffRows(platforms: OfficialChannelPlatform[]) {
       row.postsDelta += account.postsDelta || 0;
       row.views += account.totalViews;
       row.viewsDelta += account.viewsDelta || 0;
+      protectedFields(account).forEach((field) => row.protectedFields.add(field));
+      if (account.baselineProtected) {
+        row.protectedReasons.add(account.baselineProtectedLabel || account.baselineProtectedReason || '本轮样本小于历史累计，沿用历史值');
+      }
       row.platformSet.add(account.platformLabel || platform.label);
       if (!row.topAccount || account.totalViews > row.topAccount.totalViews) {
         row.topAccount = account;
@@ -104,8 +129,20 @@ export function ChannelStaffProgress({
       postsDelta: acc.postsDelta + row.postsDelta,
       views: acc.views + row.views,
       viewsDelta: acc.viewsDelta + row.viewsDelta,
+      protectedFields: new Set([...acc.protectedFields, ...row.protectedFields]),
+      protectedReasons: new Set([...acc.protectedReasons, ...row.protectedReasons]),
     }),
-    { accounts: 0, followers: 0, followersDelta: 0, posts: 0, postsDelta: 0, views: 0, viewsDelta: 0 },
+    {
+      accounts: 0,
+      followers: 0,
+      followersDelta: 0,
+      posts: 0,
+      postsDelta: 0,
+      views: 0,
+      viewsDelta: 0,
+      protectedFields: new Set<'followers' | 'posts' | 'views'>(),
+      protectedReasons: new Set<string>(),
+    },
   );
   const totalPlatforms = new Set(platforms.map((platform) => platform.label || platform.platform)).size;
   const averageViews = totals.posts ? Math.round(totals.views / totals.posts) : 0;
@@ -113,11 +150,12 @@ export function ChannelStaffProgress({
     { label: '账号', value: formatter.format(totals.accounts) },
     { label: '负责人', value: formatter.format(rows.length) },
     { label: '平台', value: formatter.format(totalPlatforms) },
-    { label: '内容', value: formatter.format(totals.posts), delta: totals.postsDelta },
-    { label: '粉丝', value: compact(totals.followers), delta: totals.followersDelta },
-    { label: '播放', value: compact(totals.views), delta: totals.viewsDelta, primary: true },
+    { label: '内容', value: formatter.format(totals.posts), delta: totals.postsDelta, protected: totals.protectedFields.has('posts') && !totals.postsDelta },
+    { label: '粉丝', value: compact(totals.followers), delta: totals.followersDelta, protected: totals.protectedFields.has('followers') && !totals.followersDelta },
+    { label: '播放', value: compact(totals.views), delta: totals.viewsDelta, protected: totals.protectedFields.has('views') && !totals.viewsDelta, primary: true },
     { label: '篇均播放', value: compact(averageViews) },
   ];
+  const totalProtectedTitle = protectedTitle(totals.protectedReasons);
   return (
     <section className={`vkpi-channel-staff${compactMode ? ' vkpi-channel-staff--compact' : ''}`}>
       <div className="vkpi-channel-staff__header">
@@ -137,7 +175,7 @@ export function ChannelStaffProgress({
                 <strong>{metric.value}</strong>
                 <span>{metric.label}</span>
               </span>
-              {'delta' in metric ? <small className={deltaTone(metric.delta)}>{deltaText(metric.delta)}</small> : null}
+              {'delta' in metric ? <small className={deltaTone(metric.delta, metric.protected)} title={metric.protected ? totalProtectedTitle : undefined}>{deltaText(metric.delta, metric.protected)}</small> : null}
             </span>
           ))}
         </div>
@@ -145,6 +183,8 @@ export function ChannelStaffProgress({
       <div className="vkpi-channel-staff-grid">
         {rows.map((row) => {
           const avatarUrl = proxiedImageUrl(row.staffAvatarUrl);
+          const viewsProtected = row.protectedFields.has('views') && !row.viewsDelta;
+          const rowProtectedTitle = protectedTitle(row.protectedReasons);
           return (
             <button
               type="button"
@@ -162,7 +202,7 @@ export function ChannelStaffProgress({
               </div>
               <div className="vkpi-channel-staff-card__value">
                 <strong>{compact(row.views)}</strong>
-                <small className={deltaTone(row.viewsDelta)}>{deltaText(row.viewsDelta)}</small>
+                <small className={deltaTone(row.viewsDelta, viewsProtected)} title={viewsProtected ? rowProtectedTitle : undefined}>{deltaText(row.viewsDelta, viewsProtected)}</small>
               </div>
             </button>
           );

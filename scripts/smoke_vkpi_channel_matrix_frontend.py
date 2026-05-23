@@ -57,6 +57,7 @@ def main() -> None:
     assert "followersDelta" in matrix and "deltaLabel" in matrix and "较上次" in matrix, "platform follower delta indicator missing"
     assert "vkpi-channel-platform-card" in matrix and "vkpi-channel-avatar-stack" in matrix, "platform card/avatar stack missing"
     assert "负责人层" in staff and "员工账号进度" in staff and "负责人进度" in staff, "staff progress header missing"
+    assert "基线保护" in staff and "baselineProtected" in staff, "staff progress must surface baseline protection"
     assert "summaryMetrics" in staff and "篇均播放" in staff and "负责人" in staff, "staff summary calculations missing"
     assert "staffAvatarUrl" in staff and "topAccount" in staff and "platformCount" in staff, "staff progress metrics missing"
     assert "补数清单" in gaps and "素材与证据缺口" in gaps and "issueLabels" in gaps, "gap panel header missing"
