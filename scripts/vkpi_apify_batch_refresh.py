@@ -151,6 +151,85 @@ def execution_preflight(args: argparse.Namespace, plan: dict[str, Any], provider
     }
 
 
+def _batch_target_count(batch: dict[str, Any]) -> int:
+    explicit = _safe_int(batch.get("target_count"))
+    if explicit:
+        return explicit
+    targets = batch.get("targets") if isinstance(batch.get("targets"), list) else []
+    if targets:
+        return len(targets)
+    kol_pool_ids = batch.get("kol_pool_ids") if isinstance(batch.get("kol_pool_ids"), list) else []
+    return len(kol_pool_ids)
+
+
+def safe_live_windows(args: argparse.Namespace, plan: dict[str, Any]) -> dict[str, Any]:
+    live_target_cap = max(1, min(100, _safe_int(args.max_live_targets) or 25))
+    windows: list[dict[str, Any]] = []
+    oversized_batches: list[dict[str, Any]] = []
+    recommended_chunk_overrides: dict[str, int] = {}
+    current_batches: list[dict[str, Any]] = []
+    current_platforms: dict[str, int] = {}
+    current_count = 0
+
+    def flush_window() -> None:
+        nonlocal current_batches, current_platforms, current_count
+        if not current_batches:
+            return
+        windows.append(
+            {
+                "window_index": len(windows) + 1,
+                "target_count": current_count,
+                "batch_count": len(current_batches),
+                "platforms": dict(current_platforms),
+                "batches": current_batches,
+            }
+        )
+        current_batches = []
+        current_platforms = {}
+        current_count = 0
+
+    for raw_batch in plan.get("batches") or []:
+        if not isinstance(raw_batch, dict):
+            continue
+        target_count = _batch_target_count(raw_batch)
+        platform = apify_batch_refresh.normalize_platform(raw_batch.get("platform"))
+        batch = {
+            "batch_key": raw_batch.get("batch_key"),
+            "platform": platform,
+            "target_count": target_count,
+            "kol_pool_ids": raw_batch.get("kol_pool_ids") if isinstance(raw_batch.get("kol_pool_ids"), list) else [],
+        }
+        if target_count > live_target_cap:
+            oversized_batches.append(
+                {
+                    **batch,
+                    "recommended_chunk_size": live_target_cap,
+                }
+            )
+            if platform:
+                recommended_chunk_overrides[platform] = live_target_cap
+            continue
+        if current_batches and current_count + target_count > live_target_cap:
+            flush_window()
+        current_batches.append(batch)
+        current_count += target_count
+        if platform:
+            current_platforms[platform] = current_platforms.get(platform, 0) + target_count
+    flush_window()
+
+    chunk_arg = ",".join(f"{platform}={size}" for platform, size in sorted(recommended_chunk_overrides.items()))
+    return {
+        "live_target_cap": live_target_cap,
+        "window_count": len(windows),
+        "windows": windows,
+        "oversized_batch_count": len(oversized_batches),
+        "oversized_batches": oversized_batches,
+        "requires_replan_for_full_live": bool(oversized_batches),
+        "recommended_chunk_overrides": recommended_chunk_overrides,
+        "recommended_chunk_sizes_arg": chunk_arg,
+    }
+
+
 def operator_summary(result: dict[str, Any]) -> dict[str, Any]:
     plan = result.get("plan") if isinstance(result.get("plan"), dict) else {}
     execution = result.get("execution") if isinstance(result.get("execution"), dict) else {}
@@ -158,6 +237,7 @@ def operator_summary(result: dict[str, Any]) -> dict[str, Any]:
     provider_gate = result.get("provider_gate") if isinstance(result.get("provider_gate"), dict) else {}
     provider_config = result.get("provider_config") if isinstance(result.get("provider_config"), dict) else {}
     preflight = result.get("execution_preflight") if isinstance(result.get("execution_preflight"), dict) else {}
+    windows = result.get("safe_live_windows") if isinstance(result.get("safe_live_windows"), dict) else {}
     skipped = [item for item in (plan.get("skipped") or []) if isinstance(item, dict)]
     skipped_reasons: dict[str, int] = {}
     for item in skipped:
@@ -191,6 +271,9 @@ def operator_summary(result: dict[str, Any]) -> dict[str, Any]:
         "missing_provider_platforms": provider_config.get("missing_platforms") if isinstance(provider_config.get("missing_platforms"), list) else [],
         "execution_preflight_status": str(preflight.get("status") or ""),
         "can_execute_if_authorized": bool(preflight.get("can_execute_if_authorized")),
+        "safe_window_count": _safe_int(windows.get("window_count")),
+        "oversized_batch_count": _safe_int(windows.get("oversized_batch_count")),
+        "requires_replan_for_full_live": bool(windows.get("requires_replan_for_full_live")),
         "live_target_cap": _safe_int(provider_gate.get("live_target_cap")),
         "selector_ready": bool(plan.get("selector_ready")),
         "source_total": _safe_int(plan.get("source_total")),
@@ -252,6 +335,7 @@ async def run_from_args(args: argparse.Namespace) -> dict[str, Any]:
     plan = build_plan(args)
     provider_config = provider_config_summary(plan)
     preflight = execution_preflight(args, plan, provider_config)
+    windows = safe_live_windows(args, plan)
     gate = provider_gate(args, plan, provider_config)
     execution = await apify_batch_refresh.execute_apify_batch_plan(
         plan,
@@ -267,6 +351,7 @@ async def run_from_args(args: argparse.Namespace) -> dict[str, Any]:
         "provider_gate": gate,
         "provider_config": provider_config,
         "execution_preflight": preflight,
+        "safe_live_windows": windows,
         "plan": _compact_plan(plan) if args.compact else plan,
         "execution": execution,
     }

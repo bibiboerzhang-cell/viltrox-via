@@ -56,6 +56,9 @@ def test_cli_run_blocks_provider_calls_by_default(monkeypatch) -> None:
         "missing_provider_platforms": ["instagram"],
         "execution_preflight_status": "provider_not_configured",
         "can_execute_if_authorized": False,
+        "safe_window_count": 1,
+        "oversized_batch_count": 0,
+        "requires_replan_for_full_live": False,
         "live_target_cap": 25,
         "selector_ready": True,
         "source_total": 3,
@@ -160,6 +163,8 @@ def test_cli_blocks_live_execution_above_target_cap(monkeypatch) -> None:
     assert result["provider_calls_allowed"] is False
     assert result["execution"]["reason"] == "live_target_cap_exceeded"
     assert result["operator_summary"]["readiness"] == "live_target_cap_exceeded"
+    assert result["safe_live_windows"]["oversized_batch_count"] == 1
+    assert result["safe_live_windows"]["recommended_chunk_sizes_arg"] == "youtube=25"
 
 
 def test_cli_blocks_live_execution_without_provider_config(monkeypatch) -> None:
@@ -224,6 +229,7 @@ def test_operator_summary_requires_review_for_retryable_execution() -> None:
         "provider_gate": {"requested": True, "allowed": True, "reason": "allowed", "live_target_cap": 25},
         "provider_config": {"configured": True, "missing_platforms": []},
         "execution_preflight": {"status": "ready", "can_execute_if_authorized": True},
+        "safe_live_windows": {"window_count": 1, "oversized_batch_count": 0, "requires_replan_for_full_live": False},
         "plan": {"selector_ready": True, "source_total": 2, "total_targets": 2, "batch_count": 1, "platforms": {"youtube": 2}, "skipped": []},
         "execution": {"executed": True, "summary": {"retry_count": 1, "failed_batches": 0}},
     }
@@ -235,6 +241,7 @@ def test_operator_summary_requires_review_for_retryable_execution() -> None:
     assert summary["provider_calls_allowed"] is True
     assert summary["execution_preflight_status"] == "ready"
     assert summary["can_execute_if_authorized"] is True
+    assert summary["safe_window_count"] == 1
 
 
 def test_execution_preflight_reports_ready_without_request(monkeypatch) -> None:
@@ -255,3 +262,25 @@ def test_execution_preflight_reports_ready_without_request(monkeypatch) -> None:
     assert preflight["status"] == "ready"
     assert preflight["can_execute_if_authorized"] is True
     assert preflight["checks"]["provider_configured"] is True
+
+
+def test_safe_live_windows_packs_small_batches_and_flags_oversized() -> None:
+    args = vkpi_apify_batch_refresh.parse_args(["--max-live-targets", "25"])
+    plan = {
+        "batches": [
+            {"batch_key": "facebook-1", "platform": "facebook", "target_count": 1, "kol_pool_ids": [1]},
+            {"batch_key": "instagram-1", "platform": "instagram", "target_count": 50, "kol_pool_ids": list(range(2, 52))},
+            {"batch_key": "instagram-2", "platform": "instagram", "target_count": 1, "kol_pool_ids": [52]},
+            {"batch_key": "tiktok-1", "platform": "tiktok", "target_count": 2, "kol_pool_ids": [53, 54]},
+            {"batch_key": "youtube-1", "platform": "youtube", "target_count": 38, "kol_pool_ids": list(range(55, 93))},
+        ]
+    }
+
+    windows = vkpi_apify_batch_refresh.safe_live_windows(args, plan)
+
+    assert windows["window_count"] == 1
+    assert windows["windows"][0]["target_count"] == 4
+    assert windows["windows"][0]["platforms"] == {"facebook": 1, "instagram": 1, "tiktok": 2}
+    assert windows["oversized_batch_count"] == 2
+    assert windows["recommended_chunk_overrides"] == {"instagram": 25, "youtube": 25}
+    assert windows["recommended_chunk_sizes_arg"] == "instagram=25,youtube=25"
