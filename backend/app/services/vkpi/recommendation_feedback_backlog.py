@@ -1,6 +1,8 @@
 """Read-only P10 recommendation feedback backlog snapshot."""
 from __future__ import annotations
 
+import csv
+import io
 import json
 from pathlib import Path
 from typing import Any
@@ -20,6 +22,33 @@ OUTCOME_FLAGS = (
     ("agreement_reached", "agreement_reached"),
     ("content_published", "content_published"),
     ("order_attributed", "order_attributed"),
+)
+
+CSV_FIELDS = (
+    "recommendation_id",
+    "action",
+    "reject_reason",
+    "reviewer_name",
+    "suggested_sku",
+    "kol_handle",
+    "platform",
+    "followers",
+    "country",
+    "recommendation_reason",
+    "top_evidence_summary",
+    "recommendation_uid",
+    "run_uid",
+    "rank",
+    "score",
+    "kol_pool_id",
+    "display_name",
+    "launch_name",
+    "launch_product_name",
+    "suggested_feedback_type",
+    "suggested_action",
+    "suggested_reasons",
+    "outcome_flags",
+    "action_allowed",
 )
 
 
@@ -42,6 +71,26 @@ def _loads(value: Any, default: Any = None) -> Any:
 
 def _truthy(value: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "t", "yes", "y"}
+
+
+def _one_line(value: Any, *, max_chars: int = 240) -> str:
+    text = " ".join(str(value or "").replace("\r", " ").replace("\n", " ").split())
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1].rstrip() + "..."
+
+
+def _evidence_text(value: Any) -> str:
+    if isinstance(value, dict):
+        for key in ("detail", "summary", "reason", "text", "label", "title", "value"):
+            if value.get(key):
+                return _one_line(value.get(key), max_chars=140)
+        parts = []
+        for key, item in value.items():
+            if isinstance(item, (str, int, float, bool)) and item not in ("", None):
+                parts.append(f"{key}={item}")
+        return _one_line(" ".join(parts), max_chars=140)
+    return _one_line(value, max_chars=140)
 
 
 def _outcome_status(row: dict[str, Any]) -> dict[str, Any]:
@@ -92,6 +141,62 @@ def _suggestion(row: dict[str, Any], outcome: dict[str, Any]) -> dict[str, Any]:
         "reasons": reasons,
         "write_allowed": False,
         "operator_note": "Review in the recommendation surface before writing feedback.",
+    }
+
+
+def _evidence_summary(item: dict[str, Any]) -> str:
+    evidence = item.get("evidence") or {}
+    pro = evidence.get("evidence_pro") or []
+    con = evidence.get("evidence_con") or []
+    reason = evidence.get("recommendation_reason") or {}
+    parts: list[str] = []
+    for value in pro[:2]:
+        parts.append(f"pro: {_evidence_text(value)}")
+    for value in con[:1]:
+        parts.append(f"con: {_evidence_text(value)}")
+    if isinstance(reason, dict):
+        for key in ("summary", "reason", "label"):
+            if reason.get(key):
+                parts.append(f"reason: {_one_line(reason.get(key), max_chars=120)}")
+                break
+    elif reason:
+        parts.append(f"reason: {_one_line(reason, max_chars=120)}")
+    return _one_line(" | ".join(part for part in parts if part), max_chars=360)
+
+
+def _csv_row(item: dict[str, Any]) -> dict[str, Any]:
+    kol = item.get("kol") or {}
+    launch = item.get("launch") or {}
+    suggestion = item.get("suggestion") or {}
+    outcome = item.get("outcome") or {}
+    evidence = item.get("evidence") or {}
+    feature_snapshot = evidence.get("feature_snapshot") or {}
+    recommendation_reason = evidence.get("recommendation_reason") or {}
+    return {
+        "recommendation_id": item.get("recommendation_id") or "",
+        "action": "",
+        "reject_reason": "",
+        "reviewer_name": "",
+        "suggested_sku": launch.get("product_sku") or "",
+        "kol_handle": kol.get("handle") or "",
+        "platform": kol.get("platform") or "",
+        "followers": feature_snapshot.get("followers") or feature_snapshot.get("follower_count") or "",
+        "country": feature_snapshot.get("country") or "",
+        "recommendation_reason": _evidence_text(recommendation_reason),
+        "top_evidence_summary": _evidence_summary(item),
+        "recommendation_uid": item.get("recommendation_uid") or "",
+        "run_uid": item.get("run_uid") or "",
+        "rank": item.get("rank") or "",
+        "score": item.get("score") or "",
+        "kol_pool_id": kol.get("kol_pool_id") or "",
+        "display_name": kol.get("display_name") or "",
+        "launch_name": launch.get("name") or "",
+        "launch_product_name": launch.get("product_name") or "",
+        "suggested_feedback_type": suggestion.get("suggested_feedback_type") or "",
+        "suggested_action": suggestion.get("suggested_action") or "",
+        "suggested_reasons": ";".join(str(value) for value in (suggestion.get("reasons") or [])),
+        "outcome_flags": ";".join(str(value) for value in (outcome.get("flags") or [])),
+        "action_allowed": "accept|reject|snooze",
     }
 
 
@@ -294,6 +399,18 @@ def build_recommendation_feedback_backlog(
     if md_out:
         Path(md_out).write_text(markdown, encoding="utf-8")
     return payload
+
+
+def build_recommendation_feedback_backlog_csv(*, run_uid: str = "", limit: int = 120) -> str:
+    """Build an Excel-friendly P13 review backlog CSV without writing feedback."""
+
+    payload = build_recommendation_feedback_backlog(run_uid=run_uid, limit=limit)
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=list(CSV_FIELDS), extrasaction="ignore")
+    writer.writeheader()
+    for item in payload.get("items") or []:
+        writer.writerow(_csv_row(item))
+    return "\ufeff" + output.getvalue()
 
 
 def format_recommendation_feedback_backlog(payload: dict[str, Any]) -> str:
