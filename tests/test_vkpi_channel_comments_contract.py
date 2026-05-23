@@ -114,3 +114,14 @@ def test_channel_post_comments_exposes_contract_fields(monkeypatch):
         "cap": 50,
         "status": "partial",
     }
+
+
+def test_comment_external_post_id_uses_shared_instagram_identity():
+    external_id = channel_comments._comment_external_post_id(
+        "instagram",
+        post_id="fallback",
+        url="https://www.instagram.com/reel/ABC123/",
+        post={"shortCode": "ABC123", "url": "https://www.instagram.com/reel/ABC123/"},
+    )
+
+    assert external_id == "ABC123"

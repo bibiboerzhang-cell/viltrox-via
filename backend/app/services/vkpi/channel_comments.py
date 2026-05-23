@@ -6,6 +6,7 @@ from typing import Any
 
 from app.db.connection import get_conn
 from app.services.vkpi import channels
+from app.services.vkpi.official_post_identity import canonical_post_identity
 
 
 COMMENT_COLLECT_PLATFORMS = {"youtube", "instagram", "tiktok", "facebook", "reddit", "x"}
@@ -232,6 +233,13 @@ def _comment_contract(
 
 def _comment_external_post_id(platform: str, post_id: str, url: str, post: dict[str, Any] | None) -> str:
     post = post or {}
+    identity = canonical_post_identity(platform, {**post, "id": channels._text(post.get("id"), post_id), "url": channels._text(post.get("url"), url)})
+    provider_id = channels._text(identity.get("provider_post_id"))
+    if provider_id:
+        return provider_id
+    canonical_url = channels._text(identity.get("canonical_url"))
+    if canonical_url:
+        return canonical_url
     if platform == "reddit":
         return channels._reddit_external_id(channels._text(post.get("url"), url, post.get("source_id"), post_id))
     if platform in {"facebook", "youtube", "tiktok", "x"}:

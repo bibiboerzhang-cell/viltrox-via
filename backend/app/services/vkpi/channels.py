@@ -19,6 +19,7 @@ from app.db.connection import get_conn
 from app.services.cache import cache_clear, cache_get, cache_set
 from app.services.vkpi import scope
 from app.services.vkpi.media_cache import cached_image_url, cached_video_url, cached_video_url_for_item
+from app.services.vkpi.official_post_identity import canonical_post_identity
 from app.services.vkpi.schema_channels import ensure_vkpi_channels_schema
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
 
@@ -609,6 +610,12 @@ def _attach_media_contract(posts: list[dict[str, Any]], platform: Any) -> list[d
     return posts
 
 
+def _attach_post_identity(posts: list[dict[str, Any]], platform: Any) -> list[dict[str, Any]]:
+    for post in posts:
+        post.update(canonical_post_identity(_text(platform, post.get("platform")), post))
+    return posts
+
+
 def _attach_cached_item_videos(posts: list[dict[str, Any]], platform: Any) -> list[dict[str, Any]]:
     platform_key = _text(platform).lower()
     if not platform_key:
@@ -986,6 +993,7 @@ def official_account_matrix(*, staff: dict[str, Any] | None = None, view_as_staf
         package_posts = _posts_from_package(_text(raw_payload.get("package_dir")))
         posts = package_posts[:sample_limit] if package_posts else _extract_posts(row, per_account_limit=limit)
         posts = _attach_cached_item_videos(posts, platform)
+        posts = _attach_post_identity(posts, platform)
         posts = _attach_media_contract(posts, platform)
         floor_status = _cumulative_floor_status(raw_payload, sample_count=len(posts))
         account_views = _int(row.get("metric_views"))
@@ -1439,6 +1447,7 @@ def channel_posts(
     if not posts:
         posts = _extract_posts(row, per_account_limit=50)
     posts = _attach_cached_item_videos(posts, row.get("platform"))
+    posts = _attach_post_identity(posts, row.get("platform"))
     posts = _attach_media_contract(posts, row.get("platform"))
     posts = [post for post in posts if _text(post.get("id"), post.get("url"))]
     posts = _filter_posts_by_window(posts, window)
@@ -1489,6 +1498,7 @@ def _all_posts_for_channel(row: dict[str, Any]) -> tuple[list[dict[str, Any]], s
     if not posts:
         posts = _extract_posts(row, per_account_limit=50)
     posts = _attach_cached_item_videos(posts, row.get("platform"))
+    posts = _attach_post_identity(posts, row.get("platform"))
     posts = _attach_media_contract(posts, row.get("platform"))
     posts = [post for post in posts if _text(post.get("id"), post.get("url"))]
     return posts, source, package_dir
@@ -1509,9 +1519,13 @@ def _match_post(row: dict[str, Any], post_id: str, url: str = "") -> dict[str, A
         keys = {
             _text(post.get("id")),
             _text(post.get("source_id")),
+            _text(post.get("provider_post_id")),
+            _text(post.get("canonical_post_uid")),
+            _text(post.get("canonical_url")),
             _text(post.get("short_code")),
             _text(post.get("url")),
             _reddit_external_id(_text(post.get("id"))),
+            _reddit_external_id(_text(post.get("provider_post_id"))),
             _reddit_external_id(_text(post.get("url"))),
         }
         if candidates & {key for key in keys if key}:

@@ -61,7 +61,11 @@ This ADR does not migrate existing rows immediately and does not rewrite provide
 
 ## Required Follow-Up
 
-1. Add a shared backend helper, likely `official_post_identity.py`, that returns `platform`, `canonical_post_uid`, `provider_post_id`, and `canonical_url` from a post dict.
-2. Update `channels.py`, `channel_comments.py`, and `channel_post_metrics.py` to call the shared helper instead of duplicating platform-specific ID fallback logic.
-3. Add unit tests for the six platform rules above.
+1. Add a shared backend helper, likely `official_post_identity.py`, that returns `platform`, `canonical_post_uid`, `provider_post_id`, and `canonical_url` from a post dict. Done in `backend/app/services/vkpi/official_post_identity.py`.
+2. Update `channels.py`, `channel_comments.py`, and `channel_post_metrics.py` to call the shared helper instead of duplicating platform-specific ID fallback logic. Done for official read paths, comment external ID derivation, and metric normalization.
+3. Add unit tests for the six platform rules above. Done in `tests/test_vkpi_official_post_identity.py`.
 4. Backfill optional explicit identity fields only after the helper has parity with current production data.
+
+## Validation
+
+Use `scripts/vkpi_official_post_identity_audit.py` before any identity-column backfill. The audit is read-only and must report zero missing canonical UIDs and zero duplicate canonical UIDs within a single official account. Global duplicates are reported but do not fail the audit because the same public post can appear in more than one official account package.

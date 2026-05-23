@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.db.connection import get_conn, is_postgres_runtime
+from app.services.vkpi.official_post_identity import canonical_post_identity, legacy_post_uid
 
 DELTA_METHOD = "post_metric_delta_v1"
 _SCHEMA_READY = False
@@ -137,23 +138,20 @@ def _iso_or_none(value: Any) -> str | None:
 
 
 def _post_uid(platform: str, item: dict[str, Any], *values: Any) -> str:
-    for value in values:
-        text = _text(value)
-        if text:
-            return text
-    url = _text(item.get("url"), item.get("postUrl"), item.get("webVideoUrl"), item.get("twitterUrl"), item.get("permalink"))
-    if url:
-        return url
-    return ""
+    return legacy_post_uid(platform, item, *values)
 
 
 def _post(platform: str, item: dict[str, Any], *, post_uid: str, title: str, url: str, posted_at: Any, views: int, likes: int, comments: int, shares: int) -> dict[str, Any] | None:
     uid = _text(post_uid)
     if not uid:
         return None
+    identity = canonical_post_identity(platform, {**item, "id": uid, "source_id": item.get("source_id") or uid, "url": url})
     return {
         "platform": platform,
         "post_uid": uid,
+        "canonical_post_uid": identity["canonical_post_uid"],
+        "provider_post_id": identity["provider_post_id"],
+        "canonical_url": identity["canonical_url"],
         "post_url": _text(url),
         "title": _text(title),
         "posted_at": _iso_or_none(posted_at),

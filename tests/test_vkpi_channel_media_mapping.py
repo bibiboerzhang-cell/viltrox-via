@@ -82,3 +82,14 @@ def test_media_contract_distinguishes_cached_and_source_only_images():
 
     assert cached["media_status"] == "cached"
     assert source_only["media_status"] == "source_only"
+
+
+def test_attach_post_identity_populates_shared_fields():
+    posts = [{"id": "abc12345678", "url": "https://www.youtube.com/watch?v=abc12345678"}]
+
+    channels._attach_post_identity(posts, "youtube")
+
+    assert posts[0]["provider_post_id"] == "abc12345678"
+    assert posts[0]["canonical_post_uid"] == "youtube:abc12345678"
+    assert posts[0]["canonical_url"] == "https://www.youtube.com/watch?v=abc12345678"
+    assert posts[0]["post_identity_source"] == "provider_post_id"

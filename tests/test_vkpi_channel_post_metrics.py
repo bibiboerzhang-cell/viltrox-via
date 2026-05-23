@@ -46,9 +46,13 @@ def test_normalize_channel_posts_reads_instagram_and_tiktok_metrics():
     )
 
     assert instagram[0]["post_uid"] == "ABC123"
+    assert instagram[0]["canonical_post_uid"] == "instagram:ABC123"
+    assert instagram[0]["provider_post_id"] == "ABC123"
     assert instagram[0]["views"] == 120
     assert instagram[0]["likes"] == 8
     assert tiktok[0]["post_uid"] == "7642560794273664277"
+    assert tiktok[0]["canonical_post_uid"] == "tiktok:7642560794273664277"
+    assert tiktok[0]["provider_post_id"] == "7642560794273664277"
     assert tiktok[0]["views"] == 435
     assert tiktok[0]["comments"] == 1
 
