@@ -7,11 +7,11 @@ Scope: P0 sync-governance closeout plus the first P1 data-trust pass. This repor
 ## Current Deployment
 
 - Live domain: `https://viltroxtest.com`
-- Latest deployed commit: `146a9623 chore(vkpi): log first silent exception batch`
+- Latest deployed commit: `cb2a0a82 chore(vkpi): log second silent exception batch`
 - Health: `/health` returns `ok`
-- Client/server hash: matched at `146a96232832e5b2054fd69dc353397c34d6e727`
-- Backup before latest deploy: `runtime/prod-sync/20260523T013459Z`
-- Previous deploy backup: `runtime/prod-sync/20260523T012928Z`
+- Client/server hash: matched at `cb2a0a826b9e0f7a617853a0c26a07b248a969ae`
+- Backup before latest deploy: `runtime/prod-sync/20260523T014215Z`
+- Previous deploy backup: `runtime/prod-sync/20260523T013459Z`
 
 ## Sync Governance
 
@@ -107,9 +107,9 @@ Acceptance:
 Acceptance:
 
 - `scripts/check_silent_exception_baseline.py` before first pass: 83 silent handlers.
-- After first pass: 63 silent handlers.
-- Reduction: 20.
-- Covered high-risk paths include channel cache clearing, channel media JSON parsing, official refill cache clearing, sync-status metadata parsing, audit fallback queries, budget/settings JSON parsing, media package parsing, task active-lock index creation, and data-quality audit logging.
+- After two bounded passes: 46 silent handlers.
+- Reduction: 37.
+- Covered high-risk paths include channel cache clearing, channel media JSON parsing, official refill cache clearing, sync-status metadata parsing, audit fallback queries, budget/settings JSON parsing, media package parsing, task active-lock index creation, data-quality audit logging, decision aggregates, learning snapshot, reports, product-analysis evidence, KOL claim audit, KPI ledger, team feedback, LLM env lookup, reconciliation stats, and outcome JSON parsing.
 - Remaining findings are still above baseline and should be handled in later bounded passes, not as one large cleanup.
 
 ## Verification Commands
