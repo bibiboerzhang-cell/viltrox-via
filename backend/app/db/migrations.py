@@ -15,6 +15,10 @@ from app.core.security import hash_password
 logger = get_logger(__name__)
 
 
+def _log_incremental_column_skip(table: str, column: str, exc: Exception) -> None:
+    logger.debug("sqlite incremental column skipped | table=%s | column=%s | error=%s", table, column, exc)
+
+
 def init_db():
     conn = get_conn()
     c = conn.cursor()
@@ -63,8 +67,8 @@ def init_db():
     ]:
         try:
             c.execute(f"ALTER TABLE submissions ADD COLUMN {col} {coltype}")
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_incremental_column_skip("submissions", col, exc)
 
     # ── genre_benchmarks ──
     c.execute("""
@@ -927,8 +931,8 @@ def init_db():
     if "extracted_handle" not in existing_sub_cols:
         try:
             c.execute("ALTER TABLE submissions ADD COLUMN extracted_handle TEXT DEFAULT ''")
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_incremental_column_skip("submissions", "extracted_handle", exc)
 
     for col, ct in [
         ("user_id", "INTEGER"),
@@ -946,8 +950,8 @@ def init_db():
         if col not in existing_sub_cols:
             try:
                 c.execute(f"ALTER TABLE submissions ADD COLUMN {col} {ct}")
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_incremental_column_skip("submissions", col, exc)
 
     # verifications
     existing_verification_cols = [r[1] for r in conn.execute("PRAGMA table_info(verifications)").fetchall()]
@@ -973,8 +977,8 @@ def init_db():
         if col not in existing_verification_cols:
             try:
                 c.execute(f"ALTER TABLE verifications ADD COLUMN {col} {ct}")
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_incremental_column_skip("verifications", col, exc)
 
     # users
     existing_user_cols = [r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()]
@@ -989,8 +993,8 @@ def init_db():
         if col not in existing_user_cols:
             try:
                 c.execute(f"ALTER TABLE users ADD COLUMN {col} {ct}")
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_incremental_column_skip("users", col, exc)
 
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_creator_code ON users(creator_code)")
 
@@ -1006,8 +1010,8 @@ def init_db():
         if col not in existing_proposal_cols:
             try:
                 c.execute(f"ALTER TABLE via_policy_proposals ADD COLUMN {col} {ct}")
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_incremental_column_skip("via_policy_proposals", col, exc)
 
     existing_reward_trace_cols = [r[1] for r in conn.execute("PRAGMA table_info(via_reward_traces)").fetchall()]
     for col, ct in [
@@ -1019,8 +1023,8 @@ def init_db():
         if col not in existing_reward_trace_cols:
             try:
                 c.execute(f"ALTER TABLE via_reward_traces ADD COLUMN {col} {ct}")
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_incremental_column_skip("via_reward_traces", col, exc)
 
     # reward_catalog
     existing_reward_cols = [r[1] for r in conn.execute("PRAGMA table_info(reward_catalog)").fetchall()]
@@ -1037,16 +1041,16 @@ def init_db():
         if col not in existing_reward_cols:
             try:
                 c.execute(f"ALTER TABLE reward_catalog ADD COLUMN {col} {ct}")
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_incremental_column_skip("reward_catalog", col, exc)
 
     # redemptions
     existing_red_cols = [r[1] for r in conn.execute("PRAGMA table_info(redemptions)").fetchall()]
     if "reward_id" not in existing_red_cols:
         try:
             c.execute("ALTER TABLE redemptions ADD COLUMN reward_id INTEGER")
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_incremental_column_skip("redemptions", "reward_id", exc)
 
     existing_asset_cols = [r[1] for r in conn.execute("PRAGMA table_info(submission_assets)").fetchall()]
     for col, ct in [

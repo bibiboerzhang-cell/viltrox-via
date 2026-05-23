@@ -464,13 +464,14 @@ class PostgresCompatCursor:
                     self._prefetched_rows.append(row)
                     try:
                         self.lastrowid = int(row[0])
-                    except Exception:
+                    except (TypeError, ValueError) as exc:
+                        logger.debug("postgres compat lastrowid unavailable: %s", exc)
                         self.lastrowid = None
         except Exception:
             try:
                 self._cursor.connection.rollback()
-            except Exception:
-                pass
+            except Exception as rollback_exc:
+                logger.debug("postgres compat rollback after execute failure skipped: %s", rollback_exc)
             raise
         return self
 
@@ -549,8 +550,8 @@ class PostgresCompatConnection:
         self._closed = True
         try:
             self._raw.rollback()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("postgres compat close rollback skipped: %s", exc)
         if self._pool is not None:
             self._pool.putconn(self._raw)
         else:
@@ -593,8 +594,8 @@ def close_standalone_conn(conn: Any) -> None:
         return
     try:
         conn.close()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("standalone connection close skipped: %s", exc)
     scoped = _scoped_conn.get()
     if isinstance(scoped, _ScopedConnectionHandle) and scoped.conn is conn:
         scoped.conn = None
@@ -622,8 +623,8 @@ def _run_runtime_seeders() -> None:
         if local_conn is not None:
             try:
                 local_conn.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("runtime seeder local connection close skipped: %s", exc)
             _db_local.conn = None
 
 
@@ -644,21 +645,21 @@ async def close_db_runtime() -> None:
     if isinstance(scoped, _ScopedConnectionHandle):
         try:
             scoped.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("scoped db connection close skipped: %s", exc)
         _scoped_conn.set(None)
     elif scoped is not None:
         try:
             scoped.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("scoped raw db connection close skipped: %s", exc)
         _scoped_conn.set(None)
     local_conn = getattr(_db_local, "conn", None)
     if local_conn is not None:
         try:
             local_conn.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("thread-local db connection close skipped: %s", exc)
         _db_local.conn = None
     if _PG_POOL is not None:
         _PG_POOL.close()
@@ -853,8 +854,8 @@ async def stop_db_actor() -> None:
     if conn is not None:
         try:
             conn.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("db actor connection close skipped: %s", exc)
         _db_local.conn = None
     logger.info("DB actor stopped")
 
