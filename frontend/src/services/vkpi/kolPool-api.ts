@@ -71,6 +71,7 @@ export interface VkpiKolPoolIntelligenceCard {
   competitors?: Record<string, unknown>;
   brand_signal?: Record<string, unknown>;
   comment_intelligence?: Record<string, unknown>;
+  video_analysis?: Record<string, unknown>;
   memory_card?: Record<string, unknown>;
   product_fit?: Record<string, unknown>;
   decision_support?: Record<string, unknown>;

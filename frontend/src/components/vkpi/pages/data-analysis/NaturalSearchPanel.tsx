@@ -183,6 +183,7 @@ function evidenceSectionLabel(value: unknown): string {
     dimensions11: '11D',
     competitors: 'Competitors',
     brand_signal: 'Brand Signal',
+    video_analysis: 'Video',
     memory_card: 'Memory',
     product_fit: 'Product Fit',
     comment_intelligence: 'Comment',

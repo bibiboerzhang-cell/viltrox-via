@@ -53,6 +53,7 @@ interface KolPoolIntelligenceCard {
   competitors?: Record<string, unknown>;
   brand_signal?: Record<string, unknown>;
   comment_intelligence?: Record<string, unknown>;
+  video_analysis?: Record<string, unknown>;
   memory_card?: Record<string, unknown>;
   product_fit?: Record<string, unknown>;
   decision_support?: Record<string, unknown>;
@@ -784,6 +785,7 @@ function KolPoolIntelligenceSection({ card }: { card: KolPoolIntelligenceCard })
   const competitors = recordValue(card.competitors);
   const brandSignal = recordValue(card.brand_signal);
   const commentIntelligence = recordValue(card.comment_intelligence);
+  const videoAnalysis = recordValue(card.video_analysis);
   const memoryCard = recordValue(card.memory_card);
   const productFit = recordValue(card.product_fit);
   const evidence = (Array.isArray(card.evidence_index) ? card.evidence_index : []).map(recordValue).filter((row) => stringifyValue(row.section));
@@ -822,6 +824,11 @@ function KolPoolIntelligenceSection({ card }: { card: KolPoolIntelligenceCard })
           <span>{formatNumber(commentIntelligence.cached_comment_count || commentIntelligence.evidence_count)}</span>
           <small>{statusLabel(commentIntelligence.status)} · cap {formatNumber(recordValue(commentIntelligence.contract).cap)}</small>
         </div>
+        <div className={statusClass(videoAnalysis.status)}>
+          <strong>Video</strong>
+          <span>{formatNumber(videoAnalysis.analyzed_count || videoAnalysis.evidence_count)}</span>
+          <small>{statusLabel(videoAnalysis.status)} · rows {formatNumber(videoAnalysis.row_count)}</small>
+        </div>
         <div className={statusClass(memoryCard.status)}>
           <strong>Memory</strong>
           <span>{memoryCardLabel(memoryCard)}</span>
@@ -853,7 +860,7 @@ function KolPoolIntelligenceSection({ card }: { card: KolPoolIntelligenceCard })
       </div>
       {evidence.length ? (
         <div className="vkpi-chip-list" style={{ marginTop: 8 }}>
-          {evidence.slice(0, 7).map((row, index) => (
+          {evidence.slice(0, 8).map((row, index) => (
             <button className="vkpi-chip" type="button" key={`${stringifyValue(row.section)}-${index}`} onClick={() => setActiveEvidence(row)}>
               {stringifyValue(row.label || row.section || 'evidence')} · {statusLabel(row.status)} · {formatNumber(row.evidence_count)}
             </button>
@@ -1055,6 +1062,54 @@ function KolPoolEvidenceBody({ section, payload }: { section: string; payload: R
         ))}
         {!runs.length && !samples.length ? (
           <EvidenceArticle title="暂无评论样本" meta={stringifyValue(payload.method || 'comment_intelligence')} value={statusLabel(payload.status)} detail="当前没有匹配到已缓存评论或评论智能 run；不会伪装成已分析。" />
+        ) : null}
+      </>
+    );
+  }
+  if (section === 'video_analysis') {
+    const evidence = arrayRecords(payload.evidence);
+    const fieldCounts = recordValue(payload.field_counts);
+    return (
+      <>
+        <EvidenceArticle
+          title="视频分析字段契约"
+          meta={stringifyValue(payload.source || 'submissions.video_analysis')}
+          value={statusLabel(payload.status)}
+          detail={`stored_rows=${formatNumber(payload.row_count)} · analyzed=${formatNumber(payload.analyzed_count)} · fields=${Object.keys(fieldCounts).slice(0, 6).join(' / ') || 'none'}`}
+          badges={[
+            `evidence ${formatNumber(payload.evidence_count)}`,
+            stringifyValue(payload.empty_reason),
+          ].filter(Boolean)}
+        />
+        {evidence.slice(0, 12).map((row, index) => {
+          const fields = recordValue(row.fields);
+          const fieldNames = Array.isArray(row.field_names) ? row.field_names.map(stringifyValue).filter(Boolean) : [];
+          const qualityScores = recordValue(fields.quality_scores);
+          const title = stringifyValue(row.title || row.source_url || `Video analysis ${index + 1}`);
+          const detailParts = [
+            fields.target_audience ? `audience=${stringifyValue(fields.target_audience)}` : '',
+            fields.production_quality ? `quality=${stringifyValue(fields.production_quality)}` : '',
+            fields.marketing_potential ? `marketing=${stringifyValue(fields.marketing_potential)}` : '',
+            fields.reference_value ? `reference=${stringifyValue(fields.reference_value)}` : '',
+          ].filter(Boolean);
+          return (
+            <EvidenceArticle
+              key={`video-analysis-${stringifyValue(row.evidence_id || index)}`}
+              title={title}
+              meta={stringifyValue(row.method || row.source_table || 'stored_video_analysis')}
+              value={formatConfidenceValue(row.confidence)}
+              detail={detailParts.join(' · ') || stringifyValue(row.reasoning || 'Stored video analysis evidence')}
+              url={stringifyValue(row.source_url)}
+              badges={[
+                ...fieldNames.slice(0, 6),
+                qualityScores.overall ? `overall ${formatNumber(qualityScores.overall)}` : '',
+                row.provider_badge_allowed ? 'provider row stored' : '',
+              ].filter(Boolean)}
+            />
+          );
+        })}
+        {!evidence.length ? (
+          <EvidenceArticle title="暂无视频分析证据" meta={stringifyValue(payload.method || 'stored_video_analysis')} value={statusLabel(payload.status)} detail="没有已存储的 analyzed=true 视频分析行；不会把 Gemini preflight 或计划字段伪装成已分析结果。" />
         ) : null}
       </>
     );
@@ -1513,6 +1568,7 @@ function intelligenceSectionPayload(card: KolPoolIntelligenceCard, section: stri
   if (key === 'competitors') return recordValue(card.competitors);
   if (key === 'brand_signal') return recordValue(card.brand_signal);
   if (key === 'comment_intelligence') return recordValue(card.comment_intelligence);
+  if (key === 'video_analysis') return recordValue(card.video_analysis);
   if (key === 'memory_card') return recordValue(card.memory_card);
   if (key === 'product_fit') return recordValue(card.product_fit);
   return {};
@@ -1525,6 +1581,7 @@ function evidenceSectionLabel(section: string): string {
     competitors: 'Competitors',
     brand_signal: 'Brand Signal',
     comment_intelligence: 'Comment Intelligence',
+    video_analysis: 'Video Analysis',
     memory_card: 'Memory Card',
     product_fit: 'Product Fit',
   };

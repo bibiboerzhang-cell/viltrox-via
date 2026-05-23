@@ -59,6 +59,25 @@ def _fake_card() -> dict:
                 }
             ],
         },
+        "video_analysis": {
+            "status": "ready",
+            "row_count": 1,
+            "analyzed_count": 1,
+            "evidence_count": 1,
+            "field_counts": {"target_audience": 1, "production_quality": 1},
+            "evidence": [
+                {
+                    "evidence_id": "va_1",
+                    "source": "video_analysis",
+                    "source_table": "submissions",
+                    "source_id": 88,
+                    "source_url": "https://youtube.com/watch?v=video1",
+                    "title": "Viltrox video review",
+                    "confidence": 0.82,
+                    "fields": {"target_audience": "camera creators", "production_quality": "studio"},
+                }
+            ],
+        },
         "memory_card": {
             "status": "ready",
             "history_match": {"cooperation_count": 1, "source_table": "vkpi_kol_pool", "source_id": 321},
@@ -80,6 +99,7 @@ def _fake_card() -> dict:
             {"section": "competitors", "label": "Competitors", "source": "vkpi_competitor_relation", "status": "ready", "evidence_count": 1, "confidence": 0.8},
             {"section": "brand_signal", "label": "Brand Signal", "source": "vkpi_kol_pool.raw_platform_data", "status": "ready", "evidence_count": 1, "confidence": 1.0},
             {"section": "comment_intelligence", "label": "Comment Intelligence", "source": "vkpi_comments", "status": "ready", "evidence_count": 1, "confidence": 1.0},
+            {"section": "video_analysis", "label": "Video Analysis", "source": "submissions.video_analysis", "status": "ready", "evidence_count": 1, "confidence": 0.82},
             {"section": "memory_card", "label": "Memory Card", "source": "vkpi_kol_pool", "status": "ready", "evidence_count": 2, "confidence": 1.0},
             {"section": "product_fit", "label": "Product Fit", "source": "vkpi_memory_entities", "status": "ready", "evidence_count": 2, "confidence": 0.85},
         ],
@@ -101,7 +121,7 @@ def test_evidence_summary_is_traceable_and_read_only(monkeypatch) -> None:
     assert payload["llm_calls"] is False
     assert payload["write_db"] is False
     assert payload["policy"]["new_fact_generation"] is False
-    assert payload["summary_count"] == 7
+    assert payload["summary_count"] == 8
     assert payload["evidence_ref_count"] >= 7
     assert payload["checks"]["all_summaries_traceable"] is True
     for item in payload["summaries"]:

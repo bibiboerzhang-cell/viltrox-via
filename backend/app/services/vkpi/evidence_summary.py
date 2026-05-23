@@ -19,6 +19,7 @@ SECTION_ORDER = (
     "competitors",
     "brand_signal",
     "comment_intelligence",
+    "video_analysis",
     "memory_card",
     "product_fit",
 )
@@ -107,6 +108,8 @@ def _evidence_refs(section: str, index_row: dict[str, Any], payload: dict[str, A
     elif section == "comment_intelligence":
         refs.extend(_ref_from_mapping(section, "comment_intelligence", row) for row in _as_list(payload.get("evidence")))
         refs.extend(_ref_from_mapping(section, "comment_sample", row) for row in _as_list(payload.get("samples")))
+    elif section == "video_analysis":
+        refs.extend(_ref_from_mapping(section, "video_analysis", row) for row in _as_list(payload.get("evidence")))
     elif section == "memory_card":
         for key in ("recent_cooperations", "recent_posts"):
             refs.extend(_ref_from_mapping(section, key, row, fallback_id=key) for row in _as_list(payload.get(key)))
@@ -173,6 +176,13 @@ def _section_summary_text(section: str, payload: dict[str, Any], index_row: dict
         return (
             f"Comment intelligence is {status}; cached_comments={_int(payload.get('cached_comment_count'))}; "
             f"declared={_int(contract.get('declared'))}; cap={_int(contract.get('cap'))}; evidence_count={evidence_count}."
+        )
+    if section == "video_analysis":
+        fields = _as_dict(payload.get("field_counts"))
+        field_names = ", ".join(sorted(fields.keys())[:5]) if fields else "none"
+        return (
+            f"Video analysis is {status}; analyzed_rows={_int(payload.get('analyzed_count'))}; "
+            f"stored_rows={_int(payload.get('row_count'))}; fields={field_names}; evidence_count={evidence_count}."
         )
     if section == "memory_card":
         history = _as_dict(payload.get("history_match"))

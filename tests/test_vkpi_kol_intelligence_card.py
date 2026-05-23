@@ -24,6 +24,11 @@ def _cleanup() -> None:
         conn.commit()
     except Exception:
         pass
+    try:
+        conn.execute("DELETE FROM submissions WHERE extracted_handle=? OR title LIKE ?", (MARKER, f"%{MARKER}%"))
+        conn.commit()
+    except Exception:
+        pass
     rows = conn.execute("SELECT id FROM vkpi_kol_pool WHERE source_ref=?", (MARKER,)).fetchall()
     for row in rows:
         kol_pool_id = int(row["id"])
@@ -99,6 +104,50 @@ def _insert_card_row() -> int:
     )
     conn.commit()
     return kol_pool_id
+
+
+def _insert_video_analysis_fixture() -> None:
+    conn = get_conn()
+    now = "2026-05-23T07:20:00Z"
+    conn.execute(
+        """
+        INSERT INTO submissions (
+          created_at, platform, url, extracted_handle, title, detection_status,
+          final_score, creator_score, overall_score, memo, video_analysis
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            now,
+            "youtube",
+            "https://www.youtube.com/watch?v=unit-video-1",
+            MARKER,
+            f"{MARKER} Viltrox 35mm video review",
+            "confirmed",
+            88,
+            72,
+            80,
+            "unit stored video analysis",
+            json.dumps(
+                {
+                    "analyzed": True,
+                    "method": "gemini_single_kol_unit",
+                    "target_audience": "hybrid camera creators",
+                    "production_quality": "clean studio review",
+                    "quality_scores": {"lighting": 8, "audio": 7},
+                    "quality_overall": 82,
+                    "quality_summary": "Strong product demonstration with clear lens samples.",
+                    "competitor_products": ["Sigma 35mm"],
+                    "brand_integration_depth": "hands-on review",
+                    "marketing_potential": "high",
+                    "reference_value": "usable launch reference",
+                    "timestamps": [{"t": "00:15", "note": "lens intro"}],
+                    "improvements": ["add AF stress test"],
+                },
+                ensure_ascii=False,
+            ),
+        ),
+    )
+    conn.commit()
 
 
 def _insert_comment_intelligence_fixture() -> None:
@@ -209,6 +258,7 @@ def test_kol_intelligence_card_aggregates_existing_evidence_without_provider_cal
     try:
         kol_pool_id = _insert_card_row()
         _insert_comment_intelligence_fixture()
+        _insert_video_analysis_fixture()
 
         card = kol_intelligence_card.build_kol_pool_intelligence_card(kol_pool_id, include_product_fit=False)
 
@@ -249,6 +299,19 @@ def test_kol_intelligence_card_aggregates_existing_evidence_without_provider_cal
         comment_evidence = card["comment_intelligence"]["evidence"][0]
         assert comment_evidence["source_table"] == "vkpi_comment_intelligence_runs"
         assert card["comment_intelligence"]["samples"][0]["source_table"] == "vkpi_comments"
+        assert card["video_analysis"]["status"] == "ready"
+        assert card["video_analysis"]["provider_calls"] is False
+        assert card["video_analysis"]["llm_calls"] is False
+        assert card["video_analysis"]["write_db"] is False
+        assert card["video_analysis"]["analyzed_count"] == 1
+        video_evidence = card["video_analysis"]["evidence"][0]
+        assert video_evidence["source"] == "video_analysis"
+        assert video_evidence["source_table"] == "submissions"
+        assert video_evidence["source_url"] == "https://www.youtube.com/watch?v=unit-video-1"
+        assert video_evidence["fields"]["target_audience"] == "hybrid camera creators"
+        assert video_evidence["fields"]["production_quality"] == "clean studio review"
+        assert video_evidence["fields"]["marketing_potential"] == "high"
+        assert "target_audience" in video_evidence["field_names"]
         assert card["memory_card"]["status"] == "ready"
         assert card["memory_card"]["source_type"] == "unit"
         assert card["memory_card"]["history_match"]["cooperation_count"] >= 1
@@ -263,6 +326,7 @@ def test_kol_intelligence_card_aggregates_existing_evidence_without_provider_cal
             "competitors",
             "brand_signal",
             "comment_intelligence",
+            "video_analysis",
             "memory_card",
             "product_fit",
         }
@@ -272,6 +336,8 @@ def test_kol_intelligence_card_aggregates_existing_evidence_without_provider_cal
         assert evidence_index["competitors"]["evidence_count"] >= 1
         assert evidence_index["comment_intelligence"]["label"] == "Comment Intelligence"
         assert evidence_index["comment_intelligence"]["evidence_count"] >= 3
+        assert evidence_index["video_analysis"]["label"] == "Video Analysis"
+        assert evidence_index["video_analysis"]["evidence_count"] == 1
         assert "confidence" in evidence_index["dimensions11"]
     finally:
         _cleanup()
@@ -366,11 +432,12 @@ def test_decision_support_treats_freshness_payload_as_ready_without_status() -> 
             "competitors": {"status": "empty"},
             "brand_signal": {"status": "ready"},
             "comment_intelligence": {"status": "ready"},
+            "video_analysis": {"status": "empty"},
             "memory_card": {"status": "ready"},
             "product_fit": {"status": "ready"},
         }
     )
 
     assert payload["readiness"] == "ready"
-    assert payload["ready_sections"] == 7
+    assert payload["ready_sections"] == 8
     assert payload["gaps"] == []

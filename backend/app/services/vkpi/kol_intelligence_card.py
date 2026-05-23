@@ -25,6 +25,25 @@ from app.services.vkpi import (
 )
 
 
+VIDEO_ANALYSIS_FIELD_KEYS = (
+    "target_audience",
+    "production_quality",
+    "quality_scores",
+    "quality_overall",
+    "quality_summary",
+    "competitor_products",
+    "brand_integration_depth",
+    "marketing_potential",
+    "reference_value",
+    "timestamps",
+    "improvements",
+    "content_genre",
+    "content_topic",
+    "content_summary",
+    "products_found",
+)
+
+
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
@@ -636,6 +655,187 @@ def _comment_intelligence(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _handle_variants(item: dict[str, Any]) -> list[str]:
+    values: list[str] = []
+    for value in (item.get("handle"), item.get("profile_url")):
+        text = _text(value).lower()
+        if not text:
+            continue
+        candidates = [text]
+        if "/" in text:
+            candidates = []
+            at_match = re.search(r"@[a-z0-9_.-]+", text)
+            if at_match:
+                candidates.append(at_match.group(0))
+            last_segment = text.split("?", 1)[0].rstrip("/").split("/")[-1]
+            if last_segment:
+                candidates.append(last_segment)
+        for candidate in candidates:
+            values.append(candidate)
+            if candidate.startswith("@"):
+                values.append(candidate[1:])
+            elif "@" not in candidate and "/" not in candidate:
+                values.append(f"@{candidate}")
+    deduped: list[str] = []
+    for value in values:
+        clean = value.strip().strip("/")
+        if clean and clean not in deduped:
+            deduped.append(clean)
+    return deduped[:12]
+
+
+def _submission_video_analysis_rows(item: dict[str, Any], *, limit: int = 12) -> list[dict[str, Any]]:
+    if not _table_exists("submissions"):
+        return []
+    platform = _text(item.get("platform")).lower()
+    variants = _handle_variants(item)
+    where = ["COALESCE(video_analysis, '') <> ''"]
+    params: list[Any] = []
+    if platform:
+        where.append("LOWER(COALESCE(platform, '')) = ?")
+        params.append(platform)
+    handle_clauses: list[str] = []
+    for variant in variants:
+        handle_clauses.append("LOWER(COALESCE(extracted_handle, '')) = ?")
+        params.append(variant.lstrip("@"))
+        handle_clauses.append("LOWER(COALESCE(extracted_handle, '')) = ?")
+        params.append(variant if variant.startswith("@") else f"@{variant}")
+        handle_clauses.append("LOWER(COALESCE(url, '')) LIKE ?")
+        params.append(f"%{variant}%")
+    if handle_clauses:
+        where.append(f"({' OR '.join(handle_clauses)})")
+    conn = get_conn()
+    rows = conn.execute(
+        f"""
+        SELECT id, created_at, platform, url, extracted_handle, title, video_analysis
+        FROM submissions
+        WHERE {" AND ".join(where)}
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?
+        """,
+        (*params, max(1, min(50, int(limit or 12)))),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _analysis_confidence(analysis: dict[str, Any]) -> float:
+    confidence = _text(analysis.get("confidence")).lower()
+    if confidence in {"high", "strong"}:
+        return 0.85
+    if confidence in {"medium", "moderate"}:
+        return 0.65
+    if confidence in {"low", "weak"}:
+        return 0.35
+    overall = _safe_float(analysis.get("quality_overall"))
+    if overall > 1:
+        return round(min(1.0, overall / 100.0), 2)
+    if overall > 0:
+        return round(min(1.0, overall), 2)
+    if bool(analysis.get("analyzed")):
+        return 0.5
+    return 0.0
+
+
+def _analysis_fields(analysis: dict[str, Any]) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    aliases = {
+        "target_audience": ("target_audience", "audience_fit", "audience_segment"),
+        "competitor_products": ("competitor_products", "competitors", "other_lens"),
+        "brand_integration_depth": ("brand_integration_depth", "brand_depth"),
+        "products_found": ("products_found", "products_detected", "viltrox_lens"),
+    }
+    for key in VIDEO_ANALYSIS_FIELD_KEYS:
+        source_keys = aliases.get(key, (key,))
+        for source_key in source_keys:
+            value = analysis.get(source_key)
+            if value not in (None, "", [], {}):
+                fields[key] = value
+                break
+    return fields
+
+
+def _video_analysis_evidence(row: dict[str, Any]) -> dict[str, Any] | None:
+    analysis = _loads(row.get("video_analysis"), {})
+    if not isinstance(analysis, dict):
+        return None
+    fields = _analysis_fields(analysis)
+    if not bool(analysis.get("analyzed")) or not fields:
+        return None
+    source_id = _safe_int(row.get("id"))
+    method = _text(analysis.get("method") or "stored_video_analysis")
+    return {
+        "evidence_id": f"ev_video_analysis_submission_{source_id}",
+        "source": "video_analysis",
+        "source_table": "submissions",
+        "source_id": source_id,
+        "source_url": _text(row.get("url")),
+        "captured_at": _text(row.get("created_at")),
+        "title": _text(row.get("title")),
+        "platform": _text(row.get("platform")),
+        "handle": _text(row.get("extracted_handle")),
+        "method": method,
+        "analyzed": True,
+        "confidence": _analysis_confidence(analysis),
+        "confidence_method": method,
+        "reasoning": _text(analysis.get("quality_summary") or analysis.get("content_summary") or analysis.get("notes") or "Stored video analysis row."),
+        "raw_data_ref": f"submissions:{source_id}:video_analysis",
+        "rebuttal_supported": True,
+        "field_names": list(fields.keys()),
+        "fields": fields,
+        "provider_badge_allowed": bool("gemini" in method.lower()),
+    }
+
+
+def _video_analysis(item: dict[str, Any]) -> dict[str, Any]:
+    if not _table_exists("submissions"):
+        return {
+            "status": "not_configured",
+            "method": "read_only_stored_video_analysis_v0",
+            "row_count": 0,
+            "evidence_count": 0,
+            "evidence": [],
+            "field_contract": list(VIDEO_ANALYSIS_FIELD_KEYS),
+            "provider_calls": False,
+            "llm_calls": False,
+            "write_db": False,
+            "source": "submissions.video_analysis",
+        }
+    try:
+        rows = _submission_video_analysis_rows(item, limit=12)
+    except Exception as exc:
+        return _status_payload(
+            "unavailable",
+            reason="video_analysis_query_failed",
+            error=exc,
+            method="read_only_stored_video_analysis_v0",
+            row_count=0,
+            evidence_count=0,
+            evidence=[],
+            field_contract=list(VIDEO_ANALYSIS_FIELD_KEYS),
+            provider_calls=False,
+            llm_calls=False,
+            write_db=False,
+            source="submissions.video_analysis",
+        )
+    evidence = [leaf for leaf in (_video_analysis_evidence(row) for row in rows) if isinstance(leaf, dict)]
+    field_counts = Counter(field for leaf in evidence for field in leaf.get("field_names", []))
+    return {
+        "status": "ready" if evidence else "empty",
+        "method": "read_only_stored_video_analysis_v0",
+        "row_count": len(rows),
+        "analyzed_count": len(evidence),
+        "evidence_count": len(evidence),
+        "field_counts": dict(field_counts),
+        "evidence": evidence[:12],
+        "field_contract": list(VIDEO_ANALYSIS_FIELD_KEYS),
+        "provider_calls": False,
+        "llm_calls": False,
+        "write_db": False,
+        "source": "submissions.video_analysis",
+        "empty_reason": "" if evidence else "no_stored_analyzed_video_rows",
+    }
+
+
 def _cached_post_summaries(item: dict[str, Any], *, limit: int = 6) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for post in _cached_posts(item, limit=limit):
@@ -992,6 +1192,8 @@ def _evidence_count_for_section(section: str, payload: dict[str, Any]) -> int:
         return _safe_int(payload.get("signal_count"))
     if section == "comment_intelligence":
         return _safe_int(payload.get("evidence_count")) or _safe_int(payload.get("cached_comment_count")) + _safe_int(payload.get("run_count"))
+    if section == "video_analysis":
+        return _safe_int(payload.get("evidence_count"))
     if section == "memory_card":
         history = payload.get("history_match") if isinstance(payload.get("history_match"), dict) else {}
         competitor_memory = payload.get("competitor_memory") if isinstance(payload.get("competitor_memory"), dict) else {}
@@ -1016,11 +1218,12 @@ def _evidence_index(sections: dict[str, dict[str, Any]]) -> list[dict[str, Any]]
         "competitors": ("Competitors", "vkpi_competitor_relation or cached posts"),
         "brand_signal": ("Brand Signal", "vkpi_kol_pool.raw_platform_data"),
         "comment_intelligence": ("Comment Intelligence", "vkpi_comments + vkpi_comment_intelligence_runs"),
+        "video_analysis": ("Video Analysis", "submissions.video_analysis"),
         "memory_card": ("Memory Card", "vkpi_kol_pool + legacy memory"),
         "product_fit": ("Product Fit", "vkpi_memory_entities/product families"),
     }
     rows: list[dict[str, Any]] = []
-    for section in ("freshness", "dimensions11", "competitors", "brand_signal", "comment_intelligence", "memory_card", "product_fit"):
+    for section in ("freshness", "dimensions11", "competitors", "brand_signal", "comment_intelligence", "video_analysis", "memory_card", "product_fit"):
         payload = sections.get(section, {})
         label, source = sources[section]
         row = {
@@ -1046,6 +1249,7 @@ def build_kol_pool_intelligence_card(kol_pool_id: int, *, include_product_fit: b
         "competitors": competitors,
         "brand_signal": _brand_signals(item),
         "comment_intelligence": _comment_intelligence(item),
+        "video_analysis": _video_analysis(item),
         "memory_card": _memory_card(item, competitors),
         "product_fit": _product_fit(kol_pool_id, include_product_fit=include_product_fit),
     }
