@@ -14,6 +14,7 @@ from app.services.vkpi import (
     llm_gateway,
     market_intelligence_v0,
     new_launch_acceptance_v0,
+    prediction_accuracy_feedback_v0,
     outcome_collector,
     prediction_calibration_v0,
     product_campaign_card,
@@ -291,6 +292,19 @@ def industry_prediction_calibration_v0(
         prediction_json=prediction_json,
         truth_json=truth_json,
         top_n=top_n,
+    )
+
+
+@router.get("/industry-data/prediction-accuracy-feedback/v0")
+def industry_prediction_accuracy_feedback_v0(
+    limit: int = Query(default=100, ge=1, le=500),
+    min_official_runs: int = Query(default=3, ge=1, le=30),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    del staff
+    return prediction_accuracy_feedback_v0.build_prediction_accuracy_feedback_v0(
+        limit=limit,
+        min_official_runs=min_official_runs,
     )
 
 
