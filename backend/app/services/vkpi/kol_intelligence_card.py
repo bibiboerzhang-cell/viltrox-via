@@ -126,6 +126,102 @@ def _dimensions11(kol_pool_id: int) -> dict[str, Any]:
     }
 
 
+def _evidence_key(value: Any) -> str:
+    key = "".join(ch.lower() if ch.isalnum() else "_" for ch in _text(value))
+    return "_".join(part for part in key.split("_") if part)[:80] or "unknown"
+
+
+def _competitor_source_table(relation: dict[str, Any]) -> str:
+    source = _text(relation.get("source"))
+    if source == "vkpi_competitor_relation":
+        return "vkpi_competitor_relation"
+    return "vkpi_kol_pool"
+
+
+def _competitor_reasoning(relation: dict[str, Any], evidence: dict[str, Any] | None = None) -> str:
+    if evidence:
+        detail = _text(evidence.get("evidence") or evidence.get("description"))
+        title = _text(evidence.get("title"))
+        if detail:
+            return detail
+        if title:
+            return title
+    brand = _text(relation.get("competitor_brand") or "competitor")
+    depth = _text(relation.get("collaboration_depth") or "none")
+    sentiment = _text(relation.get("sentiment") or "neutral")
+    total = _safe_int(relation.get("collaboration_count_total"))
+    count_90d = _safe_int(relation.get("collaboration_count_90d"))
+    return f"{brand} relation detected by rule_v0: depth={depth}, sentiment={sentiment}, 90d={count_90d}, total={total}."
+
+
+def _competitor_confidence(relation: dict[str, Any], *, has_leaf_evidence: bool) -> float:
+    score = _safe_float(relation.get("risk_score"))
+    if score > 0:
+        return round(min(1.0, max(0.2, score / 10.0)), 2)
+    return 0.35 if has_leaf_evidence else 0.0
+
+
+def _competitor_evidence_rows(relations: list[Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for relation_index, relation in enumerate(relations[:24]):
+        if not isinstance(relation, dict):
+            continue
+        brand = _text(relation.get("competitor_brand") or relation.get("brand") or "competitor")
+        if not brand:
+            continue
+        evidence_items = relation.get("evidence") if isinstance(relation.get("evidence"), list) else []
+        source_table = _competitor_source_table(relation)
+        base = {
+            "source": "competitor_signal",
+            "source_table": source_table,
+            "source_id": relation.get("competitor_brand") or brand,
+            "confidence_method": "rule_v0",
+            "rebuttal_supported": True,
+            "competitor_brand": brand,
+            "risk_tier": _text(relation.get("risk_tier") or "unknown"),
+            "risk_score": _safe_float(relation.get("risk_score")),
+            "collaboration_depth": _text(relation.get("collaboration_depth") or "none"),
+            "collaboration_recency_days": relation.get("collaboration_recency_days"),
+            "collaboration_count_90d": _safe_int(relation.get("collaboration_count_90d")),
+            "collaboration_count_total": _safe_int(relation.get("collaboration_count_total")),
+            "sentiment": _text(relation.get("sentiment") or "neutral"),
+            "platform": _text(relation.get("platform")),
+            "handle": _text(relation.get("handle")),
+            "computed_at": _text(relation.get("computed_at")),
+            "last_evidence_at": _text(relation.get("last_evidence_at")),
+        }
+        if evidence_items:
+            for evidence_index, evidence in enumerate(evidence_items[:6]):
+                if not isinstance(evidence, dict):
+                    continue
+                rows.append(
+                    {
+                        **base,
+                        "evidence_id": f"ev_competitor_{_evidence_key(brand)}_{relation_index + 1}_{evidence_index + 1}",
+                        "source_url": _text(evidence.get("url") or evidence.get("post_url") or evidence.get("source_url")),
+                        "confidence": _competitor_confidence(relation, has_leaf_evidence=True),
+                        "reasoning": _competitor_reasoning(relation, evidence),
+                        "raw_data_ref": f"{source_table}:{relation.get('kol_pool_id') or ''}:{brand}",
+                        "post_uid": _text(evidence.get("post_uid")),
+                        "title": _text(evidence.get("title")),
+                        "published_at": _text(evidence.get("published_at")),
+                        "matched_keywords": evidence.get("matched_keywords") if isinstance(evidence.get("matched_keywords"), list) else [],
+                    }
+                )
+        elif _safe_int(relation.get("collaboration_count_total")) or _safe_float(relation.get("risk_score")) > 0:
+            rows.append(
+                {
+                    **base,
+                    "evidence_id": f"ev_competitor_{_evidence_key(brand)}_{relation_index + 1}",
+                    "source_url": "",
+                    "confidence": _competitor_confidence(relation, has_leaf_evidence=False),
+                    "reasoning": _competitor_reasoning(relation),
+                    "raw_data_ref": f"{source_table}:{relation.get('kol_pool_id') or ''}:{brand}",
+                }
+            )
+    return rows[:24]
+
+
 def _competitors(kol_pool_id: int) -> dict[str, Any]:
     try:
         payload = kol_competitor_detector.evaluate_kol_competitors(kol_pool_id, prefer_persisted=True)
@@ -134,11 +230,14 @@ def _competitors(kol_pool_id: int) -> dict[str, Any]:
     relations = payload.get("relations") if isinstance(payload.get("relations"), list) else []
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     tier_counts = Counter(_text(item.get("risk_tier")) or "unknown" for item in relations if isinstance(item, dict))
+    evidence = _competitor_evidence_rows(relations)
     return {
         "status": "ready" if relations else "empty",
         "summary": summary,
         "relations": relations,
         "tier_counts": dict(tier_counts),
+        "evidence": evidence,
+        "evidence_count": len(evidence),
         "provider_calls": False,
         "write_db": bool(payload.get("write_db")),
         "source": "vkpi_competitor_relation_or_cached_raw",
@@ -528,6 +627,8 @@ def _confidence_for_section(section: str, payload: dict[str, Any]) -> float:
         top = payload.get("top") if isinstance(payload.get("top"), list) else []
         scores = [_safe_float(row.get("confidence") or row.get("fit_confidence")) for row in top if isinstance(row, dict)]
         return max(scores) if scores else 0.0
+    if section == "competitors":
+        return 1.0 if _safe_int(payload.get("evidence_count")) > 0 else 0.0
     if payload.get("status") == "ready":
         return 1.0
     if payload.get("status") == "empty":
@@ -542,6 +643,11 @@ def _evidence_count_for_section(section: str, payload: dict[str, Any]) -> int:
         confidence = payload.get("confidence") if isinstance(payload.get("confidence"), dict) else {}
         return sum(1 for key in ("block1_content", "block2_performance", "block3_business", "block4_specialty") if _safe_float(confidence.get(key)) > 0)
     if section == "competitors":
+        if payload.get("evidence_count") is not None:
+            return _safe_int(payload.get("evidence_count"))
+        evidence = payload.get("evidence") if isinstance(payload.get("evidence"), list) else []
+        if evidence:
+            return len(evidence)
         relations = payload.get("relations") if isinstance(payload.get("relations"), list) else []
         return len(relations)
     if section == "brand_signal":

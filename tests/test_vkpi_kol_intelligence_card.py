@@ -110,6 +110,14 @@ def test_kol_intelligence_card_aggregates_existing_evidence_without_provider_cal
         assert card["dimensions11"]["status"] == "ready"
         assert card["competitors"]["status"] == "ready"
         assert card["competitors"]["summary"]["competitor_brand"] == "sigma"
+        assert card["competitors"]["evidence_count"] >= 1
+        competitor_evidence = card["competitors"]["evidence"][0]
+        assert competitor_evidence["source"] == "competitor_signal"
+        assert competitor_evidence["source_table"] == "vkpi_kol_pool"
+        assert competitor_evidence["competitor_brand"] == "sigma"
+        assert competitor_evidence["risk_tier"] in {"avoid", "caution", "safe", "opportunity", "unknown"}
+        assert competitor_evidence["confidence_method"] == "rule_v0"
+        assert competitor_evidence["rebuttal_supported"] is True
         assert card["brand_signal"]["signal_count"] >= 2
         assert card["brand_signal"]["type_counts"]["mention_viltrox"] >= 1
         assert card["brand_signal"]["type_counts"]["mention_competitor"] >= 1
@@ -132,6 +140,7 @@ def test_kol_intelligence_card_aggregates_existing_evidence_without_provider_cal
         assert evidence_index["memory_card"]["label"] == "Memory Card"
         assert evidence_index["memory_card"]["evidence_count"] >= 2
         assert evidence_index["brand_signal"]["evidence_count"] >= 2
+        assert evidence_index["competitors"]["evidence_count"] >= 1
         assert "confidence" in evidence_index["dimensions11"]
     finally:
         _cleanup()

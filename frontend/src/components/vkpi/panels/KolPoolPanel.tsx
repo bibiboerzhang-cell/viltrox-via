@@ -936,9 +936,10 @@ function KolPoolEvidenceBody({ section, payload }: { section: string; payload: R
     );
   }
   if (section === 'competitors') {
+    const evidence = arrayRecords(payload.evidence);
     const relations = arrayRecords(payload.relations);
     const summary = recordValue(payload.summary);
-    if (!relations.length) return <EvidenceArticle title="暂无竞品证据" meta={stringifyValue(payload.source || 'competitor detector')} value={statusLabel(payload.status)} detail="没有可展示的竞品关系行。" />;
+    if (!evidence.length && !relations.length) return <EvidenceArticle title="暂无竞品证据" meta={stringifyValue(payload.source || 'competitor detector')} value={statusLabel(payload.status)} detail="没有可展示的竞品关系行。" />;
     return (
       <>
         <EvidenceArticle
@@ -946,9 +947,26 @@ function KolPoolEvidenceBody({ section, payload }: { section: string; payload: R
           meta="vkpi_competitor_relation or cached posts"
           value={stringifyValue(summary.risk_tier || 'unknown')}
           detail={`brand=${stringifyValue(summary.competitor_brand || '—')} · risk_score=${formatNumber(summary.risk_score)}`}
-          badges={[`relations ${relations.length}`]}
+          badges={[`evidence ${formatNumber(payload.evidence_count || evidence.length)}`, `relations ${relations.length}`]}
         />
-        {relations.slice(0, 10).map((row, index) => (
+        {evidence.slice(0, 12).map((row, index) => (
+          <EvidenceArticle
+            key={`competitor-evidence-${stringifyValue(row.evidence_id || index)}`}
+            title={stringifyValue(row.competitor_brand || row.brand || row.title || 'Competitor signal')}
+            meta={`${stringifyValue(row.risk_tier || 'unknown')} · ${stringifyValue(row.source_table || row.source || 'competitor_signal')}`}
+            value={formatConfidenceValue(row.confidence)}
+            detail={stringifyValue(row.reasoning || row.title || '规则引擎命中竞品关系证据。')}
+            url={stringifyValue(row.source_url || row.url)}
+            badges={[
+              stringifyValue(row.collaboration_depth),
+              stringifyValue(row.sentiment),
+              `90d ${formatNumber(row.collaboration_count_90d)}`,
+              `total ${formatNumber(row.collaboration_count_total)}`,
+              `risk ${formatNumber(row.risk_score)}`,
+            ].filter(Boolean)}
+          />
+        ))}
+        {!evidence.length ? relations.slice(0, 10).map((row, index) => (
           <EvidenceArticle
             key={`competitor-${index}`}
             title={stringifyValue(row.competitor_brand || row.brand || 'Competitor signal')}
@@ -957,7 +975,7 @@ function KolPoolEvidenceBody({ section, payload }: { section: string; payload: R
             detail={`90d=${formatNumber(row.collaboration_count_90d)} · total=${formatNumber(row.collaboration_count_total)} · risk=${formatNumber(row.risk_score)}`}
             badges={[stringifyValue(row.platform), stringifyValue(row.handle)].filter(Boolean)}
           />
-        ))}
+        )) : null}
       </>
     );
   }
