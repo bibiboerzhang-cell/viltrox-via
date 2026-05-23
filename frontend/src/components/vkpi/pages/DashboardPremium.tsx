@@ -828,6 +828,7 @@ async function fetchPremiumSnapshot(apiToken: string, windowDays: number): Promi
 function kpiStatusLabel(item: PremiumKpi): string {
   if (!item.isMock) return '真实 API';
   if (item.mockLabel?.includes('部分')) return '部分真实';
+  if (['GMV', '订单量', '平均 ROI'].includes(item.label)) return '待接入';
   return item.mockLabel?.includes('Shopify') || item.mockLabel?.includes('待') ? '待接入' : '示例';
 }
 
@@ -1072,11 +1073,54 @@ function buildEngagementInsight(snapshot: PremiumSnapshot): KpiDetailInsight {
   };
 }
 
+function pendingRows(items: Array<[string, string]>): KpiInsightRow[] {
+  return items.map(([label, meta]) => ({ label, value: '待接入', meta, width: '0%' }));
+}
+
+function buildCommercePendingInsight(label: string): KpiDetailInsight | null {
+  if (label === 'GMV') {
+    return {
+      insight: 'Shopify 归因尚未全量接通；当前只保留可追溯 attribution 金额，不把部分数据包装成完整 GMV。',
+      coverage: 'Shopify webhook / 折扣码 / cart attributes 待接入',
+      tabs: [
+        { label: '按折扣码', rows: pendingRows([['VIA-{handle}-10', '接入后按 creator discount code 排名']]) },
+        { label: '按归因渠道', rows: pendingRows([['server redirector', '第一层归因'], ['cookie', '第二层归因'], ['discount code', '第三层归因'], ['cart attributes', '第四层归因']]) },
+        { label: '按产品 SKU', rows: pendingRows([['SKU GMV 排行', 'Shopify line items 接入后启用']]) },
+      ],
+    };
+  }
+  if (label === '订单量') {
+    return {
+      insight: '等待 Shopify 订单 webhook 接入；订单级 KOL 归因链路预留完成，但当前不显示虚假订单数。',
+      coverage: 'Shopify orders / attribution orders 待接入',
+      tabs: [
+        { label: '按折扣码', rows: pendingRows([['VIA-{handle}-10', '各折扣码订单数']]) },
+        { label: '按创作者', rows: pendingRows([['Creator order ranking', '按 KOL / 官方账号拆解订单']]) },
+        { label: '按 SKU', rows: pendingRows([['SKU orders', '按产品订单数拆解']]) },
+        { label: '转化漏斗', rows: pendingRows([['曝光 → 点击 → 加购 → 下单', 'Shopify + attribution 全链路接通后启用']]) },
+      ],
+    };
+  }
+  if (label === '平均 ROI') {
+    return {
+      insight: 'ROI 需要销售归因和成本两端同时可信；当前不把单边数据算成完整 ROI。',
+      coverage: 'Shopify sales + Cost Dashboard 待全量接入',
+      tabs: [
+        { label: '按产品', rows: pendingRows([['SKU ROI 排行', '销售和成本都齐后启用']]) },
+        { label: '按项目', rows: pendingRows([['项目 ROI', '按 marketing project 汇总']]) },
+        { label: '成本构成', rows: pendingRows([['AI / Apify / KOL 报酬 / 物流', '成本台账和自动成本接入后启用']]) },
+        { label: 'ROI/曝光', rows: pendingRows([['ROI 与曝光相关性', '需要销售、成本、曝光三方数据']]) },
+      ],
+    };
+  }
+  return null;
+}
+
 function buildKpiDetailInsight(label: string, snapshot: PremiumSnapshot): KpiDetailInsight | null {
   if (label === '总曝光量') return buildExposureInsight(snapshot);
   if (label === '内容数') return buildContentInsight(snapshot);
   if (label === '内容互动率') return buildEngagementInsight(snapshot);
-  return null;
+  return buildCommercePendingInsight(label);
 }
 
 function PremiumKpiCard({ item, selected, onToggle }: PremiumKpiCardProps) {
@@ -1109,6 +1153,7 @@ function KpiInsightPanel({
   onClose,
   onSelectMetric,
   onOpenUrl,
+  onOpenDiagnostic,
 }: {
   item: PremiumKpi;
   snapshot: PremiumSnapshot;
@@ -1117,6 +1162,7 @@ function KpiInsightPanel({
   onClose: () => void;
   onSelectMetric: (label: string) => void;
   onOpenUrl: (url: unknown) => void;
+  onOpenDiagnostic: () => void;
 }) {
   const statusLabel = kpiStatusLabel(item);
   const flow = kpiFlow(item.label);
@@ -1205,6 +1251,12 @@ function KpiInsightPanel({
           <button type="button" onClick={() => onSelectMetric(flow.upstream)}>{flow.upstream} →</button>
           <span>· 下游：</span>
           <button type="button" onClick={() => onSelectMetric(flow.downstream)}>{flow.downstream} →</button>
+          {item.isMock ? (
+            <>
+              <span>· </span>
+              <button type="button" onClick={onOpenDiagnostic}>查看接入状态 →</button>
+            </>
+          ) : null}
         </div>
         <details>
           <summary>数据可信</summary>
@@ -1717,6 +1769,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
 		              onClose={() => setExpandedKpi(null)}
 		              onSelectMetric={selectKpiByLabel}
 		              onOpenUrl={openContentUrl}
+		              onOpenDiagnostic={() => goToWorkspacePage('settings', '接入状态')}
 		            />
 		          ) : null}
 	          {loadingData && snapshot.source === 'mock' && !snapshot.loadedAt ? (
