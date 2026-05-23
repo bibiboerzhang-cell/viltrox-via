@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { searchVkpi } from '../../../../services/vkpi.ui-api';
 import { proxiedImageUrl } from '../../shared/mediaProxy';
@@ -17,8 +17,33 @@ interface NaturalSearchHistoryItem {
   searchedAt: string;
 }
 
+interface SearchProgressState {
+  visible: boolean;
+  percent: number;
+  message: string;
+  activeKey: string;
+  doneKeys: string[];
+  errorKey?: string;
+}
+
 const NATURAL_SEARCH_HISTORY_KEY = 'vkpi:natural-search-history:v1';
 const MAX_SEARCH_HISTORY = 8;
+const SEARCH_REVEAL_BATCH_SIZE = 6;
+
+const SEARCH_PROGRESS_STEPS = [
+  { key: 'query', label: '解析查询' },
+  { key: 'pool', label: '查 KOL / Memory' },
+  { key: 'evidence', label: '整理证据' },
+  { key: 'render', label: '显示结果' },
+] as const;
+
+const IDLE_PROGRESS: SearchProgressState = {
+  visible: false,
+  percent: 0,
+  message: '',
+  activeKey: '',
+  doneKeys: [],
+};
 
 function compactText(value: unknown, fallback = '-'): string {
   const text = String(value ?? '').trim();
@@ -102,6 +127,11 @@ export function NaturalSearchPanel({ apiToken, onMessage }: NaturalSearchPanelPr
   const [meta, setMeta] = useState<Row>({});
   const [loading, setLoading] = useState(false);
   const [searchHistory, setSearchHistory] = useState<NaturalSearchHistoryItem[]>(() => loadSearchHistory());
+  const [visibleCount, setVisibleCount] = useState(0);
+  const [searchProgress, setSearchProgress] = useState<SearchProgressState>(IDLE_PROGRESS);
+  const revealTimerRef = useRef<number | null>(null);
+  const progressTimerRefs = useRef<number[]>([]);
+  const searchRunRef = useRef(0);
 
   const recordSearchHistory = (nextQuery: string, response: Row) => {
     const trimmed = nextQuery.trim();
@@ -115,21 +145,136 @@ export function NaturalSearchPanel({ apiToken, onMessage }: NaturalSearchPanelPr
       status,
       searchedAt: new Date().toISOString(),
     };
-    const deduped = [nextItem, ...searchHistory.filter((item) => item.query.toLowerCase() !== trimmed.toLowerCase())].slice(0, MAX_SEARCH_HISTORY);
-    setSearchHistory(deduped);
-    saveSearchHistory(deduped);
+    setSearchHistory((previous) => {
+      const deduped = [nextItem, ...previous.filter((item) => item.query.toLowerCase() !== trimmed.toLowerCase())].slice(0, MAX_SEARCH_HISTORY);
+      saveSearchHistory(deduped);
+      return deduped;
+    });
+  };
+
+  const clearProgressTimers = () => {
+    progressTimerRefs.current.forEach((timerId) => window.clearTimeout(timerId));
+    progressTimerRefs.current = [];
+  };
+
+  const clearTimers = () => {
+    if (revealTimerRef.current !== null) {
+      window.clearInterval(revealTimerRef.current);
+      revealTimerRef.current = null;
+    }
+    clearProgressTimers();
+  };
+
+  const setProgress = (progress: Partial<SearchProgressState>) => {
+    setSearchProgress((previous) => ({ ...previous, visible: true, ...progress }));
+  };
+
+  const scheduleProgress = (runId: number, delayMs: number, progress: Partial<SearchProgressState>) => {
+    const timerId = window.setTimeout(() => {
+      if (searchRunRef.current !== runId) return;
+      setProgress(progress);
+    }, delayMs);
+    progressTimerRefs.current.push(timerId);
+  };
+
+  const revealResults = (runId: number, resultCount: number) => {
+    if (!resultCount) {
+      setVisibleCount(0);
+      setProgress({
+        percent: 100,
+        message: '没有匹配结果；没有生成假数据。',
+        activeKey: 'render',
+        doneKeys: ['query', 'pool', 'evidence', 'render'],
+      });
+      return;
+    }
+    const firstBatch = Math.min(SEARCH_REVEAL_BATCH_SIZE, resultCount);
+    setVisibleCount(firstBatch);
+    setProgress({
+      percent: resultCount > firstBatch ? 82 : 100,
+      message: resultCount > firstBatch ? `已返回 ${resultCount} 条，正在逐批显示。` : `已显示 ${resultCount} 条结果。`,
+      activeKey: 'render',
+      doneKeys: ['query', 'pool', 'evidence'],
+    });
+    if (resultCount <= firstBatch) {
+      setProgress({
+        percent: 100,
+        doneKeys: ['query', 'pool', 'evidence', 'render'],
+      });
+      return;
+    }
+    revealTimerRef.current = window.setInterval(() => {
+      if (searchRunRef.current !== runId) return;
+      setVisibleCount((previous) => {
+        const next = Math.min(resultCount, previous + SEARCH_REVEAL_BATCH_SIZE);
+        if (next >= resultCount) {
+          if (revealTimerRef.current !== null) {
+            window.clearInterval(revealTimerRef.current);
+            revealTimerRef.current = null;
+          }
+          setProgress({
+            percent: 100,
+            message: `已显示 ${resultCount} 条结果。`,
+            activeKey: 'render',
+            doneKeys: ['query', 'pool', 'evidence', 'render'],
+          });
+        } else {
+          setProgress({
+            percent: Math.min(98, 82 + Math.round((next / resultCount) * 16)),
+            message: `已显示 ${next}/${resultCount} 条结果。`,
+            activeKey: 'render',
+            doneKeys: ['query', 'pool', 'evidence'],
+          });
+        }
+        return next;
+      });
+    }, 90);
   };
 
   const runSearch = async (nextQuery = query) => {
     const trimmedQuery = nextQuery.trim();
     if (!apiToken || !trimmedQuery) return;
+    clearTimers();
+    const runId = Date.now();
+    searchRunRef.current = runId;
     setLoading(true);
+    setItems([]);
+    setVisibleCount(0);
+    setProgress({
+      percent: 24,
+      message: '正在解析关键词并准备查询本地 V-KPI 表。',
+      activeKey: 'query',
+      doneKeys: [],
+    });
+    scheduleProgress(runId, 180, {
+      percent: 46,
+      message: '正在查询 KOL pool、Memory、推荐、竞品信号和告警。',
+      activeKey: 'pool',
+      doneKeys: ['query'],
+    });
+    scheduleProgress(runId, 520, {
+      percent: 68,
+      message: '正在合并头像、最近内容和证据摘要。',
+      activeKey: 'evidence',
+      doneKeys: ['query', 'pool'],
+    });
     try {
       const response = await searchVkpi(apiToken, trimmedQuery, 20);
-      setItems(response.items || []);
+      const nextItems = response.items || [];
+      setItems(nextItems);
       setMeta(response as Row);
       recordSearchHistory(trimmedQuery, response as Row);
+      clearProgressTimers();
+      revealResults(runId, nextItems.length);
     } catch (error) {
+      clearTimers();
+      setProgress({
+        percent: 100,
+        message: '搜索失败；未写入数据。',
+        activeKey: 'pool',
+        doneKeys: ['query'],
+        errorKey: 'pool',
+      });
       onMessage(error instanceof Error ? error.message : '自然搜索失败');
     } finally {
       setLoading(false);
@@ -150,6 +295,14 @@ export function NaturalSearchPanel({ apiToken, onMessage }: NaturalSearchPanelPr
     setSearchHistory([]);
     saveSearchHistory([]);
   };
+
+  useEffect(() => () => clearTimers(), []);
+
+  const visibleItems = useMemo(() => {
+    if (!items.length) return [];
+    if (visibleCount <= 0) return items;
+    return items.slice(0, Math.min(items.length, visibleCount));
+  }, [items, visibleCount]);
 
   return (
     <section className="da-natural-search">
@@ -185,8 +338,33 @@ export function NaturalSearchPanel({ apiToken, onMessage }: NaturalSearchPanelPr
         </div>
       ) : null}
 
+      {searchProgress.visible ? (
+        <div className="da-natural-search__progress" aria-label="自然搜索进度">
+          <div className="da-natural-search__progress-head">
+            <strong>{searchProgress.message}</strong>
+            <span>{searchProgress.percent}%</span>
+          </div>
+          <div className="da-natural-search__progress-bar">
+            <span style={{ width: `${searchProgress.percent}%` }} />
+          </div>
+          <div className="da-natural-search__steps">
+            {SEARCH_PROGRESS_STEPS.map((step) => {
+              const status = searchProgress.errorKey === step.key
+                ? 'error'
+                : searchProgress.doneKeys.includes(step.key)
+                  ? 'done'
+                  : searchProgress.activeKey === step.key
+                    ? 'active'
+                    : 'pending';
+              return <span key={step.key} className={`is-${status}`}>{step.label}</span>;
+            })}
+          </div>
+        </div>
+      ) : null}
+
       <div className="da-natural-search__meta">
         <span>total <strong>{String(meta.total ?? items.length)}</strong></span>
+        {items.length ? <span>visible <strong>{String(visibleItems.length)}/{String(items.length)}</strong></span> : null}
         <span>provider <strong>{String(Boolean(meta.provider_calls))}</strong></span>
         <span>write <strong>{String(Boolean(meta.write_db))}</strong></span>
         <span>tokens <strong>{Array.isArray(meta.tokens) ? meta.tokens.join(', ') : '-'}</strong></span>
@@ -204,7 +382,7 @@ export function NaturalSearchPanel({ apiToken, onMessage }: NaturalSearchPanelPr
             </tr>
           </thead>
           <tbody>
-            {items.length ? items.map((item, index) => {
+            {visibleItems.length ? visibleItems.map((item, index) => {
               const evidence = asRecord(item.evidence);
               const avatarUrl = firstText(item.avatar_url, evidence.avatar_url);
               const recentPosts = asRecordArray(item.recent_posts).length
