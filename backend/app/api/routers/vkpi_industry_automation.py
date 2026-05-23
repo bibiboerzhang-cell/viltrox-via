@@ -13,6 +13,7 @@ from app.services.vkpi import (
     industry_data,
     llm_gateway,
     market_intelligence_v0,
+    new_launch_acceptance_v0,
     outcome_collector,
     product_campaign_card,
     training_data_export,
@@ -255,6 +256,23 @@ def industry_trend_detection_v0(
         lookback_days=lookback_days,
         limit=limit,
         top_signals=top_signals,
+    )
+
+
+@router.get("/industry-data/new-launch-acceptance/v0")
+def industry_new_launch_acceptance_v0(
+    sku: str = Query(default=""),
+    kol_limit: int = Query(default=200, ge=1, le=500),
+    top_n: int = Query(default=12, ge=1, le=50),
+    lookback_days: int = Query(default=14, ge=1, le=90),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    del staff
+    return new_launch_acceptance_v0.build_new_launch_acceptance_v0(
+        sku=sku,
+        kol_limit=kol_limit,
+        top_n=top_n,
+        lookback_days=lookback_days,
     )
 
 
