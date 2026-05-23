@@ -14,7 +14,7 @@ LOCAL_AGENT_PATH="${HOME}/Library/LaunchAgents/${LOCAL_AGENT_ID}.plist"
 install_remote_timer() {
   ssh "${SSH_TARGET}" "cat > /etc/systemd/system/${REMOTE_SERVICE}" <<SERVICE
 [Unit]
-Description=V-KPI daily official + KOL lightweight sync
+Description=V-KPI daily official sync
 Wants=network-online.target
 After=network-online.target viltrox-2.0-test.service
 OnFailure=vkpi-sync-daily-alert@%n.service
@@ -24,9 +24,9 @@ Type=oneshot
 RestartPreventExitStatus=75 76
 WorkingDirectory=${REMOTE_ROOT}
 Environment=PYTHONPATH=backend
-ExecStart=/bin/bash -lc 'mkdir -p /var/log/vkpi && .venv/bin/python scripts/cron_daily_sync.py --official-max-posts 50 --kol-limit 1200 --kol-max-posts 1 >> /var/log/vkpi/sync_daily_\$(date -u +%%Y%%m%%d).log 2>&1'
-# TODO: Consider lowering to 2h. Current sync averages 30-60min; 6h releases resources slowly on real hangs.
-# Confirm deep scan or other long-running jobs will not be cut before changing this value.
+ExecStart=/bin/bash -lc 'mkdir -p /var/log/vkpi && .venv/bin/python scripts/cron_daily_sync.py --official-max-posts 50 --skip-kol >> /var/log/vkpi/sync_daily_\$(date -u +%%Y%%m%%d).log 2>&1'
+# Legacy KOL Pool refresh is intentionally excluded until P1.X.A tier selection replaces full-pool daily refresh.
+# TODO: Consider lowering to 2h after official-only runtime is observed for one week.
 TimeoutStartSec=6h
 Nice=10
 IOSchedulingClass=best-effort
@@ -44,7 +44,7 @@ ALERTSERVICE
 
   ssh "${SSH_TARGET}" "cat > /etc/systemd/system/${REMOTE_TIMER}" <<TIMER
 [Unit]
-Description=Run V-KPI daily official + KOL lightweight sync at 04:00 UTC
+Description=Run V-KPI daily official sync at 04:00 UTC
 
 [Timer]
 OnCalendar=*-*-* 04:00:00 UTC
