@@ -302,17 +302,28 @@
 .vkpi-glass-shell .quick button { border-radius: 17px; background: rgba(255,255,255,.42); border: 1px solid rgba(255,255,255,.66); box-shadow: var(--inner); height: 78px; display: grid; place-items: center; align-content: center; gap: 7px; color: #344054; font-weight: 850; cursor: pointer; appearance: none; font: inherit; }
 .vkpi-glass-shell .quick button b { font-size: 20px; color: #1b6cff; }
 .vkpi-glass-shell .quick button span { font-size: 11px; }
-.vkpi-glass-shell .country-drawer { position: fixed; right: 28px; top: 92px; z-index: 12; width: min(360px,calc(100vw - 32px)); max-height: calc(100vh - 140px); overflow: auto; border-radius: 22px; background: rgba(255,255,255,.72); border: 1px solid rgba(255,255,255,.78); box-shadow: var(--shadow-strong),var(--inner); backdrop-filter: blur(28px); padding: 16px; }
+.vkpi-glass-shell .country-drawer { position: fixed; right: 28px; top: 92px; z-index: 12; width: min(430px,calc(100vw - 32px)); max-height: calc(100vh - 140px); overflow: auto; border-radius: 22px; background: rgba(255,255,255,.72); border: 1px solid rgba(255,255,255,.78); box-shadow: var(--shadow-strong),var(--inner); backdrop-filter: blur(28px); padding: 16px; }
 .vkpi-glass-shell .country-drawer-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .vkpi-glass-shell .country-drawer-head span { display: block; color: #667085; font-size: 11px; font-weight: 850; }
 .vkpi-glass-shell .country-drawer-head b { display: block; margin-top: 2px; font-size: 18px; letter-spacing: -.03em; }
 .vkpi-glass-shell .country-drawer-head button { width: 32px; height: 32px; border-radius: 12px; border: 1px solid rgba(255,255,255,.72); background: rgba(255,255,255,.58); box-shadow: var(--inner); cursor: pointer; font-size: 18px; color: #344054; }
 .vkpi-glass-shell .country-drawer-meta { display: flex; gap: 8px; margin-top: 12px; }
 .vkpi-glass-shell .country-drawer-meta span { border-radius: 999px; padding: 5px 9px; background: rgba(27,108,255,.10); color: #1b6cff; font-size: 11px; font-weight: 900; }
+.vkpi-glass-shell .country-drawer-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; margin-top: 14px; }
+.vkpi-glass-shell .country-drawer-grid div { border-radius: 16px; background: rgba(255,255,255,.48); border: 1px solid rgba(255,255,255,.68); box-shadow: var(--inner); padding: 10px; }
+.vkpi-glass-shell .country-drawer-grid span { display: block; color: #667085; font-size: 11px; font-weight: 850; }
+.vkpi-glass-shell .country-drawer-grid b { display: block; margin-top: 4px; color: #101828; font-size: 16px; font-weight: 950; }
+.vkpi-glass-shell .country-drawer-section { display: grid; gap: 8px; margin-top: 14px; }
+.vkpi-glass-shell .country-drawer-section h4 { margin: 0; color: #101828; font-size: 13px; font-weight: 950; }
+.vkpi-glass-shell .country-breakdown { display: grid; grid-template-columns: 96px minmax(0,1fr) 34px; align-items: center; gap: 8px; border-radius: 13px; background: rgba(255,255,255,.42); border: 1px solid rgba(255,255,255,.62); box-shadow: var(--inner); padding: 8px 9px; }
+.vkpi-glass-shell .country-breakdown span { color: #667085; font-size: 11px; font-weight: 850; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vkpi-glass-shell .country-breakdown i { display: block; height: 6px; width: var(--w); max-width: 100%; border-radius: 999px; background: linear-gradient(90deg,#1b6cff,#18d5ff); }
+.vkpi-glass-shell .country-breakdown b { color: #101828; font-size: 12px; font-weight: 950; text-align: right; }
 .vkpi-glass-shell .country-drawer-list { display: grid; gap: 9px; margin-top: 14px; }
-.vkpi-glass-shell .country-kol { border-radius: 16px; background: rgba(255,255,255,.48); border: 1px solid rgba(255,255,255,.68); box-shadow: var(--inner); padding: 11px; }
+.vkpi-glass-shell .country-kol { display: flex; align-items: center; justify-content: space-between; gap: 10px; border-radius: 16px; background: rgba(255,255,255,.48); border: 1px solid rgba(255,255,255,.68); box-shadow: var(--inner); padding: 11px; }
 .vkpi-glass-shell .country-kol b { display: block; font-size: 13px; color: #101828; }
 .vkpi-glass-shell .country-kol span { display: block; margin-top: 4px; font-size: 11px; color: #667085; }
+.vkpi-glass-shell .country-kol button { width: 30px; height: 30px; border-radius: 11px; border: 1px solid rgba(27,108,255,.18); background: rgba(27,108,255,.09); color: #185fa5; font: inherit; font-weight: 950; cursor: pointer; }
 .vkpi-glass-shell .country-drawer-empty { margin-top: 14px; border-radius: 16px; padding: 14px; background: rgba(255,255,255,.42); border: 1px solid rgba(255,255,255,.66); color: #667085; font-size: 12px; font-weight: 850; }
 .vkpi-glass-shell .panel-drawer { position: fixed; right: 28px; top: 92px; z-index: 13; width: min(380px,calc(100vw - 32px)); border-radius: 22px; background: rgba(255,255,255,.74); border: 1px solid rgba(255,255,255,.80); box-shadow: var(--shadow-strong),var(--inner); backdrop-filter: blur(28px); padding: 16px; }
 .vkpi-glass-shell .panel-drawer-list { display: grid; gap: 9px; margin-top: 14px; }

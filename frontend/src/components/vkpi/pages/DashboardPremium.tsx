@@ -781,6 +781,54 @@ function mapMetricTitle(metric: MapMetric): string {
   return 'KOL 数';
 }
 
+function topCountryPlatforms(items: VkpiKolPoolItem[]): Array<{ label: string; count: number; width: string }> {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    const key = platformDisplayName(item.platform || '未知平台');
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  const max = Math.max(1, ...Array.from(counts.values()));
+  return Array.from(counts.entries())
+    .map(([label, count]) => ({ label, count, width: `${Math.max(8, Math.round((count / max) * 100))}%` }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5);
+}
+
+function kolDecisionLabel(item: VkpiKolPoolItem): string {
+  const score = numberValue(item.viltrox_fit_score);
+  if (score >= 80) return '可联系';
+  if (score >= 60) return '观察';
+  if (score > 0) return '谨慎';
+  return '待评估';
+}
+
+function countryDecisionRows(items: VkpiKolPoolItem[]): Array<{ label: string; count: number; width: string }> {
+  const labels = ['可联系', '观察', '谨慎', '待评估'];
+  const counts = new Map(labels.map((label) => [label, 0]));
+  for (const item of items) {
+    const label = kolDecisionLabel(item);
+    counts.set(label, (counts.get(label) || 0) + 1);
+  }
+  const max = Math.max(1, ...Array.from(counts.values()));
+  return labels.map((label) => {
+    const count = counts.get(label) || 0;
+    return { label, count, width: `${Math.max(8, Math.round((count / max) * 100))}%` };
+  });
+}
+
+function countrySyncRows(items: VkpiKolPoolItem[]): Array<{ label: string; count: number; width: string }> {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    const raw = String(item.sync_status || item.source_type || 'unknown').replace(/_/g, ' ') || 'unknown';
+    counts.set(raw, (counts.get(raw) || 0) + 1);
+  }
+  const max = Math.max(1, ...Array.from(counts.values()));
+  return Array.from(counts.entries())
+    .map(([label, count]) => ({ label, count, width: `${Math.max(8, Math.round((count / max) * 100))}%` }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 4);
+}
+
 async function fetchPremiumSnapshot(apiToken: string, windowDays: number): Promise<PremiumSnapshot> {
   const failedSections: string[] = [];
   const [dashboardResult, trendResult, productResult, kolSummaryResult, kolDistributionResult, officialMatrixResult, competitorResult, brandSignalsResult, agentsStatusResult, copilotBriefResult, tasksStatusResult] = await Promise.allSettled([
@@ -1882,19 +1930,45 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
           <div className="country-drawer-meta">
             <span>{countryDrawer.region.countryCode || '-'}</span>
             <span>{compact(countryDrawer.region.kolCount || countryDrawer.items.length)} KOL</span>
+            <span>{countryDrawer.items.length ? `${countryDrawer.items.length} 已加载` : '列表待加载'}</span>
           </div>
           {countryDrawer.loading ? <div className="country-drawer-empty">加载中…</div> : null}
           {!countryDrawer.loading && countryDrawer.error ? <div className="country-drawer-empty">{countryDrawer.error}</div> : null}
           {!countryDrawer.loading && !countryDrawer.error && countryDrawer.items.length === 0 ? <div className="country-drawer-empty">暂无 KOL</div> : null}
           {!countryDrawer.loading && !countryDrawer.error ? (
-            <div className="country-drawer-list">
-              {countryDrawer.items.slice(0, 12).map((item) => (
-                <div className="country-kol" key={item.id}>
-                  <b>{item.display_name || item.handle || `KOL ${item.id}`}</b>
-                  <span>{item.platform || '-'} · {compact(numberValue(item.followers))} followers</span>
-                </div>
-              ))}
-            </div>
+            <>
+              <div className="country-drawer-grid">
+                <div><span>平台数</span><b>{topCountryPlatforms(countryDrawer.items).length || '--'}</b></div>
+                <div><span>高适配</span><b>{countryDrawer.items.filter((item) => numberValue(item.viltrox_fit_score) >= 80).length}</b></div>
+                <div><span>平均粉丝</span><b>{countryDrawer.items.length ? compact(countryDrawer.items.reduce((sum, item) => sum + numberValue(item.followers), 0) / countryDrawer.items.length) : '--'}</b></div>
+              </div>
+              <div className="country-drawer-section">
+                <h4>平台分布</h4>
+                {topCountryPlatforms(countryDrawer.items).map((row) => <div className="country-breakdown" key={row.label}><span>{row.label}</span><i style={glassVarStyle({ '--w': row.width })}></i><b>{row.count}</b></div>)}
+              </div>
+              <div className="country-drawer-section">
+                <h4>决策标签</h4>
+                {countryDecisionRows(countryDrawer.items).map((row) => <div className="country-breakdown" key={row.label}><span>{row.label}</span><i style={glassVarStyle({ '--w': row.width })}></i><b>{row.count}</b></div>)}
+              </div>
+              <div className="country-drawer-section">
+                <h4>数据状态</h4>
+                {countrySyncRows(countryDrawer.items).map((row) => <div className="country-breakdown" key={row.label}><span>{row.label}</span><i style={glassVarStyle({ '--w': row.width })}></i><b>{row.count}</b></div>)}
+              </div>
+              <div className="country-drawer-list">
+                {countryDrawer.items.slice(0, 12).map((item) => (
+                  <div className="country-kol" key={item.id}>
+                    <div>
+                      <b>{item.display_name || item.handle || `KOL ${item.id}`}</b>
+                      <span>{platformDisplayName(item.platform)} · {compact(numberValue(item.followers))} followers · {kolDecisionLabel(item)}</span>
+                    </div>
+                    <button type="button" onClick={() => item.profile_url ? openContentUrl(item.profile_url) : goToWorkspacePage('discover', 'KOL 搜索')}>↗</button>
+                  </div>
+                ))}
+              </div>
+              <button className="panel-drawer-action" type="button" onClick={() => goToWorkspacePage('discover', `${countryDrawer.region.label} KOL`)}>
+                打开 KOL 搜索 →
+              </button>
+            </>
           ) : null}
         </div>
       ) : null}
