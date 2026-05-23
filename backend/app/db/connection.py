@@ -121,6 +121,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "076_vkpi_kol_refresh_tier.sql",
     "077_vkpi_llm_gateway_hard_caps.sql",
     "078_vkpi_gemini_single_kol_budget.sql",
+    "079_vkpi_product_aliases.sql",
 )
 
 try:
