@@ -315,6 +315,9 @@ export interface VkpiProductCostPayload {
 export interface VkpiCommentIntelligenceOverview {
   days: number;
   health: "ok" | "degraded" | "attention" | string;
+  provider_calls?: boolean;
+  llm_calls?: boolean;
+  write_db?: boolean;
   runs: {
     total: number;
     by_status?: Record<string, number>;
@@ -333,6 +336,30 @@ export interface VkpiCommentIntelligenceOverview {
     posts_total: number;
     posts_with_primary_pillar: number;
     post_pillar_coverage?: number | null;
+    sample_cap?: number;
+    sample_status?: string;
+  };
+  comment_contract?: {
+    declared?: number | null;
+    cached?: number;
+    cap?: number;
+    status?: string;
+  };
+  rule_v0?: {
+    status?: string;
+    method?: string;
+    source?: string;
+    provider_calls?: boolean;
+    llm_calls?: boolean;
+    write_db?: boolean;
+    contract?: {
+      declared?: number | null;
+      cached?: number;
+      cap?: number;
+      status?: string;
+    };
+    counts?: Record<string, number>;
+    samples?: Row[];
   };
   distributions?: {
     sentiment?: Array<{ label?: string; count?: number }>;

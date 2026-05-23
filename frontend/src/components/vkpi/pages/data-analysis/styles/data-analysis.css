@@ -1576,6 +1576,16 @@
   font-size: 12px;
 }
 
+.da-ci-readonly {
+  border: 1px solid rgba(71, 84, 103, 0.22);
+  border-radius: 999px;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 8px 10px;
+  white-space: nowrap;
+}
+
 .da-ci-distribution-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

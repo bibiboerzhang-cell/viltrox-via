@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   getCommentIntelligenceOverview,
-  processRecentCommentIntelligence,
-  retryCommentIntelligenceRun,
   type VkpiCommentIntelligenceOverview,
 } from '../../../../../services/vkpi.ui-api';
 import { BigNumberCard } from './BigNumberCard';
@@ -37,6 +35,10 @@ function statusLabel(value: unknown): string {
   if (raw === 'partial') return '部分完成';
   if (raw === 'fail') return '失败';
   if (raw === 'running') return '运行中';
+  if (raw === 'sampled_cached') return '缓存抽样';
+  if (raw === 'cached_window') return '窗口缓存';
+  if (raw === 'no_cached_comments') return '无缓存评论';
+  if (raw === 'not_configured') return '未配置';
   return raw || '-';
 }
 
@@ -102,8 +104,6 @@ function DistributionList({
 export function CommentIntelligencePanel({ apiToken, days = 7 }: CommentIntelligencePanelProps) {
   const [overview, setOverview] = useState<VkpiCommentIntelligenceOverview | null>(null);
   const [loading, setLoading] = useState(false);
-  const [actionRunning, setActionRunning] = useState('');
-  const [actionMessage, setActionMessage] = useState('');
   const [error, setError] = useState('');
 
   const load = async () => {
@@ -124,47 +124,12 @@ export function CommentIntelligencePanel({ apiToken, days = 7 }: CommentIntellig
     void load();
   }, [apiToken, days]);
 
-  const processRecent = async () => {
-    if (!apiToken) return;
-    setActionRunning('process-recent');
-    setActionMessage('');
-    setError('');
-    try {
-      const result = await processRecentCommentIntelligence(apiToken, {
-        days,
-        limit: 10,
-        collectComments: false,
-        analyzeSentiment: true,
-        classifyPillar: true,
-      });
-      setActionMessage(`最近帖子处理完成: ${String(result.processed || 0)} 条。`);
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '最近帖子处理失败');
-    } finally {
-      setActionRunning('');
-    }
-  };
-
-  const retryRun = async (runId: unknown) => {
-    if (!apiToken || !runId) return;
-    setActionRunning(`retry-${String(runId)}`);
-    setActionMessage('');
-    setError('');
-    try {
-      await retryCommentIntelligenceRun(apiToken, String(runId));
-      setActionMessage(`Run ${String(runId)} 已重试。`);
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '重试失败');
-    } finally {
-      setActionRunning('');
-    }
-  };
-
   const recentRuns = useMemo(() => overview?.runs.recent || [], [overview]);
   const distributions = overview?.distributions || {};
-  const isActionBusy = Boolean(actionRunning) || loading;
+  const rule = overview?.rule_v0 || {};
+  const contract = rule.contract || overview?.comment_contract || {};
+  const ruleCounts = rule.counts || {};
+  const samples = Array.isArray(rule.samples) ? rule.samples : [];
 
   if (!apiToken) {
     return (
@@ -187,14 +152,11 @@ export function CommentIntelligencePanel({ apiToken, days = 7 }: CommentIntellig
           <button className="da-text-button" type="button" disabled={loading} onClick={() => void load()}>
             刷新
           </button>
-          <button className="da-black-button da-ci-compact-button" type="button" disabled={isActionBusy} onClick={() => void processRecent()}>
-            处理最近帖子
-          </button>
+          <span className="da-ci-readonly">只读 v0 · 不采集</span>
         </div>
       }
     >
       {error ? <div className="da-ci-error">{error}</div> : null}
-      {actionMessage ? <div className="da-ci-message">{actionMessage}</div> : null}
       <section className="da-detail-grid">
         <BigNumberCard
           title="Pipeline Runs"
@@ -226,6 +188,12 @@ export function CommentIntelligencePanel({ apiToken, days = 7 }: CommentIntellig
           delta={`${compact(overview?.coverage.posts_with_primary_pillar || 0)} / ${compact(overview?.coverage.posts_total || 0)} 帖子`}
           tone={overview?.coverage.post_pillar_coverage ? 'positive' : 'neutral'}
         />
+        <BigNumberCard
+          title="Cached Sample"
+          value={`${compact(contract.cached || 0)} / ${compact(contract.cap || overview?.coverage.sample_cap || 0)}`}
+          delta={statusLabel(contract.status || overview?.coverage.sample_status)}
+          tone={contract.cached ? 'positive' : 'neutral'}
+        />
       </section>
 
       <section className="da-ci-distribution-grid">
@@ -239,7 +207,48 @@ export function CommentIntelligencePanel({ apiToken, days = 7 }: CommentIntellig
             count: row.count,
           }))}
         />
+        <DistributionList
+          title="Rule v0"
+          rows={[
+            { label: 'questions', display_name: '问题', count: ruleCounts.questions || 0 },
+            { label: 'opportunities', display_name: '机会', count: ruleCounts.opportunities || 0 },
+            { label: 'issues', display_name: '问题点', count: ruleCounts.issues || 0 },
+            { label: 'positive', display_name: '正向', count: ruleCounts.positive || 0 },
+            { label: 'negative', display_name: '负向', count: ruleCounts.negative || 0 },
+          ]}
+        />
       </section>
+
+      <div className="da-table-wrap da-ci-runs">
+        <table className="da-table">
+          <thead>
+            <tr>
+              <th>Cached Comment</th>
+              <th>Rule</th>
+              <th>Tags</th>
+              <th>Source</th>
+              <th>Fetched</th>
+            </tr>
+          </thead>
+          <tbody>
+            {samples.length ? samples.slice(0, 8).map((sample) => (
+              <tr key={String(sample.comment_id || sample.external_comment_id || sample.text_excerpt)}>
+                <td>{String(sample.text_excerpt || '-').slice(0, 160)}</td>
+                <td>{displayLabel(sample.rule_sentiment)}</td>
+                <td>{Array.isArray(sample.tags) ? sample.tags.join(' / ') || '-' : '-'}</td>
+                <td>{String(sample.platform || '-')} · {String(sample.post_table || '-')} #{String(sample.post_id || '-')}</td>
+                <td>{timeLabel(sample.fetched_at || sample.created_at)}</td>
+              </tr>
+            )) : (
+              <tr>
+                <td className="da-table-empty" colSpan={5}>
+                  当前窗口没有缓存评论样本。这里不会自动抓取评论。
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
 
       <div className="da-table-wrap da-ci-runs">
         <table className="da-table">
@@ -257,7 +266,6 @@ export function CommentIntelligencePanel({ apiToken, days = 7 }: CommentIntellig
           <tbody>
             {recentRuns.length ? recentRuns.map((run) => {
               const runId = run.id || run.run_uid;
-              const canRetry = ['fail', 'partial'].includes(String(run.status || ''));
               return (
                 <tr key={String(runId)}>
                   <td>{String(run.run_uid || run.id || '-')}</td>
@@ -266,18 +274,7 @@ export function CommentIntelligencePanel({ apiToken, days = 7 }: CommentIntellig
                   <td>{String(run.triggered_by || '-')}</td>
                   <td>{timeLabel(run.started_at || run.created_at)}</td>
                   <td>{String(run.error_message || '-').slice(0, 80)}</td>
-                  <td>
-                    {canRetry ? (
-                      <button
-                        className="da-text-button"
-                        type="button"
-                        disabled={isActionBusy}
-                        onClick={() => void retryRun(runId)}
-                      >
-                        {actionRunning === `retry-${String(runId)}` ? '重试中' : '重试'}
-                      </button>
-                    ) : '-'}
-                  </td>
+                  <td>只读</td>
                 </tr>
               );
             }) : (
