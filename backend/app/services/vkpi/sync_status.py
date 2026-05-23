@@ -184,7 +184,8 @@ def _shopify_status() -> dict[str, Any]:
         rows = conn.execute(
             """
             SELECT id, started_at, completed_at, status,
-                   total_orders, success_orders, failed_orders, error_message
+                   orders_received, orders_matched, orders_unmatched,
+                   orders_failed, error_message
             FROM vkpi_shopify_sync_runs
             ORDER BY started_at DESC, id DESC
             LIMIT 10

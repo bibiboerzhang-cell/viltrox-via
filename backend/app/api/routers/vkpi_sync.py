@@ -15,7 +15,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 
 from app.api.dependencies.perms import require_tab
-from app.services.vkpi import sync_status, cron
+from app.services.vkpi import cron, sync_sentinel_agent_v0, sync_status
 from app.services.vkpi.audit_decorator import audit_action
 
 
@@ -45,6 +45,16 @@ def get_industry_failures(
 ) -> dict:
     """最近 industry 抓取失败列表"""
     return sync_status.get_industry_recent_failures(limit=limit)
+
+
+@router.get("/sentinel/v0")
+def get_sync_sentinel_v0(
+    limit: int = Query(default=50, ge=1, le=200),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """Read-only P7.80 sync sentinel report. Does not trigger sync or write alerts."""
+    del staff
+    return sync_sentinel_agent_v0.build_sync_sentinel_agent_v0(limit=limit)
 
 
 # ─── Write endpoints (admin 权限 + 审计) ──────

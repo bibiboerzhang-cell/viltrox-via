@@ -81,3 +81,26 @@ def test_summary_health_marks_daily_sync_blocker_as_critical(monkeypatch) -> Non
     assert result["overall_health"] == "down"
     assert result["issues"][0]["category"] == "daily_sync"
     assert "blocked-run" in result["issues"][0]["message"]
+
+
+def test_shopify_status_uses_current_reconciliation_schema(monkeypatch) -> None:
+    row = {
+        "id": 1,
+        "started_at": "2026-05-23T10:00:00Z",
+        "completed_at": "2026-05-23T10:01:00Z",
+        "status": "success",
+        "orders_received": 3,
+        "orders_matched": 2,
+        "orders_unmatched": 1,
+        "orders_failed": 0,
+        "error_message": "",
+    }
+    conn = _Conn([row])
+    monkeypatch.setattr(sync_status, "get_conn", lambda: conn)
+
+    result = sync_status._shopify_status()
+
+    assert result["last_run_status"] == "success"
+    assert result["recent_runs"][0]["orders_received"] == 3
+    assert "orders_received" in conn.queries[0]
+    assert "total_orders" not in conn.queries[0]
