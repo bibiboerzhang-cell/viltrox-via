@@ -12,6 +12,7 @@ import {
   getKolAssessment,
   getKolPoolCompetitors,
   getKolPoolDimensions11,
+  getKolPoolIntelligenceCard,
   getKolPoolItem,
   getKolPosts,
   getKolProductFit,
@@ -1690,6 +1691,10 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
             onGetItem={(kolPoolId) => {
               if (!apiToken) return Promise.reject(new Error('未登录'));
               return getKolPoolItem(apiToken, kolPoolId);
+            }}
+            onGetIntelligenceCard={(kolPoolId) => {
+              if (!apiToken) return Promise.reject(new Error('未登录'));
+              return getKolPoolIntelligenceCard(apiToken, kolPoolId);
             }}
             onEnrichItem={(kolPoolId, maxPosts) => {
               if (!apiToken) return Promise.reject(new Error('未登录'));

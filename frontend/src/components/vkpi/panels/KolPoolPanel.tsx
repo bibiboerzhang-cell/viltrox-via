@@ -42,6 +42,21 @@ interface KolPoolRefreshState {
   };
 }
 
+interface KolPoolIntelligenceCard {
+  mode?: string;
+  generated_at?: string;
+  provider_calls?: boolean;
+  llm_calls?: boolean;
+  write_db?: boolean;
+  freshness?: Record<string, unknown>;
+  dimensions11?: Record<string, unknown>;
+  competitors?: Record<string, unknown>;
+  brand_signal?: Record<string, unknown>;
+  product_fit?: Record<string, unknown>;
+  decision_support?: Record<string, unknown>;
+  evidence_index?: Array<Record<string, unknown>>;
+}
+
 interface KolPoolItem {
   id: number;
   pool_uid: string;
@@ -83,6 +98,7 @@ interface KolPoolPanelProps {
   apiToken: string;
   onListPool: (params: { search?: string; platform?: string; limit?: number; dataStatus?: string; sortBy?: string; enrichable?: boolean; refreshIfStale?: boolean }) => Promise<{ items?: KolPoolItem[]; refresh?: KolPoolRefreshState }>;
   onGetItem?: (kolPoolId: number) => Promise<{ item?: KolPoolItem; freshness?: KolPoolFreshness; refresh?: KolPoolRefreshState }>;
+  onGetIntelligenceCard?: (kolPoolId: number) => Promise<KolPoolIntelligenceCard>;
   onEnrichItem?: (kolPoolId: number, maxPosts?: number) => Promise<{
     item?: KolPoolItem;
     sync_status?: string;
@@ -127,7 +143,7 @@ const ENRICHABLE_PLATFORMS = new Set([
   'reddit',
 ]);
 
-export function KolPoolPanel({ apiToken, onListPool, onGetItem, onEnrichItem, onBatchEnrich, onPromoteToMain, onOpenImport }: KolPoolPanelProps) {
+export function KolPoolPanel({ apiToken, onListPool, onGetItem, onGetIntelligenceCard, onEnrichItem, onBatchEnrich, onPromoteToMain, onOpenImport }: KolPoolPanelProps) {
   const [items, setItems] = useState<KolPoolItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -143,6 +159,8 @@ export function KolPoolPanel({ apiToken, onListPool, onGetItem, onEnrichItem, on
   const [selectedIds, setSelectedIds] = useState<Set<number>>(() => new Set());
   const [selectedItem, setSelectedItem] = useState<KolPoolItem | null>(null);
   const [listRefreshState, setListRefreshState] = useState<KolPoolRefreshState | null>(null);
+  const [intelligenceCard, setIntelligenceCard] = useState<KolPoolIntelligenceCard | null>(null);
+  const [intelligenceLoading, setIntelligenceLoading] = useState(false);
 
   async function loadList() {
     if (!apiToken) {
@@ -180,25 +198,41 @@ export function KolPoolPanel({ apiToken, onListPool, onGetItem, onEnrichItem, on
 
   async function openDetail(item: KolPoolItem) {
     setSelectedItem(item);
-    if (!onGetItem) return;
+    setIntelligenceCard(null);
+    if (!onGetItem && !onGetIntelligenceCard) return;
     setDetailLoading(true);
+    setIntelligenceLoading(Boolean(onGetIntelligenceCard));
     setError('');
     try {
-      const result = await onGetItem(item.id);
-      if (result.item) {
-        setSelectedItem({
-          ...result.item,
-          freshness: result.freshness || result.refresh?.freshness,
-          refresh: result.refresh,
-        });
+      if (onGetItem) {
+        const result = await onGetItem(item.id);
+        if (result.item) {
+          setSelectedItem({
+            ...result.item,
+            freshness: result.freshness || result.refresh?.freshness,
+            refresh: result.refresh,
+          });
+        }
+        if (result.refresh) {
+          setMessage(refreshStateLabel(result.refresh));
+        }
       }
-      if (result.refresh) {
-        setMessage(refreshStateLabel(result.refresh));
+      if (onGetIntelligenceCard) {
+        try {
+          const card = await onGetIntelligenceCard(item.id);
+          setIntelligenceCard(card);
+        } catch (cardError) {
+          setIntelligenceCard({
+            decision_support: { readiness: 'partial', gaps: ['intelligence_card_unavailable'] },
+            dimensions11: { status: 'unavailable', error: (cardError as Error).message || '读取失败' },
+          });
+        }
       }
     } catch (err) {
       setError((err as Error).message || '详情加载失败');
     } finally {
       setDetailLoading(false);
+      setIntelligenceLoading(false);
     }
   }
 
@@ -509,12 +543,17 @@ export function KolPoolPanel({ apiToken, onListPool, onGetItem, onEnrichItem, on
         </div>
       )}
 
-      {selectedItem && (
-        <KolPoolDetailDrawer
-          item={selectedItem}
-          loading={detailLoading}
-          onClose={() => setSelectedItem(null)}
-          onEnrich={onEnrichItem && canEnrich(selectedItem) ? () => void handleEnrich(selectedItem, 24) : undefined}
+        {selectedItem && (
+          <KolPoolDetailDrawer
+            item={selectedItem}
+            loading={detailLoading}
+            intelligenceCard={intelligenceCard}
+            intelligenceLoading={intelligenceLoading}
+            onClose={() => {
+              setSelectedItem(null);
+              setIntelligenceCard(null);
+            }}
+            onEnrich={onEnrichItem && canEnrich(selectedItem) ? () => void handleEnrich(selectedItem, 24) : undefined}
           enriching={enrichingId === selectedItem.id}
           onPromoteToMain={onPromoteToMain ? () => void handlePromoteToMain(selectedItem) : undefined}
           linking={linkingId === selectedItem.id}
@@ -554,6 +593,8 @@ function KolPoolSkeletonRows() {
 function KolPoolDetailDrawer({
   item,
   loading,
+  intelligenceCard,
+  intelligenceLoading,
   onClose,
   onEnrich,
   enriching,
@@ -562,6 +603,8 @@ function KolPoolDetailDrawer({
 }: {
   item: KolPoolItem;
   loading: boolean;
+  intelligenceCard?: KolPoolIntelligenceCard | null;
+  intelligenceLoading?: boolean;
   onClose: () => void;
   onEnrich?: () => void;
   enriching?: boolean;
@@ -593,6 +636,7 @@ function KolPoolDetailDrawer({
       </div>
 
       {loading && <div className="vkpi-alert">正在读取完整详情…</div>}
+      {intelligenceLoading && <div className="vkpi-alert">正在读取证据卡片…</div>}
       {item.refresh && <RefreshStateNotice refresh={item.refresh} />}
 
       <section className={`vkpi-kol-pool-decision-card ${priority.tone}`}>
@@ -618,6 +662,8 @@ function KolPoolDetailDrawer({
           <small>readiness</small>
         </div>
       </section>
+
+      {intelligenceCard && <KolPoolIntelligenceSection card={intelligenceCard} />}
 
       <section className="vkpi-detail-grid">
         <InfoTile label="粉丝" value={formatNumber(item.followers)} />
@@ -726,6 +772,64 @@ function ActionHint({ done, label, hint }: { done: boolean; label: string; hint:
       <strong>{done ? '已就绪' : '待处理'} · {label}</strong>
       <span>{hint}</span>
     </div>
+  );
+}
+
+function KolPoolIntelligenceSection({ card }: { card: KolPoolIntelligenceCard }) {
+  const support = recordValue(card.decision_support);
+  const dimensions = recordValue(card.dimensions11);
+  const competitors = recordValue(card.competitors);
+  const brandSignal = recordValue(card.brand_signal);
+  const productFit = recordValue(card.product_fit);
+  const evidence = Array.isArray(card.evidence_index) ? card.evidence_index : [];
+  const readiness = stringifyValue(support.readiness || 'partial');
+  const gaps = Array.isArray(support.gaps) ? support.gaps.map(stringifyValue).filter(Boolean) : [];
+  const competitorSummary = recordValue(competitors.summary);
+  return (
+    <section className="vkpi-card vkpi-alert-detail-section">
+      <h3>Intelligence Card</h3>
+      <div className="vkpi-kol-pool-readiness-grid">
+        <div className={readiness === 'ready' ? 'is-ok' : 'is-missing'}>
+          <strong>证据状态</strong>
+          <span>{readinessLabel(readiness)}</span>
+          <small>{gaps.length ? gaps.slice(0, 2).join(' / ') : '现有证据可读'}</small>
+        </div>
+        <div className={statusClass(dimensions.status)}>
+          <strong>11 维</strong>
+          <span>{formatScoreValue(dimensions.overall_score)}</span>
+          <small>{statusLabel(dimensions.status)}</small>
+        </div>
+        <div className={statusClass(competitors.status)}>
+          <strong>竞品</strong>
+          <span>{stringifyValue(competitorSummary.risk_tier || competitors.status || '—')}</span>
+          <small>{stringifyValue(competitorSummary.competitor_brand || '无高风险品牌')}</small>
+        </div>
+        <div className={statusClass(brandSignal.status)}>
+          <strong>Brand Signal</strong>
+          <span>{formatNumber(brandSignal.signal_count)}</span>
+          <small>{statusLabel(brandSignal.status)}</small>
+        </div>
+        <div className={statusClass(productFit.status)}>
+          <strong>Product Fit</strong>
+          <span>{formatNumber(productFit.count)}</span>
+          <small>{statusLabel(productFit.status)}</small>
+        </div>
+      </div>
+      <div className="vkpi-chip-list" style={{ marginTop: 12 }}>
+        <span className={card.provider_calls ? 'vkpi-chip vkpi-chip--warn' : 'vkpi-chip is-success'}>Provider {card.provider_calls ? 'called' : 'off'}</span>
+        <span className={card.llm_calls ? 'vkpi-chip vkpi-chip--warn' : 'vkpi-chip is-success'}>LLM {card.llm_calls ? 'called' : 'off'}</span>
+        <span className={card.write_db ? 'vkpi-chip vkpi-chip--warn' : 'vkpi-chip is-success'}>Write {card.write_db ? 'on' : 'off'}</span>
+      </div>
+      {evidence.length ? (
+        <div className="vkpi-chip-list" style={{ marginTop: 8 }}>
+          {evidence.slice(0, 6).map((row, index) => (
+            <span className="vkpi-chip" key={`${stringifyValue(row.section)}-${index}`}>
+              {stringifyValue(row.section || 'evidence')} · {statusLabel(row.status)}
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </section>
   );
 }
 
@@ -932,6 +1036,10 @@ function collectList(jsonValue: unknown, raw: Record<string, unknown>, keys: str
   return Array.from(new Set(values.map((item) => item.trim()).filter(Boolean))).slice(0, 8);
 }
 
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
 function getString(raw: Record<string, unknown>, keys: string[]): string {
   for (const key of keys) {
     const value = raw[key];
@@ -985,6 +1093,27 @@ function formatScore(value: unknown) {
 function formatScoreValue(value: unknown): string {
   const next = numberValue(value);
   return next === null ? '—' : `${next.toFixed(1)}/100`;
+}
+
+function statusLabel(value: unknown): string {
+  const status = stringifyValue(value || 'unknown').toLowerCase();
+  if (status === 'ready') return 'ready';
+  if (status === 'empty') return '暂无证据';
+  if (status === 'skipped') return '未启用';
+  if (status === 'unavailable') return '不可用';
+  return status || 'unknown';
+}
+
+function readinessLabel(value: unknown): string {
+  const status = stringifyValue(value || 'partial').toLowerCase();
+  if (status === 'ready') return '证据就绪';
+  if (status === 'partial') return '部分证据';
+  return status || 'unknown';
+}
+
+function statusClass(value: unknown): string {
+  const status = stringifyValue(value || '').toLowerCase();
+  return status === 'ready' || status === 'empty' ? 'is-ok' : 'is-missing';
 }
 
 function toVkpiPlatform(platform: string): VkpiPlatform {
