@@ -93,6 +93,27 @@ export interface VkpiKolPoolEvidenceSummary {
   llm_budget_preflight?: Record<string, unknown>;
 }
 
+export interface VkpiKolPoolGeminiPreflight {
+  mode: string;
+  generated_at: string;
+  kol_pool_id: number;
+  provider_calls: boolean;
+  llm_calls: boolean;
+  write_db: boolean;
+  sync_triggered?: boolean;
+  task_enqueued?: boolean;
+  policy?: Record<string, unknown>;
+  item?: Record<string, unknown>;
+  candidate_strategy?: Record<string, unknown>;
+  top_candidate?: Record<string, unknown>;
+  candidate_sample?: Array<Record<string, unknown>>;
+  url_readiness?: Record<string, unknown>;
+  field_contract?: Record<string, unknown>;
+  budget_preflight?: Record<string, unknown>;
+  go_no_go?: Record<string, unknown>;
+  checks?: Record<string, unknown>;
+}
+
 export async function listKolPool(
   token: string,
   params: { search?: string; platform?: string; country?: string; limit?: number; dataStatus?: string; sortBy?: string; enrichable?: boolean; refreshIfStale?: boolean } = {},
@@ -145,6 +166,15 @@ export async function getKolPoolEvidenceSummary(token: string, kolPoolId: number
   const query = new URLSearchParams({ include_product_fit: String(includeProductFit) });
   return apiFetch<VkpiKolPoolEvidenceSummary>(
     `/api/admin/vkpi/kol-pool/${kolPoolId}/evidence-summary?${query.toString()}`,
+    {},
+    token,
+  );
+}
+
+export async function getKolPoolGeminiPreflight(token: string, kolPoolId: number, candidateLimit = 24) {
+  const query = new URLSearchParams({ candidate_limit: String(candidateLimit), include_budget_preflight: "true" });
+  return apiFetch<VkpiKolPoolGeminiPreflight>(
+    `/api/admin/vkpi/kol-pool/${kolPoolId}/gemini-preflight?${query.toString()}`,
     {},
     token,
   );

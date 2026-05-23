@@ -1,0 +1,407 @@
+"""Read-only P4.55 Gemini single-KOL preflight.
+
+This module only inspects cached V-KPI evidence. It does not call Gemini,
+Apify, YouTube, LLM providers, task queues, or write to the database.
+"""
+from __future__ import annotations
+
+import json
+import re
+from datetime import datetime, timezone
+from typing import Any, Iterable
+
+from app.services.vkpi import kol_pool, llm_gateway
+
+
+GEMINI_SINGLE_KOL_SCOPE = "cron:p4_gemini_single_kol"
+YOUTUBE_RE = re.compile(r"(?:youtube\.com/(?:watch\?v=|shorts/)|youtu\.be/)([A-Za-z0-9_-]{6,})", re.I)
+VILTROX_RE = re.compile(r"\bviltrox\b", re.I)
+
+
+def _utcnow() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _lower(value: Any) -> str:
+    return _text(value).lower()
+
+
+def _int(value: Any, default: int = 0) -> int:
+    if value is None or value == "":
+        return default
+    try:
+        return int(float(str(value).replace(",", "").strip()))
+    except (TypeError, ValueError):
+        return default
+
+
+def _loads(value: Any, fallback: Any) -> Any:
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        parsed = json.loads(str(value or ""))
+        return parsed if parsed is not None else fallback
+    except Exception:
+        return fallback
+
+
+def _nested_dict(source: dict[str, Any], *keys: str) -> dict[str, Any]:
+    for key in keys:
+        value = source.get(key)
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def _first_text(*values: Any) -> str:
+    for value in values:
+        text = _text(value)
+        if text:
+            return text
+    return ""
+
+
+def _first_int(*values: Any) -> int:
+    for value in values:
+        parsed = _int(value)
+        if parsed:
+            return parsed
+    return 0
+
+
+def _is_youtube_url(url: str) -> bool:
+    return bool(YOUTUBE_RE.search(_text(url)))
+
+
+def _youtube_video_id(url: str) -> str:
+    match = YOUTUBE_RE.search(_text(url))
+    return match.group(1) if match else ""
+
+
+def _items(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, dict):
+        for key in ("items", "data", "results", "videos", "posts", "latestPosts", "latest_posts"):
+            nested = value.get(key)
+            if isinstance(nested, list):
+                return [item for item in nested if isinstance(item, dict)]
+        return []
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def _looks_like_post(post: dict[str, Any]) -> bool:
+    kind = _lower(post.get("kind"))
+    if "channel" in kind and "video" not in kind:
+        return False
+    return any(
+        key in post
+        for key in (
+            "video_url",
+            "videoUrl",
+            "webVideoUrl",
+            "post_url",
+            "permalink",
+            "shareUrl",
+            "content_url",
+            "videoMeta",
+            "playCount",
+            "view_count",
+            "statistics",
+            "snippet",
+            "shortCode",
+            "caption",
+            "title",
+        )
+    )
+
+
+def _raw_posts(raw: Any, *, depth: int = 0) -> Iterable[dict[str, Any]]:
+    if depth > 4:
+        return
+    if isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict):
+                if _looks_like_post(item):
+                    yield item
+                yield from _raw_posts(item, depth=depth + 1)
+        return
+    if not isinstance(raw, dict):
+        return
+    for key in ("videos", "posts", "latestPosts", "latest_posts", "items", "data", "results"):
+        value = raw.get(key)
+        for item in _items(value):
+            if _looks_like_post(item):
+                yield item
+            yield from _raw_posts(item, depth=depth + 1)
+    for key in ("profile", "raw", "channel", "account"):
+        value = raw.get(key)
+        if isinstance(value, (dict, list)):
+            yield from _raw_posts(value, depth=depth + 1)
+
+
+def _candidate_from_post(post: dict[str, Any], *, item: dict[str, Any], index: int, source_kind: str) -> dict[str, Any] | None:
+    snippet = _nested_dict(post, "snippet")
+    localized = _nested_dict(snippet, "localized")
+    stats = _nested_dict(post, "statistics", "stats", "metrics", "public_metrics")
+    post_uid = _first_text(
+        post.get("id"),
+        post.get("post_uid"),
+        post.get("post_id"),
+        post.get("video_id"),
+        post.get("videoId"),
+        post.get("shortCode"),
+        post.get("shortcode"),
+    )
+    source_url = _first_text(
+        post.get("source_url"),
+        post.get("sourceUrl"),
+        post.get("post_url"),
+        post.get("url"),
+        post.get("webVideoUrl"),
+        post.get("permalink"),
+        post.get("shareUrl"),
+        post.get("content_url"),
+        post.get("link"),
+    )
+    video_url = _first_text(post.get("video_url"), post.get("videoUrl"), post.get("webVideoUrl"), source_url)
+    kind = _lower(post.get("kind"))
+    platform = _lower(item.get("platform"))
+    if not video_url and (kind == "youtube#video" or platform == "youtube") and post_uid:
+        video_url = f"https://www.youtube.com/watch?v={post_uid}"
+    title = _first_text(
+        post.get("title"),
+        post.get("caption"),
+        post.get("text"),
+        snippet.get("title"),
+        localized.get("title"),
+        post.get("description"),
+        snippet.get("description"),
+        source_url,
+    )
+    if not any((video_url, source_url, title)):
+        return None
+    views = _first_int(post.get("views"), post.get("view_count"), post.get("play_count"), post.get("playCount"), stats.get("viewCount"), stats.get("playCount"))
+    likes = _first_int(post.get("likes"), post.get("like_count"), post.get("diggCount"), stats.get("likeCount"))
+    comments = _first_int(post.get("comments"), post.get("comment_count"), post.get("commentCount"), stats.get("commentCount"))
+    candidate_url = video_url or source_url
+    reasons: list[str] = [source_kind]
+    if _is_youtube_url(candidate_url):
+        reasons.append("youtube_url")
+    if VILTROX_RE.search(" ".join([title, source_url, video_url])):
+        reasons.append("viltrox_text_match")
+    if views:
+        reasons.append(f"views={views}")
+    if likes:
+        reasons.append(f"likes={likes}")
+    score = 0
+    score += 10000 if _is_youtube_url(candidate_url) else 0
+    score += 500 if video_url else 0
+    score += 250 if VILTROX_RE.search(" ".join([title, source_url, video_url])) else 0
+    score += min(views, 10_000_000) // 1000
+    score += min(likes, 500_000) // 100
+    score += min(comments, 100_000) // 20
+    score -= index
+    return {
+        "rank_basis": "youtube_first_then_engagement_v0",
+        "candidate_score": int(score),
+        "source_kind": source_kind,
+        "platform": _text(item.get("platform")),
+        "handle": _text(item.get("handle")),
+        "post_uid": post_uid or _youtube_video_id(candidate_url),
+        "title": title[:280],
+        "url": source_url or video_url,
+        "video_url": video_url,
+        "source_url": source_url,
+        "published_at": _first_text(post.get("published_at"), post.get("publishedAt"), post.get("timestamp"), post.get("createTimeISO"), post.get("date"), snippet.get("publishedAt")),
+        "views": views,
+        "likes": likes,
+        "comments": comments,
+        "reasons": reasons,
+    }
+
+
+def _cached_video_candidates(item: dict[str, Any], *, limit: int = 24) -> list[dict[str, Any]]:
+    raw = _loads(item.get("raw_platform_data"), {})
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, post in enumerate(_raw_posts(raw)):
+        candidate = _candidate_from_post(post, item=item, index=index, source_kind="vkpi_kol_pool.raw_platform_data")
+        if not candidate:
+            continue
+        key = _first_text(candidate.get("video_url"), candidate.get("url"), candidate.get("post_uid"), candidate.get("title"))
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        candidates.append(candidate)
+    profile_candidate = _candidate_from_post(
+        {
+            "id": item.get("handle"),
+            "title": item.get("display_name") or item.get("handle"),
+            "url": item.get("profile_url"),
+            "views": item.get("avg_views"),
+        },
+        item=item,
+        index=len(candidates) + 1000,
+        source_kind="vkpi_kol_pool.profile_fallback",
+    )
+    if profile_candidate and _is_youtube_url(_text(profile_candidate.get("video_url") or profile_candidate.get("url"))):
+        key = _text(profile_candidate.get("video_url") or profile_candidate.get("url"))
+        if key and key not in seen:
+            candidates.append(profile_candidate)
+    candidates.sort(key=lambda row: int(row.get("candidate_score") or 0), reverse=True)
+    return candidates[: max(1, min(100, int(limit or 24)))]
+
+
+def _url_readiness(candidate: dict[str, Any] | None) -> dict[str, Any]:
+    if not candidate:
+        return {
+            "valid_video_url": False,
+            "provider_path": "unsupported_or_missing_video_url",
+            "blocked_reason": "no_cached_video_candidates",
+            "risk_flags": ["no_cached_video_candidates"],
+        }
+    url = _text(candidate.get("video_url") or candidate.get("url"))
+    flags: list[str] = ["availability_unknown_no_network_check"]
+    if not url:
+        flags.append("missing_video_url")
+    if url and not _is_youtube_url(url):
+        flags.append("non_youtube_url")
+    if "shorts/" in _lower(url):
+        flags.append("likely_short")
+    valid = bool(url and _is_youtube_url(url))
+    return {
+        "valid_video_url": valid,
+        "provider_path": "youtube_direct_url_preflight" if valid else "unsupported_or_missing_video_url",
+        "youtube_video_id": _youtube_video_id(url),
+        "video_url": url,
+        "blocked_reason": "" if valid else ("missing_video_url" if not url else "non_youtube_url"),
+        "risk_flags": flags,
+    }
+
+
+def _field_contract() -> dict[str, Any]:
+    return {
+        "mode": "gemini_video_analysis_field_contract_v0",
+        "source_policy": "Gemini may only analyze the selected Top1 video after a future explicit paid-call approval.",
+        "required_evidence_backlinks": True,
+        "fields": [
+            "target_audience",
+            "production_quality",
+            "quality_scores",
+            "quality_overall",
+            "quality_summary",
+            "competitor_products",
+            "brand_integration_depth",
+            "marketing_potential",
+            "reference_value",
+            "timestamps",
+            "improvements",
+        ],
+    }
+
+
+def _budget_prompt(item: dict[str, Any], candidate: dict[str, Any] | None) -> str:
+    return json.dumps(
+        {
+            "task": "P4.55 Gemini single KOL Top1 video analysis preflight",
+            "kol_pool_id": item.get("id"),
+            "platform": item.get("platform"),
+            "handle": item.get("handle"),
+            "video_url": (candidate or {}).get("video_url") or (candidate or {}).get("url"),
+            "fields": _field_contract()["fields"],
+        },
+        ensure_ascii=False,
+    )
+
+
+def _google_budget_provider(preflight: dict[str, Any]) -> dict[str, Any]:
+    providers = preflight.get("providers") if isinstance(preflight.get("providers"), list) else []
+    for provider in providers:
+        if isinstance(provider, dict) and _lower(provider.get("provider")) == "google":
+            return provider
+    return {}
+
+
+def build_kol_pool_gemini_preflight(kol_pool_id: int, *, candidate_limit: int = 24, include_budget_preflight: bool = True) -> dict[str, Any]:
+    item = kol_pool.get_item(int(kol_pool_id))["item"]
+    candidates = _cached_video_candidates(item, limit=candidate_limit)
+    top_candidate = candidates[0] if candidates else None
+    url_readiness = _url_readiness(top_candidate)
+    budget_preflight: dict[str, Any] = {}
+    if include_budget_preflight:
+        budget_preflight = llm_gateway.budget_preflight(
+            _budget_prompt(item, top_candidate),
+            purpose="p4_gemini_single_kol",
+            max_output_tokens=1600,
+            preferred_provider="google",
+            cost_tag=GEMINI_SINGLE_KOL_SCOPE,
+        )
+    google_budget = _google_budget_provider(budget_preflight)
+    provider_allowed = bool(google_budget.get("provider_calls_allowed"))
+    candidate_ready = bool(url_readiness.get("valid_video_url"))
+    if not candidate_ready:
+        blocked_reason = str(url_readiness.get("blocked_reason") or "candidate_not_ready")
+    elif include_budget_preflight and not provider_allowed:
+        blocked_reason = f"provider_gate:{budget_preflight.get('provider_gate_reason') or 'blocked'}"
+    else:
+        blocked_reason = ""
+    return {
+        "mode": "read_only_p4_55_gemini_single_kol_preflight",
+        "generated_at": _utcnow(),
+        "kol_pool_id": int(kol_pool_id),
+        "provider_calls": False,
+        "llm_calls": False,
+        "write_db": False,
+        "sync_triggered": False,
+        "task_enqueued": False,
+        "policy": {
+            "provider_calls_allowed_by_this_endpoint": False,
+            "network_checks": False,
+            "new_fact_generation": False,
+            "paid_call_requires_explicit_future_approval": True,
+        },
+        "item": {
+            "id": int(item.get("id") or kol_pool_id),
+            "platform": _text(item.get("platform")),
+            "handle": _text(item.get("handle")),
+            "display_name": _text(item.get("display_name")),
+            "profile_url": _text(item.get("profile_url")),
+            "last_seen_at": _text(item.get("last_seen_at")),
+            "sync_status": _text(item.get("sync_status")),
+        },
+        "candidate_strategy": {
+            "name": "cached_top1_youtube_first_then_engagement_v0",
+            "candidate_count": len(candidates),
+            "limit": max(1, min(100, int(candidate_limit or 24))),
+            "sources": ["vkpi_kol_pool.raw_platform_data", "vkpi_kol_pool.profile_fallback"],
+        },
+        "top_candidate": top_candidate or {},
+        "candidate_sample": candidates[:5],
+        "url_readiness": url_readiness,
+        "field_contract": _field_contract(),
+        "budget_preflight": budget_preflight,
+        "go_no_go": {
+            "candidate_ready_for_live_test": candidate_ready,
+            "required_provider": "google",
+            "provider_calls_allowed": provider_allowed,
+            "provider_configured": bool(google_budget.get("configured")),
+            "ready_for_manual_live_test": bool(candidate_ready and provider_allowed),
+            "blocked_reason": blocked_reason,
+        },
+        "checks": {
+            "preflight_completed": True,
+            "candidate_evaluated": bool(candidates) or bool(url_readiness.get("blocked_reason")),
+            "url_readiness_checked": True,
+            "budget_preflight_readonly": not bool(budget_preflight.get("provider_calls_made")),
+            "no_provider_calls": True,
+            "no_llm_calls": True,
+            "no_write_db": True,
+            "no_sync_triggered": True,
+            "no_task_enqueued": True,
+        },
+    }

@@ -123,7 +123,8 @@ def ensure_budget_schema() -> None:
             (scope, cap_usd, current_spend, warning_at, hard_stop_at, reset_at, fallback_action, metadata_json)
         VALUES
             ('single_call', 0.50, 0, 0.80, 1.00, NULL, 'fallback_to_rule_v0', '{"seeded_by":"budget_guard_sqlite","tier":"hard_stop"}'),
-            ('cron:p4_evidence_summary', 10.00, 0, 0.80, 1.00, NULL, 'fallback_to_evidence_only', '{"seeded_by":"budget_guard_sqlite","tier":"cron","package":"P4"}');
+            ('cron:p4_evidence_summary', 10.00, 0, 0.80, 1.00, NULL, 'fallback_to_evidence_only', '{"seeded_by":"budget_guard_sqlite","tier":"cron","package":"P4"}'),
+            ('cron:p4_gemini_single_kol', 3.00, 0, 0.80, 1.00, NULL, 'fallback_to_preflight_only', '{"seeded_by":"budget_guard_sqlite","tier":"cron","package":"P4","provider":"gemini"}');
         """
     )
     conn.commit()

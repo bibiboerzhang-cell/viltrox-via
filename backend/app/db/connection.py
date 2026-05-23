@@ -120,6 +120,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "075_vkpi_sync_acknowledgements.sql",
     "076_vkpi_kol_refresh_tier.sql",
     "077_vkpi_llm_gateway_hard_caps.sql",
+    "078_vkpi_gemini_single_kol_budget.sql",
 )
 
 try:

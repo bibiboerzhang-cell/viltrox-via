@@ -23,7 +23,16 @@ import os
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 
 from app.api.dependencies.perms import require_tab
-from app.services.vkpi import evidence_summary, eleven_dimensions, kol_competitor_detector, kol_intelligence_card, kol_pool, refresh_tier, task_enqueue
+from app.services.vkpi import (
+    evidence_summary,
+    eleven_dimensions,
+    gemini_single_kol_preflight,
+    kol_competitor_detector,
+    kol_intelligence_card,
+    kol_pool,
+    refresh_tier,
+    task_enqueue,
+)
 from app.services.vkpi.audit_decorator import audit_action
 from app.services.vkpi.firewall_decorator import firewall_check
 
@@ -339,6 +348,25 @@ def get_pool_item_evidence_summary(
             include_product_fit=bool(include_product_fit),
             ref_limit=int(ref_limit),
             include_llm_preflight=bool(include_llm_preflight),
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/kol-pool/{kol_pool_id}/gemini-preflight")
+def get_pool_item_gemini_preflight(
+    kol_pool_id: int,
+    candidate_limit: int = Query(default=24, ge=1, le=100),
+    include_budget_preflight: bool = Query(default=True),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """Return P4.55 Gemini readiness from cached evidence only; no provider call."""
+    del staff
+    try:
+        return gemini_single_kol_preflight.build_kol_pool_gemini_preflight(
+            int(kol_pool_id),
+            candidate_limit=int(candidate_limit),
+            include_budget_preflight=bool(include_budget_preflight),
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
