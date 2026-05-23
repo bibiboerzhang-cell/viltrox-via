@@ -20,6 +20,7 @@ from app.services.vkpi import (
     training_data_export,
     today_new_signals_v0,
     trend_detection_v0,
+    weekly_action_plan_v0,
 )
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-industry-automation"])
@@ -303,6 +304,21 @@ def industry_today_new_signals_v0(
     return today_new_signals_v0.build_today_new_signals_v0(
         lookback_hours=lookback_hours,
         limit=limit,
+    )
+
+
+@router.get("/industry-data/weekly-action-plan/v0")
+def industry_weekly_action_plan_v0(
+    sku: str = Query(default=""),
+    top_n: int = Query(default=12, ge=1, le=50),
+    lookback_hours: int = Query(default=24, ge=1, le=168),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    del staff
+    return weekly_action_plan_v0.build_weekly_action_plan_v0(
+        sku=sku,
+        top_n=top_n,
+        lookback_hours=lookback_hours,
     )
 
 
