@@ -70,6 +70,16 @@ selects `hot` rows that have never been refreshed through
 explicit cutoff, for example yesterday's UTC timestamp, so the job does not
 reselect rows refreshed earlier in the same catch-up session.
 
+Preferred daily hot command after catch-up is complete:
+
+```bash
+scripts/cron_daily_sync.py --skip-official --include-qualified-kol --kol-tiers hot --kol-stale-days 1 --kol-limit 200 --kol-max-posts 1 --kol-error-stop-threshold 3
+```
+
+`--kol-stale-days 1` computes a UTC cutoff at runtime. It is safer than
+hand-writing timestamps in an ops command and keeps catch-up mode distinct from
+periodic refresh mode.
+
 Legacy full refresh remains separately guarded and still requires `--include-legacy-kol`.
 
 ## Acceptance

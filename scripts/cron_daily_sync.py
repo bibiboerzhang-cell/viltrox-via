@@ -12,7 +12,7 @@ import argparse
 import asyncio
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -28,6 +28,24 @@ from app.services.vkpi.daily_sync import SyncFailFast, SyncGuardBlocked  # noqa:
 
 def utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def compute_kol_stale_before(raw_value: str = "", stale_days: int = 0, *, now: datetime | None = None) -> str:
+    """Return the KOL stale cutoff for periodic qualified refreshes.
+
+    A blank cutoff means qualified catch-up mode, which only selects rows that
+    have never been refreshed through vkpi_kol_refresh_tier.
+    """
+    raw = str(raw_value or "").strip()
+    if raw:
+        return raw
+    days = max(0, int(stale_days or 0))
+    if days <= 0:
+        return ""
+    anchor = now or datetime.now(timezone.utc)
+    if anchor.tzinfo is None:
+        anchor = anchor.replace(tzinfo=timezone.utc)
+    return (anchor.astimezone(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def emit_event(event: str, **payload: object) -> None:
@@ -61,7 +79,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-official", action="store_true", help="Skip 18 official-account refresh")
     parser.add_argument("--kol-limit", type=int, default=1200, help="Max KOL pool rows to refresh")
     parser.add_argument("--kol-offset", type=int, default=0, help="Skip the first N selected KOL rows for bounded retries")
-    parser.add_argument("--kol-stale-before", default="", help="Only refresh selected KOL rows last seen/updated before this timestamp")
+    parser.add_argument("--kol-stale-before", default="", help="Only refresh selected KOL rows refreshed before this UTC timestamp")
+    parser.add_argument("--kol-stale-days", type=int, default=0, help="Compute --kol-stale-before as now minus N days. Use 1 for daily hot refresh.")
     parser.add_argument("--kol-max-posts", type=int, default=1, help="Latest post sample per KOL pool row")
     parser.add_argument("--kol-error-stop-threshold", type=int, default=3, help="Stop KOL refresh when provider errors reach this count")
     parser.add_argument("--kol-platforms", default="", help="Comma-separated KOL platforms to run")
@@ -93,7 +112,7 @@ async def main() -> int:
         "skip_official": bool(args.skip_official),
         "kol_limit": max(1, min(1200, int(args.kol_limit or 1200))),
         "kol_offset": max(0, min(5000, int(args.kol_offset or 0))),
-        "kol_stale_before": args.kol_stale_before.strip(),
+        "kol_stale_before": compute_kol_stale_before(args.kol_stale_before, args.kol_stale_days),
         "kol_max_posts": max(1, min(3, int(args.kol_max_posts or 1))),
         "kol_error_stop_threshold": max(0, min(100, int(args.kol_error_stop_threshold or 0))),
         "kol_platforms": args.kol_platforms,
