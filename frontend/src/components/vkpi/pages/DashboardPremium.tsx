@@ -942,6 +942,19 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
     });
   }, [allowMockFallback, contentTypeRows]);
 
+  const openPlatformDrawer = useCallback(() => {
+    setPanelDrawer({
+      title: 'KOL 平台分布',
+      sourceLabel: premiumPlatforms.some((platform) => !platform.isMock) ? 'kol-pool summary / official matrix' : '待真实数据',
+      rows: premiumPlatforms.map((platform) => ({
+        label: platform.label,
+        value: platform.value,
+      })),
+      actionLabel: '进入账号矩阵',
+      actionPage: 'channels',
+    });
+  }, [premiumPlatforms]);
+
   const openContentUrl = useCallback((url: unknown) => {
     const href = typeof url === 'string' ? url.trim() : '';
     if (!href) {
@@ -1013,7 +1026,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
                   </div>
                   <div className="glass-card mini">
                     <div className="panel-head"><h3>KOL 平台分布</h3><button className="link" type="button" onClick={() => goToWorkspacePage('channels', 'KOL 平台分布')}>查看全部</button></div>
-                    {premiumPlatforms.map((platform) => <div className="platform" title={platform.mockLabel} key={platform.label}><span className="picon" style={{ background: platform.background }}>{platform.icon}</span><div><b>{platform.label}{platform.isMock ? <span className="tag">{badgeText(platform.mockLabel)}</span> : null}</b><div className="bar"><span style={glassVarStyle({ '--w': platform.width })}></span></div></div><small>{platform.value}</small></div>)}
+                    {premiumPlatforms.map((platform) => <div className="platform" title={platform.mockLabel} key={platform.label} role="button" tabIndex={0} onClick={openPlatformDrawer} onKeyDown={(event) => { if (event.key === 'Enter') openPlatformDrawer(); }}><span className="picon" style={{ background: platform.background }}>{platform.icon}</span><div><b>{platform.label}{platform.isMock ? <span className="tag">{badgeText(platform.mockLabel)}</span> : null}</b><div className="bar"><span style={glassVarStyle({ '--w': platform.width })}></span></div></div><small>{platform.value}</small></div>)}
                   </div>
                 </div>
               </div>

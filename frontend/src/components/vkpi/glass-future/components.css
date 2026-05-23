@@ -169,6 +169,8 @@
 .vkpi-glass-shell .donut-label span { font-size: 11px; color: #667085; }
 .vkpi-glass-shell .donut-label b { display: block; font-size: 22px; letter-spacing: -.05em; }
 .vkpi-glass-shell .platform { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; margin: 12px 0; }
+.vkpi-glass-shell .platform[role="button"] { cursor: pointer; outline: none; border-radius: 14px; }
+.vkpi-glass-shell .platform[role="button"]:focus-visible { box-shadow: 0 0 0 3px rgba(27,108,255,.16); }
 .vkpi-glass-shell .picon { width: 28px; height: 28px; border-radius: 10px; color: #fff; display: grid; place-items: center; font-size: 10px; font-weight: 900; }
 .vkpi-glass-shell .platform b { font-size: 12px; }
 .vkpi-glass-shell .platform small { font-size: 12px; color: #667085; font-weight: 800; }
