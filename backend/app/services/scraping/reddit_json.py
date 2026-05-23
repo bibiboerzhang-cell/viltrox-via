@@ -10,6 +10,10 @@ from typing import Any, Dict, List
 from urllib.parse import urlparse
 
 from app.core.constants import USER_AGENT
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 async def scrape_reddit_json(url: str) -> Dict[str, Any]:
     """Use Reddit's public JSON API — much more reliable than Playwright."""
@@ -56,8 +60,8 @@ async def scrape_reddit_json(url: str) -> Dict[str, Any]:
                 body = (d.get("body") or "").strip()
                 if body and body != "[deleted]":
                     visible_comments.append(body)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("reddit visible comment parse failed for %s: %s", json_url, exc)
 
         return {
             "scraped_ok": True,
@@ -84,5 +88,3 @@ async def scrape_reddit_json(url: str) -> Dict[str, Any]:
     except Exception as e:
         empty["error"] = str(e)
         return empty
-
-

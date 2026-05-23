@@ -10,12 +10,14 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 
 from app.api.dependencies.perms import require_tab
 from app.core.config import UPLOAD_DIR
+from app.core.logging import get_logger
 from app.services.vkpi import evidence, scope
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-evidence-assets"])
 EVIDENCE_UPLOAD_DIR = UPLOAD_DIR / "vkpi_evidence"
 SAFE_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".csv", ".xlsx", ".xls", ".txt", ".doc", ".docx"}
 MAX_EVIDENCE_UPLOAD_BYTES = 25 * 1024 * 1024
+logger = get_logger(__name__)
 
 
 def _scope_403(exc: Exception) -> HTTPException:
@@ -56,8 +58,8 @@ async def upload_evidence_file(
             if size > MAX_EVIDENCE_UPLOAD_BYTES:
                 try:
                     target_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("failed to delete oversize evidence upload %s: %s", target_path, exc)
                 raise HTTPException(status_code=413, detail="evidence file too large")
             out.write(chunk)
     return {

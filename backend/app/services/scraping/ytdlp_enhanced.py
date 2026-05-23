@@ -76,8 +76,8 @@ def get_video_metadata(url: str, platform: str) -> dict:
                 d = str(upload_date)
                 result["upload_date"] = upload_date
                 result["published_at"] = f"{d[:4]}-{d[4:6]}-{d[6:8]}T00:00:00Z"
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("yt-dlp upload_date parse failed for %s: %s", url, exc)
 
         # ── 其他元数据 ──
         if data.get("title"):
@@ -135,8 +135,8 @@ def validate_video_publish_date(url: str, platform: str, scraped_data: dict = No
                 dt = datetime.fromtimestamp(float(created), tz=timezone.utc)
                 pub = dt.strftime("%Y-%m-%dT%H:%M:%SZ")
                 source = "reddit_api"
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("reddit publish date fallback failed for %s: %s", url, exc)
 
     if not pub:
         # 拿不到时间 → 不拒绝，给用户 benefit of the doubt

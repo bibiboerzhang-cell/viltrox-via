@@ -24,6 +24,7 @@ from app.core.config import (
     WORKER_ASYNC_CONSUMERS,
     WORKER_SERVICE_PROCESSES,
 )
+from app.core.logging import get_logger
 from app.db.connection import db_connection_scope, get_conn
 from app.services.ai.orchestrator import TaskStatus, VideoJobInput
 
@@ -31,6 +32,8 @@ try:
     from redis.asyncio import from_url as redis_from_url
 except Exception:
     redis_from_url = None
+
+logger = get_logger(__name__)
 
 
 def _utcnow() -> str:
@@ -392,8 +395,8 @@ class RedisJobQueue(BaseJobQueue):
     def _rollback_job_ledger_insert(self) -> None:
         try:
             get_conn().rollback()
-        except Exception:
-            return
+        except Exception as exc:
+            logger.warning("job ledger rollback failed: %s", exc)
 
     def _update_job_ledger(self, task_id: str, status: str, **extra: Any) -> Optional[Dict[str, Any]]:
         conn = get_conn()
@@ -657,8 +660,8 @@ class RedisJobQueue(BaseJobQueue):
                     (f"job exceeded timeout_seconds={timeout_seconds}", _utcnow(), str(row["task_id"])),
                 )
                 conn.commit()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("failed to mark timed-out async task %s: %s", row["task_id"], exc)
             timed_out += 1
         return timed_out
 

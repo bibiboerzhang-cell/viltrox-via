@@ -20,7 +20,10 @@ class Finding:
 
 
 def _relative(path: Path) -> str:
-    return path.relative_to(ROOT).as_posix()
+    try:
+        return path.relative_to(ROOT).as_posix()
+    except ValueError:
+        return path.as_posix()
 
 
 def _iter_python_files(root: Path) -> list[Path]:
@@ -61,6 +64,7 @@ def run() -> int:
         default="scripts/silent_exception_baseline.json",
         help="Baseline JSON with {'max_total': <int>}",
     )
+    parser.add_argument("--details", action="store_true", help="Include individual finding locations.")
     args = parser.parse_args()
 
     findings: list[Finding] = []
@@ -84,6 +88,8 @@ def run() -> int:
     for finding in findings:
         summary["files"].setdefault(finding.path, 0)
         summary["files"][finding.path] += 1
+    if args.details:
+        summary["findings"] = [finding.__dict__ for finding in findings]
 
     sys.stdout.write(json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
     return 1 if len(findings) > max_total else 0
