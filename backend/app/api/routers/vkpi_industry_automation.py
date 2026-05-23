@@ -20,6 +20,7 @@ from app.services.vkpi import (
     outcome_collector,
     prediction_calibration_v0,
     product_campaign_card,
+    recommendation_agent_v0,
     training_data_export,
     today_new_signals_v0,
     trend_detection_v0,
@@ -334,6 +335,27 @@ def industry_evidence_agent_v0(
         ref_limit=ref_limit,
         claim_limit=claim_limit,
         include_product_fit=include_product_fit,
+    )
+
+
+@router.get("/industry-data/recommendation-agent/v0")
+def industry_recommendation_agent_v0(
+    kol_pool_ids: str = Query(default=""),
+    limit: int = Query(default=12, ge=1, le=50),
+    min_evidence_refs: int = Query(default=3, ge=1, le=20),
+    ref_limit: int = Query(default=12, ge=1, le=100),
+    claim_limit: int = Query(default=12, ge=1, le=50),
+    use_latest_evidence_artifact: bool = True,
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    del staff
+    return recommendation_agent_v0.build_recommendation_agent_v0(
+        kol_pool_ids=kol_pool_ids,
+        limit=limit,
+        min_evidence_refs=min_evidence_refs,
+        ref_limit=ref_limit,
+        claim_limit=claim_limit,
+        use_latest_evidence_artifact=use_latest_evidence_artifact,
     )
 
 
