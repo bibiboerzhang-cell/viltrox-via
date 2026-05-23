@@ -1467,7 +1467,13 @@ function GlobalKolMapPanel({
                   <em>{region.platformSummary?.length ? region.platformSummary.join(' · ') : '平台分布待接入'}</em>
                 </button>
               );
-            }) : <div className="empty-real">暂无国家 KOL 分布</div>}
+            }) : (
+              <div className="geo-country-card geo-country-empty">
+                <b><span>•</span>暂无国家分布</b>
+                <strong>等待真实 KOL 国家数据</strong>
+                <em>登录后读取 /dashboard/kol-distribution</em>
+              </div>
+            )}
           </div>
           <button className="link geo-all-link" type="button" onClick={onOpenAll}>查看全部 {realRegions.length || 0} 国家 →</button>
         </div>

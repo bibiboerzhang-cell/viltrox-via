@@ -179,6 +179,7 @@
 .vkpi-glass-shell .geo-country-card b { display: flex; align-items: center; gap: 6px; min-width: 0; color: #101828; font-size: 13px; font-weight: 950; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vkpi-glass-shell .geo-country-card strong { color: #101828; font-size: 12px; font-weight: 900; }
 .vkpi-glass-shell .geo-country-card em { color: #667085; font-style: normal; font-size: 11px; font-weight: 820; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vkpi-glass-shell .geo-country-empty { cursor: default; opacity: .82; }
 .vkpi-glass-shell .geo-all-link { justify-self: start; margin-top: 2px; }
 .vkpi-glass-shell .map-legend { display: flex; align-items: center; gap: 13px; padding-top: 11px; border-top: 1px solid rgba(199,214,239,.58); color: #667085; font-size: 11px; font-weight: 850; }
 .vkpi-glass-shell .map-legend span { display: inline-flex; align-items: center; gap: 5px; }
