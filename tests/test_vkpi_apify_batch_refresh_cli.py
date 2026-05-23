@@ -48,7 +48,10 @@ def test_cli_run_blocks_provider_calls_by_default(monkeypatch) -> None:
     assert result["operator_summary"] == {
         "readiness": "blocked_provider_calls",
         "mode": "plan_with_blocked_executor",
+        "provider_calls_requested": False,
         "provider_calls_allowed": False,
+        "provider_gate_reason": "provider_calls_not_requested",
+        "live_target_cap": 25,
         "selector_ready": True,
         "source_total": 3,
         "target_count": 1,
@@ -67,7 +70,7 @@ def test_cli_requires_both_execute_and_allow_provider_calls(monkeypatch) -> None
     calls: dict[str, object] = {}
 
     def fake_plan(**_kwargs):
-        return {"strategy": "apify_batch_first", "max_concurrent_runs": 2, "batches": []}
+        return {"strategy": "apify_batch_first", "max_concurrent_runs": 2, "total_targets": 1, "batches": []}
 
     async def fake_execute(_plan, **kwargs):
         calls["execute"] = kwargs
@@ -83,6 +86,7 @@ def test_cli_requires_both_execute_and_allow_provider_calls(monkeypatch) -> None
     assert execute_only["execution"]["executed"] is False
     assert execute_allowed["provider_calls_allowed"] is True
     assert execute_allowed["execution"]["executed"] is True
+    assert execute_allowed["provider_gate"]["reason"] == "allowed"
 
 
 def test_cli_writes_operator_artifact(monkeypatch, tmp_path, capsys) -> None:
@@ -116,10 +120,65 @@ def test_cli_writes_operator_artifact(monkeypatch, tmp_path, capsys) -> None:
     assert printed["artifact"]["path"] == str(artifact)
 
 
+def test_cli_blocks_live_execution_above_target_cap(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    def fake_plan(**_kwargs):
+        return {
+            "strategy": "apify_batch_first",
+            "max_concurrent_runs": 2,
+            "selector_ready": True,
+            "source_total": 26,
+            "total_targets": 26,
+            "batch_count": 1,
+            "platforms": {"youtube": 26},
+            "batches": [{"batch_key": "youtube-1", "platform": "youtube", "targets": [{"kol_pool_id": item} for item in range(1, 27)]}],
+        }
+
+    async def fake_execute(_plan, **kwargs):
+        calls["execute"] = kwargs
+        return {"executed": False, "reason": "provider_calls_not_allowed", "summary": {"retry_count": 0, "failed_batches": 0}}
+
+    monkeypatch.setattr(vkpi_apify_batch_refresh.apify_batch_refresh, "qualified_apify_batch_plan", fake_plan)
+    monkeypatch.setattr(vkpi_apify_batch_refresh.apify_batch_refresh, "execute_apify_batch_plan", fake_execute)
+
+    result = asyncio.run(vkpi_apify_batch_refresh.run_from_args(vkpi_apify_batch_refresh.parse_args(["--execute", "--allow-provider-calls"])))
+
+    assert calls["execute"]["allow_provider_calls"] is False
+    assert result["provider_gate"]["requested"] is True
+    assert result["provider_gate"]["allowed"] is False
+    assert result["provider_gate"]["reason"] == "live_target_cap_exceeded"
+    assert result["provider_calls_allowed"] is False
+    assert result["execution"]["reason"] == "live_target_cap_exceeded"
+    assert result["operator_summary"]["readiness"] == "live_target_cap_exceeded"
+
+
+def test_cli_blocks_live_execution_when_plan_has_no_targets(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    def fake_plan(**_kwargs):
+        return {"strategy": "apify_batch_first", "max_concurrent_runs": 2, "total_targets": 0, "batch_count": 0, "batches": []}
+
+    async def fake_execute(_plan, **kwargs):
+        calls["execute"] = kwargs
+        return {"executed": False, "reason": "provider_calls_not_allowed", "summary": {"retry_count": 0, "failed_batches": 0}}
+
+    monkeypatch.setattr(vkpi_apify_batch_refresh.apify_batch_refresh, "qualified_apify_batch_plan", fake_plan)
+    monkeypatch.setattr(vkpi_apify_batch_refresh.apify_batch_refresh, "execute_apify_batch_plan", fake_execute)
+
+    result = asyncio.run(vkpi_apify_batch_refresh.run_from_args(vkpi_apify_batch_refresh.parse_args(["--execute", "--allow-provider-calls"])))
+
+    assert calls["execute"]["allow_provider_calls"] is False
+    assert result["provider_calls_allowed"] is False
+    assert result["provider_gate"]["reason"] == "no_targets_to_execute"
+    assert result["operator_summary"]["readiness"] == "no_targets_to_execute"
+
+
 def test_operator_summary_requires_review_for_retryable_execution() -> None:
     result = {
         "mode": "execute",
         "provider_calls_allowed": True,
+        "provider_gate": {"requested": True, "allowed": True, "reason": "allowed", "live_target_cap": 25},
         "plan": {"selector_ready": True, "source_total": 2, "total_targets": 2, "batch_count": 1, "platforms": {"youtube": 2}, "skipped": []},
         "execution": {"executed": True, "summary": {"retry_count": 1, "failed_batches": 0}},
     }

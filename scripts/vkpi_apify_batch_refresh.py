@@ -44,6 +44,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--timeout-seconds", type=int, default=apify_batch_refresh.DEFAULT_RUN_TIMEOUT_SECONDS, help="Apify actor timeout if real execution is explicitly enabled")
     parser.add_argument("--execute", action="store_true", help="Run the executor. Provider calls still require --allow-provider-calls.")
     parser.add_argument("--allow-provider-calls", action="store_true", help="Actually call Apify. Use only after backup-first operator approval.")
+    parser.add_argument("--max-live-targets", type=int, default=25, help="Hard cap for live provider execution targets. Default 25, max 100.")
     parser.add_argument("--compact", action="store_true", help="Omit full batch target lists from output")
     parser.add_argument("--json-out", default="", help="Optional JSON artifact path. Defaults to runtime/ops.")
     parser.add_argument("--no-artifact", action="store_true", help="Do not write an operator JSON artifact")
@@ -77,6 +78,7 @@ def operator_summary(result: dict[str, Any]) -> dict[str, Any]:
     plan = result.get("plan") if isinstance(result.get("plan"), dict) else {}
     execution = result.get("execution") if isinstance(result.get("execution"), dict) else {}
     execution_summary = execution.get("summary") if isinstance(execution.get("summary"), dict) else {}
+    provider_gate = result.get("provider_gate") if isinstance(result.get("provider_gate"), dict) else {}
     skipped = [item for item in (plan.get("skipped") or []) if isinstance(item, dict)]
     skipped_reasons: dict[str, int] = {}
     for item in skipped:
@@ -84,9 +86,14 @@ def operator_summary(result: dict[str, Any]) -> dict[str, Any]:
         skipped_reasons[reason] = skipped_reasons.get(reason, 0) + 1
 
     provider_calls_allowed = bool(result.get("provider_calls_allowed"))
+    gate_reason = str(provider_gate.get("reason") or "")
     failed_batches = _safe_int(execution_summary.get("failed_batches") or execution.get("failed_batches"))
     retry_count = _safe_int(execution_summary.get("retry_count"))
-    if not provider_calls_allowed:
+    if gate_reason == "live_target_cap_exceeded":
+        readiness = "live_target_cap_exceeded"
+    elif gate_reason == "no_targets_to_execute":
+        readiness = "no_targets_to_execute"
+    elif not provider_calls_allowed:
         readiness = "blocked_provider_calls"
     elif failed_batches or retry_count:
         readiness = "review_required"
@@ -96,7 +103,10 @@ def operator_summary(result: dict[str, Any]) -> dict[str, Any]:
     return {
         "readiness": readiness,
         "mode": result.get("mode"),
+        "provider_calls_requested": bool(provider_gate.get("requested")),
         "provider_calls_allowed": provider_calls_allowed,
+        "provider_gate_reason": gate_reason,
+        "live_target_cap": _safe_int(provider_gate.get("live_target_cap")),
         "selector_ready": bool(plan.get("selector_ready")),
         "source_total": _safe_int(plan.get("source_total")),
         "target_count": _safe_int(plan.get("total_targets")),
@@ -125,16 +135,46 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def provider_gate(args: argparse.Namespace, plan: dict[str, Any]) -> dict[str, Any]:
+    requested = bool(args.execute and args.allow_provider_calls)
+    target_count = _safe_int(plan.get("total_targets"))
+    live_target_cap = max(1, min(100, _safe_int(args.max_live_targets) or 25))
+    if not requested:
+        reason = "provider_calls_not_requested"
+        allowed = False
+    elif target_count <= 0:
+        reason = "no_targets_to_execute"
+        allowed = False
+    elif target_count > live_target_cap:
+        reason = "live_target_cap_exceeded"
+        allowed = False
+    else:
+        reason = "allowed"
+        allowed = True
+    return {
+        "requested": requested,
+        "allowed": allowed,
+        "reason": reason,
+        "target_count": target_count,
+        "live_target_cap": live_target_cap,
+    }
+
+
 async def run_from_args(args: argparse.Namespace) -> dict[str, Any]:
     plan = build_plan(args)
+    gate = provider_gate(args, plan)
     execution = await apify_batch_refresh.execute_apify_batch_plan(
         plan,
-        allow_provider_calls=bool(args.execute and args.allow_provider_calls),
+        allow_provider_calls=bool(gate["allowed"]),
         timeout_secs=max(30, min(1800, int(args.timeout_seconds or apify_batch_refresh.DEFAULT_RUN_TIMEOUT_SECONDS))),
     )
+    if gate["requested"] and not gate["allowed"] and isinstance(execution, dict):
+        execution = dict(execution)
+        execution["reason"] = gate["reason"]
     result = {
         "mode": "execute" if args.execute else "plan_with_blocked_executor",
-        "provider_calls_allowed": bool(args.execute and args.allow_provider_calls),
+        "provider_calls_allowed": bool(gate["allowed"]),
+        "provider_gate": gate,
         "plan": _compact_plan(plan) if args.compact else plan,
         "execution": execution,
     }
@@ -160,7 +200,7 @@ def write_artifact(result: dict[str, Any], args: argparse.Namespace) -> dict[str
     payload["artifact"] = {
         "path": str(path),
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "provider_calls_allowed": bool(args.execute and args.allow_provider_calls),
+        "provider_calls_allowed": bool(result.get("provider_calls_allowed")),
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, default=str, indent=2) + "\n", encoding="utf-8")
     return payload
@@ -172,6 +212,9 @@ async def async_main(argv: list[str] | None = None) -> int:
         result = write_artifact(await run_from_args(args), args)
         print(json.dumps(result, ensure_ascii=False, default=str, indent=2))
         execution = result.get("execution") if isinstance(result, dict) else {}
+        provider_gate_result = result.get("provider_gate") if isinstance(result, dict) and isinstance(result.get("provider_gate"), dict) else {}
+        if provider_gate_result.get("reason") == "live_target_cap_exceeded":
+            return 3
         if args.execute and args.allow_provider_calls and isinstance(execution, dict):
             if int(execution.get("failed_batches") or 0):
                 return 2
