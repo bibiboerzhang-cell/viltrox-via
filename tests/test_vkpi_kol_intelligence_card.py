@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from app.db.connection import get_conn
-from app.services.vkpi import kol_intelligence_card, kol_pool
+from app.services.vkpi import comment_intelligence, comments_collector, kol_intelligence_card, kol_pool, pillars, sentiment
 from app.services.vkpi.kol_competitor_detector import ensure_competitor_relation_schema
 from app.services.vkpi.refresh_tier import ensure_refresh_tier_schema
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
@@ -14,6 +14,16 @@ MARKER = "vkpi-kol-intelligence-card-unit"
 
 def _cleanup() -> None:
     conn = get_conn()
+    try:
+        comment_rows = conn.execute("SELECT id FROM vkpi_comments WHERE external_comment_id LIKE ?", (f"{MARKER}-%",)).fetchall()
+        comment_ids = [int(row["id"]) for row in comment_rows]
+        for comment_id in comment_ids:
+            conn.execute("DELETE FROM vkpi_sentiment_results WHERE comment_id=?", (comment_id,))
+        conn.execute("DELETE FROM vkpi_comments WHERE external_comment_id LIKE ?", (f"{MARKER}-%",))
+        conn.execute("DELETE FROM vkpi_comment_intelligence_runs WHERE run_uid LIKE ?", (f"{MARKER}-%",))
+        conn.commit()
+    except Exception:
+        pass
     rows = conn.execute("SELECT id FROM vkpi_kol_pool WHERE source_ref=?", (MARKER,)).fetchall()
     for row in rows:
         kol_pool_id = int(row["id"])
@@ -91,6 +101,106 @@ def _insert_card_row() -> int:
     return kol_pool_id
 
 
+def _insert_comment_intelligence_fixture() -> None:
+    comments_collector.ensure_vkpi_comments_schema()
+    sentiment.ensure_vkpi_sentiment_schema()
+    pillars.ensure_vkpi_pillar_schema()
+    comment_intelligence.ensure_vkpi_comment_intelligence_schema()
+    conn = get_conn()
+    now = "2026-05-23T07:10:00Z"
+    comment_ids: list[int] = []
+    comments = [
+        (f"{MARKER}-comment-1", "I love this Viltrox review. Where can I buy the FE mount?"),
+        (f"{MARKER}-comment-2", "Autofocus issue looks noisy in this test."),
+    ]
+    for index, (external_comment_id, text) in enumerate(comments, start=1):
+        row = conn.execute(
+            """
+            INSERT INTO vkpi_comments (
+              account_id, post_id, post_table, external_post_id, platform,
+              external_comment_id, comment_text, author_handle, likes_count,
+              reply_count, created_at, fetched_at, raw_data_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING id
+            """,
+            (
+                0,
+                91001,
+                "industry_posts",
+                "unit-video-1",
+                "youtube",
+                external_comment_id,
+                text,
+                "unit-viewer",
+                index,
+                0,
+                now,
+                now,
+                "{}",
+            ),
+        ).fetchone()
+        comment_ids.append(int(row["id"]))
+    conn.execute(
+        """
+        INSERT INTO vkpi_sentiment_results (
+          comment_id, sentiment, sentiment_confidence, emotion, emotion_confidence,
+          brand_attitude, brand_attitude_confidence, llm_provider, llm_model,
+          prompt_version, language_detected, analyzed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            comment_ids[0],
+            "positive",
+            0.92,
+            "curiosity",
+            0.7,
+            "supportive",
+            0.83,
+            "unit",
+            "unit-model",
+            sentiment.PROMPT_VERSION,
+            "en",
+            now,
+        ),
+    )
+    pillar_id = int(conn.execute("SELECT id FROM vkpi_pillars WHERE pillar_key='lens_review'").fetchone()["id"])
+    conn.execute(
+        """
+        INSERT INTO vkpi_post_pillars (
+          post_id, post_table, pillar_id, is_primary, confidence, llm_provider,
+          llm_model, prompt_version, classified_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT DO NOTHING
+        """,
+        (91001, "industry_posts", pillar_id, True, 0.86, "unit", "unit-model", pillars.PROMPT_VERSION, now),
+    )
+    conn.execute(
+        """
+        INSERT INTO vkpi_comment_intelligence_runs (
+          run_uid, post_id, post_table, status, triggered_by,
+          params_json, steps_json, started_at, finished_at, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            f"{MARKER}-run-1",
+            91001,
+            "industry_posts",
+            "ok",
+            "unit_test",
+            json.dumps({"max_comments": 50, "comment_limit": 20}),
+            json.dumps({
+                "collection": {"status": "ok", "fetched_count": 2, "new_count": 2},
+                "sentiment": {"status": "ok", "analyzed": 1},
+                "pillar": {"status": "ok", "primary_pillar": "lens_review"},
+            }),
+            now,
+            now,
+            now,
+        ),
+    )
+    conn.commit()
+
+
 def test_kol_intelligence_card_aggregates_existing_evidence_without_provider_calls() -> None:
     ensure_vkpi_product_industry_schema()
     ensure_refresh_tier_schema()
@@ -98,6 +208,7 @@ def test_kol_intelligence_card_aggregates_existing_evidence_without_provider_cal
     _cleanup()
     try:
         kol_pool_id = _insert_card_row()
+        _insert_comment_intelligence_fixture()
 
         card = kol_intelligence_card.build_kol_pool_intelligence_card(kol_pool_id, include_product_fit=False)
 
@@ -121,6 +232,23 @@ def test_kol_intelligence_card_aggregates_existing_evidence_without_provider_cal
         assert card["brand_signal"]["signal_count"] >= 2
         assert card["brand_signal"]["type_counts"]["mention_viltrox"] >= 1
         assert card["brand_signal"]["type_counts"]["mention_competitor"] >= 1
+        assert card["comment_intelligence"]["status"] == "ready"
+        assert card["comment_intelligence"]["provider_calls"] is False
+        assert card["comment_intelligence"]["llm_calls"] is False
+        assert card["comment_intelligence"]["write_db"] is False
+        assert card["comment_intelligence"]["contract"] == {
+            "declared": 50,
+            "cached": 2,
+            "cap": 12,
+            "status": "cached_window",
+        }
+        assert card["comment_intelligence"]["run_count"] == 1
+        assert card["comment_intelligence"]["cached_comment_count"] == 2
+        assert card["comment_intelligence"]["counts"]["sentiment"]["positive"] >= 1
+        assert card["comment_intelligence"]["counts"]["opportunities"] >= 1
+        comment_evidence = card["comment_intelligence"]["evidence"][0]
+        assert comment_evidence["source_table"] == "vkpi_comment_intelligence_runs"
+        assert card["comment_intelligence"]["samples"][0]["source_table"] == "vkpi_comments"
         assert card["memory_card"]["status"] == "ready"
         assert card["memory_card"]["source_type"] == "unit"
         assert card["memory_card"]["history_match"]["cooperation_count"] >= 1
@@ -134,6 +262,7 @@ def test_kol_intelligence_card_aggregates_existing_evidence_without_provider_cal
             "dimensions11",
             "competitors",
             "brand_signal",
+            "comment_intelligence",
             "memory_card",
             "product_fit",
         }
@@ -141,6 +270,8 @@ def test_kol_intelligence_card_aggregates_existing_evidence_without_provider_cal
         assert evidence_index["memory_card"]["evidence_count"] >= 2
         assert evidence_index["brand_signal"]["evidence_count"] >= 2
         assert evidence_index["competitors"]["evidence_count"] >= 1
+        assert evidence_index["comment_intelligence"]["label"] == "Comment Intelligence"
+        assert evidence_index["comment_intelligence"]["evidence_count"] >= 3
         assert "confidence" in evidence_index["dimensions11"]
     finally:
         _cleanup()

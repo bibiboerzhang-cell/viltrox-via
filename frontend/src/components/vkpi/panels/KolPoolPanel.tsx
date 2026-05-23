@@ -52,6 +52,7 @@ interface KolPoolIntelligenceCard {
   dimensions11?: Record<string, unknown>;
   competitors?: Record<string, unknown>;
   brand_signal?: Record<string, unknown>;
+  comment_intelligence?: Record<string, unknown>;
   memory_card?: Record<string, unknown>;
   product_fit?: Record<string, unknown>;
   decision_support?: Record<string, unknown>;
@@ -782,6 +783,7 @@ function KolPoolIntelligenceSection({ card }: { card: KolPoolIntelligenceCard })
   const dimensions = recordValue(card.dimensions11);
   const competitors = recordValue(card.competitors);
   const brandSignal = recordValue(card.brand_signal);
+  const commentIntelligence = recordValue(card.comment_intelligence);
   const memoryCard = recordValue(card.memory_card);
   const productFit = recordValue(card.product_fit);
   const evidence = (Array.isArray(card.evidence_index) ? card.evidence_index : []).map(recordValue).filter((row) => stringifyValue(row.section));
@@ -815,6 +817,11 @@ function KolPoolIntelligenceSection({ card }: { card: KolPoolIntelligenceCard })
           <span>{formatNumber(brandSignal.signal_count)}</span>
           <small>{statusLabel(brandSignal.status)}</small>
         </div>
+        <div className={statusClass(commentIntelligence.status)}>
+          <strong>Comment</strong>
+          <span>{formatNumber(commentIntelligence.cached_comment_count || commentIntelligence.evidence_count)}</span>
+          <small>{statusLabel(commentIntelligence.status)} · cap {formatNumber(recordValue(commentIntelligence.contract).cap)}</small>
+        </div>
         <div className={statusClass(memoryCard.status)}>
           <strong>Memory</strong>
           <span>{memoryCardLabel(memoryCard)}</span>
@@ -846,7 +853,7 @@ function KolPoolIntelligenceSection({ card }: { card: KolPoolIntelligenceCard })
       </div>
       {evidence.length ? (
         <div className="vkpi-chip-list" style={{ marginTop: 8 }}>
-          {evidence.slice(0, 6).map((row, index) => (
+          {evidence.slice(0, 7).map((row, index) => (
             <button className="vkpi-chip" type="button" key={`${stringifyValue(row.section)}-${index}`} onClick={() => setActiveEvidence(row)}>
               {stringifyValue(row.label || row.section || 'evidence')} · {statusLabel(row.status)} · {formatNumber(row.evidence_count)}
             </button>
@@ -995,6 +1002,60 @@ function KolPoolEvidenceBody({ section, payload }: { section: string; payload: R
             badges={[stringifyValue(row.brand), stringifyValue(row.matched_text)].filter(Boolean)}
           />
         ))}
+      </>
+    );
+  }
+  if (section === 'comment_intelligence') {
+    const contract = recordValue(payload.contract);
+    const counts = recordValue(payload.counts);
+    const sentiment = recordValue(counts.sentiment);
+    const runs = arrayRecords(payload.runs);
+    const samples = arrayRecords(payload.samples);
+    return (
+      <>
+        <EvidenceArticle
+          title="评论数据契约"
+          meta={stringifyValue(payload.source || 'vkpi_comments')}
+          value={statusLabel(payload.status)}
+          detail={`declared=${formatNumber(contract.declared)} · cached=${formatNumber(contract.cached)} · cap=${formatNumber(contract.cap)} · status=${stringifyValue(contract.status || 'unknown')}`}
+          badges={[
+            `runs ${formatNumber(payload.run_count)}`,
+            `positive ${formatNumber(sentiment.positive)}`,
+            `negative ${formatNumber(sentiment.negative)}`,
+            `questions ${formatNumber(counts.questions)}`,
+            `issues ${formatNumber(counts.issues)}`,
+          ]}
+        />
+        {runs.slice(0, 8).map((row, index) => (
+          <EvidenceArticle
+            key={`comment-run-${stringifyValue(row.source_id || index)}`}
+            title={`Run ${stringifyValue(row.source_id || row.run_uid || index + 1)}`}
+            meta={stringifyValue(row.triggered_by || row.source_table || 'comment_intelligence_run')}
+            value={statusLabel(row.status)}
+            detail={`post=${formatNumber(row.post_id)} · fetched=${formatNumber(row.fetched_count)} · new=${formatNumber(row.new_count)} · sentiment=${formatNumber(row.sentiment_count)} · pillar=${stringifyValue(row.pillar_status || '—')}`}
+            badges={[
+              stringifyValue(row.finished_at || row.created_at),
+              row.error_message ? 'has error' : '',
+            ].filter(Boolean)}
+          />
+        ))}
+        {samples.slice(0, 12).map((row, index) => (
+          <EvidenceArticle
+            key={`comment-sample-${stringifyValue(row.source_id || index)}`}
+            title={stringifyValue(row.author || `Comment ${index + 1}`)}
+            meta={`${stringifyValue(row.sentiment || row.rule_sentiment || 'unknown')} · ${stringifyValue(row.pillar_key || row.platform || 'comment')}`}
+            value={formatConfidenceValue(row.sentiment_confidence || row.confidence)}
+            detail={stringifyValue(row.text_excerpt || 'cached comment sample')}
+            badges={[
+              stringifyValue(row.brand_attitude),
+              ...(Array.isArray(row.tags) ? row.tags.map(stringifyValue) : []),
+              `likes ${formatNumber(row.likes)}`,
+            ].filter(Boolean)}
+          />
+        ))}
+        {!runs.length && !samples.length ? (
+          <EvidenceArticle title="暂无评论样本" meta={stringifyValue(payload.method || 'comment_intelligence')} value={statusLabel(payload.status)} detail="当前没有匹配到已缓存评论或评论智能 run；不会伪装成已分析。" />
+        ) : null}
       </>
     );
   }
@@ -1451,6 +1512,7 @@ function intelligenceSectionPayload(card: KolPoolIntelligenceCard, section: stri
   if (key === 'dimensions11') return recordValue(card.dimensions11);
   if (key === 'competitors') return recordValue(card.competitors);
   if (key === 'brand_signal') return recordValue(card.brand_signal);
+  if (key === 'comment_intelligence') return recordValue(card.comment_intelligence);
   if (key === 'memory_card') return recordValue(card.memory_card);
   if (key === 'product_fit') return recordValue(card.product_fit);
   return {};
@@ -1462,6 +1524,7 @@ function evidenceSectionLabel(section: string): string {
     dimensions11: '11D Confidence',
     competitors: 'Competitors',
     brand_signal: 'Brand Signal',
+    comment_intelligence: 'Comment Intelligence',
     memory_card: 'Memory Card',
     product_fit: 'Product Fit',
   };

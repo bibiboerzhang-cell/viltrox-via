@@ -624,6 +624,7 @@ export function NaturalSearchPanel({ apiToken, onMessage }: NaturalSearchPanelPr
                   ['11D', asRecord(detailCard.dimensions11).overall_score, asRecord(detailCard.dimensions11).status],
                   ['Competitor', asRecord(asRecord(detailCard.competitors).summary).risk_tier || asRecord(detailCard.competitors).status, asRecord(detailCard.competitors).status],
                   ['Brand', asRecord(detailCard.brand_signal).signal_count, asRecord(detailCard.brand_signal).status],
+                  ['Comment', asRecord(detailCard.comment_intelligence).cached_comment_count || asRecord(detailCard.comment_intelligence).evidence_count, asRecord(detailCard.comment_intelligence).status],
                   ['Memory', asRecord(detailCard.memory_card).status, asRecord(detailCard.memory_card).source_type],
                   ['Product Fit', asRecord(detailCard.product_fit).count, asRecord(detailCard.product_fit).status],
                   ['Evidence', detailEvidenceRows.length, 'sections'],
