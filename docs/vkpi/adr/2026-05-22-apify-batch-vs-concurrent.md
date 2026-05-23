@@ -78,6 +78,7 @@ First implementation package:
 - `scripts/vkpi_refresh_tier.py --apify-batch-plan` exposes the same plan from the qualified selector as a read-only operator smoke.
 - `execute_apify_batch_plan()` contains the bounded concurrency executor, but provider calls are blocked unless callers explicitly pass `allow_provider_calls=True`; no timer or CLI path sets that flag.
 - `scripts/vkpi_apify_batch_refresh.py` is the dedicated operator CLI; it defaults to a blocked executor smoke, writes a JSON artifact under `runtime/ops`, includes top-level `operator_summary`, `provider_config`, `execution_preflight`, and `safe_live_windows`, and real Apify calls require both `--execute` and `--allow-provider-calls` plus configured provider credentials and the live target count staying within `--max-live-targets` (default 25, hard max 100).
+- If the full qualified plan exceeds `--max-live-targets`, the CLI emits `window_execution_runbook.execute_commands` and supports `--live-window-index N` so operators can run one safe window at a time after explicit provider authorization.
 - `summarize_batch_execution()` normalizes chunk outcomes into per-`kol_pool_id` statuses and retry ids before any future database writes are allowed.
 - `build_retry_plan()` creates a smaller batch retry plan for `unmatched` and `error` targets; `not_configured` targets are blocked until provider config is fixed.
 
