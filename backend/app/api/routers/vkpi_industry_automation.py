@@ -7,6 +7,7 @@ from app.api.dependencies.perms import require_tab
 from app.services.vkpi import (
     ab_experiments,
     audience_graph,
+    brain_layer_acceptance_v0,
     brand_signal_detector,
     competitor_brain,
     content_brain,
@@ -306,6 +307,14 @@ def industry_prediction_accuracy_feedback_v0(
         limit=limit,
         min_official_runs=min_official_runs,
     )
+
+
+@router.get("/industry-data/brain-layer-acceptance/v0")
+def industry_brain_layer_acceptance_v0(
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    del staff
+    return brain_layer_acceptance_v0.build_brain_layer_acceptance_v0()
 
 
 @router.get("/industry-data/today-new-signals/v0")
