@@ -144,6 +144,7 @@ interface PremiumSnapshot {
   competitorDashboard: Row;
   brandSignals: Row[];
   agentsStatus: Row;
+  copilotBrief: Row;
   loadedAt?: string;
 }
 
@@ -243,6 +244,7 @@ const EMPTY_PREMIUM_SNAPSHOT: PremiumSnapshot = {
   competitorDashboard: {},
   brandSignals: [],
   agentsStatus: {},
+  copilotBrief: {},
 };
 
 function localDateISO(date = new Date()): string {
@@ -637,7 +639,7 @@ function engagementLabel(row: Row): string {
 
 async function fetchPremiumSnapshot(apiToken: string, windowDays: number): Promise<PremiumSnapshot> {
   const failedSections: string[] = [];
-  const [dashboardResult, trendResult, productResult, kolSummaryResult, kolDistributionResult, officialMatrixResult, competitorResult, brandSignalsResult, agentsStatusResult] = await Promise.allSettled([
+  const [dashboardResult, trendResult, productResult, kolSummaryResult, kolDistributionResult, officialMatrixResult, competitorResult, brandSignalsResult, agentsStatusResult, copilotBriefResult] = await Promise.allSettled([
     apiFetch<Row>(`/api/admin/vkpi/dashboard?window_days=${windowDays}`, {}, apiToken),
     apiFetch<{ rows?: Row[] }>(`/api/admin/vkpi/dashboard/revenue-trend?window_days=7`, {}, apiToken),
     apiFetch<{ rows?: Row[] }>(`/api/admin/vkpi/dashboard/product-performance?window_days=${windowDays}&limit=20`, {}, apiToken),
@@ -647,6 +649,7 @@ async function fetchPremiumSnapshot(apiToken: string, windowDays: number): Promi
     getKolPoolCompetitorDashboard(apiToken),
     listBrandSignals(apiToken, { status: 'new', limit: 10 }),
     apiFetch<Row>('/api/admin/vkpi/dashboard/agents-status', {}, apiToken),
+    apiFetch<Row>('/api/admin/vkpi/dashboard/copilot-brief', {}, apiToken),
   ]);
   const dashboard = settledValue(dashboardResult, {}, failedSections, 'dashboard');
   const trend = settledValue(trendResult, { rows: [] }, failedSections, 'revenue-trend');
@@ -657,6 +660,7 @@ async function fetchPremiumSnapshot(apiToken: string, windowDays: number): Promi
   const competitorDashboard = settledValue(competitorResult, {}, failedSections, 'competitors-dashboard');
   const brandSignals = settledValue(brandSignalsResult, { signals: [] }, failedSections, 'brand-signals');
   const agentsStatus = settledValue(agentsStatusResult, {}, failedSections, 'agents-status');
+  const copilotBrief = settledValue(copilotBriefResult, {}, failedSections, 'copilot-brief');
   return {
     source: failedSections.length ? 'partial' : 'real',
     failedSections,
@@ -669,6 +673,7 @@ async function fetchPremiumSnapshot(apiToken: string, windowDays: number): Promi
     competitorDashboard,
     brandSignals: rowsFrom(brandSignals.signals),
     agentsStatus,
+    copilotBrief,
     loadedAt: new Date().toISOString(),
   };
 }
@@ -878,6 +883,15 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
   const riskCount = numberValue(competitorTiers.avoid) + numberValue(competitorTiers.caution);
   const kolTotal = numberValue(snapshot.kolSummary.total || snapshot.kolSummary.candidate_asset_count);
   const activeAgentCount = premiumAgents.filter((agent) => agent.status === 'active').length;
+  const copilotSummary = objectValue(snapshot.copilotBrief.summary);
+  const copilotIsReal = Boolean(snapshot.copilotBrief.is_real);
+  const copilotHeadline = String(copilotSummary.headline || snapshot.copilotBrief.headline || '行动卡');
+  const copilotBody = copilotIsReal
+    ? `Brief Agent · ${String(snapshot.copilotBrief.last_output || 'latest')}`
+    : '推荐、风险、任务已汇总。';
+  const copilotInsight = copilotIsReal
+    ? `真实 brief · ${numberValue(copilotSummary.brief_item_count)} 条情报 · ${numberValue(copilotSummary.next_action_count)} 个动作`
+    : '示例 · 待接 LLM';
   const heroMissions = useMemo(() => [
     { value: snapshot.source === 'mock' && allowMockFallback ? '7' : compact(official.accountCount), suffix: snapshot.source === 'mock' && allowMockFallback ? 'actions' : 'accounts', label: snapshot.source === 'mock' && allowMockFallback ? '今日关键动作' : '官方账号' },
     { value: snapshot.source === 'mock' && allowMockFallback ? '3' : compact(official.posts), suffix: snapshot.source === 'mock' && allowMockFallback ? 'risks' : 'contents', label: snapshot.source === 'mock' && allowMockFallback ? '项目 / 竞品风险' : '已抓取内容' },
@@ -1075,7 +1089,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
               <div className="glass-card latest"><div className="panel-head"><h3>最新内容表现</h3><button className="link" type="button" onClick={() => goToWorkspacePage('channels', '内容中心')}>进入内容中心</button></div><table className="table"><thead><tr><th>内容</th><th>账号 / 平台</th><th>发布平台</th><th>发布于</th><th>曝光量</th><th>互动率</th><th>操作</th></tr></thead><tbody>{contentRows.length ? contentRows.map((row, index) => <tr key={`${row.id || row.url || index}`}><td><div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}><div className="thumb"></div><div><b>{String(row.title || '官方内容')}</b><br /><span className="tag">真实</span></div></div></td><td>@{String(row.account_handle || row.account_display_name || '-')}<br /><span style={{ color: '#667085' }}>{String(row.platform || '-')}</span></td><td>{String(row.platform || '-')}</td><td>{postedLabel(row)}</td><td><b>{compact(numberValue(row.views))}</b></td><td>{engagementLabel(row)}</td><td><button type="button" title="查看账号矩阵" onClick={() => goToWorkspacePage('channels', '内容中心')}>⌁</button> <button type="button" title="打开原始内容" onClick={() => openContentUrl(row.url)}>↗</button> <button type="button" title="查看数据分析" onClick={() => goToWorkspacePage('dataAnalysis', '内容分析')}>…</button></td></tr>) : <tr><td colSpan={7}><div className="empty-real">暂无真实最新内容明细</div></td></tr>}</tbody></table></div>
             </div>
             <aside className="rail">
-              <div className="glass-card rail-card copilot"><div className="ai-kicker">V-KPI Copilot</div><h3>行动卡</h3><p>推荐、风险、任务已汇总。</p><div className="insight">示例 · 待接 LLM</div></div>
+              <div className="glass-card rail-card copilot"><div className="ai-kicker">V-KPI Copilot</div><h3>{copilotHeadline}</h3><p>{copilotBody}</p><div className="insight">{copilotInsight}</div></div>
               <div className="glass-card rail-card agents-room">
                 <div className="panel-head"><h3>Agents 战情室</h3><span className="tag">{activeAgentCount} / {premiumAgents.length} 在线</span></div>
                 <div className="agents-list">
