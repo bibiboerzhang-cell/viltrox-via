@@ -9,6 +9,7 @@ from app.api.routers import vkpi_learning
 from app.db.connection import get_conn
 from app.services.vkpi import recommendation_feedback_backlog
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
+from scripts import vkpi_import_review_feedback
 
 
 MARKER = "vkpi-review-backlog-csv-unit"
@@ -146,6 +147,29 @@ def _read_csv(text: str) -> list[dict[str, str]]:
     return list(csv.DictReader(io.StringIO(clean)))
 
 
+def _write_csv(path, rows: list[dict[str, str]]) -> None:
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(recommendation_feedback_backlog.CSV_FIELDS))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def _feedback_rows(rec_ids: list[int]) -> list[dict]:
+    if not rec_ids:
+        return []
+    placeholders = ",".join("?" for _ in rec_ids)
+    rows = get_conn().execute(
+        f"""
+        SELECT recommendation_id, feedback_type, note, metadata_json
+        FROM vkpi_recommendation_feedback
+        WHERE recommendation_id IN ({placeholders})
+        ORDER BY recommendation_id, feedback_type
+        """,
+        tuple(rec_ids),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def test_recommendation_feedback_backlog_csv_matches_import_contract() -> None:
     marker = f"{MARKER}_{secrets.token_hex(4)}"
     _cleanup(marker)
@@ -191,3 +215,114 @@ def test_recommendation_feedback_backlog_csv_route_downloads_csv() -> None:
         assert len(rows) == 1
     finally:
         _cleanup(marker)
+
+
+def test_import_review_feedback_dry_run_commit_and_duplicate_skip(tmp_path) -> None:
+    marker = f"{MARKER}_{secrets.token_hex(4)}"
+    _cleanup(marker)
+    try:
+        _, accept_id = _insert_backlog_run(f"{marker}_accept")
+        _, reject_id = _insert_backlog_run(f"{marker}_reject")
+        _, snooze_id = _insert_backlog_run(f"{marker}_snooze")
+        path = tmp_path / "filled-review.csv"
+        _write_csv(
+            path,
+            [
+                {
+                    "recommendation_id": str(accept_id),
+                    "action": "accept",
+                    "reviewer_name": "Unit Reviewer",
+                    "suggested_sku": "AF 35mm F1.8",
+                    "kol_handle": "p13-csv-unit",
+                    "platform": "youtube",
+                    "top_evidence_summary": "accept evidence",
+                },
+                {
+                    "recommendation_id": str(reject_id),
+                    "action": "reject",
+                    "reject_reason": "not a fit",
+                    "reviewer_name": "Unit Reviewer",
+                    "suggested_sku": "AF 35mm F1.8",
+                    "kol_handle": "p13-csv-unit",
+                    "platform": "youtube",
+                    "top_evidence_summary": "reject evidence",
+                },
+                {
+                    "recommendation_id": str(snooze_id),
+                    "action": "snooze",
+                    "reviewer_name": "Unit Reviewer",
+                    "suggested_sku": "AF 35mm F1.8",
+                    "kol_handle": "p13-csv-unit",
+                    "platform": "youtube",
+                    "top_evidence_summary": "snooze evidence",
+                },
+            ],
+        )
+
+        dry_run = vkpi_import_review_feedback.import_feedback(path, dry_run=True)
+        assert dry_run["prepared"] == 3
+        assert dry_run["imported"] == 0
+        assert dry_run["error_count"] == 0
+        assert dry_run["feedback_type_counts"] == {"shortlist": 1, "reject": 1, "snooze": 1}
+        assert _feedback_rows([accept_id, reject_id, snooze_id]) == []
+
+        committed = vkpi_import_review_feedback.import_feedback(path, dry_run=False)
+        assert committed["prepared"] == 3
+        assert committed["imported"] == 3
+        assert committed["error_count"] == 0
+        feedback_rows = _feedback_rows([accept_id, reject_id, snooze_id])
+        assert [row["feedback_type"] for row in feedback_rows] == ["shortlist", "reject", "snooze"]
+        assert "not a fit" in feedback_rows[1]["note"]
+        assert "Unit Reviewer" in feedback_rows[0]["metadata_json"]
+
+        duplicate = vkpi_import_review_feedback.import_feedback(path, dry_run=False)
+        assert duplicate["prepared"] == 0
+        assert duplicate["imported"] == 0
+        assert duplicate["skipped"] == 3
+        assert len(_feedback_rows([accept_id, reject_id, snooze_id])) == 3
+    finally:
+        _cleanup(marker)
+        _cleanup(f"{marker}_accept")
+        _cleanup(f"{marker}_reject")
+        _cleanup(f"{marker}_snooze")
+
+
+def test_import_review_feedback_blocks_commit_when_any_row_has_error(tmp_path) -> None:
+    marker = f"{MARKER}_{secrets.token_hex(4)}"
+    _cleanup(marker)
+    try:
+        _, valid_id = _insert_backlog_run(f"{marker}_valid")
+        _, invalid_id = _insert_backlog_run(f"{marker}_invalid")
+        path = tmp_path / "mixed-invalid-review.csv"
+        _write_csv(
+            path,
+            [
+                {
+                    "recommendation_id": str(valid_id),
+                    "action": "accept",
+                    "reviewer_name": "Unit Reviewer",
+                    "kol_handle": "p13-csv-unit",
+                    "platform": "youtube",
+                },
+                {
+                    "recommendation_id": str(invalid_id),
+                    "action": "reject",
+                    "reviewer_name": "Unit Reviewer",
+                    "kol_handle": "p13-csv-unit",
+                    "platform": "youtube",
+                },
+            ],
+        )
+
+        result = vkpi_import_review_feedback.import_feedback(path, dry_run=False)
+
+        assert result["prepared"] == 1
+        assert result["imported"] == 0
+        assert result["commit_blocked"] is True
+        assert result["error_count"] == 1
+        assert result["errors"][0]["error"] == "reject_reason is required for reject"
+        assert _feedback_rows([valid_id, invalid_id]) == []
+    finally:
+        _cleanup(marker)
+        _cleanup(f"{marker}_valid")
+        _cleanup(f"{marker}_invalid")
