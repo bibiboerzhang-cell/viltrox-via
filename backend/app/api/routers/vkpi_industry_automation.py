@@ -14,6 +14,7 @@ from app.services.vkpi import (
     llm_gateway,
     market_intelligence_v0,
     outcome_collector,
+    product_campaign_card,
     training_data_export,
 )
 
@@ -224,6 +225,21 @@ def industry_market_intelligence_v0(
 ):
     del staff
     return market_intelligence_v0.build_market_intelligence_v0(limit=limit)
+
+
+@router.get("/industry-data/product-campaign-card")
+def industry_product_campaign_card(
+    sku: str = Query(default=""),
+    kol_limit: int = Query(default=200, ge=1, le=500),
+    top_kols: int = Query(default=12, ge=1, le=50),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    del staff
+    return product_campaign_card.build_product_campaign_card(
+        sku=sku,
+        kol_limit=kol_limit,
+        top_kols=top_kols,
+    )
 
 
 @router.get("/brand-signals/preview")
