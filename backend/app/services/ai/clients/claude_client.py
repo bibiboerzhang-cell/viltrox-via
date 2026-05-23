@@ -18,8 +18,8 @@ def _read_env_key(k: str) -> str:
         for line in Path(".env").read_text().splitlines():
             if line.startswith(k + "="):
                 return line[len(k)+1:].strip()
-    except Exception:
-        pass
+    except OSError as exc:
+        logger.debug("claude env key read skipped: %s", exc)
     return ""
 
 

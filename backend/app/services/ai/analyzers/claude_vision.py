@@ -85,8 +85,8 @@ def _download_direct_video_url(video_url: str, output_dir: str) -> dict:
         )
         try:
             result["duration"] = float(json.loads(probe.stdout)["format"]["duration"])
-        except Exception:
-            pass
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            logger.debug("direct video ffprobe duration parse failed: %s", exc)
         result["success"] = True
         result["path"] = str(out_path)
         return result
@@ -1015,8 +1015,8 @@ async def analyze_url_content_smart(
                         # Cleanup Gemini file
                         try:
                             await asyncio.to_thread(lambda f=gfile: _gemini_client.files.delete(name=f.name))
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.debug("gemini file cleanup failed: %s", exc)
 
                     except Exception as e:
                         logger.warning("smart analysis | layer 2 Gemini upload error: %s", e)
@@ -1034,8 +1034,8 @@ async def analyze_url_content_smart(
 
                 try:
                     os.unlink(video_path)
-                except Exception:
-                    pass
+                except OSError as exc:
+                    logger.debug("temporary video cleanup failed: %s", exc)
             else:
                 logger.warning("smart analysis | yt-dlp failed: %s", dl.get("error"))
                 result["layers_used"].append("ytdlp_failed")
@@ -1181,7 +1181,7 @@ def fetch_all_images_from_post(url: str, og_image: str = "") -> list[str]:
                 data = r.read()
             if len(data) > 5000:
                 images_b64.append(base64.b64encode(data).decode())
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("og image fetch for Claude vision failed: %s", exc)
 
     return images_b64

@@ -173,8 +173,8 @@ def compute_market_insights(days: int = 90) -> dict:
                         comp_brand_count[brand] = comp_brand_count.get(brand, 0) + 1
                         comp_brand_videos.setdefault(brand, set()).add(vid_id)
 
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("insights video_analysis row skipped: %s", exc)
 
         common_weak = sorted(
             [{"dim": d, "avg": round(dim_totals[d]/dim_counts[d], 1)}
@@ -225,8 +225,8 @@ def compute_market_insights(days: int = 90) -> dict:
                  result["computed_at"])
             )
             conn2.commit()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("insights cache write failed: %s", exc)
 
         return result
     except Exception as e:

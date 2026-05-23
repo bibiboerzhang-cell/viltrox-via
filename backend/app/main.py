@@ -539,8 +539,8 @@ async def db_scope_middleware(request, call_next):
             user = get_current_user(request)
             staff = staff_context_for_user(user) if user else None
             vkpi_audit.log_request_if_sensitive(request, response.status_code, staff=staff)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("vkpi sensitive request audit skipped: %s", exc)
         return response
 
 
