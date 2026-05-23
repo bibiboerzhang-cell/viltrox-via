@@ -120,6 +120,15 @@
 .vkpi-glass-shell .kpi-insight-breakdown div { border: 1px solid rgba(255,255,255,.70); border-radius: 16px; background: rgba(255,255,255,.42); padding: 12px; box-shadow: var(--inner); min-width: 0; }
 .vkpi-glass-shell .kpi-insight-breakdown span { display: block; color: #667085; font-size: 11px; font-weight: 900; }
 .vkpi-glass-shell .kpi-insight-breakdown b { display: block; margin-top: 5px; color: #101828; font-size: 13px; font-weight: 900; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vkpi-glass-shell .kpi-insight-list { position: relative; display: grid; gap: 9px; }
+.vkpi-glass-shell .kpi-insight-row { display: grid; grid-template-columns: minmax(0,1fr) auto auto; gap: 12px; align-items: center; border: 1px solid rgba(255,255,255,.70); border-radius: 16px; background: rgba(255,255,255,.42); padding: 11px 12px; box-shadow: var(--inner); }
+.vkpi-glass-shell .kpi-insight-row div { min-width: 0; display: grid; gap: 5px; }
+.vkpi-glass-shell .kpi-insight-row b { color: #101828; font-size: 13px; font-weight: 950; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vkpi-glass-shell .kpi-insight-row span { color: #667085; font-size: 11px; font-weight: 820; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vkpi-glass-shell .kpi-insight-row i { display: block; width: min(100%, var(--w)); height: 6px; border-radius: 999px; background: var(--ic); box-shadow: 0 0 0 3px rgba(27,108,255,.08); }
+.vkpi-glass-shell .kpi-insight-row strong { color: #101828; font-size: 15px; font-weight: 950; white-space: nowrap; }
+.vkpi-glass-shell .kpi-insight-row button { width: 30px; height: 30px; border: 1px solid rgba(27,108,255,.18); border-radius: 11px; background: rgba(27,108,255,.09); color: #185fa5; font: inherit; font-size: 15px; font-weight: 950; cursor: pointer; }
+.vkpi-glass-shell .kpi-insight-empty { border: 1px dashed rgba(119,159,224,.46); border-radius: 16px; background: rgba(255,255,255,.34); padding: 14px; color: #667085; font-size: 12px; font-weight: 850; }
 .vkpi-glass-shell .kpi-insight-foot { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 2px; color: #667085; font-size: 12px; font-weight: 850; }
 .vkpi-glass-shell .kpi-insight-foot button { border: 0; background: transparent; color: #185fa5; font: inherit; font-weight: 950; cursor: pointer; padding: 0; }
 .vkpi-glass-shell .kpi-insight-foot details { text-align: right; }

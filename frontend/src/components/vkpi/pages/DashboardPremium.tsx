@@ -46,6 +46,19 @@ interface PremiumKpi {
   mockLabel?: string;
 }
 
+interface KpiInsightRow {
+  label: string;
+  value: string;
+  meta?: string;
+  width?: string;
+  url?: string;
+}
+
+interface KpiInsightTab {
+  label: string;
+  rows: KpiInsightRow[];
+}
+
 interface PremiumKpiCardProps {
   item: PremiumKpi;
   selected: boolean;
@@ -733,6 +746,95 @@ function kpiFlow(label: string): { upstream: string; downstream: string } {
   return { upstream: '上游指标', downstream: '下游指标' };
 }
 
+function platformDisplayName(raw: unknown): string {
+  const key = String(raw || '').trim().toLowerCase();
+  return platformStyles[key]?.label || (key ? key.charAt(0).toUpperCase() + key.slice(1) : '未知平台');
+}
+
+function rowUrl(row: Row): string {
+  return String(row.url || row.post_url || row.source_url || row.permalink || row.content_url || '').trim();
+}
+
+function topExposureContentRows(officialMatrix: Row, limit = 10): Row[] {
+  return officialAccountRows(officialMatrix)
+    .flatMap((account) => rowsFrom(account.posts).map((post): Row => ({
+      ...post,
+      account_handle: account.handle,
+      account_display_name: account.display_name,
+      platform: account.platform_label || account.platform,
+    })))
+    .sort((a, b) => numberValue(b.views || b.total_views || b.play_count || b.impressions) - numberValue(a.views || a.total_views || a.play_count || a.impressions))
+    .slice(0, limit);
+}
+
+function buildExposureInsight(snapshot: PremiumSnapshot): { insight: string; tabs: KpiInsightTab[]; coverage: string } {
+  const official = officialTotals(snapshot.officialMatrix);
+  const platforms = officialPlatformRows(snapshot.officialMatrix)
+    .map((row): KpiInsightRow & { rawValue: number } => {
+      const views = numberValue(row.total_views || row.views || row.play_count || row.impressions);
+      const share = official.views ? (views / official.views) * 100 : 0;
+      const delta = numberValue(row.views_delta || row.delta_views);
+      return {
+        label: platformDisplayName(row.platform),
+        value: compact(views),
+        meta: `${share.toFixed(1)}%${delta ? ` · +${compact(delta)}` : ''}`,
+        width: `${Math.max(5, Math.round(share || 0))}%`,
+        rawValue: views,
+      };
+    })
+    .filter((row) => row.rawValue > 0)
+    .sort((a, b) => b.rawValue - a.rawValue);
+  const accounts = officialAccountRows(snapshot.officialMatrix)
+    .map((row): KpiInsightRow & { rawValue: number; delta: number } => {
+      const views = numberValue(row.total_views || row.views || row.play_count || row.impressions);
+      const delta = numberValue(row.views_delta || row.delta_views);
+      const label = String(row.handle || row.display_name || row.account_name || '官方账号');
+      return {
+        label: label.startsWith('@') ? label : `@${label}`,
+        value: compact(views),
+        meta: `${platformDisplayName(row.platform_label || row.platform)}${delta ? ` · +${compact(delta)}` : ''}`,
+        width: official.views ? `${Math.max(5, Math.round((views / official.views) * 100))}%` : '0%',
+        rawValue: views,
+        delta,
+      };
+    })
+    .filter((row) => row.rawValue > 0)
+    .sort((a, b) => b.rawValue - a.rawValue)
+    .slice(0, 10);
+  const topContent = topExposureContentRows(snapshot.officialMatrix)
+    .map((row): KpiInsightRow & { rawValue: number } => {
+      const views = numberValue(row.views || row.total_views || row.play_count || row.impressions);
+      return {
+        label: String(row.title || row.caption || row.text || '官方内容').replace(/\s+/g, ' ').trim().slice(0, 88),
+        value: compact(views),
+        meta: `${String(row.account_handle || row.account_display_name || '-')} · ${platformDisplayName(row.platform)} · ${postedLabel(row)} · ${engagementLabel(row)}`,
+        url: rowUrl(row),
+        rawValue: views,
+      };
+    })
+    .filter((row) => row.rawValue > 0);
+  const contributions = accounts
+    .filter((row) => row.delta > 0)
+    .sort((a, b) => b.delta - a.delta)
+    .slice(0, 8)
+    .map((row) => ({ ...row, value: `+${compact(row.delta)}` }));
+  const topPlatform = platforms[0];
+  const topAccount = accounts[0];
+  const insight = topPlatform
+    ? `${topPlatform.label} 贡献 ${topPlatform.meta?.split(' · ')[0] || '最高'}，${topAccount ? `${topAccount.label} 是当前最高曝光账号。` : '账号矩阵仍需补齐。'}`
+    : '官方矩阵暂无可拆解曝光数据。';
+  return {
+    insight,
+    coverage: `${official.accountCount || accounts.length} 个官方账号 · ${compact(official.views)} 曝光 · ${compact(official.posts)} 内容`,
+    tabs: [
+      { label: '按平台', rows: platforms },
+      { label: '按账号矩阵', rows: accounts },
+      { label: 'TOP 内容', rows: topContent },
+      { label: '环比贡献', rows: contributions.length ? contributions : accounts.slice(0, 5) },
+    ],
+  };
+}
+
 function PremiumKpiCard({ item, selected, onToggle }: PremiumKpiCardProps) {
   return (
     <div
@@ -757,18 +859,32 @@ function PremiumKpiCard({ item, selected, onToggle }: PremiumKpiCardProps) {
 
 function KpiInsightPanel({
   item,
+  snapshot,
+  trend,
   windowDays,
   onClose,
   onSelectMetric,
+  onOpenUrl,
 }: {
   item: PremiumKpi;
+  snapshot: PremiumSnapshot;
+  trend: ReturnType<typeof trendChart>;
   windowDays: number;
   onClose: () => void;
   onSelectMetric: (label: string) => void;
+  onOpenUrl: (url: unknown) => void;
 }) {
   const statusLabel = kpiStatusLabel(item);
   const flow = kpiFlow(item.label);
-  const tabs = kpiTabs(item.label);
+  const tabs = useMemo(() => kpiTabs(item.label), [item.label]);
+  const exposureInsight = useMemo(() => item.label === '总曝光量' ? buildExposureInsight(snapshot) : null, [item.label, snapshot]);
+  const [activeTab, setActiveTab] = useState(tabs[0] || '');
+  useEffect(() => {
+    setActiveTab(tabs[0] || '');
+  }, [item.label, tabs]);
+  const activeRows = exposureInsight
+    ? (exposureInsight.tabs.find((tab) => tab.label === activeTab) || exposureInsight.tabs[0])?.rows || []
+    : [];
   return (
     <section className="glass-card kpi-insight-panel" style={glassVarStyle({ '--ic': item.ic, '--ig': item.ig })}>
       <div className="kpi-insight-head">
@@ -779,25 +895,66 @@ function KpiInsightPanel({
         <div>
           <strong>{item.value}</strong>
           <em className={item.trend}>{item.meta}</em>
-          <p>近 {windowDays} 天 · {item.isMock ? item.mockLabel || '待接入' : '真实 API'} · Dashboard KPI</p>
+          <p>近 {windowDays} 天 · {item.isMock ? item.mockLabel || '待接入' : '真实 API'} · {exposureInsight?.coverage || 'Dashboard KPI'}</p>
         </div>
-        <svg viewBox="0 0 120 36" aria-hidden="true">
-          <path d={`${item.sparkPath} L118 36 L2 36 Z`} fill="var(--ig)" opacity=".72" />
-          <path d={item.sparkPath} fill="none" stroke="var(--ic)" strokeWidth="3" strokeLinecap="round" />
-        </svg>
+        {item.label === '总曝光量' ? (
+          <svg viewBox="0 0 520 250" preserveAspectRatio="none" aria-label="30 天每日曝光趋势">
+            <defs>
+              <linearGradient id="kpiExposureArea" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stopColor="var(--ic)" stopOpacity=".24" />
+                <stop offset="1" stopColor="var(--ic)" stopOpacity="0" />
+              </linearGradient>
+            </defs>
+            <g stroke="rgba(92,130,190,.16)">
+              <line x1="26" y1="30" x2="500" y2="30" />
+              <line x1="26" y1="80" x2="500" y2="80" />
+              <line x1="26" y1="130" x2="500" y2="130" />
+              <line x1="26" y1="180" x2="500" y2="180" />
+            </g>
+            <path d={trend.areaPath} fill="url(#kpiExposureArea)" opacity=".7" />
+            <path d={trend.path} fill="none" stroke="var(--ic)" strokeWidth="4" strokeLinecap="round" />
+            <circle cx={trend.pointX} cy={trend.pointY} r="7" fill="var(--ic)" stroke="#fff" strokeWidth="4" />
+            <text x="34" y="238" fontSize="12" fill="#667085">{trend.labels[0] || '-'}</text>
+            <text x="126" y="238" fontSize="12" fill="#667085">{trend.labels[1] || '-'}</text>
+            <text x="218" y="238" fontSize="12" fill="#667085">{trend.labels[2] || '-'}</text>
+            <text x="310" y="238" fontSize="12" fill="#667085">{trend.labels[3] || '-'}</text>
+            <text x="402" y="238" fontSize="12" fill="#667085">{trend.labels[4] || '-'}</text>
+          </svg>
+        ) : (
+          <svg viewBox="0 0 120 36" aria-hidden="true">
+            <path d={`${item.sparkPath} L118 36 L2 36 Z`} fill="var(--ig)" opacity=".72" />
+            <path d={item.sparkPath} fill="none" stroke="var(--ic)" strokeWidth="3" strokeLinecap="round" />
+          </svg>
+        )}
       </div>
       <div className="kpi-insight-brief">
         <span>✦ 洞见</span>
-        <p>{kpiInsightText(item)}</p>
+        <p>{exposureInsight?.insight || kpiInsightText(item)}</p>
       </div>
       <div className="kpi-insight-tabs">
-        {tabs.map((tab, index) => <button className={index === 0 ? 'is-active' : ''} type="button" key={tab}>{tab}</button>)}
+        {tabs.map((tab) => <button className={activeTab === tab ? 'is-active' : ''} type="button" key={tab} onClick={() => setActiveTab(tab)}>{tab}</button>)}
       </div>
-      <div className="kpi-insight-breakdown">
-        <div><span>当前窗口</span><b>近 {windowDays} 天</b></div>
-        <div><span>数据来源</span><b>{item.isMock ? item.mockLabel || '待接入' : item.meta}</b></div>
-        <div><span>状态</span><b>{statusLabel}</b></div>
-      </div>
+      {exposureInsight ? (
+        <div className="kpi-insight-list">
+          {activeRows.length ? activeRows.map((row, index) => (
+            <div className="kpi-insight-row" key={`${activeTab}-${row.label}-${index}`}>
+              <div>
+                <b>{row.label}</b>
+                {row.meta ? <span>{row.meta}</span> : null}
+                {row.width ? <i style={glassVarStyle({ '--w': row.width })}></i> : null}
+              </div>
+              <strong>{row.value}</strong>
+              {row.url ? <button type="button" onClick={() => onOpenUrl(row.url)}>↗</button> : null}
+            </div>
+          )) : <div className="kpi-insight-empty">暂无该维度真实数据</div>}
+        </div>
+      ) : (
+        <div className="kpi-insight-breakdown">
+          <div><span>当前窗口</span><b>近 {windowDays} 天</b></div>
+          <div><span>数据来源</span><b>{item.isMock ? item.mockLabel || '待接入' : item.meta}</b></div>
+          <div><span>状态</span><b>{statusLabel}</b></div>
+        </div>
+      )}
       <div className="kpi-insight-foot">
         <div>
           <span>上游：</span>
@@ -1140,9 +1297,12 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
 		          {selectedKpi ? (
 		            <KpiInsightPanel
 		              item={selectedKpi}
+		              snapshot={snapshot}
+		              trend={premiumTrend}
 		              windowDays={windowDays}
 		              onClose={() => setExpandedKpi(null)}
 		              onSelectMetric={selectKpiByLabel}
+		              onOpenUrl={openContentUrl}
 		            />
 		          ) : null}
 	          {loadingData && snapshot.source === 'mock' && !snapshot.loadedAt ? (
