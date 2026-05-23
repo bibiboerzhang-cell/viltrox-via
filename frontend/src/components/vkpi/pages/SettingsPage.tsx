@@ -362,6 +362,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
   const controlSummary = (controlStatus.summary || {}) as Record<string, unknown>;
   const syncPolicy = (controlStatus.sync_policy || {}) as Record<string, unknown>;
   const youtubeKpi = (controlStatus.youtube_kpi || {}) as Record<string, unknown>;
+  const kolRefresh = (controlStatus.kol_refresh || {}) as Record<string, unknown>;
   const claudeProvider = providers.find((row) => ['anthropic', 'claude'].includes(String(row.provider || '').toLowerCase())) || {};
   const claudeConfigured = boolValue(claudeProvider.configured, false);
   const claudeStatus = claudeConfigured ? String(claudeProvider.latest_status || claudeProvider.status || 'unknown') : 'not_configured';
@@ -650,6 +651,14 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
   const lightingCount = productCatalog.filter((product) => product.categoryMain === 'Lighting/Flash').length;
   const adapterCount = productCatalog.filter((product) => product.categoryMain === 'Adapter').length;
   const syncTime = String(syncPolicy.daily_sync_time || '08:00');
+  const kolRefreshMode = String(kolRefresh.mode || 'searchable_records_only');
+  const kolRefreshGateEnabled = boolValue(kolRefresh.provider_gate_enabled, false);
+  const kolRefreshTotal = numberValue(kolRefresh.kol_pool_total);
+  const kolRefreshHot = numberValue(kolRefresh.hot_count);
+  const kolRefreshWarm = numberValue(kolRefresh.warm_count);
+  const kolRefreshCold = numberValue(kolRefresh.cold_count);
+  const kolRefreshActiveTasks = numberValue(kolRefresh.active_on_demand_tasks);
+  const kolRefreshGateText = kolRefreshGateEnabled ? '按需刷新已启用' : '仅记录/查询';
   const systemHealth = settingsError || providerError || rbacStatusError || dailySync?.ack_required ? '需要处理' : 'healthy';
   const versionSummary = frontendAsset
     ? `${frontendAsset} · ${timeLabel(versionCheckedAt)}`
@@ -712,12 +721,14 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
       {settingsError ? <div className="vkpi-inline-message">{settingsError}</div> : null}
       <SettingsLoadingStrip settingsLoading={settingsLoading} catalogLoading={productCatalogLoading} />
       <div className="vkpi-settings-clean">
-        {renderSettingsModule('status', `${apiStatusText} · 同步 ${syncTime} / ${syncGuardText} · ${systemHealth} · 版本 ${versionSummary}`, (
+        {renderSettingsModule('status', `${apiStatusText} · 同步 ${syncTime} / ${syncGuardText} · KOL ${kolRefreshGateText} · ${systemHealth} · 版本 ${versionSummary}`, (
           <>
             <div className="vkpi-settings-status-grid">
               <InfoBlock label="API 服务" value={apiStatusText} />
               <InfoBlock label="服务范围" value={apiStatusDetail} />
               <InfoBlock label="同步" value={`每日 ${syncTime} · ${syncGuardText}`} />
+              <InfoBlock label="KOL 分层" value={`${kolRefreshHot} hot / ${kolRefreshCold} cold`} />
+              <InfoBlock label="按需刷新" value={`${kolRefreshGateText} · 任务 ${kolRefreshActiveTasks}`} />
               <InfoBlock label="本月成本" value={`$${totalSpentUsd.toLocaleString('en-US')} / $${totalBudgetUsd.toLocaleString('en-US')}`} />
               <InfoBlock label="系统" value={systemHealth} />
             </div>
@@ -739,6 +750,19 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
                 <InfoBlock label="目标 / 错误" value={`${syncRequested.toLocaleString('en-US')} / ${syncErrors.toLocaleString('en-US')}`} />
                 <InfoBlock label="KOL 错误" value={String(syncHealth.kol_errors ?? 0)} />
                 <InfoBlock label="最近 ack" value={syncAckReason ? `${syncAckReason} · ${timeLabel(syncAck?.acknowledged_at)}` : '-'} />
+              </div>
+            </section>
+            <section className="vkpi-settings-version-panel">
+              <div className="vkpi-table-card__header">
+                <div><h2>KOL 刷新分层</h2><span>{kolRefreshTotal ? `${kolRefreshTotal.toLocaleString('en-US')} 条历史记录` : '读取中'}</span></div>
+              </div>
+              <div className="vkpi-settings-status-grid">
+                <InfoBlock label="当前模式" value={kolRefreshMode === 'stale_while_revalidate_enabled' ? '按需刷新已启用' : '仅记录/查询'} />
+                <InfoBlock label="Provider Gate" value={kolRefreshGateEnabled ? '开启' : '关闭'} />
+                <InfoBlock label="Hot / Warm / Cold" value={`${kolRefreshHot} / ${kolRefreshWarm} / ${kolRefreshCold}`} />
+                <InfoBlock label="Cold 未刷新" value={String(numberValue(kolRefresh.cold_never_refreshed).toLocaleString('en-US'))} />
+                <InfoBlock label="30 天搜索" value={`${numberValue(kolRefresh.searched_rows).toLocaleString('en-US')} 行 / ${numberValue(kolRefresh.search_count_30d).toLocaleString('en-US')} 次`} />
+                <InfoBlock label="活跃刷新任务" value={String(kolRefreshActiveTasks)} />
               </div>
             </section>
             <section className="vkpi-settings-version-panel">

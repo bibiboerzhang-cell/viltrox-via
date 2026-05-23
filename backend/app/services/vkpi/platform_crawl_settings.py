@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime
 from typing import Any
 
@@ -68,6 +69,8 @@ APIFY_CRAWL_PLATFORMS = {
     "x",
 }
 logger = get_logger(__name__)
+ON_DEMAND_TASK_TYPE = "vkpi_kol_pool_on_demand_refresh"
+ACTIVE_TASK_STATUSES = ("queued", "retrying", "processing", "running")
 
 
 def _utcnow() -> str:
@@ -110,6 +113,113 @@ def _budget_available(row: dict[str, Any] | None) -> tuple[bool, float, float, f
     spent = float(row.get("current_month_spent") or 0)
     remaining = max(monthly - spent, 0)
     return _enabled(row.get("enabled")) and monthly > 0 and remaining > 0, monthly, spent, remaining
+
+
+def _table_exists(table_name: str) -> bool:
+    try:
+        if is_postgres_runtime():
+            row = get_conn().execute(
+                """
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = current_schema()
+                  AND table_name = ?
+                LIMIT 1
+                """,
+                (table_name,),
+            ).fetchone()
+            return row is not None
+        row = get_conn().execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+            (table_name,),
+        ).fetchone()
+        return row is not None
+    except Exception:
+        return False
+
+
+def _env_enabled(*names: str) -> bool:
+    for name in names:
+        value = os.getenv(name, "").strip().lower()
+        if value in {"1", "true", "yes", "on", "enabled"}:
+            return True
+    return False
+
+
+def _kol_refresh_status() -> dict[str, Any]:
+    provider_gate_enabled = _env_enabled("VKPI_KOL_ON_DEMAND_REFRESH_ENABLED", "VKPI_ENABLE_KOL_ON_DEMAND_REFRESH")
+    status: dict[str, Any] = {
+        "mode": "searchable_records_only" if not provider_gate_enabled else "stale_while_revalidate_enabled",
+        "provider_gate_enabled": provider_gate_enabled,
+        "provider_gate_env": "VKPI_KOL_ON_DEMAND_REFRESH_ENABLED",
+        "task_type": ON_DEMAND_TASK_TYPE,
+        "tables": {
+            "vkpi_kol_pool": _table_exists("vkpi_kol_pool"),
+            "vkpi_kol_refresh_tier": _table_exists("vkpi_kol_refresh_tier"),
+            "job_execution_ledger": _table_exists("job_execution_ledger"),
+        },
+        "kol_pool_total": 0,
+        "tier_distribution": {},
+        "hot_count": 0,
+        "warm_count": 0,
+        "cold_count": 0,
+        "cold_never_refreshed": 0,
+        "search_count_30d": 0,
+        "searched_rows": 0,
+        "active_on_demand_tasks": 0,
+        "status_counts": {},
+        "provider_calls_default": provider_gate_enabled,
+        "legacy_daily_refresh": "disabled",
+    }
+    try:
+        if status["tables"]["vkpi_kol_pool"]:
+            row = get_conn().execute("SELECT COUNT(*) AS n FROM vkpi_kol_pool").fetchone()
+            status["kol_pool_total"] = int(row["n"] or 0) if row else 0
+        if status["tables"]["vkpi_kol_refresh_tier"]:
+            rows = get_conn().execute(
+                """
+                SELECT tier,
+                       COUNT(*) AS n,
+                       SUM(CASE WHEN last_refresh_at IS NULL THEN 1 ELSE 0 END) AS never_refreshed,
+                       SUM(CASE WHEN COALESCE(search_count_30d, 0) > 0 THEN 1 ELSE 0 END) AS searched_rows,
+                       SUM(COALESCE(search_count_30d, 0)) AS search_count_30d
+                FROM vkpi_kol_refresh_tier
+                GROUP BY tier
+                """
+            ).fetchall()
+            tier_distribution: dict[str, dict[str, int]] = {}
+            for row in rows:
+                tier = str(row["tier"] or "cold").lower()
+                tier_distribution[tier] = {
+                    "count": int(row["n"] or 0),
+                    "never_refreshed": int(row["never_refreshed"] or 0),
+                    "searched_rows": int(row["searched_rows"] or 0),
+                    "search_count_30d": int(row["search_count_30d"] or 0),
+                }
+            status["tier_distribution"] = tier_distribution
+            status["hot_count"] = tier_distribution.get("hot", {}).get("count", 0)
+            status["warm_count"] = tier_distribution.get("warm", {}).get("count", 0)
+            status["cold_count"] = tier_distribution.get("cold", {}).get("count", 0)
+            status["cold_never_refreshed"] = tier_distribution.get("cold", {}).get("never_refreshed", 0)
+            status["search_count_30d"] = sum(item.get("search_count_30d", 0) for item in tier_distribution.values())
+            status["searched_rows"] = sum(item.get("searched_rows", 0) for item in tier_distribution.values())
+        if status["tables"]["job_execution_ledger"]:
+            rows = get_conn().execute(
+                """
+                SELECT status, COUNT(*) AS n
+                FROM job_execution_ledger
+                WHERE job_type=?
+                GROUP BY status
+                """,
+                (ON_DEMAND_TASK_TYPE,),
+            ).fetchall()
+            counts = {str(row["status"] or "unknown"): int(row["n"] or 0) for row in rows}
+            status["status_counts"] = counts
+            status["active_on_demand_tasks"] = sum(counts.get(item, 0) for item in ACTIVE_TASK_STATUSES)
+    except Exception as exc:
+        logger.warning("vkpi kol refresh status unavailable: %s", exc)
+        status["error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
+    return status
 
 
 def ensure_defaults() -> None:
@@ -489,6 +599,7 @@ def control_status() -> dict[str, Any]:
             "last_test_status": youtube_row.get("last_test_status") or "not_configured",
             "source": "reserved_slot",
         },
+        "kol_refresh": _kol_refresh_status(),
         "budgets": budgets,
     }
 
