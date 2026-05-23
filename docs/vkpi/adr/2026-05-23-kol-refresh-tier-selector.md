@@ -80,6 +80,23 @@ scripts/cron_daily_sync.py --skip-official --include-qualified-kol --kol-tiers h
 hand-writing timestamps in an ops command and keeps catch-up mode distinct from
 periodic refresh mode.
 
+If this is promoted from manual operation to systemd, install the separate
+qualified KOL units instead of editing `vkpi-sync-daily.service`:
+
+```bash
+scripts/ops/install_vkpi_daily_timers.sh remote-qualified-kol
+```
+
+The qualified KOL timer is disabled by default after installation. Enable it
+only after the selector has observed stable behavior:
+
+```bash
+ENABLE_QUALIFIED_KOL_TIMER=1 scripts/ops/install_vkpi_daily_timers.sh remote-qualified-kol
+```
+
+The install script backs up existing systemd unit files under
+`runtime/ops/systemd-unit-backups/` before writing remote unit config.
+
 Legacy full refresh remains separately guarded and still requires `--include-legacy-kol`.
 
 ## Acceptance

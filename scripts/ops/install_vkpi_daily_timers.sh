@@ -8,10 +8,29 @@ SSH_TARGET="${SSH_TARGET:-viltrox}"
 REMOTE_ROOT="${REMOTE_ROOT:-/opt/viltrox-2.0}"
 REMOTE_SERVICE="${REMOTE_SERVICE:-vkpi-sync-daily.service}"
 REMOTE_TIMER="${REMOTE_TIMER:-vkpi-sync-daily.timer}"
+REMOTE_QUALIFIED_KOL_SERVICE="${REMOTE_QUALIFIED_KOL_SERVICE:-vkpi-qualified-kol-refresh.service}"
+REMOTE_QUALIFIED_KOL_TIMER="${REMOTE_QUALIFIED_KOL_TIMER:-vkpi-qualified-kol-refresh.timer}"
+ENABLE_QUALIFIED_KOL_TIMER="${ENABLE_QUALIFIED_KOL_TIMER:-0}"
+QUALIFIED_KOL_LIMIT="${QUALIFIED_KOL_LIMIT:-200}"
+QUALIFIED_KOL_STALE_DAYS="${QUALIFIED_KOL_STALE_DAYS:-1}"
 LOCAL_AGENT_ID="${LOCAL_AGENT_ID:-com.viltrox.prod-snapshot-sync}"
 LOCAL_AGENT_PATH="${HOME}/Library/LaunchAgents/${LOCAL_AGENT_ID}.plist"
 
+backup_remote_units() {
+  local stamp
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  ssh "${SSH_TARGET}" "set -euo pipefail
+mkdir -p '${REMOTE_ROOT}/runtime/ops/systemd-unit-backups/${stamp}'
+for unit in '${REMOTE_SERVICE}' '${REMOTE_TIMER}' 'vkpi-sync-daily-alert@.service' '${REMOTE_QUALIFIED_KOL_SERVICE}' '${REMOTE_QUALIFIED_KOL_TIMER}'; do
+  if [ -f \"/etc/systemd/system/\${unit}\" ]; then
+    cp \"/etc/systemd/system/\${unit}\" '${REMOTE_ROOT}/runtime/ops/systemd-unit-backups/${stamp}/'
+  fi
+done
+printf '%s\n' '${REMOTE_ROOT}/runtime/ops/systemd-unit-backups/${stamp}'"
+}
+
 install_remote_timer() {
+  backup_remote_units
   ssh "${SSH_TARGET}" "cat > /etc/systemd/system/${REMOTE_SERVICE}" <<SERVICE
 [Unit]
 Description=V-KPI daily official sync
@@ -59,6 +78,48 @@ TIMER
   ssh "${SSH_TARGET}" "systemctl daemon-reload && systemctl enable --now ${REMOTE_TIMER} && systemctl list-timers --all ${REMOTE_TIMER} --no-pager"
 }
 
+install_remote_qualified_kol_units() {
+  backup_remote_units
+  ssh "${SSH_TARGET}" "cat > /etc/systemd/system/${REMOTE_QUALIFIED_KOL_SERVICE}" <<SERVICE
+[Unit]
+Description=V-KPI qualified hot KOL refresh
+Wants=network-online.target
+After=network-online.target viltrox-2.0-test.service vkpi-sync-daily.service
+OnFailure=vkpi-sync-daily-alert@%n.service
+
+[Service]
+Type=oneshot
+RestartPreventExitStatus=75 76
+WorkingDirectory=${REMOTE_ROOT}
+Environment=PYTHONPATH=backend
+ExecStart=/bin/bash -lc 'mkdir -p /var/log/vkpi && if systemctl is-active --quiet vkpi-sync-daily.service; then printf '\''{"event":"qualified_kol_refresh_skipped","reason":"vkpi-sync-daily.service active","at":"%s"}\n'\'' "\$(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ)" >> /var/log/vkpi/qualified_kol_refresh_skip.log; exit 0; fi; .venv/bin/python scripts/cron_daily_sync.py --skip-official --include-qualified-kol --kol-tiers hot --kol-stale-days ${QUALIFIED_KOL_STALE_DAYS} --kol-limit ${QUALIFIED_KOL_LIMIT} --kol-max-posts 1 --kol-error-stop-threshold 3 >> /var/log/vkpi/qualified_kol_refresh_\$(date -u +%%Y%%m%%d).log 2>&1'
+TimeoutStartSec=2h
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+SERVICE
+
+  ssh "${SSH_TARGET}" "cat > /etc/systemd/system/${REMOTE_QUALIFIED_KOL_TIMER}" <<TIMER
+[Unit]
+Description=Run V-KPI qualified hot KOL refresh at 05:00 UTC
+
+[Timer]
+OnCalendar=*-*-* 05:00:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+Unit=${REMOTE_QUALIFIED_KOL_SERVICE}
+
+[Install]
+WantedBy=timers.target
+TIMER
+
+  if [ "${ENABLE_QUALIFIED_KOL_TIMER}" = "1" ]; then
+    ssh "${SSH_TARGET}" "systemctl daemon-reload && systemctl enable --now ${REMOTE_QUALIFIED_KOL_TIMER} && systemctl list-timers --all ${REMOTE_QUALIFIED_KOL_TIMER} --no-pager"
+  else
+    ssh "${SSH_TARGET}" "systemctl daemon-reload && systemctl disable --now ${REMOTE_QUALIFIED_KOL_TIMER} >/dev/null 2>&1 || true && systemctl list-timers --all ${REMOTE_QUALIFIED_KOL_TIMER} --no-pager"
+  fi
+}
+
 install_local_snapshot_agent() {
   mkdir -p "${HOME}/Library/LaunchAgents" "${PROJECT_ROOT}/runtime/prod-sync"
   cat > "${LOCAL_AGENT_PATH}" <<PLIST
@@ -99,6 +160,9 @@ case "${1:-all}" in
   remote)
     install_remote_timer
     ;;
+  remote-qualified-kol)
+    install_remote_qualified_kol_units
+    ;;
   local)
     install_local_snapshot_agent
     ;;
@@ -107,7 +171,7 @@ case "${1:-all}" in
     install_local_snapshot_agent
     ;;
   *)
-    echo "Usage: $0 [remote|local|all]" >&2
+    echo "Usage: $0 [remote|remote-qualified-kol|local|all]" >&2
     exit 1
     ;;
 esac
