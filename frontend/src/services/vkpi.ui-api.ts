@@ -1092,7 +1092,7 @@ export async function getKolAssessment(token: string, kolId: string) {
   return apiFetch<VkpiKolAssessmentResponse>(`/api/marketing/kols/${encodeURIComponent(kolId)}/assessment`, {}, token);
 }
 export async function getKolProductFit(token: string, kolId: string, limit = 5) {
-  return apiFetch<VkpiKolProductFitResponse>(`/api/marketing/kols/${encodeURIComponent(kolId)}/product-fit?limit=${encodeURIComponent(String(limit))}`, {}, token);
+  return apiFetch<VkpiKolProductFitResponse>(`/api/admin/vkpi/kols/${encodeURIComponent(kolId)}/product-fit?limit=${encodeURIComponent(String(limit))}`, {}, token);
 }
 export async function listKolContacts(token: string, kolId: string, includeWrong = false) {
   return apiFetch<VkpiKolContactsResponse>(`/api/marketing/kols/${encodeURIComponent(kolId)}/contacts?include_wrong=${includeWrong ? "true" : "false"}`, {}, token);
