@@ -1,3 +1,5 @@
+import asyncio
+
 from app.services.vkpi import apify_batch_refresh
 
 
@@ -101,3 +103,57 @@ def test_qualified_apify_batch_plan_uses_refresh_tier_selector(monkeypatch) -> N
     assert plan["batch_count"] == 2
     assert calls["rows"]["offset"] == 5
     assert calls["rows"]["stale_before"] == "2026-05-23T00:00:00Z"
+
+
+def test_run_apify_batch_without_token_is_not_configured(monkeypatch) -> None:
+    monkeypatch.delenv("APIFY_TOKEN", raising=False)
+
+    result = apify_batch_refresh.run_apify_batch({"batch_key": "instagram-1", "platform": "instagram", "targets": []})
+
+    assert result["provider_status"] == "not_configured"
+    assert result["sync_status"] == "not_configured"
+
+
+def test_execute_apify_batch_plan_blocks_provider_calls_by_default() -> None:
+    plan = {"max_concurrent_runs": 2, "batches": [{"batch_key": "instagram-1"}]}
+
+    result = asyncio.run(apify_batch_refresh.execute_apify_batch_plan(plan))
+
+    assert result == {
+        "executed": False,
+        "reason": "provider_calls_not_allowed",
+        "batch_count": 1,
+        "max_concurrent_runs": 2,
+        "results": [],
+    }
+
+
+def test_execute_apify_batch_plan_summarizes_mocked_runs(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def fake_run(batch, **_kwargs):
+        calls.append(batch["batch_key"])
+        return {
+            "batch_key": batch["batch_key"],
+            "platform": batch["platform"],
+            "provider_status": "ok",
+            "sync_status": "synced",
+            "mapped": {"matched_count": len(batch["targets"])},
+        }
+
+    monkeypatch.setattr(apify_batch_refresh, "run_apify_batch", fake_run)
+    plan = {
+        "max_concurrent_runs": 2,
+        "batches": [
+            {"batch_key": "instagram-1", "platform": "instagram", "targets": [{"kol_pool_id": 1}]},
+            {"batch_key": "tiktok-1", "platform": "tiktok", "targets": [{"kol_pool_id": 2}, {"kol_pool_id": 3}]},
+        ],
+    }
+
+    result = asyncio.run(apify_batch_refresh.execute_apify_batch_plan(plan, allow_provider_calls=True, api_token="test"))
+
+    assert sorted(calls) == ["instagram-1", "tiktok-1"]
+    assert result["executed"] is True
+    assert result["synced_batches"] == 2
+    assert result["failed_batches"] == 0
+    assert result["matched_items"] == 3

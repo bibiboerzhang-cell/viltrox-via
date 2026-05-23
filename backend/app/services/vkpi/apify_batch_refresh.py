@@ -6,6 +6,7 @@ cannot accidentally fall back to the old full-pool refresh path.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import urllib.parse
@@ -26,6 +27,7 @@ DEFAULT_CHUNK_SIZES = {
 }
 DEFAULT_MAX_CONCURRENT_RUNS = 2
 HARD_MAX_CONCURRENT_RUNS = 3
+DEFAULT_RUN_TIMEOUT_SECONDS = 600
 
 DEFAULT_ACTORS = {
     "instagram": "apify~instagram-scraper",
@@ -44,6 +46,10 @@ ACTOR_ENV_KEYS = {
     "x": "APIFY_X_ACTOR_ID",
     "tiktok": "APIFY_TIKTOK_ACTOR_ID",
 }
+
+
+class ApifyBatchExecutionBlocked(RuntimeError):
+    """Raised when code attempts provider execution without the explicit gate."""
 
 
 def _int(value: Any, default: int = 0) -> int:
@@ -382,3 +388,141 @@ def map_dataset_items_to_targets(items: list[dict[str, Any]], targets: list[dict
         else:
             unmatched.append(item)
     return {"matched": matched, "unmatched": unmatched, "matched_count": len(matched), "unmatched_count": len(unmatched)}
+
+
+def run_apify_batch(
+    batch: dict[str, Any],
+    *,
+    api_token: str | None = None,
+    timeout_secs: int = DEFAULT_RUN_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    """Execute one planned Apify batch and map dataset items to targets."""
+    token = (api_token or os.environ.get("APIFY_TOKEN") or "").strip()
+    if not token:
+        return {
+            "batch_key": batch.get("batch_key"),
+            "platform": batch.get("platform"),
+            "provider_status": "not_configured",
+            "sync_status": "not_configured",
+            "items": [],
+            "mapped": {"matched": [], "unmatched": [], "matched_count": 0, "unmatched_count": 0},
+            "message": "APIFY_TOKEN is not configured",
+        }
+    try:
+        from apify_client import ApifyClient  # type: ignore
+    except ImportError:
+        return {
+            "batch_key": batch.get("batch_key"),
+            "platform": batch.get("platform"),
+            "provider_status": "error",
+            "sync_status": "error",
+            "items": [],
+            "mapped": {"matched": [], "unmatched": [], "matched_count": 0, "unmatched_count": 0},
+            "error": "apify-client not installed",
+        }
+
+    actor_id = _text(batch.get("actor_id"))
+    run_input = batch.get("run_input") if isinstance(batch.get("run_input"), dict) else {}
+    targets = [target for target in (batch.get("targets") or []) if isinstance(target, dict)]
+    try:
+        client = ApifyClient(token)
+        run = client.actor(actor_id).call(
+            run_input=run_input,
+            timeout_secs=max(30, min(1800, _int(timeout_secs, DEFAULT_RUN_TIMEOUT_SECONDS))),
+            wait_secs=max(30, min(1800, _int(timeout_secs, DEFAULT_RUN_TIMEOUT_SECONDS))),
+        )
+        status = str((run or {}).get("status") or "").upper()
+        if not run or status != "SUCCEEDED":
+            return {
+                "batch_key": batch.get("batch_key"),
+                "platform": batch.get("platform"),
+                "actor_id": actor_id,
+                "provider_status": "error",
+                "sync_status": "error",
+                "items": [],
+                "mapped": {"matched": [], "unmatched": [], "matched_count": 0, "unmatched_count": 0},
+                "error": f"Apify actor did not finish: {status or 'unknown'}",
+                "run": {"id": (run or {}).get("id"), "status": status},
+            }
+        dataset_id = run.get("defaultDatasetId")
+        items = list(client.dataset(dataset_id).iterate_items()) if dataset_id else []
+        dict_items = [item for item in items if isinstance(item, dict)]
+        mapped = map_dataset_items_to_targets(dict_items, targets)
+        sync_status = "synced" if mapped.get("matched_count") else "no_results"
+        return {
+            "batch_key": batch.get("batch_key"),
+            "platform": batch.get("platform"),
+            "actor_id": actor_id,
+            "provider_status": "ok",
+            "sync_status": sync_status,
+            "item_count": len(dict_items),
+            "items": dict_items,
+            "mapped": mapped,
+            "run": {
+                "id": run.get("id"),
+                "status": status,
+                "defaultDatasetId": dataset_id,
+            },
+        }
+    except Exception as exc:  # pragma: no cover - live provider path
+        return {
+            "batch_key": batch.get("batch_key"),
+            "platform": batch.get("platform"),
+            "actor_id": actor_id,
+            "provider_status": "error",
+            "sync_status": "error",
+            "items": [],
+            "mapped": {"matched": [], "unmatched": [], "matched_count": 0, "unmatched_count": 0},
+            "error": f"{type(exc).__name__}: {str(exc)[:500]}",
+        }
+
+
+async def execute_apify_batch_plan(
+    plan: dict[str, Any],
+    *,
+    allow_provider_calls: bool = False,
+    api_token: str | None = None,
+    timeout_secs: int = DEFAULT_RUN_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    """Execute a plan with bounded concurrency. Provider calls are opt-in."""
+    batches = [batch for batch in (plan.get("batches") or []) if isinstance(batch, dict)]
+    if not allow_provider_calls:
+        return {
+            "executed": False,
+            "reason": "provider_calls_not_allowed",
+            "batch_count": len(batches),
+            "max_concurrent_runs": max_concurrent_runs(plan.get("max_concurrent_runs")),
+            "results": [],
+        }
+    sem = asyncio.Semaphore(max_concurrent_runs(plan.get("max_concurrent_runs")))
+
+    async def _run(batch: dict[str, Any]) -> dict[str, Any]:
+        async with sem:
+            return await asyncio.to_thread(run_apify_batch, batch, api_token=api_token, timeout_secs=timeout_secs)
+
+    raw_results = await asyncio.gather(*[_run(batch) for batch in batches], return_exceptions=True)
+    results: list[dict[str, Any]] = []
+    for index, result in enumerate(raw_results):
+        if isinstance(result, Exception):
+            batch = batches[index] if index < len(batches) else {}
+            results.append(
+                {
+                    "batch_key": batch.get("batch_key"),
+                    "platform": batch.get("platform"),
+                    "provider_status": "error",
+                    "sync_status": "error",
+                    "error": f"{type(result).__name__}: {str(result)[:500]}",
+                }
+            )
+        else:
+            results.append(result)
+    return {
+        "executed": True,
+        "batch_count": len(batches),
+        "max_concurrent_runs": max_concurrent_runs(plan.get("max_concurrent_runs")),
+        "synced_batches": sum(1 for item in results if str(item.get("sync_status") or "") == "synced"),
+        "failed_batches": sum(1 for item in results if str(item.get("provider_status") or "") == "error"),
+        "not_configured_batches": sum(1 for item in results if str(item.get("provider_status") or "") == "not_configured"),
+        "matched_items": sum(_int((item.get("mapped") or {}).get("matched_count")) for item in results if isinstance(item.get("mapped"), dict)),
+        "results": results,
+    }
