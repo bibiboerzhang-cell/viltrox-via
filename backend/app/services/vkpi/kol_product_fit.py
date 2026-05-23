@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.services.vkpi import llm_gateway
 from app.services.vkpi import memory
@@ -51,6 +52,8 @@ from app.services.vkpi.new_launch_match import (
     _text,
     _worked_links,
 )
+
+logger = get_logger(__name__)
 
 
 SCENARIO = "kol_product_fit"
@@ -590,8 +593,8 @@ def _persist_preview_run(payload: dict[str, Any]) -> dict[str, Any]:
     except Exception:
         try:
             conn.rollback()
-        except Exception:
-            pass
+        except Exception as rollback_exc:
+            logger.warning("kol product fit rollback failed: %s", rollback_exc)
         raise
 
 

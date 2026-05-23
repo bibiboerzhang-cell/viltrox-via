@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.services.vkpi._utils import json_loads, row_to_dict, to_float, to_int, to_text
 from app.services.vkpi import memory
@@ -27,6 +28,7 @@ BUDGET_SCOPE = "cron:p4_recommendations_daily"
 REASON_BUDGET_SCOPE = "cron:p4_recommendation_reasons"
 SCENARIO = "new_launch_match"
 FORBIDDEN_WRITE_FLAGS = {"--commit", "--write-db", "--provider-call"}
+logger = get_logger(__name__)
 
 
 def _row_to_dict(row: Any) -> dict[str, Any]:
@@ -710,8 +712,8 @@ def _persist_preview_run(payload: dict[str, Any]) -> dict[str, Any]:
     except Exception:
         try:
             conn.rollback()
-        except Exception:
-            pass
+        except Exception as rollback_exc:
+            logger.warning("new launch match rollback failed: %s", rollback_exc)
         raise
 
 

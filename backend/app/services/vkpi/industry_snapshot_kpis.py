@@ -7,6 +7,9 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from typing import Any
 
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 SNAPSHOT_FIELDS = [
     "followers",
@@ -106,7 +109,8 @@ def _parse_datetime(value: Any) -> datetime | None:
             timestamp = timestamp / 1000
         try:
             return datetime.utcfromtimestamp(timestamp)
-        except Exception:
+        except Exception as exc:
+            logger.warning("industry snapshot timestamp parse failed for %r: %s", value, exc)
             return None
     text = str(value).strip()
     if text.isdigit():
@@ -115,8 +119,8 @@ def _parse_datetime(value: Any) -> datetime | None:
             timestamp = timestamp / 1000
         try:
             return datetime.utcfromtimestamp(timestamp)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("industry snapshot numeric timestamp parse failed for %r: %s", text, exc)
     for candidate in (text, text.replace("Z", "+00:00")):
         try:
             return datetime.fromisoformat(candidate).replace(tzinfo=None)

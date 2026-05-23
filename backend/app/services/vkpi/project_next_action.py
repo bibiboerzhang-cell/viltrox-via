@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.services.vkpi import llm_gateway
 from app.services.vkpi.budget_guard import check_budget, get_budget_status
@@ -25,6 +26,7 @@ from app.services.vkpi.new_launch_match import (
 
 SCENARIO = "project_next_action"
 REASON_BUDGET_SCOPE = "cron:p4_recommendation_reasons"
+logger = get_logger(__name__)
 
 
 def _utcnow() -> datetime:
@@ -346,8 +348,8 @@ def _persist_preview_run(payload: dict[str, Any]) -> dict[str, Any]:
     except Exception:
         try:
             conn.rollback()
-        except Exception:
-            pass
+        except Exception as rollback_exc:
+            logger.warning("project next action rollback failed: %s", rollback_exc)
         raise
 
 

@@ -7,6 +7,7 @@ import secrets
 from datetime import datetime
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime
 from app.services.cache import cache_clear, cache_get, cache_set
 from app.services.system import staff as staff_service
@@ -20,6 +21,7 @@ ENRICHABLE_PLATFORMS = {"youtube", "instagram", "tiktok", "xiaohongshu", "x", "b
 OWNER_NAME_KEYS = ("owner_name", "owner", "responsible_owner", "responsible_name", "assignee", "登记/对接人")
 OWNER_ID_KEYS = ("responsible_staff_id", "owner_staff_id", "assigned_staff_id", "source_staff_id")
 KOL_POOL_READ_CACHE_TTL_SEC = 300
+logger = get_logger(__name__)
 KOL_POOL_LIST_COLUMNS = (
     "id",
     "pool_uid",
@@ -153,8 +155,8 @@ def _kol_pool_cache_key(name: str, **params: Any) -> str:
 def _clear_kol_pool_read_cache() -> None:
     try:
         cache_clear(prefix="vkpi:kol_pool:")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("vkpi kol pool cache clear failed: %s", exc)
 
 
 def _kol_pool_cache_hit(payload: Any) -> Any:
@@ -607,8 +609,8 @@ def _ensure_main_kol_schema() -> None:
         from app.api.routers.kol_ops_schema import ensure_kol_schema
 
         ensure_kol_schema()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("vkpi main kol schema guard failed: %s", exc)
 
 
 def _safe_like(value: str) -> str:
