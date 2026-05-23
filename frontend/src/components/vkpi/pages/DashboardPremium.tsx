@@ -108,6 +108,15 @@ interface PremiumPlatform {
   mockLabel?: string;
 }
 
+interface PremiumAgent {
+  id: string;
+  name: string;
+  status: string;
+  summary: string;
+  lastOutput: string;
+  isMock: boolean;
+}
+
 interface CountryDrawerState {
   region: PremiumRegion;
   items: VkpiKolPoolItem[];
@@ -134,6 +143,7 @@ interface PremiumSnapshot {
   officialMatrix: Row;
   competitorDashboard: Row;
   brandSignals: Row[];
+  agentsStatus: Row;
   loadedAt?: string;
 }
 
@@ -167,6 +177,16 @@ const contentTypes = [
   { label: '视频', value: '56.7%', color: '#1b6cff' },
   { label: '图集', value: '24.3%', color: '#18d5ff' },
   { label: '图文', value: '13.6%', color: '#8b5cf6' },
+];
+
+const mockAgents: PremiumAgent[] = [
+  { id: 'recommendation', name: '推荐 Agent', status: 'idle', summary: '等待真实 API', lastOutput: '', isMock: true },
+  { id: 'brief', name: '简报 Agent', status: 'idle', summary: '等待真实 API', lastOutput: '', isMock: true },
+  { id: 'evidence', name: '证据 Agent', status: 'idle', summary: '等待真实 API', lastOutput: '', isMock: true },
+  { id: 'sync_sentinel', name: '同步守护', status: 'idle', summary: '等待真实 API', lastOutput: '', isMock: true },
+  { id: 'brain', name: '脑层验收', status: 'idle', summary: '等待真实 API', lastOutput: '', isMock: true },
+  { id: 'kol_intel', name: 'KOL 智能', status: 'idle', summary: '等待真实 API', lastOutput: '', isMock: true },
+  { id: 'market_intel', name: '市场情报', status: 'idle', summary: '等待真实 API', lastOutput: '', isMock: true },
 ];
 
 const platformStyles: Record<string, { icon: string; label: string; background: string }> = {
@@ -222,6 +242,7 @@ const EMPTY_PREMIUM_SNAPSHOT: PremiumSnapshot = {
   officialMatrix: {},
   competitorDashboard: {},
   brandSignals: [],
+  agentsStatus: {},
 };
 
 function localDateISO(date = new Date()): string {
@@ -508,6 +529,22 @@ function buildPremiumPlatforms(kolSummary: Row, officialMatrix: Row, allowMockFa
   });
 }
 
+function buildPremiumAgents(agentsStatus: Row, allowMockFallback: boolean): PremiumAgent[] {
+  const rows = rowsFrom(agentsStatus.agents)
+    .map((row): PremiumAgent => ({
+      id: String(row.id || ''),
+      name: String(row.name || row.id || 'Agent'),
+      status: String(row.status || 'idle'),
+      summary: String(row.summary || '暂无输出'),
+      lastOutput: String(row.last_output || ''),
+      isMock: false,
+    }))
+    .filter((agent) => Boolean(agent.id))
+    .slice(0, 7);
+  if (rows.length) return rows;
+  return allowMockFallback ? mockAgents : [{ id: 'agents', name: 'Agents', status: 'idle', summary: '等待真实 API', lastOutput: '', isMock: true }];
+}
+
 function recentDateLabels(days = 6): string[] {
   const labels: string[] = [];
   const now = new Date();
@@ -600,7 +637,7 @@ function engagementLabel(row: Row): string {
 
 async function fetchPremiumSnapshot(apiToken: string, windowDays: number): Promise<PremiumSnapshot> {
   const failedSections: string[] = [];
-  const [dashboardResult, trendResult, productResult, kolSummaryResult, kolDistributionResult, officialMatrixResult, competitorResult, brandSignalsResult] = await Promise.allSettled([
+  const [dashboardResult, trendResult, productResult, kolSummaryResult, kolDistributionResult, officialMatrixResult, competitorResult, brandSignalsResult, agentsStatusResult] = await Promise.allSettled([
     apiFetch<Row>(`/api/admin/vkpi/dashboard?window_days=${windowDays}`, {}, apiToken),
     apiFetch<{ rows?: Row[] }>(`/api/admin/vkpi/dashboard/revenue-trend?window_days=7`, {}, apiToken),
     apiFetch<{ rows?: Row[] }>(`/api/admin/vkpi/dashboard/product-performance?window_days=${windowDays}&limit=20`, {}, apiToken),
@@ -609,6 +646,7 @@ async function fetchPremiumSnapshot(apiToken: string, windowDays: number): Promi
     getOfficialChannelMatrix(apiToken, { limit: 20 }),
     getKolPoolCompetitorDashboard(apiToken),
     listBrandSignals(apiToken, { status: 'new', limit: 10 }),
+    apiFetch<Row>('/api/admin/vkpi/dashboard/agents-status', {}, apiToken),
   ]);
   const dashboard = settledValue(dashboardResult, {}, failedSections, 'dashboard');
   const trend = settledValue(trendResult, { rows: [] }, failedSections, 'revenue-trend');
@@ -618,6 +656,7 @@ async function fetchPremiumSnapshot(apiToken: string, windowDays: number): Promi
   const officialMatrix = settledValue(officialMatrixResult, {}, failedSections, 'official-channel-matrix');
   const competitorDashboard = settledValue(competitorResult, {}, failedSections, 'competitors-dashboard');
   const brandSignals = settledValue(brandSignalsResult, { signals: [] }, failedSections, 'brand-signals');
+  const agentsStatus = settledValue(agentsStatusResult, {}, failedSections, 'agents-status');
   return {
     source: failedSections.length ? 'partial' : 'real',
     failedSections,
@@ -629,6 +668,7 @@ async function fetchPremiumSnapshot(apiToken: string, windowDays: number): Promi
     officialMatrix,
     competitorDashboard,
     brandSignals: rowsFrom(brandSignals.signals),
+    agentsStatus,
     loadedAt: new Date().toISOString(),
   };
 }
@@ -826,6 +866,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
     [premiumRegions],
   );
   const premiumPlatforms = useMemo(() => buildPremiumPlatforms(snapshot.kolSummary, snapshot.officialMatrix, allowMockFallback), [allowMockFallback, snapshot.kolSummary, snapshot.officialMatrix]);
+  const premiumAgents = useMemo(() => buildPremiumAgents(snapshot.agentsStatus, allowMockFallback), [allowMockFallback, snapshot.agentsStatus]);
   const contentRows = useMemo(() => latestContentRows(snapshot.officialMatrix), [snapshot.officialMatrix]);
   const official = useMemo(() => officialTotals(snapshot.officialMatrix), [snapshot.officialMatrix]);
   const contentTypeRows = allowMockFallback
@@ -836,6 +877,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
   const competitorTiers = objectValue(snapshot.competitorDashboard.tier_counts);
   const riskCount = numberValue(competitorTiers.avoid) + numberValue(competitorTiers.caution);
   const kolTotal = numberValue(snapshot.kolSummary.total || snapshot.kolSummary.candidate_asset_count);
+  const activeAgentCount = premiumAgents.filter((agent) => agent.status === 'active').length;
   const heroMissions = useMemo(() => [
     { value: snapshot.source === 'mock' && allowMockFallback ? '7' : compact(official.accountCount), suffix: snapshot.source === 'mock' && allowMockFallback ? 'actions' : 'accounts', label: snapshot.source === 'mock' && allowMockFallback ? '今日关键动作' : '官方账号' },
     { value: snapshot.source === 'mock' && allowMockFallback ? '3' : compact(official.posts), suffix: snapshot.source === 'mock' && allowMockFallback ? 'risks' : 'contents', label: snapshot.source === 'mock' && allowMockFallback ? '项目 / 竞品风险' : '已抓取内容' },
@@ -1034,6 +1076,18 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
             </div>
             <aside className="rail">
               <div className="glass-card rail-card copilot"><div className="ai-kicker">V-KPI Copilot</div><h3>行动卡</h3><p>推荐、风险、任务已汇总。</p><div className="insight">示例 · 待接 LLM</div></div>
+              <div className="glass-card rail-card agents-room">
+                <div className="panel-head"><h3>Agents 战情室</h3><span className="tag">{activeAgentCount} / {premiumAgents.length} 在线</span></div>
+                <div className="agents-list">
+                  {premiumAgents.map((agent) => (
+                    <div className="agent-row" key={agent.id} title={agent.lastOutput || agent.summary}>
+                      <span className={`agent-dot ${agent.status}`}></span>
+                      <div><b>{agent.name}{agent.isMock ? <span className="tag">示例</span> : null}</b><p>{agent.summary}</p></div>
+                    </div>
+                  ))}
+                </div>
+                <button className="link agents-link" type="button" onClick={() => showToast('Agent Inbox 下一小块接入')}>Agent Inbox</button>
+              </div>
               <div className="glass-card rail-card">
                 <div className="panel-head">
                   <h3>重要提醒</h3>
