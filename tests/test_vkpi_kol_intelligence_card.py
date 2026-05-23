@@ -120,7 +120,8 @@ def test_kol_intelligence_card_aggregates_existing_evidence_without_provider_cal
         assert card["memory_card"]["recent_posts"][0]["title"] == "Viltrox 35mm F1.2 LAB review vs Sigma"
         assert card["product_fit"]["status"] == "skipped"
         assert card["decision_support"]["readiness"] in {"ready", "partial"}
-        assert {row["section"] for row in card["evidence_index"]} == {
+        evidence_index = {row["section"]: row for row in card["evidence_index"]}
+        assert set(evidence_index) == {
             "freshness",
             "dimensions11",
             "competitors",
@@ -128,5 +129,9 @@ def test_kol_intelligence_card_aggregates_existing_evidence_without_provider_cal
             "memory_card",
             "product_fit",
         }
+        assert evidence_index["memory_card"]["label"] == "Memory Card"
+        assert evidence_index["memory_card"]["evidence_count"] >= 2
+        assert evidence_index["brand_signal"]["evidence_count"] >= 2
+        assert "confidence" in evidence_index["dimensions11"]
     finally:
         _cleanup()

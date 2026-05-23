@@ -375,6 +375,71 @@ def _decision_support(sections: dict[str, dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _confidence_for_section(section: str, payload: dict[str, Any]) -> float:
+    if section == "dimensions11":
+        confidence = payload.get("confidence") if isinstance(payload.get("confidence"), dict) else {}
+        return _safe_float(confidence.get("overall"))
+    if section == "product_fit":
+        top = payload.get("top") if isinstance(payload.get("top"), list) else []
+        scores = [_safe_float(row.get("confidence") or row.get("fit_confidence")) for row in top if isinstance(row, dict)]
+        return max(scores) if scores else 0.0
+    if payload.get("status") == "ready":
+        return 1.0
+    if payload.get("status") == "empty":
+        return 0.0
+    return 0.0
+
+
+def _evidence_count_for_section(section: str, payload: dict[str, Any]) -> int:
+    if section == "freshness":
+        return 1 if payload.get("last_refresh_at") or payload.get("last_refresh_status") else 0
+    if section == "dimensions11":
+        confidence = payload.get("confidence") if isinstance(payload.get("confidence"), dict) else {}
+        return sum(1 for key in ("block1_content", "block2_performance", "block3_business", "block4_specialty") if _safe_float(confidence.get(key)) > 0)
+    if section == "competitors":
+        relations = payload.get("relations") if isinstance(payload.get("relations"), list) else []
+        return len(relations)
+    if section == "brand_signal":
+        return _safe_int(payload.get("signal_count"))
+    if section == "memory_card":
+        history = payload.get("history_match") if isinstance(payload.get("history_match"), dict) else {}
+        competitor_memory = payload.get("competitor_memory") if isinstance(payload.get("competitor_memory"), dict) else {}
+        cooperation_count = _safe_int(history.get("cooperation_count"))
+        recent_posts = payload.get("recent_posts") if isinstance(payload.get("recent_posts"), list) else []
+        recent_cooperations = payload.get("recent_cooperations") if isinstance(payload.get("recent_cooperations"), list) else []
+        return cooperation_count + len(recent_posts) + len(recent_cooperations) + _safe_int(competitor_memory.get("relation_count"))
+    if section == "product_fit":
+        return _safe_int(payload.get("count"))
+    return 0
+
+
+def _evidence_index(sections: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    sources = {
+        "freshness": ("Freshness", "vkpi_kol_refresh_tier"),
+        "dimensions11": ("11D Confidence", "vkpi_kol_pool + cached posts"),
+        "competitors": ("Competitors", "vkpi_competitor_relation or cached posts"),
+        "brand_signal": ("Brand Signal", "vkpi_kol_pool.raw_platform_data"),
+        "memory_card": ("Memory Card", "vkpi_kol_pool + legacy memory"),
+        "product_fit": ("Product Fit", "vkpi_memory_entities/product families"),
+    }
+    rows: list[dict[str, Any]] = []
+    for section in ("freshness", "dimensions11", "competitors", "brand_signal", "memory_card", "product_fit"):
+        payload = sections.get(section, {})
+        label, source = sources[section]
+        row = {
+            "section": section,
+            "label": label,
+            "source": source,
+            "status": payload.get("status") or ("ready" if section == "freshness" else "unknown"),
+            "evidence_count": _evidence_count_for_section(section, payload),
+            "confidence": _confidence_for_section(section, payload),
+        }
+        if section == "freshness" and payload.get("days_old") is not None:
+            row["freshness_hours"] = _safe_int(payload.get("days_old")) * 24
+        rows.append(row)
+    return rows
+
+
 def build_kol_pool_intelligence_card(kol_pool_id: int, *, include_product_fit: bool = True) -> dict[str, Any]:
     item = kol_pool.get_item(kol_pool_id)["item"]
     competitors = _competitors(kol_pool_id)
@@ -396,12 +461,5 @@ def build_kol_pool_intelligence_card(kol_pool_id: int, *, include_product_fit: b
         "item": _item_summary(item),
         **sections,
         "decision_support": _decision_support(sections),
-        "evidence_index": [
-            {"section": "freshness", "source": "vkpi_kol_refresh_tier", "status": sections["freshness"].get("status") or "ready"},
-            {"section": "dimensions11", "source": "vkpi_kol_pool + cached posts", "status": sections["dimensions11"].get("status")},
-            {"section": "competitors", "source": "vkpi_competitor_relation or cached posts", "status": sections["competitors"].get("status")},
-            {"section": "brand_signal", "source": "vkpi_kol_pool.raw_platform_data", "status": sections["brand_signal"].get("status")},
-            {"section": "memory_card", "source": "vkpi_kol_pool + legacy memory", "status": sections["memory_card"].get("status")},
-            {"section": "product_fit", "source": "vkpi_memory_entities/product families", "status": sections["product_fit"].get("status")},
-        ],
+        "evidence_index": _evidence_index(sections),
     }
