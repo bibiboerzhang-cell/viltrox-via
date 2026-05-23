@@ -75,6 +75,7 @@ First implementation package:
 - Provides offline planning only: platform chunking, actor input payloads, bounded concurrency caps, and dataset item mapping.
 - Does not call Apify, does not write refreshed KOL rows, and is not connected to a timer.
 - `qualified_refresh_rows()` now includes `profile_url` so future batch execution can avoid reconstructing URLs from handles when the source already has a canonical profile URL.
+- `scripts/vkpi_refresh_tier.py --apify-batch-plan` exposes the same plan from the qualified selector as a read-only operator smoke.
 
 P1.X.B must not implement:
 

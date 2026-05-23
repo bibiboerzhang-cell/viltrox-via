@@ -9,7 +9,10 @@ from __future__ import annotations
 import os
 import re
 import urllib.parse
+from datetime import datetime, timedelta, timezone
 from typing import Any
+
+from app.services.vkpi import refresh_tier
 
 
 SUPPORTED_BATCH_PLATFORMS = {"instagram", "youtube", "facebook", "reddit", "x", "tiktok"}
@@ -72,11 +75,45 @@ def chunk_size_for_platform(platform: str, overrides: dict[str, int] | None = No
     return max(1, min(100, _int(configured, 25)))
 
 
+def parse_chunk_overrides(value: Any) -> dict[str, int]:
+    overrides: dict[str, int] = {}
+    if isinstance(value, dict):
+        source = value.items()
+    else:
+        source = []
+        for part in str(value or "").split(","):
+            if "=" not in part:
+                continue
+            key, raw_size = part.split("=", 1)
+            source.append((key, raw_size))
+    for raw_platform, raw_size in source:
+        platform = normalize_platform(raw_platform)
+        if platform in SUPPORTED_BATCH_PLATFORMS:
+            overrides[platform] = chunk_size_for_platform(
+                platform,
+                {platform: _int(raw_size, DEFAULT_CHUNK_SIZES.get(platform, 25))},
+            )
+    return overrides
+
+
 def actor_id_for_platform(platform: str) -> str:
     platform_key = normalize_platform(platform)
     env_key = ACTOR_ENV_KEYS.get(platform_key, "")
     configured = os.environ.get(env_key, "").strip() if env_key else ""
     return (configured or DEFAULT_ACTORS.get(platform_key) or "").replace("/", "~")
+
+
+def compute_stale_before(raw_value: str = "", stale_days: int = 0, *, now: datetime | None = None) -> str:
+    raw = _text(raw_value)
+    if raw:
+        return raw
+    days = max(0, _int(stale_days, 0))
+    if days <= 0:
+        return ""
+    anchor = now or datetime.now(timezone.utc)
+    if anchor.tzinfo is None:
+        anchor = anchor.replace(tzinfo=timezone.utc)
+    return (anchor.astimezone(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _strip_handle(value: Any) -> str:
@@ -220,6 +257,54 @@ def plan_apify_batches(
         "batches": batches,
         "skipped": skipped,
         "platforms": {platform: len(items) for platform, items in sorted(grouped.items())},
+    }
+
+
+def qualified_apify_batch_plan(
+    *,
+    limit: int = 50,
+    offset: int = 0,
+    stale_before: str = "",
+    stale_days: int = 0,
+    platforms: set[str] | None = None,
+    tiers: set[str] | None = None,
+    max_posts: int = 1,
+    max_concurrent: int | None = None,
+    chunk_overrides: dict[str, int] | None = None,
+) -> dict[str, Any]:
+    """Plan Apify batch runs from the qualified tier selector without providers."""
+    safe_limit = max(1, min(1200, _int(limit, 50)))
+    safe_offset = max(0, min(5000, _int(offset, 0)))
+    safe_max_posts = max(1, min(3, _int(max_posts, 1)))
+    selected_tiers = refresh_tier._tier_filter(tiers)
+    selected_platforms = {normalize_platform(item) for item in (platforms or set()) if _text(item)}
+    cutoff = compute_stale_before(stale_before, stale_days)
+    source_counts = refresh_tier.qualified_source_counts(tiers=selected_tiers, platforms=selected_platforms)
+    rows = refresh_tier.qualified_refresh_rows(
+        limit=safe_limit,
+        offset=safe_offset,
+        stale_before=cutoff,
+        platforms=selected_platforms,
+        tiers=selected_tiers,
+    )
+    plan = plan_apify_batches(
+        rows,
+        max_posts=safe_max_posts,
+        chunk_overrides=chunk_overrides,
+        max_concurrent=max_concurrent,
+    )
+    return {
+        "mode": "plan_only",
+        "selector": "qualified",
+        "execution_enabled": False,
+        "reason": "apify_batch_execution_not_enabled",
+        "tiers": sorted(selected_tiers),
+        "limit": safe_limit,
+        "offset": safe_offset,
+        "stale_before": cutoff,
+        "max_posts": safe_max_posts,
+        **source_counts,
+        **plan,
     }
 
 

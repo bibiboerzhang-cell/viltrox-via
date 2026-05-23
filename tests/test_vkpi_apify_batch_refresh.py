@@ -1,6 +1,12 @@
 from app.services.vkpi import apify_batch_refresh
 
 
+def test_parse_chunk_overrides_only_accepts_supported_platforms() -> None:
+    overrides = apify_batch_refresh.parse_chunk_overrides("instagram=20,tiktok=10,unknown=7,x=200")
+
+    assert overrides == {"instagram": 20, "tiktok": 10, "x": 100}
+
+
 def test_plan_apify_batches_uses_platform_chunk_sizes_and_bounded_concurrency(monkeypatch) -> None:
     monkeypatch.setenv("APIFY_INSTAGRAM_POSTS_ACTOR_ID", "custom/instagram")
     rows = [
@@ -57,3 +63,41 @@ def test_map_dataset_items_to_targets_matches_instagram_and_tiktok_shapes() -> N
     assert mapped["matched_count"] == 2
     assert [item["kol_pool_id"] for item in mapped["matched"]] == [10, 20]
     assert mapped["unmatched_count"] == 1
+
+
+def test_qualified_apify_batch_plan_uses_refresh_tier_selector(monkeypatch) -> None:
+    rows = [
+        {"id": 1, "platform": "instagram", "handle": "viltrox", "profile_url": "", "refresh_tier": "hot"},
+        {"id": 2, "platform": "tiktok", "handle": "viltroxofficial", "profile_url": "", "refresh_tier": "hot"},
+    ]
+    calls: dict[str, object] = {}
+
+    def fake_rows(**kwargs):
+        calls["rows"] = kwargs
+        return rows
+
+    def fake_counts(**kwargs):
+        calls["counts"] = kwargs
+        return {"selector_ready": True, "source_total": 2, "source_by_platform": {"instagram": 1, "tiktok": 1}, "tier_distribution": {"hot": 2}}
+
+    monkeypatch.setattr(apify_batch_refresh.refresh_tier, "qualified_refresh_rows", fake_rows)
+    monkeypatch.setattr(apify_batch_refresh.refresh_tier, "qualified_source_counts", fake_counts)
+
+    plan = apify_batch_refresh.qualified_apify_batch_plan(
+        limit=25,
+        offset=5,
+        stale_before="2026-05-23T00:00:00Z",
+        platforms={"instagram", "tiktok"},
+        tiers={"hot"},
+        max_posts=1,
+        max_concurrent=2,
+        chunk_overrides={"instagram": 1, "tiktok": 1},
+    )
+
+    assert plan["mode"] == "plan_only"
+    assert plan["execution_enabled"] is False
+    assert plan["selector"] == "qualified"
+    assert plan["total_targets"] == 2
+    assert plan["batch_count"] == 2
+    assert calls["rows"]["offset"] == 5
+    assert calls["rows"]["stale_before"] == "2026-05-23T00:00:00Z"
