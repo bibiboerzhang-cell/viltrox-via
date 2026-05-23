@@ -24,6 +24,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 
 from app.api.dependencies.perms import require_tab
 from app.services.vkpi import (
+    ai_brief,
     evidence_summary,
     eleven_dimensions,
     gemini_single_kol_preflight,
@@ -348,6 +349,27 @@ def get_pool_item_evidence_summary(
             include_product_fit=bool(include_product_fit),
             ref_limit=int(ref_limit),
             include_llm_preflight=bool(include_llm_preflight),
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/kol-pool/{kol_pool_id}/ai-brief")
+def get_pool_item_ai_brief(
+    kol_pool_id: int,
+    include_product_fit: bool = Query(default=True),
+    ref_limit: int = Query(default=8, ge=1, le=25),
+    max_items: int = Query(default=8, ge=1, le=12),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """Return read-only AI Brief v0 from existing evidence refs only."""
+    del staff
+    try:
+        return ai_brief.build_kol_pool_ai_brief(
+            int(kol_pool_id),
+            include_product_fit=bool(include_product_fit),
+            ref_limit=int(ref_limit),
+            max_items=int(max_items),
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

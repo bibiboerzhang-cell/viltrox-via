@@ -94,6 +94,25 @@ export interface VkpiKolPoolEvidenceSummary {
   llm_budget_preflight?: Record<string, unknown>;
 }
 
+export interface VkpiKolPoolAiBrief {
+  mode: string;
+  generated_at: string;
+  kol_pool_id: number;
+  provider_calls: boolean;
+  llm_calls: boolean;
+  write_db: boolean;
+  passed?: boolean;
+  policy?: Record<string, unknown>;
+  checks?: Record<string, unknown>;
+  headline?: string;
+  brief_items?: Array<Record<string, unknown>>;
+  next_actions?: Array<Record<string, unknown>>;
+  evidence_backlinks?: Array<Record<string, unknown>>;
+  brief_item_count?: number;
+  next_action_count?: number;
+  evidence_backlink_count?: number;
+}
+
 export interface VkpiKolPoolGeminiPreflight {
   mode: string;
   generated_at: string;
@@ -189,6 +208,15 @@ export async function getKolPoolEvidenceSummary(token: string, kolPoolId: number
   const query = new URLSearchParams({ include_product_fit: String(includeProductFit) });
   return apiFetch<VkpiKolPoolEvidenceSummary>(
     `/api/admin/vkpi/kol-pool/${kolPoolId}/evidence-summary?${query.toString()}`,
+    {},
+    token,
+  );
+}
+
+export async function getKolPoolAiBrief(token: string, kolPoolId: number, includeProductFit = true) {
+  const query = new URLSearchParams({ include_product_fit: String(includeProductFit) });
+  return apiFetch<VkpiKolPoolAiBrief>(
+    `/api/admin/vkpi/kol-pool/${kolPoolId}/ai-brief?${query.toString()}`,
     {},
     token,
   );
