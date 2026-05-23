@@ -163,6 +163,25 @@
     grid-template-columns: repeat(2,minmax(0,1fr));
   }
 
+  .vkpi-glass-shell .geo-map-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .vkpi-glass-shell .geo-map-head,
+  .vkpi-glass-shell .map-legend {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .vkpi-glass-shell .map-metric-switch {
+    justify-content: flex-start;
+  }
+
+  .vkpi-glass-shell .map-legend em {
+    margin-left: 0;
+    text-align: left;
+  }
+
   .vkpi-glass-shell .latest {
     overflow-x: auto;
   }

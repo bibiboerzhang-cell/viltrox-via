@@ -161,6 +161,33 @@
 .vkpi-glass-shell .holo-map svg { position: absolute; inset: 0; width: 100%; height: 100%; }
 .vkpi-glass-shell .world-map-grid line { stroke: rgba(92,130,190,.13); stroke-width: 1; }
 .vkpi-glass-shell .world-map-real-land path { fill: url(#land-real); stroke: rgba(86,121,180,.32); stroke-width: .65; vector-effect: non-scaling-stroke; filter: drop-shadow(0 10px 16px rgba(27,108,255,.10)); }
+.vkpi-glass-shell .geo-map-card { display: grid; gap: 13px; min-height: 354px; }
+.vkpi-glass-shell .geo-map-head { position: relative; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.vkpi-glass-shell .geo-map-head h3 { font-size: 16px; letter-spacing: -.03em; }
+.vkpi-glass-shell .geo-map-head p { margin: 4px 0 0; color: #667085; font-size: 12px; font-weight: 820; }
+.vkpi-glass-shell .map-metric-switch { display: flex; gap: 7px; flex-wrap: wrap; justify-content: flex-end; }
+.vkpi-glass-shell .map-metric-switch button { border: 1px solid rgba(255,255,255,.76); background: rgba(255,255,255,.48); border-radius: 999px; padding: 8px 11px; color: #667085; font: inherit; font-size: 12px; font-weight: 850; box-shadow: var(--inner); cursor: pointer; }
+.vkpi-glass-shell .map-metric-switch button.active { background: rgba(27,108,255,.12); color: #185fa5; border-color: rgba(27,108,255,.18); }
+.vkpi-glass-shell .geo-map-layout { display: grid; grid-template-columns: minmax(0,1fr) 230px; gap: 16px; align-items: stretch; }
+.vkpi-glass-shell .geo-map-stage { min-width: 0; }
+.vkpi-glass-shell .geo-map-card .holo-map { height: 242px; background: rgba(255,255,255,.30); }
+.vkpi-glass-shell .map-hint { position: absolute; right: 12px; bottom: 10px; border-radius: 10px; background: rgba(255,255,255,.72); border: 1px solid rgba(255,255,255,.78); color: #667085; font-size: 11px; font-weight: 850; padding: 6px 9px; box-shadow: var(--inner); }
+.vkpi-glass-shell .geo-top { display: grid; align-content: start; gap: 9px; min-width: 0; }
+.vkpi-glass-shell .geo-top > span { color: #667085; font-size: 12px; font-weight: 900; }
+.vkpi-glass-shell .geo-top-list { display: grid; gap: 8px; }
+.vkpi-glass-shell .geo-country-card { width: 100%; text-align: left; border: 1px solid rgba(255,255,255,.66); border-radius: 14px; background: rgba(255,255,255,.40); box-shadow: var(--inner); padding: 10px 11px; cursor: pointer; font: inherit; display: grid; gap: 5px; }
+.vkpi-glass-shell .geo-country-card b { display: flex; align-items: center; gap: 6px; min-width: 0; color: #101828; font-size: 13px; font-weight: 950; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vkpi-glass-shell .geo-country-card strong { color: #101828; font-size: 12px; font-weight: 900; }
+.vkpi-glass-shell .geo-country-card em { color: #667085; font-style: normal; font-size: 11px; font-weight: 820; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vkpi-glass-shell .geo-all-link { justify-self: start; margin-top: 2px; }
+.vkpi-glass-shell .map-legend { display: flex; align-items: center; gap: 13px; padding-top: 11px; border-top: 1px solid rgba(199,214,239,.58); color: #667085; font-size: 11px; font-weight: 850; }
+.vkpi-glass-shell .map-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.vkpi-glass-shell .map-legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.vkpi-glass-shell .map-legend .dense { background: #185fa5; }
+.vkpi-glass-shell .map-legend .mid { background: #6aa6ff; }
+.vkpi-glass-shell .map-legend .light { background: #b5d4f4; }
+.vkpi-glass-shell .map-legend .empty { background: #e6f1fb; }
+.vkpi-glass-shell .map-legend em { margin-left: auto; font-style: normal; text-align: right; }
 .vkpi-glass-shell .zoom { position: absolute; top: 14px; left: 14px; display: flex; flex-direction: column; gap: 6px; }
 .vkpi-glass-shell .zoom span { width: 31px; height: 31px; border-radius: 10px; display: grid; place-items: center; background: rgba(255,255,255,.64); border: 1px solid rgba(255,255,255,.78); box-shadow: var(--inner); font-weight: 900; }
 .vkpi-glass-shell .region-list { position: relative; margin-top: 14px; display: grid; grid-template-columns: repeat(5,1fr); gap: 8px; }

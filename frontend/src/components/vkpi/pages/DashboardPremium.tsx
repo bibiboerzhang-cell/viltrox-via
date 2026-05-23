@@ -33,6 +33,7 @@ let glassToastTimer: number | undefined;
 type Row = Record<string, unknown>;
 type PremiumSource = 'mock' | 'real' | 'partial';
 type ContentFilter = 'all' | 'official' | 'partner' | 'ugc';
+type MapMetric = 'kol' | 'exposure' | 'sales';
 
 interface PremiumKpi {
   icon: string;
@@ -105,6 +106,9 @@ interface PremiumRegion {
   isMock: boolean;
   countryCode?: string;
   kolCount?: number;
+  exposure?: number;
+  sales?: number;
+  platformSummary?: string[];
   lat?: number;
   lng?: number;
   mockLabel?: string;
@@ -468,6 +472,14 @@ function buildPremiumRegions(kolSummary: Row, kolDistribution: Row, allowMockFal
       const count = numberValue(row.count || row.kol_count);
       const share = numberValue(row.share) || (total ? (count / total) * 100 : 0);
       const countryCode = String(row.code || row.country_code || '').trim();
+      const platformSummary = rowsFrom(row.platforms || row.platform_distribution || row.by_platform)
+        .slice(0, 3)
+        .map((platformRow) => {
+          const label = platformDisplayName(platformRow.platform || platformRow.label || platformRow.name);
+          const value = numberValue(platformRow.count || platformRow.kol_count || platformRow.value);
+          return value ? `${label} ${compact(value)}` : label;
+        })
+        .filter(Boolean);
       return {
         label: String(row.name || row.country_name || countryCode || `国家 ${index + 1}`),
         value: share ? `${share.toFixed(1)}%` : compact(count),
@@ -475,12 +487,15 @@ function buildPremiumRegions(kolSummary: Row, kolDistribution: Row, allowMockFal
         isMock: false,
         countryCode,
         kolCount: count,
+        exposure: numberValue(row.exposure || row.total_exposure || row.total_views || row.views),
+        sales: numberValue(row.sales || row.gmv || row.revenue || row.total_sales),
+        platformSummary,
         lat: numberValue(row.lat) || undefined,
         lng: numberValue(row.lng) || undefined,
       };
     })
     .filter((region) => Boolean(region.countryCode) && (region.kolCount || 0) > 0)
-    .slice(0, 5);
+    .sort((a, b) => (b.kolCount || 0) - (a.kolCount || 0));
   if (regionRows.length) return regionRows;
   return allowMockFallback
     ? regions
@@ -724,6 +739,31 @@ function contentMetric(row: Row, keys: string[]): number {
 function contentMediaIcon(row: Row): string {
   const raw = String(row.media_type || row.media_kind || row.type || row.url || '').toLowerCase();
   return raw.includes('video') || raw.includes('reel') || raw.includes('youtube') || raw.includes('tiktok') ? '▶' : '▧';
+}
+
+function countryFlag(code?: string): string {
+  const clean = String(code || '').trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(clean)) return '•';
+  return Array.from(clean).map((letter) => String.fromCodePoint(127397 + letter.charCodeAt(0))).join('');
+}
+
+function mapMetricValue(region: PremiumRegion, metric: MapMetric): number {
+  if (metric === 'exposure') return region.exposure || 0;
+  if (metric === 'sales') return region.sales || 0;
+  return region.kolCount || 0;
+}
+
+function mapMetricLabel(region: PremiumRegion, metric: MapMetric): string {
+  const value = mapMetricValue(region, metric);
+  if (metric === 'sales') return value ? `$${compact(value)}` : '待 Shopify';
+  if (metric === 'exposure') return value ? compact(value) : '待曝光';
+  return compact(value);
+}
+
+function mapMetricTitle(metric: MapMetric): string {
+  if (metric === 'sales') return '销售额';
+  if (metric === 'exposure') return '曝光量';
+  return 'KOL 数';
 }
 
 async function fetchPremiumSnapshot(apiToken: string, windowDays: number): Promise<PremiumSnapshot> {
@@ -1114,6 +1154,90 @@ function LatestContentPerformance({
   );
 }
 
+function GlobalKolMapPanel({
+  regions,
+  points,
+  activeMetric,
+  onMetricChange,
+  onOpenCountry,
+  onOpenAll,
+}: {
+  regions: PremiumRegion[];
+  points: CountryMapPoint[];
+  activeMetric: MapMetric;
+  onMetricChange: (metric: MapMetric) => void;
+  onOpenCountry: (region: PremiumRegion) => void;
+  onOpenAll: () => void;
+}) {
+  const realRegions = regions.filter((region) => !region.isMock && (region.kolCount || 0) > 0);
+  const totalKol = realRegions.reduce((sum, region) => sum + (region.kolCount || 0), 0);
+  const topRegions = realRegions.slice(0, 5);
+  const countriesLabel = realRegions.length ? `${realRegions.length} 国家` : '国家分布待接入';
+  const metricOptions: Array<{ key: MapMetric; label: string; ready: boolean }> = [
+    { key: 'kol', label: 'KOL 数', ready: true },
+    { key: 'exposure', label: '曝光量', ready: realRegions.some((region) => Boolean(region.exposure)) },
+    { key: 'sales', label: '销售额', ready: realRegions.some((region) => Boolean(region.sales)) },
+  ];
+  return (
+    <div className="glass-card panel geo-map-card">
+      <div className="geo-map-head">
+        <div>
+          <h3>全球 KOL 分布</h3>
+          <p>{compact(totalKol)} KOL · {countriesLabel} · 近 30 天</p>
+        </div>
+        <div className="map-metric-switch" aria-label="地图维度">
+          {metricOptions.map((option) => (
+            <button
+              className={activeMetric === option.key ? 'active' : ''}
+              type="button"
+              key={option.key}
+              title={option.ready ? option.label : `${option.label} 待数据源接入`}
+              onClick={() => onMetricChange(option.key)}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="geo-map-layout">
+        <div className="geo-map-stage">
+          <div className="holo-map">
+            <div className="zoom"><span>+</span><span>−</span></div>
+            <RealWorldMap points={points} onCountryClick={(point) => {
+              const region = regions.find((item) => String(item.countryCode || '').toUpperCase() === point.code);
+              if (region) onOpenCountry(region);
+            }} />
+            <div className="map-hint">悬停 / 点击国家查看详情</div>
+          </div>
+        </div>
+        <div className="geo-top">
+          <span>TOP 5 国家 · {mapMetricTitle(activeMetric)}</span>
+          <div className="geo-top-list">
+            {topRegions.length ? topRegions.map((region) => {
+              const share = totalKol ? ((region.kolCount || 0) / totalKol) * 100 : 0;
+              return (
+                <button className="geo-country-card" type="button" key={region.countryCode || region.label} onClick={() => onOpenCountry(region)}>
+                  <b><span>{countryFlag(region.countryCode)}</span>{region.label}</b>
+                  <strong>{mapMetricLabel(region, activeMetric)} · {share.toFixed(1)}%</strong>
+                  <em>{region.platformSummary?.length ? region.platformSummary.join(' · ') : '平台分布待接入'}</em>
+                </button>
+              );
+            }) : <div className="empty-real">暂无国家 KOL 分布</div>}
+          </div>
+          <button className="link geo-all-link" type="button" onClick={onOpenAll}>查看全部 {realRegions.length || 0} 国家 →</button>
+        </div>
+      </div>
+      <div className="map-legend">
+        <span><i className="dense"></i>密集</span>
+        <span><i className="mid"></i>中等</span>
+        <span><i className="light"></i>稀疏</span>
+        <span><i className="empty"></i>无 KOL</span>
+        <em>气泡大小 = {mapMetricTitle(activeMetric)}；无该维度数据时保持 KOL 分布</em>
+      </div>
+    </div>
+  );
+}
+
 function PremiumKpiSkeletons() {
   return (
     <>
@@ -1214,6 +1338,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
   const [panelDrawer, setPanelDrawer] = useState<PanelDrawerState | null>(null);
   const [expandedKpi, setExpandedKpi] = useState<string | null>(null);
   const [contentFilter, setContentFilter] = useState<ContentFilter>('all');
+  const [activeMapMetric, setActiveMapMetric] = useState<MapMetric>('kol');
 
   useEffect(() => {
     if (!apiToken) {
@@ -1253,12 +1378,12 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
         .map((region) => ({
           code: String(region.countryCode || '').toUpperCase(),
           name: region.label,
-          count: Number(region.kolCount || 0),
+          count: Number(mapMetricValue(region, activeMapMetric) || region.kolCount || 0),
           lat: Number(region.lat),
           lng: Number(region.lng),
           color: region.color,
         })),
-    [premiumRegions],
+    [activeMapMetric, premiumRegions],
   );
   const premiumPlatforms = useMemo(() => buildPremiumPlatforms(snapshot.kolSummary, snapshot.officialMatrix, allowMockFallback), [allowMockFallback, snapshot.kolSummary, snapshot.officialMatrix]);
   const premiumAgents = useMemo(() => buildPremiumAgents(snapshot.agentsStatus, allowMockFallback), [allowMockFallback, snapshot.agentsStatus]);
@@ -1455,19 +1580,19 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
 	          <div className="content-grid">
             <div>
               <div className="left-grid">
-                <div className="glass-card panel">
-                  <div className="panel-head"><h3>全球 KOL 分布</h3><button className="link" type="button" onClick={() => goToWorkspacePage('dataAnalysis', 'Country Map')}>Country Map</button></div>
-                  <div className="holo-map">
-                    <div className="zoom"><span>+</span><span>−</span></div>
-                    <RealWorldMap points={premiumMapPoints} onCountryClick={(point) => {
-                      const region = premiumRegions.find((item) => String(item.countryCode || '').toUpperCase() === point.code);
-                      if (region) openCountryDrawer(region);
-                    }} />
-                  </div>
-                  <div className="region-list">
-                    {premiumRegions.map((region) => <div className="region" style={glassVarStyle({ '--c': region.color })} key={region.label} role="button" tabIndex={0} title={region.mockLabel || `${region.kolCount || 0} KOL`} onClick={() => openCountryDrawer(region)} onKeyDown={(event) => { if (event.key === 'Enter') openCountryDrawer(region); }}><span><i></i>{region.label}{region.isMock ? <em>{badgeText(region.mockLabel)}</em> : null}</span><b>{region.value}</b></div>)}
-                  </div>
-                </div>
+                <GlobalKolMapPanel
+                  regions={premiumRegions}
+                  points={premiumMapPoints}
+                  activeMetric={activeMapMetric}
+                  onMetricChange={(metric) => {
+                    setActiveMapMetric(metric);
+                    if (metric !== 'kol' && !premiumRegions.some((region) => mapMetricValue(region, metric))) {
+                      showToast(`${mapMetricTitle(metric)}按国家聚合待接入`);
+                    }
+                  }}
+                  onOpenCountry={openCountryDrawer}
+                  onOpenAll={() => goToWorkspacePage('dataAnalysis', 'Country Map')}
+                />
                 <div className="glass-card panel">
                   <div className="panel-head"><h3>曝光趋势（近 7 天）</h3><div className="segment">{['曝光量', '互动量', '销售额'].map((segment) => <button className={activeSegment === segment ? 'active' : ''} data-seg={segment} onClick={() => handleSegmentSelect(segment)} type="button" key={segment}>{segment}</button>)}</div></div>
                   <div className="linechart" role="button" tabIndex={0} onClick={openTrendDrawer} onKeyDown={(event) => { if (event.key === 'Enter') openTrendDrawer(); }}><svg viewBox="0 0 520 250" preserveAspectRatio="none"><defs><linearGradient id="area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#1b6cff" /><stop offset="1" stopColor="#1b6cff" stopOpacity="0" /></linearGradient></defs><g stroke="rgba(92,130,190,.16)"><line x1="26" y1="30" x2="500" y2="30" /><line x1="26" y1="80" x2="500" y2="80" /><line x1="26" y1="130" x2="500" y2="130" /><line x1="26" y1="180" x2="500" y2="180" /></g><path d={premiumTrend.path} fill="none" stroke="#1b6cff" strokeWidth="4" strokeLinecap="round" /><path d={premiumTrend.areaPath} fill="url(#area)" opacity=".25" /><circle cx={premiumTrend.pointX} cy={premiumTrend.pointY} r="8" fill="#1b6cff" stroke="#fff" strokeWidth="4" /><text x="34" y="238" fontSize="12" fill="#667085">{premiumTrend.labels[0] || '-'}</text><text x="116" y="238" fontSize="12" fill="#667085">{premiumTrend.labels[1] || '-'}</text><text x="198" y="238" fontSize="12" fill="#667085">{premiumTrend.labels[2] || '-'}</text><text x="280" y="238" fontSize="12" fill="#667085">{premiumTrend.labels[3] || '-'}</text><text x="362" y="238" fontSize="12" fill="#667085">{premiumTrend.labels[4] || '-'}</text><text x="444" y="238" fontSize="12" fill="#667085">{premiumTrend.labels[5] || '-'}</text></svg><div className="float-tip">{premiumTrend.tipDate}<b>{premiumTrend.tipValue}</b></div></div>
