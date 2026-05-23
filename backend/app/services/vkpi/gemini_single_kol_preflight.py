@@ -1,21 +1,25 @@
-"""Read-only P4.55 Gemini single-KOL preflight.
+"""P4.55 Gemini single-KOL preflight and controlled live-run harness.
 
-This module only inspects cached V-KPI evidence. It does not call Gemini,
-Apify, YouTube, LLM providers, task queues, or write to the database.
+The default preflight path only inspects cached V-KPI evidence. A real Gemini
+call is only possible through run_kol_pool_gemini_single() with explicit flags,
+valid cached URL readiness, and passing budget gates.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
+import time
 from datetime import datetime, timezone
-from typing import Any, Iterable
+from typing import Any, Awaitable, Callable, Iterable
 
-from app.services.vkpi import kol_pool, llm_gateway
+from app.services.vkpi import budget_guard, kol_pool, llm_gateway
 
 
 GEMINI_SINGLE_KOL_SCOPE = "cron:p4_gemini_single_kol"
 YOUTUBE_RE = re.compile(r"(?:youtube\.com/(?:watch\?v=|shorts/)|youtu\.be/)([A-Za-z0-9_-]{6,})", re.I)
 VILTROX_RE = re.compile(r"\bviltrox\b", re.I)
+AnalyzerFn = Callable[[str, str, str], Awaitable[dict[str, Any]]]
 
 
 def _utcnow() -> str:
@@ -327,6 +331,34 @@ def _google_budget_provider(preflight: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _google_estimated_cost(preflight: dict[str, Any]) -> float:
+    provider = _google_budget_provider(preflight)
+    try:
+        return max(0.0, float(provider.get("estimated_cost_usd") or 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _blocked_run(preflight: dict[str, Any], *, reason: str, execute: bool, allow_provider_calls: bool) -> dict[str, Any]:
+    return {
+        "mode": "controlled_p4_55_gemini_single_kol_run",
+        "generated_at": _utcnow(),
+        "execution_status": "blocked",
+        "executed": False,
+        "reason": reason,
+        "execute_requested": bool(execute),
+        "allow_provider_calls": bool(allow_provider_calls),
+        "provider_calls": False,
+        "llm_calls": False,
+        "write_db": False,
+        "business_write_db": False,
+        "ledger_write_db": False,
+        "sync_triggered": False,
+        "task_enqueued": False,
+        "preflight": preflight,
+    }
+
+
 def build_kol_pool_gemini_preflight(kol_pool_id: int, *, candidate_limit: int = 24, include_budget_preflight: bool = True) -> dict[str, Any]:
     item = kol_pool.get_item(int(kol_pool_id))["item"]
     candidates = _cached_video_candidates(item, limit=candidate_limit)
@@ -403,5 +435,119 @@ def build_kol_pool_gemini_preflight(kol_pool_id: int, *, candidate_limit: int = 
             "no_write_db": True,
             "no_sync_triggered": True,
             "no_task_enqueued": True,
+        },
+    }
+
+
+async def run_kol_pool_gemini_single(
+    kol_pool_id: int,
+    *,
+    execute: bool = False,
+    allow_provider_calls: bool = False,
+    candidate_limit: int = 24,
+    timeout_seconds: int = 900,
+    analyzer: AnalyzerFn | None = None,
+) -> dict[str, Any]:
+    """Run one controlled Gemini single-KOL analysis, or return a blocked plan.
+
+    The default path is intentionally read-only. A real provider call requires
+    both execute=True and allow_provider_calls=True, a valid cached YouTube URL,
+    and a passing Google budget preflight.
+    """
+
+    preflight = build_kol_pool_gemini_preflight(
+        int(kol_pool_id),
+        candidate_limit=candidate_limit,
+        include_budget_preflight=True,
+    )
+    if not execute:
+        return _blocked_run(preflight, reason="execute_not_requested", execute=execute, allow_provider_calls=allow_provider_calls)
+    if not allow_provider_calls:
+        return _blocked_run(preflight, reason="provider_calls_not_allowed", execute=execute, allow_provider_calls=allow_provider_calls)
+    go_no_go = preflight.get("go_no_go") if isinstance(preflight.get("go_no_go"), dict) else {}
+    if not bool(go_no_go.get("candidate_ready_for_live_test")):
+        return _blocked_run(
+            preflight,
+            reason=str(go_no_go.get("blocked_reason") or "candidate_not_ready"),
+            execute=execute,
+            allow_provider_calls=allow_provider_calls,
+        )
+    if not bool(go_no_go.get("provider_calls_allowed")):
+        return _blocked_run(
+            preflight,
+            reason=str(go_no_go.get("blocked_reason") or "provider_gate_blocked"),
+            execute=execute,
+            allow_provider_calls=allow_provider_calls,
+        )
+
+    top_candidate = preflight.get("top_candidate") if isinstance(preflight.get("top_candidate"), dict) else {}
+    url = _text(top_candidate.get("video_url") or top_candidate.get("url"))
+    if not url:
+        return _blocked_run(preflight, reason="missing_video_url", execute=execute, allow_provider_calls=allow_provider_calls)
+    title = _text(top_candidate.get("title")) or _text((preflight.get("item") or {}).get("display_name"))
+    creator_handle = _text((preflight.get("item") or {}).get("handle"))
+    if analyzer is None:
+        from app.services.ai.analyzers.gemini_video import analyze_youtube_with_gemini
+
+        analyzer = analyze_youtube_with_gemini
+
+    started = time.monotonic()
+    result: dict[str, Any]
+    try:
+        result = await asyncio.wait_for(
+            analyzer(url, title, creator_handle),
+            timeout=max(30, min(3600, int(timeout_seconds or 900))),
+        )
+    except TimeoutError as exc:
+        result = {"analyzed": False, "method": "gemini_single_kol_timeout", "error": f"timeout_after_{timeout_seconds}s", "exception": str(exc)}
+    except Exception as exc:
+        result = {"analyzed": False, "method": "gemini_single_kol_exception", "error": f"{type(exc).__name__}: {str(exc)[:500]}"}
+    latency_ms = int((time.monotonic() - started) * 1000)
+    analyzed = bool(result.get("analyzed"))
+    estimated_cost = _google_estimated_cost(preflight.get("budget_preflight") if isinstance(preflight.get("budget_preflight"), dict) else {})
+    ledger = budget_guard.record_cost(
+        scope=GEMINI_SINGLE_KOL_SCOPE,
+        cron_task="p4_gemini_single_kol",
+        ai_provider="gemini",
+        model_name=str(result.get("method") or "gemini_single_kol"),
+        cost_usd=max(estimated_cost, 0.01),
+        kol_pool_id=int(kol_pool_id),
+        metadata={
+            "status": "success" if analyzed else "attempted_error",
+            "actual_cost_unknown": True,
+            "estimated_cost_source": "llm_gateway_budget_preflight",
+            "video_url": url,
+            "latency_ms": latency_ms,
+            "error": result.get("error") or "",
+        },
+        extra_scopes=["monthly_total", "single_call", "provider:gemini"],
+    )
+    return {
+        "mode": "controlled_p4_55_gemini_single_kol_run",
+        "generated_at": _utcnow(),
+        "execution_status": "completed" if analyzed else "provider_error",
+        "executed": True,
+        "execute_requested": True,
+        "allow_provider_calls": True,
+        "provider_calls": True,
+        "llm_calls": True,
+        "write_db": True,
+        "business_write_db": False,
+        "ledger_write_db": True,
+        "sync_triggered": False,
+        "task_enqueued": False,
+        "latency_ms": latency_ms,
+        "kol_pool_id": int(kol_pool_id),
+        "video_url": url,
+        "preflight": preflight,
+        "analysis": result,
+        "ledger": ledger,
+        "checks": {
+            "provider_call_was_explicit": True,
+            "budget_gate_passed": True,
+            "business_write_db_disabled": True,
+            "sync_not_triggered": True,
+            "task_not_enqueued": True,
+            "ledger_recorded": bool(ledger.get("recorded")),
         },
     }

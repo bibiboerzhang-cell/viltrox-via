@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from app.services.vkpi import gemini_single_kol_preflight
 from scripts import vkpi_gemini_single_kol_preflight as preflight_script
 
@@ -24,6 +26,24 @@ def _fake_budget(*_args, **_kwargs) -> dict:
         "provider_gate_reason": "force_offline",
         "cost_scope": gemini_single_kol_preflight.GEMINI_SINGLE_KOL_SCOPE,
         "providers": [{"provider": "google", "provider_calls_allowed": False, "scopes": ["cron:p4_gemini_single_kol"]}],
+    }
+
+
+def _fake_budget_allowed(*_args, **_kwargs) -> dict:
+    return {
+        "mode": "llm_gateway_budget_preflight_v0",
+        "provider_calls_allowed": True,
+        "provider_gate_reason": "provider_calls_allowed",
+        "cost_scope": gemini_single_kol_preflight.GEMINI_SINGLE_KOL_SCOPE,
+        "providers": [
+            {
+                "provider": "google",
+                "configured": True,
+                "estimated_cost_usd": 0.02,
+                "provider_calls_allowed": True,
+                "scopes": ["monthly_total", "single_call", "provider:gemini", "cron:p4_gemini_single_kol"],
+            }
+        ],
     }
 
 
@@ -119,3 +139,96 @@ def test_gemini_single_kol_preflight_acceptance_script_is_readonly(monkeypatch) 
     assert report["task_enqueued"] is False
     assert report["checks"]["budget_preflight_readonly"] is True
     assert "Gemini Single-KOL Preflight" in preflight_script.render_markdown(report)
+
+
+def test_gemini_single_kol_live_run_blocks_without_execute(monkeypatch) -> None:
+    raw = {"videos": [{"id": "top123456", "kind": "youtube#video", "title": "Viltrox lens review"}]}
+    monkeypatch.setattr(gemini_single_kol_preflight.kol_pool, "get_item", lambda *_args, **_kwargs: {"item": _fake_item(raw)})
+    monkeypatch.setattr(gemini_single_kol_preflight.llm_gateway, "budget_preflight", _fake_budget_allowed)
+    called = {"n": 0}
+
+    async def fake_analyzer(*_args, **_kwargs) -> dict:
+        called["n"] += 1
+        return {"analyzed": True}
+
+    payload = asyncio.run(
+        gemini_single_kol_preflight.run_kol_pool_gemini_single(
+            123,
+            execute=False,
+            allow_provider_calls=True,
+            analyzer=fake_analyzer,
+        )
+    )
+
+    assert payload["executed"] is False
+    assert payload["reason"] == "execute_not_requested"
+    assert payload["provider_calls"] is False
+    assert payload["write_db"] is False
+    assert called["n"] == 0
+
+
+def test_gemini_single_kol_live_run_blocks_when_budget_blocks(monkeypatch) -> None:
+    raw = {"videos": [{"id": "top123456", "kind": "youtube#video", "title": "Viltrox lens review"}]}
+    monkeypatch.setattr(gemini_single_kol_preflight.kol_pool, "get_item", lambda *_args, **_kwargs: {"item": _fake_item(raw)})
+    monkeypatch.setattr(gemini_single_kol_preflight.llm_gateway, "budget_preflight", _fake_budget)
+    called = {"n": 0}
+
+    async def fake_analyzer(*_args, **_kwargs) -> dict:
+        called["n"] += 1
+        return {"analyzed": True}
+
+    payload = asyncio.run(
+        gemini_single_kol_preflight.run_kol_pool_gemini_single(
+            123,
+            execute=True,
+            allow_provider_calls=True,
+            analyzer=fake_analyzer,
+        )
+    )
+
+    assert payload["executed"] is False
+    assert payload["reason"] == "provider_gate:force_offline"
+    assert payload["provider_calls"] is False
+    assert payload["write_db"] is False
+    assert called["n"] == 0
+
+
+def test_gemini_single_kol_live_run_requires_explicit_flags_and_records_ledger(monkeypatch) -> None:
+    raw = {"videos": [{"id": "top123456", "kind": "youtube#video", "title": "Viltrox lens review"}]}
+    monkeypatch.setattr(gemini_single_kol_preflight.kol_pool, "get_item", lambda *_args, **_kwargs: {"item": _fake_item(raw)})
+    monkeypatch.setattr(gemini_single_kol_preflight.llm_gateway, "budget_preflight", _fake_budget_allowed)
+    recorded = {"payload": None}
+    calls = {"n": 0}
+
+    async def fake_analyzer(url: str, title: str, handle: str) -> dict:
+        calls["n"] += 1
+        assert url == "https://www.youtube.com/watch?v=top123456"
+        assert title == "Viltrox lens review"
+        assert handle == "creatorone"
+        return {"analyzed": True, "method": "gemini_direct_test", "quality_overall": 7}
+
+    def fake_record_cost(**kwargs) -> dict:
+        recorded["payload"] = kwargs
+        return {"recorded": True, "scope": kwargs.get("scope"), "cost_usd": kwargs.get("cost_usd")}
+
+    monkeypatch.setattr(gemini_single_kol_preflight.budget_guard, "record_cost", fake_record_cost)
+
+    payload = asyncio.run(
+        gemini_single_kol_preflight.run_kol_pool_gemini_single(
+            123,
+            execute=True,
+            allow_provider_calls=True,
+            analyzer=fake_analyzer,
+        )
+    )
+
+    assert calls["n"] == 1
+    assert payload["executed"] is True
+    assert payload["provider_calls"] is True
+    assert payload["llm_calls"] is True
+    assert payload["business_write_db"] is False
+    assert payload["ledger_write_db"] is True
+    assert payload["checks"]["provider_call_was_explicit"] is True
+    assert payload["checks"]["ledger_recorded"] is True
+    assert recorded["payload"]["scope"] == gemini_single_kol_preflight.GEMINI_SINGLE_KOL_SCOPE
+    assert recorded["payload"]["ai_provider"] == "gemini"
