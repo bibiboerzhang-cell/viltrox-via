@@ -62,6 +62,8 @@ interface PremiumAlert {
   bgc: string;
   col: string;
   isMock: boolean;
+  url?: string;
+  sourceLabel?: string;
   mockLabel?: string;
 }
 
@@ -193,12 +195,6 @@ const platforms: PremiumPlatform[] = [
   { icon: 'YT', label: 'YouTube', width: '35%', value: '19.80M', background: '#ff0000', isMock: true, mockLabel: '示例平台' },
   { icon: 'TT', label: 'TikTok', width: '11%', value: '6.21M', background: '#111827', isMock: true, mockLabel: '示例平台' },
   { icon: 'FB', label: 'Facebook', width: '5%', value: '2.41M', background: '#1877f2', isMock: true, mockLabel: '示例平台' },
-];
-
-const mockAlerts: PremiumAlert[] = [
-  { icon: '!', title: 'Sigma 35mm F1.4 EX 发布', body: '竞品发布导致相关流量下降 8%', time: '2h', bgc: '#fff1f0', col: '#f04438', isMock: true, mockLabel: '示例提醒' },
-  { icon: '!', title: 'Z50II AF 问题讨论增加', body: '新增 18 条负面舆情', time: '5h', bgc: '#fff7ed', col: '#f79009', isMock: true, mockLabel: '示例提醒' },
-  { icon: '✓', title: '35mm F1.2 LAB 互动创新高', body: '互动率较上周增长 23%', time: '1d', bgc: '#ecfdf3', col: '#12b76a', isMock: true, mockLabel: '示例提醒' },
 ];
 
 const tasks: PremiumTask[] = [
@@ -414,11 +410,14 @@ function signalBody(signal: Row): string {
   const platform = String(signal.platform || '平台');
   const role = String(signal.brand_role || '').trim();
   const strength = String(signal.signal_strength || 'medium');
-  return `${platform} · ${role || 'signal'} · ${strength}`;
+  const matched = String(signal.matched_text || '').trim();
+  const context = String(signal.match_context || '').replace(/\s+/g, ' ').trim();
+  const evidence = matched || context.slice(0, 72);
+  return [platform, role || 'signal', strength, evidence].filter(Boolean).join(' · ');
 }
 
-function buildAlerts(signals: Row[], allowMockFallback: boolean): PremiumAlert[] {
-  if (!signals.length) return allowMockFallback ? mockAlerts : [];
+function buildAlerts(signals: Row[]): PremiumAlert[] {
+  if (!signals.length) return [];
   return signals.slice(0, 3).map((signal) => {
     const competitor = String(signal.brand_role || '') === 'competitor';
     return {
@@ -429,6 +428,8 @@ function buildAlerts(signals: Row[], allowMockFallback: boolean): PremiumAlert[]
       bgc: competitor ? '#fff7ed' : '#ecfdf3',
       col: competitor ? '#f79009' : '#12b76a',
       isMock: false,
+      url: String(signal.source_url || signal.post_url || '').trim(),
+      sourceLabel: String(signal.match_source || signal.source_table || 'vkpi_brand_signal').trim(),
     };
   });
 }
@@ -792,7 +793,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
   const allowMockFallback = !embedded;
   const premiumKpis = useMemo(() => buildPremiumKpis(snapshot, allowMockFallback), [allowMockFallback, snapshot]);
   const premiumProductRows = useMemo(() => buildProductRows(snapshot.productRows, allowMockFallback), [allowMockFallback, snapshot.productRows]);
-  const premiumAlerts = useMemo(() => buildAlerts(snapshot.brandSignals, allowMockFallback), [allowMockFallback, snapshot.brandSignals]);
+  const premiumAlerts = useMemo(() => buildAlerts(snapshot.brandSignals), [snapshot.brandSignals]);
   const premiumTrend = useMemo(() => trendChart(snapshot.trendRows, allowMockFallback), [allowMockFallback, snapshot.trendRows]);
   const premiumRegions = useMemo(() => buildPremiumRegions(snapshot.kolSummary, allowMockFallback), [allowMockFallback, snapshot.kolSummary]);
   const premiumPlatforms = useMemo(() => buildPremiumPlatforms(snapshot.kolSummary, snapshot.officialMatrix, allowMockFallback), [allowMockFallback, snapshot.kolSummary, snapshot.officialMatrix]);
@@ -957,7 +958,24 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
             </div>
             <aside className="rail">
               <div className="glass-card rail-card copilot"><div className="ai-kicker">V-KPI Copilot</div><h3>行动卡</h3><p>推荐、风险、任务已汇总。</p><div className="insight">示例 · 待接 LLM</div></div>
-              <div className="glass-card rail-card"><div className="panel-head"><h3>重要提醒</h3><button className="link" type="button" onClick={() => goToWorkspacePage('dataQuality', '重要提醒')}>查看全部</button></div>{premiumAlerts.length ? premiumAlerts.map((alert) => <div className="alert" title={alert.mockLabel} key={alert.title}><div className="alert-ic" style={glassVarStyle({ '--bgc': alert.bgc, '--col': alert.col })}>{alert.icon}</div><div><b>{alert.title}{alert.isMock ? <span className="tag">{badgeText(alert.mockLabel)}</span> : null}</b><p>{alert.body}</p></div><span className="time">{alert.time}</span></div>) : <div className="empty-real">暂无真实品牌信号</div>}</div>
+              <div className="glass-card rail-card">
+                <div className="panel-head">
+                  <h3>重要提醒</h3>
+                  <span className="tag">Brand Signal</span>
+                  <button className="link" type="button" onClick={() => goToWorkspacePage('dataQuality', '重要提醒')}>查看全部</button>
+                </div>
+                {premiumAlerts.length ? premiumAlerts.map((alert) => (
+                  <div className="alert" title={alert.sourceLabel} key={`${alert.title}-${alert.time}`}>
+                    <div className="alert-ic" style={glassVarStyle({ '--bgc': alert.bgc, '--col': alert.col })}>{alert.icon}</div>
+                    <div>
+                      <b>{alert.title}<span className="tag">真实</span></b>
+                      <p>{alert.body}</p>
+                    </div>
+                    <span className="time">{alert.time}</span>
+                    {alert.url ? <button className="link" type="button" title="打开原始内容" onClick={() => openContentUrl(alert.url)}>↗</button> : null}
+                  </div>
+                )) : <div className="empty-real">暂无真实品牌信号</div>}
+              </div>
               <div className="glass-card rail-card"><div className="panel-head"><h3>本周关键任务</h3><button className="link" type="button" onClick={() => goToWorkspacePage('projects', '本周关键任务')}>查看全部</button></div>{tasks.map((task) => <div className="task" title={task.mockLabel} key={task.title}><div className="task-head"><b>{task.title}{task.isMock ? <span className="tag">示例</span> : null}</b><span className={`priority ${task.priority}`}>{task.priorityLabel}</span></div><p>{task.body}</p><div className="progress"><span style={glassVarStyle({ '--w': task.width })}></span></div></div>)}</div>
               <div className="glass-card rail-card"><div className="panel-head"><h3>快捷入口</h3></div><div className="quick">{quickActions.map((action) => <button key={action.label} type="button" onClick={() => goToWorkspacePage(action.page, action.label)}><b>{action.icon}</b><span>{action.label}</span></button>)}</div></div>
             </aside>

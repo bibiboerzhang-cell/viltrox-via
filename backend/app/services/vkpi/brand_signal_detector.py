@@ -567,6 +567,22 @@ def commit_brand_signals(signals: list[dict[str, Any]]) -> int:
     return committed
 
 
+def _normalize_brand_signal_row(row: Any) -> dict[str, Any]:
+    item = dict(row)
+    evidence = _loads(item.get("evidence_json"), {})
+    if not isinstance(evidence, dict):
+        evidence = {}
+    matched = evidence.get("match_text") if isinstance(evidence.get("match_text"), list) else []
+    item["evidence"] = evidence
+    item["matched_text"] = ", ".join(_text(value) for value in matched[:6] if _text(value))
+    item["match_context"] = _text(evidence.get("match_context"))[:700]
+    item["match_source"] = _text(evidence.get("match_source"))
+    item["evidence_depth"] = _text(evidence.get("depth"))
+    item["evidence_sentiment"] = _text(evidence.get("sentiment"))
+    item["source_url"] = _text(item.get("post_url"))
+    return item
+
+
 def list_brand_signals(*, status: str = "new", signal_type: str = "", brand_role: str = "", limit: int = 100) -> dict[str, Any]:
     if not _table_exists("vkpi_brand_signal"):
         return {"schema_ready": False, "signals": [], "count": 0}
@@ -602,7 +618,7 @@ def list_brand_signals(*, status: str = "new", signal_type: str = "", brand_role
         tuple(params),
     ).fetchone()
     total_count = int(count_row["n"] if count_row else 0)
-    return {"schema_ready": True, "signals": [dict(row) for row in rows], "count": len(rows), "total_count": total_count}
+    return {"schema_ready": True, "signals": [_normalize_brand_signal_row(row) for row in rows], "count": len(rows), "total_count": total_count}
 
 
 def review_brand_signal(signal_id: int, *, action: str, staff: dict[str, Any] | None = None) -> dict[str, Any]:

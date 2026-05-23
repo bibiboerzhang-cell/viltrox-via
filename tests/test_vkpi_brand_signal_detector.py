@@ -62,7 +62,7 @@ def test_list_brand_signals_returns_total_count_separate_from_page_count():
                 "brand_name": "unit-brand",
                 "brand_role": "self",
                 "signal_strength": "medium",
-                "evidence_json": "{}",
+                "evidence_json": '{"match_text":["viltrox"],"match_source":"unit","match_context":"Unit Viltrox context"}',
                 "detected_at": "2026-05-20T00:00:00Z",
             }
         )
@@ -71,6 +71,9 @@ def test_list_brand_signals_returns_total_count_separate_from_page_count():
         result = list_brand_signals(status="all", signal_type="unit_signal", limit=1)
         assert result["count"] == 1
         assert result["total_count"] == 2
+        assert result["signals"][0]["evidence"]["match_source"] == "unit"
+        assert result["signals"][0]["matched_text"] == "viltrox"
+        assert result["signals"][0]["match_context"] == "Unit Viltrox context"
     finally:
         conn.execute("DELETE FROM vkpi_brand_signal WHERE signal_type=?", ("unit_signal",))
         conn.commit()
