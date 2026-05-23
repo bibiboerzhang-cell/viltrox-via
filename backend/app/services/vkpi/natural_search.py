@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from app.db.connection import get_conn
+from app.services.vkpi.kol_history_match import _avatar_from_raw, _recent_post_summary
 
 
 SOURCE_WEIGHTS = {
@@ -59,6 +60,41 @@ def _row(row: Any) -> dict[str, Any]:
     return dict(row) if row else {}
 
 
+def _json_obj(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    try:
+        parsed = json.loads(str(value or ""))
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def _kol_pool_evidence(data: dict[str, Any], avatar_url: str, recent_posts: list[dict[str, Any]]) -> dict[str, Any]:
+    keys = (
+        "id",
+        "platform",
+        "handle",
+        "display_name",
+        "country",
+        "bio",
+        "profile_url",
+        "sync_status",
+        "followers",
+        "posts_count",
+        "avg_views",
+        "avg_likes",
+        "avg_comments",
+        "engagement_rate",
+        "last_seen_at",
+        "updated_at",
+    )
+    evidence = {key: data.get(key) for key in keys}
+    evidence["avatar_url"] = avatar_url
+    evidence["recent_posts"] = recent_posts
+    return evidence
+
+
 def _score(result_type: str, title: str, primary: list[Any], evidence: list[Any], tokens: list[str]) -> int:
     title_l = _lower(title)
     primary_l = " ".join(_lower(value) for value in primary)
@@ -91,7 +127,9 @@ def _search_kol_pool(tokens: list[str], limit: int) -> list[dict[str, Any]]:
     where, params = _where_like(["handle", "display_name", "platform", "country", "bio", "profile_url"], tokens)
     rows = get_conn().execute(
         f"""
-        SELECT id, platform, handle, display_name, country, bio, profile_url, sync_status
+        SELECT id, platform, handle, display_name, country, bio, profile_url, avatar_url,
+               sync_status, followers, posts_count, avg_views, avg_likes, avg_comments,
+               engagement_rate, raw_platform_data, last_seen_at, updated_at
         FROM vkpi_kol_pool
         WHERE {where}
         ORDER BY id DESC
@@ -103,6 +141,10 @@ def _search_kol_pool(tokens: list[str], limit: int) -> list[dict[str, Any]]:
     for row in rows:
         data = _row(row)
         title = _text(data.get("display_name")) or _text(data.get("handle")) or f"KOL #{data.get('id')}"
+        raw = _json_obj(data.get("raw_platform_data"))
+        avatar_url = _text(data.get("avatar_url")) or _avatar_from_raw(raw)
+        recent_posts = _recent_post_summary(raw, limit=4)
+        evidence = _kol_pool_evidence(data, avatar_url, recent_posts)
         results.append(
             {
                 "result_type": "kol_pool",
@@ -110,7 +152,15 @@ def _search_kol_pool(tokens: list[str], limit: int) -> list[dict[str, Any]]:
                 "score": _score("kol_pool", title, [data.get("handle"), data.get("platform"), data.get("country")], [data.get("bio")], tokens),
                 "source_table": "vkpi_kol_pool",
                 "source_id": data.get("id"),
-                "evidence": data,
+                "platform": data.get("platform"),
+                "handle": data.get("handle"),
+                "profile_url": data.get("profile_url"),
+                "avatar_url": avatar_url,
+                "recent_posts": recent_posts,
+                "followers": data.get("followers"),
+                "posts_count": data.get("posts_count"),
+                "sync_status": data.get("sync_status"),
+                "evidence": evidence,
             }
         )
     return results

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { searchVkpi } from '../../../../services/vkpi.ui-api';
+import { proxiedImageUrl } from '../../shared/mediaProxy';
 import type { Row } from './utils/types';
 
 interface NaturalSearchPanelProps {
@@ -15,6 +16,29 @@ function compactText(value: unknown, fallback = '-'): string {
 
 function asRecord(value: unknown): Row {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Row : {};
+}
+
+function asRecordArray(value: unknown): Row[] {
+  return Array.isArray(value) ? value.map(asRecord).filter((row) => Object.keys(row).length > 0) : [];
+}
+
+function firstText(...values: unknown[]): string {
+  for (const value of values) {
+    const text = String(value ?? '').trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+function formatCount(value: unknown): string {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return '';
+  return new Intl.NumberFormat('en', { notation: numeric >= 10000 ? 'compact' : 'standard', maximumFractionDigits: 1 }).format(numeric);
+}
+
+function initials(value: unknown): string {
+  const text = compactText(value, '?');
+  return text.slice(0, 1).toUpperCase();
 }
 
 export function NaturalSearchPanel({ apiToken, onMessage }: NaturalSearchPanelProps) {
@@ -80,13 +104,62 @@ export function NaturalSearchPanel({ apiToken, onMessage }: NaturalSearchPanelPr
           <tbody>
             {items.length ? items.map((item, index) => {
               const evidence = asRecord(item.evidence);
+              const avatarUrl = firstText(item.avatar_url, evidence.avatar_url);
+              const recentPosts = asRecordArray(item.recent_posts).length
+                ? asRecordArray(item.recent_posts)
+                : asRecordArray(evidence.recent_posts);
+              const handle = firstText(item.handle, evidence.handle);
+              const platform = firstText(item.platform, evidence.platform);
+              const profileUrl = firstText(item.profile_url, evidence.profile_url);
+              const followers = firstText(item.followers, evidence.followers);
+              const evidenceText = compactText(
+                evidence.detail || evidence.body || evidence.fact_value_text || evidence.bio || evidence.handle || evidence.identity_key,
+              ).slice(0, 180);
               return (
                 <tr key={`${String(item.source_table)}-${String(item.source_id)}-${index}`}>
                   <td>{compactText(item.result_type)}</td>
                   <td>{String(item.score ?? 0)}</td>
                   <td>{compactText(item.source_table)}:{compactText(item.source_id)}</td>
-                  <td>{compactText(item.title)}</td>
-                  <td>{compactText(evidence.detail || evidence.body || evidence.fact_value_text || evidence.handle || evidence.identity_key).slice(0, 180)}</td>
+                  <td>
+                    <div className="da-natural-search__entity">
+                      {avatarUrl ? (
+                        <img src={proxiedImageUrl(avatarUrl)} alt="" loading="lazy" referrerPolicy="no-referrer" />
+                      ) : (
+                        <span className="da-natural-search__avatar-fallback">{initials(item.title)}</span>
+                      )}
+                      <div>
+                        <strong>{compactText(item.title)}</strong>
+                        <span>
+                          {[handle ? `@${handle.replace(/^@/, '')}` : '', platform, followers ? `${formatCount(followers)} followers` : ''].filter(Boolean).join(' · ')}
+                        </span>
+                        {profileUrl ? <a href={profileUrl} target="_blank" rel="noreferrer">Open profile</a> : null}
+                      </div>
+                    </div>
+                  </td>
+                  <td>
+                    <div className="da-natural-search__evidence-text">{evidenceText}</div>
+                    {recentPosts.length ? (
+                      <div className="da-natural-search__posts">
+                        {recentPosts.slice(0, 3).map((post, postIndex) => {
+                          const postTitle = compactText(post.title || post.post_url || post.url, 'Untitled post');
+                          const postUrl = firstText(post.post_url, post.url);
+                          const postMetric = formatCount(post.views) || formatCount(post.likes) || formatCount(post.comments);
+                          const postMetricLabel = post.views ? 'views' : post.likes ? 'likes' : post.comments ? 'comments' : '';
+                          return postUrl ? (
+                            <a key={`${postUrl}-${postIndex}`} href={postUrl} target="_blank" rel="noreferrer">
+                              <span>{postTitle}</span>
+                              {postMetric ? <em>{postMetric} {postMetricLabel}</em> : null}
+                            </a>
+                          ) : (
+                            <span key={`${postTitle}-${postIndex}`}>
+                              <span>{postTitle}</span>
+                              {postMetric ? <em>{postMetric} {postMetricLabel}</em> : null}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </td>
                 </tr>
               );
             }) : (
