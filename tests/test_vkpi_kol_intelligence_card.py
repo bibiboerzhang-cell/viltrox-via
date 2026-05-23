@@ -135,3 +135,84 @@ def test_kol_intelligence_card_aggregates_existing_evidence_without_provider_cal
         assert "confidence" in evidence_index["dimensions11"]
     finally:
         _cleanup()
+
+
+def test_product_fit_evidence_splits_official_catalog_from_discovery(monkeypatch) -> None:
+    def _fake_preview(**_kwargs):
+        return {
+            "mode": "dry_run",
+            "provider_calls": False,
+            "llm_calls": False,
+            "write_db": False,
+            "items": [
+                {
+                    "product_family_uid": "pf-lab-35",
+                    "product_family_name": "AF 35mm F1.2 LAB",
+                    "score": 88.0,
+                    "score_breakdown": {"dimensions11_product_fit": 16.2},
+                    "matched_catalog_product": {
+                        "sku": "AF-35MM-F12-LAB-FE",
+                        "model_name": "AF 35mm F1.2 LAB FE",
+                        "marketing_name": "AF 35mm F1.2 LAB",
+                        "mount": "FE-mount",
+                        "price_usd": 999.0,
+                        "product_url": "https://viltrox.com/products/af-35mm-f12-lab-fe",
+                        "source_confidence": 1.0,
+                        "specs": {"focal_length": "f=35mm", "aperture": "F1.2-F16"},
+                    },
+                    "matched_catalog_products": [
+                        {
+                            "sku": "AF-35MM-F12-LAB-FE",
+                            "model_name": "AF 35mm F1.2 LAB FE",
+                            "mount": "FE-mount",
+                            "price_usd": 999.0,
+                            "specs": {"focal_length": "f=35mm"},
+                        }
+                    ],
+                    "evidence_pro": [
+                        {
+                            "type": "dimensions11_product_fit",
+                            "detail": "11D product fit matched AF-35MM-F12-LAB-FE",
+                            "source_table": "vkpi_kol_profile_deep",
+                            "source_id": 7,
+                            "score_component": "dimensions11_product_fit",
+                        }
+                    ],
+                    "evidence_con": [],
+                },
+                {
+                    "product_family_uid": "pf-family-only",
+                    "product_family_name": "AF 56mm family",
+                    "score": 52.0,
+                    "score_breakdown": {"adjacent_product_fit": 6},
+                    "matched_catalog_products": [],
+                    "evidence_pro": [],
+                    "evidence_con": [{"type": "no_direct_history", "detail": "No direct history"}],
+                },
+            ],
+        }
+
+    monkeypatch.setattr(
+        kol_intelligence_card.kol_product_fit,
+        "build_kol_product_fit_preview",
+        _fake_preview,
+    )
+
+    payload = kol_intelligence_card._product_fit(123, include_product_fit=True)
+
+    assert payload["status"] == "ready"
+    assert payload["provider_calls"] is False
+    assert payload["llm_calls"] is False
+    assert payload["write_db"] is False
+    assert payload["official_catalog_count"] == 1
+    assert payload["discovery_count"] == 1
+    official = payload["official_catalog"][0]
+    assert official["source"] == "official_catalog"
+    assert official["sku"] == "AF-35MM-F12-LAB-FE"
+    assert official["mount"] == "FE-mount"
+    assert official["price_usd"] == 999.0
+    assert official["specs"]["focal_length"] == "f=35mm"
+    discovery = payload["discovery"][0]
+    assert discovery["source"] == "rule_engine"
+    assert discovery["confidence_method"] == "rule_v0_low_confidence"
+    assert payload["rule_evidence_count"] >= 2

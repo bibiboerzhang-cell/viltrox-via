@@ -1032,6 +1032,46 @@ function KolPoolEvidenceBody({ section, payload }: { section: string; payload: R
     );
   }
   if (section === 'product_fit') {
+    const evidenceRows = arrayRecords(payload.evidence);
+    if (evidenceRows.length) {
+      return (
+        <>
+          {evidenceRows.slice(0, 16).map((row, index) => {
+            const source = stringifyValue(row.source || 'rule_engine');
+            const specs = recordValue(row.specs);
+            const official = source === 'official_catalog';
+            const discovery = row.confidence_method === 'rule_v0_low_confidence';
+            const title = stringifyValue(row.sku || row.model_name || row.product_family_name || row.evidence_type || `product-fit-${index + 1}`);
+            const meta = official
+              ? `official catalog · ${stringifyValue(row.mount || specs.lens_mount || 'mount pending')}`
+              : discovery
+                ? 'product-family discovery'
+                : stringifyValue(row.source_table || source);
+            const detailParts = [
+              stringifyValue(row.reasoning),
+              row.price_usd !== undefined && row.price_usd !== null ? `price $${formatNumber(row.price_usd)}` : '',
+              specs.focal_length ? `focal ${stringifyValue(specs.focal_length)}` : '',
+              specs.aperture ? `aperture ${stringifyValue(specs.aperture)}` : '',
+            ].filter(Boolean);
+            return (
+              <EvidenceArticle
+                key={`product-fit-evidence-${index}`}
+                title={title}
+                meta={meta}
+                value={row.score !== undefined ? formatScoreValue(row.score) : formatConfidenceValue(row.confidence)}
+                detail={detailParts.join(' · ') || 'Product Fit evidence'}
+                url={stringifyValue(row.source_url)}
+                badges={[
+                  official ? 'official SKU evidence' : discovery ? 'low confidence discovery' : 'rule evidence',
+                  stringifyValue(row.score_component),
+                  stringifyValue(row.source_id),
+                ].filter(Boolean)}
+              />
+            );
+          })}
+        </>
+      );
+    }
     const rows = arrayRecords(payload.top);
     if (!rows.length) return <EvidenceArticle title="暂无 Product Fit 证据" meta={stringifyValue(payload.method || payload.reason || 'product_fit')} value={statusLabel(payload.status)} detail="当前没有 SKU 或产品适配行；不能把空结果当作产品不适配。" />;
     return (

@@ -315,6 +315,145 @@ def _memory_card(item: dict[str, Any], competitors: dict[str, Any]) -> dict[str,
     return payload
 
 
+def _product_identity(item: dict[str, Any]) -> str:
+    return _text(
+        item.get("sku")
+        or item.get("product_sku")
+        or item.get("product_key")
+        or item.get("product_family_uid")
+        or item.get("product_family_name")
+        or item.get("family_key")
+        or item.get("product_name")
+        or item.get("name")
+    )
+
+
+def _catalog_product_is_official(product: dict[str, Any]) -> bool:
+    if not _text(product.get("sku")):
+        return False
+    specs = product.get("specs") if isinstance(product.get("specs"), dict) else {}
+    return any(
+        [
+            _text(product.get("model_name")),
+            _text(product.get("marketing_name")),
+            _text(product.get("mount")),
+            product.get("price_usd") is not None,
+            _text(product.get("product_url")),
+            bool(specs),
+        ]
+    )
+
+
+def _product_fit_catalog_evidence(row: dict[str, Any], product: dict[str, Any], *, index: int) -> dict[str, Any]:
+    specs = product.get("specs") if isinstance(product.get("specs"), dict) else {}
+    sku = _text(product.get("sku")) or f"catalog-product-{index}"
+    mount = _text(product.get("mount") or specs.get("lens_mount"))
+    return {
+        "evidence_id": f"ev_official_catalog_{sku}",
+        "source": "official_catalog",
+        "source_table": "vkpi_products",
+        "source_id": sku,
+        "source_url": _text(product.get("product_url")),
+        "confidence": _safe_float(product.get("source_confidence"), 1.0) or 1.0,
+        "confidence_method": "catalog_source_confidence",
+        "reasoning": f"官方 SKU {sku} 提供产品、卡口和规格证据。",
+        "rebuttal_supported": False,
+        "sku": sku,
+        "model_name": _text(product.get("model_name")),
+        "marketing_name": _text(product.get("marketing_name")),
+        "mount": mount,
+        "price_usd": product.get("price_usd"),
+        "specs": specs,
+        "product_family_name": _text(row.get("product_family_name")),
+        "score": _safe_float(row.get("score")),
+    }
+
+
+def _product_fit_discovery_evidence(row: dict[str, Any], *, index: int) -> dict[str, Any]:
+    identity = _product_identity(row) or f"product-family-{index}"
+    return {
+        "evidence_id": f"ev_product_family_discovery_{index}",
+        "source": "rule_engine",
+        "source_table": "vkpi_memory_entities",
+        "source_id": _text(row.get("product_family_uid") or identity),
+        "confidence": 0.35,
+        "confidence_method": "rule_v0_low_confidence",
+        "reasoning": "只有产品族或历史标签证据，不能当作官方 SKU 适配完成。",
+        "rebuttal_supported": True,
+        "product_family_name": identity,
+        "score": _safe_float(row.get("score")),
+        "score_breakdown": row.get("score_breakdown") if isinstance(row.get("score_breakdown"), dict) else {},
+    }
+
+
+def _product_fit_rule_evidence(row: dict[str, Any], source: dict[str, Any], *, index: int) -> dict[str, Any]:
+    evidence_type = _text(source.get("type") or source.get("evidence_type") or "rule_evidence")
+    payload = source.get("payload") if isinstance(source.get("payload"), dict) else {}
+    return {
+        "evidence_id": f"ev_rule_engine_product_fit_{index}_{evidence_type}",
+        "source": "rule_engine",
+        "source_table": _text(source.get("source_table") or payload.get("source_table") or "vkpi_memory_entities"),
+        "source_id": source.get("source_id") or payload.get("source_id") or _text(row.get("product_family_uid")),
+        "source_url": _text(source.get("source_url") or payload.get("source_url")),
+        "confidence": _safe_float(source.get("confidence") or source.get("confidence_score") or payload.get("confidence"), 0.5),
+        "confidence_method": "rule_v0",
+        "reasoning": _text(source.get("detail") or source.get("reasoning") or evidence_type.replace("_", " ")),
+        "rebuttal_supported": True,
+        "evidence_type": evidence_type,
+        "polarity": _text(source.get("polarity")),
+        "severity": _text(source.get("severity")),
+        "score_component": _text(source.get("score_component")),
+        "product_family_name": _text(row.get("product_family_name")),
+    }
+
+
+def _product_fit_evidence(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    official: list[dict[str, Any]] = []
+    discovery: list[dict[str, Any]] = []
+    rules: list[dict[str, Any]] = []
+    seen_skus: set[str] = set()
+    for row_index, row in enumerate(rows[:10]):
+        if not isinstance(row, dict):
+            continue
+        products = []
+        first_product = row.get("matched_catalog_product") if isinstance(row.get("matched_catalog_product"), dict) else {}
+        if first_product:
+            products.append(first_product)
+        products.extend(product for product in row.get("matched_catalog_products", []) if isinstance(product, dict))
+        official_for_row = 0
+        for product in products:
+            if not _catalog_product_is_official(product):
+                continue
+            sku = _text(product.get("sku"))
+            if sku in seen_skus:
+                continue
+            seen_skus.add(sku)
+            official_for_row += 1
+            official.append(_product_fit_catalog_evidence(row, product, index=len(official) + 1))
+        if official_for_row == 0:
+            discovery.append(_product_fit_discovery_evidence(row, index=row_index + 1))
+        evidence_pro = row.get("evidence_pro") if isinstance(row.get("evidence_pro"), list) else []
+        evidence_con = row.get("evidence_con") if isinstance(row.get("evidence_con"), list) else []
+        for source in [*evidence_pro[:4], *evidence_con[:3]]:
+            if isinstance(source, dict):
+                rules.append(_product_fit_rule_evidence(row, source, index=len(rules) + 1))
+    official_rows = official[:12]
+    discovery_rows = discovery[:8]
+    rule_rows = rules[:16]
+    return {
+        "official_catalog": official_rows,
+        "discovery": discovery_rows,
+        "rule_evidence": rule_rows,
+        "evidence": [*official_rows, *discovery_rows, *rule_rows],
+        "official_catalog_count": len(official_rows),
+        "discovery_count": len(discovery_rows),
+        "rule_evidence_count": len(rule_rows),
+        "official_catalog_total": len(official),
+        "discovery_total": len(discovery),
+        "rule_evidence_total": len(rules),
+    }
+
+
 def _product_fit(kol_pool_id: int, *, include_product_fit: bool) -> dict[str, Any]:
     if not include_product_fit:
         return _status_payload("skipped", reason="include_product_fit_false")
@@ -331,11 +470,13 @@ def _product_fit(kol_pool_id: int, *, include_product_fit: bool) -> dict[str, An
     rows = payload.get("items") or payload.get("eligible") or payload.get("recommendations") or []
     if not isinstance(rows, list):
         rows = []
+    evidence = _product_fit_evidence([row for row in rows if isinstance(row, dict)])
     return {
         "status": "ready" if rows else "empty",
         "method": payload.get("method") or payload.get("mode") or "kol_product_fit_preview",
         "count": len(rows),
         "top": rows[:5],
+        **evidence,
         "provider_calls": bool(payload.get("provider_calls", False)),
         "llm_calls": bool(payload.get("llm_calls", False)),
         "write_db": bool(payload.get("write_db", False) or payload.get("persisted", False)),
@@ -380,6 +521,10 @@ def _confidence_for_section(section: str, payload: dict[str, Any]) -> float:
         confidence = payload.get("confidence") if isinstance(payload.get("confidence"), dict) else {}
         return _safe_float(confidence.get("overall"))
     if section == "product_fit":
+        if _safe_int(payload.get("official_catalog_count")):
+            return 0.85
+        if _safe_int(payload.get("discovery_count")):
+            return 0.35
         top = payload.get("top") if isinstance(payload.get("top"), list) else []
         scores = [_safe_float(row.get("confidence") or row.get("fit_confidence")) for row in top if isinstance(row, dict)]
         return max(scores) if scores else 0.0
@@ -409,7 +554,12 @@ def _evidence_count_for_section(section: str, payload: dict[str, Any]) -> int:
         recent_cooperations = payload.get("recent_cooperations") if isinstance(payload.get("recent_cooperations"), list) else []
         return cooperation_count + len(recent_posts) + len(recent_cooperations) + _safe_int(competitor_memory.get("relation_count"))
     if section == "product_fit":
-        return _safe_int(payload.get("count"))
+        evidence_count = (
+            _safe_int(payload.get("official_catalog_count"))
+            + _safe_int(payload.get("discovery_count"))
+            + _safe_int(payload.get("rule_evidence_count"))
+        )
+        return evidence_count or _safe_int(payload.get("count"))
     return 0
 
 
