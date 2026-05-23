@@ -16,6 +16,7 @@ from app.services.vkpi import (
     outcome_collector,
     product_campaign_card,
     training_data_export,
+    trend_detection_v0,
 )
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-industry-automation"])
@@ -239,6 +240,21 @@ def industry_product_campaign_card(
         sku=sku,
         kol_limit=kol_limit,
         top_kols=top_kols,
+    )
+
+
+@router.get("/industry-data/trend-detection/v0")
+def industry_trend_detection_v0(
+    lookback_days: int = Query(default=14, ge=1, le=90),
+    limit: int = Query(default=5000, ge=1, le=20000),
+    top_signals: int = Query(default=25, ge=1, le=100),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    del staff
+    return trend_detection_v0.build_trend_detection_v0(
+        lookback_days=lookback_days,
+        limit=limit,
+        top_signals=top_signals,
     )
 
 
