@@ -8,7 +8,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime
-from app.services.vkpi import audit
+from app.services.vkpi import apify_batch_refresh, audit
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
 
@@ -170,6 +170,17 @@ def _kol_refresh_status() -> dict[str, Any]:
         "status_counts": {},
         "provider_calls_default": provider_gate_enabled,
         "legacy_daily_refresh": "disabled",
+        "apify_batch_plan": {
+            "mode": "plan_only",
+            "execution_enabled": False,
+            "stale_days": 1,
+            "max_posts": 1,
+            "max_concurrent_runs": 2,
+            "source_total": 0,
+            "target_count": 0,
+            "batch_count": 0,
+            "platforms": {},
+        },
     }
     try:
         if status["tables"]["vkpi_kol_pool"]:
@@ -216,6 +227,28 @@ def _kol_refresh_status() -> dict[str, Any]:
             counts = {str(row["status"] or "unknown"): int(row["n"] or 0) for row in rows}
             status["status_counts"] = counts
             status["active_on_demand_tasks"] = sum(counts.get(item, 0) for item in ACTIVE_TASK_STATUSES)
+        if status["tables"]["vkpi_kol_refresh_tier"]:
+            plan = apify_batch_refresh.qualified_apify_batch_plan(
+                limit=200,
+                stale_days=1,
+                tiers={"hot"},
+                max_posts=1,
+                max_concurrent=2,
+            )
+            status["apify_batch_plan"] = {
+                "mode": plan.get("mode") or "plan_only",
+                "execution_enabled": bool(plan.get("execution_enabled")),
+                "reason": plan.get("reason") or "",
+                "selector_ready": bool(plan.get("selector_ready")),
+                "stale_days": 1,
+                "stale_before": plan.get("stale_before") or "",
+                "max_posts": int(plan.get("max_posts") or 1),
+                "max_concurrent_runs": int(plan.get("max_concurrent_runs") or 2),
+                "source_total": int(plan.get("source_total") or 0),
+                "target_count": int(plan.get("total_targets") or 0),
+                "batch_count": int(plan.get("batch_count") or 0),
+                "platforms": plan.get("platforms") if isinstance(plan.get("platforms"), dict) else {},
+            }
     except Exception as exc:
         logger.warning("vkpi kol refresh status unavailable: %s", exc)
         status["error"] = f"{type(exc).__name__}: {str(exc)[:200]}"

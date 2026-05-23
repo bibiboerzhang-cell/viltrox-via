@@ -363,6 +363,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
   const syncPolicy = (controlStatus.sync_policy || {}) as Record<string, unknown>;
   const youtubeKpi = (controlStatus.youtube_kpi || {}) as Record<string, unknown>;
   const kolRefresh = (controlStatus.kol_refresh || {}) as Record<string, unknown>;
+  const kolRefreshBatchPlan = (kolRefresh.apify_batch_plan || {}) as Record<string, unknown>;
   const claudeProvider = providers.find((row) => ['anthropic', 'claude'].includes(String(row.provider || '').toLowerCase())) || {};
   const claudeConfigured = boolValue(claudeProvider.configured, false);
   const claudeStatus = claudeConfigured ? String(claudeProvider.latest_status || claudeProvider.status || 'unknown') : 'not_configured';
@@ -658,6 +659,9 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
   const kolRefreshWarm = numberValue(kolRefresh.warm_count);
   const kolRefreshCold = numberValue(kolRefresh.cold_count);
   const kolRefreshActiveTasks = numberValue(kolRefresh.active_on_demand_tasks);
+  const kolRefreshBatchTargets = numberValue(kolRefreshBatchPlan.target_count);
+  const kolRefreshBatchCount = numberValue(kolRefreshBatchPlan.batch_count);
+  const kolRefreshBatchConcurrency = numberValue(kolRefreshBatchPlan.max_concurrent_runs, 2);
   const kolRefreshGateText = kolRefreshGateEnabled ? '按需刷新已启用' : '仅记录/查询';
   const systemHealth = settingsError || providerError || rbacStatusError || dailySync?.ack_required ? '需要处理' : 'healthy';
   const versionSummary = frontendAsset
@@ -763,6 +767,8 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
                 <InfoBlock label="Cold 未刷新" value={String(numberValue(kolRefresh.cold_never_refreshed).toLocaleString('en-US'))} />
                 <InfoBlock label="30 天搜索" value={`${numberValue(kolRefresh.searched_rows).toLocaleString('en-US')} 行 / ${numberValue(kolRefresh.search_count_30d).toLocaleString('en-US')} 次`} />
                 <InfoBlock label="活跃刷新任务" value={String(kolRefreshActiveTasks)} />
+                <InfoBlock label="Batch Plan" value={`${kolRefreshBatchTargets} 目标 / ${kolRefreshBatchCount} 批`} />
+                <InfoBlock label="Batch 并发" value={`${kolRefreshBatchConcurrency} · plan-only`} />
               </div>
             </section>
             <section className="vkpi-settings-version-panel">
