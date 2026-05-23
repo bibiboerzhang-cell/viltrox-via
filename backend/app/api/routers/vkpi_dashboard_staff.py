@@ -145,6 +145,39 @@ def _build_dashboard_copilot_brief(ops_dir: str = "runtime/ops") -> dict[str, An
         "is_real": bool(path and payload),
         "source": "runtime/ops p7-83 brief agent",
     }
+
+
+def _build_dashboard_tasks(ops_dir: str = "runtime/ops", limit: int = 6) -> dict[str, Any]:
+    path = _latest_dashboard_agent_artifact(ops_dir, "*p7-82-recommendation-agent-v0.json")
+    payload = _load_dashboard_agent_json(path)
+    candidates = payload.get("candidates") if isinstance(payload.get("candidates"), list) else []
+    next_steps = payload.get("next_steps") if isinstance(payload.get("next_steps"), list) else []
+    tasks: list[dict[str, Any]] = []
+    for index, candidate in enumerate(candidates[: max(1, min(20, int(limit or 6)))]):
+        item = candidate if isinstance(candidate, dict) else {}
+        confidence = float(item.get("confidence") or item.get("score") or 0)
+        priority = "high" if confidence >= 0.75 else "mid" if confidence >= 0.45 else "low"
+        title = str(item.get("title") or item.get("decision") or item.get("kol_handle") or f"推荐候选 {index + 1}")
+        body = str(item.get("reason") or item.get("recommendation_reason") or item.get("summary") or "等待人工复核")
+        tasks.append({
+            "id": str(item.get("candidate_id") or item.get("id") or f"rec-{index + 1}"),
+            "title": title,
+            "body": body,
+            "priority": priority,
+            "confidence": confidence,
+            "source": "recommendation_agent_v0",
+            "is_real": True,
+        })
+    return {
+        "tasks": tasks,
+        "next_steps": [str(step) for step in next_steps[:5]],
+        "candidate_count": len(candidates),
+        "last_output": path.name if path else "",
+        "last_run_at": _artifact_mtime_iso(path),
+        "mode": payload.get("mode") or "",
+        "is_real": bool(path and payload),
+        "source": "runtime/ops p7-82 recommendation agent",
+    }
 @router.get("/architecture")
 def architecture(staff=Depends(require_tab("vkpi", "read"))):
     return workflow.architecture_summary()
@@ -288,6 +321,16 @@ def dashboard_copilot_brief(
     """Return the latest read-only brief-agent artifact for Dashboard Copilot."""
     del staff
     return _build_dashboard_copilot_brief()
+
+
+@router.get("/dashboard/tasks")
+def dashboard_tasks(
+    limit: int = Query(default=6, ge=1, le=20),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """Return dashboard task candidates from the latest recommendation-agent artifact."""
+    del staff
+    return _build_dashboard_tasks(limit=limit)
 
 
 @router.get("/staff-directory")

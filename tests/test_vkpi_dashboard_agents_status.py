@@ -64,3 +64,26 @@ def test_dashboard_copilot_brief_reads_latest_brief_artifact(tmp_path: Path) -> 
     assert payload["mode"] == "p7_83_brief_agent_v0"
     assert len(payload["items"]) == 2
     assert len(payload["actions"]) == 1
+
+
+def test_dashboard_tasks_reads_recommendation_candidates(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "local-p7-82-recommendation-agent-v0.json",
+        {
+            "mode": "p7_82_recommendation_agent_v0",
+            "candidates": [
+                {"candidate_id": "c1", "kol_handle": "@one", "confidence": 0.82, "reason": "证据链完整"},
+                {"candidate_id": "c2", "title": "观察 @two", "score": 0.3, "summary": "证据不足"},
+            ],
+            "next_steps": ["人工复核后再联系"],
+        },
+    )
+
+    payload = vkpi_dashboard_staff._build_dashboard_tasks(str(tmp_path), limit=6)
+
+    assert payload["is_real"] is True
+    assert payload["candidate_count"] == 2
+    assert payload["tasks"][0]["priority"] == "high"
+    assert payload["tasks"][0]["title"] == "@one"
+    assert payload["tasks"][1]["priority"] == "low"
+    assert payload["next_steps"] == ["人工复核后再联系"]
