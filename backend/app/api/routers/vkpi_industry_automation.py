@@ -7,6 +7,7 @@ from app.api.dependencies.perms import require_tab
 from app.services.vkpi import (
     ab_experiments,
     audience_graph,
+    brief_agent_v0,
     brain_layer_acceptance_v0,
     brand_signal_detector,
     competitor_brain,
@@ -356,6 +357,27 @@ def industry_recommendation_agent_v0(
         ref_limit=ref_limit,
         claim_limit=claim_limit,
         use_latest_evidence_artifact=use_latest_evidence_artifact,
+    )
+
+
+@router.get("/industry-data/brief-agent/v0")
+def industry_brief_agent_v0(
+    kol_pool_ids: str = Query(default=""),
+    limit: int = Query(default=8, ge=1, le=50),
+    min_evidence_refs: int = Query(default=3, ge=1, le=20),
+    ref_limit: int = Query(default=8, ge=1, le=50),
+    claim_limit: int = Query(default=12, ge=1, le=50),
+    use_latest_recommendation_artifact: bool = True,
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    del staff
+    return brief_agent_v0.build_brief_agent_v0(
+        kol_pool_ids=kol_pool_ids,
+        limit=limit,
+        min_evidence_refs=min_evidence_refs,
+        ref_limit=ref_limit,
+        claim_limit=claim_limit,
+        use_latest_recommendation_artifact=use_latest_recommendation_artifact,
     )
 
 
