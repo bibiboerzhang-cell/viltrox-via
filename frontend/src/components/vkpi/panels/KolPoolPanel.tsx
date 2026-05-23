@@ -11,6 +11,37 @@ import { PlatformPill } from '../shared/PlatformPill';
 import { Avatar } from '../shared/Avatar';
 import type { VkpiPlatform } from '../vkpiTypes';
 
+interface KolPoolFreshness {
+  kol_pool_id: number;
+  tier: string;
+  tier_reason?: string;
+  last_refresh_at?: string;
+  last_refresh_status?: string;
+  threshold_days?: number;
+  days_old?: number | null;
+  needs_refresh?: boolean;
+  reason?: string;
+  search_count_30d?: number;
+  last_searched_at?: string;
+}
+
+interface KolPoolRefreshState {
+  triggered: boolean;
+  reason: string;
+  task_id?: string;
+  task_type?: string;
+  lock_key?: string;
+  message?: string;
+  provider_calls_enabled?: boolean;
+  freshness?: KolPoolFreshness;
+  search_marker?: {
+    tier?: string;
+    tier_reason?: string;
+    search_count_30d?: number;
+    last_searched_at?: string;
+  };
+}
+
 interface KolPoolItem {
   id: number;
   pool_uid: string;
@@ -44,12 +75,14 @@ interface KolPoolItem {
   updated_at?: string;
   last_seen_at?: string;
   sync_status?: string;
+  freshness?: KolPoolFreshness;
+  refresh?: KolPoolRefreshState;
 }
 
 interface KolPoolPanelProps {
   apiToken: string;
-  onListPool: (params: { search?: string; platform?: string; limit?: number; dataStatus?: string; sortBy?: string; enrichable?: boolean }) => Promise<{ items?: KolPoolItem[] }>;
-  onGetItem?: (kolPoolId: number) => Promise<{ item?: KolPoolItem }>;
+  onListPool: (params: { search?: string; platform?: string; limit?: number; dataStatus?: string; sortBy?: string; enrichable?: boolean; refreshIfStale?: boolean }) => Promise<{ items?: KolPoolItem[]; refresh?: KolPoolRefreshState }>;
+  onGetItem?: (kolPoolId: number) => Promise<{ item?: KolPoolItem; freshness?: KolPoolFreshness; refresh?: KolPoolRefreshState }>;
   onEnrichItem?: (kolPoolId: number, maxPosts?: number) => Promise<{
     item?: KolPoolItem;
     sync_status?: string;
@@ -109,6 +142,7 @@ export function KolPoolPanel({ apiToken, onListPool, onGetItem, onEnrichItem, on
   const [batchBusy, setBatchBusy] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(() => new Set());
   const [selectedItem, setSelectedItem] = useState<KolPoolItem | null>(null);
+  const [listRefreshState, setListRefreshState] = useState<KolPoolRefreshState | null>(null);
 
   async function loadList() {
     if (!apiToken) {
@@ -118,9 +152,14 @@ export function KolPoolPanel({ apiToken, onListPool, onGetItem, onEnrichItem, on
     setLoading(true);
     setError('');
     setMessage('');
+    setListRefreshState(null);
     try {
-      const result = await onListPool({ search, platform, dataStatus, sortBy, limit: 150 });
+      const result = await onListPool({ search, platform, dataStatus, sortBy, limit: 150, refreshIfStale: Boolean(search.trim()) });
       const nextItems = result.items || [];
+      if (result.refresh) {
+        setListRefreshState(result.refresh);
+        setMessage(refreshStateLabel(result.refresh));
+      }
       setItems(nextItems);
       setSelectedIds((current) => new Set(nextItems.filter((item) => current.has(item.id)).map((item) => item.id)));
       if (selectedItem) {
@@ -146,7 +185,16 @@ export function KolPoolPanel({ apiToken, onListPool, onGetItem, onEnrichItem, on
     setError('');
     try {
       const result = await onGetItem(item.id);
-      if (result.item) setSelectedItem(result.item);
+      if (result.item) {
+        setSelectedItem({
+          ...result.item,
+          freshness: result.freshness || result.refresh?.freshness,
+          refresh: result.refresh,
+        });
+      }
+      if (result.refresh) {
+        setMessage(refreshStateLabel(result.refresh));
+      }
     } catch (err) {
       setError((err as Error).message || '详情加载失败');
     } finally {
@@ -355,6 +403,7 @@ export function KolPoolPanel({ apiToken, onListPool, onGetItem, onEnrichItem, on
 
       {error && <div className="vkpi-alert vkpi-alert--error" style={{ marginBottom: 12 }}>{error}</div>}
       {message && <div className="vkpi-alert" style={{ marginBottom: 12 }}>{message}</div>}
+      {listRefreshState && <RefreshStateNotice refresh={listRefreshState} />}
 
       {!loading && items.length === 0 ? (
         <div className="vkpi-empty">暂无候选 KOL。点击“一键导入”从 Apify / CSV 导入。</div>
@@ -544,6 +593,7 @@ function KolPoolDetailDrawer({
       </div>
 
       {loading && <div className="vkpi-alert">正在读取完整详情…</div>}
+      {item.refresh && <RefreshStateNotice refresh={item.refresh} />}
 
       <section className={`vkpi-kol-pool-decision-card ${priority.tone}`}>
         <div>
@@ -677,6 +727,34 @@ function ActionHint({ done, label, hint }: { done: boolean; label: string; hint:
       <span>{hint}</span>
     </div>
   );
+}
+
+function RefreshStateNotice({ refresh }: { refresh: KolPoolRefreshState }) {
+  const freshness = refresh.freshness;
+  const tone = refresh.triggered ? ' is-info' : refresh.reason === 'on_demand_refresh_disabled' ? ' is-warning' : '';
+  return (
+    <div className={`vkpi-alert${tone}`} style={{ marginBottom: 12 }}>
+      <strong>{refreshStateLabel(refresh)}</strong>
+      {freshness && (
+        <div className="vkpi-help-text">
+          层级 {freshness.tier || 'cold'} · 阈值 {freshness.threshold_days ?? '-'} 天 ·
+          {freshness.days_old === null || freshness.days_old === undefined ? ' 从未刷新' : ` 已 ${freshness.days_old} 天`} ·
+          搜索计数 {refresh.search_marker?.search_count_30d ?? freshness.search_count_30d ?? 0}
+        </div>
+      )}
+      {refresh.task_id && <div className="vkpi-help-text">后台任务: {refresh.task_id}</div>}
+    </div>
+  );
+}
+
+function refreshStateLabel(refresh: KolPoolRefreshState): string {
+  if (refresh.triggered) return '旧数据已返回，后台刷新已排队。';
+  if (refresh.reason === 'on_demand_refresh_disabled') return '数据新鲜度已检查，按需刷新尚未启用。';
+  if (refresh.reason === 'fresh') return '数据仍在新鲜度窗口内。';
+  if (refresh.reason === 'job_queue_unavailable') return '数据较旧，但后台队列当前不可用。';
+  if (refresh.reason === 'not_enqueueable') return refresh.message || '该账号暂不支持按需刷新。';
+  if (refresh.reason === 'not_requested') return '已读取现有记录，未请求后台刷新。';
+  return refresh.message || `刷新状态: ${refresh.reason || 'unknown'}`;
 }
 
 function getDataGaps(item: KolPoolItem): string[] {

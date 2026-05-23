@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
+from app.api.routers import vkpi_kol_pool
 from app.services.vkpi import kol_pool, refresh_tier, task_enqueue
 from app.workers.tasks import vkpi as vkpi_tasks
 
@@ -46,6 +48,77 @@ def test_enqueue_kol_pool_on_demand_refresh_uses_active_lock(monkeypatch) -> Non
     assert queue.enqueued[0]["payload"]["kol_pool_id"] == 123
     assert queue.enqueued[0]["payload"]["max_posts"] == 3
     assert queue.enqueued[0]["priority"] == 4
+
+
+def test_on_demand_refresh_endpoint_defaults_to_status_only(monkeypatch) -> None:
+    queue = FakeQueue()
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(job_queue=queue)))
+    events: list[str] = []
+    monkeypatch.delenv("VKPI_KOL_ON_DEMAND_REFRESH_ENABLED", raising=False)
+    monkeypatch.delenv("VKPI_ENABLE_KOL_ON_DEMAND_REFRESH", raising=False)
+    monkeypatch.setattr(
+        refresh_tier,
+        "record_kol_search",
+        lambda kol_pool_id: events.append("record") or {"kol_pool_id": kol_pool_id, "tier": "warm", "search_count_30d": 1},
+    )
+    monkeypatch.setattr(
+        refresh_tier,
+        "freshness_for_kol",
+        lambda kol_pool_id: events.append("freshness") or {"kol_pool_id": kol_pool_id, "tier": "warm", "needs_refresh": True, "reason": "never_refreshed"},
+    )
+    monkeypatch.setattr(
+        task_enqueue,
+        "enqueue_kol_pool_on_demand_refresh",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("provider task was enqueued")),
+    )
+
+    result = asyncio.run(
+        vkpi_kol_pool._maybe_enqueue_refresh(
+            request,
+            123,
+            staff={"id": 7},
+            enabled=True,
+            reason="search_stale_while_revalidate",
+        )
+    )
+
+    assert result["triggered"] is False
+    assert result["reason"] == "on_demand_refresh_disabled"
+    assert result["provider_calls_enabled"] is False
+    assert result["search_marker"]["tier"] == "warm"
+    assert events == ["record", "freshness"]
+    assert queue.enqueued == []
+
+
+def test_on_demand_refresh_endpoint_enqueues_when_operator_enabled(monkeypatch) -> None:
+    queue = FakeQueue()
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(job_queue=queue)))
+    monkeypatch.setenv("VKPI_KOL_ON_DEMAND_REFRESH_ENABLED", "1")
+    monkeypatch.setattr(refresh_tier, "record_kol_search", lambda kol_pool_id: {"kol_pool_id": kol_pool_id, "tier": "warm"})
+    monkeypatch.setattr(refresh_tier, "freshness_for_kol", lambda kol_pool_id: {"kol_pool_id": kol_pool_id, "tier": "warm", "needs_refresh": True})
+
+    async def enqueue(_queue, kol_pool_id: int, **kwargs):
+        assert _queue is queue
+        assert kol_pool_id == 456
+        assert kwargs["max_posts"] == 1
+        return {"task_id": "task-enabled", "task_type": task_enqueue.VKPI_KOL_POOL_ON_DEMAND_REFRESH, "lock_key": "lock"}
+
+    monkeypatch.setattr(task_enqueue, "enqueue_kol_pool_on_demand_refresh", enqueue)
+
+    result = asyncio.run(
+        vkpi_kol_pool._maybe_enqueue_refresh(
+            request,
+            456,
+            staff={"id": 7},
+            enabled=True,
+            reason="detail_stale_while_revalidate",
+        )
+    )
+
+    assert result["triggered"] is True
+    assert result["provider_calls_enabled"] is True
+    assert result["task_id"] == "task-enabled"
+    assert result["reason"] == "detail_stale_while_revalidate"
 
 
 def test_on_demand_worker_marks_refresh_success(monkeypatch) -> None:

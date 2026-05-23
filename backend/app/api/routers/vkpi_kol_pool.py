@@ -18,6 +18,8 @@ R59: 独立 KOL Pool 路由 + 防火墙 + 审计装饰器集成示范.
 """
 from __future__ import annotations
 
+import os
+
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 
 from app.api.dependencies.perms import require_tab
@@ -32,6 +34,20 @@ router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-kol-pool"])
 # ─── Read endpoints (无装饰器) ──────────────────────
 
 
+def _on_demand_refresh_enabled() -> bool:
+    """Runtime provider gate for P1.X.C stale-while-revalidate.
+
+    Search/detail endpoints may expose freshness state and record search
+    interest by default, but they must not enqueue provider work unless an
+    operator explicitly enables this gate in the runtime environment.
+    """
+    for name in ("VKPI_KOL_ON_DEMAND_REFRESH_ENABLED", "VKPI_ENABLE_KOL_ON_DEMAND_REFRESH"):
+        value = os.getenv(name, "").strip().lower()
+        if value in {"1", "true", "yes", "on"}:
+            return True
+    return False
+
+
 async def _maybe_enqueue_refresh(
     request: Request,
     kol_pool_id: int,
@@ -41,15 +57,43 @@ async def _maybe_enqueue_refresh(
     force: bool = False,
     reason: str = "stale_while_revalidate",
 ) -> dict:
-    freshness = refresh_tier.freshness_for_kol(int(kol_pool_id))
     search_marker = refresh_tier.record_kol_search(int(kol_pool_id))
+    freshness = refresh_tier.freshness_for_kol(int(kol_pool_id))
+    provider_calls_enabled = _on_demand_refresh_enabled()
     if not enabled:
-        return {"triggered": False, "reason": "not_requested", "freshness": freshness, "search_marker": search_marker}
+        return {
+            "triggered": False,
+            "reason": "not_requested",
+            "freshness": freshness,
+            "search_marker": search_marker,
+            "provider_calls_enabled": provider_calls_enabled,
+        }
     if not force and not freshness.get("needs_refresh"):
-        return {"triggered": False, "reason": "fresh", "freshness": freshness, "search_marker": search_marker}
+        return {
+            "triggered": False,
+            "reason": "fresh",
+            "freshness": freshness,
+            "search_marker": search_marker,
+            "provider_calls_enabled": provider_calls_enabled,
+        }
+    if not provider_calls_enabled:
+        return {
+            "triggered": False,
+            "reason": "on_demand_refresh_disabled",
+            "message": "stale-while-revalidate is reporting freshness only; provider enqueue is disabled by runtime policy",
+            "freshness": freshness,
+            "search_marker": search_marker,
+            "provider_calls_enabled": False,
+        }
     queue = getattr(request.app.state, "job_queue", None)
     if queue is None:
-        return {"triggered": False, "reason": "job_queue_unavailable", "freshness": freshness, "search_marker": search_marker}
+        return {
+            "triggered": False,
+            "reason": "job_queue_unavailable",
+            "freshness": freshness,
+            "search_marker": search_marker,
+            "provider_calls_enabled": True,
+        }
     try:
         queued = await task_enqueue.enqueue_kol_pool_on_demand_refresh(
             queue,
@@ -59,8 +103,22 @@ async def _maybe_enqueue_refresh(
             staff=staff,
         )
     except ValueError as exc:
-        return {"triggered": False, "reason": "not_enqueueable", "message": str(exc), "freshness": freshness, "search_marker": search_marker}
-    return {"triggered": True, "reason": reason, "freshness": freshness, "search_marker": search_marker, **queued}
+        return {
+            "triggered": False,
+            "reason": "not_enqueueable",
+            "message": str(exc),
+            "freshness": freshness,
+            "search_marker": search_marker,
+            "provider_calls_enabled": True,
+        }
+    return {
+        "triggered": True,
+        "reason": reason,
+        "freshness": freshness,
+        "search_marker": search_marker,
+        "provider_calls_enabled": True,
+        **queued,
+    }
 
 
 @router.get("/kol-pool")
