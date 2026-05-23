@@ -28,6 +28,7 @@ DEFAULT_CHUNK_SIZES = {
 DEFAULT_MAX_CONCURRENT_RUNS = 2
 HARD_MAX_CONCURRENT_RUNS = 3
 DEFAULT_RUN_TIMEOUT_SECONDS = 600
+DEFAULT_RETRY_CHUNK_SIZE = 5
 
 DEFAULT_ACTORS = {
     "instagram": "apify~instagram-scraper",
@@ -465,6 +466,74 @@ def summarize_batch_execution(plan: dict[str, Any], results: list[dict[str, Any]
     }
 
 
+def build_retry_plan(
+    plan: dict[str, Any],
+    summary: dict[str, Any],
+    *,
+    max_targets: int = 100,
+    retry_chunk_size: int = DEFAULT_RETRY_CHUNK_SIZE,
+) -> dict[str, Any]:
+    """Build a smaller retry batch plan from a normalized execution summary."""
+    target_by_id: dict[int, dict[str, Any]] = {}
+    for batch in (plan.get("batches") or []):
+        if not isinstance(batch, dict):
+            continue
+        for target in batch.get("targets") or []:
+            if isinstance(target, dict) and _int(target.get("kol_pool_id")):
+                target_by_id[_int(target.get("kol_pool_id"))] = target
+
+    retry_rows: list[dict[str, Any]] = []
+    blocked: list[dict[str, Any]] = []
+    retry_ids: set[int] = set()
+    for status_row in summary.get("kol_statuses") or []:
+        if not isinstance(status_row, dict):
+            continue
+        status = str(status_row.get("status") or "")
+        kol_pool_id = _int(status_row.get("kol_pool_id"))
+        if status in {"planned", "matched"} or not kol_pool_id:
+            continue
+        target = target_by_id.get(kol_pool_id)
+        if not target:
+            blocked.append({**status_row, "blocked_reason": "target_not_found_in_plan"})
+            continue
+        if status == "not_configured":
+            blocked.append({**status_row, "blocked_reason": "provider_not_configured"})
+            continue
+        if kol_pool_id in retry_ids:
+            continue
+        retry_ids.add(kol_pool_id)
+        retry_rows.append(
+            {
+                **target,
+                "id": kol_pool_id,
+                "kol_pool_id": kol_pool_id,
+                "refresh_reason": f"retry:{status}:{str(status_row.get('reason') or '')[:120]}",
+                "previous_batch_key": status_row.get("batch_key"),
+                "previous_status": status,
+            }
+        )
+        if len(retry_rows) >= max(1, min(500, _int(max_targets, 100))):
+            break
+
+    retry_chunk = max(1, min(25, _int(retry_chunk_size, DEFAULT_RETRY_CHUNK_SIZE)))
+    chunk_overrides = {platform: retry_chunk for platform in SUPPORTED_BATCH_PLATFORMS}
+    retry_plan = plan_apify_batches(
+        retry_rows,
+        max_posts=max(1, min(3, _int(plan.get("max_posts"), 1))),
+        chunk_overrides=chunk_overrides,
+        max_concurrent=1,
+    )
+    return {
+        "mode": "retry_plan_only",
+        "execution_enabled": False,
+        "source_strategy": plan.get("strategy") or "apify_batch_first",
+        "retry_target_count": len(retry_rows),
+        "blocked_count": len(blocked),
+        "blocked": blocked[:50],
+        **retry_plan,
+    }
+
+
 def run_apify_batch(
     batch: dict[str, Any],
     *,
@@ -563,12 +632,14 @@ async def execute_apify_batch_plan(
     batches = [batch for batch in (plan.get("batches") or []) if isinstance(batch, dict)]
     if not allow_provider_calls:
         summary = summarize_batch_execution(plan, [], executed=False)
+        retry_plan = build_retry_plan(plan, summary)
         return {
             "executed": False,
             "reason": "provider_calls_not_allowed",
             "batch_count": len(batches),
             "max_concurrent_runs": max_concurrent_runs(plan.get("max_concurrent_runs")),
             "summary": summary,
+            "retry_plan": retry_plan,
             "results": [],
         }
     sem = asyncio.Semaphore(max_concurrent_runs(plan.get("max_concurrent_runs")))
@@ -594,6 +665,7 @@ async def execute_apify_batch_plan(
         else:
             results.append(result)
     summary = summarize_batch_execution(plan, results, executed=True)
+    retry_plan = build_retry_plan(plan, summary)
     return {
         "executed": True,
         "batch_count": len(batches),
@@ -603,5 +675,6 @@ async def execute_apify_batch_plan(
         "not_configured_batches": sum(1 for item in results if str(item.get("provider_status") or "") == "not_configured"),
         "matched_items": sum(_int((item.get("mapped") or {}).get("matched_count")) for item in results if isinstance(item.get("mapped"), dict)),
         "summary": summary,
+        "retry_plan": retry_plan,
         "results": results,
     }

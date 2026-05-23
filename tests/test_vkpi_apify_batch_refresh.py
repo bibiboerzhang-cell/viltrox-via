@@ -129,6 +129,7 @@ def test_execute_apify_batch_plan_blocks_provider_calls_by_default() -> None:
     assert result["results"] == []
     assert result["summary"]["retry_count"] == 0
     assert result["summary"]["kol_statuses"][0]["status"] == "planned"
+    assert result["retry_plan"]["retry_target_count"] == 0
 
 
 def test_execute_apify_batch_plan_summarizes_mocked_runs(monkeypatch) -> None:
@@ -167,6 +168,7 @@ def test_execute_apify_batch_plan_summarizes_mocked_runs(monkeypatch) -> None:
     assert result["matched_items"] == 3
     assert result["summary"]["target_count"] == 3
     assert result["summary"]["retry_count"] == 0
+    assert result["retry_plan"]["retry_target_count"] == 0
 
 
 def test_summarize_batch_execution_tracks_unmatched_and_failed_targets() -> None:
@@ -211,3 +213,48 @@ def test_summarize_batch_execution_tracks_unmatched_and_failed_targets() -> None
     assert summary["retry_kol_pool_ids"] == [2, 3]
     statuses = {item["kol_pool_id"]: item["status"] for item in summary["kol_statuses"]}
     assert statuses == {1: "matched", 2: "unmatched", 3: "error"}
+
+
+def test_build_retry_plan_groups_retryable_targets_and_blocks_not_configured() -> None:
+    plan = {
+        "strategy": "apify_batch_first",
+        "max_posts": 1,
+        "batches": [
+            {
+                "batch_key": "instagram-1",
+                "platform": "instagram",
+                "targets": [
+                    {"kol_pool_id": 1, "platform": "instagram", "handle": "ok", "profile_url": "https://www.instagram.com/ok/"},
+                    {"kol_pool_id": 2, "platform": "instagram", "handle": "miss", "profile_url": "https://www.instagram.com/miss/"},
+                ],
+            },
+            {
+                "batch_key": "tiktok-1",
+                "platform": "tiktok",
+                "targets": [
+                    {"kol_pool_id": 3, "platform": "tiktok", "handle": "bad", "profile_url": "https://www.tiktok.com/@bad"},
+                    {"kol_pool_id": 4, "platform": "tiktok", "handle": "no-token", "profile_url": "https://www.tiktok.com/@no-token"},
+                ],
+            },
+        ],
+    }
+    summary = {
+        "kol_statuses": [
+            {"kol_pool_id": 1, "batch_key": "instagram-1", "platform": "instagram", "status": "matched", "reason": "synced"},
+            {"kol_pool_id": 2, "batch_key": "instagram-1", "platform": "instagram", "status": "unmatched", "reason": "dataset_item_not_mapped"},
+            {"kol_pool_id": 3, "batch_key": "tiktok-1", "platform": "tiktok", "status": "error", "reason": "actor timeout"},
+            {"kol_pool_id": 4, "batch_key": "tiktok-1", "platform": "tiktok", "status": "not_configured", "reason": "apify_not_configured"},
+        ],
+    }
+
+    retry_plan = apify_batch_refresh.build_retry_plan(plan, summary, retry_chunk_size=1)
+
+    assert retry_plan["mode"] == "retry_plan_only"
+    assert retry_plan["execution_enabled"] is False
+    assert retry_plan["retry_target_count"] == 2
+    assert retry_plan["blocked_count"] == 1
+    assert retry_plan["max_concurrent_runs"] == 1
+    assert retry_plan["batch_count"] == 2
+    assert retry_plan["platforms"] == {"instagram": 1, "tiktok": 1}
+    assert retry_plan["blocked"][0]["kol_pool_id"] == 4
+    assert sorted(batch["kol_pool_ids"][0] for batch in retry_plan["batches"]) == [2, 3]
