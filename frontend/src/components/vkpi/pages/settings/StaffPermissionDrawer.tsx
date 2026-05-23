@@ -3,8 +3,7 @@ import type { VkpiStaffActivationLinkResponse, VkpiStaffPasswordResetLinkRespons
 import type { VkpiStaffMember } from "../../vkpiTypes";
 import { Avatar } from "../../shared/Avatar";
 import { InfoBlock } from "../../shared/InfoBlock";
-
-type PermissionMap = Record<string, VkpiPermissionLevel>;
+import { STAFF_PERMISSION_MODULES, STAFF_PERMISSION_TEMPLATES, type StaffPermissionMap } from "./staffPermissionTemplates";
 
 const LEVELS: Array<{ key: VkpiPermissionLevel; label: string }> = [
   { key: "none", label: "无" },
@@ -13,71 +12,14 @@ const LEVELS: Array<{ key: VkpiPermissionLevel; label: string }> = [
   { key: "admin", label: "管理" },
 ];
 
-const MODULES: Array<{ key: string; label: string; group: string; ownerOnly?: boolean }> = [
-  { key: "overview", label: "管理主控", group: "常用" },
-  { key: "kol_ops", label: "KOL/账号管理", group: "常用" },
-  { key: "vkpi", label: "V-KPI 工作台", group: "常用" },
-  { key: "activities", label: "项目/活动", group: "常用" },
-  { key: "analytics", label: "数据分析", group: "数据" },
-  { key: "insights", label: "洞察报表", group: "数据" },
-  { key: "products", label: "产品作战", group: "数据" },
-  { key: "runtime", label: "运行诊断", group: "系统" },
-  { key: "system", label: "系统设置", group: "系统" },
-  { key: "system.usage", label: "用量/预算", group: "系统" },
-  { key: "system.api_keys", label: "API Key", group: "敏感", ownerOnly: true },
-  { key: "system.models", label: "模型配置", group: "敏感", ownerOnly: true },
-  { key: "system.members", label: "成员管理", group: "敏感", ownerOnly: true },
-  { key: "system.restart", label: "服务重启", group: "敏感", ownerOnly: true },
-];
-
-const TEMPLATES: Array<{ key: string; label: string; permissions: PermissionMap }> = [
-  {
-    key: "admin",
-    label: "管理员",
-    permissions: Object.fromEntries(MODULES.map((module) => [module.key, module.ownerOnly ? "read" : "admin"])) as PermissionMap,
-  },
-  {
-    key: "kol_outreach",
-    label: "KOL 外联",
-    permissions: {
-      overview: "read", kol_ops: "write", vkpi: "write", activities: "write",
-      analytics: "read", insights: "read", products: "read", runtime: "none", system: "none",
-      "system.usage": "none", "system.api_keys": "none", "system.models": "none", "system.members": "none", "system.restart": "none",
-    },
-  },
-  {
-    key: "content_ops",
-    label: "内容运营",
-    permissions: {
-      overview: "read", kol_ops: "read", vkpi: "write", activities: "write",
-      analytics: "write", insights: "read", products: "read", runtime: "none", system: "none",
-      "system.usage": "none", "system.api_keys": "none", "system.models": "none", "system.members": "none", "system.restart": "none",
-    },
-  },
-  {
-    key: "finance",
-    label: "财务",
-    permissions: {
-      overview: "read", kol_ops: "read", vkpi: "read", activities: "read",
-      analytics: "read", insights: "write", products: "read", runtime: "none", system: "none",
-      "system.usage": "read", "system.api_keys": "none", "system.models": "none", "system.members": "none", "system.restart": "none",
-    },
-  },
-  {
-    key: "viewer",
-    label: "只读观察",
-    permissions: Object.fromEntries(MODULES.map((module) => [module.key, module.ownerOnly ? "none" : "read"])) as PermissionMap,
-  },
-];
-
 function normalizeLevel(value: unknown): VkpiPermissionLevel {
   const next = String(value || "none").toLowerCase();
   return next === "admin" || next === "write" || next === "read" ? next : "none";
 }
 
-function initialPermissions(member: VkpiStaffMember): PermissionMap {
+function initialPermissions(member: VkpiStaffMember): StaffPermissionMap {
   const current = member.permissions || {};
-  const base = Object.fromEntries(MODULES.map((module) => [module.key, normalizeLevel(current[module.key])])) as PermissionMap;
+  const base = Object.fromEntries(STAFF_PERMISSION_MODULES.map((module) => [module.key, normalizeLevel(current[module.key])])) as StaffPermissionMap;
   if (member.vkpiPermission && base.vkpi === "none") base.vkpi = normalizeLevel(member.vkpiPermission);
   return base;
 }
@@ -102,15 +44,15 @@ export function StaffPermissionDrawer({
   member: VkpiStaffMember;
   busy: boolean;
   onClose: () => void;
-  onSavePermissions: (staffId: string, permissions: PermissionMap) => Promise<void>;
+  onSavePermissions: (staffId: string, permissions: StaffPermissionMap) => Promise<void>;
   onCreateActivationLink: (member: VkpiStaffMember) => Promise<VkpiStaffActivationLinkResponse | null>;
   onCreatePasswordResetLink: (staffId: string) => Promise<VkpiStaffPasswordResetLinkResponse | null>;
 }) {
-  const [draft, setDraft] = useState<PermissionMap>(() => initialPermissions(member));
+  const [draft, setDraft] = useState<StaffPermissionMap>(() => initialPermissions(member));
   const [localMessage, setLocalMessage] = useState("");
   const [link, setLink] = useState<{ label: string; url: string; expires: number; sent?: boolean } | null>(null);
   const grouped = useMemo(() => {
-    return MODULES.reduce<Record<string, typeof MODULES>>((acc, module) => {
+    return STAFF_PERMISSION_MODULES.reduce<Record<string, typeof STAFF_PERMISSION_MODULES>>((acc, module) => {
       acc[module.group] = [...(acc[module.group] || []), module];
       return acc;
     }, {});
@@ -127,7 +69,7 @@ export function StaffPermissionDrawer({
   };
 
   const applyTemplate = (key: string) => {
-    const template = TEMPLATES.find((item) => item.key === key);
+    const template = STAFF_PERMISSION_TEMPLATES.find((item) => item.key === key);
     if (template) setDraft({ ...template.permissions });
   };
 
@@ -190,7 +132,7 @@ export function StaffPermissionDrawer({
           <span>先套模板，再细调模块权限</span>
         </div>
         <div className="vkpi-staff-template-row">
-          {TEMPLATES.map((template) => (
+          {STAFF_PERMISSION_TEMPLATES.map((template) => (
             <button type="button" key={template.key} onClick={() => applyTemplate(template.key)}>{template.label}</button>
           ))}
         </div>

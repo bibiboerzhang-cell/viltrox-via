@@ -24,7 +24,7 @@ import {
   createExistingStaffActivationLink,
   createStaffPasswordResetLink,
 } from '../../../services/vkpi.ui-api';
-import type { VkpiPermissionLevel, VkpiStaffActivationLinkResponse, VkpiStaffInviteCapabilities, VkpiStaffPasswordResetLinkResponse } from '../../../services/vkpi.ui-api';
+import type { VkpiStaffActivationLinkResponse, VkpiStaffInviteCapabilities, VkpiStaffPasswordResetLinkResponse } from '../../../services/vkpi.ui-api';
 import type { VkpiSyncOverview } from '../../../services/vkpi/sync-api';
 import type {
   VkpiDashboardData,
@@ -47,12 +47,13 @@ import {
   FeatureFlagsPanel,
   PlatformCrawlPanel,
 } from './settings/SettingsControlPanels';
+import { permissionsForTemplate, vkpiPermissionFromTemplate, type StaffPermissionMap } from './settings/staffPermissionTemplates';
 
 interface SettingsPageProps {
   data: VkpiDashboardData;
   viewMode: 'manager' | 'employee';
   apiToken?: string;
-  onInviteStaff?: (payload: { email: string; name?: string; role: string; vkpiPermission: 'none' | 'read' | 'write' }) => Promise<void>;
+  onInviteStaff?: (payload: { email: string; name?: string; role: string; vkpiPermission: 'none' | 'read' | 'write'; permissions?: StaffPermissionMap; permissionTemplate?: string }) => Promise<void>;
   onUpdateStaffPermission?: (staffId: string, permission: 'none' | 'read' | 'write') => Promise<void>;
   onUpsertProductCost?: (payload: { productSku: string; productName?: string; unitCostUsd: number; note?: string; active?: boolean }) => Promise<void>;
   onOpenStaffProfile?: (staffId: string, fallback?: Partial<VkpiStaffMember>) => void | Promise<void>;
@@ -108,6 +109,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
   const [name, setName] = useState('');
   const [role, setRole] = useState('employee');
   const [permission, setPermission] = useState<'none' | 'read' | 'write'>('write');
+  const [invitePermissionTemplate, setInvitePermissionTemplate] = useState('kol_outreach');
   const [costSku, setCostSku] = useState('');
   const [costProductName, setCostProductName] = useState('');
   const [unitCostUsd, setUnitCostUsd] = useState('');
@@ -487,6 +489,11 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
     }
   };
 
+  const invitePermissions = (): StaffPermissionMap => ({
+    ...permissionsForTemplate(invitePermissionTemplate),
+    vkpi: permission,
+  });
+
   const createManualActivationLink = async () => {
     if (!apiToken || !email.trim()) return null;
     const response = await createStaffActivationLink(apiToken, {
@@ -494,6 +501,8 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
       name: name.trim() || undefined,
       role,
       vkpiPermission: permission,
+      permissions: invitePermissions(),
+      permissionTemplate: invitePermissionTemplate,
     });
     setActivationLink(response);
     setActivationCopied(false);
@@ -514,7 +523,14 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
       const shouldSendEmail = Boolean(inviteCapabilities?.email_available && onInviteStaff);
       if (shouldSendEmail && onInviteStaff) {
         try {
-          await onInviteStaff({ email: email.trim(), name: name.trim() || undefined, role, vkpiPermission: permission });
+          await onInviteStaff({
+            email: email.trim(),
+            name: name.trim() || undefined,
+            role,
+            vkpiPermission: permission,
+            permissions: invitePermissions(),
+            permissionTemplate: invitePermissionTemplate,
+          });
           setEmail('');
           setName('');
           setMessage('员工邀请已发送。');
@@ -551,7 +567,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
     if (member) setSelectedStaffForPermissions(member);
   };
 
-  const saveStaffPermissionMatrix = async (staffId: string, permissions: Record<string, VkpiPermissionLevel>) => {
+  const saveStaffPermissionMatrix = async (staffId: string, permissions: StaffPermissionMap) => {
     if (!apiToken) throw new Error('当前没有登录 token，无法保存权限。');
     setBusy(true);
     try {
@@ -843,6 +859,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
               name={name}
               role={role}
               permission={permission}
+              permissionTemplate={invitePermissionTemplate}
               busy={busy}
               canInvite={canInviteStaff}
               inviteMode={inviteMode}
@@ -854,6 +871,10 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
               onNameChange={setName}
               onRoleChange={setRole}
               onPermissionChange={setPermission}
+              onPermissionTemplateChange={(value) => {
+                setInvitePermissionTemplate(value);
+                setPermission(vkpiPermissionFromTemplate(value));
+              }}
               onCopyActivationLink={() => void copyActivationLink()}
               onSubmit={submitInvite}
             />

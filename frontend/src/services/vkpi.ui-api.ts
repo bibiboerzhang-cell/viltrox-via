@@ -206,6 +206,8 @@ export interface VkpiInviteStaffPayload {
   name?: string;
   role: string;
   vkpiPermission: "none" | "read" | "write";
+  permissions?: Record<string, VkpiPermissionLevel | string>;
+  permissionTemplate?: string;
 }
 
 export type VkpiPermissionLevel = "none" | "read" | "write" | "admin";
@@ -1241,7 +1243,7 @@ export async function healthCheckMarketingLink(token: string, linkId: string) { 
 export async function getStaffInviteCapabilities(token: string) {
   return apiFetch<VkpiStaffInviteCapabilities>("/api/admin/staff/invite/capabilities", {}, token);
 }
-export async function inviteMarketingStaff(token: string, payload: VkpiInviteStaffPayload) { return apiFetch<Record<string, unknown>>("/api/admin/staff/invite", { method: "POST", body: jsonBody({ email: payload.email, name: payload.name, full_name: payload.name, role: payload.role, permissions: { vkpi: payload.vkpiPermission } }) }, token); }
+export async function inviteMarketingStaff(token: string, payload: VkpiInviteStaffPayload) { return apiFetch<Record<string, unknown>>("/api/admin/staff/invite", { method: "POST", body: jsonBody({ email: payload.email, name: payload.name, full_name: payload.name, role: payload.role, permissions: payload.permissions || { vkpi: payload.vkpiPermission }, permission_template: payload.permissionTemplate }) }, token); }
 export async function createStaffActivationLink(token: string, payload: VkpiInviteStaffPayload) {
   return apiFetch<VkpiStaffActivationLinkResponse>("/api/admin/staff/invite/activation-link", {
     method: "POST",
@@ -1250,7 +1252,8 @@ export async function createStaffActivationLink(token: string, payload: VkpiInvi
       name: payload.name,
       full_name: payload.name,
       role: payload.role,
-      permissions: { vkpi: payload.vkpiPermission },
+      permissions: payload.permissions || { vkpi: payload.vkpiPermission },
+      permission_template: payload.permissionTemplate,
     }),
   }, token);
 }

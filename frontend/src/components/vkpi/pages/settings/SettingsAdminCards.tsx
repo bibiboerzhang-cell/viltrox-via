@@ -4,6 +4,7 @@ import type { VkpiProductCatalogItem } from "../../vkpiTypes";
 import { CardHeader } from "../../shared/CardHeader";
 import { InfoBlock } from "../../shared/InfoBlock";
 import { ProviderStatusTable } from "../../tables/ProviderStatusTable";
+import { STAFF_PERMISSION_TEMPLATES, vkpiPermissionFromTemplate } from "./staffPermissionTemplates";
 
 type Row = Record<string, unknown>;
 
@@ -37,6 +38,7 @@ export function StaffInviteCard({
   name,
   role,
   permission,
+  permissionTemplate,
   busy,
   canInvite,
   inviteMode,
@@ -48,6 +50,7 @@ export function StaffInviteCard({
   onNameChange,
   onRoleChange,
   onPermissionChange,
+  onPermissionTemplateChange,
   onCopyActivationLink,
   onSubmit,
 }: {
@@ -55,6 +58,7 @@ export function StaffInviteCard({
   name: string;
   role: string;
   permission: "none" | "read" | "write";
+  permissionTemplate: string;
   busy: boolean;
   canInvite: boolean;
   inviteMode: "email" | "manual_link";
@@ -66,6 +70,7 @@ export function StaffInviteCard({
   onNameChange: (value: string) => void;
   onRoleChange: (value: string) => void;
   onPermissionChange: (value: "none" | "read" | "write") => void;
+  onPermissionTemplateChange: (value: string) => void;
   onCopyActivationLink: () => void;
   onSubmit: React.FormEventHandler;
 }) {
@@ -80,7 +85,24 @@ export function StaffInviteCard({
         <input value={email} onChange={(event) => onEmailChange(event.target.value)} placeholder="员工邮箱，建议使用 @viltrox.com" />
         <input value={name} onChange={(event) => onNameChange(event.target.value)} placeholder="员工姓名 / 拼音 ID" />
         <select value={role} onChange={(event) => onRoleChange(event.target.value)}><option value="employee">员工 / 运营</option><option value="manager">管理层</option><option value="analyst">数据分析</option><option value="readonly">只读</option><option value="admin">管理员</option></select>
+        <div className="vkpi-staff-template-row">
+          {STAFF_PERMISSION_TEMPLATES.map((template) => (
+            <button
+              className={permissionTemplate === template.key ? "is-active" : ""}
+              type="button"
+              key={template.key}
+              onClick={() => onPermissionTemplateChange(template.key)}
+              title={template.detail}
+            >
+              {template.label}
+            </button>
+          ))}
+        </div>
         <select value={permission} onChange={(event) => onPermissionChange(event.target.value as "none" | "read" | "write")}><option value="write">可操作 Viltrox Marketing</option><option value="read">只读 Viltrox Marketing</option><option value="none">无 Viltrox Marketing 权限</option></select>
+        <div className="vkpi-invite-mode-row">
+          <span>权限模板</span>
+          <em>{STAFF_PERMISSION_TEMPLATES.find((item) => item.key === permissionTemplate)?.detail || `V-KPI ${vkpiPermissionFromTemplate(permissionTemplate)}`}</em>
+        </div>
         <div className="vkpi-invite-mode-row">
           <span>{inviteMode === "email" ? "邮件邀请" : "激活链接"}</span>
           <em>{inviteMode === "email" ? "SMTP 已配置" : `允许域名 ${allowedDomains}`}</em>

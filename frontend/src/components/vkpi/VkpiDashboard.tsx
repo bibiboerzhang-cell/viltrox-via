@@ -77,7 +77,7 @@ export interface VkpiDashboardProps {
   onPauseLink?: (linkId: string) => Promise<void>;
   onArchiveLink?: (linkId: string) => Promise<void>;
   onHealthCheckLink?: (linkId: string) => Promise<void>;
-  onInviteStaff?: (payload: { email: string; name?: string; role: string; vkpiPermission: 'none' | 'read' | 'write' }) => Promise<void>;
+  onInviteStaff?: (payload: { email: string; name?: string; role: string; vkpiPermission: 'none' | 'read' | 'write'; permissions?: Record<string, string>; permissionTemplate?: string }) => Promise<void>;
   onUpdateStaffPermission?: (staffId: string, permission: 'none' | 'read' | 'write') => Promise<void>;
   onRunKpiRollup?: (ledgerDate?: string) => Promise<void>;
   onUpsertProductCost?: (payload: { productSku: string; productName?: string; unitCostUsd: number; currency?: string; active?: boolean; note?: string }) => Promise<void>;
