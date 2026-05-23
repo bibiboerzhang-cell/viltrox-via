@@ -145,6 +145,7 @@ interface PremiumSnapshot {
   brandSignals: Row[];
   agentsStatus: Row;
   copilotBrief: Row;
+  tasksStatus: Row;
   loadedAt?: string;
 }
 
@@ -245,6 +246,7 @@ const EMPTY_PREMIUM_SNAPSHOT: PremiumSnapshot = {
   brandSignals: [],
   agentsStatus: {},
   copilotBrief: {},
+  tasksStatus: {},
 };
 
 function localDateISO(date = new Date()): string {
@@ -547,6 +549,23 @@ function buildPremiumAgents(agentsStatus: Row, allowMockFallback: boolean): Prem
   return allowMockFallback ? mockAgents : [{ id: 'agents', name: 'Agents', status: 'idle', summary: '等待真实 API', lastOutput: '', isMock: true }];
 }
 
+function buildPremiumTasks(tasksStatus: Row): PremiumTask[] {
+  return rowsFrom(tasksStatus.tasks)
+    .map((row): PremiumTask => {
+      const priority = String(row.priority || 'low') as PremiumTask['priority'];
+      const confidence = Math.max(0, Math.min(1, numberValue(row.confidence)));
+      return {
+        title: String(row.title || '推荐任务'),
+        priority: priority === 'high' || priority === 'mid' || priority === 'low' ? priority : 'low',
+        priorityLabel: priority === 'high' ? '高' : priority === 'mid' ? '中' : '低',
+        body: String(row.body || '等待人工复核'),
+        width: `${Math.round(confidence * 100)}%`,
+        isMock: false,
+      };
+    })
+    .slice(0, 6);
+}
+
 function recentDateLabels(days = 6): string[] {
   const labels: string[] = [];
   const now = new Date();
@@ -639,7 +658,7 @@ function engagementLabel(row: Row): string {
 
 async function fetchPremiumSnapshot(apiToken: string, windowDays: number): Promise<PremiumSnapshot> {
   const failedSections: string[] = [];
-  const [dashboardResult, trendResult, productResult, kolSummaryResult, kolDistributionResult, officialMatrixResult, competitorResult, brandSignalsResult, agentsStatusResult, copilotBriefResult] = await Promise.allSettled([
+  const [dashboardResult, trendResult, productResult, kolSummaryResult, kolDistributionResult, officialMatrixResult, competitorResult, brandSignalsResult, agentsStatusResult, copilotBriefResult, tasksStatusResult] = await Promise.allSettled([
     apiFetch<Row>(`/api/admin/vkpi/dashboard?window_days=${windowDays}`, {}, apiToken),
     apiFetch<{ rows?: Row[] }>(`/api/admin/vkpi/dashboard/revenue-trend?window_days=7`, {}, apiToken),
     apiFetch<{ rows?: Row[] }>(`/api/admin/vkpi/dashboard/product-performance?window_days=${windowDays}&limit=20`, {}, apiToken),
@@ -650,6 +669,7 @@ async function fetchPremiumSnapshot(apiToken: string, windowDays: number): Promi
     listBrandSignals(apiToken, { status: 'new', limit: 10 }),
     apiFetch<Row>('/api/admin/vkpi/dashboard/agents-status', {}, apiToken),
     apiFetch<Row>('/api/admin/vkpi/dashboard/copilot-brief', {}, apiToken),
+    apiFetch<Row>('/api/admin/vkpi/dashboard/tasks?limit=6', {}, apiToken),
   ]);
   const dashboard = settledValue(dashboardResult, {}, failedSections, 'dashboard');
   const trend = settledValue(trendResult, { rows: [] }, failedSections, 'revenue-trend');
@@ -661,6 +681,7 @@ async function fetchPremiumSnapshot(apiToken: string, windowDays: number): Promi
   const brandSignals = settledValue(brandSignalsResult, { signals: [] }, failedSections, 'brand-signals');
   const agentsStatus = settledValue(agentsStatusResult, {}, failedSections, 'agents-status');
   const copilotBrief = settledValue(copilotBriefResult, {}, failedSections, 'copilot-brief');
+  const tasksStatus = settledValue(tasksStatusResult, {}, failedSections, 'tasks');
   return {
     source: failedSections.length ? 'partial' : 'real',
     failedSections,
@@ -674,6 +695,7 @@ async function fetchPremiumSnapshot(apiToken: string, windowDays: number): Promi
     brandSignals: rowsFrom(brandSignals.signals),
     agentsStatus,
     copilotBrief,
+    tasksStatus,
     loadedAt: new Date().toISOString(),
   };
 }
@@ -872,6 +894,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
   );
   const premiumPlatforms = useMemo(() => buildPremiumPlatforms(snapshot.kolSummary, snapshot.officialMatrix, allowMockFallback), [allowMockFallback, snapshot.kolSummary, snapshot.officialMatrix]);
   const premiumAgents = useMemo(() => buildPremiumAgents(snapshot.agentsStatus, allowMockFallback), [allowMockFallback, snapshot.agentsStatus]);
+  const premiumTasks = useMemo(() => buildPremiumTasks(snapshot.tasksStatus), [snapshot.tasksStatus]);
   const contentRows = useMemo(() => latestContentRows(snapshot.officialMatrix), [snapshot.officialMatrix]);
   const official = useMemo(() => officialTotals(snapshot.officialMatrix), [snapshot.officialMatrix]);
   const contentTypeRows = allowMockFallback
@@ -1120,7 +1143,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
                   </div>
                 )) : <div className="empty-real">暂无真实品牌信号</div>}
               </div>
-              <div className="glass-card rail-card"><div className="panel-head"><h3>本周关键任务</h3><button className="link" type="button" onClick={() => goToWorkspacePage('projects', '本周关键任务')}>查看全部</button></div>{tasks.map((task) => <div className="task" title={task.mockLabel} key={task.title}><div className="task-head"><b>{task.title}{task.isMock ? <span className="tag">示例</span> : null}</b><span className={`priority ${task.priority}`}>{task.priorityLabel}</span></div><p>{task.body}</p><div className="progress"><span style={glassVarStyle({ '--w': task.width })}></span></div></div>)}</div>
+              <div className="glass-card rail-card"><div className="panel-head"><h3>本周关键任务</h3><button className="link" type="button" onClick={() => goToWorkspacePage('projects', '本周关键任务')}>查看全部</button></div>{premiumTasks.length ? premiumTasks.map((task) => <div className="task" title={task.mockLabel} key={task.title}><div className="task-head"><b>{task.title}{task.isMock ? <span className="tag">示例</span> : null}</b><span className={`priority ${task.priority}`}>{task.priorityLabel}</span></div><p>{task.body}</p><div className="progress"><span style={glassVarStyle({ '--w': task.width })}></span></div></div>) : <div className="empty-real">{snapshot.tasksStatus.is_real ? '暂无真实推荐任务' : '等待真实任务 API'}</div>}</div>
               <div className="glass-card rail-card"><div className="panel-head"><h3>快捷入口</h3></div><div className="quick">{quickActions.map((action) => <button key={action.label} type="button" onClick={() => goToWorkspacePage(action.page, action.label)}><b>{action.icon}</b><span>{action.label}</span></button>)}</div></div>
             </aside>
 	          </div>
