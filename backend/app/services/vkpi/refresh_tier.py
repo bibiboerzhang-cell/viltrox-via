@@ -514,7 +514,8 @@ def qualified_refresh_rows(
 def mark_kol_refreshed(kol_pool_id: int, *, status: str) -> None:
     if not _table_exists("vkpi_kol_refresh_tier"):
         return
-    get_conn().execute(
+    conn = get_conn()
+    conn.execute(
         """
         UPDATE vkpi_kol_refresh_tier
         SET last_refresh_at=?, last_refresh_status=?, updated_at=?
@@ -522,6 +523,7 @@ def mark_kol_refreshed(kol_pool_id: int, *, status: str) -> None:
         """,
         (_utcnow(), str(status or "")[:40], _utcnow(), int(kol_pool_id)),
     )
+    conn.commit()
 
 
 def qualified_refresh_plan(*, limit: int = 50, platforms: set[str] | None = None, tiers: set[str] | None = None) -> dict[str, Any]:

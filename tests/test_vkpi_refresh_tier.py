@@ -71,3 +71,27 @@ def test_qualified_refresh_rows_do_not_fallback_without_tier_table(monkeypatch) 
     assert rows == []
     assert counts["selector_ready"] is False
     assert counts["source_total"] == 0
+
+
+def test_mark_kol_refreshed_commits(monkeypatch) -> None:
+    class Conn:
+        def __init__(self) -> None:
+            self.executed: list[tuple[str, tuple[object, ...]]] = []
+            self.commits = 0
+
+        def execute(self, sql: str, params: tuple[object, ...]):
+            self.executed.append((sql, params))
+            return None
+
+        def commit(self) -> None:
+            self.commits += 1
+
+    conn = Conn()
+    monkeypatch.setattr(refresh_tier, "_table_exists", lambda table: table == "vkpi_kol_refresh_tier")
+    monkeypatch.setattr(refresh_tier, "get_conn", lambda: conn)
+
+    refresh_tier.mark_kol_refreshed(1554, status="synced")
+
+    assert conn.executed
+    assert conn.executed[0][1][-1] == 1554
+    assert conn.commits == 1
