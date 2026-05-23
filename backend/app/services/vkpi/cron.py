@@ -129,6 +129,7 @@ def _payload_summary(payload: dict[str, Any]) -> dict[str, Any]:
         "dry_run",
         "kol_limit",
         "kol_max_posts",
+        "kol_error_stop_threshold",
         "kol_platforms",
         "kol_refresh_selector",
         "kol_source_type",

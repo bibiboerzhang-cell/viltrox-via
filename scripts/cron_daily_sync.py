@@ -63,6 +63,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--kol-offset", type=int, default=0, help="Skip the first N selected KOL rows for bounded retries")
     parser.add_argument("--kol-stale-before", default="", help="Only refresh selected KOL rows last seen/updated before this timestamp")
     parser.add_argument("--kol-max-posts", type=int, default=1, help="Latest post sample per KOL pool row")
+    parser.add_argument("--kol-error-stop-threshold", type=int, default=3, help="Stop KOL refresh when provider errors reach this count")
     parser.add_argument("--kol-platforms", default="", help="Comma-separated KOL platforms to run")
     parser.add_argument("--kol-refresh-selector", default="qualified", choices=["qualified", "legacy"], help="KOL refresh selector to use when KOL refresh is explicitly included")
     parser.add_argument("--kol-tiers", default="hot", help="Comma-separated refresh tiers for qualified selector")
@@ -94,6 +95,7 @@ async def main() -> int:
         "kol_offset": max(0, min(5000, int(args.kol_offset or 0))),
         "kol_stale_before": args.kol_stale_before.strip(),
         "kol_max_posts": max(1, min(3, int(args.kol_max_posts or 1))),
+        "kol_error_stop_threshold": max(0, min(100, int(args.kol_error_stop_threshold or 0))),
         "kol_platforms": args.kol_platforms,
         "kol_refresh_selector": kol_selector,
         "kol_tiers": args.kol_tiers,
@@ -113,6 +115,7 @@ async def main() -> int:
             kol_offset=payload["kol_offset"],
             kol_stale_before=payload["kol_stale_before"],
             kol_max_posts=payload["kol_max_posts"],
+            kol_error_stop_threshold=payload["kol_error_stop_threshold"],
             skip_kol=payload["skip_kol"],
             kol_refresh_selector=payload["kol_refresh_selector"],
             kol_tiers=payload["kol_tiers"],

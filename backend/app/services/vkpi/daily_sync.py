@@ -28,6 +28,7 @@ ENRICHABLE_KOL_PLATFORMS = {"youtube", "instagram", "tiktok", "facebook", "reddi
 SYNC_FAIL_FAST_EXIT_CODE = 75
 SYNC_GUARD_BLOCKED_EXIT_CODE = 76
 SYNC_FAILURE_RATE_THRESHOLD = 0.10
+KOL_PROVIDER_ERROR_STOP_THRESHOLD = 3
 LEGACY_KOL_REFRESH_GUARD_REASON = "legacy_kol_daily_refresh_disabled_until_tier_selector"
 QUALIFIED_KOL_REFRESH_GUARD_REASON = "qualified_kol_refresh_requires_explicit_operator_enable"
 TRACEBACK_MAX_CHARS = 4096
@@ -778,6 +779,7 @@ def run_kol_pool_light_refresh(payload: dict[str, Any]) -> dict[str, Any]:
     offset = max(0, min(5000, _int(payload.get("kol_offset"), 0)))
     stale_before = str(payload.get("kol_stale_before") or "").strip()
     max_posts = max(1, min(3, _int(payload.get("kol_max_posts") or payload.get("max_posts"), 1)))
+    error_stop_threshold = max(0, min(100, _int(payload.get("kol_error_stop_threshold"), KOL_PROVIDER_ERROR_STOP_THRESHOLD)))
     platforms = _platform_filter(payload.get("kol_platforms") or payload.get("platforms"))
     source_type = str(payload.get("kol_source_type") or "legacy_excel_p2d").strip()
     selector = _kol_refresh_selector(payload)
@@ -808,6 +810,7 @@ def run_kol_pool_light_refresh(payload: dict[str, Any]) -> dict[str, Any]:
             "offset": offset,
             "stale_before": stale_before,
             "max_posts": max_posts,
+            "error_stop_threshold": error_stop_threshold,
             "source_type": source_type,
             **source_counts,
             "refreshable_total": len(rows),
@@ -951,6 +954,53 @@ def run_kol_pool_light_refresh(payload: dict[str, Any]) -> dict[str, Any]:
                 "error_class": type(exc).__name__,
                 "error_type": error_type,
             })
+            if error_stop_threshold and len(errors) >= error_stop_threshold:
+                summary = {
+                    "dry_run": False,
+                    "requested": len(rows),
+                    "refreshed": refreshed,
+                    "partial": partial,
+                    "errors": len(errors),
+                    "limit": limit,
+                    "offset": offset,
+                    "stale_before": stale_before,
+                    "max_posts": max_posts,
+                    "error_stop_threshold": error_stop_threshold,
+                    "source_type": source_type,
+                    "selector": selector,
+                    "tiers": sorted(tiers) if selector == "qualified" else [],
+                    **source_counts,
+                    "refreshable_total": len(rows),
+                    "last_success_index": last_success_index,
+                    "interrupted_at_index": index,
+                    "interrupted_kol_pool_id": kol_pool_id,
+                    "reason": "provider_error_threshold_exceeded",
+                    "error_type": error_type,
+                    "error_class": type(exc).__name__,
+                    "error_sample": errors[:30],
+                }
+                record_sync_interrupt(
+                    run_id=run_id,
+                    job_name=job_name,
+                    stage=stage,
+                    total_targets=len(rows),
+                    last_success_index=last_success_index,
+                    interrupted_at_index=index,
+                    interrupted_kol_pool_id=kol_pool_id,
+                    reason="provider_error_threshold_exceeded",
+                    error_type=error_type,
+                    error_class=type(exc).__name__,
+                    error_message=str(exc),
+                    traceback_text=_traceback_text(exc),
+                    payload={**payload, "run_id": run_id},
+                    summary=summary,
+                )
+                raise SyncFailFast(
+                    f"daily sync interrupted: provider_error_threshold_exceeded ({len(errors)} errors)",
+                    run_id=run_id,
+                    stage=stage,
+                    summary=summary,
+                ) from exc
     logger.info(
         "daily sync kol light finish requested=%s refreshed=%s partial=%s errors=%s",
         len(rows),
@@ -971,6 +1021,7 @@ def run_kol_pool_light_refresh(payload: dict[str, Any]) -> dict[str, Any]:
         "offset": offset,
         "stale_before": stale_before,
         "max_posts": max_posts,
+        "error_stop_threshold": error_stop_threshold,
         "source_type": source_type,
         **source_counts,
         "refreshable_total": len(rows),

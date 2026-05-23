@@ -138,6 +138,33 @@ def test_kol_light_refresh_provider_error_continues_and_records_error_context(mo
     assert not events["interrupt"]
 
 
+def test_kol_light_refresh_stops_when_provider_error_threshold_reached(monkeypatch: pytest.MonkeyPatch) -> None:
+    rows = _rows(4)
+    events = _install_harness(monkeypatch, rows)
+
+    def enrich(kol_pool_id: int, **_kwargs: object) -> dict[str, object]:
+        if kol_pool_id in {2, 3, 4}:
+            raise TimeoutError(f"provider timeout {kol_pool_id}")
+        return _synced_result()
+
+    monkeypatch.setattr(daily_sync.kol_pool, "enrich_item", enrich)
+
+    with pytest.raises(daily_sync.SyncFailFast) as exc_info:
+        daily_sync.run_kol_pool_light_refresh({
+            "run_id": "unit-run-provider-threshold",
+            "kol_error_stop_threshold": 2,
+        })
+
+    assert exc_info.value.exit_code == 75
+    assert "provider_error_threshold_exceeded" in str(exc_info.value)
+    assert events["interrupt"][0]["run_id"] == "unit-run-provider-threshold"
+    assert events["interrupt"][0]["interrupted_at_index"] == 3
+    assert events["interrupt"][0]["interrupted_kol_pool_id"] == 3
+    assert events["interrupt"][0]["reason"] == "provider_error_threshold_exceeded"
+    assert events["interrupt"][0]["error_type"] == "provider_timeout"
+    assert not events["finish"]
+
+
 def test_kol_light_refresh_interrupt_record_failure_emits_stderr_json_and_exits_75(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
