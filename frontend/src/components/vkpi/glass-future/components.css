@@ -87,7 +87,9 @@
 @keyframes vkpi-premium-skeleton-shimmer {
   100% { transform: translateX(110%); }
 }
-.vkpi-glass-shell .kpi { min-height: 136px; padding: 18px; }
+.vkpi-glass-shell .kpi { min-height: 136px; padding: 18px; cursor: pointer; transition: transform .22s, box-shadow .22s, min-height .22s; }
+.vkpi-glass-shell .kpi.is-expanded { grid-column: span 2; min-height: 260px; }
+.vkpi-glass-shell .kpi.is-pending .value { color: #344054; }
 .vkpi-glass-shell .kpi .topline { position: relative; display: flex; justify-content: space-between; align-items: center; }
 .vkpi-glass-shell .kpi .icon { width: 44px; height: 44px; border-radius: 17px; background: var(--ig); display: grid; place-items: center; color: var(--ic); box-shadow: inset 0 1px 0 rgba(255,255,255,.85); font-size: 22px; }
 .vkpi-glass-shell .kpi .label { position: relative; margin-top: 12px; font-size: 12px; color: #667085; font-weight: 760; }
@@ -96,6 +98,14 @@
 .vkpi-glass-shell .kpi .up { color: #079455; }
 .vkpi-glass-shell .kpi .down { color: #d92d20; }
 .vkpi-glass-shell .spark { position: relative; width: 100%; height: 28px; margin-top: 8px; }
+.vkpi-glass-shell .kpi-detail { position: relative; margin-top: 12px; border-radius: 16px; border: 1px solid rgba(255,255,255,.70); background: rgba(255,255,255,.38); padding: 12px; box-shadow: var(--inner); }
+.vkpi-glass-shell .kpi-detail-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.vkpi-glass-shell .kpi-detail-head b { font-size: 13px; font-weight: 950; }
+.vkpi-glass-shell .kpi-detail-head span { font-size: 11px; color: #667085; font-weight: 800; text-align: right; }
+.vkpi-glass-shell .kpi-detail-grid { display: grid; grid-template-columns: 76px 1fr; gap: 7px 10px; margin-top: 10px; font-size: 12px; }
+.vkpi-glass-shell .kpi-detail-grid span { color: #667085; font-weight: 780; }
+.vkpi-glass-shell .kpi-detail-grid b { color: #101828; font-weight: 850; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vkpi-glass-shell .kpi-detail-link { margin-top: 11px; border: 1px solid rgba(27,108,255,.18); background: rgba(27,108,255,.10); color: #1b6cff; border-radius: 12px; padding: 8px 10px; font-size: 12px; font-weight: 900; cursor: pointer; }
 .vkpi-glass-shell .vkpi-premium-kpi-skeleton { display: grid; align-content: start; gap: 12px; pointer-events: none; }
 .vkpi-glass-shell .content-grid { display: grid; grid-template-columns: minmax(720px,1fr) 380px; gap: 18px; }
 .vkpi-glass-shell .vkpi-premium-loading-skeleton { pointer-events: none; }
@@ -167,6 +177,7 @@
 .vkpi-glass-shell .thumb { width: 56px; height: 42px; border-radius: 12px; background: linear-gradient(135deg,#111827,#1b6cff); position: relative; overflow: hidden; }
 .vkpi-glass-shell .thumb:after { content: "▶"; position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font-size: 14px; }
 .vkpi-glass-shell .tag { font-size: 10px; color: #1b6cff; background: rgba(27,108,255,.10); border-radius: 8px; padding: 2px 6px; font-weight: 850; }
+.vkpi-glass-shell .tag-real { color: #079455; background: rgba(18,183,106,.12); }
 .vkpi-glass-shell .table button { width: 32px; height: 32px; border-radius: 11px; border: 1px solid rgba(255,255,255,.72); background: rgba(255,255,255,.5); box-shadow: var(--inner); cursor: pointer; }
 .vkpi-glass-shell .rail { display: flex; flex-direction: column; gap: 18px; }
 .vkpi-glass-shell .rail-card { padding: 18px; }

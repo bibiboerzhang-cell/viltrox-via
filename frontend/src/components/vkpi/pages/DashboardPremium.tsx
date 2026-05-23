@@ -46,6 +46,14 @@ interface PremiumKpi {
   mockLabel?: string;
 }
 
+interface PremiumKpiCardProps {
+  item: PremiumKpi;
+  expanded: boolean;
+  windowDays: number;
+  onToggle: () => void;
+  onOpenDetail: () => void;
+}
+
 interface PremiumProductRow {
   rank: number;
   name: string;
@@ -617,14 +625,49 @@ async function fetchPremiumSnapshot(apiToken: string, windowDays: number): Promi
   };
 }
 
-function PremiumKpiCard({ item }: { item: PremiumKpi }) {
+function kpiStatusLabel(item: PremiumKpi): string {
+  if (!item.isMock) return '真实 API';
+  return item.mockLabel?.includes('Shopify') || item.mockLabel?.includes('待') ? '待接入' : '示例';
+}
+
+function PremiumKpiCard({ item, expanded, windowDays, onToggle, onOpenDetail }: PremiumKpiCardProps) {
+  const statusLabel = kpiStatusLabel(item);
   return (
-    <div className="glass-card kpi" style={glassVarStyle({ '--ig': item.ig, '--ic': item.ic })} title={item.mockLabel}>
-      <div className="topline"><div className="icon">{item.icon}</div>{item.isMock ? <span className="tag">{badgeText(item.mockLabel)}</span> : null}</div>
+    <div
+      className={`glass-card kpi${expanded ? ' is-expanded' : ''}${item.isMock ? ' is-pending' : ' is-real'}`}
+      style={glassVarStyle({ '--ig': item.ig, '--ic': item.ic })}
+      title={item.mockLabel}
+      role="button"
+      tabIndex={0}
+      onClick={onToggle}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') onToggle();
+      }}
+    >
+      <div className="topline"><div className="icon">{item.icon}</div><span className={`tag ${item.isMock ? '' : 'tag-real'}`}>{item.isMock ? badgeText(item.mockLabel) : '真实'}</span></div>
       <div className="label">{item.label}</div>
       <div className="value">{item.value}</div>
       <div className={`meta ${item.trend}`}>{item.meta}</div>
       <svg className="spark" viewBox="0 0 120 28"><path d={item.sparkPath} fill="none" stroke={item.ic} strokeWidth="3" strokeLinecap="round" /></svg>
+      {expanded ? (
+        <div className="kpi-detail">
+          <div className="kpi-detail-head"><b>{statusLabel}</b><span>{item.isMock ? item.mockLabel || '示例数据' : '来源已接入'}</span></div>
+          <div className="kpi-detail-grid">
+            <span>当前窗口</span><b>近 {windowDays} 天</b>
+            <span>数据来源</span><b>{item.isMock ? item.mockLabel || '示例数据' : item.meta}</b>
+          </div>
+          <button
+            className="kpi-detail-link"
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpenDetail();
+            }}
+          >
+            {item.isMock ? '查看接入状态' : '查看完整归因'}
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -726,6 +769,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
   const [snapshot, setSnapshot] = useState<PremiumSnapshot>(EMPTY_PREMIUM_SNAPSHOT);
   const [loadingData, setLoadingData] = useState(false);
   const [countryDrawer, setCountryDrawer] = useState<CountryDrawerState | null>(null);
+  const [expandedKpi, setExpandedKpi] = useState<string | null>(null);
 
   useEffect(() => {
     if (!apiToken) {
@@ -843,6 +887,14 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
     showToast(`${fallbackLabel} · 可接真实路由`);
   }, [onSelectPage, showToast]);
 
+  const handleKpiDetail = useCallback((item: PremiumKpi) => {
+    if (item.isMock) {
+      showToast(item.mockLabel || '该指标等待真实数据接入');
+      return;
+    }
+    goToWorkspacePage('dataAnalysis', item.label);
+  }, [goToWorkspacePage, showToast]);
+
   const openContentUrl = useCallback((url: unknown) => {
     const href = typeof url === 'string' ? url.trim() : '';
     if (!href) {
@@ -868,7 +920,16 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
 	          <section className="kpis">
 	            {loadingData && snapshot.source === 'mock' && !snapshot.loadedAt
 	              ? <PremiumKpiSkeletons />
-	              : premiumKpis.map((item) => <PremiumKpiCard key={item.label} item={item} />)}
+	              : premiumKpis.map((item) => (
+	                <PremiumKpiCard
+	                  key={item.label}
+	                  item={item}
+	                  expanded={expandedKpi === item.label}
+	                  windowDays={windowDays}
+	                  onToggle={() => setExpandedKpi((current) => current === item.label ? null : item.label)}
+	                  onOpenDetail={() => handleKpiDetail(item)}
+	                />
+	              ))}
 	          </section>
 	          {loadingData && snapshot.source === 'mock' && !snapshot.loadedAt ? (
 	            <PremiumDashboardSkeleton />
