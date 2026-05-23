@@ -7,10 +7,11 @@ Scope: P0 sync-governance closeout plus the first P1 data-trust pass. This repor
 ## Current Deployment
 
 - Live domain: `https://viltroxtest.com`
-- Latest deployed commit: `64d0097a chore(vkpi): clear remaining service silent exceptions`
+- Latest deployed commit: `137c45d3 fix(vkpi): order sync guard runs by stable timestamp`
 - Health: `/health` returns `ok`
-- Client/server hash: matched at `64d0097aa37024db3540431ed7eb2144405b5f92`
-- Backup before latest deploy: `runtime/prod-sync/20260523T014534Z`
+- Client/server hash: matched at `137c45d3ea701f2b7c0c6b3b77fb758e2b304bc2`
+- Backup before latest deploy: `runtime/prod-sync/20260523T015349Z`
+- Previous code deploy backup: `runtime/prod-sync/20260523T014534Z`
 - Previous deploy backup: `runtime/prod-sync/20260523T014215Z`
 
 ## Sync Governance
@@ -19,6 +20,8 @@ Scope: P0 sync-governance closeout plus the first P1 data-trust pass. This repor
 - Current timer command is official-only: `scripts/cron_daily_sync.py --official-max-posts 50 --skip-kol`.
 - `vkpi-sync-daily.timer` remains scheduled for natural verification at `2026-05-23 04:04:09 UTC`.
 - Latest old full-KOL run remains intentionally classified as strategy-interrupted and acked; it should not be interpreted as an unexplained production accident.
+- Preflight at `2026-05-23 01:55 UTC`: service was inactive, next timer remained `2026-05-23 04:04:09 UTC`, `/health` was `ok`, `guard_allowed=true`, and `ack_required=false`.
+- Guard/status queries now order `vkpi_sync_runs` by `started_at DESC NULLS LAST, created_at DESC NULLS LAST`, matching the production schema where `vkpi_sync_runs` has no synthetic `id` column.
 
 ## Baseline Protection
 
@@ -86,6 +89,9 @@ Acceptance:
 - Code now prefers renderable high-resolution official media while keeping cached candidates first when the external high-res candidate is not yet cacheable.
 - Media cache policy now separates official-account prewarm, future qualified KOL lazy cache, and legacy cold KOL no-daily-prewarm behavior.
 - Video cache policy remains explicit/on-demand; YouTube uses embeds, and poster images must not be presented as playable video.
+- P0 recheck at `2026-05-23 01:58 UTC`: official matrix returned 18 active channels; every official channel had an avatar URL. The YouTube official channel had 12 sampled posts, 12/12 with YouTube embed IDs and cached image thumbnails.
+- Public cache spot checks passed: sampled official image-cache URLs returned `200 image/jpeg`; sampled video-cache URLs returned `206 Partial Content` with `video/mp4`.
+- Separate legacy `vkpi_industry_posts` live-source audit remains blocked for old Instagram source URLs: sampled stored external image/video URLs returned source `403`. This is not a green media state; UI must continue to rely on cached assets where present and expose original links/cache status instead of implying expired source URLs are playable.
 
 ## Comment Contract
 
