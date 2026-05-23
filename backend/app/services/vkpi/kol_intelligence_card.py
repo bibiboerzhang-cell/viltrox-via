@@ -15,6 +15,7 @@ from app.services.vkpi import (
     brand_signal_detector,
     eleven_dimensions,
     kol_competitor_detector,
+    kol_history_match,
     kol_pool,
     kol_product_fit,
     refresh_tier,
@@ -51,6 +52,16 @@ def _loads(value: Any, fallback: Any) -> Any:
     except Exception:
         return fallback
     return parsed if parsed is not None else fallback
+
+
+def _as_list(value: Any) -> list[Any]:
+    parsed = _loads(value, [])
+    return parsed if isinstance(parsed, list) else []
+
+
+def _brief_list(value: Any, *, limit: int = 8) -> list[Any]:
+    rows = _as_list(value)
+    return rows[: max(0, min(50, int(limit or 8)))]
 
 
 def _status_payload(status: str, *, reason: str = "", error: Exception | None = None, **extra: Any) -> dict[str, Any]:
@@ -188,6 +199,122 @@ def _brand_signals(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _cached_post_summaries(item: dict[str, Any], *, limit: int = 6) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for post in _cached_posts(item, limit=limit):
+        if not isinstance(post, dict):
+            continue
+        snippet = post.get("snippet") if isinstance(post.get("snippet"), dict) else {}
+        stats = post.get("statistics") if isinstance(post.get("statistics"), dict) else {}
+        post_uid = _text(post.get("id") or post.get("post_uid") or post.get("shortCode") or post.get("shortcode"))
+        url = _text(post.get("post_url") or post.get("url") or post.get("webVideoUrl") or post.get("permalink"))
+        if not url and _text(post.get("kind")).lower() == "youtube#video" and post_uid:
+            url = f"https://www.youtube.com/watch?v={post_uid}"
+        title = _text(post.get("title") or post.get("caption") or post.get("text") or snippet.get("title") or url)
+        if not title and not url:
+            continue
+        rows.append(
+            {
+                "id": post_uid or url or f"cached-post-{len(rows) + 1}",
+                "title": title[:280],
+                "url": url,
+                "post_url": url,
+                "published_at": _text(post.get("published_at") or post.get("publishedAt") or post.get("timestamp") or snippet.get("publishedAt")),
+                "views": _safe_int(post.get("views") or post.get("view_count") or post.get("playCount") or stats.get("viewCount")),
+                "likes": _safe_int(post.get("likes") or post.get("like_count") or post.get("diggCount") or stats.get("likeCount")),
+                "comments": _safe_int(post.get("comments") or post.get("comment_count") or post.get("commentCount") or stats.get("commentCount")),
+                "source_kind": "kol_pool_cached_post",
+            }
+        )
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+def _memory_card(item: dict[str, Any], competitors: dict[str, Any]) -> dict[str, Any]:
+    raw = _loads(item.get("raw_platform_data"), {})
+    evidence_summary = raw.get("evidence_summary") if isinstance(raw, dict) and isinstance(raw.get("evidence_summary"), dict) else {}
+    try:
+        history = kol_history_match.find_history_match(item, platform=_text(item.get("platform"))) or {}
+        history_status = "ready" if history else "empty"
+    except Exception as exc:
+        history = {}
+        history_status = "unavailable"
+        history_error = f"{type(exc).__name__}: {str(exc)[:240]}"
+    else:
+        history_error = ""
+
+    recent_posts = history.get("recent_posts") if isinstance(history.get("recent_posts"), list) else []
+    if not recent_posts:
+        recent_posts = _cached_post_summaries(item, limit=6)
+    recent_cooperations = history.get("recent_cooperations") if isinstance(history.get("recent_cooperations"), list) else []
+    brand_collaborations = _brief_list(item.get("brand_collaborations_json"))
+    recommended_products = _brief_list(item.get("recommended_product_lines_json"))
+    potential_concerns = _brief_list(item.get("potential_concerns_json"))
+    relations = competitors.get("relations") if isinstance(competitors.get("relations"), list) else []
+    competitor_summary = competitors.get("summary") if isinstance(competitors.get("summary"), dict) else {}
+    cooperation_count = max(
+        _safe_int(history.get("cooperation_count")),
+        len(brand_collaborations),
+        _safe_int(evidence_summary.get("cooperation_rows")),
+    )
+    evidence_count = max(_safe_int(history.get("evidence_count")), _safe_int(evidence_summary.get("evidence_count")))
+    has_memory = any(
+        [
+            _text(item.get("source_type")),
+            _text(item.get("source_ref")),
+            item.get("linked_main_kol_id") is not None,
+            cooperation_count,
+            evidence_count,
+            recent_posts,
+            recent_cooperations,
+            brand_collaborations,
+            relations,
+        ]
+    )
+    status = "ready" if has_memory else history_status
+    payload = {
+        "status": status,
+        "source_type": _text(item.get("source_type") or history.get("source_type")),
+        "source_ref": _text(item.get("source_ref") or history.get("source_ref")),
+        "linked_main_kol_id": item.get("linked_main_kol_id") or history.get("linked_main_kol_id"),
+        "history_match": {
+            "status": history_status,
+            "matched": bool(history.get("matched")),
+            "match_type": _text(history.get("match_type")),
+            "match_confidence": _safe_float(history.get("match_confidence")),
+            "kol_pool_id": history.get("kol_pool_id"),
+            "cooperation_count": cooperation_count,
+            "evidence_count": evidence_count,
+            "profile_rows": _safe_int(history.get("profile_rows") or evidence_summary.get("kol_profile_rows")),
+            "risk_rows": _safe_int(history.get("risk_rows") or evidence_summary.get("risk_rows")),
+        },
+        "excel_record": {
+            "source_type": _text(item.get("source_type")),
+            "source_ref": _text(item.get("source_ref")),
+            "brand_collaborations": brand_collaborations,
+            "recommended_products": recommended_products,
+            "potential_concerns": potential_concerns,
+            "raw_evidence_summary": evidence_summary,
+        },
+        "recent_cooperations": recent_cooperations[:5],
+        "recent_posts": recent_posts[:6],
+        "competitor_memory": {
+            "relation_count": len(relations),
+            "strongest_brand": _text(competitor_summary.get("competitor_brand")),
+            "risk_tier": _text(competitor_summary.get("risk_tier") or "opportunity"),
+            "risk_score": _safe_float(competitor_summary.get("risk_score")),
+        },
+        "provider_calls": False,
+        "llm_calls": False,
+        "write_db": False,
+        "source": "vkpi_kol_pool + legacy memory",
+    }
+    if history_error:
+        payload["history_error"] = history_error
+    return payload
+
+
 def _product_fit(kol_pool_id: int, *, include_product_fit: bool) -> dict[str, Any]:
     if not include_product_fit:
         return _status_payload("skipped", reason="include_product_fit_false")
@@ -250,11 +377,13 @@ def _decision_support(sections: dict[str, dict[str, Any]]) -> dict[str, Any]:
 
 def build_kol_pool_intelligence_card(kol_pool_id: int, *, include_product_fit: bool = True) -> dict[str, Any]:
     item = kol_pool.get_item(kol_pool_id)["item"]
+    competitors = _competitors(kol_pool_id)
     sections = {
         "freshness": _freshness(kol_pool_id),
         "dimensions11": _dimensions11(kol_pool_id),
-        "competitors": _competitors(kol_pool_id),
+        "competitors": competitors,
         "brand_signal": _brand_signals(item),
+        "memory_card": _memory_card(item, competitors),
         "product_fit": _product_fit(kol_pool_id, include_product_fit=include_product_fit),
     }
     return {
@@ -272,6 +401,7 @@ def build_kol_pool_intelligence_card(kol_pool_id: int, *, include_product_fit: b
             {"section": "dimensions11", "source": "vkpi_kol_pool + cached posts", "status": sections["dimensions11"].get("status")},
             {"section": "competitors", "source": "vkpi_competitor_relation or cached posts", "status": sections["competitors"].get("status")},
             {"section": "brand_signal", "source": "vkpi_kol_pool.raw_platform_data", "status": sections["brand_signal"].get("status")},
+            {"section": "memory_card", "source": "vkpi_kol_pool + legacy memory", "status": sections["memory_card"].get("status")},
             {"section": "product_fit", "source": "vkpi_memory_entities/product families", "status": sections["product_fit"].get("status")},
         ],
     }

@@ -52,6 +52,7 @@ interface KolPoolIntelligenceCard {
   dimensions11?: Record<string, unknown>;
   competitors?: Record<string, unknown>;
   brand_signal?: Record<string, unknown>;
+  memory_card?: Record<string, unknown>;
   product_fit?: Record<string, unknown>;
   decision_support?: Record<string, unknown>;
   evidence_index?: Array<Record<string, unknown>>;
@@ -780,11 +781,14 @@ function KolPoolIntelligenceSection({ card }: { card: KolPoolIntelligenceCard })
   const dimensions = recordValue(card.dimensions11);
   const competitors = recordValue(card.competitors);
   const brandSignal = recordValue(card.brand_signal);
+  const memoryCard = recordValue(card.memory_card);
   const productFit = recordValue(card.product_fit);
   const evidence = Array.isArray(card.evidence_index) ? card.evidence_index : [];
   const readiness = stringifyValue(support.readiness || 'partial');
   const gaps = Array.isArray(support.gaps) ? support.gaps.map(stringifyValue).filter(Boolean) : [];
   const competitorSummary = recordValue(competitors.summary);
+  const memoryHistory = recordValue(memoryCard.history_match);
+  const memoryCompetitor = recordValue(memoryCard.competitor_memory);
   const dimensionRows = dimensionsConfidenceRows(dimensions);
   return (
     <section className="vkpi-card vkpi-alert-detail-section">
@@ -809,6 +813,13 @@ function KolPoolIntelligenceSection({ card }: { card: KolPoolIntelligenceCard })
           <strong>Brand Signal</strong>
           <span>{formatNumber(brandSignal.signal_count)}</span>
           <small>{statusLabel(brandSignal.status)}</small>
+        </div>
+        <div className={statusClass(memoryCard.status)}>
+          <strong>Memory</strong>
+          <span>{memoryCardLabel(memoryCard)}</span>
+          <small>
+            合作 {formatNumber(memoryHistory.cooperation_count)} · 竞品 {stringifyValue(memoryCompetitor.risk_tier || 'opportunity')}
+          </small>
         </div>
         <div className={statusClass(productFit.status)}>
           <strong>Product Fit</strong>
@@ -1121,6 +1132,14 @@ function readinessLabel(value: unknown): string {
   if (status === 'ready') return '证据就绪';
   if (status === 'partial') return '部分证据';
   return status || 'unknown';
+}
+
+function memoryCardLabel(memoryCard: Record<string, unknown>): string {
+  const sourceType = stringifyValue(memoryCard.source_type);
+  const sourceRef = stringifyValue(memoryCard.source_ref);
+  if (sourceType && sourceRef) return `${sourceType} · ${sourceRef}`;
+  if (sourceType) return sourceType;
+  return statusLabel(memoryCard.status);
 }
 
 function statusClass(value: unknown): string {

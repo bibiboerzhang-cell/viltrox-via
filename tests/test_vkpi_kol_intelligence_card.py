@@ -28,6 +28,7 @@ def _insert_card_row() -> int:
     conn = get_conn()
     now = "2026-05-23T07:00:00Z"
     raw = {
+        "evidence_summary": {"cooperation_rows": 1, "evidence_count": 2, "risk_rows": 1},
         "videos": [
             {
                 "id": "unit-video-1",
@@ -44,8 +45,9 @@ def _insert_card_row() -> int:
           (pool_uid, platform, handle, profile_url, display_name, avatar_url, bio, email,
            followers, following, posts_count, avg_views, avg_likes, avg_comments,
            engagement_rate, viltrox_fit_score, source_type, source_ref, raw_platform_data,
+           brand_collaborations_json, recommended_product_lines_json, potential_concerns_json,
            created_by_staff_id, last_seen_at, created_at, updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             f"{MARKER}-uid",
@@ -67,6 +69,9 @@ def _insert_card_row() -> int:
             "unit",
             MARKER,
             json.dumps(raw),
+            json.dumps([{"brand": "Viltrox", "project": "35mm review"}]),
+            json.dumps(["AF-35MM-F12-LAB"]),
+            json.dumps(["unit risk note"]),
             None,
             now,
             now,
@@ -108,6 +113,11 @@ def test_kol_intelligence_card_aggregates_existing_evidence_without_provider_cal
         assert card["brand_signal"]["signal_count"] >= 2
         assert card["brand_signal"]["type_counts"]["mention_viltrox"] >= 1
         assert card["brand_signal"]["type_counts"]["mention_competitor"] >= 1
+        assert card["memory_card"]["status"] == "ready"
+        assert card["memory_card"]["source_type"] == "unit"
+        assert card["memory_card"]["history_match"]["cooperation_count"] >= 1
+        assert card["memory_card"]["excel_record"]["brand_collaborations"]
+        assert card["memory_card"]["recent_posts"][0]["title"] == "Viltrox 35mm F1.2 LAB review vs Sigma"
         assert card["product_fit"]["status"] == "skipped"
         assert card["decision_support"]["readiness"] in {"ready", "partial"}
         assert {row["section"] for row in card["evidence_index"]} == {
@@ -115,6 +125,7 @@ def test_kol_intelligence_card_aggregates_existing_evidence_without_provider_cal
             "dimensions11",
             "competitors",
             "brand_signal",
+            "memory_card",
             "product_fit",
         }
     finally:
