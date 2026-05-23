@@ -1970,3 +1970,28 @@ export async function updateTeamFeedbackStatus(token: string, uid: string, statu
     token,
   );
 }
+
+export interface VkpiKolDecisionPayload {
+  kolPoolId: string | number;
+  decisionKey: "contact" | "watch" | "caution" | "avoid";
+  decisionLabel?: string;
+  severity?: string;
+  rationale?: string;
+  sourceTable?: string;
+  sourceId?: string | number;
+  query?: string;
+  evidenceSections?: string[];
+  evidenceSnapshot?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+export async function createKolDecisionAudit(token: string, payload: VkpiKolDecisionPayload) {
+  return apiFetch<{ decision?: Row; ok?: boolean }>("/api/admin/vkpi/kol-decisions", { method: "POST", body: jsonBody(payload) }, token);
+}
+
+export async function listKolDecisionAudit(token: string, options: { kolPoolId?: string | number; decisionKey?: string; limit?: number } = {}) {
+  const params = new URLSearchParams({ limit: String(options.limit || 100) });
+  if (options.kolPoolId) params.set("kol_pool_id", String(options.kolPoolId));
+  if (options.decisionKey) params.set("decision_key", options.decisionKey);
+  return apiFetch<{ decisions?: Row[]; count?: number }>(`/api/admin/vkpi/kol-decisions?${params.toString()}`, {}, token);
+}

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { getKolPoolIntelligenceCard, searchVkpi, submitTeamFeedback } from '../../../../services/vkpi.ui-api';
+import { createKolDecisionAudit, getKolPoolIntelligenceCard, searchVkpi } from '../../../../services/vkpi.ui-api';
 import { proxiedImageUrl } from '../../shared/mediaProxy';
 import type { Row } from './utils/types';
 
@@ -420,29 +420,31 @@ export function NaturalSearchPanel({ apiToken, onMessage }: NaturalSearchPanelPr
     setDecisionMessage('');
     setDecisionError('');
     try {
-      const result = await submitTeamFeedback(apiToken, {
-        feedbackType: 'suggestion',
+      const result = await createKolDecisionAudit(apiToken, {
+        kolPoolId,
+        decisionKey: decision.key,
+        decisionLabel: decision.label,
         severity: decision.severity,
-        pagePath: 'vkpi:natural-search',
-        title: `KOL 决策: ${decision.label} - ${compactText(detailSource.title)}`,
-        detail: decision.detail,
-        metadata: {
-          scope: 'kol_decision_label_v0',
-          decision_key: decision.key,
-          decision_label: decision.label,
-          kol_pool_id: kolPoolId,
-          source_table: detailSource.source_table,
-          source_id: detailSource.source_id,
-          handle: detailSource.handle || asRecord(detailSource.evidence).handle,
-          platform: detailSource.platform || asRecord(detailSource.evidence).platform,
-          query: meta.query || query,
-          evidence_sections: detailEvidenceRows.map((row) => firstText(row.section)).filter(Boolean),
+        rationale: decision.detail,
+        sourceTable: firstText(detailSource.source_table),
+        sourceId: firstText(detailSource.source_id),
+        query: firstText(meta.query, query),
+        evidenceSections: detailEvidenceRows.map((row) => firstText(row.section)).filter(Boolean),
+        evidenceSnapshot: {
           provider_calls: Boolean(detailCard?.provider_calls),
           llm_calls: Boolean(detailCard?.llm_calls),
           write_db: Boolean(detailCard?.write_db),
+          evidence_sections: detailEvidenceRows.map((row) => firstText(row.section)).filter(Boolean),
+        },
+        metadata: {
+          scope: 'kol_decision_label_v0',
+          source: 'natural_search',
+          title: compactText(detailSource.title),
+          handle: detailSource.handle || asRecord(detailSource.evidence).handle,
+          platform: detailSource.platform || asRecord(detailSource.evidence).platform,
         },
       });
-      const uid = firstText(result.feedback?.uid);
+      const uid = firstText(result.decision?.decision_uid);
       setDecisionMessage(uid ? `已记录决策: ${uid}` : '已记录决策。');
     } catch (error) {
       setDecisionError(error instanceof Error ? error.message : '决策记录失败');
@@ -636,7 +638,7 @@ export function NaturalSearchPanel({ apiToken, onMessage }: NaturalSearchPanelPr
               <div className="da-natural-search__decision">
                 <div>
                   <strong>决策标签</strong>
-                  <span>写入团队反馈队列，下一步会接专用 audit 表。</span>
+                  <span>写入专用 decision audit 表。</span>
                 </div>
                 <div className="da-natural-search__decision-actions">
                   {DECISION_OPTIONS.map((option) => (
