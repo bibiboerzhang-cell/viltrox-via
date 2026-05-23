@@ -171,6 +171,30 @@
     min-width: 660px;
   }
 
+  .vkpi-glass-shell .latest-head,
+  .vkpi-glass-shell .latest-actions {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .vkpi-glass-shell .content-filter {
+    justify-content: flex-start;
+  }
+
+  .vkpi-glass-shell .latest-content-row {
+    grid-template-columns: 46px minmax(0,1fr);
+  }
+
+  .vkpi-glass-shell .latest-content-metrics,
+  .vkpi-glass-shell .latest-content-tools {
+    grid-column: 2;
+  }
+
+  .vkpi-glass-shell .latest-content-metrics {
+    grid-template-columns: repeat(4,minmax(44px,1fr));
+    text-align: left;
+  }
+
   .vkpi-glass-shell .fab {
     right: 18px;
     bottom: 18px;

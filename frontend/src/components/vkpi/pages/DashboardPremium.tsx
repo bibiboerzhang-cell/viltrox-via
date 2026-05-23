@@ -32,6 +32,7 @@ let glassToastTimer: number | undefined;
 
 type Row = Record<string, unknown>;
 type PremiumSource = 'mock' | 'real' | 'partial';
+type ContentFilter = 'all' | 'official' | 'partner' | 'ugc';
 
 interface PremiumKpi {
   icon: string;
@@ -643,16 +644,32 @@ function settledValue<T>(result: PromiseSettledResult<T>, fallback: T, failed: s
   return fallback;
 }
 
-function latestContentRows(officialMatrix: Row): Row[] {
-  return officialAccountRows(officialMatrix)
+function latestContentRows(snapshot: PremiumSnapshot): Row[] {
+  const officialRows = officialAccountRows(snapshot.officialMatrix)
     .flatMap((account) => rowsFrom(account.posts).map((post): Row => ({
       ...post,
+      content_kind: 'official',
       account_handle: account.handle,
       account_display_name: account.display_name,
       platform: account.platform_label || account.platform,
-    })))
-    .sort((a, b) => String(b.posted_at || b.published_at || '').localeCompare(String(a.posted_at || a.published_at || '')))
-    .slice(0, 5);
+    })));
+  const ugcRows = rowsFrom(snapshot.brandSignals)
+    .map((signal): Row => ({
+      ...signal,
+      content_kind: 'ugc',
+      title: signal.title || signal.signal_title || signal.summary || signal.reason,
+      account_handle: signal.author_handle || signal.handle || signal.account_handle || signal.source_handle,
+      platform: signal.platform || signal.source_platform || signal.channel,
+      posted_at: signal.published_at || signal.detected_at || signal.captured_at || signal.created_at,
+      url: signal.url || signal.source_url || signal.post_url,
+      views: signal.views || signal.view_count || signal.impressions || 0,
+      likes: signal.likes || signal.like_count || 0,
+      comments: signal.comments || signal.comment_count || 0,
+    }))
+    .filter((row) => Boolean(rowUrl(row)));
+  return [...officialRows, ...ugcRows]
+    .sort((a, b) => contentTimestamp(b) - contentTimestamp(a))
+    .slice(0, 8);
 }
 
 function postedLabel(row: Row): string {
@@ -661,10 +678,52 @@ function postedLabel(row: Row): string {
 }
 
 function engagementLabel(row: Row): string {
-  const views = numberValue(row.views);
+  const views = numberValue(row.views || row.total_views || row.play_count || row.impressions);
   if (!views) return '--';
   const interactions = numberValue(row.likes) + numberValue(row.comments) + numberValue(row.shares);
   return `${((interactions / views) * 100).toFixed(2)}%`;
+}
+
+function contentTimestamp(row: Row): number {
+  const raw = String(row.posted_at || row.published_at || row.detected_at || row.captured_at || row.created_at || '');
+  const value = raw ? Date.parse(raw) : 0;
+  return Number.isFinite(value) ? value : 0;
+}
+
+function cleanContentTitle(row: Row): string {
+  const raw = String(row.title || row.caption || row.text || row.summary || row.reason || '未命名内容')
+    .replace(/https?:\/\/\S+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const hashIndex = raw.indexOf('#');
+  const withoutTags = hashIndex > 10 ? raw.slice(0, hashIndex).trim() : raw;
+  return (withoutTags || raw).slice(0, 96);
+}
+
+function contentKind(row: Row): Exclude<ContentFilter, 'all'> {
+  const raw = String(row.content_kind || row.account_kind || row.account_type || row.source_type || row.relationship || '').toLowerCase();
+  if (raw.includes('ugc') || raw.includes('mention') || raw.includes('brand_signal')) return 'ugc';
+  if (raw.includes('partner') || raw.includes('合作') || raw.includes('kol') || raw.includes('contract')) return 'partner';
+  return 'official';
+}
+
+function contentKindLabel(kind: Exclude<ContentFilter, 'all'>): string {
+  if (kind === 'partner') return '合作 KOL';
+  if (kind === 'ugc') return 'UGC 提及';
+  return '官方矩阵';
+}
+
+function contentMetric(row: Row, keys: string[]): number {
+  for (const key of keys) {
+    const value = numberValue(row[key]);
+    if (value) return value;
+  }
+  return 0;
+}
+
+function contentMediaIcon(row: Row): string {
+  const raw = String(row.media_type || row.media_kind || row.type || row.url || '').toLowerCase();
+  return raw.includes('video') || raw.includes('reel') || raw.includes('youtube') || raw.includes('tiktok') ? '▶' : '▧';
 }
 
 async function fetchPremiumSnapshot(apiToken: string, windowDays: number): Promise<PremiumSnapshot> {
@@ -971,6 +1030,90 @@ function KpiInsightPanel({
   );
 }
 
+function LatestContentPerformance({
+  rows,
+  activeFilter,
+  onFilterChange,
+  onOpenUrl,
+  onOpenContentCenter,
+  onOpenAnalysis,
+}: {
+  rows: Row[];
+  activeFilter: ContentFilter;
+  onFilterChange: (filter: ContentFilter) => void;
+  onOpenUrl: (url: unknown) => void;
+  onOpenContentCenter: () => void;
+  onOpenAnalysis: () => void;
+}) {
+  const counts = rows.reduce<Record<Exclude<ContentFilter, 'all'>, number>>((acc, row) => {
+    acc[contentKind(row)] += 1;
+    return acc;
+  }, { official: 0, partner: 0, ugc: 0 });
+  const filters: Array<{ key: ContentFilter; label: string; count: number }> = [
+    { key: 'all', label: '全部', count: rows.length },
+    { key: 'official', label: '官方矩阵', count: counts.official },
+    { key: 'partner', label: '合作 KOL', count: counts.partner },
+    { key: 'ugc', label: 'UGC 提及', count: counts.ugc },
+  ];
+  const visibleRows = activeFilter === 'all' ? rows : rows.filter((row) => contentKind(row) === activeFilter);
+  return (
+    <div className="glass-card latest latest-redesign">
+      <div className="panel-head latest-head">
+        <h3>最新内容表现</h3>
+        <div className="latest-actions">
+          <div className="content-filter" aria-label="内容来源筛选">
+            {filters.map((filter) => (
+              <button
+                className={activeFilter === filter.key ? 'active' : ''}
+                type="button"
+                key={filter.key}
+                aria-pressed={activeFilter === filter.key}
+                onClick={() => onFilterChange(filter.key)}
+              >
+                {filter.label}<span>{filter.count}</span>
+              </button>
+            ))}
+          </div>
+          <button className="link" type="button" onClick={onOpenContentCenter}>进入内容中心 →</button>
+        </div>
+      </div>
+      <div className="latest-content-list">
+        {visibleRows.length ? visibleRows.map((row, index) => {
+          const kind = contentKind(row);
+          const url = rowUrl(row);
+          const views = contentMetric(row, ['views', 'total_views', 'play_count', 'impressions', 'view_count']);
+          const likes = contentMetric(row, ['likes', 'like_count']);
+          const comments = contentMetric(row, ['comments', 'comment_count']);
+          return (
+            <article className="latest-content-row" key={`${row.id || url || index}`}>
+              <div className="latest-content-thumb" aria-hidden="true">{contentMediaIcon(row)}</div>
+              <div className="latest-content-main">
+                <b>{cleanContentTitle(row)}</b>
+                <p>
+                  <span className={`content-kind is-${kind}`}>{contentKindLabel(kind)}</span>
+                  @{String(row.account_handle || row.account_display_name || row.author || '-')} · {platformDisplayName(row.platform)} · {postedLabel(row)}
+                </p>
+              </div>
+              <div className="latest-content-metrics" aria-label="内容指标">
+                <span><em>曝光</em><strong>{compact(views)}</strong></span>
+                <span><em>点赞</em><strong>{compact(likes)}</strong></span>
+                <span><em>评论</em><strong>{compact(comments)}</strong></span>
+                <span><em>互动率</em><strong className="metric-good">{engagementLabel(row)}</strong></span>
+              </div>
+              <div className="latest-content-tools">
+                <button type="button" title={url ? '打开原帖' : '缺少原帖链接'} disabled={!url} onClick={() => onOpenUrl(url)}>↗</button>
+                <button type="button" title="查看数据分析" onClick={onOpenAnalysis}>…</button>
+              </div>
+            </article>
+          );
+        }) : (
+          <div className="empty-real">当前筛选暂无真实内容。官方矩阵来自真实 posts；合作 KOL / UGC 需要对应数据源返回后展示。</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function PremiumKpiSkeletons() {
   return (
     <>
@@ -1070,6 +1213,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
   const [countryDrawer, setCountryDrawer] = useState<CountryDrawerState | null>(null);
   const [panelDrawer, setPanelDrawer] = useState<PanelDrawerState | null>(null);
   const [expandedKpi, setExpandedKpi] = useState<string | null>(null);
+  const [contentFilter, setContentFilter] = useState<ContentFilter>('all');
 
   useEffect(() => {
     if (!apiToken) {
@@ -1120,7 +1264,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
   const premiumAgents = useMemo(() => buildPremiumAgents(snapshot.agentsStatus, allowMockFallback), [allowMockFallback, snapshot.agentsStatus]);
   const premiumTasks = useMemo(() => buildPremiumTasks(snapshot.tasksStatus), [snapshot.tasksStatus]);
   const selectedKpi = useMemo(() => premiumKpis.find((item) => item.label === expandedKpi) || null, [expandedKpi, premiumKpis]);
-  const contentRows = useMemo(() => latestContentRows(snapshot.officialMatrix), [snapshot.officialMatrix]);
+  const contentRows = useMemo(() => latestContentRows(snapshot), [snapshot]);
   const official = useMemo(() => officialTotals(snapshot.officialMatrix), [snapshot.officialMatrix]);
   const contentTypeRows = allowMockFallback
     ? contentTypes
@@ -1344,7 +1488,14 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
                   </div>
                 </div>
               </div>
-              <div className="glass-card latest"><div className="panel-head"><h3>最新内容表现</h3><button className="link" type="button" onClick={() => goToWorkspacePage('channels', '内容中心')}>进入内容中心</button></div><table className="table"><thead><tr><th>内容</th><th>账号 / 平台</th><th>发布平台</th><th>发布于</th><th>曝光量</th><th>互动率</th><th>操作</th></tr></thead><tbody>{contentRows.length ? contentRows.map((row, index) => <tr key={`${row.id || row.url || index}`}><td><div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}><div className="thumb"></div><div><b>{String(row.title || '官方内容')}</b><br /><span className="tag">真实</span></div></div></td><td>@{String(row.account_handle || row.account_display_name || '-')}<br /><span style={{ color: '#667085' }}>{String(row.platform || '-')}</span></td><td>{String(row.platform || '-')}</td><td>{postedLabel(row)}</td><td><b>{compact(numberValue(row.views))}</b></td><td>{engagementLabel(row)}</td><td><button type="button" title="查看账号矩阵" onClick={() => goToWorkspacePage('channels', '内容中心')}>⌁</button> <button type="button" title="打开原始内容" onClick={() => openContentUrl(row.url)}>↗</button> <button type="button" title="查看数据分析" onClick={() => goToWorkspacePage('dataAnalysis', '内容分析')}>…</button></td></tr>) : <tr><td colSpan={7}><div className="empty-real">暂无真实最新内容明细</div></td></tr>}</tbody></table></div>
+              <LatestContentPerformance
+                rows={contentRows}
+                activeFilter={contentFilter}
+                onFilterChange={setContentFilter}
+                onOpenUrl={openContentUrl}
+                onOpenContentCenter={() => goToWorkspacePage('channels', '内容中心')}
+                onOpenAnalysis={() => goToWorkspacePage('dataAnalysis', '内容分析')}
+              />
             </div>
             <aside className="rail">
               <div className="glass-card rail-card copilot"><div className="ai-kicker">V-KPI Copilot</div><h3>{copilotHeadline}</h3><p>{copilotBody}</p><div className="insight">{copilotInsight}</div></div>
