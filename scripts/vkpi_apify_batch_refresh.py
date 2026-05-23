@@ -109,12 +109,55 @@ def provider_config_summary(plan: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def execution_preflight(args: argparse.Namespace, plan: dict[str, Any], provider_config: dict[str, Any]) -> dict[str, Any]:
+    target_count = _safe_int(plan.get("total_targets"))
+    batch_count = _safe_int(plan.get("batch_count"))
+    skipped = [item for item in (plan.get("skipped") or []) if isinstance(item, dict)]
+    live_target_cap = max(1, min(100, _safe_int(args.max_live_targets) or 25))
+    selector_ready = bool(plan.get("selector_ready"))
+    provider_configured = bool(provider_config.get("configured"))
+    checks = {
+        "selector_ready": selector_ready,
+        "has_targets": target_count > 0,
+        "within_live_target_cap": target_count <= live_target_cap,
+        "provider_configured": provider_configured,
+        "no_skipped_targets": not skipped,
+    }
+    warnings: list[str] = []
+    if skipped:
+        warnings.append("plan_contains_skipped_targets")
+
+    if not selector_ready:
+        status = "selector_not_ready"
+    elif target_count <= 0:
+        status = "no_targets_to_execute"
+    elif target_count > live_target_cap:
+        status = "live_target_cap_exceeded"
+    elif not provider_configured:
+        status = "provider_not_configured"
+    elif skipped:
+        status = "review_skipped_targets"
+    else:
+        status = "ready"
+
+    return {
+        "status": status,
+        "can_execute_if_authorized": status == "ready",
+        "target_count": target_count,
+        "batch_count": batch_count,
+        "live_target_cap": live_target_cap,
+        "checks": checks,
+        "warnings": warnings,
+    }
+
+
 def operator_summary(result: dict[str, Any]) -> dict[str, Any]:
     plan = result.get("plan") if isinstance(result.get("plan"), dict) else {}
     execution = result.get("execution") if isinstance(result.get("execution"), dict) else {}
     execution_summary = execution.get("summary") if isinstance(execution.get("summary"), dict) else {}
     provider_gate = result.get("provider_gate") if isinstance(result.get("provider_gate"), dict) else {}
     provider_config = result.get("provider_config") if isinstance(result.get("provider_config"), dict) else {}
+    preflight = result.get("execution_preflight") if isinstance(result.get("execution_preflight"), dict) else {}
     skipped = [item for item in (plan.get("skipped") or []) if isinstance(item, dict)]
     skipped_reasons: dict[str, int] = {}
     for item in skipped:
@@ -146,6 +189,8 @@ def operator_summary(result: dict[str, Any]) -> dict[str, Any]:
         "provider_gate_reason": gate_reason,
         "provider_configured": bool(provider_config.get("configured")),
         "missing_provider_platforms": provider_config.get("missing_platforms") if isinstance(provider_config.get("missing_platforms"), list) else [],
+        "execution_preflight_status": str(preflight.get("status") or ""),
+        "can_execute_if_authorized": bool(preflight.get("can_execute_if_authorized")),
         "live_target_cap": _safe_int(provider_gate.get("live_target_cap")),
         "selector_ready": bool(plan.get("selector_ready")),
         "source_total": _safe_int(plan.get("source_total")),
@@ -206,6 +251,7 @@ def provider_gate(args: argparse.Namespace, plan: dict[str, Any], provider_confi
 async def run_from_args(args: argparse.Namespace) -> dict[str, Any]:
     plan = build_plan(args)
     provider_config = provider_config_summary(plan)
+    preflight = execution_preflight(args, plan, provider_config)
     gate = provider_gate(args, plan, provider_config)
     execution = await apify_batch_refresh.execute_apify_batch_plan(
         plan,
@@ -220,6 +266,7 @@ async def run_from_args(args: argparse.Namespace) -> dict[str, Any]:
         "provider_calls_allowed": bool(gate["allowed"]),
         "provider_gate": gate,
         "provider_config": provider_config,
+        "execution_preflight": preflight,
         "plan": _compact_plan(plan) if args.compact else plan,
         "execution": execution,
     }

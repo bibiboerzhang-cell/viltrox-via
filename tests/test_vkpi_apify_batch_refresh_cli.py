@@ -54,6 +54,8 @@ def test_cli_run_blocks_provider_calls_by_default(monkeypatch) -> None:
         "provider_gate_reason": "provider_calls_not_requested",
         "provider_configured": False,
         "missing_provider_platforms": ["instagram"],
+        "execution_preflight_status": "provider_not_configured",
+        "can_execute_if_authorized": False,
         "live_target_cap": 25,
         "selector_ready": True,
         "source_total": 3,
@@ -74,7 +76,7 @@ def test_cli_requires_both_execute_and_allow_provider_calls(monkeypatch) -> None
     monkeypatch.setenv("APIFY_TOKEN", "test-token")
 
     def fake_plan(**_kwargs):
-        return {"strategy": "apify_batch_first", "max_concurrent_runs": 2, "total_targets": 1, "batches": []}
+        return {"strategy": "apify_batch_first", "max_concurrent_runs": 2, "selector_ready": True, "total_targets": 1, "batch_count": 1, "platforms": {"youtube": 1}, "batches": []}
 
     async def fake_execute(_plan, **kwargs):
         calls["execute"] = kwargs
@@ -91,6 +93,8 @@ def test_cli_requires_both_execute_and_allow_provider_calls(monkeypatch) -> None
     assert execute_allowed["provider_calls_allowed"] is True
     assert execute_allowed["execution"]["executed"] is True
     assert execute_allowed["provider_gate"]["reason"] == "allowed"
+    assert execute_allowed["execution_preflight"]["status"] == "ready"
+    assert execute_allowed["operator_summary"]["can_execute_if_authorized"] is True
 
 
 def test_cli_writes_operator_artifact(monkeypatch, tmp_path, capsys) -> None:
@@ -187,6 +191,7 @@ def test_cli_blocks_live_execution_without_provider_config(monkeypatch) -> None:
     assert result["provider_gate"]["reason"] == "provider_not_configured"
     assert result["provider_config"]["token_configured"] is False
     assert result["provider_config"]["missing_platforms"] == ["youtube"]
+    assert result["execution_preflight"]["status"] == "provider_not_configured"
     assert result["operator_summary"]["readiness"] == "provider_not_configured"
 
 
@@ -208,6 +213,7 @@ def test_cli_blocks_live_execution_when_plan_has_no_targets(monkeypatch) -> None
     assert calls["execute"]["allow_provider_calls"] is False
     assert result["provider_calls_allowed"] is False
     assert result["provider_gate"]["reason"] == "no_targets_to_execute"
+    assert result["execution_preflight"]["status"] == "selector_not_ready"
     assert result["operator_summary"]["readiness"] == "no_targets_to_execute"
 
 
@@ -217,6 +223,7 @@ def test_operator_summary_requires_review_for_retryable_execution() -> None:
         "provider_calls_allowed": True,
         "provider_gate": {"requested": True, "allowed": True, "reason": "allowed", "live_target_cap": 25},
         "provider_config": {"configured": True, "missing_platforms": []},
+        "execution_preflight": {"status": "ready", "can_execute_if_authorized": True},
         "plan": {"selector_ready": True, "source_total": 2, "total_targets": 2, "batch_count": 1, "platforms": {"youtube": 2}, "skipped": []},
         "execution": {"executed": True, "summary": {"retry_count": 1, "failed_batches": 0}},
     }
@@ -226,3 +233,25 @@ def test_operator_summary_requires_review_for_retryable_execution() -> None:
     assert summary["readiness"] == "review_required"
     assert summary["retry_count"] == 1
     assert summary["provider_calls_allowed"] is True
+    assert summary["execution_preflight_status"] == "ready"
+    assert summary["can_execute_if_authorized"] is True
+
+
+def test_execution_preflight_reports_ready_without_request(monkeypatch) -> None:
+    monkeypatch.setenv("APIFY_TOKEN", "test-token")
+    args = vkpi_apify_batch_refresh.parse_args(["--limit", "10"])
+    plan = {
+        "selector_ready": True,
+        "total_targets": 10,
+        "batch_count": 1,
+        "platforms": {"youtube": 10},
+        "batches": [{"batch_key": "youtube-1", "platform": "youtube", "targets": [{"kol_pool_id": 1}]}],
+        "skipped": [],
+    }
+    provider_config = vkpi_apify_batch_refresh.provider_config_summary(plan)
+
+    preflight = vkpi_apify_batch_refresh.execution_preflight(args, plan, provider_config)
+
+    assert preflight["status"] == "ready"
+    assert preflight["can_execute_if_authorized"] is True
+    assert preflight["checks"]["provider_configured"] is True
