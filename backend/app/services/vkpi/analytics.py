@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime
 from app.services.system import staff as staff_service
 from app.services.vkpi import audit, kol_claims, link_center, platform_crawl_settings, workflow
@@ -18,6 +19,7 @@ from app.services.vkpi.workflow import staff_id as resolve_staff_id
 
 DEFAULT_PLATFORMS = ["youtube", "instagram", "tiktok", "xiaohongshu", "facebook", "reddit", "x"]
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
+logger = get_logger(__name__)
 OFFICIAL_ACCOUNT_KEYWORDS = ("viltrox", "唯卓仕")
 PLATFORM_EQUIVALENTS = {
     "youtube": ["youtube", "yt"],
@@ -459,8 +461,8 @@ def suggestions_overview() -> dict[str, Any]:
         row = get_conn().execute("SELECT * FROM vkpi_suggestions_overview").fetchone()
         if row:
             return dict(row)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("vkpi suggestions overview view failed, falling back to grouped status: %s", exc)
     rows = get_conn().execute("SELECT status, COUNT(*) AS n FROM vkpi_outreach_suggestions GROUP BY status").fetchall()
     return {f"{row['status']}_count": int(row["n"] or 0) for row in rows}
 

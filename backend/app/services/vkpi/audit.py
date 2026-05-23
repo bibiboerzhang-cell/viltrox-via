@@ -250,7 +250,8 @@ def unified(limit: int = 100, event_category: str = "", staff_id: int | None = N
             f"SELECT * FROM vkpi_unified_audit {clause} ORDER BY occurred_at DESC LIMIT ?",
             (*params, max(1, min(500, int(limit or 100)))),
         ).fetchall()
-    except Exception:
+    except Exception as exc:
+        logger.warning("vkpi unified audit view query failed, using fallback tables: %s", exc)
         view_ok = False
         rows = []
     events = [dict(row) for row in rows]
@@ -262,7 +263,8 @@ def unified(limit: int = 100, event_category: str = "", staff_id: int | None = N
                 return
             try:
                 events.extend(dict(row) for row in conn.execute(sql, (*params3, fallback_limit)).fetchall())
-            except Exception:
+            except Exception as exc:
+                logger.warning("vkpi audit fallback query failed for %s: %s", category, exc)
                 return
 
         staff_clause = "WHERE staff_id=?" if staff_id else ""
@@ -329,8 +331,8 @@ def unified(limit: int = 100, event_category: str = "", staff_id: int | None = N
                 (*params2, max(1, min(500, int(limit or 100)))),
             ).fetchall()
             events.extend(dict(row) for row in business_rows)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("vkpi audit business fallback query failed: %s", exc)
     events.sort(key=lambda item: str(item.get("occurred_at") or ""), reverse=True)
     return {"events": events[: max(1, min(500, int(limit or 100)))]}
 
@@ -342,7 +344,8 @@ def _loads_json(value: Any) -> Any:
         return {}
     try:
         return json.loads(str(value))
-    except Exception:
+    except Exception as exc:
+        logger.warning("vkpi audit json parse failed: %s", exc)
         return {}
 
 
@@ -362,7 +365,8 @@ def _staff_lookup() -> dict[int, dict[str, str]]:
             }
             for row in rows
         }
-    except Exception:
+    except Exception as exc:
+        logger.warning("vkpi audit staff lookup failed: %s", exc)
         return {}
 
 

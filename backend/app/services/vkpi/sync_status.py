@@ -261,8 +261,8 @@ def _cron_status() -> dict[str, Any]:
                 metadata = {}
                 try:
                     metadata = json.loads(row_dict.get("metadata_json") or "{}")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("sync_status cron metadata parse failed for %s: %s", job, exc)
                 result[job] = {
                     "last_run_at": row_dict.get("created_at"),
                     "status": metadata.get("action_status") or metadata.get("result", {}).get("status") or "unknown",
@@ -287,7 +287,8 @@ def _json_dict(value: Any) -> dict[str, Any]:
         return {}
     try:
         parsed = json.loads(str(value))
-    except Exception:
+    except Exception as exc:
+        logger.warning("sync_status json parse failed: %s", exc)
         return {}
     return parsed if isinstance(parsed, dict) else {}
 

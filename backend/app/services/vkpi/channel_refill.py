@@ -5,6 +5,7 @@ import json
 from datetime import date, datetime
 from typing import Any, Callable
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.services.cache import cache_clear
 from app.services.vkpi.channel_post_metrics import record_channel_post_metrics
@@ -15,6 +16,7 @@ from app.services.vkpi.workflow import staff_id as resolve_staff_id
 
 ProgressCallback = Callable[[int, str], None]
 CancelCheck = Callable[[], bool]
+logger = get_logger(__name__)
 
 
 class CancelledException(Exception):
@@ -73,8 +75,8 @@ def _text(*values: Any) -> str:
 def _clear_channel_read_cache() -> None:
     try:
         cache_clear(prefix="vkpi:channels:")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("vkpi channel refill cache clear failed: %s", exc)
 
 
 def _profile_url(*values: Any) -> str:

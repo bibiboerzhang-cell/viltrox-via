@@ -14,6 +14,7 @@ from typing import Any
 
 from cryptography.fernet import Fernet
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.services.cache import cache_clear, cache_get, cache_set
 from app.services.vkpi import scope
@@ -23,6 +24,7 @@ from app.services.vkpi.workflow import staff_id as resolve_staff_id
 
 SUPPORTED_PLATFORMS = {"youtube", "instagram", "tiktok", "xhs", "xiaohongshu", "bilibili", "facebook", "reddit", "x", "threads", "twitch", "pinterest", "vimeo", "website", "other"}
 CHANNEL_READ_CACHE_TTL_SEC = 300
+logger = get_logger(__name__)
 
 
 def _utcnow() -> str:
@@ -44,8 +46,8 @@ def _channel_cache_key(name: str, *, staff: dict[str, Any] | None = None, view_a
 def _clear_channel_read_cache() -> None:
     try:
         cache_clear(prefix="vkpi:channels:")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("vkpi channel cache clear failed: %s", exc)
 
 
 def _channel_cache_hit(payload: Any) -> Any:
@@ -108,7 +110,8 @@ def _parse_json(value: Any) -> dict[str, Any]:
     try:
         parsed = json.loads(str(value))
         return parsed if isinstance(parsed, dict) else {}
-    except Exception:
+    except Exception as exc:
+        logger.debug("vkpi channel json parse failed: %s", exc)
         return {}
 
 
@@ -1026,8 +1029,8 @@ def _media_urls(*values: Any) -> list[str]:
         if url.startswith("["):
             try:
                 push(json.loads(url), key_hint=key_hint)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("vkpi channel media url json parse failed: %s", exc)
             return
         if not url or not url.startswith(("http://", "https://")) or url in seen:
             return

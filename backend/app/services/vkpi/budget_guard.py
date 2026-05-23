@@ -6,8 +6,11 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
+
+logger = get_logger(__name__)
 
 
 def _utcnow() -> str:
@@ -25,7 +28,8 @@ def _load_json(value: Any) -> dict[str, Any]:
         return {}
     try:
         parsed = json.loads(value)
-    except Exception:
+    except Exception as exc:
+        logger.warning("vkpi budget guard json parse failed: %s", exc)
         return {}
     return parsed if isinstance(parsed, dict) else {}
 

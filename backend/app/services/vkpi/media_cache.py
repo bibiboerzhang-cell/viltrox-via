@@ -1512,7 +1512,8 @@ def _package_raw_payload(raw_payload: dict[str, Any]) -> dict[str, Any]:
         return {}
     try:
         parsed = json.loads(raw_path.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception as exc:
+        logger.warning("vkpi media package raw payload parse failed for %s: %s", raw_path, exc)
         return {}
     return parsed if isinstance(parsed, dict) else {}
 

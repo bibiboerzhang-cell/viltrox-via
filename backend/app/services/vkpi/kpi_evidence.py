@@ -4,6 +4,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def _parse_json(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
@@ -13,7 +17,8 @@ def _parse_json(value: Any) -> dict[str, Any]:
     try:
         parsed = json.loads(str(value))
         return parsed if isinstance(parsed, dict) else {}
-    except Exception:
+    except Exception as exc:
+        logger.warning("vkpi kpi evidence json parse failed: %s", exc)
         return {}
 
 
@@ -28,7 +33,8 @@ def _row(conn: Any, sql: str, params: tuple[Any, ...]) -> dict[str, Any]:
     try:
         item = conn.execute(sql, params).fetchone()
         return dict(item) if item else {}
-    except Exception:
+    except Exception as exc:
+        logger.warning("vkpi kpi evidence query failed: %s", exc)
         return {}
 
 

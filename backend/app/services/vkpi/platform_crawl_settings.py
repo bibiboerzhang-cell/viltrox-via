@@ -5,6 +5,7 @@ import json
 from datetime import datetime
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime
 from app.services.vkpi import audit
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
@@ -66,6 +67,7 @@ APIFY_CRAWL_PLATFORMS = {
     "reddit",
     "x",
 }
+logger = get_logger(__name__)
 
 
 def _utcnow() -> str:
@@ -83,7 +85,8 @@ def _load_json(value: Any) -> dict[str, Any]:
         return {}
     try:
         parsed = json.loads(value)
-    except Exception:
+    except Exception as exc:
+        logger.warning("vkpi platform crawl settings json parse failed: %s", exc)
         return {}
     return parsed if isinstance(parsed, dict) else {}
 

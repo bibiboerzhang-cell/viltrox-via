@@ -6,6 +6,7 @@ import json
 from datetime import datetime
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime
 from app.services.vkpi import channels, scope
 
@@ -17,6 +18,7 @@ SUPPORTED_TASK_TYPES = {VKPI_OFFICIAL_CHANNEL_SYNC, VKPI_VIDEO_CACHE}
 ACTIVE_STATUSES = {"queued", "retrying", "processing", "running"}
 TERMINAL_RETRY_STATUSES = {"failed", "timeout", "cancelled"}
 _SCHEMA_READY = False
+logger = get_logger(__name__)
 
 
 def _utcnow() -> str:
@@ -100,10 +102,10 @@ def ensure_vkpi_task_schema() -> None:
                 AND status IN ('queued', 'retrying', 'processing', 'running')
             """
         )
-    except Exception:
+    except Exception as exc:
         # Some SQLite builds can be stricter about partial indexes in old local
         # DBs. Locking still works through the pre-insert lookup in queue.py.
-        pass
+        logger.warning("vkpi async task active-lock index creation skipped: %s", exc)
     if is_postgres_runtime():
         conn.execute(
             """

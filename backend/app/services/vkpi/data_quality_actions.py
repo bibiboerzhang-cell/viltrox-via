@@ -4,9 +4,12 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.services.vkpi import audit, scope
 from app.services.vkpi.data_quality_common import _utcnow, ensure_data_quality_schema
+
+logger = get_logger(__name__)
 
 def act_on_issue(issue_id: str, *, action: str, body: dict[str, Any] | None = None, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     clean_issue_id = str(issue_id or "").strip()
@@ -60,7 +63,7 @@ def act_on_issue(issue_id: str, *, action: str, body: dict[str, Any] | None = No
                 "metadata": metadata,
             },
         )
-    except Exception:
+    except Exception as exc:
         # Audit must not block data-quality remediation actions.
-        pass
+        logger.warning("data quality action audit failed for %s/%s: %s", clean_issue_id, clean_action, exc)
     return {"status": "ok", "issue_id": clean_issue_id, "action": clean_action}

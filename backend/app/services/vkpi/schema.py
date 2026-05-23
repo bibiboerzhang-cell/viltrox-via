@@ -6,15 +6,18 @@ tables.
 """
 from __future__ import annotations
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime
 
 _SCHEMA_READY = False
+logger = get_logger(__name__)
 
 
 def _table_columns(conn, table_name: str) -> set[str]:
     try:
         return {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
-    except Exception:
+    except Exception as exc:
+        logger.warning("vkpi schema column lookup failed for %s: %s", table_name, exc)
         return set()
 
 
@@ -23,8 +26,8 @@ def _ensure_column(conn, table_name: str, column_name: str, column_def: str) -> 
         return
     try:
         conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_def}")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("vkpi schema add column skipped for %s.%s: %s", table_name, column_name, exc)
 
 
 def ensure_vkpi_schema() -> None:

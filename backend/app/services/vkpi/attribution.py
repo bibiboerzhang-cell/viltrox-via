@@ -6,12 +6,14 @@ import hashlib
 from datetime import datetime
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.services.vkpi import audit, scope
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.workflow import staff_id
 
 SOURCE_PLATFORMS = {"shopify", "amazon", "webhook", "manual", "custom"}
+logger = get_logger(__name__)
 
 
 def utcnow() -> str:
@@ -29,7 +31,8 @@ def _load_json(value: Any) -> Any:
         return value
     try:
         return json.loads(str(value))
-    except Exception:
+    except Exception as exc:
+        logger.warning("vkpi attribution json parse failed: %s", exc)
         return {}
 
 
