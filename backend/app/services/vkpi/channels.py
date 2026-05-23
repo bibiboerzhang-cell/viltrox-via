@@ -543,7 +543,7 @@ def _image_url(value: Any, *, key_hint: str = "", depth: int = 0) -> str:
                 return found
         return ""
     if isinstance(value, dict):
-        for key in ["thumbnailUrl", "thumbnail", "displayUrl", "imageUrl", "picture", "uri", "photo_image", "thumbnailImage", "image", "media"]:
+        for key in ["displayUrl", "imageUrl", "src", "uri", "picture", "photo_image", "thumbnailImage", "thumbnailUrl", "thumbnail", "image", "media"]:
             found = _image_url(value.get(key), key_hint=key, depth=depth + 1)
             if found:
                 return found
@@ -972,38 +972,55 @@ def _media_type_kind(value: Any) -> str:
 
 
 def _media_urls(*values: Any) -> list[str]:
-    urls: list[str] = []
+    candidates: list[tuple[int, int, str, str]] = []
     seen: set[str] = set()
 
-    def push(value: Any, *, key_hint: str = "") -> None:
+    def score(value: Any) -> int:
+        if not isinstance(value, dict):
+            return 0
+        width = _int(
+            value.get("width"),
+            _int(value.get("config_width"), _int(value.get("naturalWidth"), _int(value.get("displayWidth")))),
+        )
+        height = _int(
+            value.get("height"),
+            _int(value.get("config_height"), _int(value.get("naturalHeight"), _int(value.get("displayHeight")))),
+        )
+        return max(width * height, width, height)
+
+    def push(value: Any, *, key_hint: str = "", resource_score: int = 0) -> None:
         if isinstance(value, dict):
+            next_score = max(resource_score, score(value))
             for key in (
                 "displayUrl",
                 "imageUrl",
+                "src",
+                "uri",
                 "thumbnailUrl",
                 "thumbnail",
-                "uri",
                 "picture",
                 "photo_image",
-        "thumbnailImage",
-        "profilePictureUrl",
-        "profilePicUrlHD",
-        "profilePicUrl",
-        "displayResources",
-        "sidecarChildren",
-        "edge_sidecar_to_children",
-        "coverPhotoUrl",
-        "coverUrl",
-        "media_url",
+                "thumbnailImage",
+                "profilePictureUrl",
+                "profilePicUrlHD",
+                "profilePicUrl",
+                "displayResources",
+                "sidecarChildren",
+                "edge_sidecar_to_children",
+                "coverPhotoUrl",
+                "originalCoverUrl",
+                "coverUrl",
+                "media_url",
                 "media_url_https",
                 "preview_image_url",
                 "url",
             ):
-                push(value.get(key), key_hint=key)
+                push(value.get(key), key_hint=key, resource_score=next_score)
             return
         if isinstance(value, list):
-            for item in value:
-                push(item, key_hint=key_hint)
+            ordered = sorted(value, key=score, reverse=True) if any(isinstance(item, dict) and score(item) for item in value) else value
+            for item in ordered:
+                push(item, key_hint=key_hint, resource_score=max(resource_score, score(item)))
             return
         url = _text(value)
         if url.startswith("["):
@@ -1017,11 +1034,12 @@ def _media_urls(*values: Any) -> list[str]:
         if not _looks_like_image_media_url(url, key_hint=key_hint):
             return
         seen.add(url)
-        urls.append(_cached_media_url(url))
+        cached = cached_image_url(url)
+        candidates.append((1 if cached else 0, resource_score, url, cached or url))
 
     for value in values:
         push(value)
-    return urls
+    return [item[3] for item in sorted(candidates, key=lambda item: (item[0], item[1]), reverse=True)]
 
 
 def _video_url(value: Any, *, depth: int = 0) -> str:
