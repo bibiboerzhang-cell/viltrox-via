@@ -77,6 +77,22 @@ export interface VkpiKolPoolIntelligenceCard {
   evidence_index?: Array<Record<string, unknown>>;
 }
 
+export interface VkpiKolPoolEvidenceSummary {
+  mode: string;
+  generated_at: string;
+  kol_pool_id: number;
+  provider_calls: boolean;
+  llm_calls: boolean;
+  write_db: boolean;
+  passed?: boolean;
+  policy?: Record<string, unknown>;
+  checks?: Record<string, unknown>;
+  summaries?: Array<Record<string, unknown>>;
+  summary_count?: number;
+  evidence_ref_count?: number;
+  llm_budget_preflight?: Record<string, unknown>;
+}
+
 export async function listKolPool(
   token: string,
   params: { search?: string; platform?: string; country?: string; limit?: number; dataStatus?: string; sortBy?: string; enrichable?: boolean; refreshIfStale?: boolean } = {},
@@ -120,6 +136,15 @@ export async function getKolPoolIntelligenceCard(token: string, kolPoolId: numbe
   const query = new URLSearchParams({ include_product_fit: String(includeProductFit) });
   return apiFetch<VkpiKolPoolIntelligenceCard>(
     `/api/admin/vkpi/kol-pool/${kolPoolId}/intelligence-card?${query.toString()}`,
+    {},
+    token,
+  );
+}
+
+export async function getKolPoolEvidenceSummary(token: string, kolPoolId: number, includeProductFit = true) {
+  const query = new URLSearchParams({ include_product_fit: String(includeProductFit) });
+  return apiFetch<VkpiKolPoolEvidenceSummary>(
+    `/api/admin/vkpi/kol-pool/${kolPoolId}/evidence-summary?${query.toString()}`,
     {},
     token,
   );

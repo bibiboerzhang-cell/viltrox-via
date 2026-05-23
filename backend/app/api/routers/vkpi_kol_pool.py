@@ -23,7 +23,7 @@ import os
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 
 from app.api.dependencies.perms import require_tab
-from app.services.vkpi import eleven_dimensions, kol_competitor_detector, kol_intelligence_card, kol_pool, refresh_tier, task_enqueue
+from app.services.vkpi import evidence_summary, eleven_dimensions, kol_competitor_detector, kol_intelligence_card, kol_pool, refresh_tier, task_enqueue
 from app.services.vkpi.audit_decorator import audit_action
 from app.services.vkpi.firewall_decorator import firewall_check
 
@@ -318,6 +318,27 @@ def get_pool_item_intelligence_card(
         return kol_intelligence_card.build_kol_pool_intelligence_card(
             int(kol_pool_id),
             include_product_fit=bool(include_product_fit),
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/kol-pool/{kol_pool_id}/evidence-summary")
+def get_pool_item_evidence_summary(
+    kol_pool_id: int,
+    include_product_fit: bool = Query(default=True),
+    ref_limit: int = Query(default=8, ge=1, le=25),
+    include_llm_preflight: bool = Query(default=True),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """Return traceable summaries derived only from existing IntelligenceCard evidence."""
+    del staff
+    try:
+        return evidence_summary.build_kol_pool_evidence_summary(
+            int(kol_pool_id),
+            include_product_fit=bool(include_product_fit),
+            ref_limit=int(ref_limit),
+            include_llm_preflight=bool(include_llm_preflight),
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
