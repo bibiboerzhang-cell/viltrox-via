@@ -311,3 +311,67 @@ def test_daily_sync_runs_legacy_kol_refresh_when_explicitly_allowed(monkeypatch:
 
     assert result["kol_pool_light"]["requested"] == 1
     assert result["kol_pool_light"]["allow"] is True
+
+
+def test_kol_light_refresh_uses_qualified_selector(monkeypatch: pytest.MonkeyPatch) -> None:
+    rows = [
+        {
+            "id": 7,
+            "platform": "instagram",
+            "handle": "qualified_creator",
+            "display_name": "Qualified Creator",
+            "refresh_tier": "hot",
+            "refresh_reason": "viltrox_mention_60d",
+        }
+    ]
+    events = _install_harness(monkeypatch, rows)
+    monkeypatch.setattr(
+        daily_sync.refresh_tier,
+        "qualified_source_counts",
+        lambda **_kwargs: {
+            "selector_ready": True,
+            "source_total": 1,
+            "source_by_platform": {"instagram": 1},
+            "tier_distribution": {"hot": 1},
+        },
+    )
+    monkeypatch.setattr(daily_sync.refresh_tier, "qualified_refresh_rows", lambda **_kwargs: rows)
+    marked: list[dict[str, object]] = []
+    monkeypatch.setattr(daily_sync.refresh_tier, "mark_kol_refreshed", lambda kol_pool_id, **kwargs: marked.append({"id": kol_pool_id, **kwargs}))
+    monkeypatch.setattr(daily_sync.kol_pool, "enrich_item", lambda *_args, **_kwargs: _synced_result())
+
+    result = daily_sync.run_kol_pool_light_refresh({
+        "run_id": "unit-qualified",
+        "kol_refresh_selector": "qualified",
+        "kol_tiers": "hot",
+    })
+
+    assert result["selector"] == "qualified"
+    assert result["tiers"] == ["hot"]
+    assert result["requested"] == 1
+    assert result["refreshed"] == 1
+    assert marked == [{"id": 7, "status": "synced"}]
+    assert events["finish"][0]["last_success_index"] == 1
+
+
+def test_daily_sync_qualified_selector_dry_run_can_plan_without_operator_enable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        daily_sync,
+        "run_kol_pool_light_refresh",
+        lambda payload: {
+            "dry_run": payload.get("dry_run"),
+            "selector": payload.get("kol_refresh_selector"),
+            "requested": 2,
+            "errors": 0,
+        },
+    )
+
+    result = daily_sync.run_daily_incremental({
+        "dry_run": True,
+        "skip_official": True,
+        "skip_kol": False,
+        "kol_refresh_selector": "qualified",
+    })
+
+    assert result["kol_pool_light"]["selector"] == "qualified"
+    assert result["kol_pool_light"]["requested"] == 2

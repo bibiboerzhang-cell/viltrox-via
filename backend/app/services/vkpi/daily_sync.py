@@ -19,7 +19,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import close_standalone_conn, get_conn, open_standalone_conn
-from app.services.vkpi import channels, kol_pool
+from app.services.vkpi import channels, kol_pool, refresh_tier
 
 
 logger = get_logger(__name__)
@@ -29,6 +29,7 @@ SYNC_FAIL_FAST_EXIT_CODE = 75
 SYNC_GUARD_BLOCKED_EXIT_CODE = 76
 SYNC_FAILURE_RATE_THRESHOLD = 0.10
 LEGACY_KOL_REFRESH_GUARD_REASON = "legacy_kol_daily_refresh_disabled_until_tier_selector"
+QUALIFIED_KOL_REFRESH_GUARD_REASON = "qualified_kol_refresh_requires_explicit_operator_enable"
 TRACEBACK_MAX_CHARS = 4096
 TRACEBACK_MAX_LINES = 50
 INTERRUPT_RECORD_RETRY_DELAYS_SEC = (0.2, 0.5, 1.0, 2.0, 5.0)
@@ -132,6 +133,24 @@ def _platform_filter(value: Any) -> set[str]:
     if isinstance(value, list):
         return {str(item).strip().lower() for item in value if str(item).strip()}
     return set()
+
+
+def _tier_filter(value: Any) -> set[str]:
+    if isinstance(value, str):
+        tiers = {item.strip().lower() for item in value.split(",") if item.strip()}
+    elif isinstance(value, list):
+        tiers = {str(item).strip().lower() for item in value if str(item).strip()}
+    else:
+        tiers = {"hot"}
+    tiers = tiers & {"hot", "warm", "cold"}
+    return tiers or {"hot"}
+
+
+def _kol_refresh_selector(payload: dict[str, Any]) -> str:
+    raw = str(payload.get("kol_refresh_selector") or payload.get("refresh_selector") or "legacy").strip().lower()
+    if raw in {"qualified", "tier", "tiered", "refresh_tier"}:
+        return "qualified"
+    return "legacy"
 
 
 def _system_staff() -> dict[str, Any]:
@@ -761,8 +780,20 @@ def run_kol_pool_light_refresh(payload: dict[str, Any]) -> dict[str, Any]:
     max_posts = max(1, min(3, _int(payload.get("kol_max_posts") or payload.get("max_posts"), 1)))
     platforms = _platform_filter(payload.get("kol_platforms") or payload.get("platforms"))
     source_type = str(payload.get("kol_source_type") or "legacy_excel_p2d").strip()
-    source_counts = _kol_source_counts(platforms=platforms, source_type=source_type)
-    rows = _kol_light_rows(limit=limit, offset=offset, stale_before=stale_before, platforms=platforms, source_type=source_type)
+    selector = _kol_refresh_selector(payload)
+    tiers = _tier_filter(payload.get("kol_tiers") or payload.get("refresh_tiers"))
+    if selector == "qualified":
+        source_counts = refresh_tier.qualified_source_counts(tiers=tiers, platforms=platforms)
+        rows = refresh_tier.qualified_refresh_rows(
+            limit=limit,
+            offset=offset,
+            stale_before=stale_before,
+            platforms=platforms,
+            tiers=tiers,
+        )
+    else:
+        source_counts = _kol_source_counts(platforms=platforms, source_type=source_type)
+        rows = _kol_light_rows(limit=limit, offset=offset, stale_before=stale_before, platforms=platforms, source_type=source_type)
     if dry_run:
         by_platform: dict[str, int] = {}
         for row in rows:
@@ -770,6 +801,8 @@ def run_kol_pool_light_refresh(payload: dict[str, Any]) -> dict[str, Any]:
             by_platform[key] = by_platform.get(key, 0) + 1
         return {
             "dry_run": True,
+            "selector": selector,
+            "tiers": sorted(tiers) if selector == "qualified" else [],
             "requested": len(rows),
             "limit": limit,
             "offset": offset,
@@ -797,8 +830,9 @@ def run_kol_pool_light_refresh(payload: dict[str, Any]) -> dict[str, Any]:
         payload={**payload, "run_id": run_id},
     )
     logger.info(
-        "daily sync kol light start run_id=%s requested=%s source_total=%s refreshable=%s offset=%s stale_before=%s max_posts=%s source_type=%s platforms=%s",
+        "daily sync kol light start run_id=%s selector=%s requested=%s source_total=%s refreshable=%s offset=%s stale_before=%s max_posts=%s source_type=%s tiers=%s platforms=%s",
         run_id,
+        selector,
         len(rows),
         source_counts.get("source_total"),
         len(rows),
@@ -806,6 +840,7 @@ def run_kol_pool_light_refresh(payload: dict[str, Any]) -> dict[str, Any]:
         stale_before or "-",
         max_posts,
         source_type,
+        ",".join(sorted(tiers)) if selector == "qualified" else "-",
         ",".join(sorted(platforms)) if platforms else "all",
     )
     for index, row in enumerate(rows, start=1):
@@ -829,6 +864,8 @@ def run_kol_pool_light_refresh(payload: dict[str, Any]) -> dict[str, Any]:
                     "status": status or "unknown",
                     "message": result.get("message"),
                 })
+            if selector == "qualified":
+                refresh_tier.mark_kol_refreshed(kol_pool_id, status=status or "unknown")
             last_success_index = index
             if index == len(rows) or index % 10 == 0 or not _status_ok(status):
                 logger.info(
@@ -903,6 +940,8 @@ def run_kol_pool_light_refresh(payload: dict[str, Any]) -> dict[str, Any]:
                     summary=summary,
                 ) from exc
             logger.exception("daily sync kol light %s/%s failed kol_pool_id=%s %s", index, len(rows), kol_pool_id, label)
+            if selector == "qualified":
+                refresh_tier.mark_kol_refreshed(kol_pool_id, status="error")
             errors.append({
                 "id": kol_pool_id,
                 "kol_pool_id": kol_pool_id,
@@ -922,6 +961,8 @@ def run_kol_pool_light_refresh(payload: dict[str, Any]) -> dict[str, Any]:
     summary = {
         "dry_run": False,
         "run_id": run_id,
+        "selector": selector,
+        "tiers": sorted(tiers) if selector == "qualified" else [],
         "requested": len(rows),
         "refreshed": refreshed,
         "partial": partial,
@@ -963,8 +1004,22 @@ def run_daily_incremental(payload: dict[str, Any] | None = None) -> dict[str, An
         logger.info("daily sync stage official end summary=%s", result["official"])
     else:
         result["official"] = {"skipped": True}
+    selector = _kol_refresh_selector(payload)
     allow_legacy_kol = _bool(payload.get("allow_legacy_kol_full_refresh")) or _bool(payload.get("include_legacy_kol"))
-    if not _bool(payload.get("skip_kol")) and allow_legacy_kol:
+    allow_qualified_kol = _bool(payload.get("allow_qualified_kol_refresh")) or _bool(payload.get("include_qualified_kol"))
+    if not _bool(payload.get("skip_kol")) and selector == "qualified" and (allow_qualified_kol or _bool(payload.get("dry_run"))):
+        logger.info("daily sync stage kol_pool_light qualified begin")
+        result["kol_pool_light"] = run_kol_pool_light_refresh({**payload, "kol_refresh_selector": "qualified"})
+        logger.info("daily sync stage kol_pool_light qualified end summary=%s", result["kol_pool_light"])
+    elif not _bool(payload.get("skip_kol")) and selector == "qualified":
+        logger.warning("daily sync qualified kol_pool_light skipped: %s", QUALIFIED_KOL_REFRESH_GUARD_REASON)
+        result["kol_pool_light"] = {
+            "skipped": True,
+            "reason": QUALIFIED_KOL_REFRESH_GUARD_REASON,
+            "requires": "allow_qualified_kol_refresh",
+            "selector": "qualified",
+        }
+    elif not _bool(payload.get("skip_kol")) and allow_legacy_kol:
         logger.info("daily sync stage kol_pool_light begin")
         result["kol_pool_light"] = run_kol_pool_light_refresh(payload)
         logger.info("daily sync stage kol_pool_light end summary=%s", result["kol_pool_light"])

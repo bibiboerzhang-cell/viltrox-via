@@ -64,6 +64,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--kol-stale-before", default="", help="Only refresh selected KOL rows last seen/updated before this timestamp")
     parser.add_argument("--kol-max-posts", type=int, default=1, help="Latest post sample per KOL pool row")
     parser.add_argument("--kol-platforms", default="", help="Comma-separated KOL platforms to run")
+    parser.add_argument("--kol-refresh-selector", default="qualified", choices=["qualified", "legacy"], help="KOL refresh selector to use when KOL refresh is explicitly included")
+    parser.add_argument("--kol-tiers", default="hot", help="Comma-separated refresh tiers for qualified selector")
     parser.add_argument("--kol-source-type", default="legacy_excel_p2d", help="KOL pool source_type scope")
     parser.add_argument("--skip-kol", action="store_true", help="Skip KOL pool lightweight refresh")
     parser.add_argument(
@@ -71,12 +73,18 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Explicitly run the legacy KOL pool lightweight refresh. Use only for bounded retries until the tier selector replaces it.",
     )
+    parser.add_argument(
+        "--include-qualified-kol",
+        action="store_true",
+        help="Explicitly run qualified KOL refresh from vkpi_kol_refresh_tier. Does not enable legacy full-pool refresh.",
+    )
     parser.set_defaults(skip_kol=True)
     return parser.parse_args()
 
 
 async def main() -> int:
     args = parse_args()
+    kol_selector = "legacy" if args.include_legacy_kol else args.kol_refresh_selector
     payload = {
         "dry_run": bool(args.dry_run),
         "official_max_posts": max(1, min(100, int(args.official_max_posts or 50))),
@@ -87,9 +95,12 @@ async def main() -> int:
         "kol_stale_before": args.kol_stale_before.strip(),
         "kol_max_posts": max(1, min(3, int(args.kol_max_posts or 1))),
         "kol_platforms": args.kol_platforms,
+        "kol_refresh_selector": kol_selector,
+        "kol_tiers": args.kol_tiers,
         "kol_source_type": args.kol_source_type,
-        "skip_kol": bool(args.skip_kol) and not bool(args.include_legacy_kol),
+        "skip_kol": bool(args.skip_kol) and not (bool(args.include_legacy_kol) or bool(args.include_qualified_kol)),
         "allow_legacy_kol_full_refresh": bool(args.include_legacy_kol),
+        "allow_qualified_kol_refresh": bool(args.include_qualified_kol),
         "staff": {"id": 0, "staff_id": 0, "user_id": 0, "role": "admin", "is_owner": 1},
     }
     try:
@@ -103,6 +114,8 @@ async def main() -> int:
             kol_stale_before=payload["kol_stale_before"],
             kol_max_posts=payload["kol_max_posts"],
             skip_kol=payload["skip_kol"],
+            kol_refresh_selector=payload["kol_refresh_selector"],
+            kol_tiers=payload["kol_tiers"],
             kol_source_type=payload["kol_source_type"],
         )
         result = await run_job("daily_incremental_sync", payload)

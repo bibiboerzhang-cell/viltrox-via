@@ -118,6 +118,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "073_vkpi_channel_post_metrics.sql",
     "074_vkpi_sync_runs.sql",
     "075_vkpi_sync_acknowledgements.sql",
+    "076_vkpi_kol_refresh_tier.sql",
 )
 
 try:
