@@ -1260,7 +1260,7 @@ function KpiInsightPanel({
         </div>
         <details>
           <summary>数据可信</summary>
-          <p>来源 / 当前窗口 / 更新时间 / 覆盖度 / baseline 保护状态会在后续数据层补齐。</p>
+          <p>来源 / 窗口 / 覆盖度 / baseline</p>
         </details>
       </div>
     </section>
@@ -1344,7 +1344,7 @@ function LatestContentPerformance({
             </article>
           );
         }) : (
-          <div className="empty-real">当前筛选暂无真实内容。官方矩阵来自真实 posts；合作 KOL / UGC 需要对应数据源返回后展示。</div>
+          <div className="empty-real">当前来源暂无真实内容。</div>
         )}
       </div>
     </div>

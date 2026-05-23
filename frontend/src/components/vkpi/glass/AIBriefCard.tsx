@@ -11,10 +11,10 @@ interface AIBriefCardProps {
 }
 
 export function AIBriefCard({
-  label = 'AI BRIEF · 示例',
-  title = '今日优先：项目补人和竞品风险。',
-  body = '基于项目、KOL 和品牌信号生成。',
-  primaryAction = '查看证据链',
+  label = 'AI BRIEF',
+  title = '项目补人 / 竞品风险',
+  body = '项目 · KOL · 品牌信号',
+  primaryAction = '证据链',
   secondaryAction = '生成任务',
   onPrimaryAction,
   onSecondaryAction,
