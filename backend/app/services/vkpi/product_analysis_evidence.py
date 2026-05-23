@@ -5,10 +5,13 @@ import json
 import os
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime
 from app.services.vkpi import audit, kol_pool, outcome_collector
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
+
+logger = get_logger(__name__)
 
 
 def _loads(value: Any, default: Any = None) -> Any:
@@ -16,7 +19,8 @@ def _loads(value: Any, default: Any = None) -> Any:
         return value
     try:
         return json.loads(str(value or ""))
-    except Exception:
+    except Exception as exc:
+        logger.warning("vkpi product analysis evidence json parse failed: %s", exc)
         return default
 
 
@@ -50,7 +54,8 @@ def _recommendation_context(recommendation_id: int) -> tuple[dict[str, Any], dic
 def _safe_rows(sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
     try:
         return [dict(row) for row in get_conn().execute(sql, params).fetchall()]
-    except Exception:
+    except Exception as exc:
+        logger.warning("vkpi product analysis evidence rows query failed: %s", exc)
         return []
 
 
@@ -58,7 +63,8 @@ def _safe_row(sql: str, params: tuple[Any, ...] = ()) -> dict[str, Any]:
     try:
         row = get_conn().execute(sql, params).fetchone()
         return dict(row) if row else {}
-    except Exception:
+    except Exception as exc:
+        logger.warning("vkpi product analysis evidence row query failed: %s", exc)
         return {}
 
 
@@ -357,4 +363,3 @@ def recommendation_outcome_summary(launch_id: int | None = None, run_id: int | N
         "source_rows": source_rows,
         "source_count": len(source_rows),
     }
-

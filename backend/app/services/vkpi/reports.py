@@ -7,11 +7,14 @@ import secrets
 from datetime import datetime, timedelta
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.services.vkpi import alerts, attribution, costs, decision_engine, kpi_ledger, llm_gateway, metric_lineage, pdf_renderer, scope, workflow
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.schema_lineage import ensure_vkpi_lineage_schema
 from app.services.vkpi.schema_reports import ensure_vkpi_reports_schema
+
+logger = get_logger(__name__)
 
 
 def _utcnow() -> str:
@@ -47,7 +50,8 @@ def _load_json(value: Any) -> Any:
         return value
     try:
         return json.loads(str(value))
-    except Exception:
+    except Exception as exc:
+        logger.warning("vkpi report json parse failed: %s", exc)
         return {}
 
 

@@ -10,6 +10,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime
 from app.services.vkpi import audit
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
@@ -17,6 +18,7 @@ from app.services.vkpi.workflow import staff_id as resolve_staff_id
 FEEDBACK_TYPES = {"bug", "suggestion", "question", "missing_data", "button_issue"}
 SEVERITIES = {"low", "medium", "high", "critical"}
 STATUSES = {"open", "triaged", "in_progress", "resolved", "closed"}
+logger = get_logger(__name__)
 
 
 def _now() -> str:
@@ -124,9 +126,9 @@ def create_feedback(payload: dict[str, Any], *, staff: dict[str, Any] | None = N
             detail=title,
             metadata={"feedback_type": feedback_type, "severity": severity, "page_path": page_path},
         )
-    except Exception:
+    except Exception as exc:
         # Feedback must never fail because audit logging failed.
-        pass
+        logger.warning("team feedback create audit failed for %s: %s", uid, exc)
     row = conn.execute("SELECT * FROM vkpi_team_feedback WHERE uid=?", (uid,)).fetchone()
     return {"feedback": _row_to_feedback(row), "ok": True}
 
@@ -168,7 +170,7 @@ def update_feedback_status(uid: str, payload: dict[str, Any], *, staff: dict[str
             detail=status,
             metadata={"previous_status": dict(row).get("status"), "status": status},
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("team feedback status audit failed for %s: %s", clean_uid, exc)
     updated = conn.execute("SELECT * FROM vkpi_team_feedback WHERE uid=?", (clean_uid,)).fetchone()
     return {"feedback": _row_to_feedback(updated), "ok": True}

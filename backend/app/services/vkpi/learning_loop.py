@@ -5,16 +5,19 @@ import json
 from pathlib import Path
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 
 
 SCENARIO = "p10_learning_snapshot"
+logger = get_logger(__name__)
 
 
 def _count(table_name: str) -> int:
     try:
         return int(get_conn().execute(f"SELECT COUNT(*) AS count FROM {table_name}").fetchone()["count"] or 0)
-    except Exception:
+    except Exception as exc:
+        logger.warning("vkpi learning snapshot count failed for %s: %s", table_name, exc)
         return 0
 
 
@@ -29,7 +32,8 @@ def _group_counts(table_name: str, column: str) -> dict[str, int]:
             ORDER BY count DESC, key
             """
         ).fetchall()
-    except Exception:
+    except Exception as exc:
+        logger.warning("vkpi learning snapshot group count failed for %s.%s: %s", table_name, column, exc)
         return {}
     return {str(row["key"]): int(row["count"] or 0) for row in rows}
 
@@ -51,7 +55,8 @@ def _outcome_counts() -> dict[str, int]:
             FROM vkpi_recommendation_outcomes
             """
         ).fetchone()
-    except Exception:
+    except Exception as exc:
+        logger.warning("vkpi learning snapshot outcome count failed: %s", exc)
         return {}
     return {key: int(row[key] or 0) for key in row.keys()}
 

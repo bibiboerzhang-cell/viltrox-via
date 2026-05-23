@@ -13,11 +13,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.services.vkpi.kol_competitor_detector import _extract_posts, _post_date, _post_text_blob, _row_profile_post, evaluate_kol_competitors
 
 
 CLUSTERS_PATH = Path(__file__).with_name("industry_clusters.json")
+logger = get_logger(__name__)
 PRODUCT_FIT_KEYWORDS = {
     "AF-35MM-F12-LAB": ("35mm", "street", "portrait", "review", "photography", "街拍", "人像", "评测"),
     "AF-16MM-F18": ("16mm", "wide", "landscape", "travel", "vlog", "广角", "风光"),
@@ -167,7 +169,8 @@ def _text_blob(row: dict[str, Any], posts: list[dict[str, Any]]) -> str:
 def _load_clusters() -> dict[str, list[str]]:
     try:
         parsed = json.loads(CLUSTERS_PATH.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception as exc:
+        logger.warning("vkpi eleven dimensions cluster load failed: %s", exc)
         return {}
     if not isinstance(parsed, dict):
         return {}

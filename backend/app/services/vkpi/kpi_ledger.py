@@ -11,11 +11,14 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime
 from app.services.vkpi import audit, scope
 from app.services.vkpi.kpi_evidence import enrich_kpi_source_row
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
+
+logger = get_logger(__name__)
 
 
 STAGE_WEIGHTS: dict[str, float] = {
@@ -104,7 +107,8 @@ def _parse_json(value: Any) -> dict[str, Any]:
     try:
         parsed = json.loads(str(value))
         return parsed if isinstance(parsed, dict) else {}
-    except Exception:
+    except Exception as exc:
+        logger.warning("vkpi kpi ledger json parse failed: %s", exc)
         return {}
 
 
@@ -681,8 +685,8 @@ def generate_daily_rollup(ledger_date: str | None = None, staff_id: int | None =
             detail=f"generated KPI ledger for {day}",
             metadata={"ledger_date": day, "staff_id": scoped_staff_id, "metrics": dict(metric_counts), "status_counts": status_counts},
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("vkpi kpi rollup audit failed for %s: %s", day, exc)
     return {
         "ledger_date": day,
         "staff_id": scoped_staff_id,

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.services.vkpi._utils import utcnow_iso
 from app.services.vkpi.schema import ensure_vkpi_schema
@@ -20,6 +21,7 @@ NODE_COLUMNS = {
     "content_published": ("content_published", "content_published_at"),
     "order_attributed": ("order_attributed", "first_order_at"),
 }
+logger = get_logger(__name__)
 
 
 def _utcnow() -> str:
@@ -338,5 +340,6 @@ def _loads_safe(value: Any) -> dict[str, Any]:
     try:
         loaded = json.loads(str(value or "{}"))
         return loaded if isinstance(loaded, dict) else {}
-    except Exception:
+    except Exception as exc:
+        logger.warning("vkpi outcome collector json parse failed: %s", exc)
         return {}

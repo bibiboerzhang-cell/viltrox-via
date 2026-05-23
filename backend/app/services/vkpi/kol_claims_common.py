@@ -8,8 +8,11 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.services.vkpi import scope
+
+logger = get_logger(__name__)
 
 SUPPORTED_PLATFORMS = {
     "ig",
@@ -122,14 +125,16 @@ def _safe_json_loads(value: Any, fallback: Any) -> Any:
     try:
         parsed = json.loads(value or "")
         return parsed if parsed is not None else fallback
-    except Exception:
+    except Exception as exc:
+        logger.warning("kol claims json parse failed: %s", exc)
         return fallback
 
 def _rows_or_empty(sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
     conn = get_conn()
     try:
         return [dict(row) for row in conn.execute(sql, params).fetchall()]
-    except Exception:
+    except Exception as exc:
+        logger.warning("kol claims rows query failed: %s", exc)
         return []
 
 def _row_or_empty(sql: str, params: tuple[Any, ...] = ()) -> dict[str, Any]:
@@ -137,7 +142,8 @@ def _row_or_empty(sql: str, params: tuple[Any, ...] = ()) -> dict[str, Any]:
     try:
         row = conn.execute(sql, params).fetchone()
         return dict(row) if row else {}
-    except Exception:
+    except Exception as exc:
+        logger.warning("kol claims row query failed: %s", exc)
         return {}
 
 def assert_kol_access(kol_id: int, staff: dict[str, Any] | None, *, allow_unclaimed: bool = False) -> None:

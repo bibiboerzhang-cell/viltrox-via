@@ -6,11 +6,14 @@ import secrets
 from datetime import datetime
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.services.vkpi import attribution
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.schema_reconciliation import ensure_vkpi_reconciliation_schema
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
+
+logger = get_logger(__name__)
 
 
 def _utcnow() -> str:
@@ -122,8 +125,8 @@ def stats() -> dict[str, Any]:
         row = conn.execute("SELECT * FROM vkpi_reconciliation_stats").fetchone()
         if row:
             return dict(row)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("vkpi reconciliation stats view failed, using grouped fallback: %s", exc)
     statuses = {"pending": 0, "in_review": 0, "resolved": 0, "rejected": 0, "pending_gmv_cents": 0}
     for row in conn.execute("SELECT status, COUNT(*) AS n, COALESCE(SUM(revenue_cents),0) AS revenue FROM vkpi_reconciliation_queue GROUP BY status").fetchall():
         key = str(row["status"] or "")

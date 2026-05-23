@@ -5,7 +5,10 @@ import json
 from datetime import datetime
 from typing import Any
 
+from app.core.logging import get_logger
 from app.services.vkpi.kpi_evidence import enrich_kpi_source_row
+
+logger = get_logger(__name__)
 
 def _row(row: Any) -> dict[str, Any]:
     return dict(row) if row else {}
@@ -26,7 +29,8 @@ def _window_start(window: str) -> str:
 def _safe_rows(conn: Any, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
     try:
         return [dict(row) for row in conn.execute(sql, params).fetchall()]
-    except Exception:
+    except Exception as exc:
+        logger.warning("vkpi decision rows query failed: %s", exc)
         return []
 
 
@@ -37,7 +41,8 @@ def _safe_scalar(conn: Any, sql: str, params: tuple[Any, ...] = (), default: int
             return default
         data = dict(row)
         return next(iter(data.values())) or default
-    except Exception:
+    except Exception as exc:
+        logger.warning("vkpi decision scalar query failed: %s", exc)
         return default
 
 
@@ -49,7 +54,8 @@ def _parse_json(value: Any) -> dict[str, Any]:
     try:
         parsed = json.loads(str(value))
         return parsed if isinstance(parsed, dict) else {}
-    except Exception:
+    except Exception as exc:
+        logger.warning("vkpi decision json parse failed: %s", exc)
         return {}
 
 

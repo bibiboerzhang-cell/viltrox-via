@@ -8,6 +8,7 @@ from collections import Counter, defaultdict
 from datetime import datetime
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.services.vkpi.legacy_import_audit import _first_url, _text
 from app.services.vkpi.legacy_import_staging import (
@@ -26,6 +27,7 @@ DECISION_STATUS = {
     "escalate": "escalated",
 }
 BLOCKED_WEAK_LABELS = {"blocked_risk"}
+logger = get_logger(__name__)
 
 
 def _row_to_dict(row: Any) -> dict[str, Any]:
@@ -35,7 +37,8 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
 def _load_json(value: str) -> Any:
     try:
         return json.loads(value or "{}")
-    except Exception:
+    except Exception as exc:
+        logger.warning("legacy entity resolution json parse failed: %s", exc)
         return {}
 
 

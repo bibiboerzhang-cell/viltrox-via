@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.services.vkpi import audit, scope
 from app.services.vkpi.schema import ensure_vkpi_schema
@@ -22,6 +23,8 @@ from app.services.vkpi.kol_claims_common import (
     normalize_platform,
     utcnow,
 )
+
+logger = get_logger(__name__)
 
 
 def _log_kol_audit(
@@ -43,8 +46,9 @@ def _log_kol_audit(
             detail=detail,
             metadata=metadata or {},
         )
-    except Exception:
+    except Exception as exc:
         # Audit must not break KOL lifecycle actions; failures are surfaced by audit QA.
+        logger.warning("kol lifecycle audit failed for %s/%s: %s", action_type, kol_id, exc)
         return
 
 

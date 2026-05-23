@@ -71,8 +71,8 @@ def _read_env_key(name: str) -> str:
             stripped = line.strip()
             if stripped.startswith(name + "="):
                 return stripped.split("=", 1)[1].strip().strip('"').strip("'")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("vkpi llm gateway env key lookup failed for %s: %s", name, exc)
     return ""
 
 
