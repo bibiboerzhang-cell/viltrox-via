@@ -932,6 +932,16 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
     });
   }, [premiumProductRows]);
 
+  const openContentTypeDrawer = useCallback(() => {
+    setPanelDrawer({
+      title: '内容类型分布',
+      sourceLabel: allowMockFallback ? '示例分布' : 'official matrix',
+      rows: contentTypeRows.map((row) => ({ label: row.label, value: row.value })),
+      actionLabel: '进入内容中心',
+      actionPage: 'channels',
+    });
+  }, [allowMockFallback, contentTypeRows]);
+
   const openContentUrl = useCallback((url: unknown) => {
     const href = typeof url === 'string' ? url.trim() : '';
     if (!href) {
@@ -998,8 +1008,8 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
                   </div>
                   <div className="glass-card mini">
                     <div className="panel-head"><h3>内容类型分布</h3><span className="tag">{allowMockFallback ? '示例' : '官方矩阵'}</span></div>
-                    <div className="donut-wrap"><div className="donut"></div><div className="donut-label"><span>总内容</span><b>{official.posts ? compact(official.posts) : '--'}</b></div></div>
-                    <div className="region-list" style={{ gridTemplateColumns: 'repeat(3,1fr)' }}>{contentTypeRows.map((item) => <div className="region" style={glassVarStyle({ '--c': item.color })} key={item.label}><span><i></i>{item.label}</span><b>{item.value}</b></div>)}</div>
+                    <div className="donut-wrap" role="button" tabIndex={0} onClick={openContentTypeDrawer} onKeyDown={(event) => { if (event.key === 'Enter') openContentTypeDrawer(); }}><div className="donut"></div><div className="donut-label"><span>总内容</span><b>{official.posts ? compact(official.posts) : '--'}</b></div></div>
+                    <div className="region-list" style={{ gridTemplateColumns: 'repeat(3,1fr)' }}>{contentTypeRows.map((item) => <div className="region" style={glassVarStyle({ '--c': item.color })} key={item.label} role="button" tabIndex={0} onClick={openContentTypeDrawer} onKeyDown={(event) => { if (event.key === 'Enter') openContentTypeDrawer(); }}><span><i></i>{item.label}</span><b>{item.value}</b></div>)}</div>
                   </div>
                   <div className="glass-card mini">
                     <div className="panel-head"><h3>KOL 平台分布</h3><button className="link" type="button" onClick={() => goToWorkspacePage('channels', 'KOL 平台分布')}>查看全部</button></div>
