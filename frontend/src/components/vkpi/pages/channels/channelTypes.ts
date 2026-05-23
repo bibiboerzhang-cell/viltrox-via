@@ -36,6 +36,13 @@ export interface ChannelCommentItem {
   sentiment?: string;
 }
 
+export interface ChannelCommentContract {
+  declared: number;
+  cached: number;
+  cap: number;
+  status: string;
+}
+
 export interface ChannelCommentsResponse {
   channelId: number;
   postId: string;
@@ -43,9 +50,14 @@ export interface ChannelCommentsResponse {
   status: string;
   message?: string;
   commentCount?: number;
+  declaredCount?: number;
+  cachedCount?: number;
+  commentCap?: number;
+  coverageStatus?: string;
   fetchedCount?: number;
   newCount?: number;
   collectSupported?: boolean;
+  commentContract?: ChannelCommentContract;
   comments: ChannelCommentItem[];
 }
 

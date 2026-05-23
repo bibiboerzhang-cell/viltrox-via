@@ -101,6 +101,10 @@ function numberValue(value: unknown) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function firstPresent(...values: unknown[]) {
+  return values.find((value) => value !== undefined && value !== null && value !== '');
+}
+
 function textList(value: unknown): string[] {
   if (Array.isArray(value)) return value.map((item) => text(item)).filter(Boolean);
   if (typeof value === 'string') {
@@ -327,16 +331,29 @@ function commentRow(row: Row): ChannelCommentItem {
 
 function commentsResponse(row: Row): ChannelCommentsResponse {
   const comments = Array.isArray(row.comments) ? row.comments.filter((item): item is Row => Boolean(item) && typeof item === 'object').map(commentRow) : [];
+  const contractRow = (row.comment_contract || row.commentContract) as Row | undefined;
+  const contract = contractRow && typeof contractRow === 'object' ? {
+    declared: numberValue(firstPresent(contractRow.declared, row.declared_count, row.declaredCount)),
+    cached: numberValue(firstPresent(contractRow.cached, row.cached_count, row.cachedCount, row.comment_count, row.commentCount, comments.length)),
+    cap: numberValue(firstPresent(contractRow.cap, row.comment_cap, row.commentCap)),
+    status: text(firstPresent(contractRow.status, row.coverage_status, row.coverageStatus)),
+  } : undefined;
+  const collectSupportedValue = firstPresent(row.collect_supported, row.collectSupported);
   return {
     channelId: numberValue(row.channel_id || row.channelId),
     postId: text(row.post_id || row.postId),
     platform: text(row.platform),
     status: text(row.status),
     message: text(row.message),
-    commentCount: numberValue(row.comment_count || row.commentCount || comments.length),
-    fetchedCount: numberValue(row.fetched_count || row.fetchedCount),
-    newCount: numberValue(row.new_count || row.newCount),
-    collectSupported: row.collect_supported === false || row.collectSupported === false ? false : Boolean(row.collect_supported || row.collectSupported),
+    commentCount: numberValue(firstPresent(row.comment_count, row.commentCount, comments.length)),
+    declaredCount: numberValue(firstPresent(row.declared_count, row.declaredCount, contract?.declared)),
+    cachedCount: numberValue(firstPresent(row.cached_count, row.cachedCount, contract?.cached, row.comment_count, row.commentCount, comments.length)),
+    commentCap: numberValue(firstPresent(row.comment_cap, row.commentCap, contract?.cap)),
+    coverageStatus: text(firstPresent(row.coverage_status, row.coverageStatus, contract?.status)),
+    fetchedCount: numberValue(firstPresent(row.fetched_count, row.fetchedCount)),
+    newCount: numberValue(firstPresent(row.new_count, row.newCount)),
+    collectSupported: typeof collectSupportedValue === 'boolean' ? collectSupportedValue : undefined,
+    commentContract: contract,
     comments,
   };
 }
@@ -355,17 +372,21 @@ function commentEmptyText(post: ChannelContentPost, account: OfficialChannelAcco
   return '当前平台评论抓取未配置。';
 }
 
-function commentActionLabel(post: ChannelContentPost, comments: ChannelCommentItem[], canCollect: boolean) {
+function commentActionLabel(post: ChannelContentPost, payload: ChannelCommentsResponse | null, canCollect: boolean) {
+  const cached = payload?.commentContract?.cached ?? payload?.cachedCount ?? payload?.commentCount ?? payload?.comments.length ?? 0;
   if (!canCollect) return '未接入';
-  if (comments.length && post.comments > comments.length) return '继续补齐';
-  if (comments.length) return '刷新明细';
+  if (cached && post.comments > cached) return '继续补齐';
+  if (cached) return '刷新明细';
   if (post.comments > 0) return '补齐明细';
   return '尝试获取';
 }
 
 function commentCoverage(post: ChannelContentPost, account: OfficialChannelAccount, payload: ChannelCommentsResponse | null) {
-  const declared = Math.max(0, post.comments);
-  const cached = payload ? Math.max(0, payload.commentCount ?? payload.comments.length) : 0;
+  const contract = payload?.commentContract;
+  const declared = Math.max(0, contract?.declared ?? payload?.declaredCount ?? post.comments);
+  const cached = payload ? Math.max(0, contract?.cached ?? payload.cachedCount ?? payload.commentCount ?? payload.comments.length) : 0;
+  const cap = Math.max(0, contract?.cap ?? payload?.commentCap ?? 0);
+  const capLabel = cap ? ` / 上限 ${formatter.format(cap)}` : '';
   const supported = canCollectComments(account, payload);
   if (!payload) {
     return { label: declared ? `正文待读取 / 平台显示 ${formatter.format(declared)}` : '平台暂无评论', tone: 'neutral' };
@@ -374,15 +395,15 @@ function commentCoverage(post: ChannelContentPost, account: OfficialChannelAccou
     return { label: declared ? `正文未接入 / 平台显示 ${formatter.format(declared)}` : '平台暂无评论', tone: 'blocked' };
   }
   if (declared <= 0) {
-    return { label: cached ? `已缓存正文 ${formatter.format(cached)}` : '平台暂无评论', tone: cached ? 'ok' : 'neutral' };
+    return { label: cached ? `正文缓存 ${formatter.format(cached)} / 平台未声明${capLabel}` : '平台暂无评论', tone: cached ? 'partial' : 'neutral' };
   }
   if (cached >= declared) {
-    return { label: `已缓存正文 ${formatter.format(cached)} / 平台显示 ${formatter.format(declared)}`, tone: 'ok' };
+    return { label: `正文缓存 ${formatter.format(cached)} / 平台 ${formatter.format(declared)}${capLabel}`, tone: 'ok' };
   }
   if (cached > 0) {
-    return { label: `已缓存正文 ${formatter.format(cached)} / 平台显示 ${formatter.format(declared)}`, tone: 'partial' };
+    return { label: `正文缓存 ${formatter.format(cached)} / 平台 ${formatter.format(declared)}${capLabel}`, tone: 'partial' };
   }
-  return { label: `正文未缓存 / 平台显示 ${formatter.format(declared)}`, tone: 'blocked' };
+  return { label: `正文未缓存 / 平台 ${formatter.format(declared)}${capLabel}`, tone: 'blocked' };
 }
 
 function MediaLightbox({ post, account, apiToken, refreshKey = 0, onClose }: { post: ChannelContentPost; account: OfficialChannelAccount; apiToken?: string; refreshKey?: number; onClose: () => void }) {
@@ -520,7 +541,7 @@ function CommentModal({
         </div>
         <footer className="vkpi-comment-modal__footer">
           {platformExternalUrl(post.url) ? <a href={platformExternalUrl(post.url)} target="_blank" rel="noreferrer">打开原帖 ↗</a> : <span />}
-          <button type="button" disabled={loading || !canCollect} onClick={onCollect}>{commentActionLabel(post, comments, canCollect)}</button>
+          <button type="button" disabled={loading || !canCollect} onClick={onCollect}>{commentActionLabel(post, payload, canCollect)}</button>
         </footer>
       </section>
     </div>

@@ -9,6 +9,7 @@ from app.services.vkpi import channels
 
 
 COMMENT_COLLECT_PLATFORMS = {"youtube", "instagram", "tiktok", "facebook", "reddit", "x"}
+MAX_CHANNEL_COMMENT_CAP = 300
 
 
 def _reddit_comment_payload(item: dict[str, Any]) -> dict[str, Any]:
@@ -192,6 +193,43 @@ def _comment_payload(row: Any) -> dict[str, Any]:
     }
 
 
+def _comment_contract(
+    *,
+    declared: int,
+    cached: int,
+    cap: int,
+    collect_supported: bool = True,
+    missing_post_id: bool = False,
+) -> dict[str, Any]:
+    """Make declared platform counts distinct from cached comment bodies."""
+
+    declared_i = max(0, channels._int(declared))
+    cached_i = max(0, channels._int(cached))
+    cap_i = max(1, min(MAX_CHANNEL_COMMENT_CAP, channels._int(cap, 50)))
+    if missing_post_id:
+        status = "missing_post_id"
+    elif not collect_supported:
+        status = "not_supported"
+    elif declared_i <= 0 and cached_i <= 0:
+        status = "none_declared"
+    elif declared_i <= 0 and cached_i > 0:
+        status = "cached_without_declared"
+    elif cached_i >= declared_i:
+        status = "complete"
+    elif cached_i >= cap_i:
+        status = "capped"
+    elif cached_i > 0:
+        status = "partial"
+    else:
+        status = "not_cached"
+    return {
+        "declared": declared_i,
+        "cached": cached_i,
+        "cap": cap_i,
+        "status": status,
+    }
+
+
 def _comment_external_post_id(platform: str, post_id: str, url: str, post: dict[str, Any] | None) -> str:
     post = post or {}
     if platform == "reddit":
@@ -241,8 +279,11 @@ def channel_post_comments(
 ) -> dict[str, Any]:
     row = channels._latest_channel_row(channel_id, staff=staff)
     platform = str(row.get("platform") or "").lower()
+    safe_limit = max(1, min(MAX_CHANNEL_COMMENT_CAP, int(limit or 50)))
     _, _, package_dir = channels._all_posts_for_channel(row)
     post = channels._match_post(row, post_id, url) or {}
+    declared_count = channels._int(post.get("comments"))
+    collect_supported = platform in COMMENT_COLLECT_PLATFORMS
     external_ids = {
         channels._text(post_id),
         channels._text(url),
@@ -254,7 +295,26 @@ def channel_post_comments(
         external_ids |= {channels._reddit_external_id(value) for value in list(external_ids)}
     external_ids = {value for value in external_ids if value}
     if not external_ids:
-        return {"channel_id": int(channel_id), "post_id": post_id, "platform": platform, "comments": [], "comment_count": 0, "status": "missing_post_id"}
+        contract = _comment_contract(
+            declared=0,
+            cached=0,
+            cap=safe_limit,
+            collect_supported=collect_supported,
+            missing_post_id=True,
+        )
+        return {
+            "channel_id": int(channel_id),
+            "post_id": post_id,
+            "platform": platform,
+            "comments": [],
+            "comment_count": 0,
+            "declared_count": contract["declared"],
+            "cached_count": contract["cached"],
+            "comment_cap": contract["cap"],
+            "coverage_status": contract["status"],
+            "comment_contract": contract,
+            "status": "missing_post_id",
+        }
 
     from app.services.vkpi import comments_collector
 
@@ -268,7 +328,7 @@ def channel_post_comments(
         ORDER BY COALESCE(created_at, fetched_at) DESC, id DESC
         LIMIT ?
         """,
-        (platform, *sorted(external_ids), max(1, min(300, int(limit or 50)))),
+        (platform, *sorted(external_ids), safe_limit),
     ).fetchall()
     comments = [_comment_payload(item) for item in rows]
     seen = {channels._text(item.get("external_comment_id")) for item in comments}
@@ -279,7 +339,13 @@ def channel_post_comments(
                 seen.add(key)
                 comments.append(item)
         comments.sort(key=lambda item: item.get("created_at") or item.get("fetched_at") or "", reverse=True)
-        comments = comments[: max(1, min(300, int(limit or 50)))]
+        comments = comments[:safe_limit]
+    contract = _comment_contract(
+        declared=declared_count,
+        cached=len(comments),
+        cap=safe_limit,
+        collect_supported=collect_supported,
+    )
     return {
         "channel_id": int(channel_id),
         "post_id": post_id,
@@ -287,8 +353,13 @@ def channel_post_comments(
         "post": post,
         "comments": comments,
         "comment_count": len(comments),
+        "declared_count": contract["declared"],
+        "cached_count": contract["cached"],
+        "comment_cap": contract["cap"],
+        "coverage_status": contract["status"],
+        "comment_contract": contract,
         "status": "ok" if comments else "not_collected",
-        "collect_supported": platform in COMMENT_COLLECT_PLATFORMS,
+        "collect_supported": collect_supported,
         "source": "db_or_package" if comments else "db",
     }
 
@@ -390,13 +461,33 @@ def collect_channel_post_comments(
 ) -> dict[str, Any]:
     row = channels._latest_channel_row(channel_id, staff=staff)
     platform = str(row.get("platform") or "").lower()
+    safe_limit = max(1, min(MAX_CHANNEL_COMMENT_CAP, int(limit or 100)))
     if platform not in COMMENT_COLLECT_PLATFORMS:
         existing = channel_post_comments(channel_id, post_id=post_id, url=url, limit=limit, staff=staff)
         return {**existing, "status": existing["status"] if existing.get("comments") else "not_supported", "message": "当前平台评论采集未接入频道层。"}
     post = channels._match_post(row, post_id, url)
     external_post_id = _comment_external_post_id(platform, post_id, url, post)
     if not external_post_id:
-        return {"channel_id": int(channel_id), "platform": platform, "post_id": post_id, "comments": [], "status": "missing_post_id"}
+        contract = _comment_contract(
+            declared=channels._int((post or {}).get("comments")),
+            cached=0,
+            cap=safe_limit,
+            collect_supported=True,
+            missing_post_id=True,
+        )
+        return {
+            "channel_id": int(channel_id),
+            "platform": platform,
+            "post_id": post_id,
+            "comments": [],
+            "comment_count": 0,
+            "declared_count": contract["declared"],
+            "cached_count": contract["cached"],
+            "comment_cap": contract["cap"],
+            "coverage_status": contract["status"],
+            "comment_contract": contract,
+            "status": "missing_post_id",
+        }
 
     crawler, config_message = _comment_crawler(platform)
     if crawler is None:
@@ -406,7 +497,7 @@ def collect_channel_post_comments(
         existing = channel_post_comments(channel_id, post_id=external_post_id, url=url, limit=limit, staff=staff)
         return {**existing, "status": "not_configured", "message": config_message}
     crawl_ref = url or channels._text(post.get("url")) or external_post_id
-    result = crawler.crawl_video_comments(crawl_ref, max_results=max(1, min(300, int(limit or 100))))
+    result = crawler.crawl_video_comments(crawl_ref, max_results=safe_limit)
     raw_comments = [item for item in result.get("items") or [] if isinstance(item, dict)]
     new_count = _save_channel_comments(channel_id=int(channel_id), platform=platform, external_post_id=external_post_id, comments=raw_comments)
     payload = channel_post_comments(channel_id, post_id=external_post_id, url=url, limit=limit, staff=staff)
