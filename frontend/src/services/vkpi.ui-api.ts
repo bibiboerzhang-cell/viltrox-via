@@ -1415,6 +1415,10 @@ export async function getKolPoolCompetitors(token: string, kolPoolId: string | n
 export async function getKolPoolDimensions11(token: string, kolPoolId: string | number) {
   return apiFetch<Row>(`/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/dimensions11`, {}, token);
 }
+export async function getKolPoolIntelligenceCard(token: string, kolPoolId: string | number, includeProductFit = true) {
+  const params = new URLSearchParams({ include_product_fit: String(includeProductFit) });
+  return apiFetch<Row>(`/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/intelligence-card?${params.toString()}`, {}, token);
+}
 export async function previewKolPoolDimensions11(token: string, options: { limit?: number; sourceType?: string } = {}) {
   const params = new URLSearchParams({ limit: String(options.limit || 20) });
   if (options.sourceType !== undefined) params.set("source_type", options.sourceType);

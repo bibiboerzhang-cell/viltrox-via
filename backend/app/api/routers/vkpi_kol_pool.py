@@ -23,7 +23,7 @@ import os
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 
 from app.api.dependencies.perms import require_tab
-from app.services.vkpi import eleven_dimensions, kol_competitor_detector, kol_pool, refresh_tier, task_enqueue
+from app.services.vkpi import eleven_dimensions, kol_competitor_detector, kol_intelligence_card, kol_pool, refresh_tier, task_enqueue
 from app.services.vkpi.audit_decorator import audit_action
 from app.services.vkpi.firewall_decorator import firewall_check
 
@@ -302,6 +302,23 @@ def get_pool_item_dimensions11(
     """返回 KOL Pool 项的规则版 11 维画像；只读、不调 provider、不写库。"""
     try:
         return eleven_dimensions.compose_dimensions_11(int(kol_pool_id))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/kol-pool/{kol_pool_id}/intelligence-card")
+def get_pool_item_intelligence_card(
+    kol_pool_id: int,
+    include_product_fit: bool = Query(default=True),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """Return one read-only P2 KOL decision card from existing evidence."""
+    del staff
+    try:
+        return kol_intelligence_card.build_kol_pool_intelligence_card(
+            int(kol_pool_id),
+            include_product_fit=bool(include_product_fit),
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

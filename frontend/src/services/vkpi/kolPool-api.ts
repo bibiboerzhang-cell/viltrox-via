@@ -58,6 +58,23 @@ export interface VkpiKolPoolRefreshState {
   message?: string;
 }
 
+export interface VkpiKolPoolIntelligenceCard {
+  mode: string;
+  generated_at: string;
+  provider_calls: boolean;
+  llm_calls: boolean;
+  write_db: boolean;
+  kol_pool_id: number;
+  item: VkpiKolPoolItem;
+  freshness?: Record<string, unknown>;
+  dimensions11?: Record<string, unknown>;
+  competitors?: Record<string, unknown>;
+  brand_signal?: Record<string, unknown>;
+  product_fit?: Record<string, unknown>;
+  decision_support?: Record<string, unknown>;
+  evidence_index?: Array<Record<string, unknown>>;
+}
+
 export async function listKolPool(
   token: string,
   params: { search?: string; platform?: string; country?: string; limit?: number; dataStatus?: string; sortBy?: string; enrichable?: boolean; refreshIfStale?: boolean } = {},
@@ -93,6 +110,15 @@ export async function refreshKolPoolItem(token: string, kolPoolId: number, force
       method: "POST",
       body: jsonBody({ force }),
     },
+    token,
+  );
+}
+
+export async function getKolPoolIntelligenceCard(token: string, kolPoolId: number, includeProductFit = true) {
+  const query = new URLSearchParams({ include_product_fit: String(includeProductFit) });
+  return apiFetch<VkpiKolPoolIntelligenceCard>(
+    `/api/admin/vkpi/kol-pool/${kolPoolId}/intelligence-card?${query.toString()}`,
+    {},
     token,
   );
 }
