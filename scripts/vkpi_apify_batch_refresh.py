@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -74,11 +75,46 @@ def _safe_int(value: Any) -> int:
         return 0
 
 
+def provider_config_summary(plan: dict[str, Any]) -> dict[str, Any]:
+    platforms = set()
+    if isinstance(plan.get("platforms"), dict):
+        platforms.update(str(platform) for platform in plan["platforms"].keys())
+    for batch in (plan.get("batches") or []):
+        if isinstance(batch, dict) and batch.get("platform"):
+            platforms.add(str(batch["platform"]))
+
+    token_configured = bool(os.environ.get("APIFY_TOKEN", "").strip())
+    platform_rows: dict[str, dict[str, Any]] = {}
+    missing_platforms: list[str] = []
+    for platform in sorted(apify_batch_refresh.normalize_platform(item) for item in platforms if item):
+        env_key = apify_batch_refresh.ACTOR_ENV_KEYS.get(platform, "")
+        actor_env_configured = bool(env_key and os.environ.get(env_key, "").strip())
+        actor_id = apify_batch_refresh.actor_id_for_platform(platform)
+        configured = bool(token_configured and actor_id)
+        if not configured:
+            missing_platforms.append(platform)
+        platform_rows[platform] = {
+            "actor_id": actor_id,
+            "actor_env_key": env_key,
+            "actor_env_configured": actor_env_configured,
+            "actor_source": "env" if actor_env_configured else "default",
+            "configured": configured,
+        }
+    return {
+        "token_configured": token_configured,
+        "platform_count": len(platform_rows),
+        "platforms": platform_rows,
+        "missing_platforms": missing_platforms,
+        "configured": bool(token_configured and not missing_platforms),
+    }
+
+
 def operator_summary(result: dict[str, Any]) -> dict[str, Any]:
     plan = result.get("plan") if isinstance(result.get("plan"), dict) else {}
     execution = result.get("execution") if isinstance(result.get("execution"), dict) else {}
     execution_summary = execution.get("summary") if isinstance(execution.get("summary"), dict) else {}
     provider_gate = result.get("provider_gate") if isinstance(result.get("provider_gate"), dict) else {}
+    provider_config = result.get("provider_config") if isinstance(result.get("provider_config"), dict) else {}
     skipped = [item for item in (plan.get("skipped") or []) if isinstance(item, dict)]
     skipped_reasons: dict[str, int] = {}
     for item in skipped:
@@ -93,6 +129,8 @@ def operator_summary(result: dict[str, Any]) -> dict[str, Any]:
         readiness = "live_target_cap_exceeded"
     elif gate_reason == "no_targets_to_execute":
         readiness = "no_targets_to_execute"
+    elif gate_reason == "provider_not_configured":
+        readiness = "provider_not_configured"
     elif not provider_calls_allowed:
         readiness = "blocked_provider_calls"
     elif failed_batches or retry_count:
@@ -106,6 +144,8 @@ def operator_summary(result: dict[str, Any]) -> dict[str, Any]:
         "provider_calls_requested": bool(provider_gate.get("requested")),
         "provider_calls_allowed": provider_calls_allowed,
         "provider_gate_reason": gate_reason,
+        "provider_configured": bool(provider_config.get("configured")),
+        "missing_provider_platforms": provider_config.get("missing_platforms") if isinstance(provider_config.get("missing_platforms"), list) else [],
         "live_target_cap": _safe_int(provider_gate.get("live_target_cap")),
         "selector_ready": bool(plan.get("selector_ready")),
         "source_total": _safe_int(plan.get("source_total")),
@@ -135,7 +175,7 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
-def provider_gate(args: argparse.Namespace, plan: dict[str, Any]) -> dict[str, Any]:
+def provider_gate(args: argparse.Namespace, plan: dict[str, Any], provider_config: dict[str, Any] | None = None) -> dict[str, Any]:
     requested = bool(args.execute and args.allow_provider_calls)
     target_count = _safe_int(plan.get("total_targets"))
     live_target_cap = max(1, min(100, _safe_int(args.max_live_targets) or 25))
@@ -147,6 +187,9 @@ def provider_gate(args: argparse.Namespace, plan: dict[str, Any]) -> dict[str, A
         allowed = False
     elif target_count > live_target_cap:
         reason = "live_target_cap_exceeded"
+        allowed = False
+    elif not bool((provider_config or {}).get("configured")):
+        reason = "provider_not_configured"
         allowed = False
     else:
         reason = "allowed"
@@ -162,7 +205,8 @@ def provider_gate(args: argparse.Namespace, plan: dict[str, Any]) -> dict[str, A
 
 async def run_from_args(args: argparse.Namespace) -> dict[str, Any]:
     plan = build_plan(args)
-    gate = provider_gate(args, plan)
+    provider_config = provider_config_summary(plan)
+    gate = provider_gate(args, plan, provider_config)
     execution = await apify_batch_refresh.execute_apify_batch_plan(
         plan,
         allow_provider_calls=bool(gate["allowed"]),
@@ -175,6 +219,7 @@ async def run_from_args(args: argparse.Namespace) -> dict[str, Any]:
         "mode": "execute" if args.execute else "plan_with_blocked_executor",
         "provider_calls_allowed": bool(gate["allowed"]),
         "provider_gate": gate,
+        "provider_config": provider_config,
         "plan": _compact_plan(plan) if args.compact else plan,
         "execution": execution,
     }

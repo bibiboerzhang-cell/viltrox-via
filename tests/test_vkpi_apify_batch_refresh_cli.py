@@ -8,6 +8,7 @@ from scripts import vkpi_apify_batch_refresh
 
 def test_cli_run_blocks_provider_calls_by_default(monkeypatch) -> None:
     calls: dict[str, object] = {}
+    monkeypatch.delenv("APIFY_TOKEN", raising=False)
 
     def fake_plan(**kwargs):
         calls["plan"] = kwargs
@@ -51,6 +52,8 @@ def test_cli_run_blocks_provider_calls_by_default(monkeypatch) -> None:
         "provider_calls_requested": False,
         "provider_calls_allowed": False,
         "provider_gate_reason": "provider_calls_not_requested",
+        "provider_configured": False,
+        "missing_provider_platforms": ["instagram"],
         "live_target_cap": 25,
         "selector_ready": True,
         "source_total": 3,
@@ -68,6 +71,7 @@ def test_cli_run_blocks_provider_calls_by_default(monkeypatch) -> None:
 
 def test_cli_requires_both_execute_and_allow_provider_calls(monkeypatch) -> None:
     calls: dict[str, object] = {}
+    monkeypatch.setenv("APIFY_TOKEN", "test-token")
 
     def fake_plan(**_kwargs):
         return {"strategy": "apify_batch_first", "max_concurrent_runs": 2, "total_targets": 1, "batches": []}
@@ -122,6 +126,7 @@ def test_cli_writes_operator_artifact(monkeypatch, tmp_path, capsys) -> None:
 
 def test_cli_blocks_live_execution_above_target_cap(monkeypatch) -> None:
     calls: dict[str, object] = {}
+    monkeypatch.setenv("APIFY_TOKEN", "test-token")
 
     def fake_plan(**_kwargs):
         return {
@@ -153,6 +158,38 @@ def test_cli_blocks_live_execution_above_target_cap(monkeypatch) -> None:
     assert result["operator_summary"]["readiness"] == "live_target_cap_exceeded"
 
 
+def test_cli_blocks_live_execution_without_provider_config(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+    monkeypatch.delenv("APIFY_TOKEN", raising=False)
+
+    def fake_plan(**_kwargs):
+        return {
+            "strategy": "apify_batch_first",
+            "max_concurrent_runs": 2,
+            "selector_ready": True,
+            "source_total": 1,
+            "total_targets": 1,
+            "batch_count": 1,
+            "platforms": {"youtube": 1},
+            "batches": [{"batch_key": "youtube-1", "platform": "youtube", "targets": [{"kol_pool_id": 1}]}],
+        }
+
+    async def fake_execute(_plan, **kwargs):
+        calls["execute"] = kwargs
+        return {"executed": False, "reason": "provider_calls_not_allowed", "summary": {"retry_count": 0, "failed_batches": 0}}
+
+    monkeypatch.setattr(vkpi_apify_batch_refresh.apify_batch_refresh, "qualified_apify_batch_plan", fake_plan)
+    monkeypatch.setattr(vkpi_apify_batch_refresh.apify_batch_refresh, "execute_apify_batch_plan", fake_execute)
+
+    result = asyncio.run(vkpi_apify_batch_refresh.run_from_args(vkpi_apify_batch_refresh.parse_args(["--execute", "--allow-provider-calls"])))
+
+    assert calls["execute"]["allow_provider_calls"] is False
+    assert result["provider_gate"]["reason"] == "provider_not_configured"
+    assert result["provider_config"]["token_configured"] is False
+    assert result["provider_config"]["missing_platforms"] == ["youtube"]
+    assert result["operator_summary"]["readiness"] == "provider_not_configured"
+
+
 def test_cli_blocks_live_execution_when_plan_has_no_targets(monkeypatch) -> None:
     calls: dict[str, object] = {}
 
@@ -179,6 +216,7 @@ def test_operator_summary_requires_review_for_retryable_execution() -> None:
         "mode": "execute",
         "provider_calls_allowed": True,
         "provider_gate": {"requested": True, "allowed": True, "reason": "allowed", "live_target_cap": 25},
+        "provider_config": {"configured": True, "missing_platforms": []},
         "plan": {"selector_ready": True, "source_total": 2, "total_targets": 2, "batch_count": 1, "platforms": {"youtube": 2}, "skipped": []},
         "execution": {"executed": True, "summary": {"retry_count": 1, "failed_batches": 0}},
     }
