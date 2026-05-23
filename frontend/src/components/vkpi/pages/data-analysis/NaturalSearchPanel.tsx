@@ -9,6 +9,17 @@ interface NaturalSearchPanelProps {
   onMessage: (message: string) => void;
 }
 
+interface NaturalSearchHistoryItem {
+  id: string;
+  query: string;
+  resultCount: number;
+  status: string;
+  searchedAt: string;
+}
+
+const NATURAL_SEARCH_HISTORY_KEY = 'vkpi:natural-search-history:v1';
+const MAX_SEARCH_HISTORY = 8;
+
 function compactText(value: unknown, fallback = '-'): string {
   const text = String(value ?? '').trim();
   return text || fallback;
@@ -41,19 +52,83 @@ function initials(value: unknown): string {
   return text.slice(0, 1).toUpperCase();
 }
 
+function loadSearchHistory(): NaturalSearchHistoryItem[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(NATURAL_SEARCH_HISTORY_KEY) || '[]');
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((item) => {
+      const row = asRecord(item);
+      const query = firstText(row.query);
+      if (!query) return null;
+      return {
+        id: firstText(row.id, query.toLowerCase()),
+        query,
+        resultCount: Number(row.resultCount) || 0,
+        status: firstText(row.status, '只读'),
+        searchedAt: firstText(row.searchedAt, new Date().toISOString()),
+      };
+    }).filter(Boolean).slice(0, MAX_SEARCH_HISTORY) as NaturalSearchHistoryItem[];
+  } catch {
+    return [];
+  }
+}
+
+function saveSearchHistory(items: NaturalSearchHistoryItem[]) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(NATURAL_SEARCH_HISTORY_KEY, JSON.stringify(items.slice(0, MAX_SEARCH_HISTORY)));
+  } catch {
+    // Search history is convenience-only; private-mode storage failures should not block search.
+  }
+}
+
+function historyAge(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '';
+  const deltaSeconds = Math.max(0, Math.floor((Date.now() - parsed.getTime()) / 1000));
+  if (deltaSeconds < 60) return '刚刚';
+  const minutes = Math.floor(deltaSeconds / 60);
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  const days = Math.floor(hours / 24);
+  return `${days} 天前`;
+}
+
 export function NaturalSearchPanel({ apiToken, onMessage }: NaturalSearchPanelProps) {
   const [query, setQuery] = useState('godox pricing');
   const [items, setItems] = useState<Row[]>([]);
   const [meta, setMeta] = useState<Row>({});
   const [loading, setLoading] = useState(false);
+  const [searchHistory, setSearchHistory] = useState<NaturalSearchHistoryItem[]>(() => loadSearchHistory());
 
-  const runSearch = async () => {
-    if (!apiToken || !query.trim()) return;
+  const recordSearchHistory = (nextQuery: string, response: Row) => {
+    const trimmed = nextQuery.trim();
+    if (!trimmed) return;
+    const resultCount = Number(response.total) || (Array.isArray(response.items) ? response.items.length : 0);
+    const status = `${Boolean(response.provider_calls) ? 'provider' : '只读'} · ${Boolean(response.write_db) ? 'write' : 'no-write'}`;
+    const nextItem: NaturalSearchHistoryItem = {
+      id: `${trimmed.toLowerCase()}:${Date.now()}`,
+      query: trimmed,
+      resultCount,
+      status,
+      searchedAt: new Date().toISOString(),
+    };
+    const deduped = [nextItem, ...searchHistory.filter((item) => item.query.toLowerCase() !== trimmed.toLowerCase())].slice(0, MAX_SEARCH_HISTORY);
+    setSearchHistory(deduped);
+    saveSearchHistory(deduped);
+  };
+
+  const runSearch = async (nextQuery = query) => {
+    const trimmedQuery = nextQuery.trim();
+    if (!apiToken || !trimmedQuery) return;
     setLoading(true);
     try {
-      const response = await searchVkpi(apiToken, query.trim(), 20);
+      const response = await searchVkpi(apiToken, trimmedQuery, 20);
       setItems(response.items || []);
       setMeta(response as Row);
+      recordSearchHistory(trimmedQuery, response as Row);
     } catch (error) {
       onMessage(error instanceof Error ? error.message : '自然搜索失败');
     } finally {
@@ -64,6 +139,16 @@ export function NaturalSearchPanel({ apiToken, onMessage }: NaturalSearchPanelPr
   const submit = (event: FormEvent) => {
     event.preventDefault();
     void runSearch();
+  };
+
+  const selectHistory = (item: NaturalSearchHistoryItem) => {
+    setQuery(item.query);
+    void runSearch(item.query);
+  };
+
+  const clearHistory = () => {
+    setSearchHistory([]);
+    saveSearchHistory([]);
   };
 
   return (
@@ -82,6 +167,23 @@ export function NaturalSearchPanel({ apiToken, onMessage }: NaturalSearchPanelPr
           {loading ? '搜索中...' : '搜索'}
         </button>
       </form>
+
+      {searchHistory.length ? (
+        <div className="da-natural-search__history" aria-label="自然搜索历史">
+          <div className="da-natural-search__history-head">
+            <strong>搜索历史</strong>
+            <button type="button" onClick={clearHistory}>清空</button>
+          </div>
+          <div className="da-natural-search__history-items">
+            {searchHistory.map((item) => (
+              <button key={item.id} type="button" onClick={() => selectHistory(item)} title={item.query}>
+                <b>{item.query}</b>
+                <span>{item.resultCount} 条 · {item.status} · {historyAge(item.searchedAt)}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       <div className="da-natural-search__meta">
         <span>total <strong>{String(meta.total ?? items.length)}</strong></span>
