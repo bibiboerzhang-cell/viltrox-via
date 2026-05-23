@@ -481,6 +481,134 @@ def _cached_item_video_url(platform: Any, *candidates: Any) -> str:
     return ""
 
 
+def _is_cached_image_url(url: Any) -> bool:
+    text = _text(url)
+    return text.startswith(("/api/vkpi-media/image-cache/", "/api/admin/vkpi/media/image-cache/"))
+
+
+def _is_cached_video_url(url: Any) -> bool:
+    text = _text(url)
+    return text.startswith(("/api/vkpi-media/video-cache/", "/api/admin/vkpi/media/video-cache/"))
+
+
+def _youtube_video_id_from_post(post: dict[str, Any]) -> str:
+    for candidate in (post.get("source_id"), post.get("id")):
+        value = _text(candidate)
+        if len(value) == 11 and all(ch.isalnum() or ch in {"_", "-"} for ch in value):
+            return value
+    url = _text(post.get("url"))
+    if not url:
+        return ""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.hostname and parsed.hostname.endswith("youtu.be"):
+        return parsed.path.strip("/").split("/", 1)[0]
+    query_id = urllib.parse.parse_qs(parsed.query).get("v", [""])[0]
+    if query_id:
+        return query_id
+    parts = [part for part in parsed.path.split("/") if part]
+    if "shorts" in parts:
+        index = parts.index("shorts")
+        if index + 1 < len(parts):
+            return parts[index + 1]
+    return ""
+
+
+def _media_text_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [_text(item) for item in value if _text(item)]
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return []
+        if raw.startswith("["):
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                return [raw]
+            return _media_text_list(parsed)
+        return [raw]
+    return []
+
+
+def _media_contract(platform: Any, post: dict[str, Any]) -> dict[str, Any]:
+    platform_key = _text(platform, post.get("platform")).lower()
+    image_urls = _media_text_list(post.get("image_urls"))
+    media_urls = _media_text_list(post.get("media_urls"))
+    media_url = _text(post.get("media_url"))
+    video_url = _text(post.get("video_url"))
+    media_kind = _text(post.get("media_kind"), post.get("media_type")).lower()
+    original_url = _text(post.get("url"))
+    all_image_candidates = [*image_urls, *media_urls]
+    if media_url:
+        all_image_candidates.append(media_url)
+    all_image_candidates = list(dict.fromkeys(all_image_candidates))
+    cached_image_count = sum(1 for url in all_image_candidates if _is_cached_image_url(url))
+    source_image_count = sum(
+        1
+        for url in all_image_candidates
+        if _text(url).startswith(("http://", "https://")) and not _is_cached_image_url(url)
+    )
+    has_cached_video = _is_cached_video_url(video_url)
+    has_source_video = bool(video_url and video_url.startswith(("http://", "https://")) and not has_cached_video)
+    has_youtube_embed = platform_key == "youtube" and bool(_youtube_video_id_from_post(post))
+    looks_video = bool(video_url or media_kind in {"video", "reel", "reels", "clip", "clips"})
+
+    if has_youtube_embed:
+        status = "embed"
+        label = "平台嵌入"
+        reason = "YouTube 使用 video id 嵌入播放，不需要本地视频文件。"
+    elif has_cached_video:
+        status = "cached"
+        label = "已缓存"
+        reason = "V-KPI 有可渲染的本地视频缓存。"
+    elif looks_video and (has_source_video or original_url):
+        status = "inventory_only"
+        label = "视频待缓存"
+        reason = "识别为视频内容，但当前只保留来源/封面，视频缓存需手动触发。"
+    elif cached_image_count:
+        status = "cached"
+        label = "已缓存"
+        reason = "V-KPI 有可渲染的本地媒体缓存。"
+    elif source_image_count:
+        status = "source_only"
+        label = "来源图片"
+        reason = "当前使用平台来源图片或代理候选；如来源过期请打开原帖核对。"
+    elif original_url:
+        status = "source_limited"
+        label = "打开原帖"
+        reason = "已有原帖链接，但没有可渲染媒体缓存或图片候选。"
+    else:
+        status = "pending"
+        label = "待补媒体"
+        reason = "当前快照没有可渲染媒体候选。"
+
+    quality = "unknown"
+    if status in {"cached", "embed"}:
+        quality = "renderable"
+    elif status == "source_only":
+        quality = "source_dependent"
+    elif status in {"inventory_only", "source_limited"}:
+        quality = "limited"
+
+    return {
+        "media_status": status,
+        "media_status_label": label,
+        "media_status_reason": reason,
+        "media_quality": quality,
+        "media_cached_image_count": cached_image_count,
+        "media_source_image_count": source_image_count,
+        "media_has_cached_video": has_cached_video,
+        "media_has_source_video": has_source_video,
+        "media_has_embed": has_youtube_embed,
+    }
+
+
+def _attach_media_contract(posts: list[dict[str, Any]], platform: Any) -> list[dict[str, Any]]:
+    for post in posts:
+        post.update(_media_contract(platform, post))
+    return posts
+
+
 def _attach_cached_item_videos(posts: list[dict[str, Any]], platform: Any) -> list[dict[str, Any]]:
     platform_key = _text(platform).lower()
     if not platform_key:
@@ -857,6 +985,8 @@ def official_account_matrix(*, staff: dict[str, Any] | None = None, view_as_staf
         raw_payload = _parse_json(row.get("metric_raw_payload_json"))
         package_posts = _posts_from_package(_text(raw_payload.get("package_dir")))
         posts = package_posts[:sample_limit] if package_posts else _extract_posts(row, per_account_limit=limit)
+        posts = _attach_cached_item_videos(posts, platform)
+        posts = _attach_media_contract(posts, platform)
         floor_status = _cumulative_floor_status(raw_payload, sample_count=len(posts))
         account_views = _int(row.get("metric_views"))
         account_posts = _int(row.get("metric_posts"), len(posts))
@@ -1309,6 +1439,7 @@ def channel_posts(
     if not posts:
         posts = _extract_posts(row, per_account_limit=50)
     posts = _attach_cached_item_videos(posts, row.get("platform"))
+    posts = _attach_media_contract(posts, row.get("platform"))
     posts = [post for post in posts if _text(post.get("id"), post.get("url"))]
     posts = _filter_posts_by_window(posts, window)
     posts = _sort_posts(posts, sort, direction)
@@ -1358,6 +1489,7 @@ def _all_posts_for_channel(row: dict[str, Any]) -> tuple[list[dict[str, Any]], s
     if not posts:
         posts = _extract_posts(row, per_account_limit=50)
     posts = _attach_cached_item_videos(posts, row.get("platform"))
+    posts = _attach_media_contract(posts, row.get("platform"))
     posts = [post for post in posts if _text(post.get("id"), post.get("url"))]
     return posts, source, package_dir
 

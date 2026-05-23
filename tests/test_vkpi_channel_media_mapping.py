@@ -41,3 +41,44 @@ def test_media_urls_keeps_cached_fallback_before_uncached_external_high_res(monk
 
     assert urls[0] == "/api/vkpi-media/image-cache/low"
     assert high in urls
+
+
+def test_media_contract_marks_youtube_as_embed():
+    contract = channels._media_contract(
+        "youtube",
+        {"id": "abc12345678", "url": "https://www.youtube.com/watch?v=abc12345678"},
+    )
+
+    assert contract["media_status"] == "embed"
+    assert contract["media_has_embed"] is True
+
+
+def test_media_contract_keeps_video_inventory_distinct_from_cached_poster():
+    contract = channels._media_contract(
+        "instagram",
+        {
+            "id": "reel-1",
+            "url": "https://www.instagram.com/reel/reel-1/",
+            "media_kind": "video",
+            "media_url": "/api/vkpi-media/image-cache/poster",
+            "image_urls": ["/api/vkpi-media/image-cache/poster"],
+        },
+    )
+
+    assert contract["media_status"] == "inventory_only"
+    assert contract["media_cached_image_count"] == 1
+    assert contract["media_has_cached_video"] is False
+
+
+def test_media_contract_distinguishes_cached_and_source_only_images():
+    cached = channels._media_contract(
+        "facebook",
+        {"media_url": "/api/vkpi-media/image-cache/photo", "media_kind": "image"},
+    )
+    source_only = channels._media_contract(
+        "facebook",
+        {"media_url": "https://scontent.xx.fbcdn.net/photo.jpg", "media_kind": "image"},
+    )
+
+    assert cached["media_status"] == "cached"
+    assert source_only["media_status"] == "source_only"

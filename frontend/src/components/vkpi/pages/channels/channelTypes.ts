@@ -9,6 +9,10 @@ export interface ChannelContentPost {
   mediaUrls?: string[];
   mediaType?: string;
   mediaKind?: string;
+  mediaStatus?: string;
+  mediaStatusLabel?: string;
+  mediaStatusReason?: string;
+  mediaQuality?: string;
   postedAt: string;
   views: number;
   likes: number;

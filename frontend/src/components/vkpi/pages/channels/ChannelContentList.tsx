@@ -224,6 +224,28 @@ function taskResultText(task: { result_json?: Record<string, unknown>; result?: 
   return task.error || task.progress_text || '';
 }
 
+function mediaStatusLabel(post: ChannelContentPost) {
+  const status = text(post.mediaStatus);
+  if (post.mediaStatusLabel) return post.mediaStatusLabel;
+  const labels: Record<string, string> = {
+    cached: '已缓存',
+    embed: '平台嵌入',
+    source_only: '来源图片',
+    source_limited: '打开原帖',
+    inventory_only: '视频待缓存',
+    failed: '缓存失败',
+    pending: '待补媒体',
+  };
+  return labels[status] || '待缓存';
+}
+
+function mediaStatusNote(post: ChannelContentPost) {
+  const status = text(post.mediaStatus);
+  if (!status || status === 'cached' || status === 'embed') return '';
+  const reason = text(post.mediaStatusReason);
+  return `媒体：${mediaStatusLabel(post)}${reason ? ` · ${reason}` : ''}`;
+}
+
 function MediaSlot({ post, account, apiToken, compact = false, refreshKey = 0 }: { post: ChannelContentPost; account: OfficialChannelAccount; apiToken?: string; compact?: boolean; refreshKey?: number }) {
   const [active, setActive] = useState(0);
   const [failedImages, setFailedImages] = useState<Set<string>>(() => new Set());
@@ -235,7 +257,7 @@ function MediaSlot({ post, account, apiToken, compact = false, refreshKey = 0 }:
   const resolvedVideoUrl = useCachedVideoUrl(apiToken, account.platform, postVideoId(post), media.videoUrl, refreshKey);
   const hasPlayableVideo = Boolean(media.embedUrl || resolvedVideoUrl);
   if (!media.renderable && !hasPlayableVideo) {
-    return <span className="vkpi-channel-content-card__pending">待缓存</span>;
+    return <span className="vkpi-channel-content-card__pending">{mediaStatusLabel(post)}</span>;
   }
   const imageUrls = media.imageUrls.filter((url) => !failedImages.has(url));
   const current = imageUrls[Math.min(active, Math.max(0, imageUrls.length - 1))];
@@ -263,7 +285,7 @@ function MediaSlot({ post, account, apiToken, compact = false, refreshKey = 0 }:
     );
   }
   if (!current) {
-    return <span className="vkpi-channel-content-card__pending">待缓存</span>;
+    return <span className="vkpi-channel-content-card__pending">{mediaStatusLabel(post)}</span>;
   }
   return (
     <div className="vkpi-channel-content-card__carousel">
@@ -560,6 +582,10 @@ function mapPost(row: Row): ChannelContentPost {
     mediaUrls: textList(row.media_urls || row.mediaUrls),
     mediaType: text(row.media_type || row.mediaType),
     mediaKind: text(row.media_kind || row.mediaKind),
+    mediaStatus: text(row.media_status || row.mediaStatus),
+    mediaStatusLabel: text(row.media_status_label || row.mediaStatusLabel),
+    mediaStatusReason: text(row.media_status_reason || row.mediaStatusReason),
+    mediaQuality: text(row.media_quality || row.mediaQuality),
     postedAt: text(row.posted_at || row.postedAt),
     views: numberValue(row.views),
     likes: numberValue(row.likes),
@@ -780,6 +806,7 @@ export function ChannelContentList({ account, apiToken }: { account?: OfficialCh
             const canCacheVideo = canQueueVideoCache(post, account);
             const cacheKey = videoCacheKey(post, account);
             const cachePending = videoCachePending.has(cacheKey);
+            const mediaNote = mediaStatusNote(post);
             return (
               <article className="vkpi-channel-content-card" key={`${account.id}-${post.id || index}`}>
                 <div
@@ -809,6 +836,7 @@ export function ChannelContentList({ account, apiToken }: { account?: OfficialCh
                     <span>分享 <strong>{formatter.format(post.shares)}</strong></span>
                   </div>
                   {post.viewsUnavailable ? <p className="vkpi-channel-content-card__note">{viewsUnavailableText(post, account)}</p> : null}
+                  {mediaNote ? <p className="vkpi-channel-content-card__note">{mediaNote}</p> : null}
                 </div>
                 <footer className="vkpi-channel-content-card__footer">
                   <small>{date}</small>
