@@ -777,13 +777,14 @@ function ActionHint({ done, label, hint }: { done: boolean; label: string; hint:
 }
 
 function KolPoolIntelligenceSection({ card }: { card: KolPoolIntelligenceCard }) {
+  const [activeEvidence, setActiveEvidence] = useState<Record<string, unknown> | null>(null);
   const support = recordValue(card.decision_support);
   const dimensions = recordValue(card.dimensions11);
   const competitors = recordValue(card.competitors);
   const brandSignal = recordValue(card.brand_signal);
   const memoryCard = recordValue(card.memory_card);
   const productFit = recordValue(card.product_fit);
-  const evidence = Array.isArray(card.evidence_index) ? card.evidence_index : [];
+  const evidence = (Array.isArray(card.evidence_index) ? card.evidence_index : []).map(recordValue).filter((row) => stringifyValue(row.section));
   const readiness = stringifyValue(support.readiness || 'partial');
   const gaps = Array.isArray(support.gaps) ? support.gaps.map(stringifyValue).filter(Boolean) : [];
   const competitorSummary = recordValue(competitors.summary);
@@ -846,13 +847,246 @@ function KolPoolIntelligenceSection({ card }: { card: KolPoolIntelligenceCard })
       {evidence.length ? (
         <div className="vkpi-chip-list" style={{ marginTop: 8 }}>
           {evidence.slice(0, 6).map((row, index) => (
-            <span className="vkpi-chip" key={`${stringifyValue(row.section)}-${index}`}>
-              {stringifyValue(row.section || 'evidence')} · {statusLabel(row.status)}
-            </span>
+            <button className="vkpi-chip" type="button" key={`${stringifyValue(row.section)}-${index}`} onClick={() => setActiveEvidence(row)}>
+              {stringifyValue(row.label || row.section || 'evidence')} · {statusLabel(row.status)} · {formatNumber(row.evidence_count)}
+            </button>
           ))}
         </div>
       ) : null}
+      {activeEvidence && <KolPoolEvidenceDrawer card={card} indexRow={activeEvidence} onClose={() => setActiveEvidence(null)} />}
     </section>
+  );
+}
+
+function KolPoolEvidenceDrawer({
+  card,
+  indexRow,
+  onClose,
+}: {
+  card: KolPoolIntelligenceCard;
+  indexRow: Record<string, unknown>;
+  onClose: () => void;
+}) {
+  const section = stringifyValue(indexRow.section);
+  const payload = intelligenceSectionPayload(card, section);
+  const title = stringifyValue(indexRow.label || evidenceSectionLabel(section));
+  return (
+    <aside className="vkpi-evidence-drawer vkpi-kol-intelligence-evidence-drawer" role="dialog" aria-label={`${title} evidence`}>
+      <header>
+        <div>
+          <span>Intelligence Evidence</span>
+          <h2>{title}</h2>
+          <small>
+            {statusLabel(indexRow.status)} · {formatNumber(indexRow.evidence_count)} 条证据 · confidence {formatConfidenceValue(indexRow.confidence)}
+          </small>
+        </div>
+        <button type="button" onClick={onClose} aria-label="关闭">×</button>
+      </header>
+      <div className="vkpi-evidence-list">
+        <EvidenceArticle
+          title="证据来源"
+          meta={stringifyValue(indexRow.source || payload.source || 'stored evidence')}
+          value={statusLabel(indexRow.status)}
+          detail={`section=${section || 'unknown'} · provider=${card.provider_calls ? 'called' : 'off'} · llm=${card.llm_calls ? 'called' : 'off'} · write=${card.write_db ? 'on' : 'off'}`}
+          badges={[
+            `count ${formatNumber(indexRow.evidence_count)}`,
+            `confidence ${formatConfidenceValue(indexRow.confidence)}`,
+            indexRow.freshness_hours !== undefined ? `freshness ${formatNumber(indexRow.freshness_hours)}h` : '',
+          ].filter(Boolean)}
+        />
+        <KolPoolEvidenceBody section={section} payload={payload} />
+      </div>
+    </aside>
+  );
+}
+
+function KolPoolEvidenceBody({ section, payload }: { section: string; payload: Record<string, unknown> }) {
+  if (!section) return <EvidenceArticle title="无 section" meta="evidence_index" value="unavailable" detail="当前证据索引缺少 section 字段。" />;
+  if (stringifyValue(payload.status).toLowerCase() === 'skipped') {
+    return <EvidenceArticle title="未启用" meta={stringifyValue(payload.reason || 'skipped')} value="skipped" detail="当前卡片没有加载这个 section 的详细证据。" />;
+  }
+  if (section === 'freshness') {
+    return (
+      <>
+        <EvidenceArticle
+          title="刷新层级"
+          meta={stringifyValue(payload.tier_reason || payload.reason || 'vkpi_kol_refresh_tier')}
+          value={stringifyValue(payload.tier || payload.status || 'unknown')}
+          detail={`last_refresh=${stringifyValue(payload.last_refresh_at || '—')} · status=${stringifyValue(payload.last_refresh_status || '—')} · threshold=${stringifyValue(payload.threshold_days || '—')}d`}
+          badges={[`days_old ${formatNumber(payload.days_old)}`, payload.needs_refresh ? 'stale' : 'fresh']}
+        />
+      </>
+    );
+  }
+  if (section === 'dimensions11') {
+    const rows = dimensionsConfidenceRows(payload);
+    return (
+      <>
+        {rows.map((row) => (
+          <EvidenceArticle
+            key={row.key}
+            title={row.label}
+            meta="rule_engine · vkpi_kol_pool + cached posts"
+            value={row.confidenceLabel}
+            detail={row.detail}
+            badges={[row.ready ? 'ready' : 'no evidence']}
+          />
+        ))}
+      </>
+    );
+  }
+  if (section === 'competitors') {
+    const relations = arrayRecords(payload.relations);
+    const summary = recordValue(payload.summary);
+    if (!relations.length) return <EvidenceArticle title="暂无竞品证据" meta={stringifyValue(payload.source || 'competitor detector')} value={statusLabel(payload.status)} detail="没有可展示的竞品关系行。" />;
+    return (
+      <>
+        <EvidenceArticle
+          title="竞品摘要"
+          meta="vkpi_competitor_relation or cached posts"
+          value={stringifyValue(summary.risk_tier || 'unknown')}
+          detail={`brand=${stringifyValue(summary.competitor_brand || '—')} · risk_score=${formatNumber(summary.risk_score)}`}
+          badges={[`relations ${relations.length}`]}
+        />
+        {relations.slice(0, 10).map((row, index) => (
+          <EvidenceArticle
+            key={`competitor-${index}`}
+            title={stringifyValue(row.competitor_brand || row.brand || 'Competitor signal')}
+            meta={stringifyValue(row.collaboration_depth || row.sentiment || 'competitor_signal')}
+            value={stringifyValue(row.risk_tier || 'unknown')}
+            detail={`90d=${formatNumber(row.collaboration_count_90d)} · total=${formatNumber(row.collaboration_count_total)} · risk=${formatNumber(row.risk_score)}`}
+            badges={[stringifyValue(row.platform), stringifyValue(row.handle)].filter(Boolean)}
+          />
+        ))}
+      </>
+    );
+  }
+  if (section === 'brand_signal') {
+    const signals = arrayRecords(payload.signals);
+    if (!signals.length) return <EvidenceArticle title="暂无 Brand Signal" meta={stringifyValue(payload.source || 'cached posts')} value={statusLabel(payload.status)} detail="缓存帖子中暂未检测到 Viltrox / SKU / 竞品信号。" />;
+    return (
+      <>
+        {signals.slice(0, 12).map((row, index) => (
+          <EvidenceArticle
+            key={`brand-signal-${index}`}
+            title={stringifyValue(row.signal_type || row.brand || 'Brand signal')}
+            meta={stringifyValue(row.brand_role || row.platform || 'brand_signal')}
+            value={formatConfidenceValue(row.confidence)}
+            detail={stringifyValue(row.reason || row.title || row.text || row.post_title || '缓存内容命中品牌信号。')}
+            url={stringifyValue(row.source_url || row.post_url || row.url)}
+            badges={[stringifyValue(row.brand), stringifyValue(row.matched_text)].filter(Boolean)}
+          />
+        ))}
+      </>
+    );
+  }
+  if (section === 'memory_card') {
+    const history = recordValue(payload.history_match);
+    const excel = recordValue(payload.excel_record);
+    const competitorMemory = recordValue(payload.competitor_memory);
+    const posts = arrayRecords(payload.recent_posts);
+    const cooperations = arrayRecords(payload.recent_cooperations);
+    return (
+      <>
+        <EvidenceArticle
+          title="历史匹配"
+          meta={stringifyValue(payload.source_type || excel.source_type || 'excel_legacy')}
+          value={history.matched ? 'matched' : statusLabel(history.status)}
+          detail={`match=${stringifyValue(history.match_type || '—')} · cooperation=${formatNumber(history.cooperation_count)} · evidence=${formatNumber(history.evidence_count)}`}
+          badges={[stringifyValue(payload.source_ref || excel.source_ref), payload.linked_main_kol_id ? `main #${payload.linked_main_kol_id}` : ''].filter(Boolean)}
+        />
+        <EvidenceArticle
+          title="Excel 记录"
+          meta={stringifyValue(excel.source_ref || 'vkpi_kol_pool')}
+          value={stringifyValue(excel.source_type || 'legacy')}
+          detail={`产品 ${parseMaybeList(excel.recommended_products).slice(0, 3).join(' / ') || '—'} · 关注点 ${parseMaybeList(excel.potential_concerns).slice(0, 2).join(' / ') || '—'}`}
+          badges={parseMaybeList(excel.brand_collaborations).slice(0, 4)}
+        />
+        <EvidenceArticle
+          title="竞品记忆"
+          meta="competitor_signal"
+          value={stringifyValue(competitorMemory.risk_tier || 'opportunity')}
+          detail={`brand=${stringifyValue(competitorMemory.strongest_brand || '—')} · relations=${formatNumber(competitorMemory.relation_count)} · risk=${formatNumber(competitorMemory.risk_score)}`}
+        />
+        {cooperations.slice(0, 5).map((row, index) => (
+          <EvidenceArticle
+            key={`cooperation-${index}`}
+            title={stringifyValue(row.project || row.product || '历史合作')}
+            meta={stringifyValue(row.status || row.cooperation_date || 'cooperation_history')}
+            value={stringifyValue(row.product || row.project || 'record')}
+            detail={stringifyValue(row.content_link || row.note || row.cooperation_date || 'legacy cooperation row')}
+            url={stringifyValue(row.content_link)}
+          />
+        ))}
+        {posts.slice(0, 6).map((row, index) => (
+          <EvidenceArticle
+            key={`memory-post-${index}`}
+            title={stringifyValue(row.title || row.id || '最近内容')}
+            meta={stringifyValue(row.published_at || row.source_kind || 'platform_cache')}
+            value={formatNumber(row.views)}
+            detail={`likes=${formatNumber(row.likes)} · comments=${formatNumber(row.comments)}`}
+            url={stringifyValue(row.post_url || row.url)}
+          />
+        ))}
+      </>
+    );
+  }
+  if (section === 'product_fit') {
+    const rows = arrayRecords(payload.top);
+    if (!rows.length) return <EvidenceArticle title="暂无 Product Fit 证据" meta={stringifyValue(payload.method || payload.reason || 'product_fit')} value={statusLabel(payload.status)} detail="当前没有 SKU 或产品适配行；不能把空结果当作产品不适配。" />;
+    return (
+      <>
+        {rows.slice(0, 10).map((row, index) => {
+          const sku = stringifyValue(row.sku || row.product_sku || row.product_key || row.family_key || row.product_family || row.product_name || row.name || `product-${index + 1}`);
+          const official = Boolean(row.sku || row.product_sku || row.catalog_product_id || row.mount || row.specs || row.price_usd);
+          return (
+            <EvidenceArticle
+              key={`product-fit-${index}`}
+              title={sku}
+              meta={official ? 'official_catalog / rule_engine' : 'product-family discovery'}
+              value={formatScoreValue(row.score || row.fit_score || row.total_score)}
+              detail={stringifyValue(row.reason || row.match_reason || row.explanation || 'Product Fit rule evidence')}
+              url={stringifyValue(row.source_url || row.product_url || row.url)}
+              badges={[official ? 'official evidence' : 'low confidence discovery', stringifyValue(row.mount), stringifyValue(row.price_usd)].filter(Boolean)}
+            />
+          );
+        })}
+      </>
+    );
+  }
+  return <EvidenceArticle title={evidenceSectionLabel(section)} meta="raw section payload" value={statusLabel(payload.status)} detail={JSON.stringify(payload).slice(0, 600)} />;
+}
+
+function EvidenceArticle({
+  title,
+  meta,
+  value,
+  detail,
+  url,
+  badges = [],
+}: {
+  title: string;
+  meta: string;
+  value: string;
+  detail: string;
+  url?: string;
+  badges?: string[];
+}) {
+  return (
+    <article>
+      <div>
+        <div>
+          <strong>{title || '证据行'}</strong>
+          <span>{meta || 'stored evidence'}</span>
+        </div>
+        <b>{value || '—'}</b>
+      </div>
+      <p>{detail || '无更多描述。'}</p>
+      {badges.length ? (
+        <em>{badges.map((badge) => badge.trim()).filter(Boolean).slice(0, 6).join(' · ')}</em>
+      ) : null}
+      {url ? <a className="vkpi-evidence-link" href={url} target="_blank" rel="noreferrer">Open original</a> : null}
+    </article>
   );
 }
 
@@ -1140,6 +1374,40 @@ function memoryCardLabel(memoryCard: Record<string, unknown>): string {
   if (sourceType && sourceRef) return `${sourceType} · ${sourceRef}`;
   if (sourceType) return sourceType;
   return statusLabel(memoryCard.status);
+}
+
+function formatConfidenceValue(value: unknown): string {
+  const next = confidenceValue(value);
+  if (next === null) return '—';
+  return `${Math.round(next * 100)}%`;
+}
+
+function arrayRecords(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return [];
+  return value.map(recordValue).filter((row) => Object.keys(row).length > 0);
+}
+
+function intelligenceSectionPayload(card: KolPoolIntelligenceCard, section: string): Record<string, unknown> {
+  const key = section.toLowerCase();
+  if (key === 'freshness') return recordValue(card.freshness);
+  if (key === 'dimensions11') return recordValue(card.dimensions11);
+  if (key === 'competitors') return recordValue(card.competitors);
+  if (key === 'brand_signal') return recordValue(card.brand_signal);
+  if (key === 'memory_card') return recordValue(card.memory_card);
+  if (key === 'product_fit') return recordValue(card.product_fit);
+  return {};
+}
+
+function evidenceSectionLabel(section: string): string {
+  const labels: Record<string, string> = {
+    freshness: 'Freshness',
+    dimensions11: '11D Confidence',
+    competitors: 'Competitors',
+    brand_signal: 'Brand Signal',
+    memory_card: 'Memory Card',
+    product_fit: 'Product Fit',
+  };
+  return labels[section] || section || 'Evidence';
 }
 
 function statusClass(value: unknown): string {

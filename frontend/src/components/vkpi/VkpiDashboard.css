@@ -2724,6 +2724,7 @@
 .vkpi-settings-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .vkpi-settings-list span { border: 1px solid var(--vkpi-border); border-radius: 12px; background: #fff; padding: 12px; color: #344054; font-size: 13px; font-weight: 750; }
 .vkpi-evidence-drawer { position: fixed; top: 0; right: 0; z-index: 40; width: min(520px, 96vw); height: 100vh; background: #fff; border-left: 1px solid var(--vkpi-border); box-shadow: -24px 0 80px rgba(16, 24, 40, 0.18); padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+.vkpi-kol-intelligence-evidence-drawer { z-index: 70; width: min(560px, 96vw); }
 .vkpi-evidence-drawer header { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--vkpi-border); padding-bottom: 14px; }
 .vkpi-evidence-drawer header span { color: var(--vkpi-blue); font-size: 11px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.08em; }
 .vkpi-evidence-drawer header h2 { margin: 4px 0 0; color: var(--vkpi-text); font-size: 22px; }
