@@ -17,8 +17,10 @@ class _Rows:
 class _Conn:
     def __init__(self, rows: list[dict[str, object]]) -> None:
         self.rows = rows
+        self.queries: list[str] = []
 
-    def execute(self, *_args: object, **_kwargs: object) -> _Rows:
+    def execute(self, sql: str, *_args: object, **_kwargs: object) -> _Rows:
+        self.queries.append(sql)
         return _Rows(self.rows)
 
 
@@ -50,7 +52,8 @@ def test_daily_sync_status_exposes_blocking_run_and_failure_rate(monkeypatch) ->
         "ack_required": True,
     }
 
-    monkeypatch.setattr(sync_status, "get_conn", lambda: _Conn([row]))
+    conn = _Conn([row])
+    monkeypatch.setattr(sync_status, "get_conn", lambda: conn)
     monkeypatch.setattr(sync_status.daily_sync, "_blocking_sync_run", lambda _scope: blocking)
     monkeypatch.setattr(sync_status.daily_sync, "_latest_sync_ack", lambda _scope: None)
 
@@ -62,6 +65,7 @@ def test_daily_sync_status_exposes_blocking_run_and_failure_rate(monkeypatch) ->
     assert result["latest_summary"]["status"] == "failed"
     assert result["latest_summary"]["health"]["failure_rate"] == 0.2
     assert result["latest_summary"]["health"]["blocked_next_run"] is True
+    assert "ORDER BY started_at DESC NULLS LAST, created_at DESC NULLS LAST" in conn.queries[0]
 
 
 def test_summary_health_marks_daily_sync_blocker_as_critical(monkeypatch) -> None:

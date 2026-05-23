@@ -329,7 +329,7 @@ def _daily_sync_status() -> dict[str, Any]:
                    error_message, summary_json
             FROM vkpi_sync_runs
             WHERE job_name = ?
-            ORDER BY started_at DESC
+            ORDER BY started_at DESC NULLS LAST, created_at DESC NULLS LAST
             LIMIT 10
             """,
             ("daily_incremental_sync",),

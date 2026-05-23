@@ -217,6 +217,27 @@ def test_daily_sync_guard_blocks_after_unacked_failed_run(monkeypatch: pytest.Mo
     assert exc_info.value.summary["ack_required"] is True
 
 
+def test_blocking_sync_run_uses_schema_safe_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Rows:
+        def fetchall(self) -> list[dict[str, object]]:
+            return []
+
+    class Conn:
+        def __init__(self) -> None:
+            self.queries: list[str] = []
+
+        def execute(self, sql: str, *_args: object, **_kwargs: object) -> Rows:
+            self.queries.append(sql)
+            return Rows()
+
+    conn = Conn()
+    monkeypatch.setattr(daily_sync, "_latest_sync_ack", lambda _scope: None)
+    monkeypatch.setattr(daily_sync, "get_conn", lambda: conn)
+
+    assert daily_sync._blocking_sync_run("daily_incremental_sync") is None
+    assert "ORDER BY started_at DESC NULLS LAST, created_at DESC NULLS LAST" in conn.queries[0]
+
+
 def test_daily_sync_guard_ignores_dry_run(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(daily_sync, "_blocking_sync_run", lambda _scope: {"run_id": "bad"})
 

@@ -358,7 +358,7 @@ def _blocking_sync_run(scope: str = "daily_incremental_sync") -> dict[str, Any] 
                    error_type, error_class, error_message, summary_json
             FROM vkpi_sync_runs
             WHERE job_name=?
-            ORDER BY started_at DESC
+            ORDER BY started_at DESC NULLS LAST, created_at DESC NULLS LAST
             LIMIT 30
             """,
             (scope,),
