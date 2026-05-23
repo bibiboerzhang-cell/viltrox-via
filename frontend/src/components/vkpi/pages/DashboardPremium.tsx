@@ -11,6 +11,7 @@ import { apiFetch } from '../../../services/http';
 import { listKolPool, type VkpiKolPoolItem } from '../../../services/vkpi/kolPool-api';
 import { getKolPoolCompetitorDashboard, getKolPoolSummary, getOfficialChannelMatrix, listBrandSignals } from '../../../services/vkpi.ui-api';
 import type { VkpiPageKey } from '../vkpiTypes';
+import { RealWorldMap, type CountryMapPoint } from '../glass-future/RealWorldMap';
 import '../glass-future/tokens.css';
 import '../glass-future/background.css';
 import '../glass-future/components.css';
@@ -84,6 +85,8 @@ interface PremiumRegion {
   isMock: boolean;
   countryCode?: string;
   kolCount?: number;
+  lat?: number;
+  lng?: number;
   mockLabel?: string;
 }
 
@@ -111,6 +114,7 @@ interface PremiumSnapshot {
   trendRows: Row[];
   productRows: Row[];
   kolSummary: Row;
+  kolDistribution: Row;
   officialMatrix: Row;
   competitorDashboard: Row;
   brandSignals: Row[];
@@ -128,44 +132,12 @@ const mockKpis: PremiumKpi[] = [
 
 const regionColors = ['#1b6cff', '#6aa6ff', '#18d5ff', '#8b5cf6', '#cfe0ff'];
 
-const worldMapLandPaths = [
-  'M60 70 L91 49 L139 38 L181 42 L217 58 L246 83 L234 105 L207 113 L182 100 L162 118 L132 111 L111 91 L82 90 Z',
-  'M224 127 L250 145 L260 174 L247 211 L225 228 L205 205 L192 174 L200 145 Z',
-  'M302 71 L325 61 L352 70 L346 91 L321 91 L305 82 Z',
-  'M316 103 L354 100 L382 132 L370 181 L339 213 L308 177 L300 132 Z',
-  'M360 76 L417 57 L491 69 L548 101 L528 132 L473 130 L441 151 L397 126 L357 113 Z',
-  'M477 171 L524 165 L552 188 L533 209 L484 202 Z',
-  'M257 78 L279 75 L285 91 L268 100 L248 92 Z',
-  'M510 126 L526 132 L519 148 L499 145 Z',
-];
-
-const countryCoordinates: Record<string, { lon: number; lat: number }> = {
-  US: { lon: -98.5, lat: 39.8 },
-  CA: { lon: -106.3, lat: 56.1 },
-  MX: { lon: -102.5, lat: 23.6 },
-  BR: { lon: -51.9, lat: -14.2 },
-  AR: { lon: -63.6, lat: -38.4 },
-  GB: { lon: -3.4, lat: 55.4 },
-  UK: { lon: -3.4, lat: 55.4 },
-  DE: { lon: 10.5, lat: 51.2 },
-  FR: { lon: 2.2, lat: 46.2 },
-  ES: { lon: -3.7, lat: 40.4 },
-  IT: { lon: 12.6, lat: 42.9 },
-  NL: { lon: 5.3, lat: 52.1 },
-  CN: { lon: 104.2, lat: 35.9 },
-  JP: { lon: 138.3, lat: 36.2 },
-  KR: { lon: 127.8, lat: 35.9 },
-  IN: { lon: 78.9, lat: 20.6 },
-  ID: { lon: 113.9, lat: -0.8 },
-  AU: { lon: 133.8, lat: -25.3 },
-};
-
 const regions: PremiumRegion[] = [
-  { label: '北美', value: '67.2%', color: '#1b6cff', isMock: true, mockLabel: '示例地区' },
-  { label: '欧洲', value: '21.8%', color: '#6aa6ff', isMock: true, mockLabel: '示例地区' },
-  { label: '亚太', value: '8.6%', color: '#18d5ff', isMock: true, mockLabel: '示例地区' },
-  { label: '南美', value: '1.6%', color: '#8b5cf6', isMock: true, mockLabel: '示例地区' },
-  { label: '其他', value: '0.8%', color: '#cfe0ff', isMock: true, mockLabel: '示例地区' },
+  { label: 'United States', value: '34.4%', color: '#1b6cff', isMock: true, countryCode: 'US', kolCount: 336, lat: 39.8, lng: -98.5, mockLabel: '示例地区' },
+  { label: 'United Kingdom', value: '13.0%', color: '#6aa6ff', isMock: true, countryCode: 'GB', kolCount: 127, lat: 54.0, lng: -2.0, mockLabel: '示例地区' },
+  { label: 'Canada', value: '7.3%', color: '#18d5ff', isMock: true, countryCode: 'CA', kolCount: 71, lat: 56.1, lng: -106.3, mockLabel: '示例地区' },
+  { label: 'Germany', value: '4.4%', color: '#8b5cf6', isMock: true, countryCode: 'DE', kolCount: 43, lat: 51.0, lng: 9.0, mockLabel: '示例地区' },
+  { label: 'Italy', value: '4.1%', color: '#cfe0ff', isMock: true, countryCode: 'IT', kolCount: 40, lat: 42.8, lng: 12.8, mockLabel: '示例地区' },
 ];
 
 const mockProductRows: PremiumProductRow[] = [
@@ -230,6 +202,7 @@ const EMPTY_PREMIUM_SNAPSHOT: PremiumSnapshot = {
   trendRows: [],
   productRows: [],
   kolSummary: {},
+  kolDistribution: {},
   officialMatrix: {},
   competitorDashboard: {},
   brandSignals: [],
@@ -434,21 +407,23 @@ function buildAlerts(signals: Row[]): PremiumAlert[] {
   });
 }
 
-function buildPremiumRegions(kolSummary: Row, allowMockFallback: boolean): PremiumRegion[] {
-  const distribution = rowsFrom(kolSummary.country_distribution);
-  const total = distribution.reduce((sum, row) => sum + numberValue(row.kol_count), 0);
+function buildPremiumRegions(kolSummary: Row, kolDistribution: Row, allowMockFallback: boolean): PremiumRegion[] {
+  const distribution = rowsFrom(kolDistribution.countries).length ? rowsFrom(kolDistribution.countries) : rowsFrom(kolSummary.country_distribution);
+  const total = distribution.reduce((sum, row) => sum + numberValue(row.count || row.kol_count), 0);
   const regionRows = distribution
     .map((row, index): PremiumRegion => {
-      const count = numberValue(row.kol_count);
+      const count = numberValue(row.count || row.kol_count);
       const share = numberValue(row.share) || (total ? (count / total) * 100 : 0);
-      const countryCode = String(row.country_code || '').trim();
+      const countryCode = String(row.code || row.country_code || '').trim();
       return {
-        label: String(row.country_name || countryCode || `国家 ${index + 1}`),
+        label: String(row.name || row.country_name || countryCode || `国家 ${index + 1}`),
         value: share ? `${share.toFixed(1)}%` : compact(count),
         color: regionColors[index % regionColors.length],
         isMock: false,
         countryCode,
         kolCount: count,
+        lat: numberValue(row.lat) || undefined,
+        lng: numberValue(row.lng) || undefined,
       };
     })
     .filter((region) => Boolean(region.countryCode) && (region.kolCount || 0) > 0)
@@ -457,22 +432,6 @@ function buildPremiumRegions(kolSummary: Row, allowMockFallback: boolean): Premi
   return allowMockFallback
     ? regions
     : [{ label: '暂无国家分布', value: '--', color: '#cfe0ff', isMock: true, mockLabel: '待 KOL 国家数据' }];
-}
-
-function projectCountryPoint(countryCode: string, index: number) {
-  const upperCode = countryCode.trim().toUpperCase();
-  const fallback = [
-    { lon: -98, lat: 40 },
-    { lon: -3, lat: 54 },
-    { lon: 105, lat: 34 },
-    { lon: 10, lat: 51 },
-    { lon: 134, lat: -25 },
-  ][index % 5];
-  const coord = countryCoordinates[upperCode] || fallback;
-  return {
-    x: Math.round(((coord.lon + 180) / 360) * 620),
-    y: Math.round(((90 - coord.lat) / 180) * 240),
-  };
 }
 
 function buildPremiumPlatforms(kolSummary: Row, officialMatrix: Row, allowMockFallback: boolean): PremiumPlatform[] {
@@ -625,11 +584,12 @@ function engagementLabel(row: Row): string {
 
 async function fetchPremiumSnapshot(apiToken: string, windowDays: number): Promise<PremiumSnapshot> {
   const failedSections: string[] = [];
-  const [dashboardResult, trendResult, productResult, kolSummaryResult, officialMatrixResult, competitorResult, brandSignalsResult] = await Promise.allSettled([
+  const [dashboardResult, trendResult, productResult, kolSummaryResult, kolDistributionResult, officialMatrixResult, competitorResult, brandSignalsResult] = await Promise.allSettled([
     apiFetch<Row>(`/api/admin/vkpi/dashboard?window_days=${windowDays}`, {}, apiToken),
     apiFetch<{ rows?: Row[] }>(`/api/admin/vkpi/dashboard/revenue-trend?window_days=7`, {}, apiToken),
     apiFetch<{ rows?: Row[] }>(`/api/admin/vkpi/dashboard/product-performance?window_days=${windowDays}&limit=20`, {}, apiToken),
     getKolPoolSummary(apiToken),
+    apiFetch<Row>('/api/admin/vkpi/dashboard/kol-distribution?limit=200', {}, apiToken),
     getOfficialChannelMatrix(apiToken, { limit: 20 }),
     getKolPoolCompetitorDashboard(apiToken),
     listBrandSignals(apiToken, { status: 'new', limit: 10 }),
@@ -638,6 +598,7 @@ async function fetchPremiumSnapshot(apiToken: string, windowDays: number): Promi
   const trend = settledValue(trendResult, { rows: [] }, failedSections, 'revenue-trend');
   const products = settledValue(productResult, { rows: [] }, failedSections, 'product-performance');
   const kolSummary = settledValue(kolSummaryResult, {}, failedSections, 'kol-pool-summary');
+  const kolDistribution = settledValue(kolDistributionResult, {}, failedSections, 'kol-distribution');
   const officialMatrix = settledValue(officialMatrixResult, {}, failedSections, 'official-channel-matrix');
   const competitorDashboard = settledValue(competitorResult, {}, failedSections, 'competitors-dashboard');
   const brandSignals = settledValue(brandSignalsResult, { signals: [] }, failedSections, 'brand-signals');
@@ -648,6 +609,7 @@ async function fetchPremiumSnapshot(apiToken: string, windowDays: number): Promi
     trendRows: rowsFrom(trend.rows),
     productRows: rowsFrom(products.rows),
     kolSummary,
+    kolDistribution,
     officialMatrix,
     competitorDashboard,
     brandSignals: rowsFrom(brandSignals.signals),
@@ -795,7 +757,21 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
   const premiumProductRows = useMemo(() => buildProductRows(snapshot.productRows, allowMockFallback), [allowMockFallback, snapshot.productRows]);
   const premiumAlerts = useMemo(() => buildAlerts(snapshot.brandSignals), [snapshot.brandSignals]);
   const premiumTrend = useMemo(() => trendChart(snapshot.trendRows, allowMockFallback), [allowMockFallback, snapshot.trendRows]);
-  const premiumRegions = useMemo(() => buildPremiumRegions(snapshot.kolSummary, allowMockFallback), [allowMockFallback, snapshot.kolSummary]);
+  const premiumRegions = useMemo(() => buildPremiumRegions(snapshot.kolSummary, snapshot.kolDistribution, allowMockFallback), [allowMockFallback, snapshot.kolDistribution, snapshot.kolSummary]);
+  const premiumMapPoints = useMemo<CountryMapPoint[]>(
+    () =>
+      premiumRegions
+        .filter((region) => Boolean(region.countryCode) && typeof region.lat === 'number' && typeof region.lng === 'number')
+        .map((region) => ({
+          code: String(region.countryCode || '').toUpperCase(),
+          name: region.label,
+          count: Number(region.kolCount || 0),
+          lat: Number(region.lat),
+          lng: Number(region.lng),
+          color: region.color,
+        })),
+    [premiumRegions],
+  );
   const premiumPlatforms = useMemo(() => buildPremiumPlatforms(snapshot.kolSummary, snapshot.officialMatrix, allowMockFallback), [allowMockFallback, snapshot.kolSummary, snapshot.officialMatrix]);
   const contentRows = useMemo(() => latestContentRows(snapshot.officialMatrix), [snapshot.officialMatrix]);
   const official = useMemo(() => officialTotals(snapshot.officialMatrix), [snapshot.officialMatrix]);
@@ -904,31 +880,10 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
                   <div className="panel-head"><h3>全球 KOL 分布</h3><button className="link" type="button" onClick={() => goToWorkspacePage('dataAnalysis', 'Country Map')}>Country Map</button></div>
                   <div className="holo-map">
                     <div className="zoom"><span>+</span><span>−</span></div>
-                    <svg viewBox="0 0 620 240" preserveAspectRatio="xMidYMid meet" aria-label="KOL 国家分布地图">
-                      <defs>
-                        <linearGradient id="land" x1="0" x2="1"><stop offset="0" stopColor="#bfd7ff" /><stop offset="1" stopColor="#e8f1ff" /></linearGradient>
-                        <filter id="point-glow"><feGaussianBlur stdDeviation="4" result="blur" /><feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge></filter>
-                      </defs>
-                      <g className="world-map-grid">
-                        {[70, 150, 230, 310, 390, 470, 550].map((x) => <line key={`x-${x}`} x1={x} y1="24" x2={x} y2="220" />)}
-                        {[54, 92, 130, 168, 206].map((y) => <line key={`y-${y}`} x1="34" y1={y} x2="586" y2={y} />)}
-                      </g>
-                      <g className="world-map-land">
-                        {worldMapLandPaths.map((path, index) => <path d={path} key={index} />)}
-                      </g>
-                      {premiumRegions.slice(0, 5).map((region, index) => {
-                        const point = projectCountryPoint(region.countryCode || '', index);
-                        const label = (region.countryCode || region.label.slice(0, 2)).toUpperCase();
-                        const radius = Math.max(5, Math.min(13, 5 + Math.sqrt(region.kolCount || 1) / 2.6));
-                        return (
-                          <g className="map-point" key={region.label} role="button" tabIndex={0} onClick={() => openCountryDrawer(region)} onKeyDown={(event) => { if (event.key === 'Enter') openCountryDrawer(region); }}>
-                            <circle cx={point.x} cy={point.y} r={radius * 3.1} fill={region.color} opacity=".13" />
-                            <circle cx={point.x} cy={point.y} r={radius} fill={region.color} filter="url(#point-glow)" />
-                            <text x={point.x + 12} y={point.y + 4} fill="#344054" fontSize="11" fontWeight="800">{label}</text>
-                          </g>
-                        );
-                      })}
-                    </svg>
+                    <RealWorldMap points={premiumMapPoints} onCountryClick={(point) => {
+                      const region = premiumRegions.find((item) => String(item.countryCode || '').toUpperCase() === point.code);
+                      if (region) openCountryDrawer(region);
+                    }} />
                   </div>
                   <div className="region-list">
                     {premiumRegions.map((region) => <div className="region" style={glassVarStyle({ '--c': region.color })} key={region.label} role="button" tabIndex={0} title={region.mockLabel || `${region.kolCount || 0} KOL`} onClick={() => openCountryDrawer(region)} onKeyDown={(event) => { if (event.key === 'Enter') openCountryDrawer(region); }}><span><i></i>{region.label}{region.isMock ? <em>{badgeText(region.mockLabel)}</em> : null}</span><b>{region.value}</b></div>)}
