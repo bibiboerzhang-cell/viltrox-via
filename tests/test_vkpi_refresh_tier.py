@@ -73,6 +73,60 @@ def test_qualified_refresh_rows_do_not_fallback_without_tier_table(monkeypatch) 
     assert counts["source_total"] == 0
 
 
+def test_qualified_refresh_rows_default_to_never_refreshed(monkeypatch) -> None:
+    class Cursor:
+        def fetchall(self) -> list[dict[str, Any]]:
+            return []
+
+    class Conn:
+        def __init__(self) -> None:
+            self.sql = ""
+            self.params: tuple[object, ...] = ()
+
+        def execute(self, sql: str, params: tuple[object, ...]):
+            self.sql = sql
+            self.params = params
+            return Cursor()
+
+    conn = Conn()
+    monkeypatch.setattr(refresh_tier, "_table_exists", lambda table: table == "vkpi_kol_refresh_tier")
+    monkeypatch.setattr(refresh_tier, "get_conn", lambda: conn)
+
+    rows = refresh_tier.qualified_refresh_rows(limit=25, tiers={"hot"})
+
+    assert rows == []
+    assert "rt.last_refresh_at IS NULL" in conn.sql
+    assert "COALESCE(rt.last_refresh_at" in conn.sql  # ORDER BY only; filter must stay tier-owned.
+    assert "last_refresh_at, kp.last_seen_at" not in conn.sql.split("WHERE", 1)[1].split("ORDER BY", 1)[0]
+
+
+def test_qualified_refresh_rows_stale_cutoff_includes_never_refreshed(monkeypatch) -> None:
+    class Cursor:
+        def fetchall(self) -> list[dict[str, Any]]:
+            return []
+
+    class Conn:
+        def __init__(self) -> None:
+            self.sql = ""
+            self.params: tuple[object, ...] = ()
+
+        def execute(self, sql: str, params: tuple[object, ...]):
+            self.sql = sql
+            self.params = params
+            return Cursor()
+
+    conn = Conn()
+    cutoff = "2026-05-23T00:00:00Z"
+    monkeypatch.setattr(refresh_tier, "_table_exists", lambda table: table == "vkpi_kol_refresh_tier")
+    monkeypatch.setattr(refresh_tier, "get_conn", lambda: conn)
+
+    rows = refresh_tier.qualified_refresh_rows(limit=25, tiers={"hot"}, stale_before=cutoff)
+
+    assert rows == []
+    assert "(rt.last_refresh_at IS NULL OR rt.last_refresh_at < ?)" in conn.sql
+    assert cutoff in conn.params
+
+
 def test_mark_kol_refreshed_commits(monkeypatch) -> None:
     class Conn:
         def __init__(self) -> None:

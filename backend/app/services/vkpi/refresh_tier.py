@@ -487,8 +487,10 @@ def qualified_refresh_rows(
         where.append("kp.platform IN (" + ",".join(["?"] * len(platforms)) + ")")
         params.extend(sorted(platforms))
     if stale_before:
-        where.append("COALESCE(rt.last_refresh_at, kp.last_seen_at, kp.updated_at, kp.created_at) < ?")
+        where.append("(rt.last_refresh_at IS NULL OR rt.last_refresh_at < ?)")
         params.append(stale_before)
+    else:
+        where.append("rt.last_refresh_at IS NULL")
     rows = get_conn().execute(
         f"""
         SELECT kp.id, kp.platform, kp.handle, kp.display_name, kp.followers, kp.posts_count,
