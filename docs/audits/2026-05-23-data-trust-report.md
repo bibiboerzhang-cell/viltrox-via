@@ -69,6 +69,7 @@ Acceptance:
 
 Artifacts:
 
+- `docs/vkpi/adr/2026-05-23-media-cache-policy.md`
 - `docs/audits/2026-05-23-official-media-source-audit.md`
 - `runtime/qa/20260523-p1-baseline/official-media-source-audit.json`
 - `runtime/qa/20260523-p1-baseline/official-media-image-dimensions.json`
@@ -83,6 +84,8 @@ Acceptance:
 - 50 YouTube posts have embed candidates.
 - Image dimension sample found 12/30 cached images under 480x270 in at least one dimension, so remaining blur is mostly source/cache-size related rather than CSS cropping.
 - Code now prefers renderable high-resolution official media while keeping cached candidates first when the external high-res candidate is not yet cacheable.
+- Media cache policy now separates official-account prewarm, future qualified KOL lazy cache, and legacy cold KOL no-daily-prewarm behavior.
+- Video cache policy remains explicit/on-demand; YouTube uses embeds, and poster images must not be presented as playable video.
 
 ## Comment Contract
 
@@ -101,6 +104,19 @@ Acceptance:
   - `comment_contract`
 - Live sample: `declared_count=1`, `cached_count=0`, `comment_cap=50`, `coverage_status=not_cached`.
 - UI now displays cached bodies, platform-declared count, and cap separately. It no longer implies cached comment bodies are complete.
+
+## Canonical Post Identity
+
+Artifacts:
+
+- `docs/vkpi/adr/2026-05-23-canonical-post-identity.md`
+
+Acceptance:
+
+- Identity rules are frozen for `youtube`, `instagram`, `tiktok`, `facebook`, `reddit`, and `x`.
+- The ADR defines `platform`, `canonical_post_uid`, `provider_post_id`, and `canonical_url`.
+- It explicitly connects current metrics `post_uid`, comments `external_post_id`, media URL matching, and frontend post actions to the same platform-scoped identity contract.
+- It does not run a migration or rewrite crawlers; implementation is deferred to a shared helper after timer and P1 gates remain stable.
 
 ## Silent Exceptions
 
