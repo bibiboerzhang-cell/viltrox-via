@@ -160,8 +160,10 @@ export function useProductRecommendationActions({
     try {
       const response = await runProductRecommendations(apiToken, { launch_id: Number(selectedLaunchId), platform, limit: 100 });
       const rows = (response.recommendations || []) as Row[];
+      const competitorFilter = (response.competitor_filter || {}) as Row;
+      const feedbackPolicy = (response.feedback_policy || {}) as Row;
       onRecommendationsChange(rows);
-      onMessage(`推荐已生成：${rows.length} 条，当前为规则评分 rule_v0。`);
+      onMessage(`推荐已生成：${rows.length} 条，规则评分已接入竞品过滤 ${String(competitorFilter.filtered_avoid || 0)} 条、反馈调分 ${String(feedbackPolicy.candidates_with_feedback || 0)} 条。`);
     } catch (error) {
       onMessage(error instanceof Error ? error.message : '推荐生成失败');
     } finally {

@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from app.db.connection import get_conn
@@ -20,9 +20,19 @@ COMPETITOR_SCORE_ADJUSTMENTS = {
     "opportunity": 5.0,
 }
 
+FEEDBACK_SCORE_ADJUSTMENTS = {
+    "shortlist": 12.0,
+    "claim": 10.0,
+    "create_project": 14.0,
+    "positive_signal": 8.0,
+    "feedback": 2.0,
+    "reject": -25.0,
+    "snooze": -10.0,
+}
+
 
 def _utcnow() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _json(value: Any) -> str:
@@ -156,6 +166,88 @@ def _adjust_score_for_competitor(base_score: float, context: dict[str, Any]) -> 
     return max(0.0, min(100.0, round(float(base_score or 0) + adjustment, 3)))
 
 
+def _feedback_context(kol_pool_id: int, platform: str = "", handle: str = "") -> dict[str, Any]:
+    if not _table_exists("vkpi_recommendation_feedback") or not _table_exists("vkpi_kol_recommendations"):
+        return {
+            "counts": {},
+            "score_adjustment": 0.0,
+            "sentiment": "none",
+            "source": "feedback_table_unavailable",
+        }
+    where: list[str] = []
+    params: list[Any] = []
+    if kol_pool_id:
+        where.append("rec.kol_pool_id=?")
+        params.append(int(kol_pool_id))
+    clean_platform = _platform_key(platform)
+    clean_handle = str(handle or "").strip().lower()
+    if clean_platform and clean_handle:
+        where.append("(LOWER(rec.platform)=? AND LOWER(rec.handle)=?)")
+        params.extend([clean_platform, clean_handle])
+    if not where:
+        return {
+            "counts": {},
+            "score_adjustment": 0.0,
+            "sentiment": "none",
+            "source": "no_candidate_identity",
+        }
+    rows = get_conn().execute(
+        f"""
+        SELECT fb.feedback_type, fb.note, fb.created_at, fb.metadata_json,
+               rec.status AS recommendation_status, rec.id AS recommendation_id,
+               rec.run_id
+        FROM vkpi_recommendation_feedback fb
+        INNER JOIN vkpi_kol_recommendations rec ON rec.id=fb.recommendation_id
+        WHERE {" OR ".join(where)}
+        ORDER BY fb.created_at DESC, fb.id DESC
+        LIMIT 30
+        """,
+        tuple(params),
+    ).fetchall()
+    counts: dict[str, int] = {}
+    latest: dict[str, Any] = {}
+    for raw in rows:
+        row = dict(raw)
+        feedback_type = str(row.get("feedback_type") or "").strip().lower()
+        if not feedback_type:
+            continue
+        counts[feedback_type] = counts.get(feedback_type, 0) + 1
+        if not latest:
+            latest = {
+                "feedback_type": feedback_type,
+                "note": row.get("note") or "",
+                "created_at": row.get("created_at") or "",
+                "recommendation_id": row.get("recommendation_id"),
+                "run_id": row.get("run_id"),
+            }
+    adjustment = 0.0
+    for feedback_type, count in counts.items():
+        adjustment += FEEDBACK_SCORE_ADJUSTMENTS.get(feedback_type, 0.0) * min(3, int(count or 0))
+    adjustment = max(-45.0, min(30.0, round(adjustment, 3)))
+    if counts.get("reject"):
+        sentiment = "negative_reject"
+    elif counts.get("snooze"):
+        sentiment = "negative_snooze"
+    elif any(counts.get(key) for key in ("shortlist", "claim", "create_project", "positive_signal")):
+        sentiment = "positive"
+    elif counts:
+        sentiment = "neutral"
+    else:
+        sentiment = "none"
+    return {
+        "counts": counts,
+        "latest": latest,
+        "score_adjustment": adjustment,
+        "sentiment": sentiment,
+        "source": "vkpi_recommendation_feedback" if rows else "no_feedback",
+    }
+
+
+def _adjust_score_for_feedback(base_score: float, context: dict[str, Any]) -> float:
+    adjustment = float(context.get("score_adjustment") or 0)
+    return max(0.0, min(100.0, round(float(base_score or 0) + adjustment, 3)))
+
+
 def _competitor_reason(context: dict[str, Any]) -> str:
     tier = str(context.get("risk_tier") or "opportunity")
     brand = str(context.get("brand") or "").upper()
@@ -167,6 +259,15 @@ def _competitor_reason(context: dict[str, Any]) -> str:
     if tier == "safe":
         return f"竞品弱关联 {brand or 'competitor'} risk {score:.1f}"
     return "未发现强竞品绑定"
+
+
+def _feedback_reason(context: dict[str, Any]) -> str:
+    counts = context.get("counts") or {}
+    adjustment = float(context.get("score_adjustment") or 0)
+    if not counts:
+        return "暂无历史员工反馈"
+    parts = [f"{key}:{value}" for key, value in sorted(counts.items())]
+    return f"历史员工反馈 {'/'.join(parts)} 调分 {adjustment:+.1f}"
 
 
 def create_launch(payload: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -300,6 +401,7 @@ def run_recommendations(payload: dict[str, Any], *, staff: dict[str, Any] | None
     run_filters = dict(payload)
     include_avoid_competitors = str(payload.get("include_avoid_competitors") or "").lower() in {"1", "true", "yes", "on"}
     run_filters["competitor_filter"] = "include_avoid" if include_avoid_competitors else "exclude_avoid"
+    run_filters["feedback_policy"] = "score_adjust_v1"
     if effective_platforms:
         run_filters["effective_platforms"] = effective_platforms
         run_filters["platform_filter_source"] = "launch.target_platforms"
@@ -324,23 +426,37 @@ def run_recommendations(payload: dict[str, Any], *, staff: dict[str, Any] | None
         "category": launch.get("category"),
         "target_platforms": _loads(launch.get("target_platforms_json"), []),
     }
-    scored: list[tuple[float, dict[str, Any], dict[str, Any], Any, dict[str, Any]]] = []
+    scored: list[tuple[float, dict[str, Any], dict[str, Any], Any, dict[str, Any], dict[str, Any]]] = []
     filtered_competitor_avoid = 0
+    feedback_candidates = 0
+    feedback_positive = 0
+    feedback_negative = 0
     for item in pool:
         kol_pool_id = int(item.get("id") or 0)
         features = feature_store.snapshot_features(kol_pool_id=kol_pool_id, launch_id=launch_id or None)
         result = strategy.score(features, brief)
         competitor = _competitor_context(kol_pool_id)
+        feedback = _feedback_context(kol_pool_id, str(item.get("platform") or ""), str(item.get("handle") or ""))
         features["competitor_risk_tier"] = competitor.get("risk_tier")
         features["competitor_risk_score"] = competitor.get("risk_score")
         features["competitor_brand"] = competitor.get("brand")
+        features["operator_feedback_counts"] = feedback.get("counts") or {}
+        features["operator_feedback_sentiment"] = feedback.get("sentiment")
+        features["operator_feedback_adjustment"] = feedback.get("score_adjustment")
         if competitor.get("risk_tier") == "avoid" and not include_avoid_competitors:
             filtered_competitor_avoid += 1
             continue
-        adjusted_score = _adjust_score_for_competitor(float(result.score), competitor)
-        scored.append((adjusted_score, item, features, result, competitor))
+        if feedback.get("counts"):
+            feedback_candidates += 1
+        if float(feedback.get("score_adjustment") or 0) > 0:
+            feedback_positive += 1
+        if float(feedback.get("score_adjustment") or 0) < 0:
+            feedback_negative += 1
+        competitor_adjusted_score = _adjust_score_for_competitor(float(result.score), competitor)
+        adjusted_score = _adjust_score_for_feedback(competitor_adjusted_score, feedback)
+        scored.append((adjusted_score, item, features, result, competitor, feedback))
     scored.sort(key=lambda row: row[0], reverse=True)
-    for idx, (score, item, features, result, competitor) in enumerate(scored[:limit], start=1):
+    for idx, (score, item, features, result, competitor, feedback) in enumerate(scored[:limit], start=1):
         rec_uid = f"rec-{secrets.token_hex(8)}"
         breakdown = dict(result.breakdown or {})
         breakdown["competitor"] = {
@@ -350,6 +466,13 @@ def run_recommendations(payload: dict[str, Any], *, staff: dict[str, Any] | None
             "score_adjustment": competitor.get("score_adjustment"),
             "source": competitor.get("source"),
         }
+        breakdown["operator_feedback"] = {
+            "counts": feedback.get("counts") or {},
+            "sentiment": feedback.get("sentiment"),
+            "score_adjustment": feedback.get("score_adjustment"),
+            "latest": feedback.get("latest") or {},
+            "source": feedback.get("source"),
+        }
         strengths = list(result.strengths)
         concerns = list(result.concerns)
         competitor_note = _competitor_reason(competitor)
@@ -357,6 +480,11 @@ def run_recommendations(payload: dict[str, Any], *, staff: dict[str, Any] | None
             concerns.append(competitor_note)
         else:
             strengths.append(competitor_note)
+        feedback_note = _feedback_reason(feedback)
+        if float(feedback.get("score_adjustment") or 0) < 0:
+            concerns.append(feedback_note)
+        elif float(feedback.get("score_adjustment") or 0) > 0:
+            strengths.append(feedback_note)
         conn.execute(
             """
             INSERT INTO vkpi_kol_recommendations
@@ -379,7 +507,7 @@ def run_recommendations(payload: dict[str, Any], *, staff: dict[str, Any] | None
                 "recommended",
                 _json(features),
                 _json(breakdown),
-                _json({"strengths": strengths, "concerns": concerns, "version": result.version, "competitor": breakdown["competitor"]}),
+                _json({"strengths": strengths, "concerns": concerns, "version": result.version, "competitor": breakdown["competitor"], "operator_feedback": breakdown["operator_feedback"]}),
                 now,
                 now,
             ),
@@ -395,7 +523,7 @@ def run_recommendations(payload: dict[str, Any], *, staff: dict[str, Any] | None
             (
                 int(rec.get("id") or 0),
                 "rule",
-                "规则评分，未启用大模型或机器学习；已接入竞品风险过滤。",
+                "规则评分，未启用大模型或机器学习；已接入竞品风险过滤和员工反馈调分。",
                 _json(strengths),
                 _json(concerns),
                 result.version,
@@ -411,7 +539,7 @@ def run_recommendations(payload: dict[str, Any], *, staff: dict[str, Any] | None
             scoring_breakdown=breakdown,
             model_version=result.version,
             display_position=idx,
-            display_context={"rank": idx, "score": score, "run_id": run.get("id"), "competitor": breakdown["competitor"]},
+            display_context={"rank": idx, "score": score, "run_id": run.get("id"), "competitor": breakdown["competitor"], "operator_feedback": breakdown["operator_feedback"]},
         )
         rows.append(rec)
     conn.execute("UPDATE vkpi_kol_recommendation_runs SET recommendation_count=? WHERE id=?", (len(rows), int(run.get("id") or 0)))
@@ -425,6 +553,13 @@ def run_recommendations(payload: dict[str, Any], *, staff: dict[str, Any] | None
         "competitor_filter": {
             "mode": run_filters["competitor_filter"],
             "filtered_avoid": filtered_competitor_avoid,
+            "provider_calls": False,
+        },
+        "feedback_policy": {
+            "mode": "score_adjust_v1",
+            "candidates_with_feedback": feedback_candidates,
+            "positive_adjusted": feedback_positive,
+            "negative_adjusted": feedback_negative,
             "provider_calls": False,
         },
     }

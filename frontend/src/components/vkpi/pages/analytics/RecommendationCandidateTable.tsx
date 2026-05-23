@@ -33,6 +33,15 @@ function catalogProducts(row: Row): Row[] {
   return arrayValue(snapshot.matched_catalog_products || row.matched_catalog_products);
 }
 
+function scoringBreakdown(row: Row): Row {
+  return recordValue(row.scoring_breakdown || row.scoring_breakdown_json);
+}
+
+function numberValue(value: unknown): number {
+  const parsed = Number(value || 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 function money(value: unknown): string {
   const amount = Number(value || 0);
   return Number.isFinite(amount) && amount > 0 ? `$${amount.toLocaleString('en-US')}` : '-';
@@ -54,6 +63,11 @@ export function RecommendationCandidateTable({
           <tbody>
             {recommendations.length ? recommendations.map((row) => {
               const variants = catalogProducts(row).slice(0, 3);
+              const breakdown = scoringBreakdown(row);
+              const competitor = recordValue(breakdown.competitor);
+              const feedback = recordValue(breakdown.operator_feedback);
+              const competitorTier = String(competitor.risk_tier || '');
+              const feedbackAdjustment = numberValue(feedback.score_adjustment);
               return (
                 <tr key={String(row.id)}>
                   <td>{String(row.rank || '-')}</td>
@@ -73,7 +87,17 @@ export function RecommendationCandidateTable({
                       ) : null}
                     </div>
                   </td>
-                  <td>{String(row.score || '-')}</td>
+                  <td>
+                    <div className="vkpi-rec-candidate-main">
+                      <strong>{String(row.score || '-')}</strong>
+                      {feedback.source === 'vkpi_recommendation_feedback' ? (
+                        <span className="vkpi-help-text">反馈 {feedbackAdjustment > 0 ? '+' : ''}{feedbackAdjustment}</span>
+                      ) : null}
+                      {competitorTier && competitorTier !== 'opportunity' ? (
+                        <span className="vkpi-help-text">竞品 {String(competitor.brand || 'risk')} · {competitorTier}</span>
+                      ) : null}
+                    </div>
+                  </td>
                   <td>{String(row.status || '-')}</td>
                   <td>rule_v0</td>
                   <td>{row.linked_main_kol_id ? `#${String(row.linked_main_kol_id)}` : '未落库'}</td>

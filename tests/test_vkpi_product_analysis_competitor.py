@@ -20,6 +20,7 @@ def _cleanup() -> None:
     rec_ids = [int(row["id"]) for row in rec_rows]
     run_ids = sorted({int(row["run_id"]) for row in rec_rows if row["run_id"] is not None})
     for rec_id in rec_ids:
+        conn.execute("DELETE FROM vkpi_recommendation_feedback WHERE recommendation_id=?", (rec_id,))
         conn.execute("DELETE FROM vkpi_recommendation_outcomes WHERE recommendation_id=?", (rec_id,))
         conn.execute("DELETE FROM vkpi_recommendation_explanations WHERE recommendation_id=?", (rec_id,))
         conn.execute("DELETE FROM vkpi_kol_recommendations WHERE id=?", (rec_id,))
@@ -76,6 +77,62 @@ def _insert_pool_row(handle: str, *, fit_score: int) -> int:
     return int(conn.execute("SELECT id FROM vkpi_kol_pool WHERE handle=?", (handle,)).fetchone()["id"])
 
 
+def _insert_historical_feedback(kol_pool_id: int, handle: str, feedback_type: str, note: str = "") -> int:
+    conn = get_conn()
+    run_uid = f"{handle}-hist-run"
+    rec_uid = f"{handle}-hist-rec"
+    now = "2026-05-20T11:00:00Z"
+    run_id = conn.execute(
+        """
+        INSERT INTO vkpi_kol_recommendation_runs
+            (run_uid, launch_id, strategy_version, status, candidate_count,
+             recommendation_count, filters_json, created_at, completed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        RETURNING id
+        """,
+        (run_uid, None, "history_feedback_test_v0", "completed", 1, 1, json.dumps({"marker": MARKER}), now, now),
+    ).fetchone()["id"]
+    rec_id = conn.execute(
+        """
+        INSERT INTO vkpi_kol_recommendations
+            (recommendation_uid, run_id, launch_id, kol_pool_id, linked_main_kol_id,
+             platform, handle, display_name, score, rank, status,
+             feature_snapshot_json, scoring_breakdown_json, explanation_json,
+             created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        RETURNING id
+        """,
+        (
+            rec_uid,
+            run_id,
+            None,
+            kol_pool_id,
+            None,
+            "youtube",
+            handle,
+            handle,
+            50,
+            1,
+            "completed",
+            "{}",
+            "{}",
+            "{}",
+            now,
+            now,
+        ),
+    ).fetchone()["id"]
+    conn.execute(
+        """
+        INSERT INTO vkpi_recommendation_feedback
+            (recommendation_id, feedback_type, note, created_by_staff_id, created_at, metadata_json)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (rec_id, feedback_type, note, None, now, json.dumps({"marker": MARKER, "source": "unit"})),
+    )
+    conn.commit()
+    return int(rec_id)
+
+
 def test_recommendations_filter_avoid_competitor_and_mark_competitor_context():
     ensure_vkpi_product_industry_schema()
     ensure_competitor_relation_schema()
@@ -123,5 +180,41 @@ def test_recommendations_filter_avoid_competitor_and_mark_competitor_context():
         explanation = json.loads(row["explanation_json"])
         assert explanation["competitor"]["risk_tier"] == "opportunity"
         assert int(row["kol_pool_id"]) == ok_id
+    finally:
+        _cleanup()
+
+
+def test_recommendations_apply_operator_feedback_to_ranking_and_explanation():
+    ensure_vkpi_product_industry_schema()
+    ensure_competitor_relation_schema()
+    _cleanup()
+    try:
+        rejected_id = _insert_pool_row(f"{MARKER}-rejected", fit_score=90)
+        accepted_id = _insert_pool_row(f"{MARKER}-accepted", fit_score=50)
+        _insert_historical_feedback(rejected_id, f"{MARKER}-rejected", "reject", "bad prior fit")
+        _insert_historical_feedback(accepted_id, f"{MARKER}-accepted", "shortlist", "good prior fit")
+        kol_pool._clear_kol_pool_read_cache()
+
+        result = product_analysis.run_recommendations({"query": MARKER, "limit": 10})
+
+        handles = [str(row.get("handle") or "") for row in result["recommendations"]]
+        assert handles.index(f"{MARKER}-accepted") < handles.index(f"{MARKER}-rejected")
+        assert result["feedback_policy"]["mode"] == "score_adjust_v1"
+        assert result["feedback_policy"]["candidates_with_feedback"] >= 2
+        assert result["feedback_policy"]["positive_adjusted"] >= 1
+        assert result["feedback_policy"]["negative_adjusted"] >= 1
+
+        accepted = next(row for row in result["recommendations"] if row.get("handle") == f"{MARKER}-accepted")
+        rejected = next(row for row in result["recommendations"] if row.get("handle") == f"{MARKER}-rejected")
+        accepted_breakdown = json.loads(accepted["scoring_breakdown_json"])
+        rejected_breakdown = json.loads(rejected["scoring_breakdown_json"])
+        assert accepted_breakdown["operator_feedback"]["counts"]["shortlist"] == 1
+        assert accepted_breakdown["operator_feedback"]["score_adjustment"] > 0
+        assert rejected_breakdown["operator_feedback"]["counts"]["reject"] == 1
+        assert rejected_breakdown["operator_feedback"]["score_adjustment"] < 0
+        rejected_explanation = json.loads(rejected["explanation_json"])
+        assert rejected_explanation["operator_feedback"]["sentiment"] == "negative_reject"
+        assert int(accepted["kol_pool_id"]) == accepted_id
+        assert int(rejected["kol_pool_id"]) == rejected_id
     finally:
         _cleanup()
