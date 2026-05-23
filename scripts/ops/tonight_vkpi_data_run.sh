@@ -13,7 +13,7 @@ echo "== preflight state =="
 echo "== company official-account full baseline =="
 STAMP="${STAMP}" \
 JOB_NAME=official_full_baseline \
-PAYLOAD_JSON='{"staff":{"id":0,"staff_id":0,"user_id":0,"role":"admin","is_owner":1}}' \
+PAYLOAD_JSON='{"confirm":"RUN official_full_baseline","staff":{"id":0,"staff_id":0,"user_id":0,"role":"admin","is_owner":1}}' \
 REQUIRE_BACKUP=1 \
   "${SCRIPT_DIR}/run_prod_vkpi_job.sh"
 

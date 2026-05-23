@@ -320,7 +320,7 @@ Use `RSYNC_DELETE=1` only for an intentional clean package deploy after reviewin
 Generic guarded runner:
 
 ```bash
-JOB_NAME=official_full_baseline PAYLOAD_JSON='{}' scripts/ops/run_prod_vkpi_job.sh
+JOB_NAME=official_full_baseline PAYLOAD_JSON='{"confirm":"RUN official_full_baseline"}' scripts/ops/run_prod_vkpi_job.sh
 ```
 
 This takes a backup by default, runs the job on `viltrox`, and writes a remote log under `/opt/viltrox-2.0/runtime/ops/`.
@@ -328,7 +328,7 @@ This takes a backup by default, runs the job on `viltrox`, and writes a remote l
 Current safe company-owned account baseline entrypoint:
 
 ```bash
-JOB_NAME=official_full_baseline PAYLOAD_JSON='{}' scripts/ops/run_prod_vkpi_job.sh
+JOB_NAME=official_full_baseline PAYLOAD_JSON='{"confirm":"RUN official_full_baseline"}' scripts/ops/run_prod_vkpi_job.sh
 ```
 
 Current state audit:

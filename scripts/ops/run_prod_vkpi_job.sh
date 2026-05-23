@@ -20,7 +20,7 @@ STAMP="${STAMP:-$(date -u +%Y%m%dT%H%M%SZ)}"
 PYTHON_BIN="${PYTHON_BIN:-.venv/bin/python}"
 
 if [ -z "${JOB_NAME}" ]; then
-  echo "Usage: JOB_NAME=official_full_baseline PAYLOAD_JSON='{}' $0" >&2
+  echo "Usage: JOB_NAME=official_full_baseline PAYLOAD_JSON='{\"confirm\":\"RUN official_full_baseline\"}' $0" >&2
   exit 1
 fi
 
@@ -48,7 +48,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.services.vkpi.cron import run_job
+from app.services.vkpi.cron import run_manual_job
 
 
 _log_fp = open(os.environ['LOG_FILE'], 'a', encoding='utf-8')
@@ -72,7 +72,7 @@ async def main() -> None:
         'started_at': datetime.now(timezone.utc).isoformat(),
     })
     try:
-        result = await run_job(job_name, payload)
+        result = await run_manual_job(job_name, payload, staff=payload.get('staff'))
     except Exception as exc:
         emit({
             'event': 'job_failed',
