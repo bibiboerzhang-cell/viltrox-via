@@ -785,6 +785,7 @@ function KolPoolIntelligenceSection({ card }: { card: KolPoolIntelligenceCard })
   const readiness = stringifyValue(support.readiness || 'partial');
   const gaps = Array.isArray(support.gaps) ? support.gaps.map(stringifyValue).filter(Boolean) : [];
   const competitorSummary = recordValue(competitors.summary);
+  const dimensionRows = dimensionsConfidenceRows(dimensions);
   return (
     <section className="vkpi-card vkpi-alert-detail-section">
       <h3>Intelligence Card</h3>
@@ -815,6 +816,17 @@ function KolPoolIntelligenceSection({ card }: { card: KolPoolIntelligenceCard })
           <small>{statusLabel(productFit.status)}</small>
         </div>
       </div>
+      {dimensionRows.length ? (
+        <div className="vkpi-kol-pool-readiness-grid" style={{ marginTop: 12 }}>
+          {dimensionRows.map((row) => (
+            <div className={row.ready ? 'is-ok' : 'is-missing'} key={row.key}>
+              <strong>{row.label}</strong>
+              <span>{row.confidenceLabel}</span>
+              <small>{row.detail}</small>
+            </div>
+          ))}
+        </div>
+      ) : null}
       <div className="vkpi-chip-list" style={{ marginTop: 12 }}>
         <span className={card.provider_calls ? 'vkpi-chip vkpi-chip--warn' : 'vkpi-chip is-success'}>Provider {card.provider_calls ? 'called' : 'off'}</span>
         <span className={card.llm_calls ? 'vkpi-chip vkpi-chip--warn' : 'vkpi-chip is-success'}>LLM {card.llm_calls ? 'called' : 'off'}</span>
@@ -1114,6 +1126,91 @@ function readinessLabel(value: unknown): string {
 function statusClass(value: unknown): string {
   const status = stringifyValue(value || '').toLowerCase();
   return status === 'ready' || status === 'empty' ? 'is-ok' : 'is-missing';
+}
+
+function confidenceValue(value: unknown): number | null {
+  const next = numberValue(value);
+  if (next === null) return null;
+  return Math.max(0, Math.min(1, next));
+}
+
+function confidenceLabel(value: unknown): string {
+  const next = confidenceValue(value);
+  return next === null ? '无证据' : `${Math.round(next * 100)}% confidence`;
+}
+
+function blockMetricSummary(block: Record<string, unknown>, keys: string[]): string {
+  const parts = keys.map((key) => {
+    const value = numberValue(block[key]);
+    if (value === null) return `${dimensionMetricLabel(key)}: 无证据`;
+    return `${dimensionMetricLabel(key)}: ${Math.round(value)}`;
+  });
+  return parts.join(' / ');
+}
+
+function confidenceMetricSummary(block: Record<string, unknown>, keys: string[]): string {
+  return keys.map((key) => `${dimensionMetricLabel(key)}: ${confidenceLabel(block[key])}`).join(' / ');
+}
+
+function dimensionMetricLabel(key: string): string {
+  const labels: Record<string, string> = {
+    posting_frequency_score: '频率',
+    content_diversity_score: '多样',
+    followers_tier_score: '粉丝',
+    engagement_quality_score: '互动',
+    growth_velocity_score: '增长',
+    cooperation_history_score: '合作',
+    contact_reachability_score: '触达',
+    competitor_risk_score: '竞品风险',
+    industry_cluster: '垂类',
+    product_fit: '产品',
+  };
+  return labels[key] || key;
+}
+
+function dimensionsConfidenceRows(dimensions: Record<string, unknown>): Array<{ key: string; label: string; confidenceLabel: string; detail: string; ready: boolean }> {
+  const confidence = recordValue(dimensions.confidence);
+  const blocks = recordValue(dimensions.blocks);
+  const block1 = recordValue(blocks.block1_content);
+  const block2 = recordValue(blocks.block2_performance);
+  const block3 = recordValue(blocks.block3_business);
+  const block4 = recordValue(blocks.block4_specialty);
+  const rows = [
+    {
+      key: 'block1_content',
+      label: '内容证据',
+      confidence: confidence.block1_content,
+      detail: blockMetricSummary(block1, ['posting_frequency_score', 'content_diversity_score']),
+    },
+    {
+      key: 'block2_performance',
+      label: '表现证据',
+      confidence: confidence.block2_performance,
+      detail: blockMetricSummary(block2, ['followers_tier_score', 'engagement_quality_score', 'growth_velocity_score']),
+    },
+    {
+      key: 'block3_business',
+      label: '商务证据',
+      confidence: confidence.block3_business,
+      detail: blockMetricSummary(block3, ['cooperation_history_score', 'contact_reachability_score', 'competitor_risk_score']),
+    },
+    {
+      key: 'block4_specialty',
+      label: '专长/Product',
+      confidence: confidence.block4_specialty,
+      detail: confidenceMetricSummary(recordValue(block4.confidence), ['industry_cluster', 'product_fit']),
+    },
+  ];
+  return rows.map((row) => {
+    const conf = confidenceValue(row.confidence);
+    return {
+      key: row.key,
+      label: row.label,
+      confidenceLabel: confidenceLabel(row.confidence),
+      detail: row.detail,
+      ready: conf !== null && conf >= 0.5,
+    };
+  });
 }
 
 function toVkpiPlatform(platform: string): VkpiPlatform {
