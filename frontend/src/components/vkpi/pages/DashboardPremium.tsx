@@ -115,6 +115,12 @@ interface CountryDrawerState {
   error?: string;
 }
 
+interface TrendDrawerState {
+  title: string;
+  sourceLabel: string;
+  rows: Array<{ label: string; value: string }>;
+}
+
 interface PremiumSnapshot {
   source: PremiumSource;
   failedSections: string[];
@@ -769,6 +775,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
   const [snapshot, setSnapshot] = useState<PremiumSnapshot>(EMPTY_PREMIUM_SNAPSHOT);
   const [loadingData, setLoadingData] = useState(false);
   const [countryDrawer, setCountryDrawer] = useState<CountryDrawerState | null>(null);
+  const [trendDrawer, setTrendDrawer] = useState<TrendDrawerState | null>(null);
   const [expandedKpi, setExpandedKpi] = useState<string | null>(null);
 
   useEffect(() => {
@@ -895,6 +902,19 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
     goToWorkspacePage('dataAnalysis', item.label);
   }, [goToWorkspacePage, showToast]);
 
+  const openTrendDrawer = useCallback(() => {
+    setTrendDrawer({
+      title: '曝光趋势',
+      sourceLabel: snapshot.source === 'mock' ? '示例趋势' : 'revenue-trend API',
+      rows: [
+        { label: '当前指标', value: activeSegment },
+        { label: '最近日期', value: premiumTrend.tipDate },
+        { label: '最新值', value: premiumTrend.tipValue },
+        { label: '样本点', value: `${premiumTrend.labels.filter(Boolean).length} 天` },
+      ],
+    });
+  }, [activeSegment, premiumTrend.labels, premiumTrend.tipDate, premiumTrend.tipValue, snapshot.source]);
+
   const openContentUrl = useCallback((url: unknown) => {
     const href = typeof url === 'string' ? url.trim() : '';
     if (!href) {
@@ -952,7 +972,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
                 </div>
                 <div className="glass-card panel">
                   <div className="panel-head"><h3>曝光趋势（近 7 天）</h3><div className="segment">{['曝光量', '互动量', '销售额'].map((segment) => <button className={activeSegment === segment ? 'active' : ''} data-seg={segment} onClick={() => handleSegmentSelect(segment)} type="button" key={segment}>{segment}</button>)}</div></div>
-                  <div className="linechart"><svg viewBox="0 0 520 250" preserveAspectRatio="none"><defs><linearGradient id="area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#1b6cff" /><stop offset="1" stopColor="#1b6cff" stopOpacity="0" /></linearGradient></defs><g stroke="rgba(92,130,190,.16)"><line x1="26" y1="30" x2="500" y2="30" /><line x1="26" y1="80" x2="500" y2="80" /><line x1="26" y1="130" x2="500" y2="130" /><line x1="26" y1="180" x2="500" y2="180" /></g><path d={premiumTrend.path} fill="none" stroke="#1b6cff" strokeWidth="4" strokeLinecap="round" /><path d={premiumTrend.areaPath} fill="url(#area)" opacity=".25" /><circle cx={premiumTrend.pointX} cy={premiumTrend.pointY} r="8" fill="#1b6cff" stroke="#fff" strokeWidth="4" /><text x="34" y="238" fontSize="12" fill="#667085">{premiumTrend.labels[0] || '-'}</text><text x="116" y="238" fontSize="12" fill="#667085">{premiumTrend.labels[1] || '-'}</text><text x="198" y="238" fontSize="12" fill="#667085">{premiumTrend.labels[2] || '-'}</text><text x="280" y="238" fontSize="12" fill="#667085">{premiumTrend.labels[3] || '-'}</text><text x="362" y="238" fontSize="12" fill="#667085">{premiumTrend.labels[4] || '-'}</text><text x="444" y="238" fontSize="12" fill="#667085">{premiumTrend.labels[5] || '-'}</text></svg><div className="float-tip">{premiumTrend.tipDate}<b>{premiumTrend.tipValue}</b></div></div>
+                  <div className="linechart" role="button" tabIndex={0} onClick={openTrendDrawer} onKeyDown={(event) => { if (event.key === 'Enter') openTrendDrawer(); }}><svg viewBox="0 0 520 250" preserveAspectRatio="none"><defs><linearGradient id="area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#1b6cff" /><stop offset="1" stopColor="#1b6cff" stopOpacity="0" /></linearGradient></defs><g stroke="rgba(92,130,190,.16)"><line x1="26" y1="30" x2="500" y2="30" /><line x1="26" y1="80" x2="500" y2="80" /><line x1="26" y1="130" x2="500" y2="130" /><line x1="26" y1="180" x2="500" y2="180" /></g><path d={premiumTrend.path} fill="none" stroke="#1b6cff" strokeWidth="4" strokeLinecap="round" /><path d={premiumTrend.areaPath} fill="url(#area)" opacity=".25" /><circle cx={premiumTrend.pointX} cy={premiumTrend.pointY} r="8" fill="#1b6cff" stroke="#fff" strokeWidth="4" /><text x="34" y="238" fontSize="12" fill="#667085">{premiumTrend.labels[0] || '-'}</text><text x="116" y="238" fontSize="12" fill="#667085">{premiumTrend.labels[1] || '-'}</text><text x="198" y="238" fontSize="12" fill="#667085">{premiumTrend.labels[2] || '-'}</text><text x="280" y="238" fontSize="12" fill="#667085">{premiumTrend.labels[3] || '-'}</text><text x="362" y="238" fontSize="12" fill="#667085">{premiumTrend.labels[4] || '-'}</text><text x="444" y="238" fontSize="12" fill="#667085">{premiumTrend.labels[5] || '-'}</text></svg><div className="float-tip">{premiumTrend.tipDate}<b>{premiumTrend.tipValue}</b></div></div>
                 </div>
                 <div className="lower">
                   <div className="glass-card mini">
@@ -1036,6 +1056,25 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
               ))}
             </div>
           ) : null}
+        </div>
+      ) : null}
+      {trendDrawer ? (
+        <div className="panel-drawer" role="dialog" aria-label={trendDrawer.title}>
+          <div className="country-drawer-head">
+            <div><span>{trendDrawer.sourceLabel}</span><b>{trendDrawer.title}</b></div>
+            <button type="button" onClick={() => setTrendDrawer(null)}>×</button>
+          </div>
+          <div className="panel-drawer-list">
+            {trendDrawer.rows.map((row) => (
+              <div className="panel-drawer-row" key={row.label}>
+                <span>{row.label}</span>
+                <b>{row.value}</b>
+              </div>
+            ))}
+          </div>
+          <button className="panel-drawer-action" type="button" onClick={() => goToWorkspacePage('dataAnalysis', trendDrawer.title)}>
+            查看完整趋势
+          </button>
         </div>
       ) : null}
       {embedded ? null : <GlassFAB onClick={() => goToWorkspacePage('dataQuality', '反馈 / 报错')} />}
