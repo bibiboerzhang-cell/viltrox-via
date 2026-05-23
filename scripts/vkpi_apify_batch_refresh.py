@@ -11,12 +11,14 @@ import argparse
 import asyncio
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
+DEFAULT_OPS_DIR = ROOT / "runtime" / "ops"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
@@ -43,6 +45,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--execute", action="store_true", help="Run the executor. Provider calls still require --allow-provider-calls.")
     parser.add_argument("--allow-provider-calls", action="store_true", help="Actually call Apify. Use only after backup-first operator approval.")
     parser.add_argument("--compact", action="store_true", help="Omit full batch target lists from output")
+    parser.add_argument("--json-out", default="", help="Optional JSON artifact path. Defaults to runtime/ops.")
+    parser.add_argument("--no-artifact", action="store_true", help="Do not write an operator JSON artifact")
     return parser.parse_args(argv)
 
 
@@ -91,10 +95,34 @@ async def run_from_args(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _artifact_path(args: argparse.Namespace) -> Path:
+    if args.json_out:
+        path = Path(str(args.json_out)).expanduser()
+        return path if path.is_absolute() else ROOT / path
+    now = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    mode = "execute" if args.execute and args.allow_provider_calls else "plan"
+    return DEFAULT_OPS_DIR / f"{now}-apify-batch-refresh-{mode}.json"
+
+
+def write_artifact(result: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    if args.no_artifact:
+        return result
+    path = _artifact_path(args)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = dict(result)
+    payload["artifact"] = {
+        "path": str(path),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "provider_calls_allowed": bool(args.execute and args.allow_provider_calls),
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, default=str, indent=2) + "\n", encoding="utf-8")
+    return payload
+
+
 async def async_main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        result = await run_from_args(args)
+        result = write_artifact(await run_from_args(args), args)
         print(json.dumps(result, ensure_ascii=False, default=str, indent=2))
         execution = result.get("execution") if isinstance(result, dict) else {}
         if args.execute and args.allow_provider_calls and isinstance(execution, dict):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 from scripts import vkpi_apify_batch_refresh
 
@@ -51,3 +52,33 @@ def test_cli_requires_both_execute_and_allow_provider_calls(monkeypatch) -> None
     assert execute_only["execution"]["executed"] is False
     assert execute_allowed["provider_calls_allowed"] is True
     assert execute_allowed["execution"]["executed"] is True
+
+
+def test_cli_writes_operator_artifact(monkeypatch, tmp_path, capsys) -> None:
+    artifact = tmp_path / "batch-plan.json"
+    calls: dict[str, object] = {}
+
+    def fake_plan(**_kwargs):
+        return {"strategy": "apify_batch_first", "max_concurrent_runs": 2, "batches": []}
+
+    async def fake_execute(_plan, **kwargs):
+        calls["execute"] = kwargs
+        return {"executed": False, "reason": "provider_calls_not_allowed"}
+
+    async def fake_close():
+        calls["closed"] = True
+
+    monkeypatch.setattr(vkpi_apify_batch_refresh.apify_batch_refresh, "qualified_apify_batch_plan", fake_plan)
+    monkeypatch.setattr(vkpi_apify_batch_refresh.apify_batch_refresh, "execute_apify_batch_plan", fake_execute)
+    monkeypatch.setattr(vkpi_apify_batch_refresh, "close_db_runtime", fake_close)
+
+    code = asyncio.run(vkpi_apify_batch_refresh.async_main(["--compact", "--json-out", str(artifact)]))
+
+    assert code == 0
+    assert calls["execute"]["allow_provider_calls"] is False
+    assert calls["closed"] is True
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
+    printed = json.loads(capsys.readouterr().out)
+    assert payload["artifact"]["path"] == str(artifact)
+    assert payload["provider_calls_allowed"] is False
+    assert printed["artifact"]["path"] == str(artifact)
