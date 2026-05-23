@@ -88,6 +88,97 @@ def _agent_summary(agent_id: str, payload: dict[str, Any], kol_pool_total: int) 
     return "状态已读取"
 
 
+def _agent_inbox_type(agent_id: str) -> str:
+    return {
+        "recommendation": "recommendation",
+        "brief": "brief",
+        "evidence": "evidence",
+        "sync_sentinel": "sync",
+        "brain": "brain",
+        "market_intel": "market",
+    }.get(agent_id, "agent")
+
+
+def _agent_inbox_title(agent_id: str, agent_name: str, payload: dict[str, Any]) -> str:
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    if agent_id == "brief":
+        return str(summary.get("headline") or "Brief Agent 输出")
+    if agent_id == "recommendation":
+        return f"推荐 Agent · {int(summary.get('candidate_count') or 0)} 个候选"
+    if agent_id == "evidence":
+        return f"证据 Agent · {int(summary.get('chain_count') or 0)} 条证据链"
+    if agent_id == "sync_sentinel":
+        return f"同步守护 · {summary.get('sentinel_status') or 'ready'}"
+    if agent_id == "brain":
+        return "脑层验收 · 技术通过" if summary.get("technical_acceptance_passed") else "脑层验收 · 待确认"
+    if agent_id == "market_intel":
+        return f"市场情报 · {int(summary.get('signals_loaded') or 0)} 条信号"
+    return f"{agent_name} 输出"
+
+
+def _dashboard_agent_inbox_item(spec: dict[str, str], path: Path) -> dict[str, Any] | None:
+    payload = _load_dashboard_agent_json(path)
+    if not payload:
+        return None
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    passed = payload.get("passed")
+    status = "active" if passed is not False else "warning"
+    next_steps = payload.get("next_steps") if isinstance(payload.get("next_steps"), list) else []
+    return {
+        "id": path.stem,
+        "agent_id": spec["id"],
+        "agent_name": spec["name"],
+        "type": _agent_inbox_type(spec["id"]),
+        "title": _agent_inbox_title(spec["id"], spec["name"], payload),
+        "summary": _agent_summary(spec["id"], payload, kol_pool_total=0),
+        "status": status,
+        "passed": bool(passed) if passed is not None else False,
+        "mode": payload.get("mode") or "",
+        "generated_at": payload.get("generated_at") or None,
+        "last_run_at": _artifact_mtime_iso(path),
+        "artifact_name": path.name,
+        "source": "runtime/ops",
+        "details": {
+            "summary": summary,
+            "next_steps": [str(step) for step in next_steps[:5]],
+        },
+    }
+
+
+def _build_dashboard_agents_inbox(
+    ops_dir: str = "runtime/ops",
+    limit: int = 50,
+    agent_id: str | None = None,
+) -> dict[str, Any]:
+    root = Path(ops_dir)
+    items: list[dict[str, Any]] = []
+    normalized_agent_id = str(agent_id or "").strip() or None
+    if root.exists() and root.is_dir():
+        for spec in DASHBOARD_AGENT_SPECS:
+            if normalized_agent_id and spec["id"] != normalized_agent_id:
+                continue
+            for path in root.glob(spec["pattern"]):
+                if not path.is_file():
+                    continue
+                item = _dashboard_agent_inbox_item(spec, path)
+                if item:
+                    item["_mtime"] = path.stat().st_mtime
+                    items.append(item)
+    items.sort(key=lambda item: (float(item.get("_mtime") or 0), str(item.get("artifact_name") or "")), reverse=True)
+    for item in items:
+        item.pop("_mtime", None)
+    bounded_limit = max(1, min(100, int(limit or 50)))
+    return {
+        "items": items[:bounded_limit],
+        "total": len(items),
+        "limit": bounded_limit,
+        "agent_id": normalized_agent_id,
+        "ops_dir": ops_dir,
+        "is_real": True,
+        "source": "runtime/ops",
+    }
+
+
 def _build_dashboard_agents_status(ops_dir: str = "runtime/ops", kol_pool_total: int = 0) -> dict[str, Any]:
     agents: list[dict[str, Any]] = []
     for spec in DASHBOARD_AGENT_SPECS:
@@ -178,6 +269,8 @@ def _build_dashboard_tasks(ops_dir: str = "runtime/ops", limit: int = 6) -> dict
         "is_real": bool(path and payload),
         "source": "runtime/ops p7-82 recommendation agent",
     }
+
+
 @router.get("/architecture")
 def architecture(staff=Depends(require_tab("vkpi", "read"))):
     return workflow.architecture_summary()
@@ -331,6 +424,17 @@ def dashboard_tasks(
     """Return dashboard task candidates from the latest recommendation-agent artifact."""
     del staff
     return _build_dashboard_tasks(limit=limit)
+
+
+@router.get("/dashboard/agents/inbox")
+def dashboard_agents_inbox(
+    limit: int = Query(default=50, ge=1, le=100),
+    agent_id: str | None = Query(default=None),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """Return read-only inbox items from existing runtime/ops agent artifacts."""
+    del staff
+    return _build_dashboard_agents_inbox(limit=limit, agent_id=agent_id)
 
 
 @router.get("/staff-directory")

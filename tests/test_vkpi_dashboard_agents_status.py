@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 from app.api.routers import vkpi_dashboard_staff
@@ -87,3 +88,68 @@ def test_dashboard_tasks_reads_recommendation_candidates(tmp_path: Path) -> None
     assert payload["tasks"][0]["title"] == "@one"
     assert payload["tasks"][1]["priority"] == "low"
     assert payload["next_steps"] == ["人工复核后再联系"]
+
+
+def test_dashboard_agents_inbox_reads_runtime_artifacts_in_mtime_order(tmp_path: Path) -> None:
+    brief_path = tmp_path / "local-p7-83-brief-agent-v0.json"
+    recommendation_path = tmp_path / "local-p7-82-recommendation-agent-v0.json"
+    _write(
+        brief_path,
+        {
+            "mode": "p7_83_brief_agent_v0",
+            "passed": True,
+            "generated_at": "2026-05-23T11:38:48Z",
+            "summary": {"headline": "今天优先处理候选 KOL", "brief_item_count": 2},
+            "next_steps": ["打开证据链"],
+        },
+    )
+    _write(
+        recommendation_path,
+        {
+            "mode": "p7_82_recommendation_agent_v0",
+            "passed": True,
+            "generated_at": "2026-05-23T11:34:20Z",
+            "summary": {"candidate_count": 3, "agent_status": "ready"},
+            "next_steps": ["人工复核后再联系"],
+        },
+    )
+    os.utime(brief_path, (100, 100))
+    os.utime(recommendation_path, (200, 200))
+
+    payload = vkpi_dashboard_staff._build_dashboard_agents_inbox(str(tmp_path), limit=10)
+
+    assert payload["is_real"] is True
+    assert payload["total"] == 2
+    assert payload["items"][0]["agent_id"] == "recommendation"
+    assert payload["items"][0]["title"] == "推荐 Agent · 3 个候选"
+    assert payload["items"][0]["status"] == "active"
+    assert payload["items"][0]["details"]["next_steps"] == ["人工复核后再联系"]
+    assert payload["items"][1]["agent_id"] == "brief"
+    assert payload["items"][1]["title"] == "今天优先处理候选 KOL"
+
+
+def test_dashboard_agents_inbox_filters_agent_and_limits(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "local-p7-83-brief-agent-v0.json",
+        {
+            "mode": "p7_83_brief_agent_v0",
+            "passed": True,
+            "summary": {"headline": "简报输出"},
+        },
+    )
+    _write(
+        tmp_path / "local-p7-82-recommendation-agent-v0.json",
+        {
+            "mode": "p7_82_recommendation_agent_v0",
+            "passed": False,
+            "summary": {"candidate_count": 1, "agent_status": "blocked"},
+        },
+    )
+
+    payload = vkpi_dashboard_staff._build_dashboard_agents_inbox(str(tmp_path), limit=1, agent_id="recommendation")
+
+    assert payload["total"] == 1
+    assert payload["limit"] == 1
+    assert payload["agent_id"] == "recommendation"
+    assert payload["items"][0]["agent_id"] == "recommendation"
+    assert payload["items"][0]["status"] == "warning"
