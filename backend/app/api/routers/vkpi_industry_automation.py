@@ -12,6 +12,7 @@ from app.services.vkpi import (
     content_brain,
     industry_data,
     llm_gateway,
+    market_intelligence_v0,
     outcome_collector,
     training_data_export,
 )
@@ -214,6 +215,15 @@ def industry_competitor_brain_review_signal(signal_id: int, body: dict, staff=De
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/industry-data/market-intelligence/v0")
+def industry_market_intelligence_v0(
+    limit: int = Query(default=120, ge=1, le=500),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    del staff
+    return market_intelligence_v0.build_market_intelligence_v0(limit=limit)
 
 
 @router.get("/brand-signals/preview")

@@ -27,6 +27,7 @@ import { FilterDrawer } from './drawers/FilterDrawer';
 import { PostDetailDrawer } from './drawers/PostDetailDrawer';
 import { CompetitorBrainPanel } from './CompetitorBrainPanel';
 import { ContentBrainPanel } from './ContentBrainPanel';
+import { MarketIntelligencePanel } from './MarketIntelligencePanel';
 import { NaturalSearchPanel } from './NaturalSearchPanel';
 import { ProfileDashboard } from './profile/ProfileDashboard';
 
@@ -667,6 +668,7 @@ export function CrossPlatformPanel({
 
             <NaturalSearchPanel apiToken={apiToken} onMessage={onMessage} />
             <ContentBrainPanel apiToken={apiToken} onMessage={onMessage} />
+            <MarketIntelligencePanel apiToken={apiToken} onMessage={onMessage} />
             <CompetitorBrainPanel apiToken={apiToken} onMessage={onMessage} />
 
             {/* === Apify 历史导入 (Advanced 折叠区,所有 Tab 都可见) === */}

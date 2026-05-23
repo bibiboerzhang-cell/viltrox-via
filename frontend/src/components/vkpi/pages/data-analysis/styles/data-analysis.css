@@ -493,6 +493,116 @@
   font-size: 13px;
 }
 
+/* ===== P5.69 Market Intelligence ===== */
+
+.da-market-intel {
+  background: var(--da-bg-card);
+  border: 1px solid var(--da-border-soft);
+  border-radius: 18px;
+  box-shadow: var(--da-shadow-card);
+  padding: 18px;
+  margin: 24px 0;
+}
+
+.da-market-intel__header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+
+.da-market-intel__header h2 {
+  margin: 6px 0 6px;
+  font-size: 20px;
+  color: var(--da-text-primary);
+}
+
+.da-market-intel__header p {
+  margin: 0;
+  color: var(--da-text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.da-market-intel__stats,
+.da-market-intel__grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.da-market-intel__grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.da-market-intel__metric,
+.da-market-intel__list {
+  border: 1px solid var(--da-border-soft);
+  border-radius: 14px;
+  background: var(--da-bg-hover);
+  padding: 12px;
+  min-width: 0;
+}
+
+.da-market-intel__metric span,
+.da-market-intel__list > strong {
+  display: block;
+  color: var(--da-text-muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: 7px;
+}
+
+.da-market-intel__metric strong {
+  color: var(--da-text-primary);
+  font-size: 18px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.da-market-intel__item {
+  border-top: 1px solid var(--da-border);
+  margin-top: 10px;
+  padding-top: 10px;
+}
+
+.da-market-intel__item strong {
+  display: block;
+  color: var(--da-text-primary);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.da-market-intel__item span,
+.da-market-intel__empty {
+  display: block;
+  margin-top: 4px;
+  color: var(--da-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.da-market-intel__policy {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.da-market-intel__policy span {
+  border: 1px solid var(--da-border);
+  border-radius: var(--da-radius-pill);
+  background: #fff;
+  color: var(--da-text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 10px;
+}
+
 /* ===== P9 Natural Search ===== */
 
 .da-natural-search {
@@ -1169,12 +1279,15 @@
   .da-competitor-brain__stats,
   .da-competitor-brain__distributions,
   .da-competitor-brain__filters,
+  .da-market-intel__stats,
+  .da-market-intel__grid,
   .da-natural-search__bar {
     grid-template-columns: 1fr 1fr;
   }
 
   .da-content-brain__header,
-  .da-competitor-brain__header {
+  .da-competitor-brain__header,
+  .da-market-intel__header {
     flex-direction: column;
   }
 }
@@ -1269,6 +1382,11 @@
 @media (max-width: 720px) {
   .da-overview-grid {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  .da-market-intel__stats,
+  .da-market-intel__grid {
+    grid-template-columns: 1fr;
   }
 }
 

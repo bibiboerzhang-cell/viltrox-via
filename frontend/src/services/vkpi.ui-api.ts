@@ -1573,6 +1573,9 @@ export async function listCompetitorBrainSignals(token: string, options: { revie
 export async function reviewCompetitorBrainSignal(token: string, signalId: string | number, payload: { action: string; note?: string }) {
   return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/industry-data/competitor-brain/signals/${encodeURIComponent(String(signalId))}/review`, { method: "POST", body: jsonBody(payload) }, token);
 }
+export async function getMarketIntelligenceV0(token: string, limit = 120) {
+  return apiFetch<Row>(`/api/admin/vkpi/industry-data/market-intelligence/v0?limit=${encodeURIComponent(String(limit))}`, {}, token);
+}
 export async function previewBrandSignals(token: string, options: { source?: string; since?: string; limit?: number } = {}) {
   const params = new URLSearchParams({ limit: String(options.limit || 200) });
   if (options.source) params.set("source", options.source);
