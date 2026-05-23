@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { getKolPoolIntelligenceCard, searchVkpi } from '../../../../services/vkpi.ui-api';
+import { getKolPoolIntelligenceCard, searchVkpi, submitTeamFeedback } from '../../../../services/vkpi.ui-api';
 import { proxiedImageUrl } from '../../shared/mediaProxy';
 import type { Row } from './utils/types';
 
@@ -43,6 +43,13 @@ const NATURAL_SEARCH_HISTORY_KEY = 'vkpi:natural-search-history:v1';
 const MAX_SEARCH_HISTORY = 8;
 const SEARCH_REVEAL_BATCH_SIZE = 6;
 const RECENT_CONTENT_CARD_LIMIT = 8;
+
+const DECISION_OPTIONS = [
+  { key: 'contact', label: '可联系', detail: '证据足够，适合进入沟通或项目跟进。', severity: 'medium' },
+  { key: 'watch', label: '可观察', detail: '保留候选，等待更多内容或业务场景。', severity: 'low' },
+  { key: 'caution', label: '谨慎', detail: '存在数据缺口或竞品风险，联系前需要复核。', severity: 'high' },
+  { key: 'avoid', label: '避开', detail: '当前证据不支持推进，避免进入联系名单。', severity: 'high' },
+] as const;
 
 const SEARCH_PROGRESS_STEPS = [
   { key: 'query', label: '解析查询' },
@@ -204,6 +211,9 @@ export function NaturalSearchPanel({ apiToken, onMessage }: NaturalSearchPanelPr
   const [detailLoadingId, setDetailLoadingId] = useState('');
   const [detailError, setDetailError] = useState('');
   const [activeEvidenceSection, setActiveEvidenceSection] = useState('');
+  const [decisionSubmitting, setDecisionSubmitting] = useState('');
+  const [decisionMessage, setDecisionMessage] = useState('');
+  const [decisionError, setDecisionError] = useState('');
   const revealTimerRef = useRef<number | null>(null);
   const progressTimerRefs = useRef<number[]>([]);
   const searchRunRef = useRef(0);
@@ -378,6 +388,8 @@ export function NaturalSearchPanel({ apiToken, onMessage }: NaturalSearchPanelPr
     setDetailCard(null);
     setDetailError('');
     setActiveEvidenceSection('');
+    setDecisionMessage('');
+    setDecisionError('');
     setDetailLoadingId(kolPoolId);
     try {
       const card = await getKolPoolIntelligenceCard(apiToken, kolPoolId, true);
@@ -396,6 +408,47 @@ export function NaturalSearchPanel({ apiToken, onMessage }: NaturalSearchPanelPr
     setDetailCard(null);
     setDetailError('');
     setActiveEvidenceSection('');
+    setDecisionMessage('');
+    setDecisionError('');
+  };
+
+  const submitDecision = async (decision: typeof DECISION_OPTIONS[number]) => {
+    if (!apiToken || !detailSource) return;
+    const kolPoolId = kolPoolIdForItem(detailSource);
+    if (!kolPoolId) return;
+    setDecisionSubmitting(decision.key);
+    setDecisionMessage('');
+    setDecisionError('');
+    try {
+      const result = await submitTeamFeedback(apiToken, {
+        feedbackType: 'suggestion',
+        severity: decision.severity,
+        pagePath: 'vkpi:natural-search',
+        title: `KOL 决策: ${decision.label} - ${compactText(detailSource.title)}`,
+        detail: decision.detail,
+        metadata: {
+          scope: 'kol_decision_label_v0',
+          decision_key: decision.key,
+          decision_label: decision.label,
+          kol_pool_id: kolPoolId,
+          source_table: detailSource.source_table,
+          source_id: detailSource.source_id,
+          handle: detailSource.handle || asRecord(detailSource.evidence).handle,
+          platform: detailSource.platform || asRecord(detailSource.evidence).platform,
+          query: meta.query || query,
+          evidence_sections: detailEvidenceRows.map((row) => firstText(row.section)).filter(Boolean),
+          provider_calls: Boolean(detailCard?.provider_calls),
+          llm_calls: Boolean(detailCard?.llm_calls),
+          write_db: Boolean(detailCard?.write_db),
+        },
+      });
+      const uid = firstText(result.feedback?.uid);
+      setDecisionMessage(uid ? `已记录决策: ${uid}` : '已记录决策。');
+    } catch (error) {
+      setDecisionError(error instanceof Error ? error.message : '决策记录失败');
+    } finally {
+      setDecisionSubmitting('');
+    }
   };
 
   useEffect(() => () => clearTimers(), []);
@@ -579,6 +632,26 @@ export function NaturalSearchPanel({ apiToken, onMessage }: NaturalSearchPanelPr
                     <small>{compactText(detail)}</small>
                   </div>
                 ))}
+              </div>
+              <div className="da-natural-search__decision">
+                <div>
+                  <strong>决策标签</strong>
+                  <span>写入团队反馈队列，下一步会接专用 audit 表。</span>
+                </div>
+                <div className="da-natural-search__decision-actions">
+                  {DECISION_OPTIONS.map((option) => (
+                    <button
+                      key={option.key}
+                      type="button"
+                      onClick={() => void submitDecision(option)}
+                      disabled={Boolean(decisionSubmitting)}
+                    >
+                      {decisionSubmitting === option.key ? '记录中' : option.label}
+                    </button>
+                  ))}
+                </div>
+                {decisionMessage ? <p className="is-ok">{decisionMessage}</p> : null}
+                {decisionError ? <p className="is-error">{decisionError}</p> : null}
               </div>
               {detailEvidenceRows.length ? (
                 <div className="da-natural-search__evidence-tabs">
