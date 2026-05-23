@@ -305,8 +305,14 @@ function metricNumber(metrics: Map<string, Row>, key: string): number {
   return row ? numberValue(row.value_numeric ?? row.value ?? 0) : 0;
 }
 
+function metricSourceCount(metrics: Map<string, Row>, key: string): number {
+  const row = metrics.get(key);
+  return row ? numberValue(row.source_count || objectValue(row.calculation).row_count) : 0;
+}
+
 function badgeText(value?: string): string {
   if (!value) return '示例';
+  if (value.includes('部分')) return '部分';
   if (value.includes('Shopify')) return '待接入';
   if (value.includes('待')) return '待数据';
   return '示例';
@@ -379,7 +385,8 @@ function buildPremiumKpis(snapshot: PremiumSnapshot, allowMockFallback: boolean)
   );
   const views = official.views || metricNumber(metrics, 'views') || trendTotals.views;
   const gmvCents = metricNumber(metrics, 'gmv');
-  const orders = snapshot.trendRows.reduce((sum, row) => sum + numberValue(row.orders), 0);
+  const gmvSourceCount = metricSourceCount(metrics, 'gmv');
+  const costCents = metricNumber(metrics, 'cost');
   const productRois = snapshot.productRows
     .map((row) => {
       const sales = numberValue(row.sales_cents || row.revenue_cents || row.gmv_cents);
@@ -394,13 +401,15 @@ function buildPremiumKpis(snapshot: PremiumSnapshot, allowMockFallback: boolean)
     : trendTotals.views
       ? ((trendTotals.likes + trendTotals.comments) / trendTotals.views) * 100
       : 0;
+  const gmvPartial = gmvCents > 0 && gmvSourceCount > 0;
+  const roiPartial = averageRoi > 0 && gmvCents > 0 && costCents > 0;
   return [
     { ...mockKpis[0], value: views ? compact(views) : '--', meta: views ? `真实 API · 官方矩阵${official.viewsDelta ? ` · +${compact(official.viewsDelta)}` : ''}` : '等待真实 API', trend: 'up', isMock: !views, mockLabel: views ? undefined : '待真实数据' },
-    { ...mockKpis[1], value: gmvCents ? `$${compact(gmvCents / 100)}` : '--', meta: gmvCents ? '真实 API · 归因销售' : '待 Shopify 接入', trend: 'up', isMock: !gmvCents, mockLabel: gmvCents ? undefined : '待 Shopify 接入' },
+    { ...mockKpis[1], value: gmvPartial ? `$${compact(gmvCents / 100)}` : '--', meta: gmvPartial ? `部分归因 · ${gmvSourceCount} 条 attribution` : '待 Shopify 接入', trend: 'up', isMock: true, mockLabel: gmvPartial ? '部分归因' : '待 Shopify 接入' },
     { ...mockKpis[2], value: publishedContent ? compact(publishedContent) : '--', meta: publishedContent ? '真实 API · 官方矩阵' : '等待真实 API', trend: 'up', isMock: !publishedContent, mockLabel: publishedContent ? undefined : '待真实数据' },
     { ...mockKpis[3], value: `${engagementRate.toFixed(2)}%`, meta: '真实 API · likes/comments/views', trend: engagementRate ? 'up' : 'down', isMock: false, mockLabel: undefined },
-    { ...mockKpis[4], value: orders ? compact(orders) : '--', meta: orders ? '真实 API · 归因订单' : '待 Shopify 接入', trend: 'up', isMock: !orders, mockLabel: orders ? undefined : '待 Shopify 接入' },
-    { ...mockKpis[5], value: averageRoi ? `${averageRoi.toFixed(2)}x` : '--', meta: averageRoi ? '真实 API · 产品表现' : '待成本 / Shopify 接入', trend: 'up', isMock: !averageRoi, mockLabel: averageRoi ? undefined : '待成本 / Shopify 接入' },
+    { ...mockKpis[4], value: '--', meta: '待 Shopify 订单 webhook', trend: 'up', isMock: true, mockLabel: '待 Shopify 接入' },
+    { ...mockKpis[5], value: roiPartial ? `${averageRoi.toFixed(2)}x` : '--', meta: roiPartial ? '部分 ROI · 归因 + 成本未全量' : '待成本 / Shopify 接入', trend: 'up', isMock: true, mockLabel: roiPartial ? '部分归因' : '待成本 / Shopify 接入' },
   ];
 }
 
@@ -812,6 +821,7 @@ async function fetchPremiumSnapshot(apiToken: string, windowDays: number): Promi
 
 function kpiStatusLabel(item: PremiumKpi): string {
   if (!item.isMock) return '真实 API';
+  if (item.mockLabel?.includes('部分')) return '部分真实';
   return item.mockLabel?.includes('Shopify') || item.mockLabel?.includes('待') ? '待接入' : '示例';
 }
 
