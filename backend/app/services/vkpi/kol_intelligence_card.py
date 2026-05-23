@@ -932,7 +932,7 @@ def _decision_support(sections: dict[str, dict[str, Any]]) -> dict[str, Any]:
     gaps: list[str] = []
     ready = 0
     for name, payload in sections.items():
-        status = _text(payload.get("status")).lower()
+        status = _text(payload.get("status") or ("ready" if name == "freshness" else "")).lower()
         if status in {"ready", "empty"}:
             ready += 1
         elif status in {"unavailable", "error"}:

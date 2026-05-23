@@ -356,3 +356,21 @@ def test_product_fit_evidence_splits_official_catalog_from_discovery(monkeypatch
     assert discovery["source"] == "rule_engine"
     assert discovery["confidence_method"] == "rule_v0_low_confidence"
     assert payload["rule_evidence_count"] >= 2
+
+
+def test_decision_support_treats_freshness_payload_as_ready_without_status() -> None:
+    payload = kol_intelligence_card._decision_support(
+        {
+            "freshness": {"tier": "hot", "reason": "fresh"},
+            "dimensions11": {"status": "ready"},
+            "competitors": {"status": "empty"},
+            "brand_signal": {"status": "ready"},
+            "comment_intelligence": {"status": "ready"},
+            "memory_card": {"status": "ready"},
+            "product_fit": {"status": "ready"},
+        }
+    )
+
+    assert payload["readiness"] == "ready"
+    assert payload["ready_sections"] == 7
+    assert payload["gaps"] == []
