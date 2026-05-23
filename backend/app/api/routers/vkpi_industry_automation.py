@@ -18,6 +18,7 @@ from app.services.vkpi import (
     prediction_calibration_v0,
     product_campaign_card,
     training_data_export,
+    today_new_signals_v0,
     trend_detection_v0,
 )
 
@@ -289,6 +290,19 @@ def industry_prediction_calibration_v0(
         prediction_json=prediction_json,
         truth_json=truth_json,
         top_n=top_n,
+    )
+
+
+@router.get("/industry-data/today-new-signals/v0")
+def industry_today_new_signals_v0(
+    lookback_hours: int = Query(default=24, ge=1, le=168),
+    limit: int = Query(default=100, ge=1, le=500),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    del staff
+    return today_new_signals_v0.build_today_new_signals_v0(
+        lookback_hours=lookback_hours,
+        limit=limit,
     )
 
 
