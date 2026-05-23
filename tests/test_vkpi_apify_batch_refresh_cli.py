@@ -314,3 +314,149 @@ def test_execution_preflight_reports_windowed_execution_after_replan(monkeypatch
     assert preflight["can_execute_if_authorized"] is False
     assert preflight["can_execute_by_windows"] is True
     assert preflight["checks"]["windowed_execution_available"] is True
+
+
+def test_cli_live_window_index_executes_only_selected_window(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+    monkeypatch.setenv("APIFY_TOKEN", "test-token")
+
+    def fake_plan(**_kwargs):
+        return {
+            "strategy": "apify_batch_first",
+            "max_concurrent_runs": 2,
+            "selector_ready": True,
+            "source_total": 38,
+            "total_targets": 38,
+            "batch_count": 2,
+            "platforms": {"youtube": 38},
+            "batches": [
+                {
+                    "batch_key": "youtube-1",
+                    "platform": "youtube",
+                    "target_count": 25,
+                    "kol_pool_ids": list(range(1, 26)),
+                    "targets": [{"kol_pool_id": item, "platform": "youtube"} for item in range(1, 26)],
+                },
+                {
+                    "batch_key": "youtube-2",
+                    "platform": "youtube",
+                    "target_count": 13,
+                    "kol_pool_ids": list(range(26, 39)),
+                    "targets": [{"kol_pool_id": item, "platform": "youtube"} for item in range(26, 39)],
+                },
+            ],
+            "skipped": [],
+        }
+
+    async def fake_execute(plan, **kwargs):
+        calls["plan"] = plan
+        calls["execute"] = kwargs
+        return {"executed": bool(kwargs.get("allow_provider_calls")), "summary": {"retry_count": 0, "failed_batches": 0}}
+
+    monkeypatch.setattr(vkpi_apify_batch_refresh.apify_batch_refresh, "qualified_apify_batch_plan", fake_plan)
+    monkeypatch.setattr(vkpi_apify_batch_refresh.apify_batch_refresh, "execute_apify_batch_plan", fake_execute)
+
+    result = asyncio.run(
+        vkpi_apify_batch_refresh.run_from_args(
+            vkpi_apify_batch_refresh.parse_args(
+                ["--execute", "--allow-provider-calls", "--max-live-targets", "25", "--live-window-index", "2"]
+            )
+        )
+    )
+
+    assert calls["execute"]["allow_provider_calls"] is True
+    assert calls["plan"]["total_targets"] == 13
+    assert calls["plan"]["batch_count"] == 1
+    assert calls["plan"]["batches"][0]["batch_key"] == "youtube-2"
+    assert result["provider_calls_allowed"] is True
+    assert result["provider_gate"]["reason"] == "allowed"
+    assert result["window_selection"]["selected"] is True
+    assert result["window_selection"]["selected_window_index"] == 2
+    assert result["window_selection"]["full_target_count"] == 38
+    assert result["safe_live_windows"]["window_count"] == 1
+    assert result["full_safe_live_windows"]["window_count"] == 2
+
+
+def test_cli_live_window_index_not_found_blocks_execution(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+    monkeypatch.setenv("APIFY_TOKEN", "test-token")
+
+    def fake_plan(**_kwargs):
+        return {
+            "strategy": "apify_batch_first",
+            "max_concurrent_runs": 2,
+            "selector_ready": True,
+            "source_total": 1,
+            "total_targets": 1,
+            "batch_count": 1,
+            "platforms": {"youtube": 1},
+            "batches": [{"batch_key": "youtube-1", "platform": "youtube", "target_count": 1, "targets": [{"kol_pool_id": 1}]}],
+            "skipped": [],
+        }
+
+    async def fake_execute(plan, **kwargs):
+        calls["plan"] = plan
+        calls["execute"] = kwargs
+        return {"executed": False, "reason": "provider_calls_not_allowed", "summary": {"retry_count": 0, "failed_batches": 0}}
+
+    monkeypatch.setattr(vkpi_apify_batch_refresh.apify_batch_refresh, "qualified_apify_batch_plan", fake_plan)
+    monkeypatch.setattr(vkpi_apify_batch_refresh.apify_batch_refresh, "execute_apify_batch_plan", fake_execute)
+
+    result = asyncio.run(
+        vkpi_apify_batch_refresh.run_from_args(
+            vkpi_apify_batch_refresh.parse_args(
+                ["--execute", "--allow-provider-calls", "--max-live-targets", "25", "--live-window-index", "9"]
+            )
+        )
+    )
+
+    assert calls["execute"]["allow_provider_calls"] is False
+    assert calls["plan"]["total_targets"] == 0
+    assert result["provider_calls_allowed"] is False
+    assert result["provider_gate"]["reason"] == "no_targets_to_execute"
+    assert result["window_selection"]["selected"] is False
+    assert result["window_selection"]["reason"] == "window_not_found"
+
+
+def test_window_execution_runbook_emits_authorized_window_commands() -> None:
+    args = vkpi_apify_batch_refresh.parse_args(
+        [
+            "--limit",
+            "120",
+            "--tiers",
+            "hot",
+            "--stale-before",
+            "2100-01-01T00:00:00Z",
+            "--chunk-sizes",
+            "instagram=25,youtube=25",
+            "--max-live-targets",
+            "25",
+        ]
+    )
+    windows = {
+        "live_target_cap": 25,
+        "window_count": 2,
+        "windows": [
+            {"window_index": 1, "target_count": 25, "batch_count": 1, "platforms": {"instagram": 25}},
+            {"window_index": 2, "target_count": 13, "batch_count": 1, "platforms": {"youtube": 13}},
+        ],
+        "requires_replan_for_full_live": False,
+    }
+
+    runbook = vkpi_apify_batch_refresh.window_execution_runbook(
+        args,
+        windows,
+        {"requested": False, "selected": False, "reason": "not_requested"},
+    )
+
+    assert runbook["available"] is True
+    assert runbook["reason"] == "provider_authorization_required"
+    assert runbook["requires_explicit_authorization"] is True
+    assert runbook["execute_all_at_once_allowed"] is False
+    assert len(runbook["execute_commands"]) == 2
+    first_command = runbook["execute_commands"][0]["command"]
+    assert "--execute" in first_command
+    assert "--allow-provider-calls" in first_command
+    assert "--live-window-index 1" in first_command
+    assert "--chunk-sizes instagram=25,youtube=25" in first_command
+    assert "--execute" not in runbook["preflight_command"]

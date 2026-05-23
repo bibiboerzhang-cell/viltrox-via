@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import json
 import os
+import shlex
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,6 +47,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--execute", action="store_true", help="Run the executor. Provider calls still require --allow-provider-calls.")
     parser.add_argument("--allow-provider-calls", action="store_true", help="Actually call Apify. Use only after backup-first operator approval.")
     parser.add_argument("--max-live-targets", type=int, default=25, help="Hard cap for live provider execution targets. Default 25, max 100.")
+    parser.add_argument("--live-window-index", type=int, default=0, help="Restrict execution to one safe live window from the full plan, 1-based")
     parser.add_argument("--compact", action="store_true", help="Omit full batch target lists from output")
     parser.add_argument("--json-out", default="", help="Optional JSON artifact path. Defaults to runtime/ops.")
     parser.add_argument("--no-artifact", action="store_true", help="Do not write an operator JSON artifact")
@@ -244,6 +246,168 @@ def safe_live_windows(args: argparse.Namespace, plan: dict[str, Any]) -> dict[st
     }
 
 
+def _platform_counts_for_batches(batches: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for batch in batches:
+        platform = apify_batch_refresh.normalize_platform(batch.get("platform"))
+        if platform:
+            counts[platform] = counts.get(platform, 0) + _batch_target_count(batch)
+    return counts
+
+
+def _empty_window_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **plan,
+        "selector_ready": False,
+        "source_total": 0,
+        "source_by_platform": {},
+        "tier_distribution": {},
+        "total_targets": 0,
+        "batch_count": 0,
+        "batches": [],
+        "skipped": [],
+        "platforms": {},
+    }
+
+
+def select_live_window(
+    args: argparse.Namespace,
+    plan: dict[str, Any],
+    windows: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    requested_index = _safe_int(getattr(args, "live_window_index", 0))
+    if requested_index <= 0:
+        return plan, {
+            "requested": False,
+            "selected": False,
+            "reason": "not_requested",
+            "requested_index": 0,
+            "full_target_count": _safe_int(plan.get("total_targets")),
+            "full_batch_count": _safe_int(plan.get("batch_count")),
+            "full_window_count": _safe_int(windows.get("window_count")),
+        }
+
+    all_windows = [item for item in (windows.get("windows") or []) if isinstance(item, dict)]
+    selected_window = next((item for item in all_windows if _safe_int(item.get("window_index")) == requested_index), None)
+    if not selected_window:
+        return _empty_window_plan(plan), {
+            "requested": True,
+            "selected": False,
+            "reason": "window_not_found",
+            "requested_index": requested_index,
+            "full_target_count": _safe_int(plan.get("total_targets")),
+            "full_batch_count": _safe_int(plan.get("batch_count")),
+            "full_window_count": _safe_int(windows.get("window_count")),
+        }
+
+    selected_keys = {
+        str(batch.get("batch_key") or "")
+        for batch in (selected_window.get("batches") or [])
+        if isinstance(batch, dict) and batch.get("batch_key")
+    }
+    selected_batches = [
+        batch
+        for batch in (plan.get("batches") or [])
+        if isinstance(batch, dict) and str(batch.get("batch_key") or "") in selected_keys
+    ]
+    target_count = sum(_batch_target_count(batch) for batch in selected_batches)
+    selected_plan = {
+        **plan,
+        "source_total": target_count,
+        "source_by_platform": _platform_counts_for_batches(selected_batches),
+        "total_targets": target_count,
+        "batch_count": len(selected_batches),
+        "batches": selected_batches,
+        "skipped": [],
+        "platforms": _platform_counts_for_batches(selected_batches),
+    }
+    return selected_plan, {
+        "requested": True,
+        "selected": True,
+        "reason": "selected",
+        "requested_index": requested_index,
+        "selected_window_index": requested_index,
+        "selected_target_count": target_count,
+        "selected_batch_count": len(selected_batches),
+        "selected_batch_keys": [str(batch.get("batch_key") or "") for batch in selected_batches],
+        "selected_platforms": _platform_counts_for_batches(selected_batches),
+        "full_target_count": _safe_int(plan.get("total_targets")),
+        "full_batch_count": _safe_int(plan.get("batch_count")),
+        "full_window_count": _safe_int(windows.get("window_count")),
+    }
+
+
+def _cli_command(args: argparse.Namespace, *, live_window_index: int = 0, execute: bool = False) -> str:
+    parts = [
+        "PYTHONPATH=backend",
+        ".venv/bin/python",
+        "scripts/vkpi_apify_batch_refresh.py",
+        "--limit",
+        str(max(1, min(1200, _safe_int(args.limit) or 50))),
+        "--offset",
+        str(max(0, min(5000, _safe_int(args.offset)))),
+        "--tiers",
+        str(args.tiers or "hot"),
+        "--max-posts",
+        str(max(1, min(3, _safe_int(args.max_posts) or 1))),
+        "--max-concurrent-runs",
+        str(max(1, min(3, _safe_int(args.max_concurrent_runs) or 2))),
+        "--max-live-targets",
+        str(max(1, min(100, _safe_int(args.max_live_targets) or 25))),
+        "--compact",
+    ]
+    if str(args.platforms or "").strip():
+        parts.extend(["--platforms", str(args.platforms)])
+    if str(args.stale_before or "").strip():
+        parts.extend(["--stale-before", str(args.stale_before)])
+    elif _safe_int(args.stale_days):
+        parts.extend(["--stale-days", str(_safe_int(args.stale_days))])
+    if str(args.chunk_sizes or "").strip():
+        parts.extend(["--chunk-sizes", str(args.chunk_sizes)])
+    if live_window_index > 0:
+        parts.extend(["--live-window-index", str(live_window_index)])
+    if execute:
+        parts.extend(["--execute", "--allow-provider-calls"])
+    return shlex.join(parts)
+
+
+def window_execution_runbook(
+    args: argparse.Namespace,
+    full_windows: dict[str, Any],
+    window_selection: dict[str, Any],
+) -> dict[str, Any]:
+    window_count = _safe_int(full_windows.get("window_count"))
+    requires_replan = bool(full_windows.get("requires_replan_for_full_live"))
+    windows = [item for item in (full_windows.get("windows") or []) if isinstance(item, dict)]
+    execute_commands = [
+        {
+            "window_index": _safe_int(window.get("window_index")),
+            "target_count": _safe_int(window.get("target_count")),
+            "batch_count": _safe_int(window.get("batch_count")),
+            "platforms": window.get("platforms") if isinstance(window.get("platforms"), dict) else {},
+            "command": _cli_command(args, live_window_index=_safe_int(window.get("window_index")), execute=True),
+        }
+        for window in windows
+    ]
+    if requires_replan:
+        reason = "replan_required"
+    elif window_count <= 0:
+        reason = "no_safe_windows"
+    else:
+        reason = "provider_authorization_required"
+    return {
+        "available": bool(window_count and not requires_replan),
+        "reason": reason,
+        "requires_explicit_authorization": True,
+        "preflight_command": _cli_command(args, execute=False),
+        "execute_all_at_once_allowed": window_count <= 1 and not requires_replan,
+        "window_count": window_count,
+        "live_target_cap": _safe_int(full_windows.get("live_target_cap")),
+        "selected_window_index": _safe_int(window_selection.get("selected_window_index") or window_selection.get("requested_index")),
+        "execute_commands": execute_commands,
+    }
+
+
 def operator_summary(result: dict[str, Any]) -> dict[str, Any]:
     plan = result.get("plan") if isinstance(result.get("plan"), dict) else {}
     execution = result.get("execution") if isinstance(result.get("execution"), dict) else {}
@@ -347,7 +511,9 @@ def provider_gate(args: argparse.Namespace, plan: dict[str, Any], provider_confi
 
 
 async def run_from_args(args: argparse.Namespace) -> dict[str, Any]:
-    plan = build_plan(args)
+    full_plan = build_plan(args)
+    full_windows = safe_live_windows(args, full_plan)
+    plan, window_selection = select_live_window(args, full_plan, full_windows)
     provider_config = provider_config_summary(plan)
     windows = safe_live_windows(args, plan)
     preflight = execution_preflight(args, plan, provider_config, windows)
@@ -367,6 +533,9 @@ async def run_from_args(args: argparse.Namespace) -> dict[str, Any]:
         "provider_config": provider_config,
         "execution_preflight": preflight,
         "safe_live_windows": windows,
+        "full_safe_live_windows": full_windows if window_selection.get("requested") else windows,
+        "window_selection": window_selection,
+        "window_execution_runbook": window_execution_runbook(args, full_windows, window_selection),
         "plan": _compact_plan(plan) if args.compact else plan,
         "execution": execution,
     }
