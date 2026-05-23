@@ -61,6 +61,12 @@ interface KpiInsightTab {
   rows: KpiInsightRow[];
 }
 
+interface KpiDetailInsight {
+  insight: string;
+  tabs: KpiInsightTab[];
+  coverage: string;
+}
+
 interface PremiumKpiCardProps {
   item: PremiumKpi;
   selected: boolean;
@@ -876,7 +882,7 @@ function topExposureContentRows(officialMatrix: Row, limit = 10): Row[] {
     .slice(0, limit);
 }
 
-function buildExposureInsight(snapshot: PremiumSnapshot): { insight: string; tabs: KpiInsightTab[]; coverage: string } {
+function buildExposureInsight(snapshot: PremiumSnapshot): KpiDetailInsight {
   const official = officialTotals(snapshot.officialMatrix);
   const platforms = officialPlatformRows(snapshot.officialMatrix)
     .map((row): KpiInsightRow & { rawValue: number } => {
@@ -944,6 +950,135 @@ function buildExposureInsight(snapshot: PremiumSnapshot): { insight: string; tab
   };
 }
 
+function engagementRateForRow(row: Row): number {
+  const views = numberValue(row.total_views || row.views || row.play_count || row.impressions);
+  if (!views) return 0;
+  const interactions = numberValue(row.total_likes || row.likes || row.like_count) + numberValue(row.total_comments || row.comments || row.comment_count) + numberValue(row.total_shares || row.shares || row.share_count);
+  return (interactions / views) * 100;
+}
+
+function buildContentInsight(snapshot: PremiumSnapshot): KpiDetailInsight {
+  const official = officialTotals(snapshot.officialMatrix);
+  const platforms = officialPlatformRows(snapshot.officialMatrix)
+    .map((row): KpiInsightRow & { rawValue: number } => {
+      const posts = numberValue(row.total_posts || row.posts || row.post_count);
+      const share = official.posts ? (posts / official.posts) * 100 : 0;
+      return {
+        label: platformDisplayName(row.platform),
+        value: compact(posts),
+        meta: `${share.toFixed(1)}%${numberValue(row.posts_delta) ? ` · +${compact(numberValue(row.posts_delta))}` : ''}`,
+        width: `${Math.max(5, Math.round(share || 0))}%`,
+        rawValue: posts,
+      };
+    })
+    .filter((row) => row.rawValue > 0)
+    .sort((a, b) => b.rawValue - a.rawValue);
+  const accounts = officialAccountRows(snapshot.officialMatrix)
+    .map((row): KpiInsightRow & { rawValue: number } => {
+      const posts = numberValue(row.total_posts || row.posts_count || row.post_count || row.posts);
+      return {
+        label: String(row.handle || row.display_name || row.account_name || '官方账号'),
+        value: compact(posts),
+        meta: platformDisplayName(row.platform_label || row.platform),
+        width: official.posts ? `${Math.max(5, Math.round((posts / official.posts) * 100))}%` : '0%',
+        rawValue: posts,
+      };
+    })
+    .filter((row) => row.rawValue > 0)
+    .sort((a, b) => b.rawValue - a.rawValue)
+    .slice(0, 10);
+  const latestRows = latestContentRows(snapshot)
+    .filter((row) => contentKind(row) === 'official')
+    .slice(0, 8)
+    .map((row): KpiInsightRow => ({
+      label: cleanContentTitle(row),
+      value: compact(contentMetric(row, ['views', 'total_views', 'play_count', 'impressions'])),
+      meta: `${String(row.account_handle || row.account_display_name || '-')} · ${platformDisplayName(row.platform)} · ${postedLabel(row)}`,
+      url: rowUrl(row),
+    }));
+  const topPlatform = platforms[0];
+  const topAccount = accounts[0];
+  return {
+    insight: topPlatform ? `${topPlatform.label} 是当前发布主阵地，${topAccount ? `${topAccount.label} 内容量最高。` : '账号层明细待补齐。'}` : '官方矩阵暂无可拆解内容数据。',
+    coverage: `${official.accountCount || accounts.length} 个官方账号 · ${compact(official.posts)} 内容`,
+    tabs: [
+      { label: '按平台', rows: platforms },
+      { label: '按账号', rows: accounts },
+      { label: '内容类型', rows: [{ label: '未分类', value: compact(official.posts), meta: '内容分类标签待接入', width: '100%' }] },
+      { label: '发布状态', rows: [{ label: '已抓取内容', value: compact(official.posts), meta: '官方矩阵 posts', width: '100%' }, ...latestRows.slice(0, 3)] },
+    ],
+  };
+}
+
+function buildEngagementInsight(snapshot: PremiumSnapshot): KpiDetailInsight {
+  const official = officialTotals(snapshot.officialMatrix);
+  const platforms = officialPlatformRows(snapshot.officialMatrix)
+    .map((row): KpiInsightRow & { rate: number } => {
+      const rate = engagementRateForRow(row);
+      return {
+        label: platformDisplayName(row.platform),
+        value: rate ? `${rate.toFixed(2)}%` : '--',
+        meta: `${compact(numberValue(row.total_likes || row.likes))} 赞 · ${compact(numberValue(row.total_comments || row.comments))} 评论 · ${compact(numberValue(row.total_views || row.views))} 曝光`,
+        width: `${Math.max(5, Math.min(100, Math.round(rate * 12)))}%`,
+        rate,
+      };
+    })
+    .filter((row) => row.rate > 0)
+    .sort((a, b) => b.rate - a.rate);
+  const accounts = officialAccountRows(snapshot.officialMatrix)
+    .map((row): KpiInsightRow & { rate: number } => {
+      const rate = engagementRateForRow(row);
+      const label = String(row.handle || row.display_name || row.account_name || '官方账号');
+      return {
+        label: label.startsWith('@') ? label : `@${label}`,
+        value: rate ? `${rate.toFixed(2)}%` : '--',
+        meta: `${platformDisplayName(row.platform_label || row.platform)} · ${compact(numberValue(row.total_views || row.views))} 曝光`,
+        width: `${Math.max(5, Math.min(100, Math.round(rate * 12)))}%`,
+        rate,
+      };
+    })
+    .filter((row) => row.rate > 0)
+    .sort((a, b) => b.rate - a.rate)
+    .slice(0, 10);
+  const topContent = latestContentRows(snapshot)
+    .map((row): KpiInsightRow & { rate: number } => {
+      const rate = engagementRateForRow(row);
+      return {
+        label: cleanContentTitle(row),
+        value: rate ? `${rate.toFixed(2)}%` : '--',
+        meta: `${String(row.account_handle || row.account_display_name || '-')} · ${compact(contentMetric(row, ['views', 'total_views', 'play_count', 'impressions']))} 曝光`,
+        url: rowUrl(row),
+        rate,
+      };
+    })
+    .filter((row) => row.rate > 0)
+    .sort((a, b) => b.rate - a.rate)
+    .slice(0, 10);
+  const interactions = official.likes + official.comments;
+  const rate = official.views ? (interactions / official.views) * 100 : 0;
+  return {
+    insight: platforms[0] ? `${platforms[0].label} 当前互动率最高；请结合 TOP 内容判断是内容质量还是曝光基数变化。` : '官方矩阵暂无可拆解互动率数据。',
+    coverage: `${compact(official.likes)} 赞 · ${compact(official.comments)} 评论 · ${compact(official.views)} 曝光`,
+    tabs: [
+      { label: '按平台', rows: platforms },
+      { label: '按账号', rows: accounts },
+      { label: 'TOP 内容', rows: topContent },
+      { label: 'likes/comments/views', rows: [
+        { label: '点赞', value: compact(official.likes), meta: '互动率分子', width: interactions ? `${Math.round((official.likes / interactions) * 100)}%` : '0%' },
+        { label: '评论', value: compact(official.comments), meta: '互动率分子', width: interactions ? `${Math.round((official.comments / interactions) * 100)}%` : '0%' },
+        { label: '曝光', value: compact(official.views), meta: `互动率分母 · ${rate.toFixed(2)}%`, width: '100%' },
+      ] },
+    ],
+  };
+}
+
+function buildKpiDetailInsight(label: string, snapshot: PremiumSnapshot): KpiDetailInsight | null {
+  if (label === '总曝光量') return buildExposureInsight(snapshot);
+  if (label === '内容数') return buildContentInsight(snapshot);
+  if (label === '内容互动率') return buildEngagementInsight(snapshot);
+  return null;
+}
+
 function PremiumKpiCard({ item, selected, onToggle }: PremiumKpiCardProps) {
   return (
     <div
@@ -985,14 +1120,14 @@ function KpiInsightPanel({
 }) {
   const statusLabel = kpiStatusLabel(item);
   const flow = kpiFlow(item.label);
-  const tabs = useMemo(() => kpiTabs(item.label), [item.label]);
-  const exposureInsight = useMemo(() => item.label === '总曝光量' ? buildExposureInsight(snapshot) : null, [item.label, snapshot]);
+  const detailInsight = useMemo(() => buildKpiDetailInsight(item.label, snapshot), [item.label, snapshot]);
+  const tabs = useMemo(() => detailInsight?.tabs.map((tab) => tab.label) || kpiTabs(item.label), [detailInsight, item.label]);
   const [activeTab, setActiveTab] = useState(tabs[0] || '');
   useEffect(() => {
     setActiveTab(tabs[0] || '');
   }, [item.label, tabs]);
-  const activeRows = exposureInsight
-    ? (exposureInsight.tabs.find((tab) => tab.label === activeTab) || exposureInsight.tabs[0])?.rows || []
+  const activeRows = detailInsight
+    ? (detailInsight.tabs.find((tab) => tab.label === activeTab) || detailInsight.tabs[0])?.rows || []
     : [];
   return (
     <section className="glass-card kpi-insight-panel" style={glassVarStyle({ '--ic': item.ic, '--ig': item.ig })}>
@@ -1004,7 +1139,7 @@ function KpiInsightPanel({
         <div>
           <strong>{item.value}</strong>
           <em className={item.trend}>{item.meta}</em>
-          <p>近 {windowDays} 天 · {item.isMock ? item.mockLabel || '待接入' : '真实 API'} · {exposureInsight?.coverage || 'Dashboard KPI'}</p>
+          <p>近 {windowDays} 天 · {item.isMock ? item.mockLabel || '待接入' : '真实 API'} · {detailInsight?.coverage || 'Dashboard KPI'}</p>
         </div>
         {item.label === '总曝光量' ? (
           <svg viewBox="0 0 520 250" preserveAspectRatio="none" aria-label="30 天每日曝光趋势">
@@ -1038,12 +1173,12 @@ function KpiInsightPanel({
       </div>
       <div className="kpi-insight-brief">
         <span>✦ 洞见</span>
-        <p>{exposureInsight?.insight || kpiInsightText(item)}</p>
+        <p>{detailInsight?.insight || kpiInsightText(item)}</p>
       </div>
       <div className="kpi-insight-tabs">
         {tabs.map((tab) => <button className={activeTab === tab ? 'is-active' : ''} type="button" key={tab} onClick={() => setActiveTab(tab)}>{tab}</button>)}
       </div>
-      {exposureInsight ? (
+      {detailInsight ? (
         <div className="kpi-insight-list">
           {activeRows.length ? activeRows.map((row, index) => (
             <div className="kpi-insight-row" key={`${activeTab}-${row.label}-${index}`}>
