@@ -162,6 +162,7 @@ const emptyDashboardData: VkpiDashboardData = {
 const VKPI_PAGE_KEYS = new Set<VkpiPageKey>([
   'command',
   'dashboardPremium',
+  'agents',
   'discover',
   'projects',
   'links',

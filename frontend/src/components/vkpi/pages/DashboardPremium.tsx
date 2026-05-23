@@ -1123,7 +1123,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
                     </div>
                   ))}
                 </div>
-                <button className="link agents-link" type="button" onClick={() => showToast('Agent Inbox 下一小块接入')}>Agent Inbox</button>
+                <button className="link agents-link" type="button" onClick={() => goToWorkspacePage('agents', 'Agent Inbox')}>Agent Inbox</button>
               </div>
               <div className="glass-card rail-card">
                 <div className="panel-head">

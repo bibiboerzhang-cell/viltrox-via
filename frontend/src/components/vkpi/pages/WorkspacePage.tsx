@@ -10,6 +10,7 @@ import type {
 import type { VkpiDashboardProps } from '../VkpiDashboard';
 
 const AttributionPage = lazy(() => import('./AttributionPage').then((module) => ({ default: module.AttributionPage })));
+const AgentsPage = lazy(() => import('./AgentsPage').then((module) => ({ default: module.AgentsPage })));
 const AuditPage = lazy(() => import('./AuditPage').then((module) => ({ default: module.AuditPage })));
 const CampaignsPage = lazy(() => import('./CampaignsPage').then((module) => ({ default: module.CampaignsPage })));
 const ChannelsPage = lazy(() => import('./ChannelsPage').then((module) => ({ default: module.ChannelsPage })));
@@ -90,6 +91,7 @@ function WorkspaceLoadingFallback() {
 
 export function WorkspacePage(props: WorkspacePageProps) {
   let page = <SettingsPage {...props} />;
+  if (props.page === 'agents') page = <AgentsPage {...props} />;
   if (props.page === 'discover') page = <DiscoverPage {...props} />;
   if (props.page === 'projects') page = <ProjectsPage {...props} />;
   if (props.page === 'links') page = <LinksPage {...props} />;

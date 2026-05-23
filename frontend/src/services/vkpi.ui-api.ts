@@ -50,6 +50,36 @@ export interface VkpiExportPayload extends VkpiDashboardFilters {
   format: "pdf" | "csv" | "xlsx";
 }
 
+export interface VkpiAgentInboxItem {
+  id: string;
+  agent_id: string;
+  agent_name: string;
+  type: string;
+  title: string;
+  summary: string;
+  status: "active" | "warning" | "idle" | string;
+  passed: boolean;
+  mode?: string;
+  generated_at?: string | null;
+  last_run_at?: string | null;
+  artifact_name?: string;
+  source?: string;
+  details?: {
+    summary?: Record<string, unknown>;
+    next_steps?: string[];
+  };
+}
+
+export interface VkpiAgentsInboxResponse {
+  items?: VkpiAgentInboxItem[];
+  total?: number;
+  limit?: number;
+  agent_id?: string | null;
+  ops_dir?: string;
+  is_real?: boolean;
+  source?: string;
+}
+
 export interface VkpiKolLookupPayload {
   platform: string;
   handleOrUrl: string;
@@ -1094,6 +1124,14 @@ export async function getKolAssessment(token: string, kolId: string) {
 export async function getKolProductFit(token: string, kolId: string, limit = 5) {
   return apiFetch<VkpiKolProductFitResponse>(`/api/admin/vkpi/kols/${encodeURIComponent(kolId)}/product-fit?limit=${encodeURIComponent(String(limit))}`, {}, token);
 }
+
+export async function getDashboardAgentsInbox(token: string, params: { limit?: number; agentId?: string } = {}) {
+  const query = new URLSearchParams();
+  query.set("limit", String(params.limit || 50));
+  if (params.agentId) query.set("agent_id", params.agentId);
+  return apiFetch<VkpiAgentsInboxResponse>(`/api/admin/vkpi/dashboard/agents/inbox?${query.toString()}`, {}, token);
+}
+
 export async function listKolContacts(token: string, kolId: string, includeWrong = false) {
   return apiFetch<VkpiKolContactsResponse>(`/api/marketing/kols/${encodeURIComponent(kolId)}/contacts?include_wrong=${includeWrong ? "true" : "false"}`, {}, token);
 }
