@@ -4,7 +4,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
-from app.services.vkpi import audit, decision_engine, metric_lineage, scope, workflow
+from app.db.connection import get_conn
+from app.services.vkpi import audit, decision_engine, kol_pool, metric_lineage, scope, workflow
+from app.services.vkpi.country_coords import country_geo, resolve_country_code
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-dashboard"])
@@ -85,6 +87,64 @@ def dashboard_product_performance(
         )
     except scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
+
+
+@router.get("/dashboard/kol-distribution")
+def dashboard_kol_distribution(
+    limit: int = Query(default=200, ge=1, le=250),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """Return real KOL country distribution for the premium dashboard map."""
+    del staff
+    conn = get_conn()
+    distribution = kol_pool._country_distribution(conn, limit=limit)
+    countries_by_code: dict[str, dict] = {}
+    unmapped: list[dict] = []
+    for row in distribution:
+        raw_values = row.get("raw_values") if isinstance(row.get("raw_values"), list) else []
+        code = resolve_country_code(row.get("country_code"), row.get("country_name"), *raw_values)
+        geo = country_geo(code)
+        if not geo:
+            unmapped.append(row)
+            continue
+        item = countries_by_code.setdefault(
+            geo["code"],
+            {
+                **geo,
+                "count": 0,
+                "share": 0.0,
+                "raw_values": [],
+            },
+        )
+        item["count"] += int(row.get("kol_count") or 0)
+        for raw in raw_values:
+            if raw not in item["raw_values"]:
+                item["raw_values"].append(raw)
+
+    mapped_kol_count = sum(int(item["count"] or 0) for item in countries_by_code.values())
+    source_country_kol_count = mapped_kol_count + sum(int(item.get("kol_count") or 0) for item in unmapped)
+    try:
+        total_pool_rows = int((conn.execute("SELECT COUNT(*) AS n FROM vkpi_kol_pool").fetchone() or {})["n"] or 0)
+    except Exception:
+        total_pool_rows = 0
+    countries = sorted(countries_by_code.values(), key=lambda item: (-int(item["count"] or 0), str(item["code"])))
+    for item in countries:
+        item["share"] = round((int(item["count"] or 0) / mapped_kol_count) * 100, 2) if mapped_kol_count else 0.0
+
+    return {
+        "total_kol": mapped_kol_count,
+        "mapped_kol_count": mapped_kol_count,
+        "source_country_kol_count": source_country_kol_count,
+        "total_pool_rows": total_pool_rows,
+        "missing_country_count": max(0, total_pool_rows - source_country_kol_count),
+        "countries": countries,
+        "country_count": len(countries),
+        "unmapped_count": len(unmapped),
+        "unmapped_kol_count": source_country_kol_count - mapped_kol_count,
+        "unmapped_sample": unmapped[:10],
+        "data_source": "vkpi_kol_pool.country",
+        "is_real": True,
+    }
 
 @router.get("/staff-directory")
 def staff_directory(staff=Depends(require_tab("vkpi", "read"))):
@@ -184,4 +244,3 @@ def staff_id_from_context(view: str, staff: dict) -> int | None:
 @router.get("/workflow/stages")
 def stages(staff=Depends(require_tab("vkpi", "read"))):
     return workflow.stage_config()
-
