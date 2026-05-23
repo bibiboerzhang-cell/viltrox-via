@@ -44,3 +44,23 @@ def test_dashboard_agents_status_marks_missing_artifacts_idle(tmp_path: Path) ->
     assert payload["active_count"] == 0
     assert all(agent["status"] == "idle" for agent in payload["agents"])
     assert all(agent["summary"] for agent in payload["agents"])
+
+
+def test_dashboard_copilot_brief_reads_latest_brief_artifact(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "local-p7-83-brief-agent-v0.json",
+        {
+            "mode": "p7_83_brief_agent_v0",
+            "summary": {"headline": "今天优先处理 3 个 KOL 机会"},
+            "brief_items": [{"title": "机会 A"}, {"title": "机会 B"}],
+            "next_actions": [{"title": "联系 KOL"}],
+        },
+    )
+
+    payload = vkpi_dashboard_staff._build_dashboard_copilot_brief(str(tmp_path))
+
+    assert payload["is_real"] is True
+    assert payload["headline"] == "今天优先处理 3 个 KOL 机会"
+    assert payload["mode"] == "p7_83_brief_agent_v0"
+    assert len(payload["items"]) == 2
+    assert len(payload["actions"]) == 1

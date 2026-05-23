@@ -125,6 +125,26 @@ def _build_dashboard_agents_status(ops_dir: str = "runtime/ops", kol_pool_total:
         "is_real": True,
         "source": "runtime/ops + vkpi_kol_pool",
     }
+
+
+def _build_dashboard_copilot_brief(ops_dir: str = "runtime/ops") -> dict[str, Any]:
+    path = _latest_dashboard_agent_artifact(ops_dir, "*p7-83-brief-agent-v0.json")
+    payload = _load_dashboard_agent_json(path)
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    items = payload.get("brief_items") if isinstance(payload.get("brief_items"), list) else []
+    actions = payload.get("next_actions") if isinstance(payload.get("next_actions"), list) else []
+    headline = str(summary.get("headline") or "暂无 Copilot Brief")
+    return {
+        "headline": headline,
+        "summary": summary,
+        "items": items[:5],
+        "actions": actions[:5],
+        "last_output": path.name if path else "",
+        "last_run_at": _artifact_mtime_iso(path),
+        "mode": payload.get("mode") or "",
+        "is_real": bool(path and payload),
+        "source": "runtime/ops p7-83 brief agent",
+    }
 @router.get("/architecture")
 def architecture(staff=Depends(require_tab("vkpi", "read"))):
     return workflow.architecture_summary()
@@ -259,6 +279,15 @@ def dashboard_agents_status(
     except Exception:
         kol_pool_total = 0
     return _build_dashboard_agents_status(kol_pool_total=kol_pool_total)
+
+
+@router.get("/dashboard/copilot-brief")
+def dashboard_copilot_brief(
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """Return the latest read-only brief-agent artifact for Dashboard Copilot."""
+    del staff
+    return _build_dashboard_copilot_brief()
 
 
 @router.get("/staff-directory")
