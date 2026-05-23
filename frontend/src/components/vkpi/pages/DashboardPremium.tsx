@@ -48,10 +48,8 @@ interface PremiumKpi {
 
 interface PremiumKpiCardProps {
   item: PremiumKpi;
-  expanded: boolean;
-  windowDays: number;
+  selected: boolean;
   onToggle: () => void;
-  onOpenDetail: () => void;
 }
 
 interface PremiumProductRow {
@@ -705,11 +703,40 @@ function kpiStatusLabel(item: PremiumKpi): string {
   return item.mockLabel?.includes('Shopify') || item.mockLabel?.includes('待') ? '待接入' : '示例';
 }
 
-function PremiumKpiCard({ item, expanded, windowDays, onToggle, onOpenDetail }: PremiumKpiCardProps) {
-  const statusLabel = kpiStatusLabel(item);
+function kpiInsightText(item: PremiumKpi): string {
+  if (item.label === '总曝光量') return '官方矩阵曝光已接入；下一步按平台、账号和 TOP 内容拆解增长来源。';
+  if (item.label === '内容数') return '内容数量来自官方矩阵，适合与曝光和互动率联动判断发布节奏。';
+  if (item.label === '内容互动率') return '互动率需要同时看 likes、comments 和 views，避免只看单一百分比。';
+  if (item.label === 'GMV') return 'Shopify 全量订单链路未完成前，只展示接入状态和未来归因维度。';
+  if (item.label === '订单量') return '订单指标等待 Shopify webhook 与归因链路闭合后启用。';
+  if (item.label === '平均 ROI') return 'ROI 需要销售、归因和成本三侧同时接通，当前先保持待接入说明。';
+  return '该指标会按统一结构展示趋势、拆解和数据可信信息。';
+}
+
+function kpiTabs(label: string): string[] {
+  if (label === '总曝光量') return ['按平台', '按账号矩阵', 'TOP 内容', '环比贡献'];
+  if (label === '内容数') return ['按平台', '按账号', '内容类型', '发布节奏'];
+  if (label === '内容互动率') return ['按平台', '按账号', 'TOP 互动内容', '分子分母'];
+  if (label === 'GMV') return ['按折扣码', '按归因渠道', '按 SKU'];
+  if (label === '订单量') return ['按折扣码', '按创作者', '按 SKU', '转化漏斗'];
+  if (label === '平均 ROI') return ['按产品', '按项目', '成本构成', '相关性'];
+  return ['趋势', '拆解', '证据'];
+}
+
+function kpiFlow(label: string): { upstream: string; downstream: string } {
+  if (label === '内容数') return { upstream: '内容计划', downstream: '总曝光量' };
+  if (label === '总曝光量') return { upstream: '内容数', downstream: '互动率' };
+  if (label === '内容互动率') return { upstream: '总曝光量', downstream: '订单量' };
+  if (label === '订单量') return { upstream: '互动率', downstream: 'GMV' };
+  if (label === 'GMV') return { upstream: '订单量', downstream: '平均 ROI' };
+  if (label === '平均 ROI') return { upstream: 'GMV', downstream: '产品作战' };
+  return { upstream: '上游指标', downstream: '下游指标' };
+}
+
+function PremiumKpiCard({ item, selected, onToggle }: PremiumKpiCardProps) {
   return (
     <div
-      className={`glass-card kpi${expanded ? ' is-expanded' : ''}${item.isMock ? ' is-pending' : ' is-real'}`}
+      className={`glass-card kpi${selected ? ' is-selected' : ''}${item.isMock ? ' is-pending' : ' is-real'}`}
       style={glassVarStyle({ '--ig': item.ig, '--ic': item.ic })}
       title={item.mockLabel}
       role="button"
@@ -724,26 +751,66 @@ function PremiumKpiCard({ item, expanded, windowDays, onToggle, onOpenDetail }: 
       <div className="value">{item.value}</div>
       <div className={`meta ${item.trend}`}>{item.meta}</div>
       <svg className="spark" viewBox="0 0 120 28"><path d={item.sparkPath} fill="none" stroke={item.ic} strokeWidth="3" strokeLinecap="round" /></svg>
-      {expanded ? (
-        <div className="kpi-detail">
-          <div className="kpi-detail-head"><b>{statusLabel}</b><span>{item.isMock ? item.mockLabel || '示例数据' : '来源已接入'}</span></div>
-          <div className="kpi-detail-grid">
-            <span>当前窗口</span><b>近 {windowDays} 天</b>
-            <span>数据来源</span><b>{item.isMock ? item.mockLabel || '示例数据' : item.meta}</b>
-          </div>
-          <button
-            className="kpi-detail-link"
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              onOpenDetail();
-            }}
-          >
-            {item.isMock ? '查看接入状态' : '查看完整归因'}
-          </button>
-        </div>
-      ) : null}
     </div>
+  );
+}
+
+function KpiInsightPanel({
+  item,
+  windowDays,
+  onClose,
+  onSelectMetric,
+}: {
+  item: PremiumKpi;
+  windowDays: number;
+  onClose: () => void;
+  onSelectMetric: (label: string) => void;
+}) {
+  const statusLabel = kpiStatusLabel(item);
+  const flow = kpiFlow(item.label);
+  const tabs = kpiTabs(item.label);
+  return (
+    <section className="glass-card kpi-insight-panel" style={glassVarStyle({ '--ic': item.ic, '--ig': item.ig })}>
+      <div className="kpi-insight-head">
+        <div><span>{item.label}</span><b>{statusLabel}</b></div>
+        <button type="button" onClick={onClose}>×</button>
+      </div>
+      <div className="kpi-insight-hero">
+        <div>
+          <strong>{item.value}</strong>
+          <em className={item.trend}>{item.meta}</em>
+          <p>近 {windowDays} 天 · {item.isMock ? item.mockLabel || '待接入' : '真实 API'} · Dashboard KPI</p>
+        </div>
+        <svg viewBox="0 0 120 36" aria-hidden="true">
+          <path d={`${item.sparkPath} L118 36 L2 36 Z`} fill="var(--ig)" opacity=".72" />
+          <path d={item.sparkPath} fill="none" stroke="var(--ic)" strokeWidth="3" strokeLinecap="round" />
+        </svg>
+      </div>
+      <div className="kpi-insight-brief">
+        <span>✦ 洞见</span>
+        <p>{kpiInsightText(item)}</p>
+      </div>
+      <div className="kpi-insight-tabs">
+        {tabs.map((tab, index) => <button className={index === 0 ? 'is-active' : ''} type="button" key={tab}>{tab}</button>)}
+      </div>
+      <div className="kpi-insight-breakdown">
+        <div><span>当前窗口</span><b>近 {windowDays} 天</b></div>
+        <div><span>数据来源</span><b>{item.isMock ? item.mockLabel || '待接入' : item.meta}</b></div>
+        <div><span>状态</span><b>{statusLabel}</b></div>
+      </div>
+      <div className="kpi-insight-foot">
+        <div>
+          <span>上游：</span>
+          <button type="button" onClick={() => onSelectMetric(flow.upstream)}>{flow.upstream} →</button>
+          <span>· 下游：</span>
+          <button type="button" onClick={() => onSelectMetric(flow.downstream)}>{flow.downstream} →</button>
+        </div>
+        <details>
+          <summary>数据可信</summary>
+          <p>来源 / 当前窗口 / 更新时间 / 覆盖度 / baseline 保护状态会在后续数据层补齐。</p>
+        </details>
+      </div>
+    </section>
   );
 }
 
@@ -895,6 +962,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
   const premiumPlatforms = useMemo(() => buildPremiumPlatforms(snapshot.kolSummary, snapshot.officialMatrix, allowMockFallback), [allowMockFallback, snapshot.kolSummary, snapshot.officialMatrix]);
   const premiumAgents = useMemo(() => buildPremiumAgents(snapshot.agentsStatus, allowMockFallback), [allowMockFallback, snapshot.agentsStatus]);
   const premiumTasks = useMemo(() => buildPremiumTasks(snapshot.tasksStatus), [snapshot.tasksStatus]);
+  const selectedKpi = useMemo(() => premiumKpis.find((item) => item.label === expandedKpi) || null, [expandedKpi, premiumKpis]);
   const contentRows = useMemo(() => latestContentRows(snapshot.officialMatrix), [snapshot.officialMatrix]);
   const official = useMemo(() => officialTotals(snapshot.officialMatrix), [snapshot.officialMatrix]);
   const contentTypeRows = allowMockFallback
@@ -975,13 +1043,14 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
     showToast(`${fallbackLabel} · 可接真实路由`);
   }, [onSelectPage, showToast]);
 
-  const handleKpiDetail = useCallback((item: PremiumKpi) => {
-    if (item.isMock) {
-      showToast(item.mockLabel || '该指标等待真实数据接入');
+  const selectKpiByLabel = useCallback((label: string) => {
+    const match = premiumKpis.find((item) => item.label === label);
+    if (match) {
+      setExpandedKpi(match.label);
       return;
     }
-    goToWorkspacePage('dataAnalysis', item.label);
-  }, [goToWorkspacePage, showToast]);
+    showToast(`${label} · 暂无对应 KPI`);
+  }, [premiumKpis, showToast]);
 
   const openTrendDrawer = useCallback(() => {
     setPanelDrawer({
@@ -1059,17 +1128,23 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
 	          <section className="kpis">
 	            {loadingData && snapshot.source === 'mock' && !snapshot.loadedAt
 	              ? <PremiumKpiSkeletons />
-	              : premiumKpis.map((item) => (
-	                <PremiumKpiCard
-	                  key={item.label}
-	                  item={item}
-	                  expanded={expandedKpi === item.label}
-	                  windowDays={windowDays}
-	                  onToggle={() => setExpandedKpi((current) => current === item.label ? null : item.label)}
-	                  onOpenDetail={() => handleKpiDetail(item)}
-	                />
-	              ))}
-	          </section>
+		              : premiumKpis.map((item) => (
+		                <PremiumKpiCard
+		                  key={item.label}
+		                  item={item}
+		                  selected={expandedKpi === item.label}
+		                  onToggle={() => setExpandedKpi((current) => current === item.label ? null : item.label)}
+		                />
+		              ))}
+		          </section>
+		          {selectedKpi ? (
+		            <KpiInsightPanel
+		              item={selectedKpi}
+		              windowDays={windowDays}
+		              onClose={() => setExpandedKpi(null)}
+		              onSelectMetric={selectKpiByLabel}
+		            />
+		          ) : null}
 	          {loadingData && snapshot.source === 'mock' && !snapshot.loadedAt ? (
 	            <PremiumDashboardSkeleton />
 	          ) : (

@@ -87,8 +87,8 @@
 @keyframes vkpi-premium-skeleton-shimmer {
   100% { transform: translateX(110%); }
 }
-.vkpi-glass-shell .kpi { min-height: 136px; padding: 18px; cursor: pointer; transition: transform .22s, box-shadow .22s, min-height .22s; }
-.vkpi-glass-shell .kpi.is-expanded { grid-column: span 2; min-height: 260px; }
+.vkpi-glass-shell .kpi { min-height: 136px; padding: 18px; cursor: pointer; transition: transform .22s, box-shadow .22s, border-color .22s; }
+.vkpi-glass-shell .kpi.is-selected { border-color: rgba(27,108,255,.38); box-shadow: 0 0 0 4px rgba(27,108,255,.08), var(--shadow-soft),var(--inner); }
 .vkpi-glass-shell .kpi.is-pending .value { color: #344054; }
 .vkpi-glass-shell .kpi .topline { position: relative; display: flex; justify-content: space-between; align-items: center; }
 .vkpi-glass-shell .kpi .icon { width: 44px; height: 44px; border-radius: 17px; background: var(--ig); display: grid; place-items: center; color: var(--ic); box-shadow: inset 0 1px 0 rgba(255,255,255,.85); font-size: 22px; }
@@ -98,14 +98,33 @@
 .vkpi-glass-shell .kpi .up { color: #079455; }
 .vkpi-glass-shell .kpi .down { color: #d92d20; }
 .vkpi-glass-shell .spark { position: relative; width: 100%; height: 28px; margin-top: 8px; }
-.vkpi-glass-shell .kpi-detail { position: relative; margin-top: 12px; border-radius: 16px; border: 1px solid rgba(255,255,255,.70); background: rgba(255,255,255,.38); padding: 12px; box-shadow: var(--inner); }
-.vkpi-glass-shell .kpi-detail-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.vkpi-glass-shell .kpi-detail-head b { font-size: 13px; font-weight: 950; }
-.vkpi-glass-shell .kpi-detail-head span { font-size: 11px; color: #667085; font-weight: 800; text-align: right; }
-.vkpi-glass-shell .kpi-detail-grid { display: grid; grid-template-columns: 76px 1fr; gap: 7px 10px; margin-top: 10px; font-size: 12px; }
-.vkpi-glass-shell .kpi-detail-grid span { color: #667085; font-weight: 780; }
-.vkpi-glass-shell .kpi-detail-grid b { color: #101828; font-weight: 850; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.vkpi-glass-shell .kpi-detail-link { margin-top: 11px; border: 1px solid rgba(27,108,255,.18); background: rgba(27,108,255,.10); color: #1b6cff; border-radius: 12px; padding: 8px 10px; font-size: 12px; font-weight: 900; cursor: pointer; }
+.vkpi-glass-shell .kpi-insight-panel { margin: -4px 0 20px; padding: 22px; display: grid; gap: 16px; }
+.vkpi-glass-shell .kpi-insight-head { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding-bottom: 14px; border-bottom: 1px solid rgba(199,214,239,.62); }
+.vkpi-glass-shell .kpi-insight-head div { display: flex; align-items: center; gap: 10px; }
+.vkpi-glass-shell .kpi-insight-head span { color: #667085; font-size: 13px; font-weight: 900; }
+.vkpi-glass-shell .kpi-insight-head b { border-radius: 999px; background: #ecfdf3; color: #067647; padding: 4px 9px; font-size: 11px; font-weight: 950; }
+.vkpi-glass-shell .kpi-insight-head button { width: 32px; height: 32px; border: 1px solid rgba(255,255,255,.72); border-radius: 999px; background: rgba(255,255,255,.56); color: #344054; font: inherit; font-size: 18px; font-weight: 800; cursor: pointer; box-shadow: var(--inner); }
+.vkpi-glass-shell .kpi-insight-hero { position: relative; display: grid; grid-template-columns: minmax(240px,.72fr) minmax(320px,1fr); gap: 20px; align-items: end; }
+.vkpi-glass-shell .kpi-insight-hero strong { display: block; color: #101828; font-size: 40px; line-height: 1; font-weight: 950; letter-spacing: -.055em; }
+.vkpi-glass-shell .kpi-insight-hero em { display: block; margin-top: 8px; color: #079455; font-size: 13px; font-style: normal; font-weight: 850; }
+.vkpi-glass-shell .kpi-insight-hero em.down { color: #d92d20; }
+.vkpi-glass-shell .kpi-insight-hero p { margin: 6px 0 0; color: #667085; font-size: 12px; font-weight: 800; }
+.vkpi-glass-shell .kpi-insight-hero svg { width: 100%; min-height: 94px; border-radius: 18px; background: rgba(255,255,255,.34); box-shadow: var(--inner); }
+.vkpi-glass-shell .kpi-insight-brief { position: relative; border-radius: 18px; background: rgba(230,241,251,.72); border: 1px solid rgba(255,255,255,.70); padding: 12px 14px; box-shadow: var(--inner); }
+.vkpi-glass-shell .kpi-insight-brief span { display: block; color: #185fa5; font-size: 11px; font-weight: 950; letter-spacing: .08em; text-transform: uppercase; }
+.vkpi-glass-shell .kpi-insight-brief p { margin: 5px 0 0; color: #042c53; font-size: 13px; line-height: 1.55; font-weight: 780; }
+.vkpi-glass-shell .kpi-insight-tabs { position: relative; display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid rgba(199,214,239,.62); }
+.vkpi-glass-shell .kpi-insight-tabs button { border: 0; border-bottom: 2px solid transparent; background: transparent; color: #667085; padding: 9px 12px; font: inherit; font-size: 13px; font-weight: 850; cursor: pointer; }
+.vkpi-glass-shell .kpi-insight-tabs button.is-active { border-bottom-color: var(--ic); color: #101828; }
+.vkpi-glass-shell .kpi-insight-breakdown { position: relative; display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; }
+.vkpi-glass-shell .kpi-insight-breakdown div { border: 1px solid rgba(255,255,255,.70); border-radius: 16px; background: rgba(255,255,255,.42); padding: 12px; box-shadow: var(--inner); min-width: 0; }
+.vkpi-glass-shell .kpi-insight-breakdown span { display: block; color: #667085; font-size: 11px; font-weight: 900; }
+.vkpi-glass-shell .kpi-insight-breakdown b { display: block; margin-top: 5px; color: #101828; font-size: 13px; font-weight: 900; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vkpi-glass-shell .kpi-insight-foot { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 2px; color: #667085; font-size: 12px; font-weight: 850; }
+.vkpi-glass-shell .kpi-insight-foot button { border: 0; background: transparent; color: #185fa5; font: inherit; font-weight: 950; cursor: pointer; padding: 0; }
+.vkpi-glass-shell .kpi-insight-foot details { text-align: right; }
+.vkpi-glass-shell .kpi-insight-foot summary { color: #067647; cursor: pointer; font-weight: 950; }
+.vkpi-glass-shell .kpi-insight-foot p { max-width: 360px; margin: 8px 0 0; line-height: 1.45; }
 .vkpi-glass-shell .vkpi-premium-kpi-skeleton { display: grid; align-content: start; gap: 12px; pointer-events: none; }
 .vkpi-glass-shell .content-grid { display: grid; grid-template-columns: minmax(720px,1fr) 380px; gap: 18px; }
 .vkpi-glass-shell .vkpi-premium-loading-skeleton { pointer-events: none; }
