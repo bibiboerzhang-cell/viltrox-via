@@ -11,6 +11,7 @@ from app.services.vkpi import (
     brand_signal_detector,
     competitor_brain,
     content_brain,
+    evidence_agent_v0,
     industry_data,
     llm_gateway,
     market_intelligence_v0,
@@ -315,6 +316,25 @@ def industry_brain_layer_acceptance_v0(
 ):
     del staff
     return brain_layer_acceptance_v0.build_brain_layer_acceptance_v0()
+
+
+@router.get("/industry-data/evidence-agent/v0")
+def industry_evidence_agent_v0(
+    kol_pool_ids: str = Query(default=""),
+    limit: int = Query(default=12, ge=1, le=50),
+    ref_limit: int = Query(default=24, ge=1, le=100),
+    claim_limit: int = Query(default=12, ge=1, le=50),
+    include_product_fit: bool = True,
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    del staff
+    return evidence_agent_v0.build_evidence_agent_v0(
+        kol_pool_ids=kol_pool_ids,
+        limit=limit,
+        ref_limit=ref_limit,
+        claim_limit=claim_limit,
+        include_product_fit=include_product_fit,
+    )
 
 
 @router.get("/industry-data/today-new-signals/v0")
