@@ -26,9 +26,23 @@ interface SearchProgressState {
   errorKey?: string;
 }
 
+interface RecentContentCard {
+  id: string;
+  title: string;
+  url: string;
+  platform: string;
+  handle: string;
+  sourceTitle: string;
+  publishedAt: string;
+  views: string;
+  likes: string;
+  comments: string;
+}
+
 const NATURAL_SEARCH_HISTORY_KEY = 'vkpi:natural-search-history:v1';
 const MAX_SEARCH_HISTORY = 8;
 const SEARCH_REVEAL_BATCH_SIZE = 6;
+const RECENT_CONTENT_CARD_LIMIT = 8;
 
 const SEARCH_PROGRESS_STEPS = [
   { key: 'query', label: '解析查询' },
@@ -70,6 +84,14 @@ function formatCount(value: unknown): string {
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric <= 0) return '';
   return new Intl.NumberFormat('en', { notation: numeric >= 10000 ? 'compact' : 'standard', maximumFractionDigits: 1 }).format(numeric);
+}
+
+function formatPostDate(value: unknown): string {
+  const text = firstText(value);
+  if (!text) return '';
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) return text.slice(0, 10);
+  return parsed.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 function initials(value: unknown): string {
@@ -119,6 +141,12 @@ function historyAge(value: string): string {
   if (hours < 24) return `${hours} 小时前`;
   const days = Math.floor(hours / 24);
   return `${days} 天前`;
+}
+
+function recentPostsForItem(item: Row, evidence = asRecord(item.evidence)): Row[] {
+  const fromItem = asRecordArray(item.recent_posts);
+  if (fromItem.length) return fromItem;
+  return asRecordArray(evidence.recent_posts);
 }
 
 export function NaturalSearchPanel({ apiToken, onMessage }: NaturalSearchPanelProps) {
@@ -304,6 +332,38 @@ export function NaturalSearchPanel({ apiToken, onMessage }: NaturalSearchPanelPr
     return items.slice(0, Math.min(items.length, visibleCount));
   }, [items, visibleCount]);
 
+  const recentContentCards = useMemo(() => {
+    const seen = new Set<string>();
+    const cards: RecentContentCard[] = [];
+    for (const item of visibleItems) {
+      const evidence = asRecord(item.evidence);
+      const platform = firstText(item.platform, evidence.platform);
+      const handle = firstText(item.handle, evidence.handle);
+      const sourceTitle = compactText(item.title, handle || platform || 'KOL');
+      for (const post of recentPostsForItem(item, evidence)) {
+        const title = compactText(post.title || post.post_url || post.url, 'Untitled post');
+        const url = firstText(post.post_url, post.url);
+        const key = url || `${sourceTitle}:${title}`;
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        cards.push({
+          id: key,
+          title,
+          url,
+          platform,
+          handle,
+          sourceTitle,
+          publishedAt: formatPostDate(post.published_at || post.publishedAt || post.date),
+          views: formatCount(post.views),
+          likes: formatCount(post.likes),
+          comments: formatCount(post.comments),
+        });
+        if (cards.length >= RECENT_CONTENT_CARD_LIMIT) return cards;
+      }
+    }
+    return cards;
+  }, [visibleItems]);
+
   return (
     <section className="da-natural-search">
       <header className="da-natural-search__header">
@@ -370,6 +430,42 @@ export function NaturalSearchPanel({ apiToken, onMessage }: NaturalSearchPanelPr
         <span>tokens <strong>{Array.isArray(meta.tokens) ? meta.tokens.join(', ') : '-'}</strong></span>
       </div>
 
+      {recentContentCards.length ? (
+        <div className="da-natural-search__recent" aria-label="搜索结果最近内容">
+          <div className="da-natural-search__recent-head">
+            <strong>最近内容</strong>
+            <span>来自已有缓存，不触发刷新</span>
+          </div>
+          <div className="da-natural-search__recent-grid">
+            {recentContentCards.map((post) => {
+              const metricItems = [
+                post.views ? `${post.views} views` : '',
+                post.likes ? `${post.likes} likes` : '',
+                post.comments ? `${post.comments} comments` : '',
+              ].filter(Boolean);
+              const body = (
+                <>
+                  <b>{post.title}</b>
+                  <span>{[post.sourceTitle, post.handle ? `@${post.handle.replace(/^@/, '')}` : '', post.platform].filter(Boolean).join(' · ')}</span>
+                  <em>{[post.publishedAt, ...metricItems].filter(Boolean).join(' · ') || 'cached post'}</em>
+                </>
+              );
+              return post.url ? (
+                <a key={post.id} href={post.url} target="_blank" rel="noreferrer">
+                  {body}
+                </a>
+              ) : (
+                <span key={post.id}>
+                  {body}
+                </span>
+              );
+            })}
+          </div>
+        </div>
+      ) : items.length && !loading ? (
+        <div className="da-natural-search__recent-empty">当前搜索结果没有缓存最近内容；未生成占位内容。</div>
+      ) : null}
+
       <div className="da-table-wrap">
         <table className="da-table">
           <thead>
@@ -385,9 +481,7 @@ export function NaturalSearchPanel({ apiToken, onMessage }: NaturalSearchPanelPr
             {visibleItems.length ? visibleItems.map((item, index) => {
               const evidence = asRecord(item.evidence);
               const avatarUrl = firstText(item.avatar_url, evidence.avatar_url);
-              const recentPosts = asRecordArray(item.recent_posts).length
-                ? asRecordArray(item.recent_posts)
-                : asRecordArray(evidence.recent_posts);
+              const recentPosts = recentPostsForItem(item, evidence);
               const handle = firstText(item.handle, evidence.handle);
               const platform = firstText(item.platform, evidence.platform);
               const profileUrl = firstText(item.profile_url, evidence.profile_url);
