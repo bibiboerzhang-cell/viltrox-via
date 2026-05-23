@@ -1,8 +1,8 @@
-"""Planning helpers for qualified KOL Apify batch refreshes.
+"""Planning and gated execution helpers for qualified KOL Apify batch refreshes.
 
-This module intentionally does not start Apify runs. P1.X.B first locks the
-chunking, actor input, and dataset-to-KOL mapping contracts so later execution
-cannot accidentally fall back to the old full-pool refresh path.
+Execution is explicitly opt-in. P1.X.B first locks the chunking, actor input,
+dataset-to-KOL mapping, and result contracts so later execution cannot
+accidentally fall back to the old full-pool refresh path.
 """
 from __future__ import annotations
 
@@ -390,6 +390,81 @@ def map_dataset_items_to_targets(items: list[dict[str, Any]], targets: list[dict
     return {"matched": matched, "unmatched": unmatched, "matched_count": len(matched), "unmatched_count": len(unmatched)}
 
 
+def summarize_batch_execution(plan: dict[str, Any], results: list[dict[str, Any]], *, executed: bool) -> dict[str, Any]:
+    batches = [batch for batch in (plan.get("batches") or []) if isinstance(batch, dict)]
+    targets_by_batch = {str(batch.get("batch_key") or ""): [target for target in (batch.get("targets") or []) if isinstance(target, dict)] for batch in batches}
+    results_by_batch = {str(result.get("batch_key") or ""): result for result in results if isinstance(result, dict)}
+    kol_statuses: list[dict[str, Any]] = []
+    retry_kol_pool_ids: list[int] = []
+    matched_items = 0
+    unmatched_items = 0
+
+    for batch in batches:
+        batch_key = str(batch.get("batch_key") or "")
+        platform = str(batch.get("platform") or "")
+        result = results_by_batch.get(batch_key, {})
+        provider_status = str(result.get("provider_status") or ("pending" if not executed else "unknown"))
+        sync_status = str(result.get("sync_status") or ("pending" if not executed else "unknown"))
+        mapped = result.get("mapped") if isinstance(result.get("mapped"), dict) else {}
+        matched_ids = {int(item.get("kol_pool_id") or 0) for item in (mapped.get("matched") or []) if int(item.get("kol_pool_id") or 0)}
+        matched_items += _int(mapped.get("matched_count"))
+        unmatched_items += _int(mapped.get("unmatched_count"))
+
+        for target in targets_by_batch.get(batch_key, []):
+            kol_pool_id = _int(target.get("kol_pool_id"))
+            if not kol_pool_id:
+                continue
+            if not executed:
+                status = "planned"
+                retry = False
+                reason = "not_executed"
+            elif provider_status == "ok" and kol_pool_id in matched_ids:
+                status = "matched"
+                retry = False
+                reason = sync_status or "synced"
+            elif provider_status == "ok":
+                status = "unmatched"
+                retry = True
+                reason = "dataset_item_not_mapped"
+            elif provider_status == "not_configured":
+                status = "not_configured"
+                retry = True
+                reason = "apify_not_configured"
+            else:
+                status = "error"
+                retry = True
+                reason = str(result.get("error") or sync_status or provider_status or "batch_error")[:500]
+            if retry:
+                retry_kol_pool_ids.append(kol_pool_id)
+            kol_statuses.append(
+                {
+                    "kol_pool_id": kol_pool_id,
+                    "batch_key": batch_key,
+                    "platform": platform,
+                    "status": status,
+                    "provider_status": provider_status,
+                    "sync_status": sync_status,
+                    "reason": reason,
+                }
+            )
+
+    return {
+        "executed": bool(executed),
+        "strategy": plan.get("strategy") or "apify_batch_first",
+        "batch_count": len(batches),
+        "target_count": sum(len(targets) for targets in targets_by_batch.values()),
+        "result_count": len(results),
+        "matched_items": matched_items,
+        "unmatched_items": unmatched_items,
+        "failed_batches": sum(1 for item in results if str(item.get("provider_status") or "") == "error"),
+        "not_configured_batches": sum(1 for item in results if str(item.get("provider_status") or "") == "not_configured"),
+        "no_result_batches": sum(1 for item in results if str(item.get("sync_status") or "") == "no_results"),
+        "retry_kol_pool_ids": sorted(set(retry_kol_pool_ids)),
+        "retry_count": len(set(retry_kol_pool_ids)),
+        "kol_statuses": kol_statuses,
+    }
+
+
 def run_apify_batch(
     batch: dict[str, Any],
     *,
@@ -487,11 +562,13 @@ async def execute_apify_batch_plan(
     """Execute a plan with bounded concurrency. Provider calls are opt-in."""
     batches = [batch for batch in (plan.get("batches") or []) if isinstance(batch, dict)]
     if not allow_provider_calls:
+        summary = summarize_batch_execution(plan, [], executed=False)
         return {
             "executed": False,
             "reason": "provider_calls_not_allowed",
             "batch_count": len(batches),
             "max_concurrent_runs": max_concurrent_runs(plan.get("max_concurrent_runs")),
+            "summary": summary,
             "results": [],
         }
     sem = asyncio.Semaphore(max_concurrent_runs(plan.get("max_concurrent_runs")))
@@ -516,6 +593,7 @@ async def execute_apify_batch_plan(
             )
         else:
             results.append(result)
+    summary = summarize_batch_execution(plan, results, executed=True)
     return {
         "executed": True,
         "batch_count": len(batches),
@@ -524,5 +602,6 @@ async def execute_apify_batch_plan(
         "failed_batches": sum(1 for item in results if str(item.get("provider_status") or "") == "error"),
         "not_configured_batches": sum(1 for item in results if str(item.get("provider_status") or "") == "not_configured"),
         "matched_items": sum(_int((item.get("mapped") or {}).get("matched_count")) for item in results if isinstance(item.get("mapped"), dict)),
+        "summary": summary,
         "results": results,
     }

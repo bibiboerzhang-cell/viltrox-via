@@ -115,17 +115,20 @@ def test_run_apify_batch_without_token_is_not_configured(monkeypatch) -> None:
 
 
 def test_execute_apify_batch_plan_blocks_provider_calls_by_default() -> None:
-    plan = {"max_concurrent_runs": 2, "batches": [{"batch_key": "instagram-1"}]}
+    plan = {
+        "max_concurrent_runs": 2,
+        "batches": [{"batch_key": "instagram-1", "platform": "instagram", "targets": [{"kol_pool_id": 1}]}],
+    }
 
     result = asyncio.run(apify_batch_refresh.execute_apify_batch_plan(plan))
 
-    assert result == {
-        "executed": False,
-        "reason": "provider_calls_not_allowed",
-        "batch_count": 1,
-        "max_concurrent_runs": 2,
-        "results": [],
-    }
+    assert result["executed"] is False
+    assert result["reason"] == "provider_calls_not_allowed"
+    assert result["batch_count"] == 1
+    assert result["max_concurrent_runs"] == 2
+    assert result["results"] == []
+    assert result["summary"]["retry_count"] == 0
+    assert result["summary"]["kol_statuses"][0]["status"] == "planned"
 
 
 def test_execute_apify_batch_plan_summarizes_mocked_runs(monkeypatch) -> None:
@@ -138,7 +141,12 @@ def test_execute_apify_batch_plan_summarizes_mocked_runs(monkeypatch) -> None:
             "platform": batch["platform"],
             "provider_status": "ok",
             "sync_status": "synced",
-            "mapped": {"matched_count": len(batch["targets"])},
+            "mapped": {
+                "matched": [{"kol_pool_id": target["kol_pool_id"]} for target in batch["targets"]],
+                "unmatched": [],
+                "matched_count": len(batch["targets"]),
+                "unmatched_count": 0,
+            },
         }
 
     monkeypatch.setattr(apify_batch_refresh, "run_apify_batch", fake_run)
@@ -157,3 +165,49 @@ def test_execute_apify_batch_plan_summarizes_mocked_runs(monkeypatch) -> None:
     assert result["synced_batches"] == 2
     assert result["failed_batches"] == 0
     assert result["matched_items"] == 3
+    assert result["summary"]["target_count"] == 3
+    assert result["summary"]["retry_count"] == 0
+
+
+def test_summarize_batch_execution_tracks_unmatched_and_failed_targets() -> None:
+    plan = {
+        "strategy": "apify_batch_first",
+        "batches": [
+            {
+                "batch_key": "instagram-1",
+                "platform": "instagram",
+                "targets": [{"kol_pool_id": 1}, {"kol_pool_id": 2}],
+            },
+            {
+                "batch_key": "tiktok-1",
+                "platform": "tiktok",
+                "targets": [{"kol_pool_id": 3}],
+            },
+        ],
+    }
+    results = [
+        {
+            "batch_key": "instagram-1",
+            "platform": "instagram",
+            "provider_status": "ok",
+            "sync_status": "synced",
+            "mapped": {"matched": [{"kol_pool_id": 1}], "unmatched": [{"username": "unknown"}], "matched_count": 1, "unmatched_count": 1},
+        },
+        {
+            "batch_key": "tiktok-1",
+            "platform": "tiktok",
+            "provider_status": "error",
+            "sync_status": "error",
+            "error": "actor timeout",
+        },
+    ]
+
+    summary = apify_batch_refresh.summarize_batch_execution(plan, results, executed=True)
+
+    assert summary["target_count"] == 3
+    assert summary["matched_items"] == 1
+    assert summary["unmatched_items"] == 1
+    assert summary["failed_batches"] == 1
+    assert summary["retry_kol_pool_ids"] == [2, 3]
+    statuses = {item["kol_pool_id"]: item["status"] for item in summary["kol_statuses"]}
+    assert statuses == {1: "matched", 2: "unmatched", 3: "error"}

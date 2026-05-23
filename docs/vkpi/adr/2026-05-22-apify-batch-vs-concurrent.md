@@ -77,6 +77,7 @@ First implementation package:
 - `qualified_refresh_rows()` now includes `profile_url` so future batch execution can avoid reconstructing URLs from handles when the source already has a canonical profile URL.
 - `scripts/vkpi_refresh_tier.py --apify-batch-plan` exposes the same plan from the qualified selector as a read-only operator smoke.
 - `execute_apify_batch_plan()` contains the bounded concurrency executor, but provider calls are blocked unless callers explicitly pass `allow_provider_calls=True`; no timer or CLI path sets that flag.
+- `summarize_batch_execution()` normalizes chunk outcomes into per-`kol_pool_id` statuses and retry ids before any future database writes are allowed.
 
 P1.X.B must not implement:
 
