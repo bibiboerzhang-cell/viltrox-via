@@ -52,6 +52,13 @@ DEFAULT_USER_AGENT = "VKPIMarketing/1.0 (by /u/vkpi_default)"
 DEFAULT_APIFY_REDDIT_ACTOR = "trudax~reddit-scraper-lite"
 
 
+def _env_enabled(name: str, *, default: bool = True) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
 class RedditCrawler:
     """V-KPI compatible Reddit crawler with PRAW + Apify fallback."""
 
@@ -66,6 +73,7 @@ class RedditCrawler:
             os.environ.get("APIFY_REDDIT_ACTOR_ID") or DEFAULT_APIFY_REDDIT_ACTOR
         ).replace("/", "~")  # Apify uses ~ for namespace
         self.run_timeout_seconds = max(60, min(900, int(os.environ.get("APIFY_REDDIT_RUN_TIMEOUT_SECONDS") or 240)))
+        self.public_json_enabled = _env_enabled("VKPI_REDDIT_PUBLIC_JSON_ENABLED", default=True)
 
         self._praw_client = None  # lazy init
 
@@ -74,14 +82,18 @@ class RedditCrawler:
         """True if PRAW, Apify, or Reddit's public JSON listing is usable."""
         praw_ok = bool(self.client_id and self.client_secret) and _PRAW_AVAILABLE
         apify_ok = bool(self.apify_token)
-        return praw_ok or apify_ok or True
+        return praw_ok or apify_ok or self.public_json_enabled
 
     @property
     def primary_path(self) -> str:
-        """Which path will be used: 'praw' / 'apify' / 'none'."""
+        """Which path will be used: 'praw' / 'json' / 'apify' / 'none'."""
         if self.client_id and self.client_secret and _PRAW_AVAILABLE:
             return "praw"
-        return "json"
+        if self.public_json_enabled:
+            return "json"
+        if self.apify_token:
+            return "apify"
+        return "none"
 
     def provider_status(self) -> dict[str, Any]:
         """Return provider readiness without exposing tokens."""
@@ -91,7 +103,9 @@ class RedditCrawler:
             "provider_status": "configured" if self.configured else "not_configured",
             "primary_path": self.primary_path,
             "praw_available": _PRAW_AVAILABLE,
-            "json_listing": True,
+            "public_json_enabled": self.public_json_enabled,
+            "json_listing": self.public_json_enabled,
+            "apify_configured": bool(self.apify_token),
             "apify_actor": self.apify_actor,
             "key_visible": False,
         }
@@ -742,6 +756,8 @@ class RedditCrawler:
             if result.get("provider_status") == "ok" or not self.apify_token:
                 return result
             return self._crawl_subreddit_via_apify(subreddit, limit)
+        elif path == "apify":
+            return self._crawl_subreddit_via_apify(subreddit, limit)
         else:
             return {
                 "items": [],
@@ -790,10 +806,18 @@ class RedditCrawler:
             result = self._crawl_post_comments_via_praw(post_id, max_depth)
             if result.get("provider_status") == "ok":
                 return result
-        result = self._crawl_post_comments_via_json_api(post_id, max_depth)
-        if result.get("provider_status") == "ok" or not self.apify_token:
-            return result
-        return self._crawl_post_comments_via_apify(raw_ref, max_results=max_results)
+        if self.public_json_enabled:
+            result = self._crawl_post_comments_via_json_api(post_id, max_depth)
+            if result.get("provider_status") == "ok" or not self.apify_token:
+                return result
+        if self.apify_token:
+            return self._crawl_post_comments_via_apify(raw_ref, max_results=max_results)
+        return {
+            "items": [],
+            "provider_status": "not_configured",
+            "sync_status": "skip",
+            "error": "Reddit public JSON, PRAW, and Apify are not configured",
+        }
 
     # ─── V-KPI Unified Interface ────────────────────────────────
 
