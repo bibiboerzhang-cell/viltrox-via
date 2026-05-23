@@ -7,11 +7,11 @@ Scope: P0 sync-governance closeout plus the first P1 data-trust pass. This repor
 ## Current Deployment
 
 - Live domain: `https://viltroxtest.com`
-- Latest deployed commit: `cb2a0a82 chore(vkpi): log second silent exception batch`
+- Latest deployed commit: `64d0097a chore(vkpi): clear remaining service silent exceptions`
 - Health: `/health` returns `ok`
-- Client/server hash: matched at `cb2a0a826b9e0f7a617853a0c26a07b248a969ae`
-- Backup before latest deploy: `runtime/prod-sync/20260523T014215Z`
-- Previous deploy backup: `runtime/prod-sync/20260523T013459Z`
+- Client/server hash: matched at `64d0097aa37024db3540431ed7eb2144405b5f92`
+- Backup before latest deploy: `runtime/prod-sync/20260523T014534Z`
+- Previous deploy backup: `runtime/prod-sync/20260523T014215Z`
 
 ## Sync Governance
 
@@ -107,10 +107,10 @@ Acceptance:
 Acceptance:
 
 - `scripts/check_silent_exception_baseline.py` before first pass: 83 silent handlers.
-- After two bounded passes: 46 silent handlers.
-- Reduction: 37.
-- Covered high-risk paths include channel cache clearing, channel media JSON parsing, official refill cache clearing, sync-status metadata parsing, audit fallback queries, budget/settings JSON parsing, media package parsing, task active-lock index creation, data-quality audit logging, decision aggregates, learning snapshot, reports, product-analysis evidence, KOL claim audit, KPI ledger, team feedback, LLM env lookup, reconciliation stats, and outcome JSON parsing.
-- Remaining findings are still above baseline and should be handled in later bounded passes, not as one large cleanup.
+- After bounded V-KPI service passes: 40 silent handlers.
+- Reduction: 43.
+- Covered high-risk paths include channel cache clearing, channel media JSON parsing, official refill cache clearing, sync-status metadata parsing, audit fallback queries, budget/settings JSON parsing, media package parsing, task active-lock index creation, data-quality audit logging, decision aggregates, learning snapshot, reports, product-analysis evidence, KOL claim audit, KPI ledger, team feedback, LLM env lookup, reconciliation stats, outcome JSON parsing, KOL pool cache/schema guards, industry timestamp parsing, and recommendation rollback paths.
+- Remaining findings are outside `backend/app/services/vkpi` and sit mostly in DB/runtime compatibility, scraping, and non-V-KPI service layers. They should be handled in later bounded passes, not as one large cleanup.
 
 ## Verification Commands
 
