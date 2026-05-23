@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { searchVkpi } from '../../../../services/vkpi.ui-api';
+import { getKolPoolIntelligenceCard, searchVkpi } from '../../../../services/vkpi.ui-api';
 import { proxiedImageUrl } from '../../shared/mediaProxy';
 import type { Row } from './utils/types';
 
@@ -70,6 +70,11 @@ function asRecord(value: unknown): Row {
 
 function asRecordArray(value: unknown): Row[] {
   return Array.isArray(value) ? value.map(asRecord).filter((row) => Object.keys(row).length > 0) : [];
+}
+
+function numberValue(value: unknown): number {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : 0;
 }
 
 function firstText(...values: unknown[]): string {
@@ -149,6 +154,43 @@ function recentPostsForItem(item: Row, evidence = asRecord(item.evidence)): Row[
   return asRecordArray(evidence.recent_posts);
 }
 
+function kolPoolIdForItem(item: Row): string {
+  const evidence = asRecord(item.evidence);
+  if (firstText(item.source_table) !== 'vkpi_kol_pool') return '';
+  return firstText(item.source_id, item.kol_pool_id, evidence.id, evidence.kol_pool_id);
+}
+
+function evidenceRows(card: Row | null): Row[] {
+  return asRecordArray(card?.evidence_index).filter((row) => firstText(row.section));
+}
+
+function cardSectionPayload(card: Row | null, section: unknown): Row {
+  if (!card) return {};
+  return asRecord(card[firstText(section)]);
+}
+
+function evidenceSectionLabel(value: unknown): string {
+  const section = firstText(value);
+  const labels: Record<string, string> = {
+    freshness: 'Freshness',
+    dimensions11: '11D',
+    competitors: 'Competitors',
+    brand_signal: 'Brand Signal',
+    memory_card: 'Memory',
+    product_fit: 'Product Fit',
+    comment_intelligence: 'Comment',
+  };
+  return labels[section] || section || 'Evidence';
+}
+
+function evidencePayloadItems(payload: Row): Row[] {
+  for (const key of ['evidence', 'signals', 'top', 'recent_posts', 'recent_cooperations', 'relations']) {
+    const rows = asRecordArray(payload[key]);
+    if (rows.length) return rows;
+  }
+  return [];
+}
+
 export function NaturalSearchPanel({ apiToken, onMessage }: NaturalSearchPanelProps) {
   const [query, setQuery] = useState('godox pricing');
   const [items, setItems] = useState<Row[]>([]);
@@ -157,6 +199,11 @@ export function NaturalSearchPanel({ apiToken, onMessage }: NaturalSearchPanelPr
   const [searchHistory, setSearchHistory] = useState<NaturalSearchHistoryItem[]>(() => loadSearchHistory());
   const [visibleCount, setVisibleCount] = useState(0);
   const [searchProgress, setSearchProgress] = useState<SearchProgressState>(IDLE_PROGRESS);
+  const [detailSource, setDetailSource] = useState<Row | null>(null);
+  const [detailCard, setDetailCard] = useState<Row | null>(null);
+  const [detailLoadingId, setDetailLoadingId] = useState('');
+  const [detailError, setDetailError] = useState('');
+  const [activeEvidenceSection, setActiveEvidenceSection] = useState('');
   const revealTimerRef = useRef<number | null>(null);
   const progressTimerRefs = useRef<number[]>([]);
   const searchRunRef = useRef(0);
@@ -324,6 +371,33 @@ export function NaturalSearchPanel({ apiToken, onMessage }: NaturalSearchPanelPr
     saveSearchHistory([]);
   };
 
+  const openDetail = async (item: Row) => {
+    const kolPoolId = kolPoolIdForItem(item);
+    if (!apiToken || !kolPoolId) return;
+    setDetailSource(item);
+    setDetailCard(null);
+    setDetailError('');
+    setActiveEvidenceSection('');
+    setDetailLoadingId(kolPoolId);
+    try {
+      const card = await getKolPoolIntelligenceCard(apiToken, kolPoolId, true);
+      const rows = evidenceRows(card);
+      setDetailCard(card);
+      setActiveEvidenceSection(firstText(rows[0]?.section));
+    } catch (error) {
+      setDetailError(error instanceof Error ? error.message : '详情加载失败');
+    } finally {
+      setDetailLoadingId('');
+    }
+  };
+
+  const closeDetail = () => {
+    setDetailSource(null);
+    setDetailCard(null);
+    setDetailError('');
+    setActiveEvidenceSection('');
+  };
+
   useEffect(() => () => clearTimers(), []);
 
   const visibleItems = useMemo(() => {
@@ -363,6 +437,14 @@ export function NaturalSearchPanel({ apiToken, onMessage }: NaturalSearchPanelPr
     }
     return cards;
   }, [visibleItems]);
+
+  const detailEvidenceRows = useMemo(() => evidenceRows(detailCard), [detailCard]);
+  const activeEvidenceRow = useMemo(() => {
+    if (!activeEvidenceSection) return detailEvidenceRows[0] || {};
+    return detailEvidenceRows.find((row) => firstText(row.section) === activeEvidenceSection) || detailEvidenceRows[0] || {};
+  }, [activeEvidenceSection, detailEvidenceRows]);
+  const activeEvidencePayload = useMemo(() => cardSectionPayload(detailCard, activeEvidenceRow.section), [activeEvidenceRow.section, detailCard]);
+  const activeEvidenceItems = useMemo(() => evidencePayloadItems(activeEvidencePayload), [activeEvidencePayload]);
 
   return (
     <section className="da-natural-search">
@@ -466,6 +548,100 @@ export function NaturalSearchPanel({ apiToken, onMessage }: NaturalSearchPanelPr
         <div className="da-natural-search__recent-empty">当前搜索结果没有缓存最近内容；未生成占位内容。</div>
       ) : null}
 
+      {detailSource ? (
+        <div className="da-natural-search__detail" aria-label="自然搜索详情证据">
+          <div className="da-natural-search__detail-head">
+            <div>
+              <strong>{compactText(detailSource.title)}</strong>
+              <span>
+                {compactText(detailSource.source_table)}:{compactText(detailSource.source_id)}
+                {detailCard ? ` · provider=${String(Boolean(detailCard.provider_calls))} · write=${String(Boolean(detailCard.write_db))}` : ''}
+              </span>
+            </div>
+            <button type="button" onClick={closeDetail}>关闭</button>
+          </div>
+          {detailLoadingId ? <div className="da-natural-search__detail-state">正在读取 intelligence card...</div> : null}
+          {detailError ? <div className="da-natural-search__detail-error">{detailError}</div> : null}
+          {detailCard ? (
+            <>
+              <div className="da-natural-search__detail-grid">
+                {[
+                  ['11D', asRecord(detailCard.dimensions11).overall_score, asRecord(detailCard.dimensions11).status],
+                  ['Competitor', asRecord(asRecord(detailCard.competitors).summary).risk_tier || asRecord(detailCard.competitors).status, asRecord(detailCard.competitors).status],
+                  ['Brand', asRecord(detailCard.brand_signal).signal_count, asRecord(detailCard.brand_signal).status],
+                  ['Memory', asRecord(detailCard.memory_card).status, asRecord(detailCard.memory_card).source_type],
+                  ['Product Fit', asRecord(detailCard.product_fit).count, asRecord(detailCard.product_fit).status],
+                  ['Evidence', detailEvidenceRows.length, 'sections'],
+                ].map(([label, value, detail]) => (
+                  <div key={String(label)}>
+                    <strong>{String(label)}</strong>
+                    <span>{compactText(value)}</span>
+                    <small>{compactText(detail)}</small>
+                  </div>
+                ))}
+              </div>
+              {detailEvidenceRows.length ? (
+                <div className="da-natural-search__evidence-tabs">
+                  {detailEvidenceRows.map((row) => {
+                    const section = firstText(row.section);
+                    return (
+                      <button
+                        className={section === firstText(activeEvidenceRow.section) ? 'is-active' : ''}
+                        key={section}
+                        type="button"
+                        onClick={() => setActiveEvidenceSection(section)}
+                      >
+                        <b>{compactText(row.label || evidenceSectionLabel(section))}</b>
+                        <span>{compactText(row.status)} · {String(numberValue(row.evidence_count))}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+              {firstText(activeEvidenceRow.section) ? (
+                <div className="da-natural-search__evidence-panel">
+                  <header>
+                    <strong>{compactText(activeEvidenceRow.label || evidenceSectionLabel(activeEvidenceRow.section))}</strong>
+                    <span>
+                      {compactText(activeEvidenceRow.status)}
+                      {' · count '}
+                      {String(numberValue(activeEvidenceRow.evidence_count))}
+                      {' · confidence '}
+                      {compactText(activeEvidenceRow.confidence)}
+                    </span>
+                  </header>
+                  <p>
+                    {compactText(activeEvidencePayload.source || activeEvidencePayload.reason || activeEvidencePayload.method || activeEvidenceRow.source || 'stored evidence')}
+                  </p>
+                  {activeEvidenceItems.length ? (
+                    <div className="da-natural-search__evidence-items">
+                      {activeEvidenceItems.slice(0, 6).map((row, index) => {
+                        const title = compactText(row.title || row.sku || row.brand || row.competitor_brand || row.project || row.product || row.signal_type || row.id, `Evidence ${index + 1}`);
+                        const detail = compactText(row.reasoning || row.reason || row.detail || row.text || row.post_title || row.match_reason || row.content_link || row.source || row.status, 'stored row');
+                        const url = firstText(row.source_url, row.post_url, row.url, row.content_link);
+                        return url ? (
+                          <a key={`${url}-${index}`} href={url} target="_blank" rel="noreferrer">
+                            <b>{title}</b>
+                            <span>{detail}</span>
+                          </a>
+                        ) : (
+                          <span key={`${title}-${index}`}>
+                            <b>{title}</b>
+                            <span>{detail}</span>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="da-natural-search__detail-state">这个 evidence section 没有可展开样本行。</div>
+                  )}
+                </div>
+              ) : null}
+            </>
+          ) : null}
+        </div>
+      ) : null}
+
       <div className="da-table-wrap">
         <table className="da-table">
           <thead>
@@ -493,7 +669,16 @@ export function NaturalSearchPanel({ apiToken, onMessage }: NaturalSearchPanelPr
                 <tr key={`${String(item.source_table)}-${String(item.source_id)}-${index}`}>
                   <td>{compactText(item.result_type)}</td>
                   <td>{String(item.score ?? 0)}</td>
-                  <td>{compactText(item.source_table)}:{compactText(item.source_id)}</td>
+                  <td>
+                    <div className="da-natural-search__source-cell">
+                      <span>{compactText(item.source_table)}:{compactText(item.source_id)}</span>
+                      {kolPoolIdForItem(item) ? (
+                        <button type="button" onClick={() => void openDetail(item)} disabled={Boolean(detailLoadingId)}>
+                          {detailLoadingId === kolPoolIdForItem(item) ? 'Loading' : 'Evidence'}
+                        </button>
+                      ) : null}
+                    </div>
+                  </td>
                   <td>
                     <div className="da-natural-search__entity">
                       {avatarUrl ? (
