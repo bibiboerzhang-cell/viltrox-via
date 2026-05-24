@@ -1754,7 +1754,13 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
     glassToastTimer = window.setTimeout(() => setToastVisible(false), 1600);
   }, []);
 
+  const openPanelDrawer = useCallback((drawer: PanelDrawerState) => {
+    setCountryDrawer(null);
+    setPanelDrawer(drawer);
+  }, []);
+
   const openCountryDrawer = useCallback((region: PremiumRegion) => {
+    setPanelDrawer(null);
     if (region.isMock || !region.countryCode) {
       setCountryDrawer({ region, items: [], loading: false, error: '示例地区点；登录并加载真实国家分布后显示 KOL 列表。' });
       return;
@@ -1767,7 +1773,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
     listKolPool(apiToken, { country: region.countryCode, limit: 20 })
       .then((response) => setCountryDrawer({ region, items: response.items || [], loading: false }))
       .catch(() => setCountryDrawer({ region, items: [], loading: false, error: '国家 KOL 列表加载失败' }));
-  }, [apiToken, showToast]);
+  }, [apiToken]);
 
   const handleNavSelect = (key: string) => {
     setActiveNav(key);
@@ -1817,7 +1823,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
   }, [premiumKpis, showToast]);
 
   const openTrendDrawer = useCallback(() => {
-    setPanelDrawer({
+    openPanelDrawer({
       title: `${activeSegment}趋势`,
       sourceLabel: snapshot.source === 'mock' ? '示例趋势' : 'revenue-trend API',
       rows: [
@@ -1829,10 +1835,10 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
       actionLabel: '查看完整趋势',
       actionPage: 'dataAnalysis',
     });
-  }, [activeSegment, premiumTrend.labels, premiumTrend.tipDate, premiumTrend.tipValue, snapshot.source]);
+  }, [activeSegment, openPanelDrawer, premiumTrend.labels, premiumTrend.tipDate, premiumTrend.tipValue, snapshot.source]);
 
   const openProductDrawer = useCallback(() => {
-    setPanelDrawer({
+    openPanelDrawer({
       title: '产品 ROI 排行',
       sourceLabel: premiumProductRows.some((row) => !row.isMock) ? 'product-performance API' : '待成本 / Shopify',
       rows: premiumProductRows.map((row) => ({
@@ -1842,20 +1848,20 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
       actionLabel: '进入产品作战',
       actionPage: 'productBattle',
     });
-  }, [premiumProductRows]);
+  }, [openPanelDrawer, premiumProductRows]);
 
   const openContentTypeDrawer = useCallback(() => {
-    setPanelDrawer({
+    openPanelDrawer({
       title: '内容类型分布',
       sourceLabel: allowMockFallback ? '示例分布' : 'official matrix',
       rows: contentTypeRows.map((row) => ({ label: row.label, value: row.value })),
       actionLabel: '进入内容中心',
       actionPage: 'channels',
     });
-  }, [allowMockFallback, contentTypeRows]);
+  }, [allowMockFallback, contentTypeRows, openPanelDrawer]);
 
   const openPlatformDrawer = useCallback(() => {
-    setPanelDrawer({
+    openPanelDrawer({
       title: 'KOL 平台分布',
       sourceLabel: premiumPlatforms.some((platform) => !platform.isMock) ? 'kol-pool summary / official matrix' : '待真实数据',
       rows: premiumPlatforms.map((platform) => ({
@@ -1865,10 +1871,10 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
       actionLabel: '进入账号矩阵',
       actionPage: 'channels',
     });
-  }, [premiumPlatforms]);
+  }, [openPanelDrawer, premiumPlatforms]);
 
   const openAgentDrawer = useCallback((agent: PremiumAgent) => {
-    setPanelDrawer({
+    openPanelDrawer({
       title: agent.name,
       sourceLabel: agent.isMock ? 'Agent API 待接入' : 'Agents status API',
       rows: [
@@ -1880,10 +1886,10 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
       actionLabel: '打开 Agent Inbox',
       actionPage: 'agents',
     });
-  }, []);
+  }, [openPanelDrawer]);
 
   const openAlertDrawer = useCallback((alert: PremiumAlert) => {
-    setPanelDrawer({
+    openPanelDrawer({
       title: alert.title,
       sourceLabel: alert.sourceLabel || 'vkpi_brand_signal',
       rows: [
@@ -1898,10 +1904,10 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
       actionUrl: alert.url,
       actionPage: alert.url ? undefined : 'dataQuality',
     });
-  }, []);
+  }, [openPanelDrawer]);
 
   const openTaskDrawer = useCallback((task: PremiumTask) => {
-    setPanelDrawer({
+    openPanelDrawer({
       title: task.title,
       sourceLabel: task.sourceLabel || task.mockLabel || 'recommendation_agent_v0',
       rows: [
@@ -1914,7 +1920,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
       actionLabel: '进入项目跟进',
       actionPage: 'projects',
     });
-  }, []);
+  }, [openPanelDrawer]);
 
   const openCopilotDrawer = useCallback(() => {
     const summary = objectValue(snapshot.copilotBrief.summary);
@@ -1926,7 +1932,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
       label: `动作 ${index + 1}`,
       value: String(item.title || item.action || item.summary || item.body || item).slice(0, 160),
     }));
-    setPanelDrawer({
+    openPanelDrawer({
       title: String(summary.headline || snapshot.copilotBrief.headline || 'V-KPI Copilot Brief'),
       sourceLabel: String(snapshot.copilotBrief.source || 'brief_agent_v0'),
       rows: [
@@ -1940,10 +1946,10 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
       actionLabel: '打开 Agent Inbox',
       actionPage: 'agents',
     });
-  }, [snapshot]);
+  }, [openPanelDrawer, snapshot]);
 
   const openDataStatusDrawer = useCallback(() => {
-    setPanelDrawer({
+    openPanelDrawer({
       title: 'Dashboard 数据状态',
       sourceLabel: snapshot.source === 'real' ? '全部真实 API' : snapshot.source === 'partial' ? '部分真实 API' : '本地示例 / 未登录',
       rows: [
@@ -1959,10 +1965,10 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
       actionLabel: '进入数据质量',
       actionPage: 'dataQuality',
     });
-  }, [apiToken, snapshot, syncLabel]);
+  }, [apiToken, openPanelDrawer, snapshot, syncLabel]);
 
   const openDateWindowDrawer = useCallback(() => {
-    setPanelDrawer({
+    openPanelDrawer({
       title: 'Dashboard 时间窗口',
       sourceLabel: `近 ${windowDays} 天 · ${snapshot.source === 'mock' ? '示例模式' : '真实 API'}`,
       rows: [
@@ -1976,7 +1982,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
       actionLabel: '进入数据质量',
       actionPage: 'dataQuality',
     });
-  }, [snapshot, windowDays]);
+  }, [openPanelDrawer, snapshot, windowDays]);
 
   const openContentUrl = useCallback((url: unknown) => {
     const href = typeof url === 'string' ? url.trim() : '';
@@ -1991,7 +1997,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
     const url = rowUrl(row);
     const sourceTable = String(row.source_table || row.raw_data_ref || row.source || '').trim();
     const sourceId = String(row.source_id || row.id || row.post_id || row.signal_id || '').trim();
-    setPanelDrawer({
+    openPanelDrawer({
       title: cleanContentTitle(row),
       sourceLabel: contentKindLabel(contentKind(row)),
       rows: [
@@ -2010,7 +2016,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
       actionUrl: url || undefined,
       actionPage: url ? undefined : 'channels',
     });
-  }, []);
+  }, [openPanelDrawer]);
 
   const dashboardContent = (
     <>
