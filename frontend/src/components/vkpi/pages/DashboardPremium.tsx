@@ -892,6 +892,13 @@ function kpiStatusLabel(item: PremiumKpi): string {
   return item.mockLabel?.includes('Shopify') || item.mockLabel?.includes('待') ? '待接入' : '示例';
 }
 
+function loadedAtLabel(value?: string): string {
+  if (!value) return '本次会话';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
 function kpiInsightText(item: PremiumKpi): string {
   if (item.label === '总曝光量') return '官方矩阵曝光已接入；下一步按平台、账号和 TOP 内容拆解增长来源。';
   if (item.label === '内容数') return '内容数量来自官方矩阵，适合与曝光和互动率联动判断发布节奏。';
@@ -1235,6 +1242,13 @@ function KpiInsightPanel({
   const activeRows = detailInsight
     ? (detailInsight.tabs.find((tab) => tab.label === activeTab) || detailInsight.tabs[0])?.rows || []
     : [];
+  const trustRows = [
+    { label: '数据来源', value: item.isMock ? item.mockLabel || '待接入' : snapshot.source === 'partial' ? '部分真实 API' : '真实 API' },
+    { label: '当前窗口', value: `近 ${windowDays} 天` },
+    { label: '更新时间', value: loadedAtLabel(snapshot.loadedAt) },
+    { label: '覆盖度', value: detailInsight?.coverage || (item.isMock ? '接入后显示覆盖度' : 'Dashboard KPI') },
+    { label: 'baseline', value: snapshot.failedSections.length ? `部分 API 失败：${snapshot.failedSections.slice(0, 3).join(' / ')}` : '无 fallback 触发' },
+  ];
   return (
     <section className="glass-card kpi-insight-panel" style={glassVarStyle({ '--ic': item.ic, '--ig': item.ig })}>
       <div className="kpi-insight-head">
@@ -1320,7 +1334,11 @@ function KpiInsightPanel({
         </div>
         <details>
           <summary>数据可信</summary>
-          <p>来源 / 窗口 / 覆盖度 / baseline</p>
+          <div className="kpi-trust-list">
+            {trustRows.map((row) => (
+              <div key={row.label}><span>{row.label}</span><b>{row.value}</b></div>
+            ))}
+          </div>
         </details>
       </div>
     </section>
