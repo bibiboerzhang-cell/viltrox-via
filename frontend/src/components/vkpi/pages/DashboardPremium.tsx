@@ -1115,6 +1115,18 @@ function buildContentInsight(snapshot: PremiumSnapshot): KpiDetailInsight {
 
 function buildEngagementInsight(snapshot: PremiumSnapshot): KpiDetailInsight {
   const official = officialTotals(snapshot.officialMatrix);
+  if (!official.views) {
+    return {
+      insight: '互动率需要 views 作为分母；当前官方矩阵还没有可用的曝光分母，不显示 0% 假结果。',
+      coverage: '等待 likes / comments / views',
+      tabs: [
+        { label: '按平台', rows: pendingRows([['平台互动率', '等待平台 views + likes/comments']]) },
+        { label: '按账号', rows: pendingRows([['账号互动率', '等待账号级曝光与互动']]) },
+        { label: 'TOP 内容', rows: pendingRows([['TOP 互动内容', '等待内容级指标']]) },
+        { label: 'likes/comments/views', rows: pendingRows([['点赞', '互动率分子'], ['评论', '互动率分子'], ['曝光', '互动率分母']]) },
+      ],
+    };
+  }
   const platforms = officialPlatformRows(snapshot.officialMatrix)
     .map((row): KpiInsightRow & { rate: number } => {
       const rate = engagementRateForRow(row);
