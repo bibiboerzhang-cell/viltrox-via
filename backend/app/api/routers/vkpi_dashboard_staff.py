@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
@@ -69,8 +70,8 @@ def _artifact_mtime_iso(path: Path | None) -> str | None:
     return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def _recent_content_sort_key(row: dict[str, Any]) -> str:
-    return str(
+def _recent_content_sort_key(row: dict[str, Any]) -> float:
+    raw = str(
         row.get("posted_at")
         or row.get("published_at")
         or row.get("detected_at")
@@ -78,6 +79,17 @@ def _recent_content_sort_key(row: dict[str, Any]) -> str:
         or row.get("created_at")
         or ""
     )
+    if not raw:
+        return 0.0
+    try:
+        normalized = raw.replace("Z", "+00:00")
+        return datetime.fromisoformat(normalized).timestamp()
+    except ValueError:
+        pass
+    try:
+        return parsedate_to_datetime(raw).timestamp()
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return 0.0
 
 
 def _dashboard_int(value: Any) -> int:
@@ -88,10 +100,43 @@ def _dashboard_int(value: Any) -> int:
 
 
 def _dashboard_recent_official_content(limit: int) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+
+    try:
+        from app.services.vkpi import channels
+
+        matrix = channels.official_account_matrix(limit=limit)
+        for platform in matrix.get("platforms") or []:
+            for account in platform.get("accounts") or []:
+                for post in account.get("posts") or []:
+                    rows.append(
+                        {
+                            "content_kind": "official",
+                            "title": post.get("title") or "官方内容",
+                            "url": post.get("url") or post.get("canonical_url") or "",
+                            "platform": post.get("platform") or account.get("platform") or platform.get("platform") or "",
+                            "account_handle": account.get("handle") or "",
+                            "account_display_name": account.get("display_name") or account.get("handle") or "",
+                            "posted_at": post.get("posted_at") or post.get("published_at") or "",
+                            "views": _dashboard_int(post.get("views") or post.get("total_views") or post.get("play_count")),
+                            "likes": _dashboard_int(post.get("likes") or post.get("like_count")),
+                            "comments": _dashboard_int(post.get("comments") or post.get("comment_count")),
+                            "shares": _dashboard_int(post.get("shares") or post.get("share_count")),
+                            "media_type": post.get("content_type") or post.get("media_type") or post.get("media_kind") or "",
+                            "thumbnail_url": post.get("thumbnail_url") or post.get("thumbnail") or post.get("media_url") or "",
+                            "source_table": "vkpi_employee_channel_metrics",
+                            "source_id": post.get("canonical_post_uid") or post.get("provider_post_id") or post.get("id") or post.get("url") or "",
+                        }
+                    )
+    except Exception:
+        rows = []
+
+    if rows:
+        return sorted(rows, key=_recent_content_sort_key, reverse=True)[:limit]
+
     from app.db.repositories.viltrox_matrix import get_latest_viltrox_scan_bundle
 
     bundle = get_latest_viltrox_scan_bundle()
-    rows: list[dict[str, Any]] = []
     for post in bundle.get("posts") or []:
         rows.append(
             {
