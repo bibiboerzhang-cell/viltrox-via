@@ -1943,7 +1943,18 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
             ]}
         />
       ) : null}
-	          <HeroSection missions={heroMissions} />
+	          <HeroSection
+              missions={heroMissions}
+              brief={{
+                label: copilotIsReal ? 'AI BRIEF · 真实' : 'AI BRIEF',
+                title: copilotHeadline,
+                body: copilotIsReal ? copilotInsight : '项目 · KOL · 品牌信号',
+                primaryAction: '证据链',
+                secondaryAction: '生成任务',
+                onPrimaryAction: openCopilotDrawer,
+                onSecondaryAction: () => goToWorkspacePage('projects', '生成任务'),
+              }}
+            />
 	          <section className="kpis">
 	            {loadingData && snapshot.source === 'mock' && !snapshot.loadedAt
 	              ? <PremiumKpiSkeletons />

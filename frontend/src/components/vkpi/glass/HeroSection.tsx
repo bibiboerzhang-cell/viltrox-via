@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { AIBriefCard } from './AIBriefCard';
+import { AIBriefCard, type AIBriefCardProps } from './AIBriefCard';
 import type { GlassMission } from './tokens';
 
 const defaultMissions: GlassMission[] = [
@@ -13,6 +13,7 @@ interface HeroSectionProps {
   title?: ReactNode;
   body?: ReactNode;
   missions?: GlassMission[];
+  brief?: AIBriefCardProps;
 }
 
 export function HeroSection({
@@ -20,11 +21,12 @@ export function HeroSection({
   title = '全球营销情报中枢',
   body = '重点 / 风险 / 任务',
   missions = defaultMissions,
+  brief,
 }: HeroSectionProps) {
   return (
     <section className="hero">
       <div className="hero-title"><div className="eyebrow"><span className="orb"></span>{eyebrow}</div><h1>{title}</h1><p>{body}</p><div className="mini-missions">{missions.map((mission, index) => <div className="mini-mission" key={index}><b>{mission.value} <span>{mission.suffix}</span></b>{mission.label}</div>)}</div></div>
-      <AIBriefCard />
+      <AIBriefCard {...brief} />
     </section>
   );
 }

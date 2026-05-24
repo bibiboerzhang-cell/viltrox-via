@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 
-interface AIBriefCardProps {
+export interface AIBriefCardProps {
   label?: ReactNode;
   title?: ReactNode;
   body?: ReactNode;
