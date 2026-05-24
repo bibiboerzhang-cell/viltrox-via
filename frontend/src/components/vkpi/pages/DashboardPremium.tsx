@@ -1871,6 +1871,32 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
     });
   }, []);
 
+  const openCopilotDrawer = useCallback(() => {
+    const summary = objectValue(snapshot.copilotBrief.summary);
+    const itemRows = rowsFrom(snapshot.copilotBrief.items).slice(0, 4).map((item, index) => ({
+      label: `情报 ${index + 1}`,
+      value: String(item.title || item.headline || item.summary || item.body || JSON.stringify(item)).slice(0, 160),
+    }));
+    const actionRows = rowsFrom(snapshot.copilotBrief.actions).slice(0, 4).map((item, index) => ({
+      label: `动作 ${index + 1}`,
+      value: String(item.title || item.action || item.summary || item.body || item).slice(0, 160),
+    }));
+    setPanelDrawer({
+      title: String(summary.headline || snapshot.copilotBrief.headline || 'V-KPI Copilot Brief'),
+      sourceLabel: String(snapshot.copilotBrief.source || 'brief_agent_v0'),
+      rows: [
+        { label: '状态', value: snapshot.copilotBrief.is_real ? '真实 brief' : '等待 Brief Agent' },
+        { label: '模式', value: String(snapshot.copilotBrief.mode || '-') },
+        { label: '输出文件', value: String(snapshot.copilotBrief.last_output || '暂无输出文件') },
+        { label: '更新时间', value: loadedAtLabel(String(snapshot.copilotBrief.last_run_at || snapshot.loadedAt || '')) },
+        ...itemRows,
+        ...actionRows,
+      ],
+      actionLabel: '打开 Agent Inbox',
+      actionPage: 'agents',
+    });
+  }, [snapshot]);
+
   const openContentUrl = useCallback((url: unknown) => {
     const href = typeof url === 'string' ? url.trim() : '';
     if (!href) {
@@ -1991,7 +2017,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
               />
             </div>
             <aside className="rail">
-              <div className="glass-card rail-card copilot"><div className="ai-kicker">V-KPI Copilot</div><h3>{copilotHeadline}</h3><p>{copilotBody}</p><div className="insight">{copilotInsight}</div></div>
+              <div className="glass-card rail-card copilot" role="button" tabIndex={0} onClick={openCopilotDrawer} onKeyDown={(event) => { if (event.key === 'Enter') openCopilotDrawer(); }}><div className="ai-kicker">V-KPI Copilot</div><h3>{copilotHeadline}</h3><p>{copilotBody}</p><div className="insight">{copilotInsight}</div></div>
               <div className="glass-card rail-card agents-room">
                 <div className="panel-head"><h3>Agents 战情室</h3><span className="tag">{activeAgentCount} / {premiumAgents.length} 在线</span></div>
                 <div className="agents-list">

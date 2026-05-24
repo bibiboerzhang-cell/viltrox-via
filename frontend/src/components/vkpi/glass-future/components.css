@@ -274,7 +274,8 @@
 .vkpi-glass-shell .table button { width: 32px; height: 32px; border-radius: 11px; border: 1px solid rgba(255,255,255,.72); background: rgba(255,255,255,.5); box-shadow: var(--inner); cursor: pointer; }
 .vkpi-glass-shell .rail { display: flex; flex-direction: column; gap: 18px; }
 .vkpi-glass-shell .rail-card { padding: 18px; }
-.vkpi-glass-shell .copilot { min-height: 210px; background: linear-gradient(145deg,rgba(48,74,123,.58),rgba(74,94,141,.34)); color: #fff; }
+.vkpi-glass-shell .copilot { min-height: 210px; background: linear-gradient(145deg,rgba(48,74,123,.58),rgba(74,94,141,.34)); color: #fff; cursor: pointer; }
+.vkpi-glass-shell .copilot:focus-visible { outline: 2px solid rgba(27,108,255,.45); outline-offset: 2px; }
 .vkpi-glass-shell .copilot:before { background: linear-gradient(135deg,rgba(255,255,255,.28),transparent 38%,rgba(24,213,255,.16)); }
 .vkpi-glass-shell .ai-kicker { position: relative; display: flex; align-items: center; gap: 8px; color: #9edfff; font-size: 12px; font-weight: 900; letter-spacing: .06em; }
 .vkpi-glass-shell .ai-kicker:before { content: "✦"; width: 25px; height: 25px; border-radius: 10px; background: rgba(255,255,255,.14); display: grid; place-items: center; }
