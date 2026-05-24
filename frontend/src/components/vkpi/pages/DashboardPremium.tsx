@@ -151,7 +151,8 @@ interface PanelDrawerState {
   sourceLabel: string;
   rows: Array<{ label: string; value: string }>;
   actionLabel: string;
-  actionPage: VkpiPageKey;
+  actionPage?: VkpiPageKey;
+  actionUrl?: string;
 }
 
 interface PremiumSnapshot {
@@ -1332,12 +1333,14 @@ function LatestContentPerformance({
   onFilterChange,
   onOpenUrl,
   onOpenContentCenter,
+  onOpenContentDetail,
 }: {
   rows: Row[];
   activeFilter: ContentFilter;
   onFilterChange: (filter: ContentFilter) => void;
   onOpenUrl: (url: unknown) => void;
   onOpenContentCenter: () => void;
+  onOpenContentDetail: (row: Row) => void;
 }) {
   const counts = rows.reduce<Record<Exclude<ContentFilter, 'all'>, number>>((acc, row) => {
     acc[contentKind(row)] += 1;
@@ -1396,7 +1399,7 @@ function LatestContentPerformance({
               </div>
               <div className="latest-content-tools">
                 <button type="button" title={url ? '打开原帖' : '缺少原帖链接'} disabled={!url} onClick={() => onOpenUrl(url)}>↗</button>
-                <button type="button" title="进入内容中心" onClick={onOpenContentCenter}>…</button>
+                <button type="button" title="查看内容详情" onClick={() => onOpenContentDetail(row)}>…</button>
               </div>
             </article>
           );
@@ -1798,6 +1801,31 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
     window.open(href, '_blank', 'noopener,noreferrer');
   }, [showToast]);
 
+  const openContentDetailDrawer = useCallback((row: Row) => {
+    const url = rowUrl(row);
+    const sourceTable = String(row.source_table || row.raw_data_ref || row.source || '').trim();
+    const sourceId = String(row.source_id || row.id || row.post_id || row.signal_id || '').trim();
+    setPanelDrawer({
+      title: cleanContentTitle(row),
+      sourceLabel: contentKindLabel(contentKind(row)),
+      rows: [
+        { label: '来源分类', value: contentKindLabel(contentKind(row)) },
+        { label: '平台', value: platformDisplayName(row.platform) },
+        { label: '账号', value: `@${String(row.account_handle || row.account_display_name || row.author || '-').replace(/^@/, '')}` },
+        { label: '发布时间', value: postedLabel(row) },
+        { label: '曝光', value: compact(contentMetric(row, ['views', 'total_views', 'play_count', 'impressions', 'view_count'])) },
+        { label: '点赞', value: compact(contentMetric(row, ['likes', 'like_count'])) },
+        { label: '评论', value: compact(contentMetric(row, ['comments', 'comment_count'])) },
+        { label: '互动率', value: engagementLabel(row) },
+        { label: '数据表', value: sourceTable || 'Dashboard recent-content API' },
+        { label: '记录 ID', value: sourceId || '-' },
+      ],
+      actionLabel: url ? '打开原帖' : '进入内容中心',
+      actionUrl: url || undefined,
+      actionPage: url ? undefined : 'channels',
+    });
+  }, []);
+
   const dashboardContent = (
     <>
       {!embedded ? (
@@ -1880,6 +1908,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
                 onFilterChange={setContentFilter}
                 onOpenUrl={openContentUrl}
                 onOpenContentCenter={() => goToWorkspacePage('channels', '内容中心')}
+                onOpenContentDetail={openContentDetailDrawer}
               />
             </div>
             <aside className="rail">
@@ -1993,14 +2022,18 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
             <button type="button" onClick={() => setPanelDrawer(null)}>×</button>
           </div>
           <div className="panel-drawer-list">
-            {panelDrawer.rows.map((row) => (
-              <div className="panel-drawer-row" key={row.label}>
+            {panelDrawer.rows.map((row, index) => (
+              <div className="panel-drawer-row" key={`${row.label}-${index}`}>
                 <span>{row.label}</span>
                 <b>{row.value}</b>
               </div>
             ))}
           </div>
-          <button className="panel-drawer-action" type="button" onClick={() => goToWorkspacePage(panelDrawer.actionPage, panelDrawer.title)}>
+          <button
+            className="panel-drawer-action"
+            type="button"
+            onClick={() => panelDrawer.actionUrl ? openContentUrl(panelDrawer.actionUrl) : goToWorkspacePage(panelDrawer.actionPage || 'dashboardPremium', panelDrawer.title)}
+          >
             {panelDrawer.actionLabel}
           </button>
         </div>
