@@ -2194,6 +2194,11 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
             <span>{compact(countryDrawer.region.kolCount || countryDrawer.items.length)} KOL</span>
             <span>{countryDrawer.items.length ? `${countryDrawer.items.length} 已加载` : '列表待加载'}</span>
           </div>
+          <div className="country-drawer-grid">
+            <div><span>地图 KOL</span><b>{compact(countryDrawer.region.kolCount || 0)}</b></div>
+            <div><span>国家曝光</span><b>{countryDrawer.region.exposure ? compact(countryDrawer.region.exposure) : '待接入'}</b></div>
+            <div><span>国家销售额</span><b>{countryDrawer.region.sales ? `$${compact(countryDrawer.region.sales)}` : '待归因'}</b></div>
+          </div>
           {countryDrawer.loading ? <div className="country-drawer-empty">加载中…</div> : null}
           {!countryDrawer.loading && countryDrawer.error ? <div className="country-drawer-empty">{countryDrawer.error}</div> : null}
           {!countryDrawer.loading && countryDrawer.error ? (
