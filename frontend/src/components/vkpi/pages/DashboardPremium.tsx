@@ -1942,6 +1942,25 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
     });
   }, [snapshot]);
 
+  const openDataStatusDrawer = useCallback(() => {
+    setPanelDrawer({
+      title: 'Dashboard 数据状态',
+      sourceLabel: snapshot.source === 'real' ? '全部真实 API' : snapshot.source === 'partial' ? '部分真实 API' : '本地示例 / 未登录',
+      rows: [
+        { label: '状态', value: syncLabel },
+        { label: '登录', value: apiToken ? '已带 API token' : '未登录 / 演示模式' },
+        { label: '更新时间', value: loadedAtLabel(snapshot.loadedAt) },
+        { label: '失败 API', value: snapshot.failedSections.length ? snapshot.failedSections.join(' / ') : '无' },
+        { label: 'Dashboard', value: snapshot.dashboard && Object.keys(snapshot.dashboard).length ? '已返回' : '空' },
+        { label: '趋势', value: `${snapshot.trendRows.length} 行` },
+        { label: '国家分布', value: `${rowsFrom(snapshot.kolDistribution.countries).length} 国家` },
+        { label: '最新内容', value: `${snapshot.recentContent.length} 条` },
+      ],
+      actionLabel: '进入数据质量',
+      actionPage: 'dataQuality',
+    });
+  }, [apiToken, snapshot, syncLabel]);
+
   const openContentUrl = useCallback((url: unknown) => {
     const href = typeof url === 'string' ? url.trim() : '';
     if (!href) {
@@ -1982,7 +2001,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
         <GlassTopBar
             actions={[
               { label: localDateISO(), onClick: () => showToast('今日日期 · 本地时区') },
-              { label: syncLabel, variant: 'sync', onClick: () => showToast(snapshot.source === 'mock' ? '同步状态 · 开发占位' : `数据源：${snapshot.source}`) },
+              { label: syncLabel, variant: 'sync', onClick: openDataStatusDrawer },
               { label: '导出', onClick: () => goToWorkspacePage('reports', '报表导出') },
               { label: '生成周报', variant: 'primary', onClick: () => goToWorkspacePage('reports', '生成周报') },
             ]}
