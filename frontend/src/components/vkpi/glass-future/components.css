@@ -290,12 +290,14 @@
 .vkpi-glass-shell .agent-dot.active { background: #12b76a; box-shadow: 0 0 0 4px rgba(18,183,106,.14); }
 .vkpi-glass-shell .agent-dot.warning { background: #f79009; box-shadow: 0 0 0 4px rgba(247,144,9,.14); }
 .vkpi-glass-shell .agents-link { display: inline-block; margin-top: 12px; }
-.vkpi-glass-shell .alert { position: relative; display: grid; grid-template-columns: 38px 1fr auto; gap: 12px; align-items: start; padding: 12px; border-radius: 17px; background: rgba(255,255,255,.40); border: 1px solid rgba(255,255,255,.66); box-shadow: var(--inner); margin-bottom: 10px; }
+.vkpi-glass-shell .alert { position: relative; display: grid; grid-template-columns: 38px 1fr auto auto; gap: 12px; align-items: start; padding: 12px; border-radius: 17px; background: rgba(255,255,255,.40); border: 1px solid rgba(255,255,255,.66); box-shadow: var(--inner); margin-bottom: 10px; cursor: pointer; }
+.vkpi-glass-shell .alert:focus-visible,
+.vkpi-glass-shell .task:focus-visible { outline: 2px solid rgba(27,108,255,.45); outline-offset: 2px; }
 .vkpi-glass-shell .alert-ic { width: 36px; height: 36px; border-radius: 14px; display: grid; place-items: center; background: var(--bgc); color: var(--col); font-weight: 950; }
 .vkpi-glass-shell .alert b { font-size: 13px; }
 .vkpi-glass-shell .alert p { font-size: 11px; color: #667085; margin-top: 3px; }
 .vkpi-glass-shell .time { font-size: 11px; color: #98a2b3; }
-.vkpi-glass-shell .task { position: relative; padding: 12px; border-radius: 17px; background: rgba(255,255,255,.40); border: 1px solid rgba(255,255,255,.66); box-shadow: var(--inner); margin-bottom: 10px; }
+.vkpi-glass-shell .task { position: relative; padding: 12px; border-radius: 17px; background: rgba(255,255,255,.40); border: 1px solid rgba(255,255,255,.66); box-shadow: var(--inner); margin-bottom: 10px; cursor: pointer; }
 .vkpi-glass-shell .task-head { display: flex; justify-content: space-between; align-items: center; }
 .vkpi-glass-shell .task b { font-size: 13px; }
 .vkpi-glass-shell .priority { font-size: 10px; padding: 3px 7px; border-radius: 999px; font-weight: 900; }

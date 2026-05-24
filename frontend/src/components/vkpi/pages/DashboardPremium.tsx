@@ -92,16 +92,21 @@ interface PremiumAlert {
   isMock: boolean;
   url?: string;
   sourceLabel?: string;
+  signalType?: string;
+  severity?: string;
   mockLabel?: string;
 }
 
 interface PremiumTask {
+  id: string;
   title: string;
   priority: 'high' | 'mid' | 'low';
   priorityLabel: string;
   body: string;
   width: string;
   isMock: boolean;
+  confidence?: number;
+  sourceLabel?: string;
   mockLabel?: string;
 }
 
@@ -232,9 +237,9 @@ const platforms: PremiumPlatform[] = [
 ];
 
 const tasks: PremiumTask[] = [
-  { title: 'DC-A1 Monitor 上市任务', priority: 'high', priorityLabel: '高', body: '52/60 KOL 已对接，剩余 8 个需本周确认。', width: '87%', isMock: true, mockLabel: '示例任务' },
-  { title: '补寄任务（US 仓库）', priority: 'mid', priorityLabel: '中', body: '6 位 KOL 等待寄样，预计影响 56mm Pro 预热。', width: '0%', isMock: true, mockLabel: '示例任务' },
-  { title: 'Cinegear 物料准备', priority: 'low', priorityLabel: '低', body: '剩余 4 天截止，目前进行中。', width: '55%', isMock: true, mockLabel: '示例任务' },
+  { id: 'mock-task-1', title: 'DC-A1 Monitor 上市任务', priority: 'high', priorityLabel: '高', body: '52/60 KOL 已对接，剩余 8 个需本周确认。', width: '87%', isMock: true, mockLabel: '示例任务' },
+  { id: 'mock-task-2', title: '补寄任务（US 仓库）', priority: 'mid', priorityLabel: '中', body: '6 位 KOL 等待寄样，预计影响 56mm Pro 预热。', width: '0%', isMock: true, mockLabel: '示例任务' },
+  { id: 'mock-task-3', title: 'Cinegear 物料准备', priority: 'low', priorityLabel: '低', body: '剩余 4 天截止，目前进行中。', width: '55%', isMock: true, mockLabel: '示例任务' },
 ];
 
 const quickActions: Array<{ icon: string; label: string; page: VkpiPageKey }> = [
@@ -478,6 +483,8 @@ function buildAlerts(signals: Row[]): PremiumAlert[] {
       isMock: false,
       url: String(signal.source_url || signal.post_url || '').trim(),
       sourceLabel: String(signal.match_source || signal.source_table || 'vkpi_brand_signal').trim(),
+      signalType: String(signal.signal_type || signal.brand_role || 'brand_signal').trim(),
+      severity: String(signal.signal_strength || signal.severity || 'medium').trim(),
     };
   });
 }
@@ -600,12 +607,15 @@ function buildPremiumTasks(tasksStatus: Row): PremiumTask[] {
       const priority = String(row.priority || 'low') as PremiumTask['priority'];
       const confidence = Math.max(0, Math.min(1, numberValue(row.confidence)));
       return {
+        id: String(row.id || row.candidate_id || row.title || 'task'),
         title: String(row.title || '推荐任务'),
         priority: priority === 'high' || priority === 'mid' || priority === 'low' ? priority : 'low',
         priorityLabel: priority === 'high' ? '高' : priority === 'mid' ? '中' : '低',
         body: String(row.body || '等待人工复核'),
         width: `${Math.round(confidence * 100)}%`,
         isMock: false,
+        confidence,
+        sourceLabel: String(row.source || 'recommendation_agent_v0'),
       };
     })
     .slice(0, 6);
@@ -1827,6 +1837,40 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
     });
   }, []);
 
+  const openAlertDrawer = useCallback((alert: PremiumAlert) => {
+    setPanelDrawer({
+      title: alert.title,
+      sourceLabel: alert.sourceLabel || 'vkpi_brand_signal',
+      rows: [
+        { label: '类型', value: alert.signalType || 'brand_signal' },
+        { label: '等级', value: alert.severity || 'medium' },
+        { label: '时间', value: alert.time },
+        { label: '摘要', value: alert.body },
+        { label: '来源', value: alert.sourceLabel || 'vkpi_brand_signal' },
+        { label: '链接', value: alert.url ? '可打开原始内容' : '暂无原始链接' },
+      ],
+      actionLabel: alert.url ? '打开原始内容' : '进入数据质量',
+      actionUrl: alert.url,
+      actionPage: alert.url ? undefined : 'dataQuality',
+    });
+  }, []);
+
+  const openTaskDrawer = useCallback((task: PremiumTask) => {
+    setPanelDrawer({
+      title: task.title,
+      sourceLabel: task.sourceLabel || task.mockLabel || 'recommendation_agent_v0',
+      rows: [
+        { label: '任务 ID', value: task.id },
+        { label: '优先级', value: task.priorityLabel },
+        { label: '置信度', value: task.confidence == null ? task.width : `${Math.round(task.confidence * 100)}%` },
+        { label: '来源', value: task.sourceLabel || task.mockLabel || '任务队列' },
+        { label: '动作', value: task.body },
+      ],
+      actionLabel: '进入项目跟进',
+      actionPage: 'projects',
+    });
+  }, []);
+
   const openContentUrl = useCallback((url: unknown) => {
     const href = typeof url === 'string' ? url.trim() : '';
     if (!href) {
@@ -1975,18 +2019,26 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
                   <button className="link" type="button" onClick={() => goToWorkspacePage('dataQuality', '重要提醒')}>查看全部</button>
                 </div>
                 {premiumAlerts.length ? premiumAlerts.map((alert) => (
-                  <div className="alert" title={alert.sourceLabel} key={`${alert.title}-${alert.time}`}>
+                  <div
+                    className="alert"
+                    title={alert.sourceLabel}
+                    key={`${alert.title}-${alert.time}`}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => openAlertDrawer(alert)}
+                    onKeyDown={(event) => { if (event.key === 'Enter') openAlertDrawer(alert); }}
+                  >
                     <div className="alert-ic" style={glassVarStyle({ '--bgc': alert.bgc, '--col': alert.col })}>{alert.icon}</div>
                     <div>
                       <b>{alert.title}<span className="tag">真实</span></b>
                       <p>{alert.body}</p>
                     </div>
                     <span className="time">{alert.time}</span>
-                    {alert.url ? <button className="link" type="button" title="打开原始内容" onClick={() => openContentUrl(alert.url)}>↗</button> : null}
+                    {alert.url ? <button className="link" type="button" title="打开原始内容" onClick={(event) => { event.stopPropagation(); openContentUrl(alert.url); }}>↗</button> : null}
                   </div>
                 )) : <div className="empty-real">暂无真实品牌信号</div>}
               </div>
-              <div className="glass-card rail-card"><div className="panel-head"><h3>本周关键任务</h3><button className="link" type="button" onClick={() => goToWorkspacePage('projects', '本周关键任务')}>查看全部</button></div>{premiumTasks.length ? premiumTasks.map((task) => <div className="task" title={task.mockLabel} key={task.title}><div className="task-head"><b>{task.title}{task.isMock ? <span className="tag">示例</span> : null}</b><span className={`priority ${task.priority}`}>{task.priorityLabel}</span></div><p>{task.body}</p><div className="progress"><span style={glassVarStyle({ '--w': task.width })}></span></div></div>) : <div className="empty-real">{snapshot.tasksStatus.is_real ? '暂无真实推荐任务' : '等待真实任务 API'}</div>}</div>
+              <div className="glass-card rail-card"><div className="panel-head"><h3>本周关键任务</h3><button className="link" type="button" onClick={() => goToWorkspacePage('projects', '本周关键任务')}>查看全部</button></div>{premiumTasks.length ? premiumTasks.map((task) => <div className="task" title={task.mockLabel || task.sourceLabel} key={task.id || task.title} role="button" tabIndex={0} onClick={() => openTaskDrawer(task)} onKeyDown={(event) => { if (event.key === 'Enter') openTaskDrawer(task); }}><div className="task-head"><b>{task.title}{task.isMock ? <span className="tag">示例</span> : null}</b><span className={`priority ${task.priority}`}>{task.priorityLabel}</span></div><p>{task.body}</p><div className="progress"><span style={glassVarStyle({ '--w': task.width })}></span></div></div>) : <div className="empty-real">{snapshot.tasksStatus.is_real ? '暂无真实推荐任务' : '等待真实任务 API'}</div>}</div>
               <div className="glass-card rail-card"><div className="panel-head"><h3>快捷入口</h3></div><div className="quick">{quickActions.map((action) => <button key={action.label} type="button" onClick={() => goToWorkspacePage(action.page, action.label)}><b>{action.icon}</b><span>{action.label}</span></button>)}</div></div>
             </aside>
 	          </div>
