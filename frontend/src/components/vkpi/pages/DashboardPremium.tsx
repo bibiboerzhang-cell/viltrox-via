@@ -1961,6 +1961,23 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
     });
   }, [apiToken, snapshot, syncLabel]);
 
+  const openDateWindowDrawer = useCallback(() => {
+    setPanelDrawer({
+      title: 'Dashboard 时间窗口',
+      sourceLabel: `近 ${windowDays} 天 · ${snapshot.source === 'mock' ? '示例模式' : '真实 API'}`,
+      rows: [
+        { label: '本地日期', value: localDateISO() },
+        { label: '当前窗口', value: `近 ${windowDays} 天` },
+        { label: '更新时间', value: loadedAtLabel(snapshot.loadedAt) },
+        { label: 'KPI 口径', value: snapshot.source === 'mock' ? '示例 KPI / 未登录' : 'Dashboard KPI API' },
+        { label: '趋势覆盖', value: snapshot.trendRows.length ? `${snapshot.trendRows.length} 个日期点` : '暂无趋势点' },
+        { label: '内容覆盖', value: snapshot.recentContent.length ? `${snapshot.recentContent.length} 条最新内容` : '暂无内容列表' },
+      ],
+      actionLabel: '进入数据质量',
+      actionPage: 'dataQuality',
+    });
+  }, [snapshot, windowDays]);
+
   const openContentUrl = useCallback((url: unknown) => {
     const href = typeof url === 'string' ? url.trim() : '';
     if (!href) {
@@ -2000,7 +2017,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
       {!embedded ? (
         <GlassTopBar
             actions={[
-              { label: localDateISO(), onClick: () => showToast('今日日期 · 本地时区') },
+              { label: localDateISO(), onClick: openDateWindowDrawer },
               { label: syncLabel, variant: 'sync', onClick: openDataStatusDrawer },
               { label: '导出', onClick: () => goToWorkspacePage('reports', '报表导出') },
               { label: '生成周报', variant: 'primary', onClick: () => goToWorkspacePage('reports', '生成周报') },
