@@ -1984,6 +1984,26 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
     });
   }, [openPanelDrawer, snapshot, windowDays]);
 
+  const openCommerceStatusDrawer = useCallback((metricLabel: string) => {
+    const gmvKpi = premiumKpis.find((item) => item.label === 'GMV');
+    const ordersKpi = premiumKpis.find((item) => item.label === '订单量');
+    const roiKpi = premiumKpis.find((item) => item.label === '平均 ROI');
+    const exampleMode = snapshot.source === 'mock';
+    openPanelDrawer({
+      title: `${metricLabel} 接入状态`,
+      sourceLabel: 'Commerce / Attribution readiness',
+      rows: [
+        { label: 'Shopify webhook', value: exampleMode ? '示例模式 / 未登录' : ordersKpi?.mockLabel?.includes('Shopify') ? '待接入' : '需核验' },
+        { label: '折扣码归因', value: exampleMode ? '示例模式 / 未登录' : gmvKpi?.mockLabel?.includes('部分') ? '部分归因可见' : '待接入' },
+        { label: 'Cart attributes', value: exampleMode ? '示例模式 / 未登录' : '待接入' },
+        { label: '成本台账', value: exampleMode ? '示例模式 / 未登录' : roiKpi?.mockLabel?.includes('部分') ? '部分可见' : '待成本接入' },
+        { label: '当前展示策略', value: '缺关键链路时不显示完整销售 / 订单 / ROI 数字' },
+      ],
+      actionLabel: '进入系统设置',
+      actionPage: 'settings',
+    });
+  }, [openPanelDrawer, premiumKpis, snapshot.source]);
+
   const openContentUrl = useCallback((url: unknown) => {
     const href = typeof url === 'string' ? url.trim() : '';
     if (!href) {
@@ -2063,7 +2083,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
 		              onClose={() => setExpandedKpi(null)}
 		              onSelectMetric={selectKpiByLabel}
 		              onOpenUrl={openContentUrl}
-		              onOpenDiagnostic={() => goToWorkspacePage('settings', '接入状态')}
+		              onOpenDiagnostic={() => openCommerceStatusDrawer(selectedKpi.label)}
 		            />
 		          ) : null}
 	          {loadingData && snapshot.source === 'mock' && !snapshot.loadedAt ? (
