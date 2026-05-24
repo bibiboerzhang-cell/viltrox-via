@@ -249,7 +249,7 @@ const quickActions: Array<{ icon: string; label: string; page: VkpiPageKey }> = 
   { icon: '⌁', label: '内容发布', page: 'channels' },
   { icon: '⌕', label: 'KOL 寻找', page: 'discover' },
   { icon: '▣', label: '舆情监控', page: 'dataQuality' },
-  { icon: '◎', label: '竞品监控', page: 'dataQuality' },
+  { icon: '◎', label: '竞品监控', page: 'dataAnalysis' },
   { icon: '▦', label: '产品管理', page: 'productBattle' },
   { icon: '▥', label: '数据报表', page: 'reports' },
 ];
