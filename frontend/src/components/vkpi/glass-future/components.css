@@ -168,6 +168,7 @@
 .vkpi-glass-shell .map-metric-switch { display: flex; gap: 7px; flex-wrap: wrap; justify-content: flex-end; }
 .vkpi-glass-shell .map-metric-switch button { border: 1px solid rgba(255,255,255,.76); background: rgba(255,255,255,.48); border-radius: 999px; padding: 8px 11px; color: #667085; font: inherit; font-size: 12px; font-weight: 850; box-shadow: var(--inner); cursor: pointer; }
 .vkpi-glass-shell .map-metric-switch button.active { background: rgba(27,108,255,.12); color: #185fa5; border-color: rgba(27,108,255,.18); }
+.vkpi-glass-shell .map-metric-switch button:disabled { cursor: not-allowed; opacity: .45; }
 .vkpi-glass-shell .geo-map-layout { display: grid; grid-template-columns: minmax(0,1fr) 230px; gap: 16px; align-items: stretch; }
 .vkpi-glass-shell .geo-map-stage { min-width: 0; }
 .vkpi-glass-shell .geo-map-card .holo-map { height: 242px; background: rgba(255,255,255,.30); }

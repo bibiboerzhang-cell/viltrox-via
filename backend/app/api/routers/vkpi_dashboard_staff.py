@@ -80,6 +80,13 @@ def _recent_content_sort_key(row: dict[str, Any]) -> str:
     )
 
 
+def _dashboard_int(value: Any) -> int:
+    try:
+        return int(float(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _dashboard_recent_official_content(limit: int) -> list[dict[str, Any]]:
     from app.db.repositories.viltrox_matrix import get_latest_viltrox_scan_bundle
 
@@ -425,6 +432,8 @@ def dashboard_kol_distribution(
                 **geo,
                 "count": 0,
                 "share": 0.0,
+                "exposure": 0,
+                "platforms": [],
                 "raw_values": [],
             },
         )
@@ -432,6 +441,41 @@ def dashboard_kol_distribution(
         for raw in raw_values:
             if raw not in item["raw_values"]:
                 item["raw_values"].append(raw)
+
+    try:
+        platform_rows = conn.execute(
+            """
+            SELECT country, platform, COUNT(*) AS n, COALESCE(SUM(avg_views), 0) AS exposure
+            FROM vkpi_kol_pool
+            WHERE country IS NOT NULL AND TRIM(country) != ''
+            GROUP BY country, platform
+            """
+        ).fetchall()
+    except Exception:
+        platform_rows = []
+    platform_buckets: dict[str, dict[str, dict[str, int]]] = {}
+    for row in platform_rows:
+        row_data = dict(row)
+        raw_country = str(row_data.get("country") or "").strip()
+        code = resolve_country_code(raw_country)
+        geo = country_geo(code)
+        if not geo or geo["code"] not in countries_by_code:
+            continue
+        platform = str(row_data.get("platform") or "unknown").strip() or "unknown"
+        item = platform_buckets.setdefault(geo["code"], {}).setdefault(platform, {"count": 0, "exposure": 0})
+        item["count"] += _dashboard_int(row_data.get("n"))
+        item["exposure"] += _dashboard_int(row_data.get("exposure"))
+    for code, platform_map in platform_buckets.items():
+        country_item = countries_by_code.get(code)
+        if not country_item:
+            continue
+        platforms = [
+            {"platform": platform, "count": values["count"], "exposure": values["exposure"]}
+            for platform, values in platform_map.items()
+        ]
+        platforms.sort(key=lambda item: (-int(item["count"] or 0), str(item["platform"])))
+        country_item["platforms"] = platforms
+        country_item["exposure"] = sum(int(item["exposure"] or 0) for item in platforms)
 
     mapped_kol_count = sum(int(item["count"] or 0) for item in countries_by_code.values())
     source_country_kol_count = mapped_kol_count + sum(int(item.get("kol_count") or 0) for item in unmapped)

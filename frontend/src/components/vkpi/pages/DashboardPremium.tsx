@@ -1428,6 +1428,7 @@ function GlobalKolMapPanel({
 }) {
   const realRegions = regions.filter((region) => !region.isMock && (region.kolCount || 0) > 0);
   const totalKol = realRegions.reduce((sum, region) => sum + (region.kolCount || 0), 0);
+  const activeMetricTotal = realRegions.reduce((sum, region) => sum + mapMetricValue(region, activeMetric), 0);
   const topRegions = realRegions.slice(0, 5);
   const countriesLabel = realRegions.length ? `${realRegions.length} 国家` : '国家分布待接入';
   const metricOptions: Array<{ key: MapMetric; label: string; ready: boolean }> = [
@@ -1449,6 +1450,7 @@ function GlobalKolMapPanel({
               type="button"
               key={option.key}
               title={option.ready ? option.label : `${option.label} 待数据源接入`}
+              disabled={!option.ready}
               onClick={() => onMetricChange(option.key)}
             >
               {option.label}
@@ -1471,7 +1473,7 @@ function GlobalKolMapPanel({
           <span>TOP 5 国家 · {mapMetricTitle(activeMetric)}</span>
           <div className="geo-top-list">
             {topRegions.length ? topRegions.map((region) => {
-              const share = totalKol ? ((region.kolCount || 0) / totalKol) * 100 : 0;
+              const share = activeMetricTotal ? (mapMetricValue(region, activeMetric) / activeMetricTotal) * 100 : 0;
               return (
                 <button className="geo-country-card" type="button" key={region.countryCode || region.label} onClick={() => onOpenCountry(region)}>
                   <b><span>{countryFlag(region.countryCode)}</span>{region.label}</b>
@@ -1495,7 +1497,7 @@ function GlobalKolMapPanel({
         <span><i className="mid"></i>中等</span>
         <span><i className="light"></i>稀疏</span>
         <span><i className="empty"></i>无 KOL</span>
-        <em>气泡大小 = {mapMetricTitle(activeMetric)}；无该维度数据时保持 KOL 分布</em>
+        <em>气泡大小 = {mapMetricTitle(activeMetric)}；销售额等归因数据未接通时禁用</em>
       </div>
     </div>
   );
