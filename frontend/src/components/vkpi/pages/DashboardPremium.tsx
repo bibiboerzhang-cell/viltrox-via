@@ -1773,8 +1773,12 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
     setActiveNav(key);
     const target = premiumNavTarget[key];
     if (target) {
-      if (target !== 'dashboardPremium' && onSelectPage) {
-        onSelectPage(target);
+      if (target !== 'dashboardPremium') {
+        if (onSelectPage) {
+          onSelectPage(target);
+        } else if (typeof window !== 'undefined') {
+          window.location.hash = target;
+        }
       }
       return;
     }
@@ -1796,7 +1800,11 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
       onSelectPage(page);
       return;
     }
-    showToast(`${fallbackLabel} · 可接真实路由`);
+    if (typeof window !== 'undefined') {
+      window.location.hash = page;
+      return;
+    }
+    showToast(`${fallbackLabel} · 暂无可用路由`);
   }, [onSelectPage, showToast]);
 
   const selectKpiByLabel = useCallback((label: string) => {
