@@ -1812,6 +1812,21 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
     });
   }, [premiumPlatforms]);
 
+  const openAgentDrawer = useCallback((agent: PremiumAgent) => {
+    setPanelDrawer({
+      title: agent.name,
+      sourceLabel: agent.isMock ? 'Agent API 待接入' : 'Agents status API',
+      rows: [
+        { label: 'Agent ID', value: agent.id },
+        { label: '状态', value: agent.status },
+        { label: '摘要', value: agent.summary || '-' },
+        { label: '最新输出', value: agent.lastOutput || '暂无输出文件' },
+      ],
+      actionLabel: '打开 Agent Inbox',
+      actionPage: 'agents',
+    });
+  }, []);
+
   const openContentUrl = useCallback((url: unknown) => {
     const href = typeof url === 'string' ? url.trim() : '';
     if (!href) {
@@ -1937,7 +1952,15 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
                 <div className="panel-head"><h3>Agents 战情室</h3><span className="tag">{activeAgentCount} / {premiumAgents.length} 在线</span></div>
                 <div className="agents-list">
                   {premiumAgents.map((agent) => (
-                    <div className="agent-row" key={agent.id} title={agent.lastOutput || agent.summary}>
+                    <div
+                      className="agent-row"
+                      key={agent.id}
+                      title={agent.lastOutput || agent.summary}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => openAgentDrawer(agent)}
+                      onKeyDown={(event) => { if (event.key === 'Enter') openAgentDrawer(agent); }}
+                    >
                       <span className={`agent-dot ${agent.status}`}></span>
                       <div><b>{agent.name}{agent.isMock ? <span className="tag">示例</span> : null}</b><p>{agent.summary}</p></div>
                     </div>
