@@ -1756,11 +1756,11 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
 
   const openCountryDrawer = useCallback((region: PremiumRegion) => {
     if (region.isMock || !region.countryCode) {
-      showToast('地区分布 · 示例数据');
+      setCountryDrawer({ region, items: [], loading: false, error: '示例地区点；登录并加载真实国家分布后显示 KOL 列表。' });
       return;
     }
     if (!apiToken) {
-      showToast('登录后查看国家 KOL 列表');
+      setCountryDrawer({ region, items: [], loading: false, error: '未带 API token；登录后读取该国家的 KOL 列表。' });
       return;
     }
     setCountryDrawer({ region, items: [], loading: true });
@@ -2190,6 +2190,11 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
           </div>
           {countryDrawer.loading ? <div className="country-drawer-empty">加载中…</div> : null}
           {!countryDrawer.loading && countryDrawer.error ? <div className="country-drawer-empty">{countryDrawer.error}</div> : null}
+          {!countryDrawer.loading && countryDrawer.error ? (
+            <button className="panel-drawer-action" type="button" onClick={() => goToWorkspacePage('discover', `${countryDrawer.region.label} KOL`)}>
+              打开 KOL 搜索 →
+            </button>
+          ) : null}
           {!countryDrawer.loading && !countryDrawer.error && countryDrawer.items.length === 0 ? <div className="country-drawer-empty">暂无 KOL</div> : null}
           {!countryDrawer.loading && !countryDrawer.error ? (
             <>
