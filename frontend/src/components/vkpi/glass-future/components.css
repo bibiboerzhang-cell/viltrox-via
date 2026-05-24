@@ -160,6 +160,7 @@
 .vkpi-glass-shell .segment { display: flex; gap: 7px; }
 .vkpi-glass-shell .segment button { border: 1px solid rgba(255,255,255,.76); background: rgba(255,255,255,.48); border-radius: 12px; padding: 8px 11px; color: #667085; font-weight: 850; box-shadow: var(--inner); cursor: pointer; }
 .vkpi-glass-shell .segment button.active { background: linear-gradient(135deg,#1b6cff,#6aa6ff); color: white; border-color: rgba(255,255,255,.38); }
+.vkpi-glass-shell .segment button:disabled { cursor: not-allowed; opacity: .45; }
 .vkpi-glass-shell .holo-map { position: relative; height: 222px; border-radius: 22px; background: linear-gradient(135deg,rgba(235,244,255,.72),rgba(255,255,255,.36)); border: 1px solid rgba(255,255,255,.72); overflow: hidden; }
 .vkpi-glass-shell .holo-map:before { content: ""; position: absolute; inset: 0; background: radial-gradient(circle at 43% 39%,rgba(24,213,255,.18),transparent 35%); }
 .vkpi-glass-shell .holo-map svg { position: absolute; inset: 0; width: 100%; height: 100%; }

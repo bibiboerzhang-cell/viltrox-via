@@ -34,6 +34,9 @@ type Row = Record<string, unknown>;
 type PremiumSource = 'mock' | 'real' | 'partial';
 type ContentFilter = 'all' | 'official' | 'partner' | 'ugc';
 type MapMetric = 'kol' | 'exposure' | 'sales';
+type TrendSegment = '曝光量' | '互动量' | '销售额';
+
+const trendSegments: TrendSegment[] = ['曝光量', '互动量', '销售额'];
 
 interface PremiumKpi {
   icon: string;
@@ -378,9 +381,30 @@ function officialTotals(matrix: Row) {
   };
 }
 
-function latestTrendValue(rows: Row[], key: string): number {
+function trendMetricValue(row: Row, segment: TrendSegment): number {
+  if (segment === '销售额') {
+    return numberValue(row.gmv_cents || row.sales_cents || row.revenue_cents) / 100;
+  }
+  if (segment === '互动量') {
+    return numberValue(row.likes) + numberValue(row.comments);
+  }
+  return numberValue(row.views || row.total_views || row.play_count || row.impressions);
+}
+
+function trendMetricReady(rows: Row[], segment: TrendSegment, allowMockFallback: boolean): boolean {
+  if (segment === '曝光量') return allowMockFallback || rows.length > 0;
+  return rows.some((row) => trendMetricValue(row, segment) > 0);
+}
+
+function trendMetricDisplay(value: number, segment: TrendSegment): string {
+  if (!value) return '--';
+  if (segment === '销售额') return `$${compact(value)}`;
+  return compact(value);
+}
+
+function latestTrendValue(rows: Row[], segment: TrendSegment): number {
   const last = rows.length ? rows[rows.length - 1] : {};
-  return numberValue(last[key] ?? last.total_views ?? last.play_count ?? last.impressions);
+  return trendMetricValue(last, segment);
 }
 
 function buildPremiumKpis(snapshot: PremiumSnapshot, allowMockFallback: boolean): PremiumKpi[] {
@@ -632,10 +656,10 @@ function recentDateLabels(days = 6): string[] {
   return labels;
 }
 
-function trendChart(rows: Row[], allowMockFallback: boolean) {
+function trendChart(rows: Row[], allowMockFallback: boolean, segment: TrendSegment) {
   const fallbackPath = 'M34 196 C82 162 121 164 166 134 S235 102 285 101 363 76 411 51 458 25 500 32';
   if (!rows.length) {
-    if (!allowMockFallback) {
+    if (!allowMockFallback || segment !== '曝光量') {
       const emptyPath = 'M34 196 L126 196 L218 196 L310 196 L402 196 L500 196';
       return {
         path: emptyPath,
@@ -657,7 +681,7 @@ function trendChart(rows: Row[], allowMockFallback: boolean) {
       pointY: 32,
     };
   }
-  const values = rows.map((row) => numberValue(row.views || row.total_views || row.play_count || row.impressions));
+  const values = rows.map((row) => trendMetricValue(row, segment));
   const max = Math.max(1, ...values);
   const xMin = 34;
   const xMax = 500;
@@ -675,7 +699,7 @@ function trendChart(rows: Row[], allowMockFallback: boolean) {
     areaPath: `${path} L500 222 L34 222 Z`,
     labels: rows.slice(0, 6).map((row) => String(row.date || row.day || '').slice(5).replace('-', '/') || '-'),
     tipDate: String(rows[rows.length - 1]?.date || rows[rows.length - 1]?.day || '').slice(5).replace('-', '/') || 'latest',
-    tipValue: compact(latestTrendValue(rows, 'views')),
+    tipValue: trendMetricDisplay(latestTrendValue(rows, segment), segment),
     pointX: lastPoint.x,
     pointY: lastPoint.y,
   };
@@ -1624,7 +1648,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
   const [toast, setToast] = useState('已触发');
   const [toastVisible, setToastVisible] = useState(false);
   const [activeNav, setActiveNav] = useState('Dashboard');
-  const [activeSegment, setActiveSegment] = useState('曝光量');
+  const [activeSegment, setActiveSegment] = useState<TrendSegment>('曝光量');
   const [snapshot, setSnapshot] = useState<PremiumSnapshot>(EMPTY_PREMIUM_SNAPSHOT);
   const [loadingData, setLoadingData] = useState(false);
   const [countryDrawer, setCountryDrawer] = useState<CountryDrawerState | null>(null);
@@ -1662,7 +1686,15 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
   const premiumKpis = useMemo(() => buildPremiumKpis(snapshot, allowMockFallback), [allowMockFallback, snapshot]);
   const premiumProductRows = useMemo(() => buildProductRows(snapshot.productRows, allowMockFallback), [allowMockFallback, snapshot.productRows]);
   const premiumAlerts = useMemo(() => buildAlerts(snapshot.brandSignals), [snapshot.brandSignals]);
-  const premiumTrend = useMemo(() => trendChart(snapshot.trendRows, allowMockFallback), [allowMockFallback, snapshot.trendRows]);
+  const trendSegmentOptions = useMemo(
+    () => trendSegments.map((label) => ({ label, ready: trendMetricReady(snapshot.trendRows, label, allowMockFallback) })),
+    [allowMockFallback, snapshot.trendRows],
+  );
+  useEffect(() => {
+    const current = trendSegmentOptions.find((option) => option.label === activeSegment);
+    if (current && !current.ready) setActiveSegment('曝光量');
+  }, [activeSegment, trendSegmentOptions]);
+  const premiumTrend = useMemo(() => trendChart(snapshot.trendRows, allowMockFallback, activeSegment), [activeSegment, allowMockFallback, snapshot.trendRows]);
   const premiumRegions = useMemo(() => buildPremiumRegions(snapshot.kolSummary, snapshot.kolDistribution, allowMockFallback), [allowMockFallback, snapshot.kolDistribution, snapshot.kolSummary]);
   const premiumMapPoints = useMemo<CountryMapPoint[]>(
     () =>
@@ -1749,7 +1781,12 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
     showToast(`${key} · 暂无可用页面`);
   };
 
-  const handleSegmentSelect = (key: string) => {
+  const handleSegmentSelect = (key: TrendSegment) => {
+    const option = trendSegmentOptions.find((item) => item.label === key);
+    if (option && !option.ready) {
+      showToast(`${key}暂无真实趋势数据`);
+      return;
+    }
     setActiveSegment(key);
     showToast(`切换：${key}`);
   };
@@ -1773,7 +1810,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
 
   const openTrendDrawer = useCallback(() => {
     setPanelDrawer({
-      title: '曝光趋势',
+      title: `${activeSegment}趋势`,
       sourceLabel: snapshot.source === 'mock' ? '示例趋势' : 'revenue-trend API',
       rows: [
         { label: '当前指标', value: activeSegment },
@@ -1999,7 +2036,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
                   onOpenAll={() => goToWorkspacePage('discover', 'Country Map')}
                 />
                 <div className="glass-card panel">
-                  <div className="panel-head"><h3>曝光趋势（近 7 天）</h3><div className="segment">{['曝光量', '互动量', '销售额'].map((segment) => <button className={activeSegment === segment ? 'active' : ''} data-seg={segment} onClick={() => handleSegmentSelect(segment)} type="button" key={segment}>{segment}</button>)}</div></div>
+                  <div className="panel-head"><h3>{activeSegment}趋势（近 7 天）</h3><div className="segment">{trendSegmentOptions.map((segment) => <button className={activeSegment === segment.label ? 'active' : ''} data-seg={segment.label} disabled={!segment.ready} title={segment.ready ? segment.label : `${segment.label}暂无真实趋势数据`} onClick={() => handleSegmentSelect(segment.label)} type="button" key={segment.label}>{segment.label}</button>)}</div></div>
                   <div className="linechart" role="button" tabIndex={0} onClick={openTrendDrawer} onKeyDown={(event) => { if (event.key === 'Enter') openTrendDrawer(); }}><svg viewBox="0 0 520 250" preserveAspectRatio="none"><defs><linearGradient id="area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#1b6cff" /><stop offset="1" stopColor="#1b6cff" stopOpacity="0" /></linearGradient></defs><g stroke="rgba(92,130,190,.16)"><line x1="26" y1="30" x2="500" y2="30" /><line x1="26" y1="80" x2="500" y2="80" /><line x1="26" y1="130" x2="500" y2="130" /><line x1="26" y1="180" x2="500" y2="180" /></g><path d={premiumTrend.path} fill="none" stroke="#1b6cff" strokeWidth="4" strokeLinecap="round" /><path d={premiumTrend.areaPath} fill="url(#area)" opacity=".25" /><circle cx={premiumTrend.pointX} cy={premiumTrend.pointY} r="8" fill="#1b6cff" stroke="#fff" strokeWidth="4" /><text x="34" y="238" fontSize="12" fill="#667085">{premiumTrend.labels[0] || '-'}</text><text x="116" y="238" fontSize="12" fill="#667085">{premiumTrend.labels[1] || '-'}</text><text x="198" y="238" fontSize="12" fill="#667085">{premiumTrend.labels[2] || '-'}</text><text x="280" y="238" fontSize="12" fill="#667085">{premiumTrend.labels[3] || '-'}</text><text x="362" y="238" fontSize="12" fill="#667085">{premiumTrend.labels[4] || '-'}</text><text x="444" y="238" fontSize="12" fill="#667085">{premiumTrend.labels[5] || '-'}</text></svg><div className="float-tip">{premiumTrend.tipDate}<b>{premiumTrend.tipValue}</b></div></div>
                 </div>
                 <div className="lower">
