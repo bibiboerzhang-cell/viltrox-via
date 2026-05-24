@@ -1332,14 +1332,12 @@ function LatestContentPerformance({
   onFilterChange,
   onOpenUrl,
   onOpenContentCenter,
-  onOpenAnalysis,
 }: {
   rows: Row[];
   activeFilter: ContentFilter;
   onFilterChange: (filter: ContentFilter) => void;
   onOpenUrl: (url: unknown) => void;
   onOpenContentCenter: () => void;
-  onOpenAnalysis: () => void;
 }) {
   const counts = rows.reduce<Record<Exclude<ContentFilter, 'all'>, number>>((acc, row) => {
     acc[contentKind(row)] += 1;
@@ -1398,7 +1396,7 @@ function LatestContentPerformance({
               </div>
               <div className="latest-content-tools">
                 <button type="button" title={url ? '打开原帖' : '缺少原帖链接'} disabled={!url} onClick={() => onOpenUrl(url)}>↗</button>
-                <button type="button" title="查看数据分析" onClick={onOpenAnalysis}>…</button>
+                <button type="button" title="进入内容中心" onClick={onOpenContentCenter}>…</button>
               </div>
             </article>
           );
@@ -1854,7 +1852,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
                     }
                   }}
                   onOpenCountry={openCountryDrawer}
-                  onOpenAll={() => goToWorkspacePage('dataAnalysis', 'Country Map')}
+                  onOpenAll={() => goToWorkspacePage('discover', 'Country Map')}
                 />
                 <div className="glass-card panel">
                   <div className="panel-head"><h3>曝光趋势（近 7 天）</h3><div className="segment">{['曝光量', '互动量', '销售额'].map((segment) => <button className={activeSegment === segment ? 'active' : ''} data-seg={segment} onClick={() => handleSegmentSelect(segment)} type="button" key={segment}>{segment}</button>)}</div></div>
@@ -1882,7 +1880,6 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
                 onFilterChange={setContentFilter}
                 onOpenUrl={openContentUrl}
                 onOpenContentCenter={() => goToWorkspacePage('channels', '内容中心')}
-                onOpenAnalysis={() => goToWorkspacePage('dataAnalysis', '内容分析')}
               />
             </div>
             <aside className="rail">
