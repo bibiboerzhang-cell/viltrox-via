@@ -30,7 +30,6 @@ import type {
   VkpiProductCatalogItem,
   VkpiStaffMember,
 } from '../vkpiTypes';
-import { InfoBlock } from '../shared/InfoBlock';
 import { StaffTable } from '../tables/StaffTable';
 import { PageShell } from './PageShell';
 import {
@@ -46,12 +45,11 @@ import { permissionsForTemplate, vkpiPermissionFromTemplate, type StaffPermissio
 import { SettingsRulesPanel, type SettingsRulesTab } from './settings/SettingsRulesPanel';
 import {
   EmployeeSettingsView,
-  SettingsApiSkeletonGrid,
   SettingsLoadingStrip,
   SettingsModule,
-  SettingsProviderGrid,
   type SettingsModuleKey,
 } from './settings/SettingsPage.fragments';
+import { SettingsStatusPanel } from './settings/SettingsStatusPanel';
 import {
   boolLabel,
   boolValue,
@@ -576,71 +574,42 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
       <SettingsLoadingStrip settingsLoading={settingsLoading} catalogLoading={productCatalogLoading} />
       <div className="vkpi-settings-clean">
         {renderSettingsModule('status', `${apiStatusText} · 同步 ${syncTime} / ${syncGuardText} · KOL ${kolRefreshGateText} · ${systemHealth} · 版本 ${versionSummary}`, (
-          <>
-            <div className="vkpi-settings-status-grid">
-              <InfoBlock label="API 服务" value={apiStatusText} />
-              <InfoBlock label="服务范围" value={apiStatusDetail} />
-              <InfoBlock label="同步" value={`每日 ${syncTime} · ${syncGuardText}`} />
-              <InfoBlock label="KOL 分层" value={`${kolRefreshHot} hot / ${kolRefreshCold} cold`} />
-              <InfoBlock label="按需刷新" value={`${kolRefreshGateText} · 任务 ${kolRefreshActiveTasks}`} />
-              <InfoBlock label="本月成本" value={`$${totalSpentUsd.toLocaleString('en-US')} / $${totalBudgetUsd.toLocaleString('en-US')}`} />
-              <InfoBlock label="系统" value={systemHealth} />
-            </div>
-            <section className="vkpi-settings-version-panel">
-              <div className="vkpi-table-card__header">
-                <div><h2>每日同步 Guard</h2><span>{syncLastRun ? `最近 ${timeLabel(syncLastRun.finished_at || syncLastRun.started_at)}` : '暂无运行记录'}</span></div>
-              </div>
-              {dailySync?.ack_required ? (
-                <div className="vkpi-inline-message is-error">
-                  同步已暂停，需要 CLI ack 后才允许下次运行：{String(dailySync.blocking_run?.run_id || '-')}
-                </div>
-              ) : dailySync?.error ? (
-                <div className="vkpi-inline-message is-warn">同步状态读取异常：{dailySync.error}</div>
-              ) : null}
-              <div className="vkpi-settings-status-grid">
-                <InfoBlock label="Guard 状态" value={syncGuardText} />
-                <InfoBlock label="最近状态" value={syncLastRunStatus} />
-                <InfoBlock label="失败率" value={`${percentLabel(syncFailureRate)} / 阈值 ${percentLabel(dailySync?.failure_rate_threshold ?? syncHealth.failure_rate_threshold ?? 0.1)}`} />
-                <InfoBlock label="目标 / 错误" value={`${syncRequested.toLocaleString('en-US')} / ${syncErrors.toLocaleString('en-US')}`} />
-                <InfoBlock label="KOL 错误" value={String(syncHealth.kol_errors ?? 0)} />
-                <InfoBlock label="最近 ack" value={syncAckReason ? `${syncAckReason} · ${timeLabel(syncAck?.acknowledged_at)}` : '-'} />
-              </div>
-            </section>
-            <section className="vkpi-settings-version-panel">
-              <div className="vkpi-table-card__header">
-                <div><h2>KOL 刷新分层</h2><span>{kolRefreshTotal ? `${kolRefreshTotal.toLocaleString('en-US')} 条历史记录` : '读取中'}</span></div>
-              </div>
-              <div className="vkpi-settings-status-grid">
-                <InfoBlock label="当前模式" value={kolRefreshMode === 'stale_while_revalidate_enabled' ? '按需刷新已启用' : '仅记录/查询'} />
-                <InfoBlock label="Provider Gate" value={kolRefreshGateEnabled ? '开启' : '关闭'} />
-                <InfoBlock label="Hot / Warm / Cold" value={`${kolRefreshHot} / ${kolRefreshWarm} / ${kolRefreshCold}`} />
-                <InfoBlock label="Cold 未刷新" value={String(numberValue(kolRefresh.cold_never_refreshed).toLocaleString('en-US'))} />
-                <InfoBlock label="30 天搜索" value={`${numberValue(kolRefresh.searched_rows).toLocaleString('en-US')} 行 / ${numberValue(kolRefresh.search_count_30d).toLocaleString('en-US')} 次`} />
-                <InfoBlock label="活跃刷新任务" value={String(kolRefreshActiveTasks)} />
-                <InfoBlock label="Batch Plan" value={`${kolRefreshBatchTargets} 目标 / ${kolRefreshBatchCount} 批`} />
-                <InfoBlock label="Batch 并发" value={`${kolRefreshBatchConcurrency} · plan-only`} />
-              </div>
-            </section>
-            <section className="vkpi-settings-version-panel">
-              <div className="vkpi-table-card__header">
-                <div><h2>版本状态</h2><span>{versionCheckedAt ? `检查 ${timeLabel(versionCheckedAt)}` : '读取中'}</span></div>
-                <button className="vkpi-button" type="button" onClick={() => void reloadVersionStatus()}>刷新版本</button>
-              </div>
-              <div className="vkpi-settings-status-grid">
-                <InfoBlock label="页面资源" value={frontendAsset || '-'} />
-                <InfoBlock label="前端版本" value={`${shortBuildSha(frontendBuildInfo.gitSha)} · ${frontendBuildInfo.gitBranch}`} />
-                <InfoBlock label="前端构建时间" value={timeLabel(frontendBuildInfo.builtAt)} />
-                <InfoBlock label="后端版本" value={backendBuild ? `${shortBuildSha(backendBuild.git_sha)} · ${backendBuild.git_branch || '-'}` : '读取中'} />
-                <InfoBlock label="后端构建时间" value={timeLabel(backendBuild?.build_time)} />
-                <InfoBlock label="检查时间" value={timeLabel(versionCheckedAt)} />
-              </div>
-            </section>
-            {settingsLoading && !providers.length ? (
-              <SettingsApiSkeletonGrid />
-            ) : (
-              <SettingsProviderGrid providers={providers} />
-            )}
-          </>
+          <SettingsStatusPanel
+            apiStatusDetail={apiStatusDetail}
+            apiStatusText={apiStatusText}
+            backendBuild={backendBuild}
+            dailySync={dailySync as Record<string, unknown> | null}
+            frontendAsset={frontendAsset}
+            kolRefresh={kolRefresh}
+            kolRefreshActiveTasks={kolRefreshActiveTasks}
+            kolRefreshBatchConcurrency={kolRefreshBatchConcurrency}
+            kolRefreshBatchCount={kolRefreshBatchCount}
+            kolRefreshBatchTargets={kolRefreshBatchTargets}
+            kolRefreshCold={kolRefreshCold}
+            kolRefreshGateEnabled={kolRefreshGateEnabled}
+            kolRefreshGateText={kolRefreshGateText}
+            kolRefreshHot={kolRefreshHot}
+            kolRefreshMode={kolRefreshMode}
+            kolRefreshTotal={kolRefreshTotal}
+            kolRefreshWarm={kolRefreshWarm}
+            providers={providers}
+            settingsLoading={settingsLoading}
+            syncAck={syncAck as Record<string, unknown> | null}
+            syncAckReason={syncAckReason}
+            syncErrors={syncErrors}
+            syncFailureRate={syncFailureRate}
+            syncGuardText={syncGuardText}
+            syncHealth={syncHealth}
+            syncLastRun={syncLastRun as Record<string, unknown> | null}
+            syncLastRunStatus={syncLastRunStatus}
+            syncRequested={syncRequested}
+            syncTime={syncTime}
+            systemHealth={systemHealth}
+            totalBudgetUsd={totalBudgetUsd}
+            totalSpentUsd={totalSpentUsd}
+            versionCheckedAt={versionCheckedAt}
+            onReloadVersionStatus={() => void reloadVersionStatus()}
+          />
         ))}
         {renderSettingsModule('sku', `${skuCount} 个 SKU · 镜头 ${lensCount} · 闪光灯 ${lightingCount} · 转接环 ${adapterCount}`, (
           <section className="vkpi-settings-product-row">
