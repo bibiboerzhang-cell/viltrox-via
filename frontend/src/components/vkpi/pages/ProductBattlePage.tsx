@@ -4,14 +4,14 @@ import {
   createProjectFromOutreachSuggestion,
   dismissOutreachSuggestion,
   getDailyOutreachDigestStatus,
-  getKolPoolSummary,
   getProductRecommendationOutcomeSummary,
   listAnalyticsProducts,
   listDailyOutreachDigest,
   listOutreachSuggestions,
   listProductLaunches,
   listProductRecommendations,
-} from '../../../services/vkpi.ui-api';
+} from '../../../services/vkpi/product-api';
+import { getKolPoolSummary } from '../../../services/vkpi/kolPool-api';
 import { AnalyticsMonitorPanel } from './analytics/AnalyticsMonitorPanel';
 import { OutreachTables } from './analytics/OutreachTables';
 import { ProductRecommendationPanel } from './analytics/ProductRecommendationPanel';

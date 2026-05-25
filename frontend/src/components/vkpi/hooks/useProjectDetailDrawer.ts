@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { getKolProfile, getProjectDetail } from '../../../services/vkpi.ui-api';
+import { getKolProfile } from '../../../services/vkpi/kol-api';
+import { getProjectDetail } from '../../../services/vkpi/projects-api';
 import type { VkpiKolProfile, VkpiProjectDetail, VkpiProjectRow } from '../vkpiTypes';
 import { textValue } from '../shared/vkpiDataUtils';
 

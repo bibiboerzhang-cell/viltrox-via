@@ -15,7 +15,7 @@ import {
   listTasks,
   retryTask as retryAsyncTask,
   TERMINAL_STATUSES,
-} from '../../services/vkpi.ui-api';
+} from '../../services/vkpi/tasks-api';
 import './TaskCenter.css';
 
 const TASK_TYPE_LABELS: Record<string, string> = {

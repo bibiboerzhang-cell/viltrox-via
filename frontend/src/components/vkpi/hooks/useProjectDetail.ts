@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { getProjectDetail } from '../../../services/vkpi.ui-api';
+import { getProjectDetail } from '../../../services/vkpi/projects-api';
 import type { VkpiProjectDetail, VkpiProjectRow } from '../vkpiTypes';
 import { coerceProjectStage, platformFromRaw, safeNumber, textValue } from '../shared/vkpiDataUtils';
 

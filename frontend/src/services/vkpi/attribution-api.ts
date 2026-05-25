@@ -1,0 +1,113 @@
+import { apiFetch, jsonBody } from "../http";
+
+type Row = Record<string, unknown>;
+
+export interface VkpiAttributionPayload {
+  sourcePlatform: "shopify" | "amazon" | "manual" | "custom";
+  sourceRef: string;
+  projectId?: string;
+  linkId?: string;
+  productSku?: string;
+  orderId?: string;
+  revenueUsd: number;
+  commissionUsd?: number;
+  confidence?: string;
+  occurredAt?: string;
+}
+
+export interface VkpiAmazonImportPayload {
+  projectId?: string;
+  amazonTag?: string;
+  asin?: string;
+  marketplace?: string;
+  reportDate?: string;
+  rows: Row[];
+}
+
+export async function createSalesAttribution(token: string, payload: VkpiAttributionPayload) {
+  return apiFetch<Row>(
+    "/api/marketing/attribution",
+    {
+      method: "POST",
+      body: jsonBody({
+        source_platform: payload.sourcePlatform,
+        source_ref: payload.sourceRef,
+        project_id: payload.projectId ? Number(payload.projectId) : undefined,
+        link_id: payload.linkId ? Number(payload.linkId) : undefined,
+        product_sku: payload.productSku,
+        order_id: payload.orderId ? Number(payload.orderId) : undefined,
+        revenue_usd: payload.revenueUsd,
+        commission_usd: payload.commissionUsd,
+        confidence: payload.confidence || "confirmed",
+        occurred_at: payload.occurredAt,
+      }),
+    },
+    token,
+  );
+}
+
+export async function importAmazonAttributionRows(token: string, payload: VkpiAmazonImportPayload) {
+  return apiFetch<Row>(
+    "/api/marketing/attribution/amazon/import",
+    {
+      method: "POST",
+      body: jsonBody({
+        project_id: payload.projectId ? Number(payload.projectId) : undefined,
+        amazon_tag: payload.amazonTag,
+        asin: payload.asin,
+        marketplace: payload.marketplace || "US",
+        report_date: payload.reportDate,
+        rows: payload.rows,
+      }),
+    },
+    token,
+  );
+}
+
+export async function uploadAmazonAttributionReport(
+  token: string,
+  payload: Omit<VkpiAmazonImportPayload, "rows"> & { file: File },
+) {
+  const form = new FormData();
+  form.set("file", payload.file);
+  if (payload.projectId) form.set("project_id", payload.projectId);
+  if (payload.amazonTag) form.set("amazon_tag", payload.amazonTag);
+  if (payload.asin) form.set("asin", payload.asin);
+  form.set("marketplace", payload.marketplace || "US");
+  if (payload.reportDate) form.set("report_date", payload.reportDate);
+  return apiFetch<Row>("/api/marketing/attribution/amazon/upload", { method: "POST", body: form }, token);
+}
+
+export async function runShopifySync(token: string, payload: Row = {}) {
+  return apiFetch<Row>("/api/marketing/shopify/sync", { method: "POST", body: jsonBody(payload) }, token);
+}
+
+export async function runShopifyBackfill(token: string, payload: Row = {}) {
+  return apiFetch<Row>("/api/marketing/shopify/backfill", { method: "POST", body: jsonBody(payload) }, token);
+}
+
+export async function listAmazonAttributions(
+  token: string,
+  options: { staffId?: string; limit?: number } = {},
+) {
+  const params = new URLSearchParams({ limit: String(options.limit || 100) });
+  if (options.staffId) params.set("staff_id", options.staffId);
+  return apiFetch<{ attributions?: Row[] }>(
+    `/api/marketing/attribution/amazon?${params.toString()}`,
+    {},
+    token,
+  );
+}
+
+export async function getAmazonAttributionSummary(
+  token: string,
+  options: { staffId?: string; limit?: number } = {},
+) {
+  const params = new URLSearchParams({ limit: String(options.limit || 100) });
+  if (options.staffId) params.set("staff_id", options.staffId);
+  return apiFetch<{ items?: Row[]; totals?: Row }>(
+    `/api/marketing/attribution/amazon/summary?${params.toString()}`,
+    {},
+    token,
+  );
+}

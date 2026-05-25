@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { getDashboardAgentsInbox, type VkpiAgentInboxItem } from '../../../services/vkpi.ui-api';
+import { getDashboardAgentsInbox, type VkpiAgentInboxItem } from '../../../services/vkpi/dashboard-api';
 import type { WorkspacePageProps } from './WorkspacePage';
 
 const agentFilters = [

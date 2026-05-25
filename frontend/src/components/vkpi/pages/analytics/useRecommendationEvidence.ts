@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getProductRecommendationEvidence } from '../../../../services/vkpi.ui-api';
+import { getProductRecommendationEvidence } from '../../../../services/vkpi/product-api';
 
 type Row = Record<string, unknown>;
 

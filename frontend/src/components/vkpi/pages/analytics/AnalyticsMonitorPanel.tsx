@@ -5,7 +5,7 @@ import {
   runProductCompare,
   runProductMonitor,
   upsertAnalyticsProduct,
-} from '../../../../services/vkpi.ui-api';
+} from '../../../../services/vkpi/product-api';
 import { CardHeader } from '../../shared/CardHeader';
 import { InfoBlock } from '../../shared/InfoBlock';
 import { creatorPlatformOptions } from '../../shared/vkpiConstants';

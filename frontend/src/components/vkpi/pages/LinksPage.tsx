@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { getMarketingLinkDetail } from '../../../services/vkpi.ui-api';
+import { getMarketingLinkDetail } from '../../../services/vkpi/links-api';
 import type { VkpiDashboardData, VkpiLinkDetail, VkpiLinkRow } from '../vkpiTypes';
 import { LinkDetailDrawer } from '../drawers/LinkDetailDrawer';
 import { CardHeader } from '../shared/CardHeader';

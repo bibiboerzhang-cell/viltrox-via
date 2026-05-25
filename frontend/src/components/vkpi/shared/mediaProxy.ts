@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { lookupCachedVideoUrl } from '../../../services/vkpi.ui-api';
+import { lookupCachedVideoUrl } from '../../../services/vkpi/media-api';
 
 const IMAGE_PROXY_HOSTS = [
   'cdninstagram.com',

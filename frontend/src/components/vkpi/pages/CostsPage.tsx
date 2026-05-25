@@ -4,7 +4,7 @@ import { CardHeader } from '../shared/CardHeader';
 import { CostLedgerTable } from '../tables/CostLedgerTable';
 import { currencyFormatter } from '../shared/vkpiFormatters';
 import { PageShell } from './PageShell';
-import { getMarketingCostDetail } from '../../../services/vkpi.ui-api';
+import { getMarketingCostDetail } from '../../../services/vkpi/cost-api';
 import { safeNumber, textValue } from '../shared/vkpiDataUtils';
 import { BudgetMonitorPanel } from './costs/BudgetMonitorPanel';
 

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   getCommentIntelligenceOverview,
   type VkpiCommentIntelligenceOverview,
-} from '../../../../../services/vkpi.ui-api';
+} from '../../../../../services/vkpi/comment-intelligence-api';
 import { BigNumberCard } from './BigNumberCard';
 import { DaCard } from './DaCard';
 import { EmptyState } from './EmptyState';

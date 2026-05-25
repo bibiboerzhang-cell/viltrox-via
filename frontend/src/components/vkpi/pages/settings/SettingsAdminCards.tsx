@@ -1,5 +1,5 @@
 import React from "react";
-import type { VkpiStaffActivationLinkResponse, VkpiStaffInviteCapabilities } from "../../../../services/vkpi.ui-api";
+import type { VkpiStaffActivationLinkResponse, VkpiStaffInviteCapabilities } from "../../../../services/vkpi/staff-api";
 import type { VkpiProductCatalogItem } from "../../vkpiTypes";
 import { CardHeader } from "../../shared/CardHeader";
 import { InfoBlock } from "../../shared/InfoBlock";

@@ -5,15 +5,14 @@ import {
   getIndustryAccount,
   getIndustryCrossPlatform,
   importIndustryApifyHistory,
-  listBudgetSettings,
   listIndustryAccounts,
   listIndustryPosts,
   listIndustryProjects,
-  listPlatformCrawlSettings,
   refreshIndustryAccount,
   updateIndustryAccount,
   analyzeDataAnalysisPostUrl,
-} from '../../../../services/vkpi.ui-api';
+} from '../../../../services/vkpi/industry-api';
+import { listBudgetSettings, listPlatformCrawlSettings } from '../../../../services/vkpi/settings-api';
 import { creatorPlatformOptions } from '../../shared/vkpiConstants';
 
 import type { ChartKey, KpiKey, Row, SecondaryTab } from './utils/types';

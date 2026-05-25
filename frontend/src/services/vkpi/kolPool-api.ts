@@ -1,5 +1,7 @@
 import { apiFetch, jsonBody } from "../http";
 
+type Row = Record<string, unknown>;
+
 export interface VkpiKolPoolItem {
   id: number;
   pool_uid: string;
@@ -184,6 +186,22 @@ export async function getKolPoolItem(token: string, kolPoolId: number, refreshIf
   );
 }
 
+export async function getKolPoolCompetitors(token: string, kolPoolId: string | number) {
+  return apiFetch<Row>(
+    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/competitors`,
+    {},
+    token,
+  );
+}
+
+export async function getKolPoolDimensions11(token: string, kolPoolId: string | number) {
+  return apiFetch<Row>(
+    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/dimensions11`,
+    {},
+    token,
+  );
+}
+
 export async function refreshKolPoolItem(token: string, kolPoolId: number, force = false) {
   return apiFetch<VkpiKolPoolRefreshState>(
     `/api/admin/vkpi/kol-pool/${kolPoolId}/refresh`,
@@ -195,10 +213,10 @@ export async function refreshKolPoolItem(token: string, kolPoolId: number, force
   );
 }
 
-export async function getKolPoolIntelligenceCard(token: string, kolPoolId: number, includeProductFit = true) {
+export async function getKolPoolIntelligenceCard(token: string, kolPoolId: number | string, includeProductFit = true) {
   const query = new URLSearchParams({ include_product_fit: String(includeProductFit) });
   return apiFetch<VkpiKolPoolIntelligenceCard>(
-    `/api/admin/vkpi/kol-pool/${kolPoolId}/intelligence-card?${query.toString()}`,
+    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/intelligence-card?${query.toString()}`,
     {},
     token,
   );
@@ -364,6 +382,24 @@ export async function promoteKolPoolToMain(token: string, kolPoolId: number) {
       method: "POST",
       body: jsonBody({ mode: "match_or_create" }),
     },
+    token,
+  );
+}
+
+export async function getKolPoolSummary(token: string) {
+  return apiFetch<Row>("/api/admin/vkpi/kol-pool/summary", {}, token);
+}
+
+export async function getKolPoolCompetitorDashboard(
+  token: string,
+  options: { brand?: string; limit?: number; sourceType?: string } = {},
+) {
+  const params = new URLSearchParams({ limit: String(options.limit || 1200) });
+  if (options.brand) params.set("brand", options.brand);
+  if (options.sourceType !== undefined) params.set("source_type", options.sourceType);
+  return apiFetch<Row>(
+    `/api/admin/vkpi/kol-pool/competitors/dashboard?${params.toString()}`,
+    {},
     token,
   );
 }

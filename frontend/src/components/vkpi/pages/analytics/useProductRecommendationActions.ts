@@ -4,7 +4,7 @@ import {
   importProductKolPool,
   productRecommendationAction,
   runProductRecommendations,
-} from '../../../../services/vkpi.ui-api';
+} from '../../../../services/vkpi/product-api';
 
 type Row = Record<string, unknown>;
 type RecommendationAction = 'shortlist' | 'reject' | 'claim' | 'create_project';

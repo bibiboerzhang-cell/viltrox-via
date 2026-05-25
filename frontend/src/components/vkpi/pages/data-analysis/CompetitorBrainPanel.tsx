@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
-import { getCompetitorBrainStatus, listCompetitorBrainSignals, reviewCompetitorBrainSignal } from '../../../../services/vkpi.ui-api';
+import { getCompetitorBrainStatus, listCompetitorBrainSignals, reviewCompetitorBrainSignal } from '../../../../services/vkpi/market-api';
 import { platformDisplay } from './utils/platformHelpers';
 import type { Row } from './utils/types';
 

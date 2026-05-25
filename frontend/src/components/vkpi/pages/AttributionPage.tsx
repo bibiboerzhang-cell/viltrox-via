@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { getAmazonAttributionSummary, listAmazonAttributions, runShopifyBackfill, runShopifySync } from '../../../services/vkpi.ui-api';
+import { getAmazonAttributionSummary, listAmazonAttributions, runShopifyBackfill, runShopifySync } from '../../../services/vkpi/attribution-api';
 import type { VkpiDashboardData, VkpiMetricEvidenceKey } from '../vkpiTypes';
 import { AmazonAttributionLivePanel } from '../panels/AmazonAttributionLivePanel';
 import { CardHeader } from '../shared/CardHeader';
