@@ -4,7 +4,7 @@ import {
   getAiBudgetUsageByCron,
   getAiBudgetUsageByProvider,
   updateAiBudgetScope,
-} from '../../../../services/vkpi/cost-api';
+} from '../../../../domains/attribution';
 import { CardHeader } from '../../shared/CardHeader';
 import { InfoBlock } from '../../shared/InfoBlock';
 import { currencyFormatter } from '../../shared/vkpiFormatters';
