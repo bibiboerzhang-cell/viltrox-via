@@ -9,153 +9,16 @@ from datetime import datetime, timezone
 from app.core.config import ENABLE_RUNTIME_PREVIEW_DATA, IS_PRODUCTION
 from app.core.security import hash_password
 from app.db.connection import get_conn
+from app.services.runtime_seed_data import (
+    LEADERBOARD_CREATOR_SEEDS,
+    PREVIEW_ADDRESS_ROWS,
+    PREVIEW_SEED_EMAILS,
+    PREVIEW_SOCIAL_ROWS,
+    PREVIEW_VIDEO_URL,
+    REWARD_SEEDS,
+    RUNTIME_SEED_MEMO_PREFIX,
+)
 from app.services.student_identity import ensure_student_identity_registry_defaults
-
-_PREVIEW_VIDEO_URL = "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4"
-_RUNTIME_SEED_MEMO_PREFIX = "runtime_seed:"
-
-_LEADERBOARD_CREATOR_SEEDS: tuple[dict[str, object], ...] = (
-    {
-        "email": "alexfilms@viltrox.local",
-        "name": "AlexFilms",
-        "creator_code": "V_001234",
-        "handle": "alexfilms",
-        "platform": "youtube",
-        "gear_tag": "AF 56mm F1.7 Air",
-        "product_series": "Air",
-        "month_count": 14,
-        "year_count": 52,
-        "month_points": 48200,
-        "year_points": 184200,
-        "points_balance": 48200,
-        "points_pending": 1200,
-        "points_total": 184200,
-        "trust_score": 91,
-        "bio": "Commercial DP building compact rigs around the Viltrox Air primes.",
-    },
-    {
-        "email": "photobylena@viltrox.local",
-        "name": "PhotoByLena",
-        "creator_code": "V_002891",
-        "handle": "photobylena",
-        "platform": "instagram",
-        "gear_tag": "EPIC 35mm",
-        "product_series": "EPIC",
-        "month_count": 11,
-        "year_count": 47,
-        "month_points": 41500,
-        "year_points": 161500,
-        "points_balance": 41500,
-        "points_pending": 950,
-        "points_total": 161500,
-        "trust_score": 88,
-        "bio": "Portrait and travel creator testing the EPIC line in bright daylight.",
-    },
-    {
-        "email": "travelvibes@viltrox.local",
-        "name": "TravelVibes",
-        "creator_code": "V_003344",
-        "handle": "travelvibes",
-        "platform": "tiktok",
-        "gear_tag": "AF 20mm F2.8",
-        "product_series": "AF",
-        "month_count": 10,
-        "year_count": 39,
-        "month_points": 38900,
-        "year_points": 148900,
-        "points_balance": 38900,
-        "points_pending": 860,
-        "points_total": 148900,
-        "trust_score": 84,
-        "bio": "Fast-turn travel storyteller cutting handheld tests on the road.",
-    },
-)
-
-_PREVIEW_SOCIAL_ROWS: tuple[dict[str, object], ...] = (
-    {"platform": "youtube", "handle": "alexfilms", "verified": 1, "verify_code": "", "status_note": "verified"},
-    {"platform": "tiktok", "handle": "alex.creates", "verified": 0, "verify_code": "VLX-7C31B1", "status_note": "pending"},
-    {"platform": "instagram", "handle": "alexphoto", "verified": 0, "verify_code": "", "status_note": "unverified"},
-)
-
-_PREVIEW_ADDRESS_ROWS: tuple[dict[str, object], ...] = (
-    {
-        "name": "Jianbo Zhang",
-        "phone": "+1 213 555 0199",
-        "address1": "665 Jefferson Blvd",
-        "address2": "Studio 4B",
-        "city": "Los Angeles",
-        "state": "CA",
-        "country": "US",
-        "postal_code": "90089",
-        "is_default": 1,
-    },
-    {
-        "name": "Jianbo Zhang",
-        "phone": "+1 917 555 0113",
-        "address1": "15 Kent Ave",
-        "address2": "Apt 9C",
-        "city": "Brooklyn",
-        "state": "NY",
-        "country": "US",
-        "postal_code": "11249",
-        "is_default": 0,
-    },
-)
-
-_REWARD_SEEDS: tuple[dict[str, object], ...] = (
-    {
-        "title": "Viltrox Cap",
-        "description": "Limited edition cap for creator preview mode.",
-        "category": "Merch",
-        "points_cost": 800,
-        "meta_label": "MERCH",
-        "image_url": "",
-        "stock": 14,
-        "sort_order": 10,
-    },
-    {
-        "title": "AF 56mm F1.4 C Lens Coupon",
-        "description": "Preview reward coupon for lens redemption testing.",
-        "category": "Lens",
-        "points_cost": 2400,
-        "meta_label": "LENS",
-        "image_url": "",
-        "stock": 5,
-        "sort_order": 20,
-    },
-    {
-        "title": "Lens Cleaning Kit",
-        "description": "Compact cleaning kit with blower, cloth, and pen.",
-        "category": "Accessory",
-        "points_cost": 600,
-        "meta_label": "ACCESSORY",
-        "image_url": "",
-        "stock": 32,
-        "sort_order": 30,
-    },
-    {
-        "title": "Creator Tote Bag",
-        "description": "Canvas tote for booth runs, cables, and batteries.",
-        "category": "Merch",
-        "points_cost": 1200,
-        "meta_label": "MERCH",
-        "image_url": "",
-        "stock": 0,
-        "sort_order": 40,
-    },
-    {
-        "title": "UV Filter Set",
-        "description": "Multi-coated UV filters for quick product preview demos.",
-        "category": "Accessory",
-        "points_cost": 2400,
-        "meta_label": "ACCESSORY",
-        "image_url": "",
-        "stock": 9,
-        "sort_order": 50,
-    },
-)
-
-_PREVIEW_SEED_EMAILS = ("preview@viltrox.local", "alexfilms@viltrox.local", "photobylena@viltrox.local", "travelvibes@viltrox.local")
 
 
 def _utcnow() -> str:
@@ -311,7 +174,7 @@ def ensure_reward_catalog_seed() -> int:
         return 0
 
     now = _utcnow()
-    for item in _REWARD_SEEDS:
+    for item in REWARD_SEEDS:
         conn.execute(
             """
             INSERT INTO reward_catalog (
@@ -335,14 +198,14 @@ def ensure_reward_catalog_seed() -> int:
             ),
         )
     conn.commit()
-    return len(_REWARD_SEEDS)
+    return len(REWARD_SEEDS)
 
 
 def purge_reward_catalog_seed() -> int:
     conn = get_conn()
     clauses: list[str] = []
     params: list[object] = []
-    for item in _REWARD_SEEDS:
+    for item in REWARD_SEEDS:
         clauses.append("(title=? AND category=? AND points_cost=?)")
         params.extend(
             (
@@ -392,7 +255,7 @@ def _seed_leaderboard_submission_rows(conn, user_id: int, seed: dict[str, object
     gear_tag = str(seed.get("gear_tag") or "Viltrox creator kit").strip()
     product_series = str(seed.get("product_series") or "AF").strip()
     name = str(seed.get("name") or "Creator").strip()
-    memo = f"{_RUNTIME_SEED_MEMO_PREFIX}leaderboard:{seed.get('creator_code')}"
+    memo = f"{RUNTIME_SEED_MEMO_PREFIX}leaderboard:{seed.get('creator_code')}"
     points_chunks = _split_points(month_points, month_count) + _split_points(max(0, year_points - month_points), extra_count)
     created_at_rows = [
         *[_month_seed_timestamp(now, idx) for idx in range(month_count)],
@@ -442,7 +305,7 @@ def _seed_leaderboard_submission_rows(conn, user_id: int, seed: dict[str, object
                     speed=78 - (idx % 5),
                     quality=86 - (idx % 4),
                 ),
-                _PREVIEW_VIDEO_URL,
+                PREVIEW_VIDEO_URL,
                 int(user_id),
                 int(points_awarded),
                 "confirmed",
@@ -482,7 +345,7 @@ def _seed_preview_submission_rows(conn, user_id: int, now: datetime) -> int:
         "Weekend travel reel color pass",
     )
     inserted = 0
-    memo = f"{_RUNTIME_SEED_MEMO_PREFIX}preview_submission"
+    memo = f"{RUNTIME_SEED_MEMO_PREFIX}preview_submission"
     month_gears = ("AF 56mm F1.7 Air", "LUNA 30-300", "EPIC 35mm", "AF 28mm F4.5")
     for idx, title in enumerate(confirmed_titles):
         points_awarded = confirmed_month_points[idx]
@@ -529,7 +392,7 @@ def _seed_preview_submission_rows(conn, user_id: int, now: datetime) -> int:
                     speed=82 - idx,
                     quality=86 - idx,
                 ),
-                _PREVIEW_VIDEO_URL,
+                PREVIEW_VIDEO_URL,
                 int(user_id),
                 int(points_awarded),
                 "confirmed",
@@ -592,7 +455,7 @@ def _seed_preview_submission_rows(conn, user_id: int, now: datetime) -> int:
                     speed=76 - (idx % 4),
                     quality=79 - (idx % 3),
                 ),
-                _PREVIEW_VIDEO_URL,
+                PREVIEW_VIDEO_URL,
                 int(user_id),
                 int(points_awarded),
                 "confirmed",
@@ -650,7 +513,7 @@ def _seed_preview_submission_rows(conn, user_id: int, now: datetime) -> int:
                     speed=0,
                     quality=0,
                 ),
-                _PREVIEW_VIDEO_URL,
+                PREVIEW_VIDEO_URL,
                 int(user_id),
                 0,
                 "pending",
@@ -666,7 +529,7 @@ def _seed_preview_submission_rows(conn, user_id: int, now: datetime) -> int:
 def _seed_preview_account_tables(conn, preview_user_id: int) -> dict[str, int]:
     now = _utcnow()
     conn.execute("DELETE FROM user_social_accounts WHERE user_id=?", (int(preview_user_id),))
-    for row in _PREVIEW_SOCIAL_ROWS:
+    for row in PREVIEW_SOCIAL_ROWS:
         verified = int(row.get("verified") or 0)
         conn.execute(
             """
@@ -685,7 +548,7 @@ def _seed_preview_account_tables(conn, preview_user_id: int) -> dict[str, int]:
             ),
         )
     conn.execute("DELETE FROM user_addresses WHERE user_id=?", (int(preview_user_id),))
-    for row in _PREVIEW_ADDRESS_ROWS:
+    for row in PREVIEW_ADDRESS_ROWS:
         conn.execute(
             """
             INSERT INTO user_addresses (
@@ -707,7 +570,7 @@ def _seed_preview_account_tables(conn, preview_user_id: int) -> dict[str, int]:
         )
     conn.execute(
         "DELETE FROM submissions WHERE user_id=? AND memo LIKE ?",
-        (int(preview_user_id), f"{_RUNTIME_SEED_MEMO_PREFIX}%"),
+        (int(preview_user_id), f"{RUNTIME_SEED_MEMO_PREFIX}%"),
     )
     seeded_submissions = _seed_preview_submission_rows(conn, preview_user_id, datetime.now(timezone.utc))
     conn.execute(
@@ -772,8 +635,8 @@ def _seed_preview_account_tables(conn, preview_user_id: int) -> dict[str, int]:
         )
         seeded_redemptions += 1
     return {
-        "social_accounts": len(_PREVIEW_SOCIAL_ROWS),
-        "addresses": len(_PREVIEW_ADDRESS_ROWS),
+        "social_accounts": len(PREVIEW_SOCIAL_ROWS),
+        "addresses": len(PREVIEW_ADDRESS_ROWS),
         "submissions": seeded_submissions,
         "redemptions": seeded_redemptions,
     }
@@ -785,7 +648,7 @@ def ensure_preview_experience_seed(preview_user_id: int) -> dict[str, int]:
     conn = get_conn()
     now = datetime.now(timezone.utc)
     creator_ids: dict[str, int] = {}
-    for seed in _LEADERBOARD_CREATOR_SEEDS:
+    for seed in LEADERBOARD_CREATOR_SEEDS:
         creator_ids[str(seed.get("creator_code") or "")] = _upsert_seed_user(
             conn,
             email=str(seed.get("email") or "").strip(),
@@ -803,10 +666,10 @@ def ensure_preview_experience_seed(preview_user_id: int) -> dict[str, int]:
         placeholders = ",".join("?" for _ in leaderboard_creator_ids)
         conn.execute(
             f"DELETE FROM submissions WHERE user_id IN ({placeholders}) AND memo LIKE ?",
-            (*leaderboard_creator_ids, f"{_RUNTIME_SEED_MEMO_PREFIX}%"),
+            (*leaderboard_creator_ids, f"{RUNTIME_SEED_MEMO_PREFIX}%"),
         )
     leaderboard_rows = 0
-    for seed in _LEADERBOARD_CREATOR_SEEDS:
+    for seed in LEADERBOARD_CREATOR_SEEDS:
         user_id = creator_ids.get(str(seed.get("creator_code") or ""))
         if user_id:
             leaderboard_rows += _seed_leaderboard_submission_rows(conn, int(user_id), seed, now)
@@ -823,8 +686,8 @@ def purge_runtime_preview_data() -> dict[str, int]:
         FROM users
         WHERE email IN ({placeholders})
            OR note LIKE ?
-        """.format(placeholders=",".join("?" for _ in _PREVIEW_SEED_EMAILS)),
-        (*_PREVIEW_SEED_EMAILS, f"{_RUNTIME_SEED_MEMO_PREFIX}%"),
+        """.format(placeholders=",".join("?" for _ in PREVIEW_SEED_EMAILS)),
+        (*PREVIEW_SEED_EMAILS, f"{RUNTIME_SEED_MEMO_PREFIX}%"),
     ).fetchall()
     preview_user_ids = [int(row["id"]) for row in preview_rows]
     removed: dict[str, int] = {
@@ -856,7 +719,7 @@ def purge_runtime_preview_data() -> dict[str, int]:
         removed["users"] += int(cur.rowcount or 0)
     cur = conn.execute(
         "DELETE FROM submissions WHERE memo LIKE ?",
-        (f"{_RUNTIME_SEED_MEMO_PREFIX}%",),
+        (f"{RUNTIME_SEED_MEMO_PREFIX}%",),
     )
     removed["submissions"] += int(cur.rowcount or 0)
     cur = conn.execute(
