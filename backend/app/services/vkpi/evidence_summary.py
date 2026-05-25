@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.domains.kol import intelligence_card as kol_intelligence_card
-from app.services.vkpi import llm_gateway
+from app.platform import llm_gateway
 
 
 SECTION_ORDER = (

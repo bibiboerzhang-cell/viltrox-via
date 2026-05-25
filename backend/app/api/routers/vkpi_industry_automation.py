@@ -10,6 +10,7 @@ from app.domains import launch as launch_domain
 from app.domains.recommendations import outcomes as outcome_collector
 from app.domains.recommendations import training_export as training_data_export
 from app.domains import trends as trends_domain
+from app.platform import llm_gateway
 from app.services.vkpi import (
     ab_experiments,
     audience_graph,
@@ -17,7 +18,6 @@ from app.services.vkpi import (
     competitor_brain,
     content_brain,
     industry_data,
-    llm_gateway,
     prediction_accuracy_feedback_v0,
     prediction_calibration_v0,
     product_campaign_card,

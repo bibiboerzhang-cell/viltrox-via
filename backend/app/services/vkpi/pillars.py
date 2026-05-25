@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from app.db.connection import get_conn
-from app.services.vkpi import llm_gateway
+from app.platform import llm_gateway
 
 
 PROMPT_VERSION = "v1.0"

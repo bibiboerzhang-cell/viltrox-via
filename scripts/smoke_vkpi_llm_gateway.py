@@ -22,7 +22,7 @@ os.environ["LLM_MONTHLY_BUDGET_USD"] = "0"
 
 from app.db.connection import close_db_runtime, get_conn  # noqa: E402
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema  # noqa: E402
-from app.services.vkpi import llm_gateway  # noqa: E402
+from app.platform import llm_gateway  # noqa: E402
 
 
 MARKER = f"vkpi-llm-gateway-smoke-{int(time.time())}"

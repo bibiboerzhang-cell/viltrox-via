@@ -12,7 +12,8 @@ from app.db.connection import get_conn
 from app.domains import costs
 from app.domains import attribution
 from app.domains import lineage as metric_lineage
-from app.services.vkpi import alerts, decision_engine, kpi_ledger, llm_gateway, pdf_renderer, scope, workflow
+from app.platform import llm_gateway
+from app.services.vkpi import alerts, decision_engine, kpi_ledger, pdf_renderer, scope, workflow
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.domains.lineage import ensure_vkpi_lineage_schema
 from app.domains.reports.schema import ensure_vkpi_reports_schema

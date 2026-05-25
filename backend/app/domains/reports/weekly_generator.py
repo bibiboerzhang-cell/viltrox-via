@@ -17,7 +17,7 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 from app.db.connection import get_conn
-from app.services.vkpi import llm_gateway
+from app.platform import llm_gateway
 from app.domains.reports.weekly_templates import (
     PROMPT_VERSION,
     TEMPLATES,

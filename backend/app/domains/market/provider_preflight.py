@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from app.services.vkpi import llm_gateway
+from app.platform import llm_gateway
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
