@@ -9,6 +9,11 @@ from app.domains.market.signal_review_package import (
     build_market_signal_review_package_from_file,
     competitor_signal_rows_from_review_package,
 )
+from app.domains.market.signal_commit import (
+    build_competitor_signal_run_summary,
+    build_competitor_signal_write_result,
+    validate_competitor_signal_write_request,
+)
 
 
 def _candidate(**overrides):
@@ -163,6 +168,37 @@ def test_ready_candidates_map_to_competitor_signal_rows() -> None:
     assert rows[0]["source_table"] == "vkpi_market_mentions"
     assert rows[0]["review_status"] == "pending_review"
     assert "market_signal_promotion_review_package_v0" in rows[0]["evidence_json"]
+
+
+def test_competitor_signal_commit_helpers_validate_and_summarize_without_db() -> None:
+    package = build_market_signal_review_package(_payload([_candidate(signal_uid="sig-commit")]))
+    rows = validate_competitor_signal_write_request(package, backup_ref="backup-20260524T000000Z")
+
+    assert rows[0]["signal_uid"] == "sig-commit"
+
+    summary = build_competitor_signal_run_summary(
+        package,
+        backup_ref="backup-20260524T000000Z",
+        ready_count=1,
+        insert_count=1,
+        skipped_existing=0,
+    )
+    assert summary["backup_ref"] == "backup-20260524T000000Z"
+    assert summary["provider_calls"] is False
+
+    result = build_competitor_signal_write_result(
+        generated_at="2026-05-24T00:00:00Z",
+        backup_ref="backup-20260524T000000Z",
+        run_uid="mktprom-unit",
+        run_id=10,
+        inserted=1,
+        skipped_existing=0,
+        ready_candidates=1,
+        before_counts={"vkpi_competitor_signal_runs": 2, "vkpi_competitor_signals": 4},
+        after_counts={"vkpi_competitor_signal_runs": 3, "vkpi_competitor_signals": 5},
+    )
+    assert result["write_db"] is True
+    assert result["checks"]["competitor_signals_delta_matches"] is True
 
 
 def test_from_file_accepts_existing_review_package(tmp_path) -> None:

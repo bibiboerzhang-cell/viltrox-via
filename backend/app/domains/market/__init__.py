@@ -44,6 +44,11 @@ from app.domains.market.provider_preflight import (
     PROVIDER_SOURCES,
     build_provider_preflight,
 )
+from app.domains.market.signal_commit import (
+    build_competitor_signal_run_summary,
+    build_competitor_signal_write_result,
+    validate_competitor_signal_write_request,
+)
 from app.domains.market.source_design import (
     CANONICAL_CONTRACT,
     SOURCE_REGISTRY,
@@ -107,6 +112,8 @@ __all__ = [
     "build_external_signal_review_package",
     "build_external_signal_review_package_from_files",
     "build_external_market_signal_write_package",
+    "build_competitor_signal_run_summary",
+    "build_competitor_signal_write_result",
     "build_market_intelligence_cards",
     "build_market_intelligence_cards_from_files",
     "build_market_intelligence_report",
@@ -142,4 +149,5 @@ __all__ = [
     "write_classification_report",
     "write_market_intelligence_cards",
     "write_review_package_report",
+    "validate_competitor_signal_write_request",
 ]
