@@ -8,6 +8,7 @@ from app.domains import attribution as attribution_domain
 from app.domains.kol import account as kol_account_domain
 from app.domains.kol import claims as kol_claims_domain
 from app.domains.kol import contacts as kol_contacts_domain
+from app.domains.kol import lookup as kol_lookup_domain
 from app.services.vkpi import scope
 from app.domains.kol.natural_search import _natural_search_payload
 from app.domains.kol.profile_payloads import _assessment_payload, _product_fit_payload
@@ -27,34 +28,9 @@ def natural_kol_search(body: dict, staff=Depends(require_tab("vkpi", "read"))):
 @router.post("/kols/lookup")
 async def lookup_kol(body: dict, staff=Depends(require_tab("vkpi", "write"))):
     try:
-        result = kol_claims_domain.lookup(body, staff=staff)
+        return await kol_lookup_domain.lookup_with_context(body or {}, staff=staff)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    kol = result.get("kol") or {}
-    kol_id = int(kol.get("id") or 0) if isinstance(kol, dict) else 0
-    if not kol_id:
-        return result
-    try:
-        kol_claims_domain.assert_kol_access(kol_id, staff, allow_unclaimed=True)
-    except scope.ScopeDenied as exc:
-        result["dossier"] = {}
-        result["can_claim"] = False
-        result["access_status"] = "claimed_by_other"
-        result["access_message"] = str(exc) or "kol claimed by another staff"
-        return result
-    scan_result = None
-    analysis_result = None
-    if body.get("scan_account") or body.get("scan_if_missing"):
-        max_posts = max(1, min(int(body.get("max_posts") or 24), 80))
-        scan_result = await kol_account_domain.scan_account(kol_id, max_posts=max_posts)
-        if int(scan_result.get("content_count") or 0) > 0:
-            analysis_result = await kol_account_domain.analyze_account(kol_id, product_sku=str(body.get("product_sku") or ""))
-    result["dossier"] = kol_account_domain.get_dossier(kol_id)
-    if scan_result is not None:
-        result["scan_result"] = scan_result
-    if analysis_result is not None:
-        result["analysis_result"] = analysis_result
-    return result
 
 
 @router.get("/kols")
