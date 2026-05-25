@@ -1,7 +1,7 @@
 """V-KPI evidence public compatibility module."""
 from __future__ import annotations
 
-from app.services.vkpi.evidence_common import (
+from app.domains.evidence.common import (
     _actor_id,
     _assert_content_access,
     _assert_deliverable_access,
@@ -17,19 +17,19 @@ from app.services.vkpi.evidence_common import (
     _rows,
     _utcnow,
 )
-from app.services.vkpi.evidence_content import (
+from app.domains.evidence.content import (
     add_content_asset,
     create_content,
     get_content,
     list_content,
 )
-from app.services.vkpi.evidence_messages import (
+from app.domains.evidence.messages import (
     add_message_attachment,
     create_message,
     get_message,
     list_messages,
 )
-from app.services.vkpi.evidence_shipments import (
+from app.domains.evidence.shipments import (
     create_shipment,
     get_shipment,
     list_samples,
@@ -37,7 +37,7 @@ from app.services.vkpi.evidence_shipments import (
     mark_shipment_received,
     update_shipment,
 )
-from app.services.vkpi.evidence_terms import (
+from app.domains.evidence.terms import (
     _sync_deliverables,
     add_deliverable,
     get_terms,

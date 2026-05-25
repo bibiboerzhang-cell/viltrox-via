@@ -5,7 +5,7 @@ from typing import Any
 
 from app.db.connection import get_conn, is_postgres_runtime
 from app.services.vkpi import audit, scope
-from app.services.vkpi.evidence_common import (
+from app.domains.evidence.common import (
     _actor_id,
     _assert_content_access,
     _assert_kol_access,

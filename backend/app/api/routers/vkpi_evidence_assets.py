@@ -11,7 +11,8 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from app.api.dependencies.perms import require_tab
 from app.core.config import UPLOAD_DIR
 from app.core.logging import get_logger
-from app.services.vkpi import evidence, scope
+from app.domains import evidence
+from app.services.vkpi import scope
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-evidence-assets"])
 EVIDENCE_UPLOAD_DIR = UPLOAD_DIR / "vkpi_evidence"
