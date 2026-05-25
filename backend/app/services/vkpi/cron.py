@@ -333,7 +333,7 @@ async def run_job(job_name: str, payload: dict[str, Any] | None = None, *, queue
         result = await asyncio.to_thread(metric_lineage.generate_run, period_days=int(payload.get("period_days") or 7), scope_type=str(payload.get("scope_type") or "all"), trigger_source="scheduler_lineage_snapshot", metadata={"source": "cron.run_now"})
         return {"job": name, "status": "ok", "result": result, "ran_at": _stamp()}
     if name == "kpi_rollup":
-        from app.services.vkpi import kpi_ledger
+        from app.domains.staff import kpi_ledger
 
         result = await asyncio.to_thread(kpi_ledger.generate_daily_rollup, payload.get("ledger_date"))
         return {"job": name, "status": "ok", "result": result, "ran_at": _stamp()}
