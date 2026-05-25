@@ -5,14 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
 from app.domains import attribution as attribution_domain
-from app.domains.kol import account as kol_account_domain
-from app.domains.kol import claims as kol_claims_domain
-from app.domains.kol import contacts as kol_contacts_domain
-from app.domains.kol import lookup as kol_lookup_domain
-from app.domains.kol import profile as kol_profile_domain
+from app.domains import kol as kol_domain
 from app.services.vkpi import scope
-from app.domains.kol.natural_search import _natural_search_payload
-from app.domains.kol.profile_payloads import assessment_for_request, product_fit_for_request
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-kol-links"])
 
@@ -23,13 +17,13 @@ def _scope_403(exc: Exception) -> HTTPException:
 
 @router.post("/kol/search/natural")
 def natural_kol_search(body: dict, staff=Depends(require_tab("vkpi", "read"))):
-    return _natural_search_payload(body or {}, staff=staff)
+    return kol_domain.natural_search_payload(body or {}, staff=staff)
 
 
 @router.post("/kols/lookup")
 async def lookup_kol(body: dict, staff=Depends(require_tab("vkpi", "write"))):
     try:
-        return await kol_lookup_domain.lookup_with_context(body or {}, staff=staff)
+        return await kol_domain.lookup_with_context(body or {}, staff=staff)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -42,13 +36,13 @@ def list_kols(
     limit: int = Query(default=100, ge=1, le=500),
     staff=Depends(require_tab("vkpi", "read")),
 ):
-    return kol_claims_domain.list_kols(search=search, platform=platform, staff_id=staff_id, limit=limit, staff=staff)
+    return kol_domain.list_kols(search=search, platform=platform, staff_id=staff_id, limit=limit, staff=staff)
 
 
 @router.get("/kols/{kol_id}/dossier")
 def kol_dossier(kol_id: int, staff=Depends(require_tab("vkpi", "read"))):
     try:
-        return kol_account_domain.dossier_for_request(int(kol_id), staff=staff)
+        return kol_domain.dossier_for_request(int(kol_id), staff=staff)
     except scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
     except ValueError as exc:
@@ -58,7 +52,7 @@ def kol_dossier(kol_id: int, staff=Depends(require_tab("vkpi", "read"))):
 @router.get("/kols/{kol_id}/profile")
 def kol_profile(kol_id: int, staff=Depends(require_tab("vkpi", "read"))):
     try:
-        return kol_profile_domain.profile_with_dossier(int(kol_id), staff=staff)
+        return kol_domain.profile_with_dossier(int(kol_id), staff=staff)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
@@ -68,7 +62,7 @@ def kol_profile(kol_id: int, staff=Depends(require_tab("vkpi", "read"))):
 @router.get("/kols/{kol_id}/assessment")
 def kol_assessment(kol_id: int, staff=Depends(require_tab("vkpi", "read"))):
     try:
-        return assessment_for_request(int(kol_id), staff=staff)
+        return kol_domain.assessment_for_request(int(kol_id), staff=staff)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
@@ -82,7 +76,7 @@ def kol_product_fit(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     try:
-        return product_fit_for_request(int(kol_id), limit=limit, staff=staff)
+        return kol_domain.product_fit_for_request(int(kol_id), limit=limit, staff=staff)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
@@ -96,7 +90,7 @@ def kol_contacts(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     try:
-        return kol_contacts_domain.contact_rows_for_request(int(kol_id), include_wrong=include_wrong, staff=staff)
+        return kol_domain.contact_rows_for_request(int(kol_id), include_wrong=include_wrong, staff=staff)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
@@ -106,7 +100,7 @@ def kol_contacts(
 @router.post("/kols/{kol_id}/contacts")
 def add_kol_contact(kol_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
     try:
-        return kol_contacts_domain.add_contact(int(kol_id), body, staff=staff)
+        return kol_domain.add_contact(int(kol_id), body, staff=staff)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -118,7 +112,7 @@ def add_kol_contact(kol_id: int, body: dict, staff=Depends(require_tab("vkpi", "
 @router.patch("/kols/{kol_id}")
 def update_kol(kol_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
     try:
-        return kol_claims_domain.update_kol_manual(int(kol_id), body, staff=staff)
+        return kol_domain.update_kol_manual(int(kol_id), body, staff=staff)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -131,7 +125,7 @@ def update_kol(kol_id: int, body: dict, staff=Depends(require_tab("vkpi", "write
 async def scan_kol(kol_id: int, body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
     payload = body or {}
     try:
-        return await kol_account_domain.scan_account_for_request(
+        return await kol_domain.scan_account_for_request(
             int(kol_id),
             max_posts=max(1, min(int(payload.get("max_posts") or 24), 80)),
             staff=staff,
@@ -144,7 +138,7 @@ async def scan_kol(kol_id: int, body: dict | None = None, staff=Depends(require_
 async def analyze_kol(kol_id: int, body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
     payload = body or {}
     try:
-        return await kol_account_domain.analyze_account_for_request(
+        return await kol_domain.analyze_account_for_request(
             int(kol_id),
             product_sku=str(payload.get("product_sku") or ""),
             snapshot_id=payload.get("snapshot_id"),
@@ -160,13 +154,13 @@ def list_claims(
     limit: int = Query(default=100, ge=1, le=500),
     staff=Depends(require_tab("vkpi", "read")),
 ):
-    return kol_claims_domain.list_claims(status=status, limit=limit, staff=staff)
+    return kol_domain.list_claims(status=status, limit=limit, staff=staff)
 
 
 @router.post("/kols/{kol_id}/claim")
 def claim_kol(kol_id: int, body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
     try:
-        return kol_claims_domain.claim(kol_id, body or {}, staff=staff)
+        return kol_domain.claim(kol_id, body or {}, staff=staff)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -176,7 +170,7 @@ def claim_kol(kol_id: int, body: dict | None = None, staff=Depends(require_tab("
 @router.post("/claims/{claim_id}/release")
 def release_claim(claim_id: int, body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
     try:
-        return kol_claims_domain.release(claim_id, body or {}, staff=staff)
+        return kol_domain.release(claim_id, body or {}, staff=staff)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
@@ -186,7 +180,7 @@ def release_claim(claim_id: int, body: dict | None = None, staff=Depends(require
 @router.post("/claims/{claim_id}/reassign")
 def reassign_claim(claim_id: int, body: dict, staff=Depends(require_tab("vkpi", "admin"))):
     try:
-        return kol_claims_domain.reassign(claim_id, body, staff=staff)
+        return kol_domain.reassign(claim_id, body, staff=staff)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
