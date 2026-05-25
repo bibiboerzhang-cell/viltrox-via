@@ -3,13 +3,44 @@ import { proxiedImageUrl } from '../../shared/mediaProxy';
 import { PlatformLogo } from './PlatformLogo';
 
 const formatter = new Intl.NumberFormat('en-US');
-const syncTimeFormatter = new Intl.DateTimeFormat('zh-CN', {
-  month: '2-digit',
-  day: '2-digit',
-  hour: '2-digit',
-  minute: '2-digit',
-  hour12: false,
-});
+
+export const DEFAULT_CHANNEL_SYNC_TIMEZONE = 'Asia/Shanghai';
+
+export const CHANNEL_SYNC_TIMEZONES = [
+  { value: 'Asia/Shanghai', label: '中国' },
+  { value: 'America/Los_Angeles', label: '美国西部' },
+  { value: 'America/New_York', label: '美国东部' },
+  { value: 'Europe/London', label: '英国' },
+  { value: 'Europe/Berlin', label: '德国/中欧' },
+  { value: 'Asia/Tokyo', label: '日本' },
+  { value: 'Asia/Seoul', label: '韩国' },
+  { value: 'Asia/Singapore', label: '新加坡' },
+  { value: 'Asia/Kolkata', label: '印度' },
+  { value: 'Australia/Sydney', label: '澳大利亚东部' },
+  { value: 'America/Sao_Paulo', label: '巴西' },
+] as const;
+
+export function isSupportedChannelSyncTimezone(value: string) {
+  return CHANNEL_SYNC_TIMEZONES.some((item) => item.value === value);
+}
+
+function timezoneLabel(value: string) {
+  return CHANNEL_SYNC_TIMEZONES.find((item) => item.value === value)?.label || value;
+}
+
+function syncTimeFormatter(timeZone: string, format: 'short' | 'full' = 'short') {
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone,
+    year: format === 'full' ? 'numeric' : undefined,
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: format === 'full' ? '2-digit' : undefined,
+    hour12: false,
+    timeZoneName: format === 'full' ? 'short' : undefined,
+  });
+}
 
 function compact(value: number) {
   if (!value) return '0';
@@ -72,11 +103,20 @@ function deltaTone(delta = 0, baselineProtected = false) {
   return '';
 }
 
-function syncTimeLabel(value?: string) {
+function syncTimeLabel(value?: string, timeZone = DEFAULT_CHANNEL_SYNC_TIMEZONE) {
   if (!value) return '本次未同步';
   const date = new Date(value);
-  if (!Number.isNaN(date.getTime())) return `本次 ${syncTimeFormatter.format(date)}`;
+  if (!Number.isNaN(date.getTime())) return `本次 ${syncTimeFormatter(timeZone).format(date)}`;
   return `本次 ${value.slice(0, 16).replace('T', ' ')}`;
+}
+
+function syncTimeTitle(value?: string, timeZone = DEFAULT_CHANNEL_SYNC_TIMEZONE) {
+  if (!value) return '暂无同步时间';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const local = syncTimeFormatter(timeZone, 'full').format(date);
+  const utc = syncTimeFormatter('UTC', 'full').format(date);
+  return `${timezoneLabel(timeZone)}：${local}；UTC：${utc}；原始：${value}`;
 }
 
 function PlatformSkeletons() {
@@ -116,6 +156,8 @@ export function ChannelPlatformMatrix({
   onSelectPlatform,
   onOpenBindings,
   bindingCount,
+  syncTimezone = DEFAULT_CHANNEL_SYNC_TIMEZONE,
+  onSyncTimezoneChange,
 }: {
   platforms: OfficialChannelPlatform[];
   selectedPlatform: string;
@@ -127,6 +169,8 @@ export function ChannelPlatformMatrix({
   onSelectPlatform: (platform: string) => void;
   onOpenBindings?: () => void;
   bindingCount?: number;
+  syncTimezone?: string;
+  onSyncTimezoneChange?: (timeZone: string) => void;
 }) {
   const totalFollowers = platforms.reduce((sum, platform) => sum + platform.totalFollowers, 0);
   const totalFollowersDelta = platforms.reduce((sum, platform) => sum + (platform.followersDelta || 0), 0);
@@ -153,11 +197,21 @@ export function ChannelPlatformMatrix({
     <section className="vkpi-channel-matrix">
       <div className="vkpi-channel-matrix__header">
         <div>
-          <button className="vkpi-channel-matrix-trigger" type="button" onClick={onOpenBindings}>
-            <span>官方账号矩阵</span>
-            <h2>平台总览</h2>
-            <em>{formatter.format(bindingCount ?? accountCount)} 条绑定</em>
-          </button>
+          <div className="vkpi-channel-matrix__title-row">
+            <button className="vkpi-channel-matrix-trigger" type="button" onClick={onOpenBindings}>
+              <span>官方账号矩阵</span>
+              <h2>平台总览</h2>
+              <em>{formatter.format(bindingCount ?? accountCount)} 条绑定</em>
+            </button>
+            <label className="vkpi-channel-timezone">
+              <span>时区</span>
+              <select value={syncTimezone} onChange={(event) => onSyncTimezoneChange?.(event.target.value)} aria-label="同步时间显示时区">
+                {CHANNEL_SYNC_TIMEZONES.map((item) => (
+                  <option key={item.value} value={item.value}>{item.label}</option>
+                ))}
+              </select>
+            </label>
+          </div>
           {selectedPlatform ? (
             <button className="vkpi-channel-filter-reset" type="button" onClick={() => onSelectPlatform('')}>
               查看全部平台
@@ -212,7 +266,7 @@ export function ChannelPlatformMatrix({
                 <em className={deltaTone(followerDelta, followerProtected)} title={followerProtected ? platformProtectedTitle : undefined}>
                   {deltaLabel(platform.totalFollowers, followerDelta, followerProtected)}
                 </em>
-                <small title={platform.lastSyncAt}>{syncTimeLabel(platform.lastSyncAt)}</small>
+                <small title={syncTimeTitle(platform.lastSyncAt, syncTimezone)}>{syncTimeLabel(platform.lastSyncAt, syncTimezone)}</small>
                 <small className={deltaTone(viewsUnavailable ? 0 : viewsDelta, viewsProtected)} title={viewsProtected ? platformProtectedTitle : platform.viewsUnavailableReason}>
                   {viewsDeltaLabel(platform.totalViews, viewsDelta, viewsUnavailable, viewsProtected)}
                 </small>

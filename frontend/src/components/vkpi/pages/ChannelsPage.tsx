@@ -8,18 +8,23 @@ import { useTaskCenter } from '../../tasks/TaskCenter';
 import { ChannelAccountList } from './channels/ChannelAccountList';
 import { ChannelContentList } from './channels/ChannelContentList';
 import { ChannelGapPanel } from './channels/ChannelGapPanel';
-import { ChannelPlatformMatrix } from './channels/ChannelPlatformMatrix';
+import {
+  ChannelPlatformMatrix,
+  DEFAULT_CHANNEL_SYNC_TIMEZONE,
+  isSupportedChannelSyncTimezone,
+} from './channels/ChannelPlatformMatrix';
 import { MyKolMatrix } from './channels/MyKolMatrix';
 import { RedditAssessmentPanel } from './channels/RedditAssessmentPanel';
 import { ChannelStaffProgress } from './channels/ChannelStaffProgress';
 import { useOfficialChannelGaps } from './channels/useOfficialChannelGaps';
 import { useOfficialChannelMatrix } from './channels/useOfficialChannelMatrix';
 import type { OfficialChannelAccount, OfficialChannelPlatform } from './channels/channelTypes';
-import type { VkpiDashboardData } from '../vkpiTypes';
+import type { VkpiDashboardData, VkpiPageKey } from '../vkpiTypes';
 import { CardHeader } from '../shared/CardHeader';
 import { creatorPlatformOptions } from '../shared/vkpiConstants';
 import { numberFormatter } from '../shared/vkpiFormatters';
 import { platformDisplay, safeNumber } from '../shared/vkpiDataUtils';
+import { writeDiscoverFocus } from '../intelligence/intelligenceDiscoveryFocus';
 import { PageShell } from './PageShell';
 import './channels/channels.css';
 import './channels/channelStaff.css';
@@ -32,7 +37,10 @@ interface ChannelsPageProps {
   viewMode: 'manager' | 'employee';
   data: VkpiDashboardData;
   onRefreshData?: () => void;
+  onSelectPage?: (page: VkpiPageKey) => void;
 }
+
+const CHANNEL_SYNC_TIMEZONE_STORAGE_KEY = 'vkpi.channelMatrix.syncTimezone';
 
 function channelSyncLabel(row: Record<string, unknown>) {
   const status = String(row.last_sync_status || row.sync_status || '').trim();
@@ -41,6 +49,7 @@ function channelSyncLabel(row: Record<string, unknown>) {
     no_results: '抓取无结果',
     not_configured: '待配置',
     not_supported: '未接入补抓',
+    official_readonly: '只读',
     synced: '已同步',
   };
   return labels[status] || status || '待同步';
@@ -52,7 +61,81 @@ function channelMetricCell(row: Record<string, unknown>, key: string) {
   return status === 'no_results' ? '无快照' : '待同步';
 }
 
-export function ChannelsPage({ apiToken, viewMode, data, onRefreshData }: ChannelsPageProps) {
+function selectedPlatformLabel(platform?: OfficialChannelPlatform, fallback = '') {
+  return platform?.label || (fallback ? platformDisplay(fallback) : '全部平台');
+}
+
+function discoverQueryForPlatform(platformLabel: string, variant: 'same_platform' | 'viltrox' | 'gap') {
+  if (variant === 'viltrox') return `${platformLabel} Viltrox lens review creator`;
+  if (variant === 'gap') return `${platformLabel} camera lens content creator collaboration`;
+  return `${platformLabel} camera gear review creator`;
+}
+
+function officialMatrixRows(platforms: OfficialChannelPlatform[]): Array<Record<string, unknown>> {
+  return platforms.flatMap((platform) =>
+    platform.accounts.map((account) => ({
+      id: account.id,
+      platform: account.platform || platform.platform,
+      account_display_name: account.displayName,
+      account_handle: account.handle,
+      api_key_mask: '',
+      status: 'official_readonly',
+      last_sync_status: account.syncStatus,
+      latest_followers: account.followers,
+      latest_posts: account.postsCount,
+      latest_views: account.totalViews,
+    })),
+  );
+}
+
+function ChannelDiscoveryBridge({
+  platform,
+  selectedPlatform,
+  gapCount,
+  bindingCount,
+  onDiscover,
+}: {
+  platform?: OfficialChannelPlatform;
+  selectedPlatform: string;
+  gapCount: number;
+  bindingCount: number;
+  onDiscover: (variant: 'same_platform' | 'viltrox' | 'gap') => void;
+}) {
+  const label = selectedPlatformLabel(platform, selectedPlatform);
+  const accountCount = platform?.accounts.length || 0;
+  const postCount = platform?.totalPosts || 0;
+  const views = platform?.totalViews || 0;
+
+  return (
+    <section className="vkpi-channel-discovery-bridge" aria-label="平台发现桥">
+      <div className="vkpi-channel-discovery-bridge__copy">
+        <span>发现入口</span>
+        <h2>{selectedPlatform ? `${label} 候选发现` : '从平台池发现 KOL'}</h2>
+        <p>先看已有平台和账号，再把平台上下文带到红人决策中枢。员工不用从空白搜索框开始，也不会触发外部抓取。</p>
+      </div>
+      <div className="vkpi-channel-discovery-bridge__metrics">
+        <span><b>{numberFormatter.format(accountCount)}</b><em>当前账号</em></span>
+        <span><b>{numberFormatter.format(postCount)}</b><em>内容样本</em></span>
+        <span><b>{numberFormatter.format(gapCount)}</b><em>待补缺口</em></span>
+        <span><b>{numberFormatter.format(bindingCount)}</b><em>绑定记录</em></span>
+      </div>
+      <div className="vkpi-channel-discovery-bridge__flow">
+        <span className="is-active"><i>1</i><b>平台</b><em>{label}</em></span>
+        <span><i>2</i><b>已有账号</b><em>{numberFormatter.format(accountCount)} 个</em></span>
+        <span><i>3</i><b>候选发现</b><em>带入查询</em></span>
+        <span><i>4</i><b>项目判断</b><em>证据回流</em></span>
+      </div>
+      <div className="vkpi-channel-discovery-bridge__actions">
+        <button className="vkpi-button vkpi-button--primary" type="button" onClick={() => onDiscover('same_platform')}>发现同平台 KOL</button>
+        <button className="vkpi-button" type="button" onClick={() => onDiscover('viltrox')}>找 Viltrox 相关</button>
+        <button className="vkpi-button" type="button" onClick={() => onDiscover('gap')}>补项目缺口</button>
+      </div>
+      <small>{views ? `${numberFormatter.format(views)} 播放作为平台参考，不作为候选质量结论。` : '没有播放快照时，仍可按平台和内容方向进入发现。'}</small>
+    </section>
+  );
+}
+
+export function ChannelsPage({ apiToken, viewMode, data, onRefreshData, onSelectPage }: ChannelsPageProps) {
   const [channelsRows, setChannelsRows] = useState<Array<Record<string, unknown>>>([]);
   const [platform, setPlatform] = useState('youtube');
   const [handle, setHandle] = useState('');
@@ -66,38 +149,34 @@ export function ChannelsPage({ apiToken, viewMode, data, onRefreshData }: Channe
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [pendingClicks, setPendingClicks] = useState<Set<string>>(new Set());
+  const [syncTimezone, setSyncTimezone] = useState(() => {
+    if (typeof window === 'undefined') return DEFAULT_CHANNEL_SYNC_TIMEZONE;
+    const stored = window.localStorage.getItem(CHANNEL_SYNC_TIMEZONE_STORAGE_KEY) || '';
+    return isSupportedChannelSyncTimezone(stored) ? stored : DEFAULT_CHANNEL_SYNC_TIMEZONE;
+  });
   const syncUnsubscribersRef = useRef<Map<string, () => void>>(new Map());
   const { waitForTask } = useTaskCenter();
-  const matrix = useOfficialChannelMatrix(apiToken, viewMode === 'manager' ? viewAsStaffId || undefined : undefined);
-  const gaps = useOfficialChannelGaps(apiToken, viewMode === 'manager' ? viewAsStaffId || undefined : undefined);
+  const matrix = useOfficialChannelMatrix(apiToken);
+  const gaps = useOfficialChannelGaps(apiToken);
+  const matrixRows = useMemo(() => officialMatrixRows(matrix.platforms), [matrix.platforms]);
+  const bindingRows = matrixRows;
+  const bindingCount = matrix.accountCount;
 
   const selectedPlatformData = useMemo(() => {
     return matrix.platforms.find((item) => item.platform === selectedPlatform);
   }, [matrix.platforms, selectedPlatform]);
   const visiblePlatformData = useMemo<OfficialChannelPlatform | undefined>(() => {
-    if (!selectedPlatformData || selectedStaffId == null) return selectedPlatformData;
-    const accounts = selectedPlatformData.accounts.filter((account) => account.staffId === selectedStaffId);
-    return {
-      ...selectedPlatformData,
-      accounts,
-      totalViews: accounts.reduce((sum, account) => sum + account.totalViews, 0),
-      totalPosts: accounts.reduce((sum, account) => sum + account.postsCount, 0),
-      totalFollowers: accounts.reduce((sum, account) => sum + account.followers, 0),
-      followersDelta: accounts.reduce((sum, account) => sum + (account.followersDelta || 0), 0),
-      postsDelta: accounts.reduce((sum, account) => sum + (account.postsDelta || 0), 0),
-      viewsDelta: accounts.reduce((sum, account) => sum + (account.viewsDelta || 0), 0),
-    };
-  }, [selectedPlatformData, selectedStaffId]);
+    return selectedPlatformData;
+  }, [selectedPlatformData]);
   const selectedAccount = useMemo(() => {
     return visiblePlatformData?.accounts.find((account) => account.id === selectedAccountId);
   }, [visiblePlatformData, selectedAccountId]);
   const visibleGapAccounts = useMemo(() => {
     return gaps.accounts.filter((account) => {
       const platformMatches = !selectedPlatform || account.platform === selectedPlatform;
-      const staffMatches = selectedStaffId == null || account.staffId === selectedStaffId;
-      return platformMatches && staffMatches;
+      return platformMatches;
     });
-  }, [gaps.accounts, selectedPlatform, selectedStaffId]);
+  }, [gaps.accounts, selectedPlatform]);
 
   const refresh = async () => {
     if (!apiToken) return;
@@ -108,6 +187,11 @@ export function ChannelsPage({ apiToken, viewMode, data, onRefreshData }: Channe
   useEffect(() => {
     void refresh();
   }, [apiToken, viewAsStaffId, viewMode]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(CHANNEL_SYNC_TIMEZONE_STORAGE_KEY, syncTimezone);
+  }, [syncTimezone]);
 
   useEffect(() => {
     return () => {
@@ -144,6 +228,20 @@ export function ChannelsPage({ apiToken, viewMode, data, onRefreshData }: Channe
   const selectStaff = (staffId: number | null) => {
     setSelectedStaffId(staffId);
     setSelectedAccountId(null);
+  };
+
+  const openDiscoverFromPlatform = (variant: 'same_platform' | 'viltrox' | 'gap') => {
+    const platformKey = selectedPlatform || platform;
+    const label = selectedPlatformLabel(visiblePlatformData, platformKey);
+    writeDiscoverFocus({
+      source: 'channel_platform_drilldown',
+      title: `${label} 候选发现`,
+      summary: '从 KOL/账号平台池进入发现；先复用已有账号、项目和平台上下文，再判断是否需要新候选。',
+      query: discoverQueryForPlatform(label, variant),
+      platform: platformKey || 'all',
+      sourceLabel: 'KOL/账号平台池',
+    });
+    onSelectPage?.('discover');
   };
 
   const submitChannel = async (event: React.FormEvent) => {
@@ -259,8 +357,19 @@ export function ChannelsPage({ apiToken, viewMode, data, onRefreshData }: Channe
         totalViews={matrix.totalViews}
         onSelectPlatform={selectPlatform}
         onOpenBindings={() => setShowBindingList(true)}
-        bindingCount={channelsRows.length}
+        bindingCount={bindingCount}
+        syncTimezone={syncTimezone}
+        onSyncTimezoneChange={setSyncTimezone}
       />
+      {viewMode === 'employee' ? (
+        <ChannelDiscoveryBridge
+          platform={visiblePlatformData}
+          selectedPlatform={selectedPlatform}
+          gapCount={visibleGapAccounts.length}
+          bindingCount={bindingCount}
+          onDiscover={openDiscoverFromPlatform}
+        />
+      ) : null}
       <ChannelAccountList
         platform={visiblePlatformData}
         selectedAccountId={selectedAccountId}
@@ -269,7 +378,26 @@ export function ChannelsPage({ apiToken, viewMode, data, onRefreshData }: Channe
       />
       <RedditAssessmentPanel account={selectedAccount} apiToken={apiToken} />
       <ChannelContentList account={selectedAccount} apiToken={apiToken} />
-      {viewMode === 'employee' ? <MyKolMatrix apiToken={apiToken} data={data} onRefreshData={onRefreshData} /> : null}
+      {viewMode === 'employee' ? (
+        <MyKolMatrix
+          apiToken={apiToken}
+          data={data}
+          initialPlatform={selectedPlatform}
+          onDiscoverPlatform={(nextPlatform) => {
+            const label = platformDisplay(nextPlatform || selectedPlatform || platform);
+            writeDiscoverFocus({
+              source: 'my_kol_platform_card',
+              title: `${label} 相似 KOL 发现`,
+              summary: '从我的 KOL 平台卡进入发现；用于补充同平台、同内容方向的新候选。',
+              query: discoverQueryForPlatform(label, 'same_platform'),
+              platform: nextPlatform || selectedPlatform || platform || 'all',
+              sourceLabel: '我的 KOL 平台卡',
+            });
+            onSelectPage?.('discover');
+          }}
+          onRefreshData={onRefreshData}
+        />
+      ) : null}
       {message ? <div className="vkpi-inline-message">{message}</div> : null}
       {showBindingList ? (
         <div className="vkpi-glass-modal" role="dialog" aria-modal="true" aria-label="平台绑定列表">
@@ -281,16 +409,17 @@ export function ChannelsPage({ apiToken, viewMode, data, onRefreshData }: Channe
                 <h2>{viewMode === 'manager' ? '平台绑定列表' : '我的平台列表'}</h2>
               </div>
               <div>
-                <span className="vkpi-channel-bindings-count">{channelsRows.length} 条</span>
+                <span className="vkpi-channel-bindings-count">{bindingRows.length} 条</span>
                 <button className="vkpi-glass-modal__close" type="button" aria-label="关闭" onClick={() => setShowBindingList(false)}>×</button>
               </div>
             </header>
             <div className="vkpi-table-wrap">
               <table className="vkpi-table">
                 <thead><tr><th>平台</th><th>账号</th><th>状态</th><th>同步</th><th>粉丝</th><th>帖子</th><th>播放</th><th>操作</th></tr></thead>
-                <tbody>{channelsRows.length ? channelsRows.map((row) => {
+                <tbody>{bindingRows.length ? bindingRows.map((row) => {
                   const rowId = String(row.id);
-                  return <tr key={rowId}><td>{platformDisplay(row.platform)}</td><td>{String(row.account_display_name || row.account_handle || '-')}<br /><small>{row.api_key_mask ? `Key ${String(row.api_key_mask)}` : '未填写 API Key'}</small></td><td>{String(row.status || '-')}</td><td>{channelSyncLabel(row)}</td><td>{channelMetricCell(row, 'latest_followers')}</td><td>{channelMetricCell(row, 'latest_posts')}</td><td>{channelMetricCell(row, 'latest_views')}</td><td><button className="vkpi-mini-button" type="button" disabled={!apiToken || pendingClicks.has(rowId)} onClick={() => void runSync(row.id)}>同步</button></td></tr>;
+                  const platformKey = String(row.platform || '');
+                  return <tr key={rowId}><td>{platformDisplay(row.platform)}</td><td>{String(row.account_display_name || row.account_handle || '-')}<br /><small>{row.api_key_mask ? `Key ${String(row.api_key_mask)}` : '公司官方账号 · 只读'}</small></td><td>{String(row.status || '-')}</td><td>{channelSyncLabel(row)}</td><td>{channelMetricCell(row, 'latest_followers')}</td><td>{channelMetricCell(row, 'latest_posts')}</td><td>{channelMetricCell(row, 'latest_views')}</td><td>{viewMode === 'manager' ? <button className="vkpi-mini-button" type="button" disabled={!apiToken || pendingClicks.has(rowId)} onClick={() => void runSync(row.id)}>同步</button> : <button className="vkpi-mini-button" type="button" onClick={() => { setSelectedPlatform(platformKey); setSelectedAccountId(Number(row.id) || null); setShowBindingList(false); }}>查看</button>}</td></tr>;
                 }) : <tr><td className="vkpi-table-empty" colSpan={8}>暂无平台绑定。</td></tr>}</tbody>
               </table>
             </div>

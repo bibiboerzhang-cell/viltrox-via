@@ -18,6 +18,12 @@ function boolValue(value: unknown, fallback = true) {
   return value === true || value === 'true' || value === 1 || value === '1';
 }
 
+function timeValue(value: string) {
+  if (!value) return 0;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+}
+
 function rows(value: unknown): Row[] {
   return Array.isArray(value) ? value.filter((item): item is Row => Boolean(item) && typeof item === 'object') : [];
 }
@@ -130,9 +136,11 @@ function mapPlatform(row: Row): OfficialChannelPlatform {
   const viewsUnavailable = Boolean(row.views_unavailable || row.viewsUnavailable || isRedditPlatform(platform) || (accounts.length > 0 && accounts.every((account) => account.viewsUnavailable)));
   const latestSyncAt = accounts
     .map((account) => account.lastSyncAt)
-    .filter(Boolean)
-    .sort();
-  const platformLastSyncAt = latestSyncAt.length ? latestSyncAt[latestSyncAt.length - 1] : text(row.last_sync_at || row.lastSyncAt);
+    .filter(Boolean);
+  const platformLastSyncAt = latestSyncAt.reduce(
+    (latest, value) => (timeValue(value) > timeValue(latest) ? value : latest),
+    text(row.last_sync_at || row.lastSyncAt),
+  );
   return {
     platform,
     label: text(row.label || row.platform, 'Other'),
