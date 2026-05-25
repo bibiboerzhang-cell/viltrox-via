@@ -10,6 +10,10 @@ export {
   type IntelligenceAgentsInboxResponse,
 } from './agents';
 export {
+  getCommentIntelligenceOverview,
+  type VkpiCommentIntelligenceOverview,
+} from './comments';
+export {
   createMemoryFeedback,
   getMemoryFeedbackBacklog,
   getOperatingReviewStatus,

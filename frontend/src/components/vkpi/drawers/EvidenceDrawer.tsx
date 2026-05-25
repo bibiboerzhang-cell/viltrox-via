@@ -3,7 +3,7 @@ import type {
   VkpiOfficialViewsAccount,
   VkpiOfficialViewsPlatform,
   VkpiOfficialViewsPost,
-} from '../../../services/vkpi.lineage-api';
+} from '../../../domains/evidence';
 import type { VkpiEvidenceRow, VkpiMetricEvidenceKey } from '../vkpiTypes';
 import { currencyFormatter, numberFormatter } from '../shared/vkpiFormatters';
 import { likelyVideoUrl, platformExternalUrl, proxiedImageUrl, proxiedVideoUrl } from '../shared/mediaProxy';

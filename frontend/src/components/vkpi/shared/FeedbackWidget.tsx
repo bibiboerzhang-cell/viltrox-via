@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { submitTeamFeedback } from '../../../services/vkpi/feedback-api';
+import { submitTeamFeedback } from '../../../domains/feedback';
 
 type FeedbackType = 'bug' | 'button_issue' | 'missing_data' | 'suggestion' | 'question';
 type Severity = 'low' | 'medium' | 'high' | 'critical';

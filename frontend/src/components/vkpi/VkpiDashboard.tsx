@@ -17,9 +17,9 @@ import { FeedbackWidget } from './shared/FeedbackWidget';
 import { useMetricEvidence } from './hooks/useMetricEvidence';
 import { useProjectDetailDrawer } from './hooks/useProjectDetailDrawer';
 import { profileToKolDetail, textValue } from './shared/vkpiDataUtils';
-import { getMarketingAlertDetail, resolveMarketingAlert } from '../../services/vkpi/alert-api';
-import { getKolProfile } from '../../services/vkpi/kol-api';
-import { getStaffProfile } from '../../services/vkpi/staff-api';
+import { getMarketingAlertDetail, resolveMarketingAlert } from '../../domains/dashboard';
+import { getKolProfile } from '../../domains/kol';
+import { getStaffProfile } from '../../domains/settings';
 import type {
   VkpiKolProfile,
   VkpiKolLookupResult,

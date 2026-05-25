@@ -7,7 +7,7 @@ import {
   type VkpiDrilldownRow,
   type VkpiOfficialViewsPlatform,
   type VkpiOfficialViewsEvidenceRow,
-} from '../../../services/vkpi.lineage-api';
+} from '../../../domains/evidence';
 import type { VkpiDashboardData, VkpiEvidenceRow, VkpiMetricEvidenceKey } from '../vkpiTypes';
 import { objectValue, safeNumber, textValue } from '../shared/vkpiDataUtils';
 

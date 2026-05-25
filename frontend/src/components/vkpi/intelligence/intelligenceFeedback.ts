@@ -1,5 +1,5 @@
 import type { IntelligenceCardModel, IntelligenceCardStatus } from './IntelligenceCard';
-import { productRecommendationAction } from '../../../services/vkpi/product-api';
+import { productRecommendationAction } from '../../../domains/products';
 
 export type IntelligenceFeedbackAction = 'accept' | 'reject' | 'snooze' | 'done';
 
