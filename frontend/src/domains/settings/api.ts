@@ -18,10 +18,12 @@ import {
   updateTeamFeedbackStatus,
 } from '../../services/vkpi/feedback-api';
 import {
+  acceptStaffInvite,
   createExistingStaffActivationLink,
   createStaffActivationLink,
   createStaffPasswordResetLink,
   getStaffInviteCapabilities,
+  getStaffInviteStatus,
   getStaffProfile,
   inviteMarketingStaff,
   updateStaffMarketingPermission,
@@ -38,6 +40,7 @@ import {
 } from '../../services/vkpi/sync-api';
 
 export {
+  acceptStaffInvite,
   createExistingStaffActivationLink,
   createStaffActivationLink,
   createStaffPasswordResetLink,
@@ -45,6 +48,7 @@ export {
   getControlStatus,
   getRbacStatus,
   getStaffInviteCapabilities,
+  getStaffInviteStatus,
   getStaffProfile,
   getSyncOverview,
   inviteMarketingStaff,

@@ -1,7 +1,7 @@
 import {
   listBrandSignals,
   reviewBrandSignal,
-} from '../../services/vkpi.ui-api';
+} from '../../services/vkpi/market-api';
 
 export {
   listBrandSignals,
