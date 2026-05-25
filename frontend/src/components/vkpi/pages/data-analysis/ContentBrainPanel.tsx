@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
-import { getContentBrainStatus, listContentBrainPosts } from '../../../../services/vkpi/market-api';
+import { getContentBrainStatus, listContentBrainPosts } from '../../../../domains/market';
 import { platformDisplay } from './utils/platformHelpers';
 import type { Row } from './utils/types';
 

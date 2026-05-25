@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { getMarketIntelligenceV0 } from '../../../../services/vkpi/market-api';
+import { getMarketIntelligenceV0 } from '../../../../domains/market';
 import type { Row } from './utils/types';
 
 interface MarketIntelligencePanelProps {

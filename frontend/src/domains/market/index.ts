@@ -1,2 +1,9 @@
 // Market domain public surface.
-export {};
+export {
+  getCompetitorBrainStatus,
+  getContentBrainStatus,
+  getMarketIntelligenceV0,
+  listCompetitorBrainSignals,
+  listContentBrainPosts,
+  reviewCompetitorBrainSignal,
+} from './api';
