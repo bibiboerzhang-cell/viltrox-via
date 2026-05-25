@@ -4,14 +4,15 @@ import {
   createProjectFromOutreachSuggestion,
   dismissOutreachSuggestion,
   getDailyOutreachDigestStatus,
+  getKolPoolSummary,
   getProductRecommendationOutcomeSummary,
   listAnalyticsProducts,
   listDailyOutreachDigest,
   listOutreachSuggestions,
   listProductLaunches,
   listProductRecommendations,
-} from '../../../services/vkpi/product-api';
-import { getKolPoolSummary } from '../../../services/vkpi/kolPool-api';
+  type ProductDomainRow,
+} from '../../../domains/products';
 import { AnalyticsMonitorPanel } from './analytics/AnalyticsMonitorPanel';
 import { OutreachTables } from './analytics/OutreachTables';
 import { ProductRecommendationPanel } from './analytics/ProductRecommendationPanel';
@@ -21,7 +22,7 @@ interface ProductBattlePageProps {
   apiToken?: string;
 }
 
-type Row = Record<string, unknown>;
+type Row = ProductDomainRow;
 
 export function ProductBattlePage({ apiToken }: ProductBattlePageProps) {
   const [platform, setPlatform] = useState('youtube');

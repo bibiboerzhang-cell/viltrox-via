@@ -1,2 +1,25 @@
 // Products domain public surface.
-export {};
+export {
+  claimOutreachSuggestion,
+  createProductLaunch,
+  createProjectFromOutreachSuggestion,
+  dismissOutreachSuggestion,
+  generateDailyOutreachDigest,
+  getDailyOutreachDigestStatus,
+  getKolPoolSummary,
+  getProductRecommendationEvidence,
+  getProductRecommendationOutcomeSummary,
+  importProductKolPool,
+  listAnalyticsProducts,
+  listDailyOutreachDigest,
+  listOutreachSuggestions,
+  listProductLaunches,
+  listProductRecommendationRuns,
+  listProductRecommendations,
+  productRecommendationAction,
+  runProductCompare,
+  runProductMonitor,
+  runProductRecommendations,
+  upsertAnalyticsProduct,
+  type ProductDomainRow,
+} from './analysis';

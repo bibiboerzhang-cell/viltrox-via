@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { listProductRecommendationRuns, listProductRecommendations } from '../../../../services/vkpi/product-api';
+import { listProductRecommendationRuns, listProductRecommendations } from '../../../../domains/products';
 import { InfoBlock } from '../../shared/InfoBlock';
 
 type Row = Record<string, unknown>;
