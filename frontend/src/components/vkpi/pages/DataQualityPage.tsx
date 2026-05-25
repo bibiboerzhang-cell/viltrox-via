@@ -2,13 +2,11 @@ import { useEffect, useState } from 'react';
 import {
   actOnDataQualityIssue,
   DataQualitySummaryCards,
+  listBrandSignals,
+  reviewBrandSignal,
   type DataQualityAction,
   useDataQualitySummary,
 } from '../../../domains/data-quality';
-import {
-  listBrandSignals,
-  reviewBrandSignal,
-} from '../../../services/vkpi.ui-api';
 import { SeverityBadge } from '../shared/SeverityBadge';
 import { PageShell } from './PageShell';
 

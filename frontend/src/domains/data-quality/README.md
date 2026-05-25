@@ -6,7 +6,8 @@ Initial PoC scope:
 
 - Read current data-quality issue summary.
 - Render the summary cards from domain-owned UI.
-- Keep issue actions and brand-signal review in the existing legacy page until a later domain slice.
+- Keep issue actions in the existing legacy page until a later domain slice.
+- Route brand-signal review through `brandSignals.ts`.
 
 Out of scope for this PoC:
 
