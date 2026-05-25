@@ -7,6 +7,11 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
+from app.domains.kol.claim_payloads import (
+    claim_payload,
+    json_array,
+    json_object,
+)
 from app.domains.kol.identity import (
     HANDLE_RE,
     PLATFORM_ALIASES,
@@ -23,10 +28,10 @@ def utcnow() -> str:
     return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
 def _json(value: Any) -> str:
-    return json.dumps(value or {}, ensure_ascii=False, default=str)
+    return json_object(value)
 
 def _json_array(value: Any) -> str:
-    return json.dumps(value if isinstance(value, list) else [], ensure_ascii=False, default=str)
+    return json_array(value)
 
 def _int(value: Any, default: int = 0) -> int:
     try:
@@ -35,11 +40,7 @@ def _int(value: Any, default: int = 0) -> int:
         return default
 
 def _claim_payload(row: Any) -> dict[str, Any]:
-    if not row:
-        return {}
-    data = dict(row)
-    data["is_active"] = str(data.get("status") or "") == "active"
-    return data
+    return claim_payload(row)
 
 def _find_kol(platform: str, handle: str) -> dict[str, Any] | None:
     conn = get_conn()

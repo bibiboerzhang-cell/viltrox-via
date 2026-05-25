@@ -13,6 +13,7 @@ from app.domains.kol.claims import (
     release,
     update_kol_manual,
 )
+from app.domains.kol.claim_payloads import claim_payload
 from app.domains.kol.contacts import add_contact, contact_rows_for_request
 from app.domains.kol.decisions import (
     create_decision,
@@ -31,6 +32,7 @@ __all__ = [
     "analyze_account_for_request",
     "assessment_for_request",
     "claim",
+    "claim_payload",
     "create_decision",
     "create_followup",
     "contact_rows_for_request",
