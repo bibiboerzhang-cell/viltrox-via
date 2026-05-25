@@ -11,6 +11,16 @@ from app.domains.attribution.links import (
     pause_link,
     update_link,
 )
+from app.domains.attribution.revenue import (
+    amazon_attribution_detail,
+    amazon_summary,
+    create_attribution,
+    import_amazon,
+    list_amazon_attributions,
+    list_attributions,
+    summary,
+    unmatched,
+)
 
 __all__ = [
     "archive_link",
@@ -20,6 +30,14 @@ __all__ = [
     "link_detail",
     "link_orders",
     "list_links",
+    "amazon_attribution_detail",
+    "amazon_summary",
+    "create_attribution",
+    "import_amazon",
+    "list_amazon_attributions",
+    "list_attributions",
     "pause_link",
+    "summary",
+    "unmatched",
     "update_link",
 ]
