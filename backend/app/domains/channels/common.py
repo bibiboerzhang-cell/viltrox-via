@@ -19,8 +19,8 @@ from app.db.connection import get_conn
 from app.services.cache import cache_clear, cache_get, cache_set
 from app.domains.access import scope
 from app.domains.media import cached_image_url, cached_video_url, cached_video_url_for_item
-from app.services.vkpi.official_post_identity import canonical_post_identity
-from app.services.vkpi.schema_channels import ensure_vkpi_channels_schema
+from app.domains.channels.identity import canonical_post_identity
+from app.domains.channels.schema import ensure_vkpi_channels_schema
 from app.domains.projects.workflow import staff_id as resolve_staff_id
 
 SUPPORTED_PLATFORMS = {"youtube", "instagram", "tiktok", "xhs", "xiaohongshu", "bilibili", "facebook", "reddit", "x", "threads", "twitch", "pinterest", "vimeo", "website", "other"}

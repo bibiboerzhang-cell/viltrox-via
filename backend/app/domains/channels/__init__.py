@@ -10,6 +10,8 @@ from app.domains.channels.common import *
 from app.domains.channels.crud import *
 from app.domains.channels.official import *
 from app.domains.channels.posts import *
+from app.domains.channels.post_metrics import *
+from app.domains.channels.refill import *
 from app.domains.channels.evidence import *
 from app.domains.channels import posts as _channels_posts
 

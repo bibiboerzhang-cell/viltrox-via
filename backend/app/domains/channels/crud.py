@@ -161,7 +161,7 @@ def sync_now(channel_id: int, *, staff: dict[str, Any] | None = None, max_posts:
     """Sync a bound official channel through configured providers."""
     ensure_vkpi_channels_schema()
     channel = get_channel(channel_id, staff=staff, write=True)["channel"]
-    from app.services.vkpi import channel_refill
+    from app.domains.channels import refill as channel_refill
 
     result = channel_refill.sync_channel_snapshot(channel, staff=staff, max_posts=max(1, min(1000, int(max_posts or 12))))
     _clear_channel_read_cache()

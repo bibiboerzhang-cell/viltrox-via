@@ -6,7 +6,7 @@ from typing import Any
 
 from app.db.connection import get_conn
 from app.domains import channels
-from app.services.vkpi.official_post_identity import canonical_post_identity
+from app.domains.channels.identity import canonical_post_identity
 
 
 COMMENT_COLLECT_PLATFORMS = {"youtube", "instagram", "tiktok", "facebook", "reddit", "x"}

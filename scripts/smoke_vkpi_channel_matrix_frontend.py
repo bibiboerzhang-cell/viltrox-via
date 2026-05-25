@@ -18,9 +18,13 @@ def main() -> None:
     router = read("backend/app/api/routers/vkpi_operations.py")
     media_router = read("backend/app/api/routers/media.py")
     channel_service = read("backend/app/domains/channels/__init__.py")
-    refill_service = read("backend/app/services/vkpi/channel_refill.py")
+    channel_crud = read("backend/app/domains/channels/crud.py")
+    channel_evidence = read("backend/app/domains/channels/evidence.py")
+    channel_official = read("backend/app/domains/channels/official.py")
+    refill_service = read("backend/app/domains/channels/refill.py")
     media_cache_service = read("backend/app/domains/media/cache.py")
-    gaps_service = read("backend/app/services/vkpi/channel_gaps.py")
+    media_cache_core = read("backend/app/domains/media/cache_core.py")
+    gaps_service = read("backend/app/domains/channels/gaps.py")
     youtube_crawler = read("backend/app/services/vkpi/industry_crawlers/youtube_crawler.py")
     instagram_crawler = read("backend/app/services/vkpi/industry_crawlers/instagram_crawler.py")
     tiktok_crawler = read("backend/app/services/vkpi/industry_crawlers/tiktok_crawler.py")
@@ -29,6 +33,7 @@ def main() -> None:
     gaps = read("frontend/src/components/vkpi/pages/channels/ChannelGapPanel.tsx")
     accounts = read("frontend/src/components/vkpi/pages/channels/ChannelAccountList.tsx")
     content = read("frontend/src/components/vkpi/pages/channels/ChannelContentList.tsx")
+    content_helpers = read("frontend/src/components/vkpi/pages/channels/ChannelContentList.helpers.ts")
     gap_hook = read("frontend/src/components/vkpi/pages/channels/useOfficialChannelGaps.ts")
     hook = read("frontend/src/components/vkpi/pages/channels/useOfficialChannelMatrix.ts")
     types = read("frontend/src/components/vkpi/pages/channels/channelTypes.ts")
@@ -37,8 +42,10 @@ def main() -> None:
     gaps_css = read("frontend/src/components/vkpi/pages/channels/channelGaps.css")
     account_css = read("frontend/src/components/vkpi/pages/channels/channelAccounts.css")
     content_css = read("frontend/src/components/vkpi/pages/channels/channelContent.css")
+    content_card_css = read("frontend/src/components/vkpi/pages/channels/styles/channel-content-cards.css")
+    content_overlay_css = read("frontend/src/components/vkpi/pages/channels/styles/channel-content-overlays.css")
     media_proxy = read("frontend/src/components/vkpi/shared/mediaProxy.ts")
-    api = read("frontend/src/services/vkpi.ui-api.ts")
+    api = read("frontend/src/services/vkpi/channel-api.ts")
     doc = read("docs/qa/official-channel-matrix-execution.md")
 
     assert "ChannelPlatformMatrix" in channels_page, "ChannelsPage must render platform matrix"
@@ -70,8 +77,8 @@ def main() -> None:
     assert "lastSyncError" in accounts and "抓取无结果" in accounts, "account card sync state label missing"
     assert "内容层" in content and "vkpi-channel-content-card" in content, "content card UI missing"
     assert "mediaUrl" in content and "打开原帖" in content and "赞" in content, "content card fields missing"
-    assert "MediaSlot" in content and "proxiedImageUrl" in content and "proxiedVideoUrl" in content, "content media proxy missing"
-    assert "likelyVideoUrl" in content and "<video" in content and "待缓存" in content, "content video/fallback missing"
+    assert "MediaSlot" in content and "proxiedImageUrl" in content_helpers and "proxiedVideoUrl" in content_helpers, "content media proxy missing"
+    assert "likelyVideoUrl" in content_helpers and "<video" in content and "待缓存" in content, "content video/fallback missing"
     assert "OfficialChannelPlatform" in types and "OfficialChannelAccount" in types and "ChannelContentPost" in types, "typed contract missing"
     assert "staffId" in types and "staffName" in types and "staffRole" in types, "staff typed contract missing"
     assert "ChannelGapAccount" in types and "ChannelGapIssue" in types and "autoRefillSupported" in types, "gap typed contract missing"
@@ -79,8 +86,8 @@ def main() -> None:
     assert "getOfficialChannelGapReport" in api and "official-gap-report" in api, "gap API client missing"
     assert "mapAccount" in gap_hook and "mapIssue" in gap_hook, "gap mapper missing"
     assert "official-gap-report" in router and "channel_gaps.official_gap_report" in router, "gap route missing"
-    assert "channel_refill.sync_channel_snapshot" in channel_service, "sync-now must call refill service"
-    assert "attributionType" in channel_service and "accountName" in channel_service and "staffName" in channel_service and "mediaUrl" in channel_service, "official views evidence attribution fields missing"
+    assert "channel_refill.sync_channel_snapshot" in channel_crud, "sync-now must call refill service"
+    assert "attributionType" in channel_evidence and "accountName" in channel_evidence and "staffName" in channel_evidence and "mediaUrl" in channel_evidence, "official views evidence attribution fields missing"
     assert "def sync_channel_snapshot" in refill_service and "_sync_instagram" in refill_service and "_sync_tiktok" in refill_service and "_sync_youtube" in refill_service, "provider refill service incomplete"
     assert "_sync_facebook" in refill_service and "_sync_reddit" in refill_service and "_sync_x" in refill_service and "_quality_summary" in refill_service, "Facebook/Reddit/X refill path missing"
     assert "platform=\"facebook\"" in refill_service and "\"comment\"" in refill_service, "Facebook/Reddit post filtering must be platform-aware"
@@ -90,11 +97,11 @@ def main() -> None:
     assert "no_provider_results" in gaps_service and "AUTO_REFILL_PLATFORMS" in gaps_service and "facebook" in gaps_service and "reddit" in gaps_service and '"x"' in gaps_service, "gap service state separation missing"
     assert "tiktokcdn.com" in media_router and "apifyusercontent.com" in media_router, "media image proxy allowlist incomplete"
     assert "api/vkpi-media/image-cache" in media_router and "cached_image_file" in media_router, "local media cache route missing"
-    assert "videoMeta" in channel_service and "coverUrl" in channel_service and "originalCoverUrl" in channel_service, "TikTok cover mapping missing"
-    assert "cached_image_url" in channel_service and "_cached_media_url" in channel_service, "matrix must prefer local cached images"
+    assert "videoMeta" in channel_official and "coverUrl" in channel_official and "originalCoverUrl" in channel_official, "TikTok cover mapping missing"
+    assert "cached_image_url" in channel_official and "_cached_media_url" in channel_official, "matrix must prefer local cached images"
     assert "prewarm_official_media_cache" in refill_service and "media_cache" in refill_service, "refill must prewarm media cache"
     assert "def prewarm_official_media_cache" in media_cache_service and "MAX_IMAGE_BYTES" in media_cache_service, "media cache service missing safety bounds"
-    assert ".redd.it" in media_cache_service and "html.unescape" in media_cache_service, "Reddit media cache normalization missing"
+    assert ".redd.it" in media_cache_core and "html.unescape" in media_cache_core, "Reddit media cache normalization missing"
     assert "nextPageToken" in youtube_crawler and "DEFAULT_MAX_CHANNEL_VIDEOS" in youtube_crawler, "YouTube full-baseline pagination missing"
     assert "DEFAULT_MAX_POST_RESULTS" in instagram_crawler and "instagram-scraper" in instagram_crawler, "Instagram baseline must use the posts scraper for deeper playback totals"
     assert "DEFAULT_MAX_PROFILE_RESULTS" in tiktok_crawler, "TikTok baseline limit must allow more than 50"
@@ -104,11 +111,11 @@ def main() -> None:
     assert ".vkpi-channel-staff--compact" in staff_css and ".vkpi-action-card--team" in staff_css, "compact staff CSS missing"
     assert ".vkpi-channel-gap-list" in gaps_css and ".vkpi-channel-gap-card" in gaps_css and ".vkpi-channel-gaps__bar" in gaps_css, "gap CSS missing"
     assert ".vkpi-channel-account-grid" in account_css and ".vkpi-channel-account-card" in account_css, "account CSS missing"
-    assert ".vkpi-channel-content-card" in content_css and "-webkit-line-clamp" in content_css and "video" in content_css, "content CSS missing"
+    assert ".vkpi-channel-content-card" in content_card_css and "-webkit-line-clamp" in content_card_css and "video" in content_overlay_css, "content CSS missing"
     assert "IMAGE_PROXY_HOSTS" in media_proxy and "VIDEO_PROXY_HOSTS" in media_proxy and "playbackVideoCandidates" in media_proxy, "shared media proxy missing"
     assert ".image" in media_proxy and "tiktok.com/@" in media_proxy, "TikTok image/video detection missing"
     assert "staffLabel" in read("frontend/src/components/vkpi/drawers/EvidenceDrawer.tsx") and "vkpi-traffic-post__media" in read("frontend/src/components/vkpi/drawers/EvidenceDrawer.tsx"), "views evidence attribution UI missing"
-    assert ".vkpi-traffic-post__media" in read("frontend/src/components/vkpi/VkpiDashboard.css"), "views evidence media CSS missing"
+    assert ".vkpi-traffic-post__media" in read("frontend/src/components/vkpi/styles/vkpi-settings-traffic.css"), "views evidence media CSS missing"
     assert "Execution Rules" in doc and "Level 1 Platform Matrix" in doc, "execution contract doc missing"
 
     print("VKPI_CHANNEL_MATRIX_FRONTEND_SMOKE_OK")
