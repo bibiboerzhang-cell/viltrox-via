@@ -10,7 +10,7 @@ from app.api.dependencies.perms import require_tab
 from app.domains import reports
 from app.domains import audit
 from app.domains.access import scope
-from app.services.vkpi import exports
+from app.domains.reports import export_jobs as exports
 from app.domains.projects.workflow import staff_id as resolve_staff_id
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-reports"])
