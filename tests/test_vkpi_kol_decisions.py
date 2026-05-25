@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from app.db.connection import get_conn
-from app.services.vkpi import kol_decisions
+from app.domains.kol import decision_audit as kol_decisions
 from app.services.vkpi.schema_audit import ensure_vkpi_audit_schema
 
 
