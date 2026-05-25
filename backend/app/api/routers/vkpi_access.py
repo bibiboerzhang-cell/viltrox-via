@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 
 from app.api.dependencies.perms import require_tab
-from app.services.vkpi import rbac_status
+from app.domains.staff import rbac_status
 
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-access"])
