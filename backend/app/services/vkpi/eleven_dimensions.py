@@ -15,7 +15,8 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
-from app.services.vkpi.kol_competitor_detector import _extract_posts, _post_date, _post_text_blob, _row_profile_post, evaluate_kol_competitors
+from app.domains.kol.competitor_detector import evaluate_kol_competitors
+from app.domains.kol.competitor_text import _extract_posts, _post_date, _post_text_blob, _row_profile_post
 
 
 CLUSTERS_PATH = Path(__file__).with_name("industry_clusters.json")

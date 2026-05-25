@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 
 from app.db.connection import get_conn
+from app.domains.kol.competitor_detector import ensure_competitor_relation_schema
 from app.services.vkpi import kol_pool, product_analysis
-from app.services.vkpi.kol_competitor_detector import ensure_competitor_relation_schema
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 
 

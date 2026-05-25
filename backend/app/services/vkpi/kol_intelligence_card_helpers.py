@@ -7,12 +7,12 @@ from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
 
+from app.domains.kol import competitor_detector as kol_competitor_detector
 from app.db.connection import get_conn
 from app.services.vkpi import (
     brand_signal_detector,
     comment_intelligence,
     eleven_dimensions,
-    kol_competitor_detector,
 )
 
 VIDEO_ANALYSIS_FIELD_KEYS = (

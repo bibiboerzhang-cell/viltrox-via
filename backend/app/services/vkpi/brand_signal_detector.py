@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.db.connection import get_conn
-from app.services.vkpi.kol_competitor_detector import (
+from app.domains.kol.competitor_text import (
     _extract_posts,
     _post_date,
     _post_text_blob,
