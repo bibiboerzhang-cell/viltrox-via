@@ -15,7 +15,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.db.connection import close_db_runtime  # noqa: E402
-from app.services.vkpi.learning_loop import build_learning_snapshot, format_learning_snapshot  # noqa: E402
+from app.domains.learning.learning_loop import build_learning_snapshot, format_learning_snapshot  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:

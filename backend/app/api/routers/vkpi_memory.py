@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
-from app.services.vkpi import memory
+from app.domains import memory
 
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-memory"])

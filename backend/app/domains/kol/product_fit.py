@@ -9,7 +9,7 @@ from typing import Any
 
 from app.db.connection import get_conn
 from app.platform import llm_gateway
-from app.services.vkpi import memory
+from app.domains import memory
 from app.domains.costs.budget_guard import check_budget, get_budget_status
 from app.domains.kol.product_fit_helpers import *  # noqa: F403
 from app.domains.kol.product_fit_persistence import persist_product_fit_preview_run

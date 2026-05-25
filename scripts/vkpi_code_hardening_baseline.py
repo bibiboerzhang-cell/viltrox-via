@@ -39,7 +39,7 @@ def _count_table(conn: Any, table_name: str) -> dict[str, Any]:
 
 def main() -> None:
     from app.db.connection import close_db_runtime, get_conn, get_db_actor_stats, probe_postgres_connectivity
-    from app.services.vkpi import memory
+    from app.domains import memory
 
     conn = get_conn()
     payload = {

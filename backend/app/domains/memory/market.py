@@ -6,7 +6,7 @@ from typing import Any
 
 from app.db.connection import get_conn
 from app.services.vkpi.legacy_import_audit import _text
-from app.services.vkpi.memory_common import (
+from app.domains.memory.common import (
     _fetch_batch,
     _load_json,
     _public_market_signal,
@@ -17,7 +17,7 @@ from app.services.vkpi.memory_common import (
     _upsert_link,
     ensure_memory_schema,
 )
-from app.services.vkpi.memory_product import _normalize_product_family
+from app.domains.memory.product import _normalize_product_family
 
 def build_market_memory_from_legacy_batch(batch_uid: str) -> dict[str, Any]:
     """Build Market Memory v0 facts from launch, official content, materials, and VOC staging."""

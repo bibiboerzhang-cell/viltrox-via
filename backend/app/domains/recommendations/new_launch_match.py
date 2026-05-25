@@ -15,7 +15,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
-from app.services.vkpi import memory
+from app.domains import memory
 from app.platform import llm_gateway
 from app.domains.costs.budget_guard import check_budget, get_budget_status
 from app.domains.recommendations.new_launch_match_format import format_preview_summary, render_markdown

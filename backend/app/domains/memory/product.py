@@ -7,7 +7,7 @@ from typing import Any
 
 from app.db.connection import get_conn
 from app.services.vkpi.legacy_import_audit import _text
-from app.services.vkpi.memory_common import (
+from app.domains.memory.common import (
     _load_json,
     _public_entity,
     _row_to_dict,

@@ -15,7 +15,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.db.connection import close_db_runtime  # noqa: E402
-from app.services.vkpi.memory_feedback_backlog import (  # noqa: E402
+from app.domains.memory.feedback_backlog import (  # noqa: E402
     build_memory_feedback_backlog,
     format_memory_feedback_backlog,
 )

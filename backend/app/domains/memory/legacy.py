@@ -7,7 +7,7 @@ from typing import Any
 from app.db.connection import get_conn
 from app.services.vkpi.legacy_import_audit import _text
 from app.services.vkpi.legacy_import_staging import json_dumps
-from app.services.vkpi.memory_common import (
+from app.domains.memory.common import (
     _fetch_batch,
     _load_json,
     _row_to_dict,
@@ -17,7 +17,7 @@ from app.services.vkpi.memory_common import (
     ensure_memory_schema,
     summary,
 )
-from app.services.vkpi.memory_product import _product_entity
+from app.domains.memory.product import _product_entity
 
 def build_memory_from_legacy_batch(batch_uid: str) -> dict[str, Any]:
     """Build Memory v0 facts from active P2D committed refs for a legacy batch."""

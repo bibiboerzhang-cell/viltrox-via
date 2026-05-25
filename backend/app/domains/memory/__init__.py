@@ -5,7 +5,7 @@ Memory product, market, matching, and feedback behavior again.
 """
 from __future__ import annotations
 
-from app.services.vkpi.memory_common import (
+from app.domains.memory.common import (
     _entity_uid,
     _fact_uid,
     _fetch_batch,
@@ -35,9 +35,9 @@ from app.services.vkpi.memory_common import (
     list_entities,
     summary,
 )
-from app.services.vkpi.memory_feedback import list_feedback, readiness, record_feedback, update_feedback
-from app.services.vkpi.memory_legacy import build_memory_from_legacy_batch
-from app.services.vkpi.memory_market import (
+from app.domains.memory.feedback import list_feedback, readiness, record_feedback, update_feedback
+from app.domains.memory.legacy import build_memory_from_legacy_batch
+from app.domains.memory.market import (
     _market_target_for_product,
     _market_topic_entity,
     _official_account_entity,
@@ -47,14 +47,14 @@ from app.services.vkpi.memory_market import (
     market_signal_summary,
     market_signals,
 )
-from app.services.vkpi.memory_matching import (
+from app.domains.memory.matching import (
     _matched_product_rows,
     entity_facts,
     fit_features,
     kol_product_memory,
     product_kol_candidates,
 )
-from app.services.vkpi.memory_product import (
+from app.domains.memory.product import (
     _clean_product_name,
     _format_aperture,
     _normalize_lens_family,

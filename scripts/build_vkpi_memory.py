@@ -15,7 +15,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.db.connection import close_db_runtime  # noqa: E402
-from app.services.vkpi import memory  # noqa: E402
+from app.domains import memory  # noqa: E402
 
 
 DEFAULT_BATCH_UID = "vkpi_20260519033921_b36c6f28ec8d"

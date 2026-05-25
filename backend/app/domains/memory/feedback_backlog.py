@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from app.db.connection import get_conn
-from app.services.vkpi.memory import ensure_memory_schema
+from app.domains.memory import ensure_memory_schema
 
 
 SCENARIO = "p10_memory_feedback_backlog"
