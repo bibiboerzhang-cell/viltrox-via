@@ -9,7 +9,7 @@ import hashlib
 from datetime import datetime, timezone
 from typing import Any
 
-from app.services.vkpi import evidence_summary
+import app.domains.evidence.summary as evidence_summary
 
 
 SECTION_PRIORITY = {

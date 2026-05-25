@@ -23,7 +23,7 @@ from app.domains.intelligence.evidence_agent import (
     parse_kol_pool_ids,
     weekly_targets,
 )
-from app.services.vkpi import evidence_summary
+import app.domains.evidence.summary as evidence_summary
 
 
 DEFAULT_OPS_DIR = "runtime/ops"

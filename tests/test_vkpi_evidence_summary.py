@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.services.vkpi import evidence_summary
+import app.domains.evidence.summary as evidence_summary
 from scripts import vkpi_evidence_summary_acceptance
 
 
