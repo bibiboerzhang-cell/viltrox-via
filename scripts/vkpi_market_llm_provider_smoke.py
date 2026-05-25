@@ -27,7 +27,8 @@ if str(ROOT) not in sys.path:
 from app.db.connection import close_db_runtime  # noqa: E402
 from app.services.system import provider_health  # noqa: E402
 from app.domains.market import provider_preflight as market_provider_preflight  # noqa: E402
-from app.services.vkpi import llm_gateway, market_llm_quality  # noqa: E402
+from app.domains.market import llm_quality as market_llm_quality  # noqa: E402
+from app.services.vkpi import llm_gateway  # noqa: E402
 
 
 logging.getLogger("httpx").setLevel(logging.WARNING)

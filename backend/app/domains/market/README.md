@@ -6,6 +6,7 @@ Current migrated slice:
 
 - `external_signal_smoke.py`: read-only source matrix, daily candidate plan, and bounded external signal smoke builder.
 - `external_signal_reports.py`: JSON/Markdown report rendering for external signal smoke and daily plans.
+- `llm_quality.py`: deterministic quality gate for market LLM smoke outputs; does not call a model.
 - `provider_preflight.py`: read-only provider readiness and LLM budget-gate checks.
 - `signal_taxonomy.py`: shared Viltrox, competitor, product, and camera-ecosystem keyword groups.
 - `signal_classifier.py`: read-only classifier for raw market mentions and reviewable competitor-signal candidates.

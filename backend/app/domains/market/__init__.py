@@ -21,6 +21,11 @@ from app.domains.market.external_signal_smoke import (
     build_external_source_matrix,
     google_news_rss_url,
 )
+from app.domains.market.llm_quality import (
+    evaluate_market_llm_output,
+    evaluate_market_llm_report,
+    evaluate_market_llm_report_file,
+)
 from app.domains.market.provider_preflight import (
     DEFAULT_PROMPT,
     PROVIDER_SOURCES,
@@ -84,6 +89,9 @@ __all__ = [
     "build_market_signal_write_package_from_file",
     "competitor_signal_rows_from_review_package",
     "dedupe_keywords",
+    "evaluate_market_llm_output",
+    "evaluate_market_llm_report",
+    "evaluate_market_llm_report_file",
     "google_news_rss_url",
     "keyword_groups",
     "keyword_hits",
