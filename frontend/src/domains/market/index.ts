@@ -6,6 +6,7 @@ export {
   getMarketExternalDailyPlanV0,
   getMarketIntelligenceCardsV0,
   getMarketIntelligenceV0,
+  listBrandSignals,
   listCompetitorBrainSignals,
   listContentBrainPosts,
   reviewCompetitorBrainSignal,

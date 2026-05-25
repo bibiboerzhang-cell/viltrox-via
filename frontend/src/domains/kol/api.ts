@@ -1,4 +1,8 @@
-import { getKolPoolIntelligenceCard } from '../../services/vkpi/kolPool-api';
+import {
+  getKolPoolCompetitorDashboard,
+  getKolPoolIntelligenceCard,
+  getKolPoolSummary,
+} from '../../services/vkpi/kolPool-api';
 import {
   createKolDecisionAudit,
   searchVkpi,
@@ -7,7 +11,9 @@ import {
 
 export {
   createKolDecisionAudit,
+  getKolPoolCompetitorDashboard,
   getKolPoolIntelligenceCard,
+  getKolPoolSummary,
   searchVkpi,
   type VkpiKolDecisionPayload,
 };

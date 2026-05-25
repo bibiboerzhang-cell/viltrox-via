@@ -7,13 +7,6 @@ import {
   glassVarStyle,
 } from '../glass';
 import { apiFetch } from '../../../services/http';
-import { getOfficialChannelMatrix } from '../../../services/vkpi/channel-api';
-import { getRecommendationFeedbackBacklog } from '../../../services/vkpi/intelligence-api';
-import {
-  getKolPoolCompetitorDashboard,
-  getKolPoolSummary,
-} from '../../../services/vkpi/kolPool-api';
-import { listBrandSignals } from '../../../services/vkpi/market-api';
 import type { VkpiPageKey } from '../vkpiTypes';
 import { IntelligenceActionStrip } from '../intelligence/IntelligenceActionStrip';
 import {
@@ -24,6 +17,7 @@ import {
 import { IntelligenceDetailPanel } from '../intelligence/IntelligenceDetailPanel';
 import { IntelligenceEvidenceDrawer } from '../intelligence/IntelligenceEvidenceDrawer';
 import { RealWorldMap, type CountryMapPoint } from '../glass-future/RealWorldMap';
+import { getOfficialChannelMatrix } from '../../../domains/channels';
 import {
   EMPTY_SNAPSHOT,
   buildKpis,
@@ -56,6 +50,9 @@ import {
   type Snapshot,
   type TrendSegment,
 } from '../../../domains/dashboard';
+import { getRecommendationFeedbackBacklog } from '../../../domains/intelligence';
+import { getKolPoolCompetitorDashboard, getKolPoolSummary } from '../../../domains/kol';
+import { listBrandSignals } from '../../../domains/market';
 import '../glass-future/tokens.css';
 import '../glass-future/background.css';
 import '../glass-future/components.css';
