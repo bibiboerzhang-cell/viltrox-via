@@ -65,6 +65,44 @@ def _download_direct_video_url(video_url: str, output_dir: str) -> dict:
         return result
 
 
+def extract_dense_start_frames(video_path: str, *, seconds: int = 5, fps: int = 4, max_frames: int = 8) -> list[str]:
+    """Extract dense early-video frames for a second-pass gear check."""
+    frames: list[str] = []
+    with tempfile.TemporaryDirectory() as tmpdir:
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-i",
+                video_path,
+                "-t",
+                str(seconds),
+                "-vf",
+                f"fps={fps},scale=1280:-1",
+                "-frames:v",
+                str(max_frames),
+                "-q:v",
+                "2",
+                os.path.join(tmpdir, "dense_%03d.jpg"),
+            ],
+            capture_output=True,
+            timeout=30,
+        )
+        for filename in sorted(os.listdir(tmpdir)):
+            if filename.endswith(".jpg"):
+                with open(os.path.join(tmpdir, filename), "rb") as frame_file:
+                    frames.append(base64.b64encode(frame_file.read()).decode())
+    return frames
+
+
+def save_best_frame(frame_b64: str, video_path: str, frames_dir: Path) -> str:
+    """Save a representative frame for thumbnail display."""
+    frames_dir.mkdir(parents=True, exist_ok=True)
+    best_frame_path = frames_dir / f"best_{os.path.basename(video_path)}.jpg"
+    with open(best_frame_path, "wb") as frame_file:
+        frame_file.write(base64.b64decode(frame_b64))
+    return str(best_frame_path)
+
+
 def fetch_all_images_from_post(url: str, og_image: str = "") -> list[str]:
     """
     Fetch ALL images from a multi-image post (Instagram carousel, Reddit gallery, etc.)

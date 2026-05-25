@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import base64
 import json
 import os
 import re
-import subprocess
 import tempfile
 import asyncio
 from typing import Any
@@ -18,7 +16,7 @@ try:
 except ImportError:
     genai_types = None
 from app.services.ai.clients.openai_client import OPENAI_AVAILABLE
-from app.core.constants import VILTROX_CATALOG_PROMPT, USER_AGENT
+from app.core.constants import VILTROX_CATALOG_PROMPT
 from app.core.config import ANTHROPIC_API_KEY
 from app.core.logging import get_logger
 from app.services.scoring.creator import get_creator_profile
@@ -34,7 +32,7 @@ from app.services.ai.analyzers.claude_vision_client import _build_anthropic_clie
 from app.services.ai.analyzers.claude_vision_context import build_improvement_context
 from app.services.ai.analyzers.claude_vision_defaults import initial_smart_result, initial_video_result
 from app.services.ai.analyzers.claude_vision_images import _analyze_images_batch
-from app.services.ai.analyzers.claude_vision_media import _download_direct_video_url, fetch_all_images_from_post
+from app.services.ai.analyzers.claude_vision_media import _download_direct_video_url, extract_dense_start_frames, fetch_all_images_from_post, save_best_frame
 from app.services.ai.analyzers.claude_vision_merge import _merge_analysis
 
 FRAMES_DIR = Path("uploads")
@@ -280,19 +278,7 @@ def analyze_video_with_claude(video_path: str, filename: str, creator_handle: st
         # ── Pass 3: Dense first-3s if still not found ──
         if analysis and not analysis.get("viltrox_detected"):
             try:
-                dense_frames = []
-                with tempfile.TemporaryDirectory() as td:
-                    subprocess.run(
-                        ["ffmpeg", "-i", video_path, "-t", "5",
-                         "-vf", "fps=4,scale=1280:-1",
-                         "-frames:v", "8", "-q:v", "2",
-                         os.path.join(td, "dense_%03d.jpg")],
-                        capture_output=True, timeout=30
-                    )
-                    for fn in sorted(os.listdir(td)):
-                        if fn.endswith(".jpg"):
-                            with open(os.path.join(td, fn), "rb") as f:
-                                dense_frames.append(base64.b64encode(f.read()).decode())
+                dense_frames = extract_dense_start_frames(video_path)
                 if dense_frames:
                     logger.info("vision pass 3 dense retry | frames=%s", len(dense_frames))
                     analysis3 = run_claude_pass(
@@ -378,11 +364,7 @@ def analyze_video_with_claude(video_path: str, filename: str, creator_handle: st
             # Pick the first frame with product detected (usually opening b-roll)
             if frames_b64:
                 try:
-                    best_b64 = frames_b64[0]  # First frame = most likely product b-roll
-                    best_frame_path = FRAMES_DIR / f"best_{os.path.basename(video_path)}.jpg"
-                    with open(best_frame_path, "wb") as bf:
-                        bf.write(base64.b64decode(best_b64))
-                    result["best_frame_path"] = str(best_frame_path)
+                    result["best_frame_path"] = save_best_frame(frames_b64[0], video_path, FRAMES_DIR)
                 except Exception as fe:
                     logger.warning("frame save error: %s", fe)
     
