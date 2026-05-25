@@ -127,6 +127,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "078_vkpi_gemini_single_kol_budget.sql",
     "079_vkpi_product_aliases.sql",
     "080_vkpi_product_spec_facts.sql",
+    "082_vkpi_market_provider_smoke_budget.sql",
 )
 
 try:
