@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from app.db.connection import get_conn
-from app.services.vkpi import kol_claims
+from app.domains.kol import claims as kol_claims
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.schema_audit import ensure_vkpi_audit_schema
 
