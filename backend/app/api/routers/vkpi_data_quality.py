@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
+from app.domains import data_quality as data_quality_domain
 from app.services.vkpi import data_quality
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-data-quality"])
@@ -23,7 +24,7 @@ def _require_manager_staff(staff: dict) -> None:
 
 @router.get("/data-quality")
 def data_quality_issues(limit: int = Query(default=200, ge=1, le=1000), staff=Depends(require_tab("vkpi", "read"))):
-    return data_quality.list_issues(limit=limit, staff=staff)
+    return data_quality_domain.list_quality_issues(limit=limit, staff=staff)
 
 
 @router.post("/data-quality/{issue_id}/resolve")

@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react';
 import {
   actOnDataQualityIssue,
-  getDataQuality,
+  DataQualitySummaryCards,
+  type DataQualityAction,
+  useDataQualitySummary,
+} from '../../../domains/data-quality';
+import {
   listBrandSignals,
   reviewBrandSignal,
-  type VkpiDataQualityAction,
 } from '../../../services/vkpi.ui-api';
-import type { VkpiDataQualityResponse } from '../vkpiTypes';
-import { CardHeader } from '../shared/CardHeader';
-import { InfoBlock } from '../shared/InfoBlock';
 import { SeverityBadge } from '../shared/SeverityBadge';
 import { PageShell } from './PageShell';
 
@@ -74,7 +74,6 @@ function brandSignalEvidence(signal: Record<string, unknown>) {
 }
 
 export function DataQualityPage({ apiToken, viewMode }: DataQualityPageProps) {
-  const [quality, setQuality] = useState<VkpiDataQualityResponse | null>(null);
   const [brandSignals, setBrandSignals] = useState<Array<Record<string, unknown>>>([]);
   const [brandSignalCount, setBrandSignalCount] = useState(0);
   const [brandSignalSchemaReady, setBrandSignalSchemaReady] = useState(true);
@@ -82,21 +81,16 @@ export function DataQualityPage({ apiToken, viewMode }: DataQualityPageProps) {
   const [brandSignalRole, setBrandSignalRole] = useState<'all' | 'self' | 'competitor'>('all');
   const [brandSignalType, setBrandSignalType] = useState('');
   const [brandSignalLoading, setBrandSignalLoading] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
   const [message, setMessage] = useState('');
-
-  const refresh = async () => {
-    if (!apiToken || viewMode !== 'manager') return;
-    setLoading(true);
-    setMessage('');
-    try {
-      setQuality(await getDataQuality(apiToken, 200));
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : '数据质量检查失败');
-    } finally {
-      setLoading(false);
-    }
-  };
+  const {
+    errorMessage,
+    loading: qualityLoading,
+    quality,
+    refresh,
+    setQuality,
+  } = useDataQualitySummary({ enabled: viewMode === 'manager', token: apiToken, limit: 200 });
+  const loading = qualityLoading || actionLoading;
 
   const refreshBrandSignals = async () => {
     if (!apiToken || viewMode !== 'manager') return;
@@ -119,7 +113,7 @@ export function DataQualityPage({ apiToken, viewMode }: DataQualityPageProps) {
     }
   };
 
-  const actionReason: Record<VkpiDataQualityAction, string> = {
+  const actionReason: Record<DataQualityAction, string> = {
     resolve: '管理层已复核处理',
     ignore: '管理层确认暂不处理',
     assign: '已指派当前管理层跟进',
@@ -128,7 +122,7 @@ export function DataQualityPage({ apiToken, viewMode }: DataQualityPageProps) {
     reopen: '重新打开复核',
   };
 
-  const actionMessage: Record<VkpiDataQualityAction, string> = {
+  const actionMessage: Record<DataQualityAction, string> = {
     resolve: '问题已标记为已处理。',
     ignore: '问题已忽略。',
     assign: '问题已记录指派。',
@@ -137,7 +131,7 @@ export function DataQualityPage({ apiToken, viewMode }: DataQualityPageProps) {
     reopen: '问题已重新打开。',
   };
 
-  const actOnIssue = async (issueId: string, action: VkpiDataQualityAction) => {
+  const actOnIssue = async (issueId: string, action: DataQualityAction) => {
     if (!apiToken) return;
     if (action === 'resolve' || action === 'ignore') {
       const confirmed = window.confirm(action === 'resolve'
@@ -145,16 +139,16 @@ export function DataQualityPage({ apiToken, viewMode }: DataQualityPageProps) {
         : '确认忽略该数据质量问题？该动作会写入审计记录, 后续可用“重新打开”恢复。');
       if (!confirmed) return;
     }
-    setLoading(true);
+    setActionLoading(true);
     setMessage('');
     try {
       await actOnDataQualityIssue(apiToken, issueId, action, actionReason[action], { ui_action: action });
       setMessage(actionMessage[action]);
-      setQuality(await getDataQuality(apiToken, 200));
+      await refresh();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '数据质量操作失败');
     } finally {
-      setLoading(false);
+      setActionLoading(false);
     }
   };
 
@@ -173,7 +167,6 @@ export function DataQualityPage({ apiToken, viewMode }: DataQualityPageProps) {
     }
   };
 
-  useEffect(() => { void refresh(); }, [apiToken, viewMode]);
   useEffect(() => { void refreshBrandSignals(); }, [apiToken, viewMode, brandSignalStatus, brandSignalRole, brandSignalType]);
 
   if (viewMode !== 'manager') {
@@ -185,26 +178,15 @@ export function DataQualityPage({ apiToken, viewMode }: DataQualityPageProps) {
   }
 
   const issues = quality?.issues || [];
-  const summary = quality?.summary || {};
   return (
     <PageShell title="数据质量 / 可信度检查" description="检查未匹配销售、缺订单快照、缺内容证据、缺成本、异常短链、指标来源和红人联系方式。">
-      <section className="vkpi-card-grid vkpi-card-grid--forms">
-        <section className="vkpi-card vkpi-action-card">
-          <CardHeader title="检查状态" />
-          <InfoBlock label="问题总数" value={String(quality?.total_count ?? 0)} tone={(quality?.total_count || 0) ? 'warn' : 'good'} />
-          <InfoBlock label="高优先级" value={String(summary.high || 0)} tone={summary.high ? 'warn' : 'good'} />
-          <InfoBlock label="中优先级" value={String(summary.medium || 0)} />
-          <button className="vkpi-button vkpi-button--primary" type="button" disabled={loading || !apiToken} onClick={() => void refresh()}>
-            {loading ? '正在检查' : '重新检查'}
-          </button>
-        </section>
-        <section className="vkpi-card vkpi-action-card">
-          <CardHeader title="检查口径" />
-          <p className="vkpi-summary-text">只读取真实业务表，不生成假问题；问题用于复核，不会阻塞当前业务操作。</p>
-          <InfoBlock label="最近检查" value={quality?.generated_at || '-'} />
-        </section>
-      </section>
-      {message ? <div className="vkpi-inline-message">{message}</div> : null}
+      <DataQualitySummaryCards
+        apiTokenAvailable={Boolean(apiToken)}
+        loading={qualityLoading}
+        onRefresh={() => void refresh()}
+        quality={quality}
+      />
+      {message || errorMessage ? <div className="vkpi-inline-message">{message || errorMessage}</div> : null}
       <section className="vkpi-card vkpi-table-card">
         <div className="vkpi-table-card__header">
           <div><h2>Viltrox / 竞品信号</h2><span>{brandSignalSchemaReady ? `${brandSignalCount} 条` : '未建表'}</span></div>
