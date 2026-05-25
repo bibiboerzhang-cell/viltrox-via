@@ -19,7 +19,7 @@ def main() -> None:
     media_router = read("backend/app/api/routers/media.py")
     channel_service = read("backend/app/services/vkpi/channels.py")
     refill_service = read("backend/app/services/vkpi/channel_refill.py")
-    media_cache_service = read("backend/app/services/vkpi/media_cache.py")
+    media_cache_service = read("backend/app/domains/media/cache.py")
     gaps_service = read("backend/app/services/vkpi/channel_gaps.py")
     youtube_crawler = read("backend/app/services/vkpi/industry_crawlers/youtube_crawler.py")
     instagram_crawler = read("backend/app/services/vkpi/industry_crawlers/instagram_crawler.py")

@@ -18,7 +18,7 @@ from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.services.cache import cache_clear, cache_get, cache_set
 from app.services.vkpi import scope
-from app.services.vkpi.media_cache import cached_image_url, cached_video_url, cached_video_url_for_item
+from app.domains.media import cached_image_url, cached_video_url, cached_video_url_for_item
 from app.services.vkpi.official_post_identity import canonical_post_identity
 from app.services.vkpi.schema_channels import ensure_vkpi_channels_schema
 from app.services.vkpi.workflow import staff_id as resolve_staff_id

@@ -26,7 +26,7 @@ from app.db.connection import get_conn
 from app.core.security import get_current_user
 from app.db.repositories.assets import get_submission_asset
 from app.services.media.storage import resolve_local_media_path
-from app.services.vkpi.media_cache import cached_image_file, cached_video_file, cached_video_redirect_url, cached_video_url_for_item
+from app.domains.media import cached_image_file, cached_video_file, cached_video_redirect_url, cached_video_url_for_item
 
 
 FFMPEG_AVAILABLE = shutil.which("ffmpeg") is not None

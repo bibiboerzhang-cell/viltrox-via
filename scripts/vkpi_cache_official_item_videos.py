@@ -22,7 +22,7 @@ if str(BACKEND) not in sys.path:
 
 from app.db.connection import close_db_runtime, get_conn  # noqa: E402
 from app.services.vkpi import channels  # noqa: E402
-from app.services.vkpi.media_cache import cache_video_for_item, cached_video_url_for_item, video_cache_item_state  # noqa: E402
+from app.domains.media import cache_video_for_item, cached_video_url_for_item, video_cache_item_state  # noqa: E402
 
 
 STAFF = {"id": 1, "role": "admin", "is_owner": 1}

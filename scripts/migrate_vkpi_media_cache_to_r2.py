@@ -13,7 +13,7 @@ BACKEND = ROOT / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
-from app.services.vkpi.media_cache import migrate_local_video_cache_to_r2  # noqa: E402
+from app.domains.media import migrate_local_video_cache_to_r2  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:

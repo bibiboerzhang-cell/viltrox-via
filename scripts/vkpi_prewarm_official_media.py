@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 from app.db.connection import get_conn  # noqa: E402
 from app.services.vkpi import channels  # noqa: E402
-from app.services.vkpi.media_cache import cache_image, cache_video  # noqa: E402
+from app.domains.media import cache_image, cache_video  # noqa: E402
 
 
 STAFF = {"id": 1, "role": "admin", "is_owner": 1}

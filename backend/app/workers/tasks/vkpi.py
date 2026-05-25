@@ -5,7 +5,8 @@ import asyncio
 from typing import Any
 
 from app.domains.kol import pool as kol_pool
-from app.services.vkpi import channel_refill, channels, media_cache, refresh_tier, task_enqueue
+from app.domains import media as media_cache
+from app.services.vkpi import channel_refill, channels, refresh_tier, task_enqueue
 
 
 TERMINAL_STATUSES = {"done", "partial_done", "failed", "prefilter_rejected", "cancelled", "timeout"}
