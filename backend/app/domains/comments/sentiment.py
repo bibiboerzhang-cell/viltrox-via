@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.db.connection import get_conn
@@ -82,7 +82,7 @@ For unparseable or empty input, return all "neutral" with 0.5 confidence."""
 
 
 def _now_iso() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def ensure_vkpi_sentiment_schema() -> None:
@@ -428,7 +428,7 @@ def backfill_historical(
     """Backfill sentiment for comments without analysis."""
     ensure_vkpi_sentiment_schema()
     conn = get_conn()
-    cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     
     where = ["c.fetched_at >= ?", "s.id IS NULL"]
     params: list = [cutoff]
@@ -458,7 +458,7 @@ def stats(*, days: int = 30) -> dict:
     """Sentiment analysis statistics."""
     ensure_vkpi_sentiment_schema()
     conn = get_conn()
-    cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     
     by_sentiment = conn.execute(
         """

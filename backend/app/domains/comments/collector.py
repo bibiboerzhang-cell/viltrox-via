@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.db.connection import get_conn
@@ -107,7 +107,7 @@ def ensure_vkpi_comments_schema() -> None:
 
 
 def _now_iso() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _resolve_post(post_id: int, post_table: str) -> dict | None:
@@ -529,7 +529,7 @@ def batch_collect_pending(
         where_clauses.append("p.platform = ?")
         params.append(platform)
     
-    cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     where_clauses.append("p.created_at >= ?")
     params.append(cutoff)
     
@@ -572,7 +572,7 @@ def stats(*, days: int = 30) -> dict:
     """Comments collection statistics."""
     ensure_vkpi_comments_schema()
     conn = get_conn()
-    cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     
     by_platform = conn.execute(
         """

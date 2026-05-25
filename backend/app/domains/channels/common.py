@@ -30,7 +30,7 @@ logger = get_logger(__name__)
 
 
 def _utcnow() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _channel_cache_scope(staff: dict[str, Any] | None = None, view_as_staff_id: int | None = None) -> str:

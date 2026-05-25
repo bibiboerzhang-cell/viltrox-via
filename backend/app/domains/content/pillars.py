@@ -14,7 +14,7 @@ Uses llm_gateway.invoke() (4 provider fallback).
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.db.connection import get_conn
@@ -64,7 +64,7 @@ If post too vague, use "other" with low confidence."""
 
 
 def _now_iso() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 PILLAR_SEEDS = [
@@ -438,7 +438,7 @@ def classify_batch(
     """Batch classify recent unclassified posts."""
     ensure_vkpi_pillar_schema()
     conn = get_conn()
-    cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     
     if post_table == "industry_posts":
         table = "vkpi_industry_posts"
@@ -494,7 +494,7 @@ def stats(*, days: int = 30) -> dict:
     """Pillar distribution statistics."""
     ensure_vkpi_pillar_schema()
     conn = get_conn()
-    cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     
     by_pillar = conn.execute(
         """

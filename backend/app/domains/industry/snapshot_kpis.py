@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.core.logging import get_logger
@@ -57,11 +57,11 @@ SNAPSHOT_FIELDS = [
 
 
 def _utcnow() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _today() -> str:
-    return datetime.utcnow().date().isoformat()
+    return datetime.now(timezone.utc).date().isoformat()
 
 
 def _json(value: Any) -> str:
@@ -108,7 +108,7 @@ def _parse_datetime(value: Any) -> datetime | None:
         if timestamp > 10_000_000_000:
             timestamp = timestamp / 1000
         try:
-            return datetime.utcfromtimestamp(timestamp)
+            return datetime.fromtimestamp(timestamp, timezone.utc).replace(tzinfo=None)
         except Exception as exc:
             logger.warning("industry snapshot timestamp parse failed for %r: %s", value, exc)
             return None
@@ -118,7 +118,7 @@ def _parse_datetime(value: Any) -> datetime | None:
         if timestamp > 10_000_000_000:
             timestamp = timestamp / 1000
         try:
-            return datetime.utcfromtimestamp(timestamp)
+            return datetime.fromtimestamp(timestamp, timezone.utc).replace(tzinfo=None)
         except Exception as exc:
             logger.warning("industry snapshot numeric timestamp parse failed for %r: %s", text, exc)
     for candidate in (text, text.replace("Z", "+00:00")):
@@ -201,7 +201,7 @@ def calculate_kpis(raw_data: dict[str, Any]) -> dict[str, Any]:
     profile = _profile_item(raw)
     profile_stats = _stats(profile)
     videos = _video_items(raw)
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     cutoff = now - timedelta(days=30)
 
     followers = _int(

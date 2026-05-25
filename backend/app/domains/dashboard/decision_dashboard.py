@@ -1,7 +1,7 @@
 """Dashboard and chart aggregate services for V-KPI."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from app.db.connection import get_conn
@@ -132,7 +132,7 @@ def revenue_trend(window_days: int = 7, staff_id: int | None = None) -> dict[str
     """
     ensure_vkpi_schema()
     days = max(1, min(180, int(window_days or 7)))
-    end = datetime.utcnow().date()
+    end = datetime.now(timezone.utc).date()
     import datetime as _dt
 
     dates = [(end - _dt.timedelta(days=days - 1 - index)).isoformat() for index in range(days)]
@@ -259,7 +259,7 @@ def product_performance(window_days: int = 30, staff_id: int | None = None, limi
     ensure_vkpi_schema()
     days = max(1, min(180, int(window_days or 30)))
     limit = max(1, min(100, int(limit or 20)))
-    end = datetime.utcnow().date()
+    end = datetime.now(timezone.utc).date()
     import datetime as _dt
 
     start = (end - _dt.timedelta(days=days - 1)).isoformat()

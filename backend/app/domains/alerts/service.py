@@ -169,7 +169,7 @@ def generate_comment_intelligence_alerts(
     min_negative_i = max(1, min(999, int(min_negative or global_settings.get("min_negative") or 3)))
     min_critical_i = max(1, min(999, int(min_critical or global_settings.get("min_critical") or 2)))
     min_hostile_i = max(1, min(999, int(min_hostile or global_settings.get("min_hostile") or 1)))
-    cutoff = (datetime.utcnow() - timedelta(days=safe_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=safe_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     conn = get_conn()
     rows = conn.execute(
         """

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.db.connection import get_conn
@@ -24,7 +24,7 @@ _rule_v0_comment_summary = rule_v0_comment_summary
 
 
 def _now_iso() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def ensure_vkpi_comment_intelligence_schema() -> None:
@@ -337,7 +337,7 @@ def process_recent_posts(
 ) -> dict[str, Any]:
     """Process recent industry posts through the intelligence chain."""
     conn = get_conn()
-    cutoff = (datetime.utcnow() - timedelta(days=max(1, int(days or 7)))).strftime(
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max(1, int(days or 7)))).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
 
@@ -461,7 +461,7 @@ def overview(*, days: int = 7, recent_limit: int = 8) -> dict[str, Any]:
 
     conn = get_conn()
     safe_days = max(1, min(180, int(days or 7)))
-    cutoff = (datetime.utcnow() - timedelta(days=safe_days)).strftime(
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=safe_days)).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
     safe_recent = max(1, min(50, int(recent_limit or 8)))
