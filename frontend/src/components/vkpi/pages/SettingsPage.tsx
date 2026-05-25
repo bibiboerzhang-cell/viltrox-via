@@ -33,8 +33,6 @@ import type {
 import { StaffTable } from '../tables/StaffTable';
 import { PageShell } from './PageShell';
 import {
-  ProductCostFormCard,
-  ProductCatalogPreviewCard,
   StaffInviteCard,
 } from './settings/SettingsAdminCards';
 import { StaffPermissionDrawer } from './settings/StaffPermissionDrawer';
@@ -49,6 +47,7 @@ import {
   SettingsModule,
   type SettingsModuleKey,
 } from './settings/SettingsPage.fragments';
+import { SettingsSkuPanel } from './settings/SettingsSkuPanel';
 import { SettingsStatusPanel } from './settings/SettingsStatusPanel';
 import {
   boolLabel,
@@ -612,31 +611,26 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
           />
         ))}
         {renderSettingsModule('sku', `${skuCount} 个 SKU · 镜头 ${lensCount} · 闪光灯 ${lightingCount} · 转接环 ${adapterCount}`, (
-          <section className="vkpi-settings-product-row">
-            <ProductCostFormCard
-              costSku={costSku}
-              costProductName={costProductName}
-              unitCostUsd={unitCostUsd}
-              costNote={costNote}
-              selectedProduct={selectedCatalogProduct}
-              busy={busy}
-              canUpsert={Boolean(onUpsertProductCost)}
-              onCostSkuChange={setCostSku}
-              onCostProductNameChange={setCostProductName}
-              onUnitCostUsdChange={setUnitCostUsd}
-              onCostNoteChange={setCostNote}
-              onSubmit={submitProductCost}
-            />
-            <ProductCatalogPreviewCard
-              products={productCatalog}
-              loading={productCatalogLoading}
-              error={productCatalogError}
-              query={productSearch}
-              selectedSku={selectedCatalogProduct?.sku}
-              onQueryChange={setProductSearch}
-              onSelectProduct={selectCatalogProduct}
-            />
-          </section>
+          <SettingsSkuPanel
+            costSku={costSku}
+            costProductName={costProductName}
+            unitCostUsd={unitCostUsd}
+            costNote={costNote}
+            selectedCatalogProduct={selectedCatalogProduct}
+            busy={busy}
+            canUpsert={Boolean(onUpsertProductCost)}
+            productCatalog={productCatalog}
+            productCatalogLoading={productCatalogLoading}
+            productCatalogError={productCatalogError}
+            productSearch={productSearch}
+            onCostSkuChange={setCostSku}
+            onCostProductNameChange={setCostProductName}
+            onUnitCostUsdChange={setUnitCostUsd}
+            onCostNoteChange={setCostNote}
+            onProductSearchChange={setProductSearch}
+            onSelectProduct={selectCatalogProduct}
+            onSubmitProductCost={submitProductCost}
+          />
         ))}
         {renderSettingsModule('staff', `${data.staffMembers.length} 人 · 邀请 / 权限`, (
           <section className="vkpi-settings-two-column">
