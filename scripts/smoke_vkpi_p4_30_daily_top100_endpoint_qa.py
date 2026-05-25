@@ -25,7 +25,7 @@ os.environ.setdefault("ENVIRONMENT", "local")
 from app.core.permissions import staff_context_for_user  # noqa: E402
 from app.core.security import make_token  # noqa: E402
 from app.db.connection import close_db_runtime, get_conn  # noqa: E402
-from app.services.vkpi import analytics  # noqa: E402
+from app.domains import analytics  # noqa: E402
 
 
 BASE_URL = os.environ.get("VKPI_BASE_URL", "http://127.0.0.1:8102").rstrip("/")

@@ -1,18 +1,18 @@
 """V-KPI product analysis and suggested outreach adapter."""
 from __future__ import annotations
 
-from app.services.vkpi.analytics_actions import (
+from app.domains.analytics.actions import (
     claim_suggestion,
     create_project_from_suggestion,
     dismiss_suggestion,
 )
-from app.services.vkpi.analytics_common import DEFAULT_PLATFORMS
-from app.services.vkpi.analytics_digest import (
+from app.domains.analytics.common import DEFAULT_PLATFORMS
+from app.domains.analytics.digest import (
     daily_staff_outreach_digest_status,
     generate_daily_staff_outreach_digest,
     list_daily_staff_outreach_digest,
 )
-from app.services.vkpi.analytics_monitor import (
+from app.domains.analytics.monitor import (
     compare_products,
     delete_monitored_product,
     get_run,
@@ -23,7 +23,7 @@ from app.services.vkpi.analytics_monitor import (
     suggestions_overview,
     upsert_monitored_product,
 )
-from app.services.vkpi.analytics_suggestions import rank_uncontacted_suggestions
+from app.domains.analytics.suggestions import rank_uncontacted_suggestions
 
 __all__ = [
     "DEFAULT_PLATFORMS",

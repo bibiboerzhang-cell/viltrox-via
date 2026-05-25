@@ -10,7 +10,7 @@ import pytest
 from app.db.connection import get_conn, get_db_actor_stats, probe_postgres_connectivity
 from app.domains.recommendations import new_launch_match, product_analysis
 from app.domains import alerts
-from app.services.vkpi import memory
+from app.domains import memory
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 

@@ -9,9 +9,9 @@ from app.domains.kol import claims as kol_claims
 from app.domains.attribution import link_center
 from app.domains import audit
 from app.domains.projects import workflow
-from app.services.vkpi.analytics_common import _actor, _int, _is_official_account, _json, _loads_json, _utcnow
+from app.domains.analytics.common import _actor, _int, _is_official_account, _json, _loads_json, _utcnow
 from app.services.vkpi.schema import ensure_vkpi_schema
-from app.services.vkpi.schema_analytics import ensure_vkpi_analytics_schema
+from app.domains.analytics.schema import ensure_vkpi_analytics_schema
 
 
 def _suggestion_to_kol_lookup_body(row: dict[str, Any]) -> dict[str, Any]:

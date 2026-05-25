@@ -23,8 +23,8 @@ sys.path.insert(0, str(ROOT / "backend"))
 os.environ.setdefault("ENVIRONMENT", "local")
 
 from app.db.connection import close_db_runtime, get_conn  # noqa: E402
-from app.services.vkpi import analytics  # noqa: E402
-from app.services.vkpi.schema_analytics import ensure_vkpi_analytics_schema  # noqa: E402
+from app.domains import analytics  # noqa: E402
+from app.domains.analytics.schema import ensure_vkpi_analytics_schema  # noqa: E402
 
 BRIDGE_SKUS = {"", "kol_pool", "kol-pool", "pool", "unknown", "n/a", "none"}
 DEFAULT_PLATFORMS = ["youtube", "instagram", "tiktok", "xiaohongshu"]

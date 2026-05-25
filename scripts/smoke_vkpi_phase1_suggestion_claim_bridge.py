@@ -17,9 +17,9 @@ os.environ.setdefault("DB_RUNTIME_BACKEND", "sqlite")
 os.environ.setdefault("DATABASE_URL", "")
 
 from app.db.connection import get_conn  # noqa: E402
-from app.services.vkpi import analytics  # noqa: E402
+from app.domains import analytics  # noqa: E402
 from app.services.vkpi.schema import ensure_vkpi_schema  # noqa: E402
-from app.services.vkpi.schema_analytics import ensure_vkpi_analytics_schema  # noqa: E402
+from app.domains.analytics.schema import ensure_vkpi_analytics_schema  # noqa: E402
 from app.services.vkpi.schema_audit import ensure_vkpi_audit_schema  # noqa: E402
 
 

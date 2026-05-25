@@ -6,7 +6,7 @@ import secrets
 from typing import Any
 
 from app.db.connection import get_conn
-from app.services.vkpi.analytics_common import (
+from app.domains.analytics.common import (
     _content_intelligence,
     _db_bool,
     _float,
@@ -17,9 +17,9 @@ from app.services.vkpi.analytics_common import (
     _platform_variants,
     _utcnow,
 )
-from app.services.vkpi.analytics_monitor import list_suggestions
+from app.domains.analytics.monitor import list_suggestions
 from app.services.vkpi.schema import ensure_vkpi_schema
-from app.services.vkpi.schema_analytics import ensure_vkpi_analytics_schema
+from app.domains.analytics.schema import ensure_vkpi_analytics_schema
 
 
 def _kol_pool_bridge_score(row: dict[str, Any]) -> float:

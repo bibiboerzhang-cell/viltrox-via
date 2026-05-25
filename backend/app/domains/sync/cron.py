@@ -348,7 +348,7 @@ async def run_job(job_name: str, payload: dict[str, Any] | None = None, *, queue
         result = await asyncio.to_thread(reports.generate_weekly_report, period_days=int(payload.get("period_days") or 7), staff=payload.get("staff"), filters=payload)
         return {"job": name, "status": "ok", "result": {k: v for k, v in result.items() if k != "context"}, "ran_at": _stamp()}
     if name == "analytics_monitor":
-        from app.services.vkpi import analytics
+        from app.domains import analytics
 
         products = analytics.list_monitored_products(limit=50).get("products") or []
         ran = []
@@ -427,7 +427,7 @@ async def run_job(job_name: str, payload: dict[str, Any] | None = None, *, queue
         result = await asyncio.to_thread(daily_sync.run_daily_incremental, payload)
         return {"job": name, "status": "ok", "result": result, "ran_at": _stamp()}
     if name == "daily_outreach_digest_only":
-        from app.services.vkpi import analytics
+        from app.domains import analytics
 
         digest = analytics.generate_daily_staff_outreach_digest(
             target_date=payload.get("date"),
@@ -437,7 +437,8 @@ async def run_job(job_name: str, payload: dict[str, Any] | None = None, *, queue
         )
         return {"job": name, "status": "ok", "digest": digest, "ran_at": _stamp()}
     if name == "morning_sync":
-        from app.services.vkpi import analytics, channels, industry_snapshot_collector
+        from app.domains import analytics
+        from app.services.vkpi import channels, industry_snapshot_collector
 
         channel_rows = channels.list_channels(staff={}, limit=300).get("channels") or []
         channel_results = []

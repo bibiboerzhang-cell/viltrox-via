@@ -24,7 +24,7 @@ os.environ.setdefault("DATABASE_URL", "")
 
 from app.db.connection import get_conn  # noqa: E402
 from app.domains.sync import cron  # noqa: E402
-from app.services.vkpi.schema_analytics import ensure_vkpi_analytics_schema  # noqa: E402
+from app.domains.analytics.schema import ensure_vkpi_analytics_schema  # noqa: E402
 
 
 def _json(value: Any) -> str:

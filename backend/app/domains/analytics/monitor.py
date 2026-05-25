@@ -6,7 +6,7 @@ import secrets
 from typing import Any
 
 from app.db.connection import get_conn, is_postgres_runtime
-from app.services.vkpi.analytics_common import (
+from app.domains.analytics.common import (
     DEFAULT_PLATFORMS,
     _actor,
     _db_bool,
@@ -17,7 +17,7 @@ from app.services.vkpi.analytics_common import (
     _run_uid,
     _utcnow,
 )
-from app.services.vkpi.schema_analytics import ensure_vkpi_analytics_schema
+from app.domains.analytics.schema import ensure_vkpi_analytics_schema
 
 
 def _create_run(run_type: str, *, staff: dict[str, Any] | None, target_skus: list[str], platforms: list[str], period_days: int) -> int:

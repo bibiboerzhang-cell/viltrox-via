@@ -8,9 +8,9 @@ from app.services.system import staff as staff_service
 import importlib
 
 platform_crawl_settings = importlib.import_module("app.domains.settings.platform_crawl")
-from app.services.vkpi.analytics_common import _actor, _china_today, _int, _json, _loads_json, _utcnow
-from app.services.vkpi.analytics_suggestions import rank_uncontacted_suggestions
-from app.services.vkpi.schema_analytics import ensure_vkpi_analytics_schema
+from app.domains.analytics.common import _actor, _china_today, _int, _json, _loads_json, _utcnow
+from app.domains.analytics.suggestions import rank_uncontacted_suggestions
+from app.domains.analytics.schema import ensure_vkpi_analytics_schema
 
 
 def _staff_display_name(member: dict[str, Any]) -> str:

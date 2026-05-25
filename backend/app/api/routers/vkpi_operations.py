@@ -10,7 +10,8 @@ from app.domains.comments import channel as channel_comments
 from app.domains.projects import p5_selected
 from app.domains.access import scope
 from app.domains.sync import cron
-from app.services.vkpi import analytics, channel_gaps, channels, reddit_channel_insights
+from app.domains import analytics
+from app.services.vkpi import channel_gaps, channels, reddit_channel_insights
 from app.domains.projects.workflow import staff_id as resolve_staff_id
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-operations"])
