@@ -1,4 +1,5 @@
 from app.api.routers import vkpi_dashboard_staff
+from app.domains.dashboard import recent_content as dashboard_recent_content
 
 
 class _Rows:
@@ -13,8 +14,8 @@ class _Rows:
 
 
 def test_dashboard_recent_content_returns_empty_payload(monkeypatch):
-    monkeypatch.setattr(vkpi_dashboard_staff, "_dashboard_recent_official_content", lambda limit: [])
-    monkeypatch.setattr(vkpi_dashboard_staff, "_dashboard_recent_ugc_content", lambda limit: [])
+    monkeypatch.setattr(dashboard_recent_content, "_dashboard_recent_official_content", lambda limit: [])
+    monkeypatch.setattr(dashboard_recent_content, "_dashboard_recent_ugc_content", lambda limit: [])
 
     payload = vkpi_dashboard_staff.dashboard_recent_content(limit=12, staff={})
 
@@ -28,7 +29,7 @@ def test_dashboard_recent_content_returns_empty_payload(monkeypatch):
 
 def test_dashboard_recent_content_merges_and_sorts_sources(monkeypatch):
     monkeypatch.setattr(
-        vkpi_dashboard_staff,
+        dashboard_recent_content,
         "_dashboard_recent_official_content",
         lambda limit: [
             {
@@ -40,7 +41,7 @@ def test_dashboard_recent_content_merges_and_sorts_sources(monkeypatch):
         ],
     )
     monkeypatch.setattr(
-        vkpi_dashboard_staff,
+        dashboard_recent_content,
         "_dashboard_recent_ugc_content",
         lambda limit: [
             {

@@ -7,11 +7,25 @@ from app.domains.dashboard.agents import (
     _build_dashboard_copilot_brief,
     _build_dashboard_tasks,
 )
+from app.domains.dashboard.recent_content import (
+    _dashboard_int,
+    _dashboard_official_matrix_summary,
+    _dashboard_recent_official_content,
+    _dashboard_recent_ugc_content,
+    _recent_content_sort_key,
+    build_dashboard_recent_content,
+)
 
 __all__ = [
     "DASHBOARD_AGENT_SPECS",
+    "_dashboard_int",
+    "_dashboard_official_matrix_summary",
+    "_dashboard_recent_official_content",
+    "_dashboard_recent_ugc_content",
     "_build_dashboard_agents_inbox",
     "_build_dashboard_agents_status",
     "_build_dashboard_copilot_brief",
     "_build_dashboard_tasks",
+    "_recent_content_sort_key",
+    "build_dashboard_recent_content",
 ]
