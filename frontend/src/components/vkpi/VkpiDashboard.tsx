@@ -17,12 +17,9 @@ import { FeedbackWidget } from './shared/FeedbackWidget';
 import { useMetricEvidence } from './hooks/useMetricEvidence';
 import { useProjectDetailDrawer } from './hooks/useProjectDetailDrawer';
 import { profileToKolDetail, textValue } from './shared/vkpiDataUtils';
-import {
-  getMarketingAlertDetail,
-  getKolProfile,
-  resolveMarketingAlert,
-  getStaffProfile,
-} from '../../services/vkpi.ui-api';
+import { getMarketingAlertDetail, resolveMarketingAlert } from '../../services/vkpi/alert-api';
+import { getKolProfile } from '../../services/vkpi/kol-api';
+import { getStaffProfile } from '../../services/vkpi/staff-api';
 import type {
   VkpiKolProfile,
   VkpiKolLookupResult,
@@ -163,6 +160,7 @@ const VKPI_PAGE_KEYS = new Set<VkpiPageKey>([
   'command',
   'dashboardPremium',
   'agents',
+  'intelligenceCenter',
   'discover',
   'projects',
   'links',
@@ -180,7 +178,19 @@ const VKPI_PAGE_KEYS = new Set<VkpiPageKey>([
   'settings',
 ]);
 
-const DEFAULT_VKPI_PAGE: VkpiPageKey = 'dashboardPremium';
+const EMPLOYEE_ALLOWED_PAGES = new Set<VkpiPageKey>([
+  'command',
+  'channels',
+  'discover',
+  'projects',
+  'links',
+  'attribution',
+  'reports',
+  'settings',
+]);
+
+const DEFAULT_MANAGER_PAGE: VkpiPageKey = 'dashboardPremium';
+const DEFAULT_EMPLOYEE_PAGE: VkpiPageKey = 'command';
 
 const importMetaEnv = (import.meta as { env?: { DEV?: boolean } }).env;
 
@@ -199,11 +209,13 @@ function cleanVkpiPageCandidate(value: string): string {
 function normalizeVkpiPage(value: string, viewMode: 'manager' | 'employee'): VkpiPageKey {
   const page = cleanVkpiPageCandidate(value);
   if (viewMode === 'manager' && (page === 'command' || page === 'dashboard')) return 'dashboardPremium';
-  return isVkpiPageKey(page) ? page : DEFAULT_VKPI_PAGE;
+  if (viewMode === 'employee' && (page === 'dashboard' || page === 'dashboardPremium')) return DEFAULT_EMPLOYEE_PAGE;
+  if (viewMode === 'employee' && isVkpiPageKey(page) && !EMPLOYEE_ALLOWED_PAGES.has(page)) return DEFAULT_EMPLOYEE_PAGE;
+  return isVkpiPageKey(page) ? page : viewMode === 'employee' ? DEFAULT_EMPLOYEE_PAGE : DEFAULT_MANAGER_PAGE;
 }
 
 function getInitialVkpiPage(viewMode: 'manager' | 'employee'): VkpiPageKey {
-  if (typeof window === 'undefined') return DEFAULT_VKPI_PAGE;
+  if (typeof window === 'undefined') return viewMode === 'employee' ? DEFAULT_EMPLOYEE_PAGE : DEFAULT_MANAGER_PAGE;
   const hashPage = window.location.hash.replace(/^#\/?/, '');
   const queryPage = new URLSearchParams(window.location.search).get('page') || '';
   const candidate = hashPage || queryPage;
@@ -390,7 +402,9 @@ export function VkpiDashboard({
 
   useEffect(() => {
     const handleHashChange = () => {
-      setActivePage(getInitialVkpiPage(viewMode));
+      const nextPage = getInitialVkpiPage(viewMode);
+      setActivePage(nextPage);
+      writeVkpiHash(nextPage);
     };
     handleHashChange();
     window.addEventListener('hashchange', handleHashChange);
@@ -618,11 +632,12 @@ export function VkpiDashboard({
               onUploadAmazonReport={onUploadAmazonReport}
 	              onExportPDF={onExportPDF}
 	              onExportCSV={onExportCSV}
-	              onGenerateWeeklyReport={onGenerateWeeklyReport}
-	              onRefreshData={onRefreshData}
-	              onOpenEvidence={openMetricEvidence}
-	              apiToken={apiToken}
-	            />
+              onGenerateWeeklyReport={onGenerateWeeklyReport}
+              onRefreshData={onRefreshData}
+              onOpenEvidence={openMetricEvidence}
+              onSelectPage={handleSelectPage}
+              apiToken={apiToken}
+            />
           )}
         </main>
         {evidenceMetric ? (
@@ -687,7 +702,9 @@ export function VkpiDashboard({
             }}
           />
         ) : null}
-        <FeedbackWidget apiToken={apiToken} activePage={activePage} userName={userName} />
+        {activePage !== 'dashboardPremium' && activePage !== 'command' ? (
+          <FeedbackWidget apiToken={apiToken} activePage={activePage} userName={userName} />
+        ) : null}
         <TaskCenter />
       </div>
     </div>

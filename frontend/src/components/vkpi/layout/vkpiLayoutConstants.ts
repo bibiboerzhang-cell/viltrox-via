@@ -16,6 +16,8 @@ export const rangeOptions: Array<{ key: VkpiRangeKey; label: string }> = [
 
 export const MANAGER_NAV_ITEMS: VkpiNavItem[] = [
   { key: 'dashboardPremium', label: '管理主控', icon: 'grid' },
+  { key: 'intelligenceCenter', label: '智能中心', icon: 'spark' },
+  { key: 'agents', label: 'Agents 战情室', icon: 'nodes' },
   { key: 'channels', label: 'KOL/账号管理', icon: 'grid' },
   { key: 'discover', label: '红人搜索', icon: 'discover' },
   { key: 'projects', label: '项目跟进', icon: 'folder' },
@@ -32,15 +34,12 @@ export const MANAGER_NAV_ITEMS: VkpiNavItem[] = [
 ];
 
 export const EMPLOYEE_NAV_ITEMS: VkpiNavItem[] = [
-  { key: 'dashboardPremium', label: '我的驾驶舱', icon: 'spark' },
   { key: 'command', label: '我的工作台', icon: 'grid' },
   { key: 'channels', label: '我的平台', icon: 'grid' },
   { key: 'discover', label: '搜索红人', icon: 'discover' },
   { key: 'projects', label: '我的项目', icon: 'folder' },
   { key: 'links', label: '我的短链', icon: 'link' },
   { key: 'attribution', label: '我的归因', icon: 'nodes' },
-  { key: 'productBattle', label: '产品作战', icon: 'spark' },
-  { key: 'dataAnalysis', label: '数据分析', icon: 'analytics' },
   { key: 'reports', label: '我的周报', icon: 'report' },
   { key: 'settings', label: '个人设置', icon: 'settings' },
 ];

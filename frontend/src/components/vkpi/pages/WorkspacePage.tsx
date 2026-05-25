@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import type {
   VkpiDashboardData,
   VkpiMetricEvidenceKey,
@@ -8,6 +8,11 @@ import type {
   VkpiStaffMember,
 } from '../vkpiTypes';
 import type { VkpiDashboardProps } from '../VkpiDashboard';
+import {
+  clearTaskBridgeFocus,
+  readTaskBridgeFocus,
+  type IntelligenceTaskFocusPayload,
+} from '../intelligence/intelligenceTaskDraft';
 
 const AttributionPage = lazy(() => import('./AttributionPage').then((module) => ({ default: module.AttributionPage })));
 const AgentsPage = lazy(() => import('./AgentsPage').then((module) => ({ default: module.AgentsPage })));
@@ -18,6 +23,7 @@ const CostsPage = lazy(() => import('./CostsPage').then((module) => ({ default: 
 const DataAnalysisPage = lazy(() => import('./DataAnalysisPage').then((module) => ({ default: module.DataAnalysisPage })));
 const DataQualityPage = lazy(() => import('./DataQualityPage').then((module) => ({ default: module.DataQualityPage })));
 const DiscoverPage = lazy(() => import('./DiscoverPage').then((module) => ({ default: module.DiscoverPage })));
+const IntelligenceCenterPage = lazy(() => import('./IntelligenceCenterPage').then((module) => ({ default: module.IntelligenceCenterPage })));
 const LinksPage = lazy(() => import('./LinksPage').then((module) => ({ default: module.LinksPage })));
 const ProductBattlePage = lazy(() => import('./ProductBattlePage').then((module) => ({ default: module.ProductBattlePage })));
 const ProjectsPage = lazy(() => import('./ProjectsPage').then((module) => ({ default: module.ProjectsPage })));
@@ -66,6 +72,7 @@ export interface WorkspacePageProps {
   onOpenEvidence: (metric: VkpiMetricEvidenceKey, metricValueId?: number | null) => void;
   onOpenKolProfile?: (project: VkpiProjectRow) => void | Promise<void>;
   onOpenStaffProfile?: (staffId: string, fallback?: Partial<VkpiStaffMember>) => void | Promise<void>;
+  onSelectPage?: (page: VkpiPageKey) => void;
   apiToken?: string;
 }
 
@@ -89,9 +96,52 @@ function WorkspaceLoadingFallback() {
   );
 }
 
+const workstreamLabels: Record<string, string> = {
+  recommendation_review: '推荐复核',
+  market_watch: '市场跟进',
+  evidence_review: '证据复核',
+  sync_review: '同步复核',
+  repair_review: '修复复核',
+  brief_followup: '简报跟进',
+};
+
+function WorkspaceTaskFocusBanner({ focus, onDismiss }: { focus: IntelligenceTaskFocusPayload; onDismiss: () => void }) {
+  return (
+    <section className={`vkpi-task-focus-banner is-${focus.priority}`} aria-live="polite">
+      <div>
+        <span>来自智能中心 · {workstreamLabels[focus.workstream] || focus.workstream}</span>
+        <h2>{focus.taskTitle}</h2>
+        <p>{focus.objective}</p>
+      </div>
+      <div className="vkpi-task-focus-banner__meta">
+        <span><b>入口</b>{focus.label}</span>
+        <span><b>意图</b>{focus.intent}</span>
+        <span><b>来源</b>{focus.sourceLabel}</span>
+      </div>
+      <div className="vkpi-task-focus-banner__actions">
+        <a className="vkpi-button" href="#intelligenceCenter">回智能中心</a>
+        <button className="vkpi-button vkpi-button--ghost" type="button" onClick={onDismiss}>关闭</button>
+      </div>
+    </section>
+  );
+}
+
 export function WorkspacePage(props: WorkspacePageProps) {
+  const [taskFocus, setTaskFocus] = useState<IntelligenceTaskFocusPayload | null>(null);
+
+  useEffect(() => {
+    const focus = readTaskBridgeFocus();
+    if (focus?.page === props.page) {
+      setTaskFocus(focus);
+      clearTaskBridgeFocus();
+      return;
+    }
+    setTaskFocus(null);
+  }, [props.page]);
+
   let page = <SettingsPage {...props} />;
   if (props.page === 'agents') page = <AgentsPage {...props} />;
+  if (props.page === 'intelligenceCenter') page = <IntelligenceCenterPage {...props} />;
   if (props.page === 'discover') page = <DiscoverPage {...props} />;
   if (props.page === 'projects') page = <ProjectsPage {...props} />;
   if (props.page === 'links') page = <LinksPage {...props} />;
@@ -105,5 +155,10 @@ export function WorkspacePage(props: WorkspacePageProps) {
   if (props.page === 'dataQuality') page = <DataQualityPage {...props} />;
   if (props.page === 'audit') page = <AuditPage {...props} />;
   if (props.page === 'reports') page = <ReportsPage {...props} />;
-  return <Suspense fallback={<WorkspaceLoadingFallback />}>{page}</Suspense>;
+  return (
+    <Suspense fallback={<WorkspaceLoadingFallback />}>
+      {taskFocus ? <WorkspaceTaskFocusBanner focus={taskFocus} onDismiss={() => setTaskFocus(null)} /> : null}
+      {page}
+    </Suspense>
+  );
 }
