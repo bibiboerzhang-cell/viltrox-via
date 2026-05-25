@@ -8,5 +8,6 @@ Current migrated slice:
 
 - `brain_acceptance.py`: pure P6.79 technical acceptance rules over P6.71-P6.78 runtime artifacts.
 - `evidence_agent.py`: pure P7.81 evidence-chain shaping and read-only agent report assembly.
+- `recommendation_agent.py`: pure P7.82 candidate scoring, traceability gates, and report assembly.
 - `today_signals.py`: pure daily signal digest and action-item builder from trend, market, and cached-comment rows.
 - `weekly_plan.py`: pure weekly action-plan builder from launch acceptance and today signal reports.
