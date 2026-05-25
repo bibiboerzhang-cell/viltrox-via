@@ -439,7 +439,7 @@ async def run_job(job_name: str, payload: dict[str, Any] | None = None, *, queue
     if name == "morning_sync":
         from app.domains import analytics
         from app.domains import channels
-        from app.services.vkpi import industry_snapshot_collector
+        from app.domains import industry as industry_domain
 
         channel_rows = channels.list_channels(staff={}, limit=300).get("channels") or []
         channel_results = []
@@ -456,7 +456,7 @@ async def run_job(job_name: str, payload: dict[str, Any] | None = None, *, queue
             for row in channel_rows:
                 channel_results.append(channels.sync_now(int(row["id"]), staff=payload.get("staff"), max_posts=channel_max_posts))
 
-        industry_sync = industry_snapshot_collector.sync_enabled_accounts(
+        industry_sync = industry_domain.sync_enabled_accounts(
             limit=int(payload.get("industry_account_limit") or 100),
             staff=payload.get("staff"),
         )

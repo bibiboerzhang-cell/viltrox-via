@@ -5,21 +5,18 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.api.routers.vkpi_industry_market import router as market_router
 from app.api.dependencies.perms import require_tab
+from app.domains import audience as audience_domain
+from app.domains import experiments as experiments_domain
+from app.domains import industry as industry_domain
 from app.domains import intelligence as intelligence_domain
 from app.domains import launch as launch_domain
+from app.domains import predictions as predictions_domain
 from app.domains.products import product_campaign_card
 from app.domains.recommendations import outcomes as outcome_collector
 from app.domains.recommendations import training_export as training_data_export
 from app.domains import trends as trends_domain
 from app.domains.market import brand_signal_detector, competitor_brain, content_brain
 from app.platform import llm_gateway
-from app.services.vkpi import (
-    ab_experiments,
-    audience_graph,
-    industry_data,
-    prediction_accuracy_feedback_v0,
-    prediction_calibration_v0,
-)
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-industry-automation"])
 router.include_router(market_router)
@@ -43,13 +40,13 @@ def industry_projects(
     active_only: bool = True,
     staff=Depends(require_tab("vkpi", "read")),
 ):
-    return industry_data.list_projects(limit=limit, active_only=active_only)
+    return industry_domain.list_projects(limit=limit, active_only=active_only)
 
 
 @router.post("/industry-data/projects")
 def industry_create_project(body: dict, staff=Depends(require_tab("vkpi", "write"))):
     try:
-        return industry_data.create_project(body, staff=staff)
+        return industry_domain.create_project(body, staff=staff)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -57,7 +54,7 @@ def industry_create_project(body: dict, staff=Depends(require_tab("vkpi", "write
 @router.get("/industry-data/projects/{project_id}")
 def industry_get_project(project_id: int, staff=Depends(require_tab("vkpi", "read"))):
     try:
-        return industry_data.get_project(project_id)
+        return industry_domain.get_project(project_id)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -65,18 +62,18 @@ def industry_get_project(project_id: int, staff=Depends(require_tab("vkpi", "rea
 @router.delete("/industry-data/projects/{project_id}")
 def industry_delete_project(project_id: int, staff=Depends(require_tab("vkpi", "write"))):
     _require_manager_staff(staff)
-    return industry_data.delete_project(project_id, staff=staff)
+    return industry_domain.delete_project(project_id, staff=staff)
 
 
 @router.get("/industry-data/projects/{project_id}/accounts")
 def industry_accounts(project_id: int, limit: int = Query(default=300, ge=1, le=1000), staff=Depends(require_tab("vkpi", "read"))):
-    return industry_data.list_accounts(project_id=project_id, limit=limit)
+    return industry_domain.list_accounts(project_id=project_id, limit=limit)
 
 
 @router.post("/industry-data/projects/{project_id}/accounts")
 def industry_add_account(project_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
     try:
-        return industry_data.add_account(project_id, body, staff=staff)
+        return industry_domain.add_account(project_id, body, staff=staff)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -84,13 +81,13 @@ def industry_add_account(project_id: int, body: dict, staff=Depends(require_tab(
 @router.post("/industry-data/projects/{project_id}/accounts/import")
 def industry_import_accounts(project_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
     items = body.get("items") if isinstance(body.get("items"), list) else []
-    return industry_data.import_accounts(project_id, items, staff=staff)
+    return industry_domain.import_accounts(project_id, items, staff=staff)
 
 
 @router.post("/industry-data/projects/{project_id}/apify/import")
 def industry_import_apify_history(project_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
     items = body.get("items") if isinstance(body.get("items"), list) else []
-    return industry_data.import_historical_dataset(
+    return industry_domain.import_historical_dataset(
         project_id,
         items,
         source_type=str(body.get("source_type") or "apify_json"),
@@ -106,7 +103,7 @@ def industry_get_account(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     try:
-        return industry_data.get_account(account_id, post_limit=limit)
+        return industry_domain.get_account(account_id, post_limit=limit)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -114,7 +111,7 @@ def industry_get_account(
 @router.patch("/industry-data/accounts/{account_id}")
 def industry_update_account(account_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
     try:
-        return industry_data.update_account(account_id, body, staff=staff)
+        return industry_domain.update_account(account_id, body, staff=staff)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -122,19 +119,19 @@ def industry_update_account(account_id: int, body: dict, staff=Depends(require_t
 @router.post("/industry-data/accounts/{account_id}/refresh")
 def industry_refresh_account(account_id: int, staff=Depends(require_tab("vkpi", "write"))):
     try:
-        return industry_data.refresh_account(account_id, staff=staff)
+        return industry_domain.refresh_account(account_id, staff=staff)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/industry-data/projects/{project_id}/cross-platform")
 def industry_cross_platform(project_id: int, staff=Depends(require_tab("vkpi", "read"))):
-    return industry_data.cross_platform(project_id)
+    return industry_domain.cross_platform(project_id)
 
 
 @router.get("/industry-data/projects/{project_id}/posts")
 def industry_posts(project_id: int, limit: int = Query(default=100, ge=1, le=500), staff=Depends(require_tab("vkpi", "read"))):
-    return industry_data.posts(project_id, limit=limit)
+    return industry_domain.posts(project_id, limit=limit)
 
 
 @router.get("/industry-data/content-brain/status")
@@ -277,7 +274,7 @@ def industry_prediction_calibration_v0(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     del staff
-    return prediction_calibration_v0.build_prediction_calibration_v0(
+    return predictions_domain.build_prediction_calibration_v0(
         prediction_json=prediction_json,
         truth_json=truth_json,
         top_n=top_n,
@@ -291,7 +288,7 @@ def industry_prediction_accuracy_feedback_v0(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     del staff
-    return prediction_accuracy_feedback_v0.build_prediction_accuracy_feedback_v0(
+    return predictions_domain.build_prediction_accuracy_feedback_v0(
         limit=limit,
         min_official_runs=min_official_runs,
     )
@@ -454,13 +451,13 @@ def brand_signal_action(signal_id: int, body: dict = Body(default_factory=dict),
 
 @router.get("/audience-graph/status")
 def audience_graph_status(staff=Depends(require_tab("vkpi", "read"))):
-    return audience_graph.status()
+    return audience_domain.status()
 
 
 @router.post("/audience-graph/estimate")
 def audience_graph_estimate(body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
     _require_manager_staff(staff)
-    return audience_graph.estimate(body or {})
+    return audience_domain.estimate(body or {})
 
 
 @router.get("/automation/outcomes/{recommendation_id}")
@@ -471,13 +468,13 @@ def automation_outcome(recommendation_id: int, staff=Depends(require_tab("vkpi",
 @router.get("/automation/experiments")
 def automation_experiments(limit: int = Query(default=100, ge=1, le=300), staff=Depends(require_tab("vkpi", "read"))):
     _require_manager_staff(staff)
-    return ab_experiments.list_experiments(limit=limit)
+    return experiments_domain.list_experiments(limit=limit)
 
 
 @router.post("/automation/experiments")
 def automation_create_experiment(body: dict, staff=Depends(require_tab("vkpi", "admin"))):
     try:
-        return ab_experiments.create_experiment(body, staff=staff)
+        return experiments_domain.create_experiment(body, staff=staff)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -485,7 +482,7 @@ def automation_create_experiment(body: dict, staff=Depends(require_tab("vkpi", "
 @router.patch("/automation/experiments/{experiment_id}/status")
 def automation_experiment_status(experiment_id: int, body: dict, staff=Depends(require_tab("vkpi", "admin"))):
     try:
-        return ab_experiments.update_status(experiment_id, str(body.get("status") or ""), staff=staff)
+        return experiments_domain.update_status(experiment_id, str(body.get("status") or ""), staff=staff)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -495,13 +492,13 @@ def automation_experiment_status(experiment_id: int, body: dict, staff=Depends(r
 @router.get("/automation/models")
 def automation_models(staff=Depends(require_tab("vkpi", "read"))):
     _require_manager_staff(staff)
-    return ab_experiments.models()
+    return experiments_domain.models()
 
 
 @router.post("/automation/models/{model_version}/activate")
 def automation_activate_model(model_version: str, staff=Depends(require_tab("vkpi", "admin"))):
     try:
-        return ab_experiments.activate_model(model_version, staff=staff)
+        return experiments_domain.activate_model(model_version, staff=staff)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

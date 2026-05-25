@@ -7,7 +7,7 @@ from typing import Any
 from app.db.connection import get_conn
 from app.services.cache import cache_get
 from app.services.vkpi.industry_crawlers import get_crawler
-from app.services.vkpi.industry_snapshot_kpis import calculate_kpis
+from app.domains.industry.snapshot_kpis import calculate_kpis
 from app.domains.kol.pool_common import (
     ENRICHABLE_PLATFORMS,
     KOL_POOL_LIST_COLUMNS,
