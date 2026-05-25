@@ -4,34 +4,33 @@ import { frontendBuildInfo, shortBuildSha } from '../../../lib/buildInfo';
 import {
   getCommentAlertSettings,
   getControlStatus,
-  getStaffInviteCapabilities,
   getRbacStatus,
-  getSyncOverview,
   listBudgetSettings,
   listFeatureFlags,
   listPlatformCrawlSettings,
-  listProductCatalog,
   listProviderStatuses,
   probeProviderStatus,
   runVkpiAutomation,
-  triggerSync,
   updateBudgetSettings,
   updateCommentAlertSettings,
   updateFeatureFlags,
   updatePlatformCrawlSettings,
+} from '../../../services/vkpi/settings-api';
+import {
+  getStaffInviteCapabilities,
   updateStaffPermissions,
   createStaffActivationLink,
   createExistingStaffActivationLink,
   createStaffPasswordResetLink,
-} from '../../../services/vkpi.ui-api';
-import type { VkpiStaffActivationLinkResponse, VkpiStaffInviteCapabilities, VkpiStaffPasswordResetLinkResponse } from '../../../services/vkpi.ui-api';
-import type { VkpiSyncOverview } from '../../../services/vkpi/sync-api';
+} from '../../../services/vkpi/staff-api';
+import type { VkpiStaffActivationLinkResponse, VkpiStaffInviteCapabilities, VkpiStaffPasswordResetLinkResponse } from '../../../services/vkpi/staff-api';
+import { listProductCatalog } from '../../../services/vkpi/product-api';
+import { getSyncOverview, triggerSync, type VkpiSyncOverview } from '../../../services/vkpi/sync-api';
 import type {
   VkpiDashboardData,
   VkpiProductCatalogItem,
   VkpiStaffMember,
 } from '../vkpiTypes';
-import { CardHeader } from '../shared/CardHeader';
 import { InfoBlock } from '../shared/InfoBlock';
 import { StaffTable } from '../tables/StaffTable';
 import { PageShell } from './PageShell';
@@ -43,11 +42,33 @@ import {
 import { StaffPermissionDrawer } from './settings/StaffPermissionDrawer';
 import {
   BudgetSettingsTable,
-  CommentAlertThresholdCard,
-  FeatureFlagsPanel,
-  PlatformCrawlPanel,
 } from './settings/SettingsControlPanels';
 import { permissionsForTemplate, vkpiPermissionFromTemplate, type StaffPermissionMap } from './settings/staffPermissionTemplates';
+import { SettingsRulesPanel, type SettingsRulesTab } from './settings/SettingsRulesPanel';
+import {
+  EmployeeSettingsView,
+  SettingsApiSkeletonGrid,
+  SettingsLoadingStrip,
+  SettingsModule,
+  SettingsProviderGrid,
+  type SettingsModuleKey,
+} from './settings/SettingsPage.fragments';
+import {
+  boolLabel,
+  boolValue,
+  confirmHighRiskSettingChange,
+  currentFrontendAsset,
+  formNumber,
+  moneyLabel,
+  numberValue,
+  percentLabel,
+  platformBlockedReason,
+  rowEnabled,
+  settingChangeLine,
+  summarizeSettingChange,
+  timeLabel,
+} from '../../../domains/settings';
+import type { BackendBuildInfo } from '../../../domains/settings';
 
 interface SettingsPageProps {
   data: VkpiDashboardData;
@@ -60,56 +81,12 @@ interface SettingsPageProps {
   onRefreshData?: () => void | Promise<void>;
 }
 
-interface BackendBuildInfo {
-  git_sha?: string;
-  git_short_sha?: string;
-  git_branch?: string;
-  build_time?: string;
-  client_matches_server?: boolean;
-  client_build_source?: string;
-}
-
-function SettingsApiSkeletonGrid() {
-  return (
-    <div className="vkpi-settings-api-grid" aria-hidden="true">
-      {['apify', 'openai', 'anthropic', 'google', 'resend', 'storage'].map((item) => (
-        <article className="vkpi-settings-api-card vkpi-settings-api-card--skeleton" key={item}>
-          <header>
-            <span className="vkpi-skeleton vkpi-skeleton-line is-medium" />
-            <span className="vkpi-skeleton vkpi-skeleton-pill" />
-          </header>
-          <span className="vkpi-skeleton vkpi-skeleton-line is-long" />
-          <span className="vkpi-skeleton vkpi-skeleton-line is-short" />
-        </article>
-      ))}
-    </div>
-  );
-}
-
-function SettingsLoadingStrip({ settingsLoading, catalogLoading }: { settingsLoading: boolean; catalogLoading: boolean }) {
-  if (!settingsLoading && !catalogLoading) return null;
-  const label = settingsLoading && catalogLoading
-    ? '正在读取系统状态和 SKU 目录'
-    : settingsLoading
-      ? '正在读取 API / 权限 / 规则状态'
-      : '正在读取 SKU 目录';
-  return (
-    <div className="vkpi-settings-loading-strip" aria-live="polite">
-      <div>
-        <strong>{label}</strong>
-        <span>{settingsLoading ? '系统配置' : '系统配置已就绪'} · {catalogLoading ? '产品目录' : '产品目录已就绪'}</span>
-      </div>
-      <div className="vkpi-settings-loading-strip__bar" aria-hidden="true"><span /></div>
-    </div>
-  );
-}
-
 export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsertProductCost, onRefreshData }: SettingsPageProps) {
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
   const [role, setRole] = useState('employee');
   const [permission, setPermission] = useState<'none' | 'read' | 'write'>('write');
-  const [invitePermissionTemplate, setInvitePermissionTemplate] = useState('kol_outreach');
+  const [invitePermissionTemplate, setInvitePermissionTemplate] = useState('employee_workspace');
   const [costSku, setCostSku] = useState('');
   const [costProductName, setCostProductName] = useState('');
   const [unitCostUsd, setUnitCostUsd] = useState('');
@@ -134,7 +111,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
   const [settingsError, setSettingsError] = useState('');
   const [settingsLoading, setSettingsLoading] = useState(false);
   const [expandedSection, setExpandedSection] = useState<'status' | 'sku' | 'staff' | 'funds' | 'rules' | null>('status');
-  const [rulesTab, setRulesTab] = useState<'core' | 'platform' | 'alerts' | 'sync'>('platform');
+  const [rulesTab, setRulesTab] = useState<SettingsRulesTab>('platform');
   const [productSearch, setProductSearch] = useState('');
   const [selectedCatalogProduct, setSelectedCatalogProduct] = useState<VkpiProductCatalogItem | null>(null);
   const [inviteCapabilities, setInviteCapabilities] = useState<VkpiStaffInviteCapabilities | null>(null);
@@ -146,20 +123,6 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
   const [versionCheckedAt, setVersionCheckedAt] = useState('');
   const [frontendAsset, setFrontendAsset] = useState('');
   const isManager = viewMode === 'manager';
-
-  const boolValue = (value: unknown, fallback = false) => {
-    if (value === undefined || value === null) return fallback;
-    if (typeof value === 'string') return ['1', 'true', 'yes', 'on', 'enabled'].includes(value.toLowerCase());
-    return Boolean(value);
-  };
-
-  const currentFrontendAsset = () => {
-    if (typeof document === 'undefined') return '';
-    const src = Array.from(document.scripts)
-      .map((script) => script.src)
-      .find((srcValue) => srcValue.includes('/assets/app-'));
-    return src ? src.split('/').pop() || src : '';
-  };
 
   const reloadVersionStatus = async () => {
     setFrontendAsset(currentFrontendAsset());
@@ -314,53 +277,6 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
     }
   };
 
-  const rowEnabled = (row: Record<string, unknown>, key = 'enabled') => {
-    const raw = row[key];
-    return raw === true || raw === 1 || raw === '1' || String(raw).toLowerCase() === 'true';
-  };
-  const numberValue = (value: unknown, fallback = 0) => {
-    const next = Number(value ?? fallback);
-    return Number.isFinite(next) ? next : fallback;
-  };
-  const formNumber = (form: FormData, key: string, fallback = 0) => {
-    const raw = form.get(key);
-    return numberValue(raw === null ? fallback : String(raw), fallback);
-  };
-  const platformBlockedReason = (row: Record<string, unknown>) => (
-    rowEnabled(row, 'crawl_enabled') ? '已开启' : '已关闭'
-  );
-  const boolLabel = (value: boolean) => (value ? '开启' : '关闭');
-  const moneyLabel = (value: unknown) => `$${numberValue(value).toLocaleString('en-US')}`;
-  const percentLabel = (value: unknown) => {
-    const next = numberValue(value, 0);
-    return `${(next * 100).toFixed(next > 0 && next < 0.01 ? 2 : 1)}%`;
-  };
-  const timeLabel = (value: unknown) => {
-    const raw = String(value || '').trim();
-    if (!raw || raw === 'unknown') return '-';
-    const date = new Date(raw);
-    if (Number.isNaN(date.getTime())) return raw;
-    return new Intl.DateTimeFormat('zh-CN', {
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
-    }).format(date);
-  };
-  const settingChangeLine = (label: string, before: string | number, after: string | number) => (
-    `${label}: ${before} -> ${after}`
-  );
-  const confirmHighRiskSettingChange = (title: string, lines: string[]) => {
-    void title;
-    void lines;
-    return true;
-  };
-  const summarizeSettingChange = (prefix: string, lines: string[]) => {
-    const changed = lines.filter((line) => line.includes('->')).slice(0, 4);
-    return `${prefix}: ${changed.join('；') || '已写入'}`;
-  };
   const controlSummary = (controlStatus.summary || {}) as Record<string, unknown>;
   const syncPolicy = (controlStatus.sync_policy || {}) as Record<string, unknown>;
   const youtubeKpi = (controlStatus.youtube_kpi || {}) as Record<string, unknown>;
@@ -687,52 +603,23 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
   const canInviteStaff = inviteMode === 'email'
     ? Boolean(onInviteStaff)
     : Boolean(apiToken && (inviteCapabilities?.manual_activation_link_available ?? true));
-  const moduleTitle = {
-    status: '当前状态',
-    sku: 'SKU 录入',
-    staff: '账号授权',
-    funds: '资金管理',
-    rules: '规则安排',
-  } as const;
   const renderSettingsModule = (
-    key: keyof typeof moduleTitle,
+    key: SettingsModuleKey,
     subtitle: string,
     children: React.ReactNode,
-  ) => {
-    const open = expandedSection === key;
-    return (
-      <section className={`vkpi-settings-module ${open ? 'is-open' : 'is-collapsed'}`} key={key}>
-        <button className="vkpi-settings-module__head" type="button" onClick={() => setExpandedSection(open ? null : key)}>
-          <span>{moduleTitle[key]}</span>
-          <em>{subtitle}</em>
-          <strong>{open ? '收起' : '展开'}</strong>
-        </button>
-        {open ? <div className="vkpi-settings-module__body">{children}</div> : null}
-      </section>
-    );
-  };
+  ) => (
+    <SettingsModule
+      moduleKey={key}
+      open={expandedSection === key}
+      subtitle={subtitle}
+      onToggle={() => setExpandedSection(expandedSection === key ? null : key)}
+    >
+      {children}
+    </SettingsModule>
+  );
 
   if (!isManager) {
-    return (
-      <PageShell title="个人设置">
-        {message ? <div className="vkpi-inline-message">{message}</div> : null}
-        {settingsError ? <div className="vkpi-inline-message is-error">{settingsError}</div> : null}
-        <section className="vkpi-card-grid vkpi-card-grid--forms">
-          <section className="vkpi-card vkpi-action-card">
-            <CardHeader title="当前账号" />
-            <InfoBlock label="界面" value="员工视角" />
-            <InfoBlock label="数据范围" value="本人项目 / 本人短链 / 本人归因" />
-            <InfoBlock label="头像" value="左下角上传真人头像" />
-          </section>
-          <section className="vkpi-card vkpi-action-card">
-            <CardHeader title="不可见项目" />
-            <InfoBlock label="SKU 成本" value="管理层可见" />
-            <InfoBlock label="员工授权" value="管理层可见" />
-            <InfoBlock label="API Key" value="管理层可见" />
-          </section>
-        </section>
-      </PageShell>
-    );
+    return <EmployeeSettingsView message={message} settingsError={settingsError} />;
   }
 
   return (
@@ -804,24 +691,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
             {settingsLoading && !providers.length ? (
               <SettingsApiSkeletonGrid />
             ) : (
-              <div className="vkpi-settings-api-grid">
-                {providers.map((row) => {
-                  const configured = boolValue(row.configured, false);
-                  const ok = boolValue(row.ok, false);
-                  const keyMask = String(row.key_mask || '').trim();
-                  const status = String(row.latest_status || row.status || (ok ? 'healthy' : 'not_configured'));
-                  return (
-                    <article className={`vkpi-settings-api-card ${configured ? 'is-configured' : 'is-empty'}`} key={String(row.provider || row.label)}>
-                      <header>
-                        <strong>{String(row.label || row.provider || '-')}</strong>
-                        <span>{configured ? '已配置' : '未配置'}</span>
-                      </header>
-                      <p>{keyMask || '未读取到 key'}</p>
-                      <em>{status}</em>
-                    </article>
-                  );
-                })}
-              </div>
+              <SettingsProviderGrid providers={providers} />
             )}
           </>
         ))}
@@ -893,54 +763,25 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
           />
         ))}
         {renderSettingsModule('rules', '功能 / 抓取 / 告警 / 同步', (
-          <section className="vkpi-settings-rules">
-            <div className="vkpi-settings-tabs">
-              {[
-                ['core', '核心功能'],
-                ['platform', '平台抓取'],
-                ['alerts', '告警规则'],
-                ['sync', '同步策略'],
-              ].map(([key, label]) => (
-                <button className={rulesTab === key ? 'is-active' : ''} type="button" key={key} onClick={() => setRulesTab(key as typeof rulesTab)}>{label}</button>
-              ))}
-            </div>
-            {rulesTab === 'core' ? (
-              <FeatureFlagsPanel
-                featureFlags={featureFlags}
-                busy={busy}
-                apiToken={apiToken}
-                rowEnabled={rowEnabled}
-                onRunMorningSync={() => void runMorningSync()}
-                onToggleFeatureFlag={(row) => void toggleFeatureFlag(row)}
-              />
-            ) : null}
-            {rulesTab === 'platform' ? (
-              <PlatformCrawlPanel
-                platformCrawl={platformCrawl}
-                busy={busy}
-                rowEnabled={rowEnabled}
-                onTogglePlatformCrawl={(row) => void togglePlatformCrawl(row)}
-              />
-            ) : null}
-            {rulesTab === 'alerts' ? (
-              <CommentAlertThresholdCard
-                key={JSON.stringify(commentAlertSettings)}
-                settings={commentAlertSettings}
-                busy={busy}
-                onSave={(event) => void saveCommentAlertSettings(event)}
-              />
-            ) : null}
-            {rulesTab === 'sync' ? (
-              <section className="vkpi-card vkpi-action-card">
-                <CardHeader title="同步策略" />
-                <InfoBlock label="每日同步" value={`${syncTime} ${String(syncPolicy.timezone || 'Asia/Shanghai')}`} />
-                <InfoBlock label="Guard" value={syncGuardText} />
-                <InfoBlock label="失败率阈值" value={percentLabel(dailySync?.failure_rate_threshold ?? 0.1)} />
-                <InfoBlock label="每人候选" value={`${String(syncPolicy.candidate_limit_per_staff || 100)} 条`} />
-                <button className="vkpi-button vkpi-button--primary" type="button" disabled={busy || !apiToken} onClick={() => void runMorningSync()}>手动同步</button>
-              </section>
-            ) : null}
-          </section>
+          <SettingsRulesPanel
+            apiToken={apiToken}
+            busy={busy}
+            candidateLimitPerStaff={String(syncPolicy.candidate_limit_per_staff || 100)}
+            commentAlertSettings={commentAlertSettings}
+            failureRateThresholdLabel={percentLabel(dailySync?.failure_rate_threshold ?? 0.1)}
+            featureFlags={featureFlags}
+            platformCrawl={platformCrawl}
+            rowEnabled={rowEnabled}
+            rulesTab={rulesTab}
+            syncGuardText={syncGuardText}
+            syncTime={syncTime}
+            syncTimezone={String(syncPolicy.timezone || 'Asia/Shanghai')}
+            onRunMorningSync={() => void runMorningSync()}
+            onRulesTabChange={setRulesTab}
+            onSaveCommentAlertSettings={(event) => void saveCommentAlertSettings(event)}
+            onToggleFeatureFlag={(row) => void toggleFeatureFlag(row)}
+            onTogglePlatformCrawl={(row) => void togglePlatformCrawl(row)}
+          />
         ))}
       </div>
       {selectedStaffForPermissions ? (

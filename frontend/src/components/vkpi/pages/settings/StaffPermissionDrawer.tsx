@@ -3,7 +3,7 @@ import type { VkpiStaffActivationLinkResponse, VkpiStaffPasswordResetLinkRespons
 import type { VkpiStaffMember } from "../../vkpiTypes";
 import { Avatar } from "../../shared/Avatar";
 import { InfoBlock } from "../../shared/InfoBlock";
-import { STAFF_PERMISSION_MODULES, STAFF_PERMISSION_TEMPLATES, type StaffPermissionMap } from "./staffPermissionTemplates";
+import { STAFF_ASSIGNABLE_PERMISSION_TEMPLATES, STAFF_PERMISSION_MODULES, STAFF_PERMISSION_TEMPLATES, type StaffPermissionMap } from "./staffPermissionTemplates";
 
 const LEVELS: Array<{ key: VkpiPermissionLevel; label: string }> = [
   { key: "none", label: "无" },
@@ -132,7 +132,7 @@ export function StaffPermissionDrawer({
           <span>先套模板，再细调模块权限</span>
         </div>
         <div className="vkpi-staff-template-row">
-          {STAFF_PERMISSION_TEMPLATES.map((template) => (
+          {STAFF_ASSIGNABLE_PERMISSION_TEMPLATES.map((template) => (
             <button type="button" key={template.key} onClick={() => applyTemplate(template.key)}>{template.label}</button>
           ))}
         </div>
