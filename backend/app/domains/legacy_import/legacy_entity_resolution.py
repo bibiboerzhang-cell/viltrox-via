@@ -5,7 +5,7 @@ import hashlib
 import json
 import uuid
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from app.core.logging import get_logger
@@ -33,6 +33,10 @@ from app.domains.legacy_import.legacy_entity_resolution_format import (
 
 
 logger = get_logger(__name__)
+
+
+def _utcnow_naive() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _row_to_dict(row: Any) -> dict[str, Any]:
@@ -125,7 +129,7 @@ def resolve_batch(batch_uid: str, *, reset: bool = True) -> dict[str, Any]:
     ensure_legacy_staging_schema()
     conn = get_conn()
     import_batch_id = _fetch_batch_id(batch_uid)
-    run_uid = f"p2c_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:10]}"
+    run_uid = f"p2c_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:10]}"
     try:
         if reset:
             conn.execute("DELETE FROM vkpi_legacy_kol_entity_refs WHERE import_batch_id=?", (import_batch_id,))
@@ -185,7 +189,7 @@ def resolve_batch(batch_uid: str, *, reset: bool = True) -> dict[str, Any]:
                 summary["review_count"],
                 summary["blocked_count"],
                 json_dumps(metadata),
-                datetime.utcnow().isoformat(timespec="seconds"),
+                _utcnow_naive().isoformat(timespec="seconds"),
                 run_id,
             ),
         )
@@ -422,7 +426,7 @@ def decide_resolution(
                 _text(reason),
                 _text(note),
                 _text(actor) or "cli",
-                datetime.utcnow().isoformat(timespec="seconds"),
+                _utcnow_naive().isoformat(timespec="seconds"),
                 DECISION_STATUS[action],
                 int(entity["id"]),
             ),
@@ -511,7 +515,7 @@ def bulk_decide(
                 _text(reason),
                 _text(note),
                 decided_by,
-                datetime.utcnow().isoformat(timespec="seconds"),
+                _utcnow_naive().isoformat(timespec="seconds"),
                 DECISION_STATUS[action],
                 import_batch_id,
                 label,

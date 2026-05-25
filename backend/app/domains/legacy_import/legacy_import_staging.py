@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +24,10 @@ from app.domains.legacy_import.legacy_import_staging_schema import (
 
 class FileAlreadyImported(RuntimeError):
     """Raised when an active staging batch already owns the same file hash."""
+
+
+def _utcnow_naive() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def ensure_legacy_staging_schema() -> None:
@@ -93,7 +97,7 @@ def stage_legacy_file(
     source = Path(path).expanduser()
     source_stat = source.stat()
     source_hash = file_sha256(source)
-    batch_uid = f"vkpi_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:12]}"
+    batch_uid = f"vkpi_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:12]}"
     records, skipped_sheets = _prepare_records(source, sheet_name=sheet_name, max_rows=max_rows)
     pipeline_counts = Counter(record.pipeline for record in records)
     total_rows = sum(pipeline_counts.values()) + sum(int(item.get("rows") or 0) for item in skipped_sheets)
@@ -130,7 +134,7 @@ def stage_legacy_file(
                 int(total_rows),
                 True,
                 json_dumps(metadata),
-                (datetime.utcnow() + timedelta(minutes=30)).isoformat(timespec="seconds"),
+                (_utcnow_naive() + timedelta(minutes=30)).isoformat(timespec="seconds"),
                 "manual_30m",
             ),
         ).fetchone()
@@ -169,8 +173,8 @@ def stage_legacy_file(
                 int(sum(pipeline_counts.values())),
                 int(review_queue_rows),
                 json_dumps(metadata),
-                datetime.utcnow().isoformat(timespec="seconds"),
-                datetime.utcnow().isoformat(timespec="seconds"),
+                _utcnow_naive().isoformat(timespec="seconds"),
+                _utcnow_naive().isoformat(timespec="seconds"),
                 import_batch_id,
             ),
         )
@@ -301,8 +305,8 @@ def rollback_staging_batch(batch_uid: str) -> dict[str, Any]:
             """,
             (
                 deleted_rows,
-                datetime.utcnow().isoformat(timespec="seconds"),
-                datetime.utcnow().isoformat(timespec="seconds"),
+                _utcnow_naive().isoformat(timespec="seconds"),
+                _utcnow_naive().isoformat(timespec="seconds"),
                 import_batch_id,
             ),
         )

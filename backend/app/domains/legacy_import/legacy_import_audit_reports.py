@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import csv
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +29,10 @@ CSV_FIELDS = [
 ]
 
 
+def _utcnow() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def markdown_report(result: dict[str, Any]) -> str:
     source = result.get("source") or {}
     summary = result.get("summary") or {}
@@ -40,7 +44,7 @@ def markdown_report(result: dict[str, Any]) -> str:
         f"- Source: `{source.get('path', '')}`",
         f"- Filename: `{source.get('filename', '')}`",
         f"- Sheet filter: `{source.get('sheet') or 'all'}`",
-        f"- Generated at: `{datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')}`",
+        f"- Generated at: `{_utcnow()}`",
         "",
         "## Summary",
         "",
@@ -88,7 +92,7 @@ def markdown_report(result: dict[str, Any]) -> str:
 def write_reports(result: dict[str, Any], output_dir: str | Path, *, prefix: str | None = None) -> dict[str, str]:
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    date_prefix = prefix or datetime.utcnow().strftime("%Y-%m-%d")
+    date_prefix = prefix or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     md_path = out_dir / f"{date_prefix}-vkpi-legacy-excel-audit.md"
     csv_path = out_dir / f"{date_prefix}-vkpi-legacy-excel-audit.csv"
     md_path.write_text(markdown_report(result), encoding="utf-8")
