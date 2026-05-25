@@ -1,6 +1,3 @@
-"""
-services/ai/analyzers/claude_vision.py — Claude Vision 视频帧 + 图片批量分析
-"""
 from __future__ import annotations
 
 import base64
@@ -10,17 +7,9 @@ import re
 import subprocess
 import tempfile
 import asyncio
-import urllib.request
-from typing import Dict, List, Any
+from typing import Any
 from pathlib import Path
 
-# ── 第三方库 ──
-try:
-    import anthropic
-except ImportError:
-    pass
-
-# ── 业务依赖 ──
 from app.services.ai.clients.claude_client import ANTHROPIC_AVAILABLE
 from app.services.ai.clients.gemini_client import GEMINI_AVAILABLE, gemini_client as _gemini_client
 
@@ -41,154 +30,23 @@ from app.services.ai.analyzers.claude_text import analyze_text_content
 from app.services.ai.retry import call_ai_with_retry
 from app.services.audit.similarity import parse_gear_from_caption
 from app.services.media.frames import extract_video_frames_with_ts
+from app.services.ai.analyzers.claude_vision_client import _build_anthropic_client
+from app.services.ai.analyzers.claude_vision_context import build_improvement_context
+from app.services.ai.analyzers.claude_vision_defaults import initial_smart_result, initial_video_result
+from app.services.ai.analyzers.claude_vision_images import _analyze_images_batch
+from app.services.ai.analyzers.claude_vision_media import _download_direct_video_url, fetch_all_images_from_post
+from app.services.ai.analyzers.claude_vision_merge import _merge_analysis
 
 FRAMES_DIR = Path("uploads")
 logger = get_logger(__name__)
 
 
-def _download_direct_video_url(video_url: str, output_dir: str) -> dict:
-    """Download a platform-provided direct MP4/play URL for Gemini/Claude analysis."""
-    result = {"success": False, "path": None, "duration": 0, "error": None, "platform": "direct"}
-    clean_url = str(video_url or "").strip()
-    if not clean_url.startswith(("http://", "https://")):
-        result["error"] = "direct video url missing"
-        return result
-    try:
-        out_path = Path(output_dir) / "direct_video.mp4"
-        req = urllib.request.Request(
-            clean_url,
-            headers={
-                "User-Agent": USER_AGENT,
-                "Referer": "https://www.douyin.com/",
-            },
-        )
-        max_bytes = 500 * 1024 * 1024
-        read_bytes = 0
-        with urllib.request.urlopen(req, timeout=60) as resp, open(out_path, "wb") as fh:
-            while True:
-                chunk = resp.read(1024 * 1024)
-                if not chunk:
-                    break
-                read_bytes += len(chunk)
-                if read_bytes > max_bytes:
-                    result["error"] = "direct video exceeds 500MB"
-                    return result
-                fh.write(chunk)
-        if not out_path.exists() or out_path.stat().st_size <= 0:
-            result["error"] = "direct video download produced empty file"
-            return result
-        probe = subprocess.run(
-            ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", str(out_path)],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        try:
-            result["duration"] = float(json.loads(probe.stdout)["format"]["duration"])
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-            logger.debug("direct video ffprobe duration parse failed: %s", exc)
-        result["success"] = True
-        result["path"] = str(out_path)
-        return result
-    except Exception as exc:
-        result["error"] = f"direct video download failed: {str(exc)[:200]}"
-        return result
-
-
-def _build_anthropic_client():
-    if not ANTHROPIC_AVAILABLE or not ANTHROPIC_API_KEY:
-        return None
-    return anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-# build_improvement_context
-def build_improvement_context(creator_handle: str, current_scores: dict, content_genre: str) -> str:
-    """
-    Build rich context for improvement suggestions:
-    - Creator's historical weak areas
-    - Current video score breakdown
-    - Video-type specific weights
-    - Score gap analysis
-    """
-    # ── Video type specific priorities ──
-    VIDEO_TYPE_FOCUS = {
-        "review":     {"hook": "钩子（前15秒必须抓住观众）", "storytelling": "叙事结构（问题->测试->结论）", "viltrox_branding": "品牌露出"},
-        "tutorial":   {"hook": "开场吸引力", "storytelling": "步骤清晰度", "editing": "剪辑节奏（不能拖沓）"},
-        "cinematic":  {"composition": "构图与美学", "color_grade": "调色风格", "lighting": "打光层次"},
-        "vlog":       {"hook": "前5秒留存率", "storytelling": "故事感", "editing": "剪辑流畅度"},
-        "comparison": {"viltrox_branding": "品牌公平曝光", "storytelling": "对比逻辑清晰", "hook": "对比结论吸引力"},
-        "unboxing":   {"viltrox_branding": "产品特写质量", "composition": "拍摄角度", "lighting": "产品打光"},
-        "portrait":   {"composition": "构图与人像美感", "lighting": "人像打光", "color_grade": "肤色调色"},
-        "bts":        {"storytelling": "幕后故事感", "editing": "节奏与氛围", "viltrox_branding": "器材使用展示"},
-    }
-    genre_key = (content_genre or "").lower().split("/")[0].strip()
-    type_focus = VIDEO_TYPE_FOCUS.get(genre_key, {})
-
-    # ── Creator history context ──
-    history_ctx = ""
-    if creator_handle:
-        profile = get_creator_profile(creator_handle)
-        weak = profile.get("weak_areas", [])
-        avg  = profile.get("avg_scores", {})
-        count = profile.get("submission_count", 0)
-        if count >= 2 and weak:
-            history_ctx = f"\n创作者历史弱项（{count}次投稿平均）: {', '.join(weak)}"
-            if avg:
-                low_items = {k: v for k, v in avg.items() if 0 < v < 7.5}
-                if low_items:
-                    history_ctx += f"\n  具体分数: " + ", ".join(f"{k}={v}" for k,v in sorted(low_items.items(), key=lambda x: x[1]))
-
-    # ── Current video score gap analysis ──
-    score_ctx = ""
-    if current_scores:
-        low_scores = {k: v for k, v in current_scores.items() if isinstance(v, (int, float)) and 0 < v < 8}
-        if low_scores:
-            sorted_low = sorted(low_scores.items(), key=lambda x: x[1])
-            score_ctx = "\n本次视频评分明细（低于8分项目）: " + ", ".join(f"{k}={v}" for k,v in sorted_low)
-
-    # ── Type-specific instruction ──
-    type_ctx = ""
-    if type_focus:
-        type_ctx = f"\n视频类型「{genre_key}」最关键维度: " + ", ".join(f"{v}" for v in type_focus.values())
-
-    return f"""
-=== 改进建议上下文 ===
-视频类型: {content_genre or '未知'}{type_ctx}{score_ctx}{history_ctx}
-
-改进建议要求（严格执行）:
-1. 只针对评分低于8分的维度给建议，不要重复说好的地方
-2. 每条建议必须引用具体时间点（如「02:30处」）或具体画面描述
-3. 说清楚「问题是什么」再给「解决方案」，不是泛泛的建议
-4. 根据视频类型决定优先级：{genre_key}类视频最重要的是{list(type_focus.values())[0] if type_focus else '整体质量'}
-5. 改进建议必须可执行，避免「增加品牌露出」「加强叙事」这种空话
-6. 预期效果要量化（如「叙事分可从6->8」）
-7. 控制在4-6条建议，宁少勿滥
-
-改进建议格式（JSON，全中文）:
-{{"area": "叙事", "priority": "high", "timestamp": "02:30", "problem": "直接跳入产品特写，缺少使用场景引入", "suggestion": "在开头30秒加入手动镜头失焦的痛点场景，用挫败感引入NexusFocus的解决方案", "expected_improvement": "叙事分6->8，前30秒留存率预计+15%"}}
-"""
-
-
-# analyze_video_with_claude
 def analyze_video_with_claude(video_path: str, filename: str, creator_handle: str = "") -> dict:
     """
     Extract frames from video and use Claude Vision to detect Viltrox brand.
     Returns structured analysis result that feeds into scoring.
     """
-    result = {
-        "analyzed": False,
-        "frames_checked": 0,
-        "viltrox_detected": False,
-        "confidence": "none",
-        "logo_visible": False,
-        "product_visible": False,
-        "brand_elements": [],
-        "products_detected": [],
-        "content_types": [],
-        "camera_gear_present": False,
-        "notes": "",
-        "brand_score_bonus": 0,
-        "method": "none",
-        "error": None,
-    }
+    result = initial_video_result()
 
     if not video_path or not os.path.exists(video_path):
         result["error"] = "Video file not found on disk"
@@ -532,183 +390,6 @@ def analyze_video_with_claude(video_path: str, filename: str, creator_handle: st
         logger.exception("vision analysis failed: %s", e)
 
     return result
-# ──────────────────────────────────────────────
-
-
-# _analyze_images_batch
-def _analyze_images_batch(images_b64: list, title: str, platform: str, profile_hint: str = "") -> dict:
-    """Analyze a batch of images (carousel/gallery) with Claude Vision.
-    Each image gets individual composition + gear analysis."""
-    if not images_b64 or not ANTHROPIC_AVAILABLE or not ANTHROPIC_API_KEY:
-        return {}
-    try:
-        client = _build_anthropic_client()
-        if client is None:
-            return {}
-        content = []
-        for i, b64 in enumerate(images_b64[:10]):
-            content.append({"type": "image", "source": {
-                "type": "base64", "media_type": "image/jpeg", "data": b64
-            }})
-            content.append({"type": "text", "text": f"[图片 {i+1}/{len(images_b64)}]"})
-
-        # Build per-image analysis request
-        per_image_schema = ""
-        for i in range(min(len(images_b64), 10)):
-            per_image_schema += (
-                f'{{"image_index":{i+1},'
-                f'"composition":"构图描述（中文，e.g.三分构图/中心对称/对角线）",'
-                f'"lighting":"布光描述（中文，e.g.自然光/单点闪光/影棚三点光）",'
-                f'"camera_body":"机身型号或null",'
-                f'"lens":"镜头型号或null",'
-                f'"viltrox_visible":true/false,'
-                f'"viltrox_product":"Viltrox产品名或null",'
-                f'"key_elements":"画面主要元素（中文）",'
-                f'"quality_note":"画质和美学亮点（中文）"}},'
-            )
-
-        content.append({"type": "text", "text": (
-            f"这是来自 {platform} 的 {len(images_b64)} 张图片，标题: \"{title}\"。\n"
-            + profile_hint + "\n\n"
-            "你是 Viltrox 品牌情报分析师。请逐张分析每张图片的构图和器材。\n\n"
-            "重点识别:\n"
-            "- VILTROX文字/唯卓仕/橙色圆环/VCM/APO/LAB/Pro/EVO/AIR/EPIC/LUNA/RAZE\n"
-            "- 相机机身logo和外形\n"
-            "- 竞品镜头品牌 (Sigma/Tamron/Zeiss/Sony GM/Canon L等)\n"
-            "- 闪光灯/灯光 (Godox/Profoto/Aputure)\n"
-            "- 配件 (SmallRig/Tilta/DJI云台/Atomos监视器)\n\n"
-            "返回 JSON (只返回JSON，不要markdown):\n{"
-            '"viltrox_detected":true/false,'
-            '"confidence":"high/medium/low/none",'
-            '"logo_visible":true/false,'
-            '"product_visible":true/false,'
-            '"camera_gear_present":true/false,'
-            '"camera_body":"型号或null",'
-            '"camera_brand":"Sony/Canon/Nikon/Fujifilm/ARRI/Blackmagic/RED/DJI/Other/null",'
-            '"viltrox_lens":"如 AF 85mm F1.4 Pro VCM 或 null",'
-            '"viltrox_products_all":["所有可见Viltrox产品"],'
-            '"other_lens":"品牌+型号或null",'
-            '"flash":"品牌+型号或null",'
-            '"adapter":"品牌+型号或null",'
-            '"accessories":["列表"],'
-            '"gear_combo":"相机+镜头组合",'
-            '"brand_elements":["具体Viltrox证据"],'
-            '"products_detected":["Viltrox产品"],'
-            '"competitor_products":[{"brand":"Sigma","model":"35mm Art","context":"对比"}],'
-            '"competitor_brands":["列表"],'
-            '"brand_integration_depth":"incidental/featured/central/exclusive",'
-            '"content_genre":"review/tutorial/cinematic/vlog/bts/portrait/street/unboxing/comparison",'
-            '"content_topic":"内容主题（英文）",'
-            '"content_summary":"2-3句中文内容简介",'
-            '"production_quality":"amateur/semi-pro/professional/broadcast",'
-            '"audience_fit":"poor/fair/good/excellent",'
-            '"content_types":["列表"],'
-            '"negative_signals":[],'
-            f'"per_image_analysis":[{per_image_schema[:-1]}],'
-            '"quality_scores":{"exposure":7,"focus":7,"stability":8,"color_grade":7,"composition":7,"lighting":6,"editing":7,"storytelling":5,"hook":6,"viltrox_branding":8},'
-            '"quality_overall":7,'
-            '"quality_summary":"2句中文总结图片质量亮点和不足",'
-            '"reference_value":"high/medium/low",'
-            '"reference_reasons":["中文说明"],'
-            '"improvements":[{"area":"构图","priority":"medium","timestamp":"图片1","problem":"具体问题","suggestion":"具体建议（中文）","expected_improvement":"预期效果"}],'
-            '"marketing_potential":"high/medium/low",'
-            '"marketing_notes":"中文：是否能转化观众购买Viltrox",'
-            '"needs_manual_review":false,'
-            '"manual_review_reason":null,'
-            '"notes":"English: all gear + content description"'
-            "}"
-        )})
-
-        resp = call_ai_with_retry(
-            "claude_vision.image_batch",
-            lambda: client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=2000,
-                messages=[{"role": "user", "content": content}],
-            ),
-        )
-        raw = resp.content[0].text.strip()
-        raw = re.sub(r"^```json\s*|```$", "", raw, flags=re.MULTILINE).strip()
-        if not raw.endswith('}'): raw = raw[:raw.rfind('}')+1] if '}' in raw else raw+'}'
-        parsed = json.loads(raw)
-        logger.info(
-            "image vision | viltrox=%s | confidence=%s | lens=%s",
-            parsed.get("viltrox_detected"),
-            parsed.get("confidence"),
-            parsed.get("viltrox_lens"),
-        )
-        return parsed
-    except Exception as e:
-        logger.warning("image vision error: %s", e)
-        return {}
-
-
-# _merge_analysis
-def _merge_analysis(target: dict, source: dict):
-    """Merge source analysis into target, preferring higher confidence values."""
-    # Confidence ranking — Vision results override GPT text hints
-    conf_rank = {"high": 3, "medium": 2, "low": 1, "none": 0}
-    source_conf = conf_rank.get(source.get("confidence", "none"), 0)
-    target_conf = conf_rank.get(target.get("confidence", "none"), 0)
-
-    gear_fields = ["camera_body", "camera_brand", "viltrox_lens", "other_lens",
-                   "flash", "adapter", "gear_combo"]
-    for f in gear_fields:
-        src_val = source.get(f)
-        tgt_val = target.get(f)
-        # Always prefer Vision result (higher confidence) over GPT hint
-        if src_val and (not tgt_val or source_conf > target_conf):
-            target[f] = src_val
-
-    simple_fields = [
-        "brand_integration_depth", "content_genre", "content_topic", "content_summary",
-        "production_quality", "audience_fit", "originality",
-        "confidence", "logo_visible", "product_visible",
-        "needs_manual_review", "manual_review_reason", "notes",
-        "quality_overall", "quality_summary",
-        "reference_value", "marketing_potential", "marketing_notes",
-    ]
-    for f in simple_fields:
-        if source.get(f) and not target.get(f):
-            target[f] = source[f]
-
-    # Dict fields (quality_scores)
-    if source.get("quality_scores") and not target.get("quality_scores"):
-        target["quality_scores"] = source["quality_scores"]
-
-    # Per-image analysis (images only)
-    if source.get("per_image_analysis") and not target.get("per_image_analysis"):
-        target["per_image_analysis"] = source["per_image_analysis"]
-
-    # Merge lists (deduplicate)
-    list_fields = [
-        "accessories", "brand_elements", "products_detected",
-        "viltrox_products_all", "competitor_brands",
-        "competitor_products", "content_types", "negative_signals",
-        "reference_reasons", "improvements", "timestamps",
-    ]
-    for f in list_fields:
-        src_list = source.get(f, [])
-        if isinstance(src_list, str):
-            try:
-                src_list = json.loads(src_list)
-            except Exception:
-                src_list = []
-        if not isinstance(src_list, list): src_list = []
-        existing = target.get(f, [])
-        if not isinstance(existing, list): existing = []
-        for item in src_list:
-            if item and item not in existing:
-                existing.append(item)
-        target[f] = existing
-
-    # viltrox_detected: OR logic
-    if source.get("viltrox_detected"):
-        target["viltrox_detected"] = True
-
-
-
-# analyze_url_content_smart
 async def analyze_url_content_smart(
     url: str, title: str, caption: str,
     scraped_text: str, og_image: str, platform: str,
@@ -722,26 +403,7 @@ async def analyze_url_content_smart(
     Layer 3: Text fallback
     Returns merged analysis result.
     """
-    result = {
-        "analyzed": False, "method": "none",
-        "camera_body": None, "camera_brand": None,
-        "viltrox_lens": None, "other_lens": None,
-        "flash": None, "adapter": None,
-        "accessories": [], "gear_combo": "",
-        "brand_elements": [], "products_detected": [],
-        "viltrox_products_all": [], "competitor_products": [],
-        "competitor_brands": [], "content_genre": "",
-        "content_topic": "", "content_summary": "",
-        "production_quality": "", "audience_fit": "",
-        "content_types": [], "notes": "",
-        "layers_used": [], "error": None,
-        # Quality fields
-        "quality_scores": {}, "quality_overall": 0,
-        "quality_summary": "", "reference_value": "",
-        "reference_reasons": [], "improvements": [],
-        "marketing_potential": "", "marketing_notes": "",
-        "timestamps": [], "video_source": "",
-    }
+    result = initial_smart_result()
 
     if not ANTHROPIC_AVAILABLE and not GEMINI_AVAILABLE:
         return result
@@ -1130,58 +792,3 @@ async def analyze_url_content_smart(
         result.get("marketing_score", 0),
     )
     return result
-
-
-# fetch_all_images_from_post
-def fetch_all_images_from_post(url: str, og_image: str = "") -> list[str]:
-    """
-    Fetch ALL images from a multi-image post (Instagram carousel, Reddit gallery, etc.)
-    Returns list of base64-encoded image strings.
-    """
-    images_b64 = []
-
-    # Try yt-dlp to get all images (it supports image galleries too)
-    if YTDLP_AVAILABLE:
-        try:
-            with tempfile.TemporaryDirectory() as tmpdir:
-                cmd = [
-                    "yt-dlp",
-                    "--no-playlist",
-                    "-f", "jpg/png/webp/best",
-                    "--write-thumbnail",
-                    "--skip-video-download",
-                    "-o", os.path.join(tmpdir, "img_%(autonumber)s.%(ext)s"),
-                    "--no-warnings", "--quiet",
-                    url
-                ]
-                cookie_file = Path("cookies.txt")
-                if cookie_file.exists():
-                    cmd += ["--cookies", str(cookie_file)]
-
-                subprocess.run(cmd, capture_output=True, timeout=30)
-
-                # Collect all images
-                for fname in sorted(os.listdir(tmpdir)):
-                    if fname.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')):
-                        fpath = os.path.join(tmpdir, fname)
-                        if os.path.getsize(fpath) > 5000:  # skip tiny files
-                            with open(fpath, "rb") as f:
-                                images_b64.append(base64.b64encode(f.read()).decode())
-                            if len(images_b64) >= 10:  # max 10 images
-                                break
-        except Exception as e:
-            logger.warning("yt-dlp images fetch error: %s", e)
-
-    # Fallback: use og_image
-    if not images_b64 and og_image:
-        try:
-            import urllib.request
-            req = urllib.request.Request(og_image, headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(req, timeout=8) as r:
-                data = r.read()
-            if len(data) > 5000:
-                images_b64.append(base64.b64encode(data).decode())
-        except Exception as exc:
-            logger.debug("og image fetch for Claude vision failed: %s", exc)
-
-    return images_b64
