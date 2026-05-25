@@ -8,7 +8,7 @@ from app.db.connection import get_conn
 from app.services.cache import cache_get
 from app.services.vkpi.industry_crawlers import get_crawler
 from app.services.vkpi.industry_snapshot_kpis import calculate_kpis
-from app.services.vkpi.kol_pool_common import (
+from app.domains.kol.pool_common import (
     ENRICHABLE_PLATFORMS,
     KOL_POOL_LIST_COLUMNS,
     _average_from_total,
@@ -41,7 +41,7 @@ from app.services.vkpi.kol_pool_common import (
     _thumb_url,
     _utcnow,
 )
-from app.services.vkpi.kol_pool_main_linking import main_candidates, promote_to_main
+from app.domains.kol.pool_main_linking import main_candidates, promote_to_main
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 from app.services.vkpi.scoring import ScoringRegistry
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
