@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { AlertsPanel } from '../charts/AlertsPanel';
 import { ContentPerformance } from '../charts/ContentPerformance';
 import { DonutChart } from '../charts/DonutChart';
@@ -13,16 +13,43 @@ import { ExportWidget } from '../shared/ExportWidget';
 import { Icon } from '../shared/Icon';
 import { MetricCard } from '../shared/MetricCard';
 import { ProjectTable } from '../tables/ProjectTable';
-import { listBrandSignals } from '../../../services/vkpi.ui-api';
+import { getRecommendationFeedbackBacklog } from '../../../services/vkpi/intelligence-api';
+import { listBrandSignals } from '../../../services/vkpi/market-api';
+import { IntelligenceCard, intelligenceStatusLabels, type IntelligenceAction, type IntelligenceCardModel } from '../intelligence/IntelligenceCard';
+import { writeDiscoverFocus } from '../intelligence/intelligenceDiscoveryFocus';
+import { writeProjectFocus } from '../intelligence/intelligenceProjectFocus';
+import { clearProjectActionFocus, readProjectActionFocus, type ProjectActionFocusPayload } from '../intelligence/intelligenceProjectActionFocus';
+import {
+  readIntelligenceActionFeedback,
+  writeIntelligenceActionFeedback,
+  type IntelligenceActionFeedbackRecord,
+  type IntelligenceActionFeedbackStatus,
+} from '../intelligence/intelligenceActionFeedback';
+import { IntelligenceDetailPanel } from '../intelligence/IntelligenceDetailPanel';
+import { IntelligenceEvidenceDrawer } from '../intelligence/IntelligenceEvidenceDrawer';
 import type {
   VkpiDashboardData,
   VkpiAlertItem,
   VkpiKolDetail,
   VkpiLeaderboardItem,
   VkpiMetricEvidenceKey,
+  VkpiPageKey,
   VkpiProjectRow,
   VkpiStaffMember,
 } from '../vkpiTypes';
+import {
+  applyActionFeedback,
+  asRecord,
+  buildEmployeeActionBuckets,
+  buildEmployeeIntelligenceCards,
+  buildProjectActionFocusCard,
+  employeeProjectActionCount,
+  isEvidenceMetric,
+  priorityLabel,
+  storeIntelligenceFocus,
+  text,
+} from './CommandCenter.helpers';
+import type { Row } from './CommandCenter.helpers';
 
 interface CommandCenterProps {
   data: VkpiDashboardData;
@@ -45,16 +72,60 @@ interface CommandCenterProps {
   onOpenAlert?: (alertId: string) => void | Promise<void>;
   onDownloadReportPDF?: () => void;
   onExportPDF?: () => void;
+  onSelectPage?: (page: VkpiPageKey) => void;
   apiToken?: string;
 }
 
-function isEvidenceMetric(key: string): key is VkpiMetricEvidenceKey {
-  return ['gmv', 'cost', 'roi', 'new_kol', 'published_content', 'valid_clicks', 'net_contribution', 'views', 'active_projects', 'alerts'].includes(key);
-}
-
-function text(value: unknown, fallback = ''): string {
-  const next = String(value ?? '').trim();
-  return next || fallback;
+function ActionVisualPanel({ card }: { card: IntelligenceCardModel }) {
+  const confidence = Math.max(10, Math.min(100, Math.round((card.confidence || 0.5) * 100)));
+  const evidenceScore = Math.min(100, Math.max(16, card.evidence.length * 25));
+  const statusStep = card.status === 'done' ? 3 : card.status === 'accepted' || card.status === 'snoozed' ? 2 : 1;
+  const steps = ['看证据', '去执行', '回流结果'];
+  return (
+    <div className="vkpi-intelligence-visual">
+      <div className="vkpi-intelligence-visual__head">
+        <div>
+          <b>图文 / 动态演示</b>
+          <span>把文字判断拆成证据、执行、反馈三步。</span>
+        </div>
+        <em>{intelligenceStatusLabels[card.status]}</em>
+      </div>
+      <div className="vkpi-intelligence-visual__flow" aria-label="动作流程">
+        {steps.map((step, index) => {
+          const order = index + 1;
+          return (
+            <span
+              className={`${order < statusStep ? 'is-done' : ''} ${order === statusStep ? 'is-active' : ''}`}
+              key={step}
+            >
+              <i>{order}</i>
+              {step}
+            </span>
+          );
+        })}
+      </div>
+      <div className="vkpi-intelligence-visual__grid">
+        <span>
+          <b>优先级</b>
+          <strong>{priorityLabel(card.priority)}</strong>
+        </span>
+        <span>
+          <b>证据数</b>
+          <strong>{card.evidence.length} 条</strong>
+        </span>
+        <span style={{ '--score': `${confidence}%` } as CSSProperties}>
+          <b>置信度</b>
+          <strong>{confidence}%</strong>
+          <i />
+        </span>
+        <span style={{ '--score': `${evidenceScore}%` } as CSSProperties}>
+          <b>证据覆盖</b>
+          <strong>{evidenceScore}%</strong>
+          <i />
+        </span>
+      </div>
+    </div>
+  );
 }
 
 function signalTypeLabel(value: unknown): string {
@@ -143,6 +214,69 @@ function BrandSignalSummary({ apiToken }: { apiToken?: string }) {
   );
 }
 
+function EmployeeWorkdayHero({
+  mustActionCount,
+  watchActionCount,
+  evidenceActionCount,
+  projectActionCount,
+  riskActionCount,
+}: {
+  mustActionCount: number;
+  watchActionCount: number;
+  evidenceActionCount: number;
+  projectActionCount: number;
+  riskActionCount: number;
+}) {
+  const totalActions = mustActionCount + watchActionCount + evidenceActionCount;
+  const focusScore = Math.max(12, Math.min(100, Math.round(((mustActionCount * 1.4) + projectActionCount + evidenceActionCount + riskActionCount) * 14)));
+  const flowSteps = [
+    { label: '发现 KOL', hint: '找新候选' },
+    { label: '联系 / 寄样', hint: '推进项目' },
+    { label: '发布内容', hint: '跟进素材' },
+    { label: '结果回流', hint: '反馈学习' },
+  ];
+
+  return (
+    <section className="vkpi-employee-workday" aria-label="员工今日执行区">
+      <div className="vkpi-employee-workday__copy">
+        <span>EMPLOYEE VIEW</span>
+        <h1>我的今日工作台</h1>
+        <p>
+          先处理 {mustActionCount} 个必做动作、{projectActionCount} 个可推进项目和 {evidenceActionCount} 个待补证据；
+          搜索不是唯一入口，KOL/账号、智能卡和项目会一起把候选推到你面前。
+        </p>
+        <div className="vkpi-employee-workday__actions">
+          <a className="vkpi-button vkpi-button--primary" href="#intelligenceCenter">处理智能动作</a>
+          <a className="vkpi-button" href="#discover">发现 KOL</a>
+          <a className="vkpi-button" href="#projects">进入项目</a>
+        </div>
+      </div>
+      <div className="vkpi-employee-workday__visual" style={{ '--score': `${focusScore}%` } as CSSProperties}>
+        <div className="vkpi-employee-workday__flow">
+          {flowSteps.map((step, index) => (
+            <span className={index === 0 ? 'is-active' : ''} key={step.label}>
+              <i>{index + 1}</i>
+              <b>{step.label}</b>
+              <em>{step.hint}</em>
+            </span>
+          ))}
+        </div>
+        <div className="vkpi-employee-workday__meter">
+          <span><b>{focusScore}%</b> 今日动作密度</span>
+          <i />
+        </div>
+      </div>
+      <div className="vkpi-employee-workday__stats">
+        <span><b>{mustActionCount}</b><em>必做</em></span>
+        <span><b>{projectActionCount}</b><em>项目</em></span>
+        <span><b>{evidenceActionCount}</b><em>补证据</em></span>
+        <span><b>{riskActionCount}</b><em>风险</em></span>
+        <span><b>{totalActions}</b><em>行动卡</em></span>
+      </div>
+    </section>
+  );
+}
+
 export function CommandCenter({
   data,
   visibleMetrics,
@@ -164,17 +298,151 @@ export function CommandCenter({
   onOpenAlert,
   onDownloadReportPDF,
   onExportPDF,
+  onSelectPage,
   apiToken,
 }: CommandCenterProps) {
+  const [recommendationBacklog, setRecommendationBacklog] = useState<Row>({});
+  const [projectActionFocus, setProjectActionFocus] = useState<ProjectActionFocusPayload | null>(null);
+  const [actionFeedback, setActionFeedback] = useState<Record<string, IntelligenceActionFeedbackRecord>>({});
+  const [intelligenceDrawer, setIntelligenceDrawer] = useState<IntelligenceCardModel | null>(null);
+  const [evidenceDrawer, setEvidenceDrawer] = useState<IntelligenceCardModel | null>(null);
+  const [intelligenceError, setIntelligenceError] = useState('');
   const handleOpenStaffFromLeaderboard = viewMode === 'manager'
     ? (item: VkpiLeaderboardItem) => {
       if (item.staffId) void onOpenStaffProfile(item.staffId, { name: item.name, avatarUrl: item.avatar });
     }
     : undefined;
+  const employeeAlerts = alerts || data.alerts;
+  const employeeIntelligenceCards = useMemo(
+    () => {
+      const cards = buildEmployeeIntelligenceCards({
+        recommendationBacklog,
+        projects: filteredProjects,
+        alerts: employeeAlerts,
+      });
+      const nextCards = projectActionFocus ? [buildProjectActionFocusCard(projectActionFocus), ...cards] : cards;
+      return nextCards.map((card) => applyActionFeedback(card, actionFeedback[card.id]));
+    },
+    [actionFeedback, employeeAlerts, filteredProjects, projectActionFocus, recommendationBacklog],
+  );
+  const employeeActionBuckets = useMemo(
+    () => buildEmployeeActionBuckets(employeeIntelligenceCards),
+    [employeeIntelligenceCards],
+  );
+  const mustActionCount = employeeActionBuckets.find((bucket) => bucket.key === 'must')?.cards.length || 0;
+  const watchActionCount = employeeActionBuckets.find((bucket) => bucket.key === 'watch')?.cards.length || 0;
+  const evidenceActionCount = employeeActionBuckets.find((bucket) => bucket.key === 'evidence')?.cards.length || 0;
+  const employeeProjectCount = employeeProjectActionCount(filteredProjects);
+  const employeeRiskCount = employeeAlerts.filter((alert) => alert.severity === 'danger' || alert.severity === 'warning').length;
+
+  useEffect(() => {
+    if (viewMode === 'employee') setActionFeedback(readIntelligenceActionFeedback());
+  }, [viewMode]);
+
+  const updateActionFeedback = useCallback((card: IntelligenceCardModel, nextStatus: IntelligenceActionFeedbackStatus) => {
+    const feedback = writeIntelligenceActionFeedback(card.id, nextStatus);
+    setActionFeedback((current) => ({ ...current, [card.id]: feedback }));
+    setIntelligenceDrawer((current) => current?.id === card.id ? applyActionFeedback(current, feedback) : current);
+  }, []);
+
+  useEffect(() => {
+    if (viewMode !== 'employee') {
+      setProjectActionFocus(null);
+      return;
+    }
+    const focus = readProjectActionFocus();
+    if (focus) {
+      clearProjectActionFocus();
+      setProjectActionFocus(focus);
+    }
+  }, [viewMode]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!apiToken || viewMode !== 'employee') {
+      setRecommendationBacklog({});
+      setIntelligenceError('');
+      return () => { cancelled = true; };
+    }
+    getRecommendationFeedbackBacklog(apiToken, 6)
+      .then((response) => {
+        if (!cancelled) setRecommendationBacklog(response);
+      })
+      .catch((error) => {
+        if (!cancelled) setIntelligenceError(error instanceof Error ? error.message : '推荐 backlog 读取失败');
+      });
+    return () => { cancelled = true; };
+  }, [apiToken, viewMode]);
+
+  const handleIntelligenceAction = useCallback((action: IntelligenceAction, card: IntelligenceCardModel) => {
+    if (action.kind === 'disabled') return;
+    if (action.label.includes('证据')) {
+      setEvidenceDrawer(card);
+      return;
+    }
+    if (action.label.includes('接受')) {
+      updateActionFeedback(card, 'accepted');
+      return;
+    }
+    if (action.label.includes('延后')) {
+      updateActionFeedback(card, 'snoozed');
+      return;
+    }
+    if (action.label.includes('完成')) {
+      updateActionFeedback(card, 'done');
+      return;
+    }
+    if (action.label.includes('智能中心')) {
+      storeIntelligenceFocus({
+        source: 'employee_workbench',
+        focusType: card.metadata?.focus_type || 'recommendation_backlog',
+        recommendationId: card.metadata?.recommendation_id,
+        cardId: card.id,
+      });
+      onSelectPage?.('intelligenceCenter');
+      return;
+    }
+    if (action.label.includes('项目跟进')) {
+      const projectId = text(card.metadata?.project_id || card.entityId, '');
+      const projectName = text(card.metadata?.project_name || card.title, '项目跟进');
+      writeProjectFocus({
+        source: 'intelligence_task',
+        projectId: projectId || undefined,
+        projectName,
+        kolHandle: text(card.metadata?.kol_handle, '') || undefined,
+        summary: card.summary,
+      });
+      onSelectPage?.('projects');
+      return;
+    }
+    if (action.label.includes('红人搜索') || action.label.includes('相似 KOL')) {
+      writeDiscoverFocus({
+        source: 'employee_workbench',
+        title: card.title,
+        summary: card.summary,
+        query: text(card.metadata?.discover_query, card.title),
+        platform: text(card.metadata?.discover_platform, 'all'),
+        sourceLabel: card.sourceLabel,
+      });
+      onSelectPage?.('discover');
+      return;
+    }
+    if (action.label.includes('数据质量')) onSelectPage?.('dataQuality');
+  }, [onSelectPage, updateActionFeedback]);
 
   return (
     <>
       <section className="vkpi-main-column" aria-label={viewMode === 'manager' ? '管理主控' : '员工工作台'}>
+        {viewMode === 'employee' ? (
+          <EmployeeWorkdayHero
+            mustActionCount={mustActionCount}
+            watchActionCount={watchActionCount}
+            evidenceActionCount={evidenceActionCount}
+            projectActionCount={employeeProjectCount}
+            riskActionCount={employeeRiskCount}
+          />
+        ) : null}
+
         <section className="vkpi-metrics-grid" aria-label="核心指标">
           {visibleMetrics.map((metric) => {
             const evidenceKey = isEvidenceMetric(metric.key) ? metric.key : null;
@@ -263,6 +531,41 @@ export function CommandCenter({
       </section>
 
       <aside className="vkpi-right-rail" aria-label="提醒和详情">
+        {viewMode === 'employee' ? (
+          <section className="vkpi-card vkpi-panel-card vkpi-employee-intelligence">
+            <div className="vkpi-card__header">
+              <div>
+                <h2>今日行动卡</h2>
+                <span>{intelligenceError ? '读取失败' : `${mustActionCount} 必做 · ${evidenceActionCount} 待补证据`}</span>
+              </div>
+              <a className="vkpi-link-button" href="#projects">去执行</a>
+            </div>
+            {intelligenceError ? (
+              <div className="vkpi-inline-message is-error">推荐 backlog 读取失败：{intelligenceError}</div>
+            ) : null}
+            <div className="vkpi-employee-action-buckets">
+              {employeeActionBuckets.map((bucket) => (
+                <section className={`vkpi-employee-action-bucket is-${bucket.key}`} key={bucket.key}>
+                  <div>
+                    <b>{bucket.title}</b>
+                    <span>{bucket.cards.length} 项</span>
+                  </div>
+                  <p>{bucket.hint}</p>
+                  <div className="dashboard-intelligence-list">
+                    {bucket.cards.length ? bucket.cards.map((card) => (
+                      <IntelligenceCard
+                        card={card}
+                        compact
+                        key={card.id}
+                        onSelect={setIntelligenceDrawer}
+                      />
+                    )) : <small>当前没有这一类动作。</small>}
+                  </div>
+                </section>
+              ))}
+            </div>
+          </section>
+        ) : null}
         <BrandSignalSummary apiToken={viewMode === 'manager' ? apiToken : undefined} />
         <AlertsPanel alerts={alerts || data.alerts} onResolveAlert={onResolveAlert} onOpenAlert={onOpenAlert} />
         <WeeklySummary summary={data.weeklySummary} />
@@ -273,6 +576,29 @@ export function CommandCenter({
           onCopyShortLink={onCopyShortLink}
         />
       </aside>
+      {intelligenceDrawer ? (
+        <div className="panel-drawer panel-drawer--intelligence" role="dialog" aria-label={intelligenceDrawer.title}>
+          <div className="country-drawer-head">
+            <div><span>{intelligenceDrawer.sourceLabel}</span><b>{intelligenceDrawer.title}</b></div>
+            <button type="button" onClick={() => setIntelligenceDrawer(null)}>×</button>
+          </div>
+          <IntelligenceDetailPanel
+            card={intelligenceDrawer}
+            emptyTitle="选择一张行动卡"
+            emptySummary="从今日行动卡选择推荐、项目或风险。"
+            extraSlot={<ActionVisualPanel card={intelligenceDrawer} />}
+            footerNote="员工工作台只展示只读行动入口；写 feedback 和任务创建仍在智能中心或项目流程里完成。"
+            onAction={handleIntelligenceAction}
+          />
+        </div>
+      ) : null}
+      {evidenceDrawer ? (
+        <IntelligenceEvidenceDrawer
+          card={evidenceDrawer}
+          onClose={() => setEvidenceDrawer(null)}
+          footerNote="员工行动卡只展示已有 evidence refs，不触发外部抓取或模型调用。"
+        />
+      ) : null}
     </>
   );
 }
