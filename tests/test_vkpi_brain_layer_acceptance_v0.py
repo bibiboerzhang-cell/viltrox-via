@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from app.services.vkpi import brain_layer_acceptance_v0
+from app.domains.intelligence import brain_acceptance_use_case as brain_layer_acceptance_v0
 
 
 def _write(path, payload) -> None:

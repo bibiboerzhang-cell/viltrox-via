@@ -6,6 +6,7 @@ from app.domains.intelligence.brain_acceptance import (
     build_brain_layer_acceptance_report,
     build_brain_layer_module_row,
 )
+from app.domains.intelligence.brain_acceptance_use_case import build_brain_layer_acceptance_v0
 from app.domains.intelligence.brief_agent import (
     BRIEF_AGENT_VERSION,
     build_brief_agent_report,
@@ -46,6 +47,7 @@ __all__ = [
     "RECOMMENDATION_AGENT_VERSION",
     "REQUIRED_REPORTS",
     "build_brain_layer_acceptance_report",
+    "build_brain_layer_acceptance_v0",
     "build_brain_layer_module_row",
     "build_brief_agent_report",
     "build_brief_agent_v0",
