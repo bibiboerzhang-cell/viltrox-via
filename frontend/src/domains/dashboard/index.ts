@@ -16,3 +16,4 @@ export {
 } from './dashboardFormat';
 export * from './dashboardModel';
 export * from './dashboardPlatform';
+export * from './dashboardDataModels';
