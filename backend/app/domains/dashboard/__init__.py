@@ -17,6 +17,7 @@ from app.domains.dashboard.recent_content import (
     build_dashboard_recent_content,
 )
 from app.domains.dashboard.summary import build_dashboard_summary
+from app.domains.dashboard.views import build_dashboard_view_payload, staff_id_from_context
 
 __all__ = [
     "DASHBOARD_AGENT_SPECS",
@@ -32,4 +33,6 @@ __all__ = [
     "build_dashboard_kol_distribution",
     "build_dashboard_recent_content",
     "build_dashboard_summary",
+    "build_dashboard_view_payload",
+    "staff_id_from_context",
 ]

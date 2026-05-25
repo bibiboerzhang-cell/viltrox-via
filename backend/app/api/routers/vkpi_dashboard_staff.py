@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.api.dependencies.perms import require_tab
 from app.db.connection import get_conn
 from app.domains import dashboard as dashboard_domain
-from app.services.vkpi import audit, decision_engine, metric_lineage, scope, workflow
+from app.services.vkpi import audit, decision_engine, scope, workflow
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-dashboard"])
@@ -214,32 +214,16 @@ def dashboard_view(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     try:
-        requested_staff_id = staff_id if staff_id is not None else staff_id_from_context(view, staff)
-        effective_staff_id = scope.effective_staff_id(staff, requested_staff_id)
-        result = decision_engine.dashboard_view(view, window_days=window_days, staff_id=effective_staff_id)
-        try:
-            lineage = metric_lineage.dashboard_metrics(
-                period_days=window_days,
-                staff=staff,
-                staff_id=effective_staff_id,
-                generated_by_staff_id=resolve_staff_id(staff) or None,
-            )
-            result["metric_run"] = lineage.get("run") or {}
-            result["metrics"] = lineage.get("metrics") or []
-        except Exception:
-            result["metric_run"] = {}
-            result["metrics"] = []
-        return result
+        return dashboard_domain.build_dashboard_view_payload(
+            view=view,
+            window_days=window_days,
+            staff_id=staff_id,
+            staff=staff,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
-
-
-def staff_id_from_context(view: str, staff: dict) -> int | None:
-    if str(view or "").strip().lower() in {"staff", "employee"}:
-        return resolve_staff_id(staff) or None
-    return None
 
 
 @router.get("/workflow/stages")
