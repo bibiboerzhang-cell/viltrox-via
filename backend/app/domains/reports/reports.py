@@ -13,11 +13,12 @@ from app.domains import alerts
 from app.domains import costs
 from app.domains import attribution
 from app.domains import lineage as metric_lineage
+from app.domains.dashboard import decision_dashboard
 from app.platform import llm_gateway
+from app.domains.staff import decision_staff
 from app.domains.staff import kpi_ledger
 from app.domains.access import scope
 from app.domains.projects import workflow
-from app.services.vkpi import decision_engine
 from app.domains.reports import pdf_renderer
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.domains.lineage import ensure_vkpi_lineage_schema
@@ -464,9 +465,9 @@ def build_weekly_context(period_days: int = 7, *, staff: dict[str, Any] | None =
     filters = filters or {}
     start, end = _period(period_days)
     scoped_staff_id = scope.effective_staff_id(staff, filters.get("staff_id"))
-    dashboard = decision_engine.dashboard(window_days=period_days) if not scoped_staff_id else {"summary": {}}
+    dashboard = decision_dashboard.dashboard(window_days=period_days) if not scoped_staff_id else {"summary": {}}
     summary = dashboard.get("summary") or {}
-    staff_kpi = decision_engine.staff_kpi(window="week", staff_id=scoped_staff_id)
+    staff_kpi = decision_staff.staff_kpi(window="week", staff_id=scoped_staff_id)
     project_rows = workflow.list_projects(limit=200, staff=staff, staff_id_filter=scoped_staff_id).get("projects") or []
     attr_rows = attribution.list_attributions(limit=500, staff_id=scoped_staff_id, staff=staff).get("attributions") or []
     cost_rows = costs.list_costs(limit=500, staff_id=scoped_staff_id, staff=staff).get("costs") or []
