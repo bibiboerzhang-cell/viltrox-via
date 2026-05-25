@@ -13,6 +13,8 @@ interface HeroSectionProps {
   title?: ReactNode;
   body?: ReactNode;
   missions?: GlassMission[];
+  summary?: ReactNode;
+  control?: ReactNode;
   brief?: AIBriefCardProps;
 }
 
@@ -21,11 +23,31 @@ export function HeroSection({
   title = '全球营销情报中枢',
   body = '重点 / 风险 / 任务',
   missions = defaultMissions,
+  summary,
+  control,
   brief,
 }: HeroSectionProps) {
   return (
     <section className="hero">
-      <div className="hero-title"><div className="eyebrow"><span className="orb"></span>{eyebrow}</div><h1>{title}</h1><p>{body}</p><div className="mini-missions">{missions.map((mission, index) => <div className="mini-mission" key={index}><b>{mission.value} <span>{mission.suffix}</span></b>{mission.label}</div>)}</div></div>
+      <div className="hero-title">
+        <div className="hero-title-head">
+          <div className="eyebrow"><span className="orb"></span>{eyebrow}</div>
+          {control ? <div className="hero-control">{control}</div> : null}
+        </div>
+        <h1>{title}</h1>
+        <p>{body}</p>
+        {missions.length ? (
+          <div className="mini-missions">
+            {missions.map((mission, index) => (
+              <div className="mini-mission" key={index}>
+                <b>{mission.value} <span>{mission.suffix}</span></b>
+                {mission.label}
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {summary}
+      </div>
       <AIBriefCard {...brief} />
     </section>
   );

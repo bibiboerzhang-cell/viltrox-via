@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  GlassFAB,
   GlassSidebar,
   GlassToast,
   GlassTopBar,
@@ -8,9 +7,22 @@ import {
   glassVarStyle,
 } from '../glass';
 import { apiFetch } from '../../../services/http';
-import { listKolPool, type VkpiKolPoolItem } from '../../../services/vkpi/kolPool-api';
-import { getKolPoolCompetitorDashboard, getKolPoolSummary, getOfficialChannelMatrix, listBrandSignals } from '../../../services/vkpi.ui-api';
+import { getOfficialChannelMatrix } from '../../../services/vkpi/channel-api';
+import { getRecommendationFeedbackBacklog } from '../../../services/vkpi/intelligence-api';
+import {
+  getKolPoolCompetitorDashboard,
+  getKolPoolSummary,
+} from '../../../services/vkpi/kolPool-api';
+import { listBrandSignals } from '../../../services/vkpi/market-api';
 import type { VkpiPageKey } from '../vkpiTypes';
+import { IntelligenceActionStrip } from '../intelligence/IntelligenceActionStrip';
+import {
+  IntelligenceCard,
+  type IntelligenceAction,
+  type IntelligenceCardModel,
+} from '../intelligence/IntelligenceCard';
+import { IntelligenceDetailPanel } from '../intelligence/IntelligenceDetailPanel';
+import { IntelligenceEvidenceDrawer } from '../intelligence/IntelligenceEvidenceDrawer';
 import { RealWorldMap, type CountryMapPoint } from '../glass-future/RealWorldMap';
 import '../glass-future/tokens.css';
 import '../glass-future/background.css';
@@ -28,147 +40,18 @@ export interface DashboardPremiumProps {
   onSelectPage?: (page: VkpiPageKey) => void;
 }
 
-let glassToastTimer: number | undefined;
-
 type Row = Record<string, unknown>;
-type PremiumSource = 'mock' | 'real' | 'partial';
-type ContentFilter = 'all' | 'official' | 'partner' | 'ugc';
-type MapMetric = 'kol' | 'exposure' | 'sales';
+type DashboardSource = 'mock' | 'real' | 'partial';
+type DashboardScope = 'official' | 'kol' | 'no_kol' | 'combined';
 type TrendSegment = '曝光量' | '互动量' | '销售额';
+type IntelligenceTab = 'today' | 'platform' | 'market' | 'competitor';
+type TrendTotals = { views: number; likes: number; comments: number; posts: number };
 
-const trendSegments: TrendSegment[] = ['曝光量', '互动量', '销售额'];
-
-interface PremiumKpi {
-  icon: string;
-  label: string;
-  value: string;
-  meta: string;
-  trend: 'up' | 'down';
-  ig: string;
-  ic: string;
-  sparkPath: string;
-  isMock: boolean;
-  mockLabel?: string;
-}
-
-interface KpiInsightRow {
-  label: string;
-  value: string;
-  meta?: string;
-  width?: string;
-  url?: string;
-}
-
-interface KpiInsightTab {
-  label: string;
-  rows: KpiInsightRow[];
-}
-
-interface KpiDetailInsight {
-  insight: string;
-  tabs: KpiInsightTab[];
-  coverage: string;
-}
-
-interface PremiumKpiCardProps {
-  item: PremiumKpi;
-  selected: boolean;
-  onToggle: () => void;
-}
-
-interface PremiumProductRow {
-  rank: number;
-  name: string;
-  width: string;
-  value: string;
-  isMock: boolean;
-  mockLabel?: string;
-}
-
-interface PremiumAlert {
-  icon: string;
-  title: string;
-  body: string;
-  time: string;
-  bgc: string;
-  col: string;
-  isMock: boolean;
-  url?: string;
-  sourceLabel?: string;
-  signalType?: string;
-  severity?: string;
-  mockLabel?: string;
-}
-
-interface PremiumTask {
-  id: string;
-  title: string;
-  priority: 'high' | 'mid' | 'low';
-  priorityLabel: string;
-  body: string;
-  width: string;
-  isMock: boolean;
-  confidence?: number;
-  sourceLabel?: string;
-  mockLabel?: string;
-}
-
-interface PremiumRegion {
-  label: string;
-  value: string;
-  color: string;
-  isMock: boolean;
-  countryCode?: string;
-  kolCount?: number;
-  exposure?: number;
-  sales?: number;
-  platformSummary?: string[];
-  lat?: number;
-  lng?: number;
-  mockLabel?: string;
-}
-
-interface PremiumPlatform {
-  icon: string;
-  label: string;
-  width: string;
-  value: string;
-  background: string;
-  isMock: boolean;
-  mockLabel?: string;
-}
-
-interface PremiumAgent {
-  id: string;
-  name: string;
-  status: string;
-  summary: string;
-  lastOutput: string;
-  isMock: boolean;
-}
-
-interface CountryDrawerState {
-  region: PremiumRegion;
-  items: VkpiKolPoolItem[];
-  loading: boolean;
-  error?: string;
-}
-
-interface PanelDrawerState {
-  title: string;
-  sourceLabel: string;
-  rows: Array<{ label: string; value: string }>;
-  actionLabel: string;
-  actionPage?: VkpiPageKey;
-  actionUrl?: string;
-}
-
-interface PremiumSnapshot {
-  source: PremiumSource;
+interface Snapshot {
+  source: DashboardSource;
   failedSections: string[];
   dashboard: Row;
   trendRows: Row[];
-  productRows: Row[];
   kolSummary: Row;
   kolDistribution: Row;
   officialMatrix: Row;
@@ -178,99 +61,47 @@ interface PremiumSnapshot {
   agentsStatus: Row;
   copilotBrief: Row;
   tasksStatus: Row;
+  recommendationBacklog: Row;
   loadedAt?: string;
 }
 
-const mockKpis: PremiumKpi[] = [
-  { icon: '◉', label: '总曝光量', value: '86.37M', meta: '较上周 ↑ 12.5%', trend: 'up', ig: 'rgba(27,108,255,.12)', ic: '#1b6cff', sparkPath: 'M2 18 C12 20 18 12 27 16 S44 20 53 12 70 9 81 15 98 22 118 12', isMock: true, mockLabel: '示例 KPI' },
-  { icon: '▣', label: 'GMV', value: '$342.6K', meta: '较上周 ↑ 8.3%', trend: 'up', ig: 'rgba(24,199,132,.13)', ic: '#18c784', sparkPath: 'M2 18 C18 14 27 18 40 13 S60 11 74 16 94 20 118 12', isMock: true, mockLabel: '示例 KPI' },
-  { icon: '♚', label: '内容数', value: '2,847', meta: '较上周 ↑ 3', trend: 'up', ig: 'rgba(139,92,246,.13)', ic: '#8b5cf6', sparkPath: 'M2 17 C15 19 22 14 35 18 S55 8 69 12 86 20 118 15', isMock: true, mockLabel: '示例 KPI' },
-  { icon: '▥', label: '内容互动率', value: '3.24%', meta: '较上周 ↓ 0.4%', trend: 'down', ig: 'rgba(255,159,46,.14)', ic: '#ff9f2e', sparkPath: 'M2 12 C18 13 24 18 38 15 S58 9 70 17 92 20 118 13', isMock: true, mockLabel: '示例 KPI' },
-  { icon: '▤', label: '订单量', value: '1,287', meta: '较上周 ↑ 6.7%', trend: 'up', ig: 'rgba(27,108,255,.11)', ic: '#1b6cff', sparkPath: 'M2 18 C17 13 24 17 34 15 S54 14 66 11 86 19 118 10', isMock: true, mockLabel: '示例 KPI' },
-  { icon: '¥', label: '平均 ROI', value: '5.21x', meta: '较上周 ↑ 0.7x', trend: 'up', ig: 'rgba(255,77,166,.13)', ic: '#ff4da6', sparkPath: 'M2 12 C20 10 29 14 44 13 S65 19 76 17 96 12 118 9', isMock: true, mockLabel: '示例 KPI' },
-];
+interface KpiCard {
+  icon: string;
+  label: string;
+  value: string;
+  meta: string;
+  tone: 'blue' | 'green' | 'purple' | 'orange' | 'pink' | 'slate';
+  status: '真实' | '部分' | '待接入';
+  pending?: boolean;
+}
 
-const regionColors = ['#1b6cff', '#6aa6ff', '#18d5ff', '#8b5cf6', '#cfe0ff'];
+interface RegionRow {
+  label: string;
+  code: string;
+  count: number;
+  share: number;
+  lat?: number;
+  lng?: number;
+}
 
-const regions: PremiumRegion[] = [
-  { label: 'United States', value: '34.4%', color: '#1b6cff', isMock: true, countryCode: 'US', kolCount: 336, lat: 39.8, lng: -98.5, mockLabel: '示例地区' },
-  { label: 'United Kingdom', value: '13.0%', color: '#6aa6ff', isMock: true, countryCode: 'GB', kolCount: 127, lat: 54.0, lng: -2.0, mockLabel: '示例地区' },
-  { label: 'Canada', value: '7.3%', color: '#18d5ff', isMock: true, countryCode: 'CA', kolCount: 71, lat: 56.1, lng: -106.3, mockLabel: '示例地区' },
-  { label: 'Germany', value: '4.4%', color: '#8b5cf6', isMock: true, countryCode: 'DE', kolCount: 43, lat: 51.0, lng: 9.0, mockLabel: '示例地区' },
-  { label: 'Italy', value: '4.1%', color: '#cfe0ff', isMock: true, countryCode: 'IT', kolCount: 40, lat: 42.8, lng: 12.8, mockLabel: '示例地区' },
-];
+interface PanelRow {
+  label: string;
+  value: string;
+}
 
-const mockProductRows: PremiumProductRow[] = [
-  { rank: 1, name: 'AF 56mm F1.2 Pro', width: '96%', value: '8.21x', isMock: true, mockLabel: '示例 ROI' },
-  { rank: 2, name: 'AF 35mm F1.2 LAB', width: '82%', value: '6.74x', isMock: true, mockLabel: '示例 ROI' },
-  { rank: 3, name: 'AF 135mm F1.8 LAB', width: '68%', value: '5.31x', isMock: true, mockLabel: '示例 ROI' },
-  { rank: 4, name: 'AF 16mm F1.8', width: '52%', value: '4.22x', isMock: true, mockLabel: '示例 ROI' },
-];
+interface PanelDrawer {
+  title: string;
+  sourceLabel: string;
+  rows: PanelRow[];
+  actionLabel: string;
+  actionPage?: VkpiPageKey;
+}
 
-const contentTypes = [
-  { label: '视频', value: '56.7%', color: '#1b6cff' },
-  { label: '图集', value: '24.3%', color: '#18d5ff' },
-  { label: '图文', value: '13.6%', color: '#8b5cf6' },
-];
-
-const mockAgents: PremiumAgent[] = [
-  { id: 'recommendation', name: '推荐 Agent', status: 'idle', summary: '等待真实 API', lastOutput: '', isMock: true },
-  { id: 'brief', name: '简报 Agent', status: 'idle', summary: '等待真实 API', lastOutput: '', isMock: true },
-  { id: 'evidence', name: '证据 Agent', status: 'idle', summary: '等待真实 API', lastOutput: '', isMock: true },
-  { id: 'sync_sentinel', name: '同步守护', status: 'idle', summary: '等待真实 API', lastOutput: '', isMock: true },
-  { id: 'brain', name: '脑层验收', status: 'idle', summary: '等待真实 API', lastOutput: '', isMock: true },
-  { id: 'kol_intel', name: 'KOL 智能', status: 'idle', summary: '等待真实 API', lastOutput: '', isMock: true },
-  { id: 'market_intel', name: '市场情报', status: 'idle', summary: '等待真实 API', lastOutput: '', isMock: true },
-];
-
-const platformStyles: Record<string, { icon: string; label: string; background: string }> = {
-  instagram: { icon: 'IG', label: 'Instagram', background: '#e1306c' },
-  youtube: { icon: 'YT', label: 'YouTube', background: '#ff0000' },
-  tiktok: { icon: 'TT', label: 'TikTok', background: '#111827' },
-  facebook: { icon: 'FB', label: 'Facebook', background: '#1877f2' },
-  x: { icon: 'X', label: 'X', background: '#111827' },
-  media: { icon: 'MD', label: 'Media', background: '#1b6cff' },
-};
-
-const platforms: PremiumPlatform[] = [
-  { icon: 'IG', label: 'Instagram', width: '100%', value: '56.57M', background: '#e1306c', isMock: true, mockLabel: '示例平台' },
-  { icon: 'YT', label: 'YouTube', width: '35%', value: '19.80M', background: '#ff0000', isMock: true, mockLabel: '示例平台' },
-  { icon: 'TT', label: 'TikTok', width: '11%', value: '6.21M', background: '#111827', isMock: true, mockLabel: '示例平台' },
-  { icon: 'FB', label: 'Facebook', width: '5%', value: '2.41M', background: '#1877f2', isMock: true, mockLabel: '示例平台' },
-];
-
-const tasks: PremiumTask[] = [
-  { id: 'mock-task-1', title: 'DC-A1 Monitor 上市任务', priority: 'high', priorityLabel: '高', body: '52/60 KOL 已对接，剩余 8 个需本周确认。', width: '87%', isMock: true, mockLabel: '示例任务' },
-  { id: 'mock-task-2', title: '补寄任务（US 仓库）', priority: 'mid', priorityLabel: '中', body: '6 位 KOL 等待寄样，预计影响 56mm Pro 预热。', width: '0%', isMock: true, mockLabel: '示例任务' },
-  { id: 'mock-task-3', title: 'Cinegear 物料准备', priority: 'low', priorityLabel: '低', body: '剩余 4 天截止，目前进行中。', width: '55%', isMock: true, mockLabel: '示例任务' },
-];
-
-const quickActions: Array<{ icon: string; label: string; page: VkpiPageKey }> = [
-  { icon: '⌁', label: '内容发布', page: 'channels' },
-  { icon: '⌕', label: 'KOL 寻找', page: 'discover' },
-  { icon: '▣', label: '舆情监控', page: 'dataQuality' },
-  { icon: '◎', label: '竞品监控', page: 'dataAnalysis' },
-  { icon: '▦', label: '产品管理', page: 'productBattle' },
-  { icon: '▥', label: '数据报表', page: 'reports' },
-];
-
-const premiumNavTarget: Record<string, VkpiPageKey> = {
-  Dashboard: 'dashboardPremium',
-  Mission: 'command',
-  KOL: 'channels',
-  Campaign: 'projects',
-  Product: 'productBattle',
-  Market: 'dataAnalysis',
-  Data: 'dataAnalysis',
-  Settings: 'settings',
-};
-
-const EMPTY_PREMIUM_SNAPSHOT: PremiumSnapshot = {
+const EMPTY_SNAPSHOT: Snapshot = {
   source: 'mock',
   failedSections: [],
   dashboard: {},
   trendRows: [],
-  productRows: [],
   kolSummary: {},
   kolDistribution: {},
   officialMatrix: {},
@@ -280,524 +111,100 @@ const EMPTY_PREMIUM_SNAPSHOT: PremiumSnapshot = {
   agentsStatus: {},
   copilotBrief: {},
   tasksStatus: {},
+  recommendationBacklog: {},
+};
+
+const scopeOptions: Array<{ key: DashboardScope; label: string; detail: string }> = [
+  { key: 'official', label: '官方 18 号', detail: '下方 KPI 仅看官方账号矩阵' },
+  { key: 'kol', label: 'KOL', detail: '下方 KPI 仅看 KOL 口径' },
+  { key: 'no_kol', label: '不含 KOL', detail: '下方 KPI 排除 KOL 口径' },
+  { key: 'combined', label: '官方 + KOL', detail: '下方 KPI 使用合并口径' },
+];
+
+const trendSegments: TrendSegment[] = ['曝光量', '互动量', '销售额'];
+const intelligenceTabs: Array<{ key: IntelligenceTab; label: string }> = [
+  { key: 'today', label: '今日判断' },
+  { key: 'platform', label: '平台建议' },
+  { key: 'market', label: '市场雷达' },
+  { key: 'competitor', label: '竞品预警' },
+];
+
+const toneStyle: Record<KpiCard['tone'], { icon: string; text: string }> = {
+  blue: { icon: 'rgba(27,108,255,.12)', text: '#1b6cff' },
+  green: { icon: 'rgba(24,199,132,.13)', text: '#18c784' },
+  purple: { icon: 'rgba(139,92,246,.13)', text: '#8b5cf6' },
+  orange: { icon: 'rgba(255,159,46,.14)', text: '#ff9f2e' },
+  pink: { icon: 'rgba(255,77,166,.13)', text: '#ff4da6' },
+  slate: { icon: 'rgba(71,85,105,.12)', text: '#475569' },
 };
 
 function localDateISO(date = new Date()): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
-function numberValue(value: unknown): number {
+function rows(value: unknown): Row[] {
+  return Array.isArray(value) ? value.filter((item): item is Row => Boolean(item) && typeof item === 'object' && !Array.isArray(item)) : [];
+}
+
+function record(value: unknown): Row {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Row : {};
+}
+
+function num(value: unknown): number {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   const parsed = Number(String(value ?? '').replace(/[$,%\s,]/g, ''));
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function objectValue(value: unknown): Row {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as Row : {};
-}
-
 function compact(value: number): string {
   const abs = Math.abs(value);
   const trim = (input: string) => input.replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1');
-  if (abs >= 1_000_000_000) return `${trim((value / 1_000_000_000).toFixed(abs >= 10_000_000_000 ? 1 : 2))}B`;
-  if (abs >= 1_000_000) return `${trim((value / 1_000_000).toFixed(abs >= 100_000_000 ? 1 : 2))}M`;
-  if (abs >= 100_000) return `${trim((value / 1_000).toFixed(0))}K`;
-  if (abs >= 10_000) return `${trim((value / 1_000).toFixed(1))}K`;
-  if (abs >= 1_000) return `${Math.round(value).toLocaleString('en-US')}`;
-  return `${Math.round(value).toLocaleString('en-US')}`;
+  if (abs >= 1_000_000_000) return `${trim((value / 1_000_000_000).toFixed(2))}B`;
+  if (abs >= 1_000_000) return `${trim((value / 1_000_000).toFixed(2))}M`;
+  if (abs >= 10_000) return `${trim((value / 1_000).toFixed(abs >= 100_000 ? 0 : 1))}K`;
+  return Math.round(value).toLocaleString('en-US');
 }
 
-function metricMap(rows: Row[]): Map<string, Row> {
-  const entries: Array<[string, Row]> = rows
-    .map((row): [string, Row] => [String(row.metric_key || row.key || ''), row])
-    .filter(([key]) => Boolean(key));
-  return new Map(entries);
-}
-
-function metricNumber(metrics: Map<string, Row>, key: string): number {
-  const row = metrics.get(key);
-  return row ? numberValue(row.value_numeric ?? row.value ?? 0) : 0;
-}
-
-function metricSourceCount(metrics: Map<string, Row>, key: string): number {
-  const row = metrics.get(key);
-  return row ? numberValue(row.source_count || objectValue(row.calculation).row_count) : 0;
-}
-
-function badgeText(value?: string): string {
-  if (!value) return '示例';
-  if (value.includes('部分')) return '部分';
-  if (value.includes('Shopify')) return '待接入';
-  if (value.includes('待')) return '待数据';
-  return '示例';
-}
-
-function rowsFrom(value: unknown): Row[] {
-  if (Array.isArray(value)) return value as Row[];
-  return [];
-}
-
-function pendingKpis(): PremiumKpi[] {
-  return mockKpis.map((item) => ({
-    ...item,
-    value: '--',
-    meta: item.label === 'GMV' || item.label === '订单量' || item.label === '平均 ROI' ? '待 Shopify 接入' : '等待真实 API',
-    trend: 'up',
-    isMock: true,
-    mockLabel: item.label === 'GMV' || item.label === '订单量' || item.label === '平均 ROI' ? '待 Shopify 接入' : '待真实数据',
-  }));
+function dateLabel(value?: string): string {
+  if (!value) return '本次会话';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
 function officialPlatformRows(matrix: Row): Row[] {
-  return rowsFrom(matrix.platforms);
+  return rows(matrix.platforms);
 }
 
 function officialAccountRows(matrix: Row): Row[] {
-  return officialPlatformRows(matrix).flatMap((platform) => rowsFrom(platform.accounts));
+  return officialPlatformRows(matrix).flatMap((platform) => rows(platform.accounts));
 }
 
 function officialTotals(matrix: Row) {
   const platforms = officialPlatformRows(matrix);
   const accounts = officialAccountRows(matrix);
-  const platformTotal = (key: string) => platforms.reduce((sum, row) => sum + numberValue(row[key]), 0);
-  const accountTotal = (key: string) => accounts.reduce((sum, row) => sum + numberValue(row[key]), 0);
-  const views = numberValue(matrix.total_views) || platformTotal('total_views');
-  const posts = numberValue(matrix.post_count) || platformTotal('total_posts');
-  const followers = platformTotal('total_followers') || accountTotal('followers');
-  const likes = accountTotal('total_likes');
-  const comments = accountTotal('total_comments');
-  const viewsDelta = platformTotal('views_delta') || accountTotal('views_delta');
+  const platformTotal = (key: string) => platforms.reduce((sum, row) => sum + num(row[key]), 0);
+  const accountTotal = (key: string) => accounts.reduce((sum, row) => sum + num(row[key]), 0);
   return {
-    views,
-    posts,
-    followers,
-    likes,
-    comments,
-    viewsDelta,
-    accountCount: numberValue(matrix.account_count) || accounts.length,
+    views: num(matrix.total_views) || platformTotal('total_views'),
+    posts: num(matrix.post_count) || platformTotal('total_posts'),
+    likes: accountTotal('total_likes') || platformTotal('total_likes'),
+    comments: accountTotal('total_comments') || platformTotal('total_comments'),
+    viewsDelta: platformTotal('views_delta') || accountTotal('views_delta'),
+    accountCount: num(matrix.account_count) || accounts.length,
   };
 }
 
-function trendMetricValue(row: Row, segment: TrendSegment): number {
-  if (segment === '销售额') {
-    return numberValue(row.gmv_cents || row.sales_cents || row.revenue_cents) / 100;
-  }
-  if (segment === '互动量') {
-    return numberValue(row.likes) + numberValue(row.comments);
-  }
-  return numberValue(row.views || row.total_views || row.play_count || row.impressions);
+function metricValue(row: Row, segment: TrendSegment): number {
+  if (segment === '销售额') return num(row.gmv_cents || row.sales_cents || row.revenue_cents) / 100;
+  if (segment === '互动量') return num(row.likes) + num(row.comments);
+  return num(row.views || row.total_views || row.play_count || row.impressions);
 }
 
-function trendMetricReady(rows: Row[], segment: TrendSegment, allowMockFallback: boolean): boolean {
-  if (segment === '曝光量') return allowMockFallback || rows.length > 0;
-  return rows.some((row) => trendMetricValue(row, segment) > 0);
-}
-
-function trendMetricDisplay(value: number, segment: TrendSegment): string {
-  if (!value) return '--';
-  if (segment === '销售额') return `$${compact(value)}`;
-  return compact(value);
-}
-
-function latestTrendValue(rows: Row[], segment: TrendSegment): number {
-  const last = rows.length ? rows[rows.length - 1] : {};
-  return trendMetricValue(last, segment);
-}
-
-function buildPremiumKpis(snapshot: PremiumSnapshot, allowMockFallback: boolean): PremiumKpi[] {
-  if (snapshot.source === 'mock') return allowMockFallback ? mockKpis : pendingKpis();
-  const metrics = metricMap(rowsFrom(snapshot.dashboard.metrics));
-  const official = officialTotals(snapshot.officialMatrix);
-  const trendTotals = snapshot.trendRows.reduce<{ views: number; likes: number; comments: number; published: number }>(
-    (acc, row) => {
-      acc.views += numberValue(row.views || row.total_views || row.play_count || row.impressions);
-      acc.likes += numberValue(row.likes);
-      acc.comments += numberValue(row.comments);
-      acc.published += numberValue(row.published_content);
-      return acc;
-    },
-    { views: 0, likes: 0, comments: 0, published: 0 },
-  );
-  const views = official.views || metricNumber(metrics, 'views') || trendTotals.views;
-  const gmvCents = metricNumber(metrics, 'gmv');
-  const gmvSourceCount = metricSourceCount(metrics, 'gmv');
-  const costCents = metricNumber(metrics, 'cost');
-  const productRois = snapshot.productRows
-    .map((row) => {
-      const sales = numberValue(row.sales_cents || row.revenue_cents || row.gmv_cents);
-      const cost = numberValue(row.cost_cents);
-      return numberValue(row.roi) || (cost ? sales / cost : 0);
-    })
-    .filter((value) => value > 0);
-  const averageRoi = productRois.length ? productRois.reduce((sum, value) => sum + value, 0) / productRois.length : 0;
-  const publishedContent = official.posts || metricNumber(metrics, 'published_content') || trendTotals.published;
-  const engagementRate = official.views && (official.likes || official.comments)
-    ? ((official.likes + official.comments) / official.views) * 100
-    : trendTotals.views
-      ? ((trendTotals.likes + trendTotals.comments) / trendTotals.views) * 100
-      : 0;
-  const engagementReady = Boolean(official.views || trendTotals.views);
-  const gmvPartial = gmvCents > 0 && gmvSourceCount > 0;
-  const roiPartial = averageRoi > 0 && gmvCents > 0 && costCents > 0;
-  return [
-    { ...mockKpis[0], value: views ? compact(views) : '--', meta: views ? `真实 API · 官方矩阵${official.viewsDelta ? ` · +${compact(official.viewsDelta)}` : ''}` : '等待真实 API', trend: 'up', isMock: !views, mockLabel: views ? undefined : '待真实数据' },
-    { ...mockKpis[1], value: gmvPartial ? `$${compact(gmvCents / 100)}` : '--', meta: gmvPartial ? `部分归因 · ${gmvSourceCount} 条 attribution` : '待 Shopify 接入', trend: 'up', isMock: true, mockLabel: gmvPartial ? '部分归因' : '待 Shopify 接入' },
-    { ...mockKpis[2], value: publishedContent ? compact(publishedContent) : '--', meta: publishedContent ? '真实 API · 官方矩阵' : '等待真实 API', trend: 'up', isMock: !publishedContent, mockLabel: publishedContent ? undefined : '待真实数据' },
-    { ...mockKpis[3], value: engagementReady ? `${engagementRate.toFixed(2)}%` : '--', meta: engagementReady ? '真实 API · likes/comments/views' : '等待 likes/comments/views', trend: engagementRate ? 'up' : 'down', isMock: !engagementReady, mockLabel: engagementReady ? undefined : '待真实数据' },
-    { ...mockKpis[4], value: '--', meta: '待 Shopify 订单 webhook', trend: 'up', isMock: true, mockLabel: '待 Shopify 接入' },
-    { ...mockKpis[5], value: roiPartial ? `${averageRoi.toFixed(2)}x` : '--', meta: roiPartial ? '部分 ROI · 归因 + 成本未全量' : '待成本 / Shopify 接入', trend: 'up', isMock: true, mockLabel: roiPartial ? '部分归因' : '待成本 / Shopify 接入' },
-  ];
-}
-
-function buildProductRows(rows: Row[], allowMockFallback: boolean): PremiumProductRow[] {
-  const candidates = rows.slice(0, 4).map((row, index) => {
-    const sales = numberValue(row.sales_cents || row.revenue_cents || row.gmv_cents);
-    const cost = numberValue(row.cost_cents);
-    const roi = numberValue(row.roi) || (cost ? sales / cost : 0);
-    return {
-      rank: index + 1,
-      name: String(row.product_name || row.product_sku || row.project_name || `产品 ${index + 1}`),
-      width: '0%',
-      value: roi ? `${roi.toFixed(2)}x` : '待归因',
-      roi,
-      isMock: false,
-    };
-  }).filter((row) => row.roi > 0);
-  if (!candidates.length) {
-    return allowMockFallback
-      ? mockProductRows
-      : [{ rank: 1, name: '暂无真实 ROI 数据', width: '0%', value: '--', isMock: true, mockLabel: '待成本 / Shopify 接入' }];
-  }
-  const max = Math.max(1, ...candidates.map((row) => row.roi));
-  return candidates.map(({ roi, ...row }) => ({
-    ...row,
-    width: `${Math.max(8, Math.round((roi / max) * 100))}%`,
-  }));
-}
-
-function signalTitle(signal: Row): string {
-  const brand = String(signal.brand_name || '').trim();
-  const type = String(signal.signal_type || '').replace(/_/g, ' ');
-  return brand ? `${brand} · ${type}` : type || '品牌信号';
-}
-
-function signalBody(signal: Row): string {
-  const platform = String(signal.platform || '平台');
-  const role = String(signal.brand_role || '').trim();
-  const strength = String(signal.signal_strength || 'medium');
-  const matched = String(signal.matched_text || '').trim();
-  const context = String(signal.match_context || '').replace(/\s+/g, ' ').trim();
-  const evidence = matched || context.slice(0, 72);
-  return [platform, role || 'signal', strength, evidence].filter(Boolean).join(' · ');
-}
-
-function buildAlerts(signals: Row[]): PremiumAlert[] {
-  if (!signals.length) return [];
-  return signals.slice(0, 3).map((signal) => {
-    const competitor = String(signal.brand_role || '') === 'competitor';
-    return {
-      icon: competitor ? '!' : '✓',
-      title: signalTitle(signal),
-      body: signalBody(signal),
-      time: String(signal.detected_at || signal.published_at || '').slice(5, 10) || 'new',
-      bgc: competitor ? '#fff7ed' : '#ecfdf3',
-      col: competitor ? '#f79009' : '#12b76a',
-      isMock: false,
-      url: String(signal.source_url || signal.post_url || '').trim(),
-      sourceLabel: String(signal.match_source || signal.source_table || 'vkpi_brand_signal').trim(),
-      signalType: String(signal.signal_type || signal.brand_role || 'brand_signal').trim(),
-      severity: String(signal.signal_strength || signal.severity || 'medium').trim(),
-    };
-  });
-}
-
-function buildPremiumRegions(kolSummary: Row, kolDistribution: Row, allowMockFallback: boolean): PremiumRegion[] {
-  const distribution = rowsFrom(kolDistribution.countries).length ? rowsFrom(kolDistribution.countries) : rowsFrom(kolSummary.country_distribution);
-  const total = distribution.reduce((sum, row) => sum + numberValue(row.count || row.kol_count), 0);
-  const regionRows = distribution
-    .map((row, index): PremiumRegion => {
-      const count = numberValue(row.count || row.kol_count);
-      const share = numberValue(row.share) || (total ? (count / total) * 100 : 0);
-      const countryCode = String(row.code || row.country_code || '').trim();
-      const platformSummary = rowsFrom(row.platforms || row.platform_distribution || row.by_platform)
-        .slice(0, 3)
-        .map((platformRow) => {
-          const label = platformDisplayName(platformRow.platform || platformRow.label || platformRow.name);
-          const value = numberValue(platformRow.count || platformRow.kol_count || platformRow.value);
-          return value ? `${label} ${compact(value)}` : label;
-        })
-        .filter(Boolean);
-      return {
-        label: String(row.name || row.country_name || countryCode || `国家 ${index + 1}`),
-        value: share ? `${share.toFixed(1)}%` : compact(count),
-        color: regionColors[index % regionColors.length],
-        isMock: false,
-        countryCode,
-        kolCount: count,
-        exposure: numberValue(row.exposure || row.total_exposure || row.total_views || row.views),
-        sales: numberValue(row.sales || row.gmv || row.revenue || row.total_sales),
-        platformSummary,
-        lat: numberValue(row.lat) || undefined,
-        lng: numberValue(row.lng) || undefined,
-      };
-    })
-    .filter((region) => Boolean(region.countryCode) && (region.kolCount || 0) > 0)
-    .sort((a, b) => (b.kolCount || 0) - (a.kolCount || 0));
-  if (regionRows.length) return regionRows;
-  return allowMockFallback
-    ? regions
-    : [{ label: '暂无国家分布', value: '--', color: '#cfe0ff', isMock: true, mockLabel: '待 KOL 国家数据' }];
-}
-
-function buildPremiumPlatforms(kolSummary: Row, officialMatrix: Row, allowMockFallback: boolean): PremiumPlatform[] {
-  const officialRows = officialPlatformRows(officialMatrix)
-    .map((row) => {
-      const key = String(row.platform || '').trim().toLowerCase();
-      const views = numberValue(row.total_views);
-      const posts = numberValue(row.total_posts);
-      return { key, views, posts };
-    })
-    .filter((row) => Boolean(row.key) && (row.views > 0 || row.posts > 0))
-    .sort((a, b) => b.views - a.views || b.posts - a.posts)
-    .slice(0, 5);
-  if (officialRows.length) {
-    const max = Math.max(1, ...officialRows.map((row) => row.views || row.posts));
-    return officialRows.map((row): PremiumPlatform => {
-      const style = platformStyles[row.key] || {
-        icon: row.key.slice(0, 2).toUpperCase(),
-        label: row.key.charAt(0).toUpperCase() + row.key.slice(1),
-        background: '#1b6cff',
-      };
-      const value = row.views ? compact(row.views) : `${compact(row.posts)} 内容`;
-      return {
-        ...style,
-        width: `${Math.max(8, Math.round(((row.views || row.posts) / max) * 100))}%`,
-        value,
-        isMock: false,
-      };
-    });
-  }
-  const rows = rowsFrom(kolSummary.by_platform)
-    .map((row) => {
-      const key = String(row.platform || '').trim().toLowerCase();
-      const count = numberValue(row.n ?? row.count ?? row.total);
-      return { key, count };
-    })
-    .filter((row) => Boolean(row.key) && row.count > 0)
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 4);
-  if (!rows.length) {
-    return allowMockFallback
-      ? platforms
-      : [{ icon: '--', label: '暂无平台分布', width: '0%', value: '--', background: '#cfe0ff', isMock: true, mockLabel: '待真实数据' }];
-  }
-  const max = Math.max(1, ...rows.map((row) => row.count));
-  return rows.map((row): PremiumPlatform => {
-    const style = platformStyles[row.key] || {
-      icon: row.key.slice(0, 2).toUpperCase(),
-      label: row.key.charAt(0).toUpperCase() + row.key.slice(1),
-      background: '#1b6cff',
-    };
-    return {
-      ...style,
-      width: `${Math.max(8, Math.round((row.count / max) * 100))}%`,
-      value: `${compact(row.count)} KOL`,
-      isMock: false,
-    };
-  });
-}
-
-function buildPremiumAgents(agentsStatus: Row, allowMockFallback: boolean): PremiumAgent[] {
-  const rows = rowsFrom(agentsStatus.agents)
-    .map((row): PremiumAgent => ({
-      id: String(row.id || ''),
-      name: String(row.name || row.id || 'Agent'),
-      status: String(row.status || 'idle'),
-      summary: String(row.summary || '暂无输出'),
-      lastOutput: String(row.last_output || ''),
-      isMock: false,
-    }))
-    .filter((agent) => Boolean(agent.id))
-    .slice(0, 7);
-  if (rows.length) return rows;
-  return allowMockFallback ? mockAgents : [{ id: 'agents', name: 'Agents', status: 'idle', summary: '等待真实 API', lastOutput: '', isMock: true }];
-}
-
-function buildPremiumTasks(tasksStatus: Row): PremiumTask[] {
-  return rowsFrom(tasksStatus.tasks)
-    .map((row): PremiumTask => {
-      const priority = String(row.priority || 'low') as PremiumTask['priority'];
-      const confidence = Math.max(0, Math.min(1, numberValue(row.confidence)));
-      return {
-        id: String(row.id || row.candidate_id || row.title || 'task'),
-        title: String(row.title || '推荐任务'),
-        priority: priority === 'high' || priority === 'mid' || priority === 'low' ? priority : 'low',
-        priorityLabel: priority === 'high' ? '高' : priority === 'mid' ? '中' : '低',
-        body: String(row.body || '等待人工复核'),
-        width: `${Math.round(confidence * 100)}%`,
-        isMock: false,
-        confidence,
-        sourceLabel: String(row.source || 'recommendation_agent_v0'),
-      };
-    })
-    .slice(0, 6);
-}
-
-function recentDateLabels(days = 6): string[] {
-  const labels: string[] = [];
-  const now = new Date();
-  for (let index = days - 1; index >= 0; index -= 1) {
-    const date = new Date(now);
-    date.setDate(now.getDate() - index);
-    labels.push(`${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')}`);
-  }
-  return labels;
-}
-
-function trendChart(rows: Row[], allowMockFallback: boolean, segment: TrendSegment) {
-  const fallbackPath = 'M34 196 C82 162 121 164 166 134 S235 102 285 101 363 76 411 51 458 25 500 32';
-  if (!rows.length) {
-    if (!allowMockFallback || segment !== '曝光量') {
-      const emptyPath = 'M34 196 L126 196 L218 196 L310 196 L402 196 L500 196';
-      return {
-        path: emptyPath,
-        areaPath: `${emptyPath} L500 222 L34 222 Z`,
-        labels: recentDateLabels(),
-        tipDate: '无数据',
-        tipValue: '--',
-        pointX: 500,
-        pointY: 196,
-      };
-    }
-    return {
-      path: fallbackPath,
-      areaPath: `${fallbackPath} L500 222 L34 222 Z`,
-      labels: ['05/11', '05/12', '05/13', '05/14', '05/15', '05/16'],
-      tipDate: '05/17',
-      tipValue: '86.37M',
-      pointX: 500,
-      pointY: 32,
-    };
-  }
-  const values = rows.map((row) => trendMetricValue(row, segment));
-  const max = Math.max(1, ...values);
-  const xMin = 34;
-  const xMax = 500;
-  const yMin = 32;
-  const yMax = 196;
-  const points = values.map((value, index) => {
-    const x = values.length === 1 ? xMax : xMin + ((xMax - xMin) * index) / (values.length - 1);
-    const y = yMax - ((yMax - yMin) * value) / max;
-    return { x: Math.round(x), y: Math.round(y) };
-  });
-  const path = points.length ? `M${points.map((point) => `${point.x} ${point.y}`).join(' L')}` : fallbackPath;
-  const lastPoint = points[points.length - 1] || { x: 500, y: 32 };
-  return {
-    path,
-    areaPath: `${path} L500 222 L34 222 Z`,
-    labels: rows.slice(0, 6).map((row) => String(row.date || row.day || '').slice(5).replace('-', '/') || '-'),
-    tipDate: String(rows[rows.length - 1]?.date || rows[rows.length - 1]?.day || '').slice(5).replace('-', '/') || 'latest',
-    tipValue: trendMetricDisplay(latestTrendValue(rows, segment), segment),
-    pointX: lastPoint.x,
-    pointY: lastPoint.y,
-  };
-}
-
-function settledValue<T>(result: PromiseSettledResult<T>, fallback: T, failed: string[], label: string): T {
-  if (result.status === 'fulfilled') return result.value;
-  failed.push(label);
-  return fallback;
-}
-
-function latestContentRows(snapshot: PremiumSnapshot): Row[] {
-  const recent = rowsFrom(snapshot.recentContent);
-  if (recent.length) {
-    return recent
-      .sort((a, b) => contentTimestamp(b) - contentTimestamp(a))
-      .slice(0, 8);
-  }
-  const officialRows = officialAccountRows(snapshot.officialMatrix)
-    .flatMap((account) => rowsFrom(account.posts).map((post): Row => ({
-      ...post,
-      content_kind: 'official',
-      account_handle: account.handle,
-      account_display_name: account.display_name,
-      platform: account.platform_label || account.platform,
-    })));
-  const ugcRows = rowsFrom(snapshot.brandSignals)
-    .map((signal): Row => ({
-      ...signal,
-      content_kind: 'ugc',
-      title: signal.title || signal.signal_title || signal.summary || signal.reason,
-      account_handle: signal.author_handle || signal.handle || signal.account_handle || signal.source_handle,
-      platform: signal.platform || signal.source_platform || signal.channel,
-      posted_at: signal.published_at || signal.detected_at || signal.captured_at || signal.created_at,
-      url: signal.url || signal.source_url || signal.post_url,
-      views: signal.views || signal.view_count || signal.impressions || 0,
-      likes: signal.likes || signal.like_count || 0,
-      comments: signal.comments || signal.comment_count || 0,
-    }))
-    .filter((row) => Boolean(rowUrl(row)));
-  return [...officialRows, ...ugcRows]
-    .sort((a, b) => contentTimestamp(b) - contentTimestamp(a))
-    .slice(0, 8);
-}
-
-function postedLabel(row: Row): string {
-  const raw = String(row.posted_at || row.published_at || '');
-  return raw ? raw.slice(0, 10) : '-';
-}
-
-function engagementLabel(row: Row): string {
-  const views = numberValue(row.views || row.total_views || row.play_count || row.impressions);
-  if (!views) return '--';
-  const interactions = numberValue(row.likes) + numberValue(row.comments) + numberValue(row.shares);
-  return `${((interactions / views) * 100).toFixed(2)}%`;
-}
-
-function contentTimestamp(row: Row): number {
-  const raw = String(row.posted_at || row.published_at || row.detected_at || row.captured_at || row.created_at || '');
-  const value = raw ? Date.parse(raw) : 0;
-  return Number.isFinite(value) ? value : 0;
-}
-
-function cleanContentTitle(row: Row): string {
-  const raw = String(row.title || row.caption || row.text || row.summary || row.reason || '未命名内容')
-    .replace(/https?:\/\/\S+/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-  const hashIndex = raw.indexOf('#');
-  const withoutTags = hashIndex > 10 ? raw.slice(0, hashIndex).trim() : raw;
-  return (withoutTags || raw).slice(0, 96);
-}
-
-function contentKind(row: Row): Exclude<ContentFilter, 'all'> {
-  const raw = String(row.content_kind || row.account_kind || row.account_type || row.source_type || row.relationship || '').toLowerCase();
-  if (raw.includes('ugc') || raw.includes('mention') || raw.includes('brand_signal')) return 'ugc';
-  if (raw.includes('partner') || raw.includes('合作') || raw.includes('kol') || raw.includes('contract')) return 'partner';
-  return 'official';
-}
-
-function contentKindLabel(kind: Exclude<ContentFilter, 'all'>): string {
-  if (kind === 'partner') return '合作 KOL';
-  if (kind === 'ugc') return 'UGC 提及';
-  return '官方矩阵';
-}
-
-function contentMetric(row: Row, keys: string[]): number {
-  for (const key of keys) {
-    const value = numberValue(row[key]);
-    if (value) return value;
-  }
-  return 0;
-}
-
-function contentMediaIcon(row: Row): string {
-  const raw = String(row.media_type || row.media_kind || row.type || row.url || '').toLowerCase();
-  return raw.includes('video') || raw.includes('reel') || raw.includes('youtube') || raw.includes('tiktok') ? '▶' : '▧';
+function platformName(value: unknown): string {
+  const key = String(value || '').trim().toLowerCase();
+  const map: Record<string, string> = { instagram: 'Instagram', youtube: 'YouTube', tiktok: 'TikTok', facebook: 'Facebook', x: 'X' };
+  return map[key] || (key ? key.charAt(0).toUpperCase() + key.slice(1) : '未知平台');
 }
 
 function countryFlag(code?: string): string {
@@ -806,79 +213,30 @@ function countryFlag(code?: string): string {
   return Array.from(clean).map((letter) => String.fromCodePoint(127397 + letter.charCodeAt(0))).join('');
 }
 
-function mapMetricValue(region: PremiumRegion, metric: MapMetric): number {
-  if (metric === 'exposure') return region.exposure || 0;
-  if (metric === 'sales') return region.sales || 0;
-  return region.kolCount || 0;
+function settledValue<T>(result: PromiseSettledResult<T>, fallback: T, failed: string[], label: string): T {
+  if (result.status === 'fulfilled') return result.value;
+  failed.push(label);
+  return fallback;
 }
 
-function mapMetricLabel(region: PremiumRegion, metric: MapMetric): string {
-  const value = mapMetricValue(region, metric);
-  if (metric === 'sales') return value ? `$${compact(value)}` : '待 Shopify';
-  if (metric === 'exposure') return value ? compact(value) : '待曝光';
-  return compact(value);
-}
-
-function mapMetricTitle(metric: MapMetric): string {
-  if (metric === 'sales') return '销售额';
-  if (metric === 'exposure') return '曝光量';
-  return 'KOL 数';
-}
-
-function topCountryPlatforms(items: VkpiKolPoolItem[]): Array<{ label: string; count: number; width: string }> {
-  const counts = new Map<string, number>();
-  for (const item of items) {
-    const key = platformDisplayName(item.platform || '未知平台');
-    counts.set(key, (counts.get(key) || 0) + 1);
-  }
-  const max = Math.max(1, ...Array.from(counts.values()));
-  return Array.from(counts.entries())
-    .map(([label, count]) => ({ label, count, width: `${Math.max(8, Math.round((count / max) * 100))}%` }))
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 5);
-}
-
-function kolDecisionLabel(item: VkpiKolPoolItem): string {
-  const score = numberValue(item.viltrox_fit_score);
-  if (score >= 80) return '可联系';
-  if (score >= 60) return '观察';
-  if (score > 0) return '谨慎';
-  return '待评估';
-}
-
-function countryDecisionRows(items: VkpiKolPoolItem[]): Array<{ label: string; count: number; width: string }> {
-  const labels = ['可联系', '观察', '谨慎', '待评估'];
-  const counts = new Map(labels.map((label) => [label, 0]));
-  for (const item of items) {
-    const label = kolDecisionLabel(item);
-    counts.set(label, (counts.get(label) || 0) + 1);
-  }
-  const max = Math.max(1, ...Array.from(counts.values()));
-  return labels.map((label) => {
-    const count = counts.get(label) || 0;
-    return { label, count, width: `${Math.max(8, Math.round((count / max) * 100))}%` };
-  });
-}
-
-function countrySyncRows(items: VkpiKolPoolItem[]): Array<{ label: string; count: number; width: string }> {
-  const counts = new Map<string, number>();
-  for (const item of items) {
-    const raw = String(item.sync_status || item.source_type || 'unknown').replace(/_/g, ' ') || 'unknown';
-    counts.set(raw, (counts.get(raw) || 0) + 1);
-  }
-  const max = Math.max(1, ...Array.from(counts.values()));
-  return Array.from(counts.entries())
-    .map(([label, count]) => ({ label, count, width: `${Math.max(8, Math.round((count / max) * 100))}%` }))
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 4);
-}
-
-async function fetchPremiumSnapshot(apiToken: string, windowDays: number): Promise<PremiumSnapshot> {
+async function fetchSnapshot(apiToken: string, windowDays: number): Promise<Snapshot> {
   const failedSections: string[] = [];
-  const [dashboardResult, trendResult, productResult, kolSummaryResult, kolDistributionResult, officialMatrixResult, competitorResult, brandSignalsResult, recentContentResult, agentsStatusResult, copilotBriefResult, tasksStatusResult] = await Promise.allSettled([
+  const [
+    dashboardResult,
+    trendResult,
+    kolSummaryResult,
+    kolDistributionResult,
+    officialMatrixResult,
+    competitorResult,
+    brandSignalsResult,
+    recentContentResult,
+    agentsStatusResult,
+    copilotBriefResult,
+    tasksStatusResult,
+    recommendationBacklogResult,
+  ] = await Promise.allSettled([
     apiFetch<Row>(`/api/admin/vkpi/dashboard?window_days=${windowDays}`, {}, apiToken),
     apiFetch<{ rows?: Row[] }>(`/api/admin/vkpi/dashboard/revenue-trend?window_days=7`, {}, apiToken),
-    apiFetch<{ rows?: Row[] }>(`/api/admin/vkpi/dashboard/product-performance?window_days=${windowDays}&limit=20`, {}, apiToken),
     getKolPoolSummary(apiToken),
     apiFetch<Row>('/api/admin/vkpi/dashboard/kol-distribution?limit=200', {}, apiToken),
     getOfficialChannelMatrix(apiToken, { limit: 20 }),
@@ -888,1420 +246,454 @@ async function fetchPremiumSnapshot(apiToken: string, windowDays: number): Promi
     apiFetch<Row>('/api/admin/vkpi/dashboard/agents-status', {}, apiToken),
     apiFetch<Row>('/api/admin/vkpi/dashboard/copilot-brief', {}, apiToken),
     apiFetch<Row>('/api/admin/vkpi/dashboard/tasks?limit=6', {}, apiToken),
+    getRecommendationFeedbackBacklog(apiToken, 12),
   ]);
-  const dashboard = settledValue(dashboardResult, {}, failedSections, 'dashboard');
   const trend = settledValue(trendResult, { rows: [] }, failedSections, 'revenue-trend');
-  const products = settledValue(productResult, { rows: [] }, failedSections, 'product-performance');
-  const kolSummary = settledValue(kolSummaryResult, {}, failedSections, 'kol-pool-summary');
-  const kolDistribution = settledValue(kolDistributionResult, {}, failedSections, 'kol-distribution');
-  const officialMatrix = settledValue(officialMatrixResult, {}, failedSections, 'official-channel-matrix');
-  const competitorDashboard = settledValue(competitorResult, {}, failedSections, 'competitors-dashboard');
   const brandSignals = settledValue(brandSignalsResult, { signals: [] }, failedSections, 'brand-signals');
   const recentContent = settledValue(recentContentResult, { items: [] }, failedSections, 'recent-content');
-  const agentsStatus = settledValue(agentsStatusResult, {}, failedSections, 'agents-status');
-  const copilotBrief = settledValue(copilotBriefResult, {}, failedSections, 'copilot-brief');
-  const tasksStatus = settledValue(tasksStatusResult, {}, failedSections, 'tasks');
   return {
     source: failedSections.length ? 'partial' : 'real',
     failedSections,
-    dashboard,
-    trendRows: rowsFrom(trend.rows),
-    productRows: rowsFrom(products.rows),
-    kolSummary,
-    kolDistribution,
-    officialMatrix,
-    competitorDashboard,
-    brandSignals: rowsFrom(brandSignals.signals),
-    recentContent: rowsFrom(recentContent.items),
-    agentsStatus,
-    copilotBrief,
-    tasksStatus,
+    dashboard: settledValue(dashboardResult, {}, failedSections, 'dashboard'),
+    trendRows: rows(trend.rows),
+    kolSummary: settledValue(kolSummaryResult, {}, failedSections, 'kol-pool-summary'),
+    kolDistribution: settledValue(kolDistributionResult, {}, failedSections, 'kol-distribution'),
+    officialMatrix: settledValue(officialMatrixResult, {}, failedSections, 'official-channel-matrix'),
+    competitorDashboard: settledValue(competitorResult, {}, failedSections, 'competitors-dashboard'),
+    brandSignals: rows(brandSignals.signals),
+    recentContent: rows(recentContent.items),
+    agentsStatus: settledValue(agentsStatusResult, {}, failedSections, 'agents-status'),
+    copilotBrief: settledValue(copilotBriefResult, {}, failedSections, 'copilot-brief'),
+    tasksStatus: settledValue(tasksStatusResult, {}, failedSections, 'tasks'),
+    recommendationBacklog: settledValue(recommendationBacklogResult, {}, failedSections, 'recommendation-feedback-backlog'),
     loadedAt: new Date().toISOString(),
   };
 }
 
-function kpiStatusLabel(item: PremiumKpi): string {
-  if (!item.isMock) return '真实 API';
-  if (item.mockLabel?.includes('部分')) return '部分真实';
-  if (['GMV', '订单量', '平均 ROI'].includes(item.label)) return '待接入';
-  return item.mockLabel?.includes('Shopify') || item.mockLabel?.includes('待') ? '待接入' : '示例';
+function buildKpis(snapshot: Snapshot, scope: DashboardScope): KpiCard[] {
+  const official = officialTotals(snapshot.officialMatrix);
+  const trendTotals = snapshot.trendRows.reduce<TrendTotals>((acc, row) => {
+    acc.views += num(row.views || row.total_views || row.play_count || row.impressions);
+    acc.likes += num(row.likes);
+    acc.comments += num(row.comments);
+    acc.posts += num(row.published_content);
+    return acc;
+  }, { views: 0, likes: 0, comments: 0, posts: 0 });
+  const scopedPending = scope === 'kol' || scope === 'combined';
+  const scopeSuffix = scope === 'no_kol' ? ' · 不含 KOL' : '';
+  const views = official.views || trendTotals.views;
+  const posts = official.posts || trendTotals.posts;
+  const engagementBase = official.views || trendTotals.views;
+  const interactions = official.likes + official.comments || trendTotals.likes + trendTotals.comments;
+  const engagement = engagementBase ? (interactions / engagementBase) * 100 : 0;
+  const pendingLabel = scope === 'kol' ? 'KOL 口径待接入' : '官方 + KOL 合并口径待接入';
+  const maybePending = (card: KpiCard): KpiCard => scopedPending ? { ...card, value: '--', meta: pendingLabel, status: '待接入', pending: true } : card;
+  return [
+    maybePending({ icon: '◉', label: '总曝光量', value: views ? compact(views) : '--', meta: views ? `官方矩阵${official.viewsDelta ? ` · +${compact(official.viewsDelta)}` : ''}${scopeSuffix}` : '等待真实 API', tone: 'blue', status: views ? '真实' : '待接入', pending: !views }),
+    { icon: '▣', label: 'GMV', value: '--', meta: '待 Shopify 订单接入', tone: 'green', status: '待接入', pending: true },
+    maybePending({ icon: '♚', label: '内容数', value: posts ? compact(posts) : '--', meta: posts ? `官方矩阵${scopeSuffix}` : '等待真实 API', tone: 'purple', status: posts ? '真实' : '待接入', pending: !posts }),
+    maybePending({ icon: '▥', label: '内容互动率', value: engagementBase ? `${engagement.toFixed(2)}%` : '--', meta: engagementBase ? `likes/comments/views${scopeSuffix}` : '等待互动分母', tone: 'orange', status: engagementBase ? '真实' : '待接入', pending: !engagementBase }),
+    { icon: '▤', label: '订单量', value: '--', meta: '待 Shopify 订单 webhook', tone: 'blue', status: '待接入', pending: true },
+    { icon: '¥', label: '平均 ROI', value: '--', meta: '待成本与订单接入', tone: 'pink', status: '待接入', pending: true },
+  ];
 }
 
-function loadedAtLabel(value?: string): string {
-  if (!value) return '本次会话';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+function buildTrend(rowsList: Row[], segment: TrendSegment) {
+  const values = rowsList.map((row) => metricValue(row, segment));
+  const labels = rowsList.map((row) => String(row.date || row.day || '').slice(5).replace('-', '/') || '-').slice(-6);
+  if (!values.length || !values.some(Boolean)) {
+    const emptyPath = 'M34 196 L126 196 L218 196 L310 196 L402 196 L500 196';
+    return { path: emptyPath, areaPath: `${emptyPath} L500 222 L34 222 Z`, labels: labels.length ? labels : ['-', '-', '-', '-', '-', '-'], tipDate: '无数据', tipValue: '--', pointX: 500, pointY: 196 };
+  }
+  const max = Math.max(1, ...values);
+  const points = values.map((value, index) => {
+    const x = values.length === 1 ? 500 : 34 + ((500 - 34) * index) / (values.length - 1);
+    const y = 196 - ((196 - 32) * value) / max;
+    return { x: Math.round(x), y: Math.round(y) };
+  });
+  const path = `M${points.map((point) => `${point.x} ${point.y}`).join(' L')}`;
+  const lastPoint = points[points.length - 1] || { x: 500, y: 196 };
+  const latest = values[values.length - 1] || 0;
+  return {
+    path,
+    areaPath: `${path} L500 222 L34 222 Z`,
+    labels,
+    tipDate: labels[labels.length - 1] || 'latest',
+    tipValue: segment === '销售额' ? `$${compact(latest)}` : compact(latest),
+    pointX: lastPoint.x,
+    pointY: lastPoint.y,
+  };
 }
 
-function kpiInsightText(item: PremiumKpi): string {
-  if (item.label === '总曝光量') return '官方矩阵曝光已接入；下一步按平台、账号和 TOP 内容拆解增长来源。';
-  if (item.label === '内容数') return '内容数量来自官方矩阵，适合与曝光和互动率联动判断发布节奏。';
-  if (item.label === '内容互动率') return '互动率需要同时看 likes、comments 和 views，避免只看单一百分比。';
-  if (item.label === 'GMV') return 'Shopify 全量订单链路未完成前，只展示接入状态和未来归因维度。';
-  if (item.label === '订单量') return '订单指标等待 Shopify webhook 与归因链路闭合后启用。';
-  if (item.label === '平均 ROI') return 'ROI 需要销售、归因和成本三侧同时接通，当前先保持待接入说明。';
-  return '该指标会按统一结构展示趋势、拆解和数据可信信息。';
+function buildRegions(snapshot: Snapshot): RegionRow[] {
+  const distribution = rows(snapshot.kolDistribution.countries).length ? rows(snapshot.kolDistribution.countries) : rows(snapshot.kolSummary.country_distribution);
+  const total = distribution.reduce((sum, row) => sum + num(row.count || row.kol_count), 0);
+  return distribution
+    .map((row): RegionRow => {
+      const count = num(row.count || row.kol_count);
+      return {
+        label: String(row.name || row.country_name || row.country_code || '未知国家'),
+        code: String(row.code || row.country_code || '').toUpperCase(),
+        count,
+        share: total ? (count / total) * 100 : num(row.share),
+        lat: num(row.lat) || undefined,
+        lng: num(row.lng) || undefined,
+      };
+    })
+    .filter((row) => row.code && row.count > 0)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 12);
 }
 
-function kpiTabs(label: string): string[] {
-  if (label === '总曝光量') return ['按平台', '按账号矩阵', 'TOP 内容', '环比贡献'];
-  if (label === '内容数') return ['按平台', '按账号', '内容类型', '发布节奏'];
-  if (label === '内容互动率') return ['按平台', '按账号', 'TOP 互动内容', '分子分母'];
-  if (label === 'GMV') return ['按折扣码', '按归因渠道', '按 SKU'];
-  if (label === '订单量') return ['按折扣码', '按创作者', '按 SKU', '转化漏斗'];
-  if (label === '平均 ROI') return ['按产品', '按项目', '成本构成', '相关性'];
-  return ['趋势', '拆解', '证据'];
+function buildPlatforms(snapshot: Snapshot) {
+  const official = officialPlatformRows(snapshot.officialMatrix)
+    .map((row) => ({ label: platformName(row.platform), value: num(row.total_views) || num(row.total_posts), meta: num(row.total_views) ? '曝光' : '内容' }))
+    .filter((row) => row.value > 0);
+  const source = official.length ? official : rows(snapshot.kolSummary.by_platform)
+    .map((row) => ({ label: platformName(row.platform), value: num(row.n ?? row.count ?? row.total), meta: 'KOL' }))
+    .filter((row) => row.value > 0);
+  const max = Math.max(1, ...source.map((row) => row.value));
+  return source.sort((a, b) => b.value - a.value).slice(0, 5).map((row) => ({
+    ...row,
+    width: `${Math.max(8, Math.round((row.value / max) * 100))}%`,
+  }));
 }
 
-function kpiFlow(label: string): { upstream: string; downstream: string } {
-  if (label === '内容数') return { upstream: '内容计划', downstream: '总曝光量' };
-  if (label === '总曝光量') return { upstream: '内容数', downstream: '互动率' };
-  if (label === '内容互动率') return { upstream: '总曝光量', downstream: '订单量' };
-  if (label === '订单量') return { upstream: '互动率', downstream: 'GMV' };
-  if (label === 'GMV') return { upstream: '订单量', downstream: '平均 ROI' };
-  if (label === '平均 ROI') return { upstream: 'GMV', downstream: '产品作战' };
-  return { upstream: '上游指标', downstream: '下游指标' };
+function latestContent(snapshot: Snapshot): Row[] {
+  const recent = rows(snapshot.recentContent);
+  if (recent.length) return recent.slice(0, 8);
+  return officialAccountRows(snapshot.officialMatrix).flatMap((account) => rows(account.posts).map((post): Row => ({
+    ...post,
+    platform: account.platform_label || account.platform,
+    account_handle: account.handle || account.display_name,
+  }))).slice(0, 8);
 }
 
-function platformDisplayName(raw: unknown): string {
-  const key = String(raw || '').trim().toLowerCase();
-  return platformStyles[key]?.label || (key ? key.charAt(0).toUpperCase() + key.slice(1) : '未知平台');
+function contentTitle(row: Row): string {
+  return String(row.title || row.caption || row.text || row.summary || '未命名内容').replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim().slice(0, 86);
 }
 
-function rowUrl(row: Row): string {
+function contentUrl(row: Row): string {
   return String(row.url || row.post_url || row.source_url || row.permalink || row.content_url || '').trim();
 }
 
-function topExposureContentRows(officialMatrix: Row, limit = 10): Row[] {
-  return officialAccountRows(officialMatrix)
-    .flatMap((account) => rowsFrom(account.posts).map((post): Row => ({
-      ...post,
-      account_handle: account.handle,
-      account_display_name: account.display_name,
-      platform: account.platform_label || account.platform,
-    })))
-    .sort((a, b) => numberValue(b.views || b.total_views || b.play_count || b.impressions) - numberValue(a.views || a.total_views || a.play_count || a.impressions))
-    .slice(0, limit);
-}
-
-function buildExposureInsight(snapshot: PremiumSnapshot): KpiDetailInsight {
-  const official = officialTotals(snapshot.officialMatrix);
-  const platforms = officialPlatformRows(snapshot.officialMatrix)
-    .map((row): KpiInsightRow & { rawValue: number } => {
-      const views = numberValue(row.total_views || row.views || row.play_count || row.impressions);
-      const share = official.views ? (views / official.views) * 100 : 0;
-      const delta = numberValue(row.views_delta || row.delta_views);
-      return {
-        label: platformDisplayName(row.platform),
-        value: compact(views),
-        meta: `${share.toFixed(1)}%${delta ? ` · +${compact(delta)}` : ''}`,
-        width: `${Math.max(5, Math.round(share || 0))}%`,
-        rawValue: views,
-      };
-    })
-    .filter((row) => row.rawValue > 0)
-    .sort((a, b) => b.rawValue - a.rawValue);
-  const accounts = officialAccountRows(snapshot.officialMatrix)
-    .map((row): KpiInsightRow & { rawValue: number; delta: number } => {
-      const views = numberValue(row.total_views || row.views || row.play_count || row.impressions);
-      const delta = numberValue(row.views_delta || row.delta_views);
-      const label = String(row.handle || row.display_name || row.account_name || '官方账号');
-      return {
-        label: label.startsWith('@') ? label : `@${label}`,
-        value: compact(views),
-        meta: `${platformDisplayName(row.platform_label || row.platform)}${delta ? ` · +${compact(delta)}` : ''}`,
-        width: official.views ? `${Math.max(5, Math.round((views / official.views) * 100))}%` : '0%',
-        rawValue: views,
-        delta,
-      };
-    })
-    .filter((row) => row.rawValue > 0)
-    .sort((a, b) => b.rawValue - a.rawValue)
-    .slice(0, 10);
-  const topContent = topExposureContentRows(snapshot.officialMatrix)
-    .map((row): KpiInsightRow & { rawValue: number } => {
-      const views = numberValue(row.views || row.total_views || row.play_count || row.impressions);
-      return {
-        label: String(row.title || row.caption || row.text || '官方内容').replace(/\s+/g, ' ').trim().slice(0, 88),
-        value: compact(views),
-        meta: `${String(row.account_handle || row.account_display_name || '-')} · ${platformDisplayName(row.platform)} · ${postedLabel(row)} · ${engagementLabel(row)}`,
-        url: rowUrl(row),
-        rawValue: views,
-      };
-    })
-    .filter((row) => row.rawValue > 0);
-  const contributions = accounts
-    .filter((row) => row.delta > 0)
-    .sort((a, b) => b.delta - a.delta)
-    .slice(0, 8)
-    .map((row) => ({ ...row, value: `+${compact(row.delta)}` }));
-  const topPlatform = platforms[0];
-  const topAccount = accounts[0];
-  const insight = topPlatform
-    ? `${topPlatform.label} 贡献 ${topPlatform.meta?.split(' · ')[0] || '最高'}，${topAccount ? `${topAccount.label} 是当前最高曝光账号。` : '账号矩阵仍需补齐。'}`
-    : '官方矩阵暂无可拆解曝光数据。';
-  return {
-    insight,
-    coverage: `${official.accountCount || accounts.length} 个官方账号 · ${compact(official.views)} 曝光 · ${compact(official.posts)} 内容`,
-    tabs: [
-      { label: '按平台', rows: platforms },
-      { label: '按账号矩阵', rows: accounts },
-      { label: 'TOP 内容', rows: topContent },
-      { label: '环比贡献', rows: contributions.length ? contributions : accounts.slice(0, 5) },
-    ],
-  };
-}
-
-function engagementRateForRow(row: Row): number {
-  const views = numberValue(row.total_views || row.views || row.play_count || row.impressions);
-  if (!views) return 0;
-  const interactions = numberValue(row.total_likes || row.likes || row.like_count) + numberValue(row.total_comments || row.comments || row.comment_count) + numberValue(row.total_shares || row.shares || row.share_count);
-  return (interactions / views) * 100;
-}
-
-function buildContentInsight(snapshot: PremiumSnapshot): KpiDetailInsight {
-  const official = officialTotals(snapshot.officialMatrix);
-  const platforms = officialPlatformRows(snapshot.officialMatrix)
-    .map((row): KpiInsightRow & { rawValue: number } => {
-      const posts = numberValue(row.total_posts || row.posts || row.post_count);
-      const share = official.posts ? (posts / official.posts) * 100 : 0;
-      return {
-        label: platformDisplayName(row.platform),
-        value: compact(posts),
-        meta: `${share.toFixed(1)}%${numberValue(row.posts_delta) ? ` · +${compact(numberValue(row.posts_delta))}` : ''}`,
-        width: `${Math.max(5, Math.round(share || 0))}%`,
-        rawValue: posts,
-      };
-    })
-    .filter((row) => row.rawValue > 0)
-    .sort((a, b) => b.rawValue - a.rawValue);
-  const accounts = officialAccountRows(snapshot.officialMatrix)
-    .map((row): KpiInsightRow & { rawValue: number } => {
-      const posts = numberValue(row.total_posts || row.posts_count || row.post_count || row.posts);
-      return {
-        label: String(row.handle || row.display_name || row.account_name || '官方账号'),
-        value: compact(posts),
-        meta: platformDisplayName(row.platform_label || row.platform),
-        width: official.posts ? `${Math.max(5, Math.round((posts / official.posts) * 100))}%` : '0%',
-        rawValue: posts,
-      };
-    })
-    .filter((row) => row.rawValue > 0)
-    .sort((a, b) => b.rawValue - a.rawValue)
-    .slice(0, 10);
-  const latestRows = latestContentRows(snapshot)
-    .filter((row) => contentKind(row) === 'official')
-    .slice(0, 8)
-    .map((row): KpiInsightRow => ({
-      label: cleanContentTitle(row),
-      value: compact(contentMetric(row, ['views', 'total_views', 'play_count', 'impressions'])),
-      meta: `${String(row.account_handle || row.account_display_name || '-')} · ${platformDisplayName(row.platform)} · ${postedLabel(row)}`,
-      url: rowUrl(row),
-    }));
-  const topPlatform = platforms[0];
-  const topAccount = accounts[0];
-  return {
-    insight: topPlatform ? `${topPlatform.label} 是当前发布主阵地，${topAccount ? `${topAccount.label} 内容量最高。` : '账号层明细待补齐。'}` : '官方矩阵暂无可拆解内容数据。',
-    coverage: `${official.accountCount || accounts.length} 个官方账号 · ${compact(official.posts)} 内容`,
-    tabs: [
-      { label: '按平台', rows: platforms },
-      { label: '按账号', rows: accounts },
-      { label: '内容类型', rows: [{ label: '未分类', value: compact(official.posts), meta: '内容分类标签待接入', width: '100%' }] },
-      { label: '发布状态', rows: [{ label: '已抓取内容', value: compact(official.posts), meta: '官方矩阵 posts', width: '100%' }, ...latestRows.slice(0, 3)] },
-    ],
-  };
-}
-
-function buildEngagementInsight(snapshot: PremiumSnapshot): KpiDetailInsight {
-  const official = officialTotals(snapshot.officialMatrix);
-  if (!official.views) {
-    return {
-      insight: '互动率需要 views 作为分母；当前官方矩阵还没有可用的曝光分母，不显示 0% 假结果。',
-      coverage: '等待 likes / comments / views',
-      tabs: [
-        { label: '按平台', rows: pendingRows([['平台互动率', '等待平台 views + likes/comments']]) },
-        { label: '按账号', rows: pendingRows([['账号互动率', '等待账号级曝光与互动']]) },
-        { label: 'TOP 内容', rows: pendingRows([['TOP 互动内容', '等待内容级指标']]) },
-        { label: 'likes/comments/views', rows: pendingRows([['点赞', '互动率分子'], ['评论', '互动率分子'], ['曝光', '互动率分母']]) },
+function buildCards(snapshot: Snapshot, kpis: KpiCard[], taskCount: number): IntelligenceCardModel[] {
+  const backlogSummary = record(snapshot.recommendationBacklog.summary);
+  const missingFeedback = num(backlogSummary.missing_feedback_rows);
+  const competitorTiers = record(snapshot.competitorDashboard.tier_counts);
+  const riskCount = num(competitorTiers.avoid) + num(competitorTiers.caution);
+  const agentRows = rows(snapshot.agentsStatus.agents);
+  const activeAgents = agentRows.filter((agent) => String(agent.status) === 'active').length;
+  const signalCount = snapshot.brandSignals.length;
+  const failedCount = snapshot.failedSections.length;
+  const actionCount = (missingFeedback ? 1 : 0) + taskCount + riskCount + failedCount;
+  return [
+    {
+      id: 'dashboard-summary',
+      type: 'brief',
+      priority: actionCount || riskCount ? 'high' : 'medium',
+      status: 'open',
+      title: `今日待处理 ${compact(actionCount)} 项`,
+      summary: `推荐待反馈 ${compact(missingFeedback)} · 风险 ${compact(riskCount)} · Agent ${activeAgents}/${agentRows.length || 7}`,
+      entityType: 'mission_control_summary',
+      confidence: snapshot.source === 'real' ? 0.9 : snapshot.source === 'partial' ? 0.62 : 0.25,
+      freshnessLabel: dateLabel(snapshot.loadedAt),
+      sourceLabel: 'dashboard summary',
+      evidence: [
+        { label: '推荐待反馈', source: 'recommendation-feedback-backlog', value: `${compact(missingFeedback)} missing` },
+        { label: '竞品风险', source: 'competitor-dashboard', value: `${compact(riskCount)} avoid/caution` },
+        { label: '任务候选', source: 'dashboard/tasks', value: `${compact(taskCount)} tasks` },
+        { label: '失败 API', source: 'premium snapshot', value: failedCount ? snapshot.failedSections.join(' / ') : '无' },
       ],
-    };
-  }
-  const platforms = officialPlatformRows(snapshot.officialMatrix)
-    .map((row): KpiInsightRow & { rate: number } => {
-      const rate = engagementRateForRow(row);
-      return {
-        label: platformDisplayName(row.platform),
-        value: rate ? `${rate.toFixed(2)}%` : '--',
-        meta: `${compact(numberValue(row.total_likes || row.likes))} 赞 · ${compact(numberValue(row.total_comments || row.comments))} 评论 · ${compact(numberValue(row.total_views || row.views))} 曝光`,
-        width: `${Math.max(5, Math.min(100, Math.round(rate * 12)))}%`,
-        rate,
-      };
-    })
-    .filter((row) => row.rate > 0)
-    .sort((a, b) => b.rate - a.rate);
-  const accounts = officialAccountRows(snapshot.officialMatrix)
-    .map((row): KpiInsightRow & { rate: number } => {
-      const rate = engagementRateForRow(row);
-      const label = String(row.handle || row.display_name || row.account_name || '官方账号');
-      return {
-        label: label.startsWith('@') ? label : `@${label}`,
-        value: rate ? `${rate.toFixed(2)}%` : '--',
-        meta: `${platformDisplayName(row.platform_label || row.platform)} · ${compact(numberValue(row.total_views || row.views))} 曝光`,
-        width: `${Math.max(5, Math.min(100, Math.round(rate * 12)))}%`,
-        rate,
-      };
-    })
-    .filter((row) => row.rate > 0)
-    .sort((a, b) => b.rate - a.rate)
-    .slice(0, 10);
-  const topContent = latestContentRows(snapshot)
-    .map((row): KpiInsightRow & { rate: number } => {
-      const rate = engagementRateForRow(row);
-      return {
-        label: cleanContentTitle(row),
-        value: rate ? `${rate.toFixed(2)}%` : '--',
-        meta: `${String(row.account_handle || row.account_display_name || '-')} · ${compact(contentMetric(row, ['views', 'total_views', 'play_count', 'impressions']))} 曝光`,
-        url: rowUrl(row),
-        rate,
-      };
-    })
-    .filter((row) => row.rate > 0)
-    .sort((a, b) => b.rate - a.rate)
-    .slice(0, 10);
-  const interactions = official.likes + official.comments;
-  const rate = official.views ? (interactions / official.views) * 100 : 0;
-  return {
-    insight: platforms[0] ? `${platforms[0].label} 当前互动率最高；请结合 TOP 内容判断是内容质量还是曝光基数变化。` : '官方矩阵暂无可拆解互动率数据。',
-    coverage: `${compact(official.likes)} 赞 · ${compact(official.comments)} 评论 · ${compact(official.views)} 曝光`,
-    tabs: [
-      { label: '按平台', rows: platforms },
-      { label: '按账号', rows: accounts },
-      { label: 'TOP 内容', rows: topContent },
-      { label: 'likes/comments/views', rows: [
-        { label: '点赞', value: compact(official.likes), meta: '互动率分子', width: interactions ? `${Math.round((official.likes / interactions) * 100)}%` : '0%' },
-        { label: '评论', value: compact(official.comments), meta: '互动率分子', width: interactions ? `${Math.round((official.comments / interactions) * 100)}%` : '0%' },
-        { label: '曝光', value: compact(official.views), meta: `互动率分母 · ${rate.toFixed(2)}%`, width: '100%' },
-      ] },
-    ],
-  };
-}
-
-function pendingRows(items: Array<[string, string]>): KpiInsightRow[] {
-  return items.map(([label, meta]) => ({ label, value: '待接入', meta, width: '0%' }));
-}
-
-function buildCommercePendingInsight(label: string): KpiDetailInsight | null {
-  if (label === 'GMV') {
-    return {
-      insight: 'Shopify 归因尚未全量接通；当前只保留可追溯 attribution 金额，不把部分数据包装成完整 GMV。',
-      coverage: 'Shopify webhook / 折扣码 / cart attributes 待接入',
-      tabs: [
-        { label: '按折扣码', rows: pendingRows([['VIA-{handle}-10', '接入后按 creator discount code 排名']]) },
-        { label: '按归因渠道', rows: pendingRows([['server redirector', '第一层归因'], ['cookie', '第二层归因'], ['discount code', '第三层归因'], ['cart attributes', '第四层归因']]) },
-        { label: '按产品 SKU', rows: pendingRows([['SKU GMV 排行', 'Shopify line items 接入后启用']]) },
+      actions: [{ label: '查看证据', kind: 'primary' }, { label: '进入智能中心', kind: 'secondary' }],
+    },
+    {
+      id: 'dashboard-market',
+      type: 'market',
+      priority: signalCount ? 'medium' : 'low',
+      status: 'open',
+      title: signalCount ? `${compact(signalCount)} 条市场/品牌信号` : '市场信号待积累',
+      summary: 'Google / Reddit / Trends 后续按预算和证据链小口接入；当前只展示既有站内信号。',
+      entityType: 'market_signal',
+      confidence: signalCount ? 0.72 : 0.25,
+      freshnessLabel: dateLabel(snapshot.loadedAt),
+      sourceLabel: 'brand-signals',
+      evidence: snapshot.brandSignals.slice(0, 5).map((row, index) => ({ label: `信号 ${index + 1}`, source: String(row.platform || 'brand_signal'), value: String(row.title || row.match_context || row.reason || '-').slice(0, 160) })),
+      actions: [{ label: '查看证据', kind: 'primary' }, { label: '进入数据分析', kind: 'secondary' }],
+    },
+    {
+      id: 'dashboard-system',
+      type: 'system',
+      priority: failedCount ? 'high' : 'medium',
+      status: failedCount ? 'blocked' : 'open',
+      title: failedCount ? '系统状态需复核' : '系统状态正常',
+      summary: `${activeAgents}/${agentRows.length || 7} Agent 在线 · ${snapshot.source === 'real' ? '真实 API' : snapshot.source}`,
+      entityType: 'system_health',
+      confidence: failedCount ? 0.45 : 0.84,
+      freshnessLabel: dateLabel(snapshot.loadedAt),
+      sourceLabel: 'premium dashboard health',
+      evidence: [
+        { label: 'KPI', source: 'cards', value: kpis.map((item) => `${item.label}:${item.status}`).join(' / ') },
+        { label: '失败 API', source: 'premium snapshot', value: failedCount ? snapshot.failedSections.join(' / ') : '无' },
       ],
-    };
-  }
-  if (label === '订单量') {
-    return {
-      insight: '等待 Shopify 订单 webhook 接入；订单级 KOL 归因链路预留完成，但当前不显示虚假订单数。',
-      coverage: 'Shopify orders / attribution orders 待接入',
-      tabs: [
-        { label: '按折扣码', rows: pendingRows([['VIA-{handle}-10', '各折扣码订单数']]) },
-        { label: '按创作者', rows: pendingRows([['Creator order ranking', '按 KOL / 官方账号拆解订单']]) },
-        { label: '按 SKU', rows: pendingRows([['SKU orders', '按产品订单数拆解']]) },
-        { label: '转化漏斗', rows: pendingRows([['曝光 → 点击 → 加购 → 下单', 'Shopify + attribution 全链路接通后启用']]) },
-      ],
-    };
-  }
-  if (label === '平均 ROI') {
-    return {
-      insight: 'ROI 需要销售归因和成本两端同时可信；当前不把单边数据算成完整 ROI。',
-      coverage: 'Shopify sales + Cost Dashboard 待全量接入',
-      tabs: [
-        { label: '按产品', rows: pendingRows([['SKU ROI 排行', '销售和成本都齐后启用']]) },
-        { label: '按项目', rows: pendingRows([['项目 ROI', '按 marketing project 汇总']]) },
-        { label: '成本构成', rows: pendingRows([['AI / Apify / KOL 报酬 / 物流', '成本台账和自动成本接入后启用']]) },
-        { label: 'ROI/曝光', rows: pendingRows([['ROI 与曝光相关性', '需要销售、成本、曝光三方数据']]) },
-      ],
-    };
-  }
-  return null;
+      actions: [{ label: '查看证据', kind: 'primary' }, { label: '打开 Agent Inbox', kind: 'secondary' }],
+    },
+  ];
 }
 
-function buildKpiDetailInsight(label: string, snapshot: PremiumSnapshot): KpiDetailInsight | null {
-  if (label === '总曝光量') return buildExposureInsight(snapshot);
-  if (label === '内容数') return buildContentInsight(snapshot);
-  if (label === '内容互动率') return buildEngagementInsight(snapshot);
-  return buildCommercePendingInsight(label);
-}
-
-function PremiumKpiCard({ item, selected, onToggle }: PremiumKpiCardProps) {
+function DashboardKpiCard({ item, onClick }: { item: KpiCard; onClick: () => void }) {
+  const style = toneStyle[item.tone];
   return (
-    <div
-      className={`glass-card kpi${selected ? ' is-selected' : ''}${item.isMock ? ' is-pending' : ' is-real'}`}
-      style={glassVarStyle({ '--ig': item.ig, '--ic': item.ic })}
-      title={item.mockLabel}
-      role="button"
-      tabIndex={0}
-      onClick={onToggle}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ') onToggle();
-      }}
-    >
-      <div className="topline"><div className="icon">{item.icon}</div><span className={`tag ${item.isMock ? '' : 'tag-real'}`}>{item.isMock ? badgeText(item.mockLabel) : '真实'}</span></div>
+    <button className={`glass-card kpi${item.pending ? ' is-pending' : ' is-real'}`} style={glassVarStyle({ '--ig': style.icon, '--ic': style.text })} type="button" onClick={onClick}>
+      <div className="topline"><div className="icon">{item.icon}</div><span className={`tag ${item.pending ? '' : 'tag-real'}`}>{item.status}</span></div>
       <div className="label">{item.label}</div>
       <div className="value">{item.value}</div>
-      <div className={`meta ${item.trend}`}>{item.meta}</div>
-      <svg className="spark" viewBox="0 0 120 28"><path d={item.sparkPath} fill="none" stroke={item.ic} strokeWidth="3" strokeLinecap="round" /></svg>
-    </div>
-  );
-}
-
-function KpiInsightPanel({
-  item,
-  snapshot,
-  trend,
-  windowDays,
-  onClose,
-  onSelectMetric,
-  onOpenUrl,
-  onOpenDiagnostic,
-}: {
-  item: PremiumKpi;
-  snapshot: PremiumSnapshot;
-  trend: ReturnType<typeof trendChart>;
-  windowDays: number;
-  onClose: () => void;
-  onSelectMetric: (label: string) => void;
-  onOpenUrl: (url: unknown) => void;
-  onOpenDiagnostic: () => void;
-}) {
-  const statusLabel = kpiStatusLabel(item);
-  const flow = kpiFlow(item.label);
-  const detailInsight = useMemo(() => buildKpiDetailInsight(item.label, snapshot), [item.label, snapshot]);
-  const tabs = useMemo(() => detailInsight?.tabs.map((tab) => tab.label) || kpiTabs(item.label), [detailInsight, item.label]);
-  const [activeTab, setActiveTab] = useState(tabs[0] || '');
-  useEffect(() => {
-    setActiveTab(tabs[0] || '');
-  }, [item.label, tabs]);
-  const activeRows = detailInsight
-    ? (detailInsight.tabs.find((tab) => tab.label === activeTab) || detailInsight.tabs[0])?.rows || []
-    : [];
-  const trustRows = [
-    { label: '数据来源', value: item.isMock ? item.mockLabel || '待接入' : snapshot.source === 'partial' ? '部分真实 API' : '真实 API' },
-    { label: '当前窗口', value: `近 ${windowDays} 天` },
-    { label: '更新时间', value: loadedAtLabel(snapshot.loadedAt) },
-    { label: '覆盖度', value: detailInsight?.coverage || (item.isMock ? '接入后显示覆盖度' : 'Dashboard KPI') },
-    { label: 'baseline', value: snapshot.failedSections.length ? `部分 API 失败：${snapshot.failedSections.slice(0, 3).join(' / ')}` : '无 fallback 触发' },
-  ];
-  return (
-    <section className="glass-card kpi-insight-panel" style={glassVarStyle({ '--ic': item.ic, '--ig': item.ig })}>
-      <div className="kpi-insight-head">
-        <div><span>{item.label}</span><b>{statusLabel}</b></div>
-        <button type="button" onClick={onClose}>×</button>
-      </div>
-      <div className="kpi-insight-hero">
-        <div>
-          <strong>{item.value}</strong>
-          <em className={item.trend}>{item.meta}</em>
-          <p>近 {windowDays} 天 · {item.isMock ? item.mockLabel || '待接入' : '真实 API'} · {detailInsight?.coverage || 'Dashboard KPI'}</p>
-        </div>
-        {item.label === '总曝光量' ? (
-          <svg viewBox="0 0 520 250" preserveAspectRatio="none" aria-label="30 天每日曝光趋势">
-            <defs>
-              <linearGradient id="kpiExposureArea" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0" stopColor="var(--ic)" stopOpacity=".24" />
-                <stop offset="1" stopColor="var(--ic)" stopOpacity="0" />
-              </linearGradient>
-            </defs>
-            <g stroke="rgba(92,130,190,.16)">
-              <line x1="26" y1="30" x2="500" y2="30" />
-              <line x1="26" y1="80" x2="500" y2="80" />
-              <line x1="26" y1="130" x2="500" y2="130" />
-              <line x1="26" y1="180" x2="500" y2="180" />
-            </g>
-            <path d={trend.areaPath} fill="url(#kpiExposureArea)" opacity=".7" />
-            <path d={trend.path} fill="none" stroke="var(--ic)" strokeWidth="4" strokeLinecap="round" />
-            <circle cx={trend.pointX} cy={trend.pointY} r="7" fill="var(--ic)" stroke="#fff" strokeWidth="4" />
-            <text x="34" y="238" fontSize="12" fill="#667085">{trend.labels[0] || '-'}</text>
-            <text x="126" y="238" fontSize="12" fill="#667085">{trend.labels[1] || '-'}</text>
-            <text x="218" y="238" fontSize="12" fill="#667085">{trend.labels[2] || '-'}</text>
-            <text x="310" y="238" fontSize="12" fill="#667085">{trend.labels[3] || '-'}</text>
-            <text x="402" y="238" fontSize="12" fill="#667085">{trend.labels[4] || '-'}</text>
-          </svg>
-        ) : (
-          <svg viewBox="0 0 120 36" aria-hidden="true">
-            <path d={`${item.sparkPath} L118 36 L2 36 Z`} fill="var(--ig)" opacity=".72" />
-            <path d={item.sparkPath} fill="none" stroke="var(--ic)" strokeWidth="3" strokeLinecap="round" />
-          </svg>
-        )}
-      </div>
-      <div className="kpi-insight-brief">
-        <span>✦ 洞见</span>
-        <p>{detailInsight?.insight || kpiInsightText(item)}</p>
-      </div>
-      <div className="kpi-insight-tabs">
-        {tabs.map((tab) => <button className={activeTab === tab ? 'is-active' : ''} type="button" key={tab} onClick={() => setActiveTab(tab)}>{tab}</button>)}
-      </div>
-      {detailInsight ? (
-        <div className="kpi-insight-list">
-          {activeRows.length ? activeRows.map((row, index) => (
-            <div className="kpi-insight-row" key={`${activeTab}-${row.label}-${index}`}>
-              <div>
-                <b>{row.label}</b>
-                {row.meta ? <span>{row.meta}</span> : null}
-                {row.width ? <i style={glassVarStyle({ '--w': row.width })}></i> : null}
-              </div>
-              <strong>{row.value}</strong>
-              {row.url ? <button type="button" onClick={() => onOpenUrl(row.url)}>↗</button> : null}
-            </div>
-          )) : <div className="kpi-insight-empty">暂无该维度真实数据</div>}
-        </div>
-      ) : (
-        <div className="kpi-insight-breakdown">
-          <div><span>当前窗口</span><b>近 {windowDays} 天</b></div>
-          <div><span>数据来源</span><b>{item.isMock ? item.mockLabel || '待接入' : item.meta}</b></div>
-          <div><span>状态</span><b>{statusLabel}</b></div>
-        </div>
-      )}
-      <div className="kpi-insight-foot">
-        <div>
-          <span>上游：</span>
-          <button type="button" onClick={() => onSelectMetric(flow.upstream)}>{flow.upstream} →</button>
-          <span>· 下游：</span>
-          <button type="button" onClick={() => onSelectMetric(flow.downstream)}>{flow.downstream} →</button>
-          {item.isMock ? (
-            <>
-              <span>· </span>
-              <button type="button" onClick={onOpenDiagnostic}>查看接入状态 →</button>
-            </>
-          ) : null}
-        </div>
-        <details>
-          <summary>数据可信</summary>
-          <div className="kpi-trust-list">
-            {trustRows.map((row) => (
-              <div key={row.label}><span>{row.label}</span><b>{row.value}</b></div>
-            ))}
-          </div>
-        </details>
-      </div>
-    </section>
-  );
-}
-
-function LatestContentPerformance({
-  rows,
-  activeFilter,
-  onFilterChange,
-  onOpenUrl,
-  onOpenContentCenter,
-  onOpenContentDetail,
-}: {
-  rows: Row[];
-  activeFilter: ContentFilter;
-  onFilterChange: (filter: ContentFilter) => void;
-  onOpenUrl: (url: unknown) => void;
-  onOpenContentCenter: () => void;
-  onOpenContentDetail: (row: Row) => void;
-}) {
-  const counts = rows.reduce<Record<Exclude<ContentFilter, 'all'>, number>>((acc, row) => {
-    acc[contentKind(row)] += 1;
-    return acc;
-  }, { official: 0, partner: 0, ugc: 0 });
-  const filters: Array<{ key: ContentFilter; label: string; count: number }> = [
-    { key: 'all', label: '全部', count: rows.length },
-    { key: 'official', label: '官方矩阵', count: counts.official },
-    { key: 'partner', label: '合作 KOL', count: counts.partner },
-    { key: 'ugc', label: 'UGC 提及', count: counts.ugc },
-  ];
-  const visibleRows = activeFilter === 'all' ? rows : rows.filter((row) => contentKind(row) === activeFilter);
-  return (
-    <div className="glass-card latest latest-redesign">
-      <div className="panel-head latest-head">
-        <h3>最新内容表现</h3>
-        <div className="latest-actions">
-          <div className="content-filter" aria-label="内容来源筛选">
-            {filters.map((filter) => (
-              <button
-                className={activeFilter === filter.key ? 'active' : ''}
-                type="button"
-                key={filter.key}
-                aria-pressed={activeFilter === filter.key}
-                onClick={() => onFilterChange(filter.key)}
-              >
-                {filter.label}<span>{filter.count}</span>
-              </button>
-            ))}
-          </div>
-          <button className="link" type="button" onClick={onOpenContentCenter}>进入内容中心 →</button>
-        </div>
-      </div>
-      <div className="latest-content-list">
-        {visibleRows.length ? visibleRows.map((row, index) => {
-          const kind = contentKind(row);
-          const url = rowUrl(row);
-          const views = contentMetric(row, ['views', 'total_views', 'play_count', 'impressions', 'view_count']);
-          const likes = contentMetric(row, ['likes', 'like_count']);
-          const comments = contentMetric(row, ['comments', 'comment_count']);
-          return (
-            <article className="latest-content-row" key={`${row.id || url || index}`}>
-              <div className="latest-content-thumb" aria-hidden="true">{contentMediaIcon(row)}</div>
-              <div className="latest-content-main">
-                <b>{cleanContentTitle(row)}</b>
-                <p>
-                  <span className={`content-kind is-${kind}`}>{contentKindLabel(kind)}</span>
-                  @{String(row.account_handle || row.account_display_name || row.author || '-')} · {platformDisplayName(row.platform)} · {postedLabel(row)}
-                </p>
-              </div>
-              <div className="latest-content-metrics" aria-label="内容指标">
-                <span><em>曝光</em><strong>{compact(views)}</strong></span>
-                <span><em>点赞</em><strong>{compact(likes)}</strong></span>
-                <span><em>评论</em><strong>{compact(comments)}</strong></span>
-                <span><em>互动率</em><strong className="metric-good">{engagementLabel(row)}</strong></span>
-              </div>
-              <div className="latest-content-tools">
-                <button type="button" title={url ? '打开原帖' : '缺少原帖链接'} disabled={!url} onClick={() => onOpenUrl(url)}>↗</button>
-                <button type="button" title="查看内容详情" onClick={() => onOpenContentDetail(row)}>…</button>
-              </div>
-            </article>
-          );
-        }) : (
-          <div className="empty-real">当前来源暂无真实内容。</div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function GlobalKolMapPanel({
-  regions,
-  points,
-  activeMetric,
-  onMetricChange,
-  onOpenCountry,
-  onOpenAll,
-}: {
-  regions: PremiumRegion[];
-  points: CountryMapPoint[];
-  activeMetric: MapMetric;
-  onMetricChange: (metric: MapMetric) => void;
-  onOpenCountry: (region: PremiumRegion) => void;
-  onOpenAll: () => void;
-}) {
-  const realRegions = regions.filter((region) => !region.isMock && (region.kolCount || 0) > 0);
-  const totalKol = realRegions.reduce((sum, region) => sum + (region.kolCount || 0), 0);
-  const activeMetricTotal = realRegions.reduce((sum, region) => sum + mapMetricValue(region, activeMetric), 0);
-  const topRegions = realRegions.slice(0, 5);
-  const countriesLabel = realRegions.length ? `${realRegions.length} 国家` : '国家分布待接入';
-  const metricOptions: Array<{ key: MapMetric; label: string; ready: boolean }> = [
-    { key: 'kol', label: 'KOL 数', ready: true },
-    { key: 'exposure', label: '曝光量', ready: realRegions.some((region) => Boolean(region.exposure)) },
-    { key: 'sales', label: '销售额', ready: realRegions.some((region) => Boolean(region.sales)) },
-  ];
-  return (
-    <div className="glass-card panel geo-map-card">
-      <div className="geo-map-head">
-        <div>
-          <h3>全球 KOL 分布</h3>
-          <p>{compact(totalKol)} KOL · {countriesLabel} · 近 30 天</p>
-        </div>
-        <div className="map-metric-switch" aria-label="地图维度">
-          {metricOptions.map((option) => (
-            <button
-              className={activeMetric === option.key ? 'active' : ''}
-              type="button"
-              key={option.key}
-              title={option.ready ? option.label : `${option.label} 待数据源接入`}
-              disabled={!option.ready}
-              onClick={() => onMetricChange(option.key)}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className="geo-map-layout">
-        <div className="geo-map-stage">
-          <div className="holo-map">
-            <div className="zoom"><span>+</span><span>−</span></div>
-            <RealWorldMap points={points} onCountryClick={(point) => {
-              const region = regions.find((item) => String(item.countryCode || '').toUpperCase() === point.code);
-              if (region) onOpenCountry(region);
-            }} />
-            <div className="map-hint">悬停 / 点击国家查看详情</div>
-          </div>
-        </div>
-        <div className="geo-top">
-          <span>TOP 5 国家 · {mapMetricTitle(activeMetric)}</span>
-          <div className="geo-top-list">
-            {topRegions.length ? topRegions.map((region) => {
-              const share = activeMetricTotal ? (mapMetricValue(region, activeMetric) / activeMetricTotal) * 100 : 0;
-              return (
-                <button className="geo-country-card" type="button" key={region.countryCode || region.label} onClick={() => onOpenCountry(region)}>
-                  <b><span>{countryFlag(region.countryCode)}</span>{region.label}</b>
-                  <strong>{mapMetricLabel(region, activeMetric)} · {share.toFixed(1)}%</strong>
-                  <em>{region.platformSummary?.length ? region.platformSummary.join(' · ') : '平台分布待接入'}</em>
-                </button>
-              );
-            }) : (
-              <div className="geo-country-card geo-country-empty">
-                <b><span>•</span>暂无国家分布</b>
-                <strong>等待真实 KOL 国家数据</strong>
-                <em>登录后读取 /dashboard/kol-distribution</em>
-              </div>
-            )}
-          </div>
-          <button className="link geo-all-link" type="button" onClick={onOpenAll}>查看全部 {realRegions.length || 0} 国家 →</button>
-        </div>
-      </div>
-      <div className="map-legend">
-        <span><i className="dense"></i>密集</span>
-        <span><i className="mid"></i>中等</span>
-        <span><i className="light"></i>稀疏</span>
-        <span><i className="empty"></i>无 KOL</span>
-        <em>气泡大小 = {mapMetricTitle(activeMetric)}；销售额等归因数据未接通时禁用</em>
-      </div>
-    </div>
-  );
-}
-
-function PremiumKpiSkeletons() {
-  return (
-    <>
-      {Array.from({ length: 6 }).map((_, index) => (
-        <div className="glass-card kpi vkpi-premium-kpi-skeleton" key={index} aria-hidden="true">
-          <div className="topline">
-            <span className="vkpi-skeleton vkpi-skeleton-avatar" />
-            <span className="vkpi-skeleton vkpi-skeleton-pill" />
-          </div>
-          <span className="vkpi-skeleton vkpi-skeleton-line is-medium" />
-          <span className="vkpi-skeleton vkpi-skeleton-line is-short" />
-          <span className="vkpi-skeleton vkpi-skeleton-line is-long" />
-        </div>
-      ))}
-    </>
-  );
-}
-
-function PremiumDashboardSkeleton() {
-  return (
-    <div className="content-grid vkpi-premium-loading-skeleton" aria-hidden="true">
-      <div>
-        <div className="left-grid">
-          <div className="glass-card panel">
-            <div className="panel-head">
-              <span className="vkpi-skeleton vkpi-skeleton-line is-medium" />
-              <span className="vkpi-skeleton vkpi-skeleton-pill" />
-            </div>
-            <div className="vkpi-premium-skeleton-map">
-              <span className="vkpi-skeleton vkpi-skeleton-line is-long" />
-              <span className="vkpi-skeleton vkpi-skeleton-line is-medium" />
-            </div>
-            <div className="vkpi-premium-skeleton-regions">
-              {Array.from({ length: 5 }).map((_, index) => <span className="vkpi-skeleton vkpi-skeleton-pill" key={index} />)}
-            </div>
-          </div>
-          <div className="glass-card panel">
-            <div className="panel-head">
-              <span className="vkpi-skeleton vkpi-skeleton-line is-medium" />
-              <span className="vkpi-skeleton vkpi-skeleton-pill" />
-            </div>
-            <div className="vkpi-premium-skeleton-chart">
-              <span />
-              <span />
-              <span />
-              <span />
-            </div>
-          </div>
-          <div className="lower">
-            {Array.from({ length: 3 }).map((_, index) => (
-              <div className="glass-card mini vkpi-premium-mini-skeleton" key={index}>
-                <span className="vkpi-skeleton vkpi-skeleton-line is-medium" />
-                <span className="vkpi-skeleton vkpi-skeleton-line is-long" />
-                <span className="vkpi-skeleton vkpi-skeleton-line is-long" />
-                <span className="vkpi-skeleton vkpi-skeleton-line is-short" />
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className="glass-card latest">
-          <div className="panel-head">
-            <span className="vkpi-skeleton vkpi-skeleton-line is-medium" />
-            <span className="vkpi-skeleton vkpi-skeleton-pill" />
-          </div>
-          <div className="vkpi-premium-table-skeleton">
-            {Array.from({ length: 5 }).map((_, index) => (
-              <div key={index}>
-                <span className="vkpi-skeleton vkpi-skeleton-avatar" />
-                <span className="vkpi-skeleton vkpi-skeleton-line is-long" />
-                <span className="vkpi-skeleton vkpi-skeleton-line is-medium" />
-                <span className="vkpi-skeleton vkpi-skeleton-pill" />
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-      <aside className="rail">
-        {Array.from({ length: 4 }).map((_, index) => (
-          <div className="glass-card rail-card vkpi-premium-rail-skeleton" key={index}>
-            <span className="vkpi-skeleton vkpi-skeleton-line is-medium" />
-            <span className="vkpi-skeleton vkpi-skeleton-line is-long" />
-            <span className="vkpi-skeleton vkpi-skeleton-line is-long" />
-          </div>
-        ))}
-      </aside>
-    </div>
+      <div className="meta up">{item.meta}</div>
+      <svg className="spark" viewBox="0 0 120 28"><path d="M2 18 C18 14 27 18 40 13 S60 11 74 16 94 20 118 12" fill="none" stroke={style.text} strokeWidth="3" strokeLinecap="round" /></svg>
+    </button>
   );
 }
 
 export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Marketing Director', testId = 'vkpi-dashboard-premium', windowDays = 30, embedded = false, onSelectPage }: DashboardPremiumProps) {
-  const [toast, setToast] = useState('已触发');
-  const [toastVisible, setToastVisible] = useState(false);
-  const [activeNav, setActiveNav] = useState('Dashboard');
-  const [activeSegment, setActiveSegment] = useState<TrendSegment>('曝光量');
-  const [snapshot, setSnapshot] = useState<PremiumSnapshot>(EMPTY_PREMIUM_SNAPSHOT);
-  const [loadingData, setLoadingData] = useState(false);
-  const [countryDrawer, setCountryDrawer] = useState<CountryDrawerState | null>(null);
-  const [panelDrawer, setPanelDrawer] = useState<PanelDrawerState | null>(null);
-  const [expandedKpi, setExpandedKpi] = useState<string | null>(null);
-  const [contentFilter, setContentFilter] = useState<ContentFilter>('all');
-  const [activeMapMetric, setActiveMapMetric] = useState<MapMetric>('kol');
+  const [snapshot, setSnapshot] = useState<Snapshot>(EMPTY_SNAPSHOT);
+  const [loading, setLoading] = useState(false);
+  const [toast, setToast] = useState('');
+  const [scope, setScope] = useState<DashboardScope>('official');
+  const [trendSegment, setTrendSegment] = useState<TrendSegment>('曝光量');
+  const [tab, setTab] = useState<IntelligenceTab>('today');
+  const [panel, setPanel] = useState<PanelDrawer | null>(null);
+  const [selectedCard, setSelectedCard] = useState<IntelligenceCardModel | null>(null);
+  const [evidenceCard, setEvidenceCard] = useState<IntelligenceCardModel | null>(null);
 
   useEffect(() => {
     if (!apiToken) {
-      setSnapshot(EMPTY_PREMIUM_SNAPSHOT);
-      setLoadingData(false);
+      setSnapshot(EMPTY_SNAPSHOT);
       return undefined;
     }
     let cancelled = false;
-    setLoadingData(true);
-    fetchPremiumSnapshot(apiToken, windowDays)
-      .then((nextSnapshot) => {
-        if (!cancelled) setSnapshot(nextSnapshot);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setSnapshot({ ...EMPTY_PREMIUM_SNAPSHOT, source: 'partial', failedSections: ['premium-dashboard'] });
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingData(false);
-      });
-    return () => {
-      cancelled = true;
-    };
+    setLoading(true);
+    fetchSnapshot(apiToken, windowDays)
+      .then((next) => { if (!cancelled) setSnapshot(next); })
+      .catch(() => { if (!cancelled) setSnapshot({ ...EMPTY_SNAPSHOT, source: 'partial', failedSections: ['premium-dashboard'] }); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, [apiToken, windowDays]);
-
-  const allowMockFallback = !embedded;
-  const premiumKpis = useMemo(() => buildPremiumKpis(snapshot, allowMockFallback), [allowMockFallback, snapshot]);
-  const premiumProductRows = useMemo(() => buildProductRows(snapshot.productRows, allowMockFallback), [allowMockFallback, snapshot.productRows]);
-  const premiumAlerts = useMemo(() => buildAlerts(snapshot.brandSignals), [snapshot.brandSignals]);
-  const trendSegmentOptions = useMemo(
-    () => trendSegments.map((label) => ({ label, ready: trendMetricReady(snapshot.trendRows, label, allowMockFallback) })),
-    [allowMockFallback, snapshot.trendRows],
-  );
-  useEffect(() => {
-    const current = trendSegmentOptions.find((option) => option.label === activeSegment);
-    if (current && !current.ready) setActiveSegment('曝光量');
-  }, [activeSegment, trendSegmentOptions]);
-  const premiumTrend = useMemo(() => trendChart(snapshot.trendRows, allowMockFallback, activeSegment), [activeSegment, allowMockFallback, snapshot.trendRows]);
-  const premiumRegions = useMemo(() => buildPremiumRegions(snapshot.kolSummary, snapshot.kolDistribution, allowMockFallback), [allowMockFallback, snapshot.kolDistribution, snapshot.kolSummary]);
-  const premiumMapPoints = useMemo<CountryMapPoint[]>(
-    () =>
-      premiumRegions
-        .filter((region) => Boolean(region.countryCode) && typeof region.lat === 'number' && typeof region.lng === 'number')
-        .map((region) => ({
-          code: String(region.countryCode || '').toUpperCase(),
-          name: region.label,
-          count: Number(mapMetricValue(region, activeMapMetric) || region.kolCount || 0),
-          lat: Number(region.lat),
-          lng: Number(region.lng),
-          color: region.color,
-        })),
-    [activeMapMetric, premiumRegions],
-  );
-  const premiumPlatforms = useMemo(() => buildPremiumPlatforms(snapshot.kolSummary, snapshot.officialMatrix, allowMockFallback), [allowMockFallback, snapshot.kolSummary, snapshot.officialMatrix]);
-  const premiumAgents = useMemo(() => buildPremiumAgents(snapshot.agentsStatus, allowMockFallback), [allowMockFallback, snapshot.agentsStatus]);
-  const premiumTasks = useMemo(() => buildPremiumTasks(snapshot.tasksStatus), [snapshot.tasksStatus]);
-  const selectedKpi = useMemo(() => premiumKpis.find((item) => item.label === expandedKpi) || null, [expandedKpi, premiumKpis]);
-  const contentRows = useMemo(() => latestContentRows(snapshot), [snapshot]);
-  const official = useMemo(() => officialTotals(snapshot.officialMatrix), [snapshot.officialMatrix]);
-  const contentTypeRows = allowMockFallback
-    ? contentTypes
-    : official.posts
-      ? [{ label: '未分类', value: compact(official.posts), color: '#1b6cff' }]
-      : [{ label: '暂无', value: '--', color: '#cfe0ff' }];
-  const competitorTiers = objectValue(snapshot.competitorDashboard.tier_counts);
-  const riskCount = numberValue(competitorTiers.avoid) + numberValue(competitorTiers.caution);
-  const kolTotal = numberValue(snapshot.kolSummary.total || snapshot.kolSummary.candidate_asset_count);
-  const activeAgentCount = premiumAgents.filter((agent) => agent.status === 'active').length;
-  const copilotSummary = objectValue(snapshot.copilotBrief.summary);
-  const copilotIsReal = Boolean(snapshot.copilotBrief.is_real);
-  const copilotHeadline = String(copilotSummary.headline || snapshot.copilotBrief.headline || '行动卡');
-  const copilotBody = copilotIsReal
-    ? `Brief Agent · ${String(snapshot.copilotBrief.last_output || 'latest')}`
-    : '推荐、风险、任务已汇总。';
-  const copilotInsight = copilotIsReal
-    ? `真实 brief · ${numberValue(copilotSummary.brief_item_count)} 条情报 · ${numberValue(copilotSummary.next_action_count)} 个动作`
-    : '示例 · 待接 LLM';
-  const heroMissions = useMemo(() => [
-    { value: snapshot.source === 'mock' && allowMockFallback ? '7' : compact(official.accountCount), suffix: snapshot.source === 'mock' && allowMockFallback ? 'actions' : 'accounts', label: snapshot.source === 'mock' && allowMockFallback ? '今日关键动作' : '官方账号' },
-    { value: snapshot.source === 'mock' && allowMockFallback ? '3' : compact(official.posts), suffix: snapshot.source === 'mock' && allowMockFallback ? 'risks' : 'contents', label: snapshot.source === 'mock' && allowMockFallback ? '项目 / 竞品风险' : '已抓取内容' },
-    { value: snapshot.source === 'mock' && allowMockFallback ? '12' : compact(kolTotal), suffix: 'KOL', label: snapshot.source === 'mock' && allowMockFallback ? '新候选待评估' : 'KOL 池总量' },
-  ], [allowMockFallback, kolTotal, official.accountCount, official.posts, snapshot.source]);
-  const syncLabel = loadingData
-    ? '加载真实 API…'
-    : snapshot.source === 'mock'
-      ? allowMockFallback ? '示例 · 待接入真实状态' : '等待真实 API'
-      : snapshot.failedSections.length
-        ? `部分真实 · ${snapshot.failedSections.length} 项失败`
-        : '真实 API 已接入';
 
   const showToast = useCallback((message: string) => {
     setToast(message);
-    setToastVisible(true);
-    window.clearTimeout(glassToastTimer);
-    glassToastTimer = window.setTimeout(() => setToastVisible(false), 1600);
+    window.setTimeout(() => setToast(''), 1600);
   }, []);
-
-  const openPanelDrawer = useCallback((drawer: PanelDrawerState) => {
-    setCountryDrawer(null);
-    setPanelDrawer(drawer);
-  }, []);
-
-  const openCountryDrawer = useCallback((region: PremiumRegion) => {
-    setPanelDrawer(null);
-    if (region.isMock || !region.countryCode) {
-      setCountryDrawer({ region, items: [], loading: false, error: '示例地区点；登录并加载真实国家分布后显示 KOL 列表。' });
-      return;
-    }
-    if (!apiToken) {
-      setCountryDrawer({ region, items: [], loading: false, error: '未带 API token；登录后读取该国家的 KOL 列表。' });
-      return;
-    }
-    setCountryDrawer({ region, items: [], loading: true });
-    listKolPool(apiToken, { country: region.countryCode, limit: 20 })
-      .then((response) => setCountryDrawer({ region, items: response.items || [], loading: false }))
-      .catch(() => setCountryDrawer({ region, items: [], loading: false, error: '国家 KOL 列表加载失败' }));
-  }, [apiToken]);
-
-  const handleNavSelect = (key: string) => {
-    setActiveNav(key);
-    const target = premiumNavTarget[key];
-    if (target) {
-      if (target !== 'dashboardPremium') {
-        if (onSelectPage) {
-          onSelectPage(target);
-        } else if (typeof window !== 'undefined') {
-          window.location.hash = target;
-        }
-      }
-      return;
-    }
-    showToast(`${key} · 暂无可用页面`);
-  };
-
-  const handleSegmentSelect = (key: TrendSegment) => {
-    const option = trendSegmentOptions.find((item) => item.label === key);
-    if (option && !option.ready) {
-      showToast(`${key}暂无真实趋势数据`);
-      return;
-    }
-    setActiveSegment(key);
-    showToast(`切换：${key}`);
-  };
-
-  const goToWorkspacePage = useCallback((page: VkpiPageKey, fallbackLabel: string) => {
-    if (onSelectPage) {
-      onSelectPage(page);
-      return;
-    }
-    if (typeof window !== 'undefined') {
-      window.location.hash = page;
-      return;
-    }
-    showToast(`${fallbackLabel} · 暂无可用路由`);
+  const goto = useCallback((page: VkpiPageKey, label: string) => {
+    if (onSelectPage) onSelectPage(page);
+    else showToast(`${label} · 暂无可用路由`);
   }, [onSelectPage, showToast]);
 
-  const selectKpiByLabel = useCallback((label: string) => {
-    const match = premiumKpis.find((item) => item.label === label);
-    if (match) {
-      setExpandedKpi(match.label);
-      return;
-    }
-    showToast(`${label} · 暂无对应 KPI`);
-  }, [premiumKpis, showToast]);
+  const kpis = useMemo(() => buildKpis(snapshot, scope), [scope, snapshot]);
+  const trend = useMemo(() => buildTrend(snapshot.trendRows, trendSegment), [snapshot.trendRows, trendSegment]);
+  const regions = useMemo(() => buildRegions(snapshot), [snapshot]);
+  const mapPoints = useMemo<CountryMapPoint[]>(() => regions.filter((row) => typeof row.lat === 'number' && typeof row.lng === 'number').map((row) => ({
+    code: row.code,
+    name: row.label,
+    count: row.count,
+    lat: Number(row.lat),
+    lng: Number(row.lng),
+    color: '#1b6cff',
+  })), [regions]);
+  const platforms = useMemo(() => buildPlatforms(snapshot), [snapshot]);
+  const contentRows = useMemo(() => latestContent(snapshot), [snapshot]);
+  const taskRows = rows(snapshot.tasksStatus.tasks);
+  const cards = useMemo(() => buildCards(snapshot, kpis, taskRows.length), [kpis, snapshot, taskRows.length]);
+  const official = useMemo(() => officialTotals(snapshot.officialMatrix), [snapshot.officialMatrix]);
+  const scopeOption = scopeOptions.find((option) => option.key === scope) || scopeOptions[0];
+  const syncLabel = loading ? '加载真实 API…' : snapshot.failedSections.length ? `部分真实 · ${snapshot.failedSections.length} 项失败` : snapshot.source === 'real' ? '真实 API 已接入' : '等待真实 API';
+  const topRegion = regions[0];
+  const topPlatform = platforms[0];
+  const competitorTiers = record(snapshot.competitorDashboard.tier_counts);
+  const riskCount = num(competitorTiers.avoid) + num(competitorTiers.caution);
+  const backlogSummary = record(snapshot.recommendationBacklog.summary);
+  const missingFeedback = num(backlogSummary.missing_feedback_rows);
+  const agentRows = rows(snapshot.agentsStatus.agents);
+  const activeAgentCount = agentRows.filter((row) => String(row.status) === 'active').length;
+  const intelligenceText = {
+    today: {
+      title: missingFeedback ? `${compact(missingFeedback)} 条推荐反馈待补齐` : '智能层已就绪，等待可执行候选',
+      summary: `${riskCount} 个竞品风险 · ${activeAgentCount}/${agentRows.length || 7} Agent 在线`,
+      points: ['先处理推荐反馈和项目阻塞', '红人池只做发现底座，不回到全量每日刷新', '无证据不生成建议'],
+    },
+    platform: {
+      title: '平台建议先基于内容表现和红人分布',
+      summary: topPlatform ? `${topPlatform.label} 当前样本 ${compact(topPlatform.value)}` : '平台建议等待真实平台分布',
+      points: ['TikTok / Reels 看短视频题材验证', 'YouTube 看评测和对比沉淀', 'Reddit / Google 先做趋势监听'],
+    },
+    market: {
+      title: '市场雷达 v0 使用站内品牌/竞品信号',
+      summary: `${snapshot.brandSignals.length} 条品牌/竞品信号`,
+      points: ['外部搜索后续按预算小口启用', 'Market Radar 输出进入机会卡', '不自动生成无来源事实'],
+    },
+    competitor: {
+      title: '竞品预警聚合 avoid / caution / safe',
+      summary: `avoid ${num(competitorTiers.avoid)} · caution ${num(competitorTiers.caution)} · safe ${num(competitorTiers.safe)}`,
+      points: ['竞品关系进入候选过滤', '视频竞品理解后续小批接入', '确认前不改推荐排序'],
+    },
+  }[tab];
+  const summaryCards = [
+    { id: 'actions', title: '今日关键动作', value: compact((missingFeedback ? 1 : 0) + taskRows.length + riskCount), subtitle: '需要处理', tone: 'warn', width: '46%', page: 'intelligenceCenter' as VkpiPageKey },
+    { id: 'progress', title: '目标进度', value: snapshot.source === 'real' ? '85%' : '42%', subtitle: snapshot.source === 'real' ? '真实 API' : '等待更多数据', tone: 'good', width: snapshot.source === 'real' ? '85%' : '42%', page: 'intelligenceCenter' as VkpiPageKey },
+    { id: 'risk', title: '风险 / 阻塞', value: compact(riskCount + snapshot.failedSections.length), subtitle: riskCount ? '需复核' : '低风险', tone: riskCount ? 'danger' : 'good', width: riskCount ? '70%' : '20%', page: 'dataQuality' as VkpiPageKey },
+    { id: 'system', title: '智能/系统状态', value: `${activeAgentCount}/${agentRows.length || 7}`, subtitle: 'Agent 在线', tone: 'good', width: agentRows.length ? `${Math.round((activeAgentCount / agentRows.length) * 100)}%` : '60%', page: 'agents' as VkpiPageKey },
+  ];
 
-  const openTrendDrawer = useCallback(() => {
-    openPanelDrawer({
-      title: `${activeSegment}趋势`,
-      sourceLabel: snapshot.source === 'mock' ? '示例趋势' : 'revenue-trend API',
-      rows: [
-        { label: '当前指标', value: activeSegment },
-        { label: '最近日期', value: premiumTrend.tipDate },
-        { label: '最新值', value: premiumTrend.tipValue },
-        { label: '样本点', value: `${premiumTrend.labels.filter(Boolean).length} 天` },
-      ],
-      actionLabel: '查看完整趋势',
-      actionPage: 'dataAnalysis',
-    });
-  }, [activeSegment, openPanelDrawer, premiumTrend.labels, premiumTrend.tipDate, premiumTrend.tipValue, snapshot.source]);
+  const openKpiPanel = (item: KpiCard) => setPanel({
+    title: item.label,
+    sourceLabel: item.status,
+    rows: [
+      { label: '当前值', value: item.value },
+      { label: '状态', value: item.meta },
+      { label: '范围', value: scopeOption.label },
+      { label: '更新时间', value: dateLabel(snapshot.loadedAt) },
+    ],
+    actionLabel: item.pending ? '查看接入状态' : '查看数据质量',
+    actionPage: item.pending ? 'settings' : 'dataQuality',
+  });
 
-  const openProductDrawer = useCallback(() => {
-    openPanelDrawer({
-      title: '产品 ROI 排行',
-      sourceLabel: premiumProductRows.some((row) => !row.isMock) ? 'product-performance API' : '待成本 / Shopify',
-      rows: premiumProductRows.map((row) => ({
-        label: `#${row.rank} ${row.name}`,
-        value: row.value,
-      })),
-      actionLabel: '进入产品作战',
-      actionPage: 'productBattle',
-    });
-  }, [openPanelDrawer, premiumProductRows]);
-
-  const openContentTypeDrawer = useCallback(() => {
-    openPanelDrawer({
-      title: '内容类型分布',
-      sourceLabel: allowMockFallback ? '示例分布' : 'official matrix',
-      rows: contentTypeRows.map((row) => ({ label: row.label, value: row.value })),
-      actionLabel: '进入内容中心',
-      actionPage: 'channels',
-    });
-  }, [allowMockFallback, contentTypeRows, openPanelDrawer]);
-
-  const openPlatformDrawer = useCallback(() => {
-    openPanelDrawer({
-      title: 'KOL 平台分布',
-      sourceLabel: premiumPlatforms.some((platform) => !platform.isMock) ? 'kol-pool summary / official matrix' : '待真实数据',
-      rows: premiumPlatforms.map((platform) => ({
-        label: platform.label,
-        value: platform.value,
-      })),
-      actionLabel: '进入账号矩阵',
-      actionPage: 'channels',
-    });
-  }, [openPanelDrawer, premiumPlatforms]);
-
-  const openAgentDrawer = useCallback((agent: PremiumAgent) => {
-    openPanelDrawer({
-      title: agent.name,
-      sourceLabel: agent.isMock ? 'Agent API 待接入' : 'Agents status API',
-      rows: [
-        { label: 'Agent ID', value: agent.id },
-        { label: '状态', value: agent.status },
-        { label: '摘要', value: agent.summary || '-' },
-        { label: '最新输出', value: agent.lastOutput || '暂无输出文件' },
-      ],
-      actionLabel: '打开 Agent Inbox',
-      actionPage: 'agents',
-    });
-  }, [openPanelDrawer]);
-
-  const openAlertDrawer = useCallback((alert: PremiumAlert) => {
-    openPanelDrawer({
-      title: alert.title,
-      sourceLabel: alert.sourceLabel || 'vkpi_brand_signal',
-      rows: [
-        { label: '类型', value: alert.signalType || 'brand_signal' },
-        { label: '等级', value: alert.severity || 'medium' },
-        { label: '时间', value: alert.time },
-        { label: '摘要', value: alert.body },
-        { label: '来源', value: alert.sourceLabel || 'vkpi_brand_signal' },
-        { label: '链接', value: alert.url ? '可打开原始内容' : '暂无原始链接' },
-      ],
-      actionLabel: alert.url ? '打开原始内容' : '进入数据质量',
-      actionUrl: alert.url,
-      actionPage: alert.url ? undefined : 'dataQuality',
-    });
-  }, [openPanelDrawer]);
-
-  const openTaskDrawer = useCallback((task: PremiumTask) => {
-    openPanelDrawer({
-      title: task.title,
-      sourceLabel: task.sourceLabel || task.mockLabel || 'recommendation_agent_v0',
-      rows: [
-        { label: '任务 ID', value: task.id },
-        { label: '优先级', value: task.priorityLabel },
-        { label: '置信度', value: task.confidence == null ? task.width : `${Math.round(task.confidence * 100)}%` },
-        { label: '来源', value: task.sourceLabel || task.mockLabel || '任务队列' },
-        { label: '动作', value: task.body },
-      ],
-      actionLabel: '进入项目跟进',
-      actionPage: 'projects',
-    });
-  }, [openPanelDrawer]);
-
-  const openCopilotDrawer = useCallback(() => {
-    const summary = objectValue(snapshot.copilotBrief.summary);
-    const itemRows = rowsFrom(snapshot.copilotBrief.items).slice(0, 4).map((item, index) => ({
-      label: `情报 ${index + 1}`,
-      value: String(item.title || item.headline || item.summary || item.body || JSON.stringify(item)).slice(0, 160),
-    }));
-    const actionRows = rowsFrom(snapshot.copilotBrief.actions).slice(0, 4).map((item, index) => ({
-      label: `动作 ${index + 1}`,
-      value: String(item.title || item.action || item.summary || item.body || item).slice(0, 160),
-    }));
-    openPanelDrawer({
-      title: String(summary.headline || snapshot.copilotBrief.headline || 'V-KPI Copilot Brief'),
-      sourceLabel: String(snapshot.copilotBrief.source || 'brief_agent_v0'),
-      rows: [
-        { label: '状态', value: snapshot.copilotBrief.is_real ? '真实 brief' : '等待 Brief Agent' },
-        { label: '模式', value: String(snapshot.copilotBrief.mode || '-') },
-        { label: '输出文件', value: String(snapshot.copilotBrief.last_output || '暂无输出文件') },
-        { label: '更新时间', value: loadedAtLabel(String(snapshot.copilotBrief.last_run_at || snapshot.loadedAt || '')) },
-        ...itemRows,
-        ...actionRows,
-      ],
-      actionLabel: '打开 Agent Inbox',
-      actionPage: 'agents',
-    });
-  }, [openPanelDrawer, snapshot]);
-
-  const openDataStatusDrawer = useCallback(() => {
-    openPanelDrawer({
-      title: 'Dashboard 数据状态',
-      sourceLabel: snapshot.source === 'real' ? '全部真实 API' : snapshot.source === 'partial' ? '部分真实 API' : '本地示例 / 未登录',
-      rows: [
-        { label: '状态', value: syncLabel },
-        { label: '登录', value: apiToken ? '已带 API token' : '未登录 / 演示模式' },
-        { label: '更新时间', value: loadedAtLabel(snapshot.loadedAt) },
-        { label: '失败 API', value: snapshot.failedSections.length ? snapshot.failedSections.join(' / ') : '无' },
-        { label: 'Dashboard', value: snapshot.dashboard && Object.keys(snapshot.dashboard).length ? '已返回' : '空' },
-        { label: '趋势', value: `${snapshot.trendRows.length} 行` },
-        { label: '国家分布', value: `${rowsFrom(snapshot.kolDistribution.countries).length} 国家` },
-        { label: '最新内容', value: `${snapshot.recentContent.length} 条` },
-      ],
-      actionLabel: '进入数据质量',
-      actionPage: 'dataQuality',
-    });
-  }, [apiToken, openPanelDrawer, snapshot, syncLabel]);
-
-  const openDateWindowDrawer = useCallback(() => {
-    openPanelDrawer({
-      title: 'Dashboard 时间窗口',
-      sourceLabel: `近 ${windowDays} 天 · ${snapshot.source === 'mock' ? '示例模式' : '真实 API'}`,
-      rows: [
-        { label: '本地日期', value: localDateISO() },
-        { label: '当前窗口', value: `近 ${windowDays} 天` },
-        { label: '更新时间', value: loadedAtLabel(snapshot.loadedAt) },
-        { label: 'KPI 口径', value: snapshot.source === 'mock' ? '示例 KPI / 未登录' : 'Dashboard KPI API' },
-        { label: '趋势覆盖', value: snapshot.trendRows.length ? `${snapshot.trendRows.length} 个日期点` : '暂无趋势点' },
-        { label: '内容覆盖', value: snapshot.recentContent.length ? `${snapshot.recentContent.length} 条最新内容` : '暂无内容列表' },
-      ],
-      actionLabel: '进入数据质量',
-      actionPage: 'dataQuality',
-    });
-  }, [openPanelDrawer, snapshot, windowDays]);
-
-  const openCommerceStatusDrawer = useCallback((metricLabel: string) => {
-    const gmvKpi = premiumKpis.find((item) => item.label === 'GMV');
-    const ordersKpi = premiumKpis.find((item) => item.label === '订单量');
-    const roiKpi = premiumKpis.find((item) => item.label === '平均 ROI');
-    const exampleMode = snapshot.source === 'mock';
-    openPanelDrawer({
-      title: `${metricLabel} 接入状态`,
-      sourceLabel: 'Commerce / Attribution readiness',
-      rows: [
-        { label: 'Shopify webhook', value: exampleMode ? '示例模式 / 未登录' : ordersKpi?.mockLabel?.includes('Shopify') ? '待接入' : '需核验' },
-        { label: '折扣码归因', value: exampleMode ? '示例模式 / 未登录' : gmvKpi?.mockLabel?.includes('部分') ? '部分归因可见' : '待接入' },
-        { label: 'Cart attributes', value: exampleMode ? '示例模式 / 未登录' : '待接入' },
-        { label: '成本台账', value: exampleMode ? '示例模式 / 未登录' : roiKpi?.mockLabel?.includes('部分') ? '部分可见' : '待成本接入' },
-        { label: '当前展示策略', value: '缺关键链路时不显示完整销售 / 订单 / ROI 数字' },
-      ],
-      actionLabel: '进入系统设置',
-      actionPage: 'settings',
-    });
-  }, [openPanelDrawer, premiumKpis, snapshot.source]);
-
-  const openContentUrl = useCallback((url: unknown) => {
-    const href = typeof url === 'string' ? url.trim() : '';
-    if (!href) {
-      showToast('暂无内容链接');
-      return;
-    }
-    window.open(href, '_blank', 'noopener,noreferrer');
-  }, [showToast]);
-
-  const openContentDetailDrawer = useCallback((row: Row) => {
-    const url = rowUrl(row);
-    const sourceTable = String(row.source_table || row.raw_data_ref || row.source || '').trim();
-    const sourceId = String(row.source_id || row.id || row.post_id || row.signal_id || '').trim();
-    openPanelDrawer({
-      title: cleanContentTitle(row),
-      sourceLabel: contentKindLabel(contentKind(row)),
-      rows: [
-        { label: '来源分类', value: contentKindLabel(contentKind(row)) },
-        { label: '平台', value: platformDisplayName(row.platform) },
-        { label: '账号', value: `@${String(row.account_handle || row.account_display_name || row.author || '-').replace(/^@/, '')}` },
-        { label: '发布时间', value: postedLabel(row) },
-        { label: '曝光', value: compact(contentMetric(row, ['views', 'total_views', 'play_count', 'impressions', 'view_count'])) },
-        { label: '点赞', value: compact(contentMetric(row, ['likes', 'like_count'])) },
-        { label: '评论', value: compact(contentMetric(row, ['comments', 'comment_count'])) },
-        { label: '互动率', value: engagementLabel(row) },
-        { label: '数据表', value: sourceTable || 'Dashboard recent-content API' },
-        { label: '记录 ID', value: sourceId || '-' },
-      ],
-      actionLabel: url ? '打开原帖' : '进入内容中心',
-      actionUrl: url || undefined,
-      actionPage: url ? undefined : 'channels',
-    });
-  }, [openPanelDrawer]);
+  const handleCardAction = (action: IntelligenceAction, card: IntelligenceCardModel) => {
+    if (action.kind === 'disabled') return;
+    if (action.label.includes('证据')) setEvidenceCard(card);
+    else if (action.label.includes('智能中心')) goto('intelligenceCenter', '智能中心');
+    else if (action.label.includes('Agent')) goto('agents', 'Agent Inbox');
+    else if (action.label.includes('数据分析')) goto('dataAnalysis', '数据分析');
+  };
 
   const dashboardContent = (
     <>
       {!embedded ? (
         <GlassTopBar
-            actions={[
-              { label: localDateISO(), onClick: openDateWindowDrawer },
-              { label: syncLabel, variant: 'sync', onClick: openDataStatusDrawer },
-              { label: '导出', onClick: () => goToWorkspacePage('reports', '报表导出') },
-              { label: '生成周报', variant: 'primary', onClick: () => goToWorkspacePage('reports', '生成周报') },
-            ]}
+          actions={[
+            { label: localDateISO(), onClick: () => setPanel({ title: '数据窗口', sourceLabel: `近 ${windowDays} 天`, rows: [{ label: '窗口', value: `近 ${windowDays} 天` }, { label: '更新时间', value: dateLabel(snapshot.loadedAt) }], actionLabel: '进入数据质量', actionPage: 'dataQuality' }) },
+            { label: syncLabel, variant: 'sync', onClick: () => setPanel({ title: 'Dashboard 数据状态', sourceLabel: snapshot.source, rows: [{ label: '失败 API', value: snapshot.failedSections.length ? snapshot.failedSections.join(' / ') : '无' }, { label: '官方账号', value: `${official.accountCount || 0}` }, { label: '内容', value: `${official.posts || 0}` }], actionLabel: '进入数据质量', actionPage: 'dataQuality' }) },
+            { label: '导出', onClick: () => goto('reports', '报表导出') },
+            { label: '生成周报', variant: 'primary', onClick: () => goto('reports', '生成周报') },
+          ]}
         />
       ) : null}
-	          <HeroSection
-              missions={heroMissions}
-              brief={{
-                label: copilotIsReal ? 'AI BRIEF · 真实' : 'AI BRIEF',
-                title: copilotHeadline,
-                body: copilotIsReal ? copilotInsight : '项目 · KOL · 品牌信号',
-                primaryAction: '证据链',
-                secondaryAction: '生成任务',
-                onPrimaryAction: openCopilotDrawer,
-                onSecondaryAction: () => goToWorkspacePage('projects', '生成任务'),
-              }}
-            />
-	          <section className="kpis">
-	            {loadingData && snapshot.source === 'mock' && !snapshot.loadedAt
-	              ? <PremiumKpiSkeletons />
-		              : premiumKpis.map((item) => (
-		                <PremiumKpiCard
-		                  key={item.label}
-		                  item={item}
-		                  selected={expandedKpi === item.label}
-		                  onToggle={() => setExpandedKpi((current) => current === item.label ? null : item.label)}
-		                />
-		              ))}
-		          </section>
-		          {selectedKpi ? (
-		            <KpiInsightPanel
-		              item={selectedKpi}
-		              snapshot={snapshot}
-		              trend={premiumTrend}
-		              windowDays={windowDays}
-		              onClose={() => setExpandedKpi(null)}
-		              onSelectMetric={selectKpiByLabel}
-		              onOpenUrl={openContentUrl}
-		              onOpenDiagnostic={() => openCommerceStatusDrawer(selectedKpi.label)}
-		            />
-		          ) : null}
-	          {loadingData && snapshot.source === 'mock' && !snapshot.loadedAt ? (
-	            <PremiumDashboardSkeleton />
-	          ) : (
-	          <div className="content-grid">
-            <div>
-              <div className="left-grid">
-                <GlobalKolMapPanel
-                  regions={premiumRegions}
-                  points={premiumMapPoints}
-                  activeMetric={activeMapMetric}
-                  onMetricChange={(metric) => {
-                    setActiveMapMetric(metric);
-                    if (metric !== 'kol' && !premiumRegions.some((region) => mapMetricValue(region, metric))) {
-                      showToast(`${mapMetricTitle(metric)}按国家聚合待接入`);
-                    }
-                  }}
-                  onOpenCountry={openCountryDrawer}
-                  onOpenAll={() => goToWorkspacePage('discover', 'Country Map')}
-                />
-                <div className="glass-card panel">
-                  <div className="panel-head"><h3>{activeSegment}趋势（近 7 天）</h3><div className="segment">{trendSegmentOptions.map((segment) => <button className={activeSegment === segment.label ? 'active' : ''} data-seg={segment.label} disabled={!segment.ready} title={segment.ready ? segment.label : `${segment.label}暂无真实趋势数据`} onClick={() => handleSegmentSelect(segment.label)} type="button" key={segment.label}>{segment.label}</button>)}</div></div>
-                  <div className="linechart" role="button" tabIndex={0} onClick={openTrendDrawer} onKeyDown={(event) => { if (event.key === 'Enter') openTrendDrawer(); }}><svg viewBox="0 0 520 250" preserveAspectRatio="none"><defs><linearGradient id="area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#1b6cff" /><stop offset="1" stopColor="#1b6cff" stopOpacity="0" /></linearGradient></defs><g stroke="rgba(92,130,190,.16)"><line x1="26" y1="30" x2="500" y2="30" /><line x1="26" y1="80" x2="500" y2="80" /><line x1="26" y1="130" x2="500" y2="130" /><line x1="26" y1="180" x2="500" y2="180" /></g><path d={premiumTrend.path} fill="none" stroke="#1b6cff" strokeWidth="4" strokeLinecap="round" /><path d={premiumTrend.areaPath} fill="url(#area)" opacity=".25" /><circle cx={premiumTrend.pointX} cy={premiumTrend.pointY} r="8" fill="#1b6cff" stroke="#fff" strokeWidth="4" /><text x="34" y="238" fontSize="12" fill="#667085">{premiumTrend.labels[0] || '-'}</text><text x="116" y="238" fontSize="12" fill="#667085">{premiumTrend.labels[1] || '-'}</text><text x="198" y="238" fontSize="12" fill="#667085">{premiumTrend.labels[2] || '-'}</text><text x="280" y="238" fontSize="12" fill="#667085">{premiumTrend.labels[3] || '-'}</text><text x="362" y="238" fontSize="12" fill="#667085">{premiumTrend.labels[4] || '-'}</text><text x="444" y="238" fontSize="12" fill="#667085">{premiumTrend.labels[5] || '-'}</text></svg><div className="float-tip">{premiumTrend.tipDate}<b>{premiumTrend.tipValue}</b></div></div>
-                </div>
-                <div className="lower">
-                  <div className="glass-card mini">
-                    <div className="panel-head"><h3>产品 ROI 排行</h3><button className="link" type="button" onClick={() => goToWorkspacePage('productBattle', '产品 ROI')}>查看全部</button></div>
-                    {premiumProductRows.map((row) => <div className="row" title={row.mockLabel} key={row.rank} role="button" tabIndex={0} onClick={openProductDrawer} onKeyDown={(event) => { if (event.key === 'Enter') openProductDrawer(); }}><span className="rank">{row.rank}</span><div><b>{row.name}{row.isMock ? <span className="tag">{badgeText(row.mockLabel)}</span> : null}</b><div className="bar"><span style={glassVarStyle({ '--w': row.width })}></span></div></div><small>{row.value}</small></div>)}
-                  </div>
-                  <div className="glass-card mini">
-                    <div className="panel-head"><h3>内容类型分布</h3><span className="tag">{allowMockFallback ? '示例' : '官方矩阵'}</span></div>
-                    <div className="donut-wrap" role="button" tabIndex={0} onClick={openContentTypeDrawer} onKeyDown={(event) => { if (event.key === 'Enter') openContentTypeDrawer(); }}><div className="donut"></div><div className="donut-label"><span>总内容</span><b>{official.posts ? compact(official.posts) : '--'}</b></div></div>
-                    <div className="region-list" style={{ gridTemplateColumns: 'repeat(3,1fr)' }}>{contentTypeRows.map((item) => <div className="region" style={glassVarStyle({ '--c': item.color })} key={item.label} role="button" tabIndex={0} onClick={openContentTypeDrawer} onKeyDown={(event) => { if (event.key === 'Enter') openContentTypeDrawer(); }}><span><i></i>{item.label}</span><b>{item.value}</b></div>)}</div>
-                  </div>
-                  <div className="glass-card mini">
-                    <div className="panel-head"><h3>KOL 平台分布</h3><button className="link" type="button" onClick={() => goToWorkspacePage('channels', 'KOL 平台分布')}>查看全部</button></div>
-                    {premiumPlatforms.map((platform) => <div className="platform" title={platform.mockLabel} key={platform.label} role="button" tabIndex={0} onClick={openPlatformDrawer} onKeyDown={(event) => { if (event.key === 'Enter') openPlatformDrawer(); }}><span className="picon" style={{ background: platform.background }}>{platform.icon}</span><div><b>{platform.label}{platform.isMock ? <span className="tag">{badgeText(platform.mockLabel)}</span> : null}</b><div className="bar"><span style={glassVarStyle({ '--w': platform.width })}></span></div></div><small>{platform.value}</small></div>)}
-                  </div>
-                </div>
+
+      <HeroSection
+        title="全球影响情报中枢"
+        body="关键结果 / 风险 / 任务"
+        missions={[]}
+        control={(
+          <label className="dashboard-scope-switch" title={scopeOption.detail}>
+            <span>下方数据</span>
+            <select aria-label="选择下方 KPI 数据范围" value={scope} onChange={(event) => setScope(event.target.value as DashboardScope)}>
+              {scopeOptions.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
+            </select>
+          </label>
+        )}
+        summary={(
+          <div className="impact-summary-grid" aria-label="关键结果摘要">
+            {summaryCards.map((card) => (
+              <button className={`impact-summary-card is-${card.tone}`} key={card.id} type="button" onClick={() => goto(card.page, card.title)}>
+                <span>{card.title}</span><strong>{card.value}</strong><em>{card.subtitle}</em><i style={glassVarStyle({ '--w': card.width })}></i>
+              </button>
+            ))}
+          </div>
+        )}
+        brief={{
+          label: '智能层 · 只读',
+          title: intelligenceText.title,
+          body: (
+            <div className="intelligence-layer">
+              <div className="intelligence-tabs" role="tablist" aria-label="Intelligence Layer tabs">
+                {intelligenceTabs.map((item) => <button className={tab === item.key ? 'is-active' : ''} key={item.key} type="button" onClick={() => setTab(item.key)}>{item.label}</button>)}
               </div>
-              <LatestContentPerformance
-                rows={contentRows}
-                activeFilter={contentFilter}
-                onFilterChange={setContentFilter}
-                onOpenUrl={openContentUrl}
-                onOpenContentCenter={() => goToWorkspacePage('channels', '内容中心')}
-                onOpenContentDetail={openContentDetailDrawer}
-              />
+              <p>{intelligenceText.summary}</p>
+              <ul>{intelligenceText.points.map((point) => <li key={point}>{point}</li>)}</ul>
+              <div className="intelligence-layer-metrics">
+                {cards.map((card) => <button key={card.id} type="button" onClick={() => setSelectedCard(card)}><b>{card.title.split(' ')[0]}</b><small>{card.entityType}</small></button>)}
+              </div>
+              <span>不触发 LLM / provider，只展示既有信号。</span>
             </div>
-            <aside className="rail">
-              <div className="glass-card rail-card copilot" role="button" tabIndex={0} onClick={openCopilotDrawer} onKeyDown={(event) => { if (event.key === 'Enter') openCopilotDrawer(); }}><div className="ai-kicker">V-KPI Copilot</div><h3>{copilotHeadline}</h3><p>{copilotBody}</p><div className="insight">{copilotInsight}</div></div>
-              <div className="glass-card rail-card agents-room">
-                <div className="panel-head"><h3>Agents 战情室</h3><span className="tag">{activeAgentCount} / {premiumAgents.length} 在线</span></div>
-                <div className="agents-list">
-                  {premiumAgents.map((agent) => (
-                    <div
-                      className="agent-row"
-                      key={agent.id}
-                      title={agent.lastOutput || agent.summary}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => openAgentDrawer(agent)}
-                      onKeyDown={(event) => { if (event.key === 'Enter') openAgentDrawer(agent); }}
-                    >
-                      <span className={`agent-dot ${agent.status}`}></span>
-                      <div><b>{agent.name}{agent.isMock ? <span className="tag">示例</span> : null}</b><p>{agent.summary}</p></div>
-                    </div>
-                  ))}
-                </div>
-                <button className="link agents-link" type="button" onClick={() => goToWorkspacePage('agents', 'Agent Inbox')}>Agent Inbox</button>
+          ),
+          primaryAction: '查看证据',
+          secondaryAction: '进入智能中心',
+          onPrimaryAction: () => setEvidenceCard(cards[0]),
+          onSecondaryAction: () => goto('intelligenceCenter', '智能中心'),
+        }}
+      />
+
+      <section className="kpis" aria-label={scopeOption.detail}>
+        {kpis.map((item) => <DashboardKpiCard item={item} key={item.label} onClick={() => openKpiPanel(item)} />)}
+      </section>
+
+      <div className="content-grid">
+        <div>
+          <div className="left-grid">
+            <div className="glass-card panel geo-map-card">
+              <div className="geo-map-head">
+                <div><h3>全球 KOL 分布</h3><p>{regions.length ? `${regions.length} 国家 · ${compact(regions.reduce((sum, row) => sum + row.count, 0))} KOL` : '国家分布待接入'}</p></div>
               </div>
-              <div className="glass-card rail-card">
-                <div className="panel-head">
-                  <h3>重要提醒</h3>
-                  <span className="tag">Brand Signal</span>
-                  <button className="link" type="button" onClick={() => goToWorkspacePage('dataQuality', '重要提醒')}>查看全部</button>
-                </div>
-                {premiumAlerts.length ? premiumAlerts.map((alert) => (
-                  <div
-                    className="alert"
-                    title={alert.sourceLabel}
-                    key={`${alert.title}-${alert.time}`}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => openAlertDrawer(alert)}
-                    onKeyDown={(event) => { if (event.key === 'Enter') openAlertDrawer(alert); }}
-                  >
-                    <div className="alert-ic" style={glassVarStyle({ '--bgc': alert.bgc, '--col': alert.col })}>{alert.icon}</div>
-                    <div>
-                      <b>{alert.title}<span className="tag">真实</span></b>
-                      <p>{alert.body}</p>
-                    </div>
-                    <span className="time">{alert.time}</span>
-                    {alert.url ? <button className="link" type="button" title="打开原始内容" onClick={(event) => { event.stopPropagation(); openContentUrl(alert.url); }}>↗</button> : null}
+              <div className="geo-map-layout">
+                <div className="geo-map-stage"><div className="holo-map"><RealWorldMap points={mapPoints} /><div className="map-hint">KOL 国家分布</div></div></div>
+                <div className="geo-top">
+                  <span>TOP 国家 · KOL 数</span>
+                  <div className="geo-top-list">
+                    {regions.slice(0, 5).map((row) => <button className="geo-country-card" key={row.code} type="button" onClick={() => setPanel({ title: row.label, sourceLabel: 'KOL 国家分布', rows: [{ label: '国家', value: `${countryFlag(row.code)} ${row.label}` }, { label: 'KOL', value: compact(row.count) }, { label: '占比', value: `${row.share.toFixed(1)}%` }], actionLabel: '进入红人搜索', actionPage: 'discover' })}><b><span>{countryFlag(row.code)}</span>{row.label}</b><strong>{compact(row.count)} · {row.share.toFixed(1)}%</strong><em>点击查看国家详情</em></button>)}
                   </div>
-                )) : <div className="empty-real">暂无真实品牌信号</div>}
+                </div>
               </div>
-              <div className="glass-card rail-card"><div className="panel-head"><h3>本周关键任务</h3><button className="link" type="button" onClick={() => goToWorkspacePage('projects', '本周关键任务')}>查看全部</button></div>{premiumTasks.length ? premiumTasks.map((task) => <div className="task" title={task.mockLabel || task.sourceLabel} key={task.id || task.title} role="button" tabIndex={0} onClick={() => openTaskDrawer(task)} onKeyDown={(event) => { if (event.key === 'Enter') openTaskDrawer(task); }}><div className="task-head"><b>{task.title}{task.isMock ? <span className="tag">示例</span> : null}</b><span className={`priority ${task.priority}`}>{task.priorityLabel}</span></div><p>{task.body}</p><div className="progress"><span style={glassVarStyle({ '--w': task.width })}></span></div></div>) : <div className="empty-real">{snapshot.tasksStatus.is_real ? '暂无真实推荐任务' : '等待真实任务 API'}</div>}</div>
-              <div className="glass-card rail-card"><div className="panel-head"><h3>快捷入口</h3></div><div className="quick">{quickActions.map((action) => <button key={action.label} type="button" onClick={() => goToWorkspacePage(action.page, action.label)}><b>{action.icon}</b><span>{action.label}</span></button>)}</div></div>
-            </aside>
-	          </div>
-	          )}
-	    </>
-	  );
+            </div>
+            <div className="glass-card panel">
+              <div className="panel-head"><h3>{trendSegment}趋势（近 7 天）</h3><div className="segment">{trendSegments.map((segment) => <button className={trendSegment === segment ? 'active' : ''} type="button" key={segment} onClick={() => setTrendSegment(segment)}>{segment}</button>)}</div></div>
+              <div className="linechart"><svg viewBox="0 0 520 250" preserveAspectRatio="none"><defs><linearGradient id="area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#1b6cff" /><stop offset="1" stopColor="#1b6cff" stopOpacity="0" /></linearGradient></defs><g stroke="rgba(92,130,190,.16)"><line x1="26" y1="30" x2="500" y2="30" /><line x1="26" y1="80" x2="500" y2="80" /><line x1="26" y1="130" x2="500" y2="130" /><line x1="26" y1="180" x2="500" y2="180" /></g><path d={trend.path} fill="none" stroke="#1b6cff" strokeWidth="4" strokeLinecap="round" /><path d={trend.areaPath} fill="url(#area)" opacity=".25" /><circle cx={trend.pointX} cy={trend.pointY} r="8" fill="#1b6cff" stroke="#fff" strokeWidth="4" /></svg><div className="float-tip">{trend.tipDate}<b>{trend.tipValue}</b></div></div>
+            </div>
+            <div className="lower">
+              <div className="glass-card mini"><div className="panel-head"><h3>平台分布</h3><button className="link" type="button" onClick={() => goto('channels', '平台分布')}>查看全部</button></div>{platforms.length ? platforms.map((row) => <div className="platform" key={row.label}><span className="picon">{row.label.slice(0, 2)}</span><div><b>{row.label}</b><div className="bar"><span style={glassVarStyle({ '--w': row.width })}></span></div></div><small>{compact(row.value)} {row.meta}</small></div>) : <div className="empty-real">暂无平台分布</div>}</div>
+              <div className="glass-card mini"><div className="panel-head"><h3>内容状态</h3><span className="tag">官方矩阵</span></div><div className="donut-wrap"><div className="donut"></div><div className="donut-label"><span>总内容</span><b>{official.posts ? compact(official.posts) : '--'}</b></div></div></div>
+              <div className="glass-card mini"><div className="panel-head"><h3>推荐学习</h3><button className="link" type="button" onClick={() => goto('intelligenceCenter', '智能中心')}>处理</button></div><div className="task"><div className="task-head"><b>推荐反馈</b><span className="priority mid">中</span></div><p>{missingFeedback ? `${compact(missingFeedback)} 条待补 accept / reject / snooze` : '推荐反馈暂无积压'}</p><div className="progress"><span style={glassVarStyle({ '--w': missingFeedback ? '68%' : '12%' })}></span></div></div></div>
+            </div>
+          </div>
+          <div className="glass-card latest latest-redesign">
+            <div className="panel-head latest-head"><h3>最新内容表现</h3><button className="link" type="button" onClick={() => goto('channels', '内容中心')}>进入内容中心 →</button></div>
+            <div className="latest-content-list">
+              {contentRows.length ? contentRows.map((row, index) => {
+                const url = contentUrl(row);
+                return <article className="latest-content-row" key={`${row.id || url || index}`}><div className="latest-content-thumb">▶</div><div className="latest-content-main"><b>{contentTitle(row)}</b><p>@{String(row.account_handle || row.account_display_name || '-')} · {platformName(row.platform)}</p></div><div className="latest-content-metrics"><span><em>曝光</em><strong>{compact(num(row.views || row.total_views || row.play_count || row.impressions))}</strong></span><span><em>点赞</em><strong>{compact(num(row.likes || row.like_count))}</strong></span><span><em>评论</em><strong>{compact(num(row.comments || row.comment_count))}</strong></span></div><div className="latest-content-tools"><button type="button" disabled={!url} onClick={() => url && window.open(url, '_blank', 'noopener,noreferrer')}>↗</button></div></article>;
+              }) : <div className="empty-real">当前暂无最新内容列表。</div>}
+            </div>
+          </div>
+        </div>
+        <aside className="rail">
+          <div className="glass-card rail-card intelligence-war-room"><div className="panel-head"><h3>智能层战情室</h3><span className="tag">只读 · 中文</span></div><div className="dashboard-intelligence-list">{cards.map((card) => <IntelligenceCard card={card} compact key={card.id} onSelect={setSelectedCard} />)}</div></div>
+          <div className="glass-card rail-card"><div className="panel-head"><h3>本周关键任务</h3><button className="link" type="button" onClick={() => goto('projects', '项目跟进')}>查看全部</button></div>{taskRows.length ? taskRows.slice(0, 5).map((task, index) => <div className="task" key={String(task.id || index)}><div className="task-head"><b>{String(task.title || '推荐任务')}</b><span className="priority mid">中</span></div><p>{String(task.body || task.summary || '等待人工复核')}</p><div className="progress"><span style={glassVarStyle({ '--w': `${Math.max(8, Math.round(num(task.confidence) * 100))}%` })}></span></div></div>) : <div className="empty-real">暂无真实推荐任务</div>}</div>
+          <div className="glass-card rail-card"><div className="panel-head"><h3>快捷入口</h3></div><div className="quick">{[{ label: '智能中心', page: 'intelligenceCenter' }, { label: '红人搜索', page: 'discover' }, { label: '项目跟进', page: 'projects' }, { label: '数据质量', page: 'dataQuality' }, { label: '报表导出', page: 'reports' }].map((item) => <button key={item.label} type="button" onClick={() => goto(item.page as VkpiPageKey, item.label)}><b>◇</b><span>{item.label}</span></button>)}</div></div>
+        </aside>
+      </div>
+    </>
+  );
 
   return (
     <div className={`vkpi-glass-shell${embedded ? ' vkpi-glass-shell--embedded' : ''}`} data-testid={testId}>
-      {embedded ? (
-        <main className="main">{dashboardContent}</main>
-      ) : (
+      {embedded ? <main className="main">{dashboardContent}</main> : (
         <>
           <div className="browser"><div className="traffic"><span className="t-dot red"></span><span className="t-dot yellow"></span><span className="t-dot green"></span></div><div className="browser-title">viltroxtest.com · V-KPI Glass Intelligence</div><div className="browser-icons">◉ ⇧</div></div>
-          <div className="app">
-            <GlassSidebar activeKey={activeNav} onSelectNav={handleNavSelect} profileInitial={userName.slice(0, 1).toUpperCase()} profileName={userName} profileRole={userRole} />
-            <main className="main">{dashboardContent}</main>
-          </div>
+          <div className="app"><GlassSidebar activeKey="Dashboard" onSelectNav={(key) => key === 'Dashboard' ? undefined : goto('intelligenceCenter', key)} profileInitial={userName.slice(0, 1).toUpperCase()} profileName={userName} profileRole={userRole} /><main className="main">{dashboardContent}</main></div>
         </>
       )}
-      {countryDrawer ? (
-        <div className="country-drawer" role="dialog" aria-label={`${countryDrawer.region.label} KOL`}>
-          <div className="country-drawer-head">
-            <div><span>国家 KOL</span><b>{countryDrawer.region.label}</b></div>
-            <button type="button" onClick={() => setCountryDrawer(null)}>×</button>
-          </div>
-          <div className="country-drawer-meta">
-            <span>{countryDrawer.region.countryCode || '-'}</span>
-            <span>{compact(countryDrawer.region.kolCount || countryDrawer.items.length)} KOL</span>
-            <span>{countryDrawer.items.length ? `${countryDrawer.items.length} 已加载` : '列表待加载'}</span>
-          </div>
-          <div className="country-drawer-grid">
-            <div><span>地图 KOL</span><b>{compact(countryDrawer.region.kolCount || 0)}</b></div>
-            <div><span>国家曝光</span><b>{countryDrawer.region.exposure ? compact(countryDrawer.region.exposure) : '待接入'}</b></div>
-            <div><span>国家销售额</span><b>{countryDrawer.region.sales ? `$${compact(countryDrawer.region.sales)}` : '待归因'}</b></div>
-          </div>
-          {countryDrawer.loading ? <div className="country-drawer-empty">加载中…</div> : null}
-          {!countryDrawer.loading && countryDrawer.error ? <div className="country-drawer-empty">{countryDrawer.error}</div> : null}
-          {!countryDrawer.loading && countryDrawer.error ? (
-            <button className="panel-drawer-action" type="button" onClick={() => goToWorkspacePage('discover', `${countryDrawer.region.label} KOL`)}>
-              打开 KOL 搜索 →
-            </button>
-          ) : null}
-          {!countryDrawer.loading && !countryDrawer.error && countryDrawer.items.length === 0 ? <div className="country-drawer-empty">暂无 KOL</div> : null}
-          {!countryDrawer.loading && !countryDrawer.error ? (
-            <>
-              <div className="country-drawer-grid">
-                <div><span>平台数</span><b>{topCountryPlatforms(countryDrawer.items).length || '--'}</b></div>
-                <div><span>高适配</span><b>{countryDrawer.items.filter((item) => numberValue(item.viltrox_fit_score) >= 80).length}</b></div>
-                <div><span>平均粉丝</span><b>{countryDrawer.items.length ? compact(countryDrawer.items.reduce((sum, item) => sum + numberValue(item.followers), 0) / countryDrawer.items.length) : '--'}</b></div>
-              </div>
-              <div className="country-drawer-section">
-                <h4>平台分布</h4>
-                {topCountryPlatforms(countryDrawer.items).map((row) => <div className="country-breakdown" key={row.label}><span>{row.label}</span><i style={glassVarStyle({ '--w': row.width })}></i><b>{row.count}</b></div>)}
-              </div>
-              <div className="country-drawer-section">
-                <h4>决策标签</h4>
-                {countryDecisionRows(countryDrawer.items).map((row) => <div className="country-breakdown" key={row.label}><span>{row.label}</span><i style={glassVarStyle({ '--w': row.width })}></i><b>{row.count}</b></div>)}
-              </div>
-              <div className="country-drawer-section">
-                <h4>数据状态</h4>
-                {countrySyncRows(countryDrawer.items).map((row) => <div className="country-breakdown" key={row.label}><span>{row.label}</span><i style={glassVarStyle({ '--w': row.width })}></i><b>{row.count}</b></div>)}
-              </div>
-              <div className="country-drawer-list">
-                {countryDrawer.items.slice(0, 12).map((item) => (
-                  <div className="country-kol" key={item.id}>
-                    <div>
-                      <b>{item.display_name || item.handle || `KOL ${item.id}`}</b>
-                      <span>{platformDisplayName(item.platform)} · {compact(numberValue(item.followers))} followers · {kolDecisionLabel(item)}</span>
-                    </div>
-                    <button type="button" onClick={() => item.profile_url ? openContentUrl(item.profile_url) : goToWorkspacePage('discover', 'KOL 搜索')}>↗</button>
-                  </div>
-                ))}
-              </div>
-              <button className="panel-drawer-action" type="button" onClick={() => goToWorkspacePage('discover', `${countryDrawer.region.label} KOL`)}>
-                打开 KOL 搜索 →
-              </button>
-            </>
-          ) : null}
+      {selectedCard ? (
+        <div className="panel-drawer panel-drawer--intelligence" role="dialog" aria-label={selectedCard.title}>
+          <div className="country-drawer-head panel-drawer-head"><div><span>{selectedCard.sourceLabel}</span><b>{selectedCard.title}</b></div><button type="button" onClick={() => setSelectedCard(null)}>×</button></div>
+          <IntelligenceDetailPanel card={selectedCard} emptyTitle="选择一张智能卡" emptySummary="从 Dashboard 右侧选择摘要或系统卡片。" extraSlot={<IntelligenceActionStrip card={selectedCard} mode="read_only" />} footerNote="Dashboard 只展示只读智能摘要；接受、拒绝、延后和任务生成会进入智能中心统一处理。" onAction={handleCardAction} />
         </div>
       ) : null}
-      {panelDrawer ? (
-        <div className="panel-drawer" role="dialog" aria-label={panelDrawer.title}>
-          <div className="country-drawer-head">
-            <div><span>{panelDrawer.sourceLabel}</span><b>{panelDrawer.title}</b></div>
-            <button type="button" onClick={() => setPanelDrawer(null)}>×</button>
-          </div>
-          <div className="panel-drawer-list">
-            {panelDrawer.rows.map((row, index) => (
-              <div className="panel-drawer-row" key={`${row.label}-${index}`}>
-                <span>{row.label}</span>
-                <b>{row.value}</b>
-              </div>
-            ))}
-          </div>
-          <button
-            className="panel-drawer-action"
-            type="button"
-            onClick={() => panelDrawer.actionUrl ? openContentUrl(panelDrawer.actionUrl) : goToWorkspacePage(panelDrawer.actionPage || 'dashboardPremium', panelDrawer.title)}
-          >
-            {panelDrawer.actionLabel}
-          </button>
+      {evidenceCard ? <IntelligenceEvidenceDrawer card={evidenceCard} onClose={() => setEvidenceCard(null)} footerNote="Dashboard 证据抽屉只展示已有输出，不触发外部抓取或模型调用。" /> : null}
+      {panel ? (
+        <div className="panel-drawer" role="dialog" aria-label={panel.title}>
+          <div className="country-drawer-head panel-drawer-head"><div><span>{panel.sourceLabel}</span><b>{panel.title}</b></div><button type="button" onClick={() => setPanel(null)}>×</button></div>
+          <div className="panel-drawer-list">{panel.rows.map((row, index) => <div className="panel-drawer-row" key={`${row.label}-${index}`}><span>{row.label}</span><b>{row.value}</b></div>)}</div>
+          <button className="panel-drawer-action" type="button" onClick={() => goto(panel.actionPage || 'dataQuality', panel.title)}>{panel.actionLabel}</button>
         </div>
       ) : null}
-      {embedded ? null : <GlassFAB onClick={() => goToWorkspacePage('dataQuality', '反馈 / 报错')} />}
-      <GlassToast show={toastVisible}>{toast}</GlassToast>
+      <GlassToast show={Boolean(toast)}>{toast}</GlassToast>
     </div>
   );
 }

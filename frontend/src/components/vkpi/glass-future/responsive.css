@@ -7,6 +7,14 @@
     grid-template-columns: 1fr;
   }
 
+  .vkpi-glass-shell .hero {
+    grid-template-columns: minmax(0,1fr);
+  }
+
+  .vkpi-glass-shell .impact-summary-grid {
+    grid-template-columns: repeat(2,minmax(0,1fr));
+  }
+
   .vkpi-glass-shell .rail {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -139,6 +147,14 @@
     grid-template-columns: 1fr;
   }
 
+  .vkpi-glass-shell .impact-summary-grid {
+    grid-template-columns: repeat(2,minmax(0,1fr));
+  }
+
+  .vkpi-glass-shell .intelligence-layer-metrics {
+    grid-template-columns: repeat(2,minmax(0,1fr));
+  }
+
   .vkpi-glass-shell .kpis {
     grid-template-columns: repeat(2,minmax(0,1fr));
   }
@@ -227,6 +243,9 @@
   .vkpi-glass-shell .nav,
   .vkpi-glass-shell .kpis,
   .vkpi-glass-shell .lower,
+  .vkpi-glass-shell .impact-summary-grid,
+  .vkpi-glass-shell .intelligence-layer-metrics,
+  .vkpi-glass-shell .intelligence-module-grid,
   .vkpi-glass-shell .rail,
   .vkpi-glass-shell .region-list {
     grid-template-columns: 1fr;
