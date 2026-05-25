@@ -5,3 +5,4 @@ Owns intelligence cards, evidence drawers, action strips, feedback, and agent-ou
 Current migrated slice:
 
 - `agents.ts`: Agent Inbox API facade, filters, and presentation helpers for P7.80-P7.83 runtime artifacts.
+- `feedback.ts`: recommendation feedback backlog API boundary used by IntelligenceCenterPage.

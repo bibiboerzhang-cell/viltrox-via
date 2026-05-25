@@ -1,18 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   fetchIntelligenceAgentsInbox,
+  getRecommendationFeedbackBacklog,
   type IntelligenceAgentInboxItem,
 } from '../../../domains/intelligence';
-import {
-  getRecommendationFeedbackBacklog,
-} from '../../../services/vkpi/intelligence-api';
 import {
   getCompetitorBrainReviewSuggestions,
   getMarketExternalDailyPlanV0,
   getMarketIntelligenceCardsV0,
   getMarketIntelligenceV0,
   listCompetitorBrainSignals,
-} from '../../../services/vkpi/market-api';
+} from '../../../domains/market';
 import { IntelligenceActionStrip } from '../intelligence/IntelligenceActionStrip';
 import { IntelligenceCard, type IntelligenceAction, type IntelligenceCardModel, type IntelligenceCardStatus } from '../intelligence/IntelligenceCard';
 import { IntelligenceDetailPanel } from '../intelligence/IntelligenceDetailPanel';

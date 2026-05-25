@@ -1,7 +1,10 @@
 // Market domain public surface.
 export {
+  getCompetitorBrainReviewSuggestions,
   getCompetitorBrainStatus,
   getContentBrainStatus,
+  getMarketExternalDailyPlanV0,
+  getMarketIntelligenceCardsV0,
   getMarketIntelligenceV0,
   listCompetitorBrainSignals,
   listContentBrainPosts,
