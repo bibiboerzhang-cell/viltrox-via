@@ -1,4 +1,4 @@
-import { apiFetch, jsonBody } from "./http";
+import { apiFetch } from "./http";
 export * from "./vkpi";
 export * from "./vkpi/alert-api";
 export * from "./vkpi/attribution-api";
@@ -59,38 +59,6 @@ export interface VkpiDashboardFilters {
   platform?: string;
   productId?: string;
   includeEstimated?: boolean;
-}
-
-export interface VkpiExportPayload extends VkpiDashboardFilters {
-  reportType: "weekly" | "monthly" | "staff" | "project" | "product_roi" | "finance";
-  format: "pdf" | "csv" | "xlsx";
-}
-
-export interface VkpiAgentInboxItem {
-  id: string;
-  agent_id: string;
-  agent_name: string;
-  type: string;
-  title: string;
-  summary: string;
-  status: "active" | "warning" | "idle" | string;
-  passed: boolean;
-  mode?: string;
-  generated_at?: string | null;
-  last_run_at?: string | null;
-  artifact_name?: string;
-  source?: string;
-  details?: { summary?: Record<string, unknown>; next_steps?: string[] };
-}
-
-export interface VkpiAgentsInboxResponse {
-  items?: VkpiAgentInboxItem[];
-  total?: number;
-  limit?: number;
-  agent_id?: string | null;
-  ops_dir?: string;
-  is_real?: boolean;
-  source?: string;
 }
 
 type LegacyRepairItem = {
@@ -738,57 +706,4 @@ function buildWeeklySummary(summary: Row, staffRows: Row[], alerts: Row[]): stri
   const cost = centsToUsd(summary.cost_cents);
   const views = numberValue(summary.total_views || summary.views || summary.view_count || summary.play_count || summary.impressions);
   return `当前周期确认销售额为 ${money(sales)}，成本为 ${money(cost)}（镜头成本发货自动计入，员工只登记快递和推广费），已抓取播放量为 ${compact(views)}。当前范围内共有 ${staffRows.length} 名员工数据，还有 ${alerts.length} 条未处理提醒，需要在周报审批前完成复核。`;
-}
-
-export async function getDashboardAgentsInbox(
-  token: string,
-  params: { limit?: number; agentId?: string } = {},
-) {
-  const query = new URLSearchParams();
-  query.set("limit", String(params.limit || 50));
-  if (params.agentId) query.set("agent_id", params.agentId);
-  return apiFetch<VkpiAgentsInboxResponse>(
-    `/api/admin/vkpi/dashboard/agents/inbox?${query.toString()}`,
-    {},
-    token,
-  );
-}
-
-export async function generateWeeklyReport(token: string, filters: VkpiDashboardFilters = {}) {
-  return apiFetch<{ reportId?: string; report_id?: string; status: string; downloadUrl?: string; download_url?: string }>(
-    "/api/marketing/reports/weekly/generate",
-    { method: "POST", body: jsonBody(filters) },
-    token,
-  );
-}
-
-export async function exportVkpiReport(token: string, payload: VkpiExportPayload) {
-  return apiFetch<{ exportId?: string; export_id?: string; status: string; downloadUrl?: string; download_url?: string }>(
-    `/api/marketing/exports/${payload.format}`,
-    { method: "POST", body: jsonBody(payload) },
-    token,
-  );
-}
-
-export async function runKpiRollup(token: string, ledgerDate?: string) {
-  return apiFetch<Row>(
-    "/api/marketing/rollups/run-now",
-    { method: "POST", body: jsonBody({ ledger_date: ledgerDate || undefined }) },
-    token,
-  );
-}
-
-export async function copyTextToClipboard(text: string) {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
-  }
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.style.position = "fixed";
-  textarea.style.opacity = "0";
-  document.body.appendChild(textarea);
-  textarea.select();
-  document.execCommand("copy");
-  document.body.removeChild(textarea);
 }
