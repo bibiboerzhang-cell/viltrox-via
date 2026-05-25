@@ -6,10 +6,9 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
-from app.db.connection import get_conn
 from app.domains import attribution as attribution_domain
+from app.domains.kol import account as kol_account_domain
 from app.domains.kol import claims as kol_claims_domain
-from app.services.kol.account_dossier import analyze_kol_account, get_kol_dossier, scan_kol_account
 from app.services.vkpi import scope
 from app.domains.kol.payload_utils import _int, _json_loads
 from app.domains.kol.natural_search import _natural_search_payload
@@ -49,10 +48,10 @@ async def lookup_kol(body: dict, staff=Depends(require_tab("vkpi", "write"))):
     analysis_result = None
     if body.get("scan_account") or body.get("scan_if_missing"):
         max_posts = max(1, min(int(body.get("max_posts") or 24), 80))
-        scan_result = await scan_kol_account(kol_id, max_posts=max_posts)
+        scan_result = await kol_account_domain.scan_account(kol_id, max_posts=max_posts)
         if int(scan_result.get("content_count") or 0) > 0:
-            analysis_result = await analyze_kol_account(kol_id, product_sku=str(body.get("product_sku") or ""))
-    result["dossier"] = get_kol_dossier(kol_id)
+            analysis_result = await kol_account_domain.analyze_account(kol_id, product_sku=str(body.get("product_sku") or ""))
+    result["dossier"] = kol_account_domain.get_dossier(kol_id)
     if scan_result is not None:
         result["scan_result"] = scan_result
     if analysis_result is not None:
@@ -75,7 +74,7 @@ def list_kols(
 def kol_dossier(kol_id: int, staff=Depends(require_tab("vkpi", "read"))):
     try:
         kol_claims_domain.assert_kol_access(int(kol_id), staff, allow_unclaimed=True)
-        return get_kol_dossier(int(kol_id))
+        return kol_account_domain.get_dossier(int(kol_id))
     except scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
     except ValueError as exc:
@@ -87,7 +86,7 @@ def kol_profile(kol_id: int, staff=Depends(require_tab("vkpi", "read"))):
     try:
         result = kol_claims_domain.profile(int(kol_id), staff=staff)
         try:
-            result["dossier"] = get_kol_dossier(int(kol_id))
+            result["dossier"] = kol_account_domain.get_dossier(int(kol_id))
         except Exception:
             result["dossier"] = {}
         return result
@@ -209,7 +208,7 @@ async def scan_kol(kol_id: int, body: dict | None = None, staff=Depends(require_
     payload = body or {}
     try:
         kol_claims_domain.assert_kol_access(int(kol_id), staff, allow_unclaimed=True)
-        return await scan_kol_account(int(kol_id), max_posts=max(1, min(int(payload.get("max_posts") or 24), 80)))
+        return await kol_account_domain.scan_account(int(kol_id), max_posts=max(1, min(int(payload.get("max_posts") or 24), 80)))
     except scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
 
@@ -219,7 +218,7 @@ async def analyze_kol(kol_id: int, body: dict | None = None, staff=Depends(requi
     payload = body or {}
     try:
         kol_claims_domain.assert_kol_access(int(kol_id), staff, allow_unclaimed=True)
-        return await analyze_kol_account(int(kol_id), product_sku=str(payload.get("product_sku") or ""), snapshot_id=payload.get("snapshot_id"))
+        return await kol_account_domain.analyze_account(int(kol_id), product_sku=str(payload.get("product_sku") or ""), snapshot_id=payload.get("snapshot_id"))
     except scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
 
