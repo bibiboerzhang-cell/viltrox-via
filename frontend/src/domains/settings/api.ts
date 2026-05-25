@@ -14,11 +14,16 @@ import {
   updatePlatformCrawlSettings,
 } from '../../services/vkpi/settings-api';
 import {
+  listTeamFeedback,
+  updateTeamFeedbackStatus,
+} from '../../services/vkpi/feedback-api';
+import {
   createExistingStaffActivationLink,
   createStaffActivationLink,
   createStaffPasswordResetLink,
   getStaffInviteCapabilities,
   updateStaffPermissions,
+  type VkpiPermissionLevel,
   type VkpiStaffActivationLinkResponse,
   type VkpiStaffInviteCapabilities,
   type VkpiStaffPasswordResetLinkResponse,
@@ -38,6 +43,7 @@ export {
   getRbacStatus,
   getStaffInviteCapabilities,
   getSyncOverview,
+  listTeamFeedback,
   listFeatureFlags,
   listBudgetSettings,
   listPlatformCrawlSettings,
@@ -50,6 +56,8 @@ export {
   updateFeatureFlags,
   updatePlatformCrawlSettings,
   updateStaffPermissions,
+  updateTeamFeedbackStatus,
+  type VkpiPermissionLevel,
   type VkpiStaffActivationLinkResponse,
   type VkpiStaffInviteCapabilities,
   type VkpiStaffPasswordResetLinkResponse,

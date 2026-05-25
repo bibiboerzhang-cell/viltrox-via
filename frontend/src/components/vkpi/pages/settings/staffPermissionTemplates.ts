@@ -1,4 +1,4 @@
-import type { VkpiPermissionLevel } from "../../../../services/vkpi/staff-api";
+import type { VkpiPermissionLevel } from "../../../../domains/settings";
 
 export type StaffPermissionMap = Record<string, VkpiPermissionLevel>;
 export type StaffPermissionTemplate = {

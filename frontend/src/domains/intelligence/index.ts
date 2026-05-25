@@ -9,4 +9,9 @@ export {
   type IntelligenceAgentInboxItem,
   type IntelligenceAgentsInboxResponse,
 } from './agents';
-export { getRecommendationFeedbackBacklog } from './feedback';
+export {
+  createMemoryFeedback,
+  getMemoryFeedbackBacklog,
+  getOperatingReviewStatus,
+  getRecommendationFeedbackBacklog,
+} from './feedback';

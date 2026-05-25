@@ -4,8 +4,8 @@ import {
   getMemoryFeedbackBacklog,
   getOperatingReviewStatus,
   getRecommendationFeedbackBacklog,
-} from "../../../../services/vkpi/intelligence-api";
-import { productRecommendationAction } from "../../../../services/vkpi/product-api";
+} from "../../../../domains/intelligence";
+import { productRecommendationAction } from "../../../../domains/products";
 
 type Row = Record<string, unknown>;
 

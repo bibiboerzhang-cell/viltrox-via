@@ -1,5 +1,5 @@
 import React from "react";
-import { listTeamFeedback, updateTeamFeedbackStatus } from "../../../../services/vkpi/feedback-api";
+import { listTeamFeedback, updateTeamFeedbackStatus } from "../../../../domains/settings";
 
 type Row = Record<string, unknown>;
 

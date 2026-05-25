@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import type { VkpiStaffActivationLinkResponse, VkpiStaffPasswordResetLinkResponse, VkpiPermissionLevel } from "../../../../services/vkpi/staff-api";
+import type { VkpiStaffActivationLinkResponse, VkpiStaffPasswordResetLinkResponse, VkpiPermissionLevel } from "../../../../domains/settings";
 import type { VkpiStaffMember } from "../../vkpiTypes";
 import { Avatar } from "../../shared/Avatar";
 import { InfoBlock } from "../../shared/InfoBlock";
