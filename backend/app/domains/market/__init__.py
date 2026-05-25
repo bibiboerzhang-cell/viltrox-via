@@ -74,6 +74,7 @@ from app.domains.market.signal_review_reports import (
     write_external_signal_review_package_report,
     write_review_package_report,
 )
+from app.domains.market.signal_review_persistence import write_reviewed_competitor_signals
 from app.domains.market.signal_taxonomy import (
     KEYWORD_GROUPS,
     KEYWORDS,
@@ -90,6 +91,7 @@ from app.domains.market.signal_write_package import (
     build_market_signal_write_package,
     build_market_signal_write_package_from_file,
 )
+from app.domains.market.signal_ingest_use_case import write_market_signal_package
 
 __all__ = [
     "ALLOWED_HOSTS",
@@ -152,8 +154,10 @@ __all__ = [
     "write_external_daily_candidate_plan",
     "write_external_signal_smoke",
     "write_external_signal_review_package_report",
+    "write_market_signal_package",
     "write_classification_report",
     "write_market_intelligence_cards",
     "write_review_package_report",
+    "write_reviewed_competitor_signals",
     "validate_competitor_signal_write_request",
 ]

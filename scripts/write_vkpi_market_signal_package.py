@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.db.connection import close_db_runtime
-from app.services.vkpi.market_signal_ingest import write_market_signal_package
+from app.domains.market.signal_ingest_use_case import write_market_signal_package
 
 
 def _stamp() -> str:

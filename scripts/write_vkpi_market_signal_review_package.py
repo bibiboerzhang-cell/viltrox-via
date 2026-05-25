@@ -13,7 +13,7 @@ from app.domains.market.signal_review_package import (
 from app.domains.market.signal_review_reports import (
     write_competitor_signal_write_report,
 )
-from app.services.vkpi.market_signal_review_package import (
+from app.domains.market.signal_review_persistence import (
     write_reviewed_competitor_signals,
 )
 
