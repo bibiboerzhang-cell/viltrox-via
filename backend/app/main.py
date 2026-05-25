@@ -21,32 +21,21 @@ from app.api.routers import commerce, deepsight, insights, intelligence, intelli
 from app.core.config import (
     APP_ROLE,
     CORS_ORIGINS,
-    DATABASE_URL,
-    DB_RUNTIME_BACKEND,
-    DB_TARGET_BACKEND,
     ENABLE_BROWSER,
     ENABLE_LOCAL_ORCHESTRATOR,
     ENABLE_SCHEDULER,
     ENABLE_UPLOAD_CLEANUP,
     IS_PRODUCTION,
-    PLATFORM_INGEST_SOURCES,
     RESPONSE_GZIP_MIN_SIZE,
     UPLOAD_DIR,
-    USE_REDIS_JOBS,
-    WORKER_ASYNC_CONSUMERS,
-    WORKER_CLUSTER_TIER,
-    WORKER_CONFIGURED_CONCURRENCY,
-    WORKER_SERVICE_PROCESSES,
 )
 from app.db.connection import (
     close_standalone_conn,
     close_db_runtime,
     db_connection_scope,
     get_conn,
-    get_db_actor_stats,
     init_db_runtime,
     open_standalone_conn,
-    probe_postgres_connectivity,
 )
 from app.services.jobs.queue import build_job_queue
 from app.services.monitoring.runtime import record_request_metric
@@ -55,6 +44,7 @@ from app.services.via import build_via_event_bus
 from app.core.logging import get_logger
 from app.core.security import AUTH_COOKIE_NAME, get_current_user
 from app.core.permissions import check_system_permission, check_tab_permission, staff_context_for_user
+from app.main_health import build_deep_health_payload
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_ROOT = PROJECT_ROOT / "frontend"
@@ -678,68 +668,14 @@ async def health_check(request: Request, deep: bool = False):
         return {"status": "ok", "service": APP_ROLE, "version": APP_VERSION, "build": build}
     if not _can_read_deep_health(request):
         raise HTTPException(status_code=403, detail="Deep health requires admin or ops token")
-    queue_backend = getattr(getattr(app.state, "job_queue", None), "backend_name", "none")
-    via_backend = getattr(getattr(app.state, "via_event_bus", None), "backend_name", "none")
-    queue = getattr(app.state, "job_queue", None)
-    via_event_bus = getattr(app.state, "via_event_bus", None)
-    db_runtime = get_db_actor_stats()
-    postgres = {
-        "configured": bool(DATABASE_URL),
-        "runtime_selected": DB_RUNTIME_BACKEND == "postgres",
-        "pool_open": bool(db_runtime.get("running")),
-        "ok": bool(db_runtime.get("running")) if DB_RUNTIME_BACKEND == "postgres" else True,
-    }
-    queue_stats = {
-        "backend": queue_backend,
-        "configured_concurrency": WORKER_CONFIGURED_CONCURRENCY,
-        "worker_processes": WORKER_SERVICE_PROCESSES,
-        "worker_async_consumers": WORKER_ASYNC_CONSUMERS,
-    }
-    via_stats = {"backend": via_backend}
-    if deep:
-        try:
-            queue_stats = await queue.runtime_stats() if queue is not None else {"backend": "none"}
-        except Exception as exc:
-            queue_stats = {"backend": queue_backend, "ok": False, "error": str(exc)[:160]}
-        try:
-            via_stats = await via_event_bus.runtime_stats() if via_event_bus is not None else {"backend": "none"}
-        except Exception as exc:
-            via_stats = {"backend": via_backend, "ok": False, "error": str(exc)[:160]}
-        postgres = await asyncio.to_thread(probe_postgres_connectivity)
-    return {
-        "status": "ok",
-        "version": APP_VERSION,
-        "build": build,
-        "deep": deep,
-        "app_role": APP_ROLE,
-        "production_mode": IS_PRODUCTION,
-        "surfaces": {
-            "public_web": IS_PUBLIC_APP,
-            "admin_web": IS_ADMIN_APP,
-        },
-        "database": {
-            "database_backend": DB_RUNTIME_BACKEND,
-            "target_backend": DB_TARGET_BACKEND,
-            "postgres_configured": bool(DATABASE_URL),
-            "pool_health": postgres,
-            "runtime": db_runtime,
-        },
-        "ingestion_sources": PLATFORM_INGEST_SOURCES,
-        "queue_backend": queue_backend,
-        "queue": queue_stats,
-        "via_event_backend": via_backend,
-        "via": via_stats,
-        "redis_jobs": USE_REDIS_JOBS,
-        "local_orchestrator": ENABLE_LOCAL_ORCHESTRATOR,
-        "worker_role": {
-            "identity": APP_ROLE,
-            "separated": APP_ROLE == "worker",
-            "cluster_tier": WORKER_CLUSTER_TIER,
-            "processes": WORKER_SERVICE_PROCESSES,
-            "async_consumers": WORKER_ASYNC_CONSUMERS,
-            "configured_concurrency": WORKER_CONFIGURED_CONCURRENCY,
-        },
-    }
+    return await build_deep_health_payload(
+        app,
+        app_version=APP_VERSION,
+        build=build,
+        is_production=IS_PRODUCTION,
+        is_public_app=IS_PUBLIC_APP,
+        is_admin_app=IS_ADMIN_APP,
+    )
 
 
 @app.get("/")
