@@ -1,4 +1,4 @@
-import type { VkpiAgentInboxItem } from '../../../../services/vkpi/dashboard-api';
+import type { IntelligenceAgentInboxItem } from '../../../../domains/intelligence';
 import type {
   IntelligenceAction,
   IntelligenceCardModel,
@@ -196,13 +196,13 @@ export function formatTime(value?: string | null): string {
   return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
-function priorityFromAgent(item?: VkpiAgentInboxItem): IntelligenceCardModel['priority'] {
+function priorityFromAgent(item?: IntelligenceAgentInboxItem): IntelligenceCardModel['priority'] {
   if (!item) return 'low';
   if (item.status === 'warning' || item.passed === false) return 'high';
   return item.status === 'active' ? 'medium' : 'low';
 }
 
-function confidenceFromAgent(item?: VkpiAgentInboxItem): number | undefined {
+function confidenceFromAgent(item?: IntelligenceAgentInboxItem): number | undefined {
   if (!item) return undefined;
   if (item.status === 'active' && item.passed) return 0.82;
   if (item.status === 'warning') return 0.5;
@@ -210,7 +210,7 @@ function confidenceFromAgent(item?: VkpiAgentInboxItem): number | undefined {
 }
 
 export function cardFromAgent(
-  item: VkpiAgentInboxItem | undefined,
+  item: IntelligenceAgentInboxItem | undefined,
   fallback: { id: string; type: IntelligenceCardModel['type']; title: string; summary: string; entityType: string },
 ): IntelligenceCardModel {
   const summary = item?.details?.summary || {};

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  getDashboardAgentsInbox,
-  type VkpiAgentInboxItem,
-} from '../../../services/vkpi/dashboard-api';
+  fetchIntelligenceAgentsInbox,
+  type IntelligenceAgentInboxItem,
+} from '../../../domains/intelligence';
 import {
   getRecommendationFeedbackBacklog,
 } from '../../../services/vkpi/intelligence-api';
@@ -63,7 +63,7 @@ import {
 import type { WorkspacePageProps } from './WorkspacePage';
 
 export function IntelligenceCenterPage({ apiToken, viewMode }: WorkspacePageProps) {
-  const [agents, setAgents] = useState<VkpiAgentInboxItem[]>([]);
+  const [agents, setAgents] = useState<IntelligenceAgentInboxItem[]>([]);
   const [market, setMarket] = useState<Row>({});
   const [marketCardsPayload, setMarketCardsPayload] = useState<Row>({});
   const [dailyPlan, setDailyPlan] = useState<Row>({});
@@ -139,7 +139,7 @@ export function IntelligenceCenterPage({ apiToken, viewMode }: WorkspacePageProp
     setLoading(true);
     setError('');
     Promise.allSettled([
-      getDashboardAgentsInbox(apiToken, { limit: 30 }),
+      fetchIntelligenceAgentsInbox(apiToken, { limit: 30 }),
       getMarketIntelligenceV0(apiToken, 120),
       getMarketIntelligenceCardsV0(apiToken, { limit: 40, brandLimit: 5, includeLatestLlmArtifact: true, includeLatestExternalSmoke: true }),
       getMarketExternalDailyPlanV0(apiToken, { maxHttpCalls: 6, limitPerSource: 5 }),

@@ -1,42 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
-import { getDashboardAgentsInbox, type VkpiAgentInboxItem } from '../../../services/vkpi/dashboard-api';
+import {
+  agentStatusLabel,
+  agentValueLabel,
+  fetchIntelligenceAgentsInbox,
+  formatAgentTime,
+  intelligenceAgentFilters,
+  selectFirstAvailableAgent,
+  type IntelligenceAgentInboxItem,
+} from '../../../domains/intelligence';
 import type { WorkspacePageProps } from './WorkspacePage';
-
-const agentFilters = [
-  { id: '', label: '全部' },
-  { id: 'brief', label: '简报' },
-  { id: 'recommendation', label: '推荐' },
-  { id: 'evidence', label: '证据' },
-  { id: 'sync_sentinel', label: '同步' },
-  { id: 'brain', label: '脑层' },
-  { id: 'market_intel', label: '市场' },
-];
-
-function formatTime(value?: string | null): string {
-  if (!value) return '-';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-}
-
-function valueLabel(value: unknown): string {
-  if (value === null || value === undefined || value === '') return '-';
-  if (typeof value === 'boolean') return value ? 'yes' : 'no';
-  if (typeof value === 'number') return value.toLocaleString('en-US');
-  if (Array.isArray(value)) return `${value.length} 项`;
-  if (typeof value === 'object') return JSON.stringify(value).slice(0, 80);
-  return String(value);
-}
-
-function statusLabel(status: string): string {
-  if (status === 'active') return '在线';
-  if (status === 'warning') return '警告';
-  return '空闲';
-}
 
 export function AgentsPage({ apiToken }: WorkspacePageProps) {
   const [agentId, setAgentId] = useState('');
-  const [items, setItems] = useState<VkpiAgentInboxItem[]>([]);
+  const [items, setItems] = useState<IntelligenceAgentInboxItem[]>([]);
   const [selectedId, setSelectedId] = useState('');
   const [total, setTotal] = useState(0);
   const [source, setSource] = useState('');
@@ -55,14 +31,14 @@ export function AgentsPage({ apiToken }: WorkspacePageProps) {
     }
     setLoading(true);
     setError('');
-    getDashboardAgentsInbox(apiToken, { limit: 50, agentId: agentId || undefined })
+    fetchIntelligenceAgentsInbox(apiToken, { limit: 50, agentId: agentId || undefined })
       .then((payload) => {
         if (!alive) return;
         const rows = Array.isArray(payload.items) ? payload.items : [];
         setItems(rows);
         setTotal(Number(payload.total || rows.length));
         setSource(String(payload.source || payload.ops_dir || 'runtime/ops'));
-        setSelectedId((current) => (current && rows.some((item) => item.id === current) ? current : rows[0]?.id || ''));
+        setSelectedId((current) => selectFirstAvailableAgent(rows, current));
       })
       .catch((err) => {
         if (!alive) return;
@@ -100,7 +76,7 @@ export function AgentsPage({ apiToken }: WorkspacePageProps) {
 
       <section className="vkpi-agents-toolbar">
         <div className="vkpi-agents-tabs" aria-label="Agent filters">
-          {agentFilters.map((filter) => (
+          {intelligenceAgentFilters.map((filter) => (
             <button
               className={filter.id === agentId ? 'is-active' : ''}
               key={filter.id || 'all'}
@@ -125,9 +101,9 @@ export function AgentsPage({ apiToken }: WorkspacePageProps) {
               type="button"
               onClick={() => setSelectedId(item.id)}
             >
-              <span className={`vkpi-agent-status is-${item.status}`}>{statusLabel(item.status)}</span>
+              <span className={`vkpi-agent-status is-${item.status}`}>{agentStatusLabel(item.status)}</span>
               <b>{item.title}</b>
-              <small>{item.agent_name} · {formatTime(item.generated_at || item.last_run_at)}</small>
+              <small>{item.agent_name} · {formatAgentTime(item.generated_at || item.last_run_at)}</small>
               <p>{item.summary}</p>
             </button>
           ))}
@@ -138,19 +114,19 @@ export function AgentsPage({ apiToken }: WorkspacePageProps) {
           {selected ? (
             <>
               <div className="vkpi-agent-detail__head">
-                <span className={`vkpi-agent-status is-${selected.status}`}>{statusLabel(selected.status)}</span>
+                <span className={`vkpi-agent-status is-${selected.status}`}>{agentStatusLabel(selected.status)}</span>
                 <h2>{selected.title}</h2>
                 <p>{selected.artifact_name || selected.mode || '-'}</p>
               </div>
               <div className="vkpi-agent-detail__meta">
                 <span><b>Agent</b>{selected.agent_name}</span>
                 <span><b>Mode</b>{selected.mode || '-'}</span>
-                <span><b>Generated</b>{formatTime(selected.generated_at || selected.last_run_at)}</span>
+                <span><b>Generated</b>{formatAgentTime(selected.generated_at || selected.last_run_at)}</span>
                 <span><b>Passed</b>{selected.passed ? 'yes' : 'no'}</span>
               </div>
               <div className="vkpi-agent-summary-grid">
                 {summaryRows.map(([key, value]) => (
-                  <span key={key}><b>{key}</b>{valueLabel(value)}</span>
+                  <span key={key}><b>{key}</b>{agentValueLabel(value)}</span>
                 ))}
               </div>
               <div className="vkpi-agent-next">
