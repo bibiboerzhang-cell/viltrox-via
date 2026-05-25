@@ -64,7 +64,7 @@ def _check_environment() -> None:
 _check_environment()
 
 from app.db.connection import get_conn
-from app.services.vkpi.platform_crawl_settings import (
+from app.domains.settings.platform_crawl import (
     ensure_defaults,
     platform_settings,
     update_platform_settings,

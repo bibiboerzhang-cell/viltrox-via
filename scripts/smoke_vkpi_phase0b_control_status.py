@@ -22,7 +22,9 @@ from app.core.security import make_token  # noqa: E402
 from app.db.connection import get_conn, is_postgres_runtime  # noqa: E402
 from app.services.vkpi.schema_audit import ensure_vkpi_audit_schema  # noqa: E402
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema  # noqa: E402
-from app.services.vkpi import platform_crawl_settings  # noqa: E402
+import importlib  # noqa: E402
+
+platform_crawl_settings = importlib.import_module("app.domains.settings.platform_crawl")
 
 BASE = os.environ.get("VKPI_BASE_URL", "http://127.0.0.1:8102")
 ADMIN_USER_ID = int(os.environ.get("VKPI_SMOKE_ADMIN_USER_ID", "1"))

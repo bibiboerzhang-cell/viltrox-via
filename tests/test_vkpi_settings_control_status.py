@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.services.vkpi import platform_crawl_settings
+import importlib
+
+platform_crawl_settings = importlib.import_module("app.domains.settings.platform_crawl")
 
 
 class FakeConn:

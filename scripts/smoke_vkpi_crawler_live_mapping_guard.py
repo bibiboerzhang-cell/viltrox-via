@@ -21,7 +21,9 @@ os.environ.setdefault("ENVIRONMENT", "local")
 os.environ.setdefault("DB_RUNTIME_BACKEND", "postgres")
 os.environ.setdefault("DATABASE_URL", os.environ.get("LOCAL_DATABASE_URL", "postgresql://postgres@127.0.0.1:54329/viltrox2"))
 
-from app.services.vkpi import platform_crawl_settings  # noqa: E402
+import importlib  # noqa: E402
+
+platform_crawl_settings = importlib.import_module("app.domains.settings.platform_crawl")
 from app.services.vkpi.industry_crawlers import get_crawler, supported_platforms  # noqa: E402
 from app.services.vkpi.industry_snapshot_collector import calculate_kpis  # noqa: E402
 from app.db.connection import close_db_runtime  # noqa: E402

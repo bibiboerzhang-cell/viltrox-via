@@ -14,7 +14,9 @@ from datetime import datetime
 from typing import Any
 
 from app.db.connection import get_conn, is_postgres_runtime
-from app.services.vkpi import platform_crawl_settings
+import importlib
+
+platform_crawl_settings = importlib.import_module("app.domains.settings.platform_crawl")
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
 

@@ -32,7 +32,9 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends, HTTPException
 
 from app.api.dependencies.perms import require_tab
-from app.services.vkpi import platform_crawl_settings
+import importlib
+
+platform_crawl_settings = importlib.import_module("app.domains.settings.platform_crawl")
 from app.services.vkpi.audit_decorator import audit_action
 
 

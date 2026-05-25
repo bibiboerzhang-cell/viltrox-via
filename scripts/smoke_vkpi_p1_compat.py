@@ -19,7 +19,10 @@ def main() -> int:
     failures: list[str] = []
 
     from app.api.dependencies import perms
-    from app.services.vkpi import p1_compat, platform_crawl_settings
+    import importlib
+
+    platform_crawl_settings = importlib.import_module("app.domains.settings.platform_crawl")
+    from app.services.vkpi import p1_compat
 
     cases = {
         "vkpi.comments.read": ("vkpi", "read"),

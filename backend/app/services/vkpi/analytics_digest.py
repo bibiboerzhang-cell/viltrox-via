@@ -5,7 +5,9 @@ from typing import Any
 
 from app.db.connection import get_conn, is_postgres_runtime
 from app.services.system import staff as staff_service
-from app.services.vkpi import platform_crawl_settings
+import importlib
+
+platform_crawl_settings = importlib.import_module("app.domains.settings.platform_crawl")
 from app.services.vkpi.analytics_common import _actor, _china_today, _int, _json, _loads_json, _utcnow
 from app.services.vkpi.analytics_suggestions import rank_uncontacted_suggestions
 from app.services.vkpi.schema_analytics import ensure_vkpi_analytics_schema

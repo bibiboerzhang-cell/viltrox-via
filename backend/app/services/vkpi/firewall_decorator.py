@@ -31,7 +31,9 @@ from typing import Any, Callable
 
 from fastapi import HTTPException
 
-from app.services.vkpi import platform_crawl_settings
+import importlib
+
+platform_crawl_settings = importlib.import_module("app.domains.settings.platform_crawl")
 
 
 # ─── 公开装饰器 ─────────────────────────────────────────

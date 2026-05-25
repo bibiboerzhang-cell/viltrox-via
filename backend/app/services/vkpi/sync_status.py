@@ -22,7 +22,10 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
-from app.services.vkpi import daily_sync, platform_crawl_settings
+import importlib
+
+platform_crawl_settings = importlib.import_module("app.domains.settings.platform_crawl")
+from app.services.vkpi import daily_sync
 
 
 logger = get_logger(__name__)

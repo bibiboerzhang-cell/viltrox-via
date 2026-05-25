@@ -32,7 +32,9 @@ except ImportError:
     cleanup_admin = None
 
 from app.db.connection import get_conn
-from app.services.vkpi import platform_crawl_settings
+import importlib
+
+platform_crawl_settings = importlib.import_module("app.domains.settings.platform_crawl")
 
 
 PREFIX = "vkpi-fw-router-"

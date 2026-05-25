@@ -35,7 +35,9 @@ def _budget_row(key: str, *, enabled: bool, monthly: float, spent: float = 0) ->
 
 
 def _assert_crawl_budget_gate() -> None:
-    from app.services.vkpi import platform_crawl_settings as settings
+    import importlib
+
+    settings = importlib.import_module("app.domains.settings.platform_crawl")
 
     original_budget_settings = settings.budget_settings
     try:

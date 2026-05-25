@@ -30,7 +30,9 @@ except ImportError:
     cleanup_admin = None
 
 from app.db.connection import get_conn
-from app.services.vkpi import platform_crawl_settings
+import importlib
+
+platform_crawl_settings = importlib.import_module("app.domains.settings.platform_crawl")
 from app.services.vkpi.firewall_decorator import check_firewall, firewall_check
 
 
