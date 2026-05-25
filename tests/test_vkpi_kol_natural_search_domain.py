@@ -17,11 +17,7 @@ def test_kol_natural_search_uses_existing_kol_pool_without_provider_calls(monkey
         }
     ]
 
-    monkeypatch.setattr(
-        natural_search.kol_claims,
-        "list_kols",
-        lambda **kwargs: {"kols": raw_rows, "kwargs": kwargs},
-    )
+    monkeypatch.setattr(natural_search, "list_kols", lambda **kwargs: {"kols": raw_rows, "kwargs": kwargs})
     monkeypatch.setattr(natural_search.kol_history_match, "search_pool_for_natural", lambda *_args, **_kwargs: [])
 
     payload = natural_search._natural_search_payload(

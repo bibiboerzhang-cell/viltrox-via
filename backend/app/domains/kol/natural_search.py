@@ -4,7 +4,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from app.services.vkpi import kol_claims, kol_history_match
+from app.domains.kol.claim_listing import list_kols
+from app.services.vkpi import kol_history_match
 
 from app.domains.kol.payload_utils import _clamp_score, _float, _int, _json_loads
 
@@ -226,7 +227,7 @@ def _natural_search_payload(body: dict[str, Any], staff: dict[str, Any] | None =
     limit = max(1, min(200, _int(body.get("limit"), 100)))
     parsed = _parse_natural_query(query, str(body.get("platform") or ""))
     platform = str(parsed.get("platform") or "")
-    raw_rows = kol_claims.list_kols(search="", platform=platform, limit=500, staff=staff).get("kols") or []
+    raw_rows = list_kols(search="", platform=platform, limit=500, staff=staff).get("kols") or []
     rows: list[dict[str, Any]] = []
     for raw in raw_rows:
         row = dict(raw)
