@@ -47,8 +47,7 @@ def list_kols(
 @router.get("/kols/{kol_id}/dossier")
 def kol_dossier(kol_id: int, staff=Depends(require_tab("vkpi", "read"))):
     try:
-        kol_claims_domain.assert_kol_access(int(kol_id), staff, allow_unclaimed=True)
-        return kol_account_domain.get_dossier(int(kol_id))
+        return kol_account_domain.dossier_for_request(int(kol_id), staff=staff)
     except scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
     except ValueError as exc:
@@ -137,8 +136,11 @@ def update_kol(kol_id: int, body: dict, staff=Depends(require_tab("vkpi", "write
 async def scan_kol(kol_id: int, body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
     payload = body or {}
     try:
-        kol_claims_domain.assert_kol_access(int(kol_id), staff, allow_unclaimed=True)
-        return await kol_account_domain.scan_account(int(kol_id), max_posts=max(1, min(int(payload.get("max_posts") or 24), 80)))
+        return await kol_account_domain.scan_account_for_request(
+            int(kol_id),
+            max_posts=max(1, min(int(payload.get("max_posts") or 24), 80)),
+            staff=staff,
+        )
     except scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
 
@@ -147,8 +149,12 @@ async def scan_kol(kol_id: int, body: dict | None = None, staff=Depends(require_
 async def analyze_kol(kol_id: int, body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
     payload = body or {}
     try:
-        kol_claims_domain.assert_kol_access(int(kol_id), staff, allow_unclaimed=True)
-        return await kol_account_domain.analyze_account(int(kol_id), product_sku=str(payload.get("product_sku") or ""), snapshot_id=payload.get("snapshot_id"))
+        return await kol_account_domain.analyze_account_for_request(
+            int(kol_id),
+            product_sku=str(payload.get("product_sku") or ""),
+            snapshot_id=payload.get("snapshot_id"),
+            staff=staff,
+        )
     except scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
 
