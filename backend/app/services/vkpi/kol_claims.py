@@ -5,6 +5,7 @@ from app.domains.kol.claim_lifecycle import claim, reassign, release
 from app.domains.kol.claim_listing import list_claims, list_kols
 from app.domains.kol.claim_lookup import lookup
 from app.domains.kol.manual_update import update_kol_manual
+from app.domains.kol.profile_detail import profile
 from app.services.vkpi.kol_claims_common import (
     HANDLE_RE,
     PLATFORM_ALIASES,
@@ -25,8 +26,6 @@ from app.services.vkpi.kol_claims_common import (
     normalize_platform,
     utcnow,
 )
-from app.services.vkpi.kol_claims_profile import profile
-
 __all__ = [
     "HANDLE_RE",
     "PLATFORM_ALIASES",
