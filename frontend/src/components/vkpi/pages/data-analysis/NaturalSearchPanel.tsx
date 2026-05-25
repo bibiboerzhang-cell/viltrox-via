@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { getKolPoolIntelligenceCard } from '../../../../services/vkpi/kolPool-api';
-import { createKolDecisionAudit, searchVkpi } from '../../../../services/vkpi/search-api';
+import { createKolDecisionAudit, getKolPoolIntelligenceCard, searchVkpi } from '../../../../domains/kol';
 import { proxiedImageUrl } from '../../shared/mediaProxy';
 import type { Row } from './utils/types';
 import {

@@ -1,2 +1,7 @@
 // KOL domain public surface.
-export {};
+export {
+  createKolDecisionAudit,
+  getKolPoolIntelligenceCard,
+  searchVkpi,
+  type VkpiKolDecisionPayload,
+} from './api';
