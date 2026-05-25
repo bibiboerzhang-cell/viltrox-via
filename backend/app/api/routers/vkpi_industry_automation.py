@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
+from app.api.routers.vkpi_industry_market import router as market_router
 from app.api.dependencies.perms import require_tab
 from app.services.vkpi import (
     ab_experiments,
@@ -15,7 +16,6 @@ from app.services.vkpi import (
     evidence_agent_v0,
     industry_data,
     llm_gateway,
-    market_intelligence_v0,
     new_launch_acceptance_v0,
     prediction_accuracy_feedback_v0,
     outcome_collector,
@@ -29,6 +29,7 @@ from app.services.vkpi import (
 )
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-industry-automation"])
+router.include_router(market_router)
 
 
 def _is_manager_staff(staff: dict) -> bool:
@@ -226,15 +227,6 @@ def industry_competitor_brain_review_signal(signal_id: int, body: dict, staff=De
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.get("/industry-data/market-intelligence/v0")
-def industry_market_intelligence_v0(
-    limit: int = Query(default=120, ge=1, le=500),
-    staff=Depends(require_tab("vkpi", "read")),
-):
-    del staff
-    return market_intelligence_v0.build_market_intelligence_v0(limit=limit)
 
 
 @router.get("/industry-data/product-campaign-card")
