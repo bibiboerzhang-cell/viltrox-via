@@ -5,6 +5,7 @@ from typing import Any
 
 from app.db.connection import get_conn
 from app.domains.kol import profile_assembly
+from app.domains.kol import profile_scope
 from app.services.vkpi import scope
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
@@ -37,12 +38,8 @@ def profile(kol_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, An
         """,
         (int(kol_id),),
     )
-    staff_sql = ""
-    params: list[Any] = [int(kol_id)]
-    if not scope.can_view_all(staff):
-        actor = scope.actor_staff_id(staff)
-        staff_sql = " AND (p.assigned_staff_id=? OR p.created_by_staff_id=?)"
-        params.extend([actor, actor])
+    staff_sql, staff_params = profile_scope.project_staff_filter(staff)
+    params: list[Any] = [int(kol_id), *staff_params]
     projects = _rows_or_empty(
         f"""
         SELECT p.*, u.name AS staff_name, u.avatar_url AS staff_avatar_url
@@ -61,23 +58,13 @@ def profile(kol_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, An
     project_ids = [_int(item.get("id")) for item in projects if _int(item.get("id"))]
 
     def project_scope_clause(column: str) -> tuple[str, list[Any]]:
-        if is_manager:
-            return "", []
-        if not project_ids:
-            return " AND 1=0", []
-        placeholders = ",".join("?" for _ in project_ids)
-        return f" AND {column} IN ({placeholders})", list(project_ids)
+        return profile_scope.project_scope_clause(is_manager=is_manager, project_ids=project_ids, column=column)
 
-    link_scope_sql = ""
-    link_scope_params: list[Any] = []
-    if not is_manager:
-        link_scope_sql = " AND (l.staff_id=? OR l.created_by_staff_id=?"
-        link_scope_params = [actor, actor]
-        if project_ids:
-            placeholders = ",".join("?" for _ in project_ids)
-            link_scope_sql += f" OR l.project_id IN ({placeholders})"
-            link_scope_params.extend(project_ids)
-        link_scope_sql += ")"
+    link_scope_sql, link_scope_params = profile_scope.link_scope_clause(
+        is_manager=is_manager,
+        actor=actor,
+        project_ids=project_ids,
+    )
     links = _rows_or_empty(
         f"""
         SELECT l.*, p.project_name
@@ -278,31 +265,18 @@ def profile(kol_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, An
     ) if is_manager else []
     audit_events: list[dict[str, Any]] = []
     if is_manager:
-        audit_clauses = ["(target_type='kol' AND target_id=?)"]
-        audit_params: list[Any] = [str(kol_id)]
-        if project_ids:
-            placeholders = ",".join("?" for _ in project_ids)
-            audit_clauses.append(f"(target_type='project' AND target_id IN ({placeholders}))")
-            audit_params.extend(str(item) for item in project_ids)
-        if link_ids:
-            placeholders = ",".join("?" for _ in link_ids)
-            audit_clauses.append(f"(target_type='link' AND target_id IN ({placeholders}))")
-            audit_params.extend(str(item) for item in link_ids)
-        sales_ids = [_int(item.get("id")) for item in sales if _int(item.get("id"))]
-        if sales_ids:
-            placeholders = ",".join("?" for _ in sales_ids)
-            audit_clauses.append(f"(target_type='attribution' AND target_id IN ({placeholders}))")
-            audit_params.extend(str(item) for item in sales_ids)
-        cost_ids = [_int(item.get("id")) for item in costs if _int(item.get("id"))]
-        if cost_ids:
-            placeholders = ",".join("?" for _ in cost_ids)
-            audit_clauses.append(f"(target_type='cost' AND target_id IN ({placeholders}))")
-            audit_params.extend(str(item) for item in cost_ids)
+        audit_where, audit_params = profile_scope.audit_where_parts(
+            kol_id=int(kol_id),
+            project_ids=project_ids,
+            link_ids=link_ids,
+            sales=sales,
+            costs=costs,
+        )
         audit_events = _rows_or_empty(
             f"""
             SELECT id, staff_id, action_type, target_type, target_id, detail, metadata_json, created_at
             FROM vkpi_business_audit_logs
-            WHERE {" OR ".join(audit_clauses)}
+            WHERE {audit_where}
             ORDER BY created_at DESC, id DESC
             LIMIT 100
             """,
