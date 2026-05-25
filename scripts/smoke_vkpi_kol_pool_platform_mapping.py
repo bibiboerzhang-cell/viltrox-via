@@ -2,8 +2,8 @@
 """Offline guard for Apify-style platform field mapping in KOL Pool."""
 from __future__ import annotations
 
+from app.domains.kol import pool as kol_pool
 from app.services.vkpi.industry_snapshot_kpis import calculate_kpis
-from app.services.vkpi import kol_pool
 
 
 def assert_true(condition: bool, message: str) -> None:

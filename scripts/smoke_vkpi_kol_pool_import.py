@@ -25,7 +25,7 @@ except ImportError:
     cleanup_admin = None
 
 from app.db.connection import get_conn
-from app.services.vkpi import kol_pool
+from app.domains.kol import pool as kol_pool
 
 
 PREFIX = "vkpi-pool-imp-"

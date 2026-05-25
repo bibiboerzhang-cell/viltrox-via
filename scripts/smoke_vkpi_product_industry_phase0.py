@@ -14,11 +14,11 @@ os.environ.setdefault("DB_RUNTIME_BACKEND", "sqlite")
 os.environ.setdefault("DATABASE_URL", "")
 
 from app.db.connection import get_conn  # noqa: E402
+from app.domains.kol import pool as kol_pool  # noqa: E402
 from app.services.vkpi import (  # noqa: E402
     ab_experiments,
     audience_graph,
     industry_data,
-    kol_pool,
     llm_gateway,
     platform_crawl_settings,
     product_analysis,

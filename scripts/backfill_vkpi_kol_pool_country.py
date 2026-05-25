@@ -17,7 +17,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from app.db.connection import close_db_runtime, get_conn
-from app.services.vkpi.kol_pool import COUNTRY_NAMES, _clear_kol_pool_read_cache, _country_code
+from app.domains.kol.pool_common import COUNTRY_NAMES, _clear_kol_pool_read_cache, _country_code
 
 
 DOMAIN_COUNTRIES: dict[str, tuple[str, float, str]] = {

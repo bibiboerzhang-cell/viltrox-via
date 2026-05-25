@@ -292,7 +292,7 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 
 def apply_kol_pool(items: list[dict[str, Any]], staff_id: int, source_ref: str) -> dict[str, Any]:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
-    from app.services.vkpi import kol_pool
+    from app.domains.kol import pool as kol_pool
 
     payload_items = []
     for item in items:

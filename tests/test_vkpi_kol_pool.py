@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from app.db.connection import get_conn
-from app.services.vkpi import kol_pool
+from app.domains.kol import pool as kol_pool
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 
 

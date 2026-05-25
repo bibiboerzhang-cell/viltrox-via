@@ -30,7 +30,7 @@ except ImportError:
 
 from app.db.connection import get_conn
 from app.domains.kol.identity import dedup_key, normalize_handle, normalize_platform
-from app.services.vkpi import kol_pool
+from app.domains.kol import pool as kol_pool
 
 
 PREFIX = "vkpi-pool-dedup-"
