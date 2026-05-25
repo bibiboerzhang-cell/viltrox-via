@@ -4,3 +4,4 @@ Owns market trends, external source status, Google/RSS/Reddit signals, and compe
 
 Current migrated slice:
 - `api.ts`: market intelligence, content brain, and competitor brain API boundary for data-analysis panels.
+- `industry.ts`: industry project, account, post, and cross-platform API boundary for CrossPlatformPanel.

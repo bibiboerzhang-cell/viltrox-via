@@ -7,3 +7,16 @@ export {
   listContentBrainPosts,
   reviewCompetitorBrainSignal,
 } from './api';
+export {
+  addIndustryAccount,
+  analyzeDataAnalysisPostUrl,
+  createIndustryProject,
+  getIndustryAccount,
+  getIndustryCrossPlatform,
+  importIndustryApifyHistory,
+  listIndustryAccounts,
+  listIndustryPosts,
+  listIndustryProjects,
+  refreshIndustryAccount,
+  updateIndustryAccount,
+} from './industry';

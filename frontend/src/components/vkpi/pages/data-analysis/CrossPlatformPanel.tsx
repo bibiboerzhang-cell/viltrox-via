@@ -11,8 +11,8 @@ import {
   refreshIndustryAccount,
   updateIndustryAccount,
   analyzeDataAnalysisPostUrl,
-} from '../../../../services/vkpi/industry-api';
-import { listBudgetSettings, listPlatformCrawlSettings } from '../../../../services/vkpi/settings-api';
+} from '../../../../domains/market';
+import { listBudgetSettings, listPlatformCrawlSettings } from '../../../../domains/settings';
 import { creatorPlatformOptions } from '../../shared/vkpiConstants';
 
 import type { ChartKey, KpiKey, Row, SecondaryTab } from './utils/types';
