@@ -9,6 +9,7 @@ from app.domains.kol import account as kol_account_domain
 from app.domains.kol import claims as kol_claims_domain
 from app.domains.kol import contacts as kol_contacts_domain
 from app.domains.kol import lookup as kol_lookup_domain
+from app.domains.kol import profile as kol_profile_domain
 from app.services.vkpi import scope
 from app.domains.kol.natural_search import _natural_search_payload
 from app.domains.kol.profile_payloads import assessment_for_request, product_fit_for_request
@@ -57,12 +58,7 @@ def kol_dossier(kol_id: int, staff=Depends(require_tab("vkpi", "read"))):
 @router.get("/kols/{kol_id}/profile")
 def kol_profile(kol_id: int, staff=Depends(require_tab("vkpi", "read"))):
     try:
-        result = kol_claims_domain.profile(int(kol_id), staff=staff)
-        try:
-            result["dossier"] = kol_account_domain.get_dossier(int(kol_id))
-        except Exception:
-            result["dossier"] = {}
-        return result
+        return kol_profile_domain.profile_with_dossier(int(kol_id), staff=staff)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
