@@ -153,7 +153,8 @@ def _normalize_handle_for_match(value: Any) -> str:
     raw = str(value or "").strip().lower()
     raw = re.sub(r"^https?://", "", raw)
     raw = raw.replace("www.", "")
-    parts = [part for part in re.split(r"[/?#]", raw) if part]
+    raw = re.split(r"[?#]", raw, maxsplit=1)[0]
+    parts = [part for part in raw.split("/") if part]
     if parts:
         raw = parts[-1]
     return raw.lstrip("@")
