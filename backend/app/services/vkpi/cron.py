@@ -328,7 +328,7 @@ async def run_job(job_name: str, payload: dict[str, Any] | None = None, *, queue
     payload = payload or {}
     name = normalize_job_name(job_name)
     if name == "lineage_snapshot":
-        from app.services.vkpi import metric_lineage
+        from app.domains import lineage as metric_lineage
 
         result = await asyncio.to_thread(metric_lineage.generate_run, period_days=int(payload.get("period_days") or 7), scope_type=str(payload.get("scope_type") or "all"), trigger_source="scheduler_lineage_snapshot", metadata={"source": "cron.run_now"})
         return {"job": name, "status": "ok", "result": result, "ran_at": _stamp()}

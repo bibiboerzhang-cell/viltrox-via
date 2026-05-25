@@ -23,7 +23,7 @@ from app.core.config import PLATFORM_INGEST_SHARED_SECRET
 from app.core.security import make_token
 from app.db.connection import get_conn
 from app.services.vkpi.schema import ensure_vkpi_schema
-from app.services.vkpi.schema_lineage import ensure_vkpi_lineage_schema
+from app.domains.lineage import ensure_vkpi_lineage_schema
 from app.services.vkpi.schema_reconciliation import ensure_vkpi_reconciliation_schema
 
 BASE = "http://127.0.0.1:8102"

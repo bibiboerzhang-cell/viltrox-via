@@ -16,10 +16,11 @@ from __future__ import annotations
 import pytest
 
 from app.db.connection import get_conn
-from app.services.vkpi import drilldown, metric_lineage
-from app.services.vkpi.metric_definitions import DEFINITION_VERSION
+from app.domains import lineage as metric_lineage
+from app.domains.lineage import DEFINITION_VERSION
+from app.services.vkpi import drilldown
 from app.services.vkpi.schema import ensure_vkpi_schema
-from app.services.vkpi.schema_lineage import ensure_vkpi_lineage_schema
+from app.domains.lineage import ensure_vkpi_lineage_schema
 
 
 # ---------------------------------------------------------------------------

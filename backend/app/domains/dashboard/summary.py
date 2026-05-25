@@ -4,7 +4,8 @@ from __future__ import annotations
 from typing import Any
 
 from app.domains.dashboard.recent_content import _dashboard_official_matrix_summary
-from app.services.vkpi import decision_engine, metric_lineage, scope
+from app.domains import lineage as metric_lineage
+from app.services.vkpi import decision_engine, scope
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
 
 
