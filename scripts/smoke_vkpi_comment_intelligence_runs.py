@@ -18,7 +18,8 @@ def main() -> None:
     from app.db.connection import get_conn
     from app.domains.comments import collector as comments_collector
     from app.domains.comments import intelligence as comment_intelligence
-    from app.services.vkpi import pillars, sentiment
+    import app.domains.comments.sentiment as sentiment
+    from app.services.vkpi import pillars
 
     marker = f"ci_runs_{uuid.uuid4().hex[:10]}"
     conn = get_conn()

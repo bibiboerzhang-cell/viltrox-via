@@ -32,7 +32,7 @@ def main():
     
     print("[1] Module import...")
     try:
-        from app.services.vkpi import sentiment
+        import app.domains.comments.sentiment as sentiment
         print("  ✓")
     except Exception as exc:
         failures.append(f"Cannot import sentiment: {exc}")

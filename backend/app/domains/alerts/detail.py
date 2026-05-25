@@ -25,7 +25,7 @@ def get_alert_detail(alert_id: int, *, staff: dict[str, Any] | None = None) -> d
     """Return source rows behind an alert for evidence-first drilldown."""
     ensure_vkpi_schema()
     from app.domains.comments import collector as comments_collector
-    from app.services.vkpi import sentiment
+    import app.domains.comments.sentiment as sentiment
 
     conn = get_conn()
     row = conn.execute("SELECT * FROM vkpi_alerts WHERE id=?", (int(alert_id),)).fetchone()

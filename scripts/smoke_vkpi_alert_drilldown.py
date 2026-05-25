@@ -18,7 +18,7 @@ def main() -> None:
     from app.db.connection import get_conn
     from app.domains.comments import collector as comments_collector
     from app.domains import alerts
-    from app.services.vkpi import sentiment
+    import app.domains.comments.sentiment as sentiment
 
     marker = f"ad_{uuid.uuid4().hex[:10]}"
     conn = get_conn()

@@ -22,7 +22,7 @@ os.environ["LLM_MONTHLY_BUDGET_USD"] = "0"
 def main() -> None:
     from app.db.connection import get_conn
     from app.domains.comments.collector import ensure_vkpi_comments_schema
-    from app.services.vkpi import sentiment
+    import app.domains.comments.sentiment as sentiment
 
     marker = f"sentiment_smoke_{uuid.uuid4().hex[:10]}"
     conn = get_conn()

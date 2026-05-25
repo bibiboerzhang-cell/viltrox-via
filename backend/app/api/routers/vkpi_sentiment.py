@@ -10,8 +10,8 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 
+import app.domains.comments.sentiment as sentiment
 from app.api.dependencies.perms import require_permission
-from app.services.vkpi import sentiment
 from app.services.vkpi.p1_compat import admin_router_prefix
 
 

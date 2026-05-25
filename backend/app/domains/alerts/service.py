@@ -150,7 +150,7 @@ def generate_comment_intelligence_alerts(
     import importlib
 
     platform_crawl_settings = importlib.import_module("app.domains.settings.platform_crawl")
-    from app.services.vkpi import sentiment
+    import app.domains.comments.sentiment as sentiment
 
     comments_collector.ensure_vkpi_comments_schema()
     sentiment.ensure_vkpi_sentiment_schema()

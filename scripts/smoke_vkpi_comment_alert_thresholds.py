@@ -24,7 +24,7 @@ def main() -> None:
 
     platform_crawl_settings = importlib.import_module("app.domains.settings.platform_crawl")
     from app.domains import alerts
-    from app.services.vkpi import sentiment
+    import app.domains.comments.sentiment as sentiment
 
     marker = f"ci_threshold_{uuid.uuid4().hex[:10]}"
     conn = get_conn()

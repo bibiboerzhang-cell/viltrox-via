@@ -1,5 +1,5 @@
 """
-backend/app/services/vkpi/sentiment.py
+backend/app/domains/comments/sentiment.py
 
 P1.4: Multi-dimensional sentiment analysis service.
 
