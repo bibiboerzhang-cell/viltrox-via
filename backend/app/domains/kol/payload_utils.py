@@ -1,4 +1,4 @@
-"""Shared helpers for V-KPI KOL/link routes."""
+"""Shared KOL payload normalization helpers."""
 from __future__ import annotations
 
 import json

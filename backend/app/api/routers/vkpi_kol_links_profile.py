@@ -8,7 +8,7 @@ from app.db.connection import get_conn
 from app.services.vkpi import kol_history_match, kol_product_fit as kol_product_fit_service
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 
-from app.api.routers.vkpi_kol_links_common import _clamp_score, _float, _grade, _int, _json_loads
+from app.domains.kol.payload_utils import _clamp_score, _float, _grade, _int, _json_loads
 
 
 def _latest_kol_context(kol_id: int) -> dict[str, Any]:

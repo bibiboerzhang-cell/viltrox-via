@@ -7,7 +7,7 @@ from typing import Any
 from app.db.connection import get_conn
 from app.services.vkpi import kol_history_match
 
-from app.api.routers.vkpi_kol_links_common import _float, _int, _json_loads
+from app.domains.kol.payload_utils import _float, _int, _json_loads
 
 
 _PLATFORM_ALIASES = {
