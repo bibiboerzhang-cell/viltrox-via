@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import type { VkpiDashboardData, VkpiKolLookupResult, VkpiKolProfile, VkpiPageKey } from '../vkpiTypes';
+import type { VkpiKolLookupResult, VkpiKolProfile } from '../vkpiTypes';
 import { arrayValue, compactCount, objectValue, textValue } from '../shared/vkpiDataUtils';
 import { clearDiscoverFocus, readDiscoverFocus, type DiscoverFocusPayload } from '../intelligence/intelligenceDiscoveryFocus';
 import { clearLatestCandidateDecision, readLatestCandidateDecision, type CandidateDecisionRecord } from '../intelligence/intelligenceCandidateDecision';
@@ -16,7 +16,6 @@ import {
 import { DiscoverPageLayout } from './discover/DiscoverPageLayout';
 import {
   buildDirectionChips,
-  buildDiscoveryQueue,
 } from './discover/DiscoverQueueModel';
 import {
   apiContactsToItems,
@@ -44,6 +43,8 @@ import {
   runDiscoverSearch,
   type DiscoverSearchContext,
 } from './discover/DiscoverSearchController';
+import { useDiscoveryQueueSources } from './discover/DiscoverQueueSources';
+import type { DiscoverPageProps, DiscoverTab, MessageTone } from './discover/DiscoverPageTypes';
 import type {
   CompetitorRelation,
   ContactItem,
@@ -64,34 +65,12 @@ import {
   promoteKolPoolToMain,
   type VkpiKolAssessmentResponse,
 } from '../../../domains/kol';
-import { getRecommendationFeedbackBacklog } from '../../../domains/intelligence';
-import { listBrandSignals } from '../../../domains/market';
 import {
   listProductRecommendations,
   productRecommendationAction,
   runProductRecommendations,
 } from '../../../domains/products';
 import './discover/discoverDecision.css';
-
-interface DiscoverPageProps {
-  data: VkpiDashboardData;
-  onLookupKol?: (payload: { platform: string; handleOrUrl: string; createIfMissing?: boolean; email?: string; contactEmail?: string; notes?: string; scanAccount?: boolean; maxPosts?: number; productSku?: string }) => Promise<VkpiKolLookupResult>;
-  onScanKolAccount?: (kolId: string, maxPosts?: number) => Promise<Record<string, unknown>>;
-  onClaimKol?: (kolId: string) => Promise<void>;
-  onUpdateKol?: (kolId: string, payload: { avatarUrl?: string; profileUrl?: string; contactEmail?: string; contactPhone?: string; notes?: string; contactLinks?: Array<{ label?: string; value?: string; url?: string }> }) => Promise<void>;
-  onCreateProject?: (payload: { projectName: string; kolId?: string; productSku?: string; productName?: string; productSkus?: string[]; products?: Array<{ productSku: string; productName?: string }>; platform?: string; marketplace?: string; note?: string }) => Promise<Record<string, unknown> | void>;
-  onSelectPage?: (page: VkpiPageKey) => void;
-  apiToken?: string;
-}
-
-type DiscoverTab = 'search' | 'recommendations' | 'pool';
-type MessageTone = 'info' | 'warn' | 'error';
-
-const tabLabels: Array<{ key: DiscoverTab; label: string; hint: string }> = [
-  { key: 'search', label: '主动搜索', hint: '真实查重 / 抓取 / 画像' },
-  { key: 'recommendations', label: '智能推荐', hint: 'Product Analysis 真实推荐' },
-  { key: 'pool', label: '候选池', hint: '复用 KOL Pool' },
-];
 
 export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, onUpdateKol, onCreateProject, onSelectPage, apiToken }: DiscoverPageProps) {
   const baseKols = useMemo(() => data.kolOptions.map(kolOptionToUiKol), [data.kolOptions]);
@@ -115,12 +94,8 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
   const [selectedDimensions11, setSelectedDimensions11] = useState<Dimensions11Payload | null>(null);
   const [dimensions11Loading, setDimensions11Loading] = useState(false);
   const [smartRecommendations, setSmartRecommendations] = useState<SmartRecommendation[]>([]);
-  const [recommendationBacklog, setRecommendationBacklog] = useState<Record<string, unknown>>({});
-  const [brandSignals, setBrandSignals] = useState<Array<Record<string, unknown>>>([]);
   const [discoverFocus, setDiscoverFocus] = useState<DiscoverFocusPayload | null>(null);
   const [candidateDecision, setCandidateDecision] = useState<CandidateDecisionRecord | null>(null);
-  const [discoveryQueueLoading, setDiscoveryQueueLoading] = useState(false);
-  const [discoveryQueueMessage, setDiscoveryQueueMessage] = useState('');
   const [recommendationLoading, setRecommendationLoading] = useState(false);
   const [recommendationMessage, setRecommendationMessage] = useState('');
   const [profilePosts, setProfilePosts] = useState<Array<Record<string, unknown>>>([]);
@@ -173,14 +148,7 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
     const matchesHandle = Boolean(decisionHandle && selectedHandle && decisionHandle === selectedHandle);
     return matchesMainId || matchesPoolId || matchesHandle ? candidateDecision : null;
   }, [candidateDecision, selectedKol]);
-  const discoveryQueueItems = useMemo(
-    () => buildDiscoveryQueue({
-      recommendationBacklog,
-      projects: data.projects,
-      brandSignals,
-    }),
-    [brandSignals, data.projects, recommendationBacklog],
-  );
+  const { discoveryQueueItems, discoveryQueueLoading, discoveryQueueMessage } = useDiscoveryQueueSources(apiToken, data.projects);
 
   useEffect(() => {
     const focus = readDiscoverFocus();
@@ -208,36 +176,6 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
       }
     }
   }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!apiToken) {
-      setRecommendationBacklog({});
-      setBrandSignals([]);
-      setDiscoveryQueueMessage('未登录时仅显示本地数据方向；登录后会读取推荐、项目和品牌信号。');
-      return () => { cancelled = true; };
-    }
-    setDiscoveryQueueLoading(true);
-    setDiscoveryQueueMessage('');
-    Promise.allSettled([
-      getRecommendationFeedbackBacklog(apiToken, 8),
-      listBrandSignals(apiToken, { status: 'new', limit: 8 }),
-    ]).then(([recommendationResult, signalResult]) => {
-      if (cancelled) return;
-      if (recommendationResult.status === 'fulfilled') setRecommendationBacklog(recommendationResult.value);
-      else setRecommendationBacklog({});
-      if (signalResult.status === 'fulfilled') setBrandSignals(signalResult.value.signals || []);
-      else setBrandSignals([]);
-      if (recommendationResult.status === 'rejected' || signalResult.status === 'rejected') {
-        setDiscoveryQueueMessage('发现队列部分来源读取失败；已保留项目缺口和可用来源。');
-      }
-    }).finally(() => {
-      if (!cancelled) setDiscoveryQueueLoading(false);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [apiToken]);
 
   useEffect(() => {
     if (!selectedKolId && visibleKols[0]?.id) setSelectedKolId(visibleKols[0].id);
