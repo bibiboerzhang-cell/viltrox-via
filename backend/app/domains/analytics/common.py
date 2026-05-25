@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import secrets
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -78,7 +78,7 @@ COMPETITOR_TERMS = (
 
 
 def _utcnow() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _json(value: Any) -> str:
@@ -115,7 +115,7 @@ def _actor(staff: dict[str, Any] | None) -> int:
 
 
 def _run_uid(run_type: str) -> str:
-    return f"ana-{run_type}-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{secrets.token_hex(3)}"
+    return f"ana-{run_type}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{secrets.token_hex(3)}"
 
 
 def _db_bool(value: bool) -> bool | int:

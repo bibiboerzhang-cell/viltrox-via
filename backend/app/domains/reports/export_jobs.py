@@ -5,7 +5,7 @@ import csv
 import io
 import json
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -21,11 +21,11 @@ from app.domains.reports import ensure_vkpi_reports_schema
 
 
 def _utcnow() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _uid(prefix: str) -> str:
-    return f"{prefix}-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{secrets.token_hex(3)}"
+    return f"{prefix}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{secrets.token_hex(3)}"
 
 
 def _json(value: Any) -> str:
@@ -188,7 +188,7 @@ def create_export(*, export_format: str, payload: dict[str, Any], staff: dict[st
             (export_uid, requested_by_staff_id, export_type, file_format, filters_json, status, triggered_at, expires_at)
         VALUES (?,?,?,?,?,?,?,?)
         """,
-        (export_uid, actor_id or None, export_type, fmt, _json(payload), "running", _utcnow(), (datetime.utcnow() + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")),
+        (export_uid, actor_id or None, export_type, fmt, _json(payload), "running", _utcnow(), (datetime.now(timezone.utc) + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")),
     )
     row = conn.execute("SELECT id FROM vkpi_export_jobs WHERE export_uid=?", (export_uid,)).fetchone()
     export_id = int(row["id"]) if row else 0

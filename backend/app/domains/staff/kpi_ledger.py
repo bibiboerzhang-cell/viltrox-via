@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from app.core.logging import get_logger
@@ -93,7 +93,7 @@ METRIC_LABELS: dict[str, str] = {
 
 
 def utcnow() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _json(value: Any) -> str:

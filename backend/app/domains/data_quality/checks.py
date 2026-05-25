@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.core.logging import get_logger
@@ -251,7 +251,7 @@ def list_issues(*, limit: int = 100, staff: dict[str, Any] | None = None) -> dic
         """,
         (*amazon_staff_params, max_items),
     )
-    stale_cutoff = datetime.utcnow() - timedelta(days=8)
+    stale_cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=8)
     for row in rows:
         item = dict(row)
         evidence = _load_json(item.get("evidence_json"))

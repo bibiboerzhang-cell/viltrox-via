@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from app.core.logging import get_logger
@@ -24,7 +24,7 @@ logger = get_logger(__name__)
 
 
 def _utcnow() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _json(value: Any) -> str:

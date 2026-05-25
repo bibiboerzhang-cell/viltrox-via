@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from app.core.config import VKPI_ASYNC_ENABLED
@@ -84,7 +84,7 @@ _MANUAL_JOB_POLICIES: dict[str, dict[str, Any]] = {
 
 
 def _stamp() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def normalize_job_name(job_name: str) -> str:

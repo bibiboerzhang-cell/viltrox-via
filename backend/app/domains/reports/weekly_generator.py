@@ -13,7 +13,7 @@ Generates 23 reports/week (1 leader×2 + 7 employees×3) by:
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from app.db.connection import get_conn
@@ -28,7 +28,7 @@ from app.domains.reports.weekly_templates import (
 
 
 def _now_iso() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _format_date(d: date) -> str:

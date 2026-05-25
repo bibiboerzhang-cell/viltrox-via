@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.core.logging import get_logger
@@ -28,7 +28,7 @@ logger = get_logger(__name__)
 
 
 def _utcnow() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _json(value: Any) -> str:
@@ -44,7 +44,7 @@ def _money_cents(value: Any) -> str:
 
 
 def _uid(prefix: str) -> str:
-    return f"{prefix}-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{secrets.token_hex(3)}"
+    return f"{prefix}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{secrets.token_hex(3)}"
 
 
 def _staff_name(staff: dict[str, Any] | None) -> str:
@@ -439,7 +439,7 @@ def _kpi_source_appendix(start_date: str, *, scoped_staff_id: int | None = None,
 
 
 def _period(period_days: int) -> tuple[str, str]:
-    end = datetime.utcnow()
+    end = datetime.now(timezone.utc)
     start = end - timedelta(days=max(1, int(period_days or 7)))
     return start.strftime("%Y-%m-%dT%H:%M:%SZ"), end.strftime("%Y-%m-%dT%H:%M:%SZ")
 

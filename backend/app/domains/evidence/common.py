@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from app.db.connection import get_conn
 from app.domains.access import scope
 
 def _utcnow() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 def _json(value: Any) -> str:
     return json.dumps(value or {}, ensure_ascii=False, default=str)

@@ -1,7 +1,7 @@
 """Operational data quality checks appended to the main issue list."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.domains.access import scope
@@ -22,7 +22,7 @@ def append_operational_quality_issues(
         ).fetchone()
         if latest_snapshot:
             snapshot = dict(latest_snapshot)
-            stale_before = (datetime.utcnow() - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            stale_before = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
             if str(snapshot.get("updated_at") or "") < stale_before:
                 _append_issue(
                     issues,
@@ -36,7 +36,7 @@ def append_operational_quality_issues(
                 )
 
     # Stale dashboard metric snapshot.
-    stale_before = (datetime.utcnow() - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    stale_before = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
     row = conn.execute(
         """
         SELECT id, run_uid, generated_at, scope_type, scope_id

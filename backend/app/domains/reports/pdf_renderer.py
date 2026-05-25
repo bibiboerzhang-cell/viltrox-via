@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -146,7 +146,12 @@ def store_bytes(content: bytes, *, filename: str) -> dict[str, Any]:
     path = report_storage_dir() / filename
     path.write_bytes(content)
     digest = hashlib.sha256(content).hexdigest()
-    return {"file_path": str(path), "file_size_bytes": len(content), "sha256_hex": digest, "created_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")}
+    return {
+        "file_path": str(path),
+        "file_size_bytes": len(content),
+        "sha256_hex": digest,
+        "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
 
 
 def render_and_store_pdf(context: dict[str, Any], *, filename: str) -> dict[str, Any]:

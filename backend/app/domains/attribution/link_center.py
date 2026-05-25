@@ -6,7 +6,7 @@ import json
 import os
 import re
 import secrets
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -36,7 +36,7 @@ BOT_HINTS = ("bot", "spider", "crawler", "preview", "slurp", "facebookexternalhi
 
 
 def utcnow() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _json(value: Any) -> str:

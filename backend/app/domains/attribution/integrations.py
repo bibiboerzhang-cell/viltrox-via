@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -26,7 +26,7 @@ from app.domains.projects.workflow import staff_id
 
 
 def _utcnow() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
