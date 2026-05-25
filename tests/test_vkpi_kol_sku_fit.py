@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.services.vkpi import kol_sku_fit
+from app.domains.kol import sku_fit as kol_sku_fit
 
 
 def _fact(**overrides: Any) -> dict[str, Any]:
