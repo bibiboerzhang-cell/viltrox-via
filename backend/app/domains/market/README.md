@@ -7,6 +7,8 @@ Current migrated slice:
 - `signal_taxonomy.py`: shared Viltrox, competitor, product, and camera-ecosystem keyword groups.
 - `signal_classifier.py`: read-only classifier for raw market mentions and reviewable competitor-signal candidates.
 - `signal_write_package.py`: dry-run mapping from provider/review packages to raw market-signal rows.
+- `signal_review_package.py`: dry-run human-review package builders for competitor and external market signals.
+- `signal_review_reports.py`: JSON/Markdown report rendering for review packages and controlled writes.
 
 Boundary:
 
