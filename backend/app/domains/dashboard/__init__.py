@@ -16,6 +16,7 @@ from app.domains.dashboard.recent_content import (
     _recent_content_sort_key,
     build_dashboard_recent_content,
 )
+from app.domains.dashboard.summary import build_dashboard_summary
 
 __all__ = [
     "DASHBOARD_AGENT_SPECS",
@@ -30,4 +31,5 @@ __all__ = [
     "_recent_content_sort_key",
     "build_dashboard_kol_distribution",
     "build_dashboard_recent_content",
+    "build_dashboard_summary",
 ]

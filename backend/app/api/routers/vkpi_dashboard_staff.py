@@ -40,28 +40,11 @@ def dashboard(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     try:
-        effective_staff_id = scope.effective_staff_id(staff, staff_id)
-        result = (
-            decision_engine.dashboard_view("staff", window_days=window_days, staff_id=effective_staff_id)
-            if effective_staff_id
-            else decision_engine.dashboard(window_days=window_days)
-        )
-        lineage = metric_lineage.dashboard_metrics(
-            period_days=window_days,
+        result = dashboard_domain.build_dashboard_summary(
+            window_days=window_days,
+            staff_id=staff_id,
             staff=staff,
-            staff_id=effective_staff_id,
-            generated_by_staff_id=resolve_staff_id(staff) or None,
         )
-        result["metric_run"] = lineage.get("run") or {}
-        result["metrics"] = lineage.get("metrics") or []
-        official_summary = dashboard_domain._dashboard_official_matrix_summary(limit=20)
-        if official_summary:
-            result["official_matrix_summary"] = official_summary
-            summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
-            summary["official_account_count"] = official_summary["account_count"]
-            summary["official_post_count"] = official_summary["post_count"]
-            summary["official_total_views"] = official_summary["total_views"]
-            result["summary"] = summary
     except scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
     return result
