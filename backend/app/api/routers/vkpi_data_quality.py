@@ -5,7 +5,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
 from app.domains import data_quality as data_quality_domain
-from app.services.vkpi import data_quality
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-data-quality"])
 
@@ -31,7 +30,7 @@ def data_quality_issues(limit: int = Query(default=200, ge=1, le=1000), staff=De
 def data_quality_resolve(issue_id: str, body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
     _require_manager_staff(staff)
     try:
-        return data_quality.act_on_issue(issue_id, action="resolve", body=body or {}, staff=staff)
+        return data_quality_domain.act_on_issue(issue_id, action="resolve", body=body or {}, staff=staff)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except LookupError as exc:
@@ -42,7 +41,7 @@ def data_quality_resolve(issue_id: str, body: dict | None = None, staff=Depends(
 def data_quality_ignore(issue_id: str, body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
     _require_manager_staff(staff)
     try:
-        return data_quality.act_on_issue(issue_id, action="ignore", body=body or {}, staff=staff)
+        return data_quality_domain.act_on_issue(issue_id, action="ignore", body=body or {}, staff=staff)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except LookupError as exc:
@@ -53,7 +52,7 @@ def data_quality_ignore(issue_id: str, body: dict | None = None, staff=Depends(r
 def data_quality_assign(issue_id: str, body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
     _require_manager_staff(staff)
     try:
-        return data_quality.act_on_issue(issue_id, action="assign", body=body or {}, staff=staff)
+        return data_quality_domain.act_on_issue(issue_id, action="assign", body=body or {}, staff=staff)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except LookupError as exc:
@@ -64,7 +63,7 @@ def data_quality_assign(issue_id: str, body: dict | None = None, staff=Depends(r
 def data_quality_rerun(issue_id: str, body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
     _require_manager_staff(staff)
     try:
-        return data_quality.act_on_issue(issue_id, action="rerun", body=body or {}, staff=staff)
+        return data_quality_domain.act_on_issue(issue_id, action="rerun", body=body or {}, staff=staff)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except LookupError as exc:
@@ -75,7 +74,7 @@ def data_quality_rerun(issue_id: str, body: dict | None = None, staff=Depends(re
 def data_quality_evidence(issue_id: str, body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
     _require_manager_staff(staff)
     try:
-        return data_quality.act_on_issue(issue_id, action="evidence", body=body or {}, staff=staff)
+        return data_quality_domain.act_on_issue(issue_id, action="evidence", body=body or {}, staff=staff)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except LookupError as exc:
@@ -86,7 +85,7 @@ def data_quality_evidence(issue_id: str, body: dict | None = None, staff=Depends
 def data_quality_reopen(issue_id: str, body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
     _require_manager_staff(staff)
     try:
-        return data_quality.act_on_issue(issue_id, action="reopen", body=body or {}, staff=staff)
+        return data_quality_domain.act_on_issue(issue_id, action="reopen", body=body or {}, staff=staff)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except LookupError as exc:

@@ -8,7 +8,7 @@ from typing import Any
 from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.services.vkpi import scope
-from app.services.vkpi.data_quality_common import (
+from app.domains.data_quality.common import (
     _active_project_filter_for_quality,
     _append_issue,
     _int,
@@ -19,7 +19,7 @@ from app.services.vkpi.data_quality_common import (
     _utcnow,
     ensure_data_quality_schema,
 )
-from app.services.vkpi.data_quality_operational_issues import append_operational_quality_issues
+from app.domains.data_quality.operational_issues import append_operational_quality_issues
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.schema_lineage import ensure_vkpi_lineage_schema
 from app.services.vkpi.schema_reconciliation import ensure_vkpi_reconciliation_schema

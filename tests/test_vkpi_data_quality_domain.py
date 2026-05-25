@@ -12,7 +12,7 @@ def test_data_quality_domain_delegates_read_only_summary(monkeypatch):
         return {"status": "ok", "total_count": 0, "issues": []}
 
     staff = {"id": 7, "role": "manager"}
-    monkeypatch.setattr(data_quality_service.data_quality, "list_issues", fake_list_issues)
+    monkeypatch.setattr(data_quality_service.checks, "list_issues", fake_list_issues)
 
     assert data_quality_domain.list_quality_issues(limit=12, staff=staff) == {
         "status": "ok",

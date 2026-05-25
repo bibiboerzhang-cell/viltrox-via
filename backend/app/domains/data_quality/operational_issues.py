@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from app.services.vkpi import scope
-from app.services.vkpi.data_quality_common import _append_issue, _safe_rows, _staff_clause
+from app.domains.data_quality.common import _append_issue, _safe_rows, _staff_clause
 
 
 def append_operational_quality_issues(
