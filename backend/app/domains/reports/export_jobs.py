@@ -16,7 +16,7 @@ from app.domains import reports
 from app.domains import audit
 from app.domains.access import scope
 from app.domains.projects import workflow
-from app.services.vkpi.pdf_renderer import store_bytes
+from app.domains.reports.pdf_renderer import store_bytes
 from app.domains.reports import ensure_vkpi_reports_schema
 
 
