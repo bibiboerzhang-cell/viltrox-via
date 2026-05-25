@@ -32,3 +32,4 @@ export {
   pauseMarketingLink,
   type VkpiCreateLinkPayload,
 } from './links';
+export * from './attributionModels';
