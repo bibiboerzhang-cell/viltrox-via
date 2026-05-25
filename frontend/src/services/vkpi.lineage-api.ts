@@ -3,9 +3,8 @@
 // PASTE this file as:
 //   frontend/src/services/vkpi.lineage-api.ts
 //
-// It mirrors the apiFetch / jsonBody helpers used by vkpi.ui-api.ts. The
-// helpers are duplicated here intentionally so this file is paste-ready and
-// has no required edits to the existing services/vkpi.ui-api.ts file.
+// The apiFetch / jsonBody helpers are duplicated here intentionally so this
+// file remains paste-ready and does not depend on another service module.
 //
 // All endpoints are routed through the existing /api/marketing/* alias
 // middleware so they match the rest of the V-KPI frontend conventions.

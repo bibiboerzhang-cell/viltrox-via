@@ -39,6 +39,8 @@ type LegacyRepairPayload = {
 };
 
 export type VkpiRepairProposalsResponse = LegacyRepairPayload;
+export type VkpiRepairPersistencePreview = LegacyRepairPayload;
+export type VkpiRepairProposalRecord = LegacyRepairPayload;
 export type VkpiRepairPersistenceReadinessResponse = LegacyRepairPayload;
 export type VkpiRepairPersistenceBoundaryResponse = LegacyRepairPayload;
 export type VkpiRepairPersistenceApprovalEnvelopePayload = LegacyRepairPayload;
