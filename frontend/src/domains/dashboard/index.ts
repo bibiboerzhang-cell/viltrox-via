@@ -1,2 +1,1 @@
-// Dashboard domain public surface.
-export {};
+export * from './dashboardModel';
