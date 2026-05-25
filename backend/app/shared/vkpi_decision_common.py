@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from app.core.logging import get_logger
-from app.services.vkpi.kpi_evidence import enrich_kpi_source_row
+from app.shared.vkpi_kpi_evidence import enrich_kpi_source_row
 
 logger = get_logger(__name__)
 
