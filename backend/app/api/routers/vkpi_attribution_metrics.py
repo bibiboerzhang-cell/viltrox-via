@@ -4,7 +4,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 
 from app.api.dependencies.perms import require_tab
-from app.services.vkpi import alerts, attribution, audit, drilldown, integrations, kpi_ledger, metric_lineage, scope, workflow
+from app.domains import attribution
+from app.services.vkpi import alerts, audit, drilldown, integrations, kpi_ledger, metric_lineage, scope, workflow
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-attribution-metrics"])

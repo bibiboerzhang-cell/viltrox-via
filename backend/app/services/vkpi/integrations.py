@@ -17,7 +17,8 @@ from starlette.datastructures import Headers
 
 from app.db.connection import get_conn
 from app.services.ingestion.webhooks import parse_request_body, verify_webhook_request
-from app.services.vkpi import attribution, scope
+from app.domains import attribution
+from app.services.vkpi import scope
 from app.services.vkpi.integrations_amazon import AMAZON_COLUMN_ALIASES, import_amazon_report, parse_amazon_report_bytes
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.schema_reconciliation import ensure_vkpi_reconciliation_schema
@@ -690,4 +691,3 @@ def ingest_shopify_refund_webhook(headers: Headers, raw_body: bytes, client_host
         "base_attribution_id": base.get("id"),
         **result,
     }
-

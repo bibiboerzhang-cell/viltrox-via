@@ -5,7 +5,7 @@ import csv
 import io
 from typing import Any
 
-from app.services.vkpi import attribution
+from app.domains import attribution
 
 
 AMAZON_COLUMN_ALIASES = {
