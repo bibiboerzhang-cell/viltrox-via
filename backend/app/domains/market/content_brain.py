@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from app.db.connection import get_conn
-from app.services.vkpi.budget_guard import check_budget, get_budget_status
+from app.domains.costs.budget_guard import check_budget, get_budget_status
 
 
 BUDGET_SCOPE = "cron:p6_content_brain_analysis"

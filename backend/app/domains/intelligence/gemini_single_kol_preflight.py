@@ -15,7 +15,7 @@ from typing import Any, Awaitable, Callable, Iterable
 
 from app.domains.kol import pool as kol_pool
 from app.platform import llm_gateway
-from app.services.vkpi import budget_guard
+from app.domains.costs import budget_guard
 
 
 GEMINI_SINGLE_KOL_SCOPE = "cron:p4_gemini_single_kol"

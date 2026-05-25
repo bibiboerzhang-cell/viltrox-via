@@ -25,7 +25,7 @@ if str(ROOT) not in sys.path:
 
 from app.db.connection import close_db_runtime  # noqa: E402
 from app.platform import llm_gateway  # noqa: E402
-from app.services.vkpi import budget_guard  # noqa: E402
+from app.domains.costs import budget_guard  # noqa: E402
 
 
 REQUIRED_SCOPES = (

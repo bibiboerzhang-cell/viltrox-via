@@ -5,7 +5,7 @@ from pathlib import Path
 
 from app.db.connection import get_conn
 from app.platform import llm_gateway
-from app.services.vkpi import budget_guard
+from app.domains.costs import budget_guard
 from scripts import vkpi_llm_budget_acceptance
 
 

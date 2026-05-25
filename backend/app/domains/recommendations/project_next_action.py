@@ -10,7 +10,7 @@ from typing import Any
 from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.platform import llm_gateway
-from app.services.vkpi.budget_guard import check_budget, get_budget_status
+from app.domains.costs.budget_guard import check_budget, get_budget_status
 from app.domains.recommendations.project_next_action_format import format_preview_summary, render_markdown
 from app.domains.recommendations.new_launch_match import (
     BUDGET_SCOPE,
