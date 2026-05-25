@@ -30,11 +30,7 @@ import type {
   VkpiProductCatalogItem,
   VkpiStaffMember,
 } from '../vkpiTypes';
-import { StaffTable } from '../tables/StaffTable';
 import { PageShell } from './PageShell';
-import {
-  StaffInviteCard,
-} from './settings/SettingsAdminCards';
 import { StaffPermissionDrawer } from './settings/StaffPermissionDrawer';
 import {
   BudgetSettingsTable,
@@ -47,6 +43,7 @@ import {
   SettingsModule,
   type SettingsModuleKey,
 } from './settings/SettingsPage.fragments';
+import { SettingsStaffPanel } from './settings/SettingsStaffPanel';
 import { SettingsSkuPanel } from './settings/SettingsSkuPanel';
 import { SettingsStatusPanel } from './settings/SettingsStatusPanel';
 import {
@@ -633,36 +630,32 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
           />
         ))}
         {renderSettingsModule('staff', `${data.staffMembers.length} 人 · 邀请 / 权限`, (
-          <section className="vkpi-settings-two-column">
-            <StaffInviteCard
-              email={email}
-              name={name}
-              role={role}
-              permission={permission}
-              permissionTemplate={invitePermissionTemplate}
-              busy={busy}
-              canInvite={canInviteStaff}
-              inviteMode={inviteMode}
-              inviteCapabilities={inviteCapabilities}
-              inviteCapabilitiesError={inviteCapabilitiesError}
-              activationLink={activationLink}
-              activationCopied={activationCopied}
-              onEmailChange={setEmail}
-              onNameChange={setName}
-              onRoleChange={setRole}
-              onPermissionChange={setPermission}
-              onPermissionTemplateChange={(value) => {
-                setInvitePermissionTemplate(value);
-                setPermission(vkpiPermissionFromTemplate(value));
-              }}
-              onCopyActivationLink={() => void copyActivationLink()}
-              onSubmit={submitInvite}
-            />
-            <section className="vkpi-card vkpi-table-card">
-              <div className="vkpi-table-card__header"><div><h2>授权账号</h2><span>{data.staffMembers.length} 人</span></div></div>
-              <StaffTable members={data.staffMembers} onSelectStaff={openStaffPermissionDrawer} />
-            </section>
-          </section>
+          <SettingsStaffPanel
+            members={data.staffMembers}
+            email={email}
+            name={name}
+            role={role}
+            permission={permission}
+            permissionTemplate={invitePermissionTemplate}
+            busy={busy}
+            canInvite={canInviteStaff}
+            inviteMode={inviteMode}
+            inviteCapabilities={inviteCapabilities}
+            inviteCapabilitiesError={inviteCapabilitiesError}
+            activationLink={activationLink}
+            activationCopied={activationCopied}
+            onEmailChange={setEmail}
+            onNameChange={setName}
+            onRoleChange={setRole}
+            onPermissionChange={setPermission}
+            onPermissionTemplateChange={(value) => {
+              setInvitePermissionTemplate(value);
+              setPermission(vkpiPermissionFromTemplate(value));
+            }}
+            onCopyActivationLink={() => void copyActivationLink()}
+            onSubmitInvite={submitInvite}
+            onSelectStaff={openStaffPermissionDrawer}
+          />
         ))}
         {renderSettingsModule('funds', `$${totalSpentUsd.toLocaleString('en-US')} / $${totalBudgetUsd.toLocaleString('en-US')}`, (
           <BudgetSettingsTable
