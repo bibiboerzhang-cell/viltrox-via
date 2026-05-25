@@ -6,6 +6,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
+from app.domains.kol import claim_listing
 from app.services.vkpi import audit, scope
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.workflow import staff_id
@@ -244,32 +245,7 @@ def reassign(claim_id: int, body: dict[str, Any], *, staff: dict[str, Any] | Non
     return result
 
 def list_claims(status: str = "active", limit: int = 100, *, staff: dict[str, Any] | None = None, staff_id: int | None = None) -> dict[str, Any]:
-    ensure_vkpi_schema()
-    limit_i = max(1, min(500, int(limit or 100)))
-    params: list[Any] = []
-    where_parts: list[str] = []
-    if status:
-        where_parts.append("c.status=?")
-        params.append(status)
-    scoped_staff_id = scope.effective_staff_id(staff, staff_id)
-    if scoped_staff_id:
-        where_parts.append("c.staff_id=?")
-        params.append(int(scoped_staff_id))
-    where = "WHERE " + " AND ".join(where_parts) if where_parts else ""
-    rows = get_conn().execute(
-        f"""
-        SELECT c.*, k.channel_name AS kol_name, k.platform AS platform, u.name AS staff_name, u.email AS staff_email
-        FROM vkpi_kol_claims c
-        LEFT JOIN kols k ON k.id = c.kol_id
-        LEFT JOIN staff st ON st.id = c.staff_id
-        LEFT JOIN users u ON u.id = st.user_id
-        {where}
-        ORDER BY c.updated_at DESC, c.id DESC
-        LIMIT ?
-        """,
-        (*params, limit_i),
-    ).fetchall()
-    return {"claims": [dict(row) for row in rows], "scope": scope.scope_context(staff, staff_id)}
+    return claim_listing.list_claims(status=status, limit=limit, staff=staff, staff_id=staff_id)
 
 
 def list_kols(
