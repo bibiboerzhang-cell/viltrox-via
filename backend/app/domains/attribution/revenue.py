@@ -234,7 +234,7 @@ def import_amazon(body: dict[str, Any], *, staff: dict[str, Any] | None = None) 
         created = create_attribution(payload, staff=staff)["attribution"]
         imported.append(created)
         if not _int(payload.get("project_id")) or not _int(created.get("project_id")) or not _int(created.get("staff_id")):
-            from app.services.vkpi import reconciliation
+            import app.domains.attribution.reconciliation as reconciliation
 
             reconciliation.enqueue_unmatched(
                 {

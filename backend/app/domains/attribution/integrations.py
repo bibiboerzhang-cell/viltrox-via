@@ -604,7 +604,7 @@ def ingest_shopify_order_webhook(headers: Headers, raw_body: bytes, client_host:
         }
     )["attribution"]
     if not match:
-        from app.services.vkpi import reconciliation
+        import app.domains.attribution.reconciliation as reconciliation
 
         reconciliation.enqueue_unmatched(
             {
@@ -659,7 +659,7 @@ def ingest_shopify_refund_webhook(headers: Headers, raw_body: bytes, client_host
     snapshot_id = _safe_int(snapshot.get("id")) if snapshot else 0
     base = _find_base_shopify_attribution(snapshot_id or None, order_refs)
     _mark_shopify_snapshot_refunded(snapshot_id or None)
-    from app.services.vkpi import reconciliation
+    import app.domains.attribution.reconciliation as reconciliation
 
     result = reconciliation.refund(
         {
