@@ -20,6 +20,7 @@ from app.domains.kol.decisions import (
     list_decisions,
     list_followups,
 )
+from app.domains.kol.identity import dedup_key, normalize_handle, normalize_platform
 from app.domains.kol.lookup import lookup_with_context
 from app.domains.kol.natural_search import _natural_search_payload as natural_search_payload
 from app.domains.kol.profile import profile_with_dossier
@@ -34,12 +35,15 @@ __all__ = [
     "create_followup",
     "contact_rows_for_request",
     "dossier_for_request",
+    "dedup_key",
     "list_decisions",
     "list_followups",
     "list_claims",
     "list_kols",
     "lookup_with_context",
     "natural_search_payload",
+    "normalize_handle",
+    "normalize_platform",
     "product_fit_for_request",
     "profile_with_dossier",
     "reassign",
