@@ -16,9 +16,6 @@ from typing import Any
 from app.core.logging import get_logger
 from app.core.permissions import (
     OWNER_EMAILS,
-    SYSTEM_PERMISSION_KEYS,
-    TAB_PERMISSION_KEYS,
-    default_permissions_for_role,
     normalize_permissions,
 )
 from app.core.security import hash_password, invalidate_user_cache
@@ -54,100 +51,12 @@ from app.services.system.staff_tokens import (
     revoke_api_token,
     verify_token,
 )
+from app.services.system.staff_roles import ROLES, list_roles, permission_matrix
 
 logger = get_logger(__name__)
 
 
 ALLOWED_STAFF_EMAIL_DOMAINS = _load_allowed_domains()
-
-
-# Canonical role → permissions matrix (displayed on UI)
-ROLES = {
-    "admin": {
-        "label": "Admin",
-        "description": "Full access including staff + billing",
-        "permissions": {
-            "content":     ["view", "approve", "reject", "bulk"],
-            "creators":    ["view", "edit", "block", "flag"],
-            "commerce":    ["view", "approve_payouts", "process_payouts", "override_attribution"],
-            "intelligence":["view", "generate_insights"],
-            "via":         ["view", "approve_proposals", "edit_personas"],
-            "system":      ["view", "edit_integrations", "manage_staff"],
-            "trust":       ["view", "edit_rules", "block_user"],
-            "staff":       ["view", "invite", "update", "suspend"],
-        },
-    },
-    "operations": {
-        "label": "Operations",
-        "description": "Day-to-day content + creator ops",
-        "permissions": {
-            "content":     ["view", "approve", "reject", "bulk"],
-            "creators":    ["view", "edit", "flag"],
-            "commerce":    ["view"],
-            "intelligence":["view"],
-            "via":         ["view"],
-            "system":      [],
-            "trust":       ["view"],
-            "staff":       [],
-        },
-    },
-    "employee": {
-        "label": "Marketing Employee",
-        "description": "Viltrox Marketing employee workspace",
-        "permissions": {
-            "content":     ["view"],
-            "creators":    ["view"],
-            "commerce":    [],
-            "intelligence":["view"],
-            "via":         [],
-            "system":      [],
-            "trust":       [],
-            "staff":       [],
-        },
-    },
-    "manager": {
-        "label": "Marketing Manager",
-        "description": "Viltrox Marketing team management",
-        "permissions": {
-            "content":     ["view", "approve", "reject"],
-            "creators":    ["view", "edit", "flag"],
-            "commerce":    ["view"],
-            "intelligence":["view", "generate_insights"],
-            "via":         ["view"],
-            "system":      ["view"],
-            "trust":       ["view"],
-            "staff":       ["view"],
-        },
-    },
-    "analyst": {
-        "label": "Analyst",
-        "description": "Read-only across all modules + can generate insights",
-        "permissions": {
-            "content":     ["view"],
-            "creators":    ["view"],
-            "commerce":    ["view"],
-            "intelligence":["view", "generate_insights"],
-            "via":         ["view"],
-            "system":      ["view"],
-            "trust":       ["view"],
-            "staff":       [],
-        },
-    },
-    "readonly": {
-        "label": "Read-only",
-        "description": "View only — no writes",
-        "permissions": {
-            "content":     ["view"],
-            "creators":    ["view"],
-            "commerce":    ["view"],
-            "intelligence":["view"],
-            "via":         ["view"],
-            "system":      [],
-            "trust":       [],
-            "staff":       [],
-        },
-    },
-}
 
 
 # =========================================================================
@@ -751,22 +660,3 @@ def delete_member(staff_id: int) -> None:
     conn.execute("DELETE FROM staff WHERE id = ?", (int(staff_id),))
     conn.commit()
 
-
-# =========================================================================
-# Roles + matrix
-# =========================================================================
-
-def list_roles() -> dict:
-    return {"roles": [{"key": k, **v} for k, v in ROLES.items()]}
-
-
-def permission_matrix() -> dict:
-    """Flat matrix display: {role: {module: [permissions]}}."""
-    return {
-        "modules": [*TAB_PERMISSION_KEYS, *SYSTEM_PERMISSION_KEYS],
-        "roles": {k: v["permissions"] for k, v in ROLES.items()},
-        "defaults": {
-            "admin": default_permissions_for_role("admin"),
-            "readonly": default_permissions_for_role("readonly"),
-        },
-    }
