@@ -6,6 +6,10 @@ from app.domains.intelligence.brain_acceptance import (
     build_brain_layer_acceptance_report,
     build_brain_layer_module_row,
 )
+from app.domains.intelligence.brief_agent import (
+    BRIEF_AGENT_VERSION,
+    build_brief_agent_report,
+)
 from app.domains.intelligence.evidence_agent import (
     EVIDENCE_AGENT_VERSION,
     build_evidence_agent_report,
@@ -29,6 +33,7 @@ from app.domains.intelligence.weekly_plan import (
 
 __all__ = [
     "ACCEPTANCE_VERSION",
+    "BRIEF_AGENT_VERSION",
     "DEFAULT_LIMIT",
     "DEFAULT_LOOKBACK_HOURS",
     "DIGEST_VERSION",
@@ -38,6 +43,7 @@ __all__ = [
     "REQUIRED_REPORTS",
     "build_brain_layer_acceptance_report",
     "build_brain_layer_module_row",
+    "build_brief_agent_report",
     "build_evidence_agent_report",
     "build_evidence_chain_from_summary",
     "build_recommendation_agent_report",

@@ -7,6 +7,7 @@ Provider calls and raw ingestion should enter through platform/provider and sour
 Current migrated slice:
 
 - `brain_acceptance.py`: pure P6.79 technical acceptance rules over P6.71-P6.78 runtime artifacts.
+- `brief_agent.py`: pure P7.83 operator-brief items, backlinks, next actions, and report assembly.
 - `evidence_agent.py`: pure P7.81 evidence-chain shaping and read-only agent report assembly.
 - `recommendation_agent.py`: pure P7.82 candidate scoring, traceability gates, and report assembly.
 - `today_signals.py`: pure daily signal digest and action-item builder from trend, market, and cached-comment rows.
