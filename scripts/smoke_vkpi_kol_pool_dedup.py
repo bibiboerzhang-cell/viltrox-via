@@ -4,7 +4,7 @@ R59 smoke: 验证 KOL Pool 三层 dedup 规则.
 
 dedup 三层:
   Layer 1: platform + handle (UNIQUE 约束)
-  Layer 2: dedup_key (kol_claims_common.dedup_key,含 email)
+  Layer 2: dedup_key (domains.kol.identity.dedup_key,含 email)
   Layer 3: handle 不同但是 alias (vkpi_kol_pool_aliases 表)
 
 测试场景:
@@ -29,8 +29,8 @@ except ImportError:
     cleanup_admin = None
 
 from app.db.connection import get_conn
+from app.domains.kol.identity import dedup_key, normalize_handle, normalize_platform
 from app.services.vkpi import kol_pool
-from app.services.vkpi.kol_claims_common import dedup_key, normalize_handle, normalize_platform
 
 
 PREFIX = "vkpi-pool-dedup-"
