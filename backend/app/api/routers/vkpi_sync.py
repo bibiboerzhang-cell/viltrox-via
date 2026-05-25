@@ -15,7 +15,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 
 from app.api.dependencies.perms import require_tab
-from app.services.vkpi import cron, sync_sentinel_agent_v0, sync_status
+from app.domains import sync as sync_domain
+from app.services.vkpi import cron, sync_status
 from app.services.vkpi.audit_decorator import audit_action
 
 
@@ -54,7 +55,7 @@ def get_sync_sentinel_v0(
 ) -> dict:
     """Read-only P7.80 sync sentinel report. Does not trigger sync or write alerts."""
     del staff
-    return sync_sentinel_agent_v0.build_sync_sentinel_agent_v0(limit=limit)
+    return sync_domain.build_sync_sentinel_agent_v0(limit=limit)
 
 
 # ─── Write endpoints (admin 权限 + 审计) ──────

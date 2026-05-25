@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.services.vkpi import sync_sentinel_agent_v0
+from app.domains.sync import sentinel_use_case as sync_sentinel_agent_v0
 
 
 def _overview(*, ack_required: bool = False, failure_rate: float = 0.0) -> dict:
