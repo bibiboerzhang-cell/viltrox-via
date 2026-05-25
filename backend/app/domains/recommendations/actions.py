@@ -9,7 +9,8 @@ from app.domains.kol import claims as kol_claims
 from app.domains.kol import pool as kol_pool
 from app.domains.recommendations import outcomes as outcome_collector
 from app.services.vkpi._utils import json_dumps, json_loads, utcnow_iso
-from app.services.vkpi import audit, link_center, scope, workflow
+from app.domains.attribution import link_center
+from app.services.vkpi import audit, scope, workflow
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
 
