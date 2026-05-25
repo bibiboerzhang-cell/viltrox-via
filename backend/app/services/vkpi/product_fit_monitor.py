@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.db.connection import get_conn
-from app.services.vkpi import kol_sku_fit
+from app.domains.kol import sku_fit as kol_sku_fit
 
 
 def _now() -> str:
