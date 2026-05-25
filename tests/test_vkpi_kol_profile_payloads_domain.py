@@ -28,3 +28,29 @@ def test_dimensions11_product_fit_items_filters_low_confidence():
     assert items[0]["sku"] == "AF 35mm F1.2"
     assert items[0]["score"] == 86
     assert items[0]["confidence"] == 0.74
+
+
+def test_profile_payload_request_wrappers_preserve_access_and_pool_fallback(monkeypatch):
+    calls: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        profile_payloads.claims_domain,
+        "assert_kol_access",
+        lambda kol_id, staff, *, allow_unclaimed=False: calls.setdefault("assessment_access", (kol_id, staff, allow_unclaimed)),
+    )
+    monkeypatch.setattr(profile_payloads, "_assessment_payload", lambda kol_id: {"assessment": kol_id})
+
+    assert profile_payloads.assessment_for_request(8, staff={"id": 1}) == {"assessment": 8}
+    assert calls["assessment_access"] == (8, {"id": 1}, True)
+
+    def missing_kol(*_args, **_kwargs):
+        raise LookupError("not in main kols")
+
+    monkeypatch.setattr(profile_payloads.claims_domain, "assert_kol_access", missing_kol)
+    monkeypatch.setattr(
+        profile_payloads,
+        "_product_fit_preview_payload_for_pool",
+        lambda kol_pool_id, limit: {"kol_pool_id": kol_pool_id, "limit": limit},
+    )
+
+    assert profile_payloads.product_fit_for_request(99, limit=3, staff={"id": 1}) == {"kol_pool_id": 99, "limit": 3}

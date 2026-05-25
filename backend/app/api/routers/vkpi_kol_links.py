@@ -11,7 +11,7 @@ from app.domains.kol import contacts as kol_contacts_domain
 from app.domains.kol import lookup as kol_lookup_domain
 from app.services.vkpi import scope
 from app.domains.kol.natural_search import _natural_search_payload
-from app.domains.kol.profile_payloads import _assessment_payload, _product_fit_payload
+from app.domains.kol.profile_payloads import assessment_for_request, product_fit_for_request
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-kol-links"])
 
@@ -73,8 +73,7 @@ def kol_profile(kol_id: int, staff=Depends(require_tab("vkpi", "read"))):
 @router.get("/kols/{kol_id}/assessment")
 def kol_assessment(kol_id: int, staff=Depends(require_tab("vkpi", "read"))):
     try:
-        kol_claims_domain.assert_kol_access(int(kol_id), staff, allow_unclaimed=True)
-        return _assessment_payload(int(kol_id))
+        return assessment_for_request(int(kol_id), staff=staff)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
@@ -88,11 +87,7 @@ def kol_product_fit(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     try:
-        try:
-            kol_claims_domain.assert_kol_access(int(kol_id), staff, allow_unclaimed=True)
-        except LookupError:
-            return _product_fit_preview_payload_for_pool(int(kol_id), limit)
-        return _product_fit_payload(int(kol_id), limit=limit)
+        return product_fit_for_request(int(kol_id), limit=limit, staff=staff)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:

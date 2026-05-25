@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from app.domains.kol import claims as claims_domain
 from app.db.connection import get_conn
 from app.services.vkpi import kol_history_match, kol_product_fit as kol_product_fit_service
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
@@ -126,6 +127,11 @@ def _assessment_payload(kol_id: int) -> dict[str, Any]:
         "recommended_action": report.get("recommended_action") or ("先运行深度评估补齐账号报告。" if not report else ""),
         "source_tables": ["kols", "kol_account_snapshots", "kol_analysis_reports", "kol_posts"],
     }
+
+
+def assessment_for_request(kol_id: int, *, staff: dict[str, Any]) -> dict[str, Any]:
+    claims_domain.assert_kol_access(int(kol_id), staff, allow_unclaimed=True)
+    return _assessment_payload(int(kol_id))
 
 
 def _tokenize(text: str) -> set[str]:
@@ -435,6 +441,14 @@ def _product_fit_payload(kol_id: int, limit: int = 5) -> dict[str, Any]:
         "fit_engine_error": fit_engine_error,
         "items": rows[:safe_limit],
     }
+
+
+def product_fit_for_request(kol_id: int, *, limit: int = 5, staff: dict[str, Any]) -> dict[str, Any]:
+    try:
+        claims_domain.assert_kol_access(int(kol_id), staff, allow_unclaimed=True)
+    except LookupError:
+        return _product_fit_preview_payload_for_pool(int(kol_id), limit)
+    return _product_fit_payload(int(kol_id), limit=limit)
 
 
 def _contact_rows(kol_id: int, include_wrong: bool = False) -> dict[str, Any]:
