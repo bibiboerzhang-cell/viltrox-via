@@ -24,3 +24,4 @@ export {
   upsertAnalyticsProduct,
   type ProductDomainRow,
 } from './analysis';
+export * from './productModels';
