@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 
 from app.api.dependencies.perms import require_tab
-from app.services.vkpi import operating_review
+from app.domains.operations import operating_review
 
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-operating-review"])

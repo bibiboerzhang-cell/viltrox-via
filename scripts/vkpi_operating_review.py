@@ -15,7 +15,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.db.connection import close_db_runtime  # noqa: E402
-from app.services.vkpi.operating_review import build_operating_review, format_operating_review  # noqa: E402
+from app.domains.operations.operating_review import build_operating_review, format_operating_review  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
