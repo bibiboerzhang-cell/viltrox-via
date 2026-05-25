@@ -15,7 +15,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.db.connection import close_db_runtime  # noqa: E402
-from app.services.vkpi.project_next_action import (  # noqa: E402
+from app.domains.recommendations.project_next_action import (  # noqa: E402
     FORBIDDEN_WRITE_FLAGS,
     build_project_next_action_preview,
     format_preview_summary,
