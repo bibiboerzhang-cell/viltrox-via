@@ -15,17 +15,17 @@ import {
   updateCommentAlertSettings,
   updateFeatureFlags,
   updatePlatformCrawlSettings,
-} from '../../../services/vkpi/settings-api';
+} from '../../../domains/settings';
 import {
   getStaffInviteCapabilities,
   updateStaffPermissions,
   createStaffActivationLink,
   createExistingStaffActivationLink,
   createStaffPasswordResetLink,
-} from '../../../services/vkpi/staff-api';
-import type { VkpiStaffActivationLinkResponse, VkpiStaffInviteCapabilities, VkpiStaffPasswordResetLinkResponse } from '../../../services/vkpi/staff-api';
-import { listProductCatalog } from '../../../services/vkpi/product-api';
-import { getSyncOverview, triggerSync, type VkpiSyncOverview } from '../../../services/vkpi/sync-api';
+} from '../../../domains/settings';
+import type { VkpiStaffActivationLinkResponse, VkpiStaffInviteCapabilities, VkpiStaffPasswordResetLinkResponse } from '../../../domains/settings';
+import { listProductCatalog } from '../../../domains/products';
+import { getSyncOverview, triggerSync, type VkpiSyncOverview } from '../../../domains/settings';
 import type {
   VkpiDashboardData,
   VkpiProductCatalogItem,

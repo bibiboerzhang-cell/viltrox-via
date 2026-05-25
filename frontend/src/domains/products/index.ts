@@ -13,6 +13,7 @@ export {
   listAnalyticsProducts,
   listDailyOutreachDigest,
   listOutreachSuggestions,
+  listProductCatalog,
   listProductLaunches,
   listProductRecommendationRuns,
   listProductRecommendations,
