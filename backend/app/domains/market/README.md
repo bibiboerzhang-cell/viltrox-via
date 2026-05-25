@@ -4,6 +4,8 @@ Owns external market signals, Google/RSS/Reddit source ingestion, competitor men
 
 Current migrated slice:
 
+- `external_signal_smoke.py`: read-only source matrix, daily candidate plan, and bounded external signal smoke builder.
+- `external_signal_reports.py`: JSON/Markdown report rendering for external signal smoke and daily plans.
 - `signal_taxonomy.py`: shared Viltrox, competitor, product, and camera-ecosystem keyword groups.
 - `signal_classifier.py`: read-only classifier for raw market mentions and reviewable competitor-signal candidates.
 - `signal_write_package.py`: dry-run mapping from provider/review packages to raw market-signal rows.
