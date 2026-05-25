@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from app.core.logging import get_logger
@@ -138,7 +138,7 @@ COUNTRY_NAMES = {
 
 
 def _utcnow() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _kol_pool_cache_key(name: str, **params: Any) -> str:
@@ -655,5 +655,3 @@ def _normalize_item(item: dict[str, Any], *, default_platform: str = "") -> dict
         "engagement_rate": _float_or_none(_first_present(item.get("engagement_rate"), item.get("engagementRate"))),
         "raw": item,
     }
-
-

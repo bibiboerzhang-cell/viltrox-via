@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from starlette.requests import Request
@@ -28,7 +28,7 @@ SENSITIVE_ROUTE_RULES: tuple[tuple[str, str, str], ...] = (
 
 
 def _utcnow() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _json(value: Any) -> str:
@@ -391,7 +391,7 @@ def overview(limit: int = 100, event_category: str = "", staff_id: int | None = 
     ensure_vkpi_audit_schema()
     days = max(1, min(365, int(days or 7)))
     limit = max(1, min(500, int(limit or 100)))
-    since = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     raw_events = unified(limit=limit, event_category=event_category, staff_id=staff_id).get("events", [])
     staff_map = _staff_lookup()
 
@@ -450,7 +450,7 @@ def overview(limit: int = 100, event_category: str = "", staff_id: int | None = 
 
 def summary(days: int = 7) -> dict[str, Any]:
     ensure_vkpi_audit_schema()
-    since = (datetime.utcnow() - timedelta(days=max(1, int(days or 7)))).strftime("%Y-%m-%dT%H:%M:%SZ")
+    since = (datetime.now(timezone.utc) - timedelta(days=max(1, int(days or 7)))).strftime("%Y-%m-%dT%H:%M:%SZ")
     conn = get_conn()
     sensitive = conn.execute("SELECT COUNT(*) AS n FROM vkpi_sensitive_access_logs WHERE created_at>=?", (since,)).fetchone()
     exports = conn.execute("SELECT COUNT(*) AS n FROM vkpi_export_logs WHERE created_at>=?", (since,)).fetchone()

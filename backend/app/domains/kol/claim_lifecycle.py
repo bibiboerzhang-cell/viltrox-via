@@ -1,7 +1,7 @@
 """KOL claim lifecycle use cases."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.db.connection import get_conn
@@ -32,7 +32,7 @@ def claim(kol_id: int, body: dict[str, Any] | None = None, *, staff: dict[str, A
         raise ValueError("kol already claimed")
     now = utcnow()
     expires_days = max(1, min(90, _int(payload.get("expires_days"), 14)))
-    expires_at = (datetime.utcnow() + timedelta(days=expires_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    expires_at = (datetime.now(timezone.utc) + timedelta(days=expires_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     conn.execute(
         """
         INSERT INTO vkpi_kol_claims (

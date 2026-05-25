@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from app.db.connection import get_conn
@@ -11,7 +11,7 @@ from app.platform.db.schema_product_industry import ensure_vkpi_product_industry
 
 
 def _utcnow() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _loads(value: Any, default: Any = None) -> Any:

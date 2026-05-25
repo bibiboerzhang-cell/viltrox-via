@@ -27,6 +27,7 @@ R59: 平台级防火墙装饰器
 from __future__ import annotations
 
 import functools
+import inspect
 from typing import Any, Callable
 
 from fastapi import HTTPException
@@ -91,8 +92,7 @@ def firewall_check(
             return func(*args, **kwargs)
 
         # 检测 func 是否 async
-        import asyncio
-        if asyncio.iscoroutinefunction(func):
+        if inspect.iscoroutinefunction(func):
             return async_wrapper
         return sync_wrapper
 

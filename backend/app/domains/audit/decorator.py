@@ -22,6 +22,7 @@ R59: 审计装饰器
 from __future__ import annotations
 
 import functools
+import inspect
 import logging
 from typing import Any, Callable
 
@@ -128,8 +129,7 @@ def audit_action(
                 )
                 raise
 
-        import asyncio
-        if asyncio.iscoroutinefunction(func):
+        if inspect.iscoroutinefunction(func):
             return async_wrapper
         return sync_wrapper
 

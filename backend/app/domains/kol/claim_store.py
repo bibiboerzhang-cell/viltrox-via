@@ -1,7 +1,7 @@
 """KOL claim persistence helpers."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from app.db.connection import get_conn
@@ -9,7 +9,7 @@ from app.domains.kol.claim_payloads import json_array, json_object
 
 
 def utcnow() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _int(value: Any, default: int = 0) -> int:
