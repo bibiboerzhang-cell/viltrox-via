@@ -7,7 +7,6 @@ import asyncio
 import json
 import time
 import uuid
-from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -27,6 +26,16 @@ from app.core.config import (
 from app.core.logging import get_logger
 from app.db.connection import db_connection_scope, get_conn
 from app.services.ai.orchestrator import TaskStatus, VideoJobInput
+from app.services.jobs.queue_common import (
+    BaseJobQueue,
+    TERMINAL_JOB_STATUSES,
+    decode_json as _decode_json,
+    normalize_payload as _normalize_payload,
+    parse_ts as _parse_ts,
+    seconds_between as _seconds_between,
+    utcnow as _utcnow,
+)
+from app.services.jobs.queue_inprocess import InProcessJobQueue
 
 try:
     from redis.asyncio import from_url as redis_from_url
@@ -35,248 +44,6 @@ except Exception:
 
 logger = get_logger(__name__)
 
-
-def _utcnow() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _parse_ts(value: Any) -> Optional[datetime]:
-    if not value:
-        return None
-    if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-    raw = str(value).strip()
-    if not raw:
-        return None
-    try:
-        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except ValueError:
-        try:
-            return datetime.strptime(raw.replace("Z", ""), "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
-        except ValueError:
-            return None
-
-
-def _seconds_between(start: Any, end: Any) -> Optional[float]:
-    start_dt = _parse_ts(start)
-    end_dt = _parse_ts(end)
-    if not start_dt or not end_dt:
-        return None
-    return max(0.0, (end_dt - start_dt).total_seconds())
-
-
-def _normalize_payload(payload: Any) -> Dict[str, Any]:
-    if is_dataclass(payload):
-        return asdict(payload)
-    if isinstance(payload, dict):
-        return payload
-    raise TypeError(f"Unsupported job payload type: {type(payload)!r}")
-
-
-def _decode_json(raw: Any, default: Any) -> Any:
-    if raw in (None, "", b""):
-        return default
-    if isinstance(raw, (dict, list)):
-        return raw
-    try:
-        return json.loads(raw)
-    except Exception:
-        return default
-
-
-TERMINAL_JOB_STATUSES = {
-    TaskStatus.DONE.value,
-    TaskStatus.PARTIAL.value,
-    TaskStatus.FAILED.value,
-    "prefilter_rejected",
-    "cancelled",
-    "timeout",
-}
-
-TRANSIENT_JOB_STATUSES = {
-    TaskStatus.QUEUED.value,
-    TaskStatus.RETRYING.value,
-    TaskStatus.PROCESSING.value,
-    "running",
-}
-
-
-class BaseJobQueue:
-    backend_name = "unknown"
-
-    async def enqueue(
-        self,
-        job_type: str,
-        payload: Any,
-        submission_id: Optional[int] = None,
-        *,
-        priority: int | None = None,
-        lock_key: str | None = None,
-        timeout_seconds: int | None = None,
-    ) -> str:
-        raise NotImplementedError
-
-    async def get_status(self, task_id: str) -> Optional[Dict[str, Any]]:
-        raise NotImplementedError
-
-    async def set_status(self, task_id: str, status: str, **extra: Any) -> None:
-        raise NotImplementedError
-
-    async def pop_job(self, consumer_name: str, timeout: int = 5) -> Optional[Dict[str, Any]]:
-        raise NotImplementedError
-
-    async def ack(self, raw_job: Dict[str, Any]) -> None:
-        raise NotImplementedError
-
-    async def move_to_dead_letter(self, raw_job: Dict[str, Any], reason: str) -> None:
-        raise NotImplementedError
-
-    async def subscribe_task_events(self, task_id: str):
-        raise NotImplementedError
-
-    async def close(self) -> None:
-        return None
-
-    async def runtime_stats(self) -> Dict[str, Any]:
-        return {"backend": self.backend_name}
-
-
-class InProcessJobQueue(BaseJobQueue):
-    backend_name = "inprocess"
-
-    def __init__(self, orchestrator: Any) -> None:
-        self._orch = orchestrator
-        self._generic_tasks: Dict[str, asyncio.Task] = {}
-        self._generic_status: Dict[str, Dict[str, Any]] = {}
-        self._queues: Dict[str, list[asyncio.Queue]] = {}
-
-    async def _publish(self, task_id: str, event: Dict[str, Any]) -> None:
-        for queue in list(self._queues.get(task_id, [])):
-            await queue.put(event)
-
-    async def enqueue(
-        self,
-        job_type: str,
-        payload: Any,
-        submission_id: Optional[int] = None,
-        *,
-        priority: int | None = None,
-        lock_key: str | None = None,
-        timeout_seconds: int | None = None,
-    ) -> str:
-        if job_type == "audit_submission":
-            if isinstance(payload, dict):
-                payload = VideoJobInput(**payload)
-            task_id = await self._orch.enqueue(payload)
-            return task_id
-
-        task_id = str(uuid.uuid4())
-        normalized_payload = _normalize_payload(payload)
-        normalized_lock_key = str(lock_key or "").strip()
-        if normalized_lock_key:
-            for existing_task_id, item in self._generic_status.items():
-                if item.get("lock_key") == normalized_lock_key and str(item.get("status") or "") in TRANSIENT_JOB_STATUSES:
-                    return existing_task_id
-        now = _utcnow()
-        raw_job = {
-            "task_id": task_id,
-            "job_type": job_type,
-            "submission_id": submission_id or normalized_payload.get("submission_id") or 0,
-            "payload": normalized_payload,
-        }
-        self._generic_status[task_id] = {
-            "task_id": task_id,
-            "status": TaskStatus.QUEUED.value,
-            "submission_id": str(raw_job["submission_id"]),
-            "job_type": job_type,
-            "retry_count": "0",
-            "error_message": "",
-            "created_at": now,
-            "updated_at": now,
-            "payload_json": json.dumps(normalized_payload, ensure_ascii=False),
-            "priority": str(priority if priority is not None else 5),
-            "lock_key": normalized_lock_key,
-            "timeout_seconds": str(timeout_seconds if timeout_seconds is not None else 300),
-        }
-        await self._publish(task_id, {"event_type": "queued", "task_id": task_id, "status": TaskStatus.QUEUED.value, "created_at": now})
-        # Keep the heavy worker/AI stack out of queue module import time. This
-        # matters for admin/runtime tests and lightweight health checks.
-        from app.services.jobs.processor import process_background_job
-
-        self._generic_tasks[task_id] = asyncio.create_task(process_background_job(self, raw_job))
-        return task_id
-
-    async def get_status(self, task_id: str) -> Optional[Dict[str, Any]]:
-        if task_id in self._generic_status:
-            return dict(self._generic_status[task_id])
-        try:
-            task = await self._orch.store.get(task_id)
-        except KeyError:
-            return None
-        return {
-            "task_id": task_id,
-            "status": task.status.value,
-            "submission_id": str(task.job.submission_id),
-            "retry_count": str(task.retry_count),
-            "error_message": " | ".join(task.errors) if task.errors else "",
-            "updated_at": str(int(task.updated_at)),
-        }
-
-    async def set_status(self, task_id: str, status: str, **extra: Any) -> None:
-        current = self._generic_status.setdefault(task_id, {"task_id": task_id, "created_at": _utcnow()})
-        current["status"] = status
-        current["updated_at"] = _utcnow()
-        for key, value in extra.items():
-            current[key] = "" if value is None else str(value)
-        event_type = "result_ready" if status in {TaskStatus.DONE.value, TaskStatus.PARTIAL.value} else status
-        await self._publish(task_id, {"event_type": event_type, "task_id": task_id, "status": status, "created_at": _utcnow(), **{k: v for k, v in extra.items() if v is not None}})
-
-    async def pop_job(self, consumer_name: str, timeout: int = 5) -> Optional[Dict[str, Any]]:
-        return None
-
-    async def ack(self, raw_job: Dict[str, Any]) -> None:
-        return None
-
-    async def move_to_dead_letter(self, raw_job: Dict[str, Any], reason: str) -> None:
-        await self.set_status(raw_job.get("task_id", ""), "failed", error_message=reason)
-
-    async def subscribe_task_events(self, task_id: str):
-        queue: asyncio.Queue = asyncio.Queue()
-        self._queues.setdefault(task_id, []).append(queue)
-        try:
-            while True:
-                yield await queue.get()
-        finally:
-            subscribers = self._queues.get(task_id, [])
-            if queue in subscribers:
-                subscribers.remove(queue)
-
-    async def close(self) -> None:
-        for task in self._generic_tasks.values():
-            task.cancel()
-        self._generic_tasks.clear()
-        self._generic_status.clear()
-
-    async def runtime_stats(self) -> Dict[str, Any]:
-        active_tasks = sum(1 for task in self._generic_tasks.values() if not task.done())
-        waiting = sum(1 for item in self._generic_status.values() if item.get("status") in {TaskStatus.QUEUED.value, TaskStatus.RETRYING.value})
-        failed = sum(1 for item in self._generic_status.values() if item.get("status") == TaskStatus.FAILED.value)
-        return {
-            "backend": self.backend_name,
-            "generic_tasks": len(self._generic_tasks),
-            "active_tasks": active_tasks,
-            "tracked_statuses": len(self._generic_status),
-            "summary": {
-                "waiting": waiting,
-                "processing": active_tasks,
-                "failed": failed,
-                "avg_duration_seconds": None,
-                "eta_wait_seconds": None,
-                "configured_concurrency": active_tasks or 1,
-                "worker_processes": 1,
-                "worker_async_consumers": active_tasks or 1,
-            },
-        }
 
 
 class RedisJobQueue(BaseJobQueue):
