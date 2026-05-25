@@ -1,7 +1,10 @@
 """Compatibility facade for V-KPI KOL claim/profile services."""
 from __future__ import annotations
 
-from app.services.vkpi.kol_claims_actions import claim, list_claims, list_kols, lookup, reassign, release, update_kol_manual
+from app.domains.kol.claim_lifecycle import claim, reassign, release
+from app.domains.kol.claim_listing import list_claims, list_kols
+from app.domains.kol.claim_lookup import lookup
+from app.domains.kol.manual_update import update_kol_manual
 from app.services.vkpi.kol_claims_common import (
     HANDLE_RE,
     PLATFORM_ALIASES,
