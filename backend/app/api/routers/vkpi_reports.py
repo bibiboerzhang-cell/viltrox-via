@@ -7,7 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
 from app.api.dependencies.perms import require_tab
-from app.services.vkpi import audit, exports, reports, scope
+from app.domains import reports
+from app.services.vkpi import audit, exports, scope
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-reports"])

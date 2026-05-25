@@ -26,7 +26,7 @@ from app.db.connection import get_conn
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.schema_audit import ensure_vkpi_audit_schema
 from app.services.vkpi.schema_lineage import ensure_vkpi_lineage_schema
-from app.services.vkpi.schema_reports import ensure_vkpi_reports_schema
+from app.domains.reports import ensure_vkpi_reports_schema
 
 BASE = os.environ.get("VKPI_SMOKE_BASE", "http://127.0.0.1:8102")
 PREFIX = "vkpi-report-export-smoke-"

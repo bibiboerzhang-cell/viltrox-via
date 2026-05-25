@@ -21,11 +21,11 @@ os.environ.setdefault("DB_RUNTIME_BACKEND", "sqlite")
 os.environ.setdefault("DATABASE_URL", "")
 
 from app.db.connection import get_conn
-from app.services.vkpi import reports
+from app.domains import reports
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.schema_lineage import ensure_vkpi_lineage_schema
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
-from app.services.vkpi.schema_reports import ensure_vkpi_reports_schema
+from app.domains.reports import ensure_vkpi_reports_schema
 
 PREFIX = "vkpi-weekly-ai-smoke-"
 

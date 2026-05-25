@@ -26,7 +26,7 @@ from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.schema_audit import ensure_vkpi_audit_schema
 from app.services.vkpi.schema_lineage import ensure_vkpi_lineage_schema
 from app.services.vkpi.schema_reconciliation import ensure_vkpi_reconciliation_schema
-from app.services.vkpi.schema_reports import ensure_vkpi_reports_schema
+from app.domains.reports import ensure_vkpi_reports_schema
 
 BASE = "http://127.0.0.1:8102"
 PREFIX = "vkpi-dashboard-lineage-smoke-"

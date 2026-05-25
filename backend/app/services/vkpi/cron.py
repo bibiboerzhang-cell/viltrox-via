@@ -343,7 +343,7 @@ async def run_job(job_name: str, payload: dict[str, Any] | None = None, *, queue
         result = await asyncio.to_thread(alerts.generate_alerts)
         return {"job": name, "status": "ok", "result": result, "ran_at": _stamp()}
     if name == "weekly_report":
-        from app.services.vkpi import reports
+        from app.domains import reports
 
         result = await asyncio.to_thread(reports.generate_weekly_report, period_days=int(payload.get("period_days") or 7), staff=payload.get("staff"), filters=payload)
         return {"job": name, "status": "ok", "result": {k: v for k, v in result.items() if k != "context"}, "ran_at": _stamp()}
