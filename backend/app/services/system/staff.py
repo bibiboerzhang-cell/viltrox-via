@@ -21,7 +21,7 @@ from app.core.permissions import (
     default_permissions_for_role,
     normalize_permissions,
 )
-from app.core.security import hash_password
+from app.core.security import hash_password, invalidate_user_cache
 from app.db.connection import get_conn, is_postgres_runtime
 from app.services.auth.email import email_service_available
 from app.services.auth.tokens import create_email_token
@@ -325,7 +325,7 @@ def create_existing_activation_link(staff_id: int, *, inviter_id: int) -> dict[s
     conn = get_conn()
     row = conn.execute(
         """
-        SELECT s.id, s.user_id, s.role, s.active,
+        SELECT s.id, s.user_id, s.role, s.active, s.accepted_at,
                u.email AS user_email, u.name AS user_name
         FROM staff s
         LEFT JOIN users u ON u.id = s.user_id
@@ -340,6 +340,8 @@ def create_existing_activation_link(staff_id: int, *, inviter_id: int) -> dict[s
     if not user_id or not email:
         raise ValueError("staff user email missing")
     _validate_staff_email(email)
+    if row["accepted_at"]:
+        raise ValueError("staff account already activated; use reset password link")
 
     conn.execute(
         """
@@ -386,7 +388,7 @@ def _create_staff_with_token(body: dict, *, inviter_id: int) -> dict[str, Any]:
     conn = get_conn()
     email = str(body.get("email") or "").strip().lower()
     full_name = str(body.get("full_name") or body.get("name") or email.split("@")[0]).strip()
-    role = body.get("role", "readonly")
+    role = str(body.get("role") or "employee").strip().lower()
     if role not in ROLES:
         raise ValueError(f"unknown role: {role}")
     if not email:
@@ -394,14 +396,17 @@ def _create_staff_with_token(body: dict, *, inviter_id: int) -> dict[str, Any]:
     if not full_name:
         raise ValueError("full_name required")
     _validate_staff_email(email)
+    owner = email in OWNER_EMAILS
+    if role == "admin" and not owner and not _inviter_is_owner(conn, inviter_id):
+        raise PermissionError("only owner can invite admin staff")
 
     user = conn.execute(
         "SELECT id FROM users WHERE email = ?", (email,)
     ).fetchone()
     user_id = user["id"] if user else None
     if not user_id:
-        # Current auth gate is binary (`role == admin`), so invited staff
-        # users need a real admin-role account alongside the richer `staff` row.
+        # The richer `staff` row owns internal access. Keep the base user out
+        # of the legacy admin role so employee accounts cannot bypass staff RBAC.
         base = "".join(ch for ch in email.split("@")[0].lower() if ch.isalnum()) or "staff"
         creator_code = _unique_placeholder_creator_code(conn, base)
         placeholder_password = hash_password(f"staff-invite:{email}:{secrets.token_urlsafe(32)}")
@@ -409,7 +414,7 @@ def _create_staff_with_token(body: dict, *, inviter_id: int) -> dict[str, Any]:
             INSERT INTO users
                 (created_at, email, password_hash, name, creator_code, status, role, email_verified)
             VALUES
-                (?, ?, ?, ?, ?, 'active', 'admin', 0)
+                (?, ?, ?, ?, ?, 'active', 'creator', 0)
         """
         params = (_utcnow(), email, placeholder_password, full_name, creator_code)
         if is_postgres_runtime():
@@ -421,12 +426,13 @@ def _create_staff_with_token(body: dict, *, inviter_id: int) -> dict[str, Any]:
     else:
         conn.execute("UPDATE users SET name = COALESCE(NULLIF(name, ''), ?) WHERE id = ?", (full_name, user_id))
 
-    owner = email in OWNER_EMAILS
     permissions = normalize_permissions(
         _permissions_from_invite_body(body),
         role,
         owner=owner,
     )
+    if not owner and role != "admin":
+        permissions = _strip_admin_levels(permissions)
     columns = _staff_columns(conn)
     existing_staff = conn.execute("SELECT id FROM staff WHERE user_id = ? ORDER BY id DESC LIMIT 1", (user_id,)).fetchone()
     insert_cols = ["user_id", "role", "permissions_json", "mfa_enabled", "active", "invited_by", "invited_at"]
@@ -506,10 +512,24 @@ def accept_invite(invite_token: str, password: str) -> dict:
         raise ValueError("invite token expired")
     now = _utcnow()
     user_id = int(row["user_id"])
+    token_update = conn.execute(
+        "UPDATE email_tokens SET used_at = ? WHERE id = ? AND used_at IS NULL",
+        (now, int(row["id"])),
+    )
+    if int(getattr(token_update, "rowcount", 0) or 0) != 1:
+        raise ValueError("invite token already used")
+    conn.execute(
+        """
+        UPDATE email_tokens
+           SET used_at = ?
+         WHERE user_id = ? AND type = 'staff_invite' AND used_at IS NULL
+        """,
+        (now, user_id),
+    )
     conn.execute(
         """
         UPDATE users
-        SET password_hash = ?, email_verified = 1, status = 'active', role = 'admin'
+        SET password_hash = ?, email_verified = 1, status = 'active'
         WHERE id = ?
         """,
         (hash_password(password), user_id),
@@ -526,9 +546,68 @@ def accept_invite(invite_token: str, password: str) -> dict:
         f"UPDATE staff SET {', '.join(fields)} WHERE user_id = ?",
         values,
     )
-    conn.execute("UPDATE email_tokens SET used_at = ? WHERE id = ?", (now, int(row["id"])))
     conn.commit()
+    invalidate_user_cache(user_id)
     return {"ok": True, "user_id": user_id}
+
+
+def invite_token_status(invite_token: str) -> dict[str, Any]:
+    token = str(invite_token or "").strip()
+    if not token:
+        return {"valid": False, "state": "missing", "message": "invite_token required"}
+    conn = get_conn()
+    row = conn.execute(
+        """
+        SELECT t.id, t.user_id, t.expires_at, t.used_at,
+               COALESCE(u.email, '') AS email,
+               COALESCE(u.name, '') AS full_name,
+               s.accepted_at AS accepted_at
+        FROM email_tokens t
+        LEFT JOIN users u ON u.id = t.user_id
+        LEFT JOIN staff s ON s.user_id = t.user_id
+        WHERE t.token = ? AND t.type = 'staff_invite'
+        ORDER BY s.active DESC, s.id DESC
+        LIMIT 1
+        """,
+        (token,),
+    ).fetchone()
+    if not row:
+        return {"valid": False, "state": "invalid", "message": "invalid invite token"}
+    item = dict(row)
+    if item.get("used_at"):
+        return {
+            "valid": False,
+            "state": "used",
+            "message": "invite token already used",
+            "email": item.get("email") or "",
+            "used_at": item.get("used_at") or "",
+            "accepted_at": item.get("accepted_at") or "",
+        }
+    if item.get("accepted_at"):
+        return {
+            "valid": False,
+            "state": "used",
+            "message": "staff account already activated",
+            "email": item.get("email") or "",
+            "accepted_at": item.get("accepted_at") or "",
+        }
+    expires_at = str(item.get("expires_at") or "")
+    if expires_at and expires_at < _utcnow():
+        return {
+            "valid": False,
+            "state": "expired",
+            "message": "invite token expired",
+            "email": item.get("email") or "",
+            "expires_at": expires_at,
+        }
+    return {
+        "valid": True,
+        "state": "active",
+        "message": "invite token active",
+        "email": item.get("email") or "",
+        "full_name": item.get("full_name") or "",
+        "expires_at": expires_at,
+    }
 
 
 def _unique_placeholder_creator_code(conn, base: str) -> str:
@@ -577,6 +656,8 @@ def update_permissions(staff_id: int, permissions: dict[str, str], *, actor_is_o
         str(row["role"] or "readonly"),
         owner=bool(row["is_owner"]),
     )
+    if not bool(row["is_owner"]) and str(row["role"] or "").strip().lower() != "admin":
+        normalized = _strip_admin_levels(normalized)
     conn.execute(
         "UPDATE staff SET permissions_json = ? WHERE id = ?",
         (json.dumps(normalized), staff_id),
@@ -630,6 +711,8 @@ def resend_invite(staff_id: int, *, inviter_id: int) -> dict[str, Any]:
     user_id = int(row["user_id"] or 0)
     if not user_id:
         raise ValueError("staff user missing")
+    if row["accepted_at"]:
+        raise ValueError("staff account already activated; use reset password link")
 
     conn.execute(
         """

@@ -204,7 +204,7 @@ def _can_read_deep_health(request) -> bool:
 def _admin_permission_for_request(path: str, method: str) -> tuple[str, str, bool] | None:
     if method.upper() == "OPTIONS":
         return None
-    if path == "/api/admin/staff/accept-invite":
+    if path in {"/api/admin/staff/accept-invite", "/api/admin/staff/invite/status"}:
         return None
     mutating = method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
     level = "write" if mutating else "read"

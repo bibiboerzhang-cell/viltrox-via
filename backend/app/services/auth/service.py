@@ -24,15 +24,19 @@ def _row_value(user, key: str, default=None):
 def build_login_payload(user) -> dict:
     user_dict = dict(user)
     staff = staff_context_for_user(user_dict)
+    auth_role = str(user["role"] or "")
+    effective_role = str(staff.get("role") or auth_role or "readonly")
     return {
         "status": "success",
-        "token": make_token(user["id"], user["role"]),
+        "token": make_token(user["id"], auth_role),
         "user": {
             "id": user["id"],
             "email": user["email"],
             "name": user["name"],
             "creator_code": user["creator_code"],
-            "role": user["role"],
+            "role": effective_role,
+            "auth_role": auth_role,
+            "staff_role": effective_role,
             "points_balance": user["points_balance"],
             "points_pending": user["points_pending"],
             "points_total": user["points_total"],

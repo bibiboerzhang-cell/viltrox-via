@@ -192,6 +192,11 @@ def get_current_user(request: Request):
         from app.core.permissions import staff_context_for_user
 
         staff = staff_context_for_user(user_dict)
+        auth_role = str(user_dict.get("role") or "")
+        effective_role = str(staff.get("role") or auth_role or "readonly")
+        user_dict["auth_role"] = auth_role
+        user_dict["staff_role"] = effective_role
+        user_dict["role"] = effective_role
         user_dict["permissions"] = staff.get("permissions", {})
         user_dict["is_owner"] = bool(staff.get("is_owner"))
         user_dict["staff_id"] = staff.get("id") or staff.get("staff_id") or staff.get("user_id")

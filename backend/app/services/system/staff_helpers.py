@@ -50,6 +50,31 @@ def _validate_email_domain(email: str) -> None:
     _validate_staff_email(email)
 
 
+def _inviter_is_owner(conn, inviter_id: int) -> bool:
+    try:
+        row = conn.execute(
+            """
+            SELECT s.is_owner, u.email AS user_email
+            FROM staff s
+            LEFT JOIN users u ON u.id = s.user_id
+            WHERE s.user_id = ?
+            ORDER BY s.active DESC, s.id DESC
+            LIMIT 1
+            """,
+            (int(inviter_id),),
+        ).fetchone()
+    except Exception:
+        logger.debug("staff.inviter_owner_lookup_failed", extra={"inviter_id": inviter_id}, exc_info=True)
+        return False
+    if not row:
+        return False
+    return bool(row["is_owner"]) or str(row["user_email"] or "").strip().lower() in OWNER_EMAILS
+
+
+def _strip_admin_levels(permissions: dict[str, str]) -> dict[str, str]:
+    return {key: ("write" if value == "admin" else value) for key, value in permissions.items()}
+
+
 def _permissions_from_invite_body(body: dict) -> dict[str, Any]:
     raw = (
         body.get("permissions")
