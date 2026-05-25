@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.db.connection import get_conn
-from app.services.vkpi import product_aliases
+from app.domains.products import product_aliases
 
 
 def _now() -> str:

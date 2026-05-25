@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.services.vkpi import product_specs
+from app.domains.products import product_specs
 
 
 def _product(**overrides: Any) -> dict[str, Any]:
