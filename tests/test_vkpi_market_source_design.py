@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.services.vkpi import market_source_design
+from app.domains.market import source_design_use_case as market_source_design
 
 
 def test_source_registry_blocks_external_collection() -> None:

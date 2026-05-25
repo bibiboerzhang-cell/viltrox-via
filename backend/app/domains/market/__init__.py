@@ -58,6 +58,7 @@ from app.domains.market.source_design import (
     build_market_source_design_report_from_tables,
     source_readiness,
 )
+from app.domains.market.source_design_use_case import build_market_source_design_report
 from app.domains.market.signal_review_package import (
     build_external_signal_review_package,
     build_external_signal_review_package_from_files,
@@ -122,6 +123,7 @@ __all__ = [
     "build_market_intelligence_v0",
     "build_market_signal_classification",
     "build_market_source_design_report_from_tables",
+    "build_market_source_design_report",
     "build_market_signal_review_package",
     "build_market_signal_review_package_from_file",
     "build_market_signal_write_package",
