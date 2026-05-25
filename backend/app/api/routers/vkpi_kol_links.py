@@ -11,7 +11,7 @@ from app.domains import attribution as attribution_domain
 from app.services.kol.account_dossier import analyze_kol_account, get_kol_dossier, scan_kol_account
 from app.services.vkpi import kol_claims, scope
 from app.domains.kol.payload_utils import _int, _json_loads
-from app.api.routers.vkpi_kol_links_natural import _natural_search_payload
+from app.domains.kol.natural_search import _natural_search_payload
 from app.api.routers.vkpi_kol_links_profile import _assessment_payload, _contact_rows, _product_fit_payload
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-kol-links"])

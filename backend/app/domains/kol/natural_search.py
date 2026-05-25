@@ -4,10 +4,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from app.db.connection import get_conn
-from app.services.vkpi import kol_history_match
+from app.services.vkpi import kol_claims, kol_history_match
 
-from app.domains.kol.payload_utils import _float, _int, _json_loads
+from app.domains.kol.payload_utils import _clamp_score, _float, _int, _json_loads
 
 
 _PLATFORM_ALIASES = {
@@ -81,6 +80,10 @@ _DIRECTION_KEYWORDS = (
     "相机",
     "视频",
 )
+
+
+def _tokenize(text: str) -> set[str]:
+    return {part for part in re.split(r"[^a-z0-9\u4e00-\u9fff]+", str(text or "").lower()) if len(part) >= 2}
 
 
 def _parse_natural_query(query: str, platform_hint: str = "") -> dict[str, Any]:
