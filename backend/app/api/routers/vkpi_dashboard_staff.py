@@ -5,21 +5,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
 from app.domains import dashboard as dashboard_domain
-from app.services.vkpi import audit, decision_engine, scope, workflow
-from app.services.vkpi.workflow import staff_id as resolve_staff_id
+from app.domains import staff as staff_domain
+from app.services.vkpi import scope, workflow
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-dashboard"])
 
 
-def _is_manager_staff(staff: dict) -> bool:
-    role = str(staff.get("role") or "").strip().lower()
-    if int(staff.get("is_owner") or 0) == 1:
-        return True
-    return role in {"admin", "manager", "lead", "marketing_lead", "marketing_manager", "marketing-manager"}
-
-
 def _require_manager_staff(staff: dict) -> None:
-    if not _is_manager_staff(staff):
+    if not staff_domain.is_manager_staff(staff):
         raise HTTPException(status_code=403, detail="management permission required")
 
 
@@ -145,7 +138,7 @@ def dashboard_recent_content(
 @router.get("/staff-directory")
 def staff_directory(staff=Depends(require_tab("vkpi", "read"))):
     _require_manager_staff(staff)
-    return decision_engine.staff_directory()
+    return staff_domain.staff_directory()
 
 
 @router.get("/staff/{staff_id}/profile")
@@ -156,24 +149,7 @@ def staff_profile(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     try:
-        result = decision_engine.staff_profile(staff_id, staff=staff, window=window, limit=limit)
-        audit.log_sensitive_access(
-            staff_id=resolve_staff_id(staff),
-            action_type="view_staff_profile",
-            resource_type="staff",
-            resource_id=str(staff_id),
-            page_path=f"/api/admin/vkpi/staff/{staff_id}/profile",
-            metadata={"window": window, "limit": limit, "costs_visible": result.get("visibility", {}).get("costs_visible")},
-        )
-        audit.log_business_event(
-            staff_id=resolve_staff_id(staff),
-            action_type="staff_profile_view",
-            target_type="staff",
-            target_id=staff_id,
-            detail="view employee V-KPI profile",
-            metadata={"window": window, "limit": limit},
-        )
-        return result
+        return staff_domain.build_staff_profile(staff_id, staff=staff, window=window, limit=limit)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
@@ -187,7 +163,7 @@ def staff_kpi(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     try:
-        return decision_engine.staff_kpi(window=window, staff_id=scope.effective_staff_id(staff, staff_id))
+        return staff_domain.build_staff_kpi(window=window, staff_id=staff_id, staff=staff)
     except scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
 
@@ -197,8 +173,7 @@ def employee_workspace(
     staff_id: int | None = None,
     staff=Depends(require_tab("vkpi", "read")),
 ):
-    effective_staff_id = scope.effective_staff_id(staff, staff_id) or resolve_staff_id(staff)
-    return decision_engine.employee_workspace(int(effective_staff_id or 0))
+    return staff_domain.build_employee_workspace(staff_id=staff_id, staff=staff)
 
 
 @router.get("/dashboard/view/{view}")
