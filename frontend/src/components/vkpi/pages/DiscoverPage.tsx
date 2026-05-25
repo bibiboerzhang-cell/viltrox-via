@@ -27,7 +27,6 @@ import {
   isPlatformSearchCandidate,
   kolOptionToUiKol,
   kolPoolIdForCompetitors,
-  loadSearchHistory,
   lookupToUiKol,
   normalizeHandle,
   platformInputValue,
@@ -35,9 +34,9 @@ import {
   promotedResultToUiKol,
   rawToUiKol,
   recentPosts,
-  recommendationToSmart,
-  recommendationToUiKol,
 } from './discover/DiscoverKolModel';
+import { loadSearchHistory } from './discover/DiscoverSearchHistory';
+import { recommendationToSmart, recommendationToUiKol } from './discover/DiscoverRecommendationModel';
 import {
   loadDiscoverKols,
   runDiscoverSearch,

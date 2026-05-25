@@ -18,7 +18,7 @@ import { SearchPanel, SearchProgress } from './DiscoverSearchPanel';
 import { ProfilePanel } from './DiscoverProfilePanel';
 import { CandidateDecisionBanner, DiscoverFocusBanner, DiscoveryQueuePanel, type DiscoveryQueueItem } from './DiscoverQueuePanels';
 import { RecommendationPanel, type RecommendationAction, type SmartRecommendation } from './DiscoverRecommendationPanel';
-import { recommendationToUiKol } from './DiscoverKolModel';
+import { recommendationToUiKol } from './DiscoverRecommendationModel';
 import type { CompetitorRelation, ContactItem, Dimensions11Payload, ProductFitItem, SearchHistoryItem, UiKol } from './DiscoverTypes';
 import type { SearchProgressState } from './DiscoverProgressModel';
 import type { DirectionChip } from './DiscoverQueueModel';

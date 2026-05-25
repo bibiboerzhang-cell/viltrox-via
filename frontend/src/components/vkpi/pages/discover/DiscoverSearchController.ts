@@ -7,12 +7,11 @@ import {
   candidatePostsFromRaw,
   instantCandidateToUiKol,
   lookupToUiKol,
-  MAX_SEARCH_HISTORY,
   mergeSearchKols,
   platformSearchItemToUiKol,
   rawToUiKol,
-  saveSearchHistory,
 } from './DiscoverKolModel';
+import { MAX_SEARCH_HISTORY, saveSearchHistory } from './DiscoverSearchHistory';
 import type { SearchHistoryItem, UiKol } from './DiscoverTypes';
 
 type NoticeTone = 'info' | 'warn' | 'error';
