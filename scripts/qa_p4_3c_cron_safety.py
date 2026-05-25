@@ -26,7 +26,7 @@ from _smoke_seed import cleanup_admin, seed_admin  # noqa: E402
 from app.core.security import make_token  # noqa: E402
 from app.db.connection import get_conn  # noqa: E402
 from app.main import app  # noqa: E402
-from app.services.vkpi import cron  # noqa: E402
+from app.domains.sync import cron  # noqa: E402
 from app.services.vkpi.schema_audit import ensure_vkpi_audit_schema  # noqa: E402
 
 OUT_MD = ROOT / "docs/audits/2026-05-15-p4-3c-cron-safety.md"

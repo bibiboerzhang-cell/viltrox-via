@@ -17,7 +17,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from app.api.dependencies.perms import require_tab
 from app.domains import sync as sync_domain
 from app.domains.sync import sync_status
-from app.services.vkpi import cron
+from app.domains.sync import cron
 from app.services.vkpi.audit_decorator import audit_action
 
 

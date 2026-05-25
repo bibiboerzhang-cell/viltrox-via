@@ -22,7 +22,8 @@ os.environ["YOUTUBE_API_KEY"] = ""
 os.environ["GOOGLE_YOUTUBE_API_KEY"] = ""
 
 from app.db.connection import get_conn  # noqa: E402
-from app.services.vkpi import cron, industry_data, industry_snapshot_collector  # noqa: E402
+from app.domains.sync import cron  # noqa: E402
+from app.services.vkpi import industry_data, industry_snapshot_collector  # noqa: E402
 
 
 def _cleanup(marker: str) -> None:

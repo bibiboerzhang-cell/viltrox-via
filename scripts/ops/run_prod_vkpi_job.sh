@@ -48,7 +48,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.services.vkpi.cron import run_manual_job
+from app.domains.sync.cron import run_manual_job
 
 
 _log_fp = open(os.environ['LOG_FILE'], 'a', encoding='utf-8')

@@ -22,7 +22,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.db.connection import close_db_runtime  # noqa: E402
-from app.services.vkpi.cron import run_job  # noqa: E402
+from app.domains.sync.cron import run_job  # noqa: E402
 from app.services.vkpi.daily_sync import SyncFailFast, SyncGuardBlocked  # noqa: E402
 
 

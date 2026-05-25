@@ -150,7 +150,7 @@ async def job_via_daily_learning():
 async def job_vkpi_lineage_snapshot():
     """V-KPI metric lineage snapshot for dashboard drilldown evidence."""
     try:
-        from app.services.vkpi import cron
+        from app.domains.sync import cron
 
         result = await cron.run_job("lineage_snapshot", {"period_days": 7})
         logger.info("scheduler.vkpi_lineage_snapshot", extra={"result": result.get("status")})
@@ -161,7 +161,7 @@ async def job_vkpi_lineage_snapshot():
 async def job_vkpi_kpi_rollup():
     """V-KPI daily staff KPI/workload rollup."""
     try:
-        from app.services.vkpi import cron
+        from app.domains.sync import cron
 
         result = await cron.run_job("kpi_rollup", {})
         logger.info("scheduler.vkpi_kpi_rollup", extra={"result": result.get("status")})
@@ -172,7 +172,7 @@ async def job_vkpi_kpi_rollup():
 async def job_vkpi_alerts():
     """V-KPI workflow reminders and stalled project alerts."""
     try:
-        from app.services.vkpi import cron
+        from app.domains.sync import cron
 
         result = await cron.run_job("alerts", {})
         logger.info("scheduler.vkpi_alerts", extra={"result": result.get("status")})
@@ -183,7 +183,7 @@ async def job_vkpi_alerts():
 async def job_vkpi_weekly_report():
     """Generate the manager weekly report from real V-KPI data."""
     try:
-        from app.services.vkpi import cron
+        from app.domains.sync import cron
 
         result = await cron.run_job("weekly_report", {"period_days": 7})
         logger.info("scheduler.vkpi_weekly_report", extra={"result": result.get("status")})
@@ -194,7 +194,7 @@ async def job_vkpi_weekly_report():
 async def job_vkpi_channels_sync():
     """Mark employee platform channels for sync; no fake metrics are written."""
     try:
-        from app.services.vkpi import cron
+        from app.domains.sync import cron
 
         result = await cron.run_job("channels_sync", {})
         logger.info("scheduler.vkpi_channels_sync", extra={"synced": result.get("synced")})
@@ -205,7 +205,7 @@ async def job_vkpi_channels_sync():
 async def job_vkpi_morning_sync():
     """Daily 08:00 China sync for channels, product monitor, and per-staff outreach digest."""
     try:
-        from app.services.vkpi import cron
+        from app.domains.sync import cron
 
         result = await cron.run_job("morning_sync", {"limit": 100, "max_videos": 50, "period_days": 1})
         logger.info(

@@ -19,7 +19,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.db.connection import close_db_runtime  # noqa: E402
-from app.services.vkpi.cron import manual_job_policy  # noqa: E402
+from app.domains.sync.cron import manual_job_policy  # noqa: E402
 from scripts import vkpi_channel_delta_dry_run, vkpi_official_baseline_plan  # noqa: E402
 
 
