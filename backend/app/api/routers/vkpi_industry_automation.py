@@ -5,15 +5,13 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.api.routers.vkpi_industry_market import router as market_router
 from app.api.dependencies.perms import require_tab
+from app.domains import intelligence as intelligence_domain
 from app.services.vkpi import (
     ab_experiments,
     audience_graph,
-    brief_agent_v0,
-    brain_layer_acceptance_v0,
     brand_signal_detector,
     competitor_brain,
     content_brain,
-    evidence_agent_v0,
     industry_data,
     llm_gateway,
     new_launch_acceptance_v0,
@@ -21,11 +19,8 @@ from app.services.vkpi import (
     outcome_collector,
     prediction_calibration_v0,
     product_campaign_card,
-    recommendation_agent_v0,
     training_data_export,
-    today_new_signals_v0,
     trend_detection_v0,
-    weekly_action_plan_v0,
 )
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-industry-automation"])
@@ -309,7 +304,7 @@ def industry_brain_layer_acceptance_v0(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     del staff
-    return brain_layer_acceptance_v0.build_brain_layer_acceptance_v0()
+    return intelligence_domain.build_brain_layer_acceptance_v0()
 
 
 @router.get("/industry-data/evidence-agent/v0")
@@ -322,7 +317,7 @@ def industry_evidence_agent_v0(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     del staff
-    return evidence_agent_v0.build_evidence_agent_v0(
+    return intelligence_domain.build_evidence_agent_v0(
         kol_pool_ids=kol_pool_ids,
         limit=limit,
         ref_limit=ref_limit,
@@ -342,7 +337,7 @@ def industry_recommendation_agent_v0(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     del staff
-    return recommendation_agent_v0.build_recommendation_agent_v0(
+    return intelligence_domain.build_recommendation_agent_v0(
         kol_pool_ids=kol_pool_ids,
         limit=limit,
         min_evidence_refs=min_evidence_refs,
@@ -363,7 +358,7 @@ def industry_brief_agent_v0(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     del staff
-    return brief_agent_v0.build_brief_agent_v0(
+    return intelligence_domain.build_brief_agent_v0(
         kol_pool_ids=kol_pool_ids,
         limit=limit,
         min_evidence_refs=min_evidence_refs,
@@ -380,7 +375,7 @@ def industry_today_new_signals_v0(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     del staff
-    return today_new_signals_v0.build_today_new_signals_v0(
+    return intelligence_domain.build_today_new_signals_v0(
         lookback_hours=lookback_hours,
         limit=limit,
     )
@@ -394,7 +389,7 @@ def industry_weekly_action_plan_v0(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     del staff
-    return weekly_action_plan_v0.build_weekly_action_plan_v0(
+    return intelligence_domain.build_weekly_action_plan_v0(
         sku=sku,
         top_n=top_n,
         lookback_hours=lookback_hours,

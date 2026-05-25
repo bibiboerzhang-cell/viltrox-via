@@ -16,7 +16,7 @@ if str(BACKEND) not in sys.path:
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.services.vkpi import brain_layer_acceptance_v0  # noqa: E402
+from app.domains.intelligence import brain_acceptance_use_case as brain_layer_acceptance_v0  # noqa: E402
 
 
 def _as_dict(value: Any) -> dict[str, Any]:

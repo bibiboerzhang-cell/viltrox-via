@@ -26,7 +26,7 @@ from app.domains.intelligence.recommendation_agent import (
     rank_recommendation_candidates,
     text,
 )
-from app.services.vkpi import evidence_agent_v0
+from app.domains.intelligence import evidence_agent_use_case as evidence_agent_v0
 
 
 DEFAULT_OPS_DIR = "runtime/ops"

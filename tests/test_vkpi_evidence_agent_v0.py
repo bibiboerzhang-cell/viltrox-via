@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from app.services.vkpi import evidence_agent_v0
+from app.domains.intelligence import evidence_agent_use_case as evidence_agent_v0
 
 
 def _summary_payload(kol_pool_id: int = 101) -> dict:

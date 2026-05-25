@@ -17,7 +17,7 @@ from app.domains.intelligence.brief_agent import (
     parse_kol_pool_ids,
     recommendation_report_available,
 )
-from app.services.vkpi import recommendation_agent_v0
+from app.domains.intelligence import recommendation_use_case as recommendation_agent_v0
 
 
 DEFAULT_OPS_DIR = "runtime/ops"
