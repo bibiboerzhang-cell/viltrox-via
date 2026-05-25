@@ -28,8 +28,8 @@ if str(ROOT) not in sys.path:
 
 from app.db.connection import close_db_runtime, get_conn  # noqa: E402
 from app.domains.kol import decision_audit as kol_decisions  # noqa: E402
+from app.domains.kol import intelligence_card as kol_intelligence_card  # noqa: E402
 from app.services.vkpi import (  # noqa: E402
-    kol_intelligence_card,
     natural_search,
     recommendation_feedback_backlog,
 )

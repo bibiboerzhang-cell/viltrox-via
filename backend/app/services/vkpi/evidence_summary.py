@@ -10,7 +10,8 @@ import hashlib
 from datetime import datetime, timezone
 from typing import Any
 
-from app.services.vkpi import kol_intelligence_card, llm_gateway
+from app.domains.kol import intelligence_card as kol_intelligence_card
+from app.services.vkpi import llm_gateway
 
 
 SECTION_ORDER = (
