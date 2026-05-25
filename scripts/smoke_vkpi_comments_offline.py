@@ -29,7 +29,7 @@ def main():
     
     print("[1] Module import...")
     try:
-        from app.services.vkpi import comments_collector
+        from app.domains.comments import collector as comments_collector
         print("  ✓ imported")
     except Exception as exc:
         failures.append(f"Cannot import comments_collector: {exc}")

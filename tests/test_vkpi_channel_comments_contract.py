@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.services.vkpi import channel_comments
+from app.domains.comments import channel as channel_comments
 
 
 class _Rows:
@@ -67,7 +67,7 @@ def test_comment_contract_distinguishes_unsupported_from_empty():
 
 
 def test_channel_post_comments_exposes_contract_fields(monkeypatch):
-    from app.services.vkpi import comments_collector
+    from app.domains.comments import collector as comments_collector
 
     monkeypatch.setattr(comments_collector, "ensure_vkpi_comments_schema", lambda: None)
     monkeypatch.setattr(channel_comments.channels, "_latest_channel_row", lambda *_args, **_kwargs: {"id": 1, "platform": "instagram"})

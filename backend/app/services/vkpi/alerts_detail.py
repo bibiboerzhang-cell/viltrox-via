@@ -24,7 +24,8 @@ def _parse_metadata(value: Any) -> dict[str, Any]:
 def get_alert_detail(alert_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     """Return source rows behind an alert for evidence-first drilldown."""
     ensure_vkpi_schema()
-    from app.services.vkpi import comments_collector, sentiment
+    from app.domains.comments import collector as comments_collector
+    from app.services.vkpi import sentiment
 
     conn = get_conn()
     row = conn.execute("SELECT * FROM vkpi_alerts WHERE id=?", (int(alert_id),)).fetchone()

@@ -9,9 +9,9 @@ from typing import Any
 
 from app.domains.kol import competitor_detector as kol_competitor_detector
 from app.db.connection import get_conn
+from app.domains.comments import intelligence as comment_intelligence
 from app.services.vkpi import (
     brand_signal_detector,
-    comment_intelligence,
     eleven_dimensions,
 )
 

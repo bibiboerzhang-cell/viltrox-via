@@ -3,7 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from app.db.connection import get_conn
-from app.services.vkpi import comment_intelligence, comments_collector
+from app.domains.comments import collector as comments_collector
+from app.domains.comments import intelligence as comment_intelligence
 
 
 MARKER = "vkpi-comment-intelligence-readonly-unit"

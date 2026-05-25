@@ -11,7 +11,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_permission
-from app.services.vkpi import comments_collector
+from app.domains.comments import collector as comments_collector
 from app.services.vkpi.p1_compat import admin_router_prefix
 
 

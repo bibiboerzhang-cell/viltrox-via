@@ -1,5 +1,5 @@
 """
-backend/app/services/vkpi/comments_collector.py
+backend/app/domains/comments/collector.py
 
 P1.3: Comments collection service.
 

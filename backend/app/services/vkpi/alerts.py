@@ -146,7 +146,8 @@ def generate_comment_intelligence_alerts(
 ) -> dict[str, Any]:
     """Create alerts from analyzed comments without invoking crawlers or LLMs."""
     ensure_vkpi_schema()
-    from app.services.vkpi import comments_collector, platform_crawl_settings, sentiment
+    from app.domains.comments import collector as comments_collector
+    from app.services.vkpi import platform_crawl_settings, sentiment
 
     comments_collector.ensure_vkpi_comments_schema()
     sentiment.ensure_vkpi_sentiment_schema()

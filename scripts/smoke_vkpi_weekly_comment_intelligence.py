@@ -17,10 +17,10 @@ os.environ["LLM_MONTHLY_BUDGET_USD"] = "0"
 
 def main() -> None:
     from app.db.connection import get_conn
+    from app.domains.comments import collector as comments_collector
+    from app.domains.comments import intelligence as comment_intelligence
     from app.domains.reports import weekly_generator as weekly_report_generator
     from app.services.vkpi import (
-        comment_intelligence,
-        comments_collector,
         pillars,
         sentiment,
     )

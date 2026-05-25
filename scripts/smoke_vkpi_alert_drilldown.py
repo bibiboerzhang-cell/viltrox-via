@@ -16,7 +16,8 @@ os.environ["LLM_MONTHLY_BUDGET_USD"] = "0"
 
 def main() -> None:
     from app.db.connection import get_conn
-    from app.services.vkpi import alerts, comments_collector, sentiment
+    from app.domains.comments import collector as comments_collector
+    from app.services.vkpi import alerts, sentiment
 
     marker = f"ad_{uuid.uuid4().hex[:10]}"
     conn = get_conn()

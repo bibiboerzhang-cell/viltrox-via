@@ -22,7 +22,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.db.connection import close_db_runtime, get_conn
-from app.services.vkpi import channel_comments
+from app.domains.comments import channel as channel_comments
 
 
 def _staff() -> dict[str, Any]:
