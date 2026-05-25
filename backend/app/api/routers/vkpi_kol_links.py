@@ -96,8 +96,7 @@ def kol_contacts(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     try:
-        kol_claims_domain.assert_kol_access(int(kol_id), staff, allow_unclaimed=True)
-        return kol_contacts_domain.contact_rows(int(kol_id), include_wrong=include_wrong)
+        return kol_contacts_domain.contact_rows_for_request(int(kol_id), include_wrong=include_wrong, staff=staff)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:

@@ -32,6 +32,23 @@ def test_kol_contacts_domain_adds_new_contact(monkeypatch):
     assert payload["contact_links"][-1]["confidence"] == 91
 
 
+def test_kol_contacts_domain_contact_rows_request_checks_access(monkeypatch):
+    calls: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        contacts_domain.claims_domain,
+        "assert_kol_access",
+        lambda kol_id, staff, *, allow_unclaimed=False: calls.setdefault("access", (kol_id, staff, allow_unclaimed)),
+    )
+    monkeypatch.setattr(contacts_domain, "_contact_rows", lambda kol_id, *, include_wrong: {"kol_id": kol_id, "include_wrong": include_wrong})
+
+    assert contacts_domain.contact_rows_for_request(9, include_wrong=True, staff={"id": 1}) == {
+        "kol_id": 9,
+        "include_wrong": True,
+    }
+    assert calls["access"] == (9, {"id": 1}, True)
+
+
 def test_kol_contacts_domain_rejects_missing_contact_value():
     try:
         contacts_domain.add_contact(7, {"contact_type": "email"}, staff={"id": 1})

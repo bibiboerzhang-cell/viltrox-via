@@ -12,6 +12,16 @@ def contact_rows(kol_id: int, *, include_wrong: bool = False) -> dict[str, Any]:
     return _contact_rows(kol_id, include_wrong=include_wrong)
 
 
+def contact_rows_for_request(
+    kol_id: int,
+    *,
+    include_wrong: bool = False,
+    staff: dict[str, Any],
+) -> dict[str, Any]:
+    claims_domain.assert_kol_access(int(kol_id), staff, allow_unclaimed=True)
+    return contact_rows(int(kol_id), include_wrong=include_wrong)
+
+
 def add_contact(kol_id: int, body: dict[str, Any], *, staff: dict[str, Any]) -> dict[str, Any]:
     contact_type = str(body.get("contact_type") or body.get("type") or "").strip().lower()
     contact_value = str(body.get("contact_value") or body.get("value") or "").strip()
