@@ -1,7 +1,7 @@
 """V-KPI workflow public compatibility module."""
 from __future__ import annotations
 
-from app.services.vkpi.workflow_common import (
+from app.domains.projects.workflow_common import (
     ALLOWED_TRANSITIONS,
     PRIMARY_STEP_FLOW,
     PROJECT_STAGES,
@@ -21,8 +21,8 @@ from app.services.vkpi.workflow_common import (
     stage_config,
     utcnow,
 )
-from app.services.vkpi.workflow_detail import project_detail
-from app.services.vkpi.workflow_evidence import (
+from app.domains.projects.workflow_detail import project_detail
+from app.domains.projects.workflow_evidence import (
     add_project_content,
     add_project_message,
     add_project_shipment,

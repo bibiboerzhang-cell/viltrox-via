@@ -8,7 +8,7 @@ from app.db.connection import get_conn
 from app.services.vkpi import scope
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.schema_audit import ensure_vkpi_audit_schema
-from app.services.vkpi.workflow_common import _int
+from app.domains.projects.workflow_common import _int
 
 def project_detail(project_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     ensure_vkpi_schema()

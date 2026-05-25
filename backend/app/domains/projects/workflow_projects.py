@@ -8,7 +8,7 @@ from typing import Any
 from app.db.connection import get_conn
 from app.services.vkpi import audit, scope
 from app.services.vkpi.schema import ensure_vkpi_schema
-from app.services.vkpi.workflow_common import (
+from app.domains.projects.workflow_common import (
     PROJECT_STAGES,
     TERMINAL_STAGES,
     _int,
