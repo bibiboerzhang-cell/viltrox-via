@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.services.vkpi import ai_brief
+import app.domains.intelligence.ai_brief as ai_brief
 from scripts import vkpi_ai_brief_acceptance
 
 

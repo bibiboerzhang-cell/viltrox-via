@@ -28,10 +28,10 @@ from app.domains.kol import eleven_dimensions
 from app.domains.kol import intelligence_card as kol_intelligence_card
 from app.domains.kol import pool as kol_pool
 from app.domains.intelligence import gemini_single_kol_preflight
+import app.domains.intelligence.ai_brief as ai_brief
 import app.domains.evidence.summary as evidence_summary
 import app.domains.sync.refresh_tier as refresh_tier
 from app.services.vkpi import (
-    ai_brief,
     task_enqueue,
 )
 from app.services.vkpi.audit_decorator import audit_action
