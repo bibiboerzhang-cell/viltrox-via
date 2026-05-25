@@ -5,6 +5,7 @@ import { platformDisplay, safeNumber } from '../../shared/vkpiDataUtils';
 import { numberFormatter } from '../../shared/vkpiFormatters';
 import { proxiedImageUrl } from '../../shared/mediaProxy';
 import { KolMediaLightbox, KolMediaSlot, mediaBadge } from './MyKolMedia';
+import { MyKolAccounts } from './MyKolAccounts';
 import { MyKolDiscoveryBridge } from './MyKolDiscoveryBridge';
 import { MyKolPlatformCards } from './MyKolPlatformCards';
 import { buildMyKolItems, buildPlatformMetrics, categoryForPost, commentsForPost, compactContactValue, compactDate, conciseText, contactDraftFor, contactItems, displayCount, fetchAllKolPostRows, filterAndSortPosts, funnelStageFor, initials, latestSnapshotPosts, mapCommentRows, mapPostRows, platformFilterFromRaw, postPreviews, searchMatches, summarize, summarizePostInsights, textField } from './myKolMatrixData';
@@ -455,102 +456,20 @@ export function MyKolMatrix({ apiToken, data, initialPlatform, onDiscoverPlatfor
 
       {filteredItems.length ? (
         <>
-          <section className="vkpi-my-kol-accounts">
-            <div className="vkpi-my-kol-accounts__header">
-              <div>
-                <span>账号层</span>
-                <h3>{platformFilter === 'all' ? '我的 KOL 账号' : `${platformFilter} KOL 账号`}</h3>
-              </div>
-              <div className="vkpi-my-kol-section-actions">
-                <strong>{numberFormatter.format(filteredItems.length)} 个账号</strong>
-                <button
-                  aria-expanded={!accountLayerCollapsed}
-                  className="vkpi-my-kol-section-toggle"
-                  onClick={() => setAccountLayerCollapsed((value) => !value)}
-                  type="button"
-                >
-                  {accountLayerCollapsed ? '展开' : '折叠'}
-                </button>
-              </div>
-            </div>
-            {accountLayerCollapsed ? (
-              <div className="vkpi-my-kol-section-collapsed">账号层已折叠 · {numberFormatter.format(filteredItems.length)} 个账号</div>
-            ) : (
-            <div className="vkpi-my-kol-account-grid">
-              {filteredItems.map((item) => {
-                const profile = kolProfiles[item.kolId];
-                const contacts = contactItems(item, profile, contactOverrides[item.id]);
-                const avatar = proxiedImageUrl(textField(profile?.kol, 'avatar_url') || item.avatar);
-                const summary = profile?.summary || {};
-                const followerLabel = displayCount(summary.follower_count || 0) !== '0' ? displayCount(summary.follower_count) : item.followers;
-                const contentLabel = displayCount(summary.content_count || 0) !== '0' ? displayCount(summary.content_count) : item.contentCount;
-                const accountPosts = latestSnapshotPosts(kolPosts[item.kolId]?.items?.length ? kolPosts[item.kolId].items : postPreviews(profile), profile);
-                const accountInsights = summarizePostInsights(accountPosts, profile);
-                const active = selectedItem?.id === item.id;
-                return (
-                  <article
-                    className={`vkpi-my-kol-account-card${active ? ' is-active' : ''}`}
-                    key={item.id}
-                    onClick={() => setSelectedKolId(item.id)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' || event.key === ' ') setSelectedKolId(item.id);
-                    }}
-                    role="button"
-                    tabIndex={0}
-                  >
-                    <div className="vkpi-my-kol-account-card__avatar">
-                      {avatar ? <img src={avatar} alt="" loading="lazy" /> : <span>{initials(item.name)}</span>}
-                    </div>
-                    <div className="vkpi-my-kol-account-card__main">
-                      <div className="vkpi-my-kol-account-card__title">
-                        <h3>{item.name}</h3>
-                        <strong>{followerLabel}</strong>
-                      </div>
-                      <p>{item.handle} · {platformDisplay(item.platform)} · {contentLabel} 内容</p>
-                      <div className="vkpi-my-kol-account-card__metrics">
-                        <span>播放 {displayCount(accountInsights.totalViews)}</span>
-                        <span>评论 {displayCount(accountInsights.totalComments)}</span>
-                        <span>互动率 {accountInsights.engagement ? `${accountInsights.engagement.toFixed(2)}%` : '-'}</span>
-                      </div>
-                      <div className="vkpi-my-kol-account-card__chips">
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setDevicePopoverId((current) => (current === item.id ? '' : item.id));
-                          }}
-                        >
-                          设备分析
-                        </button>
-                        <span>V内容 {numberFormatter.format(accountInsights.viltroxCount)}</span>
-                        <span>竞品 {numberFormatter.format(accountInsights.competitorCount)}</span>
-                        <span>均播 {displayCount(accountInsights.avgViews)}</span>
-                      </div>
-                      {devicePopoverId === item.id ? (
-                        <div className="vkpi-my-kol-account-popover" onClick={(event) => event.stopPropagation()} role="dialog" aria-label={`${item.name} 设备与内容分析`}>
-                          <header>
-                            <strong>设备与内容分析</strong>
-                            <button type="button" onClick={() => setDevicePopoverId('')} aria-label="关闭">×</button>
-                          </header>
-                          <dl>
-                            <div><dt>设备使用</dt><dd>{accountInsights.gearLabel}</dd></div>
-                            <div><dt>Viltrox内容</dt><dd>{numberFormatter.format(accountInsights.viltroxCount)}</dd></div>
-                            <div><dt>竞品内容</dt><dd>{numberFormatter.format(accountInsights.competitorCount)}</dd></div>
-                            <div><dt>其它内容</dt><dd>{numberFormatter.format(accountInsights.otherCount)}</dd></div>
-                            <div><dt>最后抓取</dt><dd>{accountInsights.scanLabel}</dd></div>
-                            <div><dt>平均播放</dt><dd>{displayCount(accountInsights.avgViews)}</dd></div>
-                            <div><dt>互动率</dt><dd>{accountInsights.engagement ? `${accountInsights.engagement.toFixed(2)}%` : '-'}</dd></div>
-                          </dl>
-                        </div>
-                      ) : null}
-                      <small>{profile ? '已抓取账号数据' : '待抓取账号数据'} · {item.subStatus} · {item.isFollowed ? '已关注' : '未关注'} · {contacts.length ? `联系 ${contacts.length}` : '待补联系方式'}</small>
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-            )}
-          </section>
+          <MyKolAccounts
+            collapsed={accountLayerCollapsed}
+            contactOverrides={contactOverrides}
+            devicePopoverId={devicePopoverId}
+            items={filteredItems}
+            kolPosts={kolPosts}
+            kolProfiles={kolProfiles}
+            onCloseDevicePopover={() => setDevicePopoverId('')}
+            onSelectItem={setSelectedKolId}
+            onToggleCollapsed={() => setAccountLayerCollapsed((value) => !value)}
+            onToggleDevicePopover={(id) => setDevicePopoverId((current) => (current === id ? '' : id))}
+            platformFilter={platformFilter}
+            selectedItem={selectedItem}
+          />
 
           {selectedItem ? (
             <section className="vkpi-my-kol-content-layer">
