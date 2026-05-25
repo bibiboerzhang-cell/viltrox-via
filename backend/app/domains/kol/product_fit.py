@@ -13,7 +13,7 @@ from app.services.vkpi import memory
 from app.services.vkpi.budget_guard import check_budget, get_budget_status
 from app.domains.kol.product_fit_helpers import *  # noqa: F403
 from app.domains.kol.product_fit_persistence import persist_product_fit_preview_run
-from app.services.vkpi.new_launch_match import (
+from app.domains.recommendations.new_launch_match import (
     BUDGET_SCOPE,
     FORBIDDEN_WRITE_FLAGS,
     _contact_score,

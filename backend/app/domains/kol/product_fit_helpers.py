@@ -8,7 +8,7 @@ from typing import Any
 
 from app.db.connection import get_conn
 from app.services.vkpi import llm_gateway
-from app.services.vkpi.new_launch_match import (
+from app.domains.recommendations.new_launch_match import (
     _country_key,
     _entity_payload,
     _evidence_count,

@@ -8,8 +8,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.db.connection import get_conn, get_db_actor_stats, probe_postgres_connectivity
-from app.domains.recommendations import product_analysis
-from app.services.vkpi import alerts, memory, new_launch_match
+from app.domains.recommendations import new_launch_match, product_analysis
+from app.services.vkpi import alerts, memory
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 

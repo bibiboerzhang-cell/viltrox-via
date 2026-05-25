@@ -12,7 +12,7 @@ from app.db.connection import get_conn
 from app.services.vkpi import llm_gateway
 from app.services.vkpi.budget_guard import check_budget, get_budget_status
 from app.services.vkpi.project_next_action_format import format_preview_summary, render_markdown
-from app.services.vkpi.new_launch_match import (
+from app.domains.recommendations.new_launch_match import (
     BUDGET_SCOPE,
     FORBIDDEN_WRITE_FLAGS,
     _distribution,
@@ -654,4 +654,3 @@ def build_project_next_action_preview(
     _json_write(json_out, {key: value for key, value in payload.items() if key != "markdown_items"})
     _markdown_write(md_out, payload)
     return payload
-

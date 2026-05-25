@@ -7,7 +7,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
-from app.services.vkpi.new_launch_match import _json_default, _row_to_dict
+from app.domains.recommendations.new_launch_match import _json_default, _row_to_dict
 
 
 logger = get_logger(__name__)
