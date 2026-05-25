@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
 from app.db.connection import get_conn
-from app.services.vkpi import audit, decision_engine, kol_pool, metric_lineage, scope, workflow
+from app.services.vkpi import audit, channels, decision_engine, kol_pool, metric_lineage, scope, workflow
 from app.services.vkpi.country_coords import country_geo, resolve_country_code
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
 
@@ -97,6 +97,21 @@ def _dashboard_int(value: Any) -> int:
         return int(float(value or 0))
     except (TypeError, ValueError):
         return 0
+
+
+def _dashboard_official_matrix_summary(limit: int = 20) -> dict[str, Any]:
+    try:
+        matrix = channels.official_account_matrix(limit=limit)
+    except Exception:
+        return {}
+    platforms = matrix.get("platforms") if isinstance(matrix.get("platforms"), list) else []
+    return {
+        "account_count": _dashboard_int(matrix.get("account_count")),
+        "post_count": _dashboard_int(matrix.get("post_count")),
+        "total_views": _dashboard_int(matrix.get("total_views")),
+        "platform_count": len(platforms),
+        "source": "official-channel-matrix",
+    }
 
 
 def _dashboard_recent_official_content(limit: int) -> list[dict[str, Any]]:
@@ -416,6 +431,14 @@ def dashboard(
         )
         result["metric_run"] = lineage.get("run") or {}
         result["metrics"] = lineage.get("metrics") or []
+        official_summary = _dashboard_official_matrix_summary(limit=20)
+        if official_summary:
+            result["official_matrix_summary"] = official_summary
+            summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+            summary["official_account_count"] = official_summary["account_count"]
+            summary["official_post_count"] = official_summary["post_count"]
+            summary["official_total_views"] = official_summary["total_views"]
+            result["summary"] = summary
     except scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
     return result
