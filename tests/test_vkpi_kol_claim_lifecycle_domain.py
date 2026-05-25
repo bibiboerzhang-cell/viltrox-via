@@ -112,3 +112,49 @@ def test_kol_claim_lifecycle_release_updates_claim_and_audits(monkeypatch):
     assert update_kol_params == ("2026-05-25T00:00:00Z", 9)
     assert conn.committed is True
     assert audit_calls[0]["action_type"] == "kol_claim_release"
+
+
+def test_kol_claim_lifecycle_reassign_requires_target_staff(monkeypatch):
+    monkeypatch.setattr(claim_lifecycle, "ensure_vkpi_schema", lambda: None)
+
+    with pytest.raises(ValueError, match="to_staff_id required"):
+        claim_lifecycle.reassign(4, {}, staff={"id": 7})
+
+
+def test_kol_claim_lifecycle_reassign_requires_claim(monkeypatch):
+    conn = _Conn([None])
+    monkeypatch.setattr(claim_lifecycle, "get_conn", lambda: conn)
+    monkeypatch.setattr(claim_lifecycle, "ensure_vkpi_schema", lambda: None)
+
+    with pytest.raises(LookupError, match="claim not found"):
+        claim_lifecycle.reassign(4, {"staff_id": 8}, staff={"id": 7})
+
+
+def test_kol_claim_lifecycle_reassign_releases_and_reclaims(monkeypatch):
+    conn = _Conn([{"id": 4, "kol_id": 9, "staff_id": 7, "project_id": 12}])
+    audit_calls = []
+    lifecycle_calls = []
+    monkeypatch.setattr(claim_lifecycle, "get_conn", lambda: conn)
+    monkeypatch.setattr(claim_lifecycle, "ensure_vkpi_schema", lambda: None)
+    monkeypatch.setattr(claim_lifecycle, "release", lambda claim_id, body, *, staff: lifecycle_calls.append(("release", claim_id, body, staff)))
+    monkeypatch.setattr(
+        claim_lifecycle,
+        "claim",
+        lambda kol_id, body, *, staff: lifecycle_calls.append(("claim", kol_id, body, staff)) or {"claim": {"id": 22}},
+    )
+    monkeypatch.setattr(claim_lifecycle.claim_audit, "log_kol_audit", lambda **kwargs: audit_calls.append(kwargs))
+
+    payload = claim_lifecycle.reassign(4, {"to_staff_id": 8, "reason": "handoff"}, staff={"id": 7})
+
+    assert payload == {"claim": {"id": 22}}
+    assert lifecycle_calls == [
+        ("release", 4, {"reason": "handoff"}, {"id": 7}),
+        ("claim", 9, {"staff_id": 8, "project_id": 12, "metadata": {"reassigned_from_claim_id": 4}}, None),
+    ]
+    assert audit_calls[0]["action_type"] == "kol_claim_reassign"
+    assert audit_calls[0]["metadata"] == {
+        "from_claim_id": 4,
+        "from_staff_id": 7,
+        "to_staff_id": 8,
+        "new_claim_id": 22,
+    }

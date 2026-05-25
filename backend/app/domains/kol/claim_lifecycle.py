@@ -104,3 +104,35 @@ def release(claim_id: int, body: dict[str, Any] | None = None, *, staff: dict[st
         metadata={"claim_id": _int(claim_id), "reason": reason},
     )
     return {"id": _int(claim_id), "status": "released", "release_reason": reason}
+
+
+def reassign(claim_id: int, body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    ensure_vkpi_schema()
+    next_staff_id = _int(body.get("staff_id") or body.get("to_staff_id"))
+    if not next_staff_id:
+        raise ValueError("to_staff_id required")
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM vkpi_kol_claims WHERE id=?", (_int(claim_id),)).fetchone()
+    if not row:
+        raise LookupError("claim not found")
+    actor_staff_id = staff_id(staff)
+    previous_staff_id = _int(row["staff_id"])
+    release(claim_id, {"reason": str(body.get("reason") or "reassigned")}, staff=staff)
+    result = claim(
+        _int(row["kol_id"]),
+        {"staff_id": next_staff_id, "project_id": row["project_id"], "metadata": {"reassigned_from_claim_id": claim_id}},
+        staff=None,
+    )
+    claim_audit.log_kol_audit(
+        actor_staff_id=actor_staff_id,
+        action_type="kol_claim_reassign",
+        kol_id=_int(row["kol_id"]),
+        detail=str(body.get("reason") or "reassigned"),
+        metadata={
+            "from_claim_id": _int(claim_id),
+            "from_staff_id": previous_staff_id,
+            "to_staff_id": next_staff_id,
+            "new_claim_id": _int((result.get("claim") or {}).get("id")),
+        },
+    )
+    return result
