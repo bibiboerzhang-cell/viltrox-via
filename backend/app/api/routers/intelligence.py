@@ -25,7 +25,7 @@ from app.services.intelligence import (
     save_bh_snapshot,
     scan_viltrox_official_matrix_now,
 )
-from app.services.cache import get_cache_stats, cache_clear, cached
+from app.services.cache import cache_clear, cached
 from app.services.memory import (
     advance_via_live_policy_rollout_guarded,
     get_via_control_debug_snapshot,
@@ -61,12 +61,12 @@ from app.services.student_identity import (
     reissue_student_qr,
     revoke_student_qr,
 )
-from app.services.security import get_rate_limit_stats
-from app.services.scheduler import get_scheduler_status
 from app.services.security.rate_limiter import rate_limit
+from app.api.routers.intelligence_system import router as system_router
 
 
 router = APIRouter(prefix="/api/admin/intel", tags=["intelligence"])
+router.include_router(system_router)
 logger = get_logger(__name__)
 
 
@@ -774,49 +774,3 @@ def viltrox_reset_official_roster(request: Request):
     result = reset_viltrox_official_roster()
     _clear_viltrox_admin_cache()
     return result
-
-
-# ══════════════════════════════════════════════
-# 系统监控
-# ══════════════════════════════════════════════
-
-@router.get("/system/cache")
-def system_cache_stats(request: Request):
-    """In-memory cache 统计"""
-    require_admin(request)
-    return get_cache_stats()
-
-
-@router.post("/system/cache/clear")
-@rate_limit("admin_mutation", max_requests=20, window_sec=300)
-def system_cache_clear(request: Request, prefix: str = Query(default="")):
-    """清除缓存. prefix='' 清全部, prefix='admin_' 只清 admin"""
-    require_admin(request)
-    cleared = cache_clear(prefix=prefix)
-    return {"cleared": cleared, "prefix": prefix}
-
-
-@router.get("/system/rate-limit")
-def system_rate_limit_stats(request: Request):
-    """Rate limiter 统计"""
-    require_admin(request)
-    return get_rate_limit_stats()
-
-
-@router.get("/system/scheduler")
-def system_scheduler_status(request: Request):
-    """Scheduler 状态 + 下次运行时间"""
-    require_admin(request)
-    return get_scheduler_status()
-
-
-@router.get("/system/health")
-def system_health(request: Request):
-    """完整系统健康检查"""
-    require_admin(request)
-    return {
-        "cache": get_cache_stats(),
-        "rate_limit": get_rate_limit_stats(),
-        "scheduler": get_scheduler_status(),
-        "bh_summary": get_bh_summary(),
-    }
