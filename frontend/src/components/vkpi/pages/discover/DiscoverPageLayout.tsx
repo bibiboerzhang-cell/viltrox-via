@@ -12,7 +12,8 @@ import {
   getKolPoolItem,
   listKolPool,
   promoteKolPoolToMain,
-} from '../../../../services/vkpi/kolPool-api';
+  type VkpiKolAssessmentResponse,
+} from '../../../../domains/kol';
 import { SearchPanel, SearchProgress } from './DiscoverSearchPanel';
 import { ProfilePanel } from './DiscoverProfilePanel';
 import { CandidateDecisionBanner, DiscoverFocusBanner, DiscoveryQueuePanel, type DiscoveryQueueItem } from './DiscoverQueuePanels';
@@ -21,7 +22,6 @@ import { recommendationToUiKol } from './DiscoverKolModel';
 import type { CompetitorRelation, ContactItem, Dimensions11Payload, ProductFitItem, SearchHistoryItem, UiKol } from './DiscoverTypes';
 import type { SearchProgressState } from './DiscoverProgressModel';
 import type { DirectionChip } from './DiscoverQueueModel';
-import type { VkpiKolAssessmentResponse } from '../../../../services/vkpi/kol-api';
 
 type DiscoverTab = 'search' | 'recommendations' | 'pool';
 type MessageTone = 'info' | 'warn' | 'error';

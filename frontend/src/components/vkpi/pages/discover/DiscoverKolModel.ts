@@ -2,7 +2,7 @@ import { creatorPlatformOptions, platformLabels } from '../../shared/vkpiConstan
 import { arrayValue, compactCount, contactLinksFrom, objectValue, platformFromRaw, safeNumber, textValue } from '../../shared/vkpiDataUtils';
 import type { VkpiDashboardData, VkpiKolLookupResult, VkpiKolOption, VkpiKolProfile, VkpiProjectRow } from '../../vkpiTypes';
 import type { IntelligenceCardModel } from '../../intelligence/IntelligenceCard';
-import type { VkpiKolAssessmentResponse } from '../../../../services/vkpi/kol-api';
+import type { VkpiKolAssessmentResponse } from '../../../../domains/kol';
 import type { SmartRecommendation } from './DiscoverRecommendationPanel';
 import type { CompetitorRelation, ContactItem, Dimensions11Payload, ProductFitItem, SearchHistoryItem, UiKol } from './DiscoverTypes';
 

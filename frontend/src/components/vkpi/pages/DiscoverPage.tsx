@@ -55,24 +55,22 @@ import type {
 import {
   addKolContact,
   getKolAssessment,
+  getKolPoolCompetitors,
+  getKolPoolDimensions11,
   getKolPosts,
   getKolProductFit,
   getKolProfile,
   listKolContacts,
-  type VkpiKolAssessmentResponse,
-} from '../../../services/vkpi/kol-api';
-import {
-  getKolPoolCompetitors,
-  getKolPoolDimensions11,
   promoteKolPoolToMain,
-} from '../../../services/vkpi/kolPool-api';
-import { getRecommendationFeedbackBacklog } from '../../../services/vkpi/intelligence-api';
-import { listBrandSignals } from '../../../services/vkpi/market-api';
+  type VkpiKolAssessmentResponse,
+} from '../../../domains/kol';
+import { getRecommendationFeedbackBacklog } from '../../../domains/intelligence';
+import { listBrandSignals } from '../../../domains/market';
 import {
   listProductRecommendations,
   productRecommendationAction,
   runProductRecommendations,
-} from '../../../services/vkpi/product-api';
+} from '../../../domains/products';
 import './discover/discoverDecision.css';
 
 interface DiscoverPageProps {

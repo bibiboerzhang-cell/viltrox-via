@@ -1,8 +1,7 @@
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 import type { VkpiKolLookupResult } from '../../vkpiTypes';
 import { arrayValue, objectValue, textValue } from '../../shared/vkpiDataUtils';
-import { listMarketingKols } from '../../../../services/vkpi/kol-api';
-import { searchMarketingKolsNatural, searchPlatformKols } from '../../../../services/vkpi/search-api';
+import { listMarketingKols, searchMarketingKolsNatural, searchPlatformKols } from '../../../../domains/kol';
 import { idleSearchProgress, searchProgressState, type SearchProgressState } from './DiscoverProgressModel';
 import {
   candidatePostsFromRaw,

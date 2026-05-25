@@ -1,4 +1,4 @@
-import type { VkpiKolProductFitResponse } from '../../../../services/vkpi/kol-api';
+import type { VkpiKolProductFitResponse } from '../../../../domains/kol';
 import type { VkpiPlatform } from '../../vkpiTypes';
 
 export interface SearchHistoryItem {
