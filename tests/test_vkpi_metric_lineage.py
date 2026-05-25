@@ -18,7 +18,7 @@ import pytest
 from app.db.connection import get_conn
 from app.domains import lineage as metric_lineage
 from app.domains.lineage import DEFINITION_VERSION
-from app.services.vkpi import drilldown
+import app.domains.lineage.drilldown as drilldown
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.domains.lineage import ensure_vkpi_lineage_schema
 
