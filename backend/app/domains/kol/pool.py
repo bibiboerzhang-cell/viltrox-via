@@ -43,7 +43,7 @@ from app.domains.kol.pool_common import (
 )
 from app.domains.kol.pool_main_linking import main_candidates, promote_to_main
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
-from app.services.vkpi.scoring import ScoringRegistry
+from app.domains.scoring import ScoringRegistry
 from app.domains.projects.workflow import staff_id as resolve_staff_id
 
 def import_items(items: list[dict[str, Any]], *, source_type: str = "manual", source_ref: str = "", platform: str = "", staff: dict[str, Any] | None = None) -> dict[str, Any]:

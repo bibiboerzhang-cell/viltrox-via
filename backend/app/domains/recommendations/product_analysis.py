@@ -11,11 +11,11 @@ from app.db.connection import get_conn
 from app.domains.kol import pool as kol_pool
 from app.domains.recommendations import actions as product_analysis_actions
 from app.domains.recommendations import evidence as product_analysis_evidence
+from app.domains.recommendations import feature_store
 from app.domains.recommendations import outcomes as outcome_collector
 from app.domains import audit
-from app.services.vkpi import feature_store
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
-from app.services.vkpi.scoring import ScoringRegistry
+from app.domains.scoring import ScoringRegistry
 from app.domains.projects.workflow import staff_id as resolve_staff_id
 
 COMPETITOR_SCORE_ADJUSTMENTS = {
