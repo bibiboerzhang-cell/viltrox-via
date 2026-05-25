@@ -11,6 +11,8 @@ import {
   buildAnalytics,
   buildContractLines,
   buildExpenseLines,
+  buildProjectStatsSummary,
+  buildProjectTaskItems,
   buildStageCostSummary,
   defaultTracking,
   detailTabs,
@@ -23,13 +25,11 @@ import {
   stageIndex,
   statusClass,
   statusForProject,
-  terminalStages,
   uniqueRelatedProjects,
   type ConfirmAction,
   type DetailTab,
   type NoticeState,
   type ProjectDetailViewProps,
-  type ProjectStatsSummary,
   type ScreenshotTarget,
   type TaskItem,
   type TrackingState,
@@ -92,24 +92,7 @@ export function ProjectDetailView({
       stageDurationLabel: '刚刚',
     };
   }), [baseRows, stageOverrides]);
-  const stats = useMemo<ProjectStatsSummary>(() => {
-    const views = rows.reduce((sum, row) => sum + (row.views || 0), 0);
-    const clicks = rows.reduce((sum, row) => sum + (row.clicks || 0), 0);
-    const orders = rows.reduce((sum, row) => sum + (row.orders || 0), 0);
-    const gmv = rows.reduce((sum, row) => sum + (row.gmv || 0), 0);
-    const cost = rows.reduce((sum, row) => sum + (row.cost || 0), 0);
-    const published = rows.filter((row) => stageIndex(row.stage) >= stageIndex('published')).length;
-    return {
-      views,
-      clicks,
-      orders,
-      gmv,
-      cost,
-      roi: cost ? gmv / cost : null,
-      published,
-      publishRate: rows.length ? Math.round((published / rows.length) * 100) : 0,
-    };
-  }, [rows]);
+  const stats = useMemo(() => buildProjectStatsSummary(rows), [rows]);
   const analytics = useMemo(() => buildAnalytics(rows), [rows]);
   const expenseLines = useMemo(() => buildExpenseLines(rows), [rows]);
   const stageCosts = useMemo(() => buildStageCostSummary(expenseLines), [expenseLines]);
@@ -129,44 +112,7 @@ export function ProjectDetailView({
       return matchesQuery && matchesStage && matchesPlatform;
     });
   }, [rows, tablePlatform, tableQuery, tableStage]);
-  const taskItems = useMemo<TaskItem[]>(() => {
-    const delivered = rows.filter((row) => {
-      const tracking = trackingById[row.id] || defaultTracking(row);
-      return tracking.delivered && stageIndex(row.stage) <= stageIndex('received');
-    });
-    const stuck = rows.find((row) => parseDays(row.stageDurationLabel) >= 7 && !terminalStages.has(row.stage));
-    const replied = rows.find((row) => ['replied', 'in_discussion'].includes(row.stage));
-    return [
-      ...(delivered.length ? [{
-        level: '高',
-        className: 'is-red',
-        title: `${delivered.length} 个样品已送达，提醒发布`,
-        subtitle: '点击跳到物流 / 发布阶段',
-        rowId: delivered[0].id,
-      }] : []),
-      ...(replied ? [{
-        level: '高',
-        className: 'is-red',
-        title: '处理 3→4 回复到合作转化低',
-        subtitle: '点击跳到相关 KOL',
-        rowId: replied.id,
-      }] : []),
-      ...(stuck ? [{
-        level: '中',
-        className: 'is-yellow',
-        title: '检查阶段停留超过 7 天',
-        subtitle: `${stuck.kolHandle || stuck.kolName} · ${stuck.stageDurationLabel || '-'}`,
-        rowId: stuck.id,
-      }] : []),
-      {
-        level: '低',
-        className: 'is-blue',
-        title: '整理合同归档和复盘素材',
-        subtitle: '点击切换到合同归档',
-        tab: '合同归档' as DetailTab,
-      },
-    ].slice(0, 3);
-  }, [rows, trackingById]);
+  const taskItems = useMemo<TaskItem[]>(() => buildProjectTaskItems(rows, trackingById), [rows, trackingById]);
   const reminderTasks = useMemo(
     () => taskItems.filter((item) => item.className === 'is-red' || item.className === 'is-yellow'),
     [taskItems],
