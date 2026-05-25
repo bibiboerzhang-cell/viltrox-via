@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from app.services.vkpi import brief_agent_v0
+from app.domains.intelligence import brief_use_case as brief_agent_v0
 
 
 def _candidate(kol_pool_id: int = 101, *, refs: int = 4, decision: str = "contact_candidate") -> dict:

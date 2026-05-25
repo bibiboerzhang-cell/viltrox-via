@@ -10,6 +10,7 @@ from app.domains.intelligence.brief_agent import (
     BRIEF_AGENT_VERSION,
     build_brief_agent_report,
 )
+from app.domains.intelligence.brief_use_case import build_brief_agent_v0
 from app.domains.intelligence.evidence_agent import (
     EVIDENCE_AGENT_VERSION,
     build_evidence_agent_report,
@@ -47,6 +48,7 @@ __all__ = [
     "build_brain_layer_acceptance_report",
     "build_brain_layer_module_row",
     "build_brief_agent_report",
+    "build_brief_agent_v0",
     "build_evidence_agent_report",
     "build_evidence_agent_v0",
     "build_evidence_chain_from_summary",
