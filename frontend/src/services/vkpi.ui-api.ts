@@ -10,19 +10,15 @@ import {
   buildDashboardRevenueTrend,
   buildScopeContext,
   buildWeeklySummary,
-  centsToUsd,
-  durationLabel,
   emptyEvidence,
   hasAnyDashboardData,
-  numberValue,
-  platformLabel,
   rangeLabel,
   staffWindow,
-  stageValue,
   windowDays,
 } from "../domains/dashboard";
-import { buildKolOptions, emptyKol } from "../domains/kol";
+import { buildKolOptions, buildSelectedKol, emptyKol } from "../domains/kol";
 import { buildStaffMembers } from "../domains/settings";
+import { buildDashboardProjects } from "../domains/projects";
 import {
   buildProductCatalog,
   buildProductCosts,
@@ -59,14 +55,7 @@ export * from "./vkpi/settings-api";
 export * from "./vkpi/staff-api";
 export * from "./vkpi/sync-api";
 export * from "./vkpi/tasks-api";
-import type {
-  VkpiAttributionRow,
-  VkpiCostRow,
-  VkpiDashboardData,
-  VkpiKolDetail,
-  VkpiLinkRow,
-  VkpiProjectRow,
-} from "../components/vkpi/vkpiTypes";
+import type { VkpiDashboardData } from "../components/vkpi/vkpiTypes";
 
 export interface VkpiDashboardFilters {
   range?: "today" | "7d" | "30d" | "mtd" | "qtd" | "custom";
@@ -121,64 +110,6 @@ export type VkpiRepairProposalRecord = LegacyRepairPayload;
 type Row = Record<string, unknown>;
 type OptionalResult<T> = { data: T; failed?: string };
 
-function buildProjects(projects: Row[], links: VkpiLinkRow[], attributions: VkpiAttributionRow[], costs: VkpiCostRow[]): VkpiProjectRow[] {
-  const linksByProject = new Map<string, VkpiLinkRow[]>();
-  links.forEach((link) => { if (link.projectId) linksByProject.set(link.projectId, [...(linksByProject.get(link.projectId) || []), link]); });
-  const revenueByProject = new Map<string, number>();
-  attributions.forEach((row) => { if (row.projectId) revenueByProject.set(row.projectId, (revenueByProject.get(row.projectId) || 0) + row.revenue); });
-  const costByProject = new Map<string, number>();
-  costs.forEach((row) => { if (row.projectId && row.status !== "void") costByProject.set(row.projectId, (costByProject.get(row.projectId) || 0) + row.amount); });
-  return projects.map((project) => {
-    const id = String(project.id || project.project_uid || "");
-    const projectLinks = linksByProject.get(id) || [];
-    const clicks = projectLinks.reduce((sum, link) => sum + link.validClicks, 0);
-    const gmv = revenueByProject.get(id) || centsToUsd(project.revenue_cents);
-    const cost = costByProject.get(id) || centsToUsd(project.cost_cents);
-    const startedAt = String(project.started_at || project.first_event_at || project.created_at || "");
-    const closedAt = String(project.closed_at || "");
-    const stageStartedAt = String(project.current_stage_started_at || project.last_activity_at || project.updated_at || "");
-    const views = numberValue(project.total_views || project.views || project.view_count || project.play_count || project.impressions || project.content_views);
-    return {
-      id,
-      kolId: project.kol_id ? String(project.kol_id) : undefined,
-      kolName: String(project.kol_name || project.channel_name || `KOL ${project.kol_id || ""}`).trim() || "未知 KOL",
-      kolHandle: String(project.handle || project.kol_platform || project.platform || "-"),
-      platform: platformLabel(project.kol_platform || project.platform),
-      campaign: String(project.project_name || project.project_uid || "未命名项目"),
-      stage: stageValue(project.stage),
-      latestMessageAt: String(project.last_activity_at || project.updated_at || "-"),
-      latestMessageSource: "Manual note",
-      views,
-      clicks: clicks || null,
-      orders: numberValue(project.orders) || null,
-      gmv,
-      cost,
-      roi: cost ? Number((gmv / cost).toFixed(2)) : null,
-      ownerId: project.assigned_staff_id ? String(project.assigned_staff_id) : project.created_by_staff_id ? String(project.created_by_staff_id) : undefined,
-      ownerName: String(project.staff_name || project.assigned_staff_id || "未分配"),
-      productSku: String(project.product_sku || ""),
-      productName: String(project.product_name || ""),
-      marketplace: String(project.marketplace || ""),
-      priority: String(project.priority || ""),
-      shopifyLink: String(project.shopify_link || ""),
-      createdAt: String(project.created_at || ""),
-      startedAt,
-      closedAt,
-      currentStageStartedAt: stageStartedAt,
-      totalDurationLabel: durationLabel(startedAt || project.created_at, closedAt || undefined),
-      stageDurationLabel: durationLabel(stageStartedAt),
-      stageEventCount: numberValue(project.stage_event_count),
-      updatedAt: String(project.updated_at || project.created_at || "-"),
-    };
-  });
-}
-function buildKol(projects: VkpiProjectRow[], links: VkpiLinkRow[], messages: Row[]): VkpiKolDetail {
-  const first = projects[0];
-  if (!first) return emptyKol;
-  const link = links.find((row) => row.projectId === first.id) || links[0];
-  return { id: first.kolId || first.id, name: first.kolName, handle: first.kolHandle, platform: first.platform, verified: false, subscribersLabel: "-", videosLabel: "-", engagementLabel: "-", country: "", claimOwner: first.ownerName, claimStatus: "进行中项目", recentContent: [], messages: messages.slice(0, 5).map((message, index) => ({ id: String(message.id || index), source: platformLabel(message.source_platform || message.source) === "Email" ? "Email" : "Manual", type: "Note", capturedAt: String(message.created_at || message.occurred_at || "-"), snippet: String(message.title || message.body || message.note || "暂无消息摘要。"), evidenceUrl: String(message.evidence_url || "") || undefined })), shortLink: { slug: link?.slug || "暂无短链", destination: link?.destination || "-", clicks: link?.validClicks || 0, orders: first.orders || 0, gmv: first.gmv, roi: first.roi || 0 }, followUpNote: `项目总耗时 ${first.totalDurationLabel || "-"}，当前阶段已停留 ${first.stageDurationLabel || "-"}。请按流程继续推进。` };
-}
-
 function emptyData(filters: VkpiDashboardFilters = {}): VkpiDashboardData {
   return { rangeLabel: rangeLabel(filters), windowDays: windowDays(filters), dataStatus: "empty", dataNotice: "当前周期还没有真实数据。", metrics: buildDashboardMetrics([]), revenueTrend: buildDashboardRevenueTrend([]), funnel: buildDashboardFunnel([]), staffLeaderboard: [], productRoi: [{ product: "暂无项目数据", roi: 0, gmv: 0 }], platformShare: [{ label: "暂无归因", value: 100 }], contentTypePerformance: [{ label: "暂无内容数据", value: 0 }], alerts: [], weeklySummary: "当前还没有生成周报。请在 Shopify、Amazon、短链、成本和项目事件同步后生成。", exportReport: { id: "none", title: "周报尚未生成", generatedAt: "等待数据", status: "Generating" }, projects: [], links: [], attributions: [], unmatchedAttributions: [], costs: [], evidence: emptyEvidence(), staffMembers: [], kpiLedger: [], productCosts: [], productLaunches: [], kolOptions: [], selectedKol: emptyKol, scopes: {} };
 }
@@ -232,9 +163,9 @@ export async function fetchVkpiDashboardData(token: string, filters: VkpiDashboa
   const productCosts = buildProductCosts(productCostsResult.data.product_costs || []);
   const productLaunches = buildProductLaunchOptions(productLaunchesResult.data.launches || []);
   const kolOptions = buildKolOptions(kolOptionsResult.data.kols || []);
-  const uiProjects = buildProjects(projectRows, linkRows, attributionRows, costRows);
+  const uiProjects = buildDashboardProjects(projectRows, linkRows, attributionRows, costRows);
   const hasData = hasAnyDashboardData(summary, projectRows, linkRows, attributionRows, costRows, alertRows, dashboardMetrics);
   const dataStatus = failedSections.length ? "partial" : hasData ? "live" : "empty";
   const dataNotice = failedSections.length ? `部分数据源暂时不可用：${failedSections.join("、")}。当前页面只显示已成功返回的真实数据。` : hasData ? "当前页面来自真实接口数据。" : "当前周期还没有真实数据。";
-  return { ...emptyData(filters), windowDays: days, lastSyncedAt: new Date().toISOString(), dataStatus, dataNotice, metrics: buildDashboardMetrics(dashboardMetrics), revenueTrend: buildDashboardRevenueTrend(trendResult.data.rows || []), funnel: buildDashboardFunnel((dashboard.funnel as Row[] | undefined) || (dashboard.by_stage as Row[] | undefined) || []), staffLeaderboard: buildDashboardLeaderboard(staffRows, (dashboard.staff_leaderboard as Row[] | undefined) || []), productRoi: buildDashboardProductRoi((productPerformanceResult.data.rows || (dashboard.roi_by_project as Row[] | undefined) || [])), platformShare: buildDashboardPlatformShare((dashboard.revenue_by_source as Row[] | undefined) || rawAttributionRows), contentTypePerformance: [{ label: "已抓取播放量", value: uiProjects.reduce((sum, row) => sum + row.views, 0) }, { label: "有效点击", value: linkRows.reduce((sum, row) => sum + row.validClicks, 0) }, { label: "已发布内容", value: uiProjects.filter((row) => ["published", "content_published", "measured", "closed"].includes(row.stage)).length }], alerts: buildDashboardAlerts(alertRows), weeklySummary: buildWeeklySummary(summary, staffRows, alertRows), exportReport: { id: `weekly-${new Date().toISOString().slice(0, 10)}`, title: `周报（${rangeLabel(filters)}）`, generatedAt: "由 Viltrox Marketing 接口数据生成", status: "Ready" }, projects: uiProjects, links: linkRows, attributions: attributionRows, unmatchedAttributions: unmatchedRows, costs: costRows, evidence: emptyEvidence(), staffMembers, kpiLedger, productCosts, productLaunches, kolOptions, selectedKol: buildKol(uiProjects, linkRows, alertRows), scopes: { projects: buildScopeContext(projectsResult.data.scope), kols: buildScopeContext(kolOptionsResult.data.scope) } };
+  return { ...emptyData(filters), windowDays: days, lastSyncedAt: new Date().toISOString(), dataStatus, dataNotice, metrics: buildDashboardMetrics(dashboardMetrics), revenueTrend: buildDashboardRevenueTrend(trendResult.data.rows || []), funnel: buildDashboardFunnel((dashboard.funnel as Row[] | undefined) || (dashboard.by_stage as Row[] | undefined) || []), staffLeaderboard: buildDashboardLeaderboard(staffRows, (dashboard.staff_leaderboard as Row[] | undefined) || []), productRoi: buildDashboardProductRoi((productPerformanceResult.data.rows || (dashboard.roi_by_project as Row[] | undefined) || [])), platformShare: buildDashboardPlatformShare((dashboard.revenue_by_source as Row[] | undefined) || rawAttributionRows), contentTypePerformance: [{ label: "已抓取播放量", value: uiProjects.reduce((sum, row) => sum + row.views, 0) }, { label: "有效点击", value: linkRows.reduce((sum, row) => sum + row.validClicks, 0) }, { label: "已发布内容", value: uiProjects.filter((row) => ["published", "content_published", "measured", "closed"].includes(row.stage)).length }], alerts: buildDashboardAlerts(alertRows), weeklySummary: buildWeeklySummary(summary, staffRows, alertRows), exportReport: { id: `weekly-${new Date().toISOString().slice(0, 10)}`, title: `周报（${rangeLabel(filters)}）`, generatedAt: "由 Viltrox Marketing 接口数据生成", status: "Ready" }, projects: uiProjects, links: linkRows, attributions: attributionRows, unmatchedAttributions: unmatchedRows, costs: costRows, evidence: emptyEvidence(), staffMembers, kpiLedger, productCosts, productLaunches, kolOptions, selectedKol: buildSelectedKol(uiProjects, linkRows, alertRows), scopes: { projects: buildScopeContext(projectsResult.data.scope), kols: buildScopeContext(kolOptionsResult.data.scope) } };
 }

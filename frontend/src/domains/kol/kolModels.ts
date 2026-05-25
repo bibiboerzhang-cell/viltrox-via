@@ -1,4 +1,9 @@
-import type { VkpiKolDetail, VkpiKolOption } from '../../components/vkpi/vkpiTypes';
+import type {
+  VkpiKolDetail,
+  VkpiKolOption,
+  VkpiLinkRow,
+  VkpiProjectRow,
+} from '../../components/vkpi/vkpiTypes';
 import {
   compact,
   numberValue,
@@ -50,4 +55,41 @@ export function buildKolOptions(rows: Row[]): VkpiKolOption[] {
       scanStatus: String(row.snapshot_scan_status || row.contact_status || ''),
     };
   }).filter((row) => row.id);
+}
+
+export function buildSelectedKol(projects: VkpiProjectRow[], links: VkpiLinkRow[], messages: Row[]): VkpiKolDetail {
+  const first = projects[0];
+  if (!first) return emptyKol;
+  const link = links.find((row) => row.projectId === first.id) || links[0];
+  return {
+    id: first.kolId || first.id,
+    name: first.kolName,
+    handle: first.kolHandle,
+    platform: first.platform,
+    verified: false,
+    subscribersLabel: '-',
+    videosLabel: '-',
+    engagementLabel: '-',
+    country: '',
+    claimOwner: first.ownerName,
+    claimStatus: '进行中项目',
+    recentContent: [],
+    messages: messages.slice(0, 5).map((message, index) => ({
+      id: String(message.id || index),
+      source: platformLabel(message.source_platform || message.source) === 'Email' ? 'Email' : 'Manual',
+      type: 'Note',
+      capturedAt: String(message.created_at || message.occurred_at || '-'),
+      snippet: String(message.title || message.body || message.note || '暂无消息摘要。'),
+      evidenceUrl: String(message.evidence_url || '') || undefined,
+    })),
+    shortLink: {
+      slug: link?.slug || '暂无短链',
+      destination: link?.destination || '-',
+      clicks: link?.validClicks || 0,
+      orders: first.orders || 0,
+      gmv: first.gmv,
+      roi: first.roi || 0,
+    },
+    followUpNote: `项目总耗时 ${first.totalDurationLabel || '-'}，当前阶段已停留 ${first.stageDurationLabel || '-'}。请按流程继续推进。`,
+  };
 }
