@@ -1,5 +1,6 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import type { VkpiDashboardData, VkpiKolOption, VkpiProjectRow, VkpiProjectStage, VkpiStaffMember } from '../vkpiTypes';
+import { clearProjectFocus, readProjectFocus, type IntelligenceProjectFocusPayload } from '../intelligence/intelligenceProjectFocus';
 import { useProjectDetail } from '../hooks/useProjectDetail';
 import { PageShell } from './PageShell';
 import { ProjectCampaignBoard } from './projects/ProjectCampaignBoard';
@@ -16,7 +17,7 @@ interface ProjectsPageProps {
   onOpenKolProfile?: (project: VkpiProjectRow) => void | Promise<void>;
   onOpenStaffProfile?: (staffId: string, fallback?: Partial<VkpiStaffMember>) => void | Promise<void>;
   onLookupKol?: (payload: { platform: string; handleOrUrl: string; createIfMissing?: boolean; email?: string; contactEmail?: string; notes?: string; scanAccount?: boolean; maxPosts?: number; productSku?: string }) => Promise<{ kol?: Record<string, unknown> | null; created?: boolean }>;
-  onCreateProject?: (payload: { projectName: string; kolId?: string; productSku?: string; productName?: string; productSkus?: string[]; products?: Array<{ productSku: string; productName?: string }>; platform?: string; marketplace?: string; note?: string }) => Promise<void>;
+  onCreateProject?: (payload: { projectName: string; kolId?: string; productSku?: string; productName?: string; productSkus?: string[]; products?: Array<{ productSku: string; productName?: string }>; platform?: string; marketplace?: string; note?: string }) => Promise<Record<string, unknown> | void>;
   onUpdateProject?: (projectId: string, payload: { projectName?: string; productSku?: string; productName?: string; products?: Array<{ productSku: string; productName?: string }>; platform?: string; marketplace?: string; priority?: string; shopifyLink?: string; targetPostDate?: string; dueAt?: string; note?: string }) => Promise<void>;
   onMoveProjectStage?: (projectId: string, toStage: VkpiProjectStage, note?: string, extras?: { trackingNumber?: string; sampleStatus?: string; sourceRefType?: string; sourceRefId?: string }) => Promise<void>;
   onDeleteProject?: (projectId: string, reason?: string) => Promise<void>;
@@ -28,6 +29,34 @@ interface ProjectsPageProps {
 }
 
 const campaignStatusOptions = ['规划中', '进行中', '收尾中', '已结束', '已取消'];
+
+function ProjectFocusBanner({
+  focus,
+  matched,
+  onDismiss,
+}: {
+  focus: IntelligenceProjectFocusPayload;
+  matched: boolean;
+  onDismiss: () => void;
+}) {
+  return (
+    <section className="vkpi-task-focus-banner is-medium" aria-live="polite">
+      <div>
+        <span>来自智能中心 / 红人搜索</span>
+        <h2>{focus.projectName}</h2>
+        <p>{focus.summary}</p>
+      </div>
+      <div className="vkpi-task-focus-banner__meta">
+        <span><b>KOL</b>{focus.kolHandle || focus.kolId || '-'}</span>
+        <span><b>产品</b>{focus.productSku || focus.productName || '-'}</span>
+        <span><b>状态</b>{matched ? '已定位项目详情' : '等待数据刷新后定位'}</span>
+      </div>
+      <div className="vkpi-task-focus-banner__actions">
+        <button className="vkpi-button vkpi-button--ghost" type="button" onClick={onDismiss}>关闭</button>
+      </div>
+    </section>
+  );
+}
 
 export function ProjectsPage({
   data,
@@ -64,6 +93,7 @@ export function ProjectsPage({
   const [busy, setBusy] = useState(false);
   const [detailProjectId, setDetailProjectId] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [projectFocus, setProjectFocus] = useState<IntelligenceProjectFocusPayload | null>(null);
 
   const productChoices = useMemo(() => {
     const bySku = new Map<string, { id: string; productSku: string; productName: string; sourceLabel: string }>();
@@ -99,6 +129,23 @@ export function ProjectsPage({
       item.productSku.toLowerCase() === normalized
     ));
   }, [productChoices, productName]);
+
+  useEffect(() => {
+    const focus = readProjectFocus();
+    if (!focus) return;
+    clearProjectFocus();
+    setProjectFocus(focus);
+    setMessage(focus.summary);
+  }, []);
+
+  useEffect(() => {
+    if (!projectFocus) return;
+    const target = filteredProjects.find((project) => (
+      (projectFocus.projectId && project.id === projectFocus.projectId)
+      || project.campaign === projectFocus.projectName
+    ));
+    if (target) setDetailProjectId(target.id);
+  }, [filteredProjects, projectFocus]);
 
   const closeCreateModal = () => {
     if (busy) return;
@@ -277,6 +324,13 @@ export function ProjectsPage({
 
   return (
     <PageShell title="项目跟进" description="创建项目、按流程一键推进，系统自动记录从开始到完成的耗时。">
+      {projectFocus ? (
+        <ProjectFocusBanner
+          focus={projectFocus}
+          matched={Boolean(detailProjectId)}
+          onDismiss={() => setProjectFocus(null)}
+        />
+      ) : null}
       <ProjectCampaignBoard
         projects={filteredProjects}
         selectedProjectId={selectedProjectId}
