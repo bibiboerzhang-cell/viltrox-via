@@ -8,7 +8,7 @@ from app.db.connection import get_conn
 from app.domains.kol import claims as kol_claims
 from app.domains.kol import pool as kol_pool
 from app.domains.recommendations import outcomes as outcome_collector
-from app.services.vkpi._utils import json_dumps, json_loads, utcnow_iso
+from app.shared.vkpi_utils import json_dumps, json_loads, utcnow_iso
 from app.domains.attribution import link_center
 from app.domains import audit
 from app.domains.access import scope

@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.db.connection import get_conn
-from app.services.vkpi._utils import utcnow_iso
+from app.shared.vkpi_utils import utcnow_iso
 
 
 def utcnow() -> str:

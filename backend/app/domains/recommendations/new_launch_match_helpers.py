@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.db.connection import get_conn
-from app.services.vkpi._utils import json_loads, row_to_dict, to_float, to_int, to_text
+from app.shared.vkpi_utils import json_loads, row_to_dict, to_float, to_int, to_text
 
 def _row_to_dict(row: Any) -> dict[str, Any]:
     return row_to_dict(row)
