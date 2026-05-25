@@ -67,6 +67,32 @@ def build_contacts(kol: dict[str, Any], contact_links: Any, contact_raw: Any) ->
     }
 
 
+def build_kpi_summary(kpi_ledger: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    kpi_grouped: dict[str, dict[str, Any]] = {}
+    for item in kpi_ledger:
+        metric_key = str(item.get("metric_key") or "unknown")
+        bucket = kpi_grouped.setdefault(
+            metric_key,
+            {
+                "metric_key": metric_key,
+                "total_value": 0.0,
+                "row_count": 0,
+                "latest_ledger_date": "",
+                "latest_source_ref": "",
+            },
+        )
+        try:
+            bucket["total_value"] = float(bucket["total_value"]) + float(item.get("metric_value") or 0)
+        except (TypeError, ValueError):
+            pass
+        bucket["row_count"] = int(bucket["row_count"]) + 1
+        ledger_date = str(item.get("ledger_date") or "")
+        if ledger_date >= str(bucket.get("latest_ledger_date") or ""):
+            bucket["latest_ledger_date"] = ledger_date
+            bucket["latest_source_ref"] = item.get("source_ref") or ""
+    return sorted(kpi_grouped.values(), key=lambda item: str(item.get("metric_key") or ""))
+
+
 def build_profile_summary(
     *,
     snapshot: dict[str, Any],

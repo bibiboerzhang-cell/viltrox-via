@@ -72,3 +72,18 @@ def test_profile_assembly_contacts_and_summary_hide_financials():
     assert summary["financials_hidden"] is True
     assert summary["cost_cents"] is None
     assert summary["roi"] is None
+
+
+def test_profile_assembly_kpi_summary_groups_metrics():
+    summary = profile_assembly.build_kpi_summary(
+        [
+            {"metric_key": "views", "metric_value": "10", "ledger_date": "2026-01-01", "source_ref": "a"},
+            {"metric_key": "views", "metric_value": "5.5", "ledger_date": "2026-01-02", "source_ref": "b"},
+            {"metric_key": "sales", "metric_value": "bad", "ledger_date": "2026-01-01", "source_ref": "c"},
+        ]
+    )
+
+    assert summary == [
+        {"metric_key": "sales", "total_value": 0.0, "row_count": 1, "latest_ledger_date": "2026-01-01", "latest_source_ref": "c"},
+        {"metric_key": "views", "total_value": 15.5, "row_count": 2, "latest_ledger_date": "2026-01-02", "latest_source_ref": "b"},
+    ]
