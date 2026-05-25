@@ -9,7 +9,6 @@ import {
   listFeatureFlags,
   listPlatformCrawlSettings,
   listProviderStatuses,
-  probeProviderStatus,
   runVkpiAutomation,
   updateBudgetSettings,
   updateCommentAlertSettings,
@@ -25,7 +24,7 @@ import {
 } from '../../../domains/settings';
 import type { VkpiStaffActivationLinkResponse, VkpiStaffInviteCapabilities, VkpiStaffPasswordResetLinkResponse } from '../../../domains/settings';
 import { listProductCatalog } from '../../../domains/products';
-import { getSyncOverview, triggerSync, type VkpiSyncOverview } from '../../../domains/settings';
+import { getSyncOverview, type VkpiSyncOverview } from '../../../domains/settings';
 import type {
   VkpiDashboardData,
   VkpiProductCatalogItem,
@@ -97,11 +96,9 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [providers, setProviders] = useState<Array<Record<string, unknown>>>([]);
-  const [providerBusy, setProviderBusy] = useState('');
   const [providerError, setProviderError] = useState('');
   const [rbacStatus, setRbacStatus] = useState<Record<string, unknown>>({});
   const [rbacStatusError, setRbacStatusError] = useState('');
-  const [rbacStatusLoading, setRbacStatusLoading] = useState(false);
   const [featureFlags, setFeatureFlags] = useState<Array<Record<string, unknown>>>([]);
   const [platformCrawl, setPlatformCrawl] = useState<Array<Record<string, unknown>>>([]);
   const [budgetSettings, setBudgetSettings] = useState<Array<Record<string, unknown>>>([]);
@@ -234,57 +231,9 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
     setSyncOverview(syncOverviewResponse);
   };
 
-  const reloadProviders = async () => {
-    if (!apiToken) return;
-    setProviderBusy('all');
-    setProviderError('');
-    try {
-      const response = await listProviderStatuses(apiToken);
-      setProviders(response.providers || []);
-    } catch (error) {
-      setProviderError(error instanceof Error ? error.message : 'API 状态读取失败');
-    } finally {
-      setProviderBusy('');
-    }
-  };
-
-  const reloadRbacStatus = async () => {
-    if (!apiToken) return;
-    setRbacStatusLoading(true);
-    setRbacStatusError('');
-    try {
-      const response = await getRbacStatus(apiToken);
-      setRbacStatus(response || {});
-    } catch (error) {
-      setRbacStatusError(error instanceof Error ? error.message : 'RBAC 状态读取失败');
-    } finally {
-      setRbacStatusLoading(false);
-    }
-  };
-
-  const runProviderProbe = async (provider: string) => {
-    if (!apiToken || !provider) return;
-    setProviderBusy(provider);
-    setProviderError('');
-    try {
-      await probeProviderStatus(apiToken, provider);
-      const response = await listProviderStatuses(apiToken);
-      setProviders(response.providers || []);
-    } catch (error) {
-      setProviderError(error instanceof Error ? error.message : 'API 检测失败');
-    } finally {
-      setProviderBusy('');
-    }
-  };
-
-  const controlSummary = (controlStatus.summary || {}) as Record<string, unknown>;
   const syncPolicy = (controlStatus.sync_policy || {}) as Record<string, unknown>;
-  const youtubeKpi = (controlStatus.youtube_kpi || {}) as Record<string, unknown>;
   const kolRefresh = (controlStatus.kol_refresh || {}) as Record<string, unknown>;
   const kolRefreshBatchPlan = (kolRefresh.apify_batch_plan || {}) as Record<string, unknown>;
-  const claudeProvider = providers.find((row) => ['anthropic', 'claude'].includes(String(row.provider || '').toLowerCase())) || {};
-  const claudeConfigured = boolValue(claudeProvider.configured, false);
-  const claudeStatus = claudeConfigured ? String(claudeProvider.latest_status || claudeProvider.status || 'unknown') : 'not_configured';
   const selectCatalogProduct = (product: VkpiProductCatalogItem) => {
     setSelectedCatalogProduct(product);
     setCostSku(product.sku);
@@ -555,8 +504,6 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
     }
   };
 
-  const platformEnabledCount = platformCrawl.filter((row) => rowEnabled(row, 'crawl_enabled')).length;
-  const platformCount = platformCrawl.length;
   const providerCount = providers.length;
   const providerConfiguredCount = providers.filter((row) => boolValue(row.configured, false)).length;
   const providerNames = providers
