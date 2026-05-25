@@ -6,7 +6,7 @@ from typing import Any
 
 from app.domains.kol import claims as claims_domain
 from app.db.connection import get_conn
-from app.services.vkpi import kol_history_match, kol_product_fit as kol_product_fit_service
+from app.services.vkpi import kol_product_fit as kol_product_fit_service
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 
 from app.domains.kol.payload_utils import _clamp_score, _float, _grade, _int, _json_loads

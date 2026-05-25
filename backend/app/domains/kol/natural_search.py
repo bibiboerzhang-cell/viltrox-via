@@ -5,7 +5,7 @@ import re
 from typing import Any
 
 from app.domains.kol.claim_listing import list_kols
-from app.services.vkpi import kol_history_match
+from app.domains.kol import history_match
 
 from app.domains.kol.payload_utils import _clamp_score, _float, _int, _json_loads
 
@@ -254,18 +254,18 @@ def _natural_search_payload(body: dict[str, Any], staff: dict[str, Any] | None =
         row["natural_match_reasons"] = reasons
         row["score"] = max(_clamp_score(row.get("score") or row.get("account_score") or row.get("product_fit")), score)
         rows.append(row)
-    pool_rows = kol_history_match.search_pool_for_natural(query, parsed, limit=limit)
+    pool_rows = history_match.search_pool_for_natural(query, parsed, limit=limit)
     seen_keys = {
         (
             str(row.get("platform") or "").lower(),
-            kol_history_match.normalize_history_handle(row.get("handle") or row.get("channel_name") or ""),
+            history_match.normalize_history_handle(row.get("handle") or row.get("channel_name") or ""),
         )
         for row in rows
     }
     for row in pool_rows:
         key = (
             str(row.get("platform") or "").lower(),
-            kol_history_match.normalize_history_handle(row.get("handle") or row.get("channel_name") or ""),
+            history_match.normalize_history_handle(row.get("handle") or row.get("channel_name") or ""),
         )
         if key in seen_keys:
             continue
