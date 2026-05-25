@@ -7,8 +7,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
 from app.db.connection import get_conn
+from app.domains import attribution as attribution_domain
 from app.services.kol.account_dossier import analyze_kol_account, get_kol_dossier, scan_kol_account
-from app.services.vkpi import kol_claims, link_center, scope
+from app.services.vkpi import kol_claims, scope
 from app.api.routers.vkpi_kol_links_common import _int, _json_loads
 from app.api.routers.vkpi_kol_links_natural import _natural_search_payload
 from app.api.routers.vkpi_kol_links_profile import _assessment_payload, _contact_rows, _product_fit_payload
@@ -268,13 +269,13 @@ def links(
     limit: int = Query(default=50, ge=1, le=200),
     staff=Depends(require_tab("vkpi", "read")),
 ):
-    return link_center.list_links(limit=limit, status=status, staff=staff, staff_id_filter=staff_id)
+    return attribution_domain.list_links(limit=limit, status=status, staff=staff, staff_id=staff_id)
 
 
 @router.get("/links/{link_id}")
 def link_detail(link_id: int, staff=Depends(require_tab("vkpi", "read"))):
     try:
-        return link_center.link_detail(link_id, staff=staff)
+        return attribution_domain.link_detail(link_id, staff=staff)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
@@ -288,7 +289,7 @@ def link_clicks(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     try:
-        return link_center.link_clicks(link_id, staff=staff, limit=limit)
+        return attribution_domain.link_clicks(link_id, staff=staff, limit=limit)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
@@ -302,7 +303,7 @@ def link_orders(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     try:
-        return link_center.link_orders(link_id, staff=staff, limit=limit)
+        return attribution_domain.link_orders(link_id, staff=staff, limit=limit)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
@@ -312,7 +313,7 @@ def link_orders(
 @router.post("/links")
 def create_link(body: dict, staff=Depends(require_tab("vkpi", "write"))):
     try:
-        return link_center.create_link(body, staff=staff)
+        return attribution_domain.create_link(body, staff=staff)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
@@ -322,7 +323,7 @@ def create_link(body: dict, staff=Depends(require_tab("vkpi", "write"))):
 @router.patch("/links/{link_id}")
 def update_link(link_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
     try:
-        return link_center.update_link(link_id, body, staff=staff)
+        return attribution_domain.update_link(link_id, body, staff=staff)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -334,7 +335,7 @@ def update_link(link_id: int, body: dict, staff=Depends(require_tab("vkpi", "wri
 @router.post("/links/{link_id}/pause")
 def pause_link(link_id: int, staff=Depends(require_tab("vkpi", "write"))):
     try:
-        return link_center.set_status(link_id, "paused", staff=staff)
+        return attribution_domain.pause_link(link_id, staff=staff)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
@@ -344,7 +345,7 @@ def pause_link(link_id: int, staff=Depends(require_tab("vkpi", "write"))):
 @router.post("/links/{link_id}/archive")
 def archive_link(link_id: int, staff=Depends(require_tab("vkpi", "write"))):
     try:
-        return link_center.set_status(link_id, "archived", staff=staff)
+        return attribution_domain.archive_link(link_id, staff=staff)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
@@ -354,8 +355,7 @@ def archive_link(link_id: int, staff=Depends(require_tab("vkpi", "write"))):
 @router.post("/links/{link_id}/health-check")
 def check_link(link_id: int, staff=Depends(require_tab("vkpi", "read"))):
     try:
-        scope.assert_link_access(link_id, staff)
-        return link_center.health_check(link_id, staff=staff)
+        return attribution_domain.health_check(link_id, staff=staff)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
