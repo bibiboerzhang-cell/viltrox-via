@@ -4,7 +4,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
-from app.services.vkpi import costs, scope
+from app.domains import costs
+from app.services.vkpi import scope
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-costs"])
 

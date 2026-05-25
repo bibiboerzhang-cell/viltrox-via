@@ -8,7 +8,7 @@ from __future__ import annotations
 import pytest
 
 from app.db.connection import get_conn
-from app.services.vkpi import costs
+from app.domains import costs
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.schema_audit import ensure_vkpi_audit_schema
 

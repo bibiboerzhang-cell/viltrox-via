@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from app.db.connection import close_db_runtime, get_conn
-from app.services.vkpi.costs import ensure_product_catalog_schema
+from app.domains.costs import ensure_product_catalog_schema
 
 
 DEFAULT_SEED = Path(__file__).resolve().parents[1] / "backend" / "app" / "services" / "vkpi" / "viltrox_product_catalog_seed.json"

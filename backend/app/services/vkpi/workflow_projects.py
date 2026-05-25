@@ -367,7 +367,7 @@ def transition_project(project_id: int, body: dict[str, Any], *, staff: dict[str
     )
     auto_cost_result: dict[str, Any] | None = None
     if to_stage == "shipped":
-        from app.services.vkpi import costs
+        from app.domains import costs
 
         try:
             auto_cost_result = costs.record_shipped_product_cost(int(project_id), staff=staff)
