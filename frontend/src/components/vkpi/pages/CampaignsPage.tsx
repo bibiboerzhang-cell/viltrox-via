@@ -6,7 +6,7 @@ import {
   initiateOffboarding,
   listBudgetPools,
   listCampaigns,
-} from '../../../services/vkpi/projects-api';
+} from '../../../domains/projects';
 import type { VkpiDashboardData } from '../vkpiTypes';
 import { CardHeader } from '../shared/CardHeader';
 import { ProjectSelect } from '../shared/ProjectSelect';
