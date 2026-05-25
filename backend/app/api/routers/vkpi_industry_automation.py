@@ -7,6 +7,8 @@ from app.api.routers.vkpi_industry_market import router as market_router
 from app.api.dependencies.perms import require_tab
 from app.domains import intelligence as intelligence_domain
 from app.domains import launch as launch_domain
+from app.domains.recommendations import outcomes as outcome_collector
+from app.domains.recommendations import training_export as training_data_export
 from app.domains import trends as trends_domain
 from app.services.vkpi import (
     ab_experiments,
@@ -17,10 +19,8 @@ from app.services.vkpi import (
     industry_data,
     llm_gateway,
     prediction_accuracy_feedback_v0,
-    outcome_collector,
     prediction_calibration_v0,
     product_campaign_card,
-    training_data_export,
 )
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-industry-automation"])

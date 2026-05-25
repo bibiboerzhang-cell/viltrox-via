@@ -249,7 +249,7 @@ def build_items(sync: dict[str, Any], r2: dict[str, Any], snapshot: dict[str, An
         and contains("backend/app/domains/kol/competitor_detector.py", "vkpi_competitor_relation", "prefer_persisted")
     )
     competitor_recommendation_ready = (
-        contains("backend/app/services/vkpi/product_analysis.py", "COMPETITOR_SCORE_ADJUSTMENTS", "filtered_avoid")
+        contains("backend/app/domains/recommendations/product_analysis.py", "COMPETITOR_SCORE_ADJUSTMENTS", "filtered_avoid")
         and contains("frontend/src/components/vkpi/pages/DiscoverPage.tsx", "competitorRiskTier", "vkpi-discover-rec__risk")
         and exists("tests/test_vkpi_product_analysis_competitor.py")
     )

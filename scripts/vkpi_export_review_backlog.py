@@ -21,7 +21,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.db.connection import close_db_runtime  # noqa: E402
-from app.services.vkpi import recommendation_feedback_backlog  # noqa: E402
+from app.domains.recommendations import feedback_backlog as recommendation_feedback_backlog  # noqa: E402
 
 
 SOCIAL_PLATFORMS = {"facebook", "instagram", "reddit", "tiktok", "x", "youtube"}

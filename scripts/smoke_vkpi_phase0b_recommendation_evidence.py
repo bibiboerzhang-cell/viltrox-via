@@ -16,7 +16,7 @@ os.environ.setdefault("DATABASE_URL", "")
 
 from app.db.connection import get_conn  # noqa: E402
 from app.domains.kol import pool as kol_pool  # noqa: E402
-from app.services.vkpi import product_analysis  # noqa: E402
+from app.domains.recommendations import product_analysis  # noqa: E402
 from app.services.vkpi.schema import ensure_vkpi_schema  # noqa: E402
 from app.services.vkpi.schema_audit import ensure_vkpi_audit_schema  # noqa: E402
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema  # noqa: E402

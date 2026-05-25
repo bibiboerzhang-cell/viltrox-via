@@ -7,7 +7,7 @@ import secrets
 
 from app.api.routers import vkpi_learning
 from app.db.connection import get_conn
-from app.services.vkpi import recommendation_feedback_backlog
+from app.domains.recommendations import feedback_backlog as recommendation_feedback_backlog
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 from scripts import vkpi_import_review_feedback
 

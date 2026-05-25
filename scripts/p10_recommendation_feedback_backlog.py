@@ -15,11 +15,11 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.db.connection import close_db_runtime  # noqa: E402
-from app.services.vkpi.recommendation_feedback_backlog import (  # noqa: E402
+from app.domains.recommendations.feedback_backlog import (  # noqa: E402
     build_recommendation_feedback_backlog,
     format_recommendation_feedback_backlog,
 )
-from app.services.vkpi import product_analysis  # noqa: E402
+from app.domains.recommendations import product_analysis  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:

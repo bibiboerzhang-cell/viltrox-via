@@ -4,7 +4,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query, Response
 
 from app.api.dependencies.perms import require_tab
-from app.services.vkpi import learning_loop, memory_feedback_backlog, recommendation_feedback_backlog
+from app.domains.recommendations import feedback_backlog as recommendation_feedback_backlog
+from app.services.vkpi import learning_loop, memory_feedback_backlog
 
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-learning"])
