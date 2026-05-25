@@ -13,10 +13,10 @@ import { Avatar } from '../shared/Avatar';
 import {
   CoverageChip,
   DecisionCell,
-  KolPoolDetailDrawer,
   KolPoolSkeletonRows,
   RefreshStateNotice,
-} from './KolPoolPanel.parts';
+} from './KolPoolPanel.listParts';
+import { KolPoolDetailDrawer } from './KolPoolPanel.parts';
 import type { KolPoolIntelligenceCard, KolPoolItem, KolPoolPanelProps, KolPoolRefreshState } from './KolPoolPanel.types';
 import {
   canEnrich,
