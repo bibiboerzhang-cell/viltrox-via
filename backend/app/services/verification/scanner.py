@@ -160,7 +160,7 @@ async def scan_pending_verifications(
           "duration_sec": float,
         }
     """
-    from app.services.scraping.apify import fetch_viltrox_comments, normalize_comment
+    from app.services.scraping.apify_viltrox_comments import fetch_viltrox_comments, normalize_comment
     
     t0 = asyncio.get_running_loop().time()
     pending_verifications = await db_read(partial(_load_pending_verifications, platform, only_oldest_n))
@@ -258,7 +258,7 @@ async def scan_single_verification(verification_id: int) -> Dict[str, Any]:
           "message": str,
         }
     """
-    from app.services.scraping.apify import fetch_viltrox_comments, normalize_comment
+    from app.services.scraping.apify_viltrox_comments import fetch_viltrox_comments, normalize_comment
     
     verification = await db_read(partial(_load_verification, verification_id))
     if not verification:
