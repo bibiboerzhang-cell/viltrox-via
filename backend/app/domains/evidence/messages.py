@@ -4,7 +4,8 @@ from __future__ import annotations
 from typing import Any
 
 from app.db.connection import get_conn
-from app.services.vkpi import audit, scope
+from app.domains import audit
+from app.services.vkpi import scope
 from app.domains.evidence.common import (
     _actor_id,
     _assert_kol_access,

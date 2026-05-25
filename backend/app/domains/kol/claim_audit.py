@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.core.logging import get_logger
-from app.services.vkpi import audit
+from app.domains import audit
 
 
 logger = get_logger(__name__)

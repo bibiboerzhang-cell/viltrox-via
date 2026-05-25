@@ -524,7 +524,7 @@ async def db_scope_middleware(request, call_next):
     async with db_connection_scope():
         response = await call_next(request)
         try:
-            from app.services.vkpi import audit as vkpi_audit
+            from app.domains import audit as vkpi_audit
 
             user = get_current_user(request)
             staff = staff_context_for_user(user) if user else None

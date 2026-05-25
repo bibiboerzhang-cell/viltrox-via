@@ -25,7 +25,7 @@ except ImportError:
     cleanup_admin = None
 
 from app.db.connection import get_conn
-from app.services.vkpi import audit
+from app.domains import audit
 from app.services.vkpi.audit_decorator import audit_action
 
 

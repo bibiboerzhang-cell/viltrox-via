@@ -16,7 +16,7 @@ os.environ.setdefault("DATABASE_URL", "")
 
 from app.core.security import make_token
 from app.db.connection import get_conn
-from app.services.vkpi import audit
+from app.domains import audit
 from app.services.vkpi.schema_audit import ensure_vkpi_audit_schema
 
 BASE = "http://127.0.0.1:8102"

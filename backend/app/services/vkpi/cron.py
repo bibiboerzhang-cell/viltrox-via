@@ -7,7 +7,7 @@ from typing import Any
 
 from app.core.config import VKPI_ASYNC_ENABLED
 from app.core.logging import get_logger
-from app.services.vkpi import audit
+from app.domains import audit
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
 
 logger = get_logger(__name__)

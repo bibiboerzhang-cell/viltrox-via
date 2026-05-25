@@ -6,7 +6,8 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
-from app.services.vkpi import audit, scope
+from app.domains import audit
+from app.services.vkpi import scope
 from app.domains.data_quality.common import _utcnow, ensure_data_quality_schema
 
 logger = get_logger(__name__)

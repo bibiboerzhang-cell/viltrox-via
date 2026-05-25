@@ -4,7 +4,8 @@ from __future__ import annotations
 from typing import Any
 
 from app.domains.staff import decision_staff as decision_engine
-from app.services.vkpi import audit, scope
+from app.domains import audit
+from app.services.vkpi import scope
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
 
 

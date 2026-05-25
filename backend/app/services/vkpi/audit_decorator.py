@@ -25,7 +25,7 @@ import functools
 import logging
 from typing import Any, Callable
 
-from app.services.vkpi import audit
+from app.domains import audit
 
 
 _logger = logging.getLogger(__name__)
