@@ -57,6 +57,7 @@ def render_markdown(report: dict[str, Any]) -> str:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build a read-only market intelligence v0 report.")
     parser.add_argument("--limit", type=int, default=120)
+    parser.add_argument("--run-id", type=int)
     parser.add_argument("--json-out", default="")
     parser.add_argument("--md-out", default="")
     parser.add_argument("--json", action="store_true")
@@ -74,7 +75,7 @@ def _write(path_value: str, content: str) -> None:
 async def async_main(argv: list[str] | None = None) -> int:
     try:
         args = parse_args(argv)
-        report = market_intelligence_v0.build_market_intelligence_v0(limit=args.limit)
+        report = market_intelligence_v0.build_market_intelligence_v0(limit=args.limit, run_id=args.run_id)
         markdown = render_markdown(report)
         if args.json_out:
             _write(args.json_out, json.dumps(report, ensure_ascii=False, indent=2, default=str) + "\n")

@@ -9,7 +9,7 @@ def test_market_intelligence_v0_is_read_only(monkeypatch) -> None:
     monkeypatch.setattr(
         market_intelligence_v0,
         "_competitor_rows",
-        lambda limit: [
+        lambda limit, run_id=None: [
             {
                 "id": 1,
                 "signal_uid": "sig-1",
@@ -58,10 +58,28 @@ def test_market_intelligence_v0_is_read_only(monkeypatch) -> None:
 def test_market_intelligence_v0_fails_without_storage(monkeypatch) -> None:
     monkeypatch.setattr(market_intelligence_v0, "_table_exists", lambda table: False)
     monkeypatch.setattr(market_intelligence_v0, "_count", lambda table: 0)
-    monkeypatch.setattr(market_intelligence_v0, "_competitor_rows", lambda limit: [])
+    monkeypatch.setattr(market_intelligence_v0, "_competitor_rows", lambda limit, run_id=None: [])
 
     report = market_intelligence_v0.build_market_intelligence_v0()
 
     assert report["passed"] is False
     assert report["checks"]["market_storage_ready"] is False
     assert report["checks"]["competitor_signals_ready"] is False
+
+
+def test_market_intelligence_v0_passes_run_scope(monkeypatch) -> None:
+    captured = {}
+    monkeypatch.setattr(market_intelligence_v0, "_table_exists", lambda table: True)
+    monkeypatch.setattr(market_intelligence_v0, "_count", lambda table: 2)
+
+    def fake_rows(limit, run_id=None):
+        captured["limit"] = limit
+        captured["run_id"] = run_id
+        return []
+
+    monkeypatch.setattr(market_intelligence_v0, "_competitor_rows", fake_rows)
+
+    report = market_intelligence_v0.build_market_intelligence_v0(limit=7, run_id=3)
+
+    assert captured == {"limit": 7, "run_id": 3}
+    assert report["summary"]["run_id"] == 3
