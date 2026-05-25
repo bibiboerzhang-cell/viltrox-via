@@ -1,17 +1,33 @@
 import {
   addCampaignProject,
+  addProjectContent,
+  addProjectMessage,
+  addProjectShipment,
   createBudgetPool,
   createCampaign,
+  createProject,
+  deleteProject,
   initiateOffboarding,
   listBudgetPools,
   listCampaigns,
+  transitionProjectStage,
+  updateProject,
+  upsertProjectTerms,
 } from '../../services/vkpi/projects-api';
 
 export {
   addCampaignProject,
+  addProjectContent,
+  addProjectMessage,
+  addProjectShipment,
   createBudgetPool,
   createCampaign,
+  createProject,
+  deleteProject,
   initiateOffboarding,
   listBudgetPools,
   listCampaigns,
+  transitionProjectStage,
+  updateProject,
+  upsertProjectTerms,
 };

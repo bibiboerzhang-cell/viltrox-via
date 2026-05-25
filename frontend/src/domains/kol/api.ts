@@ -12,12 +12,16 @@ import {
 } from '../../services/vkpi/kolPool-api';
 import {
   addKolContact,
+  claimKol,
   getKolAssessment,
   getKolPosts,
   getKolProductFit,
   getKolProfile,
   listKolContacts,
   listMarketingKols,
+  lookupKol,
+  scanKolAccount,
+  updateMarketingKol,
   type VkpiKolAssessmentResponse,
   type VkpiKolProductFitResponse,
 } from '../../services/vkpi/kol-api';
@@ -32,6 +36,7 @@ import {
 export {
   addKolContact,
   batchEnrichKolPool,
+  claimKol,
   createKolDecisionAudit,
   enrichKolPoolItem,
   getKolAssessment,
@@ -47,10 +52,13 @@ export {
   listKolContacts,
   listKolPool,
   listMarketingKols,
+  lookupKol,
   promoteKolPoolToMain,
+  scanKolAccount,
   searchMarketingKolsNatural,
   searchPlatformKols,
   searchVkpi,
+  updateMarketingKol,
   type VkpiKolAssessmentResponse,
   type VkpiKolDecisionPayload,
   type VkpiKolProductFitResponse,

@@ -2,39 +2,48 @@ import { useCallback, useEffect, useState } from "react";
 
 import { VkpiDashboard, type VkpiDashboardData } from "../../vkpi";
 import {
-  addProjectContent,
-  copyTextToClipboard,
-  addProjectMessage,
-  addProjectShipment,
-  addProjectCost,
-  archiveMarketingLink,
-  approveMarketingCost,
-  claimKol,
   createSalesAttribution,
-  createMarketingLink,
-  createProject,
-  deleteProject,
+  importAmazonAttributionRows,
+  uploadAmazonAttributionReport,
+} from "../../../domains/attribution";
+import {
+  addProjectCost,
+  approveMarketingCost,
+  updateMarketingCost,
+  upsertProductCost,
+  voidMarketingCost,
+} from "../../../domains/attribution";
+import {
+  copyTextToClipboard,
   exportVkpiReport,
   fetchVkpiDashboardData,
   generateWeeklyReport,
-  healthCheckMarketingLink,
-  importAmazonAttributionRows,
-  inviteMarketingStaff,
-  lookupKol,
-  pauseMarketingLink,
   runKpiRollup,
+} from "../../../domains/dashboard";
+import { uploadMarketingEvidenceFile } from "../../../domains/evidence";
+import {
+  claimKol,
+  lookupKol,
   scanKolAccount,
+  updateMarketingKol,
+} from "../../../domains/kol";
+import {
+  archiveMarketingLink,
+  createMarketingLink,
+  healthCheckMarketingLink,
+  pauseMarketingLink,
+} from "../../../domains/attribution";
+import {
+  addProjectContent,
+  addProjectMessage,
+  addProjectShipment,
+  createProject,
+  deleteProject,
   transitionProjectStage,
   updateProject,
-  updateMarketingKol,
-  updateStaffMarketingPermission,
-  updateMarketingCost,
-  uploadMarketingEvidenceFile,
   upsertProjectTerms,
-  upsertProductCost,
-  voidMarketingCost,
-  uploadAmazonAttributionReport,
-} from "../../../services/vkpi.ui-api";
+} from "../../../domains/projects";
+import { inviteMarketingStaff, updateStaffMarketingPermission } from "../../../domains/settings";
 import type { VkpiProjectStage } from "../../vkpi";
 import { uploadMyAvatar } from "../../../services/auth.service";
 import { useAuth } from "../../../hooks/useAuth";
