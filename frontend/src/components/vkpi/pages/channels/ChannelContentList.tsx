@@ -4,7 +4,7 @@ import {
   enqueueVideoCacheTask,
   getChannelPostComments,
   getOfficialChannelPosts,
-} from '../../../../services/vkpi/channel-api';
+} from '../../../../domains/channels';
 import type { ChannelCommentItem, ChannelCommentsResponse, ChannelContentPost, ChannelPostPagination, OfficialChannelAccount } from './channelTypes';
 import { useTaskCenter } from '../../../tasks/TaskCenter';
 import { invalidateCachedVideoUrl, platformExternalUrl, proxiedImageUrl, useCachedVideoUrl } from "../../shared/mediaProxy";

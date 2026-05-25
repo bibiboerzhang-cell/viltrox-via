@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { getOfficialChannelGapReport } from '../../../../services/vkpi/channel-api';
+import { getOfficialChannelGapReport } from '../../../../domains/channels';
 import type { ChannelGapAccount, ChannelGapIssue } from './channelTypes';
 
 type Row = Record<string, unknown>;

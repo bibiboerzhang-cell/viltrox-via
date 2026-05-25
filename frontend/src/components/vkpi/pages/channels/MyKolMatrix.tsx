@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { claimKol, getKolComments, getKolProfile, releaseKolClaim, scanKolAccount, updateMarketingKol } from '../../../../services/vkpi/kol-api';
+import { claimKol, getKolComments, getKolProfile, releaseKolClaim, scanKolAccount, updateMarketingKol } from '../../../../domains/channels';
 import type { VkpiDashboardData, VkpiKolProfile } from '../../vkpiTypes';
 import { platformDisplay, safeNumber } from '../../shared/vkpiDataUtils';
 import { numberFormatter } from '../../shared/vkpiFormatters';

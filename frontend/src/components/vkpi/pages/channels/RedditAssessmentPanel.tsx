@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getRedditChannelAssessment } from '../../../../services/vkpi/channel-api';
+import { getRedditChannelAssessment } from '../../../../domains/channels';
 import type { OfficialChannelAccount, RedditAssessmentPost, RedditAssessmentResponse } from './channelTypes';
 
 type Row = Record<string, unknown>;

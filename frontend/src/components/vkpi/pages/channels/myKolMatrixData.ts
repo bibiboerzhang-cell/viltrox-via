@@ -1,4 +1,4 @@
-import { getKolPosts } from '../../../../services/vkpi/kol-api';
+import { getKolPosts } from '../../../../domains/channels';
 import type { VkpiContactLink, VkpiDashboardData, VkpiKolOption, VkpiKolProfile, VkpiPlatform, VkpiProjectRow } from '../../vkpiTypes';
 import { stageLabels } from '../../shared/vkpiConstants';
 import { compactCount, platformDisplay, platformFromRaw, safeNumber } from '../../shared/vkpiDataUtils';
