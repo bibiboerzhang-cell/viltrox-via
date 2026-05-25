@@ -21,6 +21,11 @@ from app.domains.market.external_signal_smoke import (
     build_external_source_matrix,
     google_news_rss_url,
 )
+from app.domains.market.provider_preflight import (
+    DEFAULT_PROMPT,
+    PROVIDER_SOURCES,
+    build_provider_preflight,
+)
 from app.domains.market.signal_review_package import (
     build_external_signal_review_package,
     build_external_signal_review_package_from_files,
@@ -56,8 +61,10 @@ from app.domains.market.signal_write_package import (
 __all__ = [
     "ALLOWED_HOSTS",
     "DEFAULT_SOURCES",
+    "DEFAULT_PROMPT",
     "KEYWORD_GROUPS",
     "KEYWORDS",
+    "PROVIDER_SOURCES",
     "TIER1_GROUPS",
     "TIER2_GROUPS",
     "TARGET_TABLES",
@@ -66,6 +73,7 @@ __all__ = [
     "build_external_signal_smoke",
     "build_external_signal_smoke_from_file",
     "build_external_source_matrix",
+    "build_provider_preflight",
     "build_external_signal_review_package",
     "build_external_signal_review_package_from_files",
     "build_external_market_signal_write_package",
