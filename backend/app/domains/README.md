@@ -16,3 +16,4 @@ Initial domains:
 - `attribution`
 - `settings`
 - `repair`
+- `sync`
