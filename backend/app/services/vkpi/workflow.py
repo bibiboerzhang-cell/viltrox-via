@@ -28,7 +28,7 @@ from app.services.vkpi.workflow_evidence import (
     add_project_shipment,
     upsert_project_terms,
 )
-from app.services.vkpi.workflow_projects import (
+from app.domains.projects.workflow_projects import (
     create_project,
     delete_project,
     list_projects,
