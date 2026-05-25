@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from app.domains.intelligence import today_signals_use_case as today_new_signals_v0
 from app.domains.intelligence.weekly_plan import PLAN_VERSION, build_weekly_action_plan_report
-from app.services.vkpi import new_launch_acceptance_v0
+from app.domains.launch import acceptance_use_case as new_launch_acceptance_v0
 
 
 def build_weekly_action_plan_v0(

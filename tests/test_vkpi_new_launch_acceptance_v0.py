@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.services.vkpi import new_launch_acceptance_v0
+from app.domains.launch import acceptance_use_case as new_launch_acceptance_v0
 
 
 def test_new_launch_acceptance_combines_fit_trend_and_risk(monkeypatch) -> None:

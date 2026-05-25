@@ -6,6 +6,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from app.api.routers.vkpi_industry_market import router as market_router
 from app.api.dependencies.perms import require_tab
 from app.domains import intelligence as intelligence_domain
+from app.domains import launch as launch_domain
 from app.domains import trends as trends_domain
 from app.services.vkpi import (
     ab_experiments,
@@ -15,7 +16,6 @@ from app.services.vkpi import (
     content_brain,
     industry_data,
     llm_gateway,
-    new_launch_acceptance_v0,
     prediction_accuracy_feedback_v0,
     outcome_collector,
     prediction_calibration_v0,
@@ -263,7 +263,7 @@ def industry_new_launch_acceptance_v0(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     del staff
-    return new_launch_acceptance_v0.build_new_launch_acceptance_v0(
+    return launch_domain.build_new_launch_acceptance_v0(
         sku=sku,
         kol_limit=kol_limit,
         top_n=top_n,
