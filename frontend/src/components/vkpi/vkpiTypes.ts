@@ -6,6 +6,8 @@ export type VkpiPageKey =
   | 'dashboardPremium'
   | 'glass-demo'
   | 'agents'
+  | 'intelligenceCenter'
+  | 'repairCenter'
   | 'discover'
   | 'projects'
   | 'links'
