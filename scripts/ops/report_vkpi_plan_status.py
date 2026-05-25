@@ -246,7 +246,7 @@ def build_items(sync: dict[str, Any], r2: dict[str, Any], snapshot: dict[str, An
     competitor_relation_ready = (
         exists("migrations/069_vkpi_competitor_relation.sql")
         and exists("scripts/ops/backfill_vkpi_competitor_relations_after_sync.sh")
-        and contains("backend/app/services/vkpi/kol_competitor_detector.py", "vkpi_competitor_relation", "prefer_persisted")
+        and contains("backend/app/domains/kol/competitor_detector.py", "vkpi_competitor_relation", "prefer_persisted")
     )
     competitor_recommendation_ready = (
         contains("backend/app/services/vkpi/product_analysis.py", "COMPETITOR_SCORE_ADJUSTMENTS", "filtered_avoid")
@@ -346,11 +346,11 @@ def build_items(sync: dict[str, Any], r2: dict[str, Any], snapshot: dict[str, An
             "B 竞品识别",
             "done" if competitor_total > 0 else ("backfill_ready" if competitor_relation_ready else "partial_ui"),
             [
-                "kol_competitor_detector.py exists" if exists("backend/app/services/vkpi/kol_competitor_detector.py") else "detector missing",
+                "domain competitor_detector.py exists" if exists("backend/app/domains/kol/competitor_detector.py") else "detector missing",
                 "competitor API exists" if contains("backend/app/api/routers/vkpi_kol_pool.py", "/competitors") else "competitor API missing",
                 "competitor relation migration exists" if exists("migrations/069_vkpi_competitor_relation.sql") else "competitor relation migration missing",
                 "remote backfill guard exists" if exists("scripts/ops/backfill_vkpi_competitor_relations_after_sync.sh") else "backfill guard missing",
-                "API can prefer persisted relation" if contains("backend/app/services/vkpi/kol_competitor_detector.py", "prefer_persisted") else "persisted relation read missing",
+                "API can prefer persisted relation" if contains("backend/app/domains/kol/competitor_detector.py", "prefer_persisted") else "persisted relation read missing",
                 "Discover competitor block exists" if contains("frontend/src/components/vkpi/pages/DiscoverPage.tsx", "竞品关系") else "Discover competitor block missing",
                 "recommendation filter exists" if competitor_recommendation_ready else "recommendation filter missing",
                 f"persisted_relations={competitor_total}",

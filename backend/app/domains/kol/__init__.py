@@ -14,6 +14,15 @@ from app.domains.kol.claims import (
     update_kol_manual,
 )
 from app.domains.kol.claim_payloads import claim_payload
+from app.domains.kol.competitor_detector import (
+    batch_evaluate_kol_pool,
+    ensure_competitor_relation_schema,
+    evaluate_kol_competitor_relation,
+    evaluate_kol_competitors,
+    get_persisted_kol_competitors,
+    persist_competitor_relations,
+    persisted_competitor_dashboard,
+)
 from app.domains.kol.contacts import add_contact, contact_rows_for_request
 from app.domains.kol.decisions import (
     create_decision,
@@ -31,6 +40,7 @@ __all__ = [
     "add_contact",
     "analyze_account_for_request",
     "assessment_for_request",
+    "batch_evaluate_kol_pool",
     "claim",
     "claim_payload",
     "create_decision",
@@ -38,6 +48,10 @@ __all__ = [
     "contact_rows_for_request",
     "dossier_for_request",
     "dedup_key",
+    "ensure_competitor_relation_schema",
+    "evaluate_kol_competitor_relation",
+    "evaluate_kol_competitors",
+    "get_persisted_kol_competitors",
     "list_decisions",
     "list_followups",
     "list_claims",
@@ -46,6 +60,8 @@ __all__ = [
     "natural_search_payload",
     "normalize_handle",
     "normalize_platform",
+    "persist_competitor_relations",
+    "persisted_competitor_dashboard",
     "product_fit_for_request",
     "profile_with_dossier",
     "reassign",
