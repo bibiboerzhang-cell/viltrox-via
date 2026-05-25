@@ -1,4 +1,4 @@
-"""backend/app/services/vkpi/firewall_decorator.py
+"""backend/app/domains/access/firewall.py
 
 R59: 平台级防火墙装饰器
 
@@ -17,7 +17,7 @@ R59: 平台级防火墙装饰器
   - 失败信息明确告诉用户"哪一关没过"
 
 使用示例:
-    from app.services.vkpi.firewall_decorator import firewall_check
+    from app.domains.access.firewall import firewall_check
     
     @router.post("/kol_pool/import")
     @firewall_check(platform="instagram", action="import")

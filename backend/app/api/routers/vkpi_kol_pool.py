@@ -32,8 +32,8 @@ import app.domains.intelligence.ai_brief as ai_brief
 import app.domains.evidence.summary as evidence_summary
 import app.domains.sync.refresh_tier as refresh_tier
 import app.domains.tasks.enqueue as task_enqueue
-from app.services.vkpi.audit_decorator import audit_action
-from app.services.vkpi.firewall_decorator import firewall_check
+from app.domains.audit.decorator import audit_action
+from app.domains.access.firewall import firewall_check
 
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-kol-pool"])

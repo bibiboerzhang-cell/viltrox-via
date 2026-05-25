@@ -11,7 +11,8 @@ import asyncio
 import pytest
 from fastapi import HTTPException
 
-from app.services.vkpi import audit_decorator, firewall_decorator
+from app.domains.audit import decorator as audit_decorator
+from app.domains.access import firewall as firewall_decorator
 
 
 # ---------------------------------------------------------------------------

@@ -18,7 +18,7 @@ from app.api.dependencies.perms import require_tab
 from app.domains import sync as sync_domain
 from app.domains.sync import sync_status
 from app.domains.sync import cron
-from app.services.vkpi.audit_decorator import audit_action
+from app.domains.audit.decorator import audit_action
 
 
 router = APIRouter(prefix="/api/admin/vkpi/sync", tags=["vkpi-sync"])

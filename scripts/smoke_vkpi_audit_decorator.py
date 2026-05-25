@@ -26,7 +26,7 @@ except ImportError:
 
 from app.db.connection import get_conn
 from app.domains import audit
-from app.services.vkpi.audit_decorator import audit_action
+from app.domains.audit.decorator import audit_action
 
 
 PREFIX = "vkpi-audit-"

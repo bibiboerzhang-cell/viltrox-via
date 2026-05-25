@@ -1,4 +1,4 @@
-"""backend/app/services/vkpi/audit_decorator.py
+"""backend/app/domains/audit/decorator.py
 
 R59: 审计装饰器
 

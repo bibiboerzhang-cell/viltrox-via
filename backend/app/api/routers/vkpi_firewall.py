@@ -35,7 +35,7 @@ from app.api.dependencies.perms import require_tab
 import importlib
 
 platform_crawl_settings = importlib.import_module("app.domains.settings.platform_crawl")
-from app.services.vkpi.audit_decorator import audit_action
+from app.domains.audit.decorator import audit_action
 
 
 router = APIRouter(prefix="/api/admin/vkpi/settings/firewall", tags=["vkpi-firewall"])

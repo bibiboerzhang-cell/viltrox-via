@@ -33,7 +33,7 @@ from app.db.connection import get_conn
 import importlib
 
 platform_crawl_settings = importlib.import_module("app.domains.settings.platform_crawl")
-from app.services.vkpi.firewall_decorator import check_firewall, firewall_check
+from app.domains.access.firewall import check_firewall, firewall_check
 
 
 PREFIX = "vkpi-fw-"
