@@ -29,3 +29,4 @@ export {
   type VkpiKolDecisionPayload,
   type VkpiKolProductFitResponse,
 } from './api';
+export * from './kolModels';
