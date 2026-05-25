@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.services.vkpi import channels
+from app.domains import channels
 
 
 def test_media_urls_prefers_high_resolution_display_resource_when_cached(monkeypatch):

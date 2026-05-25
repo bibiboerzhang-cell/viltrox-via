@@ -8,7 +8,8 @@ from app.domains.kol import pool as kol_pool
 from app.domains import media as media_cache
 import app.domains.sync.refresh_tier as refresh_tier
 import app.domains.tasks.enqueue as task_enqueue
-from app.services.vkpi import channel_refill, channels
+from app.domains import channels
+from app.services.vkpi import channel_refill
 
 
 TERMINAL_STATUSES = {"done", "partial_done", "failed", "prefilter_rejected", "cancelled", "timeout"}

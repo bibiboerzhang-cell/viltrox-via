@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.services.vkpi import channels
+from app.domains import channels
 
 
 def _reddit_score(post: dict[str, Any]) -> tuple[int, str, str]:

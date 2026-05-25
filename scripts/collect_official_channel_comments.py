@@ -24,7 +24,7 @@ if str(BACKEND) not in sys.path:
 
 from app.db.connection import close_db_runtime, get_conn
 from app.domains.comments import channel as channel_comments
-from app.services.vkpi import channels
+from app.domains import channels
 
 
 def _staff() -> dict[str, Any]:

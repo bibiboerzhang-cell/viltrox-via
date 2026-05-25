@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
 from app.db.connection import get_conn  # noqa: E402
-from app.services.vkpi import channels  # noqa: E402
+from app.domains import channels  # noqa: E402
 from app.domains.media import cache_image, cache_video  # noqa: E402
 
 

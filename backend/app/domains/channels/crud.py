@@ -1,7 +1,7 @@
 """Channel binding, access, and team overview service functions."""
 from __future__ import annotations
 
-from app.services.vkpi.channels_common import *
+from app.domains.channels.common import *
 
 def bind_channel(body: dict[str, Any], *, staff: dict[str, Any] | None = None, view_as_staff_id: int | None = None) -> dict[str, Any]:
     ensure_vkpi_channels_schema()

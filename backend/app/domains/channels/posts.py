@@ -1,8 +1,8 @@
 """Channel post extraction, package parsing, and pagination helpers."""
 from __future__ import annotations
 
-from app.services.vkpi.channels_common import *
-from app.services.vkpi.channels_official import (
+from app.domains.channels.common import *
+from app.domains.channels.official import (
     _account_name,
     _account_url,
     _attach_cached_item_videos,

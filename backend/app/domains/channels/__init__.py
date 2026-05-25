@@ -6,12 +6,12 @@ legacy helper functions used by routers, scripts, and companion services.
 """
 from __future__ import annotations
 
-from app.services.vkpi.channels_common import *
-from app.services.vkpi.channels_crud import *
-from app.services.vkpi.channels_official import *
-from app.services.vkpi.channels_posts import *
-from app.services.vkpi.channels_evidence import *
-from app.services.vkpi import channels_posts as _channels_posts
+from app.domains.channels.common import *
+from app.domains.channels.crud import *
+from app.domains.channels.official import *
+from app.domains.channels.posts import *
+from app.domains.channels.evidence import *
+from app.domains.channels import posts as _channels_posts
 
 
 def _media_urls(*values):

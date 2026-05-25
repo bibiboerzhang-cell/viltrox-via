@@ -23,7 +23,7 @@ if str(BACKEND) not in sys.path:
 
 from app.db.connection import close_db_runtime, get_conn  # noqa: E402
 from app.domains.comments import channel as channel_comments  # noqa: E402
-from app.services.vkpi import channels  # noqa: E402
+from app.domains import channels  # noqa: E402
 
 
 def _text(value: Any, fallback: str = "") -> str:

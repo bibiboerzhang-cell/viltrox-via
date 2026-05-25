@@ -5,7 +5,7 @@ import os
 import urllib.parse
 from typing import Any
 
-from app.services.vkpi import channels
+from app.domains import channels
 
 APIFY_PLATFORMS = {"instagram", "tiktok", "facebook", "x", "reddit"}
 AUTO_REFILL_PLATFORMS = {"youtube", "instagram", "tiktok", "facebook", "reddit", "x"}

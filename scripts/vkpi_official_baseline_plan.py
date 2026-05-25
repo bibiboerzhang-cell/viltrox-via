@@ -107,7 +107,7 @@ def _accounts() -> list[dict[str, Any]]:
     import sys
 
     sys.path.insert(0, str(ROOT / "backend"))
-    from app.services.vkpi import channels  # noqa: WPS433
+    from app.domains import channels  # noqa: WPS433
 
     matrix = channels.official_account_matrix(staff={"id": 1, "role": "admin"}, limit=8)
     rows: list[dict[str, Any]] = []

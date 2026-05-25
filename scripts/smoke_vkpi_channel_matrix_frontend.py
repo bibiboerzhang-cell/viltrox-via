@@ -17,7 +17,7 @@ def main() -> None:
     channels_page = read("frontend/src/components/vkpi/pages/ChannelsPage.tsx")
     router = read("backend/app/api/routers/vkpi_operations.py")
     media_router = read("backend/app/api/routers/media.py")
-    channel_service = read("backend/app/services/vkpi/channels.py")
+    channel_service = read("backend/app/domains/channels/__init__.py")
     refill_service = read("backend/app/services/vkpi/channel_refill.py")
     media_cache_service = read("backend/app/domains/media/cache.py")
     gaps_service = read("backend/app/services/vkpi/channel_gaps.py")

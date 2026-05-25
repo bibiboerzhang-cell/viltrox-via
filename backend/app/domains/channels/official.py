@@ -1,8 +1,8 @@
 """Official-channel matrix and provider sample normalization."""
 from __future__ import annotations
 
-from app.services.vkpi.channels_common import *
-from app.services.vkpi.channels_media import _media_type_kind, _media_urls, _video_url
+from app.domains.channels.common import *
+from app.domains.channels.media import _media_type_kind, _media_urls, _video_url
 
 def _latest_official_channel_rows(staff: dict[str, Any] | None = None, view_as_staff_id: int | None = None) -> list[dict[str, Any]]:
     ensure_vkpi_channels_schema()
@@ -574,7 +574,7 @@ def _extract_posts(row: dict[str, Any], *, per_account_limit: int) -> list[dict[
 
 def official_account_matrix(*, staff: dict[str, Any] | None = None, view_as_staff_id: int | None = None, limit: int = 50) -> dict[str, Any]:
     """Return the global official-account hierarchy for staff and managers."""
-    from app.services.vkpi.channels_posts import _posts_from_package
+    from app.domains.channels.posts import _posts_from_package
 
     safe_limit = max(1, min(50, int(limit or 50)))
     cache_key = _channel_cache_key("official_matrix_global", limit=safe_limit)

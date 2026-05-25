@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from app.db.connection import get_conn
-from app.services.vkpi import channels
+from app.domains import channels
 from app.services.vkpi.official_post_identity import canonical_post_identity
 
 

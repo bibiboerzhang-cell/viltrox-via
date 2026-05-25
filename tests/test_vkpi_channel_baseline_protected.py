@@ -7,7 +7,7 @@ import pytest
 
 from app.db.connection import get_conn
 from app.domains.access import scope
-from app.services.vkpi import channels
+from app.domains import channels
 from app.services.vkpi.schema_channels import ensure_vkpi_channels_schema
 
 

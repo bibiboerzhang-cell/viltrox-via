@@ -1,7 +1,7 @@
 """Shared media URL extraction helpers for channel services."""
 from __future__ import annotations
 
-from app.services.vkpi.channels_common import *
+from app.domains.channels.common import *
 
 
 def _looks_like_image_media_url(url: str, *, key_hint: str = "") -> bool:

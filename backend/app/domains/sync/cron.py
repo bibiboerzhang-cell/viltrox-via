@@ -366,7 +366,7 @@ async def run_job(job_name: str, payload: dict[str, Any] | None = None, *, queue
                 ran.append(await analytics.monitor_product({"product_sku": product.get("product_sku"), "platform": platform, "max_videos": int(payload.get("max_videos") or 20)}))
         return {"job": name, "status": "ok", "runs": len(ran), "ran_at": _stamp()}
     if name == "channels_sync":
-        from app.services.vkpi import channels
+        from app.domains import channels
 
         rows = channels.list_channels(staff={}, limit=300).get("channels") or []
         max_posts = int(payload.get("channel_max_posts") or payload.get("max_posts") or 12)
@@ -383,7 +383,7 @@ async def run_job(job_name: str, payload: dict[str, Any] | None = None, *, queue
             results.append(channels.sync_now(int(row["id"]), staff=payload.get("staff"), max_posts=max_posts))
         return {"job": name, "status": "ok", "synced": len(results), "results": results[:20], "ran_at": _stamp()}
     if name == "official_full_baseline":
-        from app.services.vkpi import channels
+        from app.domains import channels
 
         platform_limits = {
             "youtube": 1000,
@@ -438,7 +438,8 @@ async def run_job(job_name: str, payload: dict[str, Any] | None = None, *, queue
         return {"job": name, "status": "ok", "digest": digest, "ran_at": _stamp()}
     if name == "morning_sync":
         from app.domains import analytics
-        from app.services.vkpi import channels, industry_snapshot_collector
+        from app.domains import channels
+        from app.services.vkpi import industry_snapshot_collector
 
         channel_rows = channels.list_channels(staff={}, limit=300).get("channels") or []
         channel_results = []

@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from app.services.vkpi import channels
+from app.domains import channels
 from app.db.connection import close_db_runtime
 
 

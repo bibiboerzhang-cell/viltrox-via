@@ -1,9 +1,9 @@
 """Evidence projections for official-channel analytics."""
 from __future__ import annotations
 
-from app.services.vkpi.channels_common import *
-from app.services.vkpi.channels_official import _platform_label, official_account_matrix
-from app.services.vkpi.channels_posts import _posts_from_package
+from app.domains.channels.common import *
+from app.domains.channels.official import _platform_label, official_account_matrix
+from app.domains.channels.posts import _posts_from_package
 
 def _all_posts_for_channel(row: dict[str, Any]) -> tuple[list[dict[str, Any]], str, str]:
     raw = _parse_json(row.get("metric_raw_payload_json"))
