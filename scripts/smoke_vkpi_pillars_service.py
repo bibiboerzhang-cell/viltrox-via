@@ -20,7 +20,7 @@ os.environ["LLM_MONTHLY_BUDGET_USD"] = "0"
 
 def main() -> None:
     from app.db.connection import get_conn
-    from app.services.vkpi import pillars
+    from app.domains.content import pillars
 
     marker = f"pillar_smoke_{uuid.uuid4().hex[:10]}"
     conn = get_conn()

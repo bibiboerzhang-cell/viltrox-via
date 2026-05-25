@@ -11,7 +11,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 
 from app.api.dependencies.perms import require_permission
-from app.services.vkpi import pillars
+from app.domains.content import pillars
 from app.services.vkpi.p1_compat import admin_router_prefix
 
 

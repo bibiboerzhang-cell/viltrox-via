@@ -18,7 +18,7 @@ from app.db.connection import get_conn
 from app.domains.comments import collector as comments_collector
 from app.domains.comments.intelligence_rules import _rule_sentiment, _rule_tags, rule_v0_comment_summary
 import app.domains.comments.sentiment as sentiment
-from app.services.vkpi import pillars
+from app.domains.content import pillars
 
 _rule_v0_comment_summary = rule_v0_comment_summary
 

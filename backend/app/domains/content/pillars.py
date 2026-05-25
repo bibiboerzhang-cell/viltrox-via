@@ -1,5 +1,5 @@
 """
-backend/app/services/vkpi/pillars.py
+backend/app/domains/content/pillars.py
 
 P1.5: Content pillar classification service.
 

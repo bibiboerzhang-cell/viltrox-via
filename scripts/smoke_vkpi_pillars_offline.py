@@ -16,7 +16,7 @@ def main():
     
     print("[1] Module import...")
     try:
-        from app.services.vkpi import pillars
+        from app.domains.content import pillars
         print("  ✓")
     except Exception as exc:
         failures.append(f"Cannot import pillars: {exc}")
