@@ -15,8 +15,8 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.db.connection import close_db_runtime  # noqa: E402
-from app.services.vkpi.legacy_import_audit import audit_legacy_file, write_reports  # noqa: E402
-from app.services.vkpi.legacy_entity_resolution import (  # noqa: E402
+from app.domains.legacy_import.legacy_import_audit import audit_legacy_file, write_reports  # noqa: E402
+from app.domains.legacy_import.legacy_entity_resolution import (  # noqa: E402
     bulk_decide,
     decide_resolution,
     format_bulk_decision_result,
@@ -31,14 +31,14 @@ from app.services.vkpi.legacy_entity_resolution import (  # noqa: E402
     resolve_batch,
     show_entity,
 )
-from app.services.vkpi.legacy_import_staging import (  # noqa: E402
+from app.domains.legacy_import.legacy_import_staging import (  # noqa: E402
     ensure_legacy_staging_schema,
     format_batch_summary,
     inspect_batch,
     rollback_staging_batch,
     stage_legacy_file,
 )
-from app.services.vkpi.legacy_kol_commit import (  # noqa: E402
+from app.domains.legacy_import.legacy_kol_commit import (  # noqa: E402
     commit_kol_pool_batch,
     dry_run_kol_pool_commit,
     format_kol_pool_commit_plan,

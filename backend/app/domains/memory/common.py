@@ -9,8 +9,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.db.connection import get_conn
-from app.services.vkpi.legacy_import_audit import _text
-from app.services.vkpi.legacy_import_staging import ensure_legacy_staging_schema, json_dumps
+from app.domains.legacy_import.legacy_import_audit import _text
+from app.domains.legacy_import.legacy_import_staging import ensure_legacy_staging_schema, json_dumps
 
 
 def ensure_memory_schema() -> None:

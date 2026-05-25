@@ -16,7 +16,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.db.connection import close_db_runtime, get_conn  # noqa: E402
-from app.services.vkpi.legacy_kol_commit import (  # noqa: E402
+from app.domains.legacy_import.legacy_kol_commit import (  # noqa: E402
     commit_kol_pool_batch,
     preview_kol_pool_rollback,
     rollback_kol_pool_commit,

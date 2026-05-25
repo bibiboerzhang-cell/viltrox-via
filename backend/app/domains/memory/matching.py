@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.db.connection import get_conn
-from app.services.vkpi.legacy_import_audit import _text
+from app.domains.legacy_import.legacy_import_audit import _text
 from app.domains.memory.common import (
     _kol_feature_summary,
     _load_json,

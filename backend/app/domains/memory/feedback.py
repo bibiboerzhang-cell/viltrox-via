@@ -4,8 +4,8 @@ from __future__ import annotations
 from typing import Any
 
 from app.db.connection import get_conn
-from app.services.vkpi.legacy_import_audit import _text
-from app.services.vkpi.legacy_import_staging import json_dumps
+from app.domains.legacy_import.legacy_import_audit import _text
+from app.domains.legacy_import.legacy_import_staging import json_dumps
 from app.domains.memory.common import (
     _load_json,
     _market_signal_counts,

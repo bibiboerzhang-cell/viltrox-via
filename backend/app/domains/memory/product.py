@@ -6,7 +6,7 @@ from collections import Counter
 from typing import Any
 
 from app.db.connection import get_conn
-from app.services.vkpi.legacy_import_audit import _text
+from app.domains.legacy_import.legacy_import_audit import _text
 from app.domains.memory.common import (
     _load_json,
     _public_entity,
