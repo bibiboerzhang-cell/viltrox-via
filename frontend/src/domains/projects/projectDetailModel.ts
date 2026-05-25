@@ -1,6 +1,6 @@
-import type { VkpiKolOption, VkpiProjectRow, VkpiProjectStage, VkpiStaffMember } from '../../vkpiTypes';
-import { primaryStageFlow, stageLabels } from '../../shared/vkpiConstants';
-import { currencyFormatter, numberFormatter } from '../../shared/vkpiFormatters';
+import type { VkpiKolOption, VkpiProjectRow, VkpiProjectStage, VkpiStaffMember } from '../../components/vkpi/vkpiTypes';
+import { primaryStageFlow, stageLabels } from '../../components/vkpi/shared/vkpiConstants';
+import { currencyFormatter, numberFormatter } from '../../components/vkpi/shared/vkpiFormatters';
 
 export const detailTabs = ['参与 KOL', '数据汇总', '物料', '费用', '合同归档', '复盘'] as const;
 export type DetailTab = typeof detailTabs[number];

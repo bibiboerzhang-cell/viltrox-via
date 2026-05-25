@@ -33,7 +33,7 @@ import {
   type ScreenshotTarget,
   type TaskItem,
   type TrackingState,
-} from './projectDetailModel';
+} from '../../../../domains/projects';
 
 export function ProjectDetailView({
   project,

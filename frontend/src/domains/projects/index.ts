@@ -1,2 +1,1 @@
-// Projects domain public surface.
-export {};
+export * from './projectDetailModel';

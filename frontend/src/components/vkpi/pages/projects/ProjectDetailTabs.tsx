@@ -16,7 +16,7 @@ import {
   type ProjectAnalyticsSummary,
   type ProjectStatsSummary,
   type StageCostSummary,
-} from './projectDetailModel';
+} from '../../../../domains/projects';
 
 export function CampaignContractsTab({
   rows,

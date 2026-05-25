@@ -12,7 +12,7 @@ import {
   stageIndex,
   type ScreenshotTarget,
   type TrackingState,
-} from './projectDetailModel';
+} from '../../../../domains/projects';
 
 interface ProjectParticipationTabProps {
   expandedRows: Set<string>;

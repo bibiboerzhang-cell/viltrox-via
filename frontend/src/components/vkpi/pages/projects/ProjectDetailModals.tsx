@@ -8,7 +8,7 @@ import {
   stageIndex,
   type ScreenshotTarget,
   type TrackingState,
-} from './projectDetailModel';
+} from '../../../../domains/projects';
 
 export function UploadScreenshotModal({
   target,
