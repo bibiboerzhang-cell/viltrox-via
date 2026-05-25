@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from app.services.vkpi import gemini_single_kol_preflight
+from app.domains.intelligence import gemini_single_kol_preflight
 from scripts import vkpi_gemini_single_kol_preflight as preflight_script
 from scripts import vkpi_gemini_go_no_go_report
 
