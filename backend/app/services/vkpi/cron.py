@@ -338,7 +338,7 @@ async def run_job(job_name: str, payload: dict[str, Any] | None = None, *, queue
         result = await asyncio.to_thread(kpi_ledger.generate_daily_rollup, payload.get("ledger_date"))
         return {"job": name, "status": "ok", "result": result, "ran_at": _stamp()}
     if name == "alerts":
-        from app.services.vkpi import alerts
+        from app.domains import alerts
 
         result = await asyncio.to_thread(alerts.generate_alerts)
         return {"job": name, "status": "ok", "result": result, "ran_at": _stamp()}

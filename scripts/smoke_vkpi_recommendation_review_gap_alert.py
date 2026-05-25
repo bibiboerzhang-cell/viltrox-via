@@ -24,7 +24,7 @@ def _utc(hours_ago: int = 0) -> str:
 def main() -> None:
     from app.db.connection import close_db_runtime, get_conn
     from app.domains.recommendations import product_analysis
-    from app.services.vkpi import alerts
+    from app.domains import alerts
     from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 
     ensure_vkpi_product_industry_schema()

@@ -16,7 +16,7 @@ def read(rel: str) -> str:
 def main() -> None:
     settings_router = read("backend/app/api/routers/vkpi_settings.py")
     platform_settings = read("backend/app/domains/settings/platform_crawl.py")
-    alerts = read("backend/app/services/vkpi/alerts.py")
+    alerts = read("backend/app/domains/alerts/service.py")
     ui_api = read("frontend/src/services/vkpi.ui-api.ts")
     settings_page = read("frontend/src/components/vkpi/pages/SettingsPage.tsx")
     controls = read("frontend/src/components/vkpi/pages/settings/SettingsControlPanels.tsx")

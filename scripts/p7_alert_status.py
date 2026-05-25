@@ -16,7 +16,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.db.connection import close_db_runtime, get_conn  # noqa: E402
-from app.services.vkpi.alerts import apply_alert_triage_suggestions, build_alert_triage_suggestions  # noqa: E402
+from app.domains.alerts import apply_alert_triage_suggestions, build_alert_triage_suggestions  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:

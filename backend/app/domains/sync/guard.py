@@ -457,7 +457,7 @@ def _upsert_sync_health_alert(*, run_id: str, health: dict[str, Any], summary: d
     if not health.get("has_errors") and not health.get("blocked_next_run"):
         return
     try:
-        from app.services.vkpi import alerts
+        from app.domains import alerts
 
         severity = "danger" if health.get("blocked_next_run") else "warning"
         title = "Daily sync requires acknowledgement" if health.get("blocked_next_run") else "Daily sync completed with provider errors"

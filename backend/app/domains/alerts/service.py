@@ -6,12 +6,12 @@ from typing import Any
 from datetime import datetime, timedelta, timezone
 
 from app.db.connection import get_conn
+from app.domains.alerts.common import resolve_open_alert as _resolve_open_alert
+from app.domains.alerts.common import table_exists as _table_exists
+from app.domains.alerts.common import utcnow
+from app.domains.alerts.detail import get_alert_detail
+from app.domains.alerts.triage import apply_alert_triage_suggestions, build_alert_triage_suggestions
 from app.services.vkpi import scope
-from app.services.vkpi.alerts_common import resolve_open_alert as _resolve_open_alert
-from app.services.vkpi.alerts_common import table_exists as _table_exists
-from app.services.vkpi.alerts_common import utcnow
-from app.services.vkpi.alerts_detail import get_alert_detail
-from app.services.vkpi.alerts_triage import apply_alert_triage_suggestions, build_alert_triage_suggestions
 from app.services.vkpi.schema import ensure_vkpi_schema
 
 
