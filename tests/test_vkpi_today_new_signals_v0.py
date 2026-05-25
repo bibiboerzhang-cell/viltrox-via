@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from app.services.vkpi import today_new_signals_v0
+from app.domains.intelligence import today_signals_use_case as today_new_signals_v0
 
 
 def _dt(hour: int) -> datetime:
