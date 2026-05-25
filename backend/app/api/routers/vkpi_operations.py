@@ -6,7 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from app.core.config import VKPI_ASYNC_ENABLED
 from app.api.dependencies.perms import require_tab
 from app.domains.comments import channel as channel_comments
-from app.services.vkpi import analytics, channel_gaps, channels, cron, p5_selected, reddit_channel_insights, scope, task_enqueue
+from app.domains.projects import p5_selected
+from app.services.vkpi import analytics, channel_gaps, channels, cron, reddit_channel_insights, scope, task_enqueue
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-operations"])

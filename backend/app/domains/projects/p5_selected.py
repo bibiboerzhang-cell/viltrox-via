@@ -11,7 +11,7 @@ from app.db.connection import get_conn
 from app.services.vkpi import audit
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.schema_p5_selected import ensure_vkpi_p5_selected_schema
-from app.services.vkpi.workflow import staff_id as resolve_staff_id
+from app.domains.projects.workflow_common import staff_id as resolve_staff_id
 
 logger = get_logger(__name__)
 
