@@ -9,14 +9,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
 from app.db.connection import get_conn
+from app.domains import dashboard as dashboard_domain
 from app.services.vkpi import audit, channels, decision_engine, kol_pool, metric_lineage, scope, workflow
 from app.services.vkpi.country_coords import country_geo, resolve_country_code
-from app.services.vkpi.dashboard_agents import (
-    _build_dashboard_agents_inbox,
-    _build_dashboard_agents_status,
-    _build_dashboard_copilot_brief,
-    _build_dashboard_tasks,
-)
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-dashboard"])
@@ -349,7 +344,7 @@ def dashboard_agents_status(
         kol_pool_total = int((row or {})["n"] or 0)
     except Exception:
         kol_pool_total = 0
-    return _build_dashboard_agents_status(kol_pool_total=kol_pool_total)
+    return dashboard_domain._build_dashboard_agents_status(kol_pool_total=kol_pool_total)
 
 
 @router.get("/dashboard/copilot-brief")
@@ -358,7 +353,7 @@ def dashboard_copilot_brief(
 ) -> dict:
     """Return the latest read-only brief-agent artifact for Dashboard Copilot."""
     del staff
-    return _build_dashboard_copilot_brief()
+    return dashboard_domain._build_dashboard_copilot_brief()
 
 
 @router.get("/dashboard/tasks")
@@ -368,7 +363,7 @@ def dashboard_tasks(
 ) -> dict:
     """Return dashboard task candidates from the latest recommendation-agent artifact."""
     del staff
-    return _build_dashboard_tasks(limit=limit)
+    return dashboard_domain._build_dashboard_tasks(limit=limit)
 
 
 @router.get("/dashboard/agents/inbox")
@@ -379,7 +374,7 @@ def dashboard_agents_inbox(
 ) -> dict:
     """Return read-only inbox items from existing runtime/ops agent artifacts."""
     del staff
-    return _build_dashboard_agents_inbox(limit=limit, agent_id=agent_id)
+    return dashboard_domain._build_dashboard_agents_inbox(limit=limit, agent_id=agent_id)
 
 
 @router.get("/dashboard/recent-content")

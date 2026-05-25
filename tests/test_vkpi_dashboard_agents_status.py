@@ -2,7 +2,7 @@ import json
 import os
 from pathlib import Path
 
-from app.api.routers import vkpi_dashboard_staff
+from app.domains import dashboard as dashboard_domain
 
 
 def _write(path: Path, payload: dict) -> None:
@@ -27,7 +27,7 @@ def test_dashboard_agents_status_reads_latest_runtime_artifacts(tmp_path: Path) 
         },
     )
 
-    payload = vkpi_dashboard_staff._build_dashboard_agents_status(str(tmp_path), kol_pool_total=1023)
+    payload = dashboard_domain._build_dashboard_agents_status(str(tmp_path), kol_pool_total=1023)
 
     agents = {agent["id"]: agent for agent in payload["agents"]}
     assert payload["total"] == 7
@@ -40,7 +40,7 @@ def test_dashboard_agents_status_reads_latest_runtime_artifacts(tmp_path: Path) 
 
 
 def test_dashboard_agents_status_marks_missing_artifacts_idle(tmp_path: Path) -> None:
-    payload = vkpi_dashboard_staff._build_dashboard_agents_status(str(tmp_path), kol_pool_total=0)
+    payload = dashboard_domain._build_dashboard_agents_status(str(tmp_path), kol_pool_total=0)
 
     assert payload["active_count"] == 0
     assert all(agent["status"] == "idle" for agent in payload["agents"])
@@ -58,7 +58,7 @@ def test_dashboard_copilot_brief_reads_latest_brief_artifact(tmp_path: Path) -> 
         },
     )
 
-    payload = vkpi_dashboard_staff._build_dashboard_copilot_brief(str(tmp_path))
+    payload = dashboard_domain._build_dashboard_copilot_brief(str(tmp_path))
 
     assert payload["is_real"] is True
     assert payload["headline"] == "今天优先处理 3 个 KOL 机会"
@@ -80,7 +80,7 @@ def test_dashboard_tasks_reads_recommendation_candidates(tmp_path: Path) -> None
         },
     )
 
-    payload = vkpi_dashboard_staff._build_dashboard_tasks(str(tmp_path), limit=6)
+    payload = dashboard_domain._build_dashboard_tasks(str(tmp_path), limit=6)
 
     assert payload["is_real"] is True
     assert payload["candidate_count"] == 2
@@ -116,7 +116,7 @@ def test_dashboard_agents_inbox_reads_runtime_artifacts_in_mtime_order(tmp_path:
     os.utime(brief_path, (100, 100))
     os.utime(recommendation_path, (200, 200))
 
-    payload = vkpi_dashboard_staff._build_dashboard_agents_inbox(str(tmp_path), limit=10)
+    payload = dashboard_domain._build_dashboard_agents_inbox(str(tmp_path), limit=10)
 
     assert payload["is_real"] is True
     assert payload["total"] == 2
@@ -146,7 +146,7 @@ def test_dashboard_agents_inbox_filters_agent_and_limits(tmp_path: Path) -> None
         },
     )
 
-    payload = vkpi_dashboard_staff._build_dashboard_agents_inbox(str(tmp_path), limit=1, agent_id="recommendation")
+    payload = dashboard_domain._build_dashboard_agents_inbox(str(tmp_path), limit=1, agent_id="recommendation")
 
     assert payload["total"] == 1
     assert payload["limit"] == 1
