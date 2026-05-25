@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.services.vkpi import product_fit_monitor
+from app.domains.products import product_fit_monitor
 
 
 def test_monitor_report_passes_with_visible_warnings(monkeypatch) -> None:
