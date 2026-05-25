@@ -311,7 +311,7 @@ export function ProfilePanel({
       <section className="vkpi-discover-card">
         <div className="vkpi-discover-card__title">
           <b>竞品关系</b>
-          <span>{competitorLoading ? '读取历史池' : competitorRows.length ? `${competitorRows.length} 条命中` : '历史池规则检测'}</span>
+          <span>{competitorLoading ? '读取竞品记录' : competitorRows.length ? `${competitorRows.length} 条命中` : '暂无命中'}</span>
         </div>
         {competitorLoading ? (
           <>
@@ -330,7 +330,7 @@ export function ProfilePanel({
             <b>{safeNumber(relation.risk_score).toFixed(1)}</b>
           </div>
         )) : (
-          <div className="vkpi-discover-empty is-compact">1012 历史池和已缓存资料暂无竞品证据；后续 deep scan 会补最近内容。</div>
+          <div className="vkpi-discover-empty is-compact">暂无已识别竞品合作记录。可先查看近期内容和品牌提及，再决定是否补充抓取。</div>
         )}
       </section>
 
