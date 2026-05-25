@@ -1,18 +1,16 @@
 """V-KPI KOL lifecycle, claim, and link center routes."""
 from __future__ import annotations
 
-from typing import Any
-
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
 from app.domains import attribution as attribution_domain
 from app.domains.kol import account as kol_account_domain
 from app.domains.kol import claims as kol_claims_domain
+from app.domains.kol import contacts as kol_contacts_domain
 from app.services.vkpi import scope
-from app.domains.kol.payload_utils import _int, _json_loads
 from app.domains.kol.natural_search import _natural_search_payload
-from app.domains.kol.profile_payloads import _assessment_payload, _contact_rows, _product_fit_payload
+from app.domains.kol.profile_payloads import _assessment_payload, _product_fit_payload
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-kol-links"])
 
@@ -133,7 +131,7 @@ def kol_contacts(
 ):
     try:
         kol_claims_domain.assert_kol_access(int(kol_id), staff, allow_unclaimed=True)
-        return _contact_rows(int(kol_id), include_wrong=include_wrong)
+        return kol_contacts_domain.contact_rows(int(kol_id), include_wrong=include_wrong)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
@@ -142,47 +140,8 @@ def kol_contacts(
 
 @router.post("/kols/{kol_id}/contacts")
 def add_kol_contact(kol_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
-    contact_type = str(body.get("contact_type") or body.get("type") or "").strip().lower()
-    contact_value = str(body.get("contact_value") or body.get("value") or "").strip()
-    if not contact_type or not contact_value:
-        raise HTTPException(status_code=400, detail="contact_type and contact_value required")
     try:
-        kol_claims_domain.assert_kol_access(int(kol_id), staff, allow_unclaimed=True)
-        ctx = _latest_kol_context(int(kol_id))
-        kol = ctx["kol"]
-        links = _json_loads(kol.get("contact_links_json"), [])
-        if not isinstance(links, list):
-            links = []
-        existing_values = {
-            str(item.get("value") or item.get("url") or "").strip().lower()
-            for item in links
-            if isinstance(item, dict)
-        }
-        payload: dict[str, Any] = {
-            "contact_links": links,
-            "notes": str(body.get("evidence") or body.get("note") or "").strip(),
-        }
-        if contact_type in {"email", "manager_email"} and "@" in contact_value:
-            payload["contact_email"] = contact_value
-        elif contact_type in {"phone", "whatsapp"}:
-            payload["contact_phone"] = contact_value
-        if contact_value.lower() not in existing_values:
-            payload["contact_links"] = [
-                *links,
-                {
-                    "label": contact_type,
-                    "value": contact_value,
-                    "url": contact_value if contact_value.startswith("http") else "",
-                    "layer": _int(body.get("layer"), 5),
-                    "source": str(body.get("source") or "manual_input"),
-                    "confidence": _int(body.get("confidence"), 100),
-                    "evidence": str(body.get("evidence") or ""),
-                    "verified": True,
-                    "status": "active",
-                },
-            ]
-        kol_claims_domain.update_kol_manual(int(kol_id), payload, staff=staff)
-        return _contact_rows(int(kol_id), include_wrong=True)
+        return kol_contacts_domain.add_contact(int(kol_id), body, staff=staff)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
