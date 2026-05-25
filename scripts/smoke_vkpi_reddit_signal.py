@@ -27,7 +27,7 @@ from app.domains.market.signal_taxonomy import (
     keyword_hits,
     summarize_keyword_groups,
 )
-from app.services.vkpi.reddit_stability_strategy import RECOMMENDED_WATCHLIST, SOURCE_LIMITS
+from app.domains.market.reddit_stability_strategy import RECOMMENDED_WATCHLIST, SOURCE_LIMITS
 
 
 def _now_z() -> str:
