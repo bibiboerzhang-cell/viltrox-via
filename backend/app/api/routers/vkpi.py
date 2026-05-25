@@ -4,8 +4,8 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
+import app.domains.attribution.integrations as integrations
 from app.domains.attribution import link_center
-from app.services.vkpi import integrations
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi"])
 public_router = APIRouter(prefix="/go", tags=["vkpi-public"])
