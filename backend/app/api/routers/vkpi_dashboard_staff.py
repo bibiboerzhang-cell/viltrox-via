@@ -56,9 +56,10 @@ def dashboard_revenue_trend(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     try:
-        return decision_engine.revenue_trend(
+        return dashboard_domain.build_revenue_trend(
             window_days=window_days,
-            staff_id=scope.effective_staff_id(staff, staff_id),
+            staff_id=staff_id,
+            staff=staff,
         )
     except scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
@@ -72,10 +73,11 @@ def dashboard_product_performance(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     try:
-        return decision_engine.product_performance(
+        return dashboard_domain.build_product_performance(
             window_days=window_days,
-            staff_id=scope.effective_staff_id(staff, staff_id),
+            staff_id=staff_id,
             limit=limit,
+            staff=staff,
         )
     except scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
