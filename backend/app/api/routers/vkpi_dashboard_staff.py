@@ -4,7 +4,6 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
-from app.db.connection import get_conn
 from app.domains import dashboard as dashboard_domain
 from app.services.vkpi import audit, decision_engine, scope, workflow
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
@@ -98,13 +97,7 @@ def dashboard_agents_status(
 ) -> dict:
     """Return read-only dashboard status for existing V-KPI agents."""
     del staff
-    conn = get_conn()
-    try:
-        row = conn.execute("SELECT COUNT(*) AS n FROM vkpi_kol_pool").fetchone()
-        kol_pool_total = int((row or {})["n"] or 0)
-    except Exception:
-        kol_pool_total = 0
-    return dashboard_domain._build_dashboard_agents_status(kol_pool_total=kol_pool_total)
+    return dashboard_domain.build_dashboard_agents_status()
 
 
 @router.get("/dashboard/copilot-brief")

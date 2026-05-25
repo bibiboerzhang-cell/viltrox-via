@@ -3,10 +3,28 @@ import os
 from pathlib import Path
 
 from app.domains import dashboard as dashboard_domain
+from app.domains.dashboard import agents as dashboard_agents
 
 
 def _write(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+class _Rows:
+    def __init__(self, row):
+        self.row = row
+
+    def fetchone(self):
+        return self.row
+
+
+class _Conn:
+    def __init__(self, row):
+        self.row = row
+
+    def execute(self, query):
+        assert "COUNT(*) AS n FROM vkpi_kol_pool" in query
+        return _Rows(self.row)
 
 
 def test_dashboard_agents_status_reads_latest_runtime_artifacts(tmp_path: Path) -> None:
@@ -37,6 +55,16 @@ def test_dashboard_agents_status_reads_latest_runtime_artifacts(tmp_path: Path) 
     assert agents["market_intel"]["summary"] == "25 条市场信号 · 7 条高优先级"
     assert agents["kol_intel"]["status"] == "active"
     assert agents["kol_intel"]["summary"] == "1023 个 KOL 已入池"
+
+
+def test_build_dashboard_agents_status_reads_kol_pool_total(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(dashboard_agents, "get_conn", lambda: _Conn({"n": 7}))
+
+    payload = dashboard_domain.build_dashboard_agents_status(str(tmp_path))
+
+    agents = {agent["id"]: agent for agent in payload["agents"]}
+    assert agents["kol_intel"]["status"] == "active"
+    assert agents["kol_intel"]["summary"] == "7 个 KOL 已入池"
 
 
 def test_dashboard_agents_status_marks_missing_artifacts_idle(tmp_path: Path) -> None:

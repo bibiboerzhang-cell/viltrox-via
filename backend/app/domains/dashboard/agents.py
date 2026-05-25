@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.db.connection import get_conn
+
 
 DASHBOARD_AGENT_SPECS = [
     {"id": "recommendation", "name": "推荐 Agent", "pattern": "*p7-82-recommendation-agent-v0.json"},
@@ -190,6 +192,16 @@ def _build_dashboard_agents_status(ops_dir: str = "runtime/ops", kol_pool_total:
         "is_real": True,
         "source": "runtime/ops + vkpi_kol_pool",
     }
+
+
+def build_dashboard_agents_status(ops_dir: str = "runtime/ops") -> dict[str, Any]:
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT COUNT(*) AS n FROM vkpi_kol_pool").fetchone()
+        kol_pool_total = int((row or {})["n"] or 0)
+    except Exception:
+        kol_pool_total = 0
+    return _build_dashboard_agents_status(ops_dir=ops_dir, kol_pool_total=kol_pool_total)
 
 
 def _build_dashboard_copilot_brief(ops_dir: str = "runtime/ops") -> dict[str, Any]:
