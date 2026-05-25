@@ -8,15 +8,14 @@ from app.db.connection import get_conn
 from app.domains.kol import claim_audit
 from app.domains.kol import claim_listing
 from app.domains.kol import claim_lookup
+from app.domains.kol import manual_update
 from app.services.vkpi import scope
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.workflow import staff_id
 from app.services.vkpi.kol_claims_common import (
-    assert_kol_access,
     _claim_payload,
     _int,
     _json,
-    _json_array,
     utcnow,
 )
 
@@ -177,62 +176,4 @@ def list_kols(
 
 
 def update_kol_manual(kol_id: int, body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
-    ensure_vkpi_schema()
-    assert_kol_access(int(kol_id), staff, allow_unclaimed=True)
-    actor_staff_id = staff_id(staff)
-    allowed = {
-        "avatar_url": "avatar_url",
-        "profile_url": "profile_url",
-        "contact_email": "contact_email",
-        "contact_phone": "contact_phone",
-        "notes": "notes",
-        "media_name": "media_name",
-        "owner_name": "owner_name",
-        "country": "country",
-        "niche": "niche",
-        "primary_category": "primary_category",
-        "promoted_product": "promoted_product",
-        "follower_count": "follower_count",
-        "avg_views": "avg_views",
-    }
-    updates: list[str] = []
-    params: list[Any] = []
-    for key, column in allowed.items():
-        if key not in body:
-            continue
-        value = body.get(key)
-        if column in {"follower_count", "avg_views"}:
-            params.append(_int(value))
-        else:
-            params.append(str(value or "").strip())
-        updates.append(f"{column}=?")
-    if "contact_links" in body:
-        updates.append("contact_links_json=?")
-        params.append(_json_array(body.get("contact_links")))
-    if "contact_raw" in body:
-        updates.append("contact_raw_json=?")
-        params.append(_json(body.get("contact_raw")))
-    if not updates:
-        row = get_conn().execute("SELECT * FROM kols WHERE id=?", (int(kol_id),)).fetchone()
-        return {"kol": dict(row) if row else {}}
-    now = utcnow()
-    updates.append("updated_at=?")
-    params.append(now)
-    params.append(int(kol_id))
-    conn = get_conn()
-    conn.execute(f"UPDATE kols SET {', '.join(updates)} WHERE id=?", params)
-    conn.commit()
-    row = conn.execute("SELECT * FROM kols WHERE id=?", (int(kol_id),)).fetchone()
-    changed_fields = [allowed[key] for key in allowed if key in body]
-    if "contact_links" in body:
-        changed_fields.append("contact_links_json")
-    if "contact_raw" in body:
-        changed_fields.append("contact_raw_json")
-    _log_kol_audit(
-        actor_staff_id=actor_staff_id,
-        action_type="kol_manual_update",
-        kol_id=int(kol_id),
-        detail=",".join(changed_fields),
-        metadata={"changed_fields": changed_fields},
-    )
-    return {"kol": dict(row) if row else {}}
+    return manual_update.update_kol_manual(kol_id, body, staff=staff)
