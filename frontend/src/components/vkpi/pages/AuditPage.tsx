@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getAuditOverview } from '../../../services/vkpi/audit-api';
+import { getAuditOverview } from '../../../domains/audit';
 import type { VkpiAuditOverview } from '../vkpiTypes';
 import { CardHeader } from '../shared/CardHeader';
 import { InfoBlock } from '../shared/InfoBlock';
