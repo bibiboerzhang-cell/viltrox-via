@@ -21,6 +21,14 @@ from app.domains.market.external_signal_smoke import (
     build_external_source_matrix,
     google_news_rss_url,
 )
+from app.domains.market.intelligence_cards import (
+    build_market_intelligence_cards,
+    build_market_intelligence_cards_from_files,
+    latest_external_signal_smoke_report,
+    latest_usable_market_llm_report,
+    render_market_intelligence_cards_markdown,
+    write_market_intelligence_cards,
+)
 from app.domains.market.llm_quality import (
     evaluate_market_llm_output,
     evaluate_market_llm_report,
@@ -82,6 +90,8 @@ __all__ = [
     "build_external_signal_review_package",
     "build_external_signal_review_package_from_files",
     "build_external_market_signal_write_package",
+    "build_market_intelligence_cards",
+    "build_market_intelligence_cards_from_files",
     "build_market_signal_classification",
     "build_market_signal_review_package",
     "build_market_signal_review_package_from_file",
@@ -95,11 +105,14 @@ __all__ = [
     "google_news_rss_url",
     "keyword_groups",
     "keyword_hits",
+    "latest_external_signal_smoke_report",
+    "latest_usable_market_llm_report",
     "render_competitor_signal_write_markdown",
     "render_external_daily_candidate_plan_markdown",
     "render_external_signal_smoke_markdown",
     "render_external_signal_review_package_markdown",
     "render_classification_markdown",
+    "render_market_intelligence_cards_markdown",
     "render_review_package_markdown",
     "summarize_keyword_groups",
     "write_competitor_signal_write_report",
@@ -107,5 +120,6 @@ __all__ = [
     "write_external_signal_smoke",
     "write_external_signal_review_package_report",
     "write_classification_report",
+    "write_market_intelligence_cards",
     "write_review_package_report",
 ]
