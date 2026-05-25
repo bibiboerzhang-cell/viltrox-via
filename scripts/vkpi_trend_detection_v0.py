@@ -18,7 +18,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.db.connection import close_db_runtime  # noqa: E402
-from app.services.vkpi import trend_detection_v0  # noqa: E402
+from app.domains.trends import trend_detection_use_case as trend_detection_v0  # noqa: E402
 
 
 def _as_dict(value: Any) -> dict[str, Any]:

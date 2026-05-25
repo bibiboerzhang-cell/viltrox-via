@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from app.services.vkpi import trend_detection_v0
+from app.domains.trends import trend_detection_use_case as trend_detection_v0
 
 
 def _dt(day: int) -> datetime:

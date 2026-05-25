@@ -11,7 +11,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from app.services.vkpi import trend_detection_v0
+from app.domains.trends import trend_detection_use_case as trend_detection_v0
 
 
 CALIBRATION_VERSION = "prediction-calibration-v0.1"

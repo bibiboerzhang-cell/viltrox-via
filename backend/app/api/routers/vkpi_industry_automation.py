@@ -6,6 +6,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from app.api.routers.vkpi_industry_market import router as market_router
 from app.api.dependencies.perms import require_tab
 from app.domains import intelligence as intelligence_domain
+from app.domains import trends as trends_domain
 from app.services.vkpi import (
     ab_experiments,
     audience_graph,
@@ -20,7 +21,6 @@ from app.services.vkpi import (
     prediction_calibration_v0,
     product_campaign_card,
     training_data_export,
-    trend_detection_v0,
 )
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-industry-automation"])
@@ -247,7 +247,7 @@ def industry_trend_detection_v0(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     del staff
-    return trend_detection_v0.build_trend_detection_v0(
+    return trends_domain.build_trend_detection_v0(
         lookback_days=lookback_days,
         limit=limit,
         top_signals=top_signals,

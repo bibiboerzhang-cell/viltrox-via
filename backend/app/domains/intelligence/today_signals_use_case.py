@@ -12,7 +12,7 @@ from app.domains.intelligence.today_signals import (
     COMMENT_OPPORTUNITY_KEYWORDS,
     build_today_new_signals_report,
 )
-from app.services.vkpi import trend_detection_v0
+from app.domains.trends import trend_detection_use_case as trend_detection_v0
 
 
 def _now() -> datetime:
