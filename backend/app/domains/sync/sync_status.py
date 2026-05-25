@@ -1,4 +1,4 @@
-"""backend/app/services/vkpi/sync_status.py
+"""backend/app/domains/sync/sync_status.py
 
 R60: Sync 状态聚合服务
 

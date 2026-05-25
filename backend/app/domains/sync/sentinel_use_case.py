@@ -24,7 +24,7 @@ from app.domains.sync.sentinel import (
     sort_signals,
     text,
 )
-from app.services.vkpi import sync_status
+from app.domains.sync import sync_status
 
 
 DEFAULT_OPS_DIR = "runtime/ops"

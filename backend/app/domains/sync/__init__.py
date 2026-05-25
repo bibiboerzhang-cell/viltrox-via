@@ -1,5 +1,6 @@
 """Sync domain facade."""
 
+from app.domains.sync import sync_status
 from app.domains.sync.sentinel import (
     SENTINEL_VERSION,
     build_sync_sentinel_report,
@@ -44,4 +45,5 @@ __all__ = [
     "signals_from_p6_79",
     "sort_signals",
     "start_sync_run",
+    "sync_status",
 ]

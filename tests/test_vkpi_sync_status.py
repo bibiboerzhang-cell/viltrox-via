@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from app.services.vkpi import sync_status
+from app.domains.sync import sync_status
 
 
 class _Rows:
