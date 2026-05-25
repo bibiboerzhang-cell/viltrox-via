@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.services.vkpi import link_center, scope
+from app.domains.attribution import link_center
+from app.services.vkpi import scope
 
 
 def list_links(
