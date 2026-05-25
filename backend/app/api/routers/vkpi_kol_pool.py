@@ -25,12 +25,12 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from app.api.dependencies.perms import require_tab
 from app.domains.kol import competitor_detector as kol_competitor_detector
 from app.domains.kol import intelligence_card as kol_intelligence_card
+from app.domains.kol import pool as kol_pool
 from app.services.vkpi import (
     ai_brief,
     evidence_summary,
     eleven_dimensions,
     gemini_single_kol_preflight,
-    kol_pool,
     refresh_tier,
     task_enqueue,
 )

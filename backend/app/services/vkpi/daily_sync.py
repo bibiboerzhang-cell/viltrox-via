@@ -11,7 +11,8 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
-from app.services.vkpi import channels, daily_sync_guard as _guard, kol_pool, refresh_tier
+from app.domains.kol import pool as kol_pool
+from app.services.vkpi import channels, daily_sync_guard as _guard, refresh_tier
 from app.services.vkpi.daily_sync_guard import (
     ENRICHABLE_KOL_PLATFORMS,
     KOL_PROVIDER_ERROR_STOP_THRESHOLD,

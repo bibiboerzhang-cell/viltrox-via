@@ -7,7 +7,8 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime
-from app.services.vkpi import audit, kol_pool, outcome_collector
+from app.domains.kol import pool as kol_pool
+from app.services.vkpi import audit, outcome_collector
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
 

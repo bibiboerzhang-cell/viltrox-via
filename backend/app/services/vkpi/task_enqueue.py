@@ -240,7 +240,7 @@ async def enqueue_vkpi_task(
         if _int(params.get("channel_id")):
             params["channel_id"] = _int(params.get("channel_id"))
     if task_type == VKPI_KOL_POOL_ON_DEMAND_REFRESH:
-        from app.services.vkpi import kol_pool
+        from app.domains.kol import pool as kol_pool
 
         kol_pool_id = _int(params.get("kol_pool_id"))
         if not kol_pool_id:

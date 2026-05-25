@@ -8,7 +8,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
-from app.services.vkpi import kol_pool, product_analysis
+from app.domains.kol import pool as kol_pool
+from app.services.vkpi import product_analysis
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-product-analysis"])
 

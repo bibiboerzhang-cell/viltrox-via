@@ -4,7 +4,8 @@ import asyncio
 from types import SimpleNamespace
 
 from app.api.routers import vkpi_kol_pool
-from app.services.vkpi import kol_pool, refresh_tier, task_enqueue
+from app.domains.kol import pool as kol_pool
+from app.services.vkpi import refresh_tier, task_enqueue
 from app.workers.tasks import vkpi as vkpi_tasks
 
 

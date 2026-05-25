@@ -13,7 +13,8 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Iterable
 
-from app.services.vkpi import budget_guard, kol_pool, llm_gateway
+from app.domains.kol import pool as kol_pool
+from app.services.vkpi import budget_guard, llm_gateway
 
 
 GEMINI_SINGLE_KOL_SCOPE = "cron:p4_gemini_single_kol"
