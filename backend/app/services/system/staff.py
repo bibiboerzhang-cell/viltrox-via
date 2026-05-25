@@ -10,12 +10,9 @@ Domains:
 from __future__ import annotations
 
 import json
-import os
 import secrets
-from datetime import datetime, timedelta
 from typing import Any
 
-from app.core.config import SITE_URL
 from app.core.logging import get_logger
 from app.core.permissions import (
     OWNER_EMAILS,
@@ -26,27 +23,39 @@ from app.core.permissions import (
 )
 from app.core.security import hash_password
 from app.db.connection import get_conn, is_postgres_runtime
-from app.services.auth.email import email_service_available, send_email
+from app.services.auth.email import email_service_available
 from app.services.auth.tokens import create_email_token
+from app.services.system.staff_helpers import (
+    _allow_any_external,
+    _augment_member_invite_status,
+    _compute_delivery_method,
+    _compute_verification_status,
+    _get_active_invite_token,
+    _inviter_is_owner,
+    _load_allowed_domains,
+    _password_reset_url,
+    _permissions_from_invite_body,
+    _send_staff_invite_email,
+    _send_staff_password_reset_email,
+    _staff_activation_url,
+    _staff_columns,
+    _staff_id_for_user,
+    _strip_admin_levels,
+    _token_hint,
+    _truthy,
+    _utcnow,
+    _validate_email_domain,
+    _validate_staff_email,
+)
+from app.services.system.staff_tokens import (
+    create_api_token,
+    get_audit_log,
+    list_api_tokens,
+    revoke_api_token,
+    verify_token,
+)
 
 logger = get_logger(__name__)
-
-
-def _load_allowed_domains() -> list[str]:
-    """Load staff email domain allowlist from environment."""
-    domains = ["viltrox.com"]
-    extra = os.environ.get("ALLOWED_EXTERNAL_STAFF_DOMAINS", "").strip()
-    if extra:
-        for domain in extra.split(","):
-            normalized = domain.strip().lower().lstrip("@")
-            if normalized and normalized not in domains:
-                domains.append(normalized)
-    return domains
-
-
-def _allow_any_external() -> bool:
-    """Return whether any external staff email domain is allowed."""
-    return os.environ.get("ALLOW_EXTERNAL_STAFF_EMAILS", "").strip().lower() in {"1", "true", "yes"}
 
 
 ALLOWED_STAFF_EMAIL_DOMAINS = _load_allowed_domains()
@@ -678,339 +687,3 @@ def permission_matrix() -> dict:
             "readonly": default_permissions_for_role("readonly"),
         },
     }
-
-
-# =========================================================================
-# Audit log
-# =========================================================================
-
-def get_audit_log(
-    *,
-    actor_id: int | None = None,
-    action: str | None = None,
-    target_type: str | None = None,
-    target_id: str | None = None,
-    from_date: str | None = None,
-    to_date: str | None = None,
-    limit: int = 100,
-) -> dict:
-    conn = get_conn()
-    where, params = [], []
-    if actor_id:
-        where.append("actor_id = ?"); params.append(actor_id)
-    if action:
-        where.append("action = ?"); params.append(action)
-    if target_type:
-        where.append("target_type = ?"); params.append(target_type)
-    if target_id:
-        where.append("target_id = ?"); params.append(target_id)
-    if from_date:
-        where.append("occurred_at >= ?"); params.append(from_date)
-    if to_date:
-        where.append("occurred_at <= ?"); params.append(to_date)
-    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
-    rows = conn.execute(
-        f"""SELECT * FROM admin_audit_log {where_sql}
-            ORDER BY occurred_at DESC LIMIT ?""",
-        [*params, limit],
-    ).fetchall()
-    out = []
-    for r in rows:
-        item = dict(r)
-        if item.get("detail_json"):
-            try:
-                item["detail"] = json.loads(item["detail_json"])
-            except Exception:
-                logger.debug(
-                    "staff.audit_detail_json_parse_failed",
-                    extra={"audit_log_id": item.get("id")},
-                    exc_info=True,
-                )
-        out.append(item)
-    return {"entries": out}
-
-
-# =========================================================================
-# API tokens
-# =========================================================================
-
-def list_api_tokens() -> dict:
-    conn = get_conn()
-    rows = conn.execute(
-        """SELECT id, token_prefix, name, scope, created_by, created_at,
-                  last_used_at, last_used_ip, expires_at, revoked_at, active
-           FROM api_tokens ORDER BY active DESC, created_at DESC"""
-    ).fetchall()
-    return {"tokens": [dict(r) for r in rows]}
-
-
-def create_api_token(body: dict, *, created_by: int) -> dict:
-    """Generate + hash + insert. Returns full token ONLY this one time."""
-    name = body.get("name")
-    scope = body.get("scope", "readonly")
-    ttl_days = body.get("expires_days", 90)
-
-    if not name:
-        raise ValueError("name required")
-    if scope not in {"admin", "readonly", "ci"}:
-        raise ValueError("scope must be admin|readonly|ci")
-
-    raw_tail = secrets.token_urlsafe(32)
-    full_token = f"sk_vos_{raw_tail}"
-    prefix = full_token[:12]  # 'sk_vos_AAAA'
-    token_hash = _hash_token(full_token)
-
-    expires_at = None
-    if ttl_days:
-        expires_at = (datetime.utcnow() + timedelta(days=ttl_days)).isoformat()
-
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        """INSERT INTO api_tokens
-            (token_prefix, token_hash, name, scope, created_by, expires_at)
-           VALUES (?,?,?,?,?,?)""",
-        (prefix, token_hash, name, scope, created_by, expires_at),
-    )
-    conn.commit()
-    return {
-        "id": cur.lastrowid,
-        "token": full_token,          # show to user ONCE
-        "prefix": prefix,
-        "name": name,
-        "scope": scope,
-        "expires_at": expires_at,
-    }
-
-
-def revoke_api_token(token_id: int, admin_id: int) -> None:
-    conn = get_conn()
-    conn.execute(
-        """UPDATE api_tokens SET active = 0,
-            revoked_at = datetime('now'), revoked_by = ?
-           WHERE id = ?""",
-        (admin_id, token_id),
-    )
-    conn.commit()
-
-
-def verify_token(raw_token: str) -> dict | None:
-    """Lookup + verify. Call from a middleware that inspects Authorization header."""
-    conn = get_conn()
-    prefix = raw_token[:12]
-    rows = conn.execute(
-        "SELECT * FROM api_tokens WHERE token_prefix = ? AND active = 1",
-        (prefix,),
-    ).fetchall()
-    for r in rows:
-        if _verify_token(raw_token, r["token_hash"]):
-            # Check expiry
-            if r["expires_at"]:
-                try:
-                    if datetime.fromisoformat(r["expires_at"]) < datetime.utcnow():
-                        return None
-                except Exception:
-                    logger.warning(
-                        "staff.api_token_expiry_parse_failed",
-                        extra={"token_id": r["id"]},
-                        exc_info=True,
-                    )
-                    return None
-            # Update last_used
-            conn.execute(
-                "UPDATE api_tokens SET last_used_at = datetime('now') WHERE id = ?",
-                (r["id"],),
-            )
-            conn.commit()
-            return dict(r)
-    return None
-
-
-def _hash_token(raw: str) -> str:
-    """Use argon2 if available; fallback to sha256."""
-    try:
-        from argon2 import PasswordHasher
-        return PasswordHasher().hash(raw)
-    except ImportError:
-        import hashlib
-        return "sha256$" + hashlib.sha256(raw.encode()).hexdigest()
-
-
-def _verify_token(raw: str, stored: str) -> bool:
-    if stored.startswith("sha256$"):
-        import hashlib
-        return "sha256$" + hashlib.sha256(raw.encode()).hexdigest() == stored
-    try:
-        from argon2 import PasswordHasher
-        from argon2.exceptions import VerifyMismatchError
-        try:
-            PasswordHasher().verify(stored, raw)
-            return True
-        except VerifyMismatchError:
-            return False
-    except ImportError:
-        return False
-
-
-def _validate_staff_email(email: str) -> None:
-    if "@" not in email:
-        raise ValueError("valid email required")
-    domain = email.rsplit("@", 1)[-1].lower()
-    allowed = _load_allowed_domains()
-    if domain in allowed or _allow_any_external():
-        return
-    raise ValueError(
-        f"Email domain '{domain}' not in allowed list. "
-        f"Allowed: {', '.join(allowed)}. "
-        "Set ALLOW_EXTERNAL_STAFF_EMAILS=1 or "
-        "ALLOWED_EXTERNAL_STAFF_DOMAINS=domain1,domain2 to allow others."
-    )
-
-
-def _validate_email_domain(email: str) -> None:
-    _validate_staff_email(email)
-
-
-def _permissions_from_invite_body(body: dict) -> dict[str, Any]:
-    raw = (
-        body.get("permissions")
-        or body.get("permissions_override")
-        or body.get("permissions_json")
-        or {}
-    )
-    if isinstance(raw, str):
-        try:
-            parsed = json.loads(raw)
-            return parsed if isinstance(parsed, dict) else {}
-        except Exception:
-            logger.debug("staff.permissions_json_payload_parse_failed", exc_info=True)
-            return {}
-    return raw if isinstance(raw, dict) else {}
-
-
-def _augment_member_invite_status(conn, member: dict[str, Any]) -> None:
-    member.setdefault("email", member.get("user_email"))
-    member.setdefault("full_name", member.get("user_name"))
-    active_token = _get_active_invite_token(conn, int(member.get("user_id") or 0))
-    member["invite_token_active"] = bool(active_token)
-    member["verification_status"] = _compute_verification_status(member, active_token)
-    member["delivery_method"] = _compute_delivery_method(member, active_token)
-
-
-def _get_active_invite_token(conn, user_id: int) -> dict[str, Any] | None:
-    if not user_id:
-        return None
-    try:
-        row = conn.execute(
-            """
-            SELECT token, expires_at, used_at
-            FROM email_tokens
-            WHERE user_id = ? AND type = 'staff_invite' AND used_at IS NULL
-            ORDER BY created_at DESC
-            LIMIT 1
-            """,
-            (int(user_id),),
-        ).fetchone()
-    except Exception:
-        logger.debug("staff.active_invite_token_lookup_failed", extra={"user_id": user_id}, exc_info=True)
-        return None
-    if not row:
-        return None
-    token = dict(row)
-    expires_at = str(token.get("expires_at") or "")
-    if expires_at and expires_at < _utcnow():
-        return None
-    return token
-
-
-def _compute_verification_status(member: dict[str, Any], active_token: dict[str, Any] | None) -> str:
-    try:
-        if _truthy(member.get("user_email_verified")):
-            return "verified"
-        if member.get("accepted_at"):
-            return "activated"
-        if member.get("invited_at"):
-            return "pending" if active_token else "expired"
-        return "draft"
-    except Exception:
-        logger.debug("staff.verification_status_compute_failed", extra={"staff_id": member.get("id")}, exc_info=True)
-        return "unknown"
-
-
-def _compute_delivery_method(member: dict[str, Any], active_token: dict[str, Any] | None) -> str:
-    if member.get("invited_at") and not member.get("accepted_at"):
-        return "pending_invite" if active_token else "unknown"
-    if member.get("accepted_at") and _truthy(member.get("user_email_verified")):
-        return "email"
-    if member.get("accepted_at"):
-        return "manual_link"
-    return "unknown"
-
-
-def _truthy(value: Any) -> bool:
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return bool(value)
-
-
-def _staff_activation_url(token: str) -> str:
-    site_url = os.environ.get("SITE_URL", "http://localhost:5173").strip() or "http://localhost:5173"
-    return f"{site_url.rstrip('/')}/activate?token={token}"
-
-
-def _password_reset_url(token: str) -> str:
-    site_url = os.environ.get("SITE_URL", "http://localhost:5173").strip() or "http://localhost:5173"
-    return f"{site_url.rstrip('/')}?reset_token={token}"
-
-
-def _token_hint(token: str) -> str:
-    if len(token) <= 8:
-        return "..." if token else ""
-    return f"{token[:4]}...{token[-4:]}"
-
-
-def _utcnow() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _staff_columns(conn) -> set[str]:
-    try:
-        rows = conn.execute("PRAGMA table_info(staff)").fetchall()
-        return {str(row["name"]) for row in rows}
-    except Exception:
-        return set()
-
-
-def _staff_id_for_user(conn, user_id: int) -> int | None:
-    try:
-        row = conn.execute("SELECT id FROM staff WHERE user_id = ? ORDER BY id DESC LIMIT 1", (int(user_id),)).fetchone()
-        return int(row["id"]) if row else None
-    except Exception:
-        return None
-
-
-def _send_staff_invite_email(email: str, token: str) -> bool:
-    url = f"{SITE_URL.rstrip('/')}/login?staff_invite={token}"
-    html = (
-        '<div style="font-family:Inter,Arial,sans-serif;max-width:560px;margin:0 auto;padding:32px 24px">'
-        '<p style="font-size:20px;font-weight:900;color:#0f172a">Viltrox Marketing</p>'
-        '<h2 style="font-size:22px;font-weight:800">You have been invited to Viltrox Marketing</h2>'
-        '<p style="color:#5f6673;font-size:14px">Use the secure link below to set your password and accept the invite.</p>'
-        f'<a href="{url}" style="display:inline-block;padding:13px 28px;background:#1a1d23;color:#fff;'
-        'font-weight:700;font-size:14px;text-decoration:none;border-radius:8px">Accept invite</a>'
-        '<p style="color:#aaa;font-size:12px;margin-top:24px">Link expires automatically.</p></div>'
-    )
-    return send_email(email, "Viltrox Marketing invitation", html)
-
-
-def _send_staff_password_reset_email(email: str, name: str, reset_url: str) -> bool:
-    html = (
-        '<div style="font-family:Inter,Arial,sans-serif;max-width:560px;margin:0 auto;padding:32px 24px">'
-        '<p style="font-size:20px;font-weight:900;color:#0f172a">Viltrox Marketing</p>'
-        '<h2 style="font-size:22px;font-weight:800">Reset your password</h2>'
-        f'<p style="color:#5f6673;font-size:14px">Hi {name}, use the secure link below to reset your password.</p>'
-        f'<a href="{reset_url}" style="display:inline-block;padding:13px 28px;background:#1a1d23;color:#fff;'
-        'font-weight:700;font-size:14px;text-decoration:none;border-radius:8px">Reset password</a>'
-        '<p style="color:#aaa;font-size:12px;margin-top:24px">Link expires in 1 hour.</p></div>'
-    )
-    return send_email(email, "Reset your Viltrox Marketing password", html)
