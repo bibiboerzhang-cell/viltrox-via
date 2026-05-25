@@ -12,9 +12,9 @@ from typing import Any
 
 from app.db.connection import get_conn
 from app.domains.kol import history_match as kol_history_match
+from app.domains.kol import product_fit as kol_product_fit
 from app.services.vkpi import (
     kol_pool,
-    kol_product_fit,
     refresh_tier,
 )
 

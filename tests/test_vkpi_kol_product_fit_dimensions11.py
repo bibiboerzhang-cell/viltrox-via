@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import json
 
-from app.services.vkpi import kol_product_fit
-from app.services.vkpi.kol_product_fit import (
+from app.domains.kol import product_fit as kol_product_fit
+from app.domains.kol.product_fit import (
     _catalog_product_for_sku,
     _catalog_products_for_match,
     _dimensions11_product_fit_for_family,
