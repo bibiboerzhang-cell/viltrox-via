@@ -21,7 +21,7 @@ os.environ["LLM_MONTHLY_BUDGET_USD"] = "0"
 
 def main() -> None:
     from app.db.connection import get_conn
-    from app.services.vkpi import weekly_report_generator
+    from app.domains.reports import weekly_generator as weekly_report_generator
 
     marker = f"weekly_smoke_{uuid.uuid4().hex[:10]}"
     conn = get_conn()

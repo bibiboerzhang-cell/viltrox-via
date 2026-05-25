@@ -17,12 +17,12 @@ os.environ["LLM_MONTHLY_BUDGET_USD"] = "0"
 
 def main() -> None:
     from app.db.connection import get_conn
+    from app.domains.reports import weekly_generator as weekly_report_generator
     from app.services.vkpi import (
         comment_intelligence,
         comments_collector,
         pillars,
         sentiment,
-        weekly_report_generator,
     )
 
     marker = f"weekly_ci_{uuid.uuid4().hex[:10]}"

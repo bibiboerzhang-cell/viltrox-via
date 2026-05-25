@@ -12,7 +12,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 
 from app.api.dependencies.perms import require_permission
-from app.services.vkpi import weekly_report_generator
+from app.domains.reports import weekly_generator as weekly_report_generator
 from app.services.vkpi.p1_compat import admin_router_prefix
 
 

@@ -16,7 +16,8 @@ def main():
     
     print("[1] Module imports...")
     try:
-        from app.services.vkpi import weekly_report_templates, weekly_report_generator
+        from app.domains.reports import weekly_generator as weekly_report_generator
+        from app.domains.reports import weekly_templates as weekly_report_templates
         print("  ✓")
     except Exception as exc:
         failures.append(f"Cannot import: {exc}")
