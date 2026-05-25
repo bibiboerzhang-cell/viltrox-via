@@ -11,7 +11,7 @@ from app.domains.kol import pool as kol_pool
 from app.domains.recommendations import outcomes as outcome_collector
 from app.domains import audit
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
-from app.services.vkpi.workflow import staff_id as resolve_staff_id
+from app.domains.projects.workflow import staff_id as resolve_staff_id
 
 logger = get_logger(__name__)
 

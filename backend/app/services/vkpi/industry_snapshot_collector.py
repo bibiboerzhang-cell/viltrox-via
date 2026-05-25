@@ -18,7 +18,7 @@ import importlib
 
 platform_crawl_settings = importlib.import_module("app.domains.settings.platform_crawl")
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
-from app.services.vkpi.workflow import staff_id as resolve_staff_id
+from app.domains.projects.workflow import staff_id as resolve_staff_id
 
 
 from app.services.vkpi.industry_snapshot_kpis import SNAPSHOT_FIELDS, _int, _json, _parse_duration_seconds, _snippet, _stats, _today, _utcnow, _video_items, calculate_kpis

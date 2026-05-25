@@ -6,7 +6,7 @@ from typing import Any
 from app.domains import lineage as metric_lineage
 from app.domains.dashboard import decision_dashboard as decision_engine
 from app.domains.access import scope
-from app.services.vkpi.workflow import staff_id as resolve_staff_id
+from app.domains.projects.workflow import staff_id as resolve_staff_id
 
 
 def staff_id_from_context(view: str, staff: dict[str, Any]) -> int | None:

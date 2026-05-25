@@ -21,7 +21,7 @@ from app.domains.access import scope
 from app.domains.media import cached_image_url, cached_video_url, cached_video_url_for_item
 from app.services.vkpi.official_post_identity import canonical_post_identity
 from app.services.vkpi.schema_channels import ensure_vkpi_channels_schema
-from app.services.vkpi.workflow import staff_id as resolve_staff_id
+from app.domains.projects.workflow import staff_id as resolve_staff_id
 
 SUPPORTED_PLATFORMS = {"youtube", "instagram", "tiktok", "xhs", "xiaohongshu", "bilibili", "facebook", "reddit", "x", "threads", "twitch", "pinterest", "vimeo", "website", "other"}
 CHANNEL_READ_CACHE_TTL_SEC = 300

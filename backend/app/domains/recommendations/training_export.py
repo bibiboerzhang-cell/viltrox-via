@@ -10,7 +10,7 @@ from typing import Any
 from app.db.connection import get_conn
 from app.domains.recommendations import outcomes as outcome_collector
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
-from app.services.vkpi.workflow import staff_id as resolve_staff_id
+from app.domains.projects.workflow import staff_id as resolve_staff_id
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 EXPORT_DIR = PROJECT_ROOT / "runtime" / "vkpi_training_exports"

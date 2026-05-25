@@ -12,8 +12,8 @@ from app.domains import lineage as metric_lineage
 from app.domains.staff import kpi_ledger
 from app.domains import audit
 from app.domains.access import scope
-from app.services.vkpi import workflow
-from app.services.vkpi.workflow import staff_id as resolve_staff_id
+from app.domains.projects import workflow
+from app.domains.projects.workflow import staff_id as resolve_staff_id
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-attribution-metrics"])
 

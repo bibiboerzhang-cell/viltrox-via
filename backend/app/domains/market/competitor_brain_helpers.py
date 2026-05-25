@@ -9,7 +9,7 @@ from typing import Any
 
 from app.db.connection import get_conn
 from app.domains.market.content_brain import COMPETITOR_BRANDS, VILTROX_TERMS
-from app.services.vkpi.workflow import staff_id as resolve_staff_id
+from app.domains.projects.workflow import staff_id as resolve_staff_id
 
 SCENARIO = "p8_competitor_brain_preview"
 FORBIDDEN_WRITE_FLAGS = {"--commit", "--write-db", "--provider", "--crawl", "--record-cost"}

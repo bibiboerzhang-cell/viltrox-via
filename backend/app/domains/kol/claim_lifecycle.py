@@ -11,7 +11,7 @@ from app.domains.kol.claim_store import utcnow
 from app.domains.kol.payload_utils import _int
 from app.domains.access import scope
 from app.services.vkpi.schema import ensure_vkpi_schema
-from app.services.vkpi.workflow import staff_id
+from app.domains.projects.workflow import staff_id
 
 
 def claim(kol_id: int, body: dict[str, Any] | None = None, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:

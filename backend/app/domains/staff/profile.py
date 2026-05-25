@@ -6,7 +6,7 @@ from typing import Any
 from app.domains.staff import decision_staff as decision_engine
 from app.domains import audit
 from app.domains.access import scope
-from app.services.vkpi.workflow import staff_id as resolve_staff_id
+from app.domains.projects.workflow import staff_id as resolve_staff_id
 
 
 def is_manager_staff(staff: dict[str, Any]) -> bool:

@@ -19,7 +19,7 @@ os.environ.setdefault("ENVIRONMENT", "local")
 
 from _smoke_seed import cleanup_admin, seed_admin
 from app.db.connection import get_conn
-from app.services.vkpi import workflow
+from app.domains.projects import workflow
 from app.services.vkpi.schema import ensure_vkpi_schema
 
 

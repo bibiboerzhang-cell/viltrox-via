@@ -7,7 +7,7 @@ from app.domains.dashboard.recent_content import _dashboard_official_matrix_summ
 from app.domains import lineage as metric_lineage
 from app.domains.dashboard import decision_dashboard as decision_engine
 from app.domains.access import scope
-from app.services.vkpi.workflow import staff_id as resolve_staff_id
+from app.domains.projects.workflow import staff_id as resolve_staff_id
 
 
 def build_dashboard_summary(

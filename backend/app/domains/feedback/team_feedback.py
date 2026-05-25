@@ -13,7 +13,7 @@ from typing import Any
 from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime
 from app.domains import audit
-from app.services.vkpi.workflow import staff_id as resolve_staff_id
+from app.domains.projects.workflow import staff_id as resolve_staff_id
 
 FEEDBACK_TYPES = {"bug", "suggestion", "question", "missing_data", "button_issue"}
 SEVERITIES = {"low", "medium", "high", "critical"}

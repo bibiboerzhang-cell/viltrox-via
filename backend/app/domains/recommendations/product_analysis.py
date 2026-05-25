@@ -16,7 +16,7 @@ from app.domains import audit
 from app.services.vkpi import feature_store
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 from app.services.vkpi.scoring import ScoringRegistry
-from app.services.vkpi.workflow import staff_id as resolve_staff_id
+from app.domains.projects.workflow import staff_id as resolve_staff_id
 
 COMPETITOR_SCORE_ADJUSTMENTS = {
     "avoid": -999.0,

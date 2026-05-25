@@ -11,7 +11,7 @@ from app.db.connection import get_conn
 from app.domains import audit
 from app.domains.access import scope
 from app.services.vkpi.schema import ensure_vkpi_schema
-from app.services.vkpi.workflow import staff_id
+from app.domains.projects.workflow import staff_id
 
 SOURCE_PLATFORMS = {"shopify", "amazon", "webhook", "manual", "custom"}
 logger = get_logger(__name__)

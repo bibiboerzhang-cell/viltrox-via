@@ -11,7 +11,7 @@ from app.services.cache import cache_clear
 from app.services.vkpi.channel_post_metrics import record_channel_post_metrics
 from app.domains.media import prewarm_official_media_cache
 from app.services.vkpi.schema_channels import ensure_vkpi_channels_schema
-from app.services.vkpi.workflow import staff_id as resolve_staff_id
+from app.domains.projects.workflow import staff_id as resolve_staff_id
 
 
 ProgressCallback = Callable[[int, str], None]

@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.api.dependencies.perms import require_tab
 from app.domains import costs
 from app.domains.access import scope
-from app.services.vkpi import workflow
+from app.domains.projects import workflow
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-projects"])
 

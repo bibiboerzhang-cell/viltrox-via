@@ -18,7 +18,7 @@ from app.domains.kol.pool_common import (
     _utcnow,
 )
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
-from app.services.vkpi.workflow import staff_id as resolve_staff_id
+from app.domains.projects.workflow import staff_id as resolve_staff_id
 
 
 def main_candidates(kol_pool_id: int, *, limit: int = 5) -> dict[str, Any]:

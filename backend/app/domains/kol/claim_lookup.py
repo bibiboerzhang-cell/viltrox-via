@@ -14,7 +14,7 @@ from app.domains.kol.identity import (
     normalize_platform,
 )
 from app.services.vkpi.schema import ensure_vkpi_schema
-from app.services.vkpi.workflow import staff_id
+from app.domains.projects.workflow import staff_id
 
 
 def lookup(body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:

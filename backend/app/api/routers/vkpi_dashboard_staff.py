@@ -7,7 +7,7 @@ from app.api.dependencies.perms import require_tab
 from app.domains import dashboard as dashboard_domain
 from app.domains import staff as staff_domain
 from app.domains.access import scope
-from app.services.vkpi import workflow
+from app.domains.projects import workflow
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-dashboard"])
 

@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from app.core.logging import get_logger
 from app.db.connection import is_postgres_runtime
-from app.services.vkpi.workflow import staff_id as resolve_staff_id
+from app.domains.projects.workflow import staff_id as resolve_staff_id
 
 
 DEFAULT_PLATFORMS = ["youtube", "instagram", "tiktok", "xiaohongshu", "facebook", "reddit", "x"]

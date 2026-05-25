@@ -12,9 +12,9 @@ from app.services.vkpi._utils import json_dumps, json_loads, utcnow_iso
 from app.domains.attribution import link_center
 from app.domains import audit
 from app.domains.access import scope
-from app.services.vkpi import workflow
+from app.domains.projects import workflow
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
-from app.services.vkpi.workflow import staff_id as resolve_staff_id
+from app.domains.projects.workflow import staff_id as resolve_staff_id
 
 
 def _utcnow() -> str:

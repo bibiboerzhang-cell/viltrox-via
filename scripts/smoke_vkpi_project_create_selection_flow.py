@@ -22,7 +22,7 @@ if str(ROOT / "scripts") not in sys.path:
 
 from _smoke_seed import cleanup_admin, seed_admin  # noqa: E402
 from app.db.connection import get_conn  # noqa: E402
-from app.services.vkpi import workflow  # noqa: E402
+from app.domains.projects import workflow  # noqa: E402
 from app.services.vkpi.schema import ensure_vkpi_schema  # noqa: E402
 
 MARKER_PREFIX = "vkpi-p39a-project-flow"

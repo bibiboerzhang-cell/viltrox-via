@@ -10,7 +10,7 @@ from app.domains.kol.claim_payloads import json_array, json_object
 from app.domains.kol.claim_store import utcnow
 from app.domains.kol.payload_utils import _int
 from app.services.vkpi.schema import ensure_vkpi_schema
-from app.services.vkpi.workflow import staff_id
+from app.domains.projects.workflow import staff_id
 
 
 ALLOWED_MANUAL_FIELDS = {

@@ -10,7 +10,7 @@ from app.domains.costs.common import TYPE_ALIASES, VALID_COST_TYPES, _amount_cen
 from app.domains.costs.product_catalog import ensure_product_catalog_schema, list_product_catalog
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.schema_audit import ensure_vkpi_audit_schema
-from app.services.vkpi.workflow import staff_id
+from app.domains.projects.workflow import staff_id
 
 
 def _ensure_cost_ledger_columns() -> None:
