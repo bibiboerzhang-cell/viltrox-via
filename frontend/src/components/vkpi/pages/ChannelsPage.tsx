@@ -3,7 +3,7 @@ import {
   bindEmployeeChannel,
   listEmployeeChannels,
   syncEmployeeChannel,
-} from '../../../services/vkpi.ui-api';
+} from '../../../domains/channels';
 import { useTaskCenter } from '../../tasks/TaskCenter';
 import { ChannelAccountList } from './channels/ChannelAccountList';
 import { ChannelContentList } from './channels/ChannelContentList';

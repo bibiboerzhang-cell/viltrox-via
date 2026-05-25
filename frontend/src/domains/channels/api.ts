@@ -1,4 +1,5 @@
 import {
+  bindEmployeeChannel,
   collectChannelPostComments,
   enqueueVideoCacheTask,
   getChannelPostComments,
@@ -6,6 +7,8 @@ import {
   getOfficialChannelMatrix,
   getOfficialChannelPosts,
   getRedditChannelAssessment,
+  listEmployeeChannels,
+  syncEmployeeChannel,
 } from '../../services/vkpi/channel-api';
 import {
   claimKol,
@@ -18,6 +21,7 @@ import {
 } from '../../services/vkpi/kol-api';
 
 export {
+  bindEmployeeChannel,
   claimKol,
   collectChannelPostComments,
   enqueueVideoCacheTask,
@@ -29,7 +33,9 @@ export {
   getOfficialChannelMatrix,
   getOfficialChannelPosts,
   getRedditChannelAssessment,
+  listEmployeeChannels,
   releaseKolClaim,
   scanKolAccount,
+  syncEmployeeChannel,
   updateMarketingKol,
 };

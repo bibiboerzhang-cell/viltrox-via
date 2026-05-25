@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { getOfficialChannelMatrix } from '../../../../services/vkpi.ui-api';
+import { getOfficialChannelMatrix } from '../../../../domains/channels';
 import type { ChannelContentPost, OfficialChannelAccount, OfficialChannelPlatform } from './channelTypes';
 
 type Row = Record<string, unknown>;

@@ -2,7 +2,7 @@ import { Avatar } from '../../shared/Avatar';
 import { platformLabels, stageLabels } from '../../shared/vkpiConstants';
 import { arrayValue, compactCount, objectValue, safeNumber, textValue } from '../../shared/vkpiDataUtils';
 import type { VkpiDashboardData, VkpiKolLookupResult, VkpiKolProfile, VkpiPlatform, VkpiProjectRow } from '../../vkpiTypes';
-import type { VkpiKolAssessmentResponse, VkpiKolProductFitResponse } from '../../../../services/vkpi/kol-api';
+import type { VkpiKolAssessmentResponse, VkpiKolProductFitResponse } from '../../../../domains/kol';
 
 interface UiKol {
   id: string;

@@ -1,5 +1,6 @@
 // Channels domain public surface.
 export {
+  bindEmployeeChannel,
   claimKol,
   collectChannelPostComments,
   enqueueVideoCacheTask,
@@ -11,7 +12,9 @@ export {
   getOfficialChannelMatrix,
   getOfficialChannelPosts,
   getRedditChannelAssessment,
+  listEmployeeChannels,
   releaseKolClaim,
   scanKolAccount,
+  syncEmployeeChannel,
   updateMarketingKol,
 } from './api';
