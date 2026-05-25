@@ -28,7 +28,7 @@ from typing import Any
 
 from app.db.connection import get_conn
 from app.services.vkpi.industry_crawlers import get_crawler
-from app.services.vkpi.p1_compat import resolve_post_for_comments
+from app.domains.comments.compat import resolve_post_for_comments
 
 
 # Default per-post max comments by platform (overridable via env)

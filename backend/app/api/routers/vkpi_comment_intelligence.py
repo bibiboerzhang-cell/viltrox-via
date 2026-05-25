@@ -6,8 +6,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_permission
+from app.domains.comments.compat import admin_router_prefix
 from app.domains.comments import intelligence as comment_intelligence
-from app.services.vkpi.p1_compat import admin_router_prefix
 
 
 router = APIRouter(

@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, Query
 
 import app.domains.comments.sentiment as sentiment
 from app.api.dependencies.perms import require_permission
-from app.services.vkpi.p1_compat import admin_router_prefix
+from app.domains.comments.compat import admin_router_prefix
 
 
 router = APIRouter(prefix=admin_router_prefix("sentiment"), tags=["vkpi-sentiment"])
