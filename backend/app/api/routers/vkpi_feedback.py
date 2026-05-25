@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
-from app.services.vkpi import team_feedback
+from app.domains.feedback import team_feedback
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-feedback"])
 

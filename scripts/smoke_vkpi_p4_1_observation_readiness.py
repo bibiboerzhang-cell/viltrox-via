@@ -23,7 +23,7 @@ from typing import Any
 from _smoke_seed import cleanup_admin, seed_admin
 from app.core.security import make_token
 from app.db.connection import get_conn
-from app.services.vkpi import team_feedback
+from app.domains.feedback import team_feedback
 
 
 ROOT = Path(__file__).resolve().parents[1]
