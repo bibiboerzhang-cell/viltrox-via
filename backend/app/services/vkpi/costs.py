@@ -1,52 +1,14 @@
 """V-KPI cost ledger helpers."""
 from __future__ import annotations
 
-import json
-from datetime import datetime
 from typing import Any
 
 from app.db.connection import get_conn, is_postgres_runtime
 from app.services.vkpi import audit, scope
+from app.services.vkpi.costs_common import TYPE_ALIASES, VALID_COST_TYPES, _amount_cents, _int, _json, _sku, utcnow
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.schema_audit import ensure_vkpi_audit_schema
 from app.services.vkpi.workflow import staff_id
-
-VALID_COST_TYPES = {"product", "shipping", "cash_fee", "customs_tax", "sample", "overhead", "other"}
-TYPE_ALIASES = {
-    "sample_cost": "sample",
-    "sample_product": "sample",
-    "product_cost": "product",
-    "shipping_fee": "shipping",
-    "logistics": "shipping",
-    "customs": "customs_tax",
-    "tax": "customs_tax",
-    "cash": "cash_fee",
-}
-
-
-def utcnow() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _json(value: Any) -> str:
-    return json.dumps(value or {}, ensure_ascii=False, default=str)
-
-
-def _int(value: Any, default: int = 0) -> int:
-    try:
-        return int(value or default)
-    except (TypeError, ValueError):
-        return default
-
-
-def _amount_cents(body: dict[str, Any]) -> int:
-    if "amount_cents" in body:
-        return _int(body.get("amount_cents"))
-    amount = body.get("amount_usd", body.get("amount", 0))
-    try:
-        return int(round(float(amount or 0) * 100))
-    except (TypeError, ValueError):
-        return 0
 
 
 def _ensure_cost_ledger_columns() -> None:
@@ -210,10 +172,6 @@ def ensure_product_catalog_schema() -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_products_series_mount ON vkpi_products(series, mount)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_products_source_confidence ON vkpi_products(source_confidence DESC, updated_at DESC)")
     conn.commit()
-
-
-def _sku(value: Any) -> str:
-    return str(value or "").strip().upper()
 
 
 def upsert_product_cost(body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
