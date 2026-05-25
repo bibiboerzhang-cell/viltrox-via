@@ -20,7 +20,7 @@ if str(ROOT) not in sys.path:
 
 from app.db.connection import close_db_runtime  # noqa: E402
 import app.domains.evidence.summary as evidence_summary  # noqa: E402
-from app.services.vkpi import natural_search  # noqa: E402
+from app.domains.search import natural_search  # noqa: E402
 
 
 def _now() -> str:

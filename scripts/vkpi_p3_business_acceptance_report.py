@@ -30,9 +30,7 @@ from app.db.connection import close_db_runtime, get_conn  # noqa: E402
 from app.domains.kol import decision_audit as kol_decisions  # noqa: E402
 from app.domains.kol import intelligence_card as kol_intelligence_card  # noqa: E402
 from app.domains.recommendations import feedback_backlog as recommendation_feedback_backlog  # noqa: E402
-from app.services.vkpi import (  # noqa: E402
-    natural_search,
-)
+from app.domains.search import natural_search  # noqa: E402
 
 
 def _now() -> str:

@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
-from app.services.vkpi import natural_search
+from app.domains.search import natural_search
 
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-search"])
