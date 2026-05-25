@@ -6,6 +6,11 @@ from app.domains.intelligence.brain_acceptance import (
     build_brain_layer_acceptance_report,
     build_brain_layer_module_row,
 )
+from app.domains.intelligence.evidence_agent import (
+    EVIDENCE_AGENT_VERSION,
+    build_evidence_agent_report,
+    build_evidence_chain_from_summary,
+)
 from app.domains.intelligence.today_signals import (
     DEFAULT_LIMIT,
     DEFAULT_LOOKBACK_HOURS,
@@ -22,10 +27,13 @@ __all__ = [
     "DEFAULT_LIMIT",
     "DEFAULT_LOOKBACK_HOURS",
     "DIGEST_VERSION",
+    "EVIDENCE_AGENT_VERSION",
     "PLAN_VERSION",
     "REQUIRED_REPORTS",
     "build_brain_layer_acceptance_report",
     "build_brain_layer_module_row",
+    "build_evidence_agent_report",
+    "build_evidence_chain_from_summary",
     "build_today_new_signals_report",
     "build_weekly_action_plan_report",
 ]
