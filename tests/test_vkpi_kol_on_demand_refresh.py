@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from app.api.routers import vkpi_kol_pool
 from app.domains.kol import pool as kol_pool
 import app.domains.sync.refresh_tier as refresh_tier
-from app.services.vkpi import task_enqueue
+import app.domains.tasks.enqueue as task_enqueue
 from app.workers.tasks import vkpi as vkpi_tasks
 
 

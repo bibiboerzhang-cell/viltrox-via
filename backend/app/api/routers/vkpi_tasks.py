@@ -5,8 +5,8 @@ import importlib.util
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+import app.domains.tasks.enqueue as task_enqueue
 from app.api.dependencies.perms import require_tab
-from app.services.vkpi import task_enqueue
 
 
 router = APIRouter(prefix="/api/admin/vkpi/tasks", tags=["vkpi-tasks"])

@@ -206,7 +206,7 @@ async def _queue_channel_syncs(
     if effective_queue is None:
         raise RuntimeError("job queue unavailable")
 
-    from app.services.vkpi import task_enqueue
+    import app.domains.tasks.enqueue as task_enqueue
 
     enqueue_staff = staff or _system_staff()
     max_posts = int(payload.get("max_posts") or payload.get("limit") or 12)
