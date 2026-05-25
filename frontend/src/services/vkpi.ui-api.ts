@@ -17,6 +17,7 @@ import {
   stageValue,
   windowDays,
 } from "../domains/dashboard";
+import { buildStaffMembers } from "../domains/settings";
 export * from "./vkpi";
 export * from "./vkpi/alert-api";
 export * from "./vkpi/attribution-api";
@@ -61,7 +62,6 @@ import type {
   VkpiProjectRow,
   VkpiScopeContext,
   VkpiShareItem,
-  VkpiStaffMember,
   VkpiTrendPoint,
 } from "../components/vkpi/vkpiTypes";
 
@@ -292,43 +292,6 @@ function buildAttributions(rows: Row[]): VkpiAttributionRow[] {
 }
 function buildCosts(rows: Row[]): VkpiCostRow[] {
   return rows.map((row) => ({ id: String(row.id || `${row.project_id || ""}-${row.incurred_at || ""}`), projectId: row.project_id ? String(row.project_id) : undefined, kolId: row.kol_id ? String(row.kol_id) : undefined, staffId: row.staff_id ? String(row.staff_id) : undefined, costType: String(row.cost_type || "other"), amount: centsToUsd(row.amount_cents), currency: String(row.currency || "USD"), status: String(row.status || "actual"), incurredAt: String(row.incurred_at || row.created_at || "-"), sourceRef: String(row.source_ref || ""), note: String(row.note || ""), projectName: String(row.project_name || ""), productSku: String(row.product_sku || ""), kolName: String(row.kol_name || ""), staffName: String(row.staff_name || row.staff_id || ""), approvedByStaffId: row.approved_by_staff_id ? String(row.approved_by_staff_id) : undefined, approvedAt: String(row.approved_at || ""), voidedByStaffId: row.voided_by_staff_id ? String(row.voided_by_staff_id) : undefined, voidedAt: String(row.voided_at || ""), updatedAt: String(row.updated_at || row.created_at || "") })).filter((row) => row.id);
-}
-
-function parsePermissions(row: Row): Record<string, unknown> {
-  const raw = row.permissions;
-  if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw as Record<string, unknown>;
-  const rawJson = String(row.permissions_json || "").trim();
-  if (!rawJson) return {};
-  try {
-    const parsed = JSON.parse(rawJson);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
-  } catch {
-    return {};
-  }
-}
-
-function buildStaffMembers(rows: Row[]): VkpiStaffMember[] {
-  return rows.map((row) => {
-    const permissions = parsePermissions(row);
-    return {
-      id: String(row.id || ""),
-      userId: row.user_id ? String(row.user_id) : undefined,
-      name: String(row.user_name || row.name || row.email || row.user_email || "未命名员工"),
-      email: String(row.user_email || row.email || ""),
-      role: String(row.role || "readonly"),
-      active: Number(row.active ?? 1) !== 0,
-      avatarUrl: String(row.avatar_url || ""),
-      employeeCode: String(row.user_handle || row.employee_code || ""),
-      vkpiPermission: String(permissions.vkpi || row.vkpi_permission || "none"),
-      permissions: Object.fromEntries(Object.entries(permissions).map(([key, value]) => [key, String(value)])),
-      verificationStatus: String(row.verification_status || ""),
-      deliveryMethod: String(row.delivery_method || ""),
-      inviteTokenActive: Boolean(row.invite_token_active),
-      lastActiveAt: String(row.last_active_at || row.last_login || ""),
-      invitedAt: String(row.invited_at || ""),
-      acceptedAt: String(row.accepted_at || ""),
-    };
-  }).filter((row) => row.id || row.email);
 }
 
 function buildKpiLedger(rows: Row[]): VkpiKpiLedgerEntry[] {
