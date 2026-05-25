@@ -4,11 +4,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
+from app.domains import market as market_domain
 from app.services.vkpi import (
-    market_external_signal_smoke,
     market_intelligence_cards,
     market_intelligence_v0,
-    market_provider_preflight,
 )
 
 
@@ -71,7 +70,7 @@ def industry_market_external_signal_smoke_v0(
 ):
     if execute_http_fetch:
         _require_manager_staff(staff)
-    return market_external_signal_smoke.build_external_signal_smoke(
+    return market_domain.build_external_signal_smoke(
         execute_http_fetch=execute_http_fetch,
         source_key=source_key,
         source_group=source_group,
@@ -85,7 +84,7 @@ def industry_market_external_source_matrix_v0(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     del staff
-    return market_external_signal_smoke.build_external_source_matrix(source_group=source_group)
+    return market_domain.build_external_source_matrix(source_group=source_group)
 
 
 @router.get("/industry-data/market-external-daily-plan/v0")
@@ -96,7 +95,7 @@ def industry_market_external_daily_plan_v0(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     del staff
-    return market_external_signal_smoke.build_external_daily_candidate_plan(
+    return market_domain.build_external_daily_candidate_plan(
         source_group=source_group,
         max_http_calls=max_http_calls,
         limit_per_source=limit_per_source,
@@ -110,7 +109,7 @@ def industry_market_provider_preflight(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     del staff
-    return market_provider_preflight.build_provider_preflight(
+    return market_domain.build_provider_preflight(
         preferred_llm_provider=preferred_provider,
         max_output_tokens=max_output_tokens,
     )
