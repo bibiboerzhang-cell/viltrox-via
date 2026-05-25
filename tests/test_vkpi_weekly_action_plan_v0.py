@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.services.vkpi import weekly_action_plan_v0
+from app.domains.intelligence import weekly_plan_use_case as weekly_action_plan_v0
 
 
 def test_weekly_action_plan_generates_evidence_actions(monkeypatch) -> None:

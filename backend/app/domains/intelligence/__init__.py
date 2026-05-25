@@ -35,6 +35,7 @@ from app.domains.intelligence.weekly_plan import (
     PLAN_VERSION,
     build_weekly_action_plan_report,
 )
+from app.domains.intelligence.weekly_plan_use_case import build_weekly_action_plan_v0
 
 __all__ = [
     "ACCEPTANCE_VERSION",
@@ -60,4 +61,5 @@ __all__ = [
     "build_today_new_signals_report",
     "build_today_new_signals_v0",
     "build_weekly_action_plan_report",
+    "build_weekly_action_plan_v0",
 ]
