@@ -8,12 +8,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.domains.kol import competitor_detector as kol_competitor_detector
+from app.domains.kol import eleven_dimensions
+from app.domains.market import brand_signal_detector
 from app.db.connection import get_conn
 from app.domains.comments import intelligence as comment_intelligence
-from app.services.vkpi import (
-    brand_signal_detector,
-    eleven_dimensions,
-)
 
 VIDEO_ANALYSIS_FIELD_KEYS = (
     "target_audience",

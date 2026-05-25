@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from app.services.vkpi import eleven_dimensions
+import app.domains.kol.eleven_dimensions as eleven_dimensions
 
 
 def _base_row(**overrides):

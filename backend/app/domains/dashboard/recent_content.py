@@ -5,7 +5,8 @@ from datetime import datetime
 from email.utils import parsedate_to_datetime
 from typing import Any
 
-from app.services.vkpi import brand_signal_detector, channels
+from app.domains.market import brand_signal_detector
+from app.services.vkpi import channels
 
 
 def _recent_content_sort_key(row: dict[str, Any]) -> float:

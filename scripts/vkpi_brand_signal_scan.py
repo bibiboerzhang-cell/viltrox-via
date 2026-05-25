@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
 from app.db.connection import close_db_runtime  # noqa: E402
-from app.services.vkpi.brand_signal_detector import scan_cached_brand_signals  # noqa: E402
+from app.domains.market.brand_signal_detector import scan_cached_brand_signals  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:

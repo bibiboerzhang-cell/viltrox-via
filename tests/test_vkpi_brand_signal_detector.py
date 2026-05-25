@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from app.db.connection import get_conn
-from app.services.vkpi.brand_signal_detector import commit_brand_signals, detect_viltrox_signals, list_brand_signals
+from app.domains.market.brand_signal_detector import commit_brand_signals, detect_viltrox_signals, list_brand_signals
 
 
 def test_numeric_epoch_published_at_is_normalized_for_db():

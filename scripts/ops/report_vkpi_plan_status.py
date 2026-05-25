@@ -254,17 +254,17 @@ def build_items(sync: dict[str, Any], r2: dict[str, Any], snapshot: dict[str, An
         and exists("tests/test_vkpi_product_analysis_competitor.py")
     )
     brand_signal_ready = (
-        exists("backend/app/services/vkpi/brand_signal_detector.py")
+        exists("backend/app/domains/market/brand_signal_detector.py")
         and exists("scripts/ops/scan_vkpi_brand_signals_after_sync.sh")
-        and contains("backend/app/services/vkpi/brand_signal_detector.py", "scan_cached_brand_signals", "write_db")
+        and contains("backend/app/domains/market/brand_signal_detector.py", "scan_cached_brand_signals", "write_db")
     )
     dimensions_guard_ready = (
-        exists("backend/app/services/vkpi/eleven_dimensions.py")
+        exists("backend/app/domains/kol/eleven_dimensions.py")
         and exists("scripts/ops/backfill_vkpi_dimensions11_after_sync.sh")
-        and contains("backend/app/services/vkpi/eleven_dimensions.py", "backfill_existing_profile_deep_dimensions11")
+        and contains("backend/app/domains/kol/eleven_dimensions.py", "backfill_existing_profile_deep_dimensions11")
     )
     dimensions_confidence_ready = contains(
-        "backend/app/services/vkpi/eleven_dimensions.py",
+        "backend/app/domains/kol/eleven_dimensions.py",
         "product_fit_confidence",
         '"confidence"',
         '"evidence"',
@@ -369,9 +369,9 @@ def build_items(sync: dict[str, Any], r2: dict[str, Any], snapshot: dict[str, An
             "C Viltrox brand signal",
             "done" if brand_signal_total > 0 else ("scan_ready" if brand_signal_ready else "partial_live"),
             [
-                "brand_signal_detector.py exists" if exists("backend/app/services/vkpi/brand_signal_detector.py") else "detector missing",
+                "brand_signal_detector.py exists" if exists("backend/app/domains/market/brand_signal_detector.py") else "detector missing",
                 "post-sync brand signal guard exists" if exists("scripts/ops/scan_vkpi_brand_signals_after_sync.sh") else "brand signal guard missing",
-                "cached scan can write_db" if contains("backend/app/services/vkpi/brand_signal_detector.py", "scan_cached_brand_signals", "write_db") else "brand signal write path missing",
+                "cached scan can write_db" if contains("backend/app/domains/market/brand_signal_detector.py", "scan_cached_brand_signals", "write_db") else "brand signal write path missing",
                 "DataQuality signal queue exists" if contains("frontend/src/components/vkpi/pages/DataQualityPage.tsx", "Viltrox / 竞品信号") else "signal queue missing",
                 "Command Center signal card exists" if contains("frontend/src/components/vkpi/dashboard/CommandCenter.tsx", "品牌信号") else "command signal card missing",
                 f"persisted_signals={brand_signal_total}",
@@ -386,13 +386,13 @@ def build_items(sync: dict[str, Any], r2: dict[str, Any], snapshot: dict[str, An
             "D 11 维评估",
             "done" if dimensions_persisted_ready else "guard_ready" if dimensions_guard_ready else "preview_ui",
             [
-                "eleven_dimensions.py exists" if exists("backend/app/services/vkpi/eleven_dimensions.py") else "dimension service missing",
+                "eleven_dimensions.py exists" if exists("backend/app/domains/kol/eleven_dimensions.py") else "dimension service missing",
                 "profile_deep base migration exists" if exists("migrations/070_vkpi_kol_profile_deep_base.sql") else "profile_deep base migration missing",
                 f"profile_deep_total={dimensions_profile_total}" if dimensions_runtime.get("available") else f"profile_deep_status_error={dimensions_runtime.get('error', 'unavailable')}",
                 f"dimensions_11_json_present={dimensions_with_dims}",
                 f"dimensions_11_json_missing={dimensions_without_dims}",
                 "profile_deep update guard exists" if exists("scripts/ops/backfill_vkpi_dimensions11_after_sync.sh") else "dimensions backfill guard missing",
-                "updates existing profile_deep only" if contains("backend/app/services/vkpi/eleven_dimensions.py", "backfill_existing_profile_deep_dimensions11") else "dimensions write path missing",
+                "updates existing profile_deep only" if contains("backend/app/domains/kol/eleven_dimensions.py", "backfill_existing_profile_deep_dimensions11") else "dimensions write path missing",
                 "confidence/evidence guards exist" if dimensions_confidence_ready else "confidence/evidence guards missing",
                 "dimensions11 API exists" if contains("backend/app/api/routers/vkpi_kol_pool.py", "dimensions11") else "dimensions API missing",
                 "Discover 11维 UI exists" if contains("frontend/src/components/vkpi/pages/DiscoverPage.tsx", "11维") else "11维 UI missing",

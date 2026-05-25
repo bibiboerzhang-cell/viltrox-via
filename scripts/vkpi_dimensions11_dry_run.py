@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
 from app.db.connection import close_db_runtime  # noqa: E402
-from app.services.vkpi.eleven_dimensions import (  # noqa: E402
+from app.domains.kol.eleven_dimensions import (  # noqa: E402
     backfill_existing_profile_deep_dimensions11,
     batch_preview_dimensions11,
     compose_dimensions_11,
