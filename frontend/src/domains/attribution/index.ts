@@ -24,3 +24,11 @@ export {
   type VkpiCostPayload,
   type VkpiProductCostPayload,
 } from './costs';
+export {
+  archiveMarketingLink,
+  createMarketingLink,
+  getMarketingLinkDetail,
+  healthCheckMarketingLink,
+  pauseMarketingLink,
+  type VkpiCreateLinkPayload,
+} from './links';
