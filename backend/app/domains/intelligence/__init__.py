@@ -21,6 +21,7 @@ from app.domains.intelligence.recommendation_agent import (
     build_recommendation_agent_report,
     build_recommendation_candidate,
 )
+from app.domains.intelligence.recommendation_use_case import build_recommendation_agent_v0
 from app.domains.intelligence.today_signals import (
     DEFAULT_LIMIT,
     DEFAULT_LOOKBACK_HOURS,
@@ -50,6 +51,7 @@ __all__ = [
     "build_evidence_agent_v0",
     "build_evidence_chain_from_summary",
     "build_recommendation_agent_report",
+    "build_recommendation_agent_v0",
     "build_recommendation_candidate",
     "build_today_new_signals_report",
     "build_today_new_signals_v0",

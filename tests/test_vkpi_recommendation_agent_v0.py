@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from app.services.vkpi import recommendation_agent_v0
+from app.domains.intelligence import recommendation_use_case as recommendation_agent_v0
 
 
 def _chain(kol_pool_id: int = 101, *, refs: int = 4) -> dict:
