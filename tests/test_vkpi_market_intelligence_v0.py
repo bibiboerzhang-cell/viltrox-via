@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.services.vkpi import market_intelligence_v0
+from app.domains.market import intelligence_use_case as market_intelligence_v0
 
 
 def test_market_intelligence_v0_is_read_only(monkeypatch) -> None:

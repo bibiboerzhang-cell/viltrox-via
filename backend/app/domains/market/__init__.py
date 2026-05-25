@@ -35,6 +35,7 @@ from app.domains.market.intelligence_v0 import (
     MARKET_STORAGE_TABLES,
     build_market_intelligence_report,
 )
+from app.domains.market.intelligence_use_case import build_market_intelligence_v0
 from app.domains.market.llm_quality import (
     evaluate_market_llm_output,
     evaluate_market_llm_report,
@@ -118,6 +119,7 @@ __all__ = [
     "build_market_intelligence_cards",
     "build_market_intelligence_cards_from_files",
     "build_market_intelligence_report",
+    "build_market_intelligence_v0",
     "build_market_signal_classification",
     "build_market_source_design_report_from_tables",
     "build_market_signal_review_package",

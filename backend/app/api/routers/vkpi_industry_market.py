@@ -5,7 +5,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
 from app.domains import market as market_domain
-from app.services.vkpi import market_intelligence_v0
 
 
 router = APIRouter()
@@ -30,7 +29,7 @@ def industry_market_intelligence_v0(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     del staff
-    return market_intelligence_v0.build_market_intelligence_v0(limit=limit, run_id=run_id)
+    return market_domain.build_market_intelligence_v0(limit=limit, run_id=run_id)
 
 
 @router.get("/industry-data/market-intelligence/cards/v0")
@@ -44,7 +43,7 @@ def industry_market_intelligence_cards_v0(
 ):
     del staff
     resolved_run_id = run_id if run_id is not None else market_domain.latest_reviewed_market_run_id()
-    market_report = market_intelligence_v0.build_market_intelligence_v0(limit=limit, run_id=resolved_run_id)
+    market_report = market_domain.build_market_intelligence_v0(limit=limit, run_id=resolved_run_id)
     llm_report = market_domain.latest_usable_market_llm_report() if include_latest_llm_artifact else None
     external_report = market_domain.latest_external_signal_smoke_report() if include_latest_external_smoke else None
     payload = market_domain.build_market_intelligence_cards(
