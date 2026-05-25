@@ -7,21 +7,16 @@ from typing import Any
 from app.db.connection import get_conn
 from app.domains.kol import claim_audit
 from app.domains.kol import claim_listing
+from app.domains.kol import claim_lookup
 from app.services.vkpi import scope
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.workflow import staff_id
 from app.services.vkpi.kol_claims_common import (
-    SUPPORTED_PLATFORMS,
     assert_kol_access,
     _claim_payload,
-    _create_kol,
-    _find_kol,
     _int,
     _json,
     _json_array,
-    dedup_key,
-    normalize_handle,
-    normalize_platform,
     utcnow,
 )
 
@@ -43,50 +38,7 @@ def _log_kol_audit(
 
 
 def lookup(body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
-    ensure_vkpi_schema()
-    platform = normalize_platform(str(body.get("platform") or ""))
-    handle = normalize_handle(str(body.get("handle") or body.get("handle_or_url") or body.get("url") or ""), platform)
-    if not platform or platform not in SUPPORTED_PLATFORMS:
-        raise ValueError("supported platform required")
-    if not handle:
-        raise ValueError("handle_or_url required")
-    actor_staff_id = staff_id(staff)
-    conn = get_conn()
-    kol = _find_kol(platform, handle)
-    created = False
-    if not kol and body.get("create_if_missing"):
-        kol = _create_kol(platform, handle, body, actor_staff_id)
-        created = True
-        conn.commit()
-        if kol:
-            _log_kol_audit(
-                actor_staff_id=actor_staff_id,
-                action_type="kol_lookup_create",
-                kol_id=_int(kol.get("id")),
-                detail=f"{platform}:{handle}",
-                metadata={"platform": platform, "handle": handle, "source": "lookup_create_if_missing"},
-            )
-    active_claim = None
-    if kol:
-        active_claim = conn.execute(
-            """
-            SELECT c.*, u.name AS staff_name, u.email AS staff_email
-            FROM vkpi_kol_claims c
-            LEFT JOIN staff st ON st.id = c.staff_id
-            LEFT JOIN users u ON u.id = st.user_id
-            WHERE c.kol_id=? AND c.status='active'
-            ORDER BY c.claimed_at DESC
-            LIMIT 1
-            """,
-            (_int(kol.get("id")),),
-        ).fetchone()
-    return {
-        "query": {"platform": platform, "handle": handle, "dedup_key": dedup_key(platform, handle, body.get("email", ""))},
-        "kol": kol,
-        "created": created,
-        "claim": _claim_payload(active_claim),
-        "can_claim": bool(kol and not active_claim),
-    }
+    return claim_lookup.lookup(body, staff=staff)
 
 def claim(kol_id: int, body: dict[str, Any] | None = None, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     ensure_vkpi_schema()
