@@ -24,6 +24,7 @@ import { FeedbackWidget } from './shared/FeedbackWidget';
 import { useMetricEvidence } from './hooks/useMetricEvidence';
 import { useProjectDetailDrawer } from './hooks/useProjectDetailDrawer';
 import { profileToKolDetail, textValue } from './shared/vkpiDataUtils';
+import { emptyDashboardData } from './data/emptyDashboardData';
 import { getMarketingAlertDetail, resolveMarketingAlert } from '../../domains/dashboard';
 import { getKolProfile } from '../../domains/kol';
 import { getStaffProfile } from '../../domains/settings';
@@ -98,70 +99,6 @@ export interface VkpiDashboardProps {
   canSwitchView?: boolean;
   onToggleView?: () => void;
 }
-
-const emptyDashboardData: VkpiDashboardData = {
-  rangeLabel: '近 7 天',
-  dataStatus: 'empty',
-  dataNotice: '当前周期还没有真实数据。',
-  metrics: [
-    { key: 'views', label: '播放量', value: '0', deltaLabel: '来自已抓取内容', deltaDirection: 'flat' },
-    { key: 'cost', label: '成本', value: '$0', deltaLabel: '镜头自动 + 快递 + 推广', deltaDirection: 'flat' },
-    { key: 'gmv', label: '本周销售额', value: '$0', deltaLabel: 'Shopify / Amazon 订单', deltaDirection: 'flat' },
-    { key: 'new_kol', label: '新增 KOL', value: '0', deltaLabel: '当前周期', deltaDirection: 'flat' },
-    { key: 'published_content', label: '已发布内容', value: '0', deltaLabel: '流程统计', deltaDirection: 'flat' },
-    { key: 'valid_clicks', label: '有效点击', value: '0', deltaLabel: '短链点击', deltaDirection: 'flat' },
-  ],
-  revenueTrend: [],
-  funnel: [],
-  staffLeaderboard: [],
-  productRoi: [],
-  platformShare: [],
-  contentTypePerformance: [],
-  alerts: [],
-  weeklySummary: '当前还没有生成周报。请在项目、短链、Shopify、Amazon 和成本数据同步后生成。',
-  exportReport: {
-    id: 'none',
-    title: '周报尚未生成',
-    generatedAt: '等待数据',
-    status: 'Generating',
-  },
-  projects: [],
-  links: [],
-  attributions: [],
-  unmatchedAttributions: [],
-  costs: [],
-  evidence: {
-    gmv: [],
-    cost: [],
-    roi: [],
-  },
-  staffMembers: [],
-  kpiLedger: [],
-  productCosts: [],
-  productLaunches: [],
-  kolOptions: [],
-  selectedKol: {
-    id: 'none',
-    name: '未选择红人',
-    handle: '-',
-    platform: 'Other',
-    verified: false,
-    subscribersLabel: '-',
-    videosLabel: '-',
-    engagementLabel: '-',
-    recentContent: [],
-    messages: [],
-    shortLink: {
-      slug: '暂无短链',
-      destination: '-',
-      clicks: 0,
-      orders: 0,
-      gmv: 0,
-      roi: 0,
-    },
-    followUpNote: '请选择或创建项目，以查看红人详情、消息记录、短链、归因和备注。',
-  },
-};
 
 export function VkpiDashboard({
   data = emptyDashboardData,
