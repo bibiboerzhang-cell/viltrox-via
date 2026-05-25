@@ -44,6 +44,13 @@ from app.domains.market.provider_preflight import (
     PROVIDER_SOURCES,
     build_provider_preflight,
 )
+from app.domains.market.source_design import (
+    CANONICAL_CONTRACT,
+    SOURCE_REGISTRY,
+    TABLE_NAMES,
+    build_market_source_design_report_from_tables,
+    source_readiness,
+)
 from app.domains.market.signal_review_package import (
     build_external_signal_review_package,
     build_external_signal_review_package_from_files,
@@ -78,6 +85,7 @@ from app.domains.market.signal_write_package import (
 
 __all__ = [
     "ALLOWED_HOSTS",
+    "CANONICAL_CONTRACT",
     "COMPETITOR_SIGNAL_TABLE",
     "DEFAULT_SOURCES",
     "DEFAULT_PROMPT",
@@ -85,6 +93,8 @@ __all__ = [
     "KEYWORDS",
     "MARKET_STORAGE_TABLES",
     "PROVIDER_SOURCES",
+    "SOURCE_REGISTRY",
+    "TABLE_NAMES",
     "TIER1_GROUPS",
     "TIER2_GROUPS",
     "TARGET_TABLES",
@@ -101,6 +111,7 @@ __all__ = [
     "build_market_intelligence_cards_from_files",
     "build_market_intelligence_report",
     "build_market_signal_classification",
+    "build_market_source_design_report_from_tables",
     "build_market_signal_review_package",
     "build_market_signal_review_package_from_file",
     "build_market_signal_write_package",
@@ -122,6 +133,7 @@ __all__ = [
     "render_classification_markdown",
     "render_market_intelligence_cards_markdown",
     "render_review_package_markdown",
+    "source_readiness",
     "summarize_keyword_groups",
     "write_competitor_signal_write_report",
     "write_external_daily_candidate_plan",

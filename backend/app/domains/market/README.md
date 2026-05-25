@@ -10,6 +10,7 @@ Current migrated slice:
 - `intelligence_v0.py`: pure read-only market intelligence report builder over reviewed signal rows.
 - `llm_quality.py`: deterministic quality gate for market LLM smoke outputs; does not call a model.
 - `provider_preflight.py`: read-only provider readiness and LLM budget-gate checks.
+- `source_design.py`: source contracts, readiness gates, and read-only source-design report assembly.
 - `signal_taxonomy.py`: shared Viltrox, competitor, product, and camera-ecosystem keyword groups.
 - `signal_classifier.py`: read-only classifier for raw market mentions and reviewable competitor-signal candidates.
 - `signal_write_package.py`: dry-run mapping from provider/review packages to raw market-signal rows.
