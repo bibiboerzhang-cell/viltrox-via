@@ -9,7 +9,7 @@ from app.domains.kol import pool as kol_pool
 from app.domains.comments import collector as comments_collector
 from app.domains.comments import intelligence as comment_intelligence
 from app.services.vkpi import pillars, sentiment
-from app.services.vkpi.refresh_tier import ensure_refresh_tier_schema
+from app.domains.sync.refresh_tier import ensure_refresh_tier_schema
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 
 

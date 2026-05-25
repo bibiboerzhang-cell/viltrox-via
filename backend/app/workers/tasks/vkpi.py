@@ -6,7 +6,8 @@ from typing import Any
 
 from app.domains.kol import pool as kol_pool
 from app.domains import media as media_cache
-from app.services.vkpi import channel_refill, channels, refresh_tier, task_enqueue
+import app.domains.sync.refresh_tier as refresh_tier
+from app.services.vkpi import channel_refill, channels, task_enqueue
 
 
 TERMINAL_STATUSES = {"done", "partial_done", "failed", "prefilter_rejected", "cancelled", "timeout"}

@@ -24,7 +24,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.db.connection import close_db_runtime, get_conn  # noqa: E402
-from app.services.vkpi import apify_batch_refresh, refresh_tier  # noqa: E402
+import app.domains.sync.apify_batch_refresh as apify_batch_refresh  # noqa: E402
+import app.domains.sync.refresh_tier as refresh_tier  # noqa: E402
 
 
 def _int(value: Any, default: int = 0) -> int:

@@ -43,7 +43,8 @@ from app.domains.sync.guard import (
     record_sync_interrupt,
     start_sync_run,
 )
-from app.services.vkpi import channels, refresh_tier
+import app.domains.sync.refresh_tier as refresh_tier
+from app.services.vkpi import channels
 
 
 logger = get_logger(__name__)

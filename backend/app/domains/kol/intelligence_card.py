@@ -14,7 +14,7 @@ from app.db.connection import get_conn
 from app.domains.kol import history_match as kol_history_match
 from app.domains.kol import product_fit as kol_product_fit
 from app.domains.kol import pool as kol_pool
-from app.services.vkpi import refresh_tier
+import app.domains.sync.refresh_tier as refresh_tier
 
 
 from app.domains.kol.intelligence_card_helpers import *  # noqa: F403

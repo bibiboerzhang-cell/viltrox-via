@@ -8,7 +8,8 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime
-from app.services.vkpi import apify_batch_refresh, audit
+import app.domains.sync.apify_batch_refresh as apify_batch_refresh
+from app.services.vkpi import audit
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
 

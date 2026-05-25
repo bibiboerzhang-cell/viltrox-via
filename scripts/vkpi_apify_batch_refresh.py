@@ -25,7 +25,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.db.connection import close_db_runtime  # noqa: E402
-from app.services.vkpi import apify_batch_refresh  # noqa: E402
+import app.domains.sync.apify_batch_refresh as apify_batch_refresh  # noqa: E402
 
 
 def _platforms(value: str) -> set[str]:

@@ -27,11 +27,11 @@ from app.domains.kol import competitor_detector as kol_competitor_detector
 from app.domains.kol import intelligence_card as kol_intelligence_card
 from app.domains.kol import pool as kol_pool
 from app.domains.intelligence import gemini_single_kol_preflight
+import app.domains.sync.refresh_tier as refresh_tier
 from app.services.vkpi import (
     ai_brief,
     evidence_summary,
     eleven_dimensions,
-    refresh_tier,
     task_enqueue,
 )
 from app.services.vkpi.audit_decorator import audit_action

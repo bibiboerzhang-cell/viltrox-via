@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.services.vkpi import refresh_tier
+import app.domains.sync.refresh_tier as refresh_tier
 
 
 def _kol(**overrides: Any) -> dict[str, Any]:

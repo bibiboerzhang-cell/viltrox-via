@@ -1,6 +1,6 @@
 import asyncio
 
-from app.services.vkpi import apify_batch_refresh
+import app.domains.sync.apify_batch_refresh as apify_batch_refresh
 
 
 def test_parse_chunk_overrides_only_accepts_supported_platforms() -> None:

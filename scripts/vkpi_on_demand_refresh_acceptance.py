@@ -25,7 +25,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.db.connection import close_db_runtime, get_conn, is_postgres_runtime  # noqa: E402
-from app.services.vkpi import refresh_tier, task_enqueue  # noqa: E402
+import app.domains.sync.refresh_tier as refresh_tier  # noqa: E402
+from app.services.vkpi import task_enqueue  # noqa: E402
 
 
 ACTIVE_STATUSES = ("queued", "retrying", "processing", "running")

@@ -13,7 +13,7 @@ import urllib.parse
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from app.services.vkpi import refresh_tier
+import app.domains.sync.refresh_tier as refresh_tier
 
 
 SUPPORTED_BATCH_PLATFORMS = {"instagram", "youtube", "facebook", "reddit", "x", "tiktok"}
