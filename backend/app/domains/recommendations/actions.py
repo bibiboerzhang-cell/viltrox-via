@@ -13,7 +13,7 @@ from app.domains.attribution import link_center
 from app.domains import audit
 from app.domains.access import scope
 from app.domains.projects import workflow
-from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
+from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
 from app.domains.projects.workflow import staff_id as resolve_staff_id
 
 

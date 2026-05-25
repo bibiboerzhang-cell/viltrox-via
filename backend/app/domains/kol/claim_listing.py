@@ -6,7 +6,7 @@ from typing import Any
 from app.db.connection import get_conn
 from app.domains.kol.identity import normalize_platform
 from app.domains.access import scope
-from app.services.vkpi.schema import ensure_vkpi_schema
+from app.platform.db.schema import ensure_vkpi_schema
 
 
 def staff_scope_where(staff: dict[str, Any] | None, staff_id: int | None = None) -> tuple[str, list[Any]]:

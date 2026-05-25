@@ -20,9 +20,9 @@ from app.domains.data_quality.common import (
     ensure_data_quality_schema,
 )
 from app.domains.data_quality.operational_issues import append_operational_quality_issues
-from app.services.vkpi.schema import ensure_vkpi_schema
+from app.platform.db.schema import ensure_vkpi_schema
 from app.domains.lineage import ensure_vkpi_lineage_schema
-from app.services.vkpi.schema_reconciliation import ensure_vkpi_reconciliation_schema
+from app.platform.db.schema_reconciliation import ensure_vkpi_reconciliation_schema
 
 logger = get_logger(__name__)
 

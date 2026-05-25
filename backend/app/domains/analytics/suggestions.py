@@ -18,7 +18,7 @@ from app.domains.analytics.common import (
     _utcnow,
 )
 from app.domains.analytics.monitor import list_suggestions
-from app.services.vkpi.schema import ensure_vkpi_schema
+from app.platform.db.schema import ensure_vkpi_schema
 from app.domains.analytics.schema import ensure_vkpi_analytics_schema
 
 
@@ -41,7 +41,7 @@ def _bridge_kol_pool_to_suggestions(limit: int = 100, product_sku: str = "") -> 
     """
     ensure_vkpi_analytics_schema()
     try:
-        from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
+        from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
 
         ensure_vkpi_product_industry_schema()
     except Exception as exc:

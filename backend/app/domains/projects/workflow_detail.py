@@ -6,8 +6,8 @@ from typing import Any
 
 from app.db.connection import get_conn
 from app.domains.access import scope
-from app.services.vkpi.schema import ensure_vkpi_schema
-from app.services.vkpi.schema_audit import ensure_vkpi_audit_schema
+from app.platform.db.schema import ensure_vkpi_schema
+from app.platform.db.schema_audit import ensure_vkpi_audit_schema
 from app.domains.projects.workflow_common import _int
 
 def project_detail(project_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:

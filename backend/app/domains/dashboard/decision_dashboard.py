@@ -6,7 +6,7 @@ from typing import Any
 
 from app.db.connection import get_conn
 from app.shared.vkpi_decision_common import _active_project_filter, _safe_rows, _summary
-from app.services.vkpi.schema import ensure_vkpi_schema
+from app.platform.db.schema import ensure_vkpi_schema
 
 def dashboard(window_days: int = 30) -> dict[str, Any]:
     ensure_vkpi_schema()

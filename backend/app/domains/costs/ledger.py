@@ -8,8 +8,8 @@ from app.domains import audit
 from app.domains.access import scope
 from app.domains.costs.common import TYPE_ALIASES, VALID_COST_TYPES, _amount_cents, _int, _json, _sku, utcnow
 from app.domains.costs.product_catalog import ensure_product_catalog_schema, list_product_catalog
-from app.services.vkpi.schema import ensure_vkpi_schema
-from app.services.vkpi.schema_audit import ensure_vkpi_audit_schema
+from app.platform.db.schema import ensure_vkpi_schema
+from app.platform.db.schema_audit import ensure_vkpi_audit_schema
 from app.domains.projects.workflow import staff_id
 
 

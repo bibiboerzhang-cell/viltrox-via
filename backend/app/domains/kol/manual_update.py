@@ -9,7 +9,7 @@ from app.domains.kol import claim_audit
 from app.domains.kol.claim_payloads import json_array, json_object
 from app.domains.kol.claim_store import utcnow
 from app.domains.kol.payload_utils import _int
-from app.services.vkpi.schema import ensure_vkpi_schema
+from app.platform.db.schema import ensure_vkpi_schema
 from app.domains.projects.workflow import staff_id
 
 

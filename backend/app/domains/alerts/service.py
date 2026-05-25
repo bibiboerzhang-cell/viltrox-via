@@ -12,7 +12,7 @@ from app.domains.alerts.common import utcnow
 from app.domains.alerts.detail import get_alert_detail
 from app.domains.alerts.triage import apply_alert_triage_suggestions, build_alert_triage_suggestions
 from app.domains.access import scope
-from app.services.vkpi.schema import ensure_vkpi_schema
+from app.platform.db.schema import ensure_vkpi_schema
 
 
 def list_alerts(status: str = "open", limit: int = 50, *, staff: dict[str, Any] | None = None, staff_id: int | None = None) -> dict[str, Any]:

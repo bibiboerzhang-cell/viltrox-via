@@ -17,7 +17,7 @@ from app.domains.evidence.common import (
     _rows,
     _utcnow,
 )
-from app.services.vkpi.schema import ensure_vkpi_schema
+from app.platform.db.schema import ensure_vkpi_schema
 
 def _db_bool(value: Any) -> bool | int:
     return bool(value) if is_postgres_runtime() else (1 if value else 0)

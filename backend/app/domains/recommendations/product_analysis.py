@@ -14,7 +14,7 @@ from app.domains.recommendations import evidence as product_analysis_evidence
 from app.domains.recommendations import feature_store
 from app.domains.recommendations import outcomes as outcome_collector
 from app.domains import audit
-from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
+from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
 from app.domains.scoring import ScoringRegistry
 from app.domains.projects.workflow import staff_id as resolve_staff_id
 

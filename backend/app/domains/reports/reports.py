@@ -20,7 +20,7 @@ from app.domains.staff import kpi_ledger
 from app.domains.access import scope
 from app.domains.projects import workflow
 from app.domains.reports import pdf_renderer
-from app.services.vkpi.schema import ensure_vkpi_schema
+from app.platform.db.schema import ensure_vkpi_schema
 from app.domains.lineage import ensure_vkpi_lineage_schema
 from app.domains.reports.schema import ensure_vkpi_reports_schema
 

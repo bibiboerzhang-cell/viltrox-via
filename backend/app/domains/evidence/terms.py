@@ -18,7 +18,7 @@ from app.domains.evidence.common import (
     _rows,
     _utcnow,
 )
-from app.services.vkpi.schema import ensure_vkpi_schema
+from app.platform.db.schema import ensure_vkpi_schema
 
 def _sync_deliverables(project_id: int, deliverables: Any, *, replace: bool = True) -> list[dict[str, Any]]:
     if not isinstance(deliverables, list):

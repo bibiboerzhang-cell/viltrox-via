@@ -42,7 +42,7 @@ from app.domains.kol.pool_common import (
     _utcnow,
 )
 from app.domains.kol.pool_main_linking import main_candidates, promote_to_main
-from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
+from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
 from app.domains.scoring import ScoringRegistry
 from app.domains.projects.workflow import staff_id as resolve_staff_id
 

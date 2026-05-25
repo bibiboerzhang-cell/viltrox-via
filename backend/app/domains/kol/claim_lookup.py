@@ -13,7 +13,7 @@ from app.domains.kol.identity import (
     normalize_handle,
     normalize_platform,
 )
-from app.services.vkpi.schema import ensure_vkpi_schema
+from app.platform.db.schema import ensure_vkpi_schema
 from app.domains.projects.workflow import staff_id
 
 

@@ -10,7 +10,7 @@ from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime
 import app.domains.sync.apify_batch_refresh as apify_batch_refresh
 from app.domains import audit
-from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
+from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
 from app.domains.projects.workflow import staff_id as resolve_staff_id
 
 DEFAULT_FLAGS = {

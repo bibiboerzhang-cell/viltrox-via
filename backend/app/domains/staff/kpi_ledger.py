@@ -16,8 +16,8 @@ from app.db.connection import get_conn, is_postgres_runtime
 from app.domains import audit
 from app.domains.access import scope
 from app.shared.vkpi_kpi_evidence import enrich_kpi_source_row
-from app.services.vkpi.schema import ensure_vkpi_schema
-from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
+from app.platform.db.schema import ensure_vkpi_schema
+from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
 
 logger = get_logger(__name__)
 

@@ -7,8 +7,8 @@ from typing import Any
 from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.shared.vkpi_utils import utcnow_iso
-from app.services.vkpi.schema import ensure_vkpi_schema
-from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
+from app.platform.db.schema import ensure_vkpi_schema
+from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
 
 NODE_COLUMNS = {
     "shortlisted": ("was_shortlisted", "shortlisted_at"),

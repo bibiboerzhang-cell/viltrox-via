@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 from app.db.connection import get_conn, is_postgres_runtime
-from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
+from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
 
 
 def _text(value: Any) -> str:

@@ -10,7 +10,7 @@ from app.domains.attribution import link_center
 from app.domains import audit
 from app.domains.projects import workflow
 from app.domains.analytics.common import _actor, _int, _is_official_account, _json, _loads_json, _utcnow
-from app.services.vkpi.schema import ensure_vkpi_schema
+from app.platform.db.schema import ensure_vkpi_schema
 from app.domains.analytics.schema import ensure_vkpi_analytics_schema
 
 

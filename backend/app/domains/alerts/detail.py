@@ -6,7 +6,7 @@ from typing import Any
 
 from app.db.connection import get_conn
 from app.domains.access import scope
-from app.services.vkpi.schema import ensure_vkpi_schema
+from app.platform.db.schema import ensure_vkpi_schema
 
 
 def _parse_metadata(value: Any) -> dict[str, Any]:

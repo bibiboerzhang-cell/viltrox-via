@@ -10,7 +10,7 @@ from starlette.requests import Request
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
-from app.services.vkpi.schema_audit import ensure_vkpi_audit_schema
+from app.platform.db.schema_audit import ensure_vkpi_audit_schema
 from app.domains.projects.workflow import staff_id as resolve_staff_id
 
 logger = get_logger(__name__)

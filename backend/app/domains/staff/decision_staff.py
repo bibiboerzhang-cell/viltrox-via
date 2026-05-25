@@ -14,7 +14,7 @@ from app.shared.vkpi_decision_common import (
     _summary,
     _window_start,
 )
-from app.services.vkpi.schema import ensure_vkpi_schema
+from app.platform.db.schema import ensure_vkpi_schema
 
 def staff_directory() -> dict[str, Any]:
     ensure_vkpi_schema()

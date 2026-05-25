@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from app.db.connection import get_conn
-from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
+from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
 
 
 def _utcnow() -> str:

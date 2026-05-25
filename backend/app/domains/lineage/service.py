@@ -20,7 +20,7 @@ from app.domains.lineage.store import (
     latest_dashboard_run,
     list_runs,
 )
-from app.services.vkpi.schema import ensure_vkpi_schema
+from app.platform.db.schema import ensure_vkpi_schema
 from app.domains.lineage.schema import ensure_vkpi_lineage_schema
 
 def _existing_staff_id(conn: Any, value: Any) -> int | None:

@@ -14,8 +14,8 @@ from app.domains.kol.claim_query_helpers import (
 )
 from app.domains.kol.payload_utils import _int
 from app.domains.access import scope
-from app.services.vkpi.schema import ensure_vkpi_schema
-from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
+from app.platform.db.schema import ensure_vkpi_schema
+from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
 
 def profile(kol_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     ensure_vkpi_schema()
