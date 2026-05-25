@@ -4,7 +4,7 @@ from __future__ import annotations
 from app.db.connection import get_conn
 from app.domains.dashboard.recent_content import _dashboard_int
 from app.domains.kol import pool as kol_pool
-from app.services.vkpi.country_coords import country_geo, resolve_country_code
+from app.domains.dashboard.country_coords import country_geo, resolve_country_code
 
 
 def build_dashboard_kol_distribution(limit: int = 200) -> dict:
