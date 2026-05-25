@@ -18,7 +18,7 @@ BACKEND = ROOT / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
-from app.services.vkpi.daily_sync import ack_daily_sync_guard, check_daily_sync_guard  # noqa: E402
+from app.domains.sync.daily_sync import ack_daily_sync_guard, check_daily_sync_guard  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:

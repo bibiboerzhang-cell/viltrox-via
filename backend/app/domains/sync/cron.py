@@ -422,7 +422,7 @@ async def run_job(job_name: str, payload: dict[str, Any] | None = None, *, queue
             "ran_at": _stamp(),
         }
     if name == "daily_incremental_sync":
-        from app.services.vkpi import daily_sync
+        from app.domains.sync import daily_sync
 
         result = await asyncio.to_thread(daily_sync.run_daily_incremental, payload)
         return {"job": name, "status": "ok", "result": result, "ran_at": _stamp()}

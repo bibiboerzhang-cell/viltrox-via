@@ -23,7 +23,7 @@ if str(BACKEND) not in sys.path:
 
 from app.db.connection import close_db_runtime  # noqa: E402
 from app.domains.sync.cron import run_job  # noqa: E402
-from app.services.vkpi.daily_sync import SyncFailFast, SyncGuardBlocked  # noqa: E402
+from app.domains.sync.daily_sync import SyncFailFast, SyncGuardBlocked  # noqa: E402
 
 
 def utcnow() -> str:
