@@ -3,6 +3,8 @@ export interface AuthUser {
   email: string;
   name: string;
   role?: string;
+  auth_role?: string;
+  staff_role?: string;
   avatar_url?: string;
   staff_id?: number;
   employee_code?: string;
@@ -48,6 +50,38 @@ export function jsonBody(payload: unknown): string {
 }
 
 const DEFAULT_API_TIMEOUT_MS = 20000;
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function apiErrorMessage(payload: unknown, status: number, statusText: string): string {
+  const root = recordValue(payload);
+  const detail = root.detail;
+  if (typeof detail === "string" && detail.trim()) return detail;
+  const detailRecord = recordValue(detail);
+  if (typeof detailRecord.reason === "string" && detailRecord.reason.trim()) return detailRecord.reason;
+  if (typeof detailRecord.message === "string" && detailRecord.message.trim()) return detailRecord.message;
+  if (typeof detailRecord.mode === "string" && detailRecord.mode.trim()) return detailRecord.mode;
+  if (typeof root.message === "string" && root.message.trim()) return root.message;
+  return `${status} ${statusText}`;
+}
+
+export class ApiResponseError extends Error {
+  status: number;
+  statusText: string;
+  payload: unknown;
+  detail: unknown;
+
+  constructor(response: Response, payload: unknown) {
+    super(apiErrorMessage(payload, response.status, response.statusText));
+    this.name = "ApiResponseError";
+    this.status = response.status;
+    this.statusText = response.statusText;
+    this.payload = payload;
+    this.detail = recordValue(payload).detail;
+  }
+}
 
 export async function apiFetch<T>(
   path: string,
@@ -116,13 +150,7 @@ export async function apiFetch<T>(
   }
 
   if (!response.ok) {
-    const message =
-      typeof parsed === "object" && parsed && "detail" in parsed
-        ? String((parsed as { detail?: string }).detail)
-        : typeof parsed === "object" && parsed && "message" in parsed
-          ? String((parsed as { message?: string }).message)
-          : `${response.status} ${response.statusText}`;
-    throw new Error(message);
+    throw new ApiResponseError(response, parsed);
   }
 
   return parsed as T;

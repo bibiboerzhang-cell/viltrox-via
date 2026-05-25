@@ -1,4 +1,5 @@
 export {
+  ApiResponseError,
   API_BASE,
   apiFetch,
   buildApiUrl,

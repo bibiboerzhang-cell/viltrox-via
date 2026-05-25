@@ -1,7 +1,7 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
-import { acceptStaffInvite } from "../../services/vkpi.ui-api";
+import { acceptStaffInvite, getStaffInviteStatus } from "../../domains/settings";
 import { frontendBuildInfo, shortBuildSha } from "../../lib/buildInfo";
 import "../../styles/admin.css";
 
@@ -12,8 +12,40 @@ export default function StaffActivateRoute() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState<string | null>(inviteToken ? null : "激活链接缺少 token");
+  const [status, setStatus] = useState<"checking" | "active" | "used" | "expired" | "invalid">(inviteToken ? "checking" : "invalid");
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!inviteToken) {
+      setStatus("invalid");
+      setError("激活链接缺少 token");
+      return;
+    }
+    setStatus("checking");
+    setError(null);
+    getStaffInviteStatus(inviteToken)
+      .then((response) => {
+        if (cancelled) return;
+        const nextState = String(response.state || (response.valid ? "active" : "invalid"));
+        if (response.valid && nextState === "active") {
+          setStatus("active");
+          return;
+        }
+        const mapped = nextState === "used" || nextState === "expired" ? nextState : "invalid";
+        setStatus(mapped);
+        setError(response.message || "激活链接无效");
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setStatus("invalid");
+        setError(err instanceof Error ? err.message : "激活链接校验失败");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [inviteToken]);
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
@@ -34,6 +66,7 @@ export default function StaffActivateRoute() {
     try {
       await acceptStaffInvite(inviteToken, password);
       setDone(true);
+      setStatus("used");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message || "激活失败");
@@ -62,6 +95,15 @@ export default function StaffActivateRoute() {
             <button className="admin-auth-card__primary" type="button" onClick={() => navigate("/login", { replace: true })}>
               去登录
             </button>
+          </>
+        ) : status === "checking" ? (
+          <div className="admin-auth-card__success">正在校验激活链接...</div>
+        ) : status !== "active" ? (
+          <>
+            <div className="admin-auth-card__error">
+              {status === "used" ? "这个激活链接已经使用过。" : status === "expired" ? "这个激活链接已过期。" : error || "激活链接无效。"}
+            </div>
+            <Link className="admin-auth-card__back" to="/login">返回登录</Link>
           </>
         ) : (
           <>

@@ -57,12 +57,28 @@ interface Props {
     name?: string;
     email?: string;
     role?: string;
+    auth_role?: string;
+    staff_role?: string;
     avatar_url?: string;
     avatar_required?: boolean;
     staff_id?: number;
     is_owner?: boolean;
     permissions?: Record<string, string>;
   } | null;
+}
+
+function permissionLevel(user: Props["user"], key: string): string {
+  return String(user?.permissions?.[key] || "none").toLowerCase();
+}
+
+function canUseManagerView(user: Props["user"]): boolean {
+  const role = String(user?.staff_role || user?.role || "").toLowerCase();
+  return Boolean(
+    user?.is_owner ||
+      ["manager", "lead", "marketing_lead", "marketing_manager"].includes(role) ||
+      permissionLevel(user, "vkpi") === "admin" ||
+      permissionLevel(user, "system.members") === "admin",
+  );
 }
 
 function downloadUrlFrom(result: Record<string, unknown>): string {
@@ -86,8 +102,7 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
   const [viewMode, setViewMode] = useState<"manager" | "employee">("manager");
   const [range, setRange] = useState<VkpiRangeKey>("7d");
   const [lastSyncedAt, setLastSyncedAt] = useState("");
-  const role = String(user?.role || "").toLowerCase();
-  const isManager = Boolean(user?.is_owner || ["admin", "manager", "lead", "marketing_lead", "marketing_manager"].includes(role));
+  const isManager = canUseManagerView(user);
   const effectiveViewMode = isManager ? viewMode : "employee";
   const scope = effectiveViewMode === "manager" ? "all" : "self";
   const userRoleLabel = isManager

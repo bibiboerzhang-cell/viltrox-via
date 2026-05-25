@@ -49,12 +49,11 @@ function AdminAuthLoading() {
 
 function hasMarketingPermission(user: { role?: string; is_owner?: boolean; permissions?: Record<string, string> }): boolean {
   if (user.is_owner) return true;
-  if (String(user.role || "").toLowerCase() === "admin") return true;
   const permissions = user.permissions || {};
   if (Object.keys(permissions).length === 0) {
     return false;
   }
-  return ["read", "write"].includes(String(permissions.vkpi || permissions.marketing || "none").toLowerCase());
+  return ["read", "write", "admin"].includes(String(permissions.vkpi || permissions.marketing || "none").toLowerCase());
 }
 
 function isGlassDemoRequest(hashPage: string): boolean {
