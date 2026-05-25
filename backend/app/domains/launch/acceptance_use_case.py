@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from app.domains.launch.acceptance import ESTIMATOR_VERSION, build_new_launch_acceptance_report
 from app.domains.trends import trend_detection_use_case as trend_detection_v0
-from app.services.vkpi import product_campaign_card
+from app.domains.products import product_campaign_card
 
 
 def build_new_launch_acceptance_v0(

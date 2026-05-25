@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.services.vkpi import product_campaign_card
+from app.domains.products import product_campaign_card
 
 
 def test_product_campaign_card_is_read_only(monkeypatch) -> None:
