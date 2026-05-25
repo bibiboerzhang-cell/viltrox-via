@@ -33,7 +33,7 @@ os.environ["APIFY_FACEBOOK_POSTS_ACTOR_ID"] = ""
 os.environ["META_GRAPH_ACCESS_TOKEN"] = ""
 os.environ["META_GRAPH_API_VERSION"] = ""
 
-from app.services.vkpi.industry_crawlers import (
+from app.platform.industry_crawlers import (
     YouTubeCrawler,
     InstagramCrawler,
     TikTokCrawler,

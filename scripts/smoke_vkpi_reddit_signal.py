@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from app.services.vkpi.industry_crawlers.reddit_crawler import RedditCrawler
+from app.platform.industry_crawlers.reddit_crawler import RedditCrawler
 from app.domains.market.signal_taxonomy import (
     KEYWORD_GROUPS,
     TIER1_GROUPS,

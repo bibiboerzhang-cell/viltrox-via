@@ -467,7 +467,7 @@ def _crawl(channel: dict[str, Any], max_posts: int, timeout: int) -> tuple[dict[
     platform = str(channel.get("platform") or "").lower()
     target = _text(channel.get("account_url"), channel.get("account_handle"))
     if platform == "instagram":
-        from app.services.vkpi.industry_crawlers.instagram_crawler import InstagramCrawler
+        from app.platform.industry_crawlers.instagram_crawler import InstagramCrawler
 
         crawler = InstagramCrawler(run_timeout_seconds=timeout)
         profile = crawler.crawl_channel_profile(target, max_posts=12)
@@ -476,12 +476,12 @@ def _crawl(channel: dict[str, Any], max_posts: int, timeout: int) -> tuple[dict[
         raw_posts = _items(posts.get("items")) or _items(profile_item.get("latestPosts"))
         return {"profile": profile, "posts": posts}, raw_posts
     if platform == "tiktok":
-        from app.services.vkpi.industry_crawlers.tiktok_crawler import TikTokCrawler
+        from app.platform.industry_crawlers.tiktok_crawler import TikTokCrawler
 
         result = TikTokCrawler(run_timeout_seconds=timeout).crawl_channel_profile(target, max_posts=max_posts)
         return {"profile": result}, _items(result.get("items"))
     if platform == "youtube":
-        from app.services.vkpi.industry_crawlers.youtube_crawler import YouTubeCrawler
+        from app.platform.industry_crawlers.youtube_crawler import YouTubeCrawler
 
         crawler = YouTubeCrawler()
         profile = crawler.crawl_channel_profile(target)
@@ -489,17 +489,17 @@ def _crawl(channel: dict[str, Any], max_posts: int, timeout: int) -> tuple[dict[
         videos = crawler.crawl_channel_videos(_text(item.get("id")), max_results=max_posts)
         return {"profile": profile, "videos": videos}, _items(videos.get("items"))
     if platform == "facebook":
-        from app.services.vkpi.industry_crawlers.facebook_crawler import FacebookCrawler
+        from app.platform.industry_crawlers.facebook_crawler import FacebookCrawler
 
         result = FacebookCrawler().crawl_channel_profile(target, max_posts=max_posts)
         return {"profile": result}, _items(result.get("items"))
     if platform == "reddit":
-        from app.services.vkpi.industry_crawlers.reddit_crawler import RedditCrawler
+        from app.platform.industry_crawlers.reddit_crawler import RedditCrawler
 
         result = RedditCrawler().crawl_channel_profile(target, max_posts=max_posts)
         return {"profile": result}, _items(result.get("items"))
     if platform == "x":
-        from app.services.vkpi.industry_crawlers.x_crawler import XCrawler
+        from app.platform.industry_crawlers.x_crawler import XCrawler
 
         result = XCrawler(run_timeout_seconds=timeout).crawl_channel_profile(target, max_posts=max_posts)
         return {"profile": result}, _items(result.get("items"))

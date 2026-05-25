@@ -27,7 +27,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from app.db.connection import get_conn
-from app.services.vkpi.industry_crawlers import get_crawler
+from app.platform.industry_crawlers import get_crawler
 from app.domains.comments.compat import resolve_post_for_comments
 
 

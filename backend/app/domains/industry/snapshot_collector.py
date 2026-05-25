@@ -230,7 +230,7 @@ def provider_gate(account: dict[str, Any], *, force: bool = False) -> dict[str, 
                 "budget_key": budget_gate.get("budget_key"),
             }
     # R-Phase2-A: 多平台 crawler 注册检查
-    from app.services.vkpi.industry_crawlers import get_crawler, is_supported
+    from app.platform.industry_crawlers import get_crawler, is_supported
     if not is_supported(platform):
         return {"allowed": False, "provider_status": "not_configured", "sync_status": "not_configured", "message": f"{platform} 抓取适配器尚未注册。"}
     crawler = get_crawler(platform)
@@ -402,7 +402,7 @@ def collect_account_snapshot(
             conn.commit()
             return {"account": account, **gate}
         # R-Phase2-A: 多平台 dispatch
-        from app.services.vkpi.industry_crawlers import get_crawler
+        from app.platform.industry_crawlers import get_crawler
         crawler = get_crawler(platform)
         if crawler is None:
             raw_data = {"source": "unsupported", "platform": platform, "message": f"{platform} 适配器未注册"}

@@ -28,7 +28,7 @@ for key in [
 
 
 def main() -> None:
-    from app.services.vkpi.industry_crawlers import get_crawler
+    from app.platform.industry_crawlers import get_crawler
 
     failures: list[str] = []
     expected = ["youtube", "instagram", "tiktok", "reddit", "facebook"]

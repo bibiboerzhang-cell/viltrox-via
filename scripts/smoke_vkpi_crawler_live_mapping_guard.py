@@ -24,7 +24,7 @@ os.environ.setdefault("DATABASE_URL", os.environ.get("LOCAL_DATABASE_URL", "post
 import importlib  # noqa: E402
 
 platform_crawl_settings = importlib.import_module("app.domains.settings.platform_crawl")
-from app.services.vkpi.industry_crawlers import get_crawler, supported_platforms  # noqa: E402
+from app.platform.industry_crawlers import get_crawler, supported_platforms  # noqa: E402
 from app.services.vkpi.industry_snapshot_collector import calculate_kpis  # noqa: E402
 from app.db.connection import close_db_runtime  # noqa: E402
 

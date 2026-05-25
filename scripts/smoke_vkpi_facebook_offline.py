@@ -35,7 +35,7 @@ def main():
     ]:
         os.environ.pop(key, None)
 
-    from app.services.vkpi.industry_crawlers import (
+    from app.platform.industry_crawlers import (
         get_crawler,
         is_supported,
         supported_platforms,

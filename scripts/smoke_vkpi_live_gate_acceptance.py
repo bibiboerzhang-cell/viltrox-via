@@ -72,7 +72,7 @@ def _assert_live_guard_script_shape() -> None:
 
 
 def _run_optional_live() -> dict[str, Any]:
-    from app.services.vkpi.industry_crawlers import get_crawler
+    from app.platform.industry_crawlers import get_crawler
     from app.services.vkpi.industry_snapshot_collector import calculate_kpis
 
     platform = os.environ.get("VKPI_P2_12_LIVE_PLATFORM", "youtube").strip().lower()

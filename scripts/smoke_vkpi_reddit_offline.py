@@ -41,7 +41,7 @@ def main():
         os.environ.pop(key, None)
     os.environ["VKPI_REDDIT_PUBLIC_JSON_ENABLED"] = "0"
 
-    from app.services.vkpi.industry_crawlers import (
+    from app.platform.industry_crawlers import (
         get_crawler,
         is_supported,
         supported_platforms,

@@ -251,27 +251,27 @@ def _comment_external_post_id(platform: str, post_id: str, url: str, post: dict[
 
 def _comment_crawler(platform: str):
     if platform == "reddit":
-        from app.services.vkpi.industry_crawlers.reddit_crawler import RedditCrawler
+        from app.platform.industry_crawlers.reddit_crawler import RedditCrawler
 
         return RedditCrawler(), "Reddit 评论抓取需要 PRAW 配置。"
     if platform == "instagram":
-        from app.services.vkpi.industry_crawlers.instagram_crawler import InstagramCrawler
+        from app.platform.industry_crawlers.instagram_crawler import InstagramCrawler
 
         return InstagramCrawler(), "Instagram 评论抓取需要 APIFY_TOKEN 配置。"
     if platform == "facebook":
-        from app.services.vkpi.industry_crawlers.facebook_crawler import FacebookCrawler
+        from app.platform.industry_crawlers.facebook_crawler import FacebookCrawler
 
         return FacebookCrawler(), "Facebook 评论抓取需要 APIFY_TOKEN 配置。"
     if platform == "youtube":
-        from app.services.vkpi.industry_crawlers.youtube_crawler import YouTubeCrawler
+        from app.platform.industry_crawlers.youtube_crawler import YouTubeCrawler
 
         return YouTubeCrawler(), "YouTube 评论抓取需要 YOUTUBE_API_KEY 配置。"
     if platform == "tiktok":
-        from app.services.vkpi.industry_crawlers.tiktok_crawler import TikTokCrawler
+        from app.platform.industry_crawlers.tiktok_crawler import TikTokCrawler
 
         return TikTokCrawler(run_timeout_seconds=300), "TikTok 评论抓取需要 APIFY_TOKEN 配置。"
     if platform == "x":
-        from app.services.vkpi.industry_crawlers.x_crawler import XCrawler
+        from app.platform.industry_crawlers.x_crawler import XCrawler
 
         return XCrawler(run_timeout_seconds=300), "X 评论抓取需要 X_BEARER_TOKEN，或配置 APIFY_X_COMMENTS_ACTOR_ID。"
     return None, "当前平台评论采集未接入频道层。"

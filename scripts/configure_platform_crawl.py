@@ -69,7 +69,7 @@ from app.domains.settings.platform_crawl import (
     platform_settings,
     update_platform_settings,
 )
-from app.services.vkpi.industry_crawlers import get_crawler, supported_platforms
+from app.platform.industry_crawlers import get_crawler, supported_platforms
 
 
 SUPPORTED = {

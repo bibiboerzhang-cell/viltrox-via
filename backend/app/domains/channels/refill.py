@@ -390,7 +390,7 @@ def _sync_youtube(
     progress_callback: ProgressCallback | None = None,
     cancel_check: CancelCheck | None = None,
 ) -> dict[str, Any]:
-    from app.services.vkpi.industry_crawlers.youtube_crawler import YouTubeCrawler
+    from app.platform.industry_crawlers.youtube_crawler import YouTubeCrawler
 
     _check_cancel(cancel_check)
     _progress(progress_callback, 10, "YouTube crawler 启动")
@@ -432,7 +432,7 @@ def _sync_instagram(
     progress_callback: ProgressCallback | None = None,
     cancel_check: CancelCheck | None = None,
 ) -> dict[str, Any]:
-    from app.services.vkpi.industry_crawlers.instagram_crawler import InstagramCrawler
+    from app.platform.industry_crawlers.instagram_crawler import InstagramCrawler
 
     _check_cancel(cancel_check)
     _progress(progress_callback, 10, "Instagram crawler 启动")
@@ -491,7 +491,7 @@ def _sync_tiktok(
     progress_callback: ProgressCallback | None = None,
     cancel_check: CancelCheck | None = None,
 ) -> dict[str, Any]:
-    from app.services.vkpi.industry_crawlers.tiktok_crawler import TikTokCrawler
+    from app.platform.industry_crawlers.tiktok_crawler import TikTokCrawler
 
     _check_cancel(cancel_check)
     _progress(progress_callback, 10, "TikTok crawler 启动")
@@ -531,7 +531,7 @@ def _sync_facebook(
     progress_callback: ProgressCallback | None = None,
     cancel_check: CancelCheck | None = None,
 ) -> dict[str, Any]:
-    from app.services.vkpi.industry_crawlers.facebook_crawler import FacebookCrawler
+    from app.platform.industry_crawlers.facebook_crawler import FacebookCrawler
 
     _check_cancel(cancel_check)
     _progress(progress_callback, 10, "Facebook crawler 启动")
@@ -576,7 +576,7 @@ def _sync_reddit(
     progress_callback: ProgressCallback | None = None,
     cancel_check: CancelCheck | None = None,
 ) -> dict[str, Any]:
-    from app.services.vkpi.industry_crawlers.reddit_crawler import RedditCrawler
+    from app.platform.industry_crawlers.reddit_crawler import RedditCrawler
 
     _check_cancel(cancel_check)
     _progress(progress_callback, 10, "Reddit crawler 启动")
@@ -624,7 +624,7 @@ def _sync_x(
     progress_callback: ProgressCallback | None = None,
     cancel_check: CancelCheck | None = None,
 ) -> dict[str, Any]:
-    from app.services.vkpi.industry_crawlers.x_crawler import XCrawler
+    from app.platform.industry_crawlers.x_crawler import XCrawler
 
     _check_cancel(cancel_check)
     _progress(progress_callback, 10, "X crawler 启动")

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from app.db.connection import get_conn
-from app.services.vkpi.industry_crawlers import get_crawler, is_supported
+from app.platform.industry_crawlers import get_crawler, is_supported
 
 
 VALIDATION_TARGET_COUNT = 14
