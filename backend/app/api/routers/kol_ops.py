@@ -41,7 +41,7 @@ from app.services.kol.account_dossier import (
 )
 from app.services.kol.content_analyzer import analyze_kol_url_standalone
 from app.services.kol.metrics import cpv, engagement_rate, roi
-from app.services.vkpi import kol_history_match
+from app.domains.kol import history_match as kol_history_match
 
 from app.api.routers.kol_ops_schema import ensure_kol_schema
 from app.api.routers.kol_ops_dashboard import router as dashboard_router

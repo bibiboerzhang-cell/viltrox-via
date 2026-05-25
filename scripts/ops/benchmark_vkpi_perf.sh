@@ -25,7 +25,8 @@ import statistics
 import time
 
 from app.services.cache import get_cache_stats
-from app.services.vkpi import channels, kol_history_match, kol_pool
+from app.domains.kol import history_match as kol_history_match
+from app.services.vkpi import channels, kol_pool
 
 staff = {"id": 0, "staff_id": 0, "user_id": 0, "role": "admin", "is_owner": 1}
 runs = max(1, int(os.environ.get("RUNS") or 5))

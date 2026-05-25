@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from app.db.connection import get_conn
-from app.services.vkpi.kol_history_match import _avatar_from_raw, _recent_post_summary
+from app.domains.kol.history_match import _avatar_from_raw, _recent_post_summary
 
 
 SOURCE_WEIGHTS = {

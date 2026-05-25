@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from app.db.connection import get_conn
-from app.services.vkpi import kol_history_match
+from app.domains.kol import history_match as kol_history_match
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 
 

@@ -11,8 +11,8 @@ from collections import Counter
 from typing import Any
 
 from app.db.connection import get_conn
+from app.domains.kol import history_match as kol_history_match
 from app.services.vkpi import (
-    kol_history_match,
     kol_pool,
     kol_product_fit,
     refresh_tier,
