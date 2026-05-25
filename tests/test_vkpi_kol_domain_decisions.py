@@ -14,8 +14,8 @@ def test_kol_decision_domain_wraps_create_and_list(monkeypatch):
         calls["list"] = (kol_pool_id, decision_key, limit)
         return {"decisions": []}
 
-    monkeypatch.setattr(kol_domain_decisions.kol_decisions, "create_decision", create_decision)
-    monkeypatch.setattr(kol_domain_decisions.kol_decisions, "list_decisions", list_decisions)
+    monkeypatch.setattr(kol_domain_decisions.decision_audit, "create_decision", create_decision)
+    monkeypatch.setattr(kol_domain_decisions.decision_audit, "list_decisions", list_decisions)
 
     assert kol_domain.create_decision({"kol_pool_id": 1}, staff={"id": 2}) == {"decision_uid": "d1"}
     assert kol_domain.list_decisions(kol_pool_id=1, decision_key="contact", limit=10) == {"decisions": []}
@@ -38,8 +38,8 @@ def test_kol_decision_domain_wraps_followups(monkeypatch):
         calls["followup_staff"] = staff
         return {"followup_uid": "f1"}
 
-    monkeypatch.setattr(kol_domain_decisions.kol_decisions, "list_followup_queue", list_followup_queue)
-    monkeypatch.setattr(kol_domain_decisions.kol_decisions, "create_followup", create_followup)
+    monkeypatch.setattr(kol_domain_decisions.decision_audit, "list_followup_queue", list_followup_queue)
+    monkeypatch.setattr(kol_domain_decisions.decision_audit, "create_followup", create_followup)
 
     assert kol_domain.list_followups(status="due", days_after=30, decision_key="watch", limit=20) == {"items": []}
     assert kol_domain.create_followup({"decision_uid": "d1"}, staff={"id": 3}) == {"followup_uid": "f1"}

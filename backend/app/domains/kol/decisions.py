@@ -3,11 +3,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.services.vkpi import kol_decisions
+from app.domains.kol import decision_audit
 
 
 def create_decision(body: dict[str, Any], *, staff: dict[str, Any]) -> dict[str, Any]:
-    return kol_decisions.create_decision(body or {}, staff=staff)
+    return decision_audit.create_decision(body or {}, staff=staff)
 
 
 def list_decisions(
@@ -16,7 +16,7 @@ def list_decisions(
     decision_key: str = "",
     limit: int = 100,
 ) -> dict[str, Any]:
-    return kol_decisions.list_decisions(kol_pool_id=kol_pool_id, decision_key=decision_key, limit=limit)
+    return decision_audit.list_decisions(kol_pool_id=kol_pool_id, decision_key=decision_key, limit=limit)
 
 
 def list_followups(
@@ -26,7 +26,7 @@ def list_followups(
     decision_key: str = "",
     limit: int = 100,
 ) -> dict[str, Any]:
-    return kol_decisions.list_followup_queue(
+    return decision_audit.list_followup_queue(
         status=status,
         days_after=days_after,
         decision_key=decision_key,
@@ -35,4 +35,4 @@ def list_followups(
 
 
 def create_followup(body: dict[str, Any], *, staff: dict[str, Any]) -> dict[str, Any]:
-    return kol_decisions.create_followup(body or {}, staff=staff)
+    return decision_audit.create_followup(body or {}, staff=staff)
