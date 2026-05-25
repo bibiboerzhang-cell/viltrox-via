@@ -4,10 +4,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
-from app.core.logging import get_logger
 from app.db.connection import get_conn
+from app.domains.kol import claim_audit
 from app.domains.kol import claim_listing
-from app.services.vkpi import audit, scope
+from app.services.vkpi import scope
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.workflow import staff_id
 from app.services.vkpi.kol_claims_common import (
@@ -25,9 +25,6 @@ from app.services.vkpi.kol_claims_common import (
     utcnow,
 )
 
-logger = get_logger(__name__)
-
-
 def _log_kol_audit(
     *,
     actor_staff_id: int,
@@ -36,21 +33,13 @@ def _log_kol_audit(
     detail: str = "",
     metadata: dict[str, Any] | None = None,
 ) -> None:
-    if not actor_staff_id:
-        return
-    try:
-        audit.log_business_event(
-            staff_id=int(actor_staff_id),
-            action_type=action_type,
-            target_type="kol",
-            target_id=int(kol_id),
-            detail=detail,
-            metadata=metadata or {},
-        )
-    except Exception as exc:
-        # Audit must not break KOL lifecycle actions; failures are surfaced by audit QA.
-        logger.warning("kol lifecycle audit failed for %s/%s: %s", action_type, kol_id, exc)
-        return
+    claim_audit.log_kol_audit(
+        actor_staff_id=actor_staff_id,
+        action_type=action_type,
+        kol_id=kol_id,
+        detail=detail,
+        metadata=metadata,
+    )
 
 
 def lookup(body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
