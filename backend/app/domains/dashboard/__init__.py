@@ -7,6 +7,7 @@ from app.domains.dashboard.agents import (
     _build_dashboard_copilot_brief,
     _build_dashboard_tasks,
 )
+from app.domains.dashboard.kol_distribution import build_dashboard_kol_distribution
 from app.domains.dashboard.recent_content import (
     _dashboard_int,
     _dashboard_official_matrix_summary,
@@ -27,5 +28,6 @@ __all__ = [
     "_build_dashboard_copilot_brief",
     "_build_dashboard_tasks",
     "_recent_content_sort_key",
+    "build_dashboard_kol_distribution",
     "build_dashboard_recent_content",
 ]

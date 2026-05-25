@@ -1,4 +1,5 @@
 from app.api.routers import vkpi_dashboard_staff
+from app.domains.dashboard import kol_distribution as dashboard_kol_distribution
 from app.domains.dashboard import recent_content as dashboard_recent_content
 
 
@@ -74,9 +75,9 @@ def test_dashboard_kol_distribution_includes_platforms_and_exposure(monkeypatch)
                 return _Rows([{"n": 3}])
             raise AssertionError(query)
 
-    monkeypatch.setattr(vkpi_dashboard_staff, "get_conn", lambda: Conn())
+    monkeypatch.setattr(dashboard_kol_distribution, "get_conn", lambda: Conn())
     monkeypatch.setattr(
-        vkpi_dashboard_staff.kol_pool,
+        dashboard_kol_distribution.kol_pool,
         "_country_distribution",
         lambda conn, limit: [
             {

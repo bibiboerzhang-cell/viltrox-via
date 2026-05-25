@@ -1,4 +1,5 @@
 from app.api.routers import vkpi_dashboard_staff
+from app.domains.dashboard import kol_distribution as dashboard_kol_distribution
 from app.services.vkpi.country_coords import resolve_country_code
 
 
@@ -20,9 +21,9 @@ def test_resolve_country_code_handles_noisy_values():
 
 
 def test_dashboard_kol_distribution_maps_known_countries(monkeypatch):
-    monkeypatch.setattr(vkpi_dashboard_staff, "get_conn", lambda: _FakeConn())
+    monkeypatch.setattr(dashboard_kol_distribution, "get_conn", lambda: _FakeConn())
     monkeypatch.setattr(
-        vkpi_dashboard_staff.kol_pool,
+        dashboard_kol_distribution.kol_pool,
         "_country_distribution",
         lambda _conn, limit=200: [
             {"country_code": "US", "country_name": "United States", "kol_count": 2, "raw_values": ["美国"]},
