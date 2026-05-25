@@ -5,7 +5,8 @@ import os
 from typing import Any
 
 from app.db.connection import get_conn
-from app.services.vkpi import audit, kol_claims, link_center, workflow
+from app.domains.kol import claims as kol_claims
+from app.services.vkpi import audit, link_center, workflow
 from app.services.vkpi.analytics_common import _actor, _int, _is_official_account, _json, _loads_json, _utcnow
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.schema_analytics import ensure_vkpi_analytics_schema

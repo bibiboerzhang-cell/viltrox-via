@@ -5,8 +5,9 @@ import os
 from typing import Any
 
 from app.db.connection import get_conn
+from app.domains.kol import claims as kol_claims
 from app.services.vkpi._utils import json_dumps, json_loads, utcnow_iso
-from app.services.vkpi import audit, kol_claims, kol_pool, link_center, outcome_collector, scope, workflow
+from app.services.vkpi import audit, kol_pool, link_center, outcome_collector, scope, workflow
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
 
