@@ -1,0 +1,81 @@
+@media (max-width: 1280px) {
+  .vkpi-page--discover .vkpi-page-heading {
+    grid-template-columns: 1fr;
+  }
+
+  .vkpi-discover-heading-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .vkpi-discover-command,
+  .vkpi-discover-candidate-decision,
+  .vkpi-discover-focus,
+  .vkpi-discover-hero,
+  .vkpi-discover-queue__grid,
+  .vkpi-discover-workgrid {
+    grid-template-columns: 1fr;
+  }
+
+  .vkpi-discover-profile {
+    position: static;
+    max-height: none;
+  }
+
+  .vkpi-discover-hero__metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .vkpi-discover-focus-plan__flow {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .vkpi-discover-command__search {
+    grid-template-columns: 1fr;
+  }
+
+  .vkpi-discover-filters,
+  .vkpi-discover-search-history__items,
+  .vkpi-discover-search-progress__steps,
+  .vkpi-discover-queue__grid,
+  .vkpi-discover-mini-grid,
+  .vkpi-discover-hero__metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .vkpi-discover-focus-plan__why,
+  .vkpi-discover-focus-plan__flow {
+    grid-template-columns: 1fr;
+  }
+
+  .vkpi-discover-queue__header {
+    flex-direction: column;
+  }
+
+  .vkpi-discover-focus__actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .vkpi-discover-candidate-decision__meta {
+    grid-template-columns: 1fr;
+  }
+
+  .vkpi-discover-candidate-decision__actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .vkpi-discover-kol,
+  .vkpi-discover-profile-head,
+  .vkpi-discover-rec,
+  .vkpi-discover-post {
+    grid-template-columns: 1fr;
+  }
+
+  .vkpi-discover-kol__score,
+  .vkpi-discover-profile-score {
+    text-align: left;
+  }
+}

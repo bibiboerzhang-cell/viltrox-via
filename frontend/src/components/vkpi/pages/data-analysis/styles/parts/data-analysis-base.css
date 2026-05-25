@@ -1,0 +1,278 @@
+/* ============================================================
+   Data Analysis design tokens — Viltrox Marketing
+   独立样式文件,只在 DataAnalysisPage 加载
+   主色: V-KPI 蓝 (#155dfc)
+   数据强调色: 橙 (#F8A93C) 仅用于时序图 / 卡片角标 / 关键数据点
+   ============================================================ */
+
+:root {
+  /* 主色 - V-KPI 蓝 (与系统主品牌一致) */
+  --da-primary: #155dfc;
+  --da-primary-50: #edf4ff;
+  --da-primary-soft: #dbeafe;
+
+  /* 数据强调色 - 橙 (仅图表线条、关键热区) */
+  --da-accent: #F8A93C;
+  --da-accent-light: #FCD89B;
+  --da-accent-50: #FEF6E8;
+  --da-accent-corner: #FCB87A;
+
+  /* 文字 */
+  --da-text-primary: #101828;
+  --da-text-secondary: #475467;
+  --da-text-muted: #98A2B3;
+
+  /* 背景 */
+  --da-bg-page: #F8F9FB;
+  --da-bg-card: #FFFFFF;
+  --da-bg-hover: #F9FAFB;
+  --da-bg-soft: #F4F5F7;
+
+  /* 边框 */
+  --da-border: #E4E7EC;
+  --da-border-soft: #F0F1F3;
+
+  /* 状态色 */
+  --da-success: #099250;
+  --da-success-soft: #ECFDF3;
+  --da-danger: #D92D20;
+  --da-danger-soft: #FEF3F2;
+  --da-teal: #14B8A6;
+
+  /* 图表 (保留 SI 风格的橙色线条 - 这是数据可视化的灵魂) */
+  --da-chart-line: var(--da-accent);
+  --da-chart-fill: rgba(248, 169, 60, 0.12);
+  --da-chart-bubble: var(--da-accent-light);
+
+  --da-radius-card: 14px;
+  --da-radius-pill: 999px;
+  --da-shadow-card: 0 1px 3px rgba(16, 24, 40, 0.04);
+  --da-shadow-drawer: -4px 0 22px rgba(16, 24, 40, 0.08);
+}
+
+/* ===== 基础布局 ===== */
+
+.da-shell {
+  display: block;
+  background: var(--da-bg-page);
+  min-height: 100vh;
+  padding: 0;
+  overflow-x: hidden;
+}
+
+.da-main {
+  padding: 24px 28px 80px;
+  max-width: 1280px;
+  width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
+}
+
+.da-main--profile {
+  max-width: 1500px;
+}
+
+/* ===== Hero ===== */
+
+.da-hero {
+  margin-bottom: 24px;
+}
+
+.da-hero__glass {
+  background: linear-gradient(135deg, var(--da-primary) 0%, #2767ff 100%);
+  border-radius: 20px;
+  padding: 32px 36px;
+  color: #fff;
+  position: relative;
+  overflow: hidden;
+}
+
+.da-hero__glass::after {
+  content: '';
+  position: absolute;
+  top: -40%;
+  right: -10%;
+  width: 320px;
+  height: 320px;
+  background: radial-gradient(closest-side, rgba(248, 169, 60, 0.18), transparent);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.da-hero__copy {
+  position: relative;
+  z-index: 1;
+  max-width: 720px;
+}
+
+.da-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 5px 10px;
+  border-radius: var(--da-radius-pill);
+  margin-bottom: 14px;
+}
+
+.da-hero h1 {
+  font-size: 32px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  margin: 0 0 8px;
+  color: #fff;
+}
+
+.da-hero p {
+  margin: 0 0 16px;
+  font-size: 14px;
+  line-height: 1.65;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.da-platform-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 18px;
+}
+
+.da-platform-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: var(--da-radius-pill);
+}
+
+.da-platform-chip strong {
+  font-weight: 800;
+}
+
+.da-hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+/* ===== reference-dashboard style quick controls ===== */
+
+.da-analysis-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  background: var(--da-bg-card);
+  border: 1px solid var(--da-border-soft);
+  border-radius: 16px;
+  padding: 12px;
+  margin: -8px 0 20px;
+  box-shadow: var(--da-shadow-card);
+}
+
+.da-analysis-toolbar__field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  border: 1px solid var(--da-border);
+  border-radius: 12px;
+  padding: 0 10px;
+  background: #fff;
+}
+
+.da-analysis-toolbar__field span {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--da-text-muted);
+}
+
+.da-analysis-toolbar__field select {
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--da-text-primary);
+  font-size: 13px;
+  font-weight: 800;
+  min-width: 112px;
+}
+
+.da-toolbar-button {
+  min-height: 42px;
+  border: 1px solid #161225;
+  background: #161225;
+  color: #fff;
+  border-radius: 12px;
+  padding: 0 14px;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.da-analysis-toolbar__summary {
+  margin-left: auto;
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--da-text-secondary);
+  background: var(--da-bg-soft);
+  border-radius: 12px;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* ===== 横向二级 Tab 取代 240px 侧栏 ===== */
+
+.da-secondary-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--da-border);
+  margin-bottom: 24px;
+  overflow-x: auto;
+  padding-bottom: 0;
+}
+
+.da-secondary-tabs button {
+  border: 0;
+  background: transparent;
+  padding: 14px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--da-text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  position: relative;
+  transition: color 0.15s;
+}
+
+.da-secondary-tabs button:hover {
+  color: var(--da-text-primary);
+}
+
+.da-secondary-tabs button.is-active {
+  color: var(--da-primary);
+}
+
+.da-secondary-tabs button.is-active::after {
+  content: '';
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: -1px;
+  height: 2px;
+  background: var(--da-primary);
+  border-radius: 2px 2px 0 0;
+}

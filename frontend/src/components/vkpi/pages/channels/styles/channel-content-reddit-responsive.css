@@ -1,0 +1,194 @@
+.vkpi-reddit-assessment {
+  margin-bottom: 14px;
+}
+
+.vkpi-reddit-assessment__summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  width: 100%;
+  border: 1px solid rgba(203, 213, 225, 0.72);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: var(--vkpi-shadow-soft);
+  color: var(--vkpi-text);
+  cursor: pointer;
+  padding: 16px 18px;
+  text-align: left;
+  backdrop-filter: blur(18px) saturate(1.25);
+}
+
+.vkpi-reddit-assessment__summary span {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.vkpi-reddit-assessment__summary h2 {
+  margin: 4px 0;
+  color: var(--vkpi-text);
+  font-size: 20px;
+}
+
+.vkpi-reddit-assessment__summary p {
+  margin: 0;
+  color: #667085;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.vkpi-reddit-assessment__chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.vkpi-reddit-assessment__chips span,
+.vkpi-reddit-modal__stats span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  border: 1px solid rgba(203, 213, 225, 0.78);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.68);
+  color: #344054;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 0 11px;
+}
+
+.vkpi-reddit-modal__panel {
+  width: min(860px, calc(100vw - 56px));
+}
+
+.vkpi-reddit-modal__stats {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 20px 12px;
+}
+
+.vkpi-reddit-modal__body {
+  display: grid;
+  gap: 14px;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 20px 18px;
+}
+
+.vkpi-reddit-modal__body h4 {
+  margin: 0 0 8px;
+  color: var(--vkpi-text);
+  font-size: 14px;
+}
+
+.vkpi-reddit-modal__body p {
+  margin: 0;
+  color: #667085;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.vkpi-reddit-post-line {
+  display: grid;
+  gap: 5px;
+  border: 1px solid rgba(226, 232, 240, 0.86);
+  border-radius: 16px;
+  background: rgba(248, 250, 252, 0.78);
+  color: inherit;
+  padding: 10px 12px;
+  text-decoration: none;
+}
+
+.vkpi-reddit-post-line + .vkpi-reddit-post-line {
+  margin-top: 8px;
+}
+
+.vkpi-reddit-post-line strong {
+  overflow: hidden;
+  color: var(--vkpi-text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vkpi-reddit-post-line span {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.vkpi-channel-content-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.vkpi-channel-content-pagination button {
+  border: 1px solid #d0d5dd;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--vkpi-text);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 7px 10px;
+}
+
+.vkpi-channel-content-pagination button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.vkpi-channel-content-pagination span {
+  color: var(--vkpi-muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+@media (max-width: 720px) {
+  .vkpi-channel-content-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .vkpi-channel-content-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .vkpi-channel-content-card__media {
+    aspect-ratio: 16 / 9;
+  }
+
+  .vkpi-media-lightbox {
+    padding: 16px;
+  }
+
+  .vkpi-media-lightbox__panel {
+    width: fit-content;
+    min-width: 0;
+    max-height: calc(100vh - 32px);
+    border-radius: 22px;
+  }
+
+  .vkpi-media-lightbox__stage,
+  .vkpi-media-lightbox__stage img,
+  .vkpi-media-lightbox__stage video,
+  .vkpi-media-lightbox__stage iframe {
+    max-width: calc(100vw - 48px);
+  }
+
+  .vkpi-media-lightbox__header h3 {
+    max-width: 72vw;
+  }
+
+  .vkpi-media-lightbox__footer small {
+    margin-left: 0;
+  }
+}

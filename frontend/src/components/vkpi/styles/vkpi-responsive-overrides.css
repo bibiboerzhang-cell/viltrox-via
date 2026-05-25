@@ -1,0 +1,201 @@
+@media (max-width: 760px) {
+  .vkpi-kol-pool-decision-strip,
+  .vkpi-kol-pool-decision-card,
+  .vkpi-kol-pool-readiness-card { align-items: stretch; flex-direction: column; }
+  .vkpi-kol-pool-gap-grid,
+  .vkpi-kol-pool-next-grid,
+  .vkpi-kol-pool-readiness-grid { grid-template-columns: 1fr; }
+  .vkpi-agents-hero,
+  .vkpi-agents-toolbar { align-items: stretch; flex-direction: column; }
+  .vkpi-agents-grid,
+  .vkpi-agent-detail__meta,
+  .vkpi-task-focus-banner,
+  .vkpi-employee-workday,
+  .vkpi-repair-capability-strip,
+  .vkpi-repair-persist-mode,
+  .vkpi-repair-persist-mode__meters,
+  .vkpi-repair-persist-mode__flow,
+  .vkpi-repair-reject-panel__list,
+  .vkpi-repair-reject-panel__facts,
+  .vkpi-repair-endpoint-contract__stats,
+  .vkpi-repair-endpoint-contract__grid,
+  .vkpi-repair-endpoint-contract__meta,
+  .vkpi-repair-acceptance__metrics,
+  .vkpi-repair-acceptance__grid,
+  .vkpi-repair-minimum-execution__metrics,
+  .vkpi-repair-minimum-execution__gates,
+  .vkpi-repair-runbook__metrics,
+  .vkpi-repair-runbook__steps,
+  .vkpi-repair-runbook__package,
+  .vkpi-repair-v0-closure__metrics,
+  .vkpi-repair-v0-closure__rounds,
+  .vkpi-repair-v0-closure__artifacts,
+  .vkpi-repair-v0-gaps__metrics,
+  .vkpi-repair-v0-gaps__lanes,
+  .vkpi-repair-backend-contract__metrics,
+  .vkpi-repair-backend-contract__sections,
+  .vkpi-repair-approval-package__metrics,
+  .vkpi-repair-approval-package__steps,
+  .vkpi-repair-final-manifest__metrics,
+  .vkpi-repair-final-manifest__rounds,
+  .vkpi-repair-final-manifest__artifacts,
+  .vkpi-repair-preview-closeout__metrics,
+  .vkpi-repair-preview-closeout__lanes,
+  .vkpi-repair-first-slice__metrics,
+  .vkpi-repair-first-slice__primary,
+  .vkpi-repair-first-slice__prereqs,
+  .vkpi-repair-first-slice__alternates,
+  .vkpi-repair-schema-design__metrics,
+  .vkpi-repair-schema-design__tables,
+  .vkpi-repair-schema-design__tables section,
+  .vkpi-repair-migration-review__revision,
+  .vkpi-repair-migration-review__metrics,
+  .vkpi-repair-migration-review__sql,
+  .vkpi-repair-migration-review__gates,
+  .vkpi-repair-persistence-boundary__summary,
+  .vkpi-repair-persistence-boundary__grid,
+  .vkpi-repair-approval-envelope__metrics,
+  .vkpi-repair-approval-envelope__gates,
+  .vkpi-repair-migration-preflight__metrics,
+  .vkpi-repair-migration-preflight__grid,
+  .vkpi-repair-migration-draft__revision,
+  .vkpi-repair-migration-draft__metrics,
+  .vkpi-repair-migration-draft__sql,
+  .vkpi-repair-metrics,
+  .vkpi-repair-execution-queue__storage,
+  .vkpi-repair-execution-queue__stats,
+  .vkpi-repair-execution-queue__list,
+  .vkpi-repair-handoff-log__stats,
+  .vkpi-repair-handoff-review__metrics,
+  .vkpi-repair-handoff-review__lists,
+  .vkpi-repair-handoff-mapping,
+  .vkpi-repair-handoff-log__list,
+  .vkpi-repair-controlled-queue__stats,
+  .vkpi-repair-controlled-queue__gates,
+  .vkpi-repair-controlled-queue__list,
+  .vkpi-repair-controlled-queue__facts,
+  .vkpi-repair-persistence-preview__columns,
+  .vkpi-repair-closure-status__stats,
+  .vkpi-repair-closure-status__steps,
+  .vkpi-repair-write-gate__stats,
+  .vkpi-repair-write-gate__gates,
+  .vkpi-repair-audit-preview__events,
+  .vkpi-repair-audit-preview__events article > div:last-child,
+  .vkpi-repair-task-preview__cards,
+  .vkpi-repair-evidence-preview__refs,
+  .vkpi-repair-implementation-preview__status,
+  .vkpi-repair-implementation-review__metrics,
+  .vkpi-repair-implementation-review__grid,
+  .vkpi-repair-implementation-preview__grid,
+  .vkpi-repair-queue-tools,
+  .vkpi-repair-dryrun-grid,
+  .vkpi-repair-execution-record__grid,
+  .vkpi-repair-flow,
+  .vkpi-repair-package__grid,
+  .vkpi-repair-checklist,
+  .vkpi-repair-policy-grid,
+  .vkpi-agent-summary-grid,
+  .vkpi-intelligence-source-flow,
+  .vkpi-intelligence-source-metrics,
+  .vkpi-intelligence-source-grid,
+  .vkpi-platform-advice-matrix__grid,
+  .vkpi-daily-plan-panel__metrics,
+  .vkpi-daily-plan-panel__groups,
+  .vkpi-daily-plan-panel__sources { grid-template-columns: 1fr; }
+  .vkpi-intelligence-source-board__hero,
+  .vkpi-platform-advice-matrix__head,
+  .vkpi-daily-plan-panel__head { align-items: stretch; flex-direction: column; }
+  .vkpi-intelligence-source-board__score { flex: auto; text-align: left; }
+  .vkpi-task-focus-banner__actions { flex-direction: row; flex-wrap: wrap; }
+  .vkpi-employee-workday__flow,
+  .vkpi-employee-workday__stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .vkpi-repair-guard,
+  .vkpi-repair-persist-mode__requirements,
+  .vkpi-repair-reject-panel__head,
+  .vkpi-repair-endpoint-contract__head,
+  .vkpi-repair-endpoint-contract__route,
+  .vkpi-repair-acceptance__head,
+  .vkpi-repair-minimum-execution__head,
+  .vkpi-repair-runbook__head,
+  .vkpi-repair-runbook__actions,
+  .vkpi-repair-v0-closure__head,
+  .vkpi-repair-v0-closure__actions,
+  .vkpi-repair-v0-gaps__head,
+  .vkpi-repair-v0-gaps__actions,
+  .vkpi-repair-backend-contract__head,
+  .vkpi-repair-backend-contract__actions,
+  .vkpi-repair-approval-package__head,
+  .vkpi-repair-approval-package__actions,
+  .vkpi-repair-final-manifest__head,
+  .vkpi-repair-final-manifest__actions,
+  .vkpi-repair-preview-closeout__head,
+  .vkpi-repair-preview-closeout__actions,
+  .vkpi-repair-first-slice__head,
+  .vkpi-repair-first-slice__actions,
+  .vkpi-repair-schema-design__head,
+  .vkpi-repair-schema-design__actions,
+  .vkpi-repair-migration-review__head,
+  .vkpi-repair-migration-review__actions,
+  .vkpi-repair-persistence-boundary__head,
+  .vkpi-repair-approval-envelope__head,
+  .vkpi-repair-approval-envelope__actions,
+  .vkpi-repair-migration-preflight__head,
+  .vkpi-repair-migration-draft__head,
+  .vkpi-repair-execution-queue__head,
+  .vkpi-repair-execution-queue__actions,
+  .vkpi-repair-handoff-log__head,
+  .vkpi-repair-handoff-review__head,
+  .vkpi-repair-handoff-mapping__head,
+  .vkpi-repair-handoff-mapping__actions,
+  .vkpi-repair-controlled-queue__head,
+  .vkpi-repair-persistence-preview__head,
+  .vkpi-repair-closure-status__head,
+  .vkpi-repair-write-gate__head,
+  .vkpi-repair-audit-preview__head,
+  .vkpi-repair-task-preview__head,
+  .vkpi-repair-evidence-preview__head,
+  .vkpi-repair-handoff-log__actions,
+  .vkpi-repair-execution-record__actions,
+  .vkpi-repair-preflight__head,
+  .vkpi-repair-implementation-preview__head,
+  .vkpi-repair-implementation-review__head,
+  .vkpi-repair-implementation-preview__actions,
+  .vkpi-repair-dryrun-card__head,
+  .vkpi-repair-execution-record__head,
+  .vkpi-repair-package__head,
+  .vkpi-repair-checklist__head,
+  .vkpi-repair-proposal__head { align-items: flex-start; flex-direction: column; }
+  .vkpi-repair-checklist__head span { max-width: 100%; text-align: left; }
+  .vkpi-repair-endpoint-contract__stats { flex: auto; width: 100%; }
+  .vkpi-repair-acceptance__score { flex: auto; width: 100%; text-align: left; }
+  .vkpi-repair-minimum-execution__decision { flex: auto; width: 100%; text-align: left; }
+  .vkpi-repair-runbook__actions { align-items: flex-start; }
+  .vkpi-repair-runbook__actions small { text-align: left; }
+  .vkpi-repair-v0-closure__actions { align-items: flex-start; }
+  .vkpi-repair-v0-closure__actions small { text-align: left; }
+  .vkpi-repair-v0-gaps__actions { align-items: flex-start; }
+  .vkpi-repair-v0-gaps__actions small { text-align: left; }
+  .vkpi-repair-backend-contract__actions { align-items: flex-start; }
+  .vkpi-repair-backend-contract__actions small { text-align: left; }
+  .vkpi-repair-approval-package__actions { align-items: flex-start; }
+  .vkpi-repair-approval-package__actions small { text-align: left; }
+  .vkpi-repair-final-manifest__actions { align-items: flex-start; }
+  .vkpi-repair-final-manifest__actions small { text-align: left; }
+  .vkpi-repair-preview-closeout__actions { align-items: flex-start; }
+  .vkpi-repair-preview-closeout__actions small { text-align: left; }
+  .vkpi-repair-first-slice__actions { align-items: flex-start; }
+  .vkpi-repair-first-slice__actions small { text-align: left; }
+  .vkpi-repair-schema-design__actions { align-items: flex-start; }
+  .vkpi-repair-schema-design__actions small { text-align: left; }
+  .vkpi-repair-migration-review__actions { align-items: flex-start; }
+  .vkpi-repair-migration-review__actions small { text-align: left; }
+  .vkpi-repair-approval-envelope__actions { align-items: flex-start; }
+  .vkpi-repair-approval-envelope__actions small { text-align: left; }
+  .vkpi-repair-implementation-preview__head em { max-width: 100%; }
+  .vkpi-repair-package__head em { max-width: 100%; }
+  .vkpi-intelligence-write-toggle { align-items: flex-start; flex-direction: column; }
+  .vkpi-intelligence-write-toggle__controls { justify-content: space-between; width: 100%; }
+  .vkpi-intelligence-task-draft div:not(.vkpi-intelligence-task-draft__objective),
+  .vkpi-intelligence-feedback-draft div { grid-template-columns: 1fr; }
+  .vkpi-feedback-widget { right: 12px; bottom: 12px; }
+}

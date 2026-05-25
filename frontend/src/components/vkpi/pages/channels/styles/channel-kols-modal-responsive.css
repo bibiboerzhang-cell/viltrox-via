@@ -1,0 +1,214 @@
+.vkpi-my-kol-comment-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  background: rgba(15, 23, 42, 0.22);
+  padding: 22px;
+  backdrop-filter: blur(8px);
+}
+
+.vkpi-my-kol-comment-modal > section {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(760px, 100%);
+  max-height: min(680px, calc(100vh - 48px));
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 24px 72px rgba(15, 23, 42, 0.18);
+  overflow: hidden;
+}
+
+.vkpi-my-kol-comment-modal header,
+.vkpi-my-kol-comment-modal footer {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.9);
+  padding: 16px 18px;
+}
+
+.vkpi-my-kol-comment-modal footer {
+  align-items: center;
+  border-top: 1px solid rgba(226, 232, 240, 0.9);
+  border-bottom: 0;
+}
+
+.vkpi-my-kol-comment-modal span {
+  color: var(--vkpi-muted);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.vkpi-my-kol-comment-modal h3 {
+  margin: 3px 0 4px;
+  color: var(--vkpi-text);
+  font-size: 17px;
+  font-weight: 950;
+}
+
+.vkpi-my-kol-comment-modal p {
+  margin: 0;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 780;
+}
+
+.vkpi-my-kol-comment-modal button,
+.vkpi-my-kol-comment-modal a {
+  border: 1px solid rgba(191, 219, 254, 0.76);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--vkpi-blue);
+  cursor: pointer;
+  padding: 6px 11px;
+  font-size: 12px;
+  font-weight: 900;
+  text-decoration: none;
+}
+
+.vkpi-my-kol-comment-list {
+  display: grid;
+  gap: 10px;
+  overflow: auto;
+  padding: 14px 18px;
+}
+
+.vkpi-my-kol-comment-list article {
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 14px;
+  background: rgba(248, 250, 252, 0.72);
+  padding: 12px;
+}
+
+.vkpi-my-kol-comment-list article header {
+  align-items: center;
+  border: 0;
+  padding: 0;
+}
+
+.vkpi-my-kol-comment-list article strong {
+  color: var(--vkpi-text);
+  font-size: 13px;
+  font-weight: 950;
+}
+
+.vkpi-my-kol-comment-list article small {
+  display: block;
+  margin-top: 8px;
+  color: var(--vkpi-muted);
+  font-size: 11px;
+  font-weight: 820;
+}
+
+.vkpi-my-kol-empty {
+  border: 1px dashed rgba(148, 163, 184, 0.42);
+  border-radius: 16px;
+  background: rgba(248, 250, 252, 0.72);
+  color: var(--vkpi-muted);
+  padding: 22px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 820;
+}
+
+@media (max-width: 1280px) {
+  .vkpi-my-kol-platforms {
+    grid-template-columns: repeat(3, minmax(150px, 1fr));
+  }
+
+  .vkpi-my-kol-content-insights {
+    grid-template-columns: repeat(3, minmax(120px, 1fr));
+  }
+}
+
+@media (max-width: 980px) {
+  .vkpi-my-kol-matrix__header,
+  .vkpi-my-kol-toolbar,
+  .vkpi-my-kol-discovery-bridge {
+    grid-template-columns: 1fr;
+  }
+
+  .vkpi-my-kol-funnel {
+    grid-template-columns: repeat(2, minmax(140px, 1fr));
+  }
+
+  .vkpi-my-kol-content-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .vkpi-my-kol-content-list {
+    grid-template-columns: 1fr;
+  }
+
+  .vkpi-my-kol-matrix__totals {
+    justify-content: flex-start;
+  }
+
+  .vkpi-my-kol-switch {
+    justify-content: flex-start;
+  }
+
+  .vkpi-my-kol-contact-editor {
+    grid-template-columns: 1fr;
+  }
+
+  .vkpi-my-kol-discovery-bridge__flow {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .vkpi-my-kol-card__actions {
+    grid-column: 1 / -1;
+    justify-self: start;
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 720px) {
+  .vkpi-my-kol-platforms,
+  .vkpi-my-kol-grid,
+  .vkpi-my-kol-account-grid,
+  .vkpi-my-kol-content-insights {
+    grid-template-columns: 1fr;
+  }
+
+  .vkpi-my-kol-card {
+    grid-template-columns: 52px minmax(0, 1fr);
+  }
+
+  .vkpi-my-kol-card__avatar {
+    width: 52px;
+    height: 52px;
+  }
+
+  .vkpi-my-kol-card__status {
+    grid-column: 1 / -1;
+    max-width: 100%;
+  }
+
+  .vkpi-my-kol-card__actions {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+
+  .vkpi-my-kol-card__metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .vkpi-my-kol-posts {
+    grid-template-columns: 1fr;
+  }
+
+  .vkpi-my-kol-post {
+    grid-template-columns: 92px minmax(0, 1fr);
+    grid-template-rows: 1fr;
+  }
+
+  .vkpi-my-kol-card__contacts a,
+  .vkpi-my-kol-card__contacts em {
+    max-width: 100%;
+  }
+}

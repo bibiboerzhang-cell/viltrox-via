@@ -1,0 +1,146 @@
+@media (max-width: 1180px) {
+  .vkpi-project-hero,
+  .vkpi-project-filter-bar,
+  .vkpi-campaign-detail-hero {
+    grid-template-columns: 1fr;
+  }
+
+  .vkpi-project-progress-grid,
+  .vkpi-campaign-funnel {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .vkpi-campaign-kpis,
+  .vkpi-campaign-data-strip,
+  .vkpi-campaign-analytics-totals {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .vkpi-campaign-analytics-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .vkpi-campaign-finance-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .vkpi-campaign-materials-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .vkpi-campaign-contracts-grid,
+  .vkpi-campaign-retro-grid,
+  .vkpi-campaign-retro-score {
+    grid-template-columns: 1fr;
+  }
+
+  .vkpi-campaign-finance-totals,
+  .vkpi-campaign-roi-formula,
+  .vkpi-campaign-finance-gaps,
+  .vkpi-campaign-contracts-totals,
+  .vkpi-campaign-retro-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .vkpi-campaign-task-dock {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .vkpi-project-hero {
+    padding: 18px;
+  }
+
+  .vkpi-project-hero h2 {
+    font-size: 30px;
+  }
+
+  .vkpi-project-health-grid,
+  .vkpi-project-card-stats,
+  .vkpi-campaign-kpis,
+  .vkpi-campaign-data-strip,
+  .vkpi-campaign-analytics-totals,
+  .vkpi-campaign-analytics-state {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .vkpi-project-card-top,
+  .vkpi-project-card-main,
+  .vkpi-project-card-footer,
+  .vkpi-project-create-strip,
+  .vkpi-campaign-detail-top,
+  .vkpi-campaign-analytics-head,
+  .vkpi-campaign-finance-head,
+  .vkpi-campaign-materials-head,
+  .vkpi-campaign-contracts-head,
+  .vkpi-campaign-retro-head,
+  .vkpi-campaign-table-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .vkpi-campaign-platform-row {
+    grid-template-columns: minmax(120px, 1fr) repeat(5, minmax(72px, auto));
+    overflow-x: auto;
+  }
+
+  .vkpi-campaign-stage-costs > div,
+  .vkpi-campaign-expense-row,
+  .vkpi-campaign-material-row,
+  .vkpi-campaign-contract-row,
+  .vkpi-campaign-contract-statuses,
+  .vkpi-campaign-retro-kpis {
+    grid-template-columns: 1fr;
+  }
+
+  .vkpi-campaign-detail-hero {
+    padding: 18px;
+  }
+
+  .vkpi-campaign-detail-hero h2 {
+    font-size: 28px;
+  }
+
+  .vkpi-campaign-kol-ops,
+  .vkpi-campaign-timeline-row,
+  .vkpi-campaign-tracking,
+  .vkpi-campaign-video,
+  .vkpi-campaign-track-form {
+    grid-template-columns: 1fr;
+  }
+
+  .vkpi-project-card-title h3 {
+    max-width: 100%;
+  }
+
+  .vkpi-project-modal-backdrop {
+    padding: 14px;
+  }
+
+  .vkpi-project-create-modal {
+    padding: 20px;
+  }
+
+  .vkpi-project-import-modal {
+    padding: 20px;
+  }
+
+  .vkpi-project-create-modal header,
+  .vkpi-project-create-modal footer,
+  .vkpi-project-import-modal header,
+  .vkpi-project-import-modal footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .vkpi-project-create-grid,
+  .vkpi-project-import-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .vkpi-project-create-grid label.is-full,
+  .vkpi-project-import-grid label.is-full {
+    grid-column: auto;
+  }
+}
