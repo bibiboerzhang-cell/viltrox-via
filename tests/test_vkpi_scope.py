@@ -39,6 +39,7 @@ def test_actor_staff_id_accepts_common_identity_keys():
 
 def test_can_view_all_roles_and_finance_domain():
     assert scope.can_view_all(staff(role="admin")) is True
+    assert scope.can_view_all(staff(role="admin", permissions={"vkpi": "write"})) is False
     assert scope.can_view_all(staff(role="marketing-manager")) is True
     assert scope.can_view_all(staff(is_owner=1, role="employee")) is True
     assert scope.can_view_all(staff(role="finance")) is False

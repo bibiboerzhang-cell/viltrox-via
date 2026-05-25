@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from app.db.connection import get_conn
 from app.services.vkpi import budget_guard, llm_gateway
@@ -89,6 +90,23 @@ def test_budget_scopes_require_configuration_and_single_call_cap() -> None:
         assert single["hard_stopped"] is True
     finally:
         _cleanup()
+
+
+def test_market_provider_smoke_budget_scope_contract_exists() -> None:
+    scope = "cron:market_provider_smoke"
+    snapshot = _snapshot_scope(scope)
+    try:
+        budget_guard.update_budget(scope, {"cap_usd": 1.0, "current_spend": 0, "fallback_action": "fallback_to_preflight_only"})
+        row = _snapshot_scope(scope)
+        assert row is not None
+        assert float(row["cap_usd"]) == 1.0
+        assert row["fallback_action"] == "fallback_to_preflight_only"
+
+        migration_sql = Path("migrations/082_vkpi_market_provider_smoke_budget.sql").read_text(encoding="utf-8")
+        assert "cron:market_provider_smoke" in migration_sql
+        assert "fallback_to_preflight_only" in migration_sql
+    finally:
+        _restore_scope(scope, snapshot)
 
 
 def test_llm_budget_acceptance_report_is_readonly(monkeypatch) -> None:

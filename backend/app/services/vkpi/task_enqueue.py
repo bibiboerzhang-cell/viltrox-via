@@ -222,7 +222,7 @@ async def enqueue_vkpi_task(
         channel_id = _int(params.get("channel_id"))
         if not channel_id:
             raise ValueError("channel_id required")
-        channels.get_channel(channel_id, staff=staff)
+        channels.get_channel(channel_id, staff=staff, write=True)
         params["channel_id"] = channel_id
         params["max_posts"] = max(1, min(1000, _int(params.get("max_posts"), 12)))
     if task_type == VKPI_VIDEO_CACHE:

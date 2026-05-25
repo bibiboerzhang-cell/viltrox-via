@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.core.permissions import normalize_permissions
 from app.db.connection import get_conn
 
 
@@ -41,7 +42,16 @@ def is_owner(staff: dict[str, Any] | None) -> bool:
 
 def can_view_all(staff: dict[str, Any] | None, *, domain: str = "general") -> bool:
     role = role_key(staff)
-    if is_owner(staff) or role in MANAGER_ROLES:
+    if is_owner(staff):
+        return True
+    if role == "admin":
+        permissions = normalize_permissions(
+            (staff or {}).get("permissions_json") or (staff or {}).get("permissions"),
+            role,
+            owner=False,
+        )
+        return str(permissions.get("vkpi") or "none").lower() == "admin"
+    if role in MANAGER_ROLES:
         return True
     if domain in {"cost", "finance", "export"} and role in FINANCE_ROLES:
         return True
