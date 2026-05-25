@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import json
 
-from app.domains.market.intelligence_cards import (
+from app.domains.market import (
     build_market_intelligence_cards,
     latest_external_signal_smoke_report,
-    latest_usable_market_llm_report,
-)
-from app.services.vkpi.market_intelligence_cards import (
     latest_reviewed_market_run_id,
+    latest_usable_market_llm_report,
 )
 
 
@@ -162,6 +160,6 @@ def test_latest_reviewed_market_run_id_handles_db_errors(monkeypatch) -> None:
         def execute(self, *_args, **_kwargs):
             raise RuntimeError("db unavailable")
 
-    monkeypatch.setattr("app.services.vkpi.market_intelligence_cards.get_conn", lambda: BrokenConn())
+    monkeypatch.setattr("app.domains.market.intelligence_card_repository.get_conn", lambda: BrokenConn())
 
     assert latest_reviewed_market_run_id() is None

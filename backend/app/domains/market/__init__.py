@@ -29,6 +29,7 @@ from app.domains.market.intelligence_cards import (
     render_market_intelligence_cards_markdown,
     write_market_intelligence_cards,
 )
+from app.domains.market.intelligence_card_repository import latest_reviewed_market_run_id
 from app.domains.market.intelligence_v0 import (
     COMPETITOR_SIGNAL_TABLE,
     MARKET_STORAGE_TABLES,
@@ -132,6 +133,7 @@ __all__ = [
     "keyword_groups",
     "keyword_hits",
     "latest_external_signal_smoke_report",
+    "latest_reviewed_market_run_id",
     "latest_usable_market_llm_report",
     "render_competitor_signal_write_markdown",
     "render_external_daily_candidate_plan_markdown",
