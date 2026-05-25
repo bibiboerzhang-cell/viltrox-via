@@ -1,35 +1,51 @@
-import { apiFetch, buildApiUrl, jsonBody } from "./http";
+import { apiFetch, jsonBody } from "./http";
 export * from "./vkpi";
+export * from "./vkpi/alert-api";
+export * from "./vkpi/attribution-api";
+export * from "./vkpi/audit-api";
+export * from "./vkpi/channel-api";
+export * from "./vkpi/comment-intelligence-api";
+export * from "./vkpi/cost-api";
+export * from "./vkpi/data-quality-api";
+export * from "./vkpi/evidence-api";
+export * from "./vkpi/feedback-api";
+export * from "./vkpi/firewall-api";
+export * from "./vkpi/industry-api";
+export * from "./vkpi/intelligence-api";
+export * from "./vkpi/kol-api";
+export * from "./vkpi/kolPool-api";
+export * from "./vkpi/links-api";
+export * from "./vkpi/market-api";
+export * from "./vkpi/media-api";
+export * from "./vkpi/product-api";
+export * from "./vkpi/projects-api";
+export * from "./vkpi/repair-api";
+export * from "./vkpi/search-api";
+export * from "./vkpi/settings-api";
+export * from "./vkpi/staff-api";
+export * from "./vkpi/sync-api";
+export * from "./vkpi/tasks-api";
 import type {
   VkpiAlertItem,
-  VkpiAlertDetail,
-  VkpiAuditOverview,
   VkpiAttributionRow,
   VkpiContactLink,
   VkpiCostRow,
-  VkpiCostDetail,
   VkpiDashboardData,
-  VkpiDataQualityResponse,
   VkpiDeltaDirection,
   VkpiKolDetail,
   VkpiKolOption,
-  VkpiKolProfile,
-  VkpiKolLookupResult,
   VkpiKpiLedgerEntry,
-  VkpiLinkDetail,
   VkpiLinkRow,
   VkpiMetricCard,
   VkpiPlatform,
   VkpiProductCatalogItem,
   VkpiProductCostRow,
   VkpiProductLaunchOption,
-  VkpiProjectDetail,
   VkpiProductRoiItem,
   VkpiProjectRow,
   VkpiProjectStage,
   VkpiScopeContext,
   VkpiShareItem,
-  VkpiStaffProfile,
   VkpiStaffMember,
   VkpiTrendPoint,
 } from "../components/vkpi/vkpiTypes";
@@ -64,10 +80,7 @@ export interface VkpiAgentInboxItem {
   last_run_at?: string | null;
   artifact_name?: string;
   source?: string;
-  details?: {
-    summary?: Record<string, unknown>;
-    next_steps?: string[];
-  };
+  details?: { summary?: Record<string, unknown>; next_steps?: string[] };
 }
 
 export interface VkpiAgentsInboxResponse {
@@ -80,332 +93,44 @@ export interface VkpiAgentsInboxResponse {
   source?: string;
 }
 
-export interface VkpiKolLookupPayload {
-  platform: string;
-  handleOrUrl: string;
-  createIfMissing?: boolean;
-  email?: string;
-  country?: string;
-  followerCount?: number;
-  avgViews?: number;
-  contactEmail?: string;
-  notes?: string;
-  scanAccount?: boolean;
-  maxPosts?: number;
-  productSku?: string;
-}
-
-export interface VkpiKolManualUpdatePayload {
-  avatarUrl?: string;
-  profileUrl?: string;
-  contactEmail?: string;
-  contactPhone?: string;
-  notes?: string;
-  contactLinks?: Array<{ label?: string; value?: string; url?: string }>;
-}
-
-export interface VkpiKolAssessmentResponse {
-  kol_id?: number;
-  score?: number;
-  grade?: string;
-  method?: string;
-  dimensions?: Record<string, { score?: number; source?: string; reason?: string; status?: string }>;
-  risk_flags?: Row[];
-  recommended_action?: string;
-  source_tables?: string[];
-}
-
-export interface VkpiKolProductFitResponse {
-  kol_id?: number;
-  items?: Array<{
-    launch_id?: number | null;
-    product_sku?: string;
-    product_name?: string;
-    launch_name?: string;
-    score?: number;
-    method?: string;
-    status?: string;
-    reasons?: string[];
-    evidence?: string[];
-  }>;
-}
-
-export interface VkpiKolContactsResponse {
-  kol_id?: number;
-  contacts?: Array<{
-    id?: string;
-    contact_type?: string;
-    contact_value?: string;
-    layer?: number;
-    source?: string;
-    confidence?: number;
-    evidence?: string;
-    verified?: boolean;
-    status?: string;
-  }>;
-  summary?: Row;
-}
-
-export interface VkpiAddKolContactPayload {
-  contactType: string;
-  contactValue: string;
-  evidence?: string;
-  layer?: number;
-  source?: string;
-}
-
-export interface VkpiNaturalKolSearchResponse {
-  query?: string;
-  parsed?: Row;
-  items?: Row[];
-  method?: string;
-  degraded?: boolean;
-  notes?: string[];
-}
-
-export interface VkpiPlatformSearchResponse {
-  status?: string;
-  platform?: string;
-  query?: string;
-  items?: Row[];
-  candidate_ids?: number[];
-  saved_candidates?: number;
-  message?: string;
-  metadata?: Row;
-}
-
-export interface VkpiCreateProjectPayload {
-  projectName: string;
-  kolId?: string;
-  productSku?: string;
-  productName?: string;
-  productSkus?: string[];
-  products?: Array<{ productSku: string; productName?: string }>;
-  platform?: string;
-  marketplace?: string;
-  note?: string;
-}
-
-export interface VkpiUpdateProjectPayload {
-  projectName?: string;
-  productSku?: string;
-  productName?: string;
-  products?: Array<{ productSku: string; productName?: string }>;
-  platform?: string;
-  marketplace?: string;
-  priority?: string;
-  shopifyLink?: string;
-  targetPostDate?: string;
-  dueAt?: string;
-  note?: string;
-}
-
-export interface VkpiStagePayload {
-  toStage: VkpiProjectStage;
-  note?: string;
-  trackingNumber?: string;
-  sampleStatus?: string;
-  sourceRefType?: string;
-  sourceRefId?: string;
-}
-
-export interface VkpiCostPayload {
-  projectId: string;
-  costType: string;
-  amountUsd: number;
-  note?: string;
-  sourceRef?: string;
-}
-
-export interface VkpiCreateLinkPayload {
-  destinationUrl: string;
-  slug?: string;
-  projectId?: string;
-  kolId?: string;
-  platform?: string;
-  productSku?: string;
-  campaignName?: string;
-  utmSource?: string;
-  utmMedium?: string;
-  utmCampaign?: string;
-  utmContent?: string;
-}
-
-export interface VkpiInviteStaffPayload {
-  email: string;
-  name?: string;
-  role: string;
-  vkpiPermission: "none" | "read" | "write";
-  permissions?: Record<string, VkpiPermissionLevel | string>;
-  permissionTemplate?: string;
-}
-
-export type VkpiPermissionLevel = "none" | "read" | "write" | "admin";
-
-export interface VkpiStaffInviteCapabilities {
-  email_available?: boolean;
-  external_emails_allowed?: boolean;
-  allowed_domains?: string[];
-  token_ttl_hours?: number;
-  manual_activation_link_available?: boolean;
-  delivery_methods?: string[];
-  site_url_configured?: boolean;
-}
-
-export interface VkpiStaffActivationLinkResponse {
-  staff_id?: number;
-  user_id?: number;
-  email?: string;
-  full_name?: string;
-  role?: string;
-  activation_url?: string;
-  token_hint?: string;
-  expires_at?: string;
-  expires_in_hours?: number;
-  delivery_method?: string;
-}
-
-export interface VkpiStaffPasswordResetLinkResponse {
-  ok?: boolean;
-  staff_id?: number;
-  user_id?: number;
-  email?: string;
-  reset_url?: string;
-  token_hint?: string;
-  expires_at?: string;
-  expires_in_hours?: number;
-  email_sent?: boolean;
-  delivery_method?: string;
-}
-
-export type AsyncTaskStatus =
-  | "queued"
-  | "running"
-  | "processing"
-  | "retrying"
-  | "done"
-  | "failed"
-  | "cancelled"
-  | "timeout"
-  | "partial_done"
-  | "prefilter_rejected";
-
-export interface AsyncTask {
-  task_id: string;
-  task_type: string;
-  status: AsyncTaskStatus;
-  progress_pct?: number;
-  progress_text?: string;
-  result_json?: Record<string, unknown>;
-  result?: Record<string, unknown>;
-  error?: string;
-  created_at: string;
-  started_at?: string;
-  finished_at?: string;
-}
-
-export const TERMINAL_STATUSES = [
-  "done",
-  "failed",
-  "cancelled",
-  "timeout",
-  "partial_done",
-  "prefilter_rejected",
-] as const;
-
-export interface VkpiAttributionPayload {
-  sourcePlatform: "shopify" | "amazon" | "manual" | "custom";
-  sourceRef: string;
-  projectId?: string;
-  linkId?: string;
-  productSku?: string;
-  orderId?: string;
-  revenueUsd: number;
-  commissionUsd?: number;
-  confidence?: string;
-  occurredAt?: string;
-}
-
-export interface VkpiAmazonImportPayload {
-  projectId?: string;
-  amazonTag?: string;
-  asin?: string;
-  marketplace?: string;
-  reportDate?: string;
-  rows: Array<Record<string, unknown>>;
-}
-
-export interface VkpiProductCostPayload {
-  productSku: string;
-  productName?: string;
-  unitCostUsd: number;
-  currency?: string;
-  active?: boolean;
-  note?: string;
-}
-
-export interface VkpiCommentIntelligenceOverview {
-  days: number;
-  health: "ok" | "degraded" | "attention" | string;
-  provider_calls?: boolean;
-  llm_calls?: boolean;
-  write_db?: boolean;
-  runs: {
-    total: number;
-    by_status?: Record<string, number>;
-    success_rate?: number | null;
-    recent?: Row[];
-    recent_failures?: Row[];
-  };
-  coverage: {
-    comments_total: number;
-    comments_with_sentiment: number;
-    comments_with_pillar: number;
-    sentiment_coverage?: number | null;
-    comment_pillar_coverage?: number | null;
-    pending_sentiment: number;
-    pending_comment_pillar_links: number;
-    posts_total: number;
-    posts_with_primary_pillar: number;
-    post_pillar_coverage?: number | null;
-    sample_cap?: number;
-    sample_status?: string;
-  };
-  comment_contract?: {
-    declared?: number | null;
-    cached?: number;
-    cap?: number;
-    status?: string;
-  };
-  rule_v0?: {
-    status?: string;
-    method?: string;
-    source?: string;
-    provider_calls?: boolean;
-    llm_calls?: boolean;
-    write_db?: boolean;
-    contract?: {
-      declared?: number | null;
-      cached?: number;
-      cap?: number;
-      status?: string;
-    };
-    counts?: Record<string, number>;
-    samples?: Row[];
-  };
-  distributions?: {
-    sentiment?: Array<{ label?: string; count?: number }>;
-    emotion?: Array<{ label?: string; count?: number }>;
-    brand_attitude?: Array<{ label?: string; count?: number }>;
-    pillars?: Array<{
-      pillar_key?: string;
-      display_name?: string;
-      layer?: number;
-      count?: number;
-      primary_count?: number;
-    }>;
-  };
-}
+type LegacyRepairItem = {
+  [key: string]: any;
+  acceptance?: string[];
+  evidence?: string[];
+  fields?: LegacyRepairItem[];
+  requiredBeforeWrite?: string[];
+  required_before_write?: string[];
+  validationCommands?: string[];
+  validation_commands?: string[];
+};
+type LegacyRepairPayload = {
+  [key: string]: any;
+  proposals?: LegacyRepairItem[];
+  rows?: LegacyRepairItem[];
+  gates?: LegacyRepairItem[];
+  tables?: LegacyRepairItem[];
+  endpoints?: LegacyRepairItem[];
+  blockedBy?: string[];
+  blocked_by?: string[];
+  artifacts?: LegacyRepairItem[];
+  steps?: LegacyRepairItem[];
+  upSql?: LegacyRepairItem[];
+  up_sql?: LegacyRepairItem[];
+  downSql?: LegacyRepairItem[];
+  down_sql?: LegacyRepairItem[];
+  reviewCommands?: string[];
+  review_commands?: string[];
+  events?: LegacyRepairItem[];
+  drafts?: LegacyRepairItem[];
+  refs?: LegacyRepairItem[];
+  fields?: LegacyRepairItem[];
+  requiredBeforePersist?: string[];
+  required_before_persist?: string[];
+  persistencePreview?: LegacyRepairPayload;
+  persistence_preview?: LegacyRepairPayload;
+};
+export type VkpiRepairPersistencePreview = LegacyRepairPayload;
+export type VkpiRepairProposalRecord = LegacyRepairPayload;
 
 type Row = Record<string, unknown>;
 type OptionalResult<T> = { data: T; failed?: string };
@@ -1015,398 +740,49 @@ function buildWeeklySummary(summary: Row, staffRows: Row[], alerts: Row[]): stri
   return `当前周期确认销售额为 ${money(sales)}，成本为 ${money(cost)}（镜头成本发货自动计入，员工只登记快递和推广费），已抓取播放量为 ${compact(views)}。当前范围内共有 ${staffRows.length} 名员工数据，还有 ${alerts.length} 条未处理提醒，需要在周报审批前完成复核。`;
 }
 
-export async function lookupKol(token: string, payload: VkpiKolLookupPayload): Promise<VkpiKolLookupResult> {
-  return apiFetch<VkpiKolLookupResult>("/api/marketing/kols/lookup", { method: "POST", body: jsonBody({ platform: payload.platform, handle_or_url: payload.handleOrUrl, url: payload.handleOrUrl, create_if_missing: Boolean(payload.createIfMissing), email: payload.email, contact_email: payload.contactEmail || payload.email, country: payload.country, follower_count: payload.followerCount, avg_views: payload.avgViews, notes: payload.notes, scan_account: Boolean(payload.scanAccount), max_posts: payload.maxPosts || 24, product_sku: payload.productSku }) }, token);
-}
-export async function updateMarketingKol(token: string, kolId: string, payload: VkpiKolManualUpdatePayload) {
-  return apiFetch<{ kol?: Row }>(`/api/marketing/kols/${encodeURIComponent(kolId)}`, { method: "PATCH", body: jsonBody({ avatar_url: payload.avatarUrl, profile_url: payload.profileUrl, contact_email: payload.contactEmail, contact_phone: payload.contactPhone, notes: payload.notes, contact_links: payload.contactLinks }) }, token);
-}
-export async function listMarketingKols(token: string, params: { search?: string; platform?: string; limit?: number } = {}) {
-  const query = new URLSearchParams({ limit: String(params.limit || 100) });
-  if (params.search) query.set("search", params.search);
-  if (params.platform) query.set("platform", params.platform);
-  return apiFetch<{ kols?: Row[]; scope?: Row }>(`/api/marketing/kols?${query.toString()}`, {}, token);
-}
-export async function searchMarketingKolsNatural(token: string, payload: { query: string; platform?: string; limit?: number }) {
-  return apiFetch<VkpiNaturalKolSearchResponse>("/api/marketing/kol/search/natural", {
-    method: "POST",
-    body: jsonBody({
-      query: payload.query,
-      platform: payload.platform,
-      limit: payload.limit || 100,
-    }),
-  }, token);
-}
-export async function searchPlatformKols(token: string, payload: { query: string; platform: string; maxResults?: number }) {
-  return apiFetch<VkpiPlatformSearchResponse>("/api/admin/kol/search/platform", {
-    method: "POST",
-    body: jsonBody({
-      query: payload.query,
-      platform: payload.platform,
-      max_results: payload.maxResults || 25,
-    }),
-    timeoutMs: 300000,
-  }, token);
-}
-export async function scanKolAccount(token: string, kolId: string, maxPosts = 24) {
-  const scan = await apiFetch<Record<string, unknown>>(`/api/marketing/kols/${encodeURIComponent(kolId)}/scan-account`, {
-    method: "POST",
-    body: jsonBody({ max_posts: maxPosts }),
-    timeoutMs: 180000,
-  }, token);
-  if (numberValue(scan.content_count) > 0) {
-    const analysis = await apiFetch<Record<string, unknown>>(`/api/marketing/kols/${encodeURIComponent(kolId)}/analyze-account`, {
-      method: "POST",
-      body: jsonBody({}),
-      timeoutMs: 120000,
-    }, token);
-    return { scan, analysis };
-  }
-  return { scan };
-}
-
-export async function analyzeDataAnalysisPostUrl(
+export async function getDashboardAgentsInbox(
   token: string,
-  payload: { url: string; platform?: string; creatorHandle?: string },
+  params: { limit?: number; agentId?: string } = {},
 ) {
-  return apiFetch<Record<string, unknown>>("/api/admin/kol/tools/analyze-url", {
-    method: "POST",
-    body: jsonBody({
-      url: payload.url,
-      platform: payload.platform || "",
-      creator_handle: payload.creatorHandle || "",
-    }),
-    timeoutMs: 300000,
-  }, token);
-}
-
-export async function claimKol(token: string, kolId: string, expiresDays = 14) { return apiFetch<Record<string, unknown>>(`/api/marketing/kols/${encodeURIComponent(kolId)}/claim`, { method: "POST", body: jsonBody({ expires_days: expiresDays }) }, token); }
-export async function releaseKolClaim(token: string, claimId: string, reason = "employee_unfollow") { return apiFetch<Record<string, unknown>>(`/api/marketing/claims/${encodeURIComponent(claimId)}/release`, { method: "POST", body: jsonBody({ reason }) }, token); }
-export async function createProject(token: string, payload: VkpiCreateProjectPayload) {
-  return apiFetch<Record<string, unknown>>("/api/marketing/projects", {
-    method: "POST",
-    body: jsonBody({
-      project_name: payload.projectName,
-      kol_id: payload.kolId ? Number(payload.kolId) : undefined,
-      product_sku: payload.productSku,
-      product_name: payload.productName,
-      product_skus: payload.productSkus,
-      products: payload.products,
-      platform: payload.platform,
-      marketplace: payload.marketplace,
-      note: payload.note,
-    }),
-  }, token);
-}
-export async function updateProject(token: string, projectId: string, payload: VkpiUpdateProjectPayload) {
-  return apiFetch<Record<string, unknown>>(`/api/marketing/projects/${encodeURIComponent(projectId)}`, {
-    method: "PATCH",
-    body: jsonBody({
-      project_name: payload.projectName,
-      product_sku: payload.productSku,
-      product_name: payload.productName,
-      products: payload.products,
-      platform: payload.platform,
-      marketplace: payload.marketplace,
-      priority: payload.priority,
-      shopify_link: payload.shopifyLink,
-      target_post_date: payload.targetPostDate,
-      due_at: payload.dueAt,
-      note: payload.note,
-    }),
-  }, token);
-}
-export async function getProjectDetail(token: string, projectId: string) { return apiFetch<VkpiProjectDetail>(`/api/marketing/projects/${encodeURIComponent(projectId)}`, {}, token); }
-export async function getKolProfile(token: string, kolId: string) { return apiFetch<VkpiKolProfile>(`/api/marketing/kols/${encodeURIComponent(kolId)}/profile`, {}, token); }
-export async function getKolAssessment(token: string, kolId: string) {
-  return apiFetch<VkpiKolAssessmentResponse>(`/api/marketing/kols/${encodeURIComponent(kolId)}/assessment`, {}, token);
-}
-export async function getKolProductFit(token: string, kolId: string, limit = 5) {
-  return apiFetch<VkpiKolProductFitResponse>(`/api/admin/vkpi/kols/${encodeURIComponent(kolId)}/product-fit?limit=${encodeURIComponent(String(limit))}`, {}, token);
-}
-
-export async function getDashboardAgentsInbox(token: string, params: { limit?: number; agentId?: string } = {}) {
   const query = new URLSearchParams();
   query.set("limit", String(params.limit || 50));
   if (params.agentId) query.set("agent_id", params.agentId);
-  return apiFetch<VkpiAgentsInboxResponse>(`/api/admin/vkpi/dashboard/agents/inbox?${query.toString()}`, {}, token);
+  return apiFetch<VkpiAgentsInboxResponse>(
+    `/api/admin/vkpi/dashboard/agents/inbox?${query.toString()}`,
+    {},
+    token,
+  );
 }
 
-export async function listKolContacts(token: string, kolId: string, includeWrong = false) {
-  return apiFetch<VkpiKolContactsResponse>(`/api/marketing/kols/${encodeURIComponent(kolId)}/contacts?include_wrong=${includeWrong ? "true" : "false"}`, {}, token);
+export async function generateWeeklyReport(token: string, filters: VkpiDashboardFilters = {}) {
+  return apiFetch<{ reportId?: string; report_id?: string; status: string; downloadUrl?: string; download_url?: string }>(
+    "/api/marketing/reports/weekly/generate",
+    { method: "POST", body: jsonBody(filters) },
+    token,
+  );
 }
-export async function addKolContact(token: string, kolId: string, payload: VkpiAddKolContactPayload) {
-  return apiFetch<VkpiKolContactsResponse>(`/api/marketing/kols/${encodeURIComponent(kolId)}/contacts`, {
-    method: "POST",
-    body: jsonBody({
-      contact_type: payload.contactType,
-      contact_value: payload.contactValue,
-      evidence: payload.evidence,
-      layer: payload.layer,
-      source: payload.source,
-    }),
-  }, token);
+
+export async function exportVkpiReport(token: string, payload: VkpiExportPayload) {
+  return apiFetch<{ exportId?: string; export_id?: string; status: string; downloadUrl?: string; download_url?: string }>(
+    `/api/marketing/exports/${payload.format}`,
+    { method: "POST", body: jsonBody(payload) },
+    token,
+  );
 }
-export async function getKolPosts(token: string, kolId: string, params: { limit?: number; offset?: number } = {}) {
-  const query = new URLSearchParams({
-    limit: String(params.limit || 100),
-    offset: String(params.offset || 0),
-  });
-  return apiFetch<{ items?: Row[]; page?: Row }>(`/api/marketing/kols/${encodeURIComponent(kolId)}/posts?${query.toString()}`, {}, token);
+
+export async function runKpiRollup(token: string, ledgerDate?: string) {
+  return apiFetch<Row>(
+    "/api/marketing/rollups/run-now",
+    { method: "POST", body: jsonBody({ ledger_date: ledgerDate || undefined }) },
+    token,
+  );
 }
-export async function getKolComments(token: string, kolId: string, params: { limit?: number; offset?: number } = {}) {
-  const query = new URLSearchParams({
-    limit: String(params.limit || 100),
-    offset: String(params.offset || 0),
-  });
-  return apiFetch<{ items?: Row[]; page?: Row }>(`/api/marketing/kols/${encodeURIComponent(kolId)}/comments?${query.toString()}`, {}, token);
-}
-export async function getStaffProfile(token: string, staffId: string, window = "month") { return apiFetch<VkpiStaffProfile>(`/api/marketing/staff/${encodeURIComponent(staffId)}/profile?window=${encodeURIComponent(window)}&limit=120`, {}, token); }
-export async function transitionProjectStage(token: string, projectId: string, payload: VkpiStagePayload) { return apiFetch<Record<string, unknown>>(`/api/marketing/projects/${encodeURIComponent(projectId)}/stage`, { method: "POST", body: jsonBody({ to_stage: payload.toStage, note: payload.note, tracking_number: payload.trackingNumber, sample_status: payload.sampleStatus, source_ref_type: payload.sourceRefType, source_ref_id: payload.sourceRefId }) }, token); }
-export async function deleteProject(token: string, projectId: string, reason = "前端删除项目") { return apiFetch<Record<string, unknown>>(`/api/marketing/projects/${encodeURIComponent(projectId)}`, { method: "DELETE", body: jsonBody({ reason }) }, token); }
-export async function addProjectCost(token: string, payload: VkpiCostPayload) { return apiFetch<Record<string, unknown>>(`/api/marketing/projects/${encodeURIComponent(payload.projectId)}/costs`, { method: "POST", body: jsonBody({ cost_type: payload.costType, amount_usd: payload.amountUsd, note: payload.note, source_ref: payload.sourceRef }) }, token); }
-export async function getMarketingCostDetail(token: string, costId: string) { return apiFetch<VkpiCostDetail>(`/api/marketing/costs/${encodeURIComponent(costId)}`, {}, token); }
-export async function updateMarketingCost(token: string, costId: string, payload: Partial<VkpiCostPayload>) { return apiFetch<Record<string, unknown>>(`/api/marketing/costs/${encodeURIComponent(costId)}`, { method: "PATCH", body: jsonBody({ cost_type: payload.costType, amount_usd: payload.amountUsd, note: payload.note, source_ref: payload.sourceRef }) }, token); }
-export async function approveMarketingCost(token: string, costId: string, note?: string) { return apiFetch<Record<string, unknown>>(`/api/marketing/costs/${encodeURIComponent(costId)}/approve`, { method: "POST", body: jsonBody({ note }) }, token); }
-export async function voidMarketingCost(token: string, costId: string, reason?: string) { return apiFetch<Record<string, unknown>>(`/api/marketing/costs/${encodeURIComponent(costId)}/void`, { method: "POST", body: jsonBody({ reason }) }, token); }
-export async function addProjectMessage(token: string, projectId: string, payload: Record<string, unknown>) { return apiFetch<Record<string, unknown>>(`/api/marketing/projects/${encodeURIComponent(projectId)}/messages`, { method: "POST", body: jsonBody(payload) }, token); }
-export async function addProjectContent(token: string, projectId: string, payload: Record<string, unknown>) { return apiFetch<Record<string, unknown>>(`/api/marketing/projects/${encodeURIComponent(projectId)}/content`, { method: "POST", body: jsonBody(payload) }, token); }
-export async function upsertProjectTerms(token: string, projectId: string, payload: Record<string, unknown>) { return apiFetch<Record<string, unknown>>(`/api/marketing/projects/${encodeURIComponent(projectId)}/terms`, { method: "POST", body: jsonBody(payload) }, token); }
-export async function addProjectShipment(token: string, projectId: string, payload: Record<string, unknown>) { return apiFetch<Record<string, unknown>>(`/api/marketing/projects/${encodeURIComponent(projectId)}/shipments`, { method: "POST", body: jsonBody(payload) }, token); }
-export async function listMarketingMessages(token: string, params: { projectId?: string; kolId?: string; staffId?: string; limit?: number } = {}) {
-  const query = new URLSearchParams({ limit: String(params.limit || 100) });
-  if (params.projectId) query.set("project_id", params.projectId);
-  if (params.kolId) query.set("kol_id", params.kolId);
-  if (params.staffId) query.set("staff_id", params.staffId);
-  return apiFetch<{ messages?: Row[]; count?: number }>(`/api/marketing/messages?${query.toString()}`, {}, token);
-}
-export async function createMarketingMessage(token: string, payload: Record<string, unknown>) {
-  return apiFetch<Record<string, unknown>>("/api/marketing/messages", { method: "POST", body: jsonBody(payload) }, token);
-}
-export async function getMarketingMessage(token: string, messageId: string) {
-  return apiFetch<Record<string, unknown>>(`/api/marketing/messages/${encodeURIComponent(messageId)}`, {}, token);
-}
-export async function addMarketingMessageAttachment(token: string, messageId: string, payload: Record<string, unknown>) {
-  return apiFetch<Record<string, unknown>>(`/api/marketing/messages/${encodeURIComponent(messageId)}/attachments`, { method: "POST", body: jsonBody(payload) }, token);
-}
-export async function uploadMarketingEvidenceFile(token: string, file: File, payload: { entityType?: string; entityId?: string; purpose?: string } = {}) {
-  const form = new FormData();
-  form.append("file", file);
-  form.append("entity_type", payload.entityType || "manual");
-  form.append("entity_id", payload.entityId || "");
-  form.append("purpose", payload.purpose || "note");
-  return apiFetch<Record<string, unknown>>("/api/marketing/evidence/uploads", { method: "POST", body: form }, token);
-}
-export async function listMarketingContent(token: string, params: { projectId?: string; kolId?: string; staffId?: string; limit?: number } = {}) {
-  const query = new URLSearchParams({ limit: String(params.limit || 100) });
-  if (params.projectId) query.set("project_id", params.projectId);
-  if (params.kolId) query.set("kol_id", params.kolId);
-  if (params.staffId) query.set("staff_id", params.staffId);
-  return apiFetch<{ content?: Row[]; count?: number }>(`/api/marketing/content?${query.toString()}`, {}, token);
-}
-export async function createMarketingContent(token: string, payload: Record<string, unknown>) {
-  return apiFetch<Record<string, unknown>>("/api/marketing/content", { method: "POST", body: jsonBody(payload) }, token);
-}
-export async function getMarketingContent(token: string, postId: string) {
-  return apiFetch<Record<string, unknown>>(`/api/marketing/content/${encodeURIComponent(postId)}`, {}, token);
-}
-export async function addMarketingContentAsset(token: string, postId: string, payload: Record<string, unknown>) {
-  return apiFetch<Record<string, unknown>>(`/api/marketing/content/${encodeURIComponent(postId)}/assets`, { method: "POST", body: jsonBody(payload) }, token);
-}
-export async function listMarketingTerms(token: string, params: { projectId?: string; kolId?: string; staffId?: string; limit?: number } = {}) {
-  const query = new URLSearchParams({ limit: String(params.limit || 100) });
-  if (params.projectId) query.set("project_id", params.projectId);
-  if (params.kolId) query.set("kol_id", params.kolId);
-  if (params.staffId) query.set("staff_id", params.staffId);
-  return apiFetch<{ terms?: Row[]; count?: number }>(`/api/marketing/terms?${query.toString()}`, {}, token);
-}
-export async function upsertMarketingTerms(token: string, payload: Record<string, unknown>) {
-  return apiFetch<Record<string, unknown>>("/api/marketing/terms", { method: "POST", body: jsonBody(payload) }, token);
-}
-export async function getMarketingTerms(token: string, termsId: string) {
-  return apiFetch<Record<string, unknown>>(`/api/marketing/terms/${encodeURIComponent(termsId)}`, {}, token);
-}
-export async function addMarketingDeliverable(token: string, payload: Record<string, unknown>) {
-  return apiFetch<Record<string, unknown>>("/api/marketing/deliverables", { method: "POST", body: jsonBody(payload) }, token);
-}
-export async function updateMarketingDeliverable(token: string, deliverableId: string, payload: Record<string, unknown>) {
-  return apiFetch<Record<string, unknown>>(`/api/marketing/deliverables/${encodeURIComponent(deliverableId)}`, { method: "PATCH", body: jsonBody(payload) }, token);
-}
-export async function listMarketingShipments(token: string, params: { projectId?: string; kolId?: string; staffId?: string; limit?: number } = {}) {
-  const query = new URLSearchParams({ limit: String(params.limit || 100) });
-  if (params.projectId) query.set("project_id", params.projectId);
-  if (params.kolId) query.set("kol_id", params.kolId);
-  if (params.staffId) query.set("staff_id", params.staffId);
-  return apiFetch<{ shipments?: Row[]; count?: number }>(`/api/marketing/shipments?${query.toString()}`, {}, token);
-}
-export async function createMarketingShipment(token: string, payload: Record<string, unknown>) {
-  return apiFetch<Record<string, unknown>>("/api/marketing/shipments", { method: "POST", body: jsonBody(payload) }, token);
-}
-export async function getMarketingShipment(token: string, shipmentId: string) {
-  return apiFetch<Record<string, unknown>>(`/api/marketing/shipments/${encodeURIComponent(shipmentId)}`, {}, token);
-}
-export async function updateMarketingShipment(token: string, shipmentId: string, payload: Record<string, unknown>) {
-  return apiFetch<Record<string, unknown>>(`/api/marketing/shipments/${encodeURIComponent(shipmentId)}`, { method: "PATCH", body: jsonBody(payload) }, token);
-}
-export async function receiveMarketingShipment(token: string, shipmentId: string, payload: Record<string, unknown> = {}) {
-  return apiFetch<Record<string, unknown>>(`/api/marketing/shipments/${encodeURIComponent(shipmentId)}/receive`, { method: "POST", body: jsonBody(payload) }, token);
-}
-export async function listMarketingSamples(token: string, params: { projectId?: string; kolId?: string; staffId?: string; limit?: number } = {}) {
-  const query = new URLSearchParams({ limit: String(params.limit || 100) });
-  if (params.projectId) query.set("project_id", params.projectId);
-  if (params.kolId) query.set("kol_id", params.kolId);
-  if (params.staffId) query.set("staff_id", params.staffId);
-  return apiFetch<{ samples?: Row[]; count?: number }>(`/api/marketing/samples?${query.toString()}`, {}, token);
-}
-export async function upsertProductCost(token: string, payload: VkpiProductCostPayload) { return apiFetch<Record<string, unknown>>("/api/marketing/product-costs", { method: "POST", body: jsonBody({ product_sku: payload.productSku, product_name: payload.productName, unit_cost_usd: payload.unitCostUsd, currency: payload.currency || "USD", active: payload.active ?? true, note: payload.note }) }, token); }
-export async function listProductCatalog(token: string, params: { categories?: string[]; status?: string; query?: string; limit?: number } = {}) {
-  const query = new URLSearchParams({ limit: String(params.limit || 300) });
-  if (params.categories?.length) query.set("categories", params.categories.join(","));
-  if (params.status) query.set("status", params.status);
-  if (params.query) query.set("query", params.query);
-  const response = await apiFetch<{ products?: Row[]; summary?: Row[]; count?: number }>(`/api/marketing/product-catalog?${query.toString()}`, {}, token);
-  return {
-    products: buildProductCatalog(response.products || []),
-    summary: response.summary || [],
-    count: Number(response.count ?? 0),
-  };
-}
-export async function createMarketingLink(token: string, payload: VkpiCreateLinkPayload) { return apiFetch<Record<string, unknown>>("/api/marketing/links", { method: "POST", body: jsonBody({ destination_url: payload.destinationUrl, slug: payload.slug, project_id: payload.projectId ? Number(payload.projectId) : undefined, kol_id: payload.kolId ? Number(payload.kolId) : undefined, platform: payload.platform, product_sku: payload.productSku, campaign_name: payload.campaignName, utm_source: payload.utmSource, utm_medium: payload.utmMedium, utm_campaign: payload.utmCampaign, utm_content: payload.utmContent }) }, token); }
-export async function getMarketingLinkDetail(token: string, linkId: string) { return apiFetch<VkpiLinkDetail>(`/api/marketing/links/${encodeURIComponent(linkId)}`, {}, token); }
-export async function getMarketingLinkClicks(token: string, linkId: string, limit = 100) { return apiFetch<Record<string, unknown>>(`/api/marketing/links/${encodeURIComponent(linkId)}/clicks?limit=${encodeURIComponent(String(limit))}`, {}, token); }
-export async function getMarketingLinkOrders(token: string, linkId: string, limit = 100) { return apiFetch<Record<string, unknown>>(`/api/marketing/links/${encodeURIComponent(linkId)}/orders?limit=${encodeURIComponent(String(limit))}`, {}, token); }
-export async function pauseMarketingLink(token: string, linkId: string) { return apiFetch<Record<string, unknown>>(`/api/marketing/links/${encodeURIComponent(linkId)}/pause`, { method: "POST", body: jsonBody({}) }, token); }
-export async function archiveMarketingLink(token: string, linkId: string) { return apiFetch<Record<string, unknown>>(`/api/marketing/links/${encodeURIComponent(linkId)}/archive`, { method: "POST", body: jsonBody({}) }, token); }
-export async function healthCheckMarketingLink(token: string, linkId: string) { return apiFetch<Record<string, unknown>>(`/api/marketing/links/${encodeURIComponent(linkId)}/health-check`, { method: "POST", body: jsonBody({}) }, token); }
-export async function getStaffInviteCapabilities(token: string) {
-  return apiFetch<VkpiStaffInviteCapabilities>("/api/admin/staff/invite/capabilities", {}, token);
-}
-export async function inviteMarketingStaff(token: string, payload: VkpiInviteStaffPayload) { return apiFetch<Record<string, unknown>>("/api/admin/staff/invite", { method: "POST", body: jsonBody({ email: payload.email, name: payload.name, full_name: payload.name, role: payload.role, permissions: payload.permissions || { vkpi: payload.vkpiPermission }, permission_template: payload.permissionTemplate }) }, token); }
-export async function createStaffActivationLink(token: string, payload: VkpiInviteStaffPayload) {
-  return apiFetch<VkpiStaffActivationLinkResponse>("/api/admin/staff/invite/activation-link", {
-    method: "POST",
-    body: jsonBody({
-      email: payload.email,
-      name: payload.name,
-      full_name: payload.name,
-      role: payload.role,
-      permissions: payload.permissions || { vkpi: payload.vkpiPermission },
-      permission_template: payload.permissionTemplate,
-    }),
-  }, token);
-}
-export async function createExistingStaffActivationLink(token: string, staffId: string) {
-  return apiFetch<VkpiStaffActivationLinkResponse>(`/api/admin/staff/${encodeURIComponent(staffId)}/activation-link`, {
-    method: "POST",
-    body: jsonBody({}),
-  }, token);
-}
-export async function acceptStaffInvite(inviteToken: string, password: string) {
-  return apiFetch<Record<string, unknown>>("/api/admin/staff/accept-invite", {
-    method: "POST",
-    body: jsonBody({ invite_token: inviteToken, password }),
-  });
-}
-export async function updateStaffMarketingPermission(token: string, staffId: string, permission: "none" | "read" | "write") { return apiFetch<Record<string, unknown>>(`/api/admin/staff/${encodeURIComponent(staffId)}/permissions`, { method: "POST", body: jsonBody({ permissions: { vkpi: permission } }) }, token); }
-export async function updateStaffPermissions(token: string, staffId: string, permissions: Record<string, VkpiPermissionLevel | string>) {
-  return apiFetch<Record<string, unknown>>(`/api/admin/staff/${encodeURIComponent(staffId)}/permissions`, {
-    method: "POST",
-    body: jsonBody({ permissions }),
-  }, token);
-}
-export async function createStaffPasswordResetLink(token: string, staffId: string) {
-  return apiFetch<VkpiStaffPasswordResetLinkResponse>(`/api/admin/staff/${encodeURIComponent(staffId)}/reset-password-link`, {
-    method: "POST",
-    body: jsonBody({}),
-  }, token);
-}
-export async function getRbacStatus(token: string, includeStaff = false) {
-  const suffix = includeStaff ? "?include_staff=true" : "";
-  return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/access/rbac-status${suffix}`, {}, token);
-}
-export async function listProviderStatuses(token: string) {
-  return apiFetch<{ providers?: Row[]; full_key_readable?: boolean }>("/api/marketing/settings/providers", {}, token);
-}
-export async function probeProviderStatus(token: string, provider: string) {
-  return apiFetch<Record<string, unknown>>(`/api/marketing/settings/providers/${encodeURIComponent(provider)}/probe`, { method: "POST", body: jsonBody({}) }, token);
-}
-export async function runKpiRollup(token: string, ledgerDate?: string) { return apiFetch<Record<string, unknown>>("/api/marketing/rollups/run-now", { method: "POST", body: jsonBody({ ledger_date: ledgerDate || undefined }) }, token); }
-export async function createSalesAttribution(token: string, payload: VkpiAttributionPayload) { return apiFetch<Record<string, unknown>>("/api/marketing/attribution", { method: "POST", body: jsonBody({ source_platform: payload.sourcePlatform, source_ref: payload.sourceRef, project_id: payload.projectId ? Number(payload.projectId) : undefined, link_id: payload.linkId ? Number(payload.linkId) : undefined, product_sku: payload.productSku, order_id: payload.orderId ? Number(payload.orderId) : undefined, revenue_usd: payload.revenueUsd, commission_usd: payload.commissionUsd, confidence: payload.confidence || "confirmed", occurred_at: payload.occurredAt }) }, token); }
-export async function getShopifyOrderEvidence(token: string, orderRef: string) { return apiFetch<Record<string, unknown>>(`/api/marketing/shopify/orders/${encodeURIComponent(orderRef)}`, {}, token); }
-export async function runShopifySync(token: string, payload: Record<string, unknown> = {}) { return apiFetch<Record<string, unknown>>("/api/marketing/shopify/sync", { method: "POST", body: jsonBody(payload) }, token); }
-export async function runShopifyBackfill(token: string, payload: Record<string, unknown> = {}) { return apiFetch<Record<string, unknown>>("/api/marketing/shopify/backfill", { method: "POST", body: jsonBody(payload) }, token); }
-export async function getMarketingAlertDetail(token: string, alertId: string) { return apiFetch<VkpiAlertDetail>(`/api/marketing/alerts/${encodeURIComponent(alertId)}`, {}, token); }
-export async function resolveMarketingAlert(token: string, alertId: string) { return apiFetch<Record<string, unknown>>(`/api/marketing/alerts/${encodeURIComponent(alertId)}/resolve`, { method: "POST", body: jsonBody({}) }, token); }
-export async function importAmazonAttributionRows(token: string, payload: VkpiAmazonImportPayload) { return apiFetch<Record<string, unknown>>("/api/marketing/attribution/amazon/import", { method: "POST", body: jsonBody({ project_id: payload.projectId ? Number(payload.projectId) : undefined, amazon_tag: payload.amazonTag, asin: payload.asin, marketplace: payload.marketplace || "US", report_date: payload.reportDate, rows: payload.rows }) }, token); }
-export async function listAmazonAttributions(token: string, options: { staffId?: string; limit?: number } = {}) {
-  const params = new URLSearchParams({ limit: String(options.limit || 100) });
-  if (options.staffId) params.set("staff_id", options.staffId);
-  return apiFetch<{ attributions?: Row[] }>(`/api/marketing/attribution/amazon?${params.toString()}`, {}, token);
-}
-export async function getAmazonAttributionSummary(token: string, options: { staffId?: string; limit?: number } = {}) {
-  const params = new URLSearchParams({ limit: String(options.limit || 100) });
-  if (options.staffId) params.set("staff_id", options.staffId);
-  return apiFetch<{ items?: Row[]; totals?: Row }>(`/api/marketing/attribution/amazon/summary?${params.toString()}`, {}, token);
-}
-export async function uploadAmazonAttributionReport(token: string, payload: Omit<VkpiAmazonImportPayload, "rows"> & { file: File }) {
-  const form = new FormData();
-  form.set("file", payload.file);
-  if (payload.projectId) form.set("project_id", payload.projectId);
-  if (payload.amazonTag) form.set("amazon_tag", payload.amazonTag);
-  if (payload.asin) form.set("asin", payload.asin);
-  form.set("marketplace", payload.marketplace || "US");
-  if (payload.reportDate) form.set("report_date", payload.reportDate);
-  return apiFetch<Record<string, unknown>>("/api/marketing/attribution/amazon/upload", { method: "POST", body: form }, token);
-}
-export async function getDataQuality(token: string, limit = 100) { return apiFetch<VkpiDataQualityResponse>(`/api/marketing/data-quality?limit=${encodeURIComponent(String(limit))}`, {}, token); }
-export type VkpiDataQualityAction = "resolve" | "ignore" | "assign" | "rerun" | "evidence" | "reopen";
-export async function actOnDataQualityIssue(token: string, issueId: string, action: VkpiDataQualityAction, reason?: string, metadata?: Record<string, unknown>) {
-  return apiFetch<Record<string, unknown>>(`/api/marketing/data-quality/${encodeURIComponent(issueId)}/${action}`, { method: "POST", body: jsonBody({ reason, metadata }) }, token);
-}
-export async function getAuditOverview(token: string, options: { limit?: number; eventCategory?: string; staffId?: string; days?: number } = {}): Promise<VkpiAuditOverview> {
-  const params = new URLSearchParams({
-    limit: String(options.limit || 100),
-    days: String(options.days || 7),
-  });
-  if (options.eventCategory) params.set("event_category", options.eventCategory);
-  if (options.staffId) params.set("staff_id", options.staffId);
-  const response = await apiFetch<Row>(`/api/admin/vkpi/audit/overview?${params.toString()}`, {}, token);
-  const summary = (response.summary || {}) as Row;
-  const events = Array.isArray(response.events) ? response.events as Row[] : [];
-  return {
-    summary: {
-      days: numberValue(summary.days || options.days || 7),
-      sensitiveAccessCount: numberValue(summary.sensitive_access_count),
-      exportCount: numberValue(summary.export_count),
-      settingsChangeCount: numberValue(summary.settings_change_count),
-      attributionAdjustmentCount: numberValue(summary.attribution_adjustment_count),
-      businessEventCount: numberValue(summary.business_event_count),
-      eventCount: numberValue(summary.event_count || events.length),
-      byCategory: (Array.isArray(summary.by_category) ? summary.by_category as Row[] : []).map((row) => ({ label: String(row.label || ""), count: numberValue(row.count) })),
-      byAction: (Array.isArray(summary.by_action) ? summary.by_action as Row[] : []).map((row) => ({ label: String(row.label || ""), count: numberValue(row.count) })),
-    },
-    events: events.map((row) => ({
-      id: String(row.id || `${row.event_category || "event"}-${row.event_id || ""}`),
-      eventId: row.event_id as string | number | undefined,
-      eventCategory: String(row.event_category || "business"),
-      action: String(row.action || ""),
-      staffId: row.staff_id ? String(row.staff_id) : undefined,
-      staffName: String(row.staff_name || row.staff_email || row.staff_id || "-"),
-      staffEmail: String(row.staff_email || ""),
-      targetType: String(row.target_type || ""),
-      targetId: String(row.target_id || ""),
-      detail: String(row.detail || ""),
-      ip: String(row.ip || ""),
-      userAgent: String(row.user_agent || ""),
-      occurredAt: String(row.occurred_at || ""),
-      metadata: (row.metadata && typeof row.metadata === "object" ? row.metadata : {}) as Record<string, unknown>,
-    })),
-  };
-}
-export async function generateWeeklyReport(token: string, filters: VkpiDashboardFilters = {}) { return apiFetch<{ reportId?: string; report_id?: string; status: string; downloadUrl?: string; download_url?: string }>("/api/marketing/reports/weekly/generate", { method: "POST", body: jsonBody(filters) }, token); }
-export async function exportVkpiReport(token: string, payload: VkpiExportPayload) { return apiFetch<{ exportId?: string; export_id?: string; status: string; downloadUrl?: string; download_url?: string }>(`/api/marketing/exports/${payload.format}`, { method: "POST", body: jsonBody(payload) }, token); }
+
 export async function copyTextToClipboard(text: string) {
-  if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); return; }
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
   const textarea = document.createElement("textarea");
   textarea.value = text;
   textarea.style.position = "fixed";
@@ -1415,643 +791,4 @@ export async function copyTextToClipboard(text: string) {
   textarea.select();
   document.execCommand("copy");
   document.body.removeChild(textarea);
-}
-
-export async function runProductCompare(token: string, payload: Record<string, unknown>) {
-  return apiFetch<Record<string, unknown>>("/api/admin/vkpi/analytics/compare", { method: "POST", body: jsonBody(payload), timeoutMs: 180000 }, token);
-}
-export async function runProductMonitor(token: string, payload: Record<string, unknown>) {
-  return apiFetch<Record<string, unknown>>("/api/admin/vkpi/analytics/monitor", { method: "POST", body: jsonBody(payload), timeoutMs: 180000 }, token);
-}
-export async function listAnalyticsProducts(token: string) {
-  return apiFetch<{ products?: Row[] }>("/api/admin/vkpi/analytics/products?limit=100", {}, token);
-}
-export async function upsertAnalyticsProduct(token: string, payload: Record<string, unknown>) {
-  return apiFetch<Record<string, unknown>>("/api/admin/vkpi/analytics/products", { method: "POST", body: jsonBody(payload) }, token);
-}
-export async function listOutreachSuggestions(token: string, status = "new") {
-  return apiFetch<{ suggestions?: Row[] }>(`/api/admin/vkpi/analytics/suggestions?status=${encodeURIComponent(status)}&limit=100`, {}, token);
-}
-export async function listDailyOutreachDigest(token: string, staffId?: string) {
-  const params = new URLSearchParams({ limit: "100" });
-  if (staffId) params.set("staff_id", staffId);
-  return apiFetch<{ digest?: Row | null; items?: Row[]; digest_date?: string }>(`/api/admin/vkpi/analytics/daily-digest?${params.toString()}`, {}, token);
-}
-export async function getDailyOutreachDigestStatus(token: string, productSku = "") {
-  const params = new URLSearchParams({ limit: "100" });
-  if (productSku.trim()) params.set("product_sku", productSku.trim());
-  return apiFetch<Row>(`/api/admin/vkpi/analytics/daily-digest/status?${params.toString()}`, {}, token);
-}
-export async function generateDailyOutreachDigest(token: string, productSku = "") {
-  const body: Record<string, unknown> = { limit: 100 };
-  if (productSku.trim()) body.product_sku = productSku.trim();
-  return apiFetch<Record<string, unknown>>("/api/admin/vkpi/analytics/daily-digest/generate", { method: "POST", body: jsonBody(body) }, token);
-}
-export async function claimOutreachSuggestion(token: string, suggestionId: string) {
-  return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/analytics/suggestions/${encodeURIComponent(suggestionId)}/claim`, { method: "POST", body: jsonBody({}) }, token);
-}
-export async function createProjectFromOutreachSuggestion(token: string, suggestionId: string, payload: Record<string, unknown> = {}) {
-  return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/analytics/suggestions/${encodeURIComponent(suggestionId)}/create-project`, { method: "POST", body: jsonBody({ auto_create_link: true, ...payload }) }, token);
-}
-export async function dismissOutreachSuggestion(token: string, suggestionId: string, reason = "") {
-  return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/analytics/suggestions/${encodeURIComponent(suggestionId)}/dismiss`, { method: "POST", body: jsonBody({ reason }) }, token);
-}
-
-export async function listProductLaunches(token: string, options: { status?: string; limit?: number } = {}) {
-  const params = new URLSearchParams({ limit: String(options.limit || 100) });
-  if (options.status) params.set("status", options.status);
-  return apiFetch<{ launches?: Row[] }>(`/api/admin/vkpi/product-analysis/launches?${params.toString()}`, {}, token);
-}
-export async function createProductLaunch(token: string, payload: Record<string, unknown>) {
-  return apiFetch<Record<string, unknown>>("/api/admin/vkpi/product-analysis/launches", { method: "POST", body: jsonBody(payload) }, token);
-}
-export async function listProductKolPool(token: string, options: { platform?: string; query?: string; limit?: number } = {}) {
-  const params = new URLSearchParams({ limit: String(options.limit || 100) });
-  if (options.platform) params.set("platform", options.platform);
-  if (options.query) params.set("query", options.query);
-  return apiFetch<{ items?: Row[]; rows?: Row[] }>(`/api/admin/vkpi/product-analysis/kol-pool?${params.toString()}`, {}, token);
-}
-export async function importProductKolPool(token: string, payload: { platform?: string; source_type?: string; source_ref?: string; items: Row[] }) {
-  return apiFetch<Record<string, unknown>>("/api/admin/vkpi/product-analysis/kol-pool/import", { method: "POST", body: jsonBody(payload) }, token);
-}
-export async function getKolPoolSummary(token: string) {
-  return apiFetch<Row>("/api/admin/vkpi/kol-pool/summary", {}, token);
-}
-export async function getKolPoolCompetitors(token: string, kolPoolId: string | number) {
-  return apiFetch<Row>(`/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/competitors`, {}, token);
-}
-export async function getKolPoolDimensions11(token: string, kolPoolId: string | number) {
-  return apiFetch<Row>(`/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/dimensions11`, {}, token);
-}
-export async function getKolPoolIntelligenceCard(token: string, kolPoolId: string | number, includeProductFit = true) {
-  const params = new URLSearchParams({ include_product_fit: String(includeProductFit) });
-  return apiFetch<Row>(`/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/intelligence-card?${params.toString()}`, {}, token);
-}
-export async function getKolPoolEvidenceSummary(token: string, kolPoolId: string | number, includeProductFit = true) {
-  const params = new URLSearchParams({ include_product_fit: String(includeProductFit) });
-  return apiFetch<Row>(`/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/evidence-summary?${params.toString()}`, {}, token);
-}
-export async function getKolPoolAiBrief(token: string, kolPoolId: string | number, includeProductFit = true) {
-  const params = new URLSearchParams({ include_product_fit: String(includeProductFit) });
-  return apiFetch<Row>(`/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/ai-brief?${params.toString()}`, {}, token);
-}
-export async function getKolPoolGeminiPreflight(token: string, kolPoolId: string | number, candidateLimit = 24) {
-  const params = new URLSearchParams({ candidate_limit: String(candidateLimit), include_budget_preflight: "true" });
-  return apiFetch<Row>(`/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/gemini-preflight?${params.toString()}`, {}, token);
-}
-export async function getKolPoolGeminiGoNoGo(token: string, kolPoolId: string | number, candidateLimit = 24) {
-  const params = new URLSearchParams({ candidate_limit: String(candidateLimit) });
-  return apiFetch<Row>(`/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/gemini-go-no-go?${params.toString()}`, {}, token);
-}
-export async function previewKolPoolDimensions11(token: string, options: { limit?: number; sourceType?: string } = {}) {
-  const params = new URLSearchParams({ limit: String(options.limit || 20) });
-  if (options.sourceType !== undefined) params.set("source_type", options.sourceType);
-  return apiFetch<Row>(`/api/admin/vkpi/kol-pool-dimensions11/preview?${params.toString()}`, {}, token);
-}
-export async function getKolPoolCompetitorDashboard(token: string, options: { brand?: string; limit?: number; sourceType?: string } = {}) {
-  const params = new URLSearchParams({ limit: String(options.limit || 1200) });
-  if (options.brand) params.set("brand", options.brand);
-  if (options.sourceType !== undefined) params.set("source_type", options.sourceType);
-  return apiFetch<Row>(`/api/admin/vkpi/kol-pool/competitors/dashboard?${params.toString()}`, {}, token);
-}
-export async function runProductRecommendations(token: string, payload: Record<string, unknown>) {
-  return apiFetch<Record<string, unknown>>("/api/admin/vkpi/product-analysis/recommendations/run", { method: "POST", body: jsonBody(payload), timeoutMs: 120000 }, token);
-}
-export async function listProductRecommendations(token: string, options: { launchId?: string; runId?: string; limit?: number } = {}) {
-  const params = new URLSearchParams({ limit: String(options.limit || 100) });
-  if (options.launchId) params.set("launch_id", options.launchId);
-  if (options.runId) params.set("run_id", options.runId);
-  return apiFetch<{ recommendations?: Row[] }>(`/api/admin/vkpi/product-analysis/recommendations?${params.toString()}`, {}, token);
-}
-export async function listProductRecommendationRuns(token: string, options: { strategyVersion?: string; status?: string; limit?: number } = {}) {
-  const params = new URLSearchParams({ limit: String(options.limit || 100) });
-  if (options.strategyVersion) params.set("strategy_version", options.strategyVersion);
-  if (options.status) params.set("status", options.status);
-  return apiFetch<{ runs?: Row[] }>(`/api/admin/vkpi/product-analysis/recommendation-runs?${params.toString()}`, {}, token);
-}
-export async function getProductRecommendationOutcomeSummary(token: string, options: { launchId?: string; runId?: string; limit?: number } = {}) {
-  const params = new URLSearchParams({ limit: String(options.limit || 50) });
-  if (options.launchId) params.set("launch_id", options.launchId);
-  if (options.runId) params.set("run_id", options.runId);
-  return apiFetch<{ totals?: Row; conversion?: Row; by_status?: Row[]; by_platform?: Row[]; source_rows?: Row[]; source_count?: number }>(`/api/admin/vkpi/product-analysis/outcomes/summary?${params.toString()}`, {}, token);
-}
-export async function getProductRecommendationEvidence(token: string, recommendationId: string) {
-  return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/product-analysis/recommendations/${encodeURIComponent(recommendationId)}/evidence`, {}, token);
-}
-export async function productRecommendationAction(token: string, recommendationId: string, action: "shortlist" | "reject" | "feedback" | "claim" | "create_project", payload: Row = {}) {
-  return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/product-analysis/recommendations/${encodeURIComponent(recommendationId)}/${encodeURIComponent(action)}`, { method: "POST", body: jsonBody(payload) }, token);
-}
-
-export async function getAiBudgetStatus(token: string) {
-  return apiFetch<{ budgets?: Row[]; summary?: Row }>("/api/admin/vkpi/budgets", {}, token);
-}
-export async function updateAiBudgetScope(token: string, scope: string, payload: Row) {
-  return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/budgets/${encodeURIComponent(scope)}/update`, { method: "POST", body: jsonBody(payload) }, token);
-}
-export async function getAiBudgetUsageByProvider(token: string, options: { limit?: number } = {}) {
-  const params = new URLSearchParams({ limit: String(options.limit || 50) });
-  return apiFetch<{ rows?: Row[] }>(`/api/admin/vkpi/budgets/usage-by-provider?${params.toString()}`, {}, token);
-}
-export async function getAiBudgetUsageByCron(token: string, options: { limit?: number } = {}) {
-  const params = new URLSearchParams({ limit: String(options.limit || 50) });
-  return apiFetch<{ rows?: Row[] }>(`/api/admin/vkpi/budgets/usage-by-cron?${params.toString()}`, {}, token);
-}
-
-export async function listIndustryProjects(token: string, options: { activeOnly?: boolean; limit?: number } = {}) {
-  const params = new URLSearchParams({ limit: String(options.limit || 100), active_only: String(options.activeOnly ?? true) });
-  return apiFetch<{ projects?: Row[] }>(`/api/admin/vkpi/industry-data/projects?${params.toString()}`, {}, token);
-}
-export async function createIndustryProject(token: string, payload: Record<string, unknown>) {
-  return apiFetch<Record<string, unknown>>("/api/admin/vkpi/industry-data/projects", { method: "POST", body: jsonBody(payload) }, token);
-}
-export async function listIndustryAccounts(token: string, projectId: string, limit = 300) {
-  return apiFetch<{ accounts?: Row[] }>(`/api/admin/vkpi/industry-data/projects/${encodeURIComponent(projectId)}/accounts?limit=${encodeURIComponent(String(limit))}`, {}, token);
-}
-export async function addIndustryAccount(token: string, projectId: string, payload: Record<string, unknown>) {
-  return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/industry-data/projects/${encodeURIComponent(projectId)}/accounts`, { method: "POST", body: jsonBody(payload) }, token);
-}
-export async function importIndustryApifyHistory(token: string, projectId: string, payload: { source_type?: string; source_ref?: string; items: Row[] }) {
-  return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/industry-data/projects/${encodeURIComponent(projectId)}/apify/import`, { method: "POST", body: jsonBody(payload), timeoutMs: 120000 }, token);
-}
-export async function getIndustryAccount(token: string, accountId: string, limit = 500) {
-  return apiFetch<{ account?: Row; snapshots?: Row[]; posts?: Row[] }>(`/api/admin/vkpi/industry-data/accounts/${encodeURIComponent(accountId)}?limit=${encodeURIComponent(String(limit))}`, {}, token);
-}
-export async function refreshIndustryAccount(token: string, accountId: string) {
-  return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/industry-data/accounts/${encodeURIComponent(accountId)}/refresh`, { method: "POST", body: jsonBody({}), timeoutMs: 120000 }, token);
-}
-export async function updateIndustryAccount(token: string, accountId: string, payload: Record<string, unknown>) {
-  return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/industry-data/accounts/${encodeURIComponent(accountId)}`, { method: "PATCH", body: jsonBody(payload) }, token);
-}
-export async function getIndustryCrossPlatform(token: string, projectId: string) {
-  return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/industry-data/projects/${encodeURIComponent(projectId)}/cross-platform`, {}, token);
-}
-export async function listIndustryPosts(token: string, projectId: string, limit = 500) {
-  return apiFetch<{ posts?: Row[] }>(`/api/admin/vkpi/industry-data/projects/${encodeURIComponent(projectId)}/posts?limit=${encodeURIComponent(String(limit))}`, {}, token);
-}
-export async function getContentBrainStatus(token: string) {
-  return apiFetch<Record<string, unknown>>("/api/admin/vkpi/industry-data/content-brain/status", {}, token);
-}
-export async function listContentBrainPosts(token: string, options: { status?: string; platform?: string; query?: string; limit?: number } = {}) {
-  const params = new URLSearchParams({ limit: String(options.limit || 100) });
-  if (options.status) params.set("status", options.status);
-  if (options.platform) params.set("platform", options.platform);
-  if (options.query) params.set("query", options.query);
-  return apiFetch<{ posts?: Row[]; count?: number; schema_ready?: boolean }>(`/api/admin/vkpi/industry-data/content-brain/posts?${params.toString()}`, {}, token);
-}
-export async function getCompetitorBrainStatus(token: string) {
-  return apiFetch<Record<string, unknown>>("/api/admin/vkpi/industry-data/competitor-brain/status", {}, token);
-}
-export async function listCompetitorBrainSignals(token: string, options: { reviewStatus?: string; brand?: string; signalType?: string; limit?: number } = {}) {
-  const params = new URLSearchParams({ limit: String(options.limit || 100) });
-  if (options.reviewStatus) params.set("review_status", options.reviewStatus);
-  if (options.brand) params.set("brand", options.brand);
-  if (options.signalType) params.set("signal_type", options.signalType);
-  return apiFetch<{ signals?: Row[]; count?: number; schema_ready?: boolean }>(`/api/admin/vkpi/industry-data/competitor-brain/signals?${params.toString()}`, {}, token);
-}
-export async function reviewCompetitorBrainSignal(token: string, signalId: string | number, payload: { action: string; note?: string }) {
-  return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/industry-data/competitor-brain/signals/${encodeURIComponent(String(signalId))}/review`, { method: "POST", body: jsonBody(payload) }, token);
-}
-export async function getMarketIntelligenceV0(token: string, limit = 120) {
-  return apiFetch<Row>(`/api/admin/vkpi/industry-data/market-intelligence/v0?limit=${encodeURIComponent(String(limit))}`, {}, token);
-}
-export async function previewBrandSignals(token: string, options: { source?: string; since?: string; limit?: number } = {}) {
-  const params = new URLSearchParams({ limit: String(options.limit || 200) });
-  if (options.source) params.set("source", options.source);
-  if (options.since) params.set("since", options.since);
-  return apiFetch<Row>(`/api/admin/vkpi/brand-signals/preview?${params.toString()}`, {}, token);
-}
-export async function listBrandSignals(token: string, options: { status?: string; signalType?: string; brandRole?: string; limit?: number } = {}) {
-  const params = new URLSearchParams({ limit: String(options.limit || 100) });
-  if (options.status) params.set("status", options.status);
-  if (options.signalType) params.set("signal_type", options.signalType);
-  if (options.brandRole) params.set("brand_role", options.brandRole);
-  return apiFetch<{ signals?: Row[]; count?: number; total_count?: number; schema_ready?: boolean }>(`/api/admin/vkpi/brand-signals?${params.toString()}`, {}, token);
-}
-export async function scanBrandSignals(token: string, payload: { source?: string; since?: string; limit?: number; write_db?: boolean }) {
-  return apiFetch<Row>("/api/admin/vkpi/brand-signals/scan", { method: "POST", body: jsonBody(payload), timeoutMs: 120000 }, token);
-}
-export async function reviewBrandSignal(token: string, signalId: string | number, payload: { action: "contact" | "ignore" | "flag" | "compete" }) {
-  return apiFetch<Row>(`/api/admin/vkpi/brand-signals/${encodeURIComponent(String(signalId))}/action`, { method: "POST", body: jsonBody(payload) }, token);
-}
-export async function searchVkpi(token: string, query: string, limit = 20) {
-  const params = new URLSearchParams({ q: query, limit: String(limit) });
-  return apiFetch<{ items?: Row[]; total?: number; provider_calls?: boolean; write_db?: boolean; tokens?: string[] }>(`/api/admin/vkpi/search?${params.toString()}`, {}, token);
-}
-
-export async function getCommentIntelligenceOverview(
-  token: string,
-  options: { days?: number; recentLimit?: number } = {},
-) {
-  const params = new URLSearchParams({
-    days: String(options.days || 7),
-    recent_limit: String(options.recentLimit || 8),
-  });
-  return apiFetch<VkpiCommentIntelligenceOverview>(`/api/admin/vkpi/comment-intelligence/overview?${params.toString()}`, {}, token);
-}
-
-export async function processRecentCommentIntelligence(
-  token: string,
-  options: {
-    platform?: string;
-    days?: number;
-    limit?: number;
-    collectComments?: boolean;
-    analyzeSentiment?: boolean;
-    classifyPillar?: boolean;
-    forceReprocess?: boolean;
-  } = {},
-) {
-  const params = new URLSearchParams({
-    days: String(options.days || 7),
-    limit: String(options.limit || 10),
-    collect_comments: String(options.collectComments ?? false),
-    analyze_sentiment: String(options.analyzeSentiment ?? true),
-    classify_pillar: String(options.classifyPillar ?? true),
-    force_reprocess: String(options.forceReprocess ?? false),
-  });
-  if (options.platform) params.set("platform", options.platform);
-  return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/comment-intelligence/process-recent?${params.toString()}`, {
-    method: "POST",
-    body: jsonBody({}),
-    timeoutMs: 180000,
-  }, token);
-}
-
-export async function retryCommentIntelligenceRun(token: string, runId: string | number) {
-  return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/comment-intelligence/runs/${encodeURIComponent(String(runId))}/retry`, {
-    method: "POST",
-    body: jsonBody({}),
-    timeoutMs: 180000,
-  }, token);
-}
-export async function getOperatingReviewStatus(token: string, limit = 25) {
-  return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/operating-review/status?limit=${encodeURIComponent(String(limit))}`, {}, token);
-}
-export async function getRecommendationFeedbackBacklog(token: string, limit = 25, runUid = "") {
-  const params = new URLSearchParams({ limit: String(limit) });
-  if (runUid) params.set("run_uid", runUid);
-  return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/learning/recommendation-feedback-backlog?${params.toString()}`, {}, token);
-}
-export async function getMemoryFeedbackBacklog(token: string, limit = 25, entityType = "kol") {
-  const params = new URLSearchParams({ limit: String(limit), entity_type: entityType });
-  return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/learning/memory-feedback-backlog?${params.toString()}`, {}, token);
-}
-export async function createMemoryFeedback(token: string, payload: Row) {
-  return apiFetch<Record<string, unknown>>("/api/admin/vkpi/memory/feedback", { method: "POST", body: jsonBody(payload) }, token);
-}
-
-export async function listFeatureFlags(token: string) {
-  return apiFetch<{ flags?: Row[] }>("/api/admin/vkpi/settings/feature-flags", {}, token);
-}
-export async function updateFeatureFlags(token: string, flags: Row[]) {
-  return apiFetch<Record<string, unknown>>("/api/admin/vkpi/settings/feature-flags", { method: "PATCH", body: jsonBody({ flags }) }, token);
-}
-export async function listPlatformCrawlSettings(token: string) {
-  return apiFetch<{ platforms?: Row[] }>("/api/admin/vkpi/settings/platform-crawl", {}, token);
-}
-export async function updatePlatformCrawlSettings(token: string, platforms: Row[]) {
-  return apiFetch<Record<string, unknown>>("/api/admin/vkpi/settings/platform-crawl", { method: "PATCH", body: jsonBody({ platforms }) }, token);
-}
-export async function listBudgetSettings(token: string) {
-  return apiFetch<{ budgets?: Row[] }>("/api/admin/vkpi/settings/budgets", {}, token);
-}
-export async function updateBudgetSettings(token: string, budgets: Row[]) {
-  return apiFetch<Record<string, unknown>>("/api/admin/vkpi/settings/budgets", { method: "PATCH", body: jsonBody({ budgets }) }, token);
-}
-export async function getControlStatus(token: string) {
-  return apiFetch<Record<string, unknown>>("/api/admin/vkpi/settings/control-status", {}, token);
-}
-export async function getCommentAlertSettings(token: string) {
-  return apiFetch<{ settings?: Row }>("/api/admin/vkpi/settings/comment-alerts", {}, token);
-}
-export async function updateCommentAlertSettings(token: string, payload: Row) {
-  return apiFetch<{ settings?: Row }>("/api/admin/vkpi/settings/comment-alerts", { method: "PATCH", body: jsonBody(payload) }, token);
-}
-export async function runVkpiAutomation(token: string, job: string, payload: Row = {}) {
-  return apiFetch<Record<string, unknown>>(`/api/admin/vkpi/cron/${encodeURIComponent(job)}/run`, { method: "POST", body: jsonBody(payload), timeoutMs: 120000 }, token);
-}
-
-export async function getUserPreferences(token: string, staffId?: string) {
-  const suffix = staffId ? `?staff_id=${encodeURIComponent(staffId)}` : "";
-  return apiFetch<{ preference?: Row; full_scope?: boolean }>(`/api/admin/vkpi/settings/preferences${suffix}`, {}, token);
-}
-export async function updateUserPreferences(token: string, payload: Row) {
-  return apiFetch<{ preference?: Row; full_scope?: boolean }>("/api/admin/vkpi/settings/preferences", { method: "PATCH", body: jsonBody(payload) }, token);
-}
-export async function listUserPreferences(token: string, limit = 200) {
-  return apiFetch<{ preferences?: Row[]; full_scope?: boolean }>(`/api/admin/vkpi/settings/preferences/list?limit=${encodeURIComponent(String(limit))}`, {}, token);
-}
-export async function getNotificationSettings(token: string, staffId?: string) {
-  const suffix = staffId ? `?staff_id=${encodeURIComponent(staffId)}` : "";
-  return apiFetch<{ notification_settings?: Row; full_scope?: boolean }>(`/api/admin/vkpi/settings/notifications${suffix}`, {}, token);
-}
-export async function updateNotificationSettings(token: string, payload: Row) {
-  return apiFetch<{ notification_settings?: Row; full_scope?: boolean }>("/api/admin/vkpi/settings/notifications", { method: "PATCH", body: jsonBody(payload) }, token);
-}
-export async function listNotificationSettings(token: string, limit = 200) {
-  return apiFetch<{ notification_settings?: Row[]; full_scope?: boolean }>(`/api/admin/vkpi/settings/notifications/list?limit=${encodeURIComponent(String(limit))}`, {}, token);
-}
-
-export async function listEmployeeChannels(token: string, viewAsStaffId?: string) {
-  const suffix = viewAsStaffId ? `?view_as_staff_id=${encodeURIComponent(viewAsStaffId)}` : "";
-  return apiFetch<{ channels?: Row[] }>(`/api/marketing/channels${suffix}`, {}, token);
-}
-export async function getOfficialChannelMatrix(token: string, filters: { limit?: number; viewAsStaffId?: string } = {}) {
-  const qs = new URLSearchParams();
-  qs.set("limit", String(filters.limit ?? 20));
-  if (filters.viewAsStaffId) qs.set("view_as_staff_id", filters.viewAsStaffId);
-  return apiFetch<{ platforms?: Row[]; account_count?: number; post_count?: number; total_views?: number }>(
-    `/api/marketing/channels/official-matrix?${qs.toString()}`,
-    {},
-    token,
-  );
-}
-export async function getOfficialChannelGapReport(token: string, filters: { limit?: number; viewAsStaffId?: string } = {}) {
-  const qs = new URLSearchParams();
-  qs.set("limit", String(filters.limit ?? 50));
-  if (filters.viewAsStaffId) qs.set("view_as_staff_id", filters.viewAsStaffId);
-  return apiFetch<{ summary?: Row; accounts?: Row[]; platforms?: Row[] }>(
-    `/api/marketing/channels/official-gap-report?${qs.toString()}`,
-    {},
-    token,
-  );
-}
-export async function getOfficialChannelPosts(
-  token: string,
-  channelId: number | string,
-  filters: { page?: number; limit?: number; sort?: string; direction?: string; window?: string } = {},
-) {
-  const qs = new URLSearchParams();
-  qs.set("page", String(filters.page ?? 1));
-  qs.set("limit", String(filters.limit ?? 10));
-  qs.set("sort", filters.sort || "latest");
-  qs.set("direction", filters.direction || "desc");
-  qs.set("window", filters.window || "all");
-  return apiFetch<{ account?: Row; posts?: Row[]; pagination?: Row; sort?: string; source?: string }>(
-    `/api/marketing/channels/${encodeURIComponent(String(channelId))}/posts?${qs.toString()}`,
-    {},
-    token,
-  );
-}
-export async function getChannelPostComments(
-  token: string,
-  channelId: number | string,
-  filters: { postId?: string; url?: string; limit?: number } = {},
-) {
-  const qs = new URLSearchParams();
-  qs.set("post_id", filters.postId || "");
-  if (filters.url) qs.set("url", filters.url);
-  qs.set("limit", String(filters.limit ?? 50));
-  return apiFetch<Row>(
-    `/api/marketing/channels/${encodeURIComponent(String(channelId))}/post-comments?${qs.toString()}`,
-    {},
-    token,
-  );
-}
-export async function collectChannelPostComments(
-  token: string,
-  channelId: number | string,
-  payload: { postId?: string; url?: string; limit?: number } = {},
-) {
-  return apiFetch<Row>(
-    `/api/marketing/channels/${encodeURIComponent(String(channelId))}/post-comments/collect`,
-    {
-      method: "POST",
-      body: jsonBody({
-        post_id: payload.postId || "",
-        url: payload.url || "",
-        limit: payload.limit ?? 100,
-      }),
-    },
-    token,
-  );
-}
-export async function getRedditChannelAssessment(token: string, channelId: number | string) {
-  return apiFetch<Row>(
-    `/api/marketing/channels/${encodeURIComponent(String(channelId))}/reddit-assessment`,
-    {},
-    token,
-  );
-}
-export async function bindEmployeeChannel(token: string, payload: Record<string, unknown>, viewAsStaffId?: string) {
-  const suffix = viewAsStaffId ? `?view_as_staff_id=${encodeURIComponent(viewAsStaffId)}` : "";
-  return apiFetch<Record<string, unknown>>(`/api/marketing/channels${suffix}`, { method: "POST", body: jsonBody(payload) }, token);
-}
-export async function syncEmployeeChannel(token: string, channelId: string) {
-  const response = await apiFetch<Record<string, unknown>>(`/api/marketing/channels/${encodeURIComponent(channelId)}/sync-now`, { method: "POST", body: jsonBody({}) }, token);
-  if (response.task_id && !response.message) {
-    return { ...response, message: "同步任务已加入队列。" };
-  }
-  return response;
-}
-
-const DEFAULT_TASK_STATUSES: AsyncTaskStatus[] = [
-  "queued",
-  "running",
-  "processing",
-  "retrying",
-  ...TERMINAL_STATUSES,
-];
-
-const ONE_HOUR_MS = 60 * 60 * 1000;
-
-function normalizeAsyncTask(raw: Record<string, unknown>): AsyncTask | null {
-  const taskId = String(raw.task_id || "");
-  if (!taskId) return null;
-  const result = (raw.result_json || raw.result || {}) as Record<string, unknown>;
-  return {
-    task_id: taskId,
-    task_type: String(raw.task_type || raw.job_type || ""),
-    status: String(raw.status || "queued") as AsyncTaskStatus,
-    progress_pct: typeof raw.progress_pct === "number" ? raw.progress_pct : Number(raw.progress_pct || 0),
-    progress_text: String(raw.progress_text || ""),
-    result_json: result,
-    result,
-    error: String(raw.error || raw.error_message || ""),
-    created_at: String(raw.created_at || ""),
-    started_at: raw.started_at ? String(raw.started_at) : undefined,
-    finished_at: raw.finished_at ? String(raw.finished_at) : undefined,
-  };
-}
-
-function isRecentTask(task: AsyncTask): boolean {
-  if (!TERMINAL_STATUSES.includes(task.status as (typeof TERMINAL_STATUSES)[number])) return true;
-  if (!task.finished_at) return false;
-  const finishedAt = new Date(task.finished_at).getTime();
-  return Number.isFinite(finishedAt) && Date.now() - finishedAt < ONE_HOUR_MS;
-}
-
-export async function listTasks(token: string, filters: { status?: AsyncTaskStatus[] } = {}) {
-  const statuses = filters.status?.length ? filters.status : DEFAULT_TASK_STATUSES;
-  const uniqueStatuses = Array.from(new Set(statuses));
-  const responses = await Promise.all(
-    uniqueStatuses.map((status) =>
-      apiFetch<{ tasks?: Record<string, unknown>[]; items?: Record<string, unknown>[] }>(
-        `/api/marketing/tasks?status=${encodeURIComponent(status)}`,
-        {},
-        token,
-      ),
-    ),
-  );
-  const tasksById = new Map<string, AsyncTask>();
-  responses.forEach((response) => {
-    const rows = response.tasks || response.items || [];
-    rows.forEach((row) => {
-      const task = normalizeAsyncTask(row);
-      if (task && isRecentTask(task)) tasksById.set(task.task_id, task);
-    });
-  });
-  return Array.from(tasksById.values()).sort((a, b) => {
-    const aTime = new Date(a.created_at || a.finished_at || 0).getTime();
-    const bTime = new Date(b.created_at || b.finished_at || 0).getTime();
-    return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
-  });
-}
-
-export async function getTaskRealtimeStatus(token: string) {
-  return apiFetch<Row>("/api/admin/vkpi/tasks/realtime-status", {}, token);
-}
-
-export function buildTaskEventStreamUrl(taskId: string) {
-  return buildApiUrl(`/api/audit/stream/${encodeURIComponent(taskId)}`);
-}
-
-export async function cancelTask(token: string, taskId: string) {
-  await apiFetch<Record<string, unknown>>(
-    `/api/marketing/tasks/${encodeURIComponent(taskId)}/cancel`,
-    { method: "POST", body: jsonBody({}) },
-    token,
-  );
-}
-
-export async function retryTask(token: string, taskId: string) {
-  const response = await apiFetch<Record<string, unknown>>(
-    `/api/marketing/tasks/${encodeURIComponent(taskId)}/retry`,
-    { method: "POST", body: jsonBody({}) },
-    token,
-  );
-  return { task_id: String(response.task_id || "") };
-}
-
-export async function enqueueVideoCacheTask(
-  token: string,
-  payload: {
-    platform: string;
-    videoId: string;
-    sourceUrl: string;
-    channelId?: string | number;
-    forceRefresh?: boolean;
-  },
-) {
-  const response = await apiFetch<Record<string, unknown>>(
-    "/api/admin/vkpi/tasks",
-    {
-      method: "POST",
-      body: jsonBody({
-        task_type: "vkpi_video_cache",
-        params: {
-          platform: payload.platform,
-          video_id: payload.videoId,
-          source_url: payload.sourceUrl,
-          channel_id: payload.channelId,
-          force_refresh: Boolean(payload.forceRefresh),
-        },
-        priority: 3,
-        timeout_seconds: 300,
-      }),
-    },
-    token,
-  );
-  return { task_id: String(response.task_id || "") };
-}
-
-export async function lookupCachedVideoUrl(token: string, platform: string, videoId: string) {
-  const qs = new URLSearchParams();
-  qs.set("platform", platform);
-  qs.set("video_id", videoId);
-  try {
-    const response = await apiFetch<{ hit?: boolean; cached_url?: string; cachedUrl?: string }>(
-      `/api/admin/vkpi/media/video-cache/lookup?${qs.toString()}`,
-      {},
-      token,
-    );
-    return response.hit ? String(response.cached_url || response.cachedUrl || "") : "";
-  } catch {
-    return "";
-  }
-}
-export async function listTeamChannels(token: string) {
-  return apiFetch<{ rows?: Row[] }>("/api/marketing/channels/team-overview", {}, token);
-}
-
-export async function listCampaigns(token: string) {
-  return apiFetch<{ campaigns?: Row[] }>("/api/marketing/campaigns?limit=100", {}, token);
-}
-export async function createCampaign(token: string, payload: Record<string, unknown>) {
-  return apiFetch<Record<string, unknown>>("/api/marketing/campaigns", { method: "POST", body: jsonBody(payload) }, token);
-}
-export async function addCampaignProject(token: string, campaignId: string, projectId: string) {
-  return apiFetch<Record<string, unknown>>(`/api/marketing/campaigns/${encodeURIComponent(campaignId)}/projects`, { method: "POST", body: jsonBody({ project_id: Number(projectId) }) }, token);
-}
-export async function listBudgetPools(token: string) {
-  return apiFetch<{ budget_pools?: Row[] }>("/api/marketing/budget-pools?limit=100", {}, token);
-}
-export async function createBudgetPool(token: string, payload: Record<string, unknown>) {
-  return apiFetch<Record<string, unknown>>("/api/marketing/budget-pools", { method: "POST", body: jsonBody(payload) }, token);
-}
-export async function initiateOffboarding(token: string, staffId: string, newOwnerStaffId?: string) {
-  return apiFetch<Record<string, unknown>>(`/api/marketing/staff/${encodeURIComponent(staffId)}/offboard/initiate`, { method: "POST", body: jsonBody({ new_owner_staff_id: newOwnerStaffId ? Number(newOwnerStaffId) : undefined }) }, token);
-}
-
-export interface VkpiTeamFeedbackPayload {
-  feedbackType?: string;
-  severity?: string;
-  pagePath?: string;
-  title: string;
-  detail?: string;
-  metadata?: Record<string, unknown>;
-}
-
-export async function submitTeamFeedback(token: string, payload: VkpiTeamFeedbackPayload) {
-  return apiFetch<{ feedback?: Row; ok?: boolean }>("/api/admin/vkpi/feedback", { method: "POST", body: jsonBody(payload) }, token);
-}
-
-export async function listTeamFeedback(token: string, status = "", limit = 100) {
-  const params = new URLSearchParams();
-  if (status) params.set("status", status);
-  params.set("limit", String(limit));
-  return apiFetch<{ feedback?: Row[]; count?: number }>(`/api/admin/vkpi/feedback?${params.toString()}`, {}, token);
-}
-
-export async function updateTeamFeedbackStatus(token: string, uid: string, status: string) {
-  return apiFetch<{ feedback?: Row; ok?: boolean }>(
-    `/api/admin/vkpi/feedback/${encodeURIComponent(uid)}`,
-    { method: "PATCH", body: jsonBody({ status }) },
-    token,
-  );
-}
-
-export interface VkpiKolDecisionPayload {
-  kolPoolId: string | number;
-  decisionKey: "contact" | "watch" | "caution" | "avoid";
-  decisionLabel?: string;
-  severity?: string;
-  rationale?: string;
-  sourceTable?: string;
-  sourceId?: string | number;
-  query?: string;
-  evidenceSections?: string[];
-  evidenceSnapshot?: Record<string, unknown>;
-  metadata?: Record<string, unknown>;
-}
-
-export async function createKolDecisionAudit(token: string, payload: VkpiKolDecisionPayload) {
-  return apiFetch<{ decision?: Row; ok?: boolean }>("/api/admin/vkpi/kol-decisions", { method: "POST", body: jsonBody(payload) }, token);
-}
-
-export async function listKolDecisionAudit(token: string, options: { kolPoolId?: string | number; decisionKey?: string; limit?: number } = {}) {
-  const params = new URLSearchParams({ limit: String(options.limit || 100) });
-  if (options.kolPoolId) params.set("kol_pool_id", String(options.kolPoolId));
-  if (options.decisionKey) params.set("decision_key", options.decisionKey);
-  return apiFetch<{ decisions?: Row[]; count?: number }>(`/api/admin/vkpi/kol-decisions?${params.toString()}`, {}, token);
 }
