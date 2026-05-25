@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.db.connection import get_conn
-from app.services.vkpi import scope
+from app.domains.access import scope
 
 
 def _int(value: Any, default: int = 0) -> int:

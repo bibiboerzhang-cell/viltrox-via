@@ -5,7 +5,7 @@ from typing import Any
 
 from app.domains.kol import account as account_domain
 from app.domains.kol import claims as claims_domain
-from app.services.vkpi import scope
+from app.domains.access import scope
 
 
 async def lookup_with_context(body: dict[str, Any], *, staff: dict[str, Any]) -> dict[str, Any]:

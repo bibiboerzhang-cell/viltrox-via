@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.api.dependencies.perms import require_tab
 from app.domains import attribution as attribution_domain
 from app.domains import kol as kol_domain
-from app.services.vkpi import scope
+from app.domains.access import scope
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-kol-links"])
 

@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from app.db.connection import get_conn, is_postgres_runtime
-from app.services.vkpi import scope
+from app.domains.access import scope
 
 def _utcnow() -> str:
     return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")

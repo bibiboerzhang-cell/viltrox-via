@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.db.connection import get_conn
-from app.services.vkpi import scope as scope_service
+from app.domains.access import scope as scope_service
 from app.domains.lineage.common import _float, _int, _json
 from app.domains.lineage.schema import ensure_vkpi_lineage_schema
 

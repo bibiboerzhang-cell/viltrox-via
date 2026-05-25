@@ -14,7 +14,8 @@ from openpyxl import Workbook
 from app.db.connection import get_conn
 from app.domains import reports
 from app.domains import audit
-from app.services.vkpi import scope, workflow
+from app.domains.access import scope
+from app.services.vkpi import workflow
 from app.services.vkpi.pdf_renderer import store_bytes
 from app.domains.reports import ensure_vkpi_reports_schema
 

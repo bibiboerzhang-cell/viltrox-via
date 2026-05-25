@@ -7,7 +7,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
-from app.services.vkpi import scope
+from app.domains.access import scope
 from app.domains.data_quality.common import (
     _active_project_filter_for_quality,
     _append_issue,

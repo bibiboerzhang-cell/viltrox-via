@@ -17,7 +17,7 @@ from cryptography.fernet import Fernet
 from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.services.cache import cache_clear, cache_get, cache_set
-from app.services.vkpi import scope
+from app.domains.access import scope
 from app.domains.media import cached_image_url, cached_video_url, cached_video_url_for_item
 from app.services.vkpi.official_post_identity import canonical_post_identity
 from app.services.vkpi.schema_channels import ensure_vkpi_channels_schema

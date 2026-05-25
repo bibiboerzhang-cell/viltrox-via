@@ -5,7 +5,8 @@ from typing import Any
 
 from app.db.connection import get_conn
 from app.domains import audit
-from app.services.vkpi import scope, workflow
+from app.domains.access import scope
+from app.services.vkpi import workflow
 from app.domains.evidence.common import (
     _actor_id,
     _assert_kol_access,

@@ -6,7 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.api.dependencies.perms import require_tab
 from app.domains import dashboard as dashboard_domain
 from app.domains import staff as staff_domain
-from app.services.vkpi import scope, workflow
+from app.domains.access import scope
+from app.services.vkpi import workflow
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-dashboard"])
 

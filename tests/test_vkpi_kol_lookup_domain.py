@@ -1,7 +1,7 @@
 import pytest
 
 from app.domains.kol import lookup as lookup_domain
-from app.services.vkpi import scope
+from app.domains.access import scope
 
 
 @pytest.mark.anyio

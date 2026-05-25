@@ -5,7 +5,7 @@ from typing import Any
 
 from app.db.connection import get_conn, is_postgres_runtime
 from app.domains import audit
-from app.services.vkpi import scope
+from app.domains.access import scope
 from app.domains.costs.common import TYPE_ALIASES, VALID_COST_TYPES, _amount_cents, _int, _json, _sku, utcnow
 from app.domains.costs.product_catalog import ensure_product_catalog_schema, list_product_catalog
 from app.services.vkpi.schema import ensure_vkpi_schema

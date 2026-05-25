@@ -9,7 +9,7 @@ from typing import Any
 from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains import audit
-from app.services.vkpi import scope
+from app.domains.access import scope
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.workflow import staff_id
 

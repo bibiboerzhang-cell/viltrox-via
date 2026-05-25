@@ -1,7 +1,7 @@
 import pytest
 
 from app.domains.kol import claim_access
-from app.services.vkpi import scope
+from app.domains.access import scope
 
 
 class _Result:

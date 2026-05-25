@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
-from app.services.vkpi import scope
+from app.domains.access import scope
 from app.domains.data_quality.common import _append_issue, _safe_rows, _staff_clause
 
 

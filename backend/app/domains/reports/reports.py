@@ -15,7 +15,8 @@ from app.domains import attribution
 from app.domains import lineage as metric_lineage
 from app.platform import llm_gateway
 from app.domains.staff import kpi_ledger
-from app.services.vkpi import decision_engine, pdf_renderer, scope, workflow
+from app.domains.access import scope
+from app.services.vkpi import decision_engine, pdf_renderer, workflow
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.domains.lineage import ensure_vkpi_lineage_schema
 from app.domains.reports.schema import ensure_vkpi_reports_schema

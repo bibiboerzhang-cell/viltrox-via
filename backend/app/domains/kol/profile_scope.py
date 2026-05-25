@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.domains.kol.payload_utils import _int
-from app.services.vkpi import scope
+from app.domains.access import scope
 
 
 def project_staff_filter(staff: dict[str, Any] | None) -> tuple[str, list[Any]]:

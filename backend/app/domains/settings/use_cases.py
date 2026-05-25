@@ -6,7 +6,8 @@ from typing import Any
 from app.domains import staff as staff_domain
 import importlib
 
-from app.services.vkpi import notification_settings, scope, settings as vkpi_settings, user_preferences
+from app.domains.access import scope
+from app.services.vkpi import notification_settings, settings as vkpi_settings, user_preferences
 
 platform_crawl_settings = importlib.import_module("app.domains.settings.platform_crawl")
 

@@ -5,7 +5,7 @@ from typing import Any
 
 from app.db.connection import get_conn
 from app.domains.kol.identity import normalize_platform
-from app.services.vkpi import scope
+from app.domains.access import scope
 from app.services.vkpi.schema import ensure_vkpi_schema
 
 

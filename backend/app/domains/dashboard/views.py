@@ -5,7 +5,7 @@ from typing import Any
 
 from app.domains import lineage as metric_lineage
 from app.domains.dashboard import decision_dashboard as decision_engine
-from app.services.vkpi import scope
+from app.domains.access import scope
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
 
 

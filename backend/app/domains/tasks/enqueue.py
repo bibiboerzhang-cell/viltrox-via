@@ -8,7 +8,8 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime
-from app.services.vkpi import channels, scope
+from app.domains.access import scope
+from app.services.vkpi import channels
 
 
 VKPI_TASK_SOURCE = "vkpi"

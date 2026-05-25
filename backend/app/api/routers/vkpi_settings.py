@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
 from app.domains import settings as settings_domain
-from app.services.vkpi import scope
+from app.domains.access import scope
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-settings"])
 

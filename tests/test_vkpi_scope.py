@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.services.vkpi import scope
+from app.domains.access import scope
 
 
 class _FakeResult:

@@ -13,7 +13,7 @@ from app.domains.kol.claim_query_helpers import (
     safe_json_loads as _safe_json_loads,
 )
 from app.domains.kol.payload_utils import _int
-from app.services.vkpi import scope
+from app.domains.access import scope
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 

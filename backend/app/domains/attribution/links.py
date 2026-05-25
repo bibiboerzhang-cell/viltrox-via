@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.domains.attribution import link_center
-from app.services.vkpi import scope
+from app.domains.access import scope
 
 
 def list_links(

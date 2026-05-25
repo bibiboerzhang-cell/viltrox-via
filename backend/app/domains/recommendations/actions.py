@@ -11,7 +11,8 @@ from app.domains.recommendations import outcomes as outcome_collector
 from app.services.vkpi._utils import json_dumps, json_loads, utcnow_iso
 from app.domains.attribution import link_center
 from app.domains import audit
-from app.services.vkpi import scope, workflow
+from app.domains.access import scope
+from app.services.vkpi import workflow
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
 

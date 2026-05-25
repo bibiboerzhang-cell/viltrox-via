@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.db.connection import get_conn
-from app.services.vkpi import scope as scope_service
+from app.domains.access import scope as scope_service
 from app.domains.lineage.definitions import DEFINITION_VERSION, METRICS, is_known_metric
 from app.domains.lineage.common import _generate_run_uid, _int, _json, _safe_json, _utcnow, _window_bounds
 from app.domains.lineage.compute import _compute_derived, _compute_metric

@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.db.connection import get_conn
-from app.services.vkpi import scope
+from app.domains.access import scope
 from app.shared.vkpi_decision_common import (
     _KPI_LABELS,
     _active_project_filter,

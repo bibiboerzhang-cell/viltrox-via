@@ -14,7 +14,7 @@ from typing import Any
 from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime
 from app.domains import audit
-from app.services.vkpi import scope
+from app.domains.access import scope
 from app.services.vkpi.kpi_evidence import enrich_kpi_source_row
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema

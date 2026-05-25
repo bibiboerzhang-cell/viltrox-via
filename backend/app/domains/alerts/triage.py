@@ -6,7 +6,7 @@ from typing import Any
 
 from app.db.connection import get_conn
 from app.domains.alerts.common import utcnow
-from app.services.vkpi import scope
+from app.domains.access import scope
 from app.services.vkpi._utils import json_dumps
 from app.services.vkpi.schema import ensure_vkpi_schema
 

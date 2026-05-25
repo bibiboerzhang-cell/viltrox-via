@@ -12,7 +12,7 @@ from typing import Any
 
 from app.db.connection import get_conn, is_postgres_runtime
 from app.domains import audit
-from app.services.vkpi import scope
+from app.domains.access import scope
 from app.services.vkpi.schema_notifications import ensure_vkpi_notification_settings_schema
 from app.services.vkpi.workflow import staff_id as resolve_staff_id
 

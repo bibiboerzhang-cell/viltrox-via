@@ -6,7 +6,7 @@ from typing import Any
 
 from app.db.connection import get_conn, is_postgres_runtime
 from app.domains import audit
-from app.services.vkpi import scope
+from app.domains.access import scope
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.domains.projects.workflow_common import _amount_cents, _int, _json, staff_id, utcnow
 

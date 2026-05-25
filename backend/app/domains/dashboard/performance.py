@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.domains.dashboard import decision_dashboard as decision_engine
-from app.services.vkpi import scope
+from app.domains.access import scope
 
 
 def build_revenue_trend(

@@ -14,7 +14,7 @@ import json
 from typing import Any
 
 from app.db.connection import get_conn
-from app.services.vkpi import scope
+from app.domains.access import scope
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.domains.lineage import ensure_vkpi_lineage_schema
 

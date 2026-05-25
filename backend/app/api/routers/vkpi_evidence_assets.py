@@ -12,7 +12,7 @@ from app.api.dependencies.perms import require_tab
 from app.core.config import UPLOAD_DIR
 from app.core.logging import get_logger
 from app.domains import evidence
-from app.services.vkpi import scope
+from app.domains.access import scope
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-evidence-assets"])
 EVIDENCE_UPLOAD_DIR = UPLOAD_DIR / "vkpi_evidence"
