@@ -10,8 +10,9 @@ import {
   listOutreachSuggestions,
   listProductLaunches,
   listProductRecommendations,
-} from '../../../services/vkpi/product-api';
-import { getKolPoolSummary } from '../../../services/vkpi/kolPool-api';
+  getKolPoolSummary,
+  type ProductDomainRow,
+} from '../../../domains/products';
 import { AnalyticsMonitorPanel } from './analytics/AnalyticsMonitorPanel';
 import { IndustryMatrixPanel } from './analytics/IndustryMatrixPanel';
 import { OutreachTables } from './analytics/OutreachTables';
@@ -22,7 +23,7 @@ interface AnalyticsPageProps {
   apiToken?: string;
 }
 
-type Row = Record<string, unknown>;
+type Row = ProductDomainRow;
 
 export function AnalyticsPage({ apiToken }: AnalyticsPageProps) {
   const [platform, setPlatform] = useState('youtube');
