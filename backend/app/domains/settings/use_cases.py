@@ -7,9 +7,11 @@ from app.domains import staff as staff_domain
 import importlib
 
 from app.domains.access import scope
-from app.services.vkpi import notification_settings, settings as vkpi_settings, user_preferences
 
+notification_settings = importlib.import_module("app.domains.settings.notifications")
 platform_crawl_settings = importlib.import_module("app.domains.settings.platform_crawl")
+user_preferences = importlib.import_module("app.domains.settings.preferences")
+vkpi_settings = importlib.import_module("app.domains.settings.provider")
 
 
 def is_manager_staff(staff: dict[str, Any]) -> bool:
