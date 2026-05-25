@@ -5,7 +5,7 @@ from typing import Any
 
 from app.db.connection import get_conn
 from app.services.vkpi import scope
-from app.services.vkpi.decision_common import (
+from app.shared.vkpi_decision_common import (
     _KPI_LABELS,
     _active_project_filter,
     _parse_json,
