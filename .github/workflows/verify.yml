@@ -12,8 +12,8 @@ jobs:
         image: postgres:16
         env:
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
           POSTGRES_DB: viltrox_ci
+          POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 5432:5432
         options: >-
@@ -26,8 +26,7 @@ jobs:
       PYTHONPATH: backend
       DB_RUNTIME_BACKEND: postgres
       DB_USE_PGBOUNCER: "0"
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/viltrox_ci
-      JWT_SECRET: ci-test-jwt-secret
+      DATABASE_URL: postgresql://postgres@localhost:5432/viltrox_ci
     steps:
       - uses: actions/checkout@v4
       - name: Secret scan (gitleaks)
