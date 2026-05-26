@@ -25,6 +25,206 @@ def _ensure_schemas():
     yield
 
 
+def _cleanup_memory_fixture(conn, marker: str = MARKER) -> None:
+    entity_rows = conn.execute(
+        """
+        SELECT id
+        FROM vkpi_memory_entities
+        WHERE source_id LIKE ?
+           OR identity_key LIKE ?
+           OR metadata_json LIKE ?
+        """,
+        (f"{marker}%", f"{marker.lower()}%", f"%{marker}%"),
+    ).fetchall()
+    entity_ids = [int(row["id"]) for row in entity_rows]
+    if entity_ids:
+        placeholders = ",".join("?" for _ in entity_ids)
+        conn.execute(
+            f"DELETE FROM vkpi_memory_feedback WHERE entity_id IN ({placeholders})",
+            tuple(entity_ids),
+        )
+        conn.execute(
+            f"""
+            DELETE FROM vkpi_memory_links
+            WHERE source_entity_id IN ({placeholders})
+               OR target_entity_id IN ({placeholders})
+            """,
+            (*entity_ids, *entity_ids),
+        )
+        conn.execute(
+            f"DELETE FROM vkpi_memory_facts WHERE entity_id IN ({placeholders})",
+            tuple(entity_ids),
+        )
+        conn.execute(
+            f"DELETE FROM vkpi_memory_entities WHERE id IN ({placeholders})",
+            tuple(entity_ids),
+        )
+    conn.execute("DELETE FROM vkpi_memory_links WHERE source_ref LIKE ?", (f"{marker}%",))
+    conn.execute("DELETE FROM vkpi_memory_facts WHERE source_ref LIKE ?", (f"{marker}%",))
+    conn.execute("DELETE FROM vkpi_memory_snapshots WHERE source_ref LIKE ?", (f"{marker}%",))
+    conn.execute("DELETE FROM vkpi_kol_pool WHERE source_ref LIKE ? OR handle LIKE ?", (f"{marker}%", f"{marker.lower()}%"))
+    conn.commit()
+
+
+@pytest.fixture(scope="module")
+def seeded_memory_readiness():
+    conn = get_conn()
+    memory.ensure_memory_schema()
+    _cleanup_memory_fixture(conn)
+
+    family = memory._upsert_entity(
+        entity_type="product_family",
+        identity_key=f"{MARKER.lower()}-af-35mm",
+        display_name="AF 35mm",
+        source_table="tests",
+        source_id=f"{MARKER}:family",
+        identity={"product_query": "AF 35mm"},
+        metadata={"marker": MARKER},
+    )
+    product = memory._upsert_entity(
+        entity_type="product",
+        identity_key=f"{MARKER.lower()}-af-35mm-product",
+        display_name="AF 35mm F1.4 Test Product",
+        source_table="tests",
+        source_id=f"{MARKER}:product",
+        identity={"product_family": "AF 35mm"},
+        metadata={"marker": MARKER},
+    )
+    memory._upsert_link(
+        source_entity_id=int(product["id"]),
+        source_entity_uid=str(product["entity_uid"]),
+        target_entity_id=int(family["id"]),
+        target_entity_uid=str(family["entity_uid"]),
+        link_type="normalized_to_product_family",
+        source_ref=f"{MARKER}:product_family",
+        metadata={"marker": MARKER},
+    )
+    memory._upsert_fact(
+        entity_id=int(family["id"]),
+        entity_uid=str(family["entity_uid"]),
+        fact_type="market_signal",
+        fact_key="launch_plan:af-35mm",
+        value="AF 35mm launch plan",
+        source_ref=f"{MARKER}:launch_plan",
+        source_table="tests",
+        source_id=f"{MARKER}:launch_plan",
+        fact={"signal_type": "launch_plan", "product_name": "AF 35mm", "signal_date": _utc()},
+        metadata={"marker": MARKER},
+    )
+
+    source_ref = f"{MARKER}:kol-primary"
+    conn.execute(
+        """
+        INSERT INTO vkpi_kol_pool (
+          pool_uid, platform, handle, profile_url, display_name, country, email,
+          followers, avg_views, engagement_rate, source_type, source_ref,
+          raw_platform_data, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(platform, handle) DO UPDATE SET
+          source_ref=excluded.source_ref,
+          raw_platform_data=excluded.raw_platform_data,
+          updated_at=excluded.updated_at
+        """,
+        (
+            f"{MARKER}-pool-primary",
+            "youtube",
+            f"{MARKER.lower()}-primary",
+            "https://example.com/vkpi-hardening-primary",
+            "Hardening Memory Primary",
+            "United States",
+            "hardening@example.com",
+            10000,
+            2500,
+            0.08,
+            "legacy_excel_p2d",
+            source_ref,
+            json.dumps({"contact_has_email": True}),
+            _utc(),
+            _utc(),
+        ),
+    )
+    primary_kol = memory._upsert_entity(
+        entity_type="kol",
+        identity_key=f"{MARKER.lower()}-kol-primary",
+        display_name="Hardening Memory Primary",
+        source_table="tests",
+        source_id=source_ref,
+        identity={
+            "platform": "youtube",
+            "handle": f"{MARKER.lower()}-primary",
+            "country": "United States",
+            "source_ref": source_ref,
+        },
+        metadata={"marker": MARKER},
+    )
+    memory._upsert_link(
+        source_entity_id=int(primary_kol["id"]),
+        source_entity_uid=str(primary_kol["entity_uid"]),
+        target_entity_id=int(product["id"]),
+        target_entity_uid=str(product["entity_uid"]),
+        link_type="worked_on_product",
+        source_ref=f"{MARKER}:worked_on_product",
+        metadata={"marker": MARKER},
+    )
+    for fact_type, value, payload in [
+        ("country", "United States", {"country": "United States"}),
+        ("contact_status", "available_restricted", {"status": "available_restricted"}),
+        ("sync_status", "imported", {"status": "imported"}),
+        ("evidence_count", "8", {"count": 8}),
+    ]:
+        memory._upsert_fact(
+            entity_id=int(primary_kol["id"]),
+            entity_uid=str(primary_kol["entity_uid"]),
+            fact_type=fact_type,
+            fact_key=fact_type,
+            value=value,
+            source_ref=f"{MARKER}:kol-primary:{fact_type}",
+            source_table="tests",
+            source_id=f"{MARKER}:kol-primary:{fact_type}",
+            fact=payload,
+            metadata={"marker": MARKER},
+        )
+
+    now = _utc()
+    for idx in range(999):
+        key = f"{MARKER.lower()}-kol-{idx:04d}"
+        uid = memory._entity_uid("kol", key)
+        conn.execute(
+            """
+            INSERT INTO vkpi_memory_entities (
+              entity_uid, entity_type, identity_key, display_name, source_table,
+              source_id, status, confidence_score, identity_json, metadata_json,
+              first_seen_at, last_seen_at, created_at, updated_at
+            ) VALUES (?, 'kol', ?, ?, 'tests', ?, 'active', 1.0, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(entity_type, identity_key) DO UPDATE SET
+              display_name=excluded.display_name,
+              source_table=excluded.source_table,
+              source_id=excluded.source_id,
+              status=excluded.status,
+              identity_json=excluded.identity_json,
+              metadata_json=excluded.metadata_json,
+              updated_at=excluded.updated_at
+            """,
+            (
+                uid,
+                key,
+                f"Hardening Memory KOL {idx:04d}",
+                f"{MARKER}:kol:{idx:04d}",
+                json.dumps({"platform": "youtube", "handle": key}),
+                json.dumps({"marker": MARKER}),
+                now,
+                now,
+                now,
+                now,
+            ),
+        )
+    conn.commit()
+    try:
+        yield
+    finally:
+        _cleanup_memory_fixture(conn)
+
+
 def _utc(hours_ago: int = 0) -> str:
     return (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -123,7 +323,7 @@ def _ai_cost_ledger_count() -> int:
     return int(row["n"] if row else 0)
 
 
-def test_memory_readiness_keeps_p4_gate_closed_to_provider_calls():
+def test_memory_readiness_keeps_p4_gate_closed_to_provider_calls(seeded_memory_readiness):
     result = memory.readiness()
 
     assert result["status"] == "ready_for_p4_dry_run"
@@ -133,7 +333,7 @@ def test_memory_readiness_keeps_p4_gate_closed_to_provider_calls():
         assert gates[key]["status"] == "pass"
 
 
-def test_p4_new_launch_match_dry_run_is_explainable_and_zero_ai_cost():
+def test_p4_new_launch_match_dry_run_is_explainable_and_zero_ai_cost(seeded_memory_readiness):
     before = _ai_cost_ledger_count()
 
     payload = new_launch_match.build_new_launch_match_preview(product_query="AF 35mm", limit=5)
@@ -149,7 +349,7 @@ def test_p4_new_launch_match_dry_run_is_explainable_and_zero_ai_cost():
     assert _ai_cost_ledger_count() == before
 
 
-def test_p4_preview_persistence_writes_run_recommendations_and_explanations():
+def test_p4_preview_persistence_writes_run_recommendations_and_explanations(seeded_memory_readiness):
     conn = get_conn()
     payload = None
     try:
