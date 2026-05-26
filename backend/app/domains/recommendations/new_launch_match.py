@@ -545,12 +545,13 @@ def build_new_launch_match_preview(
         platform = _text((pool or {}).get("platform") or identity.get("platform"))
         handle = _text((pool or {}).get("handle") or identity.get("handle"))
         display_name = _text((pool or {}).get("display_name") or kol.get("display_name") or handle)
+        kol_pool_id = _safe_int((pool or {}).get("id")) or None
         item = {
             "rank": 0,
             "percentile_rank": 0,
             "kol_entity_uid": kol["entity_uid"],
             "legacy_entity_uid": legacy_uid,
-            "kol_pool_id": _safe_int((pool or {}).get("id")),
+            "kol_pool_id": kol_pool_id,
             "platform": platform,
             "handle": handle,
             "display_name": display_name,
