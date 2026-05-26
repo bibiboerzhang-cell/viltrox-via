@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from app.core.logging import get_logger
 from app.domains.intelligence.evidence_agent import (
     EVIDENCE_AGENT_VERSION,
     as_dict,
@@ -28,6 +29,7 @@ import app.domains.evidence.summary as evidence_summary
 
 DEFAULT_OPS_DIR = "runtime/ops"
 P6_77_PATTERN = "*p6-77-weekly-action-plan-v0.json"
+logger = get_logger(__name__)
 
 
 def _latest_artifact(ops_dir: str, pattern: str) -> Path | None:
@@ -47,6 +49,7 @@ def _load_json(path: Path | None) -> dict[str, Any]:
         payload = json.loads(path.read_text(encoding="utf-8"))
         return payload if isinstance(payload, dict) else {}
     except Exception:
+        logger.debug("Failed to load evidence agent artifact JSON from %s", path, exc_info=True)
         return {}
 
 

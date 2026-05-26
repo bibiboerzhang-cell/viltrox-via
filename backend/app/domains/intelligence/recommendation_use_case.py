@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains.intelligence.recommendation_agent import (
     COMPETITOR_SCORE,
@@ -31,6 +32,7 @@ from app.domains.intelligence import evidence_agent_use_case as evidence_agent_v
 
 DEFAULT_OPS_DIR = "runtime/ops"
 P7_81_PATTERN = "*p7-81-evidence-agent-v0.json"
+logger = get_logger(__name__)
 
 
 def _latest_artifact(ops_dir: str, pattern: str) -> Path | None:
@@ -50,6 +52,7 @@ def _load_json(path: Path | None) -> dict[str, Any]:
         payload = json.loads(path.read_text(encoding="utf-8"))
         return payload if isinstance(payload, dict) else {}
     except Exception:
+        logger.debug("Failed to load recommendation agent artifact JSON from %s", path, exc_info=True)
         return {}
 
 
@@ -60,7 +63,7 @@ def _table_exists(table_name: str) -> bool:
         if row:
             return True
     except Exception:
-        pass
+        logger.debug("SQLite table lookup failed for %s; trying information_schema fallback", table_name, exc_info=True)
     try:
         row = conn.execute(
             "SELECT 1 FROM information_schema.tables WHERE table_name=? LIMIT 1",

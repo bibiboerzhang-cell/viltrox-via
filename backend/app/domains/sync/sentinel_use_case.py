@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains.sync.sentinel import (
     SENTINEL_VERSION,
@@ -29,6 +30,7 @@ from app.domains.sync import sync_status
 
 DEFAULT_OPS_DIR = "runtime/ops"
 P6_79_PATTERN = "*p6-79-brain-layer-acceptance-v0.json"
+logger = get_logger(__name__)
 
 
 def _table_exists(table_name: str) -> bool:
@@ -38,7 +40,7 @@ def _table_exists(table_name: str) -> bool:
         if row:
             return True
     except Exception:
-        pass
+        logger.debug("SQLite table lookup failed for %s; trying information_schema fallback", table_name, exc_info=True)
     try:
         row = conn.execute(
             "SELECT 1 FROM information_schema.tables WHERE table_name=? LIMIT 1",
@@ -66,6 +68,7 @@ def _load_json(path: Path | None) -> dict[str, Any]:
         payload = json.loads(path.read_text(encoding="utf-8"))
         return payload if isinstance(payload, dict) else {}
     except Exception:
+        logger.debug("Failed to load sync sentinel artifact JSON from %s", path, exc_info=True)
         return {}
 
 

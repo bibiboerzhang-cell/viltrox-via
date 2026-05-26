@@ -12,11 +12,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.core.logging import get_logger
+
 
 FEEDBACK_VERSION = "prediction-accuracy-feedback-v0.1"
 DEFAULT_OPS_DIR = "runtime/ops"
 DEFAULT_MIN_OFFICIAL_RUNS = 3
 CALIBRATION_PATTERN = "*p6-75-prediction-calibration-v0.json"
+logger = get_logger(__name__)
 
 
 def _now() -> str:
@@ -31,14 +34,14 @@ def _float(value: Any, default: float = 0.0) -> float:
     try:
         parsed = float(value if value is not None else default)
         return parsed if parsed == parsed else default
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 
 def _int(value: Any, default: int = 0) -> int:
     try:
         return int(value if value is not None else default)
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 
@@ -47,6 +50,7 @@ def _load_json(path: Path) -> dict[str, Any]:
         payload = json.loads(path.read_text(encoding="utf-8"))
         return payload if isinstance(payload, dict) else {}
     except Exception:
+        logger.debug("Failed to load prediction accuracy artifact JSON from %s", path, exc_info=True)
         return {}
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains.trends.trend_detection import (
     DEFAULT_LOOKBACK_DAYS,
@@ -15,6 +16,8 @@ from app.domains.trends.trend_detection import (
 )
 
 
+logger = get_logger(__name__)
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -23,6 +26,7 @@ def _safe_query(sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
     try:
         return [dict(row) for row in get_conn().execute(sql, params).fetchall()]
     except Exception:
+        logger.debug("Trend detection query failed", exc_info=True)
         return []
 
 
@@ -35,7 +39,7 @@ def _table_exists(table_name: str) -> bool:
         if row:
             return True
     except Exception:
-        pass
+        logger.debug("Postgres table lookup failed for %s; trying sqlite fallback", table_name, exc_info=True)
     try:
         row = get_conn().execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1", (table_name,)).fetchone()
         return bool(row)

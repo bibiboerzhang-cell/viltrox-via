@@ -523,7 +523,8 @@ def record_daily_sync_summary(run_id: str, result: dict[str, Any]) -> dict[str, 
 
 
 def _emit_interrupt_stderr(event: dict[str, Any]) -> None:
-    print(_json({"event": "vkpi_sync_interrupt_record_failed", "at": _utcnow(), **event}), file=sys.stderr, flush=True)
+    sys.stderr.write(_json({"event": "vkpi_sync_interrupt_record_failed", "at": _utcnow(), **event}) + "\n")
+    sys.stderr.flush()
 
 
 def record_sync_interrupt(

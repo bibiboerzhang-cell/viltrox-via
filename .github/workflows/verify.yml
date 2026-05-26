@@ -7,6 +7,27 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: viltrox_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d viltrox_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      ENVIRONMENT: test
+      PYTHONPATH: backend
+      DB_RUNTIME_BACKEND: postgres
+      DB_USE_PGBOUNCER: "0"
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/viltrox_ci
+      JWT_SECRET: ci-test-jwt-secret
     steps:
       - uses: actions/checkout@v4
       - name: Secret scan (gitleaks)
@@ -27,5 +48,18 @@ jobs:
           pip install -r requirements.txt
       - name: Install frontend dependencies
         run: npm --prefix frontend ci
+      - name: Initialize database
+        run: |
+          python - <<'PY'
+          import asyncio
+
+          from app.db.connection import close_db_runtime, init_db_runtime
+
+          async def main() -> None:
+              await init_db_runtime()
+              await close_db_runtime()
+
+          asyncio.run(main())
+          PY
       - name: Verify repository
         run: bash ./scripts/verify_repo.sh

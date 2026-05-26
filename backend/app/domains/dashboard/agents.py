@@ -6,8 +6,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 
+
+logger = get_logger(__name__)
 
 DASHBOARD_AGENT_SPECS = [
     {"id": "recommendation", "name": "推荐 Agent", "pattern": "*p7-82-recommendation-agent-v0.json"},
@@ -35,6 +38,7 @@ def _load_dashboard_agent_json(path: Path | None) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
+        logger.debug("Failed to load dashboard agent JSON from %s", path, exc_info=True)
         return {}
     return payload if isinstance(payload, dict) else {}
 

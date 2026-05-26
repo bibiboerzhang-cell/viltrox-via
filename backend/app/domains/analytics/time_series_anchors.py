@@ -8,10 +8,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 
 
 ANCHOR_VERSION = "time-series-anchor-v0.1"
+logger = get_logger(__name__)
 
 ANCHOR_REGISTRY: list[dict[str, Any]] = [
     {
@@ -115,7 +117,7 @@ def _table_exists(table_name: str) -> bool:
         if row:
             return True
     except Exception:
-        pass
+        logger.debug("Postgres table lookup failed for %s; trying sqlite fallback", table_name, exc_info=True)
     try:
         row = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1", (table_name,)).fetchone()
         return bool(row)
@@ -136,7 +138,7 @@ def _columns(table_name: str) -> set[str]:
         if values:
             return values
     except Exception:
-        pass
+        logger.debug("Postgres column lookup failed for %s; trying sqlite fallback", table_name, exc_info=True)
     try:
         rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
         return {str(row["name"]) for row in rows if row and row["name"]}

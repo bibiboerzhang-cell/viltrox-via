@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from app.core.logging import get_logger
 from app.domains.intelligence.brief_agent import (
     BRIEF_AGENT_VERSION,
     as_dict,
@@ -22,6 +23,7 @@ from app.domains.intelligence import recommendation_use_case as recommendation_a
 
 DEFAULT_OPS_DIR = "runtime/ops"
 P7_82_PATTERN = "*p7-82-recommendation-agent-v0.json"
+logger = get_logger(__name__)
 
 
 def _latest_artifact(ops_dir: str, pattern: str) -> Path | None:
@@ -41,6 +43,7 @@ def _load_json(path: Path | None) -> dict[str, Any]:
         payload = json.loads(path.read_text(encoding="utf-8"))
         return payload if isinstance(payload, dict) else {}
     except Exception:
+        logger.debug("Failed to load brief agent artifact JSON from %s", path, exc_info=True)
         return {}
 
 

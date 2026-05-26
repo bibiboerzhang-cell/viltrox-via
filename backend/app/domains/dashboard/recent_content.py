@@ -5,9 +5,12 @@ from datetime import datetime
 from email.utils import parsedate_to_datetime
 from typing import Any
 
+from app.core.logging import get_logger
 from app.domains.market import brand_signal_detector
 from app.domains import channels
 
+
+logger = get_logger(__name__)
 
 def _recent_content_sort_key(row: dict[str, Any]) -> float:
     raw = str(
@@ -42,6 +45,7 @@ def _dashboard_official_matrix_summary(limit: int = 20) -> dict[str, Any]:
     try:
         matrix = channels.official_account_matrix(limit=limit)
     except Exception:
+        logger.debug("Failed to read official matrix summary", exc_info=True)
         return {}
     platforms = matrix.get("platforms") if isinstance(matrix.get("platforms"), list) else []
     return {

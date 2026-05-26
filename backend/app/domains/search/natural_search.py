@@ -6,9 +6,12 @@ import re
 from pathlib import Path
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains.kol.history_match import _avatar_from_raw, _recent_post_summary
 
+
+logger = get_logger(__name__)
 
 SOURCE_WEIGHTS = {
     "kol_pool": 8,
@@ -67,6 +70,7 @@ def _json_obj(value: Any) -> dict[str, Any]:
         parsed = json.loads(str(value or ""))
         return parsed if isinstance(parsed, dict) else {}
     except Exception:
+        logger.debug("Failed to decode natural-search JSON payload", exc_info=True)
         return {}
 
 

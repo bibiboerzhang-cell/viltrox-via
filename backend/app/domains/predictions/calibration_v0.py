@@ -11,11 +11,13 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.core.logging import get_logger
 from app.domains.trends import trend_detection_use_case as trend_detection_v0
 
 
 CALIBRATION_VERSION = "prediction-calibration-v0.1"
 DEFAULT_OPS_DIR = "runtime/ops"
+logger = get_logger(__name__)
 
 
 def _now() -> str:
@@ -30,7 +32,7 @@ def _float(value: Any, default: float = 0.0) -> float:
     try:
         parsed = float(value if value is not None else default)
         return parsed if parsed == parsed else default
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 
@@ -45,10 +47,10 @@ def _parse_datetime(value: Any) -> datetime | None:
             return None
         try:
             dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        except Exception:
+        except ValueError:
             try:
                 dt = datetime.strptime(raw[:10], "%Y-%m-%d")
-            except Exception:
+            except ValueError:
                 return None
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
@@ -65,6 +67,7 @@ def _load_json(path_value: str) -> dict[str, Any]:
         payload = json.loads(path.read_text(encoding="utf-8"))
         return payload if isinstance(payload, dict) else {}
     except Exception:
+        logger.debug("Failed to load prediction calibration JSON from %s", path, exc_info=True)
         return {}
 
 

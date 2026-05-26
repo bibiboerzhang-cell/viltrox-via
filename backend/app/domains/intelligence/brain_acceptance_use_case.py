@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from app.core.logging import get_logger
 from app.domains.intelligence.brain_acceptance import (
     ACCEPTANCE_VERSION,
     REQUIRED_REPORTS,
@@ -19,6 +20,7 @@ from app.domains.intelligence.brain_acceptance import (
 
 
 DEFAULT_OPS_DIR = "runtime/ops"
+logger = get_logger(__name__)
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -26,6 +28,7 @@ def _load_json(path: Path) -> dict[str, Any]:
         payload = json.loads(path.read_text(encoding="utf-8"))
         return payload if isinstance(payload, dict) else {}
     except Exception:
+        logger.debug("Failed to load brain acceptance artifact JSON from %s", path, exc_info=True)
         return {}
 
 

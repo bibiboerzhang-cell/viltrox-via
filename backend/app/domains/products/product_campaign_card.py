@@ -8,9 +8,12 @@ from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains.products import product_aliases
 
+
+logger = get_logger(__name__)
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
@@ -24,14 +27,14 @@ def _float(value: Any, default: float = 0.0) -> float:
     try:
         parsed = float(value if value is not None else default)
         return parsed if parsed == parsed else default
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 
 def _int(value: Any, default: int = 0) -> int:
     try:
         return int(float(value if value is not None else default))
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 
@@ -41,6 +44,7 @@ def _loads(value: Any, fallback: Any) -> Any:
     try:
         return json.loads(str(value or ""))
     except Exception:
+        logger.debug("Failed to decode product campaign JSON payload", exc_info=True)
         return fallback
 
 
@@ -54,7 +58,7 @@ def _table_exists(table_name: str) -> bool:
         if row:
             return True
     except Exception:
-        pass
+        logger.debug("Postgres table lookup failed for %s; trying sqlite fallback", table_name, exc_info=True)
     try:
         row = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1", (table_name,)).fetchone()
         return bool(row)

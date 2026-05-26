@@ -3,7 +3,7 @@ services/student_identity.py — compatibility exports for QR-first student iden
 """
 from __future__ import annotations
 
-from app.db.repositories.student_identity import get_school
+from app.db.repositories.student_identity import create_or_update_school, get_school
 from app.services.student_identity_common import (
     STUDENT_COMMISSION_RATE,
     STUDENT_PASS_TTL_SEC,

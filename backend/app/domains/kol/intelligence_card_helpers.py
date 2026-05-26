@@ -7,11 +7,14 @@ from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
 
+from app.core.logging import get_logger
 from app.domains.kol import competitor_detector as kol_competitor_detector
 from app.domains.kol import eleven_dimensions
 from app.domains.market import brand_signal_detector
 from app.db.connection import get_conn
 from app.domains.comments import intelligence as comment_intelligence
+
+logger = get_logger(__name__)
 
 VIDEO_ANALYSIS_FIELD_KEYS = (
     "target_audience",
@@ -60,6 +63,7 @@ def _loads(value: Any, fallback: Any) -> Any:
     try:
         parsed = json.loads(str(value or ""))
     except Exception:
+        logger.debug("Failed to decode intelligence-card JSON payload", exc_info=True)
         return fallback
     return parsed if parsed is not None else fallback
 
@@ -93,7 +97,7 @@ def _table_exists(table_name: str) -> bool:
         if row:
             return True
     except Exception:
-        pass
+        logger.debug("Postgres table lookup failed for %s; trying sqlite fallback", table_name, exc_info=True)
     try:
         row = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,)).fetchone()
         return bool(row)

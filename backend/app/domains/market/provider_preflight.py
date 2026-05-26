@@ -11,11 +11,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.core.logging import get_logger
 from app.platform import llm_gateway
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 ENV_PATH = Path(os.environ.get("VILTROX_ENV_PATH", PROJECT_ROOT / ".env"))
+logger = get_logger(__name__)
 DEFAULT_PROMPT = (
     "用中文给 Viltrox 市场团队做一条只基于证据的趋势测试摘要。"
     "不要编造事实；如果没有证据，请输出需要补充的数据源。"
@@ -166,6 +168,7 @@ def _env_file_values() -> dict[str, str]:
     try:
         lines = ENV_PATH.read_text(encoding="utf-8", errors="ignore").splitlines()
     except Exception:
+        logger.debug("Failed to read provider preflight env file %s", ENV_PATH, exc_info=True)
         return {}
     values: dict[str, str] = {}
     for line in lines:

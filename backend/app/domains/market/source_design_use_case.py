@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains.market.source_design import (
     CANONICAL_CONTRACT,
@@ -12,6 +13,8 @@ from app.domains.market.source_design import (
     source_readiness,
 )
 
+
+logger = get_logger(__name__)
 
 def _table_exists(table_name: str) -> bool:
     conn = get_conn()
@@ -23,7 +26,7 @@ def _table_exists(table_name: str) -> bool:
         if row:
             return True
     except Exception:
-        pass
+        logger.debug("Postgres table lookup failed for %s; trying sqlite fallback", table_name, exc_info=True)
     try:
         row = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1", (table_name,)).fetchone()
         return bool(row)

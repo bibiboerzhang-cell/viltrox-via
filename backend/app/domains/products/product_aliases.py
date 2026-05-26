@@ -7,8 +7,11 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime
 
+
+logger = get_logger(__name__)
 
 GENERIC_ALIAS_TOKENS = {
     "af",
@@ -250,7 +253,7 @@ def _table_exists(table_name: str) -> bool:
         if row:
             return True
     except Exception:
-        pass
+        logger.debug("Postgres table lookup failed for %s; trying sqlite fallback", table_name, exc_info=True)
     try:
         row = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1", (table_name,)).fetchone()
         return bool(row)
