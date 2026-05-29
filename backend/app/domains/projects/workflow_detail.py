@@ -17,19 +17,153 @@ def project_detail(project_id: int, *, staff: dict[str, Any] | None = None) -> d
     row = conn.execute(
         """
         SELECT p.*,
-               k.channel_name AS kol_name,
-               k.platform AS kol_platform,
+               CASE
+                   WHEN COALESCE(pa.kol_count, 0) > 1 THEN CAST(pa.kol_count AS TEXT) || ' KOL'
+                   ELSE COALESCE(pk.display_name, '')
+               END AS kol_name,
+               CASE
+                   WHEN COALESCE(pa.kol_count, 0) > 1 THEN 'multi'
+                   ELSE COALESCE(pk.platform, '')
+               END AS kol_platform,
+               pk.handle AS handle,
+               pk.avatar_url AS kol_avatar,
+               pa.primary_kol_pool_id AS kol_pool_id,
+               COALESCE(pa.kol_count, 0) AS kol_count,
+               COALESCE(pa.kol_with_evidence, 0) AS kol_with_evidence,
+               COALESCE(ev.evidence_count, 0) AS evidence_count,
+               COALESCE(ev.evidence_kol_count, 0) AS evidence_kol_count,
+               COALESCE(ev.total_views, 0) AS total_views,
                s.name AS staff_name
         FROM vkpi_projects p
-        LEFT JOIN kols k ON k.id = p.kol_id
+        LEFT JOIN (
+            SELECT
+                a.project_id,
+                COUNT(DISTINCT a.kol_pool_id) AS kol_count,
+                COUNT(DISTINCT CASE WHEN kp.has_video_evidence THEN a.kol_pool_id END) AS kol_with_evidence,
+                MIN(a.kol_pool_id) AS primary_kol_pool_id
+            FROM vkpi_project_kol_assignments a
+            LEFT JOIN vkpi_kol_pool kp ON kp.id = a.kol_pool_id
+            WHERE a.project_id=?
+            GROUP BY a.project_id
+        ) pa ON pa.project_id = p.id
+        LEFT JOIN vkpi_kol_pool pk ON pk.id = pa.primary_kol_pool_id
+        LEFT JOIN (
+            SELECT
+                project_id,
+                COUNT(*) AS evidence_count,
+                COUNT(DISTINCT kol_pool_id) AS evidence_kol_count,
+                COALESCE(SUM(COALESCE(view_count, 0)), 0) AS total_views
+            FROM vkpi_kol_video_evidence
+            WHERE project_id=?
+            GROUP BY project_id
+        ) ev ON ev.project_id = p.id
         LEFT JOIN staff st ON st.id = p.assigned_staff_id
         LEFT JOIN users s ON s.id = st.user_id
         WHERE p.id=?
         """,
-        (int(project_id),),
+        (int(project_id), int(project_id), int(project_id)),
     ).fetchone()
     if not row:
         raise LookupError("project not found")
+    participating_kols = [
+        dict(item)
+        for item in conn.execute(
+            """
+            SELECT
+                a.id AS assignment_id,
+                a.project_id,
+                a.kol_pool_id,
+                a.stage,
+                a.stage_status,
+                a.assigned_staff_id,
+                a.tracking_number,
+                a.is_placeholder_tracking,
+                a.source,
+                a.source_ref,
+                a.excel_progress,
+                a.metadata_json,
+                a.created_at,
+                a.updated_at,
+                kp.handle,
+                kp.display_name AS kol_name,
+                kp.display_name,
+                kp.platform AS kol_platform,
+                kp.platform,
+                kp.profile_url,
+                kp.avatar_url,
+                kp.country,
+                kp.followers,
+                kp.dashboard_account_type,
+                kp.dashboard_tier,
+                kp.has_video_evidence,
+                kp.video_evidence_count,
+                COALESCE(ev.evidence_count, 0) AS evidence_count,
+                COALESCE(ev.total_views, 0) AS total_views,
+                COALESCE(ev.total_likes, 0) AS total_likes,
+                COALESCE(ev.total_comments, 0) AS total_comments,
+                ev.latest_publish_date
+            FROM vkpi_project_kol_assignments a
+            LEFT JOIN vkpi_kol_pool kp ON kp.id = a.kol_pool_id
+            LEFT JOIN (
+                SELECT
+                    project_id,
+                    kol_pool_id,
+                    COUNT(*) AS evidence_count,
+                    COALESCE(SUM(COALESCE(view_count, 0)), 0) AS total_views,
+                    COALESCE(SUM(COALESCE(like_count, 0)), 0) AS total_likes,
+                    COALESCE(SUM(COALESCE(comment_count, 0)), 0) AS total_comments,
+                    MAX(publish_date) AS latest_publish_date
+                FROM vkpi_kol_video_evidence
+                WHERE project_id=?
+                GROUP BY project_id, kol_pool_id
+            ) ev ON ev.project_id = a.project_id AND ev.kol_pool_id = a.kol_pool_id
+            WHERE a.project_id=?
+            ORDER BY
+                CASE a.stage
+                    WHEN 'reviewed' THEN 1
+                    WHEN 'content_posted' THEN 2
+                    WHEN 'device_sent' THEN 3
+                    WHEN 'agreed' THEN 4
+                    WHEN 'replied' THEN 5
+                    WHEN 'contacted' THEN 6
+                    WHEN 'discovered' THEN 7
+                    WHEN 'churned' THEN 8
+                    ELSE 9
+                END,
+                kp.display_name ASC,
+                a.id ASC
+            """,
+            (int(project_id), int(project_id)),
+        ).fetchall()
+    ]
+    for item in participating_kols:
+        for key in (
+            "assignment_id",
+            "project_id",
+            "kol_pool_id",
+            "assigned_staff_id",
+            "followers",
+            "video_evidence_count",
+            "evidence_count",
+            "total_views",
+            "total_likes",
+            "total_comments",
+        ):
+            item[key] = int(item.get(key) or 0)
+        item["has_video_evidence"] = bool(item.get("has_video_evidence"))
+    project = dict(row)
+    if participating_kols:
+        project["kol_count"] = len({int(item.get("kol_pool_id") or 0) for item in participating_kols if int(item.get("kol_pool_id") or 0)})
+        project["kol_with_evidence"] = sum(1 for item in participating_kols if bool(item.get("has_video_evidence")))
+        project["evidence_count"] = sum(int(item.get("evidence_count") or 0) for item in participating_kols)
+        project["total_views"] = sum(int(item.get("total_views") or 0) for item in participating_kols)
+        if project["kol_count"] > 1:
+            project["kol_name"] = f"{project['kol_count']} KOL"
+            project["kol_platform"] = "multi"
+        else:
+            only = participating_kols[0]
+            project["kol_name"] = only.get("kol_name") or project.get("kol_name") or ""
+            project["kol_platform"] = only.get("kol_platform") or project.get("kol_platform") or ""
     events = [
         dict(item)
         for item in conn.execute(
@@ -275,7 +409,9 @@ def project_detail(project_id: int, *, staff: dict[str, Any] | None = None) -> d
             ).fetchall()
         ]
     return {
-        "project": dict(row),
+        "project": project,
+        "participating_kols": participating_kols,
+        "project_kol_assignments": participating_kols,
         "events": events,
         "links": links,
         "link_clicks": link_clicks,

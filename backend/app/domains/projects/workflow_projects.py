@@ -62,8 +62,22 @@ def list_projects(limit: int = 50, stage: str = "", *, staff: dict[str, Any] | N
     rows = conn.execute(
         f"""
         SELECT p.*,
-               k.channel_name AS kol_name,
-               k.platform AS kol_platform,
+               CASE
+                   WHEN COALESCE(pa.kol_count, 0) > 1 THEN CAST(pa.kol_count AS TEXT) || ' KOL'
+                   ELSE COALESCE(pk.display_name, '')
+               END AS kol_name,
+               CASE
+                   WHEN COALESCE(pa.kol_count, 0) > 1 THEN 'multi'
+                   ELSE COALESCE(pk.platform, '')
+               END AS kol_platform,
+               pk.handle AS handle,
+               pk.avatar_url AS kol_avatar,
+               pa.primary_kol_pool_id AS kol_pool_id,
+               COALESCE(pa.kol_count, 0) AS kol_count,
+               COALESCE(pa.kol_with_evidence, 0) AS kol_with_evidence,
+               COALESCE(ev.evidence_count, 0) AS evidence_count,
+               COALESCE(ev.evidence_kol_count, 0) AS evidence_kol_count,
+               COALESCE(ev.total_views, 0) AS total_views,
                s.name AS staff_name,
                (
                    SELECT MIN(e.effective_at)
@@ -81,7 +95,27 @@ def list_projects(limit: int = 50, stage: str = "", *, staff: dict[str, Any] | N
                    WHERE e.project_id = p.id
                ) AS stage_event_count
         FROM vkpi_projects p
-        LEFT JOIN kols k ON k.id = p.kol_id
+        LEFT JOIN (
+            SELECT
+                a.project_id,
+                COUNT(DISTINCT a.kol_pool_id) AS kol_count,
+                COUNT(DISTINCT CASE WHEN kp.has_video_evidence THEN a.kol_pool_id END) AS kol_with_evidence,
+                MIN(a.kol_pool_id) AS primary_kol_pool_id
+            FROM vkpi_project_kol_assignments a
+            LEFT JOIN vkpi_kol_pool kp ON kp.id = a.kol_pool_id
+            GROUP BY a.project_id
+        ) pa ON pa.project_id = p.id
+        LEFT JOIN vkpi_kol_pool pk ON pk.id = pa.primary_kol_pool_id
+        LEFT JOIN (
+            SELECT
+                project_id,
+                COUNT(*) AS evidence_count,
+                COUNT(DISTINCT kol_pool_id) AS evidence_kol_count,
+                COALESCE(SUM(COALESCE(view_count, 0)), 0) AS total_views
+            FROM vkpi_kol_video_evidence
+            WHERE project_id IS NOT NULL
+            GROUP BY project_id
+        ) ev ON ev.project_id = p.id
         LEFT JOIN staff st ON st.id = p.assigned_staff_id
         LEFT JOIN users s ON s.id = st.user_id
         {where}
