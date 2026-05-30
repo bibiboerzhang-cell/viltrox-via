@@ -8,7 +8,10 @@ from app.domains.dashboard.agents import (
     _build_dashboard_tasks,
     build_dashboard_agents_status,
 )
-from app.domains.dashboard.kol_distribution import build_dashboard_kol_distribution
+from app.domains.dashboard.kol_distribution import (
+    build_dashboard_kol_distribution,
+    build_dashboard_kol_distribution_pack,
+)
 from app.domains.dashboard.performance import build_product_performance, build_revenue_trend
 from app.domains.dashboard.recent_content import (
     _dashboard_int,
@@ -34,6 +37,7 @@ __all__ = [
     "_recent_content_sort_key",
     "build_dashboard_agents_status",
     "build_dashboard_kol_distribution",
+    "build_dashboard_kol_distribution_pack",
     "build_dashboard_recent_content",
     "build_dashboard_summary",
     "build_dashboard_view_payload",

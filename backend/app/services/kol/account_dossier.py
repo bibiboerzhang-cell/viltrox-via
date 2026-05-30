@@ -92,6 +92,136 @@ def _rows(rows) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def _unique_ints(values: list[Any]) -> list[int]:
+    seen: set[int] = set()
+    result: list[int] = []
+    for value in values:
+        next_value = _int(value)
+        if next_value and next_value not in seen:
+            seen.add(next_value)
+            result.append(next_value)
+    return result
+
+
+def _platform_aliases(platform: Any) -> set[str]:
+    canonical = _canonical_platform(platform)
+    aliases = {canonical} if canonical else set()
+    if canonical == "instagram":
+        aliases.add("ig")
+    elif canonical == "youtube":
+        aliases.add("yt")
+    elif canonical == "tiktok":
+        aliases.add("tt")
+    elif canonical == "facebook":
+        aliases.add("fb")
+    elif canonical == "x":
+        aliases.add("twitter")
+    return {alias for alias in aliases if alias}
+
+
+def _safe_like(value: Any) -> str:
+    return f"%{str(value or '').strip().lower()}%"
+
+
+def _post_lookup_kol_ids(conn: Any, kol_id: int, *, prefer_main_id: bool = False) -> list[int]:
+    """Resolve pool ids to main KOL ids before reading stored posts/comments.
+
+    MY KOL and KOL Pool often pass ``vkpi_kol_pool.id`` while account scans store
+    media rows under ``kols.id``.  This lookup keeps the read path tolerant of
+    linked-main rows and obvious handle/profile matches without mutating links.
+    """
+
+    base_id = int(kol_id)
+    if prefer_main_id:
+        try:
+            main = conn.execute("SELECT id FROM kols WHERE id = ?", (base_id,)).fetchone()
+        except Exception:
+            main = None
+        if main:
+            return [base_id]
+
+    ids: list[Any] = [base_id]
+    try:
+        pool = conn.execute(
+            """
+            SELECT id, platform, handle, display_name, profile_url, linked_main_kol_id
+            FROM vkpi_kol_pool
+            WHERE id = ?
+            """,
+            (base_id,),
+        ).fetchone()
+    except Exception:
+        pool = None
+    if not pool:
+        return _unique_ints(ids)
+
+    item = dict(pool)
+    ids = []
+    ids.append(item.get("linked_main_kol_id"))
+    terms = [
+        str(item.get("handle") or "").strip().lower().lstrip("@"),
+        str(item.get("display_name") or "").strip().lower(),
+        str(item.get("profile_url") or "").strip().lower().rstrip("/"),
+    ]
+    terms = [term for term in terms if term]
+    if not terms:
+        return _unique_ints(ids)
+
+    aliases = _platform_aliases(item.get("platform"))
+    match_parts: list[str] = []
+    params: list[Any] = []
+    for term in terms[:3]:
+        if term.startswith("http"):
+            match_parts.append("LOWER(RTRIM(COALESCE(channel_url, ''), '/')) = ?")
+            params.append(term)
+            match_parts.append("LOWER(RTRIM(COALESCE(profile_url, ''), '/')) = ?")
+            params.append(term)
+        else:
+            match_parts.append("LOWER(COALESCE(channel_name, '')) LIKE ?")
+            params.append(_safe_like(term))
+            match_parts.append("LOWER(COALESCE(channel_url, '')) LIKE ?")
+            params.append(_safe_like(term))
+            match_parts.append("LOWER(COALESCE(profile_url, '')) LIKE ?")
+            params.append(_safe_like(term))
+    if not match_parts:
+        return _unique_ints(ids)
+
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT id, platform, channel_name, channel_url, profile_url
+            FROM kols
+            WHERE {" OR ".join(match_parts)}
+            ORDER BY id DESC
+            LIMIT 50
+            """,
+            tuple(params),
+        ).fetchall()
+    except Exception:
+        rows = []
+
+    for row in rows:
+        candidate = dict(row)
+        candidate_platform = _canonical_platform(candidate.get("platform"))
+        if aliases and candidate_platform and candidate_platform not in aliases:
+            continue
+        ids.append(candidate.get("id"))
+    return _unique_ints(ids)
+
+
+def _in_clause(column: str, values: list[int]) -> tuple[str, tuple[int, ...]]:
+    safe_values = _unique_ints(values)
+    if not safe_values:
+        return f"{column} IN (?)", (0,)
+    return f"{column} IN ({','.join(['?'] * len(safe_values))})", tuple(safe_values)
+
+
+def _json_text_expr(column: str) -> str:
+    if is_postgres_runtime():
+        return f"COALESCE({column}::text, '')"
+    return f"COALESCE({column}, '')"
+
+
 def _normalize_handle(kol: dict[str, Any]) -> str:
     url = str(kol.get("channel_url") or "").strip()
     name = str(kol.get("channel_name") or kol.get("media_name") or "").strip()
@@ -651,47 +781,101 @@ def get_kol_dossier(kol_id: int) -> dict[str, Any]:
     }
 
 
-def list_kol_posts(kol_id: int, limit: int = 25, offset: int = 0) -> dict[str, Any]:
+def list_kol_posts(kol_id: int, limit: int = 25, offset: int = 0, *, prefer_main_id: bool = False) -> dict[str, Any]:
     safe_limit = max(1, min(int(limit or 25), 100))
     safe_offset = max(0, int(offset or 0))
     conn = get_conn()
-    total = conn.execute("SELECT COUNT(*) AS c FROM kol_posts WHERE kol_id = ?", (int(kol_id),)).fetchone()
+    lookup_ids = _post_lookup_kol_ids(conn, int(kol_id), prefer_main_id=prefer_main_id)
+    where_ids, where_params = _in_clause("kol_id", lookup_ids)
+    total = conn.execute(f"SELECT COUNT(*) AS c FROM kol_posts WHERE {where_ids}", where_params).fetchone()
+    count = _int(total["c"] if total else 0)
     rows = conn.execute(
-        """
+        f"""
         SELECT *
         FROM kol_posts
-        WHERE kol_id = ?
+        WHERE {where_ids}
         ORDER BY views DESC, created_at DESC
         LIMIT ? OFFSET ?
         """,
-        (int(kol_id), safe_limit, safe_offset),
+        (*where_params, safe_limit, safe_offset),
     ).fetchall()
+    if count == 0:
+        total = conn.execute(f"SELECT COUNT(*) AS c FROM vkpi_content_posts WHERE {where_ids}", where_params).fetchone()
+        count = _int(total["c"] if total else 0)
+        metadata_text = _json_text_expr("metadata_json")
+        rows = conn.execute(
+            f"""
+            SELECT
+                id,
+                kol_id,
+                NULL AS snapshot_id,
+                platform,
+                post_url,
+                title,
+                thumbnail_url,
+                published_at,
+                content_type,
+                views,
+                likes,
+                comments,
+                shares,
+                    CASE
+                        WHEN LOWER(
+                            COALESCE(title, '')
+                            || ' '
+                            || COALESCE(post_url, '')
+                            || ' '
+                            || {metadata_text}
+                        ) LIKE ?
+                        THEN '["viltrox"]'
+                        ELSE '[]'
+                    END AS brand_mentions_json,
+                '[]' AS competitor_mentions_json,
+                'unknown' AS comment_sentiment,
+                metadata_json AS raw_json,
+                created_at
+            FROM vkpi_content_posts
+            WHERE {where_ids}
+            ORDER BY views DESC, COALESCE(published_at, created_at) DESC, id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (_safe_like("viltrox"), *where_params, safe_limit, safe_offset),
+        ).fetchall()
     return {
         "items": _rows(rows),
         "page": {
             "limit": safe_limit,
             "offset": safe_offset,
-            "total": _int(total["c"] if total else 0),
-            "next_offset": safe_offset + safe_limit if safe_offset + safe_limit < _int(total["c"] if total else 0) else None,
+            "total": count,
+            "next_offset": safe_offset + safe_limit if safe_offset + safe_limit < count else None,
             "prev_offset": max(0, safe_offset - safe_limit) if safe_offset > 0 else None,
         },
     }
 
 
-def list_kol_comments(kol_id: int, limit: int = 25, offset: int = 0) -> dict[str, Any]:
+def list_kol_comments(kol_id: int, limit: int = 25, offset: int = 0, post_url: str | None = None, *, prefer_main_id: bool = False) -> dict[str, Any]:
     safe_limit = max(1, min(int(limit or 25), 100))
     safe_offset = max(0, int(offset or 0))
     conn = get_conn()
-    total = conn.execute("SELECT COUNT(*) AS c FROM kol_comments WHERE kol_id = ?", (int(kol_id),)).fetchone()
+    lookup_ids = _post_lookup_kol_ids(conn, int(kol_id), prefer_main_id=prefer_main_id)
+    where_ids, where_params = _in_clause("kol_id", lookup_ids)
+    filters = [where_ids]
+    params: list[Any] = list(where_params)
+    normalized_post_url = str(post_url or "").strip().lower().rstrip("/")
+    if normalized_post_url:
+        filters.append("LOWER(RTRIM(COALESCE(post_url, ''), '/')) = ?")
+        params.append(normalized_post_url)
+    where_sql = " AND ".join(filters)
+    total = conn.execute(f"SELECT COUNT(*) AS c FROM kol_comments WHERE {where_sql}", tuple(params)).fetchone()
     rows = conn.execute(
-        """
+        f"""
         SELECT *
         FROM kol_comments
-        WHERE kol_id = ?
+        WHERE {where_sql}
         ORDER BY like_count DESC, created_at DESC
         LIMIT ? OFFSET ?
         """,
-        (int(kol_id), safe_limit, safe_offset),
+        (*params, safe_limit, safe_offset),
     ).fetchall()
     count = _int(total["c"] if total else 0)
     return {

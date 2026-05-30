@@ -29,12 +29,14 @@ def architecture(staff=Depends(require_tab("vkpi", "read"))):
 @router.get("/dashboard")
 def dashboard(
     window_days: int = 30,
+    scope: str = Query(default="all", pattern="^(all|owned|kol|company|official|owned_matrix)$"),
     staff_id: int | None = None,
     staff=Depends(require_tab("vkpi", "read")),
 ):
     try:
         result = dashboard_domain.build_dashboard_summary(
             window_days=window_days,
+            metric_scope=scope,
             staff_id=staff_id,
             staff=staff,
         )
@@ -85,6 +87,16 @@ def dashboard_kol_distribution(
     """Return real KOL country distribution for the premium dashboard map."""
     del staff
     return dashboard_domain.build_dashboard_kol_distribution(limit=limit)
+
+
+@router.get("/dashboard/kol-distribution-pack")
+def dashboard_kol_distribution_pack(
+    limit: int = Query(default=250, ge=1, le=1000),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """Return a versioned KOL map pack for cache-first dashboard rendering."""
+    del staff
+    return dashboard_domain.build_dashboard_kol_distribution_pack(limit=limit)
 
 
 @router.get("/dashboard/agents-status")
