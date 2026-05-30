@@ -58,6 +58,8 @@ backend/runtime/
 backend/uploads/
 frontend/runtime/
 Excel/
+artifacts/
+.integration/
 
 # ─── IDE / 系统 ─────────────────────────────
 .idea/
