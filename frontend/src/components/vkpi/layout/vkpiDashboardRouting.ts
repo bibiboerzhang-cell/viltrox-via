@@ -2,9 +2,12 @@ import type { VkpiPageKey } from '../vkpiTypes';
 
 const VKPI_PAGE_KEYS = new Set<VkpiPageKey>([
   'command',
+  'v615Replica',
+  'missionControlV2',
   'dashboardPremium',
   'agents',
   'intelligenceCenter',
+  'kolPoolV2',
   'discover',
   'projects',
   'links',
@@ -33,7 +36,7 @@ const EMPLOYEE_ALLOWED_PAGES = new Set<VkpiPageKey>([
   'settings',
 ]);
 
-const DEFAULT_MANAGER_PAGE: VkpiPageKey = 'dashboardPremium';
+const DEFAULT_MANAGER_PAGE: VkpiPageKey = 'v615Replica';
 const DEFAULT_EMPLOYEE_PAGE: VkpiPageKey = 'command';
 const importMetaEnv = (import.meta as { env?: { DEV?: boolean } }).env;
 

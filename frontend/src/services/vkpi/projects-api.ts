@@ -12,6 +12,7 @@ export interface VkpiCreateProjectPayload {
   products?: Array<{ productSku: string; productName?: string }>;
   platform?: string;
   marketplace?: string;
+  sourceType?: string;
   note?: string;
 }
 
@@ -42,6 +43,29 @@ export async function getProjectDetail(token: string, projectId: string) {
   return apiFetch<VkpiProjectDetail>(`/api/marketing/projects/${encodeURIComponent(projectId)}`, {}, token);
 }
 
+export async function getAvailableProjectKols(token: string, projectId: string, query = "") {
+  const params = new URLSearchParams({
+    project_id: projectId,
+    limit: "500",
+  });
+  if (query.trim()) params.set("query", query.trim());
+  return apiFetch<{ kols?: Row[]; project_id?: number }>(`/api/marketing/kol-pool/available?${params.toString()}`, {}, token);
+}
+
+export async function addKolsToProject(token: string, projectId: string, kolPoolIds: string[], assignedStaffId?: string) {
+  return apiFetch<Row>(
+    `/api/marketing/projects/${encodeURIComponent(projectId)}/kols`,
+    {
+      method: "POST",
+      body: jsonBody({
+        kol_pool_ids: kolPoolIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0),
+        assigned_staff_id: assignedStaffId ? Number(assignedStaffId) : undefined,
+      }),
+    },
+    token,
+  );
+}
+
 export async function createProject(token: string, payload: VkpiCreateProjectPayload) {
   return apiFetch<Row>(
     "/api/marketing/projects",
@@ -56,6 +80,7 @@ export async function createProject(token: string, payload: VkpiCreateProjectPay
         products: payload.products,
         platform: payload.platform,
         marketplace: payload.marketplace,
+        source_type: payload.sourceType || "v615_projects_ui",
         note: payload.note,
       }),
     },
@@ -139,6 +164,30 @@ export async function upsertProjectTerms(token: string, projectId: string, paylo
 export async function addProjectShipment(token: string, projectId: string, payload: Row) {
   return apiFetch<Row>(
     `/api/marketing/projects/${encodeURIComponent(projectId)}/shipments`,
+    { method: "POST", body: jsonBody(payload) },
+    token,
+  );
+}
+
+export async function advanceProjectKol(token: string, projectId: string, kolRef: string, payload: Row) {
+  return apiFetch<Row>(
+    `/api/marketing/projects/${encodeURIComponent(projectId)}/kols/${encodeURIComponent(kolRef)}/advance`,
+    { method: "POST", body: jsonBody(payload) },
+    token,
+  );
+}
+
+export async function updateProjectKolShipping(token: string, projectId: string, kolRef: string, payload: Row) {
+  return apiFetch<Row>(
+    `/api/marketing/projects/${encodeURIComponent(projectId)}/kols/${encodeURIComponent(kolRef)}/shipping`,
+    { method: "POST", body: jsonBody(payload) },
+    token,
+  );
+}
+
+export async function submitProjectKolActionStub(token: string, projectId: string, kolRef: string, actionKind: "screenshot" | "video" | "contract", payload: Row) {
+  return apiFetch<Row>(
+    `/api/marketing/projects/${encodeURIComponent(projectId)}/kols/${encodeURIComponent(kolRef)}/${actionKind}`,
     { method: "POST", body: jsonBody(payload) },
     token,
   );

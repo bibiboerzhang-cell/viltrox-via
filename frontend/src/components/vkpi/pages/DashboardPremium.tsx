@@ -17,9 +17,12 @@ import {
 import { IntelligenceDetailPanel } from '../intelligence/IntelligenceDetailPanel';
 import { IntelligenceEvidenceDrawer } from '../intelligence/IntelligenceEvidenceDrawer';
 import { RealWorldMap, type CountryMapPoint } from '../glass-future/RealWorldMap';
+import { AccountTypeTabs } from '../dashboard/AccountTypeTabs';
 import { getOfficialChannelMatrix } from '../../../domains/channels';
 import {
   EMPTY_SNAPSHOT,
+  buildDashboardAccountKpiCards,
+  accountDisplayName,
   buildKpis,
   buildPlatforms,
   buildRegions,
@@ -38,11 +41,13 @@ import {
   platformName,
   record,
   rows,
-  scopeOptions,
+  dashboardAccountTypeOptions,
   settledValue,
   toneStyle,
   trendSegments,
-  type DashboardScope,
+  type DashboardAccountKpi,
+  type DashboardAccountList,
+  type DashboardAccountType,
   type IntelligenceTab,
   type KpiCard,
   type PanelDrawer,
@@ -50,6 +55,7 @@ import {
   type Snapshot,
   type TrendSegment,
 } from '../../../domains/dashboard';
+import { fetchDashboardAccounts, fetchDashboardAccountKpi } from '../../../services/vkpi/dashboard-api';
 import { getRecommendationFeedbackBacklog } from '../../../domains/intelligence';
 import { getKolPoolCompetitorDashboard, getKolPoolSummary } from '../../../domains/kol';
 import { listBrandSignals } from '../../../domains/market';
@@ -200,9 +206,15 @@ function DashboardKpiCard({ item, onClick }: { item: KpiCard; onClick: () => voi
 
 export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Marketing Director', testId = 'vkpi-dashboard-premium', windowDays = 30, embedded = false, onSelectPage }: DashboardPremiumProps) {
   const [snapshot, setSnapshot] = useState<Snapshot>(EMPTY_SNAPSHOT);
+  const [accountType, setAccountType] = useState<DashboardAccountType>('all');
+  const [accountKpi, setAccountKpi] = useState<DashboardAccountKpi | null>(null);
+  const [accountList, setAccountList] = useState<DashboardAccountList | null>(null);
+  const [accountKpiLoading, setAccountKpiLoading] = useState(false);
+  const [accountListLoading, setAccountListLoading] = useState(false);
+  const [accountKpiError, setAccountKpiError] = useState('');
+  const [accountListError, setAccountListError] = useState('');
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState('');
-  const [scope, setScope] = useState<DashboardScope>('official');
   const [trendSegment, setTrendSegment] = useState<TrendSegment>('曝光量');
   const [tab, setTab] = useState<IntelligenceTab>('today');
   const [panel, setPanel] = useState<PanelDrawer | null>(null);
@@ -223,6 +235,40 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
     return () => { cancelled = true; };
   }, [apiToken, windowDays]);
 
+  useEffect(() => {
+    if (!apiToken) {
+      setAccountKpi(null);
+      setAccountList(null);
+      setAccountKpiError('');
+      setAccountListError('');
+      return undefined;
+    }
+    let cancelled = false;
+    setAccountKpiLoading(true);
+    setAccountListLoading(true);
+    setAccountKpiError('');
+    setAccountListError('');
+    void fetchDashboardAccountKpi(apiToken, accountType)
+      .then((payload) => { if (!cancelled) setAccountKpi(payload); })
+      .catch((error) => {
+        if (!cancelled) {
+          setAccountKpi(null);
+          setAccountKpiError(error instanceof Error ? error.message : 'Dashboard KOL API 加载失败');
+        }
+      })
+      .finally(() => { if (!cancelled) setAccountKpiLoading(false); });
+    void fetchDashboardAccounts(apiToken, accountType, { pageSize: 6 })
+      .then((payload) => { if (!cancelled) setAccountList(payload); })
+      .catch((error) => {
+        if (!cancelled) {
+          setAccountList(null);
+          setAccountListError(error instanceof Error ? error.message : '账号列表 API 加载失败');
+        }
+      })
+      .finally(() => { if (!cancelled) setAccountListLoading(false); });
+    return () => { cancelled = true; };
+  }, [accountType, apiToken]);
+
   const showToast = useCallback((message: string) => {
     setToast(message);
     window.setTimeout(() => setToast(''), 1600);
@@ -232,7 +278,11 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
     else showToast(`${label} · 暂无可用路由`);
   }, [onSelectPage, showToast]);
 
-  const kpis = useMemo(() => buildKpis(snapshot, scope), [scope, snapshot]);
+  const fallbackKpis = useMemo(() => buildKpis(snapshot, 'official'), [snapshot]);
+  const kpis = useMemo(() => {
+    if (accountKpi) return buildDashboardAccountKpiCards(accountKpi);
+    return apiToken ? buildDashboardAccountKpiCards(null) : fallbackKpis;
+  }, [accountKpi, apiToken, fallbackKpis]);
   const trend = useMemo(() => buildTrend(snapshot.trendRows, trendSegment), [snapshot.trendRows, trendSegment]);
   const regions = useMemo(() => buildRegions(snapshot), [snapshot]);
   const mapPoints = useMemo<CountryMapPoint[]>(() => regions.filter((row) => typeof row.lat === 'number' && typeof row.lng === 'number').map((row) => ({
@@ -248,7 +298,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
   const taskRows = rows(snapshot.tasksStatus.tasks);
   const cards = useMemo(() => buildCards(snapshot, kpis, taskRows.length), [kpis, snapshot, taskRows.length]);
   const official = useMemo(() => officialTotals(snapshot.officialMatrix), [snapshot.officialMatrix]);
-  const scopeOption = scopeOptions.find((option) => option.key === scope) || scopeOptions[0];
+  const accountOption = dashboardAccountTypeOptions.find((option) => option.key === accountType) || dashboardAccountTypeOptions[0];
   const syncLabel = loading ? '加载真实 API…' : snapshot.failedSections.length ? `部分真实 · ${snapshot.failedSections.length} 项失败` : snapshot.source === 'real' ? '真实 API 已接入' : '等待真实 API';
   const topRegion = regions[0];
   const topPlatform = platforms[0];
@@ -293,8 +343,10 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
     rows: [
       { label: '当前值', value: item.value },
       { label: '状态', value: item.meta },
-      { label: '范围', value: scopeOption.label },
+      { label: '范围', value: accountOption.label },
       { label: '更新时间', value: dateLabel(snapshot.loadedAt) },
+      { label: '接口状态', value: accountKpiError || (accountKpiLoading ? '加载中' : '正常') },
+      { label: '账号样本', value: accountListError || (accountListLoading ? '加载中' : `${accountList?.kols.length || 0}/${accountList?.total || 0}`) },
     ],
     actionLabel: item.pending ? '查看接入状态' : '查看数据质量',
     actionPage: item.pending ? 'settings' : 'dataQuality',
@@ -326,12 +378,12 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
         body="关键结果 / 风险 / 任务"
         missions={[]}
         control={(
-          <label className="dashboard-scope-switch" title={scopeOption.detail}>
-            <span>下方数据</span>
-            <select aria-label="选择下方 KPI 数据范围" value={scope} onChange={(event) => setScope(event.target.value as DashboardScope)}>
-              {scopeOptions.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
-            </select>
-          </label>
+          <AccountTypeTabs
+            value={accountType}
+            counts={accountKpi?.counts}
+            loading={accountKpiLoading}
+            onChange={setAccountType}
+          />
         )}
         summary={(
           <div className="impact-summary-grid" aria-label="关键结果摘要">
@@ -365,8 +417,35 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
         }}
       />
 
-      <section className="kpis" aria-label={scopeOption.detail}>
+      <section className="kpis" aria-label={accountOption.detail}>
         {kpis.map((item) => <DashboardKpiCard item={item} key={item.label} onClick={() => openKpiPanel(item)} />)}
+      </section>
+
+      <section className="dashboard-account-preview glass-card" aria-label="当前口径账号样本">
+        <div className="panel-head">
+          <div>
+            <h3>{accountOption.label} 账号样本</h3>
+            <p>{accountListLoading ? '正在读取账号列表...' : accountListError || `${accountList?.total || 0} 个账号 · 来自 /api/admin/dashboard/kols`}</p>
+          </div>
+          <button className="link" type="button" onClick={() => goto('kolPoolV2', 'KOL Pool')}>进入 KOL Pool</button>
+        </div>
+        <div className="dashboard-account-preview-list">
+          {accountListLoading ? Array.from({ length: 6 }).map((_, index) => (
+            <span className="dashboard-account-preview-item is-loading" key={index}>
+              <i></i><b>读取中</b><em>真实账号列表</em>
+            </span>
+          )) : accountListError ? (
+            <div className="empty-real">{accountListError}</div>
+          ) : accountList?.kols.length ? accountList.kols.map((row) => (
+            <a className="dashboard-account-preview-item" href={row.profile_url || '#'} target="_blank" rel="noreferrer" key={row.id} onClick={(event) => { if (!row.profile_url) event.preventDefault(); }}>
+              {row.avatar_url ? <img src={row.avatar_url} alt="" /> : <i>{accountDisplayName(row).slice(0, 1).toUpperCase()}</i>}
+              <b>{accountDisplayName(row)}</b>
+              <em>{row.platform || 'unknown'} · {compact(row.total_views || row.followers || row.posts_count)}</em>
+            </a>
+          )) : (
+            <div className="empty-real">当前口径没有账号样本。</div>
+          )}
+        </div>
       </section>
 
       <div className="content-grid">

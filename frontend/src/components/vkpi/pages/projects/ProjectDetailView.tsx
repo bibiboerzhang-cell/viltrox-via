@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
+import { PackageCheck } from 'lucide-react';
 import type { VkpiKolOption, VkpiProjectRow, VkpiProjectStage } from '../../vkpiTypes';
-import { primaryStageFlow, stageLabels } from '../../shared/vkpiConstants';
+import { stageLabels } from '../../shared/vkpiConstants';
 import { nextProjectStage, shortDateTime } from '../../shared/vkpiDataUtils';
 import { writeProjectActionFocus } from '../../intelligence/intelligenceProjectActionFocus';
-import { CampaignAnalyticsTab, CampaignContractsTab, CampaignFinanceTab, CampaignMaterialsTab, CampaignRetrospectiveTab } from './ProjectDetailTabs';
-import { AddKolModal, EditProjectModal, UploadScreenshotModal } from './ProjectDetailModals';
+import { CampaignAnalyticsTab, CampaignContractsTab, CampaignFinanceTab, CampaignMaterialsTab, CampaignRetrospectiveTab, CampaignTimelineTab } from './ProjectDetailTabs';
+import { AddKolModal, ContractUploadModal, CostEntryModal, EditProjectModal, ShippingInfoModal, StageActionModal, UploadScreenshotModal, VideoUrlModal } from './ProjectDetailModals';
+import { LiveLogisticsBanner } from './LiveLogisticsBanner';
 import { ProjectParticipationTab } from './ProjectParticipationTab';
 import {
   bottleneckForRows,
@@ -19,13 +21,11 @@ import {
   formatMoney,
   formatNumber,
   formatRatio,
-  healthForRows,
+  matchesProjectStageFilter,
   parseDays,
   stageCounts,
   stageIndex,
-  statusClass,
   statusForProject,
-  uniqueRelatedProjects,
   type ConfirmAction,
   type DetailTab,
   type NoticeState,
@@ -34,23 +34,59 @@ import {
   type TaskItem,
   type TrackingState,
 } from '../../../../domains/projects';
+import {
+  healthBg,
+  healthColor,
+  PROJECT_STAGE_COLOR,
+  PROJECT_STAGE_FLOW,
+  PROJECT_STATUS_COLOR,
+  statusBg,
+} from './projectDeliverableStyle';
+
+function healthFromBackend(scoreValue: number | undefined) {
+  const score = Number.isFinite(scoreValue) ? Math.max(0, Math.min(100, Math.round(scoreValue || 0))) : 0;
+  if (score >= 85) return { score, className: 'is-good', label: '健康' };
+  if (score >= 70) return { score, className: 'is-mid', label: '关注' };
+  return { score, className: 'is-bad', label: '风险' };
+}
+
+type DetailActionModal =
+  | { kind: 'screenshot'; target: ScreenshotTarget }
+  | { kind: 'shipping'; row: VkpiProjectRow }
+  | { kind: 'cost'; row: VkpiProjectRow; costType?: 'cash_fee' | 'shipping' | 'product' }
+  | { kind: 'video'; row: VkpiProjectRow }
+  | { kind: 'contract'; row: VkpiProjectRow }
+  | { kind: 'stage-action'; row: VkpiProjectRow; action: 'stalled' | 'lost' | 'released' | 'cancelled' };
+
+interface CopyFallbackState {
+  label: string;
+  content: string;
+}
+
+function kolRef(row: VkpiProjectRow) {
+  return row.assignmentId || row.kolPoolId || row.kolId || row.id.replace(/^assignment:/, '');
+}
 
 export function ProjectDetailView({
   project,
-  projects,
+  participatingRows = [],
+  costRows = [],
   viewMode,
   onBack,
   onOpenKolProfile,
   onOpenStaffProfile,
   onUpdateProject,
   onMoveProjectStage,
+  onAddProjectCost,
   onUpsertProjectTerms,
-  onAddProjectShipment,
-  onUploadEvidenceFile,
   kolOptions = [],
+  onLoadAvailableKols,
   onAddKolsToCampaign,
   onProjectUpdated,
   onDeleteProject,
+  onAdvanceProjectKol,
+  onUpdateProjectKolShipping,
+  onSubmitProjectKolActionStub,
 }: ProjectDetailViewProps) {
   const [activeTab, setActiveTab] = useState<DetailTab>('参与 KOL');
   const [expandedRows, setExpandedRows] = useState<Set<string>>(() => new Set([project.id]));
@@ -58,29 +94,30 @@ export function ProjectDetailView({
   const [stageOverrides, setStageOverrides] = useState<Record<string, VkpiProjectStage>>({});
   const [evidenceOverrides, setEvidenceOverrides] = useState<Record<string, number>>({});
   const [shopifyLinks, setShopifyLinks] = useState<Record<string, string>>({});
-  const [savingShopifyRowId, setSavingShopifyRowId] = useState('');
-  const [savingShipmentRowId, setSavingShipmentRowId] = useState('');
+  const [savingShopifyLink, setSavingShopifyLink] = useState(false);
   const [tableQuery, setTableQuery] = useState('');
   const [tableStage, setTableStage] = useState('全部阶段');
   const [tablePlatform, setTablePlatform] = useState('全部平台');
   const [addKolOpen, setAddKolOpen] = useState(false);
   const [addingKols, setAddingKols] = useState(false);
+  const [availableKolOptions, setAvailableKolOptions] = useState<VkpiKolOption[]>([]);
+  const [loadingAvailableKols, setLoadingAvailableKols] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editingProject, setEditingProject] = useState(false);
-  const [screenshotTarget, setScreenshotTarget] = useState<ScreenshotTarget | null>(null);
+  const [actionModal, setActionModal] = useState<DetailActionModal | null>(null);
   const [movingRowId, setMovingRowId] = useState('');
   const [notice, setNotice] = useState<NoticeState | null>(null);
+  const [copyFallback, setCopyFallback] = useState<CopyFallbackState | null>(null);
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
   const [confirmingAction, setConfirmingAction] = useState(false);
   const [taskReminderOpen, setTaskReminderOpen] = useState(false);
-  const [dismissedReminderKey, setDismissedReminderKey] = useState('');
 
   useEffect(() => {
     setStageOverrides({});
     setMovingRowId('');
   }, [project.id, project.stage]);
 
-  const baseRows = useMemo(() => uniqueRelatedProjects(project, projects), [project, projects]);
+  const baseRows = useMemo(() => (participatingRows.length ? participatingRows : [project]), [participatingRows, project]);
   const rows = useMemo(() => baseRows.map((row) => {
     const overrideStage = stageOverrides[row.id];
     if (!overrideStage) return row;
@@ -97,17 +134,19 @@ export function ProjectDetailView({
   const expenseLines = useMemo(() => buildExpenseLines(rows), [rows]);
   const stageCosts = useMemo(() => buildStageCostSummary(expenseLines), [expenseLines]);
   const contractLines = useMemo(() => buildContractLines(rows), [rows]);
-  const health = useMemo(() => healthForRows(rows), [rows]);
+  const health = useMemo(() => healthFromBackend(project.healthScore), [project.healthScore]);
   const bottleneck = useMemo(() => bottleneckForRows(rows), [rows]);
   const counts = useMemo(() => stageCounts(rows), [rows]);
   const campaignStatus = statusForProject(project);
   const ownerFallback = { name: project.ownerName, avatarUrl: project.ownerAvatar };
+  const currentHealthColor = healthColor(health.score);
+  const ownerInitial = String(project.ownerName || '-').trim().slice(0, 1).toUpperCase() || '-';
   const platformOptions = useMemo(() => Array.from(new Set(rows.map((row) => row.platform))).filter(Boolean), [rows]);
   const filteredRows = useMemo(() => {
     const query = tableQuery.trim().toLowerCase();
     return rows.filter((row) => {
       const matchesQuery = !query || [row.kolHandle, row.kolName, row.platform, row.campaign].some((value) => String(value || '').toLowerCase().includes(query));
-      const matchesStage = tableStage === '全部阶段' || row.stage === tableStage;
+      const matchesStage = tableStage === '全部阶段' || matchesProjectStageFilter(row.stage, tableStage);
       const matchesPlatform = tablePlatform === '全部平台' || row.platform === tablePlatform;
       return matchesQuery && matchesStage && matchesPlatform;
     });
@@ -117,18 +156,11 @@ export function ProjectDetailView({
     () => taskItems.filter((item) => item.className === 'is-red' || item.className === 'is-yellow'),
     [taskItems],
   );
-  const reminderKey = useMemo(
-    () => [project.id, ...reminderTasks.map((item) => `${item.level}:${item.title}:${item.rowId || item.tab || ''}`)].join('|'),
-    [project.id, reminderTasks],
-  );
-
   useEffect(() => {
     if (!reminderTasks.length) {
       setTaskReminderOpen(false);
-      return;
     }
-    if (dismissedReminderKey !== reminderKey) setTaskReminderOpen(true);
-  }, [dismissedReminderKey, reminderKey, reminderTasks.length]);
+  }, [reminderTasks.length]);
 
   const toggleRow = (rowId: string) => {
     setExpandedRows((current) => {
@@ -141,10 +173,23 @@ export function ProjectDetailView({
 
   const trackingForRow = (row: VkpiProjectRow) => trackingById[row.id] || defaultTracking(row);
   const evidenceCountForRow = (row: VkpiProjectRow) => evidenceOverrides[row.id] ?? row.stageEventCount ?? 0;
-  const shopifyLinkForRow = (row: VkpiProjectRow) => shopifyLinks[row.id] ?? row.shopifyLink ?? '';
+  const projectShopifyLink = () => shopifyLinks[project.id] ?? project.shopifyLink ?? rows.find((row) => row.shopifyLink)?.shopifyLink ?? '';
+  const shopifyLinkForRow = (_row: VkpiProjectRow) => projectShopifyLink();
+  const setProjectShopifyLink = (value: string) => {
+    setShopifyLinks((current) => ({ ...current, [project.id]: value }));
+  };
+
+  const selectFunnelStage = (stage: VkpiProjectStage) => {
+    setActiveTab('参与 KOL');
+    setTableStage((current) => (current === stage ? '全部阶段' : stage));
+  };
 
   const moveRowStage = (row: VkpiProjectRow) => {
-    if (!onMoveProjectStage) {
+    if (row.assignmentId && !onAdvanceProjectKol) {
+      setNotice({ tone: 'warning', title: '无法推进', body: '当前缺少 KOL 级阶段推进接口。' });
+      return;
+    }
+    if (!row.assignmentId && !onMoveProjectStage) {
       setNotice({ tone: 'warning', title: '无法推进', body: '当前账号没有阶段推进入口，或父层没有传入阶段 API。' });
       return;
     }
@@ -163,7 +208,14 @@ export function ProjectDetailView({
         setMovingRowId(row.id);
         setStageOverrides((current) => ({ ...current, [row.id]: nextStage }));
         try {
-          await onMoveProjectStage(row.id, nextStage, `详情页手动推进：${stageLabels[previousStage]} → ${stageLabels[nextStage]}`);
+          if (row.assignmentId) {
+            await onAdvanceProjectKol?.(project.id, kolRef(row), {
+              to_stage: nextStage,
+              note: `详情页 KOL 推进：${stageLabels[previousStage]} → ${stageLabels[nextStage]}`,
+            });
+          } else {
+            await onMoveProjectStage?.(row.id, nextStage, `详情页手动推进：${stageLabels[previousStage]} → ${stageLabels[nextStage]}`);
+          }
           setNotice({
             tone: 'success',
             title: '阶段已推进',
@@ -193,40 +245,126 @@ export function ProjectDetailView({
     });
   };
 
-  const openScreenshotModal = (target: ScreenshotTarget) => {
-    if (!onUploadEvidenceFile) {
-      setNotice({ tone: 'warning', title: '无法上传截图', body: '当前没有传入证据上传接口，请先确认父层 onUploadEvidenceFile。' });
-      return;
-    }
-    setScreenshotTarget(target);
+  const openStageEvidenceModal = (target: ScreenshotTarget) => {
+    if (target.stage === 'agreed') setActionModal({ kind: 'contract', row: target.row });
+    else if (target.stage === 'shipped') setActionModal({ kind: 'shipping', row: target.row });
+    else if (target.stage === 'published') setActionModal({ kind: 'video', row: target.row });
+    else setActionModal({ kind: 'screenshot', target });
   };
 
-  const completeScreenshotUpload = async (file: File, note: string) => {
-    if (!screenshotTarget || !onUploadEvidenceFile) return;
-    await onUploadEvidenceFile(file, {
-      entityType: 'project_stage',
-      entityId: screenshotTarget.row.id,
-      purpose: `stage_${screenshotTarget.from}_${screenshotTarget.to}_screenshot${note.trim() ? `:${note.trim()}` : ''}`,
-    });
-    setEvidenceOverrides((current) => ({
+  const openAddKolModal = async () => {
+    setAddKolOpen(true);
+    if (!onLoadAvailableKols) {
+      setAvailableKolOptions([]);
+      return;
+    }
+    setLoadingAvailableKols(true);
+    try {
+      setAvailableKolOptions(await onLoadAvailableKols(project));
+    } catch (error) {
+      setNotice({ tone: 'warning', title: '候选 KOL 加载失败', body: error instanceof Error ? error.message : '无法加载可添加 KOL。' });
+      setAvailableKolOptions([]);
+    } finally {
+      setLoadingAvailableKols(false);
+    }
+  };
+
+  const submitActionStub = async (kind: 'screenshot' | 'video' | 'contract', row: VkpiProjectRow, payload: Record<string, unknown>) => {
+    if (!onSubmitProjectKolActionStub) {
+      setNotice({ tone: 'info', title: '暂存提醒', body: '当前环境缺少写入接口或 API token，本次操作不会修改项目数据。' });
+      return;
+    }
+    const result = await onSubmitProjectKolActionStub(project.id, kolRef(row), kind, payload);
+    if (kind === 'screenshot') {
+      setEvidenceOverrides((current) => ({ ...current, [row.id]: evidenceCountForRow(row) + 1 }));
+    }
+    if (kind === 'video') {
+      const metrics = (result.metrics || {}) as Record<string, unknown>;
+      const title = typeof metrics.title === 'string' && metrics.title ? metrics.title : '视频';
+      const views = typeof metrics.view_count === 'number' ? formatNumber(metrics.view_count) : '—';
+      setEvidenceOverrides((current) => ({ ...current, [row.id]: evidenceCountForRow(row) + 1 }));
+      setActionModal(null);
+      setNotice({ tone: 'success', title: '视频已写入 evidence', body: `${title} · 播放 ${views}` });
+      await onProjectUpdated?.();
+      return;
+    }
+    setActionModal(null);
+    setNotice({ tone: 'info', title: '已记录操作', body: '已提交到项目操作接口，文件和内容处理状态会在同步后更新。' });
+  };
+
+  const submitShippingInfo = async (row: VkpiProjectRow, payload: Record<string, unknown>) => {
+    if (!onUpdateProjectKolShipping) {
+      setNotice({ tone: 'warning', title: '无法写入物流', body: '当前缺少 KOL 级物流写库接口。' });
+      return;
+    }
+    const trackingNumber = String(payload.tracking_number || '').trim();
+    await onUpdateProjectKolShipping(project.id, kolRef(row), payload);
+    setTrackingById((current) => ({
       ...current,
-      [screenshotTarget.row.id]: evidenceCountForRow(screenshotTarget.row) + 1,
+      [row.id]: {
+        courier: String(payload.carrier || ''),
+        no: trackingNumber,
+        status: '已保存，等待物流追踪',
+        last: '刚刚',
+        delivered: false,
+      },
     }));
-    setScreenshotTarget(null);
-    setNotice({
-      tone: 'success',
-      title: '截图已上传',
-      body: `${screenshotTarget.row.kolHandle || screenshotTarget.row.kolName} 的 ${screenshotTarget.from}→${screenshotTarget.to} 阶段截图已保存。`,
-    });
+    setActionModal(null);
+    setNotice({ tone: 'success', title: '物流已写入', body: `${row.kolHandle || row.kolName} 的 tracking 和运费已保存。` });
     await onProjectUpdated?.();
   };
 
-  const saveShopifyLink = async (row: VkpiProjectRow) => {
+  const submitProjectCost = async (
+    row: VkpiProjectRow,
+    payload: { costType: string; amountUsd: number; note?: string; sourceRef?: string; metadata?: Record<string, unknown> },
+  ) => {
+    if (!onAddProjectCost) {
+      setNotice({ tone: 'warning', title: '费用入口待接入', body: '当前环境没有提供费用写入 API。' });
+      setActionModal(null);
+      return;
+    }
+    await onAddProjectCost({
+      projectId: project.id,
+      costType: payload.costType,
+      amountUsd: payload.amountUsd,
+      note: payload.note,
+      sourceRef: payload.sourceRef,
+      metadata: payload.metadata,
+    });
+    setNotice({
+      tone: 'success',
+      title: '费用已登记',
+      body: `${row.kolHandle || row.kolName || 'KOL'} 的费用已写入成本账本。`,
+    });
+    setActionModal(null);
+    await onProjectUpdated?.();
+  };
+
+  const submitStageAction = async (row: VkpiProjectRow, action: 'stalled' | 'lost' | 'released' | 'cancelled', reason: string) => {
+    if (!onAdvanceProjectKol) {
+      setNotice({ tone: 'warning', title: '无法提交阶段动作', body: '当前缺少 KOL 级阶段推进接口。' });
+      return;
+    }
+    setMovingRowId(row.id);
+    try {
+      await onAdvanceProjectKol(project.id, kolRef(row), { to_stage: action, action, reason });
+      setStageOverrides((current) => ({ ...current, [row.id]: action }));
+      setActionModal(null);
+      setNotice({ tone: 'success', title: '阶段动作已写入', body: `${row.kolHandle || row.kolName} 已标记为 ${stageLabels[action]}。` });
+      await onProjectUpdated?.();
+    } catch (error) {
+      setNotice({ tone: 'warning', title: '阶段动作失败', body: error instanceof Error ? error.message : '阶段动作提交失败。' });
+    } finally {
+      setMovingRowId('');
+    }
+  };
+
+  const saveShopifyLink = async () => {
     if (!onUpsertProjectTerms) {
       setNotice({ tone: 'warning', title: '无法保存链接', body: '当前没有传入项目条款保存接口。' });
       return;
     }
-    const link = shopifyLinkForRow(row).trim();
+    const link = projectShopifyLink().trim();
     if (!link) {
       setNotice({ tone: 'warning', title: '需要链接', body: '请输入 Shopify 商品链接或带 ref 的归因链接。' });
       return;
@@ -235,74 +373,21 @@ export function ProjectDetailView({
       setNotice({ tone: 'warning', title: '链接格式不对', body: '链接需要以 http:// 或 https:// 开头。' });
       return;
     }
-    setSavingShopifyRowId(row.id);
+    setSavingShopifyLink(true);
     try {
-      await onUpsertProjectTerms(row.id, {
+      await onUpsertProjectTerms(project.id, {
         shopify_url: link,
         shopify_link: link,
         note: `Shopify 归因链接：${link}`,
       });
-      setNotice({ tone: 'success', title: '链接已保存', body: `${row.kolHandle || row.kolName} 的 Shopify 归因链接已保存。` });
+      setShopifyLinks((current) => ({ ...current, [project.id]: link }));
+      setNotice({ tone: 'success', title: '链接已保存', body: `已保存到「${project.campaign || '当前项目'}」的 Shopify 项目归因链接。` });
       await onProjectUpdated?.();
     } catch (error) {
       setNotice({ tone: 'warning', title: '保存失败', body: error instanceof Error ? error.message : 'Shopify 链接保存失败。' });
     } finally {
-      setSavingShopifyRowId('');
+      setSavingShopifyLink(false);
     }
-  };
-
-  const saveShipment = async (row: VkpiProjectRow) => {
-    if (!onAddProjectShipment) {
-      setNotice({ tone: 'warning', title: '无法保存物流', body: '当前没有传入物流保存接口。' });
-      return;
-    }
-    const tracking = trackingForRow(row);
-    const carrier = tracking.courier.trim();
-    const trackingNumber = tracking.no.trim();
-    if (!trackingNumber) {
-      setNotice({ tone: 'warning', title: '需要快递单号', body: '先输入 tracking no.，再保存物流。' });
-      return;
-    }
-    setSavingShipmentRowId(row.id);
-    try {
-      await onAddProjectShipment(row.id, {
-        carrier: carrier || 'SF Express',
-        tracking_number: trackingNumber,
-        shipping_status: 'shipped',
-        note: '项目详情页保存物流单号，等待后续物流追踪刷新。',
-      });
-      setTrackingById((current) => ({
-        ...current,
-        [row.id]: {
-          ...tracking,
-          courier: carrier || 'SF Express',
-          no: trackingNumber,
-          status: '已保存，等待物流追踪',
-          last: '刚刚',
-          delivered: false,
-        },
-      }));
-      setNotice({
-        tone: 'success',
-        title: '物流已保存',
-        body: `${row.kolHandle || row.kolName} 的 ${carrier || 'SF Express'} · ${trackingNumber} 已写入项目物流。`,
-      });
-      await onProjectUpdated?.();
-    } catch (error) {
-      setNotice({ tone: 'warning', title: '物流保存失败', body: error instanceof Error ? error.message : '物流保存失败。' });
-    } finally {
-      setSavingShipmentRowId('');
-    }
-  };
-
-  const updateTracking = (row: VkpiProjectRow, key: 'courier' | 'no', value: string) => {
-    setTrackingById((current) => ({
-      ...current,
-      [row.id]: {
-        ...(current[row.id] || defaultTracking(row)),
-        [key]: value,
-      },
-    }));
   };
 
   const jumpToTask = (rowId?: string, tab?: DetailTab) => {
@@ -321,7 +406,7 @@ export function ProjectDetailView({
     });
   };
 
-  const sendTaskToWorkbench = (item: TaskItem) => {
+  const markTaskFocus = (item: TaskItem) => {
     const row = item.rowId ? rows.find((candidate) => candidate.id === item.rowId) : undefined;
     writeProjectActionFocus({
       source: 'project_detail',
@@ -340,24 +425,37 @@ export function ProjectDetailView({
     });
     setNotice({
       tone: 'success',
-      title: '已送到员工工作台',
-      body: viewMode === 'employee'
-        ? '已生成今日行动卡，并切换到员工工作台。'
-        : '已生成员工工作台动作；切换员工视角后可见。',
+      title: '已暂存提醒',
+      body: '已把当前行动暂存在本地关注列表；正式员工工作台派发待后续 API 接入。',
     });
-    if (typeof window !== 'undefined') {
-      window.location.hash = viewMode === 'employee' ? 'command' : 'dashboardPremium';
-    }
   };
 
   const dismissTaskReminder = () => {
-    setDismissedReminderKey(reminderKey);
     setTaskReminderOpen(false);
   };
 
-  const jumpFromTaskReminder = (item: TaskItem) => {
-    dismissTaskReminder();
-    jumpToTask(item.rowId, item.tab);
+  const writeClipboardText = async (content: string) => {
+    const textarea = document.createElement('textarea');
+    textarea.value = content;
+    textarea.setAttribute('readonly', 'true');
+    textarea.style.position = 'fixed';
+    textarea.style.left = '-9999px';
+    textarea.style.top = '0';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    const copied = document.execCommand('copy');
+    document.body.removeChild(textarea);
+    if (copied) return;
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(content);
+        return;
+      } catch {
+        // The user-facing message below is clearer than browser permission errors.
+      }
+    }
+    throw new Error('浏览器没有允许剪贴板写入。');
   };
 
   const copyMaterialText = async (text: string, label: string) => {
@@ -367,10 +465,12 @@ export function ProjectDetailView({
       return;
     }
     try {
-      await navigator.clipboard.writeText(content);
+      await writeClipboardText(content);
+      setCopyFallback(null);
       setNotice({ tone: 'success', title: '已复制', body: `${label} 已复制到剪贴板。` });
-    } catch (error) {
-      setNotice({ tone: 'warning', title: '复制失败', body: error instanceof Error ? error.message : '浏览器没有允许剪贴板写入。' });
+    } catch {
+      setCopyFallback({ label, content });
+      setNotice(null);
     }
   };
 
@@ -465,72 +565,91 @@ export function ProjectDetailView({
   };
 
   return (
-    <section className="vkpi-campaign-detail" aria-label="项目详情">
-      <button className="vkpi-campaign-back" type="button" onClick={onBack}>← 返回项目列表</button>
+    <section className="p-3 md:p-4 space-y-3" aria-label="项目详情">
+      <div className="flex items-center gap-3">
+        <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-white/[0.08] bg-white/[0.02] text-[11px] text-slate-300 hover:bg-white/[0.06] hover:text-white" type="button" onClick={onBack}>← 返回项目列表</button>
+        <div className="flex-1" />
+        <button className="px-3 py-1.5 rounded-md border border-white/[0.08] bg-white/[0.02] text-[11px] text-slate-300 hover:bg-white/[0.06] hover:text-white flex items-center gap-1.5" type="button" onClick={() => setEditOpen(true)} disabled={!onUpdateProject}>编辑项目</button>
+      </div>
 
-      <div className="vkpi-campaign-detail-hero">
-        <div>
-          <div className="vkpi-campaign-detail-top">
-            <div>
-              <span className="vkpi-campaign-eyebrow">VILTROX MARKETING · PROJECT DETAIL</span>
-              <h2>{project.campaign || '未命名推广'}</h2>
-            </div>
-            <span className={`vkpi-campaign-status ${statusClass(campaignStatus)}`}>{campaignStatus}</span>
+      <div className="rounded-2xl border border-white/[0.06] bg-white/[0.015] p-4 flex items-start gap-4">
+        <div className="w-14 h-14 rounded-xl flex items-center justify-center shrink-0" style={{ background: healthBg(health.score), color: currentHealthColor }}>
+          <PackageCheck size={26} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
+            <h2 className="text-[20px] font-bold text-white">{project.campaign || '未命名推广'}</h2>
+            <span className="text-[10.5px] px-2 py-0.5 rounded font-medium" style={{ background: statusBg(campaignStatus), color: PROJECT_STATUS_COLOR[campaignStatus] || PROJECT_STATUS_COLOR['已结束'] }}>{campaignStatus}</span>
+            <span className="text-[10px] px-2 py-0.5 rounded bg-white/[0.04] text-slate-300 flex items-center gap-1">产品 {project.campaign || '-'}</span>
           </div>
-          <div className="vkpi-campaign-meta">
-            <span>产品 {project.campaign || '-'}</span>
-            <span>最近更新 {shortDateTime(project.updatedAt || project.latestMessageAt)}</span>
-            <span>预算 {formatMoney(stats.cost)} · 销售 {formatMoney(stats.gmv)}</span>
+          <div className="text-[12px] text-slate-400 mb-2">{bottleneck.text}</div>
+          <div className="flex items-center gap-3 flex-wrap">
             <button
+              className="flex items-center gap-1.5"
               type="button"
               disabled={!project.ownerId || !onOpenStaffProfile}
               onClick={() => project.ownerId && onOpenStaffProfile?.(project.ownerId, ownerFallback)}
             >
-              负责人 {project.ownerName || '-'}
+              <div className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold text-white" style={{ background: '#a855f7' }}>{ownerInitial}</div>
+              <span className="text-[10.5px] text-slate-400">负责人 {project.ownerName || '-'}</span>
             </button>
-            <span>{viewMode === 'manager' ? '上市推广' : '员工跟进'}</span>
+            <span className="text-[10px] text-slate-600">·</span>
+            <span className="text-[10.5px] text-slate-400">最近更新 {shortDateTime(project.updatedAt || project.latestMessageAt)}</span>
+            <span className="text-[10px] text-slate-600">·</span>
+            <span className="text-[10.5px] text-slate-400">预算 {formatMoney(stats.cost)} · 销售 {formatMoney(stats.gmv)}</span>
+            <span className="text-[10px] text-slate-600">·</span>
+            <span className="text-[10.5px] text-slate-400">{viewMode === 'manager' ? '上市推广' : '员工跟进'}</span>
           </div>
-          <div className="vkpi-campaign-hero-actions">
-            <button type="button" onClick={() => setEditOpen(true)} disabled={!onUpdateProject}>编辑</button>
-            <button className="is-danger" type="button" onClick={cancelProject}>取消推广</button>
-            {onDeleteProject ? <button className="is-danger" type="button" onClick={deleteProject}>删除</button> : null}
-            <button className="is-primary" type="button" onClick={() => setAddKolOpen(true)}>+ 添加 KOL</button>
+          <div className="flex items-center gap-2 mt-3 flex-wrap">
+            <button className="px-3 py-1.5 rounded-md border border-white/[0.08] bg-white/[0.02] text-[11px] text-slate-300 hover:bg-white/[0.06] hover:text-white" type="button" onClick={() => setEditOpen(true)} disabled={!onUpdateProject}>编辑</button>
+            <button className="px-3 py-1.5 rounded-md border border-red-500/30 bg-red-500/10 text-[11px] text-red-300 hover:bg-red-500/15" type="button" onClick={cancelProject}>取消推广</button>
+            {onDeleteProject ? <button className="px-3 py-1.5 rounded-md border border-red-500/30 bg-red-500/10 text-[11px] text-red-300 hover:bg-red-500/15" type="button" onClick={deleteProject}>删除</button> : null}
+            <button className="px-3 py-1.5 rounded-md bg-purple-500/90 hover:bg-purple-500 text-white text-[11px] font-medium flex items-center gap-1.5" type="button" onClick={() => void openAddKolModal()}>+ 添加 KOL</button>
           </div>
         </div>
-        <div className="vkpi-campaign-score-card">
-          <div className="vkpi-campaign-score-row">
-            <div>
-              <span>健康度评分</span>
-              <strong className={health.className}>{health.score}</strong>
-            </div>
-            <em className={health.className}>{health.label}</em>
-          </div>
-          <div className="vkpi-campaign-score-tooltip">
-            <div>• 阶段停留越久，健康度越低</div>
-            <div>• 已发布和已统计会提高评分</div>
-            <div>• 取消 / 停滞项目会降低评分</div>
-          </div>
-          <div className="vkpi-campaign-bottleneck"><b>{bottleneck.from}→{bottleneck.to}</b> {bottleneck.text}</div>
+        <div className="text-right shrink-0">
+          <div className="text-[10px] text-slate-500 mb-0.5">健康度</div>
+          <div className="text-[40px] font-bold leading-none tabular-nums" style={{ color: currentHealthColor }}>{health.score}</div>
+          <div className="mt-2 text-[10.5px] px-2 py-0.5 rounded font-medium inline-flex" style={{ background: healthBg(health.score), color: currentHealthColor }}>{health.label}</div>
         </div>
       </div>
 
-      <div className="vkpi-campaign-kpis" aria-label="项目 KPI">
-        <div><span>参与 KOL</span><strong>{rows.length}</strong><em>当前项目行</em></div>
-        <div><span>总曝光</span><strong>{formatNumber(stats.views)}</strong><em>自动汇总</em></div>
-        <div><span>已发布内容</span><strong>{stats.published}</strong><em>发布率 {stats.publishRate}%</em></div>
-        <div><span>短链点击</span><strong>{formatNumber(stats.clicks)}</strong><em>{formatNumber(stats.orders)} 单</em></div>
-        <div><span>归因销售</span><strong>{formatMoney(stats.gmv)}</strong><em>现有 GMV</em></div>
-        <div><span>ROI</span><strong className="is-green">{formatRatio(stats.roi)}</strong><em>成本 {formatMoney(stats.cost)}</em></div>
+      <LiveLogisticsBanner rows={rows} trackingForRow={trackingForRow} />
+
+      <div className="grid grid-cols-6 gap-2" aria-label="项目 KPI">
+        {[
+          ['参与 KOL', rows.length, '当前项目行'],
+          ['总曝光', formatNumber(stats.views), '自动汇总'],
+          ['已发布内容', stats.published, `发布率 ${stats.publishRate}%`],
+          ['短链点击', formatNumber(stats.clicks), `${formatNumber(stats.orders)} 单`],
+          ['归因销售', formatMoney(stats.gmv), '现有 GMV'],
+          ['ROI', formatRatio(stats.roi), `成本 ${formatMoney(stats.cost)}`],
+        ].map(([label, value, hint]) => (
+          <div className="min-h-[68px] rounded-xl border border-white/[0.06] bg-white/[0.015] px-3 py-2.5" key={label}>
+            <span className="block text-slate-500 text-[9.5px] font-medium leading-none">{label}</span>
+            <strong className={`block mt-1.5 text-[21px] font-bold leading-none tabular-nums ${label === 'ROI' ? 'text-emerald-400' : 'text-white'}`}>{value}</strong>
+            <em className="block mt-1 text-[9.5px] text-slate-500 not-italic leading-tight">{hint}</em>
+          </div>
+        ))}
       </div>
 
-      <div className="vkpi-campaign-panel">
-        <div className="vkpi-campaign-panel-head">
-          <h3>KOL 进度漏斗</h3>
-          <span className="vkpi-campaign-pulse">每日刷新</span>
+      <div className="rounded-2xl border border-white/[0.06] bg-white/[0.015] p-4">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h3 className="text-[14px] font-semibold text-white">KOL 进度漏斗</h3>
+            <p className="text-[10.5px] text-slate-500 mt-0.5">项目内所有 KOL 在各阶段的实时分布</p>
+          </div>
+          <span
+            className="text-[10px] px-2 py-0.5 rounded-full border border-emerald-500/20 bg-emerald-500/[0.08] text-emerald-300 inline-flex items-center gap-1 pointer-events-none select-none"
+            title="真刷新功能将在视频 URL 每日刷新 job 接入后启用"
+          >
+            状态 · 每日刷新待接入
+          </span>
         </div>
-        <div className="vkpi-campaign-funnel">
-          {primaryStageFlow.map((stage, index) => {
+        <div className="grid grid-cols-9 gap-2">
+          {PROJECT_STAGE_FLOW.map((stage, index) => {
             const stageNumber = index + 1;
+            const stageKey = stage.key as VkpiProjectStage;
             const count = counts.get(stageNumber) || 0;
             const nextCount = counts.get(stageNumber + 1) || 0;
             const rate = count && stageNumber < 9 ? `${Math.round(Math.min(nextCount / count, 1) * 100)}%` : '—';
@@ -539,17 +658,32 @@ export function ProjectDetailView({
               .map((row) => parseDays(row.stageDurationLabel))
               .filter(Boolean);
             const avgDays = average.length ? `${Math.round(average.reduce((sum, day) => sum + day, 0) / average.length)} 天` : '-';
+            const color = PROJECT_STAGE_COLOR[stage.key];
+            const isActive = count > 0;
+            const isSelected = tableStage === stage.key;
             return (
-              <div className={`vkpi-campaign-stage ${stageNumber === bottleneck.from ? 'is-now' : ''}`} key={stage}>
-                <span>{stageNumber}. {stageLabels[stage]}</span>
-                <strong>{count}</strong>
-                <em>平均 {avgDays}</em>
-                <small>→ {rate}</small>
-              </div>
+              <button
+                aria-pressed={isSelected}
+                className="rounded-lg p-3 text-center transition-all"
+                key={stage.key}
+                onClick={() => selectFunnelStage(stageKey)}
+                style={{
+                  background: isSelected ? `${color}1f` : isActive ? `${color}12` : 'rgba(255,255,255,0.015)',
+                  border: isSelected ? `1px solid ${color}` : isActive ? `1px solid ${color}45` : '1px solid rgba(255,255,255,0.04)',
+                  boxShadow: isSelected ? `0 0 0 1px ${color}22, 0 12px 32px ${color}14` : undefined,
+                }}
+                title={`筛选 ${stageNumber}. ${stage.label}`}
+                type="button"
+              >
+                <div className="text-[10px] text-slate-400 mb-1">{stageNumber}. {stage.label}</div>
+                <div className="text-[28px] font-bold tabular-nums leading-none" style={{ color: isActive ? color : '#475569' }}>{count}</div>
+                <div className="mt-1 text-[10px] text-slate-500">平均 {avgDays}</div>
+                <div className="text-[10px] text-slate-500">→ {rate}</div>
+              </button>
             );
           })}
         </div>
-        <div className="vkpi-campaign-alert">当前瓶颈：<b>{bottleneck.from}→{bottleneck.to}</b> {bottleneck.text}</div>
+        <div className="mt-3 rounded-xl border border-amber-400/25 bg-amber-400/10 text-amber-300 px-3 py-2 text-[11px] font-medium">当前瓶颈：<b>{bottleneck.from}→{bottleneck.to}</b> {bottleneck.text}</div>
       </div>
 
       <div className="vkpi-campaign-tabs" aria-label="项目详情 tabs">
@@ -566,21 +700,19 @@ export function ProjectDetailView({
           evidenceCountForRow={evidenceCountForRow}
           filteredRows={filteredRows}
           movingRowId={movingRowId}
-          onAddKol={() => setAddKolOpen(true)}
+          onAddKol={() => void openAddKolModal()}
           onMoveRowStage={moveRowStage}
           onOpenKolProfile={onOpenKolProfile}
-          onOpenScreenshotModal={openScreenshotModal}
+          onOpenScreenshotModal={openStageEvidenceModal}
+          onOpenStageActionModal={(row, action) => setActionModal({ kind: 'stage-action', row, action })}
           onSaveShopifyLink={saveShopifyLink}
-          onSaveShipment={saveShipment}
-          onSetShopifyLink={(rowId, value) => setShopifyLinks((current) => ({ ...current, [rowId]: value }))}
+          onSetShopifyLink={setProjectShopifyLink}
           onSetTablePlatform={setTablePlatform}
           onSetTableQuery={setTableQuery}
           onSetTableStage={setTableStage}
           onToggleRow={toggleRow}
-          onUpdateTracking={updateTracking}
           platformOptions={platformOptions}
-          savingShipmentRowId={savingShipmentRowId}
-          savingShopifyRowId={savingShopifyRowId}
+          savingShopify={savingShopifyLink}
           shopifyLinkForRow={shopifyLinkForRow}
           tablePlatform={tablePlatform}
           tableQuery={tableQuery}
@@ -599,7 +731,9 @@ export function ProjectDetailView({
           project={project}
           rows={rows}
           stats={stats}
+          costRows={costRows}
           onCopy={copyMaterialText}
+          onPendingAction={(label) => setNotice({ tone: 'info', title: '素材库功能开发中', body: `${label} 功能开发中，敬请期待。` })}
         />
       ) : activeTab === '费用' ? (
         <CampaignFinanceTab
@@ -607,11 +741,15 @@ export function ProjectDetailView({
           stats={stats}
           expenseLines={expenseLines}
           stageCosts={stageCosts}
+          costRows={costRows}
+          onOpenShippingInfo={() => setActionModal({ kind: 'shipping', row: rows[0] || project })}
+          onOpenCostEntry={(row, costType) => setActionModal({ kind: 'cost', row, costType })}
         />
       ) : activeTab === '合同归档' ? (
         <CampaignContractsTab
           rows={rows}
           contractLines={contractLines}
+          onPendingAction={(label) => setNotice({ tone: 'info', title: '合同识别功能开发中', body: `${label} 功能开发中，敬请期待。` })}
         />
       ) : activeTab === '复盘' ? (
         <CampaignRetrospectiveTab
@@ -622,7 +760,10 @@ export function ProjectDetailView({
           health={health}
           bottleneck={bottleneck}
           onCopy={copyMaterialText}
+          onPendingAction={(label) => setNotice({ tone: 'info', title: '暂存提醒', body: `${label} 已进入项目操作队列，后续同步后更新状态。` })}
         />
+      ) : activeTab === '时间轴' ? (
+        <CampaignTimelineTab rows={rows} />
       ) : (
         <div className="vkpi-campaign-placeholder">
           <h3>{activeTab}</h3>
@@ -630,37 +771,92 @@ export function ProjectDetailView({
         </div>
       )}
 
-      <div className="vkpi-campaign-task-dock">
-        <div className="vkpi-campaign-task-panel">
-          <h3>今日该做什么</h3>
-          {taskItems.map((item) => (
-            <button
-              key={`${item.title}-${item.subtitle}`}
-              type="button"
-              onClick={() => jumpToTask(item.rowId, item.tab)}
-            >
-              <span className={item.className}>{item.level}</span>
-              <b>{item.title}</b>
-              <small>{item.subtitle}</small>
-            </button>
-          ))}
-          {taskItems[0] ? (
-            <button
-              className="vkpi-campaign-task-send"
-              type="button"
-              onClick={() => sendTaskToWorkbench(taskItems[0])}
-            >
-              送首要任务到员工工作台
-            </button>
-          ) : null}
-        </div>
+      <div className={`vkpi-campaign-task-dock ${taskReminderOpen ? 'is-open' : 'is-collapsed'}`}>
+        {taskReminderOpen ? (
+          <div className="vkpi-campaign-task-panel">
+            <div className="vkpi-campaign-task-panel-header">
+              <h3>今日该做什么</h3>
+              <button className="vkpi-campaign-task-close" type="button" onClick={dismissTaskReminder}>
+                收起
+              </button>
+            </div>
+            {taskItems.map((item) => (
+              <button
+                key={`${item.title}-${item.subtitle}`}
+                type="button"
+                onClick={() => jumpToTask(item.rowId, item.tab)}
+              >
+                <span className={item.className}>{item.level}</span>
+                <b>{item.title}</b>
+                <small>{item.subtitle}</small>
+              </button>
+            ))}
+            {taskItems[0] ? (
+              <button
+                className="vkpi-campaign-task-send"
+                type="button"
+                onClick={() => markTaskFocus(taskItems[0])}
+              >
+                暂存提醒
+              </button>
+            ) : null}
+          </div>
+        ) : (
+          <button className="vkpi-campaign-task-trigger" type="button" onClick={() => setTaskReminderOpen(true)}>
+            今日提醒
+            {reminderTasks.length ? <span>{reminderTasks.length}</span> : null}
+          </button>
+        )}
       </div>
 
-      {screenshotTarget ? (
+      {actionModal?.kind === 'screenshot' ? (
         <UploadScreenshotModal
-          target={screenshotTarget}
-          onClose={() => setScreenshotTarget(null)}
-          onSubmit={completeScreenshotUpload}
+          target={actionModal.target}
+          onClose={() => setActionModal(null)}
+          onSubmit={(payload) => submitActionStub('screenshot', actionModal.target.row, payload)}
+        />
+      ) : null}
+
+      {actionModal?.kind === 'shipping' ? (
+        <ShippingInfoModal
+          project={project}
+          row={actionModal.row}
+          onClose={() => setActionModal(null)}
+          onSubmit={(payload) => submitShippingInfo(actionModal.row, payload)}
+        />
+      ) : null}
+      {actionModal?.kind === 'cost' ? (
+        <CostEntryModal
+          project={project}
+          row={actionModal.row}
+          defaultType={actionModal.costType}
+          onClose={() => setActionModal(null)}
+          onSubmit={(payload) => submitProjectCost(actionModal.row, payload)}
+        />
+      ) : null}
+
+      {actionModal?.kind === 'video' ? (
+        <VideoUrlModal
+          row={actionModal.row}
+          onClose={() => setActionModal(null)}
+          onSubmit={(payload) => submitActionStub('video', actionModal.row, payload)}
+        />
+      ) : null}
+
+      {actionModal?.kind === 'contract' ? (
+        <ContractUploadModal
+          row={actionModal.row}
+          onClose={() => setActionModal(null)}
+          onSubmit={(payload) => submitActionStub('contract', actionModal.row, payload)}
+        />
+      ) : null}
+
+      {actionModal?.kind === 'stage-action' ? (
+        <StageActionModal
+          row={actionModal.row}
+          action={actionModal.action}
+          onClose={() => setActionModal(null)}
+          onSubmit={(reason) => submitStageAction(actionModal.row, actionModal.action, reason)}
         />
       ) : null}
 
@@ -668,8 +864,8 @@ export function ProjectDetailView({
         <AddKolModal
           project={project}
           rows={rows}
-          kolOptions={kolOptions}
-          busy={addingKols}
+          kolOptions={availableKolOptions.length || onLoadAvailableKols ? availableKolOptions : kolOptions}
+          busy={addingKols || loadingAvailableKols}
           onClose={() => setAddKolOpen(false)}
           onSubmit={addSelectedKols}
         />
@@ -684,39 +880,41 @@ export function ProjectDetailView({
         />
       ) : null}
 
-      {taskReminderOpen && reminderTasks.length ? (
-        <div className="vkpi-campaign-notice-backdrop" role="presentation" onClick={dismissTaskReminder}>
-          <div className="vkpi-campaign-task-modal" role="dialog" aria-label="今日项目提醒" onClick={(event) => event.stopPropagation()}>
-            <header>
-              <div>
-                <h3>今日项目提醒</h3>
-                <p>根据当前项目行检测到需要处理的物流或阶段推进事项。</p>
-              </div>
-              <button type="button" onClick={dismissTaskReminder}>稍后</button>
-            </header>
-            <div className="vkpi-campaign-task-modal-list">
-              {reminderTasks.map((item) => (
-                <button
-                  key={`${item.level}-${item.title}-${item.rowId || item.tab || ''}`}
-                  type="button"
-                  onClick={() => jumpFromTaskReminder(item)}
-                >
-                  <span className={item.className}>{item.level}</span>
-                  <b>{item.title}</b>
-                  <small>{item.subtitle}</small>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      ) : null}
-
       {notice ? (
         <div className="vkpi-campaign-notice-backdrop" role="presentation" onClick={() => setNotice(null)}>
           <div className={`vkpi-campaign-notice is-${notice.tone}`} role="dialog" aria-label={notice.title} onClick={(event) => event.stopPropagation()}>
             <h3>{notice.title}</h3>
             <p>{notice.body}</p>
             <button type="button" onClick={() => setNotice(null)}>知道了</button>
+          </div>
+        </div>
+      ) : null}
+
+      {copyFallback ? (
+        <div className="vkpi-campaign-notice-backdrop" role="presentation" onClick={() => setCopyFallback(null)}>
+          <div className="vkpi-campaign-notice is-info" role="dialog" aria-label={`手动复制 ${copyFallback.label}`} onClick={(event) => event.stopPropagation()}>
+            <h3>手动复制 {copyFallback.label}</h3>
+            <p>当前浏览器阻止了自动写入剪贴板，下面文本已可选中复制。</p>
+            <textarea
+              className="mt-3 min-h-[220px] w-full rounded-lg border border-white/[0.08] bg-black/40 p-3 text-[11px] text-slate-200 outline-none"
+              readOnly
+              value={copyFallback.content}
+              onFocus={(event) => event.currentTarget.select()}
+            />
+            <div className="vkpi-campaign-confirm-actions">
+              <button type="button" onClick={() => setCopyFallback(null)}>关闭</button>
+              <button
+                className="is-primary"
+                type="button"
+                onClick={(event) => {
+                  const textarea = event.currentTarget.closest('[role="dialog"]')?.querySelector('textarea');
+                  textarea?.focus();
+                  textarea?.select();
+                }}
+              >
+                选中文本
+              </button>
+            </div>
           </div>
         </div>
       ) : null}

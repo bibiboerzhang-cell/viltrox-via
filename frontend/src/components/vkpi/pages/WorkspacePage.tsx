@@ -18,17 +18,18 @@ const AttributionPage = lazy(() => import('./AttributionPage').then((module) => 
 const AgentsPage = lazy(() => import('./AgentsPage').then((module) => ({ default: module.AgentsPage })));
 const AuditPage = lazy(() => import('./AuditPage').then((module) => ({ default: module.AuditPage })));
 const CampaignsPage = lazy(() => import('./CampaignsPage').then((module) => ({ default: module.CampaignsPage })));
-const ChannelsPage = lazy(() => import('./ChannelsPage').then((module) => ({ default: module.ChannelsPage })));
 const CostsPage = lazy(() => import('./CostsPage').then((module) => ({ default: module.CostsPage })));
 const DataAnalysisPage = lazy(() => import('./DataAnalysisPage').then((module) => ({ default: module.DataAnalysisPage })));
 const DataQualityPage = lazy(() => import('./DataQualityPage').then((module) => ({ default: module.DataQualityPage })));
 const DiscoverPage = lazy(() => import('./DiscoverPage').then((module) => ({ default: module.DiscoverPage })));
 const IntelligenceCenterPage = lazy(() => import('./IntelligenceCenterPage').then((module) => ({ default: module.IntelligenceCenterPage })));
+const KolPoolV2Page = lazy(() => import('../kol-pool-v2/KolPoolV2Page').then((module) => ({ default: module.KolPoolV2Page })));
 const LinksPage = lazy(() => import('./LinksPage').then((module) => ({ default: module.LinksPage })));
 const ProductBattlePage = lazy(() => import('./ProductBattlePage').then((module) => ({ default: module.ProductBattlePage })));
 const ProjectsPage = lazy(() => import('./ProjectsPage').then((module) => ({ default: module.ProjectsPage })));
-const ReportsPage = lazy(() => import('./ReportsPage').then((module) => ({ default: module.ReportsPage })));
+const ReportCenterV2Page = lazy(() => import('../report-v2/ReportCenterV2Page').then((module) => ({ default: module.ReportCenterV2Page })));
 const SettingsPage = lazy(() => import('./SettingsPage').then((module) => ({ default: module.SettingsPage })));
+const MyKolPage = lazy(() => import('./myKol/MyKolPage').then((module) => ({ default: module.MyKolPage })));
 
 export interface WorkspacePageProps {
   page: VkpiPageKey;
@@ -73,6 +74,11 @@ export interface WorkspacePageProps {
   onOpenKolProfile?: (project: VkpiProjectRow) => void | Promise<void>;
   onOpenStaffProfile?: (staffId: string, fallback?: Partial<VkpiStaffMember>) => void | Promise<void>;
   onSelectPage?: (page: VkpiPageKey) => void;
+  onToggleView?: (targetPage?: VkpiPageKey) => void;
+  userName?: string;
+  userRole?: string;
+  userAvatar?: string;
+  onSignOut?: () => Promise<void> | void;
   apiToken?: string;
 }
 
@@ -142,6 +148,18 @@ export function WorkspacePage(props: WorkspacePageProps) {
   let page = <SettingsPage {...props} />;
   if (props.page === 'agents') page = <AgentsPage {...props} />;
   if (props.page === 'intelligenceCenter') page = <IntelligenceCenterPage {...props} />;
+  if (props.page === 'kolPoolV2') {
+    page = (
+      <KolPoolV2Page
+        apiToken={props.apiToken}
+        userName={props.userName}
+        userRole={props.userRole}
+        userAvatar={props.userAvatar}
+        onSelectPage={props.onSelectPage}
+        onSignOut={props.onSignOut}
+      />
+    );
+  }
   if (props.page === 'discover') page = <DiscoverPage {...props} />;
   if (props.page === 'projects') page = <ProjectsPage {...props} />;
   if (props.page === 'links') page = <LinksPage {...props} />;
@@ -150,11 +168,11 @@ export function WorkspacePage(props: WorkspacePageProps) {
   if (props.page === 'productBattle' || props.page === 'analytics') page = <ProductBattlePage {...props} />;
   // 数据分析 - 双兼容: 旧 industryData 路由 + 新 dataAnalysis 路由都进 DataAnalysisPage
   if (props.page === 'dataAnalysis' || props.page === 'industryData') page = <DataAnalysisPage {...props} />;
-  if (props.page === 'channels') page = <ChannelsPage {...props} />;
+  if (props.page === 'channels') page = <MyKolPage {...props} />;
   if (props.page === 'campaigns') page = <CampaignsPage {...props} />;
   if (props.page === 'dataQuality') page = <DataQualityPage {...props} />;
   if (props.page === 'audit') page = <AuditPage {...props} />;
-  if (props.page === 'reports') page = <ReportsPage {...props} />;
+  if (props.page === 'reports') page = <ReportCenterV2Page {...props} />;
   return (
     <Suspense fallback={<WorkspaceLoadingFallback />}>
       {taskFocus ? <WorkspaceTaskFocusBanner focus={taskFocus} onDismiss={() => setTaskFocus(null)} /> : null}

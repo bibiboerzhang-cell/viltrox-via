@@ -1,8 +1,8 @@
-import type { VkpiKolOption, VkpiProjectRow, VkpiProjectStage, VkpiStaffMember } from '../../components/vkpi/vkpiTypes';
+import type { VkpiKolOption, VkpiPageKey, VkpiProjectRow, VkpiProjectStage, VkpiStaffMember } from '../../components/vkpi/vkpiTypes';
 import { primaryStageFlow, stageLabels } from '../../components/vkpi/shared/vkpiConstants';
 import { currencyFormatter, numberFormatter } from '../../components/vkpi/shared/vkpiFormatters';
 
-export const detailTabs = ['参与 KOL', '数据汇总', '物料', '费用', '合同归档', '复盘'] as const;
+export const detailTabs = ['参与 KOL', '数据汇总', '物料', '费用', '合同归档', '复盘', '时间轴'] as const;
 export type DetailTab = typeof detailTabs[number];
 export const editPlatformOptions = ['Instagram', 'YouTube', 'TikTok', 'Facebook', 'Reddit', 'X', 'Other'] as const;
 
@@ -11,6 +11,14 @@ export const cancelledStages = new Set<VkpiProjectStage>(['cancelled', 'lost', '
 export const planningStages = new Set<VkpiProjectStage>(['invited', 'discovery']);
 export const wrappingStages = new Set<VkpiProjectStage>(['content_published', 'published', 'measured']);
 export const activeStages = new Set<VkpiProjectStage>(['contacted', 'replied', 'in_discussion', 'agreed', 'shipped', 'received']);
+const rawStageAliases: Record<string, VkpiProjectStage> = {
+  arrived: 'received',
+  churned: 'closed',
+  content_posted: 'published',
+  device_sent: 'shipped',
+  discovered: 'discovery',
+  reviewed: 'measured',
+};
 
 export const stageDescriptions: Record<VkpiProjectStage, string> = {
   invited: '待从名单确认合作对象',
@@ -26,7 +34,7 @@ export const stageDescriptions: Record<VkpiProjectStage, string> = {
   measured: '数据已统计，等待关闭复盘',
   closed: '项目已关闭',
   stalled: '项目停滞，需要人工处理',
-  lost: '合作流失',
+  lost: '项目已关闭',
   released: '已释放',
   cancelled: '已取消',
 };
@@ -141,19 +149,28 @@ export interface ContractLine {
 export interface ProjectDetailViewProps {
   project: VkpiProjectRow;
   projects: VkpiProjectRow[];
+  participatingRows?: VkpiProjectRow[];
+  costRows?: Array<Record<string, unknown>>;
   viewMode: 'manager' | 'employee';
   onBack: () => void;
   onOpenKolProfile?: (project: VkpiProjectRow) => void | Promise<void>;
   onOpenStaffProfile?: (staffId: string, fallback?: Partial<VkpiStaffMember>) => void | Promise<void>;
   onUpdateProject?: (projectId: string, payload: { projectName?: string; productSku?: string; productName?: string; products?: Array<{ productSku: string; productName?: string }>; platform?: string; marketplace?: string; priority?: string; shopifyLink?: string; targetPostDate?: string; dueAt?: string; note?: string }) => Promise<void>;
   onMoveProjectStage?: (projectId: string, toStage: VkpiProjectStage, note?: string, extras?: { trackingNumber?: string; sampleStatus?: string; sourceRefType?: string; sourceRefId?: string }) => Promise<void>;
+  onAddProjectCost?: (payload: { projectId: string; costType: string; amountUsd: number; note?: string; sourceRef?: string; metadata?: Record<string, unknown> }) => Promise<void>;
   onUpsertProjectTerms?: (projectId: string, payload: Record<string, unknown>) => Promise<void>;
   onAddProjectShipment?: (projectId: string, payload: Record<string, unknown>) => Promise<void>;
   onUploadEvidenceFile?: (file: File, payload?: { entityType?: string; entityId?: string; purpose?: string }) => Promise<Record<string, unknown>>;
   kolOptions?: VkpiKolOption[];
+  onLoadAvailableKols?: (project: VkpiProjectRow) => Promise<VkpiKolOption[]>;
   onAddKolsToCampaign?: (project: VkpiProjectRow, kols: VkpiKolOption[]) => Promise<void>;
   onProjectUpdated?: () => void | Promise<void>;
   onDeleteProject?: (project: VkpiProjectRow, reason?: string, actionLabel?: string) => void | Promise<void>;
+  onAdvanceProjectKol?: (projectId: string, kolRef: string, payload: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  onUpdateProjectKolShipping?: (projectId: string, kolRef: string, payload: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  onSubmitProjectKolActionStub?: (projectId: string, kolRef: string, actionKind: 'screenshot' | 'video' | 'contract', payload: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  onSelectPage?: (page: VkpiPageKey) => void;
+  onToggleView?: (targetPage?: VkpiPageKey) => void;
 }
 
 export function statusForProject(project: VkpiProjectRow) {
@@ -165,11 +182,23 @@ export function statusForProject(project: VkpiProjectRow) {
   return '进行中';
 }
 
-export function stageIndex(stage: VkpiProjectStage) {
-  if (stage === 'content_published') return primaryStageFlow.indexOf('published');
-  const index = primaryStageFlow.indexOf(stage);
-  if (terminalStages.has(stage) || cancelledStages.has(stage)) return primaryStageFlow.length - 1;
+export function canonicalStage(stage: VkpiProjectStage | string) {
+  const raw = String(stage || '').trim().toLowerCase();
+  return (rawStageAliases[raw] || raw) as VkpiProjectStage;
+}
+
+export function stageIndex(stage: VkpiProjectStage | string) {
+  const canonical = canonicalStage(stage);
+  if (canonical === 'content_published') return primaryStageFlow.indexOf('published');
+  const index = primaryStageFlow.indexOf(canonical);
+  if (terminalStages.has(canonical) || cancelledStages.has(canonical)) return primaryStageFlow.length - 1;
   return index >= 0 ? index : 0;
+}
+
+export function matchesProjectStageFilter(rowStage: VkpiProjectStage | string, filterStage: VkpiProjectStage | string) {
+  const filter = canonicalStage(filterStage);
+  if (filter === 'closed') return stageIndex(rowStage) === stageIndex('closed');
+  return stageIndex(rowStage) === stageIndex(filter);
 }
 
 export function parseDays(label?: string) {
@@ -443,11 +472,12 @@ export function stageCounts(rows: VkpiProjectRow[]) {
 
 export function defaultTracking(row: VkpiProjectRow): TrackingState {
   const delivered = stageIndex(row.stage) >= stageIndex('received');
+  const trackingNumber = row.isFakeTracking ? '' : String(row.trackingNumber || '').trim();
   return {
-    courier: 'SF Express',
-    no: '',
-    status: delivered ? '已送达 · 请提醒发布排期' : stageIndex(row.stage) >= stageIndex('shipped') ? '运输中 / 待查物流' : '待发货',
-    last: delivered ? '今天 09:15' : '-',
+    courier: row.trackingCarrier || '',
+    no: trackingNumber,
+    status: row.trackingStatus || (delivered ? '已送达 · 请提醒发布排期' : stageIndex(row.stage) >= stageIndex('shipped') ? '运输中 / 待查物流' : '待发货'),
+    last: row.updatedAt ? '详情刷新时' : '-',
     delivered,
   };
 }

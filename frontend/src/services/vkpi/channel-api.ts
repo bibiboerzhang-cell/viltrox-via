@@ -31,7 +31,7 @@ export async function getOfficialChannelMatrix(
   if (filters.viewAsStaffId) params.set("view_as_staff_id", filters.viewAsStaffId);
   return apiFetch<{ platforms?: Row[]; account_count?: number; post_count?: number; total_views?: number }>(
     `/api/marketing/channels/official-matrix?${params.toString()}`,
-    {},
+    { timeoutMs: 7000 },
     token,
   );
 }
@@ -63,7 +63,7 @@ export async function getOfficialChannelPosts(
   params.set("window", filters.window || "all");
   return apiFetch<{ account?: Row; posts?: Row[]; pagination?: Row; sort?: string; source?: string }>(
     `/api/marketing/channels/${encodeURIComponent(String(channelId))}/posts?${params.toString()}`,
-    {},
+    { timeoutMs: 8000 },
     token,
   );
 }
@@ -79,7 +79,7 @@ export async function getChannelPostComments(
   params.set("limit", String(filters.limit ?? 50));
   return apiFetch<Row>(
     `/api/marketing/channels/${encodeURIComponent(String(channelId))}/post-comments?${params.toString()}`,
-    {},
+    { timeoutMs: 8000 },
     token,
   );
 }

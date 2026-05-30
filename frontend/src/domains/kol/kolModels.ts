@@ -33,10 +33,10 @@ export const emptyKol: VkpiKolDetail = {
 
 export function buildKolOptions(rows: Row[]): VkpiKolOption[] {
   return rows.map((row) => {
-    const name = String(row.media_name || row.owner_name || row.channel_name || row.handle || `KOL ${row.id || ''}`).trim();
-    const handle = String(row.channel_name || row.handle || row.channel_url || '').trim();
-    const followerCount = numberValue(row.snapshot_follower_count || row.follower_count);
-    const contentCount = numberValue(row.snapshot_content_count || row.content_count);
+    const name = String(row.display_name || row.media_name || row.owner_name || row.channel_name || row.handle || `KOL ${row.id || ''}`).trim();
+    const handle = String(row.handle || row.channel_handle || row.username || row.channel_url || '').trim();
+    const followerCount = numberValue(row.snapshot_follower_count || row.follower_count || row.followers);
+    const contentCount = numberValue(row.snapshot_content_count || row.content_count || row.posts_count || row.video_evidence_count);
     return {
       id: String(row.id || ''),
       name: name || '未命名 KOL',

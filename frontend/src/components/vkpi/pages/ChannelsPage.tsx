@@ -236,10 +236,10 @@ export function ChannelsPage({ apiToken, viewMode, data, onRefreshData, onSelect
     writeDiscoverFocus({
       source: 'channel_platform_drilldown',
       title: `${label} 候选发现`,
-      summary: '从 KOL/账号平台池进入发现；先复用已有账号、项目和平台上下文，再判断是否需要新候选。',
+      summary: '从 MY KOL 平台池进入发现；先复用已有账号、项目和平台上下文，再判断是否需要新候选。',
       query: discoverQueryForPlatform(label, variant),
       platform: platformKey || 'all',
-      sourceLabel: 'KOL/账号平台池',
+      sourceLabel: 'MY KOL 平台池',
     });
     onSelectPage?.('discover');
   };
@@ -320,7 +320,7 @@ export function ChannelsPage({ apiToken, viewMode, data, onRefreshData, onSelect
 
   return (
     <PageShell
-      title={viewMode === 'manager' ? 'KOL/账号管理 / 团队矩阵' : '我的平台'}
+      title={viewMode === 'manager' ? 'MY KOL / 团队矩阵' : 'MY KOL'}
       eyebrow={null}
       headingExtra={(
         <ChannelGapPanel
@@ -378,26 +378,24 @@ export function ChannelsPage({ apiToken, viewMode, data, onRefreshData, onSelect
       />
       <RedditAssessmentPanel account={selectedAccount} apiToken={apiToken} />
       <ChannelContentList account={selectedAccount} apiToken={apiToken} />
-      {viewMode === 'employee' ? (
-        <MyKolMatrix
-          apiToken={apiToken}
-          data={data}
-          initialPlatform={selectedPlatform}
-          onDiscoverPlatform={(nextPlatform) => {
-            const label = platformDisplay(nextPlatform || selectedPlatform || platform);
-            writeDiscoverFocus({
-              source: 'my_kol_platform_card',
-              title: `${label} 相似 KOL 发现`,
-              summary: '从我的 KOL 平台卡进入发现；用于补充同平台、同内容方向的新候选。',
-              query: discoverQueryForPlatform(label, 'same_platform'),
-              platform: nextPlatform || selectedPlatform || platform || 'all',
-              sourceLabel: '我的 KOL 平台卡',
-            });
-            onSelectPage?.('discover');
-          }}
-          onRefreshData={onRefreshData}
-        />
-      ) : null}
+      <MyKolMatrix
+        apiToken={apiToken}
+        data={data}
+        initialPlatform={selectedPlatform}
+        onDiscoverPlatform={(nextPlatform) => {
+          const label = platformDisplay(nextPlatform || selectedPlatform || platform);
+          writeDiscoverFocus({
+            source: 'my_kol_platform_card',
+            title: `${label} 相似 KOL 发现`,
+            summary: '从 MY KOL 平台卡进入发现；用于补充同平台、同内容方向的新候选。',
+            query: discoverQueryForPlatform(label, 'same_platform'),
+            platform: nextPlatform || selectedPlatform || platform || 'all',
+            sourceLabel: 'MY KOL 平台卡',
+          });
+          onSelectPage?.('discover');
+        }}
+        onRefreshData={onRefreshData}
+      />
       {message ? <div className="vkpi-inline-message">{message}</div> : null}
       {showBindingList ? (
         <div className="vkpi-glass-modal" role="dialog" aria-modal="true" aria-label="平台绑定列表">

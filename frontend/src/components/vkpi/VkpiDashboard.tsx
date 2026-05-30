@@ -3,6 +3,8 @@ import './VkpiDashboard.css';
 import { CommandCenter } from './dashboard/CommandCenter';
 import { DashboardPremium } from './pages/DashboardPremium';
 import { GlassDemoPage } from './pages/GlassDemoPage';
+import { MissionControlV2Page } from './pages/MissionControlV2Page';
+import { V615ReplicaApp } from './v615-replica/V615ReplicaApp';
 import { EMPLOYEE_NAV_ITEMS, MANAGER_NAV_ITEMS } from './layout/vkpiLayoutConstants';
 import {
   cleanVkpiPageCandidate,
@@ -66,11 +68,11 @@ export interface VkpiDashboardProps {
   onClaimKol?: (kolId: string) => Promise<void>;
   onUpdateKol?: (kolId: string, payload: { avatarUrl?: string; profileUrl?: string; contactEmail?: string; contactPhone?: string; notes?: string; contactLinks?: Array<{ label?: string; value?: string; url?: string }> }) => Promise<void>;
   onUploadEvidenceFile?: (file: File, payload?: { entityType?: string; entityId?: string; purpose?: string }) => Promise<Record<string, unknown>>;
-  onCreateProject?: (payload: { projectName: string; kolId?: string; productSku?: string; productName?: string; productSkus?: string[]; products?: Array<{ productSku: string; productName?: string }>; platform?: string; marketplace?: string; note?: string }) => Promise<void>;
+  onCreateProject?: (payload: { projectName: string; kolId?: string; productSku?: string; productName?: string; productSkus?: string[]; products?: Array<{ productSku: string; productName?: string }>; platform?: string; marketplace?: string; sourceType?: string; note?: string }) => Promise<void>;
   onUpdateProject?: (projectId: string, payload: { projectName?: string; productSku?: string; productName?: string; products?: Array<{ productSku: string; productName?: string }>; platform?: string; marketplace?: string; priority?: string; shopifyLink?: string; targetPostDate?: string; dueAt?: string; note?: string }) => Promise<void>;
   onMoveProjectStage?: (projectId: string, toStage: VkpiProjectStage, note?: string, extras?: { trackingNumber?: string; sampleStatus?: string; sourceRefType?: string; sourceRefId?: string }) => Promise<void>;
   onDeleteProject?: (projectId: string, reason?: string) => Promise<void>;
-  onAddProjectCost?: (payload: { projectId: string; costType: string; amountUsd: number; note?: string; sourceRef?: string }) => Promise<void>;
+  onAddProjectCost?: (payload: { projectId: string; costType: string; amountUsd: number; note?: string; sourceRef?: string; metadata?: Record<string, unknown> }) => Promise<void>;
   onUpdateCost?: (costId: string, payload: { costType?: string; amountUsd?: number; note?: string; sourceRef?: string }) => Promise<void>;
   onApproveCost?: (costId: string, note?: string) => Promise<void>;
   onVoidCost?: (costId: string, reason?: string) => Promise<void>;
@@ -97,7 +99,7 @@ export interface VkpiDashboardProps {
   onSignOut?: () => Promise<void> | void;
   viewMode?: 'manager' | 'employee';
   canSwitchView?: boolean;
-  onToggleView?: () => void;
+  onToggleView?: (targetPage?: VkpiPageKey) => void;
 }
 
 export function VkpiDashboard({
@@ -398,6 +400,27 @@ export function VkpiDashboard({
     return <GlassDemoPage apiToken={apiToken} userName={userName} userRole={userRole} />;
   }
 
+  if (activePage === 'v615Replica') {
+    return (
+      <TaskCenterProvider apiToken={apiToken}>
+        <V615ReplicaApp
+          apiToken={apiToken}
+          userName={userName}
+          userRole={userRole}
+          userAvatar={userAvatar}
+          data={data}
+          viewMode={viewMode}
+          onRefreshData={onRefreshData}
+          onSelectPage={handleSelectPage}
+          onToggleView={onToggleView}
+          onLookupKol={onLookupKol}
+          onUpsertProjectTerms={onUpsertProjectTerms}
+          onSignOut={onSignOut}
+        />
+      </TaskCenterProvider>
+    );
+  }
+
   return (
     <TaskCenterProvider apiToken={apiToken}>
     <div className="vkpi-app" data-testid="vkpi-dashboard">
@@ -414,6 +437,7 @@ export function VkpiDashboard({
       />
 
       <div className="vkpi-shell">
+        {activePage !== 'missionControlV2' && activePage !== 'kolPoolV2' && activePage !== 'reports' ? (
         <VkpiTopbar
           query={query}
           range={range}
@@ -432,9 +456,19 @@ export function VkpiDashboard({
           onGenerateWeeklyReport={onGenerateWeeklyReport}
           weeklyReportStatus={weeklyReportStatus}
         />
+        ) : null}
 
 	        <main className={`vkpi-page vkpi-page--${activePage}`}>
-	          {activePage === 'dashboardPremium' ? (
+	          {activePage === 'missionControlV2' ? (
+	            <MissionControlV2Page
+	              apiToken={apiToken}
+	              userName={userName}
+	              userRole={userRole}
+	              userAvatar={userAvatar}
+	              onSelectPage={handleSelectPage}
+	              onSignOut={onSignOut}
+	            />
+	          ) : activePage === 'dashboardPremium' ? (
 	            <DashboardPremium apiToken={apiToken} userName={userName} userRole={userRole} embedded onSelectPage={handleSelectPage} />
 	          ) : activePage === 'command' ? (
 	            <CommandCenter
@@ -504,6 +538,11 @@ export function VkpiDashboard({
               onRefreshData={onRefreshData}
               onOpenEvidence={openMetricEvidence}
               onSelectPage={handleSelectPage}
+              onToggleView={onToggleView}
+              userName={userName}
+              userRole={userRole}
+              userAvatar={userAvatar}
+              onSignOut={onSignOut}
               apiToken={apiToken}
             />
           )}
@@ -570,7 +609,7 @@ export function VkpiDashboard({
             }}
           />
         ) : null}
-        {activePage !== 'dashboardPremium' && activePage !== 'command' ? (
+        {activePage !== 'missionControlV2' && activePage !== 'kolPoolV2' && activePage !== 'reports' && activePage !== 'dashboardPremium' && activePage !== 'command' ? (
           <FeedbackWidget apiToken={apiToken} activePage={activePage} userName={userName} />
         ) : null}
         <TaskCenter />

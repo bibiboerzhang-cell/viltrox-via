@@ -3,11 +3,14 @@ export type VkpiDataStatus = 'live' | 'partial' | 'empty';
 export type VkpiRangeKey = 'today' | '7d' | '30d' | 'mtd' | 'qtd';
 export type VkpiPageKey =
   | 'command'
+  | 'v615Replica'
+  | 'missionControlV2'
   | 'dashboardPremium'
   | 'glass-demo'
   | 'agents'
   | 'intelligenceCenter'
   | 'repairCenter'
+  | 'kolPoolV2'
   | 'discover'
   | 'projects'
   | 'links'
@@ -201,16 +204,22 @@ export interface VkpiAuditOverview {
 
 export interface VkpiProjectRow {
   id: string;
+  projectId?: string;
+  assignmentId?: string;
+  kolPoolId?: string;
   kolId?: string;
   kolName: string;
   kolHandle: string;
   kolAvatar?: string;
+  kolProfileUrl?: string;
   platform: VkpiPlatform;
   campaign: string;
   stage: VkpiProjectStage;
   latestMessageAt: string;
   latestMessageSource: 'DM' | 'Email' | 'Comment reply' | 'Manual note' | 'No reply';
   views: number;
+  likes?: number;
+  comments?: number;
   clicks: number | null;
   orders: number | null;
   gmv: number;
@@ -224,6 +233,24 @@ export interface VkpiProjectRow {
   marketplace?: string;
   priority?: string;
   shopifyLink?: string;
+  trackingNumber?: string;
+  trackingCarrier?: string;
+  trackingStatus?: string;
+  isFakeTracking?: boolean;
+  kolCount?: number;
+  kolWithEvidence?: number;
+  evidenceCount?: number;
+  platforms?: VkpiPlatform[];
+  stageCounts?: Record<string, number>;
+  publishedCount?: number;
+  healthScore?: number;
+  healthBasis?: string;
+  healthBreakdown?: Record<string, number>;
+  needsFollowupCount?: number | null;
+  overdueCount?: number | null;
+  currentFocus?: string;
+  bottleneck?: string;
+  churnedCount?: number;
   createdAt?: string;
   startedAt?: string;
   closedAt?: string;
@@ -334,6 +361,8 @@ export interface VkpiEvidenceRow {
 
 export interface VkpiProjectDetail {
   project: Record<string, unknown>;
+  participating_kols?: Array<Record<string, unknown>>;
+  project_kol_assignments?: Array<Record<string, unknown>>;
   events: Array<Record<string, unknown>>;
   links: Array<Record<string, unknown>>;
   link_clicks?: Array<Record<string, unknown>>;

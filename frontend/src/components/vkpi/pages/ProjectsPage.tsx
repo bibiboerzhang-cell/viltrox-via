@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import type { VkpiDashboardData, VkpiKolOption, VkpiProjectRow, VkpiProjectStage, VkpiStaffMember } from '../vkpiTypes';
+import type { VkpiDashboardData, VkpiKolOption, VkpiPageKey, VkpiProjectRow, VkpiProjectStage, VkpiStaffMember } from '../vkpiTypes';
 import { clearProjectFocus, readProjectFocus, type IntelligenceProjectFocusPayload } from '../intelligence/intelligenceProjectFocus';
 import { useProjectDetail } from '../hooks/useProjectDetail';
+import { addKolsToProject, advanceProjectKol, getAvailableProjectKols, submitProjectKolActionStub, updateProjectKolShipping } from '../../../domains/projects';
+import { buildKolOptions } from '../../../domains/kol';
 import { PageShell } from './PageShell';
 import { ProjectCampaignBoard } from './projects/ProjectCampaignBoard';
 import { ProjectDetailView } from './projects/ProjectDetailView';
@@ -17,14 +19,17 @@ interface ProjectsPageProps {
   onOpenKolProfile?: (project: VkpiProjectRow) => void | Promise<void>;
   onOpenStaffProfile?: (staffId: string, fallback?: Partial<VkpiStaffMember>) => void | Promise<void>;
   onLookupKol?: (payload: { platform: string; handleOrUrl: string; createIfMissing?: boolean; email?: string; contactEmail?: string; notes?: string; scanAccount?: boolean; maxPosts?: number; productSku?: string }) => Promise<{ kol?: Record<string, unknown> | null; created?: boolean }>;
-  onCreateProject?: (payload: { projectName: string; kolId?: string; productSku?: string; productName?: string; productSkus?: string[]; products?: Array<{ productSku: string; productName?: string }>; platform?: string; marketplace?: string; note?: string }) => Promise<Record<string, unknown> | void>;
+  onCreateProject?: (payload: { projectName: string; kolId?: string; productSku?: string; productName?: string; productSkus?: string[]; products?: Array<{ productSku: string; productName?: string }>; platform?: string; marketplace?: string; sourceType?: string; note?: string }) => Promise<Record<string, unknown> | void>;
   onUpdateProject?: (projectId: string, payload: { projectName?: string; productSku?: string; productName?: string; products?: Array<{ productSku: string; productName?: string }>; platform?: string; marketplace?: string; priority?: string; shopifyLink?: string; targetPostDate?: string; dueAt?: string; note?: string }) => Promise<void>;
   onMoveProjectStage?: (projectId: string, toStage: VkpiProjectStage, note?: string, extras?: { trackingNumber?: string; sampleStatus?: string; sourceRefType?: string; sourceRefId?: string }) => Promise<void>;
   onDeleteProject?: (projectId: string, reason?: string) => Promise<void>;
-  onAddProjectCost?: (payload: { projectId: string; costType: string; amountUsd: number; note?: string; sourceRef?: string }) => Promise<void>;
+  onAddProjectCost?: (payload: { projectId: string; costType: string; amountUsd: number; note?: string; sourceRef?: string; metadata?: Record<string, unknown> }) => Promise<void>;
   onUpsertProjectTerms?: (projectId: string, payload: Record<string, unknown>) => Promise<void>;
   onAddProjectShipment?: (projectId: string, payload: Record<string, unknown>) => Promise<void>;
   onUploadEvidenceFile?: (file: File, payload?: { entityType?: string; entityId?: string; purpose?: string }) => Promise<Record<string, unknown>>;
+  onSelectPage?: (page: VkpiPageKey) => void;
+  onToggleView?: (targetPage?: VkpiPageKey) => void;
+  onRefreshData?: () => void | Promise<void>;
   apiToken?: string;
 }
 
@@ -71,9 +76,13 @@ export function ProjectsPage({
   onUpdateProject,
   onMoveProjectStage,
   onDeleteProject,
+  onAddProjectCost,
   onUpsertProjectTerms,
   onAddProjectShipment,
   onUploadEvidenceFile,
+  onSelectPage,
+  onToggleView,
+  onRefreshData,
   apiToken,
 }: ProjectsPageProps) {
   const [createOpen, setCreateOpen] = useState(false);
@@ -189,6 +198,7 @@ export function ProjectsPage({
         productSku: matchedProduct?.productSku,
         productName: productName.trim() || matchedProduct?.productName,
         products: matchedProduct ? [{ productSku: matchedProduct.productSku, productName: matchedProduct.productName }] : undefined,
+        sourceType: 'v615_projects_ui',
         note: noteLines.length ? noteLines.join('\n') : undefined,
       });
       resetCreateForm();
@@ -215,57 +225,83 @@ export function ProjectsPage({
     }
   };
 
+  const loadAvailableKols = async (targetProject: VkpiProjectRow) => {
+    if (!apiToken) return data.kolOptions;
+    const response = await getAvailableProjectKols(apiToken, targetProject.id);
+    return buildKolOptions(response.kols || []);
+  };
+
   const addKolsToCampaign = async (targetProject: VkpiProjectRow, kols: VkpiKolOption[]) => {
-    if (!onCreateProject) throw new Error('当前没有项目创建接口，不能追加 KOL。');
-    for (const kol of kols) {
-      await onCreateProject({
-        projectName: targetProject.campaign || `KOL 合作 · ${kol.handle || kol.name}`,
-        kolId: kol.id,
-        platform: kol.platform,
-        note: [
-          `从项目详情追加 KOL：${kol.handle || kol.name}`,
-          `来源项目：${targetProject.id}`,
-          targetProject.campaign ? `推广名称：${targetProject.campaign}` : '',
-        ].filter(Boolean).join('\n'),
-      });
-    }
-    setMessage(`已追加 ${kols.length} 个 KOL 到「${targetProject.campaign}」。`);
+    if (!apiToken) throw new Error('缺少 API token，不能写入项目 KOL。');
+    const result = await addKolsToProject(
+      apiToken,
+      targetProject.id,
+      kols.map((kol) => kol.id),
+      targetProject.ownerId,
+    );
+    setMessage(`已向「${targetProject.campaign}」写入 ${result.inserted || 0} 个 KOL，跳过 ${result.skipped_existing || 0} 个已有项。`);
+    await onRefreshData?.();
+  };
+
+  const advanceProjectKolRow = async (projectId: string, kolRef: string, payload: Record<string, unknown>) => {
+    if (!apiToken) throw new Error('缺少 API token，不能推进 KOL 阶段。');
+    const result = await advanceProjectKol(apiToken, projectId, kolRef, payload);
+    await refreshProjectData();
+    return result;
+  };
+
+  const updateProjectKolShippingRow = async (projectId: string, kolRef: string, payload: Record<string, unknown>) => {
+    if (!apiToken) throw new Error('缺少 API token，不能写入物流。');
+    const result = await updateProjectKolShipping(apiToken, projectId, kolRef, payload);
+    await refreshProjectData();
+    return result;
+  };
+
+  const submitProjectKolStub = async (projectId: string, kolRef: string, actionKind: 'screenshot' | 'video' | 'contract', payload: Record<string, unknown>) => {
+    if (!apiToken) throw new Error('缺少 API token，不能提交该操作。');
+    return submitProjectKolActionStub(apiToken, projectId, kolRef, actionKind, payload);
+  };
+
+  const refreshProjectData = async () => {
+    await projectDetailState.refresh();
+    await onRefreshData?.();
   };
 
   const importKolRows = async (targetProject: VkpiProjectRow, rows: ImportKolRow[]) => {
-    if (!onLookupKol || !onCreateProject) throw new Error('当前缺少查重或项目创建接口，不能导入 KOL 名单。');
+    if (!apiToken) throw new Error('缺少 API token，不能向项目批量追加 KOL。');
     setBusy(true);
     try {
+      const matchedKols: VkpiKolOption[] = [];
+      const unmatchedRows: ImportKolRow[] = [];
+      const seenKolIds = new Set<string>();
       for (const row of rows) {
-        const lookup = await onLookupKol({
-          platform: row.platform,
-          handleOrUrl: row.handle,
-          createIfMissing: true,
-          email: row.email || undefined,
-          contactEmail: row.email || undefined,
-          notes: row.name ? `项目名单导入：${row.name}` : '项目名单导入',
-          scanAccount: false,
-          productSku: targetProject.productSku,
-        });
-        const kolId = String(lookup.kol?.id || lookup.kol?.kol_id || '').trim();
-        if (!kolId) throw new Error(`KOL 查重后没有返回 ID：${row.handle}`);
-        await onCreateProject({
-          projectName: targetProject.campaign || `KOL 合作 · ${row.handle}`,
-          kolId,
-          productSku: targetProject.productSku,
-          productName: targetProject.productName,
-          platform: row.platform,
-          marketplace: targetProject.marketplace,
-          note: [
-            `名单导入 KOL：${row.handle}`,
-            row.name ? `名称：${row.name}` : '',
-            row.email ? `邮箱：${row.email}` : '',
-            `来源项目：${targetProject.id}`,
-          ].filter(Boolean).join('\n'),
-        });
+        const queryTerms = buildImportSearchTerms(row);
+        const candidateMap = new Map<string, VkpiKolOption>();
+        for (const term of queryTerms.length ? queryTerms : [row.handle]) {
+          const response = await getAvailableProjectKols(apiToken, targetProject.id, term);
+          buildKolOptions(response.kols || []).forEach((kol) => candidateMap.set(kol.id, kol));
+        }
+        let match = findImportKolMatch(row, Array.from(candidateMap.values()));
+        if (!match && onLookupKol) {
+          match = await lookupImportKolPoolOption(row, onLookupKol);
+        }
+        if (!match) {
+          unmatchedRows.push(row);
+          continue;
+        }
+        if (seenKolIds.has(match.id)) continue;
+        seenKolIds.add(match.id);
+        matchedKols.push(match);
       }
+      if (!matchedKols.length) {
+        throw new Error(`没有在 KOL Pool 里匹配到可追加的 KOL。未匹配：${unmatchedRows.slice(0, 5).map((row) => row.handle).join('、') || '全部'}`);
+      }
+      await addKolsToCampaign(targetProject, matchedKols);
       setImportOpen(false);
-      setMessage(`已导入 ${rows.length} 个 KOL 到「${targetProject.campaign}」。`);
+      const unmatchedLabel = unmatchedRows.length
+        ? `；未匹配 ${unmatchedRows.length} 行：${unmatchedRows.slice(0, 5).map((row) => row.handle).join('、')}${unmatchedRows.length > 5 ? '…' : ''}`
+        : '';
+      setMessage(`已向「${targetProject.campaign}」追加 ${matchedKols.length} 个 KOL${unmatchedLabel}。`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'KOL 名单导入失败');
       throw error;
@@ -287,7 +323,7 @@ export function ProjectsPage({
   if (detailProjectId) {
     const detailProjectForView = projectDetailState.project;
     return (
-      <PageShell title="项目详情" description="按项目维度查看 KOL 阶段、数据、物流、证据和今日提醒。">
+      <PageShell title="项目详情" description="按项目维度查看 KOL 阶段、数据、物流、证据和今日提醒。" hideHeading>
         {projectDetailState.loading ? (
           <ProjectDetailSkeleton onBack={() => setDetailProjectId(null)} />
         ) : null}
@@ -302,19 +338,28 @@ export function ProjectsPage({
             key={detailProjectForView.id}
             project={detailProjectForView}
             projects={filteredProjects.map((project) => (project.id === detailProjectForView.id ? detailProjectForView : project))}
+            participatingRows={projectDetailState.participatingRows}
+            costRows={projectDetailState.detail?.costs || []}
             viewMode={viewMode}
             onBack={() => setDetailProjectId(null)}
             onOpenKolProfile={onOpenKolProfile}
             onOpenStaffProfile={onOpenStaffProfile}
             onMoveProjectStage={onMoveProjectStage}
             onUpdateProject={onUpdateProject}
+            onAddProjectCost={onAddProjectCost}
             onUpsertProjectTerms={onUpsertProjectTerms}
             onAddProjectShipment={onAddProjectShipment}
             onUploadEvidenceFile={onUploadEvidenceFile}
             kolOptions={data.kolOptions}
-            onAddKolsToCampaign={onCreateProject ? addKolsToCampaign : undefined}
-            onProjectUpdated={projectDetailState.refresh}
+            onLoadAvailableKols={apiToken ? loadAvailableKols : undefined}
+            onAddKolsToCampaign={apiToken ? addKolsToCampaign : undefined}
+            onProjectUpdated={refreshProjectData}
             onDeleteProject={onDeleteProject ? deleteProjectRow : undefined}
+            onAdvanceProjectKol={apiToken ? advanceProjectKolRow : undefined}
+            onUpdateProjectKolShipping={apiToken ? updateProjectKolShippingRow : undefined}
+            onSubmitProjectKolActionStub={apiToken ? submitProjectKolStub : undefined}
+            onSelectPage={onSelectPage}
+            onToggleView={onToggleView}
           />
         ) : null}
         {message ? <div className="vkpi-inline-message">{message}</div> : null}
@@ -323,7 +368,7 @@ export function ProjectsPage({
   }
 
   return (
-    <PageShell title="项目跟进" description="创建项目、按流程一键推进，系统自动记录从开始到完成的耗时。">
+    <PageShell title="项目跟进" description="创建项目、按流程一键推进，系统自动记录从开始到完成的耗时。" hideHeading>
       {projectFocus ? (
         <ProjectFocusBanner
           focus={projectFocus}
@@ -338,7 +383,7 @@ export function ProjectsPage({
         onOpenProjectDetail={(project) => setDetailProjectId(project.id)}
         onOpenStaffProfile={onOpenStaffProfile}
         onOpenCreateProject={() => setCreateOpen(true)}
-        onOpenImportKols={onLookupKol && onCreateProject && filteredProjects.length > 0 ? () => setImportOpen(true) : undefined}
+        onOpenImportKols={apiToken && filteredProjects.length > 0 ? () => setImportOpen(true) : undefined}
       />
       {message ? <div className="vkpi-inline-message">{message}</div> : null}
       {importOpen ? (
@@ -428,6 +473,99 @@ interface ImportKolRow {
   email?: string;
 }
 
+function normalizeImportPlatform(value: unknown) {
+  const text = String(value || '').trim().toLowerCase();
+  if (text.includes('youtube') || text === 'yt') return 'youtube';
+  if (text.includes('instagram') || text === 'ig') return 'instagram';
+  if (text.includes('tiktok')) return 'tiktok';
+  if (text.includes('facebook')) return 'facebook';
+  if (text === 'x' || text.includes('twitter')) return 'x';
+  if (text.includes('reddit')) return 'reddit';
+  return text;
+}
+
+function normalizeImportToken(value: unknown) {
+  let token = String(value || '').trim().toLowerCase();
+  token = token.replace(/^https?:\/\/(www\.)?/, '');
+  token = token.replace(/^(instagram|youtube|tiktok|facebook|twitter|x)\.com\//, '');
+  token = token.replace(/^youtu\.be\//, '');
+  token = token.replace(/^(channel|user|c)\//, '');
+  token = token.replace(/^@+/, '');
+  token = token.replace(/[?#].*$/, '');
+  token = token.replace(/\/(videos|reels|reel|posts|post|tagged)\/?$/i, '');
+  token = token.replace(/\/+$/, '');
+  return token.replace(/[^a-z0-9\u4e00-\u9fff]+/g, '');
+}
+
+function buildImportSearchTerms(row: ImportKolRow) {
+  const rawTerms = [row.handle, row.name].map((value) => String(value || '').trim()).filter(Boolean);
+  const normalizedTerms = rawTerms.map(normalizeImportToken).filter(Boolean);
+  return Array.from(new Set([...rawTerms, ...normalizedTerms]));
+}
+
+function findImportKolMatch(row: ImportKolRow, candidates: VkpiKolOption[]) {
+  const rowPlatform = normalizeImportPlatform(row.platform);
+  const rowTokens = [row.handle, row.name].map(normalizeImportToken).filter(Boolean);
+  if (!rowTokens.length) return undefined;
+  const platformCandidates = candidates.filter((candidate) => {
+    const candidatePlatform = normalizeImportPlatform(candidate.platform);
+    return !rowPlatform || !candidatePlatform || rowPlatform === candidatePlatform;
+  });
+  const pool = platformCandidates.length ? platformCandidates : candidates;
+  return pool.find((candidate) => {
+    const candidateTokens = [candidate.handle, candidate.name, candidate.profileUrl].map(normalizeImportToken).filter(Boolean);
+    return rowTokens.some((token) => candidateTokens.includes(token));
+  });
+}
+
+async function lookupImportKolPoolOption(
+  row: ImportKolRow,
+  onLookupKol: NonNullable<ProjectsPageProps['onLookupKol']>,
+): Promise<VkpiKolOption | undefined> {
+  const handleOrUrl = String(row.handle || row.name || '').trim();
+  if (!handleOrUrl) return undefined;
+  try {
+    const result = await onLookupKol({
+      platform: normalizeImportPlatform(row.platform || 'Other') || 'Other',
+      handleOrUrl,
+      createIfMissing: false,
+      scanAccount: false,
+      maxPosts: 1,
+      contactEmail: row.email,
+    });
+    const kol = result.kol || {};
+    const rawPoolId = kol.kol_pool_id ?? kol.kolPoolId ?? kol.pool_id ?? kol.poolId;
+    const poolId = rawPoolId == null ? '' : String(rawPoolId);
+    if (!poolId || !/^\d+$/.test(poolId)) return undefined;
+    return {
+      id: poolId,
+      name: String(kol.display_name || kol.channel_name || kol.name || row.name || row.handle || `KOL ${poolId}`),
+      handle: String(kol.handle || row.handle || ''),
+      platform: platformLabel(row.platform || kol.platform || 'Other'),
+      avatar: String(kol.avatar_url || ''),
+      profileUrl: String(kol.profile_url || kol.channel_url || ''),
+      contactEmail: row.email,
+      followerLabel: '-',
+      contentCountLabel: '-',
+      claimOwner: '',
+      scanStatus: 'lookup_pool',
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function platformLabel(value: unknown): VkpiKolOption['platform'] {
+  const normalized = normalizeImportPlatform(value);
+  if (normalized === 'youtube') return 'YouTube';
+  if (normalized === 'instagram') return 'Instagram';
+  if (normalized === 'tiktok') return 'TikTok';
+  if (normalized === 'facebook') return 'Facebook';
+  if (normalized === 'x') return 'X';
+  if (normalized === 'reddit') return 'Reddit';
+  return 'Other';
+}
+
 function parseKolImportRows(raw: string, fallbackPlatform: string): ImportKolRow[] {
   const rows: ImportKolRow[] = [];
   const seen = new Set<string>();
@@ -505,7 +643,7 @@ function ImportKolListModal({
         <header>
           <div>
             <h2>导入 KOL 名单</h2>
-            <p>每行先查重/创建 KOL，再追加到目标推广；最多 50 行。</p>
+            <p>从 KOL Pool 匹配账号，批量追加到目标推广；最多 50 行，不再创建孤立项目。</p>
           </div>
           <button type="button" onClick={onClose} disabled={busy}>关闭</button>
         </header>

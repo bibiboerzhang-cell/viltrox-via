@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { VkpiPlatform } from '../../vkpiTypes';
 import { platformDisplay } from '../../shared/vkpiDataUtils';
-import { likelyVideoUrl, platformExternalUrl, proxiedImageUrl, proxiedVideoUrl } from '../../shared/mediaProxy';
+import { likelyVideoUrl, platformExternalUrl, proxiedImageUrl, proxiedVideoUrl, useCachedVideoUrl } from '../../shared/mediaProxy';
 import type { PostPreview } from './myKolMatrixTypes';
 import { compactDate, conciseText, displayCount, renderableMediaUrl, uniqueStrings } from './myKolMatrixData';
 
@@ -42,7 +42,27 @@ export function mediaBadge(post: PostPreview, platform: VkpiPlatform) {
   return '待缓存';
 }
 
-export function KolMediaSlot({ post, platform, compact = false }: { post: PostPreview; platform: VkpiPlatform; compact?: boolean }) {
+function kolVideoLookupId(post: PostPreview) {
+  return String(post.snapshotId || post.id || post.url || '').trim();
+}
+
+function rawVideoCandidate(post: PostPreview, platform: VkpiPlatform) {
+  return post.videoUrl
+    || post.mediaUrls.find((url) => likelyVideoUrl(url, platform))
+    || (likelyVideoUrl(post.mediaUrl, platform) ? post.mediaUrl : '');
+}
+
+export function KolMediaSlot({
+  post,
+  platform,
+  compact = false,
+  apiToken,
+}: {
+  post: PostPreview;
+  platform: VkpiPlatform;
+  compact?: boolean;
+  apiToken?: string;
+}) {
   const [active, setActive] = useState(0);
   const [failedImages, setFailedImages] = useState<Set<string>>(() => new Set());
   useEffect(() => {
@@ -51,7 +71,10 @@ export function KolMediaSlot({ post, platform, compact = false }: { post: PostPr
   }, [post.id, post.mediaUrl, post.videoUrl, post.imageUrls.join('|'), post.mediaUrls.join('|')]);
 
   const media = kolMediaState(post, platform);
-  if (!media.renderable) return <span className="vkpi-my-kol-content-card__pending">待缓存</span>;
+  const cachedVideoUrl = useCachedVideoUrl(apiToken, platform, kolVideoLookupId(post), rawVideoCandidate(post, platform));
+  const videoUrl = cachedVideoUrl || media.videoUrl;
+  const hasVideo = Boolean(videoUrl);
+  if (!media.renderable && !hasVideo) return <span className="vkpi-my-kol-content-card__pending">待缓存</span>;
 
   const imageUrls = media.imageUrls.filter((url) => !failedImages.has(url));
   const currentImage = imageUrls[Math.min(active, Math.max(0, imageUrls.length - 1))];
@@ -61,11 +84,11 @@ export function KolMediaSlot({ post, platform, compact = false }: { post: PostPr
     return next;
   });
 
-  if (media.kind === 'video' && (!compact || !currentImage)) {
+  if (hasVideo && (!compact || !currentImage)) {
     return (
       <>
         <video
-          src={media.videoUrl}
+          src={videoUrl}
           poster={currentImage || imageUrls[0] || undefined}
           controls={!compact}
           muted={compact}
@@ -94,10 +117,22 @@ export function KolMediaSlot({ post, platform, compact = false }: { post: PostPr
   );
 }
 
-export function KolMediaLightbox({ post, platform, onClose }: { post: PostPreview; platform: VkpiPlatform; onClose: () => void }) {
+export function KolMediaLightbox({
+  post,
+  platform,
+  apiToken,
+  onClose,
+}: {
+  post: PostPreview;
+  platform: VkpiPlatform;
+  apiToken?: string;
+  onClose: () => void;
+}) {
   const [active, setActive] = useState(0);
   const media = kolMediaState(post, platform);
-  const isVideo = media.kind === 'video' && Boolean(media.videoUrl);
+  const cachedVideoUrl = useCachedVideoUrl(apiToken, platform, kolVideoLookupId(post), rawVideoCandidate(post, platform));
+  const videoUrl = cachedVideoUrl || media.videoUrl;
+  const isVideo = Boolean(videoUrl);
 
   useEffect(() => {
     setActive(0);
@@ -128,7 +163,7 @@ export function KolMediaLightbox({ post, platform, onClose }: { post: PostPrevie
         </header>
         <div className={`vkpi-media-lightbox__stage ${isVideo ? 'is-video' : 'is-image'}`}>
           {isVideo ? (
-            <video src={media.videoUrl} poster={media.imageUrls[0] || undefined} controls playsInline autoPlay />
+            <video src={videoUrl} poster={media.imageUrls[0] || undefined} controls playsInline autoPlay />
           ) : currentImage ? (
             <>
               <img src={currentImage} alt="" />

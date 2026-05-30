@@ -61,13 +61,15 @@ export function ProjectTable({
         </thead>
         <tbody>
           {projects.length ? (
-            projects.map((project) => (
-              <tr
-                key={project.id}
-                className={selectedProjectId === project.id ? 'is-selected' : undefined}
-                onClick={() => onSelectProject(project)}
-                title="点击查看员工、KOL、项目、消息、短链和归因详情"
-              >
+            projects.map((project) => {
+              const hasProjectKolCount = typeof project.kolCount === 'number' && project.kolCount > 0;
+              return (
+                <tr
+                  key={project.id}
+                  className={selectedProjectId === project.id ? 'is-selected' : undefined}
+                  onClick={() => onSelectProject(project)}
+                  title="点击查看员工、KOL、项目、消息、短链和归因详情"
+                >
                 {showFinancials ? (
                   <td>
                     <button
@@ -97,8 +99,8 @@ export function ProjectTable({
                   >
                     <Avatar name={project.kolName} src={project.kolAvatar} />
                     <div>
-                      <strong>{project.kolName}</strong>
-                      <span>{project.kolHandle}</span>
+                      <strong>{hasProjectKolCount && project.kolCount! > 1 ? `${numberFormatter.format(project.kolCount!)} KOL` : project.kolName}</strong>
+                      <span>{hasProjectKolCount ? `${numberFormatter.format(project.kolWithEvidence || 0)} 有证据 · ${numberFormatter.format(project.evidenceCount || 0)} 条内容` : project.kolHandle}</span>
                       <PlatformPill platform={project.platform} />
                     </div>
                   </button>
@@ -113,7 +115,7 @@ export function ProjectTable({
                 <td>
                   <div className="vkpi-metric-stack">
                     <span>播 {project.views ? numberFormatter.format(project.views) : '—'}</span>
-                    <small>点 {project.clicks == null ? '—' : numberFormatter.format(project.clicks)} · 单 {project.orders == null ? '—' : numberFormatter.format(project.orders)}</small>
+                    <small>{hasProjectKolCount ? `KOL ${numberFormatter.format(project.kolCount!)} · 有证据 ${numberFormatter.format(project.kolWithEvidence || 0)}` : `点 ${project.clicks == null ? '—' : numberFormatter.format(project.clicks)} · 单 ${project.orders == null ? '—' : numberFormatter.format(project.orders)}`}</small>
                   </div>
                 </td>
                 <td>
@@ -140,8 +142,9 @@ export function ProjectTable({
                     <span className="vkpi-row-arrow">›</span>
                   )}
                 </td>
-              </tr>
-            ))
+                </tr>
+              );
+            })
           ) : (
             <tr>
               <td className="vkpi-table-empty" colSpan={columnCount}>

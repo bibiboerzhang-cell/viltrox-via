@@ -4,11 +4,10 @@ import { Avatar } from '../../shared/Avatar';
 import { PlatformPill } from '../../shared/PlatformPill';
 import { primaryStageFlow, stageLabels } from '../../shared/vkpiConstants';
 import { nextProjectStage, shortDateTime } from '../../shared/vkpiDataUtils';
-import { TrackingWidget } from './ProjectDetailModals';
+import { KolStageTimeline } from './KolStageTimeline';
 import {
   formatMoney,
   formatNumber,
-  stageDescriptions,
   stageIndex,
   type ScreenshotTarget,
   type TrackingState,
@@ -23,22 +22,51 @@ interface ProjectParticipationTabProps {
   onMoveRowStage: (row: VkpiProjectRow) => void | Promise<void>;
   onOpenKolProfile?: (project: VkpiProjectRow) => void | Promise<void>;
   onOpenScreenshotModal: (target: ScreenshotTarget) => void;
-  onSaveShopifyLink: (row: VkpiProjectRow) => void | Promise<void>;
-  onSaveShipment: (row: VkpiProjectRow) => void | Promise<void>;
-  onSetShopifyLink: (rowId: string, value: string) => void;
+  onOpenStageActionModal: (row: VkpiProjectRow, action: 'stalled' | 'lost' | 'released' | 'cancelled') => void;
+  onSaveShopifyLink: () => void | Promise<void>;
+  onSetShopifyLink: (value: string) => void;
   onSetTablePlatform: (value: string) => void;
   onSetTableQuery: (value: string) => void;
   onSetTableStage: (value: string) => void;
   onToggleRow: (rowId: string) => void;
-  onUpdateTracking: (row: VkpiProjectRow, key: 'courier' | 'no', value: string) => void;
   platformOptions: Array<VkpiProjectRow['platform']>;
-  savingShipmentRowId: string;
-  savingShopifyRowId: string;
+  savingShopify: boolean;
   shopifyLinkForRow: (row: VkpiProjectRow) => string;
   tablePlatform: string;
   tableQuery: string;
   tableStage: string;
   trackingForRow: (row: VkpiProjectRow) => TrackingState;
+}
+
+function externalUrl(value?: string) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (/^https?:\/\//i.test(text)) return text;
+  return '';
+}
+
+function cleanHandle(value: string) {
+  return String(value || '')
+    .trim()
+    .replace(/^@+/, '')
+    .replace(/^https?:\/\/[^/]+\//i, '')
+    .replace(/^@+/, '')
+    .replace(/\/(videos|reels|posts)?\/?$/i, '')
+    .replace(/[?#].*$/, '')
+    .replace(/\/+$/, '');
+}
+
+function kolProfileUrl(row: VkpiProjectRow) {
+  const explicit = externalUrl(row.kolProfileUrl);
+  if (explicit) return explicit;
+  const handle = cleanHandle(row.kolHandle || row.kolName);
+  if (!handle || handle === '-') return '';
+  if (row.platform === 'YouTube') return `https://www.youtube.com/@${handle}`;
+  if (row.platform === 'TikTok') return `https://www.tiktok.com/@${handle}`;
+  if (row.platform === 'Instagram') return `https://www.instagram.com/${handle}`;
+  if (row.platform === 'X') return `https://x.com/${handle}`;
+  if (row.platform === 'Facebook') return `https://www.facebook.com/${handle}`;
+  return '';
 }
 
 export function ProjectParticipationTab({
@@ -50,17 +78,15 @@ export function ProjectParticipationTab({
   onMoveRowStage,
   onOpenKolProfile,
   onOpenScreenshotModal,
+  onOpenStageActionModal,
   onSaveShopifyLink,
-  onSaveShipment,
   onSetShopifyLink,
   onSetTablePlatform,
   onSetTableQuery,
   onSetTableStage,
   onToggleRow,
-  onUpdateTracking,
   platformOptions,
-  savingShipmentRowId,
-  savingShopifyRowId,
+  savingShopify,
   shopifyLinkForRow,
   tablePlatform,
   tableQuery,
@@ -88,6 +114,7 @@ export function ProjectParticipationTab({
               <th />
               <th>KOL</th>
               <th>平台</th>
+              <th>负责人</th>
               <th>加入</th>
               <th>当前阶段</th>
               <th>停留</th>
@@ -102,32 +129,57 @@ export function ProjectParticipationTab({
             {filteredRows.map((row) => {
               const rowOpen = expandedRows.has(row.id);
               const rowStageNumber = stageIndex(row.stage) + 1;
+              const rowEvidenceCount = evidenceCountForRow(row);
+              const profileUrl = kolProfileUrl(row);
               return (
                 <Fragment key={row.id}>
                   <tr className="vkpi-campaign-kol-row" id={`vkpi-project-row-${row.id}`} onClick={() => onToggleRow(row.id)}>
                     <td><span className={`vkpi-campaign-tri ${rowOpen ? 'is-open' : ''}`}>▶</span></td>
                     <td>
-                      <button
-                        className="vkpi-campaign-kol-cell"
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          if (onOpenKolProfile) void onOpenKolProfile(row);
-                        }}
-                      >
-                        <Avatar name={row.kolName} src={row.kolAvatar} size="sm" />
-                        <span><b>{row.kolHandle || row.kolName}</b><small>{row.kolName || '-'}</small></span>
-                      </button>
+                      {profileUrl ? (
+                        <a
+                          className="vkpi-campaign-kol-cell"
+                          href={profileUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={(event) => event.stopPropagation()}
+                          title="打开平台主页"
+                        >
+                          <Avatar name={row.kolName} src={row.kolAvatar} size="sm" />
+                          <span><b>{row.kolHandle || row.kolName}</b><small>{row.kolName || '-'}</small></span>
+                        </a>
+                      ) : (
+                        <button
+                          className="vkpi-campaign-kol-cell"
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            if (onOpenKolProfile) void onOpenKolProfile(row);
+                          }}
+                        >
+                          <Avatar name={row.kolName} src={row.kolAvatar} size="sm" />
+                          <span><b>{row.kolHandle || row.kolName}</b><small>{row.kolName || '-'}</small></span>
+                        </button>
+                      )}
                     </td>
-                    <td><PlatformPill platform={row.platform} /></td>
+                    <td>
+                      {profileUrl ? (
+                        <a className="vkpi-campaign-platform-link" href={profileUrl} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()} title="打开平台主页">
+                          <PlatformPill platform={row.platform} />
+                        </a>
+                      ) : <PlatformPill platform={row.platform} />}
+                    </td>
+                    <td>
+                      <span className="vkpi-campaign-evidence-chip">{row.ownerName || '未分配'}</span>
+                    </td>
                     <td>{shortDateTime(row.startedAt || row.createdAt || row.latestMessageAt)}</td>
                     <td><span className="vkpi-campaign-stage-pill">{rowStageNumber}. {stageLabels[row.stage]}</span></td>
                     <td>{row.stageDurationLabel || '-'}</td>
-                    <td>{stageIndex(row.stage) >= stageIndex('published') ? '1 / 1' : '0 / 1'}</td>
+                    <td>{rowEvidenceCount ? `${formatNumber(rowEvidenceCount)} 条` : '0 条'}</td>
                     <td><b>{formatNumber(row.views)}</b></td>
                     <td><b>{formatMoney(row.gmv)}</b></td>
                     <td>
-                      <span className="vkpi-campaign-evidence-chip">截图 {evidenceCountForRow(row)}</span>
+                      <span className="vkpi-campaign-evidence-chip">证据 {rowEvidenceCount}</span>
                       {trackingForRow(row).delivered ? <span className="vkpi-campaign-evidence-chip is-warn">到货</span> : null}
                     </td>
                     <td>
@@ -146,77 +198,30 @@ export function ProjectParticipationTab({
                   </tr>
                   {rowOpen ? (
                     <tr key={`${row.id}-detail`}>
-                      <td colSpan={11} className="vkpi-campaign-expand-cell">
-                        <div className="vkpi-campaign-expand">
-                          <div className="vkpi-campaign-kol-ops">
-                            <label>Shopify 归因链接
+                      <td colSpan={12} className="vkpi-campaign-expand-cell">
+                        <div className="space-y-3">
+                          <div className="flex items-center gap-2 rounded-lg border border-white/[0.05] bg-white/[0.012] px-3 py-2">
+                            <label className="flex-1 text-[10px] text-slate-500">Shopify 归因链接
                               <input
+                                className="mt-1 w-full rounded-md border border-white/[0.06] bg-black/30 px-2 py-1.5 text-[11px] text-white placeholder-slate-600 focus:border-purple-500/40 focus:outline-none"
                                 value={shopifyLinkForRow(row)}
-                                onChange={(event) => onSetShopifyLink(row.id, event.target.value)}
-                                placeholder="https://your-store.myshopify.com/... 或带 ref 的商品链接"
+                                onChange={(event) => onSetShopifyLink(event.target.value)}
+                                placeholder="项目级 Shopify 商品链接或带 ref 的归因链接"
                               />
                             </label>
-                            <button type="button" disabled={savingShopifyRowId === row.id} onClick={() => void onSaveShopifyLink(row)}>
-                              {savingShopifyRowId === row.id ? '保存中' : '保存链接'}
+                            <button className="mt-4 px-3 py-1.5 rounded-md border border-white/[0.08] text-[11px] text-slate-300 hover:bg-white/[0.04]" type="button" disabled={savingShopify} onClick={() => void onSaveShopifyLink()}>
+                              {savingShopify ? '保存中' : '保存链接'}
                             </button>
-                            <span>快递单号在「已发货」物流卡片里输入，查到已送达会自动提醒。</span>
                           </div>
-
-                          <div className="vkpi-campaign-data-strip">
-                            <div><span>视频时长</span><b>-</b><em>暂无数据</em></div>
-                            <div><span>完播率</span><b>-</b><em>暂无数据</em></div>
-                            <div><span>点赞</span><b>-</b><em>暂无数据</em></div>
-                            <div><span>评论</span><b>-</b><em>暂无数据</em></div>
-                            <div><span>分享</span><b>-</b><em>暂无数据</em></div>
-                            <div><span>短链点击</span><b>{formatNumber(row.clicks)}</b><em>现有数据</em></div>
-                          </div>
-
-                          <div className="vkpi-campaign-timeline">
-                            {primaryStageFlow.slice(1).map((stage, index) => {
-                              const toNumber = index + 2;
-                              const done = rowStageNumber >= toNumber;
-                              return (
-                                <div className={`vkpi-campaign-timeline-row ${done ? '' : 'is-todo'}`} key={stage}>
-                                  <div><strong>{done ? shortDateTime(row.latestMessageAt) : '-'}</strong><small>停留 {done ? row.stageDurationLabel || '-' : '-'}</small></div>
-                                  <div>
-                                    <strong>{toNumber - 1} → {toNumber} {stageLabels[stage]}</strong>
-                                    <small>{done ? stageDescriptions[stage] : '等待推进'}</small>
-                                    {toNumber === 5 ? (
-                                      <TrackingWidget
-                                        row={row}
-                                        tracking={trackingForRow(row)}
-                                        saving={savingShipmentRowId === row.id}
-                                        onChange={onUpdateTracking}
-                                        onSave={onSaveShipment}
-                                      />
-                                    ) : null}
-                                    {toNumber === 7 ? (
-                                      <div className="vkpi-campaign-video">
-                                        <div className="vkpi-campaign-thumb">▶</div>
-                                        <div>
-                                          <b>{row.campaign || '待同步发布内容'}</b>
-                                          <span>{row.kolHandle || row.kolName} · {row.platform} · -</span>
-                                          <small>内容链接会从项目详情 / 内容数据同步。</small>
-                                        </div>
-                                        <div><strong>{formatNumber(row.views)}</strong><span>观看</span></div>
-                                      </div>
-                                    ) : null}
-                                  </div>
-                                  <button
-                                    type="button"
-                                    onClick={() => onOpenScreenshotModal({
-                                      row,
-                                      from: toNumber - 1,
-                                      to: toNumber,
-                                      stage,
-                                    })}
-                                  >
-                                    + 截图
-                                  </button>
-                                </div>
-                              );
-                            })}
-                          </div>
+                          <KolStageTimeline
+                            evidenceCount={rowEvidenceCount}
+                            movingRowId={movingRowId}
+                            onMoveRowStage={onMoveRowStage}
+                            onOpenScreenshotModal={onOpenScreenshotModal}
+                            onOpenStageActionModal={onOpenStageActionModal}
+                            row={row}
+                            tracking={trackingForRow(row)}
+                          />
                         </div>
                       </td>
                     </tr>
@@ -227,7 +232,9 @@ export function ProjectParticipationTab({
           </tbody>
         </table>
         {!filteredRows.length ? (
-          <div className="vkpi-campaign-empty-row">没有匹配的 KOL。调整搜索、阶段或平台筛选后再看。</div>
+          <div className="vkpi-campaign-empty-row">
+            {tableStage === '全部阶段' ? '没有匹配的 KOL。调整搜索或平台筛选后再看。' : '当前阶段暂无 KOL。可切换阶段或清除筛选后再看。'}
+          </div>
         ) : null}
       </div>
     </div>

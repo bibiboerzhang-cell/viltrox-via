@@ -15,18 +15,15 @@ export const rangeOptions: Array<{ key: VkpiRangeKey; label: string }> = [
 ];
 
 export const MANAGER_NAV_ITEMS: VkpiNavItem[] = [
-  { key: 'dashboardPremium', label: '管理主控', icon: 'grid' },
+  { key: 'v615Replica', label: '管理主控', icon: 'grid' },
   { key: 'intelligenceCenter', label: '智能中心', icon: 'spark' },
   { key: 'agents', label: 'Agents 战情室', icon: 'nodes' },
-  { key: 'channels', label: 'KOL/账号管理', icon: 'grid' },
-  { key: 'discover', label: '红人搜索', icon: 'discover' },
+  { key: 'channels', label: 'MY KOL', icon: 'heart' },
+  { key: 'kolPoolV2', label: 'KOL Pool', icon: 'grid' },
   { key: 'projects', label: '项目跟进', icon: 'folder' },
-  { key: 'links', label: '短链中心', icon: 'link' },
-  { key: 'attribution', label: '销售归因', icon: 'nodes' },
-  { key: 'costs', label: '成本台', icon: 'table' },
-  { key: 'productBattle', label: '产品作战', icon: 'spark' },
+  { key: 'links', label: '短链与归因', icon: 'link' },
+  { key: 'productBattle', label: '产品分析', icon: 'spark' },
   { key: 'dataAnalysis', label: '数据分析', icon: 'analytics' },
-  { key: 'campaigns', label: '活动预算', icon: 'table' },
   { key: 'dataQuality', label: '数据质量', icon: 'report' },
   { key: 'audit', label: '审计', icon: 'table' },
   { key: 'reports', label: '报表导出', icon: 'report' },
@@ -35,7 +32,7 @@ export const MANAGER_NAV_ITEMS: VkpiNavItem[] = [
 
 export const EMPLOYEE_NAV_ITEMS: VkpiNavItem[] = [
   { key: 'command', label: '我的工作台', icon: 'grid' },
-  { key: 'channels', label: '我的平台', icon: 'grid' },
+  { key: 'channels', label: 'MY KOL', icon: 'heart' },
   { key: 'discover', label: '搜索红人', icon: 'discover' },
   { key: 'projects', label: '我的项目', icon: 'folder' },
   { key: 'links', label: '我的短链', icon: 'link' },

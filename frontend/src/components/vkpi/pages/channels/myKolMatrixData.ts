@@ -540,7 +540,14 @@ export function summarizePostInsights(posts: PostPreview[], profile?: VkpiKolPro
 export function commentsForPost(post: PostPreview | null, comments: KolCommentItem[]) {
   if (!post) return [];
   const postUrl = post.url.trim().toLowerCase();
-  return comments.filter((comment) => comment.postUrl.trim().toLowerCase() === postUrl);
+  const seen = new Set<string>();
+  return comments.filter((comment) => {
+    if (comment.postUrl.trim().toLowerCase() !== postUrl) return false;
+    const key = `${normalizedKey(comment.author)}:${normalizedKey(comment.text)}:${comment.likes}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 export function latestSnapshotPosts(posts: PostPreview[], profile?: VkpiKolProfile) {

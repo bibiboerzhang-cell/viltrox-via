@@ -65,7 +65,7 @@ export function readRepairRoadmapFocus(): RepairRoadmapFocusPayload | null {
       output: text(parsed.output, '需要定义产出。'),
       gate: text(parsed.gate, '需要准入门槛。'),
       actionLabel: text(parsed.actionLabel, '查看相关页面'),
-      actionPage: text(parsed.actionPage, 'dashboardPremium'),
+      actionPage: text(parsed.actionPage, 'missionControlV2'),
       createdAt: text(parsed.createdAt, new Date().toISOString()),
     };
   } catch {

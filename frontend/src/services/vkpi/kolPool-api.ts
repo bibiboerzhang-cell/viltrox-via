@@ -160,9 +160,10 @@ export interface VkpiKolPoolGeminiGoNoGo {
 
 export async function listKolPool(
   token: string,
-  params: { search?: string; platform?: string; country?: string; limit?: number; dataStatus?: string; sortBy?: string; enrichable?: boolean; refreshIfStale?: boolean } = {},
+  params: { search?: string; platform?: string; country?: string; limit?: number; offset?: number; dataStatus?: string; sortBy?: string; enrichable?: boolean; refreshIfStale?: boolean } = {},
 ): Promise<{ items?: VkpiKolPoolItem[]; refresh?: VkpiKolPoolRefreshState }> {
   const query = new URLSearchParams({ limit: String(params.limit || 100) });
+  if (typeof params.offset === "number") query.set("offset", String(params.offset));
   if (params.search) query.set("query", params.search);
   if (params.platform) query.set("platform", params.platform);
   if (params.country) query.set("country", params.country);

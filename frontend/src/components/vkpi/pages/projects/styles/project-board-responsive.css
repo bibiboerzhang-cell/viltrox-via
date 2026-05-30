@@ -5,6 +5,10 @@
     grid-template-columns: 1fr;
   }
 
+  .vkpi-project-health-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
   .vkpi-project-progress-grid,
   .vkpi-campaign-funnel {
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -49,11 +53,11 @@
 
 @media (max-width: 760px) {
   .vkpi-project-hero {
-    padding: 18px;
+    padding: 16px;
   }
 
   .vkpi-project-hero h2 {
-    font-size: 30px;
+    font-size: 21px;
   }
 
   .vkpi-project-health-grid,
@@ -68,7 +72,6 @@
   .vkpi-project-card-top,
   .vkpi-project-card-main,
   .vkpi-project-card-footer,
-  .vkpi-project-create-strip,
   .vkpi-campaign-detail-top,
   .vkpi-campaign-analytics-head,
   .vkpi-campaign-finance-head,

@@ -3,6 +3,47 @@ import { getOfficialChannelMatrix } from '../../../../domains/channels';
 import type { ChannelContentPost, OfficialChannelAccount, OfficialChannelPlatform } from './channelTypes';
 
 type Row = Record<string, unknown>;
+type MatrixSnapshot = {
+  platforms: OfficialChannelPlatform[];
+  accountCount: number;
+  postCount: number;
+  totalViews: number;
+  fetchedAt: number;
+};
+
+const MATRIX_STALE_MS = 30_000;
+const MATRIX_STORAGE_TTL_MS = 24 * 60 * 60 * 1000;
+const MATRIX_POST_SAMPLE_LIMIT = 4;
+const MATRIX_STORAGE_PREFIX = 'vkpi:mykol:official-matrix:v2:';
+const MATRIX_CACHE = new Map<string, MatrixSnapshot>();
+
+function matrixCacheKey(apiToken?: string, viewAsStaffId?: string) {
+  return `${viewAsStaffId || 'all'}:${apiToken ? apiToken.slice(-10) : 'no-token'}`;
+}
+
+function readStoredMatrix(cacheKey: string): MatrixSnapshot | undefined {
+  if (typeof window === 'undefined') return undefined;
+  try {
+    const raw = window.localStorage.getItem(`${MATRIX_STORAGE_PREFIX}${cacheKey}`);
+    if (!raw) return undefined;
+    const parsed = JSON.parse(raw) as MatrixSnapshot;
+    if (!parsed || !Array.isArray(parsed.platforms) || !parsed.fetchedAt) return undefined;
+    if (Date.now() - parsed.fetchedAt > MATRIX_STORAGE_TTL_MS) return undefined;
+    MATRIX_CACHE.set(cacheKey, parsed);
+    return parsed;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeStoredMatrix(cacheKey: string, snapshot: MatrixSnapshot) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(`${MATRIX_STORAGE_PREFIX}${cacheKey}`, JSON.stringify(snapshot));
+  } catch {
+    // Local storage can be full or disabled; memory cache still keeps the page responsive.
+  }
+}
 
 function text(value: unknown, fallback = '') {
   return String(value ?? fallback).trim();
@@ -165,10 +206,12 @@ function mapPlatform(row: Row): OfficialChannelPlatform {
 }
 
 export function useOfficialChannelMatrix(apiToken?: string, viewAsStaffId?: string) {
-  const [platforms, setPlatforms] = useState<OfficialChannelPlatform[]>([]);
-  const [accountCount, setAccountCount] = useState(0);
-  const [postCount, setPostCount] = useState(0);
-  const [totalViews, setTotalViews] = useState(0);
+  const cacheKey = matrixCacheKey(apiToken, viewAsStaffId);
+  const initialSnapshot = apiToken ? MATRIX_CACHE.get(cacheKey) || readStoredMatrix(cacheKey) : undefined;
+  const [platforms, setPlatforms] = useState<OfficialChannelPlatform[]>(initialSnapshot?.platforms || []);
+  const [accountCount, setAccountCount] = useState(initialSnapshot?.accountCount || 0);
+  const [postCount, setPostCount] = useState(initialSnapshot?.postCount || 0);
+  const [totalViews, setTotalViews] = useState(initialSnapshot?.totalViews || 0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -181,24 +224,56 @@ export function useOfficialChannelMatrix(apiToken?: string, viewAsStaffId?: stri
       setError('');
       return;
     }
-    setLoading(true);
+    const cached = MATRIX_CACHE.get(cacheKey);
+    if (cached) {
+      setPlatforms(cached.platforms);
+      setAccountCount(cached.accountCount);
+      setPostCount(cached.postCount);
+      setTotalViews(cached.totalViews);
+    }
+    setLoading(!cached);
     setError('');
+    if (cached && Date.now() - cached.fetchedAt < MATRIX_STALE_MS) return;
+    const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
     try {
-      const response = await getOfficialChannelMatrix(apiToken, { limit: 20, viewAsStaffId });
-      setPlatforms(rows(response.platforms).map(mapPlatform));
-      setAccountCount(numberValue(response.account_count));
-      setPostCount(numberValue(response.post_count));
-      setTotalViews(numberValue(response.total_views));
+      const response = await getOfficialChannelMatrix(apiToken, { limit: MATRIX_POST_SAMPLE_LIMIT, viewAsStaffId });
+      const nextSnapshot = {
+        platforms: rows(response.platforms).map(mapPlatform),
+        accountCount: numberValue(response.account_count),
+        postCount: numberValue(response.post_count),
+        totalViews: numberValue(response.total_views),
+        fetchedAt: Date.now(),
+      };
+      MATRIX_CACHE.set(cacheKey, nextSnapshot);
+      writeStoredMatrix(cacheKey, nextSnapshot);
+      setPlatforms(nextSnapshot.platforms);
+      setAccountCount(nextSnapshot.accountCount);
+      setPostCount(nextSnapshot.postCount);
+      setTotalViews(nextSnapshot.totalViews);
+      const viteMeta = import.meta as unknown as { env?: { DEV?: boolean } };
+      if (viteMeta.env?.DEV) {
+        const elapsed = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - startedAt);
+        console.info(`[V-KPI] official-matrix loaded in ${elapsed}ms`, {
+          accounts: nextSnapshot.accountCount,
+          posts: nextSnapshot.postCount,
+          platforms: nextSnapshot.platforms.length,
+        });
+      }
     } catch (requestError) {
-      setPlatforms([]);
-      setAccountCount(0);
-      setPostCount(0);
-      setTotalViews(0);
-      setError(requestError instanceof Error ? requestError.message : '官方账号矩阵加载失败');
+      if (!cached) {
+        setPlatforms([]);
+        setAccountCount(0);
+        setPostCount(0);
+        setTotalViews(0);
+        setError(requestError instanceof Error ? requestError.message : '官方账号矩阵加载失败');
+      } else {
+        // Stale-while-revalidate: keep cached data visible and avoid replacing a usable page with a transient timeout.
+        setError('');
+      }
     } finally {
       setLoading(false);
     }
-  }, [apiToken, viewAsStaffId]);
+  }, [apiToken, cacheKey, viewAsStaffId]);
 
   useEffect(() => {
     void refresh();

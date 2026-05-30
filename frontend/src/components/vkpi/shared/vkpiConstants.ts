@@ -66,7 +66,7 @@ export const stageLabels: Record<VkpiProjectStage, string> = {
   measured: '已统计',
   closed: '已关闭',
   stalled: '停滞',
-  lost: '流失',
+  lost: '已关闭',
   released: '已释放',
   cancelled: '已取消',
 };

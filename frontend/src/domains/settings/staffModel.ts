@@ -19,9 +19,9 @@ export function buildStaffMembers(rows: Row[]): VkpiStaffMember[] {
   return rows.map((row) => {
     const permissions = parsePermissions(row);
     return {
-      id: String(row.id || ''),
+      id: String(row.id || row.staff_id || row.staffId || ''),
       userId: row.user_id ? String(row.user_id) : undefined,
-      name: String(row.user_name || row.name || row.email || row.user_email || '未命名员工'),
+      name: String(row.user_name || row.staff_name || row.staffName || row.name || row.email || row.user_email || '未命名员工'),
       email: String(row.user_email || row.email || ''),
       role: String(row.role || 'readonly'),
       active: Number(row.active ?? 1) !== 0,

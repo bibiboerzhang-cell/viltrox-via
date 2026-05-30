@@ -35,7 +35,7 @@ const VIDEO_PROXY_HOSTS = [
   'twimg.com',
 ];
 const CACHED_VIDEO_LOOKUP_PLATFORMS = new Set(['instagram', 'tiktok']);
-const VIDEO_LOOKUP_TTL_MS = 60_000;
+const VIDEO_LOOKUP_TTL_MS = 10 * 60_000;
 
 type VideoLookupEntry = {
   value: string;

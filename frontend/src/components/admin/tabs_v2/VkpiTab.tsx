@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { VkpiDashboard, type VkpiDashboardData } from "../../vkpi";
+import { VkpiDashboard, type VkpiDashboardData, type VkpiPageKey } from "../../vkpi";
+import { getInitialVkpiPage } from "../../vkpi/layout/vkpiDashboardRouting";
 import {
   createSalesAttribution,
   importAmazonAttributionRows,
@@ -49,6 +50,8 @@ import { uploadMyAvatar } from "../../../services/auth.service";
 import { useAuth } from "../../../hooks/useAuth";
 
 type VkpiRangeKey = "today" | "7d" | "30d" | "mtd" | "qtd";
+const VKPI_DASHBOARD_CACHE_VERSION = "v3";
+const VKPI_DASHBOARD_CACHE_TTL_MS = 5 * 60 * 1000;
 
 interface Props {
   token: string;
@@ -65,6 +68,38 @@ interface Props {
     is_owner?: boolean;
     permissions?: Record<string, string>;
   } | null;
+}
+
+type CachedVkpiDashboard = {
+  savedAt: number;
+  data: VkpiDashboardData;
+};
+
+function vkpiCacheKey(range: VkpiRangeKey, scope: string, staffId?: number): string {
+  return `vkpi:dashboard:${VKPI_DASHBOARD_CACHE_VERSION}:${scope}:${range}:${staffId || "all"}`;
+}
+
+function readVkpiDashboardCache(key: string): CachedVkpiDashboard | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return null;
+    const cached = JSON.parse(raw) as CachedVkpiDashboard;
+    if (!cached?.data || !cached.savedAt) return null;
+    if (Date.now() - cached.savedAt > VKPI_DASHBOARD_CACHE_TTL_MS) return null;
+    return cached;
+  } catch {
+    return null;
+  }
+}
+
+function writeVkpiDashboardCache(key: string, data: VkpiDashboardData): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify({ savedAt: Date.now(), data }));
+  } catch {
+    // Cache is an optimization only; storage quota should never block the page.
+  }
 }
 
 function permissionLevel(user: Props["user"], key: string): string {
@@ -100,6 +135,7 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
   const [weeklyReportStatus, setWeeklyReportStatus] = useState<WeeklyReportStatus | null>(null);
   const [avatarUrl, setAvatarUrl] = useState(user?.avatar_url || "");
   const [viewMode, setViewMode] = useState<"manager" | "employee">("manager");
+  const [pendingPageAfterViewSwitch, setPendingPageAfterViewSwitch] = useState<VkpiPageKey | null>(null);
   const [range, setRange] = useState<VkpiRangeKey>("7d");
   const [lastSyncedAt, setLastSyncedAt] = useState("");
   const isManager = canUseManagerView(user);
@@ -108,11 +144,18 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
   const userRoleLabel = isManager
     ? effectiveViewMode === "manager" ? "管理层" : "员工视角"
     : "员工";
+  const canRenderWithoutDashboardData = getInitialVkpiPage(effectiveViewMode) === "v615Replica";
 
   const load = useCallback(async () => {
     setLoading(true);
     setMessage("");
     setActionLink(null);
+    const cacheKey = vkpiCacheKey(range, scope, user?.staff_id);
+    const cached = readVkpiDashboardCache(cacheKey);
+    if (cached?.data) {
+      setData(cached.data);
+      setLastSyncedAt(cached.data.lastSyncedAt || new Date(cached.savedAt).toISOString());
+    }
     try {
       const nextData = await fetchVkpiDashboardData(token, {
         range,
@@ -121,7 +164,12 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
       });
       setData(nextData);
       setLastSyncedAt(nextData.lastSyncedAt || new Date().toISOString());
+      writeVkpiDashboardCache(cacheKey, nextData);
     } catch (error) {
+      if (cached?.data) {
+        console.warn("V-KPI dashboard refresh failed; keeping local cache", error);
+        return;
+      }
       setMessage(error instanceof Error ? error.message : "加载 Viltrox Marketing 失败");
     } finally {
       setLoading(false);
@@ -131,6 +179,28 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (!pendingPageAfterViewSwitch) return;
+    if (typeof window !== "undefined") {
+      const nextHash = `#${pendingPageAfterViewSwitch}`;
+      if (window.location.hash !== nextHash) {
+        window.history.replaceState(null, "", nextHash);
+      }
+      const event = typeof HashChangeEvent === "function" ? new HashChangeEvent("hashchange") : new Event("hashchange");
+      window.dispatchEvent(event);
+    }
+    setPendingPageAfterViewSwitch(null);
+  }, [effectiveViewMode, pendingPageAfterViewSwitch]);
+
+  const handleToggleView = useCallback((targetPage?: VkpiPageKey) => {
+    if (targetPage) {
+      setPendingPageAfterViewSwitch(targetPage);
+      setViewMode("employee");
+      return;
+    }
+    setViewMode((current) => current === "manager" ? "employee" : "manager");
+  }, []);
 
   const handleExportPDF = useCallback(async () => {
     setMessage("正在生成 PDF 导出...");
@@ -396,11 +466,11 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
     await load();
   }, [load, token]);
 
-  if (loading && !data) {
+  if (loading && !data && !canRenderWithoutDashboardData) {
     return <div style={{ padding: 24, color: "#667085" }}>正在加载 Viltrox Marketing...</div>;
   }
 
-  if (!data) {
+  if (!data && !canRenderWithoutDashboardData) {
     return (
       <div style={{ padding: 24, color: "#667085" }}>
         <strong style={{ display: "block", color: "#101828", marginBottom: 8 }}>Viltrox Marketing 暂不可用</strong>
@@ -441,7 +511,7 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
         avatarRequired={Boolean(user?.avatar_required || !(avatarUrl || user?.avatar_url))}
         viewMode={effectiveViewMode}
         canSwitchView={isManager}
-        onToggleView={() => setViewMode((current) => current === "manager" ? "employee" : "manager")}
+        onToggleView={handleToggleView}
         onExportPDF={handleExportPDF}
         onExportCSV={handleExportCSV}
         onGenerateWeeklyReport={handleGenerateWeeklyReport}

@@ -279,10 +279,10 @@
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  border: 1px solid rgba(16, 24, 40, 0.08);
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.78);
-  box-shadow: 0 8px 28px rgba(16, 24, 40, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.015);
+  box-shadow: none;
   padding: 12px 14px;
 }
 
@@ -292,14 +292,14 @@
 }
 
 .vkpi-project-create-strip strong {
-  color: var(--vkpi-text);
+  color: #fff;
   font-size: 13px;
   font-weight: 900;
 }
 
 .vkpi-project-create-strip span {
   margin-top: 3px;
-  color: var(--vkpi-muted);
+  color: #94a3b8;
   font-size: 12px;
   font-weight: 760;
 }
@@ -307,16 +307,16 @@
 .vkpi-project-create-strip button {
   flex: 0 0 auto;
   min-height: 36px;
-  border: 1px solid var(--vkpi-blue);
-  border-radius: 12px;
-  background: var(--vkpi-blue);
+  border: 1px solid rgba(168, 85, 247, 0.70);
+  border-radius: 8px;
+  background: rgba(168, 85, 247, 0.88);
   color: #fff;
   padding: 0 14px;
   font: inherit;
   font-size: 13px;
   font-weight: 900;
   cursor: pointer;
-  box-shadow: 0 8px 22px rgba(21, 93, 252, 0.18);
+  box-shadow: none;
 }
 
 .vkpi-project-create-strip button:disabled {

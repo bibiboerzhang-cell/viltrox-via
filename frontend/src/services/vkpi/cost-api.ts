@@ -9,6 +9,7 @@ export interface VkpiCostPayload {
   amountUsd: number;
   note?: string;
   sourceRef?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface VkpiProductCostPayload {
@@ -34,6 +35,7 @@ export async function addProjectCost(token: string, payload: VkpiCostPayload) {
         amount_usd: payload.amountUsd,
         note: payload.note,
         source_ref: payload.sourceRef,
+        metadata: payload.metadata,
       }),
     },
     token,
@@ -50,6 +52,7 @@ export async function updateMarketingCost(token: string, costId: string, payload
         amount_usd: payload.amountUsd,
         note: payload.note,
         source_ref: payload.sourceRef,
+        metadata: payload.metadata,
       }),
     },
     token,

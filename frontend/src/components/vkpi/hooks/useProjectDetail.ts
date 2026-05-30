@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getProjectDetail } from '../../../domains/projects';
 import type { VkpiProjectDetail, VkpiProjectRow } from '../vkpiTypes';
-import { coerceProjectStage, platformFromRaw, safeNumber, textValue } from '../shared/vkpiDataUtils';
+import { coerceProjectStage, objectValue, platformFromRaw, safeNumber, textValue } from '../shared/vkpiDataUtils';
 
 interface UseProjectDetailArgs {
   apiToken?: string;
@@ -56,6 +56,22 @@ function sumNumber(rows: Array<Record<string, unknown>>, ...keys: string[]) {
   }, 0);
 }
 
+function boolValue(value: unknown) {
+  if (typeof value === 'boolean') return value;
+  return ['1', 'true', 'yes'].includes(String(value || '').trim().toLowerCase());
+}
+
+function jsonObject(value: unknown): Record<string, unknown> {
+  if (!value) return {};
+  if (typeof value === 'object') return value as Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(String(value));
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
 function currentStageStartedAt(detail: VkpiProjectDetail, stage: string, project: Record<string, unknown>) {
   const explicit = firstText(project.current_stage_started_at, project.stage_started_at);
   if (explicit) return explicit;
@@ -68,6 +84,84 @@ function firstEventAt(detail: VkpiProjectDetail, project: Record<string, unknown
   return firstText(project.started_at, oldest?.effective_at, oldest?.created_at, project.created_at);
 }
 
+function assignmentStage(value: unknown): VkpiProjectRow['stage'] {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'discovered') return 'discovery';
+  if (raw === 'device_sent') return 'shipped';
+  if (raw === 'arrived') return 'received';
+  if (raw === 'content_posted') return 'published';
+  if (raw === 'reviewed') return 'measured';
+  if (raw === 'churned') return 'closed';
+  return coerceProjectStage(raw);
+}
+
+function assignmentToProjectRow(
+  item: Record<string, unknown>,
+  detail: VkpiProjectDetail,
+  projectRow: VkpiProjectRow,
+  index: number,
+): VkpiProjectRow {
+  const project = detail.project || {};
+  const assignmentId = firstText(item.assignment_id, item.id) || String(index + 1);
+  const kolPoolId = firstText(item.kol_pool_id);
+  const stage = assignmentStage(item.stage);
+  const startedAt = firstText(item.created_at, project.created_at, projectRow.startedAt);
+  const stageStartedAt = firstText(item.updated_at, item.created_at, project.updated_at, projectRow.currentStageStartedAt);
+  const latestMessageAt = firstText(item.latest_publish_date, item.updated_at, item.created_at, project.updated_at, projectRow.latestMessageAt);
+  const views = safeNumber(item.total_views);
+  const shippingMeta = jsonObject(jsonObject(item.metadata_json).shipping);
+  const evidenceCount = safeNumber(item.evidence_count);
+  const ownerId = firstText(item.assigned_staff_id, project.assigned_staff_id, project.created_by_staff_id, projectRow.ownerId);
+  const ownerName = firstText(item.assigned_staff_name, project.staff_name, project.owner_name, projectRow.ownerName, ownerId);
+  return {
+    id: `assignment:${assignmentId}`,
+    projectId: projectRow.id,
+    assignmentId,
+    kolPoolId,
+    kolId: kolPoolId || undefined,
+    kolName: textValue(item.kol_name || item.display_name || item.handle, '未知 KOL'),
+    kolHandle: textValue(item.handle || item.profile_url || item.kol_name, '-'),
+    kolAvatar: firstText(item.avatar_url) || undefined,
+    kolProfileUrl: firstText(item.profile_url, item.channel_url) || undefined,
+    platform: platformFromRaw(item.kol_platform || item.platform),
+    campaign: projectRow.campaign,
+    stage,
+    latestMessageAt,
+    latestMessageSource: 'Manual note',
+    views,
+    likes: safeNumber(item.total_likes),
+    comments: safeNumber(item.total_comments),
+    clicks: null,
+    orders: null,
+    gmv: 0,
+    cost: 0,
+    roi: null,
+    ownerId: ownerId || undefined,
+    ownerName: textValue(ownerName, '未分配'),
+    ownerAvatar: projectRow.ownerAvatar,
+    productSku: projectRow.productSku,
+    productName: projectRow.productName,
+    marketplace: projectRow.marketplace,
+    priority: projectRow.priority,
+    shopifyLink: projectRow.shopifyLink,
+    trackingNumber: boolValue(item.is_placeholder_tracking) ? undefined : firstText(item.tracking_number) || undefined,
+    trackingCarrier: firstText(shippingMeta.carrier) || undefined,
+    trackingStatus: firstText(shippingMeta.status) || undefined,
+    isFakeTracking: boolValue(item.is_placeholder_tracking),
+    kolCount: 1,
+    kolWithEvidence: item.has_video_evidence ? 1 : 0,
+    evidenceCount,
+    createdAt: startedAt,
+    startedAt,
+    closedAt: projectRow.closedAt,
+    currentStageStartedAt: stageStartedAt,
+    totalDurationLabel: durationLabel(startedAt),
+    stageDurationLabel: durationLabel(stageStartedAt),
+    stageEventCount: evidenceCount,
+    updatedAt: firstText(item.updated_at, latestMessageAt, projectRow.updatedAt),
+  };
+}
+
 export function projectDetailToRow(detail: VkpiProjectDetail, fallback?: VkpiProjectRow): VkpiProjectRow {
   const project = detail.project || {};
   const stage = coerceProjectStage(project.stage || fallback?.stage);
@@ -78,6 +172,8 @@ export function projectDetailToRow(detail: VkpiProjectDetail, fallback?: VkpiPro
   const revenue = centsToUsd(detail.roi?.revenue_cents ?? sumCents(detail.sales_attributions, 'revenue_cents', 'gmv_cents'));
   const cost = centsToUsd(detail.roi?.cost_cents ?? sumCents(detail.costs, 'amount_cents', 'cost_cents'));
   const contentViews = sumNumber(detail.content_posts || [], 'views', 'view_count', 'play_count', 'impressions');
+  const contentLikes = sumNumber(detail.content_posts || [], 'likes', 'like_count');
+  const contentComments = sumNumber(detail.content_posts || [], 'comments', 'comment_count');
   const projectViews = safeNumber(project.total_views || project.views || project.view_count || project.play_count || project.impressions || project.content_views);
   const orders = safeNumber(linkSummary.order_count) || detail.link_orders?.length || detail.sales_attributions.length || null;
   const latestMessageAt = firstText(
@@ -101,6 +197,8 @@ export function projectDetailToRow(detail: VkpiProjectDetail, fallback?: VkpiPro
     latestMessageAt,
     latestMessageSource: fallback?.latestMessageSource || 'Manual note',
     views: contentViews || projectViews || fallback?.views || 0,
+    likes: contentLikes || fallback?.likes || 0,
+    comments: contentComments || fallback?.comments || 0,
     clicks: validClicks || fallback?.clicks || null,
     orders,
     gmv: revenue || fallback?.gmv || 0,
@@ -114,6 +212,24 @@ export function projectDetailToRow(detail: VkpiProjectDetail, fallback?: VkpiPro
     marketplace: firstText(project.marketplace, fallback?.marketplace),
     priority: firstText(project.priority, fallback?.priority),
     shopifyLink: firstText(project.shopify_link, project.shopify_url, fallback?.shopifyLink),
+    trackingNumber: boolValue(project.is_placeholder_tracking || project.is_fake_tracking) ? undefined : firstText(project.tracking_number, fallback?.trackingNumber) || undefined,
+    trackingCarrier: firstText(project.tracking_carrier, fallback?.trackingCarrier) || undefined,
+    trackingStatus: firstText(project.tracking_status, fallback?.trackingStatus) || undefined,
+    isFakeTracking: boolValue(project.is_placeholder_tracking || project.is_fake_tracking || fallback?.isFakeTracking),
+    kolCount: safeNumber(project.kol_count) || fallback?.kolCount,
+    kolWithEvidence: safeNumber(project.kol_with_evidence) || fallback?.kolWithEvidence,
+    evidenceCount: safeNumber(project.evidence_count) || fallback?.evidenceCount,
+    platforms: fallback?.platforms,
+    stageCounts: objectValue(project.stage_counts || project.stageCounts) as Record<string, number>,
+    publishedCount: safeNumber(project.published_count || project.publishedCount) || fallback?.publishedCount,
+    healthScore: safeNumber(project.health_score || project.healthScore) || fallback?.healthScore,
+    healthBasis: firstText(project.health_basis, project.healthBasis, fallback?.healthBasis),
+    healthBreakdown: objectValue(project.health_breakdown || project.healthBreakdown || fallback?.healthBreakdown) as Record<string, number>,
+    needsFollowupCount: project.needs_followup_count == null ? fallback?.needsFollowupCount : safeNumber(project.needs_followup_count),
+    overdueCount: project.overdue_count == null ? fallback?.overdueCount : safeNumber(project.overdue_count),
+    currentFocus: firstText(project.current_focus, project.currentFocus, fallback?.currentFocus),
+    bottleneck: firstText(project.bottleneck, fallback?.bottleneck),
+    churnedCount: safeNumber(project.churned_count || project.churnedCount) || fallback?.churnedCount,
     createdAt: firstText(project.created_at, fallback?.createdAt),
     startedAt,
     closedAt: firstText(project.closed_at, fallback?.closedAt),
@@ -175,6 +291,11 @@ export function useProjectDetail({ apiToken, projectId, fallbackProject }: UsePr
   const project = useMemo(() => (
     state.detail ? projectDetailToRow(state.detail, fallbackProject) : fallbackProject
   ), [fallbackProject, state.detail]);
+  const participatingRows = useMemo(() => {
+    if (!state.detail || !project) return [];
+    const rawRows = state.detail.participating_kols || state.detail.project_kol_assignments || [];
+    return rawRows.map((item, index) => assignmentToProjectRow(item, state.detail as VkpiProjectDetail, project, index));
+  }, [project, state.detail]);
   const refresh = useCallback(async () => {
     setReloadKey((key) => key + 1);
   }, []);
@@ -182,6 +303,7 @@ export function useProjectDetail({ apiToken, projectId, fallbackProject }: UsePr
   return {
     ...state,
     project,
+    participatingRows,
     refresh,
   };
 }

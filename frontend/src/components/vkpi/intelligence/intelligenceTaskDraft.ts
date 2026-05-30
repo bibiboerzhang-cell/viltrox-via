@@ -215,7 +215,7 @@ export function taskDraftBridgeTargets(
     );
   } else {
     targets.push(
-      { page: viewMode === 'employee' ? 'command' : 'dashboardPremium', label: viewMode === 'employee' ? '回我的工作台' : '回管理主控', intent: '回到今日主视图。', primary: true },
+      { page: viewMode === 'employee' ? 'command' : 'missionControlV2', label: viewMode === 'employee' ? '回我的工作台' : '回管理主控', intent: '回到今日主视图。', primary: true },
       { page: 'reports', label: '查看报表', intent: '把简报判断沉淀到周报或经营报告。' },
     );
   }

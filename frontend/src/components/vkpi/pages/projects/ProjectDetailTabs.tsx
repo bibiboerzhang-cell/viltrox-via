@@ -1,14 +1,11 @@
-import { Avatar } from '../../shared/Avatar';
-import { PlatformPill } from '../../shared/PlatformPill';
+import { useMemo, useState } from 'react';
+import { Activity, AlertCircle, BookOpen, Boxes, Check, DollarSign, Download, Edit3, ExternalLink, Eye, FileText, Heart, ImageIcon, MessageCircle, MousePointerClick, Package, Plus, Send, Shield, ShoppingCart, Sparkles, TrendingUp, Upload, Video, X } from 'lucide-react';
 import { stageLabels } from '../../shared/vkpiConstants';
 import type { VkpiProjectRow } from '../../vkpiTypes';
+import { formatLargeNum, formatMoneyShort, healthColor, PROJECT_STAGE_COLOR, PROJECT_STAGE_FLOW } from './projectDeliverableStyle';
 import {
   bottleneckForRows,
   cancelledStages,
-  formatMoney,
-  formatNumber,
-  formatPercent,
-  formatRatio,
   healthForRows,
   stageIndex,
   type ContractLine,
@@ -18,118 +15,451 @@ import {
   type StageCostSummary,
 } from '../../../../domains/projects';
 
-export function CampaignContractsTab({
+function centsValue(row: Record<string, unknown>) {
+  if (row.amount_cents != null) return Number(row.amount_cents || 0);
+  if (row.amount_usd != null) return Math.round(Number(row.amount_usd || 0) * 100);
+  return 0;
+}
+
+interface CostLedgerTotals {
+  contract: number;
+  shipping: number;
+  product: number;
+  total: number;
+}
+
+function costLedgerTotals(costRows: Array<Record<string, unknown>>): CostLedgerTotals {
+  return costRows.reduce<CostLedgerTotals>((totals, row) => {
+    if (String(row.status || '').toLowerCase() === 'void') return totals;
+    const type = String(row.cost_type || '').toLowerCase();
+    const amount = centsValue(row) / 100;
+    if (type === 'shipping') totals.shipping += amount;
+    else if (type === 'product' || type === 'sample') totals.product += amount;
+    else if (type === 'cash_fee' || type === 'contract' || type === 'creator_fee') totals.contract += amount;
+    totals.total += amount;
+    return totals;
+  }, { contract: 0, shipping: 0, product: 0, total: 0 });
+}
+
+type MaterialSection = 'assets' | 'logistics';
+type MaterialAssetStatus = 'ready' | 'draft' | 'todo';
+type MaterialAssetType = 'image' | 'pdf' | 'doc' | 'script' | 'email' | 'legal';
+
+interface MaterialAssetItem {
+  id: string;
+  name: string;
+  type: MaterialAssetType;
+  size: string;
+  date: string;
+  status: MaterialAssetStatus;
+  aiDesc: string;
+}
+
+const ASSET_ICON: Record<MaterialAssetType, typeof FileText> = {
+  image: ImageIcon,
+  pdf: FileText,
+  doc: FileText,
+  script: Edit3,
+  email: Send,
+  legal: Shield,
+};
+
+const STATUS_BG: Record<MaterialAssetStatus, string> = {
+  ready: 'bg-emerald-500/15 text-emerald-300',
+  draft: 'bg-amber-500/15 text-amber-300',
+  todo: 'bg-white/[0.05] text-slate-400',
+};
+
+const STATUS_LABEL: Record<MaterialAssetStatus, string> = {
+  ready: '已就绪',
+  draft: '起草中',
+  todo: '待处理',
+};
+
+const PROJECT_ASSETS: MaterialAssetItem[] = [
+  { id: 'a1', name: '产品图 (5 张高清)', type: 'image', status: 'ready', date: '5/15', aiDesc: '已生成 ZIP · 含 PNG + 缩略图', size: '12.4 MB' },
+  { id: 'a2', name: '技术参数手册 PDF', type: 'pdf', status: 'ready', date: '5/15', aiDesc: 'LLM 已生成 8 页 · 中英双语', size: '2.1 MB' },
+  { id: 'a3', name: '竞品对比表', type: 'doc', status: 'ready', date: '5/18', aiDesc: 'vs Sony GM / Sigma · 12 维度对比', size: '856 KB' },
+  { id: 'a4', name: '视频脚本模板', type: 'script', status: 'draft', date: '5/22', aiDesc: 'AI 起草 · 等 review', size: '—' },
+  { id: 'a5', name: 'EDM 邮件模板 (cold)', type: 'email', status: 'todo', date: '—', aiDesc: '未生成 · 点击 AI 起草', size: '—' },
+  { id: 'a6', name: '法务条款 (合同附件)', type: 'legal', status: 'ready', date: '5/10', aiDesc: '标准条款 · 已审', size: '412 KB' },
+];
+
+function buildMaterialBriefText(project: VkpiProjectRow | undefined, rows: VkpiProjectRow[], stats?: ProjectStatsSummary) {
+  const projectTitle = project?.campaign || project?.productName || rows[0]?.productName || '未命名项目';
+  const product = project?.productName || rows[0]?.productName || projectTitle;
+  const sku = project?.productSku || rows[0]?.productSku || '待补充';
+  const platforms = Array.from(new Set(rows.map((row) => row.platform).filter(Boolean))).join(', ') || '待确认';
+  const readyAssets = PROJECT_ASSETS.filter((asset) => asset.status === 'ready').map((asset) => asset.name).join(' / ') || '待准备';
+  const draftAssets = PROJECT_ASSETS.filter((asset) => asset.status !== 'ready').map((asset) => `${asset.name}(${STATUS_LABEL[asset.status]})`).join(' / ') || '无';
+  const published = stats?.published ?? rows.filter((row) => stageIndex(row.stage) >= stageIndex('published')).length;
+
+  return [
+    `# ${projectTitle} 项目 Brief`,
+    '',
+    `产品: ${product}`,
+    `SKU: ${sku}`,
+    `平台: ${platforms}`,
+    `参与 KOL: ${rows.length}`,
+    `已发布: ${published}`,
+    `当前曝光: ${formatLargeNum(stats?.views || 0)}`,
+    '',
+    '## 已就绪物料',
+    readyAssets,
+    '',
+    '## 待处理物料',
+    draftAssets,
+    '',
+    '## 执行口径',
+    '- 所有 KOL 使用同一套产品图、参数手册、竞品对比表与法务条款。',
+    '- 视频脚本和 EDM 模板仍需人工 review 后再外发。',
+    '- 合同、费用和交付证明以项目详情页当前记录为准。',
+  ].join('\n');
+}
+
+function buildRetrospectiveDraftText(
+  project: VkpiProjectRow,
+  rows: VkpiProjectRow[],
+  stats: ProjectStatsSummary,
+  healthScore: number,
+  publishedKols: VkpiProjectRow[],
+  withShopify: VkpiProjectRow[],
+  withoutShopify: VkpiProjectRow[],
+) {
+  const projectTitle = project.campaign || project.productName || '未命名项目';
+  const topRows = [...publishedKols].sort((a, b) => ((b.views || 0) - (a.views || 0))).slice(0, 5);
+  const topLines = topRows.length
+    ? topRows.map((row, index) => `${index + 1}. ${row.kolHandle || row.kolName || 'Unknown'} · ${row.platform} · ${formatLargeNum(row.views)} 播放`).join('\n')
+    : '暂无已发布内容。';
+
+  return [
+    `# ${projectTitle} 复盘草稿`,
+    '',
+    `健康度: ${healthScore}`,
+    `参与 KOL: ${rows.length}`,
+    `已发布 KOL: ${publishedKols.length}`,
+    `总曝光: ${formatLargeNum(stats.views)}`,
+    `总点击: ${formatLargeNum(stats.clicks)}`,
+    `归因 GMV: ${formatMoneyShort(stats.gmv)}`,
+    `ROI: ${stats.roi == null ? '待成本/归因补齐' : `${stats.roi.toFixed(1)}%`}`,
+    '',
+    '## 归因接入',
+    `已接 Shopify: ${withShopify.length}`,
+    `未接 Shopify: ${withoutShopify.length}`,
+    '',
+    '## 内容表现 Top 5',
+    topLines,
+    '',
+    '## 下一步',
+    withoutShopify.length > 0 ? '- 补齐未接 Shopify 的归因链接，避免 ROI 偏低。' : '- Shopify 归因已覆盖已发布内容，继续观察订单变化。',
+    publishedKols.length < rows.length ? '- 推进未发布 KOL 到内容发布节点。' : '- 所有 KOL 已进入发布/复盘口径。',
+  ].join('\n');
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  if (!value) return {};
+  if (typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+  if (typeof value !== 'string') return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+function costRowAmount(costRows: Array<Record<string, unknown>>, row: VkpiProjectRow, type: 'shipping' | 'product' | 'contract') {
+  const assignmentId = String(row.assignmentId || '').trim();
+  const kolPoolId = String(row.kolPoolId || '').trim();
+  return costRows.reduce((sum, costRow) => {
+    if (String(costRow.status || '').toLowerCase() === 'void') return sum;
+    const costType = String(costRow.cost_type || '').toLowerCase();
+    if (type === 'shipping' && costType !== 'shipping') return sum;
+    if (type === 'product' && !['product', 'sample'].includes(costType)) return sum;
+    if (type === 'contract' && !['cash_fee', 'contract', 'creator_fee'].includes(costType)) return sum;
+    const metadata = objectValue(costRow.metadata_json || costRow.metadata);
+    const sourceRef = String(costRow.source_ref || '');
+    const matchesAssignment = assignmentId && (
+      sourceRef === `assignment_${type}:${assignmentId}`
+      || sourceRef.endsWith(`:${assignmentId}`)
+      || String(metadata.assignment_id || '') === assignmentId
+    );
+    const matchesPool = kolPoolId && String(metadata.kol_pool_id || '') === kolPoolId;
+    return matchesAssignment || matchesPool ? sum + (centsValue(costRow) / 100) : sum;
+  }, 0);
+}
+
+function rowProductSent(row: VkpiProjectRow): string[] {
+  const dynamicRow = row as unknown as Record<string, unknown>;
+  const raw = dynamicRow.productSent || dynamicRow.product_sent || dynamicRow.productsSent || dynamicRow.products;
+  if (Array.isArray(raw)) {
+    return raw.map((item) => {
+      if (typeof item === 'string') return item;
+      if (item && typeof item === 'object') {
+        const record = item as Record<string, unknown>;
+        return String(record.name || record.productName || record.product_name || record.sku || record.productSku || '').trim();
+      }
+      return '';
+    }).filter(Boolean);
+  }
+  const single = String(dynamicRow.productName || dynamicRow.product_name || dynamicRow.productSku || dynamicRow.product_sku || '').trim();
+  return single ? [single] : [];
+}
+
+function productCost(productSent: string[]) {
+  return productSent.length ? 0 : 0;
+}
+
+function trackingUrl(carrier: string, trackingNumber: string) {
+  const normalizedCarrier = carrier.toLowerCase();
+  const encoded = encodeURIComponent(trackingNumber);
+  if (normalizedCarrier.includes('dhl')) return `https://www.dhl.com/us-en/home/tracking/tracking-express.html?submit=1&tracking-id=${encoded}`;
+  if (normalizedCarrier.includes('fedex')) return `https://www.fedex.com/fedextrack/?trknbr=${encoded}`;
+  if (normalizedCarrier.includes('ups')) return `https://www.ups.com/track?tracknum=${encoded}`;
+  if (normalizedCarrier.includes('usps')) return `https://tools.usps.com/go/TrackConfirmAction?tLabels=${encoded}`;
+  return `https://www.google.com/search?q=${encodeURIComponent(`${carrier} ${trackingNumber}`)}`;
+}
+
+function deliveredByStageOrStatus(row: VkpiProjectRow) {
+  const status = String(row.trackingStatus || '').toLowerCase();
+  return stageIndex(row.stage) >= stageIndex('received') || /delivered|signed|received|签收|已送达|已到货/.test(status);
+}
+
+function timelineDateValue(row: VkpiProjectRow) {
+  return row.currentStageStartedAt || row.latestMessageAt || row.updatedAt || row.createdAt || row.startedAt || '';
+}
+
+function timelineTimestamp(value: string) {
+  const time = new Date(value).getTime();
+  return Number.isFinite(time) ? time : 0;
+}
+
+function formatTimelineDate(value: string) {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return value;
+  const month = date.getMonth() + 1;
+  const day = date.getDate();
+  const hour = String(date.getHours()).padStart(2, '0');
+  const minute = String(date.getMinutes()).padStart(2, '0');
+  return `${month}/${day} ${hour}:${minute}`;
+}
+
+function timelineStage(row: VkpiProjectRow) {
+  const index = Math.max(0, Math.min(PROJECT_STAGE_FLOW.length - 1, stageIndex(row.stage)));
+  return PROJECT_STAGE_FLOW[index];
+}
+
+function timelineEventText(row: VkpiProjectRow) {
+  if (row.trackingStatus) return `✓ ${row.trackingStatus}`;
+  if ((row.evidenceCount || 0) > 0) return `✓ 已归档 ${row.evidenceCount} 条证据`;
+  if (row.latestMessageSource && row.latestMessageSource !== 'No reply') return `✓ ${row.latestMessageSource}`;
+  return `✓ ${stageLabels[row.stage] || timelineStage(row).label}`;
+}
+
+function timelineSpecial(row: VkpiProjectRow) {
+  if (row.stage === 'lost' || row.stage === 'cancelled') return 'lost';
+  if (row.stage === 'stalled') return 'stalled';
+  return '';
+}
+
+export function CampaignTimelineTab({
   rows,
-  contractLines,
 }: {
   rows: VkpiProjectRow[];
-  contractLines: ContractLine[];
 }) {
-  const archiveNeeded = contractLines.filter((line) => line.statusLabel === '需归档').length;
-  const termsPending = contractLines.filter((line) => line.statusLabel === '待确认条款').length;
-  const notStarted = contractLines.filter((line) => line.statusLabel === '未触发').length;
-  const reviewReady = contractLines.filter((line) => line.statusLabel === '待复核').length;
-  const evidenceTotal = contractLines.reduce((sum, line) => sum + line.evidenceCount, 0);
+  const events = useMemo(() => rows
+    .map((row) => {
+      const stage = timelineStage(row);
+      const special = timelineSpecial(row);
+      return {
+        id: row.id,
+        date: formatTimelineDate(timelineDateValue(row)),
+        timestamp: timelineTimestamp(timelineDateValue(row)),
+        kol: row.kolHandle || row.kolName || 'Unknown',
+        stageLabel: stageLabels[row.stage] || stage.label,
+        stageColor: special === 'lost' ? '#ef4444' : special === 'stalled' ? '#fb923c' : PROJECT_STAGE_COLOR[stage.key],
+        special,
+        ai: timelineEventText(row),
+        reason: special ? (row.bottleneck || row.currentFocus || '需要人工确认') : '',
+      };
+    })
+    .sort((a, b) => b.timestamp - a.timestamp || b.date.localeCompare(a.date)), [rows]);
 
   return (
-    <div className="vkpi-campaign-contracts" aria-label="项目合同归档">
-      <div className="vkpi-campaign-contracts-head">
-        <div>
-          <span>Contract archive center</span>
-          <h3>合同归档</h3>
-          <p>当前不新增合同表，先用项目阶段、成本和证据数量推导每个 KOL 的合同归档风险。</p>
-        </div>
-        <div>
-          <strong>{archiveNeeded + reviewReady}</strong>
-          <span>需要归档 / 复核</span>
+    <div className="p-4 space-y-3" aria-label="项目时间轴">
+      <div className="rounded-lg border border-purple-500/30 bg-purple-500/5 p-3 flex items-start gap-2.5">
+        <Activity size={13} className="text-purple-300 mt-0.5 shrink-0" />
+        <div className="text-[10.5px] text-slate-300">
+          {events.length} 条事件 · 按时间倒序 · 所有 KOL 推进记录在此聚合
         </div>
       </div>
 
-      <div className="vkpi-campaign-contracts-totals">
-        <div><span>全部 KOL</span><strong>{rows.length}</strong><em>当前项目行</em></div>
-        <div><span>需归档</span><strong>{archiveNeeded}</strong><em>已合作后应补凭证</em></div>
-        <div><span>待确认条款</span><strong>{termsPending}</strong><em>回复到合作前</em></div>
-        <div><span>未触发</span><strong>{notStarted}</strong><em>尚未到合同节点</em></div>
-        <div><span>证据截图</span><strong>{evidenceTotal}</strong><em>现有阶段证据</em></div>
-      </div>
-
-      <div className="vkpi-campaign-contracts-grid">
-        <section className="vkpi-campaign-contract-card">
-          <header>
-            <div>
-              <span>合同状态总览</span>
-              <h4>按阶段推导，不伪造签约状态</h4>
-            </div>
-          </header>
-          <div className="vkpi-campaign-contract-statuses">
-            <div><b>{notStarted}</b><span>未触发</span></div>
-            <div><b>{termsPending}</b><span>待确认条款</span></div>
-            <div><b>{archiveNeeded}</b><span>需归档</span></div>
-            <div><b>{reviewReady}</b><span>待复核</span></div>
-          </div>
-          <div className="vkpi-campaign-contract-alert">未接入 `campaign_contracts` 之前，这里不会提供假上传、假生成合同或假签署按钮；只显示真实项目行能推导出的待办。</div>
-        </section>
-
-        <section className="vkpi-campaign-contract-card">
-          <header>
-            <div>
-              <span>模板库状态</span>
-              <h4>下一步接口位置</h4>
-            </div>
-          </header>
-          <div className="vkpi-campaign-contract-template">
-            <div><strong>免费寄样 / 佣金模板</strong><span>未接入合同模板表</span></div>
-            <div><strong>付费推广模板</strong><span>未接入合同模板表</span></div>
-            <div><strong>长期合作模板</strong><span>未接入合同模板表</span></div>
-          </div>
-          <p>后续接入合同表后，这里再开放模板生成、已签版上传、条款 OCR 和归档导出。</p>
-        </section>
-      </div>
-
-      <section className="vkpi-campaign-contract-card">
-        <header>
-          <div>
-            <span>合同清单</span>
-            <h4>KOL 级归档待办</h4>
-          </div>
-        </header>
-        <div className="vkpi-campaign-contract-table">
-          <div className="vkpi-campaign-contract-row is-head">
-            <span>KOL</span>
-            <span>平台</span>
-            <span>阶段</span>
-            <span>归档状态</span>
-            <span>条款口径</span>
-            <span>金额</span>
-            <span>证据</span>
-            <span>下一步</span>
-          </div>
-          {contractLines.map((line) => (
-            <div className="vkpi-campaign-contract-row" key={line.id}>
-              <span><b>{line.kolHandle || line.kolName}</b><small>{line.kolName || '-'}</small></span>
-              <span><PlatformPill platform={line.platform} /></span>
-              <span>{stageLabels[line.stage]}</span>
-              <span className={line.statusClass}>{line.statusLabel}</span>
-              <span>{line.contractType}</span>
-              <span>{formatMoney(line.amount)}</span>
-              <span>{line.evidenceCount}</span>
-              <span>{line.nextAction}</span>
+      {events.length === 0 ? (
+        <div className="rounded-lg border border-white/[0.06] bg-white/[0.01] p-8 text-center">
+          <Activity size={24} className="text-slate-600 mx-auto mb-2" />
+          <div className="text-[11.5px] text-slate-400">暂无事件 · 推进 KOL 后自动归档到时间轴</div>
+        </div>
+      ) : (
+        <div className="space-y-2 relative">
+          <div className="absolute left-3 top-2 bottom-2 w-px bg-white/[0.06]" />
+          {events.map((event) => (
+            <div key={event.id} className="flex items-start gap-3 relative pl-1">
+              <div
+                className="w-5 h-5 rounded-full flex items-center justify-center shrink-0 z-10"
+                style={{ background: event.stageColor || '#94a3b8', boxShadow: '0 0 0 3px #0a0a0d' }}
+              >
+                {event.special === 'lost' ? (
+                  <X size={10} className="text-white" />
+                ) : event.special === 'stalled' ? (
+                  <AlertCircle size={10} className="text-white" />
+                ) : (
+                  <Check size={10} className="text-white" />
+                )}
+              </div>
+              <div className="flex-1 rounded-lg border border-white/[0.05] bg-white/[0.012] p-2.5">
+                <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+                  <span className="text-[10.5px] text-slate-400 tabular-nums font-mono">{event.date}</span>
+                  <span className="text-[11px] text-white font-medium">{event.kol}</span>
+                  <span
+                    className="text-[10px] px-1.5 py-0.5 rounded font-medium"
+                    style={{ background: `${event.stageColor}20`, color: event.stageColor }}
+                  >
+                    {event.special === 'lost' ? '标记流失' : event.special === 'stalled' ? '标记停滞' : event.stageLabel}
+                  </span>
+                </div>
+                {event.ai ? <div className="text-[10px] text-slate-400 mt-1">{event.ai}</div> : null}
+                {event.reason ? <div className="text-[10px] text-slate-400 mt-1">原因: {event.reason}</div> : null}
+              </div>
             </div>
           ))}
         </div>
-      </section>
+      )}
     </div>
   );
+}
+
+export function CampaignContractsTab({
+  contractLines,
+  onPendingAction,
+}: {
+  rows: VkpiProjectRow[];
+  contractLines: ContractLine[];
+  onPendingAction: (label: string) => void;
+}) {
+  const withContract = contractLines.filter((line) => line.statusLabel !== '未触发');
+
+  return (
+    <div className="p-4 space-y-4" aria-label="项目合同归档">
+      <button
+        type="button"
+        onClick={() => onPendingAction('合同上传')}
+        className="rounded-lg border-2 border-dashed border-white/[0.08] bg-white/[0.01] p-6 text-center hover:border-purple-500/40 transition-colors cursor-pointer w-full"
+      >
+        <Upload size={22} className="text-slate-500 mx-auto mb-2" />
+        <div className="text-[12px] text-white font-medium mb-1">拖拽上传合同 PDF</div>
+        <div className="text-[10.5px] text-slate-500 mb-2">支持 PDF / DOCX · 上传后 LLM 自动解析 KOL / 费用 / 期限 / deliverables</div>
+        <span className="px-3 py-1 rounded-md bg-purple-500/90 hover:bg-purple-500 text-white text-[11px] font-medium inline-flex">选择文件</span>
+      </button>
+
+      <div className="rounded-lg border border-purple-500/30 bg-purple-500/5 p-3 flex items-start gap-2.5">
+        <Sparkles size={13} className="text-purple-300 mt-0.5 shrink-0" />
+        <div className="text-[10.5px] text-slate-300">
+          已归档 {withContract.length} 份合同 · LLM 自动提取关键字段并同步到「费用」 · 解析中 0 份
+        </div>
+      </div>
+
+      {withContract.length === 0 ? (
+        <div className="rounded-lg border border-white/[0.06] bg-white/[0.01] p-8 text-center">
+          <FileText size={24} className="text-slate-600 mx-auto mb-2" />
+          <div className="text-[11.5px] text-slate-400">暂无合同 · 在 4→5 已合作阶段上传 PDF</div>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {withContract.map((line) => (
+            <div key={line.id} className="rounded-lg border border-white/[0.06] bg-white/[0.015] p-3 flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-purple-500/10 flex items-center justify-center shrink-0">
+                <FileText size={18} className="text-purple-300" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-0.5">
+                  <div className="text-[12px] font-semibold text-white truncate">{`${line.kolHandle || line.kolName || 'KOL'}_Contract.pdf`}</div>
+                  <span className="text-[9.5px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300">已解析</span>
+                </div>
+                <div className="text-[10.5px] text-slate-400 truncate">{line.kolName || line.kolHandle} · {line.platform} · {stageLabels[line.stage]}</div>
+                <div className="flex items-center gap-3 mt-1 text-[10px] text-slate-500">
+                  <span>期限: <span className="text-slate-300">{line.contractType || '待确认'}</span></span>
+                  <span className="truncate">{line.nextAction}</span>
+                </div>
+              </div>
+              <div className="shrink-0 text-right">
+                <div className="text-[13px] font-bold text-white tabular-nums">{formatMoneyShort(line.amount)}</div>
+                <button
+                  className="text-[10px] text-purple-300 hover:text-purple-200 mt-0.5 flex items-center gap-0.5"
+                  type="button"
+                  onClick={() => onPendingAction('查看 PDF')}
+                >
+                  <ExternalLink size={9} />查看 PDF
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function retrospectiveTextField(row: VkpiProjectRow, keys: string[]) {
+  const dynamicRow = row as unknown as Record<string, unknown>;
+  for (const key of keys) {
+    const value = dynamicRow[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
+}
+
+function retrospectiveNumberField(row: VkpiProjectRow, keys: string[]) {
+  const dynamicRow = row as unknown as Record<string, unknown>;
+  for (const key of keys) {
+    const value = dynamicRow[key];
+    if (value == null || value === '') continue;
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) return numeric;
+  }
+  return 0;
+}
+
+function retrospectiveVideoUrl(row: VkpiProjectRow) {
+  return retrospectiveTextField(row, ['contentUrl', 'content_url', 'videoUrl', 'video_url', 'postUrl', 'post_url', 'evidenceUrl', 'evidence_url']);
+}
+
+function retrospectiveVideoTitle(row: VkpiProjectRow, projectTitle: string) {
+  return retrospectiveTextField(row, ['videoTitle', 'video_title', 'contentTitle', 'content_title', 'title'])
+    || `${projectTitle} · ${row.kolHandle || row.kolName || 'KOL'}`;
+}
+
+function retrospectiveWatchTime(row: VkpiProjectRow) {
+  const direct = retrospectiveTextField(row, ['watchTime', 'watch_time', 'duration', 'durationLabel', 'duration_label']);
+  if (direct) return direct;
+  const seconds = retrospectiveNumberField(row, ['durationSeconds', 'duration_seconds']);
+  if (!seconds) return '—';
+  const minutes = Math.floor(seconds / 60);
+  const rest = Math.round(seconds % 60).toString().padStart(2, '0');
+  return `${minutes}:${rest}`;
+}
+
+function retrospectiveRowInitial(row: VkpiProjectRow) {
+  return (row.kolName || row.kolHandle || '?').trim().charAt(0).toUpperCase() || '?';
 }
 
 export function CampaignRetrospectiveTab({
   project,
   rows,
   stats,
-  analytics,
   health,
-  bottleneck,
   onCopy,
+  onPendingAction,
 }: {
   project: VkpiProjectRow;
   rows: VkpiProjectRow[];
@@ -138,145 +468,167 @@ export function CampaignRetrospectiveTab({
   health: ReturnType<typeof healthForRows>;
   bottleneck: ReturnType<typeof bottleneckForRows>;
   onCopy: (text: string, label: string) => Promise<void>;
+  onPendingAction: (label: string) => void;
 }) {
-  const bestPlatform = analytics.platformRows[0];
-  const topKol = analytics.topRows[0];
-  const pendingPublish = rows.filter((row) => stageIndex(row.stage) < stageIndex('published')).length;
-  const missingCost = rows.filter((row) => !row.cost).length;
-  const missingLinks = rows.filter((row) => !row.shopifyLink).length;
-  const targetStatus = rows.length ? '目标字段未接入，当前只展示实际值' : '暂无 KOL';
-  const highlightItems = [
-    topKol ? `${topKol.kolHandle || topKol.kolName} 当前贡献 ${formatNumber(topKol.views)} 曝光，归因销售 ${formatMoney(topKol.gmv)}。` : '暂无 Top KOL，可先追加 KOL 或等待内容同步。',
-    bestPlatform ? `${bestPlatform.platform} 是当前最高曝光平台，${bestPlatform.kolCount} 个 KOL 合计 ${formatNumber(bestPlatform.views)} 曝光。` : '暂无平台分布数据。',
-    stats.roi != null ? `项目 ROI 为 ${formatRatio(stats.roi)}，成本 ${formatMoney(stats.cost)}，归因销售 ${formatMoney(stats.gmv)}。` : '成本或销售不足，ROI 暂不可判断。',
-  ];
-  const lessonItems = [
-    `当前瓶颈在 ${bottleneck.from}→${bottleneck.to}：${bottleneck.text}`,
-    pendingPublish ? `${pendingPublish} 个 KOL 还没到发布节点，收尾前需要逐个确认发布排期。` : '当前 KOL 均已到发布或后续节点。',
-    missingLinks ? `${missingLinks} 个 KOL 缺 Shopify / 归因链接，后续销售归因会偏弱。` : '当前 KOL 都有归因链接。',
-    missingCost ? `${missingCost} 个 KOL 缺成本记录，费用 tab 的 ROI 仍需复核。` : '当前 KOL 都有成本记录。',
-  ].slice(0, 4);
-  const retrospectiveText = [
-    `${project.campaign || '未命名推广'} · 复盘草稿`,
-    `健康度：${health.score} / ${health.label}`,
-    `参与 KOL：${rows.length}`,
-    `已发布：${stats.published}，发布率 ${stats.publishRate}%`,
-    `总曝光：${formatNumber(stats.views)}`,
-    `短链点击：${formatNumber(stats.clicks || 0)}`,
-    `归因订单：${formatNumber(stats.orders || 0)}`,
-    `归因销售：${formatMoney(stats.gmv)}`,
-    `成本：${formatMoney(stats.cost)}，ROI：${formatRatio(stats.roi)}`,
-    '',
-    '亮点：',
-    ...highlightItems.map((item, index) => `${index + 1}. ${item}`),
-    '',
-    '风险 / 教训：',
-    ...lessonItems.map((item, index) => `${index + 1}. ${item}`),
-  ].join('\n');
+  const projectTitle = project.campaign || project.productName || '未命名项目';
+  const projectHealth = project.healthScore ?? health.score;
+  const publishedKols = rows
+    .filter((row) => stageIndex(row.stage) >= stageIndex('published') || (row.evidenceCount || 0) > 0 || (row.views || 0) > 0)
+    .sort((a, b) => ((b.views || 0) - (a.views || 0)) || ((b.gmv || 0) - (a.gmv || 0)));
+  const withShopify = publishedKols.filter((row) => Boolean(row.shopifyLink || row.clicks || row.orders || row.gmv));
+  const withoutShopify = publishedKols.filter((row) => !withShopify.includes(row));
+  const retrospectiveDraft = buildRetrospectiveDraftText(project, rows, stats, projectHealth, publishedKols, withShopify, withoutShopify);
+
+  function compositeScore(row: VkpiProjectRow) {
+    const hasShopify = Boolean(row.shopifyLink || row.clicks || row.orders || row.gmv);
+    if (!hasShopify || !(row.views || 0)) return null;
+    const shares = retrospectiveNumberField(row, ['shares', 'shareCount', 'share_count']);
+    const viewsNorm = Math.min((row.views || 0) / 100000, 10) * 4;
+    const engageNorm = Math.min(((row.likes || 0) + (row.comments || 0) * 5 + shares) / 5000, 10) * 2;
+    const clickNorm = Math.min((row.clicks || 0) / 100, 10) * 2;
+    const gmvNorm = Math.min((row.gmv || 0) / 500, 10) * 2;
+    return Math.round(Math.min(100, viewsNorm + engageNorm + clickNorm + gmvNorm));
+  }
 
   return (
-    <div className="vkpi-campaign-retro" aria-label="项目复盘">
-      <div className="vkpi-campaign-retro-head">
-        <div>
-          <span>Campaign retrospective</span>
-          <h3>复盘</h3>
-          <p>基于当前真实项目数据生成复盘草稿；不冒充 AI 报告，也不写入后端复盘表。</p>
+    <div className="p-4 space-y-4" aria-label="项目复盘">
+      <div className="rounded-lg border border-purple-500/30 bg-gradient-to-br from-purple-500/10 to-emerald-500/5 p-4">
+        <div className="flex items-start gap-3">
+          <div className="w-9 h-9 rounded-full bg-purple-500/20 flex items-center justify-center shrink-0">
+            <BookOpen size={17} className="text-purple-300" />
+          </div>
+          <div className="flex-1">
+            <div className="flex items-center justify-between gap-3 mb-1.5">
+              <div className="text-[12px] font-semibold text-white">AI 项目复盘总结</div>
+              <button
+                type="button"
+                className="px-2.5 py-1 rounded-md bg-purple-500/15 hover:bg-purple-500/25 text-purple-200 text-[10.5px] font-medium flex items-center gap-1 shrink-0"
+                onClick={() => (onCopy ? void onCopy(retrospectiveDraft, '复盘草稿') : onPendingAction('复制复盘草稿'))}
+              >
+                <BookOpen size={10} />复制复盘草稿
+              </button>
+            </div>
+            <div className="text-[10.5px] text-slate-300 leading-relaxed">
+              项目 {projectTitle} · 健康度{' '}
+              <span className="font-bold" style={{ color: healthColor(projectHealth) }}>{projectHealth}</span>
+              {` · ${publishedKols.length}/${rows.length} 已发布。`}
+              <br />
+              {withShopify.length > 0 ? `${withShopify.length} 个 KOL 已接入 Shopify 归因。` : null}
+              {withoutShopify.length > 0 ? (
+                <span className="text-amber-400">
+                  {`${withoutShopify.length} 个未接 Shopify,不参与 GMV / ROI 综合得分。`}
+                </span>
+              ) : null}
+              {publishedKols.length === 0 ? '等待 KOL 推进到「已发布」阶段后开始复盘。' : null}
+            </div>
+          </div>
         </div>
-        <button type="button" onClick={() => void onCopy(retrospectiveText, '复盘草稿')}>复制复盘草稿</button>
       </div>
 
-      <div className="vkpi-campaign-retro-score">
-        <div>
-          <span>健康度</span>
-          <strong className={health.className}>{health.score}</strong>
-          <em>{health.label}</em>
+      {publishedKols.length === 0 ? (
+        <div className="rounded-lg border border-white/[0.06] bg-white/[0.01] p-8 text-center">
+          <BookOpen size={24} className="text-slate-600 mx-auto mb-2" />
+          <div className="text-[11.5px] text-slate-400">等待 KOL 推进到「已发布」阶段后开始复盘</div>
         </div>
-        <div>
-          <span>当前瓶颈</span>
-          <strong>{bottleneck.from}→{bottleneck.to}</strong>
-          <em>{bottleneck.text}</em>
-        </div>
-        <div>
-          <span>复盘状态</span>
-          <strong>草稿</strong>
-          <em>{targetStatus}</em>
-        </div>
-      </div>
+      ) : (
+        <div className="space-y-3">
+          {publishedKols.map((row) => {
+            const hasShopify = Boolean(row.shopifyLink || row.clicks || row.orders || row.gmv);
+            const score = compositeScore(row);
+            const displayName = row.kolName || row.kolHandle || 'Unknown';
+            const handle = row.kolHandle || displayName;
+            const videoUrl = retrospectiveVideoUrl(row);
+            const videoTitle = retrospectiveVideoTitle(row, projectTitle);
+            const shares = retrospectiveNumberField(row, ['shares', 'shareCount', 'share_count']);
 
-      <div className="vkpi-campaign-retro-grid">
-        <section className="vkpi-campaign-retro-card is-wide">
-          <header>
-            <div>
-              <span>KPI vs 当前实际</span>
-              <h4>目标字段未接入前只看真实实际值</h4>
-            </div>
-          </header>
-          <div className="vkpi-campaign-retro-kpis">
-            <div><span>KOL</span><strong>{rows.length}</strong><em>目标未设置</em></div>
-            <div><span>已发布</span><strong>{stats.published}</strong><em>{stats.publishRate}%</em></div>
-            <div><span>曝光</span><strong>{formatNumber(stats.views)}</strong><em>自动汇总</em></div>
-            <div><span>销售</span><strong>{formatMoney(stats.gmv)}</strong><em>{formatNumber(stats.orders || 0)} 单</em></div>
-            <div><span>ROI</span><strong>{formatRatio(stats.roi)}</strong><em>成本 {formatMoney(stats.cost)}</em></div>
-          </div>
-        </section>
+            return (
+              <div key={row.id} className={`rounded-lg border p-4 ${hasShopify ? 'border-white/[0.06] bg-white/[0.015]' : 'border-white/[0.04] bg-white/[0.008] opacity-70'}`}>
+                <div className="flex items-center gap-3 mb-3">
+                  {row.kolAvatar ? (
+                    <img src={row.kolAvatar} alt={displayName} className="w-10 h-10 rounded-full object-cover shrink-0" />
+                  ) : (
+                    <div
+                      className="w-10 h-10 rounded-full flex items-center justify-center text-[12px] font-bold text-white shrink-0"
+                      style={{ background: hasShopify ? 'linear-gradient(135deg,#10b981,#06b6d4)' : 'linear-gradient(135deg,#64748b,#475569)' }}
+                    >
+                      {retrospectiveRowInitial(row)}
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <div className="text-[12.5px] font-semibold text-white truncate">{displayName}</div>
+                      {!hasShopify ? <span className="text-[9.5px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300">未接归因</span> : null}
+                    </div>
+                    <div className="text-[10px] text-slate-500 truncate">{row.platform} · {handle}</div>
+                  </div>
+                  {hasShopify && score !== null ? (
+                    <div className="text-right shrink-0">
+                      <div className="text-[10px] text-slate-500 mb-0.5">综合得分</div>
+                      <div className="text-[26px] font-bold tabular-nums leading-none" style={{ color: healthColor(score) }}>{score}</div>
+                    </div>
+                  ) : null}
+                </div>
 
-        <section className="vkpi-campaign-retro-card">
-          <header>
-            <div>
-              <span>亮点</span>
-              <h4>可以复用的经验</h4>
-            </div>
-          </header>
-          <div className="vkpi-campaign-retro-list">
-            {highlightItems.map((item) => <p key={item}>{item}</p>)}
-          </div>
-        </section>
-      </div>
+                <div className="flex items-center gap-2 mb-3 p-2 rounded bg-black/30">
+                  <div className="w-12 h-9 rounded bg-gradient-to-br from-purple-500/30 to-cyan-500/30 flex items-center justify-center shrink-0">
+                    <Video size={14} className="text-white" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[11px] text-white truncate">{videoTitle}</div>
+                    <div className="text-[9.5px] text-slate-500">播放时长 {retrospectiveWatchTime(row)}</div>
+                  </div>
+                  {videoUrl ? (
+                    <a href={videoUrl} target="_blank" rel="noreferrer" className="text-[10px] text-cyan-300 flex items-center gap-1 shrink-0">
+                      <ExternalLink size={10} /> 打开
+                    </a>
+                  ) : (
+                    <button type="button" className="text-[10px] text-cyan-300 flex items-center gap-1 shrink-0" onClick={() => onPendingAction('打开视频 / AI 分析')}>
+                      <ExternalLink size={10} /> 打开
+                    </button>
+                  )}
+                </div>
 
-      <div className="vkpi-campaign-retro-grid">
-        <section className="vkpi-campaign-retro-card">
-          <header>
-            <div>
-              <span>风险 / 教训</span>
-              <h4>下一步需要补齐</h4>
-            </div>
-          </header>
-          <div className="vkpi-campaign-retro-list is-warning">
-            {lessonItems.map((item) => <p key={item}>{item}</p>)}
-          </div>
-        </section>
+                <div className="flex items-start gap-2 mb-3 px-2.5 py-2 rounded bg-purple-500/5">
+                  <Sparkles size={11} className="text-purple-300 mt-0.5 shrink-0" />
+                  <div className="text-[10.5px] text-slate-300 leading-relaxed">
+                    <span className="text-purple-300 font-medium">AI 画面分析: </span>
+                    {hasShopify
+                      ? `内容表现已汇总 · 曝光 ${formatLargeNum(row.views)} · 互动 ${formatLargeNum((row.likes || 0) + (row.comments || 0) + shares)} · Shopify 点击 ${formatLargeNum(row.clicks || 0)} · 归因 GMV ${formatMoneyShort(row.gmv)}`
+                      : `内容表现已汇总 · 曝光 ${formatLargeNum(row.views)} · 互动 ${formatLargeNum((row.likes || 0) + (row.comments || 0) + shares)} · 尚未接 Shopify 归因,综合得分暂不计算`}
+                  </div>
+                </div>
 
-        <section className="vkpi-campaign-retro-card">
-          <header>
-            <div>
-              <span>平台结论</span>
-              <h4>从分布里找下一轮预算方向</h4>
-            </div>
-          </header>
-          <div className="vkpi-campaign-retro-platforms">
-            {analytics.platformRows.slice(0, 4).map((item) => (
-              <div key={item.platform}>
-                <span><PlatformPill platform={item.platform as VkpiProjectRow['platform']} /></span>
-                <b>{formatNumber(item.views)}</b>
-                <em>{formatMoney(item.gmv)} · ROI {formatRatio(item.roi)}</em>
+                <div className="grid grid-cols-3 md:grid-cols-5 gap-3">
+                  {[
+                    ['播放', formatLargeNum(row.views), '#06b6d4'],
+                    ['点赞', formatLargeNum(row.likes || 0), '#ec4899'],
+                    ['评论', formatLargeNum(row.comments || 0), '#a855f7'],
+                    ['分享', formatLargeNum(shares), '#fb923c'],
+                    hasShopify ? ['Shopify 点击', formatLargeNum(row.clicks || 0), '#10b981'] : ['Shopify', '—', '#64748b'],
+                  ].map(([label, value, color]) => (
+                    <div key={label}>
+                      <div className="text-[9.5px] text-slate-500 mb-0.5">{label}</div>
+                      <div className="text-[13px] font-semibold tabular-nums" style={{ color }}>{value}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {hasShopify ? (
+                  <div className="mt-3 pt-3 border-t border-white/[0.04] flex items-center gap-2 px-2 py-1.5 rounded bg-emerald-500/5">
+                    <ShoppingCart size={11} className="text-emerald-300" />
+                    <div className="flex-1 text-[10.5px] text-emerald-200">
+                      Shopify 归因: {formatLargeNum(row.orders || 0)} 单 · GMV <span className="font-bold">{formatMoneyShort(row.gmv)}</span>
+                    </div>
+                    {row.shopifyLink ? (
+                      <div className="text-[10px] text-slate-500 font-mono truncate max-w-[200px]">{row.shopifyLink.replace('https://', '')}</div>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
-            ))}
-            {!analytics.platformRows.length ? <p>暂无平台数据。</p> : null}
-          </div>
-        </section>
-      </div>
-
-      <section className="vkpi-campaign-retro-card">
-        <header>
-          <div>
-            <span>团队备注</span>
-            <h4>后端复盘表未接入</h4>
-          </div>
-        </header>
-        <div className="vkpi-campaign-retro-note">
-          <p>这里暂时不放假“添加备注”按钮。后续接入 `campaign_retrospectives` 后，再开放团队备注、AI 生成、PDF 导出和管理层分享。</p>
+            );
+          })}
         </div>
-      </section>
+      )}
     </div>
   );
 }
@@ -285,145 +637,97 @@ export function CampaignAnalyticsTab({
   rows,
   stats,
   analytics,
-  health,
 }: {
   rows: VkpiProjectRow[];
   stats: ProjectStatsSummary;
   analytics: ProjectAnalyticsSummary;
   health: ReturnType<typeof healthForRows>;
 }) {
-  const maxTimelineViews = Math.max(...analytics.timeline.map((item) => item.views), 1);
   const maxTopViews = Math.max(...analytics.topRows.map((row) => row.views || 0), 1);
-  const activeRows = rows.filter((row) => !cancelledStages.has(row.stage));
-  const pendingRows = rows.filter((row) => stageIndex(row.stage) < stageIndex('published'));
+  const totalLikes = rows.reduce((sum, row) => sum + (row.likes || 0), 0);
+  const totalComments = rows.reduce((sum, row) => sum + (row.comments || 0), 0);
+  const publishedKols = rows.filter((row) => stageIndex(row.stage) >= stageIndex('published'));
+  const projectTotalCost = stats.cost || 0;
+  const roi = projectTotalCost > 0 ? ((stats.gmv / projectTotalCost) * 100).toFixed(1) : '—';
+  const kpis: Array<[string, string, typeof Eye, string]> = [
+    ['总曝光', formatLargeNum(stats.views), Eye, '#06b6d4'],
+    ['总点赞', formatLargeNum(totalLikes), Heart, '#ec4899'],
+    ['总评论', formatLargeNum(totalComments), MessageCircle, '#a855f7'],
+    ['Shopify 点击', formatLargeNum(stats.clicks), ShoppingCart, '#fb923c'],
+    ['归因 GMV', formatMoneyShort(stats.gmv), DollarSign, '#10b981'],
+    ['ROI', `${roi}${roi !== '—' ? '%' : ''}`, TrendingUp, '#10b981'],
+  ];
+  const rankedRows = [...publishedKols]
+    .sort((a, b) => ((b.views || 0) - (a.views || 0)) || ((b.gmv || 0) - (a.gmv || 0)));
 
   return (
-    <div className="vkpi-campaign-analytics" aria-label="项目数据汇总">
-      <div className="vkpi-campaign-analytics-head">
-        <div>
-          <span>Campaign data cockpit</span>
-          <h3>数据汇总</h3>
-          <p>基于当前项目详情返回的 KOL 行、短链点击、曝光、成本和归因销售实时聚合。</p>
+    <div className="p-4 space-y-4" aria-label="项目数据汇总">
+      <div className="rounded-lg border border-purple-500/30 bg-purple-500/5 p-3 flex items-start gap-2.5">
+        <div className="shrink-0 w-7 h-7 rounded-full bg-purple-500/20 flex items-center justify-center">
+          <Sparkles size={13} className="text-purple-300" />
         </div>
-        <div className={`vkpi-campaign-analytics-health ${health.className}`}>
-          <span>健康度</span>
-          <strong>{health.score}</strong>
-          <em>{health.label}</em>
+        <div className="flex-1">
+          <div className="text-[11px] font-medium text-purple-200 mb-0.5">AI 项目数据洞察</div>
+          <div className="text-[10.5px] text-slate-300 leading-relaxed">
+            {`${publishedKols.length}/${rows.length} 已发布,总曝光 ${formatLargeNum(stats.views)} · Shopify 点击 ${formatLargeNum(stats.clicks)},归因 GMV ${formatMoneyShort(stats.gmv)} · ROI ${roi}%。总成本 (含产品) ${formatMoneyShort(projectTotalCost)}`}
+          </div>
         </div>
       </div>
 
-      <div className="vkpi-campaign-analytics-totals">
-        <div>
-          <span>总曝光</span>
-          <strong>{formatNumber(stats.views)}</strong>
-          <em>{rows.length ? `${formatNumber(Math.round(stats.views / rows.length))} / KOL` : '暂无 KOL'}</em>
-        </div>
-        <div>
-          <span>总互动</span>
-          <strong>{formatNumber(stats.clicks)}</strong>
-          <em>互动率 {formatPercent(analytics.engagement)}</em>
-        </div>
-        <div>
-          <span>归因订单</span>
-          <strong>{formatNumber(stats.orders)}</strong>
-          <em>已发布 {stats.published} / {rows.length}</em>
-        </div>
-        <div>
-          <span>归因销售</span>
-          <strong>{formatMoney(stats.gmv)}</strong>
-          <em>ROI {formatRatio(stats.roi)}</em>
-        </div>
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+        {kpis.map(([label, value, Icon, color]) => (
+          <div key={label} className="rounded-lg border border-white/[0.06] bg-white/[0.015] p-3">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[10px] text-slate-500">{label}</span>
+              <Icon size={11} style={{ color }} />
+            </div>
+            <div className="text-[18px] font-bold tabular-nums" style={{ color }}>{value}</div>
+          </div>
+        ))}
       </div>
 
-      <div className="vkpi-campaign-analytics-grid">
-        <section className="vkpi-campaign-analytics-card is-wide">
-          <header>
-            <div>
-              <span>7 天趋势</span>
-              <h4>发布与曝光</h4>
-            </div>
-            <em>{stats.published} 条已发布内容</em>
-          </header>
-          <div className="vkpi-campaign-analytics-timeline">
-            {analytics.timeline.map((point) => (
-              <div key={point.dateKey}>
-                <span style={{ height: `${Math.max(8, Math.round((point.views / maxTimelineViews) * 86))}px` }} />
-                <strong>{formatNumber(point.views)}</strong>
-                <em>{point.posts} 条</em>
-                <small>{point.label}</small>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="vkpi-campaign-analytics-card">
-          <header>
-            <div>
-              <span>执行状态</span>
-              <h4>当前项目池</h4>
-            </div>
-          </header>
-          <div className="vkpi-campaign-analytics-state">
-            <div><b>{rows.length}</b><span>全部 KOL</span></div>
-            <div><b>{activeRows.length}</b><span>有效推进</span></div>
-            <div><b>{pendingRows.length}</b><span>待发布</span></div>
-            <div><b>{stats.publishRate}%</b><span>发布率</span></div>
-          </div>
-        </section>
-      </div>
-
-      <div className="vkpi-campaign-analytics-grid">
-        <section className="vkpi-campaign-analytics-card is-wide">
-          <header>
-            <div>
-              <span>平台分布</span>
-              <h4>按平台看 ROI 和曝光</h4>
-            </div>
-          </header>
-          <div className="vkpi-campaign-platform-table">
-            <div className="vkpi-campaign-platform-row is-head">
-              <span>平台</span>
-              <span>KOL</span>
-              <span>曝光</span>
-              <span>互动率</span>
-              <span>归因$</span>
-              <span>ROI</span>
-            </div>
-            {analytics.platformRows.map((item) => (
-              <div className="vkpi-campaign-platform-row" key={item.platform}>
-                <span><PlatformPill platform={item.platform as VkpiProjectRow['platform']} /></span>
-                <span>{item.kolCount}</span>
-                <span>{formatNumber(item.views)}</span>
-                <span>{formatPercent(item.views ? (item.clicks / item.views) * 100 : 0)}</span>
-                <span>{formatMoney(item.gmv)}</span>
-                <span>{formatRatio(item.roi)}</span>
-              </div>
-            ))}
-            {!analytics.platformRows.length ? <div className="vkpi-campaign-analytics-empty">暂无平台数据。</div> : null}
-          </div>
-        </section>
-
-        <section className="vkpi-campaign-analytics-card">
-          <header>
-            <div>
-              <span>Top KOL</span>
-              <h4>贡献排行</h4>
-            </div>
-          </header>
-          <div className="vkpi-campaign-top-kols">
-            {analytics.topRows.map((row) => (
-              <div key={row.id}>
-                <Avatar name={row.kolName || row.kolHandle} src={row.kolAvatar} size="sm" />
-                <div>
-                  <strong>{row.kolHandle || row.kolName}</strong>
-                  <span>{formatNumber(row.views)} 曝光 · {formatMoney(row.gmv)}</span>
-                  <i style={{ width: `${Math.max(6, Math.round(((row.views || 0) / maxTopViews) * 100))}%` }} />
+      <div className="rounded-lg border border-white/[0.06] bg-white/[0.015] p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="text-[12.5px] font-semibold text-white">KOL 性能排名</h4>
+          <span className="text-[10px] text-slate-500">{publishedKols.length} 个已发布</span>
+        </div>
+        {publishedKols.length === 0 ? (
+          <div className="text-center py-6 text-[11px] text-slate-500">暂无已发布视频</div>
+        ) : (
+          <div className="space-y-2">
+            {rankedRows.map((row, index) => {
+              const avatarName = row.kolName || row.kolHandle || '-';
+              return (
+                <div key={row.id} className="flex items-center gap-3 px-2 py-2 rounded hover:bg-white/[0.02]">
+                  <div className="text-[11px] font-bold text-slate-500 w-5">#{index + 1}</div>
+                  <div
+                    className="w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0"
+                    style={{ background: 'linear-gradient(135deg,#a855f7,#ec4899)' }}
+                  >
+                    {avatarName.charAt(0).toUpperCase()}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[11.5px] text-white font-medium">{row.kolHandle || row.kolName}</div>
+                    <div className="text-[10px] text-slate-500">{row.platform} · 完播 {row.views ? '—' : '—'}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[12px] font-semibold text-white tabular-nums">{formatLargeNum(row.views)}</div>
+                    <div className="text-[9.5px] text-slate-500">播放</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[12px] font-semibold tabular-nums" style={{ color: row.shopifyLink ? '#10b981' : '#64748b' }}>
+                      {row.shopifyLink ? formatMoneyShort(row.gmv) : '—'}
+                    </div>
+                    <div className="text-[9.5px] text-slate-500">GMV</div>
+                  </div>
+                  <div className="hidden">
+                    <span style={{ width: `${Math.max(6, Math.round(((row.views || 0) / maxTopViews) * 100))}%` }} />
+                  </div>
                 </div>
-              </div>
-            ))}
-            {!analytics.topRows.length ? <div className="vkpi-campaign-analytics-empty">暂无 KOL 数据。</div> : null}
+              );
+            })}
           </div>
-        </section>
+        )}
       </div>
     </div>
   );
@@ -431,146 +735,150 @@ export function CampaignAnalyticsTab({
 
 export function CampaignFinanceTab({
   rows,
-  stats,
   expenseLines,
-  stageCosts,
+  costRows,
+  onOpenCostEntry,
 }: {
   rows: VkpiProjectRow[];
   stats: ProjectStatsSummary;
   expenseLines: ExpenseLine[];
   stageCosts: StageCostSummary[];
+  costRows: Array<Record<string, unknown>>;
+  onOpenShippingInfo: () => void;
+  onOpenCostEntry?: (row: VkpiProjectRow, type?: 'cash_fee' | 'shipping' | 'product') => void;
 }) {
-  const recordedLines = expenseLines.filter((line) => line.status === 'recorded');
-  const missingLines = expenseLines.filter((line) => line.status === 'missing');
-  const grossProfit = stats.gmv * 0.38;
-  const netContribution = grossProfit - stats.cost;
-  const costCoverage = rows.length ? Math.round((recordedLines.length / rows.length) * 100) : 0;
-  const maxStageCost = Math.max(...stageCosts.map((item) => item.amount), 1);
+  const ledgerTotals = costLedgerTotals(costRows);
+  const expenseById = new Map(expenseLines.map((line) => [line.id, line]));
+  const rowCosts = rows.map((row) => {
+    const shippingFee = costRowAmount(costRows, row, 'shipping');
+    const productSent = rowProductSent(row);
+    const productCostAmount = costRowAmount(costRows, row, 'product') || productCost(productSent);
+    const ledgerContractFee = costRowAmount(costRows, row, 'contract');
+    const expenseAmount = expenseById.get(row.id)?.amount ?? row.cost ?? 0;
+    const contractFee = ledgerContractFee || Math.max(expenseAmount - shippingFee - productCostAmount, 0);
+    return {
+      row,
+      contractFee,
+      shippingFee,
+      productSent,
+      productCost: productCostAmount,
+      total: contractFee + shippingFee + productCostAmount,
+      hasContract: contractFee > 0,
+    };
+  });
+  const totalContract = ledgerTotals.contract || rowCosts.reduce((sum, item) => sum + item.contractFee, 0);
+  const totalShipping = ledgerTotals.shipping || rowCosts.reduce((sum, item) => sum + item.shippingFee, 0);
+  const totalProductCost = ledgerTotals.product || rowCosts.reduce((sum, item) => sum + item.productCost, 0);
+  const totalProductRetail = totalProductCost;
+  const totalAll = totalContract + totalShipping + totalProductCost;
+  const rowsWithContract = rowCosts.filter((item) => item.contractFee > 0).length;
+  const rowsWithProductCost = rowCosts.filter((item) => item.productCost > 0).length;
+  const averageCost = totalAll / Math.max(rowCosts.filter((item) => item.contractFee + item.productCost > 0).length, 1);
 
   return (
-    <div className="vkpi-campaign-finance" aria-label="项目费用">
-      <div className="vkpi-campaign-finance-head">
-        <div>
-          <span>Campaign finance ledger</span>
-          <h3>费用</h3>
-          <p>当前先读取项目详情里的真实成本聚合；样品、物流、推广费拆分会在后续接入 cost ledger 明细后展开。</p>
-        </div>
-        <div>
-          <strong>{formatPercent(costCoverage)}</strong>
-          <span>成本登记覆盖率</span>
-        </div>
-      </div>
-
-      <div className="vkpi-campaign-finance-totals">
-        <div><span>已记录成本</span><strong>{formatMoney(stats.cost)}</strong><em>{recordedLines.length} 个 KOL 有成本记录</em></div>
-        <div><span>归因销售</span><strong>{formatMoney(stats.gmv)}</strong><em>{formatNumber(stats.orders)} 单</em></div>
-        <div><span>ROI</span><strong>{formatRatio(stats.roi)}</strong><em>销售 / 成本</em></div>
-        <div><span>净贡献估算</span><strong className={netContribution >= 0 ? 'is-green' : 'is-red'}>{formatMoney(netContribution)}</strong><em>按 38% 毛利估算</em></div>
-      </div>
-
-      <div className="vkpi-campaign-finance-grid">
-        <section className="vkpi-campaign-finance-card">
-          <header>
-            <div>
-              <span>ROI 计算明细</span>
-              <h4>用现有真实字段计算</h4>
-            </div>
-          </header>
-          <div className="vkpi-campaign-roi-formula">
-            <div><span>归因销售</span><strong>{formatMoney(stats.gmv)}</strong></div>
-            <div><span>毛利估算 38%</span><strong>{formatMoney(grossProfit)}</strong></div>
-            <div><span>已记录成本</span><strong>{formatMoney(stats.cost)}</strong></div>
-            <div><span>净贡献</span><strong className={netContribution >= 0 ? 'is-green' : 'is-red'}>{formatMoney(netContribution)}</strong></div>
+    <div className="p-4 space-y-4" aria-label="项目费用">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {[
+          ['合同费用', totalContract, '#a855f7', '已合作阶段录入'],
+          ['快递费', totalShipping, '#06b6d4', '已发货阶段录入'],
+          ['产品成本', totalProductCost, '#10b981', `零售价 ${formatMoneyShort(totalProductRetail)}`],
+          ['总成本', totalAll, '#fb923c', `${rows.length} 个 KOL`],
+        ].map(([label, value, color, sub]) => (
+          <div key={String(label)} className="rounded-lg border border-white/[0.06] bg-white/[0.015] p-3">
+            <div className="text-[10px] text-slate-500 mb-1">{label}</div>
+            <div className="text-[20px] font-bold tabular-nums" style={{ color: String(color) }}>{formatMoneyShort(Number(value))}</div>
+            <div className="text-[9.5px] text-slate-500 mt-1">{sub}</div>
           </div>
-          <p>公式：净贡献 = 归因销售 × 38% - 已记录成本；ROI = 归因销售 / 已记录成本。</p>
-        </section>
-
-        <section className="vkpi-campaign-finance-card">
-          <header>
-            <div>
-              <span>成本完整性</span>
-              <h4>缺口提示</h4>
-            </div>
-          </header>
-          <div className="vkpi-campaign-finance-gaps">
-            <div><b>{recordedLines.length}</b><span>已登记</span></div>
-            <div><b>{missingLines.length}</b><span>未登记</span></div>
-            <div><b>{formatMoney(rows.length ? stats.cost / rows.length : 0)}</b><span>均摊成本</span></div>
-          </div>
-          {missingLines.length ? (
-            <div className="vkpi-campaign-finance-alert">{missingLines.length} 个 KOL 还没有成本记录，ROI 会偏高；建议后续从「成本台」或项目明细补登记。</div>
-          ) : (
-            <div className="vkpi-campaign-finance-ok">当前项目行都已有成本记录，可以继续核对凭证和审批状态。</div>
-          )}
-        </section>
+        ))}
       </div>
 
-      <div className="vkpi-campaign-finance-grid">
-        <section className="vkpi-campaign-finance-card is-wide">
-          <header>
-            <div>
-              <span>阶段成本分布</span>
-              <h4>看成本卡在哪个阶段</h4>
-            </div>
-          </header>
-          <div className="vkpi-campaign-stage-costs">
-            {stageCosts.map((item) => (
-              <div key={item.stage}>
-                <div>
-                  <strong>{stageLabels[item.stage]}</strong>
-                  <span>{item.count} 个 KOL · {formatMoney(item.amount)}</span>
-                </div>
-                <em><i style={{ width: `${Math.max(5, Math.round((item.amount / maxStageCost) * 100))}%` }} /></em>
-              </div>
+      <div className="rounded-lg border border-purple-500/30 bg-purple-500/5 p-3 flex items-start gap-2.5">
+        <Sparkles size={13} className="text-purple-300 mt-0.5 shrink-0" />
+        <div className="text-[10.5px] text-slate-300">
+          已自动从 {rowsWithContract} 份合同提取费用 + {rowsWithProductCost} 个 KOL 计入产品成本 · 平均 KOL 总成本{' '}
+          <span className="text-purple-300 font-semibold">{formatMoneyShort(averageCost)}</span>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-white/[0.06] bg-white/[0.015] overflow-hidden">
+        <div className="px-4 py-2.5 border-b border-white/[0.05] flex items-center justify-between gap-3">
+          <h4 className="text-[12px] font-semibold text-white">KOL 费用明细</h4>
+          {rows[0] && onOpenCostEntry ? (
+            <button
+              type="button"
+              className="rounded-lg border border-purple-400/30 bg-purple-500/10 px-2.5 py-1 text-[10.5px] font-semibold text-purple-200 hover:bg-purple-500/18 transition"
+              onClick={() => onOpenCostEntry(rows[0], 'cash_fee')}
+            >
+              + 录入费用
+            </button>
+          ) : null}
+        </div>
+        <table className="w-full text-[11px]">
+          <thead>
+            <tr className="text-left text-[10px] text-slate-500 border-b border-white/[0.04]">
+              {['KOL', '合同费', '快递费', '产品 (成本)', '小计', '状态', '操作'].map((header) => (
+                <th key={header} className="px-4 py-2 font-medium">{header}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rowCosts.map((item) => (
+              <tr key={item.row.id} className="border-b border-white/[0.03] hover:bg-white/[0.012]">
+                <td className="px-4 py-2.5">
+                  <div className="flex items-center gap-2">
+                    <div className="w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-bold text-white shrink-0" style={{ background: 'linear-gradient(135deg,#a855f7,#ec4899)' }}>
+                      {(item.row.kolName || item.row.kolHandle || '-').charAt(0).toUpperCase()}
+                    </div>
+                    <div>
+                      <div className="text-white text-[11px]">{item.row.kolHandle || item.row.kolName}</div>
+                      <div className="text-[9.5px] text-slate-500">{item.row.platform}</div>
+                    </div>
+                  </div>
+                </td>
+                <td className="px-4 py-2.5 text-slate-300 tabular-nums">
+                  {item.hasContract ? formatMoneyShort(item.contractFee) : <span className="text-slate-600">—</span>}
+                </td>
+                <td className="px-4 py-2.5 text-slate-300 tabular-nums">
+                  {item.shippingFee > 0 ? formatMoneyShort(item.shippingFee) : <span className="text-slate-600">—</span>}
+                </td>
+                <td className="px-4 py-2.5 tabular-nums">
+                  {item.productCost > 0 ? (
+                    <span>
+                      <span className="text-emerald-400">{formatMoneyShort(item.productCost)}</span>
+                      <span className="text-[9.5px] text-slate-500 ml-1">({Math.max(item.productSent.length, 1)}件)</span>
+                    </span>
+                  ) : (
+                    <span className="text-slate-600">—</span>
+                  )}
+                </td>
+                <td className="px-4 py-2.5 text-white font-semibold tabular-nums">
+                  {item.total > 0 ? formatMoneyShort(item.total) : <span className="text-slate-600 font-normal">—</span>}
+                </td>
+                <td className="px-4 py-2.5">
+                  {item.hasContract ? (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300">已签合同</span>
+                  ) : (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/[0.04] text-slate-500">待签约</span>
+                  )}
+                </td>
+                <td className="px-4 py-2.5">
+                  {onOpenCostEntry ? (
+                    <button
+                      type="button"
+                      className="rounded-md border border-white/[0.08] bg-white/[0.03] px-2 py-1 text-[10px] font-medium text-slate-200 hover:border-purple-400/40 hover:text-white transition"
+                      onClick={() => onOpenCostEntry(item.row, item.hasContract ? 'shipping' : 'cash_fee')}
+                    >
+                      录入费用
+                    </button>
+                  ) : (
+                    <span className="text-slate-600">—</span>
+                  )}
+                </td>
+              </tr>
             ))}
-          </div>
-        </section>
-
-        <section className="vkpi-campaign-finance-card">
-          <header>
-            <div>
-              <span>费用口径</span>
-              <h4>当前版本说明</h4>
-            </div>
-          </header>
-          <div className="vkpi-campaign-finance-notes">
-            <p>已接入：项目行 `cost`、`gmv`、`orders`、`roi`。</p>
-            <p>未接入：样品成本、物流、现金推广、凭证审批的独立明细。</p>
-            <p>后续接入 cost ledger 后，这里会拆成费用分类和凭证表。</p>
-          </div>
-        </section>
+          </tbody>
+        </table>
       </div>
-
-      <section className="vkpi-campaign-finance-card">
-        <header>
-          <div>
-            <span>KOL 费用明细</span>
-            <h4>按当前项目行展开</h4>
-          </div>
-        </header>
-        <div className="vkpi-campaign-expense-table">
-          <div className="vkpi-campaign-expense-row is-head">
-            <span>KOL</span>
-            <span>平台</span>
-            <span>阶段</span>
-            <span>成本</span>
-            <span>销售</span>
-            <span>ROI</span>
-            <span>状态</span>
-          </div>
-          {expenseLines.map((line) => (
-            <div className="vkpi-campaign-expense-row" key={line.id}>
-              <span><b>{line.kolHandle || line.kolName}</b><small>{line.kolName || '-'}</small></span>
-              <span><PlatformPill platform={line.platform} /></span>
-              <span>{stageLabels[line.stage]}</span>
-              <span>{formatMoney(line.amount)}</span>
-              <span>{formatMoney(line.revenue)}</span>
-              <span>{formatRatio(line.roi)}</span>
-              <span className={line.status === 'recorded' ? 'is-recorded' : 'is-missing'}>{line.status === 'recorded' ? '已登记' : '未登记'}</span>
-            </div>
-          ))}
-        </div>
-      </section>
     </div>
   );
 }
@@ -579,140 +887,181 @@ export function CampaignMaterialsTab({
   project,
   rows,
   stats,
+  costRows = [],
   onCopy,
+  onPendingAction,
 }: {
-  project: VkpiProjectRow;
+  project?: VkpiProjectRow;
   rows: VkpiProjectRow[];
-  stats: ProjectStatsSummary;
-  onCopy: (text: string, label: string) => Promise<void>;
+  stats?: ProjectStatsSummary;
+  costRows?: Array<Record<string, unknown>>;
+  onCopy?: (text: string, label: string) => Promise<void>;
+  onPendingAction: (label: string) => void;
 }) {
-  const platforms = Array.from(new Set(rows.map((row) => row.platform).filter(Boolean)));
-  const productName = project.productName || project.campaign || '未设置';
-  const productSku = project.productSku || '未设置';
-  const marketplace = project.marketplace || '未设置';
-  const projectLinks = rows
-    .map((row) => row.shopifyLink)
-    .filter((value): value is string => Boolean(value && value.trim()));
-  const primaryLink = project.shopifyLink || projectLinks[0] || '';
-  const briefText = [
-    `推广：${project.campaign || '未命名推广'}`,
-    `产品：${productName}`,
-    `SKU：${productSku}`,
-    `平台：${platforms.join(' / ') || project.platform || '-'}`,
-    `市场 / 店铺：${marketplace}`,
-    primaryLink ? `商品 / 归因链接：${primaryLink}` : '商品 / 归因链接：未设置',
-    `参与 KOL：${rows.length}`,
-    `当前曝光：${formatNumber(stats.views)}`,
-    '',
-    '发布要求：请按项目沟通内容执行；如有合同或 brief PDF，以归档文件为准。',
-  ].join('\n');
-  const distributionText = rows.map((row, index) => [
-    `${index + 1}. ${row.kolHandle || row.kolName}`,
-    row.platform,
-    stageLabels[row.stage],
-    row.shopifyLink ? `link=${row.shopifyLink}` : 'link=未设置',
-  ].join(' · ')).join('\n');
-  const readyRows = rows.filter((row) => stageIndex(row.stage) >= stageIndex('agreed'));
-  const linkReadyRows = rows.filter((row) => Boolean(row.shopifyLink));
-  const pendingLinkRows = rows.filter((row) => !row.shopifyLink);
+  const [section, setSection] = useState<MaterialSection>('assets');
+  const shipped = rows.filter((row) => stageIndex(row.stage) >= stageIndex('shipped'));
+  const readyAssets = PROJECT_ASSETS.filter((asset) => asset.status === 'ready').length;
+  const briefText = buildMaterialBriefText(project, rows, stats);
 
   return (
-    <div className="vkpi-campaign-materials" aria-label="项目物料">
-      <div className="vkpi-campaign-materials-head">
-        <div>
-          <span>Campaign material hub</span>
-          <h3>物料</h3>
-          <p>先把当前项目已有字段整理成可发给 KOL 的 brief、商品链接和名单清单；文件上传库后续接入 campaign materials。</p>
-        </div>
-        <div>
-          <strong>{linkReadyRows.length}/{rows.length}</strong>
-          <span>链接就绪</span>
-        </div>
+    <div aria-label="项目物料">
+      <div className="flex items-center gap-1 px-4 pt-3 border-b border-white/[0.04]" aria-label="物料子 tab">
+        {[
+          { key: 'assets' as const, label: '营销物料', icon: Boxes },
+          { key: 'logistics' as const, label: '快递追踪 · 公开', icon: Package },
+        ].map((item) => {
+          const Icon = item.icon;
+          const active = section === item.key;
+          return (
+            <button
+              key={item.key}
+              onClick={() => setSection(item.key)}
+              className={`px-3 py-2 text-[11.5px] font-medium border-b-2 flex items-center gap-1.5 transition-all ${active ? 'text-purple-300 border-purple-500' : 'text-slate-400 border-transparent hover:text-white'}`}
+              type="button"
+            >
+              <Icon size={11} />
+              {item.label}
+            </button>
+          );
+        })}
       </div>
 
-      <div className="vkpi-campaign-materials-grid">
-        <section className="vkpi-campaign-material-card is-brief">
-          <header>
-            <div>
-              <span>Campaign Brief</span>
-              <h4>{project.campaign || '未命名推广'}</h4>
+      {section === 'assets' ? (
+        <div className="p-4 space-y-3">
+          <div className="rounded-lg border border-purple-500/30 bg-purple-500/5 p-3 flex items-start gap-2.5">
+            <Sparkles size={13} className="text-purple-300 mt-0.5 shrink-0" />
+            <div className="text-[10.5px] text-slate-300 flex-1">
+              项目级物料 · 所有 KOL 共享 · LLM 自动起草模板 + 你 review · <span className="text-purple-300">{readyAssets}/{PROJECT_ASSETS.length} 已就绪</span>
             </div>
-            <button type="button" onClick={() => void onCopy(briefText, 'Campaign Brief')}>复制 Brief</button>
-          </header>
-          <div className="vkpi-campaign-brief-fields">
-            <div><span>产品</span><strong>{productName}</strong></div>
-            <div><span>SKU</span><strong>{productSku}</strong></div>
-            <div><span>市场 / 店铺</span><strong>{marketplace}</strong></div>
-            <div><span>平台</span><strong>{platforms.join(' / ') || project.platform || '-'}</strong></div>
+            <button
+              className="px-2.5 py-1 rounded-md bg-white/[0.04] hover:bg-white/[0.08] text-slate-200 text-[10.5px] font-medium flex items-center gap-1"
+              type="button"
+              onClick={() => (onCopy ? void onCopy(briefText, '项目 Brief') : onPendingAction('复制 Brief'))}
+            >
+              <FileText size={10} />复制 Brief
+            </button>
+            <button className="px-2.5 py-1 rounded-md bg-purple-500/90 hover:bg-purple-500 text-white text-[10.5px] font-medium flex items-center gap-1" type="button" onClick={() => onPendingAction('上传/起草')}>
+              <Plus size={10} />上传/起草
+            </button>
           </div>
-          <div className="vkpi-campaign-brief-text">
-            {briefText.split('\n').map((line, index) => <p key={`${line}-${index}`}>{line || '\u00a0'}</p>)}
-          </div>
-        </section>
 
-        <section className="vkpi-campaign-material-card">
-          <header>
-            <div>
-              <span>发放状态</span>
-              <h4>物料准备度</h4>
-            </div>
-          </header>
-          <div className="vkpi-campaign-material-readiness">
-            <div><b>{rows.length}</b><span>参与 KOL</span></div>
-            <div><b>{readyRows.length}</b><span>已到合作/发货后</span></div>
-            <div><b>{linkReadyRows.length}</b><span>已设置链接</span></div>
-            <div><b>{pendingLinkRows.length}</b><span>待补链接</span></div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {PROJECT_ASSETS.map((asset) => {
+              const Icon = ASSET_ICON[asset.type] || FileText;
+              return (
+                <div key={asset.id} className="rounded-lg border border-white/[0.06] bg-white/[0.015] p-3">
+                  <div className="flex items-start gap-2.5 mb-2">
+                    <div className="w-9 h-9 rounded-lg bg-white/[0.04] flex items-center justify-center shrink-0">
+                      <Icon size={16} className="text-slate-300" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[11.5px] text-white font-medium truncate">{asset.name}</div>
+                      <div className="text-[9.5px] text-slate-500 mt-0.5">{asset.size} · {asset.date}</div>
+                    </div>
+                    <span className={`text-[9.5px] px-1.5 py-0.5 rounded font-medium ${STATUS_BG[asset.status]}`}>{STATUS_LABEL[asset.status]}</span>
+                  </div>
+                  <div className="flex items-start gap-1 mb-2 px-2 py-1 rounded bg-purple-500/[0.04]">
+                    <Sparkles size={9} className="text-purple-300 shrink-0 mt-0.5" />
+                    <div className="text-[9.5px] text-slate-400">{asset.aiDesc}</div>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {asset.status === 'ready' ? (
+                      <button className="text-[10px] text-cyan-300 hover:text-cyan-200 px-2 py-0.5 rounded bg-cyan-500/10 flex items-center gap-1" type="button" onClick={() => onPendingAction(`${asset.name} 下载`)}>
+                        <Download size={9} />下载
+                      </button>
+                    ) : null}
+                    {asset.status === 'draft' ? (
+                      <button className="text-[10px] text-amber-300 hover:text-amber-200 px-2 py-0.5 rounded bg-amber-500/10 flex items-center gap-1" type="button" onClick={() => onPendingAction(`${asset.name} 审查`)}>
+                        <Eye size={9} />审查
+                      </button>
+                    ) : null}
+                    {asset.status === 'todo' ? (
+                      <button className="text-[10px] text-purple-200 hover:text-white px-2 py-0.5 rounded bg-purple-500/15 flex items-center gap-1" type="button" onClick={() => onPendingAction(`${asset.name} AI 起草`)}>
+                        <Sparkles size={9} />AI 起草
+                      </button>
+                    ) : null}
+                    <button className="text-[10px] text-slate-400 hover:text-white px-2 py-0.5 rounded hover:bg-white/[0.04] flex items-center gap-1" type="button" onClick={() => onPendingAction(`${asset.name} 编辑`)}>
+                      <Edit3 size={9} />编辑
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
-          {pendingLinkRows.length ? (
-            <div className="vkpi-campaign-material-alert">{pendingLinkRows.length} 个 KOL 还没有归因链接。可在「参与 KOL」展开行里保存 Shopify 链接。</div>
+        </div>
+      ) : (
+        <div className="p-4 space-y-3">
+          {shipped.length === 0 ? (
+            <div className="rounded-lg border border-white/[0.06] bg-white/[0.01] p-8 text-center">
+              <Package size={24} className="text-slate-600 mx-auto mb-2" />
+              <div className="text-[11.5px] text-slate-400 mb-1">暂无快递记录</div>
+              <div className="text-[10.5px] text-slate-500">KOL 进入「已发货」阶段时录入快递信息自动追踪</div>
+            </div>
           ) : (
-            <div className="vkpi-campaign-material-ok">当前所有 KOL 都已有可用链接。</div>
+            shipped.map((row) => {
+                const carrier = row.trackingCarrier || '待识别快递';
+                const trackingNumber = String(row.trackingNumber || '').trim();
+                const tr = trackingNumber ? { carrier, no: trackingNumber } : null;
+                const isDelivered = stageIndex(row.stage) >= stageIndex('received');
+                const shippingCost = costRowAmount(costRows, row, 'shipping');
+                const productSent = rowProductSent(row);
+                const productCostAmount = costRowAmount(costRows, row, 'product') || productCost(productSent);
+                const kolName = row.kolHandle || row.kolName || 'Unknown';
+                const handle = row.kolName || row.kolHandle || '-';
+                return (
+                  <div key={row.id} className="rounded-lg border border-white/[0.06] bg-white/[0.015] p-4">
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="w-9 h-9 rounded-full flex items-center justify-center text-[12px] font-bold text-white shrink-0" style={{ background: 'linear-gradient(135deg,#a855f7,#06b6d4)' }}>
+                        {kolName.charAt(0).toUpperCase()}
+                      </div>
+                      <div className="flex-1">
+                        <div className="text-[12.5px] font-semibold text-white">{kolName}</div>
+                        <div className="text-[10px] text-slate-500">{row.platform} · {handle}</div>
+                      </div>
+                      <span className={`text-[10px] px-2 py-0.5 rounded font-medium ${isDelivered ? 'bg-emerald-500/15 text-emerald-300' : 'bg-cyan-500/15 text-cyan-300'}`}>{isDelivered ? '已签收' : '在途中'}</span>
+                    </div>
+                    {tr ? (
+                      <div className="px-3 py-2 rounded bg-black/30 mb-3 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Package size={13} className="text-cyan-400" />
+                          <div>
+                            <div className="text-[11px] text-white font-medium">{tr.carrier}</div>
+                            <div className="text-[10px] text-slate-400 font-mono">{tr.no}</div>
+                          </div>
+                        </div>
+                        <a className="text-[10px] text-cyan-300 hover:text-cyan-200 flex items-center gap-1" href={trackingUrl(tr.carrier, tr.no)} target="_blank" rel="noreferrer">
+                          <ExternalLink size={10} />外部追踪
+                        </a>
+                      </div>
+                    ) : null}
+                    <div className="flex items-center gap-1.5 mb-2">
+                      {['已发货', '在途', '派送中', '已签收'].map((step, index) => {
+                        const stepDone = isDelivered ? true : index <= 1;
+                        return (
+                          <div key={step} className="flex-1 flex items-center gap-1">
+                            <div className={`w-2 h-2 rounded-full ${stepDone ? 'bg-emerald-400' : 'bg-white/[0.08]'}`} />
+                            <div className={`flex-1 text-[9.5px] ${stepDone ? 'text-emerald-300' : 'text-slate-600'}`}>{step}</div>
+                            {index < 3 ? <div className={`h-px flex-1 ${stepDone && (isDelivered ? true : index + 1 <= 1) ? 'bg-emerald-400/40' : 'bg-white/[0.05]'}`} /> : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="flex items-center justify-between gap-3 pt-2 border-t border-white/[0.04]">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {productSent.map((item) => <span key={item} className="text-[10px] px-1.5 py-0.5 rounded bg-white/[0.04] text-slate-300">{item}</span>)}
+                      </div>
+                      <div className="text-[10px] text-slate-400">
+                        快递费 <span className="text-white tabular-nums">{formatMoneyShort(shippingCost)}</span>
+                        {' · '}
+                        产品成本 <span className="text-emerald-400 tabular-nums">{formatMoneyShort(productCostAmount)}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
           )}
-        </section>
-      </div>
-
-      <div className="vkpi-campaign-materials-grid">
-        <section className="vkpi-campaign-material-card">
-          <header>
-            <div>
-              <span>共享素材库</span>
-              <h4>文件区状态</h4>
-            </div>
-          </header>
-          <div className="vkpi-campaign-material-library">
-            <div><strong>Brief PDF</strong><span>未接入上传表</span></div>
-            <div><strong>产品图 / 视频</strong><span>未接入上传表</span></div>
-            <div><strong>Logo / LUT</strong><span>未接入上传表</span></div>
-          </div>
-          <p>这里不放假上传按钮。下一步接 `campaign_materials` 后再开放上传、下载和使用记录。</p>
-        </section>
-
-        <section className="vkpi-campaign-material-card is-wide">
-          <header>
-            <div>
-              <span>KOL 发放清单</span>
-              <h4>按当前项目行生成</h4>
-            </div>
-            <button type="button" onClick={() => void onCopy(distributionText, 'KOL 发放清单')}>复制清单</button>
-          </header>
-          <div className="vkpi-campaign-material-table">
-            <div className="vkpi-campaign-material-row is-head">
-              <span>KOL</span>
-              <span>平台</span>
-              <span>阶段</span>
-              <span>链接</span>
-            </div>
-            {rows.map((row) => (
-              <div className="vkpi-campaign-material-row" key={row.id}>
-                <span><b>{row.kolHandle || row.kolName}</b><small>{row.kolName || '-'}</small></span>
-                <span><PlatformPill platform={row.platform} /></span>
-                <span>{stageLabels[row.stage]}</span>
-                <span className={row.shopifyLink ? 'is-ready' : 'is-missing'}>{row.shopifyLink ? '已设置' : '未设置'}</span>
-              </div>
-            ))}
-          </div>
-        </section>
-      </div>
+        </div>
+      )}
     </div>
   );
 }

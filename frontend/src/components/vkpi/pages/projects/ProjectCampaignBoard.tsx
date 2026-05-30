@@ -1,11 +1,20 @@
 import { useMemo, useState } from 'react';
+import { AlertCircle, PackageCheck } from 'lucide-react';
 import type { VkpiPlatform, VkpiProjectRow, VkpiProjectStage, VkpiStaffMember } from '../../vkpiTypes';
-import { Avatar } from '../../shared/Avatar';
-import { PlatformPill } from '../../shared/PlatformPill';
-import { StageBadge } from '../../shared/StageBadge';
-import { primaryStageFlow, stageLabels } from '../../shared/vkpiConstants';
+import { primaryStageFlow } from '../../shared/vkpiConstants';
 import { currencyFormatter, numberFormatter } from '../../shared/vkpiFormatters';
 import { shortDateTime } from '../../shared/vkpiDataUtils';
+import {
+  formatLargeNum,
+  formatMoneyShort,
+  healthBg,
+  healthColor,
+  ownerColor,
+  PROJECT_STAGE_COLOR,
+  PROJECT_STAGE_FLOW,
+  PROJECT_STATUS_COLOR,
+  statusBg,
+} from './projectDeliverableStyle';
 
 const boardStatuses = ['全部', '规划中', '进行中', '收尾中', '已结束', '已取消'] as const;
 type BoardStatus = typeof boardStatuses[number];
@@ -15,7 +24,6 @@ const cancelledStages = new Set<VkpiProjectStage>(['cancelled', 'lost', 'stalled
 const planningStages = new Set<VkpiProjectStage>(['invited', 'discovery']);
 const wrappingStages = new Set<VkpiProjectStage>(['content_published', 'published', 'measured']);
 const activeStages = new Set<VkpiProjectStage>(['contacted', 'replied', 'in_discussion', 'agreed', 'shipped', 'received']);
-
 interface CampaignGroup {
   id: string;
   title: string;
@@ -24,6 +32,9 @@ interface CampaignGroup {
   focus: VkpiProjectRow;
   status: BoardStatus;
   platforms: VkpiPlatform[];
+  kolCount: number;
+  kolWithEvidence: number;
+  evidenceCount: number;
   views: number;
   clicks: number;
   orders: number;
@@ -33,6 +44,12 @@ interface CampaignGroup {
   latestMessageSource?: string;
   totalDurationLabel?: string;
   stageDurationLabel?: string;
+  stageCounts: Record<string, number>;
+  publishedCount: number;
+  healthScore: number;
+  healthBasis?: string;
+  currentFocus?: string;
+  bottleneck?: string;
 }
 
 const messageSourceLabels: Record<string, string> = {
@@ -79,13 +96,6 @@ function boardHealth(projects: VkpiProjectRow[]) {
   return { score, label: '阻塞', className: 'is-bad', reason: '取消、停滞或长时间未推进的项目偏多。' };
 }
 
-function projectHealth(project: VkpiProjectRow) {
-  if (cancelledStages.has(project.stage)) return { label: '风险', className: 'is-bad' };
-  if (wrappingStages.has(project.stage) || terminalStages.has(project.stage)) return { label: '收尾', className: 'is-good' };
-  if (parseDays(project.stageDurationLabel) >= 10) return { label: '需跟进', className: 'is-mid' };
-  return { label: '推进中', className: 'is-good' };
-}
-
 function uniquePlatforms(projects: VkpiProjectRow[]) {
   return Array.from(new Set(projects.map((project) => project.platform))).sort((a, b) => a.localeCompare(b));
 }
@@ -121,6 +131,20 @@ function pickFocusRow(rows: VkpiProjectRow[]) {
   })[0] || rows[0];
 }
 
+function rowKolCount(row: VkpiProjectRow) {
+  return typeof row.kolCount === 'number' && row.kolCount > 0 ? row.kolCount : 1;
+}
+
+function rowKolWithEvidence(row: VkpiProjectRow) {
+  if (typeof row.kolWithEvidence === 'number') return row.kolWithEvidence;
+  return row.evidenceCount || row.stageEventCount ? 1 : 0;
+}
+
+function rowEvidenceCount(row: VkpiProjectRow) {
+  if (typeof row.evidenceCount === 'number') return row.evidenceCount;
+  return row.stageEventCount || 0;
+}
+
 function buildCampaignGroups(projects: VkpiProjectRow[]): CampaignGroup[] {
   const grouped = new Map<string, VkpiProjectRow[]>();
   projects.forEach((project) => {
@@ -138,7 +162,10 @@ function buildCampaignGroups(projects: VkpiProjectRow[]): CampaignGroup[] {
       primary,
       focus,
       status: groupStatus(sortedRows),
-      platforms: Array.from(new Set(sortedRows.map((row) => row.platform))).sort((a, b) => a.localeCompare(b)),
+      platforms: Array.from(new Set(primary.platforms?.length ? primary.platforms : sortedRows.map((row) => row.platform))).sort((a, b) => a.localeCompare(b)),
+      kolCount: sortedRows.reduce((sum, row) => sum + rowKolCount(row), 0),
+      kolWithEvidence: sortedRows.reduce((sum, row) => sum + rowKolWithEvidence(row), 0),
+      evidenceCount: sortedRows.reduce((sum, row) => sum + rowEvidenceCount(row), 0),
       views: sortedRows.reduce((sum, row) => sum + (row.views || 0), 0),
       clicks: sortedRows.reduce((sum, row) => sum + (row.clicks || 0), 0),
       orders: sortedRows.reduce((sum, row) => sum + (row.orders || 0), 0),
@@ -148,19 +175,14 @@ function buildCampaignGroups(projects: VkpiProjectRow[]): CampaignGroup[] {
       latestMessageSource: primary.latestMessageSource,
       totalDurationLabel: focus.totalDurationLabel,
       stageDurationLabel: focus.stageDurationLabel,
+      stageCounts: mergeStageCounts(sortedRows),
+      publishedCount: sortedRows.reduce((sum, row) => sum + (row.publishedCount ?? (stageIndex(row.stage) >= stageIndex('published') ? rowKolCount(row) : 0)), 0),
+      healthScore: primary.healthScore ?? 0,
+      healthBasis: primary.healthBasis,
+      currentFocus: primary.currentFocus,
+      bottleneck: primary.bottleneck,
     };
   }).sort((a, b) => latestTimestamp(b.primary) - latestTimestamp(a.primary));
-}
-
-function campaignStageCells(rows: VkpiProjectRow[]) {
-  const indexes = rows.map((row) => stageIndex(row.stage));
-  const currentIndex = indexes.length ? Math.min(...indexes) : 0;
-  return primaryStageFlow.map((stage, index) => ({
-    stage,
-    state: index < currentIndex ? 'done' : index === currentIndex ? 'now' : 'todo',
-    count: rows.filter((row) => stageIndex(row.stage) === index).length,
-    doneCount: rows.filter((row) => stageIndex(row.stage) > index).length,
-  }));
 }
 
 function formatMoney(value: number) {
@@ -169,6 +191,26 @@ function formatMoney(value: number) {
 
 function formatNumber(value: number | null | undefined) {
   return value == null ? '-' : numberFormatter.format(value);
+}
+
+function projectStageCounts(row: VkpiProjectRow) {
+  const source = row.stageCounts || {};
+  return Object.fromEntries(PROJECT_STAGE_FLOW.map((stage) => [stage.key, Number(source[stage.key] || 0)]));
+}
+
+function mergeStageCounts(rows: VkpiProjectRow[]) {
+  const merged = Object.fromEntries(PROJECT_STAGE_FLOW.map((stage) => [stage.key, 0]));
+  rows.forEach((row) => {
+    const counts = projectStageCounts(row);
+    PROJECT_STAGE_FLOW.forEach((stage) => {
+      merged[stage.key] += counts[stage.key] || 0;
+    });
+  });
+  return merged;
+}
+
+function ownerInitial(name?: string) {
+  return String(name || '-').trim().slice(0, 1).toUpperCase() || '-';
 }
 
 export function ProjectCampaignBoard({
@@ -291,89 +333,112 @@ export function ProjectCampaignBoard({
           <option value="全部平台">全部平台</option>
           {platforms.map((item) => <option key={item} value={item}>{item}</option>)}
         </select>
-      </div>
-
-      <div className="vkpi-project-create-strip">
-        <div>
-          <strong>真实操作台</strong>
-          <span>新建推广保留在下方入口；阶段、物流、费用、证据和删除进入项目详情处理。</span>
-        </div>
-        <button type="button" onClick={onOpenCreateProject} disabled={!onOpenCreateProject}>
+        <button className="vkpi-project-new-button" type="button" onClick={onOpenCreateProject} disabled={!onOpenCreateProject}>
           ✦ 新建推广
         </button>
       </div>
 
       <div className="vkpi-project-card-list">
         {filteredCampaignGroups.length ? filteredCampaignGroups.map((group) => {
-          const healthState = projectHealth(group.focus);
+          const cardHealthColor = healthColor(group.healthScore);
+          const cardHealthBg = healthBg(group.healthScore);
           const messageSource = messageSourceLabels[group.latestMessageSource || ''] || group.latestMessageSource || '手动备注';
           const selected = group.rows.some((row) => row.id === selectedProjectId);
+          const initial = ownerInitial(group.primary.ownerName);
           return (
             <article
               key={group.id}
-              className={`vkpi-project-campaign-card ${selected ? 'is-selected' : ''} ${group.status === '已取消' ? 'is-cancelled' : ''}`}
+              className={`rounded-2xl border border-white/[0.06] bg-white/[0.015] hover:bg-white/[0.025] hover:border-white/[0.10] transition-all cursor-pointer overflow-hidden ${selected ? 'ring-1 ring-purple-500/40' : ''} ${group.status === '已取消' ? 'opacity-60 grayscale' : ''}`}
               onClick={() => onOpenProjectDetail(group.primary)}
               title="点击查看项目详情"
             >
-              <div className="vkpi-project-card-top">
-                <div className="vkpi-project-card-title">
-                  <h3>{group.title}</h3>
-                  <span className={`vkpi-project-status ${healthState.className}`}>{group.status}</span>
-                  <StageBadge stage={group.focus.stage} />
-                </div>
-                <div className="vkpi-project-card-actions" onClick={(event) => event.stopPropagation()}>
-                  <button className="vkpi-mini-button" type="button" onClick={() => onOpenProjectDetail(group.primary)}>详情</button>
+              <div className="p-4 border-b border-white/[0.04]">
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: cardHealthBg, color: cardHealthColor }}>
+                    <PackageCheck size={18} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1 flex-wrap">
+                      <div className="text-[14px] font-semibold text-white">{group.title}</div>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded font-medium" style={{ background: statusBg(group.status), color: PROJECT_STATUS_COLOR[group.status] || PROJECT_STATUS_COLOR['已结束'] }}>{group.status}</span>
+                      <span className="text-[10px] text-slate-500">·</span>
+                      <span className="text-[10.5px] text-slate-400">{group.currentFocus || group.focus.stageDurationLabel || '真实项目'}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                      {group.platforms.map((item) => <span className="text-[9.5px] px-1.5 py-0.5 rounded bg-white/[0.04] text-slate-400" key={item}>{item}</span>)}
+                      <span className="text-[9.5px] px-1.5 py-0.5 rounded bg-white/[0.04] text-slate-400">{formatNumber(group.kolWithEvidence)} 有证据</span>
+                    </div>
+                  </div>
+                  <div className="text-right shrink-0" title={group.healthBasis === 'simplified_no_reliable_time' ? '简化版：产出率 60% + 阶段推进 40%' : undefined}>
+                    <div className="text-[10px] text-slate-500 mb-0.5">健康度</div>
+                    <div className="text-[28px] font-bold leading-none tabular-nums" style={{ color: cardHealthColor }}>{group.healthScore || '-'}</div>
+                  </div>
                 </div>
               </div>
 
-              <div className="vkpi-project-card-main">
-                <div className="vkpi-project-campaign-summary">
-                  <div className="vkpi-project-campaign-count">
-                    <strong>{group.rows.length}</strong>
-                    <span>KOL</span>
-                  </div>
-                  <div className="vkpi-project-campaign-meta">
-                    <b>平台</b>
-                    <small>{group.platforms.map((item) => <PlatformPill key={item} platform={item} />)}</small>
-                  </div>
-                  <div className="vkpi-project-campaign-meta">
-                    <b>当前重点</b>
-                    <small>{stageLabels[group.focus.stage]} · {group.focus.kolHandle || group.focus.kolName || '未命名 KOL'}</small>
-                  </div>
+              <div
+                className="px-4 py-3 border-b border-white/[0.04] cursor-default select-none"
+                aria-label="项目阶段，仅展示"
+                onClick={(event) => event.stopPropagation()}
+                title="列表阶段条仅展示；进入详情页后可点击漏斗筛选"
+              >
+                <div className="grid grid-cols-9 gap-1">
+                  {PROJECT_STAGE_FLOW.map((stage, index) => {
+                    const count = group.stageCounts[stage.key] || 0;
+                    const active = count > 0;
+                    const color = PROJECT_STAGE_COLOR[stage.key];
+                    return (
+                      <div
+                        className="rounded p-1.5 text-center cursor-default"
+                        key={stage.key}
+                        style={{ background: active ? `${color}1a` : 'rgba(255,255,255,0.015)', border: active ? `1px solid ${color}50` : '1px solid rgba(255,255,255,0.04)' }}
+                      >
+                        <div className="text-[8.5px] text-slate-400 mb-0.5">{index + 1}.{stage.label}</div>
+                        <div className="text-[14px] font-bold tabular-nums leading-none" style={{ color: active ? color : '#475569' }}>{count || '—'}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="px-4 py-3 flex items-center justify-between gap-4">
+                <div className="grid grid-cols-5 gap-4 flex-1">
+                  {[
+                    ['KOL', formatNumber(group.kolCount)],
+                    ['已发', formatNumber(group.publishedCount)],
+                    ['曝光', formatLargeNum(group.views)],
+                    ['点击', formatNumber(group.clicks)],
+                    ['成本', formatMoneyShort(group.cost)],
+                  ].map(([label, value]) => (
+                    <div key={label}>
+                      <div className="text-[9.5px] text-slate-500">{label}</div>
+                      <div className="text-[13px] font-semibold text-white tabular-nums">{value}</div>
+                    </div>
+                  ))}
                 </div>
                 <button
-                  className={`vkpi-project-owner ${group.primary.ownerId && onOpenStaffProfile ? 'is-clickable' : ''}`}
+                  className="flex items-center gap-2 shrink-0"
                   type="button"
                   onClick={(event) => {
                     event.stopPropagation();
                     if (group.primary.ownerId && onOpenStaffProfile) void onOpenStaffProfile(group.primary.ownerId, { name: group.primary.ownerName, avatarUrl: group.primary.ownerAvatar });
                   }}
+                  title={`负责人 ${group.primary.ownerName || '-'}`}
                 >
-                  <Avatar name={group.primary.ownerName} src={group.primary.ownerAvatar} size="xs" />
-                  <span>负责人 {group.primary.ownerName || '-'}</span>
+                  <div className="flex -space-x-1.5">
+                    {group.primary.ownerAvatar ? (
+                      <img alt={group.primary.ownerName || 'owner'} className="w-6 h-6 rounded-full border-2 border-[#0a0a0d] object-cover" src={group.primary.ownerAvatar} />
+                    ) : (
+                      <div className="w-6 h-6 rounded-full border-2 border-[#0a0a0d] flex items-center justify-center text-[9px] font-bold text-white" style={{ background: ownerColor(initial) }}>{initial}</div>
+                    )}
+                  </div>
                 </button>
               </div>
 
-              <div className="vkpi-project-progress-grid" aria-label="项目阶段">
-                {campaignStageCells(group.rows).map((cell) => (
-                  <span className={`vkpi-project-progress-cell is-${cell.state}`} key={cell.stage}>
-                    <b>{stageLabels[cell.stage]}</b>
-                    <small>{cell.count ? `${cell.count} 个 KOL` : cell.state === 'done' ? `${cell.doneCount} 已过` : '待办'}</small>
-                  </span>
-                ))}
-              </div>
-
-              <div className="vkpi-project-card-stats">
-                <span><small>播放</small><strong>{formatNumber(group.views)}</strong></span>
-                <span><small>点击</small><strong>{formatNumber(group.clicks)}</strong></span>
-                <span><small>订单</small><strong>{formatNumber(group.orders)}</strong></span>
-                <span><small>销售</small><strong>{formatMoney(group.gmv)}</strong></span>
-                {viewMode === 'manager' ? <span><small>成本</small><strong>{formatMoney(group.cost)}</strong></span> : null}
-              </div>
-
-              <div className="vkpi-project-card-footer">
-                <span>{messageSource} · {shortDateTime(group.latestMessageAt)}</span>
-                <span>总耗时 {group.totalDurationLabel || '-'} · 重点阶段 {group.stageDurationLabel || '-'}</span>
+              <div className="px-4 py-2 flex items-center gap-2 border-t border-white/[0.04]" style={{ background: group.healthScore < 70 ? 'rgba(239,68,68,0.05)' : group.healthScore < 85 ? 'rgba(251,191,36,0.05)' : 'rgba(255,255,255,0.01)' }}>
+                <AlertCircle size={11} style={{ color: cardHealthColor }} />
+                <div className="text-[11px] flex-1" style={{ color: group.healthScore < 85 ? '#fbbf24' : '#94a3b8' }}>{group.bottleneck || group.currentFocus || '暂无瓶颈'}</div>
+                <div className="text-[10px] text-slate-500">更新 {shortDateTime(group.latestMessageAt)} · {messageSource}</div>
               </div>
             </article>
           );

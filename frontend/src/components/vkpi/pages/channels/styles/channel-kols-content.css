@@ -410,29 +410,32 @@
   height: 100dvh;
   padding: 24px;
   background:
-    linear-gradient(180deg, rgba(248, 250, 252, 0.22), rgba(15, 23, 42, 0.22)),
-    rgba(15, 23, 42, 0.26);
-  backdrop-filter: blur(30px) saturate(1.25);
+    radial-gradient(circle at 26% 12%, rgba(124, 58, 237, 0.2), transparent 28%),
+    rgba(2, 6, 15, 0.78);
+  backdrop-filter: blur(26px) saturate(1.12);
 }
 
 .vkpi-kol-media-lightbox .vkpi-media-lightbox__panel {
   grid-template-rows: auto minmax(0, 1fr) auto;
-  width: min(760px, calc(100vw - 48px));
+  width: min(1120px, calc(100vw - 64px));
   min-width: 0;
-  max-width: calc(100vw - 48px);
-  max-height: calc(100dvh - 48px);
+  max-width: calc(100vw - 64px);
+  max-height: calc(100dvh - 64px);
   overflow: hidden;
-  border-radius: 24px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 20px;
+  background: #07101f;
+  box-shadow: 0 30px 120px rgba(0, 0, 0, 0.46);
 }
 
 .vkpi-kol-media-lightbox .vkpi-media-lightbox__stage {
   display: grid;
   place-items: center;
   width: 100%;
-  height: min(72dvh, calc(100dvh - 216px));
+  height: min(70dvh, calc(100dvh - 196px));
   max-width: 100%;
   margin: 0 auto;
-  background: rgba(15, 23, 42, 0.08);
+  background: #030711;
 }
 
 .vkpi-kol-media-lightbox .vkpi-media-lightbox__stage.is-video {
@@ -453,4 +456,32 @@
 .vkpi-kol-media-lightbox .vkpi-media-lightbox__stage iframe {
   width: 100%;
   height: 100%;
+}
+
+.vkpi-kol-media-lightbox .vkpi-media-lightbox__header {
+  background: rgba(8, 16, 31, 0.98);
+  border-bottom-color: rgba(148, 163, 184, 0.14);
+}
+
+.vkpi-kol-media-lightbox .vkpi-media-lightbox__header h3 {
+  max-width: 760px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vkpi-kol-media-lightbox .vkpi-media-lightbox__footer {
+  background: rgba(8, 16, 31, 0.98);
+  border-top-color: rgba(148, 163, 184, 0.14);
+}
+
+.vkpi-kol-media-lightbox .vkpi-media-lightbox__footer span,
+.vkpi-kol-media-lightbox .vkpi-media-lightbox__footer small {
+  color: #cbd5e1;
+}
+
+.vkpi-kol-media-lightbox .vkpi-media-lightbox__footer a {
+  border-color: rgba(148, 163, 184, 0.16);
+  background: rgba(15, 23, 42, 0.72);
+  color: #d8b4fe;
 }

@@ -1,5 +1,6 @@
 import { apiFetch, jsonBody } from "../http";
 import type { VkpiDashboardData } from "../../components/vkpi/vkpiTypes";
+import type { DashboardAccountKpi, DashboardAccountList, DashboardAccountType } from "../../domains/dashboard/accountPicker";
 import {
   buildDashboardAlerts,
   buildDashboardFunnel,
@@ -53,6 +54,7 @@ export interface VkpiExportPayload extends VkpiDashboardFilters {
 }
 
 type OptionalResult<T> = { data: T; failed?: string };
+const DASHBOARD_SLICE_TIMEOUT_MS = 5000;
 
 function emptyDashboardData(filters: VkpiDashboardFilters = {}): VkpiDashboardData {
   return {
@@ -88,7 +90,7 @@ function emptyDashboardData(filters: VkpiDashboardFilters = {}): VkpiDashboardDa
 
 async function optionalFetch<T>(label: string, path: string, token: string, fallback: T): Promise<OptionalResult<T>> {
   try {
-    return { data: await apiFetch<T>(path, {}, token) };
+    return { data: await apiFetch<T>(path, { timeoutMs: DASHBOARD_SLICE_TIMEOUT_MS }, token) };
   } catch {
     return { data: fallback, failed: label };
   }
@@ -105,9 +107,9 @@ export async function fetchVkpiDashboardData(
   const dashboardPath = selfMode
     ? `/api/marketing/dashboard/view/employee?window_days=${days}${staffQuery}`
     : `/api/marketing/dashboard?window_days=${days}${staffQuery}`;
-  const staffMembersRequest: Promise<OptionalResult<{ members?: Row[] }>> = selfMode
+  const staffMembersRequest: Promise<OptionalResult<{ members?: Row[]; staff?: Row[] }>> = selfMode
     ? Promise.resolve({ data: { members: [] } })
-    : optionalFetch<{ members?: Row[] }>("员工授权", "/api/admin/staff", token, { members: [] });
+    : optionalFetch<{ members?: Row[]; staff?: Row[] }>("员工目录", "/api/admin/vkpi/staff-directory", token, { members: [], staff: [] });
   const productCostsRequest: Promise<OptionalResult<{ product_costs?: Row[] }>> = selfMode
     ? Promise.resolve({ data: { product_costs: [] } })
     : optionalFetch<{ product_costs?: Row[] }>("SKU 成本", "/api/marketing/product-costs?limit=200", token, { product_costs: [] });
@@ -115,7 +117,7 @@ export async function fetchVkpiDashboardData(
     ? Promise.resolve({ data: { launches: [] } })
     : optionalFetch<{ launches?: Row[] }>("产品发布", "/api/admin/vkpi/product-analysis/launches?limit=200", token, { launches: [] });
   const [
-    dashboard,
+    dashboardResult,
     trendResult,
     productPerformanceResult,
     projectsResult,
@@ -131,7 +133,7 @@ export async function fetchVkpiDashboardData(
     productLaunchesResult,
     kolOptionsResult,
   ] = await Promise.all([
-    apiFetch<Row>(dashboardPath, {}, token),
+    optionalFetch<Row>("主控摘要", dashboardPath, token, {}),
     optionalFetch<{ rows?: Row[] }>("趋势", `/api/marketing/dashboard/revenue-trend?window_days=${days}${staffQuery}`, token, { rows: [] }),
     optionalFetch<{ rows?: Row[] }>("产品表现", `/api/marketing/dashboard/product-performance?window_days=${days}${staffQuery}&limit=20`, token, { rows: [] }),
     optionalFetch<{ projects?: Row[]; scope?: Row }>("项目", "/api/marketing/projects?limit=100", token, { projects: [] }),
@@ -148,6 +150,7 @@ export async function fetchVkpiDashboardData(
     optionalFetch<{ kols?: Row[]; scope?: Row }>("红人列表", `/api/marketing/kols?limit=300${staffQuery}`, token, { kols: [] }),
   ]);
   const failedSections = [
+    dashboardResult,
     trendResult,
     productPerformanceResult,
     projectsResult,
@@ -163,6 +166,7 @@ export async function fetchVkpiDashboardData(
     productLaunchesResult,
     kolOptionsResult,
   ].map((item) => item.failed).filter(Boolean) as string[];
+  const dashboard = dashboardResult.data;
   const summary = (dashboard.summary || {}) as Row;
   const dashboardMetrics = Array.isArray(dashboard.metrics) ? dashboard.metrics as Row[] : [];
   const projectRows = (selfMode ? dashboard.projects as Row[] | undefined : projectsResult.data.projects) || [];
@@ -173,7 +177,7 @@ export async function fetchVkpiDashboardData(
   const attributionRows = buildAttributions(rawAttributionRows);
   const unmatchedRows = buildAttributions(unmatchedResult.data.items || []);
   const costRows = buildCosts(costsResult.data.costs || []);
-  const staffMembers = buildStaffMembers(staffMembersResult.data.members || []);
+  const staffMembers = buildStaffMembers(staffMembersResult.data.staff || staffMembersResult.data.members || []);
   const kpiLedger = buildDashboardKpiLedger(kpiLedgerResult.data.entries || []);
   const productCosts = buildProductCosts(productCostsResult.data.product_costs || []);
   const productLaunches = buildProductLaunchOptions(productLaunchesResult.data.launches || []);
@@ -228,6 +232,40 @@ export async function fetchVkpiDashboardData(
       kols: buildScopeContext(kolOptionsResult.data.scope),
     },
   };
+}
+
+export async function fetchDashboardAccountKpi(
+  token: string,
+  accountType: DashboardAccountType = "all",
+  selectedKolIds: string[] = [],
+): Promise<DashboardAccountKpi> {
+  return apiFetch<DashboardAccountKpi>(
+    "/api/admin/dashboard/kpi",
+    {
+      method: "POST",
+      body: jsonBody({
+        account_type: accountType,
+        selected_kol_ids: selectedKolIds,
+      }),
+    },
+    token,
+  );
+}
+
+export async function fetchDashboardAccounts(
+  token: string,
+  accountType: DashboardAccountType = "all",
+  options: { page?: number; pageSize?: number; search?: string } = {},
+): Promise<DashboardAccountList> {
+  const params = new URLSearchParams({
+    account_type: accountType,
+    page: String(options.page || 1),
+    page_size: String(options.pageSize || 8),
+  });
+  if (options.search?.trim()) {
+    params.set("search", options.search.trim());
+  }
+  return apiFetch<DashboardAccountList>(`/api/admin/dashboard/kols?${params.toString()}`, {}, token);
 }
 
 export interface VkpiAgentInboxItem {

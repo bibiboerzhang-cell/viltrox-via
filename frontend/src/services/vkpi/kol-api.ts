@@ -213,11 +213,12 @@ export async function getKolPosts(token: string, kolId: string, params: { limit?
   );
 }
 
-export async function getKolComments(token: string, kolId: string, params: { limit?: number; offset?: number } = {}) {
+export async function getKolComments(token: string, kolId: string, params: { limit?: number; offset?: number; postUrl?: string } = {}) {
   const query = new URLSearchParams({
     limit: String(params.limit || 100),
     offset: String(params.offset || 0),
   });
+  if (params.postUrl) query.set("post_url", params.postUrl);
   return apiFetch<{ items?: Row[]; page?: Row }>(
     `/api/marketing/kols/${encodeURIComponent(kolId)}/comments?${query.toString()}`,
     {},
