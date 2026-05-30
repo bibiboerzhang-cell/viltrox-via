@@ -23,14 +23,20 @@ from app.domains.projects.workflow_common import (
 )
 from app.domains.projects.workflow_detail import project_detail
 from app.domains.projects.workflow_evidence import (
+    advance_project_kol_assignment,
     add_project_content,
     add_project_message,
     add_project_shipment,
+    project_kol_action_stub,
+    record_project_kol_video,
+    update_project_kol_shipping,
     upsert_project_terms,
 )
 from app.domains.projects.workflow_projects import (
+    add_project_kols,
     create_project,
     delete_project,
+    list_available_project_kols,
     list_projects,
     transition_project,
     update_project,
@@ -56,10 +62,16 @@ __all__ = [
     "stage_config",
     "architecture_summary",
     "list_projects",
+    "list_available_project_kols",
+    "add_project_kols",
     "create_project",
     "update_project",
     "transition_project",
     "delete_project",
+    "advance_project_kol_assignment",
+    "update_project_kol_shipping",
+    "project_kol_action_stub",
+    "record_project_kol_video",
     "add_project_message",
     "add_project_content",
     "upsert_project_terms",

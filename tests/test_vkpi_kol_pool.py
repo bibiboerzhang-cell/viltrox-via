@@ -5,6 +5,7 @@ import pytest
 
 from app.db.connection import get_conn
 from app.domains.kol import pool as kol_pool
+from app.domains.kol.pool_common import _country_code, _country_name
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 
 
@@ -224,6 +225,31 @@ def test_missing_and_complete_filters_use_real_pool_columns(seeded_staff):
     assert {row["handle"] for row in complete} == {f"{MARKER}-complete"}
 
 
+def test_list_pool_supports_offset_pagination(seeded_staff):
+    staff = _staff_context(seeded_staff["staff_id"])
+    kol_pool.import_items(
+        [
+            {
+                "platform": "instagram",
+                "handle": f"{MARKER}-page-{idx}",
+                "display_name": f"Paged Candidate {idx}",
+                "followers": 100 + idx,
+            }
+            for idx in range(3)
+        ],
+        source_type="unit",
+        source_ref=MARKER,
+        staff=staff,
+    )
+
+    first = kol_pool.list_pool(query=f"{MARKER}-page", sort_by="followers", limit=1, offset=0)["items"]
+    second = kol_pool.list_pool(query=f"{MARKER}-page", sort_by="followers", limit=1, offset=1)["items"]
+
+    assert len(first) == 1
+    assert len(second) == 1
+    assert first[0]["handle"] != second[0]["handle"]
+
+
 def test_country_distribution_and_country_filter_normalize_variants(seeded_staff):
     conn = get_conn()
     now = "2026-05-01T10:00:00Z"
@@ -231,6 +257,8 @@ def test_country_distribution_and_country_filter_normalize_variants(seeded_staff
         (f"{MARKER}-country-us-cn", "instagram", "美国", "Country US CN"),
         (f"{MARKER}-country-us-code", "youtube", "US", "Country US Code"),
         (f"{MARKER}-country-be-cn", "instagram", "比利时", "Country Belgium CN"),
+        (f"{MARKER}-country-tw", "youtube", "台湾", "Country TW CN"),
+        (f"{MARKER}-country-hk", "instagram", "Hong Kong", "Country HK EN"),
     ]
     for handle, platform, country, display_name in rows:
         conn.execute(
@@ -275,11 +303,19 @@ def test_country_distribution_and_country_filter_normalize_variants(seeded_staff
     distribution = {row["country_code"]: row for row in summary["country_distribution"]}
     us_rows = kol_pool.list_pool(query=MARKER, country="United States", limit=10)["items"]
     be_rows = kol_pool.list_pool(query=MARKER, country="Belgium", limit=10)["items"]
+    tw_rows = kol_pool.list_pool(query=MARKER, country="China TW", limit=10)["items"]
+    hk_rows = kol_pool.list_pool(query=MARKER, country="China HK", limit=10)["items"]
 
     assert distribution["US"]["country_name"] == "United States"
     assert distribution["BE"]["country_name"] == "Belgium"
+    assert _country_code("中国台湾") == "TW"
+    assert _country_name("Taiwan", "TW") == "China TW"
+    assert _country_code("Hong Kong") == "HK"
+    assert _country_name("Hong Kong", "HK") == "China HK"
     assert {row["handle"] for row in us_rows} == {f"{MARKER}-country-us-cn", f"{MARKER}-country-us-code"}
     assert {row["handle"] for row in be_rows} == {f"{MARKER}-country-be-cn"}
+    assert {row["handle"] for row in tw_rows} == {f"{MARKER}-country-tw"}
+    assert {row["handle"] for row in hk_rows} == {f"{MARKER}-country-hk"}
 
 
 def test_batch_enrich_is_capped_and_skips_unsupported_platforms(seeded_staff):

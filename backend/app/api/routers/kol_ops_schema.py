@@ -58,6 +58,7 @@ def ensure_kol_schema() -> None:
         CREATE INDEX IF NOT EXISTS idx_kols_assigned ON kols(assigned_staff_id);
         CREATE INDEX IF NOT EXISTS idx_kols_platform_country ON kols(platform, country);
         CREATE INDEX IF NOT EXISTS idx_kols_status ON kols(contact_status);
+        CREATE INDEX IF NOT EXISTS idx_kols_updated ON kols(updated_at DESC, id DESC);
 
         CREATE TABLE IF NOT EXISTS kol_outreach (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -287,5 +288,4 @@ def ensure_kol_schema() -> None:
     )
     conn.commit()
     _SCHEMA_READY = True
-
 

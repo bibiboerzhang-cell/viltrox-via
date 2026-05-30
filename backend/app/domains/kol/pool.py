@@ -132,6 +132,7 @@ def import_items(items: list[dict[str, Any]], *, source_type: str = "manual", so
 
 def list_pool(
     limit: int = 100,
+    offset: int = 0,
     platform: str = "",
     query: str = "",
     country: str = "",
@@ -141,9 +142,11 @@ def list_pool(
 ) -> dict[str, Any]:
     ensure_vkpi_product_industry_schema()
     safe_limit = max(1, min(500, int(limit or 100)))
+    safe_offset = max(0, int(offset or 0))
     cache_key = _kol_pool_cache_key(
         "list",
         limit=safe_limit,
+        offset=safe_offset,
         platform=_platform(platform) if platform else "",
         query=str(query or "").strip().lower(),
         country=_country_code(country) if country else "",
@@ -205,8 +208,8 @@ def list_pool(
     select_columns = [column for column in KOL_POOL_LIST_COLUMNS if column in table_columns]
     select_clause = ", ".join(select_columns) if "id" in select_columns else "*"
     rows = conn.execute(
-        f"SELECT {select_clause} FROM vkpi_kol_pool {clause} ORDER BY {order_clause} LIMIT ?",
-        (*params, safe_limit),
+        f"SELECT {select_clause} FROM vkpi_kol_pool {clause} ORDER BY {order_clause} LIMIT ? OFFSET ?",
+        (*params, safe_limit, safe_offset),
     ).fetchall()
     return _kol_pool_cache_store(cache_key, {"items": [dict(row) for row in rows]})
 

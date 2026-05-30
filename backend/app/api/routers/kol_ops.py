@@ -464,12 +464,18 @@ def fetch_kol_dossier(kol_id: int, staff=Depends(require_tab("kol_ops", "read"))
 
 @router.get("/kols/{kol_id}/posts")
 def fetch_kol_posts(kol_id: int, limit: int = 25, offset: int = 0, staff=Depends(require_tab("kol_ops", "read"))):
-    return list_kol_posts(int(kol_id), limit=limit, offset=offset)
+    return list_kol_posts(int(kol_id), limit=limit, offset=offset, prefer_main_id=True)
 
 
 @router.get("/kols/{kol_id}/comments")
-def fetch_kol_comments(kol_id: int, limit: int = 25, offset: int = 0, staff=Depends(require_tab("kol_ops", "read"))):
-    return list_kol_comments(int(kol_id), limit=limit, offset=offset)
+def fetch_kol_comments(
+    kol_id: int,
+    limit: int = 25,
+    offset: int = 0,
+    post_url: str = "",
+    staff=Depends(require_tab("kol_ops", "read")),
+):
+    return list_kol_comments(int(kol_id), limit=limit, offset=offset, post_url=post_url, prefer_main_id=True)
 
 
 @router.post("/kols")

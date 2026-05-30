@@ -7,6 +7,7 @@ from app.api.dependencies.perms import require_tab
 from app.domains import attribution as attribution_domain
 from app.domains import kol as kol_domain
 from app.domains.access import scope
+from app.services.kol.account_dossier import list_kol_comments, list_kol_posts
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-kol-links"])
 
@@ -47,6 +48,27 @@ def kol_dossier(kol_id: int, staff=Depends(require_tab("vkpi", "read"))):
         raise _scope_403(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/kols/{kol_id}/posts")
+def kol_posts(
+    kol_id: int,
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    return list_kol_posts(int(kol_id), limit=limit, offset=offset, prefer_main_id=True)
+
+
+@router.get("/kols/{kol_id}/comments")
+def kol_comments(
+    kol_id: int,
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    post_url: str = "",
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    return list_kol_comments(int(kol_id), limit=limit, offset=offset, post_url=post_url, prefer_main_id=True)
 
 
 @router.get("/kols/{kol_id}/profile")

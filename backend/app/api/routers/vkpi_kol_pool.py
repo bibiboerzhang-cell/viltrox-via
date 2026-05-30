@@ -30,6 +30,7 @@ from app.domains.kol import pool as kol_pool
 from app.domains.intelligence import gemini_single_kol_preflight
 import app.domains.intelligence.ai_brief as ai_brief
 import app.domains.evidence.summary as evidence_summary
+from app.domains.projects import workflow as project_workflow
 import app.domains.sync.refresh_tier as refresh_tier
 import app.domains.tasks.enqueue as task_enqueue
 from app.domains.audit.decorator import audit_action
@@ -133,6 +134,7 @@ async def _maybe_enqueue_refresh(
 async def list_pool(
     request: Request,
     limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     platform: str = Query(default=""),
     query: str = Query(default=""),
     country: str = Query(default=""),
@@ -145,6 +147,7 @@ async def list_pool(
     """列出 KOL Pool"""
     result = kol_pool.list_pool(
         limit=limit,
+        offset=offset,
         platform=platform,
         query=query,
         country=country,
@@ -175,6 +178,29 @@ def get_pool_summary(
 ) -> dict:
     """KOL Pool 资产池口径统计；不等于 Daily Top100 新候选。"""
     return kol_pool.summary()
+
+
+@router.get("/kol-pool/available")
+def list_available_for_project(
+    project_id: int = Query(..., ge=1),
+    query: str = Query(default=""),
+    limit: int = Query(default=200, ge=1, le=500),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """KOL Pool candidates not yet assigned to the project."""
+    try:
+        return project_workflow.list_available_project_kols(
+            project_id,
+            query=query,
+            limit=limit,
+            staff=staff,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        if exc.__class__.__name__ == "ScopeDenied":
+            raise HTTPException(status_code=403, detail=str(exc) or "scope denied") from exc
+        raise
 
 
 @router.get("/kol-pool/competitors/dashboard")

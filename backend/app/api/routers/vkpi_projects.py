@@ -33,6 +33,80 @@ def project_detail(project_id: int, staff=Depends(require_tab("vkpi", "read"))):
         raise _scope_403(exc) from exc
 
 
+@router.post("/projects/{project_id}/kols")
+def add_project_kols(project_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
+    try:
+        return workflow.add_project_kols(project_id, body, staff=staff)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
+@router.post("/projects/{project_id}/kols/{kol_ref}/advance")
+def advance_project_kol(project_id: int, kol_ref: str, body: dict, staff=Depends(require_tab("vkpi", "write"))):
+    try:
+        return workflow.advance_project_kol_assignment(project_id, kol_ref, body, staff=staff)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
+@router.post("/projects/{project_id}/kols/{kol_ref}/shipping")
+def update_project_kol_shipping(project_id: int, kol_ref: str, body: dict, staff=Depends(require_tab("vkpi", "write"))):
+    try:
+        result = workflow.update_project_kol_shipping(project_id, kol_ref, body, staff=staff)
+        cost_results = []
+        shipping_amount = body.get("shipping_cost_usd", body.get("shippingFee", body.get("shipping_cost", 0)))
+        product_amount = body.get("product_cost_usd", body.get("productCost", body.get("product_cost", 0)))
+        if shipping_amount:
+            cost_results.append(costs.add_cost({
+                "project_id": project_id,
+                "cost_type": "shipping",
+                "amount_usd": shipping_amount,
+                "source_ref": f"assignment_shipping:{result['assignment'].get('id')}",
+                "note": body.get("note") or body.get("tracking_number") or body.get("no") or "",
+                "metadata": {"assignment_id": result["assignment"].get("id"), "kol_pool_id": result["assignment"].get("kol_pool_id"), "carrier": body.get("carrier")},
+            }, staff=staff))
+        if product_amount:
+            cost_results.append(costs.add_cost({
+                "project_id": project_id,
+                "cost_type": "product",
+                "amount_usd": product_amount,
+                "source_ref": f"assignment_product:{result['assignment'].get('id')}",
+                "note": body.get("product_note") or "KOL shipping product cost",
+                "metadata": {"assignment_id": result["assignment"].get("id"), "kol_pool_id": result["assignment"].get("kol_pool_id"), "products": body.get("products") or []},
+            }, staff=staff))
+        return {**result, "cost_results": cost_results}
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
+@router.post("/projects/{project_id}/kols/{kol_ref}/{action_kind}")
+def project_kol_action_stub(project_id: int, kol_ref: str, action_kind: str, body: dict, staff=Depends(require_tab("vkpi", "write"))):
+    if action_kind not in {"screenshot", "video", "contract"}:
+        raise HTTPException(status_code=404, detail="unknown action")
+    try:
+        if action_kind == "video":
+            return workflow.record_project_kol_video(project_id, kol_ref, body, staff=staff)
+        return workflow.project_kol_action_stub(project_id, kol_ref, body, kind=action_kind, staff=staff)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
 @router.post("/projects")
 def create_project(body: dict, staff=Depends(require_tab("vkpi", "write"))):
     try:

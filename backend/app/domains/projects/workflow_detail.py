@@ -6,6 +6,7 @@ from typing import Any
 
 from app.db.connection import get_conn
 from app.domains.access import scope
+from app.domains.projects.workflow_projects import _enrich_project_card_fields
 from app.platform.db.schema import ensure_vkpi_schema
 from app.platform.db.schema_audit import ensure_vkpi_audit_schema
 from app.domains.projects.workflow_common import _int
@@ -33,7 +34,7 @@ def project_detail(project_id: int, *, staff: dict[str, Any] | None = None) -> d
                COALESCE(ev.evidence_count, 0) AS evidence_count,
                COALESCE(ev.evidence_kol_count, 0) AS evidence_kol_count,
                COALESCE(ev.total_views, 0) AS total_views,
-               s.name AS staff_name
+               COALESCE(s.name, assignment_owner.name) AS staff_name
         FROM vkpi_projects p
         LEFT JOIN (
             SELECT
@@ -46,6 +47,22 @@ def project_detail(project_id: int, *, staff: dict[str, Any] | None = None) -> d
             WHERE a.project_id=?
             GROUP BY a.project_id
         ) pa ON pa.project_id = p.id
+        LEFT JOIN (
+            SELECT project_id, assigned_staff_id
+            FROM (
+                SELECT
+                    project_id,
+                    assigned_staff_id,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY project_id
+                        ORDER BY COUNT(*) DESC, assigned_staff_id ASC
+                    ) AS rn
+                FROM vkpi_project_kol_assignments
+                WHERE project_id=? AND assigned_staff_id IS NOT NULL
+                GROUP BY project_id, assigned_staff_id
+            ) ranked_assignment_staff
+            WHERE rn = 1
+        ) assignment_owner_pick ON assignment_owner_pick.project_id = p.id
         LEFT JOIN vkpi_kol_pool pk ON pk.id = pa.primary_kol_pool_id
         LEFT JOIN (
             SELECT
@@ -59,9 +76,11 @@ def project_detail(project_id: int, *, staff: dict[str, Any] | None = None) -> d
         ) ev ON ev.project_id = p.id
         LEFT JOIN staff st ON st.id = p.assigned_staff_id
         LEFT JOIN users s ON s.id = st.user_id
+        LEFT JOIN staff assignment_st ON assignment_st.id = assignment_owner_pick.assigned_staff_id
+        LEFT JOIN users assignment_owner ON assignment_owner.id = assignment_st.user_id
         WHERE p.id=?
         """,
-        (int(project_id), int(project_id), int(project_id)),
+        (int(project_id), int(project_id), int(project_id), int(project_id)),
     ).fetchone()
     if not row:
         raise LookupError("project not found")
@@ -84,6 +103,8 @@ def project_detail(project_id: int, *, staff: dict[str, Any] | None = None) -> d
                 a.metadata_json,
                 a.created_at,
                 a.updated_at,
+                assigned_user.name AS assigned_staff_name,
+                assigned_user.email AS assigned_staff_email,
                 kp.handle,
                 kp.display_name AS kol_name,
                 kp.display_name,
@@ -104,6 +125,8 @@ def project_detail(project_id: int, *, staff: dict[str, Any] | None = None) -> d
                 ev.latest_publish_date
             FROM vkpi_project_kol_assignments a
             LEFT JOIN vkpi_kol_pool kp ON kp.id = a.kol_pool_id
+            LEFT JOIN staff assigned_staff ON assigned_staff.id = a.assigned_staff_id
+            LEFT JOIN users assigned_user ON assigned_user.id = assigned_staff.user_id
             LEFT JOIN (
                 SELECT
                     project_id,
@@ -164,6 +187,7 @@ def project_detail(project_id: int, *, staff: dict[str, Any] | None = None) -> d
             only = participating_kols[0]
             project["kol_name"] = only.get("kol_name") or project.get("kol_name") or ""
             project["kol_platform"] = only.get("kol_platform") or project.get("kol_platform") or ""
+    _enrich_project_card_fields(conn, [project])
     events = [
         dict(item)
         for item in conn.execute(

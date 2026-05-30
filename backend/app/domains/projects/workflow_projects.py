@@ -6,7 +6,6 @@ import logging
 from typing import Any
 
 from app.db.connection import get_conn
-from app.domains import audit
 from app.domains.access import scope
 from app.platform.db.schema import ensure_vkpi_schema
 from app.domains.projects.workflow_common import (
@@ -23,6 +22,167 @@ from app.domains.projects.workflow_common import (
 
 logger = logging.getLogger(__name__)
 
+PROJECT_CARD_STAGE_KEYS = [
+    "discovery",
+    "contacted",
+    "replied",
+    "agreed",
+    "shipped",
+    "received",
+    "published",
+    "measured",
+    "closed",
+]
+
+ASSIGNMENT_STAGE_TO_CARD_STAGE = {
+    "discovered": "discovery",
+    "contacted": "contacted",
+    "replied": "replied",
+    "agreed": "agreed",
+    "device_sent": "shipped",
+    "arrived": "received",
+    "content_posted": "published",
+    "reviewed": "measured",
+    "closed": "closed",
+    "churned": "closed",
+}
+
+CARD_STAGE_LABELS = {
+    "discovered": "1.发现",
+    "contacted": "2.已联系",
+    "replied": "3.已回复",
+    "agreed": "4.已合作",
+    "device_sent": "5.已发货",
+    "arrived": "6.已到货",
+    "content_posted": "7.已发布",
+    "reviewed": "8.已统计",
+    "closed": "9.已关闭",
+    "churned": "9.已关闭",
+}
+
+CARD_STAGE_INDEX = {key: index for index, key in enumerate(PROJECT_CARD_STAGE_KEYS)}
+
+
+def _clamp(value: float, minimum: float, maximum: float) -> float:
+    return max(minimum, min(maximum, value))
+
+
+def _empty_stage_counts() -> dict[str, int]:
+    return {key: 0 for key in PROJECT_CARD_STAGE_KEYS}
+
+
+def _enrich_project_card_fields(conn, projects: list[dict[str, Any]]) -> None:
+    """Attach deliverable ProjectCard fields from assignment/kol_pool truth."""
+    project_ids = [int(project.get("id") or 0) for project in projects if int(project.get("id") or 0)]
+    if not project_ids:
+        return
+    placeholders = ",".join("?" for _ in project_ids)
+    rows = conn.execute(
+        f"""
+        SELECT
+            a.project_id,
+            COALESCE(a.stage, '') AS stage,
+            COALESCE(kp.platform, '') AS platform,
+            COALESCE(kp.has_video_evidence, FALSE) AS has_video_evidence,
+            COUNT(DISTINCT a.kol_pool_id) AS kol_count
+        FROM vkpi_project_kol_assignments a
+        LEFT JOIN vkpi_kol_pool kp ON kp.id = a.kol_pool_id
+        WHERE a.project_id IN ({placeholders})
+        GROUP BY a.project_id, COALESCE(a.stage, ''), COALESCE(kp.platform, ''), COALESCE(kp.has_video_evidence, FALSE)
+        """,
+        project_ids,
+    ).fetchall()
+    breakdowns: dict[int, dict[str, Any]] = {
+        project_id: {
+            "platforms": set(),
+            "stage_counts": _empty_stage_counts(),
+            "raw_stage_counts": {},
+            "kol_count": 0,
+            "kol_with_evidence": 0,
+            "published_count": 0,
+            "churned_count": 0,
+            "stage_index_sum": 0,
+            "stage_index_count": 0,
+        }
+        for project_id in project_ids
+    }
+    for row in rows:
+        project_id = int(row["project_id"] or 0)
+        data = breakdowns.get(project_id)
+        if not data:
+            continue
+        count = int(row["kol_count"] or 0)
+        raw_stage = str(row["stage"] or "").strip().lower()
+        platform = str(row["platform"] or "").strip().lower()
+        if platform:
+            data["platforms"].add(platform)
+        data["kol_count"] += count
+        if bool(row["has_video_evidence"]):
+            data["kol_with_evidence"] += count
+        if raw_stage == "content_posted":
+            data["published_count"] += count
+        if raw_stage == "churned":
+            data["churned_count"] += count
+        data["raw_stage_counts"][raw_stage] = data["raw_stage_counts"].get(raw_stage, 0) + count
+        card_stage = ASSIGNMENT_STAGE_TO_CARD_STAGE.get(raw_stage)
+        if card_stage:
+            data["stage_counts"][card_stage] += count
+            if raw_stage != "churned":
+                data["stage_index_sum"] += CARD_STAGE_INDEX.get(card_stage, 0) * count
+                data["stage_index_count"] += count
+
+    for project in projects:
+        project_id = int(project.get("id") or 0)
+        data = breakdowns.get(project_id)
+        if not data:
+            project.update({
+                "platforms": [],
+                "stage_counts": _empty_stage_counts(),
+                "published_count": 0,
+                "health_score": 0,
+                "health_basis": "simplified_no_reliable_time",
+                "health_breakdown": {"output_score": 0, "progress_score": 0, "output_rate": 0, "avg_stage_index": 0},
+                "needs_followup_count": None,
+                "overdue_count": None,
+                "current_focus": "暂无 KOL",
+                "bottleneck": "暂无 KOL",
+                "churned_count": 0,
+            })
+            continue
+        kol_count = int(data["kol_count"] or 0)
+        output_rate = (int(data["kol_with_evidence"] or 0) / kol_count) if kol_count else 0
+        avg_stage_index = (float(data["stage_index_sum"]) / int(data["stage_index_count"])) if int(data["stage_index_count"] or 0) else 0
+        output_score = output_rate * 60
+        progress_score = (avg_stage_index / 8) * 40
+        health_score = int(round(_clamp(output_score + progress_score, 0, 100)))
+        bottleneck_stage = ""
+        bottleneck_count = 0
+        for stage, count in data["raw_stage_counts"].items():
+            if stage in {"content_posted", "churned", "reviewed", "closed"}:
+                continue
+            if int(count or 0) > bottleneck_count:
+                bottleneck_stage = stage
+                bottleneck_count = int(count or 0)
+        bottleneck = f"{CARD_STAGE_LABELS.get(bottleneck_stage, bottleneck_stage or '当前阶段')} {bottleneck_count}人" if bottleneck_count else "暂无瓶颈"
+        project.update({
+            "platforms": sorted(data["platforms"]),
+            "stage_counts": data["stage_counts"],
+            "published_count": int(data["published_count"] or 0),
+            "health_score": health_score,
+            "health_basis": "simplified_no_reliable_time",
+            "health_breakdown": {
+                "output_score": round(output_score, 1),
+                "progress_score": round(progress_score, 1),
+                "output_rate": round(output_rate, 4),
+                "avg_stage_index": round(avg_stage_index, 2),
+            },
+            "needs_followup_count": None,
+            "overdue_count": None,
+            "current_focus": bottleneck,
+            "bottleneck": bottleneck,
+            "churned_count": int(data["churned_count"] or 0),
+        })
+
 
 def _log_project_audit(
     *,
@@ -34,6 +194,8 @@ def _log_project_audit(
 ) -> None:
     """Best-effort business audit for project lifecycle actions."""
     try:
+        from app.domains import audit
+
         audit.log_business_event(
             staff_id=staff_id(staff),
             action_type=action_type,
@@ -51,7 +213,7 @@ def list_projects(limit: int = 50, stage: str = "", *, staff: dict[str, Any] | N
     limit_i = max(1, min(200, int(limit or 50)))
     conn = get_conn()
     params: list[Any] = []
-    where = "WHERE p.stage_status <> 'deleted'"
+    where = "WHERE p.stage_status <> 'deleted' AND COALESCE(p.source_type, '') = 'excel_promo_plan'"
     if stage:
         where += " AND p.stage = ?"
         params.append(stage)
@@ -78,7 +240,7 @@ def list_projects(limit: int = 50, stage: str = "", *, staff: dict[str, Any] | N
                COALESCE(ev.evidence_count, 0) AS evidence_count,
                COALESCE(ev.evidence_kol_count, 0) AS evidence_kol_count,
                COALESCE(ev.total_views, 0) AS total_views,
-               s.name AS staff_name,
+               COALESCE(s.name, assignment_owner.name) AS staff_name,
                (
                    SELECT MIN(e.effective_at)
                    FROM vkpi_project_stage_events e
@@ -105,6 +267,22 @@ def list_projects(limit: int = 50, stage: str = "", *, staff: dict[str, Any] | N
             LEFT JOIN vkpi_kol_pool kp ON kp.id = a.kol_pool_id
             GROUP BY a.project_id
         ) pa ON pa.project_id = p.id
+        LEFT JOIN (
+            SELECT project_id, assigned_staff_id
+            FROM (
+                SELECT
+                    project_id,
+                    assigned_staff_id,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY project_id
+                        ORDER BY COUNT(*) DESC, assigned_staff_id ASC
+                    ) AS rn
+                FROM vkpi_project_kol_assignments
+                WHERE assigned_staff_id IS NOT NULL
+                GROUP BY project_id, assigned_staff_id
+            ) ranked_assignment_staff
+            WHERE rn = 1
+        ) assignment_owner_pick ON assignment_owner_pick.project_id = p.id
         LEFT JOIN vkpi_kol_pool pk ON pk.id = pa.primary_kol_pool_id
         LEFT JOIN (
             SELECT
@@ -118,13 +296,17 @@ def list_projects(limit: int = 50, stage: str = "", *, staff: dict[str, Any] | N
         ) ev ON ev.project_id = p.id
         LEFT JOIN staff st ON st.id = p.assigned_staff_id
         LEFT JOIN users s ON s.id = st.user_id
+        LEFT JOIN staff assignment_st ON assignment_st.id = assignment_owner_pick.assigned_staff_id
+        LEFT JOIN users assignment_owner ON assignment_owner.id = assignment_st.user_id
         {where}
         ORDER BY p.updated_at DESC, p.id DESC
         LIMIT ?
         """,
         (*params, limit_i),
     ).fetchall()
-    return {"projects": [dict(row) for row in rows], "scope": scope.scope_context(staff, staff_id_filter)}
+    projects = [dict(row) for row in rows]
+    _enrich_project_card_fields(conn, projects)
+    return {"projects": projects, "scope": scope.scope_context(staff, staff_id_filter)}
 
 
 def _normalize_project_products(body: dict[str, Any]) -> list[dict[str, str]]:
@@ -348,6 +530,150 @@ def update_project(project_id: int, body: dict[str, Any], *, staff: dict[str, An
         },
     )
     return {"id": int(project_id), "status": "updated", "updated_fields": sorted(updates.keys())}
+
+
+def list_available_project_kols(
+    project_id: int,
+    *,
+    query: str = "",
+    limit: int = 200,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return kol_pool rows not yet assigned to this project."""
+    ensure_vkpi_schema()
+    scope.assert_project_access(project_id, staff)
+    limit_i = max(1, min(500, int(limit or 200)))
+    conn = get_conn()
+    filters = [
+        """
+        NOT EXISTS (
+            SELECT 1
+            FROM vkpi_project_kol_assignments a
+            WHERE a.project_id = ? AND a.kol_pool_id = p.id
+        )
+        """
+    ]
+    params: list[Any] = [int(project_id)]
+    search = str(query or "").strip().lower()
+    if search:
+        like = f"%{search}%"
+        filters.append(
+            """
+            (
+                LOWER(COALESCE(p.display_name, '')) LIKE ?
+                OR LOWER(COALESCE(p.handle, '')) LIKE ?
+                OR LOWER(COALESCE(p.platform, '')) LIKE ?
+            )
+            """
+        )
+        params.extend([like, like, like])
+    rows = conn.execute(
+        f"""
+        SELECT
+            p.id,
+            p.handle,
+            p.display_name,
+            p.display_name AS channel_name,
+            p.platform,
+            p.profile_url,
+            p.avatar_url,
+            p.followers,
+            p.followers AS follower_count,
+            p.dashboard_account_type,
+            p.dashboard_tier,
+            p.has_video_evidence,
+            p.video_evidence_count
+        FROM vkpi_kol_pool p
+        WHERE {' AND '.join(filters)}
+        ORDER BY COALESCE(p.followers, 0) DESC, LOWER(COALESCE(p.display_name, p.handle, '')) ASC
+        LIMIT ?
+        """,
+        (*params, limit_i),
+    ).fetchall()
+    return {"kols": [dict(row) for row in rows], "project_id": int(project_id)}
+
+
+def add_project_kols(project_id: int, body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Attach existing kol_pool rows to a project as discovered assignments."""
+    ensure_vkpi_schema()
+    scope.assert_project_access(project_id, staff, write=True)
+    ids = body.get("kol_pool_ids") or body.get("kolPoolIds") or body.get("kol_ids") or body.get("kolIds") or []
+    if not isinstance(ids, list):
+        raise ValueError("kol_pool_ids must be a list")
+    kol_pool_ids = []
+    seen: set[int] = set()
+    for value in ids:
+        kol_pool_id = _int(value)
+        if kol_pool_id and kol_pool_id not in seen:
+            seen.add(kol_pool_id)
+            kol_pool_ids.append(kol_pool_id)
+    if not kol_pool_ids:
+        raise ValueError("kol_pool_ids required")
+    conn = get_conn()
+    existing_pool_ids = {
+        int(row["id"])
+        for row in conn.execute(
+            f"SELECT id FROM vkpi_kol_pool WHERE id IN ({','.join('?' for _ in kol_pool_ids)})",
+            kol_pool_ids,
+        ).fetchall()
+    }
+    missing = [kol_pool_id for kol_pool_id in kol_pool_ids if kol_pool_id not in existing_pool_ids]
+    actor_staff_id = staff_id(staff)
+    requested_staff_id = _int(body.get("assigned_staff_id") or body.get("assignedStaffId"))
+    assigned_staff_id = requested_staff_id if scope.can_view_all(staff) and requested_staff_id else actor_staff_id
+    now = utcnow()
+    inserted = 0
+    skipped_existing = 0
+    for kol_pool_id in kol_pool_ids:
+        if kol_pool_id not in existing_pool_ids:
+            continue
+        row = conn.execute(
+            """
+            INSERT INTO vkpi_project_kol_assignments (
+                project_id, kol_pool_id, stage, stage_status, assigned_staff_id,
+                source, source_ref, metadata_json, created_at, updated_at
+            ) VALUES (?, ?, 'discovered', 'active', ?, 'manual', ?, ?, ?, ?)
+            ON CONFLICT (project_id, kol_pool_id) DO NOTHING
+            RETURNING id
+            """,
+            (
+                int(project_id),
+                int(kol_pool_id),
+                assigned_staff_id or None,
+                f"ui:add_kol:{project_id}",
+                _json({"source": "project_detail_add_kol", "actor_staff_id": actor_staff_id}),
+                now,
+                now,
+            ),
+        ).fetchone()
+        if row:
+            inserted += 1
+        else:
+            skipped_existing += 1
+    if inserted:
+        conn.execute("UPDATE vkpi_projects SET updated_at=?, last_activity_at=? WHERE id=?", (now, now, int(project_id)))
+    conn.commit()
+    if inserted:
+        _log_project_audit(
+            staff=staff,
+            action_type="project_add_kols",
+            project_id=int(project_id),
+            detail=f"added {inserted} KOL assignments",
+            metadata={
+                "kol_pool_ids": [kol_pool_id for kol_pool_id in kol_pool_ids if kol_pool_id in existing_pool_ids],
+                "assigned_staff_id": assigned_staff_id or None,
+                "missing_kol_pool_ids": missing,
+                "skipped_existing": skipped_existing,
+            },
+        )
+    return {
+        "project_id": int(project_id),
+        "requested": len(kol_pool_ids),
+        "inserted": inserted,
+        "skipped_existing": skipped_existing,
+        "missing_kol_pool_ids": missing,
+    }
+
 
 def transition_project(project_id: int, body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     ensure_vkpi_schema()
