@@ -5,14 +5,29 @@ import type {
   VkpiProjectRow,
 } from '../../components/vkpi/vkpiTypes';
 import {
+  arrayValue,
   centsToUsd,
   durationLabel,
   numberValue,
+  objectValue,
   platformLabel,
   stageValue,
 } from '../dashboard';
 
 type Row = Record<string, unknown>;
+
+const stageCountKeys = ['discovery', 'contacted', 'replied', 'agreed', 'shipped', 'received', 'published', 'measured', 'closed'];
+
+function buildStageCounts(value: unknown): Record<string, number> {
+  const raw = objectValue(value);
+  return Object.fromEntries(stageCountKeys.map((key) => [key, numberValue(raw[key])]));
+}
+
+function buildPlatforms(value: unknown, fallback: unknown): ReturnType<typeof platformLabel>[] {
+  const raw = arrayValue(value);
+  const source = raw.length ? raw : [fallback];
+  return Array.from(new Set(source.map((item) => platformLabel(item)).filter(Boolean)));
+}
 
 export function buildDashboardProjects(
   projects: Row[],
@@ -66,6 +81,20 @@ export function buildDashboardProjects(
       marketplace: String(project.marketplace || ''),
       priority: String(project.priority || ''),
       shopifyLink: String(project.shopify_link || ''),
+      kolCount: numberValue(project.kol_count),
+      kolWithEvidence: numberValue(project.kol_with_evidence),
+      evidenceCount: numberValue(project.evidence_count),
+      platforms: buildPlatforms(project.platforms, project.kol_platform || project.platform),
+      stageCounts: buildStageCounts(project.stage_counts || project.stageCounts),
+      publishedCount: numberValue(project.published_count || project.publishedCount),
+      healthScore: numberValue(project.health_score || project.healthScore),
+      healthBasis: String(project.health_basis || project.healthBasis || ''),
+      healthBreakdown: objectValue(project.health_breakdown || project.healthBreakdown) as Record<string, number>,
+      needsFollowupCount: project.needs_followup_count == null ? null : numberValue(project.needs_followup_count),
+      overdueCount: project.overdue_count == null ? null : numberValue(project.overdue_count),
+      currentFocus: String(project.current_focus || project.currentFocus || ''),
+      bottleneck: String(project.bottleneck || ''),
+      churnedCount: numberValue(project.churned_count || project.churnedCount),
       createdAt: String(project.created_at || ''),
       startedAt,
       closedAt,

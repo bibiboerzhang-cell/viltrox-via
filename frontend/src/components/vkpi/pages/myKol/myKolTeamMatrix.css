@@ -1,0 +1,240 @@
+.mykol-team-panel .mykol-section-head > div:first-child {
+  flex: 0 0 auto;
+  min-width: 188px;
+}
+
+.mykol-team-panel .mykol-section-head h2 {
+  white-space: nowrap;
+}
+
+.mykol-team-head-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.mykol-team-page-mini {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 11px;
+  background: rgba(15, 23, 42, 0.58);
+  color: #91a0b8;
+  padding: 4px 6px 4px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.mykol-team-page-mini button {
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 8px;
+  background: rgba(30, 41, 59, 0.68);
+  color: #eef4ff;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.mykol-team-page-mini button:disabled {
+  opacity: 0.36;
+  cursor: not-allowed;
+}
+
+.mykol-team-page-mini b {
+  min-width: 16px;
+  color: #ffffff;
+  text-align: center;
+  font-size: 12px;
+}
+
+.mykol-team-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+  padding: 12px 15px 13px;
+}
+
+.mykol-staff-card {
+  display: flex;
+  min-height: 198px;
+  flex-direction: column;
+  padding: 13px 15px;
+  background:
+    radial-gradient(circle at 12% 0%, rgba(168, 85, 247, 0.12), transparent 32%),
+    linear-gradient(135deg, rgba(18, 25, 43, 0.7), rgba(2, 8, 16, 0.86));
+}
+
+.mykol-staff-card__top {
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.mykol-staff-card__identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.mykol-staff-card__top h3 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.mykol-staff-card__top h3 em {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  border-radius: 6px;
+  background: rgba(124, 58, 237, 0.32);
+  color: #dec6ff;
+  padding: 0 7px;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 850;
+  letter-spacing: 0.06em;
+}
+
+.mykol-staff-card__identity small {
+  display: block;
+  margin-top: 4px;
+  color: #66748d;
+  font-size: 12px;
+}
+
+.mykol-staff-card__reach {
+  margin-left: auto;
+  text-align: right;
+}
+
+.mykol-staff-card__reach strong {
+  display: block;
+  color: #ff5f93;
+  font-size: 22px;
+  line-height: 1.1;
+  letter-spacing: 0;
+}
+
+.mykol-staff-card__reach small {
+  display: block;
+  margin-top: 5px;
+  color: #21e6aa;
+  font-size: 12px;
+  font-weight: 780;
+}
+
+.mykol-staff-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.mykol-staff-stats span {
+  min-width: 0;
+}
+
+.mykol-staff-stats em {
+  display: block;
+  color: #7f8da7;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.mykol-staff-stats b {
+  display: block;
+  margin-top: 5px;
+  color: #ffffff;
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.mykol-staff-stats small {
+  display: block;
+  margin-top: 3px;
+  color: #21e6aa;
+  font-size: 11px;
+}
+
+.mykol-staff-stats small.is-warn {
+  color: #ffb86b;
+}
+
+.mykol-platform-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 9px;
+}
+
+.mykol-platform-tags span {
+  border-color: color-mix(in srgb, var(--tag-accent, #8b5cf6) 28%, rgba(148, 163, 184, 0.12));
+  background: rgba(15, 23, 42, 0.64);
+  color: #9fb0ca;
+  padding: 5px 8px;
+}
+
+.mykol-platform-tags span::first-letter {
+  color: var(--tag-accent, #8b5cf6);
+}
+
+.mykol-team-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 0 18px 18px;
+  color: #7f8da7;
+  font-size: 12px;
+}
+
+.mykol-team-pagination div {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mykol-team-pagination button {
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 9px;
+  background: rgba(15, 23, 42, 0.62);
+  color: #dbeafe;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 760;
+  cursor: pointer;
+}
+
+.mykol-team-pagination button:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.mykol-team-pagination b {
+  color: #ffffff;
+  font-size: 12px;
+}
+
+@media (max-width: 1100px) {
+  .mykol-team-head-right {
+    justify-content: flex-start;
+  }
+
+  .mykol-team-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mykol-staff-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

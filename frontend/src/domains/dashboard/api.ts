@@ -1,6 +1,8 @@
 import {
   copyTextToClipboard,
   exportVkpiReport,
+  fetchDashboardAccounts,
+  fetchDashboardAccountKpi,
   fetchVkpiDashboardData,
   generateWeeklyReport,
   runKpiRollup,
@@ -13,6 +15,8 @@ import {
 export {
   copyTextToClipboard,
   exportVkpiReport,
+  fetchDashboardAccounts,
+  fetchDashboardAccountKpi,
   fetchVkpiDashboardData,
   generateWeeklyReport,
   getMarketingAlertDetail,

@@ -1,0 +1,236 @@
+/* Verbatim from vkpi_v6.15.7_integrated.html */
+
+
+  body { background: #050810; font-family: -apple-system, BlinkMacSystemFont, Inter, "PingFang SC", sans-serif; margin: 0; }
+  .tabular-nums { font-variant-numeric: tabular-nums; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.16); }
+  canvas { display: block; }
+  .globe-hint {
+    position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
+    font-size: 10px; color: rgba(255,255,255,0.3); letter-spacing: 0.15em;
+    text-transform: uppercase; pointer-events: none; user-select: none;
+  }
+  /* Leaflet 暗色样式覆盖 */
+  .leaflet-container {
+    background: #040712 !important;
+    font-family: inherit;
+    outline: none;
+  }
+  .leaflet-control-zoom {
+    border: 1px solid rgba(255,255,255,0.1) !important;
+    background: rgba(11,18,32,0.9) !important;
+    backdrop-filter: blur(20px);
+  }
+  .leaflet-control-zoom a {
+    background: transparent !important;
+    color: rgba(255,255,255,0.7) !important;
+    border-color: rgba(255,255,255,0.08) !important;
+  }
+  .leaflet-control-zoom a:hover {
+    background: rgba(255,255,255,0.06) !important;
+    color: #fff !important;
+  }
+  .leaflet-control-attribution {
+    background: rgba(11,18,32,0.7) !important;
+    color: rgba(255,255,255,0.4) !important;
+    font-size: 9px !important;
+    backdrop-filter: blur(10px);
+  }
+  .leaflet-control-attribution a {
+    color: rgba(255,255,255,0.55) !important;
+  }
+  /* Custom pin styles */
+  .vkpi-pin-wrapper {
+    position: relative;
+    transform: translate(-50%, -50%);
+  }
+  .vkpi-pin-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #fff; box-shadow: 0 0 0 2px var(--pin-color), 0 0 12px var(--pin-color);
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    z-index: 2;
+  }
+  .vkpi-pin-pulse {
+    width: 30px; height: 30px; border-radius: 50%;
+    background: var(--pin-color);
+    opacity: 0.4;
+    position: absolute; left: 50%; top: 50%;
+    transform: translate(-50%, -50%);
+    animation: vkpi-pulse 2.4s ease-out infinite;
+  }
+  .vkpi-pin-ring {
+    width: 22px; height: 22px; border-radius: 50%;
+    border: 2px solid var(--pin-color);
+    opacity: 0.7;
+    position: absolute; left: 50%; top: 50%;
+    transform: translate(-50%, -50%);
+  }
+  @keyframes vkpi-pulse {
+    0%   { transform: translate(-50%, -50%) scale(0.6); opacity: 0.55; }
+    100% { transform: translate(-50%, -50%) scale(2.4); opacity: 0; }
+  }
+  .vkpi-pin-label {
+    position: absolute;
+    left: 50%; top: 18px;
+    transform: translateX(-50%);
+    background: rgba(11,18,32,0.92);
+    border: 1px solid rgba(255,255,255,0.1);
+    backdrop-filter: blur(8px);
+    color: #fff;
+    font-size: 10px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    white-space: nowrap;
+    pointer-events: none;
+    font-weight: 500;
+  }
+  .leaflet-marker-icon { background: transparent !important; border: none !important; }
+  /* V5.4: 隐藏 Leaflet 默认控件(用我们自己的) */
+  .leaflet-control-attribution,
+  .leaflet-control-zoom { display: none !important; }
+  
+  /* V5.4: 自定义 Pin Hover 信息卡 */
+  .vkpi-pin-tooltip {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    opacity: 1 !important;
+  }
+  .vkpi-pin-tooltip::before { display: none !important; }
+  .leaflet-tooltip.vkpi-pin-tooltip { 
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+  }
+  .vkpi-pin-card {
+    background: rgba(11, 18, 32, 0.96);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 12px;
+    padding: 12px 14px;
+    backdrop-filter: blur(20px);
+    box-shadow: 0 12px 36px rgba(0,0,0,0.6);
+    min-width: 220px;
+    font-family: inherit;
+  }
+  .vkpi-pin-card-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+  }
+  .vkpi-pin-avatar {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-weight: 600;
+    font-size: 12px;
+    flex-shrink: 0;
+  }
+  .vkpi-pin-info { min-width: 0; flex: 1; }
+  .vkpi-pin-name {
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .vkpi-pin-platform {
+    color: rgba(255,255,255,0.55);
+    font-size: 10px;
+    margin-top: 1px;
+  }
+  .vkpi-pin-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 3px 0;
+  }
+  .vkpi-pin-key {
+    color: rgba(255,255,255,0.5);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .vkpi-pin-val {
+    color: rgba(255,255,255,0.92);
+    font-size: 11px;
+    font-weight: 500;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .vkpi-pin-hint {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255,255,255,0.05);
+    color: rgba(255,255,255,0.4);
+    font-size: 10px;
+    text-align: center;
+  }
+  /* Leaflet 默认 z-index 太高,限制 map 内部最高到 400(让我们的 overlay 浮在上面)*/
+  .leaflet-pane         { z-index: 100 !important; }
+  .leaflet-tile-pane    { z-index: 100 !important; }
+  .leaflet-overlay-pane { z-index: 200 !important; }
+  .leaflet-marker-pane  { z-index: 300 !important; }
+  .leaflet-tooltip-pane { z-index: 350 !important; }
+  .leaflet-popup-pane   { z-index: 400 !important; }
+  .leaflet-control      { z-index: 450 !important; }
+  /* V6.2: 紫蓝主题滤镜 — 把灰色 Dark Matter 染成 V-KPI 主题 */
+  .vkpi-map-wrapper { background: #050b1a; }
+  
+  /* 关键 trick:
+     sepia(0.6) 把灰度变暖色基底
+     hue-rotate(200deg) 旋转到蓝紫色相
+     saturate 提色彩饱和度
+     World 视图大陆暗,所以微提亮;街道级已经够亮,不动 */
+  
+  /* 统一基础滤镜(World 到 City 都用这个) */
+  .vkpi-map-wrapper .leaflet-tile {
+    filter: brightness(1.4) contrast(1.1) sepia(0.55) saturate(1.6) hue-rotate(195deg);
+  }
+  
+  /* 海洋背景配色(瓦片间隙) */
+  .leaflet-container { background: #050b1a !important; }
+  /* 防御性 z-index — 防止 Tailwind JIT 不识别 z-[N] */
+  .z-overlay-mid  { z-index: 500 !important; }
+  .z-overlay-high { z-index: 600 !important; }
+
+  /* ─── KP module CSS (KOL Pool table + geo bars) ─── */
+  .kp-table { border-collapse: separate; border-spacing: 0; width: 100%; }
+  .kp-table thead th {
+    position: sticky; top: 0;
+    background: rgba(11,18,32,0.95);
+    backdrop-filter: blur(12px);
+    z-index: 10;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    font-weight: 500; font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.06em;
+    color: rgba(148,163,184,0.8);
+    padding: 9px 10px; text-align: left; white-space: nowrap;
+  }
+  .kp-table tbody tr {
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    transition: background 0.12s; cursor: pointer;
+  }
+  .kp-table tbody tr:hover { background: rgba(255,255,255,0.025); }
+  .kp-table tbody tr.is-selected {
+    background: rgba(168,85,247,0.07);
+    border-left: 2px solid #a855f7;
+  }
+  .kp-table tbody td {
+    padding: 10px 10px; font-size: 12px;
+    color: rgba(226,232,240,0.85); vertical-align: middle;
+  }
+  .kp-table tbody td:first-child { padding-left: 14px; }
+  .geo-bar-bg { background: rgba(255,255,255,0.06); height: 4px; border-radius: 2px; overflow: hidden; }
+  .geo-bar-fill { height: 100%; border-radius: 2px; transition: width 0.4s; }
+

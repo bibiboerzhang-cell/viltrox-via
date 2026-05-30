@@ -1,0 +1,281 @@
+.v2-shell-topbar {
+  position: relative;
+  z-index: 3;
+  min-height: 86px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid rgba(148, 163, 184, .22);
+  background: rgba(6, 13, 23, .68);
+  backdrop-filter: blur(22px) saturate(1.15);
+}
+
+.v2-shell-topbar__title {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.v2-shell-topbar__title strong {
+  color: #f7f9fc;
+  font-size: 18px;
+  line-height: 1.1;
+}
+
+.v2-shell-topbar__title span {
+  color: #8ea0ba;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.v2-shell-topbar__actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.v2-shell-icon-button,
+.v2-shell-report-button,
+.v2-shell-user-button,
+.v2-shell-popover button {
+  appearance: none;
+  border: 1px solid rgba(148, 163, 184, .25);
+  color: #f7f9fc;
+  background: rgba(255, 255, 255, .045);
+  font: inherit;
+  letter-spacing: 0;
+}
+
+.v2-shell-icon-button,
+.v2-shell-report-button,
+.v2-shell-user-button {
+  min-height: 44px;
+  border-radius: 14px;
+  cursor: pointer;
+  transition: border-color .18s ease, background .18s ease, transform .18s ease;
+}
+
+.v2-shell-icon-button {
+  position: relative;
+  width: 44px;
+  display: inline-grid;
+  place-items: center;
+  color: #c5d0e2;
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.v2-shell-icon-button .vkpi-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.v2-shell-icon-button i {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 9px;
+  height: 9px;
+  border-radius: 99px;
+  background: #ff4f73;
+  box-shadow: 0 0 0 4px rgba(255, 79, 115, .14);
+}
+
+.v2-shell-report-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 18px;
+  color: #eadbff;
+  border-color: rgba(168, 85, 247, .42);
+  background: rgba(126, 63, 242, .13);
+  font-weight: 900;
+}
+
+.v2-shell-report-button .vkpi-icon {
+  width: 17px;
+  height: 17px;
+  color: #b98cff;
+}
+
+.v2-shell-user-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 210px;
+  padding: 0 12px;
+  text-align: left;
+}
+
+.v2-shell-user-button > span,
+.v2-shell-popover__profile span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.v2-shell-user-button strong,
+.v2-shell-popover__profile strong {
+  color: #f7f9fc;
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+.v2-shell-user-button em,
+.v2-shell-popover__profile em {
+  color: #8999b1;
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.v2-shell-user-button > .vkpi-icon {
+  width: 16px;
+  height: 16px;
+  margin-left: auto;
+  color: #7f8ea6;
+}
+
+.v2-shell-icon-button:hover,
+.v2-shell-report-button:hover,
+.v2-shell-user-button:hover,
+.v2-shell-popover button:hover {
+  border-color: rgba(194, 209, 232, .44);
+  background: rgba(255, 255, 255, .075);
+  transform: translateY(-1px);
+}
+
+.v2-shell-icon-button[aria-expanded="true"],
+.v2-shell-user-button[aria-expanded="true"] {
+  border-color: rgba(168, 85, 247, .5);
+  background: rgba(126, 63, 242, .16);
+}
+
+.v2-shell-icon-button:focus-visible,
+.v2-shell-report-button:focus-visible,
+.v2-shell-user-button:focus-visible,
+.v2-shell-popover button:focus-visible {
+  outline: 2px solid rgba(168, 85, 247, .7);
+  outline-offset: 2px;
+}
+
+.v2-shell-popover {
+  position: absolute;
+  top: 70px;
+  width: min(360px, calc(100vw - 36px));
+  padding: 16px;
+  border: 1px solid rgba(148, 163, 184, .24);
+  border-radius: 18px;
+  background: rgba(8, 15, 27, .96);
+  box-shadow: 0 22px 58px rgba(0, 0, 0, .34);
+  display: none;
+  gap: 10px;
+}
+
+.v2-shell-popover.is-open {
+  display: grid;
+}
+
+.v2-shell-popover--help {
+  right: 438px;
+}
+
+.v2-shell-popover--messages {
+  right: 314px;
+}
+
+.v2-shell-popover--alerts {
+  right: 224px;
+}
+
+.v2-shell-popover--user {
+  right: 0;
+  width: min(430px, calc(100vw - 36px));
+}
+
+.v2-shell-popover strong {
+  color: #f7f9fc;
+  font-size: 13px;
+}
+
+.v2-shell-popover button {
+  min-height: 40px;
+  border-radius: 12px;
+  padding: 0 12px;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.v2-shell-popover button .vkpi-icon,
+.v2-shell-popover__row .vkpi-icon {
+  width: 15px;
+  height: 15px;
+  color: #8999b1;
+}
+
+.v2-shell-popover p,
+.v2-shell-popover__row {
+  margin: 0;
+  color: #a9b7cc;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.v2-shell-popover__profile {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(148, 163, 184, .18);
+}
+
+.v2-shell-popover__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 40px;
+}
+
+.v2-shell-popover__row span {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.v2-shell-popover__row b {
+  color: #f7f9fc;
+}
+
+.v2-shell-popover button.is-danger {
+  color: #ff8ea1;
+}
+
+@media (max-width: 960px) {
+  .v2-shell-topbar,
+  .v2-shell-topbar__actions {
+    flex-wrap: wrap;
+  }
+
+  .v2-shell-topbar__actions {
+    width: 100%;
+  }
+
+  .v2-shell-user-button {
+    flex: 1 1 220px;
+  }
+
+  .v2-shell-popover,
+  .v2-shell-popover--help,
+  .v2-shell-popover--messages,
+  .v2-shell-popover--alerts,
+  .v2-shell-popover--user {
+    top: 122px;
+    right: 0;
+  }
+}

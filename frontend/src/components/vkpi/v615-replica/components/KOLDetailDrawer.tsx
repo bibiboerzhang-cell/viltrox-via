@@ -1,0 +1,664 @@
+// @ts-nocheck
+// Verbatim from vkpi_v6.15.7_integrated.html
+
+
+import React from "react";
+import { motion } from "framer-motion";
+import { Activity, AlertTriangle, BadgeCheck, Camera, Check, ExternalLink, Flame, Globe2, Heart, Layers, Link2, MapPin, MoreHorizontal, RefreshCw, Send, Shield, ShoppingBag, Sparkles, Star, Target, UserPlus, Video, X, Zap } from "lucide-react";
+import { AudienceTypeChip } from "./AudienceTypeChip";
+import { CandidateKindChip } from "./CandidateKindChip";
+import { GeoTierChip } from "./GeoTierChip";
+import { KPAvatar } from "./KPAvatar";
+import { PlatformPill } from "./PlatformPill";
+import { candidateKindGroup } from "../lib/candidateKind";
+import { formatNumber, formatPercent } from "../lib/format";
+import { BRAND_TIER } from "../data/brandTier";
+import { COUNTRY_INFO, getCountryInfo } from "../data/countryInfo";
+import { TREND_PULSE_THIS_WEEK } from "../data/trendPulse";
+
+const e = React.createElement;
+
+function asArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function numberOr(value, fallback = null) {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === "string" && value.trim() === "") return fallback;
+  const numeric = typeof value === "number" ? value : Number(String(value ?? "").replace(/[% ,]/g, ""));
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function fixedOrDash(value, digits = 2) {
+  const numeric = numberOr(value);
+  return numeric == null ? "—" : numeric.toFixed(digits);
+}
+
+function pctOrZero(value) {
+  return numberOr(value, 0) * 100;
+}
+
+function scoreValue(value, fallback = 0) {
+  const numeric = numberOr(value);
+  if (numeric == null) return fallback;
+  return Math.max(0, Math.min(100, numeric));
+}
+
+function scoreText(value) {
+  const numeric = numberOr(value);
+  if (numeric == null) return "—";
+  return String(Math.round(Math.max(0, Math.min(100, numeric))));
+}
+
+function concernLabel(value) {
+  const text = String(value || "").trim();
+  const labels = {
+    contact_missing: "联系方式缺失",
+    missing_kol_profile: "主表画像缺失",
+    no_cooperation_history: "暂无合作历史",
+    risk_watchlist: "风险观察名单",
+  };
+  return labels[text] || text.replace(/_/g, " ");
+}
+
+export function KOLDetailDrawer({ item, detailLoading = false, detailError = "", onClose, inMyList, onToggleMyList, onContact }) {
+  if (!item) return null;
+  const devices = {
+    ...(item.devices || {}),
+    lenses: asArray(item.devices?.lenses),
+    competitor_brands: asArray(item.devices?.competitor_brands),
+  };
+  const geoDistribution = asArray(item.geo_distribution);
+  const trendHits = asArray(item.trend_hits);
+  const representativeVideos = asArray(item.representative_videos);
+  const recommendedProductLines = asArray(item.recommended_product_lines);
+  const potentialConcerns = asArray(item.potential_concerns);
+  const brandCollaborations = asArray(item.brand_collaborations);
+  const competitorCollabs = asArray(item.competitor_collabs);
+  const loyaltySignals = item.loyalty_signals || {};
+  const v6Breakdown = item.v6_breakdown && typeof item.v6_breakdown === "object"
+    ? item.v6_breakdown
+    : item.score_breakdown && typeof item.score_breakdown === "object"
+      ? item.score_breakdown
+      : null;
+  
+  return e(motion.div, {
+    initial: { x: "100%" }, animate: { x: 0 }, exit: { x: "100%" },
+    transition: { type: "spring", damping: 28, stiffness: 240 },
+    "aria-label": "KOL Pool 详情",
+    className: "fixed top-0 right-0 h-full w-[520px] bg-[#0a1020] border-l border-white/[0.08] shadow-2xl z-50 flex flex-col"
+  },
+    // ─── Header ───
+    e("div", { className: "px-5 py-4 border-b border-white/[0.06]" },
+      e("div", { className: "flex items-start gap-3 mb-2" },
+        e(KPAvatar, { name: item.display_name || item.handle, color: item.avatar_color, size: 44 }),
+        e("div", { className: "flex-1 min-w-0" },
+          e("div", { className: "flex items-center gap-1.5" },
+            e("h2", { className: "text-[14px] font-semibold text-white truncate" }, item.handle),
+            item.linked_main_kol_id && e(BadgeCheck, { size: 12, className: "text-emerald-400 shrink-0" }),
+          ),
+          e("div", { className: "text-[11px] text-slate-400 truncate" }, item.display_name || ""),
+        ),
+        // V6 Fit · 紧凑右上
+        item.v6_fit != null && e("div", { className: "text-right shrink-0 px-2.5 py-1 rounded-md border border-white/[0.06] bg-white/[0.02]" },
+          e("div", { className: "text-[8px] text-slate-500 uppercase tracking-wider leading-none mb-0.5" }, "V6 Fit"),
+          e("div", { className: "text-[18px] font-semibold tabular-nums leading-none",
+            style: { color: item.v6_fit >= 85 ? "#10b981" : item.v6_fit >= 70 ? "#fbbf24" : "#fb923c" }
+          }, item.v6_fit)
+        ),
+        e("button", { onClick: onClose, className: "rounded-md border border-white/10 bg-white/5 p-1.5 text-slate-400 hover:text-white shrink-0" },
+          e(X, { size: 13 })
+        )
+      ),
+      // chips 单独一行
+      e("div", { className: "flex items-center gap-1.5 flex-wrap" },
+        e(CandidateKindChip, { kind: item.candidate_kind }),
+        e(PlatformPill, { platform: item.platform }),
+        e(AudienceTypeChip, { type: item.audience_type }),
+        e(GeoTierChip, { tier: item.geo_tier }),
+        item.country && e("span", { className: "text-[10px] text-slate-500 inline-flex items-center gap-1" },
+          e(MapPin, { size: 9 }),
+          item.country
+        ),
+        devices.has_viltrox && e("span", {
+          className: "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium",
+          style: { background: "rgba(168,85,247,0.18)", color: "#c4b5fd" }
+        }, e(Check, { size: 9 }), "已用 Viltrox"),
+        devices.competitor_brands.length > 0 && e("span", {
+          className: "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium",
+          style: { background: "rgba(248,113,113,0.15)", color: "#fca5a5" },
+          title: "在用友商:" + devices.competitor_brands.join(", ")
+        }, e(AlertTriangle, { size: 9 }), "友商用户"),
+      ),
+      (detailLoading || detailError) && e("div", {
+        className: "mt-3 rounded-md border px-2.5 py-2 text-[10.5px] leading-snug",
+        style: detailError
+          ? { background: "rgba(251,113,133,0.10)", borderColor: "rgba(251,113,133,0.28)", color: "#fecdd3" }
+          : { background: "rgba(96,165,250,0.10)", borderColor: "rgba(96,165,250,0.24)", color: "#bfdbfe" }
+      }, detailError ? "详情 API 无信号: " + detailError + "；当前显示列表快照。" : "正在读取详情；先显示列表快照。"),
+      // ── New-candidate action bar: promote / discard ──
+      candidateKindGroup(item.candidate_kind) === "new" && e("div", {
+        className: "mt-3 flex items-center gap-2 px-2.5 py-2 rounded-md border",
+        style: {
+          background: "rgba(168,85,247,0.06)",
+          borderColor: "rgba(168,85,247,0.25)",
+        }
+      },
+        e(Sparkles, { size: 12, className: "text-purple-300 shrink-0" }),
+        e("div", { className: "flex-1 min-w-0" },
+          e("div", { className: "text-[10.5px] text-purple-100" },
+            item.candidate_kind === "new_promoted"  ? "新发现 · 高潜候选" :
+            item.candidate_kind === "new_validated" ? "新发现 · 已通过基础校验" :
+                                                       "新发现 · 校验中"
+          ),
+          e("div", { className: "text-[9.5px] text-slate-400 truncate" },
+            "来源 query: ", e("span", { className: "text-slate-300" }, item.source_query || "—"),
+            "  ·  发现于 ", item.discovered_at || "—",
+            "  ·  validation_score ", item.validation_score
+          ),
+        ),
+        item.candidate_kind === "new_promoted" && e("button", {
+          onClick: ev => ev.stopPropagation(),
+          disabled: true,
+          className: "flex items-center gap-1 rounded-md px-2.5 py-1 text-[10px] font-medium text-slate-400 shrink-0 cursor-not-allowed",
+          style: { background: "rgba(148,163,184,0.14)" }
+        }, e(UserPlus, { size: 10 }), "待接入写入")
+      )
+    ),
+    
+    // ─── Scroll content ───
+    e("div", { className: "flex-1 overflow-y-auto" },
+      // ── Bio ──
+      item.bio && e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
+        e("p", { className: "text-[11px] text-slate-300 leading-relaxed" }, item.bio)
+      ),
+      
+      // ── Why V6 Fit = N? · 速读 4 bullets(规则生成) ──
+      v6Breakdown && (() => {
+        const b = v6Breakdown;
+        const dims = [
+          { key: "loyalty",  Icon: Heart, color: "#86efac",
+            insight: (v) => "高忠诚度 ×" + fixedOrDash(v) + " · 老粉 " + (loyaltySignals.old_fans_pct ?? "—") + "% · 回复率 " + (loyaltySignals.creator_reply_pct ?? "—") + "%" },
+          { key: "geo_match", Icon: Target, color: "#c4b5fd",
+            insight: (v) => "海外 Geo 命中 ×" + fixedOrDash(v) + " · " + (COUNTRY_INFO[geoDistribution?.[0]?.country]?.flag || "") + " " + (geoDistribution?.[0]?.country || "—") + " 占 " + Math.round(pctOrZero(geoDistribution?.[0]?.share)) + "%" },
+          { key: "trend",    Icon: Flame, color: "#fda4af",
+            insight: (v) => "本周流行命中 ×" + fixedOrDash(v) + (trendHits.length ? " · #" + trendHits[0] : " · 未命中") },
+          { key: "real_er",  Icon: (v) => v >= 1 ? Check : AlertTriangle, color: (v) => v >= 1 ? "#86efac" : "#fde68a",
+            insight: (v) => "Real ER ×" + fixedOrDash(v) + " · 去水后 " + formatPercent(item.real_er_pct, 2) },
+          { key: "upgrade",  Icon: Zap, color: "#fde68a",
+            insight: (v) => "升级窗口 " + (devices.upgrade_window || "—") + " · 系数 ×" + fixedOrDash(v) },
+          { key: "industry", Icon: Video, color: "#c4b5fd",
+            insight: (v) => "行业 Tier " + (item.industry_tier || "—") + " · " + (item.industry_label || "") + " ×" + fixedOrDash(v) },
+          { key: "platform_native", Icon: Activity, color: "#94a3b8",
+            insight: (v) => "平台原生度 ×" + fixedOrDash(v) },
+          { key: "price_match", Icon: ShoppingBag, color: "#94a3b8",
+            insight: (v) => "价位匹配 ×" + fixedOrDash(v) },
+        ];
+        // 取偏离 1 最远的 top 3(最影响分数的维度)
+        const scored = dims
+          .filter(d => b[d.key] != null)
+          .map(d => ({ ...d, value: b[d.key], deviation: Math.abs(b[d.key] - 1) }))
+          .sort((a, x) => x.deviation - a.deviation)
+          .slice(0, 3);
+        // 第 4 条:风险/机会(永远显示一条,平衡感)
+        let risk;
+        if (competitorCollabs.length > 0) {
+          risk = { Icon: Shield, color: "#fca5a5", text: "友商合作历史 · " + competitorCollabs.map(c => typeof c === "string" ? c : (c.brand || "")).join(", ") };
+        } else if (devices.competitor_brands.length > 0) {
+          risk = { Icon: AlertTriangle, color: "#fde68a", text: "当前在用友商 · " + devices.competitor_brands.join(", ") };
+        } else if (potentialConcerns.length > 0) {
+          risk = { Icon: AlertTriangle, color: "#fde68a", text: concernLabel(potentialConcerns[0]) };
+        } else {
+          risk = { Icon: Check, color: "#86efac", text: "无友商合作 · 合作记录干净" };
+        }
+        return e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
+          e("div", { className: "flex items-center justify-between mb-2" },
+            e("div", { className: "flex items-center gap-1.5" },
+              e(Sparkles, { size: 11, className: "text-purple-400" }),
+              e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "为什么 V6 Fit = " + item.v6_fit + "?")
+            ),
+            e("span", { className: "text-[9px] text-slate-600" }, "速读 · 看完整公式 ↓")
+          ),
+          e("div", { className: "space-y-1.5" },
+            scored.map((d, i) => {
+              const IconComp = typeof d.Icon === "function" && !d.Icon.$$typeof ? d.Icon(d.value) : d.Icon;
+              const color = typeof d.color === "function" ? d.color(d.value) : d.color;
+              return e("div", { key: i, className: "flex items-start gap-2 text-[11px] leading-snug" },
+                e("span", { className: "shrink-0 inline-flex items-center justify-center w-4 h-4", style: { color } }, e(IconComp, { size: 11 })),
+                e("span", { className: "text-slate-300" }, d.insight(d.value))
+              );
+            }),
+            e("div", { className: "flex items-start gap-2 text-[11px] leading-snug pt-1.5 mt-1 border-t border-white/[0.04]" },
+              e("span", { className: "shrink-0 inline-flex items-center justify-center w-4 h-4", style: { color: risk.color } }, e(risk.Icon, { size: 11 })),
+              e("span", { className: "text-slate-300" }, risk.text)
+            )
+          )
+        );
+      })(),
+      
+      // ── 4-card 2x2 grid: Real ER / Geo / Loyalty / Trend ──
+      e("div", { className: "px-5 py-3 border-b border-white/[0.06] grid grid-cols-2 gap-2" },
+        // Real Engagement
+        e("div", { className: "rounded-md border border-white/[0.06] bg-white/[0.02] p-2.5" },
+          e("div", { className: "flex items-center gap-1.5 mb-1.5" },
+            e(Heart, { size: 10, className: "text-rose-400" }),
+            e("span", { className: "text-[9px] uppercase tracking-wider text-slate-400" }, "Real Engagement")
+          ),
+          e("div", { className: "flex items-baseline gap-1.5" },
+            e("span", { className: "text-xl font-light text-white tabular-nums" }, formatPercent(item.real_er_pct, 2)),
+            item.er_calibration != null && e("span", { className: "text-[10px] text-rose-400 tabular-nums" }, item.er_calibration + "%")
+          ),
+          e("div", { className: "text-[9px] text-slate-500" }, 
+            "原始 ", formatPercent(item.engagement_rate, 1), " · 去 ", Math.abs(item.er_calibration || 0), "% 水分"
+          )
+        ),
+        // Audience Type · HHI
+        e("div", { className: "rounded-md border border-white/[0.06] bg-white/[0.02] p-2.5" },
+          e("div", { className: "flex items-center gap-1.5 mb-1.5" },
+            e(MapPin, { size: 10, className: "text-amber-400" }),
+            e("span", { className: "text-[9px] uppercase tracking-wider text-slate-400" }, "Audience · HHI")
+          ),
+          e("div", { className: "flex items-baseline gap-1.5" },
+            e(AudienceTypeChip, { type: item.audience_type }),
+            e("span", { className: "text-[10px] text-slate-500 tabular-nums" }, "HHI " + fixedOrDash(item.hhi || 0, 2))
+          ),
+          e("div", { className: "text-[9px] text-slate-500 mt-1" }, 
+            item.audience_type === "Global" ? "适合国际展会 / 跨市场" :
+            item.audience_type === "Regional" ? "适合区域 campaign" :
+            "适合本地线下活动"
+          )
+        ),
+        // Loyalty
+        e("div", { className: "rounded-md border border-white/[0.06] bg-white/[0.02] p-2.5" },
+          e("div", { className: "flex items-center gap-1.5 mb-1.5" },
+            e(Shield, { size: 10, className: "text-emerald-400" }),
+            e("span", { className: "text-[9px] uppercase tracking-wider text-slate-400" }, "Loyalty Depth")
+          ),
+          e("div", { className: "flex items-baseline gap-1.5" },
+            e("span", { className: "text-xl font-light text-white tabular-nums" }, fixedOrDash(item.loyalty_score, 2)),
+          ),
+          e("div", { className: "text-[9px] text-slate-500" }, 
+            loyaltySignals.old_fans_pct != null ? "老粉 " + loyaltySignals.old_fans_pct + "% · 回复率 " + loyaltySignals.creator_reply_pct + "%" : "—"
+          )
+        ),
+        // Trend Resonance
+        e("div", { className: "rounded-md border border-white/[0.06] bg-white/[0.02] p-2.5" },
+          e("div", { className: "flex items-center gap-1.5 mb-1.5" },
+            e(Flame, { size: 10, className: "text-rose-400" }),
+            e("span", { className: "text-[9px] uppercase tracking-wider text-slate-400" }, "Trend Resonance")
+          ),
+          e("div", { className: "flex items-baseline gap-1.5" },
+            e("span", { className: "text-xl font-light text-white tabular-nums" }, item.trend_resonance != null ? pctOrZero(item.trend_resonance).toFixed(0) : "—"),
+            e("span", { className: "text-[10px] text-slate-500" }, "/ 100")
+          ),
+          e("div", { className: "text-[9px] text-slate-500" }, 
+            item.trend_resonance == null ? "Trend 数据待接入" : trendHits.length > 0 ? "命中 " + trendHits.length + " 个真实 trend" : "无 trend 信号"
+          )
+        )
+      ),
+      
+      // ── 11 维度雷达 ──
+      e("div", { className: "px-5 py-4 border-b border-white/[0.06]" },
+        e("div", { className: "flex items-center justify-between mb-3" },
+          e("div", { className: "flex items-center gap-1.5" },
+            e(Target, { size: 11, className: "text-purple-400" }),
+            e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "11 维度评估")
+          ),
+          e("button", {
+            disabled: true,
+            title: "待接入: 需要安全刷新 API，不触发 provider",
+            className: "flex cursor-not-allowed items-center gap-1 text-[9px] text-slate-500 opacity-70"
+          },
+            e(RefreshCw, { size: 9 }), "刷新 · 待接入"
+          )
+        ),
+        (() => {
+          const followers = numberOr(item.followers, 0);
+          const realEr = numberOr(item.real_er_pct);
+          const trend = numberOr(item.trend_resonance);
+          const geoMatch = numberOr(item.geo_match);
+          const weeklyDelta = numberOr(item.weekly_views_delta);
+          const quality =
+            item.production_quality === "premium" ? 95 :
+            item.production_quality === "high" ? 80 :
+            item.production_quality ? 60 : null;
+          const dims = [
+            { label: "Fit",      value: scoreValue(item.v6_fit, null) },
+            { label: "Reach",    value: followers > 0 ? Math.min(100, Math.log10(followers + 1) * 16.6) : null },
+            { label: "ER",       value: realEr == null ? null : Math.min(100, realEr * 8) },
+            { label: "Quality",  value: quality },
+            { label: "Style",    value: trend == null ? null : trend * 100 },
+            { label: "Audience", value: geoMatch == null ? null : geoMatch * 80 },
+            { label: "Growth",   value: weeklyDelta == null ? null : Math.min(100, Math.max(0, 50 + weeklyDelta * 3)) },
+            { label: "Brand",    value: brandCollaborations.length > 0 ? Math.min(95, 50 + (brandCollaborations.length * 15)) : null },
+            { label: "Risk",     value: Math.max(0, 100 - potentialConcerns.length * 25) },
+            { label: "Comm",     value: item.email ? 90 : 35 },
+            { label: "Activity", value: item.last_seen_at ? 78 : 20 },
+          ];
+          return e("div", { className: "flex items-center gap-4" },
+            e("svg", { width: 160, height: 160, viewBox: "-100 -100 200 200", className: "shrink-0" },
+              [20, 40, 60, 80].map(r => e("circle", { key: r, cx: 0, cy: 0, r, className: "radar-bg", fill: "none", stroke: "rgba(255,255,255,0.06)" })),
+              dims.map((d, i) => {
+                const angle = (i / dims.length) * 2 * Math.PI - Math.PI / 2;
+                return e("line", {
+                  key: i, x1: 0, y1: 0,
+                  x2: 80 * Math.cos(angle), y2: 80 * Math.sin(angle),
+                  stroke: "rgba(255,255,255,0.06)", strokeWidth: 1
+                });
+              }),
+              e("polygon", {
+                fill: "rgba(168,85,247,0.18)",
+                stroke: "#a855f7",
+                strokeWidth: 1.5,
+                points: dims.map((d, i) => {
+                  const angle = (i / dims.length) * 2 * Math.PI - Math.PI / 2;
+                  const r = (scoreValue(d.value) / 100) * 80;
+                  return `${r * Math.cos(angle)},${r * Math.sin(angle)}`;
+                }).join(" ")
+              })
+            ),
+            e("div", { className: "flex-1 grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]" },
+              dims.map((d, i) => e("div", { key: i, className: "flex items-center justify-between" },
+                e("span", { className: "text-slate-400" }, d.label),
+                e("span", { className: "text-white tabular-nums font-medium" }, scoreText(d.value))
+              ))
+            )
+          );
+        })()
+      ),
+      
+      // ── 联系方式 & 代表视频 ──
+      e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
+        e("div", { className: "flex items-center gap-1.5 mb-2" },
+          e(Send, { size: 11, className: "text-cyan-400" }),
+          e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "联系方式 & 代表作")
+        ),
+        // 联系方式
+        e("div", { className: "space-y-1 mb-3" },
+          e("div", { className: "flex items-center gap-2 text-[11px]" },
+            e("span", { className: "text-slate-500 w-[40px]" }, "邮箱"),
+            item.email
+              ? e("span", { className: "text-cyan-300" }, item.email)
+              : e("span", { className: "text-slate-500 italic" }, "未收集 · 邀请时需先添加"),
+            item.email && e("button", {
+              className: "ml-auto p-1 rounded hover:bg-white/[0.04] text-slate-400 hover:text-white",
+              title: "复制邮箱"
+            }, e(ExternalLink, { size: 10 }))
+          ),
+          e("div", { className: "flex items-center gap-2 text-[11px]" },
+            e("span", { className: "text-slate-500 w-[40px]" }, "主页"),
+            item.profile_url
+              ? e("a", { 
+                  href: item.profile_url, target: "_blank", rel: "noreferrer",
+                  className: "text-cyan-300 hover:text-cyan-200 truncate flex-1"
+                }, item.profile_url.replace("https://", ""))
+              : e("span", { className: "text-slate-500" }, "—")
+          )
+        ),
+        // 代表作视频
+        representativeVideos.length > 0 && e("div", null,
+          e("div", { className: "text-[10px] text-slate-500 mb-1.5" }, "代表作"),
+          e("div", { className: "grid grid-cols-3 gap-1.5" },
+            representativeVideos.map((v, i) => e("div", {
+              key: i,
+              className: "rounded-md border border-white/[0.06] bg-white/[0.02] overflow-hidden hover:bg-white/[0.04] cursor-pointer transition-colors"
+            },
+              e("div", { 
+                className: "aspect-video bg-gradient-to-br from-slate-700 to-slate-900 flex items-center justify-center relative"
+              },
+                e(Video, { size: 16, className: "text-slate-500" }),
+                e("span", { 
+                  className: "absolute bottom-1 right-1 px-1 rounded text-[8px] tabular-nums text-white",
+                  style: { background: "rgba(0,0,0,0.7)" }
+                }, v.duration)
+              ),
+              e("div", { className: "p-1.5" },
+                e("div", { className: "text-[9px] text-white truncate leading-tight" }, v.title),
+                e("div", { className: "text-[8px] text-slate-500 tabular-nums" }, v.views + " 播放")
+              )
+            ))
+          )
+        )
+      ),
+      devices.camera_body && e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
+        e("div", { className: "flex items-center gap-1.5 mb-2" },
+          e(Camera, { size: 11, className: "text-slate-400" }),
+          e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "当前设备 & 升级机会")
+        ),
+        // Camera body
+        e("div", { className: "flex items-center gap-2 mb-2" },
+          e("span", { className: "text-[10px] text-slate-500" }, "机身"),
+          e("span", { className: "text-[12px] text-white font-medium" }, devices.camera_body)
+        ),
+        // Lenses
+        devices.lenses.length > 0 && e("div", { className: "space-y-1 mb-2" },
+          e("div", { className: "text-[10px] text-slate-500 mb-1" }, "在用镜头"),
+          devices.lenses.map((l, i) => {
+            const bi = BRAND_TIER[l.brand] || { color: "#94a3b8", label: l.brand };
+            return e("div", { key: i, className: "flex items-center gap-2 text-[11px]" },
+              e("span", {
+                className: "px-1.5 py-0.5 rounded text-[9px] font-medium uppercase tracking-wider",
+                style: { 
+                  background: bi.tier === "viltrox" ? "rgba(168,85,247,0.18)" 
+                           : bi.tier === "competitor" ? "rgba(248,113,113,0.15)" 
+                           : "rgba(148,163,184,0.12)",
+                  color: bi.color
+                }
+              }, bi.label),
+              e("span", { className: "text-white" }, l.model),
+              l.type === "viltrox" && e("span", { className: "ml-auto text-[9px] text-emerald-400 inline-flex items-center gap-0.5" }, e(Check, { size: 9 }), "已用")
+            );
+          })
+        ),
+        // Upgrade window
+        e("div", { className: "flex items-center gap-2 mt-2 pt-2 border-t border-white/[0.04]" },
+          e("span", { className: "text-[10px] text-slate-500" }, "Upgrade 窗口"),
+          e("span", { 
+            className: "px-2 py-0.5 rounded text-[10px] font-medium",
+            style: {
+              background: devices.upgrade_window === "very high" ? "rgba(16,185,129,0.2)"
+                       : devices.upgrade_window === "high" ? "rgba(16,185,129,0.15)"
+                       : devices.upgrade_window === "medium" ? "rgba(251,191,36,0.15)"
+                       : "rgba(100,116,139,0.15)",
+              color: devices.upgrade_window === "very high" ? "#34d399"
+                   : devices.upgrade_window === "high" ? "#86efac"
+                   : devices.upgrade_window === "medium" ? "#fde68a"
+                   : "#94a3b8"
+            }
+          }, devices.upgrade_window),
+          e("span", { className: "text-[10px] text-slate-500" }, "× 系数 " + fixedOrDash(item.upgrade_factor || 1, 2))
+        )
+      ),
+      
+      // ── Geo distribution ──
+      geoDistribution.length > 0 && e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
+        e("div", { className: "flex items-center gap-1.5 mb-2" },
+          e(Globe2, { size: 11, className: "text-cyan-400" }),
+          e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "粉丝地理分布 · 估算 Reach")
+        ),
+        e("div", { className: "space-y-1.5" },
+          geoDistribution.map((g, i) => {
+            const cInfo = getCountryInfo(g.country) || { code: g.country, flag: "·", name: g.country, tier: "?" };
+            const reach = item.estimated_country_reach?.[cInfo.code] || item.estimated_country_reach?.[g.country];
+            const sharePct = pctOrZero(g.share);
+            return e("div", { key: i, className: "flex items-center gap-2 text-[11px]" },
+              e("span", { style: { fontSize: 12 } }, cInfo.flag),
+              e("span", { className: "text-white font-medium w-[28px]" }, cInfo.code),
+              e(GeoTierChip, { tier: cInfo.tier }),
+              e("div", { className: "flex-1 geo-bar-bg max-w-[120px]" },
+                e("div", { className: "geo-bar-fill", style: {
+                  width: sharePct + "%",
+                  background: cInfo.tier === "A" ? "#10b981" : cInfo.tier === "B" ? "#fbbf24" : "#64748b"
+                }})
+              ),
+              e("span", { className: "text-slate-300 tabular-nums w-[40px] text-right" }, sharePct.toFixed(0) + "%"),
+              reach && e("span", { className: "text-slate-500 tabular-nums text-[10px] ml-auto" }, "~" + formatNumber(reach) + " reach")
+            );
+          })
+        )
+      ),
+      
+      // ── V6 Fit Breakdown ──
+      e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
+        e("div", { className: "flex items-center gap-1.5 mb-2" },
+          e(Layers, { size: 11, className: "text-purple-400" }),
+          e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "V6 Fit 公式 Breakdown")
+        ),
+        e("div", { className: "space-y-1.5" },
+          [
+            { label: "Base Match (内容)",        value: v6Breakdown?.base ?? item.v6_fit,         suffix: "" },
+            { label: "× Industry Tier",          value: v6Breakdown?.industry,     suffix: "" },
+            { label: "× Upgrade Factor",         value: v6Breakdown?.upgrade ?? item.upgrade_factor,      suffix: "" },
+            { label: "× Geo Match (海外加权)",    value: v6Breakdown?.geo_match ?? item.geo_match,    suffix: "" },
+            { label: "× Real ER",                value: v6Breakdown?.real_er,      suffix: "" },
+            { label: "× Loyalty Depth",          value: v6Breakdown?.loyalty,      suffix: "" },
+            { label: "× Trend Resonance",        value: v6Breakdown?.trend ?? item.trend_resonance,        suffix: "" },
+            { label: "× Platform Native",        value: v6Breakdown?.platform_native, suffix: "" },
+            { label: "× Price Match",            value: v6Breakdown?.price_match,  suffix: "" },
+            { label: "× Network Boost",          value: v6Breakdown?.network,      suffix: "" },
+          ].map((m, i) => {
+            const val = m.value;
+            const isBase = i === 0;
+            const isPositive = !isBase && val >= 1.0;
+            const isNegative = !isBase && val < 1.0;
+            return e("div", { key: i, className: "flex items-center justify-between text-[11px]" },
+              e("span", { className: "text-slate-400" }, m.label),
+              e("span", { 
+                className: "tabular-nums font-medium",
+                style: { color: isBase ? "#fff" : isPositive ? "#86efac" : isNegative ? "#fca5a5" : "#fff" }
+              }, isBase ? (val ?? "—") : fixedOrDash(val))
+            );
+          }),
+          v6Breakdown?.competitor_decay < 0 && e("div", { className: "flex items-center justify-between text-[11px]" },
+            e("span", { className: "text-slate-400" }, "− Competitor Decay"),
+            e("span", { className: "tabular-nums font-medium text-rose-400" }, v6Breakdown.competitor_decay)
+          ),
+          e("div", { className: "border-t border-white/[0.06] pt-1.5 mt-1 flex items-center justify-between" },
+            e("span", { className: "text-[11px] text-slate-300 font-medium" }, "= Final V6 Fit"),
+            e("span", { className: "text-[14px] font-semibold tabular-nums",
+              style: { color: item.v6_fit >= 85 ? "#10b981" : item.v6_fit >= 70 ? "#fbbf24" : "#fb923c" }
+            }, scoreText(item.v6_fit))
+          )
+        )
+      ),
+      
+      // ── Trend hits ──
+      trendHits.length > 0 && e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
+        e("div", { className: "flex items-center gap-1.5 mb-2" },
+          e(Flame, { size: 11, className: "text-rose-400" }),
+          e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "本周 Trend 命中")
+        ),
+        e("div", { className: "flex flex-wrap gap-1" },
+          trendHits.map((t, i) => e("span", {
+            key: i,
+            className: "px-2 py-0.5 rounded text-[10px] border",
+            style: { background: "rgba(239,68,68,0.08)", borderColor: "rgba(239,68,68,0.2)", color: "#fda4af" }
+          }, "#" + t))
+        )
+      ),
+      
+      // ── Viltrox Fit reason ──
+      e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
+        e("div", { className: "flex items-center gap-1.5 mb-1.5" },
+          e(Sparkles, { size: 11, className: "text-purple-400" }),
+          e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "Viltrox 适配判断")
+        ),
+        item.viltrox_fit_reason
+          ? e("p", { className: "text-[11px] text-slate-300 leading-relaxed" }, item.viltrox_fit_reason)
+          : e("p", { className: "text-[11px] text-slate-500 leading-relaxed" }, "本地适配原因字段为空 · 等待 enrichment 或人工补全")
+      ),
+      
+      // ── Recommended products ──
+      e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
+        e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500 mb-2" }, "推荐产品线"),
+        recommendedProductLines.length > 0
+          ? e("div", { className: "flex flex-wrap gap-1.5" }, recommendedProductLines.map((p, i) => e("span", {
+            key: i,
+            className: "px-2 py-1 rounded-md border text-[10px]",
+            style: { background: "rgba(168,85,247,0.08)", borderColor: "rgba(168,85,247,0.3)", color: "#c4b5fd" }
+          }, p)))
+          : e("div", { className: "text-[11px] text-slate-500" }, "本地推荐字段为空 · 等待 enrichment 或历史合作导入")
+      ),
+      
+      // ── Concerns ──
+      e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
+        e("div", { className: "flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-amber-300 mb-2" },
+          e(AlertTriangle, { size: 10 }), "风险点"
+        ),
+        potentialConcerns.length > 0
+          ? e("div", { className: "space-y-1" }, potentialConcerns.map((c, i) => e("div", { 
+            key: i,
+            className: "text-[11px] text-slate-300 pl-3 border-l-2 border-amber-400/40 py-0.5"
+          }, concernLabel(c))))
+          : e("div", { className: "text-[11px] text-slate-500" }, "暂无结构化风险点 · 本地风险字段为空")
+      ),
+      
+      // ── Brand history ──
+      e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
+        e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500 mb-2" }, "品牌合作历史"),
+        brandCollaborations.length > 0
+          ? e("div", { className: "space-y-1.5" }, brandCollaborations.map((b, i) => {
+            const isCompetitor = competitorCollabs.includes(b.brand);
+            return e("div", { key: i, className: "flex items-center gap-2 text-[10px]" },
+              e("span", { 
+                className: "shrink-0 px-1.5 py-0.5 rounded text-[9px] font-medium",
+                style: isCompetitor 
+                  ? { background: "rgba(248,113,113,0.15)", color: "#f87171" }
+                  : b.brand === "Viltrox"
+                  ? { background: "rgba(168,85,247,0.18)", color: "#c4b5fd" }
+                  : { background: "rgba(100,116,139,0.15)", color: "#94a3b8" }
+              }, b.brand),
+              e("span", { className: "text-slate-500" }, b.year + " · "),
+              e("span", { className: "text-slate-300 flex-1 text-[11px]" }, b.deal),
+              isCompetitor && e("span", { className: "text-[9px] text-rose-400 font-medium" }, "友商")
+            );
+          }))
+          : e("div", { className: "text-[11px] text-slate-500" }, "本地合作历史为空 · 等待历史合作导入")
+      ),
+    ),
+    
+    // ─── Footer actions ───
+    e("div", { className: "px-5 py-3 border-t border-white/[0.06]" },
+      // 主操作 3 按钮
+      e("div", { className: "flex items-center gap-2 mb-2" },
+        e("button", {
+          onClick: () => onToggleMyList?.(item.id),
+          title: "本地临时列表: 尚未接入后端保存",
+          className: "flex-1 flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-[11px] font-medium transition-colors",
+          style: inMyList
+            ? { background: "rgba(251,191,36,0.15)", color: "#fde68a", border: "1px solid rgba(251,191,36,0.35)" }
+            : { background: "rgba(255,255,255,0.04)", color: "#e2e8f0", border: "1px solid rgba(255,255,255,0.1)" }
+        }, e(Star, { size: 11, style: inMyList ? { fill: "#fbbf24" } : {} }), inMyList ? "已在本地列表" : "加入本地列表"),
+        e("button", {
+          onClick: () => onContact?.(item),
+          title: "打开本地联系模板: 不发送邮件、不调用 provider",
+          className: "flex-1 flex items-center justify-center gap-1.5 rounded-md bg-purple-600 hover:bg-purple-500 px-3 py-2 text-[11px] font-medium text-white"
+        }, e(Send, { size: 11 }),
+          item.email ? "发起合作邀请" : "添加联系方式"
+        ),
+        !item.linked_main_kol_id && e("button", {
+          disabled: true,
+          className: "flex-1 flex cursor-not-allowed items-center justify-center gap-1.5 rounded-md border border-emerald-500/20 bg-emerald-500/[0.05] px-3 py-2 text-[11px] text-emerald-400/70",
+          title: "待接入: 需要主表写入 API 和权限校验"
+        }, e(Link2, { size: 11 }), "入主表 · 待接入"),
+      ),
+      // 次操作 icons
+      e("div", { className: "flex items-center justify-center gap-1.5" },
+        e("button", {
+          disabled: true,
+          className: "flex cursor-not-allowed items-center gap-1 rounded-md border border-white/[0.06] px-2 py-1 text-[10px] text-slate-500 opacity-70",
+          title: "待开放: 需要明确启用 Gemini / 视频分析 provider"
+        }, e(RefreshCw, { size: 10 }), "深度评估 · 待开放"),
+        item.profile_url && e("a", {
+          href: item.profile_url, target: "_blank", rel: "noreferrer",
+          className: "flex items-center gap-1 rounded-md border border-white/[0.06] px-2 py-1 text-[10px] text-slate-400 hover:bg-white/[0.04] hover:text-white"
+        }, e(ExternalLink, { size: 10 }), "打开主页"),
+        e("button", {
+          disabled: true,
+          className: "flex cursor-not-allowed items-center gap-1 rounded-md border border-white/[0.06] px-2 py-1 text-[10px] text-slate-500 opacity-70",
+          title: "待接入: 更多操作需要明确菜单项和权限"
+        }, e(MoreHorizontal, { size: 10 }), "更多 · 待接入"),
+      )
+    )
+  );
+}
