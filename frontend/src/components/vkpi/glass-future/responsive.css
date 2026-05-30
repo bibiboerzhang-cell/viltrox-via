@@ -3,6 +3,10 @@
     grid-template-columns: repeat(3,1fr);
   }
 
+  .vkpi-glass-shell .dashboard-account-preview-list {
+    grid-template-columns: repeat(3,minmax(0,1fr));
+  }
+
   .vkpi-glass-shell .content-grid {
     grid-template-columns: 1fr;
   }
@@ -143,6 +147,21 @@
     font-size: 34px;
   }
 
+  .vkpi-glass-shell .hero-control,
+  .vkpi-glass-shell .dashboard-account-tabs {
+    width: 100%;
+  }
+
+  .vkpi-glass-shell .dashboard-account-tabs {
+    display: grid;
+    grid-template-columns: repeat(2,minmax(0,1fr));
+    border-radius: 18px;
+  }
+
+  .vkpi-glass-shell .dashboard-account-tabs button {
+    justify-content: center;
+  }
+
   .vkpi-glass-shell .mini-missions {
     grid-template-columns: 1fr;
   }
@@ -156,6 +175,10 @@
   }
 
   .vkpi-glass-shell .kpis {
+    grid-template-columns: repeat(2,minmax(0,1fr));
+  }
+
+  .vkpi-glass-shell .dashboard-account-preview-list {
     grid-template-columns: repeat(2,minmax(0,1fr));
   }
 
@@ -242,6 +265,7 @@
 @media (max-width: 620px) {
   .vkpi-glass-shell .nav,
   .vkpi-glass-shell .kpis,
+  .vkpi-glass-shell .dashboard-account-preview-list,
   .vkpi-glass-shell .lower,
   .vkpi-glass-shell .impact-summary-grid,
   .vkpi-glass-shell .intelligence-layer-metrics,

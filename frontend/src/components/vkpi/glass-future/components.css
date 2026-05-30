@@ -63,6 +63,13 @@
 .vkpi-glass-shell .dashboard-scope-switch span { color: #667085; white-space: nowrap; }
 .vkpi-glass-shell .dashboard-scope-switch select { max-width: 124px; border: 0; outline: 0; background: transparent; color: #1b6cff; font: inherit; letter-spacing: 0; cursor: pointer; }
 .vkpi-glass-shell .dashboard-scope-switch:focus-within { border-color: rgba(27,108,255,.42); box-shadow: 0 0 0 4px rgba(27,108,255,.08), var(--inner); }
+.vkpi-glass-shell .dashboard-account-tabs { display: inline-flex; min-width: 0; max-width: 100%; align-items: center; gap: 4px; border: 1px solid rgba(27,108,255,.18); border-radius: 999px; background: rgba(255,255,255,.66); box-shadow: var(--inner); padding: 4px; }
+.vkpi-glass-shell .dashboard-account-tabs button { min-width: 0; height: 30px; border: 0; border-radius: 999px; background: transparent; color: #667085; display: inline-flex; align-items: center; gap: 5px; padding: 0 9px; font-size: 11px; font-weight: 900; line-height: 1; cursor: pointer; transition: background .18s, color .18s, box-shadow .18s; }
+.vkpi-glass-shell .dashboard-account-tabs button:hover { color: #1b6cff; background: rgba(27,108,255,.08); }
+.vkpi-glass-shell .dashboard-account-tabs button.is-active { color: #fff; background: linear-gradient(135deg,#1b6cff,#5ca0ff); box-shadow: 0 10px 22px rgba(27,108,255,.22), inset 0 1px 0 rgba(255,255,255,.45); }
+.vkpi-glass-shell .dashboard-account-tabs span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vkpi-glass-shell .dashboard-account-tabs b { color: inherit; font-size: 10px; font-weight: 950; opacity: .78; }
+.vkpi-glass-shell .dashboard-account-tabs.is-loading { opacity: .72; }
 .vkpi-glass-shell .hero-title h1 { position: relative; max-width: 8em; font-size: 38px; line-height: 1.05; letter-spacing: 0; margin-top: 22px; }
 .vkpi-glass-shell .hero-title p { position: relative; color: #667085; margin-top: 12px; max-width: 650px; font-size: 14px; line-height: 1.7; }
 .vkpi-glass-shell .mini-missions { position: relative; margin-top: 20px; display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; }
@@ -128,6 +135,17 @@
 .vkpi-glass-shell .kpi .meta { position: relative; font-size: 12px; color: #667085; margin-top: 4px; }
 .vkpi-glass-shell .kpi .up { color: #079455; }
 .vkpi-glass-shell .kpi .down { color: #d92d20; }
+.vkpi-glass-shell .dashboard-account-preview { margin-bottom: 20px; padding: 18px; overflow: hidden; }
+.vkpi-glass-shell .dashboard-account-preview .panel-head { position: relative; margin-bottom: 14px; }
+.vkpi-glass-shell .dashboard-account-preview .panel-head p { margin: 4px 0 0; color: #667085; font-size: 12px; font-weight: 760; }
+.vkpi-glass-shell .dashboard-account-preview-list { position: relative; display: grid; grid-template-columns: repeat(6,minmax(0,1fr)); gap: 10px; }
+.vkpi-glass-shell .dashboard-account-preview-item { min-width: 0; min-height: 88px; border: 1px solid rgba(27,108,255,.12); border-radius: 16px; background: rgba(255,255,255,.46); box-shadow: var(--inner); color: #101828; display: grid; align-content: start; gap: 5px; padding: 12px; text-decoration: none; }
+.vkpi-glass-shell .dashboard-account-preview-item:hover { border-color: rgba(27,108,255,.32); background: rgba(255,255,255,.64); }
+.vkpi-glass-shell .dashboard-account-preview-item img,
+.vkpi-glass-shell .dashboard-account-preview-item i { width: 32px; height: 32px; border-radius: 12px; background: rgba(27,108,255,.11); color: #1b6cff; display: grid; place-items: center; font-size: 13px; font-style: normal; font-weight: 950; object-fit: cover; }
+.vkpi-glass-shell .dashboard-account-preview-item b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 950; }
+.vkpi-glass-shell .dashboard-account-preview-item em { overflow: hidden; color: #667085; font-size: 10px; font-style: normal; font-weight: 850; text-overflow: ellipsis; white-space: nowrap; }
+.vkpi-glass-shell .dashboard-account-preview-item.is-loading { pointer-events: none; opacity: .7; }
 .vkpi-glass-shell .spark { position: relative; width: 100%; height: 28px; margin-top: 8px; }
 .vkpi-glass-shell .kpi-insight-panel { margin: -4px 0 20px; padding: 22px; display: grid; gap: 16px; }
 .vkpi-glass-shell .kpi-insight-head { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding-bottom: 14px; border-bottom: 1px solid rgba(199,214,239,.62); }
