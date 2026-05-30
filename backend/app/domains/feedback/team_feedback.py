@@ -130,7 +130,33 @@ def create_feedback(payload: dict[str, Any], *, staff: dict[str, Any] | None = N
         # Feedback must never fail because audit logging failed.
         logger.warning("team feedback create audit failed for %s: %s", uid, exc)
     row = conn.execute("SELECT * FROM vkpi_team_feedback WHERE uid=?", (uid,)).fetchone()
-    return {"feedback": _row_to_feedback(row), "ok": True}
+    feedback = _row_to_feedback(row)
+    alert: dict[str, Any] = {}
+    try:
+        from app.domains import alerts
+
+        alert = alerts.upsert_alert(
+            alert_key=f"team-feedback-{uid}",
+            severity="warning" if feedback_type in {"bug", "button_issue", "missing_data"} else "info",
+            target_type="team_feedback",
+            target_id=int(feedback.get("id") or 0) or None,
+            staff_id=None,
+            title=f"用户反馈待处理: {title}",
+            body=detail or "请在反馈列表中查看详情。",
+            rule_key="team_feedback.open",
+            metadata_json=_json(
+                {
+                    "feedback_uid": uid,
+                    "feedback_type": feedback_type,
+                    "page_path": page_path,
+                    "source": "vkpi_feedback",
+                    "has_screenshot": bool((metadata.get("screenshot") or {}).get("data_url")),
+                }
+            ),
+        )
+    except Exception as exc:
+        logger.warning("team feedback alert create failed for %s: %s", uid, exc)
+    return {"feedback": feedback, "alert": alert, "ok": True}
 
 
 def list_feedback(*, status: str = "", limit: int = 100) -> dict[str, Any]:

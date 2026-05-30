@@ -34,6 +34,7 @@ router = APIRouter(tags=["media"])
 logger = get_logger(__name__)
 VKPI_IMAGE_PROXY_CACHE_DIR = UPLOAD_DIR / "vkpi_media_cache"
 VKPI_IMAGE_PROXY_MAX_BYTES = 8 * 1024 * 1024
+VKPI_IMAGE_PROXY_TIMEOUT_SEC = max(2, min(8, int(os.getenv("VKPI_IMAGE_PROXY_TIMEOUT_SEC", "4"))))
 VKPI_VIDEO_PROXY_MAX_BYTES = int(os.getenv("VKPI_VIDEO_PROXY_MAX_BYTES", str(220 * 1024 * 1024)))
 VKPI_VIDEO_PROXY_CHUNK_BYTES = 512 * 1024
 VKPI_IMAGE_ALLOWED_HOST_SUFFIXES = (
@@ -241,20 +242,28 @@ def _fetch_external_image(url: str, host: str) -> tuple[bytes, str]:
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
         },
     )
-    with urllib.request.urlopen(request, timeout=15) as response:  # nosec B310 - host allowlist above.
-        content_type = str(response.headers.get("content-type") or "image/jpeg").split(";", 1)[0].strip().lower()
-        if not content_type.startswith("image/"):
-            raise HTTPException(status_code=502, detail="upstream is not image")
-        chunks: list[bytes] = []
-        total = 0
-        while True:
-            chunk = response.read(128 * 1024)
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > VKPI_IMAGE_PROXY_MAX_BYTES:
-                raise HTTPException(status_code=413, detail="image too large")
-            chunks.append(chunk)
+    try:
+        with urllib.request.urlopen(request, timeout=VKPI_IMAGE_PROXY_TIMEOUT_SEC) as response:  # nosec B310 - host allowlist above.
+            content_type = str(response.headers.get("content-type") or "image/jpeg").split(";", 1)[0].strip().lower()
+            if not content_type.startswith("image/"):
+                raise HTTPException(status_code=502, detail="upstream is not image")
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                chunk = response.read(128 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > VKPI_IMAGE_PROXY_MAX_BYTES:
+                    raise HTTPException(status_code=413, detail="image too large")
+                chunks.append(chunk)
+    except HTTPException:
+        raise
+    except urllib.error.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"upstream image unavailable: {exc.code}") from exc
+    except Exception as exc:
+        logger.info("media.image_proxy_fetch_failed", extra={"host": host, "reason": type(exc).__name__})
+        raise HTTPException(status_code=502, detail="upstream image fetch failed") from exc
     return b"".join(chunks), content_type
 
 

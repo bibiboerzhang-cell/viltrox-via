@@ -106,6 +106,10 @@ def ensure_vkpi_schema() -> None:
         CREATE UNIQUE INDEX IF NOT EXISTS idx_vkpi_kol_claims_one_active
             ON vkpi_kol_claims(kol_id)
             WHERE status = 'active';
+        CREATE INDEX IF NOT EXISTS idx_vkpi_kol_claims_staff_status
+            ON vkpi_kol_claims(staff_id, status, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_vkpi_kol_claims_project
+            ON vkpi_kol_claims(project_id, status);
 
         CREATE TABLE IF NOT EXISTS vkpi_links (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -349,6 +353,7 @@ def ensure_vkpi_schema() -> None:
             UNIQUE(project_id, post_url)
         );
         CREATE INDEX IF NOT EXISTS idx_vkpi_content_posts_project ON vkpi_content_posts(project_id, published_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_vkpi_content_posts_kol ON vkpi_content_posts(kol_id, published_at DESC);
 
         CREATE TABLE IF NOT EXISTS vkpi_content_assets (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -607,8 +607,8 @@ def official_account_matrix(*, staff: dict[str, Any] | None = None, view_as_staf
         )
         sample_limit = safe_limit
         raw_payload = _parse_json(row.get("metric_raw_payload_json"))
-        package_posts = _posts_from_package(_text(raw_payload.get("package_dir")))
-        posts = package_posts[:sample_limit] if package_posts else _extract_posts(row, per_account_limit=limit)
+        package_posts = _posts_from_package(_text(raw_payload.get("package_dir")), limit=sample_limit, enrich_raw=False)
+        posts = package_posts if package_posts else _extract_posts(row, per_account_limit=limit)
         posts = _attach_cached_item_videos(posts, platform)
         posts = _attach_post_identity(posts, platform)
         posts = _attach_media_contract(posts, platform)

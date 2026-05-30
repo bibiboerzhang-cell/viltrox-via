@@ -1,7 +1,11 @@
 """Channel post extraction, package parsing, and pagination helpers."""
 from __future__ import annotations
 
+from email.utils import parsedate_to_datetime
+from time import monotonic
+
 from app.domains.channels.common import *
+from app.domains.channels.crud import _assert_channel_access
 from app.domains.channels.official import (
     _account_name,
     _account_url,
@@ -15,6 +19,9 @@ from app.domains.channels.official import (
     _image_url,
     _looks_like_image_media_url,
 )
+
+_PACKAGE_POSTS_CACHE_TTL_SEC = 300
+_PACKAGE_POSTS_CACHE: dict[tuple[str, int, int, int, int, int, bool], tuple[float, list[dict[str, Any]]]] = {}
 
 def _latest_channel_row(channel_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     ensure_vkpi_channels_schema()
@@ -309,19 +316,55 @@ def _resolve_package_dir(package_dir: str) -> Path | None:
     return None
 
 
-def _posts_from_package(package_dir: str) -> list[dict[str, Any]]:
+def _package_posts_cache_key(resolved: Path, *, limit: int | None, enrich_raw: bool) -> tuple[str, int, int, int, int, int, bool]:
+    posts_path = resolved / "posts.csv"
+    raw_path = resolved / "raw.json"
+    try:
+        post_stat = posts_path.stat()
+    except OSError:
+        return (str(resolved), 0, 0, 0, 0, int(limit or 0), bool(enrich_raw))
+    try:
+        raw_stat = raw_path.stat() if raw_path.exists() else None
+    except OSError:
+        raw_stat = None
+    return (
+        str(resolved),
+        int(post_stat.st_mtime_ns),
+        int(post_stat.st_size),
+        int(raw_stat.st_mtime_ns if raw_stat else 0),
+        int(raw_stat.st_size if raw_stat else 0),
+        int(limit or 0),
+        bool(enrich_raw),
+    )
+
+
+def _posts_from_package(package_dir: str, *, limit: int | None = None, enrich_raw: bool = True) -> list[dict[str, Any]]:
     resolved = _resolve_package_dir(package_dir)
     if not resolved:
         return []
     path = resolved / "posts.csv"
     if not path.exists() or not path.is_file():
         return []
+    cache_key = _package_posts_cache_key(resolved, limit=limit, enrich_raw=enrich_raw)
+    cached = _PACKAGE_POSTS_CACHE.get(cache_key)
+    now = monotonic()
+    if cached and now - cached[0] < _PACKAGE_POSTS_CACHE_TTL_SEC:
+        return [dict(post) for post in cached[1]]
     raw_index: dict[str, dict[str, Any]] = {}
     raw_path = resolved / "raw.json"
-    if raw_path.exists() and raw_path.is_file():
+    if enrich_raw and raw_path.exists() and raw_path.is_file():
         raw_index = _raw_post_index(_parse_json(raw_path.read_text(encoding="utf-8")))
+    safe_limit = max(0, min(5000, int(limit or 0)))
     with path.open("r", encoding="utf-8", newline="") as handle:
-        return [_enrich_package_post(_post_from_package_row(dict(row)), raw_index) for row in csv.DictReader(handle)]
+        posts: list[dict[str, Any]] = []
+        for row in csv.DictReader(handle):
+            posts.append(_enrich_package_post(_post_from_package_row(dict(row)), raw_index))
+            if safe_limit and len(posts) >= safe_limit:
+                break
+        if len(_PACKAGE_POSTS_CACHE) > 128:
+            _PACKAGE_POSTS_CACHE.clear()
+        _PACKAGE_POSTS_CACHE[cache_key] = (now, [dict(post) for post in posts])
+        return posts
 
 
 def _raw_package(package_dir: str) -> dict[str, Any]:
@@ -346,7 +389,10 @@ def _post_datetime(post: dict[str, Any]) -> datetime | None:
     try:
         value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
-        return None
+        try:
+            value = parsedate_to_datetime(raw)
+        except (TypeError, ValueError, IndexError, OverflowError):
+            return None
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
