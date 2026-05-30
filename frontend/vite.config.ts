@@ -28,6 +28,10 @@ function packageVersion(): string {
 export default defineConfig(({ command }) => {
   const isBuild = command === "build";
   const apiTarget = process.env.VITE_API_PROXY_TARGET || process.env.VITE_ADMIN_API_TARGET || "http://127.0.0.1:8102";
+  const normalizeProxyOrigin = (proxyReq: { setHeader: (name: string, value: string) => void }) => {
+    proxyReq.setHeader("Origin", apiTarget);
+    proxyReq.setHeader("Referer", `${apiTarget}/`);
+  };
   const gitSha = process.env.VITE_APP_GIT_SHA || gitValue("rev-parse HEAD") || "unknown";
   const buildInfo = {
     version: packageVersion(),
@@ -68,6 +72,18 @@ export default defineConfig(({ command }) => {
           entryFileNames: "assets/app-[hash].js",
           chunkFileNames: "assets/chunk-[hash].js",
           assetFileNames: "assets/asset-[hash][extname]",
+          manualChunks(id) {
+            if (id.includes("node_modules")) {
+              if (id.includes("framer-motion")) return "vendor-motion";
+              if (id.includes("lucide-react")) return "vendor-icons";
+              if (id.includes("recharts")) return "vendor-charts";
+              if (id.includes("@tanstack")) return "vendor-query";
+              return "vendor";
+            }
+            if (id.includes("/src/components/vkpi/pages/myKol/")) return "vkpi-my-kol";
+            if (id.includes("/src/components/vkpi/pages/projects/")) return "vkpi-projects";
+            if (id.includes("/src/components/vkpi/v615-replica/")) return "vkpi-v615";
+          },
         },
       },
     },
@@ -78,14 +94,23 @@ export default defineConfig(({ command }) => {
         "/health": {
           target: apiTarget,
           changeOrigin: true,
+          configure: (proxy) => {
+            proxy.on("proxyReq", normalizeProxyOrigin);
+          },
         },
         "/api": {
           target: apiTarget,
           changeOrigin: true,
+          configure: (proxy) => {
+            proxy.on("proxyReq", normalizeProxyOrigin);
+          },
         },
         "/uploads": {
           target: apiTarget,
           changeOrigin: true,
+          configure: (proxy) => {
+            proxy.on("proxyReq", normalizeProxyOrigin);
+          },
         },
       },
     },
