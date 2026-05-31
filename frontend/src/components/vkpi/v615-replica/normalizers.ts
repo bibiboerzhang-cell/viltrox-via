@@ -289,6 +289,7 @@ export function normalizeDashboardMetrics(bundle, kolRows = []) {
   const evidenceRoster = record(evidenceMetrics.active_roster_by_scope);
   const evidenceEngagement = record(evidenceMetrics.engagement);
   const evidenceCoverage = record(evidenceMetrics.coverage);
+  const evidenceActive30 = record(evidenceMetrics.active_30d_by_scope);
   const rosterDetail = record(evidenceMetrics.roster_detail);
   const trendRows = list(bundle.trendRows);
   const officialCount = int(summary.official_account_count);
@@ -304,6 +305,8 @@ export function normalizeDashboardMetrics(bundle, kolRows = []) {
   const coveragePercent = coveragePct == null ? null : coveragePct * 100;
   const evidenceCoverageText = `实时 · evidence 覆盖 ${percentLabel(coveragePercent, 0)}`;
   const evidenceVideoText = `实时 · 基于 ${viewCovered != null ? viewCovered.toLocaleString() : DASH} 条已抓视频`;
+  const active30WindowDays = int(evidenceActive30.window_days) ?? 30;
+  const evidenceActive30Text = `实时 · 近 ${active30WindowDays} 天发布/同步`;
   const active30ByScope = record(summary.active_30d_by_scope);
   const exposureByScope = record(summary.exposure_30d_by_scope);
   const engagementByScope = record(summary.engagement_rate_by_scope);
@@ -315,9 +318,9 @@ export function normalizeDashboardMetrics(bundle, kolRows = []) {
       company: metricData(rosterCompany, "#06b6d4", { source: "owned_matrix", sourceLabel: "实时", trend: "实时 · 官方矩阵 active" }),
     },
     "active-30d": {
-      all: windowMetricData(number(active30ByScope.all), "#a855f7", dashboard, "all", { waiting: `${maturityLabel(dashboard, "all")} · active_30d 累计中` }),
-      kol: windowMetricData(number(active30ByScope.kol), "#ec4899", dashboard, "kol", { waiting: `${maturityLabel(dashboard, "kol")} · KOL active_30d 累计中` }),
-      company: windowMetricData(number(active30ByScope.owned ?? active30ByScope.company), "#06b6d4", dashboard, "company", { waiting: `${maturityLabel(dashboard, "company")} · 官方 active_30d 累计中` }),
+      all: number(evidenceActive30.all) != null ? metricData(number(evidenceActive30.all), "#a855f7", { source: "evidence_metrics", sourceLabel: "实时", trend: evidenceActive30Text }) : windowMetricData(number(active30ByScope.all), "#a855f7", dashboard, "all", { waiting: `${maturityLabel(dashboard, "all")} · active_30d 累计中` }),
+      kol: number(evidenceActive30.kol) != null ? metricData(number(evidenceActive30.kol), "#ec4899", { source: "evidence_metrics", sourceLabel: "实时", trend: evidenceActive30Text }) : windowMetricData(number(active30ByScope.kol), "#ec4899", dashboard, "kol", { waiting: `${maturityLabel(dashboard, "kol")} · KOL active_30d 累计中` }),
+      company: number(evidenceActive30.company ?? evidenceActive30.owned) != null ? metricData(number(evidenceActive30.company ?? evidenceActive30.owned), "#06b6d4", { source: "owned_matrix", sourceLabel: "实时", trend: evidenceActive30Text }) : windowMetricData(number(active30ByScope.owned ?? active30ByScope.company), "#06b6d4", dashboard, "company", { waiting: `${maturityLabel(dashboard, "company")} · 官方 active_30d 累计中` }),
     },
     exposure: {
       all: totalExposure != null ? metricData(totalExposure, "#a855f7", { source: "evidence_metrics", sourceLabel: "实时", trend: evidenceCoverageText }) : windowMetricData(number(exposureByScope.all), "#a855f7", dashboard, "all", { waiting: `${maturityLabel(dashboard, "all")} · 不使用 lifetime 代替 30d` }),
@@ -394,6 +397,67 @@ export function normalizeCampaigns(rows = []) {
       raw: item,
     };
   });
+}
+
+function normalizeActiveCampaigns(block = {}) {
+  const source = record(block);
+  return list(source.items).map((row, index) => {
+    const item = record(row);
+    const healthScore = int(item.health_score ?? item.healthScore);
+    const kolCount = int(item.kol_count);
+    const published = int(item.published_count);
+    const recentVideoCount = int(item.recent_video_count);
+    const executionKolCount = int(item.execution_kol_count);
+    const totalViews = int(item.total_views);
+    const activeSignals = list(item.active_signals).map((signal) => String(signal));
+    return {
+      id: item.id || item.project_uid || `active-campaign-${index}`,
+      name: String(item.name || item.project_name || "未命名项目"),
+      product: String(item.product || item.product_name || item.product_sku || ""),
+      iconKey: String(item.icon_key || "camera"),
+      iconColor: String(item.icon_color || COLORS[index % COLORS.length]),
+      status: String(item.status || "active"),
+      statusLabel: String(item.status_label || "进行中"),
+      healthScore: healthScore ?? "待评估",
+      healthColor: healthScore == null ? "#64748b" : healthScore >= 85 ? "#10b981" : healthScore >= 70 ? "#f59e0b" : "#ef4444",
+      lastUpdate: "真实 API",
+      owner: "项目工作流",
+      startDate: "真实项目",
+      source: "active_campaigns",
+      recentVideoCount: recentVideoCount ?? 0,
+      executionKolCount: executionKolCount ?? 0,
+      kolCount: kolCount ?? 0,
+      publishedCount: published ?? 0,
+      reach: totalViews != null ? compact(totalViews) : DASH,
+      stats: {
+        kolCount: kolCount ?? DASH,
+        published: recentVideoCount ?? 0,
+        publishRate: null,
+        totalReach: totalViews != null ? compact(totalViews) : DASH,
+        shortClicks: executionKolCount ?? DASH,
+        dailyClicks: DASH,
+      },
+      funnel: emptyFunnel(kolCount || 0),
+      bottleneckText: String(item.bottleneck_text || activeSignals.join(" · ") || "符合当前 active campaign 口径"),
+      kolList: [],
+      pendingPublishes: [],
+      assets: [],
+      newKolSuggestions: [],
+      raw: item,
+    };
+  });
+}
+
+function normalizeActiveCampaignsMeta(block = {}) {
+  const source = record(block);
+  const hasRealBlock = Object.keys(source).length > 0;
+  const criteria = record(source.criteria);
+  return {
+    isReal: hasRealBlock,
+    activeCount: int(source.active_count) ?? 0,
+    windowDays: int(source.window_days) ?? 30,
+    criteria,
+  };
 }
 
 export function normalizeCalendar(items = []) {
@@ -544,9 +608,15 @@ export function normalizeMapHierarchy(distribution = {}, kolRows = []) {
 }
 
 export function normalizeV615Dashboard(bundle, kolRows) {
+  const dashboard = record(bundle.dashboard);
+  const summary = record(dashboard.summary);
+  const activeCampaignsBlock = record(summary.active_campaigns);
+  const activeCampaignsMeta = normalizeActiveCampaignsMeta(activeCampaignsBlock);
+  const realCampaigns = activeCampaignsMeta.isReal ? normalizeActiveCampaigns(activeCampaignsBlock) : null;
   return {
     metrics: normalizeDashboardMetrics(bundle, kolRows),
-    campaigns: normalizeCampaigns(bundle.productRows),
+    campaigns: realCampaigns ?? normalizeCampaigns(bundle.productRows),
+    campaignsMeta: activeCampaignsMeta,
     calendarDays: normalizeCalendar(bundle.recentContent),
     aiInsight: normalizeAiInsight(bundle.copilotBrief, bundle.tasks),
     signals: normalizeSignals(bundle.marketCards),

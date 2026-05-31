@@ -42,8 +42,8 @@ export function DashboardReplicaPage(props: any) {
     setVenue, setSelectedPin, viewMode, setViewMode, countryOptions, cityOptions, itemOptions, venueOptions,
     breadcrumb, goBack, topListData, setSelectedEvent, setSelectedSignal, setShowAllSignals, setShowAIConfirm,
     setAiRegenerating, aiRegenerating, setSelectedMover, setShowAllMovers, setSelectedProject, setShowAllProjects,
-    setSelectedPublish, setShowFullCalendar, focusTarget, viewModes = VIEW_MODES,
-    metrics = [], campaigns = [], calendarDays = [],
+    setSelectedPublish, setShowFullCalendar, onOpenProjectsList, focusTarget, viewModes = VIEW_MODES,
+    metrics = [], campaigns = [], campaignsMeta = {}, calendarDays = [],
     signals = [], aiInsight = EMPTY_AI_INSIGHT, topMovers = [],
     upcomingEvents = [], revenueBySource = [], dashboardLoading = false, dashboardError = "",
   } = props;
@@ -342,8 +342,9 @@ export function DashboardReplicaPage(props: any) {
               // 1. Active Campaigns(在推什么)
               e(ActiveCampaignsCard, { 
                 campaigns,
+                campaignsMeta,
                 onCampaignClick: (c) => setSelectedProject(c),
-                onViewAll: () => setShowAllProjects(true)
+                onViewAll: () => onOpenProjectsList ? onOpenProjectsList() : setShowAllProjects(true)
               }),
               // 2. 7 天推广日历
               e(ContentCalendarCard, { 

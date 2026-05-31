@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.domains.dashboard.metric_maturity import (
+    _OFFICIAL_CHANNEL_FILTER_SQL,
     dashboard_metric_maturity_contract,
     dashboard_window_metrics_contract,
     normalize_dashboard_scope,
@@ -247,7 +248,72 @@ def _build_roster_detail(active_roster_by_scope: dict[str, int]) -> dict[str, An
     }
 
 
-def _build_evidence_metrics_summary() -> dict[str, Any]:
+def _build_evidence_active_30d_summary(*, window_days: int = 30) -> dict[str, Any]:
+    days = max(1, min(int(window_days or 30), 90))
+    external_rows = _fetch_dicts(
+        f"""
+        SELECT
+            COALESCE(p.dashboard_account_type, 'kol') AS account_type,
+            COUNT(DISTINCT p.id) AS active_accounts,
+            COUNT(*) AS evidence_count
+        FROM vkpi_kol_video_evidence e
+        JOIN vkpi_kol_pool p ON p.id = e.kol_pool_id
+        WHERE COALESCE(e.is_active, TRUE) = TRUE
+          AND COALESCE(e.evidence_type, 'video') = 'video'
+          AND e.publish_date IS NOT NULL
+          AND e.publish_date >= NOW() - INTERVAL '{days} days'
+        GROUP BY COALESCE(p.dashboard_account_type, 'kol')
+        """
+    )
+    external_counts = {"kol": 0, "media": 0}
+    external_evidence = {"kol": 0, "media": 0}
+    for row in external_rows:
+        account_type = str(row.get("account_type") or "kol")
+        if account_type in external_counts:
+            external_counts[account_type] = _as_int(row.get("active_accounts"))
+            external_evidence[account_type] = _as_int(row.get("evidence_count"))
+
+    official_row = get_conn().execute(
+        f"""
+        SELECT
+            COUNT(DISTINCT channel_id) FILTER (
+                WHERE posted_at::date >= CURRENT_DATE - INTERVAL '{days} days'
+                   OR COALESCE(views_delta, 0) > 0
+                   OR COALESCE(likes_delta, 0) > 0
+                   OR COALESCE(comments_delta, 0) > 0
+            ) AS active_accounts,
+            COUNT(*) FILTER (
+                WHERE posted_at::date >= CURRENT_DATE - INTERVAL '{days} days'
+                   OR COALESCE(views_delta, 0) > 0
+                   OR COALESCE(likes_delta, 0) > 0
+                   OR COALESCE(comments_delta, 0) > 0
+            ) AS signal_rows,
+            COUNT(DISTINCT snapshot_date) AS snapshot_days
+        FROM vkpi_channel_post_metrics pm
+        JOIN vkpi_employee_channels c ON c.id = pm.channel_id
+        WHERE {_OFFICIAL_CHANNEL_FILTER_SQL}
+        """
+    ).fetchone()
+    company_active = _as_int(_row_value(official_row, "active_accounts"))
+    all_active = external_counts["kol"] + external_counts["media"] + company_active
+    return {
+        "all": all_active,
+        "kol": external_counts["kol"],
+        "media": external_counts["media"],
+        "company": company_active,
+        "owned": company_active,
+        "window_days": days,
+        "basis": {
+            "kol_media": "vkpi_kol_video_evidence.publish_date within window",
+            "company": "vkpi_channel_post_metrics posted_at or positive deltas within window",
+        },
+        "evidence_count_by_scope": external_evidence,
+        "company_signal_rows": _as_int(_row_value(official_row, "signal_rows")),
+        "company_snapshot_days": _as_int(_row_value(official_row, "snapshot_days")),
+    }
+
+
+def _build_evidence_metrics_summary(*, window_days: int = 30) -> dict[str, Any]:
     active_roster_by_scope = {
         account_type: _as_int(build_dashboard_kpi(account_type=account_type).get("active_roster"))
         for account_type in ("all", "kol", "media", "company")
@@ -276,6 +342,7 @@ def _build_evidence_metrics_summary() -> dict[str, Any]:
     view_coverage_pct = (view_covered / evidence_total) if evidence_total > 0 else 0.0
     return {
         "active_roster_by_scope": active_roster_by_scope,
+        "active_30d_by_scope": _build_evidence_active_30d_summary(window_days=window_days),
         "total_exposure": total_views,
         "engagement": {
             "total_engagement": total_engagement,
@@ -289,6 +356,128 @@ def _build_evidence_metrics_summary() -> dict[str, Any]:
             "last_refreshed_at": _row_value(row, "last_refreshed_at"),
         },
         "roster_detail": _build_roster_detail(active_roster_by_scope),
+    }
+
+
+def _build_active_campaigns_summary(*, window_days: int = 30) -> dict[str, Any]:
+    days = max(1, min(int(window_days or 30), 365))
+    rows = _fetch_dicts(
+        f"""
+        WITH assignment_stats AS (
+          SELECT
+            project_id,
+            COUNT(DISTINCT kol_pool_id) AS kol_count,
+            COUNT(DISTINCT kol_pool_id) FILTER (
+              WHERE stage IN ('device_sent', 'received', 'content_posted')
+            ) AS execution_kol_count,
+            COUNT(DISTINCT kol_pool_id) FILTER (
+              WHERE stage = 'content_posted'
+            ) AS published_kol_count,
+            BOOL_OR(stage IN ('device_sent', 'received', 'content_posted')) AS has_execution_stage
+          FROM vkpi_project_kol_assignments
+          GROUP BY project_id
+        ),
+        evidence_stats AS (
+          SELECT
+            project_id,
+            COUNT(*) AS evidence_count,
+            COUNT(*) FILTER (
+              WHERE created_at >= NOW() - INTERVAL '{days} days'
+            ) AS recent_evidence_count,
+            COALESCE(SUM(view_count), 0) AS total_views,
+            COALESCE(SUM(view_count) FILTER (
+              WHERE created_at >= NOW() - INTERVAL '{days} days'
+            ), 0) AS recent_views,
+            BOOL_OR(created_at >= NOW() - INTERVAL '{days} days') AS has_recent_evidence
+          FROM vkpi_kol_video_evidence
+          WHERE project_id IS NOT NULL
+            AND COALESCE(is_active, TRUE) = TRUE
+            AND COALESCE(evidence_type, 'video') = 'video'
+          GROUP BY project_id
+        ),
+        active_projects AS (
+          SELECT
+            p.id,
+            p.project_uid,
+            p.project_name,
+            p.product_sku,
+            p.product_name,
+            p.stage,
+            p.stage_status,
+            p.source_type,
+            p.updated_at,
+            COALESCE(a.kol_count, 0) AS kol_count,
+            COALESCE(a.execution_kol_count, 0) AS execution_kol_count,
+            COALESCE(a.published_kol_count, 0) AS published_kol_count,
+            COALESCE(e.evidence_count, 0) AS evidence_count,
+            COALESCE(e.recent_evidence_count, 0) AS recent_evidence_count,
+            COALESCE(e.total_views, 0) AS total_views,
+            COALESCE(e.recent_views, 0) AS recent_views,
+            COALESCE(a.has_execution_stage, FALSE) AS has_execution_stage,
+            COALESCE(e.has_recent_evidence, FALSE) AS has_recent_evidence
+          FROM vkpi_projects p
+          LEFT JOIN assignment_stats a ON a.project_id = p.id
+          LEFT JOIN evidence_stats e ON e.project_id = p.id
+          WHERE COALESCE(p.stage, '') NOT IN (
+              'closed', 'churned', 'cancelled', 'canceled', 'done', 'deleted',
+              '已关闭', '已取消', '已中止', '合作中止'
+            )
+            AND COALESCE(p.stage_status, '') NOT IN (
+              'closed', 'churned', 'cancelled', 'canceled', 'done', 'deleted',
+              '已关闭', '已取消', '已中止', '合作中止'
+            )
+            AND COALESCE(p.source_type, '') <> 'codex_test'
+        )
+        SELECT *
+        FROM active_projects
+        WHERE has_execution_stage = TRUE OR has_recent_evidence = TRUE
+        ORDER BY recent_evidence_count DESC, execution_kol_count DESC, updated_at DESC NULLS LAST, id DESC
+        """
+    )
+
+    items: list[dict[str, Any]] = []
+    for index, row in enumerate(rows[:8]):
+        recent_evidence_count = _as_int(row.get("recent_evidence_count"))
+        execution_kol_count = _as_int(row.get("execution_kol_count"))
+        signals: list[str] = []
+        if execution_kol_count:
+            signals.append(f"实操阶段 {execution_kol_count} KOL")
+        if recent_evidence_count:
+            signals.append(f"近 {days} 天出片 {recent_evidence_count}")
+        items.append(
+            {
+                "id": _as_int(row.get("id")),
+                "project_uid": row.get("project_uid"),
+                "name": row.get("project_name"),
+                "product": row.get("product_name") or row.get("product_sku"),
+                "status": "active",
+                "status_label": "进行中",
+                "icon_key": "camera",
+                "icon_color": ["#a855f7", "#3b82f6", "#10b981", "#f59e0b", "#ec4899", "#06b6d4"][index % 6],
+                "kol_count": _as_int(row.get("kol_count")),
+                "execution_kol_count": execution_kol_count,
+                "published_count": _as_int(row.get("published_kol_count")),
+                "recent_video_count": recent_evidence_count,
+                "evidence_count": _as_int(row.get("evidence_count")),
+                "total_views": _as_int(row.get("total_views")),
+                "recent_views": _as_int(row.get("recent_views")),
+                "active_signals": signals,
+                "bottleneck_text": " · ".join(signals) or "符合当前 active campaign 口径",
+            }
+        )
+
+    return {
+        "active_count": len(rows),
+        "items": items,
+        "window_days": days,
+        "criteria": {
+            "project_status": "vkpi_projects.stage/stage_status not in closed/churned/cancelled/done/deleted/已关闭/已取消/已中止/合作中止",
+            "signals": [
+                "assignment stage in device_sent/received/content_posted",
+                f"video evidence created in the last {days} days",
+            ],
+            "excluded_source_types": ["codex_test"],
+        },
     }
 
 
@@ -323,7 +512,8 @@ def build_dashboard_summary(
     official_summary = _dashboard_official_matrix_summary(limit=20)
     summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
     summary["active_roster"] = int(build_dashboard_kpi(account_type="all").get("active_roster") or 0)
-    summary["evidence_metrics"] = _build_evidence_metrics_summary()
+    summary["evidence_metrics"] = _build_evidence_metrics_summary(window_days=window_days)
+    summary["active_campaigns"] = _build_active_campaigns_summary(window_days=window_days)
     summary["metric_scope"] = normalized_scope
     summary["scope_label"] = scope_maturity["scope_label"]
     summary["snapshot_days"] = scope_maturity["snapshot_days"]

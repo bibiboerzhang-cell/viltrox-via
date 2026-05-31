@@ -924,6 +924,7 @@ export function V615ReplicaApp(props: any = {}) {
               viewModes: runtimeViewModes,
               metrics: dashboardRuntime.metrics,
               campaigns: dashboardRuntime.campaigns,
+              campaignsMeta: dashboardRuntime.campaignsMeta,
               calendarDays: dashboardRuntime.calendarDays,
               signals: dashboardRuntime.signals,
               aiInsight: dashboardRuntime.aiInsight,
@@ -932,6 +933,10 @@ export function V615ReplicaApp(props: any = {}) {
               revenueBySource: [],
               dashboardLoading,
               dashboardError,
+              onOpenProjectsList: () => {
+                saveStoredState({ activeNav: "projects" });
+                setActiveNav("projects");
+              },
             })
           )
         )

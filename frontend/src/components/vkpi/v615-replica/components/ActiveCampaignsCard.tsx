@@ -11,8 +11,11 @@ import { CAMPAIGN_ICONS } from "../data/campaignIcons";
 
 const e = React.createElement;
 
-export function ActiveCampaignsCard({ campaigns, onCampaignClick, onViewAll }) {
+export function ActiveCampaignsCard({ campaigns, campaignsMeta, onCampaignClick, onViewAll }) {
   const { t } = useT();
+  const realCount = campaignsMeta?.isReal ? Number(campaignsMeta.activeCount || 0) : null;
+  const activeCount = realCount ?? campaigns.filter(c => c.status !== "done").length;
+  const windowDays = Number(campaignsMeta?.windowDays || 30);
   return e(motion.div, {
     initial: { opacity: 0, y: 8 },
     animate: { opacity: 1, y: 0 },
@@ -26,13 +29,20 @@ export function ActiveCampaignsCard({ campaigns, onCampaignClick, onViewAll }) {
         e("h3", { className: "text-sm font-semibold text-white" }, "Active Campaigns")
       ),
       e("div", { className: "flex items-center gap-2" },
-        e("span", { className: "text-[10px] text-slate-400" }, `${campaigns.filter(c => c.status !== "done").length} active`)
+        e("span", { className: "text-[10px] text-slate-400" }, `${activeCount} active`)
       )
     ),
     // Campaign list
     e("div", { className: "space-y-2" },
       campaigns.length === 0
-        ? e("div", { className: "rounded-md border border-dashed border-white/[0.08] px-3 py-8 text-center text-[11px] text-slate-500" }, "暂无真实项目数据")
+        ? e("div", { className: "rounded-md border border-dashed border-white/[0.08] px-3 py-6 text-center" },
+            e("div", { className: "text-[11px] font-medium text-slate-300" }, campaignsMeta?.isReal ? "当前口径为 0 个 active" : "暂无真实项目数据"),
+            e("div", { className: "mx-auto mt-1 max-w-[220px] text-[10px] leading-relaxed text-slate-500" },
+              campaignsMeta?.isReal
+                ? `口径: 未关闭项目 + 寄样/到货/出片阶段, 或近 ${windowDays} 天新增视频证据。`
+                : "等待项目工作流接入。"
+            )
+          )
         : campaigns.map((c) => {
         const IconComp = CAMPAIGN_ICONS[c.iconKey] || CAMPAIGN_ICONS.default;
         return e("div", {
@@ -58,8 +68,10 @@ export function ActiveCampaignsCard({ campaigns, onCampaignClick, onViewAll }) {
             ),
             // 4 mini stats
             e("div", { className: "grid grid-cols-4 gap-1 mb-1" },
-              ["KOL", "已发", "曝光", "点击"].map((label, idx) => {
-                const val = [c.stats.kolCount, c.stats.published, c.stats.totalReach, c.stats.shortClicks][idx];
+              (c.source === "active_campaigns" ? ["KOL", `近${windowDays}天`, "曝光", "实操"] : ["KOL", "已发", "曝光", "点击"]).map((label, idx) => {
+                const val = c.source === "active_campaigns"
+                  ? [c.stats.kolCount, c.recentVideoCount, c.stats.totalReach, c.executionKolCount][idx]
+                  : [c.stats.kolCount, c.stats.published, c.stats.totalReach, c.stats.shortClicks][idx];
                 const display = typeof val === "number" ? val.toLocaleString() : val;
                 return e("div", { key: label },
                   e("div", { className: "text-[8px] text-slate-500 leading-tight" }, label),
