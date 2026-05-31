@@ -122,7 +122,17 @@ def project_detail(project_id: int, *, staff: dict[str, Any] | None = None) -> d
                 COALESCE(ev.total_views, 0) AS total_views,
                 COALESCE(ev.total_likes, 0) AS total_likes,
                 COALESCE(ev.total_comments, 0) AS total_comments,
-                ev.latest_publish_date
+                ev.latest_publish_date,
+                top_ev.content_url AS evidence_url,
+                top_ev.content_url AS video_url,
+                COALESCE(top_ev.title, top_ev.video_title, top_ev.content_url) AS evidence_title,
+                top_ev.thumbnail_url AS evidence_thumbnail_url,
+                top_ev.publish_date AS evidence_publish_date,
+                latest_ev.content_url AS latest_evidence_url,
+                latest_ev.content_url AS latest_video_url,
+                COALESCE(latest_ev.title, latest_ev.video_title, latest_ev.content_url) AS latest_evidence_title,
+                latest_ev.thumbnail_url AS latest_evidence_thumbnail_url,
+                latest_ev.publish_date AS latest_evidence_publish_date
             FROM vkpi_project_kol_assignments a
             LEFT JOIN vkpi_kol_pool kp ON kp.id = a.kol_pool_id
             LEFT JOIN staff assigned_staff ON assigned_staff.id = a.assigned_staff_id
@@ -140,6 +150,44 @@ def project_detail(project_id: int, *, staff: dict[str, Any] | None = None) -> d
                 WHERE project_id=?
                 GROUP BY project_id, kol_pool_id
             ) ev ON ev.project_id = a.project_id AND ev.kol_pool_id = a.kol_pool_id
+            LEFT JOIN (
+                SELECT DISTINCT ON (project_id, kol_pool_id)
+                    project_id,
+                    kol_pool_id,
+                    content_url,
+                    title,
+                    video_title,
+                    thumbnail_url,
+                    view_count,
+                    publish_date,
+                    id
+                FROM vkpi_kol_video_evidence
+                WHERE project_id=? AND COALESCE(evidence_type, 'video') = 'video'
+                ORDER BY
+                    project_id,
+                    kol_pool_id,
+                    COALESCE(view_count, 0) DESC,
+                    publish_date DESC NULLS LAST,
+                    id DESC
+            ) top_ev ON top_ev.project_id = a.project_id AND top_ev.kol_pool_id = a.kol_pool_id
+            LEFT JOIN (
+                SELECT DISTINCT ON (project_id, kol_pool_id)
+                    project_id,
+                    kol_pool_id,
+                    content_url,
+                    title,
+                    video_title,
+                    thumbnail_url,
+                    publish_date,
+                    id
+                FROM vkpi_kol_video_evidence
+                WHERE project_id=? AND COALESCE(evidence_type, 'video') = 'video'
+                ORDER BY
+                    project_id,
+                    kol_pool_id,
+                    publish_date DESC NULLS LAST,
+                    id DESC
+            ) latest_ev ON latest_ev.project_id = a.project_id AND latest_ev.kol_pool_id = a.kol_pool_id
             WHERE a.project_id=?
             ORDER BY
                 CASE a.stage
@@ -156,7 +204,7 @@ def project_detail(project_id: int, *, staff: dict[str, Any] | None = None) -> d
                 kp.display_name ASC,
                 a.id ASC
             """,
-            (int(project_id), int(project_id)),
+            (int(project_id), int(project_id), int(project_id), int(project_id)),
         ).fetchall()
     ]
     for item in participating_kols:

@@ -212,6 +212,16 @@ export interface VkpiProjectRow {
   kolHandle: string;
   kolAvatar?: string;
   kolProfileUrl?: string;
+  videoUrl?: string;
+  evidenceUrl?: string;
+  evidenceTitle?: string;
+  evidenceThumbnailUrl?: string;
+  evidencePublishDate?: string;
+  latestVideoUrl?: string;
+  latestEvidenceUrl?: string;
+  latestEvidenceTitle?: string;
+  latestEvidenceThumbnailUrl?: string;
+  latestEvidencePublishDate?: string;
   platform: VkpiPlatform;
   campaign: string;
   stage: VkpiProjectStage;
