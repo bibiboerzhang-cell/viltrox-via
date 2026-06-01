@@ -130,6 +130,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "082_vkpi_market_provider_smoke_budget.sql",
     "093_project_follow_status.sql",
     "094_vkpi_project_stars.sql",
+    "095_apify_jobs.sql",
 )
 
 try:
