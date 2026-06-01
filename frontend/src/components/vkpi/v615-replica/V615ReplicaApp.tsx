@@ -738,6 +738,7 @@ export function V615ReplicaApp(props: any = {}) {
                     badge === "49" ? "bg-rose-500/30 text-rose-200" :
                     badge === "7"  ? "bg-blue-500/30 text-blue-200" :
                     badge === "New" ? "bg-emerald-500/30 text-emerald-200" :
+                    badge === "GEN2" ? "border border-blue-400/40 bg-blue-500/10 text-blue-200" :
                     "bg-slate-600/40 text-slate-300"
                   }`
                 }, badge)
