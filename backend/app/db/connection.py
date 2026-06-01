@@ -131,6 +131,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "093_project_follow_status.sql",
     "094_vkpi_project_stars.sql",
     "095_apify_jobs.sql",
+    "096_vkpi_analysis_cache.sql",
 )
 
 try:
