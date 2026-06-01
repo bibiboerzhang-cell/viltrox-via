@@ -2,20 +2,43 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export ENVIRONMENT="${ENVIRONMENT:-local}"
+export APP_ROLE="${APP_ROLE:-worker}"
 source "$ROOT/scripts/runtime_env.sh"
+
 PYTHON_BIN="${PYTHON_BIN:-python3}"
+PIDFILE="${PIDFILE:-$ROOT/runtime/worker.pid}"
+LOGFILE="${LOGFILE:-$ROOT/runtime/logs/worker.log}"
 
 cd "$ROOT"
+mkdir -p "$ROOT/runtime/logs"
 
-export APP_ROLE="${APP_ROLE:-worker}"
-export ENVIRONMENT="${ENVIRONMENT:-production}"
 export DB_RUNTIME_BACKEND="${DB_RUNTIME_BACKEND:-postgres}"
-export ENABLE_LOCAL_ORCHESTRATOR="${ENABLE_LOCAL_ORCHESTRATOR:-0}"
 export ENABLE_SCHEDULER="${ENABLE_SCHEDULER:-0}"
 export ENABLE_BROWSER="${ENABLE_BROWSER:-0}"
 export ENABLE_UPLOAD_CLEANUP="${ENABLE_UPLOAD_CLEANUP:-0}"
-export DATABASE_URL="${DATABASE_URL:-$LOCAL_DATABASE_URL}"
-export REDIS_URL="${REDIS_URL:-$LOCAL_REDIS_URL}"
+export PYTHONPATH="$ROOT/backend${PYTHONPATH:+:$PYTHONPATH}"
 
-cd "$ROOT/backend"
-exec "$PYTHON_BIN" -m app.workers.worker_main
+if [[ -f "$PIDFILE" ]]; then
+  PID="$(cat "$PIDFILE" 2>/dev/null || true)"
+  if [[ -n "$PID" ]] && kill -0 "$PID" 2>/dev/null; then
+    echo "apify worker already running with pid $PID"
+    exit 0
+  fi
+  rm -f "$PIDFILE"
+fi
+
+nohup "$PYTHON_BIN" -m app.workers.apify_jobs_worker >>"$LOGFILE" 2>&1 &
+PID="$!"
+echo "$PID" >"$PIDFILE"
+sleep 0.5
+if ! kill -0 "$PID" 2>/dev/null; then
+  rm -f "$PIDFILE"
+  echo "apify worker failed to start; tail $LOGFILE:" >&2
+  tail -n 40 "$LOGFILE" >&2 || true
+  exit 1
+fi
+
+echo "apify worker started pid $PID"
+echo "pidfile: $PIDFILE"
+echo "logfile: $LOGFILE"
