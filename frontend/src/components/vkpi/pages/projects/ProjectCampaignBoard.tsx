@@ -415,6 +415,8 @@ export function ProjectCampaignBoard({
           const messageSource = messageSourceLabels[group.latestMessageSource || ''] || group.latestMessageSource || '手动备注';
           const selected = group.rows.some((row) => row.id === selectedProjectId);
           const initial = ownerInitial(group.primary.ownerName);
+          const activityRaw = group.latestEvidencePublishDate;
+          const activityLabel = activityRaw ? projectBoardDateTime(activityRaw) : '活动时间未知';
           return (
             <article
               key={group.id}
@@ -508,7 +510,7 @@ export function ProjectCampaignBoard({
               <div className="px-4 py-2 flex items-center gap-2 border-t border-white/[0.04]" style={{ background: group.healthScore < 70 ? 'rgba(239,68,68,0.05)' : group.healthScore < 85 ? 'rgba(251,191,36,0.05)' : 'rgba(255,255,255,0.01)' }}>
                 <AlertCircle size={11} style={{ color: cardHealthColor }} />
                 <div className="text-[11px] flex-1" style={{ color: group.healthScore < 85 ? '#fbbf24' : '#94a3b8' }}>{group.bottleneck || group.currentFocus || '暂无瓶颈'}</div>
-                <div className="text-[10px] text-slate-500">更新 {projectBoardDateTime(group.latestMessageAt)} · {messageSource}</div>
+                <div className="text-[10px] text-slate-500">活动时间 {activityLabel} · {messageSource}</div>
               </div>
             </article>
           );
