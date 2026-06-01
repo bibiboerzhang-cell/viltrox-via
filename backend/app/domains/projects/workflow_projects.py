@@ -480,6 +480,7 @@ def update_project(project_id: int, body: dict[str, Any], *, staff: dict[str, An
         "tracking_number": ("tracking_number", "trackingNumber"),
         "target_post_date": ("target_post_date", "targetPostDate"),
         "due_at": ("due_at", "dueAt"),
+        "follow_status": ("follow_status", "followStatus"),
     }
     for column, keys in field_map.items():
         for key in keys:
@@ -489,6 +490,8 @@ def update_project(project_id: int, body: dict[str, Any], *, staff: dict[str, An
 
     if "project_name" in updates and not updates["project_name"]:
         raise ValueError("project_name required")
+    if "follow_status" in updates and updates["follow_status"] not in {"active", "paused"}:
+        raise ValueError("follow_status must be active or paused")
 
     if "assigned_staff_id" in body or "assignedStaffId" in body:
         assigned_staff_id = _int(body.get("assigned_staff_id") or body.get("assignedStaffId"))
@@ -531,7 +534,10 @@ def update_project(project_id: int, body: dict[str, Any], *, staff: dict[str, An
             "product_skus": [item["product_sku"] for item in products],
         },
     )
-    return {"id": int(project_id), "status": "updated", "updated_fields": sorted(updates.keys())}
+    result = {"id": int(project_id), "status": "updated", "updated_fields": sorted(updates.keys())}
+    if "follow_status" in updates:
+        result["follow_status"] = updates["follow_status"]
+    return result
 
 
 def list_available_project_kols(

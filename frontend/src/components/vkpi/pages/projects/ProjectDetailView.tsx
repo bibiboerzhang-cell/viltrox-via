@@ -76,6 +76,7 @@ export function ProjectDetailView({
   onOpenKolProfile,
   onOpenStaffProfile,
   onUpdateProject,
+  onSetFollowStatus,
   onMoveProjectStage,
   onAddProjectCost,
   onUpsertProjectTerms,
@@ -525,6 +526,12 @@ export function ProjectDetailView({
     }
   };
 
+  const toggleFollowStatus = async () => {
+    if (!onSetFollowStatus) return;
+    await onSetFollowStatus(project, project.followStatus === 'paused' ? 'active' : 'paused');
+    await onProjectUpdated?.();
+  };
+
   const cancelProject = () => {
     if (!onDeleteProject) {
       setNotice({ tone: 'warning', title: '无法取消', body: '当前没有传入取消 / 删除项目接口。' });
@@ -602,6 +609,7 @@ export function ProjectDetailView({
           </div>
           <div className="flex items-center gap-2 mt-3 flex-wrap">
             <button className="px-3 py-1.5 rounded-md border border-white/[0.08] bg-white/[0.02] text-[11px] text-slate-300 hover:bg-white/[0.06] hover:text-white" type="button" onClick={() => setEditOpen(true)} disabled={!onUpdateProject}>编辑</button>
+            <button className="px-3 py-1.5 rounded-md border border-sky-400/30 bg-sky-400/10 text-[11px] text-sky-200 hover:bg-sky-400/15" type="button" onClick={() => void toggleFollowStatus()} disabled={!onSetFollowStatus}>{project.followStatus === 'paused' ? '重新开启' : '暂停本轮跟进'}</button>
             <button className="px-3 py-1.5 rounded-md border border-red-500/30 bg-red-500/10 text-[11px] text-red-300 hover:bg-red-500/15" type="button" onClick={cancelProject}>取消推广</button>
             {onDeleteProject ? <button className="px-3 py-1.5 rounded-md border border-red-500/30 bg-red-500/10 text-[11px] text-red-300 hover:bg-red-500/15" type="button" onClick={deleteProject}>删除</button> : null}
             <button className="px-3 py-1.5 rounded-md bg-purple-500/90 hover:bg-purple-500 text-white text-[11px] font-medium flex items-center gap-1.5" type="button" onClick={() => void openAddKolModal()}>+ 添加 KOL</button>

@@ -129,6 +129,18 @@ def update_project(project_id: int, body: dict, staff=Depends(require_tab("vkpi"
         raise _scope_403(exc) from exc
 
 
+@router.patch("/projects/{project_id}/follow-status")
+def update_project_follow_status(project_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
+    try:
+        return workflow.update_project(project_id, {"follow_status": body.get("follow_status") or body.get("followStatus")}, staff=staff)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
 @router.post("/projects/{project_id}/stage")
 def transition_project(project_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
     try:

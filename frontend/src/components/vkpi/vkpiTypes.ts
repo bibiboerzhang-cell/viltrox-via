@@ -225,6 +225,7 @@ export interface VkpiProjectRow {
   platform: VkpiPlatform;
   campaign: string;
   stage: VkpiProjectStage;
+  followStatus?: 'active' | 'paused';
   latestMessageAt: string;
   latestMessageSource: 'DM' | 'Email' | 'Comment reply' | 'Manual note' | 'No reply';
   views: number;

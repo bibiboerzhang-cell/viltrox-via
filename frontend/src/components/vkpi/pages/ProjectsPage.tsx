@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import type { VkpiDashboardData, VkpiKolOption, VkpiPageKey, VkpiProjectRow, VkpiProjectStage, VkpiStaffMember } from '../vkpiTypes';
 import { clearProjectFocus, readProjectFocus, type IntelligenceProjectFocusPayload } from '../intelligence/intelligenceProjectFocus';
 import { useProjectDetail } from '../hooks/useProjectDetail';
-import { addKolsToProject, advanceProjectKol, getAvailableProjectKols, submitProjectKolActionStub, updateProjectKolShipping } from '../../../domains/projects';
+import { addKolsToProject, advanceProjectKol, getAvailableProjectKols, submitProjectKolActionStub, updateProjectFollowStatus, updateProjectKolShipping } from '../../../domains/projects';
 import { buildKolOptions } from '../../../domains/kol';
 import { PageShell } from './PageShell';
 import { ProjectCampaignBoard } from './projects/ProjectCampaignBoard';
@@ -262,6 +262,12 @@ export function ProjectsPage({
     return submitProjectKolActionStub(apiToken, projectId, kolRef, actionKind, payload);
   };
 
+  const setProjectFollowStatus = async (project: VkpiProjectRow, followStatus: 'active' | 'paused') => {
+    if (!apiToken) throw new Error('缺少 API token，不能更新跟进状态。');
+    await updateProjectFollowStatus(apiToken, project.id, followStatus);
+    await onRefreshData?.();
+  };
+
   const refreshProjectData = async () => {
     await projectDetailState.refresh();
     await onRefreshData?.();
@@ -358,6 +364,7 @@ export function ProjectsPage({
             onAdvanceProjectKol={apiToken ? advanceProjectKolRow : undefined}
             onUpdateProjectKolShipping={apiToken ? updateProjectKolShippingRow : undefined}
             onSubmitProjectKolActionStub={apiToken ? submitProjectKolStub : undefined}
+            onSetFollowStatus={apiToken ? setProjectFollowStatus : undefined}
             onSelectPage={onSelectPage}
             onToggleView={onToggleView}
           />
@@ -384,6 +391,7 @@ export function ProjectsPage({
         onOpenStaffProfile={onOpenStaffProfile}
         onOpenCreateProject={() => setCreateOpen(true)}
         onOpenImportKols={apiToken && filteredProjects.length > 0 ? () => setImportOpen(true) : undefined}
+        onSetFollowStatus={apiToken ? setProjectFollowStatus : undefined}
       />
       {message ? <div className="vkpi-inline-message">{message}</div> : null}
       {importOpen ? (

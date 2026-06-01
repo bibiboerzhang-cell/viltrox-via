@@ -26,6 +26,7 @@ export const PROJECT_STATUS_COLOR: Record<string, string> = {
   规划中: '#06b6d4',
   进行中: '#a855f7',
   收尾中: '#10b981',
+  已暂停: '#60a5fa',
   已结束: '#64748b',
   已取消: '#94a3b8',
 };

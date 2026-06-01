@@ -129,6 +129,14 @@ export async function transitionProjectStage(token: string, projectId: string, p
   );
 }
 
+export async function updateProjectFollowStatus(token: string, projectId: string, followStatus: 'active' | 'paused') {
+  return apiFetch<Row>(
+    `/api/marketing/projects/${encodeURIComponent(projectId)}/follow-status`,
+    { method: "PATCH", body: jsonBody({ follow_status: followStatus }) },
+    token,
+  );
+}
+
 export async function deleteProject(token: string, projectId: string, reason = "前端删除项目") {
   return apiFetch<Row>(
     `/api/marketing/projects/${encodeURIComponent(projectId)}`,

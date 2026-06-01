@@ -156,6 +156,7 @@ export interface ProjectDetailViewProps {
   onOpenKolProfile?: (project: VkpiProjectRow) => void | Promise<void>;
   onOpenStaffProfile?: (staffId: string, fallback?: Partial<VkpiStaffMember>) => void | Promise<void>;
   onUpdateProject?: (projectId: string, payload: { projectName?: string; productSku?: string; productName?: string; products?: Array<{ productSku: string; productName?: string }>; platform?: string; marketplace?: string; priority?: string; shopifyLink?: string; targetPostDate?: string; dueAt?: string; note?: string }) => Promise<void>;
+  onSetFollowStatus?: (project: VkpiProjectRow, followStatus: 'active' | 'paused') => void | Promise<void>;
   onMoveProjectStage?: (projectId: string, toStage: VkpiProjectStage, note?: string, extras?: { trackingNumber?: string; sampleStatus?: string; sourceRefType?: string; sourceRefId?: string }) => Promise<void>;
   onAddProjectCost?: (payload: { projectId: string; costType: string; amountUsd: number; note?: string; sourceRef?: string; metadata?: Record<string, unknown> }) => Promise<void>;
   onUpsertProjectTerms?: (projectId: string, payload: Record<string, unknown>) => Promise<void>;
@@ -174,6 +175,7 @@ export interface ProjectDetailViewProps {
 }
 
 export function statusForProject(project: VkpiProjectRow) {
+  if (project.followStatus === 'paused') return '已暂停';
   if (cancelledStages.has(project.stage)) return '已取消';
   if (terminalStages.has(project.stage)) return '已结束';
   if (wrappingStages.has(project.stage)) return '收尾中';

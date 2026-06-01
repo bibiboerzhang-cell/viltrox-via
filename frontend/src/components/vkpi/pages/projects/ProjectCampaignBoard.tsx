@@ -15,7 +15,7 @@ import {
   statusBg,
 } from './projectDeliverableStyle';
 
-const boardStatuses = ['全部', '规划中', '进行中', '收尾中', '已结束', '已取消'] as const;
+const boardStatuses = ['全部', '规划中', '进行中', '收尾中', '已暂停', '已结束', '已取消'] as const;
 type BoardStatus = typeof boardStatuses[number];
 const boardSortOptions = [
   { value: 'lastActivity', label: '最后活动' },
@@ -79,6 +79,7 @@ const messageSourceLabels: Record<string, string> = {
 };
 
 function statusForProject(project: VkpiProjectRow): BoardStatus {
+  if (project.followStatus === 'paused') return '已暂停';
   if (cancelledStages.has(project.stage)) return '已取消';
   if (terminalStages.has(project.stage)) return '已结束';
   if (wrappingStages.has(project.stage)) return '收尾中';
@@ -193,6 +194,7 @@ function compareCampaignGroups(a: CampaignGroup, b: CampaignGroup, sortBy: Board
 
 function groupStatus(rows: VkpiProjectRow[]): BoardStatus {
   const statuses = rows.map(statusForProject);
+  if (statuses.includes('已暂停')) return '已暂停';
   if (statuses.includes('进行中')) return '进行中';
   if (statuses.includes('收尾中')) return '收尾中';
   if (statuses.includes('规划中')) return '规划中';
@@ -303,6 +305,7 @@ export function ProjectCampaignBoard({
   onOpenStaffProfile,
   onOpenCreateProject,
   onOpenImportKols,
+  onSetFollowStatus,
 }: {
   projects: VkpiProjectRow[];
   selectedProjectId?: string;
@@ -311,6 +314,7 @@ export function ProjectCampaignBoard({
   onOpenStaffProfile?: (staffId: string, fallback?: Partial<VkpiStaffMember>) => void | Promise<void>;
   onOpenCreateProject?: () => void;
   onOpenImportKols?: () => void;
+  onSetFollowStatus?: (project: VkpiProjectRow, followStatus: 'active' | 'paused') => void | Promise<void>;
 }) {
   const [status, setStatus] = useState<BoardStatus>('全部');
   const [platform, setPlatform] = useState<'全部平台' | VkpiPlatform>('全部平台');
@@ -437,6 +441,7 @@ export function ProjectCampaignBoard({
           const initial = ownerInitial(group.primary.ownerName);
           const activityRaw = group.latestEvidencePublishDate;
           const activityLabel = activityRaw ? projectBoardDateTime(activityRaw) : '活动时间未知';
+          const paused = group.primary.followStatus === 'paused';
           return (
             <article
               key={group.id}
@@ -453,6 +458,9 @@ export function ProjectCampaignBoard({
                     <div className="flex items-center gap-2 mb-1 flex-wrap">
                       <div className="text-[14px] font-semibold text-white">{group.title}</div>
                       <span className="text-[10px] px-1.5 py-0.5 rounded font-medium" style={{ background: statusBg(group.status), color: PROJECT_STATUS_COLOR[group.status] || PROJECT_STATUS_COLOR['已结束'] }}>{group.status}</span>
+                      <button className="text-[10px] px-1.5 py-0.5 rounded border border-sky-400/30 bg-sky-400/10 text-sky-200" type="button" onClick={(event) => { event.stopPropagation(); void onSetFollowStatus?.(group.primary, paused ? 'active' : 'paused'); }} disabled={!onSetFollowStatus}>
+                        {paused ? '重新开启' : '暂停本轮跟进'}
+                      </button>
                       <span className="text-[10px] text-slate-500">·</span>
                       <span className="text-[10.5px] text-slate-400">{group.currentFocus || group.focus.stageDurationLabel || '真实项目'}</span>
                     </div>

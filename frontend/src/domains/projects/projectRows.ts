@@ -67,6 +67,7 @@ export function buildDashboardProjects(
       platform: platformLabel(project.kol_platform || project.platform),
       campaign: String(project.project_name || project.project_uid || '未命名项目'),
       stage: stageValue(project.stage),
+      followStatus: project.follow_status === 'paused' || project.followStatus === 'paused' ? 'paused' : 'active',
       latestMessageAt: String(project.last_activity_at || project.updated_at || '-'),
       latestMessageSource: 'Manual note',
       views,
