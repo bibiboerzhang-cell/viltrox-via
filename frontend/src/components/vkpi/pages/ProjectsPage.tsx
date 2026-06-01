@@ -14,6 +14,7 @@ interface ProjectsPageProps {
   filteredProjects: VkpiProjectRow[];
   selectedProjectId?: string;
   selectedProject?: VkpiProjectRow;
+  openProjectId?: string;
   viewMode: 'manager' | 'employee';
   onSelectProject: (project: VkpiProjectRow) => void;
   onOpenKolProfile?: (project: VkpiProjectRow) => void | Promise<void>;
@@ -68,6 +69,7 @@ export function ProjectsPage({
   filteredProjects,
   selectedProjectId,
   selectedProject,
+  openProjectId,
   viewMode,
   onOpenKolProfile,
   onOpenStaffProfile,
@@ -103,6 +105,10 @@ export function ProjectsPage({
   const [detailProjectId, setDetailProjectId] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [projectFocus, setProjectFocus] = useState<IntelligenceProjectFocusPayload | null>(null);
+
+  useEffect(() => {
+    if (openProjectId) setDetailProjectId(openProjectId);
+  }, [openProjectId]);
 
   const productChoices = useMemo(() => {
     const bySku = new Map<string, { id: string; productSku: string; productName: string; sourceLabel: string }>();

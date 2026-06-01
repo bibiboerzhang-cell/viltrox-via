@@ -101,6 +101,7 @@ export function V615ReplicaApp(props: any = {}) {
 
   const [selectedPin, setSelectedPin] = useState(null);
   const [selectedLegacyProject, setSelectedLegacyProject] = useState(null);
+  const [openLegacyProjectId, setOpenLegacyProjectId] = useState("");
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [selectedKpi, setSelectedKpi] = useState(null);
   const [previewEvent, setPreviewEvent] = useState(null);
@@ -139,7 +140,7 @@ export function V615ReplicaApp(props: any = {}) {
     dashboardRuntime,
     dashboardLoading,
     dashboardError,
-  } = useV615Runtime({ apiToken, userName, userRole, userAvatar });
+  } = useV615Runtime({ apiToken, userName, userRole, userAvatar, starredProjects: dashboardData.starredProjects || [] });
   const activeStaffId = viewingAs ? viewingAs.id : currentUser.id;
   const activeReminders = useMemo(() => viewingAs ? [] : runtimeReminders, [viewingAs, runtimeReminders]);
   const reportData = useMemo(() => ({
@@ -580,7 +581,19 @@ export function V615ReplicaApp(props: any = {}) {
     // V6.11: Signal Detail Modal
     e(AnimatePresence, null, selectedSignal && e(SignalDetailModal, { alert: selectedSignal, onClose: () => setSelectedSignal(null) })),
     // V6.13: 新 modal mounts
-    e(AnimatePresence, null, selectedProject && e(ProjectDetailModal, { project: selectedProject, onClose: () => setSelectedProject(null) })),
+    e(AnimatePresence, null, selectedProject && e(ProjectDetailModal, {
+      project: selectedProject,
+      onClose: () => setSelectedProject(null),
+      onOpenFullPage: (project) => {
+        const projectId = String(project?.projectId || project?.id || "");
+        const row = (dashboardData.projects || []).find((item) => item.id === projectId);
+        setSelectedLegacyProject(row || null);
+        setOpenLegacyProjectId(projectId);
+        setSelectedProject(null);
+        saveStoredState({ activeNav: "projects" });
+        setActiveNav("projects");
+      },
+    })),
     e(AnimatePresence, null, selectedPublish && e(PublishPreviewModal, { item: selectedPublish, onClose: () => setSelectedPublish(null) })),
     e(AnimatePresence, null, selectedMover && e(KOLDetailModal, { mover: selectedMover, onClose: () => setSelectedMover(null) })),
     e(AnimatePresence, null, showAllSignals && e(SignalsAllModal, { 
@@ -881,6 +894,7 @@ export function V615ReplicaApp(props: any = {}) {
                 filteredProjects: dashboardData.projects || [],
                 selectedProjectId: selectedLegacyProject?.id,
                 selectedProject: selectedLegacyProject || (dashboardData.projects || [])[0],
+                openProjectId: openLegacyProjectId,
                 viewMode: appViewMode,
                 apiToken,
                 onSelectProject: setSelectedLegacyProject,

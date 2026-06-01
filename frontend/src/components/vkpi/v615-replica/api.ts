@@ -32,6 +32,7 @@ export async function fetchV615DashboardBundle(apiToken: string) {
     copilotBrief,
     tasks,
     marketCards,
+    starredProjects,
   ] = await Promise.all([
     settle(apiFetch<Row>("/api/admin/vkpi/dashboard?window_days=30", { timeoutMs: 4000 }, apiToken), {}),
     settle(apiFetch<{ rows?: Row[] }>("/api/admin/vkpi/dashboard/revenue-trend?window_days=14", { timeoutMs: 3500 }, apiToken), { rows: [] }),
@@ -41,6 +42,7 @@ export async function fetchV615DashboardBundle(apiToken: string) {
     settle(apiFetch<Row>("/api/admin/vkpi/dashboard/copilot-brief", { timeoutMs: 2500 }, apiToken), {}),
     settle(apiFetch<Row>("/api/admin/vkpi/dashboard/tasks?limit=8", { timeoutMs: 2500 }, apiToken), {}),
     settle(apiFetch<Row>("/api/admin/vkpi/industry-data/market-intelligence/cards/v0?limit=120&brand_limit=5&include_latest_llm_artifact=false&include_latest_external_smoke=false", { timeoutMs: 2500 }, apiToken), {}),
+    settle(apiFetch<{ projects?: Row[] }>("/api/admin/vkpi/projects?limit=100&starred=true", { timeoutMs: 3500 }, apiToken), { projects: [] }),
   ]);
 
   return {
@@ -52,6 +54,7 @@ export async function fetchV615DashboardBundle(apiToken: string) {
     copilotBrief,
     tasks,
     marketCards,
+    starredProjects: Array.isArray(starredProjects.projects) ? starredProjects.projects : [],
   };
 }
 

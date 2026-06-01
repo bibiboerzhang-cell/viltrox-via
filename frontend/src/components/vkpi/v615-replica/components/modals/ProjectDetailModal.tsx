@@ -11,7 +11,7 @@ import { PLATFORM_ICONS_MAP } from "../../data/platformIconsMap";
 
 const e = React.createElement;
 
-export function ProjectDetailModal({ project, onClose }) {
+export function ProjectDetailModal({ project, onClose, onOpenFullPage }) {
   const { t } = useT();
   const [activeTab, setActiveTab] = useState("kols");  // kols / pending / assets / new-kol
   if (!project) return null;
@@ -49,7 +49,7 @@ export function ProjectDetailModal({ project, onClose }) {
         ),
         e("div", { className: "flex items-center gap-1.5" },
           e("button", { className: "rounded-md border border-white/[0.08] bg-white/[0.04] px-2 py-1 text-[10px] text-slate-300 hover:bg-white/[0.08]" }, t("编辑")),
-          e("button", { className: "rounded-md border border-purple-500/30 bg-purple-500/[0.08] px-2 py-1 text-[10px] text-purple-200 hover:bg-purple-500/[0.15] flex items-center gap-1" },
+          e("button", { onClick: () => onOpenFullPage && onOpenFullPage(project), className: "rounded-md border border-purple-500/30 bg-purple-500/[0.08] px-2 py-1 text-[10px] text-purple-200 hover:bg-purple-500/[0.15] flex items-center gap-1" },
             "打开完整页 ", e(ArrowLeft, { size: 9, className: "rotate-180" })),
           e("button", { onClick: onClose, className: "rounded-md border border-white/10 bg-white/5 p-1.5 text-slate-400 hover:text-white hover:bg-white/10" }, e(X, { size: 14 }))
         )

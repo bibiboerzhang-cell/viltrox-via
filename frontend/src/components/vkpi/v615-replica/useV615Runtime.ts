@@ -51,7 +51,7 @@ async function listAllKolPoolPages(apiToken) {
   return pages;
 }
 
-export function useV615Runtime({ apiToken, userName, userRole, userAvatar }) {
+export function useV615Runtime({ apiToken, userName, userRole, userAvatar, starredProjects }) {
   const [currentUser, setCurrentUser] = useState(() => normalizeCurrentUser(null, { userName, userRole, userAvatar }));
   const [runtimeNotifications, setRuntimeNotifications] = useState([]);
   const [runtimeReminders, setRuntimeReminders] = useState([]);
@@ -193,7 +193,10 @@ export function useV615Runtime({ apiToken, userName, userRole, userAvatar }) {
     };
   }, [apiToken]);
 
-  const dashboardRuntime = useMemo(() => normalizeV615Dashboard(dashboardRaw, kolPoolRows), [dashboardRaw, kolPoolRows]);
+  const dashboardRuntime = useMemo(() => normalizeV615Dashboard({
+    ...dashboardRaw,
+    starredProjects: Array.isArray(starredProjects) ? starredProjects : dashboardRaw.starredProjects,
+  }, kolPoolRows), [dashboardRaw, kolPoolRows, starredProjects]);
 
   return {
     currentUser,

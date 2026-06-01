@@ -27,6 +27,7 @@ export const emptyDashboardData: VkpiDashboardData = {
     status: 'Generating',
   },
   projects: [],
+  starredProjects: [],
   links: [],
   attributions: [],
   unmatchedAttributions: [],

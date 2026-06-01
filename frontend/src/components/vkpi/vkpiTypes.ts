@@ -692,6 +692,7 @@ export interface VkpiDashboardData {
   weeklySummary: string;
   exportReport: VkpiExportReport;
   projects: VkpiProjectRow[];
+  starredProjects?: VkpiProjectRow[];
   links: VkpiLinkRow[];
   attributions: VkpiAttributionRow[];
   unmatchedAttributions: VkpiAttributionRow[];

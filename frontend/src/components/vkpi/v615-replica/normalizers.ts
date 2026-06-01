@@ -460,6 +460,70 @@ function normalizeActiveCampaignsMeta(block = {}) {
   };
 }
 
+function timestampOrEmpty(value) {
+  const raw = String(value || "");
+  const time = raw ? Date.parse(raw) : Number.NEGATIVE_INFINITY;
+  return Number.isFinite(time) ? time : Number.NEGATIVE_INFINITY;
+}
+
+function normalizeProjectFunnel(stageCounts = {}) {
+  const counts = record(stageCounts);
+  const keys = ["discovery", "contacted", "replied", "agreed", "shipped", "received", "published", "measured", "closed"];
+  const labels = ["发现", "已联系", "已回复", "已合作", "已发货", "已到货", "已发布", "已统计", "已关闭"];
+  return keys.map((key, index) => ({
+    name: labels[index],
+    label: `${index + 1}.${labels[index]}`,
+    count: int(counts[key]) || 0,
+  }));
+}
+
+function normalizeStarredCampaigns(rows = []) {
+  const latestPublishOf = (row) => String(record(row).latest_publish_date || record(row).latestEvidencePublishDate || record(row).evidencePublishDate || "");
+  return list(rows)
+    .slice()
+    .sort((a, b) => timestampOrEmpty(latestPublishOf(b)) - timestampOrEmpty(latestPublishOf(a)))
+    .map((row, index) => {
+      const item = record(row);
+      const projectId = item.id || item.project_id || item.projectId || item.project_uid || `starred-project-${index}`;
+      const healthScore = int(item.health_score ?? item.healthScore);
+      const kolCount = int(item.kol_count ?? item.kolCount);
+      const published = int(item.published_count ?? item.publishedCount);
+      const totalViews = int(item.total_views ?? item.views);
+      const latestPublish = latestPublishOf(item);
+      return {
+        id: projectId,
+        projectId: String(projectId),
+        name: String(item.project_name || item.projectName || item.campaign || item.name || "未命名项目"),
+        product: String(item.product_name || item.productName || item.product_sku || item.productSku || ""),
+        iconKey: "camera",
+        iconColor: COLORS[index % COLORS.length],
+        status: String(item.stage || "active"),
+        statusLabel: String(item.stage_status || item.stage || "进行中"),
+        healthScore: healthScore ?? "待评估",
+        healthColor: healthScore == null ? "#64748b" : healthScore >= 85 ? "#10b981" : healthScore >= 70 ? "#f59e0b" : "#ef4444",
+        lastUpdate: latestPublish ? latestPublish.slice(0, 10) : "活动时间未知",
+        owner: String(item.staff_name || item.ownerName || "项目工作流"),
+        startDate: String(item.created_at || "").slice(0, 10) || "真实项目",
+        source: "starred_projects",
+        stats: {
+          kolCount: kolCount ?? DASH,
+          published: published ?? DASH,
+          publishRate: null,
+          totalReach: totalViews != null ? compact(totalViews) : DASH,
+          shortClicks: int(item.evidence_count ?? item.evidenceCount) ?? DASH,
+          dailyClicks: DASH,
+        },
+        funnel: normalizeProjectFunnel(item.stage_counts || item.stageCounts),
+        bottleneckText: String(item.bottleneck || item.current_focus || item.currentFocus || "个人重点项目"),
+        kolList: [],
+        pendingPublishes: [],
+        assets: [],
+        newKolSuggestions: [],
+        raw: item,
+      };
+    });
+}
+
 export function normalizeCalendar(items = []) {
   const buckets = new Map();
   for (const raw of list(items)) {
@@ -612,11 +676,19 @@ export function normalizeV615Dashboard(bundle, kolRows) {
   const summary = record(dashboard.summary);
   const activeCampaignsBlock = record(summary.active_campaigns);
   const activeCampaignsMeta = normalizeActiveCampaignsMeta(activeCampaignsBlock);
+  const starredCampaigns = normalizeStarredCampaigns(bundle.starredProjects);
   const realCampaigns = activeCampaignsMeta.isReal ? normalizeActiveCampaigns(activeCampaignsBlock) : null;
+  const campaigns = starredCampaigns.length ? starredCampaigns : [];
   return {
     metrics: normalizeDashboardMetrics(bundle, kolRows),
-    campaigns: realCampaigns ?? normalizeCampaigns(bundle.productRows),
-    campaignsMeta: activeCampaignsMeta,
+    campaigns,
+    campaignsMeta: {
+      ...activeCampaignsMeta,
+      isReal: true,
+      source: "starred_projects",
+      activeCount: starredCampaigns.length,
+      fallbackCount: realCampaigns?.length ?? normalizeCampaigns(bundle.productRows).length,
+    },
     calendarDays: normalizeCalendar(bundle.recentContent),
     aiInsight: normalizeAiInsight(bundle.copilotBrief, bundle.tasks),
     signals: normalizeSignals(bundle.marketCards),

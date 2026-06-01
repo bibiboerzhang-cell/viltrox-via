@@ -16,6 +16,7 @@ export function ActiveCampaignsCard({ campaigns, campaignsMeta, onCampaignClick,
   const realCount = campaignsMeta?.isReal ? Number(campaignsMeta.activeCount || 0) : null;
   const activeCount = realCount ?? campaigns.filter(c => c.status !== "done").length;
   const windowDays = Number(campaignsMeta?.windowDays || 30);
+  const isStarredSource = campaignsMeta?.source === "starred_projects";
   return e(motion.div, {
     initial: { opacity: 0, y: 8 },
     animate: { opacity: 1, y: 0 },
@@ -29,16 +30,18 @@ export function ActiveCampaignsCard({ campaigns, campaignsMeta, onCampaignClick,
         e("h3", { className: "text-sm font-semibold text-white" }, "Active Campaigns")
       ),
       e("div", { className: "flex items-center gap-2" },
-        e("span", { className: "text-[10px] text-slate-400" }, `${activeCount} active`)
+        e("span", { className: "text-[10px] text-slate-400" }, isStarredSource ? `${activeCount} starred` : `${activeCount} active`)
       )
     ),
     // Campaign list
     e("div", { className: "space-y-2" },
       campaigns.length === 0
         ? e("div", { className: "rounded-md border border-dashed border-white/[0.08] px-3 py-6 text-center" },
-            e("div", { className: "text-[11px] font-medium text-slate-300" }, campaignsMeta?.isReal ? "当前口径为 0 个 active" : "暂无真实项目数据"),
+            e("div", { className: "text-[11px] font-medium text-slate-300" }, isStarredSource ? "还没标记重点项目" : campaignsMeta?.isReal ? "当前口径为 0 个 active" : "暂无真实项目数据"),
             e("div", { className: "mx-auto mt-1 max-w-[220px] text-[10px] leading-relaxed text-slate-500" },
-              campaignsMeta?.isReal
+              isStarredSource
+                ? "在 Projects 卡片点亮「重点」后，这里只显示你自己的重点项目。"
+                : campaignsMeta?.isReal
                 ? `口径: 未关闭项目 + 寄样/到货/出片阶段, 或近 ${windowDays} 天新增视频证据。`
                 : "等待项目工作流接入。"
             )
