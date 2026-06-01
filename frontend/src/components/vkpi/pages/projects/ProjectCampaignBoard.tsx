@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { AlertCircle, PackageCheck } from 'lucide-react';
+import { AlertCircle, PackageCheck, Star } from 'lucide-react';
 import type { VkpiPlatform, VkpiProjectRow, VkpiProjectStage, VkpiStaffMember } from '../../vkpiTypes';
 import { primaryStageFlow } from '../../shared/vkpiConstants';
 import { currencyFormatter, numberFormatter } from '../../shared/vkpiFormatters';
@@ -306,6 +306,7 @@ export function ProjectCampaignBoard({
   onOpenCreateProject,
   onOpenImportKols,
   onSetFollowStatus,
+  onSetProjectStar,
 }: {
   projects: VkpiProjectRow[];
   selectedProjectId?: string;
@@ -315,11 +316,13 @@ export function ProjectCampaignBoard({
   onOpenCreateProject?: () => void;
   onOpenImportKols?: () => void;
   onSetFollowStatus?: (project: VkpiProjectRow, followStatus: 'active' | 'paused') => void | Promise<void>;
+  onSetProjectStar?: (project: VkpiProjectRow, starred: boolean) => void | Promise<void>;
 }) {
   const [status, setStatus] = useState<BoardStatus>('全部');
   const [platform, setPlatform] = useState<'全部平台' | VkpiPlatform>('全部平台');
   const [sortBy, setSortBy] = useState<BoardSort>('lastActivity');
   const [sortDirection, setSortDirection] = useState<BoardSortDirection>('desc');
+  const [starredOnly, setStarredOnly] = useState(false);
   const [search, setSearch] = useState('');
   const campaignGroups = useMemo(() => buildCampaignGroups(projects), [projects]);
   const focusRows = useMemo(() => campaignGroups.map((group) => group.focus), [campaignGroups]);
@@ -335,6 +338,7 @@ export function ProjectCampaignBoard({
   const filteredCampaignGroups = useMemo(() => {
     const query = search.trim().toLowerCase();
     return campaignGroups.filter((group) => {
+      if (starredOnly && !group.rows.some((row) => row.isStarred)) return false;
       if (status !== '全部' && group.status !== status) return false;
       if (platform !== '全部平台' && !group.platforms.includes(platform)) return false;
       if (!query) return true;
@@ -346,17 +350,14 @@ export function ProjectCampaignBoard({
         ...group.rows.flatMap((row) => [row.kolName, row.kolHandle, row.platform]),
       ].join(' ').toLowerCase().includes(query);
     }).sort((a, b) => compareCampaignGroups(a, b, sortBy, sortDirection));
-  }, [campaignGroups, platform, search, sortBy, sortDirection, status]);
+  }, [campaignGroups, platform, search, sortBy, sortDirection, starredOnly, status]);
   const health = boardHealth(focusRows);
   const stalledCount = campaignGroups.filter((group) => cancelledStages.has(group.focus.stage) || parseDays(group.stageDurationLabel) >= 10).length;
   const totalGmv = campaignGroups.reduce((sum, group) => sum + group.gmv, 0);
   const totalCost = campaignGroups.reduce((sum, group) => sum + group.cost, 0);
   const totalClicks = campaignGroups.reduce((sum, group) => sum + group.clicks, 0);
   const totalViews = campaignGroups.reduce((sum, group) => sum + group.views, 0);
-  const priorityGroup = campaignGroups.find((group) => cancelledStages.has(group.focus.stage) || parseDays(group.stageDurationLabel) >= 10)
-    || campaignGroups.find((group) => group.status === '进行中')
-    || campaignGroups[0];
-  const priorityProject = priorityGroup?.primary;
+  const starredCount = campaignGroups.filter((group) => group.rows.some((row) => row.isStarred)).length;
 
   return (
     <section className="vkpi-project-board" aria-label="我的项目看板">
@@ -366,8 +367,8 @@ export function ProjectCampaignBoard({
           <h2>把「项目跟进」从表格变成每日决策台。</h2>
           <p>保留新建推广、9 阶段推进、证据归档和 KOL 项目卡片；视觉上只突出进度、风险、ROI 和下一步动作。</p>
           <div className="vkpi-project-hero-buttons">
-            <button className="vkpi-project-hero-button is-primary" type="button" disabled={!priorityProject} onClick={() => priorityProject && onOpenProjectDetail(priorityProject)}>
-              查看当前重点项目
+            <button className="vkpi-project-hero-button is-primary" type="button" disabled={!campaignGroups.length} onClick={() => setStarredOnly((value) => !value)}>
+              {starredOnly ? '查看全部项目' : `查看当前重点项目${starredCount ? ` ${starredCount}` : ''}`}
             </button>
             <button className="vkpi-project-hero-button" type="button" onClick={onOpenImportKols} disabled={!onOpenImportKols}>
               导入 KOL 名单
@@ -442,6 +443,8 @@ export function ProjectCampaignBoard({
           const activityRaw = group.latestEvidencePublishDate;
           const activityLabel = activityRaw ? projectBoardDateTime(activityRaw) : '活动时间未知';
           const paused = group.primary.followStatus === 'paused';
+          const starredProject = group.rows.find((row) => row.isStarred) || group.primary;
+          const starred = Boolean(starredProject.isStarred);
           return (
             <article
               key={group.id}
@@ -457,6 +460,9 @@ export function ProjectCampaignBoard({
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1 flex-wrap">
                       <div className="text-[14px] font-semibold text-white">{group.title}</div>
+                      <button className={`text-[10px] px-1.5 py-0.5 rounded border flex items-center gap-1 ${starred ? 'border-amber-300/50 bg-amber-300/15 text-amber-200' : 'border-white/[0.08] bg-white/[0.03] text-slate-400'}`} type="button" onClick={(event) => { event.stopPropagation(); void onSetProjectStar?.(starredProject, !starred); }} disabled={!onSetProjectStar}>
+                        <Star size={11} fill={starred ? 'currentColor' : 'none'} />重点
+                      </button>
                       <span className="text-[10px] px-1.5 py-0.5 rounded font-medium" style={{ background: statusBg(group.status), color: PROJECT_STATUS_COLOR[group.status] || PROJECT_STATUS_COLOR['已结束'] }}>{group.status}</span>
                       <button className="text-[10px] px-1.5 py-0.5 rounded border border-sky-400/30 bg-sky-400/10 text-sky-200" type="button" onClick={(event) => { event.stopPropagation(); void onSetFollowStatus?.(group.primary, paused ? 'active' : 'paused'); }} disabled={!onSetFollowStatus}>
                         {paused ? '重新开启' : '暂停本轮跟进'}
@@ -544,7 +550,7 @@ export function ProjectCampaignBoard({
           );
         }) : (
           <div className="vkpi-project-board-empty">
-            当前筛选下没有项目。请先创建真实项目，或调整搜索和状态筛选。
+            {starredOnly ? '当前还没有重点项目。请先在项目卡上标记重点。' : '当前筛选下没有项目。请先创建真实项目，或调整搜索和状态筛选。'}
           </div>
         )}
       </div>

@@ -1,9 +1,10 @@
 """V-KPI project workflow routes."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.api.dependencies.perms import require_tab
+from app.core.security import get_current_user
 from app.domains import costs
 from app.domains.access import scope
 from app.domains.projects import workflow
@@ -17,10 +18,11 @@ def _scope_403(exc: Exception) -> HTTPException:
 def projects(
     stage: str = "",
     staff_id: int | None = None,
+    starred: bool = False,
     limit: int = Query(default=50, ge=1, le=200),
     staff=Depends(require_tab("vkpi", "read")),
 ):
-    return workflow.list_projects(limit=limit, stage=stage, staff=staff, staff_id_filter=staff_id)
+    return workflow.list_projects(limit=limit, stage=stage, staff=staff, staff_id_filter=staff_id, starred_only=starred)
 
 
 @router.get("/projects/{project_id}")
@@ -133,6 +135,21 @@ def update_project(project_id: int, body: dict, staff=Depends(require_tab("vkpi"
 def update_project_follow_status(project_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
     try:
         return workflow.update_project(project_id, {"follow_status": body.get("follow_status") or body.get("followStatus")}, staff=staff)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
+@router.patch("/projects/{project_id}/star")
+def update_project_star(project_id: int, body: dict, request: Request, staff=Depends(require_tab("vkpi", "write"))):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        return workflow.set_project_star(project_id, bool(body.get("starred")), staff={**staff, "user_id": int(user.get("id") or 0)})
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

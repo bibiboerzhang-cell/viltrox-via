@@ -208,12 +208,20 @@ def _log_project_audit(
         logger.warning("vkpi.workflow_project_audit_failed", extra={"action_type": action_type, "project_id": project_id, "error": str(exc)})
 
 
-def list_projects(limit: int = 50, stage: str = "", *, staff: dict[str, Any] | None = None, staff_id_filter: int | None = None) -> dict[str, Any]:
+def _current_user_id(staff: dict[str, Any] | None) -> int:
+    return int((staff or {}).get("user_id") or 0)
+
+
+def list_projects(limit: int = 50, stage: str = "", *, staff: dict[str, Any] | None = None, staff_id_filter: int | None = None, starred_only: bool = False) -> dict[str, Any]:
     ensure_vkpi_schema()
     limit_i = max(1, min(200, int(limit or 50)))
     conn = get_conn()
     params: list[Any] = []
+    current_user_id = _current_user_id(staff)
     where = "WHERE p.stage_status <> 'deleted' AND COALESCE(p.source_type, '') = 'excel_promo_plan'"
+    if starred_only:
+        where += " AND EXISTS (SELECT 1 FROM vkpi_project_stars ps_filter WHERE ps_filter.project_id = p.id AND ps_filter.user_id = ?)"
+        params.append(current_user_id)
     if stage:
         where += " AND p.stage = ?"
         params.append(stage)
@@ -242,6 +250,8 @@ def list_projects(limit: int = 50, stage: str = "", *, staff: dict[str, Any] | N
                ev.latest_publish_date AS latest_publish_date,
                COALESCE(ev.total_views, 0) AS total_views,
                COALESCE(s.name, assignment_owner.name) AS staff_name,
+               CASE WHEN ps.user_id IS NULL THEN FALSE ELSE TRUE END AS is_starred,
+               ps.created_at AS starred_at,
                (
                    SELECT MIN(e.effective_at)
                    FROM vkpi_project_stage_events e
@@ -300,15 +310,38 @@ def list_projects(limit: int = 50, stage: str = "", *, staff: dict[str, Any] | N
         LEFT JOIN users s ON s.id = st.user_id
         LEFT JOIN staff assignment_st ON assignment_st.id = assignment_owner_pick.assigned_staff_id
         LEFT JOIN users assignment_owner ON assignment_owner.id = assignment_st.user_id
+        LEFT JOIN vkpi_project_stars ps ON ps.project_id = p.id AND ps.user_id = ?
         {where}
         ORDER BY p.updated_at DESC, p.id DESC
         LIMIT ?
         """,
-        (*params, limit_i),
+        (current_user_id, *params, limit_i),
     ).fetchall()
     projects = [dict(row) for row in rows]
     _enrich_project_card_fields(conn, projects)
     return {"projects": projects, "scope": scope.scope_context(staff, staff_id_filter)}
+
+
+def set_project_star(project_id: int, starred: bool, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    ensure_vkpi_schema()
+    scope.assert_project_access(project_id, staff, write=False)
+    user_id = _current_user_id(staff)
+    if not user_id:
+        raise ValueError("user_id required")
+    conn = get_conn()
+    if starred:
+        conn.execute(
+            """
+            INSERT INTO vkpi_project_stars (user_id, project_id)
+            VALUES (?, ?)
+            ON CONFLICT (user_id, project_id) DO NOTHING
+            """,
+            (user_id, int(project_id)),
+        )
+    else:
+        conn.execute("DELETE FROM vkpi_project_stars WHERE user_id=? AND project_id=?", (user_id, int(project_id)))
+    conn.commit()
+    return {"project_id": int(project_id), "is_starred": bool(starred)}
 
 
 def _normalize_project_products(body: dict[str, Any]) -> list[dict[str, str]]:

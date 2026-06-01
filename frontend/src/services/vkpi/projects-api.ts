@@ -137,6 +137,14 @@ export async function updateProjectFollowStatus(token: string, projectId: string
   );
 }
 
+export async function updateProjectStar(token: string, projectId: string, starred: boolean) {
+  return apiFetch<Row>(
+    `/api/marketing/projects/${encodeURIComponent(projectId)}/star`,
+    { method: "PATCH", body: jsonBody({ starred }) },
+    token,
+  );
+}
+
 export async function deleteProject(token: string, projectId: string, reason = "前端删除项目") {
   return apiFetch<Row>(
     `/api/marketing/projects/${encodeURIComponent(projectId)}`,

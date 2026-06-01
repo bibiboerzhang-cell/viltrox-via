@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import type { VkpiDashboardData, VkpiKolOption, VkpiPageKey, VkpiProjectRow, VkpiProjectStage, VkpiStaffMember } from '../vkpiTypes';
 import { clearProjectFocus, readProjectFocus, type IntelligenceProjectFocusPayload } from '../intelligence/intelligenceProjectFocus';
 import { useProjectDetail } from '../hooks/useProjectDetail';
-import { addKolsToProject, advanceProjectKol, getAvailableProjectKols, submitProjectKolActionStub, updateProjectFollowStatus, updateProjectKolShipping } from '../../../domains/projects';
+import { addKolsToProject, advanceProjectKol, getAvailableProjectKols, submitProjectKolActionStub, updateProjectFollowStatus, updateProjectKolShipping, updateProjectStar } from '../../../domains/projects';
 import { buildKolOptions } from '../../../domains/kol';
 import { PageShell } from './PageShell';
 import { ProjectCampaignBoard } from './projects/ProjectCampaignBoard';
@@ -268,6 +268,12 @@ export function ProjectsPage({
     await onRefreshData?.();
   };
 
+  const setProjectStar = async (project: VkpiProjectRow, starred: boolean) => {
+    if (!apiToken) throw new Error('缺少 API token，不能更新重点标记。');
+    await updateProjectStar(apiToken, project.id, starred);
+    await onRefreshData?.();
+  };
+
   const refreshProjectData = async () => {
     await projectDetailState.refresh();
     await onRefreshData?.();
@@ -392,6 +398,7 @@ export function ProjectsPage({
         onOpenCreateProject={() => setCreateOpen(true)}
         onOpenImportKols={apiToken && filteredProjects.length > 0 ? () => setImportOpen(true) : undefined}
         onSetFollowStatus={apiToken ? setProjectFollowStatus : undefined}
+        onSetProjectStar={apiToken ? setProjectStar : undefined}
       />
       {message ? <div className="vkpi-inline-message">{message}</div> : null}
       {importOpen ? (

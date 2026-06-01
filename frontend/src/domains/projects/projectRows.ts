@@ -68,6 +68,8 @@ export function buildDashboardProjects(
       campaign: String(project.project_name || project.project_uid || '未命名项目'),
       stage: stageValue(project.stage),
       followStatus: project.follow_status === 'paused' || project.followStatus === 'paused' ? 'paused' : 'active',
+      isStarred: project.is_starred === true || project.isStarred === true || project.is_starred === 1,
+      starredAt: String(project.starred_at || project.starredAt || ''),
       latestMessageAt: String(project.last_activity_at || project.updated_at || '-'),
       latestMessageSource: 'Manual note',
       views,

@@ -38,6 +38,7 @@ from app.domains.projects.workflow_projects import (
     delete_project,
     list_available_project_kols,
     list_projects,
+    set_project_star,
     transition_project,
     update_project,
 )
@@ -63,6 +64,7 @@ __all__ = [
     "architecture_summary",
     "list_projects",
     "list_available_project_kols",
+    "set_project_star",
     "add_project_kols",
     "create_project",
     "update_project",
