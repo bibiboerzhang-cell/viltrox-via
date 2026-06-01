@@ -57,6 +57,7 @@ export function buildDashboardProjects(
     const startedAt = String(project.started_at || project.first_event_at || project.created_at || '');
     const closedAt = String(project.closed_at || '');
     const stageStartedAt = String(project.current_stage_started_at || project.last_activity_at || project.updated_at || '');
+    const latestEvidencePublishDate = String(project.latest_publish_date || project.latestEvidencePublishDate || '');
     const views = numberValue(project.total_views || project.views || project.view_count || project.play_count || project.impressions || project.content_views);
     return {
       id,
@@ -84,6 +85,7 @@ export function buildDashboardProjects(
       kolCount: numberValue(project.kol_count),
       kolWithEvidence: numberValue(project.kol_with_evidence),
       evidenceCount: numberValue(project.evidence_count),
+      latestEvidencePublishDate,
       platforms: buildPlatforms(project.platforms, project.kol_platform || project.platform),
       stageCounts: buildStageCounts(project.stage_counts || project.stageCounts),
       publishedCount: numberValue(project.published_count || project.publishedCount),

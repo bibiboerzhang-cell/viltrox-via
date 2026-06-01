@@ -239,6 +239,7 @@ def list_projects(limit: int = 50, stage: str = "", *, staff: dict[str, Any] | N
                COALESCE(pa.kol_with_evidence, 0) AS kol_with_evidence,
                COALESCE(ev.evidence_count, 0) AS evidence_count,
                COALESCE(ev.evidence_kol_count, 0) AS evidence_kol_count,
+               ev.latest_publish_date AS latest_publish_date,
                COALESCE(ev.total_views, 0) AS total_views,
                COALESCE(s.name, assignment_owner.name) AS staff_name,
                (
@@ -289,6 +290,7 @@ def list_projects(limit: int = 50, stage: str = "", *, staff: dict[str, Any] | N
                 project_id,
                 COUNT(*) AS evidence_count,
                 COUNT(DISTINCT kol_pool_id) AS evidence_kol_count,
+                MAX(publish_date) AS latest_publish_date,
                 COALESCE(SUM(COALESCE(view_count, 0)), 0) AS total_views
             FROM vkpi_kol_video_evidence
             WHERE project_id IS NOT NULL

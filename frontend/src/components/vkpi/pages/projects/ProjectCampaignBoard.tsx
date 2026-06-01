@@ -3,7 +3,6 @@ import { AlertCircle, PackageCheck } from 'lucide-react';
 import type { VkpiPlatform, VkpiProjectRow, VkpiProjectStage, VkpiStaffMember } from '../../vkpiTypes';
 import { primaryStageFlow } from '../../shared/vkpiConstants';
 import { currencyFormatter, numberFormatter } from '../../shared/vkpiFormatters';
-import { shortDateTime } from '../../shared/vkpiDataUtils';
 import {
   formatLargeNum,
   formatMoneyShort,
@@ -18,6 +17,18 @@ import {
 
 const boardStatuses = ['全部', '规划中', '进行中', '收尾中', '已结束', '已取消'] as const;
 type BoardStatus = typeof boardStatuses[number];
+const boardSortOptions = [
+  { value: 'lastActivity', label: '最后活动' },
+  { value: 'createdAt', label: '创建时间' },
+  { value: 'health', label: '健康度' },
+  { value: 'exposure', label: '曝光量' },
+] as const;
+type BoardSort = typeof boardSortOptions[number]['value'];
+const boardSortDirections = [
+  { value: 'desc', label: '大到小' },
+  { value: 'asc', label: '小到大' },
+] as const;
+type BoardSortDirection = typeof boardSortDirections[number]['value'];
 
 const terminalStages = new Set<VkpiProjectStage>(['closed', 'released']);
 const cancelledStages = new Set<VkpiProjectStage>(['cancelled', 'lost', 'stalled']);
@@ -50,6 +61,7 @@ interface CampaignGroup {
   healthBasis?: string;
   currentFocus?: string;
   bottleneck?: string;
+  latestEvidencePublishDate?: string;
 }
 
 const messageSourceLabels: Record<string, string> = {
@@ -111,6 +123,54 @@ function latestTimestamp(project: VkpiProjectRow) {
   return Number.isNaN(time) ? 0 : time;
 }
 
+function timestampOrEmpty(raw?: string) {
+  if (!raw) return Number.NEGATIVE_INFINITY;
+  const time = new Date(raw).getTime();
+  return Number.isNaN(time) ? Number.NEGATIVE_INFINITY : time;
+}
+
+function groupLatestEvidenceAt(rows: VkpiProjectRow[]) {
+  const candidates = rows
+    .map((row) => row.latestEvidencePublishDate || row.evidencePublishDate)
+    .filter(Boolean) as string[];
+  return candidates.sort((a, b) => timestampOrEmpty(b) - timestampOrEmpty(a))[0] || '';
+}
+
+function projectBoardDateTime(raw?: string) {
+  if (!raw) return '-';
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return String(raw);
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(date);
+}
+
+function compareCampaignGroups(a: CampaignGroup, b: CampaignGroup, sortBy: BoardSort, direction: BoardSortDirection) {
+  const directionFactor = direction === 'desc' ? 1 : -1;
+  if (sortBy === 'lastActivity') {
+    const delta = timestampOrEmpty(b.latestEvidencePublishDate) - timestampOrEmpty(a.latestEvidencePublishDate);
+    if (delta) return delta * directionFactor;
+  }
+  if (sortBy === 'createdAt') {
+    const delta = timestampOrEmpty(b.primary.createdAt) - timestampOrEmpty(a.primary.createdAt);
+    if (delta) return delta * directionFactor;
+  }
+  if (sortBy === 'health') {
+    const delta = (b.healthScore || 0) - (a.healthScore || 0);
+    if (delta) return delta * directionFactor;
+  }
+  if (sortBy === 'exposure') {
+    const delta = (b.views || 0) - (a.views || 0);
+    if (delta) return delta * directionFactor;
+  }
+  return (latestTimestamp(b.primary) - latestTimestamp(a.primary)) * directionFactor;
+}
+
 function groupStatus(rows: VkpiProjectRow[]): BoardStatus {
   const statuses = rows.map(statusForProject);
   if (statuses.includes('进行中')) return '进行中';
@@ -155,6 +215,7 @@ function buildCampaignGroups(projects: VkpiProjectRow[]): CampaignGroup[] {
     const sortedRows = [...rows].sort((a, b) => latestTimestamp(b) - latestTimestamp(a));
     const primary = sortedRows[0];
     const focus = pickFocusRow(sortedRows);
+    const latestEvidencePublishDate = groupLatestEvidenceAt(sortedRows);
     return {
       id,
       title: primary.campaign || '未命名项目',
@@ -173,6 +234,7 @@ function buildCampaignGroups(projects: VkpiProjectRow[]): CampaignGroup[] {
       cost: sortedRows.reduce((sum, row) => sum + (row.cost || 0), 0),
       latestMessageAt: primary.latestMessageAt || primary.updatedAt || primary.startedAt || primary.createdAt,
       latestMessageSource: primary.latestMessageSource,
+      latestEvidencePublishDate,
       totalDurationLabel: focus.totalDurationLabel,
       stageDurationLabel: focus.stageDurationLabel,
       stageCounts: mergeStageCounts(sortedRows),
@@ -232,6 +294,8 @@ export function ProjectCampaignBoard({
 }) {
   const [status, setStatus] = useState<BoardStatus>('全部');
   const [platform, setPlatform] = useState<'全部平台' | VkpiPlatform>('全部平台');
+  const [sortBy, setSortBy] = useState<BoardSort>('lastActivity');
+  const [sortDirection, setSortDirection] = useState<BoardSortDirection>('desc');
   const [search, setSearch] = useState('');
   const campaignGroups = useMemo(() => buildCampaignGroups(projects), [projects]);
   const focusRows = useMemo(() => campaignGroups.map((group) => group.focus), [campaignGroups]);
@@ -257,8 +321,8 @@ export function ProjectCampaignBoard({
         ...group.platforms,
         ...group.rows.flatMap((row) => [row.kolName, row.kolHandle, row.platform]),
       ].join(' ').toLowerCase().includes(query);
-    });
-  }, [campaignGroups, platform, search, status]);
+    }).sort((a, b) => compareCampaignGroups(a, b, sortBy, sortDirection));
+  }, [campaignGroups, platform, search, sortBy, sortDirection, status]);
   const health = boardHealth(focusRows);
   const stalledCount = campaignGroups.filter((group) => cancelledStages.has(group.focus.stage) || parseDays(group.stageDurationLabel) >= 10).length;
   const totalGmv = campaignGroups.reduce((sum, group) => sum + group.gmv, 0);
@@ -332,6 +396,12 @@ export function ProjectCampaignBoard({
         <select className="vkpi-project-select" value={platform} onChange={(event) => setPlatform(event.target.value as '全部平台' | VkpiPlatform)}>
           <option value="全部平台">全部平台</option>
           {platforms.map((item) => <option key={item} value={item}>{item}</option>)}
+        </select>
+        <select className="vkpi-project-select" value={sortBy} onChange={(event) => setSortBy(event.target.value as BoardSort)} aria-label="项目排序">
+          {boardSortOptions.map((item) => <option key={item.value} value={item.value}>排序：{item.label}</option>)}
+        </select>
+        <select className="vkpi-project-select" value={sortDirection} onChange={(event) => setSortDirection(event.target.value as BoardSortDirection)} aria-label="项目排序顺序">
+          {boardSortDirections.map((item) => <option key={item.value} value={item.value}>顺序：{item.label}</option>)}
         </select>
         <button className="vkpi-project-new-button" type="button" onClick={onOpenCreateProject} disabled={!onOpenCreateProject}>
           ✦ 新建推广
@@ -438,7 +508,7 @@ export function ProjectCampaignBoard({
               <div className="px-4 py-2 flex items-center gap-2 border-t border-white/[0.04]" style={{ background: group.healthScore < 70 ? 'rgba(239,68,68,0.05)' : group.healthScore < 85 ? 'rgba(251,191,36,0.05)' : 'rgba(255,255,255,0.01)' }}>
                 <AlertCircle size={11} style={{ color: cardHealthColor }} />
                 <div className="text-[11px] flex-1" style={{ color: group.healthScore < 85 ? '#fbbf24' : '#94a3b8' }}>{group.bottleneck || group.currentFocus || '暂无瓶颈'}</div>
-                <div className="text-[10px] text-slate-500">更新 {shortDateTime(group.latestMessageAt)} · {messageSource}</div>
+                <div className="text-[10px] text-slate-500">更新 {projectBoardDateTime(group.latestMessageAt)} · {messageSource}</div>
               </div>
             </article>
           );

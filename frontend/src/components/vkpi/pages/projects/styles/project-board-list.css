@@ -194,7 +194,7 @@
 
 .vkpi-project-filter-bar {
   display: grid;
-  grid-template-columns: minmax(360px, auto) minmax(220px, 1fr) minmax(140px, 180px) auto;
+  grid-template-columns: minmax(360px, auto) minmax(220px, 1fr) minmax(140px, 180px) minmax(140px, 180px) minmax(120px, 160px) auto;
   gap: 8px;
   align-items: center;
 }
