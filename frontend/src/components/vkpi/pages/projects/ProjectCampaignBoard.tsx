@@ -29,6 +29,12 @@ const boardSortDirections = [
   { value: 'asc', label: '小到大' },
 ] as const;
 type BoardSortDirection = typeof boardSortDirections[number]['value'];
+const timeSorts = new Set<BoardSort>(['lastActivity', 'createdAt']);
+
+function sortDirectionLabel(sortBy: BoardSort, direction: BoardSortDirection) {
+  if (timeSorts.has(sortBy)) return direction === 'desc' ? '时间顺序：新到旧' : '时间顺序：旧到新';
+  return direction === 'desc' ? '顺序：大到小' : '顺序：小到大';
+}
 
 const terminalStages = new Set<VkpiProjectStage>(['closed', 'released']);
 const cancelledStages = new Set<VkpiProjectStage>(['cancelled', 'lost', 'stalled']);
@@ -150,15 +156,29 @@ function projectBoardDateTime(raw?: string) {
   }).format(date);
 }
 
+function numericProjectId(group: CampaignGroup) {
+  const value = Number(group.primary.id);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function compareCampaignTime(a: CampaignGroup, b: CampaignGroup, aRaw: string | undefined, bRaw: string | undefined, direction: BoardSortDirection) {
+  const aTime = timestampOrEmpty(aRaw);
+  const bTime = timestampOrEmpty(bRaw);
+  const delta = direction === 'desc' ? bTime - aTime : aTime - bTime;
+  if (delta) return delta;
+  const idDelta = direction === 'desc' ? numericProjectId(b) - numericProjectId(a) : numericProjectId(a) - numericProjectId(b);
+  return idDelta;
+}
+
 function compareCampaignGroups(a: CampaignGroup, b: CampaignGroup, sortBy: BoardSort, direction: BoardSortDirection) {
   const directionFactor = direction === 'desc' ? 1 : -1;
   if (sortBy === 'lastActivity') {
-    const delta = timestampOrEmpty(b.latestEvidencePublishDate) - timestampOrEmpty(a.latestEvidencePublishDate);
-    if (delta) return delta * directionFactor;
+    const delta = compareCampaignTime(a, b, a.latestEvidencePublishDate, b.latestEvidencePublishDate, direction);
+    if (delta) return delta;
   }
   if (sortBy === 'createdAt') {
-    const delta = timestampOrEmpty(b.primary.createdAt) - timestampOrEmpty(a.primary.createdAt);
-    if (delta) return delta * directionFactor;
+    const delta = compareCampaignTime(a, b, a.primary.createdAt, b.primary.createdAt, direction);
+    if (delta) return delta;
   }
   if (sortBy === 'health') {
     const delta = (b.healthScore || 0) - (a.healthScore || 0);
@@ -401,7 +421,7 @@ export function ProjectCampaignBoard({
           {boardSortOptions.map((item) => <option key={item.value} value={item.value}>排序：{item.label}</option>)}
         </select>
         <select className="vkpi-project-select" value={sortDirection} onChange={(event) => setSortDirection(event.target.value as BoardSortDirection)} aria-label="项目排序顺序">
-          {boardSortDirections.map((item) => <option key={item.value} value={item.value}>顺序：{item.label}</option>)}
+          {boardSortDirections.map((item) => <option key={item.value} value={item.value}>{sortDirectionLabel(sortBy, item.value)}</option>)}
         </select>
         <button className="vkpi-project-new-button" type="button" onClick={onOpenCreateProject} disabled={!onOpenCreateProject}>
           ✦ 新建推广
