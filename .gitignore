@@ -60,6 +60,7 @@ frontend/runtime/
 Excel/
 artifacts/
 .integration/
+.codegraph/
 
 # ─── IDE / 系统 ─────────────────────────────
 .idea/
