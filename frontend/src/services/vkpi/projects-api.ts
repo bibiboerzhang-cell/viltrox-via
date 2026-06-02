@@ -53,6 +53,47 @@ export interface VkpiProjectVideoAnalysisCacheResponse {
   };
 }
 
+export interface VkpiProjectContract {
+  id: number;
+  project_id: number;
+  assignment_id?: number | null;
+  kol_pool_id?: number | null;
+  file_name?: string | null;
+  r2_key?: string | null;
+  file_size_bytes?: number | null;
+  mime_type?: string | null;
+  status?: "draft" | "needs_review" | "extracted" | "confirmed" | "failed" | string;
+  extraction_status?: "processing" | "ready" | "failed" | "skipped" | string;
+  fee_amount?: number | string | null;
+  fee_currency?: string | null;
+  contract_duration?: string | null;
+  start_date?: string | null;
+  end_date?: string | null;
+  platforms_json?: unknown[] | null;
+  deliverable_count?: number | string | null;
+  deliverables_json?: unknown[] | null;
+  must_include_json?: unknown[] | null;
+  usage_rights?: string | null;
+  exclusivity?: string | null;
+  buyout_rights?: string | null;
+  breach_terms?: string | null;
+  payment_terms?: string | null;
+  cancellation_terms?: string | null;
+  revision_terms?: string | null;
+  raw_extracted_json?: Record<string, unknown> | null;
+  field_confidence_json?: Record<string, number> | null;
+  field_confirmed_json?: Record<string, unknown> | null;
+  manual_overrides_json?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface VkpiProjectContractsResponse {
+  project_id: number;
+  count: number;
+  items: VkpiProjectContract[];
+}
+
 export interface VkpiCreateProjectPayload {
   projectName: string;
   kolId?: string;
@@ -115,6 +156,63 @@ export async function getProjectVideoAnalysisCache(token: string, projectId: str
   return apiFetch<VkpiProjectVideoAnalysisCacheResponse>(
     `/api/admin/vkpi/projects/${encodeURIComponent(projectId)}/video-analysis-cache?${params.toString()}`,
     { cache: "no-store" },
+    token,
+  );
+}
+
+export async function getProjectContracts(token: string, projectId: string) {
+  return apiFetch<VkpiProjectContractsResponse>(
+    `/api/admin/vkpi/projects/${encodeURIComponent(projectId)}/contracts?_ts=${Date.now()}`,
+    { cache: "no-store" },
+    token,
+  );
+}
+
+export async function uploadProjectContract(
+  token: string,
+  projectId: string,
+  file: File,
+  payload: { assignmentId?: string | number | null; kolPoolId?: string | number | null } = {},
+) {
+  const body = new FormData();
+  body.append("file", file);
+  if (payload.assignmentId) body.append("assignment_id", String(payload.assignmentId));
+  if (payload.kolPoolId) body.append("kol_pool_id", String(payload.kolPoolId));
+  return apiFetch<{ contract?: VkpiProjectContract; extraction?: Record<string, unknown>; budget?: Record<string, unknown> }>(
+    `/api/admin/vkpi/projects/${encodeURIComponent(projectId)}/contracts/upload`,
+    { method: "POST", body, timeoutMs: 150000 },
+    token,
+  );
+}
+
+export async function downloadProjectContract(token: string, projectId: string, contractId: number | string) {
+  return apiFetch<{ contract_id: number; r2_key?: string | null; url: string }>(
+    `/api/admin/vkpi/projects/${encodeURIComponent(projectId)}/contracts/${encodeURIComponent(String(contractId))}/download`,
+    { cache: "no-store" },
+    token,
+  );
+}
+
+export async function patchProjectContract(token: string, projectId: string, contractId: number | string, payload: Row) {
+  return apiFetch<VkpiProjectContract>(
+    `/api/admin/vkpi/projects/${encodeURIComponent(projectId)}/contracts/${encodeURIComponent(String(contractId))}`,
+    { method: "PATCH", body: jsonBody(payload) },
+    token,
+  );
+}
+
+export async function confirmProjectContract(token: string, projectId: string, contractId: number | string, payload: Row) {
+  return apiFetch<VkpiProjectContract>(
+    `/api/admin/vkpi/projects/${encodeURIComponent(projectId)}/contracts/${encodeURIComponent(String(contractId))}/confirm`,
+    { method: "POST", body: jsonBody(payload) },
+    token,
+  );
+}
+
+export async function extractProjectContract(token: string, projectId: string, contractId: number | string) {
+  return apiFetch<{ contract?: VkpiProjectContract; extraction?: Record<string, unknown>; budget?: Record<string, unknown> }>(
+    `/api/admin/vkpi/projects/${encodeURIComponent(projectId)}/contracts/${encodeURIComponent(String(contractId))}/extract`,
+    { method: "POST", timeoutMs: 150000 },
     token,
   );
 }

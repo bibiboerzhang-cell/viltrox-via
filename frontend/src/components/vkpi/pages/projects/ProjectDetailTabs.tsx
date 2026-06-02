@@ -1,8 +1,8 @@
-import { Component, useMemo, useState, type ErrorInfo, type ReactNode } from 'react';
+import { Component, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
 import { Activity, AlertCircle, BookOpen, Boxes, Check, DollarSign, Download, Edit3, ExternalLink, Eye, FileText, Heart, ImageIcon, MessageCircle, MousePointerClick, Package, Plus, Send, Shield, ShoppingCart, Sparkles, TrendingUp, Upload, Video, X } from 'lucide-react';
 import { stageLabels } from '../../shared/vkpiConstants';
 import type { VkpiProjectRow } from '../../vkpiTypes';
-import type { VkpiAnalysisCacheEntry, VkpiProjectVideoAnalysisCacheItem, VkpiProjectVideoAnalysisCacheResponse } from '../../../../services/vkpi/projects-api';
+import type { VkpiAnalysisCacheEntry, VkpiProjectContract, VkpiProjectContractsResponse, VkpiProjectVideoAnalysisCacheItem, VkpiProjectVideoAnalysisCacheResponse } from '../../../../services/vkpi/projects-api';
 import { formatLargeNum, formatMoneyShort, healthColor, PROJECT_STAGE_COLOR, PROJECT_STAGE_FLOW } from './projectDeliverableStyle';
 import {
   bottleneckForRows,
@@ -350,70 +350,376 @@ export function CampaignTimelineTab({
   );
 }
 
-export function CampaignContractsTab({
-  contractLines,
-  onPendingAction,
+function stringValue(value: unknown) {
+  return value == null ? '' : String(value);
+}
+
+function arrayValue(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [value];
+    } catch {
+      return value.split(/[,，\n]/).map((item) => item.trim()).filter(Boolean);
+    }
+  }
+  return [];
+}
+
+function editableJson(value: unknown) {
+  const list = arrayValue(value);
+  if (!list.length) return '';
+  if (list.some((item) => item && typeof item === 'object')) return JSON.stringify(list, null, 2);
+  return list.map((item) => String(item)).join('\n');
+}
+
+function parseEditableList(value: string): unknown[] {
+  const text = value.trim();
+  if (!text) return [];
+  if (text.startsWith('[') || text.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(text);
+      return Array.isArray(parsed) ? parsed : [parsed];
+    } catch {
+      // Fall through to manual line parsing.
+    }
+  }
+  return text.split(/\n|,|，/).map((item) => item.trim()).filter(Boolean);
+}
+
+function compactList(value: unknown, fallback = '待确认') {
+  const list = arrayValue(value);
+  if (!list.length) return fallback;
+  return list.map((item) => {
+    if (item && typeof item === 'object') {
+      const record = item as Record<string, unknown>;
+      return stringValue(record.description || record.item || record.title || record.name || JSON.stringify(record));
+    }
+    return stringValue(item);
+  }).filter(Boolean).slice(0, 3).join(' / ') || fallback;
+}
+
+function moneyLabel(amount: unknown, currency: unknown) {
+  const numeric = Number(amount);
+  if (!Number.isFinite(numeric) || numeric <= 0) return '金额待确认';
+  return `${String(currency || 'USD').toUpperCase()} ${numeric.toLocaleString()}`;
+}
+
+function contractLinkedRow(contract: VkpiProjectContract, rows: VkpiProjectRow[]) {
+  const assignmentId = String(contract.assignment_id || '').trim();
+  const kolPoolId = String(contract.kol_pool_id || '').trim();
+  return rows.find((row) => assignmentId && String(row.assignmentId || '') === assignmentId)
+    || rows.find((row) => kolPoolId && String(row.kolPoolId || '') === kolPoolId);
+}
+
+function contractStatusMeta(contract: VkpiProjectContract) {
+  const status = String(contract.status || '').toLowerCase();
+  const extraction = String(contract.extraction_status || '').toLowerCase();
+  if (status === 'confirmed') return { label: '已确认', className: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/20' };
+  if (extraction === 'failed' || status === 'failed') return { label: '提取失败', className: 'bg-red-500/15 text-red-300 border-red-500/20' };
+  if (extraction === 'processing') return { label: 'Claude 提取中', className: 'bg-purple-500/15 text-purple-300 border-purple-500/20' };
+  if (extraction === 'skipped') return { label: '已归档 · 未自动提取', className: 'bg-slate-500/15 text-slate-300 border-slate-500/20' };
+  return { label: '待人工确认', className: 'bg-amber-500/15 text-amber-300 border-amber-500/20' };
+}
+
+function confidenceValue(contract: VkpiProjectContract, key: string) {
+  const value = Number(contract.field_confidence_json?.[key]);
+  return Number.isFinite(value) ? value : null;
+}
+
+function ConfidenceBadge({ contract, field }: { contract: VkpiProjectContract; field: string }) {
+  const value = confidenceValue(contract, field);
+  if (value == null) return <span className="text-[9px] text-slate-600">conf —</span>;
+  const low = value < 0.7;
+  return (
+    <span className={`text-[9px] px-1.5 py-0.5 rounded border ${low ? 'border-amber-400/30 bg-amber-400/10 text-amber-300' : 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300'}`}>
+      conf {Math.round(value * 100)}%
+    </span>
+  );
+}
+
+interface ContractDraft {
+  fee_amount: string;
+  fee_currency: string;
+  contract_duration: string;
+  start_date: string;
+  end_date: string;
+  platforms: string;
+  deliverable_count: string;
+  deliverables: string;
+  must_include: string;
+  usage_rights: string;
+  exclusivity: string;
+  buyout_rights: string;
+  breach_terms: string;
+  payment_terms: string;
+}
+
+function initialContractDraft(contract: VkpiProjectContract): ContractDraft {
+  return {
+    fee_amount: stringValue(contract.fee_amount),
+    fee_currency: stringValue(contract.fee_currency || 'USD'),
+    contract_duration: stringValue(contract.contract_duration),
+    start_date: stringValue(contract.start_date),
+    end_date: stringValue(contract.end_date),
+    platforms: arrayValue(contract.platforms_json).map((item) => stringValue(item)).join(', '),
+    deliverable_count: stringValue(contract.deliverable_count),
+    deliverables: editableJson(contract.deliverables_json),
+    must_include: editableJson(contract.must_include_json),
+    usage_rights: stringValue(contract.usage_rights),
+    exclusivity: stringValue(contract.exclusivity),
+    buyout_rights: stringValue(contract.buyout_rights),
+    breach_terms: stringValue(contract.breach_terms),
+    payment_terms: stringValue(contract.payment_terms),
+  };
+}
+
+function contractPayload(draft: ContractDraft) {
+  const payload = {
+    fee_amount: draft.fee_amount ? Number(draft.fee_amount) : null,
+    fee_currency: draft.fee_currency.trim() || 'USD',
+    contract_duration: draft.contract_duration.trim(),
+    start_date: draft.start_date.trim() || null,
+    end_date: draft.end_date.trim() || null,
+    platforms: draft.platforms.split(/,|，|\n/).map((item) => item.trim()).filter(Boolean),
+    deliverable_count: draft.deliverable_count ? Number(draft.deliverable_count) : null,
+    deliverables: parseEditableList(draft.deliverables),
+    must_include: parseEditableList(draft.must_include),
+    usage_rights: draft.usage_rights.trim(),
+    exclusivity: draft.exclusivity.trim(),
+    buyout_rights: draft.buyout_rights.trim(),
+    breach_terms: draft.breach_terms.trim(),
+    payment_terms: draft.payment_terms.trim(),
+  };
+  return { ...payload, manual_overrides: payload };
+}
+
+function ContractArchiveCard({
+  contract,
+  row,
+  busyKey,
+  onSave,
+  onConfirm,
+  onOpen,
+  onRetry,
 }: {
-  rows: VkpiProjectRow[];
-  contractLines: ContractLine[];
-  onPendingAction: (label: string) => void;
+  contract: VkpiProjectContract;
+  row?: VkpiProjectRow;
+  busyKey: string;
+  onSave: (contractId: number, payload: Record<string, unknown>) => Promise<void>;
+  onConfirm: (contractId: number, payload: Record<string, unknown>) => Promise<void>;
+  onOpen: (contractId: number) => Promise<void>;
+  onRetry: (contractId: number) => Promise<void>;
 }) {
-  const withContract = contractLines.filter((line) => line.statusLabel !== '未触发');
+  const [draft, setDraft] = useState<ContractDraft>(() => initialContractDraft(contract));
+  const meta = contractStatusMeta(contract);
+  const saving = busyKey === `save:${contract.id}`;
+  const confirming = busyKey === `confirm:${contract.id}`;
+  const extracting = busyKey === `extract:${contract.id}` || contract.extraction_status === 'processing';
+  const downloading = busyKey === `download:${contract.id}`;
+  const update = (key: keyof ContractDraft, value: string) => setDraft((current) => ({ ...current, [key]: value }));
 
   return (
-    <div className="p-4 space-y-4" aria-label="项目合同归档">
-      <button
-        type="button"
-        onClick={() => onPendingAction('合同上传')}
-        className="rounded-lg border-2 border-dashed border-white/[0.08] bg-white/[0.01] p-6 text-center hover:border-purple-500/40 transition-colors cursor-pointer w-full"
-      >
-        <Upload size={22} className="text-slate-500 mx-auto mb-2" />
-        <div className="text-[12px] text-white font-medium mb-1">拖拽上传合同 PDF</div>
-        <div className="text-[10.5px] text-slate-500 mb-2">支持 PDF / DOCX · 上传后 LLM 自动解析 KOL / 费用 / 期限 / deliverables</div>
-        <span className="px-3 py-1 rounded-md bg-purple-500/90 hover:bg-purple-500 text-white text-[11px] font-medium inline-flex">选择文件</span>
-      </button>
-
-      <div className="rounded-lg border border-purple-500/30 bg-purple-500/5 p-3 flex items-start gap-2.5">
-        <Sparkles size={13} className="text-purple-300 mt-0.5 shrink-0" />
-        <div className="text-[10.5px] text-slate-300">
-          已归档 {withContract.length} 份合同 · LLM 自动提取关键字段并同步到「费用」 · 解析中 0 份
+    <div className="rounded-xl border border-white/[0.07] bg-white/[0.018] p-3 space-y-3">
+      <div className="flex items-start gap-3">
+        <div className="w-10 h-10 rounded-lg bg-purple-500/10 border border-purple-400/20 flex items-center justify-center shrink-0">
+          <FileText size={18} className="text-purple-300" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <strong className="text-[13px] text-white truncate">{contract.file_name || 'Contract.pdf'}</strong>
+            <span className={`text-[9.5px] px-2 py-0.5 rounded-full border ${meta.className}`}>{meta.label}</span>
+            {contract.status === 'confirmed' ? <span className="text-[9.5px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-300">人工确认</span> : null}
+          </div>
+          <div className="text-[10.5px] text-slate-400 mt-1">
+            {row?.kolHandle || row?.kolName || `KOL ${contract.kol_pool_id || '-'}`} · {row?.platform || compactList(contract.platforms_json, '平台待确认')} · {moneyLabel(contract.fee_amount, contract.fee_currency)}
+          </div>
+          <div className="text-[10px] text-slate-500 mt-1 truncate">
+            交付: {compactList(contract.deliverables_json)} · 授权: {contract.usage_rights || contract.buyout_rights || '授权范围待确认'}
+          </div>
+        </div>
+        <div className="shrink-0 flex items-center gap-2">
+          <button className="px-2.5 py-1.5 rounded-md border border-white/[0.08] bg-white/[0.03] text-[10px] text-slate-300 hover:text-white" type="button" onClick={() => void onOpen(contract.id)} disabled={downloading}>
+            <ExternalLink size={11} className="inline mr-1" />查看PDF
+          </button>
+          <button className="px-2.5 py-1.5 rounded-md border border-purple-400/25 bg-purple-400/10 text-[10px] text-purple-200 disabled:opacity-50" type="button" onClick={() => void onRetry(contract.id)} disabled={extracting}>
+            {extracting ? '提取中' : '重新提取'}
+          </button>
         </div>
       </div>
 
-      {withContract.length === 0 ? (
+      {contract.extraction_status === 'skipped' ? (
+        <div className="rounded-lg border border-slate-500/20 bg-slate-500/10 p-3 text-[11px] text-slate-300">DOC/DOCX 已归档，v1 仅自动提取 PDF。可查看原文件，或上传 PDF 版本触发 Claude 条款提取。</div>
+      ) : null}
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+        {[
+          ['金额', moneyLabel(contract.fee_amount, contract.fee_currency), 'fee_amount'],
+          ['期限', contract.start_date || contract.end_date ? `${contract.start_date || '?'} → ${contract.end_date || '?'}` : (contract.contract_duration || '待确认'), 'contract_duration'],
+          ['平台', compactList(contract.platforms_json), 'platforms'],
+          ['承诺条数', contract.deliverable_count || '待确认', 'deliverable_count'],
+        ].map(([label, value, field]) => (
+          <div key={label} className="rounded-lg border border-white/[0.05] bg-black/20 p-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[9px] text-slate-500">{label}</span>
+              <ConfidenceBadge contract={contract} field={String(field)} />
+            </div>
+            <strong className="block mt-1 text-[12px] text-white truncate">{value}</strong>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+        <label className="text-[10px] text-slate-400">金额<input className="mt-1 w-full rounded-md border border-white/[0.08] bg-black/20 px-2 py-1.5 text-[11px] text-white" value={draft.fee_amount} onChange={(event) => update('fee_amount', event.target.value)} /></label>
+        <label className="text-[10px] text-slate-400">币种<input className="mt-1 w-full rounded-md border border-white/[0.08] bg-black/20 px-2 py-1.5 text-[11px] text-white" value={draft.fee_currency} onChange={(event) => update('fee_currency', event.target.value)} /></label>
+        <label className="text-[10px] text-slate-400">开始日期<input className="mt-1 w-full rounded-md border border-white/[0.08] bg-black/20 px-2 py-1.5 text-[11px] text-white" value={draft.start_date} onChange={(event) => update('start_date', event.target.value)} placeholder="YYYY-MM-DD" /></label>
+        <label className="text-[10px] text-slate-400">结束日期<input className="mt-1 w-full rounded-md border border-white/[0.08] bg-black/20 px-2 py-1.5 text-[11px] text-white" value={draft.end_date} onChange={(event) => update('end_date', event.target.value)} placeholder="YYYY-MM-DD" /></label>
+        <label className="text-[10px] text-slate-400">期限<input className="mt-1 w-full rounded-md border border-white/[0.08] bg-black/20 px-2 py-1.5 text-[11px] text-white" value={draft.contract_duration} onChange={(event) => update('contract_duration', event.target.value)} /></label>
+        <label className="text-[10px] text-slate-400">平台<input className="mt-1 w-full rounded-md border border-white/[0.08] bg-black/20 px-2 py-1.5 text-[11px] text-white" value={draft.platforms} onChange={(event) => update('platforms', event.target.value)} placeholder="YouTube, Instagram" /></label>
+        <label className="text-[10px] text-slate-400">承诺条数<input className="mt-1 w-full rounded-md border border-white/[0.08] bg-black/20 px-2 py-1.5 text-[11px] text-white" value={draft.deliverable_count} onChange={(event) => update('deliverable_count', event.target.value)} /></label>
+        <label className="text-[10px] text-slate-400">Exclusivity<input className="mt-1 w-full rounded-md border border-white/[0.08] bg-black/20 px-2 py-1.5 text-[11px] text-white" value={draft.exclusivity} onChange={(event) => update('exclusivity', event.target.value)} /></label>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+        {[
+          ['deliverables', 'Deliverables', draft.deliverables, 'deliverables'],
+          ['must_include', '必须包含', draft.must_include, 'must_include'],
+          ['usage_rights', 'Usage rights', draft.usage_rights, 'usage_rights'],
+          ['buyout_rights', '买断授权', draft.buyout_rights, 'buyout_rights'],
+          ['breach_terms', '违约条款', draft.breach_terms, 'breach_terms'],
+          ['payment_terms', '付款条款', draft.payment_terms, 'payment_terms'],
+        ].map(([key, label, value, field]) => (
+          <label key={key} className="text-[10px] text-slate-400">
+            <span className="flex items-center justify-between gap-2 mb-1">{label}<ConfidenceBadge contract={contract} field={String(field)} /></span>
+            <textarea className="w-full min-h-[74px] rounded-md border border-white/[0.08] bg-black/20 px-2 py-1.5 text-[11px] text-white resize-y" value={String(value)} onChange={(event) => update(key as keyof ContractDraft, event.target.value)} />
+          </label>
+        ))}
+      </div>
+
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="text-[10px] text-slate-500">低 confidence 字段会用黄色标出；LLM 结果默认待人工确认，不作为最终合同真值。</div>
+        <div className="flex items-center gap-2">
+          <button className="px-3 py-1.5 rounded-md border border-white/[0.08] bg-white/[0.03] text-[11px] text-slate-300 disabled:opacity-50" type="button" onClick={() => void onSave(contract.id, contractPayload(draft))} disabled={saving || confirming}>{saving ? '保存中' : '保存修改'}</button>
+          <button className="px-3 py-1.5 rounded-md bg-emerald-500/90 hover:bg-emerald-500 text-[11px] font-semibold text-white disabled:opacity-50" type="button" onClick={() => void onConfirm(contract.id, contractPayload(draft))} disabled={saving || confirming}>{confirming ? '确认中' : '确认归档'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function CampaignContractsTab({
+  rows,
+  contractLines,
+  contracts,
+  loading,
+  error,
+  busyKey,
+  onUploadContract,
+  onSaveContract,
+  onConfirmContract,
+  onOpenContract,
+  onRetryExtract,
+}: {
+  rows: VkpiProjectRow[];
+  contractLines: ContractLine[];
+  contracts: VkpiProjectContractsResponse | null;
+  loading: boolean;
+  error: string;
+  busyKey: string;
+  onUploadContract: (file: File, assignmentId?: string, kolPoolId?: string) => Promise<void>;
+  onSaveContract: (contractId: number, payload: Record<string, unknown>) => Promise<void>;
+  onConfirmContract: (contractId: number, payload: Record<string, unknown>) => Promise<void>;
+  onOpenContract: (contractId: number) => Promise<void>;
+  onRetryExtract: (contractId: number) => Promise<void>;
+}) {
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [linkedRowId, setLinkedRowId] = useState('');
+  const uploadBusy = busyKey === 'upload';
+  const items = contracts?.items || [];
+  const expectedRows = contractLines.filter((line) => line.statusLabel !== '未触发');
+  const selectedRow = rows.find((row) => row.id === linkedRowId) || rows.find((row) => stageIndex(row.stage) >= stageIndex('agreed')) || rows[0];
+  const chooseFile = (nextFile?: File | null) => {
+    if (!nextFile) return;
+    if (!/\.(pdf|doc|docx)$/i.test(nextFile.name)) return;
+    setFile(nextFile);
+  };
+  const submitUpload = async () => {
+    if (!file) return;
+    await onUploadContract(file, selectedRow?.assignmentId, selectedRow?.kolPoolId);
+    setFile(null);
+  };
+
+  return (
+    <div className="p-4 space-y-4" aria-label="项目合同归档">
+      <div className="rounded-xl border border-purple-500/25 bg-purple-500/[0.06] p-3 flex items-start gap-2.5">
+        <Sparkles size={14} className="text-purple-300 mt-0.5 shrink-0" />
+        <div className="text-[10.5px] text-slate-300">
+          合同归档 v1 · PDF 上传后由 Claude Opus 自动提取条款；LLM 字段必须人工确认后才进入正式履约复盘口径。
+        </div>
+      </div>
+
+      <div
+        className="rounded-xl border-2 border-dashed border-white/[0.08] bg-white/[0.012] p-4"
+        onDragOver={(event) => event.preventDefault()}
+        onDrop={(event) => { event.preventDefault(); chooseFile(event.dataTransfer.files?.[0]); }}
+      >
+        <input ref={fileRef} type="file" accept=".pdf,.doc,.docx" className="hidden" onChange={(event) => chooseFile(event.target.files?.[0])} />
+        <div className="grid md:grid-cols-[minmax(0,1fr)_220px_128px] gap-3 items-end">
+          <button className="rounded-lg border border-white/[0.06] bg-black/20 p-4 text-left hover:border-purple-400/35" type="button" onClick={() => fileRef.current?.click()} disabled={uploadBusy}>
+            <Upload size={20} className="text-purple-300 mb-2" />
+            <strong className="block text-[12px] text-white">{file ? file.name : '拖拽或选择合同 PDF / DOCX'}</strong>
+            <span className="block mt-1 text-[10.5px] text-slate-500">{file ? `${Math.round(file.size / 1024)} KB · ${/\.pdf$/i.test(file.name) ? '将自动提取' : '只存档不提取'}` : 'PDF 自动提取条款；DOCX 先存档，v1 不自动识别'}</span>
+          </button>
+          <label className="text-[10px] text-slate-400">关联 KOL
+            <select className="mt-1 w-full rounded-md border border-white/[0.08] bg-black/30 px-2 py-2 text-[11px] text-white" value={linkedRowId} onChange={(event) => setLinkedRowId(event.target.value)}>
+              <option value="">自动选择 / 项目级</option>
+              {rows.map((row) => (
+                <option key={row.id} value={row.id}>{row.kolHandle || row.kolName || row.id} · {stageLabels[row.stage] || row.stage}</option>
+              ))}
+            </select>
+          </label>
+          <button className="rounded-md bg-purple-500/90 hover:bg-purple-500 text-white text-[11px] font-semibold px-3 py-2 disabled:opacity-50" type="button" onClick={() => void submitUpload()} disabled={!file || uploadBusy}>
+            {uploadBusy ? 'Claude正在提取条款' : '上传归档'}
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-2">
+        {[
+          ['已归档', items.length],
+          ['待确认', items.filter((item) => item.status !== 'confirmed' && item.extraction_status !== 'failed').length],
+          ['提取失败', items.filter((item) => item.extraction_status === 'failed').length],
+        ].map(([label, value]) => (
+          <div key={label} className="rounded-lg border border-white/[0.06] bg-white/[0.015] p-3">
+            <span className="block text-[9.5px] text-slate-500">{label}</span>
+            <strong className="block mt-1 text-[20px] text-white tabular-nums">{value}</strong>
+          </div>
+        ))}
+      </div>
+
+      {loading ? <div className="rounded-lg border border-white/[0.06] bg-white/[0.01] p-4 text-[11px] text-slate-400">正在读取合同归档...</div> : null}
+      {error ? <div className="rounded-lg border border-red-500/25 bg-red-500/10 p-4 text-[11px] text-red-300">{error}</div> : null}
+
+      {!loading && !items.length ? (
         <div className="rounded-lg border border-white/[0.06] bg-white/[0.01] p-8 text-center">
           <FileText size={24} className="text-slate-600 mx-auto mb-2" />
-          <div className="text-[11.5px] text-slate-400">暂无合同 · 在 4→5 已合作阶段上传 PDF</div>
+          <div className="text-[11.5px] text-slate-400">暂无真实合同 · 当前有 {expectedRows.length} 个 KOL 已到可归档阶段</div>
         </div>
       ) : (
-        <div className="space-y-2">
-          {withContract.map((line) => (
-            <div key={line.id} className="rounded-lg border border-white/[0.06] bg-white/[0.015] p-3 flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg bg-purple-500/10 flex items-center justify-center shrink-0">
-                <FileText size={18} className="text-purple-300" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-0.5">
-                  <div className="text-[12px] font-semibold text-white truncate">{`${line.kolHandle || line.kolName || 'KOL'}_Contract.pdf`}</div>
-                  <span className="text-[9.5px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300">已解析</span>
-                </div>
-                <div className="text-[10.5px] text-slate-400 truncate">{line.kolName || line.kolHandle} · {line.platform} · {stageLabels[line.stage]}</div>
-                <div className="flex items-center gap-3 mt-1 text-[10px] text-slate-500">
-                  <span>期限: <span className="text-slate-300">{line.contractType || '待确认'}</span></span>
-                  <span className="truncate">{line.nextAction}</span>
-                </div>
-              </div>
-              <div className="shrink-0 text-right">
-                <div className="text-[13px] font-bold text-white tabular-nums">{formatMoneyShort(line.amount)}</div>
-                <button
-                  className="text-[10px] text-purple-300 hover:text-purple-200 mt-0.5 flex items-center gap-0.5"
-                  type="button"
-                  onClick={() => onPendingAction('查看 PDF')}
-                >
-                  <ExternalLink size={9} />查看 PDF
-                </button>
-              </div>
-            </div>
+        <div className="space-y-3">
+          {items.map((contract) => (
+            <ContractArchiveCard
+              key={contract.id}
+              contract={contract}
+              row={contractLinkedRow(contract, rows)}
+              busyKey={busyKey}
+              onSave={onSaveContract}
+              onConfirm={onConfirmContract}
+              onOpen={onOpenContract}
+              onRetry={onRetryExtract}
+            />
           ))}
         </div>
       )}

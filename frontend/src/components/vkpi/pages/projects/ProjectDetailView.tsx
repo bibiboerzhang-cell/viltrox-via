@@ -8,7 +8,17 @@ import { CampaignAnalyticsTab, CampaignContractsTab, CampaignFinanceTab, Campaig
 import { AddKolModal, ContractUploadModal, CostEntryModal, EditProjectModal, ShippingInfoModal, StageActionModal, UploadScreenshotModal, VideoUrlModal } from './ProjectDetailModals';
 import { LiveLogisticsBanner } from './LiveLogisticsBanner';
 import { ProjectParticipationTab } from './ProjectParticipationTab';
-import { getProjectVideoAnalysisCache, type VkpiProjectVideoAnalysisCacheResponse } from '../../../../services/vkpi/projects-api';
+import {
+  confirmProjectContract,
+  downloadProjectContract,
+  extractProjectContract,
+  getProjectContracts,
+  getProjectVideoAnalysisCache,
+  patchProjectContract,
+  uploadProjectContract,
+  type VkpiProjectContractsResponse,
+  type VkpiProjectVideoAnalysisCacheResponse,
+} from '../../../../services/vkpi/projects-api';
 import {
   bottleneckForRows,
   buildAnalytics,
@@ -117,6 +127,10 @@ export function ProjectDetailView({
   const [videoAnalysisCache, setVideoAnalysisCache] = useState<VkpiProjectVideoAnalysisCacheResponse | null>(null);
   const [videoAnalysisLoading, setVideoAnalysisLoading] = useState(false);
   const [videoAnalysisError, setVideoAnalysisError] = useState('');
+  const [contractsPayload, setContractsPayload] = useState<VkpiProjectContractsResponse | null>(null);
+  const [contractsLoading, setContractsLoading] = useState(false);
+  const [contractsError, setContractsError] = useState('');
+  const [contractActionId, setContractActionId] = useState('');
 
   useEffect(() => {
     setStageOverrides({});
@@ -141,6 +155,46 @@ export function ProjectDetailView({
       })
       .finally(() => {
         if (!cancelled) setVideoAnalysisLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [apiToken, project.id]);
+
+  const loadContracts = async () => {
+    if (!apiToken || !project.id) {
+      setContractsPayload(null);
+      return;
+    }
+    setContractsLoading(true);
+    setContractsError('');
+    try {
+      setContractsPayload(await getProjectContracts(apiToken, project.id));
+    } catch (error) {
+      setContractsError(error instanceof Error ? error.message : '合同列表读取失败');
+    } finally {
+      setContractsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    setContractsPayload(null);
+    setContractsError('');
+    if (!apiToken || !project.id) {
+      setContractsLoading(false);
+      return;
+    }
+    setContractsLoading(true);
+    getProjectContracts(apiToken, project.id)
+      .then((payload) => {
+        if (!cancelled) setContractsPayload(payload);
+      })
+      .catch((error) => {
+        if (!cancelled) setContractsError(error instanceof Error ? error.message : '合同列表读取失败');
+      })
+      .finally(() => {
+        if (!cancelled) setContractsLoading(false);
       });
     return () => {
       cancelled = true;
@@ -368,6 +422,78 @@ export function ProjectDetailView({
     });
     setActionModal(null);
     await onProjectUpdated?.();
+  };
+
+  const uploadContractFile = async (file: File, assignmentId?: string, kolPoolId?: string) => {
+    if (!apiToken) {
+      setNotice({ tone: 'warning', title: '无法上传合同', body: '当前缺少 API token。' });
+      return;
+    }
+    setContractActionId('upload');
+    try {
+      await uploadProjectContract(apiToken, project.id, file, { assignmentId, kolPoolId });
+      await loadContracts();
+      setNotice({ tone: 'success', title: '合同已归档', body: /\.pdf$/i.test(file.name) ? 'Claude 已提取合同条款，请人工确认关键字段。' : '文件已存档；DOC/DOCX 暂不自动提取。' });
+    } catch (error) {
+      setNotice({ tone: 'warning', title: '合同上传失败', body: error instanceof Error ? error.message : '合同上传失败。' });
+    } finally {
+      setContractActionId('');
+    }
+  };
+
+  const saveContract = async (contractId: number, payload: Record<string, unknown>) => {
+    if (!apiToken) return;
+    setContractActionId(`save:${contractId}`);
+    try {
+      await patchProjectContract(apiToken, project.id, contractId, payload);
+      await loadContracts();
+      setNotice({ tone: 'success', title: '合同字段已保存', body: '人工修改已写入合同归档。' });
+    } catch (error) {
+      setNotice({ tone: 'warning', title: '保存失败', body: error instanceof Error ? error.message : '合同字段保存失败。' });
+    } finally {
+      setContractActionId('');
+    }
+  };
+
+  const confirmContractArchive = async (contractId: number, payload: Record<string, unknown>) => {
+    if (!apiToken) return;
+    setContractActionId(`confirm:${contractId}`);
+    try {
+      await confirmProjectContract(apiToken, project.id, contractId, payload);
+      await loadContracts();
+      setNotice({ tone: 'success', title: '合同已确认归档', body: '该合同已标记为人工确认，可进入履约复盘。' });
+    } catch (error) {
+      setNotice({ tone: 'warning', title: '确认失败', body: error instanceof Error ? error.message : '合同确认失败。' });
+    } finally {
+      setContractActionId('');
+    }
+  };
+
+  const openContractPdf = async (contractId: number) => {
+    if (!apiToken) return;
+    setContractActionId(`download:${contractId}`);
+    try {
+      const result = await downloadProjectContract(apiToken, project.id, contractId);
+      window.open(result.url, '_blank', 'noopener,noreferrer');
+    } catch (error) {
+      setNotice({ tone: 'warning', title: 'PDF 打开失败', body: error instanceof Error ? error.message : '无法生成合同下载链接。' });
+    } finally {
+      setContractActionId('');
+    }
+  };
+
+  const retryContractExtraction = async (contractId: number) => {
+    if (!apiToken) return;
+    setContractActionId(`extract:${contractId}`);
+    try {
+      await extractProjectContract(apiToken, project.id, contractId);
+      await loadContracts();
+      setNotice({ tone: 'success', title: '合同已重新提取', body: 'Claude 提取结果已刷新，请人工确认。' });
+    } catch (error) {
+      setNotice({ tone: 'warning', title: '重新提取失败', body: error instanceof Error ? error.message : '合同重新提取失败。' });
+    } finally {
+      setContractActionId('');
+    }
   };
 
   const submitStageAction = async (row: VkpiProjectRow, action: 'stalled' | 'lost' | 'released' | 'cancelled', reason: string) => {
@@ -786,7 +912,15 @@ export function ProjectDetailView({
         <CampaignContractsTab
           rows={rows}
           contractLines={contractLines}
-          onPendingAction={(label) => setNotice({ tone: 'info', title: '合同识别功能开发中', body: `${label} 功能开发中，敬请期待。` })}
+          contracts={contractsPayload}
+          loading={contractsLoading}
+          error={contractsError}
+          busyKey={contractActionId}
+          onUploadContract={uploadContractFile}
+          onSaveContract={saveContract}
+          onConfirmContract={confirmContractArchive}
+          onOpenContract={openContractPdf}
+          onRetryExtract={retryContractExtraction}
         />
       ) : activeTab === '复盘' ? (
         <CampaignRetrospectiveTab
