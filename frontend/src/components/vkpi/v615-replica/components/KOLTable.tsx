@@ -17,10 +17,27 @@ import { formatNumber, formatPercent } from "../lib/format";
 import { getCountryInfo } from "../data/countryInfo";
 
 const e = React.createElement;
+const ROW_HEIGHT = 60;
+const VISIBLE_ROWS = 18;
+const OVERSCAN_ROWS = 8;
 
 export function KOLTable({ items, onRowClick, selectedItemId, myList }) {
+  const [scrollTop, setScrollTop] = React.useState(0);
+  React.useEffect(() => {
+    setScrollTop(0);
+  }, [items]);
+  const totalRows = items.length;
+  const startIndex = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN_ROWS);
+  const endIndex = Math.min(totalRows, startIndex + VISIBLE_ROWS + OVERSCAN_ROWS * 2);
+  const visibleItems = items.slice(startIndex, endIndex);
+  const topSpacer = startIndex * ROW_HEIGHT;
+  const bottomSpacer = Math.max(0, (totalRows - endIndex) * ROW_HEIGHT);
+
   return e("div", { className: "rounded-xl border border-white/[0.08] bg-white/[0.025] backdrop-blur-xl overflow-hidden" },
-    e("div", { className: "overflow-auto max-h-[calc(100vh-460px)]" },
+    e("div", {
+      className: "overflow-auto max-h-[calc(100vh-460px)]",
+      onScroll: (event) => setScrollTop(event.currentTarget.scrollTop || 0),
+    },
       e("table", { className: "kp-table" },
         e("thead", null,
           e("tr", null,
@@ -35,7 +52,11 @@ export function KOLTable({ items, onRowClick, selectedItemId, myList }) {
           )
         ),
         e("tbody", null,
-          items.map((item, index) => {
+          topSpacer > 0 && e("tr", { "aria-hidden": true },
+            e("td", { colSpan: 8, style: { height: topSpacer, padding: 0, borderBottom: 0 } })
+          ),
+          visibleItems.map((item, offset) => {
+            const index = startIndex + offset;
             const isSelected = selectedItemId === item.id;
             return e("tr", { 
               key: [item.id, item.platform, item.handle, index].filter(Boolean).join(":"), 
@@ -138,7 +159,10 @@ export function KOLTable({ items, onRowClick, selectedItemId, myList }) {
                 )
               )
             );
-          })
+          }),
+          bottomSpacer > 0 && e("tr", { "aria-hidden": true },
+            e("td", { colSpan: 8, style: { height: bottomSpacer, padding: 0, borderBottom: 0 } })
+          )
         )
       )
     )
