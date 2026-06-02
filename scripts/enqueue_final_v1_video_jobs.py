@@ -39,6 +39,30 @@ def _platform_from_url(url: str) -> str:
     return "unsupported"
 
 
+def _explicit_video_url(url: str, platform: str) -> bool:
+    text = str(url or "").lower()
+    if platform == "youtube":
+        return "watch?v=" in text or "/shorts/" in text or "youtu.be/" in text
+    if platform == "instagram":
+        return "/reel/" in text
+    if platform == "tiktok":
+        return "/video/" in text
+    return False
+
+
+def _has_video_signal(row: dict[str, Any], platform: str) -> bool:
+    view_count = row.get("view_count")
+    duration_seconds = row.get("duration_seconds")
+    if view_count is not None:
+        return True
+    try:
+        if duration_seconds is not None and int(duration_seconds) > 0:
+            return True
+    except (TypeError, ValueError):
+        pass
+    return _explicit_video_url(str(row.get("content_url") or ""), platform)
+
+
 def _target_rows(conn: psycopg.Connection[Any], *, batch: str, cutoff: str) -> list[dict[str, Any]]:
     if batch == "recent":
         where = "e.publish_date >= %(cutoff)s::timestamptz"
@@ -61,6 +85,8 @@ def _target_rows(conn: psycopg.Connection[Any], *, batch: str, cutoff: str) -> l
               e.content_url,
               e.platform AS evidence_platform,
               e.publish_date,
+              e.view_count,
+              e.duration_seconds,
               COALESCE(kp.handle, kp.display_name, e.channel_name, '') AS kol,
               COALESCE(e.title, e.video_title, '') AS title,
               c.id AS cache_id,
@@ -89,12 +115,23 @@ def _target_rows(conn: psycopg.Connection[Any], *, batch: str, cutoff: str) -> l
 def _classify(rows: list[dict[str, Any]], *, batch: str, triggered_by_user_id: int | None, limit: int | None) -> dict[str, Any]:
     planned: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
+    eligible_video: list[dict[str, Any]] = []
+    filtered_non_video: list[dict[str, Any]] = []
     for row in rows:
         platform = str(row.get("platform_by_host") or "unsupported")
         reason = ""
         if platform not in SUPPORTED_PLATFORMS:
             reason = "unsupported_platform"
-        elif row.get("cache_id"):
+        elif not _has_video_signal(row, platform):
+            reason = "non_video_post_no_video_signal"
+        if reason:
+            skipped_item = {**row, "skip_reason": reason}
+            skipped.append(skipped_item)
+            if reason == "non_video_post_no_video_signal":
+                filtered_non_video.append(skipped_item)
+            continue
+        eligible_video.append(row)
+        if row.get("cache_id"):
             reason = "existing_ready_cache"
         elif row.get("existing_job_statuses"):
             reason = "existing_final_v1_job"
@@ -114,7 +151,7 @@ def _classify(rows: list[dict[str, Any]], *, batch: str, triggered_by_user_id: i
         planned.append({**row, "payload": payload})
     if limit is not None:
         planned = planned[: max(0, int(limit))]
-    return {"planned": planned, "skipped": skipped}
+    return {"planned": planned, "skipped": skipped, "eligible_video": eligible_video, "filtered_non_video": filtered_non_video}
 
 
 def _insert_jobs(conn: psycopg.Connection[Any], planned: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -138,11 +175,18 @@ def _insert_jobs(conn: psycopg.Connection[Any], planned: list[dict[str, Any]]) -
 def _print_report(*, batch: str, commit: bool, classified: dict[str, Any], inserted: list[dict[str, Any]] | None = None) -> None:
     planned = classified["planned"]
     skipped = classified["skipped"]
+    eligible_video = classified["eligible_video"]
+    filtered_non_video = classified["filtered_non_video"]
     planned_platforms = Counter(str(item.get("platform_by_host") or "unknown") for item in planned)
+    eligible_platforms = Counter(str(item.get("platform_by_host") or "unknown") for item in eligible_video)
     skipped_reasons = Counter(str(item.get("skip_reason") or "unknown") for item in skipped)
     print(f"mode: {'commit' if commit else 'dry-run'}")
     print(f"batch: {batch}")
     print(f"derive_method: {DERIVE_METHOD}")
+    print(f"eligible_video_count: {len(eligible_video)}")
+    print("eligible_video_platforms:", dict(sorted(eligible_platforms.items())))
+    print(f"filtered_non_video_count: {len(filtered_non_video)}")
+    print("filtered_non_video_target_ids:", [str(item["target_id"]) for item in filtered_non_video])
     print(f"planned_count: {len(planned)}")
     print("planned_platforms:", dict(sorted(planned_platforms.items())))
     print("skipped_reasons:", dict(sorted(skipped_reasons.items())))
