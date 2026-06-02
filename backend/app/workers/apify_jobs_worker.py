@@ -6,6 +6,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -27,11 +28,16 @@ from app.platform import llm_gateway
 from app.services.media.video_download import download_direct_video_url
 from app.services.media.video_keyframes import temporary_keyframes
 from app.services.ai.analyzers import gemini_video as gemini_video_analyzer
-from app.services.scraping import apify as apify_scraper
 
 
 logger = get_logger(__name__)
 POLL_SECONDS = float(os.environ.get("APIFY_WORKER_POLL_SECONDS", "2"))
+MEDIA_RESOLVE_TIMEOUT_SECONDS = max(10, int(os.environ.get("APIFY_WORKER_MEDIA_RESOLVE_TIMEOUT_SEC", "90")))
+STALE_RUNNING_MINUTES = max(1, int(os.environ.get("APIFY_WORKER_STALE_RUNNING_MINUTES", "10")))
+STALE_RECLAIM_SECONDS = STALE_RUNNING_MINUTES * 60
+STALE_RECLAIM_POLL_SECONDS = max(30, int(os.environ.get("APIFY_WORKER_STALE_RECLAIM_POLL_SECONDS", "60")))
+RUNNING_HEARTBEAT_SECONDS = max(10, int(os.environ.get("APIFY_WORKER_RUNNING_HEARTBEAT_SECONDS", "30")))
+MAX_JOB_ATTEMPTS = max(1, int(os.environ.get("APIFY_WORKER_MAX_ATTEMPTS", "2")))
 LLM_BUDGET_SCOPE = os.environ.get("APIFY_WORKER_LLM_BUDGET_SCOPE", "cron:vkpi_analysis_worker")
 LLM_CONCURRENCY_LIMIT = max(1, min(2, int(os.environ.get("APIFY_WORKER_LLM_CONCURRENCY", "1"))))
 LLM_MAX_OUTPUT_TOKENS = int(os.environ.get("APIFY_WORKER_LLM_MAX_OUTPUT_TOKENS", "1200"))
@@ -107,6 +113,76 @@ def _platform_from_content_url(url: str) -> str:
     return "unsupported"
 
 
+def _parse_apify_resolver_stdout(stdout: str) -> dict[str, Any]:
+    for line in reversed(str(stdout or "").splitlines()):
+        candidate = line.strip()
+        if not candidate:
+            continue
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return {
+        "scraped_ok": False,
+        "error": "apify resolver returned no JSON",
+        "_parse_error": True,
+    }
+
+
+def _scrape_with_apify_timeout(content_url: str, platform: str) -> dict[str, Any]:
+    backend_dir = Path(__file__).resolve().parents[2]
+    repo_dir = Path(__file__).resolve().parents[3]
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(backend_dir) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    child_code = r"""
+import asyncio
+import json
+import sys
+
+from app.services.scraping import apify as apify_scraper
+
+
+async def main() -> None:
+    result = await apify_scraper.scrape_with_apify(sys.argv[1], sys.argv[2])
+    print(json.dumps(result, ensure_ascii=False, default=str), flush=True)
+
+
+try:
+    asyncio.run(main())
+except BaseException as exc:
+    print(json.dumps({"scraped_ok": False, "error": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False), flush=True)
+    raise
+"""
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", child_code, content_url, platform],
+            cwd=str(repo_dir),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=MEDIA_RESOLVE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning(
+            "apify media resolve timeout | platform=%s source_host=%s timeout_sec=%s",
+            platform,
+            _url_host(content_url),
+            MEDIA_RESOLVE_TIMEOUT_SECONDS,
+        )
+        return {
+            "scraped_ok": False,
+            "error": "media_resolve_timeout",
+            "_timeout": True,
+        }
+    parsed = _parse_apify_resolver_stdout(proc.stdout)
+    if proc.returncode != 0:
+        parsed["_child_exit"] = True
+        parsed["error"] = str(parsed.get("error") or proc.stderr or f"apify resolver exit {proc.returncode}")[-1000:]
+    return parsed
+
+
 def _resolve_video_media(evidence: dict[str, Any]) -> dict[str, Any]:
     content_url = str(evidence.get("content_url") or "").strip()
     platform = _platform_from_content_url(content_url)
@@ -132,7 +208,19 @@ def _resolve_video_media(evidence: dict[str, Any]) -> dict[str, Any]:
         output["reason"] = "apify_not_configured"
         output["status"] = "blocked"
         return output
-    scraped = asyncio.run(apify_scraper.scrape_with_apify(content_url, platform))
+    scraped = _scrape_with_apify_timeout(content_url, platform)
+    if scraped.get("_timeout"):
+        output["reason"] = "media_resolve_timeout"
+        output["status"] = "failed"
+        return output
+    if scraped.get("_child_exit"):
+        output["reason"] = f"media_resolve_child_exit: {scraped.get('error') or platform}"
+        output["status"] = "failed"
+        return output
+    if scraped.get("_parse_error"):
+        output["reason"] = str(scraped.get("error") or "media_resolve_parse_failed")
+        output["status"] = "failed"
+        return output
     output["scraped_ok"] = bool(scraped.get("scraped_ok"))
     direct_video_url = str(scraped.get("video_url") or "").strip()
     if not direct_video_url:
@@ -1530,28 +1618,105 @@ def _fail_job(conn: psycopg.Connection[Any], job_id: int, exc: Exception) -> Non
             )
 
 
+def _heartbeat_running_job(job_id: int, stop_signal: threading.Event) -> None:
+    while not stop_signal.wait(RUNNING_HEARTBEAT_SECONDS):
+        try:
+            with psycopg.connect(DB_RUNTIME_URL, autocommit=True) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE apify_jobs SET updated_at=NOW() WHERE id=%s AND status='running'",
+                        (job_id,),
+                    )
+        except Exception as exc:
+            logger.warning("apify_jobs running heartbeat failed | id=%s error=%s", job_id, exc)
+
+
+@contextmanager
+def _running_job_heartbeat(job_id: int):
+    stop_signal = threading.Event()
+    thread = threading.Thread(
+        target=_heartbeat_running_job,
+        args=(job_id, stop_signal),
+        name=f"apify-job-heartbeat-{job_id}",
+        daemon=True,
+    )
+    thread.start()
+    try:
+        yield
+    finally:
+        stop_signal.set()
+        thread.join(timeout=2)
+
+
+def _reclaim_stale_running_jobs(conn: psycopg.Connection[Any]) -> list[dict[str, Any]]:
+    with conn.transaction():
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                UPDATE apify_jobs
+                SET
+                  status = CASE WHEN attempts < %(max_attempts)s THEN 'queued' ELSE 'failed' END,
+                  attempts = attempts + 1,
+                  last_error = CASE
+                    WHEN attempts < %(max_attempts)s THEN 'stale_running_reclaimed: requeued after worker heartbeat expired'
+                    ELSE 'stale_running_reclaimed: max attempts reached'
+                  END,
+                  updated_at = NOW()
+                WHERE status='running'
+                  AND updated_at < NOW() - make_interval(secs => %(stale_seconds)s)
+                RETURNING id, status, attempts, payload, last_error
+                """,
+                {"max_attempts": MAX_JOB_ATTEMPTS, "stale_seconds": STALE_RECLAIM_SECONDS},
+            )
+            rows = [dict(row) for row in cur.fetchall()]
+    for row in rows:
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        logger.warning(
+            "apify_jobs stale running reclaimed | id=%s target_id=%s status=%s attempts=%s",
+            row.get("id"),
+            payload.get("target_id"),
+            row.get("status"),
+            row.get("attempts"),
+        )
+    return rows
+
+
 def run_worker() -> None:
     if not DB_RUNTIME_URL:
         raise RuntimeError("DATABASE_URL is required for apify_jobs worker")
     signal.signal(signal.SIGTERM, _request_stop)
     signal.signal(signal.SIGINT, _request_stop)
-    logger.info("apify_jobs mock worker started | poll_seconds=%s", POLL_SECONDS)
+    logger.info(
+        "apify_jobs worker started | poll_seconds=%s stale_minutes=%s resolve_timeout_sec=%s",
+        POLL_SECONDS,
+        STALE_RUNNING_MINUTES,
+        MEDIA_RESOLVE_TIMEOUT_SECONDS,
+    )
     try:
         with psycopg.connect(DB_RUNTIME_URL, autocommit=True) as conn:
+            _reclaim_stale_running_jobs(conn)
+            last_reclaim = time.monotonic()
             while not _stop_event.is_set():
+                if time.monotonic() - last_reclaim >= STALE_RECLAIM_POLL_SECONDS:
+                    _reclaim_stale_running_jobs(conn)
+                    last_reclaim = time.monotonic()
                 job = _claim_job(conn)
                 if not job:
                     _stop_event.wait(POLL_SECONDS)
                     continue
+                if _stop_event.is_set():
+                    _requeue_job(conn, int(job["id"]), "worker stop requested before processing")
+                    break
                 try:
-                    _process_job(conn, job)
-                    logger.info("apify_jobs mock job done | id=%s", job["id"])
+                    with _running_job_heartbeat(int(job["id"])):
+                        _process_job(conn, job)
+                    logger.info("apify_jobs job done | id=%s", job["id"])
                 except Exception as exc:
-                    logger.exception("apify_jobs mock job failed | id=%s", job.get("id"))
+                    logger.exception("apify_jobs job failed | id=%s", job.get("id"))
                     _fail_job(conn, int(job["id"]), exc)
     finally:
         close_db_runtime_sync()
-        logger.info("apify_jobs mock worker stopped")
+        logger.info("apify_jobs worker stopped")
 
 
 if __name__ == "__main__":

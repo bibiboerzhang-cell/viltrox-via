@@ -38,6 +38,8 @@ NON_RETRYABLE_MARKERS = (
     "unsupported",
 )
 RETRYABLE_MARKERS = (
+    "stale_running_reclaimed",
+    "media_resolve_timeout",
     "timeout",
     "timed out",
     "503",
