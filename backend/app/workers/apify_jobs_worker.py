@@ -306,6 +306,8 @@ def _usage_count(metadata: dict[str, Any], *keys: str) -> int:
 
 def _gemini_input_cost_usd(model: str, metadata: dict[str, Any], tokens_in: int) -> float:
     model_key = str(model or "").lower()
+    cached_tokens = _usage_count(metadata, "cached_content_token_count", "cachedContentTokenCount")
+    uncached_tokens = max(0, tokens_in - cached_tokens)
     details = metadata.get("prompt_tokens_details")
     if not isinstance(details, list):
         details = []
@@ -317,7 +319,8 @@ def _gemini_input_cost_usd(model: str, metadata: dict[str, Any], tokens_in: int)
         modality_counts[modality] = modality_counts.get(modality, 0) + (_int_or_none(item.get("token_count")) or 0)
     if "gemini-3.1-pro" in model_key:
         rate = 4.0 if tokens_in > 200_000 else 2.0
-        return tokens_in * rate / 1_000_000
+        cached_rate = 0.40 if tokens_in > 200_000 else 0.20
+        return ((uncached_tokens * rate) + (cached_tokens * cached_rate)) / 1_000_000
     if "gemini-3-flash" in model_key:
         audio = modality_counts.get("AUDIO", 0)
         return ((tokens_in - audio) * 0.50 + audio * 1.00) / 1_000_000
@@ -1269,10 +1272,11 @@ def _process_gemini_video(
     if platform == "unsupported":
         _block_job(conn, int(job["id"]), "unsupported_platform", {"source_url_host": _url_host(str(evidence.get("content_url") or ""))})
         return
-    if platform in {"instagram", "tiktok"} and derive_method not in GEMINI_VIDEO_V2_DERIVE_METHODS:
-        _block_job(conn, int(job["id"]), "unsupported_media_derive_method", {"platform": platform, "derive_method": derive_method})
-        return
-    if platform in {"instagram", "tiktok"} and derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS:
+    if (
+        platform in {"instagram", "tiktok"}
+        and derive_method not in GEMINI_VIDEO_V2_DERIVE_METHODS
+        and derive_method not in GEMINI_VIDEO_FINAL_DERIVE_METHODS
+    ):
         _block_job(conn, int(job["id"]), "unsupported_media_derive_method", {"platform": platform, "derive_method": derive_method})
         return
     if derive_method == "gemini_video_v2_flash_pro_judge":
@@ -1310,15 +1314,28 @@ def _process_gemini_video(
                 )
                 if not download.get("success") or not download.get("path"):
                     raise RuntimeError(f"direct_video_download_failed: {download.get('error') or platform}")
+                local_schema = "final_v1" if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS else "v2"
+                analysis_context = _video_final_context(evidence) if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS else _video_performance_context(evidence)
                 raw = asyncio.run(
                     gemini_video_analyzer.analyze_local_video_with_gemini(
                         str(download["path"]),
                         str(evidence.get("title") or ""),
                         str(evidence.get("creator_handle") or ""),
-                        schema_version="v2",
-                        performance_context=_video_performance_context(evidence),
+                        schema_version=local_schema,
+                        performance_context=analysis_context,
                     )
                 )
+                raw["media_resolution"] = {
+                    "platform": platform,
+                    "source_url_host": _url_host(str(evidence.get("content_url") or "")),
+                    "direct_video_url_host": resolved.get("direct_video_url_host"),
+                    "status": resolved.get("status"),
+                }
+                raw["local_video_input"] = {
+                    "download_bytes": int(download.get("bytes") or 0),
+                    "temporary_files_cleaned": True,
+                    "download_error": download.get("error"),
+                }
         else:
             analysis_context = _video_final_context(evidence) if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS else _video_performance_context(evidence)
             raw = asyncio.run(

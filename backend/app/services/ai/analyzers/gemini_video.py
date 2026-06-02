@@ -28,6 +28,7 @@ from app.platform import llm_gateway
 from app.services.media.video_keyframes import build_anthropic_multimodal_content, build_openai_multimodal_content
 
 logger = get_logger(__name__)
+_FINAL_V1_CONTEXT_CACHES: dict[str, str] = {}
 
 
 VIDEO_V2_SCORE_KEYS = (
@@ -75,6 +76,22 @@ def _response_usage_metadata(resp: Any) -> dict[str, Any]:
         if value is not None:
             output[field] = value
     return output
+
+
+def _parse_json_response_text(text: str) -> dict[str, Any]:
+    raw = str(text or "").strip()
+    raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start < 0 or end <= start:
+            raise
+        parsed = json.loads(raw[start : end + 1])
+    if not isinstance(parsed, dict):
+        raise ValueError("Gemini response JSON root must be an object")
+    return parsed
 
 
 def _video_v2_prompt(
@@ -279,6 +296,97 @@ layer2_viewer_emotion 必须像真实观众反应，不要品牌官腔；并且�
 }}"""
 
 
+def _video_final_v1_static_prompt() -> str:
+    return """你是 Viltrox (唯卓仕) 的视频投放复盘审查员。你同时站在两个视角判断完整视频：
+1. 品牌方：这条投放是否真的帮 Viltrox 卖镜头、证明镜头、产出可复用素材。
+2. 真实观众：一个摄影/视频创作者看完后是否心动、是否想继续了解、是否反感商业植入。
+
+固定规则 A-I：
+A. 素材源 vs 分发渠道：高质量但低播放时，拆开判断“好素材源”和“弱分发渠道”。
+B. 效果归因：区分画面好看来自产品本身，还是来自 KOL 的 LUT/滤镜/后期/灯光/模特/场景/剪辑。
+C. 素材复用价值：判断是否适合买断/授权作为官方素材、官网素材、广告投流切片、产品页、展会屏幕。
+D. 恰饭警惕：警惕模板化、念稿感、赞助水印、折扣链接、自家 LUT/滤镜顺带推广。
+E. Viltrox 投放目标：卖镜头、证明镜头能力、促成购买决策；不是帮 KOL 涨粉。
+F. 11维理念精髓：关注内容专长、产品契合、品牌露出、真实性、竞品风险、转化说服力、素材资产价值。
+G. 单视频边界：没有账号基准时，禁止判断“相对该 KOL 平时”；只能用绝对播放/点赞/评论/时长/发布时间。
+H. 评分锚点：90+ 罕见顶级；70-85 合格中上；55-70 普通达标；40-55 明显短板；不能因为没硬伤就给高分。
+I. 守不造假：所有评分必须带 confidence 和 evidence；证据不足给低 confidence 或 null，不补脑。
+
+Viltrox 产品背景：Viltrox 是摄影/视频镜头品牌，核心产品线包括 Pro 系列自动对焦定焦、LAB 高端镜头、Air 轻量镜头、电影镜头等。判断 product_fit 时考虑产品定位、价格档、竞品购买理由。若视频是闪光灯/配件，也要按“是否帮助 Viltrox 卖该产品和形成购买信心”评估。
+
+输出必须是 JSON，包含 6 层：layer1_visual_content / layer2_viewer_emotion / layer3_three_values / layer4_attribution / layer5_recommendations / layer6_flags_and_scores。
+每个 score 为 0-100 或 null；confidence 为 0-1；evidence 必须具体。
+layer2_viewer_emotion 必须像真实观众反应，并和真实播放数据对照，指出矛盾或一致性。
+layer3 必须拆 channel_value / asset_value / product_proof_value。
+layer4 必须拆 lens_or_product_contribution / kol_craft_contribution / lighting / LUT / filter / editing / location 等归因。
+layer5 必须给合作建议、素材买断/授权建议、下一轮 brief 调整、必须向 KOL 索取什么。
+layer6 必须给 risk_flags、content_quality_score、viewer_heart_score、channel_value_score、asset_reuse_score、product_proof_score、marketing_value_score、final_verdict、key_hook。
+
+固定输出 schema 细则：
+layer1_visual_content = content_summary / scene_timeline[{timestamp, what, why_it_matters}] / product_presence / brand_exposure / competitor_presence / production_observations / evidence{timestamps, subtitle_used}。
+layer2_viewer_emotion = first_three_seconds_feeling / viewer_heart_score / dislike_or_resistance / memorable_points / purchase_or_interest_trigger / one_sentence_viewer_reaction / data_alignment。必须说明真实观众是否会想继续看、收藏、点赞、下单或反感。
+layer3_three_values = channel_value / asset_value / product_proof_value。channel_value 只评渠道投放值；asset_value 只评素材买断/复用；product_proof_value 只评是否证明 Viltrox 产品能力。
+layer4_attribution = attribution_breakdown[{source, share_pct_estimate, confidence, evidence}] / product_contribution / kol_craft_contribution / attribution_risk / what_to_request_to_verify_product。必须拆产品、灯光、LUT、后期、布景、模特、剪辑、平台压缩。
+layer5_recommendations = cooperation_recommendation / buyout_or_license_recommendation / next_brief_adjustments / must_request_from_kol / budget_action / why。
+layer6_flags_and_scores = risk_flags / scores / final_verdict / key_hook。scores 至少包含 content_quality_score、viewer_heart_score、channel_value_score、asset_reuse_score、product_proof_score、marketing_value_score。
+分数锚点再次强调：90+ 必须罕见且证据强；70-85 是可用但要指出不足；55-70 是普通达标；40-55 是明显短板；40以下是投放风险或证据很差。不要因为画面好看就默认渠道值高，也不要因为互动高就忽略归因风险。"""
+
+
+def _video_final_v1_dynamic_prompt(
+    *,
+    title: str,
+    profile_ctx: str,
+    subtitle_ctx: str,
+    subtitle_used: bool,
+    performance_context: dict[str, Any] | None,
+) -> str:
+    metrics = json.dumps(performance_context or {}, ensure_ascii=False, default=str)
+    return f"""动态输入如下。请严格按缓存中的 final_v1 固定规则输出完整 6 层 JSON，不要 Markdown。
+{profile_ctx}{subtitle_ctx}
+视频标题: {title}
+字幕是否注入: {str(bool(subtitle_used)).lower()}（最终 evidence.subtitle_used 会由代码侧校准）
+播放表现数据（绝对表现；没有账号基准时不要做相对判断）:
+{metrics}
+
+必须输出的 JSON 顶层键：
+layer1_visual_content, layer2_viewer_emotion, layer3_three_values, layer4_attribution, layer5_recommendations, layer6_flags_and_scores。"""
+
+
+def _final_v1_cache_config(model_name: str) -> tuple[Any | None, dict[str, Any]]:
+    info: dict[str, Any] = {"enabled": False, "cache_name": "", "static_only": True, "error": ""}
+    if not GEMINI_AVAILABLE or not gemini_client or not genai_types:
+        info["error"] = "gemini cache unavailable"
+        return None, info
+    static_prompt = _video_final_v1_static_prompt()
+    cache_key = f"{model_name}:video_analysis_final_v1:{hash(static_prompt)}"
+    cache_name = _FINAL_V1_CONTEXT_CACHES.get(cache_key)
+    try:
+        if not cache_name:
+            def _create_cache():
+                return gemini_client.caches.create(
+                    model=model_name,
+                    config=genai_types.CreateCachedContentConfig(
+                        contents=[static_prompt],
+                        ttl="3600s",
+                        displayName="vkpi_video_analysis_final_v1_static",
+                    ),
+                )
+
+            cache = _create_cache()
+            cache_name = str(getattr(cache, "name", "") or "")
+            if cache_name:
+                _FINAL_V1_CONTEXT_CACHES[cache_key] = cache_name
+        if not cache_name:
+            info["error"] = "empty cache name"
+            return None, info
+        info.update({"enabled": True, "cache_name": cache_name})
+        return genai_types.GenerateContentConfig(cachedContent=cache_name), info
+    except Exception as exc:
+        info["error"] = str(exc)[:300]
+        logger.warning("gemini_final_v1_context_cache_failed", extra={"error": info["error"]})
+        return None, info
+
+
 def _normalise_final_v1_result(parsed: dict[str, Any], *, subtitle_used: bool) -> dict[str, Any]:
     payload: dict[str, Any] = {"schema_version": "video_analysis_final_v1"}
     for layer in VIDEO_FINAL_LAYERS:
@@ -434,7 +542,7 @@ async def analyze_v2_judgment_with_keyframes(
         usage_metadata = _response_usage_metadata(resp)
         raw = resp.text.strip()
         raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
-        parsed = json.loads(raw)
+        parsed = _parse_json_response_text(raw)
         subtitle_used = bool((layer1_visual_content.get("evidence") or {}).get("subtitle_used"))
         merged = {"layer1_visual_content": layer1_visual_content, **parsed}
         _apply_v2_result(
@@ -506,7 +614,7 @@ async def analyze_v2_judgment_with_openai_keyframes(
                 }
         raw = str(getattr(resp, "output_text", "") or "").strip()
         raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
-        parsed = json.loads(raw)
+        parsed = _parse_json_response_text(raw)
         subtitle_used = bool((layer1_visual_content.get("evidence") or {}).get("subtitle_used"))
         merged = {"layer1_visual_content": layer1_visual_content, **parsed}
         _apply_v2_result(
@@ -578,7 +686,7 @@ async def analyze_v2_judgment_with_anthropic_keyframes(
                 }
         raw = "\n".join(str(block.text) for block in getattr(resp, "content", []) if getattr(block, "type", "") == "text").strip()
         raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
-        parsed = json.loads(raw)
+        parsed = _parse_json_response_text(raw)
         subtitle_used = bool((layer1_visual_content.get("evidence") or {}).get("subtitle_used"))
         merged = {"layer1_visual_content": layer1_visual_content, **parsed}
         _apply_v2_result(
@@ -736,17 +844,36 @@ async def analyze_local_video_with_gemini(
             + "\n=== 字幕结束 ===\n"
             "时间戳规则：timestamps 里的 time 字段必须来自上面字幕里的真实时间点，不允许猜测或等间隔填写。"
         )
-    is_v2 = str(schema_version or "").strip().lower() == "v2"
-    if not is_v2:
-        result["error"] = "analyze_local_video_with_gemini currently supports schema_version='v2' only"
+    schema_key = str(schema_version or "").strip().lower()
+    is_v2 = schema_key == "v2"
+    is_final_v1 = schema_key == "final_v1"
+    final_full_prompt = ""
+    if is_final_v1:
+        prompt = _video_final_v1_dynamic_prompt(
+            title=title,
+            profile_ctx=profile_ctx,
+            subtitle_ctx=subtitle_ctx,
+            subtitle_used=bool(subtitle_text),
+            performance_context=performance_context,
+        )
+        final_full_prompt = _video_final_v1_prompt(
+            title=title,
+            profile_ctx=profile_ctx,
+            subtitle_ctx=subtitle_ctx,
+            subtitle_used=bool(subtitle_text),
+            performance_context=performance_context,
+        )
+    elif is_v2:
+        prompt = _video_v2_prompt(
+            title=title,
+            profile_ctx=profile_ctx,
+            subtitle_ctx=subtitle_ctx,
+            subtitle_used=bool(subtitle_text),
+            performance_context=performance_context,
+        )
+    else:
+        result["error"] = "analyze_local_video_with_gemini supports schema_version='v2' or 'final_v1' only"
         return result
-    prompt = _video_v2_prompt(
-        title=title,
-        profile_ctx=profile_ctx,
-        subtitle_ctx=subtitle_ctx,
-        subtitle_used=bool(subtitle_text),
-        performance_context=performance_context,
-    )
     gemini_file = None
     uploaded_file_name = ""
     try:
@@ -796,22 +923,48 @@ async def analyze_local_video_with_gemini(
             return result
 
         last_err = ""
-        for model_name in ["gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-2.5-flash"]:
+        model_names = ["gemini-3.1-pro-preview"] if is_final_v1 else ["gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-2.5-flash"]
+        for model_name in model_names:
             try:
+                cache_config = None
+                cache_info: dict[str, Any] = {}
+                request_prompt = prompt
+                if is_final_v1:
+                    cache_config, cache_info = _final_v1_cache_config(model_name)
+                    if not cache_config:
+                        request_prompt = final_full_prompt
                 def _analyze(m=model_name, f=gemini_file):
-                    return gemini_client.models.generate_content(
-                        model=m,
-                        contents=[
+                    kwargs: dict[str, Any] = {
+                        "model": m,
+                        "contents": [
                             genai_types.Part.from_uri(file_uri=f.uri, mime_type="video/mp4"),
-                            prompt,
+                            request_prompt,
                         ],
-                    )
+                    }
+                    if cache_config:
+                        kwargs["config"] = cache_config
+                    return gemini_client.models.generate_content(**kwargs)
 
                 resp = await asyncio.to_thread(_analyze)
                 usage_metadata = _response_usage_metadata(resp)
                 raw = resp.text.strip()
                 raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
-                parsed = json.loads(raw)
+                parsed = _parse_json_response_text(raw)
+                if is_final_v1:
+                    _apply_final_v1_result(
+                        result,
+                        parsed,
+                        method=f"gemini_local_fileapi_{model_name}",
+                        model=model_name,
+                        usage_metadata=usage_metadata,
+                        subtitle_used=bool(subtitle_text),
+                    )
+                    result["context_cache"] = cache_info
+                    logger.info(
+                        "gemini_local_fileapi_final_v1_success",
+                        extra={"model": model_name, "timestamps": len(result.get("timestamps") or [])},
+                    )
+                    break
                 _apply_v2_result(
                     result,
                     parsed,
@@ -903,8 +1056,16 @@ async def analyze_youtube_with_gemini(
     schema_key = str(schema_version or "").strip().lower()
     is_v2 = schema_key == "v2"
     is_final_v1 = schema_key == "final_v1"
+    final_full_prompt = ""
     if is_final_v1:
-        prompt = _video_final_v1_prompt(
+        prompt = _video_final_v1_dynamic_prompt(
+            title=title,
+            profile_ctx=profile_ctx,
+            subtitle_ctx=subtitle_ctx,
+            subtitle_used=bool(subtitle_raw),
+            performance_context=performance_context,
+        )
+        final_full_prompt = _video_final_v1_prompt(
             title=title,
             profile_ctx=profile_ctx,
             subtitle_ctx=subtitle_ctx,
@@ -1083,6 +1244,8 @@ vlog类：真实感、器材自然使用是核心
         "gemini-3.1-pro-preview",    # BACKUP — highest accuracy, long videos
         "gemini-2.5-flash",          # FALLBACK — stable GA tier
     ]
+    if is_final_v1:
+        GEMINI_MODELS = ["gemini-3.1-pro-preview"]
 
     # ===== FAST PATH: YouTube direct URL (no download, no upload) =====
     # Gemini 3 supports passing YouTube URLs directly via file_uri.
@@ -1107,23 +1270,33 @@ vlog类：真实感、器材自然使用是核心
             # Try analyzing with Gemini 3 models directly (no upload, no polling)
             for model_name in GEMINI_MODELS:
                 try:
+                    cache_config = None
+                    cache_info: dict[str, Any] = {}
+                    request_prompt = prompt
+                    if is_final_v1:
+                        cache_config, cache_info = _final_v1_cache_config(model_name)
+                        if not cache_config:
+                            request_prompt = final_full_prompt
                     def _analyze_direct(m=model_name, u=url):
-                        return gemini_client.models.generate_content(
-                            model=m,
-                            contents=[
+                        kwargs: dict[str, Any] = {
+                            "model": m,
+                            "contents": [
                                 genai_types.Part(
                                     file_data=genai_types.FileData(
                                         file_uri=u
                                     )
                                 ),
-                                prompt
-                            ]
-                        )
+                                request_prompt
+                            ],
+                        }
+                        if cache_config:
+                            kwargs["config"] = cache_config
+                        return gemini_client.models.generate_content(**kwargs)
                     resp = await asyncio.to_thread(_analyze_direct)
                     usage_metadata = _response_usage_metadata(resp)
                     raw = resp.text.strip()
                     raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
-                    parsed = json.loads(raw)
+                    parsed = _parse_json_response_text(raw)
                     if is_final_v1:
                         _apply_final_v1_result(
                             result,
@@ -1133,6 +1306,7 @@ vlog类：真实感、器材自然使用是核心
                             usage_metadata=usage_metadata,
                             subtitle_used=bool(subtitle_raw),
                         )
+                        result["context_cache"] = cache_info
                         logger.info(
                             "gemini_fast_path_final_v1_success",
                             extra={"model": model_name, "timestamps": len(result.get("timestamps") or [])},
@@ -1350,22 +1524,32 @@ vlog类：真实感、器材自然使用是核心
             last_err = ""
             for model_name in MODELS:
                 try:
+                    cache_config = None
+                    cache_info: dict[str, Any] = {}
+                    request_prompt = prompt
+                    if is_final_v1:
+                        cache_config, cache_info = _final_v1_cache_config(model_name)
+                        if not cache_config:
+                            request_prompt = final_full_prompt
                     def _analyze(m=model_name, f=gemini_file):
-                        return gemini_client.models.generate_content(
-                            model=m,
-                            contents=[
+                        kwargs: dict[str, Any] = {
+                            "model": m,
+                            "contents": [
                                 genai_types.Part.from_uri(
                                     file_uri=f.uri,
                                     mime_type="video/mp4"
                                 ),
-                                prompt
-                            ]
-                        )
+                                request_prompt
+                            ],
+                        }
+                        if cache_config:
+                            kwargs["config"] = cache_config
+                        return gemini_client.models.generate_content(**kwargs)
                     resp = await asyncio.to_thread(_analyze)
                     usage_metadata = _response_usage_metadata(resp)
                     raw = resp.text.strip()
                     raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
-                    parsed = json.loads(raw)
+                    parsed = _parse_json_response_text(raw)
                     if is_final_v1:
                         _apply_final_v1_result(
                             result,
@@ -1375,6 +1559,7 @@ vlog类：真实感、器材自然使用是核心
                             usage_metadata=usage_metadata,
                             subtitle_used=bool(subtitle_raw),
                         )
+                        result["context_cache"] = cache_info
                         logger.info(
                             "gemini_fileapi_final_v1_success",
                             extra={"model": model_name, "timestamps": len(result.get("timestamps") or [])},
