@@ -7,7 +7,7 @@ from app.api.dependencies.perms import require_tab
 from app.core.security import get_current_user
 from app.domains import costs
 from app.domains.access import scope
-from app.domains.analysis.cache_repo import get_analysis_cache_entry
+from app.domains.analysis.cache_repo import get_analysis_cache_entry, list_project_video_analysis_cache
 from app.domains.projects import workflow
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-projects"])
@@ -59,6 +59,17 @@ def project_detail(project_id: int, staff=Depends(require_tab("vkpi", "read"))):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
+
+
+@router.get("/projects/{project_id}/video-analysis-cache")
+def project_video_analysis_cache(
+    project_id: int,
+    derive_method: str = "video_analysis_final_v1",
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    del staff
+    derive_method = derive_method.strip() or "video_analysis_final_v1"
+    return list_project_video_analysis_cache(project_id, derive_method=derive_method)
 
 
 @router.post("/projects/{project_id}/kols")
