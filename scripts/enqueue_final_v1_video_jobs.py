@@ -112,7 +112,14 @@ def _target_rows(conn: psycopg.Connection[Any], *, batch: str, cutoff: str) -> l
     return rows
 
 
-def _classify(rows: list[dict[str, Any]], *, batch: str, triggered_by_user_id: int | None, limit: int | None) -> dict[str, Any]:
+def _classify(
+    rows: list[dict[str, Any]],
+    *,
+    batch: str,
+    triggered_by_user_id: int | None,
+    limit: int | None,
+    excluded_platforms: set[str],
+) -> dict[str, Any]:
     planned: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     eligible_video: list[dict[str, Any]] = []
@@ -120,7 +127,9 @@ def _classify(rows: list[dict[str, Any]], *, batch: str, triggered_by_user_id: i
     for row in rows:
         platform = str(row.get("platform_by_host") or "unsupported")
         reason = ""
-        if platform not in SUPPORTED_PLATFORMS:
+        if platform in excluded_platforms:
+            reason = "excluded_platform"
+        elif platform not in SUPPORTED_PLATFORMS:
             reason = "unsupported_platform"
         elif not _has_video_signal(row, platform):
             reason = "non_video_post_no_video_signal"
@@ -211,6 +220,13 @@ def main() -> None:
     parser.add_argument("--batch", choices=["recent", "remaining"], required=True)
     parser.add_argument("--cutoff", default=DEFAULT_RECENT_CUTOFF)
     parser.add_argument("--triggered-by-user-id", type=int, default=1)
+    parser.add_argument(
+        "--exclude-platform",
+        action="append",
+        choices=sorted(SUPPORTED_PLATFORMS),
+        default=[],
+        help="Skip a supported platform without marking it as an error; repeatable.",
+    )
     parser.add_argument("--limit", type=int, default=None, help="Limit planned inserts, useful for smoke validation.")
     parser.add_argument("--commit", action="store_true", help="Insert jobs. Omit for dry-run.")
     args = parser.parse_args()
@@ -218,7 +234,13 @@ def main() -> None:
         raise SystemExit("DATABASE_URL is required")
     with psycopg.connect(DB_RUNTIME_URL) as conn:
         rows = _target_rows(conn, batch=args.batch, cutoff=args.cutoff)
-        classified = _classify(rows, batch=args.batch, triggered_by_user_id=args.triggered_by_user_id, limit=args.limit)
+        classified = _classify(
+            rows,
+            batch=args.batch,
+            triggered_by_user_id=args.triggered_by_user_id,
+            limit=args.limit,
+            excluded_platforms=set(args.exclude_platform),
+        )
         inserted = _insert_jobs(conn, classified["planned"]) if args.commit else None
     _print_report(batch=args.batch, commit=bool(args.commit), classified=classified, inserted=inserted)
 
