@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import signal
+import tempfile
 import threading
 import time
 from contextlib import ExitStack, contextmanager
@@ -21,6 +22,7 @@ from app.core.logging import get_logger
 from app.db.connection import close_db_runtime_sync, db_connection_sync_scope
 from app.domains.costs import budget_guard
 from app.platform import llm_gateway
+from app.services.media.video_download import download_direct_video_url
 from app.services.ai.analyzers import gemini_video as gemini_video_analyzer
 from app.services.scraping import apify as apify_scraper
 
@@ -32,6 +34,7 @@ LLM_CONCURRENCY_LIMIT = max(1, min(2, int(os.environ.get("APIFY_WORKER_LLM_CONCU
 LLM_MAX_OUTPUT_TOKENS = int(os.environ.get("APIFY_WORKER_LLM_MAX_OUTPUT_TOKENS", "1200"))
 LLM_TARGET_TYPES = {"video", "contract"}
 GEMINI_VIDEO_DERIVE_METHODS = {"gemini", "gemini_video_v2"}
+WORKER_GEMINI_MODEL = os.environ.get("APIFY_WORKER_GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
 _stop_event = threading.Event()
 
 
@@ -199,21 +202,6 @@ def _requeue_job(conn: psycopg.Connection[Any], job_id: int, reason: str) -> Non
             )
 
 
-def _finish_media_resolved(conn: psycopg.Connection[Any], job_id: int, resolved: dict[str, Any]) -> None:
-    detail = {
-        "reason": "media_resolved_only",
-        "platform": resolved.get("platform"),
-        "source_url_host": resolved.get("source_url_host"),
-        "direct_video_url_host": resolved.get("direct_video_url_host"),
-    }
-    with conn.transaction():
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE apify_jobs SET status='done', last_error=%s, updated_at=NOW() WHERE id=%s",
-                (_json(detail)[:2000], job_id),
-            )
-
-
 def _llm_budget_preflight(job: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     target_type, target_id = _target(payload)
     prompt = str(payload.get("prompt") or f"{job.get('job_type') or 'analysis'} {target_type}:{target_id}")
@@ -360,7 +348,7 @@ def _video_performance_context(evidence: dict[str, Any]) -> dict[str, Any]:
 
 @contextmanager
 def _gemini_worker_overrides(payload: dict[str, Any]):
-    model_override = str(payload.get("gemini_model") or os.environ.get("APIFY_WORKER_GEMINI_MODEL") or "").strip()
+    model_override = str(payload.get("gemini_model") or WORKER_GEMINI_MODEL).strip()
     skip_subtitles = _truthy(
         payload.get("skip_subtitles", payload.get("gemini_skip_subtitles", os.environ.get("APIFY_WORKER_GEMINI_SKIP_SUBTITLES")))
     )
@@ -521,21 +509,8 @@ def _process_gemini_video(
     if platform == "unsupported":
         _block_job(conn, int(job["id"]), "unsupported_platform", {"source_url_host": _url_host(str(evidence.get("content_url") or ""))})
         return
-    if platform in {"instagram", "tiktok"}:
-        resolved = _resolve_video_media(evidence)
-        if str(resolved.get("status") or "") == "blocked":
-            _block_job(conn, int(job["id"]), str(resolved.get("reason") or "media_resolve_blocked"), resolved)
-            return
-        if not resolved.get("ok"):
-            raise RuntimeError(f"media_resolve_failed: {resolved.get('reason') or platform}")
-        logger.info(
-            "apify_jobs media resolved only | job_id=%s target_id=%s platform=%s direct_host=%s",
-            job.get("id"),
-            target_id,
-            platform,
-            resolved.get("direct_video_url_host"),
-        )
-        _finish_media_resolved(conn, int(job["id"]), resolved)
+    if platform in {"instagram", "tiktok"} and derive_method != "gemini_video_v2":
+        _block_job(conn, int(job["id"]), "unsupported_media_derive_method", {"platform": platform, "derive_method": derive_method})
         return
     logger.info(
         "apify_jobs gemini video start | job_id=%s target_id=%s url=%s",
@@ -545,15 +520,40 @@ def _process_gemini_video(
     )
     started = time.monotonic()
     with _gemini_worker_overrides(payload) as model_override:
-        raw = asyncio.run(
-            gemini_video_analyzer.analyze_youtube_with_gemini(
-                str(evidence.get("content_url") or ""),
-                str(evidence.get("title") or ""),
-                str(evidence.get("creator_handle") or ""),
-                schema_version="v2" if derive_method == "gemini_video_v2" else "legacy",
-                performance_context=_video_performance_context(evidence) if derive_method == "gemini_video_v2" else None,
+        if platform in {"instagram", "tiktok"}:
+            resolved = _resolve_video_media(evidence)
+            if str(resolved.get("status") or "") == "blocked":
+                _block_job(conn, int(job["id"]), str(resolved.get("reason") or "media_resolve_blocked"), resolved)
+                return
+            if not resolved.get("ok"):
+                raise RuntimeError(f"media_resolve_failed: {resolved.get('reason') or platform}")
+            with tempfile.TemporaryDirectory(prefix="vkpi-analysis-video-") as tmpdir:
+                download = download_direct_video_url(
+                    str(resolved.get("direct_video_url") or ""),
+                    tmpdir,
+                    referer=str(evidence.get("content_url") or ""),
+                )
+                if not download.get("success") or not download.get("path"):
+                    raise RuntimeError(f"direct_video_download_failed: {download.get('error') or platform}")
+                raw = asyncio.run(
+                    gemini_video_analyzer.analyze_local_video_with_gemini(
+                        str(download["path"]),
+                        str(evidence.get("title") or ""),
+                        str(evidence.get("creator_handle") or ""),
+                        schema_version="v2",
+                        performance_context=_video_performance_context(evidence),
+                    )
+                )
+        else:
+            raw = asyncio.run(
+                gemini_video_analyzer.analyze_youtube_with_gemini(
+                    str(evidence.get("content_url") or ""),
+                    str(evidence.get("title") or ""),
+                    str(evidence.get("creator_handle") or ""),
+                    schema_version="v2" if derive_method == "gemini_video_v2" else "legacy",
+                    performance_context=_video_performance_context(evidence) if derive_method == "gemini_video_v2" else None,
+                )
             )
-        )
     if model_override and raw.get("analyzed"):
         raw["model"] = model_override
         method = str(raw.get("method") or "")
@@ -561,6 +561,8 @@ def _process_gemini_video(
             raw["method"] = f"gemini_direct_{model_override}"
         elif method.startswith("gemini_fileapi_"):
             raw["method"] = f"gemini_fileapi_{model_override}"
+        elif method.startswith("gemini_local_fileapi_"):
+            raw["method"] = f"gemini_local_fileapi_{model_override}"
     latency_ms = int((time.monotonic() - started) * 1000)
     logger.info(
         "apify_jobs gemini video returned | job_id=%s analyzed=%s method=%s latency_ms=%s",
