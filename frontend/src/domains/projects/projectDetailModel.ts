@@ -1,4 +1,4 @@
-import type { VkpiKolOption, VkpiPageKey, VkpiProjectRow, VkpiProjectStage, VkpiStaffMember } from '../../components/vkpi/vkpiTypes';
+import type { VkpiKolOption, VkpiPageKey, VkpiProjectDetail, VkpiProjectRow, VkpiProjectStage, VkpiStaffMember } from '../../components/vkpi/vkpiTypes';
 import { primaryStageFlow, stageLabels } from '../../components/vkpi/shared/vkpiConstants';
 import { currencyFormatter, numberFormatter } from '../../components/vkpi/shared/vkpiFormatters';
 
@@ -148,6 +148,7 @@ export interface ContractLine {
 
 export interface ProjectDetailViewProps {
   apiToken?: string;
+  detail?: VkpiProjectDetail | null;
   project: VkpiProjectRow;
   projects: VkpiProjectRow[];
   participatingRows?: VkpiProjectRow[];

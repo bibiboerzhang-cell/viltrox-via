@@ -355,6 +355,7 @@ export function ProjectsPage({
           <ProjectDetailView
             key={detailProjectForView.id}
             apiToken={apiToken}
+            detail={projectDetailState.detail}
             project={detailProjectForView}
             projects={filteredProjects.map((project) => (project.id === detailProjectForView.id ? detailProjectForView : project))}
             participatingRows={projectDetailState.participatingRows}

@@ -1,7 +1,7 @@
 import { Component, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
 import { Activity, AlertCircle, BookOpen, Boxes, Check, DollarSign, Download, Edit3, ExternalLink, Eye, FileText, Heart, ImageIcon, MessageCircle, MousePointerClick, Package, Plus, Send, Shield, ShoppingCart, Sparkles, TrendingUp, Upload, Video, X } from 'lucide-react';
 import { stageLabels } from '../../shared/vkpiConstants';
-import type { VkpiProjectRow } from '../../vkpiTypes';
+import type { VkpiProjectDetail, VkpiProjectRow } from '../../vkpiTypes';
 import type { VkpiAnalysisCacheEntry, VkpiProjectContract, VkpiProjectContractsResponse, VkpiProjectVideoAnalysisCacheItem, VkpiProjectVideoAnalysisCacheResponse } from '../../../../services/vkpi/projects-api';
 import { formatLargeNum, formatMoneyShort, healthColor, PROJECT_STAGE_COLOR, PROJECT_STAGE_FLOW } from './projectDeliverableStyle';
 import {
@@ -274,78 +274,145 @@ function timelineSpecial(row: VkpiProjectRow) {
   return '';
 }
 
+function timelineField(event: Record<string, unknown>, key: string) {
+  return String(event[key] ?? '').trim();
+}
+
+function timelineStageLabel(stage: string) {
+  return (stageLabels as Record<string, string>)[stage] || stage || '—';
+}
+
+function timelineEventTypeLabel(type: string) {
+  const labels: Record<string, string> = {
+    created: '创建项目',
+    deleted: '删除/取消',
+    stage_change: '阶段变更',
+    suggestion_project_created: '建议转项目',
+  };
+  return labels[type] || type || '事件';
+}
+
+function timelineEventColor(toStage: string, eventType: string) {
+  if (eventType === 'deleted' || toStage === 'cancelled') return '#ef4444';
+  if (eventType === 'created') return '#22c55e';
+  const index = Math.max(0, Math.min(PROJECT_STAGE_FLOW.length - 1, stageIndex(toStage)));
+  return PROJECT_STAGE_COLOR[PROJECT_STAGE_FLOW[index].key] || '#94a3b8';
+}
+
 export function CampaignTimelineTab({
   rows,
+  events = [],
 }: {
   rows: VkpiProjectRow[];
+  events?: VkpiProjectDetail['events'];
 }) {
-  const events = useMemo(() => rows
-    .map((row) => {
-      const stage = timelineStage(row);
-      const special = timelineSpecial(row);
+  const realEvents = useMemo(() => events
+    .map((event, index) => {
+      const fromStage = timelineField(event, 'from_stage');
+      const toStage = timelineField(event, 'to_stage');
+      const eventType = timelineField(event, 'event_type');
+      const effectiveAt = timelineField(event, 'effective_at') || timelineField(event, 'created_at');
       return {
-        id: row.id,
-        date: formatTimelineDate(timelineDateValue(row)),
-        timestamp: timelineTimestamp(timelineDateValue(row)),
-        kol: row.kolHandle || row.kolName || 'Unknown',
-        stageLabel: stageLabels[row.stage] || stage.label,
-        stageColor: special === 'lost' ? '#ef4444' : special === 'stalled' ? '#fb923c' : PROJECT_STAGE_COLOR[stage.key],
-        special,
-        ai: timelineEventText(row),
-        reason: special ? (row.bottleneck || row.currentFocus || '需要人工确认') : '',
+        id: timelineField(event, 'id') || `event-${index}`,
+        date: formatTimelineDate(effectiveAt),
+        timestamp: timelineTimestamp(effectiveAt),
+        actor: timelineField(event, 'actor_staff_id') ? `Staff #${timelineField(event, 'actor_staff_id')}` : '系统/未知',
+        fromStage,
+        toStage,
+        transition: `${timelineStageLabel(fromStage)} → ${timelineStageLabel(toStage)}`,
+        eventType: timelineEventTypeLabel(eventType),
+        note: timelineField(event, 'note'),
+        source: [timelineField(event, 'source_ref_type'), timelineField(event, 'source_ref_id')].filter(Boolean).join(' #'),
+        stageColor: timelineEventColor(toStage, eventType),
       };
     })
-    .sort((a, b) => b.timestamp - a.timestamp || b.date.localeCompare(a.date)), [rows]);
+    .sort((a, b) => b.timestamp - a.timestamp || String(b.id).localeCompare(String(a.id))), [events]);
+
+  const snapshot = useMemo(() => {
+    const grouped = new Map<string, { label: string; color: string; count: number }>();
+    rows.forEach((row) => {
+      const stage = timelineStage(row);
+      const special = timelineSpecial(row);
+      const key = row.stage;
+      const current = grouped.get(key) || {
+        label: special === 'lost' ? '标记流失' : special === 'stalled' ? '标记停滞' : (stageLabels[row.stage] || stage.label),
+        color: special === 'lost' ? '#ef4444' : special === 'stalled' ? '#fb923c' : PROJECT_STAGE_COLOR[stage.key],
+        count: 0,
+      };
+      current.count += 1;
+      grouped.set(key, current);
+    });
+    return Array.from(grouped.entries())
+      .sort(([a], [b]) => stageIndex(a) - stageIndex(b))
+      .map(([key, item]) => ({ key, ...item }));
+  }, [rows]);
 
   return (
     <div className="p-4 space-y-3" aria-label="项目时间轴">
       <div className="rounded-lg border border-purple-500/30 bg-purple-500/5 p-3 flex items-start gap-2.5">
         <Activity size={13} className="text-purple-300 mt-0.5 shrink-0" />
         <div className="text-[10.5px] text-slate-300">
-          {events.length} 条事件 · 按时间倒序 · 所有 KOL 推进记录在此聚合
+          {realEvents.length} 条真实历史事件 · 来源 vkpi_project_stage_events · 按时间倒序
         </div>
       </div>
 
-      {events.length === 0 ? (
+      {realEvents.length === 0 ? (
         <div className="rounded-lg border border-white/[0.06] bg-white/[0.01] p-8 text-center">
           <Activity size={24} className="text-slate-600 mx-auto mb-2" />
-          <div className="text-[11.5px] text-slate-400">暂无事件 · 推进 KOL 后自动归档到时间轴</div>
+          <div className="text-[11.5px] text-slate-300">暂无真实历史事件</div>
+          <div className="text-[10px] text-slate-500 mt-1">该项目尚未写入 stage_events；下方仅显示当前状态快照。</div>
         </div>
       ) : (
         <div className="space-y-2 relative">
           <div className="absolute left-3 top-2 bottom-2 w-px bg-white/[0.06]" />
-          {events.map((event) => (
+          {realEvents.map((event) => (
             <div key={event.id} className="flex items-start gap-3 relative pl-1">
               <div
                 className="w-5 h-5 rounded-full flex items-center justify-center shrink-0 z-10"
                 style={{ background: event.stageColor || '#94a3b8', boxShadow: '0 0 0 3px #0a0a0d' }}
               >
-                {event.special === 'lost' ? (
-                  <X size={10} className="text-white" />
-                ) : event.special === 'stalled' ? (
-                  <AlertCircle size={10} className="text-white" />
-                ) : (
-                  <Check size={10} className="text-white" />
-                )}
+                <Check size={10} className="text-white" />
               </div>
               <div className="flex-1 rounded-lg border border-white/[0.05] bg-white/[0.012] p-2.5">
                 <div className="flex items-center gap-2 mb-0.5 flex-wrap">
                   <span className="text-[10.5px] text-slate-400 tabular-nums font-mono">{event.date}</span>
-                  <span className="text-[11px] text-white font-medium">{event.kol}</span>
+                  <span className="text-[11px] text-white font-medium">{event.transition}</span>
                   <span
                     className="text-[10px] px-1.5 py-0.5 rounded font-medium"
                     style={{ background: `${event.stageColor}20`, color: event.stageColor }}
                   >
-                    {event.special === 'lost' ? '标记流失' : event.special === 'stalled' ? '标记停滞' : event.stageLabel}
+                    {event.eventType}
                   </span>
                 </div>
-                {event.ai ? <div className="text-[10px] text-slate-400 mt-1">{event.ai}</div> : null}
-                {event.reason ? <div className="text-[10px] text-slate-400 mt-1">原因: {event.reason}</div> : null}
+                <div className="text-[10px] text-slate-500 mt-1">{event.actor}{event.source ? ` · ${event.source}` : ''}</div>
+                {event.note ? <div className="text-[10px] text-slate-400 mt-1 whitespace-pre-wrap">{event.note}</div> : null}
               </div>
             </div>
           ))}
         </div>
       )}
+
+      <div className="rounded-lg border border-white/[0.06] bg-white/[0.012] p-3">
+        <div className="flex items-center gap-2 mb-2">
+          <AlertCircle size={12} className="text-slate-400" />
+          <div className="text-[10.5px] text-slate-300">当前状态快照 · 非历史事件</div>
+        </div>
+        {snapshot.length === 0 ? (
+          <div className="text-[10px] text-slate-500">暂无 KOL 当前状态。</div>
+        ) : (
+          <div className="flex flex-wrap gap-1.5">
+            {snapshot.map((item) => (
+              <span
+                key={item.key}
+                className="text-[10px] px-2 py-1 rounded border"
+                style={{ color: item.color, borderColor: `${item.color}40`, background: `${item.color}12` }}
+              >
+                {item.label} {item.count}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
