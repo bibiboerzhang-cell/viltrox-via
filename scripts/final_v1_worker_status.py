@@ -104,6 +104,10 @@ def main() -> None:
                     THEN (c.result #>> '{layer6_flags_and_scores,scores,marketing_value_score}')::numeric
                   WHEN jsonb_typeof(c.result #> '{layer6_flags_and_scores,scores,marketing_value_score}') = 'object'
                     THEN (c.result #>> '{layer6_flags_and_scores,scores,marketing_value_score,score}')::numeric
+                  WHEN jsonb_typeof(c.result #> '{layer6_flags_and_scores,marketing_value_score}') = 'number'
+                    THEN (c.result #>> '{layer6_flags_and_scores,marketing_value_score}')::numeric
+                  WHEN jsonb_typeof(c.result #> '{layer6_flags_and_scores,marketing_value_score}') = 'object'
+                    THEN (c.result #>> '{layer6_flags_and_scores,marketing_value_score,score}')::numeric
                   ELSE NULL
                 END AS marketing_value_score,
                 COALESCE(kp.handle, kp.display_name, e.channel_name, '') AS kol,
@@ -143,6 +147,10 @@ def main() -> None:
                     THEN (c.result #>> '{layer6_flags_and_scores,scores,marketing_value_score}')::numeric
                   WHEN jsonb_typeof(c.result #> '{layer6_flags_and_scores,scores,marketing_value_score}') = 'object'
                     THEN (c.result #>> '{layer6_flags_and_scores,scores,marketing_value_score,score}')::numeric
+                  WHEN jsonb_typeof(c.result #> '{layer6_flags_and_scores,marketing_value_score}') = 'number'
+                    THEN (c.result #>> '{layer6_flags_and_scores,marketing_value_score}')::numeric
+                  WHEN jsonb_typeof(c.result #> '{layer6_flags_and_scores,marketing_value_score}') = 'object'
+                    THEN (c.result #>> '{layer6_flags_and_scores,marketing_value_score,score}')::numeric
                   ELSE NULL
                 END AS marketing_value_score,
                 COALESCE(kp.handle, kp.display_name, e.channel_name, '') AS kol,
