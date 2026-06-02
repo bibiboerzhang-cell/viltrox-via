@@ -5,11 +5,13 @@ import asyncio
 import json
 import os
 import signal
+import subprocess
 import tempfile
 import threading
 import time
 from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 from urllib.parse import urlparse
@@ -23,6 +25,7 @@ from app.db.connection import close_db_runtime_sync, db_connection_sync_scope
 from app.domains.costs import budget_guard
 from app.platform import llm_gateway
 from app.services.media.video_download import download_direct_video_url
+from app.services.media.video_keyframes import temporary_keyframes
 from app.services.ai.analyzers import gemini_video as gemini_video_analyzer
 from app.services.scraping import apify as apify_scraper
 
@@ -33,7 +36,11 @@ LLM_BUDGET_SCOPE = os.environ.get("APIFY_WORKER_LLM_BUDGET_SCOPE", "cron:vkpi_an
 LLM_CONCURRENCY_LIMIT = max(1, min(2, int(os.environ.get("APIFY_WORKER_LLM_CONCURRENCY", "1"))))
 LLM_MAX_OUTPUT_TOKENS = int(os.environ.get("APIFY_WORKER_LLM_MAX_OUTPUT_TOKENS", "1200"))
 LLM_TARGET_TYPES = {"video", "contract"}
-GEMINI_VIDEO_V2_DERIVE_METHODS = {"gemini_video_v2", "gemini_video_v2_pro_single"}
+GEMINI_VIDEO_V2_DERIVE_METHODS = {
+    "gemini_video_v2",
+    "gemini_video_v2_pro_single",
+    "gemini_video_v2_flash_pro_judge",
+}
 GEMINI_VIDEO_DERIVE_METHODS = {"gemini", *GEMINI_VIDEO_V2_DERIVE_METHODS}
 WORKER_GEMINI_MODEL = os.environ.get("APIFY_WORKER_GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
 _stop_event = threading.Event()
@@ -271,7 +278,7 @@ def _usage_count(metadata: dict[str, Any], *keys: str) -> int:
         if value is not None:
             parsed = _int_or_none(value)
             return parsed or 0
-        return 0
+    return 0
 
 
 def _gemini_input_cost_usd(model: str, metadata: dict[str, Any], tokens_in: int) -> float:
@@ -383,6 +390,63 @@ def _video_performance_context(evidence: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _select_keyframe_requests(layer1: dict[str, Any], limit: int = 6) -> list[dict[str, str]]:
+    timeline = layer1.get("scene_timeline") if isinstance(layer1.get("scene_timeline"), list) else []
+    candidates = [
+        {"timestamp": str(item.get("timestamp") or ""), "reason": str(item.get("what") or "")}
+        for item in timeline
+        if isinstance(item, dict) and item.get("timestamp")
+    ]
+    if not candidates:
+        return [{"timestamp": ts, "reason": "fallback keyframe"} for ts in ["00:00", "00:15", "00:45", "01:30", "02:30", "04:30"]]
+    if len(candidates) <= limit:
+        return candidates
+    indexes = [round(index * (len(candidates) - 1) / (limit - 1)) for index in range(limit)]
+    output: list[dict[str, str]] = []
+    seen: set[int] = set()
+    for index in indexes:
+        if index in seen:
+            continue
+        seen.add(index)
+        output.append(candidates[index])
+    return output[:limit]
+
+
+def _download_youtube_for_keyframes(url: str, output_dir: str) -> dict[str, Any]:
+    output: dict[str, Any] = {"success": False, "path": None, "error": None, "bytes": 0}
+    out_tmpl = str(Path(output_dir) / "youtube_keyframes.%(ext)s")
+    cmd = [
+        "yt-dlp",
+        "--quiet",
+        "--no-progress",
+        "-f",
+        "bv*[ext=mp4][height<=720]+ba[ext=m4a]/b[ext=mp4][height<=720]/best[height<=720]/best",
+        "--merge-output-format",
+        "mp4",
+        "-o",
+        out_tmpl,
+        url,
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+    except subprocess.TimeoutExpired:
+        output["error"] = "youtube keyframe download timed out"
+        return output
+    if proc.returncode != 0:
+        output["error"] = (proc.stderr or proc.stdout or "youtube keyframe download failed")[-500:]
+        return output
+    candidates = sorted(Path(output_dir).glob("youtube_keyframes.*"))
+    if not candidates:
+        output["error"] = "youtube keyframe download produced no file"
+        return output
+    video_path = candidates[0]
+    if not video_path.exists() or video_path.stat().st_size <= 0:
+        output["error"] = "youtube keyframe download produced empty file"
+        return output
+    output.update({"success": True, "path": str(video_path), "bytes": video_path.stat().st_size})
+    return output
+
+
 @contextmanager
 def _gemini_worker_overrides(payload: dict[str, Any]):
     model_override = str(payload.get("gemini_model") or WORKER_GEMINI_MODEL).strip()
@@ -419,6 +483,7 @@ def _shape_gemini_result(
         layer3 = dict(v2.get("layer3_integrated_judgment") or {})
         layer3["performance_metrics"] = _video_performance_context(evidence)
         model_name = str(raw.get("model") or raw.get("method") or "gemini_video")
+        segments = raw.get("cost_segments") if isinstance(raw.get("cost_segments"), list) else None
         return {
             "schema_version": "video_analysis_v2",
             "mock": False,
@@ -444,7 +509,8 @@ def _shape_gemini_result(
                 "recorded_cost_usd": cost,
                 "cost_basis": cost_basis,
                 "preflight_estimated_cost_usd": preflight_cost,
-                "segments": [
+                "segments": segments
+                or [
                     {
                         "stage": "single_pass",
                         "provider": "gemini",
@@ -456,6 +522,7 @@ def _shape_gemini_result(
                 "latency_ms": latency_ms,
             },
             "raw_gemini_video": raw,
+            "frame_extraction": raw.get("frame_extraction") if isinstance(raw.get("frame_extraction"), dict) else {},
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
     quality_scores = raw.get("quality_scores") if isinstance(raw.get("quality_scores"), dict) else {}
@@ -539,6 +606,190 @@ def _record_gemini_cost(
         )
 
 
+def _write_gemini_cache(
+    conn: psycopg.Connection[Any],
+    *,
+    job: dict[str, Any],
+    payload: dict[str, Any],
+    evidence: dict[str, Any],
+    raw: dict[str, Any],
+    cost: float,
+    cost_basis: str,
+    preflight_cost: float,
+    latency_ms: int,
+    derive_method: str,
+) -> None:
+    target_type, target_id = _target(payload)
+    triggered_by = payload.get("triggered_by_user_id", payload.get("user_id"))
+    shaped = _shape_gemini_result(
+        job=job,
+        evidence=evidence,
+        raw=raw,
+        cost=cost,
+        cost_basis=cost_basis,
+        preflight_cost=preflight_cost,
+        latency_ms=latency_ms,
+        derive_method=derive_method,
+    )
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO vkpi_analysis_cache (
+                  target_type, target_id, model, derive_method, result, cost,
+                  status, triggered_by_user_id, created_at, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s::jsonb, %s, 'ready', %s, NOW(), NOW())
+                ON CONFLICT (target_type, target_id, derive_method)
+                DO UPDATE SET
+                  model = EXCLUDED.model,
+                  result = EXCLUDED.result,
+                  cost = EXCLUDED.cost,
+                  status = 'ready',
+                  triggered_by_user_id = EXCLUDED.triggered_by_user_id,
+                  updated_at = NOW()
+                """,
+                (
+                    target_type,
+                    target_id,
+                    str(raw.get("model") or raw.get("method") or "gemini_video"),
+                    derive_method,
+                    _json(shaped),
+                    cost,
+                    _int_or_none(triggered_by),
+                ),
+            )
+            cur.execute(
+                "UPDATE apify_jobs SET status='done', last_error=NULL, updated_at=NOW() WHERE id=%s",
+                (job["id"],),
+            )
+
+
+def _process_gemini_video_flash_pro_judge(
+    conn: psycopg.Connection[Any],
+    job: dict[str, Any],
+    payload: dict[str, Any],
+    evidence: dict[str, Any],
+    preflight_cost: float,
+) -> None:
+    if _platform_from_content_url(str(evidence.get("content_url") or "")) != "youtube":
+        raise RuntimeError("gemini_video_v2_flash_pro_judge currently supports YouTube only")
+    started = time.monotonic()
+    performance = _video_performance_context(evidence)
+    visual_payload = {**payload, "gemini_model": "gemini-3-flash-preview"}
+    with _gemini_worker_overrides(visual_payload):
+        visual_raw = asyncio.run(
+            gemini_video_analyzer.analyze_youtube_with_gemini(
+                str(evidence.get("content_url") or ""),
+                str(evidence.get("title") or ""),
+                str(evidence.get("creator_handle") or ""),
+                schema_version="v2",
+                performance_context=performance,
+            )
+        )
+    if visual_raw.get("analyzed"):
+        visual_raw["model"] = "gemini-3-flash-preview"
+        visual_raw["method"] = "gemini_direct_gemini-3-flash-preview"
+    visual_cost, visual_basis, visual_tokens_in, visual_tokens_out = _gemini_cost(visual_raw, preflight_cost)
+    _record_gemini_cost(
+        job=job,
+        payload=payload,
+        raw=visual_raw,
+        cost=visual_cost,
+        cost_basis=visual_basis,
+        tokens_in=visual_tokens_in,
+        tokens_out=visual_tokens_out,
+        latency_ms=0,
+        preflight_cost=preflight_cost,
+    )
+    if not visual_raw.get("analyzed"):
+        raise RuntimeError(f"Gemini visual pass failed: {visual_raw.get('error') or 'not_analyzed'}")
+
+    v2 = visual_raw.get("video_analysis_v2") if isinstance(visual_raw.get("video_analysis_v2"), dict) else {}
+    layer1 = v2.get("layer1_visual_content") if isinstance(v2.get("layer1_visual_content"), dict) else {}
+    keyframe_requests = _select_keyframe_requests(layer1, limit=6)
+    with tempfile.TemporaryDirectory(prefix="vkpi-scheme2-video-") as tmpdir:
+        download = _download_youtube_for_keyframes(str(evidence.get("content_url") or ""), tmpdir)
+        if not download.get("success") or not download.get("path"):
+            raise RuntimeError(f"youtube_keyframe_download_failed: {download.get('error')}")
+        with temporary_keyframes(str(download["path"]), keyframe_requests) as frames:
+            if not frames:
+                raise RuntimeError("keyframe extraction produced no frames")
+            judgment_raw = asyncio.run(
+                gemini_video_analyzer.analyze_v2_judgment_with_keyframes(
+                    layer1_visual_content=layer1,
+                    keyframes=frames,
+                    title=str(evidence.get("title") or ""),
+                    performance_context=performance,
+                    model_name="gemini-3.1-pro-preview",
+                )
+            )
+            frame_meta = [
+                {"timestamp": frame.get("timestamp"), "reason": frame.get("reason")}
+                for frame in frames
+            ]
+    judgment_cost, judgment_basis, judgment_tokens_in, judgment_tokens_out = _gemini_cost(judgment_raw, preflight_cost)
+    _record_gemini_cost(
+        job=job,
+        payload=payload,
+        raw=judgment_raw,
+        cost=judgment_cost,
+        cost_basis=judgment_basis,
+        tokens_in=judgment_tokens_in,
+        tokens_out=judgment_tokens_out,
+        latency_ms=0,
+        preflight_cost=preflight_cost,
+    )
+    if not judgment_raw.get("analyzed"):
+        raise RuntimeError(f"Gemini keyframe judgment failed: {judgment_raw.get('error') or 'not_analyzed'}")
+
+    latency_ms = int((time.monotonic() - started) * 1000)
+    total_cost = round(visual_cost + judgment_cost, 6)
+    raw = {
+        **judgment_raw,
+        "method": "gemini_flash_pro_judge",
+        "model": "gemini-3-flash-preview+gemini-3.1-pro-preview",
+        "visual_pass": visual_raw,
+        "cost_segments": [
+            {
+                "stage": "visual_video_pass",
+                "provider": "gemini",
+                "model": "gemini-3-flash-preview",
+                "cost_usd": visual_cost,
+                "cost_basis": visual_basis,
+                "usage_metadata": visual_raw.get("usage_metadata") if isinstance(visual_raw.get("usage_metadata"), dict) else {},
+            },
+            {
+                "stage": "judgment_pass",
+                "provider": "gemini",
+                "model": "gemini-3.1-pro-preview",
+                "cost_usd": judgment_cost,
+                "cost_basis": judgment_basis,
+                "usage_metadata": judgment_raw.get("usage_metadata") if isinstance(judgment_raw.get("usage_metadata"), dict) else {},
+            },
+        ],
+        "frame_extraction": {
+            "requested": keyframe_requests,
+            "extracted_count": len(frame_meta),
+            "frames": frame_meta,
+            "download_bytes": int(download.get("bytes") or 0),
+            "temporary_files_cleaned": True,
+        },
+    }
+    _write_gemini_cache(
+        conn,
+        job=job,
+        payload=payload,
+        evidence=evidence,
+        raw=raw,
+        cost=total_cost,
+        cost_basis="gemini_usage_metadata_segmented_model_rate",
+        preflight_cost=preflight_cost,
+        latency_ms=latency_ms,
+        derive_method="gemini_video_v2_flash_pro_judge",
+    )
+
+
 def _process_gemini_video(
     conn: psycopg.Connection[Any],
     job: dict[str, Any],
@@ -557,6 +808,9 @@ def _process_gemini_video(
         return
     if platform in {"instagram", "tiktok"} and derive_method not in GEMINI_VIDEO_V2_DERIVE_METHODS:
         _block_job(conn, int(job["id"]), "unsupported_media_derive_method", {"platform": platform, "derive_method": derive_method})
+        return
+    if derive_method == "gemini_video_v2_flash_pro_judge":
+        _process_gemini_video_flash_pro_judge(conn, job, payload, evidence, preflight_cost)
         return
     logger.info(
         "apify_jobs gemini video start | job_id=%s target_id=%s url=%s",

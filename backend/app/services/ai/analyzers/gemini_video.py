@@ -196,6 +196,122 @@ def _normalise_v2_result(parsed: dict[str, Any], *, subtitle_used: bool) -> dict
     }
 
 
+def _video_v2_judgment_prompt(
+    *,
+    layer1_visual_content: dict[str, Any],
+    keyframes: list[dict[str, Any]],
+    performance_context: dict[str, Any] | None,
+) -> str:
+    layer1_json = json.dumps(layer1_visual_content or {}, ensure_ascii=False, default=str)
+    keyframes_json = json.dumps(
+        [{"timestamp": frame.get("timestamp"), "reason": frame.get("reason")} for frame in keyframes],
+        ensure_ascii=False,
+        default=str,
+    )
+    metrics_json = json.dumps(performance_context or {}, ensure_ascii=False, default=str)
+    return f"""你是 Viltrox 品牌方的视频投放审查员，对投放预算负责。
+你没有看完整视频，只能基于下面的 Layer1 文字分析、6 张关键帧截图和播放表现数据判断。证据不足时必须给低 confidence，不要补脑。
+
+Layer1 文字分析:
+{layer1_json}
+
+关键帧截图说明:
+{keyframes_json}
+
+播放表现数据（只做绝对表现判断；没有账号基准，不要判断“相对该 KOL 平时”）:
+{metrics_json}
+
+只返回 JSON，不要 Markdown。必须输出 layer2_video_scores + layer3_integrated_judgment。不要重复输出 layer1。
+评分必须有区分度，不要都集中在 80-95。真正出类拔萃才给 90+；中上给 70-85；普通达标给 55-70；明显短板给 40-55。不要因为“没硬伤”就给高分。
+weaknesses 必须指出真正影响投放价值的问题，禁止“可以增加更多场景”这类客套话。
+authenticity 要敢打低分：模板化、念稿感、恰饭感重、缺少真实理解给 40 以下；有商业痕迹但基本走心给 55-75；真正喜爱且有个人观点才给 80+。
+cooperation_recommendation 不要默认 continue：continue=值得继续投；cautious=有价值但有顾虑；reconsider=不太值得。
+key_hook 用一句话点出最值得品牌方深入了解的点，或最大的疑点。
+
+{{
+  "layer2_video_scores": {{
+    "score_scale": "0-100",
+    "scores": {{
+      "video_specialty": {{"score": 0, "confidence": 0.0, "evidence": ["基于 Layer1/截图的依据"]}},
+      "product_fit": {{"score": 0, "confidence": 0.0, "evidence": ["基于 Layer1/截图的依据"]}},
+      "product_showcase": {{"score": 0, "confidence": 0.0, "evidence": ["基于 Layer1/截图的依据"]}},
+      "brand_exposure": {{"score": 0, "confidence": 0.0, "evidence": ["基于 Layer1/截图的依据"]}},
+      "production_quality": {{"score": 0, "confidence": 0.0, "evidence": ["基于 Layer1/截图的依据"]}},
+      "storytelling": {{"score": 0, "confidence": 0.0, "evidence": ["基于 Layer1/截图的依据"]}},
+      "authenticity": {{"score": 0, "confidence": 0.0, "evidence": ["基于 Layer1/截图的依据"]}},
+      "competitor_context": {{"score": 0, "confidence": 0.0, "evidence": ["基于 Layer1/截图的依据"]}}
+    }}
+  }},
+  "layer3_integrated_judgment": {{
+    "advantages": ["优势"],
+    "weaknesses": ["真正影响投放价值的具体短板"],
+    "homogeneity": {{"is_homogeneous": false, "unique_points": ["独特点"], "rationale": "判断依据"}},
+    "better_direction": {{"better_products": ["更适合产品"], "content_adjustments": ["调整建议"], "rationale": "理由"}},
+    "cooperation_recommendation": {{"recommendation": "continue/cautious/reconsider", "reason": "后续合作理由"}},
+    "key_hook": "最值得深挖的一个点或最大疑点",
+    "content_value_score": {{"score": 0, "confidence": 0.0, "rationale": "视频内容价值"}},
+    "placement_value_score": {{"score": 0, "confidence": 0.0, "rationale": "投放价值；说明无账号基准，仅基于绝对播放表现"}}
+  }}
+}}"""
+
+
+async def analyze_v2_judgment_with_keyframes(
+    *,
+    layer1_visual_content: dict[str, Any],
+    keyframes: list[dict[str, Any]],
+    title: str,
+    performance_context: dict[str, Any] | None = None,
+    model_name: str = "gemini-3.1-pro-preview",
+) -> dict[str, Any]:
+    """Judge Layer2+3 from Layer1 text plus keyframe JPGs."""
+    result = {
+        "analyzed": False,
+        "method": f"gemini_keyframe_judgment_{model_name}",
+        "model": model_name,
+        "usage_metadata": {},
+        "error": None,
+    }
+    if not GEMINI_AVAILABLE or not gemini_client or not genai_types:
+        result["error"] = "Gemini not available"
+        return result
+
+    prompt = _video_v2_judgment_prompt(
+        layer1_visual_content=layer1_visual_content,
+        keyframes=keyframes,
+        performance_context=performance_context,
+    )
+    contents: list[Any] = [f"视频标题: {title}\n\n{prompt}"]
+    for frame in keyframes:
+        image_path = Path(str(frame.get("image_path") or ""))
+        if not image_path.exists():
+            continue
+        contents.append(genai_types.Part.from_bytes(data=image_path.read_bytes(), mime_type="image/jpeg"))
+    try:
+        def _analyze():
+            return gemini_client.models.generate_content(model=model_name, contents=contents)
+
+        resp = await asyncio.to_thread(_analyze)
+        usage_metadata = _response_usage_metadata(resp)
+        raw = resp.text.strip()
+        raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
+        parsed = json.loads(raw)
+        subtitle_used = bool((layer1_visual_content.get("evidence") or {}).get("subtitle_used"))
+        merged = {"layer1_visual_content": layer1_visual_content, **parsed}
+        _apply_v2_result(
+            result,
+            merged,
+            method=f"gemini_keyframe_judgment_{model_name}",
+            model=model_name,
+            usage_metadata=usage_metadata,
+            subtitle_used=subtitle_used,
+        )
+        return result
+    except Exception as exc:
+        result["error"] = f"Gemini keyframe judgment failed: {str(exc)[:300]}"
+        logger.warning("gemini_keyframe_judgment_failed", extra={"error": str(exc)[:120]})
+        return result
+
+
 def _apply_v2_result(
     result: dict[str, Any],
     parsed: dict[str, Any],
