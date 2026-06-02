@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -42,6 +43,37 @@ if YTDLP_PROXY:
 # ──────────────────────────────────────────────
 # YouTube subtitle fetcher (yt-dlp)
 # ──────────────────────────────────────────────
+def _subtitle_timeout_seconds() -> int:
+    try:
+        value = int(os.getenv("YTDLP_SUBTITLE_TIMEOUT_SECONDS", "30") or "30")
+    except ValueError:
+        value = 30
+    return max(1, min(120, value))
+
+
+def _run_ytdlp_subtitle_cmd(cmd: list[str], *, timeout_seconds: int) -> tuple[int, str]:
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        _stdout, stderr = proc.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except Exception:
+            proc.kill()
+        _stdout, stderr = proc.communicate()
+        logger.warning(
+            "youtube_subtitles_timeout_fallback",
+            extra={"timeout_seconds": timeout_seconds, "stderr_tail": stderr.decode(errors="ignore")[-300:]},
+        )
+        return -1, stderr.decode(errors="ignore")
+    return int(proc.returncode or 0), stderr.decode(errors="ignore")
+
+
 def fetch_youtube_subtitles(url: str, max_chars: int = 6000) -> str:
     """
     Download auto-generated subtitles via yt-dlp and return a clean
@@ -55,6 +87,7 @@ def fetch_youtube_subtitles(url: str, max_chars: int = 6000) -> str:
         import tempfile, re as _re
         with tempfile.TemporaryDirectory() as tmpdir:
             sub_path = os.path.join(tmpdir, "sub")
+            timeout_seconds = _subtitle_timeout_seconds()
             cmd = [
                 YTDLP_BIN,
                 "--write-auto-sub",
@@ -66,7 +99,15 @@ def fetch_youtube_subtitles(url: str, max_chars: int = 6000) -> str:
                 "--quiet",
                 url,
             ]
-            subprocess.run(cmd, capture_output=True, timeout=30)
+            logger.info("youtube_subtitles_start", extra={"timeout_seconds": timeout_seconds})
+            returncode, stderr_text = _run_ytdlp_subtitle_cmd(cmd, timeout_seconds=timeout_seconds)
+            if returncode < 0:
+                return ""
+            if returncode != 0:
+                logger.warning(
+                    "youtube_subtitles_command_warning",
+                    extra={"returncode": returncode, "stderr_tail": stderr_text[-300:]},
+                )
 
             # Find the downloaded vtt file
             vtt_file = None
@@ -75,6 +116,7 @@ def fetch_youtube_subtitles(url: str, max_chars: int = 6000) -> str:
                     vtt_file = os.path.join(tmpdir, f)
                     break
             if not vtt_file:
+                logger.info("youtube_subtitles_empty_fallback", extra={"reason": "no_vtt_file"})
                 return ""
 
             raw = open(vtt_file, encoding="utf-8", errors="ignore").read()
@@ -113,6 +155,7 @@ def fetch_youtube_subtitles(url: str, max_chars: int = 6000) -> str:
                     entries.append((secs, text))
 
             if not entries:
+                logger.info("youtube_subtitles_empty_fallback", extra={"reason": "no_entries"})
                 return ""
 
             # De-duplicate consecutive identical lines (VTT often repeats)
