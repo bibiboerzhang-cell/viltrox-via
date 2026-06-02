@@ -564,6 +564,7 @@ export function VkpiDashboard({
         {projectDetailDrawer.projectDetailId ? (
           <ProjectDetailDrawer
             detail={projectDetailDrawer.projectDetail}
+            apiToken={apiToken}
             kolProfile={projectDetailDrawer.projectKolProfile}
             fallbackProject={data.projects.find((project) => project.id === projectDetailDrawer.projectDetailId)}
             viewMode={viewMode}

@@ -7,6 +7,7 @@ from app.api.dependencies.perms import require_tab
 from app.core.security import get_current_user
 from app.domains import costs
 from app.domains.access import scope
+from app.domains.analysis.cache_repo import get_analysis_cache_entry
 from app.domains.projects import workflow
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-projects"])
@@ -14,6 +15,31 @@ router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-projects"])
 
 def _scope_403(exc: Exception) -> HTTPException:
     return HTTPException(status_code=403, detail=str(exc) or "scope denied")
+
+
+@router.get("/analysis-cache")
+def analysis_cache(
+    target_type: str = Query(..., min_length=1),
+    target_id: str = Query(..., min_length=1),
+    derive_method: str = "",
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    del staff
+    target_type = target_type.strip()
+    target_id = target_id.strip()
+    derive_method = derive_method.strip()
+    if not target_type or not target_id:
+        raise HTTPException(status_code=400, detail="target_type and target_id required")
+    entry = get_analysis_cache_entry(target_type, target_id, derive_method=derive_method or None)
+    return {
+        "target_type": target_type,
+        "target_id": target_id,
+        "derive_method": derive_method or None,
+        "state": "ready" if entry else "pending",
+        "entry": entry,
+    }
+
+
 @router.get("/projects")
 def projects(
     stage: str = "",

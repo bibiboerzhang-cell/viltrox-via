@@ -1,9 +1,11 @@
+import { useEffect, useMemo, useState } from 'react';
 import type { VkpiKolProfile, VkpiProjectDetail, VkpiProjectRow } from '../vkpiTypes';
 import { DetailList } from '../shared/DetailList';
 import { currencyFormatter, numberFormatter } from '../shared/vkpiFormatters';
 import { coerceProjectStage, safeNumber, textValue } from '../shared/vkpiDataUtils';
 import { primaryStageFlow, stageLabels } from '../shared/vkpiConstants';
 import { ProjectEvidenceForms } from './ProjectEvidenceForms';
+import { getAnalysisCache, type VkpiAnalysisCacheEntry } from '../../../services/vkpi/projects-api';
 
 function parseProjectMetadata(value: unknown): Record<string, unknown> {
   if (!value) return {};
@@ -85,8 +87,16 @@ function EvidenceLink({ value, label = '打开证据' }: { value: unknown; label
   return <a className="vkpi-evidence-link" href={href} target="_blank" rel="noreferrer">{label}</a>;
 }
 
+function analysisPreview(value: unknown): string {
+  if (value == null) return '无结构化结果';
+  const serialized = typeof value === 'string' ? value : JSON.stringify(value);
+  const raw = typeof serialized === 'string' ? serialized : String(value);
+  return raw.length > 260 ? `${raw.slice(0, 260)}...` : raw;
+}
+
 export function ProjectDetailDrawer({
   detail,
+  apiToken,
   kolProfile,
   fallbackProject,
   viewMode,
@@ -100,6 +110,7 @@ export function ProjectDetailDrawer({
   onClose,
 }: {
   detail: VkpiProjectDetail | null;
+  apiToken?: string;
   kolProfile?: VkpiKolProfile | null;
   fallbackProject?: VkpiProjectRow;
   viewMode: 'manager' | 'employee';
@@ -156,6 +167,40 @@ export function ProjectDetailDrawer({
     ['attribution', '短链归因'],
     ['terms', '条款证据'],
   ];
+  const analysisTarget = useMemo(() => {
+    const firstContent = contentPosts.find((row) => textValue(row.id || row.evidence_id || row.post_url, ''));
+    const videoTargetId = firstContent ? textValue(firstContent.id || firstContent.evidence_id || firstContent.post_url, '') : '';
+    if (videoTargetId) return { targetType: 'video', targetId: videoTargetId, label: '内容视频' };
+    return projectId ? { targetType: 'project', targetId: projectId, label: '项目' } : null;
+  }, [contentPosts, projectId]);
+  const [analysisEntry, setAnalysisEntry] = useState<VkpiAnalysisCacheEntry | null>(null);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [analysisError, setAnalysisError] = useState('');
+
+  useEffect(() => {
+    setAnalysisEntry(null);
+    setAnalysisError('');
+    if (!apiToken || !analysisTarget) {
+      setAnalysisLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setAnalysisLoading(true);
+    getAnalysisCache(apiToken, analysisTarget.targetType, analysisTarget.targetId)
+      .then((response) => {
+        if (!cancelled) setAnalysisEntry(response.entry || null);
+      })
+      .catch((error) => {
+        if (!cancelled) setAnalysisError(error instanceof Error ? error.message : '分析缓存读取失败');
+      })
+      .finally(() => {
+        if (!cancelled) setAnalysisLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [apiToken, analysisTarget?.targetId, analysisTarget?.targetType]);
+  const analysisStatus = analysisLoading ? '读取中' : analysisEntry ? '已缓存' : '分析中 / 待分析';
 
   return (
     <aside className="vkpi-evidence-drawer vkpi-project-detail-drawer vkpi-project-detail-campaign" role="dialog" aria-label="项目详情">
@@ -215,6 +260,24 @@ export function ProjectDetailDrawer({
           <div><strong>项目概览</strong><span>{textValue(project.updated_at || fallbackProject?.updatedAt, '-')}</span></div>
           <p>产品：{textValue(project.product_sku || fallbackProject?.campaign, '-')} · 平台：{textValue(project.platform || fallbackProject?.platform, '-')}</p>
           <em>总耗时 {fallbackProject?.totalDurationLabel || '-'} · 当前阶段 {fallbackProject?.stageDurationLabel || '-'}</em>
+        </article>
+        <article id="project-detail-analysis-cache">
+          <div><strong>分析缓存</strong><span>{analysisStatus}</span></div>
+          {analysisEntry ? (
+            <>
+              <p>{analysisPreview(analysisEntry.result)}</p>
+              <em>
+                {analysisTarget?.label || '目标'} {analysisEntry.target_type}:{analysisEntry.target_id}
+                {' · '}{analysisEntry.derive_method || '-'} / {analysisEntry.model || '-'}
+                {' · '}成本 {analysisEntry.cost ?? 0}
+              </em>
+            </>
+          ) : (
+            <>
+              <p>分析中 / 待分析</p>
+              <em>{analysisTarget ? `${analysisTarget.label} ${analysisTarget.targetType}:${analysisTarget.targetId}` : '暂无目标'}{analysisError ? ` · ${analysisError}` : ''}</em>
+            </>
+          )}
         </article>
         <article id="project-detail-products">
           <div><strong>关联产品</strong><span>{selectedProducts.length ? `${selectedProducts.length} 个` : '未选择'}</span></div>

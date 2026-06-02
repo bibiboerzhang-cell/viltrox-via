@@ -3,6 +3,27 @@ import type { VkpiProjectDetail } from "../../components/vkpi/vkpiTypes";
 
 type Row = Record<string, unknown>;
 
+export interface VkpiAnalysisCacheEntry {
+  target_type: string;
+  target_id: string;
+  derive_method: string;
+  model?: string | null;
+  cost?: number | null;
+  status: string;
+  triggered_by_user_id?: number | null;
+  result?: unknown;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface VkpiAnalysisCacheResponse {
+  target_type: string;
+  target_id: string;
+  derive_method?: string | null;
+  state: "ready" | "pending";
+  entry?: VkpiAnalysisCacheEntry | null;
+}
+
 export interface VkpiCreateProjectPayload {
   projectName: string;
   kolId?: string;
@@ -41,6 +62,20 @@ export interface VkpiStagePayload {
 
 export async function getProjectDetail(token: string, projectId: string) {
   return apiFetch<VkpiProjectDetail>(`/api/marketing/projects/${encodeURIComponent(projectId)}`, {}, token);
+}
+
+export async function getAnalysisCache(token: string, targetType: string, targetId: string, deriveMethod?: string) {
+  const params = new URLSearchParams({
+    target_type: targetType,
+    target_id: targetId,
+    _ts: String(Date.now()),
+  });
+  if (deriveMethod) params.set("derive_method", deriveMethod);
+  return apiFetch<VkpiAnalysisCacheResponse>(
+    `/api/admin/vkpi/analysis-cache?${params.toString()}`,
+    { cache: "no-store" },
+    token,
+  );
 }
 
 export async function getAvailableProjectKols(token: string, projectId: string, query = "") {
