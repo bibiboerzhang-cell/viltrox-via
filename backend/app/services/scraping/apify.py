@@ -82,6 +82,48 @@ def _first_nested_int(item: dict[str, Any], keys: tuple[str, ...]) -> int:
     return 0
 
 
+def _first_path(source: dict[str, Any], *paths: str) -> Any:
+    for path in paths:
+        current: Any = source
+        found = True
+        for part in path.split("."):
+            if isinstance(current, dict) and part in current:
+                current = current[part]
+            else:
+                found = False
+                break
+        if found and current not in (None, ""):
+            return current
+    return ""
+
+
+def _first_video_url(item: dict[str, Any]) -> str:
+    direct = _first_path(
+        item,
+        "videoUrl",
+        "downloadAddr",
+        "downloadUrl",
+        "videoUrlNoWaterMark",
+        "video.playAddr",
+        "video.downloadAddr",
+        "media.videoUrl",
+    )
+    if direct:
+        return str(direct).strip()
+    medias = item.get("medias") if isinstance(item.get("medias"), list) else []
+    for media in medias:
+        if not isinstance(media, dict):
+            continue
+        url = media.get("url") or media.get("videoUrl") or media.get("downloadUrl")
+        if url:
+            return str(url).strip()
+    return ""
+
+
+def _tiktok_actor_id() -> str:
+    return (os.getenv("APIFY_TIKTOK_ACTOR_ID", "").strip() or "clockworks/tiktok-scraper")
+
+
 def _douyin_actor_id(kind: str) -> str:
     specific = os.getenv(f"APIFY_DOUYIN_{kind.upper()}_ACTOR_ID", "").strip()
     return specific or os.getenv("APIFY_DOUYIN_ACTOR_ID", "").strip()
@@ -347,9 +389,8 @@ async def scrape_tiktok(url: str) -> Dict[str, Any]:
             "shouldDownloadSubtitles": False,
         }
 
-        run = await asyncio.to_thread(
-            lambda: _client.actor("clockworks/free-tiktok-scraper").call(run_input=run_input)
-        )
+        actor_id = _tiktok_actor_id()
+        run = await asyncio.to_thread(lambda: _client.actor(actor_id).call(run_input=run_input))
 
         items = list(_client.dataset(run["defaultDatasetId"]).iterate_items())
         if not items:
@@ -390,7 +431,7 @@ async def scrape_tiktok(url: str) -> Dict[str, Any]:
             },
             "visible_comments": [],
             "published_at": item.get("createTimeISO") or None,
-            "video_url": item.get("videoUrl", "") or item.get("downloadAddr", "") or "",
+            "video_url": _first_video_url(item),
             "owner_username": author.get("name", "") or "",
             "owner_full_name": author.get("nickName", "") or "",
             "duration": video.get("duration", 0),
@@ -398,6 +439,7 @@ async def scrape_tiktok(url: str) -> Dict[str, Any]:
             "music_name": (item.get("musicMeta") or {}).get("musicName", ""),
             "error": None,
             "scraper": "apify_tiktok",
+            "actor_id": actor_id,
         }
     except Exception as e:
         logger.warning("apify.scrape_tiktok.failed | url=%s | error=%s", url, e)
