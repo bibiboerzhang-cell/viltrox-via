@@ -24,6 +24,8 @@ from app.services.scoring.core import compute_weighted_scores, get_vertical
 from app.services.scraping.ytdlp import YTDLP_AVAILABLE, YTDLP_PROXY, fetch_youtube_subtitles
 from app.services.scoring.creator import get_creator_profile
 from app.services.scoring.verticals import apply_learned_weights
+from app.platform import llm_gateway
+from app.services.media.video_keyframes import build_openai_multimodal_content
 
 logger = get_logger(__name__)
 
@@ -309,6 +311,78 @@ async def analyze_v2_judgment_with_keyframes(
     except Exception as exc:
         result["error"] = f"Gemini keyframe judgment failed: {str(exc)[:300]}"
         logger.warning("gemini_keyframe_judgment_failed", extra={"error": str(exc)[:120]})
+        return result
+
+
+async def analyze_v2_judgment_with_openai_keyframes(
+    *,
+    layer1_visual_content: dict[str, Any],
+    keyframes: list[dict[str, Any]],
+    title: str,
+    performance_context: dict[str, Any] | None = None,
+    model_name: str = "gpt-5.5",
+) -> dict[str, Any]:
+    """Judge Layer2+3 from Layer1 text plus keyframe JPGs using OpenAI vision."""
+    result = {
+        "analyzed": False,
+        "method": f"openai_keyframe_judgment_{model_name}",
+        "model": model_name,
+        "usage_metadata": {},
+        "error": None,
+    }
+    api_key = llm_gateway._get_api_key("openai")
+    if not api_key:
+        result["error"] = "OpenAI not available"
+        return result
+    try:
+        from openai import OpenAI
+    except Exception as exc:
+        result["error"] = f"OpenAI SDK unavailable: {exc}"
+        return result
+
+    prompt = _video_v2_judgment_prompt(
+        layer1_visual_content=layer1_visual_content,
+        keyframes=keyframes,
+        performance_context=performance_context,
+    )
+    content = build_openai_multimodal_content(f"视频标题: {title}\n\n{prompt}", keyframes)
+    client = OpenAI(api_key=api_key)
+    try:
+        def _analyze():
+            return client.responses.create(
+                model=model_name,
+                input=[{"role": "user", "content": content}],
+                max_output_tokens=4000,
+            )
+
+        resp = await asyncio.to_thread(_analyze)
+        usage = getattr(resp, "usage", None)
+        usage_metadata: dict[str, Any] = {}
+        if usage:
+            if hasattr(usage, "model_dump"):
+                usage_metadata = usage.model_dump(mode="json", exclude_none=True)
+            else:
+                usage_metadata = {
+                    "input_tokens": getattr(usage, "input_tokens", None),
+                    "output_tokens": getattr(usage, "output_tokens", None),
+                }
+        raw = str(getattr(resp, "output_text", "") or "").strip()
+        raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
+        parsed = json.loads(raw)
+        subtitle_used = bool((layer1_visual_content.get("evidence") or {}).get("subtitle_used"))
+        merged = {"layer1_visual_content": layer1_visual_content, **parsed}
+        _apply_v2_result(
+            result,
+            merged,
+            method=f"openai_keyframe_judgment_{model_name}",
+            model=str(getattr(resp, "model", None) or model_name),
+            usage_metadata=usage_metadata,
+            subtitle_used=subtitle_used,
+        )
+        return result
+    except Exception as exc:
+        result["error"] = f"OpenAI keyframe judgment failed: {str(exc)[:500]}"
+        logger.warning("openai_keyframe_judgment_failed", extra={"error": str(exc)[:160]})
         return result
 
 

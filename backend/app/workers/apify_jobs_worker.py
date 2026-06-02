@@ -40,6 +40,7 @@ GEMINI_VIDEO_V2_DERIVE_METHODS = {
     "gemini_video_v2",
     "gemini_video_v2_pro_single",
     "gemini_video_v2_flash_pro_judge",
+    "gemini_video_v2_flash_gpt55_judge",
 }
 GEMINI_VIDEO_DERIVE_METHODS = {"gemini", *GEMINI_VIDEO_V2_DERIVE_METHODS}
 WORKER_GEMINI_MODEL = os.environ.get("APIFY_WORKER_GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
@@ -230,6 +231,26 @@ def _google_allowed(preflight: dict[str, Any]) -> tuple[bool, str, float]:
     return bool(google.get("provider_calls_allowed")), reason, float(google.get("estimated_cost_usd") or 0.0)
 
 
+def _provider_allowed(preflight: dict[str, Any], provider_name: str) -> tuple[bool, str, float]:
+    providers = preflight.get("providers") if isinstance(preflight.get("providers"), list) else []
+    provider = next((item for item in providers if item.get("provider") == provider_name), {})
+    reason = str(preflight.get("provider_gate_reason") or provider.get("provider_gate_reason") or "provider_calls_blocked")
+    return bool(provider.get("provider_calls_allowed")), reason, float(provider.get("estimated_cost_usd") or 0.0)
+
+
+def _provider_budget_preflight(job: dict[str, Any], payload: dict[str, Any], provider: str) -> dict[str, Any]:
+    target_type, target_id = _target(payload)
+    prompt = str(payload.get("prompt") or f"{job.get('job_type') or 'analysis'} {target_type}:{target_id} {provider}")
+    with db_connection_sync_scope():
+        return llm_gateway.budget_preflight(
+            prompt,
+            purpose="vkpi_analysis_worker",
+            max_output_tokens=LLM_MAX_OUTPUT_TOKENS,
+            preferred_provider=provider,
+            cost_tag=LLM_BUDGET_SCOPE,
+        )
+
+
 def _load_video_evidence(conn: psycopg.Connection[Any], target_id: str) -> dict[str, Any]:
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
@@ -327,6 +348,23 @@ def _gemini_cost(result: dict[str, Any], fallback_cost: float) -> tuple[float, s
         cost = _gemini_input_cost_usd(model, metadata, tokens_in)
         cost += tokens_out * _gemini_output_rate_usd_per_mtok(model, tokens_in) / 1_000_000
         return round(max(0.0, cost), 6), "gemini_usage_metadata_model_rate", tokens_in, tokens_out
+    return round(max(0.0, float(fallback_cost or 0.0)), 6), "llm_gateway_budget_preflight", 0, 0
+
+
+def _openai_cost(result: dict[str, Any], fallback_cost: float) -> tuple[float, str, int, int]:
+    metadata = result.get("usage_metadata") if isinstance(result.get("usage_metadata"), dict) else {}
+    tokens_in = _usage_count(metadata, "input_tokens", "prompt_tokens")
+    tokens_out = _usage_count(metadata, "output_tokens", "completion_tokens")
+    if tokens_in or tokens_out:
+        model = str(result.get("model") or result.get("method") or "").lower()
+        if "gpt-5.5" in model:
+            cost = (tokens_in * 5.0 + tokens_out * 30.0) / 1_000_000
+        else:
+            config = llm_gateway.PROVIDER_CONFIG.get("openai") or {}
+            input_cents = float(config.get("input_cents_per_million") or 0)
+            output_cents = float(config.get("output_cents_per_million") or 0)
+            cost = ((tokens_in * input_cents) + (tokens_out * output_cents)) / 100_000_000
+        return round(max(0.0, cost), 6), "openai_usage_metadata_model_rate", tokens_in, tokens_out
     return round(max(0.0, float(fallback_cost or 0.0)), 6), "llm_gateway_budget_preflight", 0, 0
 
 
@@ -606,6 +644,43 @@ def _record_gemini_cost(
         )
 
 
+def _record_openai_cost(
+    *,
+    job: dict[str, Any],
+    payload: dict[str, Any],
+    raw: dict[str, Any],
+    cost: float,
+    cost_basis: str,
+    tokens_in: int,
+    tokens_out: int,
+    latency_ms: int,
+    preflight_cost: float,
+) -> dict[str, Any]:
+    triggered_by = payload.get("triggered_by_user_id", payload.get("user_id"))
+    with db_connection_sync_scope():
+        return budget_guard.record_cost(
+            scope=LLM_BUDGET_SCOPE,
+            cron_task="vkpi_analysis_worker",
+            ai_provider="openai",
+            model_name=str(raw.get("model") or raw.get("method") or "gpt-5.5"),
+            cost_usd=cost,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            metadata={
+                "status": "success" if raw.get("analyzed") else "provider_error",
+                "job_id": job.get("id"),
+                "target_type": payload.get("target_type"),
+                "target_id": str(payload.get("target_id") or ""),
+                "cost_basis": cost_basis,
+                "preflight_estimated_cost_usd": preflight_cost,
+                "latency_ms": latency_ms,
+                "triggered_by_user_id": triggered_by,
+                "error": raw.get("error") or "",
+            },
+            extra_scopes=["monthly_total", "single_call", "provider:openai"],
+        )
+
+
 def _write_gemini_cache(
     conn: psycopg.Connection[Any],
     *,
@@ -790,6 +865,142 @@ def _process_gemini_video_flash_pro_judge(
     )
 
 
+def _process_gemini_video_flash_gpt55_judge(
+    conn: psycopg.Connection[Any],
+    job: dict[str, Any],
+    payload: dict[str, Any],
+    evidence: dict[str, Any],
+    preflight_cost: float,
+) -> None:
+    if _platform_from_content_url(str(evidence.get("content_url") or "")) != "youtube":
+        raise RuntimeError("gemini_video_v2_flash_gpt55_judge currently supports YouTube only")
+    openai_preflight = _provider_budget_preflight(job, payload, "openai")
+    openai_allowed, openai_reason, openai_estimated_cost = _provider_allowed(openai_preflight, "openai")
+    if not openai_allowed:
+        _block_job(
+            conn,
+            int(job["id"]),
+            openai_reason,
+            {"estimated_cost_usd": openai_estimated_cost, "budget_scope": LLM_BUDGET_SCOPE, "provider": "openai"},
+        )
+        return
+
+    started = time.monotonic()
+    performance = _video_performance_context(evidence)
+    visual_payload = {**payload, "gemini_model": "gemini-3-flash-preview"}
+    with _gemini_worker_overrides(visual_payload):
+        visual_raw = asyncio.run(
+            gemini_video_analyzer.analyze_youtube_with_gemini(
+                str(evidence.get("content_url") or ""),
+                str(evidence.get("title") or ""),
+                str(evidence.get("creator_handle") or ""),
+                schema_version="v2",
+                performance_context=performance,
+            )
+        )
+    if visual_raw.get("analyzed"):
+        visual_raw["model"] = "gemini-3-flash-preview"
+        visual_raw["method"] = "gemini_direct_gemini-3-flash-preview"
+    visual_cost, visual_basis, visual_tokens_in, visual_tokens_out = _gemini_cost(visual_raw, preflight_cost)
+    _record_gemini_cost(
+        job=job,
+        payload=payload,
+        raw=visual_raw,
+        cost=visual_cost,
+        cost_basis=visual_basis,
+        tokens_in=visual_tokens_in,
+        tokens_out=visual_tokens_out,
+        latency_ms=0,
+        preflight_cost=preflight_cost,
+    )
+    if not visual_raw.get("analyzed"):
+        raise RuntimeError(f"Gemini visual pass failed: {visual_raw.get('error') or 'not_analyzed'}")
+
+    v2 = visual_raw.get("video_analysis_v2") if isinstance(visual_raw.get("video_analysis_v2"), dict) else {}
+    layer1 = v2.get("layer1_visual_content") if isinstance(v2.get("layer1_visual_content"), dict) else {}
+    keyframe_requests = _select_keyframe_requests(layer1, limit=6)
+    with tempfile.TemporaryDirectory(prefix="vkpi-scheme3a-video-") as tmpdir:
+        download = _download_youtube_for_keyframes(str(evidence.get("content_url") or ""), tmpdir)
+        if not download.get("success") or not download.get("path"):
+            raise RuntimeError(f"youtube_keyframe_download_failed: {download.get('error')}")
+        with temporary_keyframes(str(download["path"]), keyframe_requests) as frames:
+            if not frames:
+                raise RuntimeError("keyframe extraction produced no frames")
+            judgment_raw = asyncio.run(
+                gemini_video_analyzer.analyze_v2_judgment_with_openai_keyframes(
+                    layer1_visual_content=layer1,
+                    keyframes=frames,
+                    title=str(evidence.get("title") or ""),
+                    performance_context=performance,
+                    model_name="gpt-5.5",
+                )
+            )
+            frame_meta = [
+                {"timestamp": frame.get("timestamp"), "reason": frame.get("reason")}
+                for frame in frames
+            ]
+    judgment_cost, judgment_basis, judgment_tokens_in, judgment_tokens_out = _openai_cost(judgment_raw, openai_estimated_cost)
+    _record_openai_cost(
+        job=job,
+        payload=payload,
+        raw=judgment_raw,
+        cost=judgment_cost,
+        cost_basis=judgment_basis,
+        tokens_in=judgment_tokens_in,
+        tokens_out=judgment_tokens_out,
+        latency_ms=0,
+        preflight_cost=openai_estimated_cost,
+    )
+    if not judgment_raw.get("analyzed"):
+        raise RuntimeError(f"OpenAI keyframe judgment failed: {judgment_raw.get('error') or 'not_analyzed'}")
+
+    latency_ms = int((time.monotonic() - started) * 1000)
+    total_cost = round(visual_cost + judgment_cost, 6)
+    raw = {
+        **judgment_raw,
+        "method": "gemini_flash_gpt55_judge",
+        "model": "gemini-3-flash-preview+gpt-5.5",
+        "visual_pass": visual_raw,
+        "cost_segments": [
+            {
+                "stage": "visual_video_pass",
+                "provider": "gemini",
+                "model": "gemini-3-flash-preview",
+                "cost_usd": visual_cost,
+                "cost_basis": visual_basis,
+                "usage_metadata": visual_raw.get("usage_metadata") if isinstance(visual_raw.get("usage_metadata"), dict) else {},
+            },
+            {
+                "stage": "judgment_pass",
+                "provider": "openai",
+                "model": "gpt-5.5",
+                "cost_usd": judgment_cost,
+                "cost_basis": judgment_basis,
+                "usage_metadata": judgment_raw.get("usage_metadata") if isinstance(judgment_raw.get("usage_metadata"), dict) else {},
+            },
+        ],
+        "frame_extraction": {
+            "requested": keyframe_requests,
+            "extracted_count": len(frame_meta),
+            "frames": frame_meta,
+            "download_bytes": int(download.get("bytes") or 0),
+            "temporary_files_cleaned": True,
+        },
+    }
+    _write_gemini_cache(
+        conn,
+        job=job,
+        payload=payload,
+        evidence=evidence,
+        raw=raw,
+        cost=total_cost,
+        cost_basis="gemini_openai_usage_metadata_segmented_model_rate",
+        preflight_cost=preflight_cost + openai_estimated_cost,
+        latency_ms=latency_ms,
+        derive_method="gemini_video_v2_flash_gpt55_judge",
+    )
+
+
 def _process_gemini_video(
     conn: psycopg.Connection[Any],
     job: dict[str, Any],
@@ -811,6 +1022,9 @@ def _process_gemini_video(
         return
     if derive_method == "gemini_video_v2_flash_pro_judge":
         _process_gemini_video_flash_pro_judge(conn, job, payload, evidence, preflight_cost)
+        return
+    if derive_method == "gemini_video_v2_flash_gpt55_judge":
+        _process_gemini_video_flash_gpt55_judge(conn, job, payload, evidence, preflight_cost)
         return
     logger.info(
         "apify_jobs gemini video start | job_id=%s target_id=%s url=%s",
