@@ -65,6 +65,7 @@ import { emptyDashboardData } from "../data/emptyDashboardData";
 const e = React.createElement;
 const MyKolPage = React.lazy(() => import("../pages/myKol/MyKolPage").then((module) => ({ default: module.MyKolPage })));
 const LegacyProjectsPage = React.lazy(() => import("../pages/ProjectsPage").then((module) => ({ default: module.ProjectsPage })));
+const EventsMockupPage = React.lazy(() => import("../pages/events/EventsMockupPage").then((module) => ({ default: module.EventsMockupPage })));
 
 export function V615ReplicaApp(props: any = {}) {
   const {
@@ -89,7 +90,7 @@ export function V615ReplicaApp(props: any = {}) {
   const initialNav = normalizeReplicaNav(urlNav) || normalizeReplicaNav(stored.activeNav) || "dashboard";
   
   const [collapsed, setCollapsed] = useState(stored.collapsed || false);
-  const [activeNav, setActiveNav] = useState(["dashboard", "kol-pool", "my-kol", "projects"].includes(initialNav) ? initialNav : "dashboard");
+  const [activeNav, setActiveNav] = useState(["dashboard", "kol-pool", "my-kol", "projects", "events"].includes(initialNav) ? initialNav : "dashboard");
   const [theme, setTheme] = useState(stored.theme || "dark");
   
   // 层级 state
@@ -188,6 +189,10 @@ export function V615ReplicaApp(props: any = {}) {
     }
     if (page === "projects") {
       setActiveNav("projects");
+      return;
+    }
+    if (page === "events") {
+      setActiveNav("events");
       return;
     }
     if (page === "command") {
@@ -912,8 +917,16 @@ export function V615ReplicaApp(props: any = {}) {
               })
             ),
 
+            activeNav === "events" && e(React.Suspense, {
+              fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "Events 加载中...")
+            },
+              e(EventsMockupPage, {
+                userName,
+              })
+            ),
+
             // Placeholder for nav items not yet built
-            activeNav !== "dashboard" && activeNav !== "kol-pool" && activeNav !== "my-kol" && activeNav !== "projects" && e("div", { className: "p-8 md:p-16 flex flex-col items-center justify-center text-center min-h-[60vh]" },
+            activeNav !== "dashboard" && activeNav !== "kol-pool" && activeNav !== "my-kol" && activeNav !== "projects" && activeNav !== "events" && e("div", { className: "p-8 md:p-16 flex flex-col items-center justify-center text-center min-h-[60vh]" },
               e("div", { className: "rounded-2xl border border-white/[0.06] bg-white/[0.015] p-8 max-w-md w-full" },
                 (() => {
                   const navItem = NAV_ITEMS.find(n => n.key === activeNav);
