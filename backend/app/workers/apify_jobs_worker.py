@@ -33,6 +33,8 @@ from app.services.ai.analyzers import gemini_video as gemini_video_analyzer
 logger = get_logger(__name__)
 POLL_SECONDS = float(os.environ.get("APIFY_WORKER_POLL_SECONDS", "2"))
 MEDIA_RESOLVE_TIMEOUT_SECONDS = max(10, int(os.environ.get("APIFY_WORKER_MEDIA_RESOLVE_TIMEOUT_SEC", "90")))
+GEMINI_CALL_TIMEOUT_SECONDS = max(30, int(os.environ.get("APIFY_WORKER_GEMINI_CALL_TIMEOUT_SEC", "300")))
+GEMINI_CALL_TERMINATE_GRACE_SECONDS = max(1, int(os.environ.get("APIFY_WORKER_GEMINI_CALL_TERMINATE_GRACE_SEC", "5")))
 STALE_RUNNING_MINUTES = max(1, int(os.environ.get("APIFY_WORKER_STALE_RUNNING_MINUTES", "10")))
 STALE_RECLAIM_SECONDS = STALE_RUNNING_MINUTES * 60
 STALE_RECLAIM_POLL_SECONDS = max(30, int(os.environ.get("APIFY_WORKER_STALE_RECLAIM_POLL_SECONDS", "60")))
@@ -131,6 +133,20 @@ def _parse_apify_resolver_stdout(stdout: str) -> dict[str, Any]:
     }
 
 
+def _parse_last_json_stdout(stdout: str) -> dict[str, Any] | None:
+    for line in reversed(str(stdout or "").splitlines()):
+        candidate = line.strip()
+        if not candidate:
+            continue
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
 def _scrape_with_apify_timeout(content_url: str, platform: str) -> dict[str, Any]:
     backend_dir = Path(__file__).resolve().parents[2]
     repo_dir = Path(__file__).resolve().parents[3]
@@ -181,6 +197,173 @@ except BaseException as exc:
         parsed["_child_exit"] = True
         parsed["error"] = str(parsed.get("error") or proc.stderr or f"apify resolver exit {proc.returncode}")[-1000:]
     return parsed
+
+
+def _gemini_analyzer_child_code() -> str:
+    return r"""
+import asyncio
+import json
+import os
+import sys
+from contextlib import ExitStack
+from unittest.mock import patch
+
+from app.services.ai.analyzers import gemini_video as gemini_video_analyzer
+
+
+def _truthy(value):
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _apply_worker_overrides(payload):
+    stack = ExitStack()
+    model_override = str(payload.get("gemini_model") or "").strip()
+    skip_subtitles = _truthy(payload.get("skip_subtitles", payload.get("gemini_skip_subtitles", os.environ.get("APIFY_WORKER_GEMINI_SKIP_SUBTITLES"))))
+    if skip_subtitles:
+        stack.enter_context(patch.object(gemini_video_analyzer, "fetch_youtube_subtitles", lambda *_args, **_kwargs: ""))
+    if model_override and getattr(gemini_video_analyzer, "gemini_client", None):
+        original_generate = gemini_video_analyzer.gemini_client.models.generate_content
+
+        def _forced_generate_content(*args, **kwargs):
+            kwargs["model"] = model_override
+            return original_generate(*args, **kwargs)
+
+        stack.enter_context(patch.object(gemini_video_analyzer.gemini_client.models, "generate_content", _forced_generate_content))
+    return stack, model_override
+
+
+async def _run(payload):
+    mode = str(payload.get("mode") or "").strip()
+    if mode == "local":
+        return await gemini_video_analyzer.analyze_local_video_with_gemini(
+            str(payload.get("video_path") or ""),
+            str(payload.get("title") or ""),
+            str(payload.get("creator_handle") or ""),
+            schema_version=str(payload.get("schema_version") or "v2"),
+            performance_context=payload.get("performance_context"),
+        )
+    if mode == "youtube":
+        return await gemini_video_analyzer.analyze_youtube_with_gemini(
+            str(payload.get("url") or ""),
+            str(payload.get("title") or ""),
+            str(payload.get("creator_handle") or ""),
+            schema_version=str(payload.get("schema_version") or "legacy"),
+            performance_context=payload.get("performance_context"),
+        )
+    return {"analyzed": False, "method": "gemini_worker_child", "error": f"unsupported_gemini_child_mode:{mode}"}
+
+
+def _stamp_model(raw, model_override):
+    if not model_override or not isinstance(raw, dict) or not raw.get("analyzed"):
+        return raw
+    raw["model"] = model_override
+    method = str(raw.get("method") or "")
+    if method.startswith("gemini_direct_"):
+        raw["method"] = f"gemini_direct_{model_override}"
+    elif method.startswith("gemini_fileapi_"):
+        raw["method"] = f"gemini_fileapi_{model_override}"
+    elif method.startswith("gemini_local_fileapi_"):
+        raw["method"] = f"gemini_local_fileapi_{model_override}"
+    return raw
+
+
+def main():
+    payload = json.load(sys.stdin)
+    stack, model_override = _apply_worker_overrides(payload)
+    with stack:
+        raw = asyncio.run(_run(payload))
+    print(json.dumps({"ok": True, "raw": _stamp_model(raw, model_override)}, ensure_ascii=False, default=str), flush=True)
+
+
+try:
+    main()
+except BaseException as exc:
+    print(json.dumps({"ok": False, "raw": {"analyzed": False, "method": "gemini_worker_child", "error": f"{type(exc).__name__}: {exc}"}}, ensure_ascii=False, default=str), flush=True)
+    raise
+"""
+
+
+def _run_gemini_analyzer_with_timeout(payload: dict[str, Any], *, job_id: Any, target_id: str, platform: str) -> dict[str, Any]:
+    backend_dir = Path(__file__).resolve().parents[2]
+    repo_dir = Path(__file__).resolve().parents[3]
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(backend_dir) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    proc = subprocess.Popen(
+        [sys.executable, "-c", _gemini_analyzer_child_code()],
+        cwd=str(repo_dir),
+        env=env,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        preexec_fn=os.setsid if hasattr(os, "setsid") else None,
+    )
+    try:
+        stdout, stderr = proc.communicate(_json(payload), timeout=GEMINI_CALL_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        hard_killed = False
+        try:
+            if hasattr(os, "killpg"):
+                os.killpg(proc.pid, signal.SIGTERM)
+            else:
+                proc.terminate()
+            try:
+                stdout, stderr = proc.communicate(timeout=GEMINI_CALL_TERMINATE_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                hard_killed = True
+                if hasattr(os, "killpg"):
+                    os.killpg(proc.pid, signal.SIGKILL)
+                else:
+                    proc.kill()
+                stdout, stderr = proc.communicate()
+        except ProcessLookupError:
+            stdout, stderr = proc.communicate()
+        except Exception:
+            hard_killed = True
+            if hasattr(os, "killpg"):
+                os.killpg(proc.pid, signal.SIGKILL)
+            else:
+                proc.kill()
+            stdout, stderr = proc.communicate()
+        logger.warning(
+            "gemini analyzer hard timeout | job_id=%s target_id=%s platform=%s timeout_sec=%s hard_killed=%s stdout_tail=%s stderr_tail=%s",
+            job_id,
+            target_id,
+            platform,
+            GEMINI_CALL_TIMEOUT_SECONDS,
+            hard_killed,
+            str(stdout or "")[-500:],
+            str(stderr or "")[-500:],
+        )
+        return {
+            "analyzed": False,
+            "method": "gemini_worker_subprocess_timeout",
+            "error": "gemini_call_timeout",
+            "timeout_seconds": GEMINI_CALL_TIMEOUT_SECONDS,
+            "provider_subprocess": {
+                "timeout": True,
+                "hard_killed": hard_killed,
+                "stdout_tail": str(stdout or "")[-500:],
+                "stderr_tail": str(stderr or "")[-500:],
+            },
+        }
+    parsed = _parse_last_json_stdout(stdout)
+    if not parsed:
+        return {
+            "analyzed": False,
+            "method": "gemini_worker_subprocess",
+            "error": f"gemini_child_no_json: {(stderr or stdout or '')[-1000:]}",
+            "provider_subprocess": {"returncode": proc.returncode},
+        }
+    raw = parsed.get("raw") if isinstance(parsed.get("raw"), dict) else {}
+    if proc.returncode != 0 and not raw.get("error"):
+        raw["error"] = f"gemini_child_exit:{proc.returncode}: {(stderr or stdout or '')[-1000:]}"
+    raw["provider_subprocess"] = {
+        "returncode": proc.returncode,
+        "timeout": False,
+        "stderr_tail": str(stderr or "")[-500:],
+    }
+    return raw
 
 
 def _resolve_video_media(evidence: dict[str, Any]) -> dict[str, Any]:
@@ -1386,68 +1569,68 @@ def _process_gemini_video(
     analyzer_payload = payload
     if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS:
         analyzer_payload = {**payload, "gemini_model": "gemini-3.1-pro-preview"}
-    with _gemini_worker_overrides(analyzer_payload) as model_override:
-        if platform in {"instagram", "tiktok"}:
-            resolved = _resolve_video_media(evidence)
-            if str(resolved.get("status") or "") == "blocked":
-                _block_job(conn, int(job["id"]), str(resolved.get("reason") or "media_resolve_blocked"), resolved)
-                return
-            if not resolved.get("ok"):
-                raise RuntimeError(f"media_resolve_failed: {resolved.get('reason') or platform}")
-            with tempfile.TemporaryDirectory(prefix="vkpi-analysis-video-") as tmpdir:
-                download = download_direct_video_url(
-                    str(resolved.get("direct_video_url") or ""),
-                    tmpdir,
-                    referer=str(evidence.get("content_url") or ""),
-                )
-                if not download.get("success") or not download.get("path"):
-                    raise RuntimeError(f"direct_video_download_failed: {download.get('error') or platform}")
-                local_schema = "final_v1" if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS else "v2"
-                analysis_context = _video_final_context(evidence) if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS else _video_performance_context(evidence)
-                raw = asyncio.run(
-                    gemini_video_analyzer.analyze_local_video_with_gemini(
-                        str(download["path"]),
-                        str(evidence.get("title") or ""),
-                        str(evidence.get("creator_handle") or ""),
-                        schema_version=local_schema,
-                        performance_context=analysis_context,
-                    )
-                )
-                raw["media_resolution"] = {
-                    "platform": platform,
-                    "source_url_host": _url_host(str(evidence.get("content_url") or "")),
-                    "direct_video_url_host": resolved.get("direct_video_url_host"),
-                    "status": resolved.get("status"),
-                }
-                raw["local_video_input"] = {
-                    "download_bytes": int(download.get("bytes") or 0),
-                    "temporary_files_cleaned": True,
-                    "download_error": download.get("error"),
-                }
-        else:
-            analysis_context = _video_final_context(evidence) if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS else _video_performance_context(evidence)
-            raw = asyncio.run(
-                gemini_video_analyzer.analyze_youtube_with_gemini(
-                    str(evidence.get("content_url") or ""),
-                    str(evidence.get("title") or ""),
-                    str(evidence.get("creator_handle") or ""),
-                    schema_version="final_v1"
-                    if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS
-                    else ("v2" if derive_method in GEMINI_VIDEO_V2_DERIVE_METHODS else "legacy"),
-                    performance_context=analysis_context
-                    if derive_method in GEMINI_VIDEO_V2_DERIVE_METHODS or derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS
-                    else None,
-                )
+    if platform in {"instagram", "tiktok"}:
+        resolved = _resolve_video_media(evidence)
+        if str(resolved.get("status") or "") == "blocked":
+            _block_job(conn, int(job["id"]), str(resolved.get("reason") or "media_resolve_blocked"), resolved)
+            return
+        if not resolved.get("ok"):
+            raise RuntimeError(f"media_resolve_failed: {resolved.get('reason') or platform}")
+        with tempfile.TemporaryDirectory(prefix="vkpi-analysis-video-") as tmpdir:
+            download = download_direct_video_url(
+                str(resolved.get("direct_video_url") or ""),
+                tmpdir,
+                referer=str(evidence.get("content_url") or ""),
             )
-    if model_override and raw.get("analyzed"):
-        raw["model"] = model_override
-        method = str(raw.get("method") or "")
-        if method.startswith("gemini_direct_"):
-            raw["method"] = f"gemini_direct_{model_override}"
-        elif method.startswith("gemini_fileapi_"):
-            raw["method"] = f"gemini_fileapi_{model_override}"
-        elif method.startswith("gemini_local_fileapi_"):
-            raw["method"] = f"gemini_local_fileapi_{model_override}"
+            if not download.get("success") or not download.get("path"):
+                raise RuntimeError(f"direct_video_download_failed: {download.get('error') or platform}")
+            local_schema = "final_v1" if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS else "v2"
+            analysis_context = _video_final_context(evidence) if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS else _video_performance_context(evidence)
+            raw = _run_gemini_analyzer_with_timeout(
+                {
+                    **analyzer_payload,
+                    "mode": "local",
+                    "video_path": str(download["path"]),
+                    "title": str(evidence.get("title") or ""),
+                    "creator_handle": str(evidence.get("creator_handle") or ""),
+                    "schema_version": local_schema,
+                    "performance_context": analysis_context,
+                },
+                job_id=job.get("id"),
+                target_id=target_id,
+                platform=platform,
+            )
+            raw["media_resolution"] = {
+                "platform": platform,
+                "source_url_host": _url_host(str(evidence.get("content_url") or "")),
+                "direct_video_url_host": resolved.get("direct_video_url_host"),
+                "status": resolved.get("status"),
+            }
+            raw["local_video_input"] = {
+                "download_bytes": int(download.get("bytes") or 0),
+                "temporary_files_cleaned": True,
+                "download_error": download.get("error"),
+            }
+    else:
+        analysis_context = _video_final_context(evidence) if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS else _video_performance_context(evidence)
+        raw = _run_gemini_analyzer_with_timeout(
+            {
+                **analyzer_payload,
+                "mode": "youtube",
+                "url": str(evidence.get("content_url") or ""),
+                "title": str(evidence.get("title") or ""),
+                "creator_handle": str(evidence.get("creator_handle") or ""),
+                "schema_version": "final_v1"
+                if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS
+                else ("v2" if derive_method in GEMINI_VIDEO_V2_DERIVE_METHODS else "legacy"),
+                "performance_context": analysis_context
+                if derive_method in GEMINI_VIDEO_V2_DERIVE_METHODS or derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS
+                else None,
+            },
+            job_id=job.get("id"),
+            target_id=target_id,
+            platform=platform,
+        )
     latency_ms = int((time.monotonic() - started) * 1000)
     logger.info(
         "apify_jobs gemini video returned | job_id=%s analyzed=%s method=%s latency_ms=%s",
@@ -1469,7 +1652,10 @@ def _process_gemini_video(
         preflight_cost=preflight_cost,
     )
     if not raw.get("analyzed"):
-        raise RuntimeError(f"Gemini video analysis failed: {raw.get('error') or 'not_analyzed'}")
+        raw_error = str(raw.get("error") or "not_analyzed")
+        if raw_error == "gemini_call_timeout":
+            raise RuntimeError("gemini_call_timeout")
+        raise RuntimeError(f"Gemini video analysis failed: {raw_error}")
     triggered_by = payload.get("triggered_by_user_id", payload.get("user_id"))
     triggered_by_user_id = _int_or_none(triggered_by)
     shaped = _shape_gemini_result(
@@ -1605,7 +1791,10 @@ def _process_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> None:
 
 
 def _fail_job(conn: psycopg.Connection[Any], job_id: int, exc: Exception) -> None:
-    message = f"{type(exc).__name__}: {exc}"[:2000]
+    if str(exc).strip() == "gemini_call_timeout":
+        message = "gemini_call_timeout"
+    else:
+        message = f"{type(exc).__name__}: {exc}"[:2000]
     with conn.transaction():
         with conn.cursor() as cur:
             cur.execute(

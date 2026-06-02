@@ -39,6 +39,7 @@ NON_RETRYABLE_MARKERS = (
 )
 RETRYABLE_MARKERS = (
     "stale_running_reclaimed",
+    "gemini_call_timeout",
     "media_resolve_timeout",
     "timeout",
     "timed out",
