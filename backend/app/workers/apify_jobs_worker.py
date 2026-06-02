@@ -11,6 +11,7 @@ from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import patch
+from urllib.parse import urlparse
 
 import psycopg
 from psycopg.rows import dict_row
@@ -21,6 +22,7 @@ from app.db.connection import close_db_runtime_sync, db_connection_sync_scope
 from app.domains.costs import budget_guard
 from app.platform import llm_gateway
 from app.services.ai.analyzers import gemini_video as gemini_video_analyzer
+from app.services.scraping import apify as apify_scraper
 
 
 logger = get_logger(__name__)
@@ -67,6 +69,72 @@ def _derive_method(payload: dict[str, Any]) -> str:
 
 def _target(payload: dict[str, Any]) -> tuple[str, str]:
     return str(payload.get("target_type") or "").strip(), str(payload.get("target_id") or "").strip()
+
+
+def _url_host(url: str) -> str:
+    try:
+        return urlparse(str(url or "")).netloc.lower()
+    except Exception:
+        return ""
+
+
+def _platform_from_content_url(url: str) -> str:
+    host = _url_host(url)
+    if host.startswith("www."):
+        host = host[4:]
+    if host.startswith("m."):
+        host = host[2:]
+    if "youtube.com" in host or "youtu.be" in host:
+        return "youtube"
+    if "instagram.com" in host:
+        return "instagram"
+    if "tiktok.com" in host:
+        return "tiktok"
+    return "unsupported"
+
+
+def _resolve_video_media(evidence: dict[str, Any]) -> dict[str, Any]:
+    content_url = str(evidence.get("content_url") or "").strip()
+    platform = _platform_from_content_url(content_url)
+    output = {
+        "ok": False,
+        "platform": platform,
+        "source_url_host": _url_host(content_url),
+        "direct_video_url": "",
+        "direct_video_url_host": "",
+        "reason": "",
+        "scraped_ok": False,
+    }
+    if platform == "unsupported":
+        output["reason"] = "unsupported_platform"
+        output["status"] = "blocked"
+        return output
+    if platform == "youtube":
+        output["ok"] = True
+        output["reason"] = "youtube_direct_url_path"
+        output["status"] = "ready"
+        return output
+    if not os.environ.get("APIFY_TOKEN", "").strip():
+        output["reason"] = "apify_not_configured"
+        output["status"] = "blocked"
+        return output
+    scraped = asyncio.run(apify_scraper.scrape_with_apify(content_url, platform))
+    output["scraped_ok"] = bool(scraped.get("scraped_ok"))
+    direct_video_url = str(scraped.get("video_url") or "").strip()
+    if not direct_video_url:
+        output["reason"] = str(scraped.get("error") or "media_resolve_failed")
+        output["status"] = "failed"
+        return output
+    output.update(
+        {
+            "ok": True,
+            "direct_video_url": direct_video_url,
+            "direct_video_url_host": _url_host(direct_video_url),
+            "reason": "media_resolved",
+            "status": "ready",
+        }
+    )
+    return output
 
 
 def _advisory_lock(conn: psycopg.Connection[Any], scope: str, key: str) -> bool:
@@ -128,6 +196,21 @@ def _requeue_job(conn: psycopg.Connection[Any], job_id: int, reason: str) -> Non
             cur.execute(
                 "UPDATE apify_jobs SET status='queued', last_error=%s, updated_at=NOW() WHERE id=%s",
                 (reason[:2000], job_id),
+            )
+
+
+def _finish_media_resolved(conn: psycopg.Connection[Any], job_id: int, resolved: dict[str, Any]) -> None:
+    detail = {
+        "reason": "media_resolved_only",
+        "platform": resolved.get("platform"),
+        "source_url_host": resolved.get("source_url_host"),
+        "direct_video_url_host": resolved.get("direct_video_url_host"),
+    }
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE apify_jobs SET status='done', last_error=%s, updated_at=NOW() WHERE id=%s",
+                (_json(detail)[:2000], job_id),
             )
 
 
@@ -434,6 +517,26 @@ def _process_gemini_video(
         _block_job(conn, int(job["id"]), "unsupported_gemini_target_type", {"target_type": target_type})
         return
     evidence = _load_video_evidence(conn, target_id)
+    platform = _platform_from_content_url(str(evidence.get("content_url") or ""))
+    if platform == "unsupported":
+        _block_job(conn, int(job["id"]), "unsupported_platform", {"source_url_host": _url_host(str(evidence.get("content_url") or ""))})
+        return
+    if platform in {"instagram", "tiktok"}:
+        resolved = _resolve_video_media(evidence)
+        if str(resolved.get("status") or "") == "blocked":
+            _block_job(conn, int(job["id"]), str(resolved.get("reason") or "media_resolve_blocked"), resolved)
+            return
+        if not resolved.get("ok"):
+            raise RuntimeError(f"media_resolve_failed: {resolved.get('reason') or platform}")
+        logger.info(
+            "apify_jobs media resolved only | job_id=%s target_id=%s platform=%s direct_host=%s",
+            job.get("id"),
+            target_id,
+            platform,
+            resolved.get("direct_video_url_host"),
+        )
+        _finish_media_resolved(conn, int(job["id"]), resolved)
+        return
     logger.info(
         "apify_jobs gemini video start | job_id=%s target_id=%s url=%s",
         job.get("id"),
