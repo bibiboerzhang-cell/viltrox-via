@@ -227,6 +227,174 @@ def _apply_v2_result(
     )
 
 
+async def analyze_local_video_with_gemini(
+    video_path: str,
+    title: str,
+    creator_handle: str = "",
+    *,
+    schema_version: str = "v2",
+    performance_context: dict[str, Any] | None = None,
+    subtitle_text: str = "",
+) -> dict:
+    """Analyze an already-downloaded local MP4 with Gemini File API."""
+    result = {
+        "analyzed": False,
+        "method": "gemini_local_fileapi",
+        "content_summary": "",
+        "content_genre": "",
+        "content_topic": "",
+        "timestamps": [],
+        "competitor_mentions": [],
+        "why_compelling": "",
+        "hook_analysis": "",
+        "target_audience": "",
+        "production_quality": "",
+        "camera_body": None,
+        "viltrox_lens": None,
+        "other_lens": None,
+        "viltrox_detected": False,
+        "viltrox_products_all": [],
+        "marketing_potential": "",
+        "marketing_notes": "",
+        "usage_metadata": {},
+        "model": "",
+        "fileapi_cleanup": {"delete_attempted": False, "deleted": False},
+        "error": None,
+    }
+    if not GEMINI_AVAILABLE or not gemini_client or not genai_types:
+        result["error"] = "Gemini not available"
+        return result
+    local_path = Path(str(video_path or ""))
+    if not local_path.exists() or local_path.stat().st_size < 1000:
+        result["error"] = "local video file missing or empty"
+        return result
+
+    profile_ctx = ""
+    if creator_handle:
+        profile = get_creator_profile(creator_handle)
+        if profile.get("viltrox_lenses"):
+            profile_ctx = f"\n创作者历史使用过: {', '.join(profile['viltrox_lenses'][:3])}"
+    subtitle_ctx = ""
+    if subtitle_text:
+        subtitle_ctx = (
+            "\n\n=== 字幕时间轴（真实时间戳，优先用这个定位事件）===\n"
+            + subtitle_text
+            + "\n=== 字幕结束 ===\n"
+            "时间戳规则：timestamps 里的 time 字段必须来自上面字幕里的真实时间点，不允许猜测或等间隔填写。"
+        )
+    is_v2 = str(schema_version or "").strip().lower() == "v2"
+    if not is_v2:
+        result["error"] = "analyze_local_video_with_gemini currently supports schema_version='v2' only"
+        return result
+    prompt = _video_v2_prompt(
+        title=title,
+        profile_ctx=profile_ctx,
+        subtitle_ctx=subtitle_ctx,
+        subtitle_used=bool(subtitle_text),
+        performance_context=performance_context,
+    )
+    gemini_file = None
+    uploaded_file_name = ""
+    try:
+        file_size_mb = local_path.stat().st_size / 1024 / 1024
+        logger.info("gemini_local_fileapi_upload_start", extra={"size_mb": round(file_size_mb, 1)})
+
+        try:
+            def _upload():
+                return gemini_client.files.upload(file=str(local_path), config={"mime_type": "video/mp4"})
+
+            gemini_file = await asyncio.to_thread(_upload)
+        except Exception as upload_err:
+            result["error"] = f"Gemini File API upload failed: {upload_err}"
+            logger.warning("gemini_local_fileapi_upload_failed", extra={"error": str(upload_err)})
+            return result
+        if not gemini_file or not getattr(gemini_file, "name", None):
+            result["error"] = "Gemini upload returned empty file object"
+            logger.warning("gemini_local_fileapi_upload_invalid_file", extra={"file": str(gemini_file)})
+            return result
+        uploaded_file_name = str(gemini_file.name)
+        logger.info("gemini_local_fileapi_upload_complete", extra={"file_name": uploaded_file_name})
+
+        state = ""
+        for poll_attempt in range(30):
+            try:
+                def _check(name=uploaded_file_name):
+                    return gemini_client.files.get(name=name)
+
+                gemini_file = await asyncio.to_thread(_check)
+            except Exception as poll_err:
+                result["error"] = f"files.get() error during polling: {poll_err}"
+                logger.warning("gemini_local_fileapi_poll_error", extra={"attempt": poll_attempt, "error": str(poll_err)})
+                return result
+            state = getattr(gemini_file.state, "name", str(gemini_file.state))
+            logger.info("gemini_local_fileapi_poll", extra={"attempt": poll_attempt + 1, "state": state})
+            if state == "ACTIVE":
+                break
+            if state == "FAILED":
+                result["error"] = f"Gemini file processing FAILED (state={state})"
+                return result
+            await asyncio.sleep(3)
+        else:
+            result["error"] = f"Gemini file ACTIVE timeout after 90s (final state={state})"
+            return result
+        if not getattr(gemini_file, "uri", None):
+            result["error"] = "Gemini file ACTIVE but uri is empty"
+            return result
+
+        last_err = ""
+        for model_name in ["gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-2.5-flash"]:
+            try:
+                def _analyze(m=model_name, f=gemini_file):
+                    return gemini_client.models.generate_content(
+                        model=m,
+                        contents=[
+                            genai_types.Part.from_uri(file_uri=f.uri, mime_type="video/mp4"),
+                            prompt,
+                        ],
+                    )
+
+                resp = await asyncio.to_thread(_analyze)
+                usage_metadata = _response_usage_metadata(resp)
+                raw = resp.text.strip()
+                raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
+                parsed = json.loads(raw)
+                _apply_v2_result(
+                    result,
+                    parsed,
+                    method=f"gemini_local_fileapi_{model_name}",
+                    model=model_name,
+                    usage_metadata=usage_metadata,
+                    subtitle_used=bool(subtitle_text),
+                )
+                logger.info(
+                    "gemini_local_fileapi_v2_success",
+                    extra={"model": model_name, "timestamps": len(result.get("timestamps") or [])},
+                )
+                break
+            except Exception as err:
+                last_err = str(err)
+                logger.warning("gemini_local_fileapi_model_failed", extra={"model": model_name, "error": last_err[:100]})
+                continue
+        if not result["analyzed"]:
+            result["error"] = last_err or "Gemini local video analysis failed"
+    except Exception as exc:
+        result["error"] = str(exc)
+        logger.exception("gemini_local_fileapi_analysis_failed")
+    finally:
+        if uploaded_file_name:
+            result["fileapi_cleanup"]["delete_attempted"] = True
+            try:
+                def _delete(name=uploaded_file_name):
+                    gemini_client.files.delete(name=name)
+
+                await asyncio.to_thread(_delete)
+                result["fileapi_cleanup"]["deleted"] = True
+                logger.info("gemini_local_fileapi_deleted", extra={"file_name": uploaded_file_name})
+            except Exception as del_err:
+                logger.warning("gemini_local_fileapi_delete_skipped", extra={"error": str(del_err)})
+    return result
+
+
 async def analyze_youtube_with_gemini(
     url: str,
     title: str,
