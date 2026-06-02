@@ -33,7 +33,8 @@ LLM_BUDGET_SCOPE = os.environ.get("APIFY_WORKER_LLM_BUDGET_SCOPE", "cron:vkpi_an
 LLM_CONCURRENCY_LIMIT = max(1, min(2, int(os.environ.get("APIFY_WORKER_LLM_CONCURRENCY", "1"))))
 LLM_MAX_OUTPUT_TOKENS = int(os.environ.get("APIFY_WORKER_LLM_MAX_OUTPUT_TOKENS", "1200"))
 LLM_TARGET_TYPES = {"video", "contract"}
-GEMINI_VIDEO_DERIVE_METHODS = {"gemini", "gemini_video_v2"}
+GEMINI_VIDEO_V2_DERIVE_METHODS = {"gemini_video_v2", "gemini_video_v2_pro_single"}
+GEMINI_VIDEO_DERIVE_METHODS = {"gemini", *GEMINI_VIDEO_V2_DERIVE_METHODS}
 WORKER_GEMINI_MODEL = os.environ.get("APIFY_WORKER_GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
 _stop_event = threading.Event()
 
@@ -270,19 +271,55 @@ def _usage_count(metadata: dict[str, Any], *keys: str) -> int:
         if value is not None:
             parsed = _int_or_none(value)
             return parsed or 0
-    return 0
+        return 0
+
+
+def _gemini_input_cost_usd(model: str, metadata: dict[str, Any], tokens_in: int) -> float:
+    model_key = str(model or "").lower()
+    details = metadata.get("prompt_tokens_details")
+    if not isinstance(details, list):
+        details = []
+    modality_counts: dict[str, int] = {}
+    for item in details:
+        if not isinstance(item, dict):
+            continue
+        modality = str(item.get("modality") or "").upper()
+        modality_counts[modality] = modality_counts.get(modality, 0) + (_int_or_none(item.get("token_count")) or 0)
+    if "gemini-3.1-pro" in model_key:
+        rate = 4.0 if tokens_in > 200_000 else 2.0
+        return tokens_in * rate / 1_000_000
+    if "gemini-3-flash" in model_key:
+        audio = modality_counts.get("AUDIO", 0)
+        return ((tokens_in - audio) * 0.50 + audio * 1.00) / 1_000_000
+    if "gemini-2.5-flash" in model_key:
+        audio = modality_counts.get("AUDIO", 0)
+        return ((tokens_in - audio) * 0.30 + audio * 1.00) / 1_000_000
+    config = llm_gateway.PROVIDER_CONFIG.get("google") or {}
+    return tokens_in * float(config.get("input_cents_per_million") or 0) / 100_000_000
+
+
+def _gemini_output_rate_usd_per_mtok(model: str, tokens_in: int) -> float:
+    model_key = str(model or "").lower()
+    if "gemini-3.1-pro" in model_key:
+        return 18.0 if tokens_in > 200_000 else 12.0
+    if "gemini-3-flash" in model_key:
+        return 3.0
+    if "gemini-2.5-flash" in model_key:
+        return 2.50
+    config = llm_gateway.PROVIDER_CONFIG.get("google") or {}
+    return float(config.get("output_cents_per_million") or 0) / 100
 
 
 def _gemini_cost(result: dict[str, Any], fallback_cost: float) -> tuple[float, str, int, int]:
     metadata = result.get("usage_metadata") if isinstance(result.get("usage_metadata"), dict) else {}
     tokens_in = _usage_count(metadata, "prompt_token_count", "promptTokenCount")
     tokens_out = _usage_count(metadata, "candidates_token_count", "candidatesTokenCount")
+    tokens_out += _usage_count(metadata, "thoughts_token_count", "thoughtsTokenCount")
     if tokens_in or tokens_out:
-        config = llm_gateway.PROVIDER_CONFIG.get("google") or {}
-        input_cents = float(config.get("input_cents_per_million") or 0)
-        output_cents = float(config.get("output_cents_per_million") or 0)
-        cost = ((tokens_in * input_cents) + (tokens_out * output_cents)) / 100_000_000
-        return round(max(0.0, cost), 6), "gemini_usage_metadata_local_rate", tokens_in, tokens_out
+        model = str(result.get("model") or result.get("method") or "")
+        cost = _gemini_input_cost_usd(model, metadata, tokens_in)
+        cost += tokens_out * _gemini_output_rate_usd_per_mtok(model, tokens_in) / 1_000_000
+        return round(max(0.0, cost), 6), "gemini_usage_metadata_model_rate", tokens_in, tokens_out
     return round(max(0.0, float(fallback_cost or 0.0)), 6), "llm_gateway_budget_preflight", 0, 0
 
 
@@ -377,14 +414,15 @@ def _shape_gemini_result(
     latency_ms: int,
     derive_method: str,
 ) -> dict[str, Any]:
-    if derive_method == "gemini_video_v2":
+    if derive_method in GEMINI_VIDEO_V2_DERIVE_METHODS:
         v2 = raw.get("video_analysis_v2") if isinstance(raw.get("video_analysis_v2"), dict) else {}
         layer3 = dict(v2.get("layer3_integrated_judgment") or {})
         layer3["performance_metrics"] = _video_performance_context(evidence)
+        model_name = str(raw.get("model") or raw.get("method") or "gemini_video")
         return {
             "schema_version": "video_analysis_v2",
             "mock": False,
-            "analysis_method": "gemini_video_v2",
+            "analysis_method": derive_method,
             "job_id": job.get("id"),
             "target_type": "video",
             "target_id": str(evidence.get("id")),
@@ -406,6 +444,14 @@ def _shape_gemini_result(
                 "recorded_cost_usd": cost,
                 "cost_basis": cost_basis,
                 "preflight_estimated_cost_usd": preflight_cost,
+                "segments": [
+                    {
+                        "stage": "single_pass",
+                        "provider": "gemini",
+                        "model": model_name,
+                        "cost_usd": cost,
+                    }
+                ],
                 "usage_metadata": raw.get("usage_metadata") if isinstance(raw.get("usage_metadata"), dict) else {},
                 "latency_ms": latency_ms,
             },
@@ -509,7 +555,7 @@ def _process_gemini_video(
     if platform == "unsupported":
         _block_job(conn, int(job["id"]), "unsupported_platform", {"source_url_host": _url_host(str(evidence.get("content_url") or ""))})
         return
-    if platform in {"instagram", "tiktok"} and derive_method != "gemini_video_v2":
+    if platform in {"instagram", "tiktok"} and derive_method not in GEMINI_VIDEO_V2_DERIVE_METHODS:
         _block_job(conn, int(job["id"]), "unsupported_media_derive_method", {"platform": platform, "derive_method": derive_method})
         return
     logger.info(
@@ -550,8 +596,8 @@ def _process_gemini_video(
                     str(evidence.get("content_url") or ""),
                     str(evidence.get("title") or ""),
                     str(evidence.get("creator_handle") or ""),
-                    schema_version="v2" if derive_method == "gemini_video_v2" else "legacy",
-                    performance_context=_video_performance_context(evidence) if derive_method == "gemini_video_v2" else None,
+                    schema_version="v2" if derive_method in GEMINI_VIDEO_V2_DERIVE_METHODS else "legacy",
+                    performance_context=_video_performance_context(evidence) if derive_method in GEMINI_VIDEO_V2_DERIVE_METHODS else None,
                 )
             )
     if model_override and raw.get("analyzed"):

@@ -75,13 +75,24 @@ def _video_v2_prompt(
     performance_context: dict[str, Any] | None,
 ) -> str:
     metrics = json.dumps(performance_context or {}, ensure_ascii=False, default=str)
-    return f"""你是 Viltrox (唯卓仕) 品牌资深视频内容分析师。请仔细观看完整视频画面和音频。{profile_ctx}{subtitle_ctx}
+    return f"""你是 Viltrox (唯卓仕) 品牌方的视频投放审查员，对投放预算负责。请以挑剔、直接、可追责的品牌方视角审查完整视频画面和音频，不要像友善评论员一样客套夸奖。{profile_ctx}{subtitle_ctx}
 视频标题: {title}
 播放表现数据（只做绝对表现判断；没有账号基准，不要判断“相对该 KOL 平时”）:
 {metrics}
 
 只返回 JSON，不要 Markdown。必须按以下三层 schema 输出；评不出的字段用 null，confidence=0，不能瞎编。
 每个评分项 score 为 0-100 或 null，confidence 为 0-1，evidence 必须列出画面/字幕依据。
+评分必须有区分度，不要都集中在 80-95。给分前先判断：这条视频放在所有 KOL 投放视频里，属于前 10%、中上、中游，还是偏弱？
+- 真正出类拔萃、罕见优秀才给 90+
+- 扎实合格的中上水平给 70-85
+- 普通、达标但无亮点给 55-70
+- 有明显短板给 40-55
+大部分视频应该落在中间区段。不要因为视频“没硬伤”就给高分；“没硬伤”只是合格，不是优秀。
+
+weaknesses 必须指出真正影响投放价值的问题，例如恰饭感重/套路化、产品展示不充分或一带而过、受众与产品不匹配、内容与其他 KOL 高度同质化、信息密度低、转化引导弱。禁止写“可以增加更多场景”“对新手可以更友好”这类放之四海皆准的客套缺点。如果确实有明显短板，直接具体地说；如果几乎无可挑剔，说明为什么它罕见地好。
+authenticity 衡量这是真心推荐还是收钱办事：明显套模板、念稿感、为恰饭而恰饭、对产品无真实理解给 40 以下；有商业痕迹但基本走心给 55-75；真正出于喜爱、有个人观点和真实使用体验才给 80+。这个维度要敢于打低分，帮助品牌方识别谁是真喜欢产品、谁只是收钱。
+cooperation_recommendation 必须给真实判断，不要默认 continue。continue=确实值得继续投；cautious=有价值但有顾虑（说明恰饭感、数据存疑或性价比一般等顾虑）；reconsider=不太值得（说明原因）。如果谁都是 continue，这个建议就没有价值。
+key_hook 用一句话点出这条视频/这个 KOL 最值得品牌方深入了解的点，或最大的疑点，让品牌方有“想点进去深究”的理由。
 
 {{
   "layer1_visual_content": {{
@@ -129,10 +140,11 @@ def _video_v2_prompt(
   }},
   "layer3_integrated_judgment": {{
     "advantages": ["这视频好在哪"],
-    "weaknesses": ["这视频差在哪"],
+    "weaknesses": ["真正影响投放价值的具体短板，禁止客套话"],
     "homogeneity": {{"is_homogeneous": false, "unique_points": ["独特点"], "rationale": "是否同质化的判断"}},
     "better_direction": {{"better_products": ["更适合推的产品/系列"], "content_adjustments": ["内容方向建议"], "rationale": "理由"}},
-    "cooperation_recommendation": {{"recommendation": "continue/cautious/not_recommended", "reason": "后续合作理由"}},
+    "cooperation_recommendation": {{"recommendation": "continue/cautious/reconsider", "reason": "后续合作理由"}},
+    "key_hook": "最值得品牌方深挖的一个点，或最大的疑点",
     "content_value_score": {{"score": 0, "confidence": 0.0, "rationale": "视频本身做得好不好"}},
     "placement_value_score": {{"score": 0, "confidence": 0.0, "rationale": "对 Viltrox 投放值不值；说明无账号基准，仅基于绝对播放表现"}}
   }}
@@ -158,7 +170,7 @@ def _normalise_v2_result(parsed: dict[str, Any], *, subtitle_used: bool) -> dict
     layer2 = parsed.get("layer2_video_scores") if isinstance(parsed.get("layer2_video_scores"), dict) else {}
     layer3 = parsed.get("layer3_integrated_judgment") if isinstance(parsed.get("layer3_integrated_judgment"), dict) else {}
     evidence = layer1.get("evidence") if isinstance(layer1.get("evidence"), dict) else {}
-    evidence["subtitle_used"] = bool(evidence.get("subtitle_used", subtitle_used))
+    evidence["subtitle_used"] = bool(subtitle_used)
     layer1["evidence"] = evidence
     scores = layer2.get("scores") if isinstance(layer2.get("scores"), dict) else {}
     for key in VIDEO_V2_SCORE_KEYS:
