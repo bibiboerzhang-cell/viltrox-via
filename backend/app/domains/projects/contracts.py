@@ -135,12 +135,50 @@ def _budget_preflight(file_size_bytes: int) -> dict[str, Any]:
     }
 
 
-def _ledger_staff_id(staff: dict[str, Any] | None) -> int | None:
-    candidate = staff_id(staff)
+def _staff_id_by_user_id(user_id: Any) -> int | None:
+    candidate = _int(user_id)
+    if not candidate:
+        return None
+    row = get_conn().execute(
+        "SELECT id FROM staff WHERE user_id=? ORDER BY active DESC, id DESC LIMIT 1",
+        (int(candidate),),
+    ).fetchone()
+    return int(row["id"]) if row else None
+
+
+def _valid_staff_id(value: Any) -> int | None:
+    candidate = _int(value)
     if not candidate:
         return None
     row = get_conn().execute("SELECT id FROM staff WHERE id=? LIMIT 1", (int(candidate),)).fetchone()
-    return int(candidate) if row else None
+    return int(row["id"]) if row else None
+
+
+def _ledger_staff_id(staff: dict[str, Any] | None) -> int | None:
+    if not isinstance(staff, dict):
+        return None
+    return (
+        _valid_staff_id(staff.get("staff_id"))
+        or _staff_id_by_user_id(staff.get("user_id"))
+        or _staff_id_by_user_id(staff.get("id"))
+        or _valid_staff_id(staff.get("id"))
+    )
+
+
+def _triggered_by_user_id(staff: dict[str, Any] | None) -> int | None:
+    if not isinstance(staff, dict):
+        return None
+    user_id = _int(staff.get("user_id"))
+    if user_id:
+        return user_id
+    candidate = _int(staff.get("id") or staff.get("staff_id"))
+    if not candidate:
+        return None
+    conn = get_conn()
+    if conn.execute("SELECT id FROM users WHERE id=? LIMIT 1", (int(candidate),)).fetchone():
+        return int(candidate)
+    row = conn.execute("SELECT user_id FROM staff WHERE id=? LIMIT 1", (int(candidate),)).fetchone()
+    return _int(row["user_id"]) if row else None
 
 
 def _record_contract_cost(contract_id: int, project_id: int, staff: dict[str, Any] | None, extraction: dict[str, Any]) -> dict[str, Any]:
@@ -154,8 +192,13 @@ def _record_contract_cost(contract_id: int, project_id: int, staff: dict[str, An
         tokens_in=int(usage.get("input_tokens") or 0),
         tokens_out=int(usage.get("output_tokens") or 0),
         staff_id=_ledger_staff_id(staff),
-        metadata={"project_id": int(project_id), "contract_id": int(contract_id), "derive_method": CONTRACT_DERIVE_METHOD},
-        triggered_by=staff,
+        metadata={
+            "project_id": int(project_id),
+            "contract_id": int(contract_id),
+            "derive_method": CONTRACT_DERIVE_METHOD,
+            "triggered_by_user_id": _triggered_by_user_id(staff),
+        },
+        triggered_by=None,
         extra_scopes=["monthly_total", "provider:claude"],
     )
 
