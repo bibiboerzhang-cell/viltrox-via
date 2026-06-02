@@ -1106,7 +1106,7 @@ function ProjectVideoAnalysisCard({
   const layer6 = asRecord(payload.layer6_flags_and_scores);
   const scores = asRecord(layer6.scores);
   const contentScore = normaliseScore(scores.content_quality_score);
-  const marketingScore = normaliseScore(scores.marketing_value_score);
+  const marketingScore = normaliseScore(scores.marketing_value_score ?? layer6.marketing_value_score);
   const viewerHeart = normaliseScore(layer2.viewer_heart_score ?? layer2.heart_movement_score, scores.viewer_heart_score);
   const channelValue = layerValue(layer3, 'channel_value', scores.channel_value_score);
   const assetValue = layerValue(layer3, 'asset_value', scores.asset_reuse_score);
