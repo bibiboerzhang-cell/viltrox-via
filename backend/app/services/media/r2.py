@@ -38,6 +38,13 @@ def upload_file(local_path: str, r2_key: str, content_type: str = "") -> str:
     return r2_key
 
 
+def download_file(r2_key: str, local_path: str) -> str:
+    _require_configured()
+    client = _get_client()
+    client.download_file(os.getenv("R2_BUCKET_NAME"), r2_key, local_path)
+    return local_path
+
+
 def delete_object(r2_key: str) -> bool:
     if not r2_key:
         return False

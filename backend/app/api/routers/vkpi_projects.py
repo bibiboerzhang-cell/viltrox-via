@@ -1,16 +1,21 @@
 """V-KPI project workflow routes."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+import tempfile
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 
 from app.api.dependencies.perms import require_tab
 from app.core.security import get_current_user
 from app.domains import costs
 from app.domains.access import scope
 from app.domains.analysis.cache_repo import get_analysis_cache_entry, list_project_video_analysis_cache
+from app.domains.projects import contracts
 from app.domains.projects import workflow
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-projects"])
+MAX_CONTRACT_UPLOAD_BYTES = 25 * 1024 * 1024
 
 
 def _scope_403(exc: Exception) -> HTTPException:
@@ -70,6 +75,104 @@ def project_video_analysis_cache(
     del staff
     derive_method = derive_method.strip() or "video_analysis_final_v1"
     return list_project_video_analysis_cache(project_id, derive_method=derive_method)
+
+
+@router.get("/projects/{project_id}/contracts")
+def project_contracts(project_id: int, staff=Depends(require_tab("vkpi", "read"))):
+    try:
+        return contracts.list_contracts(project_id, staff=staff)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
+@router.post("/projects/{project_id}/contracts/upload")
+async def upload_project_contract(
+    project_id: int,
+    file: UploadFile = File(...),
+    assignment_id: int | None = Form(default=None),
+    kol_pool_id: int | None = Form(default=None),
+    staff=Depends(require_tab("vkpi", "write")),
+):
+    filename = file.filename or "contract.pdf"
+    suffix = Path(filename).suffix.lower() or ".pdf"
+    try:
+        with tempfile.TemporaryDirectory(prefix="vkpi-contract-upload-") as tmpdir:
+            local_path = Path(tmpdir) / f"upload{suffix}"
+            size = 0
+            with local_path.open("wb") as out:
+                while True:
+                    chunk = await file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > MAX_CONTRACT_UPLOAD_BYTES:
+                        raise HTTPException(status_code=413, detail="contract file too large")
+                    out.write(chunk)
+            return contracts.create_contract_from_file(
+                project_id,
+                str(local_path),
+                file_name=filename,
+                mime_type=file.content_type or "",
+                assignment_id=assignment_id,
+                kol_pool_id=kol_pool_id,
+                staff=staff,
+            )
+    except HTTPException:
+        raise
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/projects/{project_id}/contracts/{contract_id}/download")
+def project_contract_download(project_id: int, contract_id: int, staff=Depends(require_tab("vkpi", "read"))):
+    try:
+        return contracts.contract_download_url(project_id, contract_id, staff=staff)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
+@router.patch("/projects/{project_id}/contracts/{contract_id}")
+def update_project_contract(project_id: int, contract_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
+    try:
+        return contracts.update_contract(project_id, contract_id, body or {}, staff=staff)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
+@router.post("/projects/{project_id}/contracts/{contract_id}/confirm")
+def confirm_project_contract(project_id: int, contract_id: int, body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
+    try:
+        return contracts.confirm_contract(project_id, contract_id, body or {}, staff=staff)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
+@router.post("/projects/{project_id}/contracts/{contract_id}/extract")
+def extract_project_contract(project_id: int, contract_id: int, staff=Depends(require_tab("vkpi", "write"))):
+    try:
+        return contracts.run_contract_extraction(project_id, contract_id, staff=staff)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
 
 
 @router.post("/projects/{project_id}/kols")
