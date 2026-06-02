@@ -24,6 +24,35 @@ export interface VkpiAnalysisCacheResponse {
   entry?: VkpiAnalysisCacheEntry | null;
 }
 
+export interface VkpiProjectVideoAnalysisCacheItem {
+  assignment_id?: number | null;
+  kol_pool_id?: number | null;
+  kol_name?: string | null;
+  handle?: string | null;
+  platform?: string | null;
+  evidence_id?: number | null;
+  content_url?: string | null;
+  title?: string | null;
+  thumbnail_url?: string | null;
+  view_count?: number | null;
+  like_count?: number | null;
+  comment_count?: number | null;
+  publish_date?: string | null;
+  state: "ready" | "pending";
+  entry?: VkpiAnalysisCacheEntry | null;
+}
+
+export interface VkpiProjectVideoAnalysisCacheResponse {
+  project_id: number;
+  derive_method: string;
+  items: VkpiProjectVideoAnalysisCacheItem[];
+  summary: {
+    evidence_count: number;
+    ready_count: number;
+    pending_count: number;
+  };
+}
+
 export interface VkpiCreateProjectPayload {
   projectName: string;
   kolId?: string;
@@ -73,6 +102,18 @@ export async function getAnalysisCache(token: string, targetType: string, target
   if (deriveMethod) params.set("derive_method", deriveMethod);
   return apiFetch<VkpiAnalysisCacheResponse>(
     `/api/admin/vkpi/analysis-cache?${params.toString()}`,
+    { cache: "no-store" },
+    token,
+  );
+}
+
+export async function getProjectVideoAnalysisCache(token: string, projectId: string, deriveMethod = "video_analysis_final_v1") {
+  const params = new URLSearchParams({
+    derive_method: deriveMethod,
+    _ts: String(Date.now()),
+  });
+  return apiFetch<VkpiProjectVideoAnalysisCacheResponse>(
+    `/api/admin/vkpi/projects/${encodeURIComponent(projectId)}/video-analysis-cache?${params.toString()}`,
     { cache: "no-store" },
     token,
   );

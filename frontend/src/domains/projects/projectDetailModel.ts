@@ -147,6 +147,7 @@ export interface ContractLine {
 }
 
 export interface ProjectDetailViewProps {
+  apiToken?: string;
   project: VkpiProjectRow;
   projects: VkpiProjectRow[];
   participatingRows?: VkpiProjectRow[];

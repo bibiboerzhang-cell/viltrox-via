@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react';
+import { Component, useMemo, useState, type ErrorInfo, type ReactNode } from 'react';
 import { Activity, AlertCircle, BookOpen, Boxes, Check, DollarSign, Download, Edit3, ExternalLink, Eye, FileText, Heart, ImageIcon, MessageCircle, MousePointerClick, Package, Plus, Send, Shield, ShoppingCart, Sparkles, TrendingUp, Upload, Video, X } from 'lucide-react';
 import { stageLabels } from '../../shared/vkpiConstants';
 import type { VkpiProjectRow } from '../../vkpiTypes';
+import type { VkpiAnalysisCacheEntry, VkpiProjectVideoAnalysisCacheItem, VkpiProjectVideoAnalysisCacheResponse } from '../../../../services/vkpi/projects-api';
 import { formatLargeNum, formatMoneyShort, healthColor, PROJECT_STAGE_COLOR, PROJECT_STAGE_FLOW } from './projectDeliverableStyle';
 import {
   bottleneckForRows,
@@ -564,11 +565,304 @@ function analyticsWatchTime(row: VkpiProjectRow) {
   return '—';
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function textFrom(value: unknown): string {
+  if (value == null) return '';
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number') return String(value);
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  if (Array.isArray(value)) return value.map(textFrom).filter(Boolean).join(' / ');
+  const record = asRecord(value);
+  for (const key of ['rationale', 'evaluation', 'summary', 'text', 'reason', 'value', 'evidence', 'flag']) {
+    if (!(key in record)) continue;
+    const text = textFrom(record[key]);
+    if (text) return text;
+  }
+  return '';
+}
+
+function normaliseScore(value: unknown, fallback?: unknown) {
+  const source = value ?? fallback;
+  if (typeof source === 'number' && Number.isFinite(source)) return { score: Math.round(source), rationale: '', confidence: null as number | null };
+  const record = asRecord(source);
+  const rawScore = Number(record.score ?? record.value);
+  const rawConfidence = Number(record.confidence);
+  return {
+    score: Number.isFinite(rawScore) ? Math.round(rawScore) : null,
+    rationale: textFrom(record.rationale ?? record.evaluation ?? record.reason),
+    confidence: Number.isFinite(rawConfidence) ? rawConfidence : null,
+  };
+}
+
+function analysisScoreColor(score: number | null) {
+  if (score == null) return '#94a3b8';
+  if (score >= 80) return '#34d399';
+  if (score >= 60) return '#facc15';
+  return '#fb7185';
+}
+
+function finalV1Payload(entry?: VkpiAnalysisCacheEntry | null) {
+  const result = asRecord(entry?.result);
+  return asRecord(result.video_analysis_final_v1).layer1_visual_content ? asRecord(result.video_analysis_final_v1) : result;
+}
+
+function layerValue(layer: Record<string, unknown>, key: string, scoreFallback?: unknown) {
+  const raw = layer[key];
+  const directScore = normaliseScore(raw);
+  const fallbackScore = normaliseScore(scoreFallback);
+  const score = directScore.score != null ? directScore : fallbackScore;
+  return {
+    score: score.score,
+    confidence: score.confidence,
+    text: textFrom(raw) || score.rationale || '证据不足，等待更多分析结果。',
+  };
+}
+
+function compactText(value: string, max = 150) {
+  if (!value) return '暂无明确结论';
+  return value.length > max ? `${value.slice(0, max)}...` : value;
+}
+
+function firstText(...values: unknown[]) {
+  for (const value of values) {
+    const text = textFrom(value);
+    if (text) return text;
+  }
+  return '';
+}
+
+function normaliseRiskFlags(value: unknown) {
+  if (Array.isArray(value)) {
+    return value.map((item, index) => {
+      const record = asRecord(item);
+      const flag = textFrom(record.flag) || `risk_${index + 1}`;
+      const evidence = textFrom(record.evidence);
+      const severity = String(record.severity || '').toLowerCase();
+      return {
+        label: evidence ? `${flag}: ${evidence}` : flag,
+        severity,
+      };
+    }).filter((item) => item.label);
+  }
+  const text = textFrom(value);
+  return text ? [{ label: text, severity: /高|high|严重/i.test(text) ? 'high' : '' }] : [];
+}
+
+class RetrospectiveCardErrorBoundary extends Component<{ children: ReactNode; label: string }, { hasError: boolean }> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, _info: ErrorInfo) {
+    console.warn('final_v1 analysis card render failed', this.props.label, error);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="rounded-lg border border-rose-400/20 bg-rose-500/[0.04] p-3 text-[10.5px] text-rose-200">
+          final_v1 卡片渲染异常：{this.props.label}。该条结果仍保留在缓存中，等待字段 normalizer 补齐。
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function rowAnalysisKeys(row: VkpiProjectRow) {
+  return [
+    row.assignmentId ? `assignment:${row.assignmentId}` : '',
+    row.kolPoolId ? `kol:${row.kolPoolId}` : '',
+    row.videoUrl ? `url:${row.videoUrl}` : '',
+    row.evidenceUrl ? `url:${row.evidenceUrl}` : '',
+    row.latestVideoUrl ? `url:${row.latestVideoUrl}` : '',
+    row.latestEvidenceUrl ? `url:${row.latestEvidenceUrl}` : '',
+  ].filter(Boolean);
+}
+
+function buildAnalysisItemMap(items: VkpiProjectVideoAnalysisCacheItem[]) {
+  const map = new Map<string, VkpiProjectVideoAnalysisCacheItem[]>();
+  const add = (key: string, item: VkpiProjectVideoAnalysisCacheItem) => {
+    const list = map.get(key) || [];
+    list.push(item);
+    map.set(key, list);
+  };
+  items.forEach((item) => {
+    if (item.assignment_id != null) add(`assignment:${item.assignment_id}`, item);
+    if (item.kol_pool_id != null) add(`kol:${item.kol_pool_id}`, item);
+    if (item.content_url) add(`url:${item.content_url}`, item);
+  });
+  return map;
+}
+
+function analysisItemsForRow(row: VkpiProjectRow, map: Map<string, VkpiProjectVideoAnalysisCacheItem[]>) {
+  const seen = new Set<string>();
+  const items: VkpiProjectVideoAnalysisCacheItem[] = [];
+  rowAnalysisKeys(row).forEach((key) => {
+    (map.get(key) || []).forEach((item) => {
+      const id = String(item.evidence_id ?? item.content_url ?? `${key}:${items.length}`);
+      if (seen.has(id)) return;
+      seen.add(id);
+      items.push(item);
+    });
+  });
+  return items;
+}
+
+function ProjectVideoAnalysisCard({
+  row,
+  item,
+}: {
+  row: VkpiProjectRow;
+  item: VkpiProjectVideoAnalysisCacheItem;
+}) {
+  const ready = item.state === 'ready' && item.entry;
+  const displayName = row.kolName || item.kol_name || item.handle || 'Unknown';
+  const videoUrl = item.content_url || retrospectiveVideoUrl(row);
+  const views = item.view_count ?? row.views ?? 0;
+  const likes = item.like_count ?? row.likes ?? 0;
+  const comments = item.comment_count ?? row.comments ?? 0;
+  const payload = ready ? finalV1Payload(item.entry) : {};
+  const layer2 = asRecord(payload.layer2_viewer_emotion);
+  const layer3 = asRecord(payload.layer3_three_values);
+  const layer6 = asRecord(payload.layer6_flags_and_scores);
+  const scores = asRecord(layer6.scores);
+  const contentScore = normaliseScore(scores.content_quality_score);
+  const marketingScore = normaliseScore(scores.marketing_value_score);
+  const viewerHeart = normaliseScore(layer2.viewer_heart_score ?? layer2.heart_movement_score, scores.viewer_heart_score);
+  const channelValue = layerValue(layer3, 'channel_value', scores.channel_value_score);
+  const assetValue = layerValue(layer3, 'asset_value', scores.asset_reuse_score);
+  const productProof = layerValue(layer3, 'product_proof_value', scores.product_proof_score);
+  const viewerReaction = firstText(layer2.one_sentence_viewer_reaction, layer2.one_sentence_viewer_feeling);
+  const dislike = firstText(layer2.dislike_or_resistance, layer2.annoyance_or_ad_fatigue);
+  const trigger = firstText(layer2.purchase_or_interest_trigger, layer2.desire_to_click_or_buy);
+  const keyHook = textFrom(layer6.key_hook);
+  const riskFlagTags = normaliseRiskFlags(layer6.risk_flags);
+  const verdict = textFrom(layer6.final_verdict) || marketingScore.rationale || keyHook;
+  const fullLayers = [
+    ['layer1 画面', payload.layer1_visual_content],
+    ['layer2 心动', payload.layer2_viewer_emotion],
+    ['layer3 价值', payload.layer3_three_values],
+    ['layer4 归因', payload.layer4_attribution],
+    ['layer5 建议', payload.layer5_recommendations],
+    ['layer6 评分', payload.layer6_flags_and_scores],
+  ];
+
+  if (!ready) {
+    return (
+      <div className="rounded-lg border border-white/[0.05] bg-white/[0.012] p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-[11px] font-semibold text-slate-300 truncate">{displayName}</div>
+            <div className="text-[9.5px] text-slate-500 truncate">{item.platform || row.platform} · evidence #{item.evidence_id || '-'}</div>
+          </div>
+          <span className="px-2 py-1 rounded bg-white/[0.05] text-slate-400 text-[10px] shrink-0">分析队列中</span>
+        </div>
+        <div className="mt-2 text-[10.5px] text-slate-500">Worker 正在后台跑 final_v1，结果写入缓存后这里会亮起。</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-lg border border-cyan-400/20 bg-cyan-400/[0.035] p-3 space-y-3">
+      <div className="flex items-center gap-3">
+        {row.kolAvatar ? (
+          <img src={row.kolAvatar} alt={displayName} className="w-8 h-8 rounded-full object-cover shrink-0" />
+        ) : (
+          <div className="w-8 h-8 rounded-full bg-cyan-500/15 text-cyan-200 flex items-center justify-center text-[11px] font-bold shrink-0">{retrospectiveRowInitial(row)}</div>
+        )}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-semibold text-white truncate">{displayName}</span>
+            <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 text-[9.5px]">已分析</span>
+          </div>
+          <div className="text-[9.5px] text-slate-500 truncate">{item.platform || row.platform} · 播放 {formatLargeNum(views)} · 赞 {formatLargeNum(likes)} · 评论 {formatLargeNum(comments)}</div>
+        </div>
+        {videoUrl ? <a href={videoUrl} target="_blank" rel="noreferrer" className="text-[10px] text-cyan-300 shrink-0">看视频</a> : null}
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        {[
+          ['内容质量', contentScore],
+          ['投放价值', marketingScore],
+        ].map(([label, score]) => {
+          const itemScore = score as ReturnType<typeof normaliseScore>;
+          return (
+            <div key={label as string} className="rounded-md bg-black/30 border border-white/[0.05] px-3 py-2">
+              <div className="text-[9.5px] text-slate-500 mb-1">{label as string}</div>
+              <div className="text-[28px] font-bold leading-none tabular-nums" style={{ color: analysisScoreColor(itemScore.score) }}>{itemScore.score ?? '—'}</div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="text-[10.5px] text-slate-300 leading-relaxed">{compactText(verdict, 190)}</div>
+
+      <div className="grid md:grid-cols-3 gap-2">
+        {[
+          ['渠道价值', channelValue],
+          ['素材复用', assetValue],
+          ['产品证明', productProof],
+        ].map(([label, value]) => {
+          const block = value as ReturnType<typeof layerValue>;
+          return (
+            <div key={label as string} className="rounded-md bg-white/[0.025] border border-white/[0.05] p-2">
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <span className="text-[9.5px] text-slate-500">{label as string}</span>
+                <span className="text-[15px] font-bold tabular-nums" style={{ color: analysisScoreColor(block.score) }}>{block.score ?? '—'}</span>
+              </div>
+              <div className="text-[10px] text-slate-300 leading-relaxed">{compactText(block.text, 92)}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="rounded-md bg-purple-500/[0.06] border border-purple-400/15 p-2.5">
+        <div className="text-[9.5px] text-purple-300 mb-1">观众心动</div>
+        <div className="italic text-[11px] text-slate-100 leading-relaxed">“{viewerReaction || '暂无一句话观众反应'}”</div>
+        <div className="mt-2 flex flex-wrap gap-1.5 text-[9.5px]">
+          <span className="px-1.5 py-0.5 rounded bg-white/[0.05] text-slate-300">心动 {viewerHeart.score ?? '—'}</span>
+          {dislike ? <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-200">反感: {compactText(dislike, 42)}</span> : null}
+          {trigger ? <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-200">种草: {compactText(trigger, 42)}</span> : null}
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-2 text-[10px]">
+        {keyHook ? <span className="px-2 py-1 rounded bg-cyan-500/10 text-cyan-200">Hook: {compactText(keyHook, 90)}</span> : null}
+        {riskFlagTags.map((flag, index) => (
+          <span key={`${flag.label}-${index}`} className={`px-2 py-1 rounded ${flag.severity === 'high' ? 'bg-rose-500/15 text-rose-200' : 'bg-amber-500/10 text-amber-200'}`}>
+            风险: {compactText(flag.label, 90)}
+          </span>
+        ))}
+      </div>
+
+      <details className="rounded-md border border-white/[0.05] bg-black/20">
+        <summary className="cursor-pointer px-3 py-2 text-[10.5px] text-cyan-200">展开完整6层</summary>
+        <div className="p-3 grid gap-2">
+          {fullLayers.map(([label, layer]) => (
+            <div key={label as string}>
+              <div className="text-[9.5px] text-slate-500 mb-1">{label as string}</div>
+              <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-black/30 p-2 text-[10px] leading-relaxed text-slate-300">{JSON.stringify(layer || {}, null, 2)}</pre>
+            </div>
+          ))}
+        </div>
+      </details>
+    </div>
+  );
+}
+
 export function CampaignRetrospectiveTab({
   project,
   rows,
   stats,
   health,
+  videoAnalysisCache,
+  videoAnalysisLoading,
+  videoAnalysisError,
   onCopy,
   onPendingAction,
 }: {
@@ -578,6 +872,9 @@ export function CampaignRetrospectiveTab({
   analytics: ProjectAnalyticsSummary;
   health: ReturnType<typeof healthForRows>;
   bottleneck: ReturnType<typeof bottleneckForRows>;
+  videoAnalysisCache?: VkpiProjectVideoAnalysisCacheResponse | null;
+  videoAnalysisLoading?: boolean;
+  videoAnalysisError?: string;
   onCopy: (text: string, label: string) => Promise<void>;
   onPendingAction: (label: string) => void;
 }) {
@@ -589,6 +886,8 @@ export function CampaignRetrospectiveTab({
   const withShopify = publishedKols.filter((row) => Boolean(row.shopifyLink || row.clicks || row.orders || row.gmv));
   const withoutShopify = publishedKols.filter((row) => !withShopify.includes(row));
   const retrospectiveDraft = buildRetrospectiveDraftText(project, rows, stats, projectHealth, publishedKols, withShopify, withoutShopify);
+  const analysisItemMap = useMemo(() => buildAnalysisItemMap(videoAnalysisCache?.items || []), [videoAnalysisCache?.items]);
+  const analysisSummary = videoAnalysisCache?.summary;
 
   function compositeScore(row: VkpiProjectRow) {
     const hasShopify = Boolean(row.shopifyLink || row.clicks || row.orders || row.gmv);
@@ -632,6 +931,20 @@ export function CampaignRetrospectiveTab({
               ) : null}
               {publishedKols.length === 0 ? '等待 KOL 推进到「已发布」阶段后开始复盘。' : null}
             </div>
+            <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2">
+              {[
+                ['成品视频', analysisSummary?.evidence_count ?? 0, '#06b6d4'],
+                ['已分析', analysisSummary?.ready_count ?? 0, '#10b981'],
+                ['队列中', analysisSummary?.pending_count ?? 0, '#facc15'],
+                ['后续维度', '沟通/合同/时效/反馈', '#a855f7'],
+              ].map(([label, value, color]) => (
+                <div key={label as string} className="rounded-md border border-white/[0.05] bg-black/20 px-2.5 py-2">
+                  <div className="text-[9px] text-slate-500 mb-0.5">{label as string}</div>
+                  <div className="text-[12px] font-semibold" style={{ color: color as string }}>{String(value)}</div>
+                </div>
+              ))}
+            </div>
+            {videoAnalysisError ? <div className="mt-2 text-[10px] text-rose-300">final_v1 缓存读取失败：{videoAnalysisError}</div> : null}
           </div>
         </div>
       </div>
@@ -651,9 +964,10 @@ export function CampaignRetrospectiveTab({
             const videoUrl = retrospectiveVideoUrl(row);
             const videoTitle = retrospectiveVideoTitle(row, projectTitle);
             const shares = retrospectiveNumberField(row, ['shares', 'shareCount', 'share_count']);
+            const analysisItems = analysisItemsForRow(row, analysisItemMap);
 
             return (
-              <div key={row.id} className={`rounded-lg border p-4 ${hasShopify ? 'border-white/[0.06] bg-white/[0.015]' : 'border-white/[0.04] bg-white/[0.008] opacity-70'}`}>
+              <div key={row.id} className={`rounded-lg border p-4 ${hasShopify ? 'border-white/[0.06] bg-white/[0.015]' : 'border-white/[0.04] bg-white/[0.008]'}`}>
                 <div className="flex items-center gap-3 mb-3">
                   {row.kolAvatar ? (
                     <img src={row.kolAvatar} alt={displayName} className="w-10 h-10 rounded-full object-cover shrink-0" />
@@ -702,11 +1016,43 @@ export function CampaignRetrospectiveTab({
                 <div className="flex items-start gap-2 mb-3 px-2.5 py-2 rounded bg-purple-500/5">
                   <Sparkles size={11} className="text-purple-300 mt-0.5 shrink-0" />
                   <div className="text-[10.5px] text-slate-300 leading-relaxed">
-                    <span className="text-purple-300 font-medium">AI 画面分析: </span>
+                    <span className="text-purple-300 font-medium">项目表现摘要: </span>
                     {hasShopify
                       ? `内容表现已汇总 · 曝光 ${formatLargeNum(row.views)} · 互动 ${formatLargeNum((row.likes || 0) + (row.comments || 0) + shares)} · Shopify 点击 ${formatLargeNum(row.clicks || 0)} · 归因 GMV ${formatMoneyShort(row.gmv)}`
                       : `内容表现已汇总 · 曝光 ${formatLargeNum(row.views)} · 互动 ${formatLargeNum((row.likes || 0) + (row.comments || 0) + shares)} · 尚未接 Shopify 归因,综合得分暂不计算`}
                   </div>
+                </div>
+
+                <div className="mb-3 rounded-lg border border-white/[0.05] bg-black/20 p-3">
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <div>
+                      <div className="text-[10px] text-slate-500">复盘维度 · 成品分析</div>
+                      <div className="text-[11.5px] text-white font-semibold">final_v1 视频分析</div>
+                    </div>
+                    <span className="text-[9.5px] text-slate-500">后续可叠加沟通截图 / PDF合同 / 时效 / 市场反馈</span>
+                  </div>
+                  {videoAnalysisLoading ? (
+                    <div className="rounded-md border border-white/[0.05] bg-white/[0.012] p-3 text-[10.5px] text-slate-400">读取 final_v1 缓存...</div>
+                  ) : analysisItems.length ? (
+                    <div className="space-y-2">
+                      {analysisItems.map((item) => (
+                        <RetrospectiveCardErrorBoundary
+                          key={String(item.evidence_id ?? item.content_url ?? `${row.id}:analysis`)}
+                          label={`${displayName} evidence #${item.evidence_id || '-'}`}
+                        >
+                          <ProjectVideoAnalysisCard
+                            row={row}
+                            item={item}
+                          />
+                        </RetrospectiveCardErrorBoundary>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-md border border-white/[0.05] bg-white/[0.012] p-3">
+                      <div className="text-[10.5px] text-slate-400">暂无分析</div>
+                      <div className="text-[9.5px] text-slate-600 mt-1">未匹配到该 KOL 的 video evidence 或 final_v1 队列记录。</div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-3 md:grid-cols-5 gap-3">

@@ -8,6 +8,7 @@ import { CampaignAnalyticsTab, CampaignContractsTab, CampaignFinanceTab, Campaig
 import { AddKolModal, ContractUploadModal, CostEntryModal, EditProjectModal, ShippingInfoModal, StageActionModal, UploadScreenshotModal, VideoUrlModal } from './ProjectDetailModals';
 import { LiveLogisticsBanner } from './LiveLogisticsBanner';
 import { ProjectParticipationTab } from './ProjectParticipationTab';
+import { getProjectVideoAnalysisCache, type VkpiProjectVideoAnalysisCacheResponse } from '../../../../services/vkpi/projects-api';
 import {
   bottleneckForRows,
   buildAnalytics,
@@ -68,6 +69,7 @@ function kolRef(row: VkpiProjectRow) {
 }
 
 export function ProjectDetailView({
+  apiToken,
   project,
   participatingRows = [],
   costRows = [],
@@ -112,11 +114,38 @@ export function ProjectDetailView({
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
   const [confirmingAction, setConfirmingAction] = useState(false);
   const [taskReminderOpen, setTaskReminderOpen] = useState(false);
+  const [videoAnalysisCache, setVideoAnalysisCache] = useState<VkpiProjectVideoAnalysisCacheResponse | null>(null);
+  const [videoAnalysisLoading, setVideoAnalysisLoading] = useState(false);
+  const [videoAnalysisError, setVideoAnalysisError] = useState('');
 
   useEffect(() => {
     setStageOverrides({});
     setMovingRowId('');
   }, [project.id, project.stage]);
+
+  useEffect(() => {
+    setVideoAnalysisCache(null);
+    setVideoAnalysisError('');
+    if (!apiToken || !project.id) {
+      setVideoAnalysisLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setVideoAnalysisLoading(true);
+    getProjectVideoAnalysisCache(apiToken, project.id)
+      .then((payload) => {
+        if (!cancelled) setVideoAnalysisCache(payload);
+      })
+      .catch((error) => {
+        if (!cancelled) setVideoAnalysisError(error instanceof Error ? error.message : 'final_v1 分析读取失败');
+      })
+      .finally(() => {
+        if (!cancelled) setVideoAnalysisLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [apiToken, project.id]);
 
   const baseRows = useMemo(() => (participatingRows.length ? participatingRows : [project]), [participatingRows, project]);
   const rows = useMemo(() => baseRows.map((row) => {
@@ -767,6 +796,9 @@ export function ProjectDetailView({
           analytics={analytics}
           health={health}
           bottleneck={bottleneck}
+          videoAnalysisCache={videoAnalysisCache}
+          videoAnalysisLoading={videoAnalysisLoading}
+          videoAnalysisError={videoAnalysisError}
           onCopy={copyMaterialText}
           onPendingAction={(label) => setNotice({ tone: 'info', title: '暂存提醒', body: `${label} 已进入项目操作队列，后续同步后更新状态。` })}
         />
