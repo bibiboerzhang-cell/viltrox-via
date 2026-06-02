@@ -29,6 +29,7 @@ LLM_BUDGET_SCOPE = os.environ.get("APIFY_WORKER_LLM_BUDGET_SCOPE", "cron:vkpi_an
 LLM_CONCURRENCY_LIMIT = max(1, min(2, int(os.environ.get("APIFY_WORKER_LLM_CONCURRENCY", "1"))))
 LLM_MAX_OUTPUT_TOKENS = int(os.environ.get("APIFY_WORKER_LLM_MAX_OUTPUT_TOKENS", "1200"))
 LLM_TARGET_TYPES = {"video", "contract"}
+GEMINI_VIDEO_DERIVE_METHODS = {"gemini", "gemini_video_v2"}
 _stop_event = threading.Event()
 
 
@@ -160,14 +161,25 @@ def _load_video_evidence(conn: psycopg.Connection[Any], target_id: str) -> dict[
               COALESCE(e.video_title, e.title, '') AS title,
               e.platform,
               e.view_count,
+              e.like_count,
+              e.comment_count,
+              e.share_count,
               e.duration_seconds,
               e.publish_date,
+              e.metrics_source,
+              e.metrics_scraped_at,
               e.project_id,
               e.kol_pool_id,
+              p.project_name,
+              p.product_name,
               COALESCE(kp.handle, '') AS creator_handle,
-              COALESCE(kp.display_name, '') AS creator_name
+              COALESCE(kp.display_name, '') AS creator_name,
+              kp.followers,
+              kp.avg_views,
+              kp.engagement_rate
             FROM vkpi_kol_video_evidence e
             LEFT JOIN vkpi_kol_pool kp ON kp.id = e.kol_pool_id
+            LEFT JOIN vkpi_projects p ON p.id = e.project_id
             WHERE e.id = %s
             LIMIT 1
             """,
@@ -215,6 +227,54 @@ def _truthy(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _rate(numerator: Any, denominator: Any) -> float | None:
+    top = _int_or_none(numerator)
+    bottom = _int_or_none(denominator)
+    if top is None or bottom is None or bottom <= 0:
+        return None
+    return round(top / bottom, 6)
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _iso_or_none(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def _video_performance_context(evidence: dict[str, Any]) -> dict[str, Any]:
+    views = _int_or_none(evidence.get("view_count"))
+    return {
+        "view_count": views,
+        "like_count": _int_or_none(evidence.get("like_count")),
+        "comment_count": _int_or_none(evidence.get("comment_count")),
+        "share_count": _int_or_none(evidence.get("share_count")),
+        "like_rate": _rate(evidence.get("like_count"), views),
+        "comment_rate": _rate(evidence.get("comment_count"), views),
+        "duration_seconds": _int_or_none(evidence.get("duration_seconds")),
+        "publish_date": _iso_or_none(evidence.get("publish_date")),
+        "metrics_source": evidence.get("metrics_source"),
+        "metrics_scraped_at": _iso_or_none(evidence.get("metrics_scraped_at")),
+        "account_baseline": {
+            "followers": _int_or_none(evidence.get("followers")),
+            "avg_views": _int_or_none(evidence.get("avg_views")),
+            "engagement_rate": _float_or_none(evidence.get("engagement_rate")),
+        },
+        "relative_to_account_baseline_allowed": False,
+        "relative_baseline_note": "followers/avg_views are often missing; use absolute performance only.",
+    }
+
+
 @contextmanager
 def _gemini_worker_overrides(payload: dict[str, Any]):
     model_override = str(payload.get("gemini_model") or os.environ.get("APIFY_WORKER_GEMINI_MODEL") or "").strip()
@@ -244,7 +304,43 @@ def _shape_gemini_result(
     cost_basis: str,
     preflight_cost: float,
     latency_ms: int,
+    derive_method: str,
 ) -> dict[str, Any]:
+    if derive_method == "gemini_video_v2":
+        v2 = raw.get("video_analysis_v2") if isinstance(raw.get("video_analysis_v2"), dict) else {}
+        layer3 = dict(v2.get("layer3_integrated_judgment") or {})
+        layer3["performance_metrics"] = _video_performance_context(evidence)
+        return {
+            "schema_version": "video_analysis_v2",
+            "mock": False,
+            "analysis_method": "gemini_video_v2",
+            "job_id": job.get("id"),
+            "target_type": "video",
+            "target_id": str(evidence.get("id")),
+            "source": {
+                "url": evidence.get("content_url"),
+                "title": evidence.get("title"),
+                "platform": evidence.get("platform"),
+                "creator_handle": evidence.get("creator_handle"),
+                "creator_name": evidence.get("creator_name"),
+                "project_id": evidence.get("project_id"),
+                "project_name": evidence.get("project_name"),
+                "product_name": evidence.get("product_name"),
+                "kol_pool_id": evidence.get("kol_pool_id"),
+            },
+            "layer1_visual_content": v2.get("layer1_visual_content") or {},
+            "layer2_video_scores": v2.get("layer2_video_scores") or {},
+            "layer3_integrated_judgment": layer3,
+            "cost": {
+                "recorded_cost_usd": cost,
+                "cost_basis": cost_basis,
+                "preflight_estimated_cost_usd": preflight_cost,
+                "usage_metadata": raw.get("usage_metadata") if isinstance(raw.get("usage_metadata"), dict) else {},
+                "latency_ms": latency_ms,
+            },
+            "raw_gemini_video": raw,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
     quality_scores = raw.get("quality_scores") if isinstance(raw.get("quality_scores"), dict) else {}
     return {
         "mock": False,
@@ -333,6 +429,7 @@ def _process_gemini_video(
     preflight_cost: float,
 ) -> None:
     target_type, target_id = _target(payload)
+    derive_method = _derive_method(payload)
     if target_type != "video":
         _block_job(conn, int(job["id"]), "unsupported_gemini_target_type", {"target_type": target_type})
         return
@@ -350,6 +447,8 @@ def _process_gemini_video(
                 str(evidence.get("content_url") or ""),
                 str(evidence.get("title") or ""),
                 str(evidence.get("creator_handle") or ""),
+                schema_version="v2" if derive_method == "gemini_video_v2" else "legacy",
+                performance_context=_video_performance_context(evidence) if derive_method == "gemini_video_v2" else None,
             )
         )
     if model_override and raw.get("analyzed"):
@@ -391,6 +490,7 @@ def _process_gemini_video(
         cost_basis=cost_basis,
         preflight_cost=preflight_cost,
         latency_ms=latency_ms,
+        derive_method=derive_method,
     )
     with conn.transaction():
         with conn.cursor() as cur:
@@ -400,7 +500,7 @@ def _process_gemini_video(
                   target_type, target_id, model, derive_method, result, cost,
                   status, triggered_by_user_id, created_at, updated_at
                 )
-                VALUES (%s, %s, %s, 'gemini', %s::jsonb, %s, 'ready', %s, NOW(), NOW())
+                VALUES (%s, %s, %s, %s, %s::jsonb, %s, 'ready', %s, NOW(), NOW())
                 ON CONFLICT (target_type, target_id, derive_method)
                 DO UPDATE SET
                   model = EXCLUDED.model,
@@ -414,6 +514,7 @@ def _process_gemini_video(
                     target_type,
                     target_id,
                     str(raw.get("model") or raw.get("method") or "gemini_video"),
+                    derive_method,
                     _json(shaped),
                     cost,
                     triggered_by_user_id,
@@ -475,7 +576,7 @@ def _process_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> None:
             if not allowed:
                 _block_job(conn, int(job["id"]), reason, {"estimated_cost_usd": estimated_cost, "budget_scope": LLM_BUDGET_SCOPE})
                 return
-            if derive_method == "gemini":
+            if derive_method in GEMINI_VIDEO_DERIVE_METHODS:
                 _process_gemini_video(conn, job, payload, estimated_cost)
                 return
             _block_job(conn, int(job["id"]), "unsupported_llm_derive_method", {"derive_method": derive_method})

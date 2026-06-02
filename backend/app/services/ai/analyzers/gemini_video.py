@@ -28,6 +28,18 @@ from app.services.scoring.verticals import apply_learned_weights
 logger = get_logger(__name__)
 
 
+VIDEO_V2_SCORE_KEYS = (
+    "video_specialty",
+    "product_fit",
+    "product_showcase",
+    "brand_exposure",
+    "production_quality",
+    "storytelling",
+    "authenticity",
+    "competitor_context",
+)
+
+
 def _response_usage_metadata(resp: Any) -> dict[str, Any]:
     usage = getattr(resp, "usage_metadata", None)
     if not usage:
@@ -54,7 +66,175 @@ def _response_usage_metadata(resp: Any) -> dict[str, Any]:
     return output
 
 
-async def analyze_youtube_with_gemini(url: str, title: str, creator_handle: str = "") -> dict:
+def _video_v2_prompt(
+    *,
+    title: str,
+    profile_ctx: str,
+    subtitle_ctx: str,
+    subtitle_used: bool,
+    performance_context: dict[str, Any] | None,
+) -> str:
+    metrics = json.dumps(performance_context or {}, ensure_ascii=False, default=str)
+    return f"""你是 Viltrox (唯卓仕) 品牌资深视频内容分析师。请仔细观看完整视频画面和音频。{profile_ctx}{subtitle_ctx}
+视频标题: {title}
+播放表现数据（只做绝对表现判断；没有账号基准，不要判断“相对该 KOL 平时”）:
+{metrics}
+
+只返回 JSON，不要 Markdown。必须按以下三层 schema 输出；评不出的字段用 null，confidence=0，不能瞎编。
+每个评分项 score 为 0-100 或 null，confidence 为 0-1，evidence 必须列出画面/字幕依据。
+
+{{
+  "layer1_visual_content": {{
+    "content_summary": "这条视频拍了什么、讲了什么",
+    "scene_timeline": [{{"timestamp": "MM:SS", "what": "关键画面/内容"}}],
+    "product_presence": {{
+      "hero_product": true,
+      "closeup_time_pct": 20,
+      "products": ["Viltrox 产品精确名称"],
+      "selling_points_shown": ["展示到的卖点"],
+      "notes": "产品出镜是否充分"
+    }},
+    "brand_exposure": {{
+      "logo_scenes": [{{"timestamp": "MM:SS", "scene": "Logo/品牌露出场景"}}],
+      "sufficient": true,
+      "notes": "品牌露出是否充分"
+    }},
+    "competitor_presence": [{{"brand": "竞品品牌", "scene": "出现/提及场景"}}],
+    "production_observations": {{
+      "composition": "构图客观描述",
+      "lighting": "光线客观描述",
+      "color_grade": "调色客观描述",
+      "professional_level": "amateur/semi-pro/professional/broadcast",
+      "notes": "制作质量观察"
+    }},
+    "evidence": {{"timestamps": ["MM:SS 依据"], "subtitle_used": {str(bool(subtitle_used)).lower()}}}
+  }},
+  "layer2_video_scores": {{
+    "score_scale": "0-100",
+    "scores": {{
+      "video_specialty": {{"score": 0, "confidence": 0.0, "evidence": ["视频题材/类型契合度依据"]}},
+      "product_fit": {{"score": 0, "confidence": 0.0, "evidence": ["这视频/这KOL适合推此产品的依据"]}},
+      "product_showcase": {{"score": 0, "confidence": 0.0, "evidence": ["卖点是否讲清/展示到位依据"]}},
+      "brand_exposure": {{"score": 0, "confidence": 0.0, "evidence": ["品牌露出依据"]}},
+      "production_quality": {{"score": 0, "confidence": 0.0, "evidence": ["制作质量依据"]}},
+      "storytelling": {{"score": 0, "confidence": 0.0, "evidence": ["叙事/吸引力依据"]}},
+      "authenticity": {{"score": 0, "confidence": 0.0, "evidence": ["真实推荐还是模板化恰饭依据"]}},
+      "competitor_context": {{"score": 0, "confidence": 0.0, "evidence": ["竞品对比/风险依据"]}}
+    }},
+    "dimensions11_mapping": {{
+      "content_specialty": "video_specialty",
+      "product_fit": "product_fit",
+      "competitor_risk_score": "competitor_context"
+    }}
+  }},
+  "layer3_integrated_judgment": {{
+    "advantages": ["这视频好在哪"],
+    "weaknesses": ["这视频差在哪"],
+    "homogeneity": {{"is_homogeneous": false, "unique_points": ["独特点"], "rationale": "是否同质化的判断"}},
+    "better_direction": {{"better_products": ["更适合推的产品/系列"], "content_adjustments": ["内容方向建议"], "rationale": "理由"}},
+    "cooperation_recommendation": {{"recommendation": "continue/cautious/not_recommended", "reason": "后续合作理由"}},
+    "content_value_score": {{"score": 0, "confidence": 0.0, "rationale": "视频本身做得好不好"}},
+    "placement_value_score": {{"score": 0, "confidence": 0.0, "rationale": "对 Viltrox 投放值不值；说明无账号基准，仅基于绝对播放表现"}}
+  }}
+}}"""
+
+
+def _score_value(entry: Any) -> float | int | None:
+    if not isinstance(entry, dict):
+        return None
+    value = entry.get("score")
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    parsed = max(0.0, min(100.0, parsed))
+    return int(parsed) if parsed.is_integer() else round(parsed, 2)
+
+
+def _normalise_v2_result(parsed: dict[str, Any], *, subtitle_used: bool) -> dict[str, Any]:
+    layer1 = parsed.get("layer1_visual_content") if isinstance(parsed.get("layer1_visual_content"), dict) else {}
+    layer2 = parsed.get("layer2_video_scores") if isinstance(parsed.get("layer2_video_scores"), dict) else {}
+    layer3 = parsed.get("layer3_integrated_judgment") if isinstance(parsed.get("layer3_integrated_judgment"), dict) else {}
+    evidence = layer1.get("evidence") if isinstance(layer1.get("evidence"), dict) else {}
+    evidence["subtitle_used"] = bool(evidence.get("subtitle_used", subtitle_used))
+    layer1["evidence"] = evidence
+    scores = layer2.get("scores") if isinstance(layer2.get("scores"), dict) else {}
+    for key in VIDEO_V2_SCORE_KEYS:
+        entry = scores.get(key)
+        if not isinstance(entry, dict):
+            scores[key] = {"score": None, "confidence": 0, "evidence": []}
+            continue
+        if _score_value(entry) is None:
+            entry["score"] = None
+            entry["confidence"] = 0
+        entry["evidence"] = entry.get("evidence") if isinstance(entry.get("evidence"), list) else []
+    layer2["scores"] = scores
+    layer2["dimensions11_mapping"] = {
+        "content_specialty": "video_specialty",
+        "product_fit": "product_fit",
+        "competitor_risk_score": "competitor_context",
+    }
+    return {
+        "schema_version": "gemini_video_v2",
+        "layer1_visual_content": layer1,
+        "layer2_video_scores": layer2,
+        "layer3_integrated_judgment": layer3,
+    }
+
+
+def _apply_v2_result(
+    result: dict[str, Any],
+    parsed: dict[str, Any],
+    *,
+    method: str,
+    model: str,
+    usage_metadata: dict[str, Any],
+    subtitle_used: bool,
+) -> None:
+    payload = _normalise_v2_result(parsed, subtitle_used=subtitle_used)
+    layer1 = payload["layer1_visual_content"]
+    layer2 = payload["layer2_video_scores"]
+    layer3 = payload["layer3_integrated_judgment"]
+    evidence = layer1.get("evidence") if isinstance(layer1.get("evidence"), dict) else {}
+    timeline = layer1.get("scene_timeline") if isinstance(layer1.get("scene_timeline"), list) else []
+    quality_scores = {
+        key: value
+        for key, entry in (layer2.get("scores") or {}).items()
+        if (value := _score_value(entry)) is not None
+    }
+    content_value = layer3.get("content_value_score") if isinstance(layer3.get("content_value_score"), dict) else {}
+    result.update(
+        {
+            "analyzed": True,
+            "method": method,
+            "model": model,
+            "usage_metadata": usage_metadata,
+            "schema_version": "gemini_video_v2",
+            "video_analysis_v2": payload,
+            "content_summary": layer1.get("content_summary") or "",
+            "content_genre": "video_analysis_v2",
+            "content_topic": layer1.get("content_summary") or "",
+            "production_quality": (layer1.get("production_observations") or {}).get("professional_level")
+            if isinstance(layer1.get("production_observations"), dict)
+            else "",
+            "timestamps": evidence.get("timestamps") if isinstance(evidence.get("timestamps"), list) else timeline,
+            "competitor_mentions": layer1.get("competitor_presence") if isinstance(layer1.get("competitor_presence"), list) else [],
+            "quality_scores": quality_scores,
+            "quality_overall": _score_value(content_value) or 0,
+        }
+    )
+
+
+async def analyze_youtube_with_gemini(
+    url: str,
+    title: str,
+    creator_handle: str = "",
+    *,
+    schema_version: str = "legacy",
+    performance_context: dict[str, Any] | None = None,
+) -> dict:
     """
     Gemini YouTube analysis via File API:
     1. Download first 2min with yt-dlp
@@ -98,7 +278,17 @@ async def analyze_youtube_with_gemini(url: str, title: str, creator_handle: str 
             "不允许猜测或等间隔填写。"
         )
 
-    prompt = f"""你是 Viltrox (唯卓仕) 品牌资深内容分析师。请仔细观看这个完整视频的每一帧画面和音频。{profile_ctx}{subtitle_ctx}
+    is_v2 = str(schema_version or "").strip().lower() == "v2"
+    if is_v2:
+        prompt = _video_v2_prompt(
+            title=title,
+            profile_ctx=profile_ctx,
+            subtitle_ctx=subtitle_ctx,
+            subtitle_used=bool(subtitle_raw),
+            performance_context=performance_context,
+        )
+    else:
+        prompt = f"""你是 Viltrox (唯卓仕) 品牌资深内容分析师。请仔细观看这个完整视频的每一帧画面和音频。{profile_ctx}{subtitle_ctx}
 视频标题: {title}
 
 === 第一步：识别内容类型 ===
@@ -302,6 +492,21 @@ vlog类：真实感、器材自然使用是核心
                     raw = resp.text.strip()
                     raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
                     parsed = json.loads(raw)
+                    if is_v2:
+                        _apply_v2_result(
+                            result,
+                            parsed,
+                            method=f"gemini_direct_{model_name}",
+                            model=model_name,
+                            usage_metadata=usage_metadata,
+                            subtitle_used=bool(subtitle_raw),
+                        )
+                        logger.info(
+                            "gemini_fast_path_v2_success",
+                            extra={"model": model_name, "timestamps": len(result.get("timestamps") or [])},
+                        )
+                        _fast_path_success = True
+                        break
                     
                     # Mirror the parsing logic from slow path (Step 4)
                     result["analyzed"]             = True
@@ -514,6 +719,20 @@ vlog类：真实感、器材自然使用是核心
                     raw = resp.text.strip()
                     raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
                     parsed = json.loads(raw)
+                    if is_v2:
+                        _apply_v2_result(
+                            result,
+                            parsed,
+                            method=f"gemini_fileapi_{model_name}",
+                            model=model_name,
+                            usage_metadata=usage_metadata,
+                            subtitle_used=bool(subtitle_raw),
+                        )
+                        logger.info(
+                            "gemini_fileapi_v2_success",
+                            extra={"model": model_name, "timestamps": len(result.get("timestamps") or [])},
+                        )
+                        break
 
                     result["analyzed"]             = True
                     result["method"]               = f"gemini_fileapi_{model_name}"
