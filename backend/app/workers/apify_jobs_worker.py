@@ -43,7 +43,8 @@ GEMINI_VIDEO_V2_DERIVE_METHODS = {
     "gemini_video_v2_flash_gpt55_judge",
     "gemini_video_v2_flash_claude_judge",
 }
-GEMINI_VIDEO_DERIVE_METHODS = {"gemini", *GEMINI_VIDEO_V2_DERIVE_METHODS}
+GEMINI_VIDEO_FINAL_DERIVE_METHODS = {"video_analysis_final_v1"}
+GEMINI_VIDEO_DERIVE_METHODS = {"gemini", *GEMINI_VIDEO_V2_DERIVE_METHODS, *GEMINI_VIDEO_FINAL_DERIVE_METHODS}
 WORKER_GEMINI_MODEL = os.environ.get("APIFY_WORKER_GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
 _stop_event = threading.Event()
 
@@ -446,6 +447,20 @@ def _video_performance_context(evidence: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _video_final_context(evidence: dict[str, Any]) -> dict[str, Any]:
+    context = _video_performance_context(evidence)
+    context["product_context"] = {
+        "product_name": evidence.get("product_name"),
+        "project_name": evidence.get("project_name"),
+        "project_id": evidence.get("project_id"),
+        "creator_handle": evidence.get("creator_handle"),
+        "creator_name": evidence.get("creator_name"),
+        "kol_pool_id": evidence.get("kol_pool_id"),
+        "campaign_goal": "sell Viltrox lenses and validate lens proof; not to grow the KOL account",
+    }
+    return context
+
+
 def _select_keyframe_requests(layer1: dict[str, Any], limit: int = 6) -> list[dict[str, str]]:
     timeline = layer1.get("scene_timeline") if isinstance(layer1.get("scene_timeline"), list) else []
     candidates = [
@@ -534,6 +549,52 @@ def _shape_gemini_result(
     latency_ms: int,
     derive_method: str,
 ) -> dict[str, Any]:
+    if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS:
+        final = raw.get("video_analysis_final_v1") if isinstance(raw.get("video_analysis_final_v1"), dict) else {}
+        model_name = str(raw.get("model") or raw.get("method") or "gemini_video")
+        return {
+            "schema_version": "video_analysis_final_v1",
+            "mock": False,
+            "analysis_method": derive_method,
+            "job_id": job.get("id"),
+            "target_type": "video",
+            "target_id": str(evidence.get("id")),
+            "source": {
+                "url": evidence.get("content_url"),
+                "title": evidence.get("title"),
+                "platform": evidence.get("platform"),
+                "creator_handle": evidence.get("creator_handle"),
+                "creator_name": evidence.get("creator_name"),
+                "project_id": evidence.get("project_id"),
+                "project_name": evidence.get("project_name"),
+                "product_name": evidence.get("product_name"),
+                "kol_pool_id": evidence.get("kol_pool_id"),
+            },
+            "performance_metrics": _video_performance_context(evidence),
+            "layer1_visual_content": final.get("layer1_visual_content") or {},
+            "layer2_viewer_emotion": final.get("layer2_viewer_emotion") or {},
+            "layer3_three_values": final.get("layer3_three_values") or {},
+            "layer4_attribution": final.get("layer4_attribution") or {},
+            "layer5_recommendations": final.get("layer5_recommendations") or {},
+            "layer6_flags_and_scores": final.get("layer6_flags_and_scores") or {},
+            "cost": {
+                "recorded_cost_usd": cost,
+                "cost_basis": cost_basis,
+                "preflight_estimated_cost_usd": preflight_cost,
+                "segments": [
+                    {
+                        "stage": "single_pass",
+                        "provider": "gemini",
+                        "model": model_name,
+                        "cost_usd": cost,
+                    }
+                ],
+                "usage_metadata": raw.get("usage_metadata") if isinstance(raw.get("usage_metadata"), dict) else {},
+                "latency_ms": latency_ms,
+            },
+            "raw_gemini_video": raw,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
     if derive_method in GEMINI_VIDEO_V2_DERIVE_METHODS:
         v2 = raw.get("video_analysis_v2") if isinstance(raw.get("video_analysis_v2"), dict) else {}
         layer3 = dict(v2.get("layer3_integrated_judgment") or {})
@@ -1211,6 +1272,9 @@ def _process_gemini_video(
     if platform in {"instagram", "tiktok"} and derive_method not in GEMINI_VIDEO_V2_DERIVE_METHODS:
         _block_job(conn, int(job["id"]), "unsupported_media_derive_method", {"platform": platform, "derive_method": derive_method})
         return
+    if platform in {"instagram", "tiktok"} and derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS:
+        _block_job(conn, int(job["id"]), "unsupported_media_derive_method", {"platform": platform, "derive_method": derive_method})
+        return
     if derive_method == "gemini_video_v2_flash_pro_judge":
         _process_gemini_video_flash_pro_judge(conn, job, payload, evidence, preflight_cost)
         return
@@ -1227,7 +1291,10 @@ def _process_gemini_video(
         str(evidence.get("content_url") or "")[:120],
     )
     started = time.monotonic()
-    with _gemini_worker_overrides(payload) as model_override:
+    analyzer_payload = payload
+    if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS:
+        analyzer_payload = {**payload, "gemini_model": "gemini-3.1-pro-preview"}
+    with _gemini_worker_overrides(analyzer_payload) as model_override:
         if platform in {"instagram", "tiktok"}:
             resolved = _resolve_video_media(evidence)
             if str(resolved.get("status") or "") == "blocked":
@@ -1253,13 +1320,18 @@ def _process_gemini_video(
                     )
                 )
         else:
+            analysis_context = _video_final_context(evidence) if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS else _video_performance_context(evidence)
             raw = asyncio.run(
                 gemini_video_analyzer.analyze_youtube_with_gemini(
                     str(evidence.get("content_url") or ""),
                     str(evidence.get("title") or ""),
                     str(evidence.get("creator_handle") or ""),
-                    schema_version="v2" if derive_method in GEMINI_VIDEO_V2_DERIVE_METHODS else "legacy",
-                    performance_context=_video_performance_context(evidence) if derive_method in GEMINI_VIDEO_V2_DERIVE_METHODS else None,
+                    schema_version="final_v1"
+                    if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS
+                    else ("v2" if derive_method in GEMINI_VIDEO_V2_DERIVE_METHODS else "legacy"),
+                    performance_context=analysis_context
+                    if derive_method in GEMINI_VIDEO_V2_DERIVE_METHODS or derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS
+                    else None,
                 )
             )
     if model_override and raw.get("analyzed"):

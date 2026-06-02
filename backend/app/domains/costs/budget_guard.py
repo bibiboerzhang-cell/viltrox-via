@@ -190,6 +190,12 @@ def check_budget_scopes(
         status = get_budget_status(scope, estimated_cost=estimated_cost)
         configured = bool(status.get("configured", False))
         scope_allowed = bool(status.get("allowed", True))
+        if scope == "single_call" and configured:
+            # single_call is a per-request ceiling, not a cumulative budget pool.
+            cap = _float(status.get("cap_usd"))
+            scope_allowed = cap <= 0 or float(estimated_cost or 0) <= cap
+            status["allowed"] = scope_allowed
+            status["hard_stopped"] = not scope_allowed
         if require_configured and not configured:
             scope_allowed = False
         check = {

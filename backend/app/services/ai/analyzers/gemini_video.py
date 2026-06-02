@@ -41,6 +41,15 @@ VIDEO_V2_SCORE_KEYS = (
     "competitor_context",
 )
 
+VIDEO_FINAL_LAYERS = (
+    "layer1_visual_content",
+    "layer2_viewer_emotion",
+    "layer3_three_values",
+    "layer4_attribution",
+    "layer5_recommendations",
+    "layer6_flags_and_scores",
+)
+
 
 def _response_usage_metadata(resp: Any) -> dict[str, Any]:
     usage = getattr(resp, "usage_metadata", None)
@@ -151,6 +160,135 @@ key_hook 用一句话点出这条视频/这个 KOL 最值得品牌方深入了�
     "placement_value_score": {{"score": 0, "confidence": 0.0, "rationale": "对 Viltrox 投放值不值；说明无账号基准，仅基于绝对播放表现"}}
   }}
 }}"""
+
+
+def _video_final_v1_prompt(
+    *,
+    title: str,
+    profile_ctx: str,
+    subtitle_ctx: str,
+    subtitle_used: bool,
+    performance_context: dict[str, Any] | None,
+) -> str:
+    metrics = json.dumps(performance_context or {}, ensure_ascii=False, default=str)
+    return f"""你是 Viltrox (唯卓仕) 的视频投放复盘审查员。你同时站在两个视角判断完整视频：
+1. 品牌方：这条投放是否真的帮 Viltrox 卖镜头、证明镜头、产出可复用素材。
+2. 真实观众：一个摄影/视频创作者看完后是否心动、是否想继续了解、是否反感商业植入。
+
+【静态规则 A-I：固定判断框架】
+A. 素材源 vs 分发渠道：高质量但低播放时，要拆开判断“好素材源”和“弱分发渠道”，不要混成一个分。
+B. 效果归因：必须区分画面好看来自产品本身，还是来自 KOL 的 LUT/滤镜/后期/灯光/模特/场景/剪辑。Viltrox 投放目标是卖镜头，不是帮 KOL 展示调色包。
+C. 素材复用价值：判断这条是否适合买断/授权作为官方素材、官网素材、广告投流切片、产品页、展会屏幕。
+D. 恰饭警惕：即使完整看视频，也要警惕模板化、念稿感、赞助水印、折扣链接、自家 LUT/滤镜顺带推广造成的商业归因污染。
+E. Viltrox 投放目标：卖镜头、证明镜头能力、促成购买决策；不是帮 KOL 涨粉，也不是只追求漂亮画面。
+F. 11维理念精髓：关注内容专长、产品契合、品牌露出、真实性、竞品风险、转化说服力、素材资产价值；单条视频评不出账号长期能力时必须说明。
+G. 单视频边界：没有 followers/avg_views 等账号基准时，禁止判断“相对该 KOL 平时”；只能用绝对播放/点赞/评论/时长/发布时间。
+H. 评分锚点：90+ 是罕见顶级；70-85 是合格中上；55-70 是普通达标；40-55 是明显短板；大部分视频应落中间，不能因为没硬伤就给高分。
+I. 守不造假：所有评分必须带 confidence 和 evidence；证据不足给低 confidence 或 null，不补脑。
+
+【Viltrox 产品背景】
+Viltrox 是摄影/视频镜头品牌，核心产品线包括 Pro 系列自动对焦定焦、LAB 高端镜头、Air 轻量镜头、电影镜头等。判断 product_fit 时要考虑：产品定位、价格档、是否适合该 KOL 受众、是否和 Sony/Sigma/Tamron/Canon/Nikon 等竞品形成清晰购买理由。
+
+{profile_ctx}{subtitle_ctx}
+视频标题: {title}
+播放表现数据（绝对表现；没有账号基准时不要做相对判断）:
+{metrics}
+
+只返回 JSON，不要 Markdown。必须输出以下 6 层结构。
+每个 score 为 0-100 或 null；confidence 为 0-1；evidence 必须是具体画面/字幕/数据依据。
+layer2_viewer_emotion 必须像真实观众反应，不要品牌官腔；并且必须和真实播放数据对照，指出“模拟很心动但播放低”或“心动弱且播放低”等矛盾/一致性。
+
+{{
+  "layer1_visual_content": {{
+    "content_summary": "这条视频拍了什么、讲了什么",
+    "scene_timeline": [{{"timestamp": "MM:SS", "what": "关键画面/内容"}}],
+    "product_presence": {{
+      "hero_product": true,
+      "closeup_time_pct": 0,
+      "products": ["Viltrox 产品精确名称"],
+      "selling_points_shown": ["展示到的卖点"],
+      "missing_proof": ["没有证明到的关键能力"],
+      "notes": "产品出镜是否充分"
+    }},
+    "brand_exposure": {{
+      "logo_scenes": [{{"timestamp": "MM:SS", "scene": "Logo/品牌露出场景"}}],
+      "sufficient": true,
+      "notes": "品牌露出是否充分"
+    }},
+    "competitor_presence": [{{"brand": "竞品品牌", "scene": "出现/提及场景", "risk": "风险"}}],
+    "production_observations": {{
+      "composition": "构图客观描述",
+      "lighting": "光线客观描述",
+      "color_grade": "调色客观描述",
+      "professional_level": "amateur/semi-pro/professional/broadcast",
+      "notes": "制作质量观察"
+    }},
+    "evidence": {{"timestamps": ["MM:SS 依据"], "subtitle_used": {str(bool(subtitle_used)).lower()}}}
+  }},
+  "layer2_viewer_emotion": {{
+    "one_sentence_viewer_feeling": "一个真实摄影观众看完后的第一反应，口语化但专业",
+    "heart_movement_score": {{"score": 0, "confidence": 0.0, "evidence": ["哪里让人心动/不心动"]}},
+    "desire_to_click_or_buy": {{"score": 0, "confidence": 0.0, "evidence": ["是否想点链接/查价格/继续看评测"]}},
+    "annoyance_or_ad_fatigue": {{"score": 0, "confidence": 0.0, "evidence": ["恰饭感/广告疲劳/反感来源"]}},
+    "memory_points": ["观众最可能记住的点"],
+    "seeding_power": {{"score": 0, "confidence": 0.0, "evidence": ["是否真的种草镜头"]}},
+    "performance_alignment": {{
+      "real_metrics_summary": "播放/点赞/评论的绝对表现总结",
+      "emotion_vs_metrics": "心动模拟和真实数据是否矛盾，必须明确指出",
+      "possible_explanation": "如果矛盾，解释可能原因；不能归因过度"
+    }}
+  }},
+  "layer3_three_values": {{
+    "channel_value": {{"score": 0, "confidence": 0.0, "rationale": "作为 KOL 发布渠道值不值", "evidence": ["绝对播放/评论/传播证据"]}},
+    "asset_value": {{"score": 0, "confidence": 0.0, "rationale": "作为官方素材买断/复用值不值", "reuse_scenarios": ["官网/广告/产品页/展会/社媒切片"], "evidence": ["素材质量证据"]}},
+    "product_proof_value": {{"score": 0, "confidence": 0.0, "rationale": "是否真正证明镜头能力", "proved_capabilities": ["已证明能力"], "unproved_capabilities": ["未证明能力"], "evidence": ["证明依据"]}},
+    "material_source_vs_distribution_channel": "一句话拆分：它更像素材源、分发渠道，还是两者兼具"
+  }},
+  "layer4_attribution": {{
+    "beauty_attribution": [
+      {{"source": "lens_optics/lighting/LUT/color_grade/filter/post_production/model/location/editing", "share_pct_estimate": 0, "confidence": 0.0, "evidence": ["依据"]}}
+    ],
+    "lens_contribution": {{"score": 0, "confidence": 0.0, "rationale": "画面好看有多少能归功于镜头本身"}},
+    "kol_craft_contribution": {{"score": 0, "confidence": 0.0, "rationale": "KOL 布光/构图/后期贡献"}},
+    "attribution_risk": "如果好看主要来自 LUT/滤镜/后期，要直说风险",
+    "what_to_request_to_verify_lens": ["下次应要求的未调色/无滤镜/竞品对比/原生样片"]
+  }},
+  "layer5_recommendations": {{
+    "cooperation_recommendation": {{"recommendation": "continue/cautious/reconsider", "reason": "真实合作建议"}},
+    "buyout_or_license_recommendation": {{"recommendation": "buyout/license_do_not_buyout/ask_for_more", "reason": "是否买断/授权素材", "suggested_usage": ["适合用途"], "avoid_usage": ["不适合用途"]}},
+    "next_brief_adjustments": ["下次给这个 KOL 的 brief 怎么改"],
+    "must_request_from_kol": ["必须补拍/补交的素材或数据"],
+    "budget_action": "increase/keep_small/test_only/stop",
+    "why": "给老板看的最终理由，直接、可执行"
+  }},
+  "layer6_flags_and_scores": {{
+    "risk_flags": [
+      {{"flag": "heavy_sponsored_feel/overprocessed_visuals/no_raw_proof/no_competitor_comparison/low_views_low_discussion/low_view_high_like_anomaly/weak_cta/self_product_distraction", "severity": "low/medium/high", "evidence": "依据"}}
+    ],
+    "scores": {{
+      "content_quality_score": {{"score": 0, "confidence": 0.0, "rationale": "视频做得好不好"}},
+      "viewer_heart_score": {{"score": 0, "confidence": 0.0, "rationale": "真实观众会不会心动"}},
+      "channel_value_score": {{"score": 0, "confidence": 0.0, "rationale": "渠道投放价值"}},
+      "asset_reuse_score": {{"score": 0, "confidence": 0.0, "rationale": "素材复用价值"}},
+      "product_proof_score": {{"score": 0, "confidence": 0.0, "rationale": "产品证明价值"}},
+      "marketing_value_score": {{"score": 0, "confidence": 0.0, "rationale": "对 Viltrox 卖镜头有没有用，不等同于内容好看"}}
+    }},
+    "final_verdict": "一句话最终结论",
+    "key_hook": "最值得品牌方深入了解的一点或最大疑点"
+  }}
+}}"""
+
+
+def _normalise_final_v1_result(parsed: dict[str, Any], *, subtitle_used: bool) -> dict[str, Any]:
+    payload: dict[str, Any] = {"schema_version": "video_analysis_final_v1"}
+    for layer in VIDEO_FINAL_LAYERS:
+        value = parsed.get(layer) if isinstance(parsed.get(layer), dict) else {}
+        payload[layer] = value
+    layer1 = payload["layer1_visual_content"]
+    evidence = layer1.get("evidence") if isinstance(layer1.get("evidence"), dict) else {}
+    evidence["subtitle_used"] = bool(subtitle_used)
+    layer1["evidence"] = evidence
+    return payload
 
 
 def _score_value(entry: Any) -> float | int | None:
@@ -501,6 +639,48 @@ def _apply_v2_result(
     )
 
 
+def _apply_final_v1_result(
+    result: dict[str, Any],
+    parsed: dict[str, Any],
+    *,
+    method: str,
+    model: str,
+    usage_metadata: dict[str, Any],
+    subtitle_used: bool,
+) -> None:
+    payload = _normalise_final_v1_result(parsed, subtitle_used=subtitle_used)
+    layer1 = payload["layer1_visual_content"]
+    layer6 = payload["layer6_flags_and_scores"]
+    scores = layer6.get("scores") if isinstance(layer6.get("scores"), dict) else {}
+    content_quality = scores.get("content_quality_score") if isinstance(scores.get("content_quality_score"), dict) else {}
+    evidence = layer1.get("evidence") if isinstance(layer1.get("evidence"), dict) else {}
+    timeline = layer1.get("scene_timeline") if isinstance(layer1.get("scene_timeline"), list) else []
+    result.update(
+        {
+            "analyzed": True,
+            "method": method,
+            "model": model,
+            "usage_metadata": usage_metadata,
+            "schema_version": "video_analysis_final_v1",
+            "video_analysis_final_v1": payload,
+            "content_summary": layer1.get("content_summary") or "",
+            "content_genre": "video_analysis_final_v1",
+            "content_topic": layer1.get("content_summary") or "",
+            "production_quality": (layer1.get("production_observations") or {}).get("professional_level")
+            if isinstance(layer1.get("production_observations"), dict)
+            else "",
+            "timestamps": evidence.get("timestamps") if isinstance(evidence.get("timestamps"), list) else timeline,
+            "competitor_mentions": layer1.get("competitor_presence") if isinstance(layer1.get("competitor_presence"), list) else [],
+            "quality_scores": {
+                key: _score_value(value)
+                for key, value in scores.items()
+                if isinstance(value, dict) and _score_value(value) is not None
+            },
+            "quality_overall": _score_value(content_quality) or 0,
+        }
+    )
+
+
 async def analyze_local_video_with_gemini(
     video_path: str,
     title: str,
@@ -720,8 +900,18 @@ async def analyze_youtube_with_gemini(
             "不允许猜测或等间隔填写。"
         )
 
-    is_v2 = str(schema_version or "").strip().lower() == "v2"
-    if is_v2:
+    schema_key = str(schema_version or "").strip().lower()
+    is_v2 = schema_key == "v2"
+    is_final_v1 = schema_key == "final_v1"
+    if is_final_v1:
+        prompt = _video_final_v1_prompt(
+            title=title,
+            profile_ctx=profile_ctx,
+            subtitle_ctx=subtitle_ctx,
+            subtitle_used=bool(subtitle_raw),
+            performance_context=performance_context,
+        )
+    elif is_v2:
         prompt = _video_v2_prompt(
             title=title,
             profile_ctx=profile_ctx,
@@ -934,6 +1124,21 @@ vlog类：真实感、器材自然使用是核心
                     raw = resp.text.strip()
                     raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
                     parsed = json.loads(raw)
+                    if is_final_v1:
+                        _apply_final_v1_result(
+                            result,
+                            parsed,
+                            method=f"gemini_direct_{model_name}",
+                            model=model_name,
+                            usage_metadata=usage_metadata,
+                            subtitle_used=bool(subtitle_raw),
+                        )
+                        logger.info(
+                            "gemini_fast_path_final_v1_success",
+                            extra={"model": model_name, "timestamps": len(result.get("timestamps") or [])},
+                        )
+                        _fast_path_success = True
+                        break
                     if is_v2:
                         _apply_v2_result(
                             result,
@@ -1161,6 +1366,20 @@ vlog类：真实感、器材自然使用是核心
                     raw = resp.text.strip()
                     raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
                     parsed = json.loads(raw)
+                    if is_final_v1:
+                        _apply_final_v1_result(
+                            result,
+                            parsed,
+                            method=f"gemini_fileapi_{model_name}",
+                            model=model_name,
+                            usage_metadata=usage_metadata,
+                            subtitle_used=bool(subtitle_raw),
+                        )
+                        logger.info(
+                            "gemini_fileapi_final_v1_success",
+                            extra={"model": model_name, "timestamps": len(result.get("timestamps") or [])},
+                        )
+                        break
                     if is_v2:
                         _apply_v2_result(
                             result,
