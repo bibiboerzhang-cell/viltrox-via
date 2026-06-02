@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 import signal
-import time
+import threading
 from datetime import datetime, timezone
 from typing import Any
 
@@ -13,6 +13,7 @@ from psycopg.rows import dict_row
 
 from app.core.config import DB_RUNTIME_URL
 from app.core.logging import get_logger
+from app.db.connection import close_db_runtime_sync, db_connection_sync_scope
 from app.platform import llm_gateway
 
 
@@ -22,12 +23,11 @@ LLM_BUDGET_SCOPE = os.environ.get("APIFY_WORKER_LLM_BUDGET_SCOPE", "cron:vkpi_an
 LLM_CONCURRENCY_LIMIT = max(1, min(2, int(os.environ.get("APIFY_WORKER_LLM_CONCURRENCY", "1"))))
 LLM_MAX_OUTPUT_TOKENS = int(os.environ.get("APIFY_WORKER_LLM_MAX_OUTPUT_TOKENS", "1200"))
 LLM_TARGET_TYPES = {"video", "contract"}
-_stop_requested = False
+_stop_event = threading.Event()
 
 
 def _request_stop(_signum: int, _frame: Any) -> None:
-    global _stop_requested
-    _stop_requested = True
+    _stop_event.set()
 
 
 def _json(value: Any) -> str:
@@ -119,13 +119,14 @@ def _requeue_job(conn: psycopg.Connection[Any], job_id: int, reason: str) -> Non
 def _llm_budget_preflight(job: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     target_type, target_id = _target(payload)
     prompt = str(payload.get("prompt") or f"{job.get('job_type') or 'analysis'} {target_type}:{target_id}")
-    return llm_gateway.budget_preflight(
-        prompt,
-        purpose="vkpi_analysis_worker",
-        max_output_tokens=LLM_MAX_OUTPUT_TOKENS,
-        preferred_provider="google",
-        cost_tag=LLM_BUDGET_SCOPE,
-    )
+    with db_connection_sync_scope():
+        return llm_gateway.budget_preflight(
+            prompt,
+            purpose="vkpi_analysis_worker",
+            max_output_tokens=LLM_MAX_OUTPUT_TOKENS,
+            preferred_provider="google",
+            cost_tag=LLM_BUDGET_SCOPE,
+        )
 
 
 def _google_allowed(preflight: dict[str, Any]) -> tuple[bool, str, float]:
@@ -240,19 +241,22 @@ def run_worker() -> None:
     signal.signal(signal.SIGTERM, _request_stop)
     signal.signal(signal.SIGINT, _request_stop)
     logger.info("apify_jobs mock worker started | poll_seconds=%s", POLL_SECONDS)
-    with psycopg.connect(DB_RUNTIME_URL) as conn:
-        while not _stop_requested:
-            job = _claim_job(conn)
-            if not job:
-                time.sleep(POLL_SECONDS)
-                continue
-            try:
-                _process_job(conn, job)
-                logger.info("apify_jobs mock job done | id=%s", job["id"])
-            except Exception as exc:
-                logger.exception("apify_jobs mock job failed | id=%s", job.get("id"))
-                _fail_job(conn, int(job["id"]), exc)
-    logger.info("apify_jobs mock worker stopped")
+    try:
+        with psycopg.connect(DB_RUNTIME_URL) as conn:
+            while not _stop_event.is_set():
+                job = _claim_job(conn)
+                if not job:
+                    _stop_event.wait(POLL_SECONDS)
+                    continue
+                try:
+                    _process_job(conn, job)
+                    logger.info("apify_jobs mock job done | id=%s", job["id"])
+                except Exception as exc:
+                    logger.exception("apify_jobs mock job failed | id=%s", job.get("id"))
+                    _fail_job(conn, int(job["id"]), exc)
+    finally:
+        close_db_runtime_sync()
+        logger.info("apify_jobs mock worker stopped")
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ traffic through a pooled Postgres runtime.
 from __future__ import annotations
 
 import asyncio
+import atexit
 import json
 import os
 import re
@@ -435,7 +436,7 @@ async def init_db_runtime() -> None:
     await asyncio.to_thread(_run_runtime_seeders)
 
 
-async def close_db_runtime() -> None:
+def close_db_runtime_sync() -> None:
     global _PG_POOL
     scoped = _scoped_conn.get()
     if isinstance(scoped, _ScopedConnectionHandle):
@@ -460,6 +461,13 @@ async def close_db_runtime() -> None:
     if _PG_POOL is not None:
         _PG_POOL.close()
         _PG_POOL = None
+
+
+async def close_db_runtime() -> None:
+    close_db_runtime_sync()
+
+
+atexit.register(close_db_runtime_sync)
 
 
 def _run_postgres_migrations() -> None:
@@ -728,6 +736,7 @@ __all__ = [
     "get_db_actor_stats",
     "init_db_runtime",
     "close_db_runtime",
+    "close_db_runtime_sync",
     "is_postgres_runtime",
     "probe_postgres_connectivity",
     "start_db_actor",
