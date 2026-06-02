@@ -27,6 +27,33 @@ from app.services.scoring.verticals import apply_learned_weights
 
 logger = get_logger(__name__)
 
+
+def _response_usage_metadata(resp: Any) -> dict[str, Any]:
+    usage = getattr(resp, "usage_metadata", None)
+    if not usage:
+        return {}
+    if isinstance(usage, dict):
+        return usage
+    if hasattr(usage, "model_dump"):
+        try:
+            return usage.model_dump(mode="json", exclude_none=True)
+        except Exception:
+            pass
+    fields = (
+        "prompt_token_count",
+        "candidates_token_count",
+        "total_token_count",
+        "cached_content_token_count",
+        "thoughts_token_count",
+    )
+    output: dict[str, Any] = {}
+    for field in fields:
+        value = getattr(usage, field, None)
+        if value is not None:
+            output[field] = value
+    return output
+
+
 async def analyze_youtube_with_gemini(url: str, title: str, creator_handle: str = "") -> dict:
     """
     Gemini YouTube analysis via File API:
@@ -271,6 +298,7 @@ vlog类：真实感、器材自然使用是核心
                             ]
                         )
                     resp = await asyncio.to_thread(_analyze_direct)
+                    usage_metadata = _response_usage_metadata(resp)
                     raw = resp.text.strip()
                     raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
                     parsed = json.loads(raw)
@@ -278,6 +306,8 @@ vlog类：真实感、器材自然使用是核心
                     # Mirror the parsing logic from slow path (Step 4)
                     result["analyzed"]             = True
                     result["method"]               = f"gemini_direct_{model_name}"
+                    result["model"]                = model_name
+                    result["usage_metadata"]       = usage_metadata
                     result["content_summary"]      = parsed.get("content_summary", "")
                     result["content_genre"]        = parsed.get("content_genre", "")
                     result["content_topic"]        = parsed.get("content_topic", "")
@@ -480,12 +510,15 @@ vlog类：真实感、器材自然使用是核心
                             ]
                         )
                     resp = await asyncio.to_thread(_analyze)
+                    usage_metadata = _response_usage_metadata(resp)
                     raw = resp.text.strip()
                     raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
                     parsed = json.loads(raw)
 
                     result["analyzed"]             = True
                     result["method"]               = f"gemini_fileapi_{model_name}"
+                    result["model"]                = model_name
+                    result["usage_metadata"]       = usage_metadata
                     result["content_summary"]      = parsed.get("content_summary", "")
                     result["content_genre"]        = parsed.get("content_genre", "")
                     result["content_topic"]        = parsed.get("content_topic", "")
