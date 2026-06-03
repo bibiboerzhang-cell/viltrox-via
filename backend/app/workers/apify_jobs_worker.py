@@ -760,6 +760,7 @@ def _select_keyframe_requests(layer1: dict[str, Any], limit: int = 6) -> list[di
 def _download_youtube_for_keyframes(url: str, output_dir: str) -> dict[str, Any]:
     output: dict[str, Any] = {"success": False, "path": None, "error": None, "bytes": 0}
     out_tmpl = str(Path(output_dir) / "youtube_keyframes.%(ext)s")
+    ytdlp_proxy = os.environ.get("YTDLP_PROXY", "").strip()
     cmd = [
         "yt-dlp",
         "--quiet",
@@ -770,8 +771,10 @@ def _download_youtube_for_keyframes(url: str, output_dir: str) -> dict[str, Any]
         "mp4",
         "-o",
         out_tmpl,
-        url,
     ]
+    if ytdlp_proxy:
+        cmd.extend(["--proxy", ytdlp_proxy])
+    cmd.append(url)
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
     except subprocess.TimeoutExpired:
