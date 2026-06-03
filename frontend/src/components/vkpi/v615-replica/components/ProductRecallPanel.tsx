@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, RefreshCw, Search, Target, UsersRound, Video } from "lucide-react";
+import { ExternalLink, Loader2, RefreshCw, Search, Target, UsersRound, Video } from "lucide-react";
 
 import {
   recallKolProfiles,
@@ -23,6 +23,24 @@ function fmt(value: unknown, digits = 3): string {
   return n(value).toFixed(digits);
 }
 
+function compactNumber(value: unknown): string {
+  const next = n(value);
+  if (!next) return "";
+  if (next >= 1_000_000) return `${(next / 1_000_000).toFixed(1)}M`;
+  if (next >= 10_000) return `${Math.round(next / 1_000)}K`;
+  if (next >= 1_000) return `${(next / 1_000).toFixed(1)}K`;
+  return String(Math.round(next));
+}
+
+function cleanText(value: unknown): string {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function initialFor(item: VkpiKolRecallItem): string {
+  const text = cleanText(item.display_name || item.handle || item.platform || "K");
+  return text.slice(0, 1).toUpperCase() || "K";
+}
+
 function typeTone(item: VkpiKolRecallItem): string {
   if (item.profile_type === "mixed") return "border-amber-300/30 bg-amber-400/[0.10] text-amber-200";
   if (item.profile_type === "creator") return "border-emerald-300/30 bg-emerald-400/[0.10] text-emerald-200";
@@ -42,19 +60,116 @@ function TypeBadge({ item }: { item: VkpiKolRecallItem }) {
   );
 }
 
-function RecallCard({ item }: { item: VkpiKolRecallItem }) {
+function RecallAvatar({ item }: { item: VkpiKolRecallItem }) {
+  if (item.avatar_url) {
+    return (
+      <img
+        src={item.avatar_url}
+        alt=""
+        className="h-8 w-8 shrink-0 rounded-md object-cover"
+        referrerPolicy="no-referrer"
+      />
+    );
+  }
   return (
-    <article className="rounded-lg border border-white/[0.07] bg-black/20 px-3 py-2">
+    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-white/[0.08] bg-white/[0.04] text-[12px] font-semibold text-slate-300">
+      {initialFor(item)}
+    </span>
+  );
+}
+
+function EvidencePreview({ item }: { item: VkpiKolRecallItem }) {
+  const evidence = (item.representative_evidence || []).filter((entry) => cleanText(entry.title || entry.content_url));
+  if (!evidence.length) return null;
+  const primary = evidence[0];
+  const title = cleanText(primary.title || primary.content_url);
+  const href = cleanText(primary.content_url);
+  const thumb = cleanText(primary.thumbnail_url);
+  const views = compactNumber(primary.view_count);
+  const likes = compactNumber(primary.like_count);
+  const Wrapper = href ? "a" : "div";
+  return (
+    <div className="mt-2">
+      <Wrapper
+        {...(href ? { href, target: "_blank", rel: "noreferrer" } : {})}
+        className="group flex min-w-0 gap-2"
+      >
+        {thumb ? (
+          <div className="relative h-12 w-16 shrink-0 overflow-hidden rounded-md bg-black/30">
+            <img src={thumb} alt="" className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+            <span className="absolute bottom-0 left-0 bg-black/65 px-1 py-0.5 text-[8px] text-slate-200">代表作封面</span>
+          </div>
+        ) : null}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1 text-[9px] uppercase tracking-wide text-slate-600">
+            代表作
+            {href ? <ExternalLink size={10} className="text-slate-600 transition-colors group-hover:text-violet-200" /> : null}
+          </div>
+          <div className="mt-0.5 truncate text-[10.5px] text-slate-300 group-hover:text-violet-100">{title}</div>
+          {views || likes ? (
+            <div className="mt-0.5 text-[9.5px] text-slate-600">
+              {views ? `${views} views` : ""}
+              {views && likes ? " · " : ""}
+              {likes ? `${likes} likes` : ""}
+            </div>
+          ) : null}
+        </div>
+      </Wrapper>
+      {evidence.length > 1 ? (
+        <div className="mt-1.5 grid gap-1">
+          {evidence.slice(1, 3).map((entry, index) => {
+            const nextTitle = cleanText(entry.title || entry.content_url);
+            const nextHref = cleanText(entry.content_url);
+            return nextHref ? (
+              <a
+                key={`${nextHref}-${index}`}
+                href={nextHref}
+                target="_blank"
+                rel="noreferrer"
+                className="truncate text-[10px] text-slate-500 hover:text-violet-200"
+              >
+                {nextTitle}
+              </a>
+            ) : (
+              <div key={`${nextTitle}-${index}`} className="truncate text-[10px] text-slate-500">
+                {nextTitle}
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function RecallCard({ item }: { item: VkpiKolRecallItem }) {
+  const profileHref = cleanText(item.profile_url);
+  const handle = cleanText(item.handle || item.display_name || `KOL #${item.kol_pool_id}`);
+  const reason = cleanText(item.recall_reason || item.type_reason || "画像匹配:索引画像与产品 query 相近");
+  const lenses = (item.used_lenses || []).map(cleanText).filter(Boolean).slice(0, 3);
+  return (
+    <article className="rounded-lg border border-white/[0.07] bg-black/20 px-3 py-3">
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="truncate text-[12px] font-medium text-white">{item.handle || item.display_name || `KOL #${item.kol_pool_id}`}</div>
-          <div className="mt-0.5 truncate text-[10.5px] text-slate-500">{item.display_name || "未命名"} · {item.platform || "unknown"}</div>
+        <div className="flex min-w-0 items-start gap-2">
+          <RecallAvatar item={item} />
+          <div className="min-w-0">
+            {profileHref ? (
+              <a href={profileHref} target="_blank" rel="noreferrer" className="block truncate text-[12px] font-medium text-white hover:text-violet-100">
+                {handle}
+              </a>
+            ) : (
+              <div className="truncate text-[12px] font-medium text-white">{handle}</div>
+            )}
+            <div className="mt-0.5 truncate text-[10.5px] text-slate-500">{item.display_name || "未命名"} · {item.platform || "unknown"}</div>
+          </div>
         </div>
         <div className="shrink-0 text-right">
-          <div className="tabular-nums text-[12px] font-semibold text-violet-100">{fmt(item.vector_score)}</div>
-          <div className="text-[9px] uppercase tracking-wide text-slate-600">vector</div>
+          <div className="tabular-nums text-[12px] font-semibold text-violet-100">{fmt(item.recall_rank_score ?? item.vector_score)}</div>
+          <div className="text-[9px] uppercase tracking-wide text-slate-600">召回排序分</div>
+          <div className="mt-0.5 tabular-nums text-[9.5px] text-slate-500">vector {fmt(item.vector_score)}</div>
         </div>
       </div>
+      <p className="mt-2 text-[10.5px] leading-4 text-slate-300">{reason}</p>
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
         <TypeBadge item={item} />
         <span className="rounded-md border border-white/[0.07] px-1.5 py-0.5 text-[10px] text-slate-400">
@@ -63,7 +178,13 @@ function RecallCard({ item }: { item: VkpiKolRecallItem }) {
         <span className="rounded-md border border-white/[0.07] px-1.5 py-0.5 text-[10px] text-slate-400">
           R {fmt(item.reviewer_type_score, 1)}
         </span>
+        {lenses.map((lens) => (
+          <span key={lens} title={item.used_lenses_note || "从作品提取的镜头提及"} className="rounded-md border border-violet-300/15 bg-violet-400/[0.08] px-1.5 py-0.5 text-[10px] text-violet-100">
+            {lens}
+          </span>
+        ))}
       </div>
+      <EvidencePreview item={item} />
     </article>
   );
 }

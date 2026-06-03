@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 import os
 from pathlib import Path
+import re
 from typing import Any
 
 from app.db.connection import get_conn
@@ -18,6 +19,20 @@ PROJECT_ROOT = Path(__file__).resolve().parents[4]
 QDRANT_LOCAL_PATH = PROJECT_ROOT / "runtime" / "vkpi_qdrant"
 OPENAI_EMBEDDING_PRICE_PER_1M = Decimal("0.02")
 MAX_CANDIDATE_LIMIT = 500
+LENS_MENTION_RE = re.compile(
+    r"\b(?:Viltrox[\s-]*)?(?:AF[\s-]*)?(?:1[356]5|90|85|75|56|55|50|35|28|27|25|24|16)\s*mm"
+    r"(?:\s*[fF]/?\s*(?:1\.2|1\.4|1\.7|1\.8|2\.0|2|3\.5|4\.5))?"
+    r"(?:\s*(?:Pro|LAB|EVO|AIR|DL|FE|Z|STM|VCM|APO))*\b",
+    re.IGNORECASE,
+)
+PROFILE_REASON_KEYWORDS = (
+    ("人像", ("portrait", "portraits", "人像", "model", "fashion", "bokeh")),
+    ("街拍", ("street", "街拍", "street photography", "stranger")),
+    ("婚礼", ("wedding", "engagement", "婚礼")),
+    ("纪实", ("documentary", "storytelling", "cinematic", "film", "filmmaker", "video", "叙事", "电影感")),
+    ("测评", ("review", "comparison", "test", "unboxing", "评测", "对比")),
+    ("旅行", ("travel", "landscape", "city", "城市", "风光")),
+)
 
 PRODUCT_QUERY_TEXTS = {
     "35mm_f12_lab": """Product query profile: Viltrox AF 35mm F1.2 LAB.
@@ -180,6 +195,7 @@ def _entry_rows(kol_pool_ids: list[int]) -> dict[int, dict[str, Any]]:
                e.type_reason,
                e.type_method,
                e.sufficiency,
+               e.profile_text,
                p.handle,
                p.display_name,
                p.platform,
@@ -196,6 +212,162 @@ def _entry_rows(kol_pool_ids: list[int]) -> dict[int, dict[str, Any]]:
         (COLLECTION_NAME, METHOD, *kol_pool_ids),
     ).fetchall()
     return {int(row["kol_pool_id"]): dict(row) for row in rows}
+
+
+def _clean_text(value: Any, limit: int = 240) -> str:
+    text = " ".join(str(value or "").replace("\x00", " ").split())
+    return text[:limit]
+
+
+def _normalise_lens_mention(value: str) -> str:
+    text = _clean_text(value, 80)
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"\b[Ff]\s*/?\s*", "F", text)
+    text = re.sub(r"\b(viltrox)\b", "Viltrox", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b(af)\b", "AF", text, flags=re.IGNORECASE)
+    for word in ("pro", "lab", "evo", "air", "dl", "fe", "stm", "vcm", "apo"):
+        text = re.sub(rf"\b{word}\b", word.upper() if word in {"lab", "evo", "air", "dl", "fe", "stm", "vcm", "apo"} else "Pro", text, flags=re.IGNORECASE)
+    text = re.sub(r"(\d)\s*mm", r"\1mm", text, flags=re.IGNORECASE)
+    if "viltrox" not in text.lower():
+        text = f"Viltrox {text}"
+    return text
+
+
+def _extract_lenses(*texts: Any, limit: int = 3) -> list[str]:
+    found: list[str] = []
+    seen: set[str] = set()
+    for raw in texts:
+        blob = _clean_text(raw, 1200)
+        if not blob:
+            continue
+        for match in LENS_MENTION_RE.finditer(blob):
+            start = max(0, match.start() - 50)
+            end = min(len(blob), match.end() + 50)
+            context = blob[start:end].lower()
+            phrase = match.group(0)
+            if "viltrox" not in context and not phrase.lower().strip().startswith("af"):
+                continue
+            normalised = _normalise_lens_mention(phrase)
+            key = re.sub(r"[^a-z0-9]+", "", normalised.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            found.append(normalised)
+            if len(found) >= limit:
+                return found
+    return found
+
+
+def _reason_labels(*texts: Any, limit: int = 2) -> list[str]:
+    blob = " ".join(_clean_text(text, 1200).lower() for text in texts if text)
+    labels: list[str] = []
+    for label, keywords in PROFILE_REASON_KEYWORDS:
+        if any(keyword in blob for keyword in keywords):
+            labels.append(label)
+        if len(labels) >= limit:
+            break
+    return labels
+
+
+def _evidence_score(row: dict[str, Any]) -> tuple[int, int, int, int]:
+    title = str(row.get("title") or "")
+    product_blob = " ".join(str(row.get(key) or "") for key in ("product_presence", "brand_exposure"))
+    blob = f"{title} {product_blob}".lower()
+    lens_bonus = 1 if LENS_MENTION_RE.search(blob) else 0
+    viltrox_bonus = 1 if "viltrox" in blob else 0
+    thumbnail_bonus = 1 if _clean_text(row.get("thumbnail_url"), 500) else 0
+    try:
+        views = int(row.get("view_count") or 0)
+    except (TypeError, ValueError):
+        views = 0
+    return lens_bonus, viltrox_bonus, thumbnail_bonus, views
+
+
+def _evidence_summaries(kol_pool_ids: list[int]) -> dict[int, dict[str, Any]]:
+    if not kol_pool_ids:
+        return {}
+    placeholders = ",".join(["?"] * len(kol_pool_ids))
+    rows = get_conn().execute(
+        f"""
+        SELECT e.kol_pool_id,
+               COALESCE(NULLIF(e.title, ''), NULLIF(e.video_title, ''), NULLIF(e.content_url, '')) AS title,
+               e.content_url,
+               e.thumbnail_url,
+               e.view_count,
+               e.like_count,
+               c.result #>> '{{layer1_visual_content,content_summary}}' AS content_summary,
+               c.result #>> '{{layer1_visual_content,product_presence}}' AS product_presence,
+               c.result #>> '{{layer1_visual_content,brand_exposure}}' AS brand_exposure
+        FROM vkpi_kol_video_evidence e
+        LEFT JOIN vkpi_analysis_cache c
+          ON c.target_type = 'video'
+         AND c.target_id = e.id::text
+         AND c.derive_method = 'video_analysis_final_v1'
+         AND c.status = 'ready'
+        WHERE e.kol_pool_id IN ({placeholders})
+          AND e.is_active IS NOT FALSE
+        ORDER BY e.kol_pool_id, e.posted_at DESC NULLS LAST, e.id DESC
+        """,
+        tuple(kol_pool_ids),
+    ).fetchall()
+    by_id: dict[int, list[dict[str, Any]]] = {}
+    for row in rows:
+        item = dict(row)
+        by_id.setdefault(int(item["kol_pool_id"]), []).append(item)
+
+    summaries: dict[int, dict[str, Any]] = {}
+    for kol_id, items in by_id.items():
+        ranked = sorted(items, key=_evidence_score, reverse=True)
+        representative: list[dict[str, Any]] = []
+        for item in ranked:
+            title = _clean_text(item.get("title"), 220)
+            url = _clean_text(item.get("content_url"), 500)
+            if not title and not url:
+                continue
+            representative.append(
+                {
+                    "title": title or url,
+                    "content_url": url,
+                    "thumbnail_url": _clean_text(item.get("thumbnail_url"), 500),
+                    "view_count": item.get("view_count"),
+                    "like_count": item.get("like_count"),
+                }
+            )
+            if len(representative) >= 3:
+                break
+
+        texts: list[str] = []
+        for item in ranked[:6]:
+            texts.extend(
+                [
+                    _clean_text(item.get("title"), 500),
+                    _clean_text(item.get("product_presence"), 500),
+                    _clean_text(item.get("brand_exposure"), 500),
+                ]
+            )
+        summaries[kol_id] = {
+            "representative_evidence": representative,
+            "used_lenses": _extract_lenses(*texts),
+            "reason_labels": _reason_labels(
+                *(texts + [_clean_text(item.get("content_summary"), 500) for item in ranked[:3]])
+            ),
+        }
+    return summaries
+
+
+def _recall_reason(row: dict[str, Any], evidence: dict[str, Any]) -> str:
+    lenses = list(evidence.get("used_lenses") or [])
+    reason_labels = list(evidence.get("reason_labels") or [])
+    if not reason_labels:
+        reason_labels = _reason_labels(row.get("profile_text"), row.get("type_reason"))
+    profile_part = "/".join(reason_labels[:2]) if reason_labels else "索引画像"
+    if lenses:
+        return f"作品证据:{lenses[0]}相关内容 + {profile_part}画像匹配"
+    representative = list(evidence.get("representative_evidence") or [])
+    if representative:
+        title = _clean_text(representative[0].get("title"), 42)
+        return f"作品证据:{title} + {profile_part}画像匹配"
+    return f"画像匹配:{profile_part}内容画像与产品 query 相近"
 
 
 def _float(value: Any) -> float:
@@ -254,6 +426,7 @@ def _format_item(
     vector_weight: float,
     type_weight: float,
     type_boost_enabled: bool,
+    evidence: dict[str, Any],
 ) -> dict[str, Any]:
     type_rank_score = _type_score_for_bucket(row, bucket)
     rank_score = _recall_rank_score(
@@ -263,7 +436,7 @@ def _format_item(
         type_weight=type_weight,
         type_boost_enabled=type_boost_enabled,
     )
-    return {
+    item = {
         "kol_pool_id": int(row.get("kol_pool_id") or hit.kol_pool_id),
         "handle": row.get("handle") or "",
         "display_name": row.get("display_name") or "",
@@ -281,6 +454,7 @@ def _format_item(
         "reviewer_type_score": _float(row.get("reviewer_type_score")),
         "type_reason": row.get("type_reason") or "",
         "type_method": row.get("type_method") or "",
+        "recall_reason": _recall_reason(row, evidence),
         "source_fields": {
             "vector_method": METHOD,
             "type_method": row.get("type_method") or "",
@@ -289,6 +463,14 @@ def _format_item(
             "ranking_method": "vector_type_weighted" if type_boost_enabled else "vector_only",
         },
     }
+    representative = list(evidence.get("representative_evidence") or [])
+    if representative:
+        item["representative_evidence"] = representative
+    used_lenses = list(evidence.get("used_lenses") or [])
+    if used_lenses:
+        item["used_lenses"] = used_lenses
+        item["used_lenses_note"] = "从作品标题和视频分析中提取的镜头提及,不是确证拥有"
+    return item
 
 
 def recall_kol_profiles(
@@ -337,6 +519,7 @@ def recall_kol_profiles(
         ordered_hits.append(hit)
 
     rows_by_id = _entry_rows([hit.kol_pool_id for hit in ordered_hits])
+    evidence_by_id = _evidence_summaries([hit.kol_pool_id for hit in ordered_hits])
     buckets: dict[str, list[dict[str, Any]]] = {"creator": [], "reviewer": []}
     missing_type_count = 0
     for hit in ordered_hits:
@@ -353,6 +536,7 @@ def recall_kol_profiles(
                 vector_weight=safe_vector_weight,
                 type_weight=safe_type_weight,
                 type_boost_enabled=bool(type_boost_enabled),
+                evidence=evidence_by_id.get(hit.kol_pool_id, {}),
             )
         )
 

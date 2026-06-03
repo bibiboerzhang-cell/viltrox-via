@@ -166,6 +166,9 @@ export interface VkpiKolRecallItem {
   profile_url?: string;
   avatar_url?: string;
   vector_score: number;
+  type_rank_score?: number;
+  recall_rank_score?: number;
+  recall_rank_score_method?: string;
   profile_type: "creator" | "reviewer" | "mixed" | string;
   bucket: "creator" | "reviewer" | string;
   type_label: string;
@@ -173,6 +176,16 @@ export interface VkpiKolRecallItem {
   reviewer_type_score: number;
   type_reason?: string;
   type_method?: string;
+  recall_reason?: string;
+  used_lenses?: string[];
+  used_lenses_note?: string;
+  representative_evidence?: Array<{
+    title?: string;
+    content_url?: string;
+    thumbnail_url?: string;
+    view_count?: number | null;
+    like_count?: number | null;
+  }>;
   source_fields?: Record<string, unknown>;
 }
 
