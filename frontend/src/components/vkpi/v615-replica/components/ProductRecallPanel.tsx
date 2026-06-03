@@ -32,6 +32,14 @@ function compactNumber(value: unknown): string {
   return String(Math.round(next));
 }
 
+function compactFollowers(value: unknown): string {
+  const next = n(value);
+  if (!next) return "";
+  if (next >= 100_000_000) return `${(next / 100_000_000).toFixed(1)}亿 粉丝`;
+  if (next >= 10_000) return `${(next / 10_000).toFixed(1)}万 粉丝`;
+  return `${Math.round(next).toLocaleString()} 粉丝`;
+}
+
 function cleanText(value: unknown): string {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
@@ -61,21 +69,25 @@ function TypeBadge({ item }: { item: VkpiKolRecallItem }) {
 }
 
 function RecallAvatar({ item }: { item: VkpiKolRecallItem }) {
-  if (item.avatar_url) {
-    return (
-      <img
-        src={item.avatar_url}
-        alt=""
-        className="h-8 w-8 shrink-0 rounded-md object-cover"
-        referrerPolicy="no-referrer"
-      />
-    );
-  }
-  return (
+  const [imageFailed, setImageFailed] = useState(false);
+  const avatarUrl = cleanText(item.avatar_url);
+  const fallback = (
     <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-white/[0.08] bg-white/[0.04] text-[12px] font-semibold text-slate-300">
       {initialFor(item)}
     </span>
   );
+  if (avatarUrl && !imageFailed) {
+    return (
+      <img
+        src={avatarUrl}
+        alt=""
+        className="h-8 w-8 shrink-0 rounded-md object-cover"
+        referrerPolicy="no-referrer"
+        onError={() => setImageFailed(true)}
+      />
+    );
+  }
+  return fallback;
 }
 
 function EvidencePreview({ item }: { item: VkpiKolRecallItem }) {
@@ -147,6 +159,8 @@ function RecallCard({ item }: { item: VkpiKolRecallItem }) {
   const handle = cleanText(item.handle || item.display_name || `KOL #${item.kol_pool_id}`);
   const reason = cleanText(item.recall_reason || item.type_reason || "画像匹配:索引画像与产品 query 相近");
   const lenses = (item.used_lenses || []).map(cleanText).filter(Boolean).slice(0, 3);
+  const followers = compactFollowers(item.followers);
+  const bio = cleanText(item.bio);
   return (
     <article className="rounded-lg border border-white/[0.07] bg-black/20 px-3 py-3">
       <div className="flex items-start justify-between gap-3">
@@ -160,7 +174,11 @@ function RecallCard({ item }: { item: VkpiKolRecallItem }) {
             ) : (
               <div className="truncate text-[12px] font-medium text-white">{handle}</div>
             )}
-            <div className="mt-0.5 truncate text-[10.5px] text-slate-500">{item.display_name || "未命名"} · {item.platform || "unknown"}</div>
+            <div className="mt-0.5 truncate text-[10.5px] text-slate-500">
+              {item.display_name || "未命名"} · {item.platform || "unknown"}
+              {followers ? ` · ${followers}` : ""}
+            </div>
+            {bio ? <div className="mt-1 max-w-[280px] truncate text-[10px] text-slate-500">{bio}</div> : null}
           </div>
         </div>
         <div className="shrink-0 text-right">

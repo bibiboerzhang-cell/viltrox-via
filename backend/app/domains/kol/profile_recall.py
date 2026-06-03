@@ -200,7 +200,9 @@ def _entry_rows(kol_pool_ids: list[int]) -> dict[int, dict[str, Any]]:
                p.display_name,
                p.platform,
                p.profile_url,
-               p.avatar_url
+               p.avatar_url,
+               p.followers,
+               p.bio
         FROM vkpi_kol_profile_index_entries e
         JOIN vkpi_kol_pool p ON p.id = e.kol_pool_id
         WHERE e.collection_name = ?
@@ -443,6 +445,8 @@ def _format_item(
         "platform": row.get("platform") or "",
         "profile_url": row.get("profile_url") or "",
         "avatar_url": row.get("avatar_url") or "",
+        "followers": row.get("followers"),
+        "bio": row.get("bio") or "",
         "vector_score": round(float(hit.vector_score), 6),
         "type_rank_score": round(type_rank_score, 1),
         "recall_rank_score": round(rank_score, 6),

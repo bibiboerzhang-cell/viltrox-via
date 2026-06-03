@@ -165,6 +165,8 @@ export interface VkpiKolRecallItem {
   platform?: string;
   profile_url?: string;
   avatar_url?: string;
+  followers?: number | null;
+  bio?: string;
   vector_score: number;
   type_rank_score?: number;
   recall_rank_score?: number;
