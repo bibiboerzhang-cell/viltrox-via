@@ -27,6 +27,7 @@ from app.domains.kol import competitor_detector as kol_competitor_detector
 from app.domains.kol import eleven_dimensions
 from app.domains.kol import intelligence_card as kol_intelligence_card
 from app.domains.kol import pool as kol_pool
+import app.domains.kol.profile_recall as kol_profile_recall
 from app.domains.intelligence import gemini_single_kol_preflight
 import app.domains.intelligence.ai_brief as ai_brief
 import app.domains.evidence.summary as evidence_summary
@@ -178,6 +179,39 @@ def get_pool_summary(
 ) -> dict:
     """KOL Pool 资产池口径统计；不等于 Daily Top100 新候选。"""
     return kol_pool.summary()
+
+
+@router.get("/kol-recall")
+def recall_kol_profiles(
+    query_text: str = Query(default=""),
+    product_sku: str = Query(default=""),
+    candidate_limit: int = Query(default=50, ge=1, le=125),
+    limit: int = Query(default=10, ge=1, le=50),
+    creator_quota: int = Query(default=7, ge=0, le=50),
+    reviewer_quota: int = Query(default=3, ge=0, le=50),
+    ratio_policy: str = Query(default="soft"),
+    mixed_policy: str = Query(default="dominant"),
+    dedupe: bool = Query(default=True),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """Vector recall endpoint for KOL Index; does not affect KOL Pool ranking."""
+    del staff
+    try:
+        return kol_profile_recall.recall_kol_profiles(
+            query_text=query_text,
+            product_sku=product_sku,
+            candidate_limit=candidate_limit,
+            limit=limit,
+            creator_quota=creator_quota,
+            reviewer_quota=reviewer_quota,
+            ratio_policy=ratio_policy,
+            mixed_policy=mixed_policy,
+            dedupe=dedupe,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get("/kol-pool/available")
