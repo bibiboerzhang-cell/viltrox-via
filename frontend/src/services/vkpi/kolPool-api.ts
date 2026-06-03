@@ -158,6 +158,49 @@ export interface VkpiKolPoolGeminiGoNoGo {
   preflight?: VkpiKolPoolGeminiPreflight;
 }
 
+export interface VkpiKolRecallItem {
+  kol_pool_id: number;
+  handle: string;
+  display_name?: string;
+  platform?: string;
+  profile_url?: string;
+  avatar_url?: string;
+  vector_score: number;
+  profile_type: "creator" | "reviewer" | "mixed" | string;
+  bucket: "creator" | "reviewer" | string;
+  type_label: string;
+  creator_type_score: number;
+  reviewer_type_score: number;
+  type_reason?: string;
+  type_method?: string;
+  source_fields?: Record<string, unknown>;
+}
+
+export interface VkpiKolRecallResponse {
+  method: "vector_recall" | string;
+  query: Row;
+  ratio: {
+    creator_quota: number;
+    reviewer_quota: number;
+    policy: string;
+    mixed_policy: string;
+    dedupe: boolean;
+  };
+  items: VkpiKolRecallItem[];
+  buckets: {
+    creator: VkpiKolRecallItem[];
+    reviewer: VkpiKolRecallItem[];
+  };
+  diagnostics: Row & {
+    candidate_count?: number;
+    creator_candidate_count?: number;
+    reviewer_candidate_count?: number;
+    creator_returned?: number;
+    reviewer_returned?: number;
+    returned_count?: number;
+  };
+}
+
 export async function listKolPool(
   token: string,
   params: { search?: string; platform?: string; country?: string; limit?: number; offset?: number; dataStatus?: string; sortBy?: string; enrichable?: boolean; refreshIfStale?: boolean } = {},
@@ -173,6 +216,38 @@ export async function listKolPool(
   if (typeof params.refreshIfStale === "boolean") query.set("refresh_if_stale", String(params.refreshIfStale));
   return apiFetch<{ items?: VkpiKolPoolItem[]; refresh?: VkpiKolPoolRefreshState }>(
     `/api/admin/vkpi/kol-pool?${query.toString()}`,
+    {},
+    token,
+  );
+}
+
+export async function recallKolProfiles(
+  token: string,
+  params: {
+    queryText?: string;
+    productSku?: string;
+    candidateLimit?: number;
+    limit?: number;
+    creatorQuota?: number;
+    reviewerQuota?: number;
+    ratioPolicy?: "soft" | string;
+    mixedPolicy?: "dominant" | string;
+    dedupe?: boolean;
+  } = {},
+): Promise<VkpiKolRecallResponse> {
+  const query = new URLSearchParams({
+    candidate_limit: String(params.candidateLimit || 50),
+    limit: String(params.limit || 10),
+    creator_quota: String(params.creatorQuota ?? 7),
+    reviewer_quota: String(params.reviewerQuota ?? 3),
+    ratio_policy: params.ratioPolicy || "soft",
+    mixed_policy: params.mixedPolicy || "dominant",
+    dedupe: String(params.dedupe ?? true),
+  });
+  if (params.queryText) query.set("query_text", params.queryText);
+  if (params.productSku) query.set("product_sku", params.productSku);
+  return apiFetch<VkpiKolRecallResponse>(
+    `/api/admin/vkpi/kol-recall?${query.toString()}`,
     {},
     token,
   );
