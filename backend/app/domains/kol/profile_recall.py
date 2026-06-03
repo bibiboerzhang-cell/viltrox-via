@@ -17,6 +17,7 @@ VECTOR_SIZE = 1536
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 QDRANT_LOCAL_PATH = PROJECT_ROOT / "runtime" / "vkpi_qdrant"
 OPENAI_EMBEDDING_PRICE_PER_1M = Decimal("0.02")
+MAX_CANDIDATE_LIMIT = 500
 
 PRODUCT_QUERY_TEXTS = {
     "35mm_f12_lab": """Product query profile: Viltrox AF 35mm F1.2 LAB.
@@ -226,7 +227,42 @@ def _type_label(row: dict[str, Any]) -> str:
     return "未分类"
 
 
-def _format_item(hit: RecallHit, row: dict[str, Any], bucket: str) -> dict[str, Any]:
+def _type_score_for_bucket(row: dict[str, Any], bucket: str) -> float:
+    if bucket == "creator":
+        return _float(row.get("creator_type_score"))
+    return _float(row.get("reviewer_type_score"))
+
+
+def _recall_rank_score(
+    *,
+    vector_score: float,
+    type_score: float,
+    vector_weight: float,
+    type_weight: float,
+    type_boost_enabled: bool,
+) -> float:
+    if not type_boost_enabled:
+        return float(vector_score)
+    return float(vector_score) * float(vector_weight) + (float(type_score) / 100.0) * float(type_weight)
+
+
+def _format_item(
+    hit: RecallHit,
+    row: dict[str, Any],
+    bucket: str,
+    *,
+    vector_weight: float,
+    type_weight: float,
+    type_boost_enabled: bool,
+) -> dict[str, Any]:
+    type_rank_score = _type_score_for_bucket(row, bucket)
+    rank_score = _recall_rank_score(
+        vector_score=float(hit.vector_score),
+        type_score=type_rank_score,
+        vector_weight=vector_weight,
+        type_weight=type_weight,
+        type_boost_enabled=type_boost_enabled,
+    )
     return {
         "kol_pool_id": int(row.get("kol_pool_id") or hit.kol_pool_id),
         "handle": row.get("handle") or "",
@@ -235,6 +271,9 @@ def _format_item(hit: RecallHit, row: dict[str, Any], bucket: str) -> dict[str, 
         "profile_url": row.get("profile_url") or "",
         "avatar_url": row.get("avatar_url") or "",
         "vector_score": round(float(hit.vector_score), 6),
+        "type_rank_score": round(type_rank_score, 1),
+        "recall_rank_score": round(rank_score, 6),
+        "recall_rank_score_method": "vector_type_weighted" if type_boost_enabled else "vector_only",
         "profile_type": row.get("profile_type") or "",
         "bucket": bucket,
         "type_label": _type_label(row),
@@ -247,6 +286,7 @@ def _format_item(hit: RecallHit, row: dict[str, Any], bucket: str) -> dict[str, 
             "type_method": row.get("type_method") or "",
             "qdrant_point_id": hit.qdrant_point_id,
             "sufficiency": row.get("sufficiency") or "",
+            "ranking_method": "vector_type_weighted" if type_boost_enabled else "vector_only",
         },
     }
 
@@ -262,18 +302,25 @@ def recall_kol_profiles(
     ratio_policy: str = "soft",
     mixed_policy: str = "dominant",
     dedupe: bool = True,
+    vector_weight: float = 0.7,
+    type_weight: float = 0.3,
+    type_boost_enabled: bool = True,
 ) -> dict[str, Any]:
     if ratio_policy != "soft":
         raise ValueError("only ratio_policy=soft is supported")
     if mixed_policy != "dominant":
         raise ValueError("only mixed_policy=dominant is supported")
 
-    safe_candidate_limit = max(1, min(125, int(candidate_limit or 50)))
+    safe_candidate_limit = max(1, min(MAX_CANDIDATE_LIMIT, int(candidate_limit or 50)))
     safe_limit = max(1, min(50, int(limit or 10)))
     safe_creator_quota = max(0, min(50, int(creator_quota or 0)))
     safe_reviewer_quota = max(0, min(50, int(reviewer_quota or 0)))
+    safe_vector_weight = max(0.0, min(1.0, _float(vector_weight)))
+    safe_type_weight = max(0.0, min(1.0, _float(type_weight)))
     if safe_creator_quota + safe_reviewer_quota <= 0:
         raise ValueError("creator_quota + reviewer_quota must be greater than 0")
+    if type_boost_enabled and safe_vector_weight + safe_type_weight <= 0:
+        raise ValueError("vector_weight + type_weight must be greater than 0 when type_boost_enabled=true")
 
     resolved_text, query_meta = resolve_query_text(query_text=query_text, product_sku=product_sku)
     query_vector, embedding_meta = _embed_query(resolved_text)
@@ -298,7 +345,25 @@ def recall_kol_profiles(
             missing_type_count += 1
             continue
         bucket = _bucket_for(row, mixed_policy)
-        buckets[bucket].append(_format_item(hit, row, bucket))
+        buckets[bucket].append(
+            _format_item(
+                hit,
+                row,
+                bucket,
+                vector_weight=safe_vector_weight,
+                type_weight=safe_type_weight,
+                type_boost_enabled=bool(type_boost_enabled),
+            )
+        )
+
+    for bucket_items in buckets.values():
+        bucket_items.sort(
+            key=lambda item: (
+                _float(item.get("recall_rank_score")),
+                _float(item.get("vector_score")),
+            ),
+            reverse=True,
+        )
 
     creator_take = min(safe_creator_quota, safe_limit)
     reviewer_take = min(safe_reviewer_quota, max(0, safe_limit - creator_take))
@@ -321,6 +386,16 @@ def recall_kol_profiles(
             "policy": ratio_policy,
             "mixed_policy": mixed_policy,
             "dedupe": bool(dedupe),
+        },
+        "ranking": {
+            "type_boost_enabled": bool(type_boost_enabled),
+            "vector_weight": safe_vector_weight,
+            "type_weight": safe_type_weight,
+            "score_formula": (
+                "vector_score * vector_weight + (type_rank_score / 100) * type_weight"
+                if type_boost_enabled
+                else "vector_score"
+            ),
         },
         "items": items,
         "buckets": {
