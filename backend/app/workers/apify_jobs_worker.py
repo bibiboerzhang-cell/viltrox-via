@@ -10,6 +10,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -799,6 +800,34 @@ def _download_youtube_for_keyframes(url: str, output_dir: str) -> dict[str, Any]
 
 
 @contextmanager
+def _extract_keyframes_for_qa(
+    evidence: dict[str, Any],
+    layer1: dict[str, Any],
+    *,
+    limit: int = 6,
+    temp_prefix: str = "vkpi-keyframe-qa-video-",
+) -> Iterator[dict[str, Any]]:
+    keyframe_requests = _select_keyframe_requests(layer1, limit=limit)
+    with tempfile.TemporaryDirectory(prefix=temp_prefix) as tmpdir:
+        download = _download_youtube_for_keyframes(str(evidence.get("content_url") or ""), tmpdir)
+        if not download.get("success") or not download.get("path"):
+            raise RuntimeError(f"youtube_keyframe_download_failed: {download.get('error')}")
+        with temporary_keyframes(str(download["path"]), keyframe_requests) as frames:
+            if not frames:
+                raise RuntimeError("keyframe extraction produced no frames")
+            frame_meta = [
+                {"timestamp": frame.get("timestamp"), "reason": frame.get("reason")}
+                for frame in frames
+            ]
+            yield {
+                "frames": frames,
+                "frame_meta": frame_meta,
+                "keyframe_requests": keyframe_requests,
+                "download": download,
+            }
+
+
+@contextmanager
 def _gemini_worker_overrides(payload: dict[str, Any]):
     model_override = str(payload.get("gemini_model") or WORKER_GEMINI_MODEL).strip()
     skip_subtitles = _truthy(
@@ -1178,27 +1207,19 @@ def _process_gemini_video_flash_pro_judge(
 
     v2 = visual_raw.get("video_analysis_v2") if isinstance(visual_raw.get("video_analysis_v2"), dict) else {}
     layer1 = v2.get("layer1_visual_content") if isinstance(v2.get("layer1_visual_content"), dict) else {}
-    keyframe_requests = _select_keyframe_requests(layer1, limit=6)
-    with tempfile.TemporaryDirectory(prefix="vkpi-scheme2-video-") as tmpdir:
-        download = _download_youtube_for_keyframes(str(evidence.get("content_url") or ""), tmpdir)
-        if not download.get("success") or not download.get("path"):
-            raise RuntimeError(f"youtube_keyframe_download_failed: {download.get('error')}")
-        with temporary_keyframes(str(download["path"]), keyframe_requests) as frames:
-            if not frames:
-                raise RuntimeError("keyframe extraction produced no frames")
-            judgment_raw = asyncio.run(
-                gemini_video_analyzer.analyze_v2_judgment_with_keyframes(
-                    layer1_visual_content=layer1,
-                    keyframes=frames,
-                    title=str(evidence.get("title") or ""),
-                    performance_context=performance,
-                    model_name="gemini-3.1-pro-preview",
-                )
+    with _extract_keyframes_for_qa(evidence, layer1, limit=6, temp_prefix="vkpi-scheme2-video-") as qa_frames:
+        keyframe_requests = qa_frames["keyframe_requests"]
+        frame_meta = qa_frames["frame_meta"]
+        download = qa_frames["download"]
+        judgment_raw = asyncio.run(
+            gemini_video_analyzer.analyze_v2_judgment_with_keyframes(
+                layer1_visual_content=layer1,
+                keyframes=qa_frames["frames"],
+                title=str(evidence.get("title") or ""),
+                performance_context=performance,
+                model_name="gemini-3.1-pro-preview",
             )
-            frame_meta = [
-                {"timestamp": frame.get("timestamp"), "reason": frame.get("reason")}
-                for frame in frames
-            ]
+        )
     judgment_cost, judgment_basis, judgment_tokens_in, judgment_tokens_out = _gemini_cost(judgment_raw, preflight_cost)
     _record_gemini_cost(
         job=job,
@@ -1314,27 +1335,19 @@ def _process_gemini_video_flash_gpt55_judge(
 
     v2 = visual_raw.get("video_analysis_v2") if isinstance(visual_raw.get("video_analysis_v2"), dict) else {}
     layer1 = v2.get("layer1_visual_content") if isinstance(v2.get("layer1_visual_content"), dict) else {}
-    keyframe_requests = _select_keyframe_requests(layer1, limit=6)
-    with tempfile.TemporaryDirectory(prefix="vkpi-scheme3a-video-") as tmpdir:
-        download = _download_youtube_for_keyframes(str(evidence.get("content_url") or ""), tmpdir)
-        if not download.get("success") or not download.get("path"):
-            raise RuntimeError(f"youtube_keyframe_download_failed: {download.get('error')}")
-        with temporary_keyframes(str(download["path"]), keyframe_requests) as frames:
-            if not frames:
-                raise RuntimeError("keyframe extraction produced no frames")
-            judgment_raw = asyncio.run(
-                gemini_video_analyzer.analyze_v2_judgment_with_openai_keyframes(
-                    layer1_visual_content=layer1,
-                    keyframes=frames,
-                    title=str(evidence.get("title") or ""),
-                    performance_context=performance,
-                    model_name="gpt-5.5",
-                )
+    with _extract_keyframes_for_qa(evidence, layer1, limit=6, temp_prefix="vkpi-scheme3a-video-") as qa_frames:
+        keyframe_requests = qa_frames["keyframe_requests"]
+        frame_meta = qa_frames["frame_meta"]
+        download = qa_frames["download"]
+        judgment_raw = asyncio.run(
+            gemini_video_analyzer.analyze_v2_judgment_with_openai_keyframes(
+                layer1_visual_content=layer1,
+                keyframes=qa_frames["frames"],
+                title=str(evidence.get("title") or ""),
+                performance_context=performance,
+                model_name="gpt-5.5",
             )
-            frame_meta = [
-                {"timestamp": frame.get("timestamp"), "reason": frame.get("reason")}
-                for frame in frames
-            ]
+        )
     judgment_cost, judgment_basis, judgment_tokens_in, judgment_tokens_out = _openai_cost(judgment_raw, openai_estimated_cost)
     _record_openai_cost(
         job=job,
@@ -1450,27 +1463,19 @@ def _process_gemini_video_flash_claude_judge(
 
     v2 = visual_raw.get("video_analysis_v2") if isinstance(visual_raw.get("video_analysis_v2"), dict) else {}
     layer1 = v2.get("layer1_visual_content") if isinstance(v2.get("layer1_visual_content"), dict) else {}
-    keyframe_requests = _select_keyframe_requests(layer1, limit=6)
-    with tempfile.TemporaryDirectory(prefix="vkpi-scheme3b-video-") as tmpdir:
-        download = _download_youtube_for_keyframes(str(evidence.get("content_url") or ""), tmpdir)
-        if not download.get("success") or not download.get("path"):
-            raise RuntimeError(f"youtube_keyframe_download_failed: {download.get('error')}")
-        with temporary_keyframes(str(download["path"]), keyframe_requests) as frames:
-            if not frames:
-                raise RuntimeError("keyframe extraction produced no frames")
-            judgment_raw = asyncio.run(
-                gemini_video_analyzer.analyze_v2_judgment_with_anthropic_keyframes(
-                    layer1_visual_content=layer1,
-                    keyframes=frames,
-                    title=str(evidence.get("title") or ""),
-                    performance_context=performance,
-                    model_name="claude-opus-4-8",
-                )
+    with _extract_keyframes_for_qa(evidence, layer1, limit=6, temp_prefix="vkpi-scheme3b-video-") as qa_frames:
+        keyframe_requests = qa_frames["keyframe_requests"]
+        frame_meta = qa_frames["frame_meta"]
+        download = qa_frames["download"]
+        judgment_raw = asyncio.run(
+            gemini_video_analyzer.analyze_v2_judgment_with_anthropic_keyframes(
+                layer1_visual_content=layer1,
+                keyframes=qa_frames["frames"],
+                title=str(evidence.get("title") or ""),
+                performance_context=performance,
+                model_name="claude-opus-4-8",
             )
-            frame_meta = [
-                {"timestamp": frame.get("timestamp"), "reason": frame.get("reason")}
-                for frame in frames
-            ]
+        )
     judgment_cost, judgment_basis, judgment_tokens_in, judgment_tokens_out = _anthropic_cost(judgment_raw, anthropic_estimated_cost)
     _record_anthropic_cost(
         job=job,
