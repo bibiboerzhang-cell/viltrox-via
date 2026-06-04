@@ -28,6 +28,7 @@ from app.domains.kol import eleven_dimensions
 from app.domains.kol import intelligence_card as kol_intelligence_card
 from app.domains.kol import pool as kol_pool
 import app.domains.kol.profile_recall as kol_profile_recall
+import app.domains.kol.url_deep_crawl as kol_url_deep_crawl
 from app.domains.intelligence import gemini_single_kol_preflight
 import app.domains.intelligence.ai_brief as ai_brief
 import app.domains.evidence.summary as evidence_summary
@@ -218,6 +219,19 @@ def recall_kol_profiles(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/kol-url-deep-crawl")
+def dry_run_kol_url_deep_crawl(
+    body: dict = Body(...),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """Classify a pasted URL and check vkpi_kol_pool matches; dry-run only."""
+    del staff
+    try:
+        return kol_url_deep_crawl.dry_run_url_deep_crawl(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/kol-pool/available")
