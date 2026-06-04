@@ -8,6 +8,7 @@ import os
 import secrets as _secrets_mod
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 from app.core.logging import get_logger
 
@@ -15,6 +16,14 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 _INITIAL_ENV_KEYS = set(os.environ.keys())
+
+
+def _proxy_host_port(proxy_url: str) -> str:
+    parsed = urlparse(str(proxy_url or ""))
+    host = parsed.hostname or ""
+    if not host:
+        return "configured"
+    return f"{host}:{parsed.port}" if parsed.port else host
 
 
 def _load_env(env_file: str = ".env", *, override: bool = False):
@@ -368,7 +377,7 @@ for _origin in os.environ.get("CORS_ORIGINS", "").split(","):
 # ── YTDLP Proxy ──
 YTDLP_PROXY = os.environ.get("YTDLP_PROXY", "")
 if YTDLP_PROXY:
-    logger.info("yt-dlp proxy enabled: %s...", YTDLP_PROXY[:40])
+    logger.info("yt-dlp proxy enabled: %s", _proxy_host_port(YTDLP_PROXY))
 else:
     logger.info("yt-dlp running without proxy (direct IP)")
 

@@ -12,6 +12,7 @@ import signal
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 from app.core.logging import get_logger
 from app.services.scoring.core import compute_weighted_scores, get_vertical
@@ -36,9 +37,18 @@ logger = get_logger(__name__)
 if not YTDLP_AVAILABLE:
     logger.warning("ytdlp_binary_missing")
 
+
+def _proxy_host_port(proxy_url: str) -> str:
+    parsed = urlparse(str(proxy_url or ""))
+    host = parsed.hostname or ""
+    if not host:
+        return "configured"
+    return f"{host}:{parsed.port}" if parsed.port else host
+
+
 YTDLP_PROXY: str = os.getenv("YTDLP_PROXY", "")
 if YTDLP_PROXY:
-    logger.info("ytdlp_proxy_enabled", extra={"proxy_prefix": YTDLP_PROXY[:40]})
+    logger.info("ytdlp_proxy_enabled", extra={"proxy_host": _proxy_host_port(YTDLP_PROXY)})
 
 # ──────────────────────────────────────────────
 # YouTube subtitle fetcher (yt-dlp)
