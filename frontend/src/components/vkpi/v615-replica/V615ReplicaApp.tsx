@@ -20,6 +20,7 @@ import { MetricCard } from "./components/MetricCard";
 import { RealMap } from "./components/RealMap";
 import { ReportPanel } from "./components/ReportPanel";
 import { SignalsAlertsCard } from "./components/SignalsAlertsCard";
+import { TaskProgressBoard } from "./components/TaskProgressBoard";
 import { TopMoversCard } from "./components/TopMoversCard";
 import { UpcomingEventsCard } from "./components/UpcomingEventsCard";
 import { AIDecisionConfirmModal } from "./components/modals/AIDecisionConfirmModal";
@@ -733,7 +734,7 @@ export function V615ReplicaApp(props: any = {}) {
 
       // ─── Sidebar ───
       e("aside", {
-        className: `${collapsed ? "w-[64px]" : "w-[220px]"} sticky top-0 hidden h-screen shrink-0 flex-col justify-between border-r border-white/[0.06] bg-[#050810]/85 backdrop-blur-xl transition-all duration-300 md:flex`
+        className: `${collapsed ? "w-[64px]" : "w-[260px]"} sticky top-0 hidden h-screen shrink-0 flex-col justify-between border-r border-white/[0.06] bg-[#050810]/85 backdrop-blur-xl transition-all duration-300 md:flex`
       },
         e("div", null,
           e("div", { className: `flex h-16 items-center ${collapsed ? "justify-center" : "px-5"}` },
@@ -765,6 +766,7 @@ export function V615ReplicaApp(props: any = {}) {
           )
         ),
         e("div", { className: `flex flex-col gap-2 ${collapsed ? "px-2" : "px-3"} pb-4` },
+          !collapsed && e(TaskProgressBoard),
           e("button", {
             onClick: () => setCollapsed(!collapsed),
             className: `flex items-center ${collapsed ? "justify-center" : "gap-3 px-3"} rounded-lg py-2 text-sm text-slate-400 hover:bg-white/[0.04] hover:text-white`,
