@@ -59,6 +59,33 @@ export interface VkpiKolVideoAnalysisCacheResponse {
   entry?: VkpiKolVideoAnalysisCacheEntry | null;
 }
 
+export interface VkpiKolLlmDeepAnalysisResult {
+  id?: number;
+  kol_pool_id?: number;
+  source_url?: string;
+  source_evidence_id?: number | null;
+  analysis_kind?: string;
+  llm_v6_fit?: number | null;
+  llm_dimensions_11?: Record<string, unknown>;
+  method?: string;
+  provider?: string;
+  confidence?: number | null;
+  source_cache_id?: number | null;
+  status?: string;
+  created_at?: string;
+  llm_has_qa?: boolean;
+  llm_qa_pass?: boolean | null;
+}
+
+export interface VkpiKolLlmDeepAnalysisResponse {
+  status: "ready" | "missing";
+  kol_pool_id: number;
+  summary?: Record<string, unknown>;
+  primary_result?: VkpiKolLlmDeepAnalysisResult | null;
+  items?: VkpiKolLlmDeepAnalysisResult[];
+  count?: number;
+}
+
 export interface VkpiKolPoolFreshness {
   kol_pool_id: number;
   tier: string;
@@ -405,6 +432,15 @@ export async function getKolPoolDimensions11(
   return apiFetch<Row>(
     `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/dimensions11${query ? `?${query}` : ""}`,
     {},
+    token,
+  );
+}
+
+export async function getKolPoolLlmDeepAnalysis(token: string, kolPoolId: string | number, limit = 20) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  return apiFetch<VkpiKolLlmDeepAnalysisResponse>(
+    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/llm-deep-analysis?${params.toString()}`,
+    { cache: "no-store" },
     token,
   );
 }

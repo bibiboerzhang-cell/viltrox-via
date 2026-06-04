@@ -11,7 +11,7 @@ import { GeoTierChip } from "./GeoTierChip";
 import { KPAvatar } from "./KPAvatar";
 import { KOLVideoAnalysisPanel } from "./KOLVideoAnalysisPanel";
 import { PlatformPill } from "./PlatformPill";
-import { getKolPoolDimensions11 } from "../../../../services/vkpi/kolPool-api";
+import { getKolPoolDimensions11, getKolPoolLlmDeepAnalysis } from "../../../../services/vkpi/kolPool-api";
 import { candidateKindGroup } from "../lib/candidateKind";
 import { formatNumber, formatPercent } from "../lib/format";
 import { BRAND_TIER } from "../data/brandTier";
@@ -54,6 +54,50 @@ function scoreText(value) {
 
 function recordOr(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function compactText(value, max = 180) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  return text.length > max ? text.slice(0, max - 1) + "…" : text;
+}
+
+function flexibleTextList(value, maxItems = 3) {
+  const out = [];
+  const push = (item) => {
+    const text = compactText(item, 220);
+    if (text) out.push(text);
+  };
+  const visit = (item) => {
+    if (item === null || item === undefined || out.length >= maxItems) return;
+    if (typeof item === "string" || typeof item === "number" || typeof item === "boolean") {
+      push(item);
+      return;
+    }
+    if (Array.isArray(item)) {
+      item.forEach(visit);
+      return;
+    }
+    if (typeof item === "object") {
+      const record = recordOr(item);
+      const parts = ["recommendation", "reason", "summary", "evidence", "rationale"]
+        .map((key) => record[key])
+        .filter((part) => typeof part === "string" && part.trim());
+      if (parts.length > 1) {
+        push(parts.join(" · "));
+        return;
+      }
+      const direct = record.text || record.summary || record.reason || record.rationale || record.description || record.notes || record.evidence || record.recommendation || record.final_verdict || record.key_hook || record.flag || record.label || record.title;
+      if (direct) {
+        const prefix = record.severity ? "[" + record.severity + "] " : record.status ? "[" + record.status + "] " : "";
+        push(prefix + String(direct));
+        return;
+      }
+      if (parts.length) push(parts.join(" · "));
+    }
+  };
+  visit(value);
+  return out.slice(0, maxItems);
 }
 
 function maxScore(record) {
@@ -115,8 +159,74 @@ function videoAnalysisSources(item, representativeVideos) {
   });
 }
 
+function LlmDeepAnalysisPanel({ payload }) {
+  if (!payload || payload.status !== "ready" || !payload.primary_result) return null;
+  const primary = recordOr(payload.primary_result);
+  const dimensions = recordOr(primary.llm_dimensions_11);
+  const fitPayload = recordOr(dimensions.llm_v6_fit);
+  const recommendations = recordOr(dimensions.recommendations);
+  const risk = recordOr(dimensions.risk);
+  const qa = recordOr(dimensions.qa);
+  const llmScore = numberOr(primary.llm_v6_fit ?? fitPayload.score);
+  const confidence = numberOr(primary.confidence ?? fitPayload.confidence);
+  const qaPass = typeof primary.llm_qa_pass === "boolean" ? primary.llm_qa_pass : typeof qa.qa_pass === "boolean" ? qa.qa_pass : null;
+  const hasQa = Boolean(primary.llm_has_qa || Object.keys(qa).length);
+  const recommendationRows = [
+    { label: "合作建议", value: recommendations.cooperation_recommendation },
+    { label: "素材授权", value: recommendations.buyout_or_license_recommendation },
+    { label: "推荐理由", value: recommendations.why },
+  ].map((row) => ({ ...row, texts: flexibleTextList(row.value, row.label === "推荐理由" ? 1 : 2) })).filter((row) => row.texts.length);
+  const riskRows = [
+    ...flexibleTextList(risk.risk_flags, 3),
+    ...flexibleTextList(qa.issues, 3),
+  ].slice(0, 4);
+  const keyHook = flexibleTextList(risk.key_hook, 1)[0] || flexibleTextList(risk.final_verdict, 1)[0];
+
+  return e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
+    e("div", { className: "flex items-center justify-between gap-2 mb-2" },
+      e("div", { className: "flex items-center gap-1.5" },
+        e(Sparkles, { size: 11, className: "text-fuchsia-300" }),
+        e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "LLM 深度判断")
+      ),
+      e("span", { className: "text-[8.5px] text-slate-600" }, "llm_v6_fit · independent from V6 Fit")
+    ),
+    e("div", { className: "rounded-md border border-fuchsia-400/15 bg-fuchsia-400/[0.035] p-2.5" },
+      e("div", { className: "flex items-start justify-between gap-3" },
+        e("div", null,
+          e("div", { className: "text-[9px] uppercase tracking-wider text-fuchsia-200/80" }, "LLM判断 · 独立于V6 Fit"),
+          e("div", { className: "mt-1 flex items-baseline gap-2" },
+            e("span", { className: "text-2xl font-semibold tabular-nums text-white" }, llmScore == null ? "—" : scoreText(llmScore)),
+            confidence != null && e("span", { className: "text-[9.5px] text-slate-500" }, "conf " + fixedOrDash(confidence, 2))
+          )
+        ),
+        hasQa && e("span", {
+          className: "inline-flex shrink-0 items-center gap-1 rounded border px-2 py-1 text-[9px] font-medium",
+          style: qaPass === false
+            ? { background: "rgba(244,63,94,0.12)", borderColor: "rgba(244,63,94,0.28)", color: "#fecdd3" }
+            : { background: "rgba(16,185,129,0.12)", borderColor: "rgba(16,185,129,0.28)", color: "#bbf7d0" }
+        },
+          qaPass === false ? e(AlertTriangle, { size: 10 }) : e(Shield, { size: 10 }),
+          qaPass === false ? "关键帧QA需复核" : "关键帧QA通过"
+        )
+      ),
+      keyHook && e("div", { className: "mt-2 text-[10.5px] leading-relaxed text-slate-300" }, keyHook),
+      recommendationRows.length > 0 && e("div", { className: "mt-2 space-y-1.5" },
+        recommendationRows.map((row) => e("div", { key: row.label, className: "rounded border border-white/[0.05] bg-black/20 px-2 py-1.5" },
+          e("div", { className: "mb-0.5 text-[9px] text-fuchsia-200" }, row.label),
+          row.texts.map((text, index) => e("div", { key: index, className: "text-[10px] leading-relaxed text-slate-300" }, text))
+        ))
+      ),
+      riskRows.length > 0 && e("div", { className: "mt-2 rounded border border-amber-300/15 bg-amber-300/[0.04] px-2 py-1.5" },
+        e("div", { className: "mb-1 flex items-center gap-1 text-[9px] text-amber-200" }, e(AlertTriangle, { size: 9 }), "风险 / QA issues"),
+        riskRows.map((text, index) => e("div", { key: index, className: "text-[10px] leading-relaxed text-slate-300" }, text))
+      )
+    )
+  );
+}
+
 export function KOLDetailDrawer({ item, apiToken = "", detailLoading = false, detailError = "", onClose, inMyList, onToggleMyList, onContact }) {
   const [dimensions11, setDimensions11] = React.useState(null);
+  const [llmDeepAnalysis, setLlmDeepAnalysis] = React.useState(null);
   React.useEffect(() => {
     if (!apiToken || !item?.id) {
       setDimensions11(null);
@@ -131,6 +241,26 @@ export function KOLDetailDrawer({ item, apiToken = "", detailLoading = false, de
       })
       .catch(() => {
         if (!cancelled) setDimensions11(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [apiToken, item?.id]);
+
+  React.useEffect(() => {
+    if (!apiToken || !item?.id) {
+      setLlmDeepAnalysis(null);
+      return;
+    }
+    let cancelled = false;
+    setLlmDeepAnalysis(null);
+    void getKolPoolLlmDeepAnalysis(apiToken, item.id)
+      .then((payload) => {
+        if (cancelled) return;
+        setLlmDeepAnalysis(payload?.status === "ready" ? payload : null);
+      })
+      .catch(() => {
+        if (!cancelled) setLlmDeepAnalysis(null);
       });
     return () => {
       cancelled = true;
@@ -421,6 +551,7 @@ export function KOLDetailDrawer({ item, apiToken = "", detailLoading = false, de
           );
         })()
       ),
+      e(LlmDeepAnalysisPanel, { payload: llmDeepAnalysis }),
       
       // ── 联系方式 & 代表视频 ──
       e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
