@@ -1,0 +1,353 @@
+"""Safe KOL Pool profile-basics writer.
+
+This service is the reusable write boundary for profile-level backfills. It is
+deliberately limited to basic profile fields and verifies that V6 Fit fields do
+not change.
+"""
+from __future__ import annotations
+
+import json
+import secrets
+from datetime import datetime, timezone
+from typing import Any
+
+from app.db.connection import get_conn
+from app.domains.kol.pool_common import _table_columns
+
+PROFILE_BASICS_METHOD = "kol_profile_basics_safe_writer_v1"
+PROFILE_BASICS_WHITELIST = {
+    "avatar_url",
+    "followers",
+    "bio",
+    "profile_url",
+    "platform",
+    "handle",
+    "posts_count",
+    "last_video_at",
+    "raw_platform_data",
+    "profile_backfilled_at",
+}
+PROFILE_BASICS_UPDATE_FIELDS = (
+    "avatar_url",
+    "followers",
+    "bio",
+    "profile_url",
+    "platform",
+    "handle",
+    "posts_count",
+    "last_video_at",
+    "raw_platform_data",
+    "profile_backfilled_at",
+)
+PROFILE_BASICS_INSERT_FIELDS = (
+    "pool_uid",
+    "platform",
+    "handle",
+    "profile_url",
+    "avatar_url",
+    "bio",
+    "followers",
+    "posts_count",
+    "last_video_at",
+    "raw_platform_data",
+    "profile_backfilled_at",
+)
+SCORE_FIELDS = ("viltrox_fit_score", "viltrox_fit_reason")
+
+
+def write_kol_profile_basics(
+    kol_pool_id: int | None,
+    profile_data: dict[str, Any],
+    *,
+    dry_run: bool = True,
+    conn: Any | None = None,
+    method: str = PROFILE_BASICS_METHOD,
+) -> dict[str, Any]:
+    """Insert/update profile basics without touching V6 Fit fields.
+
+    ``dry_run`` defaults to True so callers must explicitly opt into a write.
+    When writing, this function checks score fields before/after and rolls back
+    if any existing score changes or a newly inserted row receives a score.
+    """
+    if not isinstance(profile_data, dict):
+        raise ValueError("profile_data must be a dict")
+
+    db = conn or get_conn()
+    columns = _table_columns(db, "vkpi_kol_pool")
+    if not columns:
+        raise RuntimeError("vkpi_kol_pool schema unavailable")
+
+    now = _utcnow()
+    row = _load_pool_row(db, kol_pool_id) if kol_pool_id else None
+    operation = "update" if row else "insert"
+    normalized = _normalise_profile_data(profile_data, existing=row, now=now, method=method)
+    ignored_fields = sorted(set(profile_data) - PROFILE_BASICS_WHITELIST)
+
+    if operation == "insert":
+        if not normalized.get("platform") or not normalized.get("handle"):
+            raise ValueError("platform and handle are required for new KOL profile basics")
+        normalized.setdefault("pool_uid", f"url-profile-{secrets.token_hex(8)}")
+
+    write_fields = PROFILE_BASICS_UPDATE_FIELDS if operation == "update" else PROFILE_BASICS_INSERT_FIELDS
+    allowed_fields = [field for field in write_fields if field in columns]
+    missing_columns = sorted(set(write_fields) - set(allowed_fields) - {"pool_uid"})
+    planned_values = {
+        field: normalized[field]
+        for field in allowed_fields
+        if field in normalized and _should_write(field, normalized[field], operation=operation)
+    }
+    if operation == "insert" and "pool_uid" in columns:
+        planned_values["pool_uid"] = normalized["pool_uid"]
+
+    before_scores = _score_snapshot(db, [int(kol_pool_id)]) if row else {}
+    if dry_run:
+        return {
+            "ok": True,
+            "dry_run": True,
+            "operation": operation,
+            "kol_pool_id": int(kol_pool_id) if row else None,
+            "fields_to_write": sorted(planned_values),
+            "planned_values": planned_values,
+            "ignored_fields": ignored_fields,
+            "missing_columns": missing_columns,
+            "score_before": before_scores,
+            "score_after": before_scores,
+            "viltrox_fit_score_changed_ids": [],
+            "viltrox_fit_score_untouched": True,
+            "method": method,
+        }
+
+    changed_ids: list[int] = []
+    try:
+        if operation == "update":
+            if not planned_values:
+                after_scores = before_scores
+                target_id = int(kol_pool_id or 0)
+            else:
+                target_id = int(kol_pool_id or 0)
+                _execute_update(db, target_id, planned_values)
+                after_scores = _score_snapshot(db, [target_id])
+                changed_ids = _changed_score_ids(before_scores, after_scores)
+        else:
+            target_id = _execute_insert(db, planned_values)
+            after_scores = _score_snapshot(db, [target_id])
+            if _new_row_has_score(after_scores.get(target_id, {})):
+                changed_ids = [target_id]
+
+        if changed_ids:
+            _rollback(db)
+            raise RuntimeError(f"viltrox_fit_score changed unexpectedly: {changed_ids}")
+
+        _commit(db)
+        return {
+            "ok": True,
+            "dry_run": False,
+            "operation": operation,
+            "kol_pool_id": target_id,
+            "fields_written": sorted(planned_values),
+            "ignored_fields": ignored_fields,
+            "missing_columns": missing_columns,
+            "score_before": before_scores,
+            "score_after": after_scores,
+            "viltrox_fit_score_changed_ids": [],
+            "viltrox_fit_score_untouched": True,
+            "method": method,
+        }
+    except Exception:
+        _rollback(db)
+        raise
+
+
+def _normalise_profile_data(
+    profile_data: dict[str, Any],
+    *,
+    existing: dict[str, Any] | None,
+    now: str,
+    method: str,
+) -> dict[str, Any]:
+    normalized: dict[str, Any] = {}
+    for key in PROFILE_BASICS_WHITELIST:
+        if key in profile_data:
+            normalized[key] = profile_data.get(key)
+
+    platform = _normalise_platform(normalized.get("platform") or (existing or {}).get("platform"))
+    handle = _normalise_handle(platform, normalized.get("handle") or (existing or {}).get("handle"))
+    if platform:
+        normalized["platform"] = platform
+    if handle:
+        normalized["handle"] = handle
+
+    for field in ("avatar_url", "bio", "profile_url", "last_video_at"):
+        if field in normalized:
+            normalized[field] = _text(normalized.get(field))
+
+    for field in ("followers", "posts_count"):
+        if field in normalized:
+            normalized[field] = _int_or_none(normalized.get(field))
+
+    backfilled_at = _text(normalized.get("profile_backfilled_at")) or now
+    normalized["profile_backfilled_at"] = backfilled_at
+    if "raw_platform_data" in normalized:
+        normalized["raw_platform_data"] = _merge_raw_payload(
+            normalized.get("raw_platform_data"),
+            method=method,
+            profile_backfilled_at=backfilled_at,
+        )
+    return normalized
+
+
+def _execute_update(conn: Any, kol_pool_id: int, values: dict[str, Any]) -> None:
+    assignments = ", ".join(f"{field}=?" for field in values)
+    conn.execute(
+        f"UPDATE vkpi_kol_pool SET {assignments} WHERE id=?",
+        tuple(values[field] for field in values) + (int(kol_pool_id),),
+    )
+
+
+def _execute_insert(conn: Any, values: dict[str, Any]) -> int:
+    columns = [field for field in values]
+    placeholders = ", ".join("?" for _ in columns)
+    conn.execute(
+        f"INSERT INTO vkpi_kol_pool ({', '.join(columns)}) VALUES ({placeholders})",
+        tuple(values[field] for field in columns),
+    )
+    row = conn.execute(
+        """
+        SELECT id
+        FROM vkpi_kol_pool
+        WHERE platform=? AND handle=?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (values.get("platform"), values.get("handle")),
+    ).fetchone()
+    if not row:
+        raise RuntimeError("inserted vkpi_kol_pool row could not be reloaded")
+    return int(row["id"])
+
+
+def _load_pool_row(conn: Any, kol_pool_id: int | None) -> dict[str, Any] | None:
+    if not kol_pool_id:
+        return None
+    row = conn.execute("SELECT * FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)).fetchone()
+    if not row:
+        raise LookupError(f"kol_pool_id not found: {kol_pool_id}")
+    return dict(row)
+
+
+def _score_snapshot(conn: Any, ids: list[int]) -> dict[int, dict[str, Any]]:
+    if not ids:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    rows = conn.execute(
+        f"""
+        SELECT id, viltrox_fit_score, viltrox_fit_reason
+        FROM vkpi_kol_pool
+        WHERE id IN ({placeholders})
+        """,
+        tuple(int(item) for item in ids),
+    ).fetchall()
+    return {int(row["id"]): {"viltrox_fit_score": row["viltrox_fit_score"], "viltrox_fit_reason": row["viltrox_fit_reason"]} for row in rows}
+
+
+def _changed_score_ids(before: dict[int, dict[str, Any]], after: dict[int, dict[str, Any]]) -> list[int]:
+    changed: list[int] = []
+    for kol_id, before_item in before.items():
+        after_item = after.get(kol_id, {})
+        if any(before_item.get(field) != after_item.get(field) for field in SCORE_FIELDS):
+            changed.append(kol_id)
+    return changed
+
+
+def _new_row_has_score(score_item: dict[str, Any]) -> bool:
+    return score_item.get("viltrox_fit_score") not in (None, "") or score_item.get("viltrox_fit_reason") not in (None, "")
+
+
+def _should_write(field: str, value: Any, *, operation: str) -> bool:
+    if operation == "insert":
+        return True
+    if field == "raw_platform_data":
+        return value not in (None, "")
+    if field in {"followers", "posts_count"}:
+        return value is not None
+    return _text(value) != ""
+
+
+def _merge_raw_payload(value: Any, *, method: str, profile_backfilled_at: str) -> str:
+    payload = _json_obj(value)
+    payload.setdefault("profile_backfill", {})
+    if isinstance(payload["profile_backfill"], dict):
+        payload["profile_backfill"].update(
+            {
+                "method": method,
+                "profile_backfilled_at": profile_backfilled_at,
+            }
+        )
+    return json.dumps(payload, ensure_ascii=False, default=str)
+
+
+def _json_obj(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {"raw": parsed}
+        except Exception:
+            return {"raw_text": value}
+    return {}
+
+
+def _normalise_platform(value: Any) -> str:
+    text = _text(value).lower()
+    if text in {"yt", "youtube", "youtube.com"}:
+        return "youtube"
+    if text in {"ig", "instagram", "instagram.com"}:
+        return "instagram"
+    if text in {"tt", "tiktok", "tiktok.com"}:
+        return "tiktok"
+    return text
+
+
+def _normalise_handle(platform: str, value: Any) -> str:
+    text = _text(value).strip("/")
+    if not text:
+        return ""
+    if text.startswith("@"):
+        text = text[1:]
+    if platform in {"instagram", "tiktok"}:
+        return text.lower()
+    if platform == "youtube" and not text.startswith("UC"):
+        return text.lower()
+    return text
+
+
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _int_or_none(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(float(str(value).replace(",", "")))
+    except (TypeError, ValueError):
+        return None
+
+
+def _utcnow() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _commit(conn: Any) -> None:
+    try:
+        conn.commit()
+    except Exception:
+        pass
+
+
+def _rollback(conn: Any) -> None:
+    try:
+        conn.rollback()
+    except Exception:
+        pass
