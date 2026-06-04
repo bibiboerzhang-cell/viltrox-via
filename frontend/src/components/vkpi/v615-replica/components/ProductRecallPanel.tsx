@@ -44,6 +44,20 @@ function cleanText(value: unknown): string {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
+function arrayOfRecords(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object" && !Array.isArray(entry))
+    : [];
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(cleanText).filter(Boolean) : [];
+}
+
+function recallItems(value: unknown): VkpiKolRecallItem[] {
+  return arrayOfRecords(value) as unknown as VkpiKolRecallItem[];
+}
+
 function initialFor(item: VkpiKolRecallItem): string {
   const text = cleanText(item.display_name || item.handle || item.platform || "K");
   return text.slice(0, 1).toUpperCase() || "K";
@@ -83,7 +97,10 @@ function RecallAvatar({ item }: { item: VkpiKolRecallItem }) {
         alt=""
         className="h-8 w-8 shrink-0 rounded-md object-cover"
         referrerPolicy="no-referrer"
-        onError={() => setImageFailed(true)}
+        onError={(event) => {
+          event.currentTarget.onerror = null;
+          setImageFailed(true);
+        }}
       />
     );
   }
@@ -101,7 +118,10 @@ function EvidenceThumbnail({ src }: { src: string }) {
         alt=""
         className="h-full w-full object-cover"
         referrerPolicy="no-referrer"
-        onError={() => setImageFailed(true)}
+        onError={(event) => {
+          event.currentTarget.onerror = null;
+          setImageFailed(true);
+        }}
       />
       <span className="absolute bottom-0 left-0 bg-black/65 px-1 py-0.5 text-[8px] text-slate-200">代表作封面</span>
     </div>
@@ -109,7 +129,7 @@ function EvidenceThumbnail({ src }: { src: string }) {
 }
 
 function EvidencePreview({ item }: { item: VkpiKolRecallItem }) {
-  const evidence = (item.representative_evidence || []).filter((entry) => cleanText(entry.title || entry.content_url));
+  const evidence = arrayOfRecords(item.representative_evidence).filter((entry) => cleanText(entry.title || entry.content_url));
   if (!evidence.length) return null;
   const primary = evidence[0];
   const title = cleanText(primary.title || primary.content_url);
@@ -171,7 +191,7 @@ function RecallCard({ item }: { item: VkpiKolRecallItem }) {
   const profileHref = cleanText(item.profile_url);
   const handle = cleanText(item.handle || item.display_name || `KOL #${item.kol_pool_id}`);
   const reason = cleanText(item.recall_reason || item.type_reason || "画像匹配:索引画像与产品 query 相近");
-  const lenses = (item.used_lenses || []).map(cleanText).filter(Boolean).slice(0, 3);
+  const lenses = stringList(item.used_lenses).slice(0, 3);
   const followers = compactFollowers(item.followers);
   const bio = cleanText(item.bio);
   return (
@@ -262,8 +282,8 @@ export function ProductRecallPanel({ apiToken = "" }: { apiToken?: string }) {
   const [error, setError] = useState("");
 
   const diagnostics = result?.diagnostics || {};
-  const creatorItems = useMemo(() => result?.buckets?.creator || [], [result]);
-  const reviewerItems = useMemo(() => result?.buckets?.reviewer || [], [result]);
+  const creatorItems = useMemo(() => recallItems(result?.buckets?.creator), [result]);
+  const reviewerItems = useMemo(() => recallItems(result?.buckets?.reviewer), [result]);
 
   const runRecall = async (nextQuery = queryText) => {
     if (!apiToken) {
