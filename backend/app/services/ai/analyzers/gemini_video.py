@@ -29,6 +29,18 @@ from app.services.media.video_keyframes import build_anthropic_multimodal_conten
 
 logger = get_logger(__name__)
 _FINAL_V1_CONTEXT_CACHES: dict[str, str] = {}
+DEFAULT_GEMINI_FINAL_V1_MODELS = ["gemini-3-flash-preview"]
+
+
+def final_v1_gemini_models(value: Any = None) -> list[str]:
+    raw = value
+    if raw is None:
+        raw = os.environ.get("GEMINI_FINAL_V1_MODELS", "")
+    if isinstance(raw, (list, tuple)):
+        models = [str(item or "").strip() for item in raw]
+    else:
+        models = [item.strip() for item in str(raw or "").split(",")]
+    return [model for model in models if model] or list(DEFAULT_GEMINI_FINAL_V1_MODELS)
 
 
 VIDEO_V2_SCORE_KEYS = (
@@ -797,6 +809,7 @@ async def analyze_local_video_with_gemini(
     schema_version: str = "v2",
     performance_context: dict[str, Any] | None = None,
     subtitle_text: str = "",
+    final_v1_models: list[str] | str | None = None,
 ) -> dict:
     """Analyze an already-downloaded local MP4 with Gemini File API."""
     result = {
@@ -923,7 +936,7 @@ async def analyze_local_video_with_gemini(
             return result
 
         last_err = ""
-        model_names = ["gemini-3.1-pro-preview"] if is_final_v1 else ["gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-2.5-flash"]
+        model_names = final_v1_gemini_models(final_v1_models) if is_final_v1 else ["gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-2.5-flash"]
         for model_name in model_names:
             try:
                 cache_config = None
@@ -1009,6 +1022,7 @@ async def analyze_youtube_with_gemini(
     *,
     schema_version: str = "legacy",
     performance_context: dict[str, Any] | None = None,
+    final_v1_models: list[str] | str | None = None,
 ) -> dict:
     """
     Gemini YouTube analysis via File API:
@@ -1245,7 +1259,7 @@ vlog类：真实感、器材自然使用是核心
         "gemini-2.5-flash",          # FALLBACK — stable GA tier
     ]
     if is_final_v1:
-        GEMINI_MODELS = ["gemini-3.1-pro-preview"]
+        GEMINI_MODELS = final_v1_gemini_models(final_v1_models)
 
     # ===== FAST PATH: YouTube direct URL (no download, no upload) =====
     # Gemini 3 supports passing YouTube URLs directly via file_uri.

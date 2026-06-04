@@ -54,6 +54,7 @@ GEMINI_VIDEO_V2_DERIVE_METHODS = {
 GEMINI_VIDEO_FINAL_DERIVE_METHODS = {"video_analysis_final_v1"}
 GEMINI_VIDEO_DERIVE_METHODS = {"gemini", *GEMINI_VIDEO_V2_DERIVE_METHODS, *GEMINI_VIDEO_FINAL_DERIVE_METHODS}
 WORKER_GEMINI_MODEL = os.environ.get("APIFY_WORKER_GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+FINAL_V1_GEMINI_MODELS = gemini_video_analyzer.final_v1_gemini_models()
 _stop_event = threading.Event()
 
 
@@ -241,6 +242,7 @@ async def _run(payload):
             str(payload.get("creator_handle") or ""),
             schema_version=str(payload.get("schema_version") or "v2"),
             performance_context=payload.get("performance_context"),
+            final_v1_models=payload.get("gemini_final_v1_models"),
         )
     if mode == "youtube":
         return await gemini_video_analyzer.analyze_youtube_with_gemini(
@@ -249,6 +251,7 @@ async def _run(payload):
             str(payload.get("creator_handle") or ""),
             schema_version=str(payload.get("schema_version") or "legacy"),
             performance_context=payload.get("performance_context"),
+            final_v1_models=payload.get("gemini_final_v1_models"),
         )
     return {"analyzed": False, "method": "gemini_worker_child", "error": f"unsupported_gemini_child_mode:{mode}"}
 
@@ -1571,7 +1574,12 @@ def _process_gemini_video(
     started = time.monotonic()
     analyzer_payload = payload
     if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS:
-        analyzer_payload = {**payload, "gemini_model": "gemini-3.1-pro-preview"}
+        analyzer_payload = {
+            **payload,
+            "gemini_final_v1_models": gemini_video_analyzer.final_v1_gemini_models(
+                payload.get("gemini_final_v1_models") or FINAL_V1_GEMINI_MODELS
+            ),
+        }
     if platform in {"instagram", "tiktok"}:
         resolved = _resolve_video_media(evidence)
         if str(resolved.get("status") or "") == "blocked":
