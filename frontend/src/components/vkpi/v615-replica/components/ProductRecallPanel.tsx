@@ -90,6 +90,24 @@ function RecallAvatar({ item }: { item: VkpiKolRecallItem }) {
   return fallback;
 }
 
+function EvidenceThumbnail({ src }: { src: string }) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const thumb = cleanText(src);
+  if (!thumb || imageFailed) return null;
+  return (
+    <div className="relative h-12 w-16 shrink-0 overflow-hidden rounded-md bg-black/30">
+      <img
+        src={thumb}
+        alt=""
+        className="h-full w-full object-cover"
+        referrerPolicy="no-referrer"
+        onError={() => setImageFailed(true)}
+      />
+      <span className="absolute bottom-0 left-0 bg-black/65 px-1 py-0.5 text-[8px] text-slate-200">代表作封面</span>
+    </div>
+  );
+}
+
 function EvidencePreview({ item }: { item: VkpiKolRecallItem }) {
   const evidence = (item.representative_evidence || []).filter((entry) => cleanText(entry.title || entry.content_url));
   if (!evidence.length) return null;
@@ -106,12 +124,7 @@ function EvidencePreview({ item }: { item: VkpiKolRecallItem }) {
         {...(href ? { href, target: "_blank", rel: "noreferrer" } : {})}
         className="group flex min-w-0 gap-2"
       >
-        {thumb ? (
-          <div className="relative h-12 w-16 shrink-0 overflow-hidden rounded-md bg-black/30">
-            <img src={thumb} alt="" className="h-full w-full object-cover" referrerPolicy="no-referrer" />
-            <span className="absolute bottom-0 left-0 bg-black/65 px-1 py-0.5 text-[8px] text-slate-200">代表作封面</span>
-          </div>
-        ) : null}
+        <EvidenceThumbnail src={thumb} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1 text-[9px] uppercase tracking-wide text-slate-600">
             代表作
