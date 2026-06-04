@@ -137,6 +137,8 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "098_vkpi_project_contracts.sql",
     "099_vkpi_kol_profile_index.sql",
     "100_vkpi_kol_profile_type.sql",
+    "101_vkpi_kol_profile_recall_status.sql",
+    "102_vkpi_kol_url_deep_crawl.sql",
 )
 
 try:

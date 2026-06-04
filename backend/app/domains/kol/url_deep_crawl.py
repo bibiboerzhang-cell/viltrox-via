@@ -1,18 +1,39 @@
-"""Dry-run URL classifier and KOL Pool matcher for URL deep crawl.
+"""URL classifier and safe profile-flow handler for URL deep crawl.
 
-This module is intentionally read-only. It identifies the URL type and checks
-whether the creator is already present in vkpi_kol_pool; it never crawls,
-queues jobs, calls providers, or writes business data.
+The default execute=false path is read-only. execute=true is only wired for
+profile URLs and writes through the profile-basics whitelist service; it never
+queues workers, calls LLMs, or touches V6 Fit fields.
 """
 from __future__ import annotations
 
 import json
+import re
+import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import parse_qs, urlparse, urlunparse
 
 from app.db.connection import get_conn
-from app.domains.kol.pool_common import _table_columns
+from app.domains.industry.snapshot_kpis import calculate_kpis
+from app.domains.kol.pool_common import (
+    _bio,
+    _content_items_from_payload,
+    _first_present,
+    _int_or_none,
+    _json,
+    _looks_like_content_item,
+    _platform,
+    _profile_item,
+    _profile_stats,
+    _profile_url,
+    _table_columns,
+    _thumb_url,
+)
+from app.domains.kol.profile_basics import write_kol_profile_basics
+from app.platform.industry_crawlers.instagram_crawler import InstagramCrawler
+from app.platform.industry_crawlers.tiktok_crawler import TikTokCrawler
+from app.platform.industry_crawlers.youtube_crawler import YouTubeCrawler
 from app.services.verification.viltrox_official import (
     detect_platform_from_profile_url,
     extract_handle_from_profile_url,
@@ -87,10 +108,8 @@ class ClassifiedUrl:
 
 
 def dry_run_url_deep_crawl(body: dict[str, Any]) -> dict[str, Any]:
-    """Classify a user URL and match it against vkpi_kol_pool without writes."""
+    """Classify a user URL; optionally execute safe profile basics flow."""
     execute = bool(body.get("execute", False))
-    if execute:
-        raise ValueError("execute=true is not supported in this dry-run endpoint")
 
     url = str(body.get("url") or "").strip()
     if not url:
@@ -99,13 +118,26 @@ def dry_run_url_deep_crawl(body: dict[str, Any]) -> dict[str, Any]:
     classified = classify_url(url)
     matches = _match_pool(classified) if classified.platform in SUPPORTED_PLATFORMS else []
     matched_id = matches[0]["kol_pool_id"] if len(matches) == 1 else None
+    profile_flow = _profile_flow_plan(classified, matches, body, execute=execute)
+    safety = {
+        "crawl_performed": False,
+        "llm_calls_performed": False,
+        "worker_touched": False,
+        "viltrox_fit_touched": False,
+        "business_tables_written": False,
+    }
+
+    if execute and classified.url_type == "profile" and profile_flow.get("status") == "ready_to_execute":
+        profile_flow = _execute_profile_flow(classified, matches, body)
+        safety["crawl_performed"] = bool(profile_flow.get("crawl_performed"))
+        safety["business_tables_written"] = bool(profile_flow.get("business_tables_written"))
 
     return {
-        "method": "kol_url_deep_crawl_dry_run_v1",
-        "dry_run": True,
-        "execute": False,
-        "writes_performed": False,
-        "provider_calls_performed": False,
+        "method": "kol_url_deep_crawl_profile_flow_v1",
+        "dry_run": not execute,
+        "execute": execute,
+        "writes_performed": safety["business_tables_written"],
+        "provider_calls_performed": safety["crawl_performed"],
         "url": {
             "input": classified.original_url,
             "normalized": classified.normalized_url,
@@ -119,13 +151,8 @@ def dry_run_url_deep_crawl(body: dict[str, Any]) -> dict[str, Any]:
         "matched_kol_pool_id": matched_id,
         "candidates": matches,
         "next_action": _next_action(classified, matches),
-        "safety": {
-            "crawl_performed": False,
-            "llm_calls_performed": False,
-            "worker_touched": False,
-            "viltrox_fit_touched": False,
-            "business_tables_written": False,
-        },
+        "profile_flow": profile_flow,
+        "safety": safety,
     }
 
 
@@ -251,6 +278,382 @@ def _match_pool(classified: ClassifiedUrl) -> list[dict[str, Any]]:
             ),
         )
     ][:10]
+
+
+def _profile_flow_plan(
+    classified: ClassifiedUrl,
+    matches: list[dict[str, Any]],
+    body: dict[str, Any],
+    *,
+    execute: bool,
+) -> dict[str, Any]:
+    if classified.url_type == "video":
+        return {
+            "status": "not_connected",
+            "message": "video URL branch is not wired in this knife; it will be handled by the next video flow.",
+            "crawl_performed": False,
+            "business_tables_written": False,
+        }
+    if classified.url_type != "profile":
+        return {
+            "status": "unsupported",
+            "message": "profile flow only supports recognized YouTube/Instagram/TikTok profile URLs.",
+            "crawl_performed": False,
+            "business_tables_written": False,
+        }
+    if len(matches) > 1:
+        return {
+            "status": "needs_human_choice",
+            "message": "multiple KOL Pool candidates matched; choose one before executing.",
+            "candidate_count": len(matches),
+            "crawl_performed": False,
+            "business_tables_written": False,
+        }
+
+    target = _profile_target(classified)
+    kol_pool_id = int(matches[0]["kol_pool_id"]) if len(matches) == 1 else None
+    profile_data = _identity_profile_data(classified)
+    writer_plan = write_kol_profile_basics(kol_pool_id, profile_data, dry_run=True)
+    return {
+        "status": "ready_to_execute" if execute else "dry_run_ready",
+        "operation": "update" if kol_pool_id else "insert",
+        "kol_pool_id": kol_pool_id,
+        "target": target,
+        "max_posts": _max_posts(body),
+        "would_crawl": {
+            "platform": classified.platform,
+            "target": target,
+            "crawler": f"{classified.platform}_crawler",
+            "uses_decodo": False,
+            "uses_gemini": False,
+            "uses_worker": False,
+        },
+        "safe_writer_dry_run": {
+            "operation": writer_plan.get("operation"),
+            "fields_to_write": writer_plan.get("fields_to_write"),
+            "ignored_fields": writer_plan.get("ignored_fields"),
+            "missing_columns": writer_plan.get("missing_columns"),
+            "viltrox_fit_score_changed_ids": writer_plan.get("viltrox_fit_score_changed_ids"),
+            "viltrox_fit_score_untouched": writer_plan.get("viltrox_fit_score_untouched"),
+        },
+        "crawl_performed": False,
+        "business_tables_written": False,
+    }
+
+
+def _execute_profile_flow(
+    classified: ClassifiedUrl,
+    matches: list[dict[str, Any]],
+    body: dict[str, Any],
+) -> dict[str, Any]:
+    started = time.monotonic()
+    target = _profile_target(classified)
+    max_posts = _max_posts(body)
+    kol_pool_id = int(matches[0]["kol_pool_id"]) if len(matches) == 1 else None
+    operation = "update" if kol_pool_id else "insert"
+    conn = get_conn()
+
+    crawl = _crawl_profile_basics(classified, target=target, max_posts=max_posts)
+    if str(crawl.get("status") or "").lower() not in {"ok", "synced"}:
+        run_id = _record_deep_crawl_run(
+            conn,
+            kol_pool_id=kol_pool_id,
+            source_url=classified.normalized_url,
+            url_type="profile",
+            mode=str(body.get("mode") or "profile_only"),
+            status="failed",
+            dry_run=False,
+            summary={
+                "reason": "profile_crawl_not_ready",
+                "crawl_status": crawl.get("status"),
+                "elapsed_ms": crawl.get("elapsed_ms"),
+                "provider_source": crawl.get("provider_source"),
+            },
+        )
+        return {
+            "status": "crawl_failed",
+            "operation": operation,
+            "kol_pool_id": kol_pool_id,
+            "target": target,
+            "crawl_status": crawl.get("status"),
+            "provider_source": crawl.get("provider_source"),
+            "run_id": run_id,
+            "crawl_performed": True,
+            "business_tables_written": bool(run_id),
+            "viltrox_fit_score_changed_ids": [],
+            "viltrox_fit_score_untouched": True,
+        }
+
+    profile_data = _profile_data_from_crawl(
+        classified,
+        crawl,
+        existing_match=matches[0] if matches else {},
+        max_posts=max_posts,
+    )
+    write_result = write_kol_profile_basics(kol_pool_id, profile_data, dry_run=False, conn=conn)
+    written_kol_pool_id = int(write_result.get("kol_pool_id") or kol_pool_id or 0) or None
+    run_id = _record_deep_crawl_run(
+        conn,
+        kol_pool_id=written_kol_pool_id,
+        source_url=classified.normalized_url,
+        url_type="profile",
+        mode=str(body.get("mode") or "profile_only"),
+        status="ready",
+        dry_run=False,
+        summary={
+            "operation": operation,
+            "target": target,
+            "crawl_status": crawl.get("status"),
+            "provider_source": crawl.get("provider_source"),
+            "elapsed_ms": crawl.get("elapsed_ms"),
+            "fields_written": write_result.get("fields_written"),
+            "viltrox_fit_score_changed_ids": write_result.get("viltrox_fit_score_changed_ids"),
+        },
+    )
+    return {
+        "status": "ready",
+        "operation": operation,
+        "kol_pool_id": written_kol_pool_id,
+        "target": target,
+        "max_posts": max_posts,
+        "profile_data": _public_profile_data(profile_data),
+        "write_result": {
+            "fields_written": write_result.get("fields_written"),
+            "ignored_fields": write_result.get("ignored_fields"),
+            "missing_columns": write_result.get("missing_columns"),
+            "viltrox_fit_score_changed_ids": write_result.get("viltrox_fit_score_changed_ids"),
+            "viltrox_fit_score_untouched": write_result.get("viltrox_fit_score_untouched"),
+        },
+        "run_id": run_id,
+        "elapsed_ms": int((time.monotonic() - started) * 1000),
+        "crawl_performed": True,
+        "business_tables_written": True,
+        "provider_source": crawl.get("provider_source"),
+        "crawl_status": crawl.get("status"),
+        "viltrox_fit_score_changed_ids": write_result.get("viltrox_fit_score_changed_ids") or [],
+        "viltrox_fit_score_untouched": bool(write_result.get("viltrox_fit_score_untouched")),
+    }
+
+
+def _crawl_profile_basics(classified: ClassifiedUrl, *, target: str, max_posts: int) -> dict[str, Any]:
+    crawler = _crawler_for(classified.platform)
+    started = time.monotonic()
+    profile_payload: dict[str, Any] = {}
+    videos_payload: dict[str, Any] = {}
+    videos_items: list[dict[str, Any]] = []
+
+    if classified.platform == "youtube":
+        profile_payload = crawler.crawl_channel_profile(target, channel_id="", max_posts=max_posts)
+        profile_items = profile_payload.get("items") if isinstance(profile_payload, dict) else []
+        profile = profile_items[0] if isinstance(profile_items, list) and profile_items and isinstance(profile_items[0], dict) else {}
+        channel_id = str(profile.get("id") or classified.channel_id or "")
+        if channel_id and hasattr(crawler, "crawl_channel_videos"):
+            videos_payload = crawler.crawl_channel_videos(channel_id, max_results=max_posts)
+            videos = videos_payload.get("items") if isinstance(videos_payload, dict) else []
+            videos_items = [video for video in videos if isinstance(video, dict)] if isinstance(videos, list) else []
+        fallback_videos = profile_payload.get("videos") if isinstance(profile_payload, dict) else None
+        if not videos_items and isinstance(fallback_videos, list):
+            videos_items = [video for video in fallback_videos if isinstance(video, dict)]
+    else:
+        profile_payload = crawler.crawl_channel_profile(target, channel_id="", max_posts=max_posts)
+        payload_items = _content_items_from_payload(profile_payload) if isinstance(profile_payload, dict) else []
+        profile_items = profile_payload.get("items") if isinstance(profile_payload, dict) else []
+        if payload_items and _looks_like_content_item(payload_items[0]):
+            videos_items = payload_items
+        elif isinstance(profile_items, list):
+            videos_items = [item for item in profile_items if isinstance(item, dict) and _looks_like_content_item(item)]
+
+    provider_source = str((profile_payload or {}).get("provider_source") or (videos_payload or {}).get("provider_source") or "")
+    status = str(
+        (profile_payload or {}).get("sync_status")
+        or (profile_payload or {}).get("provider_status")
+        or (videos_payload or {}).get("sync_status")
+        or (videos_payload or {}).get("provider_status")
+        or "unknown"
+    )
+    return {
+        "profile_payload": profile_payload if isinstance(profile_payload, dict) else {},
+        "videos_payload": videos_payload if isinstance(videos_payload, dict) else {},
+        "videos_items": videos_items,
+        "status": status,
+        "provider_source": provider_source,
+        "elapsed_ms": int((time.monotonic() - started) * 1000),
+    }
+
+
+def _profile_data_from_crawl(
+    classified: ClassifiedUrl,
+    crawl: dict[str, Any],
+    *,
+    existing_match: dict[str, Any],
+    max_posts: int,
+) -> dict[str, Any]:
+    profile_payload = crawl.get("profile_payload") if isinstance(crawl.get("profile_payload"), dict) else {}
+    videos_payload = crawl.get("videos_payload") if isinstance(crawl.get("videos_payload"), dict) else {}
+    videos_items = crawl.get("videos_items") if isinstance(crawl.get("videos_items"), list) else []
+    handle = classified.handle or classified.channel_id or str(existing_match.get("handle") or "")
+    raw_data = {
+        "source": f"{classified.platform}_url_deep_crawl_profile",
+        "profile": profile_payload,
+        "videos": videos_items,
+        "kpi_status": crawl.get("status") or "unknown",
+        "source_ref": classified.normalized_url,
+        "profile_backfill": {
+            "method": "url_deep_crawl_profile_v1",
+            "max_posts": int(max_posts),
+            "target": _profile_target(classified),
+            "provider_source": crawl.get("provider_source") or "",
+            "elapsed_ms": crawl.get("elapsed_ms"),
+        },
+    }
+    if classified.platform == "youtube":
+        source = str(profile_payload.get("provider_source") or videos_payload.get("provider_source") or "").strip()
+        raw_data["source"] = "youtube_url_deep_crawl_profile_apify" if source == "apify" else "youtube_url_deep_crawl_profile_api"
+        raw_data["youtube_provider_source"] = source or "youtube_api"
+
+    kpis = calculate_kpis(raw_data)
+    profile = _profile_item(raw_data)
+    stats = _profile_stats(profile)
+    return {
+        "platform": classified.platform,
+        "handle": handle,
+        "profile_url": _profile_url(classified.platform, profile, handle, classified.normalized_url),
+        "avatar_url": _thumb_url(profile),
+        "bio": _bio(profile),
+        "followers": _int_or_none(_first_present(kpis.get("followers"), stats.get("followers"), stats.get("followersCount"))),
+        "posts_count": _int_or_none(_first_present(kpis.get("posts"), stats.get("posts"), stats.get("postsCount"))),
+        "last_video_at": _latest_video_date([item for item in videos_items if isinstance(item, dict)]),
+        "raw_platform_data": _json(raw_data),
+    }
+
+
+def _record_deep_crawl_run(
+    conn: Any,
+    *,
+    kol_pool_id: int | None,
+    source_url: str,
+    url_type: str,
+    mode: str,
+    status: str,
+    dry_run: bool,
+    summary: dict[str, Any],
+) -> int | None:
+    columns = _table_columns(conn, "vkpi_kol_url_deep_crawl_runs")
+    if "id" not in columns:
+        raise RuntimeError("vkpi_kol_url_deep_crawl_runs table is missing; apply migration 102")
+    row = conn.execute(
+        """
+        INSERT INTO vkpi_kol_url_deep_crawl_runs
+          (kol_pool_id, source_url, url_type, mode, status, dry_run, result_summary_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?::jsonb)
+        RETURNING id
+        """,
+        (
+            int(kol_pool_id) if kol_pool_id else None,
+            source_url,
+            url_type,
+            mode if mode in {"auto", "profile_only", "video_deep", "dry_run"} else "profile_only",
+            status,
+            bool(dry_run),
+            json.dumps(summary or {}, ensure_ascii=False, default=str),
+        ),
+    ).fetchone()
+    try:
+        conn.commit()
+    except Exception:
+        pass
+    return int(row["id"]) if row and row["id"] is not None else None
+
+
+def _profile_target(classified: ClassifiedUrl) -> str:
+    if classified.url_type == "profile" and classified.normalized_url:
+        return classified.normalized_url
+    return classified.channel_id or classified.handle
+
+
+def _identity_profile_data(classified: ClassifiedUrl) -> dict[str, Any]:
+    return {
+        "platform": classified.platform,
+        "handle": classified.handle or classified.channel_id,
+        "profile_url": classified.normalized_url if classified.url_type == "profile" else "",
+        "raw_platform_data": {
+            "source": "url_deep_crawl_profile_identity_dry_run",
+            "profile_backfill": {
+                "method": "url_deep_crawl_profile_v1",
+                "source_url": classified.normalized_url,
+            },
+        },
+    }
+
+
+def _public_profile_data(profile_data: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: profile_data.get(key)
+        for key in ("platform", "handle", "profile_url", "avatar_url", "followers", "bio", "posts_count", "last_video_at")
+        if profile_data.get(key) not in (None, "")
+    }
+
+
+def _crawler_for(platform: str) -> Any:
+    if platform == "youtube":
+        return YouTubeCrawler(run_timeout_seconds=240)
+    if platform == "instagram":
+        return InstagramCrawler(run_timeout_seconds=180)
+    if platform == "tiktok":
+        return TikTokCrawler(run_timeout_seconds=240)
+    raise ValueError(f"unsupported platform: {platform}")
+
+
+def _max_posts(body: dict[str, Any]) -> int:
+    try:
+        return max(1, min(12, int(body.get("max_posts") or 3)))
+    except (TypeError, ValueError):
+        return 3
+
+
+def _parse_date(value: Any) -> str:
+    if value in (None, ""):
+        return ""
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(float(value), tz=timezone.utc).date().isoformat()
+        except Exception:
+            return ""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", text):
+        return text
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date().isoformat()
+    except Exception:
+        pass
+    match = re.search(r"(\d{4}-\d{2}-\d{2})", text)
+    return match.group(1) if match else ""
+
+
+def _latest_video_date(items: list[dict[str, Any]]) -> str:
+    dates: list[str] = []
+    for item in items:
+        author = item.get("authorMeta") if isinstance(item.get("authorMeta"), dict) else {}
+        candidates = [
+            item.get("publish_date"),
+            item.get("published_at"),
+            item.get("publishedAt"),
+            item.get("uploadDate"),
+            item.get("date"),
+            item.get("timestamp"),
+            item.get("createTimeISO"),
+            item.get("createTime"),
+            item.get("takenAtIso"),
+            author.get("createTime"),
+        ]
+        for candidate in candidates:
+            parsed = _parse_date(candidate)
+            if parsed:
+                dates.append(parsed)
+                break
+    return max(dates) if dates else ""
 
 
 def _pool_rows() -> list[dict[str, Any]]:
