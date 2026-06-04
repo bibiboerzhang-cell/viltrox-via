@@ -191,6 +191,7 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
       selectedItem && e(KOLDetailDrawer, {
         key: `kol-detail-${selectedItem.id || selectedItem.handle || "selected"}`,
         item: selectedItem,
+        apiToken,
         detailLoading,
         detailError,
         onClose: () => {

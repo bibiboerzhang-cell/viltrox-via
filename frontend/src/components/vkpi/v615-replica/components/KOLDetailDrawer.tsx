@@ -9,6 +9,7 @@ import { AudienceTypeChip } from "./AudienceTypeChip";
 import { CandidateKindChip } from "./CandidateKindChip";
 import { GeoTierChip } from "./GeoTierChip";
 import { KPAvatar } from "./KPAvatar";
+import { KOLVideoAnalysisPanel } from "./KOLVideoAnalysisPanel";
 import { PlatformPill } from "./PlatformPill";
 import { candidateKindGroup } from "../lib/candidateKind";
 import { formatNumber, formatPercent } from "../lib/format";
@@ -61,7 +62,18 @@ function concernLabel(value) {
   return labels[text] || text.replace(/_/g, " ");
 }
 
-export function KOLDetailDrawer({ item, detailLoading = false, detailError = "", onClose, inMyList, onToggleMyList, onContact }) {
+function videoAnalysisSources(item, representativeVideos) {
+  const seen = new Set();
+  return [...asArray(item.video_evidence), ...representativeVideos].filter((video) => {
+    if (!video || typeof video !== "object") return false;
+    const key = String(video.evidence_id || video.id || video.content_url || video.url || video.title || "");
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+export function KOLDetailDrawer({ item, apiToken = "", detailLoading = false, detailError = "", onClose, inMyList, onToggleMyList, onContact }) {
   if (!item) return null;
   const devices = {
     ...(item.devices || {}),
@@ -76,6 +88,7 @@ export function KOLDetailDrawer({ item, detailLoading = false, detailError = "",
   const brandCollaborations = asArray(item.brand_collaborations);
   const competitorCollabs = asArray(item.competitor_collabs);
   const loyaltySignals = item.loyalty_signals || {};
+  const videoAnalysisVideos = videoAnalysisSources(item, representativeVideos);
   const v6Breakdown = item.v6_breakdown && typeof item.v6_breakdown === "object"
     ? item.v6_breakdown
     : item.score_breakdown && typeof item.score_breakdown === "object"
@@ -420,6 +433,7 @@ export function KOLDetailDrawer({ item, detailLoading = false, detailError = "",
           )
         )
       ),
+      e(KOLVideoAnalysisPanel, { apiToken, videos: videoAnalysisVideos }),
       devices.camera_body && e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
         e("div", { className: "flex items-center gap-1.5 mb-2" },
           e(Camera, { size: 11, className: "text-slate-400" }),

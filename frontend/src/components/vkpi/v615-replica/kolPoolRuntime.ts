@@ -100,6 +100,29 @@ function representativeVideosFrom(raw: Record<string, unknown>) {
   });
 }
 
+function representativeVideosFromEvidence(items: unknown) {
+  if (!Array.isArray(items)) return [];
+  return items
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === "object" && !Array.isArray(entry)))
+    .slice(0, 3)
+    .map((video, index) => {
+      const durationSeconds = Number(video.duration_seconds);
+      const duration = !Number.isFinite(durationSeconds)
+        ? "—"
+        : `${Math.floor(durationSeconds / 60)}:${Math.round(durationSeconds % 60).toString().padStart(2, "0")}`;
+      return {
+        evidence_id: numberFromRecord(video, ["evidence_id", "id"]),
+        title: String(firstValue(video.title, video.video_title, video.content_url, `代表作 ${index + 1}`)),
+        views: numberFromRecord(video, ["view_count", "views"]) ?? "—",
+        duration,
+        url: String(firstValue(video.content_url, video.url, "")),
+        thumbnail_url: String(firstValue(video.thumbnail_url, "")),
+        platform: String(firstValue(video.platform, "")),
+        published_at: String(firstValue(video.publish_date, video.posted_at, "")),
+      };
+    });
+}
+
 function avatarColor(seed: string) {
   const colors = ["#a855f7", "#3b82f6", "#10b981", "#f59e0b", "#ec4899", "#06b6d4"];
   let hash = 0;
@@ -147,7 +170,8 @@ export function toV615KolPoolRows(items: VkpiKolPoolItem[]) {
       rawPlatformData.device_primary,
       nestedObject(rawPlatformData, "devices").camera_body,
     );
-    const representativeVideos = representativeVideosFrom(rawPlatformData);
+    const evidenceVideos = representativeVideosFromEvidence(raw.video_evidence);
+    const representativeVideos = evidenceVideos.length ? evidenceVideos : representativeVideosFrom(rawPlatformData);
     const profileUrl = String(firstValue(item.profile_url, rawIdentity.profile_url, rawPlatformData.profile_url, "") || "");
     const displayName = String(firstValue(item.display_name, rawIdentity.display_name, item.handle, "待补全"));
     const evidenceCount = numberFromRecord(rawEvidence, ["evidence_count"]);

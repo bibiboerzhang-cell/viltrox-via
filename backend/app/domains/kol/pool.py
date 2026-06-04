@@ -244,12 +244,67 @@ def summary() -> dict[str, Any]:
     })
 
 
+def _video_evidence_for_kol(kol_pool_id: int, *, limit: int = 3) -> list[dict[str, Any]]:
+    rows = get_conn().execute(
+        """
+        SELECT
+            id AS evidence_id,
+            id,
+            kol_pool_id,
+            project_id,
+            content_url,
+            platform,
+            COALESCE(NULLIF(title, ''), NULLIF(video_title, ''), NULLIF(content_url, '')) AS title,
+            video_title,
+            thumbnail_url,
+            view_count,
+            like_count,
+            comment_count,
+            share_count,
+            duration_seconds,
+            publish_date,
+            posted_at,
+            EXISTS(
+                SELECT 1
+                FROM vkpi_analysis_cache c
+                WHERE c.target_type='video'
+                  AND c.target_id=vkpi_kol_video_evidence.id::text
+                  AND c.derive_method='video_analysis_final_v1'
+                  AND c.status='ready'
+            ) AS has_final_v1_cache,
+            EXISTS(
+                SELECT 1
+                FROM vkpi_analysis_cache c
+                WHERE c.target_type='video'
+                  AND c.target_id=vkpi_kol_video_evidence.id::text
+                  AND c.derive_method='video_analysis_final_v1_keyframe_qa'
+                  AND c.status='ready'
+            ) AS has_keyframe_qa_cache
+        FROM vkpi_kol_video_evidence
+        WHERE kol_pool_id=?
+          AND is_active IS NOT FALSE
+          AND COALESCE(evidence_type, 'video')='video'
+        ORDER BY
+            has_keyframe_qa_cache DESC,
+            has_final_v1_cache DESC,
+            COALESCE(publish_date, posted_at, updated_at, created_at) DESC NULLS LAST,
+            COALESCE(view_count, 0) DESC,
+            id DESC
+        LIMIT ?
+        """,
+        (int(kol_pool_id), max(1, min(10, int(limit or 3)))),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def get_item(kol_pool_id: int) -> dict[str, Any]:
     ensure_vkpi_product_industry_schema()
     row = get_conn().execute("SELECT * FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)).fetchone()
     if not row:
         raise LookupError("kol pool item not found")
-    return {"item": dict(row)}
+    item = dict(row)
+    item["video_evidence"] = _video_evidence_for_kol(int(kol_pool_id), limit=3)
+    return {"item": item}
 
 
 def enrich_item(

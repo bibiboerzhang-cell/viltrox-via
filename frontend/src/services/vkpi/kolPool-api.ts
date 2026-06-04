@@ -36,6 +36,27 @@ export interface VkpiKolPoolItem {
   created_at?: string;
   updated_at?: string;
   last_seen_at?: string;
+  video_evidence?: Array<Record<string, unknown>>;
+}
+
+export interface VkpiKolVideoAnalysisCacheEntry {
+  target_type: string;
+  target_id: string;
+  derive_method: string;
+  model?: string | null;
+  cost?: number | null;
+  status: string;
+  result?: unknown;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface VkpiKolVideoAnalysisCacheResponse {
+  target_type: string;
+  target_id: string;
+  derive_method?: string | null;
+  state: "ready" | "pending";
+  entry?: VkpiKolVideoAnalysisCacheEntry | null;
 }
 
 export interface VkpiKolPoolFreshness {
@@ -334,6 +355,24 @@ export async function recallKolProfiles(
   return apiFetch<VkpiKolRecallResponse>(
     `/api/admin/vkpi/kol-recall?${query.toString()}`,
     {},
+    token,
+  );
+}
+
+export async function getKolVideoAnalysisCache(
+  token: string,
+  evidenceId: string | number,
+  deriveMethod: string,
+): Promise<VkpiKolVideoAnalysisCacheResponse> {
+  const params = new URLSearchParams({
+    target_type: "video",
+    target_id: String(evidenceId),
+    derive_method: deriveMethod,
+    _ts: String(Date.now()),
+  });
+  return apiFetch<VkpiKolVideoAnalysisCacheResponse>(
+    `/api/admin/vkpi/analysis-cache?${params.toString()}`,
+    { cache: "no-store" },
     token,
   );
 }
