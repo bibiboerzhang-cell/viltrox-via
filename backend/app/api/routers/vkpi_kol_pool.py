@@ -26,6 +26,7 @@ from app.api.dependencies.perms import require_tab
 from app.domains.kol import competitor_detector as kol_competitor_detector
 from app.domains.kol import eleven_dimensions
 from app.domains.kol import intelligence_card as kol_intelligence_card
+from app.domains.kol import llm_deep_analysis as kol_llm_deep_analysis
 from app.domains.kol import pool as kol_pool
 import app.domains.kol.profile_recall as kol_profile_recall
 import app.domains.kol.url_deep_crawl as kol_url_deep_crawl
@@ -406,6 +407,17 @@ def get_pool_item_dimensions11(
         return eleven_dimensions.compose_dimensions_11(int(kol_pool_id))
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/kol-pool/{kol_pool_id}/llm-deep-analysis")
+def get_pool_item_llm_deep_analysis(
+    kol_pool_id: int,
+    limit: int = Query(default=20, ge=1, le=50),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """Return independent LLM deep-analysis results; never touches V6 Fit."""
+    del staff
+    return kol_llm_deep_analysis.get_kol_llm_deep_analysis(int(kol_pool_id), limit=limit)
 
 
 @router.get("/kol-pool/{kol_pool_id}/intelligence-card")
