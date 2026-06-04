@@ -11,6 +11,7 @@ import { GeoTierChip } from "./GeoTierChip";
 import { KPAvatar } from "./KPAvatar";
 import { KOLVideoAnalysisPanel } from "./KOLVideoAnalysisPanel";
 import { PlatformPill } from "./PlatformPill";
+import { getKolPoolDimensions11 } from "../../../../services/vkpi/kolPool-api";
 import { candidateKindGroup } from "../lib/candidateKind";
 import { formatNumber, formatPercent } from "../lib/format";
 import { BRAND_TIER } from "../data/brandTier";
@@ -51,6 +52,47 @@ function scoreText(value) {
   return String(Math.round(Math.max(0, Math.min(100, numeric))));
 }
 
+function recordOr(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function maxScore(record) {
+  const values = Object.values(recordOr(record)).map((value) => numberOr(value)).filter((value) => value != null);
+  return values.length ? Math.max(...values) : 0;
+}
+
+function dimensions11RadarDims(payload) {
+  if (!payload || typeof payload !== "object" || payload.status === "missing" || payload.persisted === false) {
+    return [];
+  }
+  const block1 = recordOr(payload.block1_content);
+  const block2 = recordOr(payload.block2_performance);
+  const block3 = recordOr(payload.block3_business);
+  const block4 = recordOr(payload.block4_specialty);
+  if (![block1, block2, block3, block4].some((block) => Object.keys(block).length)) return [];
+  const specialtyScore = maxScore(block1.content_specialty);
+  const productFitScore = maxScore(block4.product_fit);
+  const clusters = asArray(block4.industry_cluster).filter(Boolean);
+  const industryScore = clusters.length ? 82 : 0;
+  const competitorRisk = scoreValue(block3.competitor_risk_score, 0);
+  return [
+    { label: "Fit",      value: productFitScore, source: "block4.product_fit" },
+    { label: "Reach",    value: block2.followers_tier_score, source: "block2.followers_tier_score" },
+    { label: "ER",       value: block2.engagement_quality_score, source: "block2.engagement_quality_score" },
+    { label: "Quality",  value: block1.content_diversity_score, source: "block1.content_diversity_score" },
+    { label: "Style",    value: specialtyScore, source: "block1.content_specialty" },
+    { label: "Audience", value: industryScore, source: "block4.industry_cluster" },
+    { label: "Growth",   value: block2.growth_velocity_score, source: "block2.growth_velocity_score" },
+    { label: "Brand",    value: block3.cooperation_history_score, source: "block3.cooperation_history_score" },
+    { label: "Risk",     value: 100 - competitorRisk, source: "100 - block3.competitor_risk_score" },
+    { label: "Comm",     value: block3.contact_reachability_score, source: "block3.contact_reachability_score" },
+    { label: "Activity", value: block1.posting_frequency_score, source: "block1.posting_frequency_score" },
+  ].map((dimension) => ({
+    ...dimension,
+    value: scoreValue(dimension.value, 0),
+  }));
+}
+
 function concernLabel(value) {
   const text = String(value || "").trim();
   const labels = {
@@ -74,6 +116,27 @@ function videoAnalysisSources(item, representativeVideos) {
 }
 
 export function KOLDetailDrawer({ item, apiToken = "", detailLoading = false, detailError = "", onClose, inMyList, onToggleMyList, onContact }) {
+  const [dimensions11, setDimensions11] = React.useState(null);
+  React.useEffect(() => {
+    if (!apiToken || !item?.id) {
+      setDimensions11(null);
+      return;
+    }
+    let cancelled = false;
+    setDimensions11(null);
+    void getKolPoolDimensions11(apiToken, item.id, { requirePersisted: true })
+      .then((payload) => {
+        if (cancelled) return;
+        setDimensions11(payload?.status === "missing" ? null : payload);
+      })
+      .catch(() => {
+        if (!cancelled) setDimensions11(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [apiToken, item?.id]);
+
   if (!item) return null;
   const devices = {
     ...(item.devices || {}),
@@ -89,6 +152,7 @@ export function KOLDetailDrawer({ item, apiToken = "", detailLoading = false, de
   const competitorCollabs = asArray(item.competitor_collabs);
   const loyaltySignals = item.loyalty_signals || {};
   const videoAnalysisVideos = videoAnalysisSources(item, representativeVideos);
+  const dimensions11Dims = dimensions11RadarDims(dimensions11);
   const v6Breakdown = item.v6_breakdown && typeof item.v6_breakdown === "object"
     ? item.v6_breakdown
     : item.score_breakdown && typeof item.score_breakdown === "object"
@@ -310,44 +374,22 @@ export function KOLDetailDrawer({ item, apiToken = "", detailLoading = false, de
         )
       ),
       
-      // ── 11 维度雷达 ──
-      e("div", { className: "px-5 py-4 border-b border-white/[0.06]" },
+      // ── 11 维度雷达: persisted backend dimensions_11_json only ──
+      dimensions11Dims.length > 0 && e("div", { className: "px-5 py-4 border-b border-white/[0.06]" },
         e("div", { className: "flex items-center justify-between mb-3" },
           e("div", { className: "flex items-center gap-1.5" },
             e(Target, { size: 11, className: "text-purple-400" }),
             e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "11 维度评估")
           ),
-          e("button", {
-            disabled: true,
-            title: "待接入: 需要安全刷新 API，不触发 provider",
-            className: "flex cursor-not-allowed items-center gap-1 text-[9px] text-slate-500 opacity-70"
-          },
-            e(RefreshCw, { size: 9 }), "刷新 · 待接入"
+          e("span", { className: "text-[9px] text-slate-500" },
+            "规则画像 · ",
+            scoreText(dimensions11?.overall_score),
+            " · conf ",
+            fixedOrDash(recordOr(dimensions11?.confidence).overall, 2)
           )
         ),
         (() => {
-          const followers = numberOr(item.followers, 0);
-          const realEr = numberOr(item.real_er_pct);
-          const trend = numberOr(item.trend_resonance);
-          const geoMatch = numberOr(item.geo_match);
-          const weeklyDelta = numberOr(item.weekly_views_delta);
-          const quality =
-            item.production_quality === "premium" ? 95 :
-            item.production_quality === "high" ? 80 :
-            item.production_quality ? 60 : null;
-          const dims = [
-            { label: "Fit",      value: scoreValue(item.v6_fit, null) },
-            { label: "Reach",    value: followers > 0 ? Math.min(100, Math.log10(followers + 1) * 16.6) : null },
-            { label: "ER",       value: realEr == null ? null : Math.min(100, realEr * 8) },
-            { label: "Quality",  value: quality },
-            { label: "Style",    value: trend == null ? null : trend * 100 },
-            { label: "Audience", value: geoMatch == null ? null : geoMatch * 80 },
-            { label: "Growth",   value: weeklyDelta == null ? null : Math.min(100, Math.max(0, 50 + weeklyDelta * 3)) },
-            { label: "Brand",    value: brandCollaborations.length > 0 ? Math.min(95, 50 + (brandCollaborations.length * 15)) : null },
-            { label: "Risk",     value: Math.max(0, 100 - potentialConcerns.length * 25) },
-            { label: "Comm",     value: item.email ? 90 : 35 },
-            { label: "Activity", value: item.last_seen_at ? 78 : 20 },
-          ];
+          const dims = dimensions11Dims;
           return e("div", { className: "flex items-center gap-4" },
             e("svg", { width: 160, height: 160, viewBox: "-100 -100 200 200", className: "shrink-0" },
               [20, 40, 60, 80].map(r => e("circle", { key: r, cx: 0, cy: 0, r, className: "radar-bg", fill: "none", stroke: "rgba(255,255,255,0.06)" })),

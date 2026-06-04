@@ -385,10 +385,24 @@ def get_pool_item_competitors(
 @router.get("/kol-pool/{kol_pool_id}/dimensions11")
 def get_pool_item_dimensions11(
     kol_pool_id: int,
+    require_persisted: bool = Query(default=False),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
     """返回 KOL Pool 项的规则版 11 维画像；只读、不调 provider、不写库。"""
     try:
+        if require_persisted:
+            payload = eleven_dimensions.load_persisted_dimensions_11(int(kol_pool_id))
+            if payload:
+                return payload
+            return {
+                "kol_pool_id": int(kol_pool_id),
+                "status": "missing",
+                "reason": "dimensions_11_json_missing",
+                "persisted": False,
+                "provider_calls": False,
+                "llm_calls": False,
+                "write_db": False,
+            }
         return eleven_dimensions.compose_dimensions_11(int(kol_pool_id))
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

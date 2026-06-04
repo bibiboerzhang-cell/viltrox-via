@@ -394,9 +394,16 @@ export async function getKolPoolCompetitors(token: string, kolPoolId: string | n
   );
 }
 
-export async function getKolPoolDimensions11(token: string, kolPoolId: string | number) {
+export async function getKolPoolDimensions11(
+  token: string,
+  kolPoolId: string | number,
+  options: { requirePersisted?: boolean } = {},
+) {
+  const params = new URLSearchParams();
+  if (options.requirePersisted) params.set("require_persisted", "true");
+  const query = params.toString();
   return apiFetch<Row>(
-    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/dimensions11`,
+    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/dimensions11${query ? `?${query}` : ""}`,
     {},
     token,
   );

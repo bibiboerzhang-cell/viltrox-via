@@ -487,6 +487,38 @@ def compose_dimensions_11(kol_pool_id: int) -> dict[str, Any]:
     return payload
 
 
+def load_persisted_dimensions_11(kol_pool_id: int) -> dict[str, Any] | None:
+    """Return persisted 11D payload for a KOL Pool row, if it exists.
+
+    This is intentionally read-only. It lets UI surfaces distinguish a real
+    backfilled dimensions_11_json payload from a live rule fallback.
+    """
+    _kol_pool_row(int(kol_pool_id))
+    if not _table_exists("vkpi_kol_profile_deep"):
+        return None
+    row = get_conn().execute(
+        """
+        SELECT dimensions_11_json
+        FROM vkpi_kol_profile_deep
+        WHERE kol_pool_id=? AND dimensions_11_json IS NOT NULL
+        ORDER BY COALESCE(updated_at, created_at) DESC, id DESC
+        LIMIT 1
+        """,
+        (int(kol_pool_id),),
+    ).fetchone()
+    if not row:
+        return None
+    payload = _loads(dict(row).get("dimensions_11_json"), {})
+    if not isinstance(payload, dict) or not payload:
+        return None
+    payload.setdefault("kol_pool_id", int(kol_pool_id))
+    payload.setdefault("provider_calls", False)
+    payload.setdefault("llm_calls", False)
+    payload["persisted"] = True
+    payload["source"] = "vkpi_kol_profile_deep.dimensions_11_json"
+    return payload
+
+
 def batch_preview_dimensions11(*, limit: int = 20, source_type: str = "legacy_excel_p2d") -> dict[str, Any]:
     safe_limit = max(1, min(200, int(limit or 20)))
     params: list[Any] = []
