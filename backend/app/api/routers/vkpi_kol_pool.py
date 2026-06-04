@@ -36,6 +36,7 @@ import app.domains.evidence.summary as evidence_summary
 from app.domains.projects import workflow as project_workflow
 import app.domains.sync.refresh_tier as refresh_tier
 import app.domains.tasks.enqueue as task_enqueue
+import app.domains.tasks.queue_view as task_queue_view
 from app.domains.audit.decorator import audit_action
 from app.domains.access.firewall import firewall_check
 
@@ -418,6 +419,22 @@ def get_pool_item_llm_deep_analysis(
     """Return independent LLM deep-analysis results; never touches V6 Fit."""
     del staff
     return kol_llm_deep_analysis.get_kol_llm_deep_analysis(int(kol_pool_id), limit=limit)
+
+
+@router.get("/task-queue")
+def get_vkpi_task_queue(
+    limit: int = Query(default=50, ge=1, le=100),
+    recent_minutes: int = Query(default=10, ge=1, le=120),
+    include_llm_calls: bool = Query(default=True),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """Read-only sidebar task queue projection; no worker/provider side effects."""
+    del staff
+    return task_queue_view.get_task_queue(
+        limit=int(limit),
+        recent_minutes=int(recent_minutes),
+        include_llm_calls=bool(include_llm_calls),
+    )
 
 
 @router.get("/kol-pool/{kol_pool_id}/intelligence-card")
