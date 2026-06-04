@@ -52,10 +52,12 @@ GEMINI_VIDEO_V2_DERIVE_METHODS = {
     "gemini_video_v2_flash_gpt55_judge",
     "gemini_video_v2_flash_claude_judge",
 }
-GEMINI_VIDEO_FINAL_DERIVE_METHODS = {"video_analysis_final_v1"}
+FINAL_V1_KEYFRAME_QA_DERIVE_METHOD = "video_analysis_final_v1_keyframe_qa"
+GEMINI_VIDEO_FINAL_DERIVE_METHODS = {"video_analysis_final_v1", FINAL_V1_KEYFRAME_QA_DERIVE_METHOD}
 GEMINI_VIDEO_DERIVE_METHODS = {"gemini", *GEMINI_VIDEO_V2_DERIVE_METHODS, *GEMINI_VIDEO_FINAL_DERIVE_METHODS}
 WORKER_GEMINI_MODEL = os.environ.get("APIFY_WORKER_GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
 FINAL_V1_GEMINI_MODELS = gemini_video_analyzer.final_v1_gemini_models()
+FINAL_V1_KEYFRAME_QA_MODEL = os.environ.get("GEMINI_FINAL_V1_QA_MODEL", "gemini-3.1-pro-preview").strip() or "gemini-3.1-pro-preview"
 _stop_event = threading.Event()
 
 
@@ -861,7 +863,8 @@ def _shape_gemini_result(
     if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS:
         final = raw.get("video_analysis_final_v1") if isinstance(raw.get("video_analysis_final_v1"), dict) else {}
         model_name = str(raw.get("model") or raw.get("method") or "gemini_video")
-        return {
+        segments = raw.get("cost_segments") if isinstance(raw.get("cost_segments"), list) else None
+        shaped: dict[str, Any] = {
             "schema_version": "video_analysis_final_v1",
             "mock": False,
             "analysis_method": derive_method,
@@ -890,7 +893,8 @@ def _shape_gemini_result(
                 "recorded_cost_usd": cost,
                 "cost_basis": cost_basis,
                 "preflight_estimated_cost_usd": preflight_cost,
-                "segments": [
+                "segments": segments
+                or [
                     {
                         "stage": "single_pass",
                         "provider": "gemini",
@@ -904,6 +908,12 @@ def _shape_gemini_result(
             "raw_gemini_video": raw,
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
+        if isinstance(raw.get("final_v1_keyframe_qa"), dict):
+            shaped["keyframe_qa"] = raw.get("final_v1_keyframe_qa") or {}
+            shaped["qa_pass"] = raw.get("qa_pass")
+            shaped["frame_extraction"] = raw.get("frame_extraction") if isinstance(raw.get("frame_extraction"), dict) else {}
+            shaped["final_v1_pass"] = raw.get("final_v1_pass") if isinstance(raw.get("final_v1_pass"), dict) else {}
+        return shaped
     if derive_method in GEMINI_VIDEO_V2_DERIVE_METHODS:
         v2 = raw.get("video_analysis_v2") if isinstance(raw.get("video_analysis_v2"), dict) else {}
         layer3 = dict(v2.get("layer3_integrated_judgment") or {})
@@ -1163,6 +1173,159 @@ def _write_gemini_cache(
                 "UPDATE apify_jobs SET status='done', last_error=NULL, updated_at=NOW() WHERE id=%s",
                 (job["id"],),
             )
+
+
+def _process_gemini_video_final_v1_keyframe_qa(
+    conn: psycopg.Connection[Any],
+    job: dict[str, Any],
+    payload: dict[str, Any],
+    evidence: dict[str, Any],
+    preflight_cost: float,
+) -> None:
+    if _platform_from_content_url(str(evidence.get("content_url") or "")) != "youtube":
+        raise RuntimeError("video_analysis_final_v1_keyframe_qa currently supports YouTube only")
+
+    qa_model = str(payload.get("final_v1_qa_model") or FINAL_V1_KEYFRAME_QA_MODEL).strip() or FINAL_V1_KEYFRAME_QA_MODEL
+    qa_preflight = _provider_budget_preflight(
+        job,
+        {
+            **payload,
+            "prompt": f"final_v1 keyframe QA video:{evidence.get('id')} model:{qa_model}",
+        },
+        "google",
+    )
+    qa_allowed, qa_reason, qa_estimated_cost = _provider_allowed(qa_preflight, "google")
+    if not qa_allowed:
+        _block_job(
+            conn,
+            int(job["id"]),
+            qa_reason,
+            {"estimated_cost_usd": qa_estimated_cost, "budget_scope": LLM_BUDGET_SCOPE, "provider": "google", "stage": "keyframe_qa"},
+        )
+        return
+
+    started = time.monotonic()
+    analysis_context = _video_final_context(evidence)
+    analyzer_payload = {
+        **payload,
+        "gemini_final_v1_models": gemini_video_analyzer.final_v1_gemini_models(
+            payload.get("gemini_final_v1_models") or FINAL_V1_GEMINI_MODELS
+        ),
+    }
+    visual_raw = _run_gemini_analyzer_with_timeout(
+        {
+            **analyzer_payload,
+            "mode": "youtube",
+            "url": str(evidence.get("content_url") or ""),
+            "title": str(evidence.get("title") or ""),
+            "creator_handle": str(evidence.get("creator_handle") or ""),
+            "schema_version": "final_v1",
+            "performance_context": analysis_context,
+        },
+        job_id=job.get("id"),
+        target_id=str(evidence.get("id")),
+        platform="youtube",
+    )
+    visual_cost, visual_basis, visual_tokens_in, visual_tokens_out = _gemini_cost(visual_raw, preflight_cost)
+    _record_gemini_cost(
+        job=job,
+        payload=payload,
+        raw=visual_raw,
+        cost=visual_cost,
+        cost_basis=visual_basis,
+        tokens_in=visual_tokens_in,
+        tokens_out=visual_tokens_out,
+        latency_ms=0,
+        preflight_cost=preflight_cost,
+    )
+    if not visual_raw.get("analyzed"):
+        raw_error = str(visual_raw.get("error") or "not_analyzed")
+        if raw_error == "gemini_call_timeout":
+            raise RuntimeError("gemini_call_timeout")
+        raise RuntimeError(f"Gemini final_v1 pass failed: {raw_error}")
+
+    final_v1 = visual_raw.get("video_analysis_final_v1") if isinstance(visual_raw.get("video_analysis_final_v1"), dict) else {}
+    layer1 = final_v1.get("layer1_visual_content") if isinstance(final_v1.get("layer1_visual_content"), dict) else {}
+    with _extract_keyframes_for_qa(evidence, layer1, limit=6, temp_prefix="vkpi-final-v1-qa-video-") as qa_frames:
+        keyframe_requests = qa_frames["keyframe_requests"]
+        frame_meta = qa_frames["frame_meta"]
+        download = qa_frames["download"]
+        qa_raw = asyncio.run(
+            gemini_video_analyzer.analyze_final_v1_keyframe_qa(
+                final_v1_result=final_v1,
+                keyframes=qa_frames["frames"],
+                title=str(evidence.get("title") or ""),
+                performance_context=analysis_context,
+                model_name=qa_model,
+            )
+        )
+
+    qa_cost, qa_basis, qa_tokens_in, qa_tokens_out = _gemini_cost(qa_raw, qa_estimated_cost)
+    _record_gemini_cost(
+        job=job,
+        payload=payload,
+        raw=qa_raw,
+        cost=qa_cost,
+        cost_basis=qa_basis,
+        tokens_in=qa_tokens_in,
+        tokens_out=qa_tokens_out,
+        latency_ms=0,
+        preflight_cost=qa_estimated_cost,
+    )
+    if not qa_raw.get("analyzed"):
+        raise RuntimeError(f"Gemini final_v1 keyframe QA failed: {qa_raw.get('error') or 'not_analyzed'}")
+
+    latency_ms = int((time.monotonic() - started) * 1000)
+    total_cost = round(visual_cost + qa_cost, 6)
+    visual_model = str(visual_raw.get("model") or visual_raw.get("method") or "final_v1_gemini")
+    combined_raw = {
+        **visual_raw,
+        "method": "final_v1_flash_keyframe_qa",
+        "model": f"{visual_model}+{qa_model}",
+        "final_v1_pass": visual_raw,
+        "final_v1_keyframe_qa": qa_raw.get("final_v1_keyframe_qa") if isinstance(qa_raw.get("final_v1_keyframe_qa"), dict) else {},
+        "qa_pass": qa_raw.get("qa_pass"),
+        "qa_method": qa_raw.get("method"),
+        "qa_model": qa_raw.get("model") or qa_model,
+        "qa_usage_metadata": qa_raw.get("usage_metadata") if isinstance(qa_raw.get("usage_metadata"), dict) else {},
+        "cost_segments": [
+            {
+                "stage": "final_v1_video_pass",
+                "provider": "gemini",
+                "model": visual_model,
+                "cost_usd": visual_cost,
+                "cost_basis": visual_basis,
+                "usage_metadata": visual_raw.get("usage_metadata") if isinstance(visual_raw.get("usage_metadata"), dict) else {},
+            },
+            {
+                "stage": "keyframe_qa_pass",
+                "provider": "gemini",
+                "model": qa_model,
+                "cost_usd": qa_cost,
+                "cost_basis": qa_basis,
+                "usage_metadata": qa_raw.get("usage_metadata") if isinstance(qa_raw.get("usage_metadata"), dict) else {},
+            },
+        ],
+        "frame_extraction": {
+            "requested": keyframe_requests,
+            "extracted_count": len(frame_meta),
+            "frames": frame_meta,
+            "download_bytes": int(download.get("bytes") or 0),
+            "temporary_files_cleaned": True,
+        },
+    }
+    _write_gemini_cache(
+        conn,
+        job=job,
+        payload=payload,
+        evidence=evidence,
+        raw=combined_raw,
+        cost=total_cost,
+        cost_basis="gemini_final_v1_keyframe_qa_segmented_model_rate",
+        preflight_cost=preflight_cost + qa_estimated_cost,
+        latency_ms=latency_ms,
+        derive_method=FINAL_V1_KEYFRAME_QA_DERIVE_METHOD,
+    )
 
 
 def _process_gemini_video_flash_pro_judge(
@@ -1560,6 +1723,9 @@ def _process_gemini_video(
         and derive_method not in GEMINI_VIDEO_FINAL_DERIVE_METHODS
     ):
         _block_job(conn, int(job["id"]), "unsupported_media_derive_method", {"platform": platform, "derive_method": derive_method})
+        return
+    if derive_method == FINAL_V1_KEYFRAME_QA_DERIVE_METHOD:
+        _process_gemini_video_final_v1_keyframe_qa(conn, job, payload, evidence, preflight_cost)
         return
     if derive_method == "gemini_video_v2_flash_pro_judge":
         _process_gemini_video_flash_pro_judge(conn, job, payload, evidence, preflight_cost)

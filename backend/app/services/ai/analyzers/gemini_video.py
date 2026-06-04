@@ -425,6 +425,39 @@ def _score_value(entry: Any) -> float | int | None:
     return int(parsed) if parsed.is_integer() else round(parsed, 2)
 
 
+def _clamped_confidence(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return round(max(0.0, min(1.0, parsed)), 3)
+
+
+def _bool_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "pass", "passed"}
+
+
+def _normalise_final_v1_keyframe_qa(parsed: dict[str, Any]) -> dict[str, Any]:
+    checks = parsed.get("checks") if isinstance(parsed.get("checks"), dict) else {}
+    score_correction = parsed.get("score_correction") if isinstance(parsed.get("score_correction"), dict) else {}
+    issues = parsed.get("issues") if isinstance(parsed.get("issues"), list) else []
+    confidence = _clamped_confidence(parsed.get("confidence"))
+    return {
+        "schema_version": "video_analysis_final_v1_keyframe_qa",
+        "qa_pass": _bool_value(parsed.get("qa_pass")),
+        "confidence": confidence,
+        "summary": str(parsed.get("summary") or "").strip(),
+        "checks": checks,
+        "issues": [item for item in issues if isinstance(item, dict)],
+        "score_correction": score_correction,
+        "recommended_review_action": str(parsed.get("recommended_review_action") or "").strip(),
+    }
+
+
 def _normalise_v2_result(parsed: dict[str, Any], *, subtitle_used: bool) -> dict[str, Any]:
     layer1 = parsed.get("layer1_visual_content") if isinstance(parsed.get("layer1_visual_content"), dict) else {}
     layer2 = parsed.get("layer2_video_scores") if isinstance(parsed.get("layer2_video_scores"), dict) else {}
@@ -515,6 +548,71 @@ key_hook 用一句话点出最值得品牌方深入了解的点，或最大的�
 }}"""
 
 
+def _video_final_v1_keyframe_qa_prompt(
+    *,
+    final_v1_result: dict[str, Any],
+    keyframes: list[dict[str, Any]],
+    performance_context: dict[str, Any] | None,
+) -> str:
+    final_json = json.dumps(final_v1_result or {}, ensure_ascii=False, default=str)
+    keyframes_json = json.dumps(
+        [{"timestamp": frame.get("timestamp"), "reason": frame.get("reason")} for frame in keyframes],
+        ensure_ascii=False,
+        default=str,
+    )
+    metrics_json = json.dumps(performance_context or {}, ensure_ascii=False, default=str)
+    schema = """
+{
+  "qa_pass": true,
+  "confidence": 0.0,
+  "summary": "一句话说明关键帧是否支持 final_v1 的核心判断",
+  "checks": {
+    "product_identity": {"status": "pass/warn/fail/unknown", "observed_products": [], "claimed_products": [], "issues": [], "evidence": []},
+    "brand_exposure": {"status": "pass/warn/fail/unknown", "observed_brand_signals": [], "issues": [], "evidence": []},
+    "competitor_context": {"status": "pass/warn/fail/unknown", "observed_competitors": [], "issues": [], "evidence": []},
+    "inscription_or_model_text": {"status": "pass/warn/fail/unknown", "observed_text": [], "issues": [], "evidence": []},
+    "title_image_consistency": {"status": "pass/warn/fail/unknown", "issues": [], "evidence": []}
+  },
+  "issues": [
+    {"severity": "low/medium/high", "type": "product_mismatch/brand_missing/competitor_missed/title_image_mismatch/score_overconfident/other", "timestamp": "MM:SS", "evidence": "关键帧证据", "correction": "建议纠偏"}
+  ],
+  "score_correction": {
+    "apply": false,
+    "marketing_value_delta": 0,
+    "corrected_marketing_value_score": null,
+    "rationale": "若建议调分，说明原因；否则说明不调分"
+  },
+  "recommended_review_action": "accept_final_v1/review_manually/rerun_with_pro"
+}
+"""
+    return f"""你是 Viltrox 视频投放分析的关键帧 QA 审核员。你不会重写 final_v1 六层分析，只做截图核验和纠偏。
+
+任务：基于 final_v1 的 6 层结果、抽取的关键帧截图、关键帧时间点说明和播放表现数据，检查 final_v1 是否在以下高风险事实上犯错：
+1. 产品型号/焦段/铭文是否识别错，例如标题是 27mm 但画面铭文像 75mm。
+2. Viltrox 品牌/Logo/镜头桶身/包装是否真的有露出，还是 final_v1 过度推断。
+3. 竞品/对比对象是否被漏掉或误标。
+4. 标题声称的产品和画面实际产品是否一致。
+5. final_v1 的 marketing_value_score 是否因为产品识别错误、品牌露出缺失或证据不足而明显过高/过低。
+
+重要边界：
+- 你只看关键帧截图，证据不足必须给 unknown 或 warn，不要补脑。
+- 不要重写 layer1-layer6，不要重新评分整条视频。
+- score_correction 只是建议，不是正式写分；只有证据强才 apply=true。
+- 必须返回 JSON，不要 Markdown。
+
+final_v1 六层结果：
+{final_json}
+
+关键帧说明：
+{keyframes_json}
+
+播放表现数据：
+{metrics_json}
+
+请严格按这个 JSON schema 返回：
+{schema}"""
+
+
 async def analyze_v2_judgment_with_keyframes(
     *,
     layer1_visual_content: dict[str, Any],
@@ -569,6 +667,69 @@ async def analyze_v2_judgment_with_keyframes(
     except Exception as exc:
         result["error"] = f"Gemini keyframe judgment failed: {str(exc)[:300]}"
         logger.warning("gemini_keyframe_judgment_failed", extra={"error": str(exc)[:120]})
+        return result
+
+
+async def analyze_final_v1_keyframe_qa(
+    *,
+    final_v1_result: dict[str, Any],
+    keyframes: list[dict[str, Any]],
+    title: str,
+    performance_context: dict[str, Any] | None = None,
+    model_name: str = "gemini-3.1-pro-preview",
+) -> dict[str, Any]:
+    """QA final_v1 facts from keyframe JPGs without regenerating the six-layer result."""
+    result = {
+        "analyzed": False,
+        "method": f"gemini_final_v1_keyframe_qa_{model_name}",
+        "model": model_name,
+        "usage_metadata": {},
+        "error": None,
+    }
+    if not GEMINI_AVAILABLE or not gemini_client or not genai_types:
+        result["error"] = "Gemini not available"
+        return result
+
+    prompt = _video_final_v1_keyframe_qa_prompt(
+        final_v1_result=final_v1_result,
+        keyframes=keyframes,
+        performance_context=performance_context,
+    )
+    contents: list[Any] = [f"视频标题: {title}\n\n{prompt}"]
+    for frame in keyframes:
+        image_path = Path(str(frame.get("image_path") or ""))
+        if not image_path.exists():
+            continue
+        contents.append(genai_types.Part.from_bytes(data=image_path.read_bytes(), mime_type="image/jpeg"))
+    if len(contents) <= 1:
+        result["error"] = "no keyframe images available for QA"
+        return result
+
+    try:
+        def _analyze():
+            return gemini_client.models.generate_content(model=model_name, contents=contents)
+
+        resp = await asyncio.to_thread(_analyze)
+        usage_metadata = _response_usage_metadata(resp)
+        raw = resp.text.strip()
+        raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
+        parsed = _parse_json_response_text(raw)
+        qa_payload = _normalise_final_v1_keyframe_qa(parsed)
+        result.update(
+            {
+                "analyzed": True,
+                "method": f"gemini_final_v1_keyframe_qa_{model_name}",
+                "model": model_name,
+                "usage_metadata": usage_metadata,
+                "schema_version": "video_analysis_final_v1_keyframe_qa",
+                "final_v1_keyframe_qa": qa_payload,
+                "qa_pass": qa_payload.get("qa_pass"),
+            }
+        )
+        return result
+    except Exception as exc:
+        result["error"] = f"Gemini final_v1 keyframe QA failed: {str(exc)[:500]}"
+        logger.warning("gemini_final_v1_keyframe_qa_failed", extra={"error": str(exc)[:160]})
         return result
 
 
