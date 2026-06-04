@@ -216,6 +216,52 @@ export interface VkpiKolRecallResponse {
   };
 }
 
+export interface VkpiKolUrlDeepCrawlResponse {
+  method?: string;
+  dry_run?: boolean;
+  execute?: boolean;
+  writes_performed?: boolean;
+  provider_calls_performed?: boolean;
+  url?: {
+    input?: string;
+    normalized?: string;
+  };
+  url_type?: "profile" | "video" | "unknown" | string;
+  platform?: string | null;
+  handle?: string | null;
+  channel_id?: string | null;
+  video_id?: string | null;
+  in_pool?: boolean;
+  matched_kol_pool_id?: number | null;
+  candidates?: Array<{
+    kol_pool_id?: number;
+    platform?: string;
+    handle?: string;
+    display_name?: string;
+    profile_url?: string;
+    match_source?: string;
+    match_priority?: number;
+  }>;
+  next_action?: string | Row;
+  profile_flow?: Row & {
+    status?: string;
+    message?: string;
+    operation?: "update" | "insert" | string;
+    kol_pool_id?: number | null;
+    target?: string;
+    max_posts?: number;
+    would_crawl?: Row;
+    safe_writer_dry_run?: Row & {
+      fields_to_write?: string[];
+      ignored_fields?: string[];
+      missing_columns?: string[];
+      viltrox_fit_score_changed_ids?: number[];
+      viltrox_fit_score_untouched?: boolean;
+    };
+  };
+  safety?: Row;
+}
+
 export async function listKolPool(
   token: string,
   params: { search?: string; platform?: string; country?: string; limit?: number; offset?: number; dataStatus?: string; sortBy?: string; enrichable?: boolean; refreshIfStale?: boolean } = {},
@@ -232,6 +278,30 @@ export async function listKolPool(
   return apiFetch<{ items?: VkpiKolPoolItem[]; refresh?: VkpiKolPoolRefreshState }>(
     `/api/admin/vkpi/kol-pool?${query.toString()}`,
     {},
+    token,
+  );
+}
+
+export async function deepCrawlKolUrl(
+  token: string,
+  url: string,
+  execute = false,
+  params: { maxPosts?: number; mode?: string; timeoutMs?: number } = {},
+): Promise<VkpiKolUrlDeepCrawlResponse> {
+  const body: Row = {
+    url,
+    execute,
+  };
+  if (typeof params.maxPosts === "number") body.max_posts = params.maxPosts;
+  if (params.mode) body.mode = params.mode;
+  const timeoutMs = params.timeoutMs ?? (execute ? 300000 : undefined);
+  return apiFetch<VkpiKolUrlDeepCrawlResponse>(
+    "/api/admin/vkpi/kol-url-deep-crawl",
+    {
+      method: "POST",
+      body: jsonBody(body),
+      ...(timeoutMs ? { timeoutMs } : {}),
+    },
     token,
   );
 }

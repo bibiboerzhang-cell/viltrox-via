@@ -13,6 +13,7 @@ import { MarketCoverageCard } from "./components/MarketCoverageCard";
 import { ProductRecallPanel } from "./components/ProductRecallPanel";
 import { SearchProgressBar } from "./components/SearchProgressBar";
 import { TrendPulseBar } from "./components/TrendPulseBar";
+import { UrlDeepCrawlPanel } from "./components/UrlDeepCrawlPanel";
 import { ContactModal } from "./components/modals/ContactModal";
 import { getKolPoolItem } from "../../../domains/kol";
 import { toV615KolPoolRows } from "./kolPoolRuntime";
@@ -142,6 +143,7 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
         }),
         e(TrendPulseBar),
         e(MarketCoverageCard, { items: poolItems }),
+        e(UrlDeepCrawlPanel, { apiToken }),
         e(ProductRecallPanel, { apiToken }),
         e(FilterBar, {
           search, setSearch, country, setCountry, audienceType, setAudienceType,
