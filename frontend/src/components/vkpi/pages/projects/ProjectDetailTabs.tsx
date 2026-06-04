@@ -1024,6 +1024,125 @@ function normaliseRiskFlags(value: unknown) {
   return text ? [{ label: text, severity: /高|high|严重/i.test(text) ? 'high' : '' }] : [];
 }
 
+const QA_CHECK_LABELS: Record<string, string> = {
+  product_identity: '型号',
+  brand_exposure: '品牌',
+  competitor_context: '竞品',
+  inscription_or_model_text: '铭文',
+  title_image_consistency: '标题画面',
+};
+
+function finalV1QaPayload(entry?: VkpiAnalysisCacheEntry | null) {
+  const result = asRecord(entry?.result);
+  const direct = asRecord(result.final_v1_keyframe_qa);
+  if (Object.keys(direct).length) return direct;
+  const nested = asRecord(asRecord(result.video_analysis_final_v1_keyframe_qa).final_v1_keyframe_qa);
+  if (Object.keys(nested).length) return nested;
+  if ('qa_pass' in result || 'checks' in result || 'issues' in result || 'score_correction' in result) return result;
+  return {};
+}
+
+function qaBoolean(value: unknown) {
+  if (typeof value === 'boolean') return value;
+  const text = String(value ?? '').trim().toLowerCase();
+  if (['true', '1', 'yes', 'pass', 'passed'].includes(text)) return true;
+  if (['false', '0', 'no', 'fail', 'failed'].includes(text)) return false;
+  return null;
+}
+
+function qaStatusLabel(value: unknown) {
+  const status = textFrom(value).toLowerCase();
+  if (status === 'pass') return '通过';
+  if (status === 'warn') return '提醒';
+  if (status === 'fail') return '异常';
+  if (status === 'unknown') return '未知';
+  return status || '未知';
+}
+
+function qaStatusClass(value: unknown) {
+  const status = textFrom(value).toLowerCase();
+  if (status === 'pass') return 'bg-emerald-500/10 text-emerald-200 border-emerald-400/15';
+  if (status === 'fail') return 'bg-rose-500/12 text-rose-200 border-rose-400/20';
+  if (status === 'warn') return 'bg-amber-500/10 text-amber-200 border-amber-400/20';
+  return 'bg-slate-500/10 text-slate-300 border-white/[0.06]';
+}
+
+function qaCheckTags(checks: unknown) {
+  return Object.entries(asRecord(checks)).map(([key, value]) => {
+    const record = asRecord(value);
+    const status = textFrom(record.status) || 'unknown';
+    const detail = firstText(record.issues, record.evidence, record.observed_products, record.observed_text, record.observed_brand_signals, record.observed_competitors);
+    return {
+      key,
+      label: QA_CHECK_LABELS[key] || key.replace(/_/g, ' '),
+      status,
+      detail,
+    };
+  });
+}
+
+function qaIssueItems(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item, index) => {
+    const record = asRecord(item);
+    const type = textFrom(record.type) || `issue_${index + 1}`;
+    const severity = textFrom(record.severity) || 'info';
+    const timestamp = textFrom(record.timestamp);
+    const evidence = textFrom(record.evidence);
+    const correction = textFrom(record.correction);
+    const label = [timestamp, type.replace(/_/g, ' ')].filter(Boolean).join(' · ');
+    return {
+      key: `${label || type}-${index}`,
+      label: label || type,
+      severity,
+      evidence,
+      correction,
+    };
+  }).filter((item) => item.label || item.evidence || item.correction);
+}
+
+function qaScoreCorrectionText(value: unknown) {
+  const correction = asRecord(value);
+  if (!Object.keys(correction).length) return '';
+  const apply = qaBoolean(correction.apply);
+  const delta = Number(correction.marketing_value_delta);
+  const corrected = Number(correction.corrected_marketing_value_score);
+  const rationale = textFrom(correction.rationale);
+  const parts: string[] = [];
+  parts.push(apply ? '建议纠偏' : '不建议调分');
+  if (Number.isFinite(delta) && delta !== 0) parts.push(`营销分 ${delta > 0 ? '+' : ''}${delta}`);
+  if (Number.isFinite(corrected)) parts.push(`纠偏后 ${Math.round(corrected)}`);
+  if (rationale) parts.push(rationale);
+  return parts.join(' · ');
+}
+
+function buildAnalysisItemLookup(items: VkpiProjectVideoAnalysisCacheItem[]) {
+  const map = new Map<string, VkpiProjectVideoAnalysisCacheItem>();
+  const add = (key: string, item: VkpiProjectVideoAnalysisCacheItem) => {
+    if (!key || map.has(key)) return;
+    map.set(key, item);
+  };
+  items.forEach((item) => {
+    if (item.evidence_id != null) add(`evidence:${item.evidence_id}`, item);
+    if (item.content_url) add(`url:${item.content_url}`, item);
+    if (item.entry?.target_id) add(`target:${item.entry.target_id}`, item);
+  });
+  return map;
+}
+
+function qaItemForAnalysis(item: VkpiProjectVideoAnalysisCacheItem, map: Map<string, VkpiProjectVideoAnalysisCacheItem>) {
+  const keys = [
+    item.evidence_id != null ? `evidence:${item.evidence_id}` : '',
+    item.content_url ? `url:${item.content_url}` : '',
+    item.entry?.target_id ? `target:${item.entry.target_id}` : '',
+  ].filter(Boolean);
+  for (const key of keys) {
+    const match = map.get(key);
+    if (match?.state === 'ready' && match.entry) return match;
+  }
+  return null;
+}
+
 class RetrospectiveCardErrorBoundary extends Component<{ children: ReactNode; label: string }, { hasError: boolean }> {
   state = { hasError: false };
 
@@ -1090,9 +1209,11 @@ function analysisItemsForRow(row: VkpiProjectRow, map: Map<string, VkpiProjectVi
 function ProjectVideoAnalysisCard({
   row,
   item,
+  qaItem,
 }: {
   row: VkpiProjectRow;
   item: VkpiProjectVideoAnalysisCacheItem;
+  qaItem?: VkpiProjectVideoAnalysisCacheItem | null;
 }) {
   const ready = item.state === 'ready' && item.entry;
   const displayName = row.kolName || item.kol_name || item.handle || 'Unknown';
@@ -1117,6 +1238,17 @@ function ProjectVideoAnalysisCard({
   const keyHook = textFrom(layer6.key_hook);
   const riskFlagTags = normaliseRiskFlags(layer6.risk_flags);
   const verdict = textFrom(layer6.final_verdict) || marketingScore.rationale || keyHook;
+  const qaPayload = qaItem?.state === 'ready' && qaItem.entry ? finalV1QaPayload(qaItem.entry) : {};
+  const qaHasPayload = Object.keys(qaPayload).length > 0;
+  const qaResultRecord = asRecord(qaItem?.entry?.result);
+  const qaPass = qaBoolean(qaPayload.qa_pass ?? qaResultRecord.qa_pass);
+  const qaBadgeText = qaPass === false ? '需复核' : qaPass === true ? '通过' : '未定';
+  const qaSummary = textFrom(qaPayload.summary);
+  const qaConfidence = Number(qaPayload.confidence);
+  const qaChecks = qaCheckTags(qaPayload.checks);
+  const qaIssues = qaIssueItems(qaPayload.issues);
+  const qaCorrection = qaScoreCorrectionText(qaPayload.score_correction);
+  const qaAction = textFrom(qaPayload.recommended_review_action);
   const fullLayers = [
     ['layer1 画面', payload.layer1_visual_content],
     ['layer2 心动', payload.layer2_viewer_emotion],
@@ -1213,6 +1345,42 @@ function ProjectVideoAnalysisCard({
         ))}
       </div>
 
+      {qaHasPayload ? (
+        <div className={`rounded-md border p-2.5 ${qaPass === false ? 'border-rose-400/20 bg-rose-500/[0.045]' : 'border-emerald-400/15 bg-emerald-500/[0.035]'}`}>
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className={`px-2 py-1 rounded text-[9.5px] font-medium ${qaPass === false ? 'bg-rose-500/15 text-rose-200' : 'bg-emerald-500/15 text-emerald-200'}`}>
+                关键帧 QA {qaBadgeText}
+              </span>
+              {Number.isFinite(qaConfidence) ? <span className="text-[9.5px] text-slate-500">置信 {Math.round(qaConfidence * 100)}%</span> : null}
+            </div>
+            {qaAction ? <span className="text-[9.5px] text-slate-500 shrink-0">{qaAction.replace(/_/g, ' ')}</span> : null}
+          </div>
+          {qaSummary ? <div className="text-[10.5px] text-slate-200 leading-relaxed mb-2">{compactText(qaSummary, 180)}</div> : null}
+          {qaChecks.length ? (
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              {qaChecks.map((check) => (
+                <span key={check.key} className={`px-2 py-1 rounded border text-[9.5px] ${qaStatusClass(check.status)}`} title={check.detail || undefined}>
+                  {check.label}: {qaStatusLabel(check.status)}
+                </span>
+              ))}
+            </div>
+          ) : null}
+          {qaIssues.length ? (
+            <div className="space-y-1.5 mb-2">
+              {qaIssues.slice(0, 3).map((issue) => (
+                <div key={issue.key} className="rounded bg-black/20 border border-white/[0.05] px-2 py-1.5 text-[10px] text-slate-300">
+                  <span className="text-amber-200">{issue.label}</span>
+                  {issue.evidence ? <span> · {compactText(issue.evidence, 110)}</span> : null}
+                  {issue.correction ? <span className="text-cyan-200"> · {compactText(issue.correction, 90)}</span> : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {qaCorrection ? <div className="text-[10px] text-slate-400">纠偏建议: {compactText(qaCorrection, 190)}</div> : null}
+        </div>
+      ) : null}
+
       <details className="rounded-md border border-white/[0.05] bg-black/20">
         <summary className="cursor-pointer px-3 py-2 text-[10.5px] text-cyan-200">展开完整6层</summary>
         <div className="p-3 grid gap-2">
@@ -1234,8 +1402,10 @@ export function CampaignRetrospectiveTab({
   stats,
   health,
   videoAnalysisCache,
+  videoQaCache,
   videoAnalysisLoading,
   videoAnalysisError,
+  videoQaError,
   onCopy,
   onPendingAction,
 }: {
@@ -1246,8 +1416,10 @@ export function CampaignRetrospectiveTab({
   health: ReturnType<typeof healthForRows>;
   bottleneck: ReturnType<typeof bottleneckForRows>;
   videoAnalysisCache?: VkpiProjectVideoAnalysisCacheResponse | null;
+  videoQaCache?: VkpiProjectVideoAnalysisCacheResponse | null;
   videoAnalysisLoading?: boolean;
   videoAnalysisError?: string;
+  videoQaError?: string;
   onCopy: (text: string, label: string) => Promise<void>;
   onPendingAction: (label: string) => void;
 }) {
@@ -1260,6 +1432,7 @@ export function CampaignRetrospectiveTab({
   const withoutShopify = publishedKols.filter((row) => !withShopify.includes(row));
   const retrospectiveDraft = buildRetrospectiveDraftText(project, rows, stats, projectHealth, publishedKols, withShopify, withoutShopify);
   const analysisItemMap = useMemo(() => buildAnalysisItemMap(videoAnalysisCache?.items || []), [videoAnalysisCache?.items]);
+  const qaItemLookup = useMemo(() => buildAnalysisItemLookup(videoQaCache?.items || []), [videoQaCache?.items]);
   const analysisSummary = videoAnalysisCache?.summary;
 
   function compositeScore(row: VkpiProjectRow) {
@@ -1318,6 +1491,7 @@ export function CampaignRetrospectiveTab({
               ))}
             </div>
             {videoAnalysisError ? <div className="mt-2 text-[10px] text-rose-300">final_v1 缓存读取失败：{videoAnalysisError}</div> : null}
+            {videoQaError ? <div className="mt-1 text-[10px] text-amber-300">关键帧 QA 读取失败：{videoQaError}</div> : null}
           </div>
         </div>
       </div>
@@ -1416,6 +1590,7 @@ export function CampaignRetrospectiveTab({
                           <ProjectVideoAnalysisCard
                             row={row}
                             item={item}
+                            qaItem={qaItemForAnalysis(item, qaItemLookup)}
                           />
                         </RetrospectiveCardErrorBoundary>
                       ))}

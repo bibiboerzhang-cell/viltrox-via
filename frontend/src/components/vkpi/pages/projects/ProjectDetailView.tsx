@@ -126,8 +126,10 @@ export function ProjectDetailView({
   const [confirmingAction, setConfirmingAction] = useState(false);
   const [taskReminderOpen, setTaskReminderOpen] = useState(false);
   const [videoAnalysisCache, setVideoAnalysisCache] = useState<VkpiProjectVideoAnalysisCacheResponse | null>(null);
+  const [videoQaCache, setVideoQaCache] = useState<VkpiProjectVideoAnalysisCacheResponse | null>(null);
   const [videoAnalysisLoading, setVideoAnalysisLoading] = useState(false);
   const [videoAnalysisError, setVideoAnalysisError] = useState('');
+  const [videoQaError, setVideoQaError] = useState('');
   const [contractsPayload, setContractsPayload] = useState<VkpiProjectContractsResponse | null>(null);
   const [contractsLoading, setContractsLoading] = useState(false);
   const [contractsError, setContractsError] = useState('');
@@ -140,19 +142,33 @@ export function ProjectDetailView({
 
   useEffect(() => {
     setVideoAnalysisCache(null);
+    setVideoQaCache(null);
     setVideoAnalysisError('');
+    setVideoQaError('');
     if (!apiToken || !project.id) {
       setVideoAnalysisLoading(false);
       return;
     }
     let cancelled = false;
     setVideoAnalysisLoading(true);
-    getProjectVideoAnalysisCache(apiToken, project.id)
-      .then((payload) => {
-        if (!cancelled) setVideoAnalysisCache(payload);
-      })
-      .catch((error) => {
-        if (!cancelled) setVideoAnalysisError(error instanceof Error ? error.message : 'final_v1 分析读取失败');
+    Promise.allSettled([
+      getProjectVideoAnalysisCache(apiToken, project.id),
+      getProjectVideoAnalysisCache(apiToken, project.id, 'video_analysis_final_v1_keyframe_qa'),
+    ])
+      .then(([finalV1Result, qaResult]) => {
+        if (cancelled) return;
+        if (finalV1Result.status === 'fulfilled') {
+          setVideoAnalysisCache(finalV1Result.value);
+        } else {
+          const error = finalV1Result.reason;
+          setVideoAnalysisError(error instanceof Error ? error.message : 'final_v1 分析读取失败');
+        }
+        if (qaResult.status === 'fulfilled') {
+          setVideoQaCache(qaResult.value);
+        } else {
+          const error = qaResult.reason;
+          setVideoQaError(error instanceof Error ? error.message : '关键帧 QA 读取失败');
+        }
       })
       .finally(() => {
         if (!cancelled) setVideoAnalysisLoading(false);
@@ -932,8 +948,10 @@ export function ProjectDetailView({
           health={health}
           bottleneck={bottleneck}
           videoAnalysisCache={videoAnalysisCache}
+          videoQaCache={videoQaCache}
           videoAnalysisLoading={videoAnalysisLoading}
           videoAnalysisError={videoAnalysisError}
+          videoQaError={videoQaError}
           onCopy={copyMaterialText}
           onPendingAction={(label) => setNotice({ tone: 'info', title: '暂存提醒', body: `${label} 已进入项目操作队列，后续同步后更新状态。` })}
         />
