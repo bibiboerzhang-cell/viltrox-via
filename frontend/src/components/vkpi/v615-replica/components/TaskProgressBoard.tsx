@@ -1,26 +1,10 @@
 // @ts-nocheck
 
-import React from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Brain, Clock3, FileText, Search, Zap } from "lucide-react";
+import { getTaskQueue } from "../../../../services/vkpi/tasks-api";
 
 const e = React.createElement;
-
-const MOCK_ACTIVE_TASKS = [
-  { id: "mock-search-1", stage: "search", kind: "URL深抓", target: "juliatrotti", progress: 34 },
-  { id: "mock-search-2", stage: "search", kind: "全网发现", target: "35mm 评测", progress: 58 },
-  { id: "mock-think-1", stage: "thinking", kind: "video深析", target: "eliinfante", progress: 48 },
-  { id: "mock-sum-1", stage: "summarizing", kind: "沉淀分析", target: "deep result", progress: 72 },
-];
-
-const MOCK_QUEUED_TASKS = [
-  { id: "mock-q-1", kind: "video深析", target: "directedbysean" },
-  { id: "mock-q-2", kind: "URL深抓", target: "derrelhoshing" },
-  { id: "mock-q-3", kind: "全网发现", target: "低光人像" },
-  { id: "mock-q-4", kind: "video深析", target: "editorskeys" },
-  { id: "mock-q-5", kind: "URL深抓", target: "jaysoundo" },
-  { id: "mock-q-6", kind: "全网发现", target: "85mm 对比" },
-  { id: "mock-q-7", kind: "video深析", target: "miklosmayerphoto" },
-];
 
 const LANES = [
   {
@@ -55,12 +39,31 @@ const LANES = [
   },
 ];
 
+function asArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function taskTargetText(task) {
+  const target = task?.target && typeof task.target === "object" ? task.target : {};
+  return String(
+    target.label ||
+    target.handle ||
+    target.display_name ||
+    target.target_id ||
+    target.source_url ||
+    task?.target_label ||
+    ""
+  ).trim();
+}
+
 function taskLabel(task) {
-  return `${task.kind || "任务"} · ${task.target || "未命名"}`;
+  return `${task.kind || "任务"} · ${taskTargetText(task) || "未命名"}`;
 }
 
 function TaskRow({ task, color, showBar }) {
-  const progress = Math.max(6, Math.min(100, Number(task.progress || 0)));
+  const rawProgress = task.progress_pct ?? task.progress;
+  const hasProgress = Number.isFinite(Number(rawProgress));
+  const progress = Math.max(6, Math.min(100, Number(rawProgress || 0)));
   return e("div", { className: "min-w-0" },
     e("div", { className: "flex items-center gap-1.5 min-w-0" },
       e("span", {
@@ -69,11 +72,20 @@ function TaskRow({ task, color, showBar }) {
       }),
       e("span", { className: "truncate text-[11px] leading-4 text-white/70" }, taskLabel(task))
     ),
-    showBar && e("div", { className: "ml-[11px] mt-1 h-[3px] overflow-hidden rounded-full bg-white/[0.08]" },
-      e("div", {
-        className: "h-full rounded-full transition-[width] duration-500",
-        style: { width: `${progress}%`, background: color }
-      })
+    showBar && (
+      hasProgress
+        ? e("div", { className: "ml-[11px] mt-1 h-[3px] overflow-hidden rounded-full bg-white/[0.08]" },
+          e("div", {
+            className: "h-full rounded-full transition-[width] duration-500",
+            style: { width: `${progress}%`, background: color }
+          })
+        )
+        : e("div", { className: "ml-[11px] mt-1 h-[3px] overflow-hidden rounded-full bg-white/[0.08]" },
+          e("div", {
+            className: "h-full w-1/2 rounded-full opacity-60",
+            style: { background: `linear-gradient(90deg, transparent, ${color}, transparent)` }
+          })
+        )
     )
   );
 }
@@ -101,13 +113,79 @@ function TaskLane({ lane, tasks }) {
   );
 }
 
-export function TaskProgressBoard() {
+export function TaskProgressBoard({ apiToken = "" }) {
+  const [payload, setPayload] = useState(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const refreshQueue = useCallback(async () => {
+    if (!apiToken || (typeof document !== "undefined" && document.visibilityState === "hidden")) return;
+    setLoading(true);
+    try {
+      const response = await getTaskQueue(apiToken, { limit: 50, recentMinutes: 10, includeLlmCalls: true });
+      setPayload(response);
+      setError("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "任务进度连接中");
+    } finally {
+      setLoading(false);
+    }
+  }, [apiToken]);
+
+  useEffect(() => {
+    if (!apiToken) {
+      setPayload(null);
+      setError("缺少 API token");
+      return undefined;
+    }
+    let intervalId;
+    const startPolling = () => {
+      if (intervalId || (typeof document !== "undefined" && document.visibilityState === "hidden")) return;
+      void refreshQueue();
+      intervalId = window.setInterval(() => {
+        void refreshQueue();
+      }, 2500);
+    };
+    const stopPolling = () => {
+      if (intervalId) {
+        window.clearInterval(intervalId);
+        intervalId = undefined;
+      }
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        stopPolling();
+      } else {
+        startPolling();
+      }
+    };
+    startPolling();
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      stopPolling();
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [apiToken, refreshQueue]);
+
+  const activeTasks = useMemo(() => asArray(payload?.active), [payload]);
+  const queuedTasks = useMemo(() => activeTasks.filter((task) => task?.status === "queued"), [activeTasks]);
+  const laneTasks = useMemo(() => {
+    const nonQueued = activeTasks.filter((task) => task?.status !== "queued");
+    return {
+      search: nonQueued.filter((task) => task?.stage === "search"),
+      thinking: nonQueued.filter((task) => task?.stage === "thinking"),
+      summarizing: nonQueued.filter((task) => task?.stage === "summarizing"),
+    };
+  }, [activeTasks]);
+  const activeTotal = Number(payload?.counts?.active_total ?? activeTasks.length) || 0;
+  const queueTotal = Number(payload?.counts?.queued ?? queuedTasks.length) || 0;
   const lanes = LANES.map((lane) => ({
     ...lane,
-    tasks: MOCK_ACTIVE_TASKS.filter((task) => task.stage === lane.key),
+    tasks: laneTasks[lane.key] || [],
   }));
-  const visibleQueue = MOCK_QUEUED_TASKS.slice(0, 2);
-  const remainingQueue = Math.max(0, MOCK_QUEUED_TASKS.length - visibleQueue.length);
+  const visibleQueue = queuedTasks.slice(0, 2);
+  const remainingQueue = Math.max(0, queueTotal - visibleQueue.length);
+  const emptyActive = activeTotal === 0 && !loading && !error;
 
   return e("div", {
     className: "w-full rounded-xl border border-white/10 bg-[#0d1117] px-3 py-3 shadow-[0_18px_44px_rgba(0,0,0,0.28)]"
@@ -117,7 +195,15 @@ export function TaskProgressBoard() {
         e(Zap, { size: 15, className: "shrink-0 text-[#5DCAA5]" }),
         e("span", { className: "truncate text-[13px] font-medium text-white/90" }, "任务进度")
       ),
-      e("span", { className: "shrink-0 text-[11px] text-white/40 tabular-nums" }, `${MOCK_ACTIVE_TASKS.length} 活跃`)
+      e("span", { className: "shrink-0 text-[11px] text-white/40 tabular-nums" },
+        loading && !payload ? "连接中" : `${activeTotal} 活跃`
+      )
+    ),
+    error && e("div", { className: "mb-2 rounded border border-amber-300/15 bg-amber-300/[0.05] px-2 py-1 text-[10px] leading-4 text-amber-100/70" },
+      payload ? "任务进度连接中 · 保留上次状态" : error
+    ),
+    emptyActive && e("div", { className: "mb-2 rounded border border-white/[0.06] bg-white/[0.025] px-2 py-1.5 text-center text-[10.5px] text-white/35" },
+      "暂无运行中任务"
     ),
     e("div", { className: "flex flex-col gap-2.5" },
       lanes.map((lane) => e(TaskLane, { key: lane.key, lane, tasks: lane.tasks }))
@@ -128,13 +214,15 @@ export function TaskProgressBoard() {
           e(Clock3, { size: 12, className: "text-white/35" }),
           e("span", { className: "truncate text-[11px] text-white/45" }, "排队等待")
         ),
-        e("span", { className: "text-[11px] font-medium text-white/60 tabular-nums" }, MOCK_QUEUED_TASKS.length)
+        e("span", { className: "text-[11px] font-medium text-white/60 tabular-nums" }, queueTotal)
       ),
       e("div", { className: "mt-1.5 flex flex-col gap-1" },
-        visibleQueue.map((task, index) => e("div", { key: task.id, className: "flex min-w-0 items-center gap-1.5" },
-          e("span", { className: "w-[18px] shrink-0 text-[10px] text-white/40 tabular-nums" }, `#${index + 1}`),
-          e("span", { className: "truncate text-[11px] text-white/60" }, taskLabel(task))
-        )),
+        visibleQueue.length
+          ? visibleQueue.map((task, index) => e("div", { key: task.id, className: "flex min-w-0 items-center gap-1.5" },
+            e("span", { className: "w-[18px] shrink-0 text-[10px] text-white/40 tabular-nums" }, `#${index + 1}`),
+            e("span", { className: "truncate text-[11px] text-white/60" }, taskLabel(task))
+          ))
+          : e("span", { className: "text-[11px] text-white/25" }, "—"),
         remainingQueue > 0 && e("div", { className: "flex min-w-0 items-center gap-1.5 opacity-45" },
           e("span", { className: "w-[18px] shrink-0 text-[10px] text-white/40 tabular-nums" }, `+${remainingQueue}`),
           e("span", { className: "truncate text-[11px] text-white/60" }, "更多任务…")

@@ -766,7 +766,7 @@ export function V615ReplicaApp(props: any = {}) {
           )
         ),
         e("div", { className: `flex flex-col gap-2 ${collapsed ? "px-2" : "px-3"} pb-4` },
-          !collapsed && e(TaskProgressBoard),
+          !collapsed && e(TaskProgressBoard, { apiToken }),
           e("button", {
             onClick: () => setCollapsed(!collapsed),
             className: `flex items-center ${collapsed ? "justify-center" : "gap-3 px-3"} rounded-lg py-2 text-sm text-slate-400 hover:bg-white/[0.04] hover:text-white`,

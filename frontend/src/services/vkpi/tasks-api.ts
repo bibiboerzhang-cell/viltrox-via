@@ -28,6 +28,40 @@ export interface AsyncTask {
   finished_at?: string;
 }
 
+export interface TaskQueueItem {
+  id: string;
+  source: string;
+  kind: string;
+  job_type?: string;
+  target?: Row;
+  status: string;
+  raw_status?: string;
+  stage: "queued" | "search" | "thinking" | "summarizing" | string;
+  stage_label?: string;
+  created_at?: string;
+  updated_at?: string;
+  progress_pct?: number;
+  error?: string;
+}
+
+export interface TaskQueueResponse {
+  status: "ready" | string;
+  source?: string;
+  query?: Row;
+  counts?: {
+    active_total?: number;
+    recent_total?: number;
+    queued?: number;
+    running?: number;
+    active_by_status?: Record<string, number>;
+    recent_by_status?: Record<string, number>;
+    active_by_stage?: Record<string, number>;
+  };
+  active?: TaskQueueItem[];
+  recent?: TaskQueueItem[];
+  diagnostics?: Row;
+}
+
 export const TERMINAL_STATUSES = [
   "done",
   "failed",
@@ -101,6 +135,17 @@ export async function listTasks(token: string, filters: { status?: AsyncTaskStat
 
 export async function getTaskRealtimeStatus(token: string) {
   return apiFetch<Row>("/api/admin/vkpi/tasks/realtime-status", {}, token);
+}
+
+export async function getTaskQueue(
+  token: string,
+  options: { limit?: number; recentMinutes?: number; includeLlmCalls?: boolean } = {},
+) {
+  const params = new URLSearchParams();
+  params.set("limit", String(options.limit ?? 50));
+  params.set("recent_minutes", String(options.recentMinutes ?? 10));
+  params.set("include_llm_calls", options.includeLlmCalls === false ? "false" : "true");
+  return apiFetch<TaskQueueResponse>(`/api/admin/vkpi/task-queue?${params.toString()}`, {}, token);
 }
 
 export function buildTaskEventStreamUrl(taskId: string) {
