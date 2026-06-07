@@ -30,6 +30,7 @@ from app.domains.kol import llm_deep_analysis as kol_llm_deep_analysis
 from app.domains.kol import pool as kol_pool
 import app.domains.kol.profile_recall as kol_profile_recall
 import app.domains.kol.url_deep_crawl as kol_url_deep_crawl
+import app.domains.kol.video_analysis_enqueue as kol_video_analysis_enqueue
 from app.domains.intelligence import gemini_single_kol_preflight
 import app.domains.intelligence.ai_brief as ai_brief
 import app.domains.evidence.summary as evidence_summary
@@ -353,6 +354,30 @@ async def refresh_pool_item(
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/kol-pool/{kol_pool_id}/enqueue-video-analysis")
+def enqueue_pool_item_video_analysis(
+    kol_pool_id: int,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """Queue one final_v1 video analysis job; independent from V6 Fit."""
+    evidence_id = body.get("evidence_id")
+    try:
+        evidence_id_int = int(evidence_id)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="evidence_id required") from exc
+    try:
+        return kol_video_analysis_enqueue.enqueue_final_v1_video_analysis(
+            kol_pool_id=int(kol_pool_id),
+            evidence_id=evidence_id_int,
+            staff=staff,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/kol-pool/{kol_pool_id}/main-candidates")
