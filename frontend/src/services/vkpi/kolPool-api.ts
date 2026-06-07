@@ -59,6 +59,18 @@ export interface VkpiKolVideoAnalysisCacheResponse {
   entry?: VkpiKolVideoAnalysisCacheEntry | null;
 }
 
+export interface VkpiVideoAnalysisEnqueueResponse {
+  status: "queued" | "already_analyzed" | "already_queued" | "budget_denied" | string;
+  kol_pool_id?: number;
+  evidence_id?: number;
+  derive_method?: string;
+  message?: string;
+  reason?: string;
+  job?: Record<string, unknown> | null;
+  cache?: Record<string, unknown> | null;
+  budget?: Record<string, unknown> | null;
+}
+
 export interface VkpiKolLlmDeepAnalysisResult {
   id?: number;
   kol_pool_id?: number;
@@ -400,6 +412,21 @@ export async function getKolVideoAnalysisCache(
   return apiFetch<VkpiKolVideoAnalysisCacheResponse>(
     `/api/admin/vkpi/analysis-cache?${params.toString()}`,
     { cache: "no-store" },
+    token,
+  );
+}
+
+export async function enqueueVideoAnalysis(
+  token: string,
+  kolPoolId: string | number,
+  evidenceId: string | number,
+): Promise<VkpiVideoAnalysisEnqueueResponse> {
+  return apiFetch<VkpiVideoAnalysisEnqueueResponse>(
+    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/enqueue-video-analysis`,
+    {
+      method: "POST",
+      body: jsonBody({ evidence_id: evidenceId }),
+    },
     token,
   );
 }

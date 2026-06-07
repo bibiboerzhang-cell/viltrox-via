@@ -11,7 +11,7 @@ import { GeoTierChip } from "./GeoTierChip";
 import { KPAvatar } from "./KPAvatar";
 import { KOLVideoAnalysisPanel } from "./KOLVideoAnalysisPanel";
 import { PlatformPill } from "./PlatformPill";
-import { getKolPoolDimensions11, getKolPoolLlmDeepAnalysis } from "../../../../services/vkpi/kolPool-api";
+import { enqueueVideoAnalysis, getKolPoolDimensions11, getKolPoolLlmDeepAnalysis } from "../../../../services/vkpi/kolPool-api";
 import { candidateKindGroup } from "../lib/candidateKind";
 import { formatNumber, formatPercent } from "../lib/format";
 import { BRAND_TIER } from "../data/brandTier";
@@ -159,6 +159,13 @@ function videoAnalysisSources(item, representativeVideos) {
   });
 }
 
+function evidenceIdOf(video) {
+  if (!video || typeof video !== "object") return null;
+  const value = video.evidence_id ?? video.id;
+  const id = Number(value);
+  return Number.isFinite(id) && id > 0 ? id : null;
+}
+
 function LlmDeepAnalysisPanel({ payload }) {
   if (!payload || payload.status !== "ready" || !payload.primary_result) return null;
   const primary = recordOr(payload.primary_result);
@@ -227,6 +234,7 @@ function LlmDeepAnalysisPanel({ payload }) {
 export function KOLDetailDrawer({ item, apiToken = "", detailLoading = false, detailError = "", onClose, inMyList, onToggleMyList, onContact }) {
   const [dimensions11, setDimensions11] = React.useState(null);
   const [llmDeepAnalysis, setLlmDeepAnalysis] = React.useState(null);
+  const [videoEnqueueState, setVideoEnqueueState] = React.useState({ status: "idle", message: "" });
   React.useEffect(() => {
     if (!apiToken || !item?.id) {
       setDimensions11(null);
@@ -267,6 +275,10 @@ export function KOLDetailDrawer({ item, apiToken = "", detailLoading = false, de
     };
   }, [apiToken, item?.id]);
 
+  React.useEffect(() => {
+    setVideoEnqueueState({ status: "idle", message: "" });
+  }, [item?.id]);
+
   if (!item) return null;
   const devices = {
     ...(item.devices || {}),
@@ -282,6 +294,44 @@ export function KOLDetailDrawer({ item, apiToken = "", detailLoading = false, de
   const competitorCollabs = asArray(item.competitor_collabs);
   const loyaltySignals = item.loyalty_signals || {};
   const videoAnalysisVideos = videoAnalysisSources(item, representativeVideos);
+  const primaryVideoEvidence = videoAnalysisVideos[0] || null;
+  const primaryVideoEvidenceId = evidenceIdOf(primaryVideoEvidence);
+  const videoEnqueueBusy = videoEnqueueState.status === "loading" || videoEnqueueState.status === "queued" || videoEnqueueState.status === "already_queued";
+  const canEnqueueVideoAnalysis = Boolean(apiToken && item.id && primaryVideoEvidenceId && !videoEnqueueBusy);
+  const videoEnqueueLabel =
+    videoEnqueueState.status === "loading" ? "入队中…" :
+    videoEnqueueState.status === "queued" ? "分析中…" :
+    videoEnqueueState.status === "already_analyzed" ? "已分析过" :
+    videoEnqueueState.status === "already_queued" ? "已在队列中" :
+    "AI深度分析";
+  const videoEnqueueTitle =
+    videoEnqueueState.message ||
+    (primaryVideoEvidenceId
+      ? "入队当前主代表作 evidence #" + primaryVideoEvidenceId + "；任务进度会显示在左侧看板"
+      : "暂无可分析的 video evidence");
+  const handleVideoAnalysisEnqueue = () => {
+    if (!apiToken || !item.id || !primaryVideoEvidenceId || videoEnqueueBusy) return;
+    setVideoEnqueueState({ status: "loading", message: "正在把 evidence #" + primaryVideoEvidenceId + " 加入深析队列" });
+    void enqueueVideoAnalysis(apiToken, item.id, primaryVideoEvidenceId)
+      .then((payload) => {
+        const status = String(payload?.status || "");
+        if (status === "queued") {
+          setVideoEnqueueState({ status, message: "已入队；左侧任务进度看板会自动显示" });
+        } else if (status === "already_analyzed") {
+          setVideoEnqueueState({ status, message: "这条 evidence 已有 final_v1 深析结果" });
+        } else if (status === "already_queued") {
+          setVideoEnqueueState({ status, message: "这条 evidence 已在队列中，避免重复入队" });
+        } else if (status === "budget_denied") {
+          setVideoEnqueueState({ status, message: "预算闸门拒绝，本次未入队" });
+        } else {
+          setVideoEnqueueState({ status: "error", message: payload?.message || payload?.reason || "入队失败" });
+        }
+      })
+      .catch((error) => {
+        const message = error?.message ? String(error.message) : "入队失败";
+        setVideoEnqueueState({ status: "error", message });
+      });
+  };
   const dimensions11Dims = dimensions11RadarDims(dimensions11);
   const v6Breakdown = item.v6_breakdown && typeof item.v6_breakdown === "object"
     ? item.v6_breakdown
@@ -832,10 +882,15 @@ export function KOLDetailDrawer({ item, apiToken = "", detailLoading = false, de
       // 次操作 icons
       e("div", { className: "flex items-center justify-center gap-1.5" },
         e("button", {
-          disabled: true,
-          className: "flex cursor-not-allowed items-center gap-1 rounded-md border border-white/[0.06] px-2 py-1 text-[10px] text-slate-500 opacity-70",
-          title: "待开放: 需要明确启用 Gemini / 视频分析 provider"
-        }, e(RefreshCw, { size: 10 }), "深度评估 · 待开放"),
+          disabled: !canEnqueueVideoAnalysis,
+          onClick: handleVideoAnalysisEnqueue,
+          className: "flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] transition-colors " + (
+            canEnqueueVideoAnalysis
+              ? "border-cyan-400/25 bg-cyan-400/[0.07] text-cyan-200 hover:bg-cyan-400/[0.12]"
+              : "cursor-not-allowed border-white/[0.06] text-slate-500 opacity-70"
+          ),
+          title: videoEnqueueTitle
+        }, e(RefreshCw, { size: 10, className: videoEnqueueState.status === "loading" ? "animate-spin" : "" }), videoEnqueueLabel),
         item.profile_url && e("a", {
           href: item.profile_url, target: "_blank", rel: "noreferrer",
           className: "flex items-center gap-1 rounded-md border border-white/[0.06] px-2 py-1 text-[10px] text-slate-400 hover:bg-white/[0.04] hover:text-white"
@@ -845,7 +900,16 @@ export function KOLDetailDrawer({ item, apiToken = "", detailLoading = false, de
           className: "flex cursor-not-allowed items-center gap-1 rounded-md border border-white/[0.06] px-2 py-1 text-[10px] text-slate-500 opacity-70",
           title: "待接入: 更多操作需要明确菜单项和权限"
         }, e(MoreHorizontal, { size: 10 }), "更多 · 待接入"),
-      )
+      ),
+      videoEnqueueState.message && e("div", {
+        className: "mt-1 text-center text-[10px] leading-snug " + (
+          videoEnqueueState.status === "error" || videoEnqueueState.status === "budget_denied"
+            ? "text-rose-300"
+            : videoEnqueueState.status === "queued" || videoEnqueueState.status === "already_queued"
+              ? "text-cyan-200"
+              : "text-slate-400"
+        )
+      }, videoEnqueueState.message)
     )
   );
 }
