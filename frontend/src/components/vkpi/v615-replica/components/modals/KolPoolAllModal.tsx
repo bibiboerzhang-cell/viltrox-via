@@ -85,11 +85,11 @@ export function KolPoolAllModal({
   ];
 
   return (
-    <CenterModal onClose={onClose} maxWidth="2xl">
-      <div className="border-b border-white/[0.06] px-5 py-3.5">
+    <CenterModal onClose={onClose} maxWidth="6xl">
+      <div className="shrink-0 border-b border-white/[0.06] bg-[#0b1324] px-5 py-3.5">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <h2 className="text-sm font-semibold text-white">KOL Pool 全量视图</h2>
+            <h2 className="text-sm font-semibold text-white">全部 KOL</h2>
             <div className="mt-0.5 text-[10px] text-slate-500">
               {items.length} 个 KOL · 可搜索、筛选、点行打开现有详情抽屉
             </div>
@@ -103,7 +103,7 @@ export function KolPoolAllModal({
             <X size={14} />
           </button>
         </div>
-        <div className="mt-3 grid gap-2 lg:grid-cols-[minmax(0,1fr)_auto]">
+        <div className="mt-3 grid gap-2 xl:grid-cols-[minmax(0,1fr)_auto]">
           <label className="flex min-h-[36px] items-center gap-2 rounded-md border border-white/[0.08] bg-black/20 px-2.5">
             <Search size={13} className="shrink-0 text-slate-500" />
             <input
@@ -131,12 +131,12 @@ export function KolPoolAllModal({
           </div>
         </div>
       </div>
-      <div className="max-h-[68vh] overflow-hidden p-3">
-        <div className="mb-2 flex items-center justify-between px-1 text-[10.5px] text-slate-500">
+      <div className="flex min-h-0 flex-1 flex-col p-3">
+        <div className="mb-2 flex shrink-0 items-center justify-between px-1 text-[10.5px] text-slate-500">
           <span>显示 {filtered.length} / {items.length}</span>
           <span>点行打开详情；分析动作在详情抽屉内继续使用现有按钮与任务看板</span>
         </div>
-        <div className="max-h-[58vh] overflow-y-auto rounded-xl border border-white/[0.08] bg-white/[0.025]">
+        <div className="min-h-0 flex-1 overflow-y-auto rounded-xl border border-white/[0.08] bg-white/[0.025]">
           {visibleItems.map((item) => {
             const selected = selectedItemId === item.id;
             const handle = item.handle || item.display_name || `KOL #${item.id || "--"}`;
@@ -157,7 +157,7 @@ export function KolPoolAllModal({
                   event.stopPropagation();
                   onRowClick(item);
                 }}
-                className={`grid w-full grid-cols-[minmax(0,1.5fr)_90px_90px_90px] items-center gap-3 border-b border-white/[0.04] px-3 py-2.5 text-left transition-colors last:border-b-0 hover:bg-white/[0.04] ${
+                className={`grid w-full grid-cols-[minmax(0,1.6fr)_110px_90px_100px] items-center gap-4 border-b border-white/[0.04] px-3 py-2.5 text-left transition-colors last:border-b-0 hover:bg-white/[0.04] ${
                   selected ? "bg-cyan-400/[0.08]" : ""
                 }`}
               >
