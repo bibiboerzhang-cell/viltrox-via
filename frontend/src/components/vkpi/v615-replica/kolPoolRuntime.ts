@@ -117,6 +117,11 @@ function representativeVideosFromEvidence(items: unknown) {
         duration,
         url: String(firstValue(video.content_url, video.url, "")),
         thumbnail_url: String(firstValue(video.thumbnail_url, "")),
+        best_thumbnail: String(firstValue(video.best_thumbnail, video.thumbnail_url, "")),
+        cached_video_url: String(firstValue(video.cached_video_url, "")),
+        youtube_video_id: String(firstValue(video.youtube_video_id, "")),
+        youtube_thumbnail_url: String(firstValue(video.youtube_thumbnail_url, "")),
+        watch_url: String(firstValue(video.watch_url, video.content_url, video.url, "")),
         platform: String(firstValue(video.platform, "")),
         published_at: String(firstValue(video.publish_date, video.posted_at, "")),
       };

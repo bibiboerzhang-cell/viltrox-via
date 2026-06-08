@@ -166,6 +166,107 @@ function evidenceIdOf(video) {
   return Number.isFinite(id) && id > 0 ? id : null;
 }
 
+function videoString(video, keys, fallback = "") {
+  const source = recordOr(video);
+  for (const key of keys) {
+    const value = source[key];
+    if (value !== null && value !== undefined && String(value).trim()) return String(value).trim();
+  }
+  return fallback;
+}
+
+function RepresentativeVideoCard({ video, index }) {
+  const [thumbnailFailed, setThumbnailFailed] = React.useState(false);
+  const [playMode, setPlayMode] = React.useState("");
+  const title = videoString(video, ["title", "video_title"], `代表作 ${index + 1}`);
+  const views = videoString(video, ["views", "view_count"], "—");
+  const duration = videoString(video, ["duration"], "—");
+  const thumbnail = videoString(video, ["best_thumbnail", "thumbnail_url", "youtube_thumbnail_url"]);
+  const cachedVideoUrl = videoString(video, ["cached_video_url"]);
+  const youtubeVideoId = videoString(video, ["youtube_video_id"]);
+  const watchUrl = videoString(video, ["watch_url", "url", "content_url"]);
+  const canInlinePlay = Boolean(cachedVideoUrl || youtubeVideoId);
+  const canOpen = canInlinePlay || Boolean(watchUrl);
+  const showThumbnail = Boolean(thumbnail && !thumbnailFailed);
+  const embedSrc = youtubeVideoId
+    ? `https://www.youtube.com/embed/${encodeURIComponent(youtubeVideoId)}?autoplay=1&rel=0`
+    : "";
+
+  const handleClick = () => {
+    if (playMode || !canOpen) return;
+    if (cachedVideoUrl) {
+      setPlayMode("video");
+      return;
+    }
+    if (youtubeVideoId) {
+      setPlayMode("youtube");
+      return;
+    }
+    if (watchUrl && typeof window !== "undefined") {
+      window.open(watchUrl, "_blank", "noopener,noreferrer");
+    }
+  };
+
+  const media = playMode === "youtube"
+    ? e("iframe", {
+        src: embedSrc,
+        title,
+        className: "absolute inset-0 h-full w-full",
+        allow: "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share",
+        allowFullScreen: true,
+      })
+    : playMode === "video"
+      ? e("video", {
+          src: cachedVideoUrl,
+          className: "absolute inset-0 h-full w-full object-cover",
+          controls: true,
+          autoPlay: true,
+          playsInline: true,
+          onError: () => setPlayMode(""),
+        })
+      : showThumbnail
+        ? e("img", {
+            src: thumbnail,
+            alt: title,
+            className: "absolute inset-0 h-full w-full object-cover",
+            loading: "lazy",
+            referrerPolicy: "no-referrer",
+            onError: () => setThumbnailFailed(true),
+          })
+        : e(Video, { size: 16, className: "text-slate-500" });
+
+  return e("div", {
+    className: [
+      "rounded-md border border-white/[0.06] bg-white/[0.02] overflow-hidden transition-colors",
+      canOpen ? "hover:bg-white/[0.04] cursor-pointer" : "",
+    ].filter(Boolean).join(" "),
+    onClick: handleClick,
+    role: canOpen ? "button" : undefined,
+    tabIndex: canOpen ? 0 : undefined,
+    onKeyDown: canOpen ? (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        handleClick();
+      }
+    } : undefined,
+    title: canOpen ? "点击播放或打开代表作" : undefined,
+  },
+    e("div", {
+      className: "aspect-video bg-gradient-to-br from-slate-700 to-slate-900 flex items-center justify-center relative overflow-hidden",
+    },
+      media,
+      !playMode && e("span", {
+        className: "absolute bottom-1 right-1 px-1 rounded text-[8px] tabular-nums text-white",
+        style: { background: "rgba(0,0,0,0.7)" }
+      }, duration)
+    ),
+    e("div", { className: "p-1.5" },
+      e("div", { className: "text-[9px] text-white truncate leading-tight" }, title),
+      e("div", { className: "text-[8px] text-slate-500 tabular-nums" }, views + " 播放")
+    )
+  );
+}
+
 function LlmDeepAnalysisPanel({ payload }) {
   if (!payload || payload.status !== "ready" || !payload.primary_result) return null;
   const primary = recordOr(payload.primary_result);
@@ -635,24 +736,11 @@ export function KOLDetailDrawer({ item, apiToken = "", detailLoading = false, de
         representativeVideos.length > 0 && e("div", null,
           e("div", { className: "text-[10px] text-slate-500 mb-1.5" }, "代表作"),
           e("div", { className: "grid grid-cols-3 gap-1.5" },
-            representativeVideos.map((v, i) => e("div", {
-              key: i,
-              className: "rounded-md border border-white/[0.06] bg-white/[0.02] overflow-hidden hover:bg-white/[0.04] cursor-pointer transition-colors"
-            },
-              e("div", { 
-                className: "aspect-video bg-gradient-to-br from-slate-700 to-slate-900 flex items-center justify-center relative"
-              },
-                e(Video, { size: 16, className: "text-slate-500" }),
-                e("span", { 
-                  className: "absolute bottom-1 right-1 px-1 rounded text-[8px] tabular-nums text-white",
-                  style: { background: "rgba(0,0,0,0.7)" }
-                }, v.duration)
-              ),
-              e("div", { className: "p-1.5" },
-                e("div", { className: "text-[9px] text-white truncate leading-tight" }, v.title),
-                e("div", { className: "text-[8px] text-slate-500 tabular-nums" }, v.views + " 播放")
-              )
-            ))
+            representativeVideos.map((v, i) => e(RepresentativeVideoCard, {
+              key: v.evidence_id || v.watch_url || v.url || v.title || i,
+              video: v,
+              index: i,
+            }))
           )
         )
       ),
