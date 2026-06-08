@@ -279,34 +279,34 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
   return (
     <section
       data-testid="smart-kol-input-panel"
-      className="rounded-xl border border-cyan-300/[0.12] bg-black/[0.20] p-3.5 shadow-[0_18px_60px_rgba(0,0,0,0.18)]"
+      className="rounded-lg border border-white/[0.065] bg-black/[0.14] p-2.5"
     >
-      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-        <div className="flex min-w-0 items-center gap-2.5">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-cyan-300/20 bg-cyan-400/[0.10] text-cyan-100">
-            <Sparkles size={15} />
+      <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-cyan-300/15 bg-cyan-400/[0.08] text-cyan-100">
+            <Sparkles size={12} />
           </span>
           <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-[13px] font-semibold text-white">统一智能入口</h2>
-              <span className="rounded-full border border-emerald-300/15 bg-emerald-400/[0.06] px-2 py-0.5 text-[9.5px] text-emerald-100">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <h2 className="text-[12px] font-semibold text-white">统一智能入口</h2>
+              <span className="rounded-full border border-emerald-300/12 bg-emerald-400/[0.05] px-1.5 py-0.5 text-[9px] text-emerald-100">
                 V6 Fit 不触碰
               </span>
             </div>
-            <div className="mt-0.5 truncate text-[10.5px] text-slate-500">
-              粘 URL 自动分流；输需求走产品语义召回。旧工具保留在下方回退区。
+            <div className="mt-0.5 truncate text-[10px] text-slate-600">
+              URL 自动分流；文字走语义召回。
             </div>
           </div>
         </div>
-        <div className="grid grid-cols-3 gap-1.5 text-[9.5px] text-slate-500 sm:min-w-[330px]">
-          <span className="rounded-md border border-white/[0.07] bg-white/[0.025] px-2 py-1 text-center">Video 分析</span>
-          <span className="rounded-md border border-white/[0.07] bg-white/[0.025] px-2 py-1 text-center">Profile 补档</span>
-          <span className="rounded-md border border-white/[0.07] bg-white/[0.025] px-2 py-1 text-center">文字召回</span>
+        <div className="flex flex-wrap gap-1.5 text-[9px] text-slate-500">
+          <span className="rounded border border-cyan-300/10 bg-cyan-400/[0.035] px-1.5 py-0.5 text-cyan-100">Video</span>
+          <span className="rounded border border-violet-300/10 bg-violet-400/[0.035] px-1.5 py-0.5 text-violet-100">Profile</span>
+          <span className="rounded border border-emerald-300/10 bg-emerald-400/[0.035] px-1.5 py-0.5 text-emerald-100">Recall</span>
         </div>
       </div>
 
       <form
-        className="mt-3 grid gap-2 lg:grid-cols-[minmax(0,1fr)_118px]"
+        className="mt-2 grid gap-2 lg:grid-cols-[minmax(0,1fr)_112px]"
         onSubmit={(event) => {
           event.preventDefault();
           if (isBusy || !apiToken || !cleanText(input)) return;
@@ -321,13 +321,13 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
             if (event.key === "Enter" && !isBusy) void run();
           }}
           placeholder="粘贴 KOL 主页 / 视频 URL，或输入产品需求，例如: 35mm 低光人像 YouTube 摄影师"
-          className="min-h-[44px] rounded-lg border border-white/[0.08] bg-black/30 px-3 py-2 text-[11.5px] text-slate-200 outline-none placeholder-slate-600 focus:border-cyan-300/45"
+          className="min-h-[40px] rounded-md border border-white/[0.075] bg-black/30 px-3 py-2 text-[11.5px] text-slate-200 outline-none placeholder-slate-600 focus:border-cyan-300/45"
         />
         <button
           data-testid="smart-kol-run"
           type="submit"
           disabled={isBusy || !apiToken || !cleanText(input)}
-          className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg border border-cyan-300/20 bg-cyan-500/[0.16] px-3 text-[11px] font-medium text-cyan-100 transition-colors hover:bg-cyan-500/[0.24] disabled:cursor-not-allowed disabled:opacity-55"
+          className="inline-flex min-h-[40px] items-center justify-center gap-1.5 rounded-md border border-cyan-300/18 bg-cyan-500/[0.14] px-3 text-[11px] font-medium text-cyan-100 transition-colors hover:bg-cyan-500/[0.22] disabled:cursor-not-allowed disabled:opacity-55"
         >
           {isBusy ? <Loader2 size={13} className="animate-spin" /> : inferredMode === "url" ? <Link2 size={13} /> : <Search size={13} />}
           {inferredMode === "url" ? "识别 URL" : "智能召回"}
@@ -335,17 +335,13 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
       </form>
 
       {state === "idle" && !input ? (
-        <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-slate-500">
-          <span className="inline-flex items-center gap-1.5 rounded-md border border-cyan-300/10 bg-cyan-400/[0.04] px-2 py-1 text-cyan-100">
-            <Video size={10} /> video URL
-          </span>
-          <span className="inline-flex items-center gap-1.5 rounded-md border border-violet-300/10 bg-violet-400/[0.04] px-2 py-1 text-violet-100">
-            <BadgeCheck size={10} /> profile URL
-          </span>
-          <span className="inline-flex items-center gap-1.5 rounded-md border border-emerald-300/10 bg-emerald-400/[0.04] px-2 py-1 text-emerald-100">
-            <Search size={10} /> 产品需求召回
-          </span>
-          <span className="text-slate-600">自动识别后再执行，旧工具在回退区。</span>
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[9.5px] text-slate-600">
+          <span className="inline-flex items-center gap-1 text-cyan-100"><Video size={9} /> 视频 URL</span>
+          <span className="text-slate-700">/</span>
+          <span className="inline-flex items-center gap-1 text-violet-100"><BadgeCheck size={9} /> 账号 URL</span>
+          <span className="text-slate-700">/</span>
+          <span className="inline-flex items-center gap-1 text-emerald-100"><Search size={9} /> 产品需求</span>
+          <span>先识别，再执行；旧工具在回退区。</span>
         </div>
       ) : null}
 

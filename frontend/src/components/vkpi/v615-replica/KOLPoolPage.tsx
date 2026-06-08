@@ -163,7 +163,7 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
             activeKindFilter: kindFilter,
             onTotalClick: () => setPoolModalOpen(true),
           }),
-          e("div", { className: "mt-3 space-y-3" },
+          e("div", { className: "mt-2.5 space-y-2" },
             e(SmartKolInputPanel, { apiToken }),
             e("section", { className: "rounded-xl border border-white/[0.055] bg-black/[0.12]" },
               e("button", {
@@ -189,7 +189,7 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
               )
             )
           ),
-          e("div", { className: "mt-3" },
+          e("div", { className: "mt-2.5" },
             e(MarketCoverageCard, { items: poolItems })
           )
         ),
