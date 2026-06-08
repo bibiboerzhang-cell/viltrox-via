@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.db.connection import get_conn
 from app.domains.kol import history_match
 from app.domains.kol import search_sessions
 from app.domains.kol import url_deep_crawl
@@ -50,6 +51,40 @@ def _candidate_key(item: dict[str, Any], platform: str) -> str:
     return f"{platform}:unknown:{len(str(item))}"
 
 
+def _profile_url_from_kol_pool_id(kol_pool_id: Any) -> str:
+    parsed = _int(kol_pool_id)
+    if parsed <= 0:
+        return ""
+    try:
+        row = get_conn().execute(
+            """
+            SELECT profile_url, platform, handle
+            FROM vkpi_kol_pool
+            WHERE id=?
+            """,
+            (parsed,),
+        ).fetchone()
+    except Exception:
+        return ""
+    if not row:
+        return ""
+    data = dict(row)
+    profile_url = _text(data.get("profile_url"))
+    if profile_url:
+        return profile_url
+    platform = _text(data.get("platform")).lower()
+    handle = _text(data.get("handle")).lstrip("@")
+    if not platform or not handle:
+        return ""
+    if platform == "youtube":
+        return f"https://www.youtube.com/@{handle}"
+    if platform == "instagram":
+        return f"https://www.instagram.com/{handle}/"
+    if platform == "tiktok":
+        return f"https://www.tiktok.com/@{handle}"
+    return ""
+
+
 def _profile_url_from_item(item: dict[str, Any]) -> str:
     payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
     for key in ("profile_url", "channel_url", "source_url"):
@@ -59,7 +94,7 @@ def _profile_url_from_item(item: dict[str, Any]) -> str:
     platform = _text(payload.get("platform") or item.get("platform")).lower()
     handle = _text(payload.get("handle") or payload.get("channel_name") or item.get("handle"))
     if not platform or not handle:
-        return ""
+        return _profile_url_from_kol_pool_id(item.get("kol_pool_id"))
     handle = handle.lstrip("@")
     if platform == "youtube":
         return f"https://www.youtube.com/@{handle}"
@@ -68,8 +103,8 @@ def _profile_url_from_item(item: dict[str, Any]) -> str:
     if platform == "tiktok":
         return f"https://www.tiktok.com/@{handle}"
     if platform == "douyin":
-        return ""
-    return ""
+        return _profile_url_from_kol_pool_id(item.get("kol_pool_id"))
+    return _profile_url_from_kol_pool_id(item.get("kol_pool_id"))
 
 
 def discovery_plan(
@@ -100,8 +135,8 @@ def profile_crawl_plan_for_session_item(
 ) -> dict[str, Any]:
     item = search_sessions.get_session_item(int(session_id), int(item_id))
     item_type = _text(item.get("item_type"))
-    if item_type not in {"new_creator", "existing_kol"}:
-        raise ValueError("profile crawl can only run for new_creator or existing_kol discovery items")
+    if item_type not in {"new_creator", "existing_kol", "recall_candidate"}:
+        raise ValueError("profile crawl can only run for new_creator, existing_kol, or recall_candidate items")
     profile_url = _profile_url_from_item(item)
     if not profile_url:
         raise ValueError("discovery item does not contain a usable profile URL")
@@ -209,7 +244,7 @@ def advance_search_session_items(
         _text(value)
         for value in (allowed_types_raw if isinstance(allowed_types_raw, list) else [])
         if _text(value)
-    } or {"new_creator", "existing_kol"}
+    } or {"new_creator", "existing_kol", "recall_candidate"}
 
     session = search_sessions.get_session(int(session_id))
     candidates: list[dict[str, Any]] = []
@@ -223,7 +258,7 @@ def advance_search_session_items(
             continue
         if item_type not in allowed_types:
             continue
-        if item_type not in {"new_creator", "existing_kol"}:
+        if item_type not in {"new_creator", "existing_kol", "recall_candidate"}:
             skipped.append({"item_id": item_id, "status": "skipped", "reason": "unsupported_item_type", "item_type": item_type})
             continue
         if not include_completed and item_status in terminal_statuses:
