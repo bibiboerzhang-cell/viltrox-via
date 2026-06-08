@@ -66,6 +66,7 @@ VKPI_VIDEO_ALLOWED_HOST_SUFFIXES = (
     ".twimg.com",
 )
 _SAFE_RANGE_RE = re.compile(r"^bytes=\d*-\d*$")
+_TRANSPARENT_IMAGE_SVG = b"""<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1" viewBox="0 0 1 1"><rect width="1" height="1" fill="none"/></svg>"""
 
 
 def _load_submission_media_row(submission_id: int):
@@ -260,10 +261,11 @@ def _fetch_external_image(url: str, host: str) -> tuple[bytes, str]:
     except HTTPException:
         raise
     except urllib.error.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"upstream image unavailable: {exc.code}") from exc
+        logger.info("media.image_proxy_upstream_unavailable", extra={"host": host, "status": exc.code})
+        return _TRANSPARENT_IMAGE_SVG, "image/svg+xml"
     except Exception as exc:
         logger.info("media.image_proxy_fetch_failed", extra={"host": host, "reason": type(exc).__name__})
-        raise HTTPException(status_code=502, detail="upstream image fetch failed") from exc
+        return _TRANSPARENT_IMAGE_SVG, "image/svg+xml"
     return b"".join(chunks), content_type
 
 

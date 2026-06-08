@@ -4,6 +4,7 @@ import type { OfficialChannelAccount, OfficialChannelPlatform } from '../channel
 import { useOfficialChannelMatrix } from '../channels/useOfficialChannelMatrix';
 import type { VkpiDashboardData, VkpiPageKey, VkpiProjectRow } from '../../vkpiTypes';
 import { platformDisplay, safeNumber } from '../../shared/vkpiDataUtils';
+import { proxiedImageUrl } from '../../shared/mediaProxy';
 import { OfficialContentLayer } from './OfficialContentLayer';
 import { EmployeeKolContentLayer } from './EmployeeKolContentLayer';
 import { projectDate } from '../channels/myKolMatrixData';
@@ -265,7 +266,7 @@ function TeamMatrix({ cards, pendingCount }: { cards: StaffCard[]; pendingCount:
                       className="mykol-avatar"
                       style={card.accent ? { '--avatar-accent': card.accent } as React.CSSProperties : undefined}
                     >
-                      {card.avatar ? <img src={card.avatar} alt="" /> : initials(card.name)}
+                      {card.avatar ? <img src={proxiedImageUrl(card.avatar)} alt="" /> : initials(card.name)}
                     </span>
                     <div>
                       <h3>
@@ -400,7 +401,7 @@ function OfficialMatrix({
               type="button"
               onClick={() => onSelectAccount(account)}
             >
-              <span className="mykol-avatar is-small">{account.avatarUrl ? <img src={account.avatarUrl} alt="" /> : initials(account.displayName)}</span>
+              <span className="mykol-avatar is-small">{account.avatarUrl ? <img src={proxiedImageUrl(account.avatarUrl)} alt="" /> : initials(account.displayName)}</span>
               <span>
                 <b>{account.displayName}</b>
                 <em>{account.handle || '官方账号'} · {statusLabel(account.syncStatus)} · {compactNumber(account.postsCount)} 内容</em>
@@ -587,7 +588,7 @@ function EmployeeKolLibrary({ apiToken, data, viewMode }: { apiToken?: string; d
           <div className="mykol-kol-list">
             {filteredItems.map(({ kol, projects }) => (
               <button className={`mykol-kol-row ${selectedItem?.kol.id === kol.id ? 'is-active' : ''}`} key={kol.id} type="button" onClick={() => setSelectedKolId(kol.id)}>
-                <span className="mykol-avatar">{kol.avatar ? <img src={kol.avatar} alt="" /> : initials(kol.name)}</span>
+                <span className="mykol-avatar">{kol.avatar ? <img src={proxiedImageUrl(kol.avatar)} alt="" /> : initials(kol.name)}</span>
                 <div>
                   <h3>{kol.name}</h3>
                   <p>{kol.handle || 'handle 待接入'} · {platformDisplay(kol.platform)} · {kol.followerLabel || '粉丝待接入'} · {projects.length} 项目</p>

@@ -34,8 +34,8 @@ export function ContentCalendarCard({ days, onItemClick, onViewAll }) {
     e("div", { className: "space-y-1.5" },
       days.length === 0
         ? e("div", { className: "rounded-md border border-dashed border-white/[0.08] px-3 py-8 text-center text-[11px] text-slate-500" }, "暂无真实内容信号")
-        : days.map((d) => e("div", {
-        key: d.day,
+        : days.map((d, dayIndex) => e("div", {
+        key: `${d.day || "day"}-${d.weekday || ""}-${dayIndex}`,
         className: `rounded-md px-2 py-1.5 ${d.today ? "bg-purple-500/[0.08] border border-purple-500/[0.25]" : ""}`
       },
         e("div", { className: "flex items-center gap-2 mb-1" },
@@ -46,7 +46,7 @@ export function ContentCalendarCard({ days, onItemClick, onViewAll }) {
         ),
         d.items.length > 0 && e("div", { className: "space-y-1 pl-9" },
           d.items.slice(0, 3).map((item, i) => e("div", {
-            key: i,
+            key: `${d.day || "day"}-${item.time || ""}-${item.label || ""}-${i}`,
             onClick: () => onItemClick && onItemClick({ ...item, dayStr: d.day, weekday: d.weekday, label: item.label, kolName: item.label.split(" · ")[0], title: item.label.split(" · ").slice(1).join(" · ") || item.label }),
             className: "flex items-center gap-1.5 text-[10px] cursor-pointer hover:bg-white/[0.02] rounded px-1"
           },

@@ -6,6 +6,7 @@ import {
   type VkpiKolRecallItem,
   type VkpiKolRecallResponse,
 } from "../../../../domains/kol";
+import { proxiedImageUrl } from "../../shared/mediaProxy";
 
 const DEFAULT_LAB_QUERY = `Product query profile: Viltrox AF 35mm F1.2 LAB.
 Creator use cases: environmental portrait, street photography, documentary storytelling, wedding and engagement photography, low-light portrait, editorial fashion, hybrid photo and video, premium full-frame storyteller.
@@ -84,7 +85,7 @@ function TypeBadge({ item }: { item: VkpiKolRecallItem }) {
 
 function RecallAvatar({ item }: { item: VkpiKolRecallItem }) {
   const [imageFailed, setImageFailed] = useState(false);
-  const avatarUrl = cleanText(item.avatar_url);
+  const avatarUrl = proxiedImageUrl(cleanText(item.avatar_url));
   const fallback = (
     <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-white/[0.08] bg-white/[0.04] text-[12px] font-semibold text-slate-300">
       {initialFor(item)}
@@ -109,7 +110,7 @@ function RecallAvatar({ item }: { item: VkpiKolRecallItem }) {
 
 function EvidenceThumbnail({ src }: { src: string }) {
   const [imageFailed, setImageFailed] = useState(false);
-  const thumb = cleanText(src);
+  const thumb = proxiedImageUrl(cleanText(src));
   if (!thumb || imageFailed) return null;
   return (
     <div className="relative h-12 w-16 shrink-0 overflow-hidden rounded-md bg-black/30">

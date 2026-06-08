@@ -17,6 +17,7 @@ import { formatNumber, formatPercent } from "../lib/format";
 import { BRAND_TIER } from "../data/brandTier";
 import { COUNTRY_INFO, getCountryInfo } from "../data/countryInfo";
 import { TREND_PULSE_THIS_WEEK } from "../data/trendPulse";
+import { proxiedImageUrl, proxiedVideoUrl } from "../../shared/mediaProxy";
 
 const e = React.createElement;
 
@@ -180,7 +181,7 @@ function RepresentativeVideoCard({ video, index, onOpen }) {
   const title = videoString(video, ["title", "video_title"], `代表作 ${index + 1}`);
   const views = videoString(video, ["views", "view_count"], "—");
   const duration = videoString(video, ["duration"], "—");
-  const thumbnail = videoString(video, ["best_thumbnail", "thumbnail_url", "youtube_thumbnail_url"]);
+  const thumbnail = proxiedImageUrl(videoString(video, ["best_thumbnail", "thumbnail_url", "youtube_thumbnail_url"]));
   const cachedVideoUrl = videoString(video, ["cached_video_url"]);
   const youtubeVideoId = videoString(video, ["youtube_video_id"]);
   const watchUrl = videoString(video, ["watch_url", "url", "content_url"]);
@@ -237,8 +238,8 @@ function RepresentativeVideoCard({ video, index, onOpen }) {
 
 function RepresentativeVideoPlayerModal({ video, onClose }) {
   const title = videoString(video, ["title", "video_title"], "代表作");
-  const thumbnail = videoString(video, ["best_thumbnail", "thumbnail_url", "youtube_thumbnail_url"]);
-  const cachedVideoUrl = videoString(video, ["cached_video_url"]);
+  const thumbnail = proxiedImageUrl(videoString(video, ["best_thumbnail", "thumbnail_url", "youtube_thumbnail_url"]));
+  const cachedVideoUrl = proxiedVideoUrl(videoString(video, ["cached_video_url"]));
   const youtubeVideoId = videoString(video, ["youtube_video_id"]);
   const watchUrl = videoString(video, ["watch_url", "url", "content_url"]);
   const platform = videoString(video, ["platform"], "media");

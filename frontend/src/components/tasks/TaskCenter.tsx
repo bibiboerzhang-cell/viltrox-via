@@ -155,10 +155,12 @@ export function TaskCenterProvider({ apiToken, children }: { apiToken?: string; 
     getTaskRealtimeStatus(apiToken)
       .then((status) => {
         if (cancelled) return;
+        const pollingFallbackRequired = Boolean(status.polling_fallback_required);
         setRealtimeReady(Boolean(
           status.sse_available
           && status.job_queue_present
-          && status.task_event_subscription_available,
+          && status.task_event_subscription_available
+          && !pollingFallbackRequired,
         ));
       })
       .catch(() => {
