@@ -1,7 +1,9 @@
 """Self-owned KOL pool and Apify/import adapters."""
 from __future__ import annotations
 
+import re
 import secrets
+import urllib.parse
 from typing import Any
 
 from app.db.connection import get_conn
@@ -45,6 +47,35 @@ from app.domains.kol.pool_main_linking import main_candidates, promote_to_main
 from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
 from app.domains.scoring import ScoringRegistry
 from app.domains.projects.workflow import staff_id as resolve_staff_id
+
+
+_YOUTUBE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+
+
+def _youtube_video_id(url: Any) -> str:
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    parsed = urllib.parse.urlparse(raw)
+    host = (parsed.hostname or "").lower()
+    path_parts = [part for part in parsed.path.split("/") if part]
+    if host.endswith("youtu.be") and path_parts:
+        candidate = path_parts[0]
+        return candidate if _YOUTUBE_ID_RE.match(candidate) else ""
+    if "youtube.com" in host:
+        query_id = urllib.parse.parse_qs(parsed.query).get("v", [""])[0]
+        if _YOUTUBE_ID_RE.match(query_id):
+            return query_id
+        for marker in ("shorts", "embed", "live"):
+            if marker in path_parts:
+                idx = path_parts.index(marker)
+                if idx + 1 < len(path_parts) and _YOUTUBE_ID_RE.match(path_parts[idx + 1]):
+                    return path_parts[idx + 1]
+    return ""
+
+
+def _youtube_thumbnail_url(video_id: str) -> str:
+    return f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg" if video_id else ""
 
 def import_items(items: list[dict[str, Any]], *, source_type: str = "manual", source_ref: str = "", platform: str = "", staff: dict[str, Any] | None = None) -> dict[str, Any]:
     ensure_vkpi_product_industry_schema()
@@ -248,27 +279,29 @@ def _video_evidence_for_kol(kol_pool_id: int, *, limit: int = 3) -> list[dict[st
     rows = get_conn().execute(
         """
         SELECT
-            id AS evidence_id,
-            id,
-            kol_pool_id,
-            project_id,
-            content_url,
-            platform,
-            COALESCE(NULLIF(title, ''), NULLIF(video_title, ''), NULLIF(content_url, '')) AS title,
-            video_title,
-            thumbnail_url,
-            view_count,
-            like_count,
-            comment_count,
-            share_count,
-            duration_seconds,
-            publish_date,
-            posted_at,
+            e.id AS evidence_id,
+            e.id,
+            e.kol_pool_id,
+            e.project_id,
+            e.content_url,
+            e.platform,
+            COALESCE(NULLIF(e.title, ''), NULLIF(e.video_title, ''), NULLIF(e.content_url, '')) AS title,
+            e.video_title,
+            e.thumbnail_url,
+            NULL::text AS cached_thumbnail_url,
+            COALESCE(NULLIF(m.cache_url, ''), CASE WHEN COALESCE(m.digest, '') != '' THEN '/api/vkpi-media/video-cache/' || m.digest ELSE NULL END) AS cached_video_url,
+            e.view_count,
+            e.like_count,
+            e.comment_count,
+            e.share_count,
+            e.duration_seconds,
+            e.publish_date,
+            e.posted_at,
             EXISTS(
                 SELECT 1
                 FROM vkpi_analysis_cache c
                 WHERE c.target_type='video'
-                  AND c.target_id=vkpi_kol_video_evidence.id::text
+                  AND c.target_id=e.id::text
                   AND c.derive_method='video_analysis_final_v1'
                   AND c.status='ready'
             ) AS has_final_v1_cache,
@@ -276,25 +309,64 @@ def _video_evidence_for_kol(kol_pool_id: int, *, limit: int = 3) -> list[dict[st
                 SELECT 1
                 FROM vkpi_analysis_cache c
                 WHERE c.target_type='video'
-                  AND c.target_id=vkpi_kol_video_evidence.id::text
+                  AND c.target_id=e.id::text
                   AND c.derive_method='video_analysis_final_v1_keyframe_qa'
                   AND c.status='ready'
             ) AS has_keyframe_qa_cache
-        FROM vkpi_kol_video_evidence
-        WHERE kol_pool_id=?
-          AND is_active IS NOT FALSE
-          AND COALESCE(evidence_type, 'video')='video'
+        FROM vkpi_kol_video_evidence e
+        LEFT JOIN LATERAL (
+            SELECT cache_url, digest, r2_key
+            FROM vkpi_media_cache_assets asset
+            WHERE asset.media_kind='video'
+              AND asset.status='cached'
+              AND (
+                  asset.source_url=e.content_url
+                  OR (
+                      asset.platform=LOWER(COALESCE(e.platform, ''))
+                      AND COALESCE(asset.external_id, '') != ''
+                      AND e.content_url LIKE CHR(37) || asset.external_id || CHR(37)
+                  )
+                  OR (
+                      COALESCE(asset.digest, '') != ''
+                      AND e.content_url LIKE CHR(37) || asset.digest || CHR(37)
+                  )
+              )
+            ORDER BY asset.updated_at DESC
+            LIMIT 1
+        ) m ON TRUE
+        WHERE e.kol_pool_id=?
+          AND e.is_active IS NOT FALSE
+          AND COALESCE(e.evidence_type, 'video')='video'
         ORDER BY
             has_keyframe_qa_cache DESC,
             has_final_v1_cache DESC,
-            COALESCE(publish_date, posted_at, updated_at, created_at) DESC NULLS LAST,
-            COALESCE(view_count, 0) DESC,
-            id DESC
+            COALESCE(e.publish_date, e.posted_at, e.updated_at, e.created_at) DESC NULLS LAST,
+            COALESCE(e.view_count, 0) DESC,
+            e.id DESC
         LIMIT ?
         """,
         (int(kol_pool_id), max(1, min(10, int(limit or 3)))),
     ).fetchall()
-    return [dict(row) for row in rows]
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        platform = _platform(item.get("platform") or "")
+        youtube_id = _youtube_video_id(item.get("content_url")) if platform == "youtube" else ""
+        youtube_thumb = _youtube_thumbnail_url(youtube_id)
+        item["youtube_video_id"] = youtube_id
+        item["youtube_thumbnail_url"] = youtube_thumb
+        item["best_thumbnail"] = (
+            str(item.get("cached_thumbnail_url") or "").strip()
+            or str(item.get("thumbnail_url") or "").strip()
+            or youtube_thumb
+        )
+        item["watch_url"] = (
+            f"https://www.youtube.com/watch?v={youtube_id}"
+            if youtube_id
+            else str(item.get("cached_video_url") or "").strip() or str(item.get("content_url") or "").strip()
+        )
+        items.append(item)
+    return items
 
 
 def get_item(kol_pool_id: int) -> dict[str, Any]:
