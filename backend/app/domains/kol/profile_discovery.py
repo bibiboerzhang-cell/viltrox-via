@@ -8,6 +8,8 @@ from __future__ import annotations
 from typing import Any
 
 from app.domains.kol import history_match
+from app.domains.kol import search_sessions
+from app.domains.kol import url_deep_crawl
 from app.services.intelligence.account_scan_service import search_platform_content
 
 
@@ -48,6 +50,28 @@ def _candidate_key(item: dict[str, Any], platform: str) -> str:
     return f"{platform}:unknown:{len(str(item))}"
 
 
+def _profile_url_from_item(item: dict[str, Any]) -> str:
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    for key in ("profile_url", "channel_url", "source_url"):
+        value = _text(payload.get(key) or item.get(key))
+        if value:
+            return value
+    platform = _text(payload.get("platform") or item.get("platform")).lower()
+    handle = _text(payload.get("handle") or payload.get("channel_name") or item.get("handle"))
+    if not platform or not handle:
+        return ""
+    handle = handle.lstrip("@")
+    if platform == "youtube":
+        return f"https://www.youtube.com/@{handle}"
+    if platform == "instagram":
+        return f"https://www.instagram.com/{handle}/"
+    if platform == "tiktok":
+        return f"https://www.tiktok.com/@{handle}"
+    if platform == "douyin":
+        return ""
+    return ""
+
+
 def discovery_plan(
     *,
     query_text: str,
@@ -64,6 +88,93 @@ def discovery_plan(
         "limit": safe_limit,
         "provider_calls": False,
         "message": "new discovery is planned only; set execute_new_discovery=true to call platform providers",
+    }
+
+
+def profile_crawl_plan_for_session_item(
+    *,
+    session_id: int,
+    item_id: int,
+    max_posts: int = 12,
+    mode: str = "profile_only",
+) -> dict[str, Any]:
+    item = search_sessions.get_session_item(int(session_id), int(item_id))
+    item_type = _text(item.get("item_type"))
+    if item_type not in {"new_creator", "existing_kol"}:
+        raise ValueError("profile crawl can only run for new_creator or existing_kol discovery items")
+    profile_url = _profile_url_from_item(item)
+    if not profile_url:
+        raise ValueError("discovery item does not contain a usable profile URL")
+    return {
+        "status": "planned",
+        "session_id": int(session_id),
+        "item_id": int(item_id),
+        "item_type": item_type,
+        "profile_url": profile_url,
+        "mode": mode if mode in {"profile_only", "auto", "profile_with_video", "account_deep"} else "profile_only",
+        "max_posts": max(1, min(_int(max_posts, 12), 12)),
+        "message": "set execute=true to crawl profile basics through the safe writer",
+        "viltrox_fit_score_untouched": True,
+    }
+
+
+def execute_profile_crawl_for_session_item(
+    *,
+    session_id: int,
+    item_id: int,
+    body: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    body = body or {}
+    execute = bool(body.get("execute"))
+    mode = _text(body.get("mode") or "profile_only")
+    if mode not in {"profile_only", "auto", "profile_with_video", "account_deep"}:
+        mode = "profile_only"
+    max_posts = max(1, min(_int(body.get("max_posts"), 12), 12))
+    plan = profile_crawl_plan_for_session_item(
+        session_id=int(session_id),
+        item_id=int(item_id),
+        max_posts=max_posts,
+        mode=mode,
+    )
+    if not execute:
+        return {
+            **plan,
+            "execute": False,
+            "profile_result": url_deep_crawl.dry_run_url_deep_crawl(
+                {
+                    "url": plan["profile_url"],
+                    "execute": False,
+                    "mode": mode,
+                    "max_posts": max_posts,
+                    "representative_video_limit": body.get("representative_video_limit") or 1,
+                }
+            ),
+        }
+
+    profile_result = url_deep_crawl.dry_run_url_deep_crawl(
+        {
+            "url": plan["profile_url"],
+            "execute": True,
+            "mode": mode,
+            "max_posts": max_posts,
+            "representative_video_limit": body.get("representative_video_limit") or 1,
+        }
+    )
+    updated_item = search_sessions.update_item_profile_execution(
+        int(session_id),
+        int(item_id),
+        profile_result=profile_result,
+    )
+    profile_flow = profile_result.get("profile_flow") if isinstance(profile_result.get("profile_flow"), dict) else {}
+    return {
+        **plan,
+        "execute": True,
+        "status": profile_flow.get("status") or profile_result.get("status") or "unknown",
+        "kol_pool_id": profile_flow.get("kol_pool_id") or profile_result.get("matched_kol_pool_id"),
+        "profile_result": profile_result,
+        "updated_item": updated_item,
+        "viltrox_fit_score_changed_ids": profile_flow.get("viltrox_fit_score_changed_ids") or profile_result.get("viltrox_fit_score_changed_ids") or [],
+        "viltrox_fit_score_untouched": profile_flow.get("viltrox_fit_score_untouched") if "viltrox_fit_score_untouched" in profile_flow else profile_result.get("viltrox_fit_score_untouched"),
     }
 
 

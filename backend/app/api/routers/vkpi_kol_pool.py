@@ -355,6 +355,29 @@ def get_kol_search_session(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+@router.post("/kol-search-sessions/{session_id}/items/{item_id}/profile-crawl")
+def execute_kol_search_session_item_profile_crawl(
+    session_id: int,
+    item_id: int,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """Plan or execute safe profile crawl for a discovery session item."""
+    del staff
+    try:
+        return kol_profile_discovery.execute_profile_crawl_for_session_item(
+            session_id=int(session_id),
+            item_id=int(item_id),
+            body=body or {},
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @router.post("/kol-smart-search")
 async def smart_kol_search(
     body: dict = Body(...),

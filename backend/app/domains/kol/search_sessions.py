@@ -355,6 +355,103 @@ def get_session(session_id: int) -> dict[str, Any]:
     return session
 
 
+def get_session_item(session_id: int, item_id: int) -> dict[str, Any]:
+    conn = get_conn()
+    row = conn.execute(
+        """
+        SELECT *
+        FROM vkpi_kol_search_session_items
+        WHERE session_id=? AND id=?
+        """,
+        (int(session_id), int(item_id)),
+    ).fetchone()
+    if not row:
+        raise LookupError(f"search session item not found: session={session_id} item={item_id}")
+    return _row_to_item(row)
+
+
+def update_item_profile_execution(
+    session_id: int,
+    item_id: int,
+    *,
+    profile_result: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist profile-crawl execution result for a discovery item."""
+    conn = get_conn()
+    row = conn.execute(
+        """
+        SELECT *
+        FROM vkpi_kol_search_session_items
+        WHERE session_id=? AND id=?
+        """,
+        (int(session_id), int(item_id)),
+    ).fetchone()
+    if not row:
+        raise LookupError(f"search session item not found: session={session_id} item={item_id}")
+    current = _row_to_item(row)
+    payload = _dict(current.get("payload")).copy()
+    profile_flow = _dict(profile_result.get("profile_flow"))
+    status_text = _text(profile_flow.get("status") or profile_result.get("status")).lower()
+    next_status = "ready" if status_text == "ready" else "failed" if "failed" in status_text or status_text in {"crawl_failed", "unsupported"} else "partial"
+    kol_pool_id = _int_or_none(
+        profile_flow.get("kol_pool_id")
+        or profile_result.get("matched_kol_pool_id")
+        or current.get("kol_pool_id")
+    )
+    payload["profile_execute"] = {
+        "status": status_text or next_status,
+        "kol_pool_id": kol_pool_id,
+        "operation": profile_flow.get("operation"),
+        "run_id": profile_flow.get("run_id"),
+        "profile_data": profile_flow.get("profile_data"),
+        "write_result": profile_flow.get("write_result"),
+        "representative_video_analysis": profile_flow.get("representative_video_analysis"),
+        "viltrox_fit_score_changed_ids": profile_flow.get("viltrox_fit_score_changed_ids") or profile_result.get("viltrox_fit_score_changed_ids") or [],
+        "viltrox_fit_score_untouched": profile_flow.get("viltrox_fit_score_untouched") if "viltrox_fit_score_untouched" in profile_flow else profile_result.get("viltrox_fit_score_untouched"),
+    }
+    updated = conn.execute(
+        """
+        UPDATE vkpi_kol_search_session_items
+        SET status=?,
+            stage='profile',
+            kol_pool_id=COALESCE(?, kol_pool_id),
+            payload_json=?::jsonb,
+            updated_at=NOW()
+        WHERE session_id=? AND id=?
+        RETURNING *
+        """,
+        (
+            next_status,
+            kol_pool_id,
+            _json_dumps(payload),
+            int(session_id),
+            int(item_id),
+        ),
+    ).fetchone()
+
+    session_row = conn.execute(
+        "SELECT result_summary_json FROM vkpi_kol_search_sessions WHERE id=?",
+        (int(session_id),),
+    ).fetchone()
+    summary = _loads(dict(session_row).get("result_summary_json") if session_row else "{}", {})
+    if not isinstance(summary, dict):
+        summary = {}
+    profile_materialization = _dict(summary.get("profile_materialization")).copy()
+    profile_materialization.update(
+        {
+            "last_item_id": int(item_id),
+            "last_status": next_status,
+            "last_kol_pool_id": kol_pool_id,
+            "viltrox_fit_score_untouched": payload["profile_execute"].get("viltrox_fit_score_untouched"),
+        }
+    )
+    summary["profile_materialization"] = profile_materialization
+    session_status = "partial" if next_status == "failed" else "ready"
+    _update_session(conn, int(session_id), status=session_status, summary=summary)
+    conn.commit()
+    return _row_to_item(updated)
+
+
 def _item_counts(items: list[dict[str, Any]]) -> dict[str, Any]:
     by_status: dict[str, int] = {}
     by_stage: dict[str, int] = {}
