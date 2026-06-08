@@ -546,6 +546,90 @@ def get_item(kol_pool_id: int) -> dict[str, Any]:
     return {"item": item}
 
 
+def detail_bundle(kol_pool_id: int, *, video_limit: int = 3, llm_limit: int = 20) -> dict[str, Any]:
+    """Return the read-only detail drawer bundle without provider or worker side effects."""
+
+    from app.domains.analysis.cache_repo import get_analysis_cache_entry
+    from app.domains.kol.eleven_dimensions import load_persisted_dimensions_11
+    from app.domains.kol.llm_deep_analysis import get_kol_llm_deep_analysis
+
+    safe_video_limit = max(1, min(10, int(video_limit or 3)))
+    safe_llm_limit = max(1, min(50, int(llm_limit or 20)))
+    item_payload = get_item(int(kol_pool_id))
+    item = dict(item_payload.get("item") or {})
+    videos = _video_evidence_for_kol(int(kol_pool_id), limit=safe_video_limit)
+    item["video_evidence"] = videos
+    dimensions = load_persisted_dimensions_11(int(kol_pool_id)) or {
+        "kol_pool_id": int(kol_pool_id),
+        "status": "missing",
+        "reason": "dimensions_11_json_missing",
+        "persisted": False,
+        "provider_calls": False,
+        "llm_calls": False,
+        "write_db": False,
+    }
+    llm_deep = get_kol_llm_deep_analysis(int(kol_pool_id), limit=safe_llm_limit)
+    analysis_items: list[dict[str, Any]] = []
+    ready_count = 0
+    qa_ready_count = 0
+    for video in videos:
+        evidence_id = _int_or_none(video.get("evidence_id") or video.get("id"))
+        if not evidence_id:
+            continue
+        final_entry = get_analysis_cache_entry(
+            "video",
+            str(evidence_id),
+            derive_method="video_analysis_final_v1",
+        )
+        qa_entry = get_analysis_cache_entry(
+            "video",
+            str(evidence_id),
+            derive_method="video_analysis_final_v1_keyframe_qa",
+        )
+        if final_entry and final_entry.get("status") == "ready":
+            ready_count += 1
+        else:
+            final_entry = None
+        if qa_entry and qa_entry.get("status") == "ready":
+            qa_ready_count += 1
+        else:
+            qa_entry = None
+        analysis_items.append(
+            {
+                "video": video,
+                "final_entry": final_entry,
+                "qa_entry": qa_entry,
+                "state": "ready" if final_entry else "pending",
+            }
+        )
+    return {
+        "status": "ready",
+        "method": "kol_pool_detail_bundle_v1",
+        "kol_pool_id": int(kol_pool_id),
+        "item": item,
+        "dimensions11": dimensions,
+        "llm_deep_analysis": llm_deep,
+        "video_analysis": {
+            "items": analysis_items,
+            "summary": {
+                "evidence_count": len(videos),
+                "ready_count": ready_count,
+                "pending_count": len(videos) - ready_count,
+                "qa_ready_count": qa_ready_count,
+                "source": "vkpi_analysis_cache",
+            },
+        },
+        "diagnostics": {
+            "source": "vkpi_kol_pool + vkpi_kol_profile_deep + vkpi_kol_llm_deep_analysis_results + vkpi_analysis_cache",
+            "provider_calls": False,
+            "llm_calls": False,
+            "worker_touched": False,
+            "write_db": False,
+            "viltrox_fit_score_write": False,
+        },
+    }
+
+
 def enrich_item(
     kol_pool_id: int,
     *,

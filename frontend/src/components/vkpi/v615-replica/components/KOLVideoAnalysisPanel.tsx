@@ -287,7 +287,15 @@ function AnalysisCard({ bundle }: { bundle: AnalysisBundle }) {
   );
 }
 
-export function KOLVideoAnalysisPanel({ apiToken, videos }: { apiToken?: string; videos: VideoEvidence[] }) {
+export function KOLVideoAnalysisPanel({
+  apiToken,
+  videos,
+  preloadedBundles,
+}: {
+  apiToken?: string;
+  videos: VideoEvidence[];
+  preloadedBundles?: AnalysisBundle[] | null;
+}) {
   const evidenceVideos = useMemo(() => videos.filter((video) => videoEvidenceId(video)).slice(0, 3), [videos]);
   const [bundles, setBundles] = useState<AnalysisBundle[]>([]);
   const [loading, setLoading] = useState(false);
@@ -297,6 +305,13 @@ export function KOLVideoAnalysisPanel({ apiToken, videos }: { apiToken?: string;
     let cancelled = false;
     setError("");
     setBundles([]);
+    if (Array.isArray(preloadedBundles)) {
+      setBundles(preloadedBundles);
+      setLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
     if (!apiToken || !evidenceVideos.length) {
       setLoading(false);
       return () => {
@@ -330,7 +345,7 @@ export function KOLVideoAnalysisPanel({ apiToken, videos }: { apiToken?: string;
     return () => {
       cancelled = true;
     };
-  }, [apiToken, evidenceVideos]);
+  }, [apiToken, evidenceVideos, preloadedBundles]);
 
   const readyBundles = bundles.filter((bundle) => bundle.finalEntry);
 

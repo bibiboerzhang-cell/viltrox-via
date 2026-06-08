@@ -16,7 +16,7 @@ import { SmartKolInputPanel } from "./components/SmartKolInputPanel";
 import { UrlDeepCrawlPanel } from "./components/UrlDeepCrawlPanel";
 import { ContactModal } from "./components/modals/ContactModal";
 import { KolPoolAllModal } from "./components/modals/KolPoolAllModal";
-import { getKolPoolItem } from "../../../domains/kol";
+import { getKolPoolDetailBundle, getKolPoolItem } from "../../../domains/kol";
 import { toV615KolPoolRows } from "./kolPoolRuntime";
 import { candidateKindGroup } from "./lib/candidateKind";
 import { CANDIDATE_KIND_INFO } from "./data/candidateKindInfo";
@@ -33,6 +33,7 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
   const [hasViltrox, setHasViltrox] = useState(false);
   const [hasCompetitor, setHasCompetitor] = useState(false);
   const [selectedItem, setSelectedItem] = useState(null);
+  const [selectedDetailBundle, setSelectedDetailBundle] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
   const [myList, setMyList] = useState(new Set());
@@ -54,17 +55,25 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
   };
   const openItem = async (item) => {
     setSelectedItem(item);
+    setSelectedDetailBundle(null);
     setDetailError("");
     setDetailLoading(Boolean(apiToken && item?.id));
     if (!apiToken || !item?.id) return;
     try {
-      const detail = await getKolPoolItem(apiToken, item.id, false);
-      const normalized = toV615KolPoolRows([detail.item || item])[0];
-      setSelectedItem({ ...item, ...normalized, freshness: detail.freshness, refresh: detail.refresh });
+      const bundle = await getKolPoolDetailBundle(apiToken, item.id);
+      const normalized = toV615KolPoolRows([bundle.item || item])[0];
+      setSelectedDetailBundle(bundle);
+      setSelectedItem({ ...item, ...normalized });
     } catch (err) {
-      const msg = err?.message || err?.detail || "详情接口读取失败";
-      setDetailError(String(msg).slice(0, 120));
-      setSelectedItem(item);
+      try {
+        const detail = await getKolPoolItem(apiToken, item.id, false);
+        const normalized = toV615KolPoolRows([detail.item || item])[0];
+        setSelectedItem({ ...item, ...normalized, freshness: detail.freshness, refresh: detail.refresh });
+      } catch (fallbackErr) {
+        const msg = fallbackErr?.message || fallbackErr?.detail || err?.message || err?.detail || "详情接口读取失败";
+        setDetailError(String(msg).slice(0, 120));
+        setSelectedItem(item);
+      }
     } finally {
       setDetailLoading(false);
     }
@@ -241,11 +250,13 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
       selectedItem && e(KOLDetailDrawer, {
         key: `kol-detail-${selectedItem.id || selectedItem.handle || "selected"}`,
         item: selectedItem,
+        detailBundle: selectedDetailBundle,
         apiToken,
         detailLoading,
         detailError,
         onClose: () => {
           setSelectedItem(null);
+          setSelectedDetailBundle(null);
           setDetailLoading(false);
           setDetailError("");
         },

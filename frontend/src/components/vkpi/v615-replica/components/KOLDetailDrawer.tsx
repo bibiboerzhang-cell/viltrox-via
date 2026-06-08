@@ -160,6 +160,23 @@ function videoAnalysisSources(item, representativeVideos) {
   });
 }
 
+function cacheEntryOrNull(value) {
+  const record = recordOr(value);
+  return Object.keys(record).length ? record : null;
+}
+
+function detailBundleAnalysisItems(detailBundle) {
+  const videoAnalysis = recordOr(recordOr(detailBundle).video_analysis);
+  return asArray(videoAnalysis.items).map((item) => {
+    const record = recordOr(item);
+    return {
+      video: recordOr(record.video),
+      finalEntry: cacheEntryOrNull(record.final_entry),
+      qaEntry: cacheEntryOrNull(record.qa_entry),
+    };
+  }).filter((item) => Object.keys(item.video).length);
+}
+
 function evidenceIdOf(video) {
   if (!video || typeof video !== "object") return null;
   const value = video.evidence_id ?? video.id;
@@ -400,50 +417,45 @@ function LlmDeepAnalysisPanel({ payload }) {
   );
 }
 
-export function KOLDetailDrawer({ item, apiToken = "", detailLoading = false, detailError = "", onClose, inMyList, onToggleMyList, onContact }) {
+export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", detailLoading = false, detailError = "", onClose, inMyList, onToggleMyList, onContact }) {
   const [dimensions11, setDimensions11] = React.useState(null);
   const [llmDeepAnalysis, setLlmDeepAnalysis] = React.useState(null);
+  const [preloadedVideoAnalysisBundles, setPreloadedVideoAnalysisBundles] = React.useState(undefined);
   const [videoEnqueueState, setVideoEnqueueState] = React.useState({ status: "idle", message: "" });
   const [activeRepresentativeVideo, setActiveRepresentativeVideo] = React.useState(null);
   React.useEffect(() => {
-    if (!apiToken || !item?.id) {
-      setDimensions11(null);
+    const bundleRecord = recordOr(detailBundle);
+    if (bundleRecord.status === "ready") {
+      const dimensionsPayload = recordOr(bundleRecord.dimensions11);
+      const llmPayload = recordOr(bundleRecord.llm_deep_analysis);
+      setDimensions11(dimensionsPayload.status === "missing" || dimensionsPayload.persisted === false ? null : dimensionsPayload);
+      setLlmDeepAnalysis(llmPayload.status === "ready" ? llmPayload : null);
+      setPreloadedVideoAnalysisBundles(detailBundleAnalysisItems(bundleRecord));
       return;
     }
-    let cancelled = false;
-    setDimensions11(null);
-    void getKolPoolDimensions11(apiToken, item.id, { requirePersisted: true })
-      .then((payload) => {
-        if (cancelled) return;
-        setDimensions11(payload?.status === "missing" ? null : payload);
-      })
-      .catch(() => {
-        if (!cancelled) setDimensions11(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [apiToken, item?.id]);
-
-  React.useEffect(() => {
+    setPreloadedVideoAnalysisBundles(undefined);
     if (!apiToken || !item?.id) {
+      setDimensions11(null);
       setLlmDeepAnalysis(null);
       return;
     }
     let cancelled = false;
+    setDimensions11(null);
     setLlmDeepAnalysis(null);
-    void getKolPoolLlmDeepAnalysis(apiToken, item.id)
-      .then((payload) => {
+    void Promise.allSettled([
+      getKolPoolDimensions11(apiToken, item.id, { requirePersisted: true }),
+      getKolPoolLlmDeepAnalysis(apiToken, item.id),
+    ]).then(([dimensionsResult, llmResult]) => {
         if (cancelled) return;
-        setLlmDeepAnalysis(payload?.status === "ready" ? payload : null);
-      })
-      .catch(() => {
-        if (!cancelled) setLlmDeepAnalysis(null);
+        const dimensionsPayload = dimensionsResult.status === "fulfilled" ? dimensionsResult.value : null;
+        const llmPayload = llmResult.status === "fulfilled" ? llmResult.value : null;
+        setDimensions11(dimensionsPayload?.status === "missing" ? null : dimensionsPayload);
+        setLlmDeepAnalysis(llmPayload?.status === "ready" ? llmPayload : null);
       });
     return () => {
       cancelled = true;
     };
-  }, [apiToken, item?.id]);
+  }, [apiToken, item?.id, detailBundle]);
 
   React.useEffect(() => {
     setVideoEnqueueState({ status: "idle", message: "" });
@@ -816,7 +828,7 @@ export function KOLDetailDrawer({ item, apiToken = "", detailLoading = false, de
           )
         )
       ),
-      e(KOLVideoAnalysisPanel, { apiToken, videos: videoAnalysisVideos }),
+      e(KOLVideoAnalysisPanel, { apiToken, videos: videoAnalysisVideos, preloadedBundles: preloadedVideoAnalysisBundles }),
       devices.camera_body && e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
         e("div", { className: "flex items-center gap-1.5 mb-2" },
           e(Camera, { size: 11, className: "text-slate-400" }),

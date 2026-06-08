@@ -360,6 +360,21 @@ async def get_item(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.get("/kol-pool/{kol_pool_id}/detail-bundle")
+def get_item_detail_bundle(
+    kol_pool_id: int,
+    video_limit: int = Query(default=3, ge=1, le=10),
+    llm_limit: int = Query(default=20, ge=1, le=50),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """Read-only detail drawer bundle; does not refresh providers or touch V6 Fit."""
+    del staff
+    try:
+        return kol_pool.detail_bundle(int(kol_pool_id), video_limit=video_limit, llm_limit=llm_limit)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.post("/kol-pool/{kol_pool_id}/refresh")
 async def refresh_pool_item(
     request: Request,

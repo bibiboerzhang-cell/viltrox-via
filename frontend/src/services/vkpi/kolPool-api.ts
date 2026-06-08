@@ -139,6 +139,25 @@ export interface VkpiKolPoolWorkspaceResponse {
   diagnostics?: Row;
 }
 
+export interface VkpiKolPoolDetailBundleResponse {
+  status: "ready" | string;
+  method?: string;
+  kol_pool_id: number;
+  item?: VkpiKolPoolItem;
+  dimensions11?: Row | null;
+  llm_deep_analysis?: VkpiKolLlmDeepAnalysisResponse | null;
+  video_analysis?: {
+    items?: Array<{
+      video?: Row;
+      final_entry?: VkpiKolVideoAnalysisCacheEntry | null;
+      qa_entry?: VkpiKolVideoAnalysisCacheEntry | null;
+      state?: string;
+    }>;
+    summary?: Row;
+  };
+  diagnostics?: Row;
+}
+
 export interface VkpiKolPoolIntelligenceCard {
   mode: string;
   generated_at: string;
@@ -494,6 +513,22 @@ export async function getKolPoolItem(token: string, kolPoolId: number, refreshIf
   return apiFetch<{ item: VkpiKolPoolItem; freshness?: VkpiKolPoolFreshness; refresh?: VkpiKolPoolRefreshState }>(
     `/api/admin/vkpi/kol-pool/${kolPoolId}?${query.toString()}`,
     {},
+    token,
+  );
+}
+
+export async function getKolPoolDetailBundle(
+  token: string,
+  kolPoolId: string | number,
+  options: { videoLimit?: number; llmLimit?: number } = {},
+) {
+  const params = new URLSearchParams({
+    video_limit: String(options.videoLimit || 3),
+    llm_limit: String(options.llmLimit || 20),
+  });
+  return apiFetch<VkpiKolPoolDetailBundleResponse>(
+    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/detail-bundle?${params.toString()}`,
+    { cache: "no-store" },
     token,
   );
 }
