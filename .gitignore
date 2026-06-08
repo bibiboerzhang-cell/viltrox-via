@@ -59,6 +59,8 @@ backend/uploads/
 frontend/runtime/
 Excel/
 artifacts/
+kol_assets/
+.state/
 .integration/
 .codegraph/
 

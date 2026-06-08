@@ -1,0 +1,172 @@
+{
+  "generated_at": "2026-06-07T16:15:22.375550",
+  "repo": "/Users/bibiboer/Documents/V-KPI——marketing",
+  "branch": "codex/dashboard-real",
+  "counts": {
+    "vkpi_kol_pool": 1115,
+    "vkpi_kol_video_evidence": 1008,
+    "vkpi_analysis_cache": 260,
+    "vkpi_kol_llm_deep_analysis_results": 241,
+    "vkpi_kol_profile_deep": 1023,
+    "vkpi_media_cache_assets": 10225,
+    "apify_jobs": 732,
+    "job_execution_ledger": 10,
+    "vkpi_llm_calls": 890,
+    "vkpi_provider_budget_caps": 18,
+    "vkpi_ai_cost_ledger": 703,
+    "vkpi_projects": 53,
+    "vkpi_project_stage_events": 47,
+    "vkpi_project_contracts": 0
+  },
+  "kol_platforms": {
+    "youtube": 544,
+    "instagram": 354,
+    "tiktok": 105,
+    "media": 81,
+    "unknown": 14,
+    "x": 9,
+    "facebook": 8
+  },
+  "recall_status": {
+    "empty": 565,
+    "pending_data": 204,
+    "recallable": 345,
+    "suspect": 1
+  },
+  "profile_type": {
+    "mixed": 218,
+    "reviewer": 85,
+    "creator": 42
+  },
+  "analysis_cache": {
+    "video_analysis_final_v1:ready": 242,
+    "video_analysis_final_v1_keyframe_qa:ready": 1,
+    "mock:ready": 10,
+    "gemini_video_v2:ready": 2,
+    "gemini:ready": 1,
+    "gemini_video_v2_pro_single:ready": 1,
+    "gemini_video_v2_flash_pro_judge:ready": 1,
+    "gemini_video_v2_flash_gpt55_judge:ready": 1,
+    "gemini_video_v2_flash_claude_judge:ready": 1
+  },
+  "apify_status": {
+    "video:done": 263,
+    "video:failed": 455,
+    "video:blocked": 14
+  },
+  "budget_caps": [
+    {
+      "scope": "monthly_total",
+      "cap_usd": 300.0,
+      "current_spend": 44.927,
+      "fallback_action": "dry_run_only"
+    },
+    {
+      "scope": "cron:vkpi_analysis_worker",
+      "cap_usd": 200.0,
+      "current_spend": 43.9921,
+      "fallback_action": "block_job"
+    },
+    {
+      "scope": "single_call",
+      "cap_usd": 0.5,
+      "current_spend": 43.9921,
+      "fallback_action": "fallback_to_rule_v0"
+    },
+    {
+      "scope": "provider:gemini",
+      "cap_usd": 200.0,
+      "current_spend": 43.5492,
+      "fallback_action": "skip_provider_call"
+    },
+    {
+      "scope": "provider:claude",
+      "cap_usd": 100.0,
+      "current_spend": 0.9349,
+      "fallback_action": "skip_provider_call"
+    },
+    {
+      "scope": "cron:vkpi_contract_extract",
+      "cap_usd": 25.0,
+      "current_spend": 0.9349,
+      "fallback_action": "block_contract_extract"
+    },
+    {
+      "scope": "provider:openai",
+      "cap_usd": 100.0,
+      "current_spend": 0.1243,
+      "fallback_action": "skip_provider_call"
+    }
+  ],
+  "latest_migration": "102_vkpi_kol_url_deep_crawl.sql",
+  "recent_commits": [
+    "afaedc9 feat(video-analysis): wire AI deep analysis button to enqueue endpoint (main evidence, dedup states)",
+    "3140159 feat(video-analysis): add single-evidence enqueue endpoint (ownership+dedup+budget gate, V6 Fit untouched)",
+    "b8b3329 feat(task-queue): wire TaskProgressBoard to real endpoint with 2.5s polling (pause on hidden, graceful empty/error)",
+    "ac870ef feat(task-queue): add sidebar TaskProgressBoard (mock data, three lanes + queue)",
+    "7816eb8 feat(vkpi): add read-only task queue aggregation endpoint",
+    "edbccbb feat(kol-deep): add LLM deep analysis panel in detail drawer (flexible JSON guard, hide when missing, V6 Fit untouched)",
+    "949065f feat(kol-deep): add read-only llm-deep-analysis endpoint (per-kol aggregate, V6 Fit untouched)",
+    "1308b66 feat(kol-deep): backfill final_v1+QA into llm_deep_analysis_results (pure extract, idempotent, V6 Fit untouched)",
+    "060bff2 feat(kol-pool): wire real 11D from /dimensions11 in detail drawer (hide when no persisted data)",
+    "db86958 feat(kol-pool): show video analysis (final_v1 + QA) in detail drawer (vkpi_analysis_cache, graceful degrade)",
+    "76fc072 feat(projects): show keyframe QA results in review tab (final_v1 untouched, graceful degrade)",
+    "1ef8a2d feat(video): add independent final_v1 keyframe QA derive method",
+    "b3a59c0 refactor(video): extract shared keyframe helper for QA (v2 judges reuse, final_v1 untouched)",
+    "c55f276 feat(video): make final_v1 model configurable, default Flash (Pro fallback, cache-consistent)",
+    "6fa1aa4 fix(security): redact proxy credentials in logs (host:port only)",
+    "5ed7caf fix(kol-recall): defensive render for recall cards (array guards, image fallback)",
+    "29c5fed feat(kol-url): add UrlDeepCrawlPanel dry-run UI (identify + preview, safe render)",
+    "1b01ea3 feat(kol-url): connect profile URL deep-crawl flow (dry-run/execute, no V6 Fit)",
+    "788b8bf feat(kol-url): add deep-crawl runs + llm-deep-analysis tables (independent of V6 Fit)",
+    "db5d77c feat(kol-profile): add safe profile-basics writer service (whitelist, no V6 Fit)",
+    "d434d83 feat(kol-url): add url deep-crawl dry-run endpoint (classify + dedup, read-only)",
+    "8392719 fix(kol-recall): add onError fallback for evidence thumbnails (no broken image)",
+    "6eab51b feat(kol-recall): show avatar + followers/bio on cards with initial fallback",
+    "8d38332 feat(kol-profile): add profile basics backfill (apify/yt-api, no V6 Fit touch)",
+    "90cd8d4 feat(kol-recall): add recall status table (recallable/suspect/pending/empty, index-side)"
+  ],
+  "endpoints": [
+    {
+      "method": "GET",
+      "path": "/api/admin/vkpi/kol-pool",
+      "purpose": "KOL Pool main list",
+      "safety": "reads viltrox_fit_score for sorting"
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/vkpi/kol-recall",
+      "purpose": "vector recall",
+      "safety": "does not write V6 Fit"
+    },
+    {
+      "method": "POST",
+      "path": "/api/admin/vkpi/kol-url-deep-crawl",
+      "purpose": "URL classify/dedup/profile execute",
+      "safety": "profile basics whitelist"
+    },
+    {
+      "method": "POST",
+      "path": "/api/admin/vkpi/kol-pool/{id}/enqueue-video-analysis",
+      "purpose": "single evidence final_v1 enqueue",
+      "safety": "V6 Fit unchanged guard"
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/vkpi/task-queue",
+      "purpose": "task progress board data",
+      "safety": "read-only aggregation"
+    }
+  ],
+  "diagrams": {
+    "系统总架构": "flowchart LR\n  UI[V615 React UI] --> API[FastAPI routers]\n  API --> Domain[Domain services]\n  Domain --> PG[(PostgreSQL)]\n  Domain --> Qdrant[(Qdrant vector index)]\n  API --> Jobs[(apify_jobs)]\n  Worker[apify_jobs_worker] --> Jobs\n  Worker --> Gemini[Gemini Flash/Pro]\n  Worker --> Cache[(vkpi_analysis_cache)]\n  Cache --> Deep[(vkpi_kol_llm_deep_analysis_results)]\n  UI --> Deep",
+    "KOL Pool 主列表与详情": "flowchart TD\n  Page[KOLPoolPage] --> ListAPI[GET /kol-pool]\n  ListAPI --> Pool[(vkpi_kol_pool)]\n  Pool --> Sort[COALESCE(viltrox_fit_score,0) DESC]\n  Page --> Drawer[KOLDetailDrawer]\n  Drawer --> ItemAPI[GET /kol-pool/{id}]\n  Drawer --> D11[GET /dimensions11]\n  Drawer --> Deep[GET /llm-deep-analysis]\n  Drawer --> Video[KOLVideoAnalysisPanel]\n  Video --> Cache[(vkpi_analysis_cache)]",
+    "V6 Fit 写口": "flowchart TD\n  EnrichAPI[POST /kol-pool/{id}/enrich] --> Enrich[pool.enrich_item]\n  BatchAPI[POST /kol-pool/batch-enrich] --> Batch[pool.batch_enrich_items]\n  WorkerTask[workers/tasks/vkpi.py] --> Enrich\n  Daily[daily_sync.py] --> Enrich\n  Enrich --> Rule[rule_v0 formula]\n  Rule --> Score[(vkpi_kol_pool.viltrox_fit_score)]\n  Batch --> Enrich",
+    "final_v1 视频深析": "flowchart TD\n  Button[AI深度分析按钮] --> EnqueueAPI[POST /enqueue-video-analysis]\n  EnqueueAPI --> Dedup[ownership + cache/job dedup + budget preflight]\n  Dedup --> Job[(apify_jobs queued)]\n  Worker[apify_jobs_worker claim SKIP LOCKED] --> Job\n  Worker --> Download[resolve/download media via yt-dlp/proxy]\n  Download --> Analyzer[gemini_video final_v1]\n  Analyzer --> Layers[layer1-6 JSON]\n  Layers --> Cache[(vkpi_analysis_cache)]",
+    "Keyframe QA": "flowchart TD\n  FinalV1[(final_v1 cache)] --> Select[select 4-6 frames]\n  Select --> Download[download video]\n  Download --> FFmpeg[ffmpeg extract frames]\n  FFmpeg --> QAModel[QA model checks product/model/brand/competitor/text]\n  QAModel --> QAResult[qa_pass/issues/score_correction]\n  QAResult --> QACache[(vkpi_analysis_cache derive_method final_v1_keyframe_qa)]",
+    "Deep Result 沉淀": "flowchart TD\n  Cache[(vkpi_analysis_cache final_v1)] --> Script[backfill_kol_llm_deep_analysis_results.py]\n  QACache[(keyframe QA cache)] --> Script\n  Evidence[(vkpi_kol_video_evidence)] --> Script\n  Script --> Extract[marketing_score fallback + recommendations + risk + QA]\n  Extract --> Deep[(vkpi_kol_llm_deep_analysis_results)]\n  Deep --> Endpoint[GET /llm-deep-analysis]\n  Endpoint --> Drawer[LLM深度判断 panel]",
+    "URL Deep Crawl": "flowchart TD\n  Input[粘贴 URL] --> Endpoint[POST /kol-url-deep-crawl]\n  Endpoint --> Classify[profile/video/unknown]\n  Classify --> Dedup[platform + handle/channel_id dedup]\n  Dedup --> DryRun[execute=false preview]\n  Dedup --> Execute[execute=true profile flow]\n  Execute --> Crawler[youtube/ig/tiktok crawler]\n  Crawler --> Writer[profile_basics whitelist writer]\n  Writer --> Pool[(vkpi_kol_pool profile fields)]\n  Writer --> Run[(vkpi_kol_url_deep_crawl_runs)]",
+    "Product Recall": "flowchart TD\n  Query[35mm use-case query] --> Embed[OpenAI text-embedding-3-small]\n  Embed --> Qdrant[(vkpi_kol_profile_index_v1)]\n  Qdrant --> Candidates[Top N vector candidates]\n  Candidates --> Join[Join index entries profile_type/type_scores]\n  Join --> Buckets[creator/reviewer buckets mixed dominant]\n  Buckets --> Fuse[0.7 vector + 0.3 type score]\n  Fuse --> Panel[ProductRecallPanel 7:3 soft display]",
+    "Task Queue 看板": "flowchart TD\n  Apify[(apify_jobs)] --> QueueAPI[GET /task-queue]\n  Ledger[(job_execution_ledger)] --> QueueAPI\n  Calls[(vkpi_llm_calls small window)] --> QueueAPI\n  QueueAPI --> Map[stage mapping queued/search/thinking/summarizing]\n  Map --> Board[TaskProgressBoard]\n  Board --> Poll[2.5s poll, pause on hidden, clear on unmount]"
+  }
+}

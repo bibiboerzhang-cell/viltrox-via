@@ -1,0 +1,565 @@
+# V-KPI Marketing 项目完整档案
+
+生成日期：2026-06-07  
+Repo：`/Users/bibiboer/Documents/V-KPI——marketing`  
+当前 worktree：`/Users/bibiboer/Documents/New project`  
+分支：`codex/dashboard-real`  
+用途：项目 owner 记忆备份 / 系统交接 / PDF 归档
+
+> 当前 git status 中已有用户/历史未提交项：`.gitignore` modified，`reports/` 与 `stage1_apify_ingest/` untracked。本报告只新增 reports 产物，不改代码、不提交。
+
+## 阅读说明
+
+这份档案基于当前本地代码、当前本地数据库和只读盘点结果整理。生成报告文件不修改代码、不写业务数据库、不触发 Worker、不调用 LLM、不 commit。
+
+所有评分相关结论都区分两套概念：
+
+- `viltrox_fit_score`：KOL Pool 主列表使用的正式 V6 Fit 分数。
+- `llm_v6_fit`：从 video final_v1 / QA cache 提炼出的独立 LLM 深度判断分，不进入主列表排序。
+
+## Executive Summary
+
+V-KPI Marketing 当前已经不是单纯 demo。系统已经具备真实的 KOL Pool、Projects、Contracts、视频分析、产品向量召回、URL 深抓、任务看板和 R2 媒体缓存等模块。
+
+当前核心资产：
+
+- KOL Pool：1115 个 KOL。
+- Video evidence：1008 条。
+- final_v1 video analysis ready cache：242 条。
+- keyframe QA ready cache：1 条。
+- LLM deep result：241 条。
+- Profile deep / 11D：1023 条 profile_deep 数据。
+- Media cache：10225 条 R2/cache 资产。
+- Recall status：recallable 345 / pending_data 204 / empty 565 / suspect 1。
+
+当前最重要风险：
+
+1. 部分历史 LLM/Gemini 调用没有完全收口到统一 Gateway。
+2. TikTok resolver / video download 仍是 final_v1 失败大头之一。
+3. R2 媒体缓存已存在，但 avatar / thumbnail 前端稳定引用链路还未完全收口。
+4. 旧 VIA / kol_ops 能力与 V615 新链路并存，不能直接混用。
+5. `enrich_item` / `batch_enrich_items` 是正式 V6 Fit 写口，后续所有新功能必须避开或显式审计。
+6. TaskProgressBoard 阶段一是聚合看板，不是全站 LLM 强制登记系统。
+7. URL deep crawl 的 video URL 分支仍未接入，只完成 profile URL dry-run + execute 后端。
+
+## 1. 系统架构总览
+
+V-KPI Marketing 当前采用 FastAPI + React + Postgres + Worker 架构。
+
+后端分层：
+
+- Router 层：`backend/app/api/routers/`，负责 HTTP endpoint、参数校验、staff/admin 上下文、异常包装。
+- Domain / Service 层：`backend/app/domains/`，负责业务逻辑，KOL Pool、analysis cache、cost、projects、media 等都在这里。
+- Platform 层：`backend/app/platform/`，负责 DB、LLM Gateway、crawler、外部服务封装。
+- Worker 层：`backend/app/workers/`，核心是 `apify_jobs_worker.py`，消费 `apify_jobs`。
+- 前端层：`frontend/src/components/vkpi/v615-replica/`，当前 live UI 是 V615 Replica。
+
+## 2. 运行环境与启动依赖
+
+本地运行依赖：
+
+- Postgres：`127.0.0.1:54329/viltrox2`
+- Redis：`127.0.0.1:6380`
+- 后端：admin 服务常用端口 `8102`
+- 前端：`http://127.0.0.1:5173/#v615Replica`
+- Worker：`scripts/start_worker.sh`
+
+关键启动脚本：`scripts/start_admin.sh`、`scripts/start_worker.sh`、`scripts/stop_worker.sh`、`scripts/start_postgres_local.sh`、`scripts/start_redis_local.sh`、`scripts/check_local_stack.sh`。
+
+关键环境变量只应列 key，不应泄露 value：`DATABASE_URL`、`REDIS_URL`、`YTDLP_PROXY`、`APIFY_API_TOKEN`、`YOUTUBE_API_KEY`、`GEMINI_API_KEY`、`OPENAI_API_KEY`、`ANTHROPIC_API_KEY`、`R2_ENDPOINT`、`R2_BUCKET_NAME`、`QDRANT_URL`、`GEMINI_FINAL_V1_MODELS`、`LLM_MONTHLY_BUDGET_USD`。
+
+## 3. V615 前端结构
+
+V615 Replica 主入口：`frontend/src/components/vkpi/v615-replica/V615ReplicaApp.tsx`。
+
+主要页面：Dashboard、Intelligence、MY KOL、KOL Pool、Projects、Campaigns、Events、Attribution、Analytics、Reports、Signals、Agents、P15 Warehouse、Shopify。
+
+真实度最高的模块是 KOL Pool 与 Projects；Events 已挂 mockup；Signals/Agents 多为 GEN2 规划面。
+
+## 4. KOL Pool 主列表
+
+主列表 endpoint：`GET /api/admin/vkpi/kol-pool`。核心文件：`backend/app/api/routers/vkpi_kol_pool.py`、`backend/app/domains/kol/pool.py`、`backend/app/domains/kol/pool_common.py`。
+
+主列表默认排序：
+
+```sql
+ORDER BY COALESCE(viltrox_fit_score, 0) DESC, updated_at DESC
+```
+
+这意味着 KOL Pool 主列表仍使用正式 `viltrox_fit_score`。产品召回、LLM deep result、vector score 都不会影响主列表排序。
+
+前端主组件：`KOLPoolPage.tsx`、`KOLTable.tsx`、`kolPoolRuntime.ts`、`kolPool-api.ts`。`KOLTable.tsx` 已做虚拟滚动，避免一次渲染 1115 行 DOM。
+
+## 5. KOL 详情抽屉
+
+详情抽屉主文件：`frontend/src/components/vkpi/v615-replica/components/KOLDetailDrawer.tsx`。
+
+主要区块：Header、Bio、REAL ENGAGEMENT、AUDIENCE HHI、LOYALTY DEPTH、TREND RESONANCE、11维评估、联系方式、代表作、视频深析结果、LLM深度判断、当前设备与升级机会、V6 Fit breakdown、适配判断、推荐产品线、风险点、合作历史。
+
+已真实接入：
+
+- `/dimensions11`：真实 persisted 11D，没数据隐藏。
+- `/llm-deep-analysis`：独立 LLM deep result，显示 `llm_v6_fit`。
+- `vkpi_analysis_cache`：video final_v1 + QA。
+
+仍需补齐：REAL ER、HHI、Loyalty、Trend、设备、合作历史等。
+
+## 6. V6 Fit 评分链路
+
+核心文件：`backend/app/domains/scoring/rule_v0.py`、`backend/app/domains/kol/pool.py`。
+
+正式写口：
+
+- `kol_pool.enrich_item()`
+- `kol_pool.batch_enrich_items()`
+- `/kol-pool/{id}/enrich`
+- `/kol-pool/batch-enrich`
+- `workers/tasks/vkpi.py` 间接调用
+- `daily_sync.py` 间接调用
+
+安全原则：URL deep crawl、profile basics、video final_v1、keyframe QA、llm deep result、vector recall 都不应写 `viltrox_fit_score`。
+
+## 7. Video Final_v1 链路
+
+入队方式：批量脚本 `scripts/enqueue_final_v1_video_jobs.py`，或单条 endpoint `POST /api/admin/vkpi/kol-pool/{id}/enqueue-video-analysis`。
+
+单条入队检查：ownership、cache dedupe、queued/running dedupe、budget preflight、只写一条 `apify_jobs`、快照检查 V6 Fit 未变。
+
+Worker 文件：`backend/app/workers/apify_jobs_worker.py`。Worker 从 `apify_jobs` claim queued job，使用 `FOR UPDATE SKIP LOCKED`，然后下载媒体并调用 `gemini_video.py`。
+
+final_v1 输出 layer1-6：视频内容、产品/品牌、创作者语义、营销价值、推荐建议、flags/scores。模型配置已从硬编码 Pro 改为 `GEMINI_FINAL_V1_MODELS`，默认 Flash，Pro 可回退。
+
+## 8. Keyframe QA 链路
+
+derive_method：`video_analysis_final_v1_keyframe_qa`。它独立于现有 final_v1，不覆盖旧 cache，不写 V6 Fit。
+
+QA 核验：产品型号、品牌露出、竞品上下文、镜头铭文/型号、标题画面一致性。输出 `qa_pass`、`issues`、`checks`、`score_correction`。
+
+当前限制：YouTube 最稳；IG/TikTok 因下载/resolve 问题不适合第一阶段自动 QA。
+
+## 9. Deep Result 沉淀链路
+
+目标表：`vkpi_kol_llm_deep_analysis_results`。提炼脚本：`scripts/backfill_kol_llm_deep_analysis_results.py`。
+
+来源：`vkpi_analysis_cache` 的 `video_analysis_final_v1`，可合并同 evidence 的 `video_analysis_final_v1_keyframe_qa`。
+
+`marketing_value_score` 兼容两个落点：
+
+- 主路径：`layer6_flags_and_scores.scores.marketing_value_score`
+- fallback：`layer6_flags_and_scores.marketing_value_score`
+
+当前结果：241 条 deep result。读取时 primary 排序：有 QA 优先、`llm_v6_fit` 高优先、confidence 高优先、source_evidence_id 新优先。
+
+## 10. URL Deep Crawl 链路
+
+核心文件：`backend/app/domains/kol/url_deep_crawl.py`、`backend/app/domains/kol/profile_basics.py`、`UrlDeepCrawlPanel.tsx`。
+
+Endpoint：`POST /api/admin/vkpi/kol-url-deep-crawl`。
+
+Dry-run：识别 URL 类型、平台、handle/channel_id，按 platform+channel_id、platform+handle、profile_url、raw_platform_data 查重，返回 would_crawl 与 fields_to_write。
+
+Execute profile：抓 profile 基础信息，已在库 update，不在库 insert 最小档案，写 `vkpi_kol_url_deep_crawl_runs`，走 `profile_basics` 白名单，校验 `viltrox_fit_score_changed_ids=[]`。
+
+未做：video URL 分支未接入；前端 execute 按钮未完整接活。
+
+## 11. 产品召回 / KOL Index 链路
+
+Endpoint：`GET /api/admin/vkpi/kol-recall`。Qdrant collection：`vkpi_kol_profile_index_v1`。Embedding：OpenAI `text-embedding-3-small`，1536 维，cosine similarity。
+
+召回返回 `vector_score`、`profile_type`、`creator_type_score`、`reviewer_type_score`、`recall_rank_score`、`used_lenses`、`representative_evidence`、`recall_reason`。
+
+默认 7:3 双桶，mixed 按主导分归桶。桶内排序融合：`vector_score * 0.7 + type_score/100 * 0.3`。
+
+安全边界：召回分不是质量分，不写 `viltrox_fit_score`，不影响主列表排序。
+
+## 12. Task Progress Board 任务看板
+
+Endpoint：`GET /api/admin/vkpi/task-queue`。核心文件：`backend/app/domains/tasks/queue_view.py`、`TaskProgressBoard.tsx`、`tasks-api.ts`。
+
+数据源：`apify_jobs`、`job_execution_ledger`、`vkpi_llm_calls` 小窗口。
+
+阶段映射：queued→排队，crawl/download/profile→搜索中，gemini/final_v1/analysis→思考中，report/backfill/extract→总结中。
+
+前端 2.5 秒轮询，页面隐藏时暂停，卸载时清理 interval。阶段一限制：只显示已登记任务，裸调 LLM 看不到。
+
+## 13. Projects 模块
+
+Projects 已接入真实 projects、stage_events、review tab 和 contracts tab。
+
+关键进展：Timeline 读真实 `stage_events`，Review tab 接 final_v1 + QA，Contracts tab 支持上传/R2/Claude extract/staff_id 修复，Events mockup 已挂入 V615。
+
+风险：各 tab 真实度不一致；Events 仍偏 mock；Contracts 数据量少；Projects evidence 与 KOL evidence 的 lineage 需继续保持清晰。
+
+## 14. Contracts 模块
+
+Contracts v1 包括 migration 098、R2 上传、Claude 提取、前端合同 tab、user_id → staff_id 修复。合同抽取是 LLM 成本链路，必须预算闸门。当前合同表行数：0。
+
+## 15. R2 / Media Cache
+
+R2 bucket：`viltrox-assets`。主要前缀：`vkpi/media-cache`。核心文件：`backend/app/services/media/r2.py`、`backend/app/domains/media/cache_core.py`、`backend/app/domains/media/cache.py`。
+
+媒体缓存表 `vkpi_media_cache_assets` 当前 10225 条。video cache 链路比 image/avatar 更完整。当前 V615 头像多数直接使用平台 CDN URL，IG/TikTok CDN 存在 CORP / signed URL / 防盗链问题。
+
+后续应做 avatar R2 化：下载头像，上传 R2，更新 avatar_r2_url 或 avatar_url，前端优先 R2。
+
+## 16. 数据库关键表
+
+| Key | Count |
+|---|---:|
+| `vkpi_kol_pool` | 1115 |
+| `vkpi_kol_video_evidence` | 1008 |
+| `vkpi_analysis_cache` | 260 |
+| `vkpi_kol_llm_deep_analysis_results` | 241 |
+| `vkpi_kol_profile_deep` | 1023 |
+| `vkpi_media_cache_assets` | 10225 |
+| `apify_jobs` | 732 |
+| `job_execution_ledger` | 10 |
+| `vkpi_llm_calls` | 890 |
+| `vkpi_provider_budget_caps` | 18 |
+| `vkpi_ai_cost_ledger` | 703 |
+| `vkpi_projects` | 53 |
+| `vkpi_project_stage_events` | 47 |
+| `vkpi_project_contracts` | 0 |
+
+### KOL 平台分布
+
+| Key | Count |
+|---|---:|
+| `youtube` | 544 |
+| `instagram` | 354 |
+| `tiktok` | 105 |
+| `media` | 81 |
+| `unknown` | 14 |
+| `x` | 9 |
+| `facebook` | 8 |
+
+### Recall status
+
+| Key | Count |
+|---|---:|
+| `empty` | 565 |
+| `pending_data` | 204 |
+| `recallable` | 345 |
+| `suspect` | 1 |
+
+### Profile type
+
+| Key | Count |
+|---|---:|
+| `mixed` | 218 |
+| `reviewer` | 85 |
+| `creator` | 42 |
+
+### Analysis cache 分布
+
+| Key | Count |
+|---|---:|
+| `video_analysis_final_v1:ready` | 242 |
+| `video_analysis_final_v1_keyframe_qa:ready` | 1 |
+| `mock:ready` | 10 |
+| `gemini_video_v2:ready` | 2 |
+| `gemini:ready` | 1 |
+| `gemini_video_v2_pro_single:ready` | 1 |
+| `gemini_video_v2_flash_pro_judge:ready` | 1 |
+| `gemini_video_v2_flash_gpt55_judge:ready` | 1 |
+| `gemini_video_v2_flash_claude_judge:ready` | 1 |
+
+### Apify jobs 分布
+
+| Key | Count |
+|---|---:|
+| `video:done` | 263 |
+| `video:failed` | 455 |
+| `video:blocked` | 14 |
+
+### Budget caps 快照
+
+| Scope | Cap USD | Current Spend | Fallback |
+|---|---:|---:|---|
+| `monthly_total` | 300.00 | 44.9270 | `dry_run_only` |
+| `cron:vkpi_analysis_worker` | 200.00 | 43.9921 | `block_job` |
+| `single_call` | 0.50 | 43.9921 | `fallback_to_rule_v0` |
+| `provider:gemini` | 200.00 | 43.5492 | `skip_provider_call` |
+| `provider:claude` | 100.00 | 0.9349 | `skip_provider_call` |
+| `cron:vkpi_contract_extract` | 25.00 | 0.9349 | `block_contract_extract` |
+| `provider:openai` | 100.00 | 0.1243 | `skip_provider_call` |
+
+Migration 最新登记：`102_vkpi_kol_url_deep_crawl.sql`。最近登记包括 098-102。
+
+## 17. 外部服务
+
+- Apify：profile basics、IG/TikTok/YT profile 或 posts 抓取。
+- Decodo：yt-dlp 代理，`YTDLP_PROXY`，日志已脱敏，Worker 重启后读取。
+- Gemini：final_v1 video analysis，默认 Flash，Pro 可回退。
+- OpenAI：KOL profile embedding，可能作为 Gateway provider。
+- Claude：合同抽取，可能作为 QA/判定 provider。
+- Qdrant：KOL profile vector recall。
+- R2：合同文件、media cache、后续头像稳定化。
+
+## 18. 最近 25 个提交
+
+- `afaedc9` feat(video-analysis): wire AI deep analysis button to enqueue endpoint (main evidence, dedup states)
+- `3140159` feat(video-analysis): add single-evidence enqueue endpoint (ownership+dedup+budget gate, V6 Fit untouched)
+- `b8b3329` feat(task-queue): wire TaskProgressBoard to real endpoint with 2.5s polling (pause on hidden, graceful empty/error)
+- `ac870ef` feat(task-queue): add sidebar TaskProgressBoard (mock data, three lanes + queue)
+- `7816eb8` feat(vkpi): add read-only task queue aggregation endpoint
+- `edbccbb` feat(kol-deep): add LLM deep analysis panel in detail drawer (flexible JSON guard, hide when missing, V6 Fit untouched)
+- `949065f` feat(kol-deep): add read-only llm-deep-analysis endpoint (per-kol aggregate, V6 Fit untouched)
+- `1308b66` feat(kol-deep): backfill final_v1+QA into llm_deep_analysis_results (pure extract, idempotent, V6 Fit untouched)
+- `060bff2` feat(kol-pool): wire real 11D from /dimensions11 in detail drawer (hide when no persisted data)
+- `db86958` feat(kol-pool): show video analysis (final_v1 + QA) in detail drawer (vkpi_analysis_cache, graceful degrade)
+- `76fc072` feat(projects): show keyframe QA results in review tab (final_v1 untouched, graceful degrade)
+- `1ef8a2d` feat(video): add independent final_v1 keyframe QA derive method
+- `b3a59c0` refactor(video): extract shared keyframe helper for QA (v2 judges reuse, final_v1 untouched)
+- `c55f276` feat(video): make final_v1 model configurable, default Flash (Pro fallback, cache-consistent)
+- `6fa1aa4` fix(security): redact proxy credentials in logs (host:port only)
+- `5ed7caf` fix(kol-recall): defensive render for recall cards (array guards, image fallback)
+- `29c5fed` feat(kol-url): add UrlDeepCrawlPanel dry-run UI (identify + preview, safe render)
+- `1b01ea3` feat(kol-url): connect profile URL deep-crawl flow (dry-run/execute, no V6 Fit)
+- `788b8bf` feat(kol-url): add deep-crawl runs + llm-deep-analysis tables (independent of V6 Fit)
+- `db5d77c` feat(kol-profile): add safe profile-basics writer service (whitelist, no V6 Fit)
+- `d434d83` feat(kol-url): add url deep-crawl dry-run endpoint (classify + dedup, read-only)
+- `8392719` fix(kol-recall): add onError fallback for evidence thumbnails (no broken image)
+- `6eab51b` feat(kol-recall): show avatar + followers/bio on cards with initial fallback
+- `8d38332` feat(kol-profile): add profile basics backfill (apify/yt-api, no V6 Fit touch)
+- `90cd8d4` feat(kol-recall): add recall status table (recallable/suspect/pending/empty, index-side)
+
+## 19. 已知问题 / 技术债
+
+1. TikTok resolver 未完全打通。
+2. 历史 video failed 大量存在，主要是下载、resolver、quota、429。
+3. LLM 调用未完全收口到 Gateway。
+4. R2 avatar 未完成，平台 CDN 仍可能 CORP / signed URL 过期。
+5. 旧 VIA 与 V615 并存，不能直接混用。
+6. 详情仍有 REAL ER / HHI / Loyalty / Trend / 设备 / 合作历史等占位。
+7. Task Queue 阶段一只是聚合查询，不是统一任务登记层。
+8. URL video branch 未接。
+9. migration 历史长，旧表/空壳表多，schema 变更需谨慎。
+
+## 20. 待做路线图
+
+P0 安全收口：全站 LLM 强制预算闸门、裸调收口、Worker 子阶段上报、R2 avatar、Decodo 凭证 reset。
+
+P1 KOL Detail 完整化：AI 深析完成后自动刷新、单条 final_v1 完成后自动沉淀、打开按钮接 PostDetailDrawer、REAL ER/HHI/Loyalty/Trend 接真实源。
+
+P2 URL Deep Crawl：前端 execute=true、video URL 分支、video URL → evidence → enqueue final_v1、新 KOL 建档状态流转。
+
+P3 Video Pipeline：TikTok resolver、IG resolver、yt-dlp/proxy 监控、Flash+QA 自动触发、失败 bucket 自动归因。
+
+P4 Product Recall：比例 UI 可调、产品下拉接 catalog、SKU use-case 配置化、召回证据增强、LLM 校准 creator/reviewer。
+
+P5 全网发现 B：需求拆搜索词、平台搜索、去重、profile basics、shallow filter、高价值 deep analysis。
+
+P6 Projects / Contracts：review 自动拉 deep result、contracts 和项目阶段联动、Events 从 mock 升级真实 backend。
+
+P7 报告归档：本档案定期更新，生成 Markdown/PDF/JSON 索引。
+
+---
+
+# 链路图可视化文件
+
+- ![系统总架构](/Users/bibiboer/Documents/V-KPI——marketing/reports/diagrams/01_system_architecture.png)
+- ![KOL Pool 主列表与详情](/Users/bibiboer/Documents/V-KPI——marketing/reports/diagrams/02_kol_pool_detail.png)
+- ![V6 Fit 写口](/Users/bibiboer/Documents/V-KPI——marketing/reports/diagrams/03_v6_fit_writes.png)
+- ![final_v1 视频深析](/Users/bibiboer/Documents/V-KPI——marketing/reports/diagrams/04_final_v1_video.png)
+- ![Keyframe QA](/Users/bibiboer/Documents/V-KPI——marketing/reports/diagrams/05_keyframe_qa.png)
+- ![Deep Result 沉淀](/Users/bibiboer/Documents/V-KPI——marketing/reports/diagrams/06_deep_result.png)
+- ![URL Deep Crawl](/Users/bibiboer/Documents/V-KPI——marketing/reports/diagrams/07_url_deep_crawl.png)
+- ![Product Recall](/Users/bibiboer/Documents/V-KPI——marketing/reports/diagrams/08_product_recall.png)
+- ![Task Queue 看板](/Users/bibiboer/Documents/V-KPI——marketing/reports/diagrams/09_task_queue.png)
+
+
+# V-KPI 链路图合集
+
+生成日期：2026-06-07
+
+## 系统总架构
+
+```mermaid
+flowchart LR
+  UI[V615 React UI] --> API[FastAPI routers]
+  API --> Domain[Domain services]
+  Domain --> PG[(PostgreSQL)]
+  Domain --> Qdrant[(Qdrant vector index)]
+  API --> Jobs[(apify_jobs)]
+  Worker[apify_jobs_worker] --> Jobs
+  Worker --> Gemini[Gemini Flash/Pro]
+  Worker --> Cache[(vkpi_analysis_cache)]
+  Cache --> Deep[(vkpi_kol_llm_deep_analysis_results)]
+  UI --> Deep
+```
+
+## KOL Pool 主列表与详情
+
+```mermaid
+flowchart TD
+  Page[KOLPoolPage] --> ListAPI[GET /kol-pool]
+  ListAPI --> Pool[(vkpi_kol_pool)]
+  Pool --> Sort[COALESCE(viltrox_fit_score,0) DESC]
+  Page --> Drawer[KOLDetailDrawer]
+  Drawer --> ItemAPI[GET /kol-pool/{id}]
+  Drawer --> D11[GET /dimensions11]
+  Drawer --> Deep[GET /llm-deep-analysis]
+  Drawer --> Video[KOLVideoAnalysisPanel]
+  Video --> Cache[(vkpi_analysis_cache)]
+```
+
+## V6 Fit 写口
+
+```mermaid
+flowchart TD
+  EnrichAPI[POST /kol-pool/{id}/enrich] --> Enrich[pool.enrich_item]
+  BatchAPI[POST /kol-pool/batch-enrich] --> Batch[pool.batch_enrich_items]
+  WorkerTask[workers/tasks/vkpi.py] --> Enrich
+  Daily[daily_sync.py] --> Enrich
+  Enrich --> Rule[rule_v0 formula]
+  Rule --> Score[(vkpi_kol_pool.viltrox_fit_score)]
+  Batch --> Enrich
+```
+
+## final_v1 视频深析
+
+```mermaid
+flowchart TD
+  Button[AI深度分析按钮] --> EnqueueAPI[POST /enqueue-video-analysis]
+  EnqueueAPI --> Dedup[ownership + cache/job dedup + budget preflight]
+  Dedup --> Job[(apify_jobs queued)]
+  Worker[apify_jobs_worker claim SKIP LOCKED] --> Job
+  Worker --> Download[resolve/download media via yt-dlp/proxy]
+  Download --> Analyzer[gemini_video final_v1]
+  Analyzer --> Layers[layer1-6 JSON]
+  Layers --> Cache[(vkpi_analysis_cache)]
+```
+
+## Keyframe QA
+
+```mermaid
+flowchart TD
+  FinalV1[(final_v1 cache)] --> Select[select 4-6 frames]
+  Select --> Download[download video]
+  Download --> FFmpeg[ffmpeg extract frames]
+  FFmpeg --> QAModel[QA model checks product/model/brand/competitor/text]
+  QAModel --> QAResult[qa_pass/issues/score_correction]
+  QAResult --> QACache[(vkpi_analysis_cache derive_method final_v1_keyframe_qa)]
+```
+
+## Deep Result 沉淀
+
+```mermaid
+flowchart TD
+  Cache[(vkpi_analysis_cache final_v1)] --> Script[backfill_kol_llm_deep_analysis_results.py]
+  QACache[(keyframe QA cache)] --> Script
+  Evidence[(vkpi_kol_video_evidence)] --> Script
+  Script --> Extract[marketing_score fallback + recommendations + risk + QA]
+  Extract --> Deep[(vkpi_kol_llm_deep_analysis_results)]
+  Deep --> Endpoint[GET /llm-deep-analysis]
+  Endpoint --> Drawer[LLM深度判断 panel]
+```
+
+## URL Deep Crawl
+
+```mermaid
+flowchart TD
+  Input[粘贴 URL] --> Endpoint[POST /kol-url-deep-crawl]
+  Endpoint --> Classify[profile/video/unknown]
+  Classify --> Dedup[platform + handle/channel_id dedup]
+  Dedup --> DryRun[execute=false preview]
+  Dedup --> Execute[execute=true profile flow]
+  Execute --> Crawler[youtube/ig/tiktok crawler]
+  Crawler --> Writer[profile_basics whitelist writer]
+  Writer --> Pool[(vkpi_kol_pool profile fields)]
+  Writer --> Run[(vkpi_kol_url_deep_crawl_runs)]
+```
+
+## Product Recall
+
+```mermaid
+flowchart TD
+  Query[35mm use-case query] --> Embed[OpenAI text-embedding-3-small]
+  Embed --> Qdrant[(vkpi_kol_profile_index_v1)]
+  Qdrant --> Candidates[Top N vector candidates]
+  Candidates --> Join[Join index entries profile_type/type_scores]
+  Join --> Buckets[creator/reviewer buckets mixed dominant]
+  Buckets --> Fuse[0.7 vector + 0.3 type score]
+  Fuse --> Panel[ProductRecallPanel 7:3 soft display]
+```
+
+## Task Queue 看板
+
+```mermaid
+flowchart TD
+  Apify[(apify_jobs)] --> QueueAPI[GET /task-queue]
+  Ledger[(job_execution_ledger)] --> QueueAPI
+  Calls[(vkpi_llm_calls small window)] --> QueueAPI
+  QueueAPI --> Map[stage mapping queued/search/thinking/summarizing]
+  Map --> Board[TaskProgressBoard]
+  Board --> Poll[2.5s poll, pause on hidden, clear on unmount]
+```
+
+
+
+# 附录A：关键 Endpoint 清单
+
+| Method | Path | 用途 | 读写 | 安全说明 |
+|---|---|---|---|---|
+| GET | `/api/admin/vkpi/kol-pool` | KOL Pool 主列表 | 读 | 默认按 `viltrox_fit_score` 排序 |
+| GET | `/api/admin/vkpi/kol-pool/summary` | KOL Pool 统计 | 读 | 不写评分 |
+| GET | `/api/admin/vkpi/kol-recall` | 产品向量召回 | 读 | 只读 Qdrant/index，不碰 V6 Fit |
+| POST | `/api/admin/vkpi/kol-url-deep-crawl` | URL 识别、查重、profile execute | dry-run 读；execute 写基础字段 | 使用 profile basics 白名单 |
+| GET | `/api/admin/vkpi/kol-pool/{id}` | KOL 详情基础数据 | 读 | 不写 |
+| POST | `/api/admin/vkpi/kol-pool/{id}/enqueue-video-analysis` | 单 evidence 入队 final_v1 | 写 `apify_jobs` | 快照校验 V6 Fit 未变 |
+| GET | `/api/admin/vkpi/kol-pool/{id}/dimensions11` | 真实 11 维 | 读 | 没 persisted 数据则隐藏 |
+| GET | `/api/admin/vkpi/kol-pool/{id}/llm-deep-analysis` | LLM 深度判断 | 读 | 只读 deep result 表 |
+| GET | `/api/admin/vkpi/task-queue` | 任务看板聚合 | 读 | 不触发任务 |
+| POST | `/api/admin/vkpi/kol-pool/{id}/enrich` | 单 KOL V6 enrich | 写评分 | V6 Fit 核心危险写口 |
+| POST | `/api/admin/vkpi/kol-pool/batch-enrich` | 批量 enrich | 写评分 | 批量危险写口 |
+| POST | `/api/admin/kol/tools/analyze-url` | 旧 VIA URL 分析 | 可能调分析 | 不应直接接 V615 |
+| POST | `/api/admin/kol/kols/{id}/scan-account` | 旧单账号扫描 | 写旧体系 | 需隔离 |
+| POST | `/api/admin/kol/kols/{id}/analyze-account` | 旧账号 dossier | 写旧体系 | 需剥离后复用 |
+
+# 附录B：关键脚本清单
+
+| 脚本 | 用途 | 是否写库/调用外部 | 注意 |
+|---|---|---|---|
+| `scripts/start_admin.sh` | 启动 admin 后端 | 启服务 | 读 `.env` |
+| `scripts/start_worker.sh` | 启动 Worker | 启 Worker，消费队列 | 会处理 queued job |
+| `scripts/final_v1_worker_status.py` | 查看 final_v1 状态、费用、cache | 只读 | 已兼容 score 双 JSON 落点 |
+| `scripts/enqueue_final_v1_video_jobs.py` | 批量入队 final_v1 | 写 `apify_jobs` | 批量烧钱入口 |
+| `scripts/backfill_kol_llm_deep_analysis_results.py` | 从 final_v1+QA cache 提炼 deep result | `--commit` 才写 | 不调 LLM，不碰 V6 Fit |
+| `scripts/backfill_kol_profile_basics.py` | profile 基础字段 backfill | 调 Apify/YT API，写基础字段 | 白名单写入，校验评分未变 |
+| `scripts/build_kol_profile_index.py` | 建 KOL profile vector index | 调 embedding，写 Qdrant/index | vector_recall only |
+| `scripts/expand_kol_profile_index.py` | 扩量 KOL vector index | 调 embedding，写 index | 不改 V6 Fit |
+| `scripts/classify_kol_profile_type.py` | creator/reviewer/mixed 分类 | 写 index-side 类型字段 | 类型分不是质量分 |
+| `scripts/mark_kol_profile_recall_status.py` | 标 recallable/suspect/pending/empty | 写独立 status 表 | 不删 KOL，不写评分 |
+| `scripts/migrate_vkpi_media_cache_to_r2.py` | 媒体迁 R2 | 写 R2/媒体表 | avatar 链路仍需补 |
+
+# 附录C：安全边界
+
+正式 V6 Fit 写口：`pool.enrich_item`、`pool.batch_enrich_items`、`/kol-pool/{id}/enrich`、`/kol-pool/batch-enrich`、worker task 间接 enrich、daily sync 间接 enrich。
+
+明确不碰 V6 Fit：Product Recall、URL Deep Crawl profile flow、Profile basics backfill、Single evidence video enqueue、final_v1 video analysis、keyframe QA、deep result、TaskProgressBoard。
+
+LLM 边界：已有 `llm_gateway.budget_preflight`、`budget_guard`、`vkpi_provider_budget_caps`、`vkpi_ai_cost_ledger`、`vkpi_llm_calls`，但仍需继续收口裸调 LLM。
+
+Worker 边界：启停 Worker、入队、requeue 都不是只读；TaskProgressBoard 只读聚合，不触发任务。
+
+凭证边界：`YTDLP_PROXY` 不得完整打印；日志只显示 host:port。
+
+前端 JSON 边界：string/array/object 都要防御渲染，不能直接把 object 塞进 JSX。
+
+# 附录D：术语表
+
+| 术语 | 含义 |
+|---|---|
+| V6 Fit | KOL Pool 正式业务评分，字段是 `viltrox_fit_score` |
+| llm_v6_fit | 从 video final_v1 / QA 提炼出的独立 LLM 判断分 |
+| final_v1 | 当前 video 深析主方法，输出 layer1-6 |
+| keyframe QA | 在 final_v1 后抽关键帧核验产品/型号/铭文/竞品上下文 |
+| evidence | KOL 的视频/帖子证据，主要表是 `vkpi_kol_video_evidence` |
+| analysis cache | `vkpi_analysis_cache`，存 video final_v1、QA 等分析结果 |
+| deep result | `vkpi_kol_llm_deep_analysis_results`，KOL 层独立 LLM 结果 |
+| vector_recall | 产品召回方法，基于 Qdrant embedding |
+| profile_type | creator / reviewer / mixed 分类 |
+| recall_status | recallable / suspect / pending_data / empty |
+| TaskProgressBoard | V615 左侧侧边栏任务进度看板 |
+| URL Deep Crawl | 粘 URL 后识别、查重、profile 抓取/建档的统一入口 |
