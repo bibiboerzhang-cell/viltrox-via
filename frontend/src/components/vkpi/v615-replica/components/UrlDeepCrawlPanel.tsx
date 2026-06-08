@@ -213,6 +213,7 @@ export function UrlDeepCrawlPanel({ apiToken = "" }: { apiToken?: string }) {
   const writerDryRun = profileFlow.safe_writer_dry_run || {};
   const writeResult = asRecord(profileFlow.write_result);
   const profileData = asRecord(profileFlow.profile_data);
+  const representativeVideoAnalysis = asRecord(profileFlow.representative_video_analysis);
   const fieldsToWrite = useMemo(() => asStringList(writerDryRun.fields_to_write), [writerDryRun.fields_to_write]);
   const fieldsWritten = useMemo(() => asStringList(writeResult.fields_written), [writeResult.fields_written]);
   const candidates = Array.isArray(result?.candidates) ? result?.candidates || [] : [];
@@ -279,7 +280,7 @@ export function UrlDeepCrawlPanel({ apiToken = "" }: { apiToken?: string }) {
     setPanelState("executeLoading");
     setError("");
     try {
-      const executeMode = result?.url_type === "video" ? "video_deep" : "profile_only";
+      const executeMode = result?.url_type === "video" ? "video_deep" : "auto";
       const response = await deepCrawlKolUrl(apiToken, url, true, {
         maxPosts: typeof profileFlow.max_posts === "number" ? profileFlow.max_posts : 3,
         mode: executeMode,
@@ -317,7 +318,7 @@ export function UrlDeepCrawlPanel({ apiToken = "" }: { apiToken?: string }) {
         <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500">
           <span className="rounded-md border border-white/[0.07] px-2 py-1">Profile 资料</span>
           <span className="rounded-md border border-white/[0.07] px-2 py-1">Video 智能分析</span>
-          <span className="rounded-md border border-white/[0.07] px-2 py-1">不触发 Gemini</span>
+          <span className="rounded-md border border-white/[0.07] px-2 py-1">不直接调 Gemini</span>
           <span className="rounded-md border border-white/[0.07] px-2 py-1">确认后入队</span>
         </div>
       </div>
@@ -384,7 +385,9 @@ export function UrlDeepCrawlPanel({ apiToken = "" }: { apiToken?: string }) {
                 </>
               ) : (
                 <>
-                  基础资料抓取完成，已通过安全 writer 写入。V6 Fit 未触碰：{String(Boolean(writeResult.viltrox_fit_score_untouched))}
+                  基础资料抓取完成，已通过安全 writer 写入。
+                  {representativeVideoAnalysis.enabled ? ` 代表视频入队：${displayText(representativeVideoAnalysis.queued, "0")} 条。` : " 未启用代表视频分析。"}
+                  V6 Fit 未触碰：{String(Boolean(profileFlow.viltrox_fit_score_untouched || writeResult.viltrox_fit_score_untouched))}
                 </>
               )}
             </div>
@@ -425,11 +428,17 @@ export function UrlDeepCrawlPanel({ apiToken = "" }: { apiToken?: string }) {
                   onClick={() => void runExecute()}
                   disabled={!canExecuteProfile}
                   className="mt-3 inline-flex min-h-[32px] items-center justify-center gap-1.5 rounded-md border border-emerald-300/20 bg-emerald-500/[0.14] px-3 text-[11px] text-emerald-100 transition-colors hover:bg-emerald-500/[0.22] disabled:cursor-not-allowed disabled:border-white/[0.08] disabled:bg-white/[0.04] disabled:text-slate-500"
-                  title={canExecuteProfile ? "确认后会真实抓取 profile 基础资料并写入白名单字段" : "需要先完成 profile URL dry-run，且不能有多个候选"}
+                  title={canExecuteProfile ? "确认后会抓取 profile 基础资料，并最多排入 1 条代表视频 final_v1" : "需要先完成 profile URL dry-run，且不能有多个候选"}
                 >
                   {isExecuting ? <Loader2 size={12} className="animate-spin" /> : null}
-                  确认抓取基础资料
+                  确认抓取并分析代表视频
                 </button>
+                {representativeVideoAnalysis.status ? (
+                  <div className="mt-2 text-[10px] text-slate-500">
+                    representative_video_analysis: {displayText(representativeVideoAnalysis.status)}
+                    {representativeVideoAnalysis.queued !== undefined ? ` · queued ${displayText(representativeVideoAnalysis.queued)}` : ""}
+                  </div>
+                ) : null}
                 {writeResult.viltrox_fit_score_changed_ids ? (
                   <div className="mt-2 text-[10px] text-slate-500">
                     viltrox_fit_score_changed_ids: {displayText(writeResult.viltrox_fit_score_changed_ids)}

@@ -1,10 +1,9 @@
 """URL classifier and safe profile/video-flow handler for URL deep crawl.
 
-The default execute=false path is read-only. execute=true is only wired for
-profile URLs and existing-creator video URLs. Profile writes go through the
-profile-basics whitelist service; video writes only create/reuse evidence,
-enqueue final_v1 work, and record a crawl run. Neither path touches V6 Fit
-fields.
+The default execute=false path is read-only. execute=true profile writes go
+through the profile-basics whitelist service; video writes only create/reuse
+evidence, enqueue final_v1 work, and record a crawl run. Neither path touches
+V6 Fit fields.
 """
 from __future__ import annotations
 
@@ -150,6 +149,8 @@ def dry_run_url_deep_crawl(body: dict[str, Any]) -> dict[str, Any]:
         profile_flow = _execute_profile_flow(classified, matches, body)
         safety["crawl_performed"] = bool(profile_flow.get("crawl_performed"))
         safety["business_tables_written"] = bool(profile_flow.get("business_tables_written"))
+        safety["worker_touched"] = bool(profile_flow.get("worker_touched"))
+        safety["viltrox_fit_touched"] = bool(profile_flow.get("viltrox_fit_score_changed_ids"))
     elif execute and classified.url_type == "video" and len(matches) == 1:
         video_flow = _execute_existing_creator_video_flow(classified, matches, video_flow or {}, body)
         safety["business_tables_written"] = bool(video_flow.get("business_tables_written"))
@@ -195,7 +196,7 @@ def dry_run_url_deep_crawl(body: dict[str, Any]) -> dict[str, Any]:
         "in_pool": len(matches) == 1 or bool(execute and result_kol_pool_id),
         "matched_kol_pool_id": result_kol_pool_id,
         "candidates": matches,
-        "next_action": _next_action(classified, matches),
+        "next_action": _next_action(classified, matches, video_flow=video_flow),
         "profile_flow": profile_flow,
         "video_flow": video_flow,
         "video_metadata": video_flow.get("video_metadata") if video_flow else None,
@@ -562,6 +563,7 @@ def _profile_flow_plan(
     kol_pool_id = int(matches[0]["kol_pool_id"]) if len(matches) == 1 else None
     profile_data = _identity_profile_data(classified)
     writer_plan = write_kol_profile_basics(kol_pool_id, profile_data, dry_run=True)
+    representative_enabled = _profile_should_enqueue_representative_videos(body)
     return {
         "status": "ready_to_execute" if execute else "dry_run_ready",
         "operation": "update" if kol_pool_id else "insert",
@@ -574,7 +576,13 @@ def _profile_flow_plan(
             "crawler": f"{classified.platform}_crawler",
             "uses_decodo": False,
             "uses_gemini": False,
-            "uses_worker": False,
+            "uses_worker": representative_enabled and classified.platform != "tiktok",
+        },
+        "representative_video_analysis": {
+            "enabled": representative_enabled,
+            "status": "will_try_after_profile_crawl" if representative_enabled else "disabled_profile_only",
+            "limit": _profile_representative_video_limit(body) if representative_enabled else 0,
+            "note": "TikTok profile video analysis is skipped until the TikTok video resolver is fixed." if representative_enabled and classified.platform == "tiktok" else "",
         },
         "safe_writer_dry_run": {
             "operation": writer_plan.get("operation"),
@@ -640,6 +648,19 @@ def _execute_profile_flow(
     )
     write_result = write_kol_profile_basics(kol_pool_id, profile_data, dry_run=False, conn=conn)
     written_kol_pool_id = int(write_result.get("kol_pool_id") or kol_pool_id or 0) or None
+    representative_video_analysis = _execute_profile_representative_video_analysis(
+        conn,
+        classified=classified,
+        kol_pool_id=written_kol_pool_id,
+        crawl=crawl,
+        body=body,
+    )
+    changed_ids = sorted(
+        set(
+            _fit_changed_ids(write_result)
+            + _fit_changed_ids(representative_video_analysis)
+        )
+    )
     run_id = _record_deep_crawl_run(
         conn,
         kol_pool_id=written_kol_pool_id,
@@ -656,8 +677,10 @@ def _execute_profile_flow(
             "elapsed_ms": crawl.get("elapsed_ms"),
             "fields_written": write_result.get("fields_written"),
             "viltrox_fit_score_changed_ids": write_result.get("viltrox_fit_score_changed_ids"),
+            "representative_video_analysis": representative_video_analysis,
         },
     )
+    worker_touched = bool(representative_video_analysis.get("worker_touched"))
     return {
         "status": "ready",
         "operation": operation,
@@ -672,14 +695,16 @@ def _execute_profile_flow(
             "viltrox_fit_score_changed_ids": write_result.get("viltrox_fit_score_changed_ids"),
             "viltrox_fit_score_untouched": write_result.get("viltrox_fit_score_untouched"),
         },
+        "representative_video_analysis": representative_video_analysis,
         "run_id": run_id,
         "elapsed_ms": int((time.monotonic() - started) * 1000),
         "crawl_performed": True,
         "business_tables_written": True,
+        "worker_touched": worker_touched,
         "provider_source": crawl.get("provider_source"),
         "crawl_status": crawl.get("status"),
-        "viltrox_fit_score_changed_ids": write_result.get("viltrox_fit_score_changed_ids") or [],
-        "viltrox_fit_score_untouched": bool(write_result.get("viltrox_fit_score_untouched")),
+        "viltrox_fit_score_changed_ids": changed_ids,
+        "viltrox_fit_score_untouched": not changed_ids,
     }
 
 
@@ -953,11 +978,309 @@ def _execute_new_creator_video_flow(
     }
 
 
+def _execute_profile_representative_video_analysis(
+    conn: Any,
+    *,
+    classified: ClassifiedUrl,
+    kol_pool_id: int | None,
+    crawl: dict[str, Any],
+    body: dict[str, Any],
+) -> dict[str, Any]:
+    if not _profile_should_enqueue_representative_videos(body):
+        return {
+            "enabled": False,
+            "status": "disabled_profile_only",
+            "items": [],
+            "queued": 0,
+            "skipped": 0,
+            "errors": 0,
+            "worker_touched": False,
+            "viltrox_fit_score_changed_ids": [],
+        }
+    if not kol_pool_id:
+        return {
+            "enabled": True,
+            "status": "missing_kol_pool_id",
+            "items": [],
+            "queued": 0,
+            "skipped": 0,
+            "errors": 1,
+            "worker_touched": False,
+            "viltrox_fit_score_changed_ids": [],
+        }
+    if classified.platform == "tiktok":
+        return {
+            "enabled": True,
+            "status": "skipped_tiktok_video_resolver_known_issue",
+            "items": [],
+            "queued": 0,
+            "skipped": 1,
+            "errors": 0,
+            "worker_touched": False,
+            "viltrox_fit_score_changed_ids": [],
+        }
+
+    limit = _profile_representative_video_limit(body)
+    videos = _profile_representative_video_metadata(classified, crawl, limit=limit)
+    if not videos:
+        return {
+            "enabled": True,
+            "status": "no_representative_video_url",
+            "items": [],
+            "queued": 0,
+            "skipped": 0,
+            "errors": 0,
+            "worker_touched": False,
+            "viltrox_fit_score_changed_ids": [],
+        }
+
+    items: list[dict[str, Any]] = []
+    queued = 0
+    skipped = 0
+    errors = 0
+    changed_ids: list[int] = []
+    for metadata in videos:
+        evidence_result: dict[str, Any] = {}
+        enqueue_result: dict[str, Any] = {}
+        item_status = "failed"
+        error = ""
+        try:
+            evidence_result = ensure_video_evidence_from_url(
+                int(kol_pool_id),
+                str(metadata.get("content_url") or ""),
+                metadata,
+                dry_run=False,
+                conn=conn,
+            )
+            changed_ids.extend(_fit_changed_ids(evidence_result))
+            if not evidence_result.get("ok"):
+                item_status = str(evidence_result.get("status") or "evidence_failed")
+                skipped += 1
+            else:
+                evidence_id = int(evidence_result.get("evidence_id") or 0)
+                enqueue_result = _enqueue_final_v1_video_analysis(
+                    conn,
+                    kol_pool_id=int(kol_pool_id),
+                    evidence_id=evidence_id,
+                    source="kol_url_deep_crawl",
+                    batch="url_profile_representative",
+                    commit=True,
+                )
+                changed_ids.extend(_fit_changed_ids(enqueue_result))
+                item_status = str(enqueue_result.get("status") or "enqueue_unknown")
+                if item_status == "queued":
+                    queued += 1
+                else:
+                    skipped += 1
+        except Exception as exc:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            errors += 1
+            error = str(exc)[:500]
+            item_status = "error"
+        items.append(
+            {
+                "status": item_status,
+                "metadata": _public_video_metadata(metadata),
+                "evidence_result": _compact_video_evidence_result(evidence_result),
+                "enqueue_result": _compact_enqueue_result(enqueue_result),
+                "error": error or None,
+            }
+        )
+
+    return {
+        "enabled": True,
+        "status": "completed" if not errors else "completed_with_errors",
+        "limit": limit,
+        "requested": len(videos),
+        "queued": queued,
+        "skipped": skipped,
+        "errors": errors,
+        "items": items,
+        "worker_touched": queued > 0,
+        "viltrox_fit_score_changed_ids": sorted(set(changed_ids)),
+        "viltrox_fit_score_untouched": not changed_ids,
+    }
+
+
 def _video_execute_mode(body: dict[str, Any]) -> str:
     mode = str(body.get("mode") or "").strip()
     if mode in {"auto", "video_deep"}:
         return mode
     return "video_deep"
+
+
+def _profile_should_enqueue_representative_videos(body: dict[str, Any]) -> bool:
+    mode = str(body.get("mode") or "").strip()
+    return mode in {"auto", "profile_with_video", "account_deep"}
+
+
+def _profile_representative_video_limit(body: dict[str, Any]) -> int:
+    try:
+        value = int(body.get("representative_video_limit") or 1)
+    except (TypeError, ValueError):
+        value = 1
+    return max(1, min(3, value))
+
+
+def _profile_representative_video_metadata(
+    classified: ClassifiedUrl,
+    crawl: dict[str, Any],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    items = crawl.get("videos_items") if isinstance(crawl.get("videos_items"), list) else []
+    provider_source = str(crawl.get("provider_source") or "").strip()
+    results: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        metadata = _metadata_from_profile_video_item(classified, item, provider_source=provider_source)
+        content_url = str(metadata.get("content_url") or "").strip()
+        if not content_url:
+            continue
+        dedupe_key = _profile_video_dedupe_key(classified.platform, content_url)
+        if dedupe_key in seen_urls:
+            continue
+        seen_urls.add(dedupe_key)
+        results.append(metadata)
+        if len(results) >= limit:
+            break
+    return results
+
+
+def _metadata_from_profile_video_item(
+    classified: ClassifiedUrl,
+    item: dict[str, Any],
+    *,
+    provider_source: str,
+) -> dict[str, Any]:
+    snippet = item.get("snippet") if isinstance(item.get("snippet"), dict) else {}
+    stats = item.get("statistics") if isinstance(item.get("statistics"), dict) else {}
+    content_details = item.get("contentDetails") if isinstance(item.get("contentDetails"), dict) else {}
+    platform = classified.platform
+    video_id = _profile_video_id(platform, item)
+    content_url = _profile_video_url(platform, item, video_id=video_id, classified=classified)
+    published = _first_present(
+        snippet.get("publishedAt"),
+        item.get("publish_date"),
+        item.get("published_at"),
+        item.get("publishedAt"),
+        item.get("uploadDate"),
+        item.get("date"),
+        item.get("timestamp"),
+        item.get("createTimeISO"),
+        item.get("createTime"),
+        item.get("takenAtIso"),
+    )
+    channel_id = _metadata_text(_first_present(snippet.get("channelId"), item.get("channel_id"), item.get("channelId"), classified.channel_id))
+    channel_name = _metadata_text(
+        _first_present(
+            snippet.get("channelTitle"),
+            item.get("channel_name"),
+            item.get("channelName"),
+            item.get("authorName"),
+            item.get("ownerUsername"),
+            classified.handle,
+        )
+    )
+    return {
+        "platform": platform,
+        "content_url": content_url,
+        "title": _metadata_text(_first_present(item.get("title"), snippet.get("title"), item.get("caption"), item.get("text"))) or content_url,
+        "description": _metadata_text(_first_present(item.get("description"), snippet.get("description"), item.get("caption"), item.get("text"))),
+        "view_count": _int_or_none(_first_present(stats.get("viewCount"), item.get("view_count"), item.get("viewCount"), item.get("views"), item.get("playCount"), item.get("videoPlayCount"))),
+        "like_count": _int_or_none(_first_present(stats.get("likeCount"), item.get("like_count"), item.get("likeCount"), item.get("likes"), item.get("likesCount"), item.get("diggCount"))),
+        "comment_count": _int_or_none(_first_present(stats.get("commentCount"), item.get("comment_count"), item.get("commentCount"), item.get("comments"), item.get("commentsCount"), item.get("commentCount"))),
+        "share_count": _int_or_none(_first_present(item.get("share_count"), item.get("shareCount"), item.get("shares"), item.get("sharesCount"))),
+        "publish_date": published,
+        "posted_at": _parse_date(published),
+        "duration_seconds": _duration_seconds(_first_present(content_details.get("duration"), item.get("duration_seconds"), item.get("durationSeconds"), item.get("duration"))),
+        "thumbnail_url": _profile_video_thumbnail(item, snippet),
+        "channel_id": channel_id,
+        "channel_name": channel_name,
+        "scrape_source": _metadata_text(item.get("provider_source")) or provider_source or f"{platform}_profile_crawl",
+        "scrape_status": "success",
+    }
+
+
+def _profile_video_id(platform: str, item: dict[str, Any]) -> str:
+    raw_id = _metadata_text(_first_present(item.get("id"), item.get("video_id"), item.get("videoId"), item.get("shortCode"), item.get("shortcode"), item.get("code")))
+    if platform == "youtube":
+        if isinstance(item.get("id"), dict):
+            raw_id = _metadata_text((item.get("id") or {}).get("videoId"))
+        if raw_id:
+            return raw_id
+        video_url = _profile_video_url("youtube", item, video_id="", classified=None)
+        parsed = urlparse(video_url)
+        return _video_id("youtube", parsed.netloc, parsed.path, parsed.query)
+    return raw_id
+
+
+def _profile_video_url(
+    platform: str,
+    item: dict[str, Any],
+    *,
+    video_id: str,
+    classified: ClassifiedUrl | None,
+) -> str:
+    for key in ("content_url", "url", "videoUrl", "video_url", "web_url", "webUrl", "permalink", "link"):
+        value = _metadata_text(item.get(key))
+        if value.startswith("http"):
+            return value
+    if platform == "youtube" and video_id:
+        return f"https://www.youtube.com/watch?v={video_id}"
+    if platform == "instagram" and video_id:
+        return f"https://www.instagram.com/p/{video_id.strip('/')}/"
+    if platform == "tiktok" and video_id and classified and classified.handle:
+        return f"https://www.tiktok.com/@{classified.handle.lstrip('@')}/video/{video_id}"
+    return ""
+
+
+def _profile_video_thumbnail(item: dict[str, Any], snippet: dict[str, Any]) -> str:
+    for key in ("thumbnail_url", "thumbnailUrl", "thumbnail", "displayUrl", "imageUrl", "coverUrl", "cover"):
+        value = _metadata_text(item.get(key))
+        if value.startswith("http"):
+            return value
+    thumbnails = snippet.get("thumbnails") if isinstance(snippet.get("thumbnails"), dict) else {}
+    for key in ("maxres", "standard", "high", "medium", "default"):
+        value = thumbnails.get(key)
+        if isinstance(value, dict):
+            url = _metadata_text(value.get("url"))
+            if url.startswith("http"):
+                return url
+    return ""
+
+
+def _duration_seconds(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        number = int(value)
+        return number if number >= 0 else None
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.isdigit():
+        return int(text)
+    match = re.fullmatch(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", text)
+    if match:
+        hours = int(match.group(1) or 0)
+        minutes = int(match.group(2) or 0)
+        seconds = int(match.group(3) or 0)
+        return hours * 3600 + minutes * 60 + seconds
+    return None
+
+
+def _profile_video_dedupe_key(platform: str, content_url: str) -> str:
+    parsed = urlparse(str(content_url or ""))
+    video_id = _video_id(platform, parsed.netloc, parsed.path, parsed.query)
+    if video_id:
+        return f"{platform}:{video_id}"
+    return _canonical_url(content_url) or str(content_url or "").strip()
 
 
 def _fit_changed_ids(result: dict[str, Any]) -> list[int]:
@@ -1336,7 +1659,12 @@ def _pool_rows() -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-def _next_action(classified: ClassifiedUrl, matches: list[dict[str, Any]]) -> dict[str, Any]:
+def _next_action(
+    classified: ClassifiedUrl,
+    matches: list[dict[str, Any]],
+    *,
+    video_flow: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     if classified.url_type == "unknown":
         return {
             "code": "unsupported_or_unresolved_url",
@@ -1354,12 +1682,12 @@ def _next_action(classified: ClassifiedUrl, matches: list[dict[str, Any]]) -> di
             return {
                 "code": "profile_found_in_pool",
                 "label": "已在库",
-                "description": "下一步可打开现有档案，或在确认后执行安全基础补档。",
+                "description": "下一步可打开现有档案，或在确认后执行安全基础补档；auto 模式会尝试分析 1 条代表视频。",
             }
         return {
             "code": "profile_not_in_pool",
             "label": "不在库",
-            "description": "下一步可在确认后新建最小档案并执行安全基础补档。",
+            "description": "下一步可在确认后新建最小档案并执行安全基础补档；auto 模式会尝试分析 1 条代表视频。",
         }
     if classified.url_type == "video":
         if matches:
@@ -1367,6 +1695,14 @@ def _next_action(classified: ClassifiedUrl, matches: list[dict[str, Any]]) -> di
                 "code": "video_creator_found_in_pool",
                 "label": "视频创作者已在库",
                 "description": "下一步可在确认后做单帖预览或排入 final_v1 深度分析。",
+            }
+        if video_flow and _video_creator_resolved(video_flow):
+            identity = video_flow.get("creator_identity") if isinstance(video_flow.get("creator_identity"), dict) else {}
+            creator = _metadata_text(identity.get("display_name") or identity.get("handle") or identity.get("channel_id"))
+            return {
+                "code": "video_creator_resolved_not_in_pool",
+                "label": "视频创作者已解析，未在库",
+                "description": f"下一步可确认后为 {creator or '该创作者'} 建档，并分析当前视频。",
             }
         return {
             "code": "video_creator_unresolved_or_not_in_pool",
