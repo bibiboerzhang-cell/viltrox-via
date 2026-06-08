@@ -175,9 +175,8 @@ function videoString(video, keys, fallback = "") {
   return fallback;
 }
 
-function RepresentativeVideoCard({ video, index }) {
+function RepresentativeVideoCard({ video, index, onOpen }) {
   const [thumbnailFailed, setThumbnailFailed] = React.useState(false);
-  const [playMode, setPlayMode] = React.useState("");
   const title = videoString(video, ["title", "video_title"], `代表作 ${index + 1}`);
   const views = videoString(video, ["views", "view_count"], "—");
   const duration = videoString(video, ["duration"], "—");
@@ -185,55 +184,24 @@ function RepresentativeVideoCard({ video, index }) {
   const cachedVideoUrl = videoString(video, ["cached_video_url"]);
   const youtubeVideoId = videoString(video, ["youtube_video_id"]);
   const watchUrl = videoString(video, ["watch_url", "url", "content_url"]);
-  const canInlinePlay = Boolean(cachedVideoUrl || youtubeVideoId);
-  const canOpen = canInlinePlay || Boolean(watchUrl);
+  const canOpen = Boolean(cachedVideoUrl || youtubeVideoId || watchUrl || thumbnail);
   const showThumbnail = Boolean(thumbnail && !thumbnailFailed);
-  const embedSrc = youtubeVideoId
-    ? `https://www.youtube.com/embed/${encodeURIComponent(youtubeVideoId)}?autoplay=1&rel=0`
-    : "";
 
   const handleClick = () => {
-    if (playMode || !canOpen) return;
-    if (cachedVideoUrl) {
-      setPlayMode("video");
-      return;
-    }
-    if (youtubeVideoId) {
-      setPlayMode("youtube");
-      return;
-    }
-    if (watchUrl && typeof window !== "undefined") {
-      window.open(watchUrl, "_blank", "noopener,noreferrer");
-    }
+    if (!canOpen) return;
+    onOpen?.(video);
   };
 
-  const media = playMode === "youtube"
-    ? e("iframe", {
-        src: embedSrc,
-        title,
-        className: "absolute inset-0 h-full w-full",
-        allow: "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share",
-        allowFullScreen: true,
+  const media = showThumbnail
+    ? e("img", {
+        src: thumbnail,
+        alt: title,
+        className: "absolute inset-0 h-full w-full object-cover",
+        loading: "lazy",
+        referrerPolicy: "no-referrer",
+        onError: () => setThumbnailFailed(true),
       })
-    : playMode === "video"
-      ? e("video", {
-          src: cachedVideoUrl,
-          className: "absolute inset-0 h-full w-full object-cover",
-          controls: true,
-          autoPlay: true,
-          playsInline: true,
-          onError: () => setPlayMode(""),
-        })
-      : showThumbnail
-        ? e("img", {
-            src: thumbnail,
-            alt: title,
-            className: "absolute inset-0 h-full w-full object-cover",
-            loading: "lazy",
-            referrerPolicy: "no-referrer",
-            onError: () => setThumbnailFailed(true),
-          })
-        : e(Video, { size: 16, className: "text-slate-500" });
+    : e(Video, { size: 16, className: "text-slate-500" });
 
   return e("div", {
     className: [
@@ -255,7 +223,7 @@ function RepresentativeVideoCard({ video, index }) {
       className: "aspect-video bg-gradient-to-br from-slate-700 to-slate-900 flex items-center justify-center relative overflow-hidden",
     },
       media,
-      !playMode && e("span", {
+      e("span", {
         className: "absolute bottom-1 right-1 px-1 rounded text-[8px] tabular-nums text-white",
         style: { background: "rgba(0,0,0,0.7)" }
       }, duration)
@@ -263,6 +231,105 @@ function RepresentativeVideoCard({ video, index }) {
     e("div", { className: "p-1.5" },
       e("div", { className: "text-[9px] text-white truncate leading-tight" }, title),
       e("div", { className: "text-[8px] text-slate-500 tabular-nums" }, views + " 播放")
+    )
+  );
+}
+
+function RepresentativeVideoPlayerModal({ video, onClose }) {
+  const title = videoString(video, ["title", "video_title"], "代表作");
+  const thumbnail = videoString(video, ["best_thumbnail", "thumbnail_url", "youtube_thumbnail_url"]);
+  const cachedVideoUrl = videoString(video, ["cached_video_url"]);
+  const youtubeVideoId = videoString(video, ["youtube_video_id"]);
+  const watchUrl = videoString(video, ["watch_url", "url", "content_url"]);
+  const platform = videoString(video, ["platform"], "media");
+  const embedSrc = youtubeVideoId
+    ? `https://www.youtube.com/embed/${encodeURIComponent(youtubeVideoId)}?autoplay=1&rel=0`
+    : "";
+
+  React.useEffect(() => {
+    const handleKey = (event) => {
+      if (event.key === "Escape") onClose?.();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [onClose]);
+
+  const stage = youtubeVideoId
+    ? e("iframe", {
+        src: embedSrc,
+        title,
+        className: "h-full w-full rounded-lg bg-black",
+        allow: "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share",
+        allowFullScreen: true,
+      })
+    : cachedVideoUrl
+      ? e("video", {
+          src: cachedVideoUrl,
+          poster: thumbnail || undefined,
+          className: "h-full w-full rounded-lg bg-black object-contain",
+          controls: true,
+          autoPlay: true,
+          playsInline: true,
+        })
+      : e("div", {
+          className: "flex h-full w-full flex-col items-center justify-center gap-4 rounded-lg border border-white/[0.08] bg-slate-950 p-8 text-center",
+        },
+          thumbnail
+            ? e("img", {
+                src: thumbnail,
+                alt: title,
+                className: "max-h-[55vh] max-w-full rounded-md object-contain",
+                referrerPolicy: "no-referrer",
+              })
+            : e(Video, { size: 36, className: "text-slate-500" }),
+          e("div", null,
+            e("div", { className: "text-sm font-medium text-white" }, "当前没有可内嵌播放的视频缓存"),
+            e("div", { className: "mt-1 text-xs text-slate-500" }, "可以打开原帖查看")
+          ),
+          watchUrl && e("a", {
+            href: watchUrl,
+            target: "_blank",
+            rel: "noreferrer",
+            className: "rounded-md border border-cyan-300/25 bg-cyan-300/[0.08] px-3 py-1.5 text-xs font-medium text-cyan-100 hover:bg-cyan-300/[0.14]",
+          }, "打开原帖")
+        );
+
+  return e("div", {
+    className: "fixed inset-0 z-[10000] flex items-center justify-center bg-black/80 p-4 backdrop-blur-md",
+    role: "dialog",
+    "aria-modal": true,
+    "aria-label": "代表作视频播放器",
+    onClick: onClose,
+  },
+    e(motion.div, {
+      initial: { opacity: 0, scale: 0.96, y: 16 },
+      animate: { opacity: 1, scale: 1, y: 0 },
+      exit: { opacity: 0, scale: 0.96, y: 16 },
+      className: "w-full max-w-5xl overflow-hidden rounded-xl border border-white/10 bg-[#070b14] shadow-2xl",
+      onClick: (event) => event.stopPropagation(),
+    },
+      e("header", { className: "flex items-start justify-between gap-3 border-b border-white/[0.08] px-4 py-3" },
+        e("div", { className: "min-w-0" },
+          e("div", { className: "text-[10px] uppercase tracking-wider text-cyan-200/70" }, platform + " · 代表作"),
+          e("h3", { className: "mt-1 truncate text-sm font-semibold text-white", title }, title)
+        ),
+        e("button", {
+          type: "button",
+          onClick: onClose,
+          className: "shrink-0 rounded-md border border-white/10 bg-white/[0.04] px-2 py-1 text-sm text-slate-300 hover:bg-white/[0.08] hover:text-white",
+          "aria-label": "关闭播放器",
+        }, "×")
+      ),
+      e("div", { className: "aspect-video w-full bg-black" }, stage),
+      watchUrl && e("footer", { className: "flex items-center justify-between gap-3 border-t border-white/[0.08] px-4 py-2" },
+        e("span", { className: "truncate text-[10px] text-slate-500" }, watchUrl),
+        e("a", {
+          href: watchUrl,
+          target: "_blank",
+          rel: "noreferrer",
+          className: "shrink-0 rounded-md border border-white/[0.08] px-2 py-1 text-[10px] text-slate-300 hover:bg-white/[0.06] hover:text-white",
+        }, "打开原帖")
+      )
     )
   );
 }
@@ -336,6 +403,7 @@ export function KOLDetailDrawer({ item, apiToken = "", detailLoading = false, de
   const [dimensions11, setDimensions11] = React.useState(null);
   const [llmDeepAnalysis, setLlmDeepAnalysis] = React.useState(null);
   const [videoEnqueueState, setVideoEnqueueState] = React.useState({ status: "idle", message: "" });
+  const [activeRepresentativeVideo, setActiveRepresentativeVideo] = React.useState(null);
   React.useEffect(() => {
     if (!apiToken || !item?.id) {
       setDimensions11(null);
@@ -378,6 +446,7 @@ export function KOLDetailDrawer({ item, apiToken = "", detailLoading = false, de
 
   React.useEffect(() => {
     setVideoEnqueueState({ status: "idle", message: "" });
+    setActiveRepresentativeVideo(null);
   }, [item?.id]);
 
   if (!item) return null;
@@ -440,7 +509,8 @@ export function KOLDetailDrawer({ item, apiToken = "", detailLoading = false, de
       ? item.score_breakdown
       : null;
   
-  return e(motion.div, {
+  return e(React.Fragment, null,
+  e(motion.div, {
     initial: { x: "100%" }, animate: { x: 0 }, exit: { x: "100%" },
     transition: { type: "spring", damping: 28, stiffness: 240 },
     "aria-label": "KOL Pool 详情",
@@ -740,6 +810,7 @@ export function KOLDetailDrawer({ item, apiToken = "", detailLoading = false, de
               key: v.evidence_id || v.watch_url || v.url || v.title || i,
               video: v,
               index: i,
+              onOpen: setActiveRepresentativeVideo,
             }))
           )
         )
@@ -999,5 +1070,10 @@ export function KOLDetailDrawer({ item, apiToken = "", detailLoading = false, de
         )
       }, videoEnqueueState.message)
     )
+  ),
+    activeRepresentativeVideo && e(RepresentativeVideoPlayerModal, {
+      video: activeRepresentativeVideo,
+      onClose: () => setActiveRepresentativeVideo(null),
+    })
   );
 }
