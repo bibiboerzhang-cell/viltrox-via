@@ -43,7 +43,7 @@ export function MarketCoverageCard({ items }) {
     }
   });
   
-  return e("div", { className: "rounded-xl border border-white/[0.08] bg-white/[0.025] backdrop-blur-xl mb-4 overflow-hidden" },
+  return e("div", { className: "rounded-xl border border-white/[0.07] bg-white/[0.018] backdrop-blur-xl overflow-hidden" },
     // Header — 紧凑
     e("div", { className: "px-4 py-2.5 border-b border-white/[0.06] flex items-center justify-between" },
       e("div", { className: "flex items-center gap-2" },

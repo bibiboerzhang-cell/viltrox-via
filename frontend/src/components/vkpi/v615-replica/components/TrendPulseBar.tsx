@@ -8,7 +8,7 @@ import { Flame } from "lucide-react";
 const e = React.createElement;
 
 export function TrendPulseBar() {
-  return e("div", { className: "rounded-xl border border-white/[0.08] bg-gradient-to-r from-rose-500/[0.04] via-purple-500/[0.04] to-cyan-500/[0.04] p-3 mb-4 flex items-center gap-3 backdrop-blur-xl" },
+  return e("div", { className: "rounded-xl border border-white/[0.07] bg-white/[0.018] p-3 flex items-center gap-3 backdrop-blur-xl" },
     e("div", { className: "flex items-center gap-2 shrink-0" },
       e("div", { className: "rounded-md p-1.5", style: { background: "rgba(239,68,68,0.18)" } }, e(Flame, { size: 12, className: "text-rose-400" })),
       e("div", null,

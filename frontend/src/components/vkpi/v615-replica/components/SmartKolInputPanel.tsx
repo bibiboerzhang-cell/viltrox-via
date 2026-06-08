@@ -279,30 +279,34 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
   return (
     <section
       data-testid="smart-kol-input-panel"
-      className="mb-4 rounded-lg border border-cyan-300/[0.14] bg-gradient-to-br from-cyan-950/[0.10] via-violet-950/[0.08] to-black/10 p-3"
+      className="rounded-xl border border-cyan-300/[0.12] bg-black/[0.20] p-3.5 shadow-[0_18px_60px_rgba(0,0,0,0.18)]"
     >
-      <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="flex h-7 w-7 items-center justify-center rounded-md border border-cyan-300/20 bg-cyan-400/[0.10] text-cyan-200">
-              <Sparkles size={14} />
-            </span>
-            <div>
-              <h2 className="text-[13px] font-semibold text-white">智能输入入口</h2>
-              <div className="mt-0.5 text-[10.5px] text-slate-500">URL 自动分流 · 纯文字语义召回 · 旧入口折叠回退</div>
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-cyan-300/20 bg-cyan-400/[0.10] text-cyan-100">
+            <Sparkles size={15} />
+          </span>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-[13px] font-semibold text-white">统一智能入口</h2>
+              <span className="rounded-full border border-emerald-300/15 bg-emerald-400/[0.06] px-2 py-0.5 text-[9.5px] text-emerald-100">
+                V6 Fit 不触碰
+              </span>
+            </div>
+            <div className="mt-0.5 truncate text-[10.5px] text-slate-500">
+              粘 URL 自动分流；输需求走产品语义召回。旧工具保留在下方回退区。
             </div>
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500">
-          <span className="rounded-md border border-white/[0.07] px-2 py-1">Video URL</span>
-          <span className="rounded-md border border-white/[0.07] px-2 py-1">Profile URL</span>
-          <span className="rounded-md border border-white/[0.07] px-2 py-1">文字召回</span>
-          <span className="rounded-md border border-emerald-300/15 bg-emerald-400/[0.06] px-2 py-1 text-emerald-100">V6 Fit 不触碰</span>
+        <div className="grid grid-cols-3 gap-1.5 text-[9.5px] text-slate-500 sm:min-w-[330px]">
+          <span className="rounded-md border border-white/[0.07] bg-white/[0.025] px-2 py-1 text-center">Video 分析</span>
+          <span className="rounded-md border border-white/[0.07] bg-white/[0.025] px-2 py-1 text-center">Profile 补档</span>
+          <span className="rounded-md border border-white/[0.07] bg-white/[0.025] px-2 py-1 text-center">文字召回</span>
         </div>
       </div>
 
       <form
-        className="mt-3 grid gap-2 lg:grid-cols-[minmax(0,1fr)_auto]"
+        className="mt-3 grid gap-2 lg:grid-cols-[minmax(0,1fr)_118px]"
         onSubmit={(event) => {
           event.preventDefault();
           if (isBusy || !apiToken || !cleanText(input)) return;
@@ -316,19 +320,36 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
           onKeyDown={(event) => {
             if (event.key === "Enter" && !isBusy) void run();
           }}
-          placeholder="粘贴 KOL 主页/视频 URL，或输入产品需求文本"
-          className="min-h-[42px] rounded-md border border-white/[0.08] bg-black/20 px-3 py-2 text-[11px] text-slate-300 outline-none placeholder-slate-600 focus:border-cyan-300/40"
+          placeholder="粘贴 KOL 主页 / 视频 URL，或输入产品需求，例如: 35mm 低光人像 YouTube 摄影师"
+          className="min-h-[44px] rounded-lg border border-white/[0.08] bg-black/30 px-3 py-2 text-[11.5px] text-slate-200 outline-none placeholder-slate-600 focus:border-cyan-300/45"
         />
         <button
           data-testid="smart-kol-run"
           type="submit"
           disabled={isBusy || !apiToken || !cleanText(input)}
-          className="inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-md border border-cyan-300/20 bg-cyan-500/[0.16] px-3 text-[11px] font-medium text-cyan-100 transition-colors hover:bg-cyan-500/[0.24] disabled:cursor-not-allowed disabled:opacity-55"
+          className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg border border-cyan-300/20 bg-cyan-500/[0.16] px-3 text-[11px] font-medium text-cyan-100 transition-colors hover:bg-cyan-500/[0.24] disabled:cursor-not-allowed disabled:opacity-55"
         >
           {isBusy ? <Loader2 size={13} className="animate-spin" /> : inferredMode === "url" ? <Link2 size={13} /> : <Search size={13} />}
           {inferredMode === "url" ? "识别 URL" : "智能召回"}
         </button>
       </form>
+
+      {state === "idle" && !input ? (
+        <div className="mt-3 grid gap-2 text-[10.5px] text-slate-500 md:grid-cols-3">
+          <div className="rounded-lg border border-white/[0.06] bg-white/[0.018] px-3 py-2">
+            <div className="mb-0.5 flex items-center gap-1.5 text-cyan-100"><Video size={11} /> Video URL</div>
+            <div>已在库只分析当前视频；新人先建档再分析。</div>
+          </div>
+          <div className="rounded-lg border border-white/[0.06] bg-white/[0.018] px-3 py-2">
+            <div className="mb-0.5 flex items-center gap-1.5 text-violet-100"><BadgeCheck size={11} /> Profile URL</div>
+            <div>抓基础资料和代表视频，按 last_video_at 增量防重复。</div>
+          </div>
+          <div className="rounded-lg border border-white/[0.06] bg-white/[0.018] px-3 py-2">
+            <div className="mb-0.5 flex items-center gap-1.5 text-emerald-100"><Search size={11} /> 产品需求</div>
+            <div>复用召回服务，展示创作者和测评号候选。</div>
+          </div>
+        </div>
+      ) : null}
 
       {error ? (
         <div className="mt-3 rounded-lg border border-rose-300/20 bg-rose-500/[0.08] px-3 py-2 text-[11px] text-rose-200">{error}</div>
@@ -366,7 +387,7 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
 
       <div className="mt-2 flex items-start gap-1.5 text-[10px] leading-relaxed text-slate-600">
         <AlertTriangle size={11} className="mt-0.5 shrink-0 text-slate-600" />
-        新入口先并存验证；旧 URL 深抓入口和产品召回结果已折叠到回退工具。
+        执行动作只走已接通的 URL / evidence / apify_jobs 链路；旧 URL 深抓和产品召回仍在回退工具里。
       </div>
     </section>
   );
