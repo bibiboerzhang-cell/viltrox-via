@@ -490,15 +490,195 @@ def _search_session_job_state(raw_status: str, reason: str = "") -> tuple[str, s
     return "unknown", "analysis"
 
 
+def _as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _compact_text(value: Any, limit: int = 700) -> str:
+    text = " ".join(str(value or "").replace("\x00", " ").split())
+    return text[:limit]
+
+
+def _score_value(value: Any) -> float | None:
+    raw = value.get("score") if isinstance(value, dict) else value
+    if raw in (None, ""):
+        return None
+    try:
+        parsed = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if parsed < 0:
+        return 0.0
+    if parsed > 100:
+        return 100.0
+    return round(parsed, 3)
+
+
+def _score_confidence(value: Any) -> float | None:
+    if not isinstance(value, dict) or value.get("confidence") in (None, ""):
+        return None
+    try:
+        parsed = float(value.get("confidence"))
+    except (TypeError, ValueError):
+        return None
+    if parsed < 0:
+        return 0.0
+    if parsed > 1:
+        return 1.0
+    return round(parsed, 5)
+
+
+def _final_v1_payload(result: Any) -> dict[str, Any]:
+    root = _as_dict(result)
+    nested = _as_dict(root.get("video_analysis_final_v1"))
+    if _as_dict(nested.get("layer1_visual_content")) or _as_dict(nested.get("layer6_flags_and_scores")):
+        return nested
+    return root
+
+
+def _score_entry(layer6: dict[str, Any], key: str) -> dict[str, Any] | None:
+    scores = _as_dict(layer6.get("scores"))
+    raw = scores.get(key)
+    if raw is None and key == "marketing_value_score":
+        raw = layer6.get("marketing_value_score")
+    value = _score_value(raw)
+    if value is None:
+        return None
+    entry: dict[str, Any] = {"score": value}
+    confidence = _score_confidence(raw)
+    if confidence is not None:
+        entry["confidence"] = confidence
+    if isinstance(raw, dict):
+        for meta_key in ("rationale", "reason", "evidence"):
+            if raw.get(meta_key) is not None:
+                entry[meta_key] = _compact_text(raw.get(meta_key), 420)
+    return entry
+
+
+def _search_session_analysis_summary_from_result(
+    *,
+    cache_id: int | None,
+    derive_method: str,
+    target_type: str,
+    target_id: str,
+    evidence: dict[str, Any] | None,
+    result: dict[str, Any],
+    cost: float | None = None,
+) -> dict[str, Any] | None:
+    if derive_method != "video_analysis_final_v1" or target_type != "video":
+        return None
+    payload = _final_v1_payload(result)
+    layer1 = _as_dict(payload.get("layer1_visual_content"))
+    layer5 = _as_dict(payload.get("layer5_recommendations"))
+    layer6 = _as_dict(payload.get("layer6_flags_and_scores"))
+    marketing = _score_entry(layer6, "marketing_value_score")
+    if not marketing:
+        return {
+            "status": "ready",
+            "derive_method": derive_method,
+            "cache_id": cache_id,
+            "source_evidence_id": _int_or_none(target_id),
+            "missing": "marketing_value_score",
+        }
+    score_keys = (
+        "content_quality_score",
+        "viewer_heart_score",
+        "channel_value_score",
+        "asset_reuse_score",
+        "product_proof_score",
+        "marketing_value_score",
+    )
+    scores = {key: entry for key in score_keys if (entry := _score_entry(layer6, key))}
+    evidence = evidence or {}
+    return {
+        "status": "ready",
+        "derive_method": derive_method,
+        "cache_id": cache_id,
+        "source_evidence_id": _int_or_none(target_id),
+        "kol_pool_id": _int_or_none(evidence.get("kol_pool_id") or _as_dict(payload.get("source")).get("kol_pool_id")),
+        "source_url": evidence.get("content_url") or _as_dict(payload.get("source")).get("url"),
+        "title": _compact_text(evidence.get("title") or evidence.get("video_title") or _as_dict(payload.get("source")).get("title"), 320),
+        "llm_v6_fit": marketing.get("score"),
+        "confidence": marketing.get("confidence"),
+        "scores": scores,
+        "summary": _compact_text(layer1.get("content_summary") or layer6.get("key_hook") or layer6.get("final_verdict"), 700),
+        "recommendations": {
+            "cooperation_recommendation": layer5.get("cooperation_recommendation"),
+            "buyout_or_license_recommendation": layer5.get("buyout_or_license_recommendation"),
+            "why": layer5.get("why"),
+        },
+        "risk": {
+            "risk_flags": layer6.get("risk_flags"),
+            "final_verdict": layer6.get("final_verdict"),
+            "key_hook": layer6.get("key_hook"),
+        },
+        "cost": cost,
+    }
+
+
+def _search_session_analysis_summary_from_ready_cache(
+    conn: psycopg.Connection[Any],
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    target_type, target_id = _target(payload)
+    derive_method = _derive_method(payload)
+    if derive_method != "video_analysis_final_v1" or target_type != "video" or not target_id:
+        return None
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT id, result, cost
+            FROM vkpi_analysis_cache
+            WHERE target_type=%s
+              AND target_id=%s
+              AND derive_method=%s
+              AND status='ready'
+            ORDER BY updated_at DESC, id DESC
+            LIMIT 1
+            """,
+            (target_type, target_id, derive_method),
+        )
+        cache = cur.fetchone()
+        cur.execute(
+            """
+            SELECT id, kol_pool_id, content_url, title, video_title
+            FROM vkpi_kol_video_evidence
+            WHERE id=%s
+            LIMIT 1
+            """,
+            (_int_or_none(target_id),),
+        )
+        evidence = cur.fetchone() or {}
+    if not cache:
+        return None
+    result = cache.get("result") if isinstance(cache.get("result"), dict) else _loads(cache.get("result"), {})
+    return _search_session_analysis_summary_from_result(
+        cache_id=_int_or_none(cache.get("id")),
+        derive_method=derive_method,
+        target_type=target_type,
+        target_id=target_id,
+        evidence=dict(evidence),
+        result=result if isinstance(result, dict) else {},
+        cost=float(cache.get("cost") or 0.0),
+    )
+
+
 def _sync_search_session_job(
     conn: psycopg.Connection[Any],
     job_id: int,
     *,
     raw_status: str,
     reason: str = "",
+    analysis_summary: dict[str, Any] | None = None,
 ) -> None:
     try:
-        _sync_search_session_job_impl(conn, job_id, raw_status=raw_status, reason=reason)
+        _sync_search_session_job_impl(
+            conn,
+            job_id,
+            raw_status=raw_status,
+            reason=reason,
+            analysis_summary=analysis_summary,
+        )
     except Exception as exc:
         logger.warning("search session job sync failed | job_id=%s status=%s error=%s", job_id, raw_status, exc)
 
@@ -509,6 +689,7 @@ def _sync_search_session_job_impl(
     *,
     raw_status: str,
     reason: str = "",
+    analysis_summary: dict[str, Any] | None = None,
 ) -> None:
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute("SELECT id, payload, last_error FROM apify_jobs WHERE id=%s", (int(job_id),))
@@ -523,10 +704,22 @@ def _sync_search_session_job_impl(
     if not session_id or not item_id:
         return
     item_status, stage = _search_session_job_state(raw_status, reason or row.get("last_error") or "")
+    if analysis_summary is None and item_status in {"ready", "already_analyzed"}:
+        analysis_summary = _search_session_analysis_summary_from_ready_cache(conn, payload)
     payload["search_session_item_status"] = item_status
     payload["search_session_stage"] = stage
     payload["search_session_last_job_status"] = raw_status
     payload["search_session_last_error"] = str(reason or row.get("last_error") or "")[:500]
+    if analysis_summary:
+        payload["search_session_cache_id"] = analysis_summary.get("cache_id")
+        payload["search_session_analysis_status"] = analysis_summary.get("status")
+    item_patch: dict[str, Any] = {
+        "job_status": raw_status,
+        "job_last_error": str(reason or row.get("last_error") or "")[:1000],
+        "job_updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if analysis_summary:
+        item_patch["analysis"] = analysis_summary
     with conn.transaction():
         with conn.cursor() as cur:
             cur.execute(
@@ -542,13 +735,7 @@ def _sync_search_session_job_impl(
                 (
                     item_status,
                     stage,
-                    _json(
-                        {
-                            "job_status": raw_status,
-                            "job_last_error": str(reason or row.get("last_error") or "")[:1000],
-                            "job_updated_at": datetime.now(timezone.utc).isoformat(),
-                        }
-                    ),
+                    _json(item_patch),
                     int(item_id),
                     int(session_id),
                 ),
@@ -1298,6 +1485,7 @@ def _write_gemini_cache(
                   status = 'ready',
                   triggered_by_user_id = EXCLUDED.triggered_by_user_id,
                   updated_at = NOW()
+                RETURNING id
                 """,
                 (
                     target_type,
@@ -1309,11 +1497,26 @@ def _write_gemini_cache(
                     _int_or_none(triggered_by),
                 ),
             )
+            cache_row = cur.fetchone()
+            cache_id = int(cache_row[0]) if cache_row else None
             cur.execute(
                 "UPDATE apify_jobs SET status='done', last_error=NULL, updated_at=NOW() WHERE id=%s",
                 (job["id"],),
             )
-    _sync_search_session_job(conn, int(job["id"]), raw_status="done")
+    _sync_search_session_job(
+        conn,
+        int(job["id"]),
+        raw_status="done",
+        analysis_summary=_search_session_analysis_summary_from_result(
+            cache_id=cache_id,
+            derive_method=derive_method,
+            target_type=target_type,
+            target_id=target_id,
+            evidence=evidence,
+            result=shaped,
+            cost=cost,
+        ),
+    )
 
 
 def _process_gemini_video_final_v1_keyframe_qa(
@@ -2008,6 +2211,7 @@ def _process_gemini_video(
                   status = 'ready',
                   triggered_by_user_id = EXCLUDED.triggered_by_user_id,
                   updated_at = NOW()
+                RETURNING id
                 """,
                 (
                     target_type,
@@ -2019,11 +2223,26 @@ def _process_gemini_video(
                     triggered_by_user_id,
                 ),
             )
+            cache_row = cur.fetchone()
+            cache_id = int(cache_row[0]) if cache_row else None
             cur.execute(
                 "UPDATE apify_jobs SET status='done', last_error=NULL, updated_at=NOW() WHERE id=%s",
                 (job["id"],),
             )
-    _sync_search_session_job(conn, int(job["id"]), raw_status="done")
+    _sync_search_session_job(
+        conn,
+        int(job["id"]),
+        raw_status="done",
+        analysis_summary=_search_session_analysis_summary_from_result(
+            cache_id=cache_id,
+            derive_method=derive_method,
+            target_type=target_type,
+            target_id=target_id,
+            evidence=evidence,
+            result=shaped,
+            cost=cost,
+        ),
+    )
 
 
 def _claim_job(conn: psycopg.Connection[Any]) -> dict[str, Any] | None:
@@ -2112,14 +2331,30 @@ def _process_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> None:
                   status = 'ready',
                   triggered_by_user_id = EXCLUDED.triggered_by_user_id,
                   updated_at = NOW()
+                RETURNING id
                 """,
                 (target_type, target_id, _json(result), triggered_by_user_id),
             )
+            cache_row = cur.fetchone()
+            cache_id = int(cache_row[0]) if cache_row else None
             cur.execute(
                 "UPDATE apify_jobs SET status='done', last_error=NULL, updated_at=NOW() WHERE id=%s",
                 (job["id"],),
             )
-    _sync_search_session_job(conn, int(job["id"]), raw_status="done")
+    _sync_search_session_job(
+        conn,
+        int(job["id"]),
+        raw_status="done",
+        analysis_summary=_search_session_analysis_summary_from_result(
+            cache_id=cache_id,
+            derive_method=derive_method,
+            target_type=target_type,
+            target_id=target_id,
+            evidence={"id": target_id},
+            result=result,
+            cost=0.0,
+        ),
+    )
 
 
 def _fail_job(conn: psycopg.Connection[Any], job_id: int, exc: Exception) -> None:
