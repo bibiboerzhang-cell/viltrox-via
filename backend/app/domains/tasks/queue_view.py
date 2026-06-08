@@ -169,6 +169,21 @@ def _target_from_payload(payload: Any, *, fallback: dict[str, Any] | None = None
     return {key: value for key, value in target.items() if value not in (None, "")}
 
 
+def _search_session_from_payload(payload: Any) -> dict[str, Any]:
+    data = payload if isinstance(payload, dict) else {}
+    session_id = _text(data.get("search_session_id"))
+    item_id = _text(data.get("search_session_item_id"))
+    if not session_id and not item_id:
+        return {}
+    session = {
+        "session_id": session_id or None,
+        "item_id": item_id or None,
+        "item_status": _text(data.get("search_session_item_status")) or None,
+        "stage": _text(data.get("search_session_stage")) or None,
+    }
+    return {key: value for key, value in session.items() if value not in (None, "")}
+
+
 def _make_item(
     *,
     source: str,
@@ -200,6 +215,9 @@ def _make_item(
     }
     if extra:
         item.update(extra)
+    search_session = _search_session_from_payload(payload)
+    if search_session:
+        item["search_session"] = search_session
     return _jsonable(item)
 
 

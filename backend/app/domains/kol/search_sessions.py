@@ -377,7 +377,9 @@ def attach_url_result(session_id: int, result: dict[str, Any]) -> dict[str, Any]
         "item_status": item.get("status"),
         "viltrox_fit_score_untouched": result.get("viltrox_fit_score_untouched"),
     }
-    return record_items(int(session_id), [item], status=session_status, summary=summary)
+    recorded = record_items(int(session_id), [item], status=session_status, summary=summary)
+    recorded["jobs_linked"] = _link_job_payloads(int(session_id), recorded.get("items") or [])
+    return recorded
 
 
 def attach_recall_result(session_id: int, result: dict[str, Any]) -> dict[str, Any]:
@@ -489,6 +491,38 @@ def _url_result_item(session_id: int, result: dict[str, Any]) -> dict[str, Any]:
             "viltrox_fit_score_untouched": result.get("viltrox_fit_score_untouched") or video_flow.get("viltrox_fit_score_untouched") or profile_flow.get("viltrox_fit_score_untouched"),
         },
     }
+
+
+def _link_job_payloads(session_id: int, items: list[dict[str, Any]]) -> int:
+    conn = get_conn()
+    linked = 0
+    for item in items:
+        job_id = _int_or_none(item.get("job_id"))
+        item_id = _int_or_none(item.get("id"))
+        if not job_id:
+            continue
+        row = conn.execute(
+            "SELECT id, payload FROM apify_jobs WHERE id=?",
+            (int(job_id),),
+        ).fetchone()
+        if not row:
+            continue
+        payload = _loads(dict(row).get("payload"), {})
+        if not isinstance(payload, dict):
+            payload = {}
+        payload["search_session_id"] = int(session_id)
+        if item_id:
+            payload["search_session_item_id"] = int(item_id)
+        payload["search_session_item_status"] = item.get("status")
+        payload["search_session_stage"] = item.get("stage")
+        conn.execute(
+            "UPDATE apify_jobs SET payload=?::jsonb WHERE id=?",
+            (_json_dumps(payload), int(job_id)),
+        )
+        linked += 1
+    if linked:
+        conn.commit()
+    return linked
 
 
 def _compact_flow(flow: dict[str, Any]) -> dict[str, Any]:
