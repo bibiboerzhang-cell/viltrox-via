@@ -3,7 +3,7 @@ import { BadgeCheck, Database, Link2, Loader2, Search, Sparkles, UserPlus, Video
 
 import {
   deepCrawlKolUrl,
-  recallKolProfiles,
+  smartKolSearch,
   type VkpiKolRecallItem,
   type VkpiKolRecallResponse,
   type VkpiKolUrlDeepCrawlResponse,
@@ -40,11 +40,19 @@ function detectMode(input: string): Mode {
   const value = cleanText(input);
   if (!value) return "idle";
   try {
-    const parsed = new URL(value);
-    return parsed.protocol === "http:" || parsed.protocol === "https:" ? "url" : "text";
+    const parsed = new URL(value.includes("://") ? value : `https://${value}`);
+    const supportedProtocol = parsed.protocol === "http:" || parsed.protocol === "https:";
+    return supportedProtocol && parsed.hostname.includes(".") ? "url" : "text";
   } catch {
     return "text";
   }
+}
+
+function sessionIdFrom(value: unknown): number | undefined {
+  const record = asRecord(value);
+  const raw = record.session_id ?? record.id;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 function actionDescription(value: unknown): string {
@@ -233,21 +241,22 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
     setUrlResult(null);
     setRecallResult(null);
     try {
-      if (nextMode === "url") {
-        const response = await deepCrawlKolUrl(apiToken, query, false, { maxPosts: 3, mode: "auto" });
-        setUrlResult(response);
+      const response = await smartKolSearch(apiToken, query, {
+        mode: "auto",
+        maxPosts: 3,
+        candidateLimit: 50,
+        limit: 10,
+        creatorQuota: 7,
+        reviewerQuota: 3,
+        createSession: true,
+      });
+      const responseMode = cleanText(response.mode);
+      if (responseMode === "url" || cleanText(response.query_type).startsWith("url_")) {
+        setMode("url");
+        setUrlResult(response.result as VkpiKolUrlDeepCrawlResponse);
       } else {
-        const response = await recallKolProfiles(apiToken, {
-          queryText: query,
-          candidateLimit: 50,
-          limit: 10,
-          creatorQuota: 7,
-          reviewerQuota: 3,
-          ratioPolicy: "soft",
-          mixedPolicy: "dominant",
-          dedupe: true,
-        });
-        setRecallResult(response);
+        setMode("text");
+        setRecallResult(response.result as VkpiKolRecallResponse);
       }
       setState("ready");
     } catch (err) {
@@ -263,9 +272,13 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
     setError("");
     try {
       const executeMode = urlResult.url_type === "video" ? "video_deep" : "auto";
+      const sessionId = sessionIdFrom(urlResult.search_session);
       const response = await deepCrawlKolUrl(apiToken, query, true, {
         maxPosts: typeof profileFlow.max_posts === "number" ? profileFlow.max_posts : 3,
         mode: executeMode,
+        sessionId,
+        createSession: !sessionId,
+        source: "smart_kol_input",
         timeoutMs: 300000,
       });
       setUrlResult(response);

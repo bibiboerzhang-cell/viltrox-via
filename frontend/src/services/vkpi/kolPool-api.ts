@@ -314,6 +314,15 @@ export interface VkpiKolRecallResponse {
   };
 }
 
+export interface VkpiKolSearchSessionRef {
+  id?: number;
+  session_id?: number;
+  items_written?: number;
+  jobs_linked?: number;
+  items?: Row[];
+  status?: string;
+}
+
 export interface VkpiKolUrlDeepCrawlResponse {
   method?: string;
   dry_run?: boolean;
@@ -378,6 +387,20 @@ export interface VkpiKolUrlDeepCrawlResponse {
   video_metadata?: Row | null;
   creator_identity?: Row | null;
   safety?: Row;
+  search_session?: VkpiKolSearchSessionRef | Row;
+}
+
+export interface VkpiKolSmartSearchResponse {
+  status: "ready" | string;
+  mode: "url" | "text" | string;
+  query_type?: "url_video" | "url_profile" | "text_recall" | "unknown" | string;
+  branch?: "kol_url_deep_crawl" | "kol_recall" | string;
+  result?: VkpiKolUrlDeepCrawlResponse | VkpiKolRecallResponse | Row;
+  search_session?: VkpiKolSearchSessionRef | Row;
+  provider_calls?: boolean;
+  provider_note?: string;
+  new_discovery_status?: string;
+  viltrox_fit_score_untouched?: boolean;
 }
 
 export async function listKolPool(
@@ -423,7 +446,7 @@ export async function deepCrawlKolUrl(
   token: string,
   url: string,
   execute = false,
-  params: { maxPosts?: number; mode?: string; timeoutMs?: number } = {},
+  params: { maxPosts?: number; mode?: string; timeoutMs?: number; sessionId?: number; createSession?: boolean; source?: string } = {},
 ): Promise<VkpiKolUrlDeepCrawlResponse> {
   const body: Row = {
     url,
@@ -431,6 +454,9 @@ export async function deepCrawlKolUrl(
   };
   if (typeof params.maxPosts === "number") body.max_posts = params.maxPosts;
   if (params.mode) body.mode = params.mode;
+  if (typeof params.sessionId === "number") body.session_id = params.sessionId;
+  if (typeof params.createSession === "boolean") body.create_session = params.createSession;
+  if (params.source) body.source = params.source;
   const timeoutMs = params.timeoutMs ?? (execute ? 300000 : undefined);
   return apiFetch<VkpiKolUrlDeepCrawlResponse>(
     "/api/admin/vkpi/kol-url-deep-crawl",
@@ -438,6 +464,47 @@ export async function deepCrawlKolUrl(
       method: "POST",
       body: jsonBody(body),
       ...(timeoutMs ? { timeoutMs } : {}),
+    },
+    token,
+  );
+}
+
+export async function smartKolSearch(
+  token: string,
+  input: string,
+  params: {
+    mode?: "auto" | "url" | "text" | "recall" | string;
+    execute?: boolean;
+    maxPosts?: number;
+    candidateLimit?: number;
+    limit?: number;
+    creatorQuota?: number;
+    reviewerQuota?: number;
+    productSku?: string;
+    sessionId?: number;
+    createSession?: boolean;
+    timeoutMs?: number;
+  } = {},
+): Promise<VkpiKolSmartSearchResponse> {
+  const body: Row = {
+    input,
+    mode: params.mode || "auto",
+    create_session: params.createSession ?? true,
+  };
+  if (params.execute) body.execute = true;
+  if (typeof params.maxPosts === "number") body.max_posts = params.maxPosts;
+  if (typeof params.candidateLimit === "number") body.candidate_limit = params.candidateLimit;
+  if (typeof params.limit === "number") body.limit = params.limit;
+  if (typeof params.creatorQuota === "number") body.creator_quota = params.creatorQuota;
+  if (typeof params.reviewerQuota === "number") body.reviewer_quota = params.reviewerQuota;
+  if (params.productSku) body.product_sku = params.productSku;
+  if (typeof params.sessionId === "number") body.session_id = params.sessionId;
+  return apiFetch<VkpiKolSmartSearchResponse>(
+    "/api/admin/vkpi/kol-smart-search",
+    {
+      method: "POST",
+      body: jsonBody(body),
+      ...(params.timeoutMs ? { timeoutMs: params.timeoutMs } : {}),
     },
     token,
   );
