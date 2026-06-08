@@ -19,6 +19,7 @@ R59: 独立 KOL Pool 路由 + 防火墙 + 审计装饰器集成示范.
 from __future__ import annotations
 
 import os
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 
@@ -61,6 +62,78 @@ def _on_demand_refresh_enabled() -> bool:
         if value in {"1", "true", "yes", "on"}:
             return True
     return False
+
+
+def _int_or_none(value) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _looks_like_url(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    candidate = text if "://" in text else f"https://{text}"
+    parsed = urlparse(candidate)
+    return bool(parsed.netloc and "." in parsed.netloc)
+
+
+def _smart_query_type(*, branch: str, result: dict | None = None) -> str:
+    if branch == "url":
+        url_type = str((result or {}).get("url_type") or "").strip()
+        if url_type == "video":
+            return "url_video"
+        if url_type == "profile":
+            return "url_profile"
+        return "unknown"
+    if branch == "recall":
+        return "text_recall"
+    return "unknown"
+
+
+def _attach_smart_url_session(
+    *,
+    body: dict,
+    result: dict,
+    query_text: str,
+    staff: dict,
+) -> dict:
+    session = kol_search_sessions.ensure_session_for_result(
+        session_id=_int_or_none(body.get("session_id")),
+        create=bool(body.get("create_session", True)),
+        query_text=query_text,
+        query_type=_smart_query_type(branch="url", result=result),
+        source=str(body.get("source") or "kol_smart_search"),
+        input_payload={key: value for key, value in body.items() if key != "api_token"},
+        staff=staff,
+    )
+    if session:
+        result["search_session"] = kol_search_sessions.attach_url_result(int(session["id"]), result)
+    return result
+
+
+def _attach_smart_recall_session(
+    *,
+    body: dict,
+    result: dict,
+    query_text: str,
+    staff: dict,
+) -> dict:
+    session = kol_search_sessions.ensure_session_for_result(
+        session_id=_int_or_none(body.get("session_id")),
+        create=bool(body.get("create_session", True)),
+        query_text=query_text,
+        query_type="text_recall",
+        source=str(body.get("source") or "kol_smart_search"),
+        input_payload={key: value for key, value in body.items() if key != "api_token"},
+        staff=staff,
+    )
+    if session:
+        result["search_session"] = kol_search_sessions.attach_recall_result(int(session["id"]), result)
+    return result
 
 
 async def _maybe_enqueue_refresh(
@@ -254,6 +327,83 @@ def get_kol_search_session(
     del staff
     try:
         return kol_search_sessions.get_session(int(session_id))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/kol-smart-search")
+def smart_kol_search(
+    body: dict = Body(...),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """Unified smart input endpoint.
+
+    Auto-dispatches pasted URLs to the URL workflow and plain text to profile
+    recall. It records orchestration state in search sessions only and never
+    touches vkpi_kol_pool scoring fields.
+    """
+    query_text = str(body.get("input") or body.get("query") or body.get("query_text") or body.get("url") or "").strip()
+    if not query_text:
+        raise HTTPException(status_code=400, detail="input is required")
+    mode = str(body.get("mode") or "auto").strip().lower()
+    if mode not in {"auto", "url", "recall", "text"}:
+        raise HTTPException(status_code=400, detail="mode must be auto, url, recall, or text")
+    branch = "url" if mode == "url" or (mode == "auto" and _looks_like_url(query_text)) else "recall"
+    if mode == "text":
+        branch = "recall"
+
+    try:
+        if branch == "url":
+            crawl_body = {
+                **body,
+                "url": query_text,
+                "create_session": False,
+            }
+            result = kol_url_deep_crawl.dry_run_url_deep_crawl(crawl_body)
+            result = _attach_smart_url_session(body=body, result=result, query_text=query_text, staff=staff)
+            return {
+                "status": "ready",
+                "mode": "url",
+                "query_type": _smart_query_type(branch="url", result=result),
+                "branch": "kol_url_deep_crawl",
+                "result": result,
+                "search_session": result.get("search_session"),
+                "provider_calls": bool(result.get("provider_calls") or result.get("llm_calls_performed")),
+                "viltrox_fit_score_untouched": result.get("viltrox_fit_score_untouched"),
+            }
+
+        recall_query = str(body.get("query_text") or query_text).strip()
+        result = kol_profile_recall.recall_kol_profiles(
+            query_text=recall_query,
+            product_sku=str(body.get("product_sku") or ""),
+            candidate_limit=int(body.get("candidate_limit") or 100),
+            limit=int(body.get("limit") or 30),
+            creator_quota=int(body.get("creator_quota") or 15),
+            reviewer_quota=int(body.get("reviewer_quota") or 15),
+            ratio_policy=str(body.get("ratio_policy") or "soft"),
+            mixed_policy=str(body.get("mixed_policy") or "dominant"),
+            dedupe=bool(body.get("dedupe", True)),
+            vector_weight=float(body.get("vector_weight") if body.get("vector_weight") is not None else 0.7),
+            type_weight=float(body.get("type_weight") if body.get("type_weight") is not None else 0.3),
+            type_boost_enabled=bool(body.get("type_boost_enabled", True)),
+        )
+        result = _attach_smart_recall_session(body=body, result=result, query_text=recall_query, staff=staff)
+        return {
+            "status": "ready",
+            "mode": "text",
+            "query_type": "text_recall",
+            "branch": "kol_recall",
+            "result": result,
+            "search_session": result.get("search_session"),
+            "provider_calls": True,
+            "provider_note": "text recall requires OpenAI embedding; cost is recorded by recall diagnostics",
+            "viltrox_fit_score_untouched": True,
+            "new_discovery_status": "not_connected_stage1_local_pool_recall_only",
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
