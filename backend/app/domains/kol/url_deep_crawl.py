@@ -31,6 +31,7 @@ from app.domains.kol.pool_common import (
     _thumb_url,
 )
 from app.domains.kol.profile_basics import write_kol_profile_basics
+from app.domains.projects.workflow_evidence import _fetch_video_metadata
 from app.platform.industry_crawlers.instagram_crawler import InstagramCrawler
 from app.platform.industry_crawlers.tiktok_crawler import TikTokCrawler
 from app.platform.industry_crawlers.youtube_crawler import YouTubeCrawler
@@ -117,10 +118,15 @@ def dry_run_url_deep_crawl(body: dict[str, Any]) -> dict[str, Any]:
 
     classified = classify_url(url)
     matches = _match_pool(classified) if classified.platform in SUPPORTED_PLATFORMS else []
+    video_flow: dict[str, Any] | None = None
+    if classified.url_type == "video" and classified.platform in SUPPORTED_PLATFORMS:
+        video_flow, matches = _video_flow_plan(classified, matches)
+
     matched_id = matches[0]["kol_pool_id"] if len(matches) == 1 else None
     profile_flow = _profile_flow_plan(classified, matches, body, execute=execute)
     safety = {
         "crawl_performed": False,
+        "provider_calls_performed": bool(video_flow and video_flow.get("provider_calls_performed")),
         "llm_calls_performed": False,
         "worker_touched": False,
         "viltrox_fit_touched": False,
@@ -137,7 +143,7 @@ def dry_run_url_deep_crawl(body: dict[str, Any]) -> dict[str, Any]:
         "dry_run": not execute,
         "execute": execute,
         "writes_performed": safety["business_tables_written"],
-        "provider_calls_performed": safety["crawl_performed"],
+        "provider_calls_performed": safety["crawl_performed"] or safety["provider_calls_performed"],
         "url": {
             "input": classified.original_url,
             "normalized": classified.normalized_url,
@@ -152,6 +158,9 @@ def dry_run_url_deep_crawl(body: dict[str, Any]) -> dict[str, Any]:
         "candidates": matches,
         "next_action": _next_action(classified, matches),
         "profile_flow": profile_flow,
+        "video_flow": video_flow,
+        "video_metadata": video_flow.get("video_metadata") if video_flow else None,
+        "creator_identity": video_flow.get("creator_identity") if video_flow else None,
         "safety": safety,
     }
 
@@ -280,6 +289,189 @@ def _match_pool(classified: ClassifiedUrl) -> list[dict[str, Any]]:
     ][:10]
 
 
+def _video_flow_plan(
+    classified: ClassifiedUrl,
+    initial_matches: list[dict[str, Any]],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    provider_source = ""
+    metadata: dict[str, Any] = {}
+    creator_identity = _creator_identity_from_classified(classified)
+    matches = initial_matches
+    error = ""
+
+    try:
+        metadata = _fetch_video_metadata(classified.normalized_url)
+        provider_source = str(metadata.get("scrape_source") or "").strip()
+        metadata_identity = _creator_identity_from_video_metadata(classified, metadata)
+        if metadata_identity:
+            creator_identity = metadata_identity
+        creator_classified = _classified_from_creator_identity(classified, creator_identity)
+        if creator_classified:
+            matches = _match_pool(creator_classified)
+    except Exception as exc:
+        error = str(exc)[:500]
+
+    resolved = _has_matchable_creator_identity(creator_identity)
+    status = "ready_to_execute" if resolved else "creator_unresolved"
+    if error and not metadata:
+        status = "metadata_failed"
+
+    return (
+        {
+            "status": status,
+            "operation": "video_creator_resolve",
+            "provider_calls_performed": True,
+            "provider_source": provider_source or None,
+            "creator_resolution_status": "resolved" if resolved else "unresolved",
+            "creator_identity": creator_identity or None,
+            "video_metadata": _public_video_metadata(metadata) if metadata else None,
+            "metadata_error": error or None,
+            "would_write": False,
+            "would_enqueue_worker": False,
+            "business_tables_written": False,
+            "llm_calls_performed": False,
+            "viltrox_fit_touched": False,
+        },
+        matches,
+    )
+
+
+def _creator_identity_from_classified(classified: ClassifiedUrl) -> dict[str, Any]:
+    if not classified.platform:
+        return {}
+    handle = _normalise_handle(classified.platform, classified.handle)
+    channel_id = _channel_id_from_handle(classified.platform, classified.channel_id or handle)
+    if channel_id:
+        handle = ""
+    if not handle and not channel_id:
+        return {}
+    return {
+        "platform": classified.platform,
+        "handle": handle,
+        "channel_id": channel_id or "",
+        "display_name": "",
+        "profile_url": _profile_url_for_creator(classified.platform, handle, channel_id),
+        "avatar_url": None,
+        "followers": None,
+        "bio": None,
+        "source": "url_pattern",
+    }
+
+
+def _creator_identity_from_video_metadata(classified: ClassifiedUrl, metadata: dict[str, Any]) -> dict[str, Any]:
+    platform = _normalise_platform(metadata.get("platform")) or classified.platform
+    if platform not in SUPPORTED_PLATFORMS:
+        return {}
+
+    raw_channel_id = _metadata_text(metadata.get("channel_id"))
+    channel_id = raw_channel_id if platform == "youtube" and raw_channel_id.startswith("UC") else ""
+    display_name = _metadata_text(metadata.get("channel_name"))
+    handle = ""
+
+    if platform in {"instagram", "tiktok"}:
+        handle = _normalise_handle(platform, display_name or classified.handle)
+    elif platform == "youtube" and not channel_id:
+        handle = _normalise_handle(platform, classified.handle)
+
+    profile_url = _profile_url_for_creator(platform, handle, channel_id)
+    return {
+        "platform": platform,
+        "handle": handle,
+        "channel_id": channel_id or raw_channel_id,
+        "display_name": display_name,
+        "profile_url": profile_url,
+        "avatar_url": None,
+        "followers": None,
+        "bio": None,
+        "source": _metadata_text(metadata.get("scrape_source")) or "video_metadata",
+    }
+
+
+def _classified_from_creator_identity(
+    original: ClassifiedUrl,
+    identity: dict[str, Any],
+) -> ClassifiedUrl | None:
+    platform = _normalise_platform(identity.get("platform"))
+    if platform not in SUPPORTED_PLATFORMS:
+        return None
+    channel_id = _metadata_text(identity.get("channel_id"))
+    handle = _normalise_handle(platform, identity.get("handle"))
+    if platform == "youtube" and channel_id.startswith("UC"):
+        handle = ""
+    else:
+        channel_id = ""
+    if not handle and not channel_id:
+        return None
+    profile_url = _metadata_text(identity.get("profile_url")) or _profile_url_for_creator(platform, handle, channel_id)
+    return ClassifiedUrl(
+        original.original_url,
+        profile_url or original.normalized_url,
+        "profile",
+        platform,
+        handle,
+        channel_id,
+        "",
+        "video_metadata_creator",
+    )
+
+
+def _has_matchable_creator_identity(identity: dict[str, Any]) -> bool:
+    platform = _normalise_platform(identity.get("platform"))
+    if platform == "youtube":
+        return bool(_metadata_text(identity.get("channel_id")).startswith("UC") or _metadata_text(identity.get("handle")))
+    if platform in {"instagram", "tiktok"}:
+        return bool(_metadata_text(identity.get("handle")))
+    return False
+
+
+def _profile_url_for_creator(platform: str, handle: str, channel_id: str) -> str:
+    if platform == "youtube":
+        if channel_id:
+            return f"https://www.youtube.com/channel/{channel_id}"
+        if handle:
+            return f"https://www.youtube.com/@{handle.lstrip('@')}"
+    if platform == "instagram" and handle:
+        return f"https://www.instagram.com/{handle.lstrip('@')}/"
+    if platform == "tiktok" and handle:
+        return f"https://www.tiktok.com/@{handle.lstrip('@')}"
+    return ""
+
+
+def _public_video_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key in (
+        "platform",
+        "content_url",
+        "title",
+        "description",
+        "view_count",
+        "like_count",
+        "comment_count",
+        "share_count",
+        "publish_date",
+        "posted_at",
+        "duration_seconds",
+        "thumbnail_url",
+        "channel_id",
+        "channel_name",
+        "scrape_source",
+        "scrape_status",
+        "scrape_error",
+        "apify_run_id",
+    ):
+        value = metadata.get(key)
+        if value in (None, ""):
+            continue
+        if key == "description":
+            value = str(value)[:1000]
+        result[key] = value
+    return result
+
+
+def _metadata_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
 def _profile_flow_plan(
     classified: ClassifiedUrl,
     matches: list[dict[str, Any]],
@@ -289,8 +481,8 @@ def _profile_flow_plan(
 ) -> dict[str, Any]:
     if classified.url_type == "video":
         return {
-            "status": "not_connected",
-            "message": "video URL branch is not wired in this knife; it will be handled by the next video flow.",
+            "status": "dry_run_only" if not execute else "execute_not_connected",
+            "message": "video URL creator resolver is read-only in this knife; execute/write/enqueue will be handled by later knives.",
             "crawl_performed": False,
             "business_tables_written": False,
         }
