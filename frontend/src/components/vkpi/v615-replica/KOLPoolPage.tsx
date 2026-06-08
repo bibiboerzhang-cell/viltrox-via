@@ -201,27 +201,29 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
           myListFilter, setMyListFilter, myListCount: myList.size,
         }),
         (search || kindFilter || myListFilter) && e(SearchProgressBar, { items: filteredBase, searchActive: !!search }),
-        e("div", { className: "flex items-center justify-between mb-3" },
-          e("div", { className: "text-[11px] text-slate-400 flex items-center gap-2 flex-wrap" },
-            e("span", null,
-              "显示 ", e("span", { className: "text-white font-medium" }, items.length),
-              " / " + poolItems.length + " 个 KOL"
+        e("div", { className: "mb-3 flex flex-col gap-2 rounded-lg border border-white/[0.055] bg-white/[0.015] px-3 py-2 lg:flex-row lg:items-center lg:justify-between" },
+          e("div", { className: "flex flex-wrap items-center gap-2 text-[10.5px] text-slate-500" },
+            e("span", { className: "inline-flex items-center gap-1.5 text-slate-300" },
+              e(Search, { size: 10, className: "text-purple-300" }),
+              e("span", null, "结果"),
+              e("span", { className: "text-white font-medium tabular-nums" }, items.length),
+              e("span", { className: "text-slate-600" }, "/" + poolItems.length)
             ),
-            e("span", { className: "text-slate-600" }, "·"),
-            e("span", { className: "text-slate-500" },
-              "模式 ", e("span", { className: "text-purple-300" }, searchMode === "balanced" ? "平衡 (15+15)" : searchMode === "precision" ? "精准 (20+10)" : "探索 (10+20)")
+            e("span", { className: "rounded border border-white/[0.06] px-1.5 py-0.5 text-[9.5px] text-slate-500" },
+              searchMode === "balanced" ? "平衡 15+15" : searchMode === "precision" ? "精准 20+10" : "探索 10+20"
             ),
-            kindFilter && e("span", { className: "flex items-center gap-1 px-1.5 py-0 rounded text-[10px] border border-purple-500/30 bg-purple-500/[0.08] text-purple-200" },
-              "筛选: " + (kindFilter === "existing" ? "已有库" : kindFilter === "new" ? "新发现" : (CANDIDATE_KIND_INFO[kindFilter]?.short || kindFilter)),
+            kindFilter && e("span", { className: "inline-flex items-center gap-1 rounded border border-purple-500/25 bg-purple-500/[0.07] px-1.5 py-0.5 text-[9.5px] text-purple-200" },
+              kindFilter === "existing" ? "已有库" : kindFilter === "new" ? "新发现" : (CANDIDATE_KIND_INFO[kindFilter]?.short || kindFilter),
               e("button", { onClick: () => setKindFilter(""), className: "hover:text-white" }, e(X, { size: 9 }))
             ),
-            myListFilter && e("span", { className: "flex items-center gap-1 px-1.5 py-0 rounded text-[10px] border border-amber-500/30 bg-amber-500/[0.08] text-amber-300" },
-              e(Star, { size: 9, style: { fill: "#fbbf24" } }), "仅显示我的列表",
+            myListFilter && e("span", { className: "inline-flex items-center gap-1 rounded border border-amber-500/25 bg-amber-500/[0.07] px-1.5 py-0.5 text-[9.5px] text-amber-300" },
+              e(Star, { size: 9, style: { fill: "#fbbf24" } }), "我的列表",
               e("button", { onClick: () => setMyListFilter(false), className: "hover:text-white" }, e(X, { size: 9 }))
-            ),
+            )
           ),
-          e("div", { className: "flex items-center gap-3 text-[10px] text-slate-500" },
-            e("span", { className: "flex items-center gap-1" }, e(Info, { size: 10 }), "点击行查看完整 V6 breakdown"),
+          e("div", { className: "flex items-center gap-1.5 text-[9.5px] text-slate-600" },
+            e(Info, { size: 10 }),
+            e("span", null, "点行打开详情抽屉")
           )
         ),
         e(KOLTable, {
