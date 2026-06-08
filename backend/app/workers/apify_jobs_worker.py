@@ -517,6 +517,27 @@ def _provider_allowed(preflight: dict[str, Any], provider_name: str) -> tuple[bo
     return bool(provider.get("provider_calls_allowed")), reason, float(provider.get("estimated_cost_usd") or 0.0)
 
 
+def _log_budget_preflight_record_only(
+    *,
+    job: dict[str, Any],
+    provider: str,
+    allowed: bool,
+    reason: str,
+    estimated_cost: float,
+    stage: str,
+) -> None:
+    if allowed:
+        return
+    logger.warning(
+        "apify_jobs budget preflight would block, continuing record-only | job_id=%s provider=%s stage=%s reason=%s estimated_cost_usd=%s",
+        job.get("id"),
+        provider,
+        stage,
+        reason,
+        estimated_cost,
+    )
+
+
 def _provider_budget_preflight(job: dict[str, Any], payload: dict[str, Any], provider: str) -> dict[str, Any]:
     target_type, target_id = _target(payload)
     prompt = str(payload.get("prompt") or f"{job.get('job_type') or 'analysis'} {target_type}:{target_id} {provider}")
@@ -1195,14 +1216,14 @@ def _process_gemini_video_final_v1_keyframe_qa(
         "google",
     )
     qa_allowed, qa_reason, qa_estimated_cost = _provider_allowed(qa_preflight, "google")
-    if not qa_allowed:
-        _block_job(
-            conn,
-            int(job["id"]),
-            qa_reason,
-            {"estimated_cost_usd": qa_estimated_cost, "budget_scope": LLM_BUDGET_SCOPE, "provider": "google", "stage": "keyframe_qa"},
-        )
-        return
+    _log_budget_preflight_record_only(
+        job=job,
+        provider="google",
+        allowed=qa_allowed,
+        reason=qa_reason,
+        estimated_cost=qa_estimated_cost,
+        stage="keyframe_qa",
+    )
 
     started = time.monotonic()
     analysis_context = _video_final_context(evidence)
@@ -1456,14 +1477,14 @@ def _process_gemini_video_flash_gpt55_judge(
         raise RuntimeError("gemini_video_v2_flash_gpt55_judge currently supports YouTube only")
     openai_preflight = _provider_budget_preflight(job, payload, "openai")
     openai_allowed, openai_reason, openai_estimated_cost = _provider_allowed(openai_preflight, "openai")
-    if not openai_allowed:
-        _block_job(
-            conn,
-            int(job["id"]),
-            openai_reason,
-            {"estimated_cost_usd": openai_estimated_cost, "budget_scope": LLM_BUDGET_SCOPE, "provider": "openai"},
-        )
-        return
+    _log_budget_preflight_record_only(
+        job=job,
+        provider="openai",
+        allowed=openai_allowed,
+        reason=openai_reason,
+        estimated_cost=openai_estimated_cost,
+        stage="openai_keyframe_judge",
+    )
 
     started = time.monotonic()
     performance = _video_performance_context(evidence)
@@ -1584,14 +1605,14 @@ def _process_gemini_video_flash_claude_judge(
         raise RuntimeError("gemini_video_v2_flash_claude_judge currently supports YouTube only")
     anthropic_preflight = _provider_budget_preflight(job, payload, "anthropic")
     anthropic_allowed, anthropic_reason, anthropic_estimated_cost = _provider_allowed(anthropic_preflight, "anthropic")
-    if not anthropic_allowed:
-        _block_job(
-            conn,
-            int(job["id"]),
-            anthropic_reason,
-            {"estimated_cost_usd": anthropic_estimated_cost, "budget_scope": LLM_BUDGET_SCOPE, "provider": "anthropic"},
-        )
-        return
+    _log_budget_preflight_record_only(
+        job=job,
+        provider="anthropic",
+        allowed=anthropic_allowed,
+        reason=anthropic_reason,
+        estimated_cost=anthropic_estimated_cost,
+        stage="anthropic_keyframe_judge",
+    )
 
     started = time.monotonic()
     performance = _video_performance_context(evidence)
@@ -1931,9 +1952,14 @@ def _process_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> None:
                 return
             preflight = _llm_budget_preflight(job, payload)
             allowed, reason, estimated_cost = _google_allowed(preflight)
-            if not allowed:
-                _block_job(conn, int(job["id"]), reason, {"estimated_cost_usd": estimated_cost, "budget_scope": LLM_BUDGET_SCOPE})
-                return
+            _log_budget_preflight_record_only(
+                job=job,
+                provider="google",
+                allowed=allowed,
+                reason=reason,
+                estimated_cost=estimated_cost,
+                stage=derive_method,
+            )
             if derive_method in GEMINI_VIDEO_DERIVE_METHODS:
                 _process_gemini_video(conn, job, payload, estimated_cost)
                 return

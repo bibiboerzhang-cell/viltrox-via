@@ -380,6 +380,26 @@ def enqueue_pool_item_video_analysis(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@router.post("/kol-pool/enqueue-video-analysis-batch")
+def enqueue_pool_video_analysis_batch(
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """Queue multiple final_v1 video analysis jobs; independent from V6 Fit."""
+    raw_items = body.get("items")
+    if not isinstance(raw_items, list) or not raw_items:
+        raise HTTPException(status_code=400, detail="items required")
+    try:
+        return kol_video_analysis_enqueue.enqueue_final_v1_video_analysis_batch(
+            items=raw_items,
+            staff=staff,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @router.get("/kol-pool/{kol_pool_id}/main-candidates")
 def get_main_candidates(
     kol_pool_id: int,

@@ -1,4 +1,4 @@
-"""Single-video final_v1 enqueue helpers for KOL Pool.
+"""final_v1 enqueue helpers for KOL Pool.
 
 This module only writes apify_jobs. It never updates KOL Pool scoring fields.
 """
@@ -130,17 +130,23 @@ def _active_job(conn: Any, *, evidence_id: int) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
-def enqueue_final_v1_video_analysis(
+def _enqueue_final_v1_video_analysis(
+    conn: Any,
     *,
     kol_pool_id: int,
     evidence_id: int,
     staff: dict[str, Any] | None = None,
+    source: str = "kol_pool_detail_on_demand",
+    batch: str = "on_demand",
+    commit: bool = True,
 ) -> dict[str, Any]:
-    """Enqueue one final_v1 video analysis job after ownership, duplicate, and budget checks."""
+    """Enqueue one final_v1 job after ownership and duplicate checks.
+
+    Budget preflight is retained as telemetry only; it must not block user-triggered analysis.
+    """
 
     kol_pool_id = int(kol_pool_id)
     evidence_id = int(evidence_id)
-    conn = get_conn()
     evidence = _load_owned_evidence(conn, kol_pool_id=kol_pool_id, evidence_id=evidence_id)
     if not evidence:
         raise LookupError("video evidence not found for this KOL")
@@ -190,16 +196,6 @@ def enqueue_final_v1_video_analysis(
         cost_tag=LLM_BUDGET_SCOPE,
     )
     budget = _google_budget(preflight)
-    if not budget["allowed"]:
-        return {
-            "status": "budget_denied",
-            "kol_pool_id": kol_pool_id,
-            "evidence_id": evidence_id,
-            "derive_method": FINAL_V1_DERIVE_METHOD,
-            "budget": budget,
-            "provider_calls": False,
-            "write_db": False,
-        }
 
     before_fit = _fit_snapshot(conn, kol_pool_id)
     triggered_by_user_id = _triggered_user_id(staff)
@@ -210,8 +206,8 @@ def enqueue_final_v1_video_analysis(
         "platform": platform,
         "platform_by_host": platform,
         "kol_pool_id": kol_pool_id,
-        "source": "kol_pool_detail_on_demand",
-        "batch": "on_demand",
+        "source": source,
+        "batch": batch,
         "triggered_by_user_id": triggered_by_user_id,
         "prompt": prompt,
         "source_url": evidence.get("content_url"),
@@ -231,7 +227,8 @@ def enqueue_final_v1_video_analysis(
     if changed_ids:
         conn.rollback()
         raise RuntimeError(f"viltrox_fit_score_changed_ids={changed_ids}; rolled back")
-    conn.commit()
+    if commit:
+        conn.commit()
     return {
         "status": "queued",
         "kol_pool_id": kol_pool_id,
@@ -239,6 +236,7 @@ def enqueue_final_v1_video_analysis(
         "derive_method": FINAL_V1_DERIVE_METHOD,
         "job": dict(row) if row else {},
         "budget": {key: value for key, value in budget.items() if key != "preflight"},
+        "budget_gate": "record_only",
         "evidence": {
             "platform": platform,
             "title": evidence.get("title"),
@@ -250,4 +248,84 @@ def enqueue_final_v1_video_analysis(
         "provider_calls": False,
         "write_db": True,
         "writes": ["apify_jobs"],
+    }
+
+
+def enqueue_final_v1_video_analysis(
+    *,
+    kol_pool_id: int,
+    evidence_id: int,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    conn = get_conn()
+    return _enqueue_final_v1_video_analysis(
+        conn,
+        kol_pool_id=int(kol_pool_id),
+        evidence_id=int(evidence_id),
+        staff=staff,
+    )
+
+
+def enqueue_final_v1_video_analysis_batch(
+    *,
+    items: list[dict[str, Any]],
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Enqueue multiple final_v1 jobs, one evidence per item, without touching V6 Fit."""
+
+    normalized: list[dict[str, int]] = []
+    for item in items or []:
+        kol_pool_id = _int_or_none((item or {}).get("kol_pool_id"))
+        evidence_id = _int_or_none((item or {}).get("evidence_id"))
+        if not kol_pool_id or not evidence_id:
+            normalized.append({"kol_pool_id": int(kol_pool_id or 0), "evidence_id": int(evidence_id or 0)})
+            continue
+        normalized.append({"kol_pool_id": kol_pool_id, "evidence_id": evidence_id})
+    if not normalized:
+        raise ValueError("items required")
+
+    conn = get_conn()
+    results: list[dict[str, Any]] = []
+    queued = 0
+    skipped = 0
+    errors = 0
+    for item in normalized:
+        kol_pool_id = item.get("kol_pool_id")
+        evidence_id = item.get("evidence_id")
+        if not kol_pool_id or not evidence_id:
+            errors += 1
+            results.append({"status": "invalid_item", "kol_pool_id": kol_pool_id, "evidence_id": evidence_id})
+            continue
+        try:
+            result = _enqueue_final_v1_video_analysis(
+                conn,
+                kol_pool_id=kol_pool_id,
+                evidence_id=evidence_id,
+                staff=staff,
+                source="kol_pool_detail_batch_on_demand",
+                batch="on_demand_batch",
+                commit=True,
+            )
+            results.append(result)
+            if result.get("status") == "queued":
+                queued += 1
+            else:
+                skipped += 1
+        except LookupError as exc:
+            errors += 1
+            results.append({"status": "not_found", "kol_pool_id": kol_pool_id, "evidence_id": evidence_id, "reason": str(exc)})
+        except Exception as exc:
+            errors += 1
+            results.append({"status": "error", "kol_pool_id": kol_pool_id, "evidence_id": evidence_id, "reason": str(exc)})
+    return {
+        "status": "completed",
+        "derive_method": FINAL_V1_DERIVE_METHOD,
+        "requested": len(normalized),
+        "queued": queued,
+        "skipped": skipped,
+        "errors": errors,
+        "budget_gate": "record_only",
+        "items": results,
+        "write_db": queued > 0,
+        "writes": ["apify_jobs"] if queued else [],
     }

@@ -468,8 +468,8 @@ def invoke(
 ) -> dict[str, Any]:
     """Invoke an LLM with safe fallback and ledger recording.
 
-    External calls are blocked by default because LLM_MONTHLY_BUDGET_USD defaults to 0.
-    Pass skip_budget_check=True only from an explicit live test or a budget-gated caller.
+    Budget checks are telemetry-only: they are recorded with the call but no longer
+    prevent an explicitly triggered provider call.
     """
     safe_prompt = str(prompt or "")
     if not safe_prompt.strip():
@@ -489,23 +489,15 @@ def invoke(
         return result
 
     cost_scope = _cost_scope_for_purpose(purpose, cost_tag)
+    budget_warnings: list[dict[str, Any]] = []
     if cost_scope:
         try:
             if not budget_guard.check_budget(cost_scope, 0, require_configured=True):
-                result = _rule_fallback(safe_prompt, purpose=purpose, reason="ai_budget_hard_stop")
-                record_call(
-                    provider="rule_v0",
-                    model="rule_v0",
-                    purpose=purpose,
-                    prompt=safe_prompt,
-                    status="ai_budget_hard_stop",
-                    fallback_used=True,
-                    cost_tag=cost_scope,
-                    triggered_by=triggered_by,
-                    metadata={**(metadata or {}), "cost_tag": cost_scope},
-                    staff=staff,
+                budget_warnings.append({"stage": "scope_preflight", "reason": "ai_budget_hard_stop", "cost_tag": cost_scope})
+                logger.warning(
+                    "vkpi.llm_gateway.ai_budget_hard_stop_record_only",
+                    extra={"cost_tag": cost_scope, "purpose": purpose},
                 )
-                return result
         except Exception:
             logger.warning("vkpi.llm_gateway.ai_budget_check_failed", exc_info=True)
 
@@ -514,20 +506,18 @@ def invoke(
         remaining = _budget_remaining_cents()
         if monthly_budget <= 0 or remaining <= 0:
             reason = "budget_disabled" if monthly_budget <= 0 else "budget_exhausted"
-            result = _rule_fallback(safe_prompt, purpose=purpose, reason=reason)
-            record_call(
-                provider="rule_v0",
-                model="rule_v0",
-                purpose=purpose,
-                prompt=safe_prompt,
-                status=reason,
-                fallback_used=True,
-                cost_tag=cost_scope,
-                triggered_by=triggered_by,
-                metadata={**(metadata or {}), "monthly_budget_cents": monthly_budget, "remaining_cents": remaining},
-                staff=staff,
+            budget_warnings.append(
+                {
+                    "stage": "monthly_preflight",
+                    "reason": reason,
+                    "monthly_budget_cents": monthly_budget,
+                    "remaining_cents": remaining,
+                }
             )
-            return result
+            logger.warning(
+                "vkpi.llm_gateway.monthly_budget_record_only",
+                extra={"reason": reason, "purpose": purpose, "remaining_cents": remaining},
+            )
 
     errors: list[dict[str, Any]] = []
     for provider in _ordered_providers(preferred_provider):
@@ -543,19 +533,19 @@ def invoke(
         estimated_cost = _estimated_cost_usd(provider, prompt=safe_prompt, max_output_tokens=max_output_tokens)
         provider_allowed, budget_checks = _budget_allows_provider(provider, cost_scope=cost_scope, estimated_cost_usd=estimated_cost)
         if not provider_allowed:
-            _record_budget_blocked_attempt(
-                provider,
-                purpose=purpose,
-                prompt=safe_prompt,
-                cost_scope=cost_scope,
-                estimated_cost_usd=estimated_cost,
-                budget_checks=budget_checks,
-                triggered_by=triggered_by,
-                metadata=metadata,
-                staff=staff,
+            budget_warnings.append(
+                {
+                    "stage": "provider_preflight",
+                    "provider": provider,
+                    "reason": "budget_blocked",
+                    "estimated_cost_usd": estimated_cost,
+                    "budget_checks": budget_checks,
+                }
             )
-            errors.append({"provider": provider, "status": "budget_blocked", "budget_checks": budget_checks})
-            continue
+            logger.warning(
+                "vkpi.llm_gateway.provider_budget_record_only",
+                extra={"provider": provider, "purpose": purpose, "estimated_cost_usd": estimated_cost},
+            )
         result = caller(safe_prompt, max_output_tokens)
         status = str(result.get("status") or "")
         if status == "success" and str(result.get("text") or "").strip():
@@ -576,6 +566,8 @@ def invoke(
                     "latency_ms": result.get("latency_ms"),
                     "attempt_errors": errors,
                     "budget_checks": budget_checks,
+                    "budget_warnings": budget_warnings,
+                    "budget_gate": "record_only",
                     "estimated_cost_usd": estimated_cost,
                 },
                 staff=staff,
