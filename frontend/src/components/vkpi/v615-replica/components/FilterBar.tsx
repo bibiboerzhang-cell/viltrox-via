@@ -40,7 +40,7 @@ export function FilterBar({ search, setSearch, country, setCountry, audienceType
     { key: "new_discovered",          label: "校验中",    n: kindCounts.newDiscovered,    dotColor: "#cbd5e1" },
   ];
   
-  return e("div", { className: "rounded-xl border border-white/[0.08] bg-white/[0.025] p-3 mb-4 space-y-3" },
+  return e("div", { className: "mb-3 space-y-2 rounded-lg border border-white/[0.065] bg-white/[0.018] p-2.5" },
     // ── 本地搜索行 ──
     e("div", { className: "space-y-2" },
       e("div", { className: "flex items-center gap-2" },
@@ -59,7 +59,7 @@ export function FilterBar({ search, setSearch, country, setCountry, audienceType
             type: "text", value: search, onChange: ev => setSearch(ev.target.value),
             onKeyDown: ev => { if (ev.key === "Enter") applyLocalSearch(); },
             placeholder: "输入关键词、@handle 或 URL,在本地 KOL Pool 内筛选...",
-            className: "w-full rounded-md border border-white/[0.08] bg-white/[0.02] pl-9 pr-11 py-2 text-[12.5px] text-white outline-none placeholder-slate-500 focus:border-purple-500/40"
+            className: "w-full rounded-md border border-white/[0.075] bg-white/[0.018] py-1.5 pl-9 pr-11 text-[12px] text-white outline-none placeholder-slate-500 focus:border-purple-500/40"
           }),
           e("button", {
             onClick: () => applyLocalSearch(),
@@ -72,26 +72,21 @@ export function FilterBar({ search, setSearch, country, setCountry, audienceType
           )
         ),
         // ── 搜索模式选择(老/新比例) ──
-        e("div", { className: "flex items-center rounded-md border border-white/[0.08] bg-white/[0.02] overflow-hidden shrink-0" },
-          modeChips.map(m => e("button", {
-            key: m.key,
-            onClick: () => setSearchMode(m.key),
-            className: "px-2.5 py-2 text-[10px] transition-colors",
-            title: m.hint,
-            style: searchMode === m.key
-              ? { background: m.color, color: "#fff" }
-              : { color: "rgba(148,163,184,0.7)" }
-          },
-            e("div", { className: "flex flex-col items-start leading-none" },
-              e("span", { className: "font-medium" }, m.label),
-              e("span", { className: "text-[8.5px] mt-0.5", style: { color: searchMode === m.key ? "rgba(255,255,255,0.75)" : "rgba(100,116,139,0.7)" } }, m.hint),
-            )
-          ))
+          e("div", { className: "flex shrink-0 items-center overflow-hidden rounded-md border border-white/[0.075] bg-white/[0.018]" },
+            modeChips.map(m => e("button", {
+              key: m.key,
+              onClick: () => setSearchMode(m.key),
+              className: "px-2.5 py-1.5 text-[10px] transition-colors",
+              title: m.hint,
+              style: searchMode === m.key
+                ? { background: m.color, color: "#fff" }
+                : { color: "rgba(148,163,184,0.7)" }
+          }, e("span", { className: "font-medium" }, m.label)))
         ),
         e("button", {
           disabled: true,
           title: "待接入: 需要导入预览 API，不执行批量导入",
-          className: "flex cursor-not-allowed items-center gap-1.5 rounded-md border border-white/[0.08] px-3 py-2 text-[11px] text-slate-500 opacity-70 shrink-0"
+          className: "hidden cursor-not-allowed items-center gap-1.5 rounded-md border border-white/[0.075] px-2.5 py-1.5 text-[10.5px] text-slate-500 opacity-70 shrink-0 xl:flex"
         }, e(Upload, { size: 11 }), "一键导入 · 待接入")
       ),
       e("div", { className: "flex items-center gap-1.5 flex-wrap pl-1" },
@@ -111,7 +106,7 @@ export function FilterBar({ search, setSearch, country, setCountry, audienceType
       )
     ),
     // ── 候选类型 chip 过滤行 ──
-    e("div", { className: "flex items-center gap-1.5 flex-wrap pt-2 border-t border-white/[0.04]" },
+    e("div", { className: "flex flex-wrap items-center gap-1.5 border-t border-white/[0.04] pt-2" },
       e("span", { className: "text-[10px] text-slate-500 uppercase tracking-wider mr-1" }, "候选类型"),
       kindChips.map(c => e("button", {
         key: c.key || "all",
@@ -141,7 +136,7 @@ export function FilterBar({ search, setSearch, country, setCountry, audienceType
         e("span", { className: "tabular-nums text-[9.5px] opacity-80" }, myListCount)
       )
     ),
-    e("div", { className: "flex items-center justify-between gap-2 pt-2 border-t border-white/[0.04]" },
+    e("div", { className: "flex items-center justify-between gap-2 border-t border-white/[0.04] pt-2" },
       e("span", { className: "text-[10px] text-slate-500" },
         advancedActive ? "高级筛选已启用" : "高级筛选未启用"
       ),
