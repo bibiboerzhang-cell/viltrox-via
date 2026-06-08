@@ -318,6 +318,27 @@ def list_kol_search_sessions(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+@router.get("/kol-search-history")
+def list_kol_search_history(
+    limit: int = Query(default=20, ge=1, le=50),
+    status: str = Query(default=""),
+    query_type: str = Query(default=""),
+    item_limit: int = Query(default=5, ge=0, le=10),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """Return compact smart-search history with item previews and status counts."""
+    del staff
+    try:
+        return kol_search_sessions.list_history(
+            limit=limit,
+            status=status,
+            query_type=query_type,
+            item_limit=item_limit,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @router.get("/kol-search-sessions/{session_id}")
 def get_kol_search_session(
     session_id: int,

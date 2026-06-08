@@ -221,6 +221,115 @@ def list_sessions(*, limit: int = 20, status: str = "") -> dict[str, Any]:
     }
 
 
+def list_history(
+    *,
+    limit: int = 20,
+    status: str = "",
+    query_type: str = "",
+    item_limit: int = 5,
+) -> dict[str, Any]:
+    """Return recent search sessions with compact item previews for history UI."""
+    safe_limit = max(1, min(int(limit or 20), 50))
+    safe_item_limit = max(0, min(int(item_limit or 5), 10))
+    normalized_status = _normalize_status(status) if status else ""
+    normalized_query_type = _normalize_query_type(query_type) if query_type else ""
+
+    where: list[str] = []
+    params: list[Any] = []
+    if normalized_status:
+        where.append("status=?")
+        params.append(normalized_status)
+    if normalized_query_type:
+        where.append("query_type=?")
+        params.append(normalized_query_type)
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+
+    conn = get_conn()
+    rows = conn.execute(
+        f"""
+        SELECT *
+        FROM vkpi_kol_search_sessions
+        {where_sql}
+        ORDER BY updated_at DESC, id DESC
+        LIMIT ?
+        """,
+        (*params, safe_limit),
+    ).fetchall()
+    sessions = [_row_to_session(row) for row in rows]
+    if not sessions:
+        return {
+            "status": "ready",
+            "count": 0,
+            "items": [],
+            "filters": {
+                "status": normalized_status,
+                "query_type": normalized_query_type,
+                "limit": safe_limit,
+                "item_limit": safe_item_limit,
+            },
+        }
+
+    session_ids = [int(session["id"]) for session in sessions if _int_or_none(session.get("id"))]
+    placeholders = ", ".join(["?"] * len(session_ids))
+    item_rows = conn.execute(
+        f"""
+        SELECT *
+        FROM vkpi_kol_search_session_items
+        WHERE session_id IN ({placeholders})
+        ORDER BY session_id, rank NULLS LAST, id
+        """,
+        tuple(session_ids),
+    ).fetchall()
+
+    grouped: dict[int, list[dict[str, Any]]] = {int(session_id): [] for session_id in session_ids}
+    for row in item_rows:
+        item = _row_to_item(row)
+        grouped.setdefault(int(item.get("session_id") or 0), []).append(item)
+
+    history_items: list[dict[str, Any]] = []
+    for session in sessions:
+        session_id = int(session["id"])
+        all_items = grouped.get(session_id, [])
+        counts = _item_counts(all_items)
+        preview_items = all_items[:safe_item_limit] if safe_item_limit else []
+        active_items = [
+            item
+            for item in all_items
+            if _text(item.get("status")) in {"queued", "running", "already_queued"}
+        ]
+        result_summary = _dict(session.get("result_summary"))
+        history_items.append(
+            {
+                **session,
+                "item_count": len(all_items),
+                "items_preview": preview_items,
+                "active_items": active_items[:3],
+                "counts": counts,
+                "summary": {
+                    "kind": result_summary.get("kind"),
+                    "platform": result_summary.get("platform"),
+                    "url_type": result_summary.get("url_type"),
+                    "in_pool": result_summary.get("in_pool"),
+                    "items_written": result_summary.get("items_written"),
+                    "matched_kol_pool_id": result_summary.get("matched_kol_pool_id"),
+                    "viltrox_fit_score_untouched": result_summary.get("viltrox_fit_score_untouched"),
+                },
+            }
+        )
+
+    return {
+        "status": "ready",
+        "count": len(history_items),
+        "items": history_items,
+        "filters": {
+            "status": normalized_status,
+            "query_type": normalized_query_type,
+            "limit": safe_limit,
+            "item_limit": safe_item_limit,
+        },
+    }
+
+
 def get_session(session_id: int) -> dict[str, Any]:
     conn = get_conn()
     row = conn.execute(
