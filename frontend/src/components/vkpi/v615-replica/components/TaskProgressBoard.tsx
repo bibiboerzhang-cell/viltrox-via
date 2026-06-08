@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Brain, Clock3, FileText, Search, Zap } from "lucide-react";
-import { getTaskQueue } from "../../../../services/vkpi/tasks-api";
+import { getTaskQueueCompact } from "../../../../services/vkpi/tasks-api";
 
 const e = React.createElement;
 
@@ -58,6 +58,13 @@ function taskTargetText(task) {
 
 function taskLabel(task) {
   return `${task.kind || "任务"} · ${taskTargetText(task) || "未命名"}`;
+}
+
+function lightColor(light) {
+  const tone = String(light?.tone || "").toLowerCase();
+  if (tone === "red") return "#fb7185";
+  if (tone === "amber") return "#FAC775";
+  return "#5DCAA5";
 }
 
 function TaskRow({ task, color, showBar }) {
@@ -122,7 +129,7 @@ export function TaskProgressBoard({ apiToken = "" }) {
     if (!apiToken || (typeof document !== "undefined" && document.visibilityState === "hidden")) return;
     setLoading(true);
     try {
-      const response = await getTaskQueue(apiToken, { limit: 50, recentMinutes: 10, includeLlmCalls: true });
+      const response = await getTaskQueueCompact(apiToken, { limit: 30, recentMinutes: 5 });
       setPayload(response);
       setError("");
     } catch (err) {
@@ -179,6 +186,7 @@ export function TaskProgressBoard({ apiToken = "" }) {
   }, [activeTasks]);
   const activeTotal = Number(payload?.counts?.active_total ?? activeTasks.length) || 0;
   const queueTotal = Number(payload?.counts?.queued ?? queuedTasks.length) || 0;
+  const speedLight = payload?.speed_light || {};
   const lanes = LANES.map((lane) => ({
     ...lane,
     tasks: laneTasks[lane.key] || [],
@@ -195,8 +203,22 @@ export function TaskProgressBoard({ apiToken = "" }) {
         e(Zap, { size: 15, className: "shrink-0 text-[#5DCAA5]" }),
         e("span", { className: "truncate text-[13px] font-medium text-white/90" }, "任务进度")
       ),
-      e("span", { className: "shrink-0 text-[11px] text-white/40 tabular-nums" },
-        loading && !payload ? "连接中" : `${activeTotal} 活跃`
+      e("div", { className: "flex shrink-0 items-center gap-1.5" },
+        e("span", { className: "text-[11px] text-white/40 tabular-nums" },
+          loading && !payload ? "连接中" : `${activeTotal} 活跃`
+        ),
+        e("span", {
+          className: "inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[9.5px] font-medium tabular-nums",
+          style: {
+            borderColor: `${lightColor(speedLight)}55`,
+            color: lightColor(speedLight),
+            background: `${lightColor(speedLight)}14`,
+          },
+          title: speedLight?.policy || "调度速度灯",
+        },
+          e("span", { className: "h-1.5 w-1.5 rounded-full", style: { background: lightColor(speedLight) } }),
+          speedLight?.level || "L1"
+        )
       )
     ),
     error && e("div", { className: "mb-2 rounded border border-amber-300/15 bg-amber-300/[0.05] px-2 py-1 text-[10px] leading-4 text-amber-100/70" },

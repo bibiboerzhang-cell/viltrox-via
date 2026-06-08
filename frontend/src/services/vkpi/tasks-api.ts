@@ -59,7 +59,10 @@ export interface TaskQueueResponse {
   };
   active?: TaskQueueItem[];
   recent?: TaskQueueItem[];
+  speed_light?: Row;
+  polling?: Row;
   diagnostics?: Row;
+  cache?: Row;
 }
 
 export const TERMINAL_STATUSES = [
@@ -146,6 +149,16 @@ export async function getTaskQueue(
   params.set("recent_minutes", String(options.recentMinutes ?? 10));
   params.set("include_llm_calls", options.includeLlmCalls === false ? "false" : "true");
   return apiFetch<TaskQueueResponse>(`/api/admin/vkpi/task-queue?${params.toString()}`, {}, token);
+}
+
+export async function getTaskQueueCompact(
+  token: string,
+  options: { limit?: number; recentMinutes?: number } = {},
+) {
+  const params = new URLSearchParams();
+  params.set("limit", String(options.limit ?? 30));
+  params.set("recent_minutes", String(options.recentMinutes ?? 5));
+  return apiFetch<TaskQueueResponse>(`/api/admin/vkpi/task-queue/compact?${params.toString()}`, {}, token);
 }
 
 export function buildTaskEventStreamUrl(taskId: string) {

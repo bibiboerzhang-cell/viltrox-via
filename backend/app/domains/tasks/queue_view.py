@@ -12,6 +12,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.db.connection import get_conn
+from app.services.cache import cache_get, cache_set
 
 
 ACTIVE_STATUSES = {"queued", "retrying", "processing", "running", "in_progress", "started"}
@@ -432,3 +433,65 @@ def get_task_queue(*, limit: int = 50, recent_minutes: int = 10, include_llm_cal
             "worker_touched": False,
         },
     }
+
+
+def _speed_light(counts: dict[str, Any]) -> dict[str, Any]:
+    active_total = int(counts.get("active_total") or 0)
+    queued = int(counts.get("queued") or 0)
+    running = int(counts.get("running") or 0)
+    if queued <= 10 and active_total <= 20:
+        level = "L1"
+        tone = "green"
+        label = "有序"
+    elif queued <= 50 and active_total <= 80:
+        level = "L2"
+        tone = "amber"
+        label = "拥挤"
+    else:
+        level = "L3"
+        tone = "red"
+        label = "积压"
+    return {
+        "level": level,
+        "tone": tone,
+        "label": label,
+        "queued": queued,
+        "running": running,
+        "active_total": active_total,
+        "policy": "L1<=10 queued and <=20 active; L2<=50 queued and <=80 active; otherwise L3",
+    }
+
+
+def get_task_queue_compact(*, limit: int = 30, recent_minutes: int = 5) -> dict[str, Any]:
+    """Return a cached sidebar projection for high-frequency polling."""
+
+    safe_limit = max(1, min(int(limit or 30), 50))
+    safe_recent_minutes = max(1, min(int(recent_minutes or 5), 30))
+    cache_key = f"vkpi:task_queue:compact:limit:{safe_limit}:recent:{safe_recent_minutes}"
+    cached = cache_get(cache_key)
+    if isinstance(cached, dict):
+        result = dict(cached)
+        result["cache"] = {"hit": True, "ttl_sec": 2}
+        return result
+
+    payload = get_task_queue(
+        limit=safe_limit,
+        recent_minutes=safe_recent_minutes,
+        include_llm_calls=False,
+    )
+    payload["method"] = "task_queue_compact_v1"
+    payload["speed_light"] = _speed_light(payload.get("counts") or {})
+    payload["polling"] = {
+        "recommended_interval_ms": 2500,
+        "cache_ttl_sec": 2,
+        "burst_profile": "100 visible clients share the same short Redis/memory cache window",
+        "include_llm_calls": False,
+    }
+    diagnostics = dict(payload.get("diagnostics") or {})
+    diagnostics["compact"] = True
+    diagnostics["cache_ttl_sec"] = 2
+    diagnostics["burst_safe_for_100_clients"] = True
+    payload["diagnostics"] = diagnostics
+    payload["cache"] = {"hit": False, "ttl_sec": 2}
+    cache_set(cache_key, payload, ttl=2)
+    return payload

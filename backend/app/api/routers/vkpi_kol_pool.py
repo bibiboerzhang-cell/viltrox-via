@@ -523,6 +523,20 @@ def get_vkpi_task_queue(
     )
 
 
+@router.get("/task-queue/compact")
+def get_vkpi_task_queue_compact(
+    limit: int = Query(default=30, ge=1, le=50),
+    recent_minutes: int = Query(default=5, ge=1, le=30),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """Cached read-only sidebar task queue projection for 2.5s polling."""
+    del staff
+    return task_queue_view.get_task_queue_compact(
+        limit=int(limit),
+        recent_minutes=int(recent_minutes),
+    )
+
+
 @router.get("/kol-pool/{kol_pool_id}/intelligence-card")
 def get_pool_item_intelligence_card(
     kol_pool_id: int,
