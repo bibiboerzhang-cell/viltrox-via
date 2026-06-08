@@ -366,6 +366,116 @@ def advance_search_session_items(
     }
 
 
+def enqueue_search_session_advance(
+    *,
+    session_id: int,
+    body: dict[str, Any] | None = None,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Queue ordered session advancement on apify_jobs for provider-safe pacing."""
+
+    body = body or {}
+    session_id = int(session_id)
+    plan = advance_search_session_items(
+        session_id=session_id,
+        body={**body, "execute": False},
+    )
+    if plan.get("selected", 0) <= 0:
+        return {
+            "status": "nothing_to_queue",
+            "session_id": session_id,
+            "plan": plan,
+            "provider_calls_performed": False,
+            "write_db": False,
+            "viltrox_fit_score_changed_ids": [],
+            "viltrox_fit_score_untouched": True,
+        }
+
+    conn = get_conn()
+    existing = conn.execute(
+        """
+        SELECT id, job_type, status, created_at, updated_at
+        FROM apify_jobs
+        WHERE job_type='session_advance'
+          AND status IN ('queued', 'running')
+          AND payload->>'search_session_id'=?
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        """,
+        (str(session_id),),
+    ).fetchone()
+    if existing:
+        return {
+            "status": "already_queued",
+            "session_id": session_id,
+            "job": dict(existing),
+            "plan": plan,
+            "provider_calls_performed": False,
+            "write_db": False,
+            "viltrox_fit_score_changed_ids": [],
+            "viltrox_fit_score_untouched": True,
+        }
+
+    triggered_by_user_id = None
+    staff = staff or {}
+    for key in ("user_id", "id", "staff_id"):
+        parsed = _int(staff.get(key))
+        if parsed > 0:
+            triggered_by_user_id = parsed
+            break
+    payload = {
+        "target_type": "search_session",
+        "target_id": str(session_id),
+        "derive_method": "kol_session_profile_advance",
+        "search_session_id": session_id,
+        "mode": plan.get("mode"),
+        "limit": plan.get("limit"),
+        "max_posts": max(1, min(_int(body.get("max_posts"), 12), 12)),
+        "item_types": body.get("item_types"),
+        "item_ids": body.get("item_ids"),
+        "include_completed": bool(body.get("include_completed")),
+        "representative_video_limit": body.get("representative_video_limit"),
+        "prompt": f"profile crawl advance session:{session_id}",
+        "summary": f"profile crawl advance · session {session_id}",
+        "triggered_by_user_id": triggered_by_user_id,
+        "viltrox_fit_score_untouched": True,
+    }
+    row = conn.execute(
+        """
+        INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
+        VALUES ('session_advance', ?::jsonb, 'queued', NOW(), NOW())
+        RETURNING id, job_type, status, created_at, updated_at
+        """,
+        (search_sessions._json_dumps(payload),),
+    ).fetchone()
+    conn.commit()
+    search_sessions.update_session_result_summary(
+        session_id,
+        status="running",
+        summary_patch={
+            "profile_batch_advance_job": {
+                "status": "queued",
+                "job_id": dict(row).get("id") if row else None,
+                "selected": plan.get("selected"),
+                "eligible": plan.get("eligible"),
+                "overflow": plan.get("overflow"),
+                "viltrox_fit_score_untouched": True,
+            }
+        },
+    )
+    return {
+        "status": "queued",
+        "session_id": session_id,
+        "job": dict(row) if row else {},
+        "plan": plan,
+        "provider_calls_performed": False,
+        "write_db": True,
+        "writes": ["apify_jobs", "vkpi_kol_search_sessions"],
+        "viltrox_fit_score_changed_ids": [],
+        "viltrox_fit_score_untouched": True,
+    }
+
+
 async def discover_new_creators(
     *,
     query_text: str,

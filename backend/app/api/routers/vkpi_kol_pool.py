@@ -399,6 +399,27 @@ def advance_kol_search_session_items(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+@router.post("/kol-search-sessions/{session_id}/advance-job")
+def enqueue_kol_search_session_advance(
+    session_id: int,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """Queue ordered profile crawl for session items; worker executes it."""
+    try:
+        return kol_profile_discovery.enqueue_search_session_advance(
+            session_id=int(session_id),
+            body=body or {},
+            staff=staff,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @router.post("/kol-smart-search")
 async def smart_kol_search(
     body: dict = Body(...),
