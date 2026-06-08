@@ -200,7 +200,7 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
           searchMode, setSearchMode, kindFilter, setKindFilter, kindCounts,
           myListFilter, setMyListFilter, myListCount: myList.size,
         }),
-        e(SearchProgressBar, { items: filteredBase, searchActive: !!search }),
+        (search || kindFilter || myListFilter) && e(SearchProgressBar, { items: filteredBase, searchActive: !!search }),
         e("div", { className: "flex items-center justify-between mb-3" },
           e("div", { className: "text-[11px] text-slate-400 flex items-center gap-2 flex-wrap" },
             e("span", null,

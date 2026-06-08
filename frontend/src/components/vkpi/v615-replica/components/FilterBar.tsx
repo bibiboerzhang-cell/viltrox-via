@@ -10,6 +10,8 @@ const e = React.createElement;
 
 export function FilterBar({ search, setSearch, country, setCountry, audienceType, setAudienceType, trendLevel, setTrendLevel, sortBy, setSortBy, hasViltrox, setHasViltrox, hasCompetitor, setHasCompetitor, searchMode, setSearchMode, kindFilter, setKindFilter, kindCounts, myListFilter, setMyListFilter, myListCount }) {
   const [localApplying, setLocalApplying] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const advancedActive = Boolean(country || audienceType || trendLevel || hasViltrox || hasCompetitor || sortBy !== "v6_fit");
   const exampleChips = [
     "5 月上传 35mm 评测的 YouTube 摄影师",
     "友商用户 · Geo A 级 · 未联系过",
@@ -132,8 +134,21 @@ export function FilterBar({ search, setSearch, country, setCountry, audienceType
         e("span", { className: "tabular-nums text-[9.5px] opacity-80" }, myListCount)
       )
     ),
+    e("div", { className: "flex items-center justify-between gap-2 pt-2 border-t border-white/[0.04]" },
+      e("span", { className: "text-[10px] text-slate-500" },
+        advancedActive ? "高级筛选已启用" : "高级筛选未启用"
+      ),
+      e("button", {
+        type: "button",
+        onClick: () => setAdvancedOpen((open) => !open),
+        className: "inline-flex items-center gap-1.5 rounded-md border border-white/[0.08] bg-white/[0.018] px-2 py-1 text-[10px] text-slate-400 transition-colors hover:border-white/[0.14] hover:text-white",
+      },
+        advancedOpen ? "收起高级筛选" : "展开高级筛选",
+        e(ChevronRight, { size: 10, className: "transition-transform " + (advancedOpen ? "rotate-90" : "") })
+      )
+    ),
     // ── 旧筛选行 ──
-    e("div", { className: "flex flex-wrap items-center gap-2 text-[10px] pt-2 border-t border-white/[0.04]" },
+    advancedOpen && e("div", { className: "flex flex-wrap items-center gap-2 text-[10px] pt-2 border-t border-white/[0.04]" },
       // Country
       e("div", { className: "flex items-center gap-1.5" },
         e("span", { className: "text-slate-500 uppercase tracking-wider" }, "国家"),
