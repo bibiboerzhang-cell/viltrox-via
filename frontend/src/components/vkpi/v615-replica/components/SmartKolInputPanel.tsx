@@ -289,7 +289,7 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
             </span>
             <div>
               <h2 className="text-[13px] font-semibold text-white">智能输入入口</h2>
-              <div className="mt-0.5 text-[10.5px] text-slate-500">URL 自动分流 · 纯文字语义召回 · 旧入口保留回退</div>
+              <div className="mt-0.5 text-[10.5px] text-slate-500">URL 自动分流 · 纯文字语义召回 · 旧入口折叠回退</div>
             </div>
           </div>
         </div>
@@ -366,7 +366,7 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
 
       <div className="mt-2 flex items-start gap-1.5 text-[10px] leading-relaxed text-slate-600">
         <AlertTriangle size={11} className="mt-0.5 shrink-0 text-slate-600" />
-        新入口先并存验证；下面旧 URL 深抓入口和产品召回结果仍保留回退。
+        新入口先并存验证；旧 URL 深抓入口和产品召回结果已折叠到回退工具。
       </div>
     </section>
   );

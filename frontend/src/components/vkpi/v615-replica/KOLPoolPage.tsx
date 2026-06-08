@@ -4,7 +4,7 @@
 
 import React, { useMemo, useState } from "react";
 import { AnimatePresence } from "framer-motion";
-import { Info, Search, Star, X } from "lucide-react";
+import { ChevronDown, Info, Search, SlidersHorizontal, Star, X } from "lucide-react";
 import { FilterBar } from "./components/FilterBar";
 import { KOLDetailDrawer } from "./components/KOLDetailDrawer";
 import { KOLTable } from "./components/KOLTable";
@@ -39,6 +39,7 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
   const [myList, setMyList] = useState(new Set());
   const [contactItem, setContactItem] = useState(null);
   const [poolModalOpen, setPoolModalOpen] = useState(false);
+  const [legacyToolsOpen, setLegacyToolsOpen] = useState(false);
   // Search v2 state
   const [searchMode, setSearchMode] = useState("balanced"); // balanced | precision | discovery
   const [kindFilter, setKindFilter] = useState("");          // "" | "existing" | "new" | specific kind
@@ -148,8 +149,29 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
         e(TrendPulseBar),
         e(MarketCoverageCard, { items: poolItems }),
         e(SmartKolInputPanel, { apiToken }),
-        e(UrlDeepCrawlPanel, { apiToken }),
-        e(ProductRecallPanel, { apiToken }),
+        e("section", { className: "mb-4 rounded-xl border border-white/[0.06] bg-white/[0.018]" },
+          e("button", {
+            type: "button",
+            onClick: () => setLegacyToolsOpen((open) => !open),
+            className: "flex w-full items-center justify-between gap-3 px-3.5 py-2.5 text-left"
+          },
+            e("span", { className: "flex min-w-0 items-center gap-2" },
+              e("span", { className: "rounded-md border border-slate-500/20 bg-slate-500/[0.08] p-1 text-slate-400" }, e(SlidersHorizontal, { size: 13 })),
+              e("span", { className: "min-w-0" },
+                e("span", { className: "block text-[11.5px] font-medium text-slate-300" }, "旧入口 / 回退工具"),
+                e("span", { className: "block truncate text-[10px] text-slate-600" }, "统一输入框优先；旧 URL 深抓与产品召回暂时保留用于对照验证")
+              )
+            ),
+            e("span", { className: "flex shrink-0 items-center gap-1.5 text-[10px] text-slate-500" },
+              legacyToolsOpen ? "收起" : "展开",
+              e(ChevronDown, { size: 13, className: "transition-transform " + (legacyToolsOpen ? "rotate-180" : "") })
+            )
+          ),
+          legacyToolsOpen && e("div", { className: "border-t border-white/[0.05] px-3 pb-3 pt-3" },
+            e(UrlDeepCrawlPanel, { apiToken }),
+            e(ProductRecallPanel, { apiToken })
+          )
+        ),
         e(FilterBar, {
           search, setSearch, country, setCountry, audienceType, setAudienceType,
           trendLevel, setTrendLevel, sortBy, setSortBy,
