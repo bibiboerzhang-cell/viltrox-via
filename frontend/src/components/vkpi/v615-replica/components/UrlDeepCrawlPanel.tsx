@@ -6,7 +6,7 @@ import {
   type VkpiKolUrlDeepCrawlResponse,
 } from "../../../../domains/kol";
 
-type PanelState = "idle" | "dryRunLoading" | "dryRunReady" | "error";
+type PanelState = "idle" | "dryRunLoading" | "dryRunReady" | "executeLoading" | "executeReady" | "error";
 
 function cleanText(value: unknown): string {
   return String(value ?? "").replace(/\s+/g, " ").trim();
@@ -37,6 +37,10 @@ function actionDescription(value: unknown): string {
 
 function asStringList(value: unknown): string[] {
   return Array.isArray(value) ? value.map((item) => displayText(item, "")).filter(Boolean) : [];
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
 function statusTone(result: VkpiKolUrlDeepCrawlResponse | null): string {
@@ -87,6 +91,24 @@ function FieldPills({ fields }: { fields: string[] }) {
   );
 }
 
+function ProfileDataPreview({ data }: { data: Record<string, unknown> }) {
+  const rows = Object.entries(data).filter(([, value]) => value !== null && value !== undefined && displayText(value, "") !== "");
+  if (!rows.length) return null;
+  return (
+    <div className="mt-3 rounded-lg border border-emerald-300/15 bg-emerald-400/[0.06] px-3 py-2">
+      <div className="mb-1.5 text-[10px] uppercase tracking-wide text-emerald-200/80">抓取到的基础资料</div>
+      <div className="grid gap-1 text-[11px] text-slate-300">
+        {rows.slice(0, 8).map(([key, value]) => (
+          <div key={key} className="grid grid-cols-[92px_minmax(0,1fr)] gap-2">
+            <span className="text-slate-500">{key}</span>
+            <span className="truncate text-slate-200">{displayText(value)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function UrlDeepCrawlPanel({ apiToken = "" }: { apiToken?: string }) {
   const [inputUrl, setInputUrl] = useState("");
   const [panelState, setPanelState] = useState<PanelState>("idle");
@@ -96,12 +118,27 @@ export function UrlDeepCrawlPanel({ apiToken = "" }: { apiToken?: string }) {
   const profileFlow = result?.profile_flow || {};
   const wouldCrawl = profileFlow.would_crawl || {};
   const writerDryRun = profileFlow.safe_writer_dry_run || {};
+  const writeResult = asRecord(profileFlow.write_result);
+  const profileData = asRecord(profileFlow.profile_data);
   const fieldsToWrite = useMemo(() => asStringList(writerDryRun.fields_to_write), [writerDryRun.fields_to_write]);
+  const fieldsWritten = useMemo(() => asStringList(writeResult.fields_written), [writeResult.fields_written]);
   const candidates = Array.isArray(result?.candidates) ? result?.candidates || [] : [];
   const nextActionLabel = displayText(result?.next_action);
   const nextActionDescription = actionDescription(result?.next_action);
-  const isLoading = panelState === "dryRunLoading";
+  const isLoading = panelState === "dryRunLoading" || panelState === "executeLoading";
+  const isExecuting = panelState === "executeLoading";
+  const executeSucceeded = Boolean(result?.execute && profileFlow.status === "ready");
+  const executeFailed = Boolean(result?.execute && profileFlow.status && profileFlow.status !== "ready");
   const canSubmit = Boolean(apiToken && cleanText(inputUrl)) && !isLoading;
+  const canExecute = Boolean(
+    apiToken &&
+    result &&
+    !result.execute &&
+    result.url_type === "profile" &&
+    profileFlow.status === "dry_run_ready" &&
+    candidates.length <= 1 &&
+    !isLoading,
+  );
 
   const runDryRun = async () => {
     const url = cleanText(inputUrl);
@@ -130,6 +167,28 @@ export function UrlDeepCrawlPanel({ apiToken = "" }: { apiToken?: string }) {
     }
   };
 
+  const runExecute = async () => {
+    const url = cleanText(result?.url?.input || inputUrl);
+    if (!apiToken || !url || !canExecute) return;
+    setPanelState("executeLoading");
+    setError("");
+    try {
+      const response = await deepCrawlKolUrl(apiToken, url, true, {
+        maxPosts: typeof profileFlow.max_posts === "number" ? profileFlow.max_posts : 3,
+        mode: "profile_only",
+        timeoutMs: 300000,
+      });
+      setResult(response);
+      setPanelState(response.profile_flow?.status === "ready" ? "executeReady" : "dryRunReady");
+      if (response.profile_flow?.status && response.profile_flow.status !== "ready") {
+        setError(displayText(response.profile_flow.message || response.profile_flow.status, "URL 深抓执行失败"));
+      }
+    } catch (err) {
+      setPanelState("dryRunReady");
+      setError(err instanceof Error ? err.message : "URL 深抓 execute 接口失败");
+    }
+  };
+
   return (
     <section className="mb-4 rounded-lg border border-cyan-300/[0.12] bg-cyan-950/[0.08] p-3">
       <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
@@ -138,10 +197,10 @@ export function UrlDeepCrawlPanel({ apiToken = "" }: { apiToken?: string }) {
             <span className="flex h-7 w-7 items-center justify-center rounded-md border border-cyan-300/20 bg-cyan-400/[0.10] text-cyan-200">
               <Link2 size={14} />
             </span>
-            <div>
-              <h2 className="text-[13px] font-semibold text-white">URL 深抓入口</h2>
-              <div className="mt-0.5 text-[10.5px] text-slate-500">dry-run 识别 · 本刀不执行抓取写入</div>
-            </div>
+              <div>
+                <h2 className="text-[13px] font-semibold text-white">URL 深抓入口</h2>
+              <div className="mt-0.5 text-[10.5px] text-slate-500">先 dry-run 识别 · 确认后抓取基础资料</div>
+              </div>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500">
@@ -205,6 +264,18 @@ export function UrlDeepCrawlPanel({ apiToken = "" }: { apiToken?: string }) {
 
           <ActionMessage result={result} />
 
+          {executeSucceeded ? (
+            <div className="mt-3 rounded-lg border border-emerald-300/20 bg-emerald-400/[0.10] px-3 py-2 text-[11px] text-emerald-100">
+              基础资料抓取完成，已通过安全 writer 写入。V6 Fit 未触碰：{String(Boolean(writeResult.viltrox_fit_score_untouched))}
+            </div>
+          ) : null}
+
+          {executeFailed ? (
+            <div className="mt-3 rounded-lg border border-amber-300/20 bg-amber-400/[0.08] px-3 py-2 text-[11px] text-amber-100">
+              抓取未完成：{displayText(profileFlow.message || profileFlow.status)}
+            </div>
+          ) : null}
+
           {candidates.length > 1 ? (
             <div className="mt-3 rounded-lg border border-amber-300/20 bg-amber-400/[0.08] px-3 py-2 text-[11px] text-amber-100">
               命中多个候选，需要人工选择后才能执行。
@@ -228,18 +299,26 @@ export function UrlDeepCrawlPanel({ apiToken = "" }: { apiToken?: string }) {
               </div>
               <div className="rounded-lg border border-white/[0.07] bg-black/15 p-3">
                 <div className="mb-2 text-[10px] uppercase tracking-wide text-slate-500">会写哪些字段</div>
-                <FieldPills fields={fieldsToWrite} />
+                <FieldPills fields={fieldsWritten.length ? fieldsWritten : fieldsToWrite} />
                 <button
                   type="button"
-                  disabled
-                  className="mt-3 inline-flex min-h-[32px] items-center justify-center rounded-md border border-white/[0.08] bg-white/[0.04] px-3 text-[11px] text-slate-500 disabled:cursor-not-allowed"
-                  title="刀B接 execute=true"
+                  onClick={() => void runExecute()}
+                  disabled={!canExecute}
+                  className="mt-3 inline-flex min-h-[32px] items-center justify-center gap-1.5 rounded-md border border-emerald-300/20 bg-emerald-500/[0.14] px-3 text-[11px] text-emerald-100 transition-colors hover:bg-emerald-500/[0.22] disabled:cursor-not-allowed disabled:border-white/[0.08] disabled:bg-white/[0.04] disabled:text-slate-500"
+                  title={canExecute ? "确认后会真实抓取 profile 基础资料并写入白名单字段" : "需要先完成 profile URL dry-run，且不能有多个候选"}
                 >
+                  {isExecuting ? <Loader2 size={12} className="animate-spin" /> : null}
                   确认抓取基础资料
                 </button>
+                {writeResult.viltrox_fit_score_changed_ids ? (
+                  <div className="mt-2 text-[10px] text-slate-500">
+                    viltrox_fit_score_changed_ids: {displayText(writeResult.viltrox_fit_score_changed_ids)}
+                  </div>
+                ) : null}
               </div>
             </div>
           ) : null}
+          <ProfileDataPreview data={profileData} />
         </div>
       ) : null}
     </section>
