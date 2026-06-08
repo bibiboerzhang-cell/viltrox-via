@@ -319,6 +319,26 @@ export interface VkpiKolUrlDeepCrawlResponse {
       viltrox_fit_score_untouched?: boolean;
     };
   };
+  video_flow?: Row & {
+    status?: string;
+    message?: string;
+    operation?: "video_creator_resolve" | "existing_creator_video_analysis" | "new_creator_video_analysis" | string;
+    kol_pool_id?: number | null;
+    evidence_id?: number | null;
+    run_id?: number | null;
+    run_status?: string;
+    worker_touched?: boolean;
+    creator_resolution_status?: "resolved" | "unresolved" | string;
+    creator_identity?: Row | null;
+    video_metadata?: Row | null;
+    evidence_result?: Row;
+    enqueue_result?: Row;
+    profile_flow?: Row;
+    viltrox_fit_score_changed_ids?: number[];
+    viltrox_fit_score_untouched?: boolean;
+  };
+  video_metadata?: Row | null;
+  creator_identity?: Row | null;
   safety?: Row;
 }
 
