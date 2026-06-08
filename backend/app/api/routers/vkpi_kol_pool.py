@@ -25,6 +25,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 
 from app.api.dependencies.perms import require_tab
 from app.domains.kol import competitor_detector as kol_competitor_detector
+from app.domains.kol import account_dossier as kol_account_dossier
 from app.domains.kol import eleven_dimensions
 from app.domains.kol import intelligence_card as kol_intelligence_card
 from app.domains.kol import llm_deep_analysis as kol_llm_deep_analysis
@@ -731,6 +732,27 @@ def get_item_detail_bundle(
     del staff
     try:
         return kol_pool.detail_bundle(int(kol_pool_id), video_limit=video_limit, llm_limit=llm_limit)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/kol-pool/{kol_pool_id}/account-dossier")
+def get_pool_item_account_dossier(
+    kol_pool_id: int,
+    video_limit: int = Query(default=50, ge=1, le=200),
+    event_limit: int = Query(default=80, ge=1, le=300),
+    deep_limit: int = Query(default=20, ge=1, le=50),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """Read-only KOL account dossier; aggregates local state without providers."""
+    del staff
+    try:
+        return kol_account_dossier.get_kol_account_dossier(
+            int(kol_pool_id),
+            video_limit=video_limit,
+            event_limit=event_limit,
+            deep_limit=deep_limit,
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
