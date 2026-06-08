@@ -11,6 +11,7 @@ const e = React.createElement;
 export function FilterBar({ search, setSearch, country, setCountry, audienceType, setAudienceType, trendLevel, setTrendLevel, sortBy, setSortBy, hasViltrox, setHasViltrox, hasCompetitor, setHasCompetitor, searchMode, setSearchMode, kindFilter, setKindFilter, kindCounts, myListFilter, setMyListFilter, myListCount }) {
   const [localApplying, setLocalApplying] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [examplesOpen, setExamplesOpen] = useState(false);
   const advancedActive = Boolean(country || audienceType || trendLevel || hasViltrox || hasCompetitor || sortBy !== "v6_fit");
   const exampleChips = [
     "5 月上传 35mm 评测的 YouTube 摄影师",
@@ -93,10 +94,16 @@ export function FilterBar({ search, setSearch, country, setCountry, audienceType
           className: "flex cursor-not-allowed items-center gap-1.5 rounded-md border border-white/[0.08] px-3 py-2 text-[11px] text-slate-500 opacity-70 shrink-0"
         }, e(Upload, { size: 11 }), "一键导入 · 待接入")
       ),
-      // example chips
       e("div", { className: "flex items-center gap-1.5 flex-wrap pl-1" },
-        e("span", { className: "text-[10px] text-slate-500 mr-1" }, "试试:"),
-        exampleChips.map((c, i) => e("button", {
+        e("button", {
+          type: "button",
+          onClick: () => setExamplesOpen((open) => !open),
+          className: "inline-flex items-center gap-1 rounded text-[10px] text-slate-500 hover:text-purple-200"
+        },
+          examplesOpen ? "收起试例" : "展开试例",
+          e(ChevronRight, { size: 9, className: "transition-transform " + (examplesOpen ? "rotate-90" : "") })
+        ),
+        examplesOpen && exampleChips.map((c, i) => e("button", {
           key: i,
           onClick: () => applyLocalSearch(c),
           className: "px-2 py-0.5 rounded text-[10px] border border-white/[0.06] bg-white/[0.015] text-slate-400 hover:bg-purple-500/[0.08] hover:border-purple-500/30 hover:text-purple-200 transition-colors"

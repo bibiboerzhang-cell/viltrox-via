@@ -137,16 +137,16 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
   return e(React.Fragment, null,
     e("div", { className: "p-4 sm:p-5" },
         e("section", {
-          className: "mb-4 rounded-2xl border border-white/[0.07] bg-[radial-gradient(circle_at_top_left,rgba(124,58,237,0.10),transparent_28%),radial-gradient(circle_at_top_right,rgba(20,184,166,0.08),transparent_32%),rgba(255,255,255,0.016)] p-4 shadow-[0_24px_80px_rgba(0,0,0,0.22)]"
+          className: "mb-4 rounded-2xl border border-white/[0.065] bg-[linear-gradient(135deg,rgba(124,58,237,0.055),rgba(20,184,166,0.035)_42%,rgba(2,6,23,0.35))] p-3.5 shadow-[0_24px_72px_rgba(0,0,0,0.20)]"
         },
-          e("div", { className: "mb-3 flex flex-col gap-2 border-b border-white/[0.05] pb-3 lg:flex-row lg:items-center lg:justify-between" },
+          e("div", { className: "mb-3 flex flex-col gap-2 border-b border-white/[0.045] pb-2.5 lg:flex-row lg:items-center lg:justify-between" },
             e("div", { className: "min-w-0" },
               e("div", { className: "flex flex-wrap items-center gap-2" },
-                e("h1", { className: "text-[15px] font-semibold text-white" }, "KOL Pool 工作台"),
+                e("h1", { className: "text-[14px] font-semibold text-white" }, "KOL Pool · Command Center"),
                 e("span", { className: "rounded-full border border-cyan-300/15 bg-cyan-400/[0.06] px-2 py-0.5 text-[9.5px] text-cyan-100" }, "URL / 召回 / 列表")
               ),
-              e("div", { className: "mt-1 max-w-3xl text-[10.5px] leading-relaxed text-slate-500" },
-                "主操作只留一个输入框；旧 URL 深抓和产品召回保留为回退工具。"
+              e("div", { className: "mt-0.5 max-w-3xl text-[10px] leading-relaxed text-slate-500" },
+                "一个入口处理 URL、建档、视频分析与语义召回；高级工具折叠保留。"
               )
             ),
             e("div", { className: "flex shrink-0 flex-wrap items-center gap-2 text-[10px] text-slate-500" },

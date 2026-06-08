@@ -38,7 +38,7 @@ export function KPIBar({ items, onCardClick, activeKindFilter, onTotalClick }) {
     { icon: TrendingUp,  label: "月度估算 Reach",  value: totalReach ? formatNumber(totalReach) : "待评估", sub: totalReach ? "avg_views 汇总" : "reach 字段待接入", color: "#ec4899", filterKey: null },
   ];
   
-  return e("div", { className: "grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6" },
+  return e("div", { className: "grid grid-cols-2 gap-1.5 md:grid-cols-3 xl:grid-cols-6" },
     cards.map((c, i) => {
       const isTotalCard = c.label === "Pool 总数";
       const clickable = c.filterKey !== null || (isTotalCard && onTotalClick);
@@ -56,20 +56,20 @@ export function KPIBar({ items, onCardClick, activeKindFilter, onTotalClick }) {
           }
           onCardClick(c.filterKey);
         } : undefined,
-        className: "rounded-lg border px-2.5 py-2 text-left transition-colors " +
-          (clickable ? "cursor-pointer hover:border-white/[0.16] hover:bg-white/[0.035] " : "") +
-          (isActive ? "border-white/[0.22]" : "border-white/[0.065]"),
-        style: { background: isActive ? c.color + "10" : "rgba(255,255,255,0.018)" }
+        className: "rounded-md border px-2.5 py-1.5 text-left transition-colors " +
+          (clickable ? "cursor-pointer hover:border-white/[0.14] hover:bg-white/[0.03] " : "") +
+          (isActive ? "border-white/[0.20]" : "border-white/[0.055]"),
+        style: { background: isActive ? c.color + "0F" : "rgba(255,255,255,0.014)" }
       };
       if (clickable) cardProps.type = "button";
       return e(Card, cardProps,
         e("div", { className: "flex items-center gap-1.5" },
-          e("span", { className: "rounded-md p-1", style: { background: c.color + "18", color: c.color } }, e(c.icon, { size: 10 })),
-          e("span", { className: "min-w-0 flex-1 truncate text-[9.5px] text-slate-500" }, c.label),
+          e("span", { className: "rounded p-0.5", style: { background: c.color + "16", color: c.color } }, e(c.icon, { size: 9 })),
+          e("span", { className: "min-w-0 flex-1 truncate text-[9px] text-slate-500" }, c.label),
           clickable && e(Filter, { size: 8, className: "text-slate-700", title: isTotalCard ? "查看全部 KOL" : "点击筛选" })
         ),
-        e("div", { className: "mt-1 text-[16px] font-light leading-none text-white tabular-nums" }, c.value),
-        e("div", { className: "mt-1 truncate text-[8.5px] text-slate-600" }, c.sub)
+        e("div", { className: "mt-1 text-[15px] font-medium leading-none text-white tabular-nums" }, c.value),
+        e("div", { className: "mt-0.5 truncate text-[8px] text-slate-600" }, c.sub)
       );
     })
   );
