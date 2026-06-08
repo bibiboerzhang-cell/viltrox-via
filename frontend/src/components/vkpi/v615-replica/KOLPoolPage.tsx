@@ -4,16 +4,14 @@
 
 import React, { useMemo, useState } from "react";
 import { AnimatePresence } from "framer-motion";
-import { ChevronDown, Info, Search, SlidersHorizontal, Star, X } from "lucide-react";
+import { ChevronDown, Info, Search, Star, X } from "lucide-react";
 import { FilterBar } from "./components/FilterBar";
 import { KOLDetailDrawer } from "./components/KOLDetailDrawer";
 import { KOLTable } from "./components/KOLTable";
 import { KPIBar } from "./components/KPIBar";
 import { MarketCoverageCard } from "./components/MarketCoverageCard";
-import { ProductRecallPanel } from "./components/ProductRecallPanel";
 import { SearchProgressBar } from "./components/SearchProgressBar";
 import { SmartKolInputPanel } from "./components/SmartKolInputPanel";
-import { UrlDeepCrawlPanel } from "./components/UrlDeepCrawlPanel";
 import { ContactModal } from "./components/modals/ContactModal";
 import { KolPoolAllModal } from "./components/modals/KolPoolAllModal";
 import { getKolPoolDetailBundle, getKolPoolItem } from "../../../domains/kol";
@@ -39,7 +37,6 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
   const [myList, setMyList] = useState(new Set());
   const [contactItem, setContactItem] = useState(null);
   const [poolModalOpen, setPoolModalOpen] = useState(false);
-  const [legacyToolsOpen, setLegacyToolsOpen] = useState(false);
   const [inlineListOpen, setInlineListOpen] = useState(false);
   // Search v2 state
   const [searchMode, setSearchMode] = useState("balanced"); // balanced | precision | discovery
@@ -168,30 +165,7 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
             onTotalClick: () => setPoolModalOpen(true),
           }),
           e("div", { className: "mt-2.5 space-y-2" },
-            e(SmartKolInputPanel, { apiToken }),
-            e("section", { className: "rounded-xl border border-white/[0.055] bg-black/[0.12]" },
-              e("button", {
-                type: "button",
-                onClick: () => setLegacyToolsOpen((open) => !open),
-                className: "flex w-full items-center justify-between gap-3 px-3.5 py-2.5 text-left"
-              },
-                e("span", { className: "flex min-w-0 items-center gap-2" },
-                  e("span", { className: "rounded-md border border-slate-500/20 bg-slate-500/[0.08] p-1 text-slate-400" }, e(SlidersHorizontal, { size: 13 })),
-                  e("span", { className: "min-w-0" },
-                    e("span", { className: "block text-[11px] font-medium text-slate-300" }, "高级 / 回退工具"),
-                    e("span", { className: "block truncate text-[10px] text-slate-600" }, "展开后可用旧 URL 深抓面板和旧产品召回面板对照")
-                  )
-                ),
-                e("span", { className: "flex shrink-0 items-center gap-1.5 text-[10px] text-slate-500" },
-                  legacyToolsOpen ? "收起" : "展开",
-                  e(ChevronDown, { size: 13, className: "transition-transform " + (legacyToolsOpen ? "rotate-180" : "") })
-                )
-              ),
-              legacyToolsOpen && e("div", { className: "border-t border-white/[0.05] px-3 pb-3 pt-3" },
-                e(UrlDeepCrawlPanel, { apiToken }),
-                e(ProductRecallPanel, { apiToken })
-              )
-            )
+            e(SmartKolInputPanel, { apiToken })
           ),
           e("div", { className: "mt-2.5" },
             e(MarketCoverageCard, { items: poolItems })

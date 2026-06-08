@@ -294,14 +294,14 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
               </span>
             </div>
             <div className="mt-0.5 truncate text-[10px] text-slate-600">
-              URL 自动分流；文字走语义召回。
+              URL 自动分流；文字走查找。
             </div>
           </div>
         </div>
         <div className="flex flex-wrap gap-1.5 text-[9px] text-slate-500">
           <span className="rounded border border-cyan-300/10 bg-cyan-400/[0.035] px-1.5 py-0.5 text-cyan-100">Video</span>
           <span className="rounded border border-violet-300/10 bg-violet-400/[0.035] px-1.5 py-0.5 text-violet-100">Profile</span>
-          <span className="rounded border border-emerald-300/10 bg-emerald-400/[0.035] px-1.5 py-0.5 text-emerald-100">Recall</span>
+          <span className="rounded border border-emerald-300/10 bg-emerald-400/[0.035] px-1.5 py-0.5 text-emerald-100">查找</span>
         </div>
       </div>
 
@@ -330,7 +330,7 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
           className="inline-flex min-h-[40px] items-center justify-center gap-1.5 rounded-md border border-cyan-300/18 bg-cyan-500/[0.14] px-3 text-[11px] font-medium text-cyan-100 transition-colors hover:bg-cyan-500/[0.22] disabled:cursor-not-allowed disabled:opacity-55"
         >
           {isBusy ? <Loader2 size={13} className="animate-spin" /> : inferredMode === "url" ? <Link2 size={13} /> : <Search size={13} />}
-          {inferredMode === "url" ? "识别 URL" : "智能召回"}
+          {inferredMode === "url" ? "识别 URL" : "查找"}
         </button>
       </form>
 
@@ -341,7 +341,7 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
           <span className="inline-flex items-center gap-1 text-violet-100"><BadgeCheck size={9} /> 账号 URL</span>
           <span className="text-slate-700">/</span>
           <span className="inline-flex items-center gap-1 text-emerald-100"><Search size={9} /> 产品需求</span>
-          <span>先识别，再执行；旧工具在回退区。</span>
+          <span>先识别，再执行。</span>
         </div>
       ) : null}
 
