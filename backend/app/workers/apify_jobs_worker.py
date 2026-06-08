@@ -25,6 +25,7 @@ from app.core.config import DB_RUNTIME_URL
 from app.core.logging import get_logger
 from app.db.connection import close_db_runtime_sync, db_connection_sync_scope
 from app.domains.costs import budget_guard
+from app.domains.kol.final_v1_extract import upsert_deep_analysis_from_final_v1_cache
 from app.platform import llm_gateway
 from app.services.media.video_download import download_direct_video_url
 from app.services.media.video_keyframes import temporary_keyframes
@@ -661,6 +662,45 @@ def _search_session_analysis_summary_from_ready_cache(
         result=result if isinstance(result, dict) else {},
         cost=float(cache.get("cost") or 0.0),
     )
+
+
+def _sync_deep_analysis_result_from_cache(
+    conn: psycopg.Connection[Any],
+    *,
+    cache_id: int | None,
+    derive_method: str,
+    job_id: int,
+) -> dict[str, Any] | None:
+    if derive_method != "video_analysis_final_v1" or not cache_id:
+        return None
+    try:
+        result = upsert_deep_analysis_from_final_v1_cache(conn, int(cache_id))
+    except Exception as exc:
+        logger.warning("final_v1 deep-result sync failed | job_id=%s cache_id=%s error=%s", job_id, cache_id, exc)
+        return {"status": "failed", "reason": str(exc)[:500], "source_cache_id": cache_id}
+    logger.info(
+        "final_v1 deep-result sync | job_id=%s cache_id=%s status=%s action=%s deep_result_id=%s",
+        job_id,
+        cache_id,
+        result.get("status"),
+        result.get("action"),
+        result.get("deep_result_id"),
+    )
+    return {
+        key: result.get(key)
+        for key in (
+            "status",
+            "action",
+            "reason",
+            "deep_result_id",
+            "source_cache_id",
+            "source_evidence_id",
+            "kol_pool_id",
+            "llm_v6_fit",
+            "viltrox_fit_score_changed_ids",
+        )
+        if key in result
+    }
 
 
 def _sync_search_session_job(
@@ -1503,19 +1543,28 @@ def _write_gemini_cache(
                 "UPDATE apify_jobs SET status='done', last_error=NULL, updated_at=NOW() WHERE id=%s",
                 (job["id"],),
             )
+    deep_result = _sync_deep_analysis_result_from_cache(
+        conn,
+        cache_id=cache_id,
+        derive_method=derive_method,
+        job_id=int(job["id"]),
+    )
+    analysis_summary = _search_session_analysis_summary_from_result(
+        cache_id=cache_id,
+        derive_method=derive_method,
+        target_type=target_type,
+        target_id=target_id,
+        evidence=evidence,
+        result=shaped,
+        cost=cost,
+    )
+    if analysis_summary and deep_result:
+        analysis_summary["deep_result"] = deep_result
     _sync_search_session_job(
         conn,
         int(job["id"]),
         raw_status="done",
-        analysis_summary=_search_session_analysis_summary_from_result(
-            cache_id=cache_id,
-            derive_method=derive_method,
-            target_type=target_type,
-            target_id=target_id,
-            evidence=evidence,
-            result=shaped,
-            cost=cost,
-        ),
+        analysis_summary=analysis_summary,
     )
 
 
@@ -2229,19 +2278,28 @@ def _process_gemini_video(
                 "UPDATE apify_jobs SET status='done', last_error=NULL, updated_at=NOW() WHERE id=%s",
                 (job["id"],),
             )
+    deep_result = _sync_deep_analysis_result_from_cache(
+        conn,
+        cache_id=cache_id,
+        derive_method=derive_method,
+        job_id=int(job["id"]),
+    )
+    analysis_summary = _search_session_analysis_summary_from_result(
+        cache_id=cache_id,
+        derive_method=derive_method,
+        target_type=target_type,
+        target_id=target_id,
+        evidence=evidence,
+        result=shaped,
+        cost=cost,
+    )
+    if analysis_summary and deep_result:
+        analysis_summary["deep_result"] = deep_result
     _sync_search_session_job(
         conn,
         int(job["id"]),
         raw_status="done",
-        analysis_summary=_search_session_analysis_summary_from_result(
-            cache_id=cache_id,
-            derive_method=derive_method,
-            target_type=target_type,
-            target_id=target_id,
-            evidence=evidence,
-            result=shaped,
-            cost=cost,
-        ),
+        analysis_summary=analysis_summary,
     )
 
 
