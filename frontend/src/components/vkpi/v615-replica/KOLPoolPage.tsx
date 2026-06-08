@@ -13,7 +13,6 @@ import { MarketCoverageCard } from "./components/MarketCoverageCard";
 import { ProductRecallPanel } from "./components/ProductRecallPanel";
 import { SearchProgressBar } from "./components/SearchProgressBar";
 import { SmartKolInputPanel } from "./components/SmartKolInputPanel";
-import { TrendPulseBar } from "./components/TrendPulseBar";
 import { UrlDeepCrawlPanel } from "./components/UrlDeepCrawlPanel";
 import { ContactModal } from "./components/modals/ContactModal";
 import { KolPoolAllModal } from "./components/modals/KolPoolAllModal";
@@ -129,18 +128,16 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
   return e(React.Fragment, null,
     e("div", { className: "p-4 sm:p-5" },
         e("section", {
-          className: "mb-4 rounded-2xl border border-white/[0.07] bg-[radial-gradient(circle_at_top_left,rgba(124,58,237,0.14),transparent_30%),radial-gradient(circle_at_top_right,rgba(20,184,166,0.10),transparent_34%),rgba(255,255,255,0.018)] p-4 shadow-[0_24px_80px_rgba(0,0,0,0.24)]"
+          className: "mb-4 rounded-2xl border border-white/[0.07] bg-[radial-gradient(circle_at_top_left,rgba(124,58,237,0.10),transparent_28%),radial-gradient(circle_at_top_right,rgba(20,184,166,0.08),transparent_32%),rgba(255,255,255,0.016)] p-4 shadow-[0_24px_80px_rgba(0,0,0,0.22)]"
         },
-          e("div", { className: "mb-3 flex flex-col gap-2 border-b border-white/[0.05] pb-3 lg:flex-row lg:items-end lg:justify-between" },
+          e("div", { className: "mb-3 flex flex-col gap-2 border-b border-white/[0.05] pb-3 lg:flex-row lg:items-center lg:justify-between" },
             e("div", { className: "min-w-0" },
-              e("div", { className: "mb-1 flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-[0.18em] text-slate-500" },
-                e("span", null, "KOL Pool"),
-                e("span", { className: "h-1 w-1 rounded-full bg-slate-700" }),
-                e("span", null, "Unified input")
+              e("div", { className: "flex flex-wrap items-center gap-2" },
+                e("h1", { className: "text-[15px] font-semibold text-white" }, "KOL Pool 工作台"),
+                e("span", { className: "rounded-full border border-cyan-300/15 bg-cyan-400/[0.06] px-2 py-0.5 text-[9.5px] text-cyan-100" }, "URL / 召回 / 列表")
               ),
-              e("div", { className: "text-[15px] font-semibold text-white" }, "创作者发现、URL 深抓、产品召回在一个工作台里处理"),
-              e("div", { className: "mt-1 max-w-3xl text-[11px] leading-relaxed text-slate-500" },
-                "首屏只保留决策入口和真实数据摘要；旧工具折叠为回退，不删除现有能力。"
+              e("div", { className: "mt-1 max-w-3xl text-[10.5px] leading-relaxed text-slate-500" },
+                "主操作只留一个输入框；旧 URL 深抓和产品召回保留为回退工具。"
               )
             ),
             e("div", { className: "flex shrink-0 flex-wrap items-center gap-2 text-[10px] text-slate-500" },
@@ -157,37 +154,34 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
             activeKindFilter: kindFilter,
             onTotalClick: () => setPoolModalOpen(true),
           }),
-          e("div", { className: "mt-3 grid gap-3 xl:grid-cols-[minmax(0,1.12fr)_minmax(360px,0.88fr)]" },
-            e("div", { className: "min-w-0 space-y-3" },
-              e(SmartKolInputPanel, { apiToken }),
-              e("section", { className: "rounded-xl border border-white/[0.055] bg-black/[0.14]" },
-                e("button", {
-                  type: "button",
-                  onClick: () => setLegacyToolsOpen((open) => !open),
-                  className: "flex w-full items-center justify-between gap-3 px-3.5 py-2.5 text-left"
-                },
-                  e("span", { className: "flex min-w-0 items-center gap-2" },
-                    e("span", { className: "rounded-md border border-slate-500/20 bg-slate-500/[0.08] p-1 text-slate-400" }, e(SlidersHorizontal, { size: 13 })),
-                    e("span", { className: "min-w-0" },
-                      e("span", { className: "block text-[11px] font-medium text-slate-300" }, "高级 / 回退工具"),
-                      e("span", { className: "block truncate text-[10px] text-slate-600" }, "URL 深抓原面板与产品召回原面板，必要时展开对照")
-                    )
-                  ),
-                  e("span", { className: "flex shrink-0 items-center gap-1.5 text-[10px] text-slate-500" },
-                    legacyToolsOpen ? "收起" : "展开",
-                    e(ChevronDown, { size: 13, className: "transition-transform " + (legacyToolsOpen ? "rotate-180" : "") })
+          e("div", { className: "mt-3 space-y-3" },
+            e(SmartKolInputPanel, { apiToken }),
+            e("section", { className: "rounded-xl border border-white/[0.055] bg-black/[0.12]" },
+              e("button", {
+                type: "button",
+                onClick: () => setLegacyToolsOpen((open) => !open),
+                className: "flex w-full items-center justify-between gap-3 px-3.5 py-2.5 text-left"
+              },
+                e("span", { className: "flex min-w-0 items-center gap-2" },
+                  e("span", { className: "rounded-md border border-slate-500/20 bg-slate-500/[0.08] p-1 text-slate-400" }, e(SlidersHorizontal, { size: 13 })),
+                  e("span", { className: "min-w-0" },
+                    e("span", { className: "block text-[11px] font-medium text-slate-300" }, "高级 / 回退工具"),
+                    e("span", { className: "block truncate text-[10px] text-slate-600" }, "展开后可用旧 URL 深抓面板和旧产品召回面板对照")
                   )
                 ),
-                legacyToolsOpen && e("div", { className: "border-t border-white/[0.05] px-3 pb-3 pt-3" },
-                  e(UrlDeepCrawlPanel, { apiToken }),
-                  e(ProductRecallPanel, { apiToken })
+                e("span", { className: "flex shrink-0 items-center gap-1.5 text-[10px] text-slate-500" },
+                  legacyToolsOpen ? "收起" : "展开",
+                  e(ChevronDown, { size: 13, className: "transition-transform " + (legacyToolsOpen ? "rotate-180" : "") })
                 )
+              ),
+              legacyToolsOpen && e("div", { className: "border-t border-white/[0.05] px-3 pb-3 pt-3" },
+                e(UrlDeepCrawlPanel, { apiToken }),
+                e(ProductRecallPanel, { apiToken })
               )
-            ),
-            e("div", { className: "min-w-0 space-y-3" },
-              e(TrendPulseBar),
-              e(MarketCoverageCard, { items: poolItems })
             )
+          ),
+          e("div", { className: "mt-3" },
+            e(MarketCoverageCard, { items: poolItems })
           )
         ),
         e(FilterBar, {

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { AlertTriangle, BadgeCheck, Database, Link2, Loader2, Search, Sparkles, UserPlus, Video } from "lucide-react";
+import { BadgeCheck, Database, Link2, Loader2, Search, Sparkles, UserPlus, Video } from "lucide-react";
 
 import {
   deepCrawlKolUrl,
@@ -335,19 +335,17 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
       </form>
 
       {state === "idle" && !input ? (
-        <div className="mt-3 grid gap-2 text-[10.5px] text-slate-500 md:grid-cols-3">
-          <div className="rounded-lg border border-white/[0.06] bg-white/[0.018] px-3 py-2">
-            <div className="mb-0.5 flex items-center gap-1.5 text-cyan-100"><Video size={11} /> Video URL</div>
-            <div>已在库只分析当前视频；新人先建档再分析。</div>
-          </div>
-          <div className="rounded-lg border border-white/[0.06] bg-white/[0.018] px-3 py-2">
-            <div className="mb-0.5 flex items-center gap-1.5 text-violet-100"><BadgeCheck size={11} /> Profile URL</div>
-            <div>抓基础资料和代表视频，按 last_video_at 增量防重复。</div>
-          </div>
-          <div className="rounded-lg border border-white/[0.06] bg-white/[0.018] px-3 py-2">
-            <div className="mb-0.5 flex items-center gap-1.5 text-emerald-100"><Search size={11} /> 产品需求</div>
-            <div>复用召回服务，展示创作者和测评号候选。</div>
-          </div>
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-slate-500">
+          <span className="inline-flex items-center gap-1.5 rounded-md border border-cyan-300/10 bg-cyan-400/[0.04] px-2 py-1 text-cyan-100">
+            <Video size={10} /> video URL
+          </span>
+          <span className="inline-flex items-center gap-1.5 rounded-md border border-violet-300/10 bg-violet-400/[0.04] px-2 py-1 text-violet-100">
+            <BadgeCheck size={10} /> profile URL
+          </span>
+          <span className="inline-flex items-center gap-1.5 rounded-md border border-emerald-300/10 bg-emerald-400/[0.04] px-2 py-1 text-emerald-100">
+            <Search size={10} /> 产品需求召回
+          </span>
+          <span className="text-slate-600">自动识别后再执行，旧工具在回退区。</span>
         </div>
       ) : null}
 
@@ -385,10 +383,6 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
         </div>
       ) : null}
 
-      <div className="mt-2 flex items-start gap-1.5 text-[10px] leading-relaxed text-slate-600">
-        <AlertTriangle size={11} className="mt-0.5 shrink-0 text-slate-600" />
-        执行动作只走已接通的 URL / evidence / apify_jobs 链路；旧 URL 深抓和产品召回仍在回退工具里。
-      </div>
     </section>
   );
 }
