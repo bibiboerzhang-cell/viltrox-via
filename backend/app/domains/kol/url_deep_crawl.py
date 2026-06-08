@@ -128,6 +128,15 @@ def dry_run_url_deep_crawl(body: dict[str, Any]) -> dict[str, Any]:
 
     matched_id = matches[0]["kol_pool_id"] if len(matches) == 1 else None
     profile_flow = _profile_flow_plan(classified, matches, body, execute=execute)
+    if classified.url_type == "video" and not matches and video_flow and _video_creator_resolved(video_flow):
+        profile_flow = {
+            "status": "ready_to_execute" if execute else "dry_run_ready",
+            "operation": "new_creator_video_analysis",
+            "kol_pool_id": None,
+            "message": "creator resolved but not in KOL Pool; execute will crawl profile basics, create a new KOL, create/reuse evidence, and enqueue final_v1 analysis.",
+            "crawl_performed": False,
+            "business_tables_written": False,
+        }
     safety = {
         "crawl_performed": False,
         "provider_calls_performed": bool(video_flow and video_flow.get("provider_calls_performed")),
@@ -146,16 +155,27 @@ def dry_run_url_deep_crawl(body: dict[str, Any]) -> dict[str, Any]:
         safety["business_tables_written"] = bool(video_flow.get("business_tables_written"))
         safety["worker_touched"] = bool(video_flow.get("worker_touched"))
         safety["viltrox_fit_touched"] = bool(video_flow.get("viltrox_fit_score_changed_ids"))
+    elif execute and classified.url_type == "video" and video_flow and _video_creator_resolved(video_flow):
+        video_flow = _execute_new_creator_video_flow(classified, video_flow, body)
+        if isinstance(video_flow.get("profile_flow"), dict):
+            profile_flow = video_flow["profile_flow"]
+        safety["crawl_performed"] = bool(video_flow.get("crawl_performed"))
+        safety["business_tables_written"] = bool(video_flow.get("business_tables_written"))
+        safety["worker_touched"] = bool(video_flow.get("worker_touched"))
+        safety["viltrox_fit_touched"] = bool(video_flow.get("viltrox_fit_score_changed_ids"))
     elif execute and classified.url_type == "video" and video_flow:
         video_flow = {
             **video_flow,
             "status": "execute_not_connected",
-            "message": "video URL execute currently requires exactly one existing KOL Pool creator match.",
+            "message": "video URL execute requires a resolved creator before creating evidence or enqueueing analysis.",
             "business_tables_written": False,
             "worker_touched": False,
             "viltrox_fit_score_changed_ids": [],
             "viltrox_fit_score_untouched": True,
         }
+    result_kol_pool_id = matched_id
+    if execute and video_flow and video_flow.get("kol_pool_id"):
+        result_kol_pool_id = int(video_flow["kol_pool_id"])
 
     return {
         "method": "kol_url_deep_crawl_profile_flow_v1",
@@ -172,8 +192,8 @@ def dry_run_url_deep_crawl(body: dict[str, Any]) -> dict[str, Any]:
         "handle": classified.handle or None,
         "channel_id": classified.channel_id or None,
         "video_id": classified.video_id or None,
-        "in_pool": len(matches) == 1,
-        "matched_kol_pool_id": matched_id,
+        "in_pool": len(matches) == 1 or bool(execute and result_kol_pool_id),
+        "matched_kol_pool_id": result_kol_pool_id,
         "candidates": matches,
         "next_action": _next_action(classified, matches),
         "profile_flow": profile_flow,
@@ -763,6 +783,176 @@ def _execute_existing_creator_video_flow(
     }
 
 
+def _execute_new_creator_video_flow(
+    classified: ClassifiedUrl,
+    video_flow: dict[str, Any],
+    body: dict[str, Any],
+) -> dict[str, Any]:
+    started = time.monotonic()
+    max_posts = _max_posts(body)
+    profile_classified = _profile_classified_from_video_flow(classified, video_flow)
+    conn = get_conn()
+    crawl: dict[str, Any] = {}
+    profile_data: dict[str, Any] = {}
+    write_result: dict[str, Any] = {}
+    evidence_result: dict[str, Any] = {}
+    enqueue_result: dict[str, Any] = {}
+    kol_pool_id: int | None = None
+    evidence_id: int | None = None
+    status = "failed"
+    error = ""
+    changed_ids: list[int] = []
+
+    if not profile_classified:
+        run_id = _record_deep_crawl_run(
+            conn,
+            kol_pool_id=None,
+            source_url=classified.normalized_url,
+            url_type="video",
+            mode=_video_execute_mode(body),
+            status="failed",
+            dry_run=False,
+            summary={
+                "operation": "new_creator_video_analysis",
+                "status": "creator_unresolved",
+                "reason": "resolved video creator lacks a usable profile identity",
+                "creator_identity": video_flow.get("creator_identity"),
+                "video_metadata": video_flow.get("video_metadata"),
+                "viltrox_fit_score_changed_ids": [],
+            },
+        )
+        return {
+            **video_flow,
+            "status": "creator_unresolved",
+            "operation": "new_creator_video_analysis",
+            "message": "video creator could not be converted into a profile identity; refused to create an anonymous KOL.",
+            "run_id": run_id,
+            "business_tables_written": bool(run_id),
+            "worker_touched": False,
+            "llm_calls_performed": False,
+            "viltrox_fit_score_changed_ids": [],
+            "viltrox_fit_score_untouched": True,
+            "elapsed_ms": int((time.monotonic() - started) * 1000),
+        }
+
+    try:
+        crawl = _crawl_profile_basics(profile_classified, target=_profile_target(profile_classified), max_posts=max_posts)
+        if str(crawl.get("status") or "").lower() not in {"ok", "synced"}:
+            status = "profile_crawl_failed"
+            error = "profile_crawl_not_ready"
+        else:
+            profile_data = _profile_data_for_new_video_creator(
+                profile_classified,
+                crawl,
+                video_flow,
+                max_posts=max_posts,
+            )
+            write_result = write_kol_profile_basics(None, profile_data, dry_run=False, conn=conn)
+            changed_ids.extend(_fit_changed_ids(write_result))
+            kol_pool_id = int(write_result.get("kol_pool_id") or 0) or None
+            if not kol_pool_id:
+                status = "kol_create_missing_id"
+            else:
+                metadata = video_flow.get("video_metadata")
+                if not isinstance(metadata, dict):
+                    metadata = None
+                evidence_result = ensure_video_evidence_from_url(
+                    kol_pool_id,
+                    classified.normalized_url,
+                    metadata,
+                    dry_run=False,
+                    conn=conn,
+                )
+                changed_ids.extend(_fit_changed_ids(evidence_result))
+                if not evidence_result.get("ok"):
+                    status = str(evidence_result.get("status") or "evidence_failed")
+                else:
+                    evidence_id = int(evidence_result.get("evidence_id") or 0) or None
+                    if not evidence_id:
+                        status = "evidence_missing_id"
+                    else:
+                        enqueue_result = _enqueue_final_v1_video_analysis(
+                            conn,
+                            kol_pool_id=kol_pool_id,
+                            evidence_id=evidence_id,
+                            source="kol_url_deep_crawl",
+                            batch="url_new_creator",
+                            commit=True,
+                        )
+                        changed_ids.extend(_fit_changed_ids(enqueue_result))
+                        status = str(enqueue_result.get("status") or "enqueue_unknown")
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        error = str(exc)[:500]
+        status = "failed"
+
+    run_status = "ready" if status in {"queued", "already_queued", "already_analyzed"} else "failed"
+    run_id = _record_deep_crawl_run(
+        conn,
+        kol_pool_id=kol_pool_id,
+        source_url=classified.normalized_url,
+        url_type="video",
+        mode=_video_execute_mode(body),
+        status=run_status,
+        dry_run=False,
+        summary={
+            "operation": "new_creator_video_analysis",
+            "status": status,
+            "error": error or None,
+            "creator_identity": video_flow.get("creator_identity"),
+            "profile_url": profile_classified.normalized_url,
+            "profile_crawl_status": crawl.get("status"),
+            "profile_provider_source": crawl.get("provider_source"),
+            "profile_write_result": _compact_profile_write_result(write_result),
+            "profile_data": _public_profile_data(profile_data),
+            "video_metadata": video_flow.get("video_metadata"),
+            "evidence_result": _compact_video_evidence_result(evidence_result),
+            "enqueue_result": _compact_enqueue_result(enqueue_result),
+            "viltrox_fit_score_changed_ids": sorted(set(changed_ids)),
+            "elapsed_ms": int((time.monotonic() - started) * 1000),
+        },
+    )
+
+    worker_touched = status == "queued"
+    business_tables_written = bool(kol_pool_id) or bool(evidence_result.get("status") in {"created", "reused"}) or worker_touched or bool(run_id)
+    return {
+        **video_flow,
+        "status": status,
+        "operation": "new_creator_video_analysis",
+        "kol_pool_id": kol_pool_id,
+        "evidence_id": evidence_id,
+        "profile_flow": {
+            "status": "ready" if kol_pool_id else status,
+            "operation": "insert",
+            "kol_pool_id": kol_pool_id,
+            "target": _profile_target(profile_classified),
+            "profile_data": _public_profile_data(profile_data),
+            "write_result": _compact_profile_write_result(write_result),
+            "crawl_status": crawl.get("status"),
+            "provider_source": crawl.get("provider_source"),
+            "viltrox_fit_score_changed_ids": _fit_changed_ids(write_result),
+            "viltrox_fit_score_untouched": not _fit_changed_ids(write_result),
+        },
+        "evidence_result": _compact_video_evidence_result(evidence_result),
+        "enqueue_result": _compact_enqueue_result(enqueue_result),
+        "run_id": run_id,
+        "run_status": run_status,
+        "error": error or None,
+        "crawl_performed": bool(crawl),
+        "business_tables_written": business_tables_written,
+        "worker_touched": worker_touched,
+        "write_db": business_tables_written,
+        "writes": ["vkpi_kol_pool", "vkpi_kol_video_evidence", "apify_jobs", "vkpi_kol_url_deep_crawl_runs"],
+        "llm_calls_performed": False,
+        "viltrox_fit_score_changed_ids": sorted(set(changed_ids)),
+        "viltrox_fit_score_untouched": not changed_ids,
+        "elapsed_ms": int((time.monotonic() - started) * 1000),
+    }
+
+
 def _video_execute_mode(body: dict[str, Any]) -> str:
     mode = str(body.get("mode") or "").strip()
     if mode in {"auto", "video_deep"}:
@@ -781,6 +971,87 @@ def _fit_changed_ids(result: dict[str, Any]) -> list[int]:
         except (TypeError, ValueError):
             continue
     return changed
+
+
+def _video_creator_resolved(video_flow: dict[str, Any]) -> bool:
+    identity = video_flow.get("creator_identity") if isinstance(video_flow, dict) else {}
+    return isinstance(identity, dict) and _has_matchable_creator_identity(identity)
+
+
+def _profile_classified_from_video_flow(
+    classified: ClassifiedUrl,
+    video_flow: dict[str, Any],
+) -> ClassifiedUrl | None:
+    identity = video_flow.get("creator_identity") if isinstance(video_flow, dict) else {}
+    if not isinstance(identity, dict):
+        return None
+    return _classified_from_creator_identity(classified, identity)
+
+
+def _profile_data_for_new_video_creator(
+    profile_classified: ClassifiedUrl,
+    crawl: dict[str, Any],
+    video_flow: dict[str, Any],
+    *,
+    max_posts: int,
+) -> dict[str, Any]:
+    identity = video_flow.get("creator_identity") if isinstance(video_flow.get("creator_identity"), dict) else {}
+    metadata = video_flow.get("video_metadata") if isinstance(video_flow.get("video_metadata"), dict) else {}
+    profile_data = _profile_data_from_crawl(profile_classified, crawl, existing_match={}, max_posts=max_posts)
+    now = datetime.now(timezone.utc).isoformat()
+
+    profile_data["platform"] = profile_classified.platform
+    profile_data["handle"] = profile_classified.handle or profile_classified.channel_id
+    profile_data["profile_url"] = profile_data.get("profile_url") or profile_classified.normalized_url
+    if not profile_data.get("avatar_url") and identity.get("avatar_url"):
+        profile_data["avatar_url"] = identity.get("avatar_url")
+    if not profile_data.get("followers") and identity.get("followers") is not None:
+        profile_data["followers"] = identity.get("followers")
+    if not profile_data.get("bio") and identity.get("bio"):
+        profile_data["bio"] = identity.get("bio")
+    profile_data["profile_backfilled_at"] = now
+    if not profile_data.get("last_video_at"):
+        profile_data["last_video_at"] = _video_metadata_date(metadata)
+
+    raw_payload = _load_json(profile_data.get("raw_platform_data"))
+    if not isinstance(raw_payload, dict):
+        raw_payload = {}
+    raw_payload["video_url_creator_bootstrap"] = {
+        "method": "url_deep_crawl_video_new_creator_v1",
+        "source_url": metadata.get("content_url") or "",
+        "video_title": metadata.get("title") or "",
+        "video_id": metadata.get("video_id") or metadata.get("id") or "",
+        "creator_identity": identity,
+        "profile_backfilled_at": now,
+    }
+    profile_data["raw_platform_data"] = _json(raw_payload)
+    return profile_data
+
+
+def _video_metadata_date(metadata: dict[str, Any]) -> str:
+    if not isinstance(metadata, dict):
+        return ""
+    for key in ("publish_date", "posted_at", "published_at", "publishedAt", "uploadDate", "date", "timestamp"):
+        parsed = _parse_date(metadata.get(key))
+        if parsed:
+            return parsed
+    return ""
+
+
+def _compact_profile_write_result(result: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(result, dict) or not result:
+        return {}
+    return {
+        "ok": result.get("ok"),
+        "operation": result.get("operation"),
+        "kol_pool_id": result.get("kol_pool_id"),
+        "fields_written": result.get("fields_written"),
+        "ignored_fields": result.get("ignored_fields"),
+        "missing_columns": result.get("missing_columns"),
+        "viltrox_fit_score_changed_ids": result.get("viltrox_fit_score_changed_ids") or [],
+        "viltrox_fit_score_untouched": result.get("viltrox_fit_score_untouched"),
+        "method": result.get("method"),
+    }
 
 
 def _compact_video_evidence_result(result: dict[str, Any]) -> dict[str, Any]:
