@@ -564,6 +564,7 @@ def _profile_flow_plan(
     profile_data = _identity_profile_data(classified)
     writer_plan = write_kol_profile_basics(kol_pool_id, profile_data, dry_run=True)
     representative_enabled = _profile_should_enqueue_representative_videos(body)
+    incremental_state = _profile_incremental_state(kol_pool_id)
     return {
         "status": "ready_to_execute" if execute else "dry_run_ready",
         "operation": "update" if kol_pool_id else "insert",
@@ -583,6 +584,7 @@ def _profile_flow_plan(
             "status": "will_try_after_profile_crawl" if representative_enabled else "disabled_profile_only",
             "limit": _profile_representative_video_limit(body) if representative_enabled else 0,
             "note": "TikTok profile video analysis is skipped until the TikTok video resolver is fixed." if representative_enabled and classified.platform == "tiktok" else "",
+            "incremental": incremental_state,
         },
         "safe_writer_dry_run": {
             "operation": writer_plan.get("operation"),
@@ -607,6 +609,7 @@ def _execute_profile_flow(
     max_posts = _max_posts(body)
     kol_pool_id = int(matches[0]["kol_pool_id"]) if len(matches) == 1 else None
     operation = "update" if kol_pool_id else "insert"
+    incremental_state = _profile_incremental_state(kol_pool_id)
     conn = get_conn()
 
     crawl = _crawl_profile_basics(classified, target=target, max_posts=max_posts)
@@ -654,6 +657,7 @@ def _execute_profile_flow(
         kol_pool_id=written_kol_pool_id,
         crawl=crawl,
         body=body,
+        incremental_state=incremental_state,
     )
     changed_ids = sorted(
         set(
@@ -678,6 +682,7 @@ def _execute_profile_flow(
             "fields_written": write_result.get("fields_written"),
             "viltrox_fit_score_changed_ids": write_result.get("viltrox_fit_score_changed_ids"),
             "representative_video_analysis": representative_video_analysis,
+            "incremental_state": incremental_state,
         },
     )
     worker_touched = bool(representative_video_analysis.get("worker_touched"))
@@ -985,7 +990,9 @@ def _execute_profile_representative_video_analysis(
     kol_pool_id: int | None,
     crawl: dict[str, Any],
     body: dict[str, Any],
+    incremental_state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    incremental_state = incremental_state if isinstance(incremental_state, dict) else {}
     if not _profile_should_enqueue_representative_videos(body):
         return {
             "enabled": False,
@@ -996,6 +1003,7 @@ def _execute_profile_representative_video_analysis(
             "errors": 0,
             "worker_touched": False,
             "viltrox_fit_score_changed_ids": [],
+            "incremental": incremental_state,
         }
     if not kol_pool_id:
         return {
@@ -1007,6 +1015,7 @@ def _execute_profile_representative_video_analysis(
             "errors": 1,
             "worker_touched": False,
             "viltrox_fit_score_changed_ids": [],
+            "incremental": incremental_state,
         }
     if classified.platform == "tiktok":
         return {
@@ -1018,18 +1027,22 @@ def _execute_profile_representative_video_analysis(
             "errors": 0,
             "worker_touched": False,
             "viltrox_fit_score_changed_ids": [],
+            "incremental": incremental_state,
         }
 
     limit = _profile_representative_video_limit(body)
-    videos = _profile_representative_video_metadata(classified, crawl, limit=limit)
+    all_videos = _profile_representative_video_metadata(classified, crawl, limit=max(limit, _max_posts(body)))
+    videos, skipped_by_incremental = _filter_incremental_profile_videos(all_videos, incremental_state, limit=limit)
     if not videos:
         return {
             "enabled": True,
-            "status": "no_representative_video_url",
+            "status": "no_new_representative_video_after_cutoff" if skipped_by_incremental else "no_representative_video_url",
             "items": [],
             "queued": 0,
-            "skipped": 0,
+            "skipped": skipped_by_incremental,
             "errors": 0,
+            "candidate_count": len(all_videos),
+            "incremental": incremental_state,
             "worker_touched": False,
             "viltrox_fit_score_changed_ids": [],
         }
@@ -1095,10 +1108,13 @@ def _execute_profile_representative_video_analysis(
         "status": "completed" if not errors else "completed_with_errors",
         "limit": limit,
         "requested": len(videos),
+        "candidate_count": len(all_videos),
+        "skipped_by_incremental": skipped_by_incremental,
         "queued": queued,
         "skipped": skipped,
         "errors": errors,
         "items": items,
+        "incremental": incremental_state,
         "worker_touched": queued > 0,
         "viltrox_fit_score_changed_ids": sorted(set(changed_ids)),
         "viltrox_fit_score_untouched": not changed_ids,
@@ -1150,6 +1166,44 @@ def _profile_representative_video_metadata(
         if len(results) >= limit:
             break
     return results
+
+
+def _filter_incremental_profile_videos(
+    videos: list[dict[str, Any]],
+    incremental_state: dict[str, Any],
+    *,
+    limit: int,
+) -> tuple[list[dict[str, Any]], int]:
+    cutoff = _metadata_text((incremental_state or {}).get("last_video_at"))
+    if not cutoff:
+        return videos[:limit], 0
+    selected: list[dict[str, Any]] = []
+    skipped = 0
+    for metadata in videos:
+        if _profile_video_is_newer_than_cutoff(metadata, cutoff):
+            selected.append(metadata)
+            if len(selected) >= limit:
+                break
+        else:
+            skipped += 1
+    return selected, skipped
+
+
+def _profile_video_is_newer_than_cutoff(metadata: dict[str, Any], cutoff: str) -> bool:
+    cutoff_date = _parse_date(cutoff)
+    if not cutoff_date:
+        return True
+    posted_at = _parse_date(
+        _first_present(
+            metadata.get("posted_at"),
+            metadata.get("publish_date"),
+            metadata.get("published_at"),
+            metadata.get("publishedAt"),
+        )
+    )
+    if not posted_at:
+        return False
+    return posted_at > cutoff_date
 
 
 def _metadata_from_profile_video_item(
@@ -1281,6 +1335,63 @@ def _profile_video_dedupe_key(platform: str, content_url: str) -> str:
     if video_id:
         return f"{platform}:{video_id}"
     return _canonical_url(content_url) or str(content_url or "").strip()
+
+
+def _profile_incremental_state(kol_pool_id: int | None) -> dict[str, Any]:
+    if not kol_pool_id:
+        return {
+            "enabled": True,
+            "kol_pool_id": None,
+            "last_video_at": "",
+            "profile_backfilled_at": "",
+            "mode": "full_first_profile_crawl",
+        }
+    conn = get_conn()
+    columns = _table_columns(conn, "vkpi_kol_pool")
+    selected = ["id"]
+    for column in ("last_video_at", "raw_platform_data"):
+        if column in columns:
+            selected.append(column)
+    row = conn.execute(
+        f"SELECT {', '.join(selected)} FROM vkpi_kol_pool WHERE id=?",
+        (int(kol_pool_id),),
+    ).fetchone()
+    if not row:
+        return {
+            "enabled": True,
+            "kol_pool_id": int(kol_pool_id),
+            "last_video_at": "",
+            "profile_backfilled_at": "",
+            "mode": "missing_existing_profile",
+        }
+    row_dict = dict(row)
+    raw_payload = _load_json(row_dict.get("raw_platform_data"))
+    profile_backfilled_at = _raw_profile_backfilled_at(raw_payload)
+    last_video_at = _parse_date(row_dict.get("last_video_at")) or ""
+    return {
+        "enabled": True,
+        "kol_pool_id": int(kol_pool_id),
+        "last_video_at": last_video_at,
+        "profile_backfilled_at": profile_backfilled_at,
+        "mode": "incremental_after_last_video" if last_video_at else "full_no_last_video_at",
+    }
+
+
+def _raw_profile_backfilled_at(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    backfill = payload.get("profile_basics_backfill")
+    if isinstance(backfill, dict):
+        value = _metadata_text(backfill.get("profile_backfilled_at"))
+        if value:
+            return value
+    profile_backfill = payload.get("profile_backfill")
+    if isinstance(profile_backfill, dict):
+        value = _metadata_text(profile_backfill.get("profile_backfilled_at") or profile_backfill.get("created_at"))
+        if value:
+            return value
+    value = _metadata_text(payload.get("profile_backfilled_at"))
+    return value
 
 
 def _fit_changed_ids(result: dict[str, Any]) -> list[int]:

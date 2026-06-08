@@ -214,6 +214,7 @@ export function UrlDeepCrawlPanel({ apiToken = "" }: { apiToken?: string }) {
   const writeResult = asRecord(profileFlow.write_result);
   const profileData = asRecord(profileFlow.profile_data);
   const representativeVideoAnalysis = asRecord(profileFlow.representative_video_analysis);
+  const representativeIncremental = asRecord(representativeVideoAnalysis.incremental);
   const fieldsToWrite = useMemo(() => asStringList(writerDryRun.fields_to_write), [writerDryRun.fields_to_write]);
   const fieldsWritten = useMemo(() => asStringList(writeResult.fields_written), [writeResult.fields_written]);
   const candidates = Array.isArray(result?.candidates) ? result?.candidates || [] : [];
@@ -437,6 +438,7 @@ export function UrlDeepCrawlPanel({ apiToken = "" }: { apiToken?: string }) {
                   <div className="mt-2 text-[10px] text-slate-500">
                     representative_video_analysis: {displayText(representativeVideoAnalysis.status)}
                     {representativeVideoAnalysis.queued !== undefined ? ` · queued ${displayText(representativeVideoAnalysis.queued)}` : ""}
+                    {representativeIncremental.last_video_at ? ` · since ${displayText(representativeIncremental.last_video_at)}` : ""}
                   </div>
                 ) : null}
                 {writeResult.viltrox_fit_score_changed_ids ? (
