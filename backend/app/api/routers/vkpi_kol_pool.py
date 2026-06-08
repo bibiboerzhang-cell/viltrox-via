@@ -29,6 +29,7 @@ from app.domains.kol import intelligence_card as kol_intelligence_card
 from app.domains.kol import llm_deep_analysis as kol_llm_deep_analysis
 from app.domains.kol import pool as kol_pool
 import app.domains.kol.profile_recall as kol_profile_recall
+import app.domains.kol.search_sessions as kol_search_sessions
 import app.domains.kol.url_deep_crawl as kol_url_deep_crawl
 import app.domains.kol.video_analysis_enqueue as kol_video_analysis_enqueue
 from app.domains.intelligence import gemini_single_kol_preflight
@@ -211,6 +212,54 @@ def get_pool_workspace(
     )
 
 
+@router.post("/kol-search-sessions")
+def create_kol_search_session(
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """Create a unified KOL search session; orchestration state only."""
+    try:
+        return kol_search_sessions.create_session(
+            query_text=str(body.get("query_text") or body.get("query") or ""),
+            query_type=str(body.get("query_type") or "unknown"),
+            source=str(body.get("source") or "smart_kol_input"),
+            input_payload=body.get("input_payload") if isinstance(body.get("input_payload"), dict) else body,
+            status=str(body.get("status") or "planned"),
+            staff=staff,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get("/kol-search-sessions")
+def list_kol_search_sessions(
+    limit: int = Query(default=20, ge=1, le=100),
+    status: str = Query(default=""),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """List recent unified KOL search sessions."""
+    del staff
+    try:
+        return kol_search_sessions.list_sessions(limit=limit, status=status)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get("/kol-search-sessions/{session_id}")
+def get_kol_search_session(
+    session_id: int,
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """Return one KOL search session with its candidate items."""
+    del staff
+    try:
+        return kol_search_sessions.get_session(int(session_id))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @router.get("/kol-recall")
 def recall_kol_profiles(
     query_text: str = Query(default=""),
@@ -225,12 +274,13 @@ def recall_kol_profiles(
     vector_weight: float = Query(default=0.7, ge=0, le=1),
     type_weight: float = Query(default=0.3, ge=0, le=1),
     type_boost_enabled: bool = Query(default=True),
+    session_id: int | None = Query(default=None, ge=1),
+    create_session: bool = Query(default=False),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
     """Vector recall endpoint for KOL Index; does not affect KOL Pool ranking."""
-    del staff
     try:
-        return kol_profile_recall.recall_kol_profiles(
+        result = kol_profile_recall.recall_kol_profiles(
             query_text=query_text,
             product_sku=product_sku,
             candidate_limit=candidate_limit,
@@ -244,8 +294,29 @@ def recall_kol_profiles(
             type_weight=type_weight,
             type_boost_enabled=type_boost_enabled,
         )
+        session = kol_search_sessions.ensure_session_for_result(
+            session_id=session_id,
+            create=bool(create_session),
+            query_text=query_text or product_sku,
+            query_type="text_recall",
+            source="kol_recall",
+            input_payload={
+                "query_text": query_text,
+                "product_sku": product_sku,
+                "candidate_limit": candidate_limit,
+                "limit": limit,
+                "creator_quota": creator_quota,
+                "reviewer_quota": reviewer_quota,
+            },
+            staff=staff,
+        )
+        if session:
+            result["search_session"] = kol_search_sessions.attach_recall_result(int(session["id"]), result)
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -255,12 +326,33 @@ def dry_run_kol_url_deep_crawl(
     body: dict = Body(...),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
-    """Classify a pasted URL and check vkpi_kol_pool matches; dry-run only."""
-    del staff
+    """Classify a pasted URL and optionally execute the resolved URL workflow."""
     try:
-        return kol_url_deep_crawl.dry_run_url_deep_crawl(body)
+        result = kol_url_deep_crawl.dry_run_url_deep_crawl(body)
+        session_id = body.get("session_id")
+        try:
+            session_id_int = int(session_id) if session_id else None
+        except (TypeError, ValueError):
+            raise ValueError("session_id must be an integer") from None
+        create_session = bool(body.get("create_session"))
+        session = kol_search_sessions.ensure_session_for_result(
+            session_id=session_id_int,
+            create=create_session,
+            query_text=str(body.get("url") or ""),
+            query_type="url_video" if result.get("url_type") == "video" else "url_profile" if result.get("url_type") == "profile" else "unknown",
+            source="kol_url_deep_crawl",
+            input_payload={key: value for key, value in body.items() if key != "api_token"},
+            staff=staff,
+        )
+        if session:
+            result["search_session"] = kol_search_sessions.attach_url_result(int(session["id"]), result)
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get("/kol-pool/available")
