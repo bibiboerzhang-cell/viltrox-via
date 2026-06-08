@@ -536,6 +536,104 @@ def attach_recall_result(session_id: int, result: dict[str, Any]) -> dict[str, A
     return record_items(int(session_id), items, status="ready", summary=summary)
 
 
+def attach_new_discovery_result(session_id: int, result: dict[str, Any]) -> dict[str, Any]:
+    """Attach platform-discovery candidates to an existing smart-search session."""
+    items: list[dict[str, Any]] = []
+    rank = 1
+    for raw in _list(result.get("existing_matches")):
+        if not isinstance(raw, dict):
+            continue
+        kol_pool_id = _int_or_none(raw.get("history_kol_pool_id") or _dict(raw.get("historical_match")).get("kol_pool_id"))
+        source_url = _text(raw.get("channel_url") or raw.get("source_url"))
+        items.append(
+            {
+                "dedupe_key": f"existing:{kol_pool_id or source_url or rank}",
+                "item_type": "existing_kol",
+                "status": "matched",
+                "stage": "identified",
+                "rank": rank,
+                "score": _float_or_none(raw.get("history_match_confidence") or _dict(raw.get("historical_match")).get("match_confidence")),
+                "kol_pool_id": kol_pool_id,
+                "source_url": source_url,
+                "payload": {
+                    "source": "platform_discovery",
+                    "platform": raw.get("platform"),
+                    "handle": raw.get("handle"),
+                    "channel_name": raw.get("channel_name"),
+                    "sample_title": raw.get("sample_title"),
+                    "source_url": raw.get("source_url"),
+                    "channel_url": raw.get("channel_url"),
+                    "avatar_url": raw.get("avatar_url"),
+                    "historical_match": raw.get("historical_match"),
+                },
+            }
+        )
+        rank += 1
+    for raw in _list(result.get("new_creators")):
+        if not isinstance(raw, dict):
+            continue
+        source_url = _text(raw.get("channel_url") or raw.get("source_url"))
+        handle = _text(raw.get("handle") or raw.get("channel_name"))
+        platform = _text(raw.get("platform") or (result.get("platforms") or [""])[0])
+        items.append(
+            {
+                "dedupe_key": f"new:{platform}:{handle or source_url or rank}",
+                "item_type": "new_creator",
+                "status": "identified",
+                "stage": "identified",
+                "rank": rank,
+                "score": _float_or_none(raw.get("score") or raw.get("vector_score")),
+                "source_url": source_url,
+                "payload": {
+                    "source": "platform_discovery",
+                    "platform": platform,
+                    "handle": raw.get("handle"),
+                    "channel_name": raw.get("channel_name"),
+                    "sample_title": raw.get("sample_title"),
+                    "source_url": raw.get("source_url"),
+                    "channel_url": raw.get("channel_url"),
+                    "avatar_url": raw.get("avatar_url"),
+                    "thumbnail_url": raw.get("thumbnail_url"),
+                    "views": raw.get("views"),
+                    "likes": raw.get("likes"),
+                    "comments": raw.get("comments"),
+                    "avg_views": raw.get("avg_views"),
+                    "published": raw.get("published"),
+                    "search_query": raw.get("search_query") or result.get("query"),
+                    "market": raw.get("market") or result.get("market"),
+                },
+            }
+        )
+        rank += 1
+
+    existing_summary: dict[str, Any] = {}
+    try:
+        existing_summary = _dict(get_session(int(session_id)).get("result_summary"))
+    except Exception:
+        existing_summary = {}
+    discovery_summary = {
+        "kind": "platform_discovery",
+        "query": result.get("query"),
+        "status": result.get("status"),
+        "platforms": result.get("platforms"),
+        "counts": result.get("counts"),
+        "provider_calls": result.get("provider_calls"),
+        "platform_results": result.get("platform_results"),
+        "errors": result.get("errors"),
+        "viltrox_fit_score_untouched": True,
+    }
+    summary = {
+        **existing_summary,
+        "new_discovery": discovery_summary,
+    }
+    status = "ready"
+    if result.get("status") in {"partial", "failed"}:
+        status = "partial"
+    recorded = record_items(int(session_id), items, status=status, summary=summary)
+    recorded["new_discovery"] = discovery_summary
+    return recorded
+
+
 def _session_status_from_url_result(result: dict[str, Any]) -> str:
     if not result.get("execute"):
         return "ready"

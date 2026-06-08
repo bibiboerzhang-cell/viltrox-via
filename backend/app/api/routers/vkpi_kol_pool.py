@@ -29,6 +29,7 @@ from app.domains.kol import eleven_dimensions
 from app.domains.kol import intelligence_card as kol_intelligence_card
 from app.domains.kol import llm_deep_analysis as kol_llm_deep_analysis
 from app.domains.kol import pool as kol_pool
+from app.domains.kol import profile_discovery as kol_profile_discovery
 import app.domains.kol.profile_recall as kol_profile_recall
 import app.domains.kol.search_sessions as kol_search_sessions
 import app.domains.kol.url_deep_crawl as kol_url_deep_crawl
@@ -355,7 +356,7 @@ def get_kol_search_session(
 
 
 @router.post("/kol-smart-search")
-def smart_kol_search(
+async def smart_kol_search(
     body: dict = Body(...),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
@@ -411,6 +412,36 @@ def smart_kol_search(
             type_boost_enabled=bool(body.get("type_boost_enabled", True)),
         )
         result = _attach_smart_recall_session(body=body, result=result, query_text=recall_query, staff=staff)
+        discovery_payload: dict | None = None
+        include_new_discovery = bool(body.get("include_new_discovery") or body.get("include_discovery"))
+        execute_new_discovery = bool(body.get("execute_new_discovery"))
+        if include_new_discovery:
+            discovery_limit = int(body.get("new_discovery_limit") or body.get("discovery_limit") or 15)
+            discovery_platforms = body.get("new_discovery_platforms") or body.get("discovery_platforms")
+            platform_hint = str(body.get("platform") or "")
+            if execute_new_discovery:
+                discovery_payload = await kol_profile_discovery.discover_new_creators(
+                    query_text=recall_query,
+                    platforms=discovery_platforms,
+                    platform_hint=platform_hint,
+                    market=str(body.get("market") or body.get("country") or ""),
+                    limit=discovery_limit,
+                    per_platform_limit=int(body.get("new_discovery_per_platform_limit") or discovery_limit),
+                )
+                search_session = result.get("search_session") if isinstance(result.get("search_session"), dict) else {}
+                session_id = _int_or_none(search_session.get("session_id") or search_session.get("id"))
+                if session_id:
+                    result["new_discovery_session"] = kol_search_sessions.attach_new_discovery_result(
+                        int(session_id),
+                        discovery_payload,
+                    )
+            else:
+                discovery_payload = kol_profile_discovery.discovery_plan(
+                    query_text=recall_query,
+                    platforms=discovery_platforms,
+                    platform_hint=platform_hint,
+                    limit=discovery_limit,
+                )
         return {
             "status": "ready",
             "mode": "text",
@@ -420,8 +451,9 @@ def smart_kol_search(
             "search_session": result.get("search_session"),
             "provider_calls": True,
             "provider_note": "text recall requires OpenAI embedding; cost is recorded by recall diagnostics",
+            "new_discovery": discovery_payload,
             "viltrox_fit_score_untouched": True,
-            "new_discovery_status": "not_connected_stage1_local_pool_recall_only",
+            "new_discovery_status": (discovery_payload or {}).get("status") if discovery_payload else "not_requested",
         }
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
