@@ -185,6 +185,32 @@ def get_pool_summary(
     return kol_pool.summary()
 
 
+@router.get("/kol-pool/workspace")
+def get_pool_workspace(
+    limit: int = Query(default=1200, ge=1, le=2000),
+    offset: int = Query(default=0, ge=0),
+    platform: str = Query(default=""),
+    query: str = Query(default=""),
+    country: str = Query(default=""),
+    data_status: str = Query(default=""),
+    sort_by: str = Query(default="fit"),
+    enrichable: bool | None = Query(default=None),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """One read-only KOL Pool workspace bundle for 100-user-friendly page boot."""
+    del staff
+    return kol_pool.workspace(
+        limit=limit,
+        offset=offset,
+        platform=platform,
+        query=query,
+        country=country,
+        data_status=data_status,
+        sort_by=sort_by,
+        enrichable=enrichable,
+    )
+
+
 @router.get("/kol-recall")
 def recall_kol_profiles(
     query_text: str = Query(default=""),

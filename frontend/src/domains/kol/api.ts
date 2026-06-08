@@ -10,6 +10,7 @@ import {
   getKolPoolIntelligenceCard,
   getKolPoolItem,
   getKolPoolSummary,
+  getKolPoolWorkspace,
   linkKolPoolToMain,
   listKolPoolMainCandidates,
   listKolPool,
@@ -24,6 +25,7 @@ import {
   type VkpiKolPoolIntelligenceCard,
   type VkpiKolPoolItem,
   type VkpiKolPoolRefreshState,
+  type VkpiKolPoolWorkspaceResponse,
 } from '../../services/vkpi/kolPool-api';
 import {
   addKolContact,
@@ -64,6 +66,7 @@ export {
   getKolPoolIntelligenceCard,
   getKolPoolItem,
   getKolPoolSummary,
+  getKolPoolWorkspace,
   getKolPosts,
   getKolProductFit,
   getKolProfile,
@@ -86,6 +89,7 @@ export {
   type VkpiKolPoolIntelligenceCard,
   type VkpiKolPoolItem,
   type VkpiKolPoolRefreshState,
+  type VkpiKolPoolWorkspaceResponse,
   type VkpiKolUrlDeepCrawlResponse,
   type VkpiKolRecallItem,
   type VkpiKolRecallResponse,

@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { useEffect, useMemo, useState } from "react";
-import { listKolPool } from "../../../domains/kol";
+import { getKolPoolWorkspace, listKolPool } from "../../../domains/kol";
 import { fetchV615DashboardBundle, fetchV615ShellBundle } from "./api";
 import { toV615KolPoolRows } from "./kolPoolRuntime";
 import { readCachedResource, writeCachedResource } from "./lib/resourceCache";
@@ -49,6 +49,13 @@ async function listAllKolPoolPages(apiToken) {
     if (items.length < pageSize) break;
   }
   return pages;
+}
+
+async function loadKolPoolWorkspaceRows(apiToken) {
+  const response = await getKolPoolWorkspace(apiToken, { limit: 1200, offset: 0, sortBy: "fit" });
+  const items = response?.list?.items || [];
+  if (!Array.isArray(items)) return [];
+  return items;
 }
 
 export function useV615Runtime({ apiToken, userName, userRole, userAvatar, starredProjects }) {
@@ -104,7 +111,8 @@ export function useV615Runtime({ apiToken, userName, userRole, userAvatar, starr
     setKolPoolLoading(true);
     setKolPoolError("");
 
-    const refreshRows = () => listAllKolPoolPages(apiToken)
+    const refreshRows = () => loadKolPoolWorkspaceRows(apiToken)
+      .catch(() => listAllKolPoolPages(apiToken))
       .then((response) => {
         if (!cancelled) {
           const rows = toV615KolPoolRows(response || []);

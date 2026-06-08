@@ -120,6 +120,25 @@ export interface VkpiKolPoolRefreshState {
   message?: string;
 }
 
+export interface VkpiKolPoolWorkspaceResponse {
+  status: "ready" | string;
+  method?: string;
+  query?: Row;
+  summary?: Row;
+  counts?: Row;
+  filter_options?: Row;
+  market_coverage?: Row;
+  list?: {
+    items?: VkpiKolPoolItem[];
+    limit?: number;
+    offset?: number;
+    sort_by?: string;
+    returned?: number;
+    has_more?: boolean;
+  };
+  diagnostics?: Row;
+}
+
 export interface VkpiKolPoolIntelligenceCard {
   mode: string;
   generated_at: string;
@@ -357,6 +376,25 @@ export async function listKolPool(
   if (typeof params.refreshIfStale === "boolean") query.set("refresh_if_stale", String(params.refreshIfStale));
   return apiFetch<{ items?: VkpiKolPoolItem[]; refresh?: VkpiKolPoolRefreshState }>(
     `/api/admin/vkpi/kol-pool?${query.toString()}`,
+    {},
+    token,
+  );
+}
+
+export async function getKolPoolWorkspace(
+  token: string,
+  params: { search?: string; platform?: string; country?: string; limit?: number; offset?: number; dataStatus?: string; sortBy?: string; enrichable?: boolean } = {},
+): Promise<VkpiKolPoolWorkspaceResponse> {
+  const query = new URLSearchParams({ limit: String(params.limit || 1200) });
+  if (typeof params.offset === "number") query.set("offset", String(params.offset));
+  if (params.search) query.set("query", params.search);
+  if (params.platform) query.set("platform", params.platform);
+  if (params.country) query.set("country", params.country);
+  if (params.dataStatus) query.set("data_status", params.dataStatus);
+  if (params.sortBy) query.set("sort_by", params.sortBy);
+  if (typeof params.enrichable === "boolean") query.set("enrichable", String(params.enrichable));
+  return apiFetch<VkpiKolPoolWorkspaceResponse>(
+    `/api/admin/vkpi/kol-pool/workspace?${query.toString()}`,
     {},
     token,
   );

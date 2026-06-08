@@ -188,6 +188,33 @@ def list_pool(
     cached = cache_get(cache_key)
     if cached is not None:
         return _kol_pool_cache_hit(cached)
+    clause, params = _pool_filter_clause(
+        platform=platform,
+        query=query,
+        country=country,
+        data_status=data_status,
+        enrichable=enrichable,
+    )
+    order_clause = _sort_clause(sort_by)
+    conn = get_conn()
+    table_columns = _table_columns(conn, "vkpi_kol_pool")
+    select_columns = [column for column in KOL_POOL_LIST_COLUMNS if column in table_columns]
+    select_clause = ", ".join(select_columns) if "id" in select_columns else "*"
+    rows = conn.execute(
+        f"SELECT {select_clause} FROM vkpi_kol_pool {clause} ORDER BY {order_clause} LIMIT ? OFFSET ?",
+        (*params, safe_limit, safe_offset),
+    ).fetchall()
+    return _kol_pool_cache_store(cache_key, {"items": [dict(row) for row in rows]})
+
+
+def _pool_filter_clause(
+    *,
+    platform: str = "",
+    query: str = "",
+    country: str = "",
+    data_status: str = "",
+    enrichable: bool | None = None,
+) -> tuple[str, list[Any]]:
     where: list[str] = []
     params: list[Any] = []
     if platform:
@@ -233,8 +260,54 @@ def list_pool(
         where.append(f"platform NOT IN ({placeholders})")
         params.extend(sorted(ENRICHABLE_PLATFORMS))
     clause = "WHERE " + " AND ".join(where) if where else ""
-    order_clause = _sort_clause(sort_by)
+    return clause, params
+
+
+def workspace(
+    *,
+    limit: int = 1200,
+    offset: int = 0,
+    platform: str = "",
+    query: str = "",
+    country: str = "",
+    data_status: str = "",
+    sort_by: str = "fit",
+    enrichable: bool | None = None,
+) -> dict[str, Any]:
+    """Return one read-only KOL Pool page bundle for the V615 workspace."""
+
+    ensure_vkpi_product_industry_schema()
+    safe_limit = max(1, min(2000, int(limit or 1200)))
+    safe_offset = max(0, int(offset or 0))
+    normalized_platform = _platform(platform) if platform else ""
+    normalized_country = _country_code(country) if country else ""
+    normalized_query = str(query or "").strip()
+    normalized_data_status = str(data_status or "").strip().lower()
+    normalized_sort = str(sort_by or "fit").strip().lower()
+    cache_key = _kol_pool_cache_key(
+        "workspace",
+        limit=safe_limit,
+        offset=safe_offset,
+        platform=normalized_platform,
+        query=normalized_query.lower(),
+        country=normalized_country,
+        data_status=normalized_data_status,
+        sort_by=normalized_sort,
+        enrichable="any" if enrichable is None else str(bool(enrichable)).lower(),
+    )
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return _kol_pool_cache_hit(cached)
+
     conn = get_conn()
+    clause, params = _pool_filter_clause(
+        platform=normalized_platform,
+        query=normalized_query,
+        country=normalized_country,
+        data_status=normalized_data_status,
+        enrichable=enrichable,
+    )
+    order_clause = _sort_clause(normalized_sort)
     table_columns = _table_columns(conn, "vkpi_kol_pool")
     select_columns = [column for column in KOL_POOL_LIST_COLUMNS if column in table_columns]
     select_clause = ", ".join(select_columns) if "id" in select_columns else "*"
@@ -242,7 +315,101 @@ def list_pool(
         f"SELECT {select_clause} FROM vkpi_kol_pool {clause} ORDER BY {order_clause} LIMIT ? OFFSET ?",
         (*params, safe_limit, safe_offset),
     ).fetchall()
-    return _kol_pool_cache_store(cache_key, {"items": [dict(row) for row in rows]})
+    filtered = conn.execute(
+        f"SELECT COUNT(*) AS n FROM vkpi_kol_pool {clause}",
+        tuple(params),
+    ).fetchone()
+    filtered_count = int(filtered["n"] if filtered else 0)
+    all_summary = summary()
+    by_candidate_kind = conn.execute(
+        "SELECT COALESCE(NULLIF(candidate_kind, ''), 'unknown') AS candidate_kind, COUNT(*) AS n "
+        "FROM vkpi_kol_pool GROUP BY COALESCE(NULLIF(candidate_kind, ''), 'unknown') ORDER BY n DESC, candidate_kind ASC"
+    ).fetchall() if "candidate_kind" in table_columns else []
+    by_data_status = {
+        "complete": int(conn.execute(
+            """
+            SELECT COUNT(*) AS n
+            FROM vkpi_kol_pool
+            WHERE avatar_url IS NOT NULL AND avatar_url!=''
+              AND avg_views IS NOT NULL
+              AND engagement_rate IS NOT NULL
+              AND viltrox_fit_score IS NOT NULL
+            """
+        ).fetchone()["n"]),
+        "missing": int(conn.execute(
+            """
+            SELECT COUNT(*) AS n
+            FROM vkpi_kol_pool
+            WHERE avatar_url IS NULL OR avatar_url=''
+               OR avg_views IS NULL
+               OR engagement_rate IS NULL
+               OR viltrox_fit_score IS NULL
+            """
+        ).fetchone()["n"]),
+    }
+    countries = all_summary.get("country_distribution") if isinstance(all_summary.get("country_distribution"), list) else []
+    payload = {
+        "status": "ready",
+        "method": "kol_pool_workspace_v1",
+        "query": {
+            "limit": safe_limit,
+            "offset": safe_offset,
+            "platform": normalized_platform,
+            "query": normalized_query,
+            "country": normalized_country,
+            "data_status": normalized_data_status,
+            "sort_by": normalized_sort,
+            "enrichable": enrichable,
+        },
+        "summary": all_summary,
+        "counts": {
+            "total": int(all_summary.get("total") or 0),
+            "filtered": filtered_count,
+            "returned": len(rows),
+            "offset": safe_offset,
+            "limit": safe_limit,
+            "has_more": safe_offset + len(rows) < filtered_count,
+            "by_candidate_kind": [dict(row) for row in by_candidate_kind],
+            "by_data_status": by_data_status,
+        },
+        "filter_options": {
+            "platforms": all_summary.get("by_platform") or [],
+            "countries": countries,
+            "data_statuses": [
+                {"value": "", "label": "全部"},
+                {"value": "complete", "label": "已补全"},
+                {"value": "missing", "label": "待补全"},
+            ],
+            "sort_options": [
+                {"value": "fit", "label": "V6 Fit"},
+                {"value": "followers", "label": "粉丝"},
+                {"value": "updated", "label": "最近更新"},
+                {"value": "created", "label": "最近创建"},
+            ],
+        },
+        "market_coverage": {
+            "total_countries": len(countries),
+            "items": countries,
+        },
+        "list": {
+            "items": [dict(row) for row in rows],
+            "limit": safe_limit,
+            "offset": safe_offset,
+            "sort_by": normalized_sort,
+            "returned": len(rows),
+            "has_more": safe_offset + len(rows) < filtered_count,
+        },
+        "diagnostics": {
+            "source": "vkpi_kol_pool",
+            "provider_calls": False,
+            "llm_calls": False,
+            "worker_touched": False,
+            "write_db": False,
+            "viltrox_fit_score_write": False,
+            "cache": "kol_pool_read_cache",
+        },
+    }
+    return _kol_pool_cache_store(cache_key, payload)
 
 
 def summary() -> dict[str, Any]:
