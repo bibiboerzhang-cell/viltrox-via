@@ -370,6 +370,40 @@ def get_session_item(session_id: int, item_id: int) -> dict[str, Any]:
     return _row_to_item(row)
 
 
+def update_session_result_summary(
+    session_id: int,
+    *,
+    status: str,
+    summary_patch: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge a small orchestration summary into one search session."""
+
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT result_summary_json FROM vkpi_kol_search_sessions WHERE id=?",
+        (int(session_id),),
+    ).fetchone()
+    if not row:
+        raise LookupError(f"search session not found: {session_id}")
+    summary = _loads(dict(row).get("result_summary_json"), {})
+    if not isinstance(summary, dict):
+        summary = {}
+    summary.update(_dict(summary_patch))
+    updated = conn.execute(
+        """
+        UPDATE vkpi_kol_search_sessions
+        SET status=?,
+            result_summary_json=?::jsonb,
+            updated_at=NOW()
+        WHERE id=?
+        RETURNING *
+        """,
+        (_normalize_status(status), _json_dumps(summary), int(session_id)),
+    ).fetchone()
+    conn.commit()
+    return _row_to_session(updated)
+
+
 def update_item_profile_execution(
     session_id: int,
     item_id: int,

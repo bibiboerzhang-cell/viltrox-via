@@ -178,6 +178,159 @@ def execute_profile_crawl_for_session_item(
     }
 
 
+def advance_search_session_items(
+    *,
+    session_id: int,
+    body: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Plan or execute ordered profile crawl for discovery items in a session.
+
+    This is an orchestration helper for the unified KOL input. It advances
+    session items one by one through the already-safe profile flow and never
+    writes V6 Fit fields directly.
+    """
+
+    body = body or {}
+    execute = bool(body.get("execute"))
+    limit = max(1, min(_int(body.get("limit"), 5), 15))
+    max_posts = max(1, min(_int(body.get("max_posts"), 12), 12))
+    mode = _text(body.get("mode") or "profile_only")
+    if mode not in {"profile_only", "auto", "profile_with_video", "account_deep"}:
+        mode = "profile_only"
+    include_completed = bool(body.get("include_completed"))
+    item_ids_raw = body.get("item_ids")
+    item_ids = {
+        _int(value)
+        for value in (item_ids_raw if isinstance(item_ids_raw, list) else [])
+        if _int(value) > 0
+    }
+    allowed_types_raw = body.get("item_types")
+    allowed_types = {
+        _text(value)
+        for value in (allowed_types_raw if isinstance(allowed_types_raw, list) else [])
+        if _text(value)
+    } or {"new_creator", "existing_kol"}
+
+    session = search_sessions.get_session(int(session_id))
+    candidates: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    terminal_statuses = {"ready", "queued", "running", "already_queued", "already_analyzed"}
+    for item in session.get("items") or []:
+        item_id = _int(item.get("id"))
+        item_type = _text(item.get("item_type"))
+        item_status = _text(item.get("status"))
+        if item_ids and item_id not in item_ids:
+            continue
+        if item_type not in allowed_types:
+            continue
+        if item_type not in {"new_creator", "existing_kol"}:
+            skipped.append({"item_id": item_id, "status": "skipped", "reason": "unsupported_item_type", "item_type": item_type})
+            continue
+        if not include_completed and item_status in terminal_statuses:
+            skipped.append({"item_id": item_id, "status": "skipped", "reason": "already_terminal", "item_status": item_status})
+            continue
+        profile_url = _profile_url_from_item(item)
+        if not profile_url:
+            skipped.append({"item_id": item_id, "status": "skipped", "reason": "missing_profile_url", "item_status": item_status})
+            continue
+        candidates.append(item)
+
+    selected = candidates[:limit]
+    overflow = max(0, len(candidates) - len(selected))
+    items: list[dict[str, Any]] = []
+    counts: dict[str, int] = {"planned": 0, "executed": 0, "ready": 0, "partial": 0, "failed": 0, "skipped": len(skipped), "errors": 0}
+    changed_ids: list[int] = []
+
+    for item in selected:
+        item_id = _int(item.get("id"))
+        try:
+            if not execute:
+                plan = profile_crawl_plan_for_session_item(
+                    session_id=int(session_id),
+                    item_id=item_id,
+                    max_posts=max_posts,
+                    mode=mode,
+                )
+                counts["planned"] += 1
+                items.append({"item_id": item_id, "status": "planned", "plan": plan})
+                continue
+
+            result = execute_profile_crawl_for_session_item(
+                session_id=int(session_id),
+                item_id=item_id,
+                body={**body, "execute": True, "max_posts": max_posts, "mode": mode},
+            )
+            counts["executed"] += 1
+            status = _text(result.get("status")).lower() or "unknown"
+            if status == "ready":
+                counts["ready"] += 1
+            elif status in {"failed", "crawl_failed", "profile_crawl_failed"} or "failed" in status:
+                counts["failed"] += 1
+            else:
+                counts["partial"] += 1
+            for changed_id in result.get("viltrox_fit_score_changed_ids") or []:
+                parsed = _int(changed_id)
+                if parsed > 0 and parsed not in changed_ids:
+                    changed_ids.append(parsed)
+            items.append({"item_id": item_id, "status": status, "result": result})
+        except Exception as exc:
+            counts["errors"] += 1
+            items.append({"item_id": item_id, "status": "error", "reason": str(exc)[:500]})
+
+    skipped.extend(
+        {
+            "item_id": _int(item.get("id")),
+            "status": "skipped",
+            "reason": "over_limit",
+            "item_status": _text(item.get("status")),
+        }
+        for item in candidates[limit:]
+    )
+    counts["skipped"] = len(skipped)
+
+    batch_status = "planned"
+    if execute:
+        if counts["failed"] or counts["errors"]:
+            batch_status = "partial" if counts["ready"] or counts["partial"] else "failed"
+        else:
+            batch_status = "ready"
+        search_sessions.update_session_result_summary(
+            int(session_id),
+            status=batch_status,
+            summary_patch={
+                "profile_batch_advance": {
+                    "status": batch_status,
+                    "mode": mode,
+                    "limit": limit,
+                    "selected": len(selected),
+                    "overflow": overflow,
+                    "counts": counts,
+                    "viltrox_fit_score_changed_ids": changed_ids,
+                    "viltrox_fit_score_untouched": not changed_ids,
+                }
+            },
+        )
+
+    return {
+        "status": batch_status,
+        "execute": execute,
+        "session_id": int(session_id),
+        "mode": mode,
+        "limit": limit,
+        "selected": len(selected),
+        "eligible": len(candidates),
+        "overflow": overflow,
+        "counts": counts,
+        "items": items,
+        "skipped": skipped[: max(0, 50 - len(items))],
+        "viltrox_fit_score_changed_ids": changed_ids,
+        "viltrox_fit_score_untouched": not changed_ids,
+        "provider_calls_performed": execute and bool(selected),
+        "write_db": execute and bool(selected),
+        "writes": ["vkpi_kol_pool", "vkpi_kol_url_deep_crawl_runs", "vkpi_kol_search_sessions", "vkpi_kol_search_session_items"] if execute and selected else [],
+    }
+
+
 async def discover_new_creators(
     *,
     query_text: str,
