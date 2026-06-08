@@ -16,6 +16,7 @@ import { SmartKolInputPanel } from "./components/SmartKolInputPanel";
 import { TrendPulseBar } from "./components/TrendPulseBar";
 import { UrlDeepCrawlPanel } from "./components/UrlDeepCrawlPanel";
 import { ContactModal } from "./components/modals/ContactModal";
+import { KolPoolAllModal } from "./components/modals/KolPoolAllModal";
 import { getKolPoolItem } from "../../../domains/kol";
 import { toV615KolPoolRows } from "./kolPoolRuntime";
 import { candidateKindGroup } from "./lib/candidateKind";
@@ -37,6 +38,7 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
   const [detailError, setDetailError] = useState("");
   const [myList, setMyList] = useState(new Set());
   const [contactItem, setContactItem] = useState(null);
+  const [poolModalOpen, setPoolModalOpen] = useState(false);
   // Search v2 state
   const [searchMode, setSearchMode] = useState("balanced"); // balanced | precision | discovery
   const [kindFilter, setKindFilter] = useState("");          // "" | "existing" | "new" | specific kind
@@ -141,6 +143,7 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
           items: poolItems,
           onCardClick: (k) => setKindFilter(kindFilter === k ? "" : k),
           activeKindFilter: kindFilter,
+          onTotalClick: () => setPoolModalOpen(true),
         }),
         e(TrendPulseBar),
         e(MarketCoverageCard, { items: poolItems }),
@@ -190,6 +193,17 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
         }, loading ? "正在读取真实 KOL Pool API" : error ? "真实 KOL Pool API 无信号: " + error : "暂无真实 KOL Pool 数据")
     ),
     e(AnimatePresence, null,
+      poolModalOpen && e(KolPoolAllModal, {
+        key: "kol-pool-all-modal",
+        items: poolItems,
+        myList,
+        selectedItemId: selectedItem?.id,
+        onClose: () => setPoolModalOpen(false),
+        onRowClick: (item) => {
+          void openItem(item);
+          window.setTimeout(() => setPoolModalOpen(false), 0);
+        },
+      }),
       selectedItem && e(KOLDetailDrawer, {
         key: `kol-detail-${selectedItem.id || selectedItem.handle || "selected"}`,
         item: selectedItem,

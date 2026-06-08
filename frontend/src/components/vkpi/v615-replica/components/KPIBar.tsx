@@ -10,7 +10,7 @@ import { formatNumber } from "../lib/format";
 
 const e = React.createElement;
 
-export function KPIBar({ items, onCardClick, activeKindFilter }) {
+export function KPIBar({ items, onCardClick, activeKindFilter, onTotalClick }) {
   const total = items.length;
   const fits = items.filter(i => i.v6_fit != null).map(i => i.v6_fit);
   const avgFit = fits.length ? Math.round(fits.reduce((a, b) => a + b, 0) / fits.length) : "待评估";
@@ -40,23 +40,33 @@ export function KPIBar({ items, onCardClick, activeKindFilter }) {
   
   return e("div", { className: "grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-4" },
     cards.map((c, i) => {
-      const clickable = c.filterKey !== null;
+      const isTotalCard = c.label === "Pool 总数";
+      const clickable = c.filterKey !== null || (isTotalCard && onTotalClick);
       const isActive  = clickable && activeKindFilter === c.filterKey && c.filterKey !== "";
-      return e(motion.div, {
+      const Card = clickable ? motion.button : motion.div;
+      const cardProps = {
         key: c.label,
         initial: { opacity: 0, y: 8 },
         animate: { opacity: 1, y: 0 },
         transition: { delay: i * 0.04, duration: 0.4 },
-        onClick: clickable ? () => onCardClick(c.filterKey) : undefined,
-        className: "rounded-xl border p-3 backdrop-blur-xl transition-colors " +
+        onClick: clickable ? () => {
+          if (isTotalCard && onTotalClick) {
+            onTotalClick();
+            return;
+          }
+          onCardClick(c.filterKey);
+        } : undefined,
+        className: "rounded-xl border p-3 text-left backdrop-blur-xl transition-colors " +
           (clickable ? "cursor-pointer hover:border-white/[0.18] hover:bg-white/[0.04] " : "") +
           (isActive ? "border-white/[0.25]" : "border-white/[0.08]"),
         style: { background: isActive ? c.color + "12" : "rgba(255,255,255,0.025)" }
-      },
+      };
+      if (clickable) cardProps.type = "button";
+      return e(Card, cardProps,
         e("div", { className: "flex items-center gap-1.5 mb-1" },
           e("span", { className: "rounded-md p-1", style: { background: c.color + "1a", color: c.color } }, e(c.icon, { size: 11 })),
           e("span", { className: "text-[10px] text-slate-400 flex-1" }, c.label),
-          clickable && e(Filter, { size: 9, className: "text-slate-600", title: "点击筛选" })
+          clickable && e(Filter, { size: 9, className: "text-slate-600", title: isTotalCard ? "查看全部 KOL" : "点击筛选" })
         ),
         e("div", { className: "text-xl font-light text-white tabular-nums" }, c.value),
         e("div", { className: "text-[9px] text-slate-500 truncate" }, c.sub)
