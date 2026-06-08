@@ -69,6 +69,18 @@ def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
+def _loads(raw: Any, default: Any) -> Any:
+    if raw in (None, "", b""):
+        return default
+    if isinstance(raw, (dict, list)):
+        return raw
+    try:
+        parsed = json.loads(str(raw))
+    except Exception:
+        return default
+    return parsed if parsed is not None else default
+
+
 def _int_or_none(value: Any) -> int | None:
     try:
         parsed = int(value)
@@ -462,6 +474,110 @@ def _analysis_cache_exists(conn: psycopg.Connection[Any], target_type: str, targ
         return cur.fetchone() is not None
 
 
+def _search_session_job_state(raw_status: str, reason: str = "") -> tuple[str, str]:
+    status = str(raw_status or "").strip().lower()
+    reason_text = str(reason or "").strip().lower()
+    if status == "running":
+        return "running", "analysis"
+    if status == "queued":
+        return "queued", "analysis"
+    if status == "done":
+        if "skipped_existing_analysis_cache" in reason_text:
+            return "already_analyzed", "summary"
+        return "ready", "summary"
+    if status in {"failed", "blocked"}:
+        return "failed", "analysis"
+    return "unknown", "analysis"
+
+
+def _sync_search_session_job(
+    conn: psycopg.Connection[Any],
+    job_id: int,
+    *,
+    raw_status: str,
+    reason: str = "",
+) -> None:
+    try:
+        _sync_search_session_job_impl(conn, job_id, raw_status=raw_status, reason=reason)
+    except Exception as exc:
+        logger.warning("search session job sync failed | job_id=%s status=%s error=%s", job_id, raw_status, exc)
+
+
+def _sync_search_session_job_impl(
+    conn: psycopg.Connection[Any],
+    job_id: int,
+    *,
+    raw_status: str,
+    reason: str = "",
+) -> None:
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute("SELECT id, payload, last_error FROM apify_jobs WHERE id=%s", (int(job_id),))
+        row = cur.fetchone()
+    if not row:
+        return
+    payload = row.get("payload") if isinstance(row.get("payload"), dict) else _loads(row.get("payload"), {})
+    if not isinstance(payload, dict):
+        return
+    session_id = _int_or_none(payload.get("search_session_id"))
+    item_id = _int_or_none(payload.get("search_session_item_id"))
+    if not session_id or not item_id:
+        return
+    item_status, stage = _search_session_job_state(raw_status, reason or row.get("last_error") or "")
+    payload["search_session_item_status"] = item_status
+    payload["search_session_stage"] = stage
+    payload["search_session_last_job_status"] = raw_status
+    payload["search_session_last_error"] = str(reason or row.get("last_error") or "")[:500]
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE vkpi_kol_search_session_items
+                SET status=%s,
+                    stage=%s,
+                    payload_json = payload_json || %s::jsonb,
+                    updated_at=NOW()
+                WHERE id=%s
+                  AND session_id=%s
+                """,
+                (
+                    item_status,
+                    stage,
+                    _json(
+                        {
+                            "job_status": raw_status,
+                            "job_last_error": str(reason or row.get("last_error") or "")[:1000],
+                            "job_updated_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                    ),
+                    int(item_id),
+                    int(session_id),
+                ),
+            )
+            cur.execute(
+                """
+                UPDATE vkpi_kol_search_sessions
+                SET status = CASE
+                    WHEN EXISTS (
+                      SELECT 1 FROM vkpi_kol_search_session_items
+                      WHERE session_id=%s AND status IN ('queued', 'running')
+                    ) THEN 'running'
+                    WHEN EXISTS (
+                      SELECT 1 FROM vkpi_kol_search_session_items
+                      WHERE session_id=%s AND status='failed'
+                    ) THEN 'partial'
+                    ELSE 'ready'
+                  END,
+                  updated_at=NOW()
+                WHERE id=%s
+                """,
+                (int(session_id), int(session_id), int(session_id)),
+            )
+            cur.execute(
+                "UPDATE apify_jobs SET payload=%s::jsonb WHERE id=%s",
+                (_json(payload), int(job_id)),
+            )
+
+
 def _finish_skipped(conn: psycopg.Connection[Any], job_id: int, reason: str) -> None:
     with conn.transaction():
         with conn.cursor() as cur:
@@ -469,6 +585,7 @@ def _finish_skipped(conn: psycopg.Connection[Any], job_id: int, reason: str) -> 
                 "UPDATE apify_jobs SET status='done', last_error=%s, updated_at=NOW() WHERE id=%s",
                 (reason[:2000], job_id),
             )
+    _sync_search_session_job(conn, job_id, raw_status="done", reason=reason)
 
 
 def _block_job(conn: psycopg.Connection[Any], job_id: int, reason: str, detail: dict[str, Any] | None = None) -> None:
@@ -479,6 +596,7 @@ def _block_job(conn: psycopg.Connection[Any], job_id: int, reason: str, detail: 
                 "UPDATE apify_jobs SET status='blocked', last_error=%s, updated_at=NOW() WHERE id=%s",
                 (_json(payload)[:2000], job_id),
             )
+    _sync_search_session_job(conn, job_id, raw_status="blocked", reason=_json(payload))
 
 
 def _requeue_job(conn: psycopg.Connection[Any], job_id: int, reason: str) -> None:
@@ -488,6 +606,7 @@ def _requeue_job(conn: psycopg.Connection[Any], job_id: int, reason: str) -> Non
                 "UPDATE apify_jobs SET status='queued', last_error=%s, updated_at=NOW() WHERE id=%s",
                 (reason[:2000], job_id),
             )
+    _sync_search_session_job(conn, job_id, raw_status="queued", reason=reason)
 
 
 def _llm_budget_preflight(job: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
@@ -1194,6 +1313,7 @@ def _write_gemini_cache(
                 "UPDATE apify_jobs SET status='done', last_error=NULL, updated_at=NOW() WHERE id=%s",
                 (job["id"],),
             )
+    _sync_search_session_job(conn, int(job["id"]), raw_status="done")
 
 
 def _process_gemini_video_final_v1_keyframe_qa(
@@ -1903,6 +2023,7 @@ def _process_gemini_video(
                 "UPDATE apify_jobs SET status='done', last_error=NULL, updated_at=NOW() WHERE id=%s",
                 (job["id"],),
             )
+    _sync_search_session_job(conn, int(job["id"]), raw_status="done")
 
 
 def _claim_job(conn: psycopg.Connection[Any]) -> dict[str, Any] | None:
@@ -1925,7 +2046,9 @@ def _claim_job(conn: psycopg.Connection[Any]) -> dict[str, Any] | None:
                 "UPDATE apify_jobs SET status='running', updated_at=NOW() WHERE id=%s",
                 (job["id"],),
             )
-            return dict(job)
+            claimed = dict(job)
+    _sync_search_session_job(conn, int(claimed["id"]), raw_status="running")
+    return claimed
 
 
 def _process_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> None:
@@ -1996,6 +2119,7 @@ def _process_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> None:
                 "UPDATE apify_jobs SET status='done', last_error=NULL, updated_at=NOW() WHERE id=%s",
                 (job["id"],),
             )
+    _sync_search_session_job(conn, int(job["id"]), raw_status="done")
 
 
 def _fail_job(conn: psycopg.Connection[Any], job_id: int, exc: Exception) -> None:
@@ -2013,6 +2137,7 @@ def _fail_job(conn: psycopg.Connection[Any], job_id: int, exc: Exception) -> Non
                 """,
                 (message, job_id),
             )
+    _sync_search_session_job(conn, job_id, raw_status="failed", reason=message)
 
 
 def _heartbeat_running_job(job_id: int, stop_signal: threading.Event) -> None:
@@ -2075,6 +2200,15 @@ def _reclaim_stale_running_jobs(conn: psycopg.Connection[Any]) -> list[dict[str,
             row.get("status"),
             row.get("attempts"),
         )
+        try:
+            _sync_search_session_job(
+                conn,
+                int(row.get("id")),
+                raw_status=str(row.get("status") or "queued"),
+                reason=str(row.get("last_error") or "stale_running_reclaimed"),
+            )
+        except Exception as exc:
+            logger.warning("search session stale job sync failed | job_id=%s error=%s", row.get("id"), exc)
     return rows
 
 
