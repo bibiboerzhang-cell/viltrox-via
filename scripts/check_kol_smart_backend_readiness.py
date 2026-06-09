@@ -151,9 +151,25 @@ def build_gates(state: dict[str, Any]) -> list[Gate]:
     gates.append(
         Gate(
             "history_video_crawl",
-            "missing",
-            "full account video history + since-window incremental crawler is not implemented",
-            "Build account history crawl service after materialization/search smoke.",
+            "pass" if _contains(
+                "backend/app/domains/kol/url_deep_crawl.py",
+                "_execute_profile_history_video_evidence",
+                "_profile_should_materialize_history_videos",
+                "_profile_history_video_limit",
+                "_filter_incremental_profile_videos",
+                "url_profile_history_video_evidence_v1",
+            ) else "missing",
+            "account_deep/full_history can materialize profile videos as evidence with since-window cutoff",
+            "Run a provider-backed profile execute on a chosen KOL to populate real history evidence."
+            if _contains(
+                "backend/app/domains/kol/url_deep_crawl.py",
+                "_execute_profile_history_video_evidence",
+                "_profile_should_materialize_history_videos",
+                "_profile_history_video_limit",
+                "_filter_incremental_profile_videos",
+                "url_profile_history_video_evidence_v1",
+            )
+            else "Build account history crawl service after materialization/search smoke.",
         )
     )
     gates.append(

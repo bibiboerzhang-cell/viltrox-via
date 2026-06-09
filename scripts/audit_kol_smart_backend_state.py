@@ -470,19 +470,34 @@ def score_summary(state: dict[str, Any]) -> dict[str, Any]:
         "projected_profile_llm_ratio": round(projected_profile_llm_ratio, 4),
         "search_history_has_real_sessions": bool(search["search_sessions"]),
         "search_history_has_real_items": bool(search["search_session_items"]),
+        "history_video_crawl_implemented": history_video_crawl_implemented(),
         "remaining_blockers": [
             item
             for item in (
                 "missing_video_deep_backfill_ready_to_commit" if deep.get("missing_video_deep_writable_count") else "missing_video_deep_backfill" if deep["missing_video_deep_count"] else "",
                 "profile_llm_ready_to_commit" if profile_projection.get("ready_insert") else "profile_llm_not_materialized" if not profile_llm_ready else "",
                 "search_session_not_smoked" if not search["search_sessions"] else "search_items_not_smoked" if not search["search_session_items"] else "",
-                "full_history_video_crawl_not_implemented",
+                "full_history_video_crawl_not_implemented" if not history_video_crawl_implemented() else "",
                 "tiktok_video_resolver_known_issue",
                 "100_user_load_test_not_run",
             )
             if item
         ],
     }
+
+
+def history_video_crawl_implemented() -> bool:
+    src = (ROOT / "backend/app/domains/kol/url_deep_crawl.py").read_text(encoding="utf-8")
+    return all(
+        needle in src
+        for needle in (
+            "_execute_profile_history_video_evidence",
+            "_profile_should_materialize_history_videos",
+            "_profile_history_video_limit",
+            "_filter_incremental_profile_videos",
+            "url_profile_history_video_evidence_v1",
+        )
+    )
 
 
 def print_report(state: dict[str, Any]) -> None:

@@ -564,6 +564,7 @@ def _profile_flow_plan(
     profile_data = _identity_profile_data(classified)
     writer_plan = write_kol_profile_basics(kol_pool_id, profile_data, dry_run=True)
     representative_enabled = _profile_should_enqueue_representative_videos(body)
+    history_enabled = _profile_should_materialize_history_videos(body)
     incremental_state = _profile_incremental_state(kol_pool_id)
     return {
         "status": "ready_to_execute" if execute else "dry_run_ready",
@@ -584,6 +585,14 @@ def _profile_flow_plan(
             "status": "will_try_after_profile_crawl" if representative_enabled else "disabled_profile_only",
             "limit": _profile_representative_video_limit(body) if representative_enabled else 0,
             "note": "TikTok profile video analysis is skipped until the TikTok video resolver is fixed." if representative_enabled and classified.platform == "tiktok" else "",
+            "incremental": incremental_state,
+        },
+        "history_video_evidence": {
+            "enabled": history_enabled,
+            "status": "will_materialize_after_profile_crawl" if history_enabled else "disabled",
+            "limit": _profile_history_video_limit(body) if history_enabled else 0,
+            "enqueue_final_v1": False,
+            "note": "History videos are materialized as evidence only; batch/on-demand analysis can enqueue final_v1 later.",
             "incremental": incremental_state,
         },
         "safe_writer_dry_run": {
@@ -659,6 +668,14 @@ def _execute_profile_flow(
         body=body,
         incremental_state=incremental_state,
     )
+    history_video_evidence = _execute_profile_history_video_evidence(
+        conn,
+        classified=classified,
+        kol_pool_id=written_kol_pool_id,
+        crawl=crawl,
+        body=body,
+        incremental_state=incremental_state,
+    )
     worker_touched = bool(representative_video_analysis.get("worker_touched"))
     account_dossier_extract_job = None
     if written_kol_pool_id and not worker_touched:
@@ -674,6 +691,7 @@ def _execute_profile_flow(
         set(
             _fit_changed_ids(write_result)
             + _fit_changed_ids(representative_video_analysis)
+            + _fit_changed_ids(history_video_evidence)
             + _fit_changed_ids(account_dossier_extract_job or {})
         )
     )
@@ -694,6 +712,7 @@ def _execute_profile_flow(
             "fields_written": write_result.get("fields_written"),
             "viltrox_fit_score_changed_ids": write_result.get("viltrox_fit_score_changed_ids"),
             "representative_video_analysis": representative_video_analysis,
+            "history_video_evidence": history_video_evidence,
             "account_dossier_extract_job": account_dossier_extract_job,
             "incremental_state": incremental_state,
         },
@@ -713,6 +732,7 @@ def _execute_profile_flow(
             "viltrox_fit_score_untouched": write_result.get("viltrox_fit_score_untouched"),
         },
         "representative_video_analysis": representative_video_analysis,
+        "history_video_evidence": history_video_evidence,
         "account_dossier_extract_job": account_dossier_extract_job,
         "run_id": run_id,
         "elapsed_ms": int((time.monotonic() - started) * 1000),
@@ -1162,6 +1182,126 @@ def _execute_profile_representative_video_analysis(
     }
 
 
+def _execute_profile_history_video_evidence(
+    conn: Any,
+    *,
+    classified: ClassifiedUrl,
+    kol_pool_id: int | None,
+    crawl: dict[str, Any],
+    body: dict[str, Any],
+    incremental_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    incremental_state = incremental_state if isinstance(incremental_state, dict) else {}
+    if not _profile_should_materialize_history_videos(body):
+        return {
+            "enabled": False,
+            "status": "disabled",
+            "items": [],
+            "materialized": 0,
+            "reused": 0,
+            "skipped": 0,
+            "errors": 0,
+            "worker_touched": False,
+            "viltrox_fit_score_changed_ids": [],
+            "incremental": incremental_state,
+        }
+    if not kol_pool_id:
+        return {
+            "enabled": True,
+            "status": "missing_kol_pool_id",
+            "items": [],
+            "materialized": 0,
+            "reused": 0,
+            "skipped": 0,
+            "errors": 1,
+            "worker_touched": False,
+            "viltrox_fit_score_changed_ids": [],
+            "incremental": incremental_state,
+        }
+
+    limit = _profile_history_video_limit(body)
+    all_videos = _profile_representative_video_metadata(classified, crawl, limit=max(limit, _max_posts(body)))
+    videos, skipped_by_incremental = _filter_incremental_profile_videos(all_videos, incremental_state, limit=limit)
+    if not videos:
+        return {
+            "enabled": True,
+            "status": "no_new_history_video_after_cutoff" if skipped_by_incremental else "no_history_video_url",
+            "items": [],
+            "materialized": 0,
+            "reused": 0,
+            "skipped": skipped_by_incremental,
+            "errors": 0,
+            "candidate_count": len(all_videos),
+            "worker_touched": False,
+            "viltrox_fit_score_changed_ids": [],
+            "incremental": incremental_state,
+        }
+
+    items: list[dict[str, Any]] = []
+    materialized = 0
+    reused = 0
+    skipped = 0
+    errors = 0
+    changed_ids: list[int] = []
+    for metadata in videos:
+        evidence_result: dict[str, Any] = {}
+        item_status = "failed"
+        error = ""
+        try:
+            evidence_result = ensure_video_evidence_from_url(
+                int(kol_pool_id),
+                str(metadata.get("content_url") or ""),
+                metadata,
+                dry_run=False,
+                conn=conn,
+                method="url_profile_history_video_evidence_v1",
+            )
+            changed_ids.extend(_fit_changed_ids(evidence_result))
+            if not evidence_result.get("ok"):
+                item_status = str(evidence_result.get("status") or "evidence_failed")
+                skipped += 1
+            else:
+                item_status = str(evidence_result.get("status") or "evidence_unknown")
+                if item_status == "created":
+                    materialized += 1
+                else:
+                    reused += 1
+        except Exception as exc:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            errors += 1
+            error = str(exc)[:500]
+            item_status = "error"
+        items.append(
+            {
+                "status": item_status,
+                "metadata": _public_video_metadata(metadata),
+                "evidence_result": _compact_video_evidence_result(evidence_result),
+                "error": error or None,
+            }
+        )
+
+    return {
+        "enabled": True,
+        "status": "completed" if not errors else "completed_with_errors",
+        "limit": limit,
+        "requested": len(videos),
+        "candidate_count": len(all_videos),
+        "skipped_by_incremental": skipped_by_incremental,
+        "materialized": materialized,
+        "reused": reused,
+        "skipped": skipped,
+        "errors": errors,
+        "items": items,
+        "incremental": incremental_state,
+        "worker_touched": False,
+        "viltrox_fit_score_changed_ids": sorted(set(changed_ids)),
+        "viltrox_fit_score_untouched": not changed_ids,
+    }
+
+
 def _video_execute_mode(body: dict[str, Any]) -> str:
     mode = str(body.get("mode") or "").strip()
     if mode in {"auto", "video_deep"}:
@@ -1180,6 +1320,24 @@ def _profile_representative_video_limit(body: dict[str, Any]) -> int:
     except (TypeError, ValueError):
         value = 1
     return max(1, min(3, value))
+
+
+def _profile_should_materialize_history_videos(body: dict[str, Any]) -> bool:
+    mode = str(body.get("mode") or "").strip()
+    return mode == "account_deep" or bool(
+        body.get("full_history")
+        or body.get("materialize_history_videos")
+        or body.get("history_video_limit")
+    )
+
+
+def _profile_history_video_limit(body: dict[str, Any]) -> int:
+    default = _max_posts(body) if _profile_should_materialize_history_videos(body) else 0
+    try:
+        value = int(body.get("history_video_limit") or default or 0)
+    except (TypeError, ValueError):
+        value = default
+    return max(1, min(120, int(value or 1)))
 
 
 def _profile_representative_video_metadata(
@@ -1819,9 +1977,11 @@ def _crawler_for(platform: str) -> Any:
 
 def _max_posts(body: dict[str, Any]) -> int:
     try:
-        return max(1, min(12, int(body.get("max_posts") or 3)))
+        value = int(body.get("max_posts") or body.get("history_video_limit") or 3)
     except (TypeError, ValueError):
-        return 3
+        value = 3
+    upper = 120 if _profile_should_materialize_history_videos(body) else 12
+    return max(1, min(upper, value))
 
 
 def _parse_date(value: Any) -> str:
