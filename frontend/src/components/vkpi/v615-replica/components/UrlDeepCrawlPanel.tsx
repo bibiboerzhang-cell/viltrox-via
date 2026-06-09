@@ -236,13 +236,19 @@ export function UrlDeepCrawlPanel({ apiToken = "" }: { apiToken?: string }) {
     candidates.length <= 1 &&
     !isLoading,
   );
-  const videoOperation = cleanText(profileFlow.operation || videoFlow.operation);
+  const videoStatus = cleanText(videoFlow.status || profileFlow.status);
+  const videoOperation = cleanText(videoFlow.operation || profileFlow.operation);
+  const videoCreatorResolved = Boolean(
+    cleanText(videoFlow.creator_resolution_status) === "resolved" ||
+    cleanText(creatorIdentity.handle || creatorIdentity.channel_id || creatorIdentity.profile_url),
+  );
   const canExecuteVideo = Boolean(
     apiToken &&
     result &&
     !result.execute &&
     result.url_type === "video" &&
-    profileFlow.status === "dry_run_ready" &&
+    videoStatus === "dry_run_ready" &&
+    videoCreatorResolved &&
     ["existing_creator_video_analysis", "new_creator_video_analysis"].includes(videoOperation) &&
     !isLoading,
   );

@@ -210,6 +210,13 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
   const isBusy = state === "loading" || state === "executing";
   const profileFlow = asRecord(urlResult?.profile_flow);
   const videoFlow = asRecord(urlResult?.video_flow);
+  const videoCreator = asRecord(urlResult?.creator_identity || videoFlow.creator_identity);
+  const videoStatus = cleanText(videoFlow.status || profileFlow.status);
+  const videoOperation = cleanText(videoFlow.operation || profileFlow.operation);
+  const videoCreatorResolved = Boolean(
+    cleanText(videoFlow.creator_resolution_status) === "resolved" ||
+    cleanText(videoCreator.handle || videoCreator.channel_id || videoCreator.profile_url),
+  );
   const urlCanExecute = Boolean(
     apiToken &&
     urlResult &&
@@ -217,7 +224,12 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
     !isBusy &&
     (
       (urlResult.url_type === "profile" && cleanText(profileFlow.status) === "dry_run_ready") ||
-      (urlResult.url_type === "video" && cleanText(profileFlow.status) === "dry_run_ready" && ["existing_creator_video_analysis", "new_creator_video_analysis"].includes(cleanText(videoFlow.operation || profileFlow.operation)))
+      (
+        urlResult.url_type === "video" &&
+        videoStatus === "dry_run_ready" &&
+        videoCreatorResolved &&
+        ["existing_creator_video_analysis", "new_creator_video_analysis"].includes(videoOperation)
+      )
     )
   );
   const recallItems = recallTopItems(recallResult);
