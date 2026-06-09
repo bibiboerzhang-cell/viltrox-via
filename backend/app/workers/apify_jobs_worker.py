@@ -706,6 +706,67 @@ def _sync_deep_analysis_result_from_cache(
     }
 
 
+def _enqueue_account_dossier_extract_after_final_v1(
+    conn: psycopg.Connection[Any],
+    *,
+    job_id: int,
+    deep_result: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not deep_result or deep_result.get("status") != "ready":
+        return None
+    kol_pool_id = _int_or_none(deep_result.get("kol_pool_id"))
+    if not kol_pool_id:
+        return None
+    with conn.transaction():
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                SELECT id, status, created_at, updated_at
+                FROM apify_jobs
+                WHERE job_type='account_dossier_extract'
+                  AND status IN ('queued', 'running')
+                  AND payload->>'target_type'='kol_pool'
+                  AND payload->>'target_id'=%s
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                (str(kol_pool_id),),
+            )
+            existing = cur.fetchone()
+            if existing:
+                return {
+                    "status": "already_queued" if existing["status"] == "queued" else "already_running",
+                    "job_id": int(existing["id"]),
+                    "kol_pool_id": kol_pool_id,
+                }
+            payload = {
+                "target_type": "kol_pool",
+                "target_id": str(kol_pool_id),
+                "derive_method": "kol_account_dossier_extract_v1",
+                "analysis_kind": "profile_llm",
+                "source": "final_v1_worker_followup",
+                "trigger": "final_v1_done",
+                "source_job_id": int(job_id),
+                "source_cache_id": deep_result.get("source_cache_id"),
+                "source_evidence_id": deep_result.get("source_evidence_id"),
+                "query_text": f"account dossier - kol_pool #{kol_pool_id}",
+            }
+            cur.execute(
+                """
+                INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
+                VALUES ('account_dossier_extract', %s::jsonb, 'queued', NOW(), NOW())
+                RETURNING id, status, created_at, updated_at
+                """,
+                (_json(payload),),
+            )
+            row = cur.fetchone() or {}
+    return {
+        "status": "queued",
+        "job_id": int(row["id"]) if row.get("id") is not None else None,
+        "kol_pool_id": kol_pool_id,
+    }
+
+
 def _sync_search_session_job(
     conn: psycopg.Connection[Any],
     job_id: int,
@@ -809,13 +870,39 @@ def _sync_search_session_job_impl(
 
 
 def _finish_skipped(conn: psycopg.Connection[Any], job_id: int, reason: str) -> None:
+    analysis_summary: dict[str, Any] | None = None
+    if "skipped_existing_analysis_cache" in str(reason or ""):
+        try:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute("SELECT payload FROM apify_jobs WHERE id=%s LIMIT 1", (int(job_id),))
+                row = cur.fetchone() or {}
+            payload = row.get("payload") if isinstance(row.get("payload"), dict) else _loads(row.get("payload"), {})
+            analysis_summary = _search_session_analysis_summary_from_ready_cache(conn, payload if isinstance(payload, dict) else {})
+            cache_id = _int_or_none((analysis_summary or {}).get("cache_id"))
+            deep_result = _sync_deep_analysis_result_from_cache(
+                conn,
+                cache_id=cache_id,
+                derive_method=_derive_method(payload if isinstance(payload, dict) else {}),
+                job_id=int(job_id),
+            )
+            account_extract_job = _enqueue_account_dossier_extract_after_final_v1(
+                conn,
+                job_id=int(job_id),
+                deep_result=deep_result,
+            )
+            if analysis_summary and deep_result:
+                analysis_summary["deep_result"] = deep_result
+            if analysis_summary and account_extract_job:
+                analysis_summary["account_dossier_extract_job"] = account_extract_job
+        except Exception as exc:
+            logger.warning("skipped cache deep/account sync failed | job_id=%s error=%s", job_id, exc)
     with conn.transaction():
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE apify_jobs SET status='done', last_error=%s, updated_at=NOW() WHERE id=%s",
                 (reason[:2000], job_id),
             )
-    _sync_search_session_job(conn, job_id, raw_status="done", reason=reason)
+    _sync_search_session_job(conn, job_id, raw_status="done", reason=reason, analysis_summary=analysis_summary)
 
 
 def _block_job(conn: psycopg.Connection[Any], job_id: int, reason: str, detail: dict[str, Any] | None = None) -> None:
@@ -1722,6 +1809,11 @@ def _write_gemini_cache(
         derive_method=derive_method,
         job_id=int(job["id"]),
     )
+    account_extract_job = _enqueue_account_dossier_extract_after_final_v1(
+        conn,
+        job_id=int(job["id"]),
+        deep_result=deep_result,
+    )
     analysis_summary = _search_session_analysis_summary_from_result(
         cache_id=cache_id,
         derive_method=derive_method,
@@ -1733,6 +1825,8 @@ def _write_gemini_cache(
     )
     if analysis_summary and deep_result:
         analysis_summary["deep_result"] = deep_result
+    if analysis_summary and account_extract_job:
+        analysis_summary["account_dossier_extract_job"] = account_extract_job
     _sync_search_session_job(
         conn,
         int(job["id"]),
@@ -2457,6 +2551,11 @@ def _process_gemini_video(
         derive_method=derive_method,
         job_id=int(job["id"]),
     )
+    account_extract_job = _enqueue_account_dossier_extract_after_final_v1(
+        conn,
+        job_id=int(job["id"]),
+        deep_result=deep_result,
+    )
     analysis_summary = _search_session_analysis_summary_from_result(
         cache_id=cache_id,
         derive_method=derive_method,
@@ -2468,6 +2567,8 @@ def _process_gemini_video(
     )
     if analysis_summary and deep_result:
         analysis_summary["deep_result"] = deep_result
+    if analysis_summary and account_extract_job:
+        analysis_summary["account_dossier_extract_job"] = account_extract_job
     _sync_search_session_job(
         conn,
         int(job["id"]),
