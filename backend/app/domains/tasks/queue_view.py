@@ -116,6 +116,10 @@ def _infer_kind(source: str, job_type: str = "", purpose: str = "", payload: Any
             _text(data.get("script")),
         ]
     ).lower()
+    if _text(job_type).lower() == "smart_search_profile_advance" or "kol_smart_search_profile_advance" in haystack:
+        return "智能查找"
+    if _text(job_type).lower() == "session_advance":
+        return "资料补全"
     if "final_v1" in haystack or "video_analysis" in haystack or "video" in haystack:
         return "video深析"
     if any(word in haystack for word in ("url", "profile", "crawl", "scan", "resolve", "download", "ingest", "sync")):
@@ -158,7 +162,7 @@ def _target_from_payload(payload: Any, *, fallback: dict[str, Any] | None = None
     target_type = _text(data.get("target_type") or fallback.get("target_type"))
     target_id = _text(data.get("target_id") or fallback.get("target_id"))
     source_url = _text(data.get("source_url") or data.get("url") or fallback.get("source_url"))
-    label = _text(data.get("prompt") or data.get("summary") or fallback.get("label"))
+    label = _text(data.get("query_text") or data.get("prompt") or data.get("summary") or fallback.get("label"))
     target = {
         "target_type": target_type or None,
         "target_id": target_id or None,
@@ -172,6 +176,8 @@ def _target_from_payload(payload: Any, *, fallback: dict[str, Any] | None = None
 def _search_session_from_payload(payload: Any) -> dict[str, Any]:
     data = payload if isinstance(payload, dict) else {}
     session_id = _text(data.get("search_session_id"))
+    if not session_id and _text(data.get("target_type")) == "search_session":
+        session_id = _text(data.get("target_id"))
     item_id = _text(data.get("search_session_item_id"))
     if not session_id and not item_id:
         return {}
