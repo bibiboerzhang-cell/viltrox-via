@@ -406,7 +406,7 @@ def enqueue_search_session_advance(
         """
         SELECT id, job_type, status, created_at, updated_at
         FROM apify_jobs
-        WHERE job_type='session_advance'
+        WHERE job_type IN ('session_advance', 'smart_search_profile_advance')
           AND status IN ('queued', 'running')
           AND payload->>'search_session_id'=?
         ORDER BY created_at DESC, id DESC
@@ -518,7 +518,7 @@ def cancel_search_session_advance(
         """
         SELECT id, job_type, status, payload, created_at, updated_at
         FROM apify_jobs
-        WHERE job_type='session_advance'
+        WHERE job_type IN ('session_advance', 'smart_search_profile_advance')
           AND status IN ('queued', 'running')
           AND payload->>'search_session_id'=?
         ORDER BY created_at DESC, id DESC
@@ -536,6 +536,11 @@ def cancel_search_session_advance(
                 "profile_batch_advance_job": {
                     "status": "running_not_cancelled" if running_jobs else "no_queued_job",
                     "running_job_ids": [job.get("id") for job in running_jobs],
+                    "viltrox_fit_score_untouched": True,
+                },
+                "smart_search_profile_advance_job": {
+                    "status": "running_not_cancelled" if any(_text(job.get("job_type")) == "smart_search_profile_advance" for job in running_jobs) else "no_queued_job",
+                    "running_job_ids": [job.get("id") for job in running_jobs if _text(job.get("job_type")) == "smart_search_profile_advance"],
                     "viltrox_fit_score_untouched": True,
                 }
             },
@@ -581,9 +586,16 @@ def cancel_search_session_advance(
         summary_patch={
             "profile_batch_advance_job": {
                 "status": "cancelled" if not running_jobs else "partial_cancelled_running_remains",
-                "cancelled_job_ids": cancelled_job_ids,
-                "running_job_ids": [job.get("id") for job in running_jobs],
+                "cancelled_job_ids": [job.get("id") for job in queued_jobs if _text(job.get("job_type")) == "session_advance"],
+                "running_job_ids": [job.get("id") for job in running_jobs if _text(job.get("job_type")) == "session_advance"],
                 "cancelled_items": cancelled_items.get("updated_count"),
+                "reason": reason,
+                "viltrox_fit_score_untouched": True,
+            },
+            "smart_search_profile_advance_job": {
+                "status": "cancelled" if any(_text(job.get("job_type")) == "smart_search_profile_advance" for job in queued_jobs) else "not_cancelled",
+                "cancelled_job_ids": [job.get("id") for job in queued_jobs if _text(job.get("job_type")) == "smart_search_profile_advance"],
+                "running_job_ids": [job.get("id") for job in running_jobs if _text(job.get("job_type")) == "smart_search_profile_advance"],
                 "reason": reason,
                 "viltrox_fit_score_untouched": True,
             }
