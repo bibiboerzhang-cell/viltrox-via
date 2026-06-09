@@ -324,8 +324,11 @@ def _video_identity(value: str) -> tuple[str, str] | None:
         elif len(parts) >= 2 and lowered[0] in {"shorts", "embed", "live"}:
             video_id = parts[1]
         return ("youtube", video_id) if video_id else None
-    if "instagram.com" in host and len(parts) >= 2 and lowered[0] in {"p", "reel", "tv"}:
-        return ("instagram", parts[1])
+    if "instagram.com" in host:
+        if len(parts) >= 2 and lowered[0] in {"p", "reel", "tv"}:
+            return ("instagram", parts[1])
+        if len(parts) >= 3 and lowered[1] in {"p", "reel", "tv"}:
+            return ("instagram", parts[2])
     if "tiktok.com" in host:
         for index, part in enumerate(lowered):
             if part == "video" and index + 1 < len(parts):

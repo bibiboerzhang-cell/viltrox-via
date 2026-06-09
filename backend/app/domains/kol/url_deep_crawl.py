@@ -1970,6 +1970,8 @@ def _video_id(platform: str, host: str, path: str, query: str) -> str:
     if platform == "instagram":
         if len(parts) >= 2 and lowered[0] in {"p", "reel", "tv"}:
             return parts[1]
+        if len(parts) >= 3 and lowered[1] in {"p", "reel", "tv"}:
+            return parts[2]
     if platform == "tiktok":
         for index, part in enumerate(lowered):
             if part == "video" and index + 1 < len(parts):
