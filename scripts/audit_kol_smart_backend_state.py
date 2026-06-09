@@ -35,6 +35,8 @@ from app.domains.kol.account_dossier_extract import (  # noqa: E402
     prepare_account_dossier_extract,
 )
 
+QUEUE_LOAD_SMOKE_REPORT = ROOT / "runtime" / "kol-smart-queue-load-smoke-latest.json"
+
 
 def _load_env() -> None:
     if load_dotenv is not None:
@@ -389,6 +391,52 @@ def queue_state(conn: psycopg.Connection[Any]) -> dict[str, Any]:
     }
 
 
+def queue_load_smoke_state() -> dict[str, Any]:
+    if not QUEUE_LOAD_SMOKE_REPORT.exists():
+        return {
+            "status": "missing",
+            "report_path": str(QUEUE_LOAD_SMOKE_REPORT.relative_to(ROOT)),
+            "pass": False,
+        }
+    try:
+        report = json.loads(QUEUE_LOAD_SMOKE_REPORT.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {
+            "status": "invalid",
+            "report_path": str(QUEUE_LOAD_SMOKE_REPORT.relative_to(ROOT)),
+            "pass": False,
+            "error": str(exc),
+        }
+    passed = (
+        report.get("status") == "pass"
+        and int(report.get("users") or 0) >= 100
+        and int(report.get("inserted") or 0) >= 100
+        and int(report.get("claimed") or 0) >= 100
+        and bool(report.get("ordered")) is True
+        and bool(report.get("provider_calls_performed")) is False
+        and bool(report.get("worker_visible")) is False
+        and bool(report.get("persistent_write")) is False
+        and bool(report.get("viltrox_fit_score_changed")) is False
+    )
+    return {
+        "status": report.get("status") or "unknown",
+        "report_path": str(QUEUE_LOAD_SMOKE_REPORT.relative_to(ROOT)),
+        "pass": passed,
+        "users": int(report.get("users") or 0),
+        "inserted": int(report.get("inserted") or 0),
+        "claimed": int(report.get("claimed") or 0),
+        "ordered": bool(report.get("ordered")),
+        "elapsed_ms": report.get("elapsed_ms"),
+        "provider_calls_performed": bool(report.get("provider_calls_performed")),
+        "worker_visible": bool(report.get("worker_visible")),
+        "persistent_write": bool(report.get("persistent_write")),
+        "viltrox_fit_score_changed": bool(report.get("viltrox_fit_score_changed")),
+        "method": report.get("method"),
+        "claim_contract": report.get("claim_contract"),
+        "generated_at": report.get("generated_at"),
+    }
+
+
 def url_classifier_state(conn: psycopg.Connection[Any], *, sample_limit: int) -> dict[str, Any]:
     rows = _rows(
         conn,
@@ -444,6 +492,7 @@ def url_classifier_state(conn: psycopg.Connection[Any], *, sample_limit: int) ->
 def score_summary(state: dict[str, Any]) -> dict[str, Any]:
     deep = state["deep_results"]
     search = state["search"]
+    queue_load_smoke = state.get("queue_load_smoke") if isinstance(state.get("queue_load_smoke"), dict) else {}
     final_ready = int(deep["final_v1_ready"] or 0)
     video_deep_ready = int(deep["video_deep_ready"] or 0)
     final_kols = int(deep["final_v1_kols"] or 0)
@@ -479,7 +528,7 @@ def score_summary(state: dict[str, Any]) -> dict[str, Any]:
                 "search_session_not_smoked" if not search["search_sessions"] else "search_items_not_smoked" if not search["search_session_items"] else "",
                 "full_history_video_crawl_not_implemented" if not history_video_crawl_implemented() else "",
                 "tiktok_video_resolver_known_issue",
-                "100_user_load_test_not_run",
+                "" if queue_load_smoke.get("pass") else "100_user_load_test_not_run",
             )
             if item
         ],
@@ -535,6 +584,16 @@ def print_report(state: dict[str, Any]) -> None:
     print(f"  url_deep_crawl_runs: {search['url_deep_crawl_runs']}")
     print("queue:")
     print(f"  active_total: {queue['active_total']}")
+    queue_load_smoke = state.get("queue_load_smoke") if isinstance(state.get("queue_load_smoke"), dict) else {}
+    print("queue_load_smoke:")
+    print(f"  status: {queue_load_smoke.get('status', 'missing')}")
+    print(f"  pass: {queue_load_smoke.get('pass', False)}")
+    print(f"  users: {queue_load_smoke.get('users', 0)}")
+    print(f"  ordered: {queue_load_smoke.get('ordered', False)}")
+    print(f"  provider_calls_performed: {queue_load_smoke.get('provider_calls_performed', False)}")
+    print(f"  persistent_write: {queue_load_smoke.get('persistent_write', False)}")
+    if queue_load_smoke.get("report_path"):
+        print(f"  report_path: {queue_load_smoke.get('report_path')}")
     print("url_classifier:")
     print(f"  evidence_with_url: {url_state['evidence_with_url']}")
     print(f"  not_classified_as_video: {url_state['not_classified_as_video']}")
@@ -580,6 +639,7 @@ def main() -> None:
             "deep_results": deep_result_state(conn),
             "search": search_state(conn),
             "queue": queue_state(conn),
+            "queue_load_smoke": queue_load_smoke_state(),
             "url_classifier": url_classifier_state(conn, sample_limit=max(1, int(args.sample_limit or 12))),
         }
     state["score"] = score_summary(state)

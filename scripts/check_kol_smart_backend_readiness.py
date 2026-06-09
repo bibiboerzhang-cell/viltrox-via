@@ -45,6 +45,7 @@ def _state() -> dict[str, Any]:
             "deep_results": audit.deep_result_state(conn),
             "search": audit.search_state(conn),
             "queue": audit.queue_state(conn),
+            "queue_load_smoke": audit.queue_load_smoke_state(),
             "url_classifier": audit.url_classifier_state(conn, sample_limit=5),
         }
     state["score"] = audit.score_summary(state)
@@ -55,6 +56,7 @@ def build_gates(state: dict[str, Any]) -> list[Gate]:
     deep = state["deep_results"]
     search = state["search"]
     queue = state["queue"]
+    queue_load_smoke = state.get("queue_load_smoke") if isinstance(state.get("queue_load_smoke"), dict) else {}
     score = state["score"]
     url_state = state["url_classifier"]
     missing_video_count = int(deep["missing_video_deep_count"] or 0)
@@ -183,9 +185,19 @@ def build_gates(state: dict[str, Any]) -> list[Gate]:
     gates.append(
         Gate(
             "hundred_user_ordered_queue",
-            "unverified",
-            "queue design exists, but a 100-user load test has not been run",
-            "Add/load-run a no-provider queue smoke before claiming concurrency capacity.",
+            "pass" if queue_load_smoke.get("pass") else "unverified",
+            (
+                f"users={queue_load_smoke.get('users', 0)}; "
+                f"claimed={queue_load_smoke.get('claimed', 0)}; "
+                f"ordered={queue_load_smoke.get('ordered', False)}; "
+                f"provider_calls={queue_load_smoke.get('provider_calls_performed', False)}; "
+                f"persistent_write={queue_load_smoke.get('persistent_write', False)}"
+            )
+            if queue_load_smoke.get("pass")
+            else "queue design exists, but a 100-user load test has not been run",
+            "No-provider temp-table queue smoke passed; real provider throughput remains governed by Worker/provider capacity."
+            if queue_load_smoke.get("pass")
+            else "Run scripts/smoke_kol_smart_queue_load.py --users 100 before claiming queue ordering capacity.",
         )
     )
     gates.append(
