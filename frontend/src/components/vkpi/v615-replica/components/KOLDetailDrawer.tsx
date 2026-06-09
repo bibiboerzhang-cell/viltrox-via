@@ -278,6 +278,15 @@ function youtubeIdForVideo(video) {
   return videoString(video, ["youtube_video_id"]) || parseYoutubeVideoId(watchUrl);
 }
 
+function youtubeEmbedUrl(videoId) {
+  const id = String(videoId || "").trim();
+  if (!id) return "";
+  const origin = typeof window !== "undefined" && window.location?.origin
+    ? `&origin=${encodeURIComponent(window.location.origin)}`
+    : "";
+  return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?rel=0&playsinline=1&modestbranding=1${origin}`;
+}
+
 function RepresentativeVideoCard({ video, index, onOpen }) {
   const [thumbnailFailed, setThumbnailFailed] = React.useState(false);
   const title = videoString(video, ["title", "video_title"], `代表作 ${index + 1}`);
@@ -347,9 +356,7 @@ function RepresentativeVideoPlayerModal({ video, onClose }) {
   const youtubeVideoId = youtubeIdForVideo(video);
   const watchUrl = videoString(video, ["watch_url", "url", "content_url"]);
   const platform = normalizedVideoPlatform(video);
-  const embedSrc = youtubeVideoId
-    ? `https://www.youtube.com/embed/${encodeURIComponent(youtubeVideoId)}?autoplay=1&rel=0`
-    : "";
+  const embedSrc = youtubeEmbedUrl(youtubeVideoId);
 
   React.useEffect(() => {
     const handleKey = (event) => {
@@ -369,13 +376,23 @@ function RepresentativeVideoPlayerModal({ video, onClose }) {
           playsInline: true,
         })
     : youtubeVideoId
-      ? e("iframe", {
-          src: embedSrc,
-          title,
-          className: "h-full w-full rounded-lg bg-black",
-          allow: "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share",
-          allowFullScreen: true,
-        })
+      ? e("div", { className: "relative h-full w-full rounded-lg bg-black" },
+          e("iframe", {
+            src: embedSrc,
+            title,
+            className: "h-full w-full rounded-lg bg-black",
+            allow: "accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share",
+            allowFullScreen: true,
+            loading: "eager",
+            referrerPolicy: "strict-origin-when-cross-origin",
+          }),
+          watchUrl && e("a", {
+            href: watchUrl,
+            target: "_blank",
+            rel: "noreferrer",
+            className: "absolute bottom-3 right-3 rounded-md border border-white/12 bg-black/70 px-2 py-1 text-[10px] font-medium text-white/80 backdrop-blur hover:bg-black/85 hover:text-white",
+          }, "黑屏则打开原帖")
+        )
       : e("div", {
           className: "flex h-full w-full flex-col items-center justify-center gap-4 rounded-lg border border-white/[0.08] bg-slate-950 p-8 text-center",
         },
