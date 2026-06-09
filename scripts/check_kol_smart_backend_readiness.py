@@ -124,11 +124,13 @@ def build_gates(state: dict[str, Any]) -> list[Gate]:
     gates.append(
         Gate(
             "search_history_smoke",
-            "pass" if int(search["search_sessions"] or 0) > 0 else "missing",
+            "pass" if int(search["search_sessions"] or 0) > 0 and int(search["search_session_items"] or 0) > 0 else "partial" if int(search["search_sessions"] or 0) > 0 else "missing",
             f"search_sessions={search['search_sessions']}; search_session_items={search['search_session_items']}",
             "Run one real smart text queue smoke after write permission is approved."
             if not int(search["search_sessions"] or 0)
-            else "History table accepts sessions; item-producing search smoke is the next deeper validation.",
+            else "History table accepts sessions; item-producing search smoke is the next deeper validation."
+            if not int(search["search_session_items"] or 0)
+            else "History table accepts sessions and candidate item previews.",
         )
     )
     gates.append(

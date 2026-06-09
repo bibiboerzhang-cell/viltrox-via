@@ -469,12 +469,13 @@ def score_summary(state: dict[str, Any]) -> dict[str, Any]:
         "projected_video_deep_ratio": round(projected_video_deep_ratio, 4),
         "projected_profile_llm_ratio": round(projected_profile_llm_ratio, 4),
         "search_history_has_real_sessions": bool(search["search_sessions"]),
+        "search_history_has_real_items": bool(search["search_session_items"]),
         "remaining_blockers": [
             item
             for item in (
                 "missing_video_deep_backfill_ready_to_commit" if deep.get("missing_video_deep_writable_count") else "missing_video_deep_backfill" if deep["missing_video_deep_count"] else "",
                 "profile_llm_ready_to_commit" if profile_projection.get("ready_insert") else "profile_llm_not_materialized" if not profile_llm_ready else "",
-                "search_session_not_smoked" if not search["search_sessions"] else "",
+                "search_session_not_smoked" if not search["search_sessions"] else "search_items_not_smoked" if not search["search_session_items"] else "",
                 "full_history_video_crawl_not_implemented",
                 "tiktok_video_resolver_known_issue",
                 "100_user_load_test_not_run",
