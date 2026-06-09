@@ -77,6 +77,72 @@ def _youtube_video_id(url: Any) -> str:
 def _youtube_thumbnail_url(video_id: str) -> str:
     return f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg" if video_id else ""
 
+
+def _v6_breakdown_for_item(item: dict[str, Any]) -> dict[str, Any] | None:
+    """Project persisted V6 Fit into the drawer's read-only breakdown shape.
+
+    vkpi_kol_pool only persists viltrox_fit_score/reason today. The current
+    rule_v0 score is additive, while the drawer has older multiplier labels.
+    Keep those legacy multiplier slots neutral and expose the real additive
+    components under components so the UI can evolve without a write migration.
+    """
+
+    persisted_score = _float_or_none(item.get("viltrox_fit_score"))
+    if persisted_score is None:
+        return None
+    platform = _platform(item.get("platform") or "")
+    engagement = _float_or_none(item.get("engagement_rate"))
+    engagement_ratio = (engagement / 100.0) if engagement is not None and engagement > 1 else engagement
+    try:
+        scoring = ScoringRegistry.get("rule_v0").score(
+            {
+                "platform": platform,
+                "followers": _int_or_none(item.get("followers")),
+                "posts_count": _int_or_none(item.get("posts_count")),
+                "avg_views": _int_or_none(item.get("avg_views")),
+                "engagement_rate": engagement_ratio,
+                "primary_topic": item.get("primary_topic") or item.get("bio") or "",
+                "sync_status": item.get("sync_status") or "",
+            },
+            {"product_name": "Viltrox lens", "category": "camera lens", "target_platforms": [platform]},
+        )
+        components = dict(scoring.breakdown or {})
+        projected_score = float(scoring.score)
+        strengths = list(scoring.strengths or [])
+        concerns = list(scoring.concerns or [])
+    except Exception:
+        components = {}
+        projected_score = persisted_score
+        strengths = []
+        concerns = []
+
+    return {
+        "source": "rule_v0_read_projection",
+        "formula": "additive_rule_v0_projected_to_legacy_multiplier_slots",
+        "base": round(float(persisted_score), 3),
+        "industry": 1.0,
+        "upgrade": 1.0,
+        "geo_match": 1.0,
+        "real_er": 1.0,
+        "loyalty": 1.0,
+        "trend": 1.0,
+        "platform_native": 1.0,
+        "price_match": 1.0,
+        "network": 1.0,
+        "competitor_decay": 0.0,
+        "components": components,
+        "projected_rule_v0_score": round(projected_score, 3),
+        "persisted_viltrox_fit_score": round(float(persisted_score), 3),
+        "reason": item.get("viltrox_fit_reason"),
+        "strengths": strengths,
+        "concerns": concerns,
+        "provider_calls": False,
+        "llm_calls": False,
+        "write_db": False,
+        "viltrox_fit_score_write": False,
+    }
+
+
 def import_items(items: list[dict[str, Any]], *, source_type: str = "manual", source_ref: str = "", platform: str = "", staff: dict[str, Any] | None = None) -> dict[str, Any]:
     ensure_vkpi_product_industry_schema()
     actor = resolve_staff_id(staff) or None
@@ -542,6 +608,7 @@ def get_item(kol_pool_id: int) -> dict[str, Any]:
     if not row:
         raise LookupError("kol pool item not found")
     item = dict(row)
+    item["v6_breakdown"] = _v6_breakdown_for_item(item)
     item["video_evidence"] = _video_evidence_for_kol(int(kol_pool_id), limit=3)
     return {"item": item}
 
