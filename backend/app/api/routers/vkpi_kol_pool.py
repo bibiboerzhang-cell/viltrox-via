@@ -26,6 +26,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from app.api.dependencies.perms import require_tab
 from app.domains.kol import competitor_detector as kol_competitor_detector
 from app.domains.kol import account_dossier as kol_account_dossier
+from app.domains.kol import account_dossier_extract as kol_account_dossier_extract
 from app.domains.kol import eleven_dimensions
 from app.domains.kol import intelligence_card as kol_intelligence_card
 from app.domains.kol import llm_deep_analysis as kol_llm_deep_analysis
@@ -898,6 +899,25 @@ def get_pool_item_account_dossier(
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/kol-pool/{kol_pool_id}/account-dossier-extract-job")
+def enqueue_pool_item_account_dossier_extract(
+    kol_pool_id: int,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """Queue local account dossier materialization into independent profile_llm results."""
+    try:
+        return kol_account_dossier_extract.enqueue_account_dossier_extract_job(
+            int(kol_pool_id),
+            body=body or {},
+            staff=staff,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.post("/kol-pool/{kol_pool_id}/refresh")

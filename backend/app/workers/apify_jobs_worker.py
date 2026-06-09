@@ -25,6 +25,7 @@ from app.core.config import DB_RUNTIME_URL
 from app.core.logging import get_logger
 from app.db.connection import close_db_runtime_sync, db_connection_sync_scope
 from app.domains.costs import budget_guard
+from app.domains.kol.account_dossier_extract import upsert_account_dossier_extract
 from app.domains.kol.final_v1_extract import upsert_deep_analysis_from_final_v1_cache
 from app.domains.kol import profile_discovery as kol_profile_discovery
 from app.domains.kol import search_sessions as kol_search_sessions
@@ -970,6 +971,29 @@ def _process_smart_search_profile_advance(conn: psycopg.Connection[Any], job: di
     }
     payload["search_session_last_job_status"] = job_status
     payload["search_session_last_error"] = last_error
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE apify_jobs
+                SET status=%s,
+                    last_error=NULLIF(%s, ''),
+                    payload=%s::jsonb,
+                    updated_at=NOW()
+                WHERE id=%s
+                """,
+                (job_status, last_error[:2000], _json(payload), int(job["id"])),
+            )
+
+
+def _process_account_dossier_extract(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
+    kol_pool_id = _int_or_none(payload.get("target_id") or payload.get("kol_pool_id"))
+    if not kol_pool_id:
+        raise ValueError("account_dossier_extract payload must include target_id")
+    result = upsert_account_dossier_extract(conn, int(kol_pool_id))
+    job_status = "done" if result.get("status") == "ready" else "blocked"
+    last_error = "" if job_status == "done" else str(result.get("reason") or result.get("status") or "account_dossier_extract_not_ready")
+    payload["account_dossier_extract_result"] = result
     with conn.transaction():
         with conn.cursor() as cur:
             cur.execute(
@@ -2484,6 +2508,9 @@ def _process_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> None:
         return
     if str(job.get("job_type") or "").strip().lower() == "smart_search_profile_advance":
         _process_smart_search_profile_advance(conn, job, payload)
+        return
+    if str(job.get("job_type") or "").strip().lower() == "account_dossier_extract":
+        _process_account_dossier_extract(conn, job, payload)
         return
     target_type, target_id = _target(payload)
     if not target_type or not target_id:

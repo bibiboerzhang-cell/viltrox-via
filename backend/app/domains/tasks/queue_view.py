@@ -120,6 +120,8 @@ def _infer_kind(source: str, job_type: str = "", purpose: str = "", payload: Any
         return "智能查找"
     if _text(job_type).lower() == "session_advance":
         return "资料补全"
+    if _text(job_type).lower() == "account_dossier_extract" or "kol_account_dossier_extract" in haystack:
+        return "账号沉淀"
     if "final_v1" in haystack or "video_analysis" in haystack or "video" in haystack:
         return "video深析"
     if any(word in haystack for word in ("url", "profile", "crawl", "scan", "resolve", "download", "ingest", "sync")):
@@ -147,7 +149,7 @@ def _infer_stage(status: str, kind: str, job_type: str = "", purpose: str = "", 
             _text(data.get("prompt")),
         ]
     ).lower()
-    if any(word in haystack for word in ("report", "summary", "cache_extract", "deep_result", "post_process", "backfill")):
+    if any(word in haystack for word in ("report", "summary", "cache_extract", "deep_result", "post_process", "backfill", "account_dossier_extract")):
         return "summarizing"
     if any(word in haystack for word in ("gemini", "claude", "openai", "llm", "final_v1", "video_analysis", "score")):
         return "thinking"
