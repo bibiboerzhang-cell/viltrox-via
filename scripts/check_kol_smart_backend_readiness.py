@@ -57,6 +57,10 @@ def build_gates(state: dict[str, Any]) -> list[Gate]:
     queue = state["queue"]
     score = state["score"]
     url_state = state["url_classifier"]
+    missing_video_count = int(deep["missing_video_deep_count"] or 0)
+    writable_video_missing = int(deep.get("missing_video_deep_writable_count") or 0)
+    profile_ready_insert = int((deep.get("profile_llm_projection") or {}).get("ready_insert") or 0)
+    materialization_has_pending_writes = writable_video_missing > 0 or profile_ready_insert > 0
 
     gates: list[Gate] = []
     gates.append(
@@ -99,9 +103,11 @@ def build_gates(state: dict[str, Any]) -> list[Gate]:
     gates.append(
         Gate(
             "video_deep_materialized",
-            "pass" if int(deep["missing_video_deep_count"] or 0) == 0 else "ready_to_commit" if int(deep.get("missing_video_deep_writable_count") or 0) else "warn",
+            "pass" if missing_video_count == 0 else "ready_to_commit" if writable_video_missing else "warn",
             f"{deep['video_deep_ready']}/{deep['final_v1_ready']} final_v1 caches materialized; writable missing={deep.get('missing_video_deep_writable_count', 0)}",
-            "Run the approved video deep --commit command when ready.",
+            "Run the approved video deep --commit command when ready."
+            if writable_video_missing
+            else "Only non-extractable final_v1 rows remain; do not write a fake score.",
         )
     )
     projection = deep.get("profile_llm_projection") if isinstance(deep.get("profile_llm_projection"), dict) else {}
@@ -110,7 +116,9 @@ def build_gates(state: dict[str, Any]) -> list[Gate]:
             "profile_llm_materialized",
             "pass" if int(deep["profile_llm_ready"] or 0) > 0 else "ready_to_commit" if int(projection.get("ready_insert") or 0) else "fail",
             f"profile_llm_ready={deep['profile_llm_ready']}; ready_insert={projection.get('ready_insert', 0)}; skipped={projection.get('skipped', 0)}",
-            "Run the approved profile_llm --commit command when ready.",
+            "Run the approved profile_llm --commit command when ready."
+            if int(projection.get("ready_insert") or 0)
+            else "Profile-level extracts are already materialized; future runs would update existing rows only.",
         )
     )
     gates.append(
@@ -118,7 +126,9 @@ def build_gates(state: dict[str, Any]) -> list[Gate]:
             "search_history_smoke",
             "pass" if int(search["search_sessions"] or 0) > 0 else "missing",
             f"search_sessions={search['search_sessions']}; search_session_items={search['search_session_items']}",
-            "Run one real smart text queue smoke after write permission is approved.",
+            "Run one real smart text queue smoke after write permission is approved."
+            if not int(search["search_sessions"] or 0)
+            else "History table accepts sessions; item-producing search smoke is the next deeper validation.",
         )
     )
     gates.append(
@@ -163,11 +173,24 @@ def build_gates(state: dict[str, Any]) -> list[Gate]:
     gates.append(
         Gate(
             "materialization_projection",
-            "ready_to_commit" if score.get("projected_materialized_data_layers_if_ready_backfills_committed") else "unknown",
+            "ready_to_commit" if materialization_has_pending_writes else "pass",
             f"current={score['materialized_data_layers_estimate']}%; projected={score.get('projected_materialized_data_layers_if_ready_backfills_committed')}%",
+            "Materialization write candidates remain."
+            if materialization_has_pending_writes
+            else "No approved materialization write candidates remain.",
         )
     )
     return gates
+
+
+def pending_write_commands(gates: list[Gate]) -> list[str]:
+    keys = {gate.key for gate in gates if gate.status == "ready_to_commit"}
+    commands: list[str] = []
+    if "video_deep_materialized" in keys:
+        commands.append("python3 scripts/backfill_kol_llm_deep_analysis_results.py --cache-id 266,267,268,269 --commit")
+    if "profile_llm_materialized" in keys:
+        commands.append("python3 scripts/backfill_kol_account_dossier_extract.py --commit")
+    return commands
 
 
 def print_report(state: dict[str, Any], gates: list[Gate]) -> None:
@@ -185,9 +208,13 @@ def print_report(state: dict[str, Any], gates: list[Gate]) -> None:
         print(f"  [{gate.status}] {gate.key}: {gate.evidence}")
         if gate.next_step:
             print(f"       next: {gate.next_step}")
-    print("approved_write_commands_pending_confirmation:")
-    print("  python3 scripts/backfill_kol_llm_deep_analysis_results.py --cache-id 266,267,268,269 --commit")
-    print("  python3 scripts/backfill_kol_account_dossier_extract.py --commit")
+    commands = pending_write_commands(gates)
+    if commands:
+        print("approved_write_commands_pending_confirmation:")
+        for command in commands:
+            print(f"  {command}")
+    else:
+        print("approved_write_commands_pending_confirmation: none")
 
 
 def main() -> None:
