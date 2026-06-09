@@ -292,7 +292,8 @@ def _build_dimensions(
     return _json_ready(dimensions)
 
 
-def fetch_rows(conn: psycopg.Connection[Any]) -> list[dict[str, Any]]:
+def fetch_rows(conn: psycopg.Connection[Any], *, cache_ids: list[int] | None = None) -> list[dict[str, Any]]:
+    cache_ids = sorted(set(int(item) for item in (cache_ids or []) if int(item) > 0))
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             """
@@ -334,11 +335,30 @@ def fetch_rows(conn: psycopg.Connection[Any]) -> list[dict[str, Any]]:
             WHERE c.target_type = 'video'
               AND c.derive_method = %(final_derive_method)s
               AND c.status = 'ready'
+              AND (
+                %(cache_ids)s::bigint[] IS NULL
+                OR c.id = ANY(%(cache_ids)s::bigint[])
+              )
             ORDER BY c.id
             """,
-            {"final_derive_method": FINAL_DERIVE_METHOD, "qa_derive_method": QA_DERIVE_METHOD},
+            {
+                "final_derive_method": FINAL_DERIVE_METHOD,
+                "qa_derive_method": QA_DERIVE_METHOD,
+                "cache_ids": cache_ids or None,
+            },
         )
         return [dict(row) for row in cur.fetchall()]
+
+
+def _parse_cache_ids(values: list[str]) -> list[int]:
+    ids: list[int] = []
+    for value in values:
+        for item in str(value or "").split(","):
+            item = item.strip()
+            if not item:
+                continue
+            ids.append(int(item))
+    return sorted(set(ids))
 
 
 def fetch_existing_by_source_cache(conn: psycopg.Connection[Any]) -> dict[int, list[int]]:
@@ -584,11 +604,13 @@ def write_results(conn: psycopg.Connection[Any], prepared: list[PreparedResult],
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Backfill independent KOL deep analysis results from final_v1 cache.")
+    parser.add_argument("--cache-id", action="append", default=[], help="Limit to one or more final_v1 cache ids; comma-separated or repeated.")
     parser.add_argument("--commit", action="store_true", help="Write results. Omit for dry-run.")
     args = parser.parse_args()
     _load_env()
     with _connect() as conn:
-        rows = fetch_rows(conn)
+        cache_ids = _parse_cache_ids(args.cache_id)
+        rows = fetch_rows(conn, cache_ids=cache_ids)
         existing = fetch_existing_by_source_cache(conn)
         prepared, skipped = build_plan(rows, existing)
         print_report(rows, prepared, skipped)
