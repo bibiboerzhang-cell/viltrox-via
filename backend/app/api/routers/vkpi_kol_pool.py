@@ -641,7 +641,7 @@ async def smart_kol_search_profile_advance_job(
             body={
                 "limit": int(body.get("advance_limit") or body.get("profile_advance_limit") or 15),
                 "max_posts": int(body.get("max_posts") or 12),
-                "mode": str(body.get("advance_mode") or body.get("mode") or "profile_only"),
+                "mode": str(body.get("advance_mode") or body.get("mode") or "account_deep"),
                 "representative_video_limit": body.get("representative_video_limit"),
                 "item_types": body.get("item_types") or ["new_creator", "existing_kol", "recall_candidate"],
                 "include_completed": bool(body.get("include_completed")),
