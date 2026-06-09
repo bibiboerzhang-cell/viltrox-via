@@ -909,6 +909,82 @@ def _process_session_advance(conn: psycopg.Connection[Any], job: dict[str, Any],
             )
 
 
+def _process_smart_search_profile_advance(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
+    session_id = _int_or_none(payload.get("search_session_id") or payload.get("target_id"))
+    if not session_id:
+        raise ValueError("smart_search_profile_advance payload must include search_session_id")
+    try:
+        kol_search_sessions.update_session_result_summary(
+            int(session_id),
+            status="running",
+            summary_patch={
+                "smart_search_profile_advance_job": {
+                    "status": "running",
+                    "job_id": int(job["id"]),
+                    "query_text": payload.get("query_text"),
+                    "viltrox_fit_score_untouched": True,
+                }
+            },
+        )
+        result = asyncio.run(
+            kol_profile_discovery.execute_smart_search_profile_advance_pipeline(
+                session_id=int(session_id),
+                payload={**payload, "job_id": int(job["id"])},
+            )
+        )
+    except Exception as exc:
+        try:
+            kol_search_sessions.update_session_result_summary(
+                int(session_id),
+                status="failed",
+                summary_patch={
+                    "smart_search_profile_advance_job": {
+                        "status": "failed",
+                        "job_id": int(job["id"]),
+                        "query_text": payload.get("query_text"),
+                        "error": str(exc)[:1000],
+                        "viltrox_fit_score_untouched": True,
+                    }
+                },
+            )
+        except Exception as inner_exc:
+            logger.warning("smart_search_profile_advance failure summary update failed | job_id=%s error=%s", job.get("id"), inner_exc)
+        raise
+
+    job_status = "failed" if result.get("status") == "failed" else "done"
+    last_error = "" if job_status == "done" else str(result.get("status") or "smart_search_profile_advance_failed")
+    advance = result.get("advance") if isinstance(result.get("advance"), dict) else {}
+    new_discovery = result.get("new_discovery") if isinstance(result.get("new_discovery"), dict) else {}
+    payload["smart_search_profile_advance_result"] = {
+        "status": result.get("status"),
+        "session_id": result.get("session_id"),
+        "query": result.get("query"),
+        "recall": result.get("recall"),
+        "new_discovery_status": new_discovery.get("status") if new_discovery else "not_requested",
+        "new_discovery_counts": new_discovery.get("counts") if new_discovery else None,
+        "advance_status": advance.get("status"),
+        "advance_selected": advance.get("selected"),
+        "advance_counts": advance.get("counts"),
+        "viltrox_fit_score_changed_ids": result.get("viltrox_fit_score_changed_ids"),
+        "viltrox_fit_score_untouched": result.get("viltrox_fit_score_untouched"),
+    }
+    payload["search_session_last_job_status"] = job_status
+    payload["search_session_last_error"] = last_error
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE apify_jobs
+                SET status=%s,
+                    last_error=NULLIF(%s, ''),
+                    payload=%s::jsonb,
+                    updated_at=NOW()
+                WHERE id=%s
+                """,
+                (job_status, last_error[:2000], _json(payload), int(job["id"])),
+            )
+
+
 def _llm_budget_preflight(job: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     target_type, target_id = _target(payload)
     prompt = str(payload.get("prompt") or f"{job.get('job_type') or 'analysis'} {target_type}:{target_id}")
@@ -2405,6 +2481,9 @@ def _process_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> None:
     payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
     if str(job.get("job_type") or "").strip().lower() == "session_advance":
         _process_session_advance(conn, job, payload)
+        return
+    if str(job.get("job_type") or "").strip().lower() == "smart_search_profile_advance":
+        _process_smart_search_profile_advance(conn, job, payload)
         return
     target_type, target_id = _target(payload)
     if not target_type or not target_id:

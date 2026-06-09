@@ -9,6 +9,7 @@ from typing import Any
 
 from app.db.connection import get_conn
 from app.domains.kol import history_match
+from app.domains.kol import profile_recall
 from app.domains.kol import search_sessions
 from app.domains.kol import url_deep_crawl
 from app.services.intelligence.account_scan_service import search_platform_content
@@ -26,6 +27,15 @@ def _int(value: Any, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _staff_user_id(staff: dict[str, Any] | None) -> int | None:
+    staff = staff or {}
+    for key in ("user_id", "id", "staff_id"):
+        parsed = _int(staff.get(key))
+        if parsed > 0:
+            return parsed
+    return None
 
 
 def _platforms(value: Any, fallback: str = "") -> list[str]:
@@ -427,13 +437,7 @@ def enqueue_search_session_advance(
             "viltrox_fit_score_untouched": True,
         }
 
-    triggered_by_user_id = None
-    staff = staff or {}
-    for key in ("user_id", "id", "staff_id"):
-        parsed = _int(staff.get(key))
-        if parsed > 0:
-            triggered_by_user_id = parsed
-            break
+    triggered_by_user_id = _staff_user_id(staff)
     payload = {
         "target_type": "search_session",
         "target_id": str(session_id),
@@ -596,6 +600,194 @@ def cancel_search_session_advance(
         "writes": ["apify_jobs", "vkpi_kol_search_sessions", "vkpi_kol_search_session_items"],
         "viltrox_fit_score_changed_ids": [],
         "viltrox_fit_score_untouched": True,
+    }
+
+
+def enqueue_smart_search_profile_advance(
+    *,
+    query_text: str,
+    body: dict[str, Any] | None = None,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Queue the full text-search -> discovery -> profile-advance pipeline."""
+
+    body = body or {}
+    query = _text(query_text)
+    if not query:
+        raise ValueError("query_text is required")
+    session = search_sessions.ensure_session_for_result(
+        session_id=None,
+        create=True,
+        query_text=query,
+        query_type="text_recall",
+        source=_text(body.get("source") or "kol_smart_search_profile_pipeline"),
+        input_payload={key: value for key, value in body.items() if key != "api_token"},
+        staff=staff,
+    )
+    if not session:
+        raise RuntimeError("smart search session was not created")
+    session_id = int(session["id"])
+    triggered_by_user_id = _staff_user_id(staff)
+    payload = {
+        "target_type": "search_session",
+        "target_id": str(session_id),
+        "derive_method": "kol_smart_search_profile_advance",
+        "search_session_id": session_id,
+        "query_text": query,
+        "product_sku": _text(body.get("product_sku")),
+        "candidate_limit": max(1, min(_int(body.get("candidate_limit"), 100), 500)),
+        "limit": max(1, min(_int(body.get("limit"), 30), 50)),
+        "creator_quota": max(0, min(_int(body.get("creator_quota"), 15), 50)),
+        "reviewer_quota": max(0, min(_int(body.get("reviewer_quota"), 15), 50)),
+        "ratio_policy": _text(body.get("ratio_policy") or "soft"),
+        "mixed_policy": _text(body.get("mixed_policy") or "dominant"),
+        "dedupe": bool(body.get("dedupe", True)),
+        "vector_weight": body.get("vector_weight") if body.get("vector_weight") is not None else 0.7,
+        "type_weight": body.get("type_weight") if body.get("type_weight") is not None else 0.3,
+        "type_boost_enabled": bool(body.get("type_boost_enabled", True)),
+        "include_new_discovery": bool(body.get("include_new_discovery", True)),
+        "new_discovery_limit": max(1, min(_int(body.get("new_discovery_limit") or body.get("discovery_limit"), 15), 50)),
+        "new_discovery_per_platform_limit": max(1, min(_int(body.get("new_discovery_per_platform_limit") or body.get("new_discovery_limit") or body.get("discovery_limit"), 15), 50)),
+        "new_discovery_platforms": body.get("new_discovery_platforms") or body.get("discovery_platforms"),
+        "platform": _text(body.get("platform")),
+        "market": _text(body.get("market") or body.get("country")),
+        "advance_limit": max(1, min(_int(body.get("advance_limit") or body.get("profile_advance_limit"), 15), 15)),
+        "max_posts": max(1, min(_int(body.get("max_posts"), 12), 12)),
+        "advance_mode": _text(body.get("advance_mode") or body.get("mode") or "profile_only"),
+        "representative_video_limit": body.get("representative_video_limit"),
+        "item_types": body.get("item_types") or ["new_creator", "existing_kol", "recall_candidate"],
+        "include_completed": bool(body.get("include_completed")),
+        "prompt": f"smart profile advance · {query[:120]}",
+        "summary": f"smart profile advance · {query[:80]}",
+        "triggered_by_user_id": triggered_by_user_id,
+        "viltrox_fit_score_untouched": True,
+    }
+    conn = get_conn()
+    row = conn.execute(
+        """
+        INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
+        VALUES ('smart_search_profile_advance', ?::jsonb, 'queued', NOW(), NOW())
+        RETURNING id, job_type, status, created_at, updated_at
+        """,
+        (search_sessions._json_dumps(payload),),
+    ).fetchone()
+    conn.commit()
+    job = dict(row) if row else {}
+    search_sessions.update_session_result_summary(
+        session_id,
+        status="running",
+        summary_patch={
+            "smart_search_profile_advance_job": {
+                "status": "queued",
+                "job_id": job.get("id"),
+                "query_text": query,
+                "include_new_discovery": payload["include_new_discovery"],
+                "advance_limit": payload["advance_limit"],
+                "viltrox_fit_score_untouched": True,
+            }
+        },
+    )
+    return {
+        "status": "queued",
+        "session_id": session_id,
+        "search_session": search_sessions.get_session(session_id),
+        "job": job,
+        "provider_calls_performed": False,
+        "write_db": True,
+        "writes": ["vkpi_kol_search_sessions", "apify_jobs"],
+        "viltrox_fit_score_changed_ids": [],
+        "viltrox_fit_score_untouched": True,
+    }
+
+
+async def execute_smart_search_profile_advance_pipeline(
+    *,
+    session_id: int,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Execute a queued text recall/new-discovery/profile-advance pipeline."""
+
+    query = _text(payload.get("query_text") or payload.get("input") or payload.get("query"))
+    if not query:
+        raise ValueError("smart profile advance payload missing query_text")
+    recall_result = profile_recall.recall_kol_profiles(
+        query_text=query,
+        product_sku=_text(payload.get("product_sku")),
+        candidate_limit=max(1, min(_int(payload.get("candidate_limit"), 100), 500)),
+        limit=max(1, min(_int(payload.get("limit"), 30), 50)),
+        creator_quota=max(0, min(_int(payload.get("creator_quota"), 15), 50)),
+        reviewer_quota=max(0, min(_int(payload.get("reviewer_quota"), 15), 50)),
+        ratio_policy=_text(payload.get("ratio_policy") or "soft"),
+        mixed_policy=_text(payload.get("mixed_policy") or "dominant"),
+        dedupe=bool(payload.get("dedupe", True)),
+        vector_weight=float(payload.get("vector_weight") if payload.get("vector_weight") is not None else 0.7),
+        type_weight=float(payload.get("type_weight") if payload.get("type_weight") is not None else 0.3),
+        type_boost_enabled=bool(payload.get("type_boost_enabled", True)),
+    )
+    recall_session = search_sessions.attach_recall_result(int(session_id), recall_result)
+    new_discovery: dict[str, Any] | None = None
+    if bool(payload.get("include_new_discovery", True)):
+        new_discovery = await discover_new_creators(
+            query_text=query,
+            platforms=payload.get("new_discovery_platforms") or payload.get("discovery_platforms"),
+            platform_hint=_text(payload.get("platform")),
+            market=_text(payload.get("market") or payload.get("country")),
+            limit=max(1, min(_int(payload.get("new_discovery_limit"), 15), 50)),
+            per_platform_limit=max(1, min(_int(payload.get("new_discovery_per_platform_limit"), 15), 50)),
+        )
+        search_sessions.attach_new_discovery_result(int(session_id), new_discovery)
+
+    advance_result = advance_search_session_items(
+        session_id=int(session_id),
+        body={
+            **payload,
+            "execute": True,
+            "limit": max(1, min(_int(payload.get("advance_limit") or payload.get("profile_advance_limit"), 15), 15)),
+            "max_posts": max(1, min(_int(payload.get("max_posts"), 12), 12)),
+            "mode": _text(payload.get("advance_mode") or payload.get("mode") or "profile_only"),
+            "item_types": payload.get("item_types") or ["new_creator", "existing_kol", "recall_candidate"],
+            "include_completed": bool(payload.get("include_completed")),
+        },
+    )
+    changed_ids = [
+        _int(value)
+        for value in (advance_result.get("viltrox_fit_score_changed_ids") or [])
+        if _int(value) > 0
+    ]
+    pipeline_status = "failed" if advance_result.get("status") == "failed" else "ready"
+    search_sessions.update_session_result_summary(
+        int(session_id),
+        status="partial" if changed_ids or advance_result.get("status") == "partial" else pipeline_status,
+        summary_patch={
+            "smart_search_profile_advance_job": {
+                "status": pipeline_status,
+                "query_text": query,
+                "recall_returned": len(recall_result.get("items") or []),
+                "new_discovery_status": (new_discovery or {}).get("status") if new_discovery else "not_requested",
+                "advance_status": advance_result.get("status"),
+                "advance_counts": advance_result.get("counts"),
+                "viltrox_fit_score_changed_ids": changed_ids,
+                "viltrox_fit_score_untouched": not changed_ids,
+            }
+        },
+    )
+    return {
+        "status": pipeline_status,
+        "session_id": int(session_id),
+        "query": query,
+        "recall": {
+            "method": recall_result.get("method"),
+            "returned_count": len(recall_result.get("items") or []),
+            "diagnostics": recall_result.get("diagnostics"),
+            "search_session": recall_session,
+        },
+        "new_discovery": new_discovery,
+        "advance": advance_result,
+        "provider_calls_performed": True,
+        "write_db": True,
+        "writes": ["vkpi_kol_search_sessions", "vkpi_kol_search_session_items", "vkpi_kol_pool", "vkpi_kol_url_deep_crawl_runs"],
+        "viltrox_fit_score_changed_ids": changed_ids,
+        "viltrox_fit_score_untouched": not changed_ids,
     }
 
 

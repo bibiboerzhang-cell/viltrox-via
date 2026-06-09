@@ -567,8 +567,32 @@ async def smart_kol_search_profile_advance_job(
         raise HTTPException(status_code=400, detail="input is required")
     if _looks_like_url(query_text):
         raise HTTPException(status_code=400, detail="profile-advance-job accepts text needs only; use kol-url-deep-crawl for URLs")
+    queue_pipeline_raw = body.get("queue_pipeline", True)
+    queue_pipeline = str(queue_pipeline_raw).strip().lower() not in {"0", "false", "no", "off", "sync"}
 
     try:
+        if queue_pipeline:
+            queued = kol_profile_discovery.enqueue_smart_search_profile_advance(
+                query_text=query_text,
+                body=body,
+                staff=staff,
+            )
+            return {
+                "status": queued.get("status"),
+                "mode": "text",
+                "query_type": "text_recall",
+                "branch": "kol_recall_profile_advance_pipeline",
+                "query": query_text,
+                "search_session": queued.get("search_session"),
+                "advance_job": queued,
+                "provider_calls": False,
+                "provider_note": "pipeline queued on apify_jobs; worker will run recall/new discovery/profile advance in order",
+                "write_db": True,
+                "writes": queued.get("writes") or ["vkpi_kol_search_sessions", "apify_jobs"],
+                "viltrox_fit_score_changed_ids": [],
+                "viltrox_fit_score_untouched": True,
+            }
+
         recall_result = kol_profile_recall.recall_kol_profiles(
             query_text=query_text,
             product_sku=str(body.get("product_sku") or ""),
