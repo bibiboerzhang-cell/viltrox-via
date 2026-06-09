@@ -227,6 +227,33 @@ function videoString(video, keys, fallback = "") {
   return fallback;
 }
 
+function hostFromUrl(url) {
+  try {
+    return new URL(String(url || "").trim()).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function normalizedVideoPlatform(video) {
+  const explicit = videoString(video, ["platform"]).toLowerCase();
+  if (explicit) return explicit;
+  const url = videoString(video, ["watch_url", "url", "content_url"]);
+  const host = hostFromUrl(url);
+  if (host.includes("youtube.com") || host.includes("youtu.be")) return "youtube";
+  if (host.includes("instagram.com")) return "instagram";
+  if (host.includes("tiktok.com")) return "tiktok";
+  return "media";
+}
+
+function youtubeIdForVideo(video) {
+  const platform = normalizedVideoPlatform(video);
+  const watchUrl = videoString(video, ["watch_url", "url", "content_url"]);
+  const host = hostFromUrl(watchUrl);
+  if (platform !== "youtube" && !host.includes("youtube.com") && !host.includes("youtu.be")) return "";
+  return videoString(video, ["youtube_video_id"]);
+}
+
 function RepresentativeVideoCard({ video, index, onOpen }) {
   const [thumbnailFailed, setThumbnailFailed] = React.useState(false);
   const title = videoString(video, ["title", "video_title"], `代表作 ${index + 1}`);
@@ -234,8 +261,9 @@ function RepresentativeVideoCard({ video, index, onOpen }) {
   const duration = videoString(video, ["duration"], "—");
   const thumbnail = proxiedImageUrl(videoString(video, ["best_thumbnail", "thumbnail_url", "youtube_thumbnail_url"]));
   const cachedVideoUrl = videoString(video, ["cached_video_url"]);
-  const youtubeVideoId = videoString(video, ["youtube_video_id"]);
+  const youtubeVideoId = youtubeIdForVideo(video);
   const watchUrl = videoString(video, ["watch_url", "url", "content_url"]);
+  const platform = normalizedVideoPlatform(video);
   const canOpen = Boolean(cachedVideoUrl || youtubeVideoId || watchUrl || thumbnail);
   const showThumbnail = Boolean(thumbnail && !thumbnailFailed);
 
@@ -276,6 +304,14 @@ function RepresentativeVideoCard({ video, index, onOpen }) {
     },
       media,
       e("span", {
+        className: "absolute left-1 top-1 rounded px-1 py-0.5 text-[7.5px] font-medium uppercase tracking-wide text-white/85",
+        style: { background: "rgba(0,0,0,0.62)" }
+      }, platform === "instagram" ? "IG" : platform === "tiktok" ? "TT" : platform === "youtube" ? "YT" : "MEDIA"),
+      platform !== "youtube" && e("span", {
+        className: "absolute right-1 top-1 rounded px-1 py-0.5 text-[7.5px] font-medium text-white/80",
+        style: { background: cachedVideoUrl ? "rgba(16,185,129,0.58)" : "rgba(15,23,42,0.72)" }
+      }, cachedVideoUrl ? "R2" : "无缓存"),
+      e("span", {
         className: "absolute bottom-1 right-1 px-1 rounded text-[8px] tabular-nums text-white",
         style: { background: "rgba(0,0,0,0.7)" }
       }, duration)
@@ -291,9 +327,9 @@ function RepresentativeVideoPlayerModal({ video, onClose }) {
   const title = videoString(video, ["title", "video_title"], "代表作");
   const thumbnail = proxiedImageUrl(videoString(video, ["best_thumbnail", "thumbnail_url", "youtube_thumbnail_url"]));
   const cachedVideoUrl = proxiedVideoUrl(videoString(video, ["cached_video_url"]));
-  const youtubeVideoId = videoString(video, ["youtube_video_id"]);
+  const youtubeVideoId = youtubeIdForVideo(video);
   const watchUrl = videoString(video, ["watch_url", "url", "content_url"]);
-  const platform = videoString(video, ["platform"], "media");
+  const platform = normalizedVideoPlatform(video);
   const embedSrc = youtubeVideoId
     ? `https://www.youtube.com/embed/${encodeURIComponent(youtubeVideoId)}?autoplay=1&rel=0`
     : "";
@@ -306,22 +342,22 @@ function RepresentativeVideoPlayerModal({ video, onClose }) {
     return () => window.removeEventListener("keydown", handleKey);
   }, [onClose]);
 
-  const stage = youtubeVideoId
-    ? e("iframe", {
-        src: embedSrc,
-        title,
-        className: "h-full w-full rounded-lg bg-black",
-        allow: "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share",
-        allowFullScreen: true,
-      })
-    : cachedVideoUrl
-      ? e("video", {
+  const stage = cachedVideoUrl
+    ? e("video", {
           src: cachedVideoUrl,
           poster: thumbnail || undefined,
           className: "h-full w-full rounded-lg bg-black object-contain",
           controls: true,
           autoPlay: true,
           playsInline: true,
+        })
+    : youtubeVideoId
+      ? e("iframe", {
+          src: embedSrc,
+          title,
+          className: "h-full w-full rounded-lg bg-black",
+          allow: "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share",
+          allowFullScreen: true,
         })
       : e("div", {
           className: "flex h-full w-full flex-col items-center justify-center gap-4 rounded-lg border border-white/[0.08] bg-slate-950 p-8 text-center",
@@ -335,8 +371,12 @@ function RepresentativeVideoPlayerModal({ video, onClose }) {
               })
             : e(Video, { size: 36, className: "text-slate-500" }),
           e("div", null,
-            e("div", { className: "text-sm font-medium text-white" }, "当前没有可内嵌播放的视频缓存"),
-            e("div", { className: "mt-1 text-xs text-slate-500" }, "可以打开原帖查看")
+            e("div", { className: "text-sm font-medium text-white" },
+              platform === "instagram" || platform === "tiktok" ? "当前未命中 R2 视频缓存" : "当前没有可内嵌播放的视频缓存"
+            ),
+            e("div", { className: "mt-1 text-xs text-slate-500" },
+              platform === "instagram" || platform === "tiktok" ? "不会使用 YouTube 播放器；可以打开原帖查看" : "可以打开原帖查看"
+            )
           ),
           watchUrl && e("a", {
             href: watchUrl,
