@@ -399,7 +399,26 @@ export interface VkpiKolSmartSearchResponse {
   search_session?: VkpiKolSearchSessionRef | Row;
   provider_calls?: boolean;
   provider_note?: string;
+  llm_query_plan?: Row;
   new_discovery_status?: string;
+  viltrox_fit_score_untouched?: boolean;
+}
+
+export interface VkpiKolSmartSearchProfileAdvanceResponse {
+  status: "queued" | "already_queued" | "nothing_to_queue" | string;
+  mode?: "text" | string;
+  query_type?: "text_recall" | string;
+  branch?: string;
+  query?: string;
+  original_query?: string;
+  llm_query_plan?: Row;
+  search_session?: VkpiKolSearchSessionRef | Row;
+  advance_job?: Row;
+  provider_calls?: boolean;
+  provider_note?: string;
+  write_db?: boolean;
+  writes?: string[];
+  viltrox_fit_score_changed_ids?: number[];
   viltrox_fit_score_untouched?: boolean;
 }
 
@@ -501,6 +520,46 @@ export async function smartKolSearch(
   if (typeof params.sessionId === "number") body.session_id = params.sessionId;
   return apiFetch<VkpiKolSmartSearchResponse>(
     "/api/admin/vkpi/kol-smart-search",
+    {
+      method: "POST",
+      body: jsonBody(body),
+      ...(params.timeoutMs ? { timeoutMs: params.timeoutMs } : {}),
+    },
+    token,
+  );
+}
+
+export async function smartKolSearchProfileAdvanceJob(
+  token: string,
+  input: string,
+  params: {
+    candidateLimit?: number;
+    limit?: number;
+    creatorQuota?: number;
+    reviewerQuota?: number;
+    advanceLimit?: number;
+    maxPosts?: number;
+    representativeVideoLimit?: number;
+    includeNewDiscovery?: boolean;
+    newDiscoveryLimit?: number;
+    timeoutMs?: number;
+  } = {},
+): Promise<VkpiKolSmartSearchProfileAdvanceResponse> {
+  const body: Row = {
+    input,
+    queue_pipeline: true,
+    include_new_discovery: params.includeNewDiscovery ?? true,
+  };
+  if (typeof params.candidateLimit === "number") body.candidate_limit = params.candidateLimit;
+  if (typeof params.limit === "number") body.limit = params.limit;
+  if (typeof params.creatorQuota === "number") body.creator_quota = params.creatorQuota;
+  if (typeof params.reviewerQuota === "number") body.reviewer_quota = params.reviewerQuota;
+  if (typeof params.advanceLimit === "number") body.advance_limit = params.advanceLimit;
+  if (typeof params.maxPosts === "number") body.max_posts = params.maxPosts;
+  if (typeof params.representativeVideoLimit === "number") body.representative_video_limit = params.representativeVideoLimit;
+  if (typeof params.newDiscoveryLimit === "number") body.new_discovery_limit = params.newDiscoveryLimit;
+  return apiFetch<VkpiKolSmartSearchProfileAdvanceResponse>(
+    "/api/admin/vkpi/kol-smart-search/profile-advance-job",
     {
       method: "POST",
       body: jsonBody(body),

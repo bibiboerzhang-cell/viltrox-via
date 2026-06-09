@@ -3,9 +3,11 @@ import { BadgeCheck, Database, Link2, Loader2, Search, Sparkles, UserPlus, Video
 
 import {
   deepCrawlKolUrl,
+  smartKolSearchProfileAdvanceJob,
   smartKolSearch,
   type VkpiKolRecallItem,
   type VkpiKolRecallResponse,
+  type VkpiKolSmartSearchProfileAdvanceResponse,
   type VkpiKolUrlDeepCrawlResponse,
 } from "../../../../domains/kol";
 import { proxiedImageUrl } from "../../shared/mediaProxy";
@@ -98,6 +100,32 @@ function RecallMiniItem({ item }: { item: VkpiKolRecallItem }) {
       <span className="shrink-0 rounded-md border border-violet-300/15 px-1.5 py-0.5 text-[9.5px] text-violet-100">
         {Number(item.recall_rank_score ?? item.vector_score ?? 0).toFixed(2)}
       </span>
+    </div>
+  );
+}
+
+function PlanPills({ plan }: { plan: Row }) {
+  const searchQuery = display(plan.search_query);
+  const persona = display(plan.target_persona, "");
+  const provider = display(plan.provider, "rule_v0");
+  const focus = Array.isArray(plan.product_focus) ? plan.product_focus.map(cleanText).filter(Boolean).slice(0, 4) : [];
+  return (
+    <div className="mb-2 rounded-md border border-cyan-300/12 bg-cyan-400/[0.045] px-2.5 py-2">
+      <div className="mb-1 flex flex-wrap items-center gap-1.5 text-[9.5px] text-cyan-100">
+        <span className="rounded border border-cyan-300/15 px-1.5 py-0.5">LLM 查询计划</span>
+        <span className="text-slate-500">{provider}</span>
+      </div>
+      <div className="truncate text-[10.5px] text-slate-300">{searchQuery}</div>
+      {persona ? <div className="mt-1 truncate text-[10px] text-slate-500">{persona}</div> : null}
+      {focus.length ? (
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          {focus.map((item) => (
+            <span key={item} className="rounded border border-white/[0.07] bg-black/20 px-1.5 py-0.5 text-[9.5px] text-slate-400">
+              {item}
+            </span>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -204,6 +232,7 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
   const [mode, setMode] = useState<Mode>("idle");
   const [urlResult, setUrlResult] = useState<VkpiKolUrlDeepCrawlResponse | null>(null);
   const [recallResult, setRecallResult] = useState<VkpiKolRecallResponse | null>(null);
+  const [advanceResult, setAdvanceResult] = useState<VkpiKolSmartSearchProfileAdvanceResponse | null>(null);
   const [error, setError] = useState("");
 
   const inferredMode = useMemo(() => detectMode(input), [input]);
@@ -215,7 +244,7 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
   const videoOperation = cleanText(videoFlow.operation || profileFlow.operation);
   const videoCreatorResolved = Boolean(
     cleanText(videoFlow.creator_resolution_status) === "resolved" ||
-    cleanText(videoCreator.handle || videoCreator.channel_id || videoCreator.profile_url),
+    cleanText(videoCreator.handle || videoCreator.channel_id || videoCreator.profile_url || urlResult?.handle || urlResult?.channel_id),
   );
   const urlCanExecute = Boolean(
     apiToken &&
@@ -233,6 +262,7 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
     )
   );
   const recallItems = recallTopItems(recallResult);
+  const llmPlan = asRecord((recallResult as Row | null)?.llm_query_plan);
 
   const run = async () => {
     const query = cleanText(input);
@@ -252,6 +282,7 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
     setError("");
     setUrlResult(null);
     setRecallResult(null);
+    setAdvanceResult(null);
     try {
       const response = await smartKolSearch(apiToken, query, {
         mode: "auto",
@@ -261,6 +292,7 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
         creatorQuota: 7,
         reviewerQuota: 3,
         createSession: true,
+        timeoutMs: 60000,
       });
       const responseMode = cleanText(response.mode);
       if (responseMode === "url" || cleanText(response.query_type).startsWith("url_")) {
@@ -298,6 +330,32 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
     } catch (err) {
       setState("ready");
       setError(err instanceof Error ? err.message : "URL 执行失败");
+    }
+  };
+
+  const queueTextAdvance = async () => {
+    const query = cleanText(input);
+    if (!apiToken || !query || state === "executing") return;
+    setState("executing");
+    setError("");
+    try {
+      const response = await smartKolSearchProfileAdvanceJob(apiToken, query, {
+        candidateLimit: 100,
+        limit: 30,
+        creatorQuota: 15,
+        reviewerQuota: 15,
+        advanceLimit: 15,
+        maxPosts: 12,
+        representativeVideoLimit: 1,
+        includeNewDiscovery: true,
+        newDiscoveryLimit: 15,
+        timeoutMs: 300000,
+      });
+      setAdvanceResult(response);
+      setState("ready");
+    } catch (err) {
+      setState("ready");
+      setError(err instanceof Error ? err.message : "后台深度查找入队失败");
     }
   };
 
@@ -386,13 +444,14 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
       {mode === "text" && recallResult ? (
         <div className="mt-3 rounded-lg border border-violet-300/15 bg-violet-950/[0.10] p-3">
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <div className="text-[11px] font-medium text-violet-100">语义召回结果</div>
+            <div className="text-[11px] font-medium text-violet-100">LLM 查找结果</div>
             <div className="flex flex-wrap gap-1.5 text-[10px] text-slate-500">
               <span className="rounded-md border border-white/[0.07] px-2 py-1">候选 {display(recallResult.diagnostics?.candidate_count)}</span>
               <span className="rounded-md border border-white/[0.07] px-2 py-1">创作者 {display(recallResult.diagnostics?.creator_returned)}</span>
               <span className="rounded-md border border-white/[0.07] px-2 py-1">测评号 {display(recallResult.diagnostics?.reviewer_returned)}</span>
             </div>
           </div>
+          {Object.keys(llmPlan).length ? <PlanPills plan={llmPlan} /> : null}
           <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
             {recallItems.map((item) => (
               <RecallMiniItem key={`${item.bucket}-${item.kol_pool_id}`} item={item} />
@@ -400,6 +459,23 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
           </div>
           {!recallItems.length ? (
             <div className="rounded-md border border-dashed border-white/[0.08] px-3 py-4 text-center text-[11px] text-slate-500">暂无召回结果</div>
+          ) : null}
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void queueTextAdvance()}
+              disabled={state === "executing" || !apiToken || !cleanText(input)}
+              className="inline-flex min-h-[32px] items-center justify-center gap-1.5 rounded-md border border-emerald-300/18 bg-emerald-500/[0.12] px-3 text-[10.5px] font-medium text-emerald-100 transition-colors hover:bg-emerald-500/[0.20] disabled:cursor-not-allowed disabled:opacity-55"
+            >
+              {state === "executing" ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+              后台深度查找
+            </button>
+            <span className="text-[10px] text-slate-600">15+15 候选 · 新发现 · 逐个补档 · V6 Fit 不触碰</span>
+          </div>
+          {advanceResult ? (
+            <div className="mt-2 rounded-md border border-emerald-300/18 bg-emerald-400/[0.08] px-2.5 py-2 text-[10.5px] text-emerald-100">
+              已入队: {display(advanceResult.status)} · 看侧边栏任务进度。V6 Fit 未触碰: {display(advanceResult.viltrox_fit_score_untouched)}
+            </div>
           ) : null}
         </div>
       ) : null}

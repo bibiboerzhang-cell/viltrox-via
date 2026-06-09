@@ -240,7 +240,7 @@ export function UrlDeepCrawlPanel({ apiToken = "" }: { apiToken?: string }) {
   const videoOperation = cleanText(videoFlow.operation || profileFlow.operation);
   const videoCreatorResolved = Boolean(
     cleanText(videoFlow.creator_resolution_status) === "resolved" ||
-    cleanText(creatorIdentity.handle || creatorIdentity.channel_id || creatorIdentity.profile_url),
+    cleanText(creatorIdentity.handle || creatorIdentity.channel_id || creatorIdentity.profile_url || result?.handle || result?.channel_id),
   );
   const canExecuteVideo = Boolean(
     apiToken &&

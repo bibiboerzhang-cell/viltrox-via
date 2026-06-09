@@ -34,6 +34,7 @@ from app.domains.kol import pool as kol_pool
 from app.domains.kol import profile_discovery as kol_profile_discovery
 import app.domains.kol.profile_recall as kol_profile_recall
 import app.domains.kol.search_sessions as kol_search_sessions
+import app.domains.kol.smart_query_planner as kol_smart_query_planner
 import app.domains.kol.url_deep_crawl as kol_url_deep_crawl
 import app.domains.kol.video_analysis_enqueue as kol_video_analysis_enqueue
 from app.domains.intelligence import gemini_single_kol_preflight
@@ -485,13 +486,15 @@ async def smart_kol_search(
             }
 
         recall_query = str(body.get("query_text") or query_text).strip()
+        llm_query_plan = kol_smart_query_planner.plan_text_query(recall_query, body=body, staff=staff)
+        effective_query = str(llm_query_plan.get("search_query") or recall_query).strip()
         result = kol_profile_recall.recall_kol_profiles(
-            query_text=recall_query,
+            query_text=effective_query,
             product_sku=str(body.get("product_sku") or ""),
             candidate_limit=int(body.get("candidate_limit") or 100),
             limit=int(body.get("limit") or 30),
-            creator_quota=int(body.get("creator_quota") or 15),
-            reviewer_quota=int(body.get("reviewer_quota") or 15),
+            creator_quota=int(body.get("creator_quota") or llm_query_plan.get("creator_quota") or 15),
+            reviewer_quota=int(body.get("reviewer_quota") or llm_query_plan.get("reviewer_quota") or 15),
             ratio_policy=str(body.get("ratio_policy") or "soft"),
             mixed_policy=str(body.get("mixed_policy") or "dominant"),
             dedupe=bool(body.get("dedupe", True)),
@@ -499,6 +502,9 @@ async def smart_kol_search(
             type_weight=float(body.get("type_weight") if body.get("type_weight") is not None else 0.3),
             type_boost_enabled=bool(body.get("type_boost_enabled", True)),
         )
+        result["llm_query_plan"] = llm_query_plan
+        result["original_query_text"] = recall_query
+        result["effective_query_text"] = effective_query
         result = _attach_smart_recall_session(body=body, result=result, query_text=recall_query, staff=staff)
         discovery_payload: dict | None = None
         include_new_discovery = bool(body.get("include_new_discovery") or body.get("include_discovery"))
@@ -509,10 +515,10 @@ async def smart_kol_search(
             platform_hint = str(body.get("platform") or "")
             if execute_new_discovery:
                 discovery_payload = await kol_profile_discovery.discover_new_creators(
-                    query_text=recall_query,
-                    platforms=discovery_platforms,
+                    query_text=effective_query,
+                    platforms=discovery_platforms or llm_query_plan.get("platforms"),
                     platform_hint=platform_hint,
-                    market=str(body.get("market") or body.get("country") or ""),
+                    market=str(body.get("market") or body.get("country") or llm_query_plan.get("market") or ""),
                     limit=discovery_limit,
                     per_platform_limit=int(body.get("new_discovery_per_platform_limit") or discovery_limit),
                 )
@@ -525,8 +531,8 @@ async def smart_kol_search(
                     )
             else:
                 discovery_payload = kol_profile_discovery.discovery_plan(
-                    query_text=recall_query,
-                    platforms=discovery_platforms,
+                    query_text=effective_query,
+                    platforms=discovery_platforms or llm_query_plan.get("platforms"),
                     platform_hint=platform_hint,
                     limit=discovery_limit,
                 )
@@ -538,7 +544,8 @@ async def smart_kol_search(
             "result": result,
             "search_session": result.get("search_session"),
             "provider_calls": True,
-            "provider_note": "text recall requires OpenAI embedding; cost is recorded by recall diagnostics",
+            "provider_note": "text search uses LLM query planning plus OpenAI embedding recall; costs are recorded in ledgers",
+            "llm_query_plan": llm_query_plan,
             "new_discovery": discovery_payload,
             "viltrox_fit_score_untouched": True,
             "new_discovery_status": (discovery_payload or {}).get("status") if discovery_payload else "not_requested",
@@ -572,10 +579,23 @@ async def smart_kol_search_profile_advance_job(
     queue_pipeline = str(queue_pipeline_raw).strip().lower() not in {"0", "false", "no", "off", "sync"}
 
     try:
+        llm_query_plan = kol_smart_query_planner.plan_text_query(query_text, body=body, staff=staff)
+        effective_query = str(llm_query_plan.get("search_query") or query_text).strip()
+        queued_body = {
+            **body,
+            "original_query_text": query_text,
+            "llm_query_plan": llm_query_plan,
+            "creator_quota": body.get("creator_quota") or llm_query_plan.get("creator_quota"),
+            "reviewer_quota": body.get("reviewer_quota") or llm_query_plan.get("reviewer_quota"),
+            "include_new_discovery": body.get("include_new_discovery", llm_query_plan.get("include_new_discovery", True)),
+            "new_discovery_limit": body.get("new_discovery_limit") or llm_query_plan.get("new_discovery_limit"),
+            "new_discovery_platforms": body.get("new_discovery_platforms") or llm_query_plan.get("platforms"),
+            "market": body.get("market") or llm_query_plan.get("market"),
+        }
         if queue_pipeline:
             queued = kol_profile_discovery.enqueue_smart_search_profile_advance(
-                query_text=query_text,
-                body=body,
+                query_text=effective_query,
+                body=queued_body,
                 staff=staff,
             )
             return {
@@ -583,11 +603,13 @@ async def smart_kol_search_profile_advance_job(
                 "mode": "text",
                 "query_type": "text_recall",
                 "branch": "kol_recall_profile_advance_pipeline",
-                "query": query_text,
+                "query": effective_query,
+                "original_query": query_text,
+                "llm_query_plan": llm_query_plan,
                 "search_session": queued.get("search_session"),
                 "advance_job": queued,
-                "provider_calls": False,
-                "provider_note": "pipeline queued on apify_jobs; worker will run recall/new discovery/profile advance in order",
+                "provider_calls": bool(llm_query_plan.get("provider_calls_performed")),
+                "provider_note": "LLM planner ran before queueing; worker will run recall/new discovery/profile advance in order",
                 "write_db": True,
                 "writes": queued.get("writes") or ["vkpi_kol_search_sessions", "apify_jobs"],
                 "viltrox_fit_score_changed_ids": [],
@@ -595,12 +617,12 @@ async def smart_kol_search_profile_advance_job(
             }
 
         recall_result = kol_profile_recall.recall_kol_profiles(
-            query_text=query_text,
+            query_text=effective_query,
             product_sku=str(body.get("product_sku") or ""),
             candidate_limit=int(body.get("candidate_limit") or 100),
             limit=int(body.get("limit") or 30),
-            creator_quota=int(body.get("creator_quota") or 15),
-            reviewer_quota=int(body.get("reviewer_quota") or 15),
+            creator_quota=int(body.get("creator_quota") or llm_query_plan.get("creator_quota") or 15),
+            reviewer_quota=int(body.get("reviewer_quota") or llm_query_plan.get("reviewer_quota") or 15),
             ratio_policy=str(body.get("ratio_policy") or "soft"),
             mixed_policy=str(body.get("mixed_policy") or "dominant"),
             dedupe=bool(body.get("dedupe", True)),
@@ -608,6 +630,9 @@ async def smart_kol_search_profile_advance_job(
             type_weight=float(body.get("type_weight") if body.get("type_weight") is not None else 0.3),
             type_boost_enabled=bool(body.get("type_boost_enabled", True)),
         )
+        recall_result["llm_query_plan"] = llm_query_plan
+        recall_result["original_query_text"] = query_text
+        recall_result["effective_query_text"] = effective_query
         recall_result = _attach_smart_recall_session(
             body={**body, "create_session": True, "source": body.get("source") or "kol_smart_search_profile_advance"},
             result=recall_result,
@@ -624,10 +649,10 @@ async def smart_kol_search_profile_advance_job(
         if include_new_discovery:
             discovery_limit = int(body.get("new_discovery_limit") or body.get("discovery_limit") or 15)
             new_discovery = await kol_profile_discovery.discover_new_creators(
-                query_text=query_text,
-                platforms=body.get("new_discovery_platforms") or body.get("discovery_platforms"),
+                query_text=effective_query,
+                platforms=body.get("new_discovery_platforms") or body.get("discovery_platforms") or llm_query_plan.get("platforms"),
                 platform_hint=str(body.get("platform") or ""),
-                market=str(body.get("market") or body.get("country") or ""),
+                market=str(body.get("market") or body.get("country") or llm_query_plan.get("market") or ""),
                 limit=discovery_limit,
                 per_platform_limit=int(body.get("new_discovery_per_platform_limit") or discovery_limit),
             )
