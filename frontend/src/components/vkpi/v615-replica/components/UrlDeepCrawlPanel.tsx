@@ -127,8 +127,13 @@ function VideoUrlActionPanel({
   isExecuting: boolean;
   onExecute: () => void;
 }) {
-  const operation = cleanText(videoFlow.operation || result.profile_flow?.operation);
-  const creatorResolved = cleanText(videoFlow.creator_resolution_status) === "resolved" || Boolean(creatorIdentity.profile_url || creatorIdentity.handle || creatorIdentity.channel_id);
+  const profileFlow = asRecord(result.profile_flow);
+  const profileOperation = cleanText(profileFlow.operation);
+  const rawVideoOperation = cleanText(videoFlow.operation);
+  const operation = ["existing_creator_video_analysis", "new_creator_video_analysis"].includes(profileOperation)
+    ? profileOperation
+    : rawVideoOperation || profileOperation;
+  const creatorResolved = cleanText(videoFlow.creator_resolution_status) === "resolved" || Boolean(creatorIdentity.profile_url || creatorIdentity.handle || creatorIdentity.channel_id || result.handle || result.channel_id);
   const isKnownCreator = operation === "existing_creator_video_analysis" || Boolean(result.in_pool);
   const actionLabel = isKnownCreator ? "只分析此视频" : "建档并分析";
   const creatorName = displayText(creatorIdentity.display_name || creatorIdentity.handle || creatorIdentity.channel_id, "创作者未解析");
@@ -236,8 +241,12 @@ export function UrlDeepCrawlPanel({ apiToken = "" }: { apiToken?: string }) {
     candidates.length <= 1 &&
     !isLoading,
   );
-  const videoStatus = cleanText(videoFlow.status || profileFlow.status);
-  const videoOperation = cleanText(videoFlow.operation || profileFlow.operation);
+  const videoStatus = cleanText(profileFlow.status || videoFlow.status);
+  const profileOperation = cleanText(profileFlow.operation);
+  const rawVideoOperation = cleanText(videoFlow.operation);
+  const videoOperation = ["existing_creator_video_analysis", "new_creator_video_analysis"].includes(profileOperation)
+    ? profileOperation
+    : rawVideoOperation || profileOperation;
   const videoCreatorResolved = Boolean(
     cleanText(videoFlow.creator_resolution_status) === "resolved" ||
     cleanText(creatorIdentity.handle || creatorIdentity.channel_id || creatorIdentity.profile_url || result?.handle || result?.channel_id),
@@ -247,7 +256,7 @@ export function UrlDeepCrawlPanel({ apiToken = "" }: { apiToken?: string }) {
     result &&
     !result.execute &&
     result.url_type === "video" &&
-    videoStatus === "dry_run_ready" &&
+    ["dry_run_ready", "ready_to_execute"].includes(videoStatus) &&
     videoCreatorResolved &&
     ["existing_creator_video_analysis", "new_creator_video_analysis"].includes(videoOperation) &&
     !isLoading,

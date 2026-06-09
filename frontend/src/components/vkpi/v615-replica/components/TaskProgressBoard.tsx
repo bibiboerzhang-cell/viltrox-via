@@ -5,6 +5,7 @@ import { Brain, Clock3, FileText, Search, Zap } from "lucide-react";
 import { getTaskQueueCompact } from "../../../../services/vkpi/tasks-api";
 
 const e = React.createElement;
+const PENDING_SEARCH_SESSION_KEY = "vkpi:pendingKolSearchSessionId";
 
 const LANES = [
   {
@@ -60,6 +61,24 @@ function taskLabel(task) {
   return `${task.kind || "任务"} · ${taskTargetText(task) || "未命名"}`;
 }
 
+function taskSearchSessionId(task) {
+  const session = task?.search_session && typeof task.search_session === "object" ? task.search_session : {};
+  const raw = session.session_id || session.id || task?.target?.target_id;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 && String(task?.target?.target_type || "").includes("search_session")
+    ? parsed
+    : Number.isFinite(Number(session.session_id || session.id)) && Number(session.session_id || session.id) > 0
+      ? Number(session.session_id || session.id)
+      : undefined;
+}
+
+function openSearchSessionFromTask(task) {
+  const sessionId = taskSearchSessionId(task);
+  if (!sessionId || typeof window === "undefined") return;
+  window.localStorage.setItem(PENDING_SEARCH_SESSION_KEY, String(sessionId));
+  window.dispatchEvent(new CustomEvent("vkpi:open-kol-search-session", { detail: { sessionId, task } }));
+}
+
 function lightColor(light) {
   const tone = String(light?.tone || "").toLowerCase();
   if (tone === "red") return "#fb7185";
@@ -71,7 +90,14 @@ function TaskRow({ task, color, showBar }) {
   const rawProgress = task.progress_pct ?? task.progress;
   const hasProgress = Number.isFinite(Number(rawProgress));
   const progress = Math.max(6, Math.min(100, Number(rawProgress || 0)));
-  return e("div", { className: "min-w-0" },
+  const canOpen = Boolean(taskSearchSessionId(task));
+  return e("button", {
+    type: "button",
+    onClick: canOpen ? () => openSearchSessionFromTask(task) : undefined,
+    disabled: !canOpen,
+    className: `block w-full min-w-0 text-left ${canOpen ? "cursor-pointer rounded-md transition-colors hover:bg-white/[0.045]" : "cursor-default"} disabled:cursor-default`,
+    title: canOpen ? "打开这次查找记录" : "",
+  },
     e("div", { className: "flex items-center gap-1.5 min-w-0" },
       e("span", {
         className: `h-[5px] w-[5px] shrink-0 rounded-full ${showBar ? "animate-pulse" : ""}`,
@@ -175,6 +201,7 @@ export function TaskProgressBoard({ apiToken = "" }) {
   }, [apiToken, refreshQueue]);
 
   const activeTasks = useMemo(() => asArray(payload?.active), [payload]);
+  const recentTasks = useMemo(() => asArray(payload?.recent), [payload]);
   const queuedTasks = useMemo(() => activeTasks.filter((task) => task?.status === "queued"), [activeTasks]);
   const laneTasks = useMemo(() => {
     const nonQueued = activeTasks.filter((task) => task?.status !== "queued");
@@ -193,6 +220,7 @@ export function TaskProgressBoard({ apiToken = "" }) {
   }));
   const visibleQueue = queuedTasks.slice(0, 2);
   const remainingQueue = Math.max(0, queueTotal - visibleQueue.length);
+  const visibleRecent = recentTasks.filter((task) => taskSearchSessionId(task)).slice(0, 2);
   const emptyActive = activeTotal === 0 && !loading && !error;
 
   return e("div", {
@@ -240,7 +268,13 @@ export function TaskProgressBoard({ apiToken = "" }) {
       ),
       e("div", { className: "mt-1.5 flex flex-col gap-1" },
         visibleQueue.length
-          ? visibleQueue.map((task, index) => e("div", { key: task.id, className: "flex min-w-0 items-center gap-1.5" },
+          ? visibleQueue.map((task, index) => e("button", {
+            key: task.id,
+            type: "button",
+            onClick: taskSearchSessionId(task) ? () => openSearchSessionFromTask(task) : undefined,
+            disabled: !taskSearchSessionId(task),
+            className: "flex min-w-0 items-center gap-1.5 text-left disabled:cursor-default"
+          },
             e("span", { className: "w-[18px] shrink-0 text-[10px] text-white/40 tabular-nums" }, `#${index + 1}`),
             e("span", { className: "truncate text-[11px] text-white/60" }, taskLabel(task))
           ))
@@ -250,6 +284,23 @@ export function TaskProgressBoard({ apiToken = "" }) {
           e("span", { className: "truncate text-[11px] text-white/60" }, "更多任务…")
         )
       )
-    )
+    ),
+    visibleRecent.length ? e("div", { className: "mt-3 border-t border-white/[0.08] pt-2.5" },
+      e("div", { className: "mb-1.5 flex items-center justify-between gap-2" },
+        e("span", { className: "text-[11px] text-white/45" }, "最近完成"),
+        e("span", { className: "text-[10px] text-[#5DCAA5]/80" }, "可打开")
+      ),
+      e("div", { className: "flex flex-col gap-1" },
+        visibleRecent.map((task) => e("button", {
+          key: `recent-${task.id}`,
+          type: "button",
+          onClick: () => openSearchSessionFromTask(task),
+          className: "flex min-w-0 items-center justify-between gap-2 rounded-md border border-emerald-300/10 bg-emerald-400/[0.045] px-2 py-1 text-left hover:bg-emerald-400/[0.08]"
+        },
+          e("span", { className: "truncate text-[10.5px] text-white/65" }, taskLabel(task)),
+          e("span", { className: "shrink-0 text-[10px] text-[#5DCAA5]" }, "打开")
+        ))
+      )
+    ) : null
   );
 }

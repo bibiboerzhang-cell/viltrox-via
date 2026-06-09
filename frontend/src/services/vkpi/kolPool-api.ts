@@ -323,6 +323,48 @@ export interface VkpiKolSearchSessionRef {
   status?: string;
 }
 
+export interface VkpiKolSearchSessionItem {
+  id?: number;
+  session_id?: number;
+  item_type?: string;
+  status?: string;
+  stage?: string;
+  rank?: number;
+  score?: number;
+  kol_pool_id?: number;
+  evidence_id?: number;
+  job_id?: number;
+  source_url?: string;
+  payload?: Row;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface VkpiKolSearchHistoryItem {
+  id?: number;
+  query_text?: string;
+  query_type?: "url_video" | "url_profile" | "text_recall" | "unknown" | string;
+  source?: string;
+  status?: string;
+  input_payload?: Row;
+  result_summary?: Row;
+  summary?: Row;
+  item_count?: number;
+  items_preview?: VkpiKolSearchSessionItem[];
+  active_items?: VkpiKolSearchSessionItem[];
+  items?: VkpiKolSearchSessionItem[];
+  counts?: Row;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface VkpiKolSearchHistoryResponse {
+  status: "ready" | string;
+  count?: number;
+  items?: VkpiKolSearchHistoryItem[];
+  filters?: Row;
+}
+
 export interface VkpiKolUrlDeepCrawlResponse {
   method?: string;
   dry_run?: boolean;
@@ -565,6 +607,34 @@ export async function smartKolSearchProfileAdvanceJob(
       body: jsonBody(body),
       ...(params.timeoutMs ? { timeoutMs: params.timeoutMs } : {}),
     },
+    token,
+  );
+}
+
+export async function listKolSearchHistory(
+  token: string,
+  params: { limit?: number; status?: string; queryType?: string; itemLimit?: number } = {},
+): Promise<VkpiKolSearchHistoryResponse> {
+  const query = new URLSearchParams({
+    limit: String(params.limit || 12),
+    item_limit: String(params.itemLimit ?? 5),
+  });
+  if (params.status) query.set("status", params.status);
+  if (params.queryType) query.set("query_type", params.queryType);
+  return apiFetch<VkpiKolSearchHistoryResponse>(
+    `/api/admin/vkpi/kol-search-history?${query.toString()}`,
+    { cache: "no-store" },
+    token,
+  );
+}
+
+export async function getKolSearchSession(
+  token: string,
+  sessionId: string | number,
+): Promise<VkpiKolSearchHistoryItem> {
+  return apiFetch<VkpiKolSearchHistoryItem>(
+    `/api/admin/vkpi/kol-search-sessions/${encodeURIComponent(String(sessionId))}`,
+    { cache: "no-store" },
     token,
   );
 }

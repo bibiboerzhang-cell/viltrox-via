@@ -1,12 +1,15 @@
-import { useMemo, useState } from "react";
-import { BadgeCheck, Database, Link2, Loader2, Search, Sparkles, UserPlus, Video } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { BadgeCheck, Clock3, Database, Link2, Loader2, Search, Sparkles, UserPlus, Video } from "lucide-react";
 
 import {
   deepCrawlKolUrl,
+  getKolSearchSession,
+  listKolSearchHistory,
   smartKolSearchProfileAdvanceJob,
   smartKolSearch,
   type VkpiKolRecallItem,
   type VkpiKolRecallResponse,
+  type VkpiKolSearchHistoryItem,
   type VkpiKolSmartSearchProfileAdvanceResponse,
   type VkpiKolUrlDeepCrawlResponse,
 } from "../../../../domains/kol";
@@ -15,6 +18,7 @@ import { proxiedImageUrl } from "../../shared/mediaProxy";
 type Mode = "idle" | "url" | "text";
 type State = "idle" | "loading" | "ready" | "executing" | "error";
 type Row = Record<string, unknown>;
+const PENDING_SEARCH_SESSION_KEY = "vkpi:pendingKolSearchSessionId";
 
 function cleanText(value: unknown): string {
   return String(value ?? "").replace(/\s+/g, " ").trim();
@@ -80,6 +84,154 @@ function recallTopItems(response: VkpiKolRecallResponse | null): VkpiKolRecallIt
   const creator = Array.isArray(response.buckets?.creator) ? response.buckets.creator : [];
   const reviewer = Array.isArray(response.buckets?.reviewer) ? response.buckets.reviewer : [];
   return [...creator.slice(0, 3), ...reviewer.slice(0, 2)];
+}
+
+function historySessionId(value: unknown): number | undefined {
+  const record = asRecord(value);
+  const raw = record.id ?? record.session_id;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function sessionItems(session: VkpiKolSearchHistoryItem): Row[] {
+  const items = Array.isArray(session.items) && session.items.length
+    ? session.items
+    : Array.isArray(session.items_preview)
+      ? session.items_preview
+      : [];
+  return items.map((item) => asRecord(item));
+}
+
+function recallResultFromSession(session: VkpiKolSearchHistoryItem): VkpiKolRecallResponse {
+  const creator: VkpiKolRecallItem[] = [];
+  const reviewer: VkpiKolRecallItem[] = [];
+  sessionItems(session).forEach((item) => {
+    const payload = asRecord(item.payload);
+    const bucket: "creator" | "reviewer" = cleanText(payload.bucket) === "reviewer" ? "reviewer" : "creator";
+    const row = {
+      bucket,
+      kol_pool_id: Number(item.kol_pool_id || payload.kol_pool_id || 0),
+      handle: display(payload.handle || payload.display_name || payload.channel_name, "unknown"),
+      display_name: cleanText(payload.display_name || payload.channel_name || payload.handle),
+      platform: cleanText(payload.platform),
+      profile_type: display(payload.profile_type || item.item_type, "creator"),
+      followers: Number(payload.followers || 0) || null,
+      avatar_url: cleanText(payload.avatar_url),
+      profile_url: cleanText(item.source_url || payload.profile_url || payload.source_url || payload.channel_url),
+      recall_rank_score: Number(item.score ?? payload.recall_rank_score ?? payload.vector_score ?? 0),
+      vector_score: Number(payload.vector_score ?? item.score ?? 0),
+      type_label: bucket === "reviewer" ? "测评号" : "创作者",
+      creator_type_score: bucket === "creator" ? 1 : 0,
+      reviewer_type_score: bucket === "reviewer" ? 1 : 0,
+      recall_reason: cleanText(payload.evidence || payload.sample_title),
+      source_fields: payload,
+    } satisfies VkpiKolRecallItem;
+    if (bucket === "reviewer") reviewer.push(row);
+    else creator.push(row);
+  });
+  const summary = asRecord(session.result_summary);
+  const diagnostics = asRecord(summary.diagnostics);
+  return {
+    method: "search_session_history",
+    query: { query_text: display(summary.query || session.query_text, "") },
+    ratio: {
+      creator_quota: creator.length,
+      reviewer_quota: reviewer.length,
+      policy: "history",
+      mixed_policy: "history",
+      dedupe: true,
+    },
+    items: [...creator, ...reviewer],
+    buckets: { creator, reviewer },
+    diagnostics: {
+      ...diagnostics,
+      candidate_count: Number(diagnostics.candidate_count ?? session.item_count ?? creator.length + reviewer.length),
+      creator_returned: Number(diagnostics.creator_returned ?? creator.length),
+      reviewer_returned: Number(diagnostics.reviewer_returned ?? reviewer.length),
+      returned_count: creator.length + reviewer.length,
+    },
+  } satisfies VkpiKolRecallResponse;
+}
+
+function urlResultFromSession(session: VkpiKolSearchHistoryItem): VkpiKolUrlDeepCrawlResponse | null {
+  const item = sessionItems(session).find((entry) => cleanText(entry.item_type).startsWith("url_")) || sessionItems(session)[0];
+  if (!item) return null;
+  const payload = asRecord(item.payload);
+  const videoFlow = asRecord(payload.video_flow);
+  const profileFlow = asRecord(payload.profile_flow);
+  const urlType = cleanText(payload.url_type || session.query_type).includes("video") ? "video" : cleanText(payload.url_type || session.query_type).includes("profile") ? "profile" : "unknown";
+  return {
+    method: "search_session_history",
+    execute: false,
+    url: {
+      input: session.query_text,
+      normalized: cleanText(item.source_url || session.query_text),
+    },
+    url_type: urlType,
+    platform: cleanText(payload.platform),
+    handle: cleanText(payload.handle),
+    channel_id: cleanText(payload.channel_id),
+    video_id: cleanText(payload.video_id),
+    in_pool: Boolean(payload.in_pool || item.kol_pool_id),
+    matched_kol_pool_id: Number(payload.matched_kol_pool_id || item.kol_pool_id) || null,
+    next_action: "history_restore",
+    profile_flow: profileFlow,
+    video_flow: videoFlow,
+    creator_identity: asRecord(payload.creator_identity),
+    video_metadata: asRecord(payload.video_metadata),
+    search_session: { id: session.id, session_id: session.id, status: session.status },
+    safety: { viltrox_fit_score_untouched: Boolean(payload.viltrox_fit_score_untouched) },
+  };
+}
+
+function historyKindLabel(session: VkpiKolSearchHistoryItem): string {
+  const type = cleanText(session.query_type);
+  if (type === "url_video") return "视频 URL";
+  if (type === "url_profile") return "账号 URL";
+  if (type === "text_recall") return "查找";
+  return "历史";
+}
+
+function HistoryStrip({
+  items,
+  loading,
+  onOpen,
+}: {
+  items: VkpiKolSearchHistoryItem[];
+  loading: boolean;
+  onOpen: (session: VkpiKolSearchHistoryItem) => void;
+}) {
+  if (!items.length && !loading) return null;
+  return (
+    <div className="mt-2 rounded-lg border border-white/[0.055] bg-black/15 px-2.5 py-2">
+      <div className="mb-1.5 flex items-center justify-between gap-2">
+        <div className="inline-flex items-center gap-1.5 text-[10px] font-medium text-slate-300">
+          <Clock3 size={11} className="text-slate-500" />
+          最近历史
+        </div>
+        {loading ? <span className="text-[9.5px] text-slate-600">同步中</span> : null}
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {items.slice(0, 5).map((item) => {
+          const sessionId = historySessionId(item);
+          const label = display(item.query_text, `session #${sessionId || "--"}`);
+          return (
+            <button
+              key={`${sessionId || label}-${item.updated_at || item.created_at || ""}`}
+              type="button"
+              onClick={() => onOpen(item)}
+              className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-white/[0.07] bg-white/[0.025] px-2 py-1 text-[10px] text-slate-400 transition-colors hover:border-cyan-300/25 hover:text-cyan-100"
+              title={label}
+            >
+              <span className="shrink-0 text-slate-600">{historyKindLabel(item)}</span>
+              <span className="max-w-[220px] truncate">{label}</span>
+              <span className="shrink-0 text-slate-600">{item.status || "ready"}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 function RecallMiniItem({ item }: { item: VkpiKolRecallItem }) {
@@ -150,11 +302,15 @@ function UrlSummary({
   const enqueueJob = asRecord(enqueue.job);
   const platform = cleanText(result.platform).toLowerCase();
   const isVideo = result.url_type === "video";
-  const operation = cleanText(videoFlow.operation || profileFlow.operation);
+  const profileOperation = cleanText(profileFlow.operation);
+  const videoOperation = cleanText(videoFlow.operation);
+  const operation = ["existing_creator_video_analysis", "new_creator_video_analysis"].includes(profileOperation)
+    ? profileOperation
+    : videoOperation || profileOperation;
   const knownCreator = Boolean(result.in_pool || operation === "existing_creator_video_analysis");
   const creatorResolved = Boolean(
     cleanText(videoFlow.creator_resolution_status) === "resolved" ||
-    cleanText(creator.handle || creator.channel_id || creator.profile_url),
+    cleanText(creator.handle || creator.channel_id || creator.profile_url || result.handle || result.channel_id),
   );
   const tiktokRisk = isVideo && platform === "tiktok";
   const executeDone = result.execute && (
@@ -233,6 +389,8 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
   const [urlResult, setUrlResult] = useState<VkpiKolUrlDeepCrawlResponse | null>(null);
   const [recallResult, setRecallResult] = useState<VkpiKolRecallResponse | null>(null);
   const [advanceResult, setAdvanceResult] = useState<VkpiKolSmartSearchProfileAdvanceResponse | null>(null);
+  const [historyItems, setHistoryItems] = useState<VkpiKolSearchHistoryItem[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [error, setError] = useState("");
 
   const inferredMode = useMemo(() => detectMode(input), [input]);
@@ -240,8 +398,12 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
   const profileFlow = asRecord(urlResult?.profile_flow);
   const videoFlow = asRecord(urlResult?.video_flow);
   const videoCreator = asRecord(urlResult?.creator_identity || videoFlow.creator_identity);
-  const videoStatus = cleanText(videoFlow.status || profileFlow.status);
-  const videoOperation = cleanText(videoFlow.operation || profileFlow.operation);
+  const videoStatus = cleanText(profileFlow.status || videoFlow.status);
+  const profileOperation = cleanText(profileFlow.operation);
+  const rawVideoOperation = cleanText(videoFlow.operation);
+  const videoOperation = ["existing_creator_video_analysis", "new_creator_video_analysis"].includes(profileOperation)
+    ? profileOperation
+    : rawVideoOperation || profileOperation;
   const videoCreatorResolved = Boolean(
     cleanText(videoFlow.creator_resolution_status) === "resolved" ||
     cleanText(videoCreator.handle || videoCreator.channel_id || videoCreator.profile_url || urlResult?.handle || urlResult?.channel_id),
@@ -255,7 +417,7 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
       (urlResult.url_type === "profile" && cleanText(profileFlow.status) === "dry_run_ready") ||
       (
         urlResult.url_type === "video" &&
-        videoStatus === "dry_run_ready" &&
+        ["dry_run_ready", "ready_to_execute"].includes(videoStatus) &&
         videoCreatorResolved &&
         ["existing_creator_video_analysis", "new_creator_video_analysis"].includes(videoOperation)
       )
@@ -263,6 +425,88 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
   );
   const recallItems = recallTopItems(recallResult);
   const llmPlan = asRecord((recallResult as Row | null)?.llm_query_plan);
+
+  const refreshHistory = useCallback(async () => {
+    if (!apiToken) {
+      setHistoryItems([]);
+      return;
+    }
+    setHistoryLoading(true);
+    try {
+      const response = await listKolSearchHistory(apiToken, { limit: 10, itemLimit: 5 });
+      setHistoryItems(Array.isArray(response.items) ? response.items : []);
+    } catch {
+      // History is a convenience surface; do not interrupt the main search flow.
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [apiToken]);
+
+  const restoreSession = useCallback((session: VkpiKolSearchHistoryItem) => {
+    const query = cleanText(session.query_text);
+    if (query) setInput(query);
+    setAdvanceResult(null);
+    setError("");
+    const queryType = cleanText(session.query_type);
+    if (queryType === "url_video" || queryType === "url_profile") {
+      const nextUrlResult = urlResultFromSession(session);
+      setMode("url");
+      setUrlResult(nextUrlResult);
+      setRecallResult(null);
+    } else {
+      setMode("text");
+      setRecallResult(recallResultFromSession(session));
+      setUrlResult(null);
+    }
+    setState("ready");
+  }, []);
+
+  const openHistorySession = useCallback(async (sessionOrId: VkpiKolSearchHistoryItem | number | string) => {
+    if (!apiToken) return;
+    const knownSession = typeof sessionOrId === "object" ? sessionOrId : null;
+    const sessionId = knownSession ? historySessionId(knownSession) : Number(sessionOrId);
+    if (!sessionId) {
+      if (knownSession) restoreSession(knownSession);
+      return;
+    }
+    setHistoryLoading(true);
+    try {
+      const session = await getKolSearchSession(apiToken, sessionId);
+      restoreSession(session);
+      void refreshHistory();
+    } catch (err) {
+      if (knownSession) {
+        restoreSession(knownSession);
+      } else {
+        setError(err instanceof Error ? err.message : "历史记录读取失败");
+      }
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [apiToken, refreshHistory, restoreSession]);
+
+  useEffect(() => {
+    void refreshHistory();
+  }, [refreshHistory]);
+
+  useEffect(() => {
+    if (!apiToken || typeof window === "undefined") return undefined;
+    const openPending = (sessionId: unknown) => {
+      const parsed = Number(sessionId);
+      if (Number.isFinite(parsed) && parsed > 0) void openHistorySession(parsed);
+    };
+    const fromStorage = window.localStorage.getItem(PENDING_SEARCH_SESSION_KEY);
+    if (fromStorage) {
+      window.localStorage.removeItem(PENDING_SEARCH_SESSION_KEY);
+      openPending(fromStorage);
+    }
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent).detail || {};
+      openPending(detail.sessionId || detail.session_id);
+    };
+    window.addEventListener("vkpi:open-kol-search-session", handler);
+    return () => window.removeEventListener("vkpi:open-kol-search-session", handler);
+  }, [apiToken, openHistorySession]);
 
   const run = async () => {
     const query = cleanText(input);
@@ -303,6 +547,7 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
         setRecallResult(response.result as VkpiKolRecallResponse);
       }
       setState("ready");
+      void refreshHistory();
     } catch (err) {
       setState("error");
       setError(err instanceof Error ? err.message : "智能入口请求失败");
@@ -327,6 +572,7 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
       });
       setUrlResult(response);
       setState("ready");
+      void refreshHistory();
     } catch (err) {
       setState("ready");
       setError(err instanceof Error ? err.message : "URL 执行失败");
@@ -353,6 +599,7 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
       });
       setAdvanceResult(response);
       setState("ready");
+      void refreshHistory();
     } catch (err) {
       setState("ready");
       setError(err instanceof Error ? err.message : "后台深度查找入队失败");
@@ -427,6 +674,12 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
           <span>先识别，再执行。</span>
         </div>
       ) : null}
+
+      <HistoryStrip
+        items={historyItems}
+        loading={historyLoading}
+        onOpen={(session) => void openHistorySession(session)}
+      />
 
       {error ? (
         <div className="mt-3 rounded-lg border border-rose-300/20 bg-rose-500/[0.08] px-3 py-2 text-[11px] text-rose-200">{error}</div>

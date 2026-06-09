@@ -93,6 +93,14 @@ export function V615ReplicaApp(props: any = {}) {
   const [collapsed, setCollapsed] = useState(stored.collapsed || false);
   const [activeNav, setActiveNav] = useState(["dashboard", "kol-pool", "my-kol", "projects", "events"].includes(initialNav) ? initialNav : "dashboard");
   const [theme, setTheme] = useState(stored.theme || "dark");
+
+  useEffect(() => {
+    const handleOpenKolSearchSession = () => {
+      setActiveNav("kol-pool");
+    };
+    window.addEventListener("vkpi:open-kol-search-session", handleOpenKolSearchSession);
+    return () => window.removeEventListener("vkpi:open-kol-search-session", handleOpenKolSearchSession);
+  }, []);
   
   // 层级 state
   const [viewMode, setViewMode]   = useState(stored.viewMode || null);
