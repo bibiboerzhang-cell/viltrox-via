@@ -229,7 +229,31 @@ function videoString(video, keys, fallback = "") {
 
 function hostFromUrl(url) {
   try {
-    return new URL(String(url || "").trim()).hostname.toLowerCase();
+    const raw = String(url || "").trim();
+    if (!raw) return "";
+    const normalized = raw.includes("://") ? raw : `https://${raw}`;
+    return new URL(normalized).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function parseYoutubeVideoId(url) {
+  try {
+    const raw = String(url || "").trim();
+    if (!raw) return "";
+    const normalized = raw.includes("://") ? raw : `https://${raw}`;
+    const parsed = new URL(normalized);
+    const host = parsed.hostname.toLowerCase();
+    if (host.includes("youtu.be")) {
+      return parsed.pathname.split("/").filter(Boolean)[0] || "";
+    }
+    if (!host.includes("youtube.com")) return "";
+    const watchId = parsed.searchParams.get("v");
+    if (watchId) return watchId;
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    const marker = parts.findIndex((part) => ["embed", "shorts", "live"].includes(part));
+    return marker >= 0 ? parts[marker + 1] || "" : "";
   } catch {
     return "";
   }
@@ -251,7 +275,7 @@ function youtubeIdForVideo(video) {
   const watchUrl = videoString(video, ["watch_url", "url", "content_url"]);
   const host = hostFromUrl(watchUrl);
   if (platform !== "youtube" && !host.includes("youtube.com") && !host.includes("youtu.be")) return "";
-  return videoString(video, ["youtube_video_id"]);
+  return videoString(video, ["youtube_video_id"]) || parseYoutubeVideoId(watchUrl);
 }
 
 function RepresentativeVideoCard({ video, index, onOpen }) {
@@ -283,20 +307,13 @@ function RepresentativeVideoCard({ video, index, onOpen }) {
       })
     : e(Video, { size: 16, className: "text-slate-500" });
 
-  return e("div", {
+  return e("button", {
+    type: "button",
     className: [
-      "rounded-md border border-white/[0.06] bg-white/[0.02] overflow-hidden transition-colors",
-      canOpen ? "hover:bg-white/[0.04] cursor-pointer" : "",
+      "w-full rounded-md border border-white/[0.06] bg-white/[0.02] overflow-hidden text-left transition-colors",
+      canOpen ? "hover:bg-white/[0.04] cursor-pointer focus:outline-none focus:ring-1 focus:ring-cyan-300/30" : "cursor-default",
     ].filter(Boolean).join(" "),
     onClick: handleClick,
-    role: canOpen ? "button" : undefined,
-    tabIndex: canOpen ? 0 : undefined,
-    onKeyDown: canOpen ? (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        handleClick();
-      }
-    } : undefined,
     title: canOpen ? "点击播放或打开代表作" : undefined,
   },
     e("div", {
