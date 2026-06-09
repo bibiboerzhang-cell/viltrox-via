@@ -854,6 +854,11 @@ def _process_session_advance(conn: psycopg.Connection[Any], job: dict[str, Any],
                 }
             },
         )
+        kol_search_sessions.mark_items_profile_running(
+            int(session_id),
+            job_id=int(job["id"]),
+            reason="session_advance_worker_claimed",
+        )
         result = kol_profile_discovery.advance_search_session_items(
             session_id=int(session_id),
             body={**payload, "execute": True},

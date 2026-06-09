@@ -405,13 +405,24 @@ def enqueue_search_session_advance(
         (str(session_id),),
     ).fetchone()
     if existing:
+        existing_job = dict(existing)
+        queued_items: dict[str, Any] | None = None
+        if _text(existing_job.get("status")).lower() == "queued":
+            queued_items = search_sessions.mark_items_profile_queued(
+                session_id,
+                item_ids=[_int(item.get("item_id")) for item in plan.get("items") or []],
+                job_id=_int(existing_job.get("id")),
+                reason="session_advance_already_queued",
+                plan_items=plan.get("items") or [],
+            )
         return {
             "status": "already_queued",
             "session_id": session_id,
-            "job": dict(existing),
+            "job": existing_job,
+            "queued_items": queued_items,
             "plan": plan,
             "provider_calls_performed": False,
-            "write_db": False,
+            "write_db": bool(queued_items and queued_items.get("updated_count")),
             "viltrox_fit_score_changed_ids": [],
             "viltrox_fit_score_untouched": True,
         }
@@ -449,16 +460,25 @@ def enqueue_search_session_advance(
         (search_sessions._json_dumps(payload),),
     ).fetchone()
     conn.commit()
+    job = dict(row) if row else {}
+    queued_items = search_sessions.mark_items_profile_queued(
+        session_id,
+        item_ids=[_int(item.get("item_id")) for item in plan.get("items") or []],
+        job_id=_int(job.get("id")),
+        reason="session_advance_queued",
+        plan_items=plan.get("items") or [],
+    )
     search_sessions.update_session_result_summary(
         session_id,
         status="running",
         summary_patch={
             "profile_batch_advance_job": {
                 "status": "queued",
-                "job_id": dict(row).get("id") if row else None,
+                "job_id": job.get("id"),
                 "selected": plan.get("selected"),
                 "eligible": plan.get("eligible"),
                 "overflow": plan.get("overflow"),
+                "queued_items": queued_items.get("updated_count"),
                 "viltrox_fit_score_untouched": True,
             }
         },
@@ -466,11 +486,114 @@ def enqueue_search_session_advance(
     return {
         "status": "queued",
         "session_id": session_id,
-        "job": dict(row) if row else {},
+        "job": job,
+        "queued_items": queued_items,
         "plan": plan,
         "provider_calls_performed": False,
         "write_db": True,
-        "writes": ["apify_jobs", "vkpi_kol_search_sessions"],
+        "writes": ["apify_jobs", "vkpi_kol_search_sessions", "vkpi_kol_search_session_items"],
+        "viltrox_fit_score_changed_ids": [],
+        "viltrox_fit_score_untouched": True,
+    }
+
+
+def cancel_search_session_advance(
+    *,
+    session_id: int,
+    body: dict[str, Any] | None = None,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Block queued session-advance jobs without interrupting running provider work."""
+
+    del staff
+    body = body or {}
+    session_id = int(session_id)
+    reason = _text(body.get("reason") or "session_advance_cancelled_by_user")
+    conn = get_conn()
+    rows = conn.execute(
+        """
+        SELECT id, job_type, status, payload, created_at, updated_at
+        FROM apify_jobs
+        WHERE job_type='session_advance'
+          AND status IN ('queued', 'running')
+          AND payload->>'search_session_id'=?
+        ORDER BY created_at DESC, id DESC
+        """,
+        (str(session_id),),
+    ).fetchall()
+    jobs = [dict(row) for row in rows]
+    queued_jobs = [job for job in jobs if _text(job.get("status")).lower() == "queued"]
+    running_jobs = [job for job in jobs if _text(job.get("status")).lower() == "running"]
+    if not queued_jobs:
+        search_sessions.update_session_result_summary(
+            session_id,
+            status="running" if running_jobs else "ready",
+            summary_patch={
+                "profile_batch_advance_job": {
+                    "status": "running_not_cancelled" if running_jobs else "no_queued_job",
+                    "running_job_ids": [job.get("id") for job in running_jobs],
+                    "viltrox_fit_score_untouched": True,
+                }
+            },
+        )
+        return {
+            "status": "running_not_cancelled" if running_jobs else "no_queued_job",
+            "session_id": session_id,
+            "cancelled_jobs": [],
+            "running_jobs": running_jobs,
+            "provider_calls_performed": False,
+            "write_db": bool(running_jobs),
+            "viltrox_fit_score_changed_ids": [],
+            "viltrox_fit_score_untouched": True,
+        }
+
+    cancelled_job_ids = [_int(job.get("id")) for job in queued_jobs if _int(job.get("id")) > 0]
+    for job in queued_jobs:
+        payload = job.get("payload")
+        payload_dict = search_sessions._loads(payload, {}) if not isinstance(payload, dict) else payload
+        if not isinstance(payload_dict, dict):
+            payload_dict = {}
+        payload_dict = {**payload_dict, "session_advance_cancelled": {"status": "cancelled", "reason": reason}}
+        conn.execute(
+            """
+            UPDATE apify_jobs
+            SET status='blocked',
+                last_error=?,
+                payload=?::jsonb,
+                updated_at=NOW()
+            WHERE id=? AND status='queued'
+            """,
+            (reason[:2000], search_sessions._json_dumps(payload_dict), int(job["id"])),
+        )
+    conn.commit()
+    cancelled_items = search_sessions.mark_items_profile_cancelled(
+        session_id,
+        job_ids=cancelled_job_ids,
+        reason=reason,
+    )
+    search_sessions.update_session_result_summary(
+        session_id,
+        status="running" if running_jobs else "partial",
+        summary_patch={
+            "profile_batch_advance_job": {
+                "status": "cancelled" if not running_jobs else "partial_cancelled_running_remains",
+                "cancelled_job_ids": cancelled_job_ids,
+                "running_job_ids": [job.get("id") for job in running_jobs],
+                "cancelled_items": cancelled_items.get("updated_count"),
+                "reason": reason,
+                "viltrox_fit_score_untouched": True,
+            }
+        },
+    )
+    return {
+        "status": "cancelled" if not running_jobs else "partial_cancelled_running_remains",
+        "session_id": session_id,
+        "cancelled_jobs": queued_jobs,
+        "running_jobs": running_jobs,
+        "cancelled_items": cancelled_items,
+        "provider_calls_performed": False,
+        "write_db": True,
+        "writes": ["apify_jobs", "vkpi_kol_search_sessions", "vkpi_kol_search_session_items"],
         "viltrox_fit_score_changed_ids": [],
         "viltrox_fit_score_untouched": True,
     }

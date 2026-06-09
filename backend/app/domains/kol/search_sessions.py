@@ -486,6 +486,234 @@ def update_item_profile_execution(
     return _row_to_item(updated)
 
 
+def mark_items_profile_queued(
+    session_id: int,
+    *,
+    item_ids: list[int],
+    job_id: int,
+    reason: str = "session_advance_queued",
+    plan_items: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Mark selected discovery items as queued for one session-advance job."""
+
+    safe_item_ids = sorted({int(item_id) for item_id in item_ids if _int_or_none(item_id)})
+    safe_job_id = _int_or_none(job_id)
+    if not safe_item_ids or not safe_job_id:
+        return {
+            "status": "ready",
+            "session_id": int(session_id),
+            "job_id": safe_job_id,
+            "updated_count": 0,
+            "items": [],
+        }
+
+    plan_by_item_id = {
+        _int_or_none(item.get("item_id")): item
+        for item in (plan_items or [])
+        if isinstance(item, dict) and _int_or_none(item.get("item_id"))
+    }
+    placeholders = ", ".join(["?"] * len(safe_item_ids))
+    conn = get_conn()
+    rows = conn.execute(
+        f"""
+        SELECT *
+        FROM vkpi_kol_search_session_items
+        WHERE session_id=?
+          AND id IN ({placeholders})
+        ORDER BY rank NULLS LAST, id
+        """,
+        (int(session_id), *safe_item_ids),
+    ).fetchall()
+
+    queued_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    updated_items: list[dict[str, Any]] = []
+    for row in rows:
+        current = _row_to_item(row)
+        item_id = int(current["id"])
+        payload = _dict(current.get("payload")).copy()
+        payload["profile_advance_job"] = {
+            "status": "queued",
+            "job_id": safe_job_id,
+            "queued_at": queued_at,
+            "reason": _text(reason) or "session_advance_queued",
+            "plan": _dict(plan_by_item_id.get(item_id)).get("plan"),
+            "viltrox_fit_score_untouched": True,
+        }
+        updated = conn.execute(
+            """
+            UPDATE vkpi_kol_search_session_items
+            SET status='queued',
+                stage='profile',
+                job_id=?,
+                payload_json=?::jsonb,
+                updated_at=NOW()
+            WHERE session_id=? AND id=?
+            RETURNING *
+            """,
+            (
+                safe_job_id,
+                _json_dumps(payload),
+                int(session_id),
+                item_id,
+            ),
+        ).fetchone()
+        updated_items.append(_row_to_item(updated))
+
+    conn.commit()
+    return {
+        "status": "ready",
+        "session_id": int(session_id),
+        "job_id": safe_job_id,
+        "updated_count": len(updated_items),
+        "items": updated_items,
+    }
+
+
+def mark_items_profile_running(
+    session_id: int,
+    *,
+    job_id: int,
+    reason: str = "session_advance_running",
+) -> dict[str, Any]:
+    """Mark queued discovery items as running when the worker claims the job."""
+
+    safe_job_id = _int_or_none(job_id)
+    if not safe_job_id:
+        return {
+            "status": "ready",
+            "session_id": int(session_id),
+            "job_id": safe_job_id,
+            "updated_count": 0,
+            "items": [],
+        }
+
+    conn = get_conn()
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM vkpi_kol_search_session_items
+        WHERE session_id=? AND job_id=? AND status='queued'
+        ORDER BY rank NULLS LAST, id
+        """,
+        (int(session_id), safe_job_id),
+    ).fetchall()
+    running_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    updated_items: list[dict[str, Any]] = []
+    for row in rows:
+        current = _row_to_item(row)
+        payload = _dict(current.get("payload")).copy()
+        profile_advance_job = _dict(payload.get("profile_advance_job")).copy()
+        profile_advance_job.update(
+            {
+                "status": "running",
+                "job_id": safe_job_id,
+                "running_at": running_at,
+                "reason": _text(reason) or "session_advance_running",
+                "viltrox_fit_score_untouched": True,
+            }
+        )
+        payload["profile_advance_job"] = profile_advance_job
+        updated = conn.execute(
+            """
+            UPDATE vkpi_kol_search_session_items
+            SET status='running',
+                stage='profile',
+                payload_json=?::jsonb,
+                updated_at=NOW()
+            WHERE session_id=? AND id=?
+            RETURNING *
+            """,
+            (
+                _json_dumps(payload),
+                int(session_id),
+                int(current["id"]),
+            ),
+        ).fetchone()
+        updated_items.append(_row_to_item(updated))
+
+    conn.commit()
+    return {
+        "status": "ready",
+        "session_id": int(session_id),
+        "job_id": safe_job_id,
+        "updated_count": len(updated_items),
+        "items": updated_items,
+    }
+
+
+def mark_items_profile_cancelled(
+    session_id: int,
+    *,
+    job_ids: list[int],
+    reason: str = "session_advance_cancelled_by_user",
+) -> dict[str, Any]:
+    """Mark queued items as retryable after their queued session-advance job is blocked."""
+
+    safe_job_ids = sorted({int(job_id) for job_id in job_ids if _int_or_none(job_id)})
+    if not safe_job_ids:
+        return {
+            "status": "ready",
+            "session_id": int(session_id),
+            "updated_count": 0,
+            "items": [],
+        }
+
+    placeholders = ", ".join(["?"] * len(safe_job_ids))
+    conn = get_conn()
+    rows = conn.execute(
+        f"""
+        SELECT *
+        FROM vkpi_kol_search_session_items
+        WHERE session_id=?
+          AND job_id IN ({placeholders})
+          AND status='queued'
+        ORDER BY rank NULLS LAST, id
+        """,
+        (int(session_id), *safe_job_ids),
+    ).fetchall()
+
+    cancelled_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    updated_items: list[dict[str, Any]] = []
+    for row in rows:
+        current = _row_to_item(row)
+        payload = _dict(current.get("payload")).copy()
+        profile_advance_job = _dict(payload.get("profile_advance_job")).copy()
+        profile_advance_job.update(
+            {
+                "status": "cancelled",
+                "cancelled_at": cancelled_at,
+                "reason": _text(reason) or "session_advance_cancelled_by_user",
+                "viltrox_fit_score_untouched": True,
+            }
+        )
+        payload["profile_advance_job"] = profile_advance_job
+        updated = conn.execute(
+            """
+            UPDATE vkpi_kol_search_session_items
+            SET status='skipped',
+                stage='identified',
+                payload_json=?::jsonb,
+                updated_at=NOW()
+            WHERE session_id=? AND id=?
+            RETURNING *
+            """,
+            (
+                _json_dumps(payload),
+                int(session_id),
+                int(current["id"]),
+            ),
+        ).fetchone()
+        updated_items.append(_row_to_item(updated))
+
+    conn.commit()
+    return {
+        "status": "ready",
+        "session_id": int(session_id),
+        "updated_count": len(updated_items),
+        "items": updated_items,
+    }
+
+
 def _item_counts(items: list[dict[str, Any]]) -> dict[str, Any]:
     by_status: dict[str, int] = {}
     by_stage: dict[str, int] = {}
