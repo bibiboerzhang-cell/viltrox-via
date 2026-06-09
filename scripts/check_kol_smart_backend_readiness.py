@@ -46,6 +46,7 @@ def _state() -> dict[str, Any]:
             "search": audit.search_state(conn),
             "queue": audit.queue_state(conn),
             "queue_load_smoke": audit.queue_load_smoke_state(),
+            "tiktok_video_resolver": audit.tiktok_video_resolver_state(conn),
             "url_classifier": audit.url_classifier_state(conn, sample_limit=5),
         }
     state["score"] = audit.score_summary(state)
@@ -57,6 +58,7 @@ def build_gates(state: dict[str, Any]) -> list[Gate]:
     search = state["search"]
     queue = state["queue"]
     queue_load_smoke = state.get("queue_load_smoke") if isinstance(state.get("queue_load_smoke"), dict) else {}
+    tiktok_resolver = state.get("tiktok_video_resolver") if isinstance(state.get("tiktok_video_resolver"), dict) else {}
     score = state["score"]
     url_state = state["url_classifier"]
     missing_video_count = int(deep["missing_video_deep_count"] or 0)
@@ -178,8 +180,13 @@ def build_gates(state: dict[str, Any]) -> list[Gate]:
         Gate(
             "tiktok_video_resolver",
             "known_risk",
-            "TikTok profile flow can work, but TikTok video final_v1 can still media_resolve_failed",
-            "Handle as a separate resolver/R2-cache task.",
+            (
+                f"evidence={tiktok_resolver.get('evidence_total', 0)}; "
+                f"final_v1_failed={tiktok_resolver.get('final_v1_failed', 0)}; "
+                f"r2_assets={tiktok_resolver.get('r2_cached_tiktok_assets', 0)}; "
+                f"evidence_r2_hits={tiktok_resolver.get('r2_external_id_hits', 0)}"
+            ),
+            "Handle as a separate resolver/R2-cache task; current failed evidence has no matching cached R2 media.",
         )
     )
     gates.append(

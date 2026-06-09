@@ -437,6 +437,108 @@ def queue_load_smoke_state() -> dict[str, Any]:
     }
 
 
+def tiktok_video_resolver_state(conn: psycopg.Connection[Any]) -> dict[str, Any]:
+    evidence_total = _scalar(
+        conn,
+        """
+        SELECT count(*)
+        FROM vkpi_kol_video_evidence
+        WHERE lower(platform)='tiktok'
+        """,
+    )
+    final_v1_jobs = _rows(
+        conn,
+        """
+        SELECT j.status, count(*) AS count
+        FROM apify_jobs j
+        JOIN vkpi_kol_video_evidence e
+          ON e.id::text=j.payload->>'target_id'
+        WHERE j.job_type='video'
+          AND j.payload->>'derive_method'='video_analysis_final_v1'
+          AND lower(e.platform)='tiktok'
+        GROUP BY j.status
+        ORDER BY j.status
+        """,
+    )
+    exact_cache_hits = _scalar(
+        conn,
+        """
+        SELECT count(*)
+        FROM vkpi_kol_video_evidence e
+        JOIN vkpi_media_cache_assets a
+          ON a.media_kind='video'
+         AND lower(a.platform)='tiktok'
+         AND a.source_url=e.content_url
+         AND a.status='cached'
+        WHERE lower(e.platform)='tiktok'
+        """,
+    )
+    external_id_cache_hits = _scalar(
+        conn,
+        """
+        WITH evidence AS (
+          SELECT id, substring(content_url from '/video/([0-9]+)') AS video_id
+          FROM vkpi_kol_video_evidence
+          WHERE lower(platform)='tiktok'
+        )
+        SELECT count(*)
+        FROM evidence e
+        JOIN vkpi_media_cache_assets a
+          ON a.media_kind='video'
+         AND lower(a.platform)='tiktok'
+         AND a.external_id=e.video_id
+         AND a.status='cached'
+        """,
+    )
+    failed_samples = _rows(
+        conn,
+        """
+        SELECT e.id AS evidence_id,
+               e.kol_pool_id,
+               p.handle,
+               substring(e.content_url from '/video/([0-9]+)') AS video_id,
+               j.id AS job_id,
+               j.status,
+               left(coalesce(j.last_error, ''), 220) AS last_error
+        FROM apify_jobs j
+        JOIN vkpi_kol_video_evidence e
+          ON e.id::text=j.payload->>'target_id'
+        JOIN vkpi_kol_pool p
+          ON p.id=e.kol_pool_id
+        WHERE j.job_type='video'
+          AND j.payload->>'derive_method'='video_analysis_final_v1'
+          AND lower(e.platform)='tiktok'
+          AND j.status='failed'
+        ORDER BY j.id DESC
+        LIMIT 10
+        """,
+    )
+    final_status_counts = {str(row["status"]): int(row["count"] or 0) for row in final_v1_jobs}
+    return {
+        "evidence_total": evidence_total,
+        "final_v1_job_status_counts": final_status_counts,
+        "final_v1_failed": int(final_status_counts.get("failed") or 0),
+        "r2_cached_tiktok_assets": _scalar(
+            conn,
+            """
+            SELECT count(*)
+            FROM vkpi_media_cache_assets
+            WHERE media_kind='video'
+              AND lower(platform)='tiktok'
+              AND status='cached'
+            """,
+        ),
+        "r2_exact_source_url_hits": exact_cache_hits,
+        "r2_external_id_hits": external_id_cache_hits,
+        "failed_samples": failed_samples,
+        "diagnosis": (
+            "tiktok evidence has no matching R2 cached asset; final_v1 still depends on live media resolver"
+            if evidence_total and not exact_cache_hits and not external_id_cache_hits
+            else "some tiktok evidence can use cached media"
+        ),
+    }
+
+
 def url_classifier_state(conn: psycopg.Connection[Any], *, sample_limit: int) -> dict[str, Any]:
     rows = _rows(
         conn,
@@ -554,6 +656,7 @@ def print_report(state: dict[str, Any]) -> None:
     deep = state["deep_results"]
     search = state["search"]
     queue = state["queue"]
+    tiktok_resolver = state.get("tiktok_video_resolver") if isinstance(state.get("tiktok_video_resolver"), dict) else {}
     url_state = state["url_classifier"]
     print("V-KPI KOL smart backend audit")
     print(f"branch: {state['git']['branch']} sha: {state['git']['short_sha']}")
@@ -594,6 +697,14 @@ def print_report(state: dict[str, Any]) -> None:
     print(f"  persistent_write: {queue_load_smoke.get('persistent_write', False)}")
     if queue_load_smoke.get("report_path"):
         print(f"  report_path: {queue_load_smoke.get('report_path')}")
+    print("tiktok_video_resolver:")
+    print(f"  evidence_total: {tiktok_resolver.get('evidence_total', 0)}")
+    print(f"  final_v1_failed: {tiktok_resolver.get('final_v1_failed', 0)}")
+    print(f"  r2_cached_tiktok_assets: {tiktok_resolver.get('r2_cached_tiktok_assets', 0)}")
+    print(f"  r2_exact_source_url_hits: {tiktok_resolver.get('r2_exact_source_url_hits', 0)}")
+    print(f"  r2_external_id_hits: {tiktok_resolver.get('r2_external_id_hits', 0)}")
+    if tiktok_resolver.get("diagnosis"):
+        print(f"  diagnosis: {tiktok_resolver.get('diagnosis')}")
     print("url_classifier:")
     print(f"  evidence_with_url: {url_state['evidence_with_url']}")
     print(f"  not_classified_as_video: {url_state['not_classified_as_video']}")
@@ -640,6 +751,7 @@ def main() -> None:
             "search": search_state(conn),
             "queue": queue_state(conn),
             "queue_load_smoke": queue_load_smoke_state(),
+            "tiktok_video_resolver": tiktok_video_resolver_state(conn),
             "url_classifier": url_classifier_state(conn, sample_limit=max(1, int(args.sample_limit or 12))),
         }
     state["score"] = score_summary(state)
