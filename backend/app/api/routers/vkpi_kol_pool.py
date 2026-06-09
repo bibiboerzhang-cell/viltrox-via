@@ -550,6 +550,104 @@ async def smart_kol_search(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+@router.post("/kol-smart-search/profile-advance-job")
+async def smart_kol_search_profile_advance_job(
+    body: dict = Body(...),
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """Run text recall/new discovery and queue ordered profile advancement.
+
+    This is the write-mode companion to /kol-smart-search. It keeps plain
+    recall read-oriented, while giving the unified input one backend call for
+    "find candidates, persist the session, then advance profiles in the queue".
+    """
+
+    query_text = str(body.get("input") or body.get("query") or body.get("query_text") or "").strip()
+    if not query_text:
+        raise HTTPException(status_code=400, detail="input is required")
+    if _looks_like_url(query_text):
+        raise HTTPException(status_code=400, detail="profile-advance-job accepts text needs only; use kol-url-deep-crawl for URLs")
+
+    try:
+        recall_result = kol_profile_recall.recall_kol_profiles(
+            query_text=query_text,
+            product_sku=str(body.get("product_sku") or ""),
+            candidate_limit=int(body.get("candidate_limit") or 100),
+            limit=int(body.get("limit") or 30),
+            creator_quota=int(body.get("creator_quota") or 15),
+            reviewer_quota=int(body.get("reviewer_quota") or 15),
+            ratio_policy=str(body.get("ratio_policy") or "soft"),
+            mixed_policy=str(body.get("mixed_policy") or "dominant"),
+            dedupe=bool(body.get("dedupe", True)),
+            vector_weight=float(body.get("vector_weight") if body.get("vector_weight") is not None else 0.7),
+            type_weight=float(body.get("type_weight") if body.get("type_weight") is not None else 0.3),
+            type_boost_enabled=bool(body.get("type_boost_enabled", True)),
+        )
+        recall_result = _attach_smart_recall_session(
+            body={**body, "create_session": True, "source": body.get("source") or "kol_smart_search_profile_advance"},
+            result=recall_result,
+            query_text=query_text,
+            staff=staff,
+        )
+        search_session = recall_result.get("search_session") if isinstance(recall_result.get("search_session"), dict) else {}
+        session_id = _int_or_none(search_session.get("session_id") or search_session.get("id"))
+        if not session_id:
+            raise RuntimeError("smart search session was not created")
+
+        include_new_discovery = bool(body.get("include_new_discovery", True))
+        new_discovery: dict | None = None
+        if include_new_discovery:
+            discovery_limit = int(body.get("new_discovery_limit") or body.get("discovery_limit") or 15)
+            new_discovery = await kol_profile_discovery.discover_new_creators(
+                query_text=query_text,
+                platforms=body.get("new_discovery_platforms") or body.get("discovery_platforms"),
+                platform_hint=str(body.get("platform") or ""),
+                market=str(body.get("market") or body.get("country") or ""),
+                limit=discovery_limit,
+                per_platform_limit=int(body.get("new_discovery_per_platform_limit") or discovery_limit),
+            )
+            recall_result["new_discovery_session"] = kol_search_sessions.attach_new_discovery_result(
+                int(session_id),
+                new_discovery,
+            )
+
+        advance_job = kol_profile_discovery.enqueue_search_session_advance(
+            session_id=int(session_id),
+            body={
+                "limit": int(body.get("advance_limit") or body.get("profile_advance_limit") or 15),
+                "max_posts": int(body.get("max_posts") or 12),
+                "mode": str(body.get("advance_mode") or body.get("mode") or "profile_only"),
+                "representative_video_limit": body.get("representative_video_limit"),
+                "item_types": body.get("item_types") or ["new_creator", "existing_kol", "recall_candidate"],
+                "include_completed": bool(body.get("include_completed")),
+            },
+            staff=staff,
+        )
+        return {
+            "status": "queued" if advance_job.get("status") in {"queued", "already_queued"} else advance_job.get("status"),
+            "mode": "text",
+            "query_type": "text_recall",
+            "branch": "kol_recall_profile_advance",
+            "query": query_text,
+            "result": recall_result,
+            "search_session": recall_result.get("search_session"),
+            "new_discovery": new_discovery,
+            "advance_job": advance_job,
+            "provider_calls": True,
+            "provider_note": "text recall/new discovery may call provider APIs; profile advancement is queued on apify_jobs",
+            "write_db": True,
+            "writes": ["vkpi_kol_search_sessions", "vkpi_kol_search_session_items", "apify_jobs"],
+            "viltrox_fit_score_changed_ids": [],
+            "viltrox_fit_score_untouched": True,
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @router.get("/kol-recall")
 def recall_kol_profiles(
     query_text: str = Query(default=""),
