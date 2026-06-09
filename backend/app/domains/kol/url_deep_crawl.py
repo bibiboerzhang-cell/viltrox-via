@@ -659,10 +659,22 @@ def _execute_profile_flow(
         body=body,
         incremental_state=incremental_state,
     )
+    worker_touched = bool(representative_video_analysis.get("worker_touched"))
+    account_dossier_extract_job = None
+    if written_kol_pool_id and not worker_touched:
+        account_dossier_extract_job = _enqueue_account_dossier_extract_followup(
+            conn,
+            kol_pool_id=written_kol_pool_id,
+            source="kol_url_profile_flow",
+            trigger=str(representative_video_analysis.get("status") or "profile_ready_no_video_job"),
+            source_url=classified.normalized_url,
+            query_text=f"profile account dossier - {target}",
+        )
     changed_ids = sorted(
         set(
             _fit_changed_ids(write_result)
             + _fit_changed_ids(representative_video_analysis)
+            + _fit_changed_ids(account_dossier_extract_job or {})
         )
     )
     run_id = _record_deep_crawl_run(
@@ -682,10 +694,10 @@ def _execute_profile_flow(
             "fields_written": write_result.get("fields_written"),
             "viltrox_fit_score_changed_ids": write_result.get("viltrox_fit_score_changed_ids"),
             "representative_video_analysis": representative_video_analysis,
+            "account_dossier_extract_job": account_dossier_extract_job,
             "incremental_state": incremental_state,
         },
     )
-    worker_touched = bool(representative_video_analysis.get("worker_touched"))
     return {
         "status": "ready",
         "operation": operation,
@@ -701,11 +713,12 @@ def _execute_profile_flow(
             "viltrox_fit_score_untouched": write_result.get("viltrox_fit_score_untouched"),
         },
         "representative_video_analysis": representative_video_analysis,
+        "account_dossier_extract_job": account_dossier_extract_job,
         "run_id": run_id,
         "elapsed_ms": int((time.monotonic() - started) * 1000),
         "crawl_performed": True,
         "business_tables_written": True,
-        "worker_touched": worker_touched,
+        "worker_touched": worker_touched or bool(account_dossier_extract_job and account_dossier_extract_job.get("status") == "queued"),
         "provider_source": crawl.get("provider_source"),
         "crawl_status": crawl.get("status"),
         "viltrox_fit_score_changed_ids": changed_ids,
@@ -767,6 +780,18 @@ def _execute_existing_creator_video_flow(
         error = str(exc)[:500]
         status = "failed"
 
+    account_dossier_extract_job = None
+    if status == "already_analyzed":
+        account_dossier_extract_job = _enqueue_account_dossier_extract_followup(
+            conn,
+            kol_pool_id=kol_pool_id,
+            source="kol_url_video_flow",
+            trigger="video_already_analyzed",
+            source_url=classified.normalized_url,
+            query_text=f"video account dossier - kol_pool #{kol_pool_id}",
+        )
+        changed_ids.extend(_fit_changed_ids(account_dossier_extract_job or {}))
+
     run_status = "ready" if status in {"queued", "already_queued", "already_analyzed"} else "failed"
     run_id = _record_deep_crawl_run(
         conn,
@@ -784,6 +809,7 @@ def _execute_existing_creator_video_flow(
             "video_metadata": video_flow.get("video_metadata"),
             "evidence_result": _compact_video_evidence_result(evidence_result),
             "enqueue_result": _compact_enqueue_result(enqueue_result),
+            "account_dossier_extract_job": account_dossier_extract_job,
             "viltrox_fit_score_changed_ids": sorted(set(changed_ids)),
             "elapsed_ms": int((time.monotonic() - started) * 1000),
         },
@@ -799,11 +825,12 @@ def _execute_existing_creator_video_flow(
         "evidence_id": evidence_id,
         "evidence_result": _compact_video_evidence_result(evidence_result),
         "enqueue_result": _compact_enqueue_result(enqueue_result),
+        "account_dossier_extract_job": account_dossier_extract_job,
         "run_id": run_id,
         "run_status": run_status,
         "error": error or None,
         "business_tables_written": business_tables_written,
-        "worker_touched": worker_touched,
+        "worker_touched": worker_touched or bool(account_dossier_extract_job and account_dossier_extract_job.get("status") == "queued"),
         "write_db": business_tables_written,
         "writes": ["vkpi_kol_video_evidence", "apify_jobs", "vkpi_kol_url_deep_crawl_runs"],
         "llm_calls_performed": False,
@@ -919,6 +946,18 @@ def _execute_new_creator_video_flow(
         error = str(exc)[:500]
         status = "failed"
 
+    account_dossier_extract_job = None
+    if status == "already_analyzed" and kol_pool_id:
+        account_dossier_extract_job = _enqueue_account_dossier_extract_followup(
+            conn,
+            kol_pool_id=kol_pool_id,
+            source="kol_url_video_new_creator_flow",
+            trigger="video_already_analyzed",
+            source_url=classified.normalized_url,
+            query_text=f"new creator account dossier - kol_pool #{kol_pool_id}",
+        )
+        changed_ids.extend(_fit_changed_ids(account_dossier_extract_job or {}))
+
     run_status = "ready" if status in {"queued", "already_queued", "already_analyzed"} else "failed"
     run_id = _record_deep_crawl_run(
         conn,
@@ -941,6 +980,7 @@ def _execute_new_creator_video_flow(
             "video_metadata": video_flow.get("video_metadata"),
             "evidence_result": _compact_video_evidence_result(evidence_result),
             "enqueue_result": _compact_enqueue_result(enqueue_result),
+            "account_dossier_extract_job": account_dossier_extract_job,
             "viltrox_fit_score_changed_ids": sorted(set(changed_ids)),
             "elapsed_ms": int((time.monotonic() - started) * 1000),
         },
@@ -968,12 +1008,13 @@ def _execute_new_creator_video_flow(
         },
         "evidence_result": _compact_video_evidence_result(evidence_result),
         "enqueue_result": _compact_enqueue_result(enqueue_result),
+        "account_dossier_extract_job": account_dossier_extract_job,
         "run_id": run_id,
         "run_status": run_status,
         "error": error or None,
         "crawl_performed": bool(crawl),
         "business_tables_written": business_tables_written,
-        "worker_touched": worker_touched,
+        "worker_touched": worker_touched or bool(account_dossier_extract_job and account_dossier_extract_job.get("status") == "queued"),
         "write_db": business_tables_written,
         "writes": ["vkpi_kol_pool", "vkpi_kol_video_evidence", "apify_jobs", "vkpi_kol_url_deep_crawl_runs"],
         "llm_calls_performed": False,
@@ -1536,6 +1577,75 @@ def _compact_enqueue_result(result: dict[str, Any]) -> dict[str, Any]:
     if result.get("reason"):
         compact["reason"] = result.get("reason")
     return compact
+
+
+def _enqueue_account_dossier_extract_followup(
+    conn: Any,
+    *,
+    kol_pool_id: int | None,
+    source: str,
+    trigger: str,
+    source_url: str,
+    query_text: str = "",
+) -> dict[str, Any] | None:
+    if not kol_pool_id:
+        return None
+    existing = conn.execute(
+        """
+        SELECT id, job_type, status, created_at, updated_at
+        FROM apify_jobs
+        WHERE job_type='account_dossier_extract'
+          AND status IN ('queued', 'running')
+          AND payload->>'target_type'='kol_pool'
+          AND payload->>'target_id'=?
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        """,
+        (str(int(kol_pool_id)),),
+    ).fetchone()
+    if existing:
+        return {
+            "status": "already_queued" if existing["status"] == "queued" else "already_running",
+            "job": {
+                "id": existing["id"],
+                "job_type": existing["job_type"],
+                "status": existing["status"],
+                "created_at": existing["created_at"],
+                "updated_at": existing["updated_at"],
+            },
+            "kol_pool_id": int(kol_pool_id),
+            "viltrox_fit_score_changed_ids": [],
+            "viltrox_fit_score_untouched": True,
+        }
+    payload = {
+        "target_type": "kol_pool",
+        "target_id": str(int(kol_pool_id)),
+        "derive_method": "kol_account_dossier_extract_v1",
+        "analysis_kind": "profile_llm",
+        "source": source,
+        "trigger": trigger,
+        "source_url": source_url,
+        "query_text": query_text or f"account dossier - kol_pool #{int(kol_pool_id)}",
+    }
+    row = conn.execute(
+        """
+        INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
+        VALUES ('account_dossier_extract', ?::jsonb, 'queued', NOW(), NOW())
+        RETURNING id, job_type, status, created_at, updated_at
+        """,
+        (json.dumps(payload, ensure_ascii=False, default=str),),
+    ).fetchone()
+    try:
+        conn.commit()
+    except Exception:
+        pass
+    return {
+        "status": "queued",
+        "job": dict(row) if row else None,
+        "kol_pool_id": int(kol_pool_id),
+        "viltrox_fit_score_changed_ids": [],
+        "viltrox_fit_score_untouched": True,
+    }
 
 
 def _crawl_profile_basics(classified: ClassifiedUrl, *, target: str, max_posts: int) -> dict[str, Any]:
