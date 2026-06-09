@@ -21,6 +21,40 @@ import { proxiedImageUrl, proxiedVideoUrl } from "../../shared/mediaProxy";
 
 const e = React.createElement;
 
+function detailAvatarUrl(item) {
+  if (!item || typeof item !== "object") return "";
+  return proxiedImageUrl(
+    item.avatar_url ||
+    item.avatarUrl ||
+    item.avatar_image_url ||
+    item.profile_image_url ||
+    item.profileImageUrl ||
+    item.source_fields?.avatar_url ||
+    item.source_fields?.profile_image_url ||
+    ""
+  );
+}
+
+function KOLDetailAvatar({ item, size = 44 }) {
+  const [failed, setFailed] = React.useState(false);
+  const avatar = failed ? "" : detailAvatarUrl(item);
+  if (!avatar) {
+    return e(KPAvatar, { name: item.display_name || item.handle, color: item.avatar_color, size });
+  }
+  return e("span", {
+    className: "shrink-0 overflow-hidden rounded-full border border-white/[0.08] bg-white/[0.04]",
+    style: { width: size, height: size }
+  },
+    e("img", {
+      src: avatar,
+      alt: "",
+      className: "h-full w-full object-cover",
+      referrerPolicy: "no-referrer",
+      onError: () => setFailed(true),
+    })
+  );
+}
+
 function asArray(value) {
   return Array.isArray(value) ? value : [];
 }
@@ -532,7 +566,7 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
     // ─── Header ───
     e("div", { className: "px-5 py-4 border-b border-white/[0.06]" },
       e("div", { className: "flex items-start gap-3 mb-2" },
-        e(KPAvatar, { name: item.display_name || item.handle, color: item.avatar_color, size: 44 }),
+        e(KOLDetailAvatar, { item, size: 44 }),
         e("div", { className: "flex-1 min-w-0" },
           e("div", { className: "flex items-center gap-1.5" },
             e("h2", { className: "text-[14px] font-semibold text-white truncate" }, item.handle),

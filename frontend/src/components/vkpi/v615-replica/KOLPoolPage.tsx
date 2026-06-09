@@ -2,7 +2,7 @@
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { AnimatePresence } from "framer-motion";
 import { ChevronDown, Info, Search, Star, X } from "lucide-react";
 import { FilterBar } from "./components/FilterBar";
@@ -21,6 +21,26 @@ import { CANDIDATE_KIND_INFO } from "./data/candidateKindInfo";
 import { normalizeCountryCode } from "./data/countryInfo";
 
 const e = React.createElement;
+
+function avatarCandidate(item) {
+  if (!item || typeof item !== "object") return "";
+  return String(
+    item.avatar_url ||
+    item.avatarUrl ||
+    item.avatar_image_url ||
+    item.profile_image_url ||
+    item.profileImageUrl ||
+    item.source_fields?.avatar_url ||
+    item.source_fields?.profile_image_url ||
+    ""
+  ).trim();
+}
+
+function kolIdFrom(item) {
+  const raw = item?.id ?? item?.kol_pool_id ?? item?.kolPoolId;
+  const id = Number(raw);
+  return Number.isFinite(id) && id > 0 ? id : null;
+}
 
 export function KOLPoolPage({ items: sourceItems = [], loading = false, error = "", apiToken = "" } = {}) {
   const [search, setSearch] = useState("");
@@ -42,7 +62,38 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
   const [searchMode, setSearchMode] = useState("balanced"); // balanced | precision | discovery
   const [kindFilter, setKindFilter] = useState("");          // "" | "existing" | "new" | specific kind
   const [myListFilter, setMyListFilter] = useState(false);   // toggle: only show items in myList
+  const [recallAvatarIndex, setRecallAvatarIndex] = useState(new Map());
   const poolItems = Array.isArray(sourceItems) ? sourceItems : [];
+
+  const rememberRecallItems = useCallback((recallItems = []) => {
+    if (!Array.isArray(recallItems) || recallItems.length === 0) return;
+    setRecallAvatarIndex((prev) => {
+      const next = new Map(prev);
+      recallItems.forEach((item) => {
+        const id = kolIdFrom(item);
+        const avatar = avatarCandidate(item);
+        if (id && avatar) next.set(id, avatar);
+      });
+      return next;
+    });
+  }, []);
+
+  const avatarForItem = (item) => {
+    const direct = avatarCandidate(item);
+    if (direct) return direct;
+    const id = kolIdFrom(item);
+    return id ? recallAvatarIndex.get(id) || "" : "";
+  };
+
+  const mergeAvatarSeed = (item, avatar) => {
+    if (!avatar) return item;
+    return {
+      ...item,
+      avatar_url: item?.avatar_url || avatar,
+      avatar_image_url: item?.avatar_image_url || avatar,
+      profile_image_url: item?.profile_image_url || avatar,
+    };
+  };
   
   const toggleMyList = (id) => {
     setMyList(prev => {
@@ -52,30 +103,50 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
     });
   };
   const openItem = async (item) => {
-    setSelectedItem(item);
+    const seedAvatar = avatarForItem(item);
+    const seedItem = mergeAvatarSeed(item, seedAvatar);
+    setSelectedItem(seedItem);
     setSelectedDetailBundle(null);
     setDetailError("");
-    setDetailLoading(Boolean(apiToken && item?.id));
-    if (!apiToken || !item?.id) return;
+    setDetailLoading(Boolean(apiToken && seedItem?.id));
+    if (!apiToken || !seedItem?.id) return;
     try {
-      const bundle = await getKolPoolDetailBundle(apiToken, item.id);
-      const normalized = toV615KolPoolRows([bundle.item || item])[0];
+      const bundle = await getKolPoolDetailBundle(apiToken, seedItem.id);
+      const normalized = toV615KolPoolRows([bundle.item || seedItem])[0];
       setSelectedDetailBundle(bundle);
-      setSelectedItem({ ...item, ...normalized });
+      setSelectedItem(mergeAvatarSeed({ ...seedItem, ...normalized }, seedAvatar));
     } catch (err) {
       try {
-        const detail = await getKolPoolItem(apiToken, item.id, false);
-        const normalized = toV615KolPoolRows([detail.item || item])[0];
-        setSelectedItem({ ...item, ...normalized, freshness: detail.freshness, refresh: detail.refresh });
+        const detail = await getKolPoolItem(apiToken, seedItem.id, false);
+        const normalized = toV615KolPoolRows([detail.item || seedItem])[0];
+        setSelectedItem(mergeAvatarSeed({ ...seedItem, ...normalized, freshness: detail.freshness, refresh: detail.refresh }, seedAvatar));
       } catch (fallbackErr) {
         const msg = fallbackErr?.message || fallbackErr?.detail || err?.message || err?.detail || "详情接口读取失败";
         setDetailError(String(msg).slice(0, 120));
-        setSelectedItem(item);
+        setSelectedItem(seedItem);
       }
     } finally {
       setDetailLoading(false);
     }
   };
+
+  const openRecallItem = useCallback((recallItem) => {
+    const id = kolIdFrom(recallItem);
+    if (!id) return;
+    const matched = poolItems.find((it) => kolIdFrom(it) === id) || {};
+    const avatar = avatarCandidate(recallItem) || avatarCandidate(matched);
+    void openItem(mergeAvatarSeed({
+      ...matched,
+      id,
+      kol_pool_id: id,
+      handle: recallItem.handle || matched.handle,
+      display_name: recallItem.display_name || matched.display_name || recallItem.handle,
+      platform: recallItem.platform || matched.platform,
+      profile_type: recallItem.profile_type || matched.profile_type,
+      followers: recallItem.followers ?? matched.followers,
+      candidate_kind: matched.candidate_kind || "existing",
+    }, avatar));
+  }, [poolItems, recallAvatarIndex, apiToken]);
   
   // Base filter (no kind filter applied) — used for kindCounts so chips always show full pool counts.
   const filteredBase = useMemo(() => {
@@ -165,7 +236,7 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
             onTotalClick: () => setPoolModalOpen(true),
           }),
           e("div", { className: "mt-2.5 space-y-2" },
-            e(SmartKolInputPanel, { apiToken })
+            e(SmartKolInputPanel, { apiToken, onRecallItems: rememberRecallItems, onOpenRecallItem: openRecallItem })
           ),
           e("div", { className: "mt-2.5" },
             e(MarketCoverageCard, { items: poolItems })

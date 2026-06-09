@@ -234,12 +234,28 @@ function HistoryStrip({
   );
 }
 
-function RecallMiniItem({ item }: { item: VkpiKolRecallItem }) {
+function RecallMiniItem({
+  item,
+  index,
+  onOpen,
+}: {
+  item: VkpiKolRecallItem;
+  index: number;
+  onOpen?: (item: VkpiKolRecallItem) => void;
+}) {
   const avatar = proxiedImageUrl(item.avatar_url);
   const name = display(item.handle || item.display_name || `KOL #${item.kol_pool_id}`);
   const followers = numberLabel(item.followers);
   return (
-    <div className="flex min-w-0 items-center gap-2 rounded-md border border-white/[0.06] bg-black/20 px-2 py-1.5">
+    <button
+      type="button"
+      onClick={() => onOpen?.(item)}
+      className="flex min-w-0 items-center gap-2 rounded-md border border-white/[0.06] bg-black/20 px-2 py-1.5 text-left transition-colors hover:border-cyan-300/22 hover:bg-cyan-400/[0.045] focus:outline-none focus:ring-1 focus:ring-cyan-300/30"
+      title="打开 KOL 详情"
+    >
+      <span className="shrink-0 rounded border border-white/[0.06] bg-white/[0.03] px-1 py-0.5 text-[8.5px] tabular-nums text-slate-500">
+        #{index}
+      </span>
       <span className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-md border border-white/[0.08] bg-white/[0.04] text-[10px] text-slate-300">
         {avatar ? <img src={avatar} alt="" className="h-full w-full object-cover" referrerPolicy="no-referrer" /> : name.slice(0, 1).toUpperCase()}
       </span>
@@ -252,7 +268,7 @@ function RecallMiniItem({ item }: { item: VkpiKolRecallItem }) {
       <span className="shrink-0 rounded-md border border-violet-300/15 px-1.5 py-0.5 text-[9.5px] text-violet-100">
         {Number(item.recall_rank_score ?? item.vector_score ?? 0).toFixed(2)}
       </span>
-    </div>
+    </button>
   );
 }
 
@@ -382,7 +398,15 @@ function UrlSummary({
   );
 }
 
-export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
+export function SmartKolInputPanel({
+  apiToken = "",
+  onRecallItems,
+  onOpenRecallItem,
+}: {
+  apiToken?: string;
+  onRecallItems?: (items: VkpiKolRecallItem[]) => void;
+  onOpenRecallItem?: (item: VkpiKolRecallItem) => void;
+}) {
   const [input, setInput] = useState("");
   const [state, setState] = useState<State>("idle");
   const [mode, setMode] = useState<Mode>("idle");
@@ -423,8 +447,12 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
       )
     )
   );
-  const recallItems = recallTopItems(recallResult);
+  const recallItems = useMemo(() => recallTopItems(recallResult), [recallResult]);
   const llmPlan = asRecord((recallResult as Row | null)?.llm_query_plan);
+
+  useEffect(() => {
+    if (recallItems.length) onRecallItems?.(recallItems);
+  }, [recallItems, onRecallItems]);
 
   const refreshHistory = useCallback(async () => {
     if (!apiToken) {
@@ -706,8 +734,13 @@ export function SmartKolInputPanel({ apiToken = "" }: { apiToken?: string }) {
           </div>
           {Object.keys(llmPlan).length ? <PlanPills plan={llmPlan} /> : null}
           <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-            {recallItems.map((item) => (
-              <RecallMiniItem key={`${item.bucket}-${item.kol_pool_id}`} item={item} />
+            {recallItems.map((item, index) => (
+              <RecallMiniItem
+                key={`${item.bucket}-${item.kol_pool_id || item.handle || index}`}
+                item={item}
+                index={index + 1}
+                onOpen={onOpenRecallItem}
+              />
             ))}
           </div>
           {!recallItems.length ? (
