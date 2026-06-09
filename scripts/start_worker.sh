@@ -6,7 +6,13 @@ export ENVIRONMENT="${ENVIRONMENT:-local}"
 export APP_ROLE="${APP_ROLE:-worker}"
 source "$ROOT/scripts/runtime_env.sh"
 
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+if [[ -z "${PYTHON_BIN:-}" ]]; then
+  if [[ -x "$ROOT/.venv/bin/python" ]]; then
+    PYTHON_BIN="$ROOT/.venv/bin/python"
+  else
+    PYTHON_BIN="python3"
+  fi
+fi
 PIDFILE="${PIDFILE:-$ROOT/runtime/worker.pid}"
 LOGFILE="${LOGFILE:-$ROOT/runtime/logs/worker.log}"
 
