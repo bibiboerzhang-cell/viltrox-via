@@ -30,6 +30,8 @@
 
 P4 维护窗定义 v1.2：冻结仅约束“存在 running 任务，或 60 秒内有任务可被 claim”的时段；全部 queued 均带未来 `next_retry_at` 属于合法维护窗，worker 侧改动可在人审后进窗。账本脚注随批：注明哪些任务跨了代码版本，例如 `308` 第 4 次起运行于 FIX-1 之后。
 
+Worker timeout 档案：`APIFY_WORKER_GEMINI_CALL_TIMEOUT_SEC` 默认值为 `1200` 秒，以 worker 启动回显 `gemini_timeout_sec=1200` 为准；`GEMINI_VIDEO_YTDLP_DOWNLOAD_TIMEOUT_SEC` 默认值保持 `900` 秒。前者控制 Gemini 子进程总等待，后者只控制 yt-dlp 下载备胎路径，二者不要混用。
+
 ## 3. 四闸
 
 到闸即停，人批后过。
