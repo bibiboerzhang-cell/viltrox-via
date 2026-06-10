@@ -575,6 +575,7 @@ def _search_session_analysis_summary_from_result(
     layer1 = _as_dict(payload.get("layer1_visual_content"))
     layer5 = _as_dict(payload.get("layer5_recommendations"))
     layer6 = _as_dict(payload.get("layer6_flags_and_scores"))
+    cost_info = _as_dict(payload.get("cost"))
     marketing = _score_entry(layer6, "marketing_value_score")
     if not marketing:
         return {
@@ -617,7 +618,166 @@ def _search_session_analysis_summary_from_result(
             "key_hook": layer6.get("key_hook"),
         },
         "cost": cost,
+        "latency_ms": _int_or_none(cost_info.get("latency_ms")),
     }
+
+
+def _session_url_enrichment_error(payload: dict[str, Any]) -> str:
+    """Return a compact error when account/video enrichment partially failed."""
+
+    def _flow_error(flow: dict[str, Any], label: str) -> str:
+        status = str(flow.get("status") or "").strip()
+        errors = _int_or_none(flow.get("errors")) or 0
+        if errors <= 0 and "error" not in status:
+            return ""
+        messages: list[str] = []
+        for item in flow.get("items") or []:
+            if not isinstance(item, dict):
+                continue
+            error = str(item.get("error") or "").strip()
+            if error:
+                metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+                title = str(
+                    metadata.get("title")
+                    or metadata.get("content_url")
+                    or item.get("title")
+                    or item.get("content_url")
+                    or "video"
+                ).strip()
+                messages.append(f"{title}: {error}")
+            if len(messages) >= 3:
+                break
+        detail = "; ".join(messages) if messages else status or "partial_failure"
+        return f"{label}: {detail}"
+
+    profile_flow = payload.get("profile_flow") if isinstance(payload.get("profile_flow"), dict) else {}
+    video_flow = payload.get("video_flow") if isinstance(payload.get("video_flow"), dict) else {}
+    representative = profile_flow.get("representative_video_analysis") or video_flow.get("representative_video_analysis")
+    history = profile_flow.get("history_video_evidence") or video_flow.get("history_video_evidence")
+    parts = []
+    if isinstance(representative, dict):
+        error = _flow_error(representative, "代表视频分析")
+        if error:
+            parts.append(error)
+    if isinstance(history, dict):
+        error = _flow_error(history, "历史视频物化")
+        if error:
+            parts.append(error)
+    return " | ".join(parts)[:1000]
+
+
+def _search_session_status_from_items(items: list[dict[str, Any]]) -> str:
+    statuses = {str(item.get("status") or "").strip() for item in items}
+    if statuses.intersection({"queued", "running", "already_queued"}):
+        return "running"
+    if statuses.intersection({"failed"}):
+        return "partial"
+    if statuses.intersection({"partial"}):
+        return "partial"
+    if statuses:
+        return "ready"
+    return "ready"
+
+
+def _search_session_item_counts(items: list[dict[str, Any]]) -> dict[str, Any]:
+    by_status: dict[str, int] = {}
+    by_stage: dict[str, int] = {}
+    ready = errors = skipped = executed = 0
+    for item in items:
+        status = str(item.get("status") or "unknown").strip()
+        stage = str(item.get("stage") or "identified").strip()
+        by_status[status] = by_status.get(status, 0) + 1
+        by_stage[stage] = by_stage.get(stage, 0) + 1
+        if status in {"ready", "already_analyzed"}:
+            ready += 1
+        if status in {"failed", "partial"}:
+            errors += 1
+        if status == "skipped":
+            skipped += 1
+        if status not in {"planned", "identified", "matched", "queued", "running", "unknown"}:
+            executed += 1
+    return {
+        "by_status": by_status,
+        "by_stage": by_stage,
+        "ready": ready,
+        "errors": errors,
+        "skipped": skipped,
+        "executed": executed,
+    }
+
+
+def _rebuild_search_session_summary(
+    cur: Any,
+    *,
+    session_id: int,
+    session_status: str,
+) -> None:
+    cur.execute(
+        """
+        SELECT result_summary_json
+        FROM vkpi_kol_search_sessions
+        WHERE id=%s
+        LIMIT 1
+        """,
+        (int(session_id),),
+    )
+    session_row = cur.fetchone() or {}
+    current_summary = session_row.get("result_summary_json")
+    current_summary = current_summary if isinstance(current_summary, dict) else _loads(current_summary, {})
+    if not isinstance(current_summary, dict):
+        current_summary = {}
+    cur.execute(
+        """
+        SELECT id, item_type, status, stage, rank, score, kol_pool_id, evidence_id, job_id, source_url, payload_json, updated_at
+        FROM vkpi_kol_search_session_items
+        WHERE session_id=%s
+        ORDER BY rank NULLS LAST, id
+        """,
+        (int(session_id),),
+    )
+    item_rows = cur.fetchall() or []
+    items: list[dict[str, Any]] = []
+    for row in item_rows:
+        payload = row.get("payload_json") if isinstance(row.get("payload_json"), dict) else _loads(row.get("payload_json"), {})
+        item = {
+            "id": row.get("id"),
+            "item_type": row.get("item_type"),
+            "status": row.get("status"),
+            "stage": row.get("stage"),
+            "rank": row.get("rank"),
+            "score": row.get("score"),
+            "kol_pool_id": row.get("kol_pool_id"),
+            "evidence_id": row.get("evidence_id"),
+            "job_id": row.get("job_id"),
+            "source_url": row.get("source_url"),
+            "job_status": payload.get("job_status") if isinstance(payload, dict) else None,
+            "job_last_error": payload.get("job_last_error") if isinstance(payload, dict) else None,
+            "analysis": payload.get("analysis") if isinstance(payload, dict) else None,
+            "updated_at": row.get("updated_at").isoformat() if hasattr(row.get("updated_at"), "isoformat") else row.get("updated_at"),
+        }
+        items.append(item)
+    counts = _search_session_item_counts(items)
+    primary = next((item for item in items if str(item.get("item_type") or "").startswith("url_")), items[0] if items else {})
+    summary = {
+        **current_summary,
+        "item_status": primary.get("status"),
+        "job_status": primary.get("job_status"),
+        "job_last_error": primary.get("job_last_error"),
+        "analysis": primary.get("analysis"),
+        "counts": counts,
+        "items_written": len(items),
+        "terminal_synced_at": datetime.now(timezone.utc).isoformat(),
+    }
+    cur.execute(
+        """
+        UPDATE vkpi_kol_search_sessions
+        SET status=%s,
+            result_summary_json=%s::jsonb,
+            updated_at=NOW()
+        WHERE id=%s
+        """,
+        (session_status, _json(summary), int(session_id)),
+    )
 
 
 def _search_session_analysis_summary_from_ready_cache(
@@ -808,24 +968,43 @@ def _sync_search_session_job_impl(
     if not session_id or not item_id:
         return
     item_status, stage = _search_session_job_state(raw_status, reason or row.get("last_error") or "")
-    if analysis_summary is None and item_status in {"ready", "already_analyzed"}:
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT payload_json
+            FROM vkpi_kol_search_session_items
+            WHERE id=%s
+              AND session_id=%s
+            LIMIT 1
+            """,
+            (int(item_id), int(session_id)),
+        )
+        item_row = cur.fetchone() or {}
+    existing_payload = item_row.get("payload_json") if isinstance(item_row.get("payload_json"), dict) else _loads(item_row.get("payload_json"), {})
+    if not isinstance(existing_payload, dict):
+        existing_payload = {}
+    enrichment_error = _session_url_enrichment_error(existing_payload)
+    if item_status in {"ready", "already_analyzed"} and enrichment_error:
+        item_status = "partial"
+        stage = "summary"
+    if analysis_summary is None and item_status in {"ready", "already_analyzed", "partial"}:
         analysis_summary = _search_session_analysis_summary_from_ready_cache(conn, payload)
     payload["search_session_item_status"] = item_status
     payload["search_session_stage"] = stage
     payload["search_session_last_job_status"] = raw_status
-    payload["search_session_last_error"] = str(reason or row.get("last_error") or "")[:500]
+    payload["search_session_last_error"] = str(enrichment_error or reason or row.get("last_error") or "")[:500]
     if analysis_summary:
         payload["search_session_cache_id"] = analysis_summary.get("cache_id")
         payload["search_session_analysis_status"] = analysis_summary.get("status")
     item_patch: dict[str, Any] = {
         "job_status": raw_status,
-        "job_last_error": str(reason or row.get("last_error") or "")[:1000],
+        "job_last_error": str(enrichment_error or reason or row.get("last_error") or "")[:1000],
         "job_updated_at": datetime.now(timezone.utc).isoformat(),
     }
     if analysis_summary:
         item_patch["analysis"] = analysis_summary
     with conn.transaction():
-        with conn.cursor() as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
                 UPDATE vkpi_kol_search_session_items
@@ -846,23 +1025,14 @@ def _sync_search_session_job_impl(
             )
             cur.execute(
                 """
-                UPDATE vkpi_kol_search_sessions
-                SET status = CASE
-                    WHEN EXISTS (
-                      SELECT 1 FROM vkpi_kol_search_session_items
-                      WHERE session_id=%s AND status IN ('queued', 'running')
-                    ) THEN 'running'
-                    WHEN EXISTS (
-                      SELECT 1 FROM vkpi_kol_search_session_items
-                      WHERE session_id=%s AND status='failed'
-                    ) THEN 'partial'
-                    ELSE 'ready'
-                  END,
-                  updated_at=NOW()
-                WHERE id=%s
+                SELECT status, stage
+                FROM vkpi_kol_search_session_items
+                WHERE session_id=%s
                 """,
-                (int(session_id), int(session_id), int(session_id)),
+                (int(session_id),),
             )
+            session_status = _search_session_status_from_items([dict(item) for item in (cur.fetchall() or [])])
+            _rebuild_search_session_summary(cur, session_id=int(session_id), session_status=session_status)
             cur.execute(
                 "UPDATE apify_jobs SET payload=%s::jsonb WHERE id=%s",
                 (_json(payload), int(job_id)),

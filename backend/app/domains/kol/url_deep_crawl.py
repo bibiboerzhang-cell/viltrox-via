@@ -34,6 +34,7 @@ from app.domains.kol.pool_common import (
 from app.domains.kol.profile_basics import write_kol_profile_basics
 from app.domains.kol.video_analysis_enqueue import _enqueue_final_v1_video_analysis
 from app.domains.kol.video_evidence import ensure_video_evidence_from_url
+from app.domains.kol.video_evidence_sources import profile_crawl_source
 from app.domains.projects.workflow_evidence import _fetch_video_metadata
 from app.platform.industry_crawlers.instagram_crawler import InstagramCrawler
 from app.platform.industry_crawlers.tiktok_crawler import TikTokCrawler
@@ -1531,7 +1532,7 @@ def _metadata_from_profile_video_item(
         "thumbnail_url": _profile_video_thumbnail(item, snippet),
         "channel_id": channel_id,
         "channel_name": channel_name,
-        "scrape_source": _metadata_text(item.get("provider_source")) or provider_source or f"{platform}_profile_crawl",
+        "scrape_source": _metadata_text(item.get("provider_source")) or provider_source or profile_crawl_source(platform),
         "scrape_status": "success",
     }
 

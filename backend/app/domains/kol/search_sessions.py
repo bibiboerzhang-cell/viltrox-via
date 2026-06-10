@@ -1091,6 +1091,48 @@ def _link_job_payloads(session_id: int, items: list[dict[str, Any]]) -> int:
     return linked
 
 
+def _compact_video_batch_flow(flow: Any) -> dict[str, Any]:
+    if not isinstance(flow, dict):
+        return {}
+    keep = (
+        "enabled",
+        "status",
+        "limit",
+        "requested",
+        "candidate_count",
+        "skipped_by_incremental",
+        "queued",
+        "skipped",
+        "errors",
+        "materialized",
+        "reused",
+        "worker_touched",
+        "viltrox_fit_score_changed_ids",
+        "viltrox_fit_score_untouched",
+    )
+    compact = {key: flow.get(key) for key in keep if key in flow}
+    items: list[dict[str, Any]] = []
+    for raw in _list(flow.get("items"))[:12]:
+        if not isinstance(raw, dict):
+            continue
+        metadata = _dict(raw.get("metadata"))
+        evidence = _dict(raw.get("evidence_result"))
+        enqueue = _dict(raw.get("enqueue_result"))
+        items.append(
+            {
+                "status": raw.get("status"),
+                "error": raw.get("error"),
+                "title": metadata.get("title"),
+                "content_url": metadata.get("content_url"),
+                "evidence_id": evidence.get("evidence_id"),
+                "job_id": _dict(enqueue.get("job")).get("id") or enqueue.get("job_id"),
+            }
+        )
+    if items:
+        compact["items"] = items
+    return compact
+
+
 def _compact_flow(flow: dict[str, Any]) -> dict[str, Any]:
     if not flow:
         return {}
@@ -1105,5 +1147,21 @@ def _compact_flow(flow: dict[str, Any]) -> dict[str, Any]:
         "viltrox_fit_score_changed_ids",
         "viltrox_fit_score_untouched",
         "writes",
+        "error",
+        "elapsed_ms",
     )
-    return {key: flow.get(key) for key in keep if key in flow}
+    compact = {key: flow.get(key) for key in keep if key in flow}
+    representative = _compact_video_batch_flow(flow.get("representative_video_analysis"))
+    history = _compact_video_batch_flow(flow.get("history_video_evidence"))
+    if representative:
+        compact["representative_video_analysis"] = representative
+    if history:
+        compact["history_video_evidence"] = history
+    if isinstance(flow.get("account_dossier_extract_job"), dict):
+        job = _dict(flow.get("account_dossier_extract_job"))
+        compact["account_dossier_extract_job"] = {
+            key: job.get(key)
+            for key in ("status", "job_id", "kol_pool_id")
+            if key in job
+        }
+    return compact

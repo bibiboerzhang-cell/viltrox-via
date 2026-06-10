@@ -14,6 +14,11 @@ from urllib.parse import parse_qs, urlparse
 
 from app.db.connection import get_conn
 from app.domains.kol.pool_common import _table_columns
+from app.domains.kol.video_evidence_sources import (
+    SOURCE_MANUAL_URL,
+    SOURCE_URL_METADATA,
+    validate_source_value,
+)
 from app.domains.projects.workflow_evidence import _fetch_video_metadata
 
 VIDEO_EVIDENCE_METHOD = "kol_video_evidence_url_service_v1"
@@ -139,8 +144,12 @@ def _evidence_values(
     method: str,
 ) -> dict[str, Any]:
     title = _text(metadata.get("title")) or video_url
-    source = "manual_url"
-    scrape_source = _text(metadata.get("scrape_source")) or "url_metadata"
+    source = validate_source_value("source", SOURCE_MANUAL_URL, max_len=20)
+    scrape_source = validate_source_value(
+        "scrape_source",
+        _text(metadata.get("scrape_source")) or SOURCE_URL_METADATA,
+    )
+    metrics_source = validate_source_value("metrics_source", scrape_source)
     values = {
         "kol_pool_id": int(kol_pool_id),
         "content_url": _text(metadata.get("content_url")) or video_url,
@@ -166,7 +175,7 @@ def _evidence_values(
         "scrape_source": scrape_source,
         "scraped_at": now,
         "metrics_scraped_at": now,
-        "metrics_source": scrape_source,
+        "metrics_source": metrics_source,
         "scrape_error": _text(metadata.get("scrape_error")),
         "created_at": now,
         "updated_at": now,

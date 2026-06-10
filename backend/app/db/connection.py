@@ -139,6 +139,8 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "100_vkpi_kol_profile_type.sql",
     "101_vkpi_kol_profile_recall_status.sql",
     "102_vkpi_kol_url_deep_crawl.sql",
+    "103_vkpi_kol_search_sessions.sql",
+    "104_vkpi_evidence_source_width.sql",
 )
 
 try:
