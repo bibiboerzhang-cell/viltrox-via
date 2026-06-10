@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import random
+import re
 import signal
 import subprocess
 import sys
@@ -107,6 +108,26 @@ def _int_or_none(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return parsed
+
+
+_SENSITIVE_URL_USERINFO_RE = re.compile(r"\b([a-z][a-z0-9+.-]*://)([^/\s@]+@)", re.IGNORECASE)
+_SENSITIVE_AUTH_RE = re.compile(r"\b(authorization)\b\s*([:=])\s*(?:bearer\s+)?([^,\s'\"}\]]+)", re.IGNORECASE)
+_SENSITIVE_BEARER_RE = re.compile(r"\bbearer\s+[A-Za-z0-9._~+/\-=]+", re.IGNORECASE)
+_SENSITIVE_KV_RE = re.compile(
+    r"\b("
+    r"proxy|token|api[_-]?key|key|secret|password|passwd|access[_-]?token|refresh[_-]?token|client[_-]?secret"
+    r")\b\s*([:=])\s*([^,\s'\"}\]]+)",
+    re.IGNORECASE,
+)
+
+
+def _redact_sensitive_text(value: Any, *, limit: int = 2000) -> str:
+    text = str(value or "")
+    text = _SENSITIVE_URL_USERINFO_RE.sub(lambda match: f"{match.group(1)}***@", text)
+    text = _SENSITIVE_AUTH_RE.sub(lambda match: f"{match.group(1)}{match.group(2)}***", text)
+    text = _SENSITIVE_BEARER_RE.sub("Bearer ***", text)
+    text = _SENSITIVE_KV_RE.sub(lambda match: f"{match.group(1)}{match.group(2)}***", text)
+    return text[:limit]
 
 
 def _error_category(message: str) -> str:
@@ -1937,7 +1958,7 @@ def _record_gemini_cost(
                 "preflight_estimated_cost_usd": preflight_cost,
                 "latency_ms": latency_ms,
                 "triggered_by_user_id": triggered_by,
-                "error": raw.get("error") or "",
+                "error": _redact_sensitive_text(raw.get("error") or ""),
             },
             extra_scopes=["monthly_total", "single_call", "provider:gemini"],
         )
@@ -1974,7 +1995,7 @@ def _record_openai_cost(
                 "preflight_estimated_cost_usd": preflight_cost,
                 "latency_ms": latency_ms,
                 "triggered_by_user_id": triggered_by,
-                "error": raw.get("error") or "",
+                "error": _redact_sensitive_text(raw.get("error") or ""),
             },
             extra_scopes=["monthly_total", "single_call", "provider:openai"],
         )
@@ -2011,7 +2032,7 @@ def _record_anthropic_cost(
                 "preflight_estimated_cost_usd": preflight_cost,
                 "latency_ms": latency_ms,
                 "triggered_by_user_id": triggered_by,
-                "error": raw.get("error") or "",
+                "error": _redact_sensitive_text(raw.get("error") or ""),
             },
             extra_scopes=["monthly_total", "single_call", "provider:anthropic"],
         )
@@ -3010,7 +3031,7 @@ def _fail_job(conn: psycopg.Connection[Any], job_id: int, exc: Exception) -> Non
     if str(exc).strip() == "gemini_call_timeout":
         message = "gemini_call_timeout"
     else:
-        message = f"{type(exc).__name__}: {exc}"[:2000]
+        message = _redact_sensitive_text(f"{type(exc).__name__}: {exc}")
     category = _error_category(message)
     raw_status = "failed"
     sync_reason = message

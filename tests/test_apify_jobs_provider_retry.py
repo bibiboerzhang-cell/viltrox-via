@@ -66,6 +66,40 @@ class ApifyJobsProviderRetryTests(unittest.TestCase):
         ):
             self.assertEqual(worker._provider_retry_delay_seconds(4), 960)
 
+    def test_redacts_url_userinfo_in_worker_errors(self) -> None:
+        raw = (
+            "yt-dlp --proxy http://sp7y5uz7ho:AJmCw2Secret@gate.decodo.com:10001 "
+            "https://www.youtube.com/watch?v=abc"
+        )
+
+        redacted = worker._redact_sensitive_text(raw)
+
+        self.assertIn("http://***@gate.decodo.com:10001", redacted)
+        self.assertNotIn("sp7y5uz7ho", redacted)
+        self.assertNotIn("AJmCw2Secret", redacted)
+        self.assertIn("yt-dlp", redacted)
+
+    def test_redacts_key_value_and_authorization_tokens(self) -> None:
+        raw = (
+            "proxy=http://user:pass@proxy.local token=tok123 API_KEY=api-secret "
+            "client_secret=client-secret authorization=Bearer abc.def.ghi Bearer xyz.123"
+        )
+
+        redacted = worker._redact_sensitive_text(raw)
+
+        self.assertIn("proxy=***", redacted)
+        self.assertIn("token=***", redacted)
+        self.assertIn("API_KEY=***", redacted)
+        self.assertIn("client_secret=***", redacted)
+        self.assertIn("authorization=***", redacted)
+        self.assertIn("Bearer ***", redacted)
+        self.assertNotIn("user:pass", redacted)
+        self.assertNotIn("tok123", redacted)
+        self.assertNotIn("api-secret", redacted)
+        self.assertNotIn("client-secret", redacted)
+        self.assertNotIn("abc.def.ghi", redacted)
+        self.assertNotIn("xyz.123", redacted)
+
 
 if __name__ == "__main__":
     unittest.main()
