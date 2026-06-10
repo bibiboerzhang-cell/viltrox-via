@@ -61,6 +61,11 @@ function sessionIdFrom(value: unknown): number | undefined {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+function terminalSessionStatus(value: unknown): boolean {
+  const status = cleanText(value).toLowerCase();
+  return ["ready", "partial", "failed", "done", "blocked", "cancelled", "canceled"].includes(status);
+}
+
 function actionDescription(value: unknown): string {
   if (typeof value === "string") return value;
   const record = asRecord(value);
@@ -102,6 +107,21 @@ function sessionItems(session: VkpiKolSearchHistoryItem): Row[] {
   return items.map((item) => asRecord(item));
 }
 
+function sessionAdvanceCounts(session: VkpiKolSearchHistoryItem | null): Row {
+  const summary = asRecord(session?.result_summary);
+  const batch = asRecord(summary.profile_batch_advance);
+  const smartJob = asRecord(summary.smart_search_profile_advance_job);
+  return asRecord(batch.counts || smartJob.advance_counts);
+}
+
+function isSearchSessionTerminal(session: VkpiKolSearchHistoryItem): boolean {
+  if (terminalSessionStatus(session.status)) return true;
+  const summary = asRecord(session.result_summary);
+  const batch = asRecord(summary.profile_batch_advance);
+  const smartJob = asRecord(summary.smart_search_profile_advance_job);
+  return terminalSessionStatus(batch.status) || terminalSessionStatus(smartJob.status) || terminalSessionStatus(smartJob.advance_status);
+}
+
 function recallResultFromSession(session: VkpiKolSearchHistoryItem): VkpiKolRecallResponse {
   const creator: VkpiKolRecallItem[] = [];
   const reviewer: VkpiKolRecallItem[] = [];
@@ -130,10 +150,11 @@ function recallResultFromSession(session: VkpiKolSearchHistoryItem): VkpiKolReca
     else creator.push(row);
   });
   const summary = asRecord(session.result_summary);
+  const querySummary = asRecord(summary.query);
   const diagnostics = asRecord(summary.diagnostics);
   return {
     method: "search_session_history",
-    query: { query_text: display(summary.query || session.query_text, "") },
+    query: { query_text: display(querySummary.query_text || summary.query || session.query_text, "") },
     ratio: {
       creator_quota: creator.length,
       reviewer_quota: reviewer.length,
@@ -413,6 +434,9 @@ export function SmartKolInputPanel({
   const [urlResult, setUrlResult] = useState<VkpiKolUrlDeepCrawlResponse | null>(null);
   const [recallResult, setRecallResult] = useState<VkpiKolRecallResponse | null>(null);
   const [advanceResult, setAdvanceResult] = useState<VkpiKolSmartSearchProfileAdvanceResponse | null>(null);
+  const [activeSearchSessionId, setActiveSearchSessionId] = useState<number | null>(null);
+  const [activeSearchSession, setActiveSearchSession] = useState<VkpiKolSearchHistoryItem | null>(null);
+  const [sessionPollNotice, setSessionPollNotice] = useState("");
   const [historyItems, setHistoryItems] = useState<VkpiKolSearchHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [error, setError] = useState("");
@@ -449,6 +473,10 @@ export function SmartKolInputPanel({
   );
   const recallItems = useMemo(() => recallTopItems(recallResult), [recallResult]);
   const llmPlan = asRecord((recallResult as Row | null)?.llm_query_plan);
+  const activeSessionCounts = sessionAdvanceCounts(activeSearchSession);
+  const activeSessionSummary = asRecord(activeSearchSession?.result_summary);
+  const activeSmartJob = asRecord(activeSessionSummary.smart_search_profile_advance_job);
+  const activeSessionStatus = cleanText(activeSmartJob.advance_status || activeSmartJob.status || activeSearchSession?.status);
 
   useEffect(() => {
     if (recallItems.length) onRecallItems?.(recallItems);
@@ -474,6 +502,9 @@ export function SmartKolInputPanel({
     const query = cleanText(session.query_text);
     if (query) setInput(query);
     setAdvanceResult(null);
+    setActiveSearchSessionId(null);
+    setActiveSearchSession(session);
+    setSessionPollNotice("");
     setError("");
     const queryType = cleanText(session.query_type);
     if (queryType === "url_video" || queryType === "url_profile") {
@@ -487,6 +518,13 @@ export function SmartKolInputPanel({
       setUrlResult(null);
     }
     setState("ready");
+  }, []);
+
+  const applySearchSession = useCallback((session: VkpiKolSearchHistoryItem) => {
+    setActiveSearchSession(session);
+    setMode("text");
+    setRecallResult(recallResultFromSession(session));
+    setUrlResult(null);
   }, []);
 
   const openHistorySession = useCallback(async (sessionOrId: VkpiKolSearchHistoryItem | number | string) => {
@@ -536,6 +574,43 @@ export function SmartKolInputPanel({
     return () => window.removeEventListener("vkpi:open-kol-search-session", handler);
   }, [apiToken, openHistorySession]);
 
+  useEffect(() => {
+    if (!apiToken || !activeSearchSessionId || typeof window === "undefined") return undefined;
+    let cancelled = false;
+    const startedAt = Date.now();
+    const maxPollMs = 12 * 60 * 1000;
+    const poll = async () => {
+      try {
+        const session = await getKolSearchSession(apiToken, activeSearchSessionId);
+        if (cancelled) return;
+        applySearchSession(session);
+        if (isSearchSessionTerminal(session)) {
+          setActiveSearchSessionId(null);
+          setSessionPollNotice("后台深度查找已回填");
+          void refreshHistory();
+          return;
+        }
+        if (Date.now() - startedAt > maxPollMs) {
+          setActiveSearchSessionId(null);
+          setSessionPollNotice("后台深度查找仍在运行，可从最近历史或侧边栏任务继续打开");
+          void refreshHistory();
+        }
+      } catch (err) {
+        if (cancelled) return;
+        setSessionPollNotice(err instanceof Error ? err.message : "后台深度查找同步失败，下次轮询会重试");
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "hidden") return;
+      void poll();
+    }, 2500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeSearchSessionId, apiToken, applySearchSession, refreshHistory]);
+
   const run = async () => {
     const query = cleanText(input);
     if (!apiToken) {
@@ -555,6 +630,9 @@ export function SmartKolInputPanel({
     setUrlResult(null);
     setRecallResult(null);
     setAdvanceResult(null);
+    setActiveSearchSessionId(null);
+    setActiveSearchSession(null);
+    setSessionPollNotice("");
     try {
       const response = await smartKolSearch(apiToken, query, {
         mode: "auto",
@@ -626,6 +704,15 @@ export function SmartKolInputPanel({
         timeoutMs: 300000,
       });
       setAdvanceResult(response);
+      const queuedSession = response.search_session && typeof response.search_session === "object"
+        ? response.search_session as VkpiKolSearchHistoryItem
+        : null;
+      const sessionId = sessionIdFrom(response.search_session) || sessionIdFrom(response.advance_job) || sessionIdFrom(queuedSession);
+      if (queuedSession && sessionItems(queuedSession).length) applySearchSession(queuedSession);
+      if (sessionId) {
+        setActiveSearchSessionId(sessionId);
+        setSessionPollNotice("后台深度查找同步中...");
+      }
       setState("ready");
       void refreshHistory();
     } catch (err) {
@@ -758,9 +845,27 @@ export function SmartKolInputPanel({
             </button>
             <span className="text-[10px] text-slate-600">15+15 候选 · 新发现 · 逐个补档 · V6 Fit 不触碰</span>
           </div>
-          {advanceResult ? (
+          {advanceResult || activeSearchSession || sessionPollNotice ? (
             <div className="mt-2 rounded-md border border-emerald-300/18 bg-emerald-400/[0.08] px-2.5 py-2 text-[10.5px] text-emerald-100">
-              已入队: {display(advanceResult.status)} · 看侧边栏任务进度。V6 Fit 未触碰: {display(advanceResult.viltrox_fit_score_untouched)}
+              <div className="flex flex-wrap items-center gap-2">
+                {activeSearchSessionId ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                <span>
+                  后台深度查找: {display(activeSessionStatus || advanceResult?.status, "queued")}
+                  {activeSearchSession?.id ? ` · session #${activeSearchSession.id}` : ""}
+                </span>
+                {sessionPollNotice ? <span className="text-emerald-200/70">{sessionPollNotice}</span> : null}
+              </div>
+              {Object.keys(activeSessionCounts).length ? (
+                <div className="mt-1.5 flex flex-wrap gap-1.5 text-[10px] text-emerald-100/80">
+                  <span className="rounded border border-emerald-300/15 bg-black/15 px-1.5 py-0.5">ready {display(activeSessionCounts.ready, "0")}</span>
+                  <span className="rounded border border-emerald-300/15 bg-black/15 px-1.5 py-0.5">errors {display(activeSessionCounts.errors, "0")}</span>
+                  <span className="rounded border border-emerald-300/15 bg-black/15 px-1.5 py-0.5">skipped {display(activeSessionCounts.skipped, "0")}</span>
+                  <span className="rounded border border-emerald-300/15 bg-black/15 px-1.5 py-0.5">executed {display(activeSessionCounts.executed, "0")}</span>
+                </div>
+              ) : null}
+              <div className="mt-1 text-[10px] text-emerald-100/65">
+                结果会自动回填到当前区域；也可从最近历史或侧边栏完成任务打开。V6 Fit 未触碰: {display(advanceResult?.viltrox_fit_score_untouched ?? activeSmartJob.viltrox_fit_score_untouched)}
+              </div>
             </div>
           ) : null}
         </div>
