@@ -180,6 +180,8 @@ function urlResultFromSession(session: VkpiKolSearchHistoryItem): VkpiKolUrlDeep
   const payload = asRecord(item.payload);
   const videoFlow = asRecord(payload.video_flow);
   const profileFlow = asRecord(payload.profile_flow);
+  const jobLastError = cleanText(payload.job_last_error || payload.search_session_last_error);
+  const jobStatus = cleanText(payload.job_status || payload.search_session_last_job_status || item.status);
   const urlType = cleanText(payload.url_type || session.query_type).includes("video") ? "video" : cleanText(payload.url_type || session.query_type).includes("profile") ? "profile" : "unknown";
   return {
     method: "search_session_history",
@@ -197,7 +199,7 @@ function urlResultFromSession(session: VkpiKolSearchHistoryItem): VkpiKolUrlDeep
     matched_kol_pool_id: Number(payload.matched_kol_pool_id || item.kol_pool_id) || null,
     next_action: "history_restore",
     profile_flow: profileFlow,
-    video_flow: videoFlow,
+    video_flow: { ...videoFlow, job_last_error: jobLastError, job_status: jobStatus },
     creator_identity: asRecord(payload.creator_identity),
     video_metadata: asRecord(payload.video_metadata),
     search_session: { id: session.id, session_id: session.id, status: session.status },
@@ -337,6 +339,8 @@ function UrlSummary({
   const evidence = asRecord(videoFlow.evidence_result);
   const enqueue = asRecord(videoFlow.enqueue_result);
   const enqueueJob = asRecord(enqueue.job);
+  const jobLastError = cleanText(videoFlow.job_last_error || profileFlow.job_last_error);
+  const jobStatus = cleanText(videoFlow.job_status || profileFlow.job_status || videoFlow.status || profileFlow.status);
   const platform = cleanText(result.platform).toLowerCase();
   const isVideo = result.url_type === "video";
   const profileOperation = cleanText(profileFlow.operation);
@@ -350,11 +354,12 @@ function UrlSummary({
     cleanText(creator.handle || creator.channel_id || creator.profile_url || result.handle || result.channel_id),
   );
   const tiktokRisk = isVideo && platform === "tiktok";
+  const retryableFailure = Boolean(isVideo && jobLastError && ["failed", "blocked"].includes(jobStatus));
   const executeDone = result.execute && (
     isVideo ? videoExecutionDone(videoFlow.status) : cleanText(profileFlow.status) === "ready"
   );
   const actionLabel = isVideo
-    ? knownCreator ? "只分析此视频" : "建档并分析"
+    ? retryableFailure ? "重试分析" : knownCreator ? "只分析此视频" : "建档并分析"
     : "抓基础资料";
   const disabledReason = isVideo && !creatorResolved
     ? "创作者未解析，不能建匿名档，也不会入队。"
@@ -412,6 +417,11 @@ function UrlSummary({
             : `kol_pool_id ${display(profileFlow.kol_pool_id)} · V6 Fit 未触碰 ${display(profileFlow.viltrox_fit_score_untouched)}`}
         </div>
       ) : null}
+      {jobLastError ? (
+        <div className="mt-2 rounded-md border border-rose-300/20 bg-rose-500/[0.08] px-2 py-1.5 text-[10.5px] text-rose-100">
+          分析失败: {jobLastError}
+        </div>
+      ) : null}
       {!result.execute && actionDescription(result.next_action) ? (
         <div className="mt-2 text-[10px] leading-relaxed text-slate-500">{actionDescription(result.next_action)}</div>
       ) : null}
@@ -447,6 +457,8 @@ export function SmartKolInputPanel({
   const videoFlow = asRecord(urlResult?.video_flow);
   const videoCreator = asRecord(urlResult?.creator_identity || videoFlow.creator_identity);
   const videoStatus = cleanText(profileFlow.status || videoFlow.status);
+  const videoJobStatus = cleanText(videoFlow.job_status || videoStatus);
+  const videoJobLastError = cleanText(videoFlow.job_last_error);
   const profileOperation = cleanText(profileFlow.operation);
   const rawVideoOperation = cleanText(videoFlow.operation);
   const videoOperation = ["existing_creator_video_analysis", "new_creator_video_analysis"].includes(profileOperation)
@@ -459,10 +471,11 @@ export function SmartKolInputPanel({
   const urlCanExecute = Boolean(
     apiToken &&
     urlResult &&
-    !urlResult.execute &&
+    (!urlResult.execute || Boolean(videoJobLastError)) &&
     !isBusy &&
     (
       (urlResult.url_type === "profile" && cleanText(profileFlow.status) === "dry_run_ready") ||
+      (urlResult.url_type === "video" && Boolean(videoJobLastError) && ["failed", "blocked"].includes(videoJobStatus)) ||
       (
         urlResult.url_type === "video" &&
         ["dry_run_ready", "ready_to_execute"].includes(videoStatus) &&
@@ -520,8 +533,15 @@ export function SmartKolInputPanel({
     setState("ready");
   }, []);
 
-  const applySearchSession = useCallback((session: VkpiKolSearchHistoryItem) => {
+  const applyPolledSession = useCallback((session: VkpiKolSearchHistoryItem) => {
     setActiveSearchSession(session);
+    const queryType = cleanText(session.query_type);
+    if (queryType === "url_video" || queryType === "url_profile") {
+      setMode("url");
+      setUrlResult(urlResultFromSession(session));
+      setRecallResult(null);
+      return;
+    }
     setMode("text");
     setRecallResult(recallResultFromSession(session));
     setUrlResult(null);
@@ -583,7 +603,7 @@ export function SmartKolInputPanel({
       try {
         const session = await getKolSearchSession(apiToken, activeSearchSessionId);
         if (cancelled) return;
-        applySearchSession(session);
+        applyPolledSession(session);
         if (isSearchSessionTerminal(session)) {
           setActiveSearchSessionId(null);
           setSessionPollNotice("后台深度查找已回填");
@@ -609,7 +629,7 @@ export function SmartKolInputPanel({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [activeSearchSessionId, apiToken, applySearchSession, refreshHistory]);
+  }, [activeSearchSessionId, apiToken, applyPolledSession, refreshHistory]);
 
   const run = async () => {
     const query = cleanText(input);
@@ -677,6 +697,11 @@ export function SmartKolInputPanel({
         timeoutMs: 300000,
       });
       setUrlResult(response);
+      const nextSessionId = sessionIdFrom(response.search_session) || sessionId;
+      if (nextSessionId) {
+        setActiveSearchSessionId(nextSessionId);
+        setSessionPollNotice(response.url_type === "video" ? "视频分析状态同步中..." : "账号抓取状态同步中...");
+      }
       setState("ready");
       void refreshHistory();
     } catch (err) {
@@ -708,7 +733,7 @@ export function SmartKolInputPanel({
         ? response.search_session as VkpiKolSearchHistoryItem
         : null;
       const sessionId = sessionIdFrom(response.search_session) || sessionIdFrom(response.advance_job) || sessionIdFrom(queuedSession);
-      if (queuedSession && sessionItems(queuedSession).length) applySearchSession(queuedSession);
+      if (queuedSession && sessionItems(queuedSession).length) applyPolledSession(queuedSession);
       if (sessionId) {
         setActiveSearchSessionId(sessionId);
         setSessionPollNotice("后台深度查找同步中...");
