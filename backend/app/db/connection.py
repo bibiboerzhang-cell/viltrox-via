@@ -141,6 +141,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "102_vkpi_kol_url_deep_crawl.sql",
     "103_vkpi_kol_search_sessions.sql",
     "104_vkpi_evidence_source_width.sql",
+    "105_apify_jobs_provider_retry.sql",
 )
 
 try:

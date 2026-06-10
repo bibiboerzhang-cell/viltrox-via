@@ -61,6 +61,23 @@ function taskLabel(task) {
   return `${task.kind || "任务"} · ${taskTargetText(task) || "未命名"}`;
 }
 
+function taskRetryText(task) {
+  const category = String(task?.error_category || "").trim();
+  const retryAt = String(task?.next_retry_at || "").trim();
+  if (!category && !retryAt) return "";
+  let timeText = "";
+  if (retryAt) {
+    const parsed = new Date(retryAt);
+    if (Number.isFinite(parsed.getTime())) {
+      timeText = parsed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    }
+  }
+  const categoryLabel = category === "provider_pressure" ? "provider压力" : category;
+  if (categoryLabel && timeText) return `${categoryLabel} · 退避至 ${timeText}`;
+  if (timeText) return `退避至 ${timeText}`;
+  return categoryLabel;
+}
+
 function taskSearchSessionId(task) {
   const session = task?.search_session && typeof task.search_session === "object" ? task.search_session : {};
   const raw = session.session_id || session.id || task?.target?.target_id;
@@ -91,6 +108,7 @@ function TaskRow({ task, color, showBar }) {
   const hasProgress = Number.isFinite(Number(rawProgress));
   const progress = Math.max(6, Math.min(100, Number(rawProgress || 0)));
   const canOpen = Boolean(taskSearchSessionId(task));
+  const retryText = taskRetryText(task);
   return e("button", {
     type: "button",
     onClick: canOpen ? () => openSearchSessionFromTask(task) : undefined,
@@ -105,6 +123,7 @@ function TaskRow({ task, color, showBar }) {
       }),
       e("span", { className: "truncate text-[11px] leading-4 text-white/70" }, taskLabel(task))
     ),
+    retryText && e("div", { className: "ml-[11px] truncate text-[10px] leading-4 text-white/35" }, retryText),
     showBar && (
       hasProgress
         ? e("div", { className: "ml-[11px] mt-1 h-[3px] overflow-hidden rounded-full bg-white/[0.08]" },
@@ -273,10 +292,13 @@ export function TaskProgressBoard({ apiToken = "" }) {
             type: "button",
             onClick: taskSearchSessionId(task) ? () => openSearchSessionFromTask(task) : undefined,
             disabled: !taskSearchSessionId(task),
-            className: "flex min-w-0 items-center gap-1.5 text-left disabled:cursor-default"
+            className: "flex min-w-0 items-start gap-1.5 text-left disabled:cursor-default"
           },
             e("span", { className: "w-[18px] shrink-0 text-[10px] text-white/40 tabular-nums" }, `#${index + 1}`),
-            e("span", { className: "truncate text-[11px] text-white/60" }, taskLabel(task))
+            e("span", { className: "min-w-0 flex-1" },
+              e("span", { className: "block truncate text-[11px] text-white/60" }, taskLabel(task)),
+              taskRetryText(task) && e("span", { className: "block truncate text-[10px] text-white/30" }, taskRetryText(task))
+            )
           ))
           : e("span", { className: "text-[11px] text-white/25" }, "—"),
         remainingQueue > 0 && e("div", { className: "flex min-w-0 items-center gap-1.5 opacity-45" },

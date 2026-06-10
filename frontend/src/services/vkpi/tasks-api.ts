@@ -42,6 +42,8 @@ export interface TaskQueueItem {
   updated_at?: string;
   progress_pct?: number;
   error?: string;
+  error_category?: string;
+  next_retry_at?: string;
 }
 
 export interface TaskQueueResponse {

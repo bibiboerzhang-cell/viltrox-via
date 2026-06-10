@@ -233,17 +233,19 @@ def _query_apify_jobs(cutoff: datetime, limit: int) -> tuple[list[dict[str, Any]
     conn = get_conn()
     active_rows = conn.execute(
         """
-        SELECT id, job_type, payload, status, last_error, created_at, updated_at
+        SELECT id, job_type, payload, status, last_error, last_error_category,
+               next_retry_at, created_at, updated_at
         FROM apify_jobs
         WHERE status IN ('queued', 'retrying', 'processing', 'running')
-        ORDER BY created_at DESC
+        ORDER BY COALESCE(next_retry_at, created_at) ASC, created_at DESC
         LIMIT ?
         """,
         (limit,),
     ).fetchall()
     recent_rows = conn.execute(
         """
-        SELECT id, job_type, payload, status, last_error, created_at, updated_at
+        SELECT id, job_type, payload, status, last_error, last_error_category,
+               next_retry_at, created_at, updated_at
         FROM apify_jobs
         WHERE status IN ('done', 'failed', 'blocked')
           AND created_at >= ?
@@ -264,7 +266,11 @@ def _query_apify_jobs(cutoff: datetime, limit: int) -> tuple[list[dict[str, Any]
             payload=payload,
             created_at=data.get("created_at"),
             updated_at=data.get("updated_at"),
-            extra={"error": _text(data.get("last_error")) or None},
+            extra={
+                "error": _text(data.get("last_error")) or None,
+                "error_category": _text(data.get("last_error_category")) or None,
+                "next_retry_at": _timestamp(data.get("next_retry_at")),
+            },
         )
 
     return [convert(row) for row in active_rows], [convert(row) for row in recent_rows]
@@ -449,7 +455,7 @@ def get_task_queue(*, limit: int = 50, recent_minutes: int = 10, include_llm_cal
         "diagnostics": {
             "sources": sources,
             "indexes_used": {
-                "apify_jobs": "idx_apify_jobs_status_created(status, created_at)",
+                "apify_jobs": "idx_apify_jobs_status_next_retry(status, next_retry_at, created_at)",
                 "job_execution_ledger": "idx_job_execution_ledger_status_updated(status, updated_at)",
                 "vkpi_llm_calls": "pkey id desc window; no status/created_at index in phase 1",
             },

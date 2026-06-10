@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import random
 import signal
 import subprocess
 import sys
@@ -12,7 +13,7 @@ import threading
 import time
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -45,9 +46,22 @@ STALE_RECLAIM_SECONDS = STALE_RUNNING_MINUTES * 60
 STALE_RECLAIM_POLL_SECONDS = max(30, int(os.environ.get("APIFY_WORKER_STALE_RECLAIM_POLL_SECONDS", "60")))
 RUNNING_HEARTBEAT_SECONDS = max(10, int(os.environ.get("APIFY_WORKER_RUNNING_HEARTBEAT_SECONDS", "30")))
 MAX_JOB_ATTEMPTS = max(1, int(os.environ.get("APIFY_WORKER_MAX_ATTEMPTS", "2")))
+PROVIDER_RETRY_MAX_ATTEMPTS = max(1, int(os.environ.get("APIFY_WORKER_PROVIDER_RETRY_MAX_ATTEMPTS", "5")))
+PROVIDER_RETRY_BASE_SECONDS = max(1, int(os.environ.get("APIFY_WORKER_PROVIDER_RETRY_BASE_SECONDS", "60")))
+PROVIDER_RETRY_MAX_DELAY_SECONDS = max(
+    PROVIDER_RETRY_BASE_SECONDS,
+    int(os.environ.get("APIFY_WORKER_PROVIDER_RETRY_MAX_DELAY_SECONDS", "960")),
+)
+PROVIDER_RETRY_JITTER_RATIO = max(0.0, min(0.5, float(os.environ.get("APIFY_WORKER_PROVIDER_RETRY_JITTER_RATIO", "0.20"))))
+PROVIDER_RETRY_ADOPT_WINDOW_MINUTES = max(0, int(os.environ.get("APIFY_WORKER_PROVIDER_RETRY_ADOPT_WINDOW_MINUTES", "1440")))
 LLM_BUDGET_SCOPE = os.environ.get("APIFY_WORKER_LLM_BUDGET_SCOPE", "cron:vkpi_analysis_worker")
 LLM_CONCURRENCY_LIMIT = max(1, min(2, int(os.environ.get("APIFY_WORKER_LLM_CONCURRENCY", "1"))))
 LLM_MAX_OUTPUT_TOKENS = int(os.environ.get("APIFY_WORKER_LLM_MAX_OUTPUT_TOKENS", "1200"))
+GEMINI_QPS_LIMIT = max(0.0, float(os.environ.get("APIFY_WORKER_GEMINI_QPS", "0.05")))
+GEMINI_MIN_INTERVAL_SECONDS = max(
+    0.0,
+    float(os.environ.get("APIFY_WORKER_GEMINI_MIN_INTERVAL_SEC", str((1.0 / GEMINI_QPS_LIMIT) if GEMINI_QPS_LIMIT > 0 else 0.0))),
+)
 LLM_TARGET_TYPES = {"video", "contract"}
 GEMINI_VIDEO_V2_DERIVE_METHODS = {
     "gemini_video_v2",
@@ -63,6 +77,8 @@ WORKER_GEMINI_MODEL = os.environ.get("APIFY_WORKER_GEMINI_MODEL", "gemini-2.5-fl
 FINAL_V1_GEMINI_MODELS = gemini_video_analyzer.final_v1_gemini_models()
 FINAL_V1_KEYFRAME_QA_MODEL = os.environ.get("GEMINI_FINAL_V1_QA_MODEL", "gemini-3.1-pro-preview").strip() or "gemini-3.1-pro-preview"
 _stop_event = threading.Event()
+_gemini_qps_lock = threading.Lock()
+_last_gemini_call_started_at = 0.0
 
 
 def _request_stop(_signum: int, _frame: Any) -> None:
@@ -91,6 +107,70 @@ def _int_or_none(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return parsed
+
+
+def _error_category(message: str) -> str:
+    text = str(message or "").lower()
+    if any(marker in text for marker in ("429", "resource_exhausted", "rate limit", "quota exceeded")):
+        return "provider_pressure"
+    if any(
+        marker in text
+        for marker in (
+            "500",
+            "502",
+            "503",
+            "504",
+            "5xx",
+            "internal server error",
+            "server error",
+            "unavailable",
+            "service unavailable",
+            "high demand",
+            "temporarily overloaded",
+        )
+    ):
+        return "provider_pressure"
+    if "gemini_call_timeout" in text:
+        return "timeout"
+    if "media_resolve_failed" in text or "media_resolve" in text:
+        return "media_resolve"
+    if "yt-dlp" in text or "yt_dlp" in text or "direct_video_download_failed" in text or "download_failed" in text:
+        return "download"
+    if "unsupported" in text or "invalid_video_url" in text or "not_video" in text or "bad url" in text:
+        return "permanent"
+    if "stale_running_reclaimed" in text:
+        return "stale_running"
+    return "other"
+
+
+def _provider_retry_delay_seconds(next_attempt: int) -> int:
+    attempt = max(1, int(next_attempt or 1))
+    base_delay = min(PROVIDER_RETRY_MAX_DELAY_SECONDS, PROVIDER_RETRY_BASE_SECONDS * (4 ** max(0, attempt - 1)))
+    if PROVIDER_RETRY_JITTER_RATIO <= 0:
+        return int(base_delay)
+    jitter = random.uniform(0, base_delay * PROVIDER_RETRY_JITTER_RATIO)
+    return int(min(PROVIDER_RETRY_MAX_DELAY_SECONDS, round(base_delay + jitter)))
+
+
+def _respect_gemini_qps() -> None:
+    global _last_gemini_call_started_at
+    if GEMINI_MIN_INTERVAL_SECONDS <= 0:
+        return
+    with _gemini_qps_lock:
+        now = time.monotonic()
+        wait_seconds = (_last_gemini_call_started_at + GEMINI_MIN_INTERVAL_SECONDS) - now
+        if wait_seconds > 0:
+            logger.info("gemini qps throttle sleep | seconds=%.2f", wait_seconds)
+            time.sleep(wait_seconds)
+            now = time.monotonic()
+        _last_gemini_call_started_at = now
+
+
+def _provider_retry_reason(message: str, *, next_retry_at: Any | None = None) -> str:
+    suffix = ""
+    if next_retry_at:
+        suffix = f" | next_retry_at={next_retry_at}"
+    return f"provider_pressure_retry_scheduled: {message}{suffix}"[:2000]
 
 
 def _mock_result(job: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
@@ -1069,7 +1149,15 @@ def _finish_skipped(conn: psycopg.Connection[Any], job_id: int, reason: str) -> 
     with conn.transaction():
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE apify_jobs SET status='done', last_error=%s, updated_at=NOW() WHERE id=%s",
+                """
+                UPDATE apify_jobs
+                SET status='done',
+                    last_error=%s,
+                    last_error_category=NULL,
+                    next_retry_at=NULL,
+                    updated_at=NOW()
+                WHERE id=%s
+                """,
                 (reason[:2000], job_id),
             )
     _sync_search_session_job(conn, job_id, raw_status="done", reason=reason, analysis_summary=analysis_summary)
@@ -1080,7 +1168,15 @@ def _block_job(conn: psycopg.Connection[Any], job_id: int, reason: str, detail: 
     with conn.transaction():
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE apify_jobs SET status='blocked', last_error=%s, updated_at=NOW() WHERE id=%s",
+                """
+                UPDATE apify_jobs
+                SET status='blocked',
+                    last_error=%s,
+                    last_error_category='blocked',
+                    next_retry_at=NULL,
+                    updated_at=NOW()
+                WHERE id=%s
+                """,
                 (_json(payload)[:2000], job_id),
             )
     _sync_search_session_job(conn, job_id, raw_status="blocked", reason=_json(payload))
@@ -1090,7 +1186,15 @@ def _requeue_job(conn: psycopg.Connection[Any], job_id: int, reason: str) -> Non
     with conn.transaction():
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE apify_jobs SET status='queued', last_error=%s, updated_at=NOW() WHERE id=%s",
+                """
+                UPDATE apify_jobs
+                SET status='queued',
+                    last_error=%s,
+                    last_error_category=NULL,
+                    next_retry_at=NULL,
+                    updated_at=NOW()
+                WHERE id=%s
+                """,
                 (reason[:2000], job_id),
             )
     _sync_search_session_job(conn, job_id, raw_status="queued", reason=reason)
@@ -1970,7 +2074,15 @@ def _write_gemini_cache(
             cache_row = cur.fetchone()
             cache_id = int(cache_row[0]) if cache_row else None
             cur.execute(
-                "UPDATE apify_jobs SET status='done', last_error=NULL, updated_at=NOW() WHERE id=%s",
+                """
+                UPDATE apify_jobs
+                SET status='done',
+                    last_error=NULL,
+                    last_error_category=NULL,
+                    next_retry_at=NULL,
+                    updated_at=NOW()
+                WHERE id=%s
+                """,
                 (job["id"],),
             )
     deep_result = _sync_deep_analysis_result_from_cache(
@@ -2712,7 +2824,15 @@ def _process_gemini_video(
             cache_row = cur.fetchone()
             cache_id = int(cache_row[0]) if cache_row else None
             cur.execute(
-                "UPDATE apify_jobs SET status='done', last_error=NULL, updated_at=NOW() WHERE id=%s",
+                """
+                UPDATE apify_jobs
+                SET status='done',
+                    last_error=NULL,
+                    last_error_category=NULL,
+                    next_retry_at=NULL,
+                    updated_at=NOW()
+                WHERE id=%s
+                """,
                 (job["id"],),
             )
     deep_result = _sync_deep_analysis_result_from_cache(
@@ -2752,10 +2872,11 @@ def _claim_job(conn: psycopg.Connection[Any]) -> dict[str, Any] | None:
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
-                SELECT id, job_type, payload
+                SELECT id, job_type, payload, attempts, next_retry_at, last_error_category
                 FROM apify_jobs
                 WHERE status = 'queued'
-                ORDER BY created_at, id
+                  AND (next_retry_at IS NULL OR next_retry_at <= NOW())
+                ORDER BY COALESCE(next_retry_at, created_at), created_at, id
                 FOR UPDATE SKIP LOCKED
                 LIMIT 1
                 """
@@ -2764,7 +2885,15 @@ def _claim_job(conn: psycopg.Connection[Any]) -> dict[str, Any] | None:
             if not job:
                 return None
             cur.execute(
-                "UPDATE apify_jobs SET status='running', updated_at=NOW() WHERE id=%s",
+                """
+                UPDATE apify_jobs
+                SET status='running',
+                    last_error=NULL,
+                    last_error_category=NULL,
+                    next_retry_at=NULL,
+                    updated_at=NOW()
+                WHERE id=%s
+                """,
                 (job["id"],),
             )
             claimed = dict(job)
@@ -2814,6 +2943,7 @@ def _process_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> None:
                 stage=derive_method,
             )
             if derive_method in GEMINI_VIDEO_DERIVE_METHODS:
+                _respect_gemini_qps()
                 _process_gemini_video(conn, job, payload, estimated_cost)
                 return
             _block_job(conn, int(job["id"]), "unsupported_llm_derive_method", {"derive_method": derive_method})
@@ -2849,7 +2979,15 @@ def _process_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> None:
             cache_row = cur.fetchone()
             cache_id = int(cache_row[0]) if cache_row else None
             cur.execute(
-                "UPDATE apify_jobs SET status='done', last_error=NULL, updated_at=NOW() WHERE id=%s",
+                """
+                UPDATE apify_jobs
+                SET status='done',
+                    last_error=NULL,
+                    last_error_category=NULL,
+                    next_retry_at=NULL,
+                    updated_at=NOW()
+                WHERE id=%s
+                """,
                 (job["id"],),
             )
     _sync_search_session_job(
@@ -2873,17 +3011,55 @@ def _fail_job(conn: psycopg.Connection[Any], job_id: int, exc: Exception) -> Non
         message = "gemini_call_timeout"
     else:
         message = f"{type(exc).__name__}: {exc}"[:2000]
+    category = _error_category(message)
+    raw_status = "failed"
+    sync_reason = message
     with conn.transaction():
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE apify_jobs
-                SET status='failed', attempts=attempts+1, last_error=%s, updated_at=NOW()
-                WHERE id=%s
-                """,
-                (message, job_id),
-            )
-    _sync_search_session_job(conn, job_id, raw_status="failed", reason=message)
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute("SELECT attempts FROM apify_jobs WHERE id=%s FOR UPDATE", (job_id,))
+            row = cur.fetchone() or {}
+            next_attempt = int(row.get("attempts") or 0) + 1
+            if category == "provider_pressure" and next_attempt < PROVIDER_RETRY_MAX_ATTEMPTS:
+                delay_seconds = _provider_retry_delay_seconds(next_attempt)
+                cur.execute(
+                    """
+                    UPDATE apify_jobs
+                    SET status='queued',
+                        attempts=%s,
+                        last_error=%s,
+                        last_error_category=%s,
+                        next_retry_at=NOW() + make_interval(secs => %s),
+                        updated_at=NOW()
+                    WHERE id=%s
+                    RETURNING next_retry_at
+                    """,
+                    (next_attempt, message, category, delay_seconds, job_id),
+                )
+                retry_row = cur.fetchone() or {}
+                raw_status = "queued"
+                sync_reason = _provider_retry_reason(message, next_retry_at=retry_row.get("next_retry_at"))
+                logger.warning(
+                    "apify_jobs provider pressure retry scheduled | id=%s attempt=%s delay_seconds=%s next_retry_at=%s",
+                    job_id,
+                    next_attempt,
+                    delay_seconds,
+                    retry_row.get("next_retry_at"),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE apify_jobs
+                    SET status='failed',
+                        attempts=%s,
+                        last_error=%s,
+                        last_error_category=%s,
+                        next_retry_at=NULL,
+                        updated_at=NOW()
+                    WHERE id=%s
+                    """,
+                    (next_attempt, message, category, job_id),
+                )
+    _sync_search_session_job(conn, job_id, raw_status=raw_status, reason=sync_reason)
 
 
 def _heartbeat_running_job(job_id: int, stop_signal: threading.Event) -> None:
@@ -2929,6 +3105,8 @@ def _reclaim_stale_running_jobs(conn: psycopg.Connection[Any]) -> list[dict[str,
                     WHEN attempts < %(max_attempts)s THEN 'stale_running_reclaimed: requeued after worker heartbeat expired'
                     ELSE 'stale_running_reclaimed: max attempts reached'
                   END,
+                  last_error_category = 'stale_running',
+                  next_retry_at = NULL,
                   updated_at = NOW()
                 WHERE status='running'
                   AND updated_at < NOW() - make_interval(secs => %(stale_seconds)s)
@@ -2958,24 +3136,107 @@ def _reclaim_stale_running_jobs(conn: psycopg.Connection[Any]) -> list[dict[str,
     return rows
 
 
+def _adopt_recent_provider_pressure_failures(conn: psycopg.Connection[Any]) -> list[dict[str, Any]]:
+    if PROVIDER_RETRY_ADOPT_WINDOW_MINUTES <= 0:
+        return []
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT id, attempts, last_error, updated_at, payload
+            FROM apify_jobs
+            WHERE status='failed'
+              AND attempts < %(max_attempts)s
+              AND updated_at >= NOW() - make_interval(mins => %(window_minutes)s)
+            ORDER BY updated_at DESC, id DESC
+            LIMIT 25
+            """,
+            {
+                "max_attempts": PROVIDER_RETRY_MAX_ATTEMPTS,
+                "window_minutes": PROVIDER_RETRY_ADOPT_WINDOW_MINUTES,
+            },
+        )
+        candidates = [dict(row) for row in cur.fetchall()]
+    adopted: list[dict[str, Any]] = []
+    for row in candidates:
+        message = str(row.get("last_error") or "")[:2000]
+        if _error_category(message) != "provider_pressure":
+            continue
+        attempts = int(row.get("attempts") or 0)
+        delay_seconds = _provider_retry_delay_seconds(attempts or 1)
+        with conn.transaction():
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    UPDATE apify_jobs
+                    SET status='queued',
+                        last_error=%s,
+                        last_error_category='provider_pressure',
+                        next_retry_at=NOW() + make_interval(secs => %s),
+                        updated_at=NOW()
+                    WHERE id=%s
+                      AND status='failed'
+                    RETURNING id, status, attempts, payload, last_error, last_error_category, next_retry_at
+                    """,
+                    (
+                        _provider_retry_reason(message),
+                        delay_seconds,
+                        int(row["id"]),
+                    ),
+                )
+                updated = cur.fetchone()
+        if not updated:
+            continue
+        adopted_row = dict(updated)
+        adopted.append(adopted_row)
+        payload = adopted_row.get("payload") if isinstance(adopted_row.get("payload"), dict) else {}
+        logger.warning(
+            "apify_jobs adopted provider pressure failure | id=%s target_id=%s attempts=%s delay_seconds=%s next_retry_at=%s",
+            adopted_row.get("id"),
+            payload.get("target_id"),
+            adopted_row.get("attempts"),
+            delay_seconds,
+            adopted_row.get("next_retry_at"),
+        )
+        try:
+            _sync_search_session_job(
+                conn,
+                int(adopted_row["id"]),
+                raw_status="queued",
+                reason=str(adopted_row.get("last_error") or "provider_pressure_retry_scheduled"),
+            )
+        except Exception as exc:
+            logger.warning("search session adopted retry sync failed | job_id=%s error=%s", adopted_row.get("id"), exc)
+    return adopted
+
+
 def run_worker() -> None:
     if not DB_RUNTIME_URL:
         raise RuntimeError("DATABASE_URL is required for apify_jobs worker")
     signal.signal(signal.SIGTERM, _request_stop)
     signal.signal(signal.SIGINT, _request_stop)
     logger.info(
-        "apify_jobs worker started | poll_seconds=%s stale_minutes=%s resolve_timeout_sec=%s",
+        "apify_jobs worker started | poll_seconds=%s stale_minutes=%s resolve_timeout_sec=%s gemini_timeout_sec=%s llm_concurrency=%s gemini_qps=%s gemini_min_interval_sec=%s provider_retry_max_attempts=%s provider_retry_base_sec=%s provider_retry_max_delay_sec=%s provider_retry_adopt_window_min=%s",
         POLL_SECONDS,
         STALE_RUNNING_MINUTES,
         MEDIA_RESOLVE_TIMEOUT_SECONDS,
+        GEMINI_CALL_TIMEOUT_SECONDS,
+        LLM_CONCURRENCY_LIMIT,
+        GEMINI_QPS_LIMIT,
+        GEMINI_MIN_INTERVAL_SECONDS,
+        PROVIDER_RETRY_MAX_ATTEMPTS,
+        PROVIDER_RETRY_BASE_SECONDS,
+        PROVIDER_RETRY_MAX_DELAY_SECONDS,
+        PROVIDER_RETRY_ADOPT_WINDOW_MINUTES,
     )
     try:
         with psycopg.connect(DB_RUNTIME_URL, autocommit=True) as conn:
             _reclaim_stale_running_jobs(conn)
+            _adopt_recent_provider_pressure_failures(conn)
             last_reclaim = time.monotonic()
             while not _stop_event.is_set():
                 if time.monotonic() - last_reclaim >= STALE_RECLAIM_POLL_SECONDS:
                     _reclaim_stale_running_jobs(conn)
+                    _adopt_recent_provider_pressure_failures(conn)
                     last_reclaim = time.monotonic()
                 job = _claim_job(conn)
                 if not job:
