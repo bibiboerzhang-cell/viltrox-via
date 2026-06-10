@@ -42,6 +42,15 @@ function numberLabel(value: unknown): string {
   return String(Math.round(next));
 }
 
+function durationLabel(value: unknown): string {
+  const ms = Number(value);
+  if (!Number.isFinite(ms) || ms <= 0) return "";
+  const totalSeconds = Math.max(1, Math.round(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
 function detectMode(input: string): Mode {
   const value = cleanText(input);
   if (!value) return "idle";
@@ -81,7 +90,7 @@ function urlTypeLabel(value: unknown): string {
 }
 
 function videoExecutionDone(status: unknown): boolean {
-  return ["queued", "already_queued", "already_analyzed"].includes(cleanText(status));
+  return ["queued", "already_queued", "already_analyzed", "ready", "partial"].includes(cleanText(status));
 }
 
 function recallTopItems(response: VkpiKolRecallResponse | null): VkpiKolRecallItem[] {
@@ -178,14 +187,23 @@ function urlResultFromSession(session: VkpiKolSearchHistoryItem): VkpiKolUrlDeep
   const item = sessionItems(session).find((entry) => cleanText(entry.item_type).startsWith("url_")) || sessionItems(session)[0];
   if (!item) return null;
   const payload = asRecord(item.payload);
+  const summary = asRecord(session.result_summary);
   const videoFlow = asRecord(payload.video_flow);
   const profileFlow = asRecord(payload.profile_flow);
-  const jobLastError = cleanText(payload.job_last_error || payload.search_session_last_error);
+  const analysis = asRecord(payload.analysis || summary.analysis);
+  const jobLastError = cleanText(payload.job_last_error || summary.job_last_error || payload.search_session_last_error);
   const jobStatus = cleanText(payload.job_status || payload.search_session_last_job_status || item.status);
+  const itemStatus = cleanText(item.status || summary.item_status || videoFlow.status || profileFlow.status);
   const urlType = cleanText(payload.url_type || session.query_type).includes("video") ? "video" : cleanText(payload.url_type || session.query_type).includes("profile") ? "profile" : "unknown";
+  const terminal = terminalSessionStatus(session.status) || terminalSessionStatus(itemStatus);
+  const nextAction = jobLastError
+    ? "主任务已同步；部分富化/分析有错误，可查看错误并重试。"
+    : terminal
+      ? "任务已完成，结果已回填。"
+      : "任务正在队列中运行，完成后会自动回填。";
   return {
     method: "search_session_history",
-    execute: false,
+    execute: Boolean(summary.execute || terminal || ["queued", "running", "already_queued"].includes(itemStatus)),
     url: {
       input: session.query_text,
       normalized: cleanText(item.source_url || session.query_text),
@@ -197,13 +215,20 @@ function urlResultFromSession(session: VkpiKolSearchHistoryItem): VkpiKolUrlDeep
     video_id: cleanText(payload.video_id),
     in_pool: Boolean(payload.in_pool || item.kol_pool_id),
     matched_kol_pool_id: Number(payload.matched_kol_pool_id || item.kol_pool_id) || null,
-    next_action: "history_restore",
+    next_action: nextAction,
     profile_flow: profileFlow,
-    video_flow: { ...videoFlow, job_last_error: jobLastError, job_status: jobStatus },
+    video_flow: {
+      ...videoFlow,
+      status: itemStatus || cleanText(videoFlow.status),
+      evidence_id: Number(item.evidence_id || videoFlow.evidence_id) || null,
+      job_last_error: jobLastError,
+      job_status: jobStatus,
+      analysis,
+    },
     creator_identity: asRecord(payload.creator_identity),
     video_metadata: asRecord(payload.video_metadata),
-    search_session: { id: session.id, session_id: session.id, status: session.status },
-    safety: { viltrox_fit_score_untouched: Boolean(payload.viltrox_fit_score_untouched) },
+    search_session: { id: session.id, session_id: session.id, status: session.status, item_status: itemStatus },
+    safety: { viltrox_fit_score_untouched: Boolean(payload.viltrox_fit_score_untouched ?? summary.viltrox_fit_score_untouched) },
   };
 }
 
@@ -339,8 +364,12 @@ function UrlSummary({
   const evidence = asRecord(videoFlow.evidence_result);
   const enqueue = asRecord(videoFlow.enqueue_result);
   const enqueueJob = asRecord(enqueue.job);
+  const analysis = asRecord(videoFlow.analysis);
+  const deepResult = asRecord(analysis.deep_result);
   const jobLastError = cleanText(videoFlow.job_last_error || profileFlow.job_last_error);
   const jobStatus = cleanText(videoFlow.job_status || profileFlow.job_status || videoFlow.status || profileFlow.status);
+  const flowStatus = cleanText(videoFlow.status || profileFlow.status || (result.search_session ? asRecord(result.search_session).item_status : ""));
+  const latency = durationLabel(analysis.latency_ms);
   const platform = cleanText(result.platform).toLowerCase();
   const isVideo = result.url_type === "video";
   const profileOperation = cleanText(profileFlow.operation);
@@ -356,7 +385,7 @@ function UrlSummary({
   const tiktokRisk = isVideo && platform === "tiktok";
   const retryableFailure = Boolean(isVideo && jobLastError && ["failed", "blocked"].includes(jobStatus));
   const executeDone = result.execute && (
-    isVideo ? videoExecutionDone(videoFlow.status) : cleanText(profileFlow.status) === "ready"
+    isVideo ? videoExecutionDone(flowStatus || videoFlow.status) : cleanText(profileFlow.status) === "ready"
   );
   const actionLabel = isVideo
     ? retryableFailure ? "重试分析" : knownCreator ? "只分析此视频" : "建档并分析"
@@ -411,10 +440,17 @@ function UrlSummary({
         </div>
       ) : null}
       {executeDone ? (
-        <div className="mt-2 rounded-md border border-emerald-300/20 bg-emerald-400/[0.10] px-2 py-1.5 text-[10.5px] text-emerald-100">
-          执行完成: {isVideo
-            ? `kol_pool_id ${display(videoFlow.kol_pool_id || result.matched_kol_pool_id)} · evidence_id ${display(videoFlow.evidence_id || evidence.evidence_id)} · job_id ${display(enqueueJob.id || enqueue.id)}`
+        <div className={`mt-2 rounded-md border px-2 py-1.5 text-[10.5px] ${
+          flowStatus === "partial"
+            ? "border-amber-300/20 bg-amber-400/[0.10] text-amber-100"
+            : "border-emerald-300/20 bg-emerald-400/[0.10] text-emerald-100"
+        }`}>
+          {flowStatus === "partial" ? "部分完成" : "执行完成"}: {isVideo
+            ? `kol_pool_id ${display(videoFlow.kol_pool_id || result.matched_kol_pool_id)} · evidence_id ${display(videoFlow.evidence_id || evidence.evidence_id || analysis.source_evidence_id)} · job_id ${display(enqueueJob.id || enqueue.id)}`
             : `kol_pool_id ${display(profileFlow.kol_pool_id)} · V6 Fit 未触碰 ${display(profileFlow.viltrox_fit_score_untouched)}`}
+          {analysis.cache_id ? ` · cache #${display(analysis.cache_id)}` : ""}
+          {deepResult.id ? ` · deep #${display(deepResult.id)}` : ""}
+          {latency ? ` · 耗时 ${latency}` : ""}
         </div>
       ) : null}
       {jobLastError ? (
