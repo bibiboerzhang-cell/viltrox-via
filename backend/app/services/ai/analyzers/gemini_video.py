@@ -30,6 +30,10 @@ from app.services.media.video_keyframes import build_anthropic_multimodal_conten
 logger = get_logger(__name__)
 _FINAL_V1_CONTEXT_CACHES: dict[str, str] = {}
 DEFAULT_GEMINI_FINAL_V1_MODELS = ["gemini-3-flash-preview"]
+GEMINI_VIDEO_YTDLP_DOWNLOAD_TIMEOUT_SECONDS = max(
+    60,
+    int(os.environ.get("GEMINI_VIDEO_YTDLP_DOWNLOAD_TIMEOUT_SEC", "900")),
+)
 
 
 def final_v1_gemini_models(value: Any = None) -> list[str]:
@@ -1592,7 +1596,9 @@ vlog类：真实感、器材自然使用是核心
     
     # ===== SLOW PATH: yt-dlp download + File API upload =====
     try:
-        # Step 1: Download FULL video at 720p (no time limit)
+        # Step 1: Download FULL video at 720p. Keep this below the worker
+        # subprocess timeout so failures report as a download timeout, not a
+        # generic Gemini child-process kill.
         import tempfile
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = os.path.join(tmpdir, "gemini_video.mp4")
@@ -1610,7 +1616,11 @@ vlog类：真实感、器材自然使用是核心
                 dl_cmd += ["--proxy", YTDLP_PROXY]
             dl_cmd.append(url)
             dl_proc = await asyncio.to_thread(
-                lambda: subprocess.run(dl_cmd, capture_output=True, timeout=600)
+                lambda: subprocess.run(
+                    dl_cmd,
+                    capture_output=True,
+                    timeout=GEMINI_VIDEO_YTDLP_DOWNLOAD_TIMEOUT_SECONDS,
+                )
             )
             if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) < 1000:
                 result["error"] = "yt-dlp video download failed for Gemini analysis"
