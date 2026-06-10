@@ -874,6 +874,8 @@ def _execute_new_creator_video_flow(
     write_result: dict[str, Any] = {}
     evidence_result: dict[str, Any] = {}
     enqueue_result: dict[str, Any] = {}
+    representative_video_analysis: dict[str, Any] = {}
+    history_video_evidence: dict[str, Any] = {}
     kol_pool_id: int | None = None
     evidence_id: int | None = None
     status = "failed"
@@ -958,6 +960,34 @@ def _execute_new_creator_video_flow(
                         )
                         changed_ids.extend(_fit_changed_ids(enqueue_result))
                         status = str(enqueue_result.get("status") or "enqueue_unknown")
+                if kol_pool_id:
+                    onboarding_body = {
+                        **body,
+                        "mode": "account_deep",
+                        "representative_video_limit": body.get("representative_video_limit") or 3,
+                        "history_video_limit": body.get("history_video_limit") or max_posts,
+                        "materialize_history_videos": True,
+                        "exclude_video_urls": [classified.normalized_url],
+                    }
+                    incremental_state = _profile_incremental_state(None)
+                    representative_video_analysis = _execute_profile_representative_video_analysis(
+                        conn,
+                        classified=profile_classified,
+                        kol_pool_id=kol_pool_id,
+                        crawl=crawl,
+                        body=onboarding_body,
+                        incremental_state=incremental_state,
+                    )
+                    history_video_evidence = _execute_profile_history_video_evidence(
+                        conn,
+                        classified=profile_classified,
+                        kol_pool_id=kol_pool_id,
+                        crawl=crawl,
+                        body=onboarding_body,
+                        incremental_state=incremental_state,
+                    )
+                    changed_ids.extend(_fit_changed_ids(representative_video_analysis))
+                    changed_ids.extend(_fit_changed_ids(history_video_evidence))
     except Exception as exc:
         try:
             conn.rollback()
@@ -978,7 +1008,8 @@ def _execute_new_creator_video_flow(
         )
         changed_ids.extend(_fit_changed_ids(account_dossier_extract_job or {}))
 
-    run_status = "ready" if status in {"queued", "already_queued", "already_analyzed"} else "failed"
+    representative_worker_touched = bool(representative_video_analysis.get("worker_touched"))
+    run_status = "ready" if status in {"queued", "already_queued", "already_analyzed"} or representative_worker_touched else "failed"
     run_id = _record_deep_crawl_run(
         conn,
         kol_pool_id=kol_pool_id,
@@ -1000,6 +1031,8 @@ def _execute_new_creator_video_flow(
             "video_metadata": video_flow.get("video_metadata"),
             "evidence_result": _compact_video_evidence_result(evidence_result),
             "enqueue_result": _compact_enqueue_result(enqueue_result),
+            "representative_video_analysis": representative_video_analysis,
+            "history_video_evidence": history_video_evidence,
             "account_dossier_extract_job": account_dossier_extract_job,
             "viltrox_fit_score_changed_ids": sorted(set(changed_ids)),
             "elapsed_ms": int((time.monotonic() - started) * 1000),
@@ -1007,7 +1040,15 @@ def _execute_new_creator_video_flow(
     )
 
     worker_touched = status == "queued"
-    business_tables_written = bool(kol_pool_id) or bool(evidence_result.get("status") in {"created", "reused"}) or worker_touched or bool(run_id)
+    history_written = bool((history_video_evidence.get("materialized") or 0) or (history_video_evidence.get("reused") or 0))
+    business_tables_written = (
+        bool(kol_pool_id)
+        or bool(evidence_result.get("status") in {"created", "reused"})
+        or worker_touched
+        or representative_worker_touched
+        or history_written
+        or bool(run_id)
+    )
     return {
         **video_flow,
         "status": status,
@@ -1028,13 +1069,17 @@ def _execute_new_creator_video_flow(
         },
         "evidence_result": _compact_video_evidence_result(evidence_result),
         "enqueue_result": _compact_enqueue_result(enqueue_result),
+        "representative_video_analysis": representative_video_analysis,
+        "history_video_evidence": history_video_evidence,
         "account_dossier_extract_job": account_dossier_extract_job,
         "run_id": run_id,
         "run_status": run_status,
         "error": error or None,
         "crawl_performed": bool(crawl),
         "business_tables_written": business_tables_written,
-        "worker_touched": worker_touched or bool(account_dossier_extract_job and account_dossier_extract_job.get("status") == "queued"),
+        "worker_touched": worker_touched
+        or representative_worker_touched
+        or bool(account_dossier_extract_job and account_dossier_extract_job.get("status") == "queued"),
         "write_db": business_tables_written,
         "writes": ["vkpi_kol_pool", "vkpi_kol_video_evidence", "apify_jobs", "vkpi_kol_url_deep_crawl_runs"],
         "llm_calls_performed": False,
@@ -1092,7 +1137,12 @@ def _execute_profile_representative_video_analysis(
         }
 
     limit = _profile_representative_video_limit(body)
-    all_videos = _profile_representative_video_metadata(classified, crawl, limit=max(limit, _max_posts(body)))
+    all_videos = _profile_representative_video_metadata(
+        classified,
+        crawl,
+        limit=max(limit, _max_posts(body)),
+        exclude_video_urls=_profile_exclude_video_urls(body),
+    )
     videos, skipped_by_incremental = _filter_incremental_profile_videos(all_videos, incremental_state, limit=limit)
     if not videos:
         return {
@@ -1220,7 +1270,12 @@ def _execute_profile_history_video_evidence(
         }
 
     limit = _profile_history_video_limit(body)
-    all_videos = _profile_representative_video_metadata(classified, crawl, limit=max(limit, _max_posts(body)))
+    all_videos = _profile_representative_video_metadata(
+        classified,
+        crawl,
+        limit=max(limit, _max_posts(body)),
+        exclude_video_urls=_profile_exclude_video_urls(body),
+    )
     videos, skipped_by_incremental = _filter_incremental_profile_videos(all_videos, incremental_state, limit=limit)
     if not videos:
         return {
@@ -1345,11 +1400,17 @@ def _profile_representative_video_metadata(
     crawl: dict[str, Any],
     *,
     limit: int,
+    exclude_video_urls: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     items = crawl.get("videos_items") if isinstance(crawl.get("videos_items"), list) else []
     provider_source = str(crawl.get("provider_source") or "").strip()
     results: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
+    excluded_keys = {
+        _profile_video_dedupe_key(classified.platform, url)
+        for url in (exclude_video_urls or [])
+        if str(url or "").strip()
+    }
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -1358,6 +1419,8 @@ def _profile_representative_video_metadata(
         if not content_url:
             continue
         dedupe_key = _profile_video_dedupe_key(classified.platform, content_url)
+        if dedupe_key in excluded_keys:
+            continue
         if dedupe_key in seen_urls:
             continue
         seen_urls.add(dedupe_key)
@@ -1365,6 +1428,19 @@ def _profile_representative_video_metadata(
         if len(results) >= limit:
             break
     return results
+
+
+def _profile_exclude_video_urls(body: dict[str, Any]) -> list[str]:
+    values = body.get("exclude_video_urls")
+    if values is None:
+        values = body.get("exclude_video_url")
+    if values is None:
+        return []
+    if isinstance(values, str):
+        values = [values]
+    if not isinstance(values, list):
+        return []
+    return [str(value).strip() for value in values if str(value or "").strip()]
 
 
 def _filter_incremental_profile_videos(
