@@ -29,11 +29,41 @@ from app.services.media.video_keyframes import build_anthropic_multimodal_conten
 
 logger = get_logger(__name__)
 _FINAL_V1_CONTEXT_CACHES: dict[str, str] = {}
-DEFAULT_GEMINI_FINAL_V1_MODELS = ["gemini-3-flash-preview"]
+DEFAULT_GEMINI_FINAL_V1_MODELS = ["gemini-3-flash-preview", "gemini-2.5-flash"]
 GEMINI_VIDEO_YTDLP_DOWNLOAD_TIMEOUT_SECONDS = max(
     60,
     int(os.environ.get("GEMINI_VIDEO_YTDLP_DOWNLOAD_TIMEOUT_SEC", "900")),
 )
+
+
+class ProviderPressureExhausted(RuntimeError):
+    """All models in the chain failed with provider-pressure class errors.
+
+    Raised by the fast path instead of falling through to the slow path:
+    switching transport (download + File API) hits the same overloaded models,
+    so the download would be pure waste. Time-based retry is owned by the
+    worker's backoff machinery.
+    """
+
+
+_PROVIDER_PRESSURE_MARKERS = (
+    "429",
+    "502",
+    "503",
+    "504",
+    "resource_exhausted",
+    "resource exhausted",
+    "high demand",
+    "overloaded",
+    "rate limit",
+    "service unavailable",
+    "internal error",
+)
+
+
+def _is_provider_pressure_error(text: str) -> bool:
+    low = (text or "").lower()
+    return any(marker in low for marker in _PROVIDER_PRESSURE_MARKERS)
 
 
 def final_v1_gemini_models(value: Any = None) -> list[str]:
@@ -1413,11 +1443,11 @@ vlog类：真实感、器材自然使用是核心
     gemini_file = None
     tmp_path = None
 
-    # ── Model priority list (April 2026) ──────────────────────────────────────
-    # gemini-3-flash-preview: shut down; gemini-3-pro-preview: shut down 2026-03-09
-    # gemini-1.5-x: shut down 2025-04-29; gemini-2.0-flash: GA until 2026-06-01
-    # Safe stable order: 2.5-flash first (best price/perf, video capable),
-    # then 2.5-pro (slower/pricier but more accurate), then 2.0-flash as fallback.
+    # ── Model priority list (June 2026) ─────────────────────────────────────
+    # Reality check 2026-06: 3-flash-preview LIVE (primary, cache 271/273 evidence),
+    # 3.1-pro-preview LIVE (accuracy backup), 2.5-flash = stable GA fallback.
+    # Keep comments synchronized with the table; stale model docs caused
+    # provider-pressure recovery confusion during recycle wave N2.
     GEMINI_MODELS = [
         "gemini-3-flash-preview",    # PRIMARY — best price/perf, multimodal
         "gemini-3.1-pro-preview",    # BACKUP — highest accuracy, long videos
@@ -1587,9 +1617,19 @@ vlog类：真实感、器材自然使用是核心
             
             if _fast_path_success:
                 return result  # Done! Skip slow path entirely.
+            elif _fast_path_err and _is_provider_pressure_error(_fast_path_err):
+                logger.warning(
+                    "gemini_fast_path_provider_pressure_abort",
+                    extra={"error": _fast_path_err[:120]},
+                )
+                raise ProviderPressureExhausted(
+                    f"provider_pressure(all models tried): {_fast_path_err}"
+                )
             else:
                 logger.warning("gemini_fast_path_fallback_to_download")
                 # Fall through to slow path below
+        except ProviderPressureExhausted:
+            raise
         except Exception as fast_err:
             logger.warning("gemini_fast_path_exception", extra={"error": str(fast_err)})
             # Fall through to slow path

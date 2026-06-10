@@ -11,6 +11,7 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.workers import apify_jobs_worker as worker  # noqa: E402
+from app.services.ai.analyzers import gemini_video  # noqa: E402
 
 
 class ApifyJobsProviderRetryTests(unittest.TestCase):
@@ -18,6 +19,7 @@ class ApifyJobsProviderRetryTests(unittest.TestCase):
         samples = [
             "429 RESOURCE_EXHAUSTED quota exceeded",
             "RuntimeError: Gemini video analysis failed: 503 UNAVAILABLE high demand",
+            str(gemini_video.ProviderPressureExhausted("provider_pressure(all models tried): 503 UNAVAILABLE")),
             "500 internal server error",
             "service unavailable: temporarily overloaded",
         ]
@@ -25,6 +27,12 @@ class ApifyJobsProviderRetryTests(unittest.TestCase):
         for message in samples:
             with self.subTest(message=message):
                 self.assertEqual(worker._error_category(message), "provider_pressure")
+
+    def test_final_v1_model_chain_has_stable_fallback(self) -> None:
+        self.assertEqual(
+            gemini_video.final_v1_gemini_models(""),
+            ["gemini-3-flash-preview", "gemini-2.5-flash"],
+        )
 
     def test_permanent_media_errors_do_not_become_provider_pressure(self) -> None:
         cases = {
