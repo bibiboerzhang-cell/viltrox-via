@@ -85,18 +85,37 @@ def failure_rate_section(
     failed = _as_int(row.get("failed_count"))
     blocked = _as_int(row.get("blocked_count"))
     provider_pressure = _as_int(row.get("provider_pressure_count"))
+    provider_pressure_oldest_age_seconds = _as_float(row.get("provider_pressure_oldest_age_seconds"))
     total = done + failed + blocked
-    rate = (failed + blocked) / total if total else 0.0
+    category_counts = {str(item.get("category") or "unknown"): _as_int(item.get("count")) for item in categories}
+    content_unavailable = category_counts.get("content_unavailable", 0)
+    excluded = {"provider_pressure", "content_unavailable"}
+    pipeline_failure_count = sum(
+        count for category, count in category_counts.items() if category not in excluded
+    )
+    raw_failure_rate = (failed + blocked) / total if total else 0.0
+    pipeline_failure_rate = pipeline_failure_count / total if total else 0.0
+    provider_pressure_share = provider_pressure / total if total else 0.0
+    provider_pressure_warning = provider_pressure_oldest_age_seconds >= 7200 and provider_pressure_share > 0.5
     return {
-        "status": _status(danger=total > 0 and rate >= danger_rate, warning=total > 0 and rate >= warning_rate),
+        "status": _status(
+            danger=total > 0 and pipeline_failure_rate >= danger_rate,
+            warning=(total > 0 and pipeline_failure_rate >= warning_rate) or provider_pressure_warning,
+        ),
         "window_terminal_count": total,
         "done_count": done,
         "failed_count": failed,
         "blocked_count": blocked,
-        "failure_rate": round(rate, 6),
+        "failure_rate": round(raw_failure_rate, 6),
+        "pipeline_failure_rate": round(pipeline_failure_rate, 6),
+        "pipeline_failure_count": pipeline_failure_count,
         "warning_rate": warning_rate,
         "danger_rate": danger_rate,
         "provider_pressure_count": provider_pressure,
+        "provider_pressure_share": round(provider_pressure_share, 6),
+        "provider_pressure_oldest_age_seconds": round(provider_pressure_oldest_age_seconds, 3),
+        "provider_pressure_status": "warning" if provider_pressure_warning else "info",
+        "content_unavailable_count": content_unavailable,
         "by_error_category": categories,
     }
 
@@ -197,7 +216,14 @@ def read_health(
               COUNT(*) FILTER (WHERE status='done') AS done_count,
               COUNT(*) FILTER (WHERE status='failed') AS failed_count,
               COUNT(*) FILTER (WHERE status='blocked') AS blocked_count,
-              COUNT(*) FILTER (WHERE last_error_category='provider_pressure') AS provider_pressure_count
+              COUNT(*) FILTER (WHERE last_error_category='provider_pressure') AS provider_pressure_count,
+              COALESCE(
+                MAX(EXTRACT(EPOCH FROM (NOW() - updated_at))) FILTER (
+                  WHERE last_error_category='provider_pressure'
+                    AND status IN ('failed', 'blocked')
+                ),
+                0
+              ) AS provider_pressure_oldest_age_seconds
             FROM apify_jobs
             WHERE updated_at >= NOW() - make_interval(hours => %(hours)s)
               AND status IN ('done', 'failed', 'blocked')
@@ -264,8 +290,12 @@ def format_markdown(payload: dict[str, Any]) -> str:
             f"worker.running={worker.get('running_count')}",
             f"worker.stale_running={worker.get('stale_running_count')}",
             f"failure.status={failure.get('status')}",
-            f"failure.rate={failure.get('failure_rate')}",
+            f"failure.raw_rate={failure.get('failure_rate')}",
+            f"failure.pipeline_rate={failure.get('pipeline_failure_rate')}",
+            f"failure.pipeline_count={failure.get('pipeline_failure_count')}",
             f"failure.provider_pressure={failure.get('provider_pressure_count')}",
+            f"failure.provider_pressure_status={failure.get('provider_pressure_status')}",
+            f"failure.content_unavailable={failure.get('content_unavailable_count')}",
             f"cost.status={cost.get('status')}",
             f"cost.visible_total_usd={cost.get('visible_total_usd')}",
             "```",
