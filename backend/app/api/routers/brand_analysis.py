@@ -9,6 +9,7 @@ import json, time
 from datetime import datetime
 from fastapi import APIRouter, Request, HTTPException
 from app.api.dependencies.admin import get_admin
+from app.core.config import CLAUDE_MODEL
 from app.core.logging import get_logger
 from app.services.ai.retry import call_ai_with_retry
 from app.services.security.rate_limiter import rate_limit
@@ -155,7 +156,7 @@ async def analyze_brand(request: Request, body: dict):
         resp = call_ai_with_retry(
             "brand_analysis.claude",
             lambda: client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=CLAUDE_MODEL,
                 max_tokens=4000,
                 messages=[{"role": "user", "content": prompt}],
             ),

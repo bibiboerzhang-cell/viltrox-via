@@ -5,6 +5,7 @@ import json
 import re
 from typing import Any
 
+from app.core.config import CLAUDE_MODEL
 from app.services.ai.clients.claude_client import get_claude_client
 from app.services.ai.clients.openai_client import OPENAI_AVAILABLE, openai_client
 from app.services.ai.clients.gemini_client import GEMINI_AVAILABLE, gemini_client
@@ -66,7 +67,7 @@ async def _ask_claude(pack: dict) -> dict:
         def _call():
             return call_ai_with_retry(
                 "deepsight.triad.claude",
-                lambda: client.messages.create(model="claude-sonnet-4-20250514", max_tokens=1600, messages=[{"role": "user", "content": prompt}]),
+                lambda: client.messages.create(model=CLAUDE_MODEL, max_tokens=1600, messages=[{"role": "user", "content": prompt}]),
             )
         resp = await asyncio.to_thread(_call)
         text = _clean_json_text(resp.content[0].text if resp.content else "")

@@ -17,7 +17,7 @@ except ImportError:
     genai_types = None
 from app.services.ai.clients.openai_client import OPENAI_AVAILABLE
 from app.core.constants import VILTROX_CATALOG_PROMPT
-from app.core.config import ANTHROPIC_API_KEY
+from app.core.config import ANTHROPIC_API_KEY, CLAUDE_MODEL
 from app.core.logging import get_logger
 from app.services.scoring.creator import get_creator_profile
 from app.services.scoring.core import compute_weighted_scores
@@ -237,7 +237,7 @@ def analyze_video_with_claude(video_path: str, filename: str, creator_handle: st
             resp = call_ai_with_retry(
                 "claude_vision.video_frames",
                 lambda: _client.messages.create(
-                    model="claude-sonnet-4-20250514",
+                    model=CLAUDE_MODEL,
                     max_tokens=2000,
                     messages=[{"role":"user","content":_content}],
                 ),

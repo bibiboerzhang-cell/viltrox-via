@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from app.core.config import CLAUDE_MODEL
 from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains.costs import budget_guard
@@ -45,7 +46,7 @@ PROVIDER_CONFIG: dict[str, dict[str, Any]] = {
         "timeout": 30,
     },
     "anthropic": {
-        "model": os.getenv("VKPI_CLAUDE_MODEL", os.getenv("VKPI_WEEKLY_SUMMARY_MODEL", "claude-sonnet-4-20250514")),
+        "model": os.getenv("VKPI_CLAUDE_MODEL", os.getenv("VKPI_WEEKLY_SUMMARY_MODEL", CLAUDE_MODEL)),
         "endpoint": "https://api.anthropic.com/v1/messages",
         "input_cents_per_million": 25,
         "output_cents_per_million": 125,

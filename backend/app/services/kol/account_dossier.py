@@ -7,6 +7,7 @@ import re
 from datetime import datetime
 from typing import Any
 
+from app.core.config import CLAUDE_MODEL
 from app.core.logging import get_logger
 from app.db.connection import db_write, get_conn, is_postgres_runtime
 from app.services.ai.retry import call_ai_with_retry
@@ -692,7 +693,7 @@ DATA:
         resp = call_ai_with_retry(
             "kol_account_dossier.claude",
             lambda: client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=CLAUDE_MODEL,
                 max_tokens=1400,
                 messages=[{"role": "user", "content": prompt}],
             ),

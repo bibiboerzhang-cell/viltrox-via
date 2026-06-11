@@ -7,6 +7,7 @@ import json
 import re
 from typing import Dict
 
+from app.core.config import CLAUDE_MODEL
 from app.core.logging import get_logger
 from app.services.ai.clients.claude_client import ANTHROPIC_AVAILABLE, get_claude_client
 from app.services.ai.retry import call_ai_with_retry
@@ -114,7 +115,7 @@ Analyze this content and respond ONLY with valid JSON:
         resp = call_ai_with_retry(
             "claude_text.content",
             lambda: client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=CLAUDE_MODEL,
                 max_tokens=2000,
                 messages=[{"role": "user", "content": prompt}],
             ),
@@ -138,7 +139,7 @@ Analyze this content and respond ONLY with valid JSON:
                     vision_resp = call_ai_with_retry(
                         "claude_text.thumbnail",
                         lambda: client.messages.create(
-                            model="claude-sonnet-4-20250514",
+                            model=CLAUDE_MODEL,
                             max_tokens=600,
                             messages=[{"role": "user", "content": [
                                 {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": img_b64}},

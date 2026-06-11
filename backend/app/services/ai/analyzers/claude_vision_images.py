@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import re
 
-from app.core.config import ANTHROPIC_API_KEY
+from app.core.config import ANTHROPIC_API_KEY, CLAUDE_MODEL
 from app.core.logging import get_logger
 from app.services.ai.analyzers.claude_vision_client import _build_anthropic_client
 from app.services.ai.clients.claude_client import ANTHROPIC_AVAILABLE
@@ -99,7 +99,7 @@ def _analyze_images_batch(images_b64: list, title: str, platform: str, profile_h
         resp = call_ai_with_retry(
             "claude_vision.image_batch",
             lambda: client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=CLAUDE_MODEL,
                 max_tokens=2000,
                 messages=[{"role": "user", "content": content}],
             ),

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 
+from app.core.config import CLAUDE_MODEL
 from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.services.ai.retry import call_ai_with_retry
@@ -71,7 +72,7 @@ Score for relevance to the product, audience fit, authenticity, creative quality
         resp = call_ai_with_retry(
             "kol_content_scorer.claude",
             lambda: client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=CLAUDE_MODEL,
                 max_tokens=900,
                 messages=[{"role": "user", "content": prompt}],
             ),

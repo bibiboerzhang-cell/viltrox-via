@@ -21,6 +21,7 @@ import os
 import time
 from typing import Any, Optional
 
+from app.core.config import CLAUDE_MODEL
 from app.core.logging import get_logger
 from app.services.ai.retry import call_ai_with_retry
 from app.services.intelligence.lens_monitor import filter_videos_by_date, search_market_videos
@@ -262,7 +263,7 @@ def analyze_with_claude(lens_a: str, lens_b: str, stats_a: dict, stats_b: dict, 
         resp = call_ai_with_retry(
             "lens_compare.claude",
             lambda: client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=CLAUDE_MODEL,
                 max_tokens=2000,
                 messages=[{"role": "user", "content": prompt}],
             ),
