@@ -28,6 +28,7 @@ from app.core.logging import get_logger
 from app.db.connection import close_db_runtime_sync, db_connection_sync_scope
 from app.domains.costs import budget_guard
 from app.domains.kol.account_dossier_extract import upsert_account_dossier_extract
+from app.domains.projects import contracts as project_contracts
 from app.domains.kol.final_v1_extract import upsert_deep_analysis_from_final_v1_cache
 from app.domains.kol import profile_discovery as kol_profile_discovery
 from app.domains.kol import search_sessions as kol_search_sessions
@@ -1388,6 +1389,31 @@ def _process_account_dossier_extract(conn: psycopg.Connection[Any], job: dict[st
                 WHERE id=%s
                 """,
                 (job_status, last_error[:2000], _json(payload), int(job["id"])),
+            )
+
+
+def _process_project_contract_extract(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
+    contract_id = _int_or_none(payload.get("target_id"))
+    project_id = _int_or_none(payload.get("project_id"))
+    if not contract_id or not project_id:
+        raise ValueError("project_contract_extract payload must include target_id and project_id")
+    staff = {
+        "user_id": payload.get("triggered_by_user_id"),
+        "id": payload.get("triggered_by_user_id"),
+        "staff_id": payload.get("staff_id"),
+    }
+    # contracts.py uses sqlite-compat '?' via its own get_conn(); run inside the sync scope so
+    # placeholders are translated and never touch this worker's raw psycopg connection.
+    # R2 ordering: the core writes domain state (extraction_status='ready'/'failed' + cache)
+    # and commits BEFORE we mark the job done; on failure it re-raises to _fail_job. Re-runs
+    # are idempotent (cache upsert + contract row UPDATE overwrite with the same result).
+    with db_connection_sync_scope():
+        project_contracts.run_contract_extraction_for_job(int(project_id), int(contract_id), staff=staff)
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE apify_jobs SET status='done', last_error=NULL, updated_at=NOW() WHERE id=%s",
+                (int(job["id"]),),
             )
 
 
@@ -2932,6 +2958,9 @@ def _process_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> None:
         return
     if str(job.get("job_type") or "").strip().lower() == "account_dossier_extract":
         _process_account_dossier_extract(conn, job, payload)
+        return
+    if str(job.get("job_type") or "").strip().lower() == "project_contract_extract":
+        _process_project_contract_extract(conn, job, payload)
         return
     target_type, target_id = _target(payload)
     if not target_type or not target_id:

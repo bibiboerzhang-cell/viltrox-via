@@ -526,6 +526,34 @@ def enqueue_contract_extract_job(
     }
 
 
+def run_contract_extraction_for_job(
+    project_id: int,
+    contract_id: int,
+    *,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """apify worker entry: run extraction for a contract already marked 'processing' by enqueue.
+
+    Uses contracts-local get_conn() (sqlite-compat '?'); the worker wraps this in
+    db_connection_sync_scope() so the abstraction layer translates placeholders.
+    Non-PDF returns skipped (defensive — enqueue already filters). Failure marks the
+    contract failed (inside the core) and re-raises so the worker's _fail_job retries.
+    """
+    conn = get_conn()
+    contract = get_contract(project_id, contract_id, staff=staff, write=True)
+    if not str(contract.get("file_name") or "").lower().endswith(".pdf"):
+        return {"contract": contract, "extraction": {"status": "skipped", "reason": "not_pdf"}}
+    context = _assignment_context(
+        conn,
+        int(project_id),
+        _int(contract.get("assignment_id")) or None,
+        _int(contract.get("kol_pool_id")) or None,
+    )
+    return _run_contract_extraction_core(
+        conn, project_id, contract_id, contract=contract, context=context, staff=staff
+    )
+
+
 def update_contract(project_id: int, contract_id: int, body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     get_contract(project_id, contract_id, staff=staff, write=True)
     allowed = {
