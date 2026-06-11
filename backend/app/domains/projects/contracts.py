@@ -374,7 +374,9 @@ def create_contract_from_file(
     contract = get_contract(project_id, contract_id, staff=staff)
     if ext != ".pdf":
         return {"contract": contract, "extraction": {"status": "skipped", "reason": "doc_docx_archive_only"}}
-    return {**run_contract_extraction(project_id, contract_id, local_path=str(path), context=context, staff=staff), "contract": get_contract(project_id, contract_id, staff=staff)}
+    # PDF 提取改异步:入队由 apify worker 执行(F2 裁决:无同步 fallback)。
+    # worker 会从 R2 重新下载,upload 时的 local_path 不再透传。
+    return enqueue_contract_extract_job(project_id, contract_id, staff=staff)
 
 
 def run_contract_extraction(

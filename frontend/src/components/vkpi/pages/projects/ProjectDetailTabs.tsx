@@ -565,6 +565,11 @@ function ContractArchiveCard({
       {contract.extraction_status === 'skipped' ? (
         <div className="rounded-lg border border-slate-500/20 bg-slate-500/10 p-3 text-[11px] text-slate-300">DOC/DOCX 已归档，v1 仅自动提取 PDF。可查看原文件，或上传 PDF 版本触发 Claude 条款提取。</div>
       ) : null}
+      {contract.extraction_status === 'failed' ? (
+        <div className="rounded-lg border border-red-500/25 bg-red-500/10 p-3 text-[11px] text-red-300">
+          提取失败{(contract.raw_extracted_json as Record<string, unknown> | undefined)?.error ? `：${String((contract.raw_extracted_json as Record<string, unknown>).error).slice(0, 200)}` : ''}。可点「重新提取」重新入队。
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
         {[

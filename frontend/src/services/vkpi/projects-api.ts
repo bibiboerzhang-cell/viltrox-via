@@ -178,7 +178,7 @@ export async function uploadProjectContract(
   body.append("file", file);
   if (payload.assignmentId) body.append("assignment_id", String(payload.assignmentId));
   if (payload.kolPoolId) body.append("kol_pool_id", String(payload.kolPoolId));
-  return apiFetch<{ contract?: VkpiProjectContract; extraction?: Record<string, unknown>; budget?: Record<string, unknown> }>(
+  return apiFetch<{ status?: string; contract?: VkpiProjectContract; job?: Record<string, unknown> | null; extraction?: Record<string, unknown>; budget?: Record<string, unknown> }>(
     `/api/admin/vkpi/projects/${encodeURIComponent(projectId)}/contracts/upload`,
     { method: "POST", body, timeoutMs: 150000 },
     token,

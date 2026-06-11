@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { PackageCheck } from 'lucide-react';
 import type { VkpiKolOption, VkpiProjectRow, VkpiProjectStage } from '../../vkpiTypes';
 import { stageLabels } from '../../shared/vkpiConstants';
@@ -132,6 +132,9 @@ export function ProjectDetailView({
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
   const [confirmingAction, setConfirmingAction] = useState(false);
   const [taskReminderOpen, setTaskReminderOpen] = useState(false);
+  const contractPollStartRef = useRef(0);
+  const contractStallWarnedRef = useRef(false);
+  const contractPollStoppedRef = useRef(false);
   const [videoAnalysisCache, setVideoAnalysisCache] = useState<VkpiProjectVideoAnalysisCacheResponse | null>(null);
   const [videoQaCache, setVideoQaCache] = useState<VkpiProjectVideoAnalysisCacheResponse | null>(null);
   const [videoAnalysisLoading, setVideoAnalysisLoading] = useState(false);
@@ -454,17 +457,14 @@ export function ProjectDetailView({
       return;
     }
     const isPdf = /\.pdf$/i.test(file.name);
-    const activityId = `contract-upload-${file.name}-${Date.now()}`;
     setContractActionId('upload');
-    if (isPdf) emitLlmActivity({ id: activityId, label: `合同提取 · ${file.name}`, kind: '合同提取', active: true });
     try {
       await uploadProjectContract(apiToken, project.id, file, { assignmentId, kolPoolId });
       await loadContracts();
-      setNotice({ tone: 'success', title: '合同已归档', body: isPdf ? 'Claude 已提取合同条款，请人工确认关键字段。' : '文件已存档；DOC/DOCX 暂不自动提取。' });
+      setNotice({ tone: 'success', title: '合同已归档', body: isPdf ? '条款提取已入队，完成后此处自动回填；进度见左侧任务泳道。' : '文件已存档；DOC/DOCX 暂不自动提取。' });
     } catch (error) {
       setNotice({ tone: 'warning', title: '合同上传失败', body: error instanceof Error ? error.message : '合同上传失败。' });
     } finally {
-      if (isPdf) emitLlmActivity({ id: activityId, label: `合同提取 · ${file.name}`, kind: '合同提取', active: false });
       setContractActionId('');
     }
   };
@@ -534,17 +534,15 @@ export function ProjectDetailView({
 
   const retryContractExtraction = async (contractId: number) => {
     if (!apiToken) return;
-    const activityId = `contract-extract-${contractId}`;
     setContractActionId(`extract:${contractId}`);
-    emitLlmActivity({ id: activityId, label: `合同重新提取 · #${contractId}`, kind: '合同提取', active: true });
     try {
-      await extractProjectContract(apiToken, project.id, contractId);
+      const result = await extractProjectContract(apiToken, project.id, contractId);
       await loadContracts();
-      setNotice({ tone: 'success', title: '合同已重新提取', body: 'Claude 提取结果已刷新，请人工确认。' });
+      const already = String(result?.status || '').startsWith('already');
+      setNotice({ tone: 'success', title: already ? '提取任务已在队列中' : '提取任务已入队', body: '完成后此处自动回填；进度见左侧任务泳道。' });
     } catch (error) {
-      setNotice({ tone: 'warning', title: '重新提取失败', body: error instanceof Error ? error.message : '合同重新提取失败。' });
+      setNotice({ tone: 'warning', title: '重新提取失败', body: error instanceof Error ? error.message : '合同重新提取入队失败。' });
     } finally {
-      emitLlmActivity({ id: activityId, label: `合同重新提取 · #${contractId}`, kind: '合同提取', active: false });
       setContractActionId('');
     }
   };

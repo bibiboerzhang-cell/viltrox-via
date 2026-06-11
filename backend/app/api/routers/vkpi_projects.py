@@ -176,7 +176,7 @@ def delete_project_contract(project_id: int, contract_id: int, staff=Depends(req
 @router.post("/projects/{project_id}/contracts/{contract_id}/extract")
 def extract_project_contract(project_id: int, contract_id: int, staff=Depends(require_tab("vkpi", "write"))):
     try:
-        return contracts.run_contract_extraction(project_id, contract_id, staff=staff)
+        return contracts.enqueue_contract_extract_job(project_id, contract_id, staff=staff)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
