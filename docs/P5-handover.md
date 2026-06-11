@@ -12,9 +12,15 @@
 | `(C2)` | feat(worker): project_contract_extract branch + handler | 闸C | **代码已提交,worker 未重载** → 运行中仍是旧 worker |
 
 ## 窗口动作(迁移 / worker 重载 / 铁律对账)
-| 时刻 | 动作 | migration | worker PID(前→后) | 启动回显 | 对账(fit_score 零写入) |
+| 时刻 | 动作 | migration | worker PID(前→后) | admin master | 对账(fit_score 零写入) |
 |---|---|---|---|---|---|
-| — | 尚无窗口动作 | 106 未 apply | 运行中 PID 待查(旧代码) | — | — |
+| 2026-06-11 14:12 | pg_dump 出工作树 | — | — | — | `~/vkpi-db-backups/viltrox2-pre106-20260611T141238.dump`(48M,TOC 2453,可 restore) |
+| 2026-06-11 14:13 | apply 106 | 106 ✅(净增 2 行预算 scope,幂等;schema_migrations 已记) | — | — | cron=$5 / single=$1 已入 vkpi_provider_budget_caps |
+| 2026-06-11 14:14 | worker 重载(单次) | — | 68403 → **61087** | — | 新进程载入 _process_project_contract_extract + _process_project_retrospective(AST 实证),回显正常、空转健康 |
+| 2026-06-11 14:15 | admin-web HUP + npm build | — | — | 46951(workers 61574/61575) | C3/C9 端点 403=已注册;dist=36c3ae70 |
+| 2026-06-11 14:15 | 铁律对账 | — | — | — | retrospective_aggregate.py 写 SQL 触 fit/kol_pool=**0**(5 处命中全为 docstring/diagnostics 标志);kol_pool 指纹基线 行1123 / fit_score合计 507.4200 / fit_reason非空 1123(跑复盘任务后应不变) |
+
+**激活完成(commit 38d44af3/2a92f719/39011c89/36c3ae70 全生效)。** 合同异步链 + 复盘聚合 + 费用估算 + 请求合一 现已在浏览器可用。回滚序:G4→G3→G2→G1 + 106 down + worker/admin 重载回旧。
 
 ## 一波备稿(未提交,全程 tsc+py_compile 绿,未激活)
 > 单轨执行;基线 HEAD e90f28b8。改 11 文件 + 新增 3 文件(retrospective_aggregate.py、migration 106 up/down)。
