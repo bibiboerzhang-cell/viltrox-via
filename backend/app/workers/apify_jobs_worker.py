@@ -3271,7 +3271,12 @@ def run_worker() -> None:
                         _process_job(conn, job)
                     logger.info("apify_jobs job done | id=%s", job["id"])
                 except Exception as exc:
-                    logger.exception("apify_jobs job failed | id=%s", job.get("id"))
+                    logger.error(
+                        "apify_jobs job failed | id=%s category=%s error=%s",
+                        job.get("id"),
+                        _error_category(str(exc)),
+                        _redact_sensitive_text(f"{type(exc).__name__}: {exc}"),
+                    )
                     _fail_job(conn, int(job["id"]), exc)
     finally:
         close_db_runtime_sync()
