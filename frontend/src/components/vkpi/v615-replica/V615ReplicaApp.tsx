@@ -81,6 +81,9 @@ export function V615ReplicaApp(props: any = {}) {
     onToggleView,
     onLookupKol,
     onUpsertProjectTerms,
+    onUploadEvidenceFile,
+    onAddProjectShipment,
+    onMoveProjectStage,
     onSignOut,
   } = props;
   // V6.10: 从 localStorage 恢复
@@ -920,6 +923,9 @@ export function V615ReplicaApp(props: any = {}) {
                 onRefreshData,
                 onLookupKol,
                 onUpsertProjectTerms,
+                onUploadEvidenceFile,
+                onAddProjectShipment,
+                onMoveProjectStage,
                 onCreateProject: handleReplicaCreateProject,
                 onUpdateProject: handleReplicaUpdateProject,
                 onDeleteProject: handleReplicaDeleteProject,

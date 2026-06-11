@@ -72,7 +72,12 @@
 
 **P6 立案 · gemini thinking 饥饿(平台级,记档不修)**:`llm_gateway._call_google` 无 `thinkingConfig`,gemini-flash 动态思考计入 maxOutputTokens——凡要求**结构化 JSON 输出**的场景都会重演截断(复盘只是首例)。P6 方案候选:generationConfig 加 thinkingConfig budget / 按 purpose 路由非 thinking 模型 / 输出截断检测重试。
 
-**激活完成(commit 38d44af3/2a92f719/39011c89/36c3ae70 + 4ce7a9b7/b0833b78 + 9f8124cb/edaeb38d/7194ba09 全生效)。** 合同异步链 + 复盘聚合 + 费用估算 + 请求合一 现已在浏览器可用。回滚序:G4→G3→G2→G1 + 106 down + worker/admin 重载回旧。
+**激活完成(commit 38d44af3/2a92f719/39011c89/36c3ae70 + 4ce7a9b7/b0833b78 + 9f8124cb/edaeb38d/7194ba09 全生效)。** 合同异步链 + 复盘聚合 + 费用估算 + 请求合一 现已在浏览器可用。
+**回滚序(2026-06-11 上线审查修订,沙箱实测)**:~~G4→G3→G2→G1 逐项 revert~~ **已实测在 G3 卡冲突,不可执行**。可执行路径三档:
+- 档1 仅前端:`git checkout f418a7f0 -- frontend/src && npm run build` 重发 dist(不动后端);
+- 档2 整段代码:`git revert --no-commit 38d44af3^..HEAD` → `npm run build` → psql 执行 `migrations/106_vkpi_project_retrospective_budget_down.sql`(仅 DELETE 两 budget scope)→ worker/admin 重载;
+- 档3 数据灾难:`pg_restore` 自 `~/vkpi-db-backups/viltrox2-pre106-20260611T141238.dump`(50MB,TOC 2453 已验可读)。
+档2 后验证:铁律指纹仍 1123/507.420/1123、schema_migrations 无 106 行、/health 200。
 
 ## 一波备稿(未提交,全程 tsc+py_compile 绿,未激活)
 > 单轨执行;基线 HEAD e90f28b8。改 11 文件 + 新增 3 文件(retrospective_aggregate.py、migration 106 up/down)。

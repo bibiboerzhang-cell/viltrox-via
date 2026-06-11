@@ -221,7 +221,10 @@ export function formatNumber(value: number | null | undefined) {
 }
 
 export function formatMoney(value: number | null | undefined) {
-  return currencyFormatter.format(value || 0);
+  // 钱口径(裁决②):null/undefined = 归因链路不存在 → '—';0 = 有链路但值为零 → $0.00。
+  // 此前 `value || 0` 把 null 击穿成 $0,与 formatMoneyShort 的语义打架(上线审查 BLOCKER#1)。
+  if (value == null) return '—';
+  return currencyFormatter.format(value);
 }
 
 export function formatRatio(value: number | null | undefined) {

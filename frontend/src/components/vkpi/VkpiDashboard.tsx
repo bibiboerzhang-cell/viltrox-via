@@ -415,6 +415,9 @@ export function VkpiDashboard({
           onToggleView={onToggleView}
           onLookupKol={onLookupKol}
           onUpsertProjectTerms={onUpsertProjectTerms}
+          onUploadEvidenceFile={onUploadEvidenceFile}
+          onAddProjectShipment={onAddProjectShipment}
+          onMoveProjectStage={onMoveProjectStage}
           onSignOut={onSignOut}
         />
       </TaskCenterProvider>
