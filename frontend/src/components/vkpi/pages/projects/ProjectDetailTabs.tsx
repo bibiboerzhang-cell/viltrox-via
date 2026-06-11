@@ -1,5 +1,5 @@
 import { Component, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
-import { Activity, AlertCircle, BookOpen, Boxes, Check, DollarSign, Download, Edit3, ExternalLink, Eye, FileText, Heart, ImageIcon, MessageCircle, MousePointerClick, Package, Plus, Send, Shield, ShoppingCart, Sparkles, TrendingUp, Upload, Video, X } from 'lucide-react';
+import { Activity, AlertCircle, BookOpen, Boxes, Check, DollarSign, ExternalLink, Eye, FileText, Heart, MessageCircle, MousePointerClick, Package, ShoppingCart, Sparkles, TrendingUp, Upload, Video, X } from 'lucide-react';
 import { stageLabels } from '../../shared/vkpiConstants';
 import type { VkpiProjectDetail, VkpiProjectRow } from '../../vkpiTypes';
 import type { VkpiAnalysisCacheEntry, VkpiProjectContract, VkpiProjectContractsResponse, VkpiProjectVideoAnalysisCacheItem, VkpiProjectVideoAnalysisCacheResponse } from '../../../../services/vkpi/projects-api';
@@ -43,66 +43,12 @@ function costLedgerTotals(costRows: Array<Record<string, unknown>>): CostLedgerT
 }
 
 type MaterialSection = 'assets' | 'logistics';
-type MaterialAssetStatus = 'ready' | 'draft' | 'todo';
-type MaterialAssetType = 'image' | 'pdf' | 'doc' | 'script' | 'email' | 'legal';
-
-interface MaterialAssetItem {
-  id: string;
-  name: string;
-  type: MaterialAssetType;
-  size: string;
-  date: string;
-  status: MaterialAssetStatus;
-  aiDesc: string;
-}
-
-const ASSET_ICON: Record<MaterialAssetType, typeof FileText> = {
-  image: ImageIcon,
-  pdf: FileText,
-  doc: FileText,
-  script: Edit3,
-  email: Send,
-  legal: Shield,
-};
-
-const STATUS_BG: Record<MaterialAssetStatus, string> = {
-  ready: 'bg-emerald-500/15 text-emerald-300',
-  draft: 'bg-amber-500/15 text-amber-300',
-  todo: 'bg-white/[0.05] text-slate-400',
-};
-
-const STATUS_LABEL: Record<MaterialAssetStatus, string> = {
-  ready: '已就绪',
-  draft: '起草中',
-  todo: '待处理',
-};
-
-const PROJECT_ASSETS: MaterialAssetItem[] = [
-  { id: 'a1', name: '产品图 (5 张高清)', type: 'image', status: 'ready', date: '5/15', aiDesc: '已生成 ZIP · 含 PNG + 缩略图', size: '12.4 MB' },
-  { id: 'a2', name: '技术参数手册 PDF', type: 'pdf', status: 'ready', date: '5/15', aiDesc: 'LLM 已生成 8 页 · 中英双语', size: '2.1 MB' },
-  { id: 'a3', name: '竞品对比表', type: 'doc', status: 'ready', date: '5/18', aiDesc: 'vs Sony GM / Sigma · 12 维度对比', size: '856 KB' },
-  { id: 'a4', name: '视频脚本模板', type: 'script', status: 'draft', date: '5/22', aiDesc: 'AI 起草 · 等 review', size: '—' },
-  { id: 'a5', name: 'EDM 邮件模板 (cold)', type: 'email', status: 'todo', date: '—', aiDesc: '未生成 · 点击 AI 起草', size: '—' },
-  { id: 'a6', name: '法务条款 (合同附件)', type: 'legal', status: 'ready', date: '5/10', aiDesc: '标准条款 · 已审', size: '412 KB' },
-];
-
-const PROJECT_EVIDENCE_COVERAGE = {
-  assigned: 725,
-  total: 1003,
-};
-
-function projectEvidenceCoverageLabel() {
-  const pct = Math.round((PROJECT_EVIDENCE_COVERAGE.assigned / Math.max(PROJECT_EVIDENCE_COVERAGE.total, 1)) * 100);
-  return `项目归属覆盖 ${pct}% · ${PROJECT_EVIDENCE_COVERAGE.assigned}/${PROJECT_EVIDENCE_COVERAGE.total} evidence 已归属`;
-}
 
 function buildMaterialBriefText(project: VkpiProjectRow | undefined, rows: VkpiProjectRow[], stats?: ProjectStatsSummary) {
   const projectTitle = project?.campaign || project?.productName || rows[0]?.productName || '未命名项目';
   const product = project?.productName || rows[0]?.productName || projectTitle;
   const sku = project?.productSku || rows[0]?.productSku || '待补充';
   const platforms = Array.from(new Set(rows.map((row) => row.platform).filter(Boolean))).join(', ') || '待确认';
-  const readyAssets = PROJECT_ASSETS.filter((asset) => asset.status === 'ready').map((asset) => asset.name).join(' / ') || '待准备';
-  const draftAssets = PROJECT_ASSETS.filter((asset) => asset.status !== 'ready').map((asset) => `${asset.name}(${STATUS_LABEL[asset.status]})`).join(' / ') || '无';
   const published = stats?.published ?? rows.filter((row) => stageIndex(row.stage) >= stageIndex('published')).length;
 
   return [
@@ -115,15 +61,7 @@ function buildMaterialBriefText(project: VkpiProjectRow | undefined, rows: VkpiP
     `已发布: ${published}`,
     `当前曝光: ${formatLargeNum(stats?.views || 0)}`,
     '',
-    '## 已就绪物料',
-    readyAssets,
-    '',
-    '## 待处理物料',
-    draftAssets,
-    '',
     '## 执行口径',
-    '- 所有 KOL 使用同一套产品图、参数手册、竞品对比表与法务条款。',
-    '- 视频脚本和 EDM 模板仍需人工 review 后再外发。',
     '- 合同、费用和交付证明以项目详情页当前记录为准。',
   ].join('\n');
 }
@@ -1694,7 +1632,7 @@ export function CampaignAnalyticsTab({
             {`${publishedKols.length}/${rows.length} 已发布,总曝光 ${formatLargeNum(stats.views)} · Shopify 点击 ${formatLargeNum(stats.clicks)},归因 GMV ${formatMoneyShort(stats.gmv)} · ROI ${roi}%。总成本 (当前 stats.cost 口径) ${formatMoneyShort(projectTotalCost)}`}
           </div>
           <div className="mt-1 text-[10px] text-amber-300 leading-relaxed">
-            {projectEvidenceCoverageLabel()} · 曝光/点赞/评论/排名仅统计已归属当前项目的数据,Shopify / GMV / ROI 等待独立归因链路。
+            曝光/点赞/评论/排名仅统计已归属当前项目的数据,Shopify / GMV / ROI 等待独立归因链路。
           </div>
         </div>
       </div>
@@ -2024,7 +1962,6 @@ export function CampaignMaterialsTab({
 }) {
   const [section, setSection] = useState<MaterialSection>('assets');
   const shipped = rows.filter((row) => stageIndex(row.stage) >= stageIndex('shipped'));
-  const readyAssets = PROJECT_ASSETS.filter((asset) => asset.status === 'ready').length;
   const briefText = buildMaterialBriefText(project, rows, stats);
 
   return (
@@ -2052,10 +1989,10 @@ export function CampaignMaterialsTab({
 
       {section === 'assets' ? (
         <div className="p-4 space-y-3">
-          <div className="rounded-lg border border-purple-500/30 bg-purple-500/5 p-3 flex items-start gap-2.5">
-            <Sparkles size={13} className="text-purple-300 mt-0.5 shrink-0" />
+          <div className="rounded-lg border border-white/[0.06] bg-white/[0.015] p-3 flex items-start gap-2.5">
+            <FileText size={13} className="text-slate-300 mt-0.5 shrink-0" />
             <div className="text-[10.5px] text-slate-300 flex-1">
-              项目级物料 · 所有 KOL 共享 · LLM 自动起草模板 + 你 review · <span className="text-purple-300">{readyAssets}/{PROJECT_ASSETS.length} 已就绪</span>
+              项目 Brief 汇总当前项目的产品 / SKU / 平台 / KOL / 曝光,供对外沟通使用。物料库（产品图、参数手册、脚本等）管理尚未接入。
             </div>
             <button
               className="px-2.5 py-1 rounded-md bg-white/[0.04] hover:bg-white/[0.08] text-slate-200 text-[10.5px] font-medium flex items-center gap-1"
@@ -2064,53 +2001,12 @@ export function CampaignMaterialsTab({
             >
               <FileText size={10} />复制 Brief
             </button>
-            <button className="px-2.5 py-1 rounded-md bg-purple-500/90 hover:bg-purple-500 text-white text-[10.5px] font-medium flex items-center gap-1" type="button" onClick={() => onPendingAction('上传/起草')}>
-              <Plus size={10} />上传/起草
-            </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {PROJECT_ASSETS.map((asset) => {
-              const Icon = ASSET_ICON[asset.type] || FileText;
-              return (
-                <div key={asset.id} className="rounded-lg border border-white/[0.06] bg-white/[0.015] p-3">
-                  <div className="flex items-start gap-2.5 mb-2">
-                    <div className="w-9 h-9 rounded-lg bg-white/[0.04] flex items-center justify-center shrink-0">
-                      <Icon size={16} className="text-slate-300" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-[11.5px] text-white font-medium truncate">{asset.name}</div>
-                      <div className="text-[9.5px] text-slate-500 mt-0.5">{asset.size} · {asset.date}</div>
-                    </div>
-                    <span className={`text-[9.5px] px-1.5 py-0.5 rounded font-medium ${STATUS_BG[asset.status]}`}>{STATUS_LABEL[asset.status]}</span>
-                  </div>
-                  <div className="flex items-start gap-1 mb-2 px-2 py-1 rounded bg-purple-500/[0.04]">
-                    <Sparkles size={9} className="text-purple-300 shrink-0 mt-0.5" />
-                    <div className="text-[9.5px] text-slate-400">{asset.aiDesc}</div>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    {asset.status === 'ready' ? (
-                      <button className="text-[10px] text-cyan-300 hover:text-cyan-200 px-2 py-0.5 rounded bg-cyan-500/10 flex items-center gap-1" type="button" onClick={() => onPendingAction(`${asset.name} 下载`)}>
-                        <Download size={9} />下载
-                      </button>
-                    ) : null}
-                    {asset.status === 'draft' ? (
-                      <button className="text-[10px] text-amber-300 hover:text-amber-200 px-2 py-0.5 rounded bg-amber-500/10 flex items-center gap-1" type="button" onClick={() => onPendingAction(`${asset.name} 审查`)}>
-                        <Eye size={9} />审查
-                      </button>
-                    ) : null}
-                    {asset.status === 'todo' ? (
-                      <button className="text-[10px] text-purple-200 hover:text-white px-2 py-0.5 rounded bg-purple-500/15 flex items-center gap-1" type="button" onClick={() => onPendingAction(`${asset.name} AI 起草`)}>
-                        <Sparkles size={9} />AI 起草
-                      </button>
-                    ) : null}
-                    <button className="text-[10px] text-slate-400 hover:text-white px-2 py-0.5 rounded hover:bg-white/[0.04] flex items-center gap-1" type="button" onClick={() => onPendingAction(`${asset.name} 编辑`)}>
-                      <Edit3 size={9} />编辑
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
+          <div className="rounded-lg border border-white/[0.06] bg-white/[0.01] p-8 text-center">
+            <Boxes size={24} className="text-slate-600 mx-auto mb-2" />
+            <div className="text-[11.5px] text-slate-400 mb-1">物料库尚未接入</div>
+            <div className="text-[10.5px] text-slate-500">产品图 / 参数手册 / 脚本等物料管理与 LLM 起草将在后续版本上线</div>
           </div>
         </div>
       ) : (
