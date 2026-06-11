@@ -1,6 +1,7 @@
 import { Component, useEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
 import { Activity, AlertCircle, BookOpen, Boxes, Check, DollarSign, ExternalLink, Eye, FileText, Heart, MessageCircle, MousePointerClick, Package, ShoppingCart, Sparkles, TrendingUp, Upload, Video, X } from 'lucide-react';
 import { stageLabels } from '../../shared/vkpiConstants';
+import { ProjectEvidenceForms } from '../../drawers/ProjectEvidenceForms';
 import type { VkpiProjectDetail, VkpiProjectRow } from '../../vkpiTypes';
 import type { VkpiAnalysisCacheEntry, VkpiProjectContract, VkpiProjectContractsResponse, VkpiProjectRetrospectiveResult, VkpiProjectVideoAnalysisCacheItem, VkpiProjectVideoAnalysisCacheResponse } from '../../../../services/vkpi/projects-api';
 import { formatLargeNum, formatMoneyShort, healthColor, PROJECT_STAGE_COLOR, PROJECT_STAGE_FLOW } from './projectDeliverableStyle';
@@ -2107,6 +2108,10 @@ export function CampaignMaterialsTab({
   productUnitCosts = {},
   onCopy,
   onPendingAction,
+  projectId,
+  onUpsertTerms,
+  onAddShipment,
+  onUploadEvidenceFile,
 }: {
   project?: VkpiProjectRow;
   rows: VkpiProjectRow[];
@@ -2115,6 +2120,10 @@ export function CampaignMaterialsTab({
   productUnitCosts?: Record<string, number>;
   onCopy?: (text: string, label: string) => Promise<void>;
   onPendingAction: (label: string) => void;
+  projectId?: string;
+  onUpsertTerms?: (payload: Record<string, unknown>) => Promise<void>;
+  onAddShipment?: (payload: Record<string, unknown>) => Promise<void>;
+  onUploadEvidenceFile?: (file: File, payload?: { entityType?: string; entityId?: string; purpose?: string }) => Promise<Record<string, unknown>>;
 }) {
   const [section, setSection] = useState<MaterialSection>('assets');
   const shipped = rows.filter((row) => stageIndex(row.stage) >= stageIndex('shipped'));
@@ -2159,11 +2168,25 @@ export function CampaignMaterialsTab({
             </button>
           </div>
 
-          <div className="rounded-lg border border-white/[0.06] bg-white/[0.01] p-8 text-center">
-            <Boxes size={24} className="text-slate-600 mx-auto mb-2" />
-            <div className="text-[11.5px] text-slate-400 mb-1">物料库尚未接入</div>
-            <div className="text-[10.5px] text-slate-500">产品图 / 参数手册 / 脚本等物料管理与 LLM 起草将在后续版本上线</div>
-          </div>
+          {projectId && (onUpsertTerms || onAddShipment) ? (
+            <div className="vkpi-campaign-evidence-forms rounded-lg border border-white/[0.06] bg-white/[0.015] p-4">
+              <ProjectEvidenceForms
+                projectId={projectId}
+                onUpsertTerms={onUpsertTerms}
+                onAddShipment={onAddShipment}
+                onUploadEvidenceFile={onUploadEvidenceFile}
+              />
+              <div className="mt-2 text-[10px] text-slate-500">
+                条款附件 / 物流凭证支持真实文件上传(落 evidence 存储)。消息记录与发布内容两个表单的写入接口待接入,按钮已禁用。
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-lg border border-white/[0.06] bg-white/[0.01] p-8 text-center">
+              <Boxes size={24} className="text-slate-600 mx-auto mb-2" />
+              <div className="text-[11.5px] text-slate-400 mb-1">物料库尚未接入</div>
+              <div className="text-[10.5px] text-slate-500">产品图 / 参数手册 / 脚本等物料管理与 LLM 起草将在后续版本上线</div>
+            </div>
+          )}
         </div>
       ) : (
         <div className="p-4 space-y-3">

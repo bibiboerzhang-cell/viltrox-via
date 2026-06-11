@@ -80,6 +80,7 @@ export function ProjectsPage({
   onDeleteProject,
   onAddProjectCost,
   onUpsertProjectTerms,
+  onAddProjectShipment,
   onUploadEvidenceFile,
   onSelectPage,
   onToggleView,
@@ -382,6 +383,7 @@ export function ProjectsPage({
             onUpdateProject={onUpdateProject}
             onAddProjectCost={onAddProjectCost}
             onUpsertProjectTerms={onUpsertProjectTerms}
+            onAddProjectShipment={onAddProjectShipment}
             onUploadEvidenceFile={onUploadEvidenceFile}
             kolOptions={data.kolOptions}
             onLoadAvailableKols={apiToken ? loadAvailableKols : undefined}

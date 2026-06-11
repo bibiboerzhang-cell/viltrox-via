@@ -716,3 +716,40 @@
 
 .vkpi-stage-action-person strong { color: #fff; font-size: 12px; }
 .vkpi-stage-action-person small { color: #64748b; font-size: 10px; }
+
+/* 物料 tab 的 ProjectEvidenceForms(复用旧 Drawer 浅色组件)深色作用域覆盖 —— 防白底 */
+.vkpi-campaign-evidence-forms .vkpi-detail-forms {
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+.vkpi-campaign-evidence-forms .vkpi-detail-forms__header strong { color: #f1f5f9; font-size: 13px; }
+.vkpi-campaign-evidence-forms .vkpi-detail-forms__header span { color: #8b94a3; font-size: 10px; }
+.vkpi-campaign-evidence-forms .vkpi-form-stack { border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 10px; background: rgba(255, 255, 255, 0.015); padding: 12px; margin-top: 10px; }
+.vkpi-campaign-evidence-forms .vkpi-form-stack h4 { color: #e2e8f0; font-size: 12px; margin: 0 0 8px; }
+.vkpi-campaign-evidence-forms .vkpi-form-stack input,
+.vkpi-campaign-evidence-forms .vkpi-form-stack select,
+.vkpi-campaign-evidence-forms .vkpi-form-stack textarea {
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  color: #e2e8f0;
+  font-size: 11px;
+  padding: 6px 8px;
+}
+.vkpi-campaign-evidence-forms .vkpi-form-stack input::placeholder,
+.vkpi-campaign-evidence-forms .vkpi-form-stack textarea::placeholder { color: #5b6472; }
+.vkpi-campaign-evidence-forms .vkpi-form-stack label { color: #8b94a3; font-size: 10px; }
+.vkpi-campaign-evidence-forms .vkpi-upload-row input[type="file"] { color: #8b94a3; background: transparent; border: none; }
+.vkpi-campaign-evidence-forms .vkpi-mini-button {
+  background: rgba(168, 85, 247, 0.85);
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+.vkpi-campaign-evidence-forms .vkpi-mini-button:disabled { background: rgba(255, 255, 255, 0.06); color: #5b6472; cursor: not-allowed; }
+.vkpi-campaign-evidence-forms .vkpi-inline-message.is-error { background: rgba(255, 59, 48, 0.12); color: #fca5a5; border-radius: 8px; padding: 8px 10px; font-size: 11px; }

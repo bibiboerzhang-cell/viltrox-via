@@ -104,6 +104,8 @@ export function ProjectDetailView({
   onMoveProjectStage,
   onAddProjectCost,
   onUpsertProjectTerms,
+  onAddProjectShipment,
+  onUploadEvidenceFile,
   kolOptions = [],
   onLoadAvailableKols,
   onAddKolsToCampaign,
@@ -472,13 +474,23 @@ export function ProjectDetailView({
   };
 
   const submitActionStub = async (kind: 'screenshot' | 'video' | 'contract', row: VkpiProjectRow, payload: Record<string, unknown>) => {
+    // 合同走真实归档链(合同归档 tab 的上传可关联本 KOL),不再调审计-only stub。
+    if (kind === 'contract') {
+      setActionModal(null);
+      setActiveTab('合同归档');
+      setNotice({ tone: 'info', title: '请用合同归档上传', body: '已切到「合同归档」tab——这里是真实链路(上传 + Claude 提取 + 入账),上传时可在「关联 KOL」选择本红人。' });
+      return;
+    }
     if (!onSubmitProjectKolActionStub) {
       setNotice({ tone: 'info', title: '暂存提醒', body: '当前环境缺少写入接口或 API token，本次操作不会修改项目数据。' });
       return;
     }
     const result = await onSubmitProjectKolActionStub(project.id, kolRef(row), kind, payload);
     if (kind === 'screenshot') {
-      setEvidenceOverrides((current) => ({ ...current, [row.id]: evidenceCountForRow(row) + 1 }));
+      // 后端 stub 只写审计日志、不存文件——不再做乐观 +1 假反馈(诚实化,扫描 #5)。
+      setActionModal(null);
+      setNotice({ tone: 'info', title: '已记录到审计日志', body: '截图文件存证尚未接入(开发中);如需上传留档,可先用「物料」tab 的条款附件/物流凭证表单。' });
+      return;
     }
     if (kind === 'video') {
       const metrics = (result.metrics || {}) as Record<string, unknown>;
@@ -488,10 +500,7 @@ export function ProjectDetailView({
       setActionModal(null);
       setNotice({ tone: 'success', title: '视频已写入 evidence', body: `${title} · 播放 ${views}` });
       await onProjectUpdated?.();
-      return;
     }
-    setActionModal(null);
-    setNotice({ tone: 'info', title: '已记录操作', body: '已提交到项目操作接口，文件和内容处理状态会在同步后更新。' });
   };
 
   const submitShippingInfo = async (row: VkpiProjectRow, payload: Record<string, unknown>) => {
@@ -1040,6 +1049,10 @@ export function ProjectDetailView({
           productUnitCosts={productUnitCosts}
           onCopy={copyMaterialText}
           onPendingAction={(label) => setNotice({ tone: 'info', title: '素材库功能开发中', body: `${label} 功能开发中，敬请期待。` })}
+          projectId={project.id}
+          onUpsertTerms={onUpsertProjectTerms ? async (payload) => { await onUpsertProjectTerms(project.id, payload); await onProjectUpdated?.(); } : undefined}
+          onAddShipment={onAddProjectShipment ? async (payload) => { await onAddProjectShipment(project.id, payload); await onProjectUpdated?.(); } : undefined}
+          onUploadEvidenceFile={onUploadEvidenceFile}
         />
       ) : activeTab === '费用' ? (
         <CampaignFinanceTab
