@@ -25,6 +25,7 @@
 | 2026-06-11 15:0x–16:18 | **Window B-fix**:复盘聚合三连修(用户授权重载+重跑) | — | 67105→75118→77965→**79067** | — | ① `9f8124cb` worker staff.id 反查(job 900 FK 违例:user 108→真 staff 84;`_resolve_job_staff`);② `edaeb38d` max_output_tokens 1200→4000 + 解析失败不写垃圾 cache;③ `7194ba09` 路由 openai(gemini-flash 思考吃光预算 out=43→574 仍截断)。**job 903=done**:insight 干净中文 / highlights4·risks3·next_steps2 / gpt-5.4-mini / 零触 fit_score。指纹 1123/507.4200/1123 不变;cache(project:3998)=ready |
 | 同窗 UI | 合同表单回填 `619646da` + deliverables 整理只读 `3f790c62`(去 JSON 代码)+ 泳道 ETA `4ce7a9b7` + 通知卡深色 `b0833b78` | — | — | — | 纯前端,dist 已 build |
 | 2026-06-11 16:4x | **钱口径上屏**(裁决①②③):汇总卡接 detail.roi 真值 + null('—',链路不存在)/0($0,有链路值为零)语义 + 明细行假 0→null + 合同费 metadata 补 assignment/kol_pool 键(历史行借重确认幂等补) | — | — | 46951(87311/87312) | `f80f3487`(前端)+ `d4d26175`(后端);dist=d4d26175。逐 KOL 分钱确认不做,并入四环链路工程(links 补 assignment 维) |
+| 2026-06-11 17:0x | **#5 物料链聚焦段**(裁决⑤,既批):onUploadEvidenceFile/onAddProjectShipment 断链补接(Dashboard→…→MaterialsTab 全链);物料 tab 挂真 ProjectEvidenceForms(条款附件/物流凭证真文件上传走 /evidence/uploads;消息/内容待接自禁用);泳道『合同』→切合同归档真链,『截图』去乐观+1 假反馈;浅色表单组件加 .vkpi-campaign-evidence-forms 深色作用域覆盖 | — | — | — | `0c45469c`;纯前端,dist=0c45469c;后端 stub 未动(合同路径前端绕开) |
 
 ## 模型路由表(2026-06-11 追认,复盘→openai 已批)
 | 场景 | provider/model | 理由一句 |
