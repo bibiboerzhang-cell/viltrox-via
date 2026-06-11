@@ -167,24 +167,17 @@ export function ProjectDetailView({
     }
     let cancelled = false;
     setVideoAnalysisLoading(true);
-    Promise.allSettled([
-      getProjectVideoAnalysisCache(apiToken, project.id),
-      getProjectVideoAnalysisCache(apiToken, project.id, 'video_analysis_final_v1_keyframe_qa'),
-    ])
-      .then(([finalV1Result, qaResult]) => {
+    // 批5:final_v1 + keyframe_qa 合并为一次请求(后端 by_method 拆分),省一个往返。
+    getProjectVideoAnalysisCacheMulti(apiToken, project.id, ['video_analysis_final_v1', 'video_analysis_final_v1_keyframe_qa'])
+      .then((payload) => {
         if (cancelled) return;
-        if (finalV1Result.status === 'fulfilled') {
-          setVideoAnalysisCache(finalV1Result.value);
-        } else {
-          const error = finalV1Result.reason;
-          setVideoAnalysisError(error instanceof Error ? error.message : 'final_v1 分析读取失败');
-        }
-        if (qaResult.status === 'fulfilled') {
-          setVideoQaCache(qaResult.value);
-        } else {
-          const error = qaResult.reason;
-          setVideoQaError(error instanceof Error ? error.message : '关键帧 QA 读取失败');
-        }
+        setVideoAnalysisCache(payload.by_method?.['video_analysis_final_v1'] ?? null);
+        setVideoQaCache(payload.by_method?.['video_analysis_final_v1_keyframe_qa'] ?? null);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setVideoAnalysisError(error instanceof Error ? error.message : 'final_v1 分析读取失败');
+        setVideoQaError(error instanceof Error ? error.message : '关键帧 QA 读取失败');
       })
       .finally(() => {
         if (!cancelled) setVideoAnalysisLoading(false);

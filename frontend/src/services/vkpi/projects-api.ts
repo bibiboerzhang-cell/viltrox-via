@@ -249,9 +249,24 @@ export async function deleteProjectContract(token: string, projectId: string, co
 }
 
 export async function extractProjectContract(token: string, projectId: string, contractId: number | string) {
-  return apiFetch<{ contract?: VkpiProjectContract; extraction?: Record<string, unknown>; budget?: Record<string, unknown> }>(
+  // 异步入队:立即返回 {status:'queued'|'already_*'|'skipped', job, contract},不再阻塞等待提取
+  return apiFetch<{ status?: string; contract?: VkpiProjectContract; job?: Record<string, unknown> | null; extraction?: Record<string, unknown>; budget?: Record<string, unknown> }>(
     `/api/admin/vkpi/projects/${encodeURIComponent(projectId)}/contracts/${encodeURIComponent(String(contractId))}/extract`,
-    { method: "POST", timeoutMs: 150000 },
+    { method: "POST" },
+    token,
+  );
+}
+
+export interface VkpiProjectVideoAnalysisCacheMulti {
+  project_id: number;
+  by_method: Record<string, VkpiProjectVideoAnalysisCacheResponse>;
+}
+
+export async function getProjectVideoAnalysisCacheMulti(token: string, projectId: string, deriveMethods: string[]) {
+  const params = new URLSearchParams({ derive_method: deriveMethods.join(","), _ts: String(Date.now()) });
+  return apiFetch<VkpiProjectVideoAnalysisCacheMulti>(
+    `/api/admin/vkpi/projects/${encodeURIComponent(projectId)}/video-analysis-cache?${params.toString()}`,
+    { cache: "no-store" },
     token,
   );
 }
