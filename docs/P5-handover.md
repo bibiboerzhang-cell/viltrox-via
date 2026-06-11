@@ -22,6 +22,8 @@
 
 | 2026-06-11 14:5x | **Window A-fix**:worker ScopeDenied 修复 + 泳道 ETA | — | 61087 → **67105** | 46951(67244/67246) | commit `4ce7a9b7`;job 896 根因=worker 伪 staff 过不了项目 scope(API 入队已 scope,worker 改无 scope 直取+全程兜底 _mark_failed);queue_view 增 queue_position/ahead/eta;TaskProgressBoard 排队区显示前方/约X分钟(冻结区按用户直接指令加法);UI 通知卡深色化 `b0833b78` |
 | 待办 | 残留:合同行(job 896 target)卡 processing → 浏览器「删除+重传」即解;job_execution_ledger 两条 5/20 孤儿 `vkpi_official_channel_sync` 在排队区显示为『搜索/抓取·未命名』(R3 欠账,清理归 P6) | — | — | — | 手动 UPDATE 被守卫拦(协议⑥),命令已报用户 |
+| 2026-06-11 15:0x–16:18 | **Window B-fix**:复盘聚合三连修(用户授权重载+重跑) | — | 67105→75118→77965→**79067** | — | ① `9f8124cb` worker staff.id 反查(job 900 FK 违例:user 108→真 staff 84;`_resolve_job_staff`);② `edaeb38d` max_output_tokens 1200→4000 + 解析失败不写垃圾 cache;③ `7194ba09` 路由 openai(gemini-flash 思考吃光预算 out=43→574 仍截断)。**job 903=done**:insight 干净中文 / highlights4·risks3·next_steps2 / gpt-5.4-mini / 零触 fit_score。指纹 1123/507.4200/1123 不变;cache(project:3998)=ready |
+| 同窗 UI | 合同表单回填 `619646da` + deliverables 整理只读 `3f790c62`(去 JSON 代码)+ 泳道 ETA `4ce7a9b7` + 通知卡深色 `b0833b78` | — | — | — | 纯前端,dist 已 build |
 
 **激活完成(commit 38d44af3/2a92f719/39011c89/36c3ae70 + 4ce7a9b7/b0833b78 全生效)。** 合同异步链 + 复盘聚合 + 费用估算 + 请求合一 现已在浏览器可用。回滚序:G4→G3→G2→G1 + 106 down + worker/admin 重载回旧。
 
