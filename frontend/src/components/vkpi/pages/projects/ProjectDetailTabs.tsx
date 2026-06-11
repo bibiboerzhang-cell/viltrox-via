@@ -570,6 +570,7 @@ function ContractArchiveCard({
   onConfirm,
   onOpen,
   onRetry,
+  onDelete,
 }: {
   contract: VkpiProjectContract;
   row?: VkpiProjectRow;
@@ -578,6 +579,7 @@ function ContractArchiveCard({
   onConfirm: (contractId: number, payload: Record<string, unknown>) => Promise<void>;
   onOpen: (contractId: number) => Promise<void>;
   onRetry: (contractId: number) => Promise<void>;
+  onDelete?: (contractId: number, fileName?: string) => void;
 }) {
   const [draft, setDraft] = useState<ContractDraft>(() => initialContractDraft(contract));
   const meta = contractStatusMeta(contract);
@@ -585,6 +587,7 @@ function ContractArchiveCard({
   const confirming = busyKey === `confirm:${contract.id}`;
   const extracting = busyKey === `extract:${contract.id}` || contract.extraction_status === 'processing';
   const downloading = busyKey === `download:${contract.id}`;
+  const deleting = busyKey === `delete:${contract.id}`;
   const update = (key: keyof ContractDraft, value: string) => setDraft((current) => ({ ...current, [key]: value }));
 
   return (
@@ -610,9 +613,14 @@ function ContractArchiveCard({
           <button className="px-2.5 py-1.5 rounded-md border border-white/[0.08] bg-white/[0.03] text-[10px] text-slate-300 hover:text-white" type="button" onClick={() => void onOpen(contract.id)} disabled={downloading}>
             <ExternalLink size={11} className="inline mr-1" />查看PDF
           </button>
-          <button className="px-2.5 py-1.5 rounded-md border border-purple-400/25 bg-purple-400/10 text-[10px] text-purple-200 disabled:opacity-50" type="button" onClick={() => void onRetry(contract.id)} disabled={extracting}>
+          <button className="px-2.5 py-1.5 rounded-md border border-purple-400/25 bg-purple-400/10 text-[10px] text-purple-200 disabled:opacity-50" type="button" onClick={() => void onRetry(contract.id)} disabled={extracting || contract.extraction_status === 'skipped'} title={contract.extraction_status === 'skipped' ? 'DOC/DOCX v1 仅归档不提取，请上传 PDF 版本触发条款提取' : undefined}>
             {extracting ? '提取中' : '重新提取'}
           </button>
+          {onDelete ? (
+            <button className="px-2.5 py-1.5 rounded-md border border-red-400/25 bg-red-400/10 text-[10px] text-red-300 hover:text-red-200 disabled:opacity-50" type="button" onClick={() => onDelete(contract.id, contract.file_name || undefined)} disabled={deleting} title="删除该合同归档（原文件与提取结果一并删除）">
+              {deleting ? '删除中' : '删除'}
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -687,6 +695,7 @@ export function CampaignContractsTab({
   onConfirmContract,
   onOpenContract,
   onRetryExtract,
+  onDeleteContract,
 }: {
   rows: VkpiProjectRow[];
   contractLines: ContractLine[];
@@ -699,6 +708,7 @@ export function CampaignContractsTab({
   onConfirmContract: (contractId: number, payload: Record<string, unknown>) => Promise<void>;
   onOpenContract: (contractId: number) => Promise<void>;
   onRetryExtract: (contractId: number) => Promise<void>;
+  onDeleteContract?: (contractId: number, fileName?: string) => void;
 }) {
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -786,6 +796,7 @@ export function CampaignContractsTab({
               onConfirm={onConfirmContract}
               onOpen={onOpenContract}
               onRetry={onRetryExtract}
+              onDelete={onDeleteContract}
             />
           ))}
         </div>
@@ -1554,9 +1565,9 @@ export function CampaignRetrospectiveTab({
                       <ExternalLink size={10} /> 打开
                     </a>
                   ) : (
-                    <button type="button" className="text-[10px] text-cyan-300 flex items-center gap-1 shrink-0" onClick={() => onPendingAction('打开视频 / AI 分析')}>
+                    <span className="text-[10px] text-slate-600 flex items-center gap-1 shrink-0" title="暂无视频链接">
                       <ExternalLink size={10} /> 打开
-                    </button>
+                    </span>
                   )}
                 </div>
 

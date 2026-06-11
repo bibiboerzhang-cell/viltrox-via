@@ -12,6 +12,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
+from app.domains import audit
 from app.domains.access import scope
 from app.domains.costs import budget_guard
 from app.domains.projects.workflow_common import _int, staff_id, utcnow
@@ -480,3 +481,43 @@ def contract_download_url(project_id: int, contract_id: int, *, staff: dict[str,
     from app.services.media.r2 import get_presigned_url
 
     return {"contract_id": int(contract_id), "r2_key": contract.get("r2_key"), "url": get_presigned_url(str(contract.get("r2_key") or ""))}
+
+
+def delete_contract(project_id: int, contract_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    contract = get_contract(project_id, contract_id, staff=staff, write=True)
+    conn = get_conn()
+    conn.execute(
+        "DELETE FROM vkpi_analysis_cache WHERE target_type='contract' AND target_id=? AND derive_method=?",
+        (str(int(contract_id)), CONTRACT_DERIVE_METHOD),
+    )
+    conn.execute(
+        "DELETE FROM vkpi_project_contracts WHERE id=? AND project_id=?",
+        (int(contract_id), int(project_id)),
+    )
+    conn.commit()
+    # R2 对象删除放在 commit 之后:对象存储失败不应回滚已删的归档行,残留对象可由后续清理任务回收
+    r2_key = str(contract.get("r2_key") or "")
+    r2_deleted = False
+    if r2_key:
+        from app.services.media.r2 import delete_object
+
+        try:
+            r2_deleted = delete_object(r2_key)
+        except Exception:
+            logger.warning("contract.delete.r2_cleanup_failed contract_id=%s", contract_id)
+    audit.log_business_event(
+        staff_id=staff_id(staff),
+        action_type="contract_deleted",
+        target_type="project_contract",
+        target_id=contract_id,
+        detail=f"删除合同归档 {contract.get('file_name') or contract_id}",
+        metadata={
+            "project_id": int(project_id),
+            "contract_id": int(contract_id),
+            "file_name": contract.get("file_name"),
+            "r2_key": r2_key,
+            "r2_deleted": r2_deleted,
+            "status_before": contract.get("status"),
+        },
+    )
+    return {"deleted": True, "contract_id": int(contract_id), "r2_deleted": r2_deleted}

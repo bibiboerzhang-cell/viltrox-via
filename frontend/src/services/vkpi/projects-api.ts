@@ -209,6 +209,14 @@ export async function confirmProjectContract(token: string, projectId: string, c
   );
 }
 
+export async function deleteProjectContract(token: string, projectId: string, contractId: number | string) {
+  return apiFetch<{ deleted: boolean; contract_id: number; r2_deleted?: boolean }>(
+    `/api/admin/vkpi/projects/${encodeURIComponent(projectId)}/contracts/${encodeURIComponent(String(contractId))}`,
+    { method: "DELETE" },
+    token,
+  );
+}
+
 export async function extractProjectContract(token: string, projectId: string, contractId: number | string) {
   return apiFetch<{ contract?: VkpiProjectContract; extraction?: Record<string, unknown>; budget?: Record<string, unknown> }>(
     `/api/admin/vkpi/projects/${encodeURIComponent(projectId)}/contracts/${encodeURIComponent(String(contractId))}/extract`,

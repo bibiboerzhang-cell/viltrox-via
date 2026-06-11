@@ -169,6 +169,25 @@ export function TaskProgressBoard({ apiToken = "" }) {
   const [payload, setPayload] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  // 客户端进行中的 LLM 活动(如合同提取):同步请求在途期间由前端派发 vkpi:llm-activity 事件,
+  // 请求结束即移除。区别于后端任务队列,纯本地、仅在真在跑时出现。
+  const [clientActivities, setClientActivities] = useState([]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const handler = (event) => {
+      const detail = (event && event.detail) || {};
+      if (!detail.id) return;
+      setClientActivities((current) => {
+        const rest = current.filter((item) => item.id !== detail.id);
+        return detail.active
+          ? [...rest, { id: detail.id, label: detail.label || "AI 任务", kind: detail.kind || "AI 任务" }]
+          : rest;
+      });
+    };
+    window.addEventListener("vkpi:llm-activity", handler);
+    return () => window.removeEventListener("vkpi:llm-activity", handler);
+  }, []);
 
   const refreshQueue = useCallback(async () => {
     if (!apiToken || (typeof document !== "undefined" && document.visibilityState === "hidden")) return;
@@ -230,12 +249,25 @@ export function TaskProgressBoard({ apiToken = "" }) {
       summarizing: nonQueued.filter((task) => task?.stage === "summarizing"),
     };
   }, [activeTasks]);
-  const activeTotal = Number(payload?.counts?.active_total ?? activeTasks.length) || 0;
+  const clientThinkingTasks = useMemo(
+    () => clientActivities.map((activity) => ({
+      id: `client-${activity.id}`,
+      kind: activity.kind || "AI 任务",
+      target: { label: activity.label },
+      stage: "thinking",
+      status: "running",
+      progress_pct: null,
+    })),
+    [clientActivities],
+  );
+  const activeTotal = (Number(payload?.counts?.active_total ?? activeTasks.length) || 0) + clientThinkingTasks.length;
   const queueTotal = Number(payload?.counts?.queued ?? queuedTasks.length) || 0;
   const speedLight = payload?.speed_light || {};
   const lanes = LANES.map((lane) => ({
     ...lane,
-    tasks: laneTasks[lane.key] || [],
+    tasks: lane.key === "thinking"
+      ? [...clientThinkingTasks, ...(laneTasks[lane.key] || [])]
+      : (laneTasks[lane.key] || []),
   }));
   const visibleQueue = queuedTasks.slice(0, 2);
   const remainingQueue = Math.max(0, queueTotal - visibleQueue.length);

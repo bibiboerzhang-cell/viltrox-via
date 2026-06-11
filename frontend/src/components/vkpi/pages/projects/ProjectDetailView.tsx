@@ -10,6 +10,7 @@ import { LiveLogisticsBanner } from './LiveLogisticsBanner';
 import { ProjectParticipationTab } from './ProjectParticipationTab';
 import {
   confirmProjectContract,
+  deleteProjectContract,
   downloadProjectContract,
   extractProjectContract,
   getProjectContracts,
@@ -53,6 +54,12 @@ import {
   PROJECT_STATUS_COLOR,
   statusBg,
 } from './projectDeliverableStyle';
+
+function emitLlmActivity(detail: { id: string; label: string; kind?: string; active: boolean }) {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('vkpi:llm-activity', { detail }));
+  }
+}
 
 function healthFromBackend(scoreValue: number | undefined) {
   const score = Number.isFinite(scoreValue) ? Math.max(0, Math.min(100, Math.round(scoreValue || 0))) : 0;
@@ -446,14 +453,18 @@ export function ProjectDetailView({
       setNotice({ tone: 'warning', title: '无法上传合同', body: '当前缺少 API token。' });
       return;
     }
+    const isPdf = /\.pdf$/i.test(file.name);
+    const activityId = `contract-upload-${file.name}-${Date.now()}`;
     setContractActionId('upload');
+    if (isPdf) emitLlmActivity({ id: activityId, label: `合同提取 · ${file.name}`, kind: '合同提取', active: true });
     try {
       await uploadProjectContract(apiToken, project.id, file, { assignmentId, kolPoolId });
       await loadContracts();
-      setNotice({ tone: 'success', title: '合同已归档', body: /\.pdf$/i.test(file.name) ? 'Claude 已提取合同条款，请人工确认关键字段。' : '文件已存档；DOC/DOCX 暂不自动提取。' });
+      setNotice({ tone: 'success', title: '合同已归档', body: isPdf ? 'Claude 已提取合同条款，请人工确认关键字段。' : '文件已存档；DOC/DOCX 暂不自动提取。' });
     } catch (error) {
       setNotice({ tone: 'warning', title: '合同上传失败', body: error instanceof Error ? error.message : '合同上传失败。' });
     } finally {
+      if (isPdf) emitLlmActivity({ id: activityId, label: `合同提取 · ${file.name}`, kind: '合同提取', active: false });
       setContractActionId('');
     }
   };
@@ -499,9 +510,33 @@ export function ProjectDetailView({
     }
   };
 
+  const deleteContractArchive = (contractId: number, fileName?: string) => {
+    if (!apiToken) return;
+    setConfirmAction({
+      title: '确认删除该合同归档？',
+      body: `「${fileName || `合同 ${contractId}`}」将从归档列表移除并删除原文件，提取结果一并清除。LLM 提取的历史成本记录会保留。`,
+      confirmLabel: '确认删除',
+      confirmVariant: 'danger',
+      onConfirm: async () => {
+        setContractActionId(`delete:${contractId}`);
+        try {
+          await deleteProjectContract(apiToken, project.id, contractId);
+          await loadContracts();
+          setNotice({ tone: 'success', title: '合同已删除', body: '归档记录与原文件已删除。' });
+        } catch (error) {
+          setNotice({ tone: 'warning', title: '删除失败', body: error instanceof Error ? error.message : '合同删除失败。' });
+        } finally {
+          setContractActionId('');
+        }
+      },
+    });
+  };
+
   const retryContractExtraction = async (contractId: number) => {
     if (!apiToken) return;
+    const activityId = `contract-extract-${contractId}`;
     setContractActionId(`extract:${contractId}`);
+    emitLlmActivity({ id: activityId, label: `合同重新提取 · #${contractId}`, kind: '合同提取', active: true });
     try {
       await extractProjectContract(apiToken, project.id, contractId);
       await loadContracts();
@@ -509,6 +544,7 @@ export function ProjectDetailView({
     } catch (error) {
       setNotice({ tone: 'warning', title: '重新提取失败', body: error instanceof Error ? error.message : '合同重新提取失败。' });
     } finally {
+      emitLlmActivity({ id: activityId, label: `合同重新提取 · #${contractId}`, kind: '合同提取', active: false });
       setContractActionId('');
     }
   };
@@ -938,6 +974,7 @@ export function ProjectDetailView({
           onConfirmContract={confirmContractArchive}
           onOpenContract={openContractPdf}
           onRetryExtract={retryContractExtraction}
+          onDeleteContract={deleteContractArchive}
         />
       ) : activeTab === '复盘' ? (
         <CampaignRetrospectiveTab

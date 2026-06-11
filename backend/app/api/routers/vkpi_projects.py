@@ -163,6 +163,16 @@ def confirm_project_contract(project_id: int, contract_id: int, body: dict | Non
         raise _scope_403(exc) from exc
 
 
+@router.delete("/projects/{project_id}/contracts/{contract_id}")
+def delete_project_contract(project_id: int, contract_id: int, staff=Depends(require_tab("vkpi", "write"))):
+    try:
+        return contracts.delete_contract(project_id, contract_id, staff=staff)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
 @router.post("/projects/{project_id}/contracts/{contract_id}/extract")
 def extract_project_contract(project_id: int, contract_id: int, staff=Depends(require_tab("vkpi", "write"))):
     try:
