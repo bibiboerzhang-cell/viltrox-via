@@ -24,6 +24,7 @@
 | 待办 | 残留:合同行(job 896 target)卡 processing → 浏览器「删除+重传」即解;job_execution_ledger 两条 5/20 孤儿 `vkpi_official_channel_sync` 在排队区显示为『搜索/抓取·未命名』(R3 欠账,清理归 P6) | — | — | — | 手动 UPDATE 被守卫拦(协议⑥),命令已报用户 |
 | 2026-06-11 15:0x–16:18 | **Window B-fix**:复盘聚合三连修(用户授权重载+重跑) | — | 67105→75118→77965→**79067** | — | ① `9f8124cb` worker staff.id 反查(job 900 FK 违例:user 108→真 staff 84;`_resolve_job_staff`);② `edaeb38d` max_output_tokens 1200→4000 + 解析失败不写垃圾 cache;③ `7194ba09` 路由 openai(gemini-flash 思考吃光预算 out=43→574 仍截断)。**job 903=done**:insight 干净中文 / highlights4·risks3·next_steps2 / gpt-5.4-mini / 零触 fit_score。指纹 1123/507.4200/1123 不变;cache(project:3998)=ready |
 | 同窗 UI | 合同表单回填 `619646da` + deliverables 整理只读 `3f790c62`(去 JSON 代码)+ 泳道 ETA `4ce7a9b7` + 通知卡深色 `b0833b78` | — | — | — | 纯前端,dist 已 build |
+| 2026-06-11 16:4x | **钱口径上屏**(裁决①②③):汇总卡接 detail.roi 真值 + null('—',链路不存在)/0($0,有链路值为零)语义 + 明细行假 0→null + 合同费 metadata 补 assignment/kol_pool 键(历史行借重确认幂等补) | — | — | 46951(87311/87312) | `f80f3487`(前端)+ `d4d26175`(后端);dist=d4d26175。逐 KOL 分钱确认不做,并入四环链路工程(links 补 assignment 维) |
 
 ## 模型路由表(2026-06-11 追认,复盘→openai 已批)
 | 场景 | provider/model | 理由一句 |
@@ -34,6 +35,7 @@
 
 **复盘成本实测(job 903 / call 1646)**:in 13,244 + out 492 tok ≈ **$0.0043/次**,占 single_call $1 上限 0.43%。$5 cron 预算:典型 ~1,100 次;最坏口径(输出吃满 4000 tok ≈ $0.013)~380 次——首批 1-3 项目验证完全无压力。
 ⚠️ 记账盲点(闸A telemetry):`cost_cents` 整数地板除,亚美分调用记 0 → `current_spend` 不累计,预算护栏对复盘这种小额调用实际"看不见花费"。属 gateway 平台层,P6 一并考虑(改 microcents 或按 estimated_cost_usd 累计)。
+**风险注记(裁决④)**:这意味着**复盘的 $5 预算护栏当前形同虚设**(亚美分全记 0)。gateway 修复前,复盘批量跑的真实开销只能靠 `vkpi_llm_calls` 的 token 手工核,**不能信 current_spend**。首批 1-3 项目无碍;**全量批跑前此项必须先修**。
 
 **P6 立案 · gemini thinking 饥饿(平台级,记档不修)**:`llm_gateway._call_google` 无 `thinkingConfig`,gemini-flash 动态思考计入 maxOutputTokens——凡要求**结构化 JSON 输出**的场景都会重演截断(复盘只是首例)。P6 方案候选:generationConfig 加 thinkingConfig budget / 按 purpose 路由非 thinking 模型 / 输出截断检测重试。
 
