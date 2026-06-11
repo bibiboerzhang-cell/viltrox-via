@@ -94,6 +94,7 @@ export function ProjectDetailView({
   project,
   participatingRows = [],
   costRows = [],
+  productUnitCosts = {},
   viewMode,
   onBack,
   onOpenKolProfile,
@@ -728,9 +729,9 @@ export function ProjectDetailView({
       tab: item.tab || (item.rowId ? '参与 KOL' : undefined),
     });
     setNotice({
-      tone: 'success',
-      title: '已暂存提醒',
-      body: '已把当前行动暂存在本地关注列表；正式员工工作台派发待后续 API 接入。',
+      tone: 'info',
+      title: '已加入本地关注',
+      body: '仅保存在本机浏览器(刷新/换设备会丢失)。跨账号的任务派发功能尚未接入。',
     });
   };
 
@@ -1043,6 +1044,7 @@ export function ProjectDetailView({
           rows={rows}
           stats={stats}
           costRows={costRows}
+          productUnitCosts={productUnitCosts}
           onCopy={copyMaterialText}
           onPendingAction={(label) => setNotice({ tone: 'info', title: '素材库功能开发中', body: `${label} 功能开发中，敬请期待。` })}
         />
@@ -1053,6 +1055,7 @@ export function ProjectDetailView({
           expenseLines={expenseLines}
           stageCosts={stageCosts}
           costRows={costRows}
+          productUnitCosts={productUnitCosts}
           onOpenShippingInfo={() => setActionModal({ kind: 'shipping', row: rows[0] || project })}
           onOpenCostEntry={(row, costType) => setActionModal({ kind: 'cost', row, costType })}
         />

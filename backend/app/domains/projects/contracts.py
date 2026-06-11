@@ -609,7 +609,45 @@ def confirm_contract(project_id: int, contract_id: int, body: dict[str, Any], *,
         (_json(body.get("field_confirmed") or {"all": True}), staff_id(staff) or None, now, now, int(contract_id), int(project_id)),
     )
     conn.commit()
+    _record_contract_fee_to_ledger(int(project_id), int(contract_id), staff=staff)
     return get_contract(project_id, contract_id, staff=staff)
+
+
+def _record_contract_fee_to_ledger(project_id: int, contract_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """合同人工确认后,把签约费(creator fee)幂等写入成本账本。
+
+    cost_type 用 'cash_fee'(前端合同费列统计的真实类型);source_ref='contract:{id}' 去重,
+    防重复确认双记。fee<=0 不写。这是审计 F 缺口的修复:合同费此前无真实账本来源。
+    """
+    contract = get_contract(project_id, contract_id, staff=staff)
+    try:
+        fee = float(contract.get("fee_amount") or 0)
+    except (TypeError, ValueError):
+        fee = 0.0
+    if fee <= 0:
+        return None
+    source_ref = f"contract:{int(contract_id)}"
+    existing = get_conn().execute(
+        "SELECT id FROM vkpi_cost_ledger WHERE project_id=? AND cost_type='cash_fee' AND source_ref=? LIMIT 1",
+        (int(project_id), source_ref),
+    ).fetchone()
+    if existing:
+        return None
+    from app.domains.costs import ledger as cost_ledger
+
+    return cost_ledger.add_cost(
+        {
+            "project_id": int(project_id),
+            "cost_type": "cash_fee",
+            "amount_usd": fee,
+            "currency": str(contract.get("fee_currency") or "USD"),
+            "status": "actual",
+            "source_ref": source_ref,
+            "note": "合同人工确认 · 签约费自动入账",
+            "metadata": {"contract_id": int(contract_id), "from": "contract_confirm"},
+        },
+        staff=staff,
+    )
 
 
 def contract_download_url(project_id: int, contract_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:

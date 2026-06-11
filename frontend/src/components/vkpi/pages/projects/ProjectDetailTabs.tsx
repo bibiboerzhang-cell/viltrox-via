@@ -155,8 +155,12 @@ function rowProductSent(row: VkpiProjectRow): string[] {
   return single ? [single] : [];
 }
 
-function productCost(productSent: string[]) {
-  return productSent.length ? 0 : 0;
+function productCost(productSent: string[], unitCosts: Record<string, number> = {}) {
+  if (!productSent.length) return 0;
+  return productSent.reduce((sum, item) => {
+    const key = String(item || '').trim();
+    return sum + (Number(unitCosts[key]) || Number(unitCosts[key.toLowerCase()]) || 0);
+  }, 0);
 }
 
 function trackingUrl(carrier: string, trackingNumber: string) {
@@ -1858,6 +1862,7 @@ export function CampaignFinanceTab({
   rows,
   expenseLines,
   costRows,
+  productUnitCosts = {},
   onOpenCostEntry,
 }: {
   rows: VkpiProjectRow[];
@@ -1865,6 +1870,7 @@ export function CampaignFinanceTab({
   expenseLines: ExpenseLine[];
   stageCosts: StageCostSummary[];
   costRows: Array<Record<string, unknown>>;
+  productUnitCosts?: Record<string, number>;
   onOpenShippingInfo: () => void;
   onOpenCostEntry?: (row: VkpiProjectRow, type?: 'cash_fee' | 'shipping' | 'product') => void;
 }) {
@@ -1873,7 +1879,10 @@ export function CampaignFinanceTab({
   const rowCosts = rows.map((row) => {
     const shippingFee = costRowAmount(costRows, row, 'shipping');
     const productSent = rowProductSent(row);
-    const productCostAmount = costRowAmount(costRows, row, 'product') || productCost(productSent);
+    const ledgerProductCost = costRowAmount(costRows, row, 'product');
+    const estimatedProductCost = productCost(productSent, productUnitCosts);
+    const productCostAmount = ledgerProductCost || estimatedProductCost;
+    const productCostIsEstimate = !ledgerProductCost && estimatedProductCost > 0;
     const ledgerContractFee = costRowAmount(costRows, row, 'contract');
     const expenseAmount = expenseById.get(row.id)?.amount ?? row.cost ?? 0;
     const contractFee = ledgerContractFee || Math.max(expenseAmount - shippingFee - productCostAmount, 0);
@@ -1883,6 +1892,7 @@ export function CampaignFinanceTab({
       shippingFee,
       productSent,
       productCost: productCostAmount,
+      productCostIsEstimate,
       total: contractFee + shippingFee + productCostAmount,
       hasContract: contractFee > 0,
     };
@@ -1966,6 +1976,9 @@ export function CampaignFinanceTab({
                   {item.productCost > 0 ? (
                     <span>
                       <span className="text-emerald-400">{formatMoneyShort(item.productCost)}</span>
+                      {item.productCostIsEstimate ? (
+                        <span className="text-[9px] text-amber-300/80 ml-1" title="按 SKU 成本目录单价估算(成本账本暂无该 KOL 产品成本行)">估</span>
+                      ) : null}
                       <span className="text-[9.5px] text-slate-500 ml-1">({Math.max(item.productSent.length, 1)}件)</span>
                     </span>
                   ) : (
@@ -2009,6 +2022,7 @@ export function CampaignMaterialsTab({
   rows,
   stats,
   costRows = [],
+  productUnitCosts = {},
   onCopy,
   onPendingAction,
 }: {
@@ -2016,6 +2030,7 @@ export function CampaignMaterialsTab({
   rows: VkpiProjectRow[];
   stats?: ProjectStatsSummary;
   costRows?: Array<Record<string, unknown>>;
+  productUnitCosts?: Record<string, number>;
   onCopy?: (text: string, label: string) => Promise<void>;
   onPendingAction: (label: string) => void;
 }) {
@@ -2084,7 +2099,7 @@ export function CampaignMaterialsTab({
                 const isDelivered = stageIndex(row.stage) >= stageIndex('received');
                 const shippingCost = costRowAmount(costRows, row, 'shipping');
                 const productSent = rowProductSent(row);
-                const productCostAmount = costRowAmount(costRows, row, 'product') || productCost(productSent);
+                const productCostAmount = costRowAmount(costRows, row, 'product') || productCost(productSent, productUnitCosts);
                 const kolName = row.kolHandle || row.kolName || 'Unknown';
                 const handle = row.kolName || row.kolHandle || '-';
                 return (

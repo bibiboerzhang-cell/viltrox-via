@@ -135,6 +135,20 @@ export function ProjectsPage({
     return Array.from(bySku.values()).sort((a, b) => a.productName.localeCompare(b.productName));
   }, [data.productCosts, data.productLaunches]);
 
+  // SKU / 产品名 → 单价(USD),供费用 tab 在 ledger 无产品成本行时做估算
+  const productUnitCosts = useMemo(() => {
+    const map: Record<string, number> = {};
+    data.productCosts
+      .filter((item) => item.active !== false)
+      .forEach((item) => {
+        const cost = Number(item.unitCost) || 0;
+        if (!cost) return;
+        if (item.productSku) map[item.productSku] = cost;
+        if (item.productName) map[item.productName.toLowerCase()] = cost;
+      });
+    return map;
+  }, [data.productCosts]);
+
   const matchedProduct = useMemo(() => {
     const normalized = productName.trim().toLowerCase();
     if (!normalized) return undefined;
@@ -359,6 +373,7 @@ export function ProjectsPage({
             projects={filteredProjects.map((project) => (project.id === detailProjectForView.id ? detailProjectForView : project))}
             participatingRows={projectDetailState.participatingRows}
             costRows={projectDetailState.detail?.costs || []}
+            productUnitCosts={productUnitCosts}
             viewMode={viewMode}
             onBack={() => setDetailProjectId(null)}
             onOpenKolProfile={onOpenKolProfile}

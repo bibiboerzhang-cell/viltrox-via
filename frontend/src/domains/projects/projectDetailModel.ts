@@ -153,6 +153,7 @@ export interface ProjectDetailViewProps {
   projects: VkpiProjectRow[];
   participatingRows?: VkpiProjectRow[];
   costRows?: Array<Record<string, unknown>>;
+  productUnitCosts?: Record<string, number>;
   viewMode: 'manager' | 'employee';
   onBack: () => void;
   onOpenKolProfile?: (project: VkpiProjectRow) => void | Promise<void>;
