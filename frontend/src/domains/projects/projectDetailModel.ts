@@ -490,6 +490,14 @@ export function bottleneckForRows(rows: VkpiProjectRow[]) {
   return { from: index, to: Math.min(index + 1, 9), text: '当前没有明显阻塞，保持每日刷新。' };
 }
 
+// "流失/取消"判定:cancelled/lost/stalled + churned(churned alias 到 closed 是折叠来源,
+// 业务上属流失)。漏斗显示层用它把流失从"已关闭"列拆出来(扫描 #11),不动 stageIndex/筛选语义。
+export function isLostStage(stage: VkpiProjectStage | string) {
+  const raw = String(stage || '').trim().toLowerCase();
+  if (raw === 'churned') return true;
+  return cancelledStages.has(canonicalStage(stage));
+}
+
 export function stageCounts(rows: VkpiProjectRow[]) {
   const counts = new Map<number, number>();
   primaryStageFlow.forEach((_, index) => counts.set(index + 1, 0));

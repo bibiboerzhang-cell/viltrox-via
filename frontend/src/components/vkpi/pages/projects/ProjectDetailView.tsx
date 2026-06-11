@@ -37,6 +37,7 @@ import {
   formatNumber,
   formatRatio,
   matchesProjectStageFilter,
+  isLostStage,
   parseDays,
   stageCounts,
   stageIndex,
@@ -960,15 +961,17 @@ export function ProjectDetailView({
             状态 · 每日刷新待接入
           </span>
         </div>
-        <div className="grid grid-cols-9 gap-2">
+        <div className="grid grid-cols-10 gap-2">
           {PROJECT_STAGE_FLOW.map((stage, index) => {
             const stageNumber = index + 1;
             const stageKey = stage.key as VkpiProjectStage;
-            const count = counts.get(stageNumber) || 0;
+            // 末列"已关闭"剔除流失/取消(独立列展示,口径不再失真;扫描 #11)。
+            const lostInStage = stageNumber === 9 ? rows.filter((row) => stageIndex(row.stage) === index && isLostStage(row.stage)).length : 0;
+            const count = (counts.get(stageNumber) || 0) - lostInStage;
             const nextCount = counts.get(stageNumber + 1) || 0;
             const rate = count && stageNumber < 9 ? `${Math.round(Math.min(nextCount / count, 1) * 100)}%` : '—';
             const average = rows
-              .filter((row) => stageIndex(row.stage) === index)
+              .filter((row) => stageIndex(row.stage) === index && !(stageNumber === 9 && isLostStage(row.stage)))
               .map((row) => parseDays(row.stageDurationLabel))
               .filter(Boolean);
             const avgDays = average.length ? `${Math.round(average.reduce((sum, day) => sum + day, 0) / average.length)} 天` : '-';
@@ -996,6 +999,26 @@ export function ProjectDetailView({
               </button>
             );
           })}
+          {(() => {
+            const lostRows = rows.filter((row) => isLostStage(row.stage));
+            const lostAvg = lostRows.map((row) => parseDays(row.stageDurationLabel)).filter(Boolean);
+            const lostAvgDays = lostAvg.length ? `${Math.round(lostAvg.reduce((sum, day) => sum + day, 0) / lostAvg.length)} 天` : '-';
+            return (
+              <div
+                className="rounded-lg p-3 text-center"
+                style={{
+                  background: lostRows.length ? 'rgba(244,63,94,0.07)' : 'rgba(255,255,255,0.015)',
+                  border: lostRows.length ? '1px solid rgba(244,63,94,0.28)' : '1px solid rgba(255,255,255,0.04)',
+                }}
+                title="流失(churned)/取消(cancelled/lost/stalled)聚合,不计入主流程与『已关闭』"
+              >
+                <div className="text-[10px] text-slate-400 mb-1">✕ 流失/取消</div>
+                <div className="text-[28px] font-bold tabular-nums leading-none" style={{ color: lostRows.length ? '#fb7185' : '#475569' }}>{lostRows.length}</div>
+                <div className="mt-1 text-[10px] text-slate-500">平均 {lostAvgDays}</div>
+                <div className="text-[10px] text-slate-500">独立口径</div>
+              </div>
+            );
+          })()}
         </div>
         <div className="mt-3 rounded-xl border border-amber-400/25 bg-amber-400/10 text-amber-300 px-3 py-2 text-[11px] font-medium">当前瓶颈：<b>{bottleneck.from}→{bottleneck.to}</b> {bottleneck.text}</div>
       </div>
