@@ -12,6 +12,7 @@ from app.domains import costs
 from app.domains.access import scope
 from app.domains.analysis.cache_repo import get_analysis_cache_entry, list_project_video_analysis_cache
 from app.domains.projects import contracts
+from app.domains.projects import retrospective_aggregate
 from app.domains.projects import workflow
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-projects"])
@@ -73,8 +74,41 @@ def project_video_analysis_cache(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     del staff
-    derive_method = derive_method.strip() or "video_analysis_final_v1"
-    return list_project_video_analysis_cache(project_id, derive_method=derive_method)
+    # 向后兼容:单值返回旧形状;逗号分隔的多值返回 by_method 映射,供前端一次取回拆多份(批5)。
+    methods = [m.strip() for m in str(derive_method or "").split(",") if m.strip()] or ["video_analysis_final_v1"]
+    if len(methods) == 1:
+        return list_project_video_analysis_cache(project_id, derive_method=methods[0])
+    return {
+        "project_id": int(project_id),
+        "by_method": {m: list_project_video_analysis_cache(project_id, derive_method=m) for m in methods},
+    }
+
+
+@router.post("/projects/{project_id}/retrospective/generate")
+def generate_project_retrospective(project_id: int, staff=Depends(require_tab("vkpi", "write"))):
+    try:
+        return retrospective_aggregate.enqueue_project_retrospective(project_id, staff=staff)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
+@router.get("/projects/{project_id}/retrospective")
+def project_retrospective(project_id: int, staff=Depends(require_tab("vkpi", "read"))):
+    del staff
+    # R1:cache 只存 ready/stale,但失败必须读端可见 —— 回传最新 job 的终态 + last_error,
+    # 否则复刻"主流程绿、富化静默失败"旧病。
+    entry = get_analysis_cache_entry("project", str(int(project_id)), derive_method=retrospective_aggregate.DERIVE_METHOD)
+    active_job = retrospective_aggregate.latest_retrospective_job(int(project_id))
+    return {
+        "project_id": int(project_id),
+        "retrospective": entry,
+        "active_job": active_job.get("active") if active_job else None,
+        "last_job": active_job.get("last") if active_job else None,
+    }
 
 
 @router.get("/projects/{project_id}/contracts")

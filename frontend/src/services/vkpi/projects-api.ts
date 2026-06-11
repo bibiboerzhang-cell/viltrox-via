@@ -160,6 +160,37 @@ export async function getProjectVideoAnalysisCache(token: string, projectId: str
   );
 }
 
+export interface VkpiProjectRetrospectiveResult {
+  insight_text?: string;
+  highlights?: string[];
+  risks?: string[];
+  next_steps?: string[];
+  provenance?: { video_count?: number; model?: string; provider?: string; generated_at?: string; selection?: string; top_n?: number };
+}
+
+export interface VkpiProjectRetrospectiveResponse {
+  project_id: number;
+  retrospective: { result?: VkpiProjectRetrospectiveResult; model?: string; status?: string; updated_at?: string } | null;
+  active_job: Record<string, unknown> | null;
+  last_job: { id?: number; status?: string; last_error?: string | null } | null;
+}
+
+export async function generateProjectRetrospective(token: string, projectId: string) {
+  return apiFetch<{ status?: string; job?: Record<string, unknown> | null }>(
+    `/api/admin/vkpi/projects/${encodeURIComponent(projectId)}/retrospective/generate`,
+    { method: "POST" },
+    token,
+  );
+}
+
+export async function getProjectRetrospective(token: string, projectId: string) {
+  return apiFetch<VkpiProjectRetrospectiveResponse>(
+    `/api/admin/vkpi/projects/${encodeURIComponent(projectId)}/retrospective?_ts=${Date.now()}`,
+    { cache: "no-store" },
+    token,
+  );
+}
+
 export async function getProjectContracts(token: string, projectId: string) {
   return apiFetch<VkpiProjectContractsResponse>(
     `/api/admin/vkpi/projects/${encodeURIComponent(projectId)}/contracts?_ts=${Date.now()}`,

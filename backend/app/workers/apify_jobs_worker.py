@@ -29,6 +29,7 @@ from app.db.connection import close_db_runtime_sync, db_connection_sync_scope
 from app.domains.costs import budget_guard
 from app.domains.kol.account_dossier_extract import upsert_account_dossier_extract
 from app.domains.projects import contracts as project_contracts
+from app.domains.projects import retrospective_aggregate as project_retrospective
 from app.domains.kol.final_v1_extract import upsert_deep_analysis_from_final_v1_cache
 from app.domains.kol import profile_discovery as kol_profile_discovery
 from app.domains.kol import search_sessions as kol_search_sessions
@@ -1414,6 +1415,33 @@ def _process_project_contract_extract(conn: psycopg.Connection[Any], job: dict[s
             cur.execute(
                 "UPDATE apify_jobs SET status='done', last_error=NULL, updated_at=NOW() WHERE id=%s",
                 (int(job["id"]),),
+            )
+
+
+def _process_project_retrospective(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
+    project_id = _int_or_none(payload.get("target_id") or payload.get("project_id"))
+    if not project_id:
+        raise ValueError("project_retrospective_aggregate payload must include target_id")
+    staff = {"user_id": payload.get("triggered_by_user_id"), "id": payload.get("triggered_by_user_id")}
+    # retrospective_aggregate uses sqlite-compat '?' via its own get_conn(); run inside the sync scope.
+    # R2 ordering: the domain writes cache(project) BEFORE we mark the job done; on no-ready/failure it
+    # writes nothing to cache and we mark the job blocked (not done) so the UI/读端能区分。
+    # Never touches vkpi_kol_pool / fit_score.
+    with db_connection_sync_scope():
+        result = project_retrospective.run_project_retrospective(int(project_id), staff=staff)
+    status = str(result.get("status") or "")
+    job_status = "done" if status == "ready" else "blocked"
+    last_error = "" if job_status == "done" else (status or "project_retrospective_not_ready")
+    payload["project_retrospective_result"] = {k: v for k, v in result.items() if k != "result"}
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE apify_jobs
+                SET status=%s, last_error=NULLIF(%s, ''), payload=%s::jsonb, updated_at=NOW()
+                WHERE id=%s
+                """,
+                (job_status, last_error[:2000], _json(payload), int(job["id"])),
             )
 
 
@@ -2961,6 +2989,9 @@ def _process_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> None:
         return
     if str(job.get("job_type") or "").strip().lower() == "project_contract_extract":
         _process_project_contract_extract(conn, job, payload)
+        return
+    if str(job.get("job_type") or "").strip().lower() == "project_retrospective_aggregate":
+        _process_project_retrospective(conn, job, payload)
         return
     target_type, target_id = _target(payload)
     if not target_type or not target_id:

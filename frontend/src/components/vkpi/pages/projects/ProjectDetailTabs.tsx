@@ -2,7 +2,7 @@ import { Component, useMemo, useRef, useState, type ErrorInfo, type ReactNode } 
 import { Activity, AlertCircle, BookOpen, Boxes, Check, DollarSign, ExternalLink, Eye, FileText, Heart, MessageCircle, MousePointerClick, Package, ShoppingCart, Sparkles, TrendingUp, Upload, Video, X } from 'lucide-react';
 import { stageLabels } from '../../shared/vkpiConstants';
 import type { VkpiProjectDetail, VkpiProjectRow } from '../../vkpiTypes';
-import type { VkpiAnalysisCacheEntry, VkpiProjectContract, VkpiProjectContractsResponse, VkpiProjectVideoAnalysisCacheItem, VkpiProjectVideoAnalysisCacheResponse } from '../../../../services/vkpi/projects-api';
+import type { VkpiAnalysisCacheEntry, VkpiProjectContract, VkpiProjectContractsResponse, VkpiProjectRetrospectiveResult, VkpiProjectVideoAnalysisCacheItem, VkpiProjectVideoAnalysisCacheResponse } from '../../../../services/vkpi/projects-api';
 import { formatLargeNum, formatMoneyShort, healthColor, PROJECT_STAGE_COLOR, PROJECT_STAGE_FLOW } from './projectDeliverableStyle';
 import {
   bottleneckForRows,
@@ -1360,6 +1360,10 @@ export function CampaignRetrospectiveTab({
   videoAnalysisLoading,
   videoAnalysisError,
   videoQaError,
+  retrospective,
+  retrospectiveLastJob,
+  retrospectiveGenerating,
+  onGenerateRetrospective,
   onCopy,
   onPendingAction,
 }: {
@@ -1374,6 +1378,10 @@ export function CampaignRetrospectiveTab({
   videoAnalysisLoading?: boolean;
   videoAnalysisError?: string;
   videoQaError?: string;
+  retrospective?: { result?: VkpiProjectRetrospectiveResult; model?: string; updated_at?: string } | null;
+  retrospectiveLastJob?: { status?: string; last_error?: string | null } | null;
+  retrospectiveGenerating?: boolean;
+  onGenerateRetrospective?: () => void | Promise<void>;
   onCopy: (text: string, label: string) => Promise<void>;
   onPendingAction: (label: string) => void;
 }) {
@@ -1400,6 +1408,10 @@ export function CampaignRetrospectiveTab({
     return Math.round(Math.min(100, viewsNorm + engageNorm + clickNorm + gmvNorm));
   }
 
+  const retroResult = retrospective?.result;
+  const retroProvenance = retroResult?.provenance;
+  const retroFailed = !retroResult && (retrospectiveLastJob?.status === 'failed' || retrospectiveLastJob?.status === 'blocked');
+
   return (
     <div className="p-4 space-y-4" aria-label="项目复盘">
       <div className="rounded-lg border border-purple-500/30 bg-gradient-to-br from-purple-500/10 to-emerald-500/5 p-4">
@@ -1409,17 +1421,58 @@ export function CampaignRetrospectiveTab({
           </div>
           <div className="flex-1">
             <div className="flex items-center justify-between gap-3 mb-1.5">
-              <div className="text-[12px] font-semibold text-white">AI 项目复盘总结</div>
-              <button
-                type="button"
-                className="px-2.5 py-1 rounded-md bg-purple-500/15 hover:bg-purple-500/25 text-purple-200 text-[10.5px] font-medium flex items-center gap-1 shrink-0"
-                onClick={() => (onCopy ? void onCopy(retrospectiveDraft, '复盘草稿') : onPendingAction('复制复盘草稿'))}
-              >
-                <BookOpen size={10} />复制复盘草稿
-              </button>
+              <div className="flex items-center gap-2">
+                <div className="text-[12px] font-semibold text-white">项目复盘总结</div>
+                {retroResult ? (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-200" title="由 LLM 聚合项目下所有成品视频分析生成；分值类指标未定标，仅供参考">AI 聚合 · 未定标</span>
+                ) : (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/[0.06] text-slate-400" title="尚未生成项目级 AI 复盘，下方为前端模板草稿(非 AI 产物)">模板 · 非 AI</span>
+                )}
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {onGenerateRetrospective ? (
+                  <button
+                    type="button"
+                    className="px-2.5 py-1 rounded-md bg-emerald-500/90 hover:bg-emerald-500 text-white text-[10.5px] font-medium flex items-center gap-1 disabled:opacity-50"
+                    onClick={() => void onGenerateRetrospective()}
+                    disabled={Boolean(retrospectiveGenerating)}
+                  >
+                    <Sparkles size={10} />{retrospectiveGenerating ? '生成中…' : retroResult ? '重新生成' : '生成项目复盘'}
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="px-2.5 py-1 rounded-md bg-purple-500/15 hover:bg-purple-500/25 text-purple-200 text-[10.5px] font-medium flex items-center gap-1"
+                  onClick={() => (onCopy ? void onCopy(retroResult?.insight_text || retrospectiveDraft, retroResult ? '复盘聚合' : '复盘草稿') : onPendingAction('复制复盘'))}
+                >
+                  <BookOpen size={10} />复制
+                </button>
+              </div>
             </div>
+            {retroResult ? (
+              <div className="space-y-2">
+                <div className="text-[10.5px] text-slate-200 leading-relaxed whitespace-pre-wrap">{retroResult.insight_text}</div>
+                {(retroResult.highlights?.length || retroResult.risks?.length || retroResult.next_steps?.length) ? (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                    {([['亮点', retroResult.highlights, '#10b981'], ['风险', retroResult.risks, '#fb7185'], ['下一步', retroResult.next_steps, '#a855f7']] as const).map(([label, items, color]) => (
+                      <div key={label} className="rounded-md border border-white/[0.05] bg-black/20 p-2">
+                        <div className="text-[9px] mb-1" style={{ color }}>{label}</div>
+                        <ul className="space-y-0.5">
+                          {(items || []).map((it, i) => <li key={i} className="text-[10px] text-slate-300 leading-snug">· {it}</li>)}
+                          {!(items || []).length ? <li className="text-[10px] text-slate-600">—</li> : null}
+                        </ul>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                <div className="text-[9px] text-slate-500">
+                  来源:聚合 {retroProvenance?.video_count ?? 0} 个成品视频(按曝光 Top-{retroProvenance?.top_n ?? 15}) · 模型 {retroProvenance?.model || retrospective?.model || '-'} · {retroProvenance?.generated_at || retrospective?.updated_at || ''}
+                </div>
+              </div>
+            ) : (
             <div className="text-[10.5px] text-slate-300 leading-relaxed">
-              项目 {projectTitle} · 健康度{' '}
+              {retroFailed ? <span className="text-amber-400">上次生成未完成{retrospectiveLastJob?.last_error ? `(${retrospectiveLastJob.last_error})` : ''},可点「生成项目复盘」重试。<br /></span> : null}
+              <span className="text-slate-500">以下为模板草稿(非 AI):</span> 项目 {projectTitle} · 健康度{' '}
               <span className="font-bold" style={{ color: healthColor(projectHealth) }}>{projectHealth}</span>
               {` · ${publishedKols.length}/${rows.length} 已发布。`}
               <br />
@@ -1431,6 +1484,7 @@ export function CampaignRetrospectiveTab({
               ) : null}
               {publishedKols.length === 0 ? '等待 KOL 推进到「已发布」阶段后开始复盘。' : null}
             </div>
+            )}
             <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2">
               {[
                 ['成品视频', analysisSummary?.evidence_count ?? 0, '#06b6d4'],
