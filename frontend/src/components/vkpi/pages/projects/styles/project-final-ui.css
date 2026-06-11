@@ -559,12 +559,22 @@
 
 .vkpi-campaign-upload-modal,
 .vkpi-project-create-modal,
-.vkpi-project-import-modal {
+.vkpi-project-import-modal,
+.vkpi-campaign-notice {
   border-color: rgba(255, 255, 255, 0.08) !important;
   border-radius: 18px !important;
   background: #0b1220 !important;
   color: #e2e8f0 !important;
   box-shadow: 0 22px 80px rgba(0, 0, 0, 0.42) !important;
+}
+
+/* notice/确认卡 与其它深色弹窗一致:标题/正文用浅色(原浅色主题变量在深底上看不清) */
+.vkpi-campaign-notice h3 {
+  color: #f1f5f9 !important;
+}
+.vkpi-campaign-notice p {
+  color: #aeb6c4 !important;
+  font-weight: 600 !important;
 }
 
 .vkpi-campaign-upload-modal.is-compact {
