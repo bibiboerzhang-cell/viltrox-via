@@ -493,6 +493,8 @@ interface ContractDraft {
   buyout_rights: string;
   breach_terms: string;
   payment_terms: string;
+  cancellation_terms: string;
+  revision_terms: string;
 }
 
 function initialContractDraft(contract: VkpiProjectContract): ContractDraft {
@@ -511,6 +513,8 @@ function initialContractDraft(contract: VkpiProjectContract): ContractDraft {
     buyout_rights: stringValue(contract.buyout_rights),
     breach_terms: stringValue(contract.breach_terms),
     payment_terms: stringValue(contract.payment_terms),
+    cancellation_terms: stringValue(contract.cancellation_terms),
+    revision_terms: stringValue(contract.revision_terms),
   };
 }
 
@@ -530,6 +534,8 @@ function contractPayload(draft: ContractDraft) {
     buyout_rights: draft.buyout_rights.trim(),
     breach_terms: draft.breach_terms.trim(),
     payment_terms: draft.payment_terms.trim(),
+    cancellation_terms: draft.cancellation_terms.trim(),
+    revision_terms: draft.revision_terms.trim(),
   };
   return { ...payload, manual_overrides: payload };
 }
@@ -564,14 +570,14 @@ function ContractArchiveCard({
         contract.start_date, contract.end_date, contract.platforms_json,
         contract.deliverable_count, contract.deliverables_json, contract.must_include_json,
         contract.usage_rights, contract.exclusivity, contract.buyout_rights,
-        contract.breach_terms, contract.payment_terms,
+        contract.breach_terms, contract.payment_terms, contract.cancellation_terms, contract.revision_terms,
       ]),
     [
       contract.fee_amount, contract.fee_currency, contract.contract_duration,
       contract.start_date, contract.end_date, contract.platforms_json,
       contract.deliverable_count, contract.deliverables_json, contract.must_include_json,
       contract.usage_rights, contract.exclusivity, contract.buyout_rights,
-      contract.breach_terms, contract.payment_terms,
+      contract.breach_terms, contract.payment_terms, contract.cancellation_terms, contract.revision_terms,
     ],
   );
   // 重新提取开始(processing)时清掉脏标记,让新结果可以回填。
@@ -693,6 +699,8 @@ function ContractArchiveCard({
           ['buyout_rights', '买断授权', draft.buyout_rights, 'buyout_rights'],
           ['breach_terms', '违约条款', draft.breach_terms, 'breach_terms'],
           ['payment_terms', '付款条款', draft.payment_terms, 'payment_terms'],
+          ['cancellation_terms', '解约条款', draft.cancellation_terms, 'cancellation_terms'],
+          ['revision_terms', '返工/修改条款', draft.revision_terms, 'revision_terms'],
         ].map(([key, label, value, field]) => (
           <label key={key} className="text-[10px] text-slate-400">
             <span className="flex items-center justify-between gap-2 mb-1">{label}<ConfidenceBadge contract={contract} field={String(field)} /></span>
@@ -1969,9 +1977,12 @@ export function CampaignFinanceTab({
     const ledgerContractFee = costRowAmount(costRows, row, 'contract');
     const expenseAmount = expenseById.get(row.id)?.amount ?? row.cost ?? 0;
     const contractFee = ledgerContractFee || Math.max(expenseAmount - shippingFee - productCostAmount, 0);
+    // 残差推算的合同费要打"估"——与产品成本估算同口径,不冒充账本真值(扫描 #10)。
+    const contractFeeIsEstimate = !ledgerContractFee && contractFee > 0;
     return {
       row,
       contractFee,
+      contractFeeIsEstimate,
       shippingFee,
       productSent,
       productCost: productCostAmount,
@@ -2050,7 +2061,14 @@ export function CampaignFinanceTab({
                   </div>
                 </td>
                 <td className="px-4 py-2.5 text-slate-300 tabular-nums">
-                  {item.hasContract ? formatMoneyShort(item.contractFee) : <span className="text-slate-600">—</span>}
+                  {item.hasContract ? (
+                    <span>
+                      {formatMoneyShort(item.contractFee)}
+                      {item.contractFeeIsEstimate ? (
+                        <span className="text-[9px] text-amber-300/80 ml-1" title="按总支出倒推估算(成本账本暂无该 KOL 签约费行;合同确认归档后自动入账)">估</span>
+                      ) : null}
+                    </span>
+                  ) : <span className="text-slate-600">—</span>}
                 </td>
                 <td className="px-4 py-2.5 text-slate-300 tabular-nums">
                   {item.shippingFee > 0 ? formatMoneyShort(item.shippingFee) : <span className="text-slate-600">—</span>}
@@ -2072,8 +2090,10 @@ export function CampaignFinanceTab({
                   {item.total > 0 ? formatMoneyShort(item.total) : <span className="text-slate-600 font-normal">—</span>}
                 </td>
                 <td className="px-4 py-2.5">
-                  {item.hasContract ? (
+                  {item.hasContract && !item.contractFeeIsEstimate ? (
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300">已签合同</span>
+                  ) : item.hasContract ? (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-300/80" title="费用为倒推估算,账本暂无签约费行">费用估算</span>
                   ) : (
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/[0.04] text-slate-500">待签约</span>
                   )}
@@ -2204,7 +2224,10 @@ export function CampaignMaterialsTab({
                 const isDelivered = stageIndex(row.stage) >= stageIndex('received');
                 const shippingCost = costRowAmount(costRows, row, 'shipping');
                 const productSent = rowProductSent(row);
-                const productCostAmount = costRowAmount(costRows, row, 'product') || productCost(productSent, productUnitCosts);
+                const ledgerProductCost = costRowAmount(costRows, row, 'product');
+                const productCostAmount = ledgerProductCost || productCost(productSent, productUnitCosts);
+                // 与财务 tab 同口径:估算回退值打"估",不冒充账本真值(扫描 #9)。
+                const productCostIsEstimate = !ledgerProductCost && productCostAmount > 0;
                 const kolName = row.kolHandle || row.kolName || 'Unknown';
                 const handle = row.kolName || row.kolHandle || '-';
                 return (
@@ -2253,6 +2276,9 @@ export function CampaignMaterialsTab({
                         快递费 <span className="text-white tabular-nums">{formatMoneyShort(shippingCost)}</span>
                         {' · '}
                         产品成本 <span className="text-emerald-400 tabular-nums">{formatMoneyShort(productCostAmount)}</span>
+                        {productCostIsEstimate ? (
+                          <span className="text-[9px] text-amber-300/80 ml-1" title="按 SKU 成本目录单价估算(成本账本暂无该 KOL 产品成本行)">估</span>
+                        ) : null}
                       </div>
                     </div>
                   </div>
