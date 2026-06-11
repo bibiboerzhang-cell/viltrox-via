@@ -397,16 +397,45 @@ function parseEditableList(value: string): unknown[] {
   return text.split(/\n|,|，/).map((item) => item.trim()).filter(Boolean);
 }
 
+function deliverableLabel(record: Record<string, unknown>): string {
+  // 提取出的 deliverable 对象键是 content_type/platform/quantity/deadline/notes(合同提取 schema)。
+  const head = stringValue(
+    record.description || record.item || record.title || record.name || record.content_type || record.platform,
+  );
+  const qty = record.quantity != null && stringValue(record.quantity) ? `×${stringValue(record.quantity)}` : '';
+  const platform = head !== stringValue(record.platform) ? stringValue(record.platform) : '';
+  return [head, platform, qty].filter(Boolean).join(' · ') || stringValue(record.notes) || '交付项';
+}
+
 function compactList(value: unknown, fallback = '待确认') {
   const list = arrayValue(value);
   if (!list.length) return fallback;
   return list.map((item) => {
     if (item && typeof item === 'object') {
-      const record = item as Record<string, unknown>;
-      return stringValue(record.description || record.item || record.title || record.name || JSON.stringify(record));
+      return deliverableLabel(item as Record<string, unknown>);
     }
     return stringValue(item);
   }).filter(Boolean).slice(0, 3).join(' / ') || fallback;
+}
+
+// 把 deliverables 对象数组整理成人类可读的结构(不再把 JSON 代码塞进输入框)。
+function summarizeDeliverables(value: unknown): { line: string; notes: string }[] {
+  return arrayValue(value).map((item) => {
+    if (item && typeof item === 'object') {
+      const record = item as Record<string, unknown>;
+      const parts: string[] = [];
+      const type = stringValue(record.content_type || record.type || record.title || record.name);
+      const platform = stringValue(record.platform);
+      const qty = record.quantity != null && stringValue(record.quantity) ? `×${stringValue(record.quantity)}` : '';
+      const deadline = stringValue(record.deadline);
+      if (type) parts.push(type);
+      if (platform) parts.push(platform);
+      if (qty) parts.push(qty);
+      if (deadline) parts.push(`截止 ${deadline}`);
+      return { line: parts.join(' · ') || '交付项', notes: stringValue(record.notes || record.description) };
+    }
+    return { line: stringValue(item), notes: '' };
+  }).filter((d) => d.line || d.notes);
 }
 
 function moneyLabel(amount: unknown, currency: unknown) {
@@ -637,9 +666,27 @@ function ContractArchiveCard({
         <label className="text-[10px] text-slate-400">Exclusivity<input className="mt-1 w-full rounded-md border border-white/[0.08] bg-black/20 px-2 py-1.5 text-[11px] text-white" value={draft.exclusivity} onChange={(event) => update('exclusivity', event.target.value)} /></label>
       </div>
 
+      <div className="text-[10px] text-slate-400">
+        <span className="flex items-center justify-between gap-2 mb-1">Deliverables 交付物<ConfidenceBadge contract={contract} field="deliverables" /></span>
+        <div className="w-full rounded-md border border-white/[0.08] bg-black/20 px-2.5 py-2 space-y-2">
+          {summarizeDeliverables(contract.deliverables_json).length ? (
+            summarizeDeliverables(contract.deliverables_json).map((d, index) => (
+              <div key={index} className="flex gap-2">
+                <span className="text-[10px] text-purple-300/70 mt-0.5 tabular-nums shrink-0">{index + 1}.</span>
+                <div className="min-w-0">
+                  <div className="text-[11px] text-white font-medium">{d.line}</div>
+                  {d.notes && <div className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">{d.notes}</div>}
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="text-[11px] text-slate-500">—</div>
+          )}
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
         {[
-          ['deliverables', 'Deliverables', draft.deliverables, 'deliverables'],
           ['must_include', '必须包含', draft.must_include, 'must_include'],
           ['usage_rights', 'Usage rights', draft.usage_rights, 'usage_rights'],
           ['buyout_rights', '买断授权', draft.buyout_rights, 'buyout_rights'],
