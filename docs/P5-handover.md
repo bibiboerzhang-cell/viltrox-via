@@ -20,7 +20,10 @@
 | 2026-06-11 14:15 | admin-web HUP + npm build | — | — | 46951(workers 61574/61575) | C3/C9 端点 403=已注册;dist=36c3ae70 |
 | 2026-06-11 14:15 | 铁律对账 | — | — | — | retrospective_aggregate.py 写 SQL 触 fit/kol_pool=**0**(5 处命中全为 docstring/diagnostics 标志);kol_pool 指纹基线 行1123 / fit_score合计 507.4200 / fit_reason非空 1123(跑复盘任务后应不变) |
 
-**激活完成(commit 38d44af3/2a92f719/39011c89/36c3ae70 全生效)。** 合同异步链 + 复盘聚合 + 费用估算 + 请求合一 现已在浏览器可用。回滚序:G4→G3→G2→G1 + 106 down + worker/admin 重载回旧。
+| 2026-06-11 14:5x | **Window A-fix**:worker ScopeDenied 修复 + 泳道 ETA | — | 61087 → **67105** | 46951(67244/67246) | commit `4ce7a9b7`;job 896 根因=worker 伪 staff 过不了项目 scope(API 入队已 scope,worker 改无 scope 直取+全程兜底 _mark_failed);queue_view 增 queue_position/ahead/eta;TaskProgressBoard 排队区显示前方/约X分钟(冻结区按用户直接指令加法);UI 通知卡深色化 `b0833b78` |
+| 待办 | 残留:合同行(job 896 target)卡 processing → 浏览器「删除+重传」即解;job_execution_ledger 两条 5/20 孤儿 `vkpi_official_channel_sync` 在排队区显示为『搜索/抓取·未命名』(R3 欠账,清理归 P6) | — | — | — | 手动 UPDATE 被守卫拦(协议⑥),命令已报用户 |
+
+**激活完成(commit 38d44af3/2a92f719/39011c89/36c3ae70 + 4ce7a9b7/b0833b78 全生效)。** 合同异步链 + 复盘聚合 + 费用估算 + 请求合一 现已在浏览器可用。回滚序:G4→G3→G2→G1 + 106 down + worker/admin 重载回旧。
 
 ## 一波备稿(未提交,全程 tsc+py_compile 绿,未激活)
 > 单轨执行;基线 HEAD e90f28b8。改 11 文件 + 新增 3 文件(retrospective_aggregate.py、migration 106 up/down)。
