@@ -1393,16 +1393,36 @@ def _process_account_dossier_extract(conn: psycopg.Connection[Any], job: dict[st
             )
 
 
+def _resolve_job_staff(conn: psycopg.Connection[Any], payload: dict[str, Any]) -> dict[str, Any]:
+    """Build a staff dict for worker-run domain calls.
+
+    payload carries triggered_by_user_id (a *users.id*), NOT a staff.id. Paths that hit
+    llm_gateway → vkpi_llm_calls.created_by_staff_id (FK → staff.id) need the real staff.id;
+    feeding the user_id there caused job 900's ForeignKeyViolation (user 108 → no staff.id 108;
+    the real staff.id is 84). Resolve user_id → staff.id here. Keep user_id for attribution
+    columns that legitimately store users.id (e.g. vkpi_analysis_cache.triggered_by_user_id).
+    Not-found (non-staff actor, shouldn't reach these endpoints): null out so the FK records NULL
+    rather than re-raising — `workflow.staff_id()` falls back to user_id, so we must drop it too.
+    """
+    user_id = _int_or_none(payload.get("triggered_by_user_id"))
+    resolved = _int_or_none(payload.get("staff_id"))
+    if resolved is None and user_id is not None:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute("SELECT id FROM staff WHERE user_id=%s ORDER BY id LIMIT 1", (user_id,))
+            row = cur.fetchone()
+        if row:
+            resolved = _int_or_none(row.get("id"))
+    if resolved is None:
+        return {"id": None, "staff_id": None, "user_id": None}
+    return {"id": resolved, "staff_id": resolved, "user_id": user_id}
+
+
 def _process_project_contract_extract(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
     contract_id = _int_or_none(payload.get("target_id"))
     project_id = _int_or_none(payload.get("project_id"))
     if not contract_id or not project_id:
         raise ValueError("project_contract_extract payload must include target_id and project_id")
-    staff = {
-        "user_id": payload.get("triggered_by_user_id"),
-        "id": payload.get("triggered_by_user_id"),
-        "staff_id": payload.get("staff_id"),
-    }
+    staff = _resolve_job_staff(conn, payload)
     # contracts.py uses sqlite-compat '?' via its own get_conn(); run inside the sync scope so
     # placeholders are translated and never touch this worker's raw psycopg connection.
     # R2 ordering: the core writes domain state (extraction_status='ready'/'failed' + cache)
@@ -1422,7 +1442,7 @@ def _process_project_retrospective(conn: psycopg.Connection[Any], job: dict[str,
     project_id = _int_or_none(payload.get("target_id") or payload.get("project_id"))
     if not project_id:
         raise ValueError("project_retrospective_aggregate payload must include target_id")
-    staff = {"user_id": payload.get("triggered_by_user_id"), "id": payload.get("triggered_by_user_id")}
+    staff = _resolve_job_staff(conn, payload)
     # retrospective_aggregate uses sqlite-compat '?' via its own get_conn(); run inside the sync scope.
     # R2 ordering: the domain writes cache(project) BEFORE we mark the job done; on no-ready/failure it
     # writes nothing to cache and we mark the job blocked (not done) so the UI/读端能区分。
