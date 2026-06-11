@@ -143,8 +143,10 @@ function assignmentToProjectRow(
     comments: safeNumber(item.total_comments),
     clicks: null,
     orders: null,
-    gmv: 0,
-    cost: 0,
+    // 逐 KOL 钱数在归因键(links→assignment 维)接通前没有数据来源:null=无归因数据(显"—"),
+    // 不写 0 冒充"归因结果为零"。
+    gmv: null,
+    cost: null,
     roi: null,
     ownerId: ownerId || undefined,
     ownerName: textValue(ownerName, '未分配'),
@@ -178,6 +180,9 @@ export function projectDetailToRow(detail: VkpiProjectDetail, fallback?: VkpiPro
   const startedAt = firstEventAt(detail, project);
   const stageStartedAt = currentStageStartedAt(detail, stage, project);
   const linkSummary = detail.link_summary || {};
+  // 钱口径语义:链路不存在 → null(显"—");有链路但值为零 → 0(显 $0)。
+  const hasAttribution = safeNumber(linkSummary.link_count) > 0 || (detail.sales_attributions?.length || 0) > 0;
+  const hasCostLedger = (detail.costs || []).some((item) => String((item as { status?: string }).status || '') !== 'void');
   const validClicks = safeNumber(linkSummary.valid_click_count || linkSummary.click_count);
   const revenue = centsToUsd(detail.roi?.revenue_cents ?? sumCents(detail.sales_attributions, 'revenue_cents', 'gmv_cents'));
   const cost = centsToUsd(detail.roi?.cost_cents ?? sumCents(detail.costs, 'amount_cents', 'cost_cents'));
@@ -209,11 +214,11 @@ export function projectDetailToRow(detail: VkpiProjectDetail, fallback?: VkpiPro
     views: contentViews || projectViews || fallback?.views || 0,
     likes: contentLikes || fallback?.likes || 0,
     comments: contentComments || fallback?.comments || 0,
-    clicks: validClicks || fallback?.clicks || null,
-    orders,
-    gmv: revenue || fallback?.gmv || 0,
-    cost: cost || fallback?.cost || 0,
-    roi: cost ? Number((revenue / cost).toFixed(2)) : fallback?.roi || null,
+    clicks: hasAttribution ? validClicks : null,
+    orders: hasAttribution ? orders : null,
+    gmv: hasAttribution ? revenue : null,
+    cost: hasCostLedger ? cost : null,
+    roi: hasAttribution && hasCostLedger && cost ? Number((revenue / cost).toFixed(2)) : null,
     ownerId: firstText(project.assigned_staff_id, project.created_by_staff_id, fallback?.ownerId) || undefined,
     ownerName: textValue(project.staff_name || project.owner_name || project.assigned_staff_id || fallback?.ownerName, fallback?.ownerName || '未分配'),
     ownerAvatar: fallback?.ownerAvatar,

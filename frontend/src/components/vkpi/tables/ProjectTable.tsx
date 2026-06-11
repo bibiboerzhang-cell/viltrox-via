@@ -120,8 +120,8 @@ export function ProjectTable({
                 </td>
                 <td>
                   <div className="vkpi-metric-stack">
-                    <span>{currencyFormatter.format(project.gmv)}</span>
-                    {showFinancials ? <small>成本 {currencyFormatter.format(project.cost)}</small> : null}
+                    <span>{project.gmv == null ? '—' : currencyFormatter.format(project.gmv)}</span>
+                    {showFinancials ? <small>成本 {project.cost == null ? '—' : currencyFormatter.format(project.cost)}</small> : null}
                   </div>
                 </td>
                 <td>

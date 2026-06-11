@@ -1745,12 +1745,13 @@ export function CampaignAnalyticsTab({
   const totalComments = rows.reduce((sum, row) => sum + (row.comments || 0), 0);
   const publishedKols = rows.filter(analyticsHasPublishedEvidence);
   const projectTotalCost = stats.cost || 0;
-  const roi = projectTotalCost > 0 ? ((stats.gmv / projectTotalCost) * 100).toFixed(1) : '—';
+  // null=归因链路不存在(显"—");0=有链路但值为零(显 $0/0)。
+  const roi = stats.gmv != null && projectTotalCost > 0 ? ((stats.gmv / projectTotalCost) * 100).toFixed(1) : '—';
   const kpis: Array<[string, string, typeof Eye, string]> = [
     ['总曝光', formatLargeNum(stats.views), Eye, '#06b6d4'],
     ['总点赞', formatLargeNum(totalLikes), Heart, '#ec4899'],
     ['总评论', formatLargeNum(totalComments), MessageCircle, '#a855f7'],
-    ['Shopify 点击', formatLargeNum(stats.clicks), ShoppingCart, '#fb923c'],
+    ['Shopify 点击', stats.clicks == null ? '—' : formatLargeNum(stats.clicks), ShoppingCart, '#fb923c'],
     ['归因 GMV', formatMoneyShort(stats.gmv), DollarSign, '#10b981'],
     ['ROI', `${roi}${roi !== '—' ? '%' : ''}`, TrendingUp, '#10b981'],
   ];

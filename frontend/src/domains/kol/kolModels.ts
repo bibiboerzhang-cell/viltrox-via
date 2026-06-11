@@ -87,7 +87,7 @@ export function buildSelectedKol(projects: VkpiProjectRow[], links: VkpiLinkRow[
       destination: link?.destination || '-',
       clicks: link?.validClicks || 0,
       orders: first.orders || 0,
-      gmv: first.gmv,
+      gmv: first.gmv ?? 0,
       roi: first.roi || 0,
     },
     followUpNote: `项目总耗时 ${first.totalDurationLabel || '-'}，当前阶段已停留 ${first.stageDurationLabel || '-'}。请按流程继续推进。`,

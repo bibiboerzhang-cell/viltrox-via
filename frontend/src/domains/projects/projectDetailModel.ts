@@ -105,10 +105,11 @@ export interface ProjectAnalyticsSummary {
 
 export interface ProjectStatsSummary {
   views: number;
-  clicks: number;
-  orders: number;
-  gmv: number;
-  cost: number;
+  // 钱口径:null = 归因链路不存在(渲染"—");0 = 有链路但值为零(渲染 $0)。
+  clicks: number | null;
+  orders: number | null;
+  gmv: number | null;
+  cost: number | null;
   roi: number | null;
   published: number;
   publishRate: number;
@@ -299,13 +300,37 @@ export function buildAnalytics(rows: VkpiProjectRow[]): ProjectAnalyticsSummary 
   };
 }
 
-export function buildProjectStatsSummary(rows: VkpiProjectRow[]): ProjectStatsSummary {
+export function buildProjectStatsSummary(rows: VkpiProjectRow[], detail?: VkpiProjectDetail | null): ProjectStatsSummary {
   const views = rows.reduce((sum, row) => sum + (row.views || 0), 0);
+  const published = rows.filter((row) => stageIndex(row.stage) >= stageIndex('published')).length;
+  // 钱口径语义(裁决②):有归因链路但值为零 = 显 $0;链路本身不存在 = null(渲染为"—")。
+  // detail.roi/link_summary 是后端项目级真值(workflow_detail.py);rows 的逐 KOL 钱数在
+  // 归因键(links→assignment 维)接通之前没有数据来源,绝不从 rows 求和冒充。
+  if (detail) {
+    const linkSummary = detail.link_summary || ({} as Record<string, unknown>);
+    const hasAttribution = Number((linkSummary as { link_count?: number }).link_count || 0) > 0
+      || (detail.sales_attributions?.length || 0) > 0;
+    const hasCostLedger = (detail.costs || []).some((item) => String((item as { status?: string }).status || '') !== 'void');
+    const revenueCents = Number(detail.roi?.revenue_cents || 0);
+    const costCents = Number(detail.roi?.cost_cents || 0);
+    const gmv = hasAttribution ? revenueCents / 100 : null;
+    const cost = hasCostLedger ? costCents / 100 : null;
+    return {
+      views,
+      clicks: hasAttribution ? Number((linkSummary as { valid_click_count?: number; click_count?: number }).valid_click_count
+        ?? (linkSummary as { click_count?: number }).click_count ?? 0) : null,
+      orders: hasAttribution ? Number((linkSummary as { order_count?: number }).order_count || 0) : null,
+      gmv,
+      cost,
+      roi: gmv != null && cost ? gmv / cost : null,
+      published,
+      publishRate: rows.length ? Math.round((published / rows.length) * 100) : 0,
+    };
+  }
   const clicks = rows.reduce((sum, row) => sum + (row.clicks || 0), 0);
   const orders = rows.reduce((sum, row) => sum + (row.orders || 0), 0);
   const gmv = rows.reduce((sum, row) => sum + (row.gmv || 0), 0);
   const cost = rows.reduce((sum, row) => sum + (row.cost || 0), 0);
-  const published = rows.filter((row) => stageIndex(row.stage) >= stageIndex('published')).length;
   return {
     views,
     clicks,
@@ -413,7 +438,7 @@ export function buildContractLines(rows: VkpiProjectRow[]): ContractLine[] {
       stage: row.stage,
       statusLabel: status.statusLabel,
       statusClass: status.statusClass,
-      contractType: row.cost > 0 ? '成本 / 样品合作待确认' : '合作条款待确认',
+      contractType: (row.cost ?? 0) > 0 ? '成本 / 样品合作待确认' : '合作条款待确认',
       amount: row.cost || 0,
       evidenceCount: row.stageEventCount ?? 0,
       nextAction: status.nextAction,

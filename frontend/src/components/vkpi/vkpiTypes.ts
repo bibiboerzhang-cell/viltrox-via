@@ -235,8 +235,9 @@ export interface VkpiProjectRow {
   comments?: number;
   clicks: number | null;
   orders: number | null;
-  gmv: number;
-  cost: number;
+  // 钱口径:null = 无归因数据/链路不存在(显"—");0 = 有归因链路但值为零(显 $0)。
+  gmv: number | null;
+  cost: number | null;
   roi: number | null;
   ownerId?: string;
   ownerName: string;

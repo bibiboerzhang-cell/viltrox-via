@@ -331,7 +331,7 @@ export function ProjectDetailView({
       stageDurationLabel: '刚刚',
     };
   }), [baseRows, stageOverrides]);
-  const stats = useMemo(() => buildProjectStatsSummary(rows), [rows]);
+  const stats = useMemo(() => buildProjectStatsSummary(rows, detail), [rows, detail]);
   const analytics = useMemo(() => buildAnalytics(rows), [rows]);
   const expenseLines = useMemo(() => buildExpenseLines(rows), [rows]);
   const stageCosts = useMemo(() => buildStageCostSummary(expenseLines), [expenseLines]);
