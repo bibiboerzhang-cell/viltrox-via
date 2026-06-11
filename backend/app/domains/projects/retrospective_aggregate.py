@@ -228,6 +228,9 @@ def run_project_retrospective(project_id: int, *, staff: dict[str, Any] | None =
         prompt,
         purpose="vkpi_project_retrospective",
         max_output_tokens=MAX_OUTPUT_TOKENS,
+        # gemini-flash 的动态思考会吃光 maxOutputTokens 导致 JSON 截断(out=43→574 仍不完整);
+        # 路由到 openai(gpt-5.4-mini,非重思考、稳定返回完整 JSON)。失败仍按链回退。
+        preferred_provider="openai",
         cost_tag=BUDGET_SCOPE,
         staff=staff or {},
         metadata={"project_id": int(project_id), "video_count": len(selected)},
