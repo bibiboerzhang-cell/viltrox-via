@@ -31,6 +31,10 @@ SOURCE_DERIVE_METHOD = "video_analysis_final_v1"
 # F5 截断/选取(确定性,写入 provenance,保证重新生成可比):
 TOP_N_VIDEOS = 15           # 最多纳入的视频数(按 view_count 降序,平手按 evidence_id 升序)
 PER_VIDEO_CHARS = 2400      # 每视频摘要截断 ~600 token
+# gemini-flash 等 thinking 模型把思考算进 maxOutputTokens;1200 太紧→思考吃光后输出仅
+# ~43 token 即被 MAX_TOKENS 截断(整段 JSON 不完整)。提到 gateway 上限 4000,给思考+
+# 完整 JSON 输出留够空间。成本仍 <$0.05/次,在闸A 已批 single=$1 之内。
+MAX_OUTPUT_TOKENS = 4000
 
 
 def _triggered_by_user_id(staff: dict[str, Any] | None) -> int | None:
@@ -162,7 +166,7 @@ def enqueue_project_retrospective(project_id: int, *, staff: dict[str, Any] | No
         preflight = llm_gateway.budget_preflight(
             f"project_retrospective project:{int(project_id)}",
             purpose="vkpi_project_retrospective",
-            max_output_tokens=1200,
+            max_output_tokens=MAX_OUTPUT_TOKENS,
             cost_tag=BUDGET_SCOPE,
         )
     except Exception:
@@ -223,7 +227,7 @@ def run_project_retrospective(project_id: int, *, staff: dict[str, Any] | None =
     resp = llm_gateway.invoke(
         prompt,
         purpose="vkpi_project_retrospective",
-        max_output_tokens=1200,
+        max_output_tokens=MAX_OUTPUT_TOKENS,
         cost_tag=BUDGET_SCOPE,
         staff=staff or {},
         metadata={"project_id": int(project_id), "video_count": len(selected)},
@@ -239,8 +243,21 @@ def run_project_retrospective(project_id: int, *, staff: dict[str, Any] | None =
         }
 
     parsed = _parse_llm_json(text)
+    insight = str(parsed.get("insight_text") or "").strip()
+    if not insight:
+        # 解析不出结构化 insight。若模型本想返回 JSON 却被截断/损坏(text 以 '{' 开头),
+        # 不要把半截 JSON 当正文塞进 cache(会渲染成代码)——判失败,不写 cache,让用户重试。
+        if text.lstrip().startswith("{"):
+            return {
+                "status": "failed",
+                "reason": "llm_json_truncated_or_malformed",
+                "project_id": int(project_id),
+                "provider": resp.get("provider"),
+            }
+        # 纯散文模型:整段当 insight(非 JSON 输出的优雅兜底)。
+        insight = text[:600]
     result = {
-        "insight_text": str(parsed.get("insight_text") or "").strip() or text[:600],
+        "insight_text": insight,
         "highlights": [str(x) for x in (parsed.get("highlights") or []) if str(x).strip()][:6],
         "risks": [str(x) for x in (parsed.get("risks") or []) if str(x).strip()][:6],
         "next_steps": [str(x) for x in (parsed.get("next_steps") or []) if str(x).strip()][:6],
