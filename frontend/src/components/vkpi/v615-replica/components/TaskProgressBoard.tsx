@@ -61,6 +61,19 @@ function taskLabel(task) {
   return `${task.kind || "任务"} · ${taskTargetText(task) || "未命名"}`;
 }
 
+function taskEtaText(task) {
+  const eta = Number(task?.eta_seconds);
+  const ahead = Number(task?.ahead_count);
+  if (!Number.isFinite(eta) && !Number.isFinite(ahead)) return "";
+  const parts = [];
+  if (Number.isFinite(ahead)) parts.push(ahead > 0 ? `前方 ${ahead} 个` : "下一个就是它");
+  if (Number.isFinite(eta) && eta > 0) {
+    const mins = Math.max(1, Math.round(eta / 60));
+    parts.push(`约 ${mins} 分钟`);
+  }
+  return parts.join(" · ");
+}
+
 function taskRetryText(task) {
   const category = String(task?.error_category || "").trim();
   const retryAt = String(task?.next_retry_at || "").trim();
@@ -329,6 +342,7 @@ export function TaskProgressBoard({ apiToken = "" }) {
             e("span", { className: "w-[18px] shrink-0 text-[10px] text-white/40 tabular-nums" }, `#${index + 1}`),
             e("span", { className: "min-w-0 flex-1" },
               e("span", { className: "block truncate text-[11px] text-white/60" }, taskLabel(task)),
+              taskEtaText(task) && e("span", { className: "block truncate text-[10px] text-emerald-300/70" }, taskEtaText(task)),
               taskRetryText(task) && e("span", { className: "block truncate text-[10px] text-white/30" }, taskRetryText(task))
             )
           ))

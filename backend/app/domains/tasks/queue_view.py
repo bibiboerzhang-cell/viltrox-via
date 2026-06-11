@@ -237,6 +237,26 @@ def _make_item(
     return _jsonable(item)
 
 
+DEFAULT_JOB_DURATION_SEC = 300
+
+
+def _avg_duration_by_job_type(conn: Any) -> dict[str, float]:
+    """Read-only:近 7 天 done 任务的均时(秒),供排队 ETA 估算;无样本回退默认值。"""
+    try:
+        rows = conn.execute(
+            """
+            SELECT job_type, AVG(EXTRACT(EPOCH FROM (updated_at - created_at))) AS avg_sec
+            FROM apify_jobs
+            WHERE status='done' AND updated_at >= NOW() - INTERVAL '7 days'
+            GROUP BY job_type
+            LIMIT 50
+            """,
+        ).fetchall()
+        return {str(r["job_type"]): max(30.0, float(r["avg_sec"] or 0)) for r in rows}
+    except Exception:
+        return {}
+
+
 def _query_apify_jobs(cutoff: datetime, limit: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     conn = get_conn()
     active_rows = conn.execute(
@@ -263,9 +283,44 @@ def _query_apify_jobs(cutoff: datetime, limit: int) -> tuple[list[dict[str, Any]
         (cutoff, limit),
     ).fetchall()
 
+    # 排队位次/ETA(worker 串行消费 apify_jobs):按 claim 排序(COALESCE(next_retry_at,created_at))
+    # 给每个 queued 任务算 前方任务数 与 预计等待秒数(基于近 7 天同类型均时,无样本回退 300s)。
+    avg_by_type = _avg_duration_by_job_type(conn)
+
+    def _dur(job_type: str) -> float:
+        return avg_by_type.get(job_type, DEFAULT_JOB_DURATION_SEC)
+
+    eta_info: dict[Any, dict[str, Any]] = {}
+    running_remaining = 0.0
+    ahead = 0
+    for row in active_rows:  # 已按 claim 顺序排序
+        data = dict(row)
+        jt = _text(data.get("job_type"))
+        status = _text(data.get("status"))
+        if status in ("running", "processing"):
+            running_remaining += _dur(jt) / 2  # 在跑任务按半程估
+            ahead += 1
+        elif status in ("queued", "retrying"):
+            eta_info[data.get("id")] = {
+                "queue_position": sum(1 for v in eta_info.values()) + 1,
+                "ahead_count": ahead,
+                "eta_seconds": int(running_remaining + sum(x["_q"] for x in eta_info.values())),
+                "_q": _dur(jt),
+            }
+            ahead += 1
+    for v in eta_info.values():
+        v.pop("_q", None)
+
     def convert(row: Any) -> dict[str, Any]:
         data = dict(row)
         payload = _loads(data.get("payload"), {})
+        extra = {
+            "error": _text(data.get("last_error")) or None,
+            "error_category": _text(data.get("last_error_category")) or None,
+            "next_retry_at": _timestamp(data.get("next_retry_at")),
+        }
+        if data.get("id") in eta_info:
+            extra.update(eta_info[data.get("id")])
         return _make_item(
             source="apify_jobs",
             row_id=data.get("id"),
@@ -274,11 +329,7 @@ def _query_apify_jobs(cutoff: datetime, limit: int) -> tuple[list[dict[str, Any]
             payload=payload,
             created_at=data.get("created_at"),
             updated_at=data.get("updated_at"),
-            extra={
-                "error": _text(data.get("last_error")) or None,
-                "error_category": _text(data.get("last_error_category")) or None,
-                "next_retry_at": _timestamp(data.get("next_retry_at")),
-            },
+            extra=extra,
         )
 
     return [convert(row) for row in active_rows], [convert(row) for row in recent_rows]

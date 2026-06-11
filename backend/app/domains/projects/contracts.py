@@ -536,24 +536,39 @@ def run_contract_extraction_for_job(
 ) -> dict[str, Any]:
     """apify worker entry: run extraction for a contract already marked 'processing' by enqueue.
 
-    Uses contracts-local get_conn() (sqlite-compat '?'); the worker wraps this in
-    db_connection_sync_scope() so the abstraction layer translates placeholders.
-    Non-PDF returns skipped (defensive — enqueue already filters). Failure marks the
-    contract failed (inside the core) and re-raises so the worker's _fail_job retries.
+    System context: NO scope check here — the API enqueue already enforced project scope
+    with the real session staff; the payload-rebuilt staff dict cannot pass ScopeDenied
+    and is only used for cost-ledger attribution. Uses contracts-local get_conn()
+    (sqlite-compat '?'); the worker wraps this in db_connection_sync_scope().
+    Any failure marks the contract failed and re-raises so the worker's _fail_job records it.
     """
     conn = get_conn()
-    contract = get_contract(project_id, contract_id, staff=staff, write=True)
-    if not str(contract.get("file_name") or "").lower().endswith(".pdf"):
-        return {"contract": contract, "extraction": {"status": "skipped", "reason": "not_pdf"}}
-    context = _assignment_context(
-        conn,
-        int(project_id),
-        _int(contract.get("assignment_id")) or None,
-        _int(contract.get("kol_pool_id")) or None,
-    )
-    return _run_contract_extraction_core(
-        conn, project_id, contract_id, contract=contract, context=context, staff=staff
-    )
+    try:
+        row = conn.execute(
+            "SELECT * FROM vkpi_project_contracts WHERE id=? AND project_id=?",
+            (int(contract_id), int(project_id)),
+        ).fetchone()
+        if not row:
+            raise LookupError("contract not found")
+        contract = _safe_row(row)
+        if not str(contract.get("file_name") or "").lower().endswith(".pdf"):
+            return {"contract": contract, "extraction": {"status": "skipped", "reason": "not_pdf"}}
+        context = _assignment_context(
+            conn,
+            int(project_id),
+            _int(contract.get("assignment_id")) or None,
+            _int(contract.get("kol_pool_id")) or None,
+        )
+        return _run_contract_extraction_core(
+            conn, project_id, contract_id, contract=contract, context=context, staff=staff
+        )
+    except Exception as exc:
+        # 兜底:任何 pre-core 异常也要把合同翻 failed,避免卡死在 processing(前端会一直轮询)
+        try:
+            _mark_failed(conn, contract_id, project_id, str(exc))
+        except Exception:
+            logger.warning("contract.job.mark_failed_failed contract_id=%s", contract_id)
+        raise
 
 
 def update_contract(project_id: int, contract_id: int, body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
