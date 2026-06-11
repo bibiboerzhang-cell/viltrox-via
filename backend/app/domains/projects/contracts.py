@@ -29,6 +29,8 @@ CONTRACT_DERIVE_METHOD = "claude_contract_extract_v1"
 CONTRACT_BUDGET_SCOPE = "cron:vkpi_contract_extract"
 CONTRACT_SINGLE_CALL_SCOPE = "single_call_contract"
 CONTRACT_ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx"}
+CONTRACT_EXTRACT_JOB_TYPE = "project_contract_extract"
+CONTRACT_EXTRACT_DERIVE_METHOD = "project_contract_extract_v1"
 
 
 def _json(value: Any) -> str:
@@ -399,6 +401,28 @@ def run_contract_extraction(
         (utcnow(), int(contract_id), int(project_id)),
     )
     conn.commit()
+    result = _run_contract_extraction_core(
+        conn, project_id, contract_id, contract=contract, context=context, staff=staff, local_path=local_path
+    )
+    return {"contract": get_contract(project_id, contract_id, staff=staff), "budget": budget, **result}
+
+
+def _run_contract_extraction_core(
+    conn: Any,
+    project_id: int,
+    contract_id: int,
+    *,
+    contract: dict[str, Any],
+    context: dict[str, Any] | None,
+    staff: dict[str, Any] | None,
+    local_path: str | None = None,
+) -> dict[str, Any]:
+    """Heavy extraction body (R2 download → Claude subprocess → apply), shared by the sync
+    path (run_contract_extraction) and the apify worker handler.
+
+    Caller guarantees the contract is a PDF and already marked extraction_status='processing'.
+    Keeps the 120s subprocess timeout; on failure marks the contract failed and re-raises.
+    """
     temp_path = local_path
     with tempfile.TemporaryDirectory(prefix="vkpi-contract-extract-") as tmpdir:
         if not temp_path:
@@ -416,8 +440,90 @@ def run_contract_extraction(
         except Exception as exc:
             _mark_failed(conn, contract_id, project_id, str(exc))
             raise
-        result = _apply_extraction(conn, contract_id, project_id, staff, extraction)
-        return {"contract": get_contract(project_id, contract_id, staff=staff), "budget": budget, **result}
+        return _apply_extraction(conn, contract_id, project_id, staff, extraction)
+
+
+def enqueue_contract_extract_job(
+    project_id: int,
+    contract_id: int,
+    *,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Queue one async contract-extraction job. Does NOT run the LLM here.
+
+    - Non-PDF returns skipped (no job enqueued).
+    - Dedups against an active (queued/running) job for the same contract.
+    - Budget preflight stays synchronous so callers get an early failure (mapped to 400).
+    - payload deliberately omits search_session_id so the KOL session sync no-ops.
+    The actual extraction is run later by the apify worker via _run_contract_extraction_core.
+    """
+    contract = get_contract(project_id, contract_id, staff=staff, write=True)
+    if not str(contract.get("file_name") or "").lower().endswith(".pdf"):
+        return {
+            "status": "skipped",
+            "contract": contract,
+            "extraction": {"status": "skipped", "reason": "not_pdf"},
+        }
+    conn = get_conn()
+    active = conn.execute(
+        """
+        SELECT id, job_type, status, payload, created_at, updated_at
+        FROM apify_jobs
+        WHERE job_type=?
+          AND status IN ('queued', 'running')
+          AND payload->>'target_type'='project_contract'
+          AND payload->>'target_id'=?
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        """,
+        (CONTRACT_EXTRACT_JOB_TYPE, str(int(contract_id))),
+    ).fetchone()
+    if active:
+        item = dict(active)
+        return {
+            "status": "already_queued" if item.get("status") == "queued" else "already_running",
+            "contract": contract,
+            "job": item,
+            "diagnostics": {"provider_calls": False, "llm_calls": False, "worker_touched": False, "write_viltrox_fit_score": False},
+        }
+    budget = _budget_preflight(_int(contract.get("file_size_bytes")))
+    if not budget.get("allowed"):
+        _mark_failed(conn, contract_id, project_id, "budget_guard_blocked")
+        raise RuntimeError("budget_guard_blocked")
+    staff = staff or {}
+    payload = {
+        "target_type": "project_contract",
+        "target_id": str(int(contract_id)),
+        "project_id": int(project_id),
+        "assignment_id": _int(contract.get("assignment_id")) or None,
+        "kol_pool_id": _int(contract.get("kol_pool_id")) or None,
+        "r2_key": contract.get("r2_key"),
+        "file_name": contract.get("file_name"),
+        "derive_method": CONTRACT_EXTRACT_DERIVE_METHOD,
+        "query_text": contract.get("file_name") or f"contract:{int(contract_id)}",
+        "triggered_by_user_id": _triggered_by_user_id(staff),
+        "staff_id": _ledger_staff_id(staff),
+    }
+    conn.execute(
+        "UPDATE vkpi_project_contracts SET extraction_status='processing', status='needs_review', updated_at=? WHERE id=? AND project_id=?",
+        (utcnow(), int(contract_id), int(project_id)),
+    )
+    job = conn.execute(
+        """
+        INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
+        VALUES (?, ?::jsonb, 'queued', NOW(), NOW())
+        RETURNING id, job_type, status, payload, created_at, updated_at
+        """,
+        (CONTRACT_EXTRACT_JOB_TYPE, json.dumps(payload, ensure_ascii=False)),
+    ).fetchone()
+    conn.commit()
+    return {
+        "status": "queued",
+        "contract": get_contract(project_id, contract_id, staff=staff),
+        "job": dict(job) if job else None,
+        "budget": budget,
+        "diagnostics": {"provider_calls": False, "llm_calls": False, "worker_touched": False, "write_viltrox_fit_score": False},
+    }
 
 
 def update_contract(project_id: int, contract_id: int, body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
