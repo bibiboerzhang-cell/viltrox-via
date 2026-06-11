@@ -642,11 +642,35 @@ def _record_contract_fee_to_ledger(project_id: int, contract_id: int, *, staff: 
     if fee <= 0:
         return None
     source_ref = f"contract:{int(contract_id)}"
-    existing = get_conn().execute(
-        "SELECT id FROM vkpi_cost_ledger WHERE project_id=? AND cost_type='cash_fee' AND source_ref=? LIMIT 1",
+    conn = get_conn()
+    # KOL 归属键:前端 costRowAmount 按 metadata.assignment_id/kol_pool_id 匹配 KOL 明细行——
+    # 不带键的合同费只进顶部汇总卡、进不了明细行(全盘扫描 #4)。
+    assignment_id = _int(contract.get("assignment_id")) or None
+    kol_pool_id = _int(contract.get("kol_pool_id")) or None
+    metadata: dict[str, Any] = {"contract_id": int(contract_id), "from": "contract_confirm"}
+    if assignment_id:
+        metadata["assignment_id"] = assignment_id
+    if kol_pool_id:
+        metadata["kol_pool_id"] = kol_pool_id
+    existing = conn.execute(
+        "SELECT id, metadata_json FROM vkpi_cost_ledger WHERE project_id=? AND cost_type='cash_fee' AND source_ref=? LIMIT 1",
         (int(project_id), source_ref),
     ).fetchone()
     if existing:
+        row = _safe_row(existing)
+        old_meta = row.get("metadata_json")
+        if isinstance(old_meta, str):
+            try:
+                old_meta = json.loads(old_meta)
+            except Exception:
+                old_meta = {}
+        old_meta = old_meta if isinstance(old_meta, dict) else {}
+        # 历史行缺 KOL 归属键:借再次确认归档幂等补键(应用路径触发,非裸 UPDATE)。
+        if (assignment_id or kol_pool_id) and not (old_meta.get("assignment_id") or old_meta.get("kol_pool_id")):
+            conn.execute(
+                "UPDATE vkpi_cost_ledger SET metadata_json=?, updated_at=? WHERE id=?",
+                (json.dumps({**old_meta, **metadata}, ensure_ascii=False), utcnow(), int(row["id"])),
+            )
         return None
     from app.domains.costs import ledger as cost_ledger
 
@@ -659,7 +683,7 @@ def _record_contract_fee_to_ledger(project_id: int, contract_id: int, *, staff: 
             "status": "actual",
             "source_ref": source_ref,
             "note": "合同人工确认 · 签约费自动入账",
-            "metadata": {"contract_id": int(contract_id), "from": "contract_confirm"},
+            "metadata": metadata,
         },
         staff=staff,
     )
