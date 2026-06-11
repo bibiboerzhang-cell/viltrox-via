@@ -1,4 +1,4 @@
-import { Component, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
+import { Component, useEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
 import { Activity, AlertCircle, BookOpen, Boxes, Check, DollarSign, ExternalLink, Eye, FileText, Heart, MessageCircle, MousePointerClick, Package, ShoppingCart, Sparkles, TrendingUp, Upload, Video, X } from 'lucide-react';
 import { stageLabels } from '../../shared/vkpiConstants';
 import type { VkpiProjectDetail, VkpiProjectRow } from '../../vkpiTypes';
@@ -524,13 +524,47 @@ function ContractArchiveCard({
   onDelete?: (contractId: number, fileName?: string) => void;
 }) {
   const [draft, setDraft] = useState<ContractDraft>(() => initialContractDraft(contract));
+  // 用户是否手改过本表单:手改后不让后台轮询/重提取的回填覆盖编辑中的内容。
+  const editedRef = useRef(false);
+  // 提取结果指纹:仅当服务端真值变化时变(纯本地编辑期间稳定,不会触发回填)。
+  const extractionSig = useMemo(
+    () =>
+      JSON.stringify([
+        contract.fee_amount, contract.fee_currency, contract.contract_duration,
+        contract.start_date, contract.end_date, contract.platforms_json,
+        contract.deliverable_count, contract.deliverables_json, contract.must_include_json,
+        contract.usage_rights, contract.exclusivity, contract.buyout_rights,
+        contract.breach_terms, contract.payment_terms,
+      ]),
+    [
+      contract.fee_amount, contract.fee_currency, contract.contract_duration,
+      contract.start_date, contract.end_date, contract.platforms_json,
+      contract.deliverable_count, contract.deliverables_json, contract.must_include_json,
+      contract.usage_rights, contract.exclusivity, contract.buyout_rights,
+      contract.breach_terms, contract.payment_terms,
+    ],
+  );
+  // 重新提取开始(processing)时清掉脏标记,让新结果可以回填。
+  useEffect(() => {
+    if (contract.extraction_status === 'processing') editedRef.current = false;
+  }, [contract.extraction_status]);
+  // 提取真值变化(上传后异步提取完成 / 重新提取)→ 未手改则把结果灌进表单。
+  // 修复:此前用 useState 初始化函数只在挂载跑一次,processing 时挂载→提取完成后表单永远空。
+  useEffect(() => {
+    if (editedRef.current) return;
+    setDraft(initialContractDraft(contract));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [extractionSig]);
   const meta = contractStatusMeta(contract);
   const saving = busyKey === `save:${contract.id}`;
   const confirming = busyKey === `confirm:${contract.id}`;
   const extracting = busyKey === `extract:${contract.id}` || contract.extraction_status === 'processing';
   const downloading = busyKey === `download:${contract.id}`;
   const deleting = busyKey === `delete:${contract.id}`;
-  const update = (key: keyof ContractDraft, value: string) => setDraft((current) => ({ ...current, [key]: value }));
+  const update = (key: keyof ContractDraft, value: string) => {
+    editedRef.current = true;
+    setDraft((current) => ({ ...current, [key]: value }));
+  };
 
   return (
     <div className="rounded-xl border border-white/[0.07] bg-white/[0.018] p-3 space-y-3">
