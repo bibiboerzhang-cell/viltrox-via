@@ -176,6 +176,54 @@ def assert_project_access(project_id: int, staff: dict[str, Any] | None, *, writ
     raise ScopeDenied("project scope denied")
 
 
+def is_project_member(project_id: int, staff: dict[str, Any] | None) -> bool:
+    """True 当 actor 是该项目的 assigned 或 creator(批D 收款遮蔽豁免判定用)。"""
+    actor = actor_staff_id(staff)
+    if not actor:
+        return False
+    row = get_conn().execute(
+        "SELECT assigned_staff_id, created_by_staff_id FROM vkpi_projects WHERE id=?",
+        (int(project_id),),
+    ).fetchone()
+    if not row:
+        return False
+    item = dict(row)
+    return actor in {_int(item.get("assigned_staff_id")), _int(item.get("created_by_staff_id"))}
+
+
+_ANALYSIS_TARGET_PROJECT_TABLES = {
+    "contract": "vkpi_project_contracts",
+    "video": "vkpi_kol_video_evidence",
+}
+
+
+def resolve_analysis_target_project(target_type: str, target_id: str | int) -> int | None:
+    """批D 权限收口(2026-06-12):把分析缓存读目标映射回所属项目。
+
+    project → 自身;contract/video → 反查行上的 project_id;kol_pool 等无项目
+    维度的目标、或反查不到(历史 NULL 归属)→ 返回 None,调用方维持 tab 级权限,
+    不额外收紧(诚实降级,不假装有归属)。
+    """
+    kind = str(target_type or "").strip().lower()
+    try:
+        row_id = int(str(target_id).strip())
+    except (TypeError, ValueError):
+        return None
+    if kind == "project":
+        return row_id
+    table = _ANALYSIS_TARGET_PROJECT_TABLES.get(kind)
+    if not table:
+        return None
+    row = get_conn().execute(
+        f"SELECT project_id FROM {table} WHERE id=?",  # noqa: S608 - table 来自白名单映射
+        (row_id,),
+    ).fetchone()
+    if not row:
+        return None
+    project_id = _int(dict(row).get("project_id"))
+    return project_id or None
+
+
 def assert_link_access(link_id: int, staff: dict[str, Any] | None, *, write: bool = False) -> None:
     if can_view_all(staff):
         return

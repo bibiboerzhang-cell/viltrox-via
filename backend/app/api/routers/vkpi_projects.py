@@ -1,8 +1,10 @@
 """V-KPI project workflow routes."""
 from __future__ import annotations
 
+import re
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
 
@@ -23,6 +25,33 @@ def _scope_403(exc: Exception) -> HTTPException:
     return HTTPException(status_code=403, detail=str(exc) or "scope denied")
 
 
+_PAYMENT_KEY_RE = re.compile(r"payment|account|iban|swift|bank|payee|beneficiary|routing", re.IGNORECASE)
+_PAYMENT_MASK = "***"
+
+
+def _mask_payment_values(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: (_PAYMENT_MASK if _PAYMENT_KEY_RE.search(str(key)) and val not in (None, "", [], {}) else _mask_payment_values(val))
+            for key, val in value.items()
+        }
+    if isinstance(value, list):
+        return [_mask_payment_values(item) for item in value]
+    return value
+
+
+def _mask_payment_fields(result: Any, staff: dict | None, *, project_id: int | None = None) -> Any:
+    """批D 收款遮蔽(2026-06-12):合同详情/列表返回里的收款敏感字段
+    (payment/account/iban/swift/bank 类,含 extraction/manual_overrides 等 json 内
+    嵌套键)对非 can_view_all(finance/cost 域)且非项目 assigned/creator 的员工
+    遮蔽为 "***"。空值保留原样,前端可区分"未填"与"被遮蔽"。"""
+    if scope.can_view_all(staff, domain="finance") or scope.can_view_all(staff, domain="cost"):
+        return result
+    if project_id is not None and scope.is_project_member(int(project_id), staff):
+        return result
+    return _mask_payment_values(result)
+
+
 @router.get("/analysis-cache")
 def analysis_cache(
     target_type: str = Query(..., min_length=1),
@@ -30,20 +59,31 @@ def analysis_cache(
     derive_method: str = "",
     staff=Depends(require_tab("vkpi", "read")),
 ):
-    del staff
     target_type = target_type.strip()
     target_id = target_id.strip()
     derive_method = derive_method.strip()
     if not target_type or not target_id:
         raise HTTPException(status_code=400, detail="target_type and target_id required")
+    # 批D 权限收口(2026-06-12):原 del staff 绕过项目级 scope。能映射回项目的目标
+    # (project/contract/video)走 assert_project_access;kol_pool 等无项目维度目标
+    # 维持 tab 级权限(require_tab 已生效)。
+    scoped_project_id = scope.resolve_analysis_target_project(target_type, target_id)
+    if scoped_project_id is not None:
+        try:
+            scope.assert_project_access(scoped_project_id, staff)
+        except scope.ScopeDenied as exc:
+            raise _scope_403(exc) from exc
     entry = get_analysis_cache_entry(target_type, target_id, derive_method=derive_method or None)
-    return {
+    result = {
         "target_type": target_type,
         "target_id": target_id,
         "derive_method": derive_method or None,
         "state": "ready" if entry else "pending",
         "entry": entry,
     }
+    if target_type.lower() == "contract":
+        result = _mask_payment_fields(result, staff, project_id=scoped_project_id)
+    return result
 
 
 @router.get("/projects")
@@ -96,7 +136,11 @@ def project_video_analysis_cache(
     derive_method: str = "video_analysis_final_v1",
     staff=Depends(require_tab("vkpi", "read")),
 ):
-    del staff
+    # 批D 权限收口(2026-06-12):原 del staff 绕过项目级 scope,改为读模式断言。
+    try:
+        scope.assert_project_access(int(project_id), staff)
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
     # 向后兼容:单值返回旧形状;逗号分隔的多值返回 by_method 映射,供前端一次取回拆多份(批5)。
     methods = [m.strip() for m in str(derive_method or "").split(",") if m.strip()] or ["video_analysis_final_v1"]
     if len(methods) == 1:
@@ -121,7 +165,11 @@ def generate_project_retrospective(project_id: int, staff=Depends(require_tab("v
 
 @router.get("/projects/{project_id}/retrospective")
 def project_retrospective(project_id: int, staff=Depends(require_tab("vkpi", "read"))):
-    del staff
+    # 批D 权限收口(2026-06-12):原 del staff 绕过项目级 scope,改为读模式断言。
+    try:
+        scope.assert_project_access(int(project_id), staff)
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
     # R1:cache 只存 ready/stale,但失败必须读端可见 —— 回传最新 job 的终态 + last_error,
     # 否则复刻"主流程绿、富化静默失败"旧病。
     entry = get_analysis_cache_entry("project", str(int(project_id)), derive_method=retrospective_aggregate.DERIVE_METHOD)
@@ -136,8 +184,9 @@ def project_retrospective(project_id: int, staff=Depends(require_tab("vkpi", "re
 
 @router.get("/projects/{project_id}/contracts")
 def project_contracts(project_id: int, staff=Depends(require_tab("vkpi", "read"))):
+    # 项目级 scope 由 contracts.list_contracts 内部 assert_project_access 把关(读模式)。
     try:
-        return contracts.list_contracts(project_id, staff=staff)
+        return _mask_payment_fields(contracts.list_contracts(project_id, staff=staff), staff, project_id=project_id)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
@@ -161,6 +210,7 @@ def generate_project_contract(
             assignment_id=body.get("assignment_id"),
             kol_pool_id=body.get("kol_pool_id"),
             staff=staff,
+            output_format=str(body.get("format") or "pdf"),
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -229,7 +279,7 @@ def project_contract_download(project_id: int, contract_id: int, staff=Depends(r
 @router.patch("/projects/{project_id}/contracts/{contract_id}")
 def update_project_contract(project_id: int, contract_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
     try:
-        return contracts.update_contract(project_id, contract_id, body or {}, staff=staff)
+        return _mask_payment_fields(contracts.update_contract(project_id, contract_id, body or {}, staff=staff), staff, project_id=project_id)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -241,9 +291,11 @@ def update_project_contract(project_id: int, contract_id: int, body: dict, staff
 @router.post("/projects/{project_id}/contracts/{contract_id}/confirm")
 def confirm_project_contract(project_id: int, contract_id: int, body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
     try:
-        return contracts.confirm_contract(project_id, contract_id, body or {}, staff=staff)
+        return _mask_payment_fields(contracts.confirm_contract(project_id, contract_id, body or {}, staff=staff), staff, project_id=project_id)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
 
