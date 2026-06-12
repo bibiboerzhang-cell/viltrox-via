@@ -205,7 +205,12 @@ export function toV615KolPoolRows(items: VkpiKolPoolItem[]) {
       trend_hits: raw.trend_hits ? parseList(raw.trend_hits) : [],
       v6_fit: fit,
       viltrox_fit_reason: item.viltrox_fit_reason,
-      loyalty_score: fit,
+      // d3 量纲修复:fit 是 0-100,loyalty 全部消费点(Drawer fixedOrDash(x,2)、email.ts 阈值 0.85)
+      // 按 0-1 设计;原先直塞 fit 导致 email 高忠诚分支恒 true、Drawer 显示 "45.00"。
+      loyalty_score: fit == null ? null : Math.round(fit) / 100,
+      // d3 geo_match 透传:email.ts 按 (geo_match||0)>0.9 分支,此前该键从未输出恒 undefined。
+      // 启发式信号仅供邮件文案分支:A 档市场 0.95 / B 档 0.6 / 其他有国家 0.3 / 未知 null。
+      geo_match: GEO_A.has(country) ? 0.95 : GEO_B.has(country) ? 0.6 : country ? 0.3 : null,
       upgrade_factor: fit,
       estimated_country_reach: estimatedReach,
       representative_videos: representativeVideos,
