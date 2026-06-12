@@ -667,24 +667,30 @@ def _looks_like_garbage_handle(handle: str) -> bool:
     id 3323-3328)。入库口对 handle 做卫生校验:LLM 模板标记 / 失败叙述句 / 超长 / 单字符
     一律拒收(handle 置空 → import 走既有 skipped 路径,不丢整行数据进池)。
     """
+    return _garbage_handle_rule(handle) is not None
+
+
+def _garbage_handle_rule(handle: str) -> str | None:
+    """返回命中的规则名(细则一:拒收留痕要素);None=干净。"""
     if not handle:
-        return False
-    if len(handle) > 60 or len(handle) < 2:
-        return True
+        return None
+    if len(handle) > 60:
+        return "len_gt_60"
+    if len(handle) < 2:
+        return "len_lt_2"
     if "<|" in handle or "|>" in handle:
-        return True
+        return "llm_template_marker"
     for marker in ("由于", "未提供", "字段为空", "具体内容", "无法识别", "宣发", "推广"):
         if marker in handle:
-            return True
-    # 泛词整名拒收(回测样本 18 行闭合;精确匹配防误伤 cameralabs/cameraconspiracies 等真 handle)
+            return "llm_failure_phrase"
+    # 泛词整名拒收(精确匹配防误伤 cameralabs/cameraconspiracies 等真 handle)
     if handle in {"camera", "cameras", "products", "contact", "hipster", "channel", "media", "unknown"}:
-        return True
-    # 口子#2(2026-06-12 定位令):URL 路径保留段当 handle——youtube.com/watch?v=… 取出
-    # "watch"、amazon.com/dp/… 取出 "dp"(商品链接整行进池)。URL 保留词整名拒收。
-    # 注:%编码句柄(真频道名,解码可救)与 11 字符视频 ID 形句柄按裁决单独判,不在拒收集。
+        return "generic_word"
+    # 口子#2:URL 路径保留段当 handle(youtube.com/watch、amazon.com/dp 商品链接)。
+    # %编码句柄(真频道名可解码)与 11 字符视频 ID 形按裁决单独判,不在拒收集。
     if handle in {"watch", "dp", "shorts", "embed", "videos", "playlist", "user", "share", "reel", "status"}:
-        return True
-    return False
+        return "url_reserved_segment"
+    return None
 
 
 def _normalize_item(item: dict[str, Any], *, default_platform: str = "") -> dict[str, Any]:

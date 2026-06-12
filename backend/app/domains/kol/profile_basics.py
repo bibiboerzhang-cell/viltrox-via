@@ -11,8 +11,11 @@ import secrets
 from datetime import datetime, timezone
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
-from app.domains.kol.pool_common import _table_columns
+from app.domains.kol.pool_common import _garbage_handle_rule, _table_columns
+
+logger = get_logger("viltrox.domains.kol.profile_basics")
 
 PROFILE_BASICS_METHOD = "kol_profile_basics_safe_writer_v1"
 PROFILE_BASICS_WHITELIST = {
@@ -172,6 +175,16 @@ def _normalise_profile_data(
 
     platform = _normalise_platform(normalized.get("platform") or (existing or {}).get("platform"))
     handle = _normalise_handle(platform, normalized.get("handle") or (existing or {}).get("handle"))
+    # 管2 卫生闸(咽喉审计乙案,2026-06-12):A1 新人建档主链此前零卫生校验。
+    # 细则一·拒收可见:留痕 原始URL+被拒handle+规则名——A1 是用户交互链,
+    # 用户贴了 URL 没建档必须可查,静默吞掉=静默假设复发。
+    rule = _garbage_handle_rule(handle)
+    if rule:
+        logger.warning(
+            "kol_pool pipe2 rejected garbage handle: handle=%r rule=%s url=%r",
+            handle[:60], rule, str(profile_data.get("profile_url") or "")[:120],
+        )
+        handle = ""  # 返空 → 上游既有 "platform and handle are required" 校验自然拦截
     if platform:
         normalized["platform"] = platform
     if handle:

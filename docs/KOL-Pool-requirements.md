@@ -170,3 +170,18 @@
 **候裁方案**(原则对齐 fit_score 唯一写点教义):
 - **甲·唯一入闸**:抽公共 `sanitize_pool_handle()`,三管强制过闸(改动牵 A1 主链,中险)
 - **乙·逐路径接入 + 覆盖清单**(推荐):管2 `_normalise_handle` 尾部加 guard(垃圾→返 ""→上游既有 "handle required" 校验自然拦截);管3 提交前校验同函数;本表即覆盖清单,**F4 第三源开闸时按登记制复用同函数**——一个标准,三处登记
+
+## 池写入路径登记制(细则三立户,2026-06-12;格式=路径/file:行号/闸接入点/接入commit)
+| # | 路径 | INSERT 点 | 闸接入点 | 接入 commit |
+|---|---|---|---|---|
+| 管1 | 批量导入(legacy Excel/promo_plan//kol-pool/import) | pool.py:172 | `_normalize_item`(pool_common)调 `_looks_like_garbage_handle` | `e3a1e872`+`a7286255` |
+| 管2 | A1 新人建档(url_deep_crawl→write_kol_profile_basics) | profile_basics.py:211 | `_normalise_profile_data` 调 `_garbage_handle_rule`,拒收留痕(handle+rule+url 日志) | 本 commit |
+| 管3 | legacy 治理批次提交 | legacy_kol_commit.py:317(_insert_pool_item) | 写前 `_garbage_handle_rule`,命中 raise(进既有 per-entity 失败路径) | 本 commit |
+| 管4 | **F4 外部候选建档(未开闸)** | — | **设计稿第五要件:本表先登记、代码后行**(裁决④) | 候 F3 过闸 |
+- 规则:新写入路径上线前必须在本表登记闸接入点;`pool_favorites` 写关系不写档案,不适用(裁决⑤确认)。
+
+## 2026-06-12 乙案执行 + 细则对账
+- **①管2/管3 落码**(本 commit):管2 垃圾→返空→上游 "handle required" 自然拦;管3 命中 raise 进 per-entity 失败路径。激活共享下一次 HUP(与 d11 同一激活窗)
+- **②细则一·拒收可见**:管2 留痕格式 `handle=… rule=… url=…`(warning 日志);规则名由 `_garbage_handle_rule` 供给(len_gt_60/llm_template_marker/generic_word/url_reserved_segment 等)
+- **③细则二·staging 体检(只读)**:**1018 行命中 21**——池外候诊污染并入 P6 案卷(含已知形态全套 + 新形态 `p`、`reel`);管3 之闸为实防非纯预防
+- 回归不回退:拒收 21/21、单独判与真 handle 0 误杀(dpreview/watchfinder123 复跑)

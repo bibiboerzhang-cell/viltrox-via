@@ -315,6 +315,13 @@ def dry_run_kol_pool_commit(
 
 
 def _insert_pool_item(payload: dict[str, Any], *, now: str) -> dict[str, Any]:
+    # 管3 卫生闸(咽喉审计乙案,2026-06-12):staging normalized_handle 直入池,此前零校验。
+    from app.domains.kol.pool_common import _garbage_handle_rule
+
+    handle_value = str(payload.get("handle") or "").strip().lower()
+    rule = _garbage_handle_rule(handle_value)
+    if rule:
+        raise ValueError(f"garbage handle rejected by pipe3 gate: handle={handle_value[:60]!r} rule={rule}")
     values = {**payload, "last_seen_at": now, "updated_at": now}
     values["created_at"] = now
     columns = [
