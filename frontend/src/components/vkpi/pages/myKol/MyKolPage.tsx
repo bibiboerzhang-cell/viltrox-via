@@ -7,6 +7,7 @@ import { platformDisplay, safeNumber } from '../../shared/vkpiDataUtils';
 import { proxiedImageUrl } from '../../shared/mediaProxy';
 import { OfficialContentLayer } from './OfficialContentLayer';
 import { EmployeeKolContentLayer } from './EmployeeKolContentLayer';
+import { PoolEvidenceContent } from './PoolEvidenceContent';
 import { projectDate } from '../channels/myKolMatrixData';
 import type { FunnelStageKey, PlatformFilter, PostPreview } from '../channels/myKolMatrixTypes';
 import './myKolPage.css';
@@ -653,6 +654,11 @@ function EmployeeKolLibrary({ apiToken, data, viewMode }: { apiToken?: string; d
       {filteredItems.length ? (
         <div className="mykol-library-grid">
           <div className="mykol-kol-list">
+            {favError ? (
+              <div style={{ border: '1px solid rgba(244,63,94,0.3)', background: 'rgba(244,63,94,0.08)', borderRadius: 8, padding: '6px 10px', fontSize: 10.5, color: '#fca5a5', marginBottom: 6 }}>
+                收藏读取失败:{favError} —— 列表可能缺收藏项,请刷新或报值班。
+              </div>
+            ) : null}
             {filteredItems.map(({ kol, projects, poolId, poolFit }) => (
               <button className={`mykol-kol-row ${selectedItem?.kol.id === kol.id ? 'is-active' : ''}`} key={kol.id} type="button" onClick={() => setSelectedKolId(kol.id)}>
                 <span className="mykol-avatar">{kol.avatar ? <img src={proxiedImageUrl(kol.avatar)} alt="" /> : initials(kol.name)}</span>
@@ -688,244 +694,6 @@ function EmployeeKolLibrary({ apiToken, data, viewMode }: { apiToken?: string; d
   );
 }
 
-
-// C4-full(裁决重做,2026-06-12):Pool 收藏并入库的关注列表(见 EmployeeKolLibrary);
-// 本组件为 Pool 行的右侧内容层——读该 KOL 全部 evidence 视频(/kol-pool/{id}/videos),
-// "Viltrox 相关"识别筛选待深析铺量(诚实标注),先给全部视频可看。
-function PoolEvidenceContent({ apiToken, kol, poolId, viltroxOnly, projects = [] }: { apiToken?: string; kol?: VkpiKolOption; poolId: number; viltroxOnly?: boolean; projects?: VkpiProjectRow[] }) {
-  // ①(裁令):零视频行就地发起账号分析(走 A1 deep-crawl execute 链,泳道可见)
-  const [analyzeState, setAnalyzeState] = useState<'idle' | 'busy' | 'queued' | 'error'>('idle');
-  const [analyzeMsg, setAnalyzeMsg] = useState('');
-  const queuedBaseline = useRef<number | null>(null);
-  const [refreshTick, setRefreshTick] = useState(0);
-  const startAccountAnalysis = () => {
-    if (!apiToken || !kol?.profileUrl || analyzeState === 'busy') return;
-    setAnalyzeState('busy');
-    import('../../../../domains/kol').then(({ enqueueKolProfileDeepCrawl }) =>
-      enqueueKolProfileDeepCrawl(apiToken, String(kol.profileUrl), poolId).then((resp) => {
-        queuedBaseline.current = videos.length;
-        setAnalyzeState('queued');
-        setAnalyzeMsg(resp.status === 'already_queued' ? '该账号分析已在队列中——看左侧泳道「账号分析」,完成后此处自动回执。' : '已入队——左侧泳道「账号分析 · 搜索中」可见,完成后此处自动回执。');
-      }),
-    ).catch((err) => {
-      setAnalyzeState('error');
-      setAnalyzeMsg(String((err as Error)?.message || '发起失败').slice(0, 120));
-    });
-  };
-  const [videos, setVideos] = useState<Array<Record<string, unknown>>>([]);
-  const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
-  const [error, setError] = useState('');
-  useEffect(() => {
-    if (!apiToken || !poolId) return;
-    let cancelled = false;
-    setState((s) => (s === 'ready' ? s : 'loading'));
-    import('../../../../domains/kol').then(({ listKolPoolVideos }) =>
-      listKolPoolVideos(apiToken, poolId, 200).then((resp) => {
-        if (cancelled) return;
-        setVideos((resp.items || []) as Array<Record<string, unknown>>);
-        setState('ready');
-      }),
-    ).catch((err) => {
-      if (cancelled) return;
-      setState('error');
-      setError(String((err as Error)?.message || '视频读取失败').slice(0, 120));
-    });
-    return () => { cancelled = true; };
-  }, [apiToken, poolId, refreshTick]);
-  // 入队后自动轮询回执(任务约 8 秒完成,泳道一闪而过——结果回执落在这里):
-  // 6s 一拍重拉视频,新增即报"✓ 分析完成";150s 未见新增则诚实收口(任务结果看泳道)。
-  useEffect(() => {
-    if (analyzeState !== 'queued') return;
-    let elapsed = 0;
-    const timer = window.setInterval(() => {
-      elapsed += 6;
-      if (elapsed > 150) {
-        window.clearInterval(timer);
-        queuedBaseline.current = null;
-        setAnalyzeState('idle');
-        setAnalyzeMsg('任务已结束(结果见左侧泳道「最近完成」)——暂未见新视频,该账号原始数据可能无视频链接。');
-        return;
-      }
-      setRefreshTick((t) => t + 1);
-    }, 6000);
-    return () => window.clearInterval(timer);
-  }, [analyzeState]);
-  useEffect(() => {
-    if (analyzeState !== 'queued' || queuedBaseline.current == null) return;
-    if (videos.length > queuedBaseline.current) {
-      const added = videos.length - queuedBaseline.current;
-      queuedBaseline.current = null;
-      setAnalyzeState('idle');
-      setAnalyzeMsg(`✓ 分析完成——新增 ${added} 条视频已采集,缩略图/R2 回传中(稍后自动可见)。`);
-    }
-  }, [videos, analyzeState]);
-  const totalViews = videos.reduce((sum, v) => sum + safeNumber(v.view_count as number), 0);
-  // evidence → PostPreview 映射(2026-06-12 裁令"分析完了应该都和图2一样"):喂进
-  // EmployeeKolContentLayer 同一渲染——指标聚合/排序 tab/Viltrox 徽/lightbox 全套复用。
-  const poolPosts = useMemo<PostPreview[]>(() => videos.map((v, i) => {
-    const title = String(v.title || v.video_title || '').trim();
-    // Viltrox 识别以 Gemini 深析为准(2026-06-12 裁令):
-    // 已析:llm_viltrox_detected 定徽章(false=确认非相关,不再误标);未析:标题词兜底。
-    const analyzed = Boolean(v.has_final_v1_cache);
-    const llmDetected = v.llm_viltrox_detected;
-    const isViltrox = analyzed && llmDetected != null
-      ? Boolean(llmDetected)
-      : /viltrox/i.test(`${title} ${String(v.content_url || '')}`);
-    const gear = Array.isArray(v.llm_viltrox_products) ? (v.llm_viltrox_products as string[]).filter(Boolean) : [];
-    const competitors = Array.isArray(v.llm_competitor_mentions) ? (v.llm_competitor_mentions as string[]).filter(Boolean) : [];
-    return {
-      id: `evidence:${String(v.evidence_id ?? v.id ?? i)}`,
-      snapshotId: '',
-      title: title || '未命名视频',
-      url: String(v.content_url || ''),
-      mediaUrl: '',
-      videoUrl: String(v.cached_video_url || ''),
-      imageUrl: String(v.cached_thumbnail_url || v.best_thumbnail || v.thumbnail_url || ''),
-      imageUrls: [],
-      mediaUrls: [],
-      views: safeNumber(v.view_count as number),
-      likes: safeNumber(v.like_count as number),
-      comments: safeNumber(v.comment_count as number),
-      shares: safeNumber(v.share_count as number),
-      publishedAt: String(v.publish_date || v.posted_at || ''),
-      contentType: 'video',
-      brandMentions: isViltrox ? ['viltrox'] : [],
-      competitorMentions: competitors,
-      gearMentions: gear,
-      rawText: analyzed ? `${title} · 已深析` : title,
-    };
-  }), [videos]);
-  // Viltrox 识别未铺量时(标题无命中)不套筛选,否则采了 12 条却显示 0 条——诚实回退显示全部。
-  const anyViltrox = poolPosts.some((p) => p.brandMentions.length > 0);
-  const analyzedCount = videos.filter((v) => Boolean(v.has_final_v1_cache)).length;
-  const unanalyzed = videos.filter((v) => !v.has_final_v1_cache);
-  // Gemini 深析铺量(手动按钮,E4 自动扇出仍闸):逐条入队 final_v1,思考中泳道可见。
-  const [deepState, setDeepState] = useState<'idle' | 'busy' | 'queued'>('idle');
-  const startDeepAnalysis = () => {
-    if (!apiToken || !unanalyzed.length || deepState === 'busy') return;
-    setDeepState('busy');
-    import('../../../../services/vkpi/kolPool-api').then(async ({ enqueueVideoAnalysis }) => {
-      let queued = 0;
-      for (const v of unanalyzed) {
-        try {
-          await enqueueVideoAnalysis(apiToken, poolId, Number(v.evidence_id ?? v.id));
-          queued += 1;
-        } catch { /* 单条失败不阻断其余(已入队/预算拒绝等),计数如实 */ }
-      }
-      setDeepState('queued');
-      setAnalyzeMsg(`已入队 ${queued}/${unanalyzed.length} 条 Gemini 深析(思考中泳道)——逐条约 1-3 分钟,完成后徽章自动以深析为准。`);
-    }).catch(() => {
-      setDeepState('idle');
-      setAnalyzeMsg('深析入队失败——请重试或看泳道。');
-    });
-  };
-  // 评论(2026-06-12 裁令"评论的展示也要有"):evidence 评论走 pool 专用读端;
-  // 采集为手动按钮入队(Apify 每帖计费,泳道「评论采集」可见)。
-  const [commentsState, setCommentsState] = useState<'idle' | 'busy' | 'queued'>('idle');
-  const poolCommentsFetcher = useMemo(() => (post: PostPreview) => {
-    const evidenceId = Number(String(post.id).split(':')[1] || 0);
-    if (!apiToken || !evidenceId) return Promise.resolve({ rows: [], total: 0 });
-    return import('../../../../services/vkpi/kolPool-api').then(({ listKolPoolVideoComments }) =>
-      listKolPoolVideoComments(apiToken, poolId, evidenceId, 200).then((resp) => ({
-        rows: (resp.items || []) as Array<Record<string, unknown>>,
-        total: Number((resp.page as { total?: number } | undefined)?.total || (resp.items || []).length),
-      })),
-    );
-  }, [apiToken, poolId]);
-  const startCommentsCollect = () => {
-    if (!apiToken || commentsState === 'busy') return;
-    setCommentsState('busy');
-    import('../../../../services/vkpi/kolPool-api').then(({ enqueueKolPoolCommentsCollect }) =>
-      enqueueKolPoolCommentsCollect(apiToken, poolId).then((resp) => {
-        setCommentsState('queued');
-        setAnalyzeMsg(resp.status === 'already_queued' ? '评论采集已在队列中——看左侧泳道「评论采集」。' : '评论采集已入队(泳道「评论采集」)——完成后点视频卡「评论明细」即见正文。');
-      }),
-    ).catch((err) => {
-      setCommentsState('idle');
-      setAnalyzeMsg(String((err as Error)?.message || '评论采集入队失败').slice(0, 120));
-    });
-  };
-  // 深析期间慢轮询(15s)刷新徽章;全析或超时(15 分钟)即停。
-  useEffect(() => {
-    if (deepState !== 'queued') return;
-    if (!unanalyzed.length) { setDeepState('idle'); return; }
-    let ticks = 0;
-    const timer = window.setInterval(() => {
-      ticks += 1;
-      if (ticks > 60) { window.clearInterval(timer); setDeepState('idle'); return; }
-      setRefreshTick((t) => t + 1);
-    }, 15000);
-    return () => window.clearInterval(timer);
-  }, [deepState, unanalyzed.length]);
-  return (
-    <div className="mykol-content-layer" style={{ minWidth: 0 }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
-        <div style={{ fontSize: 10, color: '#8b94a3' }}>Pool 收藏 · 已采集 {videos.length} 条 · 合计播放 {totalViews.toLocaleString()}</div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          {/* 深爬内核只支持 YT/IG/TT 主页 URL;库存里 87 条收藏的 profile_url 是博客/页面标题
-              等脏值(如 "(50) Brandon Li - YouTube")——前置拦截,免得入队必败。 */}
-          {kol?.profileUrl && /^https?:\/\/[^ ]*(youtube\.com|instagram\.com|tiktok\.com)/i.test(String(kol.profileUrl)) ? (
-            <button type="button" onClick={startAccountAnalysis} disabled={analyzeState === 'busy' || analyzeState === 'queued'}
-              style={{ fontSize: 10, color: analyzeState === 'queued' ? '#86efac' : '#c4b5fd', background: 'rgba(168,85,247,0.12)', border: '1px solid rgba(168,85,247,0.3)', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>
-              {analyzeState === 'busy' ? '发起中…' : analyzeState === 'queued' ? '已入队 ✓' : '账号分析 · 采集视频'}
-            </button>
-          ) : kol?.profileUrl ? (
-            <span style={{ fontSize: 10, color: '#5b6472' }} title={String(kol.profileUrl)}>主页 URL 非 YT/IG/TT,无法账号分析</span>
-          ) : null}
-          {unanalyzed.length ? (
-            <button type="button" onClick={startDeepAnalysis} disabled={deepState !== 'idle'}
-              style={{ fontSize: 10, color: deepState === 'queued' ? '#86efac' : '#fbcfe8', background: 'rgba(236,72,153,0.10)', border: '1px solid rgba(236,72,153,0.3)', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>
-              {deepState === 'busy' ? '入队中…' : deepState === 'queued' ? `深析中 ${analyzedCount}/${videos.length}` : `Gemini 深析 · ${unanalyzed.length} 条未析`}
-            </button>
-          ) : videos.length ? (
-            <span style={{ fontSize: 10, color: '#86efac' }}>✓ 全部已深析</span>
-          ) : null}
-          {videos.length ? (
-            <button type="button" onClick={startCommentsCollect} disabled={commentsState !== 'idle'}
-              style={{ fontSize: 10, color: commentsState === 'queued' ? '#86efac' : '#93c5fd', background: 'rgba(59,130,246,0.10)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>
-              {commentsState === 'busy' ? '入队中…' : commentsState === 'queued' ? '评论采集中 ✓' : '采集评论'}
-            </button>
-          ) : null}
-          {kol?.profileUrl ? <a href={kol.profileUrl} target="_blank" rel="noreferrer" style={{ fontSize: 10, color: '#67e8f9' }}>打开主页</a> : null}
-        </div>
-      </div>
-      {analyzeMsg ? (
-        <div style={{ border: analyzeState === 'error' ? '1px solid rgba(244,63,94,0.3)' : '1px solid rgba(16,185,129,0.25)', background: analyzeState === 'error' ? 'rgba(244,63,94,0.08)' : 'rgba(16,185,129,0.06)', borderRadius: 8, padding: '6px 10px', fontSize: 10, color: analyzeState === 'error' ? '#fca5a5' : '#bbf7d0', marginBottom: 8 }}>{analyzeMsg}</div>
-      ) : null}
-      {projects.length ? (
-        <div style={{ border: '1px solid rgba(255,255,255,0.07)', borderRadius: 8, padding: '8px 10px', marginBottom: 8 }}>
-          <div style={{ fontSize: 10, color: '#8b94a3', marginBottom: 6 }}>合作项目结果(来自 Projects 映射)</div>
-          {projects.slice(0, 4).map((proj) => (
-            <div key={proj.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 10.5, color: '#cbd5e1', padding: '2px 0' }}>
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{proj.campaign}</span>
-              <span style={{ flexShrink: 0, color: '#8b94a3' }}>阶段 {proj.stage} · 曝光 {compactNumber(proj.views)} · 证据 {proj.evidenceCount ?? proj.stageEventCount ?? 0}</span>
-            </div>
-          ))}
-          {projects.length > 4 ? <div style={{ fontSize: 9.5, color: '#5b6472' }}>…其余 {projects.length - 4} 个项目在 Projects 查看</div> : null}
-        </div>
-      ) : null}
-      {state === 'error' ? (
-        <div style={{ border: '1px solid rgba(244,63,94,0.3)', background: 'rgba(244,63,94,0.08)', borderRadius: 8, padding: '8px 12px', fontSize: 11, color: '#fca5a5' }}>
-          视频读取失败:{error} —— 请刷新或报值班。
-        </div>
-      ) : state === 'loading' ? (
-        <div style={{ fontSize: 11, color: '#5b6472', padding: '12px 0' }}>视频载入中…</div>
-      ) : !videos.length ? (
-        <div style={{ fontSize: 11, color: '#5b6472', padding: '12px 0' }}>该 KOL 暂无已采集视频——点右上「账号分析 · 采集视频」即可补采(泳道可见进度,完成后此处自动回执)。</div>
-      ) : (
-        <EmployeeKolContentLayer
-          apiToken={apiToken}
-          kol={kol}
-          projects={projects}
-          viltroxOnly={Boolean(viltroxOnly) && anyViltrox}
-          postsOverride={poolPosts}
-          subtitle={`Pool 收藏 · Gemini 已深析 ${analyzedCount}/${videos.length}${Boolean(viltroxOnly) && !anyViltrox ? ' · 识别零命中,显示全部' : ''}`}
-          commentsFetcher={poolCommentsFetcher}
-        />
-      )}
-    </div>
-  );
-}
 
 export function MyKolPage({ apiToken, viewMode, data, userName, onRefreshData }: MyKolPageProps) {
   const matrix = useOfficialChannelMatrix(apiToken);
