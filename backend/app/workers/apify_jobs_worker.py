@@ -1447,6 +1447,13 @@ def _process_kol_profile_deep_crawl(conn: psycopg.Connection[Any], job: dict[str
         result = kol_url_deep_crawl.run_profile_deep_crawl_for_job(payload, staff=staff)
     status = str((result or {}).get("status") or "")
     ok = status in ("", "ok", "ready", "done", "executed") or bool((result or {}).get("execution"))
+    # 诚实闸(job 926 案:35mmc.com 搜索页 URL 标 done 但什么都没干):
+    # 非 profile/video 的 URL 内核走 unsupported 短路,任务必须 blocked 而非 done。
+    flow_status = str(((result or {}).get("profile_flow") or {}).get("status") or "")
+    url_type = str((result or {}).get("url_type") or "")
+    if ok and flow_status in ("unsupported", "needs_human_choice") and not (result or {}).get("video_flow"):
+        ok = False
+        status = f"url_{url_type or 'unknown'}_{flow_status}"
     # search_session_id 回写 payload:queue_view 据此输出 search_session,
     # 泳道「最近完成」才会保留该任务并支持点开会话详情(一闪而过案)。
     session_id = _int_or_none((result or {}).get("search_session_id"))

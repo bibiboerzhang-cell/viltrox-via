@@ -233,7 +233,18 @@ export function TaskProgressBoard({ apiToken = "" }) {
 
   const activeTasks = useMemo(() => asArray(payload?.active), [payload]);
   const recentTasks = useMemo(() => asArray(payload?.recent), [payload]);
-  const queuedTasks = useMemo(() => activeTasks.filter((task) => task?.status === "queued"), [activeTasks]);
+  // 排队区按真实执行序排(后端 queue_position 按 claim 顺序;无该字段的按 created_at 升序垫后)——
+  // 此前直接用合并列表(updated_at 倒序)切片,屏上 #1 可能是最后才跑的(2026-06-12 主管裁令)。
+  const queuedTasks = useMemo(() => {
+    const queued = activeTasks.filter((task) => task?.status === "queued");
+    return queued.slice().sort((a, b) => {
+      const pa = Number(a?.queue_position); const pb = Number(b?.queue_position);
+      if (Number.isFinite(pa) && Number.isFinite(pb)) return pa - pb;
+      if (Number.isFinite(pa)) return -1;
+      if (Number.isFinite(pb)) return 1;
+      return String(a?.created_at || "").localeCompare(String(b?.created_at || ""));
+    });
+  }, [activeTasks]);
   const laneTasks = useMemo(() => {
     const nonQueued = activeTasks.filter((task) => task?.status !== "queued");
     return {
@@ -249,7 +260,8 @@ export function TaskProgressBoard({ apiToken = "" }) {
     ...lane,
     tasks: laneTasks[lane.key] || [],
   }));
-  const visibleQueue = queuedTasks.slice(0, 2);
+  // 主管裁令(2026-06-12):排队要能看清"前面还有谁"——放宽到 5 条(其余以 +N 计数)。
+  const visibleQueue = queuedTasks.slice(0, 5);
   const remainingQueue = Math.max(0, queueTotal - visibleQueue.length);
   // 账号分析等队列任务 ~8 秒即完成,若按 session 过滤会"一闪而过"再无痕迹——
   // 即使 payload 暂缺 search_session_id 也保底留在「最近完成」(无 session 时不可点开)。
@@ -308,7 +320,7 @@ export function TaskProgressBoard({ apiToken = "" }) {
             disabled: !taskSearchSessionId(task),
             className: "flex min-w-0 items-start gap-1.5 text-left disabled:cursor-default"
           },
-            e("span", { className: "w-[18px] shrink-0 text-[10px] text-white/40 tabular-nums" }, `#${index + 1}`),
+            e("span", { className: "w-[18px] shrink-0 text-[10px] text-white/40 tabular-nums" }, `#${Number.isFinite(Number(task?.queue_position)) ? Number(task.queue_position) : index + 1}`),
             e("span", { className: "min-w-0 flex-1" },
               e("span", { className: "block truncate text-[11px] text-white/60" }, taskLabel(task)),
               taskEtaText(task) && e("span", { className: "block truncate text-[10px] text-emerald-300/70" }, taskEtaText(task)),

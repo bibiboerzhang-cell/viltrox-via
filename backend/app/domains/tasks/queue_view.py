@@ -174,7 +174,23 @@ def _target_from_payload(payload: Any, *, fallback: dict[str, Any] | None = None
     target_type = _text(data.get("target_type") or fallback.get("target_type"))
     target_id = _text(data.get("target_id") or fallback.get("target_id"))
     source_url = _text(data.get("source_url") or data.get("url") or fallback.get("source_url"))
-    label = _text(data.get("query_text") or data.get("prompt") or data.get("summary") or fallback.get("label"))
+    # label 链补业务键兜底(未命名案,2026-06-12):query_text 系缺失时退 handle/标题/文件名,
+    # 再退 platform/handle 组合——泳道里"看得出是谁"优先于留空。
+    label = _text(
+        data.get("query_text")
+        or data.get("prompt")
+        or data.get("summary")
+        or data.get("handle")
+        or data.get("display_name")
+        or data.get("title")
+        or data.get("file_name")
+        or fallback.get("label")
+    )
+    if not label:
+        platform = _text(data.get("platform"))
+        handle = _text(data.get("kol_handle") or data.get("creator_handle"))
+        if platform and handle:
+            label = f"{platform}/{handle}"
     target = {
         "target_type": target_type or None,
         "target_id": target_id or None,
@@ -337,14 +353,38 @@ def _query_apify_jobs(cutoff: datetime, limit: int) -> tuple[list[dict[str, Any]
     return [convert(row) for row in active_rows], [convert(row) for row in recent_rows]
 
 
+LEDGER_JOB_TYPE_CN = {
+    "vkpi_official_channel_sync": "官号同步",
+}
+
+
+def _ledger_fallback_label(job_type: str, payload: Any) -> str:
+    """ledger 行无 summary/query_text 时按 job_type 组可读名(未命名案,2026-06-12)。"""
+    data = payload if isinstance(payload, dict) else {}
+    name = LEDGER_JOB_TYPE_CN.get(_text(job_type), _text(job_type))
+    ref = _text(
+        data.get("handle")
+        or data.get("channel_id")
+        or data.get("kol_pool_id")
+        or data.get("verification_id")
+        or data.get("content_id")
+        or data.get("target_id")
+        or data.get("url")
+    )
+    return f"{name} · {ref}" if name and ref else name
+
+
 def _query_job_execution_ledger(cutoff: datetime, limit: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     conn = get_conn()
+    # 新鲜闸:in-process 队列随 admin 进程生灭,排队行超 24h 未动即孤儿
+    # (实案:05-20 两条 official_channel_sync 在「排队等待」滞留三周)——不再算 active。
     active_rows = conn.execute(
         """
         SELECT id, task_id, job_type, status, stage, summary, payload_json, result_json, error_message,
                submission_id, user_id, created_at, updated_at, started_at, finished_at
         FROM job_execution_ledger
         WHERE status IN ('queued', 'retrying', 'processing', 'running')
+          AND updated_at >= NOW() - INTERVAL '24 hours'
         ORDER BY updated_at DESC
         LIMIT ?
         """,
@@ -371,7 +411,7 @@ def _query_job_execution_ledger(cutoff: datetime, limit: int) -> tuple[list[dict
             fallback={
                 "target_id": data.get("submission_id"),
                 "target_type": "submission" if data.get("submission_id") else "",
-                "label": data.get("summary"),
+                "label": _text(data.get("summary")) or _ledger_fallback_label(_text(data.get("job_type")), payload),
             },
         )
         item = _make_item(
