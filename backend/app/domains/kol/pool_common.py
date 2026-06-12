@@ -673,9 +673,12 @@ def _looks_like_garbage_handle(handle: str) -> bool:
         return True
     if "<|" in handle or "|>" in handle:
         return True
-    for marker in ("由于", "未提供", "字段为空", "具体内容", "无法识别"):
+    for marker in ("由于", "未提供", "字段为空", "具体内容", "无法识别", "宣发", "推广"):
         if marker in handle:
             return True
+    # 泛词整名拒收(回测样本 18 行闭合;精确匹配防误伤 cameralabs/cameraconspiracies 等真 handle)
+    if handle in {"camera", "cameras", "products", "contact", "hipster", "channel", "media", "unknown"}:
+        return True
     return False
 
 

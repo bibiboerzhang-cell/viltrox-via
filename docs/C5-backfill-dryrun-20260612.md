@@ -1,14 +1,26 @@
-# C5 backfill dry-run 人审清单(777 对 kol×staff,distinct KOL 720)
+# C5 backfill dry-run 人审清单(770 对 kol×staff,distinct KOL 714)
+
+## 逐步算术(裁决 2026-06-12)
+781(全量)→ −3(测试项目 4041/4042/4027/3620)→ 778 → −1(漏网 4026)→ 777
+→ −7(污染行,排除集=_looks_like_garbage_handle 同一函数)→ **770**
+
+## 污染排除名单(排除≠放生:P6 重建后补收藏)
+- pool#3308 instagram 'products' ← 项目 4011
+- pool#3341 youtube 'u' ← 项目 4010
+- pool#3371 instagram 'hipster' ← 项目 3995
+- pool#3833 media 'contact' ← 项目 4003
+- pool#3895 youtube '%e3%82%ab%e3%83%a1%e3%83%a9%e3%81%ae' ← 项目 4011
+- pool#3895 youtube '%e3%82%ab%e3%83%a1%e3%83%a9%e3%81%ae' ← 项目 4023
+- pool#5646 unknown 'hipster' ← 项目 4044
 
 归属规则:assignment.assigned_staff_id → project.assigned_staff_id → project.created_by → 84
 
-## staff 84(81 个 KOL)
+## staff 84(79 个 KOL)
 - pool#1508 youtube markbennettcameracrisis ← 项目 4018 K90 Tube Light
 - pool#1511 youtube dylanblackburn ← 项目 4018 K90 Tube Light
 - pool#1575 instagram alessandro_sagnelli ← 项目 4006 AF 85mm F1.4 Pro FE+Z
 - pool#1584 instagram luigiirace ← 项目 4018 K90 Tube Light
 - pool#1586 youtube videozappo ← 项目 4018 K90 Tube Light
-- pool#3308 instagram products ← 项目 4011 AF 15mm F1.7 Air E+Z+X
 - pool#3330 x digitalcameraworld ← 项目 4025 DC-A1 Monitor
 - pool#3331 x kojinakagawa ← 项目 4000 Vintage Z2
 - pool#3332 x opticallimits ← 项目 4010 AF 14mm F4.0 Air FE+Z
@@ -34,7 +46,6 @@
 - pool#3794 instagram roldangilbuena ← 项目 4018 K90 Tube Light
 - pool#3804 instagram srodalmenara ← 项目 4018 K90 Tube Light
 - pool#3809 instagram techbyter ← 项目 4018 K90 Tube Light
-- pool#3833 media contact ← 项目 4003 AF 56mm F1.2 Pro E+X+Z
 - pool#3838 media fotografie.de ← 项目 3995 AF 75mm F1.8+90mm F2.2 EV
 - pool#3844 media johnriley ← 项目 3998 AF 35+55mm F1.8 EVO FE+Z
 - pool#3848 media libor ← 项目 3998 AF 35+55mm F1.8 EVO FE+Z
@@ -187,7 +198,7 @@
 - pool#4100 youtube minimalchannel06 ← 项目 4023 AF 35mm F1.7 Air E+XF+Z
 - pool#4108 youtube munktvdomunk ← 项目 4022 AF 40mm F2.5 Air FE
 
-## staff 7683(185 个 KOL)
+## staff 7683(184 个 KOL)
 - pool#1503 youtube adrianalfordphotography ← 项目 4000 Vintage Z2
 - pool#1504 youtube dsipictures ← 项目 4007 AF 9mm F2.8 Air E+Z+X
 - pool#1505 tiktok teleginivan ← 项目 4006 AF 85mm F1.4 Pro FE+Z
@@ -279,7 +290,6 @@
 - pool#3822 instagram xiaoyang_xy ← 项目 4012 90DL (90mm F3.5+Raze)
 - pool#3825 instagram yushi.95 ← 项目 4011 AF 15mm F1.7 Air E+Z+X
 - pool#3877 tiktok mattiacappelletti_ ← 项目 4013 Vintage Z1 Flash
-- pool#3895 youtube %e3%82%ab%e3%83%a1%e3%83%a9%e3%81%ae%e3%82%82%e3%81%a3%e3%81%8f%e3%82%93 ← 项目 4011 AF 15mm F1.7 Air E+Z+X
 - pool#3899 youtube 3bmep ← 项目 4024 AF 135mm F1.8 LAB FE
 - pool#3904 youtube alchoromer ← 项目 4013 Vintage Z1 Flash
 - pool#3907 youtube alexzarfatifilms ← 项目 4025 DC-A1 Monitor
@@ -374,7 +384,7 @@
 - pool#5588 youtube Mauro Licul ← 项目 4006 AF 85mm F1.4 Pro FE+Z
 - pool#5590 youtube Tony & Chelsea Northrup ← 项目 4004 AF 35mm F1.2 LAB FE+Z
 
-## staff 7684(301 个 KOL)
+## staff 7684(299 个 KOL)
 - pool#1521 youtube josealcoy ← 项目 4000 Vintage Z2
 - pool#1522 youtube heitorpergherfotografia ← 项目 4011 AF 15mm F1.7 Air E+Z+X
 - pool#1523 youtube pavsz ← 项目 4008 AF 85mm F2.0 EVO FE+Z
@@ -417,7 +427,6 @@
 - pool#1572 media objektive ← 项目 3998 AF 35+55mm F1.8 EVO FE+Z
 - pool#1573 instagram snap_halsbana ← 项目 3998 AF 35+55mm F1.8 EVO FE+Z
 - pool#1574 youtube stephanwiesner ← 项目 4008 AF 85mm F2.0 EVO FE+Z
-- pool#3341 youtube u ← 项目 4010 AF 14mm F4.0 Air FE+Z
 - pool#3516 youtube brandonli ← 项目 4044 Frame the Game
 - pool#3642 facebook xpotographer ← 项目 4000 Vintage Z2
 - pool#3644 instagram _peppermint.b ← 项目 4006 AF 85mm F1.4 Pro FE+Z
@@ -506,7 +515,6 @@
 - pool#3863 media wirecutter ← 项目 4009 Spark Z3 Flash
 - pool#3864 media yangzhensiang ← 项目 4000 Vintage Z2
 - pool#3888 tiktok toladaodao ← 项目 4007 AF 9mm F2.8 Air E+Z+X
-- pool#3895 youtube %e3%82%ab%e3%83%a1%e3%83%a9%e3%81%ae%e3%82%82%e3%81%a3%e3%81%8f%e3%82%93 ← 项目 4023 AF 35mm F1.7 Air E+XF+Z
 - pool#3896 youtube %ec%b9%b4%ec%84%a4%eb%82%a8 ← 项目 4013 Vintage Z1 Flash
 - pool#3902 youtube adriensanguinetti ← 项目 4015 AF 50mm F2.0 Air FE+Z
 - pool#3905 youtube alexarmitage ← 项目 4011 AF 15mm F1.7 Air E+Z+X
@@ -680,8 +688,7 @@
 ## staff 7685(1 个 KOL)
 - pool#3755 instagram kwasnikpictures ← 项目 3999 AF 16mm F1.8 L Mount
 
-## staff 7686(67 个 KOL)
-- pool#3371 instagram hipster ← 项目 3995 AF 75mm F1.8+90mm F2.2 EV
+## staff 7686(65 个 KOL)
 - pool#3533 youtube erensarigul ← 项目 3994 Vintage Z1 Pro
 - pool#3599 youtube runawayvows ← 项目 3995 AF 75mm F1.8+90mm F2.2 EV
 - pool#3643 instagram _aguywithacamera ← 项目 3995 AF 75mm F1.8+90mm F2.2 EV
@@ -747,7 +754,6 @@
 - pool#5643 unknown driventocapture ← 项目 4044 Frame the Game
 - pool#5644 unknown photovanessacarvalho ← 项目 4044 Frame the Game
 - pool#5645 unknown williamvolcov ← 项目 4044 Frame the Game
-- pool#5646 unknown hipster ← 项目 4044 Frame the Game
 
 ## staff 7687(37 个 KOL)
 - pool#3675 instagram braddeel_sports ← 项目 4044 Frame the Game

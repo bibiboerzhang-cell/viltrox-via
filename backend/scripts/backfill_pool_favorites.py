@@ -16,6 +16,7 @@ import sys
 from collections import defaultdict
 
 from app.db.connection import db_connection_sync_scope, get_conn
+from app.domains.kol.pool_common import _looks_like_garbage_handle
 
 DEFAULT_STAFF_ID = 84
 EXCLUDED_STAGES = ("churned", "cancelled", "lost")
@@ -52,7 +53,15 @@ def resolve_rows(conn) -> list[dict]:
 
 def main(apply: bool) -> None:
     conn = get_conn()
-    pairs = resolve_rows(conn)
+    # 逐步算术(裁决 2026-06-12,可逐步复算):
+    #   781(全量) → −3(测试项目 4041/4042/4027/3620) → 778 → −1(同系列漏网 4026) → 777
+    #   → −17(污染行,排除集=_looks_like_garbage_handle 同一函数,入库与 backfill 共用一个卫生标准)
+    #   → 760
+    # 排除≠放生(裁决②):17 对 assignment 是真实在役关系,污染的是 KOL 行非关系;
+    # P6 污染专项含"重建"条款——垃圾行净化/重建档后此 17 对补收藏。
+    raw_pairs = resolve_rows(conn)
+    pairs = [p for p in raw_pairs if not _looks_like_garbage_handle(str(p.get("handle") or "").strip().lower())]
+    excluded_dirty = [p for p in raw_pairs if p not in pairs]
     existing = {
         (int(r["kol_pool_id"]), int(r["staff_id"]))
         for r in conn.execute("SELECT kol_pool_id, staff_id FROM vkpi_kol_pool_favorites").fetchall()
@@ -65,6 +74,13 @@ def main(apply: bool) -> None:
 
     if not apply:
         print(f"# C5 backfill dry-run 人审清单({len(todo)} 对 kol×staff,distinct KOL {len({p['kol_pool_id'] for p in todo})})\n")
+        print("## 逐步算术(裁决 2026-06-12)")
+        print(f"781(全量)→ −3(测试项目 4041/4042/4027/3620)→ 778 → −1(漏网 4026)→ {len(raw_pairs)}")
+        print(f"→ −{len(excluded_dirty)}(污染行,排除集=_looks_like_garbage_handle 同一函数)→ **{len(pairs)}**\n")
+        print("## 污染排除名单(排除≠放生:P6 重建后补收藏)")
+        for p in excluded_dirty:
+            print(f"- pool#{p['kol_pool_id']} {p['platform']} {str(p['handle'])[:36]!r} ← 项目 {p['project_id']}")
+        print()
         print("归属规则:assignment.assigned_staff_id → project.assigned_staff_id → project.created_by → 84\n")
         for sid in sorted(by_staff):
             group = by_staff[sid]
