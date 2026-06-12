@@ -1526,7 +1526,7 @@ def _metadata_from_profile_video_item(
         "content_url": content_url,
         "title": _metadata_text(_first_present(item.get("title"), snippet.get("title"), item.get("caption"), item.get("text"))) or content_url,
         "description": _metadata_text(_first_present(item.get("description"), snippet.get("description"), item.get("caption"), item.get("text"))),
-        "view_count": _int_or_none(_first_present(stats.get("viewCount"), item.get("view_count"), item.get("viewCount"), item.get("views"), item.get("playCount"), item.get("videoPlayCount"))),
+        "view_count": _int_or_none(_first_present(stats.get("viewCount"), item.get("view_count"), item.get("viewCount"), item.get("views"), item.get("playCount"), item.get("videoPlayCount"), item.get("videoViewCount"))),
         "like_count": _int_or_none(_first_present(stats.get("likeCount"), item.get("like_count"), item.get("likeCount"), item.get("likes"), item.get("likesCount"), item.get("diggCount"))),
         "comment_count": _int_or_none(_first_present(stats.get("commentCount"), item.get("comment_count"), item.get("commentCount"), item.get("comments"), item.get("commentsCount"), item.get("commentCount"))),
         "share_count": _int_or_none(_first_present(item.get("share_count"), item.get("shareCount"), item.get("shares"), item.get("sharesCount"))),
@@ -1914,6 +1914,17 @@ def _crawl_profile_basics(classified: ClassifiedUrl, *, target: str, max_posts: 
             videos_items = payload_items
         elif isinstance(profile_items, list):
             videos_items = [item for item in profile_items if isinstance(item, dict) and _looks_like_content_item(item)]
+        if not videos_items and isinstance(profile_items, list) and profile_items and isinstance(profile_items[0], dict):
+            # IG 断点(2026-06-12 审计):instagram-profile-scraper 的 dataset item 是 profile 对象,
+            # 帖子嵌在 profile.latestPosts 里——此前没人下钻这层,IG 账号分析永远 no_history_video_url。
+            # 下钻口径对齐 industry/snapshot_collector.py。
+            profile_obj = profile_items[0]
+            for nested_key in ("latestPosts", "posts", "videos"):
+                nested = profile_obj.get(nested_key)
+                if isinstance(nested, list) and nested:
+                    videos_items = [item for item in nested if isinstance(item, dict) and _looks_like_content_item(item)]
+                    if videos_items:
+                        break
 
     provider_source = str((profile_payload or {}).get("provider_source") or (videos_payload or {}).get("provider_source") or "")
     status = str(
@@ -2369,7 +2380,9 @@ def enqueue_profile_deep_crawl_job(
         "url": clean_url,
         "kol_pool_id": int(kol_pool_id) if kol_pool_id else None,
         "max_posts": max(1, min(12, int(max_posts or 3))),
-        "query_text": f"账号分析 · {clean_url[:80]}",
+        # 泳道 label=kind+query_text,kind 已是「账号分析」——query_text 只留 URL,
+        # 否则显示成"账号分析 · 账号分析 · url"(2026-06-12 截图案)。
+        "query_text": clean_url[:96],
         "target_type": "kol_profile",
         "triggered_by_user_id": (staff or {}).get("user_id"),
         "staff_id": (staff or {}).get("id") or (staff or {}).get("staff_id"),
@@ -2409,7 +2422,7 @@ def run_profile_deep_crawl_for_job(payload: dict[str, Any], *, staff: dict[str, 
         session = kol_search_sessions.ensure_session_for_result(
             session_id=None,
             create=True,
-            query_text=str(payload.get("query_text") or f"账号分析 · {body['url'][:80]}"),
+            query_text=f"账号分析 · {body['url'][:80]}",
             query_type="url",
             source="queue:kol_profile_deep_crawl",
             input_payload={key: value for key, value in body.items() if key != "api_token"},
@@ -2431,18 +2444,22 @@ def run_profile_deep_crawl_for_job(payload: dict[str, Any], *, staff: dict[str, 
             conn = get_conn()
             rows = conn.execute(
                 "SELECT id, platform, content_url, thumbnail_url FROM vkpi_kol_video_evidence "
-                "WHERE kol_pool_id=? ORDER BY id DESC LIMIT 5",
+                "WHERE kol_pool_id=? ORDER BY id DESC LIMIT 12",
                 (int(kol_pool_id),),
             ).fetchall()
             warm_stats: list[str] = []
+            videos_warmed = 0
             for row in rows:
                 item = dict(row)
                 if item.get("thumbnail_url"):
                     img = cache_image(item["thumbnail_url"])
                     warm_stats.append(f"img#{item['id']}:{img.get('status')}")
                 platform_key = str(item.get("platform") or "").lower()
-                if platform_key and platform_key != "youtube" and item.get("content_url"):
+                # 视频下载重(IG 经 ytdlp ~100s/条),只喂前 3 条免得串行 worker 被卡 20 分钟;
+                # 缩略图轻,12 条全喂。
+                if platform_key and platform_key != "youtube" and item.get("content_url") and videos_warmed < 3:
                     vid = cache_video_for_item(platform_key, str(item["id"]), item["content_url"])
+                    videos_warmed += 1
                     reason = vid.get("skip_reason") or vid.get("reason") or ""
                     warm_stats.append(f"vid#{item['id']}:{vid.get('status')}{':' + str(reason) if reason else ''}")
             logger.info(
