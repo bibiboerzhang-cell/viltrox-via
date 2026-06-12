@@ -124,6 +124,7 @@ export function ProjectDetailView({
   const [addingKols, setAddingKols] = useState(false);
   const [availableKolOptions, setAvailableKolOptions] = useState<VkpiKolOption[]>([]);
   const [loadingAvailableKols, setLoadingAvailableKols] = useState(false);
+  const [availableKolError, setAvailableKolError] = useState('');
   const [editOpen, setEditOpen] = useState(false);
   const [editingProject, setEditingProject] = useState(false);
   const [actionModal, setActionModal] = useState<DetailActionModal | null>(null);
@@ -453,6 +454,7 @@ export function ProjectDetailView({
 
   const openAddKolModal = async () => {
     setAddKolOpen(true);
+    setAvailableKolError('');
     if (!onLoadAvailableKols) {
       setAvailableKolOptions([]);
       return;
@@ -461,7 +463,10 @@ export function ProjectDetailView({
     try {
       setAvailableKolOptions(await onLoadAvailableKols(project));
     } catch (error) {
-      setNotice({ tone: 'warning', title: '候选 KOL 加载失败', body: error instanceof Error ? error.message : '无法加载可添加 KOL。' });
+      // 错误必须显在弹窗里(静默 catch 禁令)——此前只发 toast,弹窗里伪装成"没有匹配"。
+      const message = error instanceof Error ? error.message : '无法加载可添加 KOL。';
+      setAvailableKolError(message);
+      setNotice({ tone: 'warning', title: '候选 KOL 加载失败', body: message });
       setAvailableKolOptions([]);
     } finally {
       setLoadingAvailableKols(false);
@@ -1221,6 +1226,8 @@ export function ProjectDetailView({
           rows={rows}
           kolOptions={availableKolOptions.length || onLoadAvailableKols ? availableKolOptions : kolOptions}
           busy={addingKols || loadingAvailableKols}
+          loading={loadingAvailableKols}
+          loadError={availableKolError}
           onClose={() => setAddKolOpen(false)}
           onSubmit={addSelectedKols}
         />

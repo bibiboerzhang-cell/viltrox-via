@@ -503,6 +503,8 @@ export function AddKolModal({
   rows,
   kolOptions,
   busy,
+  loading = false,
+  loadError = '',
   onClose,
   onSubmit,
 }: {
@@ -510,6 +512,8 @@ export function AddKolModal({
   rows: VkpiProjectRow[];
   kolOptions: VkpiKolOption[];
   busy: boolean;
+  loading?: boolean;
+  loadError?: string;
   onClose: () => void;
   onSubmit: (selectedKols: VkpiKolOption[]) => Promise<void>;
 }) {
@@ -578,7 +582,11 @@ export function AddKolModal({
           </select>
         </div>
         <div className="flex-1 overflow-y-auto -mx-1 px-1 max-h-[50vh]">
-          {visibleKols.length === 0 ? (
+          {loadError ? (
+            <div className="text-center py-8 text-[11px] text-rose-300">候选加载失败：{loadError} —— 关闭重开重试；若提示权限(scope)请重新登录或联系管理员。</div>
+          ) : loading ? (
+            <div className="text-center py-8 text-[11px] text-slate-500">候选 KOL 加载中…</div>
+          ) : visibleKols.length === 0 ? (
             <div className="text-center py-8 text-[11px] text-slate-500">没有匹配的 KOL，或全部已加入</div>
           ) : (
             <div className="space-y-1.5">

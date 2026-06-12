@@ -156,7 +156,7 @@ def assert_project_access(project_id: int, staff: dict[str, Any] | None, *, writ
         raise ScopeDenied("project scope denied")
     row = get_conn().execute(
         """
-        SELECT assigned_staff_id, created_by_staff_id
+        SELECT assigned_staff_id, created_by_staff_id, COALESCE(restricted, FALSE) AS restricted
         FROM vkpi_projects
         WHERE id=?
         """,
@@ -166,6 +166,11 @@ def assert_project_access(project_id: int, staff: dict[str, Any] | None, *, writ
         return
     item = dict(row)
     if actor in {_int(item.get("assigned_staff_id")), _int(item.get("created_by_staff_id"))}:
+        return
+    # PV-3 对齐(2026-06-12 添加KOL弹窗 403 案):非 restricted 项目员工默认可见——
+    # 读访问随可见性放行(此前只认 assigned/creator,而存量项目两栏多为 NULL,谁都 403);
+    # restricted 项目与写访问仍只认 assigned/creator/全可见角色。
+    if not write and not bool(item.get("restricted")):
         return
     raise ScopeDenied("project scope denied")
 
