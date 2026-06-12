@@ -660,9 +660,31 @@ def _candidate_score(pool_item: dict[str, Any], candidate: dict[str, Any]) -> in
     return score
 
 
+def _looks_like_garbage_handle(handle: str) -> bool:
+    """池污染根因堵口(2026-06-12 裁决⑤b;F4 暂存区质量校验的田野证据)。
+
+    5/19 legacy Excel 批次把 LLM 失败原文当 handle 入库(如『由于<|红人/媒体|>字段为空』,
+    id 3323-3328)。入库口对 handle 做卫生校验:LLM 模板标记 / 失败叙述句 / 超长 / 单字符
+    一律拒收(handle 置空 → import 走既有 skipped 路径,不丢整行数据进池)。
+    """
+    if not handle:
+        return False
+    if len(handle) > 60 or len(handle) < 2:
+        return True
+    if "<|" in handle or "|>" in handle:
+        return True
+    for marker in ("由于", "未提供", "字段为空", "具体内容", "无法识别"):
+        if marker in handle:
+            return True
+    return False
+
+
 def _normalize_item(item: dict[str, Any], *, default_platform: str = "") -> dict[str, Any]:
     platform = _platform(item.get("platform") or default_platform or item.get("type") or "other")
     handle = str(item.get("handle") or item.get("username") or item.get("userName") or item.get("channelName") or item.get("name") or "").strip().lstrip("@").lower()
+    if _looks_like_garbage_handle(handle):
+        logger.warning("kol_pool intake rejected garbage handle: %r", handle[:60])
+        handle = ""
     profile_url = str(item.get("profile_url") or item.get("profileUrl") or item.get("url") or item.get("channelUrl") or "").strip()
     return {
         "platform": platform,
