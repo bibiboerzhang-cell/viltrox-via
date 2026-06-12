@@ -217,6 +217,101 @@ def _current_user_id(staff: dict[str, Any] | None) -> int:
     return int((staff or {}).get("user_id") or 0)
 
 
+def _staff_display_names(conn, staff_ids: list[int] | set[int]) -> dict[int, str]:
+    """staff.id -> 真人姓名(users.name),查无名时回退「员工#id」。"""
+    ids = sorted({int(value) for value in staff_ids if _int(value)})
+    if not ids:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    rows = conn.execute(
+        f"""
+        SELECT st.id AS staff_id, u.name AS user_name
+        FROM staff st
+        LEFT JOIN users u ON u.id = st.user_id
+        WHERE st.id IN ({placeholders})
+        """,
+        ids,
+    ).fetchall()
+    names: dict[int, str] = {}
+    for row in rows:
+        data = dict(row)
+        sid = _int(data.get("staff_id"))
+        if sid:
+            names[sid] = str(data.get("user_name") or "").strip() or f"员工#{sid}"
+    for sid in ids:
+        names.setdefault(sid, f"员工#{sid}")
+    return names
+
+
+def _pool_claim_occupancy(conn, kol_pool_ids: list[int]) -> dict[int, dict[str, Any]]:
+    """乙案(项目维独占)事实独占源,选择器置灰与写入防绕过共用同一口径:
+
+    1. active claim(vkpi_kol_claims,经 vkpi_kol_pool.linked_main_kol_id join,
+       预研实测命中≈0 但为真实认领表,优先级最高);
+    2. 在役 assignment 负责人(stage/stage_status 非终态、项目非 cancelled/deleted/
+       restricted)——与 pool_favorites.list_favorites 的在役口径同源,另排除 closed。
+    返回 {kol_pool_id: {staff_id, source('claim'|'assignment'), claim_id, project_id, stage}}。
+    """
+    ids = sorted({_int(value) for value in kol_pool_ids if _int(value)})
+    if not ids:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    occupancy: dict[int, dict[str, Any]] = {}
+    assignment_rows = conn.execute(
+        f"""
+        SELECT a.kol_pool_id, a.assigned_staff_id, a.project_id, COALESCE(a.stage, '') AS stage
+        FROM vkpi_project_kol_assignments a
+        JOIN vkpi_projects pr ON pr.id = a.project_id
+        WHERE a.kol_pool_id IN ({placeholders})
+          AND a.assigned_staff_id IS NOT NULL
+          AND COALESCE(a.stage, '') NOT IN ('churned', 'cancelled', 'lost', 'closed')
+          AND COALESCE(a.stage_status, '') NOT IN ('lost', 'cancelled', 'released', 'deleted')
+          AND pr.stage <> 'cancelled'
+          AND COALESCE(pr.stage_status, '') <> 'deleted'
+          AND COALESCE(pr.restricted, FALSE) = FALSE
+        ORDER BY a.updated_at DESC, a.id DESC
+        """,
+        ids,
+    ).fetchall()
+    for row in assignment_rows:
+        data = dict(row)
+        pool_id = _int(data.get("kol_pool_id"))
+        owner_staff_id = _int(data.get("assigned_staff_id"))
+        if not pool_id or not owner_staff_id or pool_id in occupancy:
+            continue
+        occupancy[pool_id] = {
+            "staff_id": owner_staff_id,
+            "source": "assignment",
+            "claim_id": None,
+            "project_id": _int(data.get("project_id")) or None,
+            "stage": str(data.get("stage") or ""),
+        }
+    claim_rows = conn.execute(
+        f"""
+        SELECT p.id AS kol_pool_id, c.id AS claim_id, c.staff_id, c.project_id
+        FROM vkpi_kol_pool p
+        JOIN vkpi_kol_claims c ON c.kol_id = p.linked_main_kol_id AND c.status = 'active'
+        WHERE p.id IN ({placeholders})
+        ORDER BY c.id ASC
+        """,
+        ids,
+    ).fetchall()
+    for row in claim_rows:
+        data = dict(row)
+        pool_id = _int(data.get("kol_pool_id"))
+        owner_staff_id = _int(data.get("staff_id"))
+        if not pool_id or not owner_staff_id:
+            continue
+        occupancy[pool_id] = {
+            "staff_id": owner_staff_id,
+            "source": "claim",
+            "claim_id": _int(data.get("claim_id")) or None,
+            "project_id": _int(data.get("project_id")) or None,
+            "stage": "",
+        }
+    return occupancy
+
+
 def list_projects(limit: int = 50, stage: str = "", *, staff: dict[str, Any] | None = None, staff_id_filter: int | None = None, starred_only: bool = False) -> dict[str, Any]:
     ensure_vkpi_schema()
     limit_i = max(1, min(200, int(limit or 50)))
@@ -650,7 +745,27 @@ def list_available_project_kols(
         """,
         (*params, limit_i),
     ).fetchall()
-    return {"kols": [dict(row) for row in rows], "project_id": int(project_id)}
+    items = [dict(row) for row in rows]
+    # 乙案①(选择器置灰):候选行补 claim/在役占用字段。claim_staff_id/claim_staff_name/
+    # active_claim_id 仅在「被他人占用」时下发(前端 buildKolOptions 据此映射 claimStaffId/
+    # claimOwner/activeClaimId 灰显「已被 X 跟进」);本人占用与裸数据走 occupied_* 诚实字段。
+    occupancy = _pool_claim_occupancy(conn, [_int(item.get("id")) for item in items])
+    owner_names = _staff_display_names(conn, [occ["staff_id"] for occ in occupancy.values()])
+    actor_staff_id = staff_id(staff)
+    for item in items:
+        occ = occupancy.get(_int(item.get("id")))
+        owner_staff_id = _int(occ.get("staff_id")) if occ else 0
+        owner_name = owner_names.get(owner_staff_id, "") if owner_staff_id else ""
+        claimed_by_other = bool(owner_staff_id and owner_staff_id != actor_staff_id)
+        item["occupied_by_staff_id"] = owner_staff_id or None
+        item["occupied_by_name"] = owner_name
+        item["claim_source"] = str(occ.get("source") or "") if occ else ""
+        item["claimed_by_other"] = claimed_by_other
+        if claimed_by_other:
+            item["active_claim_id"] = occ.get("claim_id")
+            item["claim_staff_id"] = owner_staff_id
+            item["claim_staff_name"] = owner_name
+    return {"kols": items, "project_id": int(project_id)}
 
 
 def add_project_kols(project_id: int, body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -681,6 +796,47 @@ def add_project_kols(project_id: int, body: dict[str, Any], *, staff: dict[str, 
     actor_staff_id = staff_id(staff)
     requested_staff_id = _int(body.get("assigned_staff_id") or body.get("assignedStaffId"))
     assigned_staff_id = requested_staff_id if scope.can_view_all(staff) and requested_staff_id else actor_staff_id
+    # 乙案②(写入侧防绕过):与选择器同口径校验——被他人认领/在役跟进的 KOL 拒绝写入,
+    # ValueError 带占用人姓名(路由已映 400);admin 可 body.force=true 强制,audit 留痕。
+    occupancy = _pool_claim_occupancy(conn, sorted(existing_pool_ids))
+    blocked = {
+        pool_id: occ
+        for pool_id, occ in occupancy.items()
+        if _int(occ.get("staff_id")) and _int(occ.get("staff_id")) != actor_staff_id
+    }
+    force = bool(body.get("force"))
+    forced_conflicts: list[dict[str, Any]] = []
+    if blocked:
+        owner_names = _staff_display_names(conn, [occ["staff_id"] for occ in blocked.values()])
+        if force and scope.can_view_all(staff):
+            forced_conflicts = [
+                {
+                    "kol_pool_id": pool_id,
+                    "occupied_by_staff_id": _int(occ.get("staff_id")),
+                    "occupied_by_name": owner_names.get(_int(occ.get("staff_id")), ""),
+                    "claim_source": str(occ.get("source") or ""),
+                    "claim_id": occ.get("claim_id"),
+                    "occupied_project_id": occ.get("project_id"),
+                }
+                for pool_id, occ in sorted(blocked.items())
+            ]
+        else:
+            blocked_ids = sorted(blocked)
+            placeholders = ",".join("?" for _ in blocked_ids)
+            label_rows = conn.execute(
+                f"SELECT id, COALESCE(display_name, handle, '') AS label FROM vkpi_kol_pool WHERE id IN ({placeholders})",
+                blocked_ids,
+            ).fetchall()
+            labels = {_int(dict(row).get("id")): str(dict(row).get("label") or "").strip() for row in label_rows}
+            parts = []
+            for pool_id, occ in sorted(blocked.items()):
+                kol_label = labels.get(pool_id) or f"KOL #{pool_id}"
+                owner_staff_id = _int(occ.get("staff_id"))
+                owner_label = owner_names.get(owner_staff_id) or f"员工#{owner_staff_id}"
+                parts.append(f"「{kol_label}」已被 {owner_label} 跟进")
+            raise ValueError(
+                "以下 KOL 已被他人认领/跟进,未写入:" + ";".join(parts) + "。如确需加入,请管理员携 force=true 重试。"
+            )
     now = utcnow()
     inserted = 0
     skipped_existing = 0
@@ -718,12 +874,14 @@ def add_project_kols(project_id: int, body: dict[str, Any], *, staff: dict[str, 
             staff=staff,
             action_type="project_add_kols",
             project_id=int(project_id),
-            detail=f"added {inserted} KOL assignments",
+            detail=f"added {inserted} KOL assignments" + (f" (admin force, {len(forced_conflicts)} 个越过他人占用)" if forced_conflicts else ""),
             metadata={
                 "kol_pool_ids": [kol_pool_id for kol_pool_id in kol_pool_ids if kol_pool_id in existing_pool_ids],
                 "assigned_staff_id": assigned_staff_id or None,
                 "missing_kol_pool_ids": missing,
                 "skipped_existing": skipped_existing,
+                "force": bool(forced_conflicts),
+                "forced_claim_conflicts": forced_conflicts,
             },
         )
     return {
@@ -732,6 +890,7 @@ def add_project_kols(project_id: int, body: dict[str, Any], *, staff: dict[str, 
         "inserted": inserted,
         "skipped_existing": skipped_existing,
         "missing_kol_pool_ids": missing,
+        "forced_claim_conflicts": forced_conflicts,
     }
 
 
@@ -795,6 +954,19 @@ def transition_project(project_id: int, body: dict[str, Any], *, staff: dict[str
         except Exception as exc:  # cost catalog issues must not block workflow progress
             auto_cost_result = {"status": "error", "reason": str(exc)}
     conn.commit()
+    # 乙案④(释放双轨之自动轨):项目推进入终态时,认领人=assignment 负责人的 active claim
+    # 自动释放(claims.auto_release_claims_for_project 内部 audit 留痕);失败不阻塞推进。
+    claim_auto_release: dict[str, Any] | None = None
+    if to_stage in TERMINAL_STAGES:
+        try:
+            from app.domains.kol import claims as kol_claims
+
+            claim_auto_release = kol_claims.auto_release_claims_for_project(
+                int(project_id), to_stage=to_stage, actor_staff_id=actor_staff_id
+            )
+        except Exception as exc:  # claim release must not block workflow progress
+            logger.warning("vkpi.claim_auto_release_failed", extra={"project_id": project_id, "error": str(exc)})
+            claim_auto_release = {"status": "error", "reason": str(exc)}
     _log_project_audit(
         staff=staff,
         action_type="project_stage_transition",
@@ -810,9 +982,16 @@ def transition_project(project_id: int, body: dict[str, Any], *, staff: dict[str
             "source_ref_type": str(body.get("source_ref_type") or ""),
             "source_ref_id": str(body.get("source_ref_id") or ""),
             "auto_product_cost": auto_cost_result,
+            "claim_auto_release": claim_auto_release,
         },
     )
-    return {"id": int(project_id), "from_stage": from_stage, "to_stage": to_stage, "auto_product_cost": auto_cost_result}
+    return {
+        "id": int(project_id),
+        "from_stage": from_stage,
+        "to_stage": to_stage,
+        "auto_product_cost": auto_cost_result,
+        "claim_auto_release": claim_auto_release,
+    }
 
 def delete_project(project_id: int, body: dict[str, Any] | None = None, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     """Soft-delete a project while preserving attribution, cost, and audit history."""
@@ -873,6 +1052,17 @@ def delete_project(project_id: int, body: dict[str, Any] | None = None, *, staff
         (now, int(project_id)),
     )
     conn.commit()
+    # 乙案④:软删=进 cancelled 终态,同样触发认领自动释放(失败不阻塞删除)。
+    claim_auto_release: dict[str, Any] | None = None
+    try:
+        from app.domains.kol import claims as kol_claims
+
+        claim_auto_release = kol_claims.auto_release_claims_for_project(
+            int(project_id), to_stage="cancelled", actor_staff_id=actor_staff_id
+        )
+    except Exception as exc:
+        logger.warning("vkpi.claim_auto_release_failed", extra={"project_id": project_id, "error": str(exc)})
+        claim_auto_release = {"status": "error", "reason": str(exc)}
     _log_project_audit(
         staff=staff,
         action_type="project_delete",
@@ -883,6 +1073,7 @@ def delete_project(project_id: int, body: dict[str, Any] | None = None, *, staff
             "previous_stage_status": project.get("stage_status"),
             "reason": reason,
             "paused_live_links": True,
+            "claim_auto_release": claim_auto_release,
         },
     )
-    return {"id": int(project_id), "status": "deleted", "previous_stage": from_stage}
+    return {"id": int(project_id), "status": "deleted", "previous_stage": from_stage, "claim_auto_release": claim_auto_release}

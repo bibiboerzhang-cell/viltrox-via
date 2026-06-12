@@ -535,6 +535,10 @@ export function AddKolModal({
   const joinedIds = useMemo(() => new Set(rows.map((row) => row.kolId).filter(Boolean) as string[]), [rows]);
   const joinedHandles = useMemo(() => new Set(rows.map((row) => String(row.kolHandle || '').toLowerCase()).filter(Boolean)), [rows]);
   const platformOptions = useMemo(() => Array.from(new Set(kolOptions.map((kol) => kol.platform))).filter(Boolean), [kolOptions]);
+  // 乙案①(独占体制·项目维):后端 available 接口仅对「被他人认领/在役跟进」的候选行下发
+  // claim_staff_id/active_claim_id(buildKolOptions 映射 claimStaffId/activeClaimId/claimOwner),
+  // 本人占用不下发——故此处有值即「已被他人跟进」,灰态不可勾。
+  const isClaimedByOther = (kol: VkpiKolOption) => Boolean(kol.claimStaffId || kol.activeClaimId);
   const visibleKols = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     return kolOptions.filter((kol) => {
@@ -542,13 +546,18 @@ export function AddKolModal({
       const joined = joinedIds.has(kol.id) || joinedHandles.has(normalizedHandle);
       const matchesQuery = !normalizedQuery || [kol.name, kol.handle, kol.platform, kol.followerLabel].some((value) => String(value || '').toLowerCase().includes(normalizedQuery));
       const matchesPlatform = platform === '全部平台' || kol.platform === platform;
-      const matchesClaim = claimFilter === '全部' || (claimFilter === '已关注' ? Boolean(kol.activeClaimId) : !kol.activeClaimId);
+      const matchesClaim = claimFilter === '全部' || (claimFilter === '已被跟进' ? isClaimedByOther(kol) : !isClaimedByOther(kol));
       return !joined && matchesQuery && matchesPlatform && matchesClaim;
     }).slice(0, 80);
   }, [claimFilter, joinedHandles, joinedIds, kolOptions, platform, query]);
-  const selectedKols = useMemo(() => kolOptions.filter((kol) => selectedIds.has(kol.id)), [kolOptions, selectedIds]);
+  const selectedKols = useMemo(
+    () => kolOptions.filter((kol) => selectedIds.has(kol.id) && !isClaimedByOther(kol)),
+    [kolOptions, selectedIds],
+  );
 
   const toggleKol = (kolId: string) => {
+    const target = kolOptions.find((kol) => kol.id === kolId);
+    if (target && isClaimedByOther(target)) return;
     setSelectedIds((current) => {
       const next = new Set(current);
       if (next.has(kolId)) next.delete(kolId);
@@ -588,8 +597,8 @@ export function AddKolModal({
           </select>
           <select className="px-3 py-1.5 rounded-md bg-white/[0.02] border border-white/[0.06] text-[11px] text-slate-300 focus:outline-none focus:border-purple-500/40" value={claimFilter} onChange={(event) => setClaimFilter(event.target.value)}>
             <option style={{ background: '#0a0a0d' }}>全部</option>
-            <option style={{ background: '#0a0a0d' }}>已关注</option>
-            <option style={{ background: '#0a0a0d' }}>未关注</option>
+            <option style={{ background: '#0a0a0d' }}>可添加</option>
+            <option style={{ background: '#0a0a0d' }}>已被跟进</option>
           </select>
         </div>
         <div className="flex-1 overflow-y-auto -mx-1 px-1 max-h-[50vh]">
@@ -602,19 +611,24 @@ export function AddKolModal({
           ) : (
             <div className="space-y-1.5">
               {visibleKols.map((kol) => {
-                const selected = selectedIds.has(kol.id);
+                const claimedByOther = isClaimedByOther(kol);
+                const selected = selectedIds.has(kol.id) && !claimedByOther;
                 return (
                   <label
-                    className={`flex items-center gap-3 px-3 py-2 rounded cursor-pointer ${selected ? 'bg-purple-500/10 border border-purple-500/30' : 'border border-white/[0.04] hover:bg-white/[0.02]'}`}
+                    className={`flex items-center gap-3 px-3 py-2 rounded ${claimedByOther ? 'cursor-not-allowed opacity-55 border border-white/[0.04]' : `cursor-pointer ${selected ? 'bg-purple-500/10 border border-purple-500/30' : 'border border-white/[0.04] hover:bg-white/[0.02]'}`}`}
                     key={kol.id}
                   >
-                    <input checked={selected} className="accent-purple-500" type="checkbox" onChange={() => toggleKol(kol.id)} />
+                    <input checked={selected} className="accent-purple-500 disabled:opacity-40" disabled={claimedByOther} type="checkbox" onChange={() => toggleKol(kol.id)} />
                     <div className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold text-white shrink-0" style={{ background: 'linear-gradient(135deg,#a855f7,#06b6d4)' }}>{kol.name.charAt(0).toUpperCase()}</div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <div className="text-[12px] text-white font-medium truncate">{kol.name}</div>
                         <span className="text-[9.5px] text-slate-500 truncate">{kol.handle || '-'}</span>
-                        <span className={`text-[9.5px] px-1.5 py-0.5 rounded font-medium ${kol.activeClaimId ? 'bg-emerald-500/15 text-emerald-300' : 'bg-cyan-500/15 text-cyan-300'}`}>{kol.activeClaimId ? '已关注' : '未关注'}</span>
+                        {claimedByOther ? (
+                          <span className="text-[9.5px] px-1.5 py-0.5 rounded font-medium bg-amber-500/15 text-amber-300 truncate">已被 {kol.claimOwner || '他人'} 跟进</span>
+                        ) : (
+                          <span className="text-[9.5px] px-1.5 py-0.5 rounded font-medium bg-cyan-500/15 text-cyan-300">可添加</span>
+                        )}
                       </div>
                       <div className="text-[10px] text-slate-400 mt-0.5">{kol.platform} · {kol.followerLabel || '-'} followers</div>
                     </div>
