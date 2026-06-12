@@ -31,6 +31,8 @@ CONTRACT_SINGLE_CALL_SCOPE = "single_call_contract"
 CONTRACT_ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx"}
 CONTRACT_EXTRACT_JOB_TYPE = "project_contract_extract"
 CONTRACT_EXTRACT_DERIVE_METHOD = "project_contract_extract_v1"
+# 签署版关联键(批E,2026-06-12):存于 raw_extracted_json,提取/失败回写时必须保留。
+CONTRACT_LINK_KEYS = ("signed_version_of", "superseded_by")
 
 
 def _json(value: Any) -> str:
@@ -58,7 +60,15 @@ def _safe_row(row: Any) -> dict[str, Any]:
             try:
                 item[key] = json.loads(value or "{}")
             except Exception:
+                # 残账修复(批E,2026-06-12):不再静默吞 JSON 错——带行 id/键名 warning,坏数据可追。
+                logger.warning("contract.safe_row.json_malformed id=%s key=%s", item.get("id"), key)
                 item[key] = [] if key.endswith("_json") and key not in {"raw_extracted_json", "field_confidence_json", "field_confirmed_json", "manual_overrides_json"} else {}
+    # 签署版关联(批E):raw_extracted_json 里的关联键提到顶层,list/get 直接带出。
+    raw = item.get("raw_extracted_json")
+    if isinstance(raw, dict):
+        for link_key in CONTRACT_LINK_KEYS:
+            if raw.get(link_key) is not None:
+                item[link_key] = raw.get(link_key)
     return item
 
 
@@ -206,9 +216,30 @@ def _record_contract_cost(contract_id: int, project_id: int, staff: dict[str, An
     )
 
 
+def _existing_link_keys(conn: Any, contract_id: int, project_id: int) -> dict[str, Any]:
+    """读 raw_extracted_json 里的签署版关联键(批E):提取/失败整体覆盖该列前 merge 回去,防丢链。"""
+    row = conn.execute(
+        "SELECT raw_extracted_json FROM vkpi_project_contracts WHERE id=? AND project_id=?",
+        (int(contract_id), int(project_id)),
+    ).fetchone()
+    if not row:
+        return {}
+    raw = dict(row).get("raw_extracted_json")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw or "{}")
+        except Exception:
+            return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {key: raw[key] for key in CONTRACT_LINK_KEYS if raw.get(key) is not None}
+
+
 def _apply_extraction(conn: Any, contract_id: int, project_id: int, staff: dict[str, Any] | None, extraction: dict[str, Any]) -> dict[str, Any]:
     data = extraction.get("extracted") if isinstance(extraction.get("extracted"), dict) else {}
     confidence = data.get("field_confidence") if isinstance(data.get("field_confidence"), dict) else {}
+    # 签署版关联键保留(批E):本函数整体覆盖 raw_extracted_json,merge 回关联键。
+    data = {**data, **_existing_link_keys(conn, int(contract_id), int(project_id))}
     deliverables = _list(data.get("deliverables"))
     platforms = _list(data.get("platforms"))
     must_include = _list(data.get("must_include"))
@@ -309,6 +340,8 @@ def _apply_extraction(conn: Any, contract_id: int, project_id: int, staff: dict[
 
 def _mark_failed(conn: Any, contract_id: int, project_id: int, error: str) -> None:
     # 已人工确认的合同不因提取失败降级状态(批B #3),仅记 extraction_status='failed'
+    # 签署版关联键保留(批E):error 覆盖 raw_extracted_json 时 merge 回关联键。
+    error_payload = {"error": error[:1000], **_existing_link_keys(conn, int(contract_id), int(project_id))}
     conn.execute(
         """
         UPDATE vkpi_project_contracts
@@ -317,7 +350,7 @@ def _mark_failed(conn: Any, contract_id: int, project_id: int, error: str) -> No
             raw_extracted_json=?::jsonb, updated_at=?
         WHERE id=? AND project_id=?
         """,
-        (_json({"error": error[:1000]}), utcnow(), int(contract_id), int(project_id)),
+        (_json(error_payload), utcnow(), int(contract_id), int(project_id)),
     )
     conn.commit()
 
@@ -354,6 +387,7 @@ def create_contract_from_file(
     mime_type: str = "",
     assignment_id: int | None = None,
     kol_pool_id: int | None = None,
+    related_contract_id: int | None = None,
     staff: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     ensure_vkpi_schema()
@@ -365,6 +399,15 @@ def create_contract_from_file(
     if not path.exists() or path.stat().st_size <= 0:
         raise ValueError("contract file missing")
     conn = get_conn()
+    # 签署版关联(批E):related_contract_id 指向同项目草稿行,先校验再建链。
+    related_id = _int(related_contract_id) or None
+    if related_id:
+        related_row = conn.execute(
+            "SELECT id FROM vkpi_project_contracts WHERE id=? AND project_id=?",
+            (int(related_id), int(project_id)),
+        ).fetchone()
+        if not related_row:
+            raise ValueError("related contract not found in this project")
     context = _assignment_context(conn, int(project_id), assignment_id, kol_pool_id)
     effective_kol_pool_id = _int(context.get("kol_pool_id"), _int(kol_pool_id)) or None
     r2_key = f"contracts/projects/{int(project_id)}/{uuid.uuid4().hex}-{stem}{ext}"
@@ -397,6 +440,16 @@ def create_contract_from_file(
         ),
     )
     contract_id = int(conn.execute("SELECT id FROM vkpi_project_contracts WHERE r2_key=? ORDER BY id DESC LIMIT 1", (r2_key,)).fetchone()["id"])
+    if related_id:
+        # 签署版关联(批E):新行并入 signed_version_of,草稿行并入 superseded_by(同列 raw_extracted_json)。
+        conn.execute(
+            "UPDATE vkpi_project_contracts SET raw_extracted_json=COALESCE(raw_extracted_json, '{}'::jsonb) || ?::jsonb, updated_at=? WHERE id=? AND project_id=?",
+            (_json({"signed_version_of": int(related_id)}), now, int(contract_id), int(project_id)),
+        )
+        conn.execute(
+            "UPDATE vkpi_project_contracts SET raw_extracted_json=COALESCE(raw_extracted_json, '{}'::jsonb) || ?::jsonb, updated_at=? WHERE id=? AND project_id=?",
+            (_json({"superseded_by": int(contract_id)}), now, int(related_id), int(project_id)),
+        )
     conn.commit()
     contract = get_contract(project_id, contract_id, staff=staff)
     if ext != ".pdf":

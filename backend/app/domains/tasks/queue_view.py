@@ -124,6 +124,10 @@ def _infer_kind(source: str, job_type: str = "", purpose: str = "", payload: Any
         return "账号沉淀"
     if _text(job_type).lower() == "project_contract_extract" or "project_contract_extract" in haystack:
         return "合同提取"
+    if _text(job_type).lower() == "contract_invoice_extract" or "contract_invoice_extract" in haystack:
+        return "发票提取"
+    if _text(job_type).lower() == "contract_polish" or "contract_polish" in haystack:
+        return "合同润色"
     if _text(job_type).lower() == "project_retrospective_aggregate" or "project_retrospective" in haystack:
         return "复盘聚合"
     if _text(job_type).lower() == "kol_profile_deep_crawl" or "kol_profile_deep_crawl" in haystack:
@@ -162,6 +166,8 @@ def _infer_stage(status: str, kind: str, job_type: str = "", purpose: str = "", 
         ]
     ).lower()
     if "project_contract_extract" in haystack or "outreach_draft" in haystack:
+        return "thinking"
+    if "contract_invoice_extract" in haystack or "contract_polish" in haystack:
         return "thinking"
     if "project_retrospective" in haystack:
         return "summarizing"

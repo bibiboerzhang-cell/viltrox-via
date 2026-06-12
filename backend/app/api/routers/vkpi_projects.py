@@ -13,6 +13,7 @@ from app.core.security import get_current_user
 from app.domains import costs
 from app.domains.access import scope
 from app.domains.analysis.cache_repo import get_analysis_cache_entry, list_project_video_analysis_cache
+from app.domains.projects import contract_assist
 from app.domains.projects import contracts
 from app.domains.projects import retrospective_aggregate
 from app.domains.projects import workflow
@@ -118,6 +119,85 @@ def get_contract_templates(staff=Depends(require_tab("vkpi", "read"))) -> dict:
     from app.domains.projects import contract_generator
 
     return contract_generator.list_templates()
+
+
+@router.get("/projects/invoice-extract/{extract_key}")
+def project_invoice_extract(extract_key: str, staff=Depends(require_tab("vkpi", "read"))):
+    """发票提取读端(批E)。静态段 invoice-extract 须定义在 /projects/{project_id} 之前。
+    产物含收款敏感字段:能映射回项目时按项目级 scope 把关。"""
+    try:
+        entry = contract_assist.get_invoice_extract(extract_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    result_project_id = ((entry.get("result") or {}) if isinstance(entry.get("result"), dict) else {}).get("project_id")
+    if result_project_id:
+        try:
+            scope.assert_project_access(int(result_project_id), staff)
+        except scope.ScopeDenied as exc:
+            raise _scope_403(exc) from exc
+    return entry
+
+
+@router.get("/projects/contract-polish/{polish_key}")
+def project_contract_polish(polish_key: str, staff=Depends(require_tab("vkpi", "read"))):
+    """合同润色读端(批E)。静态段 contract-polish 须定义在 /projects/{project_id} 之前。"""
+    try:
+        entry = contract_assist.get_contract_polish(polish_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    result_project_id = ((entry.get("result") or {}) if isinstance(entry.get("result"), dict) else {}).get("project_id")
+    if result_project_id:
+        try:
+            scope.assert_project_access(int(result_project_id), staff)
+        except scope.ScopeDenied as exc:
+            raise _scope_403(exc) from exc
+    return entry
+
+
+@router.post("/projects/{project_id}/invoice-extract/enqueue")
+def enqueue_project_invoice_extract(
+    project_id: int,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+):
+    """发票回填提取入队(批E):文件已由 /evidence/uploads 落盘,这里只收 file_url。"""
+    try:
+        return contract_assist.enqueue_invoice_extract_job(
+            project_id,
+            str(body.get("file_url") or ""),
+            file_name=str(body.get("file_name") or ""),
+            staff=staff,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
+@router.post("/projects/{project_id}/contract-polish/enqueue")
+def enqueue_project_contract_polish(
+    project_id: int,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+):
+    """合同条款 LLM 润色入队(批E):只收文本类槽,LLM 经 apify_jobs 队列。"""
+    try:
+        return contract_assist.enqueue_contract_polish_job(
+            project_id,
+            template_key=str(body.get("template_key") or ""),
+            fields=dict(body.get("fields") or {}),
+            staff=staff,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
 
 
 @router.get("/projects/{project_id}")
@@ -228,6 +308,7 @@ async def upload_project_contract(
     file: UploadFile = File(...),
     assignment_id: int | None = Form(default=None),
     kol_pool_id: int | None = Form(default=None),
+    related_contract_id: int | None = Form(default=None),
     staff=Depends(require_tab("vkpi", "write")),
 ):
     filename = file.filename or "contract.pdf"
@@ -252,6 +333,7 @@ async def upload_project_contract(
                 mime_type=file.content_type or "",
                 assignment_id=assignment_id,
                 kol_pool_id=kol_pool_id,
+                related_contract_id=related_contract_id,
                 staff=staff,
             )
     except HTTPException:
@@ -382,7 +464,14 @@ def update_project_kol_shipping(project_id: int, kol_ref: str, body: dict, staff
 
 @router.post("/projects/{project_id}/kols/{kol_ref}/{action_kind}")
 def project_kol_action_stub(project_id: int, kol_ref: str, action_kind: str, body: dict, staff=Depends(require_tab("vkpi", "write"))):
-    if action_kind not in {"screenshot", "video", "contract"}:
+    # 残账收窄(批E,2026-06-12):兜底白名单只留 screenshot/video;
+    # contract 早已走 /projects/{project_id}/contracts/upload 真归档(前端不再调旧路径),显式 410。
+    if action_kind == "contract":
+        raise HTTPException(
+            status_code=410,
+            detail="contract action retired: use POST /api/admin/vkpi/projects/{project_id}/contracts/upload",
+        )
+    if action_kind not in {"screenshot", "video"}:
         raise HTTPException(status_code=404, detail="unknown action")
     try:
         if action_kind == "video":

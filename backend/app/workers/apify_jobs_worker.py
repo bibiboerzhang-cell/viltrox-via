@@ -1516,6 +1516,50 @@ def _process_kol_outreach_draft(conn: psycopg.Connection[Any], job: dict[str, An
             )
 
 
+def _process_contract_invoice_extract(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
+    """发票回填提取(批E,2026-06-12):读本地存证文件 → Claude 提取收款字段 → cache(invoice)。
+    失败域内不写 cache,这里标 blocked(模式同 _process_kol_outreach_draft)。"""
+    from app.domains.projects import contract_assist
+
+    staff = _resolve_job_staff(conn, payload)
+    with db_connection_sync_scope():
+        result = contract_assist.run_invoice_extract_for_job(payload, staff=staff)
+    status = str((result or {}).get("status") or "")
+    ok = status == "ready"
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE apify_jobs SET status=%s, last_error=%s, updated_at=NOW() WHERE id=%s",
+                (
+                    "done" if ok else "blocked",
+                    None if ok else (str((result or {}).get("reason") or status or "invoice_extract_failed"))[:300],
+                    int(job["id"]),
+                ),
+            )
+
+
+def _process_contract_polish(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
+    """合同条款 LLM 润色(批E,2026-06-12):llm_gateway(preferred openai)→ cache(contract_polish)。
+    失败域内不写 cache,这里标 blocked(模式同 _process_kol_outreach_draft)。"""
+    from app.domains.projects import contract_assist
+
+    staff = _resolve_job_staff(conn, payload)
+    with db_connection_sync_scope():
+        result = contract_assist.run_contract_polish_for_job(payload, staff=staff)
+    status = str((result or {}).get("status") or "")
+    ok = status == "ready"
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE apify_jobs SET status=%s, last_error=%s, updated_at=NOW() WHERE id=%s",
+                (
+                    "done" if ok else "blocked",
+                    None if ok else (str((result or {}).get("reason") or status or "contract_polish_failed"))[:300],
+                    int(job["id"]),
+                ),
+            )
+
+
 def _process_kol_pool_comments_collect(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
     """KOL Pool 收藏行评论采集(2026-06-12 裁令):逐帖走 collect_post_comments,泳道可见。"""
     from app.domains.comments import collector as comments_collector
@@ -3122,6 +3166,12 @@ def _process_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> None:
         return
     if str(job.get("job_type") or "").strip().lower() == "kol_outreach_draft":
         _process_kol_outreach_draft(conn, job, payload)
+        return
+    if str(job.get("job_type") or "").strip().lower() == "contract_invoice_extract":
+        _process_contract_invoice_extract(conn, job, payload)
+        return
+    if str(job.get("job_type") or "").strip().lower() == "contract_polish":
+        _process_contract_polish(conn, job, payload)
         return
     if str(job.get("job_type") or "").strip().lower() == "logistics_track_sync":
         _process_logistics_track_sync(conn, job, payload)
