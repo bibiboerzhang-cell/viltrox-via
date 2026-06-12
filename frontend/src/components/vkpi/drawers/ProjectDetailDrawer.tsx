@@ -254,7 +254,17 @@ export function ProjectDetailDrawer({
           })}
         </section>
         <nav className="vkpi-project-detail-tabs" aria-label="项目详情分区">
-          {tabLinks.map(([id, label]) => <a key={id} href={`#project-detail-${id}`}>{label}</a>)}
+          {/* 全局 hashchange 把非法 hash 归一化回默认页——锚点会把整个应用踢回首页(2026-06-12 清查)。
+              改 button+scrollIntoView,零 hash 写入。 */}
+          {tabLinks.map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => document.getElementById(`project-detail-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+            >
+              {label}
+            </button>
+          ))}
         </nav>
         <article id="project-detail-overview-card">
           <div><strong>项目概览</strong><span>{textValue(project.updated_at || fallbackProject?.updatedAt, '-')}</span></div>

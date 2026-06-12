@@ -371,13 +371,13 @@ export function IntelligenceCenterPage({ apiToken, viewMode }: WorkspacePageProp
       if (source) {
         writeSourceRepairFocus(source);
         setRecommendationBacklogNotice(`${source.title} 已生成接入前检查；修复中心只做本地 dry-run。`);
-        if (typeof window !== 'undefined') window.location.hash = 'repairCenter';
+        // 修复中心页未挂载路由(2026-06-12 清查):跳 hash 会被归一化踢回首页——不跳,提示留在本页。
         return;
       }
       if (platformPlan) {
         writePlatformRepairFocus(platformPlan);
         setRecommendationBacklogNotice(`${platformPlan.platform} 平台建议已生成接入前检查；修复中心只做本地 dry-run。`);
-        if (typeof window !== 'undefined') window.location.hash = 'repairCenter';
+        // 修复中心页未挂载路由(2026-06-12 清查):跳 hash 会被归一化踢回首页——不跳,提示留在本页。
         return;
       }
     }

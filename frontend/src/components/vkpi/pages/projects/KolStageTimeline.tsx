@@ -223,13 +223,23 @@ export function KolStageTimeline({
                       <Send size={10} />联系 KOL
                     </button>
                   ) : null}
+                  {isCurrent && stage.key !== 'measured' ? (
+                    <button
+                      className="text-[10px] text-emerald-200 hover:text-white px-2.5 py-1 rounded bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/35 flex items-center gap-1 font-medium disabled:opacity-50"
+                      onClick={() => void onMoveRowStage(row)}
+                      disabled={movingRowId === row.id}
+                      type="button"
+                    >
+                      {movingRowId === row.id ? '推进中…' : '推进 →'}
+                    </button>
+                  ) : null}
                   {isCurrent && stage.key === 'measured' ? (
                     <span className="text-[10px] text-cyan-300 px-2.5 py-1 rounded bg-cyan-500/15 border border-cyan-500/30 flex items-center gap-1.5">
                       <RefreshCw size={10} className="animate-spin" />自动采集中
                     </span>
                   ) : null}
                   {isPending ? (
-                    <button className="text-[10px] text-slate-600 px-2 py-0.5 rounded border border-white/[0.05] opacity-50 cursor-not-allowed" type="button">
+                    <button className="text-[10px] text-slate-600 px-2 py-0.5 rounded border border-white/[0.05] opacity-50 cursor-not-allowed" type="button" disabled>
                       <Plus size={10} className="inline mr-0.5" />等待上一阶段
                     </button>
                   ) : null}

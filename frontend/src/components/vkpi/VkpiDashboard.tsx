@@ -496,6 +496,7 @@ export function VkpiDashboard({
 	              onDownloadReportPDF={onDownloadReportPDF}
 	              onExportPDF={onExportPDF}
 	              apiToken={apiToken}
+	              onSelectPage={handleSelectPage}
 	            />
 	          ) : (
             <WorkspacePage

@@ -357,16 +357,18 @@ export function ProjectsPage({
     const detailProjectForView = projectDetailState.project;
     return (
       <PageShell title="项目详情" description="按项目维度查看 KOL 阶段、数据、物流、证据和今日提醒。" hideHeading>
-        {projectDetailState.loading ? (
+        {/* 白屏闪案(2026-06-12):骨架屏只在首载(无既有数据)时出现;
+            推进/联系后的刷新保留旧视图原地更新,不再整页换骨架。 */}
+        {projectDetailState.loading && !projectDetailState.detail && !detailProjectForView ? (
           <ProjectDetailSkeleton onBack={() => setDetailProjectId(null)} />
         ) : null}
-        {!projectDetailState.loading && projectDetailState.error ? (
+        {!projectDetailState.loading && projectDetailState.error && !detailProjectForView ? (
           <ProjectDetailError
             message={projectDetailState.notFound ? '项目不存在' : projectDetailState.error}
             onBack={() => setDetailProjectId(null)}
           />
         ) : null}
-        {!projectDetailState.loading && !projectDetailState.error && detailProjectForView ? (
+        {(!projectDetailState.loading || Boolean(projectDetailState.detail)) && detailProjectForView ? (
           <ProjectDetailView
             key={detailProjectForView.id}
             apiToken={apiToken}
