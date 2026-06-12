@@ -645,6 +645,10 @@ def _public_video_page_url(value: Any, platform_key: str) -> str:
     host = (parsed.hostname or "").lower()
     if platform_key == "tiktok" and host.endswith("tiktok.com") and "/video/" in parsed.path:
         return url
+    # IG reel/p 页与 TikTok 同走 ytdlp(代理已配);此前仅放行 TikTok,
+    # IG evidence 的 content_url 全是页 URL → 一律 not_allowlisted,"IG 视频进 R2"从未通过。
+    if platform_key == "instagram" and host.endswith("instagram.com") and ("/reel/" in parsed.path or "/p/" in parsed.path):
+        return url
     return ""
 
 
