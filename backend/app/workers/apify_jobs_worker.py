@@ -1447,11 +1447,21 @@ def _process_kol_profile_deep_crawl(conn: psycopg.Connection[Any], job: dict[str
         result = kol_url_deep_crawl.run_profile_deep_crawl_for_job(payload, staff=staff)
     status = str((result or {}).get("status") or "")
     ok = status in ("", "ok", "ready", "done", "executed") or bool((result or {}).get("execution"))
+    # search_session_id 回写 payload:queue_view 据此输出 search_session,
+    # 泳道「最近完成」才会保留该任务并支持点开会话详情(一闪而过案)。
+    session_id = _int_or_none((result or {}).get("search_session_id"))
+    if session_id:
+        payload["search_session_id"] = int(session_id)
     with conn.transaction():
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE apify_jobs SET status=%s, last_error=%s, updated_at=NOW() WHERE id=%s",
-                ("done" if ok else "blocked", None if ok else (status or "deep_crawl_not_executed")[:300], int(job["id"])),
+                "UPDATE apify_jobs SET status=%s, last_error=%s, payload=%s::jsonb, updated_at=NOW() WHERE id=%s",
+                (
+                    "done" if ok else "blocked",
+                    None if ok else (status or "deep_crawl_not_executed")[:300],
+                    _json(payload),
+                    int(job["id"]),
+                ),
             )
 
 

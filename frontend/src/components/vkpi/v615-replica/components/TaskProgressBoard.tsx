@@ -251,7 +251,9 @@ export function TaskProgressBoard({ apiToken = "" }) {
   }));
   const visibleQueue = queuedTasks.slice(0, 2);
   const remainingQueue = Math.max(0, queueTotal - visibleQueue.length);
-  const visibleRecent = recentTasks.filter((task) => taskSearchSessionId(task)).slice(0, 2);
+  // 账号分析等队列任务 ~8 秒即完成,若按 session 过滤会"一闪而过"再无痕迹——
+  // 即使 payload 暂缺 search_session_id 也保底留在「最近完成」(无 session 时不可点开)。
+  const visibleRecent = recentTasks.filter((task) => taskSearchSessionId(task) || task?.kind === "账号分析").slice(0, 2);
   const emptyActive = activeTotal === 0 && !loading && !error;
 
   return e("div", {
