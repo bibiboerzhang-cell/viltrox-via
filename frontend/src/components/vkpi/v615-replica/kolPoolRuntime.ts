@@ -205,6 +205,11 @@ export function toV615KolPoolRows(items: VkpiKolPoolItem[]) {
       trend_hits: raw.trend_hits ? parseList(raw.trend_hits) : [],
       v6_fit: fit,
       viltrox_fit_reason: item.viltrox_fit_reason,
+      // d4(D2 点亮):后端 get_item/detail_bundle 已输出只读投影 v6_breakdown(pool.py:611,
+      // rule_v0 重算的 read projection,2b44eebc),此前被本映射的固定键集合滤掉——透传即通电。
+      // 注:投影的十个乘数槽是中性 1.0(legacy slot),真加法组件在 components 键;
+      // 因子真值持久化归 E2(Codex)。列表 list 端点不带此键,值为 null,Drawer 显 "—" 不受影响。
+      v6_breakdown: (item as unknown as Record<string, unknown>).v6_breakdown || null,
       // d3 量纲修复:fit 是 0-100,loyalty 全部消费点(Drawer fixedOrDash(x,2)、email.ts 阈值 0.85)
       // 按 0-1 设计;原先直塞 fit 导致 email 高忠诚分支恒 true、Drawer 显示 "45.00"。
       loyalty_score: fit == null ? null : Math.round(fit) / 100,
