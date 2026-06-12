@@ -103,3 +103,6 @@
 - [x] **B 心跳盘点** + **C 周脉冲报价** → docs/KOL-Pool-heartbeat-20260612.md(13 job 全死着=ENABLE_SCHEDULER=0;qualified 真实作用面 25 行非 960,报价 <$1.2/周 待裁)
 - [x] **A 补全扫** workflow 满配在跑 → docs/KOL-Pool-fullscan-20260612.md(完成即归档)
 - 备稿(未 commit,等闸):**E** C2 三端点+域+3 测试全过 | **F** C3 收藏接线(Pool 拉取/乐观 toggle/Drawer 文案,tsc 绿;C4 My KOL 主切换待 107+C5 数据后一刀落,避免空集回退反复)| **G** C5 脚本+dry-run 人审清单 docs/C5-backfill-dryrun-20260612.md(**781 对/721 KOL**,staff 40 名下 4 条 CODEX-VERIFY 测试项目建议人审剔除)
+
+## 程序法(2026-06-12 立)
+- **tsc 红禁 commit**:体检不过不许落刀;amend 仅限未 push 的紧急修正且必须回执自报(d4 首例已自报,记录在案不追责,下不为例)。
