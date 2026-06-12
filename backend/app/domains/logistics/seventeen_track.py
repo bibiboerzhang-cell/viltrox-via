@@ -37,7 +37,20 @@ STATUS_CN = {
 
 
 def _token() -> str:
-    return os.getenv("VKPI_17TRACK_TOKEN", "").strip()
+    """env 优先;admin master 进程不重启拿不到新 env——兜底读仓库根 .env(gitignored)。"""
+    token = os.getenv("VKPI_17TRACK_TOKEN", "").strip()
+    if token:
+        return token
+    try:
+        from pathlib import Path
+
+        env_path = Path(__file__).resolve().parents[4] / ".env"
+        for line in env_path.read_text().splitlines():
+            if line.strip().startswith("VKPI_17TRACK_TOKEN="):
+                return line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return ""
 
 
 def _utcnow() -> str:
@@ -133,11 +146,19 @@ def run_logistics_sync_for_job(payload: dict[str, Any], *, staff: dict[str, Any]
         return {"status": "ready", "synced": 0, "note": "no_active_tracking_numbers"}
     numbers = [{"number": str(row["tracking_number"]).strip()} for row in rows]
     # 注册(已注册会进 rejected,code -18019901,属幂等正常)
+    rejected_invalid: dict[str, str] = {}
     try:
         reg = _api("register", numbers)
-        logger.info("17track register accepted=%s rejected=%s",
+        for item in (reg.get("data") or {}).get("rejected") or []:
+            error = item.get("error") or {}
+            code = int(error.get("code") or 0)
+            # -18019901 = 已注册(幂等正常),其余拒收=单号无法识别/无效
+            if code != -18019901:
+                rejected_invalid[str(item.get("number") or "")] = str(error.get("message") or "")[:120]
+        logger.info("17track register accepted=%s rejected=%s invalid=%s",
                     len((reg.get("data") or {}).get("accepted") or []),
-                    len((reg.get("data") or {}).get("rejected") or []))
+                    len((reg.get("data") or {}).get("rejected") or []),
+                    len(rejected_invalid))
     except Exception as exc:
         return {"status": f"failed:register_{exc.__class__.__name__}"}
     try:
@@ -150,6 +171,30 @@ def run_logistics_sync_for_job(payload: dict[str, Any], *, staff: dict[str, Any]
     now = _utcnow()
     for row in rows:
         number = str(row["tracking_number"]).strip()
+        # 拒收回写(2026-06-12 首跑发现):无法识别的单号在 UI 明示,不再静默跳过
+        if number in rejected_invalid:
+            metadata = row.get("metadata_json")
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata)
+                except Exception:
+                    metadata = {}
+            metadata = metadata if isinstance(metadata, dict) else {}
+            shipping = metadata.get("shipping") if isinstance(metadata.get("shipping"), dict) else {}
+            shipping.update({
+                "status": "单号无法识别",
+                "status_raw": "Rejected",
+                "provider": "17track",
+                "synced_at": now,
+                "reject_reason": rejected_invalid[number],
+            })
+            metadata["shipping"] = shipping
+            conn.execute(
+                "UPDATE vkpi_project_kol_assignments SET metadata_json=?, updated_at=? WHERE id=?",
+                (json.dumps(metadata, ensure_ascii=False), now, int(row["id"])),
+            )
+            results.append({"number": number, "status": "rejected_invalid"})
+            continue
         item = accepted.get(number)
         if not item:
             results.append({"number": number, "status": "not_returned"})
