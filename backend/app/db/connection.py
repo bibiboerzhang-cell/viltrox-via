@@ -147,6 +147,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "108_vkpi_kol_pool_video_cursor.sql",
     "109_vkpi_kol_pool_duplicate_of.sql",
     "110_vkpi_projects_restricted.sql",
+    "111_vkpi_kol_pool_real_er_shadow.sql",
 )
 
 try:
