@@ -937,6 +937,44 @@ def get_kol_pool_video_comments(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.post("/kol-pool/outreach-draft/enqueue")
+@audit_action(
+    action_type="kol_outreach_draft_enqueue",
+    target_type="kol_pool",
+    target_id_extractor=lambda result, kwargs: str((result or {}).get("job_id") or ""),
+    detail_extractor=lambda result, kwargs: f"enqueue outreach draft status={(result or {}).get('status')}",
+)
+def enqueue_kol_outreach_draft(
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """联系草稿入队(2026-06-12 裁令:点联系给优化后的聊天方式;泳道「联系草稿」可见)。"""
+    from app.domains.kol import outreach_draft as kol_outreach_draft
+
+    try:
+        return kol_outreach_draft.enqueue_outreach_draft_job(
+            int(body.get("kol_pool_id") or 0),
+            project_id=body.get("project_id"),
+            staff=staff,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/kol-pool/{kol_pool_id}/outreach-draft")
+def get_kol_outreach_draft(
+    kol_pool_id: int,
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """读最新联系草稿(cache,kol_outreach_draft_v1);无则 state=missing。"""
+    del staff
+    from app.domains.kol import outreach_draft as kol_outreach_draft
+
+    return kol_outreach_draft.get_outreach_draft(int(kol_pool_id))
+
+
 @router.get("/kol-pool/favorites")
 def list_kol_pool_favorites(
     limit: int = Query(default=2000, ge=1, le=5000),

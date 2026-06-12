@@ -1472,6 +1472,27 @@ def _process_kol_profile_deep_crawl(conn: psycopg.Connection[Any], job: dict[str
             )
 
 
+def _process_kol_outreach_draft(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
+    """联系草稿(2026-06-12 裁令):LLM 经队列生成外联消息,产物落 cache(kol_outreach_draft_v1)。"""
+    from app.domains.kol import outreach_draft as kol_outreach_draft
+
+    staff = _resolve_job_staff(conn, payload)
+    with db_connection_sync_scope():
+        result = kol_outreach_draft.run_outreach_draft_for_job(payload, staff=staff)
+    status = str((result or {}).get("status") or "")
+    ok = status == "ready"
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE apify_jobs SET status=%s, last_error=%s, updated_at=NOW() WHERE id=%s",
+                (
+                    "done" if ok else "blocked",
+                    None if ok else (str((result or {}).get("reason") or status or "outreach_draft_failed"))[:300],
+                    int(job["id"]),
+                ),
+            )
+
+
 def _process_kol_pool_comments_collect(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
     """KOL Pool 收藏行评论采集(2026-06-12 裁令):逐帖走 collect_post_comments,泳道可见。"""
     from app.domains.comments import collector as comments_collector
@@ -3075,6 +3096,9 @@ def _process_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> None:
         return
     if str(job.get("job_type") or "").strip().lower() == "kol_pool_comments_collect":
         _process_kol_pool_comments_collect(conn, job, payload)
+        return
+    if str(job.get("job_type") or "").strip().lower() == "kol_outreach_draft":
+        _process_kol_outreach_draft(conn, job, payload)
         return
     target_type, target_id = _target(payload)
     if not target_type or not target_id:
