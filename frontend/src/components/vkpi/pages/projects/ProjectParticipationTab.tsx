@@ -194,7 +194,14 @@ export function ProjectParticipationTab({
                           void onMoveRowStage(row);
                         }}
                       >
-                        {movingRowId === row.id ? '推进中' : nextProjectStage(row.stage) ? '推进' : '已完成'}
+                        {/* 流失/停滞/取消是终止态不是完成态:按 stageLabels 如实显示,不冒充"已完成"。 */}
+                        {movingRowId === row.id
+                          ? '推进中'
+                          : nextProjectStage(row.stage)
+                            ? '推进'
+                            : ['lost', 'stalled', 'cancelled'].includes(row.stage)
+                              ? (stageLabels[row.stage] || '已终止')
+                              : '已完成'}
                       </button>
                     </td>
                   </tr>

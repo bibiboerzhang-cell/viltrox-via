@@ -1,20 +1,16 @@
 import { Component, useEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
-import { Activity, AlertCircle, BookOpen, Boxes, Check, DollarSign, ExternalLink, Eye, FileText, Heart, MessageCircle, MousePointerClick, Package, ShoppingCart, Sparkles, TrendingUp, Upload, Video, X } from 'lucide-react';
+import { Activity, AlertCircle, BookOpen, Boxes, Check, DollarSign, ExternalLink, Eye, FileText, Heart, MessageCircle, Package, ShoppingCart, Sparkles, TrendingUp, Upload, Video } from 'lucide-react';
 import { stageLabels } from '../../shared/vkpiConstants';
 import { ProjectEvidenceForms } from '../../drawers/ProjectEvidenceForms';
 import type { VkpiProjectDetail, VkpiProjectRow } from '../../vkpiTypes';
 import type { VkpiAnalysisCacheEntry, VkpiProjectContract, VkpiProjectContractsResponse, VkpiProjectRetrospectiveResult, VkpiProjectVideoAnalysisCacheItem, VkpiProjectVideoAnalysisCacheResponse } from '../../../../services/vkpi/projects-api';
 import { formatLargeNum, formatMoneyShort, healthColor, PROJECT_STAGE_COLOR, PROJECT_STAGE_FLOW } from './projectDeliverableStyle';
 import {
-  bottleneckForRows,
-  cancelledStages,
   healthForRows,
   stageIndex,
   type ContractLine,
   type ExpenseLine,
-  type ProjectAnalyticsSummary,
   type ProjectStatsSummary,
-  type StageCostSummary,
 } from '../../../../domains/projects';
 
 function centsValue(row: Record<string, unknown>) {
@@ -91,7 +87,8 @@ function buildRetrospectiveDraftText(
     `总曝光: ${formatLargeNum(stats.views)}`,
     `总点击: ${formatLargeNum(stats.clicks)}`,
     `归因 GMV: ${formatMoneyShort(stats.gmv)}`,
-    `ROI: ${stats.roi == null ? '待成本/归因补齐' : `${stats.roi.toFixed(1)}%`}`,
+    // stats.roi 是比值(gmv/cost);同页 KPI 口径显示百分数,这里同样 ×100,不再把比值直接当百分数。
+    `ROI: ${stats.roi == null ? '待成本/归因补齐' : `${(stats.roi * 100).toFixed(1)}%`}`,
     '',
     '## 归因接入',
     `已接 Shopify: ${withShopify.length}`,
@@ -180,10 +177,6 @@ function deliveredByStageOrStatus(row: VkpiProjectRow) {
   return stageIndex(row.stage) >= stageIndex('received') || /delivered|signed|received|签收|已送达|已到货/.test(status);
 }
 
-function timelineDateValue(row: VkpiProjectRow) {
-  return row.currentStageStartedAt || row.latestMessageAt || row.updatedAt || row.createdAt || row.startedAt || '';
-}
-
 function timelineTimestamp(value: string) {
   const time = new Date(value).getTime();
   return Number.isFinite(time) ? time : 0;
@@ -203,13 +196,6 @@ function formatTimelineDate(value: string) {
 function timelineStage(row: VkpiProjectRow) {
   const index = Math.max(0, Math.min(PROJECT_STAGE_FLOW.length - 1, stageIndex(row.stage)));
   return PROJECT_STAGE_FLOW[index];
-}
-
-function timelineEventText(row: VkpiProjectRow) {
-  if (row.trackingStatus) return `✓ ${row.trackingStatus}`;
-  if ((row.evidenceCount || 0) > 0) return `✓ 已归档 ${row.evidenceCount} 条证据`;
-  if (row.latestMessageSource && row.latestMessageSource !== 'No reply') return `✓ ${row.latestMessageSource}`;
-  return `✓ ${stageLabels[row.stage] || timelineStage(row).label}`;
 }
 
 function timelineSpecial(row: VkpiProjectRow) {
@@ -593,6 +579,8 @@ function ContractArchiveCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [extractionSig]);
   const meta = contractStatusMeta(contract);
+  // 一次解析存变量,避免渲染里对同一份 deliverables_json 双调 summarizeDeliverables。
+  const deliverableSummaries = summarizeDeliverables(contract.deliverables_json);
   const saving = busyKey === `save:${contract.id}`;
   const confirming = busyKey === `confirm:${contract.id}`;
   const extracting = busyKey === `extract:${contract.id}` || contract.extraction_status === 'processing';
@@ -611,7 +599,7 @@ function ContractArchiveCard({
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <strong className="text-[13px] text-white truncate">{contract.file_name || 'Contract.pdf'}</strong>
+            <strong className="text-[13px] text-white truncate">{contract.file_name || '合同文件'}</strong>
             <span className={`text-[9.5px] px-2 py-0.5 rounded-full border ${meta.className}`}>{meta.label}</span>
             {contract.status === 'confirmed' ? <span className="text-[9.5px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-300">人工确认</span> : null}
           </div>
@@ -677,8 +665,8 @@ function ContractArchiveCard({
       <div className="text-[10px] text-slate-400">
         <span className="flex items-center justify-between gap-2 mb-1">Deliverables 交付物<ConfidenceBadge contract={contract} field="deliverables" /></span>
         <div className="w-full rounded-md border border-white/[0.08] bg-black/20 px-2.5 py-2 space-y-2">
-          {summarizeDeliverables(contract.deliverables_json).length ? (
-            summarizeDeliverables(contract.deliverables_json).map((d, index) => (
+          {deliverableSummaries.length ? (
+            deliverableSummaries.map((d, index) => (
               <div key={index} className="flex gap-2">
                 <span className="text-[10px] text-purple-300/70 mt-0.5 tabular-nums shrink-0">{index + 1}.</span>
                 <div className="min-w-0">
@@ -750,6 +738,7 @@ export function CampaignContractsTab({
 }) {
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [file, setFile] = useState<File | null>(null);
+  const [fileError, setFileError] = useState('');
   const [linkedRowId, setLinkedRowId] = useState('');
   const uploadBusy = busyKey === 'upload';
   const items = contracts?.items || [];
@@ -757,7 +746,12 @@ export function CampaignContractsTab({
   const selectedRow = rows.find((row) => row.id === linkedRowId) || rows.find((row) => stageIndex(row.stage) >= stageIndex('agreed')) || rows[0];
   const chooseFile = (nextFile?: File | null) => {
     if (!nextFile) return;
-    if (!/\.(pdf|doc|docx)$/i.test(nextFile.name)) return;
+    // 非法类型不再静默吞掉:给出明确提示,让用户知道为什么没选上。
+    if (!/\.(pdf|doc|docx)$/i.test(nextFile.name)) {
+      setFileError(`「${nextFile.name}」类型不支持,仅接受 PDF / DOC / DOCX 合同文件。`);
+      return;
+    }
+    setFileError('');
     setFile(nextFile);
   };
   const submitUpload = async () => {
@@ -780,7 +774,7 @@ export function CampaignContractsTab({
         onDragOver={(event) => event.preventDefault()}
         onDrop={(event) => { event.preventDefault(); chooseFile(event.dataTransfer.files?.[0]); }}
       >
-        <input ref={fileRef} type="file" accept=".pdf,.doc,.docx" className="hidden" onChange={(event) => chooseFile(event.target.files?.[0])} />
+        <input ref={fileRef} type="file" accept=".pdf,.doc,.docx" className="hidden" onChange={(event) => { chooseFile(event.target.files?.[0]); event.target.value = ''; }} />
         <div className="grid md:grid-cols-[minmax(0,1fr)_220px_128px] gap-3 items-end">
           <button className="rounded-lg border border-white/[0.06] bg-black/20 p-4 text-left hover:border-purple-400/35" type="button" onClick={() => fileRef.current?.click()} disabled={uploadBusy}>
             <Upload size={20} className="text-purple-300 mb-2" />
@@ -799,6 +793,7 @@ export function CampaignContractsTab({
             {uploadBusy ? 'Claude正在提取条款' : '上传归档'}
           </button>
         </div>
+        {fileError ? <div className="mt-2 text-[10.5px] text-red-300">{fileError}</div> : null}
       </div>
 
       <div className="grid grid-cols-3 gap-2">
@@ -1465,9 +1460,7 @@ export function CampaignRetrospectiveTab({
   project: VkpiProjectRow;
   rows: VkpiProjectRow[];
   stats: ProjectStatsSummary;
-  analytics: ProjectAnalyticsSummary;
   health: ReturnType<typeof healthForRows>;
-  bottleneck: ReturnType<typeof bottleneckForRows>;
   videoAnalysisCache?: VkpiProjectVideoAnalysisCacheResponse | null;
   videoQaCache?: VkpiProjectVideoAnalysisCacheResponse | null;
   videoAnalysisLoading?: boolean;
@@ -1747,8 +1740,6 @@ export function CampaignAnalyticsTab({
 }: {
   rows: VkpiProjectRow[];
   stats: ProjectStatsSummary;
-  analytics: ProjectAnalyticsSummary;
-  health: ReturnType<typeof healthForRows>;
 }) {
   const [rankingSort, setRankingSort] = useState<AnalyticsRankingSort>('views');
   const totalLikes = rows.reduce((sum, row) => sum + (row.likes || 0), 0);
@@ -1955,12 +1946,11 @@ export function CampaignFinanceTab({
   expenseLines,
   costRows,
   productUnitCosts = {},
+  onOpenShippingInfo,
   onOpenCostEntry,
 }: {
   rows: VkpiProjectRow[];
-  stats: ProjectStatsSummary;
   expenseLines: ExpenseLine[];
-  stageCosts: StageCostSummary[];
   costRows: Array<Record<string, unknown>>;
   productUnitCosts?: Record<string, number>;
   onOpenShippingInfo: () => void;
@@ -1995,9 +1985,10 @@ export function CampaignFinanceTab({
   const totalContract = ledgerTotals.contract || rowCosts.reduce((sum, item) => sum + item.contractFee, 0);
   const totalShipping = ledgerTotals.shipping || rowCosts.reduce((sum, item) => sum + item.shippingFee, 0);
   const totalProductCost = ledgerTotals.product || rowCosts.reduce((sum, item) => sum + item.productCost, 0);
-  const totalProductRetail = totalProductCost;
   const totalAll = totalContract + totalShipping + totalProductCost;
-  const rowsWithContract = rowCosts.filter((item) => item.contractFee > 0).length;
+  // 横幅口径:账本真值与倒推估算分开计数,不再合并冒充"已从合同提取"。
+  const ledgerContractRows = rowCosts.filter((item) => item.hasContract && !item.contractFeeIsEstimate).length;
+  const estimatedContractRows = rowCosts.filter((item) => item.contractFeeIsEstimate).length;
   const rowsWithProductCost = rowCosts.filter((item) => item.productCost > 0).length;
   const averageCost = totalAll / Math.max(rowCosts.filter((item) => item.contractFee + item.productCost > 0).length, 1);
 
@@ -2007,7 +1998,8 @@ export function CampaignFinanceTab({
         {[
           ['合同费用', totalContract, '#a855f7', '已合作阶段录入'],
           ['快递费', totalShipping, '#06b6d4', '已发货阶段录入'],
-          ['产品成本', totalProductCost, '#10b981', `零售价 ${formatMoneyShort(totalProductRetail)}`],
+          // 子标签曾标"零售价"但贴的是成本数——这里只有产品成本口径,如实标注。
+          ['产品成本', totalProductCost, '#10b981', '按产品成本计 · 零售价未录入'],
           ['总成本', totalAll, '#fb923c', `${rows.length} 个 KOL`],
         ].map(([label, value, color, sub]) => (
           <div key={String(label)} className="rounded-lg border border-white/[0.06] bg-white/[0.015] p-3">
@@ -2021,7 +2013,7 @@ export function CampaignFinanceTab({
       <div className="rounded-lg border border-purple-500/30 bg-purple-500/5 p-3 flex items-start gap-2.5">
         <Sparkles size={13} className="text-purple-300 mt-0.5 shrink-0" />
         <div className="text-[10.5px] text-slate-300">
-          已自动从 {rowsWithContract} 份合同提取费用 + {rowsWithProductCost} 个 KOL 计入产品成本 · 平均 KOL 总成本{' '}
+          合同费用:账本入账 {ledgerContractRows} 份 · 估算 {estimatedContractRows} 份 + {rowsWithProductCost} 个 KOL 计入产品成本 · 平均 KOL 总成本{' '}
           <span className="text-purple-300 font-semibold">{formatMoneyShort(averageCost)}</span>
         </div>
       </div>
@@ -2029,15 +2021,24 @@ export function CampaignFinanceTab({
       <div className="rounded-lg border border-white/[0.06] bg-white/[0.015] overflow-hidden">
         <div className="px-4 py-2.5 border-b border-white/[0.05] flex items-center justify-between gap-3">
           <h4 className="text-[12px] font-semibold text-white">KOL 费用明细</h4>
-          {rows[0] && onOpenCostEntry ? (
+          <div className="flex items-center gap-2">
             <button
               type="button"
-              className="rounded-lg border border-purple-400/30 bg-purple-500/10 px-2.5 py-1 text-[10.5px] font-semibold text-purple-200 hover:bg-purple-500/18 transition"
-              onClick={() => onOpenCostEntry(rows[0], 'cash_fee')}
+              className="rounded-lg border border-cyan-400/30 bg-cyan-500/10 px-2.5 py-1 text-[10.5px] font-semibold text-cyan-200 hover:bg-cyan-500/20 transition"
+              onClick={onOpenShippingInfo}
             >
-              + 录入费用
+              录入快递
             </button>
-          ) : null}
+            {rows[0] && onOpenCostEntry ? (
+              <button
+                type="button"
+                className="rounded-lg border border-purple-400/30 bg-purple-500/10 px-2.5 py-1 text-[10.5px] font-semibold text-purple-200 hover:bg-purple-500/18 transition"
+                onClick={() => onOpenCostEntry(rows[0], 'cash_fee')}
+              >
+                + 录入费用
+              </button>
+            ) : null}
+          </div>
         </div>
         <table className="w-full text-[11px]">
           <thead>
@@ -2222,7 +2223,9 @@ export function CampaignMaterialsTab({
                 const carrier = row.trackingCarrier || '待识别快递';
                 const trackingNumber = String(row.trackingNumber || '').trim();
                 const tr = trackingNumber ? { carrier, no: trackingNumber } : null;
-                const isDelivered = stageIndex(row.stage) >= stageIndex('received');
+                // 签收判定与时间轴同口径:阶段 >= 已到货,或 trackingStatus 真值含签收关键字。
+                const isDelivered = deliveredByStageOrStatus(row);
+                const realTrackingStatus = String(row.trackingStatus || '').trim();
                 const shippingCost = costRowAmount(costRows, row, 'shipping');
                 const productSent = rowProductSent(row);
                 const ledgerProductCost = costRowAmount(costRows, row, 'product');
@@ -2257,17 +2260,25 @@ export function CampaignMaterialsTab({
                         </a>
                       </div>
                     ) : null}
+                    {/* 物流节点没有逐段真值:有 trackingStatus(17track 等)显示真值,否则只显两态(在途/已签收)并注明按阶段推断,不再画四段假进度。 */}
                     <div className="flex items-center gap-1.5 mb-2">
-                      {['已发货', '在途', '派送中', '已签收'].map((step, index) => {
-                        const stepDone = isDelivered ? true : index <= 1;
-                        return (
-                          <div key={step} className="flex-1 flex items-center gap-1">
-                            <div className={`w-2 h-2 rounded-full ${stepDone ? 'bg-emerald-400' : 'bg-white/[0.08]'}`} />
-                            <div className={`flex-1 text-[9.5px] ${stepDone ? 'text-emerald-300' : 'text-slate-600'}`}>{step}</div>
-                            {index < 3 ? <div className={`h-px flex-1 ${stepDone && (isDelivered ? true : index + 1 <= 1) ? 'bg-emerald-400/40' : 'bg-white/[0.05]'}`} /> : null}
-                          </div>
-                        );
-                      })}
+                      {realTrackingStatus ? (
+                        <span className="text-[10px] px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-300">物流状态:{realTrackingStatus}</span>
+                      ) : (
+                        <>
+                          {['在途', '已签收'].map((step, index) => {
+                            const stepDone = isDelivered || index === 0;
+                            return (
+                              <div key={step} className="flex-1 flex items-center gap-1">
+                                <div className={`w-2 h-2 rounded-full ${stepDone ? 'bg-emerald-400' : 'bg-white/[0.08]'}`} />
+                                <div className={`flex-1 text-[9.5px] ${stepDone ? 'text-emerald-300' : 'text-slate-600'}`}>{step}</div>
+                                {index < 1 ? <div className={`h-px flex-1 ${isDelivered ? 'bg-emerald-400/40' : 'bg-white/[0.05]'}`} /> : null}
+                              </div>
+                            );
+                          })}
+                          <span className="text-[9px] text-slate-600 shrink-0">按阶段推断</span>
+                        </>
+                      )}
                     </div>
                     <div className="flex items-center justify-between gap-3 pt-2 border-t border-white/[0.04]">
                       <div className="flex items-center gap-1.5 flex-wrap">

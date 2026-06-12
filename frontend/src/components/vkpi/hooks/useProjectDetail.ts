@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getProjectDetail } from '../../../domains/projects';
 import type { VkpiProjectDetail, VkpiProjectRow } from '../vkpiTypes';
 import { coerceProjectStage, objectValue, platformFromRaw, safeNumber, textValue } from '../shared/vkpiDataUtils';
@@ -84,6 +84,20 @@ function firstEventAt(detail: VkpiProjectDetail, project: Record<string, unknown
   return firstText(project.started_at, oldest?.effective_at, oldest?.created_at, project.created_at);
 }
 
+type MessageSource = VkpiProjectRow['latestMessageSource'];
+
+// 来源从 detail.messages[0].source 真值推导,不再恒填 'Manual note'。
+// vkpi_messages.source 是自由文本(manual/dm/email/stage_screenshot...),行类型是受限联合:
+// 能确证渠道时映射;取不到时给空串(看板按 '-' 显示),不冒充手动备注。
+function deriveLatestMessageSource(detail: VkpiProjectDetail): MessageSource {
+  const raw = String(detail.messages?.[0]?.source ?? '').trim().toLowerCase();
+  if (raw === 'dm' || raw.includes('direct message') || raw.includes('私信')) return 'DM';
+  if (raw.includes('email') || raw.includes('mail') || raw.includes('邮件')) return 'Email';
+  if (raw.includes('comment')) return 'Comment reply';
+  if (raw === 'manual' || raw.includes('note') || raw === 'stage_screenshot') return 'Manual note';
+  return '' as string as MessageSource;
+}
+
 function assignmentStage(value: unknown): VkpiProjectRow['stage'] {
   const raw = String(value || '').trim().toLowerCase();
   if (raw === 'discovered') return 'discovery';
@@ -137,7 +151,8 @@ function assignmentToProjectRow(
     campaign: projectRow.campaign,
     stage,
     latestMessageAt,
-    latestMessageSource: 'Manual note',
+    // 行级没有逐 assignment 消息源,继承项目级推导值(detail.messages[0].source),不恒填 'Manual note'。
+    latestMessageSource: projectRow.latestMessageSource,
     views,
     likes: safeNumber(item.total_likes),
     comments: safeNumber(item.total_comments),
@@ -190,7 +205,10 @@ export function projectDetailToRow(detail: VkpiProjectDetail, fallback?: VkpiPro
   const contentLikes = sumNumber(detail.content_posts || [], 'likes', 'like_count');
   const contentComments = sumNumber(detail.content_posts || [], 'comments', 'comment_count');
   const projectViews = safeNumber(project.total_views || project.views || project.view_count || project.play_count || project.impressions || project.content_views);
-  const orders = safeNumber(linkSummary.order_count) || detail.link_orders?.length || detail.sales_attributions.length || null;
+  // order_count 为 0 是有效真值(有链路但零单),只有 null/undefined 才退回归因行数兜底,不再拿行数冒充订单数。
+  const orders = linkSummary.order_count != null
+    ? safeNumber(linkSummary.order_count)
+    : (detail.link_orders?.length || detail.sales_attributions.length || null);
   const latestMessageAt = firstText(
     detail.events[0]?.effective_at,
     detail.messages?.[0]?.captured_at,
@@ -210,7 +228,7 @@ export function projectDetailToRow(detail: VkpiProjectDetail, fallback?: VkpiPro
     campaign: textValue(project.project_name || project.project_uid || fallback?.campaign, fallback?.campaign || '未命名推广'),
     stage,
     latestMessageAt,
-    latestMessageSource: fallback?.latestMessageSource || 'Manual note',
+    latestMessageSource: deriveLatestMessageSource(detail),
     views: contentViews || projectViews || fallback?.views || 0,
     likes: contentLikes || fallback?.likes || 0,
     comments: contentComments || fallback?.comments || 0,
@@ -265,7 +283,13 @@ export function useProjectDetail({ apiToken, projectId, fallbackProject }: UsePr
     notFound: false,
   });
 
+  // 跨项目切换防串数据:projectId 变化的瞬间必须先清掉旧 detail 再进 loading,
+  // 否则新项目请求返回前会短暂渲染上一个项目的数据。
+  const loadedProjectIdRef = useRef<string | null | undefined>(undefined);
+
   useEffect(() => {
+    const projectChanged = loadedProjectIdRef.current !== projectId;
+    loadedProjectIdRef.current = projectId;
     if (!projectId) {
       setState({ detail: null, loading: false, error: '', notFound: false });
       return;
@@ -281,7 +305,9 @@ export function useProjectDetail({ apiToken, projectId, fallbackProject }: UsePr
     }
 
     let cancelled = false;
-    setState((current) => ({ ...current, loading: true, error: '', notFound: false }));
+    setState((current) => (projectChanged
+      ? { detail: null, loading: true, error: '', notFound: false }
+      : { ...current, loading: true, error: '', notFound: false }));
     getProjectDetail(apiToken, projectId)
       .then((detail) => {
         if (cancelled) return;
@@ -317,8 +343,11 @@ export function useProjectDetail({ apiToken, projectId, fallbackProject }: UsePr
     if (!apiToken || !projectId) return;
     try {
       const detail = await getProjectDetail(apiToken, projectId);
+      // 请求期间已切到别的项目:丢弃过期结果,避免旧项目数据串台。
+      if (loadedProjectIdRef.current !== projectId) return;
       setState({ detail, loading: false, error: '', notFound: false });
     } catch (error) {
+      if (loadedProjectIdRef.current !== projectId) return;
       const message = error instanceof Error ? error.message : '项目详情刷新失败';
       setState((current) => ({ ...current, loading: false, error: current.detail ? '' : message }));
     }

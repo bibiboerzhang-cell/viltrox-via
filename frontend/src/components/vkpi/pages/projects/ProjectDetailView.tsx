@@ -1138,8 +1138,6 @@ export function ProjectDetailView({
         <CampaignAnalyticsTab
           rows={rows}
           stats={stats}
-          analytics={analytics}
-          health={health}
         />
       ) : activeTab === '物料' ? (
         <CampaignMaterialsTab
@@ -1158,9 +1156,7 @@ export function ProjectDetailView({
       ) : activeTab === '费用' ? (
         <CampaignFinanceTab
           rows={rows}
-          stats={stats}
           expenseLines={expenseLines}
-          stageCosts={stageCosts}
           costRows={costRows}
           productUnitCosts={productUnitCosts}
           onOpenShippingInfo={() => setActionModal({ kind: 'shipping', row: rows[0] || project })}
@@ -1186,9 +1182,7 @@ export function ProjectDetailView({
           project={project}
           rows={rows}
           stats={stats}
-          analytics={analytics}
           health={health}
-          bottleneck={bottleneck}
           videoAnalysisCache={videoAnalysisCache}
           videoQaCache={videoQaCache}
           videoAnalysisLoading={videoAnalysisLoading}

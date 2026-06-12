@@ -202,7 +202,7 @@ export function KolStageTimeline({
                   <div className="flex items-center gap-2 flex-wrap">
                     <div className="text-[12px] font-semibold" style={{ color: isPending ? '#64748b' : '#fff' }}>{idx + 1}. {stage.label}</div>
                     {isCurrent ? <span className="text-[9px] px-1.5 py-0.5 rounded font-medium" style={{ background: `${color}20`, color }}>进行中</span> : null}
-                    {isDone ? <span className="text-[9px] text-slate-500">{shortDateTime(row.latestMessageAt || row.updatedAt)}</span> : null}
+                    {/* 没有阶段级完成时间数据:此前九个已完成阶段共用同一行级时间戳冒充各阶段完成时间,已移除。 */}
                   </div>
                   {isCurrent && !['discovery', 'measured'].includes(stage.key) ? (
                     <button

@@ -53,10 +53,11 @@ interface CampaignGroup {
   kolWithEvidence: number;
   evidenceCount: number;
   views: number;
-  clicks: number;
-  orders: number;
-  gmv: number;
-  cost: number;
+  // 钱/归因口径与行级一致:null = 全组都没有归因/账本数据(显"—"),0 = 有链路但值为零。
+  clicks: number | null;
+  orders: number | null;
+  gmv: number | null;
+  cost: number | null;
   latestMessageAt?: string;
   latestMessageSource?: string;
   totalDurationLabel?: string;
@@ -198,7 +199,10 @@ function groupStatus(rows: VkpiProjectRow[]): BoardStatus {
   if (statuses.includes('进行中')) return '进行中';
   if (statuses.includes('收尾中')) return '收尾中';
   if (statuses.includes('规划中')) return '规划中';
-  if (statuses.includes('已结束')) return statuses.every((status) => status === '已结束') ? '已结束' : '进行中';
+  // 全终态组(已结束 + 已取消混合)归"已结束",不再因为混入已取消而回退成"进行中"。
+  if (statuses.includes('已结束')) {
+    return statuses.every((status) => status === '已结束' || status === '已取消') ? '已结束' : '进行中';
+  }
   return '已取消';
 }
 
@@ -227,6 +231,19 @@ function rowEvidenceCount(row: VkpiProjectRow) {
   return row.stageEventCount || 0;
 }
 
+// 组内全 null(无归因/账本链路)→ null 显"—";只要有一行有真值就求和。
+function sumNullable(rows: VkpiProjectRow[], pick: (row: VkpiProjectRow) => number | null | undefined): number | null {
+  let hasValue = false;
+  let total = 0;
+  rows.forEach((row) => {
+    const value = pick(row);
+    if (value == null) return;
+    hasValue = true;
+    total += value;
+  });
+  return hasValue ? total : null;
+}
+
 function buildCampaignGroups(projects: VkpiProjectRow[]): CampaignGroup[] {
   const grouped = new Map<string, VkpiProjectRow[]>();
   projects.forEach((project) => {
@@ -250,10 +267,10 @@ function buildCampaignGroups(projects: VkpiProjectRow[]): CampaignGroup[] {
       kolWithEvidence: sortedRows.reduce((sum, row) => sum + rowKolWithEvidence(row), 0),
       evidenceCount: sortedRows.reduce((sum, row) => sum + rowEvidenceCount(row), 0),
       views: sortedRows.reduce((sum, row) => sum + (row.views || 0), 0),
-      clicks: sortedRows.reduce((sum, row) => sum + (row.clicks || 0), 0),
-      orders: sortedRows.reduce((sum, row) => sum + (row.orders || 0), 0),
-      gmv: sortedRows.reduce((sum, row) => sum + (row.gmv || 0), 0),
-      cost: sortedRows.reduce((sum, row) => sum + (row.cost || 0), 0),
+      clicks: sumNullable(sortedRows, (row) => row.clicks),
+      orders: sumNullable(sortedRows, (row) => row.orders),
+      gmv: sumNullable(sortedRows, (row) => row.gmv),
+      cost: sumNullable(sortedRows, (row) => row.cost),
       latestMessageAt: primary.latestMessageAt || primary.updatedAt || primary.startedAt || primary.createdAt,
       latestMessageSource: primary.latestMessageSource,
       latestEvidencePublishDate,
@@ -353,9 +370,9 @@ export function ProjectCampaignBoard({
   }, [campaignGroups, platform, search, sortBy, sortDirection, starredOnly, status]);
   const health = boardHealth(focusRows);
   const stalledCount = campaignGroups.filter((group) => cancelledStages.has(group.focus.stage) || parseDays(group.stageDurationLabel) >= 10).length;
-  const totalGmv = campaignGroups.reduce((sum, group) => sum + group.gmv, 0);
-  const totalCost = campaignGroups.reduce((sum, group) => sum + group.cost, 0);
-  const totalClicks = campaignGroups.reduce((sum, group) => sum + group.clicks, 0);
+  const totalGmv = campaignGroups.reduce((sum, group) => sum + (group.gmv || 0), 0);
+  const totalCost = campaignGroups.reduce((sum, group) => sum + (group.cost || 0), 0);
+  const totalClicks = campaignGroups.reduce((sum, group) => sum + (group.clicks || 0), 0);
   const totalViews = campaignGroups.reduce((sum, group) => sum + group.views, 0);
   const starredCount = campaignGroups.filter((group) => group.rows.some((row) => row.isStarred)).length;
 
@@ -376,10 +393,10 @@ export function ProjectCampaignBoard({
           </div>
         </div>
         <div className="vkpi-project-health-grid">
-          <div className={`vkpi-project-health-card ${health.className}`}>
-            <span>今日健康度</span>
+          <div className={`vkpi-project-health-card ${health.className}`} title="前端启发式估算:按发布占比 / 取消占比 / 阻塞项目数加权,非后端健康度口径">
+            <span>今日健康度 · 启发式</span>
             <strong>{health.score ? `${health.score}` : '-'}</strong>
-            <em>{Math.max(0, campaignGroups.length - stalledCount)} 个项目正常推进</em>
+            <em>{Math.max(0, campaignGroups.length - stalledCount)} 个项目正常推进 · 启发式估算</em>
           </div>
           <div className="vkpi-project-health-card">
             <span>需要处理</span>
@@ -387,7 +404,7 @@ export function ProjectCampaignBoard({
             <em>停滞 / 取消 / 超 10 天未推进</em>
           </div>
           <div className="vkpi-project-health-card">
-            <span>本周预计曝光</span>
+            <span>累计曝光</span>
             <strong>{formatNumber(totalViews)}</strong>
             <em>基于当前项目播放数据</em>
           </div>
@@ -437,7 +454,8 @@ export function ProjectCampaignBoard({
         {filteredCampaignGroups.length ? filteredCampaignGroups.map((group) => {
           const cardHealthColor = healthColor(group.healthScore);
           const cardHealthBg = healthBg(group.healthScore);
-          const messageSource = messageSourceLabels[group.latestMessageSource || ''] || group.latestMessageSource || '手动备注';
+          // 来源取不到时如实显 '-',不再恒兜底"手动备注"。
+          const messageSource = messageSourceLabels[group.latestMessageSource || ''] || group.latestMessageSource || '-';
           const selected = group.rows.some((row) => row.id === selectedProjectId);
           const initial = ownerInitial(group.primary.ownerName);
           const activityRaw = group.latestEvidencePublishDate;

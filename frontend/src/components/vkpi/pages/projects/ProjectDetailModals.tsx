@@ -1,12 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { AlertCircle, ArrowLeft, DollarSign, FileText, ImageIcon, Package, Search, ShoppingCart, Sparkles, Upload, Video, X } from 'lucide-react';
-import type { VkpiKolOption, VkpiProjectRow, VkpiProjectStage } from '../../vkpiTypes';
+import { AlertCircle, ArrowLeft, DollarSign, FileText, ImageIcon, Package, Search, Sparkles, Upload, Video, X } from 'lucide-react';
+import type { VkpiKolOption, VkpiProjectRow } from '../../vkpiTypes';
 import { stageLabels } from '../../shared/vkpiConstants';
 import {
   editPlatformOptions,
-  stageIndex,
   type ScreenshotTarget,
-  type TrackingState,
 } from '../../../../domains/projects';
 
 function filePayload(file: File | null) {
@@ -397,6 +395,11 @@ export function ContractUploadModal({
       setError('只支持 PDF / DOC / DOCX。');
       return;
     }
+    // 与后端上限对齐(25MB):超限在前端就拦下,不再白等上传后被拒。
+    if (nextFile.size > 25 * 1024 * 1024) {
+      setError('合同文件不能超过 25MB。');
+      return;
+    }
     setFile(nextFile);
   };
   const submit = async (event: FormEvent) => {
@@ -426,7 +429,7 @@ export function ContractUploadModal({
           <input ref={fileRef} type="file" accept=".pdf,.doc,.docx" onChange={(event) => chooseFile(event.target.files?.[0])} />
           <FileText size={25} />
           <strong>{file ? file.name : '点击或拖拽上传合同 PDF / DOCX'}</strong>
-          <span>{file ? `${Math.round(file.size / 1024)} KB · 已选择` : '最大 20MB · PDF / DOCX 合同文件'}</span>
+          <span>{file ? `${Math.round(file.size / 1024)} KB · 已选择` : '最大 25MB · PDF / DOCX 合同文件'}</span>
         </div>
         <div className="vkpi-modal-form-grid">
           <label>合同金额 USD<input inputMode="decimal" value={fee} onChange={(event) => setFee(event.target.value)} placeholder="1500" /></label>
@@ -745,44 +748,6 @@ export function EditProjectModal({
   );
 }
 
-export function TrackingWidget({
-  row,
-  tracking,
-  saving,
-  onChange,
-  onSave,
-}: {
-  row: VkpiProjectRow;
-  tracking: TrackingState;
-  saving: boolean;
-  onChange: (row: VkpiProjectRow, key: 'courier' | 'no', value: string) => void;
-  onSave: (row: VkpiProjectRow) => void;
-}) {
-  return (
-    <div className={`vkpi-campaign-tracking ${tracking.delivered ? 'is-delivered' : ''}`}>
-      <span className={tracking.delivered ? 'is-green' : 'is-red'}>{tracking.delivered ? '已送达' : tracking.courier || '快递'}</span>
-      <div>
-        <div className="vkpi-campaign-track-form">
-          <label>快递商
-            <input value={tracking.courier} onChange={(event) => onChange(row, 'courier', event.target.value)} placeholder="SF / DHL / UPS" />
-          </label>
-          <label>快递单号
-            <input value={tracking.no} onChange={(event) => onChange(row, 'no', event.target.value)} placeholder="输入 tracking no." />
-          </label>
-        </div>
-        <strong>{tracking.status}</strong>
-        {tracking.delivered ? <em>物流已送达，系统已加入今日提醒：请跟进 KOL 发布排期。</em> : null}
-      </div>
-      <div className="vkpi-campaign-track-actions">
-        <small>状态 · 每日刷新待接入</small>
-        <span>上次：{tracking.last}</span>
-        <button type="button" disabled={saving} onClick={() => onSave(row)}>{saving ? '保存中' : '保存物流'}</button>
-        <span className="vkpi-campaign-track-status" title="下次更新接入真实物流追踪">刷新功能待接入</span>
-      </div>
-    </div>
-  );
-}
-
 export function ContactKolModal({
   row,
   onClose,
@@ -803,16 +768,28 @@ export function ContactKolModal({
   const [draftMeta, setDraftMeta] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
+  // 轮询取消位:关闭/卸载后置位,正在跑的 5s×24 轮询立即停手,不再对已卸载组件 setState。
+  const cancelledRef = useRef(false);
+
+  const handleClose = () => {
+    cancelledRef.current = true;
+    onClose();
+  };
 
   useEffect(() => {
-    let cancelled = false;
     onFetchDraft().then((resp) => {
-      if (cancelled || resp.state !== 'ready' || !resp.draft) return;
+      if (cancelledRef.current || resp.state !== 'ready' || !resp.draft) return;
       setDraftMeta(resp.draft);
       setMessage((current) => current || String(resp.draft?.message_en || ''));
       setDraftState('ready');
-    }).catch(() => { /* 无既有草稿属正常 */ });
-    return () => { cancelled = true; };
+    }).catch((fetchError) => {
+      if (cancelledRef.current) return;
+      // 只吞 404(无既有草稿属正常);其他错误如实提示,不再静默。
+      const text = fetchError instanceof Error ? fetchError.message : String(fetchError ?? '');
+      if (/404|not found|不存在/i.test(text)) return;
+      setError(text || '草稿预取失败');
+    });
+    return () => { cancelledRef.current = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -823,7 +800,9 @@ export function ContactKolModal({
       await onRequestDraft();
       for (let i = 0; i < 24; i += 1) {
         await new Promise((resolve) => setTimeout(resolve, 5000));
+        if (cancelledRef.current) return;
         const resp = await onFetchDraft();
+        if (cancelledRef.current) return;
         if (resp.state === 'ready' && resp.draft) {
           setDraftMeta(resp.draft);
           setMessage(String(resp.draft.message_en || ''));
@@ -834,6 +813,7 @@ export function ContactKolModal({
       setDraftState('failed');
       setError('草稿生成超时——看左侧泳道「联系草稿」状态,完成后重开本窗即见。');
     } catch (draftError) {
+      if (cancelledRef.current) return;
       setDraftState('failed');
       setError(draftError instanceof Error ? draftError.message : '草稿生成失败');
     }
@@ -855,7 +835,7 @@ export function ContactKolModal({
     setError('');
     try {
       await onLogOutreach({ message: message.trim(), channel });
-      onClose();
+      handleClose();
     } catch (logError) {
       setError(logError instanceof Error ? logError.message : '记录失败');
     } finally {
@@ -865,14 +845,14 @@ export function ContactKolModal({
 
   const talkingPoints = Array.isArray(draftMeta?.talking_points) ? (draftMeta?.talking_points as string[]) : [];
   return (
-    <div className="vkpi-campaign-notice-backdrop" role="presentation" onClick={busy ? undefined : onClose}>
+    <div className="vkpi-campaign-notice-backdrop" role="presentation" onClick={busy ? undefined : handleClose}>
       <div className="rounded-2xl border border-white/[0.08] bg-[#0b1220] w-full max-w-xl p-5 max-h-[90vh] overflow-y-auto" role="dialog" aria-label="联系 KOL" onClick={(event) => event.stopPropagation()}>
         <div className="flex items-center justify-between mb-3">
           <div>
             <h3 className="text-[14px] font-semibold text-white">联系 KOL</h3>
             <p className="text-[10.5px] text-slate-500 mt-0.5">{row.kolHandle || row.kolName} · {row.platform} · 系统不代发——复制后到平台发送,这里留档沟通记录</p>
           </div>
-          <button className="text-slate-500 hover:text-white" type="button" onClick={onClose} disabled={busy}><X size={16} /></button>
+          <button className="text-slate-500 hover:text-white" type="button" onClick={handleClose} disabled={busy}><X size={16} /></button>
         </div>
         <div className="flex items-center gap-2 mb-2.5">
           <select className="px-2.5 py-1.5 rounded-md bg-white/[0.02] border border-white/[0.06] text-[11px] text-slate-300" value={channel} onChange={(event) => setChannel(event.target.value)}>
@@ -908,7 +888,7 @@ export function ContactKolModal({
         ) : null}
         {error ? <div className="mt-2 text-[10.5px] text-rose-300">{error}</div> : null}
         <div className="flex items-center justify-between mt-3.5 pt-3 border-t border-white/[0.05]">
-          <button className="px-3 py-1.5 rounded-md border border-white/[0.08] text-[11px] text-slate-300 hover:bg-white/[0.04]" type="button" onClick={onClose} disabled={busy}>取消</button>
+          <button className="px-3 py-1.5 rounded-md border border-white/[0.08] text-[11px] text-slate-300 hover:bg-white/[0.04]" type="button" onClick={handleClose} disabled={busy}>取消</button>
           <div className="flex items-center gap-2">
             <button className="px-3 py-1.5 rounded-md border border-cyan-500/30 bg-cyan-500/10 text-[11px] text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-50" type="button" onClick={() => void copyDraft()} disabled={!message.trim()}>
               {copied ? '已复制 ✓' : '复制内容'}
