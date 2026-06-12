@@ -150,6 +150,7 @@ function metricData(value, color, options = {}) {
     color,
     spark: hasValue ? options.spark || null : null,
     waiting: options.waiting || "数据待接入",
+    anomaly: options.anomaly || null,
   };
 }
 
@@ -291,7 +292,6 @@ export function normalizeDashboardMetrics(bundle, kolRows = []) {
   const evidenceCoverage = record(evidenceMetrics.coverage);
   const evidenceActive30 = record(evidenceMetrics.active_30d_by_scope);
   const rosterDetail = record(evidenceMetrics.roster_detail);
-  const trendRows = list(bundle.trendRows);
   const officialCount = int(summary.official_account_count);
   const kolCount = kolRows.length || null;
   const rosterAll = int(evidenceRoster.all ?? summary.active_roster) ?? (kolCount != null || officialCount != null ? (kolCount || 0) + (officialCount || 0) : null);
@@ -310,6 +310,16 @@ export function normalizeDashboardMetrics(bundle, kolRows = []) {
   const active30ByScope = record(summary.active_30d_by_scope);
   const exposureByScope = record(summary.exposure_30d_by_scope);
   const engagementByScope = record(summary.engagement_rate_by_scope);
+  // 防御性标注(2026-06-12 波3 R2):单条 evidence 占比 >80% 时提示数据被单源污染。
+  // 数据问题本身由主控清理;这里只做卡面提示,不改数值。
+  const moversTabs = record(rosterDetail.movers_tabs);
+  const maxTabValue = (rows) => list(rows).reduce((max, row) => Math.max(max, number(record(row).value) ?? 0), 0);
+  const topEvidenceViews = maxTabValue(moversTabs.by_views);
+  const topEvidenceEngagement = maxTabValue(moversTabs.by_engagement);
+  const totalEngagement = number(evidenceEngagement.total_engagement);
+  const SINGLE_SOURCE_WARNING = "⚠ 单源占比异常";
+  const exposureAnomaly = totalExposure != null && totalExposure > 0 && topEvidenceViews / totalExposure > 0.8;
+  const engagementAnomaly = totalEngagement != null && totalEngagement > 0 && topEvidenceEngagement / totalEngagement > 0.8;
 
   const values = {
     "kol-count": {
@@ -323,13 +333,15 @@ export function normalizeDashboardMetrics(bundle, kolRows = []) {
       company: number(evidenceActive30.company ?? evidenceActive30.owned) != null ? metricData(number(evidenceActive30.company ?? evidenceActive30.owned), "#06b6d4", { source: "owned_matrix", sourceLabel: "实时", trend: evidenceActive30Text }) : windowMetricData(number(active30ByScope.owned ?? active30ByScope.company), "#06b6d4", dashboard, "company", { waiting: `${maturityLabel(dashboard, "company")} · 官方 active_30d 累计中` }),
     },
     exposure: {
-      all: totalExposure != null ? metricData(totalExposure, "#a855f7", { source: "evidence_metrics", sourceLabel: "实时", trend: evidenceCoverageText }) : windowMetricData(number(exposureByScope.all), "#a855f7", dashboard, "all", { waiting: `${maturityLabel(dashboard, "all")} · 不使用 lifetime 代替 30d` }),
-      kol: totalExposure != null ? metricData(totalExposure, "#ec4899", { source: "evidence_metrics", sourceLabel: "实时", trend: evidenceCoverageText }) : windowMetricData(number(exposureByScope.kol), "#ec4899", dashboard, "kol", { waiting: `${maturityLabel(dashboard, "kol")} · KOL 30d 曝光累计中` }),
+      all: totalExposure != null ? metricData(totalExposure, "#a855f7", { source: "evidence_metrics", sourceLabel: "实时", trend: evidenceCoverageText, anomaly: exposureAnomaly ? SINGLE_SOURCE_WARNING : null }) : windowMetricData(number(exposureByScope.all), "#a855f7", dashboard, "all", { waiting: `${maturityLabel(dashboard, "all")} · 不使用 lifetime 代替 30d` }),
+      // 2026-06-12 波3 R6:KOL 口径不再复用全量 totalExposure(避免「KOL 曝光=全部曝光」假象)
+      kol: windowMetricData(number(exposureByScope.kol), "#ec4899", dashboard, "kol", { waiting: `${maturityLabel(dashboard, "kol")} · KOL 30d 曝光累计中(不复用全量口径)` }),
       company: windowMetricData(number(exposureByScope.owned ?? exposureByScope.company), "#06b6d4", dashboard, "company", { waiting: `${maturityLabel(dashboard, "company")} · 官方 30d 曝光累计中` }),
     },
     engagement: {
-      all: engagementPercent != null ? metricData(engagementPercent, "#a855f7", { source: "evidence_metrics", sourceLabel: "实时", trend: evidenceVideoText }) : windowMetricData(number(engagementByScope.all), "#a855f7", dashboard, "all", { waiting: `${maturityLabel(dashboard, "all")} · 互动率累计中` }),
-      kol: engagementPercent != null ? metricData(engagementPercent, "#ec4899", { source: "evidence_metrics", sourceLabel: "实时", trend: evidenceVideoText }) : windowMetricData(number(engagementByScope.kol), "#ec4899", dashboard, "kol", { waiting: `${maturityLabel(dashboard, "kol")} · KOL 互动率累计中` }),
+      all: engagementPercent != null ? metricData(engagementPercent, "#a855f7", { source: "evidence_metrics", sourceLabel: "实时", trend: evidenceVideoText, anomaly: engagementAnomaly ? SINGLE_SOURCE_WARNING : null }) : windowMetricData(number(engagementByScope.all), "#a855f7", dashboard, "all", { waiting: `${maturityLabel(dashboard, "all")} · 互动率累计中` }),
+      // 2026-06-12 波3 R6:KOL 口径不再复用全量 engagementPercent
+      kol: windowMetricData(number(engagementByScope.kol), "#ec4899", dashboard, "kol", { waiting: `${maturityLabel(dashboard, "kol")} · KOL 互动率累计中(不复用全量口径)` }),
       company: windowMetricData(number(engagementByScope.owned ?? engagementByScope.company), "#06b6d4", dashboard, "company", { waiting: `${maturityLabel(dashboard, "company")} · 官方互动率累计中` }),
     },
     gmv: {
@@ -524,11 +536,37 @@ function normalizeStarredCampaigns(rows = []) {
     });
 }
 
+// 2026-06-12 波3 R3:recent-content 同批存在 "2026-05-28" 与 "Thu May 28" 两种日期串,
+// 直接 slice(0,10) 会把同一天拆成两桶;这里统一归一成 YYYY-MM-DD 再分桶。
+function calendarDateKey(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "unknown";
+  const direct = raw.slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(direct)) return direct;
+  const withYear = /\d{4}/.test(raw) ? raw : `${raw} ${new Date().getFullYear()}`;
+  const parsed = new Date(withYear);
+  if (!Number.isNaN(parsed.getTime())) {
+    return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, "0")}-${String(parsed.getDate()).padStart(2, "0")}`;
+  }
+  return direct;
+}
+
+// 数据源停更案(2026-06-12):取最近一条内容日期,卡面诚实标注「数据截至 …」。
+export function latestCalendarDate(items = []) {
+  let latest = "";
+  for (const raw of list(items)) {
+    const item = record(raw);
+    const key = calendarDateKey(item.posted_at || item.published_at || item.created_at);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(key) && key > latest) latest = key;
+  }
+  return latest || null;
+}
+
 export function normalizeCalendar(items = []) {
   const buckets = new Map();
   for (const raw of list(items)) {
     const item = record(raw);
-    const dateKey = String(item.posted_at || item.published_at || item.created_at || "").slice(0, 10) || "unknown";
+    const dateKey = calendarDateKey(item.posted_at || item.published_at || item.created_at);
     const meta = formatDay(dateKey);
     if (!buckets.has(dateKey)) buckets.set(dateKey, { ...meta, items: [] });
     buckets.get(dateKey).items.push({
@@ -550,7 +588,8 @@ export function normalizeAiInsight(copilotBrief = {}, tasks = {}) {
   const taskItems = list(record(tasks).tasks);
   const headline = String(brief.headline || summary.headline || "暂无可执行候选");
   return {
-    confidence: brief.is_real ? 72 : 0,
+    // 2026-06-12 波3 R4:此前 72% 为前端硬编码假置信度;brief 产物不含模型置信度,诚实置 null(卡面不显示 conf)。
+    confidence: null,
     updatedLabel: brief.last_run_at ? timeLabel(brief.last_run_at) : "无信号",
     todayDecision: {
       text: headline,
@@ -671,6 +710,22 @@ export function normalizeMapHierarchy(distribution = {}, kolRows = []) {
   return Object.keys(hierarchy).length ? hierarchy : null;
 }
 
+// 2026-06-12 C10(波3 R1):消费后端 summary.funnel
+// shape = { favorites_total, claimed_total, in_project_total, published_total, by_staff[] }
+// 后端块未上线前 isReal=false,卡面显示「漏斗数据待后端」,绝不硬编码假数。
+export function normalizeKolFunnel(summary = {}) {
+  const block = record(record(summary).funnel);
+  const stages = [
+    { key: "favorites", label: "收藏", count: int(block.favorites_total) },
+    { key: "claimed", label: "已认领", count: int(block.claimed_total) },
+    { key: "in_project", label: "入项目", count: int(block.in_project_total) },
+    { key: "published", label: "已发布", count: int(block.published_total) },
+  ];
+  const isReal = stages.some((stage) => stage.count != null);
+  const byStaff = list(block.by_staff).map((row) => record(row));
+  return { isReal, stages, byStaff, raw: block };
+}
+
 export function normalizeV615Dashboard(bundle, kolRows) {
   const dashboard = record(bundle.dashboard);
   const summary = record(dashboard.summary);
@@ -678,21 +733,24 @@ export function normalizeV615Dashboard(bundle, kolRows) {
   const activeCampaignsMeta = normalizeActiveCampaignsMeta(activeCampaignsBlock);
   const starredCampaigns = normalizeStarredCampaigns(bundle.starredProjects);
   const realCampaigns = activeCampaignsMeta.isReal ? normalizeActiveCampaigns(activeCampaignsBlock) : null;
-  const campaigns = starredCampaigns.length ? starredCampaigns : [];
+  // 2026-06-12 波3 R7:无 starred 时回退到后端真实 active_campaigns 块,不再整块丢弃。
+  const campaigns = starredCampaigns.length ? starredCampaigns : (realCampaigns || []);
   return {
     metrics: normalizeDashboardMetrics(bundle, kolRows),
     campaigns,
     campaignsMeta: {
       ...activeCampaignsMeta,
       isReal: true,
-      source: "starred_projects",
-      activeCount: starredCampaigns.length,
-      fallbackCount: realCampaigns?.length ?? normalizeCampaigns(bundle.productRows).length,
+      source: starredCampaigns.length ? "starred_projects" : "active_campaigns",
+      activeCount: starredCampaigns.length ? starredCampaigns.length : activeCampaignsMeta.activeCount,
+      fallbackCount: realCampaigns?.length ?? 0,
     },
     calendarDays: normalizeCalendar(bundle.recentContent),
+    calendarMeta: { latestDate: latestCalendarDate(bundle.recentContent) },
     aiInsight: normalizeAiInsight(bundle.copilotBrief, bundle.tasks),
     signals: normalizeSignals(bundle.marketCards),
     topMovers: normalizeTopMovers(kolRows),
     mapHierarchy: normalizeMapHierarchy(bundle.distribution, kolRows),
+    kolFunnel: normalizeKolFunnel(summary),
   };
 }

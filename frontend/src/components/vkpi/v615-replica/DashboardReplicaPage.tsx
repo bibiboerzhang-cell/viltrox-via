@@ -10,6 +10,7 @@ import { Breadcrumb } from "./components/Breadcrumb";
 import { ContentCalendarCard } from "./components/ContentCalendarCard";
 import { FloatingCard } from "./components/FloatingCard";
 import { HierarchyDropdown } from "./components/HierarchyDropdown";
+import { KolFunnelCard } from "./components/KolFunnelCard";
 import { MetricCard } from "./components/MetricCard";
 import { RealMap } from "./components/RealMap";
 import { SignalsAlertsCard } from "./components/SignalsAlertsCard";
@@ -42,9 +43,9 @@ export function DashboardReplicaPage(props: any) {
     setVenue, setSelectedPin, viewMode, setViewMode, countryOptions, cityOptions, itemOptions, venueOptions,
     breadcrumb, goBack, topListData, setSelectedEvent, setSelectedSignal, setShowAllSignals, setShowAIConfirm,
     setAiRegenerating, aiRegenerating, setSelectedMover, setShowAllMovers, setSelectedProject, setShowAllProjects,
-    setSelectedPublish, setShowFullCalendar, onOpenProjectsList, focusTarget, viewModes = VIEW_MODES,
-    metrics = [], campaigns = [], campaignsMeta = {}, calendarDays = [],
-    signals = [], aiInsight = EMPTY_AI_INSIGHT, topMovers = [],
+    setSelectedPublish, setShowFullCalendar, onOpenProjectsList, onOpenMyKol, focusTarget, viewModes = VIEW_MODES,
+    metrics = [], campaigns = [], campaignsMeta = {}, calendarDays = [], calendarMeta = {},
+    signals = [], aiInsight = EMPTY_AI_INSIGHT, topMovers = [], kolFunnel = null,
     upcomingEvents = [], revenueBySource = [], dashboardLoading = false, dashboardError = "",
   } = props;
   return e("div", { className: "p-4 md:p-6" },
@@ -319,10 +320,11 @@ export function DashboardReplicaPage(props: any) {
                 ),
                 // 2. AI Today (from right rail)
                 e("div", { className: "h-full" },
-                  e(AIIntelligenceCard, { 
+                  e(AIIntelligenceCard, {
                     insight: aiInsight,
                     onApprove: () => setShowAIConfirm(true),
-                    onLater: () => alert("待接入真实提醒写入接口"),
+                    // 2026-06-12 死按钮诚实化:提醒写入接口未接,不再 alert 假动作 → 卡内按钮禁用+title 待接入
+                    onLater: null,
                     regenerating: aiRegenerating
                   })
                 ),
@@ -337,18 +339,24 @@ export function DashboardReplicaPage(props: any) {
               )
             ),
 
-            // ─── RIGHT RAIL (V6.12: 只保留 Active Campaigns + 7 天日历) ───
+            // ─── RIGHT RAIL (KOL 漏斗 + Active Campaigns + 7 天日历) ───
             e("div", { className: "space-y-4" },
+              // 0. KOL 漏斗(2026-06-12 C10/波3 R1:收藏→认领→入项目→已发布)
+              e(KolFunnelCard, {
+                funnel: kolFunnel,
+                onOpenMyKol,
+              }),
               // 1. Active Campaigns(在推什么)
-              e(ActiveCampaignsCard, { 
+              e(ActiveCampaignsCard, {
                 campaigns,
                 campaignsMeta,
                 onCampaignClick: (c) => setSelectedProject(c),
                 onViewAll: () => onOpenProjectsList ? onOpenProjectsList() : setShowAllProjects(true)
               }),
               // 2. 7 天推广日历
-              e(ContentCalendarCard, { 
+              e(ContentCalendarCard, {
                 days: calendarDays,
+                latestDate: calendarMeta?.latestDate,
                 onItemClick: (item) => setSelectedPublish(item),
                 onViewAll: () => setShowFullCalendar(true)
               })

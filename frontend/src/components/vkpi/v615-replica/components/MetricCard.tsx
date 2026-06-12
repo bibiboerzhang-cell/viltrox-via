@@ -13,7 +13,7 @@ export function MetricCard({ item, i, scope, onClick }) {
   const { t } = useT();
   const { label, sub, icon: Icon, format } = item;
   const scopeData = item.data[scope] || item.data.all;
-  const { value, trend, source, sourceLabel, color, spark, waiting } = scopeData;
+  const { value, trend, source, sourceLabel, color, spark, waiting, anomaly } = scopeData;
   
   const isAccumulating = source === "accumulating";
   const hasNoValue = value === null || value === undefined;
@@ -73,8 +73,13 @@ export function MetricCard({ item, i, scope, onClick }) {
       ),
       !isUnavailable && spark && e(Sparkline, { color, data: spark })
     ),
+    // 单源污染防御标注(2026-06-12 波3 R2):单条 evidence 占比 >80% 时提示
+    anomaly && e("div", {
+      className: "mt-1 text-[9px] text-amber-400 truncate",
+      title: "单条 evidence 占总量 80% 以上,数值可能被单源污染(数据清理由主控负责)"
+    }, anomaly),
     // Trend footer (only for non-pending)
-    !isUnavailable && trend && e("div", { 
+    !isUnavailable && trend && e("div", {
       className: "mt-2 pt-2 border-t border-white/[0.04] text-[10px] text-emerald-400 truncate"
     }, "↑ " + t(trend))
   );

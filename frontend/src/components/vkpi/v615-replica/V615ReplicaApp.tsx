@@ -102,11 +102,19 @@ export function V615ReplicaApp(props: any = {}) {
     const handleOpenMyKolKol = () => {
       setActiveNav("my-kol");
     };
+    // 2026-06-12 波5 R5:泳道 target_type=project 的任务点开 → 直达项目详情(复用 Active Campaigns 同款管道)
+    const handleOpenProjectTask = (event) => {
+      const projectId = String(event?.detail?.projectId || "");
+      if (projectId) setOpenLegacyProjectId(projectId);
+      setActiveNav("projects");
+    };
     window.addEventListener("vkpi:open-kol-search-session", handleOpenKolSearchSession);
     window.addEventListener("vkpi:open-mykol-kol", handleOpenMyKolKol);
+    window.addEventListener("vkpi:open-project-task", handleOpenProjectTask);
     return () => {
       window.removeEventListener("vkpi:open-kol-search-session", handleOpenKolSearchSession);
       window.removeEventListener("vkpi:open-mykol-kol", handleOpenMyKolKol);
+      window.removeEventListener("vkpi:open-project-task", handleOpenProjectTask);
     };
   }, []);
   
@@ -583,7 +591,17 @@ export function V615ReplicaApp(props: any = {}) {
       style: { background: "radial-gradient(circle at 30% -10%,rgba(65,73,255,.22),transparent 35%),radial-gradient(circle at 90% 20%,rgba(0,213,200,.08),transparent 30%),linear-gradient(180deg,#060a15,#03060c)" }
     }),
 
-    e(AnimatePresence, null, selectedPin && e(PinDetailModal, { pin: selectedPin, mode: currentMode, onClose: () => setSelectedPin(null) })),
+    e(AnimatePresence, null, selectedPin && e(PinDetailModal, {
+      pin: selectedPin,
+      mode: currentMode,
+      onClose: () => setSelectedPin(null),
+      // 2026-06-12 死按钮诚实化:View full profile → 跳 KOL Pool 真页
+      onOpenKolPool: () => {
+        setSelectedPin(null);
+        saveStoredState({ activeNav: "kol-pool" });
+        setActiveNav("kol-pool");
+      },
+    })),
     e(AnimatePresence, null, selectedEvent && e(EventDetailModal, { event: selectedEvent, onClose: () => setSelectedEvent(null) })),
     e(AnimatePresence, null, selectedKpi && e(KPIDetailModal, {
       kpiId: selectedKpi,
@@ -615,16 +633,43 @@ export function V615ReplicaApp(props: any = {}) {
       },
     })),
     e(AnimatePresence, null, selectedPublish && e(PublishPreviewModal, { item: selectedPublish, onClose: () => setSelectedPublish(null) })),
-    e(AnimatePresence, null, selectedMover && e(KOLDetailModal, { mover: selectedMover, onClose: () => setSelectedMover(null) })),
+    e(AnimatePresence, null, selectedMover && e(KOLDetailModal, {
+      mover: selectedMover,
+      onClose: () => setSelectedMover(null),
+      // 2026-06-12 死按钮诚实化:查看完整档案 → 跳 KOL Pool 真页
+      onOpenKolPool: () => {
+        setSelectedMover(null);
+        saveStoredState({ activeNav: "kol-pool" });
+        setActiveNav("kol-pool");
+      },
+    })),
     e(AnimatePresence, null, showAllSignals && e(SignalsAllModal, { 
       alerts: dashboardRuntime.signals, 
       onClose: () => setShowAllSignals(false), 
       onAlertClick: (a) => { setShowAllSignals(false); setSelectedSignal(a); }
     })),
-    e(AnimatePresence, null, showAIConfirm && e(AIDecisionConfirmModal, { 
-      insight: dashboardRuntime.aiInsight, 
-      onClose: () => setShowAIConfirm(false), 
-      onConfirm: () => { setShowAIConfirm(false); alert("待接入真实任务创建接口"); }
+    e(AnimatePresence, null, showAIConfirm && e(AIDecisionConfirmModal, {
+      insight: dashboardRuntime.aiInsight,
+      onClose: () => setShowAIConfirm(false),
+      // 2026-06-12 波5 R8:alert 假动作换成本地通知,明示未写入后端
+      onConfirm: () => {
+        setShowAIConfirm(false);
+        pushLocalNotification({
+          id: `ai-confirm-${Date.now()}`,
+          raw: {},
+          iconKey: "bell",
+          iconColor: "#a855f7",
+          title: "AI 建议确认仅记录在本地",
+          desc: "真实任务创建接口待接入,本次确认未写入后端",
+          time: "刚刚",
+          unread: true,
+          category: "notification",
+          severity: "medium",
+          status: "todo",
+          priority: "medium",
+          source: "ai_confirm_local",
+        });
+      }
     })),
     // V6.14.2: 顶部 4 按钮 popovers - 锚定到具体按钮 + i18n + role
     e(AnimatePresence, null, showHelp && e(HelpPopover, { 
@@ -914,7 +959,11 @@ export function V615ReplicaApp(props: any = {}) {
                 viewMode: appViewMode,
                 apiToken,
                 onSelectProject: setSelectedLegacyProject,
-                onOpenKolProfile: () => undefined,
+                // 2026-06-12 波5 R3:此前为空函数死点击;最小接真 → 跳 KOL Pool 页
+                onOpenKolProfile: () => {
+                  saveStoredState({ activeNav: "kol-pool" });
+                  setActiveNav("kol-pool");
+                },
                 onOpenStaffProfile: () => undefined,
                 onSelectPage: handleReplicaSelectPage,
                 onToggleView,
@@ -968,9 +1017,11 @@ export function V615ReplicaApp(props: any = {}) {
               campaigns: dashboardRuntime.campaigns,
               campaignsMeta: dashboardRuntime.campaignsMeta,
               calendarDays: dashboardRuntime.calendarDays,
+              calendarMeta: dashboardRuntime.calendarMeta,
               signals: dashboardRuntime.signals,
               aiInsight: dashboardRuntime.aiInsight,
               topMovers: dashboardRuntime.topMovers,
+              kolFunnel: dashboardRuntime.kolFunnel,
               upcomingEvents: [],
               revenueBySource: [],
               dashboardLoading,
@@ -978,6 +1029,10 @@ export function V615ReplicaApp(props: any = {}) {
               onOpenProjectsList: () => {
                 saveStoredState({ activeNav: "projects" });
                 setActiveNav("projects");
+              },
+              onOpenMyKol: () => {
+                saveStoredState({ activeNav: "my-kol" });
+                setActiveNav("my-kol");
               },
             })
           )

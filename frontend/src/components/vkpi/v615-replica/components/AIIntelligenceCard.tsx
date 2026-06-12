@@ -11,6 +11,9 @@ const e = React.createElement;
 
 export function AIIntelligenceCard({ insight, onApprove, onLater, onRegenerate, regenerating }) {
   const { t } = useT();
+  // 2026-06-12 波3 R4:confidence 此前为前端硬编码 72,现仅在后端真实提供置信度时显示。
+  const confidence = Number(insight.confidence);
+  const confLabel = Number.isFinite(confidence) && confidence > 0 ? `${confidence}% conf · ` : "";
   return e(motion.div, {
     initial: { opacity: 0, y: 8 },
     animate: { opacity: 1, y: 0 },
@@ -28,7 +31,7 @@ export function AIIntelligenceCard({ insight, onApprove, onLater, onRegenerate, 
         e(Sparkles, { size: 14, className: "text-violet-300" }),
         e("h3", { className: "text-sm font-semibold text-white" }, "AI Today")
       ),
-      e("span", { className: "rounded-md bg-violet-500/20 px-2 py-0.5 text-[9px] font-medium text-violet-200" }, `${insight.confidence}% conf · ${insight.updatedLabel}`)
+      e("span", { className: "rounded-md bg-violet-500/20 px-2 py-0.5 text-[9px] font-medium text-violet-200" }, `${confLabel}${insight.updatedLabel}`)
     ),
     
     // ─ 今日重点决策 ─
@@ -46,9 +49,11 @@ export function AIIntelligenceCard({ insight, onApprove, onLater, onRegenerate, 
           onClick: onApprove,
           className: "rounded-md bg-violet-500/30 px-2.5 py-1 text-[10px] font-medium text-white hover:bg-violet-500/40 flex items-center gap-1"
         }, e(Check, { size: 10 }), insight.todayDecision.primaryAction),
-        e("button", { 
-          onClick: onLater,
-          className: "rounded-md border border-white/[0.12] px-2.5 py-1 text-[10px] text-slate-300 hover:bg-white/[0.04] flex items-center gap-1"
+        e("button", {
+          onClick: onLater || undefined,
+          disabled: !onLater,
+          title: onLater ? undefined : "待接入真实提醒写入接口",
+          className: `rounded-md border border-white/[0.12] px-2.5 py-1 text-[10px] text-slate-300 flex items-center gap-1 ${onLater ? "hover:bg-white/[0.04]" : "opacity-50 cursor-not-allowed"}`
         }, e(Clock, { size: 10 }), insight.todayDecision.secondaryAction)
       )
     ),

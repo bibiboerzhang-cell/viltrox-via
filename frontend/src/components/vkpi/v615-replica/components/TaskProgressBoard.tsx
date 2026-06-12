@@ -115,8 +115,17 @@ function taskMyKolPoolId(task) {
   return String(target.target_type || "") === "kol_profile" && Number.isFinite(poolId) && poolId > 0 ? poolId : undefined;
 }
 
+// 2026-06-12 波5 R5:target_type=project 的任务(合同润色等同族)可回到项目详情。
+// 注意只认 target_type === 'project'(target_id 即 project_id);
+// 'project_contract' 的 target_id 是合同 id,无法可靠映射项目,保持禁用(诚实降级)。
+function taskProjectId(task) {
+  const target = task?.target && typeof task.target === "object" ? task.target : {};
+  const projectId = Number(target.target_id);
+  return String(target.target_type || "") === "project" && Number.isFinite(projectId) && projectId > 0 ? projectId : undefined;
+}
+
 // 从哪发起回哪去(2026-06-12 裁令):账号分析(kol_profile)点开回 MY KOL 并定位该收藏行,
-// 其余仍走 KOL Pool 查找会话。
+// project 任务回项目详情,其余仍走 KOL Pool 查找会话。
 function openTaskOrigin(task) {
   const poolId = taskMyKolPoolId(task);
   if (poolId && typeof window !== "undefined") {
@@ -124,11 +133,16 @@ function openTaskOrigin(task) {
     window.dispatchEvent(new CustomEvent("vkpi:open-mykol-kol", { detail: { kolPoolId: poolId, task } }));
     return;
   }
+  const projectId = taskProjectId(task);
+  if (projectId && typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("vkpi:open-project-task", { detail: { projectId: String(projectId), task } }));
+    return;
+  }
   openSearchSessionFromTask(task);
 }
 
 function taskCanOpen(task) {
-  return Boolean(taskMyKolPoolId(task) || taskSearchSessionId(task));
+  return Boolean(taskMyKolPoolId(task) || taskProjectId(task) || taskSearchSessionId(task));
 }
 
 function taskInitiatorChip(task) {
@@ -365,21 +379,27 @@ export function TaskProgressBoard({ apiToken = "" }) {
         )
       )
     ),
+    // 2026-06-12 波5 R7:无 target 的条目不再假装可点 — 按钮禁用、「可打开」标签按实际情况显示
     visibleRecent.length ? e("div", { className: "mt-3 border-t border-white/[0.08] pt-2.5" },
       e("div", { className: "mb-1.5 flex items-center justify-between gap-2" },
         e("span", { className: "text-[11px] text-white/45" }, "最近完成"),
-        e("span", { className: "text-[10px] text-[#5DCAA5]/80" }, "可打开")
+        visibleRecent.some((task) => taskCanOpen(task)) && e("span", { className: "text-[10px] text-[#5DCAA5]/80" }, "可打开")
       ),
       e("div", { className: "flex flex-col gap-1" },
-        visibleRecent.map((task) => e("button", {
-          key: `recent-${task.id}`,
-          type: "button",
-          onClick: () => openTaskOrigin(task),
-          className: "flex min-w-0 items-center justify-between gap-2 rounded-md border border-emerald-300/10 bg-emerald-400/[0.045] px-2 py-1 text-left hover:bg-emerald-400/[0.08]"
-        },
-          e("span", { className: "truncate text-[10.5px] text-white/65" }, taskLabel(task)),
-          e("span", { className: "shrink-0 text-[10px] text-[#5DCAA5]" }, "打开")
-        ))
+        visibleRecent.map((task) => {
+          const canOpen = taskCanOpen(task);
+          return e("button", {
+            key: `recent-${task.id}`,
+            type: "button",
+            onClick: canOpen ? () => openTaskOrigin(task) : undefined,
+            disabled: !canOpen,
+            title: canOpen ? "" : "无可跳转的所属对象",
+            className: `flex min-w-0 items-center justify-between gap-2 rounded-md border border-emerald-300/10 bg-emerald-400/[0.045] px-2 py-1 text-left ${canOpen ? "hover:bg-emerald-400/[0.08]" : "cursor-default opacity-60"}`
+          },
+            e("span", { className: "truncate text-[10.5px] text-white/65" }, taskLabel(task)),
+            canOpen && e("span", { className: "shrink-0 text-[10px] text-[#5DCAA5]" }, "打开")
+          );
+        })
       )
     ) : null
   );

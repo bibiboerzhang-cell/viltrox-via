@@ -9,7 +9,7 @@ import { useT } from "../lib/i18n";
 
 const e = React.createElement;
 
-export function ContentCalendarCard({ days, onItemClick, onViewAll }) {
+export function ContentCalendarCard({ days, onItemClick, onViewAll, latestDate }) {
   const { t } = useT();
   const platformIcons = {
     YT: { label: "YT", bg: "#ef4444" },
@@ -50,7 +50,7 @@ export function ContentCalendarCard({ days, onItemClick, onViewAll }) {
             onClick: () => onItemClick && onItemClick({ ...item, dayStr: d.day, weekday: d.weekday, label: item.label, kolName: item.label.split(" · ")[0], title: item.label.split(" · ").slice(1).join(" · ") || item.label }),
             className: "flex items-center gap-1.5 text-[10px] cursor-pointer hover:bg-white/[0.02] rounded px-1"
           },
-            e("span", { 
+            e("span", {
               className: "shrink-0 rounded text-[8px] text-white font-bold flex items-center justify-center",
               style: { width: 14, height: 12, background: item.color, fontSize: "8px" }
             }, platformIcons[item.platform]?.label || "·"),
@@ -59,6 +59,11 @@ export function ContentCalendarCard({ days, onItemClick, onViewAll }) {
           ))
         )
       ))
-    )
+    ),
+    // 数据源停更案(2026-06-12 波3 R3):上游同步可能停更,诚实标注数据截止日,不冒充「近 7 天」。
+    latestDate && days.length > 0 && e("div", {
+      className: "mt-2 border-t border-white/[0.06] pt-2 text-[9px] text-amber-400/80",
+      title: "来自 dashboard/recent-content 的最新 posted_at;上游同步停更时此日期不再前进"
+    }, `数据截至 ${latestDate}`)
   );
 }

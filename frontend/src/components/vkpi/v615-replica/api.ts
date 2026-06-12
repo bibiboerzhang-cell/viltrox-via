@@ -23,10 +23,10 @@ export async function fetchV615ShellBundle(apiToken: string) {
 }
 
 export async function fetchV615DashboardBundle(apiToken: string) {
+  // 2026-06-12 波3 R8:revenue-trend(14 行全零)与 product-performance(rows=[])为死取数,
+  // 前端解析后零消费,已从 90s 轮询 bundle 中移除;接真后再恢复。
   const [
     dashboard,
-    trend,
-    products,
     distribution,
     recentContent,
     copilotBrief,
@@ -35,8 +35,6 @@ export async function fetchV615DashboardBundle(apiToken: string) {
     starredProjects,
   ] = await Promise.all([
     settle(apiFetch<Row>("/api/admin/vkpi/dashboard?window_days=30", { timeoutMs: 4000 }, apiToken), {}),
-    settle(apiFetch<{ rows?: Row[] }>("/api/admin/vkpi/dashboard/revenue-trend?window_days=14", { timeoutMs: 3500 }, apiToken), { rows: [] }),
-    settle(apiFetch<{ rows?: Row[] }>("/api/admin/vkpi/dashboard/product-performance?window_days=30&limit=8", { timeoutMs: 3500 }, apiToken), { rows: [] }),
     settle(apiFetch<Row>("/api/admin/vkpi/dashboard/kol-distribution-pack?limit=250", { timeoutMs: 2500 }, apiToken), {}),
     settle(apiFetch<{ items?: Row[] }>("/api/admin/vkpi/dashboard/recent-content?limit=30", { timeoutMs: 4000 }, apiToken), { items: [] }),
     settle(apiFetch<Row>("/api/admin/vkpi/dashboard/copilot-brief", { timeoutMs: 2500 }, apiToken), {}),
@@ -47,8 +45,6 @@ export async function fetchV615DashboardBundle(apiToken: string) {
 
   return {
     dashboard,
-    trendRows: Array.isArray(trend.rows) ? trend.rows : [],
-    productRows: Array.isArray(products.rows) ? products.rows : [],
     distribution,
     recentContent: Array.isArray(recentContent.items) ? recentContent.items : [],
     copilotBrief,
