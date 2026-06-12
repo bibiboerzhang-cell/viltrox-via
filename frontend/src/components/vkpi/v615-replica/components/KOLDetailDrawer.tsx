@@ -21,6 +21,21 @@ import { proxiedImageUrl, proxiedVideoUrl } from "../../shared/mediaProxy";
 
 const e = React.createElement;
 
+// d1:真复制按钮(原按钮有 title 无 onClick,点击无声失败——B2 全页唯一假按钮)
+function CopyEmailButton({ email }) {
+  const [copied, setCopied] = React.useState(false);
+  return e("button", {
+    className: "ml-auto p-1 rounded hover:bg-white/[0.04] " + (copied ? "text-emerald-300" : "text-slate-400 hover:text-white"),
+    title: copied ? "已复制" : "复制邮箱",
+    onClick: () => {
+      void navigator.clipboard?.writeText(String(email || "")).then(() => {
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 1600);
+      });
+    },
+  }, e(copied ? Check : Link2, { size: 10 }));
+}
+
 function detailAvatarUrl(item) {
   if (!item || typeof item !== "object") return "";
   return proxiedImageUrl(
@@ -908,10 +923,7 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
             item.email
               ? e("span", { className: "text-cyan-300" }, item.email)
               : e("span", { className: "text-slate-500 italic" }, "未收集 · 邀请时需先添加"),
-            item.email && e("button", {
-              className: "ml-auto p-1 rounded hover:bg-white/[0.04] text-slate-400 hover:text-white",
-              title: "复制邮箱"
-            }, e(ExternalLink, { size: 10 }))
+            item.email && e(CopyEmailButton, { email: item.email })
           ),
           e("div", { className: "flex items-center gap-2 text-[11px]" },
             e("span", { className: "text-slate-500 w-[40px]" }, "主页"),
