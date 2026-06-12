@@ -1272,13 +1272,15 @@ export function ProjectDetailView({
                 assignment_id: row?.assignmentId || undefined,
                 kol_pool_id: row?.kolPoolId || undefined,
               });
-              setGenerateOpen(false);
               setNotice({ tone: 'success', title: '合同已生成并归档', body: `${String((resp as Record<string, unknown>).file_name || 'DOCX')} 已入「合同归档」${row ? `,关联 ${row.kolHandle || row.kolName}` : ''}。` });
-              await onProjectUpdated?.();
+              void onProjectUpdated?.();
+              const contract = (resp as Record<string, unknown>).contract as Record<string, unknown> | undefined;
+              return Number(contract?.id) || null;
             } finally {
               setGenerateBusy(false);
             }
           }}
+          onDownload={(contractId) => void openContractPdf(contractId)}
         />
       ) : null}
 

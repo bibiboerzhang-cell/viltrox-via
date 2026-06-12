@@ -931,6 +931,7 @@ export function GenerateContractModal({
   busy,
   onClose,
   onSubmit,
+  onDownload,
 }: {
   project: VkpiProjectRow;
   rows: VkpiProjectRow[];
@@ -938,12 +939,14 @@ export function GenerateContractModal({
   partyA: string;
   busy: boolean;
   onClose: () => void;
-  onSubmit: (payload: { templateKey: string; fields: Record<string, string>; row: VkpiProjectRow | null }) => Promise<void>;
+  onSubmit: (payload: { templateKey: string; fields: Record<string, string>; row: VkpiProjectRow | null }) => Promise<number | null>;
+  onDownload?: (contractId: number) => void;
 }) {
   const [templateKey, setTemplateKey] = useState(templates[0]?.key || 'paid');
   const [rowId, setRowId] = useState(rows[0]?.id || '');
   const [fields, setFields] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
+  const [doneContractId, setDoneContractId] = useState<number | null>(null);
   const template = templates.find((item) => item.key === templateKey) || templates[0];
   const selectedRow = rows.find((item) => item.id === rowId) || null;
 
@@ -976,11 +979,31 @@ export function GenerateContractModal({
     }
     setError('');
     try {
-      await onSubmit({ templateKey, fields, row: selectedRow });
+      const contractId = await onSubmit({ templateKey, fields, row: selectedRow });
+      if (contractId) setDoneContractId(contractId);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : '生成失败');
     }
   };
+
+  if (doneContractId) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" role="presentation" onClick={onClose}>
+        <div className="rounded-2xl border border-white/[0.08] bg-[#0b1220] w-full max-w-md p-6 text-center" role="dialog" aria-label="合同已生成" onClick={(event) => event.stopPropagation()}>
+          <div className="text-[15px] font-semibold text-emerald-300 mb-1.5">✓ 合同已生成并自动归档</div>
+          <p className="text-[11px] text-slate-400 mb-4">已入「合同归档」{selectedRow ? `,关联 ${selectedRow.kolHandle || selectedRow.kolName}` : ''}——可现在下载 DOCX,或稍后到归档 tab 查看/删除。</p>
+          <div className="flex items-center justify-center gap-2.5">
+            {onDownload ? (
+              <button className="px-4 py-2 rounded-md text-[11.5px] font-medium bg-purple-500 hover:bg-purple-400 text-white" type="button" onClick={() => onDownload(doneContractId)}>
+                下载 DOCX
+              </button>
+            ) : null}
+            <button className="px-4 py-2 rounded-md border border-white/[0.08] text-[11.5px] text-slate-300 hover:bg-white/[0.04]" type="button" onClick={onClose}>完成</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" role="presentation" onClick={busy ? undefined : onClose}>
