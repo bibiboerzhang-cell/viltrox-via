@@ -997,7 +997,16 @@ export function ProjectDetailView({
         </div>
       </div>
 
-      <LiveLogisticsBanner rows={rows} trackingForRow={trackingForRow} />
+      <LiveLogisticsBanner
+        rows={rows}
+        trackingForRow={trackingForRow}
+        onSyncTracking={apiToken ? async () => {
+          const { enqueueLogisticsSync } = await import('../../../../services/vkpi/projects-api');
+          const resp = await enqueueLogisticsSync(apiToken, Number(project.id));
+          if (resp.status === 'blocked') throw new Error(String(resp.message || '未配置 17track token'));
+          return resp.status === 'already_queued' ? '同步已在队列中(泳道「物流同步」)' : '已入队——完成后刷新即见真实轨迹';
+        } : undefined}
+      />
 
       <div className="grid grid-cols-6 gap-2" aria-label="项目 KPI">
         {[

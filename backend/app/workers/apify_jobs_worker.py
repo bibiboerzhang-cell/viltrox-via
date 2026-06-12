@@ -1472,6 +1472,29 @@ def _process_kol_profile_deep_crawl(conn: psycopg.Connection[Any], job: dict[str
             )
 
 
+def _process_logistics_track_sync(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
+    """17track 物流同步(2026-06-12):注册+拉取轨迹写回 shipping 元数据,泳道可见。"""
+    from app.domains.logistics import seventeen_track
+
+    staff = _resolve_job_staff(conn, payload)
+    with db_connection_sync_scope():
+        result = seventeen_track.run_logistics_sync_for_job(payload, staff=staff)
+    status = str((result or {}).get("status") or "")
+    ok = status == "ready"
+    payload["logistics_sync_result"] = {k: v for k, v in (result or {}).items() if k != "results"}
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE apify_jobs SET status=%s, last_error=%s, payload=%s::jsonb, updated_at=NOW() WHERE id=%s",
+                (
+                    "done" if ok else "blocked",
+                    None if ok else (status or "logistics_sync_failed")[:300],
+                    _json(payload),
+                    int(job["id"]),
+                ),
+            )
+
+
 def _process_kol_outreach_draft(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
     """联系草稿(2026-06-12 裁令):LLM 经队列生成外联消息,产物落 cache(kol_outreach_draft_v1)。"""
     from app.domains.kol import outreach_draft as kol_outreach_draft
@@ -3099,6 +3122,9 @@ def _process_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> None:
         return
     if str(job.get("job_type") or "").strip().lower() == "kol_outreach_draft":
         _process_kol_outreach_draft(conn, job, payload)
+        return
+    if str(job.get("job_type") or "").strip().lower() == "logistics_track_sync":
+        _process_logistics_track_sync(conn, job, payload)
         return
     target_type, target_id = _target(payload)
     if not target_type or not target_id:

@@ -132,6 +132,8 @@ def _infer_kind(source: str, job_type: str = "", purpose: str = "", payload: Any
         return "评论采集"
     if _text(job_type).lower() == "kol_outreach_draft" or "kol_outreach_draft" in haystack:
         return "联系草稿"
+    if _text(job_type).lower() == "logistics_track_sync" or "logistics_track_sync" in haystack:
+        return "物流同步"
     if "final_v1" in haystack or "video_analysis" in haystack or "video" in haystack:
         return "video深析"
     if any(word in haystack for word in ("url", "profile", "crawl", "scan", "resolve", "download", "ingest", "sync")):

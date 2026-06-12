@@ -57,6 +57,20 @@ def projects(
     return workflow.list_projects(limit=limit, stage=stage, staff=staff, staff_id_filter=staff_id, starred_only=starred)
 
 
+@router.post("/projects/logistics-sync/enqueue")
+def enqueue_logistics_sync(
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """17track 物流同步入队(2026-06-12;无 token 诚实返回 blocked)。"""
+    from app.domains.logistics import seventeen_track
+
+    return seventeen_track.enqueue_logistics_sync_job(
+        project_id=body.get("project_id"),
+        staff=staff,
+    )
+
+
 @router.get("/projects/contract-templates")
 def get_contract_templates(staff=Depends(require_tab("vkpi", "read"))) -> dict:
     """合同模板目录(2026-06-12 生成器 v1):槽位 schema 供前端表单渲染。"""

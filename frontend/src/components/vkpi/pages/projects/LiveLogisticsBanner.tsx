@@ -1,3 +1,4 @@
+import React from 'react';
 import { Package, RefreshCw } from 'lucide-react';
 import type { VkpiProjectRow } from '../../vkpiTypes';
 import { Avatar } from '../../shared/Avatar';
@@ -21,12 +22,28 @@ function freeTrackingUrl(carrier: string, trackingNumber: string) {
 }
 
 function trackingStatus(row: VkpiProjectRow, tracking: TrackingState) {
+  // 17track 同步过的真实状态优先(metadata.shipping.status);否则按阶段推断
+  if (row.trackingStatus && !['shipped'].includes(String(row.trackingStatus).toLowerCase())) return String(row.trackingStatus);
   if (tracking.delivered || stageIndex(row.stage) >= stageIndex('received')) return '已签收';
   if (stageIndex(row.stage) >= stageIndex('shipped')) return '在途';
   return '待追踪';
 }
 
-export function LiveLogisticsBanner({ rows, trackingForRow }: LiveLogisticsBannerProps) {
+export function LiveLogisticsBanner({ rows, trackingForRow, onSyncTracking }: LiveLogisticsBannerProps & { onSyncTracking?: () => Promise<string> }) {
+  const [syncState, setSyncState] = React.useState<'idle' | 'busy' | 'done'>('idle');
+  const [syncMsg, setSyncMsg] = React.useState('');
+  const syncNow = async () => {
+    if (!onSyncTracking || syncState === 'busy') return;
+    setSyncState('busy');
+    try {
+      const message = await onSyncTracking();
+      setSyncMsg(message);
+      setSyncState('done');
+    } catch (error) {
+      setSyncMsg(error instanceof Error ? error.message : '同步发起失败');
+      setSyncState('idle');
+    }
+  };
   const cards = rows
     .map((row) => ({ row, tracking: trackingForRow(row) }))
     .filter(({ row, tracking }) => tracking.no && !row.isFakeTracking);
@@ -36,11 +53,23 @@ export function LiveLogisticsBanner({ rows, trackingForRow }: LiveLogisticsBanne
       <header>
         <div>
           <span><Package size={13} /> 实时物流 · {cards.length} 个快递</span>
-          <p>真实 tracking 单号 · 排除占位/假单号 · 状态按当前阶段推断</p>
+          <p>真实 tracking 单号 · 排除占位/假单号 · 已同步的显 17track 轨迹,其余按阶段推断</p>
         </div>
-        <em title="真刷新功能将在视频 URL 每日刷新 job 接入后启用">
-          <RefreshCw size={10} /> 状态 · 每日刷新待接入
-        </em>
+        {onSyncTracking ? (
+          <button
+            type="button"
+            onClick={() => void syncNow()}
+            disabled={syncState === 'busy'}
+            style={{ fontSize: 10, color: syncState === 'done' ? '#86efac' : '#93c5fd', background: 'rgba(59,130,246,0.10)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}
+            title={syncMsg || '经 17track 拉取真实轨迹(队列「物流同步」可见)'}
+          >
+            <RefreshCw size={10} /> {syncState === 'busy' ? '发起中…' : syncState === 'done' ? '已入队 ✓' : '同步状态(17track)'}
+          </button>
+        ) : (
+          <em title="配置 VKPI_17TRACK_TOKEN 后启用真实轨迹同步">
+            <RefreshCw size={10} /> 状态 · 阶段推断
+          </em>
+        )}
       </header>
 
       {cards.length ? (

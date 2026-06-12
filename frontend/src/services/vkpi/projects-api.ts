@@ -527,3 +527,11 @@ export async function generateProjectContract(
     token,
   );
 }
+
+export async function enqueueLogisticsSync(token: string, projectId?: number) {
+  return apiFetch<{ status?: string; job_id?: number; message?: string }>(
+    "/api/marketing/projects/logistics-sync/enqueue",
+    { method: "POST", body: jsonBody({ project_id: projectId }) },
+    token,
+  );
+}
