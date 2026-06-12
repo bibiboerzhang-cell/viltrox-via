@@ -500,6 +500,22 @@ export function ProjectDetailView({
       }
       const resp = await uploadProjectContract(apiToken, project.id, file, { assignmentId: row.assignmentId, kolPoolId: row.kolPoolId });
       setActionModal(null);
+      // 全盘扫描 P0(V2):手填金额/期限/交付项随档落库(DOCX 无自动提取时这是唯一来源)
+      const contractRecord = (resp as Record<string, unknown>).contract as Record<string, unknown> | undefined;
+      const feeUsd = Number(payload.fee_usd) || 0;
+      const duration = String(payload.duration || '').trim();
+      const deliverables = String(payload.deliverables || '').trim();
+      if (contractRecord?.id && (feeUsd > 0 || duration || deliverables)) {
+        try {
+          await patchProjectContract(apiToken, project.id, Number(contractRecord.id), {
+            ...(feeUsd > 0 ? { fee_amount: feeUsd, fee_currency: 'USD' } : {}),
+            ...(duration ? { contract_duration: duration } : {}),
+            ...(deliverables ? { deliverables: [deliverables] } : {}),
+          });
+        } catch {
+          setNotice({ tone: 'warning', title: '字段回填失败', body: '合同文件已归档,但手填的金额/期限未写入——请到归档 tab 手动补填。' });
+        }
+      }
       let advanced = '';
       const nextStage = nextProjectStage(row.stage);
       if (nextStage && row.assignmentId && onAdvanceProjectKol) {
@@ -513,9 +529,12 @@ export function ProjectDetailView({
           advanced = ',阶段自动推进失败——可手动点「推进」';
         }
       }
-      setNotice({ tone: 'success', title: '合同已归档', body: `Claude 提取已入队(泳道「合同提取」)${advanced}。归档 tab 可查看全文与提取字段。` });
-      void resp;
-      await onProjectUpdated?.();
+      // 诚实 toast(全盘扫描 P1):仅 PDF 走 Claude 提取;DOC/DOCX 归档不自动提取
+      const isPdf = /\.pdf$/i.test(file.name);
+      setNotice({ tone: 'success', title: '合同已归档', body: `${isPdf ? 'Claude 提取已入队(泳道「合同提取」)' : 'DOCX 已归档(不走自动提取,金额/期限以手填为准)'}${advanced}。归档 tab 可查看。` });
+      // 全盘扫描 P0(A1):刷新合同列表,提取轮询才能接管新合同
+      await loadContracts();
+      void onProjectUpdated?.();
       return;
     }
     if (!onSubmitProjectKolActionStub) {
@@ -1272,7 +1291,8 @@ export function ProjectDetailView({
                 assignment_id: row?.assignmentId || undefined,
                 kol_pool_id: row?.kolPoolId || undefined,
               });
-              setNotice({ tone: 'success', title: '合同已生成并归档', body: `${String((resp as Record<string, unknown>).file_name || 'DOCX')} 已入「合同归档」${row ? `,关联 ${row.kolHandle || row.kolName}` : ''}。` });
+              setNotice({ tone: 'success', title: '草稿已生成并归档', body: `${String((resp as Record<string, unknown>).file_name || 'DOCX')} 已入「合同归档」${row ? `,关联 ${row.kolHandle || row.kolName}` : ''};签署后回归档上传签署版(双记录留痕)。` });
+              await loadContracts();
               void onProjectUpdated?.();
               const contract = (resp as Record<string, unknown>).contract as Record<string, unknown> | undefined;
               return Number(contract?.id) || null;

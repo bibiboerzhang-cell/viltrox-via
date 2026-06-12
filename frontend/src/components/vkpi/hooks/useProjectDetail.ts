@@ -312,8 +312,17 @@ export function useProjectDetail({ apiToken, projectId, fallbackProject }: UsePr
     return rawRows.map((item, index) => assignmentToProjectRow(item, state.detail as VkpiProjectDetail, project, index));
   }, [project, state.detail]);
   const refresh = useCallback(async () => {
-    setReloadKey((key) => key + 1);
-  }, []);
+    // 全盘扫描 P0(D1-2):原实现只 bump reloadKey 即 resolve,调用方 await 不到取数完成,
+    // 乐观 override 提前撤销致阶段闪回。改为真取数;失败保留旧 detail(不清屏)。
+    if (!apiToken || !projectId) return;
+    try {
+      const detail = await getProjectDetail(apiToken, projectId);
+      setState({ detail, loading: false, error: '', notFound: false });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '项目详情刷新失败';
+      setState((current) => ({ ...current, loading: false, error: current.detail ? '' : message }));
+    }
+  }, [apiToken, projectId]);
 
   return {
     ...state,

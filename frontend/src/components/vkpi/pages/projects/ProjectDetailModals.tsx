@@ -951,10 +951,11 @@ export function GenerateContractModal({
   const selectedRow = rows.find((item) => item.id === rowId) || null;
 
   useEffect(() => {
-    // 切 KOL/模板时预填对方名与产品(时间/账户留空待填)
+    // 切 KOL 时乙方名无条件跟随所选 KOL(全盘扫描 P0:`||` 短路致切换后仍是上一个 KOL,
+    // 会生成主体写错的法务文本);产品类字段保留手改值。
     setFields((current) => ({
       ...current,
-      party_b_name: current.party_b_name || selectedRow?.kolName || selectedRow?.kolHandle || '',
+      party_b_name: selectedRow?.kolName || selectedRow?.kolHandle || current.party_b_name || '',
       product: current.product || project.productName || project.campaign || '',
       product_models: current.product_models || project.productName || '',
       provided_products: current.provided_products || project.productName || '',

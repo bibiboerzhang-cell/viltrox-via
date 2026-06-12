@@ -357,8 +357,8 @@ export function ProjectsPage({
     const detailProjectForView = projectDetailState.project;
     return (
       <PageShell title="项目详情" description="按项目维度查看 KOL 阶段、数据、物流、证据和今日提醒。" hideHeading>
-        {/* 白屏闪案(2026-06-12):骨架屏只在首载(无既有数据)时出现;
-            推进/联系后的刷新保留旧视图原地更新,不再整页换骨架。 */}
+        {/* 白屏闪案(2026-06-12)+ 全盘扫描 P0 修正:骨架屏只在"首载且连 fallback 都没有"时出现;
+            有 fallback/旧 detail 即渲染视图原地更新——三分支互斥,杜绝全 false 空白。 */}
         {projectDetailState.loading && !projectDetailState.detail && !detailProjectForView ? (
           <ProjectDetailSkeleton onBack={() => setDetailProjectId(null)} />
         ) : null}
@@ -368,7 +368,7 @@ export function ProjectsPage({
             onBack={() => setDetailProjectId(null)}
           />
         ) : null}
-        {(!projectDetailState.loading || Boolean(projectDetailState.detail)) && detailProjectForView ? (
+        {detailProjectForView ? (
           <ProjectDetailView
             key={detailProjectForView.id}
             apiToken={apiToken}
