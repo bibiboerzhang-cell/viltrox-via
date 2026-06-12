@@ -517,7 +517,7 @@ def _recent_sort_key(item: dict[str, Any]) -> str:
     return str(item.get("updated_at") or item.get("created_at") or "")
 
 
-def get_task_queue(*, limit: int = 50, recent_minutes: int = 10, include_llm_calls: bool = True) -> dict[str, Any]:
+def get_task_queue(*, limit: int = 50, recent_minutes: int = 10, include_llm_calls: bool = True, viewer: dict[str, Any] | None = None) -> dict[str, Any]:
     """Return a compact read-only projection for 2-3s polling."""
 
     safe_limit = max(1, min(int(limit or 50), 100))
@@ -549,7 +549,7 @@ def get_task_queue(*, limit: int = 50, recent_minutes: int = 10, include_llm_cal
     recent_status_counts = Counter(str(item.get("status") or "") for item in recent)
     active_stage_counts = Counter(str(item.get("stage") or "") for item in active)
 
-    return {
+    payload = {
         "status": "ready",
         "source": "apify_jobs+job_execution_ledger+vkpi_llm_calls" if include_llm_calls else "apify_jobs+job_execution_ledger",
         "query": {
@@ -583,6 +583,8 @@ def get_task_queue(*, limit: int = 50, recent_minutes: int = 10, include_llm_cal
             "worker_touched": False,
         },
     }
+    # 波2 R1(2026-06-12 体检):重型端点同样按观看者遮蔽,杜绝绕过 compact 隐私
+    return _apply_viewer_visibility(payload, viewer)
 
 
 def _speed_light(counts: dict[str, Any]) -> dict[str, Any]:

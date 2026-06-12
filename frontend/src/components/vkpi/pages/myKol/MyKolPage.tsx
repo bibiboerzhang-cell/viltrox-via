@@ -427,22 +427,6 @@ function EmployeeKolLibrary({ apiToken, data, viewMode }: { apiToken?: string; d
   const [activeView, setActiveView] = useState<'watchlist' | 'funnel'>('watchlist');
   const [activeFunnelStage, setActiveFunnelStage] = useState<FunnelStageKey>('claimed');
   const [viltroxOnly, setViltroxOnly] = useState(true);
-  // 从哪发起回哪去(2026-06-12):泳道点开账号分析任务 → 切回 MY KOL 并定位该收藏行
-  // (pending key 由 TaskProgressBoard 写入;挂载时也消费一次,覆盖"先切页后挂载"的时序)。
-  useEffect(() => {
-    const consumePending = () => {
-      try {
-        const pending = window.localStorage.getItem('vkpi:pending-mykol-pool-id');
-        if (!pending) return;
-        window.localStorage.removeItem('vkpi:pending-mykol-pool-id');
-        setActiveView('watchlist');
-        setSelectedKolId(`pool:${pending}`);
-      } catch { /* localStorage 不可用时忽略定位 */ }
-    };
-    consumePending();
-    window.addEventListener('vkpi:open-mykol-kol', consumePending);
-    return () => window.removeEventListener('vkpi:open-mykol-kol', consumePending);
-  }, []);
   const [funnelCollapsed, setFunnelCollapsed] = useState(true);
   const projectByKol = useMemo(() => {
     const grouped = new Map<string, VkpiProjectRow[]>();
@@ -490,7 +474,12 @@ function EmployeeKolLibrary({ apiToken, data, viewMode }: { apiToken?: string; d
       } as unknown as VkpiKolOption;
       // ②(裁令重修):合作结果以后端直连 assignments(projects_json)为准——dashboard
       // 项目行只有主 KOL,平台:handle 匹配对 769 收藏几乎全 miss(浏览器实证 0 合作)。
-      const rawAssignments = Array.isArray(fav.projects_json) ? (fav.projects_json as Array<Record<string, unknown>>) : [];
+      // 波5 R1(2026-06-12 体检):psycopg/json_agg 路径下 projects_json 以字符串到达,
+      // 按数组判空恒 false 致合作直连失效——字符串先 parse。
+      const rawProjectsJson = typeof fav.projects_json === 'string'
+        ? (() => { try { return JSON.parse(fav.projects_json as string); } catch { return []; } })()
+        : fav.projects_json;
+      const rawAssignments = Array.isArray(rawProjectsJson) ? (rawProjectsJson as Array<Record<string, unknown>>) : [];
       const enriched = projectByKeyLower.get(`${String(platformLabel).toLowerCase()}:${handle.toLowerCase()}`) || [];
       const synth = rawAssignments.map((asg) => {
         const matched = enriched.find((row) => String(row.id) === String(asg.project_id));
@@ -548,7 +537,36 @@ function EmployeeKolLibrary({ apiToken, data, viewMode }: { apiToken?: string; d
     sum + item.projects.reduce((inner, project) => inner + safeNumber(project.clicks), 0)
   ), 0);
 
+  // 波5 R2(2026-06-12 体检):泳道回跳的 pool 定位曾被本重置效应吃掉(收藏未并入列表时
+  // pool:N 不在 filteredItems → 被重置到首项)。pending 持引用,目标行出现才消费;持留 15s 兜底。
+  const pendingPoolRef = useRef<{ id: string; until: number } | null>(null);
   useEffect(() => {
+    const consume = () => {
+      try {
+        const pending = window.localStorage.getItem('vkpi:pending-mykol-pool-id');
+        if (!pending) return;
+        window.localStorage.removeItem('vkpi:pending-mykol-pool-id');
+        pendingPoolRef.current = { id: `pool:${pending}`, until: Date.now() + 15000 };
+        setActiveView('watchlist');
+      } catch { /* localStorage 不可用忽略 */ }
+    };
+    consume();
+    window.addEventListener('vkpi:open-mykol-kol', consume);
+    return () => window.removeEventListener('vkpi:open-mykol-kol', consume);
+  }, []);
+  useEffect(() => {
+    const pending = pendingPoolRef.current;
+    if (pending && Date.now() > pending.until) pendingPoolRef.current = null;
+    if (pendingPoolRef.current) {
+      const target = pendingPoolRef.current.id;
+      if (filteredItems.some((item) => item.kol.id === target)) {
+        pendingPoolRef.current = null;
+        setSelectedKolId(target);
+        return;
+      }
+      // 目标未到场:持留期间不做默认重置,等收藏并入
+      if (filteredItems.length) return;
+    }
     if (!filteredItems.length) {
       setSelectedKolId('');
       return;

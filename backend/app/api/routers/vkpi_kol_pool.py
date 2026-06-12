@@ -1208,11 +1208,12 @@ def get_vkpi_task_queue(
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
     """Read-only sidebar task queue projection; no worker/provider side effects."""
-    del staff
+    # 波2 R1:重型端点同样按 viewer 遮蔽(此前 del staff 绕过 compact 隐私)
     return task_queue_view.get_task_queue(
         limit=int(limit),
         recent_minutes=int(recent_minutes),
         include_llm_calls=bool(include_llm_calls),
+        viewer=staff if isinstance(staff, dict) else None,
     )
 
 
