@@ -2384,6 +2384,8 @@ def enqueue_profile_deep_crawl_job(
         # 否则显示成"账号分析 · 账号分析 · url"(2026-06-12 截图案)。
         "query_text": clean_url[:96],
         "target_type": "kol_profile",
+        # target_id=泳道点击回跳 MY KOL 的定位键(2026-06-12 裁令:从哪发起回哪去)
+        "target_id": int(kol_pool_id) if kol_pool_id else None,
         "triggered_by_user_id": (staff or {}).get("user_id"),
         "staff_id": (staff or {}).get("id") or (staff or {}).get("staff_id"),
     }

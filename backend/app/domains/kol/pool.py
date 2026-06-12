@@ -522,7 +522,7 @@ def _video_evidence_for_kol(kol_pool_id: int, *, limit: int = 3) -> list[dict[st
             COALESCE(NULLIF(e.title, ''), NULLIF(e.video_title, ''), NULLIF(e.content_url, '')) AS title,
             e.video_title,
             e.thumbnail_url,
-            COALESCE(NULLIF(mimg.cache_url, ''), CASE WHEN COALESCE(mimg.digest, '') != '' THEN '/api/vkpi-media/video-cache/' || mimg.digest ELSE NULL END) AS cached_thumbnail_url,
+            COALESCE(NULLIF(mimg.cache_url, ''), CASE WHEN COALESCE(mimg.digest, '') != '' THEN '/api/vkpi-media/image-cache/' || mimg.digest ELSE NULL END) AS cached_thumbnail_url,
             COALESCE(NULLIF(m.cache_url, ''), CASE WHEN COALESCE(m.digest, '') != '' THEN '/api/vkpi-media/video-cache/' || m.digest ELSE NULL END) AS cached_video_url,
             e.view_count,
             e.like_count,
@@ -589,12 +589,28 @@ def _video_evidence_for_kol(kol_pool_id: int, *, limit: int = 3) -> list[dict[st
             e.id DESC
         LIMIT ?
         """,
-        (int(kol_pool_id), max(1, min(10, int(limit or 3)))),
+        # 上限 10→200(2026-06-12「全部视频」裁令:账号分析现采 12 条/E5 全量更多,硬顶 10 把列表掐断)
+        (int(kol_pool_id), max(1, min(200, int(limit or 3)))),
     ).fetchall()
+    # cache_image 只落本地文件缓存、不写 vkpi_media_cache_assets 行(asset 行历史上仅 prewarm
+    # 脚本批量写入)——上面的 image LATERAL join 对深爬暖出的缩略图永远扑空;视频按
+    # (platform, evidence_id) 键存 sidecar,join 的 source_url 匹配也兜不全。读端直查文件缓存补齐。
+    from app.domains.media.cache import cached_image_url, cached_video_url_for_item
+
     items: list[dict[str, Any]] = []
     for row in rows:
         item = dict(row)
         platform = _platform(item.get("platform") or "")
+        if not item.get("cached_thumbnail_url") and item.get("thumbnail_url"):
+            try:
+                item["cached_thumbnail_url"] = cached_image_url(item["thumbnail_url"]) or None
+            except Exception:
+                pass
+        if not item.get("cached_video_url") and platform and platform != "youtube":
+            try:
+                item["cached_video_url"] = cached_video_url_for_item(platform, str(item.get("id") or "")) or None
+            except Exception:
+                pass
         youtube_id = _youtube_video_id(item.get("content_url")) if platform == "youtube" else ""
         youtube_thumb = _youtube_thumbnail_url(youtube_id)
         item["youtube_video_id"] = youtube_id
