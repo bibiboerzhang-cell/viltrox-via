@@ -1374,3 +1374,61 @@ def link_to_main_kol(
         "main_kol_id": int(main_kol_id),
         "linked": True,
     }
+
+
+# ── C2 收藏三端点(四环漏斗第一段;依赖 migration 107,apply 前勿激活)──
+@router.post("/kol-pool/{kol_pool_id}/favorite")
+@audit_action(
+    action_type="kol_pool_favorite",
+    target_type="kol_pool",
+    target_id_extractor=lambda result, kwargs: str(kwargs.get("kol_pool_id") or ""),
+    detail_extractor=lambda result, kwargs: f"favorite pool_id={kwargs.get('kol_pool_id')} status={result.get('status')}",
+)
+def favorite_kol_pool_item(
+    kol_pool_id: int,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """收藏(My KOL 归宿)。幂等:重复收藏返回 already_favorited。"""
+    from app.domains.kol import pool_favorites
+
+    try:
+        return pool_favorites.add_favorite(int(kol_pool_id), staff=staff, note=str(body.get("note") or ""))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@router.delete("/kol-pool/{kol_pool_id}/favorite")
+@audit_action(
+    action_type="kol_pool_unfavorite",
+    target_type="kol_pool",
+    target_id_extractor=lambda result, kwargs: str(kwargs.get("kol_pool_id") or ""),
+    detail_extractor=lambda result, kwargs: f"unfavorite pool_id={kwargs.get('kol_pool_id')} status={result.get('status')}",
+)
+def unfavorite_kol_pool_item(
+    kol_pool_id: int,
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """取消收藏。幂等;在役软禁止(C8)落地时在 domain 层前置。"""
+    from app.domains.kol import pool_favorites
+
+    try:
+        return pool_favorites.remove_favorite(int(kol_pool_id), staff=staff)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@router.get("/kol-pool/favorites")
+def list_kol_pool_favorites(
+    limit: int = Query(default=2000, ge=1, le=5000),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """本人收藏清单(staff 隔离),供 Pool 星标/My KOL 收藏集渲染。"""
+    from app.domains.kol import pool_favorites
+
+    try:
+        return pool_favorites.list_favorites(staff=staff, limit=limit)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
