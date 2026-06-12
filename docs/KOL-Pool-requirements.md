@@ -185,3 +185,26 @@
 - **②细则一·拒收可见**:管2 留痕格式 `handle=… rule=… url=…`(warning 日志);规则名由 `_garbage_handle_rule` 供给(len_gt_60/llm_template_marker/generic_word/url_reserved_segment 等)
 - **③细则二·staging 体检(只读)**:**1018 行命中 21**——池外候诊污染并入 P6 案卷(含已知形态全套 + 新形态 `p`、`reel`);管3 之闸为实防非纯预防
 - 回归不回退:拒收 21/21、单独判与真 handle 0 误杀(dpreview/watchfinder123 复跑)
+
+## 工具与依赖(2026-06-12 立节)
+**anime.js v4**(D4/批6 施工工具;**第二段前零安装零引用**)。四约束全文:
+① 仅 v4 具名导入(animate/stagger/createScope),禁 v3 语法,React 内 createScope+useEffect 清理
+② 仅 transform/opacity,虚拟化列表禁逐行动画,bundle 增量入性能基线账(488KB 对照组)
+③ 只修饰真状态,禁假延迟/假过程(B2 前科条款)
+④ lux 气质:克制短促(<400ms),prefers-reduced-motion 可关
+首单预登记:AnimatedNumber 接生 + 入场微动效。
+
+## G 节 · 增补提案(2026-06-12 立;N1-N7 原文不在本会话上下文,框架与排期先立,原文到达即贴入)
+- **N1 五月 outreach 规格**(status check 已执行,见下)= 生则复活施工排 Pool 切面,与 G3 协作痕迹同族
+- **N2/N3** = 候第二段窗口(批6 体验段成员)
+- **N4-N6** = G 节排队;**N7** = 排末可不做
+- 全系列纪律:**零插队,不碰 apply 链与 d 批**
+
+### N1 status check(2026-06-12 只读,一页)
+| 规格件 | 判定 | 证据 |
+|---|---|---|
+| OutreachTimelinePanel 组件系 | **纸面(0 落码)** | 全仓 grep 零命中;前端 outreach 命中均为无关物(权限 key/演示文案/digest 标签) |
+| timeline API | **纸面** | 无 outreach timeline 端点;admin_ops.py:426 的 timeline 是创作者投稿域,非同物 |
+| migration | **纸面** | 033 是 `vkpi_staff_outreach_digests`(晨报摘要,另一功能);无 timeline 专表 |
+| 注入指南 | **纸面** | docs/ 零命中,规格文档不在仓库(疑在五月会话/飞书) |
+**可借力的既有土壤**:033 digest 表 + `daily_outreach_digest_only` automation(SettingsPage:342 真调用)+ `vkpi_outreach_suggestions` 表 + `kol_outreach` 权限 key——复活施工非从零。**生死候裁。**
