@@ -222,3 +222,19 @@ staging_intake.submit_candidates(source, items, *, staff=None, query_text="")
 | **施工** | F3 开工:migration 111/112 入 apply 窗(三段式)、网关乙案(或裁甲)、staging_intake、F1 chips+F2 platforms 传参、15+15 版式、F4 链④自动收藏、platform_search 收编;管4 行接入 commit 回填登记表 | 候闸A(本档要件 6 数字)+闸C(本档要件 3/4 语义裁定)双过后;F4 全量同步尾巴依赖 E5,排期不变 |
 
 二字独立:可先"测"后凭实测数字再裁"施工";直接"施工"则牌价口径风险自担(不建议,Apify 案在前)。
+
+---
+
+## 附录:「测」字探针实测(2026-06-12,主控执行)
+
+脚本:`backend/scripts_local/f3_grounding_probe.py`(模型取 config.GEMINI_MODEL,零硬编码)。
+
+**两跑结果**:
+| 跑 | 接地 | 产出 | 量化 |
+|---|---|---|---|
+| #1 | ✅ 真接地 | Christopher Frost / Dustin Abbott(真实 Viltrox 测评人,带频道 URL) | 503 重试后成功 |
+| #2 | ⚠️ `grounding_queries=0` | pal2tech(未经搜索,知识作答) | prompt 26 / out 54 / total 1816 tokens |
+
+**计费口径裁定(测字答案)**:grounding 按"实际执行的搜索查询"计费(Google 牌价 ~$14/千次查询 ≈ $0.014/查询),token 费另计(flash 档 1816 tokens ≈ <$0.001)。**单次发现搜索全成本 ≈ $0.015-0.05,远低于 $0.5 单次闸**——两道资金闸数字($0.50 单次/$10 日)富余成立。
+
+**风险实证**:跑 #2 证明模型可能跳过搜索直接作答(零接地)——**fail-closed 必须落实为"grounding_metadata 缺失即判失败重试,绝不把未接地结果当发现产物"**(乙案设计 §2 的硬性验收项)。
