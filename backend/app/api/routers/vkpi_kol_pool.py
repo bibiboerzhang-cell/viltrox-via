@@ -1139,10 +1139,11 @@ def get_vkpi_task_queue_compact(
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
     """Cached read-only sidebar task queue projection for 2.5s polling."""
-    del staff
+    # viewer 用于队列隐私(非管理员只见他人任务的存在与位次,内容遮蔽)——缓存仍全员共享。
     return task_queue_view.get_task_queue_compact(
         limit=int(limit),
         recent_minutes=int(recent_minutes),
+        viewer=staff if isinstance(staff, dict) else None,
     )
 
 

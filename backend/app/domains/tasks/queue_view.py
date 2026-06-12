@@ -336,6 +336,9 @@ def _query_apify_jobs(cutoff: datetime, limit: int) -> tuple[list[dict[str, Any]
             "error": _text(data.get("last_error")) or None,
             "error_category": _text(data.get("last_error_category")) or None,
             "next_retry_at": _timestamp(data.get("next_retry_at")),
+            # 发起人透传(2026-06-12 主管裁令:排队显示用户,内容仅本人/管理员可见)
+            "initiator_user_id": _text(payload.get("triggered_by_user_id") or payload.get("user_id")) or None,
+            "initiator_staff_id": _text(payload.get("staff_id")) or None,
         }
         if data.get("id") in eta_info:
             extra.update(eta_info[data.get("id")])
@@ -428,6 +431,8 @@ def _query_job_execution_ledger(cutoff: datetime, limit: int) -> tuple[list[dict
                 "error": _text(data.get("error_message")) or None,
                 "started_at": _timestamp(data.get("started_at")),
                 "finished_at": _timestamp(data.get("finished_at")),
+                "initiator_user_id": _text(data.get("user_id") or payload.get("user_id") or payload.get("created_by_user_id")) or None,
+                "initiator_staff_id": _text(payload.get("staff_id")) or None,
             },
         )
         if data.get("stage") and item["stage"] == "thinking" and str(data.get("stage")).lower() in {"ingest", "crawl"}:
@@ -595,7 +600,45 @@ def _speed_light(counts: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def get_task_queue_compact(*, limit: int = 30, recent_minutes: int = 5) -> dict[str, Any]:
+def _apply_viewer_visibility(payload: dict[str, Any], viewer: dict[str, Any] | None) -> dict[str, Any]:
+    """队列隐私(2026-06-12 主管裁令):非管理员只见他人任务的"队列存在"(位次/状态/发起人),
+    任务内容(label/会话入口)仅本人与管理员可见。缓存为全员共享,故在缓存读取后按
+    观看者后处理,且只产副本、绝不变异缓存内对象。"""
+    if not viewer:
+        return payload
+    if str(viewer.get("role") or "").strip().lower() == "admin":
+        return payload
+    viewer_user = _text(viewer.get("user_id"))
+    viewer_staff = _text(viewer.get("id") or viewer.get("staff_id"))
+
+    def _mask(items: Any) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for item in items if isinstance(items, list) else []:
+            if not isinstance(item, dict):
+                continue
+            owner_user = _text(item.get("initiator_user_id"))
+            owner_staff = _text(item.get("initiator_staff_id"))
+            mine = (owner_user and viewer_user and owner_user == viewer_user) or (
+                owner_staff and viewer_staff and owner_staff == viewer_staff
+            )
+            if mine:
+                out.append(item)
+                continue
+            masked = dict(item)
+            who = owner_user or owner_staff
+            masked["target"] = {"label": f"用户 {who} 的任务" if who else "其他成员的任务"}
+            masked.pop("search_session", None)
+            masked["masked"] = True
+            out.append(masked)
+        return out
+
+    result = dict(payload)
+    result["active"] = _mask(payload.get("active"))
+    result["recent"] = _mask(payload.get("recent"))
+    return result
+
+
+def get_task_queue_compact(*, limit: int = 30, recent_minutes: int = 5, viewer: dict[str, Any] | None = None) -> dict[str, Any]:
     """Return a cached sidebar projection for high-frequency polling."""
 
     safe_limit = max(1, min(int(limit or 30), 50))
@@ -605,7 +648,7 @@ def get_task_queue_compact(*, limit: int = 30, recent_minutes: int = 5) -> dict[
     if isinstance(cached, dict):
         result = dict(cached)
         result["cache"] = {"hit": True, "ttl_sec": 2}
-        return result
+        return _apply_viewer_visibility(result, viewer)
 
     payload = get_task_queue(
         limit=safe_limit,
@@ -627,4 +670,4 @@ def get_task_queue_compact(*, limit: int = 30, recent_minutes: int = 5) -> dict[
     payload["diagnostics"] = diagnostics
     payload["cache"] = {"hit": False, "ttl_sec": 2}
     cache_set(cache_key, payload, ttl=2)
-    return payload
+    return _apply_viewer_visibility(payload, viewer)
