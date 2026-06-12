@@ -120,3 +120,12 @@
 ## 2026-06-12 A 补分补课记录
 - 补课 b(头排点名核):90+ 共 6 行已逐个人眼核,judgment 见对话回执(petermckinnon/thecamerastoretv/brandonli 等相机圈真顶流,头排成立);**报裁两点:① brandonli 与 brandonliunscripted 为同一人重复档案,头排占两席(数据治理,非评分错);② TikTok 两行输入量纲可疑(ER 53.5%、avg_views 18.8M>粉丝 36 倍,疑单爆款拉伸)——标记不回滚,E6 刷新自愈**。随机 5 行 sane。
 - 补课 a(零漂移补写):370 行薄数据(avg_views 与 ER 双缺)reason 追加「·基于有限数据」;**写后指纹 1123/39823.6700/1123 分毫不差(score 零触碰自证)**;幂等复跑 0。
+
+## 程序法第四条(2026-06-12 立,第四例 footgun)
+- **拦截波及同批**:守卫拦截发生后,同批命令逐条标注已执行/未执行,恢复时逐条复核,不许假设(本例:sed 改参随拦截静默未执行,致 tier 闸复踩)。
+
+## 2026-06-12 普查 + 脉冲对账
+- **重复档案普查(只读,双路)**:路A 字段同值 2 对(brandonli/brandonliunscripted、stefanolombardoyt/stefanolombardo)+ 路B 同平台前缀 2 对(danieljm.visuals/danieljmvisuals、matthewstorerphotography/matthewstorer)= **真重复 4 对 ≤10 → 候裁主从标记单**。跨平台同名 ~10 组为合法多平台行,不动。**新发现·池污染群(P6 专项候裁)**:LLM 失败输出当 handle 入库 5 行(id 3323-3328)+ 垃圾 handle("u"/products×3/contact/camera/cameras/hipster)+ media 池卡口拆行(-fe/-z)与宣发项目行(3311/3312)≈ 20+ 行,性质=非 KOL 行入池,非重复。
+- **TikTok 量纲(裁决②)**:智能层 0 号案卷**首例田野证据**——TT 视图数不受粉丝约束(算法分发),YT 语义公式系统性高估全部 TT 行;Real ER de-inflation 因子即为此病设计;**josiah(3462)/frank(3450)为 0 号法定验收样本**。
+- **25 行脉冲实测(漂移第三起,最终令)**:23 行实跑(YT13/IG7/TT3,media 2 行不可 enrich 自动排除)/210.8s/0 错误;**Apify 实测 $0.0206**(YT 官方配额 $0)。指纹 39823.6700→**39814.3900**(Δ-9.28 全额归因 23 行 enrich 重算,逐行前后账在档:有升有降——juanografoo 21.9→66.9 补到真数据,jasonvong 86.2→57.5 真 ER 校准;原 11 行之一 teleginivan 85→67.5 = 条件 e 预期覆盖)。**as-of 戳自动跳 2026-06-12**(d14 活了)。skipped:id 3341 handle="u" no_results(污染群又一证)。
+- **双报价(实测落档)**:① 周脉冲 ≈ **$0.02/次、<$0.10/周**(qualified 25 行口径;下次跑带 stale_before=7d);② 方案B 全池 provider 刷新参考:~9.2s/行,1112 行 ≈ **<$1、串行 ~2.9h**(YT 527 行免费,IG+TT ~400 行 ×$0.002)。
