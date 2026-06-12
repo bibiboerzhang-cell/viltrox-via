@@ -91,3 +91,9 @@
 1. **A1 星号**:"账号URL→execute auto+增量since"——交互链路验真 ✅,但 **增量 since 实测为伪**(a++:游标字段 last_video_at 不进 provider,整列表重拉本地截断,配额照烧);且 "execute auto" 后端只 dry-run,真执行靠前端二跳 execute=true。A1 成品定性不变,**增量语义降级为"待真游标"**,归 E 类数据侧。
 2. **F4 依赖缺口**:F4 写"复用 A1 新人管线(析代表视频→建档→**全量同步**)"——a+ 实测**全量同步不存在**(候选池 max_posts=3 抓死 + worker 无 account-sync job 类型)。F 段设计稿必须把"全量同步补建"列为 F4 前置,或降级为"代表作 N 条"。
 3. **E1 数字更新**:深析覆盖 148/1122 → **实测 205/1123**(2026-06-11)。
+
+## 2026-06-12 裁决确认 + E 节新增(a+/a++ 正式移交 Codex)
+- **D 类裁决确认**(用户回执):D2 入队①(后端序列化,第一段顺手)/ D6 真徽章入队② / D1 email 无解则冻结(loyalty+geo 两 bug 第一段修)/ D3 销账删孤儿 / D4 排末。三个一行级修复(复制邮箱/D6 残骸/loyalty 量纲)捎进 C3 commit。
+- **E5(新增)账号全量同步补建**:新人 onboarding 候选池 max_posts=3 抓死(url_deep_crawl.py:919)+ worker 无 account-sync job 类型(apify_jobs_worker.py:3001)→ 补建"建档后全量(或大 N)同步"管线。**Stage1 ingest 管线已有 path contract 可复用**。F4 的硬前置。
+- **E6(新增)真 since 游标改造**:现为伪增量(游标 last_video_at 不进 provider,整列表重拉本地截断,配额照烧;daily light refresh 另一套零游标互不联动)→ provider 侧传真游标(YouTube publishedAfter 等)+ 统一游标推进。**Stage1 ingest 管线已有 path contract 可复用**。light refresh 开闸前置。
+- **停摆诊断(2026-06-12)**:last_seen_at 停摆 06-04 根因=双重主动闸——①全系统 ENABLE_SCHEDULER=0(admin 实测 env,worker 默认 0),APScheduler 未启动,morning_sync 等 cron 全停;②应用层守卫 allow_qualified_kol_refresh 默认 false,即便调度器开着 kol_pool_light 也会 skipped(daily_sync.py:553-560 QUALIFIED_KOL_REFRESH_GUARD)。**非故障,light refresh 本就处于停闸省钱态**;E6 落地前不开闸。
