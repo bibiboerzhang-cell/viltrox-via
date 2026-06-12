@@ -82,7 +82,7 @@ export function NotificationDetailModal({ notification, onClose, onMarkRead }) {
         }, e(Check, { size: 11 }), t("标记已读")),
         linked && e("button", { 
           className: "flex-1 flex items-center justify-center gap-1.5 rounded-md bg-purple-600 hover:bg-purple-500 px-3 py-2 text-[11px] font-medium text-white"
-        }, t("跳转到关联"), e(ChevronRight, { size: 11 }))
+        , disabled: true, title: "跳转待接入" }, t("跳转到关联"), e(ChevronRight, { size: 11 }))
       )
     )
   );

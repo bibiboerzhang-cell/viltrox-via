@@ -41,7 +41,7 @@ export function SignalsAlertsCard({ alerts, onAlertClick, onViewAll }) {
         e("h3", { className: "text-sm font-semibold text-white" }, "Signals & Alerts")
       ),
       e("div", { className: "flex items-center gap-1.5 text-[9px] text-slate-400" },
-        e("button", { className: "rounded-full p-1 hover:bg-white/[0.05]" },
+        e("span", { className: "rounded-full p-1" },
           e(Activity, { size: 10 })
         ),
         e("span", null, "Just now · Live")

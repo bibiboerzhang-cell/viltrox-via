@@ -9,9 +9,12 @@ import { useT } from "../../lib/i18n";
 
 const e = React.createElement;
 
-export function KOLDetailModal({ mover, onClose }) {
+export function KOLDetailModal({ mover, onClose, onOpenKolPool }) {
   const { t } = useT();
   if (!mover) return null;
+  // 2026-06-12 死按钮诚实化:无写接口的 CTA 一律 disabled+待接入,不再渲染假 hover
+  const pendingBtn = "rounded-md border border-white/[0.12] px-3 py-1.5 text-[11px] text-slate-500 opacity-60 cursor-not-allowed";
+  const openProfile = onOpenKolPool ? () => { onClose && onClose(); onOpenKolPool(mover); } : undefined;
   // 假数据(实际从 mover.handle 查 KOL pool 数据)
   const trendData = {
     follower: [0,2,3,5,8,11,12.4].map(v => ({ value: v })),
@@ -110,18 +113,31 @@ export function KOLDetailModal({ mover, onClose }) {
             className: "text-[10px] font-medium text-purple-200 px-2 py-0.5 bg-purple-500/[0.12] border border-purple-500/[0.25] rounded"
           }, p))
         ),
-        // Actions
+        // Actions(2026-06-12 死按钮清查:加大投入/续约/评估/退出合作 无后端写接口 → disabled;
+        // 查看完整档案 → 接真跳 KOL Pool)
         e("div", { className: "pt-2 flex flex-wrap gap-2 border-t border-white/[0.06]" },
-          mover.badge !== "⚠️" 
+          mover.badge !== "⚠️"
             ? [
-                e("button", { key: 0, className: "rounded-md bg-purple-600 hover:bg-purple-500 px-3 py-1.5 text-[11px] font-medium text-white" }, t("加大投入")),
-                e("button", { key: 1, className: "rounded-md border border-white/[0.12] px-3 py-1.5 text-[11px] text-slate-300 hover:bg-white/[0.04]" }, "续约"),
-                e("button", { key: 2, className: "rounded-md border border-white/[0.12] px-3 py-1.5 text-[11px] text-slate-300 hover:bg-white/[0.04]" }, "查看完整档案 →"),
+                e("button", { key: 0, disabled: true, title: "待接入", className: pendingBtn }, t("加大投入")),
+                e("button", { key: 1, disabled: true, title: "待接入", className: pendingBtn }, "续约"),
+                e("button", {
+                  key: 2,
+                  onClick: openProfile,
+                  disabled: !openProfile,
+                  title: openProfile ? "在 KOL Pool 查看完整档案" : "待接入",
+                  className: openProfile ? "rounded-md border border-white/[0.12] px-3 py-1.5 text-[11px] text-slate-300 hover:bg-white/[0.04]" : pendingBtn
+                }, "查看完整档案 →"),
               ]
             : [
-                e("button", { key: 0, className: "rounded-md bg-amber-600 hover:bg-amber-500 px-3 py-1.5 text-[11px] font-medium text-white" }, t("评估")),
-                e("button", { key: 1, className: "rounded-md border border-red-500/30 px-3 py-1.5 text-[11px] text-red-300 hover:bg-red-500/[0.06]" }, "退出合作"),
-                e("button", { key: 2, className: "rounded-md border border-white/[0.12] px-3 py-1.5 text-[11px] text-slate-300 hover:bg-white/[0.04]" }, "查看完整档案 →"),
+                e("button", { key: 0, disabled: true, title: "待接入", className: pendingBtn }, t("评估")),
+                e("button", { key: 1, disabled: true, title: "待接入", className: "rounded-md border border-red-500/20 px-3 py-1.5 text-[11px] text-red-300/50 opacity-60 cursor-not-allowed" }, "退出合作"),
+                e("button", {
+                  key: 2,
+                  onClick: openProfile,
+                  disabled: !openProfile,
+                  title: openProfile ? "在 KOL Pool 查看完整档案" : "待接入",
+                  className: openProfile ? "rounded-md border border-white/[0.12] px-3 py-1.5 text-[11px] text-slate-300 hover:bg-white/[0.04]" : pendingBtn
+                }, "查看完整档案 →"),
               ]
         )
       )

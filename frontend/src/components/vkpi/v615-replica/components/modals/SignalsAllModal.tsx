@@ -71,7 +71,7 @@ export function SignalsAllModal({ alerts, onClose, onAlertClick }) {
           }
         }, sev === "all" ? "全部" : sev === "high" ? "高" : sev === "medium" ? "中" : sev === "low" ? "低" : "info")),
         // sort
-        e("button", { className: "text-[10px] px-2.5 py-1 rounded border border-white/[0.1] text-slate-400 hover:bg-white/[0.03]" }, t("本周"))
+        e("button", { className: "text-[10px] px-2.5 py-1 rounded border border-white/[0.06] text-white/25", disabled: true, title: "时间范围切换待接入" }, t("本周"))
       ),
       // List
       e("div", { className: "flex-1 overflow-y-auto p-5 space-y-2" },

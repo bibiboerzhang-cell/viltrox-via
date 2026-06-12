@@ -40,9 +40,9 @@ export function EditGroupModal({ groupName = "KOL Operations", mode = "edit", st
       e("div", null,
         e("div", { className: "flex items-center justify-between mb-2" },
           e("label", { className: "text-[10px] text-slate-500" }, t("成员列表")),
-          e("button", { className: "text-[10px] text-purple-300 hover:text-purple-200" }, "+ " + t("添加成员"))
+          e("button", { className: "text-[10px] text-purple-300 hover:text-purple-200", onClick: () => document.getElementById("edit-group-member-list")?.scrollIntoView({ behavior: "smooth" }) }, "+ " + t("添加成员"))
         ),
-        e("div", { className: "space-y-1" },
+        e("div", { id: "edit-group-member-list", className: "space-y-1" },
           staff.map(s => {
             const isMember = members.includes(s.id);
             return e("label", {
@@ -78,7 +78,7 @@ export function EditGroupModal({ groupName = "KOL Operations", mode = "edit", st
             e("div", { className: "text-[11px] text-white" }, row.label),
             e("div", { className: "text-[10px] text-slate-400" }, row.value)
           ),
-          e("button", { className: "text-[10px] text-purple-300 hover:text-purple-200 shrink-0" }, t("编辑"))
+          e("button", { className: "text-white/25", disabled: true, title: "权限编辑待接入" }, t("编辑"))
         ))
       )
     ),

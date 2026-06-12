@@ -24,7 +24,8 @@ export function ProfileModal({ user, onClose, t }) {
           style: { background: user.avatarGradient }
         }, user.avatar),
         e("div", { className: "flex-1" },
-          e("button", { className: "rounded-md border border-white/[0.12] px-3 py-1.5 text-[11px] text-slate-300 hover:bg-white/[0.04]" }, t("更换头像")),
+          // 2026-06-12 死按钮诚实化:更换头像 / 保存 无写接口 → disabled+待接入
+          e("button", { disabled: true, title: "待接入", className: "rounded-md border border-white/[0.12] px-3 py-1.5 text-[11px] text-slate-500 opacity-60 cursor-not-allowed" }, t("更换头像")),
           e("div", { className: "text-[10px] text-slate-500 mt-1.5" }, "JPG / PNG · 最大 2MB")
         )
       ),
@@ -74,7 +75,7 @@ export function ProfileModal({ user, onClose, t }) {
     ),
     e("div", { className: "px-5 py-2.5 border-t border-white/[0.06] flex justify-end gap-2" },
       e("button", { onClick: onClose, className: "rounded-md border border-white/10 px-3 py-1 text-[11px] text-slate-300 hover:bg-white/[0.04]" }, t("取消")),
-      e("button", { className: "rounded-md bg-purple-600 hover:bg-purple-500 px-3 py-1 text-[11px] font-medium text-white" }, t("保存"))
+      e("button", { disabled: true, title: "待接入", className: "rounded-md bg-purple-600/40 px-3 py-1 text-[11px] font-medium text-white/50 opacity-60 cursor-not-allowed" }, t("保存"))
     )
   );
 }

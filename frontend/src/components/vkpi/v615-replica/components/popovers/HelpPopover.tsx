@@ -59,7 +59,7 @@ export function HelpPopover({ onClose, anchorRef, t, onOpenDocs, onOpenShortcuts
             e("div", { className: "text-[10px] text-slate-400 mb-1" }, t("Viltrox 唯卓仕 · 北美组")),
             e("div", { className: "flex items-center gap-2 text-[10px]" },
               e("a", { 
-                href: "#", className: "flex items-center gap-1 text-blue-300 hover:text-blue-200"
+                className: "flex items-center gap-1 text-slate-400"
               }, e(MessageCircle, { size: 10 }), t("飞书")),
               e("span", { className: "text-slate-600" }, "·"),
               e("span", { className: "text-slate-400" }, "+1-8582269427")

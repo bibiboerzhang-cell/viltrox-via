@@ -75,15 +75,15 @@ export function PublishPreviewModal({ item, onClose }) {
             e("div", { className: "text-[14px] font-semibold text-white" }, s.value)
           ))
         ),
-        // Actions
+        // Actions(2026-06-12 死按钮诚实化:审批/编辑时间/提醒 KOL 无写接口 → disabled+待接入;取消 → 关闭弹窗)
         e("div", { className: "flex flex-wrap gap-2 pt-2" },
-          e("button", { className: "flex items-center gap-1 rounded-md bg-purple-600 hover:bg-purple-500 px-3 py-1.5 text-[11px] font-medium text-white" },
+          e("button", { disabled: true, title: "待接入", className: "flex items-center gap-1 rounded-md bg-purple-600/40 px-3 py-1.5 text-[11px] font-medium text-white/50 opacity-60 cursor-not-allowed" },
             e(Check, { size: 11 }), t("审批通过")),
-          e("button", { className: "flex items-center gap-1 rounded-md border border-white/[0.12] px-3 py-1.5 text-[11px] text-slate-300 hover:bg-white/[0.04]" },
+          e("button", { disabled: true, title: "待接入", className: "flex items-center gap-1 rounded-md border border-white/[0.12] px-3 py-1.5 text-[11px] text-slate-500 opacity-60 cursor-not-allowed" },
             e(Edit3, { size: 11 }), "编辑时间"),
-          e("button", { className: "flex items-center gap-1 rounded-md border border-white/[0.12] px-3 py-1.5 text-[11px] text-slate-300 hover:bg-white/[0.04]" },
+          e("button", { disabled: true, title: "待接入", className: "flex items-center gap-1 rounded-md border border-white/[0.12] px-3 py-1.5 text-[11px] text-slate-500 opacity-60 cursor-not-allowed" },
             e(Bell, { size: 11 }), "提醒 KOL"),
-          e("button", { className: "flex items-center gap-1 ml-auto rounded-md border border-red-500/30 px-3 py-1.5 text-[11px] text-red-300 hover:bg-red-500/[0.06]" },
+          e("button", { onClick: onClose, className: "flex items-center gap-1 ml-auto rounded-md border border-red-500/30 px-3 py-1.5 text-[11px] text-red-300 hover:bg-red-500/[0.06]" },
             e(X, { size: 11 }), "取消")
         )
       )

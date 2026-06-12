@@ -103,7 +103,7 @@ export function TeamModal({ user, staff, onClose, onImpersonate, t, onOpenEditGr
                   e("div", { className: "text-[11px] text-white" }, s.name),
                   e("div", { className: "text-[10px] text-slate-500" }, s.title)
                 ),
-                e("button", { className: "text-[10px] text-purple-300 hover:text-purple-200" }, t("@ 提及"))
+                e("button", { className: "text-[10px] text-white/25", disabled: true, title: "提及待接入" }, t("@ 提及"))
               ))
             )
           )

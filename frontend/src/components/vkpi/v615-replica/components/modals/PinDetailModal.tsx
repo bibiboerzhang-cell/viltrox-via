@@ -10,6 +10,8 @@ const e = React.createElement;
 
 export function PinDetailModal({ pin, mode, onClose }) {
   if (!pin) return null;
+  // 2026-06-12 死按钮诚实化:无后端/路由的 CTA 一律 disabled+待接入;Open in maps 接真 Google Maps 查询
+  const pendingBtnFull = "w-full rounded-lg border border-white/[0.1] bg-white/[0.03] py-2 text-sm text-slate-500 opacity-60 cursor-not-allowed";
   return e(motion.div, {
     initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 },
     className: "v615-modal fixed inset-0 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4",
@@ -65,8 +67,8 @@ export function PinDetailModal({ pin, mode, onClose }) {
             e("span", { className: "shrink-0 rounded px-2 py-0.5 text-[10px]", style: { background: `${mode.color}22`, color: mode.color } }, v.type)
           ))
         ),
-        e("button", { key: "kk2",
-          className: "w-full rounded-lg border border-violet-500/30 bg-violet-500/[0.08] py-2 text-sm text-violet-300 hover:bg-violet-500/[0.14]"
+        e("button", { key: "kk2", disabled: true, title: "待接入",
+          className: pendingBtnFull
         }, "View full profile →")
       ],
 
@@ -94,6 +96,11 @@ export function PinDetailModal({ pin, mode, onClose }) {
           e("div", { className: "mt-1 text-sm text-white" }, pin.note || "—")
         ),
         e("button", { key: "vv2",
+          onClick: () => window.open(
+            "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(pin.name || pin.label || pin.parentItem || ""),
+            "_blank", "noopener,noreferrer"
+          ),
+          title: "在 Google Maps 中打开",
           className: "w-full rounded-lg border border-white/[0.1] bg-white/[0.04] py-2 text-sm text-slate-300 hover:bg-white/[0.08]"
         }, "Open in maps →")
       ],
@@ -110,8 +117,8 @@ export function PinDetailModal({ pin, mode, onClose }) {
             e("div", { className: "mt-1 text-sm text-white" }, pin.type)
           )
         ),
-        e("button", { key: "ss2",
-          className: "w-full rounded-lg border border-emerald-500/30 bg-emerald-500/[0.08] py-2 text-sm text-emerald-300 hover:bg-emerald-500/[0.14]"
+        e("button", { key: "ss2", disabled: true, title: "待接入",
+          className: pendingBtnFull
         }, "View dealer details →")
       ]
     )

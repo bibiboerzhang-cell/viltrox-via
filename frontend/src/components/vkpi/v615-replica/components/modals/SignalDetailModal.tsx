@@ -107,7 +107,7 @@ export function SignalDetailModal({ alert, onClose }) {
           e("div", { className: "space-y-1.5" },
             alert.actions.map((a, i) => e("div", { 
               key: i, 
-              className: "flex items-start gap-2 rounded-md border border-white/[0.06] bg-white/[0.02] px-3 py-2 text-[11px] text-slate-300 hover:border-purple-500/30 hover:bg-purple-500/[0.04] cursor-pointer transition-colors" 
+              className: "flex items-start gap-2 rounded-md border border-white/[0.06] bg-white/[0.02] px-3 py-2 text-[11px] text-slate-300" 
             },
               e("span", { className: "shrink-0 flex items-center justify-center h-4 w-4 rounded-full bg-purple-500/20 text-[9px] font-bold text-purple-300" }, i + 1),
               e("span", { className: "flex-1" }, a)
@@ -121,7 +121,7 @@ export function SignalDetailModal({ alert, onClose }) {
             alert.sources.map((s, i) => e("div", { key: i, className: "flex items-center gap-2 text-[11px] text-slate-400" },
               e("span", { className: "text-slate-500" }, "→"),
               e("span", { className: "flex-1" }, `${s.name} (${s.mentions} mentions)`),
-              e("button", { className: "rounded border border-white/[0.08] px-2 py-0.5 text-[9px] text-slate-400 hover:text-white hover:border-white/[0.18]" }, "查看")
+              e("button", { className: "rounded border border-white/[0.06] px-2 py-0.5 text-[9px] text-white/25", disabled: true, title: "来源链接待接入" }, "查看")
             ))
           )
         )
@@ -134,7 +134,7 @@ export function SignalDetailModal({ alert, onClose }) {
             onClick: onClose,
             className: "rounded-md border border-white/10 bg-white/[0.03] px-3 py-1 text-[11px] text-slate-300 hover:bg-white/[0.06]"
           }, t("关闭")),
-          e("button", { className: "rounded-md px-3 py-1 text-[11px] font-medium text-white bg-purple-600 hover:bg-purple-500" }, "执行建议 →")
+          e("button", { className: "rounded-md px-3 py-1 text-[11px] font-medium text-white/40 bg-white/[0.06]", disabled: true, title: "待接入" }, "执行建议 →")
         )
       )
     )

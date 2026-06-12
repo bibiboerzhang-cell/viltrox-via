@@ -218,11 +218,11 @@ export function EventDetailModal({ event, onClose }) {
         e("div", { className: "flex gap-2" },
           e("button", { 
             className: "rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-slate-300 hover:bg-white/[0.06]" 
-          }, "Edit Plan"),
+          , disabled: true, title: "待接入" }, "Edit Plan"),
           e("button", { 
             className: "rounded-lg px-3 py-1.5 text-xs text-white",
             style: { background: event.color }
-          }, "View Full Report →")
+          , disabled: true, title: "待接入" }, "View Full Report →")
         )
       )
     )

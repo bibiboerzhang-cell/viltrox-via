@@ -169,7 +169,7 @@ export function ProjectDetailModal({ project, onClose, onOpenFullPage }) {
             : e("div", { className: "space-y-2" },
                 project.pendingPublishes.map((p, i) => {
                   const platCfg = PLATFORM_ICONS_MAP[p.platform] || PLATFORM_ICONS_MAP.default;
-                  return e("div", { key: i, className: "rounded-md border border-white/[0.06] bg-white/[0.02] p-3 hover:bg-white/[0.03] cursor-pointer flex gap-3" },
+                  return e("div", { key: i, className: "rounded-md border border-white/[0.06] bg-white/[0.02] p-3 flex gap-3" },
                     e("div", {
                       className: "shrink-0 w-9 h-9 rounded-full flex items-center justify-center text-[12px] font-bold text-white",
                       style: { background: p.color }
@@ -221,7 +221,7 @@ export function ProjectDetailModal({ project, onClose, onOpenFullPage }) {
                 className: "flex-1 bg-transparent text-[11px] text-white placeholder:text-slate-500 outline-none"
               })
             ),
-            e("button", { className: "rounded-md border border-purple-500/30 bg-purple-500/[0.08] px-3 py-1.5 text-[10px] text-purple-200 hover:bg-purple-500/[0.15]" }, t("AI 推荐"))
+            e("button", { className: "rounded-md border border-white/[0.08] px-3 py-1.5 text-[10px] text-white/25", disabled: true, title: "AI 推荐待接入" }, t("AI 推荐"))
           ),
           e("div", { className: "text-[10px] text-slate-500 mt-1 mb-1" }, t("Claude 基于品类匹配度推荐")),
           project.newKolSuggestions.length === 0
@@ -241,7 +241,7 @@ export function ProjectDetailModal({ project, onClose, onOpenFullPage }) {
                     e("span", { className: "ml-auto text-[9px] font-medium px-1.5 py-0.5 rounded", style: { background: k.fit === "高" ? "rgba(16,185,129,0.18)" : "rgba(245,158,11,0.18)", color: k.fit === "高" ? "#6ee7b7" : "#fbbf24" } }, "适合度 " + k.fit)
                   ),
                   e("div", { className: "text-[10px] text-slate-400 mb-1" }, k.reason),
-                  e("button", { className: "text-[10px] text-purple-300 hover:text-purple-200" }, t("邀请合作 →"))
+                  e("button", { className: "text-[10px] text-white/25", disabled: true, title: "邀请待接入" }, t("邀请合作 →"))
                 )
               ))
         )
