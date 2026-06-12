@@ -539,6 +539,9 @@ def _video_evidence_for_kol(kol_pool_id: int, *, limit: int = 3) -> list[dict[st
                   AND c.derive_method='video_analysis_final_v1'
                   AND c.status='ready'
             ) AS has_final_v1_cache,
+            fc.result #>> '{raw_gemini_video,viltrox_detected}' AS llm_viltrox_detected_text,
+            fc.result #> '{raw_gemini_video,viltrox_products_all}' AS llm_viltrox_products,
+            fc.result #> '{raw_gemini_video,competitor_mentions}' AS llm_competitor_mentions,
             EXISTS(
                 SELECT 1
                 FROM vkpi_analysis_cache c
@@ -548,6 +551,16 @@ def _video_evidence_for_kol(kol_pool_id: int, *, limit: int = 3) -> list[dict[st
                   AND c.status='ready'
             ) AS has_keyframe_qa_cache
         FROM vkpi_kol_video_evidence e
+        LEFT JOIN LATERAL (
+            SELECT c.result
+            FROM vkpi_analysis_cache c
+            WHERE c.target_type='video'
+              AND c.target_id=e.id::text
+              AND c.derive_method='video_analysis_final_v1'
+              AND c.status='ready'
+            ORDER BY c.id DESC
+            LIMIT 1
+        ) fc ON TRUE
         LEFT JOIN LATERAL (
             SELECT cache_url, digest
             FROM vkpi_media_cache_assets asset
@@ -601,6 +614,20 @@ def _video_evidence_for_kol(kol_pool_id: int, *, limit: int = 3) -> list[dict[st
     for row in rows:
         item = dict(row)
         platform = _platform(item.get("platform") or "")
+        # Viltrox 识别以 Gemini 深析为准(2026-06-12 裁令"视频分析要给 gemini 不然区分不出"):
+        # llm_ 前缀=LLM 产物;未深析行三键为 None,前端按"未析"诚实处理。
+        detected_text = str(item.pop("llm_viltrox_detected_text", None) or "").strip().lower()
+        item["llm_viltrox_detected"] = (detected_text == "true") if detected_text in ("true", "false") else None
+        for key in ("llm_viltrox_products", "llm_competitor_mentions"):
+            value = item.get(key)
+            if isinstance(value, str):
+                try:
+                    import json as _json
+
+                    value = _json.loads(value)
+                except Exception:
+                    value = None
+            item[key] = [str(v) for v in value if v] if isinstance(value, list) else None
         if not item.get("cached_thumbnail_url") and item.get("thumbnail_url"):
             try:
                 item["cached_thumbnail_url"] = cached_image_url(item["thumbnail_url"]) or None
