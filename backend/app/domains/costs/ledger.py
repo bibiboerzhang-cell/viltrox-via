@@ -281,6 +281,66 @@ def add_cost(body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> di
         raise LookupError("project not found")
     actor_staff_id = staff_id(staff)
     now = utcnow()
+    source_ref = str(body.get("source_ref") or "").strip()
+    # 批B #1(2026-06-12):物流/产品类成本带 source_ref 即幂等——路由层每次保存物流都调 add_cost,
+    # 按 (project_id, cost_type, source_ref) 查重,命中未作废行则 UPDATE 替代 INSERT,防双记。
+    if source_ref and cost_type in {"shipping", "product"}:
+        existing = conn.execute(
+            """
+            SELECT *
+            FROM vkpi_cost_ledger
+            WHERE project_id=? AND cost_type=? AND source_ref=? AND status!='void'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (project_id, cost_type, source_ref),
+        ).fetchone()
+        if existing:
+            old = dict(existing)
+            old_metadata = old.get("metadata_json")
+            metadata_value = (
+                _json(body.get("metadata"))
+                if body.get("metadata") is not None
+                else (old_metadata if isinstance(old_metadata, str) else _json(old_metadata))
+            )
+            conn.execute(
+                """
+                UPDATE vkpi_cost_ledger
+                SET amount_cents=?, currency=?, status=?, incurred_at=?, note=?, metadata_json=?, updated_at=?
+                WHERE id=?
+                """,
+                (
+                    amount_cents,
+                    str(body.get("currency") or old.get("currency") or "USD"),
+                    str(body.get("status") or old.get("status") or "actual"),
+                    str(body.get("incurred_at") or old.get("incurred_at") or now),
+                    str(body.get("note") or old.get("note") or ""),
+                    metadata_value,
+                    now,
+                    int(old["id"]),
+                ),
+            )
+            conn.commit()
+            fresh = dict(conn.execute("SELECT * FROM vkpi_cost_ledger WHERE id=?", (int(old["id"]),)).fetchone())
+            audit.log_business_event(
+                staff_id=actor_staff_id,
+                action_type="cost_edit",
+                target_type="cost",
+                target_id=int(old["id"]),
+                detail=f"{cost_type}:{amount_cents} (source_ref idempotent update)",
+                metadata={
+                    "project_id": project_id,
+                    "kol_id": fresh.get("kol_id"),
+                    "staff_id": fresh.get("staff_id"),
+                    "cost_id": int(old["id"]),
+                    "cost_type": cost_type,
+                    "amount_cents": amount_cents,
+                    "old_amount_cents": _int(old.get("amount_cents")),
+                    "source_ref": source_ref,
+                    "idempotent_update": True,
+                },
+            )
+            return {"cost": fresh, "idempotent_update": True}
     conn.execute(
         """
         INSERT INTO vkpi_cost_ledger (
@@ -297,7 +357,7 @@ def add_cost(body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> di
             str(body.get("currency") or "USD"),
             str(body.get("status") or "actual"),
             str(body.get("incurred_at") or now),
-            str(body.get("source_ref") or ""),
+            source_ref,
             str(body.get("note") or ""),
             actor_staff_id or None,
             _json(body.get("metadata")),

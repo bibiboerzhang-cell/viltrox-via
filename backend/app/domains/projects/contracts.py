@@ -214,48 +214,73 @@ def _apply_extraction(conn: Any, contract_id: int, project_id: int, staff: dict[
     must_include = _list(data.get("must_include"))
     fee_amount = _float_or_none(data.get("fee_amount"))
     now = utcnow()
-    conn.execute(
-        """
-        UPDATE vkpi_project_contracts
-        SET status='extracted', extraction_status='ready',
-            fee_amount=?, fee_currency=?, contract_duration=?, start_date=?, end_date=?,
-            platforms_json=?::jsonb, deliverable_count=?, deliverables_json=?::jsonb,
-            must_include_json=?::jsonb, usage_rights=?, exclusivity=?, buyout_rights=?,
-            breach_terms=?, payment_terms=?, cancellation_terms=?, revision_terms=?,
-            raw_extracted_json=?::jsonb, field_confidence_json=?::jsonb,
-            promised_platforms_json=?::jsonb, promised_deliverables_json=?::jsonb,
-            promised_publish_deadline=?, promised_must_include_json=?::jsonb,
-            updated_at=?
-        WHERE id=? AND project_id=?
-        """,
-        (
-            fee_amount,
-            str(data.get("fee_currency") or "USD"),
-            str(data.get("contract_duration") or ""),
-            _date(data.get("start_date")),
-            _date(data.get("end_date")),
-            _json(platforms),
-            _int(data.get("deliverable_count")) or (len(deliverables) if deliverables else None),
-            _json(deliverables),
-            _json(must_include),
-            str(data.get("usage_rights") or ""),
-            str(data.get("exclusivity") or ""),
-            str(data.get("buyout_rights") or ""),
-            str(data.get("breach_terms") or ""),
-            str(data.get("payment_terms") or ""),
-            str(data.get("cancellation_terms") or ""),
-            str(data.get("revision_terms") or ""),
-            _json(data),
-            _json(confidence),
-            _json(platforms),
-            _json(deliverables),
-            data.get("promised_publish_deadline") or None,
-            _json(must_include),
-            now,
-            int(contract_id),
-            int(project_id),
-        ),
-    )
+    # 批B #3(2026-06-12):异步提取不得覆盖人工确认——status='confirmed' 时只存提取结果
+    # (raw/confidence 提取字段),不降级状态、不覆盖人工确认过的业务字段,留 audit。
+    current = conn.execute(
+        "SELECT status FROM vkpi_project_contracts WHERE id=? AND project_id=?",
+        (int(contract_id), int(project_id)),
+    ).fetchone()
+    is_confirmed = bool(current and str(dict(current).get("status") or "") == "confirmed")
+    if is_confirmed:
+        conn.execute(
+            """
+            UPDATE vkpi_project_contracts
+            SET extraction_status='ready', raw_extracted_json=?::jsonb, field_confidence_json=?::jsonb, updated_at=?
+            WHERE id=? AND project_id=?
+            """,
+            (_json(data), _json(confidence), now, int(contract_id), int(project_id)),
+        )
+        audit.log_business_event(
+            staff_id=staff_id(staff) or None,
+            action_type="contract_extraction_preserved_confirmed",
+            target_type="project_contract",
+            target_id=int(contract_id),
+            detail="提取完成但合同已人工确认:状态保持 confirmed,仅存提取结果,不覆盖人工字段",
+            metadata={"project_id": int(project_id), "contract_id": int(contract_id), "status": "confirmed"},
+        )
+    else:
+        conn.execute(
+            """
+            UPDATE vkpi_project_contracts
+            SET status='extracted', extraction_status='ready',
+                fee_amount=?, fee_currency=?, contract_duration=?, start_date=?, end_date=?,
+                platforms_json=?::jsonb, deliverable_count=?, deliverables_json=?::jsonb,
+                must_include_json=?::jsonb, usage_rights=?, exclusivity=?, buyout_rights=?,
+                breach_terms=?, payment_terms=?, cancellation_terms=?, revision_terms=?,
+                raw_extracted_json=?::jsonb, field_confidence_json=?::jsonb,
+                promised_platforms_json=?::jsonb, promised_deliverables_json=?::jsonb,
+                promised_publish_deadline=?, promised_must_include_json=?::jsonb,
+                updated_at=?
+            WHERE id=? AND project_id=?
+            """,
+            (
+                fee_amount,
+                str(data.get("fee_currency") or "USD"),
+                str(data.get("contract_duration") or ""),
+                _date(data.get("start_date")),
+                _date(data.get("end_date")),
+                _json(platforms),
+                _int(data.get("deliverable_count")) or (len(deliverables) if deliverables else None),
+                _json(deliverables),
+                _json(must_include),
+                str(data.get("usage_rights") or ""),
+                str(data.get("exclusivity") or ""),
+                str(data.get("buyout_rights") or ""),
+                str(data.get("breach_terms") or ""),
+                str(data.get("payment_terms") or ""),
+                str(data.get("cancellation_terms") or ""),
+                str(data.get("revision_terms") or ""),
+                _json(data),
+                _json(confidence),
+                _json(platforms),
+                _json(deliverables),
+                data.get("promised_publish_deadline") or None,
+                _json(must_include),
+                now,
+                int(contract_id),
+                int(project_id),
+            ),
+        )
     cost = _record_contract_cost(contract_id, project_id, staff, extraction)
     conn.execute(
         """
@@ -283,10 +308,12 @@ def _apply_extraction(conn: Any, contract_id: int, project_id: int, staff: dict[
 
 
 def _mark_failed(conn: Any, contract_id: int, project_id: int, error: str) -> None:
+    # 已人工确认的合同不因提取失败降级状态(批B #3),仅记 extraction_status='failed'
     conn.execute(
         """
         UPDATE vkpi_project_contracts
-        SET status='needs_review', extraction_status='failed',
+        SET status=CASE WHEN status='confirmed' THEN status ELSE 'needs_review' END,
+            extraction_status='failed',
             raw_extracted_json=?::jsonb, updated_at=?
         WHERE id=? AND project_id=?
         """,
@@ -379,34 +406,8 @@ def create_contract_from_file(
     return enqueue_contract_extract_job(project_id, contract_id, staff=staff)
 
 
-def run_contract_extraction(
-    project_id: int,
-    contract_id: int,
-    *,
-    local_path: str | None = None,
-    context: dict[str, Any] | None = None,
-    staff: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    contract = get_contract(project_id, contract_id, staff=staff, write=True)
-    if not str(contract.get("file_name") or "").lower().endswith(".pdf"):
-        return {"contract": contract, "extraction": {"status": "skipped", "reason": "not_pdf"}}
-    conn = get_conn()
-    file_size = _int(contract.get("file_size_bytes"))
-    budget = _budget_preflight(file_size)
-    if not budget.get("allowed"):
-        _mark_failed(conn, contract_id, project_id, "budget_guard_blocked")
-        raise RuntimeError("budget_guard_blocked")
-    if not context:
-        context = _assignment_context(conn, int(project_id), _int(contract.get("assignment_id")) or None, _int(contract.get("kol_pool_id")) or None)
-    conn.execute(
-        "UPDATE vkpi_project_contracts SET extraction_status='processing', status='needs_review', updated_at=? WHERE id=? AND project_id=?",
-        (utcnow(), int(contract_id), int(project_id)),
-    )
-    conn.commit()
-    result = _run_contract_extraction_core(
-        conn, project_id, contract_id, contract=contract, context=context, staff=staff, local_path=local_path
-    )
-    return {"contract": get_contract(project_id, contract_id, staff=staff), "budget": budget, **result}
+# 批B #9(2026-06-12):同步路径 run_contract_extraction 已删——全仓无调用方
+# (F2 裁决后提取统一走 enqueue_contract_extract_job → apify worker → run_contract_extraction_for_job)。
 
 
 def _run_contract_extraction_core(
@@ -419,8 +420,8 @@ def _run_contract_extraction_core(
     staff: dict[str, Any] | None,
     local_path: str | None = None,
 ) -> dict[str, Any]:
-    """Heavy extraction body (R2 download → Claude subprocess → apply), shared by the sync
-    path (run_contract_extraction) and the apify worker handler.
+    """Heavy extraction body (R2 download → Claude subprocess → apply), called by the
+    apify worker handler (run_contract_extraction_for_job). 同步路径已删(批B #9)。
 
     Caller guarantees the contract is a PDF and already marked extraction_status='processing'.
     Keeps the 120s subprocess timeout; on failure marks the contract failed and re-raises.
@@ -506,8 +507,15 @@ def enqueue_contract_extract_job(
         "triggered_by_user_id": _triggered_by_user_id(staff),
         "staff_id": _ledger_staff_id(staff),
     }
+    # 已确认合同重提取:保持 confirmed,不降级为 needs_review(批B #3)
     conn.execute(
-        "UPDATE vkpi_project_contracts SET extraction_status='processing', status='needs_review', updated_at=? WHERE id=? AND project_id=?",
+        """
+        UPDATE vkpi_project_contracts
+        SET extraction_status='processing',
+            status=CASE WHEN status='confirmed' THEN status ELSE 'needs_review' END,
+            updated_at=?
+        WHERE id=? AND project_id=?
+        """,
         (utcnow(), int(contract_id), int(project_id)),
     )
     job = conn.execute(
@@ -610,8 +618,19 @@ def update_contract(project_id: int, contract_id: int, body: dict[str, Any], *, 
 
 
 def confirm_contract(project_id: int, contract_id: int, body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    body = body or {}
     if body:
         update_contract(project_id, contract_id, body, staff=staff)
+    # 批B #4(2026-06-12):空 body 绕写闸修复——确认前校验 fee_amount>0,
+    # 或显式 confirm_no_fee=true(置换/无费合同),否则 400 语义 ValueError。
+    contract = get_contract(project_id, contract_id, staff=staff, write=True)
+    try:
+        fee = float(contract.get("fee_amount") or 0)
+    except (TypeError, ValueError):
+        fee = 0.0
+    confirm_no_fee = str(body.get("confirm_no_fee")).strip().lower() in {"1", "true", "yes"}
+    if fee <= 0 and not confirm_no_fee:
+        raise ValueError("fee_amount must be > 0 to confirm contract (or set confirm_no_fee=true for a no-fee contract)")
     conn = get_conn()
     now = utcnow()
     conn.execute(
@@ -701,6 +720,39 @@ def contract_download_url(project_id: int, contract_id: int, *, staff: dict[str,
 def delete_contract(project_id: int, contract_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     contract = get_contract(project_id, contract_id, staff=staff, write=True)
     conn = get_conn()
+    # 批B #2(2026-06-12):删除合同(含已确认)时联动作废其签约费账本行——
+    # 标记 voided(经 void_cost 应用路径,自动 audit)+ metadata 留痕,防幽灵 cash_fee 留在账本。
+    from app.domains.costs import ledger as cost_ledger
+
+    fee_source_ref = f"contract:{int(contract_id)}"
+    fee_rows = conn.execute(
+        "SELECT id, metadata_json FROM vkpi_cost_ledger WHERE project_id=? AND cost_type='cash_fee' AND source_ref=? AND status!='void'",
+        (int(project_id), fee_source_ref),
+    ).fetchall()
+    voided_cost_ids: list[int] = []
+    for fee_row in fee_rows:
+        fee_item = dict(fee_row)
+        cost_ledger.void_cost(int(fee_item["id"]), {"reason": f"contract_deleted:{int(contract_id)}"}, staff=staff)
+        old_meta = fee_item.get("metadata_json")
+        if isinstance(old_meta, str):
+            try:
+                old_meta = json.loads(old_meta or "{}")
+            except Exception:
+                old_meta = {}
+        old_meta = old_meta if isinstance(old_meta, dict) else {}
+        conn.execute(
+            "UPDATE vkpi_cost_ledger SET metadata_json=?, updated_at=? WHERE id=?",
+            (
+                json.dumps(
+                    {**old_meta, "voided_reason": "contract_deleted", "voided_contract_id": int(contract_id)},
+                    ensure_ascii=False,
+                ),
+                utcnow(),
+                int(fee_item["id"]),
+            ),
+        )
+        conn.commit()
+        voided_cost_ids.append(int(fee_item["id"]))
     conn.execute(
         "DELETE FROM vkpi_analysis_cache WHERE target_type='contract' AND target_id=? AND derive_method=?",
         (str(int(contract_id)), CONTRACT_DERIVE_METHOD),
@@ -733,6 +785,7 @@ def delete_contract(project_id: int, contract_id: int, *, staff: dict[str, Any] 
             "r2_key": r2_key,
             "r2_deleted": r2_deleted,
             "status_before": contract.get("status"),
+            "voided_cost_ids": voided_cost_ids,
         },
     )
-    return {"deleted": True, "contract_id": int(contract_id), "r2_deleted": r2_deleted}
+    return {"deleted": True, "contract_id": int(contract_id), "r2_deleted": r2_deleted, "voided_cost_ids": voided_cost_ids}

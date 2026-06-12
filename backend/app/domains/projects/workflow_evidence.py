@@ -14,7 +14,32 @@ from app.db.connection import get_conn, is_postgres_runtime
 from app.domains import audit
 from app.domains.access import scope
 from app.platform.db.schema import ensure_vkpi_schema
-from app.domains.projects.workflow_common import _amount_cents, _int, _json, _loads, normalize_stage, staff_id, utcnow
+from app.domains.projects.workflow_common import SIDE_STAGES, _amount_cents, _int, _json, _loads, normalize_stage, staff_id, utcnow
+
+# 批B #5(2026-06-12):assignment 阶段受控集合 = assignment 词表 + side stages。
+# normalize_stage 是单跳别名表,delivered→received / posted→published 落在项目词表,
+# 这里二跳归一到 assignment 词表后再校验,词表外一律拒收。
+_ASSIGNMENT_STAGE_FALLBACK_ALIASES = {
+    "discovery": "discovered",
+    "shipped": "device_sent",
+    "received": "arrived",
+    "published": "content_posted",
+    "measured": "reviewed",
+}
+ASSIGNMENT_STAGES = {
+    "discovered",
+    "contacted",
+    "replied",
+    "agreed",
+    "device_sent",
+    "arrived",
+    "content_posted",
+    "reviewed",
+    "closed",
+    "churned",
+}
+_CONTROLLED_ASSIGNMENT_STAGES = ASSIGNMENT_STAGES | SIDE_STAGES
+
 
 def _db_bool(value: Any) -> bool | int:
     return bool(value) if is_postgres_runtime() else (1 if value else 0)
@@ -52,6 +77,9 @@ def advance_project_kol_assignment(project_id: int, kol_ref: str | int, body: di
     to_stage = normalize_stage(str(body.get("to_stage") or body.get("stage") or body.get("action") or "").strip())
     if not to_stage:
         raise ValueError("to_stage required")
+    to_stage = _ASSIGNMENT_STAGE_FALLBACK_ALIASES.get(to_stage, to_stage)
+    if to_stage not in _CONTROLLED_ASSIGNMENT_STAGES:
+        raise ValueError("unsupported stage")
     now = utcnow()
     terminal_status = to_stage if to_stage in {"stalled", "lost", "released", "cancelled"} else "active"
     metadata = _loads(row["metadata_json"])
@@ -553,7 +581,10 @@ def record_project_kol_video(project_id: int, kol_ref: str | int, body: dict[str
         "scrape_source": metadata.get("scrape_source"),
     })
     current_stage = _text(row["stage"]).lower()
-    next_stage = "content_posted" if current_stage not in {"content_posted", "reviewed", "closed", "churned"} else current_stage
+    # 批B #6(2026-06-12):只前进不后退——published/measured(历史项目词表行)/reviewed/
+    # content_posted 及终态之后补录视频,不把阶段倒退回 content_posted。
+    _no_regress_stages = {"content_posted", "published", "measured", "reviewed", "closed", "churned"}
+    next_stage = "content_posted" if current_stage not in _no_regress_stages else current_stage
     conn.execute(
         """
         UPDATE vkpi_project_kol_assignments
