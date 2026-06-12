@@ -522,7 +522,7 @@ def _video_evidence_for_kol(kol_pool_id: int, *, limit: int = 3) -> list[dict[st
             COALESCE(NULLIF(e.title, ''), NULLIF(e.video_title, ''), NULLIF(e.content_url, '')) AS title,
             e.video_title,
             e.thumbnail_url,
-            NULL::text AS cached_thumbnail_url,
+            COALESCE(NULLIF(mimg.cache_url, ''), CASE WHEN COALESCE(mimg.digest, '') != '' THEN '/api/vkpi-media/video-cache/' || mimg.digest ELSE NULL END) AS cached_thumbnail_url,
             COALESCE(NULLIF(m.cache_url, ''), CASE WHEN COALESCE(m.digest, '') != '' THEN '/api/vkpi-media/video-cache/' || m.digest ELSE NULL END) AS cached_video_url,
             e.view_count,
             e.like_count,
@@ -548,6 +548,16 @@ def _video_evidence_for_kol(kol_pool_id: int, *, limit: int = 3) -> list[dict[st
                   AND c.status='ready'
             ) AS has_keyframe_qa_cache
         FROM vkpi_kol_video_evidence e
+        LEFT JOIN LATERAL (
+            SELECT cache_url, digest
+            FROM vkpi_media_cache_assets asset
+            WHERE asset.media_kind='image'
+              AND asset.status='cached'
+              AND COALESCE(e.thumbnail_url, '') != ''
+              AND asset.source_url = e.thumbnail_url
+            ORDER BY asset.id DESC
+            LIMIT 1
+        ) mimg ON TRUE
         LEFT JOIN LATERAL (
             SELECT cache_url, digest, r2_key
             FROM vkpi_media_cache_assets asset

@@ -1,3 +1,5 @@
+/* base 遮罩(fixed+backdrop)随变体自带——MY KOL 等引用方曾漏 base 致 lightbox 塌版 */
+@import "./channel-content-overlays.css";
 .vkpi-my-kol-content-layer__header {
   display: flex;
   align-items: flex-start;

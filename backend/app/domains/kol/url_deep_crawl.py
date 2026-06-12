@@ -7,6 +7,10 @@ V6 Fit fields.
 """
 from __future__ import annotations
 
+from app.core.logging import get_logger
+
+logger = get_logger("viltrox.domains.kol.url_deep_crawl")
+
 import json
 import re
 import time
@@ -2392,4 +2396,28 @@ def run_profile_deep_crawl_for_job(payload: dict[str, Any], *, staff: dict[str, 
         "source": "queue:kol_profile_deep_crawl",
     }
     _ = staff  # 身份留痕在 payload(triggered_by/staff_id);内核签名不收 staff
-    return dry_run_url_deep_crawl(body)
+    result = dry_run_url_deep_crawl(body)
+    # 媒体进 R2(2026-06-12 裁令:"理论都是在 R2 然后回传"):深爬产出的 evidence
+    # 缩略图(cache_image)与非 YT 平台视频(cache_video_for_item,YT 走 embed 不缓存)
+    # 就地喂缓存——失败不毁任务(媒体缓存属增强,非主链)。
+    kol_pool_id = payload.get("kol_pool_id")
+    if kol_pool_id:
+        try:
+            from app.domains.media.cache import cache_image, cache_video_for_item
+
+            conn = get_conn()
+            rows = conn.execute(
+                "SELECT id, platform, content_url, thumbnail_url FROM vkpi_kol_video_evidence "
+                "WHERE kol_pool_id=? ORDER BY id DESC LIMIT 5",
+                (int(kol_pool_id),),
+            ).fetchall()
+            for row in rows:
+                item = dict(row)
+                if item.get("thumbnail_url"):
+                    cache_image(item["thumbnail_url"])
+                platform_key = str(item.get("platform") or "").lower()
+                if platform_key and platform_key != "youtube" and item.get("content_url"):
+                    cache_video_for_item(platform_key, str(item["id"]), item["content_url"])
+        except Exception:
+            logger.warning("deep_crawl media r2 warm failed kol_pool_id=%s", kol_pool_id)
+    return result
