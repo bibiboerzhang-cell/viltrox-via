@@ -170,11 +170,16 @@ export function EmployeeKolContentLayer({
   kol,
   projects,
   viltroxOnly = true,
+  postsOverride,
+  subtitle,
 }: {
   apiToken?: string;
   kol?: VkpiKolOption;
   projects: VkpiProjectRow[];
   viltroxOnly?: boolean;
+  /** Pool 收藏行旁路(C4-full):evidence 已映射好的 PostPreview 直接喂入,跳过 kol posts 接口。 */
+  postsOverride?: PostPreview[];
+  subtitle?: string;
 }) {
   const [postState, setPostState] = useState(emptyPostState);
   const [commentState, setCommentState] = useState(emptyCommentState);
@@ -212,6 +217,10 @@ export function EmployeeKolContentLayer({
     setPage(1);
     setPostState(emptyPostState());
     setCommentState(emptyCommentState());
+    if (postsOverride) {
+      setPostState({ items: postsOverride, total: postsOverride.length, loading: false, error: '' });
+      return undefined;
+    }
     if (!apiToken || !kol?.id) return undefined;
 
     let cancelled = false;
@@ -274,7 +283,7 @@ export function EmployeeKolContentLayer({
       cancelled = true;
       if (postTimer) window.clearTimeout(postTimer);
     };
-  }, [apiToken, kol?.id]);
+  }, [apiToken, kol?.id, postsOverride]);
 
   useEffect(() => {
     if (!commentPost) return;
@@ -305,7 +314,7 @@ export function EmployeeKolContentLayer({
         <div>
           <span>VILTROX 相关内容</span>
           <h3>{kol.name}</h3>
-          <p>{viltroxOnly ? '全平台 Viltrox 内容' : '全平台全部内容'} · {filteredPosts.length} / {postState.total || postState.items.length} 条</p>
+          <p>{subtitle || (viltroxOnly ? '全平台 Viltrox 内容' : '全平台全部内容')} · {filteredPosts.length} / {postState.total || postState.items.length} 条</p>
         </div>
         {kol.profileUrl ? (
           <a href={kol.profileUrl} target="_blank" rel="noreferrer" aria-label="打开主页"><ExternalLink size={17} /></a>

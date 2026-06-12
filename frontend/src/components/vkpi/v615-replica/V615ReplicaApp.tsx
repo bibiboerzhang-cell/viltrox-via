@@ -100,8 +100,16 @@ export function V615ReplicaApp(props: any = {}) {
     const handleOpenKolSearchSession = () => {
       setActiveNav("kol-pool");
     };
+    // 从哪发起回哪去(2026-06-12):账号分析任务点开切回 MY KOL(行定位由 MyKolPage 自取 pending key)
+    const handleOpenMyKolKol = () => {
+      setActiveNav("my-kol");
+    };
     window.addEventListener("vkpi:open-kol-search-session", handleOpenKolSearchSession);
-    return () => window.removeEventListener("vkpi:open-kol-search-session", handleOpenKolSearchSession);
+    window.addEventListener("vkpi:open-mykol-kol", handleOpenMyKolKol);
+    return () => {
+      window.removeEventListener("vkpi:open-kol-search-session", handleOpenKolSearchSession);
+      window.removeEventListener("vkpi:open-mykol-kol", handleOpenMyKolKol);
+    };
   }, []);
   
   // 层级 state

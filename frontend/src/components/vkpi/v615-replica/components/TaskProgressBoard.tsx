@@ -109,6 +109,33 @@ function openSearchSessionFromTask(task) {
   window.dispatchEvent(new CustomEvent("vkpi:open-kol-search-session", { detail: { sessionId, task } }));
 }
 
+function taskMyKolPoolId(task) {
+  const target = task?.target && typeof task.target === "object" ? task.target : {};
+  const poolId = Number(target.target_id);
+  return String(target.target_type || "") === "kol_profile" && Number.isFinite(poolId) && poolId > 0 ? poolId : undefined;
+}
+
+// 从哪发起回哪去(2026-06-12 裁令):账号分析(kol_profile)点开回 MY KOL 并定位该收藏行,
+// 其余仍走 KOL Pool 查找会话。
+function openTaskOrigin(task) {
+  const poolId = taskMyKolPoolId(task);
+  if (poolId && typeof window !== "undefined") {
+    window.localStorage.setItem("vkpi:pending-mykol-pool-id", String(poolId));
+    window.dispatchEvent(new CustomEvent("vkpi:open-mykol-kol", { detail: { kolPoolId: poolId, task } }));
+    return;
+  }
+  openSearchSessionFromTask(task);
+}
+
+function taskCanOpen(task) {
+  return Boolean(taskMyKolPoolId(task) || taskSearchSessionId(task));
+}
+
+function taskInitiatorChip(task) {
+  const initiator = task?.initiator_user_id || task?.initiator_staff_id;
+  return initiator ? `用户 ${initiator}` : "";
+}
+
 function lightColor(light) {
   const tone = String(light?.tone || "").toLowerCase();
   if (tone === "red") return "#fb7185";
@@ -120,21 +147,22 @@ function TaskRow({ task, color, showBar }) {
   const rawProgress = task.progress_pct ?? task.progress;
   const hasProgress = Number.isFinite(Number(rawProgress));
   const progress = Math.max(6, Math.min(100, Number(rawProgress || 0)));
-  const canOpen = Boolean(taskSearchSessionId(task));
+  const canOpen = taskCanOpen(task);
   const retryText = taskRetryText(task);
   return e("button", {
     type: "button",
-    onClick: canOpen ? () => openSearchSessionFromTask(task) : undefined,
+    onClick: canOpen ? () => openTaskOrigin(task) : undefined,
     disabled: !canOpen,
     className: `block w-full min-w-0 text-left ${canOpen ? "cursor-pointer rounded-md transition-colors hover:bg-white/[0.045]" : "cursor-default"} disabled:cursor-default`,
-    title: canOpen ? "打开这次查找记录" : "",
+    title: canOpen ? (taskMyKolPoolId(task) ? "回到 MY KOL 查看该 KOL" : "打开这次查找记录") : "",
   },
     e("div", { className: "flex items-center gap-1.5 min-w-0" },
       e("span", {
         className: `h-[5px] w-[5px] shrink-0 rounded-full ${showBar ? "animate-pulse" : ""}`,
         style: { background: color }
       }),
-      e("span", { className: "truncate text-[11px] leading-4 text-white/70" }, taskLabel(task))
+      e("span", { className: "truncate text-[11px] leading-4 text-white/70" }, taskLabel(task)),
+      taskInitiatorChip(task) && e("span", { className: "shrink-0 text-[9px] text-white/30" }, taskInitiatorChip(task))
     ),
     retryText && e("div", { className: "ml-[11px] truncate text-[10px] leading-4 text-white/35" }, retryText),
     showBar && (
@@ -265,7 +293,7 @@ export function TaskProgressBoard({ apiToken = "" }) {
   const remainingQueue = Math.max(0, queueTotal - visibleQueue.length);
   // 账号分析等队列任务 ~8 秒即完成,若按 session 过滤会"一闪而过"再无痕迹——
   // 即使 payload 暂缺 search_session_id 也保底留在「最近完成」(无 session 时不可点开)。
-  const visibleRecent = recentTasks.filter((task) => taskSearchSessionId(task) || task?.kind === "账号分析").slice(0, 2);
+  const visibleRecent = recentTasks.filter((task) => taskCanOpen(task) || task?.kind === "账号分析").slice(0, 2);
   const emptyActive = activeTotal === 0 && !loading && !error;
 
   return e("div", {
@@ -316,13 +344,16 @@ export function TaskProgressBoard({ apiToken = "" }) {
           ? visibleQueue.map((task, index) => e("button", {
             key: task.id,
             type: "button",
-            onClick: taskSearchSessionId(task) ? () => openSearchSessionFromTask(task) : undefined,
-            disabled: !taskSearchSessionId(task),
+            onClick: taskCanOpen(task) ? () => openTaskOrigin(task) : undefined,
+            disabled: !taskCanOpen(task),
             className: "flex min-w-0 items-start gap-1.5 text-left disabled:cursor-default"
           },
             e("span", { className: "w-[18px] shrink-0 text-[10px] text-white/40 tabular-nums" }, `#${Number.isFinite(Number(task?.queue_position)) ? Number(task.queue_position) : index + 1}`),
             e("span", { className: "min-w-0 flex-1" },
-              e("span", { className: "block truncate text-[11px] text-white/60" }, taskLabel(task)),
+              e("span", { className: "block truncate text-[11px] text-white/60" },
+                taskLabel(task),
+                taskInitiatorChip(task) && e("span", { className: "ml-1 text-[9px] text-white/30" }, taskInitiatorChip(task))
+              ),
               taskEtaText(task) && e("span", { className: "block truncate text-[10px] text-emerald-300/70" }, taskEtaText(task)),
               taskRetryText(task) && e("span", { className: "block truncate text-[10px] text-white/30" }, taskRetryText(task))
             )
@@ -343,7 +374,7 @@ export function TaskProgressBoard({ apiToken = "" }) {
         visibleRecent.map((task) => e("button", {
           key: `recent-${task.id}`,
           type: "button",
-          onClick: () => openSearchSessionFromTask(task),
+          onClick: () => openTaskOrigin(task),
           className: "flex min-w-0 items-center justify-between gap-2 rounded-md border border-emerald-300/10 bg-emerald-400/[0.045] px-2 py-1 text-left hover:bg-emerald-400/[0.08]"
         },
           e("span", { className: "truncate text-[10.5px] text-white/65" }, taskLabel(task)),
