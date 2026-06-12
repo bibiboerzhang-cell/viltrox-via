@@ -57,6 +57,15 @@ def projects(
     return workflow.list_projects(limit=limit, stage=stage, staff=staff, staff_id_filter=staff_id, starred_only=starred)
 
 
+@router.get("/projects/contract-templates")
+def get_contract_templates(staff=Depends(require_tab("vkpi", "read"))) -> dict:
+    """合同模板目录(2026-06-12 生成器 v1):槽位 schema 供前端表单渲染。"""
+    del staff
+    from app.domains.projects import contract_generator
+
+    return contract_generator.list_templates()
+
+
 @router.get("/projects/{project_id}")
 def project_detail(project_id: int, staff=Depends(require_tab("vkpi", "read"))):
     try:
@@ -119,15 +128,6 @@ def project_contracts(project_id: int, staff=Depends(require_tab("vkpi", "read")
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
-
-
-@router.get("/projects/contract-templates")
-def get_contract_templates(staff=Depends(require_tab("vkpi", "read"))) -> dict:
-    """合同模板目录(2026-06-12 生成器 v1):槽位 schema 供前端表单渲染。"""
-    del staff
-    from app.domains.projects import contract_generator
-
-    return contract_generator.list_templates()
 
 
 @router.post("/projects/{project_id}/contracts/generate")
