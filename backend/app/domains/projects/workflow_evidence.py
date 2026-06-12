@@ -604,6 +604,53 @@ def project_kol_action_stub(project_id: int, kol_ref: str | int, body: dict[str,
     row = _assignment_row(conn, project_id, kol_ref)
     if not row:
         raise LookupError("project kol assignment not found")
+    # 截图真存证(2026-06-12 裁令):文件已由 /evidence/uploads 落盘,这里把 file_url
+    # 记入 vkpi_messages(internal_note,evidence_url 列)——沟通/证据流可查,不再是 stub。
+    file_url = str(body.get("file_url") or "").strip()
+    if kind == "screenshot" and file_url:
+        project = conn.execute("SELECT kol_id FROM vkpi_projects WHERE id=?", (int(project_id),)).fetchone()
+        note = str(body.get("note") or "").strip()
+        stage = str(body.get("stage") or "")
+        snippet = note or f"阶段截图存证({stage})"
+        conn.execute(
+            """
+            INSERT INTO vkpi_messages (
+                project_id, kol_id, staff_id, source, direction, sender, receiver,
+                body, snippet, evidence_url, captured_at, metadata_json, created_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                int(project_id),
+                _int(dict(project or {}).get("kol_id")) or None,
+                staff_id(staff) or None,
+                "stage_screenshot",
+                "internal_note",
+                "",
+                "",
+                snippet,
+                snippet[:240],
+                file_url,
+                utcnow(),
+                json.dumps({"stage": stage, "assignment_id": int(row["id"]), "kol_pool_id": row["kol_pool_id"], "file_name": body.get("file_name")}, ensure_ascii=False),
+                utcnow(),
+            ),
+        )
+        conn.commit()
+        audit.log_business_event(
+            staff_id=staff_id(staff),
+            action_type="assignment_screenshot_stored",
+            target_type="project_kol_assignment",
+            target_id=row["id"],
+            detail=str(body.get("file_name") or file_url)[:240],
+            metadata={"project_id": int(project_id), "assignment_id": int(row["id"]), "kol_pool_id": row["kol_pool_id"], "file_url": file_url, "stage": stage},
+        )
+        return {
+            "status": "stored",
+            "kind": kind,
+            "file_url": file_url,
+            "project_id": int(project_id),
+            "assignment_id": int(row["id"]),
+        }
     audit.log_business_event(
         staff_id=staff_id(staff),
         action_type=f"assignment_{kind}_stub",

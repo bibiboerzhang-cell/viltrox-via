@@ -296,7 +296,8 @@ export function ProjectsPage({
 
   const refreshProjectData = async () => {
     await projectDetailState.refresh();
-    await onRefreshData?.();
+    // dashboard 全量刷新转后台(2026-06-12 推进卡顿案):详情已刷即解锁交互,不再阻塞等全站数据。
+    void onRefreshData?.();
   };
 
   const importKolRows = async (targetProject: VkpiProjectRow, rows: ImportKolRow[]) => {

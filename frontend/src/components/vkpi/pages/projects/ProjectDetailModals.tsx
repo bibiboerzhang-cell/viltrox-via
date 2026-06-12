@@ -77,6 +77,7 @@ export function UploadScreenshotModal({
         to: target.to,
         note: note.trim(),
         shopify_url: shopifyUrl.trim() || undefined,
+        file,
         ...filePayload(file),
       });
     } catch (uploadError) {
@@ -407,7 +408,7 @@ export function ContractUploadModal({
     setBusy(true);
     setError('');
     try {
-      await onSubmit({ kind: 'contract', fee_usd: Number(fee || 0), duration, deliverables, ...filePayload(file) });
+      await onSubmit({ kind: 'contract', fee_usd: Number(fee || 0), duration, deliverables, file, ...filePayload(file) });
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : '合同提交失败');
     } finally {
@@ -777,6 +778,146 @@ export function TrackingWidget({
         <span>上次：{tracking.last}</span>
         <button type="button" disabled={saving} onClick={() => onSave(row)}>{saving ? '保存中' : '保存物流'}</button>
         <span className="vkpi-campaign-track-status" title="下次更新接入真实物流追踪">刷新功能待接入</span>
+      </div>
+    </div>
+  );
+}
+
+export function ContactKolModal({
+  row,
+  onClose,
+  onLogOutreach,
+  onRequestDraft,
+  onFetchDraft,
+}: {
+  row: VkpiProjectRow;
+  onClose: () => void;
+  onLogOutreach: (payload: { message: string; channel: string }) => Promise<void>;
+  onRequestDraft: () => Promise<Record<string, unknown>>;
+  onFetchDraft: () => Promise<{ state?: string; draft?: Record<string, unknown> }>;
+}) {
+  const [message, setMessage] = useState('');
+  const [channel, setChannel] = useState('dm');
+  const [busy, setBusy] = useState(false);
+  const [draftState, setDraftState] = useState<'idle' | 'generating' | 'ready' | 'failed'>('idle');
+  const [draftMeta, setDraftMeta] = useState<Record<string, unknown> | null>(null);
+  const [error, setError] = useState('');
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    onFetchDraft().then((resp) => {
+      if (cancelled || resp.state !== 'ready' || !resp.draft) return;
+      setDraftMeta(resp.draft);
+      setMessage((current) => current || String(resp.draft?.message_en || ''));
+      setDraftState('ready');
+    }).catch(() => { /* 无既有草稿属正常 */ });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const generateDraft = async () => {
+    setDraftState('generating');
+    setError('');
+    try {
+      await onRequestDraft();
+      for (let i = 0; i < 24; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+        const resp = await onFetchDraft();
+        if (resp.state === 'ready' && resp.draft) {
+          setDraftMeta(resp.draft);
+          setMessage(String(resp.draft.message_en || ''));
+          setDraftState('ready');
+          return;
+        }
+      }
+      setDraftState('failed');
+      setError('草稿生成超时——看左侧泳道「联系草稿」状态,完成后重开本窗即见。');
+    } catch (draftError) {
+      setDraftState('failed');
+      setError(draftError instanceof Error ? draftError.message : '草稿生成失败');
+    }
+  };
+
+  const copyDraft = async () => {
+    try {
+      await navigator.clipboard.writeText(message);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setError('复制失败——请手动选中文本复制。');
+    }
+  };
+
+  const logOutreach = async () => {
+    if (!message.trim()) { setError('请先填写或生成消息内容。'); return; }
+    setBusy(true);
+    setError('');
+    try {
+      await onLogOutreach({ message: message.trim(), channel });
+      onClose();
+    } catch (logError) {
+      setError(logError instanceof Error ? logError.message : '记录失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const talkingPoints = Array.isArray(draftMeta?.talking_points) ? (draftMeta?.talking_points as string[]) : [];
+  return (
+    <div className="vkpi-campaign-notice-backdrop" role="presentation" onClick={busy ? undefined : onClose}>
+      <div className="rounded-2xl border border-white/[0.08] bg-[#0b1220] w-full max-w-xl p-5 max-h-[90vh] overflow-y-auto" role="dialog" aria-label="联系 KOL" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h3 className="text-[14px] font-semibold text-white">联系 KOL</h3>
+            <p className="text-[10.5px] text-slate-500 mt-0.5">{row.kolHandle || row.kolName} · {row.platform} · 系统不代发——复制后到平台发送,这里留档沟通记录</p>
+          </div>
+          <button className="text-slate-500 hover:text-white" type="button" onClick={onClose} disabled={busy}><X size={16} /></button>
+        </div>
+        <div className="flex items-center gap-2 mb-2.5">
+          <select className="px-2.5 py-1.5 rounded-md bg-white/[0.02] border border-white/[0.06] text-[11px] text-slate-300" value={channel} onChange={(event) => setChannel(event.target.value)}>
+            <option value="dm" style={{ background: '#0a0a0d' }}>平台私信</option>
+            <option value="email" style={{ background: '#0a0a0d' }}>邮件</option>
+            <option value="other" style={{ background: '#0a0a0d' }}>其他渠道</option>
+          </select>
+          <button
+            className="px-2.5 py-1.5 rounded-md text-[11px] font-medium bg-purple-500/15 border border-purple-500/35 text-purple-200 hover:bg-purple-500/25 disabled:opacity-50"
+            type="button"
+            onClick={() => void generateDraft()}
+            disabled={draftState === 'generating'}
+          >
+            {draftState === 'generating' ? 'AI 草稿生成中…(泳道「联系草稿」可见)' : draftState === 'ready' ? '重新生成 AI 草稿' : 'AI 草稿(队列生成)'}
+          </button>
+          {draftMeta?.channel_suggestion ? <span className="text-[10px] text-cyan-300/80 truncate">{String(draftMeta.channel_suggestion)}</span> : null}
+        </div>
+        <textarea
+          className="w-full h-44 px-3 py-2 rounded-md bg-white/[0.02] border border-white/[0.06] text-[11.5px] text-white placeholder-slate-600 focus:outline-none focus:border-purple-500/40 resize-y"
+          value={message}
+          onChange={(event) => setMessage(event.target.value)}
+          placeholder="手写外联消息,或点上方「AI 草稿」生成英文私信(基于 KOL 资料与项目背景)…"
+        />
+        {draftMeta?.subject ? <div className="mt-1.5 text-[10.5px] text-slate-400">邮件主题:<span className="text-slate-200">{String(draftMeta.subject)}</span></div> : null}
+        {draftMeta?.message_cn ? (
+          <details className="mt-1.5">
+            <summary className="text-[10.5px] text-slate-500 cursor-pointer">中文对照(内部审阅)</summary>
+            <p className="text-[10.5px] text-slate-300 mt-1 whitespace-pre-wrap">{String(draftMeta.message_cn)}</p>
+          </details>
+        ) : null}
+        {talkingPoints.length ? (
+          <div className="mt-1.5 text-[10.5px] text-slate-400">后续要点:{talkingPoints.map((point, index) => <span key={index} className="inline-block mr-2 text-slate-300">· {point}</span>)}</div>
+        ) : null}
+        {error ? <div className="mt-2 text-[10.5px] text-rose-300">{error}</div> : null}
+        <div className="flex items-center justify-between mt-3.5 pt-3 border-t border-white/[0.05]">
+          <button className="px-3 py-1.5 rounded-md border border-white/[0.08] text-[11px] text-slate-300 hover:bg-white/[0.04]" type="button" onClick={onClose} disabled={busy}>取消</button>
+          <div className="flex items-center gap-2">
+            <button className="px-3 py-1.5 rounded-md border border-cyan-500/30 bg-cyan-500/10 text-[11px] text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-50" type="button" onClick={() => void copyDraft()} disabled={!message.trim()}>
+              {copied ? '已复制 ✓' : '复制内容'}
+            </button>
+            <button className="px-3.5 py-1.5 rounded-md text-[11px] font-medium bg-purple-500 hover:bg-purple-400 text-white disabled:opacity-50" type="button" onClick={() => void logOutreach()} disabled={busy || !message.trim()}>
+              {busy ? '记录中' : '记录沟通(留档)'}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

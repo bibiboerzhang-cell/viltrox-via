@@ -471,3 +471,23 @@ export async function initiateOffboarding(token: string, staffId: string, newOwn
     token,
   );
 }
+
+export async function enqueueKolOutreachDraft(token: string, kolPoolId: number, projectId?: number) {
+  return apiFetch<Row>(
+    "/api/marketing/kol-pool/outreach-draft/enqueue",
+    { method: "POST", body: jsonBody({ kol_pool_id: kolPoolId, project_id: projectId }) },
+    token,
+  );
+}
+
+export async function getKolOutreachDraft(token: string, kolPoolId: number) {
+  return apiFetch<{ state?: string; draft?: Row }>(
+    `/api/marketing/kol-pool/${encodeURIComponent(String(kolPoolId))}/outreach-draft`,
+    {},
+    token,
+  );
+}
+
+export async function createMarketingMessage(token: string, payload: Row) {
+  return apiFetch<Row>("/api/marketing/messages", { method: "POST", body: jsonBody(payload) }, token);
+}

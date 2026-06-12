@@ -20,6 +20,7 @@ interface ProjectParticipationTabProps {
   movingRowId: string;
   onAddKol: () => void;
   onMoveRowStage: (row: VkpiProjectRow) => void | Promise<void>;
+  onOpenContactModal?: (row: VkpiProjectRow) => void;
   onOpenKolProfile?: (project: VkpiProjectRow) => void | Promise<void>;
   onOpenScreenshotModal: (target: ScreenshotTarget) => void;
   onOpenStageActionModal: (row: VkpiProjectRow, action: 'stalled' | 'lost' | 'released' | 'cancelled') => void;
@@ -76,6 +77,7 @@ export function ProjectParticipationTab({
   movingRowId,
   onAddKol,
   onMoveRowStage,
+  onOpenContactModal,
   onOpenKolProfile,
   onOpenScreenshotModal,
   onOpenStageActionModal,
@@ -217,6 +219,7 @@ export function ProjectParticipationTab({
                             evidenceCount={rowEvidenceCount}
                             movingRowId={movingRowId}
                             onMoveRowStage={onMoveRowStage}
+                            onOpenContactModal={onOpenContactModal}
                             onOpenScreenshotModal={onOpenScreenshotModal}
                             onOpenStageActionModal={onOpenStageActionModal}
                             row={row}

@@ -23,6 +23,7 @@ interface KolStageTimelineProps {
   evidenceCount: number;
   movingRowId: string;
   onMoveRowStage: (row: VkpiProjectRow) => void | Promise<void>;
+  onOpenContactModal?: (row: VkpiProjectRow) => void;
   onOpenScreenshotModal: (target: ScreenshotTarget) => void;
   onOpenStageActionModal: (row: VkpiProjectRow, action: 'stalled' | 'lost' | 'released' | 'cancelled') => void;
   row: VkpiProjectRow;
@@ -94,6 +95,7 @@ export function KolStageTimeline({
   evidenceCount,
   movingRowId,
   onMoveRowStage,
+  onOpenContactModal,
   onOpenScreenshotModal,
   onOpenStageActionModal,
   row,
@@ -213,7 +215,11 @@ export function KolStageTimeline({
                     </button>
                   ) : null}
                   {isCurrent && stage.key === 'discovery' ? (
-                    <button className="text-[10px] text-purple-200 px-2.5 py-1 rounded bg-purple-500/20 border border-purple-500/40 flex items-center gap-1 font-medium" type="button">
+                    <button
+                      className="text-[10px] text-purple-200 hover:text-white px-2.5 py-1 rounded bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/40 flex items-center gap-1 font-medium"
+                      onClick={() => onOpenContactModal?.(row)}
+                      type="button"
+                    >
                       <Send size={10} />联系 KOL
                     </button>
                   ) : null}

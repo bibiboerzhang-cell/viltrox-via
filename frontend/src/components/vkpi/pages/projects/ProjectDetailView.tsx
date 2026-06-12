@@ -5,7 +5,8 @@ import { stageLabels } from '../../shared/vkpiConstants';
 import { nextProjectStage, shortDateTime } from '../../shared/vkpiDataUtils';
 import { writeProjectActionFocus } from '../../intelligence/intelligenceProjectActionFocus';
 import { CampaignAnalyticsTab, CampaignContractsTab, CampaignFinanceTab, CampaignMaterialsTab, CampaignRetrospectiveTab, CampaignTimelineTab } from './ProjectDetailTabs';
-import { AddKolModal, ContractUploadModal, CostEntryModal, EditProjectModal, ShippingInfoModal, StageActionModal, UploadScreenshotModal, VideoUrlModal } from './ProjectDetailModals';
+import { AddKolModal, ContactKolModal, ContractUploadModal, CostEntryModal, EditProjectModal, ShippingInfoModal, StageActionModal, UploadScreenshotModal, VideoUrlModal } from './ProjectDetailModals';
+import { createMarketingMessage, enqueueKolOutreachDraft, getKolOutreachDraft } from '../../../../services/vkpi/projects-api';
 import { LiveLogisticsBanner } from './LiveLogisticsBanner';
 import { ProjectParticipationTab } from './ProjectParticipationTab';
 import {
@@ -125,6 +126,7 @@ export function ProjectDetailView({
   const [availableKolOptions, setAvailableKolOptions] = useState<VkpiKolOption[]>([]);
   const [loadingAvailableKols, setLoadingAvailableKols] = useState(false);
   const [availableKolError, setAvailableKolError] = useState('');
+  const [contactRow, setContactRow] = useState<VkpiProjectRow | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [editingProject, setEditingProject] = useState(false);
   const [actionModal, setActionModal] = useState<DetailActionModal | null>(null);
@@ -474,24 +476,56 @@ export function ProjectDetailView({
   };
 
   const submitActionStub = async (kind: 'screenshot' | 'video' | 'contract', row: VkpiProjectRow, payload: Record<string, unknown>) => {
-    // 合同走真实归档链(合同归档 tab 的上传可关联本 KOL),不再调审计-only stub。
+    // 合同就地归档(2026-06-12 裁令:上传后自动下一步,不切页;归档 tab 只作查看/补档)。
     if (kind === 'contract') {
+      const file = payload.file as File | undefined;
+      if (!apiToken || !file) {
+        setNotice({ tone: 'warning', title: '无法上传', body: !apiToken ? '缺少 API token。' : '请选择合同文件。' });
+        return;
+      }
+      const resp = await uploadProjectContract(apiToken, project.id, file, { assignmentId: row.assignmentId, kolPoolId: row.kolPoolId });
       setActionModal(null);
-      setActiveTab('合同归档');
-      setNotice({ tone: 'info', title: '请用合同归档上传', body: '已切到「合同归档」tab——这里是真实链路(上传 + Claude 提取 + 入账),上传时可在「关联 KOL」选择本红人。' });
+      let advanced = '';
+      const nextStage = nextProjectStage(row.stage);
+      if (nextStage && row.assignmentId && onAdvanceProjectKol) {
+        try {
+          await onAdvanceProjectKol(project.id, kolRef(row), {
+            to_stage: nextStage,
+            note: `合同归档自动推进：${stageLabels[row.stage]} → ${stageLabels[nextStage]}`,
+          });
+          advanced = `,阶段已自动推进到「${stageLabels[nextStage]}」`;
+        } catch {
+          advanced = ',阶段自动推进失败——可手动点「推进」';
+        }
+      }
+      setNotice({ tone: 'success', title: '合同已归档', body: `Claude 提取已入队(泳道「合同提取」)${advanced}。归档 tab 可查看全文与提取字段。` });
+      void resp;
+      await onProjectUpdated?.();
       return;
     }
     if (!onSubmitProjectKolActionStub) {
       setNotice({ tone: 'info', title: '暂存提醒', body: '当前环境缺少写入接口或 API token，本次操作不会修改项目数据。' });
       return;
     }
-    const result = await onSubmitProjectKolActionStub(project.id, kolRef(row), kind, payload);
     if (kind === 'screenshot') {
-      // 后端 stub 只写审计日志、不存文件——不再做乐观 +1 假反馈(诚实化,扫描 #5)。
+      // 截图真存证(2026-06-12):文件先上传 evidence 存储,再随 stub 落沟通/证据流(vkpi_messages)。
+      const file = payload.file as File | undefined;
+      let fileUrl = '';
+      if (file && onUploadEvidenceFile) {
+        const uploaded = await onUploadEvidenceFile(file, { entityType: 'project_kol_stage', entityId: String(row.assignmentId || row.id), purpose: `stage_${String(payload.stage || '')}` });
+        fileUrl = String(uploaded.file_url || '');
+      }
+      const { file: _omit, ...rest } = payload;
+      const result = await onSubmitProjectKolActionStub(project.id, kolRef(row), kind, { ...rest, file_url: fileUrl });
       setActionModal(null);
-      setNotice({ tone: 'info', title: '已记录到审计日志', body: '截图文件存证尚未接入(开发中);如需上传留档,可先用「物料」tab 的条款附件/物流凭证表单。' });
+      if (String((result as Record<string, unknown>).status || '') === 'stored') {
+        setNotice({ tone: 'success', title: '截图已存证', body: '文件已入证据存储并记入该 KOL 的沟通/证据流(时间轴可查)。' });
+      } else {
+        setNotice({ tone: 'info', title: '已记录', body: fileUrl ? '文件已上传;记录状态见审计日志。' : '未选择文件,仅记录了备注。' });
+      }
       return;
     }
+    const result = await onSubmitProjectKolActionStub(project.id, kolRef(row), kind, payload);
     if (kind === 'video') {
       const metrics = (result.metrics || {}) as Record<string, unknown>;
       const title = typeof metrics.title === 'string' && metrics.title ? metrics.title : '视频';
@@ -1038,6 +1072,7 @@ export function ProjectDetailView({
           movingRowId={movingRowId}
           onAddKol={() => void openAddKolModal()}
           onMoveRowStage={moveRowStage}
+          onOpenContactModal={(target) => setContactRow(target)}
           onOpenKolProfile={onOpenKolProfile}
           onOpenScreenshotModal={openStageEvidenceModal}
           onOpenStageActionModal={(row, action) => setActionModal({ kind: 'stage-action', row, action })}
@@ -1200,6 +1235,33 @@ export function ProjectDetailView({
           row={actionModal.row}
           onClose={() => setActionModal(null)}
           onSubmit={(payload) => submitActionStub('video', actionModal.row, payload)}
+        />
+      ) : null}
+
+      {contactRow ? (
+        <ContactKolModal
+          row={contactRow}
+          onClose={() => setContactRow(null)}
+          onLogOutreach={async ({ message, channel }) => {
+            if (!apiToken) throw new Error('缺少 API token,不能记录沟通。');
+            await createMarketingMessage(apiToken, {
+              project_id: Number(project.id),
+              direction: 'outbound',
+              source: channel,
+              body: message,
+              receiver: contactRow.kolHandle || contactRow.kolName || '',
+              metadata: { kol_pool_id: contactRow.kolPoolId, assignment_id: contactRow.assignmentId, stage: contactRow.stage },
+            });
+            setNotice({ tone: 'success', title: '沟通已留档', body: `外联消息已记录到「${contactRow.kolHandle || contactRow.kolName}」的沟通流。` });
+          }}
+          onRequestDraft={async () => {
+            if (!apiToken) throw new Error('缺少 API token。');
+            return enqueueKolOutreachDraft(apiToken, Number(contactRow.kolPoolId), Number(project.id));
+          }}
+          onFetchDraft={async () => {
+            if (!apiToken) return { state: 'missing' };
+            return getKolOutreachDraft(apiToken, Number(contactRow.kolPoolId));
+          }}
         />
       ) : null}
 
