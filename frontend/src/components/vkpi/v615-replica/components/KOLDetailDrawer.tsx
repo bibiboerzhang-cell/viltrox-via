@@ -535,9 +535,42 @@ function LlmDeepAnalysisPanel({ payload }) {
       riskRows.length > 0 && e("div", { className: "mt-2 rounded border border-amber-300/15 bg-amber-300/[0.04] px-2 py-1.5" },
         e("div", { className: "mb-1 flex items-center gap-1 text-[9px] text-amber-200" }, e(AlertTriangle, { size: 9 }), "风险 / QA issues"),
         riskRows.map((text, index) => e("div", { key: index, className: "text-[10px] leading-relaxed text-slate-300" }, text))
-      )
+      ),
+      e(LlmDeepHistoryList, { payload, primary })
     )
   );
+}
+
+// d7:历史深析放出——payload.items(≤50 条)此前仅取 primary 1 条,其余 614 条库存数据 UI 无门。
+function LlmDeepHistoryList({ payload, primary }) {
+  const [expanded, setExpanded] = React.useState(false);
+  const all = Array.isArray(payload.items) ? payload.items : [];
+  const history = all.filter((it) => it && it !== primary && it.id !== primary?.id);
+  if (!history.length) return null;
+  return e("div", { className: "mt-2 border-t border-white/[0.05] pt-1.5" },
+    e("button", {
+      type: "button",
+      onClick: () => setExpanded((v) => !v),
+      className: "flex w-full items-center justify-between text-[9.5px] text-slate-500 hover:text-slate-300",
+    },
+      `历史深析 ${history.length} 条(共 ${payload.count ?? all.length} 条,当前展示最新判断)`,
+      e(ChevronsUpDownIcon, { expanded })
+    ),
+    expanded && e("div", { className: "mt-1.5 space-y-1" },
+      history.slice(0, 8).map((it, index) => e("div", {
+        key: it.id ?? index,
+        className: "flex items-center justify-between rounded border border-white/[0.04] bg-black/15 px-2 py-1 text-[9.5px] text-slate-400",
+      },
+        e("span", { className: "truncate" }, String(it.created_at || "").slice(0, 10) || "—"),
+        e("span", { className: "tabular-nums text-slate-300" }, it.llm_v6_fit == null ? "—" : scoreText(numberOr(it.llm_v6_fit)))
+      )),
+      history.length > 8 && e("div", { className: "text-[9px] text-slate-600" }, `…其余 ${history.length - 8} 条`)
+    )
+  );
+}
+
+function ChevronsUpDownIcon({ expanded }) {
+  return e("span", { className: "text-[9px] text-slate-600" }, expanded ? "收起 ▲" : "展开 ▼");
 }
 
 export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", detailLoading = false, detailError = "", onClose, inMyList, onToggleMyList, onContact }) {
@@ -1152,12 +1185,12 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
       e("div", { className: "flex items-center gap-2 mb-2" },
         e("button", {
           onClick: () => onToggleMyList?.(item.id),
-          title: "本地临时列表: 尚未接入后端保存",
+          title: "我的收藏(My KOL 归宿)· 持久化保存",
           className: "flex-1 flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-[11px] font-medium transition-colors",
           style: inMyList
             ? { background: "rgba(251,191,36,0.15)", color: "#fde68a", border: "1px solid rgba(251,191,36,0.35)" }
             : { background: "rgba(255,255,255,0.04)", color: "#e2e8f0", border: "1px solid rgba(255,255,255,0.1)" }
-        }, e(Star, { size: 11, style: inMyList ? { fill: "#fbbf24" } : {} }), inMyList ? "已在本地列表" : "加入本地列表"),
+        }, e(Star, { size: 11, style: inMyList ? { fill: "#fbbf24" } : {} }), inMyList ? "已收藏" : "加入收藏"),
         e("button", {
           onClick: () => onContact?.(item),
           title: "打开本地联系模板: 不发送邮件、不调用 provider",
