@@ -5,8 +5,8 @@ import { stageLabels } from '../../shared/vkpiConstants';
 import { nextProjectStage, shortDateTime } from '../../shared/vkpiDataUtils';
 import { writeProjectActionFocus } from '../../intelligence/intelligenceProjectActionFocus';
 import { CampaignAnalyticsTab, CampaignContractsTab, CampaignFinanceTab, CampaignMaterialsTab, CampaignRetrospectiveTab, CampaignTimelineTab } from './ProjectDetailTabs';
-import { AddKolModal, ContactKolModal, ContractUploadModal, CostEntryModal, EditProjectModal, ShippingInfoModal, StageActionModal, UploadScreenshotModal, VideoUrlModal } from './ProjectDetailModals';
-import { createMarketingMessage, enqueueKolOutreachDraft, getKolOutreachDraft } from '../../../../services/vkpi/projects-api';
+import { AddKolModal, ContactKolModal, ContractUploadModal, GenerateContractModal, CostEntryModal, EditProjectModal, ShippingInfoModal, StageActionModal, UploadScreenshotModal, VideoUrlModal } from './ProjectDetailModals';
+import { createMarketingMessage, enqueueKolOutreachDraft, generateProjectContract, getContractTemplates, getKolOutreachDraft, type VkpiContractTemplate } from '../../../../services/vkpi/projects-api';
 import { LiveLogisticsBanner } from './LiveLogisticsBanner';
 import { ProjectParticipationTab } from './ProjectParticipationTab';
 import {
@@ -127,6 +127,21 @@ export function ProjectDetailView({
   const [loadingAvailableKols, setLoadingAvailableKols] = useState(false);
   const [availableKolError, setAvailableKolError] = useState('');
   const [contactRow, setContactRow] = useState<VkpiProjectRow | null>(null);
+  const [generateOpen, setGenerateOpen] = useState(false);
+  const [generateBusy, setGenerateBusy] = useState(false);
+  const [contractTemplates, setContractTemplates] = useState<VkpiContractTemplate[]>([]);
+  const [contractPartyA, setContractPartyA] = useState('SHENZHEN VILTROX TECHNOLOGY CO., LTD.');
+  const openGenerateContract = async () => {
+    setGenerateOpen(true);
+    if (!apiToken || contractTemplates.length) return;
+    try {
+      const resp = await getContractTemplates(apiToken);
+      setContractTemplates((resp.templates || []) as VkpiContractTemplate[]);
+      if (resp.party_a) setContractPartyA(String(resp.party_a));
+    } catch (error) {
+      setNotice({ tone: 'warning', title: '模板加载失败', body: error instanceof Error ? error.message : '无法加载合同模板。' });
+    }
+  };
   const [editOpen, setEditOpen] = useState(false);
   const [editingProject, setEditingProject] = useState(false);
   const [actionModal, setActionModal] = useState<DetailActionModal | null>(null);
@@ -953,6 +968,7 @@ export function ProjectDetailView({
             <button className="px-3 py-1.5 rounded-md border border-red-500/30 bg-red-500/10 text-[11px] text-red-300 hover:bg-red-500/15" type="button" onClick={cancelProject}>取消推广</button>
             {onDeleteProject ? <button className="px-3 py-1.5 rounded-md border border-red-500/30 bg-red-500/10 text-[11px] text-red-300 hover:bg-red-500/15" type="button" onClick={deleteProject}>删除</button> : null}
             <button className="px-3 py-1.5 rounded-md bg-purple-500/90 hover:bg-purple-500 text-white text-[11px] font-medium flex items-center gap-1.5" type="button" onClick={() => void openAddKolModal()}>+ 添加 KOL</button>
+            <button className="px-3 py-1.5 rounded-md border border-purple-500/40 bg-purple-500/10 hover:bg-purple-500/20 text-purple-200 text-[11px] font-medium" type="button" onClick={() => void openGenerateContract()}>生成合同</button>
           </div>
         </div>
         <div className="text-right shrink-0">
@@ -1235,6 +1251,34 @@ export function ProjectDetailView({
           row={actionModal.row}
           onClose={() => setActionModal(null)}
           onSubmit={(payload) => submitActionStub('video', actionModal.row, payload)}
+        />
+      ) : null}
+
+      {generateOpen && contractTemplates.length ? (
+        <GenerateContractModal
+          project={project}
+          rows={rows}
+          templates={contractTemplates}
+          partyA={contractPartyA}
+          busy={generateBusy}
+          onClose={() => setGenerateOpen(false)}
+          onSubmit={async ({ templateKey, fields, row }) => {
+            if (!apiToken) throw new Error('缺少 API token。');
+            setGenerateBusy(true);
+            try {
+              const resp = await generateProjectContract(apiToken, project.id, {
+                template_key: templateKey,
+                fields,
+                assignment_id: row?.assignmentId || undefined,
+                kol_pool_id: row?.kolPoolId || undefined,
+              });
+              setGenerateOpen(false);
+              setNotice({ tone: 'success', title: '合同已生成并归档', body: `${String((resp as Record<string, unknown>).file_name || 'DOCX')} 已入「合同归档」${row ? `,关联 ${row.kolHandle || row.kolName}` : ''}。` });
+              await onProjectUpdated?.();
+            } finally {
+              setGenerateBusy(false);
+            }
+          }}
         />
       ) : null}
 

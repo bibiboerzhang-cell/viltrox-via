@@ -922,3 +922,133 @@ export function ContactKolModal({
     </div>
   );
 }
+
+export function GenerateContractModal({
+  project,
+  rows,
+  templates,
+  partyA,
+  busy,
+  onClose,
+  onSubmit,
+}: {
+  project: VkpiProjectRow;
+  rows: VkpiProjectRow[];
+  templates: Array<{ key: string; label: string; title: string; slots: Array<{ key: string; label: string; group?: string; type?: string; options?: string[]; required?: boolean }> }>;
+  partyA: string;
+  busy: boolean;
+  onClose: () => void;
+  onSubmit: (payload: { templateKey: string; fields: Record<string, string>; row: VkpiProjectRow | null }) => Promise<void>;
+}) {
+  const [templateKey, setTemplateKey] = useState(templates[0]?.key || 'paid');
+  const [rowId, setRowId] = useState(rows[0]?.id || '');
+  const [fields, setFields] = useState<Record<string, string>>({});
+  const [error, setError] = useState('');
+  const template = templates.find((item) => item.key === templateKey) || templates[0];
+  const selectedRow = rows.find((item) => item.id === rowId) || null;
+
+  useEffect(() => {
+    // 切 KOL/模板时预填对方名与产品(时间/账户留空待填)
+    setFields((current) => ({
+      ...current,
+      party_b_name: current.party_b_name || selectedRow?.kolName || selectedRow?.kolHandle || '',
+      product: current.product || project.productName || project.campaign || '',
+      product_models: current.product_models || project.productName || '',
+      provided_products: current.provided_products || project.productName || '',
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rowId, templateKey]);
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, typeof template.slots>();
+    (template?.slots || []).forEach((slot) => {
+      const group = slot.group || '其他';
+      map.set(group, [...(map.get(group) || []), slot]);
+    });
+    return Array.from(map.entries());
+  }, [template]);
+
+  const submit = async () => {
+    const missing = (template?.slots || []).filter((slot) => slot.required && !String(fields[slot.key] || '').trim());
+    if (missing.length) {
+      setError(`缺少必填:${missing.map((slot) => slot.label).join('、')}`);
+      return;
+    }
+    setError('');
+    try {
+      await onSubmit({ templateKey, fields, row: selectedRow });
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : '生成失败');
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" role="presentation" onClick={busy ? undefined : onClose}>
+      <div className="rounded-2xl border border-white/[0.08] bg-[#0b1220] w-full max-w-2xl p-5 max-h-[92vh] flex flex-col" role="dialog" aria-label="生成合同" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h3 className="text-[14px] font-semibold text-white">生成合同(模板填槽 · 法务文本冻结)</h3>
+            <p className="text-[10.5px] text-slate-500 mt-0.5">甲方:{partyA} · 生成 DOCX 自动归档并关联所选 KOL;同输入恒同输出,LLM 零参与正文</p>
+          </div>
+          <button className="text-slate-500 hover:text-white" type="button" onClick={onClose} disabled={busy}><X size={16} /></button>
+        </div>
+        <div className="flex items-center gap-2 mb-3">
+          <select className="px-2.5 py-1.5 rounded-md bg-white/[0.02] border border-white/[0.06] text-[11px] text-slate-200" value={templateKey} onChange={(event) => setTemplateKey(event.target.value)}>
+            {templates.map((item) => <option key={item.key} value={item.key} style={{ background: '#0a0a0d' }}>{item.label}</option>)}
+          </select>
+          <select className="px-2.5 py-1.5 rounded-md bg-white/[0.02] border border-white/[0.06] text-[11px] text-slate-200 flex-1" value={rowId} onChange={(event) => setRowId(event.target.value)}>
+            <option value="" style={{ background: '#0a0a0d' }}>不关联 KOL(仅按表单)</option>
+            {rows.map((item) => <option key={item.id} value={item.id} style={{ background: '#0a0a0d' }}>{item.kolHandle || item.kolName} · {item.platform}</option>)}
+          </select>
+        </div>
+        <div className="flex-1 overflow-y-auto -mx-1 px-1 space-y-3">
+          {grouped.map(([group, slots]) => (
+            <div key={group}>
+              <div className="text-[10.5px] text-slate-500 mb-1.5">{group}</div>
+              <div className="grid grid-cols-2 gap-2">
+                {slots.map((slot) => (
+                  <label className={`text-[10.5px] text-slate-400 ${slot.type === 'multiline' ? 'col-span-2' : ''}`} key={slot.key}>
+                    {slot.label}{slot.required ? <span className="text-rose-400"> *</span> : null}
+                    {slot.type === 'choice' ? (
+                      <select
+                        className="mt-1 w-full px-2.5 py-1.5 rounded-md bg-white/[0.02] border border-white/[0.06] text-[11px] text-white"
+                        value={fields[slot.key] || ''}
+                        onChange={(event) => setFields((current) => ({ ...current, [slot.key]: event.target.value }))}
+                      >
+                        <option value="" style={{ background: '#0a0a0d' }}>请选择</option>
+                        {(slot.options || []).map((option) => <option key={option} value={option} style={{ background: '#0a0a0d' }}>{option}</option>)}
+                      </select>
+                    ) : slot.type === 'multiline' ? (
+                      <textarea
+                        className="mt-1 w-full h-16 px-2.5 py-1.5 rounded-md bg-white/[0.02] border border-white/[0.06] text-[11px] text-white resize-y"
+                        value={fields[slot.key] || ''}
+                        onChange={(event) => setFields((current) => ({ ...current, [slot.key]: event.target.value }))}
+                      />
+                    ) : (
+                      <input
+                        className="mt-1 w-full px-2.5 py-1.5 rounded-md bg-white/[0.02] border border-white/[0.06] text-[11px] text-white"
+                        type={slot.type === 'date' ? 'date' : 'text'}
+                        value={fields[slot.key] || ''}
+                        onChange={(event) => setFields((current) => ({ ...current, [slot.key]: event.target.value }))}
+                      />
+                    )}
+                  </label>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+        {error ? <div className="mt-2 text-[10.5px] text-rose-300">{error}</div> : null}
+        <div className="flex items-center justify-between mt-3.5 pt-3 border-t border-white/[0.05]">
+          <span className="text-[10px] text-slate-500">产出 DOCX 入「合同归档」;PDF 直出候依赖报备</span>
+          <div className="flex items-center gap-2">
+            <button className="px-3 py-1.5 rounded-md border border-white/[0.08] text-[11px] text-slate-300 hover:bg-white/[0.04]" type="button" onClick={onClose} disabled={busy}>取消</button>
+            <button className="px-3.5 py-1.5 rounded-md text-[11px] font-medium bg-purple-500 hover:bg-purple-400 text-white disabled:opacity-50" type="button" onClick={() => void submit()} disabled={busy}>
+              {busy ? '生成中…' : '生成并归档'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -491,3 +491,39 @@ export async function getKolOutreachDraft(token: string, kolPoolId: number) {
 export async function createMarketingMessage(token: string, payload: Row) {
   return apiFetch<Row>("/api/marketing/messages", { method: "POST", body: jsonBody(payload) }, token);
 }
+
+export interface VkpiContractTemplateSlot {
+  key: string;
+  label: string;
+  group?: string;
+  type?: string;
+  options?: string[];
+  required?: boolean;
+}
+
+export interface VkpiContractTemplate {
+  key: string;
+  label: string;
+  title: string;
+  slots: VkpiContractTemplateSlot[];
+}
+
+export async function getContractTemplates(token: string) {
+  return apiFetch<{ party_a?: string; templates?: VkpiContractTemplate[] }>(
+    "/api/marketing/projects/contract-templates",
+    {},
+    token,
+  );
+}
+
+export async function generateProjectContract(
+  token: string,
+  projectId: string,
+  body: { template_key: string; fields: Record<string, string>; assignment_id?: string | number | null; kol_pool_id?: string | number | null },
+) {
+  return apiFetch<Row>(
+    `/api/marketing/projects/${encodeURIComponent(projectId)}/contracts/generate`,
+    { method: "POST", body: jsonBody(body) },
+    token,
+  );
+}

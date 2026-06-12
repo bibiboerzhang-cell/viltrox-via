@@ -4,7 +4,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
 
 from app.api.dependencies.perms import require_tab
 from app.core.security import get_current_user
@@ -119,6 +119,39 @@ def project_contracts(project_id: int, staff=Depends(require_tab("vkpi", "read")
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
+
+
+@router.get("/projects/contract-templates")
+def get_contract_templates(staff=Depends(require_tab("vkpi", "read"))) -> dict:
+    """合同模板目录(2026-06-12 生成器 v1):槽位 schema 供前端表单渲染。"""
+    del staff
+    from app.domains.projects import contract_generator
+
+    return contract_generator.list_templates()
+
+
+@router.post("/projects/{project_id}/contracts/generate")
+def generate_project_contract(
+    project_id: int,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """模板填槽生成合同 DOCX 并落档(确定性,LLM 零参与;正文=法务冻结模板)。"""
+    from app.domains.projects import contract_generator
+
+    try:
+        return contract_generator.generate_contract(
+            int(project_id),
+            template_key=str(body.get("template_key") or ""),
+            fields=dict(body.get("fields") or {}),
+            assignment_id=body.get("assignment_id"),
+            kol_pool_id=body.get("kol_pool_id"),
+            staff=staff,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/projects/{project_id}/contracts/upload")
