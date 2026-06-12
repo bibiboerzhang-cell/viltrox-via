@@ -152,6 +152,10 @@ def generate_project_contract(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        if exc.__class__.__name__ == "ScopeDenied":
+            raise HTTPException(status_code=403, detail=str(exc) or "scope denied") from exc
+        raise
 
 
 @router.post("/projects/{project_id}/contracts/upload")

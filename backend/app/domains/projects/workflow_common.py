@@ -71,6 +71,12 @@ STAGE_ALIASES = {
     "confirmed": "agreed",
     "delivered": "received",
     "posted": "published",
+    # 双词表案(2026-06-12 全盘扫描 P0):前端推进/合同自动推进发项目词表,
+    # assignment 聚合只认 assignment 词表——写侧统一归一,读侧另有兼容。
+    "shipped": "device_sent",
+    "received": "arrived",
+    "published": "content_posted",
+    "measured": "reviewed",
 }
 
 ALLOWED_TRANSITIONS = {

@@ -167,10 +167,11 @@ def assert_project_access(project_id: int, staff: dict[str, Any] | None, *, writ
     item = dict(row)
     if actor in {_int(item.get("assigned_staff_id")), _int(item.get("created_by_staff_id"))}:
         return
-    # PV-3 对齐(2026-06-12 添加KOL弹窗 403 案):非 restricted 项目员工默认可见——
-    # 读访问随可见性放行(此前只认 assigned/creator,而存量项目两栏多为 NULL,谁都 403);
-    # restricted 项目与写访问仍只认 assigned/creator/全可见角色。
-    if not write and not bool(item.get("restricted")):
+    # PV-3 对齐(2026-06-12 添加KOL弹窗 403 案 → 全盘扫描 P0 写侧跟进):
+    # 非 restricted 项目对员工读写均放行——存量项目 75% 双归属 NULL,只开读会让
+    # 推进/合同/截图/留档全部 403,与旅程"员工往项目塞人"相悖(候追认)。
+    # restricted 项目仍只认 assigned/creator/全可见角色(先遮后开铁则不破)。
+    if not bool(item.get("restricted")):
         return
     raise ScopeDenied("project scope denied")
 

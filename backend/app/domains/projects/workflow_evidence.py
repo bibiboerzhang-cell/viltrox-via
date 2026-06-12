@@ -31,8 +31,13 @@ def _assignment_row(conn, project_id: int, kol_ref: str | int):
     else:
         clauses.append("source_ref=?")
         params.append(text_ref)
+    # 撞号防御(全盘扫描 P1):id 与 kol_pool_id 同号时优先 id 精确命中,避免改错行
+    order_sql = ""
+    if numeric_ref:
+        order_sql = " ORDER BY CASE WHEN id=? THEN 0 ELSE 1 END, id DESC"
+        params.append(numeric_ref)
     return conn.execute(
-        f"SELECT * FROM vkpi_project_kol_assignments WHERE {' AND '.join(clauses)} LIMIT 1",
+        f"SELECT * FROM vkpi_project_kol_assignments WHERE {' AND '.join(clauses)}{order_sql} LIMIT 1",
         tuple(params),
     ).fetchone()
 

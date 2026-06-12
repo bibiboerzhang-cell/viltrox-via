@@ -192,8 +192,12 @@ def project_detail(project_id: int, *, staff: dict[str, Any] | None = None) -> d
             ORDER BY
                 CASE a.stage
                     WHEN 'reviewed' THEN 1
+                    WHEN 'measured' THEN 1
                     WHEN 'content_posted' THEN 2
+                    WHEN 'published' THEN 2
                     WHEN 'device_sent' THEN 3
+                    WHEN 'shipped' THEN 3
+                    WHEN 'received' THEN 3
                     WHEN 'agreed' THEN 4
                     WHEN 'replied' THEN 5
                     WHEN 'contacted' THEN 6

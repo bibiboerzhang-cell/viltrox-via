@@ -671,6 +671,8 @@ def _record_contract_fee_to_ledger(project_id: int, contract_id: int, *, staff: 
                 "UPDATE vkpi_cost_ledger SET metadata_json=?, updated_at=? WHERE id=?",
                 (json.dumps({**old_meta, **metadata}, ensure_ascii=False), utcnow(), int(row["id"])),
             )
+            # 全盘扫描 P0(2026-06-12):scoped 连接退出即 rollback,缺 commit 致补键永不落库
+            conn.commit()
         return None
     from app.domains.costs import ledger as cost_ledger
 

@@ -45,6 +45,11 @@ ASSIGNMENT_STAGE_TO_CARD_STAGE = {
     "reviewed": "measured",
     "closed": "closed",
     "churned": "closed",
+    # 双词表案读侧兼容:历史误写的项目词表行照常入桶(写侧已归一,此为存量保底)
+    "shipped": "shipped",
+    "received": "received",
+    "published": "published",
+    "measured": "measured",
 }
 
 CARD_STAGE_LABELS = {
@@ -119,7 +124,7 @@ def _enrich_project_card_fields(conn, projects: list[dict[str, Any]]) -> None:
         data["kol_count"] += count
         if bool(row["has_video_evidence"]):
             data["kol_with_evidence"] += count
-        if raw_stage == "content_posted":
+        if raw_stage in ("content_posted", "published"):
             data["published_count"] += count
         if raw_stage == "churned":
             data["churned_count"] += count
