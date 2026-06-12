@@ -111,11 +111,25 @@ def staff_filter(column_sql: str, staff: dict[str, Any] | None, requested_staff_
 
 
 def project_filter(alias: str, staff: dict[str, Any] | None, requested_staff_id: int | None = None) -> tuple[str, list[Any]]:
-    scoped_staff_id = effective_staff_id(staff, requested_staff_id)
-    if not scoped_staff_id:
-        return "", []
+    """PV-3 裁决(2026-06-12):员工默认可见全部项目 + 例外遮蔽制。
+
+    旧口径(assigned/created_by 归属过滤)在 33 个项目归属键全 NULL 的现实下
+    把 14 个员工挡成空列表。新口径:admin 全可见(含 restricted);非 admin 可见
+    全部非 restricted 项目(migration 110;先遮后开铁则——14 个 smoke/测试项目
+    已先标 restricted=TRUE 再落本反转)。requested_staff_id 仍生效:显式按人
+    筛选时叠加归属条件(查询语义,非权限)。
+    """
     prefix = f"{alias}." if alias else ""
-    return f"({prefix}assigned_staff_id = ? OR {prefix}created_by_staff_id = ?)", [scoped_staff_id, scoped_staff_id]
+    if can_view_all(staff):
+        if requested_staff_id:
+            return f"({prefix}assigned_staff_id = ? OR {prefix}created_by_staff_id = ?)", [int(requested_staff_id), int(requested_staff_id)]
+        return "", []
+    clause = f"COALESCE({prefix}restricted, FALSE) = FALSE"
+    params: list[Any] = []
+    if requested_staff_id:
+        clause += f" AND ({prefix}assigned_staff_id = ? OR {prefix}created_by_staff_id = ?)"
+        params = [int(requested_staff_id), int(requested_staff_id)]
+    return f"({clause})", params
 
 
 def link_filter(alias: str, staff: dict[str, Any] | None, requested_staff_id: int | None = None) -> tuple[str, list[Any]]:
