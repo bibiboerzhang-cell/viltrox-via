@@ -1138,6 +1138,19 @@ def get_pool_item_intelligence_card(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.get("/kol-pool/{kol_pool_id}/videos")
+def list_kol_pool_videos(
+    kol_pool_id: int,
+    limit: int = Query(default=50, ge=1, le=200),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """C4-full:MY KOL 库内容层(Pool 收藏行)读该 KOL 全部 evidence 视频(只读)。"""
+    from app.domains.kol.pool import _video_evidence_for_kol
+
+    items = _video_evidence_for_kol(int(kol_pool_id), limit=limit)
+    return {"items": items, "total": len(items), "kol_pool_id": int(kol_pool_id)}
+
+
 @router.get("/kol-pool/{kol_pool_id}/evidence-summary")
 def get_pool_item_evidence_summary(
     kol_pool_id: int,
