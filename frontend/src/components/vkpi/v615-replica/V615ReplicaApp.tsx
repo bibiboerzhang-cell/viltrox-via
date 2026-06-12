@@ -8,7 +8,6 @@ import { Bell, ChevronDown, DollarSign, FileText, Globe2, HelpCircle, List, Load
 import "./styles/mockup.css";
 import { KOLPoolPage } from "./KOLPoolPage";
 import { DashboardReplicaPage } from "./DashboardReplicaPage";
-import { Sidebar } from "./V615Sidebar";
 import { AIIntelligenceCard } from "./components/AIIntelligenceCard";
 import { ActiveCampaignsCard } from "./components/ActiveCampaignsCard";
 import { Avatar } from "./components/Avatar";

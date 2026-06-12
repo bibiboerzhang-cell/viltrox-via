@@ -59,12 +59,6 @@ import {
   statusBg,
 } from './projectDeliverableStyle';
 
-function emitLlmActivity(detail: { id: string; label: string; kind?: string; active: boolean }) {
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('vkpi:llm-activity', { detail }));
-  }
-}
-
 function healthFromBackend(scoreValue: number | undefined) {
   const score = Number.isFinite(scoreValue) ? Math.max(0, Math.min(100, Math.round(scoreValue || 0))) : 0;
   if (score >= 85) return { score, className: 'is-good', label: '健康' };
