@@ -679,6 +679,11 @@ def _looks_like_garbage_handle(handle: str) -> bool:
     # 泛词整名拒收(回测样本 18 行闭合;精确匹配防误伤 cameralabs/cameraconspiracies 等真 handle)
     if handle in {"camera", "cameras", "products", "contact", "hipster", "channel", "media", "unknown"}:
         return True
+    # 口子#2(2026-06-12 定位令):URL 路径保留段当 handle——youtube.com/watch?v=… 取出
+    # "watch"、amazon.com/dp/… 取出 "dp"(商品链接整行进池)。URL 保留词整名拒收。
+    # 注:%编码句柄(真频道名,解码可救)与 11 字符视频 ID 形句柄按裁决单独判,不在拒收集。
+    if handle in {"watch", "dp", "shorts", "embed", "videos", "playlist", "user", "share", "reel", "status"}:
+        return True
     return False
 
 

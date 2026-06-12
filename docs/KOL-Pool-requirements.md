@@ -150,3 +150,9 @@
 - 新鲜度:**537 行 last_seen=今日;≥7 天未更占比 77% → 52.2%**(半池复活兑现)
 - partial 17 行多为污染句柄再确认(contact/products/u/watch/dp/_hokyzwb1a4/URL 编码两例)→ 并入 P6 案卷证据
 - d14 活教材:max()=06-12 但 52% 行仍旧——分布形修法(已入队③)的必要性当场自证
+
+## 2026-06-12 三件随行执行
+- **① 0 号案卷原则入卷**:临时分(backfill)与真数据校准须**短窗或同窗**——防分数锚定后跳水烧信任(漂移#4 的 464 行下修为本原则首例教材)
+- **② 口子#2 堵口**:实锤=URL 路径保留段当 handle(`watch`←youtube.com/watch?v=…、`dp`←**amazon.com/dp/ 商品链接整行进池**、1557 watch←promo_plan_xlsx 源)。URL 保留词整名拒收(watch/dp/shorts/embed/videos/playlist/user/share/reel/status);**回归 22/22 全中**(18+3895+watch×2+dp);**单独判集零误杀**(_hokyzwb1a4 视频 ID 形、%编码真频道名 ×2 不拒收);真 handle 零误伤(含 dpreview/watchfinder123)。**立案三单归 P6 污染专项**:a. %编码句柄解码修复(真名可救,如 35milímetros);b. 11 字符视频 ID 形句柄观察单(视频链接误判建档,与口子同源);c. 历史解析行号溯源(legacy/promo 导入"URL 末段 fallback"精确定位)
+- **③ C5=770 正式转入 apply 链候发**(排除 7 对留痕+重建条款照裁决②)
+- **④ 车道二/三至今未报到(catch 登记)**;d 批续按令在车道一窗口间隙自落,下一间隙首件=d11(bundle 瘦身,速度最大单点)
