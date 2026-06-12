@@ -527,6 +527,11 @@ function contractPayload(draft: ContractDraft) {
   return { ...payload, manual_overrides: payload };
 }
 
+// GEN-/草稿行判定:生成器产出(文件名 GEN- 前缀)或 status=draft,可挂签署版。
+function isGeneratedDraftContract(contract: VkpiProjectContract) {
+  return /^GEN-/i.test(String(contract.file_name || '')) || String(contract.status || '') === 'draft';
+}
+
 function ContractArchiveCard({
   contract,
   row,
@@ -536,6 +541,7 @@ function ContractArchiveCard({
   onOpen,
   onRetry,
   onDelete,
+  onUploadSignedVersion,
 }: {
   contract: VkpiProjectContract;
   row?: VkpiProjectRow;
@@ -545,6 +551,7 @@ function ContractArchiveCard({
   onOpen: (contractId: number) => Promise<void>;
   onRetry: (contractId: number) => Promise<void>;
   onDelete?: (contractId: number, fileName?: string) => void;
+  onUploadSignedVersion?: (contract: VkpiProjectContract) => void;
 }) {
   const [draft, setDraft] = useState<ContractDraft>(() => initialContractDraft(contract));
   // 用户是否手改过本表单:手改后不让后台轮询/重提取的回填覆盖编辑中的内容。
@@ -602,6 +609,16 @@ function ContractArchiveCard({
             <strong className="text-[13px] text-white truncate">{contract.file_name || '合同文件'}</strong>
             <span className={`text-[9.5px] px-2 py-0.5 rounded-full border ${meta.className}`}>{meta.label}</span>
             {contract.status === 'confirmed' ? <span className="text-[9.5px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-300">人工确认</span> : null}
+            {contract.signed_version_of ? (
+              <span className="text-[9.5px] px-2 py-0.5 rounded-full border border-emerald-400/30 bg-emerald-400/10 text-emerald-300" title={`本文件是合同 #${contract.signed_version_of} 的签署版`}>
+                签署版 · 关联 #{contract.signed_version_of}
+              </span>
+            ) : null}
+            {contract.superseded_by ? (
+              <span className="text-[9.5px] px-2 py-0.5 rounded-full border border-slate-400/25 bg-slate-400/10 text-slate-300" title={`该草稿已有签署版,见合同 #${contract.superseded_by}`}>
+                已有签署版 #{contract.superseded_by}
+              </span>
+            ) : null}
           </div>
           <div className="text-[10.5px] text-slate-400 mt-1">
             {row?.kolHandle || row?.kolName || `KOL ${contract.kol_pool_id || '-'}`} · {row?.platform || compactList(contract.platforms_json, '平台待确认')} · {moneyLabel(contract.fee_amount, contract.fee_currency)}
@@ -611,6 +628,16 @@ function ContractArchiveCard({
           </div>
         </div>
         <div className="shrink-0 flex items-center gap-2">
+          {onUploadSignedVersion && isGeneratedDraftContract(contract) && !contract.superseded_by ? (
+            <button
+              className="px-2.5 py-1.5 rounded-md border border-emerald-400/30 bg-emerald-400/10 text-[10px] text-emerald-200 hover:bg-emerald-400/20"
+              type="button"
+              onClick={() => onUploadSignedVersion(contract)}
+              title="签署完成后上传签署版,与本草稿双记录留痕"
+            >
+              上传签署版
+            </button>
+          ) : null}
           <button className="px-2.5 py-1.5 rounded-md border border-white/[0.08] bg-white/[0.03] text-[10px] text-slate-300 hover:text-white" type="button" onClick={() => void onOpen(contract.id)} disabled={downloading}>
             <ExternalLink size={11} className="inline mr-1" />查看PDF
           </button>
@@ -729,7 +756,7 @@ export function CampaignContractsTab({
   loading: boolean;
   error: string;
   busyKey: string;
-  onUploadContract: (file: File, assignmentId?: string, kolPoolId?: string) => Promise<void>;
+  onUploadContract: (file: File, assignmentId?: string, kolPoolId?: string, relatedContractId?: number) => Promise<void>;
   onSaveContract: (contractId: number, payload: Record<string, unknown>) => Promise<void>;
   onConfirmContract: (contractId: number, payload: Record<string, unknown>) => Promise<void>;
   onOpenContract: (contractId: number) => Promise<void>;
@@ -737,9 +764,12 @@ export function CampaignContractsTab({
   onDeleteContract?: (contractId: number, fileName?: string) => void;
 }) {
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const uploadZoneRef = useRef<HTMLDivElement | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [fileError, setFileError] = useState('');
   const [linkedRowId, setLinkedRowId] = useState('');
+  // 签署版上传:点 GEN-/草稿行「上传签署版」后记录被关联草稿,复用本上传表单携带 related_contract_id。
+  const [relatedContract, setRelatedContract] = useState<VkpiProjectContract | null>(null);
   const uploadBusy = busyKey === 'upload';
   const items = contracts?.items || [];
   const expectedRows = contractLines.filter((line) => line.statusLabel !== '未触发');
@@ -754,10 +784,16 @@ export function CampaignContractsTab({
     setFileError('');
     setFile(nextFile);
   };
+  const startSignedVersionUpload = (contract: VkpiProjectContract) => {
+    setRelatedContract(contract);
+    uploadZoneRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    fileRef.current?.click();
+  };
   const submitUpload = async () => {
     if (!file) return;
-    await onUploadContract(file, selectedRow?.assignmentId, selectedRow?.kolPoolId);
+    await onUploadContract(file, selectedRow?.assignmentId, selectedRow?.kolPoolId, relatedContract?.id);
     setFile(null);
+    setRelatedContract(null);
   };
 
   return (
@@ -770,11 +806,22 @@ export function CampaignContractsTab({
       </div>
 
       <div
-        className="rounded-xl border-2 border-dashed border-white/[0.08] bg-white/[0.012] p-4"
+        ref={uploadZoneRef}
+        className={`rounded-xl border-2 border-dashed ${relatedContract ? 'border-emerald-400/40 bg-emerald-400/[0.04]' : 'border-white/[0.08] bg-white/[0.012]'} p-4`}
         onDragOver={(event) => event.preventDefault()}
         onDrop={(event) => { event.preventDefault(); chooseFile(event.dataTransfer.files?.[0]); }}
       >
         <input ref={fileRef} type="file" accept=".pdf,.doc,.docx" className="hidden" onChange={(event) => { chooseFile(event.target.files?.[0]); event.target.value = ''; }} />
+        {relatedContract ? (
+          <div className="mb-3 flex items-center gap-2 flex-wrap text-[10.5px]">
+            <span className="px-2 py-1 rounded-md border border-emerald-400/30 bg-emerald-400/10 text-emerald-200">
+              签署版上传 · 将关联草稿 #{relatedContract.id}{relatedContract.file_name ? `(${relatedContract.file_name})` : ''}
+            </span>
+            <button className="px-2 py-1 rounded-md border border-white/[0.08] text-slate-300 hover:text-white" type="button" onClick={() => setRelatedContract(null)}>
+              取消关联(改为普通归档)
+            </button>
+          </div>
+        ) : null}
         <div className="grid md:grid-cols-[minmax(0,1fr)_220px_128px] gap-3 items-end">
           <button className="rounded-lg border border-white/[0.06] bg-black/20 p-4 text-left hover:border-purple-400/35" type="button" onClick={() => fileRef.current?.click()} disabled={uploadBusy}>
             <Upload size={20} className="text-purple-300 mb-2" />
@@ -790,7 +837,7 @@ export function CampaignContractsTab({
             </select>
           </label>
           <button className="rounded-md bg-purple-500/90 hover:bg-purple-500 text-white text-[11px] font-semibold px-3 py-2 disabled:opacity-50" type="button" onClick={() => void submitUpload()} disabled={!file || uploadBusy}>
-            {uploadBusy ? 'Claude正在提取条款' : '上传归档'}
+            {uploadBusy ? 'Claude正在提取条款' : relatedContract ? '上传签署版' : '上传归档'}
           </button>
         </div>
         {fileError ? <div className="mt-2 text-[10.5px] text-red-300">{fileError}</div> : null}
@@ -830,6 +877,7 @@ export function CampaignContractsTab({
               onOpen={onOpenContract}
               onRetry={onRetryExtract}
               onDelete={onDeleteContract}
+              onUploadSignedVersion={startSignedVersionUpload}
             />
           ))}
         </div>

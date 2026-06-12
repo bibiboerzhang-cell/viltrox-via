@@ -263,18 +263,16 @@ export function ProjectsPage({
     await onRefreshData?.();
   };
 
+  // V3 双刷合一:刷新责任收口在 ProjectDetailView 的 onProjectUpdated 一处,
+  // 此处不再各自 await refreshProjectData(),否则同一动作触发两次全量刷新。
   const advanceProjectKolRow = async (projectId: string, kolRef: string, payload: Record<string, unknown>) => {
     if (!apiToken) throw new Error('缺少 API token，不能推进 KOL 阶段。');
-    const result = await advanceProjectKol(apiToken, projectId, kolRef, payload);
-    await refreshProjectData();
-    return result;
+    return advanceProjectKol(apiToken, projectId, kolRef, payload);
   };
 
   const updateProjectKolShippingRow = async (projectId: string, kolRef: string, payload: Record<string, unknown>) => {
     if (!apiToken) throw new Error('缺少 API token，不能写入物流。');
-    const result = await updateProjectKolShipping(apiToken, projectId, kolRef, payload);
-    await refreshProjectData();
-    return result;
+    return updateProjectKolShipping(apiToken, projectId, kolRef, payload);
   };
 
   const submitProjectKolStub = async (projectId: string, kolRef: string, actionKind: 'screenshot' | 'video' | 'contract', payload: Record<string, unknown>) => {
@@ -355,8 +353,22 @@ export function ProjectsPage({
 
   if (detailProjectId) {
     const detailProjectForView = projectDetailState.project;
+    // 焦点横幅修复:此前 banner 只在列表分支渲染、matched 恒 false——焦点命中即自动打开详情,
+    // 「已定位」状态不可达。现在命中并打开详情时在详情分支也渲染,matched 如实为 true。
+    const focusMatched = Boolean(projectFocus && (
+      (projectFocus.projectId && detailProjectId === projectFocus.projectId)
+      || (detailProjectForView && detailProjectForView.campaign === projectFocus.projectName)
+      || (detailProject && detailProject.campaign === projectFocus.projectName)
+    ));
     return (
       <PageShell title="项目详情" description="按项目维度查看 KOL 阶段、数据、物流、证据和今日提醒。" hideHeading>
+        {projectFocus && focusMatched ? (
+          <ProjectFocusBanner
+            focus={projectFocus}
+            matched
+            onDismiss={() => setProjectFocus(null)}
+          />
+        ) : null}
         {/* 白屏闪案(2026-06-12)+ 全盘扫描 P0 修正:骨架屏只在"首载且连 fallback 都没有"时出现;
             有 fallback/旧 detail 即渲染视图原地更新——三分支互斥,杜绝全 false 空白。 */}
         {projectDetailState.loading && !projectDetailState.detail && !detailProjectForView ? (

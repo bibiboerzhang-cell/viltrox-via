@@ -6,6 +6,13 @@ import {
   editPlatformOptions,
   type ScreenshotTarget,
 } from '../../../../domains/projects';
+import { uploadMarketingEvidenceFile } from '../../../../services/vkpi/evidence-api';
+import {
+  enqueueContractPolish,
+  enqueueInvoiceExtract,
+  getContractPolish,
+  getInvoiceExtract,
+} from '../../../../services/vkpi/projects-api';
 
 function filePayload(file: File | null) {
   return file ? { file_name: file.name, file_type: file.type, file_size: file.size } : {};
@@ -758,8 +765,9 @@ export function ContactKolModal({
   row: VkpiProjectRow;
   onClose: () => void;
   onLogOutreach: (payload: { message: string; channel: string }) => Promise<void>;
-  onRequestDraft: () => Promise<Record<string, unknown>>;
-  onFetchDraft: () => Promise<{ state?: string; draft?: Record<string, unknown> }>;
+  // kolPoolId 非正整数时父层不传草稿入口(无 Pool 主体没法入队);modal 自行降级隐藏 AI 草稿。
+  onRequestDraft?: () => Promise<Record<string, unknown>>;
+  onFetchDraft?: () => Promise<{ state?: string; draft?: Record<string, unknown> }>;
 }) {
   const [message, setMessage] = useState('');
   const [channel, setChannel] = useState('dm');
@@ -777,6 +785,7 @@ export function ContactKolModal({
   };
 
   useEffect(() => {
+    if (!onFetchDraft) return () => { cancelledRef.current = true; };
     onFetchDraft().then((resp) => {
       if (cancelledRef.current || resp.state !== 'ready' || !resp.draft) return;
       setDraftMeta(resp.draft);
@@ -793,7 +802,10 @@ export function ContactKolModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const canDraft = Boolean(onRequestDraft && onFetchDraft);
+
   const generateDraft = async () => {
+    if (!onRequestDraft || !onFetchDraft) return;
     setDraftState('generating');
     setError('');
     try {
@@ -860,14 +872,18 @@ export function ContactKolModal({
             <option value="email" style={{ background: '#0a0a0d' }}>邮件</option>
             <option value="other" style={{ background: '#0a0a0d' }}>其他渠道</option>
           </select>
-          <button
-            className="px-2.5 py-1.5 rounded-md text-[11px] font-medium bg-purple-500/15 border border-purple-500/35 text-purple-200 hover:bg-purple-500/25 disabled:opacity-50"
-            type="button"
-            onClick={() => void generateDraft()}
-            disabled={draftState === 'generating'}
-          >
-            {draftState === 'generating' ? 'AI 草稿生成中…(泳道「联系草稿」可见)' : draftState === 'ready' ? '重新生成 AI 草稿' : 'AI 草稿(队列生成)'}
-          </button>
+          {canDraft ? (
+            <button
+              className="px-2.5 py-1.5 rounded-md text-[11px] font-medium bg-purple-500/15 border border-purple-500/35 text-purple-200 hover:bg-purple-500/25 disabled:opacity-50"
+              type="button"
+              onClick={() => void generateDraft()}
+              disabled={draftState === 'generating'}
+            >
+              {draftState === 'generating' ? 'AI 草稿生成中…(泳道「联系草稿」可见)' : draftState === 'ready' ? '重新生成 AI 草稿' : 'AI 草稿(队列生成)'}
+            </button>
+          ) : (
+            <span className="text-[10px] text-slate-500">该 KOL 缺少有效 Pool ID,AI 草稿不可用——可手写消息后留档。</span>
+          )}
           {draftMeta?.channel_suggestion ? <span className="text-[10px] text-cyan-300/80 truncate">{String(draftMeta.channel_suggestion)}</span> : null}
         </div>
         <textarea
@@ -903,12 +919,34 @@ export function ContactKolModal({
   );
 }
 
+// 发票 LLM 提取字段 → 合同模板槽位(党 b / 收款组)。目标槽不在当前模板里就跳过。
+const INVOICE_SLOT_MAP: Array<[source: string, targets: string[]]> = [
+  ['party_name', ['party_b_name']],
+  ['address', ['party_b_address', 'account_address']],
+  ['account_name', ['account_name']],
+  ['account_number_or_iban', ['iban', 'account_number_or_iban', 'account_number']],
+  ['swift', ['swift']],
+  ['bank_name', ['bank_name']],
+  ['bank_address', ['bank_address']],
+];
+
+// 金额槽位:paid 模板 campaign_fee / event 模板 payment_usd;仅在为空时回填。
+const INVOICE_FEE_SLOTS = ['campaign_fee', 'payment_usd'];
+
+interface PolishPreviewItem {
+  key: string;
+  label: string;
+  original: string;
+  polished: string;
+}
+
 export function GenerateContractModal({
   project,
   rows,
   templates,
   partyA,
   busy,
+  apiToken,
   onClose,
   onSubmit,
   onDownload,
@@ -918,6 +956,7 @@ export function GenerateContractModal({
   templates: Array<{ key: string; label: string; title: string; slots: Array<{ key: string; label: string; group?: string; type?: string; options?: string[]; required?: boolean }> }>;
   partyA: string;
   busy: boolean;
+  apiToken?: string;
   onClose: () => void;
   onSubmit: (payload: { templateKey: string; fields: Record<string, string>; row: VkpiProjectRow | null }) => Promise<number | null>;
   onDownload?: (contractId: number) => void;
@@ -927,6 +966,18 @@ export function GenerateContractModal({
   const [fields, setFields] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
   const [doneContractId, setDoneContractId] = useState<number | null>(null);
+  // 发票回填(LLM 经 apify_jobs 队列;失败/超时如实显示,绝不静默)。
+  const [invoiceState, setInvoiceState] = useState<'idle' | 'uploading' | 'extracting' | 'done' | 'failed'>('idle');
+  const [invoiceError, setInvoiceError] = useState('');
+  const [invoiceFilledKeys, setInvoiceFilledKeys] = useState<Set<string>>(() => new Set());
+  // AI 润色(整组文本槽;差异预览人工「应用」后才写回)。
+  const [polishState, setPolishState] = useState<'idle' | 'running' | 'failed'>('idle');
+  const [polishError, setPolishError] = useState('');
+  const [polishPreview, setPolishPreview] = useState<PolishPreviewItem[] | null>(null);
+  const invoiceFileRef = useRef<HTMLInputElement | null>(null);
+  // 轮询取消位:关闭/卸载后正在跑的 5s 轮询立即停手,不再对已卸载组件 setState。
+  const cancelledRef = useRef(false);
+  useEffect(() => () => { cancelledRef.current = true; }, []);
   const template = templates.find((item) => item.key === templateKey) || templates[0];
   const selectedRow = rows.find((item) => item.id === rowId) || null;
 
@@ -940,6 +991,8 @@ export function GenerateContractModal({
       product_models: current.product_models || project.productName || '',
       provided_products: current.provided_products || project.productName || '',
     }));
+    // 模板/KOL 切换后旧的发票高亮不再对应当前槽位,一并清掉。
+    setInvoiceFilledKeys(new Set());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rowId, templateKey]);
 
@@ -951,6 +1004,170 @@ export function GenerateContractModal({
     });
     return Array.from(map.entries());
   }, [template]);
+
+  // 手改即视为人工接管:写值并摘掉「来自发票」高亮。
+  const setSlotValue = (key: string, value: string) => {
+    setFields((current) => ({ ...current, [key]: value }));
+    setInvoiceFilledKeys((current) => {
+      if (!current.has(key)) return current;
+      const next = new Set(current);
+      next.delete(key);
+      return next;
+    });
+  };
+
+  const applyInvoiceResult = (result: Record<string, unknown>) => {
+    const slotKeys = new Set((template?.slots || []).map((slot) => slot.key));
+    const filled = new Set<string>();
+    setFields((current) => {
+      const next = { ...current };
+      INVOICE_SLOT_MAP.forEach(([source, targets]) => {
+        const value = String(result[source] ?? '').trim();
+        if (!value) return;
+        targets.forEach((target) => {
+          if (!slotKeys.has(target)) return;
+          next[target] = value;
+          filled.add(target);
+        });
+      });
+      const amount = String(result.amount ?? '').trim();
+      if (amount) {
+        const feeSlot = INVOICE_FEE_SLOTS.find((key) => slotKeys.has(key));
+        if (feeSlot && !String(next[feeSlot] || '').trim()) {
+          next[feeSlot] = amount;
+          filled.add(feeSlot);
+        }
+      }
+      return next;
+    });
+    setInvoiceFilledKeys(filled);
+    if (!filled.size) setInvoiceError('发票解析完成,但没有能回填到当前模板的字段——请手动填写。');
+  };
+
+  const runInvoiceExtract = async (file?: File | null) => {
+    if (!file) return;
+    if (!apiToken) {
+      setInvoiceError('缺少 API token,不能上传发票。');
+      setInvoiceState('failed');
+      return;
+    }
+    if (!/\.(pdf|png|jpe?g)$/i.test(file.name)) {
+      setInvoiceError('只支持 PDF / PNG / JPG 发票文件。');
+      setInvoiceState('failed');
+      return;
+    }
+    setInvoiceError('');
+    setInvoiceFilledKeys(new Set());
+    setInvoiceState('uploading');
+    try {
+      const uploaded = await uploadMarketingEvidenceFile(apiToken, file, { entityType: 'project', entityId: String(project.id), purpose: 'invoice' });
+      if (cancelledRef.current) return;
+      const fileUrl = String((uploaded as Record<string, unknown>).file_url || '');
+      if (!fileUrl) throw new Error('发票已上传但未返回文件 URL,无法发起提取。');
+      const enq = await enqueueInvoiceExtract(apiToken, String(project.id), fileUrl);
+      if (cancelledRef.current) return;
+      const extractKey = String(enq.extract_key || enq.key || '');
+      if (!extractKey) throw new Error('发票提取入队失败:后端未返回 extract_key。');
+      setInvoiceState('extracting');
+      // 5s × 18 = 90s 封顶;超时如实说,不假装成功。
+      for (let i = 0; i < 18; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+        if (cancelledRef.current) return;
+        const resp = await getInvoiceExtract(apiToken, extractKey);
+        if (cancelledRef.current) return;
+        const state = String(resp.state || resp.status || '');
+        if (state === 'ready') {
+          applyInvoiceResult((resp.result || {}) as Record<string, unknown>);
+          setInvoiceState('done');
+          return;
+        }
+        if (state === 'failed') throw new Error(String(resp.error || '发票提取失败(LLM 未产出结果)。'));
+      }
+      throw new Error('发票提取超时(90 秒)——任务仍在队列(泳道「发票提取」可见),完成后重开本窗再试。');
+    } catch (extractError) {
+      if (cancelledRef.current) return;
+      setInvoiceState('failed');
+      setInvoiceError(extractError instanceof Error ? extractError.message : '发票回填失败');
+    }
+  };
+
+  // 文本类槽(非 choice/date)整组送润色;只送有内容的字段。
+  const polishableFields = () => {
+    const textFields: Record<string, string> = {};
+    (template?.slots || []).forEach((slot) => {
+      if (slot.type === 'choice' || slot.type === 'date') return;
+      const value = String(fields[slot.key] || '').trim();
+      if (value) textFields[slot.key] = value;
+    });
+    return textFields;
+  };
+
+  const runPolish = async () => {
+    if (!apiToken) {
+      setPolishError('缺少 API token,不能发起润色。');
+      setPolishState('failed');
+      return;
+    }
+    const textFields = polishableFields();
+    if (!Object.keys(textFields).length) {
+      setPolishError('请先填写文本字段,再发起整组润色。');
+      setPolishState('failed');
+      return;
+    }
+    setPolishError('');
+    setPolishState('running');
+    try {
+      const enq = await enqueueContractPolish(apiToken, String(project.id), templateKey, textFields);
+      if (cancelledRef.current) return;
+      const polishKey = String(enq.polish_key || enq.key || '');
+      if (!polishKey) throw new Error('润色任务入队失败:后端未返回 polish_key。');
+      for (let i = 0; i < 18; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+        if (cancelledRef.current) return;
+        const resp = await getContractPolish(apiToken, polishKey);
+        if (cancelledRef.current) return;
+        const state = String(resp.state || resp.status || '');
+        if (state === 'ready') {
+          const raw = (resp.result || {}) as Record<string, unknown>;
+          const polishedFields = (raw.fields && typeof raw.fields === 'object' && !Array.isArray(raw.fields)
+            ? raw.fields
+            : raw) as Record<string, unknown>;
+          const items: PolishPreviewItem[] = Object.entries(textFields)
+            .map(([key, original]) => ({
+              key,
+              label: (template?.slots || []).find((slot) => slot.key === key)?.label || key,
+              original,
+              polished: String(polishedFields[key] ?? '').trim(),
+            }))
+            .filter((item) => item.polished && item.polished !== item.original);
+          if (!items.length) {
+            setPolishState('idle');
+            setPolishError('润色完成:LLM 没有给出与原文不同的改写,表单未变。');
+            return;
+          }
+          setPolishPreview(items);
+          setPolishState('idle');
+          return;
+        }
+        if (state === 'failed') throw new Error(String(resp.error || '润色失败(LLM 未产出结果)。'));
+      }
+      throw new Error('润色超时(90 秒)——任务仍在队列(泳道可见),稍后可重试。');
+    } catch (polishRunError) {
+      if (cancelledRef.current) return;
+      setPolishState('failed');
+      setPolishError(polishRunError instanceof Error ? polishRunError.message : 'AI 润色失败');
+    }
+  };
+
+  const applyPolish = () => {
+    if (!polishPreview) return;
+    setFields((current) => {
+      const next = { ...current };
+      polishPreview.forEach((item) => { next[item.key] = item.polished; });
+      return next;
+    });
+    setPolishPreview(null);
+  };
 
   const submit = async () => {
     const missing = (template?.slots || []).filter((slot) => slot.required && !String(fields[slot.key] || '').trim());
@@ -1005,39 +1222,79 @@ export function GenerateContractModal({
             {rows.map((item) => <option key={item.id} value={item.id} style={{ background: '#0a0a0d' }}>{item.kolHandle || item.kolName} · {item.platform}</option>)}
           </select>
         </div>
+        <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/[0.05] px-3 py-2 mb-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            <input
+              ref={invoiceFileRef}
+              type="file"
+              accept=".pdf,.png,.jpg,.jpeg"
+              className="hidden"
+              onChange={(event) => { void runInvoiceExtract(event.target.files?.[0]); event.target.value = ''; }}
+            />
+            <button
+              className="px-2.5 py-1.5 rounded-md text-[11px] font-medium bg-cyan-500/15 border border-cyan-500/35 text-cyan-200 hover:bg-cyan-500/25 disabled:opacity-50"
+              type="button"
+              onClick={() => invoiceFileRef.current?.click()}
+              disabled={invoiceState === 'uploading' || invoiceState === 'extracting' || !apiToken}
+              title={apiToken ? undefined : '缺少 API token,发票回填不可用'}
+            >
+              {invoiceState === 'uploading' ? '发票上传中…' : invoiceState === 'extracting' ? '发票解析中…(≤90s · 泳道「发票提取」可见)' : '上传发票自动回填'}
+            </button>
+            <button
+              className="px-2.5 py-1.5 rounded-md text-[11px] font-medium bg-purple-500/15 border border-purple-500/35 text-purple-200 hover:bg-purple-500/25 disabled:opacity-50"
+              type="button"
+              onClick={() => void runPolish()}
+              disabled={polishState === 'running' || !apiToken}
+              title={apiToken ? '整组润色非选择/日期类文本槽,差异预览确认后才写回' : '缺少 API token,AI 润色不可用'}
+            >
+              {polishState === 'running' ? 'AI 润色中…(≤90s · 队列可见)' : 'AI 润色(整组文本)'}
+            </button>
+            <span className="text-[10px] text-slate-500">发票 PDF/PNG/JPG → 乙方与收款信息自动回填;两者均为 LLM 产物,请人工核对</span>
+          </div>
+          {invoiceState === 'done' && invoiceFilledKeys.size ? (
+            <div className="mt-1.5 text-[10.5px] text-cyan-300">已回填 {invoiceFilledKeys.size} 个字段(高亮显示)——来自发票,请逐项核对后再生成。</div>
+          ) : null}
+          {invoiceError ? <div className="mt-1.5 text-[10.5px] text-rose-300">{invoiceError}</div> : null}
+          {polishError ? <div className="mt-1.5 text-[10.5px] text-rose-300">{polishError}</div> : null}
+        </div>
         <div className="flex-1 overflow-y-auto -mx-1 px-1 space-y-3">
           {grouped.map(([group, slots]) => (
             <div key={group}>
               <div className="text-[10.5px] text-slate-500 mb-1.5">{group}</div>
               <div className="grid grid-cols-2 gap-2">
-                {slots.map((slot) => (
-                  <label className={`text-[10.5px] text-slate-400 ${slot.type === 'multiline' ? 'col-span-2' : ''}`} key={slot.key}>
-                    {slot.label}{slot.required ? <span className="text-rose-400"> *</span> : null}
-                    {slot.type === 'choice' ? (
-                      <select
-                        className="mt-1 w-full px-2.5 py-1.5 rounded-md bg-white/[0.02] border border-white/[0.06] text-[11px] text-white"
-                        value={fields[slot.key] || ''}
-                        onChange={(event) => setFields((current) => ({ ...current, [slot.key]: event.target.value }))}
-                      >
-                        <option value="" style={{ background: '#0a0a0d' }}>请选择</option>
-                        {(slot.options || []).map((option) => <option key={option} value={option} style={{ background: '#0a0a0d' }}>{option}</option>)}
-                      </select>
-                    ) : slot.type === 'multiline' ? (
-                      <textarea
-                        className="mt-1 w-full h-16 px-2.5 py-1.5 rounded-md bg-white/[0.02] border border-white/[0.06] text-[11px] text-white resize-y"
-                        value={fields[slot.key] || ''}
-                        onChange={(event) => setFields((current) => ({ ...current, [slot.key]: event.target.value }))}
-                      />
-                    ) : (
-                      <input
-                        className="mt-1 w-full px-2.5 py-1.5 rounded-md bg-white/[0.02] border border-white/[0.06] text-[11px] text-white"
-                        type={slot.type === 'date' ? 'date' : 'text'}
-                        value={fields[slot.key] || ''}
-                        onChange={(event) => setFields((current) => ({ ...current, [slot.key]: event.target.value }))}
-                      />
-                    )}
-                  </label>
-                ))}
+                {slots.map((slot) => {
+                  const fromInvoice = invoiceFilledKeys.has(slot.key);
+                  const invoiceBorder = fromInvoice ? 'border-cyan-400/60 ring-1 ring-cyan-400/30' : 'border-white/[0.06]';
+                  return (
+                    <label className={`text-[10.5px] text-slate-400 ${slot.type === 'multiline' ? 'col-span-2' : ''}`} key={slot.key}>
+                      {slot.label}{slot.required ? <span className="text-rose-400"> *</span> : null}
+                      {slot.type === 'choice' ? (
+                        <select
+                          className={`mt-1 w-full px-2.5 py-1.5 rounded-md bg-white/[0.02] border ${invoiceBorder} text-[11px] text-white`}
+                          value={fields[slot.key] || ''}
+                          onChange={(event) => setSlotValue(slot.key, event.target.value)}
+                        >
+                          <option value="" style={{ background: '#0a0a0d' }}>请选择</option>
+                          {(slot.options || []).map((option) => <option key={option} value={option} style={{ background: '#0a0a0d' }}>{option}</option>)}
+                        </select>
+                      ) : slot.type === 'multiline' ? (
+                        <textarea
+                          className={`mt-1 w-full h-16 px-2.5 py-1.5 rounded-md bg-white/[0.02] border ${invoiceBorder} text-[11px] text-white resize-y`}
+                          value={fields[slot.key] || ''}
+                          onChange={(event) => setSlotValue(slot.key, event.target.value)}
+                        />
+                      ) : (
+                        <input
+                          className={`mt-1 w-full px-2.5 py-1.5 rounded-md bg-white/[0.02] border ${invoiceBorder} text-[11px] text-white`}
+                          type={slot.type === 'date' ? 'date' : 'text'}
+                          value={fields[slot.key] || ''}
+                          onChange={(event) => setSlotValue(slot.key, event.target.value)}
+                        />
+                      )}
+                      {fromInvoice ? <span className="block mt-0.5 text-[9.5px] text-cyan-300">来自发票,请核对</span> : null}
+                    </label>
+                  );
+                })}
               </div>
             </div>
           ))}
@@ -1052,6 +1309,40 @@ export function GenerateContractModal({
             </button>
           </div>
         </div>
+
+        {polishPreview ? (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" role="presentation" onClick={() => setPolishPreview(null)}>
+            <div className="rounded-2xl border border-white/[0.08] bg-[#0b1220] w-full max-w-2xl p-5 max-h-[85vh] flex flex-col" role="dialog" aria-label="AI 润色差异预览" onClick={(event) => event.stopPropagation()}>
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <h3 className="text-[14px] font-semibold text-white">AI 润色差异预览</h3>
+                  <p className="text-[10.5px] text-slate-500 mt-0.5">LLM 产物 · 请人工确认——点「应用」才写回表单,放弃则原文不动</p>
+                </div>
+                <button className="text-slate-500 hover:text-white" type="button" onClick={() => setPolishPreview(null)}><X size={16} /></button>
+              </div>
+              <div className="flex-1 overflow-y-auto -mx-1 px-1 space-y-3">
+                {polishPreview.map((item) => (
+                  <div key={item.key} className="rounded-lg border border-white/[0.06] bg-white/[0.015] p-2.5">
+                    <div className="text-[10.5px] text-slate-400 mb-1.5 flex items-center gap-2">
+                      {item.label}
+                      <span className="text-[9px] px-1.5 py-0.5 rounded border border-purple-400/30 bg-purple-400/10 text-purple-300">LLM 产物·请人工确认</span>
+                    </div>
+                    <div className="text-[9.5px] text-slate-500 mb-0.5">原文</div>
+                    <div className="rounded-md bg-black/30 px-2 py-1.5 text-[11px] text-slate-300 whitespace-pre-wrap">{item.original}</div>
+                    <div className="text-[9.5px] text-emerald-400/80 mt-1.5 mb-0.5">润色后</div>
+                    <div className="rounded-md bg-emerald-500/[0.06] border border-emerald-500/20 px-2 py-1.5 text-[11px] text-emerald-100 whitespace-pre-wrap">{item.polished}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="flex items-center justify-end gap-2 mt-3.5 pt-3 border-t border-white/[0.05]">
+                <button className="px-3 py-1.5 rounded-md border border-white/[0.08] text-[11px] text-slate-300 hover:bg-white/[0.04]" type="button" onClick={() => setPolishPreview(null)}>放弃改写</button>
+                <button className="px-3.5 py-1.5 rounded-md text-[11px] font-medium bg-emerald-500/90 hover:bg-emerald-500 text-white" type="button" onClick={applyPolish}>
+                  应用 {polishPreview.length} 处改写
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );

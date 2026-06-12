@@ -880,6 +880,11 @@ export function SmartKolInputPanel({
               <span className="rounded-md border border-white/[0.07] px-2 py-1">测评号 {display(recallResult.diagnostics?.reviewer_returned)}</span>
             </div>
           </div>
+          {/* P0-B(session#48 尸检):text 召回 ready ≠ 全链完成——深度查找/全网发现从不自动发
+              (E4 闸)。裸 "ready" 让用户以为零动静;诚实标注回显规格(命中数+未启用项)。 */}
+          <div className="mb-2 rounded-md border border-amber-300/15 bg-amber-400/[0.05] px-2.5 py-1.5 text-[10px] text-amber-200/80">
+            本次为库内语义召回(命中 {display(recallResult.diagnostics?.candidate_count)} 条)· 全网深度查找未启用——需手动点「后台深度查找」发起;批量自动分析按闸关闭(E4)。
+          </div>
           {Object.keys(llmPlan).length ? <PlanPills plan={llmPlan} /> : null}
           <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
             {recallItems.map((item, index) => (

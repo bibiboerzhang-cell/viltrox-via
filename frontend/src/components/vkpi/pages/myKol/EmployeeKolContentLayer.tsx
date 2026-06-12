@@ -172,6 +172,7 @@ export function EmployeeKolContentLayer({
   viltroxOnly = true,
   postsOverride,
   subtitle,
+  commentsFetcher,
 }: {
   apiToken?: string;
   kol?: VkpiKolOption;
@@ -180,6 +181,8 @@ export function EmployeeKolContentLayer({
   /** Pool 收藏行旁路(C4-full):evidence 已映射好的 PostPreview 直接喂入,跳过 kol posts 接口。 */
   postsOverride?: PostPreview[];
   subtitle?: string;
+  /** Pool 收藏行评论旁路:按 post 取评论(evidence 评论表),替代 marketing kol comments 接口。 */
+  commentsFetcher?: (post: PostPreview) => Promise<{ rows: Array<Record<string, unknown>>; total: number }>;
 }) {
   const [postState, setPostState] = useState(emptyPostState);
   const [commentState, setCommentState] = useState(emptyCommentState);
@@ -191,9 +194,9 @@ export function EmployeeKolContentLayer({
   const [commentPost, setCommentPost] = useState<PostPreview | null>(null);
 
   const loadComments = useCallback((targetPost?: PostPreview | null) => {
-    if (!apiToken || !kol?.id || !targetPost?.url) return;
+    if (!targetPost?.url || (!commentsFetcher && (!apiToken || !kol?.id))) return;
     setCommentState((current) => ({ ...current, loading: true, error: '' }));
-    fetchKolCommentRows(apiToken, kol.id, targetPost.url)
+    (commentsFetcher ? commentsFetcher(targetPost) : fetchKolCommentRows(apiToken as string, kol!.id, targetPost.url))
       .then(({ rows, total }) => {
         setCommentState({
           items: mapCommentRows(rows),
@@ -209,7 +212,7 @@ export function EmployeeKolContentLayer({
           error: quietMissingError(error),
         }));
       });
-  }, [apiToken, kol?.id]);
+  }, [apiToken, kol?.id, commentsFetcher]);
 
   useEffect(() => {
     setPreviewPost(null);

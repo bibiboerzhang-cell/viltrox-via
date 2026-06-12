@@ -27,13 +27,11 @@ import { AllMoversModal } from "./components/modals/AllMoversModal";
 import { AllNotificationsModal } from "./components/modals/AllNotificationsModal";
 import { AllProjectsModal } from "./components/modals/AllProjectsModal";
 import { AllRemindersModal } from "./components/modals/AllRemindersModal";
-import { DocsModal } from "./components/modals/DocsModal";
 import { EditGroupModal } from "./components/modals/EditGroupModal";
 import { EventDetailModal } from "./components/modals/EventDetailModal";
 import { EventPreviewModal } from "./components/modals/EventPreviewModal";
 import { FeedbackModal } from "./components/modals/FeedbackModal";
 import { FullCalendarModal } from "./components/modals/FullCalendarModal";
-import { ImportTasksModal } from "./components/modals/ImportTasksModal";
 import { KOLDetailModal } from "./components/modals/KOLDetailModal";
 import { KPIDetailModal } from "./components/modals/KPIDetailModal";
 import { NotificationDetailModal } from "./components/modals/NotificationDetailModal";
@@ -258,8 +256,6 @@ export function V615ReplicaApp(props: any = {}) {
   const [showProfile, setShowProfile] = useState(false);
   const [showTeam, setShowTeam] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
-  const [showImport, setShowImport] = useState(false);
-  const [showDocs, setShowDocs] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
   // V6.14.4: ViewAll modals + NotifDetail + EditGroup
@@ -677,8 +673,6 @@ export function V615ReplicaApp(props: any = {}) {
       t 
     })),
     e(AnimatePresence, null, showSettingsModal && e(SettingsModal, { onClose: () => setShowSettingsModal(false), t })),
-    e(AnimatePresence, null, showImport && e(ImportTasksModal, { onClose: () => setShowImport(false), t })),
-    e(AnimatePresence, null, showDocs && e(DocsModal, { onClose: () => setShowDocs(false) })),
     e(AnimatePresence, null, showShortcuts && e(ShortcutsModal, { onClose: () => setShowShortcuts(false) })),
     e(AnimatePresence, null, showFeedback && e(FeedbackModal, { onClose: () => setShowFeedback(false), apiToken, onSubmitted: handleFeedbackSubmitted })),
     // V6.14.4: ViewAll modals + NotifDetail + EditGroup

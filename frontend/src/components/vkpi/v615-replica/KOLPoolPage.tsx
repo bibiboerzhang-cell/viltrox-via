@@ -2,7 +2,7 @@
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence } from "framer-motion";
 import { ChevronDown, Info, Search, Star, X } from "lucide-react";
 import { FilterBar } from "./components/FilterBar";
@@ -14,7 +14,7 @@ import { SearchProgressBar } from "./components/SearchProgressBar";
 import { SmartKolInputPanel } from "./components/SmartKolInputPanel";
 import { ContactModal } from "./components/modals/ContactModal";
 import { KolPoolAllModal } from "./components/modals/KolPoolAllModal";
-import { getKolPoolDetailBundle, getKolPoolItem } from "../../../domains/kol";
+import { favoriteKolPool, getKolPoolDetailBundle, getKolPoolItem, listKolPoolFavorites, unfavoriteKolPool } from "../../../domains/kol";
 import { toV615KolPoolRows } from "./kolPoolRuntime";
 import { candidateKindGroup } from "./lib/candidateKind";
 import { CANDIDATE_KIND_INFO } from "./data/candidateKindInfo";
@@ -105,11 +105,36 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
     };
   };
   
+  // C3 收藏接线:挂载拉取本人收藏集(107 未 apply / 端点未活时静默回退纯内存 Set,行为同旧)。
+  useEffect(() => {
+    if (!apiToken) return;
+    let cancelled = false;
+    listKolPoolFavorites(apiToken)
+      .then((resp) => {
+        if (cancelled) return;
+        const ids = (resp.items || []).map((it) => it.kol_pool_id).filter(Boolean);
+        if (ids.length) setMyList(new Set(ids));
+      })
+      .catch(() => { /* 端点未激活(107 未 apply)→ 保持本地 Set,星标仍可用 */ });
+    return () => { cancelled = true; };
+  }, [apiToken]);
+
   const toggleMyList = (id) => {
+    const wasIn = myList.has(id);
     setMyList(prev => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id); else next.add(id);
       return next;
+    });
+    // 乐观更新 + 真持久化;失败(端点未活/网络)回滚本地态,不留假象。
+    if (!apiToken || !id) return;
+    const call = wasIn ? unfavoriteKolPool(apiToken, id) : favoriteKolPool(apiToken, id);
+    call.catch(() => {
+      setMyList(prev => {
+        const next = new Set(prev);
+        if (wasIn) next.add(id); else next.delete(id);
+        return next;
+      });
     });
   };
   const openItem = async (item) => {

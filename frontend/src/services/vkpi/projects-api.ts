@@ -84,6 +84,10 @@ export interface VkpiProjectContract {
   field_confidence_json?: Record<string, number> | null;
   field_confirmed_json?: Record<string, unknown> | null;
   manual_overrides_json?: Record<string, unknown> | null;
+  /** 签署版关联:本合同是 #N(GEN 草稿)的签署版 */
+  signed_version_of?: number | null;
+  /** 本草稿已有签署版 #M(被取代) */
+  superseded_by?: number | null;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -203,12 +207,14 @@ export async function uploadProjectContract(
   token: string,
   projectId: string,
   file: File,
-  payload: { assignmentId?: string | number | null; kolPoolId?: string | number | null } = {},
+  payload: { assignmentId?: string | number | null; kolPoolId?: string | number | null; relatedContractId?: string | number | null } = {},
 ) {
   const body = new FormData();
   body.append("file", file);
   if (payload.assignmentId) body.append("assignment_id", String(payload.assignmentId));
   if (payload.kolPoolId) body.append("kol_pool_id", String(payload.kolPoolId));
+  // 签署版上传:携带被签署的 GEN 草稿 id,后端把本次上传标记为其签署版(双记录留痕)。
+  if (payload.relatedContractId) body.append("related_contract_id", String(payload.relatedContractId));
   return apiFetch<{ status?: string; contract?: VkpiProjectContract; job?: Record<string, unknown> | null; extraction?: Record<string, unknown>; budget?: Record<string, unknown> }>(
     `/api/admin/vkpi/projects/${encodeURIComponent(projectId)}/contracts/upload`,
     { method: "POST", body, timeoutMs: 150000 },
@@ -532,6 +538,54 @@ export async function enqueueLogisticsSync(token: string, projectId?: number) {
   return apiFetch<{ status?: string; job_id?: number; message?: string }>(
     "/api/marketing/projects/logistics-sync/enqueue",
     { method: "POST", body: jsonBody({ project_id: projectId }) },
+    token,
+  );
+}
+
+// ---- 发票提取(LLM 经 apify_jobs 队列;产物 llm_ 标注,人工核对后才算真值) ----
+
+export interface VkpiInvoiceExtractResult {
+  party_name?: string | null;
+  address?: string | null;
+  account_name?: string | null;
+  account_number_or_iban?: string | null;
+  swift?: string | null;
+  bank_name?: string | null;
+  bank_address?: string | null;
+  amount?: string | number | null;
+  [key: string]: unknown;
+}
+
+export async function enqueueInvoiceExtract(token: string, projectId: string, fileUrl: string) {
+  return apiFetch<{ status?: string; extract_key?: string; key?: string; job?: Row | null; message?: string }>(
+    `/api/marketing/projects/${encodeURIComponent(projectId)}/invoice-extract/enqueue`,
+    { method: "POST", body: jsonBody({ file_url: fileUrl }) },
+    token,
+  );
+}
+
+export async function getInvoiceExtract(token: string, extractKey: string) {
+  return apiFetch<{ state?: string; status?: string; result?: VkpiInvoiceExtractResult | null; error?: string | null }>(
+    `/api/marketing/projects/invoice-extract/${encodeURIComponent(extractKey)}?_ts=${Date.now()}`,
+    { cache: "no-store" },
+    token,
+  );
+}
+
+// ---- 合同槽位 AI 润色(LLM 经队列;差异预览人工「应用」后才写回表单) ----
+
+export async function enqueueContractPolish(token: string, projectId: string, templateKey: string, textFields: Record<string, string>) {
+  return apiFetch<{ status?: string; polish_key?: string; key?: string; job?: Row | null; message?: string }>(
+    `/api/marketing/projects/${encodeURIComponent(projectId)}/contract-polish/enqueue`,
+    { method: "POST", body: jsonBody({ template_key: templateKey, fields: textFields }) },
+    token,
+  );
+}
+
+export async function getContractPolish(token: string, polishKey: string) {
+  return apiFetch<{ state?: string; status?: string; result?: { fields?: Record<string, string> } & Record<string, unknown> | null; error?: string | null }>(
+    `/api/marketing/projects/contract-polish/${encodeURIComponent(polishKey)}?_ts=${Date.now()}`,
+    { cache: "no-store" },
     token,
   );
 }

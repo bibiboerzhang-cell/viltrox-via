@@ -962,3 +962,62 @@ export async function getKolPoolCompetitorDashboard(
     token,
   );
 }
+
+// ── C2 收藏三端点包装(四环漏斗第一段;后端随 107 apply 激活)──
+export async function favoriteKolPool(token: string, kolPoolId: number | string, note = "") {
+  return apiFetch<Row>(
+    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/favorite`,
+    { method: "POST", body: JSON.stringify({ note }), headers: { "Content-Type": "application/json" } },
+    token,
+  );
+}
+
+export async function unfavoriteKolPool(token: string, kolPoolId: number | string) {
+  return apiFetch<Row>(
+    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/favorite`,
+    { method: "DELETE" },
+    token,
+  );
+}
+
+export async function listKolPoolFavorites(token: string, limit = 2000) {
+  return apiFetch<{ items?: Row[]; total?: number }>(
+    `/api/admin/vkpi/kol-pool/favorites?limit=${encodeURIComponent(String(limit))}`,
+    {},
+    token,
+  );
+}
+
+export async function listKolPoolVideos(token: string, kolPoolId: number | string, limit = 50) {
+  return apiFetch<{ items?: Row[]; total?: number }>(
+    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/videos?limit=${encodeURIComponent(String(limit))}`,
+    {},
+    token,
+  );
+}
+
+export async function enqueueKolProfileDeepCrawl(token: string, url: string, kolPoolId?: number) {
+  return apiFetch<Row>(
+    "/api/admin/vkpi/kol-pool/profile-deep-crawl/enqueue",
+    // 12 = IG profile-scraper 单跑 latestPosts 上限(YT/TT 同步取齐);LLM 仍只析 1 条代表作。
+    // 真全量(全部历史视频)= E5 account_full_sync 单独件。
+    { method: "POST", body: JSON.stringify({ url, kol_pool_id: kolPoolId, max_posts: 12 }), headers: { "Content-Type": "application/json" } },
+    token,
+  );
+}
+
+export async function enqueueKolPoolCommentsCollect(token: string, kolPoolId: number) {
+  return apiFetch<Row>(
+    "/api/admin/vkpi/kol-pool/comments-collect/enqueue",
+    { method: "POST", body: JSON.stringify({ kol_pool_id: kolPoolId }), headers: { "Content-Type": "application/json" } },
+    token,
+  );
+}
+
+export async function listKolPoolVideoComments(token: string, kolPoolId: number, evidenceId: number, limit = 100) {
+  return apiFetch<{ items?: Row[]; page?: Row }>(
+    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/video-comments?evidence_id=${encodeURIComponent(String(evidenceId))}&limit=${limit}`,
+    {},
+    token,
+  );
+}

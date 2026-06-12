@@ -568,6 +568,13 @@ export function ProjectDetailView({
       setActionModal(null);
       setNotice({ tone: 'success', title: '视频已写入 evidence', body: `${title} · 播放 ${views}` });
       await onProjectUpdated?.();
+      // 详情已重读真值,本地乐观 +1 退场——否则真值落后/超前时会双计或卡住旧数。
+      setEvidenceOverrides((current) => {
+        if (!(row.id in current)) return current;
+        const next = { ...current };
+        delete next[row.id];
+        return next;
+      });
     }
   };
 
@@ -619,7 +626,7 @@ export function ProjectDetailView({
     await onProjectUpdated?.();
   };
 
-  const uploadContractFile = async (file: File, assignmentId?: string, kolPoolId?: string) => {
+  const uploadContractFile = async (file: File, assignmentId?: string, kolPoolId?: string, relatedContractId?: number) => {
     if (!apiToken) {
       setNotice({ tone: 'warning', title: '无法上传合同', body: '当前缺少 API token。' });
       return;
@@ -627,9 +634,13 @@ export function ProjectDetailView({
     const isPdf = /\.pdf$/i.test(file.name);
     setContractActionId('upload');
     try {
-      await uploadProjectContract(apiToken, project.id, file, { assignmentId, kolPoolId });
+      await uploadProjectContract(apiToken, project.id, file, { assignmentId, kolPoolId, relatedContractId });
       await loadContracts();
-      setNotice({ tone: 'success', title: '合同已归档', body: isPdf ? '条款提取已入队，完成后此处自动回填；进度见左侧任务泳道。' : '文件已存档；DOC/DOCX 暂不自动提取。' });
+      setNotice({
+        tone: 'success',
+        title: relatedContractId ? '签署版已归档' : '合同已归档',
+        body: `${relatedContractId ? `已关联草稿 #${relatedContractId}(双记录留痕)。` : ''}${isPdf ? '条款提取已入队，完成后此处自动回填；进度见左侧任务泳道。' : '文件已存档；DOC/DOCX 暂不自动提取。'}`,
+      });
     } catch (error) {
       setNotice({ tone: 'warning', title: '合同上传失败', body: error instanceof Error ? error.message : '合同上传失败。' });
     } finally {
@@ -961,7 +972,7 @@ export function ProjectDetailView({
           <div className="flex items-center gap-2 mb-1 flex-wrap">
             <h2 className="text-[20px] font-bold text-white">{project.campaign || '未命名推广'}</h2>
             <span className="text-[10.5px] px-2 py-0.5 rounded font-medium" style={{ background: statusBg(campaignStatus), color: PROJECT_STATUS_COLOR[campaignStatus] || PROJECT_STATUS_COLOR['已结束'] }}>{campaignStatus}</span>
-            <span className="text-[10px] px-2 py-0.5 rounded bg-white/[0.04] text-slate-300 flex items-center gap-1">产品 {project.campaign || '-'}</span>
+            <span className="text-[10px] px-2 py-0.5 rounded bg-white/[0.04] text-slate-300 flex items-center gap-1">产品 {project.productName || project.productSku || '-'}</span>
           </div>
           <div className="text-[12px] text-slate-400 mb-2">{bottleneck.text}</div>
           <div className="flex items-center gap-3 flex-wrap">
@@ -1283,6 +1294,7 @@ export function ProjectDetailView({
           templates={contractTemplates}
           partyA={contractPartyA}
           busy={generateBusy}
+          apiToken={apiToken}
           onClose={() => setGenerateOpen(false)}
           onSubmit={async ({ templateKey, fields, row }) => {
             if (!apiToken) throw new Error('缺少 API token。');
@@ -1307,32 +1319,37 @@ export function ProjectDetailView({
         />
       ) : null}
 
-      {contactRow ? (
-        <ContactKolModal
-          row={contactRow}
-          onClose={() => setContactRow(null)}
-          onLogOutreach={async ({ message, channel }) => {
-            if (!apiToken) throw new Error('缺少 API token,不能记录沟通。');
-            await createMarketingMessage(apiToken, {
-              project_id: Number(project.id),
-              direction: 'outbound',
-              source: channel,
-              body: message,
-              receiver: contactRow.kolHandle || contactRow.kolName || '',
-              metadata: { kol_pool_id: contactRow.kolPoolId, assignment_id: contactRow.assignmentId, stage: contactRow.stage },
-            });
-            setNotice({ tone: 'success', title: '沟通已留档', body: `外联消息已记录到「${contactRow.kolHandle || contactRow.kolName}」的沟通流。` });
-          }}
-          onRequestDraft={async () => {
-            if (!apiToken) throw new Error('缺少 API token。');
-            return enqueueKolOutreachDraft(apiToken, Number(contactRow.kolPoolId), Number(project.id));
-          }}
-          onFetchDraft={async () => {
-            if (!apiToken) return { state: 'missing' };
-            return getKolOutreachDraft(apiToken, Number(contactRow.kolPoolId));
-          }}
-        />
-      ) : null}
+      {contactRow ? (() => {
+        // kolPoolId 非正整数(空/NaN/0)时不传草稿入口:Number('') 会变 0 入队必失败,modal 自行降级。
+        const contactPoolId = Number(contactRow.kolPoolId);
+        const canDraft = Number.isInteger(contactPoolId) && contactPoolId > 0;
+        return (
+          <ContactKolModal
+            row={contactRow}
+            onClose={() => setContactRow(null)}
+            onLogOutreach={async ({ message, channel }) => {
+              if (!apiToken) throw new Error('缺少 API token,不能记录沟通。');
+              await createMarketingMessage(apiToken, {
+                project_id: Number(project.id),
+                direction: 'outbound',
+                source: channel,
+                body: message,
+                receiver: contactRow.kolHandle || contactRow.kolName || '',
+                metadata: { kol_pool_id: contactRow.kolPoolId, assignment_id: contactRow.assignmentId, stage: contactRow.stage },
+              });
+              setNotice({ tone: 'success', title: '沟通已留档', body: `外联消息已记录到「${contactRow.kolHandle || contactRow.kolName}」的沟通流。` });
+            }}
+            onRequestDraft={canDraft ? async () => {
+              if (!apiToken) throw new Error('缺少 API token。');
+              return enqueueKolOutreachDraft(apiToken, contactPoolId, Number(project.id));
+            } : undefined}
+            onFetchDraft={canDraft ? async () => {
+              if (!apiToken) return { state: 'missing' };
+              return getKolOutreachDraft(apiToken, contactPoolId);
+            } : undefined}
+          />
+        );
+      })() : null}
 
       {actionModal?.kind === 'contract' ? (
         <ContractUploadModal
