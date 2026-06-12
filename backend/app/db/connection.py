@@ -143,6 +143,10 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "104_vkpi_evidence_source_width.sql",
     "105_apify_jobs_provider_retry.sql",
     "106_vkpi_project_retrospective_budget.sql",
+    "107_vkpi_kol_pool_favorites.sql",
+    "108_vkpi_kol_pool_video_cursor.sql",
+    "109_vkpi_kol_pool_duplicate_of.sql",
+    "110_vkpi_projects_restricted.sql",
 )
 
 try:
