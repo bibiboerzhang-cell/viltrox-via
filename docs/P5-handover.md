@@ -154,3 +154,4 @@
 | 06-12 | 自走令 d1-d6(一单一 commit) | `65b6b2e0`→`ae69f01c` | 全 tsc 绿+自审三问;d4 零 SQL 写入证明;dist=ae69f01c |
 | 06-12 | B 心跳 + C 报价 + G dry-run 清单 | (本 commit) | 13 job 死因=ENABLE_SCHEDULER=0;qualified 真实面 25 行;C5 清单 781 对待过目 |
 | 等待 | "无恙"→C3/C4 commit;"apply"→107+C2;"清单过目"→C5;"报价"→脉冲 | — | 四拍齐等 |
+| 06-12 19:2x | **A 补分执行**(智能层第 0 号,裁决①放行;红线第二次修订:离线 backfill 同函数) | — | — | — | 快照 `viltrox2-pre-fitbackfill-20260611T191937.dump`(50MB);**第二起合法漂移:指纹基线 1123/507.4200/1123 → 1123/39823.6700/1123**,全额归因:957 标记行(`[rule_v0_backfill_20260612]` reason 留痕)合计 39316.25 + 原 11 行原封 507.42;155 行门槛保护保持 NULL;幂等复跑 written=0;脚本 `backend/scripts/backfill_fit_scores.py`。排序当场痊愈(分是数据,读缓存 ≤300s 即见);三段 clause 随下次 HUP 激活后自动收敛 fit 主导 |
