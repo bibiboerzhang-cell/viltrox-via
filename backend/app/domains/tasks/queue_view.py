@@ -126,6 +126,8 @@ def _infer_kind(source: str, job_type: str = "", purpose: str = "", payload: Any
         return "合同提取"
     if _text(job_type).lower() == "project_retrospective_aggregate" or "project_retrospective" in haystack:
         return "复盘聚合"
+    if _text(job_type).lower() == "kol_profile_deep_crawl" or "kol_profile_deep_crawl" in haystack:
+        return "账号分析"
     if "final_v1" in haystack or "video_analysis" in haystack or "video" in haystack:
         return "video深析"
     if any(word in haystack for word in ("url", "profile", "crawl", "scan", "resolve", "download", "ingest", "sync")):

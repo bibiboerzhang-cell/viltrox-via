@@ -1438,6 +1438,23 @@ def _process_project_contract_extract(conn: psycopg.Connection[Any], job: dict[s
             )
 
 
+def _process_kol_profile_deep_crawl(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
+    """队列铁律(2026-06-12):账号深爬 execute 走队列,泳道可见;内核与 HTTP execute 同一条。"""
+    from app.domains.kol import url_deep_crawl as kol_url_deep_crawl
+
+    staff = _resolve_job_staff(conn, payload)
+    with db_connection_sync_scope():
+        result = kol_url_deep_crawl.run_profile_deep_crawl_for_job(payload, staff=staff)
+    status = str((result or {}).get("status") or "")
+    ok = status in ("", "ok", "ready", "done", "executed") or bool((result or {}).get("execution"))
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE apify_jobs SET status=%s, last_error=%s, updated_at=NOW() WHERE id=%s",
+                ("done" if ok else "blocked", None if ok else (status or "deep_crawl_not_executed")[:300], int(job["id"])),
+            )
+
+
 def _process_project_retrospective(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
     project_id = _int_or_none(payload.get("target_id") or payload.get("project_id"))
     if not project_id:
@@ -3012,6 +3029,9 @@ def _process_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> None:
         return
     if str(job.get("job_type") or "").strip().lower() == "project_retrospective_aggregate":
         _process_project_retrospective(conn, job, payload)
+        return
+    if str(job.get("job_type") or "").strip().lower() == "kol_profile_deep_crawl":
+        _process_kol_profile_deep_crawl(conn, job, payload)
         return
     target_type, target_id = _target(payload)
     if not target_type or not target_id:

@@ -91,7 +91,17 @@ def list_favorites(*, staff: dict[str, Any] | None = None, limit: int = 2000) ->
         """
         SELECT f.id AS favorite_id, f.kol_pool_id, f.note, f.created_at,
                kp.platform, kp.handle, kp.display_name, kp.followers,
-               kp.viltrox_fit_score, kp.profile_url, kp.avatar_url
+               kp.viltrox_fit_score, kp.profile_url, kp.avatar_url,
+               (
+                 SELECT json_agg(json_build_object(
+                   'project_id', p.id, 'project_name', p.project_name,
+                   'stage', a.stage, 'stage_status', a.stage_status))
+                 FROM vkpi_project_kol_assignments a
+                 JOIN vkpi_projects p ON p.id = a.project_id
+                 WHERE a.kol_pool_id = f.kol_pool_id
+                   AND COALESCE(a.stage,'') NOT IN ('churned','cancelled','lost')
+                   AND COALESCE(p.restricted, FALSE) = FALSE
+               ) AS projects_json
         FROM vkpi_kol_pool_favorites f
         JOIN vkpi_kol_pool kp ON kp.id = f.kol_pool_id
         WHERE f.staff_id=?

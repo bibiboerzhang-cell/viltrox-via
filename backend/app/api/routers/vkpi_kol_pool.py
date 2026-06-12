@@ -866,6 +866,31 @@ def batch_enrich_pool_items(
     )
 
 
+@router.post("/kol-pool/profile-deep-crawl/enqueue")
+@audit_action(
+    action_type="kol_profile_deep_crawl_enqueue",
+    target_type="kol_pool",
+    target_id_extractor=lambda result, kwargs: str((result or {}).get("job_id") or ""),
+    detail_extractor=lambda result, kwargs: f"enqueue deep crawl status={(result or {}).get('status')}",
+)
+def enqueue_kol_profile_deep_crawl(
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """队列铁律:账号深爬入 apify_jobs(泳道可见),替代同步内爬。"""
+    from app.domains.kol import url_deep_crawl as kol_url_deep_crawl
+
+    try:
+        return kol_url_deep_crawl.enqueue_profile_deep_crawl_job(
+            str(body.get("url") or ""),
+            kol_pool_id=body.get("kol_pool_id"),
+            max_posts=int(body.get("max_posts") or 3),
+            staff=staff,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/kol-pool/favorites")
 def list_kol_pool_favorites(
     limit: int = Query(default=2000, ge=1, le=5000),

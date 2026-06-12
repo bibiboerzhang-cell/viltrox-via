@@ -2328,3 +2328,68 @@ def _normalise_identity(value: Any) -> str:
         except ValueError:
             pass
     return text
+
+
+# ── 队列铁律(2026-06-12 裁令:所有 LLM 搜索都要进左侧队列)──
+DEEP_CRAWL_JOB_TYPE = "kol_profile_deep_crawl"
+
+
+def enqueue_profile_deep_crawl_job(
+    url: str,
+    *,
+    kol_pool_id: int | None = None,
+    max_posts: int = 3,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """把账号深爬 execute 入 apify_jobs 队列(泳道可见),替代同步 HTTP 内爬。
+
+    幂等:同 URL 已有 queued/running 任务则返回 already_queued。
+    """
+    import json as _json
+
+    conn = get_conn()
+    clean_url = str(url or "").strip()
+    if not clean_url:
+        raise ValueError("url required")
+    active = conn.execute(
+        """
+        SELECT id FROM apify_jobs
+        WHERE job_type=? AND status IN ('queued','running')
+          AND payload->>'url'=? LIMIT 1
+        """,
+        (DEEP_CRAWL_JOB_TYPE, clean_url),
+    ).fetchone()
+    if active:
+        return {"status": "already_queued", "job_id": int(dict(active)["id"])}
+    payload = {
+        "url": clean_url,
+        "kol_pool_id": int(kol_pool_id) if kol_pool_id else None,
+        "max_posts": max(1, min(12, int(max_posts or 3))),
+        "query_text": f"账号分析 · {clean_url[:80]}",
+        "target_type": "kol_profile",
+        "triggered_by_user_id": (staff or {}).get("user_id"),
+        "staff_id": (staff or {}).get("id") or (staff or {}).get("staff_id"),
+    }
+    job = conn.execute(
+        """
+        INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
+        VALUES (?, ?::jsonb, 'queued', NOW(), NOW())
+        RETURNING id
+        """,
+        (DEEP_CRAWL_JOB_TYPE, _json.dumps(payload, ensure_ascii=False)),
+    ).fetchone()
+    conn.commit()
+    return {"status": "queued", "job_id": int(dict(job)["id"]) if job else None}
+
+
+def run_profile_deep_crawl_for_job(payload: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    """worker 入口:执行账号深爬(与 HTTP execute 同一内核 dry_run_url_deep_crawl execute=True)。"""
+    body = {
+        "url": str(payload.get("url") or ""),
+        "execute": True,
+        "max_posts": payload.get("max_posts") or 3,
+        "create_session": True,
+        "source": "queue:kol_profile_deep_crawl",
+    }
+    _ = staff  # 身份留痕在 payload(triggered_by/staff_id);内核签名不收 staff
+    return dry_run_url_deep_crawl(body)

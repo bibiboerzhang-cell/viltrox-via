@@ -31,6 +31,21 @@ def favorites_conn(monkeypatch):
     )
     conn.execute("INSERT INTO vkpi_kol_pool (id, platform, handle, display_name, followers) VALUES (1,'youtube','@a','A',1000)")
     conn.execute("INSERT INTO vkpi_kol_pool (id, platform, handle, display_name, followers) VALUES (2,'instagram','@b','B',2000)")
+    # projects_json 子查询依赖(PG json_agg/json_build_object 的 sqlite 等价物 + 两张表)
+    conn.execute("CREATE TABLE vkpi_projects (id INTEGER PRIMARY KEY, project_name TEXT, restricted INTEGER DEFAULT 0)")
+    conn.execute("CREATE TABLE vkpi_project_kol_assignments (id INTEGER PRIMARY KEY, project_id INTEGER, kol_pool_id INTEGER, stage TEXT, stage_status TEXT)")
+    import json as _json
+
+    class _JsonAgg:
+        def __init__(self):
+            self.items = []
+        def step(self, value):
+            self.items.append(_json.loads(value) if isinstance(value, str) else value)
+        def finalize(self):
+            return _json.dumps(self.items) if self.items else None
+
+    conn.create_function("json_build_object", -1, lambda *args: _json.dumps({str(args[i]): args[i + 1] for i in range(0, len(args), 2)}))
+    conn.create_aggregate("json_agg", 1, _JsonAgg)
     conn.commit()
 
     from app.domains.kol import pool_favorites
