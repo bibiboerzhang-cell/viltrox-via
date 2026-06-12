@@ -78,3 +78,16 @@
  run_kol_pool_gemini_single / 主列表默认排序 COALESCE(fit,0) DESC
  / 13 区块不简化 / rule_v0+rubric 冻结 / 新 LLM 产物一律 llm_
  前缀+未定标标签
+
+---
+# 对照打勾记录(原文不动,进度与勘误追加于此)
+
+## 2026-06-11 第〇段验收
+- [x] **B1 减法仪式** — commit `75d6cc84`:V615Sidebar 删/GEN2+Beta 假徽章删(Events New 保留)/休眠监听整组删。待 Jianbo 扫 Pool 回"无恙"=冻结解除
+- [x] **B2 差量诊断** — 报告 `docs/KOL-Pool-delta-report-20260611.md`(`a52a8bcc`):四盲区+a+/a+++D 类生死判
+- [x] **D 类销账/入队完毕,无悬案**:D1 入队第3(硬前置 email 0/1123)/ D2 入队①(ROI 最高)/ D3 销账(删 V615Topbar.tsx 孤儿)/ D4 排末 / D5 本就不迁移 / D6 B1 验收销账+真徽章入队②
+
+## B2 勘误(总册 vs 实测,三处)
+1. **A1 星号**:"账号URL→execute auto+增量since"——交互链路验真 ✅,但 **增量 since 实测为伪**(a++:游标字段 last_video_at 不进 provider,整列表重拉本地截断,配额照烧);且 "execute auto" 后端只 dry-run,真执行靠前端二跳 execute=true。A1 成品定性不变,**增量语义降级为"待真游标"**,归 E 类数据侧。
+2. **F4 依赖缺口**:F4 写"复用 A1 新人管线(析代表视频→建档→**全量同步**)"——a+ 实测**全量同步不存在**(候选池 max_posts=3 抓死 + worker 无 account-sync job 类型)。F 段设计稿必须把"全量同步补建"列为 F4 前置,或降级为"代表作 N 条"。
+3. **E1 数字更新**:深析覆盖 148/1122 → **实测 205/1123**(2026-06-11)。
