@@ -866,6 +866,20 @@ def batch_enrich_pool_items(
     )
 
 
+@router.get("/kol-pool/favorites")
+def list_kol_pool_favorites(
+    limit: int = Query(default=2000, ge=1, le=5000),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """本人收藏清单(staff 隔离),供 Pool 星标/My KOL 收藏集渲染。"""
+    from app.domains.kol import pool_favorites
+
+    try:
+        return pool_favorites.list_favorites(staff=staff, limit=limit)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
 @router.get("/kol-pool/{kol_pool_id}")
 async def get_item(
     request: Request,
@@ -1420,15 +1434,4 @@ def unfavorite_kol_pool_item(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
-@router.get("/kol-pool/favorites")
-def list_kol_pool_favorites(
-    limit: int = Query(default=2000, ge=1, le=5000),
-    staff=Depends(require_tab("vkpi", "read")),
-) -> dict:
-    """本人收藏清单(staff 隔离),供 Pool 星标/My KOL 收藏集渲染。"""
-    from app.domains.kol import pool_favorites
 
-    try:
-        return pool_favorites.list_favorites(staff=staff, limit=limit)
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
