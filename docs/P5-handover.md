@@ -155,3 +155,4 @@
 | 06-12 | B 心跳 + C 报价 + G dry-run 清单 | (本 commit) | 13 job 死因=ENABLE_SCHEDULER=0;qualified 真实面 25 行;C5 清单 781 对待过目 |
 | 等待 | "无恙"→C3/C4 commit;"apply"→107+C2;"清单过目"→C5;"报价"→脉冲 | — | 四拍齐等 |
 | 06-12 19:2x | **A 补分执行**(智能层第 0 号,裁决①放行;红线第二次修订:离线 backfill 同函数) | — | — | — | 快照 `viltrox2-pre-fitbackfill-20260611T191937.dump`(50MB);**第二起合法漂移:指纹基线 1123/507.4200/1123 → 1123/39823.6700/1123**,全额归因:957 标记行(`[rule_v0_backfill_20260612]` reason 留痕)合计 39316.25 + 原 11 行原封 507.42;155 行门槛保护保持 NULL;幂等复跑 written=0;脚本 `backend/scripts/backfill_fit_scores.py`。排序当场痊愈(分是数据,读缓存 ≤300s 即见);三段 clause 随下次 HUP 激活后自动收敛 fit 主导 |
+| 2026-06-12 | **PV-3 裁决落档**:员工**默认可见全部项目+例外遮蔽制**——最薄实现=去掉/反转挡员工的 scope 过滤(scope.py:113-118 project_filter);`restricted` 布尔标记(109 同窗捎带一列,或 vkpi_projects 既有 metadata 字段承载,实施时择薄),restricted=true 仅 ADMIN 可见;**开放前先清 9 个 smoke 项目+0-KOL 幻影行**;若五月 A/B/C 原文冲突持原文翻案,否则照落;**随 apply 链同窗或紧随,Projects 真上线以此为准** | — | — | — | 施工随 apply 链 |
