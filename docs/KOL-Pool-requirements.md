@@ -97,3 +97,9 @@
 - **E5(新增)账号全量同步补建**:新人 onboarding 候选池 max_posts=3 抓死(url_deep_crawl.py:919)+ worker 无 account-sync job 类型(apify_jobs_worker.py:3001)→ 补建"建档后全量(或大 N)同步"管线。**Stage1 ingest 管线已有 path contract 可复用**。F4 的硬前置。
 - **E6(新增)真 since 游标改造**:现为伪增量(游标 last_video_at 不进 provider,整列表重拉本地截断,配额照烧;daily light refresh 另一套零游标互不联动)→ provider 侧传真游标(YouTube publishedAfter 等)+ 统一游标推进。**Stage1 ingest 管线已有 path contract 可复用**。light refresh 开闸前置。
 - **停摆诊断(2026-06-12)**:last_seen_at 停摆 06-04 根因=双重主动闸——①全系统 ENABLE_SCHEDULER=0(admin 实测 env,worker 默认 0),APScheduler 未启动,morning_sync 等 cron 全停;②应用层守卫 allow_qualified_kol_refresh 默认 false,即便调度器开着 kol_pool_light 也会 skipped(daily_sync.py:553-560 QUALIFIED_KOL_REFRESH_GUARD)。**非故障,light refresh 本就处于停闸省钱态**;E6 落地前不开闸。
+
+## 2026-06-12 全量自走令执行(d1-d6 + 备稿)
+- [x] **d1** Drawer 复制邮箱接真(`65b6b2e0`)| **d2** D6 残骸三行清除(`f7db19af`)| **d3** loyalty 量纲+geo_match(`9c3b1a47`)| **d4** D2 'Why V6 Fit' 点亮——真断点为前端 normalizer 滤键,后端投影早已在 pool.py:611(`a54081a8`,零 SQL 写入证明在 commit)| **d5** D3 销账删 V615Topbar(`e34442b4`)| **d6** ContactModal 草稿暂存(`ae69f01c`)。dist=ae69f01c
+- [x] **B 心跳盘点** + **C 周脉冲报价** → docs/KOL-Pool-heartbeat-20260612.md(13 job 全死着=ENABLE_SCHEDULER=0;qualified 真实作用面 25 行非 960,报价 <$1.2/周 待裁)
+- [x] **A 补全扫** workflow 满配在跑 → docs/KOL-Pool-fullscan-20260612.md(完成即归档)
+- 备稿(未 commit,等闸):**E** C2 三端点+域+3 测试全过 | **F** C3 收藏接线(Pool 拉取/乐观 toggle/Drawer 文案,tsc 绿;C4 My KOL 主切换待 107+C5 数据后一刀落,避免空集回退反复)| **G** C5 脚本+dry-run 人审清单 docs/C5-backfill-dryrun-20260612.md(**781 对/721 KOL**,staff 40 名下 4 条 CODEX-VERIFY 测试项目建议人审剔除)
