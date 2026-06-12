@@ -10,7 +10,7 @@ from app.domains.dashboard.metric_maturity import (
     normalize_dashboard_scope,
 )
 from app.domains.dashboard.account_picker import build_dashboard_kpi
-from app.db.connection import get_conn
+from app.db.connection import get_conn, table_exists
 from app.domains.dashboard.recent_content import _dashboard_official_matrix_summary
 from app.domains import lineage as metric_lineage
 from app.domains.dashboard import decision_dashboard as decision_engine
@@ -106,7 +106,8 @@ def _build_roster_detail(active_roster_by_scope: dict[str, int]) -> dict[str, An
             COUNT(DISTINCT a.project_id) AS project_count,
             COUNT(*) FILTER (WHERE a.stage IN ('content_posted','reviewed')) AS published_rows,
             COUNT(*) FILTER (WHERE a.stage = 'device_sent') AS device_rows,
-            COUNT(*) FILTER (WHERE a.stage IN ('discovered','contacted','replied','agreed')) AS pending_rows,
+            -- C9 顺手修(2026-06-12):DB 存在 discovery/discovered 双拼写,pending 桶补上 discovery(23 行)。
+            COUNT(*) FILTER (WHERE a.stage IN ('discovery','discovered','contacted','replied','agreed')) AS pending_rows,
             COUNT(*) FILTER (WHERE a.stage = 'churned') AS churned_rows,
             COALESCE(p.video_evidence_count, 0) AS video_evidence_count
           FROM vkpi_project_kol_assignments a
@@ -359,6 +360,113 @@ def _build_evidence_metrics_summary(*, window_days: int = 30) -> dict[str, Any]:
     }
 
 
+# 四环漏斗在役口径(与 pool_favorites.list_favorites 的排除集对齐)
+_FUNNEL_EXCLUDED_STAGES_SQL = "('churned','cancelled','lost')"
+# 已发布口径(波3 R1 裁定:content_posted/published)
+_FUNNEL_PUBLISHED_STAGES_SQL = "('content_posted','published')"
+
+
+def _build_funnel_summary() -> dict[str, Any]:
+    """四环漏斗聚合(波3 R1 / 施工卡 C9,2026-06-12)。全部真 SQL 聚合,零估算零硬编码。
+
+    输出 shape(前端 v615 normalizers.ts 消费契约——键名勿改,前端按此解析):
+
+    summary.funnel = {
+        "favorites_total":  int,        # 环1 收藏:vkpi_kol_pool_favorites 总对数(staff×kol 对;体检日口径 772)
+        "claimed_total":    int | None, # 环2 认领:vkpi_kol_claims status='active' 的 distinct kol_id。
+                                        #   注意:claims 键在 kols.id(在役主表),与 kol_pool id 非同一维度,
+                                        #   只能作为环序数读、不能与环1/环3 做 id 级联;表缺失时为 None。
+        "in_project_total": int,        # 环3 进项目:vkpi_project_kol_assignments 在役
+                                        #   (stage NOT IN churned/cancelled/lost)的 distinct kol_pool_id
+        "published_total":  int,        # 环4 已发布:assignments stage IN (content_posted, published)
+                                        #   的 distinct kol_pool_id
+        "by_staff": [                   # 按 staff 分布,以收藏表为锚,favorites DESC 排序:
+            {
+                "staff_id":   int,         # vkpi_kol_pool_favorites.staff_id(真 staff.id)
+                "name":       str | None,  # staff -> users.name(查不到时 null,前端显示 "Staff {id}")
+                "favorites":  int,         # 该 staff 的收藏对数
+                "in_project": int,         # 该 staff 收藏的 KOL 中已进项目(在役 assignment 存在)的 distinct kol 数
+            },
+        ],
+        "favorites_kol_total": int,     # 辅助口径:收藏覆盖的 distinct KOL 数(体检日口径 715)
+        "basis": {...},                 # 各环口径自述(诊断/审计用,前端可忽略)
+    }
+    """
+    conn = get_conn()
+
+    favorites_row = conn.execute(
+        """
+        SELECT COUNT(*) AS favorites_total,
+               COUNT(DISTINCT kol_pool_id) AS favorites_kol_total
+        FROM vkpi_kol_pool_favorites
+        """
+    ).fetchone()
+    favorites_total = _as_int(_row_value(favorites_row, "favorites_total"))
+    favorites_kol_total = _as_int(_row_value(favorites_row, "favorites_kol_total"))
+
+    claimed_total: int | None = None
+    if table_exists("vkpi_kol_claims"):
+        claimed_row = conn.execute(
+            "SELECT COUNT(DISTINCT kol_id) AS claimed_total FROM vkpi_kol_claims WHERE status = 'active'"
+        ).fetchone()
+        claimed_total = _as_int(_row_value(claimed_row, "claimed_total"))
+
+    assignment_row = conn.execute(
+        f"""
+        SELECT
+            COUNT(DISTINCT kol_pool_id) FILTER (
+                WHERE COALESCE(stage, '') NOT IN {_FUNNEL_EXCLUDED_STAGES_SQL}
+            ) AS in_project_total,
+            COUNT(DISTINCT kol_pool_id) FILTER (
+                WHERE stage IN {_FUNNEL_PUBLISHED_STAGES_SQL}
+            ) AS published_total
+        FROM vkpi_project_kol_assignments
+        """
+    ).fetchone()
+
+    by_staff_rows = _fetch_dicts(
+        f"""
+        SELECT f.staff_id,
+               MAX(u.name) AS name,
+               COUNT(DISTINCT f.id) AS favorites,
+               COUNT(DISTINCT a.kol_pool_id) AS in_project
+        FROM vkpi_kol_pool_favorites f
+        LEFT JOIN staff st ON st.id = f.staff_id
+        LEFT JOIN users u ON u.id = st.user_id
+        LEFT JOIN vkpi_project_kol_assignments a
+               ON a.kol_pool_id = f.kol_pool_id
+              AND COALESCE(a.stage, '') NOT IN {_FUNNEL_EXCLUDED_STAGES_SQL}
+        GROUP BY f.staff_id
+        ORDER BY COUNT(DISTINCT f.id) DESC, f.staff_id
+        """
+    )
+    by_staff = [
+        {
+            "staff_id": _as_int(row.get("staff_id")),
+            "name": row.get("name"),
+            "favorites": _as_int(row.get("favorites")),
+            "in_project": _as_int(row.get("in_project")),
+        }
+        for row in by_staff_rows
+    ]
+
+    return {
+        "favorites_total": favorites_total,
+        "claimed_total": claimed_total,
+        "in_project_total": _as_int(_row_value(assignment_row, "in_project_total")),
+        "published_total": _as_int(_row_value(assignment_row, "published_total")),
+        "by_staff": by_staff,
+        "favorites_kol_total": favorites_kol_total,
+        "basis": {
+            "favorites": "COUNT(*) FROM vkpi_kol_pool_favorites (staff×kol 对)",
+            "claimed": "COUNT(DISTINCT kol_id) FROM vkpi_kol_claims WHERE status='active'(kols.id 维度;表缺失时 null)",
+            "in_project": f"COUNT(DISTINCT kol_pool_id) FROM vkpi_project_kol_assignments WHERE stage NOT IN {_FUNNEL_EXCLUDED_STAGES_SQL}",
+            "published": f"COUNT(DISTINCT kol_pool_id) FROM vkpi_project_kol_assignments WHERE stage IN {_FUNNEL_PUBLISHED_STAGES_SQL}",
+            "by_staff": "以收藏表为锚:favorites=本人收藏对数;in_project=本人收藏 KOL 中存在在役 assignment 的 distinct kol 数",
+        },
+    }
+
+
 def _build_active_campaigns_summary(*, window_days: int = 30) -> dict[str, Any]:
     days = max(1, min(int(window_days or 30), 365))
     rows = _fetch_dicts(
@@ -514,6 +622,8 @@ def build_dashboard_summary(
     summary["active_roster"] = int(build_dashboard_kpi(account_type="all").get("active_roster") or 0)
     summary["evidence_metrics"] = _build_evidence_metrics_summary(window_days=window_days)
     summary["active_campaigns"] = _build_active_campaigns_summary(window_days=window_days)
+    # 波3 R1 / C9(2026-06-12):四环漏斗块(收藏→认领→进项目→已发布),shape 契约见 _build_funnel_summary docstring。
+    summary["funnel"] = _build_funnel_summary()
     summary["metric_scope"] = normalized_scope
     summary["scope_label"] = scope_maturity["scope_label"]
     summary["snapshot_days"] = scope_maturity["snapshot_days"]
