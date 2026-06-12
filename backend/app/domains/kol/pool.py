@@ -13,6 +13,7 @@ from app.domains.industry.snapshot_kpis import calculate_kpis
 from app.domains.kol.pool_common import (
     ENRICHABLE_PLATFORMS,
     KOL_POOL_LIST_COLUMNS,
+    KOL_POOL_LIST_EXTRA_SELECT,
     _average_from_total,
     _bio,
     _clear_kol_pool_read_cache,
@@ -265,7 +266,7 @@ def list_pool(
     conn = get_conn()
     table_columns = _table_columns(conn, "vkpi_kol_pool")
     select_columns = [column for column in KOL_POOL_LIST_COLUMNS if column in table_columns]
-    select_clause = ", ".join(select_columns) if "id" in select_columns else "*"
+    select_clause = (", ".join(select_columns) + ", " + KOL_POOL_LIST_EXTRA_SELECT) if "id" in select_columns else "*"
     rows = conn.execute(
         f"SELECT {select_clause} FROM vkpi_kol_pool {clause} ORDER BY {order_clause} LIMIT ? OFFSET ?",
         (*params, safe_limit, safe_offset),
@@ -376,7 +377,7 @@ def workspace(
     order_clause = _sort_clause(normalized_sort)
     table_columns = _table_columns(conn, "vkpi_kol_pool")
     select_columns = [column for column in KOL_POOL_LIST_COLUMNS if column in table_columns]
-    select_clause = ", ".join(select_columns) if "id" in select_columns else "*"
+    select_clause = (", ".join(select_columns) + ", " + KOL_POOL_LIST_EXTRA_SELECT) if "id" in select_columns else "*"
     rows = conn.execute(
         f"SELECT {select_clause} FROM vkpi_kol_pool {clause} ORDER BY {order_clause} LIMIT ? OFFSET ?",
         (*params, safe_limit, safe_offset),

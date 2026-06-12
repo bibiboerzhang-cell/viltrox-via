@@ -223,6 +223,9 @@ export function toV615KolPoolRows(items: VkpiKolPoolItem[]) {
       potential_concerns: Array.from(new Set(potentialConcerns)).slice(0, 5),
       brand_collaborations: toBrandHistory(Array.from(new Set(brandCollaborationNames))),
       competitor_collabs: competitorBrands,
+      // d8:后端列表 payload 新供两计数(KolPoolAllModal『已分析』chip 的既有判定键)。
+      video_evidence_count: (item as unknown as Record<string, unknown>).video_evidence_count ?? null,
+      llm_deep_analysis_count: (item as unknown as Record<string, unknown>).llm_deep_analysis_count ?? null,
       refresh_state: item.sync_status || "fresh",
       industry_label: item.content_style || item.primary_topic || "真实 KOL Pool",
       weekly_views_delta: null,

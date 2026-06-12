@@ -16,6 +16,12 @@ OWNER_NAME_KEYS = ("owner_name", "owner", "responsible_owner", "responsible_name
 OWNER_ID_KEYS = ("responsible_staff_id", "owner_staff_id", "assigned_staff_id", "source_staff_id")
 KOL_POOL_READ_CACHE_TTL_SEC = 300
 logger = get_logger(__name__)
+# d8:列表 payload 的两根现成水管(只读相关子查询;前端 KolPoolAllModal『已分析』chip
+# 早已按 llm_deep_analysis_count 等键设计,此前后端从未供给——饿死字段)。
+KOL_POOL_LIST_EXTRA_SELECT = (
+    "(SELECT COUNT(*) FROM vkpi_kol_video_evidence ve WHERE ve.kol_pool_id = vkpi_kol_pool.id) AS video_evidence_count, "
+    "(SELECT COUNT(*) FROM vkpi_kol_llm_deep_analysis_results ld WHERE ld.kol_pool_id = vkpi_kol_pool.id) AS llm_deep_analysis_count"
+)
 KOL_POOL_LIST_COLUMNS = (
     "id",
     "pool_uid",
