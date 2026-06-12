@@ -171,7 +171,8 @@ function trackingUrl(carrier: string, trackingNumber: string) {
   if (normalizedCarrier.includes('fedex')) return `https://www.fedex.com/fedextrack/?trknbr=${encoded}`;
   if (normalizedCarrier.includes('ups')) return `https://www.ups.com/track?tracknum=${encoded}`;
   if (normalizedCarrier.includes('usps')) return `https://tools.usps.com/go/TrackConfirmAction?tLabels=${encoded}`;
-  return `https://www.google.com/search?q=${encodeURIComponent(`${carrier} ${trackingNumber}`)}`;
+  // 17track 免费聚合页:覆盖国内外承运商,比裸 Google 搜索稳定(2026-06-12 免费查单裁令)
+  return `https://t.17track.net/zh-cn#nums=${encoded}`;
 }
 
 function deliveredByStageOrStatus(row: VkpiProjectRow) {

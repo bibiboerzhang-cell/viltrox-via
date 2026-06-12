@@ -8,6 +8,18 @@ interface LiveLogisticsBannerProps {
   trackingForRow: (row: VkpiProjectRow) => TrackingState;
 }
 
+// 免费查单(2026-06-12 裁令:不买 API):承运商官网直达,识别不了落 17track 免费聚合页。
+// 程序抓 Google/官网结果页不做(反爬+脆),一键外链即用户"Google 搜单号"的零成本等价物。
+function freeTrackingUrl(carrier: string, trackingNumber: string) {
+  const normalized = String(carrier || '').toLowerCase();
+  const encoded = encodeURIComponent(trackingNumber);
+  if (normalized.includes('dhl')) return `https://www.dhl.com/us-en/home/tracking/tracking-express.html?submit=1&tracking-id=${encoded}`;
+  if (normalized.includes('fedex')) return `https://www.fedex.com/fedextrack/?trknbr=${encoded}`;
+  if (normalized.includes('ups')) return `https://www.ups.com/track?tracknum=${encoded}`;
+  if (normalized.includes('sf') || normalized.includes('顺丰')) return `https://www.sf-express.com/chn/sc/waybill/waybill-detail/${encoded}`;
+  return `https://t.17track.net/zh-cn#nums=${encoded}`;
+}
+
 function trackingStatus(row: VkpiProjectRow, tracking: TrackingState) {
   if (tracking.delivered || stageIndex(row.stage) >= stageIndex('received')) return '已签收';
   if (stageIndex(row.stage) >= stageIndex('shipped')) return '在途';
@@ -40,7 +52,11 @@ export function LiveLogisticsBanner({ rows, trackingForRow }: LiveLogisticsBanne
                 <Avatar name={row.kolName || row.kolHandle} src={row.kolAvatar} size="sm" />
                 <div>
                   <strong>{row.kolHandle || row.kolName}</strong>
-                  <small>{tracking.courier || row.trackingCarrier || '待识别快递'} · {tracking.no}</small>
+                  <small>
+                    {tracking.courier || row.trackingCarrier || '待识别快递'} · {tracking.no}
+                    {' '}
+                    <a href={freeTrackingUrl(tracking.courier || row.trackingCarrier || '', tracking.no)} target="_blank" rel="noreferrer" style={{ color: '#67e8f9' }}>查单 ↗</a>
+                  </small>
                 </div>
                 <span className={status === '已签收' ? 'is-delivered' : status === '在途' ? 'is-moving' : 'is-pending'}>
                   {status}
