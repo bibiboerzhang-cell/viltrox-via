@@ -226,6 +226,8 @@ export function toV615KolPoolRows(items: VkpiKolPoolItem[]) {
       // d8:后端列表 payload 新供两计数(KolPoolAllModal『已分析』chip 的既有判定键)。
       video_evidence_count: (item as unknown as Record<string, unknown>).video_evidence_count ?? null,
       llm_deep_analysis_count: (item as unknown as Record<string, unknown>).llm_deep_analysis_count ?? null,
+      // d14:as-of 戳数据源(列表头部"数据截至"——脉冲恢复前,诚实陈旧比假新鲜值钱)。
+      last_seen_at: (item as unknown as Record<string, unknown>).last_seen_at ?? null,
       refresh_state: item.sync_status || "fresh",
       industry_label: item.content_style || item.primary_topic || "真实 KOL Pool",
       weekly_views_delta: null,

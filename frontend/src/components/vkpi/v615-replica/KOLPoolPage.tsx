@@ -64,6 +64,16 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
   const [myListFilter, setMyListFilter] = useState(false);   // toggle: only show items in myList
   const [recallAvatarIndex, setRecallAvatarIndex] = useState(new Map());
   const poolItems = Array.isArray(sourceItems) ? sourceItems : [];
+  // d14:as-of 戳 = 全池 max(last_seen_at),YYYY-MM-DD。
+  const dataAsOf = useMemo(() => {
+    let max = "";
+    for (const it of poolItems || []) {
+      const v = String(it?.last_seen_at || "");
+      if (v && v > max) max = v;
+    }
+    return max ? max.slice(0, 10) : "";
+  }, [poolItems]);
+
 
   const rememberRecallItems = useCallback((recallItems = []) => {
     if (!Array.isArray(recallItems) || recallItems.length === 0) return;
@@ -223,7 +233,11 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
                 e("span", { className: "h-1.5 w-1.5 rounded-full bg-emerald-400" }),
                 loading ? "正在读取真实 API" : error ? "真实 API 无信号" : "真实 API"
               ),
-              e("span", { className: "rounded-full border border-white/[0.07] px-2 py-1" }, "V6 Fit 只读展示")
+              e("span", { className: "rounded-full border border-white/[0.07] px-2 py-1" }, "V6 Fit 只读展示"),
+              dataAsOf && e("span", {
+                className: "rounded-full border border-amber-300/20 bg-amber-400/[0.06] px-2 py-1 text-amber-200/90",
+                title: "全池最近一次抓取时间(max last_seen_at)。日刷新恢复前数据停更,诚实陈旧优于假新鲜。",
+              }, `数据截至 ${dataAsOf}`)
             )
           ),
           e(KPIBar, {

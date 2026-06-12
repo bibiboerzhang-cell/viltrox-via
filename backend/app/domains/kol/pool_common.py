@@ -580,7 +580,14 @@ def _sort_clause(sort_by: str) -> str:
             ) DESC,
             updated_at DESC
         """
-    return "COALESCE(viltrox_fit_score, 0) DESC, updated_at DESC"
+    # 红线第一次修订(2026-06-12 裁决,意图不变字面升级):fit 99% NULL 时
+    # 旧 COALESCE(fit,0) DESC 实为 1112 行并列 0 的假排序。三段式:有分行仍 fit 主导,
+    # 无分行按最近活跃排;rule_v0 backfill 落地后第一段恒真,自动收敛回 fit 主导(自愈)。
+    return (
+        "(viltrox_fit_score IS NOT NULL) DESC, "
+        "COALESCE(viltrox_fit_score, 0) DESC, "
+        "COALESCE(last_video_at, last_seen_at, updated_at) DESC NULLS LAST"
+    )
 
 
 def _pool_item_gaps(item: dict[str, Any]) -> list[str]:
