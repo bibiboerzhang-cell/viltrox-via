@@ -552,6 +552,18 @@ def update_project(project_id: int, body: dict[str, Any], *, staff: dict[str, An
     if metadata_changed:
         updates["metadata_json"] = _json(metadata)
 
+    # P2:note 是契约里的死字段(vkpi_projects 无对应列)。收到时落一条业务 audit,
+    # 不再静默丢弃;不阻塞主更新流程(_log_project_audit 自身 best-effort)。
+    note = str(body.get("note") or "").strip()
+    if note:
+        _log_project_audit(
+            staff=staff,
+            action_type="project_update_note",
+            project_id=int(project_id),
+            detail=note[:240],
+            metadata={"note": note[:2000]},
+        )
+
     if not updates:
         return {"id": int(project_id), "status": "unchanged"}
 
@@ -602,13 +614,15 @@ def list_available_project_kols(
     params: list[Any] = [int(project_id)]
     search = str(query or "").strip().lower()
     if search:
-        like = f"%{search}%"
+        # P2:LIKE 字面语义——转义用户输入中的 \ % _ 并显式 ESCAPE,防通配符注入/全表慢扫。
+        escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{escaped}%"
         filters.append(
             """
             (
-                LOWER(COALESCE(p.display_name, '')) LIKE ?
-                OR LOWER(COALESCE(p.handle, '')) LIKE ?
-                OR LOWER(COALESCE(p.platform, '')) LIKE ?
+                LOWER(COALESCE(p.display_name, '')) LIKE ? ESCAPE '\\'
+                OR LOWER(COALESCE(p.handle, '')) LIKE ? ESCAPE '\\'
+                OR LOWER(COALESCE(p.platform, '')) LIKE ? ESCAPE '\\'
             )
             """
         )

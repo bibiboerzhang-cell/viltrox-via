@@ -341,12 +341,14 @@ def add_cost(body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> di
                 },
             )
             return {"cost": fresh, "idempotent_update": True}
-    conn.execute(
+    # P2:INSERT 取行一律 RETURNING——并发下 ORDER BY id DESC 会取到别人的行。
+    row = conn.execute(
         """
         INSERT INTO vkpi_cost_ledger (
             project_id, kol_id, staff_id, cost_type, amount_cents, currency,
             status, incurred_at, source_ref, note, created_by_staff_id, metadata_json, created_at, updated_at
         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        RETURNING *
         """,
         (
             project_id,
@@ -364,9 +366,8 @@ def add_cost(body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> di
             now,
             now,
         ),
-    )
+    ).fetchone()
     conn.commit()
-    row = conn.execute("SELECT * FROM vkpi_cost_ledger WHERE project_id=? ORDER BY id DESC LIMIT 1", (project_id,)).fetchone()
     cost = dict(row) if row else {}
     audit.log_business_event(
         staff_id=actor_staff_id,

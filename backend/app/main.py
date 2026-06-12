@@ -628,7 +628,7 @@ if IS_ADMIN_APP:
     app.include_router(brand_analysis.router)
     app.include_router(account_scanner.router)
     app.include_router(kol_ops.router)
-    app.include_router(vkpi.router)
+    # P2:vkpi.router 为零路由空壳(vkpi.py 仅 public_router/webhook_router 挂路由),不再 include。
     app.include_router(vkpi_access.router)
     app.include_router(vkpi_dashboard_staff.router)
     app.include_router(dashboard_account_picker.router)

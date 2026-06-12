@@ -4,12 +4,15 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains.access import scope
 from app.domains.projects.workflow_projects import _enrich_project_card_fields
 from app.platform.db.schema import ensure_vkpi_schema
 from app.platform.db.schema_audit import ensure_vkpi_audit_schema
 from app.domains.projects.workflow_common import _int
+
+logger = get_logger(__name__)
 
 def project_detail(project_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     ensure_vkpi_schema()
@@ -400,7 +403,12 @@ def project_detail(project_id: int, *, staff: dict[str, Any] | None = None) -> d
     if not deliverables and terms_dict.get("deliverables_json"):
         try:
             raw_deliverables = json.loads(str(terms_dict.get("deliverables_json") or "[]"))
-        except Exception:
+        except Exception as exc:
+            # P2:不再静默吞——terms.deliverables_json 解析失败要可观测,降级为空列表继续。
+            logger.warning(
+                "vkpi.project_terms_deliverables_json_parse_failed",
+                extra={"project_id": int(project_id), "error": str(exc)},
+            )
             raw_deliverables = []
         if isinstance(raw_deliverables, list):
             deliverables = [

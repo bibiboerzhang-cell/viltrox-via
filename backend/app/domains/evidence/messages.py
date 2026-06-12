@@ -96,12 +96,14 @@ def create_message(body: dict[str, Any], *, staff: dict[str, Any] | None = None)
     actor = _actor_id(staff)
     now = _utcnow()
     message_body = str(body.get("body") or body.get("message") or body.get("snippet") or "").strip()
-    conn.execute(
+    # P2:INSERT 取行一律 RETURNING——并发下 ORDER BY id DESC 会取到别人的行。
+    row = conn.execute(
         """
         INSERT INTO vkpi_messages (
             project_id, kol_id, staff_id, source, direction, sender, receiver,
             body, snippet, evidence_url, follow_up_due_at, captured_at, metadata_json, created_at
         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        RETURNING *
         """,
         (
             project_id or None,
@@ -119,9 +121,8 @@ def create_message(body: dict[str, Any], *, staff: dict[str, Any] | None = None)
             _json(body.get("metadata")),
             now,
         ),
-    )
+    ).fetchone()
     conn.commit()
-    row = conn.execute("SELECT * FROM vkpi_messages ORDER BY id DESC LIMIT 1").fetchone()
     item = _row(row)
     if item:
         audit.log_business_event(

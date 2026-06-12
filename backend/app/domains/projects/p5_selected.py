@@ -251,7 +251,19 @@ def initiate_offboarding(staff_id: int, *, new_owner_staff_id: int | None = None
     active_projects = conn.execute("SELECT COUNT(*) AS n FROM vkpi_projects WHERE assigned_staff_id=? AND stage_status!='closed' AND stage NOT IN ('closed','released','lost','cancelled')", (int(staff_id),)).fetchone()
     try:
         channels = conn.execute("SELECT COUNT(*) AS n FROM vkpi_employee_channels WHERE staff_id=? AND deleted_at IS NULL", (int(staff_id),)).fetchone()
-    except Exception:
+    except Exception as exc:
+        # P2:不再静默吞——区分表缺失(schema 未迁移)与普通查询失败,均按 0 继续离职流程。
+        error_text = str(exc)
+        if "no such table" in error_text or "does not exist" in error_text:
+            logger.warning(
+                "vkpi.offboarding_channels_table_missing",
+                extra={"staff_id": int(staff_id), "error": error_text},
+            )
+        else:
+            logger.warning(
+                "vkpi.offboarding_channels_count_failed",
+                extra={"staff_id": int(staff_id), "error": error_text},
+            )
         channels = {"n": 0}
     actual_costs = conn.execute("SELECT COUNT(*) AS n FROM vkpi_cost_ledger WHERE staff_id=? AND status='actual'", (int(staff_id),)).fetchone()
     uid = f"off-{secrets.token_hex(8)}"

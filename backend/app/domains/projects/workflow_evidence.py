@@ -712,12 +712,14 @@ def add_project_message(project_id: int, body: dict[str, Any], *, staff: dict[st
         raise LookupError("project not found")
     now = utcnow()
     message_body = str(body.get("body") or body.get("message") or body.get("snippet") or "").strip()
-    conn.execute(
+    # P2:INSERT 取行一律 RETURNING——并发下 ORDER BY id DESC 会取到别人的行。
+    row = conn.execute(
         """
         INSERT INTO vkpi_messages (
             project_id, kol_id, staff_id, source, direction, sender, receiver,
             body, snippet, evidence_url, follow_up_due_at, captured_at, metadata_json, created_at
         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        RETURNING *
         """,
         (
             int(project_id),
@@ -735,9 +737,8 @@ def add_project_message(project_id: int, body: dict[str, Any], *, staff: dict[st
             _json(body.get("metadata")),
             now,
         ),
-    )
+    ).fetchone()
     conn.commit()
-    row = conn.execute("SELECT * FROM vkpi_messages WHERE project_id=? ORDER BY id DESC LIMIT 1", (int(project_id),)).fetchone()
     item = dict(row) if row else {}
     if item:
         audit.log_business_event(
