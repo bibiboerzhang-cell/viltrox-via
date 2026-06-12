@@ -36,36 +36,59 @@ STATUS_CN = {
 }
 
 
-def _token() -> str:
-    """env 优先;admin master 进程不重启拿不到新 env——兜底读仓库根 .env(gitignored)。"""
-    token = os.getenv("VKPI_17TRACK_TOKEN", "").strip()
-    if token:
-        return token
-    try:
-        from pathlib import Path
+def _tokens() -> list[str]:
+    """token 池(逗号分隔,2026-06-12 裁令"试 2 个免费的"):env 优先,
+    兜底读仓库根 .env(gitignored;admin master 免重启)。配额耗尽自动轮换下一个。"""
+    raw = os.getenv("VKPI_17TRACK_TOKEN", "").strip()
+    if not raw:
+        try:
+            from pathlib import Path
 
-        env_path = Path(__file__).resolve().parents[4] / ".env"
-        for line in env_path.read_text().splitlines():
-            if line.strip().startswith("VKPI_17TRACK_TOKEN="):
-                return line.split("=", 1)[1].strip()
-    except OSError:
-        pass
-    return ""
+            env_path = Path(__file__).resolve().parents[4] / ".env"
+            for line in env_path.read_text().splitlines():
+                if line.strip().startswith("VKPI_17TRACK_TOKEN="):
+                    raw = line.split("=", 1)[1].strip()
+                    break
+        except OSError:
+            pass
+    return [token.strip() for token in raw.split(",") if token.strip()]
+
+
+def _token() -> str:
+    tokens = _tokens()
+    return tokens[0] if tokens else ""
 
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+_QUOTA_ERROR_CODES = {-18019908, -18019909}  # 配额不足/超限(17track 文档码,命中即换 token)
+
+
 def _api(path: str, payload: list[dict[str, Any]]) -> dict[str, Any]:
-    request = urllib.request.Request(
-        f"{API_BASE}/{path}",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json", "17token": _token()},
-        method="POST",
-    )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return json.loads(response.read().decode("utf-8"))
+    """token 池轮换:配额类错误自动切下一个 token 重试,全池耗尽才抛。"""
+    tokens = _tokens()
+    if not tokens:
+        raise RuntimeError("17track token missing")
+    last: dict[str, Any] = {}
+    for index, token in enumerate(tokens):
+        request = urllib.request.Request(
+            f"{API_BASE}/{path}",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json", "17token": token},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            last = json.loads(response.read().decode("utf-8"))
+        code = int(last.get("code") or 0)
+        if code == 0:
+            return last
+        if code in _QUOTA_ERROR_CODES and index < len(tokens) - 1:
+            logger.warning("17track token #%s quota hit(code=%s), rotating", index, code)
+            continue
+        return last
+    return last
 
 
 def enqueue_logistics_sync_job(
@@ -118,6 +141,8 @@ def _candidates(conn: Any, project_id: int | None) -> list[dict[str, Any]]:
         "COALESCE(is_placeholder_tracking, FALSE) = FALSE",
         # 已签收的不再耗配额
         "COALESCE(metadata_json->'shipping'->>'status','') NOT IN ('Delivered','已签收')",
+        # 6h 节流(2026-06-12 "不想这么早用完"):刚同步过的行跳过
+        "(COALESCE(NULLIF(metadata_json->'shipping'->>'synced_at',''),'1970-01-01T00:00:00Z'))::timestamptz < NOW() - interval '6 hours'",
     ]
     params: list[Any] = []
     if project_id:
