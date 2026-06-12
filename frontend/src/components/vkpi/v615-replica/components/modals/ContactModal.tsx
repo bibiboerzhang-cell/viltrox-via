@@ -9,21 +9,29 @@ import { genEmailBody, genEmailSubject } from "../../lib/email";
 
 const e = React.createElement;
 
+// d6:关窗丢稿修复——模块级内存草稿(按 KOL id),重开同一 KOL 自动恢复;
+// 刷新页面即清(内存级,后端联系人写端点落地前的最低保障)。
+const CONTACT_DRAFTS = new Map();
+
 export function ContactModal({ item, onClose }) {
   if (!item) return null;
   const hasEmail = !!item.email;
   const recommended = item.recommended_product_lines || [];
   const defaultProduct = recommended[0] || "Viltrox 镜头";
-  const [tab, setTab] = useState(hasEmail ? "email" : "add");
-  const [selectedProduct, setSelectedProduct] = useState(defaultProduct);
-  const [customProduct, setCustomProduct] = useState("");
-  const [showCustom, setShowCustom] = useState(false);
+  const draft = CONTACT_DRAFTS.get(item.id) || null;
+  const [tab, setTab] = useState(draft?.tab ?? (hasEmail ? "email" : "add"));
+  const [selectedProduct, setSelectedProduct] = useState(draft?.selectedProduct ?? defaultProduct);
+  const [customProduct, setCustomProduct] = useState(draft?.customProduct ?? "");
+  const [showCustom, setShowCustom] = useState(draft?.showCustom ?? false);
   const [templateApplying, setTemplateApplying] = useState(false);
-  const [subject, setSubject] = useState(hasEmail ? genEmailSubject(defaultProduct, item) : "");
-  const [body, setBody] = useState(hasEmail ? genEmailBody(defaultProduct, item) : "");
-  const [newEmail, setNewEmail] = useState("");
-  const [newPlatform, setNewPlatform] = useState("ig_dm");
-  const [newHandle, setNewHandle] = useState("");
+  const [subject, setSubject] = useState(draft?.subject ?? (hasEmail ? genEmailSubject(defaultProduct, item) : ""));
+  const [body, setBody] = useState(draft?.body ?? (hasEmail ? genEmailBody(defaultProduct, item) : ""));
+  const [newEmail, setNewEmail] = useState(draft?.newEmail ?? "");
+  const [newPlatform, setNewPlatform] = useState(draft?.newPlatform ?? "ig_dm");
+  const [newHandle, setNewHandle] = useState(draft?.newHandle ?? "");
+  React.useEffect(() => {
+    CONTACT_DRAFTS.set(item.id, { tab, selectedProduct, customProduct, showCustom, subject, body, newEmail, newPlatform, newHandle });
+  }, [item.id, tab, selectedProduct, customProduct, showCustom, subject, body, newEmail, newPlatform, newHandle]);
   
   // 切换产品时,主题立即同步;正文需要用户主动点本地模板重写才覆盖。
   const onPickProduct = (p) => {
