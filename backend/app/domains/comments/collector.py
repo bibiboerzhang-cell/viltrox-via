@@ -599,3 +599,133 @@ def stats(*, days: int = 30) -> dict:
         "by_platform": [dict(r) for r in by_platform],
         "total_comments": total_comments["n"] if total_comments else 0,
     }
+
+
+# ============ KOL Pool evidence 评论(2026-06-12 裁令"评论的展示也要有")============
+
+POOL_COMMENTS_JOB_TYPE = "kol_pool_comments_collect"
+POOL_EVIDENCE_POST_TABLE = "vkpi_kol_video_evidence"
+
+
+def enqueue_kol_pool_comments_job(
+    kol_pool_id: int,
+    *,
+    evidence_ids: list[int] | None = None,
+    max_comments: int | None = None,
+    staff: dict | None = None,
+) -> dict:
+    """KOL Pool 收藏行的评论采集入 apify_jobs(泳道可见;幂等:同 KOL 已有活跃任务则返回)。"""
+    import json as _json
+
+    from app.db.connection import get_conn as _get_conn
+
+    conn = _get_conn()
+    kol = conn.execute(
+        "SELECT id, handle, display_name FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)
+    ).fetchone()
+    if not kol:
+        raise LookupError("kol pool item not found")
+    active = conn.execute(
+        """
+        SELECT id FROM apify_jobs
+        WHERE job_type=? AND status IN ('queued','running')
+          AND payload->>'kol_pool_id'=? LIMIT 1
+        """,
+        (POOL_COMMENTS_JOB_TYPE, str(int(kol_pool_id))),
+    ).fetchone()
+    if active:
+        return {"status": "already_queued", "job_id": int(dict(active)["id"])}
+    name = str(dict(kol).get("handle") or dict(kol).get("display_name") or kol_pool_id)
+    payload = {
+        "kol_pool_id": int(kol_pool_id),
+        "evidence_ids": [int(e) for e in evidence_ids] if evidence_ids else None,
+        "max_comments": int(max_comments) if max_comments else None,
+        "query_text": f"评论采集 · {name}"[:96],
+        "target_type": "kol_profile",
+        "target_id": int(kol_pool_id),
+        "triggered_by_user_id": (staff or {}).get("user_id"),
+        "staff_id": (staff or {}).get("id") or (staff or {}).get("staff_id"),
+    }
+    job = conn.execute(
+        """
+        INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
+        VALUES (?, ?::jsonb, 'queued', NOW(), NOW())
+        RETURNING id
+        """,
+        (POOL_COMMENTS_JOB_TYPE, _json.dumps(payload, ensure_ascii=False)),
+    ).fetchone()
+    conn.commit()
+    return {"status": "queued", "job_id": int(dict(job)["id"]) if job else None}
+
+
+def run_kol_pool_comments_for_job(payload: dict, *, staff: dict | None = None) -> dict:
+    """worker 入口:对该 KOL 的 evidence 逐帖采评论(复用 collect_post_comments 全套机器)。"""
+    from app.db.connection import get_conn as _get_conn
+
+    kol_pool_id = int(payload.get("kol_pool_id") or 0)
+    if not kol_pool_id:
+        raise ValueError("kol_pool_id required")
+    evidence_ids = payload.get("evidence_ids")
+    if not evidence_ids:
+        rows = _get_conn().execute(
+            """
+            SELECT id FROM vkpi_kol_video_evidence
+            WHERE kol_pool_id=? AND is_active IS NOT FALSE
+              AND COALESCE(evidence_type,'video')='video'
+            ORDER BY COALESCE(view_count,0) DESC, id DESC LIMIT 20
+            """,
+            (kol_pool_id,),
+        ).fetchall()
+        evidence_ids = [int(dict(r)["id"]) for r in rows]
+    results = []
+    new_total = 0
+    for eid in evidence_ids:
+        result = collect_post_comments(
+            int(eid),
+            POOL_EVIDENCE_POST_TABLE,
+            max_comments=payload.get("max_comments"),
+            staff=staff,
+            triggered_by="kol_pool_button",
+        )
+        new_total += int(result.get("new_count") or 0)
+        results.append({"evidence_id": int(eid), "status": result.get("status"), "new": result.get("new_count"), "error": (result.get("error") or "")[:120]})
+    ok_count = sum(1 for r in results if r.get("status") == "ok")
+    return {
+        "status": "ready" if ok_count or not results else "blocked:all_posts_failed",
+        "kol_pool_id": kol_pool_id,
+        "posts": len(results),
+        "ok": ok_count,
+        "new_comments": new_total,
+        "results": results,
+    }
+
+
+def list_pool_video_comments(kol_pool_id: int, *, evidence_id: int, limit: int = 100) -> dict:
+    """读端:该 evidence 的已采评论(vkpi_comments,post_table=evidence)。字段对齐前端 mapCommentRows。"""
+    from app.db.connection import get_conn as _get_conn
+
+    conn = _get_conn()
+    owner = conn.execute(
+        "SELECT kol_pool_id, content_url FROM vkpi_kol_video_evidence WHERE id=?",
+        (int(evidence_id),),
+    ).fetchone()
+    if not owner or int(dict(owner)["kol_pool_id"] or 0) != int(kol_pool_id):
+        raise LookupError("evidence not found for this kol")
+    post_url = str(dict(owner).get("content_url") or "")
+    rows = conn.execute(
+        """
+        SELECT id, comment_text, author_handle, likes_count AS like_count,
+               reply_count, created_at, platform
+        FROM vkpi_comments
+        WHERE post_table=? AND post_id=?
+        ORDER BY COALESCE(likes_count,0) DESC, id ASC
+        LIMIT ?
+        """,
+        (POOL_EVIDENCE_POST_TABLE, int(evidence_id), max(1, min(500, int(limit or 100)))),
+    ).fetchall()
+    items = []
+    for row in rows:
+        item = dict(row)
+        item["post_url"] = post_url
+        items.append(item)
+    return {"items": items, "page": {"total": len(items), "next_offset": 0}}

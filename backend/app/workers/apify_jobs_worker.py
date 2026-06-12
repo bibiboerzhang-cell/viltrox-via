@@ -1472,6 +1472,29 @@ def _process_kol_profile_deep_crawl(conn: psycopg.Connection[Any], job: dict[str
             )
 
 
+def _process_kol_pool_comments_collect(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
+    """KOL Pool 收藏行评论采集(2026-06-12 裁令):逐帖走 collect_post_comments,泳道可见。"""
+    from app.domains.comments import collector as comments_collector
+
+    staff = _resolve_job_staff(conn, payload)
+    with db_connection_sync_scope():
+        result = comments_collector.run_kol_pool_comments_for_job(payload, staff=staff)
+    status = str((result or {}).get("status") or "")
+    ok = status == "ready"
+    payload["comments_collect_result"] = {k: v for k, v in (result or {}).items() if k != "results"}
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE apify_jobs SET status=%s, last_error=%s, payload=%s::jsonb, updated_at=NOW() WHERE id=%s",
+                (
+                    "done" if ok else "blocked",
+                    None if ok else (status or "comments_collect_failed")[:300],
+                    _json(payload),
+                    int(job["id"]),
+                ),
+            )
+
+
 def _process_project_retrospective(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
     project_id = _int_or_none(payload.get("target_id") or payload.get("project_id"))
     if not project_id:
@@ -3049,6 +3072,9 @@ def _process_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> None:
         return
     if str(job.get("job_type") or "").strip().lower() == "kol_profile_deep_crawl":
         _process_kol_profile_deep_crawl(conn, job, payload)
+        return
+    if str(job.get("job_type") or "").strip().lower() == "kol_pool_comments_collect":
+        _process_kol_pool_comments_collect(conn, job, payload)
         return
     target_type, target_id = _target(payload)
     if not target_type or not target_id:

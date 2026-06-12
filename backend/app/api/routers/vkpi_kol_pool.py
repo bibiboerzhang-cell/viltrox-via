@@ -891,6 +891,52 @@ def enqueue_kol_profile_deep_crawl(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/kol-pool/comments-collect/enqueue")
+@audit_action(
+    action_type="kol_pool_comments_collect_enqueue",
+    target_type="kol_pool",
+    target_id_extractor=lambda result, kwargs: str((result or {}).get("job_id") or ""),
+    detail_extractor=lambda result, kwargs: f"enqueue comments collect status={(result or {}).get('status')}",
+)
+def enqueue_kol_pool_comments_collect(
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """评论采集入 apify_jobs(2026-06-12 裁令"评论的展示也要有";泳道「评论采集」可见)。"""
+    from app.domains.comments import collector as comments_collector
+
+    try:
+        return comments_collector.enqueue_kol_pool_comments_job(
+            int(body.get("kol_pool_id") or 0),
+            evidence_ids=body.get("evidence_ids") or None,
+            max_comments=body.get("max_comments"),
+            staff=staff,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/kol-pool/{kol_pool_id}/video-comments")
+def get_kol_pool_video_comments(
+    kol_pool_id: int,
+    evidence_id: int = Query(..., ge=1),
+    limit: int = Query(default=100, ge=1, le=500),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """读该 evidence 的已采评论(vkpi_comments,post_table=evidence;字段对齐 mapCommentRows)。"""
+    del staff
+    from app.domains.comments import collector as comments_collector
+
+    try:
+        return comments_collector.list_pool_video_comments(
+            int(kol_pool_id), evidence_id=int(evidence_id), limit=int(limit)
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.get("/kol-pool/favorites")
 def list_kol_pool_favorites(
     limit: int = Query(default=2000, ge=1, le=5000),

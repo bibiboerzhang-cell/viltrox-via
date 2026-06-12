@@ -82,6 +82,35 @@ def resolve_post_for_comments(post_id: int, post_table: str = "industry_posts") 
         row = conn.execute(industry_post_projection_sql(), (int(post_id),)).fetchone()
         return normalize_industry_post(dict(row)) if row else None
 
+    if table_key in {"vkpi_kol_video_evidence", "kol_video_evidence"}:
+        # KOL Pool evidence 钩(2026-06-12 裁令"评论的展示也要有"):
+        # external_post_id = YT 取视频 id(Data API 要求),IG/TT 取帖子 URL(Apify actor 吃 URL)。
+        row = conn.execute(
+            """
+            SELECT id, NULL AS account_id, LOWER(COALESCE(platform,'')) AS platform,
+                   COALESCE(content_url,'') AS content_url
+            FROM vkpi_kol_video_evidence
+            WHERE id = ?
+            """,
+            (int(post_id),),
+        ).fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        external_post_id = str(data.get("content_url") or "")
+        if data.get("platform") == "youtube" and external_post_id:
+            from app.domains.kol.pool import _youtube_video_id
+
+            external_post_id = _youtube_video_id(external_post_id) or external_post_id
+        return {
+            "id": data.get("id"),
+            "account_id": None,
+            "platform": data.get("platform") or "",
+            "external_post_id": external_post_id,
+            "raw_data_json": "{}",
+            "raw_data": {},
+        }
+
     if table_key in {"kol_posts", "vkpi_kol_posts"}:
         try:
             row = conn.execute(
