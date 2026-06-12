@@ -156,3 +156,17 @@
 - **② 口子#2 堵口**:实锤=URL 路径保留段当 handle(`watch`←youtube.com/watch?v=…、`dp`←**amazon.com/dp/ 商品链接整行进池**、1557 watch←promo_plan_xlsx 源)。URL 保留词整名拒收(watch/dp/shorts/embed/videos/playlist/user/share/reel/status);**回归 22/22 全中**(18+3895+watch×2+dp);**单独判集零误杀**(_hokyzwb1a4 视频 ID 形、%编码真频道名 ×2 不拒收);真 handle 零误伤(含 dpreview/watchfinder123)。**立案三单归 P6 污染专项**:a. %编码句柄解码修复(真名可救,如 35milímetros);b. 11 字符视频 ID 形句柄观察单(视频链接误判建档,与口子同源);c. 历史解析行号溯源(legacy/promo 导入"URL 末段 fallback"精确定位)
 - **③ C5=770 正式转入 apply 链候发**(排除 7 对留痕+重建条款照裁决②)
 - **④ 车道二/三至今未报到(catch 登记)**;d 批续按令在车道一窗口间隙自落,下一间隙首件=d11(bundle 瘦身,速度最大单点)
+
+## 2026-06-12 咽喉审计(只读;裁决②令)
+**结论:池子没有"唯一入闸"——写入 vkpi_kol_pool 共 3 根管,卫生闸只守住 1 根。**
+
+| # | INSERT 点 | 上游链 | 卫生闸在必经之路? |
+|---|---|---|---|
+| 1 | `pool.py:172`(import_items) | `_normalize_item`(pool_common)← router `/kol-pool/import`(vkpi_kol_pool.py:1313)与 `vkpi_product_analysis.py:63`(promo_plan 等批量导入均汇于此) | ✅ **已覆盖**(`_looks_like_garbage_handle` 在 `_normalize_item` 内) |
+| 2 | `profile_basics.py:211`(_execute_insert) | `write_kol_profile_basics` ← **A1 新人建档主链**(url_deep_crawl.py:930/:662);handle 经 `_normalise_handle`(:161-178,仅 strip/lower,**零卫生校验**) | ❌ **漏管**——视频 ID 形/任意垃圾可经新人建档直进池 |
+| 3 | `legacy_kol_commit.py:339`(治理批次提交) | handle 取 staging `normalized_handle`(legacy_entity_resolution 生成,**不经卫生函数**) | ❌ **漏管** |
+| — | `pool_favorites.py:49` | 收藏关联表,非池本体 | 不适用 |
+
+**候裁方案**(原则对齐 fit_score 唯一写点教义):
+- **甲·唯一入闸**:抽公共 `sanitize_pool_handle()`,三管强制过闸(改动牵 A1 主链,中险)
+- **乙·逐路径接入 + 覆盖清单**(推荐):管2 `_normalise_handle` 尾部加 guard(垃圾→返 ""→上游既有 "handle required" 校验自然拦截);管3 提交前校验同函数;本表即覆盖清单,**F4 第三源开闸时按登记制复用同函数**——一个标准,三处登记
