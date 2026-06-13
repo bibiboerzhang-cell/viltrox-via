@@ -53,6 +53,129 @@ WHY_FIT_RULES = (
     ("电影镜头", ("电影镜头", "anamorphic", "变形", "cine", "epic", "广告", "commercial"), ("anamorphic", "变形", "cine", "电影感", "cinematic", "filmmaker", "广告", "commercial"), "拍电影/广告片"),
 )
 
+# ── 召回展示辅助信号(全独立,绝不并入 viltrox_fit_score / recall_rank_score / rule_v0)──────
+# 「视频向产品」query_profile 白名单:监视器 / 电影镜头(其买家=视频拍摄者,纯平面摄影师契合一般)。
+VIDEO_LEANING_PROFILES = frozenset({"monitor_dc550pro2", "cine_epic_anamorphic"})
+# 人群侧「视频向」词:planner product_focus / target_persona / persona_text 命中即判产品偏视频。
+VIDEO_LEANING_PERSONA_WORDS = (
+    "videograph", "filmmaker", "cinematograph", "cinematic", "monitor", "监视器",
+    "外接屏", "cine", "电影", "影视", "field monitor", "camera monitor", "dp ", "多机位",
+)
+# KOL 真实信号里的「视频」证据词:命中任一 → 该候选具备视频信号(不判为纯平面)。
+KOL_VIDEO_SIGNAL_WORDS = (
+    "video", "videograph", "film", "filmmaker", "cinema", "cinematic", "cine",
+    "vlog", "vlogger", "monitor", "监视器", "影视", "电影", "电影感", "短片",
+    "footage", "gimbal", "稳定器", "b-roll", "broll", "motion", "拍视频",
+)
+# KOL 真实信号里的「纯平面摄影」证据词:命中且无视频信号 → 判为以平面摄影为主。
+KOL_STILL_PHOTO_WORDS = (
+    "photographer", "photography", "photo ", "still photo", "stills", "摄影师",
+    "平面", "portrait photographer", "headshot", "拍照", "lightroom", "raw photo",
+)
+# 合作过载阈值:brand_collaborations_json 条数 ≥ 此值即提示议价/独占性弱(数据缺时不杜撰)。
+BRAND_COLLAB_OVERLOAD_N = 6
+
+
+def _is_video_leaning_product(
+    query_meta: dict[str, Any],
+    persona_text: str,
+    product_focus: Any,
+) -> bool:
+    """本次 query 是否偏「视频/监视器」人群(监视器/cine 产品线,或人群文本含视频向词)。
+    纯展示判据,不写任何评分。"""
+    profile_key = str((query_meta or {}).get("query_profile") or "")
+    if profile_key in VIDEO_LEANING_PROFILES:
+        return True
+    blob = str(persona_text or "").lower()
+    if isinstance(product_focus, (list, tuple)):
+        blob += " " + " ".join(str(item).lower() for item in product_focus if item)
+    elif product_focus:
+        blob += " " + str(product_focus).lower()
+    return any(word in blob for word in VIDEO_LEANING_PERSONA_WORDS)
+
+
+def _kol_signal_blob(row: dict[str, Any], evidence: dict[str, Any]) -> str:
+    """KOL 真实画像信号汇总(画像文本/类型理由/bio/主垂类/内容风格/次垂类/已用器材/标签)。"""
+    parts: list[str] = [
+        _clean_text(row.get("profile_text"), 600),
+        _clean_text(row.get("type_reason"), 400),
+        _clean_text(row.get("bio"), 300),
+        _clean_text(row.get("primary_topic"), 200),
+        _clean_text(row.get("content_style"), 200),
+        _clean_text(row.get("secondary_topics_json"), 300),
+        " ".join(str(lens) for lens in (evidence.get("used_lenses") or [])),
+        " ".join(str(label) for label in (evidence.get("reason_labels") or [])),
+    ]
+    return " ".join(p for p in parts if p).lower()
+
+
+def _still_photo_dominant(signal_blob: str) -> bool:
+    """命中纯平面摄影词且不含任何视频信号 → 判为以平面摄影为主(数据缺时返回 False,不杜撰)。"""
+    if not signal_blob:
+        return False
+    has_video = any(word in signal_blob for word in KOL_VIDEO_SIGNAL_WORDS)
+    has_still = any(word in signal_blob for word in KOL_STILL_PHOTO_WORDS)
+    return has_still and not has_video
+
+
+def _brand_collab_count(row: dict[str, Any]) -> int:
+    """brand_collaborations_json 真实合作条数;空/[] / 解析失败 → 0(视为数据缺,不提示过载)。"""
+    raw = row.get("brand_collaborations_json")
+    if raw in (None, "", "[]"):
+        return 0
+    value: Any = raw
+    if isinstance(raw, (str, bytes)):
+        try:
+            import json as _json_mod
+
+            value = _json_mod.loads(raw)
+        except Exception:
+            return 0
+    if isinstance(value, dict):
+        for key in ("brands", "collaborations", "items", "list"):
+            inner = value.get(key)
+            if isinstance(inner, list):
+                value = inner
+                break
+        else:
+            return 0
+    if isinstance(value, list):
+        return sum(1 for item in value if item not in (None, "", {}, []))
+    return 0
+
+
+def _relevance_signals(
+    row: dict[str, Any],
+    evidence: dict[str, Any],
+    *,
+    video_leaning: bool,
+) -> tuple[float, list[str], list[str], str]:
+    """产出独立展示信号:(display_relevance_adjust, relevance_flags, note_parts, tier_hint)。
+    红线:adjust 仅用于一个独立展示排序字段,绝不并入 viltrox_fit_score / recall_rank_score / vector_score。
+    note_parts 为可读短语,拼进 why_fit;数据缺时一律不提示(不杜撰)。"""
+    adjust = 0.0
+    flags: list[str] = []
+    notes: list[str] = []
+    tier_hint = ""
+
+    signal_blob = _kol_signal_blob(row, evidence)
+    # ① 视频向产品 × 纯平面摄影候选:诚实标注 + 展示相关度下调(下调仅作用于独立展示分)。
+    if video_leaning and signal_blob and _still_photo_dominant(signal_blob):
+        adjust -= 0.12
+        flags.append("平面为主")
+        notes.append("以平面摄影为主,与视频/监视器人群契合一般")
+        tier_hint = "demote"
+
+    # ② 合作过载:真实合作条数高 → 议价/独占性弱(数据缺不提示)。
+    collab_count = _brand_collab_count(row)
+    if collab_count >= BRAND_COLLAB_OVERLOAD_N:
+        adjust -= 0.04
+        flags.append(f"合作{collab_count}+")
+        notes.append(f"已合作品牌较多({collab_count}),议价/独占性弱")
+
+    return adjust, flags, notes, tier_hint
+
+
 PRODUCT_QUERY_TEXTS = {
     "35mm_f12_lab": """Product query profile: Viltrox AF 35mm F1.2 LAB.
 Creator use cases: environmental portrait, street photography, documentary storytelling, wedding and engagement photography, low-light portrait, editorial fashion, hybrid photo and video, premium full-frame storyteller.
@@ -303,7 +426,11 @@ def _entry_rows(kol_pool_ids: list[int]) -> dict[int, dict[str, Any]]:
                p.avatar_url,
                p.followers,
                p.bio,
-               p.country
+               p.country,
+               p.primary_topic,
+               p.content_style,
+               p.secondary_topics_json,
+               p.brand_collaborations_json
         FROM vkpi_kol_profile_index_entries e
         JOIN vkpi_kol_pool p ON p.id = e.kol_pool_id
         WHERE e.collection_name = ?
@@ -623,6 +750,7 @@ def _format_item(
     evidence: dict[str, Any],
     persona_text: str = "",
     product_label: str = "",
+    video_leaning: bool = False,
 ) -> dict[str, Any]:
     type_rank_score = _type_score_for_bucket(row, bucket)
     rank_score = _recall_rank_score(
@@ -632,6 +760,13 @@ def _format_item(
         type_weight=type_weight,
         type_boost_enabled=type_boost_enabled,
     )
+    # 独立展示信号(绝不并入 viltrox_fit_score / recall_rank_score / vector_score / rule_v0)。
+    relevance_adjust, relevance_flags, relevance_notes, tier_hint = _relevance_signals(
+        row, evidence, video_leaning=video_leaning
+    )
+    why_fit_text = _why_fit(row, evidence, persona_text, product_label)
+    if relevance_notes:
+        why_fit_text = f"{why_fit_text}({';'.join(relevance_notes)})"
     item = {
         "kol_pool_id": int(row.get("kol_pool_id") or hit.kol_pool_id),
         "handle": row.get("handle") or "",
@@ -645,6 +780,12 @@ def _format_item(
         "type_rank_score": round(type_rank_score, 1),
         "recall_rank_score": round(rank_score, 6),
         "recall_rank_score_method": "vector_type_weighted" if type_boost_enabled else "vector_only",
+        # 独立展示分:= recall_rank_score + 展示用 adjust;仅供前端展示排序/分档,
+        # 绝不回写任何评分字段(recall_rank_score 原值不变,供审计)。
+        "display_rank_score": round(rank_score + relevance_adjust, 6),
+        "display_relevance_adjust": round(relevance_adjust, 6),
+        "relevance_flags": relevance_flags,
+        "relevance_tier_hint": tier_hint,
         "profile_type": row.get("profile_type") or "",
         "bucket": bucket,
         "type_label": _type_label(row),
@@ -653,7 +794,7 @@ def _format_item(
         "type_reason": row.get("type_reason") or "",
         "type_method": row.get("type_method") or "",
         "recall_reason": _recall_reason(row, evidence),
-        "why_fit": _why_fit(row, evidence, persona_text, product_label),
+        "why_fit": why_fit_text,
         "source_fields": {
             "vector_method": METHOD,
             "type_method": row.get("type_method") or "",
@@ -716,6 +857,8 @@ def recall_kol_profiles(
         product_focus,
         target_persona,
     )
+    # 本次 query 是否偏视频/监视器人群(用于纯平面摄影候选的诚实标注与展示降权)。纯展示判据。
+    video_leaning = _is_video_leaning_product(query_meta, persona_text, product_focus)
     query_vector, embedding_meta = _embed_query(resolved_text)
     hits = _search_qdrant(query_vector, safe_candidate_limit)
 
@@ -755,12 +898,16 @@ def recall_kol_profiles(
                 evidence=evidence_by_id.get(hit.kol_pool_id, {}),
                 persona_text=persona_text,
                 product_label=product_label,
+                video_leaning=video_leaning,
             )
         )
 
     for bucket_items in buckets.values():
+        # 展示排序用独立的 display_rank_score(= recall_rank_score + 展示 adjust);
+        # recall_rank_score / vector_score 原值保留不变,仅作 tie-break 与审计。
         bucket_items.sort(
             key=lambda item: (
+                _float(item.get("display_rank_score")),
                 _float(item.get("recall_rank_score")),
                 _float(item.get("vector_score")),
             ),
@@ -783,6 +930,7 @@ def recall_kol_profiles(
             "limit": safe_limit,
             "product_label": product_label,
             "product_persona": str(persona_meta.get("persona") or ""),
+            "video_leaning_product": bool(video_leaning),
         },
         "ratio": {
             "creator_quota": safe_creator_quota,
