@@ -42,6 +42,7 @@ from app.services.kol.account_dossier import (
 from app.services.kol.content_analyzer import analyze_kol_url_standalone
 from app.services.kol.metrics import cpv, engagement_rate, roi
 from app.domains.kol import history_match as kol_history_match
+from app.domains.kol import profile_discovery as _kol_discovery  # P0-6 地区排除判据复用
 
 from app.api.routers.kol_ops_schema import ensure_kol_schema
 from app.api.routers.kol_ops_dashboard import router as dashboard_router
@@ -152,6 +153,29 @@ async def search_kol_platform(body: dict, staff=Depends(require_tab("kol_ops", "
     market = str(body.get("market") or "").strip().upper()
     if not query:
         raise HTTPException(status_code=400, detail="query is required")
+    # P0-6:同步发现入口此前旁路了发现侧过滤。① douyin 已从发现支持平台硬移除,直接 422。
+    if platform == "douyin":
+        # P0-6:douyin 已硬移除出发现平台;优雅空返回(覆盖所有调用方,不抛 422)。
+        return {
+            "status": "unsupported_platform",
+            "items": [],
+            "candidate_ids": [],
+            "saved_candidates": 0,
+            "message": "douyin is not a supported discovery platform",
+            "platform": platform,
+        }
+    # ② 默认排除 {中国大陆 CN / 香港 HK / 台湾 TW} 三地区(exclude_chinese 默认 True,语义=排除三地区);
+    #    同步入口无 per-item country,地区信号来自搜索 market;market 命中三地区则整批不落库。
+    exclude_region = bool(body.get("exclude_chinese", True))
+    if exclude_region and _kol_discovery._country_in_excluded_region(market):
+        return {
+            "status": "excluded_region",
+            "items": [],
+            "candidate_ids": [],
+            "saved_candidates": 0,
+            "message": "market is in excluded region {CN/HK/TW}; no candidates persisted",
+            "market": market,
+        }
     result = await search_platform_content(
         platform,
         query,
@@ -160,6 +184,14 @@ async def search_kol_platform(body: dict, staff=Depends(require_tab("kol_ops", "
     )
     result_items = [dict(item or {}) for item in (result.get("items", []) or [])]
     enriched_items = await db_write(lambda: kol_history_match.annotate_platform_items(result_items, platform=platform))
+    # ③ 写入前再按 item 上可能出现的 country/region 兜底过滤(默认开),海外中文号放行。
+    if exclude_region:
+        enriched_items = [
+            item for item in enriched_items
+            if not _kol_discovery._country_in_excluded_region(
+                market, item.get("country"), item.get("region")
+            )
+        ]
     result["items"] = enriched_items
     candidate_ids = await db_write(lambda: _persist_search_candidates(enriched_items, body, platform, market))
     await db_write(

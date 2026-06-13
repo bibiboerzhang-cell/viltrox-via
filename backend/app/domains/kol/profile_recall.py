@@ -235,33 +235,28 @@ def _clean_text(value: Any, limit: int = 240) -> str:
     return text[:limit]
 
 
-_CHINESE_COUNTRY_RE = re.compile(r"中国|中國|大陆|大陸", re.IGNORECASE)
+# P0-6 地区口径:排除 {中国大陆 CN / 香港 HK / 台湾 TW} 三地区,其余所有国家放行
+# (含海外中文博主)。同时匹配中文地名与 ISO 码;country 为空不命中(放行,预期)。
+_EXCLUDED_REGION_RE = re.compile(
+    r"中国|中國|大陆|大陸|香港|台湾|台灣|hong\s*kong|taiwan|china", re.IGNORECASE
+)
+_EXCLUDED_REGION_CODES = {"CN", "HK", "TW", "CHINA"}
 
 
-def _country_is_mainland(value: Any) -> bool:
-    """大陆国别判据(规避中国人 KOL,用户硬诉求):country 含「中国/中國/大陆」或纯 CN
-    即判大陆。台/港(TW/HK/Taiwan/Hong Kong)默认不排——先只排大陆。"""
+def _country_in_excluded_region(value: Any) -> bool:
+    """地区排除判据(P0-6 取代旧大陆/汉字双判据):country 命中 {CN/HK/TW} 之一即排除,
+    同时匹配中文地名(中国/中國/大陆/大陸/香港/台湾/台灣/Hong Kong/Taiwan/China)与 ISO 码
+    (CN/HK/TW/CHINA)。country 为空 → 不命中 → 放行(海外中文博主一律放行)。"""
     text = str(value or "").strip()
     if not text:
         return False
-    if text.upper() == "CN":
+    if text.upper() in _EXCLUDED_REGION_CODES:
         return True
-    return bool(_CHINESE_COUNTRY_RE.search(text))
+    return bool(_EXCLUDED_REGION_RE.search(text))
 
 
-def _looks_chinese(*texts: Any) -> bool:
-    """中文创作者判据(复用 profile_discovery._looks_chinese 思路):某文本含 >=2 汉字
-    且不含日文假名/韩文谚文(防误杀日韩号)即判中文。仅看 display_name/handle,bio 不纳入
-    (误杀高)。"""
-    for value in texts:
-        text = str(value or "")
-        if not text:
-            continue
-        if re.search(r"[぀-ヿ가-힯]", text):  # 日文假名/韩文 → 非中文,跳过
-            continue
-        if len(re.findall(r"[一-鿿]", text)) >= 2:
-            return True
-    return False
+# P0-6 移除:旧汉字判据 `_looks_chinese` 已从过滤链下线(误杀三地区外日韩/海外中文号),
+# 排除一律走 `_country_in_excluded_region` 地区判据。函数整体删除,不再保留死代码。
 
 
 def _normalise_lens_mention(value: str) -> str:
@@ -576,10 +571,8 @@ def recall_kol_profiles(
         if not row:
             missing_type_count += 1
             continue
-        if exclude_chinese and (
-            _country_is_mainland(row.get("country"))
-            or _looks_chinese(row.get("display_name"), row.get("handle"))
-        ):
+        # P0-6:纯地区判据(CN/HK/TW),不再按汉字名排除;country 为空放行(预期)。
+        if exclude_chinese and _country_in_excluded_region(row.get("country")):
             excluded_chinese_count += 1
             continue
         bucket = _bucket_for(row, mixed_policy)

@@ -16,19 +16,30 @@ from app.domains.kol import url_deep_crawl
 from app.services.intelligence.account_scan_service import search_platform_content
 
 
-SUPPORTED_DISCOVERY_PLATFORMS = {"youtube", "instagram", "tiktok", "douyin"}
+# P0-6:douyin 代码层硬移除出发现支持平台(不靠 env)。抖音号天然落 {中国大陆} 排除域,
+# 且无稳定海外召回价值,故从发现入口剔除;_platforms() 命中 douyin 时直接被过滤掉。
+SUPPORTED_DISCOVERY_PLATFORMS = {"youtube", "instagram", "tiktok"}
 
 
-def _looks_chinese(*texts: Any) -> bool:
-    """中文创作者判据(规避中国人/中文 KOL,用户硬诉求):某文本含 >=2 汉字 且不含日文假名/
-    韩文谚文(防误杀日韩号)即判中文。发现侧过滤用。"""
-    for value in texts:
-        text = str(value or "")
+# P0-6 地区口径:排除 {中国大陆 CN / 香港 HK / 台湾 TW},匹配中文地名 + ISO 码;
+# 其余国家(含海外中文博主)放行;空地区放行。发现侧/写入前过滤共用。
+_EXCLUDED_REGION_RE = re.compile(
+    r"中国|中國|大陆|大陸|香港|台湾|台灣|hong\s*kong|taiwan|china", re.IGNORECASE
+)
+_EXCLUDED_REGION_CODES = {"CN", "HK", "TW", "CHINA"}
+
+
+def _country_in_excluded_region(*values: Any) -> bool:
+    """地区排除判据(P0-6,取代旧 `_looks_chinese`):任一 country/market 文本命中
+    {CN/HK/TW}(中文地名或 ISO 码)即排除;全空 → 放行。发现侧 item 无 per-item country,
+    实际传入的是搜索 market;见调用点说明。"""
+    for value in values:
+        text = str(value or "").strip()
         if not text:
             continue
-        if re.search(r"[぀-ヿ가-힯]", text):  # 日文假名/韩文 → 非中文,跳过
-            continue
-        if len(re.findall(r"[一-鿿]", text)) >= 2:
+        if text.upper() in _EXCLUDED_REGION_CODES:
+            return True
+        if _EXCLUDED_REGION_RE.search(text):
             return True
     return False
 
@@ -888,8 +899,11 @@ async def discover_new_creators(
             if item.get("historical_match") or item.get("history_kol_pool_id"):
                 existing_matches.append(item)
                 continue
-            # 规避中文 KOL(用户硬诉求)+ 丢弃 query-as-handle 残废项。
-            if _is_discovery_garbage(item) or _looks_chinese(item.get("channel_name"), item.get("handle"), item.get("sample_title")):
+            # P0-6:按地区排除 {中国大陆/香港/台湾}(写入前过滤),其余放行;丢弃 query-as-handle 残废项。
+            # 发现 item 无 per-item country,主地区信号来自搜索 market;item 上若带 country/region 也一并判。
+            if _is_discovery_garbage(item) or _country_in_excluded_region(
+                market, item.get("country"), item.get("region")
+            ):
                 continue
             if len(new_creators) < safe_limit:
                 new_creators.append(item)

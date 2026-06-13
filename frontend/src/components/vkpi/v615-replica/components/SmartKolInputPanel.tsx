@@ -651,7 +651,8 @@ export function SmartKolInputPanel({
   const [discoveryPlatforms, setDiscoveryPlatforms] = useState<string[]>(["youtube", "instagram", "tiktok"]);
   // 开闸全量(用户裁令「直接开闸全量」):深度查找默认开,文字搜索后自动触发全网发现一步到位。
   const [deepFindOn, setDeepFindOn] = useState(true);
-  // 规避中国人/中文 KOL(用户硬诉求):默认开,库内召回侧按国别+中文名判据排除大陆中文号。
+  // P0-6 地区口径:默认开,排除 {中国大陆 CN / 香港 HK / 台湾 TW} 三地区(按 country/market 地区判据,
+  // 含 ISO 码与中文地名),其余所有国家放行(含海外中文博主)。后端参数名保留 exclude_chinese。
   const [excludeChinese, setExcludeChinese] = useState(true);
 
   const inferredMode = useMemo(() => detectMode(input), [input]);
@@ -1132,9 +1133,9 @@ export function SmartKolInputPanel({
                 );
               })}
               <span className="rounded-full border border-white/[0.06] px-2 py-0.5 text-[10px] text-slate-600" title="Facebook 发现待 provider 落地">Facebook · 即将</span>
-              <label className="flex items-center gap-1 text-[10px] text-slate-400" title="库内召回排除大陆中文 KOL(国别/中文名判据)">
+              <label className="flex items-center gap-1 text-[10px] text-slate-400" title="排除 中国大陆/香港/台湾 地区(按 country/market 地区判据,海外中文博主放行)">
                 <input type="checkbox" checked={excludeChinese} onChange={(event) => setExcludeChinese(event.target.checked)} className="accent-emerald-500" />
-                排除中文 KOL
+                排除 中国/港/台 地区
               </label>
               <button
                 type="button"
