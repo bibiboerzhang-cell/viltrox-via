@@ -74,8 +74,20 @@ def _fallback_plan(query: str, *, reason: str = "rule_fallback") -> dict[str, An
         keywords.extend(["portrait", "portrait photographer"])
     if any(term in lowered for term in ("测评", "review", "gear")):
         keywords.extend(["gear reviewer", "camera gear review"])
+    if any(term in lowered for term in ("monitor", "监视器", "550pro", "550 pro", "550por", "外接屏", "screen", "屏")):
+        keywords.extend(["camera monitor", "field monitor", "on-camera monitor", "filmmaker gear", "cinematographer"])
+    if any(term in lowered for term in ("镜头", "lens", "lab", "mm")):
+        keywords.extend(["videographer", "photographer", "camera gear"])
 
-    search_query = " ".join(dict.fromkeys([query_text, *keywords])).strip()
+    # 规避问题A:中文 query 直接塞进 search_query 会让平台搜出中文号。
+    # 有英文关键词→只用英文关键词;纯中文无匹配→给英文影视器材兜底;ASCII 原串才保留。
+    has_cjk = any("一" <= ch <= "鿿" for ch in query_text)
+    if keywords:
+        search_query = " ".join(dict.fromkeys(keywords)).strip()
+    elif has_cjk:
+        search_query = "camera gear reviewer filmmaker videographer"
+    else:
+        search_query = query_text
     return {
         "status": "fallback",
         "original_query": query_text,
@@ -83,7 +95,7 @@ def _fallback_plan(query: str, *, reason: str = "rule_fallback") -> dict[str, An
         "product_focus": keywords[:6],
         "target_persona": query_text,
         "platforms": platforms,
-        "market": "",
+        "market": "US",
         "creator_quota": 15,
         "reviewer_quota": 15,
         "include_new_discovery": True,
@@ -148,7 +160,10 @@ Operator request:
 {query_text}
 
 Rules:
-- Preserve the original intent but expand it into searchable creator terms.
+- OUTPUT MUST BE IN ENGLISH. Translate any Chinese / non-English request into English creator search terms. search_query and product_focus MUST be English keywords — never the raw Chinese text.
+- Recognize Viltrox products and map to English creator terms: monitor / 监视器 / 550pro / 550 pro / 外接屏 / screen → "camera monitor", "field monitor", "on-camera monitor", "filmmaker gear", "cinematographer", "camera rig"; flash / 闪光灯 / 灯 → "lighting", "flash", "strobe"; lens / 镜头 → "photographer", "videographer", "camera gear".
+- Target the ENGLISH-speaking market. Set market to "US" unless the user explicitly names another English region (UK/CA/AU/EU). Exclude Chinese-language creators.
+- Preserve the original intent but expand it into searchable English creator terms.
 - If the request mentions flash, lighting, strobe, LED, Godox, or price/value, include lighting/flash creator terms.
 - Prefer a balanced 15 creator / 15 reviewer search unless the user says otherwise.
 - Platforms must be from: youtube, instagram, tiktok.

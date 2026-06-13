@@ -478,12 +478,14 @@ async def search_platform_content(
             likes = _normalize_int(item.get("likesCount"))
             comments = _normalize_int(item.get("commentsCount"))
 
-        clean_channel_name = _known_text(channel_name, handle, normalized_query) or "Unknown creator"
+        # 修 query-as-handle bug:去掉 normalized_query 兜底——无真 handle/name 时不再把整句查询
+        # 当成创作者(此前造出 youtube.com/@整句 的假号混入发现结果)。
+        clean_channel_name = _known_text(channel_name, handle) or "Unknown creator"
         items.append(
             {
                 "platform": normalized_platform,
                 "channel_name": clean_channel_name,
-                "handle": _known_text(handle, channel_name, normalized_query),
+                "handle": _known_text(handle, channel_name),
                 "avatar_url": avatar_url or thumbnail_url,
                 "thumbnail_url": thumbnail_url,
                 "channel_url": channel_url,

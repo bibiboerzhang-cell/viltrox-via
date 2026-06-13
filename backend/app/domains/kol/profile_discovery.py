@@ -5,6 +5,7 @@ It does not create KOL Pool rows and never touches V6 Fit scoring fields.
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.db.connection import get_conn
@@ -16,6 +17,27 @@ from app.services.intelligence.account_scan_service import search_platform_conte
 
 
 SUPPORTED_DISCOVERY_PLATFORMS = {"youtube", "instagram", "tiktok", "douyin"}
+
+
+def _looks_chinese(*texts: Any) -> bool:
+    """中文创作者判据(规避中国人/中文 KOL,用户硬诉求):某文本含 >=2 汉字 且不含日文假名/
+    韩文谚文(防误杀日韩号)即判中文。发现侧过滤用。"""
+    for value in texts:
+        text = str(value or "")
+        if not text:
+            continue
+        if re.search(r"[぀-ヿ가-힯]", text):  # 日文假名/韩文 → 非中文,跳过
+            continue
+        if len(re.findall(r"[一-鿿]", text)) >= 2:
+            return True
+    return False
+
+
+def _is_discovery_garbage(item: dict[str, Any]) -> bool:
+    """残废发现项:无真 handle(query-as-handle 修复后兜底为 'Unknown creator'/空)→ 丢弃。"""
+    handle = str(item.get("handle") or "").strip()
+    name = str(item.get("channel_name") or "").strip()
+    return not handle and name.lower() in ("", "unknown creator")
 
 
 def _text(value: Any) -> str:
@@ -864,6 +886,9 @@ async def discover_new_creators(
             seen.add(key)
             if item.get("historical_match") or item.get("history_kol_pool_id"):
                 existing_matches.append(item)
+                continue
+            # 规避中文 KOL(用户硬诉求)+ 丢弃 query-as-handle 残废项。
+            if _is_discovery_garbage(item) or _looks_chinese(item.get("channel_name"), item.get("handle"), item.get("sample_title")):
                 continue
             if len(new_creators) < safe_limit:
                 new_creators.append(item)
