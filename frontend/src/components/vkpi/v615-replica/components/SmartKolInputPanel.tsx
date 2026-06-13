@@ -423,16 +423,36 @@ function RecallMiniItem({
 
 function PlanPills({ plan }: { plan: Row }) {
   const searchQuery = display(plan.search_query);
+  // 产品定位(说人话):优先 LLM product_positioning,缺则用 persona。
+  const positioning = display(plan.product_positioning, "") || display(plan.target_persona, "");
   const persona = display(plan.target_persona, "");
   const focus = Array.isArray(plan.product_focus) ? plan.product_focus.map(cleanText).filter(Boolean).slice(0, 4) : [];
+  const avoid = Array.isArray(plan.avoid_types) ? plan.avoid_types.map(cleanText).filter(Boolean).slice(0, 4) : [];
   return (
     <div className="mb-2 rounded-md border border-cyan-300/12 bg-cyan-400/[0.045] px-2.5 py-2">
-      <div className="truncate text-[10.5px] text-slate-300">{searchQuery}</div>
-      {persona ? <div className="mt-1 truncate text-[10px] text-slate-500">{persona}</div> : null}
+      {/* 产品定位:这是什么产品、价位、给谁的(说人话,不暴露 SKU 技术腔) */}
+      {positioning ? (
+        <div className="text-[10.5px] leading-relaxed text-slate-200">{positioning}</div>
+      ) : null}
+      <div className="mt-1 truncate text-[10px] text-slate-500">检索词:{searchQuery}</div>
+      {persona && persona !== positioning ? (
+        <div className="mt-0.5 truncate text-[9.5px] text-slate-600">{persona}</div>
+      ) : null}
       {focus.length ? (
         <div className="mt-1.5 flex flex-wrap gap-1">
+          <span className="self-center text-[9px] text-emerald-300/70">理想</span>
           {focus.map((item) => (
-            <span key={item} className="rounded border border-white/[0.07] bg-black/20 px-1.5 py-0.5 text-[9.5px] text-slate-400">
+            <span key={item} className="rounded border border-emerald-300/15 bg-emerald-400/[0.07] px-1.5 py-0.5 text-[9.5px] text-emerald-100/80">
+              {item}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {avoid.length ? (
+        <div className="mt-1 flex flex-wrap gap-1">
+          <span className="self-center text-[9px] text-rose-300/70">规避</span>
+          {avoid.map((item) => (
+            <span key={item} className="rounded border border-rose-300/15 bg-rose-400/[0.07] px-1.5 py-0.5 text-[9.5px] text-rose-100/75 line-through decoration-rose-300/40">
               {item}
             </span>
           ))}
