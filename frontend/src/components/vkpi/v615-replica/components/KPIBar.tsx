@@ -29,13 +29,16 @@ export function KPIBar({ items, onCardClick, activeKindFilter, onTotalClick }) {
     return sum + Object.values(k.estimated_country_reach).reduce((a, b) => a + b, 0);
   }, 0);
   
+  // 诊断 P1-8/9/10 + P2-5 状态卡诚实化:candidate_kind 后端未供(前端按 linked_main_kol_id 推导,
+  // 全池仅 1 行有链接→新/已有拆分失真);trend_score 列不存在(本周Trend 恒空);月度Reach 实为
+  // avg_views 静态总和非去重触达;V6Fit 是旧静态分未含 RealER 影子。下方卡名/sub 如实标注。
   const cards = [
-    { icon: Users,       label: "Pool 总数",       value: total,                                    sub: existingCount + " 已有 · " + newCount + " 新发现",    color: "#a855f7", filterKey: "" },
-    { icon: Sparkles,    label: "新发现 KOL",      value: newCount,                                  sub: validatingCount + " 校验中 · " + (newCount - validatingCount) + " 待画像", color: "#c4b5fd", filterKey: "new" },
-    { icon: AlertCircle, label: "待补全",          value: lowConfCount,                              sub: "已有库 · 数据不全",                                  color: "#fdba74", filterKey: "existing_low_confidence" },
-    { icon: Target,      label: "平均 V6 Fit",     value: avgFit,                                    sub: fits.length ? fits.length + " 个有效" : "评分待生成", color: "#10b981", filterKey: null },
-    { icon: Flame,       label: "本周高 Trend",    value: highTrend,                                 sub: trendItems.length ? "真实 trend 字段" : "Trend 数据待接入", color: "#ef4444", filterKey: null },
-    { icon: TrendingUp,  label: "月度估算 Reach",  value: totalReach ? formatNumber(totalReach) : "待评估", sub: totalReach ? "avg_views 汇总" : "reach 字段待接入", color: "#ec4899", filterKey: null },
+    { icon: Users,       label: "Pool 总数",       value: total,                                    sub: existingCount + " 已链主表 · " + newCount + " 未链(≈新)",    color: "#a855f7", filterKey: "" },
+    { icon: Sparkles,    label: "新发现 KOL",      value: newCount,                                  sub: "按未链主表推导 · candidate_kind 待后端", color: "#c4b5fd", filterKey: "new" },
+    { icon: AlertCircle, label: "待补全",          value: lowConfCount,                              sub: "已链主表 · 数据不全(分类待后端)",                                  color: "#fdba74", filterKey: "existing_low_confidence" },
+    { icon: Target,      label: "平均 V6 Fit",     value: avgFit,                                    sub: fits.length ? fits.length + " 个有效 · 旧V6分(未含RealER)" : "评分待生成", color: "#10b981", filterKey: null },
+    { icon: Flame,       label: "本周高 Trend",    value: highTrend,                                 sub: trendItems.length ? "真实 trend 字段" : "Trend 列待接入(恒空)", color: "#ef4444", filterKey: null },
+    { icon: TrendingUp,  label: "播放量汇总",      value: totalReach ? formatNumber(totalReach) : "待评估", sub: totalReach ? "Σ avg_views · 非去重触达" : "reach 字段待接入", color: "#ec4899", filterKey: null },
   ];
   
   return e("div", { className: "grid grid-cols-2 gap-1.5 md:grid-cols-3 xl:grid-cols-6" },
