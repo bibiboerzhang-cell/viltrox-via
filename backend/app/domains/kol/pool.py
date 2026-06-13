@@ -509,7 +509,13 @@ def summary() -> dict[str, Any]:
     })
 
 
-def _video_evidence_for_kol(kol_pool_id: int, *, limit: int = 3) -> list[dict[str, Any]]:
+def _video_evidence_for_kol(
+    kol_pool_id: int, *, limit: int = 3, only_with_cache: bool = False, include_inactive: bool = False
+) -> list[dict[str, Any]]:
+    # only_with_cache: 仅回带有 final_v1 / keyframe_qa cache 的 evidence(detail_bundle 视频分析
+    #   与展示用 videos 限 3 解耦,修「已找到 N 条 evidence 但 video_analysis 未命中」)。
+    # include_inactive: 放宽 is_active(回挂已有分析——有 cache 的 inactive evidence 也回带,
+    #   纯只读 SELECT,不复活、不改 is_active、不触 viltrox_fit_score 写点)。
     rows = get_conn().execute(
         """
         SELECT
@@ -592,8 +598,18 @@ def _video_evidence_for_kol(kol_pool_id: int, *, limit: int = 3) -> list[dict[st
             LIMIT 1
         ) m ON TRUE
         WHERE e.kol_pool_id=?
-          AND e.is_active IS NOT FALSE
+          AND (? OR e.is_active IS NOT FALSE)
           AND COALESCE(e.evidence_type, 'video')='video'
+          AND (
+              NOT ?
+              OR EXISTS(
+                  SELECT 1 FROM vkpi_analysis_cache c
+                  WHERE c.target_type='video'
+                    AND c.target_id=e.id::text
+                    AND c.derive_method IN ('video_analysis_final_v1', 'video_analysis_final_v1_keyframe_qa')
+                    AND c.status='ready'
+              )
+          )
         ORDER BY
             has_keyframe_qa_cache DESC,
             has_final_v1_cache DESC,
@@ -603,7 +619,13 @@ def _video_evidence_for_kol(kol_pool_id: int, *, limit: int = 3) -> list[dict[st
         LIMIT ?
         """,
         # 上限 10→200(2026-06-12「全部视频」裁令:账号分析现采 12 条/E5 全量更多,硬顶 10 把列表掐断)
-        (int(kol_pool_id), max(1, min(200, int(limit or 3)))),
+        # 绑定顺序须与 WHERE 占位符一致:kol_pool_id, include_inactive, only_with_cache, LIMIT。
+        (
+            int(kol_pool_id),
+            bool(include_inactive),
+            bool(only_with_cache),
+            max(1, min(200, int(limit or 3))),
+        ),
     ).fetchall()
     # cache_image 只落本地文件缓存、不写 vkpi_media_cache_assets 行(asset 行历史上仅 prewarm
     # 脚本批量写入)——上面的 image LATERAL join 对深爬暖出的缩略图永远扑空;视频按
@@ -680,6 +702,11 @@ def detail_bundle(kol_pool_id: int, *, video_limit: int = 3, llm_limit: int = 20
     item = dict(item_payload.get("item") or {})
     videos = _video_evidence_for_kol(int(kol_pool_id), limit=safe_video_limit)
     item["video_evidence"] = videos
+    # 视频分析与展示用 videos(限 3)解耦:单独查该 kol 全部有 final_v1/keyframe_qa cache 的
+    # evidence(放宽 is_active 回挂 inactive 上的已有分析),修「找到 N 条但 video_analysis 未命中」。
+    analysis_evidence = _video_evidence_for_kol(
+        int(kol_pool_id), limit=200, only_with_cache=True, include_inactive=True
+    )
     dimensions = load_persisted_dimensions_11(int(kol_pool_id)) or {
         "kol_pool_id": int(kol_pool_id),
         "status": "missing",
@@ -693,7 +720,7 @@ def detail_bundle(kol_pool_id: int, *, video_limit: int = 3, llm_limit: int = 20
     analysis_items: list[dict[str, Any]] = []
     ready_count = 0
     qa_ready_count = 0
-    for video in videos:
+    for video in analysis_evidence:
         evidence_id = _int_or_none(video.get("evidence_id") or video.get("id"))
         if not evidence_id:
             continue
@@ -733,9 +760,9 @@ def detail_bundle(kol_pool_id: int, *, video_limit: int = 3, llm_limit: int = 20
         "video_analysis": {
             "items": analysis_items,
             "summary": {
-                "evidence_count": len(videos),
+                "evidence_count": len(analysis_evidence),
                 "ready_count": ready_count,
-                "pending_count": len(videos) - ready_count,
+                "pending_count": len(analysis_evidence) - ready_count,
                 "qa_ready_count": qa_ready_count,
                 "source": "vkpi_analysis_cache",
             },

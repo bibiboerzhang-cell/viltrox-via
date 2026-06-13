@@ -727,6 +727,32 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
           title: "在用友商:" + devices.competitor_brands.join(", ")
         }, e(AlertTriangle, { size: 9 }), "友商用户"),
       ),
+      // C-fix:账户信息块(粉丝/关注/帖数/均赞均评/语言/首末视频)——此前 toV615KolPoolRows
+      //   白名单截断,抽屉拿不到;现已透传,在此诚实展示(缺值显「—」)。
+      e("div", { className: "mt-3 grid grid-cols-3 gap-x-3 gap-y-1.5 text-[10px]" },
+        [
+          ["粉丝", item.followers],
+          ["关注", item.following],
+          ["帖数", item.posts_count],
+          ["均播放", item.avg_views],
+          ["均赞", item.avg_likes],
+          ["均评", item.avg_comments],
+        ].map(([label, value], i) =>
+          e("div", { key: i, className: "flex flex-col" },
+            e("span", { className: "text-[8px] uppercase tracking-wider text-slate-500" }, label),
+            e("span", { className: "text-slate-200 tabular-nums" }, value != null ? Number(value).toLocaleString() : "—")
+          )
+        ),
+        e("div", { className: "flex flex-col" },
+          e("span", { className: "text-[8px] uppercase tracking-wider text-slate-500" }, "语言"),
+          e("span", { className: "text-slate-200" }, item.language || "—")
+        ),
+        e("div", { className: "col-span-2 flex flex-col" },
+          e("span", { className: "text-[8px] uppercase tracking-wider text-slate-500" }, "视频区间"),
+          e("span", { className: "text-slate-200 text-[9px]" },
+            (item.first_video_at || "—") + " → " + (item.last_video_at || "—"))
+        )
+      ),
       (detailLoading || detailError) && e("div", {
         className: "mt-3 rounded-md border px-2.5 py-2 text-[10.5px] leading-snug",
         style: detailError
