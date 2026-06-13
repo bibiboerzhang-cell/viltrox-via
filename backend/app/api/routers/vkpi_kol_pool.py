@@ -22,6 +22,7 @@ import os
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+from fastapi.concurrency import run_in_threadpool
 
 from app.api.dependencies.perms import require_tab
 from app.domains.kol import competitor_detector as kol_competitor_detector
@@ -508,9 +509,12 @@ async def smart_kol_search(
             }
 
         recall_query = str(body.get("query_text") or query_text).strip()
-        llm_query_plan = kol_smart_query_planner.plan_text_query(recall_query, body=body, staff=staff)
+        # 问题5 性能:plan_text_query(同步 LLM,冷启可达 15s)+ recall(同步 embedding+Qdrant)
+        # 此前直接在事件循环线程跑,阻塞同进程其他请求。卸到线程池,首屏不再被冷启 LLM 卡死。
+        llm_query_plan = await run_in_threadpool(kol_smart_query_planner.plan_text_query, recall_query, body=body, staff=staff)
         effective_query = str(llm_query_plan.get("search_query") or recall_query).strip()
-        result = kol_profile_recall.recall_kol_profiles(
+        result = await run_in_threadpool(
+            kol_profile_recall.recall_kol_profiles,
             query_text=effective_query,
             product_sku=str(body.get("product_sku") or ""),
             candidate_limit=int(body.get("candidate_limit") or 100),
@@ -520,8 +524,8 @@ async def smart_kol_search(
             ratio_policy=str(body.get("ratio_policy") or "soft"),
             mixed_policy=str(body.get("mixed_policy") or "dominant"),
             dedupe=bool(body.get("dedupe", True)),
-            vector_weight=float(body.get("vector_weight") if body.get("vector_weight") is not None else 0.7),
-            type_weight=float(body.get("type_weight") if body.get("type_weight") is not None else 0.3),
+            vector_weight=float(body.get("vector_weight") if body.get("vector_weight") is not None else 0.85),
+            type_weight=float(body.get("type_weight") if body.get("type_weight") is not None else 0.15),
             type_boost_enabled=bool(body.get("type_boost_enabled", True)),
         )
         result["llm_query_plan"] = llm_query_plan
@@ -648,8 +652,8 @@ async def smart_kol_search_profile_advance_job(
             ratio_policy=str(body.get("ratio_policy") or "soft"),
             mixed_policy=str(body.get("mixed_policy") or "dominant"),
             dedupe=bool(body.get("dedupe", True)),
-            vector_weight=float(body.get("vector_weight") if body.get("vector_weight") is not None else 0.7),
-            type_weight=float(body.get("type_weight") if body.get("type_weight") is not None else 0.3),
+            vector_weight=float(body.get("vector_weight") if body.get("vector_weight") is not None else 0.85),
+            type_weight=float(body.get("type_weight") if body.get("type_weight") is not None else 0.15),
             type_boost_enabled=bool(body.get("type_boost_enabled", True)),
         )
         recall_result["llm_query_plan"] = llm_query_plan
@@ -731,8 +735,8 @@ def recall_kol_profiles(
     ratio_policy: str = Query(default="soft"),
     mixed_policy: str = Query(default="dominant"),
     dedupe: bool = Query(default=True),
-    vector_weight: float = Query(default=0.7, ge=0, le=1),
-    type_weight: float = Query(default=0.3, ge=0, le=1),
+    vector_weight: float = Query(default=0.85, ge=0, le=1),
+    type_weight: float = Query(default=0.15, ge=0, le=1),
     type_boost_enabled: bool = Query(default=True),
     session_id: int | None = Query(default=None, ge=1),
     create_session: bool = Query(default=False),

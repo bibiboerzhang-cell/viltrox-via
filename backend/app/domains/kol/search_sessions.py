@@ -878,6 +878,9 @@ def attach_recall_result(session_id: int, result: dict[str, Any]) -> dict[str, A
                         "platform": raw.get("platform"),
                         "profile_type": raw.get("profile_type"),
                         "followers": raw.get("followers"),
+                        # 问题1 头像修:recall_candidate 会话项此前漏写 avatar_url(new_creator/existing_kol 都写了),
+                        # 致历史回填掉头像。透传 _build_item 已填的 avatar_url。
+                        "avatar_url": raw.get("avatar_url"),
                         "recall_rank_score": raw.get("recall_rank_score"),
                         "vector_score": raw.get("vector_score"),
                         "type_score": raw.get("type_score"),

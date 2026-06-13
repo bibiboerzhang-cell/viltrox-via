@@ -501,8 +501,8 @@ def recall_kol_profiles(
     ratio_policy: str = "soft",
     mixed_policy: str = "dominant",
     dedupe: bool = True,
-    vector_weight: float = 0.7,
-    type_weight: float = 0.3,
+    vector_weight: float = 0.85,
+    type_weight: float = 0.15,
     type_boost_enabled: bool = True,
 ) -> dict[str, Any]:
     if ratio_policy != "soft":
