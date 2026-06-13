@@ -48,6 +48,10 @@ def _lower(value: Any) -> str:
     return _text(value).lower()
 
 
+def _is_cjk_token(token: str) -> bool:
+    return any("\u4e00" <= ch <= "\u9fff" for ch in token)
+
+
 def _tokens(query: str) -> list[str]:
     tokens = [token.lower() for token in re.findall(r"[\w\u4e00-\u9fff#@.+-]+", query or "")]
     expanded: list[str] = []
@@ -56,6 +60,11 @@ def _tokens(query: str) -> list[str]:
             continue
         expanded.append(token)
         expanded.extend(TOKEN_ALIASES.get(token, []))
+        # \u8bca\u65ad P1-6:\u65e0\u4e2d\u6587\u5206\u8bcd\u65f6\u6574\u4e32 CJK \u88ab\u5f53 1 token,LIKE '%\u6574\u53e5%' \u6c38\u4e0d\u547d\u4e2d(\u5e93\u5185 0 \u53ec\u56de)\u3002
+        # \u8865 2-gram \u8ba9\u5b50\u4e32\u53ef\u53ec\u56de(\u4eba\u50cf/\u6444\u5f71/\u955c\u5934\u2026);\u5404 token \u5728 _where_like \u91cc OR \u5408\u5e76\u5e7f\u53ec\u56de,
+        # \u7cbe\u6392\u7531 _score_row \u8d1f\u8d23(\u5168\u4e32\u7cbe\u786e\u547d\u4e2d\u5f97\u5206\u66f4\u9ad8)\u3002jieba/PG \u5168\u6587\u4e3a\u540e\u7eed\u7cbe\u5ea6\u4e13\u9879\u3002
+        if _is_cjk_token(token) and len(token) > 2:
+            expanded.extend(token[i:i + 2] for i in range(len(token) - 1))
     return list(dict.fromkeys(expanded))
 
 
