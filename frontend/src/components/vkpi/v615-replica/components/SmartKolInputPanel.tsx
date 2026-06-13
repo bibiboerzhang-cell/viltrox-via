@@ -14,6 +14,7 @@ import {
   type VkpiKolUrlDeepCrawlResponse,
 } from "../../../../domains/kol";
 import { proxiedImageUrl } from "../../shared/mediaProxy";
+import { getKolVideoAnalysisCache, type VkpiKolVideoAnalysisCacheEntry } from "../../../../services/vkpi/kolPool-api";
 
 type Mode = "idle" | "url" | "text";
 type State = "idle" | "loading" | "ready" | "executing" | "error";
@@ -482,13 +483,161 @@ function ProfileInfoCard({ data }: { data: Row }) {
   );
 }
 
+// A·上框:视频 URL 的创作者账号信息卡。复用 ProfileInfoCard 头像骨架(proxiedImageUrl + onError 渐变圆兜底),
+// 数据取 creator_identity,缺失字段用 video_metadata 兜底;点开展开抽屉看该用户全部字段。
+function VideoCreatorCard({ creator, metadata }: { creator: Row; metadata: Row }) {
+  const [imgError, setImgError] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const avatar = proxiedImageUrl(cleanText(creator.avatar_url));
+  const handle = cleanText(creator.handle || creator.display_name || creator.channel_name || metadata.channel_name);
+  const platform = cleanText(creator.platform || metadata.platform);
+  const channelId = cleanText(creator.channel_id || metadata.channel_id);
+  const name = display(handle || channelId || "创作者");
+  const followers = numberLabel(creator.followers ?? creator.subscriber_count);
+  const bio = cleanText(creator.bio || creator.description || metadata.description);
+  const profileUrl = cleanText(creator.profile_url || creator.channel_url);
+  const showImg = Boolean(avatar) && !imgError;
+  // 全部字段(creator_identity 优先,video_metadata 兜底),空值过滤。
+  const allFields = Object.entries({ ...metadata, ...creator })
+    .map(([key, value]) => [key, cleanText(value)] as const)
+    .filter(([, value]) => Boolean(value));
+  return (
+    <div className="mt-2 rounded-md border border-white/[0.07] bg-black/20 px-2.5 py-2">
+      <div className="flex items-start gap-3">
+        <span
+          className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full text-[14px] font-bold text-white"
+          style={{ background: "linear-gradient(135deg,#7c3aed,#06b6d4)" }}
+        >
+          {showImg ? (
+            <img
+              src={avatar}
+              alt=""
+              className="h-full w-full rounded-full object-cover"
+              referrerPolicy="no-referrer"
+              onError={() => setImgError(true)}
+            />
+          ) : (
+            name.slice(0, 1).toUpperCase()
+          )}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="truncate text-[12px] font-medium text-slate-100">{name}</span>
+            {platform ? (
+              <span className="shrink-0 rounded border border-white/[0.08] px-1 text-[9px] text-slate-400">{platform}</span>
+            ) : null}
+            {followers ? (
+              <span className="shrink-0 rounded bg-amber-400/[0.10] px-1 text-[9px] font-semibold text-amber-200/90">{followers} 粉</span>
+            ) : null}
+          </div>
+          {bio ? (
+            <p className="mt-1 line-clamp-2 text-[10.5px] leading-relaxed text-slate-400">{bio}</p>
+          ) : null}
+          {profileUrl ? (
+            <a
+              href={profileUrl}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="mt-1 inline-block truncate text-[10px] text-cyan-300/80 hover:text-cyan-200 hover:underline"
+            >
+              {profileUrl}
+            </a>
+          ) : null}
+        </div>
+        {allFields.length ? (
+          <button
+            type="button"
+            onClick={() => setExpanded((cur) => !cur)}
+            className="shrink-0 rounded border border-white/[0.1] px-2 py-0.5 text-[9.5px] text-slate-400 transition-colors hover:border-cyan-300/30 hover:text-cyan-100"
+          >{expanded ? "收起" : "点开全部字段"}</button>
+        ) : null}
+      </div>
+      {expanded && allFields.length ? (
+        <div className="mt-2 grid gap-x-3 gap-y-1 border-t border-white/[0.06] pt-2 text-[10px] sm:grid-cols-2">
+          {allFields.map(([key, value]) => (
+            <div key={key} className="flex min-w-0 gap-1.5">
+              <span className="shrink-0 text-slate-600">{key}</span>
+              <span className="min-w-0 flex-1 truncate text-slate-300" title={value}>{value}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// A·下框:时间戳分镜 + 内容概述。读 final_v1 cache 的 layer1_visual_content.scene_timeline / content_summary。
+// 复用 KOLVideoAnalysisPanel 的 sceneTimeline 行结构;缺则静默不渲染(降级,绝不报错占位)。
+function sceneTimelineRowsLocal(value: unknown, max = 8): { key: string; timestamp: string; what: string }[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item, index) => {
+    const record = asRecord(item);
+    return {
+      key: `${cleanText(record.timestamp) || "scene"}-${index}`,
+      timestamp: cleanText(record.timestamp),
+      what: cleanText(record.what ?? record.scene ?? record.content),
+    };
+  }).filter((row) => row.timestamp || row.what).slice(0, max);
+}
+
+function VideoSceneAnalysis({ apiToken, evidenceId }: { apiToken: string; evidenceId: string }) {
+  const [entry, setEntry] = useState<VkpiKolVideoAnalysisCacheEntry | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setEntry(null);
+    if (!apiToken || !evidenceId) return undefined;
+    getKolVideoAnalysisCache(apiToken, evidenceId, "video_analysis_final_v1")
+      .then((res) => {
+        if (cancelled) return;
+        if (res.state === "ready" && res.entry) setEntry(res.entry);
+      })
+      .catch(() => {
+        // 静默降级:无缓存/读取失败则不渲染分析框,不打断视频展示。
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [apiToken, evidenceId]);
+  const result = asRecord(entry?.result);
+  const payload = asRecord(result.video_analysis_final_v1).layer1_visual_content ? asRecord(result.video_analysis_final_v1) : result;
+  const layer1 = asRecord(payload.layer1_visual_content);
+  const contentSummary = cleanText(layer1.content_summary);
+  const sceneTimeline = sceneTimelineRowsLocal(layer1.scene_timeline);
+  if (!contentSummary && !sceneTimeline.length) return null;
+  return (
+    <div className="mt-2 space-y-2">
+      {contentSummary ? (
+        <div className="rounded-md border border-white/[0.05] bg-white/[0.02] px-2.5 py-2">
+          <div className="mb-1 text-[9px] uppercase tracking-wider text-slate-500">内容概述</div>
+          <div className="text-[10.5px] leading-relaxed text-slate-300">{contentSummary.length > 240 ? `${contentSummary.slice(0, 240)}...` : contentSummary}</div>
+        </div>
+      ) : null}
+      {sceneTimeline.length ? (
+        <div className="rounded-md border border-white/[0.05] bg-black/20 px-2.5 py-2">
+          <div className="mb-1.5 text-[9px] uppercase tracking-wider text-slate-500">分镜时间线</div>
+          <div className="space-y-1">
+            {sceneTimeline.map((row) => (
+              <div key={row.key} className="flex items-start gap-2 text-[10px] leading-relaxed">
+                <span className="shrink-0 rounded bg-cyan-500/12 px-1.5 py-0.5 font-mono tabular-nums text-cyan-200">{row.timestamp || "—"}</span>
+                <span className="text-slate-300">{row.what || "—"}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function UrlSummary({
   result,
+  apiToken,
   canExecute,
   isExecuting,
   onExecute,
 }: {
   result: VkpiKolUrlDeepCrawlResponse;
+  apiToken: string;
   canExecute: boolean;
   isExecuting: boolean;
   onExecute: () => void;
@@ -561,11 +710,15 @@ function UrlSummary({
               </span>
             ) : null}
           </div>
-          <div className="mt-2 grid gap-1 text-[11px] text-slate-400 sm:grid-cols-2">
-            <div className="truncate">对象: <span className="text-slate-200">{display(metadata.title || creator.display_name || creator.handle || result.handle || result.video_id)}</span></div>
-            <div className="truncate">身份: <span className="text-slate-200">{display(creator.channel_id || creator.handle || result.channel_id || result.handle)}</span></div>
-            <div className="truncate sm:col-span-2">normalized: <span className="text-slate-500">{display(result.url?.normalized)}</span></div>
-          </div>
+          {isVideo ? (
+            <VideoCreatorCard creator={creator} metadata={metadata} />
+          ) : (
+            <div className="mt-2 grid gap-1 text-[11px] text-slate-400 sm:grid-cols-2">
+              <div className="truncate">对象: <span className="text-slate-200">{display(metadata.title || creator.display_name || creator.handle || result.handle || result.video_id)}</span></div>
+              <div className="truncate">身份: <span className="text-slate-200">{display(creator.channel_id || creator.handle || result.channel_id || result.handle)}</span></div>
+            </div>
+          )}
+          <div className="mt-2 truncate text-[11px] text-slate-400">normalized: <span className="text-slate-500">{display(result.url?.normalized)}</span></div>
         </div>
         <div className="shrink-0">
           {showActionButton ? (
@@ -591,27 +744,35 @@ function UrlSummary({
         </div>
       </div>
       {hasPlayableVideo ? (
-        <div className="mt-2 overflow-hidden rounded-md border border-white/[0.08] bg-black/40">
-          <div className="relative w-full" style={{ aspectRatio: "16 / 9" }}>
-            {platform === "youtube" ? (
-              <iframe
-                src={youtubeEmbedUrl(youtubeVideoId)}
-                title={display(metadata.title || result.video_id)}
-                className="absolute inset-0 h-full w-full"
-                allow="autoplay; encrypted-media; picture-in-picture"
-                allowFullScreen
-              />
-            ) : (
-              <video
-                src={cachedVideoUrl}
-                poster={videoPoster || undefined}
-                controls
-                playsInline
-                preload="metadata"
-                className="absolute inset-0 h-full w-full bg-black object-contain"
-              />
-            )}
+        <div className="mt-2">
+          <div className="mx-auto w-full max-w-2xl overflow-hidden rounded-md border border-white/[0.08] bg-black/40">
+            <div className="relative w-full" style={{ aspectRatio: "16 / 9" }}>
+              {platform === "youtube" ? (
+                <iframe
+                  src={youtubeEmbedUrl(youtubeVideoId)}
+                  title={display(metadata.title || result.video_id)}
+                  className="absolute inset-0 h-full w-full"
+                  allow="autoplay; encrypted-media; picture-in-picture"
+                  allowFullScreen
+                />
+              ) : (
+                <video
+                  src={cachedVideoUrl}
+                  poster={videoPoster || undefined}
+                  controls
+                  playsInline
+                  preload="metadata"
+                  className="absolute inset-0 h-full w-full bg-black object-contain"
+                />
+              )}
+            </div>
           </div>
+          {apiToken ? (
+            <VideoSceneAnalysis
+              apiToken={apiToken}
+              evidenceId={String(videoFlow.evidence_id ?? result.matched_kol_pool_id ?? "").trim()}
+            />
+          ) : null}
         </div>
       ) : null}
       {disabledReason ? (
@@ -1091,6 +1252,7 @@ export function SmartKolInputPanel({
       {mode === "url" && urlResult ? (
         <UrlSummary
           result={urlResult}
+          apiToken={apiToken}
           canExecute={urlCanExecute}
           isExecuting={state === "executing"}
           onExecute={() => void executeUrlAction()}
