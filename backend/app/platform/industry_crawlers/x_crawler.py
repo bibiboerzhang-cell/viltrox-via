@@ -158,6 +158,9 @@ class XCrawler:
                     "items": [], "error": f"X actor did not finish: {str((run or {}).get('status') or 'unknown')}",
                     "raw": {"actor_id": resolved_actor_id, "input": input_payload},
                 }
+            from . import record_apify_run_cost
+
+            record_apify_run_cost(run, platform="x", actor_id=resolved_actor_id, operation="apify_run")
             items = list(client.dataset(run.get("defaultDatasetId")).iterate_items())
             return {
                 "provider": "x", "provider_status": "ok", "sync_status": "synced",

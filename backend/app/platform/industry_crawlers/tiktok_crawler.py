@@ -127,6 +127,9 @@ class TikTokCrawler:
                     "error": f"TikTok actor did not finish: {str((run or {}).get('status') or 'unknown')}",
                     "raw": {"actor_id": self.actor_id, "input": input_payload},
                 }
+            from . import record_apify_run_cost
+
+            record_apify_run_cost(run, platform="tiktok", actor_id=self.actor_id, operation="start_run")
             items = list(client.dataset(run.get("defaultDatasetId")).iterate_items())
             return {
                 "provider": "tiktok",
@@ -263,6 +266,9 @@ class TikTokCrawler:
                 timeout_secs=self.run_timeout_seconds,
                 wait_secs=self.run_timeout_seconds,
             )
+            from . import record_apify_run_cost
+
+            record_apify_run_cost(run, platform="tiktok", actor_id=actor_id, operation="crawl_video_comments")
             dataset_id = run.get("defaultDatasetId")
             items = list(client.dataset(dataset_id).iterate_items()) if dataset_id else []
             return {

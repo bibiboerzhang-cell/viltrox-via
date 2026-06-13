@@ -141,6 +141,9 @@ class FacebookCrawler:
                     "provider": "apify",
                     "error": f"Facebook page actor did not finish: {str((run or {}).get('status') or 'unknown')}",
                 }
+            from . import record_apify_run_cost
+
+            record_apify_run_cost(run, platform="facebook", actor_id=self.pages_actor, operation="crawl_page_pages_actor")
             dataset_id = run.get("defaultDatasetId")
             page_items = list(client.dataset(dataset_id).iterate_items())
 
@@ -175,6 +178,9 @@ class FacebookCrawler:
                     "provider": "apify",
                     "error": f"Facebook posts actor did not finish: {str((posts_run or {}).get('status') or 'unknown')}",
                 }
+            from . import record_apify_run_cost
+
+            record_apify_run_cost(posts_run, platform="facebook", actor_id=self.posts_actor, operation="crawl_page_posts_actor")
             posts_dataset_id = posts_run.get("defaultDatasetId")
             post_items = list(
                 client.dataset(posts_dataset_id).iterate_items()
@@ -374,6 +380,9 @@ class FacebookCrawler:
                 timeout_secs=self.run_timeout_seconds,
                 wait_secs=self.run_timeout_seconds,
             )
+            from . import record_apify_run_cost
+
+            record_apify_run_cost(run, platform="facebook", actor_id=actor_id, operation="crawl_post_comments")
             dataset_id = run.get("defaultDatasetId")
             items = list(client.dataset(dataset_id).iterate_items()) if dataset_id else []
             return {

@@ -369,6 +369,9 @@ class RedditCrawler(RedditJsonPathMixin):
                     "provider": "apify",
                     "error": f"Reddit comment actor did not finish: {str((run or {}).get('status') or 'unknown')}",
                 }
+            from . import record_apify_run_cost
+
+            record_apify_run_cost(run, platform="reddit", actor_id=self.apify_actor, operation="crawl_post_comments")
             dataset_id = run.get("defaultDatasetId")
             items = list(client.dataset(dataset_id).iterate_items()) if dataset_id else []
             comments = [
@@ -439,6 +442,9 @@ class RedditCrawler(RedditJsonPathMixin):
                     "provider": "apify",
                     "error": f"Reddit actor did not finish: {str((run or {}).get('status') or 'unknown')}",
                 }
+            from . import record_apify_run_cost
+
+            record_apify_run_cost(run, platform="reddit", actor_id=self.apify_actor, operation="crawl_subreddit")
             dataset_id = run.get("defaultDatasetId")
             items = list(client.dataset(dataset_id).iterate_items())
 

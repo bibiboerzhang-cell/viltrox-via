@@ -40,6 +40,56 @@ from .reddit_crawler import RedditCrawler
 from .facebook_crawler import FacebookCrawler
 
 
+def record_apify_run_cost(
+    run: Any,
+    *,
+    platform: str,
+    actor_id: str = "",
+    operation: str = "",
+) -> None:
+    """护栏④ 记账可见(第一步):从 Apify run 对象取 usageTotalUsd 落 vkpi_ai_cost_ledger。
+
+    纯记账 / 不预检 / 不拦截(spend 累积后第二批再加 check_budget 预检)。
+    记账异常绝不打断爬取(第一步只求可见不求强一致)。
+    """
+    try:
+        if not isinstance(run, dict):
+            return
+        cost = run.get("usageTotalUsd")
+        if cost is None:
+            usage = run.get("usageUsd")
+            if isinstance(usage, dict):
+                cost = sum(
+                    float(value or 0)
+                    for value in usage.values()
+                    if isinstance(value, (int, float))
+                )
+        try:
+            cost_usd = float(cost or 0)
+        except (TypeError, ValueError):
+            cost_usd = 0.0
+        from app.domains.costs.budget_guard import record_cost
+
+        record_cost(
+            scope="provider:apify",
+            ai_provider="apify",
+            model_name=str(actor_id or ""),
+            cost_usd=cost_usd,
+            extra_scopes=["monthly_total"],
+            metadata={
+                "platform": platform,
+                "actor_id": str(actor_id or ""),
+                "operation": operation,
+                "apify_run_id": run.get("id"),
+                "run_status": run.get("status"),
+                "usage_total_usd": cost_usd,
+            },
+        )
+    except Exception:
+        # 记账失败绝不阻断爬取。
+        return
+
+
 _CRAWLER_REGISTRY: dict[str, type[Any]] = {
     "youtube": YouTubeCrawler,
     "instagram": InstagramCrawler,

@@ -188,6 +188,9 @@ class YouTubeCrawler:
                     "error": f"YouTube Apify actor did not finish: {str((run or {}).get('status') or 'unknown')}",
                     "raw": {"actor_id": self.apify_actor_id, "input": input_payload},
                 }
+            from . import record_apify_run_cost
+
+            record_apify_run_cost(run, platform="youtube", actor_id=self.apify_actor_id, operation="start_apify_run")
             items = list(client.dataset(run.get("defaultDatasetId")).iterate_items())
             return {
                 "provider": "youtube",
