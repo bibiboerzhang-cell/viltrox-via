@@ -45,6 +45,10 @@ _bge_encoder: Any | None = None
 _vector_backend_singleton: Any | None = None
 logger = get_logger(__name__)
 
+# 护栏③ enforce:per-request embedding 批量硬上限。当前最大真实批次=128(seed 路径
+# knowledge_seed.build_via_seed_documents -> docs[:128]),128 不截断现有调用又挡住失控 fan-out。
+MAX_EMBED_BATCH = 128
+
 
 def _stable_id(*parts: Any) -> str:
     raw = "|".join(str(part or "").strip() for part in parts if str(part or "").strip())
@@ -147,7 +151,8 @@ def _seed_payload(
 def _embed_openai_sync(texts: list[str]) -> list[list[float]]:
     if not OPENAI_AVAILABLE or not openai_client:
         return []
-    resp = openai_client.embeddings.create(model=VIA_EMBEDDING_MODEL, input=texts)
+    batch = list(texts)[:MAX_EMBED_BATCH]
+    resp = openai_client.embeddings.create(model=VIA_EMBEDDING_MODEL, input=batch)
     return [[float(value) for value in item.embedding] for item in (resp.data or [])]
 
 

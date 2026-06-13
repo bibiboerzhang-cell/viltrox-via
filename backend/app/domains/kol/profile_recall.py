@@ -9,6 +9,7 @@ import re
 from typing import Any
 
 from app.db.connection import get_conn
+from app.domains.costs.budget_guard import check_budget, record_cost
 
 
 COLLECTION_NAME = "vkpi_kol_profile_index_v1"
@@ -101,6 +102,9 @@ def _openai_client():
 
 
 def _embed_query(query_text: str) -> tuple[list[float], dict[str, Any]]:
+    # 护栏③ enforce(诊断 C-3③):embedding 调用前硬闸 + 调用后记账(此前裸奔零护栏零记账)。
+    if not check_budget("provider:openai", 0.0, require_configured=True):
+        raise RuntimeError("embedding_budget_exceeded")
     client = _openai_client()
     resp = client.embeddings.create(model=EMBEDDING_MODEL, input=[query_text])
     data = list(resp.data or [])
@@ -111,10 +115,19 @@ def _embed_query(query_text: str) -> tuple[list[float], dict[str, Any]]:
         raise RuntimeError(f"embedding_vector_size_mismatch:{len(vector)}")
     usage = getattr(resp, "usage", None)
     tokens = int(getattr(usage, "prompt_tokens", 0) or getattr(usage, "total_tokens", 0) or 0)
+    cost = _cost_for_tokens(tokens)
+    record_cost(
+        scope="provider:openai",
+        ai_provider="openai",
+        model_name=EMBEDDING_MODEL,
+        cost_usd=float(cost),
+        tokens_in=tokens,
+        extra_scopes=["monthly_total"],
+    )
     return vector, {
         "embedding_model": EMBEDDING_MODEL,
         "query_embedding_tokens": tokens,
-        "query_embedding_cost_usd_estimate": float(_cost_for_tokens(tokens)),
+        "query_embedding_cost_usd_estimate": float(cost),
     }
 
 
