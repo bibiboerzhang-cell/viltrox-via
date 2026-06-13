@@ -282,11 +282,12 @@ function HistoryStrip({
   );
 }
 
-// 问题5 UI:裸 score(0.55)用户读不懂 → 映射相关度标签,数值进 title 供细看。
-function relevanceTier(score: number): { label: string; cls: string } {
-  if (score >= 0.55) return { label: "高相关", cls: "border-emerald-300/30 bg-emerald-400/[0.08] text-emerald-200" };
-  if (score >= 0.5) return { label: "中相关", cls: "border-cyan-300/25 bg-cyan-400/[0.06] text-cyan-200" };
-  return { label: "相关", cls: "border-white/[0.1] text-slate-400" };
+// 问题5 UI:相关度按名次分档(列表已按分排序,名次=相关度强弱),裸 score 进 title 供细看,
+// 避免向量分都 <0.5 时全显「相关」无区分。
+function relevanceTier(index: number): { label: string; cls: string; dot: string } {
+  if (index <= 1) return { label: "高相关", cls: "border-emerald-300/35 bg-emerald-400/[0.10] text-emerald-100", dot: "#34d399" };
+  if (index <= 3) return { label: "中相关", cls: "border-cyan-300/30 bg-cyan-400/[0.07] text-cyan-100", dot: "#22d3ee" };
+  return { label: "相关", cls: "border-white/[0.08] bg-white/[0.02] text-slate-400", dot: "#64748b" };
 }
 
 function RecallMiniItem({
@@ -298,37 +299,50 @@ function RecallMiniItem({
   index: number;
   onOpen?: (item: VkpiKolRecallItem) => void;
 }) {
+  const [imgError, setImgError] = useState(false);
   const avatar = proxiedImageUrl(item.avatar_url);
   const name = display(item.handle || item.display_name || `KOL #${item.kol_pool_id}`);
   const followers = numberLabel(item.followers);
   const score = Number(item.recall_rank_score ?? item.vector_score ?? 0);
-  const tier = relevanceTier(score);
+  const tier = relevanceTier(index);
+  const showImg = Boolean(avatar) && !imgError;
   return (
     <button
       type="button"
       onClick={() => onOpen?.(item)}
-      className="flex min-w-0 items-center gap-2 rounded-md border border-white/[0.06] bg-black/20 px-2 py-1.5 text-left transition-colors hover:border-cyan-300/22 hover:bg-cyan-400/[0.045] focus:outline-none focus:ring-1 focus:ring-cyan-300/30"
-      title="打开 KOL 详情"
+      className="group flex min-w-0 items-center gap-2.5 rounded-lg border border-white/[0.06] bg-white/[0.015] px-2.5 py-2 text-left transition-all hover:border-cyan-300/25 hover:bg-cyan-400/[0.04] focus:outline-none focus:ring-1 focus:ring-cyan-300/30"
+      title={`打开 KOL 详情 · 相关度 ${score.toFixed(3)}`}
     >
-      <span className="shrink-0 rounded border border-white/[0.06] bg-white/[0.03] px-1 py-0.5 text-[8.5px] tabular-nums text-slate-500">
-        #{index}
-      </span>
-      <span className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-md border border-white/[0.08] bg-white/[0.04] text-[10px] text-slate-300">
-        {avatar ? <img src={avatar} alt="" className="h-full w-full object-cover" referrerPolicy="no-referrer" /> : name.slice(0, 1).toUpperCase()}
+      <span className="w-3.5 shrink-0 text-center text-[9px] font-medium tabular-nums text-slate-600">{index}</span>
+      <span
+        className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full text-[12px] font-bold text-white"
+        style={{ background: "linear-gradient(135deg,#7c3aed,#06b6d4)" }}
+      >
+        {showImg ? (
+          <img
+            src={avatar}
+            alt=""
+            className="h-full w-full rounded-full object-cover"
+            referrerPolicy="no-referrer"
+            onError={() => setImgError(true)}
+          />
+        ) : (
+          name.slice(0, 1).toUpperCase()
+        )}
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-1.5">
-          <span className="truncate text-[11px] font-medium text-slate-100">{name}</span>
-          {followers ? <span className="shrink-0 text-[9.5px] font-medium text-amber-200/80">{followers}</span> : null}
+          <span className="truncate text-[11.5px] font-medium text-slate-100 group-hover:text-white">{name}</span>
+          {followers ? (
+            <span className="shrink-0 rounded bg-amber-400/[0.10] px-1 text-[9px] font-semibold text-amber-200/90">{followers}</span>
+          ) : null}
         </span>
-        <span className="block truncate text-[9.5px] text-slate-500">
+        <span className="mt-0.5 block truncate text-[9.5px] text-slate-500">
           {display(item.platform, "unknown")} · {item.type_label || item.profile_type || "profile"}
         </span>
       </span>
-      <span
-        className={`shrink-0 rounded-md border px-1.5 py-0.5 text-[9.5px] ${tier.cls}`}
-        title={`相关度 ${score.toFixed(3)}`}
-      >
+      <span className={`flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-medium ${tier.cls}`}>
+        <span className="h-1 w-1 rounded-full" style={{ background: tier.dot }} />
         {tier.label}
       </span>
     </button>
