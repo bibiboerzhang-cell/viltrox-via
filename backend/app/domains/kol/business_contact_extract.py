@@ -117,6 +117,12 @@ def extract_public_business_contacts(raw_platform_data: dict[str, Any], *, platf
     profile = (raw_platform_data or {}).get("profile") or {}
     if platform == "youtube":
         about = str((profile.get("snippet") or {}).get("description") or profile.get("description") or "")
+        # YouTube Data API channels.list/search 把频道包在 items[0].snippet.description —— 真实 raw 形态。
+        # 创作者常把明文商务邮箱写在频道简介(公开声明=白名单来源,合规)。
+        if not about:
+            items = profile.get("items") if isinstance(profile.get("items"), list) else []
+            if items and isinstance(items[0], dict):
+                about = str((items[0].get("snippet") or {}).get("description") or "")
         contacts += _extract_from_text(about, SOURCE_YOUTUBE_ABOUT)
     elif platform == "instagram":
         # IG 商务资料:public_email / business_email 字段直取(profile-scraper 偶含),再兜底 bio
