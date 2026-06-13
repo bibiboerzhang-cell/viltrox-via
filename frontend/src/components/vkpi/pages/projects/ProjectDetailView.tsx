@@ -1006,6 +1006,18 @@ export function ProjectDetailView({
             {onDeleteProject ? <button className="px-3 py-1.5 rounded-md border border-red-500/30 bg-red-500/10 text-[11px] text-red-300 hover:bg-red-500/15" type="button" onClick={deleteProject}>删除</button> : null}
             <button className="px-3 py-1.5 rounded-md bg-purple-500/90 hover:bg-purple-500 text-white text-[11px] font-medium flex items-center gap-1.5" type="button" onClick={() => void openAddKolModal()}>+ 添加 KOL</button>
             <button className="px-3 py-1.5 rounded-md border border-purple-500/40 bg-purple-500/10 hover:bg-purple-500/20 text-purple-200 text-[11px] font-medium" type="button" onClick={() => void openGenerateContract()}>生成合同</button>
+            <button
+              className="px-3 py-1.5 rounded-md border border-white/[0.08] bg-white/[0.02] text-[11px] text-slate-300 hover:bg-white/[0.06] hover:text-white"
+              type="button"
+              disabled={!apiToken || !project.id}
+              onClick={async () => {
+                if (!apiToken || !project.id) return;
+                const { exportVkpiReport } = await import('../../../../services/vkpi/dashboard-api');
+                const result = await exportVkpiReport(apiToken, { reportType: 'project_kols', format: 'csv', projectId: project.id });
+                const url = result.downloadUrl || result.download_url;
+                if (url) window.open(url, '_blank', 'noopener,noreferrer');
+              }}
+            >导出 KOL 名单</button>
           </div>
         </div>
         <div className="text-right shrink-0">

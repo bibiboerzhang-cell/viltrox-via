@@ -147,7 +147,92 @@ def _rows(export_type: str, filters: dict[str, Any], *, staff: dict[str, Any] | 
             tuple(params),
         ).fetchall()
         return [dict(row) for row in rows]
+    if export_type in {"vkpi_kol_pool", "favorites", "project_kols"}:
+        return _kol_pool_rows(export_type, filters, staff=staff)
     raise ValueError("unsupported export_type")
+
+
+# ---- KOL 名单导出列(P0-5)。纯只读 SELECT,零触 viltrox_fit_score 写点。----
+# 注:CSV/XLSX 引擎按 sorted(row.keys()) 字母序出列,列序不由此 SELECT 决定(故不留有序列元组)。
+# 友商关系列(competitor_brands/risk_tier)留待 P1-1 vkpi_competitor_relation 落库后再加
+# (当前 0 行;且 TEXT 列 MAX 非严重度序、string_agg 跨库不可移植,P1-1 一并正确实现)。
+_KOL_POOL_BASE_SELECT = """
+    SELECT kp.handle AS handle,
+           kp.platform AS platform,
+           kp.viltrox_fit_score AS fit_score,
+           kp.primary_topic AS kol_type,
+           kp.country AS country,
+           kp.followers AS followers,
+           kp.engagement_rate AS engagement_rate,
+           kp.email AS email
+    FROM vkpi_kol_pool kp
+"""
+
+
+def _region_dedup_hooks(filters: dict[str, Any]) -> tuple[str, list[Any]]:
+    """红线 hook:P0-6 地区过滤 +(若 P0-4 落地)duplicate_of_id IS NULL。
+
+    本 concern 仅留参数位,实际过滤接其他 concern。默认空串=不过滤,行为与现状一致。
+    其他 concern 落地时:读 filters['region']/filters['country'] 追加 'kp.country = ?',
+    并视开关追加 'kp.duplicate_of_id IS NULL'(列 mig 109 已存在,实跑确认)。
+    """
+    extra: list[str] = []
+    params: list[Any] = []
+    # --- P0-6 region filter hook (no-op until wired by region concern) ---
+    # --- P0-4 duplicate_of_id IS NULL hook (no-op until wired) ---
+    clause = (" AND " + " AND ".join(extra)) if extra else ""
+    return clause, params
+
+
+def _kol_pool_rows(export_type: str, filters: dict[str, Any], *, staff: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    conn = get_conn()
+    hook_clause, hook_params = _region_dedup_hooks(filters)
+    if export_type == "vkpi_kol_pool":
+        rows = conn.execute(
+            f"""
+            {_KOL_POOL_BASE_SELECT}
+            WHERE 1=1 {hook_clause}
+            ORDER BY COALESCE(kp.viltrox_fit_score, 0) DESC, kp.id DESC
+            LIMIT 50000
+            """,
+            tuple(hook_params),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    if export_type == "favorites":
+        # 当前员工收藏:始终强制 actor staff,view-all 也不放大到他人收藏。
+        scoped_staff_id = scope.actor_staff_id(staff) or scope.effective_staff_id(staff, filters.get("staff_id"))
+        if not scoped_staff_id:
+            return []
+        rows = conn.execute(
+            f"""
+            {_KOL_POOL_BASE_SELECT}
+            JOIN vkpi_kol_pool_favorites f ON f.kol_pool_id = kp.id
+            WHERE f.staff_id = ? {hook_clause}
+            ORDER BY f.created_at DESC, f.id DESC
+            LIMIT 50000
+            """,
+            (scoped_staff_id, *hook_params),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    # project_kols:某项目的 KOL 名单。
+    try:
+        project_id = int(filters.get("project_id") or filters.get("projectId") or 0)
+    except (TypeError, ValueError):
+        project_id = 0
+    if not project_id:
+        raise ValueError("project_kols export requires project_id")
+    scope.assert_project_access(project_id, staff)
+    rows = conn.execute(
+        f"""
+        {_KOL_POOL_BASE_SELECT}
+        JOIN vkpi_project_kol_assignments a ON a.kol_pool_id = kp.id
+        WHERE a.project_id = ? {hook_clause}
+        ORDER BY a.id DESC
+        LIMIT 50000
+        """,
+        (project_id, *hook_params),
+    ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def _csv_bytes(rows: list[dict[str, Any]]) -> bytes:
@@ -227,7 +312,7 @@ def create_export(*, export_format: str, payload: dict[str, Any], staff: dict[st
             file_size_bytes=file_size,
             file_sha256=sha,
             download_url=download_url,
-            contains_pii=export_type in {"kols", "attribution", "finance"},
+            contains_pii=export_type in {"kols", "attribution", "finance", "vkpi_kol_pool", "favorites", "project_kols"},
             contains_financial=export_type in {"weekly", "attribution", "finance", "cost", "costs"},
             ip=(request_meta or {}).get("ip", ""),
             user_agent=(request_meta or {}).get("user_agent", ""),

@@ -49,8 +49,19 @@ export interface VkpiDashboardFilters {
 }
 
 export interface VkpiExportPayload extends VkpiDashboardFilters {
-  reportType: "weekly" | "monthly" | "staff" | "project" | "product_roi" | "finance";
+  reportType:
+    | "weekly"
+    | "monthly"
+    | "staff"
+    | "project"
+    | "product_roi"
+    | "finance"
+    | "vkpi_kol_pool"
+    | "favorites"
+    | "project_kols";
   format: "pdf" | "csv" | "xlsx";
+  // P0-5 KOL 名单导出:project_kols 需带 projectId(后端读 project_id/projectId)。
+  projectId?: string | number;
 }
 
 type OptionalResult<T> = { data: T; failed?: string };

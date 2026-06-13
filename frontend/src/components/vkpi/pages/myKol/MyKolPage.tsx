@@ -441,6 +441,7 @@ function EmployeeKolLibrary({ apiToken, data, viewMode }: { apiToken?: string; d
   // 点开复用右侧内容层看"该 KOL 的视频"(Pool 行走 evidence 数据源)。
   const [poolFavorites, setPoolFavorites] = useState<Array<Record<string, unknown>>>([]);
   const [favError, setFavError] = useState('');
+  const [exporting, setExporting] = useState(false);
   useEffect(() => {
     if (!apiToken) return;
     let cancelled = false;
@@ -632,6 +633,27 @@ function EmployeeKolLibrary({ apiToken, data, viewMode }: { apiToken?: string; d
           onClick={() => setViltroxOnly((value) => !value)}
         >
           <span /> Viltrox 相关
+        </button>
+        <button
+          className="mykol-toggle"
+          type="button"
+          disabled={!apiToken || exporting}
+          onClick={async () => {
+            if (!apiToken) return;
+            setExporting(true);
+            try {
+              const { exportVkpiReport } = await import('../../../../services/vkpi/dashboard-api');
+              const result = await exportVkpiReport(apiToken, { reportType: 'favorites', format: 'csv' });
+              const url = result.downloadUrl || result.download_url;
+              if (url) window.open(url, '_blank', 'noopener,noreferrer');
+            } catch (err) {
+              setFavError(String((err as Error)?.message || '导出失败').slice(0, 100));
+            } finally {
+              setExporting(false);
+            }
+          }}
+        >
+          <span /> {exporting ? '导出中…' : '导出收藏名单'}
         </button>
       </div>
       <div className={`mykol-employee-funnel ${funnelCollapsed ? 'is-collapsed' : ''}`} aria-label="KOL 合作漏斗">
