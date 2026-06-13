@@ -556,7 +556,7 @@ class YouTubeCrawler:
             return ""
         if kind == "channel_id" or value.startswith("UC"):
             return f"https://www.youtube.com/channel/{value}/videos"
-        if kind in {"handle", "query"} and re.match(r"^[A-Za-z0-9_.-]+$", value):
+        if kind == "handle" and re.match(r"^[A-Za-z0-9_.-]+$", value):
             return f"https://www.youtube.com/@{value}/videos"
         return ""
 

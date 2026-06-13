@@ -158,8 +158,10 @@ async def scan_youtube_account(handle: str, max_posts: int = 1000) -> Dict[str, 
         videos = await _run_actor(
             "streamers/youtube-scraper",
             {
-                "searchKeywords": f"viltrox {normalized}",
+                "searchQueries": [f"viltrox {normalized}"],
                 "maxResults": max_posts,
+                "maxResultsShorts": 0,
+                "maxResultStreams": 0,
             },
         )
     profile = _profile_from_items("youtube", normalized, videos)
@@ -396,7 +398,14 @@ async def search_platform_content(
         }
     elif normalized_platform == "instagram":
         actor_id = "apify/instagram-hashtag-scraper"
-        hashtag = "".join(ch for ch in search_query.lower() if ch.isalnum() or ch == "_")[:80]
+        # 多词搜索短语不能整串去空格拼成一个超长无效 hashtag(IG actor 搜不到 → 恒空)。
+        # 取首个有意义词(>2 字符)作单 hashtag,保留关键词搜索语义、恢复 IG 可用结果。
+        hashtag = next(
+            ("".join(ch for ch in word if ch.isalnum() or ch == "_")[:80]
+             for word in search_query.lower().split()
+             if len(word) > 2),
+            "",
+        )
         if not hashtag:
             return {"status": "invalid_query", "items": [], "message": "instagram hashtag query is empty after normalization"}
         payload = {
