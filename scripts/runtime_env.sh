@@ -120,6 +120,20 @@ export JWT_SECRET="${JWT_SECRET:-$INSECURE_LOCAL_JWT_SECRET}"
 export ADMIN_PASSWORD="${ADMIN_PASSWORD:-AdminPass123!}"
 export WORKER_CLUSTER_TIER="${WORKER_CLUSTER_TIER:-60}"
 
+# ── LLM/AI 出网代理 ───────────────────────────────────────────────────────
+# api.openai.com / generativelanguage(Gemini)/ api.anthropic.com 在本网络下不可直连
+# (SSL 握手超时 / Remote end closed connection,区域封锁),走与 yt-dlp 同一残留代理可达
+# (实测 Gemini generate 4.1s、OpenAI HTTP200)。LLM SDK(genai/openai/anthropic,httpx 基)
+# 认 HTTPS_PROXY/HTTP_PROXY env。NO_PROXY 排除本地 Postgres/Qdrant/admin,避免本地回环被代理。
+if [[ -n "${YTDLP_PROXY:-}" && -z "${VKPI_DISABLE_LLM_PROXY:-}" ]]; then
+  export HTTPS_PROXY="${HTTPS_PROXY:-$YTDLP_PROXY}"
+  export HTTP_PROXY="${HTTP_PROXY:-$YTDLP_PROXY}"
+  export https_proxy="${https_proxy:-$YTDLP_PROXY}"
+  export http_proxy="${http_proxy:-$YTDLP_PROXY}"
+  export NO_PROXY="${NO_PROXY:-localhost,127.0.0.1,0.0.0.0,::1}"
+  export no_proxy="${no_proxy:-localhost,127.0.0.1,0.0.0.0,::1}"
+fi
+
 # ──────────────────────────────────────────────────────────
 # R58E NEW: 启动可见性 - 打印当前生效的关键环境
 # 让任何调用 runtime_env.sh 的脚本都能看到真实值
