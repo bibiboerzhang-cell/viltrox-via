@@ -413,13 +413,13 @@ async def _youtube_data_api_search(search_query: str, *, market: str = "", safe_
     if not crawler.api_key:
         return None
 
-    def go() -> Dict[str, Any] | None:
+    def _channel_search(q: str) -> Dict[str, Any] | None:
         payload = crawler._request(
             "search",
             {
                 "part": "snippet",
                 "type": "channel",
-                "q": search_query,
+                "q": q,
                 "maxResults": max(1, min(25, int(safe_limit or 25))),
                 "relevanceLanguage": "en",
                 "safeSearch": "none",
@@ -427,6 +427,20 @@ async def _youtube_data_api_search(search_query: str, *, market: str = "", safe_
         )
         if crawler._should_use_apify_fallback(payload) or str(payload.get("provider_status") or "") == "error":
             return None
+        return payload
+
+    def go() -> Dict[str, Any] | None:
+        payload = _channel_search(search_query)
+        if payload is None:
+            return None
+        # 长 query(产品名 + 多 persona 词,如 planner 监视器输出 10+ 词)在 type=channel 上
+        # 常 0 命中 → 用前 5 个词(persona 关键词)重试,使长 query 也走 ~0.6s 快路径而非降级 Apify。
+        if not (payload.get("items") or []):
+            short_q = " ".join(str(search_query or "").split()[:5]).strip()
+            if short_q and short_q.lower() != str(search_query or "").strip().lower():
+                retry = _channel_search(short_q)
+                if retry is not None and (retry.get("items") or []):
+                    return retry
         return payload
 
     try:
