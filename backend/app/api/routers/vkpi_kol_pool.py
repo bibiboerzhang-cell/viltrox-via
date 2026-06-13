@@ -76,13 +76,35 @@ def _int_or_none(value) -> int | None:
     return parsed if parsed > 0 else None
 
 
+_KNOWN_URL_DOMAINS = (
+    "youtube.com", "youtu.be", "tiktok.com", "instagram.com", "facebook.com",
+    "twitter.com", "x.com", "bilibili.com", "b23.tv", "douyin.com", "twitch.tv", "reddit.com",
+)
+
+
 def _looks_like_url(value: str) -> bool:
+    """诊断 P1-2/3 分流CJK收口:真闸门。此前 urlparse netloc 含点即判 url,致含域名词的
+    中文问句(如「找像youtube.com的博主」无空格、「推荐 example.com 的人」带空格)被静默
+    吞进 URL 分支、语义意图丢失。现加三重校验:无空白 + host 纯 ASCII DNS-label(CJK/
+    punycode-折叠的中文主机一律拒)+ 命中已知平台域或合法 TLD;否则回退 recall。"""
     text = str(value or "").strip()
     if not text:
         return False
+    # 真 URL 不含空白——含空白的输入是问句,回退 recall
+    if any(ch.isspace() for ch in text):
+        return False
     candidate = text if "://" in text else f"https://{text}"
     parsed = urlparse(candidate)
-    return bool(parsed.netloc and "." in parsed.netloc)
+    host = (parsed.hostname or "").lower()
+    if not host or "." not in host:
+        return False
+    # host 必须是合法 DNS 名(纯 ASCII 字母数字/连字符/点)——CJK 主机拒判
+    if not all(ch.isascii() and (ch.isalnum() or ch in ".-") for ch in host):
+        return False
+    if any(host == d or host.endswith("." + d) for d in _KNOWN_URL_DOMAINS):
+        return True
+    tld = host.rsplit(".", 1)[-1]
+    return tld.isalpha() and len(tld) >= 2
 
 
 def _smart_query_type(*, branch: str, result: dict | None = None) -> str:
