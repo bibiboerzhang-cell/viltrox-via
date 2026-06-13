@@ -175,6 +175,16 @@ def _openai_client():
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("missing_openai_api_key")
+    # api.openai.com 在本网络下不可直连(SSL 握手超时,区域封锁);走与 yt-dlp 同一残留代理
+    # (YTDLP_PROXY / OPENAI_PROXY)可达(实测直连 ConnectTimeout、走代理 HTTP200 2.9s)。
+    proxy = (os.getenv("OPENAI_PROXY") or os.getenv("YTDLP_PROXY") or "").strip()
+    if proxy:
+        try:
+            import httpx
+
+            return OpenAI(api_key=api_key, http_client=httpx.Client(proxy=proxy, timeout=30.0))
+        except Exception:
+            pass
     return OpenAI(api_key=api_key)
 
 
