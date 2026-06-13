@@ -165,6 +165,7 @@ function recallResultFromSession(session: VkpiKolSearchHistoryItem): VkpiKolReca
       creator_type_score: bucket === "creator" ? 1 : 0,
       reviewer_type_score: bucket === "reviewer" ? 1 : 0,
       recall_reason: cleanText(payload.evidence || payload.sample_title),
+      why_fit: cleanText(payload.why_fit),
       source_fields: payload,
     } satisfies VkpiKolRecallItem;
     if (bucket === "reviewer") reviewer.push(row);
@@ -218,6 +219,7 @@ function discoveryItemsFromSession(session: VkpiKolSearchHistoryItem | null): Vk
       creator_type_score: 1,
       reviewer_type_score: 0,
       recall_reason: cleanText(payload.sample_title || payload.evidence),
+      why_fit: cleanText(payload.why_fit),
       source_fields: payload,
     } satisfies VkpiKolRecallItem);
   });
@@ -347,16 +349,17 @@ function RecallMiniItem({
   const score = Number(item.recall_rank_score ?? item.vector_score ?? 0);
   const tier = relevanceTier(index);
   const showImg = Boolean(avatar) && !imgError;
+  const whyFit = cleanText(item.why_fit);
   return (
     <button
       type="button"
       onClick={() => onOpen?.(item)}
-      className="group flex min-w-0 items-center gap-2.5 rounded-lg border border-white/[0.06] bg-white/[0.015] px-2.5 py-2 text-left transition-all hover:border-cyan-300/25 hover:bg-cyan-400/[0.04] focus:outline-none focus:ring-1 focus:ring-cyan-300/30"
-      title={`打开 KOL 详情 · 相关度 ${score.toFixed(3)}`}
+      className="group flex min-w-0 items-start gap-2.5 rounded-lg border border-white/[0.06] bg-white/[0.015] px-2.5 py-2 text-left transition-all hover:border-cyan-300/25 hover:bg-cyan-400/[0.04] focus:outline-none focus:ring-1 focus:ring-cyan-300/30"
+      title={whyFit ? `${whyFit} · 相关度 ${score.toFixed(3)}` : `打开 KOL 详情 · 相关度 ${score.toFixed(3)}`}
     >
-      <span className="w-3.5 shrink-0 text-center text-[9px] font-medium tabular-nums text-slate-600">{index}</span>
+      <span className="mt-1 w-3.5 shrink-0 text-center text-[9px] font-medium tabular-nums text-slate-600">{index}</span>
       <span
-        className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full text-[12px] font-bold text-white"
+        className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full text-[12px] font-bold text-white"
         style={{ background: "linear-gradient(135deg,#7c3aed,#06b6d4)" }}
       >
         {showImg ? (
@@ -381,8 +384,11 @@ function RecallMiniItem({
         <span className="mt-0.5 block truncate text-[9.5px] text-slate-500">
           {display(item.platform, "unknown")} · {item.type_label || item.profile_type || "profile"}
         </span>
+        {whyFit ? (
+          <span className="mt-1 line-clamp-2 block text-[10px] leading-snug text-cyan-200/85">{whyFit}</span>
+        ) : null}
       </span>
-      <span className={`flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-medium ${tier.cls}`}>
+      <span className={`mt-1 flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-medium ${tier.cls}`}>
         <span className="h-1 w-1 rounded-full" style={{ background: tier.dot }} />
         {tier.label}
       </span>
@@ -521,9 +527,15 @@ function UrlSummary({
   const executeDone = result.execute && (
     isVideo ? videoExecutionDone(flowStatus || videoFlow.status) : cleanText(profileFlow.status) === "ready"
   );
+  // profile 已改自动 execute(识别即自动抓资料入库),手动按钮只在 profile 抓取失败时作「重试」兜底。
+  const profileFailed = !isVideo && ["crawl_failed", "failed"].includes(cleanText(profileFlow.status));
+  const profileRetryable = profileFailed && canExecute;
+  // 账号资料自动抓取中(用户贴 URL → 自动 execute,无二次确认):展示自动状态,不再显示「抓基础资料」按钮。
+  const profileAutoRunning = !isVideo && isExecuting;
+  const showActionButton = isVideo || profileRetryable;
   const actionLabel = isVideo
     ? retryableFailure ? "重试分析" : knownCreator ? "只分析此视频" : "建档并分析"
-    : "抓基础资料";
+    : "重试抓资料";
   const disabledReason = isVideo && !creatorResolved
     ? "创作者未解析，不能建匿名档，也不会入队。"
     : result.url_type === "unknown"
@@ -556,16 +568,26 @@ function UrlSummary({
           </div>
         </div>
         <div className="shrink-0">
-          <button
-            type="button"
-            onClick={onExecute}
-            disabled={!canExecute}
-            className="inline-flex min-h-[34px] items-center justify-center gap-1.5 rounded-md border border-cyan-300/20 bg-cyan-500/[0.14] px-3 text-[11px] font-medium text-cyan-100 transition-colors hover:bg-cyan-500/[0.22] disabled:cursor-not-allowed disabled:border-white/[0.08] disabled:bg-white/[0.04] disabled:text-slate-500"
-            title={disabledReason || "确认后执行，任务进侧边栏任务看板"}
-          >
-            {isExecuting ? <Loader2 size={12} className="animate-spin" /> : isVideo && !knownCreator ? <UserPlus size={12} /> : <Database size={12} />}
-            {isExecuting ? "执行中..." : actionLabel}
-          </button>
+          {showActionButton ? (
+            <button
+              type="button"
+              onClick={onExecute}
+              disabled={!canExecute}
+              className="inline-flex min-h-[34px] items-center justify-center gap-1.5 rounded-md border border-cyan-300/20 bg-cyan-500/[0.14] px-3 text-[11px] font-medium text-cyan-100 transition-colors hover:bg-cyan-500/[0.22] disabled:cursor-not-allowed disabled:border-white/[0.08] disabled:bg-white/[0.04] disabled:text-slate-500"
+              title={disabledReason || "确认后执行，任务进侧边栏任务看板"}
+            >
+              {isExecuting ? <Loader2 size={12} className="animate-spin" /> : isVideo && !knownCreator ? <UserPlus size={12} /> : <Database size={12} />}
+              {isExecuting ? "执行中..." : actionLabel}
+            </button>
+          ) : !isVideo ? (
+            <span
+              className="inline-flex min-h-[34px] items-center justify-center gap-1.5 rounded-md border border-cyan-300/20 bg-cyan-500/[0.10] px-3 text-[11px] font-medium text-cyan-100"
+              title="账号 URL 已自动抓取基础资料并入库，无需手动确认"
+            >
+              {profileAutoRunning ? <Loader2 size={12} className="animate-spin" /> : <Database size={12} />}
+              {profileAutoRunning ? "自动抓资料中..." : "已自动抓资料入库"}
+            </span>
+          ) : null}
         </div>
       </div>
       {hasPlayableVideo ? (
@@ -876,9 +898,21 @@ export function SmartKolInputPanel({
       });
       const responseMode = cleanText(response.mode);
       const isText = !(responseMode === "url" || cleanText(response.query_type).startsWith("url_"));
+      let autoProfile: VkpiKolUrlDeepCrawlResponse | null = null;
       if (!isText) {
         setMode("url");
-        setUrlResult(response.result as VkpiKolUrlDeepCrawlResponse);
+        const urlPayload = response.result as VkpiKolUrlDeepCrawlResponse;
+        setUrlResult(urlPayload);
+        // 账号 URL 自动入库:识别为 profile 且后端 dry-run 就绪(dry_run_ready)→ 直接自动 execute
+        // (mode profile_basics:只抓基础资料 + 入库,不触发昂贵视频深析),前端随后展示 ProfileInfoCard。
+        // video URL 不自动(视频分析更重,保留手动确认)。
+        if (
+          urlPayload.url_type === "profile" &&
+          !urlPayload.execute &&
+          cleanText(asRecord(urlPayload.profile_flow).status) === "dry_run_ready"
+        ) {
+          autoProfile = urlPayload;
+        }
       } else {
         setMode("text");
         setRecallResult(response.result as VkpiKolRecallResponse);
@@ -888,33 +922,40 @@ export function SmartKolInputPanel({
       // 开闸全量:文字搜索且深度查找开关开 → 自动触发全网发现(advance-job 全量,含所选平台),
       // 一步「先库内召回 → 再全网发现」,不必再手点。护栏 enforce 兜底超支。
       if (isText && deepFindOn) void queueTextAdvance(overrideQuery);
+      // 账号 URL 自动抓资料 + 入库(不再弹「抓基础资料」二次确认)。
+      if (autoProfile) void runUrlExecute(autoProfile, { auto: true });
     } catch (err) {
       setState("error");
       setError(err instanceof Error ? err.message : "智能入口请求失败");
     }
   };
 
-  const executeUrlAction = async () => {
-    const query = cleanText(urlResult?.url?.input || input);
-    if (!apiToken || !query || !urlCanExecute || !urlResult) return;
+  // URL 执行核心:source 显式传当次结果(避免 setUrlResult 后读到旧 state),auto=true 为 profile 自动跑。
+  // profile 用 mode "profile_basics"(非 "auto")——只抓基础资料 + 入库,绝不触发 representative_video
+  // final_v1 视频深析(后端 _profile_should_enqueue_representative_videos 仅认 auto/profile_with_video/
+  // account_deep);video 仍走 video_deep + 手动确认。V6 Fit 由 write_kol_profile_basics 白名单兜底不触碰。
+  const runUrlExecute = async (source: VkpiKolUrlDeepCrawlResponse, opts: { auto?: boolean } = {}) => {
+    const query = cleanText(source.url?.input || input);
+    if (!apiToken || !query) return;
+    const sourceProfileFlow = asRecord(source.profile_flow);
     setState("executing");
     setError("");
     try {
-      const executeMode = urlResult.url_type === "video" ? "video_deep" : "auto";
-      const sessionId = sessionIdFrom(urlResult.search_session);
+      const executeMode = source.url_type === "video" ? "video_deep" : "profile_basics";
+      const sessionId = sessionIdFrom(source.search_session);
       const response = await deepCrawlKolUrl(apiToken, query, true, {
-        maxPosts: typeof profileFlow.max_posts === "number" ? profileFlow.max_posts : 3,
+        maxPosts: typeof sourceProfileFlow.max_posts === "number" ? sourceProfileFlow.max_posts : 3,
         mode: executeMode,
         sessionId,
         createSession: !sessionId,
-        source: "smart_kol_input",
+        source: opts.auto ? "smart_kol_input_auto" : "smart_kol_input",
         timeoutMs: 300000,
       });
       setUrlResult(response);
       const nextSessionId = sessionIdFrom(response.search_session) || sessionId;
       if (nextSessionId) {
         setActiveSearchSessionId(nextSessionId);
-        setSessionPollNotice(response.url_type === "video" ? "视频分析状态同步中..." : "账号抓取状态同步中...");
+        setSessionPollNotice(response.url_type === "video" ? "视频分析状态同步中..." : "账号资料抓取状态同步中...");
       }
       setState("ready");
       void refreshHistory();
@@ -922,6 +963,12 @@ export function SmartKolInputPanel({
       setState("ready");
       setError(err instanceof Error ? err.message : "URL 执行失败");
     }
+  };
+
+  // 手动执行(视频区「只分析此视频」/「建档并分析」按钮 + profile 重试兜底):沿用受控 canExecute 门槛。
+  const executeUrlAction = async () => {
+    if (!urlResult || !urlCanExecute) return;
+    await runUrlExecute(urlResult);
   };
 
   const queueTextAdvance = async (overrideQuery?: string) => {

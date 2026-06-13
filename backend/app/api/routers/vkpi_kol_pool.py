@@ -539,6 +539,8 @@ async def smart_kol_search(
             type_weight=float(body.get("type_weight") if body.get("type_weight") is not None else 0.15),
             type_boost_enabled=bool(body.get("type_boost_enabled", True)),
             exclude_chinese=bool(body.get("exclude_chinese", True)),
+            product_focus=llm_query_plan.get("product_focus"),
+            target_persona=str(llm_query_plan.get("target_persona") or ""),
         )
         result["llm_query_plan"] = llm_query_plan
         result["original_query_text"] = recall_query
@@ -668,6 +670,8 @@ async def smart_kol_search_profile_advance_job(
             type_weight=float(body.get("type_weight") if body.get("type_weight") is not None else 0.15),
             type_boost_enabled=bool(body.get("type_boost_enabled", True)),
             exclude_chinese=bool(body.get("exclude_chinese", True)),
+            product_focus=llm_query_plan.get("product_focus"),
+            target_persona=str(llm_query_plan.get("target_persona") or ""),
         )
         recall_result["llm_query_plan"] = llm_query_plan
         recall_result["original_query_text"] = query_text

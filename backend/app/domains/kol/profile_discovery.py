@@ -681,6 +681,9 @@ def enqueue_smart_search_profile_advance(
         "search_session_id": session_id,
         "query_text": query,
         "product_sku": _text(body.get("product_sku")),
+        # why-fit 人群侧上下文(纯展示透传):planner 计划里的产品人群,worker 跑 recall 时拼"适合理由"。
+        "product_focus": (body.get("llm_query_plan") or {}).get("product_focus") if isinstance(body.get("llm_query_plan"), dict) else None,
+        "target_persona": (body.get("llm_query_plan") or {}).get("target_persona") if isinstance(body.get("llm_query_plan"), dict) else "",
         "candidate_limit": max(1, min(_int(body.get("candidate_limit"), 100), 500)),
         "limit": max(1, min(_int(body.get("limit"), 30), 50)),
         "creator_quota": max(0, min(_int(body.get("creator_quota"), 15), 50)),
@@ -772,6 +775,8 @@ async def execute_smart_search_profile_advance_pipeline(
         type_weight=float(payload.get("type_weight") if payload.get("type_weight") is not None else 0.3),
         type_boost_enabled=bool(payload.get("type_boost_enabled", True)),
         exclude_chinese=bool(payload.get("exclude_chinese", True)),
+        product_focus=payload.get("product_focus"),
+        target_persona=_text(payload.get("target_persona")),
     )
     recall_session = search_sessions.attach_recall_result(int(session_id), recall_result)
     new_discovery: dict[str, Any] | None = None

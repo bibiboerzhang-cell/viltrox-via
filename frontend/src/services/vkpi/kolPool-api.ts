@@ -277,6 +277,7 @@ export interface VkpiKolRecallItem {
   type_reason?: string;
   type_method?: string;
   recall_reason?: string;
+  why_fit?: string;
   used_lenses?: string[];
   used_lenses_note?: string;
   representative_evidence?: Array<{

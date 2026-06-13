@@ -35,6 +35,24 @@ PROFILE_REASON_KEYWORDS = (
     ("旅行", ("travel", "landscape", "city", "城市", "风光")),
 )
 
+# why-fit 规则桥(零成本、纯展示):每条 = (人群侧关键词, 该面向的 KOL 画像信号词, 命中后人话短语)。
+# 命中逻辑:本次 query 的人群文本(persona/product_focus/target_persona/query_text)命中"人群侧"任一词,
+# 且该 KOL 真实信号(profile_text/type_reason/已用器材/垂类标签/bio)命中"画像信号"任一词 → 该理由成立。
+# 纯文本,绝不参与任何评分;与 viltrox_fit_score 完全无关。
+WHY_FIT_RULES = (
+    ("婚礼", ("婚礼", "wedding", "engagement", "新人", "婚纱"), ("婚礼", "wedding", "engagement", "新人", "婚纱"), "拍婚礼/新人"),
+    ("人像", ("人像", "portrait", "肖像", "headshot", "model", "时尚", "fashion"), ("人像", "portrait", "肖像", "headshot", "model", "时尚", "fashion", "bokeh"), "做人像/肖像内容"),
+    ("棚拍灯光", ("棚拍", "studio", "灯光", "lighting", "闪光", "flash", "strobe", "补光", "off-camera"), ("棚拍", "studio", "灯光", "lighting", "闪光", "flash", "strobe", "补光", "灯", "off-camera"), "常做灯光/棚拍内容"),
+    ("街拍", ("街拍", "street", "扫街", "lifestyle", "生活方式"), ("街拍", "street", "扫街", "lifestyle", "生活方式"), "拍街头/生活方式"),
+    ("影视", ("影视", "电影", "film", "cinema", "cinematic", "filmmaker", "短片", "narrative"), ("影视", "电影", "film", "cinema", "cinematic", "filmmaker", "短片", "叙事", "电影感", "narrative"), "做影视/电影感内容"),
+    ("多机位", ("多机位", "多机", "multi-cam", "multicam", "现场", "监看", "on-set", "rig", "gimbal", "稳定器"), ("多机位", "多机", "multi-cam", "multicam", "监视器", "monitor", "现场", "监看", "rig", "gimbal", "稳定器", "导播"), "现场/多机位拍摄"),
+    ("视频", ("视频", "video", "videograph", "拍视频", "vlog", "vlogger", "content creator", "内容创作"), ("视频", "video", "videograph", "vlog", "vlogger", "拍视频", "电影感", "filmmaker"), "持续产出视频内容"),
+    ("风光", ("风光", "landscape", "星空", "astro", "城市", "cityscape", "建筑", "real estate", "interior"), ("风光", "landscape", "星空", "astro", "城市", "cityscape", "风景", "建筑", "real estate", "interior"), "拍风光/超广题材"),
+    ("旅行", ("旅行", "travel", "旅拍", "vlog"), ("旅行", "travel", "旅拍", "city", "城市", "风光", "landscape"), "做旅行/旅拍内容"),
+    ("测评", ("测评", "评测", "review", "对比", "comparison", "unboxing", "gear", "器材"), ("测评", "评测", "review", "对比", "comparison", "unboxing", "gear", "器材"), "做器材测评/对比"),
+    ("电影镜头", ("电影镜头", "anamorphic", "变形", "cine", "epic", "广告", "commercial"), ("anamorphic", "变形", "cine", "电影感", "cinematic", "filmmaker", "广告", "commercial"), "拍电影/广告片"),
+)
+
 PRODUCT_QUERY_TEXTS = {
     "35mm_f12_lab": """Product query profile: Viltrox AF 35mm F1.2 LAB.
 Creator use cases: environmental portrait, street photography, documentary storytelling, wedding and engagement photography, low-light portrait, editorial fashion, hybrid photo and video, premium full-frame storyteller.
@@ -455,6 +473,72 @@ def _evidence_summaries(kol_pool_ids: list[int]) -> dict[int, dict[str, Any]]:
     return summaries
 
 
+def _persona_text_for_query(query_meta: dict[str, Any], product_focus: Any, target_persona: Any) -> str:
+    """拼出"本次 query 面向的人群"文本(供 why-fit 人群侧关键词匹配)。
+    优先级:planner 的 product_focus/target_persona + 产品线 persona/label + 原始 query_text。
+    纯展示用文本,绝不参与评分。"""
+    parts: list[str] = []
+    profile_key = str((query_meta or {}).get("query_profile") or "")
+    persona_meta = PRODUCT_LINE_PERSONAS.get(profile_key) or {}
+    if persona_meta:
+        parts.append(str(persona_meta.get("persona") or ""))
+        parts.append(str(persona_meta.get("label") or ""))
+    if isinstance(product_focus, (list, tuple)):
+        parts.extend(str(item) for item in product_focus if item)
+    elif product_focus:
+        parts.append(str(product_focus))
+    if target_persona:
+        parts.append(str(target_persona))
+    if (query_meta or {}).get("query_text_provided"):
+        parts.append(str((query_meta or {}).get("query_text") or ""))
+    return _clean_text(" ".join(p for p in parts if p), 600).lower()
+
+
+def _why_fit(
+    row: dict[str, Any],
+    evidence: dict[str, Any],
+    persona_text: str,
+    product_label: str,
+) -> str:
+    """一句话「为何这个人适合本次产品/人群」:把 ① 本次 query 人群 与 ② KOL 真实信号做规则匹配。
+    命中即拼可读理由(无 LLM 也有理由);纯展示文本,绝不写/影响 viltrox_fit_score。"""
+    persona_blob = str(persona_text or "")
+    # KOL 真实信号 blob:画像文本 / 类型理由 / 已用器材 / 垂类标签 / bio。
+    kol_blob = " ".join(
+        _clean_text(value, 600).lower()
+        for value in (
+            row.get("profile_text"),
+            row.get("type_reason"),
+            row.get("bio"),
+            " ".join(str(lens) for lens in (evidence.get("used_lenses") or [])),
+            " ".join(str(label) for label in (evidence.get("reason_labels") or [])),
+        )
+        if value
+    )
+    matched: list[str] = []
+    seen: set[str] = set()
+    for _persona_key, persona_words, kol_words, phrase in WHY_FIT_RULES:
+        if phrase in seen:
+            continue
+        persona_hit = (not persona_blob) or any(word.lower() in persona_blob for word in persona_words)
+        kol_hit = any(word.lower() in kol_blob for word in kol_words)
+        if persona_hit and kol_hit:
+            matched.append(phrase)
+            seen.add(phrase)
+        if len(matched) >= 2:
+            break
+    target = str(product_label or "").strip()
+    if matched:
+        signal = " + ".join(matched)
+        return f"{signal} → 适合{target}" if target else f"适合理由:{signal}"
+    # 无规则命中时的可读兜底:用画像标签说人话,不假装精准匹配。
+    fallback_labels = list(evidence.get("reason_labels") or []) or _reason_labels(
+        row.get("profile_text"), row.get("type_reason")
+    )
+    label_text = "/".join(fallback_labels[:2]) if fallback_labels else "内容画像"
+    return f"{label_text}画像与{target}人群相近" if target else f"{label_text}画像与产品人群相近"
+
+
 def _recall_reason(row: dict[str, Any], evidence: dict[str, Any]) -> str:
     lenses = list(evidence.get("used_lenses") or [])
     reason_labels = list(evidence.get("reason_labels") or [])
@@ -527,6 +611,8 @@ def _format_item(
     type_weight: float,
     type_boost_enabled: bool,
     evidence: dict[str, Any],
+    persona_text: str = "",
+    product_label: str = "",
 ) -> dict[str, Any]:
     type_rank_score = _type_score_for_bucket(row, bucket)
     rank_score = _recall_rank_score(
@@ -557,6 +643,7 @@ def _format_item(
         "type_reason": row.get("type_reason") or "",
         "type_method": row.get("type_method") or "",
         "recall_reason": _recall_reason(row, evidence),
+        "why_fit": _why_fit(row, evidence, persona_text, product_label),
         "source_fields": {
             "vector_method": METHOD,
             "type_method": row.get("type_method") or "",
@@ -590,6 +677,8 @@ def recall_kol_profiles(
     type_weight: float = 0.15,
     type_boost_enabled: bool = True,
     exclude_chinese: bool = True,
+    product_focus: Any = None,
+    target_persona: str = "",
 ) -> dict[str, Any]:
     if ratio_policy != "soft":
         raise ValueError("only ratio_policy=soft is supported")
@@ -608,6 +697,15 @@ def recall_kol_profiles(
         raise ValueError("vector_weight + type_weight must be greater than 0 when type_boost_enabled=true")
 
     resolved_text, query_meta = resolve_query_text(query_text=query_text, product_sku=product_sku)
+    # why-fit 人群侧上下文(纯展示):产品线 persona + planner product_focus/target_persona + 原始 query。
+    profile_key = str(query_meta.get("query_profile") or "")
+    persona_meta = PRODUCT_LINE_PERSONAS.get(profile_key) or {}
+    product_label = str(persona_meta.get("label") or persona_meta.get("persona") or "")
+    persona_text = _persona_text_for_query(
+        {**query_meta, "query_text": resolved_text},
+        product_focus,
+        target_persona,
+    )
     query_vector, embedding_meta = _embed_query(resolved_text)
     hits = _search_qdrant(query_vector, safe_candidate_limit)
 
@@ -645,6 +743,8 @@ def recall_kol_profiles(
                 type_weight=safe_type_weight,
                 type_boost_enabled=bool(type_boost_enabled),
                 evidence=evidence_by_id.get(hit.kol_pool_id, {}),
+                persona_text=persona_text,
+                product_label=product_label,
             )
         )
 
@@ -671,6 +771,8 @@ def recall_kol_profiles(
             "collection_name": COLLECTION_NAME,
             "candidate_limit": safe_candidate_limit,
             "limit": safe_limit,
+            "product_label": product_label,
+            "product_persona": str(persona_meta.get("persona") or ""),
         },
         "ratio": {
             "creator_quota": safe_creator_quota,
