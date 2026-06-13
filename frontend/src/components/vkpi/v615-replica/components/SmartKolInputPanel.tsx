@@ -162,6 +162,9 @@ function recallResultFromSession(session: VkpiKolSearchHistoryItem): VkpiKolReca
       profile_url: cleanText(item.source_url || payload.profile_url || payload.source_url || payload.channel_url),
       recall_rank_score: Number(item.score ?? payload.recall_rank_score ?? payload.vector_score ?? 0),
       vector_score: Number(payload.vector_score ?? item.score ?? 0),
+      display_rank_score: Number(payload.display_rank_score ?? item.score ?? payload.recall_rank_score ?? 0),
+      relevance_flags: Array.isArray(payload.relevance_flags) ? (payload.relevance_flags as unknown[]).map(cleanText).filter(Boolean) : [],
+      relevance_tier_hint: cleanText(payload.relevance_tier_hint),
       type_label: bucket === "reviewer" ? "测评号" : "创作者",
       creator_type_score: bucket === "creator" ? 1 : 0,
       reviewer_type_score: bucket === "reviewer" ? 1 : 0,
@@ -276,6 +279,15 @@ function urlResultFromSession(session: VkpiKolSearchHistoryItem): VkpiKolUrlDeep
   };
 }
 
+// 全网发现状态码 → 人话(面向营销人,不暴露 queued/running 等内部状态码)。
+function advanceStatusLabel(value: unknown): string {
+  const status = cleanText(value).toLowerCase();
+  if (["ready", "done", "partial"].includes(status)) return "已完成";
+  if (["failed", "blocked"].includes(status)) return "未完成";
+  if (status === "running") return "查找中";
+  return "排队中";
+}
+
 function historyKindLabel(session: VkpiKolSearchHistoryItem): string {
   const type = cleanText(session.query_type);
   if (type === "url_video") return "视频 URL";
@@ -306,7 +318,7 @@ function HistoryStrip({
       <div className="flex flex-wrap gap-1.5">
         {items.slice(0, 5).map((item) => {
           const sessionId = historySessionId(item);
-          const label = display(item.query_text, `session #${sessionId || "--"}`);
+          const label = display(item.query_text, "未命名");
           return (
             <button
               key={`${sessionId || label}-${item.updated_at || item.created_at || ""}`}
@@ -317,7 +329,7 @@ function HistoryStrip({
             >
               <span className="shrink-0 text-slate-600">{historyKindLabel(item)}</span>
               <span className="max-w-[220px] truncate">{label}</span>
-              <span className="shrink-0 text-slate-600">{item.status || "ready"}</span>
+              <span className="shrink-0 text-slate-600">{advanceStatusLabel(item.status || "ready")}</span>
             </button>
           );
         })}
@@ -328,8 +340,10 @@ function HistoryStrip({
 
 // 问题5 UI:相关度按名次分档(列表已按分排序,名次=相关度强弱),裸 score 进 title 供细看,
 // 避免向量分都 <0.5 时全显「相关」无区分。
-function relevanceTier(index: number): { label: string; cls: string; dot: string } {
-  if (index <= 1) return { label: "高相关", cls: "border-emerald-300/35 bg-emerald-400/[0.10] text-emerald-100", dot: "#34d399" };
+// demote:后端 relevance_tier_hint==="demote"(如视频向产品×纯平面摄影候选)时,封顶为「中相关」,
+// 绝不显「高相关」——纯展示分档,不动召回侧排序与任何评分字段。
+function relevanceTier(index: number, demote = false): { label: string; cls: string; dot: string } {
+  if (index <= 1 && !demote) return { label: "高相关", cls: "border-emerald-300/35 bg-emerald-400/[0.10] text-emerald-100", dot: "#34d399" };
   if (index <= 3) return { label: "中相关", cls: "border-cyan-300/30 bg-cyan-400/[0.07] text-cyan-100", dot: "#22d3ee" };
   return { label: "相关", cls: "border-white/[0.08] bg-white/[0.02] text-slate-400", dot: "#64748b" };
 }
@@ -348,7 +362,8 @@ function RecallMiniItem({
   const name = display(item.handle || item.display_name || `KOL #${item.kol_pool_id}`);
   const followers = numberLabel(item.followers);
   const score = Number(item.recall_rank_score ?? item.vector_score ?? 0);
-  const tier = relevanceTier(index);
+  const relevanceFlags = Array.isArray(item.relevance_flags) ? item.relevance_flags.map(cleanText).filter(Boolean) : [];
+  const tier = relevanceTier(index, cleanText(item.relevance_tier_hint) === "demote");
   const showImg = Boolean(avatar) && !imgError;
   const whyFit = cleanText(item.why_fit);
   return (
@@ -388,6 +403,15 @@ function RecallMiniItem({
         {whyFit ? (
           <span className="mt-1 line-clamp-2 block text-[10px] leading-snug text-cyan-200/85">{whyFit}</span>
         ) : null}
+        {relevanceFlags.length ? (
+          <span className="mt-1 flex flex-wrap gap-1">
+            {relevanceFlags.map((flag) => (
+              <span key={flag} className="rounded border border-amber-300/25 bg-amber-400/[0.08] px-1 text-[8.5px] font-medium text-amber-200/85">
+                {flag}
+              </span>
+            ))}
+          </span>
+        ) : null}
       </span>
       <span className={`mt-1 flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-medium ${tier.cls}`}>
         <span className="h-1 w-1 rounded-full" style={{ background: tier.dot }} />
@@ -400,14 +424,9 @@ function RecallMiniItem({
 function PlanPills({ plan }: { plan: Row }) {
   const searchQuery = display(plan.search_query);
   const persona = display(plan.target_persona, "");
-  const provider = display(plan.provider, "rule_v0");
   const focus = Array.isArray(plan.product_focus) ? plan.product_focus.map(cleanText).filter(Boolean).slice(0, 4) : [];
   return (
     <div className="mb-2 rounded-md border border-cyan-300/12 bg-cyan-400/[0.045] px-2.5 py-2">
-      <div className="mb-1 flex flex-wrap items-center gap-1.5 text-[9.5px] text-cyan-100">
-        <span className="rounded border border-cyan-300/15 px-1.5 py-0.5">LLM 查询计划</span>
-        <span className="text-slate-500">{provider}</span>
-      </div>
       <div className="truncate text-[10.5px] text-slate-300">{searchQuery}</div>
       {persona ? <div className="mt-1 truncate text-[10px] text-slate-500">{persona}</div> : null}
       {focus.length ? (
@@ -646,11 +665,7 @@ function UrlSummary({
   const videoFlow = asRecord(result.video_flow);
   const creator = asRecord(result.creator_identity || videoFlow.creator_identity);
   const metadata = asRecord(result.video_metadata || videoFlow.video_metadata);
-  const evidence = asRecord(videoFlow.evidence_result);
-  const enqueue = asRecord(videoFlow.enqueue_result);
-  const enqueueJob = asRecord(enqueue.job);
   const analysis = asRecord(videoFlow.analysis);
-  const deepResult = asRecord(analysis.deep_result);
   const jobLastError = cleanText(videoFlow.job_last_error || profileFlow.job_last_error);
   const jobStatus = cleanText(videoFlow.job_status || profileFlow.job_status || videoFlow.status || profileFlow.status);
   const flowStatus = cleanText(videoFlow.status || profileFlow.status || (result.search_session ? asRecord(result.search_session).item_status : ""));
@@ -686,9 +701,9 @@ function UrlSummary({
     ? retryableFailure ? "重试分析" : knownCreator ? "只分析此视频" : "建档并分析"
     : "重试抓资料";
   const disabledReason = isVideo && !creatorResolved
-    ? "创作者未解析，不能建匿名档，也不会入队。"
+    ? "没识别到创作者，无法建档。"
     : result.url_type === "unknown"
-      ? "无法识别 URL。"
+      ? "识别不了这个链接。"
       : "";
 
   return (
@@ -702,11 +717,11 @@ function UrlSummary({
             </span>
             <span className="rounded-md border border-white/[0.08] bg-black/20 px-2 py-1 text-slate-300">{display(result.platform)}</span>
             <span className="rounded-md border border-white/[0.08] bg-black/20 px-2 py-1 text-slate-300">
-              {result.in_pool ? `已在库 #${display(result.matched_kol_pool_id)}` : "未命中库内 KOL"}
+              {result.in_pool ? "库内已有此人" : "库内暂无此人"}
             </span>
             {tiktokRisk ? (
               <span className="rounded-md border border-amber-300/20 bg-amber-400/[0.08] px-2 py-1 text-amber-100">
-                TikTok final_v1 有 media_resolve_failed 风险
+                TikTok 视频有时拿不到，可能需要重试
               </span>
             ) : null}
           </div>
@@ -718,7 +733,6 @@ function UrlSummary({
               <div className="truncate">身份: <span className="text-slate-200">{display(creator.channel_id || creator.handle || result.channel_id || result.handle)}</span></div>
             </div>
           )}
-          <div className="mt-2 truncate text-[11px] text-slate-400">normalized: <span className="text-slate-500">{display(result.url?.normalized)}</span></div>
         </div>
         <div className="shrink-0">
           {showActionButton ? (
@@ -789,11 +803,9 @@ function UrlSummary({
             ? "border-amber-300/20 bg-amber-400/[0.10] text-amber-100"
             : "border-emerald-300/20 bg-emerald-400/[0.10] text-emerald-100"
         }`}>
-          {flowStatus === "partial" ? "部分完成" : "执行完成"}: {isVideo
-            ? `kol_pool_id ${display(videoFlow.kol_pool_id || result.matched_kol_pool_id)} · evidence_id ${display(videoFlow.evidence_id || evidence.evidence_id || analysis.source_evidence_id)} · job_id ${display(enqueueJob.id || enqueue.id)}`
-            : `kol_pool_id ${display(profileFlow.kol_pool_id)} · V6 Fit 未触碰 ${display(profileFlow.viltrox_fit_score_untouched)}`}
-          {analysis.cache_id ? ` · cache #${display(analysis.cache_id)}` : ""}
-          {deepResult.id ? ` · deep #${display(deepResult.id)}` : ""}
+          {flowStatus === "partial"
+            ? (isVideo ? "视频分析部分完成，已入库" : "资料部分抓取完成，已入库")
+            : (isVideo ? "视频分析完成，已入库" : "资料已抓取并入库")}
           {latency ? ` · 耗时 ${latency}` : ""}
         </div>
       ) : null}
@@ -998,18 +1010,18 @@ export function SmartKolInputPanel({
         applyPolledSession(session);
         if (isSearchSessionTerminal(session)) {
           setActiveSearchSessionId(null);
-          setSessionPollNotice("后台深度查找已回填");
+          setSessionPollNotice("已找完，结果已更新");
           void refreshHistory();
           return;
         }
         if (Date.now() - startedAt > maxPollMs) {
           setActiveSearchSessionId(null);
-          setSessionPollNotice("后台深度查找仍在运行，可从最近历史或侧边栏任务继续打开");
+          setSessionPollNotice("仍在后台查找，可从最近历史或任务里继续查看");
           void refreshHistory();
         }
       } catch (err) {
         if (cancelled) return;
-        setSessionPollNotice(err instanceof Error ? err.message : "后台深度查找同步失败，下次轮询会重试");
+        setSessionPollNotice(err instanceof Error ? err.message : "同步失败，稍后会自动重试");
       }
     };
     void poll();
@@ -1087,7 +1099,7 @@ export function SmartKolInputPanel({
       if (autoProfile) void runUrlExecute(autoProfile, { auto: true });
     } catch (err) {
       setState("error");
-      setError(err instanceof Error ? err.message : "智能入口请求失败");
+      setError(err instanceof Error ? err.message : "请求失败，请重试");
     }
   };
 
@@ -1160,13 +1172,13 @@ export function SmartKolInputPanel({
       if (queuedSession && sessionItems(queuedSession).length) applyPolledSession(queuedSession);
       if (sessionId) {
         setActiveSearchSessionId(sessionId);
-        setSessionPollNotice("后台深度查找同步中...");
+        setSessionPollNotice("后台查找中...");
       }
       setState("ready");
       void refreshHistory();
     } catch (err) {
       setState("ready");
-      setError(err instanceof Error ? err.message : "后台深度查找入队失败");
+      setError(err instanceof Error ? err.message : "全网查找启动失败，请重试");
     }
   };
 
@@ -1182,13 +1194,10 @@ export function SmartKolInputPanel({
           </span>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-1.5">
-              <h2 className="text-[12px] font-semibold text-white">统一智能入口</h2>
-              <span className="rounded-full border border-emerald-300/12 bg-emerald-400/[0.05] px-1.5 py-0.5 text-[9px] text-emerald-100">
-                V6 Fit 不触碰
-              </span>
+              <h2 className="text-[12px] font-semibold text-white">找达人</h2>
             </div>
             <div className="mt-0.5 truncate text-[10px] text-slate-600">
-              URL 自动分流；文字走查找。
+              贴主页/视频链接看资料，或描述产品需求找人。
             </div>
           </div>
         </div>
@@ -1224,7 +1233,7 @@ export function SmartKolInputPanel({
           className="inline-flex min-h-[40px] items-center justify-center gap-1.5 rounded-md border border-cyan-300/18 bg-cyan-500/[0.14] px-3 text-[11px] font-medium text-cyan-100 transition-colors hover:bg-cyan-500/[0.22] disabled:cursor-not-allowed disabled:opacity-55"
         >
           {isBusy ? <Loader2 size={13} className="animate-spin" /> : inferredMode === "url" ? <Link2 size={13} /> : <Search size={13} />}
-          {inferredMode === "url" ? "识别 URL" : "查找"}
+          {inferredMode === "url" ? "查看" : "查找"}
         </button>
       </form>
 
@@ -1235,7 +1244,6 @@ export function SmartKolInputPanel({
           <span className="inline-flex items-center gap-1 text-violet-100"><BadgeCheck size={9} /> 账号 URL</span>
           <span className="text-slate-700">/</span>
           <span className="inline-flex items-center gap-1 text-emerald-100"><Search size={9} /> 产品需求</span>
-          <span>先识别，再执行。</span>
         </div>
       ) : null}
 
@@ -1264,7 +1272,7 @@ export function SmartKolInputPanel({
           {/* 框1 · 产品人群分析(可编辑,防 LLM 理解偏) */}
           <div className="rounded-lg border border-cyan-300/15 bg-cyan-400/[0.04] p-3">
             <div className="mb-1.5 flex items-center justify-between gap-2">
-              <div className="text-[11px] font-medium text-cyan-100">① 产品人群分析 · 先识人群再找人</div>
+              <div className="text-[11px] font-medium text-cyan-100">① 要找什么样的人</div>
               {!personaEditing ? (
                 <button
                   type="button"
@@ -1280,7 +1288,7 @@ export function SmartKolInputPanel({
                   onChange={(event) => setPersonaDraft(event.target.value)}
                   rows={2}
                   className="w-full resize-none rounded-md border border-white/[0.1] bg-black/30 px-2 py-1.5 text-[11px] text-white placeholder-slate-600 focus:border-cyan-400/40 focus:outline-none"
-                  placeholder="改写「要找什么样的人」让 LLM 更懂你的产品需求…"
+                  placeholder="描述要找什么样的人，例如:35mm 低光人像 YouTube 摄影师…"
                 />
                 <div className="flex items-center gap-2">
                   <button
@@ -1295,14 +1303,14 @@ export function SmartKolInputPanel({
             ) : Object.keys(llmPlan).length ? (
               <PlanPills plan={llmPlan} />
             ) : (
-              <div className="text-[10px] text-slate-500">本次走规则解析(无 LLM 计划);点「编辑」改写查询后「用此重搜」。</div>
+              <div className="text-[10px] text-slate-500">点「编辑」改写要找的人群，再「用此重搜」。</div>
             )}
           </div>
 
           {/* 框2 · 库内账号匹配 */}
           <div className="rounded-lg border border-violet-300/15 bg-violet-950/[0.10] p-3">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-              <div className="text-[11px] font-medium text-violet-100">② 库内账号匹配 · 命中 {display(recallResult.diagnostics?.candidate_count)} 条</div>
+              <div className="text-[11px] font-medium text-violet-100">② 库内已有的人 · {display(recallResult.diagnostics?.candidate_count)} 个</div>
               <div className="flex flex-wrap gap-1.5 text-[10px] text-slate-500">
                 <span className="rounded-md border border-white/[0.07] px-2 py-1">创作者 {display(recallResult.diagnostics?.creator_returned)}</span>
                 <span className="rounded-md border border-white/[0.07] px-2 py-1">测评号 {display(recallResult.diagnostics?.reviewer_returned)}</span>
@@ -1322,7 +1330,7 @@ export function SmartKolInputPanel({
           {/* 框3 · 全网发现(Apify+平台,带头像) */}
           <div className="rounded-lg border border-emerald-300/15 bg-emerald-950/[0.10] p-3">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-              <div className="text-[11px] font-medium text-emerald-100">③ 全网发现 · Apify+平台{discoveryItems.length ? ` · ${discoveryItems.length} 个` : ""}</div>
+              <div className="text-[11px] font-medium text-emerald-100">③ 全网新发现的人{discoveryItems.length ? ` · ${discoveryItems.length} 个` : ""}</div>
               <label className="flex items-center gap-1 text-[10px] text-slate-400">
                 <input type="checkbox" checked={deepFindOn} onChange={(event) => setDeepFindOn(event.target.checked)} className="accent-emerald-500" />
                 默认开
@@ -1341,7 +1349,7 @@ export function SmartKolInputPanel({
                   >{p.t}</button>
                 );
               })}
-              <span className="rounded-full border border-white/[0.06] px-2 py-0.5 text-[10px] text-slate-600" title="Facebook 发现待 provider 落地">Facebook · 即将</span>
+              <span className="rounded-full border border-white/[0.06] px-2 py-0.5 text-[10px] text-slate-600" title="Facebook 发现即将支持">Facebook · 即将</span>
               <label className="flex items-center gap-1 text-[10px] text-slate-400" title="排除 中国大陆/香港/台湾 地区(按 country/market 地区判据,海外中文博主放行)">
                 <input type="checkbox" checked={excludeChinese} onChange={(event) => setExcludeChinese(event.target.checked)} className="accent-emerald-500" />
                 排除 中国/港/台 地区
@@ -1364,23 +1372,24 @@ export function SmartKolInputPanel({
               </div>
             ) : activeSearchSessionId ? (
               <div className="flex items-center gap-1.5 rounded-md border border-emerald-300/15 bg-black/15 px-2.5 py-2 text-[10.5px] text-emerald-100/80">
-                <Loader2 size={12} className="animate-spin" /> 全网发现进行中…后台按所选平台抓取,完成自动回填{activeSearchSession?.id ? ` · session #${activeSearchSession.id}` : ""}
+                <Loader2 size={12} className="animate-spin" /> 正在从所选平台找新号，完成后自动显示
               </div>
             ) : (
               <div className="rounded-md border border-dashed border-white/[0.08] px-3 py-3 text-center text-[10.5px] text-slate-500">{deepFindOn ? "深度查找默认开 · 搜索后自动从所选平台发现新号" : "点「立即全网查找」从所选平台发现新号"}</div>
             )}
             {advanceResult || activeSearchSession || sessionPollNotice ? (
               <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-emerald-100/65">
-                <span>{display(activeSessionStatus || advanceResult?.status, "queued")}</span>
+                <span>{advanceStatusLabel(activeSessionStatus || advanceResult?.status)}</span>
                 {Object.keys(activeSessionCounts).length ? (
                   <>
-                    <span className="rounded border border-emerald-300/15 bg-black/15 px-1.5 py-0.5">ready {display(activeSessionCounts.ready, "0")}</span>
-                    <span className="rounded border border-emerald-300/15 bg-black/15 px-1.5 py-0.5">executed {display(activeSessionCounts.executed, "0")}</span>
-                    <span className="rounded border border-emerald-300/15 bg-black/15 px-1.5 py-0.5">errors {display(activeSessionCounts.errors, "0")}</span>
+                    <span className="rounded border border-emerald-300/15 bg-black/15 px-1.5 py-0.5">已找到 {display(activeSessionCounts.ready, "0")}</span>
+                    <span className="rounded border border-emerald-300/15 bg-black/15 px-1.5 py-0.5">已入库 {display(activeSessionCounts.executed, "0")}</span>
+                    {Number(activeSessionCounts.errors) > 0 ? (
+                      <span className="rounded border border-rose-300/20 bg-black/15 px-1.5 py-0.5 text-rose-200/80">失败 {display(activeSessionCounts.errors, "0")}</span>
+                    ) : null}
                   </>
                 ) : null}
                 {sessionPollNotice ? <span className="text-emerald-200/70">{sessionPollNotice}</span> : null}
-                <span className="ml-auto">V6 Fit 未触碰: {display(advanceResult?.viltrox_fit_score_untouched ?? activeSmartJob.viltrox_fit_score_untouched, "true")}</span>
               </div>
             ) : null}
           </div>

@@ -269,6 +269,11 @@ export interface VkpiKolRecallItem {
   type_rank_score?: number;
   recall_rank_score?: number;
   recall_rank_score_method?: string;
+  // 独立展示信号(后端 profile_recall 产出,绝不并入 viltrox_fit_score)
+  display_rank_score?: number;
+  display_relevance_adjust?: number;
+  relevance_flags?: string[];
+  relevance_tier_hint?: string;
   profile_type: "creator" | "reviewer" | "mixed" | string;
   bucket: "creator" | "reviewer" | string;
   type_label: string;

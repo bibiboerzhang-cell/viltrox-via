@@ -33,7 +33,7 @@ class SmartKolInputPollingContractTests(unittest.TestCase):
     def test_polling_stops_on_terminal_session_and_refreshes_history(self) -> None:
         self.assertIn("if (isSearchSessionTerminal(session))", self.source)
         self.assertIn("setActiveSearchSessionId(null);", self.source)
-        self.assertIn('setSessionPollNotice("后台深度查找已回填");', self.source)
+        self.assertIn('setSessionPollNotice("已找完，结果已更新");', self.source)
         self.assertIn("void refreshHistory();", self.source)
 
     def test_polling_has_visibility_pause_timeout_and_cleanup(self) -> None:

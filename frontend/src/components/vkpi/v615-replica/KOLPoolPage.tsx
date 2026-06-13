@@ -166,20 +166,43 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
   };
 
   const openRecallItem = useCallback((recallItem) => {
+    if (!recallItem || typeof recallItem !== "object") return;
     const id = kolIdFrom(recallItem);
-    if (!id) return;
-    const matched = poolItems.find((it) => kolIdFrom(it) === id) || {};
+    const matched = id ? (poolItems.find((it) => kolIdFrom(it) === id) || {}) : {};
     const avatar = avatarCandidate(recallItem) || avatarCandidate(matched);
+    // ① 库内项(有 kol_pool_id)→ openItem 设 selectedItem 并拉 detail_bundle 打开抽屉看全部信息。
+    if (id) {
+      void openItem(mergeAvatarSeed({
+        ...matched,
+        id,
+        kol_pool_id: id,
+        handle: recallItem.handle || matched.handle,
+        display_name: recallItem.display_name || matched.display_name || recallItem.handle,
+        platform: recallItem.platform || matched.platform,
+        profile_type: recallItem.profile_type || matched.profile_type,
+        followers: recallItem.followers ?? matched.followers,
+        candidate_kind: matched.candidate_kind || "existing",
+      }, avatar));
+      return;
+    }
+    // ② 全网发现项(new_creator,无 kol_pool_id,还没入库)→ 不再静默 return;
+    //    用召回项自带 identity(头像/handle/平台/followers/profile_url/why_fit/sample)拼轻量 seed,
+    //    直接打开抽屉只读展示。openItem 见 seed 无 id 会跳过 detail_bundle 拉取(纯前端、不触评分),
+    //    把 why_fit / 召回理由映射进 bio 让用户看到「为什么推荐它」。
+    const src = (recallItem.source_fields && typeof recallItem.source_fields === "object") ? recallItem.source_fields : {};
+    const handle = String(recallItem.handle || recallItem.display_name || src.handle || src.channel_name || "").trim();
+    const why = String(recallItem.why_fit || recallItem.recall_reason || src.why_fit || src.sample_title || src.evidence || "").trim();
     void openItem(mergeAvatarSeed({
-      ...matched,
-      id,
-      kol_pool_id: id,
-      handle: recallItem.handle || matched.handle,
-      display_name: recallItem.display_name || matched.display_name || recallItem.handle,
-      platform: recallItem.platform || matched.platform,
-      profile_type: recallItem.profile_type || matched.profile_type,
-      followers: recallItem.followers ?? matched.followers,
-      candidate_kind: matched.candidate_kind || "existing",
+      id: null,
+      kol_pool_id: null,
+      handle: handle || "未入库候选",
+      display_name: String(recallItem.display_name || src.display_name || src.channel_name || handle || "").trim(),
+      platform: String(recallItem.platform || src.platform || "").trim(),
+      profile_type: recallItem.profile_type || "creator",
+      followers: recallItem.followers ?? src.followers ?? null,
+      profile_url: String(recallItem.profile_url || src.profile_url || src.channel_url || src.source_url || "").trim(),
+      bio: why,
+      candidate_kind: "new_discovered",
     }, avatar));
   }, [poolItems, recallAvatarIndex, apiToken]);
   
