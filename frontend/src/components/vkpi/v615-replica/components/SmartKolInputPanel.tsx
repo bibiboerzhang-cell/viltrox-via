@@ -282,6 +282,13 @@ function HistoryStrip({
   );
 }
 
+// 问题5 UI:裸 score(0.55)用户读不懂 → 映射相关度标签,数值进 title 供细看。
+function relevanceTier(score: number): { label: string; cls: string } {
+  if (score >= 0.55) return { label: "高相关", cls: "border-emerald-300/30 bg-emerald-400/[0.08] text-emerald-200" };
+  if (score >= 0.5) return { label: "中相关", cls: "border-cyan-300/25 bg-cyan-400/[0.06] text-cyan-200" };
+  return { label: "相关", cls: "border-white/[0.1] text-slate-400" };
+}
+
 function RecallMiniItem({
   item,
   index,
@@ -294,6 +301,8 @@ function RecallMiniItem({
   const avatar = proxiedImageUrl(item.avatar_url);
   const name = display(item.handle || item.display_name || `KOL #${item.kol_pool_id}`);
   const followers = numberLabel(item.followers);
+  const score = Number(item.recall_rank_score ?? item.vector_score ?? 0);
+  const tier = relevanceTier(score);
   return (
     <button
       type="button"
@@ -308,13 +317,19 @@ function RecallMiniItem({
         {avatar ? <img src={avatar} alt="" className="h-full w-full object-cover" referrerPolicy="no-referrer" /> : name.slice(0, 1).toUpperCase()}
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[11px] font-medium text-slate-100">{name}</span>
+        <span className="flex items-center gap-1.5">
+          <span className="truncate text-[11px] font-medium text-slate-100">{name}</span>
+          {followers ? <span className="shrink-0 text-[9.5px] font-medium text-amber-200/80">{followers}</span> : null}
+        </span>
         <span className="block truncate text-[9.5px] text-slate-500">
-          {display(item.platform, "unknown")} · {item.type_label || item.profile_type || "profile"}{followers ? ` · ${followers}` : ""}
+          {display(item.platform, "unknown")} · {item.type_label || item.profile_type || "profile"}
         </span>
       </span>
-      <span className="shrink-0 rounded-md border border-violet-300/15 px-1.5 py-0.5 text-[9.5px] text-violet-100">
-        {Number(item.recall_rank_score ?? item.vector_score ?? 0).toFixed(2)}
+      <span
+        className={`shrink-0 rounded-md border px-1.5 py-0.5 text-[9.5px] ${tier.cls}`}
+        title={`相关度 ${score.toFixed(3)}`}
+      >
+        {tier.label}
       </span>
     </button>
   );
