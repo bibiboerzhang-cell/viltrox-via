@@ -175,10 +175,15 @@ def _budget_scopes_for_provider(provider: str, cost_scope: str) -> list[str]:
 
 
 def _budget_allows_provider(provider: str, *, cost_scope: str, estimated_cost_usd: float) -> tuple[bool, list[dict[str, Any]]]:
+    # 护栏① enforce(诊断 C-3):require_configured=False —— 仅对真有 caps 行的 scope
+    # (monthly_total / single_call / provider:*)硬拦;无 caps 行的 cost_scope(实测 5 个:
+    # cron:vkpi_sentiment / vkpi_contract_polish / vkpi_kol_outreach_draft /
+    # kol_smart_search_query_plan / cron:vkpi_weekly_summary)视为放行,避免 enforce 把这些
+    # 未配额功能 100% 降级 rule_v0(避雷1:require_configured=True 会全拦死)。
     plan = budget_guard.check_budget_scopes(
         _budget_scopes_for_provider(provider, cost_scope),
         estimated_cost_usd,
-        require_configured=True,
+        require_configured=False,
     )
     return bool(plan.get("allowed")), plan.get("checks") if isinstance(plan.get("checks"), list) else []
 
@@ -544,9 +549,24 @@ def invoke(
                 }
             )
             logger.warning(
-                "vkpi.llm_gateway.provider_budget_record_only",
+                "vkpi.llm_gateway.provider_budget_hard_stop",
                 extra={"provider": provider, "purpose": purpose, "estimated_cost_usd": estimated_cost},
             )
+            # 护栏① enforce:超预算 provider 不再发请求——记零成本台账后跳过,for 循环续 fallback;
+            # 全部 provider 被拦则落 _rule_fallback(rule_v0 不计费),不 raise 不阻断上层。
+            _record_budget_blocked_attempt(
+                provider,
+                purpose=purpose,
+                prompt=safe_prompt,
+                cost_scope=cost_scope,
+                estimated_cost_usd=estimated_cost,
+                budget_checks=budget_checks,
+                triggered_by=triggered_by,
+                metadata=metadata,
+                staff=staff,
+            )
+            errors.append({"provider": provider, "status": "budget_blocked", "error": "budget_blocked"})
+            continue
         result = caller(safe_prompt, max_output_tokens)
         status = str(result.get("status") or "")
         if status == "success" and str(result.get("text") or "").strip():
