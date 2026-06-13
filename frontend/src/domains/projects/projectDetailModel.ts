@@ -167,7 +167,7 @@ export interface ProjectDetailViewProps {
   onAddProjectShipment?: (projectId: string, payload: Record<string, unknown>) => Promise<void>;
   onUploadEvidenceFile?: (file: File, payload?: { entityType?: string; entityId?: string; purpose?: string }) => Promise<Record<string, unknown>>;
   kolOptions?: VkpiKolOption[];
-  onLoadAvailableKols?: (project: VkpiProjectRow) => Promise<VkpiKolOption[]>;
+  onLoadAvailableKols?: (project: VkpiProjectRow, scope?: string) => Promise<VkpiKolOption[]>;
   onAddKolsToCampaign?: (project: VkpiProjectRow, kols: VkpiKolOption[]) => Promise<void>;
   onProjectUpdated?: () => void | Promise<void>;
   onDeleteProject?: (project: VkpiProjectRow, reason?: string, actionLabel?: string) => void | Promise<void>;

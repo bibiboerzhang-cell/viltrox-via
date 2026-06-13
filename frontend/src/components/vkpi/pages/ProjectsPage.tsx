@@ -245,9 +245,10 @@ export function ProjectsPage({
     }
   };
 
-  const loadAvailableKols = async (targetProject: VkpiProjectRow) => {
+  const loadAvailableKols = async (targetProject: VkpiProjectRow, scope = 'favorites') => {
     if (!apiToken) return data.kolOptions;
-    const response = await getAvailableProjectKols(apiToken, targetProject.id);
+    // P0-2 裁决:默认 favorites 子集;scope='all' 是「从全池查找」逃生门。
+    const response = await getAvailableProjectKols(apiToken, targetProject.id, '', scope);
     return buildKolOptions(response.kols || []);
   };
 
@@ -309,7 +310,8 @@ export function ProjectsPage({
         const queryTerms = buildImportSearchTerms(row);
         const candidateMap = new Map<string, VkpiKolOption>();
         for (const term of queryTerms.length ? queryTerms : [row.handle]) {
-          const response = await getAvailableProjectKols(apiToken, targetProject.id, term);
+          // 批量导入匹配走全池(scope=all):按导入 handle 在全库找人,而非仅本人收藏。
+          const response = await getAvailableProjectKols(apiToken, targetProject.id, term, 'all');
           buildKolOptions(response.kols || []).forEach((kol) => candidateMap.set(kol.id, kol));
         }
         let match = findImportKolMatch(row, Array.from(candidateMap.values()));

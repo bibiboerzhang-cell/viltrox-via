@@ -277,13 +277,14 @@ export async function getProjectVideoAnalysisCacheMulti(token: string, projectId
   );
 }
 
-export async function getAvailableProjectKols(token: string, projectId: string, query = "") {
+export async function getAvailableProjectKols(token: string, projectId: string, query = "", scope = "favorites") {
   const params = new URLSearchParams({
     project_id: projectId,
     limit: "500",
   });
   if (query.trim()) params.set("query", query.trim());
-  return apiFetch<{ kols?: Row[]; project_id?: number }>(`/api/marketing/kol-pool/available?${params.toString()}`, {}, token);
+  if (scope) params.set("scope", scope);
+  return apiFetch<{ kols?: Row[]; project_id?: number; scope?: string; total_available?: number; returned?: number; has_more?: boolean }>(`/api/marketing/kol-pool/available?${params.toString()}`, {}, token);
 }
 
 export async function addKolsToProject(token: string, projectId: string, kolPoolIds: string[], assignedStaffId?: string) {

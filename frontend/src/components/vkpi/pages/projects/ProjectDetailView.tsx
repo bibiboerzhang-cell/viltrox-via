@@ -126,6 +126,7 @@ export function ProjectDetailView({
   const [availableKolOptions, setAvailableKolOptions] = useState<VkpiKolOption[]>([]);
   const [loadingAvailableKols, setLoadingAvailableKols] = useState(false);
   const [availableKolError, setAvailableKolError] = useState('');
+  const [availableScope, setAvailableScope] = useState<'favorites' | 'all'>('favorites');
   const [contactRow, setContactRow] = useState<VkpiProjectRow | null>(null);
   const [generateOpen, setGenerateOpen] = useState(false);
   const [generateBusy, setGenerateBusy] = useState(false);
@@ -469,8 +470,8 @@ export function ProjectDetailView({
     else setActionModal({ kind: 'screenshot', target });
   };
 
-  const openAddKolModal = async () => {
-    setAddKolOpen(true);
+  const loadAvailableForScope = async (scope: 'favorites' | 'all') => {
+    setAvailableScope(scope);
     setAvailableKolError('');
     if (!onLoadAvailableKols) {
       setAvailableKolOptions([]);
@@ -478,7 +479,8 @@ export function ProjectDetailView({
     }
     setLoadingAvailableKols(true);
     try {
-      setAvailableKolOptions(await onLoadAvailableKols(project));
+      // P0-2 裁决:默认 favorites 我的收藏子集;'all' 是「从全池查找」逃生门。
+      setAvailableKolOptions(await onLoadAvailableKols(project, scope));
     } catch (error) {
       // 错误必须显在弹窗里(静默 catch 禁令)——此前只发 toast,弹窗里伪装成"没有匹配"。
       const message = error instanceof Error ? error.message : '无法加载可添加 KOL。';
@@ -488,6 +490,11 @@ export function ProjectDetailView({
     } finally {
       setLoadingAvailableKols(false);
     }
+  };
+
+  const openAddKolModal = async () => {
+    setAddKolOpen(true);
+    await loadAvailableForScope('favorites');
   };
 
   const submitActionStub = async (kind: 'screenshot' | 'video' | 'contract', row: VkpiProjectRow, payload: Record<string, unknown>) => {
@@ -1376,6 +1383,8 @@ export function ProjectDetailView({
           busy={addingKols || loadingAvailableKols}
           loading={loadingAvailableKols}
           loadError={availableKolError}
+          scope={availableScope}
+          onSwitchScope={onLoadAvailableKols ? (next) => void loadAvailableForScope(next) : undefined}
           onClose={() => setAddKolOpen(false)}
           onSubmit={addSelectedKols}
         />

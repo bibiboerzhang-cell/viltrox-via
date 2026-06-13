@@ -690,13 +690,22 @@ def list_available_project_kols(
     *,
     query: str = "",
     limit: int = 200,
+    scope_mode: str = "favorites",
     staff: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Return kol_pool rows not yet assigned to this project."""
+    """Return kol_pool rows not yet assigned to this project.
+
+    诊断 P0-2 裁决:默认 scope_mode="favorites" 只返本人收藏子集(三环闭环——收藏即跟进归宿);
+    scope_mode="all" 是显式逃生门(前端「从全池查找」入口触发,查到的人经 add_project_kols
+    自动入收藏)。两种 scope 下乙案占用置灰(claimed_by_other)均生效。
+    """
     ensure_vkpi_schema()
     scope.assert_project_access(project_id, staff)
     limit_i = max(1, min(500, int(limit or 200)))
     conn = get_conn()
+    actor_staff_id = staff_id(staff)
+    want_all = str(scope_mode or "").strip().lower() in {"all", "pool", "global", "全池"}
+    favorites_scoped = bool(not want_all and actor_staff_id)
     filters = [
         """
         NOT EXISTS (
@@ -707,6 +716,17 @@ def list_available_project_kols(
         """
     ]
     params: list[Any] = [int(project_id)]
+    # 默认收藏子集:仅本人已收藏的 pool 行可选;want_all 逃生门跳过此闸。
+    if favorites_scoped:
+        filters.append(
+            """
+            EXISTS (
+                SELECT 1 FROM vkpi_kol_pool_favorites f
+                WHERE f.kol_pool_id = p.id AND f.staff_id = ?
+            )
+            """
+        )
+        params.append(int(actor_staff_id))
     search = str(query or "").strip().lower()
     if search:
         # P2:LIKE 字面语义——转义用户输入中的 \ % _ 并显式 ESCAPE,防通配符注入/全表慢扫。
@@ -765,7 +785,20 @@ def list_available_project_kols(
             item["active_claim_id"] = occ.get("claim_id")
             item["claim_staff_id"] = owner_staff_id
             item["claim_staff_name"] = owner_name
-    return {"kols": items, "project_id": int(project_id)}
+    # 总量(同 filters,不含 limit)——消除「静默截断」错觉(诊断 P1-7 后端半)。
+    total_row = conn.execute(
+        f"SELECT COUNT(*) AS n FROM vkpi_kol_pool p WHERE {' AND '.join(filters)}",
+        tuple(params),
+    ).fetchone()
+    total_available = int(dict(total_row).get("n") or 0) if total_row else len(items)
+    return {
+        "kols": items,
+        "project_id": int(project_id),
+        "scope": "favorites" if favorites_scoped else "all",
+        "total_available": total_available,
+        "returned": len(items),
+        "has_more": total_available > len(items),
+    }
 
 
 def add_project_kols(project_id: int, body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -868,6 +901,23 @@ def add_project_kols(project_id: int, body: dict[str, Any], *, staff: dict[str, 
             skipped_existing += 1
     if inserted:
         conn.execute("UPDATE vkpi_projects SET updated_at=?, last_activity_at=? WHERE id=?", (now, now, int(project_id)))
+    # 裁决「查到的人先入收藏再可选」:加入项目=本人跟进=应在本人收藏内(幂等;含全池逃生门添加)。
+    attached_ids = [kid for kid in kol_pool_ids if kid in existing_pool_ids]
+    if actor_staff_id and attached_ids:
+        ph = ",".join("?" for _ in attached_ids)
+        already_fav = {
+            int(dict(r)["kol_pool_id"])
+            for r in conn.execute(
+                f"SELECT kol_pool_id FROM vkpi_kol_pool_favorites WHERE staff_id=? AND kol_pool_id IN ({ph})",
+                (int(actor_staff_id), *attached_ids),
+            ).fetchall()
+        }
+        for kid in attached_ids:
+            if kid not in already_fav:
+                conn.execute(
+                    "INSERT INTO vkpi_kol_pool_favorites (kol_pool_id, staff_id, note) VALUES (?, ?, ?)",
+                    (int(kid), int(actor_staff_id), "项目添加自动收藏"),
+                )
     conn.commit()
     if inserted:
         _log_project_audit(

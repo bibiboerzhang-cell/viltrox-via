@@ -798,14 +798,19 @@ def list_available_for_project(
     project_id: int = Query(..., ge=1),
     query: str = Query(default=""),
     limit: int = Query(default=200, ge=1, le=500),
+    scope: str = Query(default="favorites"),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
-    """KOL Pool candidates not yet assigned to the project."""
+    """KOL Pool candidates not yet assigned to the project.
+
+    scope=favorites(默认)只返本人收藏子集;scope=all 显式逃生门返全池(诊断 P0-2 裁决)。
+    """
     try:
         return project_workflow.list_available_project_kols(
             project_id,
             query=query,
             limit=limit,
+            scope_mode=scope,
             staff=staff,
         )
     except LookupError as exc:

@@ -516,6 +516,8 @@ export function AddKolModal({
   busy,
   loading = false,
   loadError = '',
+  scope = 'favorites',
+  onSwitchScope,
   onClose,
   onSubmit,
 }: {
@@ -525,6 +527,8 @@ export function AddKolModal({
   busy: boolean;
   loading?: boolean;
   loadError?: string;
+  scope?: 'favorites' | 'all';
+  onSwitchScope?: (scope: 'favorites' | 'all') => void;
   onClose: () => void;
   onSubmit: (selectedKols: VkpiKolOption[]) => Promise<void>;
 }) {
@@ -539,7 +543,7 @@ export function AddKolModal({
   // claim_staff_id/active_claim_id(buildKolOptions 映射 claimStaffId/activeClaimId/claimOwner),
   // 本人占用不下发——故此处有值即「已被他人跟进」,灰态不可勾。
   const isClaimedByOther = (kol: VkpiKolOption) => Boolean(kol.claimStaffId || kol.activeClaimId);
-  const visibleKols = useMemo(() => {
+  const filteredKols = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     return kolOptions.filter((kol) => {
       const normalizedHandle = String(kol.handle || '').toLowerCase();
@@ -548,8 +552,12 @@ export function AddKolModal({
       const matchesPlatform = platform === '全部平台' || kol.platform === platform;
       const matchesClaim = claimFilter === '全部' || (claimFilter === '已被跟进' ? isClaimedByOther(kol) : !isClaimedByOther(kol));
       return !joined && matchesQuery && matchesPlatform && matchesClaim;
-    }).slice(0, 80);
+    });
   }, [claimFilter, joinedHandles, joinedIds, kolOptions, platform, query]);
+  // 诊断 P1-7 前端半:截断显形,不再静默丢弃。
+  const RENDER_CAP = 80;
+  const visibleKols = useMemo(() => filteredKols.slice(0, RENDER_CAP), [filteredKols]);
+  const truncatedCount = Math.max(0, filteredKols.length - visibleKols.length);
   const selectedKols = useMemo(
     () => kolOptions.filter((kol) => selectedIds.has(kol.id) && !isClaimedByOther(kol)),
     [kolOptions, selectedIds],
@@ -601,13 +609,34 @@ export function AddKolModal({
             <option style={{ background: '#0a0a0d' }}>已被跟进</option>
           </select>
         </div>
+        {onSwitchScope ? (
+          <div className="flex items-center justify-between mb-2 px-0.5">
+            <span className="text-[10px] text-slate-400">
+              {scope === 'favorites'
+                ? '范围:我的收藏(跟进归宿)'
+                : '范围:全池查找 · 选中者将自动加入我的收藏'}
+            </span>
+            <button
+              type="button"
+              className="text-[10px] px-2 py-0.5 rounded border border-white/[0.1] text-cyan-300 hover:text-cyan-200 hover:border-cyan-400/40 disabled:opacity-50"
+              disabled={busy}
+              onClick={() => onSwitchScope(scope === 'favorites' ? 'all' : 'favorites')}
+            >
+              {scope === 'favorites' ? '从全池查找 →' : '← 回到我的收藏'}
+            </button>
+          </div>
+        ) : null}
         <div className="flex-1 overflow-y-auto -mx-1 px-1 max-h-[50vh]">
           {loadError ? (
             <div className="text-center py-8 text-[11px] text-rose-300">候选加载失败：{loadError} —— 关闭重开重试；若提示权限(scope)请重新登录或联系管理员。</div>
           ) : loading ? (
             <div className="text-center py-8 text-[11px] text-slate-500">候选 KOL 加载中…</div>
           ) : visibleKols.length === 0 ? (
-            <div className="text-center py-8 text-[11px] text-slate-500">没有匹配的 KOL，或全部已加入</div>
+            <div className="text-center py-8 text-[11px] text-slate-500">
+              {scope === 'favorites' && onSwitchScope
+                ? '我的收藏里没有可加入的 KOL ——试试右上「从全池查找」'
+                : '没有匹配的 KOL，或全部已加入'}
+            </div>
           ) : (
             <div className="space-y-1.5">
               {visibleKols.map((kol) => {
@@ -635,6 +664,11 @@ export function AddKolModal({
                   </label>
                 );
               })}
+              {truncatedCount > 0 ? (
+                <div className="text-center py-2 text-[10px] text-slate-500">
+                  仅显示前 {RENDER_CAP} 个,另有 {truncatedCount} 个未列出——请用搜索缩小范围
+                </div>
+              ) : null}
             </div>
           )}
         </div>
