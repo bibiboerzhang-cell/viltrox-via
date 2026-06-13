@@ -24,6 +24,7 @@ DEFAULT_FLAGS = {
     "ml_scoring": "机器学习评分，默认关闭",
     "llm_summary": "大模型总结润色，默认关闭",
     "youtube_kpi_reserved": "YouTube KPI 接入预留",
+    "business_email_enrichment": "公开商务邮箱富化（白名单来源，PII 合规门禁，默认关闭）",
 }
 
 DEFAULT_FLAG_ENABLED = {

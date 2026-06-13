@@ -144,6 +144,26 @@ def _v6_breakdown_for_item(item: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def _whitelisted_other_contacts(raw_payload: dict[str, Any]) -> str:
+    """P0-1: 只从导入侧已携带的白名单联系字段取值,序列化为 other_contacts_json。
+
+    合规边界:不做网络抓取、不做全网正则;仅采纳显式 contact 字段。网络侧的公开商务邮箱
+    富化走 business_contact_extract.enrich_business_contacts(默认 feature_flag OFF)。
+    """
+    out: list[dict[str, Any]] = []
+    for key in ("business_email", "contact_email", "public_email"):
+        val = str(raw_payload.get(key) or "").strip()
+        if val and "@" in val:
+            out.append({"contact_type": "business_email", "contact_value": val, "contact_source": "manual"})
+    links = raw_payload.get("contact_links") or raw_payload.get("external_links")
+    if isinstance(links, list):
+        for ln in links:
+            sval = str(ln or "").strip()
+            if sval:
+                out.append({"contact_type": "link", "contact_value": sval, "contact_source": "manual"})
+    return _json(out) if out else "[]"
+
+
 def import_items(items: list[dict[str, Any]], *, source_type: str = "manual", source_ref: str = "", platform: str = "", staff: dict[str, Any] | None = None) -> dict[str, Any]:
     ensure_vkpi_product_industry_schema()
     actor = resolve_staff_id(staff) or None
@@ -159,6 +179,10 @@ def import_items(items: list[dict[str, Any]], *, source_type: str = "manual", so
             skipped += 1
             continue
         raw_payload = dict(item["raw"] or {})
+        # P0-1: 入池时若 raw 已含手填/导入侧公开商务联系方式,带 contact_source 留痕落 other_contacts_json。
+        # 严格白名单:仅采纳显式 contact 字段(manual);不在此处做任何网络抓取/全网正则。
+        item["_other_contacts"] = _whitelisted_other_contacts(raw_payload)
+        item["_contact_source"] = "manual" if item.get("email") and item["_other_contacts"] not in ("", "[]") else ""
         responsible_staff_id, match_status, owner_names = _resolve_responsible_staff(raw_payload, staff_lookup)
         if owner_names:
             raw_payload["owner_names"] = owner_names
@@ -171,16 +195,19 @@ def import_items(items: list[dict[str, Any]], *, source_type: str = "manual", so
             """
             INSERT INTO vkpi_kol_pool
 +                (pool_uid, platform, handle, profile_url, display_name, avatar_url, bio, email,
++                 other_contacts_json, contact_source,
 +                 followers, following, posts_count, avg_views, avg_likes, avg_comments,
 +                 engagement_rate, source_type, source_ref, raw_platform_data, created_by_staff_id,
 +                 last_seen_at, created_at, updated_at)
-+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
++            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 +            ON CONFLICT(platform, handle) DO UPDATE SET
 +                profile_url=excluded.profile_url,
 +                display_name=excluded.display_name,
 +                avatar_url=excluded.avatar_url,
 +                bio=excluded.bio,
 +                email=excluded.email,
++                other_contacts_json=CASE WHEN excluded.other_contacts_json <> '[]' THEN excluded.other_contacts_json ELSE vkpi_kol_pool.other_contacts_json END,
++                contact_source=CASE WHEN excluded.contact_source <> '' THEN excluded.contact_source ELSE vkpi_kol_pool.contact_source END,
 +                followers=excluded.followers,
 +                following=excluded.following,
 +                posts_count=excluded.posts_count,
@@ -203,6 +230,8 @@ def import_items(items: list[dict[str, Any]], *, source_type: str = "manual", so
                 item["avatar_url"],
                 item["bio"],
                 item["email"],
+                item.get("_other_contacts") or "[]",
+                item.get("_contact_source") or "",
                 item["followers"],
                 item["following"],
                 item["posts_count"],
