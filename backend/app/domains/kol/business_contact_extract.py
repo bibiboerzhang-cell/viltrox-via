@@ -17,6 +17,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.db.connection import get_conn
+from app.domains.costs.budget_guard import check_budget, record_cost
+
+# Apify 专抓 about 页的单次预估成本上限(USD);超此或闸不过 → 拒抓。
+# YouTube channel-about actor 单跑约 $0.01-0.03 量级,取 0.05 保守预估。
+APIFY_ABOUT_EST_COST_USD = 0.05
+APIFY_BUDGET_SCOPE = "provider:apify"
 
 # 白名单来源标签(写入 contact_source)
 SOURCE_YOUTUBE_ABOUT = "youtube_about_declared"
@@ -49,12 +55,38 @@ def _flag_enabled() -> bool:
     return bool(row and row["enabled"])  # 缺行视为关
 
 
-def _budget_ok() -> bool:
-    """闸A:Apify 预算闸。零成本来源(已抓回 raw)走这里仍返回 True;真要 Apify 专抓 about 页
-    (Jianbo 已授权)由调用方先查 vkpi_budget_settings 'apify' 闸,预算不足则不发 call。
+def _budget_ok(*, est_cost: float = 0.0) -> bool:
+    """闸A:Apify 预算闸预检(双闸并查,防御纵深)。
+
+    零成本来源(纯读已抓回 raw,est_cost=0)默认放行;真要 Apify 专抓 about 页(Jianbo 已授权)
+    传入 est_cost>0 时,必须同时过两道闸才放行:
+      1) budget_guard 硬闸 vkpi_provider_budget_caps scope='provider:apify'(check_budget,与既有
+         record_apify_run_cost 记账同 scope,累计 spend 对齐)。
+      2) 操作员月度上限 vkpi_budget_settings budget_key='apify'(enabled 且 monthly>0 且 remaining>0)。
+    任一闸不过 → 拒抓(返回 False),不发 Apify call。闸查异常一律保守拒抓。
     """
-    # TODO: 复用 vkpi_budget_settings 'apify' 闸预检;此处占位,授权前不接 Apify 专抓。
-    return True
+    cost = max(0.0, float(est_cost or 0))
+    if cost <= 0:
+        # 零成本路径(只读已抓 raw):仍需 budget_guard 未硬停才放行,保持与记账闸一致。
+        try:
+            return bool(check_budget(APIFY_BUDGET_SCOPE, 0.0, require_configured=False))
+        except Exception:
+            return False
+    try:
+        if not check_budget(APIFY_BUDGET_SCOPE, cost, require_configured=True):
+            return False
+    except Exception:
+        return False
+    # 操作员月度上限(vkpi_budget_settings 'apify')预检。
+    try:
+        from app.domains.settings.platform_crawl import _budget_available
+        row = get_conn().execute(
+            "SELECT * FROM vkpi_budget_settings WHERE budget_key=?", ("apify",)
+        ).fetchone()
+        ok, _monthly, _spent, _remaining = _budget_available(dict(row) if row else None)
+        return bool(ok)
+    except Exception:
+        return False
 
 
 def _extract_from_text(text: str, source: str) -> list[dict[str, Any]]:
@@ -116,8 +148,9 @@ def enrich_business_contacts(kol_pool_id: int, *, staff: dict[str, Any] | None =
     """
     if not _flag_enabled():
         return {"status": "disabled", "reason": "feature_flag business_email_enrichment OFF"}
-    if not _budget_ok():
-        return {"status": "budget_blocked", "reason": "apify budget gate"}
+    # 第一道预检:纯读已抓 raw 走零成本路径(est_cost=0),仅查 budget_guard 未硬停。
+    if not _budget_ok(est_cost=0.0):
+        return {"status": "budget_blocked", "reason": "apify budget gate (provider:apify hard-stopped)"}
     conn = get_conn()
     row = conn.execute("SELECT raw_platform_data, platform, email, other_contacts_json FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)).fetchone()
     if not row:
@@ -127,8 +160,22 @@ def enrich_business_contacts(kol_pool_id: int, *, staff: dict[str, Any] | None =
     except Exception:
         raw = {}
     contacts = extract_public_business_contacts(raw, platform=str(row["platform"] or ""))
+    apify_run_ref = ""
+    # raw 内无白名单联系 → Apify 专抓 about 页兜底(Jianbo 已授权;est_cost>0 触发双闸硬预检)。
     if not contacts:
-        return {"status": "no_public_contact", "kol_pool_id": int(kol_pool_id)}
+        platform = str(row["platform"] or "")
+        if _budget_ok(est_cost=APIFY_ABOUT_EST_COST_USD):
+            scraped_raw, apify_run_ref = _apify_scrape_about(
+                platform=platform,
+                handle=str((raw.get("profile") or {}).get("handle") or ""),
+                profile_url=str((raw.get("profile") or {}).get("profile_url") or (raw.get("profile") or {}).get("url") or ""),
+                kol_pool_id=int(kol_pool_id),
+                staff=staff,
+            )
+            if scraped_raw:
+                contacts = extract_public_business_contacts(scraped_raw, platform=platform)
+    if not contacts:
+        return {"status": "no_public_contact", "kol_pool_id": int(kol_pool_id), "apify_run_ref": apify_run_ref}
     now = _utcnow()
     actor = (staff or {}).get("staff_id") or (staff or {}).get("user_id")
     primary = contacts[0]["contact_value"]
@@ -156,4 +203,44 @@ def enrich_business_contacts(kol_pool_id: int, *, staff: dict[str, Any] | None =
         (primary, json.dumps(contacts, ensure_ascii=False), contacts[0]["contact_source"], now, now, int(kol_pool_id)),
     )
     conn.commit()
-    return {"status": "enriched", "kol_pool_id": int(kol_pool_id), "contacts": len(contacts), "source": contacts[0]["contact_source"]}
+    return {"status": "enriched", "kol_pool_id": int(kol_pool_id), "contacts": len(contacts), "source": contacts[0]["contact_source"], "apify_run_ref": apify_run_ref}
+
+
+def _apify_scrape_about(*, platform: str, handle: str, profile_url: str, kol_pool_id: int, staff: dict[str, Any] | None = None) -> tuple[dict[str, Any], str]:
+    """Apify 专抓 about 页(默认仅 youtube 有现成 about 抓取链路)。
+
+    复用既有 YouTubeCrawler + record_apify_run_cost 记账(industry_crawlers),不新写 ApifyClient。
+    返回 (raw_platform_data 形 dict, apify_run_ref)。任一异常 → 返回 ({}, '') 不阻断。
+    记账由 crawler 内 record_apify_run_cost 落 vkpi_provider_budget_caps('provider:apify'),此处再补一条
+    带 kol_pool_id/about 用途的 record_cost 留痕 apify_run_ref(便于合规追溯单条富化的 Apify 归因)。
+    红线:抓回的 raw 只喂 extract_public_business_contacts;绝不触 viltrox_fit_score。
+    """
+    if platform != "youtube":
+        return {}, ""
+    try:
+        from app.platform.industry_crawlers import get_crawler
+        crawler = get_crawler("youtube")
+        if crawler is None:
+            return {}, ""
+        result = crawler.crawl_channel_profile(profile_url or handle, max_posts=1)
+        if not isinstance(result, dict) or str(result.get("provider_status") or "") != "ok":
+            return {}, ""
+        items = result.get("items") or []
+        profile = items[0] if items and isinstance(items[0], dict) else {}
+        apify_run_ref = str(((result.get("raw") or {}).get("apify_run_id")) or result.get("apify_run_id") or "")
+        # 补一条带 kol_pool_id + about 用途的归因记账(crawler 已记主成本,此处 cost_usd=0 仅留 ref)。
+        try:
+            record_cost(
+                scope=APIFY_BUDGET_SCOPE,
+                ai_provider="apify",
+                model_name="about_scrape",
+                cost_usd=0.0,
+                kol_pool_id=int(kol_pool_id),
+                staff_id=int((staff or {}).get("staff_id") or (staff or {}).get("user_id") or 0) or None,
+                metadata={"operation": "business_email_about_scrape", "apify_run_ref": apify_run_ref, "platform": platform},
+            )
+        except Exception:
+            pass
+        return ({"profile": profile}, apify_run_ref)
+    except Exception:
+        return {}, ""

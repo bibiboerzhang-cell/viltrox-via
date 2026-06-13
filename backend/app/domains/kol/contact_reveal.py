@@ -1,0 +1,129 @@
+"""P0-1 二期:KOL 池联系方式真值展开(二次确认 + 访问审计 hook)。
+
+读端默认脱敏(pool_common.mask_pool_item 在 list_pool/get_item 出口套用,掩码 e***@d***)。
+真值仅经本模块 view_kol_contact 展开:必须 confirm=True 二次确认,且每次展开写
+vkpi_sensitive_access_logs(audit/service.log_sensitive_access)+ 更新 vkpi_kol_pool 审计计数列
+(118 迁移:contact_reveal_count / contact_last_revealed_at / contact_last_revealed_by_staff_id)。
+
+红线:只读真值 email/other_contacts_json + 写审计列;绝不触 viltrox_fit_score 或任何业务/排序列。
+"""
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+from typing import Any
+
+from app.db.connection import get_conn, is_postgres_runtime
+
+
+def _utcnow() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _ensure_contact_audit_schema() -> None:
+    """本地 SQLite 兼容:幂等补 118 迁移的审计列(Postgres 走正式迁移序列,不进此分支)。"""
+    if is_postgres_runtime():
+        return
+    conn = get_conn()
+    try:
+        cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(vkpi_kol_pool)").fetchall()}
+    except Exception:
+        return
+    try:
+        if "contact_reveal_count" not in cols:
+            conn.execute("ALTER TABLE vkpi_kol_pool ADD COLUMN contact_reveal_count INTEGER NOT NULL DEFAULT 0")
+        if "contact_last_revealed_at" not in cols:
+            conn.execute("ALTER TABLE vkpi_kol_pool ADD COLUMN contact_last_revealed_at TEXT")
+        if "contact_last_revealed_by_staff_id" not in cols:
+            conn.execute("ALTER TABLE vkpi_kol_pool ADD COLUMN contact_last_revealed_by_staff_id INTEGER")
+        conn.commit()
+    except Exception:
+        pass
+
+
+def _loads(value: Any) -> Any:
+    if isinstance(value, (list, dict)):
+        return value
+    try:
+        return json.loads(str(value or ""))
+    except Exception:
+        return []
+
+
+def view_kol_contact(
+    kol_pool_id: int,
+    *,
+    confirm: bool = False,
+    staff: dict[str, Any] | None = None,
+    page_path: str = "",
+    ip: str = "",
+    user_agent: str = "",
+) -> dict[str, Any]:
+    """展开单个 KOL 池条目的真值联系方式。
+
+    confirm 必须显式为 True(前端二次确认弹窗回传)否则返回脱敏值 + need_confirm,不写审计。
+    confirm=True:写 sensitive access 审计 + 更新展开计数,返回真值 email/other_contacts。
+    """
+    from app.domains.kol.pool_common import _mask_email, _mask_contacts_json
+
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT id, email, other_contacts_json FROM vkpi_kol_pool WHERE id=?",
+        (int(kol_pool_id),),
+    ).fetchone()
+    if not row:
+        raise LookupError("kol pool item not found")
+    real_email = str(row["email"] or "")
+    real_contacts = _loads(row["other_contacts_json"])
+
+    if not confirm:
+        return {
+            "status": "need_confirm",
+            "kol_pool_id": int(kol_pool_id),
+            "email": _mask_email(real_email),
+            "other_contacts": _loads(_mask_contacts_json(row["other_contacts_json"])),
+            "contact_masked": True,
+        }
+
+    staff_id = int((staff or {}).get("staff_id") or (staff or {}).get("user_id") or 0)
+    # 访问审计(复用既有 sensitive access 设施;keyword-only)。
+    try:
+        from app.domains.audit.service import log_sensitive_access
+
+        log_sensitive_access(
+            staff_id=staff_id,
+            action_type="view_kol_pool_contact",
+            resource_type="kol_pool",
+            resource_id=str(int(kol_pool_id)),
+            page_path=page_path,
+            ip=ip,
+            user_agent=user_agent,
+            metadata={"revealed": ["email", "other_contacts_json"], "has_email": bool(real_email)},
+        )
+    except Exception:
+        pass
+
+    # 更新展开计数留痕(118 列;SQLite 幂等建)。审计写失败不阻断真值返回。
+    try:
+        _ensure_contact_audit_schema()
+        conn.execute(
+            """
+            UPDATE vkpi_kol_pool
+            SET contact_reveal_count = COALESCE(contact_reveal_count, 0) + 1,
+                contact_last_revealed_at = ?,
+                contact_last_revealed_by_staff_id = ?
+            WHERE id = ?
+            """,
+            (_utcnow(), staff_id or None, int(kol_pool_id)),
+        )
+        conn.commit()
+    except Exception:
+        pass
+
+    return {
+        "status": "revealed",
+        "kol_pool_id": int(kol_pool_id),
+        "email": real_email,
+        "other_contacts": real_contacts,
+        "contact_masked": False,
+    }

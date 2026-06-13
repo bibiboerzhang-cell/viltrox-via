@@ -25,9 +25,69 @@ from typing import Any
 
 from app.db.connection import get_conn
 
+# Qdrant collection(与 profile_recall.COLLECTION_NAME 同源,避免漂移)。
+QDRANT_COLLECTION = "vkpi_kol_profile_index_v1"
+
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _delete_qdrant_points(point_ids: list[str]) -> dict[str, Any]:
+    """删 Qdrant 外部 points(collection vkpi_kol_profile_index_v1)。
+
+    复用 profile_recall._qdrant_client()(同一 client 配置:QDRANT_URL 或本地 path),
+    用 http.models.PointIdsList 作 points_selector。返回 {deleted, failed, error}。
+    collection 不存在 / client 不可用 → 记 skipped,不抛(删除可重试且不留悬挂)。
+    """
+    result: dict[str, Any] = {"requested": list(point_ids), "deleted": [], "failed": [], "status": "skipped"}
+    if not point_ids:
+        result["status"] = "noop"
+        return result
+    try:
+        from app.domains.kol.profile_recall import _qdrant_client
+        from qdrant_client.http import models as qdrant_models
+        client = _qdrant_client()
+        if not client.collection_exists(QDRANT_COLLECTION):
+            result["status"] = "collection_absent"
+            return result
+        client.delete(
+            collection_name=QDRANT_COLLECTION,
+            points_selector=qdrant_models.PointIdsList(points=list(point_ids)),
+            wait=True,
+        )
+        result["deleted"] = list(point_ids)
+        result["status"] = "done"
+    except Exception as exc:
+        result["failed"] = list(point_ids)
+        result["status"] = "error"
+        result["error"] = str(exc)
+    return result
+
+
+def _delete_r2_objects(r2_keys: list[str]) -> dict[str, Any]:
+    """删 R2 外部资产。逐 key 调既有 app.services.media.r2.delete_object(未配置/失败返 False,不抛)。"""
+    result: dict[str, Any] = {"requested": list(r2_keys), "deleted": [], "failed": [], "status": "skipped"}
+    if not r2_keys:
+        result["status"] = "noop"
+        return result
+    try:
+        from app.services.media import r2
+    except Exception as exc:
+        result["status"] = "error"
+        result["error"] = f"r2_import_failed:{exc}"
+        result["failed"] = list(r2_keys)
+        return result
+    for key in r2_keys:
+        try:
+            if r2.delete_object(key):
+                result["deleted"].append(key)
+            else:
+                result["failed"].append(key)
+        except Exception:
+            result["failed"].append(key)
+    result["status"] = "done" if not result["failed"] else ("partial" if result["deleted"] else "error")
+    return result
 
 
 def collect_subject_footprint(kol_pool_id: int) -> dict[str, Any]:
@@ -73,12 +133,15 @@ def erase_subject(kol_pool_id: int, *, dsar_request_id: int, staff: dict[str, An
     footprint = collect_subject_footprint(kol_pool_id)
     receipt: dict[str, Any] = {"started_at": _utcnow()}
 
-    # 1) 外部 Qdrant points(无法靠 DB CASCADE)—— TODO: 用项目内既有 Qdrant 封装 delete points
-    receipt["qdrant_points"] = footprint.get("qdrant_point_ids") or []
-    # TODO: 项目内向量库封装 delete_points(ids=receipt['qdrant_points'])(确认 collection 名)
+    # 1) 外部 Qdrant points(无法靠 DB CASCADE)—— 用 profile_recall 同源 client + http.models.PointIdsList。
+    qdrant_point_ids = [str(p) for p in (footprint.get("qdrant_point_ids") or []) if str(p or "").strip()]
+    receipt["qdrant_points"] = qdrant_point_ids
+    receipt["qdrant_deleted"] = _delete_qdrant_points(qdrant_point_ids)
 
-    # 2) 外部 R2 资产 —— TODO: 项目内既有 R2 封装 delete_objects(.venv 已确认 boto3 可用)
-    receipt["r2_keys"] = footprint.get("r2_keys") or []
+    # 2) 外部 R2 资产 —— 用既有 app.services.media.r2.delete_object(.venv 已确认 boto3 可用)。
+    r2_keys = [str(k) for k in (footprint.get("r2_keys") or []) if str(k or "").strip()]
+    receipt["r2_keys"] = r2_keys
+    receipt["r2_deleted"] = _delete_r2_objects(r2_keys)
 
     # 3) 无 FK 表:profile_deep + analysis_cache(字符串键)显式删
     deleted: dict[str, int] = {}

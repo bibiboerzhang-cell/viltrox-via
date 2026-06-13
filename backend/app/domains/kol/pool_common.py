@@ -163,6 +163,66 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _mask_email(value: Any) -> str:
+    """读端邮箱脱敏:e***@d***。空/无效原样返回(空串)。
+
+    合规:列表与详情默认掩码,真值仅 view_kol_contact 二次确认 + 审计后返回。
+    """
+    text = str(value or "").strip()
+    if not text or "@" not in text:
+        return text
+    local, _, domain = text.partition("@")
+    masked_local = (local[0] + "***") if local else "***"
+    masked_domain = (domain[0] + "***") if domain else "***"
+    return f"{masked_local}@{masked_domain}"
+
+
+def _mask_contact_value(contact_type: Any, value: Any) -> str:
+    """按 contact_type 脱敏:email 类走 e***@d***;其它(phone/whatsapp/url)保留首尾各 1 位。"""
+    text = str(value or "").strip()
+    if not text:
+        return text
+    ctype = str(contact_type or "").strip().lower()
+    if "email" in ctype or "@" in text:
+        return _mask_email(text)
+    if len(text) <= 4:
+        return "***"
+    return f"{text[0]}***{text[-1]}"
+
+
+def _mask_contacts_json(value: Any) -> str:
+    """对 other_contacts_json(list[dict]) 逐条脱敏 contact_value。非法 JSON → 原样返回。"""
+    data = _loads(value, default=None)
+    if not isinstance(data, list):
+        return value if isinstance(value, str) else json.dumps(data or [], ensure_ascii=False)
+    out: list[Any] = []
+    for item in data:
+        if isinstance(item, dict):
+            masked = dict(item)
+            if "contact_value" in masked:
+                masked["contact_value"] = _mask_contact_value(masked.get("contact_type"), masked.get("contact_value"))
+            out.append(masked)
+        else:
+            out.append(item)
+    return json.dumps(out, ensure_ascii=False)
+
+
+def mask_pool_item(item: dict[str, Any]) -> dict[str, Any]:
+    """读端联系列默认脱敏(就地浅拷贝)。列表/详情序列化出口统一套用。
+
+    红线:只改 email/other_contacts_json 展示值;不触任何 fit/质量/产品线列。
+    """
+    if not isinstance(item, dict):
+        return item
+    masked = dict(item)
+    if "email" in masked and masked.get("email"):
+        masked["email"] = _mask_email(masked.get("email"))
+    if "other_contacts_json" in masked and masked.get("other_contacts_json"):
+        masked["other_contacts_json"] = _mask_contacts_json(masked.get("other_contacts_json"))
+    masked["contact_masked"] = True
+    return masked
+
+
 def _kol_pool_cache_key(name: str, **params: Any) -> str:
     parts = [f"{key}:{params[key]}" for key in sorted(params)]
     return f"vkpi:kol_pool:{name}:{':'.join(parts)}"

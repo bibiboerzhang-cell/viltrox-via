@@ -13,6 +13,7 @@ from app.domains.industry.snapshot_kpis import calculate_kpis
 from app.domains.kol.pool_common import (
     ENRICHABLE_PLATFORMS,
     KOL_POOL_LIST_COLUMNS,
+    mask_pool_item,
     KOL_POOL_LIST_EXTRA_SELECT,
     _average_from_total,
     _bio,
@@ -300,7 +301,7 @@ def list_pool(
         f"SELECT {select_clause} FROM vkpi_kol_pool {clause} ORDER BY {order_clause} LIMIT ? OFFSET ?",
         (*params, safe_limit, safe_offset),
     ).fetchall()
-    return _kol_pool_cache_store(cache_key, {"items": [dict(row) for row in rows]})
+    return _kol_pool_cache_store(cache_key, {"items": [mask_pool_item(dict(row)) for row in rows]})
 
 
 def _pool_filter_clause(
@@ -881,7 +882,7 @@ def get_item(kol_pool_id: int) -> dict[str, Any]:
     row = get_conn().execute("SELECT * FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)).fetchone()
     if not row:
         raise LookupError("kol pool item not found")
-    item = dict(row)
+    item = mask_pool_item(dict(row))
     item["v6_breakdown"] = _v6_breakdown_for_item(item)
     item["video_evidence"] = _video_evidence_for_kol(int(kol_pool_id), limit=3)
     return {"item": item}

@@ -154,6 +154,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "115_vkpi_kol_pool_contact_provenance.sql",
     "116_vkpi_pii_export_ledger.sql",
     "117_vkpi_dsar_requests.sql",
+    "118_vkpi_kol_pool_contact_audit.sql",
 )
 
 try:
