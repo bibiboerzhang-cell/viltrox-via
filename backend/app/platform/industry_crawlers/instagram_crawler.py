@@ -170,11 +170,17 @@ class InstagramCrawler:
         *,
         channel_id: str = "",
         max_posts: int = 12,
+        since: str = "",
     ) -> dict[str, Any]:
-        """抓取 IG 账号 profile + 最近 N 帖"""
+        """抓取 IG 账号 profile + 最近 N 帖
+
+        since: 增量游标(ISO YYYY-MM-DD)。空=维持现状(向后兼容)。
+        profile-scraper actor 不支持日期字段 → since 非空仅放宽 resultsLimit 窗口(12→48),
+        真正日期裁剪由 url_deep_crawl._filter_incremental_profile_videos 客户端完成。
+        """
         if not self.configured:
             return self._not_configured("crawl_channel_profile")
-        
+
         ref = self.normalize_handle_ref(handle_or_url)
         if ref["kind"] == "empty":
             return {
@@ -184,11 +190,13 @@ class InstagramCrawler:
                 "items": [],
                 "message": "handle 为空",
             }
-        
+
         # Apify input 格式 (instagram-profile-scraper)
+        # since 非空且 actor 无日期游标 → 放宽 resultsLimit 窗口(12→48)给客户端裁剪留余量;空=原口径不变。
+        _results_cap = 48 if str(since or "").strip() else 12
         input_payload: dict[str, Any] = {
             "usernames": [ref["value"]] if ref["kind"] == "handle" else [],
-            "resultsLimit": max(1, min(12, int(max_posts or 12))),
+            "resultsLimit": max(1, min(_results_cap, int(max_posts or 12))),
             "addParentData": False,
         }
         if ref["kind"] == "query":
@@ -205,11 +213,16 @@ class InstagramCrawler:
         channel_id: str,
         *,
         max_results: int = 25,
+        since: str = "",
     ) -> dict[str, Any]:
-        """抓取最近视频/帖子. 对 IG 来说 channel_id 可以是 username 或 profile URL."""
+        """抓取最近视频/帖子. 对 IG 来说 channel_id 可以是 username 或 profile URL.
+
+        since: 增量游标(ISO YYYY-MM-DD)。空=维持现状。posts actor apify~instagram-scraper
+        支持 onlyPostsNewerThan → since 非空时下推到爬虫端(真增量)。
+        """
         if not self.configured:
             return self._not_configured("crawl_channel_videos")
-        
+
         if not channel_id:
             return {
                 "provider": "instagram",
@@ -218,7 +231,7 @@ class InstagramCrawler:
                 "items": [],
                 "message": "channel_id (username) 为空",
             }
-        
+
         ref = self.normalize_handle_ref(channel_id)
         if ref["kind"] == "handle":
             direct_url = f"https://www.instagram.com/{ref['value'].lstrip('@')}/"
@@ -230,6 +243,9 @@ class InstagramCrawler:
             "resultsLimit": max(1, min(_max_post_results(), int(max_results or 25))),
             "addParentData": False,
         }
+        _since = str(since or "").strip()
+        if _since:
+            input_payload["onlyPostsNewerThan"] = _since
         return self._start_run(input_payload, actor_id=self.posts_actor_id)
 
     def crawl_video_comments(

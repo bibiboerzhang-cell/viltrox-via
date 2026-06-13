@@ -165,11 +165,16 @@ class TikTokCrawler:
         *,
         channel_id: str = "",
         max_posts: int = 12,
+        since: str = "",
     ) -> dict[str, Any]:
-        """抓取 TikTok 账号 profile + 最近 N 帖"""
+        """抓取 TikTok 账号 profile + 最近 N 帖
+
+        since: 增量游标(ISO YYYY-MM-DD)。空=维持现状(向后兼容)。
+        clockworks/tiktok-scraper 支持 oldestPostDate → since 非空时下推(真增量)。
+        """
         if not self.configured:
             return self._not_configured("crawl_channel_profile")
-        
+
         ref = self.normalize_handle_ref(handle_or_url)
         if ref["kind"] == "empty":
             return {
@@ -179,7 +184,7 @@ class TikTokCrawler:
                 "items": [],
                 "message": "handle 为空",
             }
-        
+
         # Apify clockworks/tiktok-scraper input
         input_payload: dict[str, Any] = {
             "profiles": [ref["value"]] if ref["kind"] == "handle" else [],
@@ -189,6 +194,9 @@ class TikTokCrawler:
             "shouldDownloadSubtitles": False,
             "shouldDownloadSlideshowImages": False,
         }
+        _since_m = re.search(r"\d{4}-\d{2}-\d{2}", str(since or ""))
+        if _since_m:
+            input_payload["oldestPostDate"] = _since_m.group(0)
         if ref["kind"] == "query":
             input_payload["searchQueries"] = [ref["value"]]
             input_payload["searchSection"] = "user"
@@ -202,11 +210,15 @@ class TikTokCrawler:
         channel_id: str,
         *,
         max_results: int = 25,
+        since: str = "",
     ) -> dict[str, Any]:
-        """抓取最近视频. channel_id 就是 username (不带 @)."""
+        """抓取最近视频. channel_id 就是 username (不带 @).
+
+        since: 增量游标(ISO YYYY-MM-DD)。空=维持现状;非空下推 oldestPostDate(真增量)。
+        """
         if not self.configured:
             return self._not_configured("crawl_channel_videos")
-        
+
         if not channel_id:
             return {
                 "provider": "tiktok",
@@ -215,13 +227,16 @@ class TikTokCrawler:
                 "items": [],
                 "message": "channel_id (username) 为空",
             }
-        
+
         input_payload = {
             "profiles": [channel_id.lstrip("@")],
             "resultsPerPage": self._max_profile_results(int(max_results or 25)),
             "shouldDownloadVideos": False,
             "shouldDownloadCovers": False,
         }
+        _since_m = re.search(r"\d{4}-\d{2}-\d{2}", str(since or ""))
+        if _since_m:
+            input_payload["oldestPostDate"] = _since_m.group(0)
         return self._start_run(input_payload)
 
     def crawl_video_comments(

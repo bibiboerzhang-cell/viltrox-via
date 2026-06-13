@@ -15,6 +15,20 @@ import urllib.request
 from typing import Any
 
 
+def _since_to_rfc3339(since: str | None) -> str:
+    """增量游标(YYYY-MM-DD 或含时间)→ RFC3339(publishedAfter 用)。
+    游标来源 url_deep_crawl._parse_date 恒 YYYY-MM-DD;无法识别返回空串(=不下推 since,退回全量+客户端裁剪)。"""
+    text = str(since or "").strip()
+    if not text:
+        return ""
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", text):
+        return f"{text}T00:00:00Z"
+    if re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", text):
+        return text if text.endswith("Z") or "+" in text[11:] else f"{text}Z"
+    match = re.search(r"(\d{4}-\d{2}-\d{2})", text)
+    return f"{match.group(1)}T00:00:00Z" if match else ""
+
+
 YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3"
 DEFAULT_MAX_CHANNEL_VIDEOS = 10000
 DEFAULT_APIFY_ACTOR_ID = "streamers/youtube-scraper"
@@ -249,7 +263,7 @@ class YouTubeCrawler:
             },
         )
 
-    def crawl_channel_profile(self, handle_or_url: str, *, channel_id: str = "", max_posts: int = 1) -> dict[str, Any]:
+    def crawl_channel_profile(self, handle_or_url: str, *, channel_id: str = "", max_posts: int = 1, since: str | None = None) -> dict[str, Any]:
         if not self.configured:
             return self._not_configured("crawl_channel_profile")
         channel_ref = {"kind": "channel_id", "value": channel_id} if channel_id else self.normalize_channel_ref(handle_or_url)
@@ -292,24 +306,26 @@ class YouTubeCrawler:
         payload["query"] = channel_ref
         return payload
 
-    def crawl_channel_videos(self, channel_id: str, *, max_results: int = 25) -> dict[str, Any]:
+    def crawl_channel_videos(self, channel_id: str, *, max_results: int = 25, since: str | None = None) -> dict[str, Any]:
         if not self.configured:
             return self._not_configured("crawl_channel_videos")
         target = self._max_channel_videos(int(max_results or 25))
+        published_after = _since_to_rfc3339(since)
         if not self.api_key:
-            return self._crawl_channel_videos_apify(channel_id, max_results=target, fallback_from="youtube_api_not_configured")
+            return self._crawl_channel_videos_apify(channel_id, max_results=target, fallback_from="youtube_api_not_configured", since=published_after)
         profile = self._request("channels", {"part": "contentDetails", "id": channel_id})
         if self._should_use_apify_fallback(profile):
-            return self._crawl_channel_videos_apify(channel_id, max_results=target, fallback_from="youtube_api", reason_payload=profile)
+            return self._crawl_channel_videos_apify(channel_id, max_results=target, fallback_from="youtube_api", reason_payload=profile, since=published_after)
         upload_playlist_id = self._upload_playlist_id_from_payload(profile)
-        if upload_playlist_id:
+        # since 下推:playlistItems 不支持 publishedAfter,只 search 端点支持 → 有 since 强制走 search 拿真增量。
+        if upload_playlist_id and not published_after:
             result = self._crawl_upload_playlist(upload_playlist_id, target)
             if self._should_use_apify_fallback(result):
-                return self._crawl_channel_videos_apify(channel_id, max_results=target, fallback_from="youtube_api", reason_payload=result)
+                return self._crawl_channel_videos_apify(channel_id, max_results=target, fallback_from="youtube_api", reason_payload=result, since=published_after)
             return result
-        result = self._crawl_channel_videos_by_search(channel_id, target)
+        result = self._crawl_channel_videos_by_search(channel_id, target, published_after=published_after)
         if self._should_use_apify_fallback(result):
-            return self._crawl_channel_videos_apify(channel_id, max_results=target, fallback_from="youtube_api", reason_payload=result)
+            return self._crawl_channel_videos_apify(channel_id, max_results=target, fallback_from="youtube_api", reason_payload=result, since=published_after)
         return result
 
     def _upload_playlist_id(self, channel_id: str) -> str:
@@ -360,7 +376,7 @@ class YouTubeCrawler:
                 break
         return self._video_details(video_ids, {"mode": "uploads_playlist", "pages": pages, "video_count": len(video_ids)})
 
-    def _crawl_channel_videos_by_search(self, channel_id: str, target: int) -> dict[str, Any]:
+    def _crawl_channel_videos_by_search(self, channel_id: str, target: int, *, published_after: str = "") -> dict[str, Any]:
         video_ids: list[str] = []
         search_pages: list[dict[str, Any]] = []
         page_token = ""
@@ -372,6 +388,7 @@ class YouTubeCrawler:
                     "channelId": channel_id,
                     "type": "video",
                     "order": "date",
+                    "publishedAfter": published_after or None,
                     "maxResults": min(50, target - len(video_ids)),
                     "pageToken": page_token,
                 },
@@ -475,13 +492,14 @@ class YouTubeCrawler:
         max_results: int,
         fallback_from: str,
         reason_payload: dict[str, Any] | None = None,
+        since: str | None = None,
     ) -> dict[str, Any]:
         if not self.apify_token:
             return self._apify_not_configured("crawl_channel_videos", reason_payload)
         ref = self.normalize_channel_ref(channel_id_or_handle)
         if ref["kind"] == "query" and str(channel_id_or_handle or "").startswith("UC"):
             ref = {"kind": "channel_id", "value": str(channel_id_or_handle or "").strip()}
-        run_input = self._apify_channel_input(channel_id_or_handle, ref, max_results=max_results)
+        run_input = self._apify_channel_input(channel_id_or_handle, ref, max_results=max_results, since=since)
         result = self._start_apify_run(run_input, operation="crawl_channel_videos")
         if result.get("provider_status") != "ok":
             result["fallback_from"] = fallback_from
@@ -504,7 +522,7 @@ class YouTubeCrawler:
             },
         }
 
-    def _apify_channel_input(self, handle_or_url: str, channel_ref: dict[str, str], *, max_results: int) -> dict[str, Any]:
+    def _apify_channel_input(self, handle_or_url: str, channel_ref: dict[str, str], *, max_results: int, since: str | None = None) -> dict[str, Any]:
         limit = max(1, min(self._max_channel_videos(max_results or 1), 50))
         channel_url = self._channel_videos_url(handle_or_url, channel_ref)
         payload: dict[str, Any] = {
@@ -516,6 +534,11 @@ class YouTubeCrawler:
             payload["startUrls"] = [{"url": channel_url}]
         else:
             payload["searchQueries"] = [str(channel_ref.get("value") or handle_or_url or "").strip()]
+        # since best-effort:仅在有 since 时加 oldestPostDate(保 test 对 input dict 的精确等值断言);
+        # 真增量精度靠 maxResults 窗口 + 客户端 _filter_incremental_profile_videos 兜底。
+        published_after = _since_to_rfc3339(since)
+        if published_after:
+            payload["oldestPostDate"] = published_after[:10]
         return payload
 
     def _channel_videos_url(self, handle_or_url: str, channel_ref: dict[str, str]) -> str:
