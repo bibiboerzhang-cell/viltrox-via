@@ -61,6 +61,9 @@ KOL_POOL_LIST_COLUMNS = (
     "last_seen_at",
     "created_at",
     "updated_at",
+    # P0-3 假粉/异常号独立角标(纯展示列,绝不进 viltrox_fit_score 计算/排序)
+    "suspect_inflation",
+    "inflation_reason",
 )
 
 COUNTRY_CODE_ALIASES = {

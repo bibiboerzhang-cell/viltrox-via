@@ -286,6 +286,17 @@ def get_pool_summary(
     return kol_pool.summary()
 
 
+@router.get("/kol-pool/suspect-inflation")
+def get_suspect_inflation_review(
+    limit: int = Query(default=200, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """P0-3 疑似刷量/假粉复核清单;独立角标列,绝不参与 viltrox_fit_score。"""
+    del staff
+    return kol_pool.suspect_inflation_review_list(limit=limit, offset=offset)
+
+
 @router.get("/kol-pool/workspace")
 def get_pool_workspace(
     limit: int = Query(default=1200, ge=1, le=2000),
