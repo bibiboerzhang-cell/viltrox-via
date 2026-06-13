@@ -1,26 +1,110 @@
 {
   "sigma": {
     "keywords": ["sigma", "sigmaphoto", "@sigmaphoto"],
-    "priority": "tier1"
+    "priority": "tier1",
+    "category": "lens",
+    "brand_type": "third_party"
   },
   "tamron": {
     "keywords": ["tamron", "@tamronusa", "tamronlens"],
-    "priority": "tier1"
+    "priority": "tier1",
+    "category": "lens",
+    "brand_type": "third_party"
   },
   "samyang": {
     "keywords": ["samyang", "samyanglens", "@samyangoptics", "rokinon"],
-    "priority": "tier2"
+    "priority": "tier2",
+    "category": "lens",
+    "brand_type": "third_party"
   },
   "yongnuo": {
     "keywords": ["yongnuo", "@yongnuo", "yn lens", "yn "],
-    "priority": "tier3"
+    "priority": "tier3",
+    "category": "lens",
+    "brand_type": "third_party"
   },
   "meike": {
     "keywords": ["meike", "@meike_global"],
-    "priority": "tier3"
+    "priority": "tier3",
+    "category": "lens",
+    "brand_type": "third_party"
+  },
+  "7artisans": {
+    "keywords": ["7artisans", "7 artisans", "@7artisans", "七工匠"],
+    "priority": "tier3",
+    "category": "lens",
+    "brand_type": "third_party"
+  },
+  "ttartisan": {
+    "keywords": ["ttartisan", "tt artisan", "@ttartisan", "铭匠"],
+    "priority": "tier3",
+    "category": "lens",
+    "brand_type": "third_party"
+  },
+  "canon": {
+    "keywords": ["canon", "@canonusa", "canon rf", "rf lens", "canon ef", "佳能"],
+    "priority": "tier1",
+    "category": "lens",
+    "brand_type": "oem"
+  },
+  "nikon": {
+    "keywords": ["nikon", "@nikonusa", "nikkor", "nikon z", "z mount", "尼康"],
+    "priority": "tier1",
+    "category": "lens",
+    "brand_type": "oem"
+  },
+  "sony": {
+    "keywords": ["sony", "@sonyalpha", "sony alpha", "sony fe", "sony e mount", "gmaster", "g master", "索尼"],
+    "priority": "tier1",
+    "category": "lens",
+    "brand_type": "oem"
+  },
+  "fujifilm": {
+    "keywords": ["fujifilm", "fujinon", "@fujifilm", "fuji xf", "富士"],
+    "priority": "tier2",
+    "category": "lens",
+    "brand_type": "oem"
+  },
+  "atomos": {
+    "keywords": ["atomos", "@atomos", "ninja v", "shinobi", "atomos ninja"],
+    "priority": "tier1",
+    "category": "monitor",
+    "brand_type": "third_party"
+  },
+  "smallhd": {
+    "keywords": ["smallhd", "small hd", "@smallhd", "smallhd indie", "cine 7"],
+    "priority": "tier1",
+    "category": "monitor",
+    "brand_type": "third_party"
+  },
+  "feelworld": {
+    "keywords": ["feelworld", "@feelworld", "feelworld lut"],
+    "priority": "tier2",
+    "category": "monitor",
+    "brand_type": "third_party"
   },
   "godox": {
     "keywords": ["godox", "@godox_photo"],
-    "priority": "tier2"
+    "priority": "tier2",
+    "category": "flash",
+    "brand_type": "third_party"
+  },
+  "profoto": {
+    "keywords": ["profoto", "@profoto", "profoto a10", "profoto b10"],
+    "priority": "tier1",
+    "category": "flash",
+    "brand_type": "third_party"
+  },
+  "neewer": {
+    "keywords": ["neewer", "@neewer_official", "neewer flash"],
+    "priority": "tier3",
+    "category": "flash",
+    "brand_type": "third_party"
+  },
+  "nanlite": {
+    "keywords": ["nanlite", "nanlux", "@nanlite_official", "forza"],
+    "priority": "tier3",
+    "category": "flash",
+    "brand_type": "third_party"
   }
 }

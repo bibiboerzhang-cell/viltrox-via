@@ -879,6 +879,27 @@ def get_pool_competitor_dashboard(
     )
 
 
+@router.get("/kol-pool/competitors/poach-targets")
+def get_competitor_poach_targets(
+    category: str = Query(default="", pattern="^(|lens|monitor|flash)$"),
+    limit: int = Query(default=200, ge=1, le=1000),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """可挖角名单:对副厂开放(无原厂深度绑定)的 KOL;纯读已落库竞品关系。"""
+    del staff
+    return kol_competitor_detector.list_poach_targets(category=category, limit=limit)
+
+
+@router.get("/kol-pool/competitors/avoid-brands")
+def get_competitor_avoid_brands(
+    limit: int = Query(default=500, ge=1, le=2000),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """近期合作友商/原厂避雷名单:risk_tier 在 caution/avoid 的 KOL×品牌关系;纯读。"""
+    del staff
+    return kol_competitor_detector.list_avoid_brands(limit=limit)
+
+
 @router.post("/kol-pool/batch-enrich")
 @audit_action(
     action_type="kol_pool_batch_enrich",

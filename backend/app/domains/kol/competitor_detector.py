@@ -441,6 +441,111 @@ def persisted_competitor_dashboard(*, brand: str = "", limit: int = 1200) -> dic
     return result
 
 
+def list_poach_targets(*, category: str = "", limit: int = 200) -> dict[str, Any]:
+    """可挖角名单:对副厂(brand_type=third_party)开放=未与原厂深度绑定的 KOL。
+
+    判据(纯读 vkpi_competitor_relation,零 provider/零 LLM/零 fit 触碰):
+    - 仅看 brand_type='oem'(Canon/Nikon/Sony 原厂)的关系;
+    - 该 KOL 对所有 OEM 的最高 risk_tier 在 {opportunity, safe} 内(无近期原厂深度合作)→ 可挖角。
+    """
+    safe_limit = max(1, min(1000, int(limit or 200)))
+    if not _relation_table_exists():
+        return {"persisted": False, "provider_calls": False, "targets": []}
+    brands = load_competitor_brands()
+    cat = str(category or "").strip().lower()
+    oem_brands = [
+        b for b, cfg in brands.items()
+        if str(cfg.get("brand_type") or "third_party") == "oem"
+        and (not cat or str(cfg.get("category") or "lens") == cat)
+    ]
+    if not oem_brands:
+        return {"persisted": True, "provider_calls": False, "targets": [], "oem_brands": []}
+    placeholders = ",".join(["?"] * len(oem_brands))
+    rows = get_conn().execute(
+        f"""
+        SELECT kol_pool_id, MAX(handle) AS handle, MAX(display_name) AS display_name,
+               MAX(platform) AS platform, MAX(risk_score) AS max_oem_risk
+        FROM vkpi_competitor_relation
+        WHERE competitor_brand IN ({placeholders})
+        GROUP BY kol_pool_id
+        HAVING MAX(risk_score) < 4
+        ORDER BY MAX(risk_score) ASC, kol_pool_id ASC
+        LIMIT ?
+        """,
+        (*oem_brands, safe_limit),
+    ).fetchall()
+    targets = [
+        {
+            "kol_pool_id": int(dict(r).get("kol_pool_id") or 0),
+            "handle": _text(dict(r).get("handle")),
+            "display_name": _text(dict(r).get("display_name")),
+            "platform": _text(dict(r).get("platform")),
+            "max_oem_risk_score": float(dict(r).get("max_oem_risk") or 0),
+            "poach_reason": "无原厂深度绑定(OEM 关系最高 risk<4),对副厂生态开放",
+        }
+        for r in rows
+    ]
+    return {
+        "persisted": True,
+        "provider_calls": False,
+        "write_db": False,
+        "category": cat,
+        "oem_brands": sorted(oem_brands),
+        "count": len(targets),
+        "targets": targets,
+    }
+
+
+def list_avoid_brands(*, limit: int = 500) -> dict[str, Any]:
+    """原厂避雷名单:近期与原厂/友商有 caution+ 合作的 KOL(risk_tier in caution/avoid)。
+
+    纯读 vkpi_competitor_relation;按 brand_type/category 分组,供「近期合作友商」回避。
+    """
+    safe_limit = max(1, min(2000, int(limit or 500)))
+    if not _relation_table_exists():
+        return {"persisted": False, "provider_calls": False, "avoid": []}
+    brands = load_competitor_brands()
+    rows = get_conn().execute(
+        """
+        SELECT kol_pool_id, handle, display_name, platform, competitor_brand,
+               collaboration_depth, collaboration_recency_days, risk_score, risk_tier, last_evidence_at
+        FROM vkpi_competitor_relation
+        WHERE risk_tier IN ('caution', 'avoid')
+        ORDER BY risk_score DESC, kol_pool_id ASC
+        LIMIT ?
+        """,
+        (safe_limit,),
+    ).fetchall()
+    avoid: list[dict[str, Any]] = []
+    for r in rows:
+        item = dict(r)
+        brand_key = _text(item.get("competitor_brand")).lower()
+        cfg = brands.get(brand_key, {})
+        avoid.append({
+            "kol_pool_id": int(item.get("kol_pool_id") or 0),
+            "handle": _text(item.get("handle")),
+            "display_name": _text(item.get("display_name")),
+            "platform": _text(item.get("platform")),
+            "competitor_brand": brand_key,
+            "brand_type": str(cfg.get("brand_type") or "third_party"),
+            "category": str(cfg.get("category") or "lens"),
+            "collaboration_depth": _text(item.get("collaboration_depth")) or "none",
+            "collaboration_recency_days": item.get("collaboration_recency_days"),
+            "risk_score": float(item.get("risk_score") or 0),
+            "risk_tier": _text(item.get("risk_tier")),
+            "last_evidence_at": _text(item.get("last_evidence_at")),
+        })
+    oem_avoid = [a for a in avoid if a["brand_type"] == "oem"]
+    return {
+        "persisted": True,
+        "provider_calls": False,
+        "write_db": False,
+        "count": len(avoid),
+        "oem_avoid_count": len(oem_avoid),
+        "avoid": avoid,
+    }
+
+
 def batch_evaluate_kol_pool(
     *,
     brand: str = "",

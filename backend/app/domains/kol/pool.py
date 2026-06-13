@@ -888,6 +888,26 @@ def get_item(kol_pool_id: int) -> dict[str, Any]:
     return {"item": item}
 
 
+def _confidence_badge_from_dims(dimensions: dict[str, Any]) -> dict[str, Any]:
+    """从持久化 dimensions_11_json 抽独立置信度/数据完整度角标(只读,绝不进 fit)。"""
+    conf = dimensions.get("confidence") if isinstance(dimensions.get("confidence"), dict) else {}
+    present = sum(
+        1
+        for k in ("block1_content", "block2_performance", "block3_business", "block4_specialty")
+        if isinstance(conf.get(k), (int, float)) and float(conf.get(k) or 0) > 0
+    )
+    return {
+        "overall": float(conf.get("overall") or 0),
+        "data_completeness": float(conf.get("data_completeness")) if conf.get("data_completeness") is not None else round(present / 4.0, 3),
+        "per_block": {
+            k: float(conf.get(k) or 0)
+            for k in ("block1_content", "block2_performance", "block3_business", "block4_specialty")
+        },
+        "persisted": bool(dimensions.get("persisted")),
+        "note": "独立置信度/数据完整度角标,绝不参与 viltrox_fit_score。",
+    }
+
+
 def detail_bundle(kol_pool_id: int, *, video_limit: int = 3, llm_limit: int = 20) -> dict[str, Any]:
     """Return the read-only detail drawer bundle without provider or worker side effects."""
 
@@ -955,6 +975,8 @@ def detail_bundle(kol_pool_id: int, *, video_limit: int = 3, llm_limit: int = 20
         "kol_pool_id": int(kol_pool_id),
         "item": item,
         "dimensions11": dimensions,
+        # 独立角标:置信度 + 数据完整度(从 dimensions_11_json 透出,绝不并入 viltrox_fit_score)
+        "confidence_badge": _confidence_badge_from_dims(dimensions),
         "llm_deep_analysis": llm_deep,
         "video_analysis": {
             "items": analysis_items,

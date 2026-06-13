@@ -479,7 +479,13 @@ def compose_dimensions_11(kol_pool_id: int) -> dict[str, Any]:
         (100 - payload["block3_business"]["competitor_risk_score"], payload["block3_business"]["confidence"]["competitor_risk_score"]),
     ]
     weighted = [(float(score), _confidence(conf)) for score, conf in score_items if _confidence(conf) > 0]
-    payload["confidence"] = {**confidence, "overall": _mean_confidence(list(confidence.values()))}
+    # data_completeness 独立角标:四 block 中有非零置信度的占比(数据完整度,独立于 fit/分类分)。
+    _present_blocks = sum(1 for v in confidence.values() if _confidence(v) > 0)
+    payload["confidence"] = {
+        **confidence,
+        "overall": _mean_confidence(list(confidence.values())),
+        "data_completeness": round(_present_blocks / 4.0, 3) if confidence else 0.0,
+    }
     if weighted:
         payload["overall_score"] = _clamp(sum(score * conf for score, conf in weighted) / sum(conf for _score, conf in weighted))
     else:

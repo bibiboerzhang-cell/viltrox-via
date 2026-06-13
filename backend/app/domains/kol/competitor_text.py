@@ -81,6 +81,10 @@ def load_competitor_brands() -> dict[str, dict[str, Any]]:
         result[str(brand).strip().lower()] = {
             "keywords": [str(item).strip().lower() for item in keywords if str(item).strip()],
             "priority": str(config.get("priority") or "tier3"),
+            # 产品线扩容:category(lens/monitor/flash)+ brand_type(oem 原厂=镜头直接对手须避雷 /
+            # third_party 副厂=对副厂开放生态可挖角)。仅元数据,不参与 viltrox_fit_score。
+            "category": str(config.get("category") or "lens"),
+            "brand_type": str(config.get("brand_type") or "third_party"),
         }
     return result or DEFAULT_BRANDS
 
