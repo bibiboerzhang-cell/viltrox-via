@@ -239,14 +239,19 @@ def list_benchmarks() -> dict:
 
 def list_gap_insights() -> dict:
     conn = get_conn()
-    rows = conn.execute(
-        """SELECT * FROM ai_insights
-           WHERE module='market' AND category='gap'
-             AND (expires_at IS NULL OR expires_at > datetime('now'))
-             AND dismissed_at IS NULL
-           ORDER BY generated_at DESC
-           LIMIT 20"""
-    ).fetchall()
+    try:
+        rows = conn.execute(
+            """SELECT * FROM ai_insights
+               WHERE module='market' AND category='gap'
+                 AND (expires_at IS NULL OR expires_at > datetime('now'))
+                 AND dismissed_at IS NULL
+               ORDER BY generated_at DESC
+               LIMIT 20"""
+        ).fetchall()
+    except Exception:
+        # 诊断阶段三c(1):ai_insights 表缺失(未迁移)时此前抛 500 崩端点。
+        # 收尾期不建表——优雅降级返空,落到下方 heatmap 兜底/占位,不再 500。
+        rows = []
     insights = [dict(row) for row in rows]
     if insights:
         return {"insights": insights}

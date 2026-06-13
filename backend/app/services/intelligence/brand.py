@@ -150,14 +150,18 @@ def list_posts(
 
 def list_insights() -> dict:
     conn = get_conn()
-    rows = conn.execute(
-        """SELECT * FROM ai_insights
-           WHERE module='brand' AND category='brand_analysis'
-             AND (expires_at IS NULL OR expires_at > datetime('now'))
-             AND dismissed_at IS NULL
-           ORDER BY generated_at DESC
-           LIMIT 10"""
-    ).fetchall()
+    try:
+        rows = conn.execute(
+            """SELECT * FROM ai_insights
+               WHERE module='brand' AND category='brand_analysis'
+                 AND (expires_at IS NULL OR expires_at > datetime('now'))
+                 AND dismissed_at IS NULL
+               ORDER BY generated_at DESC
+               LIMIT 10"""
+        ).fetchall()
+    except Exception:
+        # 诊断阶段三c(1):ai_insights 表缺失(未迁移)时此前抛 500 崩端点。收尾期降级返空走兜底/占位。
+        rows = []
     insights = [dict(r) for r in rows]
     if insights:
         return {"insights": insights}

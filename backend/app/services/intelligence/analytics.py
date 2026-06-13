@@ -54,12 +54,16 @@ def trend_series(*, metric: str = "submissions", window_days: int = 30) -> dict:
 
 def get_correlations() -> dict:
     conn = get_conn()
-    rows = conn.execute(
-        """SELECT metric_a, metric_b, r, slope, lag_days, sample_size, computed_at
-           FROM correlation_cache
-           ORDER BY computed_at DESC
-           LIMIT 50"""
-    ).fetchall()
+    try:
+        rows = conn.execute(
+            """SELECT metric_a, metric_b, r, slope, lag_days, sample_size, computed_at
+               FROM correlation_cache
+               ORDER BY computed_at DESC
+               LIMIT 50"""
+        ).fetchall()
+    except Exception:
+        # 诊断阶段三c(1):correlation_cache 表缺失(未迁移)时此前抛 500 崩端点。收尾期降级返空。
+        rows = []
     # dedupe by metric pair (latest per pair)
     best: dict[tuple, dict] = {}
     for r in rows:
