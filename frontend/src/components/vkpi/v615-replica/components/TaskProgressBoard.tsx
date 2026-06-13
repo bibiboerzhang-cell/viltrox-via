@@ -62,15 +62,13 @@ function taskLabel(task) {
 }
 
 function taskEtaText(task) {
-  const eta = Number(task?.eta_seconds);
   const ahead = Number(task?.ahead_count);
-  if (!Number.isFinite(eta) && !Number.isFinite(ahead)) return "";
+  if (!Number.isFinite(ahead)) return "";
   const parts = [];
+  // 止血(诊断 P1-1):eta_seconds 由 queue_view 用墙钟(建档→完成,含排队等待)均时估算,
+  // 被数天前的 video 队列积压污染成天文数字(均时≈7.8天)→「约X分」会显成数千分钟的谎言。
+  // 前方N个(ahead_count)准,保留;约X分砍掉,待 apify_jobs 加 started_at 列(迁移112)算真处理时长后恢复。
   if (Number.isFinite(ahead)) parts.push(ahead > 0 ? `前方 ${ahead} 个` : "下一个就是它");
-  if (Number.isFinite(eta) && eta > 0) {
-    const mins = Math.max(1, Math.round(eta / 60));
-    parts.push(`约 ${mins} 分钟`);
-  }
   return parts.join(" · ");
 }
 
