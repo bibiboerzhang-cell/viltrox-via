@@ -355,6 +355,106 @@ SCANNERS: Dict[str, Callable[[str, int], Awaitable[Dict[str, Any]]]] = {
 }
 
 
+def _youtube_data_api_normalize(items: List[Dict[str, Any]], query: str, market: str, actor_id: str, safe_limit: int) -> List[Dict[str, Any]]:
+    """Map YouTube Data API search.list (type=channel) snippets to discovery candidates.
+
+    Output shape matches the Apify-path item exactly so downstream annotate / region /
+    garbage filters behave identically regardless of which provider fed the candidate.
+    """
+    normalized: List[Dict[str, Any]] = []
+    for raw in items[:safe_limit]:
+        snippet = raw.get("snippet") if isinstance(raw.get("snippet"), dict) else {}
+        channel_id = str(((raw.get("id") or {}).get("channelId")) or "").strip()
+        channel_name = str(snippet.get("channelTitle") or snippet.get("title") or "").strip()
+        thumbs = snippet.get("thumbnails") if isinstance(snippet.get("thumbnails"), dict) else {}
+        avatar_url = str(
+            (((thumbs.get("high") or thumbs.get("medium") or thumbs.get("default")) or {}).get("url")) or ""
+        ).strip()
+        channel_url = f"https://www.youtube.com/channel/{channel_id}" if channel_id else ""
+        # search.list snippet 无 @handle;用 channel_id 当 handle 保证非空(避开 _is_discovery_garbage 丢弃),
+        # Apify 深度爬阶段再富化真 @handle。
+        handle = channel_id or channel_name
+        clean_channel_name = _known_text(channel_name, handle) or "Unknown creator"
+        normalized.append(
+            {
+                "platform": "youtube",
+                "channel_name": clean_channel_name,
+                "handle": _known_text(handle, channel_name),
+                "avatar_url": avatar_url,
+                "thumbnail_url": avatar_url,
+                "channel_url": channel_url,
+                "source_url": channel_url,
+                "sample_title": str(snippet.get("description") or "")[:300],
+                "views": 0,
+                "likes": 0,
+                "comments": 0,
+                "avg_views": 0,
+                "published": str(snippet.get("publishedAt") or "").strip(),
+                "market": (market or "").strip().upper(),
+                "search_query": (query or "").strip(),
+                "provider_actor": actor_id,
+                "channel_id": channel_id,
+                "fast_path": True,
+            }
+        )
+    return normalized
+
+
+async def _youtube_data_api_search(search_query: str, *, market: str = "", safe_limit: int = 25) -> Dict[str, Any] | None:
+    """YouTube Data API fast path (search.list type=channel, ~1s). None => fall back to Apify.
+
+    None is returned when: no API key, quota exhausted, or any API error — the caller then
+    runs the existing Apify youtube-scraper branch unchanged. Quota: search.list = 100
+    units/call (daily default 10000). One call per discovery.
+    """
+    from app.platform.industry_crawlers.youtube_crawler import YouTubeCrawler
+
+    crawler = YouTubeCrawler()
+    if not crawler.api_key:
+        return None
+
+    def go() -> Dict[str, Any] | None:
+        payload = crawler._request(
+            "search",
+            {
+                "part": "snippet",
+                "type": "channel",
+                "q": search_query,
+                "maxResults": max(1, min(25, int(safe_limit or 25))),
+                "relevanceLanguage": "en",
+                "safeSearch": "none",
+            },
+        )
+        if crawler._should_use_apify_fallback(payload) or str(payload.get("provider_status") or "") == "error":
+            return None
+        return payload
+
+    try:
+        payload = await asyncio.to_thread(go)
+    except Exception as exc:  # pragma: no cover - network only
+        logger.warning("scanner.youtube_data_api_failed", extra={"error": str(exc)})
+        return None
+    if payload is None:
+        return None
+    raw_items = [item for item in (payload.get("items") or []) if isinstance(item, dict)]
+    items = _youtube_data_api_normalize(raw_items, search_query, market, "youtube-data-api/search.list", int(safe_limit or 25))
+    return {
+        "status": "done",
+        "platform": "youtube",
+        "query": (search_query or "").strip(),
+        "market": (market or "").strip().upper(),
+        "items": items,
+        "metadata": {
+            "actor_id": "youtube-data-api/search.list",
+            "provider": "youtube_data_api",
+            "fast_path": True,
+            "requested": int(safe_limit or 25),
+            "returned": len(items),
+            "quota_units": 100,
+        },
+    }
+
+
 async def search_platform_content(
     platform: str,
     query: str,
@@ -377,6 +477,15 @@ async def search_platform_content(
         return {"status": "provider_unavailable", "items": [], "message": "APIFY_TOKEN is not configured"}
 
     search_query = _market_query(normalized_query, market)
+
+    # YouTube fast path: YouTube Data API search.list (~1s) before the slow Apify actor
+    # (10-60s cold start). 命中即返回归一化候选;无 key / 配额耗尽 / 错误 → None,落回下方
+    # 原 Apify youtube-scraper 分支(逻辑零改动)。
+    if normalized_platform == "youtube":
+        fast = await _youtube_data_api_search(search_query, market=market, safe_limit=safe_limit)
+        if fast is not None and fast.get("items"):
+            return fast
+
     actor_id = ""
     payload: Dict[str, Any] = {}
     timeout = 240

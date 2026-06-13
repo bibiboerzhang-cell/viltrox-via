@@ -5,6 +5,7 @@ It does not create KOL Pool rows and never touches V6 Fit scoring fields.
 """
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Any
 
@@ -871,26 +872,56 @@ async def discover_new_creators(
     seen: set[str] = set()
     errors: list[dict[str, Any]] = []
 
-    for platform in resolved_platforms:
-        result = await search_platform_content(
-            platform,
-            query,
-            market=_text(market).upper(),
-            max_results=safe_per_platform,
-        )
+    async def _search_one_platform(platform: str) -> dict[str, Any]:
+        """Run one platform search with error isolation; returns annotated items + meta.
+
+        每平台并发(asyncio.gather)。单平台失败在此捕获、绝不传播,其余平台照常返回。
+        """
+        try:
+            result = await search_platform_content(
+                platform,
+                query,
+                market=_text(market).upper(),
+                max_results=safe_per_platform,
+            )
+        except Exception as exc:
+            return {"platform": platform, "status": "failed", "message": str(exc)[:500], "annotated": [], "error": True}
         raw_items = [dict(item or {}) for item in (result.get("items") or [])]
         annotated = history_match.annotate_platform_items(raw_items, platform=platform)
+        return {
+            "platform": platform,
+            "status": result.get("status"),
+            "message": result.get("message"),
+            "metadata": result.get("metadata") or {},
+            "annotated": annotated,
+            "error": result.get("status") not in {"done", "ready"} and not annotated,
+        }
+
+    # 并行化:YT/IG/TikTok 同时发,替代旧串行 for(一个接一个 await)。
+    # return_exceptions=True 双保险——_search_one_platform 已内部捕获,这里再兜一层防御。
+    platform_outcomes = await asyncio.gather(
+        *[_search_one_platform(platform) for platform in resolved_platforms],
+        return_exceptions=True,
+    )
+
+    # 按 resolved_platforms 原顺序合并(gather 保序),保留确定性的去重/limit 语义。
+    for platform, outcome in zip(resolved_platforms, platform_outcomes):
+        if isinstance(outcome, BaseException):
+            errors.append({"platform": platform, "status": "failed", "message": str(outcome)[:500]})
+            platform_results.append({"platform": platform, "status": "failed", "returned": 0, "metadata": {}, "message": str(outcome)[:500]})
+            continue
+        annotated = outcome.get("annotated") or []
         platform_results.append(
             {
                 "platform": platform,
-                "status": result.get("status"),
+                "status": outcome.get("status"),
                 "returned": len(annotated),
-                "metadata": result.get("metadata") or {},
-                "message": result.get("message"),
+                "metadata": outcome.get("metadata") or {},
+                "message": outcome.get("message"),
             }
         )
-        if result.get("status") not in {"done", "ready"} and not annotated:
-            errors.append({"platform": platform, "status": result.get("status"), "message": result.get("message")})
+        if outcome.get("error"):
+            errors.append({"platform": platform, "status": outcome.get("status"), "message": outcome.get("message")})
         for item in annotated:
             key = _candidate_key(item, platform)
             if key in seen:
