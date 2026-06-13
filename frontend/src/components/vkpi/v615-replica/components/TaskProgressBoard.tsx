@@ -306,7 +306,9 @@ export function TaskProgressBoard({ apiToken = "" }) {
   // 账号分析等队列任务 ~8 秒即完成,若按 session 过滤会"一闪而过"再无痕迹——
   // 即使 payload 暂缺 search_session_id 也保底留在「最近完成」(无 session 时不可点开)。
   const visibleRecent = recentTasks.filter((task) => taskCanOpen(task) || task?.kind === "账号分析").slice(0, 2);
-  const emptyActive = activeTotal === 0 && !loading && !error;
+  // 乱晃修复:此前挂 !loading,每 2.5s 轮询 loading 翻 true→灰条消失、翻 false→重现,整块上下跳 ~28px。
+  // 改挂 !!payload——后台刷新时上次 payload 留存,灰条稳住不闪;仅首次连接(无 payload)隐藏,此时 header 已显「连接中」。
+  const emptyActive = activeTotal === 0 && !!payload && !error;
 
   return e("div", {
     className: "w-full rounded-xl border border-white/10 bg-[#0d1117] px-3 py-3 shadow-[0_18px_44px_rgba(0,0,0,0.28)]"
