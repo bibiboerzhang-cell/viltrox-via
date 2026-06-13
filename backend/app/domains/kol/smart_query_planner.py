@@ -75,7 +75,11 @@ def _fallback_plan(query: str, *, reason: str = "rule_fallback") -> dict[str, An
     if any(term in lowered for term in ("测评", "review", "gear")):
         keywords.extend(["gear reviewer", "camera gear review"])
     if any(term in lowered for term in ("monitor", "监视器", "550pro", "550 pro", "550por", "外接屏", "screen", "屏")):
-        keywords.extend(["camera monitor", "field monitor", "on-camera monitor", "filmmaker gear", "cinematographer"])
+        # 泛人群:监视器买家=各行业视频拍摄者,不止「监视器评测」。撒宽到创作者类型+代表垂类。
+        keywords.extend([
+            "camera monitor", "field monitor", "videographer", "filmmaker", "cinematographer",
+            "content creator", "automotive videographer", "food videographer", "wedding filmmaker", "commercial video",
+        ])
     if any(term in lowered for term in ("镜头", "lens", "lab", "mm")):
         keywords.extend(["videographer", "photographer", "camera gear"])
 
@@ -161,7 +165,8 @@ Operator request:
 
 Rules:
 - OUTPUT MUST BE IN ENGLISH. Translate any Chinese / non-English request into English creator search terms. search_query and product_focus MUST be English keywords — never the raw Chinese text.
-- Recognize Viltrox products and map to English creator terms: monitor / 监视器 / 550pro / 550 pro / 外接屏 / screen → "camera monitor", "field monitor", "on-camera monitor", "filmmaker gear", "cinematographer", "camera rig"; flash / 闪光灯 / 灯 → "lighting", "flash", "strobe"; lens / 镜头 → "photographer", "videographer", "camera gear".
+- Recognize Viltrox products and map to English creator terms: monitor / 监视器 / 550pro / 550 pro / 外接屏 / screen → camera monitor / field monitor / on-camera monitor / filmmaker gear; flash / 闪光灯 / 灯 → lighting / flash / strobe; lens / 镜头 → photographer / videographer.
+- FIRST analyze WHO actually uses/buys this product, then BROADEN the search — do NOT narrow to only literal product-name matches. A camera monitor is used by filmmakers, videographers, photographers and content creators ACROSS many verticals (automotive/racing, food/culinary, weddings & events, travel, commercial/ad, sports, real-estate, music video, documentary). product_focus should mix creator-type terms (videographer, filmmaker, cinematographer, content creator, DP) with a few representative verticals; write target_persona as one sentence describing this buyer group broadly.
 - Target the ENGLISH-speaking market. Set market to "US" unless the user explicitly names another English region (UK/CA/AU/EU). Exclude Chinese-language creators.
 - Preserve the original intent but expand it into searchable English creator terms.
 - If the request mentions flash, lighting, strobe, LED, Godox, or price/value, include lighting/flash creator terms.
