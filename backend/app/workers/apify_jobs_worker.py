@@ -2385,6 +2385,20 @@ def _process_gemini_video_final_v1_keyframe_qa(
         estimated_cost=qa_estimated_cost,
         stage="keyframe_qa",
     )
+    if not qa_allowed:
+        # 护栏② enforce:撞 cap 不再继续——_block_job 终态(对齐 cron fallback_action=block_job)
+        _block_job(
+            conn,
+            int(job["id"]),
+            "budget_guard_blocked",
+            {
+                "provider": "google",
+                "stage": "keyframe_qa",
+                "reason_detail": qa_reason,
+                "estimated_cost_usd": qa_estimated_cost,
+            },
+        )
+        return
 
     started = time.monotonic()
     analysis_context = _video_final_context(evidence)
@@ -2646,6 +2660,19 @@ def _process_gemini_video_flash_gpt55_judge(
         estimated_cost=openai_estimated_cost,
         stage="openai_keyframe_judge",
     )
+    if not openai_allowed:
+        _block_job(
+            conn,
+            int(job["id"]),
+            "budget_guard_blocked",
+            {
+                "provider": "openai",
+                "stage": "openai_keyframe_judge",
+                "reason_detail": openai_reason,
+                "estimated_cost_usd": openai_estimated_cost,
+            },
+        )
+        return
 
     started = time.monotonic()
     performance = _video_performance_context(evidence)
@@ -2774,6 +2801,19 @@ def _process_gemini_video_flash_claude_judge(
         estimated_cost=anthropic_estimated_cost,
         stage="anthropic_keyframe_judge",
     )
+    if not anthropic_allowed:
+        _block_job(
+            conn,
+            int(job["id"]),
+            "budget_guard_blocked",
+            {
+                "provider": "anthropic",
+                "stage": "anthropic_keyframe_judge",
+                "reason_detail": anthropic_reason,
+                "estimated_cost_usd": anthropic_estimated_cost,
+            },
+        )
+        return
 
     started = time.monotonic()
     performance = _video_performance_context(evidence)
@@ -3207,6 +3247,20 @@ def _process_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> None:
                 estimated_cost=estimated_cost,
                 stage=derive_method,
             )
+            if not allowed:
+                # 护栏② 主线 enforce:撞 cap 拦在 _process_gemini_video 之前(finally 正常释放 slot/lock)
+                _block_job(
+                    conn,
+                    int(job["id"]),
+                    "budget_guard_blocked",
+                    {
+                        "provider": "google",
+                        "stage": derive_method,
+                        "reason_detail": reason,
+                        "estimated_cost_usd": estimated_cost,
+                    },
+                )
+                return
             if derive_method in GEMINI_VIDEO_DERIVE_METHODS:
                 _respect_gemini_qps()
                 _process_gemini_video(conn, job, payload, estimated_cost)
