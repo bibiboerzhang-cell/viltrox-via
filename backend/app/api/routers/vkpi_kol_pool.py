@@ -527,6 +527,7 @@ async def smart_kol_search(
             vector_weight=float(body.get("vector_weight") if body.get("vector_weight") is not None else 0.85),
             type_weight=float(body.get("type_weight") if body.get("type_weight") is not None else 0.15),
             type_boost_enabled=bool(body.get("type_boost_enabled", True)),
+            exclude_chinese=bool(body.get("exclude_chinese", True)),
         )
         result["llm_query_plan"] = llm_query_plan
         result["original_query_text"] = recall_query
@@ -655,6 +656,7 @@ async def smart_kol_search_profile_advance_job(
             vector_weight=float(body.get("vector_weight") if body.get("vector_weight") is not None else 0.85),
             type_weight=float(body.get("type_weight") if body.get("type_weight") is not None else 0.15),
             type_boost_enabled=bool(body.get("type_boost_enabled", True)),
+            exclude_chinese=bool(body.get("exclude_chinese", True)),
         )
         recall_result["llm_query_plan"] = llm_query_plan
         recall_result["original_query_text"] = query_text
@@ -738,6 +740,7 @@ def recall_kol_profiles(
     vector_weight: float = Query(default=0.85, ge=0, le=1),
     type_weight: float = Query(default=0.15, ge=0, le=1),
     type_boost_enabled: bool = Query(default=True),
+    exclude_chinese: bool = Query(default=True),
     session_id: int | None = Query(default=None, ge=1),
     create_session: bool = Query(default=False),
     staff=Depends(require_tab("vkpi", "read")),
@@ -757,6 +760,7 @@ def recall_kol_profiles(
             vector_weight=vector_weight,
             type_weight=type_weight,
             type_boost_enabled=type_boost_enabled,
+            exclude_chinese=exclude_chinese,
         )
         session = kol_search_sessions.ensure_session_for_result(
             session_id=session_id,

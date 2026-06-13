@@ -759,6 +759,7 @@ async def execute_smart_search_profile_advance_pipeline(
         vector_weight=float(payload.get("vector_weight") if payload.get("vector_weight") is not None else 0.7),
         type_weight=float(payload.get("type_weight") if payload.get("type_weight") is not None else 0.3),
         type_boost_enabled=bool(payload.get("type_boost_enabled", True)),
+        exclude_chinese=bool(payload.get("exclude_chinese", True)),
     )
     recall_session = search_sessions.attach_recall_result(int(session_id), recall_result)
     new_discovery: dict[str, Any] | None = None

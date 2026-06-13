@@ -215,7 +215,8 @@ def _entry_rows(kol_pool_ids: list[int]) -> dict[int, dict[str, Any]]:
                p.profile_url,
                p.avatar_url,
                p.followers,
-               p.bio
+               p.bio,
+               p.country
         FROM vkpi_kol_profile_index_entries e
         JOIN vkpi_kol_pool p ON p.id = e.kol_pool_id
         WHERE e.collection_name = ?
@@ -232,6 +233,35 @@ def _entry_rows(kol_pool_ids: list[int]) -> dict[int, dict[str, Any]]:
 def _clean_text(value: Any, limit: int = 240) -> str:
     text = " ".join(str(value or "").replace("\x00", " ").split())
     return text[:limit]
+
+
+_CHINESE_COUNTRY_RE = re.compile(r"中国|中國|大陆|大陸", re.IGNORECASE)
+
+
+def _country_is_mainland(value: Any) -> bool:
+    """大陆国别判据(规避中国人 KOL,用户硬诉求):country 含「中国/中國/大陆」或纯 CN
+    即判大陆。台/港(TW/HK/Taiwan/Hong Kong)默认不排——先只排大陆。"""
+    text = str(value or "").strip()
+    if not text:
+        return False
+    if text.upper() == "CN":
+        return True
+    return bool(_CHINESE_COUNTRY_RE.search(text))
+
+
+def _looks_chinese(*texts: Any) -> bool:
+    """中文创作者判据(复用 profile_discovery._looks_chinese 思路):某文本含 >=2 汉字
+    且不含日文假名/韩文谚文(防误杀日韩号)即判中文。仅看 display_name/handle,bio 不纳入
+    (误杀高)。"""
+    for value in texts:
+        text = str(value or "")
+        if not text:
+            continue
+        if re.search(r"[぀-ヿ가-힯]", text):  # 日文假名/韩文 → 非中文,跳过
+            continue
+        if len(re.findall(r"[一-鿿]", text)) >= 2:
+            return True
+    return False
 
 
 def _normalise_lens_mention(value: str) -> str:
@@ -504,6 +534,7 @@ def recall_kol_profiles(
     vector_weight: float = 0.85,
     type_weight: float = 0.15,
     type_boost_enabled: bool = True,
+    exclude_chinese: bool = True,
 ) -> dict[str, Any]:
     if ratio_policy != "soft":
         raise ValueError("only ratio_policy=soft is supported")
@@ -539,10 +570,17 @@ def recall_kol_profiles(
     evidence_by_id = _evidence_summaries([hit.kol_pool_id for hit in ordered_hits])
     buckets: dict[str, list[dict[str, Any]]] = {"creator": [], "reviewer": []}
     missing_type_count = 0
+    excluded_chinese_count = 0
     for hit in ordered_hits:
         row = rows_by_id.get(hit.kol_pool_id)
         if not row:
             missing_type_count += 1
+            continue
+        if exclude_chinese and (
+            _country_is_mainland(row.get("country"))
+            or _looks_chinese(row.get("display_name"), row.get("handle"))
+        ):
+            excluded_chinese_count += 1
             continue
         bucket = _bucket_for(row, mixed_policy)
         buckets[bucket].append(
