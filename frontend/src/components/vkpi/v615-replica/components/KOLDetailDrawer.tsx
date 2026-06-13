@@ -226,6 +226,11 @@ function detailBundleAnalysisItems(detailBundle) {
   }).filter((item) => Object.keys(item.video).length);
 }
 
+function detailBundleAnalysisSummary(detailBundle) {
+  const summary = recordOr(recordOr(recordOr(detailBundle).video_analysis).summary);
+  return Object.keys(summary).length ? summary : null;
+}
+
 function evidenceIdOf(video) {
   if (!video || typeof video !== "object") return null;
   const value = video.evidence_id ?? video.id;
@@ -577,6 +582,7 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
   const [dimensions11, setDimensions11] = React.useState(null);
   const [llmDeepAnalysis, setLlmDeepAnalysis] = React.useState(null);
   const [preloadedVideoAnalysisBundles, setPreloadedVideoAnalysisBundles] = React.useState(undefined);
+  const [videoAnalysisSummary, setVideoAnalysisSummary] = React.useState(null);
   const [videoEnqueueState, setVideoEnqueueState] = React.useState({ status: "idle", message: "" });
   const [activeRepresentativeVideo, setActiveRepresentativeVideo] = React.useState(null);
   React.useEffect(() => {
@@ -587,9 +593,11 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
       setDimensions11(dimensionsPayload.status === "missing" || dimensionsPayload.persisted === false ? null : dimensionsPayload);
       setLlmDeepAnalysis(llmPayload.status === "ready" ? llmPayload : null);
       setPreloadedVideoAnalysisBundles(detailBundleAnalysisItems(bundleRecord));
+      setVideoAnalysisSummary(detailBundleAnalysisSummary(bundleRecord));
       return;
     }
     setPreloadedVideoAnalysisBundles(undefined);
+    setVideoAnalysisSummary(null);
     if (!apiToken || !item?.id) {
       setDimensions11(null);
       setLlmDeepAnalysis(null);
@@ -1007,7 +1015,7 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
           )
         )
       ),
-      e(KOLVideoAnalysisPanel, { apiToken, videos: videoAnalysisVideos, preloadedBundles: preloadedVideoAnalysisBundles }),
+      e(KOLVideoAnalysisPanel, { apiToken, videos: videoAnalysisVideos, preloadedBundles: preloadedVideoAnalysisBundles, summary: videoAnalysisSummary }),
       devices.camera_body && e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
         e("div", { className: "flex items-center gap-1.5 mb-2" },
           e(Camera, { size: 11, className: "text-slate-400" }),

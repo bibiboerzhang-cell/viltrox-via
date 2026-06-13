@@ -75,6 +75,18 @@ function finalV1Payload(entry?: VkpiKolVideoAnalysisCacheEntry | null) {
   return asRecord(result.video_analysis_final_v1).layer1_visual_content ? asRecord(result.video_analysis_final_v1) : result;
 }
 
+function sceneTimelineRows(value: unknown, max = 8) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item, index) => {
+    const record = asRecord(item);
+    return {
+      key: `${textFrom(record.timestamp) || "scene"}-${index}`,
+      timestamp: textFrom(record.timestamp),
+      what: textFrom(record.what ?? record.scene ?? record.content),
+    };
+  }).filter((row) => row.timestamp || row.what).slice(0, max);
+}
+
 function finalV1QaPayload(entry?: VkpiKolVideoAnalysisCacheEntry | null) {
   const result = asRecord(entry?.result);
   const direct = asRecord(result.final_v1_keyframe_qa);
@@ -186,6 +198,9 @@ function ScoreBlock({ label, score }: { label: string; score: ReturnType<typeof 
 
 function AnalysisCard({ bundle }: { bundle: AnalysisBundle }) {
   const payload = finalV1Payload(bundle.finalEntry);
+  const layer1 = asRecord(payload.layer1_visual_content);
+  const contentSummary = textFrom(layer1.content_summary);
+  const sceneTimeline = sceneTimelineRows(layer1.scene_timeline);
   const layer2 = asRecord(payload.layer2_viewer_emotion);
   const layer3 = asRecord(payload.layer3_three_values);
   const layer6 = asRecord(payload.layer6_flags_and_scores);
@@ -230,6 +245,27 @@ function AnalysisCard({ bundle }: { bundle: AnalysisBundle }) {
         <ScoreBlock label="投放价值" score={marketingScore} />
       </div>
       <div className="mb-2 text-[10.5px] leading-relaxed text-slate-300">{compactText(verdict, 180)}</div>
+
+      {contentSummary ? (
+        <div className="mb-2 rounded-md border border-white/[0.05] bg-white/[0.02] px-2.5 py-2">
+          <div className="mb-1 text-[9px] uppercase tracking-wider text-slate-500">内容概述</div>
+          <div className="text-[10.5px] leading-relaxed text-slate-300">{compactText(contentSummary, 200)}</div>
+        </div>
+      ) : null}
+
+      {sceneTimeline.length ? (
+        <div className="mb-2 rounded-md border border-white/[0.05] bg-black/20 px-2.5 py-2">
+          <div className="mb-1.5 text-[9px] uppercase tracking-wider text-slate-500">分镜时间线</div>
+          <div className="space-y-1">
+            {sceneTimeline.map((row) => (
+              <div key={row.key} className="flex items-start gap-2 text-[10px] leading-relaxed">
+                <span className="shrink-0 rounded bg-cyan-500/12 px-1.5 py-0.5 font-mono tabular-nums text-cyan-200">{row.timestamp || "—"}</span>
+                <span className="text-slate-300">{row.what || "—"}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       <div className="mb-2 grid grid-cols-3 gap-1.5">
         {[
@@ -291,12 +327,17 @@ export function KOLVideoAnalysisPanel({
   apiToken,
   videos,
   preloadedBundles,
+  summary,
 }: {
   apiToken?: string;
   videos: VideoEvidence[];
   preloadedBundles?: AnalysisBundle[] | null;
+  summary?: Record<string, unknown> | null;
 }) {
   const evidenceVideos = useMemo(() => videos.filter((video) => videoEvidenceId(video)).slice(0, 3), [videos]);
+  const summaryRecord = asRecord(summary);
+  const summaryReadyCount = Number(summaryRecord.ready_count);
+  const summaryEvidenceCount = Number(summaryRecord.evidence_count);
   const [bundles, setBundles] = useState<AnalysisBundle[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -356,7 +397,14 @@ export function KOLVideoAnalysisPanel({
           <Video size={11} className="text-cyan-400" />
           <span className="text-[10px] uppercase tracking-wider text-slate-500">视频深析结果</span>
         </div>
-        <span className="text-[8.5px] text-slate-600">vkpi_analysis_cache</span>
+        <div className="flex items-center gap-1.5">
+          {Number.isFinite(summaryReadyCount) && summaryReadyCount > 0 ? (
+            <span className="rounded bg-cyan-500/12 px-1.5 py-0.5 text-[9px] font-medium text-cyan-200">已有 {summaryReadyCount} 条分析</span>
+          ) : Number.isFinite(summaryEvidenceCount) && summaryEvidenceCount > 0 ? (
+            <span className="rounded bg-slate-500/12 px-1.5 py-0.5 text-[9px] text-slate-300">已有 {summaryEvidenceCount} 条 evidence</span>
+          ) : null}
+          <span className="text-[8.5px] text-slate-600">vkpi_analysis_cache</span>
+        </div>
       </div>
 
       {!apiToken ? (
@@ -378,7 +426,7 @@ export function KOLVideoAnalysisPanel({
             暂无深度分析
           </div>
           <div className="mt-1 text-[9.5px] text-slate-600">
-            已找到 {evidenceVideos.length} 条 video evidence，但未命中 video_analysis_final_v1 cache。
+            已找到 {Number.isFinite(summaryEvidenceCount) && summaryEvidenceCount > 0 ? summaryEvidenceCount : evidenceVideos.length} 条 video evidence，但未命中 video_analysis_final_v1 cache。
           </div>
           {error ? <div className="mt-1 text-[9.5px] text-rose-300">{error}</div> : null}
         </div>
