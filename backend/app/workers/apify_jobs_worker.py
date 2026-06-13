@@ -3131,6 +3131,7 @@ def _claim_job(conn: psycopg.Connection[Any]) -> dict[str, Any] | None:
                     last_error=NULL,
                     last_error_category=NULL,
                     next_retry_at=NULL,
+                    started_at=NOW(),
                     updated_at=NOW()
                 WHERE id=%s
                 """,

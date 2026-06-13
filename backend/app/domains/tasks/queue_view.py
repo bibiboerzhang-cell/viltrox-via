@@ -271,13 +271,20 @@ DEFAULT_JOB_DURATION_SEC = 300
 
 
 def _avg_duration_by_job_type(conn: Any) -> dict[str, float]:
-    """Read-only:近 7 天 done 任务的均时(秒),供排队 ETA 估算;无样本回退默认值。"""
+    """Read-only:近 7 天 done 任务的真处理均时(秒),供排队 ETA 估算;无样本回退默认值。
+
+    诊断 P1-1 a根治:用 started_at(worker claim 时写,迁移112)算"真处理时长"
+    (claim→done),而非墙钟(created_at→done,含排队等待)。墙钟被数天前队列积压
+    污染成天文数字(video 均时≈7.8天)致 ETA「约X分」爆表。历史 done 行 started_at
+    为 NULL 时排除;新行累积后 ETA 自愈,无样本则上层回退 DEFAULT_JOB_DURATION_SEC。
+    """
     try:
         rows = conn.execute(
             """
-            SELECT job_type, AVG(EXTRACT(EPOCH FROM (updated_at - created_at))) AS avg_sec
+            SELECT job_type, AVG(EXTRACT(EPOCH FROM (updated_at - started_at))) AS avg_sec
             FROM apify_jobs
-            WHERE status='done' AND updated_at >= NOW() - INTERVAL '7 days'
+            WHERE status='done' AND started_at IS NOT NULL
+              AND updated_at >= NOW() - INTERVAL '7 days'
             GROUP BY job_type
             LIMIT 50
             """,
