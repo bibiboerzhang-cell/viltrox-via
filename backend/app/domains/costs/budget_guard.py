@@ -60,6 +60,22 @@ def _normalize_scope(scope: str) -> str:
     return str(scope or "").strip().lower().replace(" ", "_")
 
 
+def _is_single_call_ceiling_scope(scope: str) -> bool:
+    """single_call[_*] scopes are per-request ceilings, not cumulative pools.
+
+    They gate one call against cap_usd via estimated_cost only; current_spend is
+    never accumulated for them and never used to hard-stop (that would flap as
+    unrelated single calls pump the shared row past cap). Cumulative budgets live
+    in monthly_total / provider:* / cron:* instead.
+    """
+    key = _normalize_scope(scope)
+    return key == "single_call" or key.startswith("single_call_")
+
+
+def _single_call_ceiling_allowed(cap: float, estimated_cost: float) -> bool:
+    return float(cap or 0) <= 0 or float(estimated_cost or 0) <= float(cap or 0)
+
+
 def _resolve_staff(value: Any) -> int | None:
     if isinstance(value, dict):
         return resolve_staff_id(value) or None
@@ -171,7 +187,11 @@ def check_budget(scope: str, estimated_cost: float, *, require_configured: bool 
     row = get_conn().execute("SELECT * FROM vkpi_provider_budget_caps WHERE scope=?", (scope_key,)).fetchone()
     if not row:
         return not require_configured
-    return bool(_budget_payload(_clean_row(row), estimated_cost=float(estimated_cost or 0)).get("allowed"))
+    payload = _budget_payload(_clean_row(row), estimated_cost=float(estimated_cost or 0))
+    if _is_single_call_ceiling_scope(scope_key):
+        # Per-request ceiling: compare estimated_cost to cap, ignore current_spend.
+        return _single_call_ceiling_allowed(_float(payload.get("cap_usd")), float(estimated_cost or 0))
+    return bool(payload.get("allowed"))
 
 
 def check_budget_scopes(
@@ -190,10 +210,10 @@ def check_budget_scopes(
         status = get_budget_status(scope, estimated_cost=estimated_cost)
         configured = bool(status.get("configured", False))
         scope_allowed = bool(status.get("allowed", True))
-        if scope == "single_call" and configured:
-            # single_call is a per-request ceiling, not a cumulative budget pool.
+        if _is_single_call_ceiling_scope(scope) and configured:
+            # single_call[_*] is a per-request ceiling, not a cumulative budget pool.
             cap = _float(status.get("cap_usd"))
-            scope_allowed = cap <= 0 or float(estimated_cost or 0) <= cap
+            scope_allowed = _single_call_ceiling_allowed(cap, float(estimated_cost or 0))
             status["allowed"] = scope_allowed
             status["hard_stopped"] = not scope_allowed
         if require_configured and not configured:
@@ -232,7 +252,13 @@ def get_budget_status(scope: str | None = None, *, estimated_cost: float = 0.0) 
                 "allowed": True,
                 "estimated_cost_usd": max(0.0, float(estimated_cost or 0)),
             }
-        return {"configured": True, **_budget_payload(_clean_row(row), estimated_cost=float(estimated_cost or 0))}
+        payload = _budget_payload(_clean_row(row), estimated_cost=float(estimated_cost or 0))
+        if _is_single_call_ceiling_scope(scope_key):
+            # Per-request ceiling: allowed reflects estimated_cost<=cap, not current_spend.
+            ceiling_allowed = _single_call_ceiling_allowed(_float(payload.get("cap_usd")), float(estimated_cost or 0))
+            payload["allowed"] = ceiling_allowed
+            payload["hard_stopped"] = not ceiling_allowed
+        return {"configured": True, **payload}
 
     rows = conn.execute("SELECT * FROM vkpi_provider_budget_caps ORDER BY scope").fetchall()
     budgets = [_budget_payload(_clean_row(row), estimated_cost=0.0) for row in rows]
@@ -335,8 +361,12 @@ def record_cost(
             now,
         ),
     )
-    scopes_to_update = [scope for scope in [scope_key, *(_normalize_scope(scope) for scope in (extra_scopes or []))] if scope]
-    for budget_scope in dict.fromkeys(scopes_to_update):
+    requested_scopes = [scope for scope in [scope_key, *(_normalize_scope(scope) for scope in (extra_scopes or []))] if scope]
+    # single_call[_*] are per-request ceilings: never accumulate current_spend on
+    # them or the shared row creeps past cap and hard-stops every later call
+    # (the flapping bug). Cumulative accounting stays on monthly_total/provider:*/cron:*.
+    scopes_to_update = [scope for scope in dict.fromkeys(requested_scopes) if not _is_single_call_ceiling_scope(scope)]
+    for budget_scope in scopes_to_update:
         conn.execute(
             """
             UPDATE vkpi_provider_budget_caps
