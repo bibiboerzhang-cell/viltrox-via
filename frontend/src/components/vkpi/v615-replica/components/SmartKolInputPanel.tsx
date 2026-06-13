@@ -486,6 +486,10 @@ export function SmartKolInputPanel({
   const [historyItems, setHistoryItems] = useState<VkpiKolSearchHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [error, setError] = useState("");
+  // 问题2 平台选择器:默认全选已落地的 YT/IG/TikTok(FB 待 provider 落地,UI 置灰)。
+  const [discoveryPlatforms, setDiscoveryPlatforms] = useState<string[]>(["youtube", "instagram", "tiktok"]);
+  // 开闸全量(用户裁令「直接开闸全量」):深度查找默认开,文字搜索后自动触发全网发现一步到位。
+  const [deepFindOn, setDeepFindOn] = useState(true);
 
   const inferredMode = useMemo(() => detectMode(input), [input]);
   const isBusy = state === "loading" || state === "executing";
@@ -701,7 +705,8 @@ export function SmartKolInputPanel({
         timeoutMs: 60000,
       });
       const responseMode = cleanText(response.mode);
-      if (responseMode === "url" || cleanText(response.query_type).startsWith("url_")) {
+      const isText = !(responseMode === "url" || cleanText(response.query_type).startsWith("url_"));
+      if (!isText) {
         setMode("url");
         setUrlResult(response.result as VkpiKolUrlDeepCrawlResponse);
       } else {
@@ -710,6 +715,9 @@ export function SmartKolInputPanel({
       }
       setState("ready");
       void refreshHistory();
+      // 开闸全量:文字搜索且深度查找开关开 → 自动触发全网发现(advance-job 全量,含所选平台),
+      // 一步「先库内召回 → 再全网发现」,不必再手点。护栏 enforce 兜底超支。
+      if (isText && deepFindOn) void queueTextAdvance();
     } catch (err) {
       setState("error");
       setError(err instanceof Error ? err.message : "智能入口请求失败");
@@ -762,6 +770,7 @@ export function SmartKolInputPanel({
         representativeVideoLimit: 1,
         includeNewDiscovery: true,
         newDiscoveryLimit: 15,
+        newDiscoveryPlatforms: discoveryPlatforms,
         timeoutMs: 300000,
       });
       setAdvanceResult(response);
@@ -880,11 +889,14 @@ export function SmartKolInputPanel({
               <span className="rounded-md border border-white/[0.07] px-2 py-1">测评号 {display(recallResult.diagnostics?.reviewer_returned)}</span>
             </div>
           </div>
-          {/* P0-B(session#48 尸检):text 召回 ready ≠ 全链完成——深度查找/全网发现从不自动发
-              (E4 闸)。裸 "ready" 让用户以为零动静;诚实标注回显规格(命中数+未启用项)。 */}
-          <div className="mb-2 rounded-md border border-amber-300/15 bg-amber-400/[0.05] px-2.5 py-1.5 text-[10px] text-amber-200/80">
-            本次为库内语义召回(命中 {display(recallResult.diagnostics?.candidate_count)} 条)· 全网深度查找未启用——需手动点「后台深度查找」发起;批量自动分析按闸关闭(E4)。
+          {/* 文案订正:深度查找(全网发现)走 F3 单次闸且已默认开,E4 只闸「批量自动深析」非发现本身。 */}
+          <div className="mb-2 rounded-md border border-emerald-300/15 bg-emerald-400/[0.05] px-2.5 py-1.5 text-[10px] text-emerald-200/80">
+            库内语义召回(命中 {display(recallResult.diagnostics?.candidate_count)} 条)已返回;
+            {deepFindOn ? "全网深度查找已自动发起(后台按所选平台回填)" : "全网深度查找已关,可手动发起"}。批量自动深析(E4)仍按闸关闭。
           </div>
+          {Object.keys(llmPlan).length ? (
+            <div className="mb-1 text-[10px] font-medium text-violet-200/70">① 产品人群分析(先识人群再找人)</div>
+          ) : null}
           {Object.keys(llmPlan).length ? <PlanPills plan={llmPlan} /> : null}
           <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
             {recallItems.map((item, index) => (
@@ -899,7 +911,29 @@ export function SmartKolInputPanel({
           {!recallItems.length ? (
             <div className="rounded-md border border-dashed border-white/[0.08] px-3 py-4 text-center text-[11px] text-slate-500">暂无召回结果</div>
           ) : null}
-          <div className="mt-3 flex flex-wrap items-center gap-2">
+          {/* 问题2:发现平台选择器(YT/IG/TikTok 已落地;FB 待 provider)+ 深度查找默认开开关 */}
+          <div className="mt-3 flex flex-wrap items-center gap-1.5">
+            <span className="text-[10px] text-slate-500">发现平台</span>
+            {[{ k: "youtube", t: "YouTube" }, { k: "instagram", t: "Instagram" }, { k: "tiktok", t: "TikTok" }].map((p) => {
+              const on = discoveryPlatforms.includes(p.k);
+              return (
+                <button
+                  key={p.k}
+                  type="button"
+                  onClick={() => setDiscoveryPlatforms((cur) => (on ? cur.filter((x) => x !== p.k) : [...cur, p.k]))}
+                  className={`rounded-full border px-2 py-0.5 text-[10px] transition-colors ${on ? "border-cyan-300/40 bg-cyan-400/[0.12] text-cyan-100" : "border-white/[0.08] text-slate-500 hover:border-white/[0.16]"}`}
+                >
+                  {p.t}
+                </button>
+              );
+            })}
+            <span className="rounded-full border border-white/[0.06] px-2 py-0.5 text-[10px] text-slate-600" title="Facebook 发现待 provider 落地">Facebook · 即将</span>
+            <label className="ml-auto flex items-center gap-1 text-[10px] text-slate-400">
+              <input type="checkbox" checked={deepFindOn} onChange={(event) => setDeepFindOn(event.target.checked)} className="accent-emerald-500" />
+              深度查找默认开
+            </label>
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={() => void queueTextAdvance()}
@@ -907,9 +941,9 @@ export function SmartKolInputPanel({
               className="inline-flex min-h-[32px] items-center justify-center gap-1.5 rounded-md border border-emerald-300/18 bg-emerald-500/[0.12] px-3 text-[10.5px] font-medium text-emerald-100 transition-colors hover:bg-emerald-500/[0.20] disabled:cursor-not-allowed disabled:opacity-55"
             >
               {state === "executing" ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
-              后台深度查找
+              {deepFindOn ? "重新全网查找" : "立即全网查找"}
             </button>
-            <span className="text-[10px] text-slate-600">15+15 候选 · 新发现 · 逐个补档 · V6 Fit 不触碰</span>
+            <span className="text-[10px] text-slate-600">所选平台全量发现 · 逐个补档 · V6 Fit 不触碰</span>
           </div>
           {advanceResult || activeSearchSession || sessionPollNotice ? (
             <div className="mt-2 rounded-md border border-emerald-300/18 bg-emerald-400/[0.08] px-2.5 py-2 text-[10.5px] text-emerald-100">

@@ -584,6 +584,7 @@ export async function smartKolSearchProfileAdvanceJob(
     representativeVideoLimit?: number;
     includeNewDiscovery?: boolean;
     newDiscoveryLimit?: number;
+    newDiscoveryPlatforms?: string[];
     timeoutMs?: number;
   } = {},
 ): Promise<VkpiKolSmartSearchProfileAdvanceResponse> {
@@ -592,6 +593,7 @@ export async function smartKolSearchProfileAdvanceJob(
     queue_pipeline: true,
     include_new_discovery: params.includeNewDiscovery ?? true,
   };
+  if (params.newDiscoveryPlatforms?.length) body.new_discovery_platforms = params.newDiscoveryPlatforms;
   if (typeof params.candidateLimit === "number") body.candidate_limit = params.candidateLimit;
   if (typeof params.limit === "number") body.limit = params.limit;
   if (typeof params.creatorQuota === "number") body.creator_quota = params.creatorQuota;
