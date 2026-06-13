@@ -150,6 +150,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "111_vkpi_kol_pool_real_er_shadow.sql",
     "112_apify_jobs_started_at.sql",
     "113_vkpi_kol_pool_suspect_inflation.sql",
+    "114_vkpi_kol_pool_touches.sql",
 )
 
 try:

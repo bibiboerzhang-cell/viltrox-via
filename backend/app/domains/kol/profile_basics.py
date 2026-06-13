@@ -132,9 +132,18 @@ def write_kol_profile_basics(
                 after_scores = _score_snapshot(db, [target_id])
                 changed_ids = _changed_score_ids(before_scores, after_scores)
         else:
+            # P0-4 修复 score 守卫误杀:ON CONFLICT DO UPDATE 可能落到已 enrich 的既有
+            # (platform,handle) 行,其 viltrox_fit_score 非空。旧码 _new_row_has_score 会把
+            # 『撞已评分行』误判为『新行被打分』→误回滚『二次贴 URL 刷新已评分 KOL』正常场景。
+            # 改法:INSERT 前按 (platform,handle) 快照既有 score;若冲突落到同一既有 id,
+            # 用 before==after 比对(仅 score 真变才回滚);若是真新行,保留旧守卫。
+            pre_id = _preexisting_pool_id(db, planned_values.get("platform"), planned_values.get("handle"))
+            insert_before_scores = _score_snapshot(db, [pre_id]) if pre_id else {}
             target_id = _execute_insert(db, planned_values)
             after_scores = _score_snapshot(db, [target_id])
-            if _new_row_has_score(after_scores.get(target_id, {})):
+            if pre_id is not None and int(pre_id) == int(target_id):
+                changed_ids = _changed_score_ids(insert_before_scores, after_scores)
+            elif _new_row_has_score(after_scores.get(target_id, {})):
                 changed_ids = [target_id]
 
         if changed_ids:
@@ -217,13 +226,16 @@ def _execute_update(conn: Any, kol_pool_id: int, values: dict[str, Any]) -> None
     )
 
 
-def _execute_insert(conn: Any, values: dict[str, Any]) -> int:
-    columns = [field for field in values]
-    placeholders = ", ".join("?" for _ in columns)
-    conn.execute(
-        f"INSERT INTO vkpi_kol_pool ({', '.join(columns)}) VALUES ({placeholders})",
-        tuple(values[field] for field in columns),
-    )
+# ON CONFLICT(platform,handle) 范式与 pool.import_items 同口径:贴 URL 单建档撞
+# UNIQUE(platform,handle)(039:42)时不再 IntegrityError,而是 DO UPDATE 既有行的
+# profile-basics 列。SCORE_FIELDS 绝不出现在 SET(skip 列 + 派生自 INSERT_FIELDS),
+# 既有评分原样保留(红线:不新增 fit_score 写点)。pool_uid 仅 INSERT 生效、冲突不覆写。
+_PROFILE_BASICS_CONFLICT_SKIP = {"platform", "handle", "pool_uid"}
+
+
+def _preexisting_pool_id(conn: Any, platform: Any, handle: Any) -> int | None:
+    """按 (platform,handle) 取既有行 id(若有)。供 insert 路径在 ON CONFLICT 前
+    快照既有 score——区分『真新行』与『撞已评分行』,避免 score 守卫误杀。"""
     row = conn.execute(
         """
         SELECT id
@@ -232,11 +244,32 @@ def _execute_insert(conn: Any, values: dict[str, Any]) -> int:
         ORDER BY id DESC
         LIMIT 1
         """,
-        (values.get("platform"), values.get("handle")),
+        (platform, handle),
     ).fetchone()
-    if not row:
+    return int(row["id"]) if row else None
+
+
+def _execute_insert(conn: Any, values: dict[str, Any]) -> int:
+    columns = [field for field in values]
+    placeholders = ", ".join("?" for _ in columns)
+    set_cols = [c for c in columns if c not in _PROFILE_BASICS_CONFLICT_SKIP]
+    update_clause = ", ".join(f"{c}=excluded.{c}" for c in set_cols)
+    # vkpi_kol_pool 自带 updated_at(039:41);冲突时同步刷新时间戳。
+    if "updated_at" in _table_columns(conn, "vkpi_kol_pool") and "updated_at" not in set_cols:
+        update_clause = (update_clause + ", " if update_clause else "") + "updated_at=NOW()"
+    if not update_clause:
+        update_clause = "handle=excluded.handle"  # no-op 占位,保 DO UPDATE 语法合法
+    conn.execute(
+        f"""
+        INSERT INTO vkpi_kol_pool ({', '.join(columns)}) VALUES ({placeholders})
+        ON CONFLICT(platform, handle) DO UPDATE SET {update_clause}
+        """,
+        tuple(values[field] for field in columns),
+    )
+    row_id = _preexisting_pool_id(conn, values.get("platform"), values.get("handle"))
+    if row_id is None:
         raise RuntimeError("inserted vkpi_kol_pool row could not be reloaded")
-    return int(row["id"])
+    return row_id
 
 
 def _load_pool_row(conn: Any, kol_pool_id: int | None) -> dict[str, Any] | None:

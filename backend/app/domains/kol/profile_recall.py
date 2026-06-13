@@ -223,6 +223,7 @@ def _entry_rows(kol_pool_ids: list[int]) -> dict[int, dict[str, Any]]:
           AND e.method = ?
           AND e.status = 'ready'
           AND e.profile_type IN ('creator', 'reviewer', 'mixed')
+          AND p.duplicate_of_id IS NULL
           AND e.kol_pool_id IN ({placeholders})
         """,
         (COLLECTION_NAME, METHOD, *kol_pool_ids),

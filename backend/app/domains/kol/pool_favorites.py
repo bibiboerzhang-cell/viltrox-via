@@ -105,6 +105,7 @@ def list_favorites(*, staff: dict[str, Any] | None = None, limit: int = 2000) ->
         FROM vkpi_kol_pool_favorites f
         JOIN vkpi_kol_pool kp ON kp.id = f.kol_pool_id
         WHERE f.staff_id=?
+          AND kp.duplicate_of_id IS NULL
         ORDER BY f.created_at DESC, f.id DESC
         LIMIT ?
         """,

@@ -326,6 +326,9 @@ def _pool_filter_clause(
         placeholders = ",".join(["?"] * len(ENRICHABLE_PLATFORMS))
         where.append(f"platform NOT IN ({placeholders})")
         params.extend(sorted(ENRICHABLE_PLATFORMS))
+    # P0-4 去重激活:全链统一滤掉归并从行(duplicate_of_id 非空=已并入主记录)。
+    # 此处是 list_pool/workspace 两读的单一收口(主行 duplicate_of_id IS NULL 恒过)。
+    where.append("duplicate_of_id IS NULL")
     clause = "WHERE " + " AND ".join(where) if where else ""
     return clause, params
 
@@ -486,8 +489,11 @@ def summary() -> dict[str, Any]:
     if cached is not None:
         return _kol_pool_cache_hit(cached)
     conn = get_conn()
-    total = conn.execute("SELECT COUNT(*) AS n FROM vkpi_kol_pool").fetchone()
-    linked = conn.execute("SELECT COUNT(*) AS n FROM vkpi_kol_pool WHERE linked_main_kol_id IS NOT NULL").fetchone()
+    # P0-4 半接修复:workspace(:390)调 summary() 算总量,若 total 不滤 duplicate_of_id,
+    # 归并后 filtered_count(已滤)与 summary().total(未滤)打架。total/linked 加 IS NULL 对齐。
+    # historical(source_type 分布)保留口径不滤——它是『历史名录占比』统计语义,见 open_question。
+    total = conn.execute("SELECT COUNT(*) AS n FROM vkpi_kol_pool WHERE duplicate_of_id IS NULL").fetchone()
+    linked = conn.execute("SELECT COUNT(*) AS n FROM vkpi_kol_pool WHERE duplicate_of_id IS NULL AND linked_main_kol_id IS NOT NULL").fetchone()
     historical = conn.execute("SELECT COUNT(*) AS n FROM vkpi_kol_pool WHERE source_type=?", ("promo_plan_xlsx",)).fetchone()
     by_platform = conn.execute(
         "SELECT platform, COUNT(*) AS n FROM vkpi_kol_pool GROUP BY platform ORDER BY n DESC, platform ASC"

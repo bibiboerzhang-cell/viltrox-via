@@ -713,7 +713,9 @@ def list_available_project_kols(
             FROM vkpi_project_kol_assignments a
             WHERE a.project_id = ? AND a.kol_pool_id = p.id
         )
-        """
+        """,
+        # P0-4:项目可选池滤归并从行,避免同一人多平台条目重复入选。
+        "p.duplicate_of_id IS NULL",
     ]
     params: list[Any] = [int(project_id)]
     # 默认收藏子集:仅本人已收藏的 pool 行可选;want_all 逃生门跳过此闸。
@@ -897,6 +899,29 @@ def add_project_kols(project_id: int, body: dict[str, Any], *, staff: dict[str, 
         ).fetchone()
         if row:
             inserted += 1
+            # P0-4 触达历史回流:加入项目=一次明确触达(谁/何时/经哪个项目)。最薄记录,
+            # ON CONFLICT 幂等(同人同项目同 channel 不重复堆);失败旁路不阻断 assignment 主写。
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO vkpi_kol_pool_touches
+                        (kol_pool_id, staff_id, channel, project_id, note, touched_at, created_at)
+                    VALUES (?, ?, 'project_assignment', ?, ?, ?, ?)
+                    ON CONFLICT (kol_pool_id, channel, project_id) DO UPDATE SET
+                        staff_id=excluded.staff_id,
+                        touched_at=excluded.touched_at
+                    """,
+                    (
+                        int(kol_pool_id),
+                        assigned_staff_id or actor_staff_id or None,
+                        int(project_id),
+                        "added to project",
+                        now,
+                        now,
+                    ),
+                )
+            except Exception:
+                logger.warning("kol_pool touch log skipped for pool_id=%s project_id=%s", kol_pool_id, project_id, exc_info=True)
         else:
             skipped_existing += 1
     if inserted:
