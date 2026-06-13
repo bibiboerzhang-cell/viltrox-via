@@ -420,6 +420,7 @@ export interface VkpiKolUrlDeepCrawlResponse {
     creator_resolution_status?: "resolved" | "unresolved" | string;
     creator_identity?: Row | null;
     video_metadata?: Row | null;
+    cached_video_url?: string | null;
     evidence_result?: Row;
     enqueue_result?: Row;
     profile_flow?: Row;
@@ -544,6 +545,7 @@ export async function smartKolSearch(
     productSku?: string;
     sessionId?: number;
     createSession?: boolean;
+    excludeChinese?: boolean;
     timeoutMs?: number;
   } = {},
 ): Promise<VkpiKolSmartSearchResponse> {
@@ -560,6 +562,7 @@ export async function smartKolSearch(
   if (typeof params.reviewerQuota === "number") body.reviewer_quota = params.reviewerQuota;
   if (params.productSku) body.product_sku = params.productSku;
   if (typeof params.sessionId === "number") body.session_id = params.sessionId;
+  if (typeof params.excludeChinese === "boolean") body.exclude_chinese = params.excludeChinese;
   return apiFetch<VkpiKolSmartSearchResponse>(
     "/api/admin/vkpi/kol-smart-search",
     {
@@ -585,6 +588,7 @@ export async function smartKolSearchProfileAdvanceJob(
     includeNewDiscovery?: boolean;
     newDiscoveryLimit?: number;
     newDiscoveryPlatforms?: string[];
+    excludeChinese?: boolean;
     timeoutMs?: number;
   } = {},
 ): Promise<VkpiKolSmartSearchProfileAdvanceResponse> {
@@ -594,6 +598,7 @@ export async function smartKolSearchProfileAdvanceJob(
     include_new_discovery: params.includeNewDiscovery ?? true,
   };
   if (params.newDiscoveryPlatforms?.length) body.new_discovery_platforms = params.newDiscoveryPlatforms;
+  if (typeof params.excludeChinese === "boolean") body.exclude_chinese = params.excludeChinese;
   if (typeof params.candidateLimit === "number") body.candidate_limit = params.candidateLimit;
   if (typeof params.limit === "number") body.limit = params.limit;
   if (typeof params.creatorQuota === "number") body.creator_quota = params.creatorQuota;

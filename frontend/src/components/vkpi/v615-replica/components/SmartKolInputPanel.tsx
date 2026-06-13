@@ -28,6 +28,16 @@ function asRecord(value: unknown): Row {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Row : {};
 }
 
+// YouTube embed:复用 KOLDetailDrawer 的 youtube-nocookie 格式(B:视频结果区可播放)。
+function youtubeEmbedUrl(videoId: string): string {
+  const id = String(videoId || "").trim();
+  if (!id) return "";
+  const origin = typeof window !== "undefined" && window.location?.origin
+    ? `&origin=${encodeURIComponent(window.location.origin)}`
+    : "";
+  return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?rel=0&playsinline=1&modestbranding=1${origin}`;
+}
+
 function display(value: unknown, fallback = "--"): string {
   const text = cleanText(value);
   return text || fallback;
@@ -406,6 +416,66 @@ function PlanPills({ plan }: { plan: Row }) {
   );
 }
 
+function ProfileInfoCard({ data }: { data: Row }) {
+  const [imgError, setImgError] = useState(false);
+  const avatar = proxiedImageUrl(cleanText(data.avatar_url));
+  const handle = cleanText(data.handle);
+  const platform = cleanText(data.platform);
+  const name = display(handle || platform || "账户");
+  const followers = numberLabel(data.followers);
+  const posts = numberLabel(data.posts_count);
+  const bio = cleanText(data.bio);
+  const profileUrl = cleanText(data.profile_url);
+  const showImg = Boolean(avatar) && !imgError;
+  return (
+    <div className="mt-2 flex items-start gap-3 rounded-md border border-white/[0.07] bg-black/20 px-2.5 py-2">
+      <span
+        className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full text-[14px] font-bold text-white"
+        style={{ background: "linear-gradient(135deg,#7c3aed,#06b6d4)" }}
+      >
+        {showImg ? (
+          <img
+            src={avatar}
+            alt=""
+            className="h-full w-full rounded-full object-cover"
+            referrerPolicy="no-referrer"
+            onError={() => setImgError(true)}
+          />
+        ) : (
+          name.slice(0, 1).toUpperCase()
+        )}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="truncate text-[12px] font-medium text-slate-100">{name}</span>
+          {platform ? (
+            <span className="shrink-0 rounded border border-white/[0.08] px-1 text-[9px] text-slate-400">{platform}</span>
+          ) : null}
+          {followers ? (
+            <span className="shrink-0 rounded bg-amber-400/[0.10] px-1 text-[9px] font-semibold text-amber-200/90">{followers} 粉</span>
+          ) : null}
+          {posts ? (
+            <span className="shrink-0 rounded bg-cyan-400/[0.10] px-1 text-[9px] font-semibold text-cyan-200/90">{posts} 帖</span>
+          ) : null}
+        </div>
+        {bio ? (
+          <p className="mt-1 line-clamp-2 text-[10.5px] leading-relaxed text-slate-400">{bio}</p>
+        ) : null}
+        {profileUrl ? (
+          <a
+            href={profileUrl}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="mt-1 inline-block truncate text-[10px] text-cyan-300/80 hover:text-cyan-200 hover:underline"
+          >
+            {profileUrl}
+          </a>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function UrlSummary({
   result,
   canExecute,
@@ -432,6 +502,10 @@ function UrlSummary({
   const latency = durationLabel(analysis.latency_ms);
   const platform = cleanText(result.platform).toLowerCase();
   const isVideo = result.url_type === "video";
+  const cachedVideoUrl = cleanText(videoFlow.cached_video_url);
+  const youtubeVideoId = cleanText(result.video_id || videoFlow.video_id);
+  const videoPoster = proxiedImageUrl(cleanText(metadata.thumbnail_url));
+  const hasPlayableVideo = isVideo && (platform === "youtube" ? Boolean(youtubeVideoId) : Boolean(cachedVideoUrl));
   const profileOperation = cleanText(profileFlow.operation);
   const videoOperation = cleanText(videoFlow.operation);
   const operation = ["existing_creator_video_analysis", "new_creator_video_analysis"].includes(profileOperation)
@@ -494,10 +568,37 @@ function UrlSummary({
           </button>
         </div>
       </div>
+      {hasPlayableVideo ? (
+        <div className="mt-2 overflow-hidden rounded-md border border-white/[0.08] bg-black/40">
+          <div className="relative w-full" style={{ aspectRatio: "16 / 9" }}>
+            {platform === "youtube" ? (
+              <iframe
+                src={youtubeEmbedUrl(youtubeVideoId)}
+                title={display(metadata.title || result.video_id)}
+                className="absolute inset-0 h-full w-full"
+                allow="autoplay; encrypted-media; picture-in-picture"
+                allowFullScreen
+              />
+            ) : (
+              <video
+                src={cachedVideoUrl}
+                poster={videoPoster || undefined}
+                controls
+                playsInline
+                preload="metadata"
+                className="absolute inset-0 h-full w-full bg-black object-contain"
+              />
+            )}
+          </div>
+        </div>
+      ) : null}
       {disabledReason ? (
         <div className="mt-2 rounded-md border border-amber-300/20 bg-amber-400/[0.08] px-2 py-1.5 text-[10.5px] text-amber-100">
           {disabledReason}
         </div>
+      ) : null}
+      {!isVideo && Object.keys(asRecord(profileFlow.profile_data)).length ? (
+        <ProfileInfoCard data={asRecord(profileFlow.profile_data)} />
       ) : null}
       {executeDone ? (
         <div className={`mt-2 rounded-md border px-2 py-1.5 text-[10.5px] ${
@@ -550,6 +651,8 @@ export function SmartKolInputPanel({
   const [discoveryPlatforms, setDiscoveryPlatforms] = useState<string[]>(["youtube", "instagram", "tiktok"]);
   // 开闸全量(用户裁令「直接开闸全量」):深度查找默认开,文字搜索后自动触发全网发现一步到位。
   const [deepFindOn, setDeepFindOn] = useState(true);
+  // 规避中国人/中文 KOL(用户硬诉求):默认开,库内召回侧按国别+中文名判据排除大陆中文号。
+  const [excludeChinese, setExcludeChinese] = useState(true);
 
   const inferredMode = useMemo(() => detectMode(input), [input]);
   const isBusy = state === "loading" || state === "executing";
@@ -767,6 +870,7 @@ export function SmartKolInputPanel({
         creatorQuota: 7,
         reviewerQuota: 3,
         createSession: true,
+        excludeChinese,
         timeoutMs: 60000,
       });
       const responseMode = cleanText(response.mode);
@@ -836,6 +940,7 @@ export function SmartKolInputPanel({
         includeNewDiscovery: true,
         newDiscoveryLimit: 15,
         newDiscoveryPlatforms: discoveryPlatforms,
+        excludeChinese,
         timeoutMs: 300000,
       });
       setAdvanceResult(response);
@@ -1027,6 +1132,10 @@ export function SmartKolInputPanel({
                 );
               })}
               <span className="rounded-full border border-white/[0.06] px-2 py-0.5 text-[10px] text-slate-600" title="Facebook 发现待 provider 落地">Facebook · 即将</span>
+              <label className="flex items-center gap-1 text-[10px] text-slate-400" title="库内召回排除大陆中文 KOL(国别/中文名判据)">
+                <input type="checkbox" checked={excludeChinese} onChange={(event) => setExcludeChinese(event.target.checked)} className="accent-emerald-500" />
+                排除中文 KOL
+              </label>
               <button
                 type="button"
                 onClick={() => void queueTextAdvance()}
