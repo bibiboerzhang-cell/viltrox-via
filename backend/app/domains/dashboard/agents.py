@@ -49,6 +49,23 @@ def _artifact_mtime_iso(path: Path | None) -> str | None:
     return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+# A0-2 诚实化:dashboard agent 工件是只读 ops 输出,超 7 天视为陈旧,供前端标注而非当实时。
+_DASHBOARD_STALE_AFTER_DAYS = 7
+
+
+def _artifact_is_stale(path: Path | None) -> bool:
+    if not path:
+        return False
+    age = datetime.now(tz=timezone.utc) - datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+    return age.total_seconds() > _DASHBOARD_STALE_AFTER_DAYS * 86400
+
+
+def _artifact_mtime_iso_from_epoch(epoch: float) -> str | None:
+    if not epoch:
+        return None
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
 def _agent_summary(agent_id: str, payload: dict[str, Any], kol_pool_total: int) -> str:
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     if agent_id == "recommendation":
@@ -143,28 +160,43 @@ def _build_dashboard_agents_inbox(
                 item = _dashboard_agent_inbox_item(spec, path)
                 if item:
                     item["_mtime"] = path.stat().st_mtime
+                    item["stale"] = _artifact_is_stale(path)
                     items.append(item)
     items.sort(key=lambda item: (float(item.get("_mtime") or 0), str(item.get("artifact_name") or "")), reverse=True)
+    newest_mtime = max((float(item.get("_mtime") or 0) for item in items), default=0.0)
     for item in items:
         item.pop("_mtime", None)
     bounded_limit = max(1, min(100, int(limit or 50)))
+    newest_generated_at = items[0].get("generated_at") if items else None
+    all_stale = bool(items) and all(item.get("stale") for item in items)
     return {
         "items": items[:bounded_limit],
         "total": len(items),
         "limit": bounded_limit,
         "agent_id": normalized_agent_id,
         "ops_dir": ops_dir,
-        "is_real": True,
+        # A0-2 诚实化:仅当真加载到 runtime/ops 工件才 is_real(空集→false,前端走空态不误伤)。
+        "is_real": bool(items),
+        "stale": all_stale,
+        "newest_generated_at": newest_generated_at,
+        "newest_artifact_mtime": _artifact_mtime_iso_from_epoch(newest_mtime) if newest_mtime else None,
         "source": "runtime/ops",
     }
 
 
 def _build_dashboard_agents_status(ops_dir: str = "runtime/ops", kol_pool_total: int = 0) -> dict[str, Any]:
     agents: list[dict[str, Any]] = []
+    loaded_artifact_count = 0
+    stale_artifact_count = 0
     for spec in DASHBOARD_AGENT_SPECS:
         path = _latest_dashboard_agent_artifact(ops_dir, spec["pattern"])
         payload = _load_dashboard_agent_json(path)
         loaded = bool(path and payload)
+        stale = _artifact_is_stale(path) if loaded else False
+        if loaded:
+            loaded_artifact_count += 1
+            if stale:
+                stale_artifact_count += 1
         passed = payload.get("passed")
         status = "active" if loaded and passed is not False else "warning" if loaded else "idle"
         agents.append({
@@ -173,6 +205,8 @@ def _build_dashboard_agents_status(ops_dir: str = "runtime/ops", kol_pool_total:
             "status": status,
             "last_output": path.name if path else "",
             "last_run_at": _artifact_mtime_iso(path),
+            "generated_at": payload.get("generated_at") or None,
+            "stale": stale,
             "summary": _agent_summary(spec["id"], payload, kol_pool_total) if loaded else "暂无 runtime/ops 输出",
             "mode": payload.get("mode") or "",
             "passed": bool(passed) if passed is not None else False,
@@ -183,6 +217,8 @@ def _build_dashboard_agents_status(ops_dir: str = "runtime/ops", kol_pool_total:
         "status": "active" if kol_pool_total else "idle",
         "last_output": "vkpi_kol_pool",
         "last_run_at": None,
+        "generated_at": None,
+        "stale": False,
         "summary": _agent_summary("kol_intel", {}, kol_pool_total),
         "mode": "read_only_kol_intelligence_card_v0",
         "passed": bool(kol_pool_total),
@@ -193,7 +229,10 @@ def _build_dashboard_agents_status(ops_dir: str = "runtime/ops", kol_pool_total:
         "active_count": active_count,
         "total": len(agents),
         "ops_dir": ops_dir,
-        "is_real": True,
+        # A0-2 诚实化:有工件加载或池有行才 is_real(全 idle 且空池→false)。
+        "is_real": bool(loaded_artifact_count or kol_pool_total),
+        "stale": loaded_artifact_count > 0 and stale_artifact_count == loaded_artifact_count,
+        "loaded_artifact_count": loaded_artifact_count,
         "source": "runtime/ops + vkpi_kol_pool",
     }
 
@@ -234,6 +273,8 @@ def _build_dashboard_tasks(ops_dir: str = "runtime/ops", limit: int = 6) -> dict
     candidates = payload.get("candidates") if isinstance(payload.get("candidates"), list) else []
     next_steps = payload.get("next_steps") if isinstance(payload.get("next_steps"), list) else []
     tasks: list[dict[str, Any]] = []
+    artifact_real = bool(path and payload)
+    artifact_stale = _artifact_is_stale(path)
     for index, candidate in enumerate(candidates[: max(1, min(20, int(limit or 6)))]):
         item = candidate if isinstance(candidate, dict) else {}
         confidence = float(item.get("confidence") or item.get("score") or 0)
@@ -247,7 +288,9 @@ def _build_dashboard_tasks(ops_dir: str = "runtime/ops", limit: int = 6) -> dict
             "priority": priority,
             "confidence": confidence,
             "source": "recommendation_agent_v0",
-            "is_real": True,
+            # A0-2 诚实化:由是否有真实推荐工件支撑派生,不再硬编码 True。
+            "is_real": artifact_real,
+            "stale": artifact_stale,
         })
     return {
         "tasks": tasks,
@@ -255,7 +298,9 @@ def _build_dashboard_tasks(ops_dir: str = "runtime/ops", limit: int = 6) -> dict
         "candidate_count": len(candidates),
         "last_output": path.name if path else "",
         "last_run_at": _artifact_mtime_iso(path),
+        "generated_at": payload.get("generated_at") or None,
         "mode": payload.get("mode") or "",
-        "is_real": bool(path and payload),
+        "is_real": artifact_real,
+        "stale": artifact_stale,
         "source": "runtime/ops p7-82 recommendation agent",
     }
