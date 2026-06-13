@@ -161,6 +161,7 @@ def dry_run_url_deep_crawl(body: dict[str, Any]) -> dict[str, Any]:
         safety["business_tables_written"] = bool(video_flow.get("business_tables_written"))
         safety["worker_touched"] = bool(video_flow.get("worker_touched"))
         safety["viltrox_fit_touched"] = bool(video_flow.get("viltrox_fit_score_changed_ids"))
+        safety["provider_calls_performed"] = safety["provider_calls_performed"] or bool(video_flow.get("provider_calls_performed"))
     elif execute and classified.url_type == "video" and video_flow and _video_creator_resolved(video_flow):
         video_flow = _execute_new_creator_video_flow(classified, video_flow, body)
         if isinstance(video_flow.get("profile_flow"), dict):
@@ -169,6 +170,7 @@ def dry_run_url_deep_crawl(body: dict[str, Any]) -> dict[str, Any]:
         safety["business_tables_written"] = bool(video_flow.get("business_tables_written"))
         safety["worker_touched"] = bool(video_flow.get("worker_touched"))
         safety["viltrox_fit_touched"] = bool(video_flow.get("viltrox_fit_score_changed_ids"))
+        safety["provider_calls_performed"] = safety["provider_calls_performed"] or bool(video_flow.get("provider_calls_performed"))
     elif execute and classified.url_type == "video" and video_flow:
         video_flow = {
             **video_flow,
@@ -751,6 +753,42 @@ def _execute_profile_flow(
     }
 
 
+def _cache_video_flow_url(
+    classified: ClassifiedUrl,
+    metadata: dict[str, Any] | None,
+    evidence_id: int | None,
+) -> tuple[str | None, bool]:
+    """为 video URL 结果区把 IG/TikTok 视频就地喂 R2,返回 (cached_video_url, provider_called)。
+
+    YouTube 走前端 embed 不缓存;失败/skip 不毁主链(媒体缓存属增强)。
+    模式照搬 url_deep_crawl 媒体回灌段(cache_video_for_item)。
+    """
+    platform_key = str(getattr(classified, "platform", "") or "").lower()
+    if not evidence_id or not platform_key or platform_key == "youtube":
+        return None, False
+    content_url = ""
+    if isinstance(metadata, dict):
+        content_url = str(metadata.get("content_url") or "").strip()
+    content_url = content_url or classified.normalized_url
+    if not content_url:
+        return None, False
+    try:
+        from app.domains.media.cache import cache_video_for_item
+
+        vid = cache_video_for_item(platform_key, str(evidence_id), content_url)
+        cached_url = str(vid.get("cached_url") or "").strip() or None
+        logger.info(
+            "video_flow r2 warm evidence_id=%s platform=%s status=%s",
+            evidence_id,
+            platform_key,
+            vid.get("status"),
+        )
+        return cached_url, True
+    except Exception:
+        logger.warning("video_flow r2 warm failed evidence_id=%s platform=%s", evidence_id, platform_key)
+        return None, True
+
+
 def _execute_existing_creator_video_flow(
     classified: ClassifiedUrl,
     matches: list[dict[str, Any]],
@@ -770,6 +808,8 @@ def _execute_existing_creator_video_flow(
     error = ""
     evidence_id: int | None = None
     changed_ids: list[int] = []
+    cached_video_url: str | None = None
+    video_provider_called = False
 
     try:
         evidence_result = ensure_video_evidence_from_url(
@@ -804,6 +844,8 @@ def _execute_existing_creator_video_flow(
             pass
         error = str(exc)[:500]
         status = "failed"
+
+    cached_video_url, video_provider_called = _cache_video_flow_url(classified, metadata, evidence_id)
 
     account_dossier_extract_job = None
     if status == "already_analyzed":
@@ -858,6 +900,8 @@ def _execute_existing_creator_video_flow(
         "worker_touched": worker_touched or bool(account_dossier_extract_job and account_dossier_extract_job.get("status") == "queued"),
         "write_db": business_tables_written,
         "writes": ["vkpi_kol_video_evidence", "apify_jobs", "vkpi_kol_url_deep_crawl_runs"],
+        "cached_video_url": cached_video_url,
+        "provider_calls_performed": video_provider_called,
         "llm_calls_performed": False,
         "viltrox_fit_score_changed_ids": sorted(set(changed_ids)),
         "viltrox_fit_score_untouched": not changed_ids,
@@ -886,6 +930,8 @@ def _execute_new_creator_video_flow(
     status = "failed"
     error = ""
     changed_ids: list[int] = []
+    cached_video_url: str | None = None
+    video_provider_called = False
 
     if not profile_classified:
         run_id = _record_deep_crawl_run(
@@ -1001,6 +1047,10 @@ def _execute_new_creator_video_flow(
         error = str(exc)[:500]
         status = "failed"
 
+    cached_video_url, video_provider_called = _cache_video_flow_url(
+        classified, video_flow.get("video_metadata") if isinstance(video_flow.get("video_metadata"), dict) else None, evidence_id
+    )
+
     account_dossier_extract_job = None
     if status == "already_analyzed" and kol_pool_id:
         account_dossier_extract_job = _enqueue_account_dossier_extract_followup(
@@ -1087,6 +1137,8 @@ def _execute_new_creator_video_flow(
         or bool(account_dossier_extract_job and account_dossier_extract_job.get("status") == "queued"),
         "write_db": business_tables_written,
         "writes": ["vkpi_kol_pool", "vkpi_kol_video_evidence", "apify_jobs", "vkpi_kol_url_deep_crawl_runs"],
+        "cached_video_url": cached_video_url,
+        "provider_calls_performed": video_provider_called,
         "llm_calls_performed": False,
         "viltrox_fit_score_changed_ids": sorted(set(changed_ids)),
         "viltrox_fit_score_untouched": not changed_ids,
