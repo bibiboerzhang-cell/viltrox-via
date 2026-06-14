@@ -239,3 +239,123 @@
 .v615-settings-dark p,
 .v615-settings-dark small,
 .v615-settings-dark em { color: var(--vkpi-muted); }
+
+/* ════════════════════════════════════════════════════════════════════════
+ * 全面排查:settings CSS 里所有「硬编码白底/浅底」类的兜底暗化
+ * (来源:vkpi-settings-traffic.css 全量 grep #fff/#f8fafc/白渐变)
+ * 作用域隔离,只影响系统设置覆盖层。
+ * ════════════════════════════════════════════════════════════════════════ */
+
+/* A. 容器 / 卡片 / 信息块 → 暗玻璃 */
+.v615-settings-dark .vkpi-settings-secondary details,
+.v615-settings-dark .vkpi-platform-crawl-list,
+.v615-settings-dark .vkpi-platform-crawl-kpis div,
+.v615-settings-dark .vkpi-settings-check-row--panel,
+.v615-settings-dark .vkpi-selected-product-detail dl div,
+.v615-settings-dark .vkpi-invite-mode-row,
+.v615-settings-dark .vkpi-existing-kol-row,
+.v615-settings-dark .vkpi-inline-list,
+.v615-settings-dark .vkpi-detail-forms,
+.v615-settings-dark .vkpi-detail-forms .vkpi-form-stack,
+.v615-settings-dark .vkpi-flow-step,
+.v615-settings-dark .vkpi-info-block,
+.v615-settings-dark .vkpi-digest-details,
+.v615-settings-dark .vkpi-lookup-summary,
+.v615-settings-dark .vkpi-settings-list span,
+.v615-settings-dark .vkpi-intelligence-evidence-context,
+.v615-settings-dark .vkpi-intelligence-quality-checks span,
+.v615-settings-dark .vkpi-product-catalog-row,
+.v615-settings-dark .vkpi-digest-source-strip span {
+  background: rgba(255, 255, 255, 0.018);
+  border-color: rgba(255, 255, 255, 0.06);
+  color: var(--vkpi-text);
+  box-shadow: none;
+}
+
+/* B. 胶囊 / 小按钮 / 标签 / 模板片 → 暗 subtle(含「权限模板」选择片 员工工作台/KOL外联…) */
+.v615-settings-dark .vkpi-staff-template-row button,
+.v615-settings-dark .vkpi-settings-check-row label,
+.v615-settings-dark .vkpi-platform-advanced-toggle,
+.v615-settings-dark .vkpi-crawl-primary-toggle,
+.v615-settings-dark .vkpi-crawl-primary-toggle.is-off,
+.v615-settings-dark .vkpi-chip,
+.v615-settings-dark .vkpi-settings-tabs button,
+.v615-settings-dark .vkpi-permission-levels button,
+.v615-settings-dark .vkpi-staff-permission-drawer__header button,
+.v615-settings-dark .vkpi-evidence-drawer header button {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: var(--vkpi-text);
+  box-shadow: none;
+}
+.v615-settings-dark .vkpi-staff-template-row button:hover,
+.v615-settings-dark .vkpi-chip:hover,
+.v615-settings-dark .vkpi-settings-tabs button:hover,
+.v615-settings-dark .vkpi-platform-advanced-toggle:hover { background: rgba(255, 255, 255, 0.08); }
+
+/* C. 选中态胶囊 → 紫色高亮 */
+.v615-settings-dark .vkpi-settings-tabs button.is-active,
+.v615-settings-dark .vkpi-staff-template-row button.is-active,
+.v615-settings-dark .vkpi-staff-template-row button[aria-pressed="true"],
+.v615-settings-dark .vkpi-chip.is-active,
+.v615-settings-dark .vkpi-permission-levels button.is-active,
+.v615-settings-dark .vkpi-permission-levels button[aria-pressed="true"] {
+  background: rgba(168, 85, 247, 0.16);
+  border-color: rgba(168, 85, 247, 0.4);
+  color: #d8b9ff;
+}
+
+/* D. 带类名的输入框 → 暗(通用 input 规则之外的补充) */
+.v615-settings-dark .vkpi-product-search-input,
+.v615-settings-dark .vkpi-activation-link-panel input,
+.v615-settings-dark .vkpi-digest-scope input,
+.v615-settings-dark .vkpi-form-stack textarea {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: var(--vkpi-text);
+}
+
+/* E. 抽屉(证据/评估)→ 暗 */
+.v615-settings-dark .vkpi-evidence-drawer { background: #14141a; border-color: rgba(255, 255, 255, 0.08); }
+.v615-settings-dark .vkpi-evidence-list article { background: rgba(255, 255, 255, 0.016); border-color: rgba(255, 255, 255, 0.06); }
+
+/* F. 空态面板 → 暗虚线 */
+.v615-settings-dark .vkpi-empty-panel {
+  background: rgba(255, 255, 255, 0.012);
+  border: 1px dashed rgba(255, 255, 255, 0.14);
+  color: var(--vkpi-muted);
+}
+
+/* G. 语义状态:阻断/错误/警告 → 暗化保留色相 */
+.v615-settings-dark .vkpi-inline-message.is-error,
+.v615-settings-dark .vkpi-platform-crawl-row__status.is-blocked,
+.v615-settings-dark .vkpi-platform-crawl-ready.is-blocked,
+.v615-settings-dark .vkpi-platform-crawl-reason.is-blocked {
+  background: rgba(180, 35, 24, 0.16);
+  border-color: rgba(244, 63, 94, 0.3);
+  color: #fda4af;
+}
+.v615-settings-dark .vkpi-inline-message.is-warning {
+  background: rgba(146, 64, 14, 0.18);
+  border-color: rgba(253, 230, 138, 0.3);
+  color: #fde68a;
+}
+
+/* H. 文字色兜底:浅底类里写死的深灰文字(#344054/#475467/#101828/#064e3b)→ 亮 */
+.v615-settings-dark .vkpi-staff-template-row button,
+.v615-settings-dark .vkpi-chip,
+.v615-settings-dark .vkpi-settings-check-row label,
+.v615-settings-dark .vkpi-invite-mode-row,
+.v615-settings-dark .vkpi-settings-list span,
+.v615-settings-dark .vkpi-digest-source-strip span,
+.v615-settings-dark .vkpi-platform-advanced-toggle,
+.v615-settings-dark .vkpi-settings-tabs button,
+.v615-settings-dark .vkpi-activation-link-panel input,
+.v615-settings-dark .vkpi-crawl-primary-toggle.is-off { color: var(--vkpi-text); }
+
+/* I. 跨文件兜底:警告 chip(vkpi-chip--warn,定义在 intelligence css)→ 暗琥珀 */
+.v615-settings-dark .vkpi-chip--warn {
+  background: rgba(146, 64, 14, 0.18);
+  border-color: rgba(253, 186, 116, 0.32);
+  color: #fdba74;
+}
