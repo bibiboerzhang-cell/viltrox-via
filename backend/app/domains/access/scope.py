@@ -111,25 +111,27 @@ def staff_filter(column_sql: str, staff: dict[str, Any] | None, requested_staff_
 
 
 def project_filter(alias: str, staff: dict[str, Any] | None, requested_staff_id: int | None = None) -> tuple[str, list[Any]]:
-    """PV-3 裁决(2026-06-12):员工默认可见全部项目 + 例外遮蔽制。
+    """PV-4 裁决(2026-06-14,用户决策):员工只看自己负责/创建的项目;管理层(can_view_all)全可见。
 
-    旧口径(assigned/created_by 归属过滤)在 33 个项目归属键全 NULL 的现实下
-    把 14 个员工挡成空列表。新口径:admin 全可见(含 restricted);非 admin 可见
-    全部非 restricted 项目(migration 110;先遮后开铁则——14 个 smoke/测试项目
-    已先标 restricted=TRUE 再落本反转)。requested_staff_id 仍生效:显式按人
-    筛选时叠加归属条件(查询语义,非权限)。
+    推翻 PV-3(员工看全部非受限)——用户明确要"员工只看自己做的项目,管理员看全部"。
+    非 admin:(assigned_staff_id=自己 OR created_by_staff_id=自己) AND 非 restricted。
+    归属键由管理层在设置页分配/创建项目时落;未分配的项目对该员工不可见(诚实——尚未派活)。
+    admin 全可见(含 restricted);requested_staff_id 仅在 admin 下作显式按人筛选(查询语义)。
     """
     prefix = f"{alias}." if alias else ""
     if can_view_all(staff):
         if requested_staff_id:
             return f"({prefix}assigned_staff_id = ? OR {prefix}created_by_staff_id = ?)", [int(requested_staff_id), int(requested_staff_id)]
         return "", []
-    clause = f"COALESCE({prefix}restricted, FALSE) = FALSE"
-    params: list[Any] = []
-    if requested_staff_id:
-        clause += f" AND ({prefix}assigned_staff_id = ? OR {prefix}created_by_staff_id = ?)"
-        params = [int(requested_staff_id), int(requested_staff_id)]
-    return f"({clause})", params
+    actor = actor_staff_id(staff)
+    if not actor:
+        # 取不到登录人 → 保守只给非受限(不暴露 restricted),避免空登录态异常
+        return f"(COALESCE({prefix}restricted, FALSE) = FALSE)", []
+    return (
+        f"(COALESCE({prefix}restricted, FALSE) = FALSE AND "
+        f"({prefix}assigned_staff_id = ? OR {prefix}created_by_staff_id = ?))",
+        [int(actor), int(actor)],
+    )
 
 
 def link_filter(alias: str, staff: dict[str, Any] | None, requested_staff_id: int | None = None) -> tuple[str, list[Any]]:
