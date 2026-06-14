@@ -83,7 +83,17 @@ def _load_products(opts: dict[str, Any]) -> list[dict[str, Any]]:
         FROM vkpi_products p
         LEFT JOIN vkpi_product_persona pp ON pp.product_sku = p.sku
         {clause}
-        ORDER BY p.category_main ASC, p.sku ASC
+        ORDER BY
+          CASE p.category_main
+            WHEN 'Cine Lens' THEN 0
+            WHEN 'Lens' THEN 1
+            WHEN 'Monitor' THEN 2
+            WHEN 'Lighting/Flash' THEN 3
+            WHEN 'Lighting' THEN 4
+            WHEN 'Macro Extension Tube' THEN 5
+            ELSE 9
+          END ASC,
+          p.category_main ASC, p.sku ASC
     """
     rows = conn.execute(sql, tuple(params)).fetchall()
     products = [dict(row) for row in rows]
