@@ -35,7 +35,7 @@ from app.platform import llm_gateway  # noqa: E402
 
 PERSONA_SOURCE = "llm_persona_v1"
 # Claude(anthropic)首选 → openai 兜底;绝不用 google/gemini-flash(深度产品分析会截断)。
-PREFERRED_PROVIDER = "anthropic"
+PREFERRED_PROVIDER = "openai"  # GPT:走代理可达、长 specs 上下文稳;anthropic 本环境被墙、google=flash 截断
 PERSONA_COST_TAG = "vkpi_product_persona"
 MAX_OUTPUT_TOKENS = 1100
 
@@ -112,7 +112,7 @@ def _real_specs(product: dict[str, Any]) -> dict[str, Any]:
 
 def _build_prompt(product: dict[str, Any], specs: dict[str, Any]) -> str:
     name = product.get("marketing_name") or product.get("model_name") or product.get("sku")
-    specs_text = json.dumps(specs, ensure_ascii=False, indent=2) if specs else "(无结构化参数,仅凭描述)"
+    specs_text = json.dumps(specs, ensure_ascii=False, indent=2, default=str) if specs else "(无结构化参数,仅凭描述)"
     return (
         "你是 Viltrox(唯卓仕)影像产品的市场推广策略师。基于下方真实产品资料,"
         "为这个 SKU 产出一份「推广方向 persona」:这个产品是什么、最适合哪类创作者、"
@@ -260,14 +260,19 @@ def main(argv: list[str]) -> None:
             try:
                 specs = _real_specs(product)
                 prompt = _build_prompt(product, specs)
-                result = llm_gateway.invoke(
-                    prompt,
-                    purpose="vkpi_product_persona",
-                    preferred_provider=PREFERRED_PROVIDER,
-                    max_output_tokens=MAX_OUTPUT_TOKENS,
-                    cost_tag=PERSONA_COST_TAG,
-                    metadata={"sku": sku, "category": product.get("category_main")},
-                )
+                # provider 间歇掉线(~50%),重试至多 3 次到 success+text(纯重试,不绕预算闸)。
+                result = {}
+                for _attempt in range(3):
+                    result = llm_gateway.invoke(
+                        prompt,
+                        purpose="vkpi_product_persona",
+                        preferred_provider=PREFERRED_PROVIDER,
+                        max_output_tokens=MAX_OUTPUT_TOKENS,
+                        cost_tag=PERSONA_COST_TAG,
+                        metadata={"sku": sku, "category": product.get("category_main"), "attempt": _attempt + 1},
+                    )
+                    if str(result.get("provider") or "") != "rule_v0" and str(result.get("text") or "").strip():
+                        break
                 provider = str(result.get("provider") or "")
                 if provider == "rule_v0" or not str(result.get("text") or "").strip():
                     print(f"SKIP {sku} :: LLM 无产出(provider={provider} status={result.get('status')})——跳过不落库")
