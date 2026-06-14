@@ -148,13 +148,20 @@ def test_invoke_budget_block_records_zero_cost_ledger_without_calling_provider(m
         budget_guard.update_budget("monthly_total", {"cap_usd": 999, "current_spend": 0, "fallback_action": "fallback_to_rule_v0"})
         budget_guard.update_budget("provider:openai", {"cap_usd": 999, "current_spend": 0, "fallback_action": "fallback_to_rule_v0"})
         budget_guard.update_budget(cost_scope, {"cap_usd": 999, "current_spend": 0, "fallback_action": "fallback_to_rule_v0"})
-        budget_guard.update_budget("single_call", {"cap_usd": 0.01, "current_spend": 0.01, "fallback_action": "fallback_to_rule_v0"})
+        # single_call 是"每次调用上限":按 estimated_cost<=cap 硬拦,current_spend 不计入
+        # (见 budget_guard._is_single_call_ceiling_scope 文档)。cap_usd 列精度 2 位小数,
+        # 故最小可设上限=$0.01;只能靠"真实超额请求"触发——下方 max_output_tokens=10000
+        # 让 openai 估算成本=$0.02 > cap $0.01,真正越线。
+        # 关键:即便 skip_budget_check=True,invoke 的 per-provider 硬上限仍照常执行,
+        # 成本护栏不被绕过(skip_budget_check 只跳过月度 env 预检,不跳 provider/single_call 上限)。
+        budget_guard.update_budget("single_call", {"cap_usd": 0.01, "current_spend": 0, "fallback_action": "fallback_to_rule_v0"})
 
         result = llm_gateway.invoke(
             "Budget blocked test",
             purpose=f"{MARKER}-blocked",
             preferred_provider="openai",
             skip_budget_check=True,
+            max_output_tokens=10000,
             cost_tag=cost_scope,
             metadata={"marker": MARKER},
         )

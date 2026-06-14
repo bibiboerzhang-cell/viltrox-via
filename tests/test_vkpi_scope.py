@@ -76,10 +76,14 @@ def test_filter_builders_return_safe_where_clauses():
     assert scope.staff_filter("p.assigned_staff_id", staff(id=14)) == ("p.assigned_staff_id = ?", [14])
     assert scope.staff_filter("p.assigned_staff_id", staff(role="admin")) == ("", [])
     assert scope.project_filter("p", staff(id=15)) == (
-        "(p.assigned_staff_id = ? OR p.created_by_staff_id = ?)",
+        "(COALESCE(p.restricted, FALSE) = FALSE AND "
+        "(p.assigned_staff_id = ? OR p.created_by_staff_id = ?))",
         [15, 15],
     )
-    assert scope.project_filter("", staff(id=15))[0] == "(assigned_staff_id = ? OR created_by_staff_id = ?)"
+    assert scope.project_filter("", staff(id=15))[0] == (
+        "(COALESCE(restricted, FALSE) = FALSE AND "
+        "(assigned_staff_id = ? OR created_by_staff_id = ?))"
+    )
     assert scope.link_filter("l", staff(id=16)) == (
         "(l.staff_id = ? OR l.created_by_staff_id = ?)",
         [16, 16],
@@ -104,11 +108,27 @@ def test_assert_project_access_allows_assigned_or_created_staff(monkeypatch):
     assert conn.calls[-1][1] == (123,)
 
 
-def test_assert_project_access_denies_out_of_scope_staff(monkeypatch):
-    monkeypatch.setattr(scope, "get_conn", lambda: _FakeConn({"assigned_staff_id": 10, "created_by_staff_id": 20}))
+def test_assert_project_access_denies_out_of_scope_staff_on_restricted(monkeypatch):
+    # PV-3 对齐:受限项目仍只认 assigned/creator/全可见角色,越权员工必 403。
+    monkeypatch.setattr(
+        scope,
+        "get_conn",
+        lambda: _FakeConn({"assigned_staff_id": 10, "created_by_staff_id": 20, "restricted": 1}),
+    )
 
     with pytest.raises(scope.ScopeDenied, match="project scope denied"):
         scope.assert_project_access(123, staff(id=30))
+
+
+def test_assert_project_access_allows_out_of_scope_staff_on_non_restricted(monkeypatch):
+    # PV-3 对齐:非受限项目对员工读写放行(存量 75% 双归属 NULL,只开读会全盘 403)。
+    monkeypatch.setattr(
+        scope,
+        "get_conn",
+        lambda: _FakeConn({"assigned_staff_id": 10, "created_by_staff_id": 20, "restricted": 0}),
+    )
+
+    scope.assert_project_access(123, staff(id=30))
 
 
 def test_assert_project_access_allows_missing_row_and_manager(monkeypatch):
