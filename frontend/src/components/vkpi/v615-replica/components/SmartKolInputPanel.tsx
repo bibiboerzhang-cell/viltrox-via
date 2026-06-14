@@ -307,12 +307,21 @@ function historyKindLabel(session: VkpiKolSearchHistoryItem): string {
 
 // 历史标签可读化:文字搜索显查询语;URL 搜索把裸链接解析成「平台 @handle / 平台 帖id」,
 // 让一堆长得一样的 instagram.com/p/... 能区分、看懂搜的是谁/什么(用户:历史要备注搜索信息)。
+const _RESERVED_PATH = new Set(["p", "reel", "reels", "shorts", "video", "watch", "videos"]);
+
 function historyLabel(session: VkpiKolSearchHistoryItem): string {
   const type = cleanText(session.query_type);
-  const q = cleanText(session.query_text);
-  if (type !== "url_video" && type !== "url_profile") return display(q, "未命名");
+  const raw = cleanText(session.query_text);
+  // 数据里很多是 query_type='unknown' 且 query_text 形如「账号分析 · https://…」——
+  // 去掉中文前缀、从文本里抠出 URL 再解析,而不是死认 query_type。
+  const stripped = raw.replace(/^[一-龥A-Za-z]+\s*·\s*/, "").trim();
+  const urlMatch = stripped.match(/https?:\/\/\S+/) || raw.match(/https?:\/\/\S+/);
+  // 「账号分析」意图优先于路径启发式(如 /@x/shorts 是主页 Shorts 栏,不是单条视频)
+  const isAccount = type === "url_profile" || /账号分析/.test(raw);
+  const looksVideo = !isAccount && (type === "url_video" || /视频分析/.test(raw) || /\/(reel|reels|shorts|watch)\b|[?&]v=/.test(raw));
+  if (!urlMatch) return display(raw, "未命名"); // 纯文字搜索:原文
   try {
-    const u = new URL(q);
+    const u = new URL(urlMatch[0]);
     const host = u.hostname.replace(/^www\./, "");
     const plat = host.includes("instagram")
       ? "IG"
@@ -323,15 +332,17 @@ function historyLabel(session: VkpiKolSearchHistoryItem): string {
           : (host.split(".")[0] || "URL");
     const parts = u.pathname.split("/").filter(Boolean);
     const handleSeg = parts.find((p) => p.startsWith("@"));
-    if (type === "url_profile" && (handleSeg || (parts[0] && parts[0] !== "p" && parts[0] !== "reel"))) {
-      return `${plat} @${(handleSeg || parts[0]).replace(/^@/, "")}`;
+    const firstNamed = parts[0] && !_RESERVED_PATH.has(parts[0]) ? parts[0] : "";
+    // 账号/主页:有 @handle 或首段是用户名 → 「平台 @handle」
+    if (!looksVideo && (handleSeg || firstNamed)) {
+      return `${plat} @${(handleSeg || firstNamed).replace(/^@/, "")}`;
     }
     // 视频/帖:youtube 取 v 参数,其余取末段 id
     const vid = u.searchParams.get("v");
-    const id = vid || parts[parts.length - 1] || parts[0] || "";
-    return `${plat} ${type === "url_video" ? "视频" : "帖"} ${id}`.trim();
+    const id = vid || parts[parts.length - 1] || firstNamed || "";
+    return `${plat} ${looksVideo ? "视频" : "帖"} ${id}`.trim();
   } catch {
-    return display(q, "未命名");
+    return display(raw, "未命名");
   }
 }
 
@@ -351,9 +362,14 @@ function relativeTime(value: unknown): string {
 
 function historyKindMeta(session: VkpiKolSearchHistoryItem): { label: string; cls: string } {
   const type = cleanText(session.query_type);
-  if (type === "url_video") return { label: "视频", cls: "border-rose-300/30 bg-rose-400/[0.10] text-rose-100/90" };
-  if (type === "url_profile") return { label: "账号", cls: "border-violet-300/30 bg-violet-400/[0.10] text-violet-100/90" };
+  const raw = cleanText(session.query_text);
+  const video = { label: "视频", cls: "border-rose-300/30 bg-rose-400/[0.10] text-rose-100/90" };
+  const account = { label: "账号", cls: "border-violet-300/30 bg-violet-400/[0.10] text-violet-100/90" };
+  if (type === "url_video" || /视频分析/.test(raw)) return video;
+  if (type === "url_profile" || /账号分析/.test(raw)) return account;
   if (type === "text_recall") return { label: "找人", cls: "border-cyan-300/30 bg-cyan-400/[0.10] text-cyan-100/90" };
+  // query_type='unknown' 但文本含 URL:按视频路径/否则账号 兜底归类
+  if (/https?:\/\//.test(raw)) return /\/(reel|reels|shorts|watch)\b|[?&]v=/.test(raw) ? video : account;
   return { label: "历史", cls: "border-white/[0.1] bg-white/[0.03] text-slate-300" };
 }
 
