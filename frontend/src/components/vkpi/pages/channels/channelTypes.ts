@@ -84,6 +84,7 @@ export interface OfficialChannelAccount {
   staffActive: boolean;
   platform: string;
   platformLabel: string;
+  group?: 'main_brand' | 'product_line' | 'regional' | string;
   handle: string;
   displayName: string;
   accountUrl: string;

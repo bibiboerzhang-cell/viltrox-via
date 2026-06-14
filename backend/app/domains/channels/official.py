@@ -73,6 +73,16 @@ def _account_url(row: dict[str, Any]) -> str:
     return _text(row.get("account_url"))
 
 
+def _account_group(handle: str) -> str:
+    """Bucket an official account into the company-account grouping for the MY KOL matrix."""
+    text = str(handle or "").lower()
+    if "official" in text or "global" in text:
+        return "main_brand"
+    if any(token in text for token in ("cine", "flash", "gear")):
+        return "product_line"
+    return "regional"
+
+
 def _cached_media_url(raw_url: Any) -> str:
     text = _text(raw_url)
     return cached_image_url(text) or text
@@ -651,6 +661,7 @@ def official_account_matrix(*, staff: dict[str, Any] | None = None, view_as_staf
                 "platform": platform,
                 "platform_label": _platform_label(platform),
                 "handle": str(row.get("account_handle") or ""),
+                "group": _account_group(row.get("account_handle")),
                 "display_name": _account_name(row),
                 "account_url": _account_url(row),
                 "avatar_url": _cached_media_url(row.get("avatar_url")),
@@ -671,11 +682,15 @@ def official_account_matrix(*, staff: dict[str, Any] | None = None, view_as_staf
                 "posts": posts,
             }
         )
+    group_counts = {"main_brand": 0, "product_line": 0, "regional": 0}
+    for row in rows:
+        group_counts[_account_group(row.get("account_handle"))] += 1
     return _channel_cache_store(cache_key, {
         "platforms": sorted(platforms.values(), key=lambda item: item["label"]),
         "account_count": len(rows),
         "post_count": total_posts,
         "total_views": total_views,
+        "groups": group_counts,
     })
 
 

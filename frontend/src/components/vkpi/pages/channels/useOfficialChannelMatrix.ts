@@ -143,6 +143,7 @@ function mapAccount(row: Row): OfficialChannelAccount {
     staffActive: boolValue(row.staff_active ?? row.staffActive),
     platform,
     platformLabel: text(row.platform_label || row.platformLabel || row.platform),
+    group: text(row.group || row.account_group || row.accountGroup) || undefined,
     handle: text(row.handle),
     displayName: text(row.display_name || row.displayName || row.handle, '官方账号'),
     accountUrl: text(row.account_url || row.accountUrl),
