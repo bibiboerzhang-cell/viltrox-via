@@ -359,3 +359,90 @@
   border-color: rgba(253, 186, 116, 0.32);
   color: #fdba74;
 }
+
+/* ════════════════════════════════════════════════════════════════════════
+ * 全面排查 v2:补齐首轮 grep 漏网的浅色 hex
+ * (首轮只匹配 #fff/#f8fafc 等;漏了 #fbfcff/#f2f4f7/#eef4ff/#ecfdf3/#eff6ff/
+ *  #f8fbff/#eef2f7/#edf4ff/#f6fef9/#fef3f2/#e5e7eb —— 含 SKU 目录分组卡 vkpi-product-catalog-group)
+ * 按色相重映射:近白→暗玻璃 / 蓝→暗+紫 / 绿→暗绿 / 红→暗红 / 琥珀→暗琥珀。穷举自 settings-traffic.css 全量浅 hex。
+ * ════════════════════════════════════════════════════════════════════════ */
+
+/* J1. 近白卡片/行/格(#fbfcff/#fff)→ 暗玻璃 —— 含 SKU 目录分组卡(就是你看到的白卡) */
+.v615-settings-dark .vkpi-product-catalog-group,
+.v615-settings-dark .vkpi-staff-permission-profile,
+.v615-settings-dark .vkpi-staff-permission-row,
+.v615-settings-dark .vkpi-settings-meta-grid small,
+.v615-settings-dark .vkpi-info-row,
+.v615-settings-dark .vkpi-stage-current div,
+.v615-settings-dark .vkpi-traffic-account,
+.v615-settings-dark .vkpi-traffic-account[open] summary,
+.v615-settings-dark .vkpi-traffic-rows article {
+  background: rgba(255, 255, 255, 0.016);
+  border-color: rgba(255, 255, 255, 0.06);
+  color: var(--vkpi-text);
+}
+
+/* J2. 浅蓝 badge / 头像底(#f2f4f7/#eef4ff/#eef2f7)→ 暗 subtle;目录计数 badge 紫字 */
+.v615-settings-dark .vkpi-settings-api-card header span,
+.v615-settings-dark .vkpi-settings-toggle-card header span,
+.v615-settings-dark .vkpi-settings-toggle-card.is-off header span,
+.v615-settings-dark .vkpi-product-catalog-group header span,
+.v615-settings-dark .vkpi-existing-kol-avatar,
+.v615-settings-dark .vkpi-flow-step i {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--vkpi-text);
+}
+.v615-settings-dark .vkpi-product-catalog-group header strong { color: #fff; }
+.v615-settings-dark .vkpi-product-catalog-group header span { color: #c4b5fd; }
+
+/* J3. 浅蓝 hover / 渐变面板(#f8fbff/#eff6ff)→ 暗 subtle */
+.v615-settings-dark .vkpi-table tr.is-clickable-row:hover td,
+.v615-settings-dark .vkpi-digest-source-strip,
+.v615-settings-dark .vkpi-selected-product-detail,
+.v615-settings-dark .vkpi-traffic-summary,
+.v615-settings-dark .vkpi-traffic-platform,
+.v615-settings-dark .vkpi-traffic-post__media {
+  background: rgba(255, 255, 255, 0.025);
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+/* J4. 选中态(#eef4ff/#edf4ff)→ 紫高亮 */
+.v615-settings-dark .vkpi-platform-crawl-row.is-selected,
+.v615-settings-dark .vkpi-product-catalog-row.is-selected,
+.v615-settings-dark .vkpi-chip.is-selected,
+.v615-settings-dark .vkpi-flow-step.is-current {
+  background: rgba(168, 85, 247, 0.16);
+  border-color: rgba(168, 85, 247, 0.4);
+  color: #d8b9ff;
+}
+
+/* J5. 进度条底(#e5e7eb)→ 暗 */
+.v615-settings-dark .vkpi-settings-loading-strip__bar { background: rgba(255, 255, 255, 0.08); }
+
+/* J6. 绿色成功态(#ecfdf3/#f6fef9)→ 暗绿保留色相 */
+.v615-settings-dark .vkpi-settings-api-card.is-configured header span,
+.v615-settings-dark .vkpi-settings-toggle-card.is-on header span,
+.v615-settings-dark .vkpi-platform-switch-card.is-on,
+.v615-settings-dark .vkpi-platform-crawl-row__status.is-ok,
+.v615-settings-dark .vkpi-platform-crawl-ready.is-ok,
+.v615-settings-dark .vkpi-platform-crawl-reason.is-ok,
+.v615-settings-dark .vkpi-selected-sku-price,
+.v615-settings-dark .vkpi-activation-link-panel,
+.v615-settings-dark .vkpi-flow-step.is-done,
+.v615-settings-dark .vkpi-intelligence-quality-checks span.is-pass {
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(16, 185, 129, 0.28);
+  color: #6ee7b7;
+}
+
+/* J7. 红色失败态补(#fef3f2)+ 琥珀 info-block.is-warn */
+.v615-settings-dark .vkpi-intelligence-quality-checks span.is-fail {
+  background: rgba(180, 35, 24, 0.16);
+  border-color: rgba(244, 63, 94, 0.3);
+  color: #fda4af;
+}
+.v615-settings-dark .vkpi-info-block.is-warn {
+  background: rgba(146, 64, 14, 0.18);
+  border-color: rgba(253, 230, 138, 0.3);
+  color: #fde68a;
+}
