@@ -145,7 +145,13 @@ export function toV615KolPoolRows(items: VkpiKolPoolItem[]) {
     const followers = numberOrNull(item.followers);
     const realEr = normalizePercent(numberOrNull(raw.real_engagement_rate as number) ?? numberOrNull(item.engagement_rate));
     const realFollowers = normalizePercent(numberOrNull(raw.real_followers_pct as number) ?? numberOrNull(raw.real_followers_percent as number));
-    const fit = numberOrNull(item.viltrox_fit_score);
+    // 四a 修复:workspace/list 投影实际把契合分序列化在 v6_fit / fit_score 槽,
+    // viltrox_fit_score 在该投影里可能缺省/为 null(DB 列名 ≠ 端点序列化键)——
+    // 此前只读 viltrox_fit_score 导致已评分的 KOL(frank_of_all_trades=95 等)v6_fit 落 null,
+    // 卡面显示「待评估」。改为按真实序列化键回退,谁有取谁,绝不臆造分数。
+    const fit = numberOrNull(
+      (raw.v6_fit as number) ?? item.viltrox_fit_score ?? (raw.fit_score as number),
+    );
     const stale = ["stale", "needs_refresh", "missing", "partial"].includes(String(item.sync_status || "").toLowerCase());
     const missingCore = !followers || !country || realEr == null || fit == null;
     const candidateKind = item.linked_main_kol_id

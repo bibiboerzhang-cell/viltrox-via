@@ -310,17 +310,28 @@ export function V615ReplicaApp(props: any = {}) {
     saveStoredState({ collapsed, activeNav, theme, viewMode, country, city, item, venue, kpiScope });
   }, [collapsed, activeNav, theme, viewMode, country, city, item, venue, kpiScope]);
 
+  // 四-map:KOLs 模式的分布数据(/dashboard/kol-distribution-pack → mapHierarchy)是真算出来的,
+  // 有真数据就点亮该模式(available=true);Dealers / Customer Heatmap / Events 仍诚实禁用——
+  // 它们各自要 Shopify / dealer / events-on-map 端点(Wave 2),保持 WAITING/待接入 徽标。
+  const kolHierarchyReady = Boolean(
+    dashboardRuntime.mapHierarchy && Object.keys(dashboardRuntime.mapHierarchy).length > 0,
+  );
   const runtimeViewModes = useMemo(() => ({
     ...VIEW_MODES,
     kols: {
       ...VIEW_MODES.kols,
-      desc: dashboardRuntime.mapHierarchy ? "真实 KOL Pool 国家分布" : "KOL 分布数据待接入",
+      desc: kolHierarchyReady ? "真实 KOL Pool 国家分布" : "KOL 分布数据待接入",
       hierarchy: dashboardRuntime.mapHierarchy || {},
-      available: Boolean(dashboardRuntime.mapHierarchy),
+      available: kolHierarchyReady,
     },
     dealers: {
       ...VIEW_MODES.dealers,
       desc: "Dealer locations endpoint 待接入",
+      hierarchy: {},
+      available: false,
+    },
+    customer: {
+      ...VIEW_MODES.customer,
       hierarchy: {},
       available: false,
     },
@@ -330,7 +341,7 @@ export function V615ReplicaApp(props: any = {}) {
       hierarchy: {},
       available: false,
     },
-  }), [dashboardRuntime.mapHierarchy]);
+  }), [dashboardRuntime.mapHierarchy, kolHierarchyReady]);
   const currentMode = viewMode ? runtimeViewModes[viewMode] : null;
   const isAvailable = currentMode?.available;
   const hierarchy = currentMode?.hierarchy || {};

@@ -632,10 +632,21 @@ export function normalizeSignals(marketCards = {}) {
 }
 
 export function normalizeTopMovers(kolRows = []) {
+  // 四a:V6 Fit Top 卡只展示「真有契合分」的 KOL(scored-only)。
+  // 旧口径 (v6_fit != null || followers != null) 会把只有粉丝、无评分的行也放进来,
+  // 它们的 deltaFollower 落「待评估」占满卡面,把 frank_of_all_trades(95)等真分挤掉。
+  // 改为仅保留 v6_fit != null,DESC 排序、null 垫底,卡面只见真分不见占位。
   return list(kolRows)
-    .filter((item) => item.v6_fit != null || item.followers != null)
+    .filter((item) => item.v6_fit != null)
     .slice()
-    .sort((a, b) => (number(b.v6_fit) || 0) - (number(a.v6_fit) || 0))
+    .sort((a, b) => {
+      const av = number(a.v6_fit);
+      const bv = number(b.v6_fit);
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      return bv - av;
+    })
     .slice(0, 5)
     .map((item, index) => ({
       id: item.id,
