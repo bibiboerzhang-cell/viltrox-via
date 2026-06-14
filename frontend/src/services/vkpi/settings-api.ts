@@ -79,6 +79,40 @@ export async function runVkpiAutomation(token: string, job: string, payload: Row
   );
 }
 
+export async function getPreferenceSettings(token: string, staffId?: number) {
+  const q = staffId ? `?staff_id=${encodeURIComponent(String(staffId))}` : "";
+  return apiFetch<{ preference?: Row; full_scope?: boolean }>(
+    `/api/admin/vkpi/settings/preferences${q}`,
+    {},
+    token,
+  );
+}
+
+export async function updatePreferenceSettings(token: string, payload: Row) {
+  return apiFetch<{ preference?: Row; full_scope?: boolean }>(
+    "/api/admin/vkpi/settings/preferences",
+    { method: "PATCH", body: jsonBody(payload) },
+    token,
+  );
+}
+
+export async function listPreferenceSettings(token: string, limit = 200) {
+  return apiFetch<{ preferences?: Row[]; full_scope?: boolean }>(
+    `/api/admin/vkpi/settings/preferences/list?limit=${encodeURIComponent(String(limit))}`,
+    {},
+    token,
+  );
+}
+
+export async function getNotificationSettings(token: string, staffId?: number) {
+  const q = staffId ? `?staff_id=${encodeURIComponent(String(staffId))}` : "";
+  return apiFetch<{ notification_settings?: Row; full_scope?: boolean }>(
+    `/api/admin/vkpi/settings/notifications${q}`,
+    {},
+    token,
+  );
+}
+
 export async function updateNotificationSettings(token: string, payload: Row) {
   return apiFetch<{ notification_settings?: Row; full_scope?: boolean }>(
     "/api/admin/vkpi/settings/notifications",

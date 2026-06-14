@@ -11,6 +11,8 @@ export const SETTINGS_MODULE_TITLES = {
   staff: '账号授权',
   funds: '资金管理',
   rules: '规则安排',
+  preference: '个人偏好',
+  notification: '通知配置',
 } as const;
 
 export type SettingsModuleKey = keyof typeof SETTINGS_MODULE_TITLES;

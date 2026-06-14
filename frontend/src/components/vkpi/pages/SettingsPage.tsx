@@ -5,6 +5,12 @@ import {
   getCommentAlertSettings,
   getControlStatus,
   getRbacStatus,
+  getPreferenceSettings,
+  updatePreferenceSettings,
+  listPreferenceSettings,
+  getNotificationSettings,
+  updateNotificationSettings,
+  listNotificationSettings,
   listBudgetSettings,
   listFeatureFlags,
   listPlatformCrawlSettings,
@@ -15,6 +21,12 @@ import {
   updateFeatureFlags,
   updatePlatformCrawlSettings,
 } from '../../../domains/settings';
+import {
+  PreferenceSettingsCard,
+  NotificationSettingsCard,
+  TeamPreferenceTable,
+  TeamNotificationTable,
+} from './settings/SettingsPreferencePanels';
 import {
   getStaffInviteCapabilities,
   updateStaffPermissions,
@@ -101,7 +113,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
   const [syncOverview, setSyncOverview] = useState<VkpiSyncOverview | null>(null);
   const [settingsError, setSettingsError] = useState('');
   const [settingsLoading, setSettingsLoading] = useState(false);
-  const [expandedSection, setExpandedSection] = useState<'status' | 'sku' | 'staff' | 'funds' | 'rules' | null>('status');
+  const [expandedSection, setExpandedSection] = useState<'status' | 'sku' | 'staff' | 'funds' | 'rules' | 'preference' | 'notification' | null>('status');
   const [rulesTab, setRulesTab] = useState<SettingsRulesTab>('platform');
   const [productSearch, setProductSearch] = useState('');
   const [selectedCatalogProduct, setSelectedCatalogProduct] = useState<VkpiProductCatalogItem | null>(null);
@@ -113,7 +125,53 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
   const [backendBuild, setBackendBuild] = useState<BackendBuildInfo | null>(null);
   const [versionCheckedAt, setVersionCheckedAt] = useState('');
   const [frontendAsset, setFrontendAsset] = useState('');
+  // 个人偏好(恢复 8b174068 下线的面板;后端 /settings/preferences 一直在)
+  const [landingPage, setLandingPage] = useState('dashboard');
+  const [dateRangeDefault, setDateRangeDefault] = useState('7d');
+  const [tableDensity, setTableDensity] = useState('comfortable');
+  const [rowsPerPage, setRowsPerPage] = useState('25');
+  const [compactMode, setCompactMode] = useState(false);
+  const [rightPanelOpen, setRightPanelOpen] = useState(false);
+  const [preferenceList, setPreferenceList] = useState<Array<Record<string, unknown>>>([]);
+  // 通知配置(v3 存储模式:只保存偏好,不实发)
+  const [emailEnabled, setEmailEnabled] = useState(false);
+  const [inAppEnabled, setInAppEnabled] = useState(true);
+  const [dailyDigestEnabled, setDailyDigestEnabled] = useState(false);
+  const [weeklySummaryEnabled, setWeeklySummaryEnabled] = useState(false);
+  const [stalledProjectEnabled, setStalledProjectEnabled] = useState(false);
+  const [claimActivityEnabled, setClaimActivityEnabled] = useState(false);
+  const [attributionAlertEnabled, setAttributionAlertEnabled] = useState(false);
+  const [costAlertEnabled, setCostAlertEnabled] = useState(false);
+  const [systemAlertEnabled, setSystemAlertEnabled] = useState(false);
+  const [quietHoursStart, setQuietHoursStart] = useState('');
+  const [quietHoursEnd, setQuietHoursEnd] = useState('');
+  const [notificationList, setNotificationList] = useState<Array<Record<string, unknown>>>([]);
   const isManager = viewMode === 'manager';
+
+  const hydratePreference = (row: Record<string, unknown> | null | undefined) => {
+    const prefs = ((row?.preferences as Record<string, unknown>) || {});
+    setLandingPage(String(prefs.landing_page || 'dashboard'));
+    setDateRangeDefault(String(prefs.date_range_default || '7d'));
+    setTableDensity(String(prefs.table_density || 'comfortable'));
+    setRowsPerPage(String(prefs.rows_per_page ?? '25'));
+    setCompactMode(boolValue(prefs.compact_mode, false));
+    setRightPanelOpen(boolValue(prefs.right_panel_open, false));
+  };
+
+  const hydrateNotification = (row: Record<string, unknown> | null | undefined) => {
+    const s = ((row?.settings as Record<string, unknown>) || {});
+    setEmailEnabled(boolValue(s.email_enabled, false));
+    setInAppEnabled(boolValue(s.in_app_enabled, true));
+    setDailyDigestEnabled(boolValue(s.daily_digest_enabled, false));
+    setWeeklySummaryEnabled(boolValue(s.weekly_summary_enabled, false));
+    setStalledProjectEnabled(boolValue(s.stalled_project_enabled, false));
+    setClaimActivityEnabled(boolValue(s.claim_activity_enabled, false));
+    setAttributionAlertEnabled(boolValue(s.attribution_alert_enabled, false));
+    setCostAlertEnabled(boolValue(s.cost_alert_enabled, false));
+    setSystemAlertEnabled(boolValue(s.system_alert_enabled, false));
+    setQuietHoursStart(String(s.quiet_hours_start || ''));
+    setQuietHoursEnd(String(s.quiet_hours_end || ''));
+  };
 
   const reloadVersionStatus = async () => {
     setFrontendAsset(currentFrontendAsset());
@@ -204,6 +262,34 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
     return () => {
       cancelled = true;
     };
+  }, [apiToken, isManager]);
+
+  // 个人偏好 + 通知配置(恢复的两面板;后端端点一直在)
+  useEffect(() => {
+    if (!isManager || !apiToken) return;
+    let cancelled = false;
+    const loadPrefs = async () => {
+      try {
+        const [prefResp, notifResp, prefListResp, notifListResp] = await Promise.all([
+          getPreferenceSettings(apiToken),
+          getNotificationSettings(apiToken),
+          listPreferenceSettings(apiToken).catch(() => ({ preferences: [] as Array<Record<string, unknown>> })),
+          listNotificationSettings(apiToken).catch(() => ({ notification_settings: [] as Array<Record<string, unknown>> })),
+        ]);
+        if (cancelled) return;
+        hydratePreference(prefResp.preference);
+        hydrateNotification(notifResp.notification_settings);
+        setPreferenceList((prefListResp.preferences as Array<Record<string, unknown>>) || []);
+        setNotificationList((notifListResp.notification_settings as Array<Record<string, unknown>>) || []);
+      } catch (error) {
+        if (!cancelled) setSettingsError(error instanceof Error ? error.message : '偏好 / 通知读取失败');
+      }
+    };
+    void loadPrefs();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiToken, isManager]);
 
   const reloadSystemSettings = async () => {
@@ -330,6 +416,59 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
       setMessage('评论风险告警阈值已保存。');
     } catch (error) {
       setSettingsError(error instanceof Error ? error.message : '评论风险告警阈值保存失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const savePreferences = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!apiToken) return;
+    setBusy(true);
+    try {
+      const response = await updatePreferenceSettings(apiToken, {
+        landing_page: landingPage,
+        date_range_default: dateRangeDefault,
+        table_density: tableDensity,
+        rows_per_page: rowsPerPage,
+        compact_mode: compactMode,
+        right_panel_open: rightPanelOpen,
+      });
+      hydratePreference(response.preference);
+      const listResp = await listPreferenceSettings(apiToken).catch(() => ({ preferences: [] as Array<Record<string, unknown>> }));
+      setPreferenceList((listResp.preferences as Array<Record<string, unknown>>) || []);
+      setMessage('个人偏好已保存。');
+    } catch (error) {
+      setSettingsError(error instanceof Error ? error.message : '个人偏好保存失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveNotifications = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!apiToken) return;
+    setBusy(true);
+    try {
+      const response = await updateNotificationSettings(apiToken, {
+        email_enabled: emailEnabled,
+        in_app_enabled: inAppEnabled,
+        daily_digest_enabled: dailyDigestEnabled,
+        weekly_summary_enabled: weeklySummaryEnabled,
+        stalled_project_enabled: stalledProjectEnabled,
+        claim_activity_enabled: claimActivityEnabled,
+        attribution_alert_enabled: attributionAlertEnabled,
+        cost_alert_enabled: costAlertEnabled,
+        system_alert_enabled: systemAlertEnabled,
+        quiet_hours_start: quietHoursStart,
+        quiet_hours_end: quietHoursEnd,
+      });
+      hydrateNotification(response.notification_settings);
+      const listResp = await listNotificationSettings(apiToken).catch(() => ({ notification_settings: [] as Array<Record<string, unknown>> }));
+      setNotificationList((listResp.notification_settings as Array<Record<string, unknown>>) || []);
+      setMessage('通知配置已保存。');
+    } catch (error) {
+      setSettingsError(error instanceof Error ? error.message : '通知配置保存失败');
     } finally {
       setBusy(false);
     }
@@ -685,6 +824,60 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
             onToggleFeatureFlag={(row) => void toggleFeatureFlag(row)}
             onTogglePlatformCrawl={(row) => void togglePlatformCrawl(row)}
           />
+        ))}
+        {renderSettingsModule('preference', `默认入口 ${landingPage} · 范围 ${dateRangeDefault} · 密度 ${tableDensity}`, (
+          <>
+            <PreferenceSettingsCard
+              busy={busy}
+              apiToken={apiToken}
+              landingPage={landingPage}
+              dateRangeDefault={dateRangeDefault}
+              tableDensity={tableDensity}
+              rowsPerPage={rowsPerPage}
+              compactMode={compactMode}
+              rightPanelOpen={rightPanelOpen}
+              onLandingPageChange={setLandingPage}
+              onDateRangeDefaultChange={setDateRangeDefault}
+              onTableDensityChange={setTableDensity}
+              onRowsPerPageChange={setRowsPerPage}
+              onCompactModeChange={setCompactMode}
+              onRightPanelOpenChange={setRightPanelOpen}
+              onSubmit={(event) => void savePreferences(event)}
+            />
+            <TeamPreferenceTable preferenceList={preferenceList} />
+          </>
+        ))}
+        {renderSettingsModule('notification', `站内 ${inAppEnabled ? '开' : '关'} · 邮件 ${emailEnabled ? '开' : '关'} · v3 只存不发`, (
+          <>
+            <NotificationSettingsCard
+              busy={busy}
+              apiToken={apiToken}
+              emailEnabled={emailEnabled}
+              inAppEnabled={inAppEnabled}
+              dailyDigestEnabled={dailyDigestEnabled}
+              weeklySummaryEnabled={weeklySummaryEnabled}
+              stalledProjectEnabled={stalledProjectEnabled}
+              claimActivityEnabled={claimActivityEnabled}
+              attributionAlertEnabled={attributionAlertEnabled}
+              costAlertEnabled={costAlertEnabled}
+              systemAlertEnabled={systemAlertEnabled}
+              quietHoursStart={quietHoursStart}
+              quietHoursEnd={quietHoursEnd}
+              onEmailEnabledChange={setEmailEnabled}
+              onInAppEnabledChange={setInAppEnabled}
+              onDailyDigestEnabledChange={setDailyDigestEnabled}
+              onWeeklySummaryEnabledChange={setWeeklySummaryEnabled}
+              onStalledProjectEnabledChange={setStalledProjectEnabled}
+              onClaimActivityEnabledChange={setClaimActivityEnabled}
+              onAttributionAlertEnabledChange={setAttributionAlertEnabled}
+              onCostAlertEnabledChange={setCostAlertEnabled}
+              onSystemAlertEnabledChange={setSystemAlertEnabled}
+              onQuietHoursStartChange={setQuietHoursStart}
+              onQuietHoursEndChange={setQuietHoursEnd}
+              onSubmit={(event) => void saveNotifications(event)}
+            />
+            <TeamNotificationTable notificationList={notificationList} boolValue={boolValue} />
+          </>
         ))}
       </div>
       {selectedStaffForPermissions ? (
