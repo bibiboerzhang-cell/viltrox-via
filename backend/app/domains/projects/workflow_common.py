@@ -140,6 +140,34 @@ def normalize_stage(stage: str) -> str:
     clean = str(stage or "").strip().lower()
     return STAGE_ALIASES.get(clean, clean)
 
+
+# ── Assignment 层(vkpi_project_kol_assignments)状态词归一(P0-1 状态词统一)──
+# 双词表分裂实证(2026-06-14 真库):assignment.stage 里混入项目层词
+#   discovery 23 / shipped 7 / received 2 / measured 1,且项目层有 content_published。
+# 扁平、幂等(canonical 词不作 key,重复套用是 no-op)。读侧消歧,不改写库、不碰 viltrox_fit_score。
+CANONICAL_ASSIGNMENT_STAGES = {
+    "discovered", "contacted", "replied", "agreed",
+    "device_sent", "arrived", "content_posted", "reviewed", "closed", "churned",
+}
+CANONICAL_ASSIGNMENT_VOCAB = CANONICAL_ASSIGNMENT_STAGES | SIDE_STAGES
+ASSIGNMENT_STAGE_READ_NORMALIZATION = {
+    "discovery": "discovered",
+    "shipped": "device_sent",
+    "received": "arrived",
+    "delivered": "arrived",
+    "published": "content_posted",
+    "content_published": "content_posted",
+    "posted": "content_posted",
+    "measured": "reviewed",
+    "confirmed": "agreed",
+}
+
+
+def normalize_assignment_stage(stage: str) -> str:
+    """读 assignment.stage 时归一到 assignment 规范词表(消除项目层词溢出)。幂等。"""
+    clean = str(stage or "").strip().lower()
+    return ASSIGNMENT_STAGE_READ_NORMALIZATION.get(clean, clean)
+
 def _validate_transition(from_stage: str, to_stage: str, body: dict[str, Any]) -> None:
     from_clean = normalize_stage(from_stage)
     to_clean = normalize_stage(to_stage)

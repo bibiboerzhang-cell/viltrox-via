@@ -12,14 +12,21 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from app.db.connection import get_conn
+from app.domains.projects.workflow_common import normalize_assignment_stage
 
 
 def deliverable_stages_summary() -> dict[str, Any]:
-    """assignment 的 stage / stage_status 真实分布(P0:看状态词是否分裂)。"""
+    """assignment 的 stage / stage_status 真实分布(P0-1:状态词统一)。
+
+    读侧归一:把溢出的项目层词(discovery/shipped/received/measured/content_published…)
+    合并到 assignment 规范词(discovered/device_sent/arrived/reviewed/content_posted),
+    再在 Python 侧重聚合,避免 discovery 与 discovered 等被算成两档导致 due-list/复盘错。
+    同时透出 raw_stages(归一前分布)便于核对。
+    """
     conn = get_conn()
     rows = conn.execute(
         """
-        SELECT COALESCE(NULLIF(stage, ''), '(空)') AS stage,
+        SELECT COALESCE(NULLIF(stage, ''), '') AS stage,
                COALESCE(NULLIF(stage_status, ''), '(空)') AS stage_status,
                COUNT(*) AS n
         FROM vkpi_project_kol_assignments
@@ -27,11 +34,26 @@ def deliverable_stages_summary() -> dict[str, Any]:
         ORDER BY n DESC
         """
     ).fetchall()
-    items = [dict(r) for r in rows]
+    raw_items = [dict(r) for r in rows]
+    merged: dict[tuple[str, str], int] = {}
+    for r in raw_items:
+        canon = normalize_assignment_stage(r.get("stage") or "") or "(空)"
+        key = (canon, str(r.get("stage_status") or "(空)"))
+        merged[key] = merged.get(key, 0) + int(r.get("n") or 0)
+    stages = [
+        {"stage": k[0], "stage_status": k[1], "n": n}
+        for k, n in sorted(merged.items(), key=lambda kv: kv[1], reverse=True)
+    ]
+    # 归一前后是否有合并(诚实透出),raw 里把空串还原成「(空)」展示
+    for r in raw_items:
+        if not r.get("stage"):
+            r["stage"] = "(空)"
     return {
         "status": "ok",
-        "total": sum(int(r.get("n") or 0) for r in items),
-        "stages": items,
+        "total": sum(s["n"] for s in stages),
+        "stages": stages,
+        "raw_stages": raw_items,
+        "normalized": True,
     }
 
 
