@@ -12,6 +12,7 @@ from app.domains.dashboard.kol_distribution import (
     build_dashboard_kol_distribution,
     build_dashboard_kol_distribution_pack,
 )
+from app.domains.dashboard.data_freshness import build_data_freshness_snapshot
 from app.domains.dashboard.performance import build_product_performance, build_revenue_trend
 from app.domains.dashboard.recent_content import (
     _dashboard_int,
@@ -43,6 +44,7 @@ __all__ = [
     "build_dashboard_summary",
     "build_dashboard_system_health",
     "build_dashboard_view_payload",
+    "build_data_freshness_snapshot",
     "build_product_performance",
     "build_revenue_trend",
     "staff_id_from_context",

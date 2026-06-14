@@ -162,6 +162,20 @@ def dashboard_system_health(
     return dashboard_domain.build_dashboard_system_health()
 
 
+@router.get("/dashboard/data-freshness")
+def dashboard_data_freshness(
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """Return read-only per-entity data-freshness buckets for the Agent-OS layer.
+
+    One light CASE aggregate per entity (vkpi_kol_pool / vkpi_employee_channels /
+    optional vkpi_products), freshness derived via COALESCE over existing timestamps.
+    Missing sources surface honestly as available=false + 待接入, never fabricated.
+    """
+    del staff
+    return dashboard_domain.build_data_freshness_snapshot()
+
+
 @router.get("/staff-directory")
 def staff_directory(staff=Depends(require_tab("vkpi", "read"))):
     _require_manager_staff(staff)

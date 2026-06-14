@@ -8,6 +8,7 @@ import { AIIntelligenceCard } from "./components/AIIntelligenceCard";
 import { ActiveCampaignsCard } from "./components/ActiveCampaignsCard";
 import { Breadcrumb } from "./components/Breadcrumb";
 import { ContentCalendarCard } from "./components/ContentCalendarCard";
+import { DataFreshnessCard } from "./components/DataFreshnessCard";
 import { FloatingCard } from "./components/FloatingCard";
 import { HierarchyDropdown } from "./components/HierarchyDropdown";
 import { KolFunnelCard } from "./components/KolFunnelCard";
@@ -54,6 +55,9 @@ export function DashboardReplicaPage(props: any) {
 
           // P5 系统健康条(真实只读端点;字段缺失显「待接入」,绝不编造)
           e(SystemHealthBar, { apiToken }),
+
+          // Agent-OS 数据新鲜度卡片(逐实体桶;真实只读端点;0 就显 0,缺源显「待接入」)
+          e(DataFreshnessCard, { apiToken }),
 
           // V6.6: KPI Header — title + scope toggle
           e("div", { className: "mb-3 flex items-end justify-between gap-3 flex-wrap" },
