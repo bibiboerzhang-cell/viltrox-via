@@ -109,6 +109,28 @@ def projects(
     return workflow.list_projects(limit=limit, stage=stage, staff=staff, staff_id_filter=staff_id, starred_only=starred)
 
 
+@router.get("/projects/deliverable-stages-summary")
+def deliverable_stages_summary(staff=Depends(require_tab("vkpi", "read"))):
+    """履约观测 P0(只读):assignment 阶段分布,看状态词是否分裂。"""
+    from app.domains.projects import fulfillment_observation
+
+    del staff
+    return fulfillment_observation.deliverable_stages_summary()
+
+
+@router.get("/projects/due-list")
+def projects_due_list(
+    days_overdue: int = Query(default=7, ge=0, le=90),
+    limit: int = Query(default=100, ge=1, le=500),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    """履约观测 刀1(只读):已签收满 N 天但项目无内容证据的待观察项。"""
+    from app.domains.projects import fulfillment_observation
+
+    del staff
+    return fulfillment_observation.due_list(days_overdue=days_overdue, limit=limit)
+
+
 @router.post("/projects/logistics-sync/enqueue")
 def enqueue_logistics_sync(
     body: dict = Body(default_factory=dict),
