@@ -16,7 +16,7 @@ if str(BACKEND_ROOT) not in sys.path:
 def favorites_conn(monkeypatch):
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
-    conn.execute("CREATE TABLE vkpi_kol_pool (id INTEGER PRIMARY KEY, platform TEXT, handle TEXT, display_name TEXT, followers INTEGER, viltrox_fit_score REAL, profile_url TEXT, avatar_url TEXT)")
+    conn.execute("CREATE TABLE vkpi_kol_pool (id INTEGER PRIMARY KEY, platform TEXT, handle TEXT, display_name TEXT, followers INTEGER, viltrox_fit_score REAL, profile_url TEXT, avatar_url TEXT, duplicate_of_id INTEGER DEFAULT NULL)")
     conn.execute(
         """
         CREATE TABLE vkpi_kol_pool_favorites (
