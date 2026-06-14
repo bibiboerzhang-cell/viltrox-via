@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { BadgeCheck, Clock3, Database, Link2, Loader2, Search, Sparkles, UserPlus, Video } from "lucide-react";
+import { BadgeCheck, Clock3, Database, Link2, Loader2, Search, Sparkles, TrendingUp, UserPlus, Video } from "lucide-react";
 
 import {
   deepCrawlKolUrl,
@@ -169,9 +169,14 @@ function recallResultFromSession(session: VkpiKolSearchHistoryItem): VkpiKolReca
       creator_type_score: bucket === "creator" ? 1 : 0,
       reviewer_type_score: bucket === "reviewer" ? 1 : 0,
       recall_reason: cleanText(payload.evidence || payload.sample_title),
-      why_fit: cleanText(payload.why_fit),
+      // why_fit:实时/历史会话项透传(payload.why_fit 由后端 attach_recall_result 写入;缺则回退召回理由)。
+      why_fit: cleanText(payload.why_fit || payload.evidence),
+      // 三引擎展示信号透传(纯只读;后端在会话项 payload 写入则亮起,否则静默不渲染)。
+      fit_verdict: cleanText(payload.fit_verdict),
+      creator_type: cleanText(payload.creator_type),
+      exposure_potential: Number(payload.exposure_potential ?? payload.avg_views ?? 0) || null,
       source_fields: payload,
-    } satisfies VkpiKolRecallItem;
+    } as VkpiKolRecallItem;
     if (bucket === "reviewer") reviewer.push(row);
     else creator.push(row);
   });
@@ -223,9 +228,13 @@ function discoveryItemsFromSession(session: VkpiKolSearchHistoryItem | null): Vk
       creator_type_score: 1,
       reviewer_type_score: 0,
       recall_reason: cleanText(payload.sample_title || payload.evidence),
-      why_fit: cleanText(payload.why_fit),
+      why_fit: cleanText(payload.why_fit || payload.sample_title),
+      // 三引擎展示信号(发现项:exposure 用 avg_views/views;published/historical_match 透 source_fields 供新人/新鲜判定)。
+      fit_verdict: cleanText(payload.fit_verdict),
+      creator_type: cleanText(payload.creator_type),
+      exposure_potential: Number(payload.exposure_potential ?? payload.avg_views ?? payload.views ?? 0) || null,
       source_fields: payload,
-    } satisfies VkpiKolRecallItem);
+    } as VkpiKolRecallItem);
   });
   return out;
 }
@@ -348,6 +357,45 @@ function relevanceTier(index: number, demote = false): { label: string; cls: str
   return { label: "相关", cls: "border-white/[0.08] bg-white/[0.02] text-slate-400", dot: "#64748b" };
 }
 
+// 内容契合判定 → 徽章(纯展示信号,读会话项透传的 content_fit;绝不并入/改写 viltrox_fit_score）。
+// 已深析才显;verdict ∈ {fit/partial_fit/not_fit} 映射 适合/一般/不适合,不可识别则不渲染。
+function contentFitBadge(value: unknown): { label: string; cls: string } | null {
+  const verdict = cleanText(value).toLowerCase();
+  if (verdict === "fit") return { label: "适合", cls: "border-emerald-300/35 bg-emerald-400/[0.12] text-emerald-100" };
+  if (verdict === "not_fit") return { label: "不适合", cls: "border-rose-300/30 bg-rose-400/[0.10] text-rose-100" };
+  if (verdict === "partial_fit") return { label: "一般", cls: "border-amber-300/30 bg-amber-400/[0.10] text-amber-100" };
+  return null;
+}
+
+// 预估曝光(说人话):读会话项 exposure_potential / avg_views / views,折成 K/M 量级。
+// 纯展示触达潜力(终极=提升曝光/市场),不参与任何评分。
+function exposureLabel(item: VkpiKolRecallItem): string {
+  const self = item as unknown as Row;
+  const src = (item.source_fields && typeof item.source_fields === "object" ? item.source_fields : {}) as Row;
+  const raw = Number(
+    self.exposure_potential ?? src.exposure_potential ?? src.avg_views ?? src.views ?? 0,
+  );
+  return numberLabel(raw);
+}
+
+// 新人/新鲜标(纯展示,优先新人裁令):
+//  - newcomer:全网发现 new_creator(无 kol_pool_id 未入库)= 优先新人主源。
+//  - fresh:近 90 天有新作(published 时间戳)。
+//  - lowCollab:历史无合作记录(无 historical_match / cooperation 计数为 0)。
+function freshnessMarks(item: VkpiKolRecallItem): { newcomer: boolean; fresh: boolean; lowCollab: boolean } {
+  const src = (item.source_fields && typeof item.source_fields === "object" ? item.source_fields : {}) as Row;
+  const newcomer = !Number(item.kol_pool_id) && cleanText(item.type_label) === "全网发现";
+  let fresh = false;
+  const published = cleanText(src.published);
+  if (published) {
+    const ts = Date.parse(published);
+    if (Number.isFinite(ts)) fresh = Date.now() - ts <= 90 * 24 * 3600 * 1000;
+  }
+  const coop = Number(src.history_cooperation_count ?? src.cooperation_count ?? 0);
+  const lowCollab = newcomer || (!src.historical_match && coop <= 0);
+  return { newcomer, fresh, lowCollab };
+}
+
 function RecallMiniItem({
   item,
   index,
@@ -366,6 +414,13 @@ function RecallMiniItem({
   const tier = relevanceTier(index, cleanText(item.relevance_tier_hint) === "demote");
   const showImg = Boolean(avatar) && !imgError;
   const whyFit = cleanText(item.why_fit);
+  // 三引擎产出·候选卡展示信号(全部纯只读透传,绝不触评分):
+  const itemRow = item as unknown as Row;
+  const fitSrc = (item.source_fields && typeof item.source_fields === "object" ? item.source_fields : {}) as Row;
+  const fitBadge = contentFitBadge(itemRow.fit_verdict ?? fitSrc.fit_verdict);
+  const creatorType = cleanText(itemRow.creator_type ?? fitSrc.creator_type);
+  const exposure = exposureLabel(item);
+  const marks = freshnessMarks(item);
   return (
     <button
       type="button"
@@ -400,6 +455,32 @@ function RecallMiniItem({
         <span className="mt-0.5 block truncate text-[9.5px] text-slate-500">
           {display(item.platform, "unknown")} · {item.type_label || item.profile_type || "profile"}
         </span>
+        {/* 三引擎徽章行:内容契合判定(已深析)+ 预估曝光 + 新人/新鲜/低合作 */}
+        {(fitBadge || exposure || marks.newcomer || marks.fresh || marks.lowCollab) ? (
+          <span className="mt-1 flex flex-wrap items-center gap-1">
+            {fitBadge ? (
+              <span className={`rounded-full border px-1.5 py-0.5 text-[8.5px] font-medium ${fitBadge.cls}`} title={creatorType ? `内容契合:${fitBadge.label} · ${creatorType}` : `内容契合判定:${fitBadge.label}`}>
+                契合·{fitBadge.label}
+              </span>
+            ) : null}
+            {exposure ? (
+              <span className="inline-flex items-center gap-0.5 rounded border border-sky-300/25 bg-sky-400/[0.08] px-1 text-[8.5px] font-medium text-sky-100/90" title="预估曝光/触达潜力(均播放量,纯展示)">
+                <TrendingUp size={8} /> {exposure} 曝光
+              </span>
+            ) : null}
+            {marks.newcomer ? (
+              <span className="inline-flex items-center gap-0.5 rounded border border-emerald-300/30 bg-emerald-400/[0.10] px-1 text-[8.5px] font-medium text-emerald-100" title="全网新发现、库内尚无 · 优先新人">
+                <UserPlus size={8} /> 新人
+              </span>
+            ) : null}
+            {marks.fresh ? (
+              <span className="rounded border border-cyan-300/25 bg-cyan-400/[0.08] px-1 text-[8.5px] font-medium text-cyan-100/90" title="近 90 天有新作">新鲜</span>
+            ) : null}
+            {marks.lowCollab && !marks.newcomer ? (
+              <span className="rounded border border-violet-300/25 bg-violet-400/[0.08] px-1 text-[8.5px] font-medium text-violet-100/90" title="历史无合作记录 · 成长空间">低合作</span>
+            ) : null}
+          </span>
+        ) : null}
         {whyFit ? (
           <span className="mt-1 line-clamp-2 block text-[10px] leading-snug text-cyan-200/85">{whyFit}</span>
         ) : null}
@@ -1347,10 +1428,15 @@ export function SmartKolInputPanel({
             )}
           </div>
 
-          {/* 框3 · 全网发现(Apify+平台,带头像) */}
-          <div className="rounded-lg border border-emerald-300/15 bg-emerald-950/[0.10] p-3">
+          {/* 框3 · 全网发现(Apify+平台,带头像)· 优先新人主源,描边更亮 */}
+          <div className="rounded-lg border border-emerald-300/30 bg-emerald-950/[0.16] p-3 ring-1 ring-emerald-300/10">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-              <div className="text-[11px] font-medium text-emerald-100">③ 全网新发现的人{discoveryItems.length ? ` · ${discoveryItems.length} 个` : ""}</div>
+              <div className="flex items-center gap-1.5">
+                <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300/30 bg-emerald-400/[0.12] px-1.5 py-0.5 text-[8.5px] font-semibold text-emerald-100">
+                  <UserPlus size={9} /> 优先新人
+                </span>
+                <div className="text-[11px] font-semibold text-emerald-100">③ 全网新发现的人{discoveryItems.length ? ` · ${discoveryItems.length} 个` : ""}</div>
+              </div>
               <label className="flex items-center gap-1 text-[10px] text-slate-400">
                 <input type="checkbox" checked={deepFindOn} onChange={(event) => setDeepFindOn(event.target.checked)} className="accent-emerald-500" />
                 默认开
