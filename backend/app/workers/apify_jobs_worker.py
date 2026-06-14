@@ -2477,11 +2477,24 @@ def _write_gemini_cache(
         derive_method=derive_method,
         job_id=int(job["id"]),
     )
-    account_extract_job = _enqueue_account_dossier_extract_after_final_v1(
-        conn,
-        job_id=int(job["id"]),
-        deep_result=deep_result,
-    )
+    account_extract_job = None
+    content_fit_job = None
+    try:
+        account_extract_job = _enqueue_account_dossier_extract_after_final_v1(
+            conn,
+            job_id=int(job["id"]),
+            deep_result=deep_result,
+        )
+        # QA P0 修:主成功路径补内容契合链式入队(此前只接在 cache-skip 路径,主路径漏接 → 发现的新人
+        # 首次 final_v1 完成拿不到内容契合)。QA P1 修:连同 account_dossier 一并兜进 try/except,
+        # 入队异常仅 warning、绝不冒泡把 final_v1 标 failed(『失败不阻断 final_v1』)。
+        content_fit_job = _enqueue_content_fit_after_final_v1(
+            conn,
+            job_id=int(job["id"]),
+            deep_result=deep_result,
+        )
+    except Exception as exc:
+        logger.warning("final_v1 followup enqueue failed (non-fatal) | job_id=%s error=%s", job.get("id"), exc)
     analysis_summary = _search_session_analysis_summary_from_result(
         cache_id=cache_id,
         derive_method=derive_method,
@@ -3267,11 +3280,24 @@ def _process_gemini_video(
         derive_method=derive_method,
         job_id=int(job["id"]),
     )
-    account_extract_job = _enqueue_account_dossier_extract_after_final_v1(
-        conn,
-        job_id=int(job["id"]),
-        deep_result=deep_result,
-    )
+    account_extract_job = None
+    content_fit_job = None
+    try:
+        account_extract_job = _enqueue_account_dossier_extract_after_final_v1(
+            conn,
+            job_id=int(job["id"]),
+            deep_result=deep_result,
+        )
+        # QA P0 修:主成功路径补内容契合链式入队(此前只接在 cache-skip 路径,主路径漏接 → 发现的新人
+        # 首次 final_v1 完成拿不到内容契合)。QA P1 修:连同 account_dossier 一并兜进 try/except,
+        # 入队异常仅 warning、绝不冒泡把 final_v1 标 failed(『失败不阻断 final_v1』)。
+        content_fit_job = _enqueue_content_fit_after_final_v1(
+            conn,
+            job_id=int(job["id"]),
+            deep_result=deep_result,
+        )
+    except Exception as exc:
+        logger.warning("final_v1 followup enqueue failed (non-fatal) | job_id=%s error=%s", job.get("id"), exc)
     analysis_summary = _search_session_analysis_summary_from_result(
         cache_id=cache_id,
         derive_method=derive_method,
