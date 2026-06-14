@@ -543,6 +543,57 @@ export async function enqueueLogisticsSync(token: string, projectId?: number) {
   );
 }
 
+// ---- 履约待办 / Due List(后端已真:物流签收 N 天后未推进的项目;只读看板) ----
+
+export interface VkpiProjectDueListItem {
+  project_id: number;
+  project_name?: string | null;
+  product_name?: string | null;
+  delivered_at?: string | null;
+  days_since_delivered?: number | null;
+  assignment_count?: number | null;
+}
+
+export interface VkpiProjectDueListResponse {
+  status?: string;
+  days_overdue?: number;
+  count?: number;
+  items?: VkpiProjectDueListItem[];
+  note?: string | null;
+}
+
+export interface VkpiDeliverableStage {
+  stage?: string | null;
+  stage_status?: string | null;
+  n?: number | null;
+}
+
+export interface VkpiDeliverableStagesSummaryResponse {
+  total?: number;
+  stages?: VkpiDeliverableStage[];
+  raw_stages?: unknown;
+}
+
+export async function getProjectsDueList(token: string, daysOverdue = 7) {
+  const params = new URLSearchParams({
+    days_overdue: String(daysOverdue),
+    _ts: String(Date.now()),
+  });
+  return apiFetch<VkpiProjectDueListResponse>(
+    `/api/admin/vkpi/projects/due-list?${params.toString()}`,
+    { cache: "no-store" },
+    token,
+  );
+}
+
+export async function getDeliverableStagesSummary(token: string) {
+  return apiFetch<VkpiDeliverableStagesSummaryResponse>(
+    `/api/admin/vkpi/projects/deliverable-stages-summary?_ts=${Date.now()}`,
+    { cache: "no-store" },
+    token,
+  );
+}
+
 // ---- 发票提取(LLM 经 apify_jobs 队列;产物 llm_ 标注,人工核对后才算真值) ----
 
 export interface VkpiInvoiceExtractResult {

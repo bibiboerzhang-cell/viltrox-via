@@ -6,7 +6,9 @@ import { addKolsToProject, advanceProjectKol, getAvailableProjectKols, submitPro
 import { buildKolOptions } from '../../../domains/kol';
 import { PageShell } from './PageShell';
 import { ProjectCampaignBoard } from './projects/ProjectCampaignBoard';
+import { ProjectDueListCard } from './projects/ProjectDueListCard';
 import { ProjectDetailView } from './projects/ProjectDetailView';
+import { useAuth } from '../../../hooks/useAuth';
 import './projects/projectBoard.css';
 
 interface ProjectsPageProps {
@@ -87,6 +89,9 @@ export function ProjectsPage({
   onRefreshData,
   apiToken,
 }: ProjectsPageProps) {
+  // 履约待办卡片消费 admin 端点,token 优先用页面下传的 apiToken,缺失时回退到 useAuth。
+  const { token: authToken } = useAuth();
+  const dueListToken = apiToken || authToken || undefined;
   const [createOpen, setCreateOpen] = useState(false);
   const [projectName, setProjectName] = useState('');
   const [kolId, setKolId] = useState('');
@@ -429,6 +434,11 @@ export function ProjectsPage({
           onDismiss={() => setProjectFocus(null)}
         />
       ) : null}
+      <ProjectDueListCard
+        apiToken={dueListToken}
+        daysOverdue={7}
+        onOpenProject={(projectId) => setDetailProjectId(projectId)}
+      />
       <ProjectCampaignBoard
         projects={filteredProjects}
         selectedProjectId={selectedProjectId}
