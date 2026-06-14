@@ -707,6 +707,9 @@ export function V615ReplicaApp(props: any = {}) {
     // V6.13: 新 modal mounts
     e(AnimatePresence, null, selectedProject && e(ProjectDetailModal, {
       project: selectedProject,
+      staff: uiStaff,
+      apiToken,
+      onAssigned: () => { onRefreshData && onRefreshData(); },
       onClose: () => setSelectedProject(null),
       onOpenFullPage: (project) => {
         const projectId = String(project?.projectId || project?.id || "");

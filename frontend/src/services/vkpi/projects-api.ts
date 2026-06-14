@@ -123,6 +123,7 @@ export interface VkpiUpdateProjectPayload {
   targetPostDate?: string;
   dueAt?: string;
   note?: string;
+  assignedStaffId?: string;
 }
 
 export interface VkpiStagePayload {
@@ -340,6 +341,7 @@ export async function updateProject(token: string, projectId: string, payload: V
         target_post_date: payload.targetPostDate,
         due_at: payload.dueAt,
         note: payload.note,
+        assigned_staff_id: payload.assignedStaffId ? Number(payload.assignedStaffId) : undefined,
       }),
     },
     token,

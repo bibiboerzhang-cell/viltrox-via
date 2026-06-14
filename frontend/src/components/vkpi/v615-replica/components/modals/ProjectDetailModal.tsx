@@ -8,12 +8,14 @@ import { AlertTriangle, ArrowLeft, Package, Search, Send, Target, UserPlus, User
 import { useT } from "../../lib/i18n";
 import { CAMPAIGN_ICONS } from "../../data/campaignIcons";
 import { PLATFORM_ICONS_MAP } from "../../data/platformIconsMap";
+import { updateProject } from "../../../../../services/vkpi/projects-api";
 
 const e = React.createElement;
 
-export function ProjectDetailModal({ project, onClose, onOpenFullPage }) {
+export function ProjectDetailModal({ project, onClose, onOpenFullPage, staff = [], apiToken, onAssigned }) {
   const { t } = useT();
   const [activeTab, setActiveTab] = useState("kols");  // kols / pending / assets / new-kol
+  const [assignBusy, setAssignBusy] = useState(false);  // 指派给员工(管理层把项目派给某员工 → 该员工 own-only 即可见)
   if (!project) return null;
   const IconComp = CAMPAIGN_ICONS[project.iconKey] || CAMPAIGN_ICONS.default;
   const maxFunnel = Math.max(...project.funnel.map(f => f.count), 1);
@@ -48,6 +50,16 @@ export function ProjectDetailModal({ project, onClose, onOpenFullPage }) {
             "最近更新 " + project.lastUpdate + " · 负责人 " + project.owner + " · 开始 " + project.startDate)
         ),
         e("div", { className: "flex items-center gap-1.5" },
+          apiToken && staff.length > 0 && e("select", {
+            value: "", disabled: assignBusy, title: "指派给员工",
+            className: "rounded-md border border-white/[0.08] bg-white/[0.04] px-2 py-1 text-[10px] text-slate-300 hover:bg-white/[0.08] outline-none max-w-[120px]",
+            onChange: async (ev) => {
+              const sid = ev.target.value; if (!sid) return;
+              setAssignBusy(true);
+              try { await updateProject(apiToken, String(project.projectId || project.id || ""), { assignedStaffId: sid }); onAssigned && onAssigned(); }
+              finally { setAssignBusy(false); }
+            },
+          }, [e("option", { key: "_", value: "" }, assignBusy ? "指派中…" : "指派给…"), ...staff.map(s => e("option", { key: s.id, value: String(s.id), style: { background: "#0a1020" } }, s.name))]),
           e("button", { className: "rounded-md border border-white/[0.08] bg-white/[0.04] px-2 py-1 text-[10px] text-slate-300 hover:bg-white/[0.08]" }, t("编辑")),
           e("button", { onClick: () => onOpenFullPage && onOpenFullPage(project), className: "rounded-md border border-purple-500/30 bg-purple-500/[0.08] px-2 py-1 text-[10px] text-purple-200 hover:bg-purple-500/[0.15] flex items-center gap-1" },
             "打开完整页 ", e(ArrowLeft, { size: 9, className: "rotate-180" })),
