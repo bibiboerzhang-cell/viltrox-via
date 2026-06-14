@@ -14,9 +14,20 @@ export function EditGroupModal({ groupName = "KOL Operations", mode = "edit", st
   const [name, setName] = useState(groupName);
   const [desc, setDesc] = useState(mode === "new" ? "" : (initialDesc || ""));
   const [members, setMembers] = useState(mode === "new" ? [] : (Array.isArray(initialMembers) ? initialMembers : []));
+  // 组级权限可编辑(落库到 vkpi_staff_groups.permissions_json):共享 Projects / KOL 池 / KPI 目标 / 提醒规则。
+  const [permProjects, setPermProjects] = useState((permissions && (permissions.shared_projects || []).join(" / ")) || "");
+  const [permKolPool, setPermKolPool] = useState((permissions && permissions.shared_kol_pool) || "");
+  const [permKpi, setPermKpi] = useState((permissions && permissions.kpi_goal) || "");
+  const [permReminder, setPermReminder] = useState((permissions && permissions.reminder_rule) || "");
   const toggleMember = (id) => setMembers(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   const save = () => {
-    onSave && onSave({ mode, name, desc, members });
+    const perms = {
+      shared_projects: permProjects.split("/").map(s => s.trim()).filter(Boolean),
+      shared_kol_pool: permKolPool.trim(),
+      kpi_goal: permKpi.trim(),
+      reminder_rule: permReminder.trim(),
+    };
+    onSave && onSave({ mode, name, desc, members, permissions: perms });
     onClose();
   };
   return e(CenterModal, { onClose, maxWidth: "lg" },
@@ -64,21 +75,25 @@ export function EditGroupModal({ groupName = "KOL Operations", mode = "edit", st
           })
         )
       ),
-      // Sharing & collaboration scope
-      e("div", { className: "rounded-md border border-white/[0.06] bg-white/[0.02] p-3 space-y-2" },
-        e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, t("组级权限")),
+      // Sharing & collaboration scope — 可编辑,保存到 permissions_json
+      e("div", { className: "rounded-md border border-white/[0.06] bg-white/[0.02] p-3 space-y-2.5" },
+        e("div", { className: "flex items-center justify-between" },
+          e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, t("组级权限")),
+          e("div", { className: "text-[9px] text-slate-600" }, t("组内成员共享"))
+        ),
         [
-          { icon: Target,   label: t("共享 Projects"),     value: (permissions && (permissions.shared_projects || []).join(" / ")) || "135mm LAB / CineGear / 56mm 复推" },
-          { icon: Users,    label: t("共享 KOL 池"),       value: (permissions && permissions.shared_kol_pool) || t("Top performers(78 人)") },
-          { icon: TrendingUp, label: t("共同 KPI 目标"),   value: (permissions && permissions.kpi_goal) || t("Q2 新增 50 个高活 KOL") },
-          { icon: Bell,     label: t("内部 @ 提醒规则"),   value: (permissions && permissions.reminder_rule) || t("组内变更自动通知") },
-        ].map((row, i) => e("div", { key: i, className: "flex items-start gap-2.5" },
-          e(row.icon, { size: 11, className: "text-slate-400 shrink-0 mt-0.5" }),
-          e("div", { className: "flex-1 min-w-0" },
-            e("div", { className: "text-[11px] text-white" }, row.label),
-            e("div", { className: "text-[10px] text-slate-400" }, row.value)
-          ),
-          e("button", { className: "text-white/25", disabled: true, title: "权限编辑待接入" }, t("编辑"))
+          { icon: Target,     label: t("共享 Projects"),     value: permProjects, set: setPermProjects, ph: "用 / 分隔,如 135mm LAB / CineGear" },
+          { icon: Users,      label: t("共享 KOL 池"),       value: permKolPool,  set: setPermKolPool,  ph: "如 Top performers(78 人)" },
+          { icon: TrendingUp, label: t("共同 KPI 目标"),     value: permKpi,      set: setPermKpi,      ph: "如 Q2 新增 50 个高活 KOL" },
+          { icon: Bell,       label: t("内部 @ 提醒规则"),   value: permReminder, set: setPermReminder, ph: "如 组内变更自动通知" },
+        ].map((row, i) => e("div", { key: i, className: "flex items-center gap-2.5" },
+          e(row.icon, { size: 11, className: "text-purple-300/80 shrink-0" }),
+          e("div", { className: "w-[88px] shrink-0 text-[11px] text-white" }, row.label),
+          e("input", {
+            type: "text", value: row.value, placeholder: row.ph,
+            onChange: (ev) => row.set(ev.target.value),
+            className: "flex-1 min-w-0 rounded-md border border-white/[0.08] bg-white/[0.025] px-2.5 py-1 text-[10.5px] text-white placeholder-slate-600 outline-none focus:border-purple-500/40"
+          })
         ))
       )
     ),

@@ -798,7 +798,7 @@ export function V615ReplicaApp(props: any = {}) {
       onSave: async (group) => {
         try {
           if (!apiToken) throw new Error("缺少 API token，不能保存分组。");
-          const body = { name: group.name, description: group.desc, member_ids: group.members };
+          const body = { name: group.name, description: group.desc, member_ids: group.members, permissions: group.permissions };
           if (group.mode === "new") {
             await createStaffGroup(apiToken, body);
           } else if (editGroupTarget?.id) {
