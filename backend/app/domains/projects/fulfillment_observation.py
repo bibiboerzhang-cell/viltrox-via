@@ -12,27 +12,37 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from app.db.connection import get_conn
+from app.domains.access import scope
 from app.domains.projects.workflow_common import normalize_assignment_stage
 
 
-def deliverable_stages_summary() -> dict[str, Any]:
+def deliverable_stages_summary(staff: dict[str, Any] | None = None) -> dict[str, Any]:
     """assignment 的 stage / stage_status 真实分布(P0-1:状态词统一)。
 
     读侧归一:把溢出的项目层词(discovery/shipped/received/measured/content_published…)
     合并到 assignment 规范词(discovered/device_sent/arrived/reviewed/content_posted),
     再在 Python 侧重聚合,避免 discovery 与 discovered 等被算成两档导致 due-list/复盘错。
     同时透出 raw_stages(归一前分布)便于核对。
+
+    RBAC(PV-4):own-only 员工只统计自己负责/创建的项目下的 assignment;管理层(can_view_all)
+    看全部。复用 scope.project_filter 经 JOIN vkpi_projects 收口,与 vkpi_projects.py 同款。
     """
     conn = get_conn()
+    where_sql, params = scope.project_filter("p", staff)
+    join_clause = "JOIN vkpi_projects p ON p.id = a.project_id"
+    where_clause = f"WHERE {where_sql}" if where_sql else ""
     rows = conn.execute(
-        """
-        SELECT COALESCE(NULLIF(stage, ''), '') AS stage,
-               COALESCE(NULLIF(stage_status, ''), '(空)') AS stage_status,
+        f"""
+        SELECT COALESCE(NULLIF(a.stage, ''), '') AS stage,
+               COALESCE(NULLIF(a.stage_status, ''), '(空)') AS stage_status,
                COUNT(*) AS n
-        FROM vkpi_project_kol_assignments
+        FROM vkpi_project_kol_assignments a
+        {join_clause}
+        {where_clause}
         GROUP BY 1, 2
         ORDER BY n DESC
-        """
+        """,
+        tuple(params),
     ).fetchall()
     raw_items = [dict(r) for r in rows]
     merged: dict[tuple[str, str], int] = {}
@@ -54,20 +64,26 @@ def deliverable_stages_summary() -> dict[str, Any]:
         "stages": stages,
         "raw_stages": raw_items,
         "normalized": True,
+        "scope_mode": scope.scope_context(staff)["scope_mode"],
     }
 
 
-def due_list(days_overdue: int = 7, limit: int = 100) -> dict[str, Any]:
+def due_list(days_overdue: int = 7, limit: int = 100, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     """待观察项:有 delivered shipment 早于 (now - days_overdue),且项目零视频证据。
 
     纯只读。cutoff 在 Python 算后作参数传(避开 psycopg 字面 % / INTERVAL 翻译层脆弱)。
+
+    RBAC(PV-4):own-only 员工只看自己负责/创建的项目;管理层(can_view_all)看全部。
+    复用 scope.project_filter("p", staff),与 deliverable_stages_summary / vkpi_projects.py 同款。
     """
     days = max(0, min(int(days_overdue or 7), 90))
     cutoff = datetime.utcnow() - timedelta(days=days)
     safe_limit = max(1, min(int(limit or 100), 500))
     conn = get_conn()
+    scope_sql, scope_params = scope.project_filter("p", staff)
+    scope_clause = f"AND {scope_sql}" if scope_sql else ""
     rows = conn.execute(
-        """
+        f"""
         SELECT p.id AS project_id,
                p.project_name,
                p.product_name,
@@ -81,11 +97,12 @@ def due_list(days_overdue: int = 7, limit: int = 100) -> dict[str, Any]:
           AND NOT EXISTS (
             SELECT 1 FROM vkpi_kol_video_evidence e WHERE e.project_id = p.id
           )
+          {scope_clause}
         GROUP BY p.id, p.project_name, p.product_name
         ORDER BY MIN(s.delivered_at) ASC
         LIMIT ?
         """,
-        (cutoff, safe_limit),
+        (cutoff, *scope_params, safe_limit),
     ).fetchall()
     items: list[dict[str, Any]] = []
     now = datetime.utcnow()
@@ -110,5 +127,6 @@ def due_list(days_overdue: int = 7, limit: int = 100) -> dict[str, Any]:
         "days_overdue": days,
         "count": len(items),
         "items": items,
+        "scope_mode": scope.scope_context(staff)["scope_mode"],
         "note": "已签收满 N 天但项目零内容证据的待观察项;空=无 delivered shipment 数据(物流断流,见刀2)。",
     }

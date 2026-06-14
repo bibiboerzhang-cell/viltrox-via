@@ -111,11 +111,13 @@ def projects(
 
 @router.get("/projects/deliverable-stages-summary")
 def deliverable_stages_summary(staff=Depends(require_tab("vkpi", "read"))):
-    """履约观测 P0(只读):assignment 阶段分布,看状态词是否分裂。"""
+    """履约观测 P0(只读):assignment 阶段分布,看状态词是否分裂。
+
+    RBAC(PV-4):own-only 员工只统计自己负责/创建的项目;管理层看全部。
+    """
     from app.domains.projects import fulfillment_observation
 
-    del staff
-    return fulfillment_observation.deliverable_stages_summary()
+    return fulfillment_observation.deliverable_stages_summary(staff=staff)
 
 
 @router.get("/projects/due-list")
@@ -124,11 +126,13 @@ def projects_due_list(
     limit: int = Query(default=100, ge=1, le=500),
     staff=Depends(require_tab("vkpi", "read")),
 ):
-    """履约观测 刀1(只读):已签收满 N 天但项目无内容证据的待观察项。"""
+    """履约观测 刀1(只读):已签收满 N 天但项目无内容证据的待观察项。
+
+    RBAC(PV-4):own-only 员工只看自己负责/创建的项目;管理层看全部。
+    """
     from app.domains.projects import fulfillment_observation
 
-    del staff
-    return fulfillment_observation.due_list(days_overdue=days_overdue, limit=limit)
+    return fulfillment_observation.due_list(days_overdue=days_overdue, limit=limit, staff=staff)
 
 
 @router.post("/projects/logistics-sync/enqueue")
