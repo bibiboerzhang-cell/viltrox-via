@@ -63,6 +63,82 @@ def _int(value: Any, default: int = 0) -> int:
         return default
 
 
+# ── 收口路①-4:新人优先「展示排序信号」(全独立,绝不写 viltrox_fit_score / 不改 rule_v0)──────
+# 合并库内召回 + 全网发现时,给「新发现(无库内历史匹配)+ 新鲜(低合作)+ 成长期」加权;
+# 库内饱和大号(合作过载 / 老面孔大粉)降位。产出的 display_rank 仅作前端展示排序,纯透出。
+_DISCOVERY_BRAND_COLLAB_OVERLOAD_N = 6  # 与 profile_recall.BRAND_COLLAB_OVERLOAD_N 同口径
+_SATURATED_FOLLOWER_FLOOR = 500_000     # 老面孔大粉(库内已匹配 + 超大粉)视为饱和,降位
+
+
+def _discovery_brand_collab_count(item: dict[str, Any]) -> int:
+    """发现项真实合作条数(historical_match.recent_cooperations / brand_*);缺 → 0(不杜撰)。"""
+    history = item.get("historical_match") if isinstance(item.get("historical_match"), dict) else {}
+    coops = history.get("recent_cooperations")
+    if isinstance(coops, list):
+        return sum(1 for c in coops if c not in (None, "", {}, []))
+    raw = item.get("brand_collaborations") or item.get("brand_collaborations_json")
+    if isinstance(raw, list):
+        return sum(1 for c in raw if c not in (None, "", {}, []))
+    return 0
+
+
+def _new_priority_signal(item: dict[str, Any]) -> dict[str, Any]:
+    """单个发现候选的「新人优先」展示信号:(display_rank_adjust, flags, note)。
+
+    红线:adjust 只进一个独立展示字段 display_rank,绝不并入任何评分/排名分;数据缺不杜撰。
+    """
+    adjust = 0.0
+    flags: list[str] = []
+    notes: list[str] = []
+    is_new = not (item.get("history_kol_pool_id") or item.get("historical_match"))
+    followers = _int(item.get("follower_count") or item.get("followers"))
+    collab = _discovery_brand_collab_count(item)
+
+    if is_new:
+        # 全网新发现(库内无此人)= 主源,优先加权。
+        adjust += 0.20
+        flags.append("新发现")
+        notes.append("全网新发现(库内无此人)")
+    if collab and collab < 3:
+        adjust += 0.05
+        flags.append("低合作")
+        notes.append(f"合作较少({collab}),新鲜度高")
+    # 库内已匹配 + 超大粉 = 老面孔饱和,降位(让位新人)。
+    if (item.get("history_kol_pool_id") or item.get("historical_match")) and followers >= _SATURATED_FOLLOWER_FLOOR:
+        adjust -= 0.10
+        flags.append("饱和大号")
+        notes.append(f"库内已合作的大号({followers}+),降位让新人")
+    if collab >= _DISCOVERY_BRAND_COLLAB_OVERLOAD_N:
+        adjust -= 0.05
+        flags.append(f"合作{collab}+")
+        notes.append(f"合作过载({collab}),议价/独占性弱")
+    return {
+        "display_rank_adjust": round(adjust, 4),
+        "new_priority_flags": flags,
+        "new_priority_note": "；".join(notes) if notes else "",
+        "is_new_discovery": bool(is_new),
+    }
+
+
+def _annotate_new_priority(discovery: dict[str, Any] | None) -> dict[str, Any] | None:
+    """给 discover_new_creators 结果的 items/new_creators/existing_matches 逐项贴新人优先展示信号。
+    仅副本注解(就地补字段),不改顺序、不写库;前端可按 display_rank 重排展示。"""
+    if not isinstance(discovery, dict):
+        return discovery
+    for key in ("items", "new_creators", "existing_matches"):
+        seq = discovery.get(key)
+        if not isinstance(seq, list):
+            continue
+        for item in seq:
+            if isinstance(item, dict):
+                item.update(_new_priority_signal(item))
+    discovery["new_priority_signal_applied"] = True
+    discovery["new_priority_note"] = (
+        "新人优先展示信号:新发现/低合作/成长期加权,库内饱和大号降位;纯展示,绝不写 viltrox_fit_score。"
+    )
+    return discovery
+
+
 def _staff_user_id(staff: dict[str, Any] | None) -> int | None:
     staff = staff or {}
     for key in ("user_id", "id", "staff_id"):
@@ -695,6 +771,9 @@ def enqueue_smart_search_profile_advance(
         "type_weight": body.get("type_weight") if body.get("type_weight") is not None else 0.3,
         "type_boost_enabled": bool(body.get("type_boost_enabled", True)),
         "include_new_discovery": bool(body.get("include_new_discovery", True)),
+        # 收口路①-2:内容契合入队控量旋钮(默认开,top N=6);worker→pipeline 透传。
+        "include_content_fit": bool(body.get("include_content_fit", True)),
+        "content_fit_top_n": max(1, min(_int(body.get("content_fit_top_n"), 6), 12)),
         "new_discovery_limit": max(1, min(_int(body.get("new_discovery_limit") or body.get("discovery_limit"), 15), 50)),
         "new_discovery_per_platform_limit": max(1, min(_int(body.get("new_discovery_per_platform_limit") or body.get("new_discovery_limit") or body.get("discovery_limit"), 15), 50)),
         "new_discovery_platforms": body.get("new_discovery_platforms") or body.get("discovery_platforms"),
@@ -789,6 +868,9 @@ async def execute_smart_search_profile_advance_pipeline(
             limit=max(1, min(_int(payload.get("new_discovery_limit"), 15), 50)),
             per_platform_limit=max(1, min(_int(payload.get("new_discovery_per_platform_limit"), 15), 50)),
         )
+        # 收口路①-4:新人优先展示信号(新发现/低合作/成长期加权,饱和大号降位)。纯展示透出,
+        # 绝不写 viltrox_fit_score / 不改 rule_v0;注解后再 attach(库内召回的 display_rank_score 已在 recall 侧产出)。
+        new_discovery = _annotate_new_priority(new_discovery)
         search_sessions.attach_new_discovery_result(int(session_id), new_discovery)
 
     advance_result = advance_search_session_items(
@@ -808,6 +890,22 @@ async def execute_smart_search_profile_advance_pipeline(
         for value in (advance_result.get("viltrox_fit_score_changed_ids") or [])
         if _int(value) > 0
     ]
+    # 收口路①-2:搜索拿到候选(库内召回 + 发现 + advance 补全)后,对**头部 N 个有视频证据的
+    # 库内候选**异步入队内容契合深析(「思考中」段)。控量(top N + 有证据 + cache 复用 + 去重)。
+    # 纯编排入队 + exposure_potential 展示计算,零烧 LLM、零写 fit。入队失败不阻断 pipeline。
+    content_fit: dict[str, Any] | None = None
+    if bool(payload.get("include_content_fit", True)):
+        try:
+            from app.domains.kol import content_fit_enqueue
+
+            content_fit = content_fit_enqueue.enqueue_content_fit_for_session(
+                session_id=int(session_id),
+                product_sku=_text(payload.get("product_sku")),
+                top_n=max(1, min(_int(payload.get("content_fit_top_n"), content_fit_enqueue.DEFAULT_TOP_N), content_fit_enqueue.MAX_TOP_N)),
+                triggered_by_user_id=_int(payload.get("triggered_by_user_id")) or None,
+            )
+        except Exception as exc:
+            content_fit = {"status": "error", "reason": str(exc)[:300]}
     pipeline_status = "failed" if advance_result.get("status") == "failed" else "ready"
     search_sessions.update_session_result_summary(
         int(session_id),
@@ -820,6 +918,9 @@ async def execute_smart_search_profile_advance_pipeline(
                 "new_discovery_status": (new_discovery or {}).get("status") if new_discovery else "not_requested",
                 "advance_status": advance_result.get("status"),
                 "advance_counts": advance_result.get("counts"),
+                # 内容契合入队状态(「思考中」桶进度):入队数 / 跳过原因,纯展示透出。
+                "content_fit_status": (content_fit or {}).get("status") if content_fit else "not_requested",
+                "content_fit_enqueued": (content_fit or {}).get("enqueued_count") if content_fit else 0,
                 "viltrox_fit_score_changed_ids": changed_ids,
                 "viltrox_fit_score_untouched": not changed_ids,
             }
@@ -829,6 +930,7 @@ async def execute_smart_search_profile_advance_pipeline(
         "status": pipeline_status,
         "session_id": int(session_id),
         "query": query,
+        "content_fit": content_fit,
         "recall": {
             "method": recall_result.get("method"),
             "returned_count": len(recall_result.get("items") or []),

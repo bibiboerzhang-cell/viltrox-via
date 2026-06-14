@@ -1516,6 +1516,50 @@ def _process_kol_outreach_draft(conn: psycopg.Connection[Any], job: dict[str, An
             )
 
 
+def _process_kol_content_fit_analysis(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
+    """收口路①-2:内容契合深析(「思考中」)。读该 KOL 视频画面/故事 + 评论 → openai(GPT)+3重试
+    → 落独立 cache(target_type='kol'/derive_method='content_fit_v1')。
+
+    红线:零触 viltrox_fit_score;LLM/重试/cache 全由 content_fit_analysis 域内负责,本 handler
+    只做调度与状态回写。无视频证据 → status='insufficient_evidence',标 blocked(不烧 LLM,诚实)。
+    """
+    from app.domains.kol import content_fit_analysis as kol_content_fit
+
+    kol_pool_id = _int_or_none(payload.get("kol_pool_id") or payload.get("target_id"))
+    if not kol_pool_id:
+        raise ValueError("kol_content_fit_analysis payload must include kol_pool_id")
+    staff = _resolve_job_staff(conn, payload)
+    with db_connection_sync_scope():
+        result = kol_content_fit.analyze_content_fit(
+            int(kol_pool_id),
+            str(payload.get("product_sku") or "") or None,
+            staff=staff if isinstance(staff, dict) else None,
+        )
+    state = str((result or {}).get("state") or (result or {}).get("status") or "")
+    ok = state == "ready"
+    # insufficient_evidence / llm_failed 不是错误态,但也无 cache 产出 → blocked(可见、不重试雪崩)。
+    last_error = "" if ok else (str((result or {}).get("reason") or state or "content_fit_not_ready"))
+    payload["content_fit_result"] = {
+        "state": state,
+        "kol_pool_id": kol_pool_id,
+        "fit_verdict": ((result or {}).get("result") or {}).get("fit_verdict"),
+        "confidence": ((result or {}).get("result") or {}).get("confidence"),
+        "cached": (result or {}).get("cached"),
+        "viltrox_fit_score_untouched": True,
+    }
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE apify_jobs SET status=%s, last_error=NULLIF(%s, ''), payload=%s::jsonb, updated_at=NOW() WHERE id=%s",
+                (
+                    "done" if ok else "blocked",
+                    last_error[:300],
+                    _json(payload),
+                    int(job["id"]),
+                ),
+            )
+
+
 def _process_contract_invoice_extract(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
     """发票回填提取(批E,2026-06-12):读本地存证文件 → Claude 提取收款字段 → cache(invoice)。
     失败域内不写 cache,这里标 blocked(模式同 _process_kol_outreach_draft)。"""
@@ -3189,6 +3233,9 @@ def _process_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> None:
         return
     if str(job.get("job_type") or "").strip().lower() == "smart_search_profile_advance":
         _process_smart_search_profile_advance(conn, job, payload)
+        return
+    if str(job.get("job_type") or "").strip().lower() == "kol_content_fit_analysis":
+        _process_kol_content_fit_analysis(conn, job, payload)
         return
     if str(job.get("job_type") or "").strip().lower() == "account_dossier_extract":
         _process_account_dossier_extract(conn, job, payload)

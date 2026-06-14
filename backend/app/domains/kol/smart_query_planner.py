@@ -240,6 +240,76 @@ def _normalise_plan(
     }
 
 
+def _plan_from_product_persona(
+    query: str,
+    product: dict[str, Any],
+    body: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """收口路①-1:用产品知识库 persona(地基A)直接成 plan,跳过 on-the-fly LLM。
+
+    命中已填充 persona → 返回与 _normalise_plan 同形的 plan(search_query / product_focus /
+    target_persona / avoid_types / product_positioning 全取 persona 真值);未填充 → 返回 None
+    让调用方回退 LLM。纯只读,零写 fit / 零改 rule_v0;读失败静默 None。
+    """
+    # 显式关停开关(可由 body 覆盖):默认开,need 时可强制走 LLM 对比。
+    if str((body or {}).get("use_product_persona", "true")).strip().lower() in {"0", "false", "no", "off"}:
+        return None
+    try:
+        from app.domains.costs import product_persona as product_persona_kb
+
+        persona = product_persona_kb.get_product_persona(str(product.get("sku") or ""))
+    except Exception:
+        return None
+    if not persona:
+        return None
+
+    ideal_persona = _text(persona.get("ideal_persona"))
+    creator_types = _as_list(persona.get("ideal_creator_types_json"))
+    verticals = _as_list(persona.get("verticals_json"))
+    avoid_types = _as_list(persona.get("avoid_types_json"))
+    what_is = _text(persona.get("what_is"))
+    # search_query / product_focus:理想创作者类型 + 代表垂类(英文检索词,与 LLM 口径一致)。
+    focus = list(dict.fromkeys([*creator_types, *verticals]))
+    if not focus:
+        # persona 行存在但类型/垂类为空 → 退 LLM,避免空检索词。
+        return None
+    search_query = " ".join(focus).strip()
+    target_persona = ideal_persona or _text(query)
+    product_positioning = what_is or _text(product.get("specs_line"))
+
+    fallback = _fallback_plan(query)
+    return {
+        "status": "ready",
+        "original_query": _text(query),
+        "search_query": search_query or fallback["search_query"],
+        "product_focus": focus[:10],
+        "target_persona": target_persona,
+        "avoid_types": avoid_types[:8],
+        "product_positioning": product_positioning,
+        "platforms": fallback["platforms"],
+        "market": "US",
+        "creator_quota": 15,
+        "reviewer_quota": 15,
+        "include_new_discovery": True,
+        "new_discovery_limit": 15,
+        "reason": "product_persona_kb",
+        # provider/model 标知识库来源(非本次 LLM 调用);审计可见走的是 persona 而非 on-the-fly。
+        "provider": "product_persona_kb",
+        "model": _text(persona.get("model")) or "product_persona_kb",
+        "fallback_used": False,
+        "provider_calls_performed": False,
+        "persona_source": _text(persona.get("source")) or "llm_persona_v1",
+        "resolved_product": {
+            "sku": product.get("sku"),
+            "model_name": product.get("model_name"),
+            "marketing_name": product.get("marketing_name"),
+            "category_main": product.get("category_main"),
+            "series": product.get("series"),
+            "price_usd": _as_float_or_none(product.get("price_usd")),
+        },
+    }
+
+
 def plan_text_query(
     query: str,
     *,
@@ -262,6 +332,15 @@ def plan_text_query(
         resolved_product = product_resolver.resolve_product(query_text)
     except Exception:
         resolved_product = None
+
+    # 收口路①-1:解析到 SKU 后,优先读已填充的产品知识库 persona(地基A)。命中即直接拿
+    # ideal_persona / avoid_types / ideal_creator_types / verticals,跳过 on-the-fly LLM(更稳更快、
+    # 与批跑 369 SKU 口径一致)。无 persona(尚未填充)则照常走下面的 LLM planner。
+    # 红线:只读 LLM 生成的 persona 文本/标签,零写 fit、零改 rule_v0。读失败静默回退 LLM。
+    if resolved_product and str(resolved_product.get("sku") or "").strip():
+        persona_plan = _plan_from_product_persona(query_text, resolved_product, body)
+        if persona_plan is not None:
+            return persona_plan
 
     if resolved_product:
         product_block = f"""

@@ -134,6 +134,8 @@ def _infer_kind(source: str, job_type: str = "", purpose: str = "", payload: Any
         return "账号分析"
     if _text(job_type).lower() == "kol_pool_comments_collect" or "kol_pool_comments_collect" in haystack:
         return "评论采集"
+    if _text(job_type).lower() == "kol_content_fit_analysis" or "kol_content_fit_analysis" in haystack or "content_fit_v1" in haystack:
+        return "内容契合"
     if _text(job_type).lower() == "kol_outreach_draft" or "kol_outreach_draft" in haystack:
         return "联系草稿"
     if _text(job_type).lower() == "logistics_track_sync" or "logistics_track_sync" in haystack:
@@ -165,6 +167,9 @@ def _infer_stage(status: str, kind: str, job_type: str = "", purpose: str = "", 
             _text(data.get("prompt")),
         ]
     ).lower()
+    # 收口路①-3:内容契合深析(逐候选)= 思考中。job_type/derive_method/kind 任一命中即归桶。
+    if "kol_content_fit_analysis" in haystack or "content_fit_v1" in haystack or "内容契合" in haystack:
+        return "thinking"
     if "project_contract_extract" in haystack or "outreach_draft" in haystack:
         return "thinking"
     if "contract_invoice_extract" in haystack or "contract_polish" in haystack:
