@@ -1162,6 +1162,8 @@ export function V615ReplicaApp(props: any = {}) {
               revenueBySource: [],
               dashboardLoading,
               dashboardError,
+              // P5 系统健康条:透传 token 供其独立拉取真实只读端点
+              apiToken,
               onOpenProjectsList: () => {
                 saveStoredState({ activeNav: "projects" });
                 setActiveNav("projects");

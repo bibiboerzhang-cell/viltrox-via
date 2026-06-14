@@ -133,7 +133,9 @@ export interface VkpiEventTaskCreatePayload {
   phase: string;
   owner: string;
   collaborators?: string[];
-  due_date: string;
+  // 后端 due_date 是 Postgres DATE DEFAULT NULL 列;空值必须缺省/NULL,
+  // 传 "" 会触发 invalid input syntax for type date。故此字段可选,无日期时整字段省略。
+  due_date?: string;
   kind?: string;
   checklist?: Array<{ label: string; done: boolean; value?: string }>;
   details?: Record<string, unknown>;
@@ -570,7 +572,7 @@ export function fromUiTaskCreate(t: Record<string, any>): VkpiEventTaskCreatePay
     phase: String(t.phase || "prep"),
     owner: String(t.owner || "All"),
     collaborators: Array.isArray(t.collaborators) ? t.collaborators : [],
-    due_date: t.dueDate ? String(t.dueDate) : "",
+    due_date: t.dueDate ? String(t.dueDate) : undefined,
     kind: t.kind || undefined,
     checklist: Array.isArray(t.checklist) ? t.checklist : undefined,
     details,

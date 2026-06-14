@@ -148,6 +148,20 @@ def dashboard_recent_content(
     return dashboard_domain.build_dashboard_recent_content(limit=limit)
 
 
+@router.get("/dashboard/system-health")
+def dashboard_system_health(
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """Return real, read-only system-health counters for the dashboard health bar.
+
+    One light read per source (apify_jobs queue/blocked/worker, vkpi_llm_calls
+    today cost, vkpi_kol_pool freshness). Missing sources surface honestly as
+    available=false + 待接入, never fabricated.
+    """
+    del staff
+    return dashboard_domain.build_dashboard_system_health()
+
+
 @router.get("/staff-directory")
 def staff_directory(staff=Depends(require_tab("vkpi", "read"))):
     _require_manager_staff(staff)

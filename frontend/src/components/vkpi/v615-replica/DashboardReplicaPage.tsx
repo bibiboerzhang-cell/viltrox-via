@@ -14,6 +14,7 @@ import { KolFunnelCard } from "./components/KolFunnelCard";
 import { MetricCard } from "./components/MetricCard";
 import { RealMap } from "./components/RealMap";
 import { SignalsAlertsCard } from "./components/SignalsAlertsCard";
+import { SystemHealthBar } from "./components/SystemHealthBar";
 import { TopMoversCard } from "./components/TopMoversCard";
 import { UpcomingEventsCard } from "./components/UpcomingEventsCard";
 import { KPI_SCOPES } from "./data/kpiScopes";
@@ -47,8 +48,12 @@ export function DashboardReplicaPage(props: any) {
     metrics = [], campaigns = [], campaignsMeta = {}, calendarDays = [], calendarMeta = {},
     signals = [], aiInsight = EMPTY_AI_INSIGHT, topMovers = [], kolFunnel = null,
     upcomingEvents = [], revenueBySource = [], dashboardLoading = false, dashboardError = "",
+    apiToken = "",
   } = props;
   return e("div", { className: "p-4 md:p-6" },
+
+          // P5 系统健康条(真实只读端点;字段缺失显「待接入」,绝不编造)
+          e(SystemHealthBar, { apiToken }),
 
           // V6.6: KPI Header — title + scope toggle
           e("div", { className: "mb-3 flex items-end justify-between gap-3 flex-wrap" },

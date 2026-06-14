@@ -22,6 +22,7 @@ from app.domains.dashboard.recent_content import (
     build_dashboard_recent_content,
 )
 from app.domains.dashboard.summary import build_dashboard_summary
+from app.domains.dashboard.system_health import build_dashboard_system_health
 from app.domains.dashboard.views import build_dashboard_view_payload, staff_id_from_context
 
 __all__ = [
@@ -40,6 +41,7 @@ __all__ = [
     "build_dashboard_kol_distribution_pack",
     "build_dashboard_recent_content",
     "build_dashboard_summary",
+    "build_dashboard_system_health",
     "build_dashboard_view_payload",
     "build_product_performance",
     "build_revenue_trend",
