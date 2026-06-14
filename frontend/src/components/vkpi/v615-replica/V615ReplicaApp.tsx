@@ -17,6 +17,7 @@ import { Breadcrumb } from "./components/Breadcrumb";
 import { ContentCalendarCard } from "./components/ContentCalendarCard";
 import { FloatingCard } from "./components/FloatingCard";
 import { HierarchyDropdown } from "./components/HierarchyDropdown";
+import { LazyErrorBoundary } from "./components/LazyErrorBoundary";
 import { MetricCard } from "./components/MetricCard";
 import { RealMap } from "./components/RealMap";
 import { ReportPanel } from "./components/ReportPanel";
@@ -1124,14 +1125,16 @@ export function V615ReplicaApp(props: any = {}) {
               })
             ),
 
-            activeNav === "events" && e(React.Suspense, {
-              fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "Events 加载中...")
-            },
-              e(EventsMockupPage, {
-                userName,
-                staff: uiStaff,
-                currentUser,
-              })
+            activeNav === "events" && e(LazyErrorBoundary, { name: "Events" },
+              e(React.Suspense, {
+                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "Events 加载中...")
+              },
+                e(EventsMockupPage, {
+                  userName,
+                  staff: uiStaff,
+                  currentUser,
+                })
+              )
             ),
 
             activeNav === "shopify" && e(ShopifyConnectPage, { apiToken }),
