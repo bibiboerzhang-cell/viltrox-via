@@ -6,8 +6,11 @@ It does not create KOL Pool rows and never touches V6 Fit scoring fields.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from app.db.connection import get_conn
 from app.domains.kol import history_match
@@ -149,6 +152,50 @@ def _persona_relevance(item: dict[str, Any], *, pos_terms: list[str], neg_terms:
         "relevance_tier": tier,
         "relevance_hits": hits[:6],
     }
+
+
+# ── 相机/视觉创作者相关度闸门(用户硬要求:「用户得有相机,得需要拍摄」)──────────────────────
+# 只放行真正的 摄影/摄像/电影/视觉内容 创作者。_persona_relevance 只调排序不丢弃,这里负责真丢弃。
+# 信号集**故意做宽**:真摄影师/视频创作者的 频道名/handle/标题 几乎必含其中之一即放行;
+# 香水/啤酒/戏剧/政治帖等非视觉创作者无任一信号 → 丢弃。red line:只做 FILTER(丢),绝不改 viltrox_fit_score / rule_v0。
+_CAMERA_SIGNAL_TERMS = frozenset({
+    "photography", "photographer", "videography", "videographer", "filmmaker",
+    "filmmaking", "cinematography", "cinematographer", "camera", "lens", "video",
+    "film", "cinema", "anamorphic", "footage", "shoot", "shooting", "photo",
+    "editing", "editor", "colorist", "director", "dp", "dop", "reel", "reels",
+    "short", "shorts", "vlog", "vlogger", "youtuber", "content creator", "4k",
+    "8k", "bts", "b-roll", "gimbal", "drone", "mirrorless", "dslr", "creator",
+})
+
+# 明确的非视觉「硬避免」集:商业带货 / 政治帖等与相机拍摄无关的品类,命中即丢(优先于相机信号判断)。
+_HARD_AVOID_TERMS = frozenset({
+    "scentsy", "fragrance", "perfume", "scent", "essential oil", "candle", "mlm",
+    "beer", "alcohol", "wine", "spirits", "brewery", "distillery", "jewelry",
+    "jewellery", "real estate", "realtor", "realty", "mortgage", "crypto",
+    "forex", "nft", "casino", "betting", "supplement", "weight loss", "diet",
+    "recruiter", "stopwar", "political",
+})
+
+
+def _candidate_blob(item: dict[str, Any]) -> str:
+    """候选自身内容拼接(sample_title + channel_name + handle),小写。绝不含 search_query(查询词会自命中)。"""
+    return " ".join(
+        str(item.get(k) or "") for k in ("sample_title", "channel_name", "handle")
+    ).lower()
+
+
+def _has_camera_signal(item: dict[str, Any]) -> bool:
+    """候选是否带任一「相机/拍摄/视觉创作」信号(宽口径)。无任一信号 → 非视觉创作者,应丢弃。"""
+    blob = _candidate_blob(item)
+    return any(term in blob for term in _CAMERA_SIGNAL_TERMS)
+
+
+def _is_hard_avoid(item: dict[str, Any], neg_terms: list[str]) -> bool:
+    """候选是否命中明确非视觉「硬避免」品类,或命中任一 persona 负词 → 直接丢弃(不止扣分)。"""
+    blob = _candidate_blob(item)
+    if any(term in blob for term in _HARD_AVOID_TERMS):
+        return True
+    return any(t and t in blob for t in neg_terms)
 
 
 # ── 区域语言本地化(用户令):选了目标市场就按该区语言搜平台,捞本地达人(本地达人频道/标题是本地语言)。──
@@ -1227,6 +1274,7 @@ async def discover_new_creators(
     _pos_terms = _persona_positive_terms(product_focus, ideal_creator_types, verticals, search_query_en or query_text)
     _neg_terms = _persona_avoid_terms(avoid_types)
     errors: list[dict[str, Any]] = []
+    _gate_dropped = {"hard_avoid": 0, "no_camera_signal": 0}  # 相机闸门丢弃计数(可观测,用于调参)
 
     async def _search_one_platform(platform: str) -> dict[str, Any]:
         """Run one platform search with error isolation; returns annotated items + meta.
@@ -1293,11 +1341,27 @@ async def discover_new_creators(
             _region = _detect_excluded_region(item)
             if _is_discovery_garbage(item) or _region:
                 continue
+            # 相机/视觉创作者闸门(用户硬要求:得有相机、得需要拍摄)。全新发现(无库内历史匹配,
+            # 上方 existing_matches 已先行 continue)零相机信号 → 真丢弃。red line:只丢,绝不杜撰分。
+            if _is_hard_avoid(item, _neg_terms):
+                _gate_dropped["hard_avoid"] += 1
+                continue
+            if not _has_camera_signal(item):
+                _gate_dropped["no_camera_signal"] += 1
+                continue
             # persona 启发式相关度(纯本地零 LLM):写 item['score']/relevance_score/relevance_tier;
             # 先全收集到 survivors,循环外按 relevance 降序排序再 top-N 截断(否则按到达顺序砍掉高相关项)。
             item.update(_persona_relevance(item, pos_terms=_pos_terms, neg_terms=_neg_terms))
             survivors.append(item)
 
+    # 相机闸门可观测:单行 INFO,丢弃明细(诚实——被丢=结果中静默缺席,非杜撰分)。便于调参。
+    _total_dropped = _gate_dropped["hard_avoid"] + _gate_dropped["no_camera_signal"]
+    if _total_dropped:
+        logger.info(
+            "camera_relevance_gate dropped=%d hard_avoid=%d no_camera_signal=%d survivors=%d query=%r",
+            _total_dropped, _gate_dropped["hard_avoid"], _gate_dropped["no_camera_signal"],
+            len(survivors), query,
+        )
     # relevance 降序排序 → top-N 截断。red line:relevance 是独立展示信号,绝不并入 viltrox_fit_score / rule_v0。
     survivors.sort(key=lambda it: float(it.get("relevance_score") or 0.0), reverse=True)
     for item in survivors:
