@@ -130,8 +130,9 @@ def _persona_relevance(item: dict[str, Any], *, pos_terms: list[str], neg_terms:
     """persona 启发式相关度(纯本地零 LLM):扫 item 文本对正/负词命中打分。
     返回 {score, relevance_score, relevance_tier, relevance_hits};score=relevance_score 供落库。
     red line:独立展示信号,绝不并入 viltrox_fit_score / rule_v0。CN/HK/TW 不在此扣分(交 _detect_excluded_region 排)。"""
+    # 只看候选**自身内容**(标题/频道名/handle);绝不含 search_query —— 那是查询词本身,会自命中致全 1.0。
     blob = " ".join(
-        str(item.get(k) or "") for k in ("sample_title", "channel_name", "handle", "search_query")
+        str(item.get(k) or "") for k in ("sample_title", "channel_name", "handle")
     ).lower()
     if not pos_terms and not neg_terms:
         return {"score": 0.5, "relevance_score": 0.5, "relevance_tier": "中", "relevance_hits": []}
