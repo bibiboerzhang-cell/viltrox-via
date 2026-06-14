@@ -400,7 +400,7 @@ def _youtube_data_api_normalize(items: List[Dict[str, Any]], query: str, market:
     return normalized
 
 
-async def _youtube_data_api_search(search_query: str, *, market: str = "", safe_limit: int = 25) -> Dict[str, Any] | None:
+async def _youtube_data_api_search(search_query: str, *, market: str = "", safe_limit: int = 25, relevance_language: str = "en") -> Dict[str, Any] | None:
     """YouTube Data API fast path (search.list type=channel, ~1s). None => fall back to Apify.
 
     None is returned when: no API key, quota exhausted, or any API error — the caller then
@@ -421,7 +421,7 @@ async def _youtube_data_api_search(search_query: str, *, market: str = "", safe_
                 "type": "channel",
                 "q": q,
                 "maxResults": max(1, min(25, int(safe_limit or 25))),
-                "relevanceLanguage": "en",
+                "relevanceLanguage": (relevance_language or "en").strip().lower() or "en",
                 "safeSearch": "none",
             },
         )
@@ -475,6 +475,7 @@ async def search_platform_content(
     *,
     market: str = "",
     max_results: int = 25,
+    relevance_language: str = "en",
 ) -> Dict[str, Any]:
     """Search public platform content and normalize it into KOL candidates.
 
@@ -496,7 +497,7 @@ async def search_platform_content(
     # (10-60s cold start). 命中即返回归一化候选;无 key / 配额耗尽 / 错误 → None,落回下方
     # 原 Apify youtube-scraper 分支(逻辑零改动)。
     if normalized_platform == "youtube":
-        fast = await _youtube_data_api_search(search_query, market=market, safe_limit=safe_limit)
+        fast = await _youtube_data_api_search(search_query, market=market, safe_limit=safe_limit, relevance_language=relevance_language)
         if fast is not None and fast.get("items"):
             return fast
 

@@ -595,6 +595,7 @@ export async function smartKolSearchProfileAdvanceJob(
     newDiscoveryLimit?: number;
     newDiscoveryPlatforms?: string[];
     excludeChinese?: boolean;
+    market?: string;
     timeoutMs?: number;
   } = {},
 ): Promise<VkpiKolSmartSearchProfileAdvanceResponse> {
@@ -604,6 +605,8 @@ export async function smartKolSearchProfileAdvanceJob(
     include_new_discovery: params.includeNewDiscovery ?? true,
   };
   if (params.newDiscoveryPlatforms?.length) body.new_discovery_platforms = params.newDiscoveryPlatforms;
+  // 区域语言本地化:目标市场码(JP/KR/DE/...)→ 后端按该区语言搜平台;空=全球英文。
+  if (params.market) body.market = params.market;
   if (typeof params.excludeChinese === "boolean") body.exclude_chinese = params.excludeChinese;
   if (typeof params.candidateLimit === "number") body.candidate_limit = params.candidateLimit;
   if (typeof params.limit === "number") body.limit = params.limit;

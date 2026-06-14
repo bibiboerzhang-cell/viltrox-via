@@ -945,6 +945,8 @@ export function SmartKolInputPanel({
   const [error, setError] = useState("");
   // 问题2 平台选择器:默认全选已落地的 YT/IG/TikTok(FB 待 provider 落地,UI 置灰)。
   const [discoveryPlatforms, setDiscoveryPlatforms] = useState<string[]>(["youtube", "instagram", "tiktok"]);
+  // 区域语言本地化:目标市场码(空=全球英文;JP/KR/DE/… 按该区语言搜平台捞本地达人)。
+  const [discoveryRegion, setDiscoveryRegion] = useState<string>("");
   // 开闸全量(用户裁令「直接开闸全量」):深度查找默认开,文字搜索后自动触发全网发现一步到位。
   const [deepFindOn, setDeepFindOn] = useState(true);
   // P0-6 地区口径:默认开,排除 {中国大陆 CN / 香港 HK / 台湾 TW} 三地区(按 country/market 地区判据,
@@ -1283,6 +1285,7 @@ export function SmartKolInputPanel({
         newDiscoveryLimit: 15,
         newDiscoveryPlatforms: discoveryPlatforms,
         excludeChinese,
+        market: discoveryRegion,
         timeoutMs: 300000,
       });
       setAdvanceResult(response);
@@ -1476,6 +1479,30 @@ export function SmartKolInputPanel({
                 );
               })}
               <span className="rounded-full border border-white/[0.06] px-2 py-0.5 text-[10px] text-slate-600" title="Facebook 发现即将支持">Facebook · 即将</span>
+              <span className="ml-1 text-[10px] text-slate-500">区域</span>
+              <select
+                value={discoveryRegion}
+                onChange={(event) => setDiscoveryRegion(event.target.value)}
+                title="目标市场:选非英语区会按该区语言搜平台、捞本地达人(改区域后点「重新全网查找」重搜生效)"
+                className="rounded-md border border-white/[0.1] bg-black/30 px-1.5 py-0.5 text-[10px] text-slate-200 focus:border-cyan-400/40 focus:outline-none"
+              >
+                {[
+                  { v: "", t: "全球·英文" },
+                  { v: "JP", t: "日本·日语" },
+                  { v: "KR", t: "韩国·韩语" },
+                  { v: "DE", t: "德国·德语" },
+                  { v: "FR", t: "法国·法语" },
+                  { v: "ES", t: "西班牙·西语" },
+                  { v: "IT", t: "意大利·意语" },
+                  { v: "BR", t: "巴西·葡语" },
+                  { v: "RU", t: "俄罗斯·俄语" },
+                  { v: "TH", t: "泰国·泰语" },
+                  { v: "VN", t: "越南·越语" },
+                  { v: "ID", t: "印尼·印尼语" },
+                ].map((o) => (
+                  <option key={o.v} value={o.v} className="bg-slate-900 text-slate-100">{o.t}</option>
+                ))}
+              </select>
               <label className="flex items-center gap-1 text-[10px] text-slate-400" title="排除 中国大陆/香港/台湾 地区(按 country/market 地区判据,海外中文博主放行)">
                 <input type="checkbox" checked={excludeChinese} onChange={(event) => setExcludeChinese(event.target.checked)} className="accent-emerald-500" />
                 排除 中国/港/台 地区

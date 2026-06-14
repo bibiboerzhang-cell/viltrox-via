@@ -150,6 +150,65 @@ def _persona_relevance(item: dict[str, Any], *, pos_terms: list[str], neg_terms:
     }
 
 
+# ── 区域语言本地化(用户令):选了目标市场就按该区语言搜平台,捞本地达人(本地达人频道/标题是本地语言)。──
+# value=(relevanceLanguage ISO-639-1, regionCode);英语区/未列/空 → ("en", market)。CN/HK/TW 为排除域不作目标。
+MARKET_LANGUAGE: dict[str, tuple[str, str]] = {
+    "JP": ("ja", "JP"), "KR": ("ko", "KR"), "DE": ("de", "DE"), "FR": ("fr", "FR"),
+    "ES": ("es", "ES"), "MX": ("es", "MX"), "IT": ("it", "IT"), "BR": ("pt", "BR"),
+    "PT": ("pt", "PT"), "RU": ("ru", "RU"), "TH": ("th", "TH"), "VN": ("vi", "VN"),
+    "ID": ("id", "ID"), "TR": ("tr", "TR"), "PL": ("pl", "PL"), "NL": ("nl", "NL"),
+    "SA": ("ar", "SA"), "AE": ("ar", "AE"),
+}
+_LANG_DISPLAY = {
+    "ja": "Japanese", "ko": "Korean", "de": "German", "fr": "French", "es": "Spanish",
+    "it": "Italian", "pt": "Portuguese", "ru": "Russian", "th": "Thai", "vi": "Vietnamese",
+    "id": "Indonesian", "tr": "Turkish", "pl": "Polish", "nl": "Dutch", "ar": "Arabic",
+}
+_LOCALIZE_CACHE: dict[tuple[str, str], str] = {}
+
+
+def _market_to_language(market: str) -> tuple[str, str]:
+    """市场码 → (relevanceLanguage, regionCode);英语区/未列 → ('en', market)。"""
+    m = _text(market).upper()
+    return MARKET_LANGUAGE.get(m, ("en", m))
+
+
+def _localize_search_terms(en_query: str, language: str) -> str:
+    """英文 creator 检索词 → 目标语言(保持可搜关键词)。走 llm_gateway 预算闸;同 (query,lang) 进程内
+    缓存不重复烧;翻译失败/空 → 回退英文(不阻断)。language 为空/en → 原样返回。"""
+    q = _text(en_query)
+    lang = _text(language).lower()
+    if not q or lang in ("", "en"):
+        return q
+    key = (q, lang)
+    if key in _LOCALIZE_CACHE:
+        return _LOCALIZE_CACHE[key]
+    localized = q
+    try:
+        from app.platform import llm_gateway
+
+        lang_name = _LANG_DISPLAY.get(lang, lang)
+        prompt = (
+            f"Translate these influencer/creator search keywords into {lang_name} for searching "
+            f"YouTube/Instagram/TikTok. Return ONLY the translated keywords, space-separated, "
+            f"no explanation, no quotes:\n\n{q}"
+        )
+        resp = llm_gateway.invoke(
+            prompt=prompt,
+            purpose="vkpi_discovery_localize",
+            preferred_provider="openai",
+            max_output_tokens=120,
+        )
+        if str(resp.get("status") or "") == "success":
+            text = _text(resp.get("text"))
+            if text:
+                localized = text
+    except Exception:
+        localized = q
+    _LOCALIZE_CACHE[key] = localized
+    return localized
+
+
 def _is_discovery_garbage(item: dict[str, Any]) -> bool:
     """残废发现项:无真 handle(query-as-handle 修复后兜底为 'Unknown creator'/空)→ 丢弃。"""
     handle = str(item.get("handle") or "").strip()
@@ -1089,6 +1148,10 @@ async def discover_new_creators(
     中文 query 捞中文圈);product_focus/ideal_creator_types/verticals/avoid_types 供 per-item
     persona 启发式相关度打分(纯本地字符串比对,零 LLM/零 Apify,无需预算闸)。全 default,既有调用不破坏。"""
     query = _text(search_query_en) or _text(query_text)
+    # 区域语言本地化:目标市场非英语区 → 英文检索词翻成该区语言搜平台(捞本地达人),relevanceLanguage 同步。
+    # 英语区/空 market → search_term=query、relevance_language='en',与现状完全一致(零回归)。
+    _relevance_language, _region_code = _market_to_language(market)
+    search_term = _localize_search_terms(query, _relevance_language)
     safe_limit = max(1, min(_int(limit, 15), 50))
     safe_per_platform = max(1, min(_int(per_platform_limit, 15), 50))
     resolved_platforms = _platforms(platforms, fallback=platform_hint)
@@ -1122,9 +1185,10 @@ async def discover_new_creators(
         try:
             result = await search_platform_content(
                 platform,
-                query,
+                search_term,
                 market=_text(market).upper(),
                 max_results=safe_per_platform,
+                relevance_language=_relevance_language,
             )
         except Exception as exc:
             return {"platform": platform, "status": "failed", "message": str(exc)[:500], "annotated": [], "error": True}
