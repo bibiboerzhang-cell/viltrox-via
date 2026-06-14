@@ -329,6 +329,142 @@
   box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.8);
 }
 
+.mykol-official-head-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+/* 官方矩阵更紧凑:更小的平台卡 + 更密的栅格 */
+.mykol-platform-grid--compact {
+  gap: 9px;
+  padding: 12px;
+}
+
+.mykol-platform-card--compact {
+  min-height: 132px;
+  padding: 13px;
+}
+
+.mykol-platform-card--compact .mykol-platform-icon {
+  width: 32px;
+  height: 32px;
+}
+
+.mykol-platform-card--compact b {
+  margin-top: 8px;
+  font-size: 14px;
+}
+
+.mykol-platform-card--compact strong {
+  margin-top: 11px;
+  font-size: 21px;
+}
+
+.mykol-platform-card--compact em,
+.mykol-platform-card--compact small {
+  margin-top: 3px;
+  font-size: 11px;
+}
+
+.mykol-platform-card--compact i {
+  margin-top: 8px;
+  font-size: 11px;
+}
+
+/* 收起态:单条速览 + 6 个品牌 logo 迷你徽章 */
+.mykol-platform-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 14px 14px;
+}
+
+.mykol-platform-summary__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 11px;
+  background: rgba(15, 23, 42, 0.58);
+  color: #c7d2e4;
+  padding: 7px 11px;
+  cursor: pointer;
+}
+
+.mykol-platform-summary__item:hover {
+  border-color: rgba(56, 189, 248, 0.4);
+}
+
+.mykol-platform-summary__item svg {
+  flex: 0 0 auto;
+}
+
+.mykol-platform-summary__item b {
+  color: #ffffff;
+  font-size: 12.5px;
+  font-weight: 800;
+}
+
+.mykol-platform-summary__item em {
+  color: #7f8da7;
+  font-size: 11px;
+  font-style: normal;
+}
+
+/* G-ui:账号按 group 分段 */
+.mykol-account-group__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 18px 7px;
+  color: #8fa0bd;
+  font-size: 11px;
+  font-weight: 820;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: rgba(15, 23, 42, 0.4);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+}
+
+.mykol-account-group__head b {
+  color: #c4b5fd;
+  font-size: 11px;
+}
+
+/* D:负责人筛选条 */
+.mykol-staff-filter-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px 14px 0;
+  border: 1px solid rgba(168, 85, 247, 0.32);
+  border-radius: 11px;
+  background: rgba(124, 58, 237, 0.12);
+  color: #d7deeb;
+  padding: 8px 13px;
+  font-size: 12px;
+}
+
+.mykol-staff-filter-bar b {
+  color: #ead7ff;
+}
+
+.mykol-staff-filter-bar button {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.62);
+  color: #c7d2e4;
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 760;
+  cursor: pointer;
+}
+
 .mykol-drill-grid {
   display: grid;
   grid-template-columns: minmax(280px, 0.7fr) minmax(360px, 1.3fr);

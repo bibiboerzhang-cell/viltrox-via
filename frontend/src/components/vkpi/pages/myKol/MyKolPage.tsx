@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Bell, CheckCircle2, ChevronDown, ChevronUp, Heart, Search } from 'lucide-react';
 import type { OfficialChannelAccount, OfficialChannelPlatform } from '../channels/channelTypes';
+import { PlatformLogo } from './platformLogos';
 import { useOfficialChannelMatrix } from '../channels/useOfficialChannelMatrix';
 import type { VkpiDashboardData, VkpiKolOption, VkpiPageKey, VkpiProjectRow } from '../../vkpiTypes';
 import { platformDisplay, safeNumber } from '../../shared/vkpiDataUtils';
@@ -157,6 +158,41 @@ function statusLabel(value: string) {
   return labels[value] || value || '待接入';
 }
 
+function readCollapse(storageKey: string, fallback: boolean) {
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    return raw === null ? fallback : raw === '1';
+  } catch {
+    return fallback;
+  }
+}
+
+function writeCollapse(storageKey: string, value: boolean) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(storageKey, value ? '1' : '0');
+  } catch {
+    // localStorage 不可用忽略,折叠状态仅本会话生效
+  }
+}
+
+const COLLAPSE_KEY_TEAM = 'vkpi:mykol-collapse:team';
+const COLLAPSE_KEY_OFFICIAL = 'vkpi:mykol-collapse:official';
+
+// G-ui:公司账号分组——后端 account.group 三态,UI 归到 3 个有序段。
+const ACCOUNT_GROUPS: Array<{ key: string; label: string }> = [
+  { key: 'main_brand', label: '主品牌' },
+  { key: 'product_line', label: '产品线' },
+  { key: 'regional', label: '区域' },
+];
+
+function accountGroupKey(account: OfficialChannelAccount) {
+  const raw = String(account.group || '').toLowerCase();
+  if (raw === 'main_brand' || raw === 'product_line' || raw === 'regional') return raw;
+  return 'main_brand';
+}
+
 function normalizeHandle(value: string | undefined) {
   return String(value || '').trim().toLowerCase().replace(/^@/, '').replace(/[\s_-]+/g, '.');
 }
@@ -198,8 +234,24 @@ function MyKolSkeleton() {
   );
 }
 
-function TeamMatrix({ cards, pendingCount }: { cards: StaffCard[]; pendingCount: number }) {
+function TeamMatrix({
+  cards,
+  pendingCount,
+  selectedStaffId,
+  onSelectStaff,
+}: {
+  cards: StaffCard[];
+  pendingCount: number;
+  selectedStaffId: string | null;
+  onSelectStaff: (card: StaffCard) => void;
+}) {
   const [page, setPage] = useState(0);
+  const [collapsed, setCollapsed] = useState(() => readCollapse(COLLAPSE_KEY_TEAM, false));
+  const toggleCollapsed = () => setCollapsed((value) => {
+    const next = !value;
+    writeCollapse(COLLAPSE_KEY_TEAM, next);
+    return next;
+  });
   const allAccounts = cards.flatMap((card) => card.accounts);
   const totalPosts = allAccounts.reduce((sum, account) => sum + safeNumber(account.postsCount), 0);
   const totalFollowers = allAccounts.reduce((sum, account) => sum + safeNumber(account.followers), 0);
@@ -237,7 +289,7 @@ function TeamMatrix({ cards, pendingCount }: { cards: StaffCard[]; pendingCount:
             <span><b>{contractCount || '待接入'}</b> 签约</span>
             <span><b>{pendingCount}</b> 待定</span>
           </div>
-          {cards.length ? (
+          {cards.length && !collapsed ? (
             <div className="mykol-team-page-mini" aria-label="团队矩阵分页">
               <span>{rangeStart}-{rangeEnd} / {cards.length}</span>
               <button disabled={safePage === 0} type="button" onClick={() => setPage((current) => Math.max(0, current - 1))}>‹</button>
@@ -245,9 +297,18 @@ function TeamMatrix({ cards, pendingCount }: { cards: StaffCard[]; pendingCount:
               <button disabled={safePage >= pageCount - 1} type="button" onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))}>›</button>
             </div>
           ) : null}
+          <button
+            className={`mykol-toggle ${collapsed ? '' : 'is-active'}`}
+            type="button"
+            aria-expanded={!collapsed}
+            onClick={toggleCollapsed}
+          >
+            {collapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+            {collapsed ? '展开矩阵' : '收起矩阵'}
+          </button>
         </div>
       </header>
-      {cards.length ? (
+      {cards.length && !collapsed ? (
         <>
           <div className="mykol-team-grid">
           {visibleCards.map((card) => {
@@ -259,8 +320,22 @@ function TeamMatrix({ cards, pendingCount }: { cards: StaffCard[]; pendingCount:
             const platforms = new Set(card.accounts.map((account) => account.platform)).size;
             const pending = card.accounts.filter((account) => account.syncStatus !== 'synced' && account.syncStatus !== 'official_readonly').length;
             const platformTags = Array.from(new Set(card.accounts.map((account) => account.platform))).slice(0, 4);
+            const isSelected = selectedStaffId === card.id;
             return (
-              <article className="mykol-staff-card" key={card.id}>
+              <article
+                className={`mykol-staff-card mykol-staff-card--clickable ${isSelected ? 'is-selected' : ''}`}
+                key={card.id}
+                role="button"
+                tabIndex={0}
+                aria-pressed={isSelected}
+                onClick={() => onSelectStaff(card)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    onSelectStaff(card);
+                  }
+                }}
+              >
                 <div className="mykol-staff-card__top">
                   <div className="mykol-staff-card__identity">
                     <span
@@ -304,20 +379,18 @@ function TeamMatrix({ cards, pendingCount }: { cards: StaffCard[]; pendingCount:
             );
           })}
           </div>
-          {cards.length ? (
-            <footer className="mykol-team-pagination">
-              <span>显示 {rangeStart}-{rangeEnd} / {cards.length} 名负责人</span>
-              <div>
-                <button disabled={safePage === 0} type="button" onClick={() => setPage((current) => Math.max(0, current - 1))}>上一页</button>
-                <b>{safePage + 1} / {pageCount}</b>
-                <button disabled={safePage >= pageCount - 1} type="button" onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))}>下一页</button>
-              </div>
-            </footer>
-          ) : null}
+          <footer className="mykol-team-pagination">
+            <span>显示 {rangeStart}-{rangeEnd} / {cards.length} 名负责人</span>
+            <div>
+              <button disabled={safePage === 0} type="button" onClick={() => setPage((current) => Math.max(0, current - 1))}>上一页</button>
+              <b>{safePage + 1} / {pageCount}</b>
+              <button disabled={safePage >= pageCount - 1} type="button" onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))}>下一页</button>
+            </div>
+          </footer>
         </>
-      ) : (
+      ) : !cards.length ? (
         <div className="mykol-empty">暂无团队账号矩阵。等待官方矩阵接口返回 staff 归属。</div>
-      )}
+      ) : null}
     </section>
   );
 }
@@ -345,82 +418,138 @@ function OfficialMatrix({
   const totalFollowersDelta = matrix.platforms.reduce((sum, platform) => sum + safeNumber(platform.followersDelta), 0);
   const totalViewsDelta = matrix.platforms.reduce((sum, platform) => sum + safeNumber(platform.viewsDelta), 0);
   const avgViews = matrix.postCount ? Math.round(matrix.totalViews / matrix.postCount) : 0;
+  const [collapsed, setCollapsed] = useState(() => readCollapse(COLLAPSE_KEY_OFFICIAL, false));
+  const toggleCollapsed = () => setCollapsed((value) => {
+    const next = !value;
+    writeCollapse(COLLAPSE_KEY_OFFICIAL, next);
+    return next;
+  });
+
+  const groupedAccounts = useMemo(() => {
+    const accounts = selectedPlatform?.accounts || [];
+    return ACCOUNT_GROUPS.map((group) => ({
+      ...group,
+      accounts: accounts.filter((account) => accountGroupKey(account) === group.key),
+    })).filter((group) => group.accounts.length);
+  }, [selectedPlatform]);
 
   return (
-    <section className="mykol-panel">
+    <section className="mykol-panel mykol-official-panel">
       <header className="mykol-section-head">
         <div>
           <h2><span className="is-blue" />官方账号矩阵 <em>/ 平台总览</em></h2>
         </div>
-        <div className="mykol-chip-row">
-          <span><b>{matrix.accountCount}</b> 账号</span>
-          <span><b>{syncedAccounts}</b> 已同步</span>
-          <span><b>{matrix.platforms.length}</b> 平台</span>
-          <span><b>{compactNumber(matrix.postCount)}</b> 内容 <Delta value={totalPostsDelta} /></span>
-          <span><b>{compactNumber(totalFollowers)}</b> 粉丝 <Delta value={totalFollowersDelta} /></span>
-          <span><b>{compactNumber(matrix.totalViews)}</b> 播放 <Delta value={totalViewsDelta} /></span>
-          <span><b>{compactNumber(avgViews)}</b> 篇均</span>
+        <div className="mykol-official-head-right">
+          <div className="mykol-chip-row">
+            <span><b>{matrix.accountCount}</b> 账号</span>
+            <span><b>{syncedAccounts}</b> 已同步</span>
+            <span><b>{matrix.platforms.length}</b> 平台</span>
+            <span><b>{compactNumber(matrix.postCount)}</b> 内容 <Delta value={totalPostsDelta} /></span>
+            <span><b>{compactNumber(totalFollowers)}</b> 粉丝 <Delta value={totalFollowersDelta} /></span>
+            <span><b>{compactNumber(matrix.totalViews)}</b> 播放 <Delta value={totalViewsDelta} /></span>
+            <span><b>{compactNumber(avgViews)}</b> 篇均</span>
+          </div>
+          <button
+            className={`mykol-toggle ${collapsed ? '' : 'is-active'}`}
+            type="button"
+            aria-expanded={!collapsed}
+            onClick={toggleCollapsed}
+          >
+            {collapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+            {collapsed ? '展开矩阵' : '收起矩阵'}
+          </button>
         </div>
       </header>
       {matrix.loading && !matrix.platforms.length ? <MyKolSkeleton /> : null}
       {matrix.error ? <div className="mykol-warning">{matrix.error}</div> : null}
-      <div className="mykol-platform-grid">
-        {matrix.platforms.map((platform) => {
-          const accent = platformAccent[platform.platform] || '#8b5cf6';
-          const active = selectedPlatform?.platform === platform.platform;
-          return (
-            <button
-              className={`mykol-platform-card ${active ? 'is-active' : ''}`}
-              key={platform.platform}
-              style={{ '--accent': accent } as React.CSSProperties}
-              type="button"
-              onClick={() => onSelectPlatform(platform.platform)}
-            >
-              <span className="mykol-platform-icon">{platform.label.slice(0, 1)}</span>
-              <b>{platform.label}</b>
-              <em>{platform.accounts.length} 账号 · {compactNumber(platform.totalPosts)} 内容</em>
-              <strong>{platform.viewsUnavailable ? '—' : compactNumber(platform.totalViews)}</strong>
-              <small>{platform.viewsUnavailable ? platform.viewsUnavailableReason || '公开播放不可用' : `${compactNumber(platform.totalFollowers)} 粉丝`}</small>
-              <i>{platform.baselineProtected ? '基线保护' : statusLabel(platform.accounts[0]?.syncStatus || '')}</i>
-              <div className="mykol-platform-card__footer">
-                <span>{platform.lastSyncAt ? `本次 ${new Date(platform.lastSyncAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}` : '同步时间待接入'}</span>
-                <span>{signedNumber(platform.viewsDelta, ' 播放') || '较上次 0'}</span>
-              </div>
-              <div className="mykol-platform-card__accounts">
-                {platform.accounts.slice(0, 5).map((account) => <span key={account.id}>{initials(account.displayName)}</span>)}
-              </div>
-            </button>
-          );
-        })}
-      </div>
-      <div className="mykol-drill-grid">
-        <div className="mykol-account-list">
-          {(selectedPlatform?.accounts || []).map((account) => (
-            <button
-              className={`mykol-account-row ${selectedAccountId === account.id ? 'is-active' : ''}`}
-              key={account.id}
-              type="button"
-              onClick={() => onSelectAccount(account)}
-            >
-              <span className="mykol-avatar is-small">{account.avatarUrl ? <img src={proxiedImageUrl(account.avatarUrl)} alt="" /> : initials(account.displayName)}</span>
-              <span>
-                <b>{account.displayName}</b>
-                <em>{account.handle || '官方账号'} · {statusLabel(account.syncStatus)} · {compactNumber(account.postsCount)} 内容</em>
-              </span>
-              <strong>{account.viewsUnavailable ? '无公开播放' : compactNumber(account.totalViews)}</strong>
-            </button>
-          ))}
-        </div>
-        <OfficialContentLayer
-          account={(selectedPlatform?.accounts || []).find((account) => account.id === selectedAccountId)}
-          apiToken={apiToken}
-        />
-      </div>
+      {collapsed ? (
+        matrix.platforms.length ? (
+          <div className="mykol-platform-summary" aria-label="官方账号矩阵速览">
+            {matrix.platforms.slice(0, 6).map((platform) => (
+              <button
+                className="mykol-platform-summary__item"
+                key={platform.platform}
+                type="button"
+                onClick={() => { onSelectPlatform(platform.platform); toggleCollapsed(); }}
+              >
+                <PlatformLogo platform={platform.platform} size={18} />
+                <b>{platform.label}</b>
+                <em>{platform.accounts.length} 账号 · {compactNumber(platform.totalPosts)} 内容</em>
+              </button>
+            ))}
+          </div>
+        ) : null
+      ) : (
+        <>
+          <div className="mykol-platform-grid mykol-platform-grid--compact">
+            {matrix.platforms.map((platform) => {
+              const accent = platformAccent[platform.platform] || '#8b5cf6';
+              const active = selectedPlatform?.platform === platform.platform;
+              return (
+                <button
+                  className={`mykol-platform-card mykol-platform-card--compact ${active ? 'is-active' : ''}`}
+                  key={platform.platform}
+                  style={{ '--accent': accent } as React.CSSProperties}
+                  type="button"
+                  onClick={() => onSelectPlatform(platform.platform)}
+                >
+                  <span className="mykol-platform-icon"><PlatformLogo platform={platform.platform} size={24} /></span>
+                  <b>{platform.label}</b>
+                  <em>{platform.accounts.length} 账号 · {compactNumber(platform.totalPosts)} 内容</em>
+                  <strong>{platform.viewsUnavailable ? '—' : compactNumber(platform.totalViews)}</strong>
+                  <small>{platform.viewsUnavailable ? platform.viewsUnavailableReason || '公开播放不可用' : `${compactNumber(platform.totalFollowers)} 粉丝`}</small>
+                  <i>{platform.baselineProtected ? '基线保护' : statusLabel(platform.accounts[0]?.syncStatus || '')}</i>
+                </button>
+              );
+            })}
+          </div>
+          <div className="mykol-drill-grid">
+            <div className="mykol-account-list">
+              {groupedAccounts.map((group) => (
+                <div className="mykol-account-group" key={group.key}>
+                  <div className="mykol-account-group__head">{group.label} <b>{group.accounts.length}</b></div>
+                  {group.accounts.map((account) => (
+                    <button
+                      className={`mykol-account-row ${selectedAccountId === account.id ? 'is-active' : ''}`}
+                      key={account.id}
+                      type="button"
+                      onClick={() => onSelectAccount(account)}
+                    >
+                      <span className="mykol-avatar is-small">{account.avatarUrl ? <img src={proxiedImageUrl(account.avatarUrl)} alt="" /> : initials(account.displayName)}</span>
+                      <span>
+                        <b>{account.displayName}</b>
+                        <em>{account.handle || '官方账号'} · {statusLabel(account.syncStatus)} · {compactNumber(account.postsCount)} 内容</em>
+                      </span>
+                      <strong>{account.viewsUnavailable ? '无公开播放' : compactNumber(account.totalViews)}</strong>
+                    </button>
+                  ))}
+                </div>
+              ))}
+            </div>
+            <OfficialContentLayer
+              account={(selectedPlatform?.accounts || []).find((account) => account.id === selectedAccountId)}
+              apiToken={apiToken}
+            />
+          </div>
+        </>
+      )}
     </section>
   );
 }
 
-function EmployeeKolLibrary({ apiToken, data, viewMode }: { apiToken?: string; data: VkpiDashboardData; viewMode: 'manager' | 'employee' }) {
+function EmployeeKolLibrary({
+  apiToken,
+  data,
+  viewMode,
+  staffFilter,
+  onClearStaffFilter,
+}: {
+  apiToken?: string;
+  data: VkpiDashboardData;
+  viewMode: 'manager' | 'employee';
+  staffFilter?: { id: string; name: string } | null;
+  onClearStaffFilter?: () => void;
+}) {
   const [query, setQuery] = useState('');
   const [platformFilter, setPlatformFilter] = useState<PlatformFilter>('all');
   const [selectedKolId, setSelectedKolId] = useState('');
@@ -524,11 +653,17 @@ function EmployeeKolLibrary({ apiToken, data, viewMode }: { apiToken?: string; d
       };
     });
   }, [activeItems]);
-  const filteredItems = useMemo(() => activeItems.filter(({ kol }) => {
+  // D:点团队卡 → 按负责人过滤库。项目带 ownerId/ownerName,按 id 或归一姓名匹配。
+  const staffNameKey = staffFilter ? staffIdentityKey(staffFilter.name) : '';
+  const filteredItems = useMemo(() => activeItems.filter(({ kol, projects }) => {
     const matchesPlatform = platformFilter === 'all' || kol.platform === platformFilter;
     const haystack = `${kol.name} ${kol.handle}`.toLowerCase();
-    return matchesPlatform && haystack.includes(query.trim().toLowerCase());
-  }), [activeItems, platformFilter, query]);
+    const matchesStaff = !staffFilter || projects.some((project) => (
+      (project.ownerId && project.ownerId === staffFilter.id) ||
+      (project.ownerName && staffIdentityKey(project.ownerName) === staffNameKey)
+    ));
+    return matchesPlatform && matchesStaff && haystack.includes(query.trim().toLowerCase());
+  }), [activeItems, platformFilter, query, staffFilter, staffNameKey]);
   const preferredItem = preferredEmployeeKolItem(filteredItems);
   const selectedItem = filteredItems.find((item) => item.kol.id === selectedKolId) || preferredItem;
   const totalViews = items.reduce((sum, item) => (
@@ -591,6 +726,12 @@ function EmployeeKolLibrary({ apiToken, data, viewMode }: { apiToken?: string; d
           <span><b>{compactNumber(totalClicks)}</b> Viltrox 点击</span>
         </div>
       </header>
+      {staffFilter ? (
+        <div className="mykol-staff-filter-bar">
+          <span>正按负责人筛选 · <b>{staffFilter.name}</b> · {filteredItems.length} KOL</span>
+          <button type="button" onClick={() => onClearStaffFilter?.()}>清除筛选</button>
+        </div>
+      ) : null}
       <div className="mykol-library-toolbar">
         <div className="mykol-tabs">
           <button
@@ -739,6 +880,8 @@ export function MyKolPage({ apiToken, viewMode, data, userName, onRefreshData }:
   const matrix = useOfficialChannelMatrix(apiToken);
   const [selectedPlatformKey, setSelectedPlatformKey] = useState('');
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
+  // D:团队卡选中态——点卡过滤下方 KOL 库,再点同卡取消。
+  const [selectedStaff, setSelectedStaff] = useState<{ id: string; name: string } | null>(null);
   const selectedPlatform = matrix.platforms.find((platform) => platform.platform === selectedPlatformKey) || matrix.platforms[0];
 
   useEffect(() => {
@@ -825,7 +968,16 @@ export function MyKolPage({ apiToken, viewMode, data, userName, onRefreshData }:
           <button type="button" onClick={onRefreshData}><CheckCircle2 size={14} /> 刷新数据</button>
         </div>
       </header>
-      {viewMode === 'manager' ? <TeamMatrix cards={staffCards} pendingCount={pendingCount} /> : null}
+      {viewMode === 'manager' ? (
+        <TeamMatrix
+          cards={staffCards}
+          pendingCount={pendingCount}
+          selectedStaffId={selectedStaff?.id ?? null}
+          onSelectStaff={(card) => setSelectedStaff((current) => (
+            current?.id === card.id ? null : { id: card.id, name: card.name }
+          ))}
+        />
+      ) : null}
       {viewMode === 'employee' ? <EmployeeKolLibrary apiToken={apiToken} data={data} viewMode={viewMode} /> : null}
       <OfficialMatrix
         apiToken={apiToken}
@@ -835,7 +987,15 @@ export function MyKolPage({ apiToken, viewMode, data, userName, onRefreshData }:
         onSelectPlatform={setSelectedPlatformKey}
         onSelectAccount={(account) => setSelectedAccountId(account.id)}
       />
-      {viewMode === 'manager' ? <EmployeeKolLibrary apiToken={apiToken} data={data} viewMode={viewMode} /> : null}
+      {viewMode === 'manager' ? (
+        <EmployeeKolLibrary
+          apiToken={apiToken}
+          data={data}
+          viewMode={viewMode}
+          staffFilter={selectedStaff}
+          onClearStaffFilter={() => setSelectedStaff(null)}
+        />
+      ) : null}
     </main>
   );
 }
