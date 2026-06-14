@@ -715,7 +715,7 @@ export function V615ReplicaApp(props: any = {}) {
     e(AnimatePresence, null, showUserMenu && e(UserMenuPopover, { 
       onClose: () => setShowUserMenu(false), 
       theme, onToggleTheme: () => setTheme(t => t === "light" ? "dark" : "light"), 
-      anchorRef: userMenuBtnRef, t, user: currentUser, lang, 
+      anchorRef: userMenuBtnRef, t, user: currentUser, staff: uiStaff, lang,
       onToggleLang: () => setLang(l => l === "zh" ? "en" : "zh"),
       viewingAs, onResetView: () => setViewingAs(null),
       onOpenProfile: () => setShowProfile(true),
