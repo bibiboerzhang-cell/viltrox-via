@@ -45,6 +45,111 @@ def _country_in_excluded_region(*values: Any) -> bool:
     return False
 
 
+# 发现精准修(用户令):逐人地区识别 + persona 启发式相关度。全纯本地字符串比对,零 LLM/零 Apify。
+# 大陆 + 台/港主要城市强信号(发现 item 无 per-item country,真地区信号落在 sample_title 文本,
+# 如「#中国广州」)。口径保留海外华人:表内只放 CN大陆/TW/HK 地名,绝不含马六甲/新加坡/吉隆坡等海外地名。
+_EXCLUDED_REGION_CITY_RE = re.compile(
+    r"北京|上海|广州|廣州|深圳|杭州|成都|重庆|重慶|武汉|武漢|西安|南京|苏州|蘇州|天津|长沙|長沙|"
+    r"郑州|鄭州|青岛|青島|大连|大連|厦门|廈門|东莞|東莞|佛山|宁波|寧波|无锡|無錫|昆明|合肥|济南|濟南|"
+    r"沈阳|瀋陽|哈尔滨|哈爾濱|福州|南昌|贵阳|貴陽|南宁|南寧|"
+    r"台北|臺北|高雄|台中|臺中|新北|桃园|桃園|台南|臺南",  # 台湾(TW)主要城市
+    re.IGNORECASE,
+)
+
+
+def _detect_excluded_region(item: dict[str, Any]) -> str:
+    """逐人地区识别(取代喂错字段的旧判据):扫真带地区信号的文本(sample_title/channel_name/handle),
+    命中 {CN大陆/HK/TW} 地名/国名/ISO 码 → 返回地区码;否则 ""。口径保留海外华人(马六甲/新加坡/
+    海外中文博主只要无大陆+港台地名即放行——单纯中文字符不命中)。"""
+    if _country_in_excluded_region(item.get("country"), item.get("region")):
+        return "CN/HK/TW"
+    blob = " ".join(str(item.get(k) or "") for k in ("sample_title", "channel_name", "handle"))
+    if not blob.strip():
+        return ""
+    if _EXCLUDED_REGION_RE.search(blob) or _EXCLUDED_REGION_CITY_RE.search(blob):
+        return "CN/HK/TW"
+    return ""
+
+
+# persona 启发式相关度:发现 item 文本 vs 产品 persona 正/负词。泛词不计分,英文优先。
+_PERSONA_GENERIC_TERMS = {
+    "photo", "photos", "photography", "photographer", "photographers", "video", "videos",
+    "videography", "videographer", "content", "creator", "creators", "vlog", "vlogger",
+    "vlogging", "camera", "gear", "film", "filmmaker", "filmmaking", "reel", "reels",
+    "shoot", "shooting", "and", "the", "for", "with",
+    "摄影", "攝影", "摄影师", "攝影師", "视频", "視頻", "创作者", "創作者", "博主", "内容",
+    "拍摄", "拍攝", "短视频", "短視頻", "相机", "相機", "器材", "视频创作者",
+}
+
+
+def _persona_term_list(*sources: Any) -> list[str]:
+    """归一 persona 字段(list / JSON 串 / None 各自兜底)→ 分词 → 去泛词 → 去重保序。"""
+    out: list[str] = []
+    for src in sources:
+        if src is None:
+            continue
+        value: Any = src
+        if isinstance(src, (str, bytes)):
+            s = src.decode() if isinstance(src, bytes) else src
+            s = s.strip()
+            if s[:1] in ("[", "{"):
+                try:
+                    import json as _json_mod
+
+                    value = _json_mod.loads(s)
+                except Exception:
+                    value = s
+            else:
+                value = s
+        if isinstance(value, dict):
+            value = list(value.values())
+        items = value if isinstance(value, (list, tuple, set)) else [value]
+        for entry in items:
+            for tok in re.split(r"[\s,/、，;；|·\-]+", str(entry or "").lower()):
+                tok = tok.strip()
+                if len(tok) >= 2 and tok not in _PERSONA_GENERIC_TERMS:
+                    out.append(tok)
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for t in out:
+        if t not in seen:
+            seen.add(t)
+            uniq.append(t)
+    return uniq
+
+
+def _persona_positive_terms(product_focus: Any, ideal_creator_types: Any, verticals: Any, query: Any) -> list[str]:
+    return _persona_term_list(product_focus, ideal_creator_types, verticals, query)
+
+
+def _persona_avoid_terms(avoid_types: Any) -> list[str]:
+    return _persona_term_list(avoid_types)
+
+
+def _persona_relevance(item: dict[str, Any], *, pos_terms: list[str], neg_terms: list[str]) -> dict[str, Any]:
+    """persona 启发式相关度(纯本地零 LLM):扫 item 文本对正/负词命中打分。
+    返回 {score, relevance_score, relevance_tier, relevance_hits};score=relevance_score 供落库。
+    red line:独立展示信号,绝不并入 viltrox_fit_score / rule_v0。CN/HK/TW 不在此扣分(交 _detect_excluded_region 排)。"""
+    blob = " ".join(
+        str(item.get(k) or "") for k in ("sample_title", "channel_name", "handle", "search_query")
+    ).lower()
+    if not pos_terms and not neg_terms:
+        return {"score": 0.5, "relevance_score": 0.5, "relevance_tier": "中", "relevance_hits": []}
+    hits = [t for t in pos_terms if t in blob]
+    neg_hits = [t for t in neg_terms if t in blob]
+    score = 0.35 + 0.18 * len(hits) - 0.30 * len(neg_hits)
+    if not hits:
+        score = min(score, 0.12)  # 零正命中=泛结果,压低,排序后置
+    score = max(0.0, min(1.0, score))
+    tier = "高" if score >= 0.6 else ("中" if score >= 0.3 else "低")
+    return {
+        "score": round(score, 4),
+        "relevance_score": round(score, 4),
+        "relevance_tier": tier,
+        "relevance_hits": hits[:6],
+    }
+
+
 def _is_discovery_garbage(item: dict[str, Any]) -> bool:
     """残废发现项:无真 handle(query-as-handle 修复后兜底为 'Unknown creator'/空)→ 丢弃。"""
     handle = str(item.get("handle") or "").strip()
@@ -860,6 +965,16 @@ async def execute_smart_search_profile_advance_pipeline(
     recall_session = search_sessions.attach_recall_result(int(session_id), recall_result)
     new_discovery: dict[str, Any] | None = None
     if bool(payload.get("include_new_discovery", True)):
+        # persona 检索词原料:payload 有 product_focus/target_persona(来自 llm_query_plan);
+        # verticals/ideal_creator_types/avoid_types 不在 payload → 用 product_sku 实时兜底取(只读 KB,零 LLM)。
+        _persona_kb: dict[str, Any] = {}
+        _sku = _text(payload.get("product_sku"))
+        if _sku:
+            try:
+                from app.domains.costs import product_persona as _product_persona_kb
+                _persona_kb = _product_persona_kb.get_product_persona(_sku) or {}
+            except Exception:
+                _persona_kb = {}
         new_discovery = await discover_new_creators(
             query_text=query,
             platforms=payload.get("new_discovery_platforms") or payload.get("discovery_platforms"),
@@ -867,6 +982,12 @@ async def execute_smart_search_profile_advance_pipeline(
             market=_text(payload.get("market") or payload.get("country")),
             limit=max(1, min(_int(payload.get("new_discovery_limit"), 15), 50)),
             per_platform_limit=max(1, min(_int(payload.get("new_discovery_per_platform_limit"), 15), 50)),
+            search_query_en=query,  # pipeline 入参 query 已是 effective_query(planner 英文 search_query;失效退 rule_v0 英文兜底)
+            product_focus=payload.get("product_focus"),
+            ideal_creator_types=_persona_kb.get("ideal_creator_types_json"),
+            verticals=_persona_kb.get("verticals_json"),
+            avoid_types=_persona_kb.get("avoid_types_json"),
+            target_persona=_text(payload.get("target_persona")),
         )
         # 收口路①-4:新人优先展示信号(新发现/低合作/成长期加权,饱和大号降位)。纯展示透出,
         # 绝不写 viltrox_fit_score / 不改 rule_v0;注解后再 attach(库内召回的 display_rank_score 已在 recall 侧产出)。
@@ -955,9 +1076,19 @@ async def discover_new_creators(
     market: str = "",
     limit: int = 15,
     per_platform_limit: int = 15,
+    search_query_en: str = "",
+    product_focus: Any = None,
+    ideal_creator_types: Any = None,
+    verticals: Any = None,
+    avoid_types: Any = None,
+    target_persona: str = "",
 ) -> dict[str, Any]:
-    """Search platforms for creator candidates and mark existing KOL matches."""
-    query = _text(query_text)
+    """Search platforms for creator candidates and mark existing KOL matches.
+
+    发现精准修:search_query_en(英文平台检索词,优先于中文 query_text 用于实际平台搜索,治
+    中文 query 捞中文圈);product_focus/ideal_creator_types/verticals/avoid_types 供 per-item
+    persona 启发式相关度打分(纯本地字符串比对,零 LLM/零 Apify,无需预算闸)。全 default,既有调用不破坏。"""
+    query = _text(search_query_en) or _text(query_text)
     safe_limit = max(1, min(_int(limit, 15), 50))
     safe_per_platform = max(1, min(_int(per_platform_limit, 15), 50))
     resolved_platforms = _platforms(platforms, fallback=platform_hint)
@@ -974,9 +1105,13 @@ async def discover_new_creators(
         }
 
     new_creators: list[dict[str, Any]] = []
+    survivors: list[dict[str, Any]] = []  # 全部通过去重/garbage/地区过滤的存活候选,待 relevance 排序后再 top-N 截断
     existing_matches: list[dict[str, Any]] = []
     platform_results: list[dict[str, Any]] = []
     seen: set[str] = set()
+    # persona 检索词原料(英文优先;avoid 命中重扣)。helper 内做泛词过滤与归一,空表零影响。
+    _pos_terms = _persona_positive_terms(product_focus, ideal_creator_types, verticals, search_query_en or query_text)
+    _neg_terms = _persona_avoid_terms(avoid_types)
     errors: list[dict[str, Any]] = []
 
     async def _search_one_platform(platform: str) -> dict[str, Any]:
@@ -1037,14 +1172,23 @@ async def discover_new_creators(
             if item.get("historical_match") or item.get("history_kol_pool_id"):
                 existing_matches.append(item)
                 continue
-            # P0-6:按地区排除 {中国大陆/香港/台湾}(写入前过滤),其余放行;丢弃 query-as-handle 残废项。
-            # 发现 item 无 per-item country,主地区信号来自搜索 market;item 上若带 country/region 也一并判。
-            if _is_discovery_garbage(item) or _country_in_excluded_region(
-                market, item.get("country"), item.get("region")
-            ):
+            # P0-6 修:地区排除判据改扫**真正带地区信号的文本字段**(sample_title/channel_name/handle);
+            # 发现 item 无 per-item country、market 恒=搜索市场 US,旧判据三参全空 → 形同虚设。
+            # 口径保留海外华人(马六甲=马来西亚/新加坡/海外华人摄影师不排,只排 CN大陆/HK/TW 强信号)。
+            _region = _detect_excluded_region(item)
+            if _is_discovery_garbage(item) or _region:
                 continue
-            if len(new_creators) < safe_limit:
-                new_creators.append(item)
+            # persona 启发式相关度(纯本地零 LLM):写 item['score']/relevance_score/relevance_tier;
+            # 先全收集到 survivors,循环外按 relevance 降序排序再 top-N 截断(否则按到达顺序砍掉高相关项)。
+            item.update(_persona_relevance(item, pos_terms=_pos_terms, neg_terms=_neg_terms))
+            survivors.append(item)
+
+    # relevance 降序排序 → top-N 截断。red line:relevance 是独立展示信号,绝不并入 viltrox_fit_score / rule_v0。
+    survivors.sort(key=lambda it: float(it.get("relevance_score") or 0.0), reverse=True)
+    for item in survivors:
+        if len(new_creators) >= safe_limit:
+            break
+        new_creators.append(item)
 
     status = "ready" if new_creators or existing_matches else "empty"
     if errors and (new_creators or existing_matches):

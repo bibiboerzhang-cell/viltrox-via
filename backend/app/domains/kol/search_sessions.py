@@ -944,7 +944,7 @@ def attach_new_discovery_result(session_id: int, result: dict[str, Any]) -> dict
                 "status": "identified",
                 "stage": "identified",
                 "rank": rank,
-                "score": _float_or_none(raw.get("score") or raw.get("vector_score")),
+                "score": _float_or_none(raw.get("score") or raw.get("relevance_score") or raw.get("vector_score")),
                 "source_url": source_url,
                 "payload": {
                     "source": "platform_discovery",
@@ -963,6 +963,10 @@ def attach_new_discovery_result(session_id: int, result: dict[str, Any]) -> dict
                     "published": raw.get("published"),
                     "search_query": raw.get("search_query") or result.get("query"),
                     "market": raw.get("market") or result.get("market"),
+                    # 独立展示信号(绝不并入 viltrox_fit_score):persona 相关度 + 可解释命中。
+                    "relevance_score": raw.get("relevance_score"),
+                    "relevance_tier": raw.get("relevance_tier"),
+                    "relevance_hits": raw.get("relevance_hits"),
                 },
             }
         )
