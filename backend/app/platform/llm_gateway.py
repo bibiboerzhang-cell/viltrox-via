@@ -63,6 +63,18 @@ def _json(value: Any) -> str:
     return json.dumps(value or {}, ensure_ascii=False, default=str)
 
 
+def _existing_staff_id(conn: Any, sid: Any) -> int | None:
+    """台账 created_by_staff_id 是 staff FK——陌生/过期 staff id 不该让 LLM 台账写挂(FK violation)。
+    快速 PK 存在性校验:存在则用,否则落 NULL。"""
+    if not sid:
+        return None
+    try:
+        row = conn.execute("SELECT 1 FROM staff WHERE id=?", (int(sid),)).fetchone()
+        return int(sid) if row else None
+    except Exception:
+        return None
+
+
 def _read_env_key(name: str) -> str:
     """Read a key from process env or local .env without exposing the value."""
     value = os.environ.get(name, "")
@@ -688,7 +700,7 @@ def record_call(
             int((metadata or {}).get("latency_ms") or 0) if isinstance(metadata, dict) and (metadata or {}).get("latency_ms") is not None else None,
             status or "not_configured",
             bool(fallback_used),
-            resolve_staff_id(staff) or None,
+            _existing_staff_id(conn, resolve_staff_id(staff)),
             _utcnow(),
             _json(metadata),
         ),

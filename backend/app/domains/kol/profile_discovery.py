@@ -1017,6 +1017,24 @@ async def execute_smart_search_profile_advance_pipeline(
     query = _text(payload.get("query_text") or payload.get("input") or payload.get("query"))
     if not query:
         raise ValueError("smart profile advance payload missing query_text")
+    # P0-1:LLM planner 改在 worker 跑(请求侧已去同步 LLM,见 vkpi_kol_pool smart-search 端点)。
+    # payload 未带 plan 时,worker 侧补 planner:拿英文 search_query(治中文 query 捞中文圈)+ persona。
+    # 失效则退原 query(管线既有 rule_v0 英文兜底)。本管线本就同步阻塞跑 recall,planner 同步调用一致。
+    if not payload.get("product_focus") and not _text(payload.get("target_persona")) and not payload.get("_worker_planned"):
+        try:
+            from app.domains.kol import smart_query_planner as _sqp
+            _plan = _sqp.plan_text_query(query, body=payload, staff=None)
+            _eff = _text(_plan.get("search_query"))
+            if _eff:
+                query = _eff
+            payload["product_focus"] = _plan.get("product_focus")
+            payload["target_persona"] = _text(_plan.get("target_persona"))
+            for _k in ("creator_quota", "reviewer_quota", "new_discovery_limit"):
+                if payload.get(_k) is None and _plan.get(_k) is not None:
+                    payload[_k] = _plan.get(_k)
+            payload["_worker_planned"] = True
+        except Exception:
+            pass
     recall_result = profile_recall.recall_kol_profiles(
         query_text=query,
         product_sku=_text(payload.get("product_sku")),

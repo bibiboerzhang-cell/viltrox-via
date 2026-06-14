@@ -622,24 +622,12 @@ async def smart_kol_search_profile_advance_job(
     queue_pipeline = str(queue_pipeline_raw).strip().lower() not in {"0", "false", "no", "off", "sync"}
 
     try:
-        # 同步 LLM(冷启可达15s)挪进 threadpool,避免阻塞 async 事件循环(对齐 :525 kol-smart-search 路)。
-        llm_query_plan = await run_in_threadpool(kol_smart_query_planner.plan_text_query, query_text, body=body, staff=staff)
-        effective_query = str(llm_query_plan.get("search_query") or query_text).strip()
-        queued_body = {
-            **body,
-            "original_query_text": query_text,
-            "llm_query_plan": llm_query_plan,
-            "creator_quota": body.get("creator_quota") or llm_query_plan.get("creator_quota"),
-            "reviewer_quota": body.get("reviewer_quota") or llm_query_plan.get("reviewer_quota"),
-            "include_new_discovery": body.get("include_new_discovery", llm_query_plan.get("include_new_discovery", True)),
-            "new_discovery_limit": body.get("new_discovery_limit") or llm_query_plan.get("new_discovery_limit"),
-            "new_discovery_platforms": body.get("new_discovery_platforms") or llm_query_plan.get("platforms"),
-            "market": body.get("market") or llm_query_plan.get("market"),
-        }
         if queue_pipeline:
+            # P0-1 命门(100 人并发):请求侧不再同步跑 LLM planner(冷启~15s,会打爆 threadpool/provider)。
+            # raw query 入队 → worker 的 execute_smart_search_profile_advance_pipeline 跑 planner+recall+advance。
             queued = kol_profile_discovery.enqueue_smart_search_profile_advance(
-                query_text=effective_query,
-                body=queued_body,
+                query_text=query_text,
+                body={**body, "original_query_text": query_text},
                 staff=staff,
             )
             return {
@@ -647,19 +635,22 @@ async def smart_kol_search_profile_advance_job(
                 "mode": "text",
                 "query_type": "text_recall",
                 "branch": "kol_recall_profile_advance_pipeline",
-                "query": effective_query,
+                "query": query_text,
                 "original_query": query_text,
-                "llm_query_plan": llm_query_plan,
+                "llm_query_plan": None,
                 "search_session": queued.get("search_session"),
                 "advance_job": queued,
-                "provider_calls": bool(llm_query_plan.get("provider_calls_performed")),
-                "provider_note": "LLM planner ran before queueing; worker will run recall/new discovery/profile advance in order",
+                "provider_calls": False,
+                "provider_note": "planner deferred to worker; request makes no synchronous LLM call",
                 "write_db": True,
                 "writes": queued.get("writes") or ["vkpi_kol_search_sessions", "apify_jobs"],
                 "viltrox_fit_score_changed_ids": [],
                 "viltrox_fit_score_untouched": True,
             }
 
+        # 非队列(显式 sync 模式,低频/调试):此路本就同步,保留请求内 planner+recall。
+        llm_query_plan = await run_in_threadpool(kol_smart_query_planner.plan_text_query, query_text, body=body, staff=staff)
+        effective_query = str(llm_query_plan.get("search_query") or query_text).strip()
         recall_result = kol_profile_recall.recall_kol_profiles(
             query_text=effective_query,
             product_sku=str(body.get("product_sku") or ""),
