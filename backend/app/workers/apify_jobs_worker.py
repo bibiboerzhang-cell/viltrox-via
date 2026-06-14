@@ -163,6 +163,24 @@ def _error_category(message: str) -> str:
         return "permanent"
     if "stale_running_reclaimed" in text:
         return "stale_running"
+    # 代码级错误(缺依赖/异常类型)——和"天气问题"(provider_pressure/download)区分,
+    # 这类要改代码而非重试。放在 transient 判据之后,避免吞掉 yt-dlp/429 等真瞬时态。
+    if any(
+        marker in text
+        for marker in (
+            "modulenotfounderror",
+            "importerror",
+            "nameerror",
+            "attributeerror",
+            "typeerror",
+            "keyerror",
+            "indexerror",
+            "syntaxerror",
+            "unboundlocalerror",
+            "traceback (most recent call last)",
+        )
+    ):
+        return "code_error"
     return "other"
 
 
