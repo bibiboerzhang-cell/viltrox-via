@@ -5,7 +5,7 @@ import { DashboardPremium } from './pages/DashboardPremium';
 import { GlassDemoPage } from './pages/GlassDemoPage';
 import { MissionControlV2Page } from './pages/MissionControlV2Page';
 import { V615ReplicaApp } from './v615-replica/V615ReplicaApp';
-import { EMPLOYEE_NAV_ITEMS, MANAGER_NAV_ITEMS } from './layout/vkpiLayoutConstants';
+import { MANAGER_NAV_ITEMS } from './layout/vkpiLayoutConstants';
 import {
   cleanVkpiPageCandidate,
   getInitialVkpiPage,
@@ -223,7 +223,8 @@ export function VkpiDashboard({
     () => data.alerts.filter((alert) => !resolvedAlertIds.has(alert.id)),
     [data.alerts, resolvedAlertIds],
   );
-  const navItems = viewMode === 'manager' ? MANAGER_NAV_ITEMS : EMPLOYEE_NAV_ITEMS;
+  // 员工 UI = 管理层同款全量 UI(用户决策「一模一样」):两种角色共用全量导航,数据按后端 RBAC 过滤。
+  const navItems = MANAGER_NAV_ITEMS;
   const selectedKolForPanel = useMemo(
     () => profileToKolDetail(projectDetailDrawer.projectKolProfile, data.selectedKol, selectedProject, data.links),
     [projectDetailDrawer.projectKolProfile, data.selectedKol, selectedProject, data.links],

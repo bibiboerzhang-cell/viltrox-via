@@ -25,19 +25,13 @@ const VKPI_PAGE_KEYS = new Set<VkpiPageKey>([
   'settings',
 ]);
 
-const EMPLOYEE_ALLOWED_PAGES = new Set<VkpiPageKey>([
-  'command',
-  'channels',
-  'discover',
-  'projects',
-  'links',
-  'attribution',
-  'reports',
-  'settings',
-]);
+// 员工 UI = 管理层同款全量 UI(2026-06-14 用户决策「一模一样」):员工与管理层共享同一页面集,
+// 差异只在数据层(后端按 RBAC 作用域过滤:项目 own-only、成本指标隐藏、设置员工视图等)。
+// 故 EMPLOYEE_ALLOWED_PAGES 直接别名到全量页面集。
+const EMPLOYEE_ALLOWED_PAGES = VKPI_PAGE_KEYS;
 
 const DEFAULT_MANAGER_PAGE: VkpiPageKey = 'v615Replica';
-const DEFAULT_EMPLOYEE_PAGE: VkpiPageKey = 'command';
+const DEFAULT_EMPLOYEE_PAGE: VkpiPageKey = 'v615Replica';
 const importMetaEnv = (import.meta as { env?: { DEV?: boolean } }).env;
 
 if (importMetaEnv?.DEV) {
