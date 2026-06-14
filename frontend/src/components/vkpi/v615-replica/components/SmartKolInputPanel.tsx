@@ -305,6 +305,36 @@ function historyKindLabel(session: VkpiKolSearchHistoryItem): string {
   return "历史";
 }
 
+// 历史标签可读化:文字搜索显查询语;URL 搜索把裸链接解析成「平台 @handle / 平台 帖id」,
+// 让一堆长得一样的 instagram.com/p/... 能区分、看懂搜的是谁/什么(用户:历史要备注搜索信息)。
+function historyLabel(session: VkpiKolSearchHistoryItem): string {
+  const type = cleanText(session.query_type);
+  const q = cleanText(session.query_text);
+  if (type !== "url_video" && type !== "url_profile") return display(q, "未命名");
+  try {
+    const u = new URL(q);
+    const host = u.hostname.replace(/^www\./, "");
+    const plat = host.includes("instagram")
+      ? "IG"
+      : host.includes("tiktok")
+        ? "TikTok"
+        : host.includes("youtu")
+          ? "YouTube"
+          : (host.split(".")[0] || "URL");
+    const parts = u.pathname.split("/").filter(Boolean);
+    const handleSeg = parts.find((p) => p.startsWith("@"));
+    if (type === "url_profile" && (handleSeg || (parts[0] && parts[0] !== "p" && parts[0] !== "reel"))) {
+      return `${plat} @${(handleSeg || parts[0]).replace(/^@/, "")}`;
+    }
+    // 视频/帖:youtube 取 v 参数,其余取末段 id
+    const vid = u.searchParams.get("v");
+    const id = vid || parts[parts.length - 1] || parts[0] || "";
+    return `${plat} ${type === "url_video" ? "视频" : "帖"} ${id}`.trim();
+  } catch {
+    return display(q, "未命名");
+  }
+}
+
 function relativeTime(value: unknown): string {
   const s = cleanText(value);
   if (!s) return "";
@@ -355,9 +385,9 @@ function HistoryStrip({
         {loading ? <span className="text-[9.5px] text-slate-600">同步中</span> : null}
       </div>
       <div className="space-y-1">
-        {items.slice(0, 6).map((item) => {
+        {items.slice(0, 15).map((item) => {
           const sessionId = historySessionId(item);
-          const label = display(item.query_text, "未命名");
+          const label = historyLabel(item);
           const kind = historyKindMeta(item);
           const st = historyStatusMeta(item.status || "ready");
           const when = relativeTime(item.updated_at || item.created_at);
@@ -1065,7 +1095,7 @@ export function SmartKolInputPanel({
     }
     setHistoryLoading(true);
     try {
-      const response = await listKolSearchHistory(apiToken, { limit: 10, itemLimit: 5 });
+      const response = await listKolSearchHistory(apiToken, { limit: 20, itemLimit: 5 });
       setHistoryItems(Array.isArray(response.items) ? response.items : []);
     } catch {
       // History is a convenience surface; do not interrupt the main search flow.
