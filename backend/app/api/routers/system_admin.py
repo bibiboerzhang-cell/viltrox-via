@@ -239,6 +239,18 @@ def system_usage(
     return usage_svc.usage_summary(days=days)
 
 
+@router.get("/system/rbac/status")
+def system_rbac_status(
+    include_staff: bool = Query(default=False),
+    staff=Depends(require_system_permission("system.members", "read")),
+):
+    """RBAC 只读状态快照:staff 数/角色分布/权限等级分布/缺口检测。零写库。"""
+    from app.domains.staff import rbac_status
+
+    del staff
+    return rbac_status.build_rbac_status(include_staff=include_staff)
+
+
 @router.post("/system/providers/{provider}/probe")
 async def probe_provider(
     provider: str,

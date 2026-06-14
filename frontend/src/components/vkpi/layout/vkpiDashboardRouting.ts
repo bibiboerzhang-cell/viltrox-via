@@ -60,6 +60,22 @@ export function normalizeVkpiPage(value: string, viewMode: 'manager' | 'employee
   return isVkpiPageKey(page) ? page : viewMode === 'employee' ? DEFAULT_EMPLOYEE_PAGE : DEFAULT_MANAGER_PAGE;
 }
 
+// 员工版页面门禁:管理层可访问全部页;员工仅 EMPLOYEE_ALLOWED_PAGES。
+export function canAccessPage(page: VkpiPageKey, viewMode: 'manager' | 'employee'): boolean {
+  if (viewMode === 'manager') {
+    return VKPI_PAGE_KEYS.has(page);
+  }
+  return EMPLOYEE_ALLOWED_PAGES.has(page);
+}
+
+// 越权访问优雅拦截:不可访问 → 回退到该视图默认页。
+export function enforcePageAccess(page: VkpiPageKey, viewMode: 'manager' | 'employee'): VkpiPageKey {
+  if (canAccessPage(page, viewMode)) {
+    return page;
+  }
+  return viewMode === 'employee' ? DEFAULT_EMPLOYEE_PAGE : DEFAULT_MANAGER_PAGE;
+}
+
 export function getInitialVkpiPage(viewMode: 'manager' | 'employee'): VkpiPageKey {
   if (typeof window === 'undefined') return viewMode === 'employee' ? DEFAULT_EMPLOYEE_PAGE : DEFAULT_MANAGER_PAGE;
   const hashPage = window.location.hash.replace(/^#\/?/, '');
