@@ -1,0 +1,241 @@
+/* vkpi-settings-dark.css
+ * 把旧 vkpi-* 浅色玻璃设计系统(白底/银灰渐变)在「系统设置全屏覆盖层」内
+ * 重映射为 V615 暗色玻璃风(#0a0a0d + rgba(255,255,255,.0x) 卡片)。
+ * 作用域:.v615-settings-dark(由 V615ReplicaApp 的覆盖层加在外层)。
+ * 做法:1) 在作用域内重定义 --vkpi-* 变量为暗色(级联覆盖 :root 浅色值);
+ *      2) 显式覆盖那些硬编码白底/白渐变的设置类。
+ * 不改任何组件文件,不影响其它页面。
+ */
+
+.v615-settings-dark {
+  /* 1) 变量级联覆盖(凡用变量的规则自动变暗) */
+  --vkpi-bg: #0a0a0d;
+  --vkpi-surface: rgba(255, 255, 255, 0.02);
+  --vkpi-border: rgba(255, 255, 255, 0.08);
+  --vkpi-glass-border: rgba(255, 255, 255, 0.07);
+  --vkpi-text: #e7ebf3;
+  --vkpi-muted: #8b94a7;
+  --vkpi-blue: #a855f7;
+  --vkpi-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
+  --vkpi-inner: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+
+  background: #0a0a0d;
+  color: var(--vkpi-text);
+}
+
+/* 布局壳 */
+.v615-settings-dark .vkpi-main-column,
+.v615-settings-dark .vkpi-workspace {
+  background: transparent;
+}
+.v615-settings-dark .vkpi-workspace {
+  padding: 20px 22px 56px;
+  max-width: 1520px;
+  margin: 0 auto;
+}
+
+/* 顶部标题块(VILTROX MARKETING / 系统设置)——原本银色渐变 */
+.v615-settings-dark .vkpi-page-heading {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: none;
+  backdrop-filter: none;
+}
+.v615-settings-dark .vkpi-page-heading span {
+  color: var(--vkpi-muted);
+  letter-spacing: 0.14em;
+}
+.v615-settings-dark .vkpi-page-heading h1 {
+  color: #fff;
+}
+.v615-settings-dark .vkpi-page-heading p {
+  color: var(--vkpi-muted);
+}
+
+/* loading strip */
+.v615-settings-dark .vkpi-settings-loading-strip {
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: none;
+  backdrop-filter: none;
+}
+.v615-settings-dark .vkpi-settings-loading-strip strong { color: var(--vkpi-text); }
+.v615-settings-dark .vkpi-settings-loading-strip span { color: var(--vkpi-muted); }
+
+/* ── 折叠模块(核心:原本白色渐变大药丸)──────────────────────────── */
+.v615-settings-dark .vkpi-settings-module {
+  background: rgba(255, 255, 255, 0.014);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 16px;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+.v615-settings-dark .vkpi-settings-module:hover {
+  background: rgba(255, 255, 255, 0.022);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+.v615-settings-dark .vkpi-settings-module__head { min-height: 64px; padding: 16px 20px; }
+.v615-settings-dark .vkpi-settings-module__head span {
+  color: #fff;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.v615-settings-dark .vkpi-settings-module__head em {
+  color: var(--vkpi-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+.v615-settings-dark .vkpi-settings-module__head strong {
+  background: rgba(168, 85, 247, 0.14);
+  border: 1px solid rgba(168, 85, 247, 0.3);
+  color: #d8b9ff;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 6px 12px;
+  box-shadow: none;
+}
+.v615-settings-dark .vkpi-settings-module.is-open .vkpi-settings-module__head {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.v615-settings-dark .vkpi-settings-module__body { padding: 18px 20px 20px; }
+
+/* ── 卡片 / 表单卡 / 表格卡 ─────────────────────────────────────── */
+.v615-settings-dark .vkpi-card,
+.v615-settings-dark .vkpi-action-card,
+.v615-settings-dark .vkpi-table-card,
+.v615-settings-dark .vkpi-settings-version-panel,
+.v615-settings-dark .vkpi-settings-toggle-card,
+.v615-settings-dark .vkpi-platform-crawl-detail,
+.v615-settings-dark .vkpi-info-tile {
+  background: rgba(255, 255, 255, 0.016);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: none;
+  backdrop-filter: none;
+  color: var(--vkpi-text);
+}
+.v615-settings-dark .vkpi-card h2,
+.v615-settings-dark .vkpi-table-card h2,
+.v615-settings-dark .vkpi-card h3,
+.v615-settings-dark .vkpi-card-header,
+.v615-settings-dark .vkpi-card strong { color: #fff; }
+.v615-settings-dark .vkpi-card span,
+.v615-settings-dark .vkpi-table-card span,
+.v615-settings-dark label { color: var(--vkpi-muted); }
+
+/* ── 表单控件:input / select / textarea ─────────────────────────── */
+.v615-settings-dark input,
+.v615-settings-dark select,
+.v615-settings-dark textarea,
+.v615-settings-dark .vkpi-table-input {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--vkpi-text);
+  box-shadow: none;
+}
+.v615-settings-dark input::placeholder,
+.v615-settings-dark textarea::placeholder { color: #5b657a; }
+.v615-settings-dark input:focus,
+.v615-settings-dark select:focus,
+.v615-settings-dark textarea:focus {
+  border-color: rgba(168, 85, 247, 0.5);
+  outline: none;
+}
+.v615-settings-dark select option { background: #14141a; color: var(--vkpi-text); }
+.v615-settings-dark .vkpi-checkbox { color: var(--vkpi-text); }
+.v615-settings-dark input[type="checkbox"] { accent-color: #a855f7; }
+
+/* ── 按钮 ────────────────────────────────────────────────────────── */
+.v615-settings-dark .vkpi-button {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--vkpi-text);
+  box-shadow: none;
+}
+.v615-settings-dark .vkpi-button:hover { background: rgba(255, 255, 255, 0.08); }
+.v615-settings-dark .vkpi-button--primary {
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.9), rgba(139, 92, 246, 0.85));
+  border: 1px solid rgba(168, 85, 247, 0.5);
+  color: #fff;
+}
+.v615-settings-dark .vkpi-button--primary:hover {
+  background: linear-gradient(135deg, rgba(168, 85, 247, 1), rgba(139, 92, 246, 1));
+}
+.v615-settings-dark .vkpi-button:disabled { opacity: 0.45; }
+
+/* ── API 提供商网格 ─────────────────────────────────────────────── */
+.v615-settings-dark .vkpi-settings-api-card,
+.v615-settings-dark .vkpi-settings-api-card--skeleton {
+  background: rgba(255, 255, 255, 0.016);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: none;
+}
+.v615-settings-dark .vkpi-settings-api-card.is-configured { border-color: rgba(52, 211, 153, 0.28); }
+.v615-settings-dark .vkpi-settings-api-card strong { color: #fff; }
+.v615-settings-dark .vkpi-settings-api-card p,
+.v615-settings-dark .vkpi-settings-api-card em { color: var(--vkpi-muted); }
+
+/* ── 表格 ────────────────────────────────────────────────────────── */
+.v615-settings-dark .vkpi-table { color: var(--vkpi-text); }
+.v615-settings-dark .vkpi-table thead th {
+  color: var(--vkpi-muted);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: transparent;
+}
+.v615-settings-dark .vkpi-table td {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  color: var(--vkpi-text);
+}
+.v615-settings-dark .vkpi-table tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
+.v615-settings-dark .vkpi-table-empty { color: #5b657a; }
+.v615-settings-dark .vkpi-table-wrap,
+.v615-settings-dark .vkpi-table-card__header { border-color: rgba(255, 255, 255, 0.06); }
+.v615-settings-dark .vkpi-table-card__header h2 { color: #fff; }
+
+/* ── 平台抓取行/卡 / 切换卡 ──────────────────────────────────────── */
+.v615-settings-dark .vkpi-platform-switch-card,
+.v615-settings-dark .vkpi-platform-switch-card.is-off,
+.v615-settings-dark .vkpi-platform-crawl-row,
+.v615-settings-dark .vkpi-platform-crawl-kpis div {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: var(--vkpi-text);
+}
+.v615-settings-dark .vkpi-platform-crawl-row:hover { background: rgba(255, 255, 255, 0.035); }
+.v615-settings-dark .vkpi-platform-crawl-row__status.is-blocked,
+.v615-settings-dark .vkpi-platform-crawl-ready.is-blocked,
+.v615-settings-dark .vkpi-platform-crawl-reason.is-blocked {
+  background: rgba(180, 35, 24, 0.16);
+  border-color: rgba(244, 63, 94, 0.3);
+  color: #fda4af;
+}
+
+/* ── 内联提示 ────────────────────────────────────────────────────── */
+.v615-settings-dark .vkpi-inline-message {
+  background: rgba(168, 85, 247, 0.1);
+  border: 1px solid rgba(168, 85, 247, 0.22);
+  color: #d8b9ff;
+}
+
+/* ── 员工权限抽屉(从设置里打开)──────────────────────────────────── */
+.v615-settings-dark .vkpi-staff-permission-drawer,
+.v615-settings-dark .vkpi-staff-permission-section,
+.v615-settings-dark .vkpi-settings-secondary details,
+.v615-settings-dark .vkpi-permission-levels button {
+  background: rgba(20, 20, 26, 0.98);
+  border-color: rgba(255, 255, 255, 0.08);
+  color: var(--vkpi-text);
+}
+.v615-settings-dark .vkpi-staff-permission-row.is-owner-only {
+  background: rgba(253, 223, 105, 0.06);
+  border-color: rgba(253, 223, 105, 0.25);
+}
+
+/* 文字兜底:作用域内通用标题/段落不再用浅色默认 */
+.v615-settings-dark h1,
+.v615-settings-dark h2,
+.v615-settings-dark h3,
+.v615-settings-dark strong { color: #fff; }
+.v615-settings-dark p,
+.v615-settings-dark small,
+.v615-settings-dark em { color: var(--vkpi-muted); }

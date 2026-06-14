@@ -6,6 +6,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { AnimatePresence, motion } from "framer-motion";
 import { Bell, ChevronDown, DollarSign, FileText, Globe2, HelpCircle, List, Loader2, Menu, MessageCircle, Moon, PanelLeftClose, PanelLeftOpen, Search, Sun, TrendingUp, User, X } from "lucide-react";
 import "./styles/mockup.css";
+import "../styles/vkpi-settings-dark.css";
 import { KOLPoolPage } from "./KOLPoolPage";
 import { DashboardReplicaPage } from "./DashboardReplicaPage";
 import { AIIntelligenceCard } from "./components/AIIntelligenceCard";
@@ -717,7 +718,7 @@ export function V615ReplicaApp(props: any = {}) {
       onOpenNewGroup: () => openGroupEditor("new"),
       t 
     })),
-    showSettingsModal && e("div", { className: "fixed inset-0 z-[200] bg-[#0a0a0d] overflow-auto" },
+    showSettingsModal && e("div", { className: "v615-settings-dark fixed inset-0 z-[200] bg-[#0a0a0d] overflow-auto" },
       e("button", {
         onClick: () => setShowSettingsModal(false),
         className: "fixed top-4 right-5 z-[210] rounded-md border border-white/10 bg-white/5 p-2 text-slate-300 hover:text-white hover:bg-white/10",
