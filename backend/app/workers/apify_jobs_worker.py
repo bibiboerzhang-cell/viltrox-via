@@ -159,6 +159,57 @@ def _error_category(message: str) -> str:
         return "media_resolve"
     if "yt-dlp" in text or "yt_dlp" in text or "direct_video_download_failed" in text or "download_failed" in text:
         return "download"
+    # content_restricted:内容存在但被门禁挡住(私密/年龄限制/登录/会员/订阅),需要凭证而非重试。
+    # 放在 download 之后,避免吞掉 yt-dlp 下载失败(那是 download);"sign in to confirm" 这类
+    # 是 YouTube 风控登录墙,归门禁。
+    if any(
+        marker in text
+        for marker in (
+            "age restricted",
+            "age-restricted",
+            "private video",
+            "login required",
+            "sign in to confirm",
+            "members-only",
+            "subscriber-only",
+            "this video is private",
+            "account is private",
+            "requires authentication",
+        )
+    ):
+        return "content_restricted"
+    # content_blocked:内容被地域/版权/平台强制下架(geo/DMCA/removed/terminated),不可恢复。
+    # "video unavailable" 是歧义词:明确"has been removed"/版权/封号的归 blocked,纯泛化 404/not_found 归
+    # content_unavailable(见下)。这里只收明确下架信号。
+    if any(
+        marker in text
+        for marker in (
+            "not available in your country",
+            "geoblock",
+            "geo",
+            "blocked in",
+            "copyright",
+            "dmca",
+            "has been removed",
+            "account terminated",
+            "content warning",
+        )
+    ):
+        return "content_blocked"
+    # content_unavailable:泛化的找不到/已删除,既不是明确门禁也不是明确下架。
+    # "video unavailable" 在缺乏更强信号时落这里(歧义安全网)。
+    if any(
+        marker in text
+        for marker in (
+            "video unavailable",
+            "not_found",
+            "not found",
+            "404",
+            "does not exist",
+            "deleted",
+        )
+    ):
+        return "content_unavailable"
     if "unsupported" in text or "invalid_video_url" in text or "not_video" in text or "bad url" in text:
         return "permanent"
     if "stale_running_reclaimed" in text:
@@ -178,10 +229,13 @@ def _error_category(message: str) -> str:
             "syntaxerror",
             "unboundlocalerror",
             "traceback (most recent call last)",
+            # 运行期消息形态(无类名前缀):ModuleNotFoundError/ImportError 的裸文本
+            "no module named",
+            "cannot import name",
         )
     ):
         return "code_error"
-    return "other"
+    return "unknown"
 
 
 def _provider_retry_delay_seconds(next_attempt: int) -> int:
