@@ -227,8 +227,14 @@ def list_history(
     status: str = "",
     query_type: str = "",
     item_limit: int = 5,
+    staff: dict[str, Any] | None = None,
+    scope_to_staff: bool = True,
 ) -> dict[str, Any]:
-    """Return recent search sessions with compact item previews for history UI."""
+    """Return recent search sessions with compact item previews for history UI.
+
+    每个人的记录不能串:默认按 created_by=当前登录人作用域过滤(scope_to_staff),
+    不同员工互不串记录。actor 取不到时不过滤(回退看全部,避免登录态异常致空)。
+    """
     safe_limit = max(1, min(int(limit or 20), 50))
     safe_item_limit = max(0, min(int(item_limit or 5), 10))
     normalized_status = _normalize_status(status) if status else ""
@@ -242,6 +248,10 @@ def list_history(
     if normalized_query_type:
         where.append("query_type=?")
         params.append(normalized_query_type)
+    actor_id = _staff_user_id(staff) if scope_to_staff else None
+    if actor_id:
+        where.append("created_by=?")
+        params.append(actor_id)
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
 
     conn = get_conn()

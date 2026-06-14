@@ -365,6 +365,8 @@ function historyStatusMeta(value: unknown): { label: string; cls: string; dot: s
   return { label, cls: "text-slate-500", dot: "#64748b" };
 }
 
+const HISTORY_COLLAPSED_COUNT = 6;
+
 function HistoryStrip({
   items,
   loading,
@@ -374,18 +376,33 @@ function HistoryStrip({
   loading: boolean;
   onOpen: (session: VkpiKolSearchHistoryItem) => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
   if (!items.length && !loading) return null;
+  const shown = expanded ? items : items.slice(0, HISTORY_COLLAPSED_COUNT);
+  const overflow = items.length - HISTORY_COLLAPSED_COUNT;
   return (
     <div className="mt-2 rounded-lg border border-white/[0.055] bg-black/15 px-2.5 py-2">
       <div className="mb-1.5 flex items-center justify-between gap-2">
         <div className="inline-flex items-center gap-1.5 text-[10px] font-medium text-slate-300">
           <Clock3 size={11} className="text-slate-500" />
           最近历史
+          {items.length ? <span className="text-[9px] text-slate-600">· {items.length}</span> : null}
         </div>
-        {loading ? <span className="text-[9.5px] text-slate-600">同步中</span> : null}
+        <div className="inline-flex items-center gap-2">
+          {loading ? <span className="text-[9.5px] text-slate-600">同步中</span> : null}
+          {overflow > 0 ? (
+            <button
+              type="button"
+              onClick={() => setExpanded((x) => !x)}
+              className="text-[9.5px] font-medium text-slate-500 hover:text-cyan-200"
+            >
+              {expanded ? "收起" : `展开 +${overflow}`}
+            </button>
+          ) : null}
+        </div>
       </div>
       <div className="space-y-1">
-        {items.slice(0, 15).map((item) => {
+        {shown.map((item) => {
           const sessionId = historySessionId(item);
           const label = historyLabel(item);
           const kind = historyKindMeta(item);

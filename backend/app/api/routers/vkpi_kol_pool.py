@@ -364,14 +364,17 @@ def list_kol_search_history(
     item_limit: int = Query(default=5, ge=0, le=10),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
-    """Return compact smart-search history with item previews and status counts."""
-    del staff
+    """Return compact smart-search history with item previews and status counts.
+
+    每个人的记录不能串:按当前登录员工 created_by 作用域过滤(service 内做)。
+    """
     try:
         return kol_search_sessions.list_history(
             limit=limit,
             status=status,
             query_type=query_type,
             item_limit=item_limit,
+            staff=staff,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
