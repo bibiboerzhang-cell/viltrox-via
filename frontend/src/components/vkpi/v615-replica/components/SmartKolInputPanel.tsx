@@ -297,6 +297,47 @@ function advanceStatusLabel(value: unknown): string {
   return "排队中";
 }
 
+// 异步会话状态横幅(诚实显示 排队/查找中/已完成/部分完成/未完成):只读后端真有的字段——
+// 会话级 status(planned/running/ready/partial/failed/cancelled)+ result_summary
+// .smart_search_profile_advance_job 的 {status, advance_status, advance_counts, error}。
+// failed 时把后端 error 原文(异常串)收进 note,而非吞掉看似空白卡死。后端未单独返回「AI 规划
+// 失败已退基础检索」原因字段(planner 失败被静默兜底),故只能据真实 status/error 说明,不编造。
+type SessionBanner = { tone: "info" | "ok" | "warn" | "error"; label: string; note: string } | null;
+
+function sessionStatusBanner(
+  session: VkpiKolSearchHistoryItem | null,
+  advanceStatus: string,
+  counts: Row,
+  polling: boolean,
+): SessionBanner {
+  if (!session && !advanceStatus && !polling) return null;
+  const summary = asRecord(session?.result_summary);
+  const job = asRecord(summary.smart_search_profile_advance_job);
+  const raw = cleanText(advanceStatus || job.advance_status || job.status || session?.status).toLowerCase();
+  const jobError = cleanText(job.error);
+  const ready = Number(counts.ready ?? 0);
+  const failed = Number(counts.failed ?? 0) + Number(counts.errors ?? 0);
+  if (["failed", "blocked"].includes(raw) && ready <= 0) {
+    return { tone: "error", label: "这次没找到结果", note: jobError ? `失败原因:${jobError}` : "查找未能完成,可调整描述或换个区域重试。" };
+  }
+  if (["partial"].includes(raw) || (failed > 0 && ready > 0)) {
+    return {
+      tone: "warn",
+      label: "已找到部分结果",
+      note: failed > 0
+        ? `下方结果可直接查看;另有 ${failed} 个没跑完,可稍后重试补齐。`
+        : "下方结果可直接查看;部分人选还在补全,完成后会自动更新。",
+    };
+  }
+  if (["ready", "done"].includes(raw)) {
+    return { tone: "ok", label: "已找完", note: ready > 0 ? `共找到 ${ready} 个人选,见下方。` : "这次没有新的人选,可换个描述再试。" };
+  }
+  if (raw === "running" || polling) {
+    return { tone: "info", label: "正在查找", note: "后台正从所选平台找人,找到的会随时显示,无需等待。" };
+  }
+  return { tone: "info", label: "已排队", note: "已进入后台查找队列,稍候会自动开始。" };
+}
+
 function historyKindLabel(session: VkpiKolSearchHistoryItem): string {
   const type = cleanText(session.query_type);
   if (type === "url_video") return "视频 URL";
@@ -1118,6 +1159,12 @@ export function SmartKolInputPanel({
   const activeSessionSummary = asRecord(activeSearchSession?.result_summary);
   const activeSmartJob = asRecord(activeSessionSummary.smart_search_profile_advance_job);
   const activeSessionStatus = cleanText(activeSmartJob.advance_status || activeSmartJob.status || activeSearchSession?.status);
+  // 诚实会话横幅(排队/查找中/已完成/部分完成/未完成)——只读后端真有字段,见 sessionStatusBanner。
+  // advanceResult?.status:queueTextAdvance 刚返回、尚未首拍轮询时的即时状态兜底(queued/...)。
+  const sessionBanner = useMemo(
+    () => sessionStatusBanner(activeSearchSession, activeSessionStatus || cleanText(advanceResult?.status), activeSessionCounts, Boolean(activeSearchSessionId)),
+    [activeSearchSession, activeSessionStatus, advanceResult, activeSessionCounts, activeSearchSessionId],
+  );
 
   useEffect(() => {
     if (recallItems.length) onRecallItems?.(recallItems);
@@ -1640,22 +1687,45 @@ export function SmartKolInputPanel({
               <div className="flex items-center gap-1.5 rounded-md border border-emerald-300/15 bg-black/15 px-2.5 py-2 text-[10.5px] text-emerald-100/80">
                 <Loader2 size={12} className="animate-spin" /> 正在从所选平台找新号，完成后自动显示
               </div>
+            ) : sessionBanner && (sessionBanner.tone === "error" || sessionBanner.tone === "warn") ? (
+              // 失败/部分但无发现项:不再静默落空白占位,直接说明状态与原因(诚实兜底)。
+              <div className={`rounded-md border px-3 py-2.5 text-[10.5px] leading-relaxed ${
+                sessionBanner.tone === "error"
+                  ? "border-rose-300/20 bg-rose-500/[0.08] text-rose-100"
+                  : "border-amber-300/20 bg-amber-400/[0.08] text-amber-100"
+              }`}>
+                <div className="font-medium">{sessionBanner.label}</div>
+                <div className="mt-0.5 opacity-85">{sessionBanner.note}</div>
+              </div>
             ) : (
               <div className="rounded-md border border-dashed border-white/[0.08] px-3 py-3 text-center text-[10.5px] text-slate-500">{deepFindOn ? "深度查找默认开 · 搜索后自动从所选平台发现新号" : "点「立即全网查找」从所选平台发现新号"}</div>
             )}
-            {advanceResult || activeSearchSession || sessionPollNotice ? (
-              <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-emerald-100/65">
-                <span>{advanceStatusLabel(activeSessionStatus || advanceResult?.status)}</span>
-                {Object.keys(activeSessionCounts).length ? (
-                  <>
-                    <span className="rounded border border-emerald-300/15 bg-black/15 px-1.5 py-0.5">已找到 {display(activeSessionCounts.ready, "0")}</span>
-                    <span className="rounded border border-emerald-300/15 bg-black/15 px-1.5 py-0.5">已入库 {display(activeSessionCounts.executed, "0")}</span>
-                    {Number(activeSessionCounts.errors) > 0 ? (
-                      <span className="rounded border border-rose-300/20 bg-black/15 px-1.5 py-0.5 text-rose-200/80">失败 {display(activeSessionCounts.errors, "0")}</span>
-                    ) : null}
-                  </>
-                ) : null}
-                {sessionPollNotice ? <span className="text-emerald-200/70">{sessionPollNotice}</span> : null}
+            {sessionBanner ? (
+              // 诚实会话横幅:排队/查找中/已完成/部分完成/未完成 + 真原因;部分/已完成仍保留计数。
+              <div className={`mt-2 rounded-md border px-2.5 py-2 text-[10px] leading-relaxed ${
+                sessionBanner.tone === "error"
+                  ? "border-rose-300/20 bg-rose-500/[0.07] text-rose-100"
+                  : sessionBanner.tone === "warn"
+                    ? "border-amber-300/20 bg-amber-400/[0.07] text-amber-100"
+                    : sessionBanner.tone === "ok"
+                      ? "border-emerald-300/20 bg-emerald-400/[0.07] text-emerald-100"
+                      : "border-emerald-300/15 bg-black/15 text-emerald-100/75"
+              }`}>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {sessionBanner.tone === "info" ? <Loader2 size={11} className="animate-spin" /> : null}
+                  <span className="font-medium">{sessionBanner.label}</span>
+                  {Object.keys(activeSessionCounts).length ? (
+                    <>
+                      <span className="rounded border border-white/[0.1] bg-black/15 px-1.5 py-0.5">已找到 {display(activeSessionCounts.ready, "0")}</span>
+                      <span className="rounded border border-white/[0.1] bg-black/15 px-1.5 py-0.5">已入库 {display(activeSessionCounts.executed, "0")}</span>
+                      {Number(activeSessionCounts.errors) > 0 || Number(activeSessionCounts.failed) > 0 ? (
+                        <span className="rounded border border-rose-300/20 bg-black/15 px-1.5 py-0.5 text-rose-200/80">未完成 {display(Number(activeSessionCounts.errors || 0) + Number(activeSessionCounts.failed || 0), "0")}</span>
+                      ) : null}
+                    </>
+                  ) : null}
+                </div>
+                <div className="mt-0.5 opacity-85">{sessionBanner.note}</div>
+                {sessionPollNotice ? <div className="mt-0.5 opacity-70">{sessionPollNotice}</div> : null}
               </div>
             ) : null}
           </div>
