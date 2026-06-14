@@ -85,7 +85,8 @@ def _candidate_pool(query: str, probe_tokens: list[str]) -> dict[str, dict[str, 
             products = []
         for prod in products:
             sku = str(prod.get("sku") or "")
-            if sku:
+            # 排污:IMAGE-AWARDS-* 是活动/人物/奖项页(被误当产品),绝不参与「按产品找人」解析。
+            if sku and not sku.upper().startswith("IMAGE-AWARDS"):
                 pool[sku] = prod
     return pool
 

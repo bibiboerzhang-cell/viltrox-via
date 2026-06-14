@@ -619,7 +619,8 @@ async def smart_kol_search_profile_advance_job(
     queue_pipeline = str(queue_pipeline_raw).strip().lower() not in {"0", "false", "no", "off", "sync"}
 
     try:
-        llm_query_plan = kol_smart_query_planner.plan_text_query(query_text, body=body, staff=staff)
+        # 同步 LLM(冷启可达15s)挪进 threadpool,避免阻塞 async 事件循环(对齐 :525 kol-smart-search 路)。
+        llm_query_plan = await run_in_threadpool(kol_smart_query_planner.plan_text_query, query_text, body=body, staff=staff)
         effective_query = str(llm_query_plan.get("search_query") or query_text).strip()
         queued_body = {
             **body,

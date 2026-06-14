@@ -351,9 +351,10 @@ function HistoryStrip({
 // 避免向量分都 <0.5 时全显「相关」无区分。
 // demote:后端 relevance_tier_hint==="demote"(如视频向产品×纯平面摄影候选)时,封顶为「中相关」,
 // 绝不显「高相关」——纯展示分档,不动召回侧排序与任何评分字段。
-function relevanceTier(index: number, demote = false): { label: string; cls: string; dot: string } {
-  if (index <= 1 && !demote) return { label: "高相关", cls: "border-emerald-300/35 bg-emerald-400/[0.10] text-emerald-100", dot: "#34d399" };
-  if (index <= 3) return { label: "中相关", cls: "border-cyan-300/30 bg-cyan-400/[0.07] text-cyan-100", dot: "#22d3ee" };
+function relevanceTier(score: number, demote = false): { label: string; cls: string; dot: string } {
+  // 按真实相关度分值(0-1)分档:高≥0.6 / 中≥0.3 / 相关。demote 封顶「中相关」绝不显「高相关」。纯展示。
+  if (score >= 0.6 && !demote) return { label: "高相关", cls: "border-emerald-300/35 bg-emerald-400/[0.10] text-emerald-100", dot: "#34d399" };
+  if (score >= 0.3) return { label: "中相关", cls: "border-cyan-300/30 bg-cyan-400/[0.07] text-cyan-100", dot: "#22d3ee" };
   return { label: "相关", cls: "border-white/[0.08] bg-white/[0.02] text-slate-400", dot: "#64748b" };
 }
 
@@ -411,7 +412,7 @@ function RecallMiniItem({
   const followers = numberLabel(item.followers);
   const score = Number(item.recall_rank_score ?? item.vector_score ?? 0);
   const relevanceFlags = Array.isArray(item.relevance_flags) ? item.relevance_flags.map(cleanText).filter(Boolean) : [];
-  const tier = relevanceTier(index, cleanText(item.relevance_tier_hint) === "demote");
+  const tier = relevanceTier(score, cleanText(item.relevance_tier_hint) === "demote");
   const showImg = Boolean(avatar) && !imgError;
   const whyFit = cleanText(item.why_fit);
   // 三引擎产出·候选卡展示信号(全部纯只读透传,绝不触评分):
@@ -483,6 +484,16 @@ function RecallMiniItem({
         ) : null}
         {whyFit ? (
           <span className="mt-1 line-clamp-2 block text-[10px] leading-snug text-cyan-200/85">{whyFit}</span>
+        ) : null}
+        {Array.isArray(fitSrc.relevance_hits) && (fitSrc.relevance_hits as unknown[]).length ? (
+          <span className="mt-1 inline-flex flex-wrap items-center gap-1" title="persona 相关度命中词(为何契合,纯展示)">
+            <span className="text-[8.5px] text-slate-500">契合命中</span>
+            {(fitSrc.relevance_hits as unknown[]).slice(0, 4).map((h, i) => (
+              <span key={`${cleanText(h)}-${i}`} className="rounded border border-sky-300/25 bg-sky-400/[0.08] px-1 text-[8.5px] font-medium text-sky-100/90">
+                {cleanText(h)}
+              </span>
+            ))}
+          </span>
         ) : null}
         {relevanceFlags.length ? (
           <span className="mt-1 flex flex-wrap gap-1">
