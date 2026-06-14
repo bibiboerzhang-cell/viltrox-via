@@ -365,8 +365,6 @@ function historyStatusMeta(value: unknown): { label: string; cls: string; dot: s
   return { label, cls: "text-slate-500", dot: "#64748b" };
 }
 
-const HISTORY_COLLAPSED_COUNT = 6;
-
 function HistoryStrip({
   items,
   loading,
@@ -378,30 +376,34 @@ function HistoryStrip({
 }) {
   const [expanded, setExpanded] = useState(false);
   if (!items.length && !loading) return null;
-  const shown = expanded ? items : items.slice(0, HISTORY_COLLAPSED_COUNT);
-  const overflow = items.length - HISTORY_COLLAPSED_COUNT;
+  // 收缩态:只显示「最近历史」标题(不渲染记录);展开才出列表。
+  const shown = expanded ? items : [];
   return (
     <div className="mt-2 rounded-lg border border-white/[0.055] bg-black/15 px-2.5 py-2">
-      <div className="mb-1.5 flex items-center justify-between gap-2">
-        <div className="inline-flex items-center gap-1.5 text-[10px] font-medium text-slate-300">
+      <div className={`flex items-center justify-between gap-2${expanded ? " mb-1.5" : ""}`}>
+        <button
+          type="button"
+          onClick={() => setExpanded((x) => !x)}
+          className="inline-flex items-center gap-1.5 text-[10px] font-medium text-slate-300 hover:text-cyan-100"
+        >
           <Clock3 size={11} className="text-slate-500" />
           最近历史
           {items.length ? <span className="text-[9px] text-slate-600">· {items.length}</span> : null}
-        </div>
+        </button>
         <div className="inline-flex items-center gap-2">
           {loading ? <span className="text-[9.5px] text-slate-600">同步中</span> : null}
-          {overflow > 0 ? (
+          {items.length ? (
             <button
               type="button"
               onClick={() => setExpanded((x) => !x)}
               className="text-[9.5px] font-medium text-slate-500 hover:text-cyan-200"
             >
-              {expanded ? "收起" : `展开 +${overflow}`}
+              {expanded ? "收起" : `展开 ${items.length} 条`}
             </button>
           ) : null}
         </div>
       </div>
-      <div className="space-y-1">
+      <div className={expanded ? "space-y-1" : ""}>
         {shown.map((item) => {
           const sessionId = historySessionId(item);
           const label = historyLabel(item);
