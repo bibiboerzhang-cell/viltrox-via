@@ -4,7 +4,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bell, ChevronDown, DollarSign, FileText, Globe2, HelpCircle, List, Loader2, Menu, MessageCircle, Moon, PanelLeftClose, PanelLeftOpen, Search, Sun, TrendingUp, User } from "lucide-react";
+import { Bell, ChevronDown, DollarSign, FileText, Globe2, HelpCircle, List, Loader2, Menu, MessageCircle, Moon, PanelLeftClose, PanelLeftOpen, Search, Sun, TrendingUp, User, X } from "lucide-react";
 import "./styles/mockup.css";
 import { KOLPoolPage } from "./KOLPoolPage";
 import { DashboardReplicaPage } from "./DashboardReplicaPage";
@@ -39,7 +39,7 @@ import { PinDetailModal } from "./components/modals/PinDetailModal";
 import { ProfileModal } from "./components/modals/ProfileModal";
 import { ProjectDetailModal } from "./components/modals/ProjectDetailModal";
 import { PublishPreviewModal } from "./components/modals/PublishPreviewModal";
-import { SettingsModal } from "./components/modals/SettingsModal";
+import { SettingsPage } from "../pages/SettingsPage";
 import { ShortcutsModal } from "./components/modals/ShortcutsModal";
 import { SignalDetailModal } from "./components/modals/SignalDetailModal";
 import { SignalsAllModal } from "./components/modals/SignalsAllModal";
@@ -717,7 +717,19 @@ export function V615ReplicaApp(props: any = {}) {
       onOpenNewGroup: () => openGroupEditor("new"),
       t 
     })),
-    e(AnimatePresence, null, showSettingsModal && e(SettingsModal, { onClose: () => setShowSettingsModal(false), t })),
+    showSettingsModal && e("div", { className: "fixed inset-0 z-[200] bg-[#0a0a0d] overflow-auto" },
+      e("button", {
+        onClick: () => setShowSettingsModal(false),
+        className: "fixed top-4 right-5 z-[210] rounded-md border border-white/10 bg-white/5 p-2 text-slate-300 hover:text-white hover:bg-white/10",
+        title: t("关闭"),
+      }, e(X, { size: 18 })),
+      e(SettingsPage, {
+        data: dashboardData,
+        viewMode: appViewMode === "employee" ? "employee" : "manager",
+        apiToken,
+        onRefreshData,
+      })
+    ),
     e(AnimatePresence, null, showShortcuts && e(ShortcutsModal, { onClose: () => setShowShortcuts(false) })),
     e(AnimatePresence, null, showFeedback && e(FeedbackModal, { onClose: () => setShowFeedback(false), apiToken, onSubmitted: handleFeedbackSubmitted })),
     // V6.14.4: ViewAll modals + NotifDetail + EditGroup
