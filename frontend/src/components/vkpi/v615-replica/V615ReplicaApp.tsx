@@ -8,6 +8,7 @@ import { Bell, Calendar, Camera, ChevronDown, DollarSign, FileText, Globe2, Help
 import "./styles/mockup.css";
 import "../styles/vkpi-settings-dark.css";
 import { KOLPoolPage } from "./KOLPoolPage";
+import { ShopifyConnectPage } from "./ShopifyConnectPage";
 import { DashboardReplicaPage } from "./DashboardReplicaPage";
 import { AIIntelligenceCard } from "./components/AIIntelligenceCard";
 import { ActiveCampaignsCard } from "./components/ActiveCampaignsCard";
@@ -94,7 +95,7 @@ export function V615ReplicaApp(props: any = {}) {
   const initialNav = normalizeReplicaNav(urlNav) || normalizeReplicaNav(stored.activeNav) || "dashboard";
   
   const [collapsed, setCollapsed] = useState(stored.collapsed || false);
-  const [activeNav, setActiveNav] = useState(["dashboard", "kol-pool", "my-kol", "projects", "events"].includes(initialNav) ? initialNav : "dashboard");
+  const [activeNav, setActiveNav] = useState(["dashboard", "kol-pool", "my-kol", "projects", "events", "shopify"].includes(initialNav) ? initialNav : "dashboard");
   const [theme, setTheme] = useState(stored.theme || "dark");
 
   useEffect(() => {
@@ -1133,8 +1134,10 @@ export function V615ReplicaApp(props: any = {}) {
               })
             ),
 
+            activeNav === "shopify" && e(ShopifyConnectPage, { apiToken }),
+
             // Placeholder for nav items not yet built
-            activeNav !== "dashboard" && activeNav !== "kol-pool" && activeNav !== "my-kol" && activeNav !== "projects" && activeNav !== "events" && e("div", { className: "p-8 md:p-16 flex flex-col items-center justify-center text-center min-h-[60vh]" },
+            activeNav !== "dashboard" && activeNav !== "kol-pool" && activeNav !== "my-kol" && activeNav !== "projects" && activeNav !== "events" && activeNav !== "shopify" && e("div", { className: "p-8 md:p-16 flex flex-col items-center justify-center text-center min-h-[60vh]" },
               e("div", { className: "rounded-2xl border border-white/[0.06] bg-white/[0.015] p-8 max-w-md w-full" },
                 (() => {
                   const navItem = NAV_ITEMS.find(n => n.key === activeNav);

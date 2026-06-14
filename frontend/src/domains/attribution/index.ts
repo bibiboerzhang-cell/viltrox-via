@@ -2,11 +2,14 @@
 export {
   createSalesAttribution,
   getAmazonAttributionSummary,
+  getShopifyStatus,
   importAmazonAttributionRows,
   listAmazonAttributions,
   runShopifyBackfill,
   runShopifySync,
   uploadAmazonAttributionReport,
+  type ShopifyProviderStatus,
+  type ShopifySyncRun,
   type VkpiAmazonImportPayload,
   type VkpiAttributionPayload,
 } from './api';

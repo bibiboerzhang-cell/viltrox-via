@@ -199,7 +199,18 @@ export function settledValue<T>(result: PromiseSettledResult<T>, fallback: T, fa
   return fallback;
 }
 
-export function buildKpis(snapshot: Snapshot, scope: DashboardScope): KpiCard[] {
+export interface KpiAttributionInput {
+  /** Confirmed Shopify GMV in USD (vkpi_sales_attributions.revenue_cents / 100). */
+  attributedGmv?: number;
+  /** (GMV - cost) / cost, may be negative; null when no cost basis. */
+  avgRoi?: number | null;
+  /** Backend metric_source.gmv: real source | 'awaiting_data' | 'not_connected'. */
+  gmvSource?: string;
+  /** Backend metric_source.roi. */
+  roiSource?: string;
+}
+
+export function buildKpis(snapshot: Snapshot, scope: DashboardScope, attribution?: KpiAttributionInput | null): KpiCard[] {
   const official = officialTotals(snapshot.officialMatrix);
   const trendTotals = snapshot.trendRows.reduce<TrendTotals>((acc, row) => {
     acc.views += num(row.views || row.total_views || row.play_count || row.impressions);
@@ -217,13 +228,27 @@ export function buildKpis(snapshot: Snapshot, scope: DashboardScope): KpiCard[] 
   const engagement = engagementBase ? (interactions / engagementBase) * 100 : 0;
   const pendingLabel = scope === 'kol' ? 'KOL 口径待接入' : '官方 + KOL 合并口径待接入';
   const maybePending = (card: KpiCard): KpiCard => scopedPending ? { ...card, value: '--', meta: pendingLabel, status: '待接入', pending: true } : card;
+
+  // GMV / ROI: show real numbers only when the attribution ledger actually has
+  // confirmed Shopify revenue. No payload (or zero) → honest 待接入.
+  const gmv = Number(attribution?.attributedGmv || 0);
+  const roi = attribution?.avgRoi;
+  const gmvAwaiting = attribution?.gmvSource === 'awaiting_data';
+  const roiAwaiting = attribution?.roiSource === 'awaiting_data';
+  const gmvCard: KpiCard = gmv > 0
+    ? { icon: '▣', label: 'GMV', value: `$${compact(gmv)}`, meta: 'Shopify 已确认归因', tone: 'green', status: '真实' }
+    : { icon: '▣', label: 'GMV', value: '--', meta: gmvAwaiting ? '已连接 · 等待确认归因订单' : '待 Shopify 订单接入', tone: 'green', status: '待接入', pending: true };
+  const roiCard: KpiCard = (gmv > 0 && roi !== null && roi !== undefined)
+    ? { icon: '¥', label: '平均 ROI', value: `${Number(roi).toFixed(1)}x`, meta: '(GMV-成本)/成本', tone: 'pink', status: '真实' }
+    : { icon: '¥', label: '平均 ROI', value: '--', meta: roiAwaiting ? '已连接 · 等待确认归因订单' : '待成本与订单接入', tone: 'pink', status: '待接入', pending: true };
+
   return [
     maybePending({ icon: '◉', label: '总曝光量', value: views ? compact(views) : '--', meta: views ? `官方矩阵${official.viewsDelta ? ` · +${compact(official.viewsDelta)}` : ''}${scopeSuffix}` : '等待真实 API', tone: 'blue', status: views ? '真实' : '待接入', pending: !views }),
-    { icon: '▣', label: 'GMV', value: '--', meta: '待 Shopify 订单接入', tone: 'green', status: '待接入', pending: true },
+    gmvCard,
     maybePending({ icon: '♚', label: '内容数', value: posts ? compact(posts) : '--', meta: posts ? `官方矩阵${scopeSuffix}` : '等待真实 API', tone: 'purple', status: posts ? '真实' : '待接入', pending: !posts }),
     maybePending({ icon: '▥', label: '内容互动率', value: engagementBase ? `${engagement.toFixed(2)}%` : '--', meta: engagementBase ? `likes/comments/views${scopeSuffix}` : '等待互动分母', tone: 'orange', status: engagementBase ? '真实' : '待接入', pending: !engagementBase }),
     { icon: '▤', label: '订单量', value: '--', meta: '待 Shopify 订单 webhook', tone: 'blue', status: '待接入', pending: true },
-    { icon: '¥', label: '平均 ROI', value: '--', meta: '待成本与订单接入', tone: 'pink', status: '待接入', pending: true },
+    roiCard,
   ];
 }
 

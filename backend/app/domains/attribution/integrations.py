@@ -520,6 +520,70 @@ def shopify_sync_status(body: dict[str, Any] | None = None, *, staff: dict[str, 
     }
 
 
+def list_shopify_sync_runs(limit: int = 10) -> list[dict[str, Any]]:
+    """Return the most recent Shopify sync run rows for the connect-page history table."""
+    ensure_vkpi_reconciliation_schema()
+    safe_limit = max(1, min(int(limit or 10), 100))
+    rows = get_conn().execute(
+        """
+        SELECT id, sync_uid, source, started_at, completed_at, status,
+               orders_received, orders_matched, orders_unmatched, orders_failed,
+               error_message, triggered_by_staff_id, metadata_json
+        FROM vkpi_shopify_sync_runs
+        ORDER BY started_at DESC, id DESC
+        LIMIT ?
+        """,
+        (safe_limit,),
+    ).fetchall()
+    runs: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        meta_raw = item.pop("metadata_json", None)
+        try:
+            item["metadata"] = json.loads(meta_raw) if isinstance(meta_raw, str) and meta_raw else {}
+        except json.JSONDecodeError:
+            item["metadata"] = {}
+        runs.append(item)
+    return runs
+
+
+def shopify_provider_status(*, limit: int = 10) -> dict[str, Any]:
+    """Read-only Shopify connection status for the connect page.
+
+    Reports whether SHOPIFY_SHOP_DOMAIN + SHOPIFY_ADMIN_ACCESS_TOKEN are present
+    in the environment without writing a sync run or fabricating any orders.
+    """
+    ensure_vkpi_reconciliation_schema()
+    shop_domain = str(os.environ.get("SHOPIFY_SHOP_DOMAIN") or "").strip()
+    access_token = str(
+        os.environ.get("SHOPIFY_ADMIN_ACCESS_TOKEN") or os.environ.get("SHOPIFY_API_ACCESS_TOKEN") or ""
+    ).strip()
+    webhook_secret = str(os.environ.get("SHOPIFY_WEBHOOK_SECRET") or "").strip()
+    configured = bool(shop_domain and access_token)
+    return {
+        "provider_status": "configured" if configured else "not_configured",
+        "shop_domain": shop_domain,
+        "shop_domain_configured": bool(shop_domain),
+        "access_token_configured": bool(access_token),
+        "webhook_secret_configured": bool(webhook_secret),
+        "env_vars": {
+            "SHOPIFY_SHOP_DOMAIN": bool(shop_domain),
+            "SHOPIFY_ADMIN_ACCESS_TOKEN": bool(access_token),
+            "SHOPIFY_WEBHOOK_SECRET": bool(webhook_secret),
+        },
+        "webhooks": {
+            "orders_create": "/api/vkpi/webhooks/shopify/orders",
+            "orders_refund_create": "/api/vkpi/webhooks/shopify/refunds",
+        },
+        "sync_runs": list_shopify_sync_runs(limit=limit),
+        "message": (
+            "Shopify Admin API 已配置，可接入真实拉取任务。"
+            if configured
+            else "Shopify Admin API 未配置；设置 SHOPIFY_SHOP_DOMAIN 与 SHOPIFY_ADMIN_ACCESS_TOKEN 后即可连接。"
+        ),
+    }
+
+
 def _shopify_refund_ref(payload: dict[str, Any], order_refs: list[str]) -> str:
     refund_ref = _pick(payload.get("admin_graphql_api_id"), payload.get("id"), payload.get("refund_id"))
     if not refund_ref:

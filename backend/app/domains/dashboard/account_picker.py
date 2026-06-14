@@ -164,6 +164,84 @@ def build_dashboard_account_counts() -> dict[str, int]:
     return counts
 
 
+def _shopify_configured() -> bool:
+    """True when the Shopify Admin API env vars are present (no fabrication)."""
+    import os
+
+    shop_domain = str(os.environ.get("SHOPIFY_SHOP_DOMAIN") or "").strip()
+    access_token = str(
+        os.environ.get("SHOPIFY_ADMIN_ACCESS_TOKEN") or os.environ.get("SHOPIFY_API_ACCESS_TOKEN") or ""
+    ).strip()
+    return bool(shop_domain and access_token)
+
+
+def _build_attributed_gmv_roi() -> dict[str, Any]:
+    """Program-wide confirmed-Shopify GMV + ROI from the real attribution ledger.
+
+    GMV  = SUM(vkpi_sales_attributions.revenue_cents) WHERE source_platform='shopify'
+           AND confidence='confirmed'.
+    cost = SUM(vkpi_cost_ledger.amount_cents) WHERE status != 'void' (the same
+           formula the metric-lineage layer uses for marketing cost).
+    ROI  = (gmv - cost) / cost when cost > 0, else None.
+
+    The dashboard account-picker scope (v_dashboard_account_pool.source_id) maps to
+    vkpi_kol_pool.id, while attribution.kol_id maps to kols.id — different id
+    namespaces — so this is computed program-wide rather than per selected account.
+    Numbers are real; when no confirmed attribution exists the cards stay honest
+    (待接入 / awaiting_data).
+    """
+    conn = get_conn()
+    gmv_row = conn.execute(
+        """
+        SELECT COALESCE(SUM(revenue_cents), 0) AS gmv_cents
+        FROM vkpi_sales_attributions
+        WHERE source_platform = 'shopify'
+          AND confidence = 'confirmed'
+        """
+    ).fetchone()
+    cost_row = conn.execute(
+        """
+        SELECT COALESCE(SUM(amount_cents), 0) AS cost_cents
+        FROM vkpi_cost_ledger
+        WHERE status != 'void'
+        """
+    ).fetchone()
+
+    gmv_cents = _as_int(_row_value(gmv_row, "gmv_cents"))
+    cost_cents = _as_int(_row_value(cost_row, "cost_cents"))
+    gmv = round(gmv_cents / 100.0, 2)
+    cost = round(cost_cents / 100.0, 2)
+
+    has_gmv = gmv_cents > 0
+    avg_roi: float | None = None
+    if cost_cents > 0:
+        avg_roi = round((gmv_cents - cost_cents) / cost_cents, 4)
+
+    if has_gmv:
+        gmv_source = "vkpi_sales_attributions.revenue_cents[shopify,confirmed]"
+    elif _shopify_configured():
+        gmv_source = "awaiting_data"
+    else:
+        gmv_source = "not_connected"
+
+    if avg_roi is not None and has_gmv:
+        roi_source = "(gmv-cost)/cost · vkpi_cost_ledger[status!=void]"
+    elif _shopify_configured():
+        roi_source = "awaiting_data"
+    else:
+        roi_source = "not_connected"
+
+    return {
+        "attributed_gmv": gmv,
+        "attributed_gmv_cents": gmv_cents,
+        "cost": cost,
+        "cost_cents": cost_cents,
+        "avg_roi": avg_roi,
+        "gmv_source": gmv_source,
+        "roi_source": roi_source,
+    }
+
+
 def build_dashboard_kpi(
     account_type: str = "all",
     selected_kol_ids: list[str] | tuple[str, ...] | None = None,
@@ -208,6 +286,7 @@ def build_dashboard_kpi(
     total_likes = _as_int(_row_value(row, "total_likes"))
     total_comments = _as_int(_row_value(row, "total_comments"))
     total_shares = _as_int(_row_value(row, "total_shares"))
+    revenue = _build_attributed_gmv_roi()
     return {
         "account_type": normalized,
         "selected_count": len(_clean_selected_ids(selected_kol_ids)),
@@ -217,14 +296,16 @@ def build_dashboard_kpi(
         "total_exposure": total_exposure,
         "total_followers": _as_int(_row_value(row, "total_followers")),
         "engagement_rate": round(_as_float(_row_value(row, "engagement_rate")), 2),
-        "attributed_gmv": 0.0,
-        "avg_roi": None,
+        "attributed_gmv": revenue["attributed_gmv"],
+        "attributed_gmv_cents": revenue["attributed_gmv_cents"],
+        "attributed_cost": revenue["cost"],
+        "avg_roi": revenue["avg_roi"],
         "counts": counts,
         "metric_source": {
             "exposure": "v_dashboard_account_pool.total_views",
             "engagement": "weighted_real_metrics",
-            "gmv": "not_connected",
-            "roi": "not_connected",
+            "gmv": revenue["gmv_source"],
+            "roi": revenue["roi_source"],
         },
         "totals": {
             "likes": total_likes,

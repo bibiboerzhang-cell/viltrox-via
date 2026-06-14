@@ -114,7 +114,27 @@ export function buildDashboardAccountKpiCards(payload: DashboardAccountKpi | nul
     { icon: '▣', label: 'Active 30D', value: compact(payload.active_30d || 0), meta: '30 天内同步且有内容数据', tone: 'green', status: '真实' },
     { icon: '▥', label: 'Total Exposure', value: dashForZero(exposure), meta: exposure ? 'v_dashboard_account_pool.total_views' : '当前口径暂无播放数据', tone: 'purple', ...realOrEmpty(exposure > 0) },
     { icon: '◇', label: 'Engagement R.', value: engagement ? `${engagement.toFixed(2)}%` : '--', meta: 'likes/comments/shares ÷ views', tone: 'orange', ...realOrEmpty(engagement > 0) },
-    { icon: '$', label: 'Attributed GMV', value: money(payload.attributed_gmv || 0), meta: '待 Shopify 归因接入', tone: 'green', status: '待接入', pending: true },
-    { icon: '¥', label: 'Avg ROI', value: roi(payload.avg_roi), meta: '待成本与订单接入', tone: 'pink', status: '待接入', pending: true },
+    gmvCard(payload),
+    roiCard(payload),
   ];
+}
+
+function gmvCard(payload: DashboardAccountKpi): KpiCard {
+  const gmv = Number(payload.attributed_gmv || 0);
+  const source = payload.metric_source?.gmv || '';
+  if (gmv > 0) {
+    return { icon: '$', label: 'Attributed GMV', value: money(gmv), meta: 'Shopify 已确认归因 (vkpi_sales_attributions)', tone: 'green', status: '真实' };
+  }
+  const meta = source === 'awaiting_data' ? '已连接 · 等待确认归因订单' : '待 Shopify 归因接入';
+  return { icon: '$', label: 'Attributed GMV', value: '--', meta, tone: 'green', status: '待接入', pending: true };
+}
+
+function roiCard(payload: DashboardAccountKpi): KpiCard {
+  const gmv = Number(payload.attributed_gmv || 0);
+  const source = payload.metric_source?.roi || '';
+  if (gmv > 0 && payload.avg_roi !== null && payload.avg_roi !== undefined) {
+    return { icon: '¥', label: 'Avg ROI', value: roi(payload.avg_roi), meta: '(GMV-成本)/成本 · 真实成本台账', tone: 'pink', status: '真实' };
+  }
+  const meta = source === 'awaiting_data' ? '已连接 · 等待确认归因订单' : '待成本与订单接入';
+  return { icon: '¥', label: 'Avg ROI', value: '--', meta, tone: 'pink', status: '待接入', pending: true };
 }

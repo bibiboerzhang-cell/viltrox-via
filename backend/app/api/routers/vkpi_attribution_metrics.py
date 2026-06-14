@@ -243,6 +243,20 @@ def shopify_backfill(body: dict | None = None, staff=Depends(require_tab("vkpi",
     return integrations.shopify_sync_status(body or {}, staff=staff, mode="backfill")
 
 
+@router.get("/shopify/status")
+def shopify_status(
+    limit: int = Query(default=10, ge=1, le=100),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    """Read-only Shopify connection status + recent sync runs for the connect page.
+
+    Does not trigger a sync or fabricate any orders; it only reports whether the
+    SHOPIFY_SHOP_DOMAIN / SHOPIFY_ADMIN_ACCESS_TOKEN env vars are present.
+    """
+    del staff
+    return integrations.shopify_provider_status(limit=limit)
+
+
 @router.get("/alerts")
 def list_alerts(
     status: str = "open",

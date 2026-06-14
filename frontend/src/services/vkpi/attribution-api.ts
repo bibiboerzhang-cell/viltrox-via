@@ -86,6 +86,42 @@ export async function runShopifyBackfill(token: string, payload: Row = {}) {
   return apiFetch<Row>("/api/marketing/shopify/backfill", { method: "POST", body: jsonBody(payload) }, token);
 }
 
+export interface ShopifySyncRun {
+  id?: number;
+  sync_uid?: string;
+  source?: string;
+  started_at?: string;
+  completed_at?: string | null;
+  status?: string;
+  orders_received?: number;
+  orders_matched?: number;
+  orders_unmatched?: number;
+  orders_failed?: number;
+  error_message?: string;
+  triggered_by_staff_id?: number | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ShopifyProviderStatus {
+  provider_status: "configured" | "not_configured";
+  shop_domain?: string;
+  shop_domain_configured?: boolean;
+  access_token_configured?: boolean;
+  webhook_secret_configured?: boolean;
+  env_vars?: Record<string, boolean>;
+  webhooks?: { orders_create?: string; orders_refund_create?: string };
+  sync_runs?: ShopifySyncRun[];
+  message?: string;
+}
+
+export async function getShopifyStatus(token: string, limit = 10) {
+  return apiFetch<ShopifyProviderStatus>(
+    `/api/marketing/shopify/status?limit=${encodeURIComponent(String(limit))}`,
+    {},
+    token,
+  );
+}
+
 export async function listAmazonAttributions(
   token: string,
   options: { staffId?: string; limit?: number } = {},
