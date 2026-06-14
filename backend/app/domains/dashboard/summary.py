@@ -178,6 +178,80 @@ def _build_company_roster_detail() -> dict[str, Any]:
     }
 
 
+def _build_company_window_metrics() -> dict[str, Any]:
+    """官方矩阵(18 个官方账号)真实 30d 窗口指标,供 Dashboard「公司账号」scope 的 Total Exposure / Engagement Rate 消费。
+
+    与 _build_company_roster_detail 同口径(_OFFICIAL_CHANNEL_FILTER_SQL)。两项均为真实数,诚实标注 30d 与 lifetime:
+      - exposure_30d:vkpi_channel_metrics 官方账号近 30 天(latest snapshot 起回溯 30 天)的逐日
+        SUM(GREATEST(views_delta_24h, 0))——真实「30d 新增曝光增量」,绝不取 lifetime total_views 代替。
+        (不用「latest total_views − earliest total_views」:部分账号首条快照为 0 回填,该差值会把 0→lifetime
+         的跳变误计入 30d,远超真实增量;逐日 delta 才诚实。)
+      - engagement_rate:每账号最新一条快照 SUM(total_likes + total_comments) / SUM(total_views),百分比
+        (与全量 evidence ER 同单位:百分数,前端直接 toFixed 显示)。
+    输出键:exposure_30d(int)/ engagement_rate(float 百分数 | None)/ snapshot_days(int)/
+            total_views_lifetime(int,清楚标注为 lifetime,仅作 fallback/审计,默认不展示)。
+    """
+    conn = get_conn()
+    exposure_row = conn.execute(
+        f"""
+        WITH official AS (
+            SELECT c.id FROM vkpi_employee_channels c WHERE {_OFFICIAL_CHANNEL_FILTER_SQL}
+        ),
+        latest AS (
+            SELECT MAX(m.snapshot_date) AS latest_date
+            FROM vkpi_channel_metrics m
+            JOIN official o ON o.id = m.channel_id
+        )
+        SELECT
+            COALESCE(SUM(GREATEST(COALESCE(m.views_delta_24h, 0), 0)), 0) AS exposure_30d,
+            COUNT(DISTINCT m.snapshot_date) AS snapshot_days
+        FROM vkpi_channel_metrics m
+        JOIN official o ON o.id = m.channel_id
+        CROSS JOIN latest
+        WHERE latest.latest_date IS NOT NULL
+          AND m.snapshot_date > latest.latest_date - INTERVAL '30 days'
+          AND m.snapshot_date <= latest.latest_date
+        """
+    ).fetchone()
+
+    engagement_row = conn.execute(
+        f"""
+        WITH official AS (
+            SELECT c.id FROM vkpi_employee_channels c WHERE {_OFFICIAL_CHANNEL_FILTER_SQL}
+        ),
+        latest_snap AS (
+            SELECT m.total_views, m.total_likes, m.total_comments
+            FROM vkpi_channel_metrics m
+            JOIN official o ON o.id = m.channel_id
+            WHERE m.id = (
+                SELECT mm.id FROM vkpi_channel_metrics mm
+                WHERE mm.channel_id = m.channel_id
+                ORDER BY mm.snapshot_date DESC, mm.captured_at DESC, mm.id DESC
+                LIMIT 1
+            )
+        )
+        SELECT
+            COALESCE(SUM(total_likes), 0) AS total_likes,
+            COALESCE(SUM(total_comments), 0) AS total_comments,
+            COALESCE(SUM(total_views), 0) AS total_views
+        FROM latest_snap
+        """
+    ).fetchone()
+
+    exposure_30d = _as_int(_row_value(exposure_row, "exposure_30d"))
+    snapshot_days = _as_int(_row_value(exposure_row, "snapshot_days"))
+    likes = _as_int(_row_value(engagement_row, "total_likes"))
+    comments = _as_int(_row_value(engagement_row, "total_comments"))
+    views_lifetime = _as_int(_row_value(engagement_row, "total_views"))
+    engagement_rate = ((likes + comments) / views_lifetime * 100) if views_lifetime > 0 else None
+    return {
+        "exposure_30d": exposure_30d,
+        "engagement_rate": engagement_rate,
+        "snapshot_days": snapshot_days,
+        "total_views_lifetime": views_lifetime,
+    }
+
+
 def _build_roster_detail(active_roster_by_scope: dict[str, int]) -> dict[str, Any]:
     total_pool_row = get_conn().execute("SELECT COUNT(*) AS count FROM vkpi_kol_pool").fetchone()
     total_pool = _as_int(_row_value(total_pool_row, "count"))
@@ -736,6 +810,20 @@ def build_dashboard_summary(
     summary["exposure_30d_by_scope"] = window_metrics["exposure_30d_by_scope"]
     summary["engagement_rate_by_scope"] = window_metrics["engagement_rate_by_scope"]
     summary["active_30d_by_scope"] = window_metrics["active_30d_by_scope"]
+    # 公司账号(官方矩阵)真实 30d 窗口指标——additive 覆盖 company/owned 键。
+    # post-level snapshot 未满 30d 前 window_metrics.owned 为 null(走「累积中」),
+    # 但 channel-level vkpi_channel_metrics 已有 ~30d 真实快照,可诚实算出官方 30d 曝光增量与互动率。
+    # 仅写 company/owned,绝不动 all/kol(KOL 窗口仍未就绪)。
+    company_window = _build_company_window_metrics()
+    company_exposure_30d = company_window.get("exposure_30d")
+    company_engagement_rate = company_window.get("engagement_rate")
+    if company_exposure_30d is not None:
+        summary["exposure_30d_by_scope"]["company"] = company_exposure_30d
+        summary["exposure_30d_by_scope"]["owned"] = company_exposure_30d
+    if company_engagement_rate is not None:
+        summary["engagement_rate_by_scope"]["company"] = company_engagement_rate
+        summary["engagement_rate_by_scope"]["owned"] = company_engagement_rate
+    summary["company_window_metrics"] = company_window
     if official_summary:
         result["official_matrix_summary"] = official_summary
         summary["official_account_count"] = official_summary["account_count"]

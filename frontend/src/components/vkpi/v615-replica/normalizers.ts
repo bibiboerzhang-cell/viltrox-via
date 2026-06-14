@@ -336,13 +336,16 @@ export function normalizeDashboardMetrics(bundle, kolRows = []) {
       all: totalExposure != null ? metricData(totalExposure, "#a855f7", { source: "evidence_metrics", sourceLabel: "实时", trend: evidenceCoverageText, anomaly: exposureAnomaly ? SINGLE_SOURCE_WARNING : null }) : windowMetricData(number(exposureByScope.all), "#a855f7", dashboard, "all", { waiting: `${maturityLabel(dashboard, "all")} · 不使用 lifetime 代替 30d` }),
       // 2026-06-12 波3 R6:KOL 口径不再复用全量 totalExposure(避免「KOL 曝光=全部曝光」假象)
       kol: windowMetricData(number(exposureByScope.kol), "#ec4899", dashboard, "kol", { waiting: `${maturityLabel(dashboard, "kol")} · KOL 30d 曝光累计中(不复用全量口径)` }),
-      company: windowMetricData(number(exposureByScope.owned ?? exposureByScope.company), "#06b6d4", dashboard, "company", { waiting: `${maturityLabel(dashboard, "company")} · 官方 30d 曝光累计中` }),
+      // 官方矩阵 channel-level 30d 真实增量(summary.exposure_30d_by_scope.owned/company,由 _build_company_window_metrics 写入);
+      // 后端给到非 null 即走实时,否则回退到原「累积中」窗口口径。镜像 active-30d.company 的 owned_matrix 模式。
+      company: number(exposureByScope.owned ?? exposureByScope.company) != null ? metricData(number(exposureByScope.owned ?? exposureByScope.company), "#06b6d4", { source: "owned_matrix", sourceLabel: "实时", trend: "实时 · 官方矩阵 30d" }) : windowMetricData(number(exposureByScope.owned ?? exposureByScope.company), "#06b6d4", dashboard, "company", { waiting: `${maturityLabel(dashboard, "company")} · 官方 30d 曝光累计中` }),
     },
     engagement: {
       all: engagementPercent != null ? metricData(engagementPercent, "#a855f7", { source: "evidence_metrics", sourceLabel: "实时", trend: evidenceVideoText, anomaly: engagementAnomaly ? SINGLE_SOURCE_WARNING : null }) : windowMetricData(number(engagementByScope.all), "#a855f7", dashboard, "all", { waiting: `${maturityLabel(dashboard, "all")} · 互动率累计中` }),
       // 2026-06-12 波3 R6:KOL 口径不再复用全量 engagementPercent
       kol: windowMetricData(number(engagementByScope.kol), "#ec4899", dashboard, "kol", { waiting: `${maturityLabel(dashboard, "kol")} · KOL 互动率累计中(不复用全量口径)` }),
-      company: windowMetricData(number(engagementByScope.owned ?? engagementByScope.company), "#06b6d4", dashboard, "company", { waiting: `${maturityLabel(dashboard, "company")} · 官方互动率累计中` }),
+      // 官方矩阵最新快照真实互动率(summary.engagement_rate_by_scope.owned/company,百分数,由 _build_company_window_metrics 写入)。
+      company: number(engagementByScope.owned ?? engagementByScope.company) != null ? metricData(number(engagementByScope.owned ?? engagementByScope.company), "#06b6d4", { source: "owned_matrix", sourceLabel: "实时", trend: "实时 · 官方互动率" }) : windowMetricData(number(engagementByScope.owned ?? engagementByScope.company), "#06b6d4", dashboard, "company", { waiting: `${maturityLabel(dashboard, "company")} · 官方互动率累计中` }),
     },
     gmv: {
       all: metricData(null, "#fbbf24", { waiting: "待 Shopify 订单接入" }),
