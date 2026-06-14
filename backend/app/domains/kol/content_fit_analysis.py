@@ -44,7 +44,7 @@ MAX_OUTPUT_TOKENS = 1400
 LLM_PURPOSE = "vkpi_kol_content_fit"
 LLM_COST_TAG = "vkpi_kol_content_fit"
 # 主依据是画面/故事 → 必须非 flash(flash 会截断长 final_v1 上下文)。openai/anthropic 皆可。
-PREFERRED_PROVIDER = "anthropic"
+PREFERRED_PROVIDER = "openai"  # GPT:走代理可达、长上下文稳;anthropic 本环境被墙、google=flash 会截断长 final_v1
 
 
 def _utcnow() -> str:
@@ -236,7 +236,7 @@ def _resolve_product(product_sku: str | None, product_persona: str | None) -> di
                         "marketing_name": str(prod.get("marketing_name") or ""),
                         "category_main": str(prod.get("category_main") or ""),
                         "category_detail": str(prod.get("category_detail") or ""),
-                        "price_usd": prod.get("price_usd"),
+                        "price_usd": float(prod["price_usd"]) if prod.get("price_usd") is not None else None,
                         "description": _text(prod.get("description"), 800),
                     }
         except Exception:
@@ -397,7 +397,7 @@ def _write_cache(
             str(int(kol_pool_id)),
             str(model or "llm_gateway"),
             DERIVE_METHOD,
-            json.dumps(result, ensure_ascii=False),
+            json.dumps(result, ensure_ascii=False, default=str),
             float(cost_usd or 0.0),
             int(triggered_by_user_id) if triggered_by_user_id else None,
             now,
@@ -482,20 +482,27 @@ def analyze_content_fit(
 
     prompt = _build_prompt(kol, product, videos, comments, dimensions)
     triggered_by_user_id = (staff or {}).get("user_id")
-    resp = llm_gateway.invoke(
-        prompt,
-        purpose=LLM_PURPOSE,
-        max_output_tokens=MAX_OUTPUT_TOKENS,
-        preferred_provider=PREFERRED_PROVIDER,
-        cost_tag=LLM_COST_TAG,
-        staff=staff or {},
-        metadata={
-            "kol_pool_id": kid,
-            "video_count": len(videos),
-            "comment_count": len(comments),
-            "product_mode": product.get("mode"),
-        },
-    )
+    # provider 在本环境间歇掉线(Remote end closed / 超时),单次调用 ~50% 落 rule_v0;
+    # 重试至多 3 次到拿到 success+text 为止(纯重试,不绕预算闸、不改红线)。
+    resp: dict[str, Any] = {}
+    for _attempt in range(3):
+        resp = llm_gateway.invoke(
+            prompt,
+            purpose=LLM_PURPOSE,
+            max_output_tokens=MAX_OUTPUT_TOKENS,
+            preferred_provider=PREFERRED_PROVIDER,
+            cost_tag=LLM_COST_TAG,
+            staff=staff or {},
+            metadata={
+                "kol_pool_id": kid,
+                "video_count": len(videos),
+                "comment_count": len(comments),
+                "product_mode": product.get("mode"),
+                "attempt": _attempt + 1,
+            },
+        )
+        if str(resp.get("status") or "") == "success" and str(resp.get("text") or "").strip():
+            break
 
     text = str(resp.get("text") or "").strip()
     if resp.get("status") != "success" or not text:
