@@ -1099,6 +1099,20 @@ async def execute_smart_search_profile_advance_pipeline(
             )
         except Exception as exc:
             content_fit = {"status": "error", "reason": str(exc)[:300]}
+    # Lane D(用户裁令「搜索时顺带懒抓」):对搜索召回的、**缺视频**的库内候选,顺带抓少数 account_deep,
+    # 成本摊到未来、按需、自动优先真被搜到的人(不一次性全量烧 $660)。入队失败不阻断 pipeline。
+    video_backfill: dict[str, Any] | None = None
+    if bool(payload.get("include_lazy_video_backfill", True)):
+        try:
+            from app.domains.kol import video_backfill_enqueue
+
+            video_backfill = video_backfill_enqueue.enqueue_lazy_video_backfill_for_session(
+                session_id=int(session_id),
+                top_n=max(1, min(_int(payload.get("lazy_video_backfill_top_n"), video_backfill_enqueue.DEFAULT_TOP_N), video_backfill_enqueue.MAX_TOP_N)),
+                staff=None,
+            )
+        except Exception as exc:
+            video_backfill = {"status": "error", "reason": str(exc)[:300]}
     pipeline_status = "failed" if advance_result.get("status") == "failed" else "ready"
     search_sessions.update_session_result_summary(
         int(session_id),
