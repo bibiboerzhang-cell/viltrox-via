@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS idx_vkpi_analysis_cache_kol_content_fit;

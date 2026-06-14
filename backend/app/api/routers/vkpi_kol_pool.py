@@ -1271,6 +1271,35 @@ def get_pool_item_llm_deep_analysis(
     return kol_llm_deep_analysis.get_kol_llm_deep_analysis(int(kol_pool_id), limit=limit)
 
 
+@router.get("/kol-pool/{kol_pool_id}/content-fit")
+def get_pool_item_content_fit(
+    kol_pool_id: int,
+    analyze: bool = Query(default=False),
+    force: bool = Query(default=False),
+    product_sku: str | None = Query(default=None),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """地基B 内容契合深析(content_fit_v1):读该 KOL 视频画面/故事 + 评论的契合判断。
+
+    默认只读已缓存结果(不烧 LLM);analyze=true 才按需触发深析(读已有视频分析+评论
+    → llm_gateway 非 flash → 落 cache)。force=true 重算。红线:零触 viltrox_fit_score,
+    不新跑 Gemini 视频分析;无视频证据返回 status='insufficient_evidence'(诚实不杜撰)。
+    """
+    from app.domains.kol import content_fit_analysis as kol_content_fit
+
+    try:
+        if analyze or force:
+            return kol_content_fit.analyze_content_fit(
+                int(kol_pool_id),
+                product_sku,
+                force=bool(force),
+                staff=staff if isinstance(staff, dict) else None,
+            )
+        return kol_content_fit.get_content_fit(int(kol_pool_id))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.get("/task-queue")
 def get_vkpi_task_queue(
     limit: int = Query(default=50, ge=1, le=100),

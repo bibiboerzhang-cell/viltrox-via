@@ -11,7 +11,7 @@ import { GeoTierChip } from "./GeoTierChip";
 import { KPAvatar } from "./KPAvatar";
 import { KOLVideoAnalysisPanel } from "./KOLVideoAnalysisPanel";
 import { PlatformPill } from "./PlatformPill";
-import { enqueueVideoAnalysis, getKolPoolDimensions11, getKolPoolLlmDeepAnalysis } from "../../../../services/vkpi/kolPool-api";
+import { enqueueVideoAnalysis, getKolPoolContentFit, getKolPoolDimensions11, getKolPoolLlmDeepAnalysis } from "../../../../services/vkpi/kolPool-api";
 import { candidateKindGroup } from "../lib/candidateKind";
 import { formatNumber, formatPercent } from "../lib/format";
 import { BRAND_TIER } from "../data/brandTier";
@@ -585,6 +585,10 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
   const [videoAnalysisSummary, setVideoAnalysisSummary] = React.useState(null);
   const [videoEnqueueState, setVideoEnqueueState] = React.useState({ status: "idle", message: "" });
   const [activeRepresentativeVideo, setActiveRepresentativeVideo] = React.useState(null);
+  // 地基B 内容契合深析(content_fit_v1):默认只读缓存;点击才按需触发深析(不烧 LLM 直到点击)。
+  const [contentFit, setContentFit] = React.useState(null);
+  const [contentFitBusy, setContentFitBusy] = React.useState(false);
+  const [contentFitError, setContentFitError] = React.useState("");
   React.useEffect(() => {
     const bundleRecord = recordOr(detailBundle);
     if (bundleRecord.status === "ready") {
@@ -625,6 +629,47 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
     setVideoEnqueueState({ status: "idle", message: "" });
     setActiveRepresentativeVideo(null);
   }, [item?.id]);
+
+  // 内容契合深析:开抽屉先只读已有缓存(不烧 LLM);无缓存则留待用户点击触发。
+  React.useEffect(() => {
+    setContentFit(null);
+    setContentFitError("");
+    setContentFitBusy(false);
+    if (!apiToken || !item?.id) return;
+    let cancelled = false;
+    void getKolPoolContentFit(apiToken, item.id)
+      .then((payload) => {
+        if (cancelled) return;
+        setContentFit(payload && payload.state === "ready" ? payload : null);
+      })
+      .catch(() => {
+        if (!cancelled) setContentFit(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [apiToken, item?.id]);
+
+  const handleContentFitAnalyze = (force = false) => {
+    if (!apiToken || !item?.id || contentFitBusy) return;
+    setContentFitBusy(true);
+    setContentFitError("");
+    void getKolPoolContentFit(apiToken, item.id, { analyze: true, force })
+      .then((payload) => {
+        if (payload && payload.state === "ready") {
+          setContentFit(payload);
+        } else {
+          setContentFit(null);
+          setContentFitError(
+            payload?.status === "insufficient_evidence"
+              ? "该 KOL 暂无可用视频分析证据,无法做内容契合深析(不杜撰)。"
+              : "深析未产出(可能 LLM 暂不可达),请稍后重试。",
+          );
+        }
+      })
+      .catch(() => setContentFitError("深析请求失败,请稍后重试。"))
+      .finally(() => setContentFitBusy(false));
+  };
 
   if (!item) return null;
   const devices = {
@@ -1016,6 +1061,70 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
         )
       ),
       e(KOLVideoAnalysisPanel, { apiToken, videos: videoAnalysisVideos, preloadedBundles: preloadedVideoAnalysisBundles, summary: videoAnalysisSummary }),
+      // 地基B:内容契合深析(content_fit_v1)——基于视频画面/故事 + 评论的适配判断(胜过粉丝数)。
+      apiToken && item.id && e("div", { className: "px-5 py-4 border-b border-white/[0.06]" },
+        e("div", { className: "flex items-center gap-1.5 mb-2" },
+          e(Sparkles, { size: 11, className: "text-cyan-300" }),
+          e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "内容契合深析"),
+          e("span", { className: "text-[9px] text-slate-600" }, "基于视频画面/故事 + 评论 · 胜过粉丝数"),
+          e("button", {
+            className: "ml-auto rounded-md border border-cyan-300/25 bg-cyan-300/[0.08] px-2 py-1 text-[10px] font-medium text-cyan-100 hover:bg-cyan-300/[0.16] disabled:opacity-50",
+            disabled: contentFitBusy,
+            onClick: () => handleContentFitAnalyze(Boolean(contentFit)),
+            title: contentFit ? "重新深析(force,重算 LLM)" : "按需触发深析(读已有视频分析+评论,经 LLM 综合)",
+          }, contentFitBusy ? "深析中…" : contentFit ? "重新深析" : "开始深析")
+        ),
+        contentFitError && e("div", { className: "text-[10px] text-amber-300/90 mb-2" }, contentFitError),
+        !contentFit && !contentFitError && !contentFitBusy && e("div", { className: "text-[11px] text-slate-500" },
+          "尚无内容契合深析结果。点击「开始深析」基于该 KOL 过往视频的画面/故事与粉丝评论生成适配判断。"
+        ),
+        contentFit && (() => {
+          const r = recordOr(contentFit.result);
+          const verdict = String(r.fit_verdict || "");
+          const verdictColor = verdict === "fit" ? "text-emerald-300" : verdict === "not_fit" ? "text-red-300" : "text-amber-300";
+          const verdictLabel = verdict === "fit" ? "适合" : verdict === "not_fit" ? "不适合" : verdict === "partial_fit" ? "部分适合" : (verdict || "—");
+          const reasons = asArray(r.fit_reasons);
+          const basis = recordOr(r.evidence_basis);
+          return e("div", { className: "space-y-2.5" },
+            // 创作者类型 + 判定 + 置信度
+            e("div", { className: "flex items-center flex-wrap gap-2" },
+              e("span", { className: "px-1.5 py-0.5 rounded text-[9px] font-medium uppercase tracking-wider bg-cyan-300/[0.10] text-cyan-200" }, "创作者类型"),
+              e("span", { className: "text-[12px] text-white font-medium" }, r.creator_type || "—"),
+              e("span", { className: "ml-auto flex items-center gap-1 text-[11px] " + verdictColor },
+                e(Target, { size: 11 }), verdictLabel,
+                e("span", { className: "text-slate-500" }, "· 置信 " + fixedOrDash(r.confidence, 2))
+              )
+            ),
+            // 过往视频画面/故事综述
+            r.content_summary && e("div", null,
+              e("div", { className: "text-[10px] text-slate-500 mb-0.5" }, "过往视频画面/故事综述"),
+              e("div", { className: "text-[11px] text-slate-300 leading-relaxed" }, r.content_summary)
+            ),
+            // 受众信号(评论)
+            r.audience_signal && e("div", null,
+              e("div", { className: "flex items-center gap-1 text-[10px] text-slate-500 mb-0.5" },
+                e(Heart, { size: 9, className: "text-rose-300/80" }), "受众信号(粉丝评论)"
+              ),
+              e("div", { className: "text-[11px] text-slate-300 leading-relaxed" }, r.audience_signal)
+            ),
+            // 逐条契合理由(基于内容证据)
+            reasons.length > 0 && e("div", null,
+              e("div", { className: "text-[10px] text-slate-500 mb-1" }, "契合判断(逐条基于内容证据)"),
+              e("ul", { className: "space-y-1" },
+                reasons.map((reason, i) => e("li", { key: i, className: "flex gap-1.5 text-[11px] text-slate-300 leading-relaxed" },
+                  e("span", { className: "text-cyan-400/70 mt-px" }, "·"),
+                  e("span", null, String(reason))
+                ))
+              )
+            ),
+            // 证据基础脚注
+            e("div", { className: "text-[9px] text-slate-600 tabular-nums pt-1" },
+              "依据 " + (basis.video_count ?? 0) + " 条视频分析 · " + (basis.comment_count ?? 0) + " 条评论"
+              + (contentFit.model ? " · " + String(contentFit.model) : "")
+            )
+          );
+        })()
+      ),
       devices.camera_body && e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
         e("div", { className: "flex items-center gap-1.5 mb-2" },
           e(Camera, { size: 11, className: "text-slate-400" }),
