@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { BadgeCheck, Clock3, Database, Link2, Loader2, Search, Sparkles, TrendingUp, UserPlus, Video } from "lucide-react";
+import { BadgeCheck, Clock3, Database, Info, Link2, Loader2, Search, Sparkles, TrendingUp, UserPlus, Video } from "lucide-react";
 
 import {
   deepCrawlKolUrl,
@@ -20,6 +20,9 @@ type Mode = "idle" | "url" | "text";
 type State = "idle" | "loading" | "ready" | "executing" | "error";
 type Row = Record<string, unknown>;
 const PENDING_SEARCH_SESSION_KEY = "vkpi:pendingKolSearchSessionId";
+// 搜索展示态持久化:把当前激活搜索的 ①②③ 显示态存进 sessionStorage,挂载时回填。
+// 即便父级 90s/10min 刷新偶发重挂本面板(useState 归零),也能恢复结果,不让用户的搜索凭空消失。
+const ACTIVE_SEARCH_DISPLAY_KEY = "vkpi:activeKolSearchDisplay";
 
 function cleanText(value: unknown): string {
   return String(value ?? "").replace(/\s+/g, " ").trim();
@@ -27,6 +30,41 @@ function cleanText(value: unknown): string {
 
 function asRecord(value: unknown): Row {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Row : {};
+}
+
+// 搜索展示态的持久化形状(只存渲染所需,够回填 ①②③ 与轮询续接)。
+type PersistedSearchDisplay = {
+  input: string;
+  mode: Mode;
+  recallResult: VkpiKolRecallResponse | null;
+  urlResult: VkpiKolUrlDeepCrawlResponse | null;
+  activeSearchSession: VkpiKolSearchHistoryItem | null;
+  activeSearchSessionId: number | null;
+};
+
+function readPersistedSearchDisplay(): PersistedSearchDisplay | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(ACTIVE_SEARCH_DISPLAY_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PersistedSearchDisplay;
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writePersistedSearchDisplay(value: PersistedSearchDisplay | null): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (!value) {
+      window.sessionStorage.removeItem(ACTIVE_SEARCH_DISPLAY_KEY);
+      return;
+    }
+    window.sessionStorage.setItem(ACTIVE_SEARCH_DISPLAY_KEY, JSON.stringify(value));
+  } catch {
+    // 配额/隐私模式失败时静默:持久化只是兜底,失败不影响实时搜索。
+  }
 }
 
 // YouTube embed:复用 KOLDetailDrawer 的 youtube-nocookie 格式(B:视频结果区可播放)。
@@ -1085,14 +1123,17 @@ export function SmartKolInputPanel({
   onRecallItems?: (items: VkpiKolRecallItem[]) => void;
   onOpenRecallItem?: (item: VkpiKolRecallItem) => void;
 }) {
-  const [input, setInput] = useState("");
-  const [state, setState] = useState<State>("idle");
-  const [mode, setMode] = useState<Mode>("idle");
-  const [urlResult, setUrlResult] = useState<VkpiKolUrlDeepCrawlResponse | null>(null);
-  const [recallResult, setRecallResult] = useState<VkpiKolRecallResponse | null>(null);
+  // 挂载时回填上次激活搜索的展示态(sessionStorage),让 90s/10min 父刷新若偶发重挂本面板时
+  // ①②③ 结果与轮询不凭空消失;无持久化则回到正常初始态。
+  const persistedDisplay = useMemo(() => readPersistedSearchDisplay(), []);
+  const [input, setInput] = useState(() => persistedDisplay?.input ?? "");
+  const [state, setState] = useState<State>(() => (persistedDisplay?.recallResult || persistedDisplay?.urlResult ? "ready" : "idle"));
+  const [mode, setMode] = useState<Mode>(() => persistedDisplay?.mode ?? "idle");
+  const [urlResult, setUrlResult] = useState<VkpiKolUrlDeepCrawlResponse | null>(() => persistedDisplay?.urlResult ?? null);
+  const [recallResult, setRecallResult] = useState<VkpiKolRecallResponse | null>(() => persistedDisplay?.recallResult ?? null);
   const [advanceResult, setAdvanceResult] = useState<VkpiKolSmartSearchProfileAdvanceResponse | null>(null);
-  const [activeSearchSessionId, setActiveSearchSessionId] = useState<number | null>(null);
-  const [activeSearchSession, setActiveSearchSession] = useState<VkpiKolSearchHistoryItem | null>(null);
+  const [activeSearchSessionId, setActiveSearchSessionId] = useState<number | null>(() => persistedDisplay?.activeSearchSessionId ?? null);
+  const [activeSearchSession, setActiveSearchSession] = useState<VkpiKolSearchHistoryItem | null>(() => persistedDisplay?.activeSearchSession ?? null);
   const [sessionPollNotice, setSessionPollNotice] = useState("");
   const [historyItems, setHistoryItems] = useState<VkpiKolSearchHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -1159,6 +1200,10 @@ export function SmartKolInputPanel({
   const activeSessionSummary = asRecord(activeSearchSession?.result_summary);
   const activeSmartJob = asRecord(activeSessionSummary.smart_search_profile_advance_job);
   const activeSessionStatus = cleanText(activeSmartJob.advance_status || activeSmartJob.status || activeSearchSession?.status);
+  // F-display:AI 规划退回基础检索的诚实提示。读 result_summary.smart_search_profile_advance_job
+  // .query_plan_source ∈ {llm_plan, rule_v0_fallback};仅当存在且等于 rule_v0_fallback 才提示,
+  // 字段缺失/为 llm_plan 时静默不渲染(graceful absence,不编造)。
+  const plannerFellBack = cleanText(activeSmartJob.query_plan_source) === "rule_v0_fallback";
   // 诚实会话横幅(排队/查找中/已完成/部分完成/未完成)——只读后端真有字段,见 sessionStatusBanner。
   // advanceResult?.status:queueTextAdvance 刚返回、尚未首拍轮询时的即时状态兜底(queued/...)。
   const sessionBanner = useMemo(
@@ -1169,6 +1214,16 @@ export function SmartKolInputPanel({
   useEffect(() => {
     if (recallItems.length) onRecallItems?.(recallItems);
   }, [recallItems, onRecallItems]);
+
+  // 搜索展示态持久化:任一 ①②③ 相关态变化就写回 sessionStorage(兜底重挂恢复);
+  // 全空(无召回/无 URL 结果/无激活会话)时清掉,避免回填到一个空壳搜索框。
+  useEffect(() => {
+    if (!recallResult && !urlResult && !activeSearchSession && !activeSearchSessionId) {
+      writePersistedSearchDisplay(null);
+      return;
+    }
+    writePersistedSearchDisplay({ input, mode, recallResult, urlResult, activeSearchSession, activeSearchSessionId });
+  }, [input, mode, recallResult, urlResult, activeSearchSession, activeSearchSessionId]);
 
   const refreshHistory = useCallback(async () => {
     if (!apiToken) {
@@ -1209,27 +1264,45 @@ export function SmartKolInputPanel({
   }, []);
 
   const applyPolledSession = useCallback((session: VkpiKolSearchHistoryItem) => {
-    setActiveSearchSession(session);
     const queryType = cleanText(session.query_type);
     if (queryType === "url_video" || queryType === "url_profile") {
+      setActiveSearchSession(session);
       setMode("url");
       setUrlResult(urlResultFromSession(session));
       setRecallResult(null);
       return;
     }
     setMode("text");
-    // 非破坏式覆盖:run() 触发的全网发现会建一个 advance 会话并启动轮询,其 recall items 由后台
-    // worker 异步写入,轮询头几拍常拿到 running/空会话。若无条件覆盖,会把 run() 首屏已渲染的库内
-    // 召回(框2)刷成空 → 看起来「用户列表整块消失」。故:空轮询不得覆盖已有的非空召回(保住首屏);
+    // 框3(全网发现)非破坏式覆盖:discoveryItems 派生自 activeSearchSession 的 new_creator 项;
+    // 轮询头几拍常拿到尚无发现项的会话快照(running/部分写入)。若无条件覆盖,会把已点亮的框3
+    // 刷成空 → 看起来「全网发现整块消失」。故:已有发现项时,空发现的轮询快照不覆盖会话(保住框3);
+    // 但仍合并后端最新 result_summary/status,让横幅与计数继续推进。
+    setActiveSearchSession((prev) => {
+      const prevDiscovery = discoveryItemsFromSession(prev).length;
+      const nextDiscovery = discoveryItemsFromSession(session).length;
+      if (prevDiscovery > 0 && nextDiscovery === 0) {
+        return { ...prev, status: session.status, result_summary: session.result_summary };
+      }
+      return session;
+    });
+    // 框2(库内召回)非破坏式覆盖:run() 触发的全网发现会建一个 advance 会话并启动轮询,其 recall
+    // items 由后台 worker 异步写入,轮询头几拍常拿到 running/空会话。若无条件覆盖,会把 run() 首屏已
+    // 渲染的库内召回刷成空 → 看起来「用户列表整块消失」。故:空轮询不得覆盖已有的非空召回(保住首屏);
     // 但当前无召回(null/空)时仍允许用轮询结果点亮结果区,以便框3 全网发现能显示。
+    // 框1(产品人群分析)保活:recallResultFromSession 不带 llm_query_plan(那只在实时 smartKolSearch
+    // 响应里有),若直接替换会把已渲染的 ① PlanPills 刷没 → 单独把上次的 llm_query_plan 透传进来。
     const polledRecall = recallResultFromSession(session);
     const polledRecallCount =
       (polledRecall.buckets?.creator?.length || 0) + (polledRecall.buckets?.reviewer?.length || 0);
     setRecallResult((prev) => {
       const prevCount =
         (prev?.buckets?.creator?.length || 0) + (prev?.buckets?.reviewer?.length || 0);
+      const prevPlan = (prev as Row | null)?.llm_query_plan;
+      const merged = prevPlan && !(polledRecall as unknown as Row).llm_query_plan
+        ? ({ ...polledRecall, llm_query_plan: prevPlan } as VkpiKolRecallResponse)
+        : polledRecall;
       if (polledRecallCount === 0 && prevCount > 0) return prev;
-      return polledRecall;
+      return merged;
     });
     setUrlResult(null);
   }, []);
@@ -1565,6 +1638,12 @@ export function SmartKolInputPanel({
                 >编辑</button>
               ) : null}
             </div>
+            {plannerFellBack ? (
+              <div className="mb-1.5 flex items-start gap-1.5 rounded-md border border-amber-300/20 bg-amber-400/[0.07] px-2 py-1.5 text-[10px] leading-relaxed text-amber-100/90">
+                <Info size={11} className="mt-0.5 shrink-0" />
+                <span>AI 规划暂不可用,已用基础检索匹配。下方结果可正常查看,稍后可重试以获得更精准的人群理解。</span>
+              </div>
+            ) : null}
             {personaEditing ? (
               <div className="space-y-1.5">
                 <textarea
