@@ -987,7 +987,15 @@ export function SmartKolInputPanel({
   const recallItems = useMemo(() => recallTopItems(recallResult), [recallResult]);
   const llmPlan = asRecord((recallResult as Row | null)?.llm_query_plan);
   // 三框·框3:全网发现项(new_creator)从在役 advance 会话抽取,与框2 库内召回分开展示。
-  const discoveryItems = useMemo(() => discoveryItemsFromSession(activeSearchSession), [activeSearchSession]);
+  const discoveryItems = useMemo(() => {
+    const all = discoveryItemsFromSession(activeSearchSession);
+    // 平台筛选即时生效:按当前勾选的 discoveryPlatforms 过滤已展示的发现结果(不必重搜)。
+    // platform 字段缺失的未分类项放行,避免因字段缺失误藏。全不勾选时仅余未分类项。
+    return all.filter((it) => {
+      const p = String(it.platform || "").toLowerCase();
+      return !p || discoveryPlatforms.includes(p);
+    });
+  }, [activeSearchSession, discoveryPlatforms]);
   // 三框·框1:LLM 人群理解可编辑(防 LLM 理解偏)——编辑后「用此重搜」。
   const [personaEditing, setPersonaEditing] = useState(false);
   const [personaDraft, setPersonaDraft] = useState("");
