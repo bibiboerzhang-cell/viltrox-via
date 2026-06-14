@@ -235,6 +235,25 @@ export async function deleteEvent(
   );
 }
 
+export interface VkpiEventDetail {
+  item: VkpiEvent | null;
+  tasks: VkpiEventTask[];
+  expenses: VkpiEventExpense[];
+  invites: VkpiEventKolInvite[];
+}
+
+/** GET 单活动详情(item + 内嵌 tasks/expenses/invites)。 */
+export async function getEventDetail(
+  token: string,
+  eventId: string,
+): Promise<VkpiEventDetail> {
+  return apiFetch<VkpiEventDetail>(
+    `/api/admin/vkpi/events/${encodeURIComponent(eventId)}`,
+    {},
+    token,
+  );
+}
+
 export async function addEventTask(
   token: string,
   eventId: string,
@@ -481,4 +500,145 @@ export function fromUiUpdate(ui: Record<string, any>): VkpiEventUpdatePayload {
   if (ui.roi !== undefined) out.roi = ui.roi;
   if (ui.retrospective !== undefined) out.retrospective = ui.retrospective;
   return out;
+}
+
+// ── Detail-tab adapters:后端 snake_case ↔ tab 期望的 camelCase ───────────────
+// TasksTab / BudgetExpensesTab / KolsTab 用 dueDate/doneAt/paidBy/kolId… 形态;
+// 后端是 due_date/done_at/paid_by/kol_id…。注:后端无 expense.date/receipt 列,
+// 用 created_at 派生展示日期;notes 收纳进 task.details.notes。
+
+export interface UiEventTask {
+  id: string;
+  phase: string;
+  title: string;
+  owner: string;
+  collaborators: string[];
+  dueDate: string;
+  kind?: string;
+  checklist?: Array<{ label: string; done: boolean; value?: string }>;
+  details?: Record<string, unknown>;
+  notes?: string;
+  done: boolean;
+  doneAt?: string;
+  doneBy?: string;
+}
+
+/** 后端 due_date(可能是 ISO / "MM/DD" / 空)→ tab 显示用短日期 "M/D"。 */
+function shortDate(raw: unknown): string {
+  if (!raw) return "";
+  const s = String(raw);
+  // 已是 "M/D" 之类的就原样返回
+  if (/^\d{1,2}\/\d{1,2}/.test(s)) return s;
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return s;
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+/** 后端 created_at(ISO)→ "M/D HH:MM" 展示。 */
+function shortDateTime(raw: unknown): string {
+  if (!raw) return "";
+  const d = new Date(String(raw));
+  if (Number.isNaN(d.getTime())) return String(raw);
+  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+export function toUiTask(row: VkpiEventTask): UiEventTask {
+  const details = (row.details && typeof row.details === "object" ? row.details : {}) as Record<string, unknown>;
+  return {
+    id: row.id,
+    phase: row.phase || "prep",
+    title: row.title || "",
+    owner: row.owner || "All",
+    collaborators: Array.isArray(row.collaborators) ? row.collaborators : [],
+    dueDate: shortDate(row.due_date),
+    kind: row.kind || undefined,
+    checklist: Array.isArray(row.checklist) ? row.checklist : undefined,
+    details,
+    notes: typeof details.notes === "string" ? details.notes : undefined,
+    done: !!row.done,
+    doneAt: row.done_at ? shortDate(row.done_at) : undefined,
+    doneBy: row.done_by || undefined,
+  };
+}
+
+/** NewTaskModal onSubmit(camel)→ 创建 payload(snake);notes 折叠进 details.notes。 */
+export function fromUiTaskCreate(t: Record<string, any>): VkpiEventTaskCreatePayload {
+  const details: Record<string, unknown> = { ...(t.details || {}) };
+  if (t.notes) details.notes = t.notes;
+  return {
+    title: String(t.title || ""),
+    phase: String(t.phase || "prep"),
+    owner: String(t.owner || "All"),
+    collaborators: Array.isArray(t.collaborators) ? t.collaborators : [],
+    due_date: t.dueDate ? String(t.dueDate) : "",
+    kind: t.kind || undefined,
+    checklist: Array.isArray(t.checklist) ? t.checklist : undefined,
+    details,
+  };
+}
+
+export interface UiEventExpense {
+  id: string;
+  amount: number;
+  category: string;
+  description: string;
+  paidBy: string;
+  paymentMethod: string;
+  reimbursementStatus: string;
+  date: string;
+  receipt: boolean;
+}
+
+export function toUiExpense(row: VkpiEventExpense): UiEventExpense {
+  return {
+    id: row.id,
+    amount: Number(row.amount || 0),
+    category: row.category || "other",
+    description: row.description || "",
+    paidBy: row.paid_by || "",
+    paymentMethod: row.payment_method || "other",
+    reimbursementStatus: row.reimbursement_status || "n/a",
+    date: shortDateTime(row.created_at),
+    receipt: false, // 后端暂无票据列
+  };
+}
+
+/** ExpenseEntryModal onSubmit(camel)→ 创建 payload(snake)。 */
+export function fromUiExpenseCreate(x: Record<string, any>): VkpiEventExpenseCreatePayload {
+  return {
+    amount: Number(x.amount || 0),
+    category: String(x.category || "other"),
+    description: String(x.description || ""),
+    paid_by: String(x.paidBy || ""),
+    payment_method: String(x.paymentMethod || "other"),
+    reimbursement_status: String(x.reimbursementStatus || "pending"),
+  };
+}
+
+export interface UiEventInvite {
+  id: string;
+  kolId: string;
+  status: string;
+  days: string;
+  travel: string;
+}
+
+export function toUiInvite(row: VkpiEventKolInvite): UiEventInvite {
+  return {
+    id: row.id,
+    kolId: row.kol_id || "",
+    status: row.status || "pending",
+    days: row.days || "",
+    travel: row.travel_status || "",
+  };
+}
+
+/** InviteKolModal onSubmit({id,status})→ 创建 payload(kol_id)。 */
+export function fromUiInviteCreate(k: Record<string, any>): VkpiEventKolInviteCreatePayload {
+  return {
+    kol_id: String(k.kolId || k.id || ""),
+    status: String(k.status || "pending"),
+    days: k.days ? String(k.days) : undefined,
+    travel_status: k.travel ? String(k.travel) : undefined,
+  };
 }

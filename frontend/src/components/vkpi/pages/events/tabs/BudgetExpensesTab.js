@@ -1,17 +1,41 @@
 import React, { useState } from "react";
-import { Check, FileText, Plus, Receipt } from "lucide-react";
-import { EXPENSES_DATA } from "../data/expenses.js";
+import { Check, FileText, Plus, Receipt, X } from "lucide-react";
+import {
+  addEventExpense, deleteEventExpense, fromUiExpenseCreate,
+} from "../../../../../services/vkpi/events-api";
+import DeleteConfirmModal from "../modals/DeleteConfirmModal.js";
 import ExpenseEntryModal from "../modals/ExpenseEntryModal.js";
 import { EXPENSE_CATEGORIES } from "../shared/constants.js";
 import { fmtMoney, fmtMoneyShort, sum } from "../shared/helpers.js";
 import { ownerById } from "../shared/lookups.js";
 
 const e = React.createElement;
-export default function BudgetExpensesTab({ ev, currentUser }) {
+export default function BudgetExpensesTab({ ev, currentUser, token, expenses: rawExpenses = [], loading, error, reload }) {
   const [showModal, setShowModal] = useState(false);
   const [scope, setScope] = useState("mine");  // mine | all (只 owner 能看 all)
-  const allExpenses = EXPENSES_DATA[ev.id] || [];
+  const [deleting, setDeleting] = useState(null);
+  const [opError, setOpError] = useState("");
+  const allExpenses = rawExpenses;
   const isOwner = ev.ownerId === currentUser.id;
+
+  const onErr = (label) => (err) => {
+    setOpError(label + ":" + String(err && err.message ? err.message : err));
+    reload && reload();
+  };
+
+  function addExpense(data) {
+    setShowModal(false);
+    addEventExpense(token, ev.id, fromUiExpenseCreate(data))
+      .then(() => reload && reload())
+      .catch(onErr("录入费用失败"));
+  }
+
+  function removeExpense(id) {
+    setDeleting(null);
+    deleteEventExpense(token, ev.id, id)
+      .then(() => reload && reload())
+      .catch(onErr("删除费用失败"));
+  }
   
   // 权限: 默认只看自己付的, owner 可切换看全部
   const expenses = scope === "all" && isOwner
@@ -23,6 +47,8 @@ export default function BudgetExpensesTab({ ev, currentUser }) {
   const totalPlan = ev.budgetTotal;
   
   return e("div", { className: "p-5" },
+    (error || opError) && e("div", { className: "mb-3 px-3 py-2 rounded-lg border border-rose-500/30 bg-rose-500/10 text-[11px] text-rose-200" }, "⚠ ", opError || error),
+    loading && e("div", { className: "mb-3 px-3 py-2 rounded-lg border border-white/[0.06] bg-white/[0.02] text-[11px] text-slate-400" }, "加载费用中…"),
     e("div", { className: "grid grid-cols-2 gap-4" },
       // 左侧 - 预算表
       e("div", null,
@@ -125,7 +151,7 @@ export default function BudgetExpensesTab({ ev, currentUser }) {
               expenses.map(exp => {
             const cfg = EXPENSE_CATEGORIES[exp.category];
             const Icon = cfg.icon;
-            return e("div", { key: exp.id, className: "rounded-lg border border-white/[0.05] bg-white/[0.012] p-2.5 hover:bg-white/[0.025] transition-all" },
+            return e("div", { key: exp.id, className: "rounded-lg border border-white/[0.05] bg-white/[0.012] p-2.5 hover:bg-white/[0.025] transition-all group" },
               e("div", { className: "flex items-start gap-2.5" },
                 e("div", { className: "w-7 h-7 rounded flex items-center justify-center shrink-0", style: { background: cfg.color + "15" } },
                   e(Icon, { size: 12, style: { color: cfg.color } })
@@ -133,7 +159,14 @@ export default function BudgetExpensesTab({ ev, currentUser }) {
                 e("div", { className: "flex-1 min-w-0" },
                   e("div", { className: "flex items-center justify-between gap-2 mb-0.5" },
                     e("div", { className: "text-[11.5px] text-white font-medium truncate" }, exp.description),
-                    e("div", { className: "text-[12px] font-bold text-white tabular-nums shrink-0" }, fmtMoney(exp.amount))
+                    e("div", { className: "flex items-center gap-1.5 shrink-0" },
+                      e("div", { className: "text-[12px] font-bold text-white tabular-nums" }, fmtMoney(exp.amount)),
+                      e("button", {
+                        onClick: () => setDeleting({ id: exp.id, description: exp.description }),
+                        className: "opacity-0 group-hover:opacity-100 text-slate-500 hover:text-red-300 p-0.5",
+                        title: "删除费用"
+                      }, e(X, { size: 11 }))
+                    )
                   ),
                   e("div", { className: "flex items-center gap-2 text-[9.5px] text-slate-500" },
                     e("span", { className: "tabular-nums font-mono" }, exp.date),
@@ -171,7 +204,13 @@ export default function BudgetExpensesTab({ ev, currentUser }) {
     
     showModal && e(ExpenseEntryModal, {
       onClose: () => setShowModal(false),
-      onSubmit: data => { setShowModal(false); alert("费用已录入 (demo)\n" + JSON.stringify(data, null, 2)); }
+      onSubmit: addExpense,
+    }),
+    deleting && e(DeleteConfirmModal, {
+      title: `删除费用 "${deleting.description}"?`,
+      subtitle: "这条费用流水将从该 Event 移除 · 不可撤销",
+      onClose: () => setDeleting(null),
+      onConfirm: () => removeExpense(deleting.id),
     })
   );
 }

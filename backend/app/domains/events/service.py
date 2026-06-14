@@ -153,7 +153,7 @@ def create_event(payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[
     )
     conn.commit()
     row = conn.execute("SELECT * FROM vkpi_events WHERE id = ?", (eid,)).fetchone()
-    return {"event": _event_row(row)}
+    return {"item": _event_row(row)}
 
 
 _EVENT_UPDATABLE = {

@@ -94,7 +94,7 @@ export default function EventsPage({ currentUser, staff = [] }) {
     if (!ev) { setSelectedId(null); return null; }
     return e(React.Fragment, null,
       e(EventDetailView, {
-        ev, currentUser, staff,
+        ev, currentUser, staff, token,
         onBack: () => setSelectedId(null),
         onEdit: () => setEditingEvent(ev),
         onDelete: () => setDeletingEvent(ev),

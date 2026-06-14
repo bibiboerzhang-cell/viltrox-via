@@ -1,21 +1,48 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Plus, Users, X } from "lucide-react";
+import {
+  inviteKolToEvent, removeKolFromEvent, fromUiInviteCreate,
+} from "../../../../../services/vkpi/events-api";
 import DeleteConfirmModal from "../modals/DeleteConfirmModal.js";
 import InviteKolModal from "../modals/InviteKolModal.js";
 import { kolById } from "../shared/lookups.js";
 
 const e = React.createElement;
-export default function KolsTab({ ev }) {
-  const [kols, setKols] = useState(ev.invitedKols);
+export default function KolsTab({ ev, token, invites = [], loading, error, reload }) {
+  const [kols, setKols] = useState(invites);
   const [showInvite, setShowInvite] = useState(false);
   const [deleting, setDeleting] = useState(null);
-  
-  function removeKol(id) {
-    setKols(prev => prev.filter(k => k.id !== id));
+  const [opError, setOpError] = useState("");
+
+  // 父级 reload 后 props.invites 变化 → 同步本地乐观态
+  useEffect(() => { setKols(invites); }, [invites]);
+
+  const onErr = (label) => (err) => {
+    setOpError(label + ":" + String(err && err.message ? err.message : err));
+    reload && reload();
+  };
+
+  function removeKol(inviteId) {
     setDeleting(null);
+    setKols(prev => prev.filter(k => k.id !== inviteId));  // 乐观
+    removeKolFromEvent(token, ev.id, inviteId)
+      .then(() => reload && reload())
+      .catch(onErr("移除邀请失败"));
   }
-  
+
+  function inviteKols(newKols) {
+    setShowInvite(false);
+    // InviteKolModal 给的是 [{ id(=kol id), status }];映射成 kolId 再创建
+    Promise.all((newKols || []).map(k =>
+      inviteKolToEvent(token, ev.id, fromUiInviteCreate({ kolId: k.id, status: k.status }))
+    ))
+      .then(() => reload && reload())
+      .catch(onErr("邀请 KOL 失败"));
+  }
+
   return e("div", { className: "p-5" },
+    (error || opError) && e("div", { className: "mb-3 px-3 py-2 rounded-lg border border-rose-500/30 bg-rose-500/10 text-[11px] text-rose-200" }, "⚠ ", opError || error),
+    loading && e("div", { className: "mb-3 px-3 py-2 rounded-lg border border-white/[0.06] bg-white/[0.02] text-[11px] text-slate-400" }, "加载 KOL 邀请中…"),
     e("div", { className: "flex items-center justify-between mb-3" },
       e("div", { className: "text-[11px] text-slate-500" }, "已邀请 ", kols.length, " 位 · 确认 ", kols.filter(k => k.status === "confirmed").length),
       e("button", {
@@ -33,7 +60,7 @@ export default function KolsTab({ ev }) {
         )
       : e("div", { className: "rounded-lg border border-white/[0.06] bg-white/[0.012] overflow-hidden" },
           kols.map((ik, i) => {
-            const k = kolById(ik.id);
+            const k = kolById(ik.kolId);
             if (!k) return null;
             const cfg = ik.status === "confirmed" ? { c: "#10b981", label: "已确认" }
                       : ik.status === "pending"   ? { c: "#fbbf24", label: "待回复" }
@@ -62,12 +89,9 @@ export default function KolsTab({ ev }) {
         ),
     showInvite && e(InviteKolModal, {
       ev,
-      existingKolIds: new Set(kols.map(k => k.id)),
+      existingKolIds: new Set(kols.map(k => k.kolId)),
       onClose: () => setShowInvite(false),
-      onSubmit: (newKols) => {
-        setKols(prev => [...prev, ...newKols]);
-        setShowInvite(false);
-      },
+      onSubmit: inviteKols,
     }),
     deleting && e(DeleteConfirmModal, {
       title: `移除 "${deleting.name}" 的邀请?`,

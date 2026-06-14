@@ -1,6 +1,8 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { AlertCircle, Check, ChevronRight, Plus, ShieldCheck, Sparkles, X } from "lucide-react";
-import { TASKS_DATA } from "../data/tasks.js";
+import {
+  addEventTask, updateEventTask, deleteEventTask, fromUiTaskCreate,
+} from "../../../../../services/vkpi/events-api";
 import { TEAM } from "../data/team.js";
 import AiGenerateTasksModal from "../modals/AiGenerateTasksModal.js";
 import DeleteConfirmModal from "../modals/DeleteConfirmModal.js";
@@ -9,21 +11,32 @@ import { EQUIP_SOURCE, ITEM_STATUS, MAT_SOURCE, PHASE_LABELS, TASK_KINDS } from 
 import { ownerByInitial } from "../shared/lookups.js";
 
 const e = React.createElement;
-export default function TasksTab({ ev, currentUser }) {
-  const tasks = TASKS_DATA[ev.id] || [];
-  const phases = ["4w", "2w", "1w", "live", "after"];
+export default function TasksTab({ ev, currentUser, token, tasks = [], loading, error, reload }) {
+  const phases = ["4w", "2w", "1w", "live", "after", "prep"];
   const [tasksState, setTasksState] = useState(tasks);
   const [expandedId, setExpandedId] = useState(null);
   const [addCollabFor, setAddCollabFor] = useState(null);
   const [showNew, setShowNew] = useState(false);
   const [showAi, setShowAi] = useState(false);
   const [deleting, setDeleting] = useState(null);
-  
+  const [opError, setOpError] = useState("");
+
+  // 父级 reload 后 props.tasks 变化 → 同步本地乐观态
+  useEffect(() => { setTasksState(tasks); }, [tasks]);
+
+  const onErr = (label) => (err) => {
+    setOpError(label + ":" + String(err && err.message ? err.message : err));
+    reload && reload();  // 失败回滚到服务器真值
+  };
+
   function deleteTask(id) {
-    setTasksState(prev => prev.filter(t => t.id !== id));
     setDeleting(null);
+    setTasksState(prev => prev.filter(t => t.id !== id));  // 乐观
+    deleteEventTask(token, ev.id, id)
+      .then(() => reload && reload())
+      .catch(onErr("删除任务失败"));
   }
-  
+
   // 权限过滤: 只看跟当前用户相关的任务 (owner 或 collaborators 或 owner === All)
   const visible = tasksState.filter(t => {
     if (t.owner === "All") return true;
@@ -31,42 +44,69 @@ export default function TasksTab({ ev, currentUser }) {
     if ((t.collaborators || []).includes(currentUser.initial)) return true;
     return false;
   });
-  
+
   function toggleTask(id) {
+    const cur = tasksState.find(t => t.id === id);
+    if (!cur) return;
+    const newDone = !cur.done;
     setTasksState(prev => prev.map(t => {
       if (t.id !== id) return t;
-      const newDone = !t.done;
       return {
         ...t, done: newDone,
         doneAt: newDone ? "今天" : undefined,
         doneBy: newDone ? currentUser.initial : undefined,  // ★ 记录实际点的人
       };
     }));
+    updateEventTask(token, ev.id, id, { done: newDone, done_by: newDone ? currentUser.initial : "" })
+      .then(() => reload && reload())
+      .catch(onErr("更新任务失败"));
   }
-  
+
   function toggleChecklistItem(taskId, itemIdx) {
-    setTasksState(prev => prev.map(t => {
-      if (t.id !== taskId) return t;
-      const newChecklist = (t.checklist || []).map((c, i) =>
-        i === itemIdx ? { ...c, done: !c.done } : c
-      );
-      return { ...t, checklist: newChecklist };
-    }));
+    const cur = tasksState.find(t => t.id === taskId);
+    if (!cur) return;
+    const newChecklist = (cur.checklist || []).map((c, i) =>
+      i === itemIdx ? { ...c, done: !c.done } : c
+    );
+    setTasksState(prev => prev.map(t => t.id === taskId ? { ...t, checklist: newChecklist } : t));
+    updateEventTask(token, ev.id, taskId, { checklist: newChecklist })
+      .then(() => reload && reload())
+      .catch(onErr("更新 checklist 失败"));
   }
-  
+
   function addCollaborator(taskId, userInitial) {
-    setTasksState(prev => prev.map(t => {
-      if (t.id !== taskId) return t;
-      const existing = t.collaborators || [];
-      if (existing.includes(userInitial)) return t;
-      return { ...t, collaborators: [...existing, userInitial] };
-    }));
     setAddCollabFor(null);
+    const cur = tasksState.find(t => t.id === taskId);
+    if (!cur) return;
+    const existing = cur.collaborators || [];
+    if (existing.includes(userInitial)) return;
+    const next = [...existing, userInitial];
+    setTasksState(prev => prev.map(t => t.id === taskId ? { ...t, collaborators: next } : t));
+    updateEventTask(token, ev.id, taskId, { collaborators: next })
+      .then(() => reload && reload())
+      .catch(onErr("添加协作者失败"));
+  }
+
+  function createTask(t) {
+    setShowNew(false);
+    addEventTask(token, ev.id, fromUiTaskCreate(t))
+      .then(() => reload && reload())
+      .catch(onErr("新建任务失败"));
+  }
+
+  function createTasksBulk(list) {
+    setShowAi(false);
+    Promise.all((list || []).map(t => addEventTask(token, ev.id, fromUiTaskCreate(t))))
+      .then(() => reload && reload())
+      .catch(onErr("AI 生成任务失败"));
   }
   
   const doneCount = visible.filter(t => t.done).length;
-  
+
   return e("div", { className: "p-5" },
+    // 真后端状态横幅
+    (error || opError) && e("div", { className: "mb-3 px-3 py-2 rounded-lg border border-rose-500/30 bg-rose-500/10 text-[11px] text-rose-200" }, "⚠ ", opError || error),
+    loading && e("div", { className: "mb-3 px-3 py-2 rounded-lg border border-white/[0.06] bg-white/[0.02] text-[11px] text-slate-400" }, "加载任务中…"),
     // 头部进度
     e("div", { className: "mb-4 rounded-xl border border-purple-500/20 bg-purple-500/[0.04] p-3 flex items-center justify-between gap-3" },
       e("div", { className: "flex-1" },
@@ -314,19 +354,13 @@ export default function TasksTab({ ev, currentUser }) {
     // Modals
     showNew && e(NewTaskModal, {
       onClose: () => setShowNew(false),
-      onSubmit: (t) => {
-        setTasksState(prev => [...prev, t]);
-        setShowNew(false);
-      },
+      onSubmit: createTask,
     }),
     showAi && e(AiGenerateTasksModal, {
       ev,
       existingTitles: new Set(tasksState.map(t => t.title)),
       onClose: () => setShowAi(false),
-      onSubmit: (tasks) => {
-        setTasksState(prev => [...prev, ...tasks]);
-        setShowAi(false);
-      },
+      onSubmit: createTasksBulk,
     }),
     deleting && e(DeleteConfirmModal, {
       title: `删除任务 "${deleting.title}"?`,
