@@ -196,7 +196,6 @@ def _localize_search_terms(en_query: str, language: str) -> str:
     key = (q, lang)
     if key in _LOCALIZE_CACHE:
         return _LOCALIZE_CACHE[key]
-    localized = q
     try:
         from app.platform import llm_gateway
 
@@ -213,13 +212,14 @@ def _localize_search_terms(en_query: str, language: str) -> str:
             max_output_tokens=120,
         )
         if str(resp.get("status") or "") == "success":
-            text = _text(resp.get("text"))
+            # QA P3:去掉 LLM 可能误带的首尾引号(prompt 已要求 no quotes,这里稳健兜底)。
+            text = _text(resp.get("text")).strip().strip('"').strip("'").strip()
             if text:
-                localized = text
+                _LOCALIZE_CACHE[key] = text  # QA P2:仅成功才缓存;失败不缓存,允许 LLM 恢复后重试。
+                return text
     except Exception:
-        localized = q
-    _LOCALIZE_CACHE[key] = localized
-    return localized
+        pass
+    return q  # 翻译失败/空 → 回退英文(不缓存)
 
 
 def _is_discovery_garbage(item: dict[str, Any]) -> bool:
