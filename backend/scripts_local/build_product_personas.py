@@ -114,7 +114,11 @@ def _real_specs(product: dict[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError):
             pass
     if product.get("price_usd") is not None and "price_usd" not in specs:
-        specs["price_usd"] = product["price_usd"]
+        # price_usd 是 Postgres Decimal,转 float 防 json.dumps 落库时 TypeError(EPIC Cine 等有价 SKU 命中)。
+        try:
+            specs["price_usd"] = float(product["price_usd"])
+        except (TypeError, ValueError):
+            specs["price_usd"] = str(product["price_usd"])
     if product.get("series"):
         specs.setdefault("series", product["series"])
     return specs
@@ -222,7 +226,7 @@ def _upsert(conn: Any, sku: str, category: str, persona: dict[str, Any], model: 
             sku,
             category,
             persona["what_is"],
-            json.dumps(persona["key_specs_json"], ensure_ascii=False),
+            json.dumps(persona["key_specs_json"], ensure_ascii=False, default=str),
             persona["ideal_persona"],
             json.dumps(persona["ideal_creator_types_json"], ensure_ascii=False),
             json.dumps(persona["verticals_json"], ensure_ascii=False),
