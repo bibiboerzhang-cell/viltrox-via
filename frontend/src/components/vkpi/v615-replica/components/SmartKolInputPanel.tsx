@@ -1048,7 +1048,19 @@ export function SmartKolInputPanel({
       return;
     }
     setMode("text");
-    setRecallResult(recallResultFromSession(session));
+    // 非破坏式覆盖:run() 触发的全网发现会建一个 advance 会话并启动轮询,其 recall items 由后台
+    // worker 异步写入,轮询头几拍常拿到 running/空会话。若无条件覆盖,会把 run() 首屏已渲染的库内
+    // 召回(框2)刷成空 → 看起来「用户列表整块消失」。故:空轮询不得覆盖已有的非空召回(保住首屏);
+    // 但当前无召回(null/空)时仍允许用轮询结果点亮结果区,以便框3 全网发现能显示。
+    const polledRecall = recallResultFromSession(session);
+    const polledRecallCount =
+      (polledRecall.buckets?.creator?.length || 0) + (polledRecall.buckets?.reviewer?.length || 0);
+    setRecallResult((prev) => {
+      const prevCount =
+        (prev?.buckets?.creator?.length || 0) + (prev?.buckets?.reviewer?.length || 0);
+      if (polledRecallCount === 0 && prevCount > 0) return prev;
+      return polledRecall;
+    });
     setUrlResult(null);
   }, []);
 
