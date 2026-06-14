@@ -159,6 +159,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "120_vkpi_kol_content_fit_cache_index.sql",
     "121_apify_jobs_kol_content_fit_index.sql",
     "122_vkpi_events.sql",
+    "123_vkpi_staff_groups.sql",
 )
 
 try:
