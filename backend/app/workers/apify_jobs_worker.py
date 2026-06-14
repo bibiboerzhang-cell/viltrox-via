@@ -1572,6 +1572,18 @@ def _process_kol_profile_deep_crawl(conn: psycopg.Connection[Any], job: dict[str
                     int(job["id"]),
                 ),
             )
+    # Lane E(用户开启口径):账号深爬完成 → 顺带提取公开商务邮箱(从刚抓的 raw 零成本提;无则按预算
+    # 决定是否 Apify 兜底。flag/预算/白名单源/consent_basis=legitimate_interest_public_business 全在
+    # enrich_business_contacts 内建)。这样 Lane D 懒抓视频时也顺带补邮箱,搜索驱动、省消耗。失败不阻断。
+    kol_pool_id = _int_or_none(payload.get("kol_pool_id"))
+    if ok and kol_pool_id:
+        try:
+            from app.domains.kol.business_contact_extract import enrich_business_contacts
+
+            with db_connection_sync_scope():
+                enrich_business_contacts(int(kol_pool_id), staff=staff)
+        except Exception as exc:
+            logger.warning("lazy email enrich after deep_crawl failed (non-fatal) | kol_pool_id=%s error=%s", kol_pool_id, exc)
 
 
 def _process_logistics_track_sync(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
