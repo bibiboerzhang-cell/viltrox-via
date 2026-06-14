@@ -55,9 +55,10 @@ import { loadStoredState, saveStoredState } from "./lib/storage";
 import { useV615Runtime } from "./useV615Runtime";
 import { createProject, deleteProject, updateProject } from "../../../services/vkpi/projects-api";
 import { addProjectCost } from "../../../services/vkpi/cost-api";
+import { toUiStaffList } from "../../../services/vkpi/staffAdapter";
+import { listStaffGroups, createStaffGroup, updateStaffGroup, toUiGroup } from "../../../services/vkpi/groups-api";
 import { KPI_SCOPES } from "./data/kpiScopes";
 import { NAV_ITEMS } from "./data/navItems";
-import { TEAM_STAFF } from "./data/teamStaff";
 import { VIEW_MODES } from "./data/viewModes";
 import { emptyDashboardData } from "../data/emptyDashboardData";
 
@@ -170,6 +171,22 @@ export function V615ReplicaApp(props: any = {}) {
   } = useV615Runtime({ apiToken, userName, userRole, userAvatar, starredProjects: dashboardData.starredProjects || [] });
   const activeStaffId = viewingAs ? viewingAs.id : currentUser.id;
   const activeReminders = useMemo(() => viewingAs ? [] : runtimeReminders, [viewingAs, runtimeReminders]);
+  // Real staff (17) adapted to the UI shape the team/group/events modals expect.
+  const uiStaff = useMemo(() => toUiStaffList(dashboardData.staffMembers || []), [dashboardData.staffMembers]);
+  // Real staff-groups loaded from the new backend (replaces hardcoded "KOL Operations").
+  const [staffGroups, setStaffGroups] = useState([]);
+  const refreshStaffGroups = useCallback(async () => {
+    if (!apiToken) return;
+    try {
+      const res = await listStaffGroups(apiToken);
+      setStaffGroups((res.items || []).map(toUiGroup));
+    } catch (err) {
+      setStaffGroups([]);
+    }
+  }, [apiToken]);
+  useEffect(() => { refreshStaffGroups(); }, [refreshStaffGroups]);
+  // The group currently targeted by the editor (edit mode binds to a real group).
+  const [editGroupTarget, setEditGroupTarget] = useState(null);
   const reportData = useMemo(() => ({
     currentUser,
     dashboard: dashboardRuntime,
@@ -178,9 +195,11 @@ export function V615ReplicaApp(props: any = {}) {
     reminders: runtimeReminders,
     errors: { dashboardError, kolPoolError },
   }), [currentUser, dashboardRuntime, kolPoolRows, runtimeNotifications, runtimeReminders, dashboardError, kolPoolError]);
-  const openGroupEditor = (mode = "edit") => {
+  const openGroupEditor = (mode = "edit", group = null) => {
     setEditGroupMode(mode);
-    setEditGroupName(mode === "new" ? "新分组" : "KOL Operations");
+    const target = group || (mode === "edit" ? staffGroups[0] : null);
+    setEditGroupTarget(target || null);
+    setEditGroupName(mode === "new" ? "新分组" : (target?.name || "新分组"));
     setShowEditGroup(true);
   };
   const pushLocalNotification = (notification) => {
@@ -710,13 +729,13 @@ export function V615ReplicaApp(props: any = {}) {
     })),
     // V6.14.2: 7 子 modals
     e(AnimatePresence, null, showProfile && e(ProfileModal, { user: currentUser, onClose: () => setShowProfile(false), t })),
-    e(AnimatePresence, null, showTeam && e(TeamModal, { 
-      user: currentUser, staff: TEAM_STAFF, 
-      onClose: () => setShowTeam(false), 
-      onImpersonate: (s) => setViewingAs(s), 
-      onOpenEditGroup: () => openGroupEditor("edit"),
+    e(AnimatePresence, null, showTeam && e(TeamModal, {
+      user: currentUser, staff: uiStaff, groups: staffGroups,
+      onClose: () => setShowTeam(false),
+      onImpersonate: (s) => setViewingAs(s),
+      onOpenEditGroup: (g) => openGroupEditor("edit", g || null),
       onOpenNewGroup: () => openGroupEditor("new"),
-      t 
+      t
     })),
     showSettingsModal && e("div", { className: "v615-settings-dark fixed inset-0 z-[200] bg-[#0a0a0d] overflow-auto" },
       e("button", {
@@ -768,26 +787,57 @@ export function V615ReplicaApp(props: any = {}) {
         setRuntimeNotifications(prev => prev.map(item => item.id === id ? { ...item, unread: false, status: "done" } : item));
       }
     })),
-    e(AnimatePresence, null, showEditGroup && e(EditGroupModal, { 
+    e(AnimatePresence, null, showEditGroup && e(EditGroupModal, {
       groupName: editGroupName,
       mode: editGroupMode,
-      staff: TEAM_STAFF, 
+      staff: uiStaff,
+      initialMembers: editGroupTarget?.member_ids || [],
+      initialDesc: editGroupTarget?.description || "",
+      permissions: editGroupTarget?.permissions || null,
       onClose: () => setShowEditGroup(false),
-      onSave: (group) => pushLocalNotification({
-        id: `team-group-${Date.now()}`,
-        raw: group,
-        iconKey: "bell",
-        iconColor: "#a855f7",
-        title: editGroupMode === "new" ? `新建分组: ${group.name}` : `分组已更新: ${group.name}`,
-        desc: "当前为前端分组草稿，后端 staff-groups endpoint 待接入",
-        time: "刚刚",
-        unread: true,
-        category: "notification",
-        severity: "medium",
-        status: "todo",
-        priority: "medium",
-        source: "team_group_local",
-      })
+      onSave: async (group) => {
+        try {
+          if (!apiToken) throw new Error("缺少 API token，不能保存分组。");
+          const body = { name: group.name, description: group.desc, member_ids: group.members };
+          if (group.mode === "new") {
+            await createStaffGroup(apiToken, body);
+          } else if (editGroupTarget?.id) {
+            await updateStaffGroup(apiToken, editGroupTarget.id, body);
+          }
+          await refreshStaffGroups();
+          pushLocalNotification({
+            id: `team-group-${Date.now()}`,
+            raw: group,
+            iconKey: "bell",
+            iconColor: "#a855f7",
+            title: group.mode === "new" ? `新建分组: ${group.name}` : `分组已更新: ${group.name}`,
+            desc: "已写入 staff-groups",
+            time: "刚刚",
+            unread: true,
+            category: "notification",
+            severity: "low",
+            status: "done",
+            priority: "low",
+            source: "team_group",
+          });
+        } catch (err) {
+          pushLocalNotification({
+            id: `team-group-err-${Date.now()}`,
+            raw: { error: String(err && err.message ? err.message : err) },
+            iconKey: "warning",
+            iconColor: "#ef4444",
+            title: "分组保存失败",
+            desc: String(err && err.message ? err.message : err),
+            time: "刚刚",
+            unread: true,
+            category: "notification",
+            severity: "high",
+            status: "todo",
+            priority: "high",
+            source: "team_group_error",
+          });
+        }
+      }
     })),
     // V6.9: Event preview modal (二次点击逻辑)
     e(AnimatePresence, null, previewEvent && e(EventPreviewModal, { 
@@ -998,6 +1048,8 @@ export function V615ReplicaApp(props: any = {}) {
             },
               e(EventsMockupPage, {
                 userName,
+                staff: uiStaff,
+                currentUser,
               })
             ),
 

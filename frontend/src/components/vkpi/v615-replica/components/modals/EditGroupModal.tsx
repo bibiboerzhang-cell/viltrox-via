@@ -9,11 +9,11 @@ import { useT } from "../../lib/i18n";
 
 const e = React.createElement;
 
-export function EditGroupModal({ groupName = "KOL Operations", mode = "edit", staff, onClose, onSave }) {
+export function EditGroupModal({ groupName = "KOL Operations", mode = "edit", staff, initialMembers, initialDesc, permissions, onClose, onSave }) {
   const { t } = useT();
   const [name, setName] = useState(groupName);
-  const [desc, setDesc] = useState(mode === "new" ? "" : "外部 KOL 推广 + 内容审核 + 海外市场拓展");
-  const [members, setMembers] = useState(mode === "new" ? [] : staff.map(s => s.id));
+  const [desc, setDesc] = useState(mode === "new" ? "" : (initialDesc || ""));
+  const [members, setMembers] = useState(mode === "new" ? [] : (Array.isArray(initialMembers) ? initialMembers : []));
   const toggleMember = (id) => setMembers(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   const save = () => {
     onSave && onSave({ mode, name, desc, members });
@@ -59,7 +59,7 @@ export function EditGroupModal({ groupName = "KOL Operations", mode = "edit", st
                 e("div", { className: "text-[11px] text-white" }, s.name),
                 e("div", { className: "text-[10px] text-slate-500" }, s.title)
               ),
-              s.role === "admin" && e("span", { className: "text-[8px] uppercase tracking-wider px-1 py-0.5 rounded bg-purple-500/15 text-purple-300" }, "Admin")
+              (s.isAdmin || s.role === "admin" || s.role === "owner") && e("span", { className: "text-[8px] uppercase tracking-wider px-1 py-0.5 rounded bg-purple-500/15 text-purple-300" }, "Admin")
             );
           })
         )
@@ -68,10 +68,10 @@ export function EditGroupModal({ groupName = "KOL Operations", mode = "edit", st
       e("div", { className: "rounded-md border border-white/[0.06] bg-white/[0.02] p-3 space-y-2" },
         e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, t("组级权限")),
         [
-          { icon: Target,   label: t("共享 Projects"),     value: "135mm LAB / CineGear / 56mm 复推" },
-          { icon: Users,    label: t("共享 KOL 池"),       value: t("Top performers(78 人)") },
-          { icon: TrendingUp, label: t("共同 KPI 目标"),   value: t("Q2 新增 50 个高活 KOL") },
-          { icon: Bell,     label: t("内部 @ 提醒规则"),   value: t("组内变更自动通知") },
+          { icon: Target,   label: t("共享 Projects"),     value: (permissions && (permissions.shared_projects || []).join(" / ")) || "135mm LAB / CineGear / 56mm 复推" },
+          { icon: Users,    label: t("共享 KOL 池"),       value: (permissions && permissions.shared_kol_pool) || t("Top performers(78 人)") },
+          { icon: TrendingUp, label: t("共同 KPI 目标"),   value: (permissions && permissions.kpi_goal) || t("Q2 新增 50 个高活 KOL") },
+          { icon: Bell,     label: t("内部 @ 提醒规则"),   value: (permissions && permissions.reminder_rule) || t("组内变更自动通知") },
         ].map((row, i) => e("div", { key: i, className: "flex items-start gap-2.5" },
           e(row.icon, { size: 11, className: "text-slate-400 shrink-0 mt-0.5" }),
           e("div", { className: "flex-1 min-w-0" },

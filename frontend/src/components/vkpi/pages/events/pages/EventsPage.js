@@ -16,7 +16,7 @@ import { EVENT_STATUS, EVENT_TYPES } from "../shared/constants.js";
 import { fmtMoneyShort, sum } from "../shared/helpers.js";
 
 const e = React.createElement;
-export default function EventsPage({ currentUser }) {
+export default function EventsPage({ currentUser, staff = [] }) {
   const { token } = useAuth();
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -94,7 +94,7 @@ export default function EventsPage({ currentUser }) {
     if (!ev) { setSelectedId(null); return null; }
     return e(React.Fragment, null,
       e(EventDetailView, {
-        ev, currentUser,
+        ev, currentUser, staff,
         onBack: () => setSelectedId(null),
         onEdit: () => setEditingEvent(ev),
         onDelete: () => setDeletingEvent(ev),
@@ -103,6 +103,7 @@ export default function EventsPage({ currentUser }) {
       }),
       editingEvent && e(NewEventModal, {
         initialData: editingEvent,
+        teamOptions: staff,
         onClose: () => setEditingEvent(null),
         onSubmit: data => handleUpdateEvent({ ...editingEvent, ...data, budgetTotal: data.budget,
           location: { ...editingEvent.location, name: data.locName, city: data.city, country: data.country },
@@ -204,10 +205,12 @@ export default function EventsPage({ currentUser }) {
             e("div", { className: "text-slate-500 text-[12px]" }, "没有匹配的 event"),
             showOnlyMine && e("button", { onClick: () => setShowOnlyMine(false), className: "mt-2 text-[10.5px] text-purple-300 hover:text-purple-200" }, "查看全部 event →")
           )
-        : filtered.map(ev => e(EventCard, { key: ev.id, ev, onOpen: x => setSelectedId(x.id) }))
+        : filtered.map(ev => e(EventCard, { key: ev.id, ev, staff, onOpen: x => setSelectedId(x.id) }))
     ),
     
     showNew && e(NewEventModal, {
+      teamOptions: staff,
+      currentUserId: currentUser?.id,
       onClose: () => setShowNew(false),
       onSubmit: handleCreateEvent,
     }),

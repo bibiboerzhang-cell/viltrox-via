@@ -1,21 +1,44 @@
 import React from "react";
 import EventsPage from "./pages/EventsPage.js";
 
-type EventsMockupPageProps = {
-  userName?: string;
+type UiStaff = {
+  id: string;
+  name: string;
+  email?: string;
+  isAdmin?: boolean;
+  avatar?: string;
+  color?: string;
+  title?: string;
 };
 
-export function EventsMockupPage({ userName }: EventsMockupPageProps) {
-  const currentUser = React.useMemo(() => ({
-    id: "j",
-    name: userName || "Jia",
-    initial: (userName || "J").slice(0, 1).toUpperCase(),
-    color: "#a855f7",
-  }), [userName]);
+type EventsMockupPageProps = {
+  userName?: string;
+  staff?: UiStaff[];
+  currentUser?: { id?: string | number; name?: string; avatar?: string; email?: string };
+};
+
+export function EventsMockupPage({ userName, staff = [], currentUser: loggedInUser }: EventsMockupPageProps) {
+  // Derive the events currentUser from the real logged-in user, matched against the
+  // real staff list so its id lines up with event teamUserIds/ownerId (real staff ids).
+  const currentUser = React.useMemo(() => {
+    const meId = loggedInUser?.id != null ? String(loggedInUser.id) : "";
+    const me =
+      staff.find((s) => String(s.id) === meId) ||
+      (loggedInUser?.email ? staff.find((s) => s.email === loggedInUser.email) : null) ||
+      staff[0] ||
+      null;
+    const name = me?.name || loggedInUser?.name || userName || "Jia";
+    return {
+      id: me ? String(me.id) : (meId || "j"),
+      name,
+      initial: (me?.avatar || name || "J").slice(0, 1).toUpperCase(),
+      color: me?.color || "#a855f7",
+    };
+  }, [loggedInUser, staff, userName]);
 
   return (
     <div className="min-h-[calc(100vh-4rem)] bg-[#0a0a0d] text-white">
-      <EventsPage currentUser={currentUser} />
+      <EventsPage currentUser={currentUser} staff={staff} />
     </div>
   );
 }

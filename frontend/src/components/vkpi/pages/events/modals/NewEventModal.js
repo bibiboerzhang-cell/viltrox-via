@@ -1,11 +1,12 @@
 import React, { useState } from "react";
 import { X } from "lucide-react";
 import { PROJECTS } from "../data/projects.js";
-import { TEAM } from "../data/team.js";
 import { EVENT_TYPES } from "../shared/constants.js";
 
 const e = React.createElement;
-export default function NewEventModal({ initialData, onClose, onSubmit }) {
+export default function NewEventModal({ initialData, onClose, onSubmit, teamOptions = [], currentUserId }) {
+  // 真员工(UiStaff[])喂团队成员选择器,替换 mock TEAM。
+  const team = Array.isArray(teamOptions) ? teamOptions : [];
   const isEdit = !!initialData;
   const [title, setTitle] = useState(initialData?.title || "");
   const [typeKey, setTypeKey] = useState(initialData?.typeKey || "tradeshow");
@@ -15,7 +16,7 @@ export default function NewEventModal({ initialData, onClose, onSubmit }) {
   const [country, setCountry] = useState(initialData?.location?.country || "");
   const [locName, setLocName] = useState(initialData?.location?.name || "");
   const [budget, setBudget] = useState(initialData?.budgetTotal || 20000);
-  const [teamIds, setTeamIds] = useState(initialData?.teamUserIds || ["j"]);
+  const [teamIds, setTeamIds] = useState(initialData?.teamUserIds || (currentUserId ? [String(currentUserId)] : (team[0] ? [String(team[0].id)] : [])));
   const [projectIds, setProjectIds] = useState(initialData?.relatedProjectIds || []);
   const [note, setNote] = useState(initialData?.note || "");
   const [autoCategories, setAutoCategories] = useState(!isEdit);
@@ -116,13 +117,13 @@ export default function NewEventModal({ initialData, onClose, onSubmit }) {
         e("div", null,
           e("label", { className: "text-[10.5px] text-slate-400 mb-1.5 block" }, "团队成员 (可多选,第一个 = 负责人)"),
           e("div", { className: "flex flex-wrap gap-1.5" },
-            TEAM.map(u => {
+            team.map(u => {
               const active = teamIds.includes(u.id);
               return e("button", {
                 key: u.id, onClick: () => toggleTeam(u.id),
                 className: `px-2.5 py-1 rounded text-[10.5px] border flex items-center gap-1.5 transition-all ${active ? "border-purple-500/40 bg-purple-500/10 text-white" : "border-white/[0.06] bg-white/[0.02] text-slate-400 hover:bg-white/[0.04]"}`
               },
-                e("div", { className: "w-4 h-4 rounded-full flex items-center justify-center text-[8.5px] font-bold text-white", style: { background: u.color } }, u.initial),
+                e("div", { className: "w-4 h-4 rounded-full flex items-center justify-center text-[8.5px] font-bold text-white", style: { background: u.color } }, u.avatar),
                 u.name
               );
             })
@@ -157,7 +158,7 @@ export default function NewEventModal({ initialData, onClose, onSubmit }) {
         e("button", { onClick: onClose, className: "px-3 py-1.5 rounded-md border border-white/[0.08] text-[11px] text-slate-300 hover:bg-white/[0.04]" }, "取消"),
         e("button", {
           disabled: !title || !startDate,
-          onClick: () => onSubmit({ title, typeKey, startDate, endDate, locName, city, country, budget, teamIds, ownerId: teamIds[0] || "j", projectIds, note }),
+          onClick: () => onSubmit({ title, typeKey, startDate, endDate, locName, city, country, budget, teamIds, ownerId: teamIds[0] || (currentUserId ? String(currentUserId) : (team[0]?.id || "")), projectIds, note }),
           className: `px-3.5 py-1.5 rounded-md text-[11px] font-medium ${title && startDate ? "bg-purple-500 hover:bg-purple-400 text-white" : "bg-white/[0.05] text-slate-600 cursor-not-allowed"}`
         }, isEdit ? "保存修改" : "创建 Event")
       )

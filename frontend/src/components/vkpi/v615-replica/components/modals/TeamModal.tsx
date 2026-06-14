@@ -8,8 +8,12 @@ import { CenterModal } from "./CenterModal";
 
 const e = React.createElement;
 
-export function TeamModal({ user, staff, onClose, onImpersonate, t, onOpenEditGroup, onOpenNewGroup }) {
+export function TeamModal({ user, staff, groups, onClose, onImpersonate, t, onOpenEditGroup, onOpenNewGroup }) {
   const isAdmin = user.role === "admin";
+  const groupList = Array.isArray(groups) ? groups : [];
+  const primaryGroup = groupList[0] || null;
+  const groupName = primaryGroup?.name || "KOL Operations";
+  const groupMemberCount = primaryGroup ? (primaryGroup.member_ids || []).length : staff.length;
   return e(CenterModal, { onClose, maxWidth: "xl" },
     e("div", { className: "px-5 py-3.5 border-b border-white/[0.06] flex items-center justify-between" },
       e("div", null,
@@ -32,12 +36,12 @@ export function TeamModal({ user, staff, onClose, onImpersonate, t, onOpenEditGr
             e("div", { className: "rounded-lg border border-white/[0.06] bg-white/[0.02] p-3" },
               e("div", { className: "flex items-center justify-between mb-2" },
                 e("div", { className: "flex items-center gap-2" },
-                  e("span", { className: "text-[11px] font-medium text-white" }, "KOL Operations"),
-                  e("span", { className: "text-[9px] text-slate-500" }, `${staff.length} ${t("成员")}`)
+                  e("span", { className: "text-[11px] font-medium text-white" }, groupName),
+                  e("span", { className: "text-[9px] text-slate-500" }, `${groupMemberCount} ${t("成员")}`)
                 ),
-                e("button", { 
-                  onClick: () => { onClose(); onOpenEditGroup && onOpenEditGroup(); },
-                  className: "text-[10px] text-purple-300 hover:text-purple-200" 
+                e("button", {
+                  onClick: () => { onClose(); onOpenEditGroup && onOpenEditGroup(primaryGroup); },
+                  className: "text-[10px] text-purple-300 hover:text-purple-200"
                 }, t("编辑分组"))
               ),
               // V6.14.4: 小组合作定位 4 行
@@ -65,7 +69,7 @@ export function TeamModal({ user, staff, onClose, onImpersonate, t, onOpenEditGr
                   e("div", { className: "flex-1 min-w-0" },
                     e("div", { className: "flex items-center gap-1.5" },
                       e("span", { className: "text-[11px] font-medium text-white" }, s.name),
-                      s.role === "admin" && e("span", { className: "text-[8px] uppercase tracking-wider px-1 py-0.5 rounded bg-purple-500/15 text-purple-300" }, "Admin")
+                      (s.isAdmin || s.role === "admin" || s.role === "owner") && e("span", { className: "text-[8px] uppercase tracking-wider px-1 py-0.5 rounded bg-purple-500/15 text-purple-300" }, "Admin")
                     ),
                     e("div", { className: "text-[10px] text-slate-500" }, `${s.title} · ${s.focus}`)
                   ),

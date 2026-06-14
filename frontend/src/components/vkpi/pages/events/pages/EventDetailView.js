@@ -6,7 +6,7 @@ import {
 import PlaceholderTab from "../components/PlaceholderTab.js";
 import { EVENT_STATUS, EVENT_TYPES } from "../shared/constants.js";
 import { daysUntil } from "../shared/helpers.js";
-import { ownerById } from "../shared/lookups.js";
+import { memberFromStaff } from "../shared/lookups.js";
 import BudgetExpensesTab from "../tabs/BudgetExpensesTab.js";
 import KolsTab from "../tabs/KolsTab.js";
 import MaterialsTab from "../tabs/MaterialsTab.js";
@@ -14,7 +14,7 @@ import OverviewTab from "../tabs/OverviewTab.js";
 import TasksTab from "../tabs/TasksTab.js";
 
 const e = React.createElement;
-export default function EventDetailView({ ev, onBack, currentUser, onEdit, onDelete, onUpdateTeam, stock, setStock }) {
+export default function EventDetailView({ ev, onBack, currentUser, onEdit, onDelete, onUpdateTeam, stock, setStock, staff = [] }) {
   const [tab, setTab] = useState("overview");
   const [menuOpen, setMenuOpen] = useState(false);
   const typeCfg = EVENT_TYPES[ev.typeKey];
@@ -46,7 +46,7 @@ export default function EventDetailView({ ev, onBack, currentUser, onEdit, onDel
         e("div", { className: "text-[13px] text-amber-200 font-medium mb-1" }, currentUser.name, " 不在 ", ev.title, " 的团队成员中"),
         e("div", { className: "text-[10.5px] text-slate-400 mb-3" }, "你只能看到自己参与的 Event 详情 (权限隔离)"),
         e("div", { className: "text-[10px] text-slate-500" },
-          "团队: ", ev.teamUserIds.map(u => ownerById(u).name).join(", ")
+          "团队: ", ev.teamUserIds.map(u => memberFromStaff(u, staff).name).join(", ")
         )
       )
     );
@@ -84,7 +84,7 @@ export default function EventDetailView({ ev, onBack, currentUser, onEdit, onDel
         e("div", { className: "flex items-center gap-2" },
           e("div", { className: "flex items-center gap-0.5" },
             ev.teamUserIds.slice(0, 5).map((uid, i) => {
-              const u = ownerById(uid);
+              const u = memberFromStaff(uid, staff);
               return e("div", { key: uid,
                 className: "w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold text-white",
                 style: { background: u.color, marginLeft: i > 0 ? "-6px" : 0, border: "2px solid #0a0a0d", zIndex: 10 - i }

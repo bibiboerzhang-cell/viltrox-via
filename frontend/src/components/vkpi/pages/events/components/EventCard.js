@@ -2,10 +2,10 @@ import React from "react";
 import { Briefcase, Calendar, Check, Clock, MapPin, Users } from "lucide-react";
 import { EVENT_STATUS, EVENT_TYPES } from "../shared/constants.js";
 import { daysUntil, fmtMoneyShort, healthColor, sum } from "../shared/helpers.js";
-import { ownerById } from "../shared/lookups.js";
+import { memberFromStaff } from "../shared/lookups.js";
 
 const e = React.createElement;
-export default function EventCard({ ev, onOpen }) {
+export default function EventCard({ ev, onOpen, staff = [] }) {
   const typeCfg = EVENT_TYPES[ev.typeKey];
   const statusCfg = EVENT_STATUS[ev.status];
   const Icon = typeCfg.icon;
@@ -103,7 +103,7 @@ export default function EventCard({ ev, onOpen }) {
       // team avatars
       e("div", { className: "flex items-center gap-0.5" },
         ev.teamUserIds.slice(0, 4).map((uid, i) => {
-          const u = ownerById(uid);
+          const u = memberFromStaff(uid, staff);
           return e("div", {
             key: uid,
             className: "w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold text-white",
