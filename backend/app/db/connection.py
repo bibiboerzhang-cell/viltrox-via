@@ -162,6 +162,8 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "123_vkpi_staff_groups.sql",
     "124_perf_indexes.sql",
     "125_vkpi_channel_metrics_filled.sql",
+    "126_vkpi_fulfillment_observation_tasks.sql",
+    "127_vkpi_data_freshness.sql",
 )
 
 try:

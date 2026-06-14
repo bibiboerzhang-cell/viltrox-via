@@ -130,3 +130,49 @@ def due_list(days_overdue: int = 7, limit: int = 100, staff: dict[str, Any] | No
         "scope_mode": scope.scope_context(staff)["scope_mode"],
         "note": "已签收满 N 天但项目零内容证据的待观察项;空=无 delivered shipment 数据(物流断流,见刀2)。",
     }
+
+
+def scan_due_into_tasks(staff: dict[str, Any] | None = None, days_overdue: int = 7) -> dict[str, Any]:
+    """唯一的「自动」入口:把 due_list() 的每个待观察项 CREATE 成一条 content_due 人工复核任务。
+
+    红线:这不是裁决——只为人创建「待看」任务,绝不自动改项目/派单/费用状态。去重交给
+    create_observation_task(同 project + content_due 的 pending 已存在则跳过)。
+    当前 vkpi_shipments 多无 delivered 数据,due_list 常为空 → created=[] 是诚实结果(物流断流)。
+    """
+    from app.domains.projects import fulfillment_tasks
+
+    due = due_list(days_overdue=days_overdue, staff=staff)
+    created: list[int] = []
+    skipped_existing = 0
+    for item in due.get("items", []):
+        project_id = item.get("project_id")
+        if not project_id:
+            continue
+        reason = {
+            "trigger": "scan_due",
+            "days_overdue": due.get("days_overdue"),
+            "delivered_at": item.get("delivered_at"),
+            "days_since_delivered": item.get("days_since_delivered"),
+            "assignment_count": item.get("assignment_count"),
+        }
+        result = fulfillment_tasks.create_observation_task(
+            project_id=int(project_id),
+            task_type="content_due",
+            reason=reason,
+            staff=staff,
+        )
+        if result.get("status") == "created":
+            task = result.get("task") or {}
+            if task.get("id") is not None:
+                created.append(int(task["id"]))
+        elif result.get("status") == "skipped":
+            skipped_existing += 1
+    return {
+        "status": "ok",
+        "days_overdue": due.get("days_overdue"),
+        "scanned": len(due.get("items", [])),
+        "created": created,
+        "skipped_existing": skipped_existing,
+        "scope_mode": scope.scope_context(staff)["scope_mode"],
+        "note": "只为人创建 content_due 待复核任务,零自动裁决;created=[] 多因无 delivered shipment(物流断流,诚实)。",
+    }

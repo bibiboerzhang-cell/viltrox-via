@@ -135,6 +135,75 @@ def projects_due_list(
     return fulfillment_observation.due_list(days_overdue=days_overdue, limit=limit, staff=staff)
 
 
+@router.get("/projects/observation-tasks")
+def list_observation_tasks(
+    status: str = Query(default="pending"),
+    project_id: int | None = Query(default=None),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    """履约 stage-2(只读):列人工复核观察任务。
+
+    RBAC(PV-4):own-only 员工只见自己负责/创建项目的任务;管理层全见。
+    """
+    from app.domains.projects import fulfillment_tasks
+
+    return fulfillment_tasks.list_observation_tasks(staff=staff, status=status, project_id=project_id)
+
+
+@router.post("/projects/{project_id}/observation-tasks")
+def create_observation_task(
+    project_id: int,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+):
+    """履约 stage-2(SAFE):创建一条 pending 观察任务。零自动裁决——只建待人看任务。"""
+    from app.domains.projects import fulfillment_tasks
+
+    return fulfillment_tasks.create_observation_task(
+        project_id=project_id,
+        task_type=str(body.get("task_type") or ""),
+        reason=body.get("reason"),
+        staff=staff,
+        kol_pool_id=body.get("kol_pool_id"),
+    )
+
+
+@router.patch("/projects/observation-tasks/{task_id}")
+def mark_observation_task(
+    task_id: int,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+):
+    """履约 stage-2(SAFE):把任务标 reviewed/dismissed。仅触任务行,绝不改项目/派单/费用。"""
+    from app.domains.projects import fulfillment_tasks
+
+    return fulfillment_tasks.mark_observation_task(
+        task_id=task_id,
+        action=str(body.get("action") or ""),
+        staff=staff,
+        note=str(body.get("note") or ""),
+    )
+
+
+@router.post("/projects/observation-tasks/scan-due")
+def scan_due_into_tasks(
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+):
+    """履约 stage-2(SAFE 手动触发):把 due-list 项 CREATE 成 content_due 复核任务。
+
+    不自动跑、不裁决——只为人建任务。无 delivered shipment 时 created=[](物流断流,诚实)。
+    """
+    from app.domains.projects import fulfillment_observation
+
+    days_overdue = body.get("days_overdue", 7)
+    try:
+        days_overdue = int(days_overdue)
+    except (TypeError, ValueError):
+        days_overdue = 7
+    return fulfillment_observation.scan_due_into_tasks(staff=staff, days_overdue=days_overdue)
+
+
 @router.post("/projects/logistics-sync/enqueue")
 def enqueue_logistics_sync(
     body: dict = Body(default_factory=dict),
