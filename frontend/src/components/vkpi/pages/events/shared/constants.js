@@ -86,6 +86,7 @@ export const EVENT_TYPES = {
   webinar:    { label: "线上 Webinar", icon: Video,        color: "#10b981" },
   kol_meetup: { label: "KOL 聚会",     icon: PartyPopper,  color: "#fbbf24" },
   internal:   { label: "内部团建",     icon: Users,        color: "#94a3b8" },
+  other:      { label: "其他活动",     icon: Briefcase,    color: "#94a3b8" },
 };
 
 export const EVENT_STATUS = {

@@ -6,8 +6,8 @@ import { memberFromStaff } from "../shared/lookups.js";
 
 const e = React.createElement;
 export default function EventCard({ ev, onOpen, staff = [] }) {
-  const typeCfg = EVENT_TYPES[ev.typeKey];
-  const statusCfg = EVENT_STATUS[ev.status];
+  const typeCfg = EVENT_TYPES[ev.typeKey] || EVENT_TYPES.other;
+  const statusCfg = EVENT_STATUS[ev.status] || EVENT_STATUS.planning;
   const Icon = typeCfg.icon;
   const totalSpent = sum(ev.budgetByCategory, "spent");
   const spentPct = Math.round(totalSpent / ev.budgetTotal * 100);

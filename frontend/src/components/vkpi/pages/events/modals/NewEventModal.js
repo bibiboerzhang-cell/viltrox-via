@@ -108,7 +108,7 @@ export default function NewEventModal({ initialData, onClose, onSubmit, teamOpti
             ),
             e("label", { className: "flex items-center gap-1.5 text-[10.5px] text-slate-300 cursor-pointer" },
               e("input", { type: "checkbox", checked: autoCategories, onChange: ev => setAutoCategories(ev.target.checked), className: "accent-purple-500" }),
-              "按「", EVENT_TYPES[typeKey].label, "」模板自动分类"
+              "按「", (EVENT_TYPES[typeKey] || EVENT_TYPES.other).label, "」模板自动分类"
             )
           )
         ),

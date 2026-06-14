@@ -57,8 +57,8 @@ export default function EventDetailView({ ev, onBack, currentUser, onEdit, onDel
       .finally(() => { if (alive) setDetailLoading(false); });
     return () => { alive = false; };
   }, [token, ev.id]);
-  const typeCfg = EVENT_TYPES[ev.typeKey];
-  const statusCfg = EVENT_STATUS[ev.status];
+  const typeCfg = EVENT_TYPES[ev.typeKey] || EVENT_TYPES.other;
+  const statusCfg = EVENT_STATUS[ev.status] || EVENT_STATUS.planning;
   const Icon = typeCfg.icon;
   const days = daysUntil(ev.startDate);
   const isDone = ev.status === "done";

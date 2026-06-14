@@ -59,7 +59,7 @@ export default function AiGenerateTasksModal({ ev, existingTitles, onClose, onSu
           e("div", null,
             e("h3", { className: "text-[14px] font-semibold text-white" }, "AI 生成任务清单"),
             e("p", { className: "text-[10.5px] text-slate-500 mt-0.5" },
-              "基于 ", EVENT_TYPES[ev.typeKey].label, " · ", ev.title, " · 时间节奏自动推荐"
+              "基于 ", (EVENT_TYPES[ev.typeKey] || EVENT_TYPES.other).label, " · ", ev.title, " · 时间节奏自动推荐"
             )
           )
         ),

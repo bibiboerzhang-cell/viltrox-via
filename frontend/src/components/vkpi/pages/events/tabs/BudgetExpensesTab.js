@@ -149,7 +149,7 @@ export default function BudgetExpensesTab({ ev, currentUser, token, expenses: ra
             )
           : e("div", { className: "space-y-1.5 max-h-[480px] overflow-y-auto pr-1" },
               expenses.map(exp => {
-            const cfg = EXPENSE_CATEGORIES[exp.category];
+            const cfg = EXPENSE_CATEGORIES[exp.category] || EXPENSE_CATEGORIES.other;
             const Icon = cfg.icon;
             return e("div", { key: exp.id, className: "rounded-lg border border-white/[0.05] bg-white/[0.012] p-2.5 hover:bg-white/[0.025] transition-all group" },
               e("div", { className: "flex items-start gap-2.5" },
