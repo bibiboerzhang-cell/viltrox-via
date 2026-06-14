@@ -4,7 +4,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bell, ChevronDown, DollarSign, FileText, Globe2, HelpCircle, List, Loader2, Menu, MessageCircle, Moon, PanelLeftClose, PanelLeftOpen, Search, Sun, TrendingUp, User, X } from "lucide-react";
+import { Bell, Calendar, Camera, ChevronDown, DollarSign, FileText, Globe2, HelpCircle, List, Loader2, Menu, MessageCircle, Moon, PanelLeftClose, PanelLeftOpen, PartyPopper, Search, Sun, Ticket, TrendingUp, User, Users, Video, X } from "lucide-react";
 import "./styles/mockup.css";
 import "../styles/vkpi-settings-dark.css";
 import { KOLPoolPage } from "./KOLPoolPage";
@@ -50,6 +50,7 @@ import { NotificationsPopover } from "./components/popovers/NotificationsPopover
 import { UserMenuPopover } from "./components/popovers/UserMenuPopover";
 import { WorkRemindersPopover } from "./components/popovers/WorkRemindersPopover";
 import { logoutV615, resolveV615Alert } from "./api";
+import { listEvents } from "../../../services/vkpi/events-api";
 import { I18nContext, makeT } from "./lib/i18n";
 import { loadStoredState, saveStoredState } from "./lib/storage";
 import { useV615Runtime } from "./useV615Runtime";
@@ -133,6 +134,8 @@ export function V615ReplicaApp(props: any = {}) {
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [selectedKpi, setSelectedKpi] = useState(null);
   const [previewEvent, setPreviewEvent] = useState(null);
+  // 2026-06-14 诚实化:Upcoming Events 卡接真实 /api/admin/vkpi/events,不再传空数组。
+  const [eventRows, setEventRows] = useState([]);
   const [kpiScope, setKpiScope] = useState(stored.kpiScope || "all");
   const [reportOpen, setReportOpen] = useState(urlReport === "1"); // V6.10: Report Panel
   const [selectedSignal, setSelectedSignal] = useState(null); // V6.11: Signal detail modal
@@ -579,10 +582,11 @@ export function V615ReplicaApp(props: any = {}) {
       const items = cityData.kols || cityData.stores || [];
       return {
         title: viewMode === "kols" ? `KOLs in ${city}` : `Dealers in ${city}`,
+        // 2026-06-14 诚实化:此层无 per-KOL 真实排序量级,改用统一占位条宽(不再 Math.random 伪造排名)。
         items: items.map((d) => ({
           label: d.handle || d.name,
           value: d.engagement || d.revenue,
-          barWidth: 60 + Math.random() * 30,
+          barWidth: 60,
         }))
       };
     }
@@ -603,6 +607,68 @@ export function V615ReplicaApp(props: any = {}) {
     }
     return { title: "", items: [] };
   }, [currentMode, country, city, item, hierarchy, viewMode]);
+
+  // 2026-06-14 诚实化:拉真实 events(只读,失败/无 token 静默置空,绝不硬编码假活动)。
+  useEffect(() => {
+    if (!apiToken) {
+      setEventRows([]);
+      return;
+    }
+    let cancelled = false;
+    listEvents(apiToken, { limit: 100 })
+      .then((res) => {
+        if (cancelled) return;
+        setEventRows(Array.isArray(res?.items) ? res.items : []);
+      })
+      .catch(() => {
+        if (!cancelled) setEventRows([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [apiToken]);
+
+  // 真实 events → UpcomingEventsCard 形态:start_date >= 今天,升序,取前 6。
+  const upcomingEvents = useMemo(() => {
+    const EVENT_TYPE_VISUAL = {
+      tradeshow: { icon: Ticket, color: "#a855f7" },
+      media: { icon: Camera, color: "#06b6d4" },
+      webinar: { icon: Video, color: "#10b981" },
+      kol_meetup: { icon: PartyPopper, color: "#fbbf24" },
+      internal: { icon: Users, color: "#94a3b8" },
+    };
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    return (Array.isArray(eventRows) ? eventRows : [])
+      .filter((row) => {
+        const start = Date.parse(String(row?.start_date || ""));
+        return Number.isFinite(start) && start >= startOfToday.getTime();
+      })
+      .sort((a, b) => Date.parse(String(a.start_date)) - Date.parse(String(b.start_date)))
+      .slice(0, 6)
+      .map((row) => {
+        const visual = EVENT_TYPE_VISUAL[row.type_key] || { icon: Calendar, color: "#a855f7" };
+        const start = new Date(String(row.start_date));
+        const dateLabel = Number.isNaN(start.getTime())
+          ? String(row.start_date || "").slice(0, 10)
+          : start.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
+        const locParts = [row.location_city, row.location_country].filter(Boolean);
+        const health = Number(row.health_score);
+        return {
+          id: row.id,
+          title: String(row.title || "未命名活动"),
+          date: dateLabel,
+          location: String(row.location_name || locParts.join(" · ") || "地点待补"),
+          country: String(row.location_country || ""),
+          city: String(row.location_city || ""),
+          icon: visual.icon,
+          color: visual.color,
+          // 真实 health_score 作为进度条;无则 0(不编造)。
+          materialProgress: Number.isFinite(health) ? Math.max(0, Math.min(100, health)) : 0,
+          raw: row,
+        };
+      });
+  }, [eventRows]);
 
   return e(I18nContext.Provider, { value: { t, lang, setLang } },
    e("div", { className: "relative min-h-screen bg-[#050810] text-slate-200" },
@@ -1087,7 +1153,9 @@ export function V615ReplicaApp(props: any = {}) {
               aiInsight: dashboardRuntime.aiInsight,
               topMovers: dashboardRuntime.topMovers,
               kolFunnel: dashboardRuntime.kolFunnel,
-              upcomingEvents: [],
+              // 2026-06-14 诚实化:Upcoming Events 接真实 listEvents(空则卡内显「暂无活动」)。
+              upcomingEvents,
+              // Revenue by Source 无真实后端口径 → 维持空,卡片自带 length>0 守卫不渲染(绝不编造收入)。
               revenueBySource: [],
               dashboardLoading,
               dashboardError,

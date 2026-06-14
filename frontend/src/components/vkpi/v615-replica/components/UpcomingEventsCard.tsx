@@ -60,7 +60,9 @@ export function UpcomingEventsCard({ events, dragConstraintsRef, onEventClick })
         ),
         e(Calendar, { size: 12, className: "text-amber-400 ml-1" }),
         e("h3", { className: "text-xs font-semibold text-white truncate" }, "Upcoming Events"),
-        e("span", { className: "text-[9px] text-slate-500 tabular-nums" }, `(${events.length})`)
+        e("span", { className: "text-[9px] text-slate-500 tabular-nums" }, `(${events.length})`),
+        // 数据来源标注:真实 events API(诚实化 2026-06-14)
+        e("span", { className: "shrink-0 rounded border border-emerald-500/20 bg-emerald-500/[0.06] px-1 py-px text-[8px] text-emerald-400/80" }, "实时")
       ),
       e("div", { className: "flex items-center gap-1 shrink-0" },
         e("button", {
@@ -77,6 +79,11 @@ export function UpcomingEventsCard({ events, dragConstraintsRef, onEventClick })
     ),
 
     e("div", { className: "space-y-2 max-h-[200px] overflow-y-auto pr-1" },
+      // 诚实空态:无真实未来活动时显示「暂无活动」,不编造占位卡。
+      events.length === 0 && e("div", { className: "rounded-lg border border-dashed border-white/[0.08] bg-white/[0.01] px-3 py-4 text-center" },
+        e("div", { className: "text-[11px] text-slate-400" }, "暂无活动"),
+        e("div", { className: "mt-0.5 text-[9px] text-slate-600" }, "近期无即将开始的真实活动")
+      ),
       events.map((evt) => {
         const Icon = evt.icon;
         return e("div", {
@@ -113,7 +120,7 @@ export function UpcomingEventsCard({ events, dragConstraintsRef, onEventClick })
       })
     ),
 
-    e("button", {
+    events.length > 0 && e("button", {
       onClick: () => { if (onEventClick && events[0]) onEventClick(events[0]); },
       className: "mt-2 w-full rounded-md border border-white/[0.06] bg-white/[0.02] py-1 text-[10px] text-slate-400 hover:text-white hover:border-white/[0.14]"
     }, "View all events →")

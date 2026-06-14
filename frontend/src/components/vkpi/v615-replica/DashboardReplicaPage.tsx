@@ -238,6 +238,11 @@ export function DashboardReplicaPage(props: any) {
                     defaultSize: { width: 280, height: "auto" },
                     initialDelay: 0.3,
                   },
+                    // 数据来源标注:真实 KOL Pool 国家/城市分布(诚实化 2026-06-14)
+                    e("div", { className: "mb-2 flex items-center gap-1.5 text-[9px] text-slate-500" },
+                      e("span", { className: "rounded border border-emerald-500/20 bg-emerald-500/[0.06] px-1 py-px text-emerald-400/80" }, "实时"),
+                      e("span", null, "KOL Pool 分布")
+                    ),
                     topListData.items.slice(0, 7).map((row, i) => e(motion.div, {
                       key: row.label,
                       initial: { opacity: 0, x: -8 }, animate: { opacity: 1, x: 0 },
