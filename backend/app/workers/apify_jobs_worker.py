@@ -969,6 +969,100 @@ def _sync_deep_analysis_result_from_cache(
     }
 
 
+def _enqueue_content_fit_after_final_v1(
+    conn: psycopg.Connection[Any],
+    *,
+    job_id: int,
+    deep_result: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """L2(用户令「最重档」):final_v1 视频深析就绪后,链式入队**内容契合深析**——读该 KOL 视频
+    Gemini 分析 + 评论,LLM 出 creator_type/fit_verdict(发现的新人经 account_deep 抓取入库 +
+    视频深析后,在此自动获得内容契合)。镜像 account_dossier followup。
+    控量:① 已有 ready content_fit_v1 cache → 复用不重烧;② 已有 queued/running content_fit job → 去重;
+    每 KOL 仅一次。LLM 走 content_fit_analysis 的 openai + 预算闸(闸A)。product_sku 尽力从该 KOL 的
+    搜索会话取(无则 None→通用类型分析)。绝不写 viltrox_fit_score(独立 cache);失败不阻断 final_v1。"""
+    if not deep_result or deep_result.get("status") != "ready":
+        return None
+    kol_pool_id = _int_or_none(deep_result.get("kol_pool_id"))
+    if not kol_pool_id:
+        return None
+    with conn.transaction():
+        with conn.cursor(row_factory=dict_row) as cur:
+            # ① 复用:已有 ready content_fit_v1 cache → 不重复烧 LLM
+            cur.execute(
+                """
+                SELECT 1 FROM vkpi_analysis_cache
+                WHERE target_type='kol' AND derive_method='content_fit_v1'
+                  AND target_id=%s AND status='ready' LIMIT 1
+                """,
+                (str(kol_pool_id),),
+            )
+            if cur.fetchone():
+                return {"status": "cache_reused", "kol_pool_id": kol_pool_id}
+            # ② 去重:已有 queued/running content_fit job
+            cur.execute(
+                """
+                SELECT id, status FROM apify_jobs
+                WHERE job_type='kol_content_fit_analysis'
+                  AND status IN ('queued', 'running')
+                  AND payload->>'kol_pool_id'=%s
+                ORDER BY created_at DESC, id DESC LIMIT 1
+                """,
+                (str(kol_pool_id),),
+            )
+            existing = cur.fetchone()
+            if existing:
+                return {
+                    "status": "already_queued" if existing["status"] == "queued" else "already_running",
+                    "job_id": int(existing["id"]),
+                    "kol_pool_id": kol_pool_id,
+                }
+            # product_sku 尽力而为:取最近一次以此 KOL 为候选、且带 product_sku 的搜索会话(无则 None)
+            product_sku: str | None = None
+            try:
+                cur.execute(
+                    """
+                    SELECT s.input_payload_json->>'product_sku' AS sku
+                    FROM vkpi_kol_search_session_items i
+                    JOIN vkpi_kol_search_sessions s ON s.id = i.session_id
+                    WHERE i.kol_pool_id = %s
+                      AND COALESCE(s.input_payload_json->>'product_sku', '') <> ''
+                    ORDER BY i.id DESC LIMIT 1
+                    """,
+                    (int(kol_pool_id),),
+                )
+                srow = cur.fetchone()
+                if srow and srow.get("sku"):
+                    product_sku = str(srow["sku"])
+            except Exception:
+                product_sku = None
+            payload = {
+                "kol_pool_id": int(kol_pool_id),
+                "product_sku": product_sku,
+                "derive_method": "content_fit_v1",
+                "source": "final_v1_worker_followup",
+                "trigger": "final_v1_done",
+                "source_job_id": int(job_id),
+                "viltrox_fit_score_untouched": True,
+                "query_text": f"content fit - kol_pool #{kol_pool_id}",
+            }
+            cur.execute(
+                """
+                INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
+                VALUES ('kol_content_fit_analysis', %s::jsonb, 'queued', NOW(), NOW())
+                RETURNING id, status
+                """,
+                (_json(payload),),
+            )
+            row = cur.fetchone() or {}
+    return {
+        "status": "queued",
+        "job_id": int(row["id"]) if row.get("id") is not None else None,
+        "kol_pool_id": kol_pool_id,
+        "product_sku": product_sku,
+    }
+
+
 def _enqueue_account_dossier_extract_after_final_v1(
     conn: psycopg.Connection[Any],
     *,
@@ -1163,6 +1257,14 @@ def _finish_skipped(conn: psycopg.Connection[Any], job_id: int, reason: str) -> 
                 job_id=int(job_id),
                 deep_result=deep_result,
             )
+            # L2:final_v1 就绪 → 链式入队内容契合深析(每 KOL 一次,cache 复用/去重/预算闸控量)。
+            content_fit_job = _enqueue_content_fit_after_final_v1(
+                conn,
+                job_id=int(job_id),
+                deep_result=deep_result,
+            )
+            if analysis_summary and content_fit_job:
+                analysis_summary["content_fit_job"] = content_fit_job
             if analysis_summary and deep_result:
                 analysis_summary["deep_result"] = deep_result
             if analysis_summary and account_extract_job:
