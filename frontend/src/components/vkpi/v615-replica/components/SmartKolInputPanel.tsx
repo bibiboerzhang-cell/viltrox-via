@@ -305,6 +305,36 @@ function historyKindLabel(session: VkpiKolSearchHistoryItem): string {
   return "历史";
 }
 
+function relativeTime(value: unknown): string {
+  const s = cleanText(value);
+  if (!s) return "";
+  const t = Date.parse(s);
+  if (!Number.isFinite(t)) return "";
+  const diff = Date.now() - t;
+  if (diff < 60000) return "刚刚";
+  const m = Math.floor(diff / 60000);
+  if (m < 60) return `${m} 分钟前`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} 小时前`;
+  return `${Math.floor(h / 24)} 天前`;
+}
+
+function historyKindMeta(session: VkpiKolSearchHistoryItem): { label: string; cls: string } {
+  const type = cleanText(session.query_type);
+  if (type === "url_video") return { label: "视频", cls: "border-rose-300/30 bg-rose-400/[0.10] text-rose-100/90" };
+  if (type === "url_profile") return { label: "账号", cls: "border-violet-300/30 bg-violet-400/[0.10] text-violet-100/90" };
+  if (type === "text_recall") return { label: "找人", cls: "border-cyan-300/30 bg-cyan-400/[0.10] text-cyan-100/90" };
+  return { label: "历史", cls: "border-white/[0.1] bg-white/[0.03] text-slate-300" };
+}
+
+function historyStatusMeta(value: unknown): { label: string; cls: string; dot: string } {
+  const label = advanceStatusLabel(value);
+  if (label === "已完成") return { label, cls: "text-emerald-300/85", dot: "#34d399" };
+  if (label === "查找中") return { label, cls: "text-amber-300/85", dot: "#fbbf24" };
+  if (label === "未完成") return { label, cls: "text-rose-300/85", dot: "#fb7185" };
+  return { label, cls: "text-slate-500", dot: "#64748b" };
+}
+
 function HistoryStrip({
   items,
   loading,
@@ -324,21 +354,28 @@ function HistoryStrip({
         </div>
         {loading ? <span className="text-[9.5px] text-slate-600">同步中</span> : null}
       </div>
-      <div className="flex flex-wrap gap-1.5">
-        {items.slice(0, 5).map((item) => {
+      <div className="space-y-1">
+        {items.slice(0, 6).map((item) => {
           const sessionId = historySessionId(item);
           const label = display(item.query_text, "未命名");
+          const kind = historyKindMeta(item);
+          const st = historyStatusMeta(item.status || "ready");
+          const when = relativeTime(item.updated_at || item.created_at);
           return (
             <button
               key={`${sessionId || label}-${item.updated_at || item.created_at || ""}`}
               type="button"
               onClick={() => onOpen(item)}
-              className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-white/[0.07] bg-white/[0.025] px-2 py-1 text-[10px] text-slate-400 transition-colors hover:border-cyan-300/25 hover:text-cyan-100"
-              title={label}
+              className="group flex w-full items-center gap-2 rounded-md border border-white/[0.05] bg-white/[0.015] px-2 py-1.5 text-left transition-colors hover:border-cyan-300/25 hover:bg-cyan-400/[0.04]"
+              title={`${kind.label} · ${label} · ${st.label}`}
             >
-              <span className="shrink-0 text-slate-600">{historyKindLabel(item)}</span>
-              <span className="max-w-[220px] truncate">{label}</span>
-              <span className="shrink-0 text-slate-600">{advanceStatusLabel(item.status || "ready")}</span>
+              <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[8.5px] font-semibold ${kind.cls}`}>{kind.label}</span>
+              <span className="min-w-0 flex-1 truncate text-[11px] text-slate-300 group-hover:text-cyan-100">{label}</span>
+              {when ? <span className="shrink-0 text-[9px] text-slate-600">{when}</span> : null}
+              <span className={`inline-flex shrink-0 items-center gap-1 text-[9.5px] font-medium ${st.cls}`}>
+                <span className="h-1 w-1 rounded-full" style={{ background: st.dot }} />
+                {st.label}
+              </span>
             </button>
           );
         })}
