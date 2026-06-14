@@ -1,8 +1,12 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Activity, CircleDot, DollarSign, Package, Plus, Search, Target, TrendingUp } from "lucide-react";
 import EventCard from "../components/EventCard.js";
-import { EVENTS_DATA } from "../data/events.js";
 import { INITIAL_STOCK } from "../data/stock.js";
+import {
+  listEvents, createEvent, updateEvent, deleteEvent,
+  toUiEvent, fromUiCreate, fromUiUpdate, unwrapItem,
+} from "../../../../../services/vkpi/events-api";
+import { useAuth } from "../../../../../hooks/useAuth";
 import { TASKS_DATA } from "../data/tasks.js";
 import DeleteConfirmModal from "../modals/DeleteConfirmModal.js";
 import NewEventModal from "../modals/NewEventModal.js";
@@ -13,7 +17,10 @@ import { fmtMoneyShort, sum } from "../shared/helpers.js";
 
 const e = React.createElement;
 export default function EventsPage({ currentUser }) {
-  const [events, setEvents] = useState(EVENTS_DATA);
+  const { token } = useAuth();
+  const [events, setEvents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [selectedId, setSelectedId] = useState(null);
   const [showNew, setShowNew] = useState(false);
   const [editingEvent, setEditingEvent] = useState(null);
@@ -23,55 +30,56 @@ export default function EventsPage({ currentUser }) {
   const [statusFilter, setStatusFilter] = useState("全部");
   const [typeFilter, setTypeFilter] = useState("all");
   const [search, setSearch] = useState("");
-  const [showOnlyMine, setShowOnlyMine] = useState(true);
-  
+  const [showOnlyMine, setShowOnlyMine] = useState(false);
+
+  // 从后端加载真活动(替代旧 mock EVENTS_DATA)
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    setLoadError("");
+    listEvents(token, { limit: 200 })
+      .then(res => { if (alive) setEvents((res.items || []).map(toUiEvent)); })
+      .catch(err => { if (alive) { setEvents([]); setLoadError(String(err && err.message ? err.message : err)); } })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [token]);
+
   function handleCreateEvent(data) {
-    const newEv = {
-      id: "evt_" + Date.now(),
-      title: data.title,
-      typeKey: data.typeKey,
-      status: "planning",
-      healthScore: 100,
-      startDate: data.startDate,
-      endDate: data.endDate || data.startDate,
-      location: { name: data.locName, city: data.city, country: data.country },
-      budgetTotal: data.budget,
-      budgetByCategory: {},
-      ownerId: data.teamIds[0] || "j",
-      teamUserIds: data.teamIds,
-      relatedProjectIds: data.projectIds,
-      invitedKols: [],
-      note: data.note,
-      updatedAt: "刚刚",
-    };
-    setEvents(prev => [newEv, ...prev]);
     setShowNew(false);
+    createEvent(token, fromUiCreate(data))
+      .then(res => { const row = unwrapItem(res); if (row) setEvents(prev => [toUiEvent(row), ...prev]); })
+      .catch(err => { setLoadError("创建失败:" + String(err && err.message ? err.message : err)); });
   }
-  
+
   function handleUpdateEvent(updated) {
-    setEvents(prev => prev.map(ev => ev.id === updated.id ? { ...ev, ...updated, updatedAt: "刚刚" } : ev));
     setEditingEvent(null);
+    setEvents(prev => prev.map(ev => ev.id === updated.id ? { ...ev, ...updated, updatedAt: "刚刚" } : ev)); // 乐观
+    updateEvent(token, updated.id, fromUiUpdate(updated))
+      .then(res => { const row = unwrapItem(res); if (row) setEvents(prev => prev.map(ev => ev.id === row.id ? toUiEvent(row) : ev)); })
+      .catch(err => { setLoadError("更新失败:" + String(err && err.message ? err.message : err)); });
   }
-  
+
   function handleDeleteEvent(id) {
-    setEvents(prev => prev.filter(ev => ev.id !== id));
     setDeletingEvent(null);
     setSelectedId(null);
+    setEvents(prev => prev.filter(ev => ev.id !== id)); // 乐观
+    deleteEvent(token, id)
+      .catch(err => { setLoadError("删除失败:" + String(err && err.message ? err.message : err)); });
   }
   
   const STATUS_LIST = ["全部", "筹备中", "物料就绪", "进行中", "复盘中", "已完成"];
   
   // 权限: showOnlyMine 时只显示当前用户参与的 event
   const filtered = useMemo(() => events.filter(ev => {
-    if (showOnlyMine && !ev.teamUserIds.includes(currentUser.id)) return false;
-    if (statusFilter !== "全部" && EVENT_STATUS[ev.status].label !== statusFilter) return false;
+    if (showOnlyMine && !(ev.teamUserIds || []).includes(currentUser.id)) return false;
+    if (statusFilter !== "全部" && (EVENT_STATUS[ev.status]?.label || ev.status) !== statusFilter) return false;
     if (typeFilter !== "all" && ev.typeKey !== typeFilter) return false;
-    if (search && !ev.title.toLowerCase().includes(search.toLowerCase()) && !ev.location.city.toLowerCase().includes(search.toLowerCase())) return false;
+    if (search && !ev.title.toLowerCase().includes(search.toLowerCase()) && !(ev.location?.city || "").toLowerCase().includes(search.toLowerCase())) return false;
     return true;
   }), [events, statusFilter, typeFilter, search, showOnlyMine, currentUser]);
   
   // KPI - 也按权限过滤
-  const myEvents = events.filter(ev => ev.teamUserIds.includes(currentUser.id));
+  const myEvents = events.filter(ev => (ev.teamUserIds || []).includes(currentUser.id));
   const activeEvents = myEvents.filter(ev => ev.status === "planning" || ev.status === "prep_ready" || ev.status === "live");
   const totalSpentThisMonth = myEvents.reduce((s, ev) => s + sum(ev.budgetByCategory, "spent"), 0);
   const allTasks = myEvents.flatMap(ev => (TASKS_DATA[ev.id] || []).filter(t => 
@@ -111,6 +119,9 @@ export default function EventsPage({ currentUser }) {
   }
   
   return e("div", { className: "max-w-7xl mx-auto p-5" },
+    // 加载 / 错误 横幅(真后端状态)
+    loadError && e("div", { className: "mb-3 px-3 py-2 rounded-lg border border-rose-500/30 bg-rose-500/10 text-[11px] text-rose-200" }, "⚠ ", loadError),
+    loading && e("div", { className: "mb-3 px-3 py-2 rounded-lg border border-white/[0.06] bg-white/[0.02] text-[11px] text-slate-400" }, "加载活动中…"),
     // 顶部 KPI 4 个
     e("div", { className: "grid grid-cols-4 gap-3 mb-5" },
       e("div", { className: "rounded-xl border border-white/[0.06] bg-white/[0.012] p-3.5" },
