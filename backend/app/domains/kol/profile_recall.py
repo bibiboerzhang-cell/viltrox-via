@@ -144,6 +144,25 @@ def _brand_collab_count(row: dict[str, Any]) -> int:
     return 0
 
 
+# ── 新人优先(用户令):库内反复用的「饱和大号」(高粉)展示降权,让新鲜/上升期候选浮上来。──
+# 仅作用于独立展示分 display_rank_score,绝不并入 viltrox_fit_score / recall_rank_score / vector_score。
+# 粉丝数据缺(0)→ 一律不动(不杜撰)。分档让降权可解释、可调。
+SATURATED_FOLLOWER_TIERS: tuple[tuple[int, float], ...] = (
+    (500_000, -0.18),
+    (200_000, -0.12),
+    (100_000, -0.08),
+)
+FRESH_FOLLOWER_CEILING = 30_000  # 粉丝低于此且有内容证据 → 上升期小号,新人优先小幅加权
+FRESH_PRIORITY_BOOST = 0.06
+
+
+def _followers_int(row: dict[str, Any]) -> int:
+    try:
+        return int(float(row.get("followers") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _relevance_signals(
     row: dict[str, Any],
     evidence: dict[str, Any],
@@ -172,6 +191,22 @@ def _relevance_signals(
         adjust -= 0.04
         flags.append(f"合作{collab_count}+")
         notes.append(f"已合作品牌较多({collab_count}),议价/独占性弱")
+
+    # ③ 新人优先(用户令):库内反复用的「饱和大号」(高粉)展示降权,新鲜/上升期小号上浮;
+    #    粉丝数据缺(0)→ 不动。仅调整独立展示分,绝不并入任何评分。
+    followers = _followers_int(row)
+    if followers > 0:
+        for threshold, penalty in SATURATED_FOLLOWER_TIERS:
+            if followers >= threshold:
+                adjust += penalty
+                flags.append("大号·饱和")
+                notes.append(f"库内高粉大号({followers:,}),优先让新鲜/上升期创作者")
+                break
+        else:
+            if followers <= FRESH_FOLLOWER_CEILING and signal_blob:
+                adjust += FRESH_PRIORITY_BOOST
+                flags.append("新鲜上升期")
+                notes.append("上升期小号,新人优先加权")
 
     return adjust, flags, notes, tier_hint
 
