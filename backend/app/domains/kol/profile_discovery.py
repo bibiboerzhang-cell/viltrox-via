@@ -161,11 +161,17 @@ MARKET_LANGUAGE: dict[str, tuple[str, str]] = {
     "SA": ("ar", "SA"), "AE": ("ar", "AE"),
 }
 _LANG_DISPLAY = {
+    "en": "English",
     "ja": "Japanese", "ko": "Korean", "de": "German", "fr": "French", "es": "Spanish",
     "it": "Italian", "pt": "Portuguese", "ru": "Russian", "th": "Thai", "vi": "Vietnamese",
     "id": "Indonesian", "tr": "Turkish", "pl": "Polish", "nl": "Dutch", "ar": "Arabic",
 }
 _LOCALIZE_CACHE: dict[tuple[str, str], str] = {}
+
+
+def _has_cjk(text: str) -> bool:
+    """含中日韩统一表意文字(中文为主)→ 需翻译成目标语言再搜平台。"""
+    return any("一" <= ch <= "鿿" for ch in text)
 
 
 def _market_to_language(market: str) -> tuple[str, str]:
@@ -179,8 +185,14 @@ def _localize_search_terms(en_query: str, language: str) -> str:
     缓存不重复烧;翻译失败/空 → 回退英文(不阻断)。language 为空/en → 原样返回。"""
     q = _text(en_query)
     lang = _text(language).lower()
-    if not q or lang in ("", "en"):
+    if not q:
         return q
+    # 英文/全球市场:query 已是拉丁/英文 → 原样;但若是中文(persona-KB 计划的中文 search_query)→
+    # 翻成英文,贯彻「中文输入→英文搜索」(否则中文词又被原样拿去搜平台、捞中文圈)。
+    if lang in ("", "en"):
+        if not _has_cjk(q):
+            return q
+        lang = "en"
     key = (q, lang)
     if key in _LOCALIZE_CACHE:
         return _LOCALIZE_CACHE[key]
