@@ -80,6 +80,12 @@ const PARTNERSHIP_LABELS = {
   pending: { label: "待签", desc: "联系 / 回复 / 确认前", color: "#a855f7" },
 };
 
+const COMPANY_GROUP_LABELS = {
+  main_brand: { label: "主品牌", desc: "Official / Global 官方主账号", color: "#10b981" },
+  product_line: { label: "产品线", desc: "Cine / Flash / Gear 产品矩阵", color: "#f59e0b" },
+  regional: { label: "区域", desc: "区域 / 本地化官方账号", color: "#3b82f6" },
+};
+
 const MOVER_TABS = [
   { id: "by_views", label: "播放量", metric: "views" },
   { id: "by_activity", label: "最活跃", metric: "evidence" },
@@ -142,35 +148,69 @@ export function KPIDetailModal({ kpiId, initialScope, metrics = [], onClose, onD
   const isRosterDetail = metric.id === "kol-count" && number(rosterDetail.active_roster) != null;
 
   if (isRosterDetail) {
-    const active = number(rosterDetail.active_roster) || 0;
-    const totalPool = number(rosterDetail.total_pool) || 0;
+    const isCompany = scope === "company";
+    const company = record(rosterDetail.company);
+    const active = isCompany
+      ? number(company.active_roster) || 0
+      : number(rosterDetail.active_roster) || 0;
+    const totalPool = isCompany
+      ? number(company.total_pool) || 0
+      : number(rosterDetail.total_pool) || 0;
+    const companyFollowers = number(company.followers) || 0;
+    const companyViews = number(company.total_views) || 0;
+    const companyGroups = record(company.groups);
     const composition = record(rosterDetail.composition);
     const tiers = record(rosterDetail.partnership_4tier);
     const tierPct = record(rosterDetail.partnership_4tier_pct);
-    const platformRows = Array.isArray(rosterDetail.by_platform) ? rosterDetail.by_platform : [];
+    const platformRows = isCompany
+      ? (Array.isArray(company.by_platform) ? company.by_platform : [])
+      : (Array.isArray(rosterDetail.by_platform) ? rosterDetail.by_platform : []);
     const moversTabs = record(rosterDetail.movers_tabs);
-    const movers = Array.isArray(moversTabs[moverTab]) ? moversTabs[moverTab] : [];
+    const movers = isCompany
+      ? (Array.isArray(company.movers) ? company.movers : [])
+      : (Array.isArray(moversTabs[moverTab]) ? moversTabs[moverTab] : []);
     const trend = record(record(rosterDetail.trend)[scope] || record(rosterDetail.trend).all);
     const trendPoints = Array.isArray(trend.points) ? trend.points : [];
     const trendPath = scope === "company" ? sparkPath(trendPoints.map((point) => number(record(point).total_views))) : "";
     const maxPlatform = Math.max(1, ...platformRows.map((row) => number(record(row).count) || 0));
     const handleExportCsv = () => {
-      const rows = [
+      const headerAndSummary = [
         ["section", "name", "platform", "value", "pct", "title", "date", "url"],
         ["summary", "total_pool", "", totalPool, "", "", "", ""],
         ["summary", "active_roster", "", active, "", "", "", ""],
-        ["composition", "signed", "", number(composition.signed) || 0, "", "", "", ""],
-        ["composition", "pending", "", number(composition.pending) || 0, "", "", "", ""],
-        ...Object.keys(PARTNERSHIP_LABELS).map((key) => [
-          "partnership",
-          PARTNERSHIP_LABELS[key].label,
-          "",
-          number(tiers[key]) || 0,
-          pct(tierPct[key]),
-          "",
-          "",
-          "",
-        ]),
+      ];
+      const breakdownRows = isCompany
+        ? [
+            ["summary", "followers", "", companyFollowers, "", "", "", ""],
+            ["summary", "total_views", "", companyViews, "", "", "", ""],
+            ...Object.keys(COMPANY_GROUP_LABELS).map((key) => [
+              "group",
+              COMPANY_GROUP_LABELS[key].label,
+              "",
+              number(companyGroups[key]) || 0,
+              totalPool > 0 ? pct((number(companyGroups[key]) || 0) / totalPool) : "0.0%",
+              "",
+              "",
+              "",
+            ]),
+          ]
+        : [
+            ["composition", "signed", "", number(composition.signed) || 0, "", "", "", ""],
+            ["composition", "pending", "", number(composition.pending) || 0, "", "", "", ""],
+            ...Object.keys(PARTNERSHIP_LABELS).map((key) => [
+              "partnership",
+              PARTNERSHIP_LABELS[key].label,
+              "",
+              number(tiers[key]) || 0,
+              pct(tierPct[key]),
+              "",
+              "",
+              "",
+            ]),
+          ];
+      const rows = [
+        ...headerAndSummary,
+        ...breakdownRows,
         ...platformRows.map((raw) => {
           const row = record(raw);
           return ["platform", row.platform || "", row.platform || "", number(row.count) || 0, pct(row.pct), "", "", ""];
@@ -178,7 +218,7 @@ export function KPIDetailModal({ kpiId, initialScope, metrics = [], onClose, onD
         ...movers.map((raw) => {
           const row = record(raw);
           return [
-            `movers:${moverTab}`,
+            isCompany ? "movers:company" : `movers:${moverTab}`,
             row.kol_name || "",
             row.platform || "",
             number(row.value) || 0,
@@ -234,24 +274,43 @@ export function KPIDetailModal({ kpiId, initialScope, metrics = [], onClose, onD
         ),
         e("div", { className: "relative grid gap-4 p-5 lg:grid-cols-[320px_minmax(0,1fr)]" },
           e("section", { className: "rounded-xl border border-white/[0.08] bg-white/[0.03] p-4" },
-            e("div", { className: "text-[10px] uppercase tracking-[0.18em] text-slate-500" }, "现役名单"),
-            e("div", { className: "mt-2 text-5xl font-light tracking-tight text-white tabular-nums" }, totalPool.toLocaleString()),
-            e("div", { className: "mt-2 text-sm text-slate-300" }, "精准 active ", e("span", { className: "font-semibold text-emerald-300 tabular-nums" }, active.toLocaleString())),
-            e("div", { className: "mt-4 grid grid-cols-2 gap-2" },
-              e("div", { className: "rounded-lg border border-emerald-400/15 bg-emerald-500/[0.08] p-3" },
-                e("div", { className: "text-[10px] text-emerald-200" }, "已签约"),
-                e("div", { className: "mt-1 text-2xl font-semibold text-white" }, compact(composition.signed))
-              ),
-              e("div", { className: "rounded-lg border border-purple-400/15 bg-purple-500/[0.08] p-3" },
-                e("div", { className: "text-[10px] text-purple-200" }, "待签"),
-                e("div", { className: "mt-1 text-2xl font-semibold text-white" }, compact(composition.pending))
-              )
-            ),
+            e("div", { className: "text-[10px] uppercase tracking-[0.18em] text-slate-500" }, isCompany ? "官方账号" : "现役名单"),
+            e("div", { className: "mt-2 text-5xl font-light tracking-tight text-white tabular-nums" }, isCompany ? `${totalPool.toLocaleString()}` : totalPool.toLocaleString()),
+            e("div", { className: "mt-2 text-sm text-slate-300" }, isCompany ? "官方在役账号" : "精准 active ", isCompany ? e("span", { className: "font-semibold text-emerald-300 tabular-nums" }, `${active.toLocaleString()} 个`) : e("span", { className: "font-semibold text-emerald-300 tabular-nums" }, active.toLocaleString())),
+            isCompany
+              ? e("div", { className: "mt-4 grid grid-cols-2 gap-2" },
+                  e("div", { className: "rounded-lg border border-cyan-400/15 bg-cyan-500/[0.08] p-3" },
+                    e("div", { className: "text-[10px] text-cyan-200" }, "粉丝总数"),
+                    e("div", { className: "mt-1 text-2xl font-semibold text-white" }, compact(companyFollowers))
+                  ),
+                  e("div", { className: "rounded-lg border border-purple-400/15 bg-purple-500/[0.08] p-3" },
+                    e("div", { className: "text-[10px] text-purple-200" }, "总播放"),
+                    e("div", { className: "mt-1 text-2xl font-semibold text-white" }, compact(companyViews))
+                  )
+                )
+              : e("div", { className: "mt-4 grid grid-cols-2 gap-2" },
+                  e("div", { className: "rounded-lg border border-emerald-400/15 bg-emerald-500/[0.08] p-3" },
+                    e("div", { className: "text-[10px] text-emerald-200" }, "已签约"),
+                    e("div", { className: "mt-1 text-2xl font-semibold text-white" }, compact(composition.signed))
+                  ),
+                  e("div", { className: "rounded-lg border border-purple-400/15 bg-purple-500/[0.08] p-3" },
+                    e("div", { className: "text-[10px] text-purple-200" }, "待签"),
+                    e("div", { className: "mt-1 text-2xl font-semibold text-white" }, compact(composition.pending))
+                  )
+                ),
             e("div", { className: "mt-4 rounded-lg border border-white/[0.06] bg-black/20 p-3 text-[10px] leading-relaxed text-slate-400" },
               e("div", { className: "mb-1 flex items-center gap-1.5 text-slate-300" }, e(Database, { size: 11 }), "数据契约"),
-              e("div", null, "active: ", e("span", { className: "text-slate-200" }, "has_video_evidence / official active")),
-              e("div", null, "partnership: ", e("span", { className: "text-slate-200" }, "vkpi_project_kol_assignments")),
-              e("div", null, "movers: ", e("span", { className: "text-slate-200" }, "vkpi_kol_video_evidence"))
+              isCompany
+                ? e(React.Fragment, null,
+                    e("div", null, "accounts: ", e("span", { className: "text-slate-200" }, "vkpi_employee_channels (official active)")),
+                    e("div", null, "metrics: ", e("span", { className: "text-slate-200" }, "vkpi_channel_metrics")),
+                    e("div", null, "movers: ", e("span", { className: "text-slate-200" }, "vkpi_channel_post_metrics"))
+                  )
+                : e(React.Fragment, null,
+                    e("div", null, "active: ", e("span", { className: "text-slate-200" }, "has_video_evidence / official active")),
+                    e("div", null, "partnership: ", e("span", { className: "text-slate-200" }, "vkpi_project_kol_assignments")),
+                    e("div", null, "movers: ", e("span", { className: "text-slate-200" }, "vkpi_kol_video_evidence"))
+                  )
             )
           ),
           e("section", { className: "rounded-xl border border-white/[0.08] bg-white/[0.03] p-4" },
@@ -281,23 +340,43 @@ export function KPIDetailModal({ kpiId, initialScope, metrics = [], onClose, onD
           )
         ),
         e("div", { className: "relative grid gap-4 px-5 pb-5 lg:grid-cols-[1fr_1fr]" },
-          e("section", { className: "rounded-xl border border-white/[0.08] bg-white/[0.03] p-4" },
-            e("h3", { className: "text-sm font-semibold text-white" }, "合作关系"),
-            e("div", { className: "mt-3 grid grid-cols-2 gap-2" },
-              ["long_term", "in_production", "one_off", "pending"].map((key) => {
-                const cfg = PARTNERSHIP_LABELS[key];
-                return e("div", { key, className: "rounded-lg border border-white/[0.07] bg-black/20 p-3" },
-                  e("div", { className: "flex items-center justify-between gap-2" },
-                    e("span", { className: "text-[11px] font-medium text-slate-200" }, cfg.label),
-                    e("span", { className: "text-[10px] text-slate-500" }, pct(tierPct[key]))
-                  ),
-                  e("div", { className: "mt-1 text-2xl font-semibold text-white tabular-nums" }, compact(tiers[key])),
-                  e("div", { className: "mt-1 h-1.5 rounded-full bg-white/[0.06]" }, e("div", { className: "h-full rounded-full", style: { width: pct(tierPct[key]), background: cfg.color } })),
-                  e("p", { className: "mt-2 text-[10px] leading-snug text-slate-500" }, cfg.desc)
-                );
-              })
-            )
-          ),
+          isCompany
+            ? e("section", { className: "rounded-xl border border-white/[0.08] bg-white/[0.03] p-4" },
+                e("h3", { className: "text-sm font-semibold text-white" }, "账号分组"),
+                e("div", { className: "mt-3 grid grid-cols-3 gap-2" },
+                  ["main_brand", "product_line", "regional"].map((key) => {
+                    const cfg = COMPANY_GROUP_LABELS[key];
+                    const count = number(companyGroups[key]) || 0;
+                    const groupPct = totalPool > 0 ? count / totalPool : 0;
+                    return e("div", { key, className: "rounded-lg border border-white/[0.07] bg-black/20 p-3" },
+                      e("div", { className: "flex items-center justify-between gap-2" },
+                        e("span", { className: "text-[11px] font-medium text-slate-200" }, cfg.label),
+                        e("span", { className: "text-[10px] text-slate-500" }, pct(groupPct))
+                      ),
+                      e("div", { className: "mt-1 text-2xl font-semibold text-white tabular-nums" }, compact(count)),
+                      e("div", { className: "mt-1 h-1.5 rounded-full bg-white/[0.06]" }, e("div", { className: "h-full rounded-full", style: { width: pct(groupPct), background: cfg.color } })),
+                      e("p", { className: "mt-2 text-[10px] leading-snug text-slate-500" }, cfg.desc)
+                    );
+                  })
+                )
+              )
+            : e("section", { className: "rounded-xl border border-white/[0.08] bg-white/[0.03] p-4" },
+                e("h3", { className: "text-sm font-semibold text-white" }, "合作关系"),
+                e("div", { className: "mt-3 grid grid-cols-2 gap-2" },
+                  ["long_term", "in_production", "one_off", "pending"].map((key) => {
+                    const cfg = PARTNERSHIP_LABELS[key];
+                    return e("div", { key, className: "rounded-lg border border-white/[0.07] bg-black/20 p-3" },
+                      e("div", { className: "flex items-center justify-between gap-2" },
+                        e("span", { className: "text-[11px] font-medium text-slate-200" }, cfg.label),
+                        e("span", { className: "text-[10px] text-slate-500" }, pct(tierPct[key]))
+                      ),
+                      e("div", { className: "mt-1 text-2xl font-semibold text-white tabular-nums" }, compact(tiers[key])),
+                      e("div", { className: "mt-1 h-1.5 rounded-full bg-white/[0.06]" }, e("div", { className: "h-full rounded-full", style: { width: pct(tierPct[key]), background: cfg.color } })),
+                      e("p", { className: "mt-2 text-[10px] leading-snug text-slate-500" }, cfg.desc)
+                    );
+                  })
+                )
+              ),
           e("section", { className: "rounded-xl border border-white/[0.08] bg-white/[0.03] p-4" },
             e("h3", { className: "text-sm font-semibold text-white" }, "按平台"),
             e("div", { className: "mt-3 space-y-2" },
@@ -319,27 +398,29 @@ export function KPIDetailModal({ kpiId, initialScope, metrics = [], onClose, onD
         e("section", { className: "relative mx-5 mb-5 rounded-xl border border-white/[0.08] bg-white/[0.03] p-4" },
           e("div", { className: "flex flex-wrap items-center justify-between gap-3" },
             e("div", null,
-              e("h3", { className: "text-sm font-semibold text-white" }, "KOL 榜单"),
-              e("p", { className: "text-[10px] text-slate-500" }, "用真实播放、内容数、近 30 天爆款和互动替代粉丝涨幅 mock")
+              e("h3", { className: "text-sm font-semibold text-white" }, isCompany ? "官方账号榜单" : "KOL 榜单"),
+              e("p", { className: "text-[10px] text-slate-500" }, isCompany ? "官方账号真实帖子,按播放量排序(vkpi_channel_post_metrics)" : "用真实播放、内容数、近 30 天爆款和互动替代粉丝涨幅 mock")
             ),
-            e("div", { className: "flex rounded-lg border border-white/[0.07] bg-white/[0.02] p-0.5" },
-              MOVER_TABS.map((tab) => e("button", {
-                key: tab.id,
-                onClick: () => setMoverTab(tab.id),
-                className: `rounded-md px-3 py-1.5 text-[11px] ${moverTab === tab.id ? "bg-purple-500/[0.24] text-white" : "text-slate-400 hover:text-white"}`,
-              }, tab.label))
-            )
+            isCompany
+              ? null
+              : e("div", { className: "flex rounded-lg border border-white/[0.07] bg-white/[0.02] p-0.5" },
+                  MOVER_TABS.map((tab) => e("button", {
+                    key: tab.id,
+                    onClick: () => setMoverTab(tab.id),
+                    className: `rounded-md px-3 py-1.5 text-[11px] ${moverTab === tab.id ? "bg-purple-500/[0.24] text-white" : "text-slate-400 hover:text-white"}`,
+                  }, tab.label))
+                )
           ),
           e("div", { className: "mt-3 grid gap-2 md:grid-cols-2" },
             movers.slice(0, 10).map((raw, index) => {
               const row = record(raw);
-              return e("div", { key: `${moverTab}-${row.kol_id}-${index}`, className: "flex items-center justify-between gap-3 rounded-lg border border-white/[0.06] bg-black/20 px-3 py-2" },
+              return e("div", { key: `${isCompany ? "company" : moverTab}-${row.kol_id || row.handle || index}-${index}`, className: "flex items-center justify-between gap-3 rounded-lg border border-white/[0.06] bg-black/20 px-3 py-2" },
                 e("div", { className: "min-w-0" },
-                  e("div", { className: "truncate text-[12px] font-medium text-slate-100" }, index + 1, ". ", row.kol_name || "Unknown KOL"),
+                  e("div", { className: "truncate text-[12px] font-medium text-slate-100" }, index + 1, ". ", row.kol_name || (isCompany ? "官方账号" : "Unknown KOL")),
                   e("div", { className: "truncate text-[10px] text-slate-500" }, row.platform || "unknown", row.title ? ` · ${shortText(row.title, 54)}` : "")
                 ),
                 e("div", { className: "shrink-0 text-right" },
-                  e("div", { className: "text-[12px] font-semibold text-white tabular-nums" }, metricLabel(moverTab, row)),
+                  e("div", { className: "text-[12px] font-semibold text-white tabular-nums" }, metricLabel(isCompany ? "by_views" : moverTab, row)),
                   e("div", { className: "text-[9px] text-slate-500" }, row.publish_date ? String(row.publish_date).slice(0, 10) : "无历史涨跌")
                 )
               );
