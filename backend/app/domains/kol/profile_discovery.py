@@ -1033,8 +1033,10 @@ async def execute_smart_search_profile_advance_pipeline(
                 if payload.get(_k) is None and _plan.get(_k) is not None:
                     payload[_k] = _plan.get(_k)
             payload["_worker_planned"] = True
+            payload["query_plan_source"] = "llm_plan"
         except Exception:
-            pass
+            # 诚实标注:planner 抛错 → 退 rule_v0 英文兜底(行为不变),仅记录走了哪条路。
+            payload["query_plan_source"] = "rule_v0_fallback"
     recall_result = profile_recall.recall_kol_profiles(
         query_text=query,
         product_sku=_text(payload.get("product_sku")),
@@ -1148,6 +1150,9 @@ async def execute_smart_search_profile_advance_pipeline(
                 "content_fit_enqueued": (content_fit or {}).get("enqueued_count") if content_fit else 0,
                 "viltrox_fit_score_changed_ids": changed_ids,
                 "viltrox_fit_score_untouched": not changed_ids,
+                # 诚实信号:本次走 LLM planner('llm_plan')还是 rule_v0 英文兜底('rule_v0_fallback');
+                # 未尝试规划(已带 product_focus/persona)则为 None。前端据此如实告知用户。
+                "query_plan_source": payload.get("query_plan_source"),
             }
         },
     )
@@ -1155,6 +1160,7 @@ async def execute_smart_search_profile_advance_pipeline(
         "status": pipeline_status,
         "session_id": int(session_id),
         "query": query,
+        "query_plan_source": payload.get("query_plan_source"),
         "content_fit": content_fit,
         "recall": {
             "method": recall_result.get("method"),

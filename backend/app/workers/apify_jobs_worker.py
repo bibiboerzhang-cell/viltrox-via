@@ -1452,6 +1452,8 @@ def _process_smart_search_profile_advance(conn: psycopg.Connection[Any], job: di
         "advance_status": advance.get("status"),
         "advance_selected": advance.get("selected"),
         "advance_counts": advance.get("counts"),
+        # 诚实信号:LLM planner('llm_plan')vs rule_v0 兜底('rule_v0_fallback'),源自 pipeline 返回。
+        "query_plan_source": result.get("query_plan_source"),
         "viltrox_fit_score_changed_ids": result.get("viltrox_fit_score_changed_ids"),
         "viltrox_fit_score_untouched": result.get("viltrox_fit_score_untouched"),
     }
