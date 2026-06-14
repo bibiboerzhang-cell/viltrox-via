@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 import app.domains.tasks.enqueue as task_enqueue
 from app.core.config import VKPI_ASYNC_ENABLED
 from app.api.dependencies.perms import require_tab
+from app.db.connection import get_conn
 from app.domains.comments import channel as channel_comments
 from app.domains.projects import p5_selected
 from app.domains.access import scope
@@ -211,6 +212,27 @@ def official_channel_matrix(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     return channels.official_account_matrix(staff=staff, view_as_staff_id=view_as_staff_id, limit=limit)
+
+
+@router.get("/channels/metrics-filled")
+def official_channel_metrics_filled(
+    channel_id: int | None = None,
+    start: str = "",
+    end: str = "",
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    from app.domains.channels import metrics_gapfill
+
+    conn = get_conn()
+    channel_ids = [int(channel_id)] if channel_id else None
+    series = metrics_gapfill.compute_filled_series(
+        conn,
+        channel_ids=channel_ids,
+        start=start or None,
+        end=end or None,
+    )
+    summary = metrics_gapfill.gap_summary(conn)
+    return {"series": series, "summary": summary}
 
 
 @router.get("/channels/official-views-evidence")
