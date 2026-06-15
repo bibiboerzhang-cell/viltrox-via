@@ -45,6 +45,7 @@ export function DashboardReplicaPage(props: any) {
     breadcrumb, goBack, topListData, setSelectedEvent, setSelectedSignal, setShowAllSignals, setShowAIConfirm,
     setAiRegenerating, aiRegenerating, setSelectedMover, setShowAllMovers, setSelectedProject, setShowAllProjects,
     setSelectedPublish, setShowFullCalendar, onOpenProjectsList, onOpenMyKol, onOpenEvents, focusTarget, viewModes = VIEW_MODES,
+    showSettingsModal = false,
     metrics = [], campaigns = [], campaignsMeta = {}, calendarDays = [], calendarMeta = {},
     signals = [], aiInsight = EMPTY_AI_INSIGHT, topMovers = [], kolFunnel = null,
     upcomingEvents = [], revenueBySource = [], dashboardLoading = false, dashboardError = "",
@@ -126,7 +127,7 @@ export function DashboardReplicaPage(props: any) {
                 }),
 
                 // Title overlay 左上(永远在,加半透明背景便于在 2D 街景下可读)
-                e("div", { className: "pointer-events-none absolute left-6 top-6 z-overlay-high max-w-md rounded-xl bg-[#040712]/70 backdrop-blur-md px-3 py-2" },
+                !showSettingsModal && e("div", { className: "pointer-events-none absolute left-6 top-6 z-overlay-high max-w-md rounded-xl bg-[#040712]/70 backdrop-blur-md px-3 py-2" },
                   e("h2", { className: "text-xl md:text-2xl font-semibold text-white" }, "Marketing Command Center"),
                   e("p", { className: "mt-1 text-xs md:text-sm text-slate-400" },
                     currentMode ? currentMode.desc : "Choose a view to explore real-time activity across the globe"
@@ -134,7 +135,7 @@ export function DashboardReplicaPage(props: any) {
                 ),
 
                 // 层级选择器(左侧顶部,不顶到右边)
-                e("div", { className: "absolute left-6 top-24 z-overlay-high flex flex-wrap items-start gap-2 max-w-[calc(100%-360px)]" },
+                !showSettingsModal && e("div", { className: "absolute left-6 top-24 z-overlay-high flex flex-wrap items-start gap-2 max-w-[calc(100%-360px)]" },
 
                   // Step 1: VIEWING
                   e(HierarchyDropdown, {
@@ -183,7 +184,7 @@ export function DashboardReplicaPage(props: any) {
                 ),
 
                 // Breadcrumb — 单独一行在 dropdown 下方(避免和 Events 卡重合)
-                breadcrumb.length > 0 && e("div", { className: "absolute left-6 top-[154px] z-overlay-high" },
+                !showSettingsModal && breadcrumb.length > 0 && e("div", { className: "absolute left-6 top-[154px] z-overlay-high" },
                   e(Breadcrumb, { levels: breadcrumb, onGoBack: goBack })
                 ),
 
@@ -226,17 +227,19 @@ export function DashboardReplicaPage(props: any) {
                 ),
 
                 // ⬇️ Upcoming Events 浮动卡(可拖动 + 可折叠)
-                isAvailable && viewMode && e("div", { 
-                  className: "absolute right-6 top-24 w-[280px]", 
+                // P2 穿透根治:Settings 浮层(z-1000)打开时,这些 z-800 绝对定位浮卡会从
+                // dashboard 栈逃逸穿到设置页之上 → settings 打开就不渲染浮卡(最稳,无状态丢失)。
+                !showSettingsModal && isAvailable && viewMode && e("div", {
+                  className: "absolute right-6 top-24 w-[280px]",
                   style: { zIndex: 800 }
                 },
                   e(UpcomingEventsCard, { events: upcomingEvents, dragConstraintsRef: globeContainerRef, onEventClick: setSelectedEvent, onViewAll: onOpenEvents })
                 ),
 
                 // V6.3: Top List 浮动卡(可拖动 / 可缩放 / 可折叠)
-                isAvailable && viewMode && topListData.items.length > 0 && e("div", { 
-                  className: "absolute bottom-6 left-6", 
-                  style: { zIndex: 800 } 
+                !showSettingsModal && isAvailable && viewMode && topListData.items.length > 0 && e("div", {
+                  className: "absolute bottom-6 left-6",
+                  style: { zIndex: 800 }
                 },
                   e(FloatingCard, {
                     title: topListData.title,
@@ -282,9 +285,9 @@ export function DashboardReplicaPage(props: any) {
                 ),
 
                 // V6.3: Revenue Donut 浮动卡(仅真实收入分布可用时显示)
-                revenueBySource.length > 0 && e("div", { 
-                  className: "absolute bottom-6 right-6", 
-                  style: { zIndex: 800 } 
+                !showSettingsModal && revenueBySource.length > 0 && e("div", {
+                  className: "absolute bottom-6 right-6",
+                  style: { zIndex: 800 }
                 },
                   e(FloatingCard, {
                     title: "Revenue by Source",

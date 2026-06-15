@@ -292,7 +292,8 @@ export function V615ReplicaApp(props: any = {}) {
       ? { ...payload, sourceType: "excel_promo_plan" }
       : payload;
     const result = await createProject(apiToken, visiblePayload);
-    await refreshReplicaProjects();
+    // 创建已 200 成功;刷新列表失败不该被上层 catch 当成"创建失败"(此前的假失败真因)。
+    try { await refreshReplicaProjects(); } catch { /* 刷新打嗝不影响创建成功 */ }
     return result;
   }, [apiToken, refreshReplicaProjects]);
   const handleReplicaUpdateProject = useCallback(async (projectId, payload) => {
@@ -1264,6 +1265,7 @@ export function V615ReplicaApp(props: any = {}) {
             ),
 
             activeNav === "dashboard" && e(DashboardReplicaPage, {
+              showSettingsModal,  // P2 穿透:设置浮层打开时,dashboard 浮卡/地图 overlay 不渲染
               kpiScope, setKpiScope, t, setSelectedKpi, globeContainerRef, isAvailable, pins, currentMode,
               venue, item, city, country, setPreviewEvent, handleCountryChange, handleCityChange, handleItemChange,
               setVenue, setSelectedPin, viewMode, setViewMode, countryOptions, cityOptions, itemOptions, venueOptions,

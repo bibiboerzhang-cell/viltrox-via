@@ -582,7 +582,7 @@ def create_project(body: dict[str, Any], *, staff: dict[str, Any] | None = None)
                 "source_type": str(body.get("source_type") or "manual"),
             },
         )
-    return {"id": project_id, "project_uid": project_uid, "stage": stage}
+    return {"id": project_id, "project_uid": project_uid, "project_name": name, "stage": stage}
 
 
 def update_project(project_id: int, body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
