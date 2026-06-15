@@ -178,6 +178,8 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "139_vkpi_isolation_perf_indexes.sql",
     "140_vkpi_worker_heartbeat.sql",
     "141_vkpi_action_inbox.sql",
+    "142_vkpi_project_automation_audit.sql",
+    "143_vkpi_kol_memory.sql",
 )
 
 try:
