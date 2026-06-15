@@ -74,12 +74,31 @@ export default defineConfig(({ command }) => {
           assetFileNames: "assets/asset-[hash][extname]",
           manualChunks(id) {
             if (id.includes("node_modules")) {
-              if (id.includes("framer-motion")) return "vendor-motion";
+              // Keep the React runtime in one cohesive chunk (react + react-dom + scheduler)
+              // so it cannot be split across chunks in a way that breaks the runtime.
+              if (
+                id.includes("/node_modules/react-dom/") ||
+                id.includes("/node_modules/react/") ||
+                id.includes("/node_modules/scheduler/")
+              ) {
+                return "vendor-react";
+              }
+              if (id.includes("react-router") || id.includes("@remix-run/router")) return "vendor-router";
+              if (id.includes("framer-motion") || id.includes("motion-dom") || id.includes("motion-utils")) return "vendor-motion";
               if (id.includes("lucide-react")) return "vendor-icons";
               if (id.includes("recharts")) return "vendor-charts";
               if (id.includes("@tanstack")) return "vendor-query";
+              // Heavy 3D / map / geo libs are only used on a few pages — isolate them
+              // so they no longer inflate the shared vendor chunk past the 500 kB warning.
+              if (id.includes("/node_modules/three/")) return "vendor-three";
+              if (id.includes("/node_modules/leaflet/")) return "vendor-leaflet";
+              if (id.includes("d3-geo") || id.includes("topojson-client") || id.includes("d3-array")) return "vendor-geo";
               return "vendor";
             }
+            // NOTE: most vkpi route pages are already React.lazy()-split (see WorkspacePage.tsx),
+            // so they get their own async chunks automatically. We only name a few stable groups
+            // here to keep historical chunk boundaries; do NOT add page-dir rules that would force
+            // lazy route modules to merge back into eager shared chunks.
             if (id.includes("/src/components/vkpi/pages/myKol/")) return "vkpi-my-kol";
             if (id.includes("/src/components/vkpi/pages/projects/")) return "vkpi-projects";
             if (id.includes("/src/components/vkpi/v615-replica/")) return "vkpi-v615";
