@@ -3,14 +3,15 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
-import { Check, Copy, Download, FileText, Printer, X } from "lucide-react";
+import { Check, Copy, Download, FileText, Loader2, Printer, Wand2, X } from "lucide-react";
 import { markdownToHtml } from "../lib/markdown";
 import { generateRuntimeReportMarkdown, generateRuntimeVisualHtml } from "../lib/reportRuntime";
 import { loadStoredState, saveStoredState } from "../lib/storage";
+import { fetchV615ReportAnalysis } from "../api";
 
 const e = React.createElement;
 
-export function ReportPanel({ onClose, data }: any) {
+export function ReportPanel({ onClose, data, apiToken }: any) {
   // 加载上次选项
   const stored = loadStoredState();
   const [period, setPeriod] = useState(stored.reportPeriod || "monthly");
@@ -43,7 +44,72 @@ export function ReportPanel({ onClose, data }: any) {
     () => generateRuntimeVisualHtml({ period, language, sections, data }),
     [period, language, sections, data]
   );
-  
+
+  // 2026-06-15:报告深度分析 —— 把拼好的全量真实数据 POST 给后端,LLM 整理成经营分析,插回报告顶部。
+  const [analysis, setAnalysis] = useState<any>(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analyzeErr, setAnalyzeErr] = useState("");
+  // 报告内容变了(改周期/语言/section)→ 旧分析作废,需重新分析。
+  useEffect(() => { setAnalysis(null); setAnalyzeErr(""); }, [reportContent]);
+
+  const A_LABELS = language === "zh"
+    ? { h: "🧭 经营深度分析", hi: "关键亮点", rk: "风险与问题", rc: "行动建议", mk: "市场 / 竞品 / 社区洞察" }
+    : { h: "🧭 Executive Analysis", hi: "Highlights", rk: "Risks & Issues", rc: "Recommendations", mk: "Market / Competitor / Community" };
+
+  const analysisMd = useMemo(() => {
+    if (!analysis) return "";
+    const out: any[] = [`## ${A_LABELS.h}`, ""];
+    if (analysis.executive_summary) out.push(`> ${analysis.executive_summary}`, "");
+    const blk = (title: string, arr: any) => {
+      if (Array.isArray(arr) && arr.length) {
+        out.push(`**${title}**`, "");
+        arr.forEach((x: any) => out.push(`- ${x}`));
+        out.push("");
+      }
+    };
+    blk(A_LABELS.hi, analysis.highlights);
+    blk(A_LABELS.rk, analysis.risks);
+    blk(A_LABELS.rc, analysis.recommendations);
+    blk(A_LABELS.mk, analysis.market_insights);
+    out.push("---", "");
+    return out.join("\n");
+  }, [analysis, language]);
+
+  const analysisHtml = useMemo(() => {
+    if (!analysis) return "";
+    const esc = (s: any) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const grid = (arr: any) => `<div class="ai-grid">${(Array.isArray(arr) ? arr : []).map((x: any) => `<div class="ai-item">${esc(x)}</div>`).join("")}</div>`;
+    const card = (title: string, arr: any) => (Array.isArray(arr) && arr.length) ? `<div class="card"><div class="card-title">${esc(title)}</div>${grid(arr)}</div>` : "";
+    return `<section><h2>${esc(A_LABELS.h)}</h2>${analysis.executive_summary ? `<div class="ai-callout"><div class="ai-body">${esc(analysis.executive_summary)}</div></div>` : ""}${card(A_LABELS.hi, analysis.highlights)}${card(A_LABELS.rk, analysis.risks)}${card(A_LABELS.rc, analysis.recommendations)}${card(A_LABELS.mk, analysis.market_insights)}</section>`;
+  }, [analysis, language]);
+
+  // 有分析则插到报告顶部(执行摘要在前,详细数据在后 —— 给老板看的报告标准结构);复制 / 下载 / PDF 全包含。
+  const finalReportContent = analysisMd ? `${analysisMd}\n${reportContent}` : reportContent;
+  const finalVisualHtml = analysisHtml ? `${analysisHtml}${visualReportHtml}` : visualReportHtml;
+
+  const handleAnalyze = async () => {
+    if (analyzing || !apiToken) return;
+    setAnalyzing(true);
+    setAnalyzeErr("");
+    try {
+      const res: any = await fetchV615ReportAnalysis(apiToken, reportContent, period, language);
+      if (res && res.available && res.analysis) {
+        setAnalysis(res.analysis);
+      } else {
+        const reason = res && res.reason;
+        setAnalyzeErr(
+          reason === "budget_blocked"
+            ? (language === "zh" ? "今日深度分析额度已用满,明天再试。" : "Daily analysis budget reached. Try again tomorrow.")
+            : (language === "zh" ? "暂时无法生成深度分析,请稍后重试。" : "Analysis unavailable, please retry later.")
+        );
+      }
+    } catch {
+      setAnalyzeErr(language === "zh" ? "深度分析请求失败,请重试。" : "Analysis request failed, please retry.");
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
   const toggleSection = (key: any) => {
     setSections((s: any) => ({ ...s, [key]: !s[key] }));
   };
@@ -52,12 +118,12 @@ export function ReportPanel({ onClose, data }: any) {
   const handleCopy = async () => {
     const msg = language === "zh" ? "已复制到剪贴板 ✓" : "Report copied to clipboard ✓";
     try {
-      await navigator.clipboard.writeText(reportContent);
+      await navigator.clipboard.writeText(finalReportContent);
       alert(msg);
     } catch (err) {
       // Fallback
       const ta = document.createElement("textarea");
-      ta.value = reportContent;
+      ta.value = finalReportContent;
       document.body.appendChild(ta);
       ta.select();
       document.execCommand("copy");
@@ -68,7 +134,7 @@ export function ReportPanel({ onClose, data }: any) {
   
   // Download as .md
   const handleDownloadMd = () => {
-    const blob = new Blob([reportContent], { type: "text/markdown;charset=utf-8" });
+    const blob = new Blob([finalReportContent], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -201,7 +267,7 @@ export function ReportPanel({ onClose, data }: any) {
     `;
     
     const isVisual = format === "visual";
-    const bodyHtml = isVisual ? visualReportHtml : markdownToHtml(reportContent);
+    const bodyHtml = isVisual ? finalVisualHtml : markdownToHtml(finalReportContent);
     const css = isVisual ? visualCss : markdownCss;
     
     const html = `<!DOCTYPE html><html lang="${language === "zh" ? "zh-CN" : "en"}"><head><meta charset="utf-8"><title>Viltrox Marketing Report</title><style>${css}</style></head><body>${bodyHtml}</body></html>`;
@@ -349,6 +415,32 @@ export function ReportPanel({ onClose, data }: any) {
             )
           ),
           
+          // 深度分析(据全量真实数据整理经营洞察,插到报告顶部)
+          e("div", null,
+            e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500 mb-2" }, language === "zh" ? "深度分析" : "Deep Analysis"),
+            e("button", {
+              onClick: handleAnalyze,
+              disabled: analyzing || !apiToken,
+              title: !apiToken ? (language === "zh" ? "缺少凭证,无法分析" : "Missing token") : undefined,
+              className: `w-full rounded-lg border p-2 text-left transition ${analysis ? "border-emerald-500/30 bg-emerald-500/[0.06]" : "border-purple-500/40 bg-purple-500/[0.08]"} ${(analyzing || !apiToken) ? "opacity-60 cursor-not-allowed" : "hover:bg-purple-500/[0.14]"}`
+            },
+              e("div", { className: "flex items-center gap-2" },
+                analyzing
+                  ? e(Loader2, { size: 13, className: "text-purple-300 animate-spin shrink-0" })
+                  : e(Wand2, { size: 13, className: (analysis ? "text-emerald-300" : "text-purple-300") + " shrink-0" }),
+                e("div", { className: "min-w-0" },
+                  e("div", { className: "text-[11px] font-medium text-white" },
+                    analyzing ? (language === "zh" ? "分析中…" : "Analyzing…")
+                    : analysis ? (language === "zh" ? "已生成 · 重新分析" : "Generated · Re-analyze")
+                    : (language === "zh" ? "生成深度分析" : "Generate Analysis")),
+                  e("div", { className: "text-[9px] text-slate-400 leading-tight" }, language === "zh" ? "据全量数据整理经营洞察,插入报告顶部" : "Synthesize insights from all data into the report top")
+                )
+              )
+            ),
+            analyzeErr && e("div", { className: "mt-1.5 text-[9px] text-amber-400 leading-snug" }, analyzeErr),
+            analysis && !analyzeErr && e("div", { className: "mt-1.5 text-[9px] text-emerald-400 leading-snug" }, language === "zh" ? "✓ 已插入报告顶部 · 复制 / 下载 / PDF 都会包含" : "✓ Added to report top · included in copy / download / PDF")
+          ),
+
           // Format
           e("div", null,
             e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500 mb-2" }, language === "zh" ? "导出方式" : "Output"),
@@ -502,7 +594,7 @@ export function ReportPanel({ onClose, data }: any) {
                     .action-row { display: flex; gap: 8px; align-items: flex-start; font-size: 10px; color: #1e293b; line-height: 1.5; }
                     .action-num { width: 18px; height: 18px; background: #a855f7; color: #fff; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; flex-shrink: 0; }
                     .empty { border: 1px dashed #cbd5e1; border-radius: 8px; padding: 12px; color: #64748b; font-size: 11px; }
-                  </style></head><body>${visualReportHtml}</body></html>`,
+                  </style></head><body>${finalVisualHtml}</body></html>`,
                   style: { width: "100%", height: "calc(88vh - 200px)", border: "0", borderRadius: "8px", background: "#fff" },
                   title: "Report Preview"
                 })
@@ -510,12 +602,12 @@ export function ReportPanel({ onClose, data }: any) {
             : e("div", { className: "p-5" },
                 e("div", { className: "mb-2 flex items-center justify-between" },
                   e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, language === "zh" ? "预览 · Markdown" : "Preview · Markdown"),
-                  e("div", { className: "text-[10px] text-slate-500" }, `${reportContent.length} ${language === "zh" ? "字符" : "characters"}`)
+                  e("div", { className: "text-[10px] text-slate-500" }, `${finalReportContent.length} ${language === "zh" ? "字符" : "characters"}`)
                 ),
-                e("pre", { 
+                e("pre", {
                   className: "rounded-lg border border-white/[0.06] bg-[#040712] p-4 text-[11px] text-slate-300 whitespace-pre-wrap font-mono leading-relaxed",
                   style: { maxHeight: "100%" }
-                }, reportContent)
+                }, finalReportContent)
               )
         )
       ),

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 
 from app.api.dependencies.perms import require_tab
 from app.domains import dashboard as dashboard_domain
@@ -149,6 +150,28 @@ def dashboard_competitor_radar(
     from app.domains.market import competitor_radar
 
     return competitor_radar.get_competitor_radar()
+
+
+class _ReportAnalysisBody(BaseModel):
+    report_text: str
+    period: str = "monthly"
+    language: str = "zh"
+
+
+@router.post("/dashboard/report-analysis")
+def dashboard_report_analysis(
+    body: _ReportAnalysisBody,
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """按需:把「生成报告」拼好的全量真实数据喂 LLM,整理成经营深度分析(预算闸硬限 + 当天缓存)。"""
+    del staff
+    from app.domains.dashboard import report_analysis
+
+    return report_analysis.analyze(
+        report_text=body.report_text,
+        period=(body.period or "monthly"),
+        language=(body.language or "zh"),
+    )
 
 
 @router.get("/dashboard/tasks")

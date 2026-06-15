@@ -820,7 +820,7 @@ export function V615ReplicaApp(props: any = {}) {
       },
     })),
     // V6.10: Report Panel
-    e(AnimatePresence, null, reportOpen && e(ReportPanel, { onClose: () => setReportOpen(false), data: reportData })),
+    e(AnimatePresence, null, reportOpen && e(ReportPanel, { onClose: () => setReportOpen(false), data: reportData, apiToken })),
     // V6.11: Signal Detail Modal
     e(AnimatePresence, null, selectedSignal && e(SignalDetailModal, { alert: selectedSignal, onClose: () => setSelectedSignal(null) })),
     // V6.13: 新 modal mounts

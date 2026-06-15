@@ -63,6 +63,20 @@ export async function fetchV615DashboardBundle(apiToken: string) {
   };
 }
 
+// 报告深度分析:把「生成报告」拼好的全量真实数据 POST 给后端,LLM 整理成经营分析(预算闸 + 当天缓存)。
+export async function fetchV615ReportAnalysis(
+  apiToken: string,
+  reportText: string,
+  period: string,
+  language: string,
+): Promise<Row> {
+  return apiFetch<Row>(
+    "/api/admin/vkpi/dashboard/report-analysis",
+    { method: "POST", body: jsonBody({ report_text: reportText, period, language }), timeoutMs: 45000 },
+    apiToken,
+  );
+}
+
 export async function resolveV615Alert(apiToken: string, alertId: string | number) {
   return apiFetch<Row>(
     `/api/admin/vkpi/alerts/${encodeURIComponent(String(alertId))}/resolve`,
