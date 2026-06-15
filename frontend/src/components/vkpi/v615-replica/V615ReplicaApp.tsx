@@ -847,7 +847,7 @@ export function V615ReplicaApp(props: any = {}) {
       onOpenNewGroup: () => openGroupEditor("new"),
       t
     })),
-    showSettingsModal && e("div", { className: "v615-settings-dark fixed inset-0 z-[200] bg-[#0a0a0d] overflow-auto" },
+    showSettingsModal && e("div", { className: "v615-settings-dark fixed inset-0 z-[1000] bg-[#0a0a0d] overflow-auto" },
       e("button", {
         onClick: () => setShowSettingsModal(false),
         className: "fixed top-4 right-5 z-[210] rounded-md border border-white/10 bg-white/5 p-2 text-slate-300 hover:text-white hover:bg-white/10",
