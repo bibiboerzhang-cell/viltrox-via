@@ -20,6 +20,9 @@ import {
   updateCommentAlertSettings,
   updateFeatureFlags,
   updatePlatformCrawlSettings,
+  listApiKeyPool,
+  upsertApiKey,
+  deleteApiKey,
 } from '../../services/vkpi/settings-api';
 import {
   listTeamFeedback,
@@ -80,6 +83,9 @@ export {
   updateCommentAlertSettings,
   updateFeatureFlags,
   updatePlatformCrawlSettings,
+  listApiKeyPool,
+  upsertApiKey,
+  deleteApiKey,
   updateStaffMarketingPermission,
   updateStaffPermissions,
   updateTeamFeedbackStatus,

@@ -51,17 +51,22 @@ def get_kol_memory(
 @router.post("/kol-memory/{kol_id}/rebuild")
 def rebuild_kol_memory(
     kol_id: int,
+    v2: bool = Query(default=False),
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict:
-    del staff
-    result = kol_memory.rebuild_kol_memory_snapshot(int(kol_id))
+    # v2=true 才按需触发一次 LLM 长期记忆 summary;默认/false = v1 纯聚合,零 LLM(不全量 blast)。
+    if v2:
+        result = kol_memory.rebuild_kol_memory_snapshot_v2(int(kol_id), staff=staff)
+    else:
+        result = kol_memory.rebuild_kol_memory_snapshot(int(kol_id))
     return {
         "written": bool(result.get("written")),
         "snapshot_id": result.get("snapshot_id"),
         "kol_pool_id": int(kol_id),
         "snapshot": result.get("snapshot"),
         "source_counts": result.get("source_counts"),
-        "llm_calls": False,
+        "llm_calls": bool(result.get("llm_calls", False)),
+        "method": result.get("method"),
         "viltrox_fit_score_changed_ids": result.get("viltrox_fit_score_changed_ids", []),
         "computed_at": result.get("computed_at"),
     }

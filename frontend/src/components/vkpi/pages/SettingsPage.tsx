@@ -22,6 +22,9 @@ import {
   updateCommentAlertSettings,
   updateFeatureFlags,
   updatePlatformCrawlSettings,
+  listApiKeyPool,
+  upsertApiKey,
+  deleteApiKey,
 } from '../../../domains/settings';
 import {
   PreferenceSettingsCard,
@@ -116,9 +119,11 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
   const [syncOverview, setSyncOverview] = useState<VkpiSyncOverview | null>(null);
   const [schedulerTasks, setSchedulerTasks] = useState<Array<Record<string, unknown>>>([]);
   const [schedulerStatus, setSchedulerStatus] = useState<Record<string, unknown>>({});
+  const [apiKeyPool, setApiKeyPool] = useState<Array<Record<string, unknown>>>([]);
+  const [keyDraft, setKeyDraft] = useState<{ account_name: string; provider: string; key: string; daily_quota: string; enabled: boolean }>({ account_name: '', provider: 'gemini', key: '', daily_quota: '', enabled: true });
   const [settingsError, setSettingsError] = useState('');
   const [settingsLoading, setSettingsLoading] = useState(false);
-  const [expandedSection, setExpandedSection] = useState<'status' | 'sku' | 'staff' | 'funds' | 'rules' | 'scheduler' | 'preference' | 'notification' | null>('status');
+  const [expandedSection, setExpandedSection] = useState<'status' | 'sku' | 'staff' | 'funds' | 'rules' | 'scheduler' | 'apikeys' | 'preference' | 'notification' | null>('status');
   const [rulesTab, setRulesTab] = useState<SettingsRulesTab>('platform');
   const [productSearch, setProductSearch] = useState('');
   const [selectedCatalogProduct, setSelectedCatalogProduct] = useState<VkpiProductCatalogItem | null>(null);
@@ -205,7 +210,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
       setProviderError('');
       setSettingsError('');
       try {
-        const [providerResponse, rbacResponse, flagsResponse, crawlResponse, budgetResponse, controlResponse, commentAlertResponse, inviteCapabilitiesResponse, syncOverviewResponse, schedulerResponse] = await Promise.all([
+        const [providerResponse, rbacResponse, flagsResponse, crawlResponse, budgetResponse, controlResponse, commentAlertResponse, inviteCapabilitiesResponse, syncOverviewResponse, schedulerResponse, apiKeyPoolResponse] = await Promise.all([
           listProviderStatuses(apiToken),
           getRbacStatus(apiToken).catch((error) => {
             setRbacStatusError(error instanceof Error ? error.message : 'RBAC 状态读取失败');
@@ -222,6 +227,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
           }),
           getSyncOverview(apiToken).catch(() => null),
           listSchedulerTasks(apiToken).catch(() => ({ tasks: [] as Array<Record<string, unknown>>, status: {} as Record<string, unknown> })),
+          listApiKeyPool(apiToken).catch(() => ({ keys: [] as Array<Record<string, unknown>> })),
         ]);
         if (!cancelled) {
           setProviders(providerResponse.providers || []);
@@ -235,6 +241,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
           setSyncOverview(syncOverviewResponse);
           setSchedulerTasks((schedulerResponse.tasks as Array<Record<string, unknown>>) || []);
           setSchedulerStatus((schedulerResponse.status as Record<string, unknown>) || {});
+          setApiKeyPool((apiKeyPoolResponse.keys as Array<Record<string, unknown>>) || []);
         }
       } catch (error) {
         if (!cancelled) setSettingsError(error instanceof Error ? error.message : '系统设置读取失败');
@@ -356,6 +363,71 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
       setMessage(`定时任务 ${taskKey} 已${enabled ? '开启' : '关闭'}(仅标记，本期不自动执行）。`);
     } catch (error) {
       setSettingsError(error instanceof Error ? error.message : '定时任务开关更新失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // 多账号 API key 池(设置位,7月手动填轮转)。key 单向:只写入/不回显;系统不自动轮转(worker 未接)。
+  const refreshApiKeyPool = async () => {
+    if (!apiToken) return;
+    const resp = await listApiKeyPool(apiToken).catch(() => ({ keys: apiKeyPool }));
+    setApiKeyPool((resp.keys as Array<Record<string, unknown>>) || []);
+  };
+
+  const saveApiKey = async () => {
+    if (!apiToken) return;
+    setSettingsError('');
+    setBusy(true);
+    try {
+      await upsertApiKey(apiToken, {
+        account_name: keyDraft.account_name,
+        provider: keyDraft.provider,
+        key: keyDraft.key,
+        daily_quota: Number(keyDraft.daily_quota || 0),
+        enabled: keyDraft.enabled,
+      });
+      await refreshApiKeyPool();
+      setKeyDraft({ account_name: '', provider: 'gemini', key: '', daily_quota: '', enabled: true });
+      setMessage('API key 已保存(密文入库,前端不回显)。');
+    } catch (error) {
+      setSettingsError(error instanceof Error ? error.message : 'API key 保存失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeApiKey = async (id: number) => {
+    if (!apiToken || !id) return;
+    setSettingsError('');
+    setBusy(true);
+    try {
+      await deleteApiKey(apiToken, id);
+      await refreshApiKeyPool();
+      setMessage('API key 已删除。');
+    } catch (error) {
+      setSettingsError(error instanceof Error ? error.message : 'API key 删除失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleApiKey = async (row: Record<string, unknown>) => {
+    if (!apiToken) return;
+    setSettingsError('');
+    setBusy(true);
+    try {
+      // 不带 key 字段 = 保留旧密文,只切换启用状态。
+      await upsertApiKey(apiToken, {
+        id: row.id,
+        account_name: row.account_name,
+        provider: row.provider,
+        daily_quota: Number(row.daily_quota || 0),
+        enabled: !Boolean(row.enabled),
+      });
+      await refreshApiKeyPool();
+    } catch (error) {
+      setSettingsError(error instanceof Error ? error.message : 'API key 状态更新失败');
     } finally {
       setBusy(false);
     }
@@ -865,6 +937,105 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
             busy={busy}
             onToggleTask={(taskKey, enabled) => void toggleSchedulerTask(taskKey, enabled)}
           />
+        ))}
+        {renderSettingsModule('apikeys', `${apiKeyPool.length} 个账号 · 7月手动填轮转 · 密文存,前端不回显`, (
+          <div className="vkpi-settings-keypool">
+            <p className="vkpi-settings-hint">
+              本轮只预留输入位:7月由用户手动填入,系统不自动轮转(轮转 worker 未接线)。key 仅以密文入库,前端永不回显;留空表示保留已存密文不变。
+            </p>
+            <table className="vkpi-table vkpi-settings-keypool__table">
+              <thead>
+                <tr>
+                  <th>账号名</th>
+                  <th>Provider</th>
+                  <th>Key</th>
+                  <th>日额度</th>
+                  <th>启用</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {apiKeyPool.map((row) => (
+                  <tr key={String(row.id)}>
+                    <td>{String(row.account_name ?? '')}</td>
+                    <td>{String(row.provider ?? '')}</td>
+                    <td>{row.key_prefix ? `${String(row.key_prefix)}(已存,留空不改)` : '(未填)'}</td>
+                    <td>{Number(row.daily_quota ?? 0)}</td>
+                    <td>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(row.enabled)}
+                        disabled={busy}
+                        onChange={() => void toggleApiKey(row)}
+                        aria-label="启用"
+                      />
+                    </td>
+                    <td>
+                      <button type="button" className="vkpi-btn vkpi-btn--danger" disabled={busy} onClick={() => void removeApiKey(Number(row.id))}>
+                        删除
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                <tr className="vkpi-settings-keypool__draft">
+                  <td>
+                    <input
+                      type="text"
+                      value={keyDraft.account_name}
+                      placeholder="账号名"
+                      disabled={busy}
+                      onChange={(event) => setKeyDraft({ ...keyDraft, account_name: event.target.value })}
+                    />
+                  </td>
+                  <td>
+                    <select
+                      value={keyDraft.provider}
+                      disabled={busy}
+                      onChange={(event) => setKeyDraft({ ...keyDraft, provider: event.target.value })}
+                    >
+                      {['gemini', 'openai', 'anthropic', 'apify', 'youtube', 'resend'].map((provider) => (
+                        <option key={provider} value={provider}>{provider}</option>
+                      ))}
+                    </select>
+                  </td>
+                  <td>
+                    <input
+                      type="password"
+                      value={keyDraft.key}
+                      placeholder="7月填,留空=不改"
+                      autoComplete="new-password"
+                      disabled={busy}
+                      onChange={(event) => setKeyDraft({ ...keyDraft, key: event.target.value })}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      type="number"
+                      min={0}
+                      value={keyDraft.daily_quota}
+                      placeholder="0"
+                      disabled={busy}
+                      onChange={(event) => setKeyDraft({ ...keyDraft, daily_quota: event.target.value })}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={keyDraft.enabled}
+                      disabled={busy}
+                      onChange={(event) => setKeyDraft({ ...keyDraft, enabled: event.target.checked })}
+                      aria-label="启用"
+                    />
+                  </td>
+                  <td>
+                    <button type="button" className="vkpi-btn" disabled={busy || !keyDraft.account_name.trim()} onClick={() => void saveApiKey()}>
+                      新增 / 保存
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         ))}
         <div className="vkpi-settings-zone" data-zone="personal">
           <header className="vkpi-settings-zone__head">

@@ -23,9 +23,19 @@ from typing import Any
 
 from app.db.connection import get_conn
 from app.domains.kol import lifecycle as kol_lifecycle
+from app.platform import llm_gateway
 
 MEMORY_METHOD = "kol_memory_pure_aggregate_v1"
 SCORE_FIELDS = ("viltrox_fit_score", "viltrox_fit_reason")
+
+# ─── v2: LLM 长期记忆 summary(预算放开 = record-only,绝不硬拦)───
+MEMORY_METHOD_V2 = "kol_memory_llm_summary_v2"
+# llm_gateway purpose / cost_tag。无 caps 行 = record-only:gateway 预算闸仅 warn 不 raise。
+V2_PURPOSE = "vkpi_kol_memory_summary"
+# MEMORY 教训:token 太小 = 分镜截断;1200 给人话 summary 足够,可调到 2048。
+V2_MAX_OUTPUT_TOKENS = 1200
+# prompt 取材时 timeline 截断条数(避免超长 prompt)。
+_V2_TIMELINE_MAX = 12
 
 _SHIPPED_STAGES = ("content_posted", "reviewed")
 _PUBLISHED_STAGES = ("published",)
@@ -429,4 +439,220 @@ def get_latest_kol_memory_snapshot(kol_pool_id: int) -> dict[str, Any] | None:
         "source_counts": _loads(item.get("source_counts"), {}),
         "computed_at": _jsonable(item.get("computed_at")),
         "note": "pure_aggregate, no_llm, no_v6_fit",
+    }
+
+
+# ─── v2: LLM 长期记忆 summary(预算放开;绝不写 viltrox_fit_score / 独立于 V6 Fit)───
+
+def _build_summary_v2_prompt(snapshot: dict[str, Any]) -> str:
+    """拼装 v2 长期记忆 prompt(纯字符串,镜像 outreach_draft._build_prompt 风格)。
+
+    取材完全来自 v1 纯聚合 snapshot;timeline 截断避免超长。严禁打分语义。
+    """
+    content_style = _text(snapshot.get("content_style")) or "-"
+
+    product_lines = snapshot.get("recommended_product_lines")
+    product_lines = product_lines if isinstance(product_lines, list) else []
+    product_text = "、".join(_dedup_strings(product_lines)[:12]) or "-"
+
+    risk = snapshot.get("risk") if isinstance(snapshot.get("risk"), dict) else {}
+    risk_flags = risk.get("risk_flags") if isinstance(risk.get("risk_flags"), list) else []
+    risk_text = "、".join(_dedup_strings(risk_flags)[:12]) or "-"
+    final_verdict = _text(risk.get("final_verdict")) or "-"
+
+    fulfillment = snapshot.get("fulfillment") if isinstance(snapshot.get("fulfillment"), dict) else {}
+
+    timeline = snapshot.get("timeline") if isinstance(snapshot.get("timeline"), list) else []
+    recent = timeline[:_V2_TIMELINE_MAX]
+    timeline_lines: list[str] = []
+    for event in recent:
+        if not isinstance(event, dict):
+            timeline_lines.append(f"- {_text(event)}"[:200])
+            continue
+        kind = _text(event.get("event") or event.get("kind") or event.get("type"))
+        when = _text(event.get("at") or event.get("occurred_at") or event.get("created_at"))
+        label = _text(event.get("label") or event.get("title") or event.get("detail") or event.get("summary"))
+        parts = [p for p in (when, kind, label) if p]
+        timeline_lines.append(("- " + " · ".join(parts))[:200] if parts else "- (事件)")
+    timeline_text = "\n".join(timeline_lines) if timeline_lines else "- (无生命周期事件)"
+
+    material_lines = [
+        f"- 内容风格/Content style: {content_style}",
+        f"- 推荐产品线/Recommended product lines: {product_text}",
+        f"- 风险标记/Risk flags: {risk_text}",
+        f"- 风险结论/Final verdict: {final_verdict}",
+        f"- 合作履约/Fulfillment: 已分配 {int(fulfillment.get('assigned_count') or 0)} · "
+        f"已寄送 {int(fulfillment.get('shipped_count') or 0)} · "
+        f"已发布 {int(fulfillment.get('published_count') or 0)} · "
+        f"失败任务 {int(fulfillment.get('failed_jobs_count') or 0)}",
+    ]
+
+    return (
+        "你是 VILTROX(唯卓仕)KOL 长期记忆分析师。"
+        "基于以下纯聚合材料,写一段自然语言长期记忆 summary。\n\n"
+        "聚合材料:\n" + "\n".join(material_lines) + "\n\n"
+        "最近生命周期事件(已截断):\n" + timeline_text + "\n\n"
+        "要求:用人话总结以下四个维度,串成一段连贯的长期记忆:\n"
+        "1. 内容风格——TA 的创作方向、调性、制作水准。\n"
+        "2. 推荐产品线——基于材料适合主推哪些镜头/产品方向。\n"
+        "3. 风险——合作中需要留意的点(若材料无风险则明说无明显风险)。\n"
+        "4. 合作履约——历史寄送/发布/失败的履约表现与可靠度。\n\n"
+        "硬约束(不可违反):严禁输出任何打分/契合度数值;summary 独立于 V6 Fit;"
+        "不得编造材料里没有的事实,材料缺失就说明该维度暂无足够信息。\n"
+        "只返回 JSON:{\"summary_v2\": \"<自然语言长期记忆,涵盖上述四维>\", \"highlights\": [\"要点1\", \"要点2\"]}"
+    )
+
+
+def _parse_summary_v2(text: str) -> dict[str, Any]:
+    """解析 LLM 文本:strip ``` 围栏 + json.loads;坏则把 raw text 当 summary_v2 文本(容错优先)。"""
+    cleaned = (text or "").strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`")
+        cleaned = cleaned[4:] if cleaned.lower().lstrip().startswith("json") else cleaned
+        cleaned = cleaned.strip()
+    try:
+        parsed = json.loads(cleaned)
+    except Exception:
+        return {"summary": _text(text), "highlights": []}
+    if not isinstance(parsed, dict):
+        return {"summary": _text(text), "highlights": []}
+    summary = _text(parsed.get("summary_v2") or parsed.get("summary"))
+    highlights_raw = parsed.get("highlights")
+    highlights = _dedup_strings(highlights_raw) if isinstance(highlights_raw, list) else []
+    if not summary:
+        summary = _text(text)
+    return {"summary": summary, "highlights": highlights}
+
+
+def build_kol_memory_snapshot_v2(kol_pool_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    """v2:复用 v1 纯聚合 + 喂 LLM 产一段长期记忆 summary。
+
+    完全复用 v1 build_kol_memory_snapshot 的聚合;status=='missing' 原样返回不调 LLM。
+    预算 record-only:直接 invoke(gateway 内部 budget 仅 warn 不 raise),不传 skip_budget_check。
+    绝不写 viltrox_fit_score;summary_v2 段显式不含任何 score / v6_fit 键。
+    """
+
+    kol_pool_id = int(kol_pool_id)
+    built = build_kol_memory_snapshot(kol_pool_id)
+    if built.get("status") == "missing":
+        return built
+
+    snapshot = dict(built["snapshot"])  # 浅拷贝,不改 v1 段
+    resp = llm_gateway.invoke(
+        _build_summary_v2_prompt(snapshot),
+        purpose=V2_PURPOSE,
+        max_output_tokens=V2_MAX_OUTPUT_TOKENS,
+        cost_tag=V2_PURPOSE,
+        staff=staff or {},
+        metadata={"kol_pool_id": int(kol_pool_id), "method": MEMORY_METHOD_V2},
+    )
+
+    text = str(resp.get("text") or "").strip()
+    provider = resp.get("provider")
+    model = resp.get("model")
+    fallback_used = bool(resp.get("fallback_used"))
+
+    if str(resp.get("status") or "") != "success" or not text:
+        summary_v2 = {
+            "status": "fallback",
+            "summary": "",
+            "highlights": [],
+            "provider": provider,
+            "model": model,
+            "fallback_used": fallback_used,
+            "note": "llm_unavailable_or_fallback_rule_v0",
+            "computed_at": _utcnow(),
+        }
+    else:
+        parsed = _parse_summary_v2(text)
+        summary_v2 = {
+            "status": "ready",
+            "summary": parsed["summary"],
+            "highlights": parsed["highlights"],
+            "provider": provider,
+            "model": model,
+            "fallback_used": fallback_used,
+            "computed_at": _utcnow(),
+        }
+
+    # summary_v2 显式独立于 V6 Fit,绝不含任何 score 键。
+    snapshot["summary_v2"] = summary_v2
+    snapshot["note"] = "llm_summary_v2,no_v6_fit,no_score"
+
+    return {
+        "status": "ready",
+        "kol_pool_id": kol_pool_id,
+        "snapshot": _jsonable(snapshot),
+        "source_counts": built["source_counts"],
+        "computed_at": _utcnow(),
+        "llm_calls": True,
+        "note": "llm_summary_v2,no_v6_fit,no_score",
+    }
+
+
+def rebuild_kol_memory_snapshot_v2(kol_pool_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    """v2 重建并持久化(按需触发,跑一次 LLM summary)。
+
+    照抄 v1 rebuild 的 INSERT + viltrox_fit_score 守卫骨架;仅把 built 换成 v2 构建。
+    守卫:before/after 对比,changed 非空则 rollback + raise(零写 viltrox_fit_score 审计)。
+    summary_v2 仅落在现有 snapshot_json JSONB 内(additive,无需新表/列)。
+    """
+
+    kol_pool_id = int(kol_pool_id)
+    built = build_kol_memory_snapshot_v2(kol_pool_id, staff=staff)
+    if built.get("status") == "missing":
+        return {
+            "written": False,
+            "snapshot_id": None,
+            "kol_pool_id": kol_pool_id,
+            "snapshot": built.get("snapshot"),
+            "source_counts": built.get("source_counts"),
+            "llm_calls": True,
+            "method": MEMORY_METHOD_V2,
+            "viltrox_fit_score_changed_ids": [],
+            "computed_at": built.get("computed_at"),
+            "status": "missing",
+        }
+
+    conn = get_conn()
+    before_scores = _score_snapshot(conn, kol_pool_id)
+    try:
+        row = conn.execute(
+            """
+            INSERT INTO vkpi_kol_memory_snapshots
+                (kol_pool_id, snapshot_json, source_counts, computed_at)
+            VALUES (?, ?::jsonb, ?::jsonb, NOW())
+            RETURNING id
+            """,
+            (
+                kol_pool_id,
+                json.dumps(built.get("snapshot") or {}, ensure_ascii=False, default=str),
+                json.dumps(built.get("source_counts") or {}, ensure_ascii=False, default=str),
+            ),
+        ).fetchone()
+        after_scores = _score_snapshot(conn, kol_pool_id)
+        changed_ids = _changed_score_ids(before_scores, after_scores)
+        if changed_ids:
+            conn.rollback()
+            raise RuntimeError(f"viltrox_fit_score changed unexpectedly: {changed_ids}; rolled back")
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+
+    snapshot_id = int(dict(row)["id"]) if row else None
+    return {
+        "written": snapshot_id is not None,
+        "snapshot_id": snapshot_id,
+        "kol_pool_id": kol_pool_id,
+        "snapshot": built.get("snapshot"),
+        "source_counts": built.get("source_counts"),
+        "llm_calls": True,
+        "method": MEMORY_METHOD_V2,
+        "viltrox_fit_score_changed_ids": [],
+        "computed_at": built.get("computed_at"),
+        "status": "ready",
     }

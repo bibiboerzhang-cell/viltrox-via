@@ -55,6 +55,27 @@ export async function updateBudgetSettings(token: string, budgets: Row[]) {
   );
 }
 
+// 多账号 API key 池(设置位,7月手动填轮转)。key 单向:只写入/不回读;响应只回 key_prefix 掩码。
+export async function listApiKeyPool(token: string) {
+  return apiFetch<{ keys?: Row[] }>("/api/admin/vkpi/settings/api-key-pool", {}, token);
+}
+
+export async function upsertApiKey(token: string, row: Row) {
+  return apiFetch<Row>(
+    "/api/admin/vkpi/settings/api-key-pool",
+    { method: "POST", body: jsonBody(row) },
+    token,
+  );
+}
+
+export async function deleteApiKey(token: string, id: number) {
+  return apiFetch<Row>(
+    "/api/admin/vkpi/settings/api-key-pool",
+    { method: "POST", body: jsonBody({ action: "delete", id }) },
+    token,
+  );
+}
+
 export async function getControlStatus(token: string) {
   return apiFetch<Row>("/api/admin/vkpi/settings/control-status", {}, token);
 }

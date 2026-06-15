@@ -7,6 +7,7 @@ from app.api.dependencies.perms import require_tab
 from app.domains import settings as settings_domain
 from app.domains.access import scope
 from app.domains.ops import scheduler_registry
+from app.domains.settings import api_key_pool
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-settings"])
 
@@ -150,3 +151,27 @@ def update_scheduler_task(task_key: str, body: dict, staff=Depends(require_tab("
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc) or "invalid scheduler task request") from exc
     return {"task": task, "status": scheduler_registry.scheduler_status()}
+
+
+@router.get("/settings/api-key-pool")
+def api_key_pool_list(staff=Depends(require_tab("vkpi", "read"))):
+    """多账号 API key 池(设置位,7月手动填轮转)。响应只回 key_prefix 掩码,绝不回明文 key。"""
+    _require_manager_staff(staff)
+    return api_key_pool.list_keys()
+
+
+@router.post("/settings/api-key-pool")
+def api_key_pool_upsert(body: dict, staff=Depends(require_tab("vkpi", "admin"))):
+    """upsert + delete 复用同端点(body.action 区分)。key 留空=不改旧密文,绝不回显。"""
+    _require_manager_staff(staff)
+    payload = body or {}
+    action = str(payload.get("action") or "upsert")
+    try:
+        if action == "delete":
+            kid = payload.get("id")
+            if not kid:
+                raise HTTPException(status_code=400, detail="id required for delete")
+            return api_key_pool.delete_key(int(kid), staff=staff)
+        return api_key_pool.upsert_key(payload, staff=staff)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc) or "invalid api key pool request") from exc

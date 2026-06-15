@@ -12,6 +12,7 @@ export const SETTINGS_MODULE_TITLES = {
   funds: '资金管理',
   rules: '规则安排',
   scheduler: '定时任务 / Scheduler',
+  apikeys: '多账号 API Key 池',
   preference: '个人偏好',
   notification: '通知配置',
 } as const;
