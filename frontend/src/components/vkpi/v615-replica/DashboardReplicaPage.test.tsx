@@ -1,0 +1,101 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen } from "@testing-library/react";
+
+// P2-7 render smoke(jsdom):DashboardReplicaPage 顶层展示页。
+// 该页纯展示但 props 无完整默认 → 传完整 props bag(否则 breadcrumb.length / topListData.items 崩)。
+// mock seam:framer-motion(含 AnimatePresence)、RealMap(→null,隔离 leaflet)、
+// services/http(apiFetch,SystemHealthBar 用)、actionInbox-api(listActionInbox,ActionInboxPanel 用)。
+
+vi.mock("framer-motion", () => ({
+  // forwardRef stub:吞掉 motion 组件传入的 ref,消除良性 ref 警告。
+  motion: new Proxy(
+    {},
+    {
+      get: () => {
+        const React = require("react");
+        return React.forwardRef((props: Record<string, unknown>, _ref: unknown) =>
+          React.createElement("div", props, props.children as React.ReactNode),
+        );
+      },
+    },
+  ),
+  AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
+}));
+
+vi.mock("./components/RealMap", () => ({ RealMap: () => null }));
+
+const apiFetch = vi.fn();
+vi.mock("../../../services/http", () => ({
+  apiFetch: (...a: unknown[]) => apiFetch(...a),
+}));
+
+const listActionInbox = vi.fn();
+vi.mock("../../../services/vkpi/actionInbox-api", () => ({
+  listActionInbox: (...a: unknown[]) => listActionInbox(...a),
+  approveAction: vi.fn(),
+  dismissAction: vi.fn(),
+  snoozeAction: vi.fn(),
+}));
+
+import { DashboardReplicaPage } from "./DashboardReplicaPage";
+
+beforeEach(() => {
+  apiFetch.mockReset().mockResolvedValue({});
+  listActionInbox.mockReset().mockResolvedValue({ items: [], available: false });
+});
+
+// 最小但完整的 props bag(避免无默认值字段崩)。
+const baseProps = {
+  t: (s: string) => s,
+  kpiScope: "all",
+  setKpiScope: () => {},
+  setSelectedKpi: () => {},
+  apiToken: "",
+  breadcrumb: [],
+  goBack: () => {},
+  topListData: { title: "", items: [] },
+  revenueBySource: [],
+  currentMode: { color: "#fff", isEvents: false },
+  globeContainerRef: { current: null },
+  isAvailable: false,
+  viewMode: null,
+  setViewMode: () => {},
+  countryOptions: [],
+  cityOptions: [],
+  itemOptions: [],
+  venueOptions: [],
+  metrics: [],
+  campaigns: [],
+  campaignsMeta: {},
+  calendarDays: [],
+  calendarMeta: {},
+  signals: [],
+  topMovers: [],
+  kolFunnel: null,
+  upcomingEvents: [],
+};
+
+describe("DashboardReplicaPage render smoke", () => {
+  it("挂载不抛错 → Performance Overview 标题在", async () => {
+    render(<DashboardReplicaPage {...baseProps} />);
+    expect(await screen.findByText("Performance Overview")).toBeInTheDocument();
+  });
+
+  it("无 error boundary 文案", async () => {
+    render(<DashboardReplicaPage {...baseProps} />);
+    await screen.findByText("Performance Overview");
+    expect(screen.queryByText(/出错了|Something went wrong/)).not.toBeInTheDocument();
+  });
+
+  it("dashboardLoading=true → 标题仍在,副标题显示读取中", async () => {
+    render(<DashboardReplicaPage {...baseProps} dashboardLoading={true} />);
+    expect(await screen.findByText("Performance Overview")).toBeInTheDocument();
+    expect(screen.getByText("正在读取真实 API")).toBeInTheDocument();
+  });
+
+  it("dashboardError 非空 → 副标题显示无信号", async () => {
+    render(<DashboardReplicaPage {...baseProps} dashboardError="boom" />);
+    await screen.findByText("Performance Overview");
+    expect(screen.getByText("真实 API 无信号")).toBeInTheDocument();
+  });
+});
