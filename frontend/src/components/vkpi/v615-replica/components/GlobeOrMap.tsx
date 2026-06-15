@@ -1,16 +1,14 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
 import React from "react";
 import { AnimatePresence } from "framer-motion";
-import { Globe } from "lucide-react";
 import { Globe } from "./Globe";
 import { RealMap } from "./RealMap";
 
 const e = React.createElement;
 
-export function GlobeOrMap({ pins, accentColor, onPinClick, focusTarget, useRealMap, mapZoom }) {
+export function GlobeOrMap({ pins, accentColor, onPinClick, focusTarget, useRealMap, mapZoom }: any) {
   // V5.2: 不再用 AnimatePresence(它会 mount/unmount 导致 Leaflet 死亡)
   // 改成两个组件常驻,只用 opacity + pointer-events 切换可见性
   return e("div", { className: "absolute inset-0" },

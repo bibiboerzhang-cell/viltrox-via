@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -9,12 +8,12 @@ import { NOTIF_ICON_MAP } from "../../data/notifIconMap";
 
 const e = React.createElement;
 
-export function NotificationsPopover({ onClose, notifications, anchorRef, t, onViewAll, onItemClick, onMarkAllRead }) {
+export function NotificationsPopover({ onClose, notifications, anchorRef, t, onViewAll, onItemClick, onMarkAllRead }: any) {
   const [items, setItems] = useState(notifications);
   useEffect(() => { setItems(notifications); }, [notifications]);
-  const unreadCount = items.filter(n => n.unread).length;
+  const unreadCount = items.filter((n: any) => n.unread).length;
   const markAllRead = () => {
-    setItems(prev => prev.map(n => ({ ...n, unread: false })));
+    setItems((prev: any) => prev.map((n: any) => ({ ...n, unread: false })));
     onMarkAllRead && onMarkAllRead();
   };
   return e(PopoverWrapper, { onClose, anchorRef, width: 380 },
@@ -28,8 +27,8 @@ export function NotificationsPopover({ onClose, notifications, anchorRef, t, onV
         onMarkAllRead && e("button", { onClick: markAllRead, className: "text-[10px] text-slate-400 hover:text-white" }, t("全部已读"))
       ),
       e("div", { className: "flex-1 overflow-y-auto py-1" },
-        items.map(n => {
-          const IconComp = NOTIF_ICON_MAP[n.iconKey] || Bell;
+        items.map((n: any) => {
+          const IconComp = (NOTIF_ICON_MAP as any)[n.iconKey] || Bell;
           return e("div", {
             key: n.id,
             onClick: () => { onClose(); onItemClick && onItemClick(n); },

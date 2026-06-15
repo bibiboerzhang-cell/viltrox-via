@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -21,7 +20,7 @@ const ROW_HEIGHT = 60;
 const VISIBLE_ROWS = 18;
 const OVERSCAN_ROWS = 8;
 
-export function KOLTable({ items, onRowClick, selectedItemId, myList }) {
+export function KOLTable({ items, onRowClick, selectedItemId, myList }: any) {
   const [scrollTop, setScrollTop] = React.useState(0);
   React.useEffect(() => {
     setScrollTop(0);
@@ -36,7 +35,7 @@ export function KOLTable({ items, onRowClick, selectedItemId, myList }) {
   return e("div", { className: "rounded-xl border border-white/[0.08] bg-white/[0.025] backdrop-blur-xl overflow-hidden" },
     e("div", {
       className: "overflow-auto max-h-[calc(100vh-460px)]",
-      onScroll: (event) => setScrollTop(event.currentTarget.scrollTop || 0),
+      onScroll: (event: any) => setScrollTop(event.currentTarget.scrollTop || 0),
     },
       e("table", { className: "kp-table" },
         e("thead", null,
@@ -55,7 +54,7 @@ export function KOLTable({ items, onRowClick, selectedItemId, myList }) {
           topSpacer > 0 && e("tr", { "aria-hidden": true },
             e("td", { colSpan: 8, style: { height: topSpacer, padding: 0, borderBottom: 0 } })
           ),
-          visibleItems.map((item, offset) => {
+          visibleItems.map((item: any, offset: any) => {
             const index = startIndex + offset;
             const isSelected = selectedItemId === item.id;
             return e("tr", { 
@@ -77,8 +76,8 @@ export function KOLTable({ items, onRowClick, selectedItemId, myList }) {
                   e("div", { className: "min-w-0" },
                     e("div", { className: "flex items-center gap-1.5" },
                       e("span", { className: "text-[12px] text-white font-medium truncate max-w-[160px]" }, item.handle),
-                      myList?.has(item.id) && e(Star, { size: 10, className: "text-amber-400 shrink-0", style: { fill: "#fbbf24" }, title: "在我的列表" }),
-                      item.linked_main_kol_id && e(BadgeCheck, { size: 11, className: "text-emerald-400 shrink-0", title: "已链接主表" }),
+                      myList?.has(item.id) && e(Star, { size: 10, className: "text-amber-400 shrink-0", style: { fill: "#fbbf24" }, title: "在我的列表" } as any),
+                      item.linked_main_kol_id && e(BadgeCheck, { size: 11, className: "text-emerald-400 shrink-0", title: "已链接主表" } as any),
                       item.devices?.has_viltrox && e("span", {
                         className: "shrink-0 px-1 rounded text-[9px] font-medium",
                         style: { background: "rgba(168,85,247,0.18)", color: "#c4b5fd" },
@@ -120,7 +119,7 @@ export function KOLTable({ items, onRowClick, selectedItemId, myList }) {
                   e(GeoTierChip, { tier: item.geo_tier })
                 ),
                 item.geo_distribution && e("div", { className: "text-[10px] text-slate-500 mt-0.5 truncate" },
-                  item.geo_distribution.slice(0, 3).map(g => {
+                  item.geo_distribution.slice(0, 3).map((g: any) => {
                     const info = getCountryInfo(g.country);
                     return info ? info.flag + " " + Math.round(g.share * 100) + "%" : "待评估";
                   }).join(" ")
@@ -151,9 +150,9 @@ export function KOLTable({ items, onRowClick, selectedItemId, myList }) {
                 }, "本周 " + (item.weekly_views_delta > 0 ? "+" : "") + item.weekly_views_delta.toFixed(1) + "%")
               ),
               // Action
-              e("td", { onClick: ev => ev.stopPropagation() },
+              e("td", { onClick: (ev: any) => ev.stopPropagation() },
                 e("button", {
-                  onClick: ev => {
+                  onClick: (ev: any) => {
                     ev.stopPropagation();
                     onRowClick(item);
                   },

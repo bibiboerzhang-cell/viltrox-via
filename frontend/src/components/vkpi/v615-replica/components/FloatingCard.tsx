@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -11,15 +10,15 @@ const e = React.createElement;
 export function FloatingCard({ 
   title, icon, iconColor, children, defaultPos, defaultSize, dragConstraintsRef, 
   collapsedSummary, minWidth = 200, minHeight = 100, initialDelay = 0
-}) {
+}: any) {
   const [collapsed, setCollapsed] = useState(false);
-  const [size, setSize] = useState(defaultSize || { width: 260, height: "auto" });
-  const cardRef = useRef(null);
+  const [size, setSize] = useState<any>(defaultSize || { width: 260, height: "auto" });
+  const cardRef = useRef<any>(null);
   const resizingRef = useRef(false);
   const [isResizing, setIsResizing] = useState(false);  // V6.13.1: trigger re-render
   
   // Resize handle 拖拽逻辑
-  const startResize = (e) => {
+  const startResize = (e: any) => {
     e.stopPropagation();
     e.preventDefault();
     resizingRef.current = true;
@@ -29,7 +28,7 @@ export function FloatingCard({
     const startW = cardRef.current?.offsetWidth || 260;
     const startH = cardRef.current?.offsetHeight || 200;
     
-    const onMove = (ev) => {
+    const onMove = (ev: any) => {
       if (!resizingRef.current) return;
       const newW = Math.max(minWidth, startW + (ev.clientX - startX));
       const newH = Math.max(minHeight, startH + (ev.clientY - startY));
@@ -110,7 +109,7 @@ export function FloatingCard({
       // 控件 - 折叠按钮
       e("div", { className: "flex items-center gap-1 shrink-0" },
         e("button", {
-          onClick: (ev) => { ev.stopPropagation(); setCollapsed(true); },
+          onClick: (ev: any) => { ev.stopPropagation(); setCollapsed(true); },
           className: "p-1 rounded text-slate-500 hover:text-white hover:bg-white/5"
         }, e(X, { size: 12 }))
       )
@@ -125,7 +124,7 @@ export function FloatingCard({
     // Resize handle 右下角 — V6.13.1: 用 onPointerDownCapture 拦截 framer-motion
     e("div", {
       onMouseDown: startResize,
-      onPointerDownCapture: (ev) => { ev.stopPropagation(); },
+      onPointerDownCapture: (ev: any) => { ev.stopPropagation(); },
       className: "absolute bottom-0 right-0 w-4 h-4 cursor-nwse-resize",
       style: {
         background: "linear-gradient(135deg, transparent 50%, rgba(255,255,255,0.2) 50%, rgba(255,255,255,0.2) 60%, transparent 60%, transparent 70%, rgba(255,255,255,0.2) 70%, rgba(255,255,255,0.2) 80%, transparent 80%)",

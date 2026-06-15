@@ -1,4 +1,3 @@
-// @ts-nocheck
 // 地基A 产品 persona 展示面板(只读)。
 // 渲染 vkpi_product_persona 的 LLM 生成「产品是什么 / 理想创作者人群 / 推广方向 / 规避类型」。
 // 纯展示组件:不发评分请求、不写 fit;数据由上层(产品详情/搜索详情抽屉)以 persona prop 注入。
@@ -9,12 +8,12 @@ import { Sparkles, Target, Compass, Ban, Layers } from "lucide-react";
 
 const e = React.createElement;
 
-function asArray(value) {
-  if (Array.isArray(value)) return value.filter((item) => String(item || "").trim());
+function asArray(value: any) {
+  if (Array.isArray(value)) return value.filter((item: any) => String(item || "").trim());
   return [];
 }
 
-function ChipRow({ icon, label, items, tone }) {
+function ChipRow({ icon, label, items, tone }: any) {
   const list = asArray(items);
   if (!list.length) return null;
   const toneClass =
@@ -35,7 +34,7 @@ function ChipRow({ icon, label, items, tone }) {
     e(
       "div",
       { className: "flex flex-wrap gap-1.5" },
-      list.map((item, idx) =>
+      list.map((item: any, idx: any) =>
         e(
           "span",
           {
@@ -49,9 +48,9 @@ function ChipRow({ icon, label, items, tone }) {
   );
 }
 
-function SpecsGrid({ specs }) {
+function SpecsGrid({ specs }: any) {
   const entries = specs && typeof specs === "object" && !Array.isArray(specs) ? Object.entries(specs) : [];
-  const cleaned = entries.filter(([, value]) => String(value ?? "").trim());
+  const cleaned = entries.filter(([, value]: any) => String(value ?? "").trim());
   if (!cleaned.length) return null;
   return e(
     "div",
@@ -65,7 +64,7 @@ function SpecsGrid({ specs }) {
     e(
       "div",
       { className: "grid grid-cols-2 gap-1.5" },
-      cleaned.map(([key, value], idx) =>
+      cleaned.map(([key, value]: any, idx: any) =>
         e(
           "div",
           { key: idx, className: "flex items-center justify-between gap-2 px-2 py-1 rounded bg-white/[0.03] text-xs" },
@@ -78,7 +77,7 @@ function SpecsGrid({ specs }) {
 }
 
 // persona: get_product_persona(sku) 的返回(JSON 列已为原生 dict/list)。
-export function ProductPersonaPanel({ persona, sku }) {
+export function ProductPersonaPanel({ persona, sku }: any) {
   if (!persona) {
     return e(
       "div",

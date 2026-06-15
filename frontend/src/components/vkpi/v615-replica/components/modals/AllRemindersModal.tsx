@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -10,22 +9,22 @@ import { REMINDER_ICON_MAP } from "../../data/reminderIconMap";
 
 const e = React.createElement;
 
-export function AllRemindersModal({ reminders, onClose, viewingAs }) {
+export function AllRemindersModal({ reminders, onClose, viewingAs }: any) {
   const { t } = useT();
   const [tab, setTab] = useState("todo");
   const [items, setItems] = useState(reminders);
   const [search, setSearch] = useState("");
-  
-  const filtered = items.filter(r => 
+
+  const filtered = items.filter((r: any) =>
     (tab === "all" || r.status === tab) &&
     (!search || r.title.toLowerCase().includes(search.toLowerCase()) || r.desc.toLowerCase().includes(search.toLowerCase()))
   );
-  const todoCount = items.filter(r => r.status === "todo").length;
-  const markDone    = (id) => setItems(prev => prev.map(r => r.id === id ? { ...r, status: "done" } : r));
-  const markIgnored = (id) => setItems(prev => prev.map(r => r.id === id ? { ...r, status: "ignored" } : r));
-  
-  const prioColor = { high: "#ef4444", medium: "#f59e0b", low: "#64748b" };
-  const sourceLabels = {
+  const todoCount = items.filter((r: any) => r.status === "todo").length;
+  const markDone    = (id: any) => setItems((prev: any) => prev.map((r: any) => r.id === id ? { ...r, status: "done" } : r));
+  const markIgnored = (id: any) => setItems((prev: any) => prev.map((r: any) => r.id === id ? { ...r, status: "ignored" } : r));
+
+  const prioColor: any = { high: "#ef4444", medium: "#f59e0b", low: "#64748b" };
+  const sourceLabels: any = {
     system: { label: t("系统"), color: "#64748b" },
     ai:     { label: t("AI"),   color: "#a855f7" },
     manual: { label: t("手动"), color: "#3b82f6" },
@@ -47,7 +46,7 @@ export function AllRemindersModal({ reminders, onClose, viewingAs }) {
     // Search + tabs
     e("div", { className: "px-5 py-2 border-b border-white/[0.06] space-y-2" },
       e("input", { 
-        type: "text", value: search, onChange: (ev) => setSearch(ev.target.value),
+        type: "text", value: search, onChange: (ev: any) => setSearch(ev.target.value),
         placeholder: t("搜索") + "...",
         className: "w-full rounded-md border border-white/[0.08] bg-white/[0.025] px-3 py-1.5 text-[12px] text-white outline-none"
       }),
@@ -55,9 +54,9 @@ export function AllRemindersModal({ reminders, onClose, viewingAs }) {
         [
           { key: "all",     label: t("全部"),   count: items.length },
           { key: "todo",    label: t("待跟进"), count: todoCount },
-          { key: "done",    label: t("已完成"), count: items.filter(r => r.status === "done").length },
-          { key: "ignored", label: t("已忽略"), count: items.filter(r => r.status === "ignored").length },
-        ].map(x => e("button", {
+          { key: "done",    label: t("已完成"), count: items.filter((r: any) => r.status === "done").length },
+          { key: "ignored", label: t("已忽略"), count: items.filter((r: any) => r.status === "ignored").length },
+        ].map((x: any) => e("button", {
           key: x.key, onClick: () => setTab(x.key),
           className: "text-[11px] py-1.5 px-0.5 border-b-2 flex items-center gap-1",
           style: { borderColor: tab === x.key ? "#a855f7" : "transparent", color: tab === x.key ? "#fff" : "rgba(255,255,255,0.5)" }
@@ -68,8 +67,8 @@ export function AllRemindersModal({ reminders, onClose, viewingAs }) {
       filtered.length === 0
         ? e("div", { className: "text-center py-8 text-[11px] text-slate-500" }, t("没有内容"))
         : e("div", { className: "space-y-1" },
-            filtered.map(r => {
-              const IconComp = REMINDER_ICON_MAP[r.iconKey] || Target;
+            filtered.map((r: any) => {
+              const IconComp = (REMINDER_ICON_MAP as any)[r.iconKey] || Target;
               const sourceCfg = sourceLabels[r.source] || sourceLabels.system;
               return e("div", { 
                 key: r.id,

@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -8,10 +7,10 @@ import { PopoverWrapper } from "./PopoverWrapper";
 
 const e = React.createElement;
 
-export function UserMenuPopover({ onClose, theme, onToggleTheme, anchorRef, t, user, staff, lang, onToggleLang, viewingAs, onResetView, onImpersonate, onOpenProfile, onOpenTeam, onOpenSettings, onLogout }) {
+export function UserMenuPopover({ onClose, theme, onToggleTheme, anchorRef, t, user, staff, lang, onToggleLang, viewingAs, onResetView, onImpersonate, onOpenProfile, onOpenTeam, onOpenSettings, onLogout }: any) {
   const isAdmin = user.role === "admin";
   const staffList = Array.isArray(staff) ? staff : [];
-  const openMenuItem = (handler) => {
+  const openMenuItem = (handler: any) => {
     onClose();
     if (handler) handler();
   };
@@ -49,7 +48,7 @@ export function UserMenuPopover({ onClose, theme, onToggleTheme, anchorRef, t, u
           { icon: UserCircle, label: t("个人资料"), right: null,     onClick: onOpenProfile },
           { icon: Users,       label: t("团队管理"), right: isAdmin ? "4 人" : "我的团队", onClick: onOpenTeam },
           { icon: Settings,    label: t("系统设置"), right: null,     onClick: onOpenSettings },
-        ].map((m, i) => e("button", {
+        ].map((m: any, i: any) => e("button", {
           key: i,
           onClick: () => openMenuItem(m.onClick),
           className: "mx-2 flex w-[calc(100%-1rem)] items-center gap-3 rounded-lg bg-white/[0.018] px-3 py-2 text-left text-slate-200 transition-colors hover:bg-white/[0.055]"
@@ -63,7 +62,7 @@ export function UserMenuPopover({ onClose, theme, onToggleTheme, anchorRef, t, u
       // Admin only: impersonate(快捷入口,完整列表在团队管理)
       isAdmin && !viewingAs && onImpersonate && e("div", { className: "py-1 border-t border-white/[0.06]" },
         e("div", { className: "px-3 py-1 text-[9px] uppercase tracking-wider text-slate-500" }, t("切换身份(查看为)")),
-        staffList.filter(s => String(s.id) !== String(user.id) && !s.isAdmin).slice(0, 3).map(s => e("button", {
+        staffList.filter((s: any) => String(s.id) !== String(user.id) && !s.isAdmin).slice(0, 3).map((s: any) => e("button", {
           key: s.id,
           onClick: () => { onImpersonate(s); onClose(); },
           className: "mx-2 flex w-[calc(100%-1rem)] items-center gap-2.5 rounded-lg bg-white/[0.018] px-3 py-1.5 text-left transition-colors hover:bg-white/[0.055]"

@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -9,21 +8,21 @@ import { useT } from "../lib/i18n";
 
 const e = React.createElement;
 
-export function SignalsAlertsCard({ alerts, onAlertClick, onViewAll }) {
+export function SignalsAlertsCard({ alerts, onAlertClick, onViewAll }: any) {
   const { t } = useT();
-  const sevColor = {
+  const sevColor: any = {
     high:   "#ef4444",
     medium: "#f59e0b",
     low:    "#10b981",
     info:   "#06b6d4",
   };
-  const sevBg = {
+  const sevBg: any = {
     high:   "rgba(239, 68, 68, 0.06)",
     medium: "rgba(245, 158, 11, 0.06)",
     low:    "rgba(16, 185, 129, 0.06)",
     info:   "rgba(6, 182, 212, 0.06)",
   };
-  const sevTextColor = {
+  const sevTextColor: any = {
     high:   "#fca5a5",
     medium: "#fcd34d",
     low:    "#6ee7b7",
@@ -50,7 +49,7 @@ export function SignalsAlertsCard({ alerts, onAlertClick, onViewAll }) {
     e("div", { className: "flex-1 space-y-1.5" },
       alerts.length === 0
         ? e("div", { className: "rounded-md border border-dashed border-white/[0.08] px-3 py-8 text-center text-[11px] text-slate-500" }, "暂无真实市场信号")
-        : alerts.slice(0, 4).map((a) => e("div", {
+        : alerts.slice(0, 4).map((a: any) => e("div", {
         key: a.id,
         onClick: () => onAlertClick && onAlertClick(a),
         className: "group cursor-pointer rounded-md px-2.5 py-2 transition-colors hover:bg-white/[0.04]",
@@ -64,7 +63,7 @@ export function SignalsAlertsCard({ alerts, onAlertClick, onViewAll }) {
         // Sources + mentions
         e("div", { className: "flex items-center justify-between text-[9px]" },
           e("div", { className: "flex items-center gap-1 text-slate-500" },
-            e("span", null, a.sources.slice(0, 3).map(s => s.name).join(" · ")),
+            e("span", null, a.sources.slice(0, 3).map((s: any) => s.name).join(" · ")),
             a.sources.length > 3 && e("span", null, ` +${a.sources.length - 3}`)
           ),
           e("div", { className: "flex items-center gap-1.5" },

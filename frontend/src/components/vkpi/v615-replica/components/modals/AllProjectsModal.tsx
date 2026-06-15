@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -10,10 +9,10 @@ import { REMINDER_ICON_MAP } from "../../data/reminderIconMap";
 
 const e = React.createElement;
 
-export function AllProjectsModal({ campaigns, onClose, onProjectClick }) {
+export function AllProjectsModal({ campaigns, onClose, onProjectClick }: any) {
   const { t } = useT();
   const [filter, setFilter] = useState("all");
-  const filtered = campaigns.filter(c => filter === "all" || c.status === filter);
+  const filtered = campaigns.filter((c: any) => filter === "all" || c.status === filter);
   return e(CenterModal, { onClose, maxWidth: "2xl" },
     e("div", { className: "px-5 py-3.5 border-b border-white/[0.06] flex items-center justify-between" },
       e("div", null,
@@ -26,10 +25,10 @@ export function AllProjectsModal({ campaigns, onClose, onProjectClick }) {
     e("div", { className: "px-5 pt-2 flex gap-3 border-b border-white/[0.04]" },
       [
         { key: "all",      label: t("全部"),   count: campaigns.length },
-        { key: "active",   label: t("进行中"), count: campaigns.filter(c => c.status === "active").length },
-        { key: "planning", label: t("规划中"), count: campaigns.filter(c => c.status === "planning").length },
-        { key: "done",     label: t("已完成"), count: campaigns.filter(c => c.status === "done").length },
-      ].map(x => e("button", {
+        { key: "active",   label: t("进行中"), count: campaigns.filter((c: any) => c.status === "active").length },
+        { key: "planning", label: t("规划中"), count: campaigns.filter((c: any) => c.status === "planning").length },
+        { key: "done",     label: t("已完成"), count: campaigns.filter((c: any) => c.status === "done").length },
+      ].map((x: any) => e("button", {
         key: x.key, onClick: () => setFilter(x.key),
         className: "text-[11px] py-1.5 px-0.5 border-b-2 flex items-center gap-1",
         style: { borderColor: filter === x.key ? "#a855f7" : "transparent", color: filter === x.key ? "#fff" : "rgba(255,255,255,0.5)" }
@@ -39,8 +38,8 @@ export function AllProjectsModal({ campaigns, onClose, onProjectClick }) {
       filtered.length === 0
         ? e("div", { className: "text-center py-8 text-[11px] text-slate-500" }, t("没有内容"))
         : e("div", { className: "space-y-2" },
-            filtered.map(c => {
-              const IconComp = REMINDER_ICON_MAP[c.iconKey] || Target;
+            filtered.map((c: any) => {
+              const IconComp = (REMINDER_ICON_MAP as any)[c.iconKey] || Target;
               return e("button", {
                 key: c.id,
                 onClick: () => { onClose(); onProjectClick && onProjectClick(c); },

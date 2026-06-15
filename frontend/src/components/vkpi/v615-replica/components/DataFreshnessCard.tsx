@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Agent-OS data-freshness 卡片(2026-06-14):KOL 池 / 成员渠道(/ 产品)的逐实体新鲜度。
 // 数据全部来自真实只读端点 GET /api/admin/vkpi/dashboard/data-freshness;
 // 新鲜度由后端 COALESCE(last_checked, updated_at/last_seen_at/last_sync_at) 派生(127 列起始 NULL,
@@ -13,7 +12,7 @@ const e = React.createElement;
 
 const REFRESH_MS = 60000;
 
-function relativeAge(iso) {
+function relativeAge(iso: any) {
   if (!iso) return null;
   const then = Date.parse(iso);
   if (Number.isNaN(then)) return null;
@@ -28,14 +27,14 @@ function relativeAge(iso) {
 
 const PENDING = e("span", { className: "text-amber-400/80 text-[11px]" }, "待接入");
 
-function BucketChip({ count, accent, label }) {
+function BucketChip({ count, accent, label }: any) {
   return e("div", { className: "flex items-baseline gap-1" },
     e("span", { className: `text-[13px] font-semibold tabular-nums ${accent}` }, `${count ?? 0}`),
     e("span", { className: "text-[9px] text-slate-500" }, label)
   );
 }
 
-function EntityRow({ title, entity }) {
+function EntityRow({ title, entity }: any) {
   const available = entity && entity.available;
   let body;
   if (!available) {
@@ -63,8 +62,8 @@ function EntityRow({ title, entity }) {
   );
 }
 
-export function DataFreshnessCard({ apiToken }) {
-  const [snap, setSnap] = useState(null);
+export function DataFreshnessCard({ apiToken }: any) {
+  const [snap, setSnap] = useState<any>(null);
   const [error, setError] = useState("");
   const aliveRef = useRef(true);
 

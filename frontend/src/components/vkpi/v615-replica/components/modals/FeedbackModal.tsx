@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -10,16 +9,16 @@ import { submitV615Feedback } from "../../api";
 
 const e = React.createElement;
 
-export function FeedbackModal({ onClose, apiToken, onSubmitted }) {
+export function FeedbackModal({ onClose, apiToken, onSubmitted }: any) {
   const { t } = useT();
-  const fileInputRef = useRef(null);
+  const fileInputRef = useRef<any>(null);
   const [category, setCategory] = useState("bug");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [status, setStatus] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [screenshot, setScreenshot] = useState(null);
-  const onPickScreenshot = (event) => {
+  const [screenshot, setScreenshot] = useState<any>(null);
+  const onPickScreenshot = (event: any) => {
     const file = event.target.files?.[0];
     if (!file) return;
     if (!file.type.startsWith("image/")) {
@@ -88,7 +87,7 @@ export function FeedbackModal({ onClose, apiToken, onSubmitted }) {
             { key: "feature", label: "💡 功能建议",   color: "#a855f7" },
             { key: "ux",      label: "🎨 UX 优化",    color: "#06b6d4" },
             { key: "other",   label: "其他",          color: "#64748b" },
-          ].map(c => e("button", {
+          ].map((c: any) => e("button", {
             key: c.key, onClick: () => setCategory(c.key),
             className: "flex-1 text-[10px] py-1.5 rounded-md border transition-colors",
             style: category === c.key ? {
@@ -99,11 +98,11 @@ export function FeedbackModal({ onClose, apiToken, onSubmitted }) {
       ),
       e("div", null,
         e("label", { className: "text-[10px] text-slate-500 mb-1.5 block" }, "标题"),
-        e("input", { type: "text", value: title, onChange: (event) => setTitle(event.target.value), placeholder: "简短描述...", className: "w-full rounded-md border border-white/[0.08] bg-white/[0.025] px-3 py-1.5 text-[12px] text-white outline-none" })
+        e("input", { type: "text", value: title, onChange: (event: any) => setTitle(event.target.value), placeholder: "简短描述...", className: "w-full rounded-md border border-white/[0.08] bg-white/[0.025] px-3 py-1.5 text-[12px] text-white outline-none" })
       ),
       e("div", null,
         e("label", { className: "text-[10px] text-slate-500 mb-1.5 block" }, "详细描述"),
-        e("textarea", { value: description, onChange: (event) => setDescription(event.target.value), placeholder: "请描述操作步骤、期望结果、实际结果...", rows: 5, className: "w-full rounded-md border border-white/[0.08] bg-white/[0.025] px-3 py-2 text-[11px] text-white outline-none resize-none" })
+        e("textarea", { value: description, onChange: (event: any) => setDescription(event.target.value), placeholder: "请描述操作步骤、期望结果、实际结果...", rows: 5, className: "w-full rounded-md border border-white/[0.08] bg-white/[0.025] px-3 py-2 text-[11px] text-white outline-none resize-none" })
       ),
       e("div", null,
         e("input", {

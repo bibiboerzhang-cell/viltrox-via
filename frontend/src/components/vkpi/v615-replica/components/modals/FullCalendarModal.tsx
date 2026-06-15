@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -9,7 +8,7 @@ import { useT } from "../../lib/i18n";
 
 const e = React.createElement;
 
-export function FullCalendarModal({ days, onClose, onItemClick }) {
+export function FullCalendarModal({ days, onClose, onItemClick }: any) {
   const { t } = useT();
   return e(CenterModal, { onClose, maxWidth: "2xl" },
     e("div", { className: "px-5 py-3.5 border-b border-white/[0.06] flex items-center justify-between" },
@@ -20,7 +19,7 @@ export function FullCalendarModal({ days, onClose, onItemClick }) {
       e("button", { onClick: onClose, className: "rounded-md border border-white/10 bg-white/5 p-1.5 text-slate-400 hover:text-white" }, e(X, { size: 14 }))
     ),
     e("div", { className: "p-3 max-h-[60vh] overflow-y-auto space-y-2" },
-      days.map(day => e("div", { 
+      days.map((day: any) => e("div", {
         key: day.date,
         className: "rounded-lg border border-white/[0.06] bg-white/[0.02] p-3"
       },
@@ -35,7 +34,7 @@ export function FullCalendarModal({ days, onClose, onItemClick }) {
         day.items.length === 0
           ? e("div", { className: "text-[10px] text-slate-500 text-center py-2" }, t("没有内容"))
           : e("div", { className: "space-y-1" },
-              day.items.map((item, i) => e("button", {
+              day.items.map((item: any, i: any) => e("button", {
                 key: i,
                 onClick: () => { onClose(); onItemClick && onItemClick(item); },
                 className: "w-full text-left flex items-center gap-2 px-2 py-1.5 rounded hover:bg-white/[0.04]"

@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -6,8 +5,8 @@ import React, { useEffect, useRef, useState } from "react";
 
 const e = React.createElement;
 
-export function KPITrendChart({ data, color }) {
-  const canvasRef = useRef(null);
+export function KPITrendChart({ data, color }: any) {
+  const canvasRef = useRef<any>(null);
   const [size, setSize] = useState({ w: 600, h: 120 });
   
   useEffect(() => {
@@ -30,11 +29,11 @@ export function KPITrendChart({ data, color }) {
   const pad = 10;
   const w = size.w, h = size.h;
   const stepX = (w - pad * 2) / (data.length - 1);
-  const points = data.map((v, i) => [
+  const points = data.map((v: any, i: any) => [
     pad + i * stepX,
     h - pad - ((v - min) / range) * (h - pad * 2),
   ]);
-  const linePath = points.map((p, i) => `${i === 0 ? "M" : "L"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
+  const linePath = points.map((p: any, i: any) => `${i === 0 ? "M" : "L"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
   const areaPath = `${linePath} L${points[points.length - 1][0]},${h - pad} L${pad},${h - pad} Z`;
   
   return e("div", { ref: canvasRef, className: "h-full w-full" },

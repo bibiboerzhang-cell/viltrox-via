@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -10,14 +9,14 @@ import { COUNTRY_INFO, getCountryInfo, normalizeCountryCode } from "../data/coun
 
 const e = React.createElement;
 
-export function MarketCoverageCard({ items }) {
+export function MarketCoverageCard({ items }: any) {
   const [showAll, setShowAll] = useState(false);
   const [showGaps, setShowGaps] = useState(false);
   
   // 聚合所有 KOL 的 country reach
   const countryStats = useMemo(() => {
-    const stats = {};
-    items.forEach(kol => {
+    const stats: Record<string, any> = {};
+    items.forEach((kol: any) => {
       if (!kol.estimated_country_reach) return;
       Object.entries(kol.estimated_country_reach).forEach(([rawCountry, reach]) => {
         const country = normalizeCountryCode(rawCountry);
@@ -27,18 +26,18 @@ export function MarketCoverageCard({ items }) {
         stats[country].reach += reach;
       });
     });
-    return Object.values(stats).sort((a, b) => b.reach - a.reach);
+    return Object.values(stats).sort((a: any, b: any) => b.reach - a.reach);
   }, [items]);
   
   const displayStats = showAll ? countryStats : countryStats.slice(0, 5);
-  const maxReach = Math.max(...countryStats.map(s => s.reach), 1);
-  
+  const maxReach = Math.max(...countryStats.map((s: any) => s.reach), 1);
+
   // 缺口检测:Tier A/B 国家但 KOL < 3
-  const gaps = [];
-  ["FR", "KR", "ES", "IT"].forEach(c => {
-    const stat = countryStats.find(s => s.country === c);
+  const gaps: any[] = [];
+  ["FR", "KR", "ES", "IT"].forEach((c: any) => {
+    const stat = countryStats.find((s: any) => s.country === c);
     if (!stat || stat.kol_count < 3) {
-      const cInfo = COUNTRY_INFO[c];
+      const cInfo = (COUNTRY_INFO as any)[c];
       gaps.push({ country: c, current: stat?.kol_count || 0, suggest: 3 - (stat?.kol_count || 0), info: cInfo });
     }
   });
@@ -59,7 +58,7 @@ export function MarketCoverageCard({ items }) {
     
     // Country rows — 紧凑(行高减小,字号小)
     e("div", { className: "px-4 py-2 space-y-1" },
-      displayStats.map((s, i) => {
+      displayStats.map((s: any, i: any) => {
         const cInfo = getCountryInfo(s.country) || { code: s.country, flag: "·", name: s.country, tier: "?" };
         const widthPct = (s.reach / maxReach) * 100;
         return e("div", { key: s.country, className: "flex items-center gap-3 text-[10px] py-0.5" },
@@ -99,7 +98,7 @@ export function MarketCoverageCard({ items }) {
         e(ChevronRight, { size: 10, className: "text-slate-500 ml-auto", style: { transform: showGaps ? "rotate(90deg)" : "none", transition: "transform 0.2s" } })
       ),
       showGaps && e("div", { className: "px-4 pb-2 space-y-1 bg-amber-500/[0.03]" },
-        gaps.map(g => e("div", { key: g.country, className: "flex items-center gap-2 text-[10px] py-1" },
+        gaps.map((g: any) => e("div", { key: g.country, className: "flex items-center gap-2 text-[10px] py-1" },
           e("span", { style: { fontSize: 12 } }, g.info.flag),
           e("span", { className: "text-white font-medium w-[24px]" }, g.country),
           e("span", { className: "text-slate-400 flex-1" }, g.info.name, " · " + g.current + " KOL · 建议补 " + g.suggest + " 个"),

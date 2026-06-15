@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -8,7 +7,7 @@ import { CenterModal } from "./CenterModal";
 
 const e = React.createElement;
 
-export function TeamModal({ user, staff, groups, onClose, onImpersonate, t, onOpenEditGroup, onOpenNewGroup }) {
+export function TeamModal({ user, staff, groups, onClose, onImpersonate, t, onOpenEditGroup, onOpenNewGroup }: any) {
   const isAdmin = user.role === "admin";
   const groupList = Array.isArray(groups) ? groups : [];
   const primaryGroup = groupList[0] || null;
@@ -51,14 +50,14 @@ export function TeamModal({ user, staff, groups, onClose, onImpersonate, t, onOp
                   { icon: Users,      label: t("共享 KOL 池"),     value: t("Top performers(78 人)") },
                   { icon: TrendingUp, label: t("共同 KPI 目标"),   value: t("Q2 新增 50 个高活 KOL") },
                   { icon: Bell,       label: t("内部 @ 提醒规则"), value: t("组内变更自动通知") },
-                ].map((row, i) => e("div", { key: i, className: "flex items-start gap-2 text-[10px]" },
+                ].map((row: any, i: any) => e("div", { key: i, className: "flex items-start gap-2 text-[10px]" },
                   e(row.icon, { size: 10, className: "text-purple-300 shrink-0 mt-0.5" }),
                   e("span", { className: "text-slate-400 shrink-0" }, row.label + ":"),
                   e("span", { className: "text-slate-300 flex-1 min-w-0 truncate" }, row.value)
                 ))
               ),
               e("div", { className: "space-y-1.5" },
-                staff.map(s => e("div", {
+                staff.map((s: any) => e("div", {
                   key: s.id,
                   className: "flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-white/[0.04]"
                 },
@@ -96,7 +95,7 @@ export function TeamModal({ user, staff, groups, onClose, onImpersonate, t, onOp
             ),
             e("div", { className: "text-[10px] text-slate-500" }, "我所在的分组:KOL Operations"),
             e("div", { className: "space-y-1" },
-              staff.filter(s => s.id !== user.id).map(s => e("div", {
+              staff.filter((s: any) => s.id !== user.id).map((s: any) => e("div", {
                 key: s.id, className: "flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-white/[0.04]"
               },
                 e("div", {

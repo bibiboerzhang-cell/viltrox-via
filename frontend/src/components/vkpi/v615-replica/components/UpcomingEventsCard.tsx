@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -8,7 +7,7 @@ import { Calendar, Minimize, Plus, X } from "lucide-react";
 
 const e = React.createElement;
 
-export function UpcomingEventsCard({ events, dragConstraintsRef, onEventClick, onViewAll }) {
+export function UpcomingEventsCard({ events, dragConstraintsRef, onEventClick, onViewAll }: any) {
   const [collapsed, setCollapsed] = useState(false);
   const nearestEvent = events[0];
 
@@ -66,12 +65,12 @@ export function UpcomingEventsCard({ events, dragConstraintsRef, onEventClick, o
       ),
       e("div", { className: "flex items-center gap-1 shrink-0" },
         e("button", {
-          onClick: (ev) => { ev.stopPropagation(); },
+          onClick: (ev: any) => { ev.stopPropagation(); },
           title: "Add event",
           className: "rounded-md p-1 text-slate-400 hover:bg-white/[0.06] hover:text-white"
         }, e(Plus, { size: 10 })),
         e("button", {
-          onClick: (ev) => { ev.stopPropagation(); setCollapsed(true); },
+          onClick: (ev: any) => { ev.stopPropagation(); setCollapsed(true); },
           title: "Minimize",
           className: "rounded-md p-1 text-slate-400 hover:bg-white/[0.06] hover:text-white"
         }, e(X, { size: 10 }))
@@ -84,11 +83,11 @@ export function UpcomingEventsCard({ events, dragConstraintsRef, onEventClick, o
         e("div", { className: "text-[11px] text-slate-400" }, "暂无活动"),
         e("div", { className: "mt-0.5 text-[9px] text-slate-600" }, "近期无即将开始的真实活动")
       ),
-      events.map((evt) => {
+      events.map((evt: any) => {
         const Icon = evt.icon;
         return e("div", {
           key: evt.id,
-          onClick: (ev) => { ev.stopPropagation(); if (onEventClick) onEventClick(evt); },
+          onClick: (ev: any) => { ev.stopPropagation(); if (onEventClick) onEventClick(evt); },
           className: "group cursor-pointer rounded-lg border border-white/[0.06] bg-white/[0.02] p-2 transition-colors hover:border-white/[0.14] hover:bg-white/[0.04]"
         },
           e("div", { className: "mb-1.5 flex items-start gap-2" },

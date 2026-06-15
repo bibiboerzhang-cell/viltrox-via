@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -10,23 +9,23 @@ import { formatNumber } from "../lib/format";
 
 const e = React.createElement;
 
-export function KPIBar({ items, onCardClick, activeKindFilter, onTotalClick }) {
+export function KPIBar({ items, onCardClick, activeKindFilter, onTotalClick }: any) {
   const total = items.length;
-  const fits = items.filter(i => i.v6_fit != null).map(i => i.v6_fit);
-  const avgFit = fits.length ? Math.round(fits.reduce((a, b) => a + b, 0) / fits.length) : "待评估";
-  
-  const trendItems = items.filter(i => i.trend_resonance != null);
-  const highTrend = trendItems.length ? items.filter(i => (i.trend_resonance || 0) >= 0.5).length : "待评估";
-  
+  const fits = items.filter((i: any) => i.v6_fit != null).map((i: any) => i.v6_fit);
+  const avgFit = fits.length ? Math.round(fits.reduce((a: any, b: any) => a + b, 0) / fits.length) : "待评估";
+
+  const trendItems = items.filter((i: any) => i.trend_resonance != null);
+  const highTrend = trendItems.length ? items.filter((i: any) => (i.trend_resonance || 0) >= 0.5).length : "待评估";
+
   // Search v2 breakdown
-  const existingCount = items.filter(i => candidateKindGroup(i.candidate_kind) === "existing").length;
-  const newCount      = items.filter(i => candidateKindGroup(i.candidate_kind) === "new").length;
-  const validatingCount = items.filter(i => i.candidate_kind === "new_discovered").length;
-  const lowConfCount  = items.filter(i => i.candidate_kind === "existing_low_confidence").length;
-  
-  const totalReach = items.reduce((sum, k) => {
+  const existingCount = items.filter((i: any) => candidateKindGroup(i.candidate_kind) === "existing").length;
+  const newCount      = items.filter((i: any) => candidateKindGroup(i.candidate_kind) === "new").length;
+  const validatingCount = items.filter((i: any) => i.candidate_kind === "new_discovered").length;
+  const lowConfCount  = items.filter((i: any) => i.candidate_kind === "existing_low_confidence").length;
+
+  const totalReach = items.reduce((sum: any, k: any) => {
     if (!k.estimated_country_reach) return sum;
-    return sum + Object.values(k.estimated_country_reach).reduce((a, b) => a + b, 0);
+    return sum + Object.values(k.estimated_country_reach).reduce((a: any, b: any) => a + b, 0);
   }, 0);
   
   // 诊断 P1-8/9/10 + P2-5 状态卡诚实化:candidate_kind 后端未供(前端按 linked_main_kol_id 推导,
@@ -42,12 +41,12 @@ export function KPIBar({ items, onCardClick, activeKindFilter, onTotalClick }) {
   ];
   
   return e("div", { className: "grid grid-cols-2 gap-1.5 md:grid-cols-3 xl:grid-cols-6" },
-    cards.map((c, i) => {
+    cards.map((c: any, i: any) => {
       const isTotalCard = c.label === "Pool 总数";
       const clickable = c.filterKey !== null || (isTotalCard && onTotalClick);
       const isActive  = clickable && activeKindFilter === c.filterKey && c.filterKey !== "";
       const Card = clickable ? motion.button : motion.div;
-      const cardProps = {
+      const cardProps: any = {
         key: c.label,
         initial: { opacity: 0, y: 8 },
         animate: { opacity: 1, y: 0 },
@@ -65,11 +64,11 @@ export function KPIBar({ items, onCardClick, activeKindFilter, onTotalClick }) {
         style: { background: isActive ? c.color + "0F" : "rgba(255,255,255,0.014)" }
       };
       if (clickable) cardProps.type = "button";
-      return e(Card, cardProps,
+      return e(Card as any, cardProps,
         e("div", { className: "flex items-center gap-1.5" },
           e("span", { className: "rounded p-0.5", style: { background: c.color + "16", color: c.color } }, e(c.icon, { size: 9 })),
           e("span", { className: "min-w-0 flex-1 truncate text-[9px] text-slate-500" }, c.label),
-          clickable && e(Filter, { size: 8, className: "text-slate-700", title: isTotalCard ? "查看全部 KOL" : "点击筛选" })
+          clickable && e(Filter, { size: 8, className: "text-slate-700", title: isTotalCard ? "查看全部 KOL" : "点击筛选" } as any)
         ),
         e("div", { className: "mt-1 text-[15px] font-medium leading-none text-white tabular-nums" }, c.value),
         e("div", { className: "mt-0.5 truncate text-[8px] text-slate-600" }, c.sub)

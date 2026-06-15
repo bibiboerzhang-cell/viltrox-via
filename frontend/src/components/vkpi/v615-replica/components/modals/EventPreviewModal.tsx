@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -9,12 +8,12 @@ import { Breadcrumb } from "../Breadcrumb";
 
 const e = React.createElement;
 
-export function EventPreviewModal({ event, allEvents, onClose, onViewDetails }) {
+export function EventPreviewModal({ event, allEvents, onClose, onViewDetails }: any) {
   if (!event) return null;
   const Icon = event.icon;
-  
+
   // 找附近 events(同 country 或同 city 的其他)
-  const nearby = allEvents.filter(e => 
+  const nearby = allEvents.filter((e: any) =>
     e.id !== event.id && (e.country === event.country || e.city === event.city)
   );
   
@@ -26,7 +25,7 @@ export function EventPreviewModal({ event, allEvents, onClose, onViewDetails }) 
   },
     e(motion.div, {
       initial: { scale: 0.95, opacity: 0 }, animate: { scale: 1, opacity: 1 }, exit: { scale: 0.95, opacity: 0 },
-      onClick: (ev) => ev.stopPropagation(),
+      onClick: (ev: any) => ev.stopPropagation(),
       className: "relative w-full max-w-sm rounded-2xl border border-white/10 bg-[#0a1020] shadow-2xl overflow-hidden",
     },
       // Header
@@ -90,7 +89,7 @@ export function EventPreviewModal({ event, allEvents, onClose, onViewDetails }) 
             `Other events in ${event.country}`
           ),
           e("div", { className: "space-y-1.5" },
-            nearby.slice(0, 3).map((evt) => {
+            nearby.slice(0, 3).map((evt: any) => {
               const NIcon = evt.icon;
               return e("button", {
                 key: evt.id,

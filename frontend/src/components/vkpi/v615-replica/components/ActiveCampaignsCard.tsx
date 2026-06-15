@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -11,10 +10,10 @@ import { CAMPAIGN_ICONS } from "../data/campaignIcons";
 
 const e = React.createElement;
 
-export function ActiveCampaignsCard({ campaigns, campaignsMeta, onCampaignClick, onViewAll }) {
+export function ActiveCampaignsCard({ campaigns, campaignsMeta, onCampaignClick, onViewAll }: any) {
   const { t } = useT();
   const realCount = campaignsMeta?.isReal ? Number(campaignsMeta.activeCount || 0) : null;
-  const activeCount = realCount ?? campaigns.filter(c => c.status !== "done").length;
+  const activeCount = realCount ?? campaigns.filter((c: any) => c.status !== "done").length;
   const windowDays = Number(campaignsMeta?.windowDays || 30);
   const isStarredSource = campaignsMeta?.source === "starred_projects";
   return e(motion.div, {
@@ -46,8 +45,8 @@ export function ActiveCampaignsCard({ campaigns, campaignsMeta, onCampaignClick,
                 : "等待项目工作流接入。"
             )
           )
-        : campaigns.map((c) => {
-        const IconComp = CAMPAIGN_ICONS[c.iconKey] || CAMPAIGN_ICONS.default;
+        : campaigns.map((c: any) => {
+        const IconComp = (CAMPAIGN_ICONS as any)[c.iconKey] || CAMPAIGN_ICONS.default;
         return e("div", {
           key: c.id,
           onClick: () => onCampaignClick && onCampaignClick(c),
@@ -71,7 +70,7 @@ export function ActiveCampaignsCard({ campaigns, campaignsMeta, onCampaignClick,
             ),
             // 4 mini stats
             e("div", { className: "grid grid-cols-4 gap-1 mb-1" },
-              (c.source === "active_campaigns" ? ["KOL", `近${windowDays}天`, "曝光", "实操"] : ["KOL", "已发", "曝光", "点击"]).map((label, idx) => {
+              (c.source === "active_campaigns" ? ["KOL", `近${windowDays}天`, "曝光", "实操"] : ["KOL", "已发", "曝光", "点击"]).map((label: any, idx: any) => {
                 const val = c.source === "active_campaigns"
                   ? [c.stats.kolCount, c.recentVideoCount, c.stats.totalReach, c.executionKolCount][idx]
                   : [c.stats.kolCount, c.stats.published, c.stats.totalReach, c.stats.shortClicks][idx];
@@ -89,7 +88,7 @@ export function ActiveCampaignsCard({ campaigns, campaignsMeta, onCampaignClick,
             e("div", { className: "flex items-center justify-between" },
               // Avatar stack
               e("div", { className: "flex items-center" },
-                c.kolList.slice(0, 3).map((k, i) => e("div", {
+                c.kolList.slice(0, 3).map((k: any, i: any) => e("div", {
                   key: i,
                   className: "w-[18px] h-[18px] rounded-full flex items-center justify-center text-[8px] font-bold text-white",
                   style: {
@@ -106,7 +105,7 @@ export function ActiveCampaignsCard({ campaigns, campaignsMeta, onCampaignClick,
               // Bottleneck note
               e("span", { 
                 className: "text-[9px] truncate ml-2",
-                style: { color: c.funnel.some(f => f.bottleneck) ? "#fbbf24" : "rgba(255,255,255,0.45)" }
+                style: { color: c.funnel.some((f: any) => f.bottleneck) ? "#fbbf24" : "rgba(255,255,255,0.45)" }
               }, c.status === "done" ? "已完成" : c.bottleneckText.split("(")[0])
             )
           )

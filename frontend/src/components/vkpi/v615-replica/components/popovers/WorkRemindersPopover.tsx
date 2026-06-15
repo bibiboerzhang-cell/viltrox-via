@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -9,26 +8,26 @@ import { REMINDER_ICON_MAP } from "../../data/reminderIconMap";
 
 const e = React.createElement;
 
-export function WorkRemindersPopover({ onClose, reminders, anchorRef, t, viewingAs, onOpenImport, onViewAll, onMarkAllRead }) {
+export function WorkRemindersPopover({ onClose, reminders, anchorRef, t, viewingAs, onOpenImport, onViewAll, onMarkAllRead }: any) {
   const [activeTab, setActiveTab] = useState("todo");
   const [items, setItems] = useState(reminders);
-  
+
   useEffect(() => { setItems(reminders); }, [reminders]);
-  
-  const filtered = items.filter(r => {
+
+  const filtered = items.filter((r: any) => {
     if (activeTab === "all") return true;
     return r.status === activeTab;
   });
-  const todoCount = items.filter(r => r.status === "todo").length;
-  const doneCount = items.filter(r => r.status === "done").length;
-  
-  const markDone    = (id) => setItems(prev => prev.map(r => r.id === id ? { ...r, status: "done" } : r));
-  const markIgnored = (id) => setItems(prev => prev.map(r => r.id === id ? { ...r, status: "ignored" } : r));
-  const markAllRead = () => setItems(prev => prev.map(r => r.status === "todo" ? { ...r, status: "done" } : r));
-  
-  const prioColor = { high: "#ef4444", medium: "#f59e0b", low: "#64748b" };
-  const prioLabel = { high: t("高"), medium: t("中"), low: t("低") };
-  const sourceLabels = {
+  const todoCount = items.filter((r: any) => r.status === "todo").length;
+  const doneCount = items.filter((r: any) => r.status === "done").length;
+
+  const markDone    = (id: any) => setItems((prev: any) => prev.map((r: any) => r.id === id ? { ...r, status: "done" } : r));
+  const markIgnored = (id: any) => setItems((prev: any) => prev.map((r: any) => r.id === id ? { ...r, status: "ignored" } : r));
+  const markAllRead = () => setItems((prev: any) => prev.map((r: any) => r.status === "todo" ? { ...r, status: "done" } : r));
+
+  const prioColor: any = { high: "#ef4444", medium: "#f59e0b", low: "#64748b" };
+  const prioLabel: any = { high: t("高"), medium: t("中"), low: t("低") };
+  const sourceLabels: any = {
     system: { label: t("系统"), color: "#64748b" },
     ai:     { label: t("AI"),   color: "#a855f7" },
     manual: { label: t("手动"), color: "#3b82f6" },
@@ -61,8 +60,8 @@ export function WorkRemindersPopover({ onClose, reminders, anchorRef, t, viewing
           { key: "all",     label: t("全部"),   count: items.length },
           { key: "todo",    label: t("待跟进"), count: todoCount },
           { key: "done",    label: t("已完成"), count: doneCount },
-          { key: "ignored", label: t("已忽略"), count: items.filter(r => r.status === "ignored").length },
-        ].map(x => e("button", {
+          { key: "ignored", label: t("已忽略"), count: items.filter((r: any) => r.status === "ignored").length },
+        ].map((x: any) => e("button", {
           key: x.key,
           onClick: () => setActiveTab(x.key),
           className: "text-[11px] py-1.5 border-b-2 transition-colors flex items-center gap-1",
@@ -76,8 +75,8 @@ export function WorkRemindersPopover({ onClose, reminders, anchorRef, t, viewing
       e("div", { className: "flex-1 overflow-y-auto py-1" },
         filtered.length === 0
           ? e("div", { className: "text-center py-8 text-[11px] text-slate-500" }, t("没有内容"))
-          : filtered.map(r => {
-              const IconComp = REMINDER_ICON_MAP[r.iconKey] || Target;
+          : filtered.map((r: any) => {
+              const IconComp = (REMINDER_ICON_MAP as any)[r.iconKey] || Target;
               const sourceCfg = sourceLabels[r.source] || sourceLabels.system;
               return e("div", { 
                 key: r.id, 

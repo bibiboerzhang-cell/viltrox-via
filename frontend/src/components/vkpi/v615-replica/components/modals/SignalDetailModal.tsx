@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -9,10 +8,10 @@ import { useT } from "../../lib/i18n";
 
 const e = React.createElement;
 
-export function SignalDetailModal({ alert, onClose }) {
+export function SignalDetailModal({ alert, onClose }: any) {
   const { t } = useT();
   if (!alert) return null;
-  const sevColor = {
+  const sevColor: any = {
     high:   "#ef4444",
     medium: "#f59e0b",
     low:    "#10b981",
@@ -26,7 +25,7 @@ export function SignalDetailModal({ alert, onClose }) {
   },
     e(motion.div, {
       initial: { scale: 0.95, opacity: 0, y: 20 }, animate: { scale: 1, opacity: 1, y: 0 }, exit: { scale: 0.95, opacity: 0 },
-      onClick: (ev) => ev.stopPropagation(),
+      onClick: (ev: any) => ev.stopPropagation(),
       className: "relative w-full max-w-2xl max-h-[90vh] flex flex-col rounded-2xl border border-white/10 bg-[#0a1020] shadow-2xl overflow-hidden",
     },
       // Header
@@ -62,7 +61,7 @@ export function SignalDetailModal({ alert, onClose }) {
         alert.thumbnails && alert.thumbnails.length > 0 && e("div", null,
           e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500 mb-2" }, "相关图片"),
           e("div", { className: "flex gap-2 overflow-x-auto" },
-            alert.thumbnails.map((src, i) => e("div", {
+            alert.thumbnails.map((src: any, i: any) => e("div", {
               key: i,
               className: "shrink-0 h-24 w-32 rounded-md bg-white/[0.04] border border-white/[0.06] overflow-hidden flex items-center justify-center",
               style: { backgroundImage: `url(${src})`, backgroundSize: "cover", backgroundPosition: "center" }
@@ -78,8 +77,8 @@ export function SignalDetailModal({ alert, onClose }) {
         e("div", null,
           e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500 mb-2" }, "热度分布(各源 mentions)"),
           e("div", { className: "space-y-1.5" },
-            alert.sources.map((s, i) => {
-              const maxMentions = Math.max(...alert.sources.map(x => x.mentions));
+            alert.sources.map((s: any, i: any) => {
+              const maxMentions = Math.max(...alert.sources.map((x: any) => x.mentions));
               const pct = (s.mentions / maxMentions) * 100;
               return e("div", { key: i, className: "flex items-center gap-2 text-[11px]" },
                 e("span", { className: "w-32 text-slate-400 truncate" }, s.name),
@@ -95,7 +94,7 @@ export function SignalDetailModal({ alert, onClose }) {
         e("div", null,
           e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500 mb-2" }, "对 Viltrox 的影响(Claude 分析)"),
           e("div", { className: "space-y-1" },
-            alert.impact.map((imp, i) => e("div", { key: i, className: "flex items-start gap-2 text-[11px] text-slate-300" },
+            alert.impact.map((imp: any, i: any) => e("div", { key: i, className: "flex items-start gap-2 text-[11px] text-slate-300" },
               e("span", { className: "shrink-0" }, imp.level),
               e("span", null, imp.text)
             ))
@@ -105,7 +104,7 @@ export function SignalDetailModal({ alert, onClose }) {
         e("div", null,
           e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500 mb-2" }, "建议行动"),
           e("div", { className: "space-y-1.5" },
-            alert.actions.map((a, i) => e("div", { 
+            alert.actions.map((a: any, i: any) => e("div", {
               key: i, 
               className: "flex items-start gap-2 rounded-md border border-white/[0.06] bg-white/[0.02] px-3 py-2 text-[11px] text-slate-300" 
             },
@@ -118,7 +117,7 @@ export function SignalDetailModal({ alert, onClose }) {
         e("div", null,
           e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500 mb-2" }, "原始来源链接"),
           e("div", { className: "space-y-1" },
-            alert.sources.map((s, i) => e("div", { key: i, className: "flex items-center gap-2 text-[11px] text-slate-400" },
+            alert.sources.map((s: any, i: any) => e("div", { key: i, className: "flex items-center gap-2 text-[11px] text-slate-400" },
               e("span", { className: "text-slate-500" }, "→"),
               e("span", { className: "flex-1" }, `${s.name} (${s.mentions} mentions)`),
               e("button", { className: "rounded border border-white/[0.06] px-2 py-0.5 text-[9px] text-white/25", disabled: true, title: "来源链接待接入" }, "查看")

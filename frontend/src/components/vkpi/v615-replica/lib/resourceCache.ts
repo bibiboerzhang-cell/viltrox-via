@@ -1,5 +1,3 @@
-// @ts-nocheck
-
 const DB_NAME = "vkpi-v615-runtime-cache";
 const DB_VERSION = 1;
 const STORE_NAME = "resources";
@@ -15,7 +13,7 @@ function canUseIndexedDb() {
 
 function openDb() {
   if (!canUseIndexedDb()) return Promise.resolve(null);
-  return new Promise((resolve) => {
+  return new Promise<any>((resolve) => {
     const request = window.indexedDB.open(DB_NAME, DB_VERSION);
     request.onupgradeneeded = () => {
       const db = request.result;
@@ -29,11 +27,11 @@ function openDb() {
   });
 }
 
-function localKey(key) {
+function localKey(key: any) {
   return `${LOCAL_PREFIX}${key}`;
 }
 
-async function readLocal(key) {
+async function readLocal(key: any) {
   if (!canUseWindow()) return null;
   try {
     const raw = window.localStorage.getItem(localKey(key));
@@ -46,7 +44,7 @@ async function readLocal(key) {
   }
 }
 
-async function writeLocal(key, value) {
+async function writeLocal(key: any, value: any) {
   if (!canUseWindow()) return;
   try {
     window.localStorage.setItem(localKey(key), JSON.stringify({ key, value, savedAt: Date.now() }));
@@ -55,7 +53,7 @@ async function writeLocal(key, value) {
   }
 }
 
-export async function readCachedResource(key) {
+export async function readCachedResource(key: any) {
   const db = await openDb();
   if (!db) return readLocal(key);
   return new Promise((resolve) => {
@@ -74,14 +72,14 @@ export async function readCachedResource(key) {
   });
 }
 
-export async function writeCachedResource(key, value) {
+export async function writeCachedResource(key: any, value: any) {
   const row = { key, value, savedAt: Date.now() };
   const db = await openDb();
   if (!db) {
     await writeLocal(key, value);
     return;
   }
-  await new Promise((resolve) => {
+  await new Promise<void>((resolve) => {
     const tx = db.transaction(STORE_NAME, "readwrite");
     tx.objectStore(STORE_NAME).put(row);
     tx.oncomplete = () => resolve();

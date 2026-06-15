@@ -1,4 +1,3 @@
-// @ts-nocheck
 // P5 系统健康条(诚实化 2026-06-14):队列 / 今日 LLM 成本 / 数据新鲜度 / Worker 状态。
 // 数据全部来自真实只读端点 GET /api/admin/vkpi/dashboard/system-health;
 // 任何字段 available=false 时显示「待接入」,绝不编造数字。
@@ -11,7 +10,7 @@ const e = React.createElement;
 
 const REFRESH_MS = 30000;
 
-function relativeTime(iso) {
+function relativeTime(iso: any) {
   if (!iso) return null;
   const then = Date.parse(iso);
   if (Number.isNaN(then)) return null;
@@ -24,7 +23,7 @@ function relativeTime(iso) {
   return `${Math.round(hours / 24)}天前`;
 }
 
-function Cell({ icon, label, children, accent }) {
+function Cell({ icon, label, children, accent }: any) {
   return e("div", { className: "flex items-center gap-2 px-3 py-1.5 min-w-0" },
     e(icon, { size: 13, className: accent || "text-slate-400", strokeWidth: 2 }),
     e("div", { className: "min-w-0" },
@@ -36,8 +35,8 @@ function Cell({ icon, label, children, accent }) {
 
 const PENDING = e("span", { className: "text-amber-400/80" }, "待接入");
 
-export function SystemHealthBar({ apiToken }) {
-  const [health, setHealth] = useState(null);
+export function SystemHealthBar({ apiToken }: any) {
+  const [health, setHealth] = useState<any>(null);
   const [error, setError] = useState("");
   const aliveRef = useRef(true);
 

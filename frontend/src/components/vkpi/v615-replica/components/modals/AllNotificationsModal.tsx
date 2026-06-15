@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -10,18 +9,18 @@ import { NOTIF_ICON_MAP } from "../../data/notifIconMap";
 
 const e = React.createElement;
 
-export function AllNotificationsModal({ notifications, onClose, onNotifClick }) {
+export function AllNotificationsModal({ notifications, onClose, onNotifClick }: any) {
   const { t } = useT();
   const [tab, setTab] = useState("all");
   const [items, setItems] = useState(notifications);
-  
+
   // Categorize by iconKey
-  const isSystem = (n) => ["filetext", "zap", "trending", "package", "target"].includes(n.iconKey);
-  const isAI     = (n) => n.iconKey === "sparkles";
-  const isAlert  = (n) => n.iconKey === "warning";
-  const isFeedback = (n) => n.category === "feedback" || n.source === "vkpi_feedback";
-  
-  const filtered = items.filter(n => {
+  const isSystem = (n: any) => ["filetext", "zap", "trending", "package", "target"].includes(n.iconKey);
+  const isAI     = (n: any) => n.iconKey === "sparkles";
+  const isAlert  = (n: any) => n.iconKey === "warning";
+  const isFeedback = (n: any) => n.category === "feedback" || n.source === "vkpi_feedback";
+
+  const filtered = items.filter((n: any) => {
     if (tab === "all")    return true;
     if (tab === "system") return isSystem(n);
     if (tab === "ai")     return isAI(n);
@@ -45,15 +44,15 @@ export function AllNotificationsModal({ notifications, onClose, onNotifClick }) 
         { key: "ai",     label: t("AI"),     count: items.filter(isAI).length },
         { key: "alert",  label: "⚠ Alert",  count: items.filter(isAlert).length },
         { key: "feedback", label: t("反馈"), count: items.filter(isFeedback).length },
-      ].map(x => e("button", {
+      ].map((x: any) => e("button", {
         key: x.key, onClick: () => setTab(x.key),
         className: "text-[11px] py-1.5 px-0.5 border-b-2 flex items-center gap-1",
         style: { borderColor: tab === x.key ? "#a855f7" : "transparent", color: tab === x.key ? "#fff" : "rgba(255,255,255,0.5)" }
       }, x.label, e("span", { className: "text-[9px] text-slate-500" }, x.count)))
     ),
     e("div", { className: "p-3 max-h-[60vh] overflow-y-auto space-y-1" },
-      filtered.map(n => {
-        const IconComp = NOTIF_ICON_MAP[n.iconKey] || Bell;
+      filtered.map((n: any) => {
+        const IconComp = (NOTIF_ICON_MAP as any)[n.iconKey] || Bell;
         return e("button", {
           key: n.id,
           onClick: () => { onClose(); onNotifClick && onNotifClick(n); },

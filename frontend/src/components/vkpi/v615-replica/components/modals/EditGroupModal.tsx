@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -9,7 +8,7 @@ import { useT } from "../../lib/i18n";
 
 const e = React.createElement;
 
-export function EditGroupModal({ groupName = "KOL Operations", mode = "edit", staff, initialMembers, initialDesc, permissions, onClose, onSave }) {
+export function EditGroupModal({ groupName = "KOL Operations", mode = "edit", staff, initialMembers, initialDesc, permissions, onClose, onSave }: any) {
   const { t } = useT();
   const [name, setName] = useState(groupName);
   const [desc, setDesc] = useState(mode === "new" ? "" : (initialDesc || ""));
@@ -19,10 +18,10 @@ export function EditGroupModal({ groupName = "KOL Operations", mode = "edit", st
   const [permKolPool, setPermKolPool] = useState((permissions && permissions.shared_kol_pool) || "");
   const [permKpi, setPermKpi] = useState((permissions && permissions.kpi_goal) || "");
   const [permReminder, setPermReminder] = useState((permissions && permissions.reminder_rule) || "");
-  const toggleMember = (id) => setMembers(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  const toggleMember = (id: any) => setMembers((prev: any) => prev.includes(id) ? prev.filter((x: any) => x !== id) : [...prev, id]);
   const save = () => {
     const perms = {
-      shared_projects: permProjects.split("/").map(s => s.trim()).filter(Boolean),
+      shared_projects: permProjects.split("/").map((s: any) => s.trim()).filter(Boolean),
       shared_kol_pool: permKolPool.trim(),
       kpi_goal: permKpi.trim(),
       reminder_rule: permReminder.trim(),
@@ -39,12 +38,12 @@ export function EditGroupModal({ groupName = "KOL Operations", mode = "edit", st
       // Name + description
       e("div", null,
         e("label", { className: "text-[10px] text-slate-500 mb-1 block" }, t("组名")),
-        e("input", { type: "text", value: name, onChange: (ev) => setName(ev.target.value),
+        e("input", { type: "text", value: name, onChange: (ev: any) => setName(ev.target.value),
           className: "w-full rounded-md border border-white/[0.08] bg-white/[0.025] px-3 py-1.5 text-[12px] text-white outline-none" })
       ),
       e("div", null,
         e("label", { className: "text-[10px] text-slate-500 mb-1 block" }, t("组描述")),
-        e("textarea", { value: desc, onChange: (ev) => setDesc(ev.target.value), rows: 2,
+        e("textarea", { value: desc, onChange: (ev: any) => setDesc(ev.target.value), rows: 2,
           className: "w-full rounded-md border border-white/[0.08] bg-white/[0.025] px-3 py-1.5 text-[11px] text-white outline-none resize-none" })
       ),
       // Members
@@ -54,7 +53,7 @@ export function EditGroupModal({ groupName = "KOL Operations", mode = "edit", st
           e("button", { className: "text-[10px] text-purple-300 hover:text-purple-200", onClick: () => document.getElementById("edit-group-member-list")?.scrollIntoView({ behavior: "smooth" }) }, "+ " + t("添加成员"))
         ),
         e("div", { id: "edit-group-member-list", className: "space-y-1" },
-          staff.map(s => {
+          staff.map((s: any) => {
             const isMember = members.includes(s.id);
             return e("label", {
               key: s.id,
@@ -86,12 +85,12 @@ export function EditGroupModal({ groupName = "KOL Operations", mode = "edit", st
           { icon: Users,      label: t("共享 KOL 池"),       value: permKolPool,  set: setPermKolPool,  ph: "如 Top performers(78 人)" },
           { icon: TrendingUp, label: t("共同 KPI 目标"),     value: permKpi,      set: setPermKpi,      ph: "如 Q2 新增 50 个高活 KOL" },
           { icon: Bell,       label: t("内部 @ 提醒规则"),   value: permReminder, set: setPermReminder, ph: "如 组内变更自动通知" },
-        ].map((row, i) => e("div", { key: i, className: "flex items-center gap-2.5" },
+        ].map((row: any, i: any) => e("div", { key: i, className: "flex items-center gap-2.5" },
           e(row.icon, { size: 11, className: "text-purple-300/80 shrink-0" }),
           e("div", { className: "w-[88px] shrink-0 text-[11px] text-white" }, row.label),
           e("input", {
             type: "text", value: row.value, placeholder: row.ph,
-            onChange: (ev) => row.set(ev.target.value),
+            onChange: (ev: any) => row.set(ev.target.value),
             className: "flex-1 min-w-0 rounded-md border border-white/[0.08] bg-white/[0.025] px-2.5 py-1 text-[10.5px] text-white placeholder-slate-600 outline-none focus:border-purple-500/40"
           })
         ))

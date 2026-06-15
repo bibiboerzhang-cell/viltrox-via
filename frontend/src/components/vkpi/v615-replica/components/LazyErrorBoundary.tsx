@@ -1,9 +1,8 @@
-// @ts-nocheck
 // 隔离懒加载页面的崩溃:① 部署后 chunk 哈希变化导致旧浏览器加载失败(白屏)——
 // 自动硬刷新一次拉取新资源;② 任何渲染异常——优雅兜底,只挂这一块,不连累整个 app。
 import React from "react";
 
-function isChunkError(err) {
+function isChunkError(err: any) {
   const msg = String((err && err.message) || err || "");
   const name = String((err && err.name) || "");
   return (
@@ -12,17 +11,17 @@ function isChunkError(err) {
   );
 }
 
-export class LazyErrorBoundary extends React.Component {
-  constructor(props) {
+export class LazyErrorBoundary extends React.Component<any, any> {
+  constructor(props: any) {
     super(props);
     this.state = { error: null };
   }
 
-  static getDerivedStateFromError(error) {
+  static getDerivedStateFromError(error: any) {
     return { error };
   }
 
-  componentDidCatch(error) {
+  componentDidCatch(error: any) {
     // 旧版本 chunk 失效:一次性硬刷新拉新资源(sessionStorage 防刷新死循环)。
     if (isChunkError(error)) {
       try {

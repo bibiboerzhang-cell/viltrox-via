@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -8,7 +7,7 @@ import { PopoverWrapper } from "./PopoverWrapper";
 
 const e = React.createElement;
 
-export function HelpPopover({ onClose, anchorRef, t, onOpenDocs, onOpenShortcuts, onOpenFeedback }) {
+export function HelpPopover({ onClose, anchorRef, t, onOpenDocs, onOpenShortcuts, onOpenFeedback }: any) {
   const items = [
     { icon: BookOpen,    title: t("文档 & 指南"),       desc: t("V-KPI 完整使用文档"), badge: t("暂不可用"), disabled: true, onClick: onOpenDocs },
     { icon: Keyboard,    title: t("键盘快捷键"),        desc: "⌘ K / ⌘ ? / ⌘ /",       badge: null,    onClick: onOpenShortcuts },
@@ -20,7 +19,7 @@ export function HelpPopover({ onClose, anchorRef, t, onOpenDocs, onOpenShortcuts
         e("div", { className: "text-[11px] font-semibold text-white" }, t("帮助 & 反馈"))
       ),
       e("div", { className: "py-1" },
-        items.map((item, i) => e("button", {
+        items.map((item: any, i: any) => e("button", {
           key: i,
           disabled: item.disabled,
           onClick: () => {

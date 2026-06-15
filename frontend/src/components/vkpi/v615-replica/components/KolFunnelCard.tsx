@@ -1,4 +1,3 @@
-// @ts-nocheck
 // 2026-06-12 C10(波3 R1):KOL 漏斗卡 — 消费后端 GET /api/admin/vkpi/dashboard → summary.funnel
 // shape = { favorites_total, claimed_total, in_project_total, published_total, by_staff[] }
 // 后端块未上线前显示空态「漏斗数据待后端」,绝不硬编码假数。
@@ -11,22 +10,22 @@ const e = React.createElement;
 
 const STAGE_COLORS = ["#a855f7", "#3b82f6", "#f59e0b", "#10b981"];
 
-function staffLabel(row) {
+function staffLabel(row: any) {
   return String(row.staff_name || row.name || (row.staff_id != null ? `Staff ${row.staff_id}` : "未知成员"));
 }
 
-function staffCount(row) {
+function staffCount(row: any) {
   const value = Number(
     row.favorites_total ?? row.favorites ?? row.count ?? row.total ?? NaN,
   );
   return Number.isFinite(value) ? value : null;
 }
 
-export function KolFunnelCard({ funnel, onOpenMyKol }) {
+export function KolFunnelCard({ funnel, onOpenMyKol }: any) {
   const stages = Array.isArray(funnel?.stages) ? funnel.stages : [];
   const isReal = Boolean(funnel?.isReal);
   const byStaff = Array.isArray(funnel?.byStaff) ? funnel.byStaff : [];
-  const maxCount = Math.max(1, ...stages.map((stage) => Number(stage.count) || 0));
+  const maxCount = Math.max(1, ...stages.map((stage: any) => Number(stage.count) || 0));
 
   return e(motion.div, {
     initial: { opacity: 0, y: 8 },
@@ -51,7 +50,7 @@ export function KolFunnelCard({ funnel, onOpenMyKol }) {
           e("div", { className: "mt-1 text-[9px] text-slate-600" }, "等待 dashboard summary.funnel 聚合块上线")
         )
       : e("div", { className: "space-y-2" },
-          stages.map((stage, index) => {
+          stages.map((stage: any, index: any) => {
             const count = Number(stage.count) || 0;
             const width = Math.max(4, Math.min(100, (count / maxCount) * 100));
             const color = STAGE_COLORS[index % STAGE_COLORS.length];
@@ -76,13 +75,13 @@ export function KolFunnelCard({ funnel, onOpenMyKol }) {
           // by_staff 摘要(前 3 名)
           byStaff.length > 0 && e("div", { className: "mt-2 border-t border-white/[0.06] pt-2 space-y-1" },
             e("div", { className: "text-[9px] uppercase tracking-wider text-slate-500" }, "我的漏斗"),
-            byStaff.slice(0, 3).map((row, index) => e("div", {
+            byStaff.slice(0, 3).map((row: any, index: any) => e("div", {
               key: row.staff_id ?? index,
               className: "flex items-center justify-between text-[10px]"
             },
               e("span", { className: "min-w-0 truncate text-slate-300" }, staffLabel(row)),
               e("span", { className: "shrink-0 tabular-nums text-slate-400" },
-                staffCount(row) == null ? "--" : staffCount(row).toLocaleString()
+                staffCount(row) == null ? "--" : staffCount(row)!.toLocaleString()
               )
             )),
             byStaff.length > 3 && e("div", { className: "text-[9px] text-slate-500" }, `+${byStaff.length - 3} 人`)

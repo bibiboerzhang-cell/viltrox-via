@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -8,19 +7,19 @@ import { Check, ChevronDown } from "lucide-react";
 
 const e = React.createElement;
 
-export function HierarchyDropdown({ label, value, placeholder, options, onChange, color, disabled, accent }) {
+export function HierarchyDropdown({ label, value, placeholder, options, onChange, color, disabled, accent }: any) {
   const [open, setOpen] = useState(false);
-  const ref = useRef(null);
+  const ref = useRef<any>(null);
 
   useEffect(() => {
-    const handle = (ev) => {
+    const handle = (ev: any) => {
       if (ref.current && !ref.current.contains(ev.target)) setOpen(false);
     };
     document.addEventListener("mousedown", handle);
     return () => document.removeEventListener("mousedown", handle);
   }, []);
 
-  const selected = options.find((o) => o.key === value);
+  const selected = options.find((o: any) => o.key === value);
 
   return e("div", { ref, className: "relative min-w-[160px]" },
     e("button", {
@@ -45,7 +44,7 @@ export function HierarchyDropdown({ label, value, placeholder, options, onChange
       transition: { duration: 0.14 },
       className: "absolute left-0 top-full z-50 mt-1.5 w-[280px] max-h-[360px] overflow-y-auto overflow-hidden rounded-lg border border-white/[0.1] bg-[#0b1220]/95 shadow-2xl backdrop-blur-xl"
     },
-      options.map((opt) => {
+      options.map((opt: any) => {
         const isSelected = value === opt.key;
         const itemDisabled = opt.disabled;
         return e("button", {

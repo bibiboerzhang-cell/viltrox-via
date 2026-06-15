@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -8,10 +7,10 @@ import "leaflet/dist/leaflet.css";
 
 const e = React.createElement;
 
-export function RealMap({ pins, accentColor, onPinClick, focusTarget, defaultZoom = 12 }) {
-  const containerRef = useRef(null);
-  const mapRef = useRef(null);
-  const markersRef = useRef([]);
+export function RealMap({ pins, accentColor, onPinClick, focusTarget, defaultZoom = 12 }: any) {
+  const containerRef = useRef<any>(null);
+  const mapRef = useRef<any>(null);
+  const markersRef = useRef<any[]>([]);
   const onPinClickRef = useRef(onPinClick);
   onPinClickRef.current = onPinClick;
   
@@ -56,10 +55,10 @@ export function RealMap({ pins, accentColor, onPinClick, focusTarget, defaultZoo
     if (!map) return;
     
     // 清旧 markers
-    markersRef.current.forEach((m) => map.removeLayer(m));
+    markersRef.current.forEach((m: any) => map.removeLayer(m));
     markersRef.current = [];
-    
-    pins.forEach((p) => {
+
+    pins.forEach((p: any) => {
       const color = p.color || accentColor || "#a855f7";
       
       const icon = L.divIcon({

@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -9,7 +8,7 @@ import { useT } from "../lib/i18n";
 
 const e = React.createElement;
 
-export function AIIntelligenceCard({ insight, onApprove, onLater, onRegenerate, regenerating }) {
+export function AIIntelligenceCard({ insight, onApprove, onLater, onRegenerate, regenerating }: any) {
   const { t } = useT();
   // 2026-06-12 波3 R4:confidence 此前为前端硬编码 72,现仅在后端真实提供置信度时显示。
   const confidence = Number(insight.confidence);
@@ -38,7 +37,7 @@ export function AIIntelligenceCard({ insight, onApprove, onLater, onRegenerate, 
     e("div", { className: "relative mb-3" },
       e("div", { className: "mb-1.5 text-[9px] uppercase tracking-wider text-violet-300" }, "📌 今日重点决策"),
       e("p", { className: "text-[12px] leading-relaxed text-slate-200" }, 
-        insight.todayDecision.text.split(insight.todayDecision.amount).reduce((acc, part, i, arr) => {
+        insight.todayDecision.text.split(insight.todayDecision.amount).reduce((acc: any, part: any, i: any, arr: any) => {
           if (i === arr.length - 1) return [...acc, part];
           return [...acc, part, e("span", { key: i, className: "font-semibold text-amber-300" }, insight.todayDecision.amount)];
         }, [])
@@ -64,7 +63,7 @@ export function AIIntelligenceCard({ insight, onApprove, onLater, onRegenerate, 
         e("div", { className: "text-[9px] uppercase tracking-wider text-emerald-300" }, "📈 加强"),
         e("span", { className: "text-[9px] text-slate-500" }, `${insight.strengthen.length} ${t("项")}`)
       ),
-      ...insight.strengthen.map((s, i) => e("div", { key: i, className: "mb-1 flex items-start gap-1.5 text-[11px]" },
+      ...insight.strengthen.map((s: any, i: any) => e("div", { key: i, className: "mb-1 flex items-start gap-1.5 text-[11px]" },
         e("span", { className: "text-emerald-400 mt-0.5" }, "·"),
         e("div", { className: "flex-1" },
           e("span", { className: "text-slate-200" }, s.text),
@@ -79,7 +78,7 @@ export function AIIntelligenceCard({ insight, onApprove, onLater, onRegenerate, 
         e("div", { className: "text-[9px] uppercase tracking-wider text-amber-300" }, "📉 减弱"),
         e("span", { className: "text-[9px] text-slate-500" }, `${insight.weaken.length} 项`)
       ),
-      ...insight.weaken.map((s, i) => e("div", { key: i, className: "mb-1 flex items-start gap-1.5 text-[11px]" },
+      ...insight.weaken.map((s: any, i: any) => e("div", { key: i, className: "mb-1 flex items-start gap-1.5 text-[11px]" },
         e("span", { className: "text-amber-400 mt-0.5" }, "·"),
         e("div", { className: "flex-1" },
           e("span", { className: "text-slate-200" }, s.text),
@@ -91,7 +90,7 @@ export function AIIntelligenceCard({ insight, onApprove, onLater, onRegenerate, 
     // ─ 今天适合发 ─
     e("div", { className: "relative mb-2" },
       e("div", { className: "mb-1.5 text-[9px] uppercase tracking-wider text-cyan-300" }, "📅 今天适合发"),
-      ...insight.todayContent.map((c, i) => e("div", { key: i, className: "mb-1 flex items-start gap-1.5 text-[11px]" },
+      ...insight.todayContent.map((c: any, i: any) => e("div", { key: i, className: "mb-1 flex items-start gap-1.5 text-[11px]" },
         e("span", { className: "text-cyan-400 mt-0.5" }, "·"),
         e("span", { className: "flex-1 text-slate-200" }, c)
       ))

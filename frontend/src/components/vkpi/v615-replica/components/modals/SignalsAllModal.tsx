@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -9,16 +8,16 @@ import { useT } from "../../lib/i18n";
 
 const e = React.createElement;
 
-export function SignalsAllModal({ alerts, onClose, onAlertClick }) {
+export function SignalsAllModal({ alerts, onClose, onAlertClick }: any) {
   const { t } = useT();
   const [searchQuery, setSearchQuery] = useState("");
   const [sevFilter, setSevFilter] = useState("all");
-  
-  const sevColor = { high: "#ef4444", medium: "#f59e0b", low: "#10b981", info: "#06b6d4" };
-  const sevBg    = { high: "rgba(239,68,68,0.06)", medium: "rgba(245,158,11,0.06)", low: "rgba(16,185,129,0.06)", info: "rgba(6,182,212,0.06)" };
-  const sevText  = { high: "#fca5a5", medium: "#fcd34d", low: "#6ee7b7", info: "#67e8f9" };
-  
-  const filtered = alerts.filter(a => {
+
+  const sevColor: any = { high: "#ef4444", medium: "#f59e0b", low: "#10b981", info: "#06b6d4" };
+  const sevBg: any    = { high: "rgba(239,68,68,0.06)", medium: "rgba(245,158,11,0.06)", low: "rgba(16,185,129,0.06)", info: "rgba(6,182,212,0.06)" };
+  const sevText: any  = { high: "#fca5a5", medium: "#fcd34d", low: "#6ee7b7", info: "#67e8f9" };
+
+  const filtered = alerts.filter((a: any) => {
     if (sevFilter !== "all" && a.severity !== sevFilter) return false;
     if (searchQuery && !a.title.toLowerCase().includes(searchQuery.toLowerCase()) && !a.desc.toLowerCase().includes(searchQuery.toLowerCase())) return false;
     return true;
@@ -32,7 +31,7 @@ export function SignalsAllModal({ alerts, onClose, onAlertClick }) {
   },
     e(motion.div, {
       initial: { scale: 0.95, opacity: 0, y: 20 }, animate: { scale: 1, opacity: 1, y: 0 }, exit: { scale: 0.95, opacity: 0 },
-      onClick: (ev) => ev.stopPropagation(),
+      onClick: (ev: any) => ev.stopPropagation(),
       className: "relative w-full max-w-3xl h-[85vh] flex flex-col rounded-2xl border border-white/10 bg-[#0a1020] shadow-2xl overflow-hidden",
     },
       // Header
@@ -50,13 +49,13 @@ export function SignalsAllModal({ alerts, onClose, onAlertClick }) {
           e("input", {
             type: "text",
             value: searchQuery,
-            onChange: (ev) => setSearchQuery(ev.target.value),
+            onChange: (ev: any) => setSearchQuery(ev.target.value),
             placeholder: "搜索标题 / 来源 / 关键词",
             className: "flex-1 bg-transparent text-[11px] text-white placeholder:text-slate-500 outline-none"
           })
         ),
         // severity buttons
-        ["all", "high", "medium", "low", "info"].map(sev => e("button", {
+        ["all", "high", "medium", "low", "info"].map((sev: any) => e("button", {
           key: sev,
           onClick: () => setSevFilter(sev),
           className: "text-[10px] px-2.5 py-1 rounded transition-colors",
@@ -77,7 +76,7 @@ export function SignalsAllModal({ alerts, onClose, onAlertClick }) {
       e("div", { className: "flex-1 overflow-y-auto p-5 space-y-2" },
         filtered.length === 0
           ? e("div", { className: "text-center py-12 text-[11px] text-slate-500" }, t("没有匹配的信号"))
-          : filtered.map(a => e("div", {
+          : filtered.map((a: any) => e("div", {
               key: a.id,
               onClick: () => onAlertClick && onAlertClick(a),
               className: "rounded-md p-3 cursor-pointer hover:bg-white/[0.04] transition-colors",
@@ -90,7 +89,7 @@ export function SignalsAllModal({ alerts, onClose, onAlertClick }) {
               e("div", { className: "text-[10px] text-slate-400 mb-1.5" }, a.desc),
               e("div", { className: "flex items-center justify-between text-[9px]" },
                 e("div", { className: "text-slate-500" },
-                  a.sources.map(s => s.name).join(" · ")
+                  a.sources.map((s: any) => s.name).join(" · ")
                 ),
                 e("div", { className: "flex items-center gap-1.5" },
                   e("span", { className: "rounded bg-white/[0.05] px-1.5 py-0.5 text-slate-400" }, a.totalMentions + " mentions"),

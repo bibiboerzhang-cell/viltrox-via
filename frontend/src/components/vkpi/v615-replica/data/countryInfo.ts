@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 export const COUNTRY_INFO = {
@@ -67,16 +66,16 @@ const COUNTRY_ALIASES = {
   "new zealand": "NZ", "新西兰": "NZ",
 };
 
-export function normalizeCountryCode(value) {
+export function normalizeCountryCode(value: any) {
   if (!value) return "";
   const raw = String(value).trim();
   if (!raw) return "";
   const upper = raw.toUpperCase();
-  if (COUNTRY_INFO[upper]) return upper;
-  return COUNTRY_ALIASES[raw.toLowerCase()] || COUNTRY_ALIASES[raw] || "";
+  if ((COUNTRY_INFO as any)[upper]) return upper;
+  return (COUNTRY_ALIASES as any)[raw.toLowerCase()] || (COUNTRY_ALIASES as any)[raw] || "";
 }
 
-export function getCountryInfo(value) {
+export function getCountryInfo(value: any) {
   const code = normalizeCountryCode(value);
-  return code ? { code, ...COUNTRY_INFO[code] } : null;
+  return code ? { code, ...(COUNTRY_INFO as any)[code] } : null;
 }
