@@ -12,6 +12,7 @@ import { KPAvatar } from "./KPAvatar";
 import { KOLVideoAnalysisPanel } from "./KOLVideoAnalysisPanel";
 import { PlatformPill } from "./PlatformPill";
 import { enqueueVideoAnalysis, getKolPoolContentFit, getKolPoolDimensions11, getKolPoolLlmDeepAnalysis } from "../../../../services/vkpi/kolPool-api";
+import { getKolMemory } from "../../../../services/vkpi/kolMemory-api";
 import { candidateKindGroup } from "../lib/candidateKind";
 import { formatNumber, formatPercent } from "../lib/format";
 import { BRAND_TIER } from "../data/brandTier";
@@ -591,6 +592,8 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
   const [contentFit, setContentFit] = React.useState(null);
   const [contentFitBusy, setContentFitBusy] = React.useState(false);
   const [contentFitError, setContentFitError] = React.useState("");
+  // W3 长期记忆(纯聚合,显式独立于 V6 Fit · 不影响排序;snapshot 不含任何 fit/score 字段)。
+  const [kolMemory, setKolMemory] = React.useState(null);
   React.useEffect(() => {
     const bundleRecord = recordOr(detailBundle);
     if (bundleRecord.status === "ready") {
@@ -646,6 +649,24 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
       })
       .catch(() => {
         if (!cancelled) setContentFit(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [apiToken, item?.id]);
+
+  // W3 长期记忆:开抽屉纯读聚合快照(不烧 LLM、零触评分)。失败静默(记忆是增益,非阻塞)。
+  React.useEffect(() => {
+    setKolMemory(null);
+    if (!apiToken || !item?.id) return;
+    let cancelled = false;
+    void getKolMemory(apiToken, item.id)
+      .then((payload) => {
+        if (cancelled) return;
+        setKolMemory(payload && typeof payload === "object" ? payload : null);
+      })
+      .catch(() => {
+        if (!cancelled) setKolMemory(null);
       });
     return () => {
       cancelled = true;
@@ -1023,7 +1044,139 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
         })()
       ),
       e(LlmDeepAnalysisPanel, { payload: llmDeepAnalysis }),
-      
+
+      // ── 长期记忆(W3)· 显式独立于 V6 Fit · 不影响排序 ──
+      // 红线:本区块纯渲染聚合记忆,绝不渲染任何 viltrox/v6_fit 数值。
+      (() => {
+        const memRecord = recordOr(kolMemory);
+        const snap = recordOr(memRecord.snapshot);
+        const hasMemory = memRecord.status === "ready" || memRecord.status === "missing";
+        if (!hasMemory) return null;
+        const contentStyle = compactText(snap.content_style, 320);
+        const productLines = Array.isArray(snap.recommended_product_lines)
+          ? snap.recommended_product_lines.map((x) => compactText(x, 60)).filter(Boolean)
+          : [];
+        const risk = recordOr(snap.risk);
+        const riskFlags = Array.isArray(risk.risk_flags)
+          ? risk.risk_flags.map((x) => compactText(x, 80)).filter(Boolean)
+          : [];
+        const riskVerdict = compactText(risk.final_verdict, 160);
+        const fulfillment = recordOr(snap.fulfillment);
+        const timeline = Array.isArray(snap.timeline) ? snap.timeline : [];
+        const EVENT_LABEL = {
+          discovered: "发现",
+          favorited: "收藏",
+          assigned: "派单",
+          shipped: "寄样",
+          published: "发布",
+          analyzed: "深析",
+          failed: "失败",
+        };
+        const formatWhen = (value) => {
+          const text = String(value || "").trim();
+          if (!text) return "";
+          return text.length >= 10 ? text.slice(0, 10) : text;
+        };
+        const fulfillmentItems = [
+          { label: "派单", value: numberOr(fulfillment.assigned_count) || 0 },
+          { label: "寄样", value: numberOr(fulfillment.shipped_count) || 0 },
+          { label: "发布", value: numberOr(fulfillment.published_count) || 0 },
+          { label: "失败任务", value: numberOr(fulfillment.failed_jobs_count) || 0 },
+        ];
+        return e("div", { className: "px-5 py-4 border-b border-white/[0.06]" },
+          // 标题 · 显式区隔评分
+          e("div", { className: "flex items-center gap-1.5 mb-3" },
+            e(Layers, { size: 11, className: "text-violet-400" }),
+            e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "长期记忆"),
+            e("span", { className: "ml-1.5 text-[9px] px-1.5 py-0.5 rounded border border-violet-400/20 bg-violet-400/[0.06] text-violet-300/90" }, "独立于 V6 Fit · 不影响排序"),
+            memRecord.status === "missing" && e("span", { className: "ml-auto text-[9px] text-slate-600 italic" }, "暂无聚合数据")
+          ),
+          // 内容风格
+          e("div", { className: "mb-3" },
+            e("div", { className: "flex items-center gap-1 mb-1" },
+              e(Sparkles, { size: 10, className: "text-cyan-400/80" }),
+              e("span", { className: "text-[10px] text-slate-500" }, "内容风格")
+            ),
+            contentStyle
+              ? e("p", { className: "text-[11px] text-slate-300 leading-relaxed" }, contentStyle)
+              : e("span", { className: "text-[10px] text-slate-600 italic" }, "—")
+          ),
+          // 推荐产品线
+          e("div", { className: "mb-3" },
+            e("div", { className: "flex items-center gap-1 mb-1" },
+              e(ShoppingBag, { size: 10, className: "text-emerald-400/80" }),
+              e("span", { className: "text-[10px] text-slate-500" }, "推荐产品线")
+            ),
+            productLines.length > 0
+              ? e("div", { className: "flex items-center gap-1.5 flex-wrap" },
+                  productLines.map((line, i) => e("span", {
+                    key: i,
+                    className: "text-[10px] px-1.5 py-0.5 rounded border border-emerald-400/15 bg-emerald-400/[0.05] text-emerald-200/90",
+                  }, line))
+                )
+              : e("span", { className: "text-[10px] text-slate-600 italic" }, "—")
+          ),
+          // 风险
+          e("div", { className: "mb-3" },
+            e("div", { className: "flex items-center gap-1 mb-1" },
+              e(Shield, { size: 10, className: "text-amber-400/80" }),
+              e("span", { className: "text-[10px] text-slate-500" }, "风险")
+            ),
+            (riskFlags.length > 0 || riskVerdict)
+              ? e("div", { className: "space-y-1" },
+                  riskFlags.length > 0 && e("div", { className: "flex items-start gap-1.5 flex-wrap" },
+                    riskFlags.map((flag, i) => e("span", {
+                      key: i,
+                      className: "inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border border-amber-400/20 bg-amber-400/[0.06] text-amber-200/90",
+                    },
+                      e(AlertTriangle, { size: 9, className: "text-amber-400" }),
+                      flag
+                    ))
+                  ),
+                  riskVerdict && e("p", { className: "text-[10px] text-slate-400 leading-relaxed" }, riskVerdict)
+                )
+              : e("span", { className: "text-[10px] text-slate-600 italic" }, "无明显风险标记")
+          ),
+          // 合作履约
+          e("div", { className: "mb-3" },
+            e("div", { className: "flex items-center gap-1 mb-1.5" },
+              e(Activity, { size: 10, className: "text-sky-400/80" }),
+              e("span", { className: "text-[10px] text-slate-500" }, "合作履约")
+            ),
+            e("div", { className: "grid grid-cols-4 gap-1.5" },
+              fulfillmentItems.map((stat, i) => e("div", {
+                key: i,
+                className: "px-2 py-1.5 rounded-md border border-white/[0.06] bg-white/[0.02] text-center",
+              },
+                e("div", { className: "text-[14px] font-semibold tabular-nums text-white leading-none mb-0.5" }, stat.value),
+                e("div", { className: "text-[9px] text-slate-500 leading-none" }, stat.label)
+              ))
+            )
+          ),
+          // 时间线
+          e("div", null,
+            e("div", { className: "flex items-center gap-1 mb-1.5" },
+              e(Star, { size: 10, className: "text-violet-400/80" }),
+              e("span", { className: "text-[10px] text-slate-500" }, "时间线")
+            ),
+            timeline.length > 0
+              ? e("div", { className: "space-y-1.5" },
+                  timeline.slice(0, 12).map((ev, i) => {
+                    const evRecord = recordOr(ev);
+                    const evType = String(evRecord.event_type || "").trim();
+                    return e("div", { key: i, className: "flex items-center gap-2 text-[10px]" },
+                      e("span", { className: "w-1 h-1 rounded-full bg-violet-400/60 shrink-0" }),
+                      e("span", { className: "text-slate-300 w-[40px] shrink-0" }, EVENT_LABEL[evType] || evType || "事件"),
+                      e("span", { className: "text-slate-500 tabular-nums shrink-0" }, formatWhen(evRecord.occurred_at)),
+                      evRecord.ref_type && e("span", { className: "text-slate-600 truncate" }, String(evRecord.ref_type) + (evRecord.ref_id ? " · " + String(evRecord.ref_id) : ""))
+                    );
+                  })
+                )
+              : e("span", { className: "text-[10px] text-slate-600 italic" }, "暂无生命周期事件")
+          )
+        );
+      })(),
+
       // ── 联系方式 & 代表视频 ──
       e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
         e("div", { className: "flex items-center gap-1.5 mb-2" },
