@@ -2995,6 +2995,14 @@ def _process_gemini_video(
                 referer=str(evidence.get("content_url") or ""),
             )
             if not download.get("success") or not download.get("path"):
+                # Point 8: a terminal precheck verdict (404/403/410/451) means the
+                # direct URL is confidently unavailable. Re-raise its bare reason —
+                # which carries a content_* marker — instead of the
+                # "direct_video_download_failed:" prefix, so _error_category routes
+                # it to content_unavailable/_restricted/_blocked (a terminal,
+                # non-retried bucket) rather than the retryable "download" bucket.
+                if download.get("precheck_terminal"):
+                    raise RuntimeError(str(download.get("error") or f"content unavailable: {platform}"))
                 raise RuntimeError(f"direct_video_download_failed: {download.get('error') or platform}")
             local_schema = "final_v1" if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS else "v2"
             analysis_context = _video_final_context(evidence) if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS else _video_performance_context(evidence)
