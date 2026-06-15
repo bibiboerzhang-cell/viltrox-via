@@ -205,3 +205,147 @@ def list_inbox(
         "by_category": counts,
         "scope": "all" if scope.can_view_all(staff) else "own",
     }
+
+
+# ── W2 状态流转 + 单条读取(scope-gated) ────────────────────────────────
+_INBOX_COLUMNS = (
+    "id, dedupe_key, category, title, detail, priority, entity_type, entity_id, "
+    "suggested_endpoint, estimated_cost_cents, writes_business_data, uses_llm, "
+    "requires_approval, owner_staff_id, reason, payload_json, status, "
+    "touches_v6_fit, created_at, updated_at"
+)
+
+# 人可发起的流转目标(executed/failed 仅由 executor 内部 set_status 用,不开放给 _transition)。
+_TRANSITION_TARGETS = {"approved", "dismissed", "snoozed"}
+# 允许「进入」某目标态的源态白名单(终态 executed/dismissed/failed 拒)。
+_TRANSITION_FROM: dict[str, tuple[str, ...]] = {
+    "approved": ("suggested", "snoozed"),  # snoozed 可被重新 approve
+    "dismissed": ("suggested", "snoozed"),
+    "snoozed": ("suggested",),
+}
+
+
+def get_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """读单条建议(scope 收口)。越权 / 不存在 / 缺表 → None。
+
+    scope 与 list_inbox 同款:成员只放行 owner_staff_id==自己(owner=NULL 公司级成员不可见)。
+    payload_json _loads 回 dict。
+    """
+    if not table_exists(_TABLE):
+        return None
+    row = get_conn().execute(
+        f"SELECT {_INBOX_COLUMNS} FROM {_TABLE} WHERE id = ?",
+        (int(action_id),),
+    ).fetchone()
+    if row is None:
+        return None
+    item = dict(row)
+    if not scope.can_view_all(staff):
+        # 成员越权收口:owner 必须等于 actor;公司级(owner=NULL)成员不可见。
+        owner = item.get("owner_staff_id")
+        if owner is None or int(owner) != int(scope.actor_staff_id(staff)):
+            return None
+    item["payload_json"] = _loads(item.get("payload_json"))
+    return item
+
+
+def _transition(
+    action_id: int,
+    to_status: str,
+    staff: dict[str, Any] | None = None,
+    *,
+    snooze_until: str | None = None,
+) -> dict[str, Any]:
+    """通用流转:approve/dismiss/snooze。scope 收口 + 源态白名单 + 自身行 UPDATE。
+
+    红线:只动 vkpi_action_inbox 自己这一行,绝不碰 viltrox_fit_score / rule_v0。
+    """
+    target = str(to_status or "").strip().lower()
+    if target not in _TRANSITION_TARGETS:
+        return {"ok": False, "reason": "invalid_transition", "action_id": int(action_id)}
+
+    current = get_action(action_id, staff)
+    if current is None:
+        return {"ok": False, "reason": "not_found_or_out_of_scope", "action_id": int(action_id)}
+
+    allowed_from = _TRANSITION_FROM[target]
+    if str(current.get("status") or "") not in allowed_from:
+        return {
+            "ok": False,
+            "reason": "illegal_state_transition",
+            "action_id": int(action_id),
+            "from_status": current.get("status"),
+            "to_status": target,
+        }
+
+    conn = get_conn()
+    from_placeholders = ",".join(["?"] * len(allowed_from))
+    if target == "snoozed" and snooze_until:
+        # snooze_until 写进 payload_json(表无专列)。Python read-modify-write 既有 payload,
+        # 走与生成器同款 _dumps + ?::jsonb 路径(不引入新 jsonb_set/to_jsonb 方言面)。
+        payload = current.get("payload_json")
+        merged = dict(payload) if isinstance(payload, dict) else {}
+        merged["snooze_until"] = str(snooze_until)
+        cursor = conn.execute(
+            f"""
+            UPDATE {_TABLE}
+            SET status = ?, payload_json = ?::jsonb, updated_at = NOW()
+            WHERE id = ? AND status IN ({from_placeholders})
+            """,
+            (target, _dumps(merged), int(action_id), *allowed_from),
+        )
+    else:
+        cursor = conn.execute(
+            f"""
+            UPDATE {_TABLE}
+            SET status = ?, updated_at = NOW()
+            WHERE id = ? AND status IN ({from_placeholders})
+            """,
+            (target, int(action_id), *allowed_from),
+        )
+    conn.commit()
+    if int(getattr(cursor, "rowcount", 0) or 0) <= 0:
+        # 并发竞态:行已被别处改走源态 → 诚实回 illegal。
+        return {"ok": False, "reason": "illegal_state_transition", "action_id": int(action_id)}
+
+    result: dict[str, Any] = {"ok": True, "status": target, "action_id": int(action_id)}
+    if target == "snoozed" and snooze_until:
+        result["snooze_until"] = str(snooze_until)
+    return result
+
+
+def approve_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    """人审通过 → status=approved(execute 仍需后端 validators 双闸)。"""
+    return _transition(action_id, "approved", staff)
+
+
+def dismiss_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    """忽略 → status=dismissed(终态)。"""
+    return _transition(action_id, "dismissed", staff)
+
+
+def snooze_action(
+    action_id: int, staff: dict[str, Any] | None = None, minutes: int = 1440
+) -> dict[str, Any]:
+    """延后 → status=snoozed;snooze_until = now + minutes(Python 算 ISO 串传参,不裸 %)。"""
+    from datetime import datetime, timedelta, timezone
+
+    mins = max(1, min(int(minutes or 1440), 60 * 24 * 30))  # 1 分钟 ~ 30 天
+    snooze_until = (datetime.now(timezone.utc) + timedelta(minutes=mins)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return _transition(action_id, "snoozed", staff, snooze_until=snooze_until)
+
+
+def set_status(action_id: int, status: str) -> None:
+    """内部可信状态置位(executor 用,不做 scope)。只动本行 status + updated_at。
+
+    executor 执行成功置 'executed'、失败置 'failed';CHECK 约束限定合法值。
+    """
+    try:
+        conn = get_conn()
+        conn.execute(
+            f"UPDATE {_TABLE} SET status = ?, updated_at = NOW() WHERE id = ?",
+            (str(status), int(action_id)),
+        )
+        conn.commit()
+    except Exception:
+        logger.warning("action_inbox.set_status_failed", extra={"action_id": action_id, "status": status}, exc_info=True)

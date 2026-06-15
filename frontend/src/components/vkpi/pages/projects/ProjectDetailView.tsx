@@ -1226,7 +1226,7 @@ export function ProjectDetailView({
           onPendingAction={(label) => setNotice({ tone: 'info', title: '暂存提醒', body: `${label} 已进入项目操作队列，后续同步后更新状态。` })}
         />
       ) : activeTab === '时间轴' ? (
-        <CampaignTimelineTab rows={rows} events={detail?.events || []} />
+        <CampaignTimelineTab rows={rows} events={detail?.events || []} apiToken={apiToken} projectId={project.id} />
       ) : (
         <div className="vkpi-campaign-placeholder">
           <h3>{activeTab}</h3>

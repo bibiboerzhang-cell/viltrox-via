@@ -303,6 +303,26 @@ async def job_fulfillment_delivered_scan():
                 "scheduler.fulfillment_delivered_scan",
                 extra={"created": created, "scanned_projects": result.get("scanned_projects")},
             )
+        # W2 审计:每个新开窗口落 window_open(record-only,失败不拖垮 job)。
+        try:
+            from app.db.connection import get_conn
+            from app.domains.projects import automation_audit
+
+            for wid in result.get("created") or []:
+                row = get_conn().execute(
+                    "SELECT project_id FROM vkpi_project_content_observation_windows WHERE id = ?",
+                    (int(wid),),
+                ).fetchone()
+                pid = int(dict(row).get("project_id")) if row and dict(row).get("project_id") else None
+                if pid:
+                    automation_audit.record_audit(
+                        project_id=pid,
+                        action="window_open",
+                        window_id=int(wid),
+                        reason="scheduler:fulfillment_delivered_scan",
+                    )
+        except Exception:
+            logger.debug("scheduler.fulfillment_delivered_scan_audit_skipped", exc_info=True)
     except Exception:
         logger.exception("scheduler.fulfillment_delivered_scan_failed")
 
@@ -357,6 +377,29 @@ async def job_fulfillment_content_scan():
                     "rate_limited": result.get("rate_limited"),
                 },
             )
+        # W2 审计:对每个新候选 post 落 content_scan(按其 project_id);record-only,容错。
+        try:
+            from app.db.connection import get_conn
+            from app.domains.projects import automation_audit
+
+            scanned = int(result.get("scanned_windows") or 0)
+            for post_id in result.get("created_posts") or []:
+                row = get_conn().execute(
+                    "SELECT project_id FROM vkpi_project_content_posts WHERE id = ?",
+                    (int(post_id),),
+                ).fetchone()
+                pid = int(dict(row).get("project_id")) if row and dict(row).get("project_id") else None
+                if pid:
+                    automation_audit.record_audit(
+                        project_id=pid,
+                        action="content_scan",
+                        scanned_kol_count=scanned,
+                        matched_count=1,
+                        reason="scheduler:fulfillment_content_scan",
+                        detail={"post_id": int(post_id)},
+                    )
+        except Exception:
+            logger.debug("scheduler.fulfillment_content_scan_audit_skipped", exc_info=True)
     except Exception:
         logger.exception("scheduler.fulfillment_content_scan_failed")
 
@@ -417,6 +460,18 @@ def _enqueue_due_retrospectives(max_projects: int = 50) -> dict:
         status = str(res.get("status") or "")
         if status == "queued":
             enqueued.append(pid)
+            # W2 审计:落 retrospective_enqueue(record-only,容错;不拖垮 enqueue)。
+            try:
+                from app.domains.projects import automation_audit
+
+                automation_audit.record_audit(
+                    project_id=pid,
+                    action="retrospective_enqueue",
+                    reason="scheduler:retrospective_enqueue",
+                    detail={"enqueue_status": status},
+                )
+            except Exception:
+                logger.debug("scheduler.retrospective_enqueue_audit_skipped", exc_info=True)
         else:
             # already_queued / already_running → 去重命中(幂等),不重复排队。
             skipped += 1

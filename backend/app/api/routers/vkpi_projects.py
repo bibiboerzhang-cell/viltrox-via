@@ -13,6 +13,7 @@ from app.core.security import get_current_user
 from app.domains import costs
 from app.domains.access import policy, scope
 from app.domains.analysis.cache_repo import get_analysis_cache_entry, list_project_video_analysis_cache
+from app.domains.projects import automation_audit
 from app.domains.projects import contract_assist
 from app.domains.projects import contracts
 from app.domains.projects import retrospective_aggregate
@@ -488,6 +489,36 @@ def project_retrospective(project_id: int, staff=Depends(require_tab("vkpi", "re
         "retrospective": entry,
         "active_job": active_job.get("active") if active_job else None,
         "last_job": active_job.get("last") if active_job else None,
+    }
+
+
+@router.get("/projects/{project_id}/timeline")
+def project_timeline(project_id: int, staff=Depends(require_tab("vkpi", "read"))):
+    """W2 只读:项目履约时间线(建→选→寄→签→观察→发布→复盘),按 canonical 阶段有序。
+
+    纯聚合既有履约/项目表;零业务写、不碰 viltrox_fit_score。项目级 scope 收口(读模式)。
+    """
+    try:
+        policy.require_project_read(int(project_id), staff)
+    except policy.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+    return automation_audit.build_project_timeline(int(project_id))
+
+
+@router.get("/projects/{project_id}/automation-audit")
+def project_automation_audit(
+    project_id: int,
+    limit: int = Query(default=100, ge=1, le=500),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    """W2 只读:项目自动化审计行(哪单同步/哪天开窗/扫了谁/命中啥/为何进复盘)。"""
+    try:
+        policy.require_project_read(int(project_id), staff)
+    except policy.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+    return {
+        "project_id": int(project_id),
+        "items": automation_audit.list_project_audit(int(project_id), limit=limit),
     }
 
 

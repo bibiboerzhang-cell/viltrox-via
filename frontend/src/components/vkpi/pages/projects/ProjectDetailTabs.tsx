@@ -2,6 +2,7 @@ import { Component, useEffect, useMemo, useRef, useState, type ErrorInfo, type R
 import { Activity, AlertCircle, BookOpen, Boxes, Check, DollarSign, ExternalLink, Eye, FileText, Heart, MessageCircle, Package, ShoppingCart, Sparkles, TrendingUp, Upload, Video } from 'lucide-react';
 import { stageLabels } from '../../shared/vkpiConstants';
 import { ProjectEvidenceForms } from '../../drawers/ProjectEvidenceForms';
+import { ProjectTimeline } from '../../v615-replica/components/ProjectTimeline';
 import type { VkpiProjectDetail, VkpiProjectRow } from '../../vkpiTypes';
 import type { VkpiAnalysisCacheEntry, VkpiProjectContract, VkpiProjectContractsResponse, VkpiProjectRetrospectiveResult, VkpiProjectVideoAnalysisCacheItem, VkpiProjectVideoAnalysisCacheResponse } from '../../../../services/vkpi/projects-api';
 import { formatLargeNum, formatMoneyShort, healthColor, PROJECT_STAGE_COLOR, PROJECT_STAGE_FLOW } from './projectDeliverableStyle';
@@ -232,10 +233,17 @@ function timelineEventColor(toStage: string, eventType: string) {
 export function CampaignTimelineTab({
   rows,
   events = [],
+  apiToken,
+  projectId,
 }: {
   rows: VkpiProjectRow[];
   events?: VkpiProjectDetail['events'];
+  apiToken?: string;
+  projectId?: string;
 }) {
+  // W2 履约时间线:projectId 优先取传入,否则从 rows 派生(VkpiProjectRow.projectId)。
+  // apiToken 若未透传则 ProjectTimeline 自动降级为只读阶段骨架(不报错)。
+  const timelineProjectId = projectId || rows[0]?.projectId || '';
   const realEvents = useMemo(() => events
     .map((event, index) => {
       const fromStage = timelineField(event, 'from_stage');
@@ -279,6 +287,9 @@ export function CampaignTimelineTab({
 
   return (
     <div className="p-4 space-y-3" aria-label="项目时间轴">
+      {/* W2 履约时间线(只读):建→选→寄→签→观察→发布→复盘。渲染在真实事件流之上。 */}
+      <ProjectTimeline apiToken={apiToken} projectId={timelineProjectId} />
+
       <div className="rounded-lg border border-purple-500/30 bg-purple-500/5 p-3 flex items-start gap-2.5">
         <Activity size={13} className="text-purple-300 mt-0.5 shrink-0" />
         <div className="text-[10.5px] text-slate-300">
