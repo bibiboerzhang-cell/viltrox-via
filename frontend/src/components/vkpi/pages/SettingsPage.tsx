@@ -15,7 +15,9 @@ import {
   listFeatureFlags,
   listPlatformCrawlSettings,
   listProviderStatuses,
+  listSchedulerTasks,
   runVkpiAutomation,
+  setSchedulerTaskEnabled,
   updateBudgetSettings,
   updateCommentAlertSettings,
   updateFeatureFlags,
@@ -58,6 +60,7 @@ import {
 import { SettingsStaffPanel } from './settings/SettingsStaffPanel';
 import { SettingsSkuPanel } from './settings/SettingsSkuPanel';
 import { SettingsStatusPanel } from './settings/SettingsStatusPanel';
+import { SettingsSchedulerPanel } from './settings/SettingsSchedulerPanel';
 import {
   boolLabel,
   boolValue,
@@ -111,9 +114,11 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
   const [commentAlertSettings, setCommentAlertSettings] = useState<Record<string, unknown>>({});
   const [controlStatus, setControlStatus] = useState<Record<string, unknown>>({});
   const [syncOverview, setSyncOverview] = useState<VkpiSyncOverview | null>(null);
+  const [schedulerTasks, setSchedulerTasks] = useState<Array<Record<string, unknown>>>([]);
+  const [schedulerStatus, setSchedulerStatus] = useState<Record<string, unknown>>({});
   const [settingsError, setSettingsError] = useState('');
   const [settingsLoading, setSettingsLoading] = useState(false);
-  const [expandedSection, setExpandedSection] = useState<'status' | 'sku' | 'staff' | 'funds' | 'rules' | 'preference' | 'notification' | null>('status');
+  const [expandedSection, setExpandedSection] = useState<'status' | 'sku' | 'staff' | 'funds' | 'rules' | 'scheduler' | 'preference' | 'notification' | null>('status');
   const [rulesTab, setRulesTab] = useState<SettingsRulesTab>('platform');
   const [productSearch, setProductSearch] = useState('');
   const [selectedCatalogProduct, setSelectedCatalogProduct] = useState<VkpiProductCatalogItem | null>(null);
@@ -200,7 +205,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
       setProviderError('');
       setSettingsError('');
       try {
-        const [providerResponse, rbacResponse, flagsResponse, crawlResponse, budgetResponse, controlResponse, commentAlertResponse, inviteCapabilitiesResponse, syncOverviewResponse] = await Promise.all([
+        const [providerResponse, rbacResponse, flagsResponse, crawlResponse, budgetResponse, controlResponse, commentAlertResponse, inviteCapabilitiesResponse, syncOverviewResponse, schedulerResponse] = await Promise.all([
           listProviderStatuses(apiToken),
           getRbacStatus(apiToken).catch((error) => {
             setRbacStatusError(error instanceof Error ? error.message : 'RBAC 状态读取失败');
@@ -216,6 +221,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
             return null;
           }),
           getSyncOverview(apiToken).catch(() => null),
+          listSchedulerTasks(apiToken).catch(() => ({ tasks: [] as Array<Record<string, unknown>>, status: {} as Record<string, unknown> })),
         ]);
         if (!cancelled) {
           setProviders(providerResponse.providers || []);
@@ -227,6 +233,8 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
           setCommentAlertSettings(commentAlertResponse.settings || {});
           setInviteCapabilities(inviteCapabilitiesResponse);
           setSyncOverview(syncOverviewResponse);
+          setSchedulerTasks((schedulerResponse.tasks as Array<Record<string, unknown>>) || []);
+          setSchedulerStatus((schedulerResponse.status as Record<string, unknown>) || {});
         }
       } catch (error) {
         if (!cancelled) setSettingsError(error instanceof Error ? error.message : '系统设置读取失败');
@@ -331,6 +339,23 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
       setMessage('功能开关已更新。');
     } catch (error) {
       setSettingsError(error instanceof Error ? error.message : '功能开关更新失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleSchedulerTask = async (taskKey: string, enabled: boolean) => {
+    if (!apiToken || !taskKey) return;
+    setSettingsError('');
+    setBusy(true);
+    try {
+      const response = await setSchedulerTaskEnabled(apiToken, taskKey, enabled);
+      const refreshed = await listSchedulerTasks(apiToken).catch(() => ({ tasks: schedulerTasks, status: schedulerStatus }));
+      setSchedulerTasks((refreshed.tasks as Array<Record<string, unknown>>) || []);
+      setSchedulerStatus((refreshed.status as Record<string, unknown>) || (response.status as Record<string, unknown>) || {});
+      setMessage(`定时任务 ${taskKey} 已${enabled ? '开启' : '关闭'}(仅标记，本期不自动执行）。`);
+    } catch (error) {
+      setSettingsError(error instanceof Error ? error.message : '定时任务开关更新失败');
     } finally {
       setBusy(false);
     }
@@ -675,6 +700,8 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
   const kolRefreshBatchCount = numberValue(kolRefreshBatchPlan.batch_count);
   const kolRefreshBatchConcurrency = numberValue(kolRefreshBatchPlan.max_concurrent_runs, 2);
   const kolRefreshGateText = kolRefreshGateEnabled ? '按需刷新已启用' : '仅记录/查询';
+  const schedulerTaskTotal = numberValue(schedulerStatus.total, schedulerTasks.length);
+  const schedulerTaskEnabled = numberValue(schedulerStatus.enabled, schedulerTasks.filter((row) => boolValue(row.enabled, false)).length);
   const systemHealth = settingsError || providerError || rbacStatusError || dailySync?.ack_required ? '需要处理' : 'healthy';
   const versionSummary = frontendAsset
     ? `${frontendAsset} · ${timeLabel(versionCheckedAt)}`
@@ -823,6 +850,14 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
             onSaveCommentAlertSettings={(event) => void saveCommentAlertSettings(event)}
             onToggleFeatureFlag={(row) => void toggleFeatureFlag(row)}
             onTogglePlatformCrawl={(row) => void togglePlatformCrawl(row)}
+          />
+        ))}
+        {renderSettingsModule('scheduler', `${schedulerTaskTotal} 个任务 · ${schedulerTaskEnabled} 已开启 · 仅注册可见,执行链后续接`, (
+          <SettingsSchedulerPanel
+            tasks={schedulerTasks}
+            status={schedulerStatus}
+            busy={busy}
+            onToggleTask={(taskKey, enabled) => void toggleSchedulerTask(taskKey, enabled)}
           />
         ))}
         {renderSettingsModule('preference', `默认入口 ${landingPage} · 范围 ${dateRangeDefault} · 密度 ${tableDensity}`, (

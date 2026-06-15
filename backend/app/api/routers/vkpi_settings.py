@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.api.dependencies.perms import require_tab
 from app.domains import settings as settings_domain
 from app.domains.access import scope
+from app.domains.ops import scheduler_registry
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-settings"])
 
@@ -122,3 +123,30 @@ def notifications_list(limit: int = Query(default=200, ge=1, le=500), staff=Depe
     if not settings_domain.can_view_all(staff):
         raise HTTPException(status_code=403, detail="management permission required")
     return settings_domain.notifications_list(staff=staff, limit=limit)
+
+
+# ---------------------------------------------------------------------------
+# Scheduler-task registry (S1) — visibility + enable toggles ONLY.
+# 红线:本期仅注册 + 可见 + 翻 enabled 开关;不执行、不 auto-run 任何任务。
+# 执行链(调度器接线)留待后续单独接入。
+# ---------------------------------------------------------------------------
+@router.get("/settings/scheduler-tasks")
+def scheduler_tasks(staff=Depends(require_tab("vkpi", "read"))):
+    _require_manager_staff(staff)
+    return {
+        "tasks": scheduler_registry.list_scheduler_tasks(),
+        "status": scheduler_registry.scheduler_status(),
+    }
+
+
+@router.patch("/settings/scheduler-tasks/{task_key}")
+def update_scheduler_task(task_key: str, body: dict, staff=Depends(require_tab("vkpi", "write"))):
+    if "enabled" not in (body or {}):
+        raise HTTPException(status_code=400, detail="enabled (bool) required")
+    try:
+        task = scheduler_registry.set_scheduler_task_enabled(task_key, bool(body.get("enabled")), staff=staff)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc) or "scheduler task not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc) or "invalid scheduler task request") from exc
+    return {"task": task, "status": scheduler_registry.scheduler_status()}

@@ -59,6 +59,23 @@ export async function getControlStatus(token: string) {
   return apiFetch<Row>("/api/admin/vkpi/settings/control-status", {}, token);
 }
 
+// 调度任务注册表(S1):仅注册 + 可见 + enable 开关;不执行任何任务。
+export async function listSchedulerTasks(token: string) {
+  return apiFetch<{ tasks?: Row[]; status?: Row }>(
+    "/api/admin/vkpi/settings/scheduler-tasks",
+    {},
+    token,
+  );
+}
+
+export async function setSchedulerTaskEnabled(token: string, taskKey: string, enabled: boolean) {
+  return apiFetch<{ task?: Row; status?: Row }>(
+    `/api/admin/vkpi/settings/scheduler-tasks/${encodeURIComponent(taskKey)}`,
+    { method: "PATCH", body: jsonBody({ enabled }) },
+    token,
+  );
+}
+
 export async function getCommentAlertSettings(token: string) {
   return apiFetch<{ settings?: Row }>("/api/admin/vkpi/settings/comment-alerts", {}, token);
 }
