@@ -260,7 +260,7 @@ export function IntelligenceCenterPage({ apiToken, viewMode }: WorkspacePageProp
     ));
     if (!target) return;
     setSelectedId(target.id);
-    setRecommendationBacklogNotice('已从员工工作台定位到推荐待反馈；打开写库开关后可提交 accept / reject / snooze。');
+    setRecommendationBacklogNotice('已从我的工作台定位到推荐待反馈；打开写库开关后可提交 accept / reject / snooze。');
     setIncomingFocus({});
   }, [cards, incomingFocus]);
 

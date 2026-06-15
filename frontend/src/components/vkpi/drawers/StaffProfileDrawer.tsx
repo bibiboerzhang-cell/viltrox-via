@@ -66,7 +66,7 @@ export function StaffProfileDrawer({
         <div>
           <h3>{displayName}</h3>
           <p>{textValue(staff.role || member.role, '-')} · {member.active ? '启用' : '停用'}</p>
-          <span>{costsVisible ? '管理层可见成本和审计' : '当前视角隐藏内部成本'}</span>
+          <span>{costsVisible ? '已授权查看成本和审计' : '需要授权查看内部成本'}</span>
         </div>
       </div>
       {loading ? <div className="vkpi-empty-state">正在加载员工详情...</div> : null}

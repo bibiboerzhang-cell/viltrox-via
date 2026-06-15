@@ -86,7 +86,7 @@ export function AuditPage({ apiToken, viewMode }: AuditPageProps) {
   ];
 
   return (
-    <PageShell title="审计 / 证据访问记录" description="管理层查看敏感访问、导出、设置变更、归因调整和业务动作，员工视角不可见。">
+    <PageShell title="审计 / 证据访问记录" description="管理层查看敏感访问、导出、设置变更、归因调整和业务动作，未授权账号不可见。">
       <section className="vkpi-card-grid vkpi-card-grid--forms">
         <section className="vkpi-card vkpi-action-card">
           <CardHeader title="审计概览" />

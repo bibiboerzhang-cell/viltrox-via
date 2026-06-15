@@ -89,7 +89,7 @@ export function CampaignsPage({ apiToken, viewMode, data }: CampaignsPageProps) 
       await createBudgetPool(apiToken, { pool_name: budgetName.trim(), total_budget_usd: Number(budgetUsd || 0) });
       setBudgetName('');
       setBudgetUsd('');
-      setMessage('预算池已创建。预算池只在管理层可见。');
+      setMessage('预算池已创建。预算池需要授权后可见。');
       await refresh();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '预算池创建失败');

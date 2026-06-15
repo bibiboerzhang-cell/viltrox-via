@@ -143,7 +143,7 @@ export function EmployeeSettingsView({ message, settingsError }: { message: stri
         </section>
         <EmployeePermissionCard permissions={user?.permissions as Record<string, string> | undefined} />
         <section className="vkpi-card vkpi-action-card">
-          <CardHeader title="不可见项目" />
+          <CardHeader title="当前账号未开放" />
           <InfoBlock label="SKU 成本" value="需要授权" />
           <InfoBlock label="账号权限" value="需要授权" />
           <InfoBlock label="API Key" value="需要授权" />

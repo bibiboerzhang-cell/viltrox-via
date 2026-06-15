@@ -466,7 +466,7 @@ export function CommandCenter({
             <FunnelChart items={data.funnel} />
           </div>
           <div className="vkpi-card">
-            <CardHeader title={viewMode === 'manager' ? '员工贡献榜（按销售额）' : '我的贡献概览'} />
+            <CardHeader title={viewMode === 'manager' ? '成员贡献榜（按销售额）' : '我的贡献概览'} />
             <Leaderboard items={data.staffLeaderboard} onOpenStaff={handleOpenStaffFromLeaderboard} />
           </div>
         </section>
@@ -496,7 +496,7 @@ export function CommandCenter({
         <section className="vkpi-card vkpi-table-card">
           <div className="vkpi-table-card__header">
             <div>
-              <h2>{viewMode === 'manager' ? '员工 / KOL 管理' : '我的 KOL / 项目'}</h2>
+              <h2>{viewMode === 'manager' ? '成员 / KOL 管理' : '我的 KOL / 项目'}</h2>
               <span>{filteredProjects.length} 条</span>
             </div>
             <div className="vkpi-table-tools">
@@ -587,7 +587,7 @@ export function CommandCenter({
             emptyTitle="选择一张行动卡"
             emptySummary="从今日行动卡选择推荐、项目或风险。"
             extraSlot={<ActionVisualPanel card={intelligenceDrawer} />}
-            footerNote="员工工作台只展示只读行动入口；写 feedback 和任务创建仍在智能中心或项目流程里完成。"
+            footerNote="我的工作台只展示只读行动入口；写 feedback 和任务创建仍在智能中心或项目流程里完成。"
             onAction={handleIntelligenceAction}
           />
         </div>
@@ -596,7 +596,7 @@ export function CommandCenter({
         <IntelligenceEvidenceDrawer
           card={evidenceDrawer}
           onClose={() => setEvidenceDrawer(null)}
-          footerNote="员工行动卡只展示已有 evidence refs，不触发外部抓取或模型调用。"
+          footerNote="我的行动卡只展示已有 evidence refs，不触发外部抓取或模型调用。"
         />
       ) : null}
     </>

@@ -82,7 +82,7 @@ export function VkpiTopbar({
 
       {canSwitchView ? (
         <button className="vkpi-button" type="button" onClick={onToggleView}>
-          {viewMode === 'manager' ? '切换员工视角' : '返回管理主控'}
+          {viewMode === 'manager' ? '切换我的视角' : '返回管理主控'}
         </button>
       ) : null}
 

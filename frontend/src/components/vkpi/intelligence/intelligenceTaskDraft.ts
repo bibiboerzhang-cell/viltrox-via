@@ -182,7 +182,7 @@ export function taskDraftBridgeTargets(
     targets.push({
       page: 'command',
       label: '回我的工作台',
-      intent: '在员工工作台处理今日任务和项目。',
+      intent: '在我的工作台处理今日任务和项目。',
       primary: true,
     });
   }

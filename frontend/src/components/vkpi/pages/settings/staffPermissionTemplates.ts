@@ -29,7 +29,7 @@ export const STAFF_PERMISSION_MODULES: Array<{ key: string; label: string; group
 export const STAFF_PERMISSION_TEMPLATES: StaffPermissionTemplate[] = [
   {
     key: "employee_workspace",
-    label: "员工工作台",
+    label: "成员工作台",
     detail: "官方账号矩阵和个人工作台，不开放管理后台",
     permissions: {
       overview: "none", kol_ops: "read", vkpi: "write", activities: "none",
@@ -76,7 +76,7 @@ export const STAFF_PERMISSION_TEMPLATES: StaffPermissionTemplate[] = [
   {
     key: "admin",
     label: "管理员",
-    detail: "Owner 专用，普通员工授权入口不显示",
+    detail: "Owner 专用，普通成员授权入口不显示",
     ownerOnly: true,
     permissions: Object.fromEntries(STAFF_PERMISSION_MODULES.map((module) => [module.key, module.ownerOnly ? "read" : "admin"])) as StaffPermissionMap,
   },
