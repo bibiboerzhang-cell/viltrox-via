@@ -14,6 +14,7 @@ from app.db.connection import get_conn, is_postgres_runtime
 from app.domains import audit
 from app.domains.access import scope
 from app.platform.db.schema import ensure_vkpi_schema
+from app.domains.projects import stage_canonical
 from app.domains.projects.workflow_common import SIDE_STAGES, _amount_cents, _int, _json, _loads, normalize_stage, staff_id, utcnow
 
 # 批B #5(2026-06-12):assignment 阶段受控集合 = assignment 词表 + side stages。
@@ -167,6 +168,217 @@ def update_project_kol_shipping(project_id: int, kol_ref: str | int, body: dict[
         metadata={"project_id": int(project_id), "assignment_id": updated.get("id"), "kol_pool_id": updated.get("kol_pool_id"), "tracking_number": tracking_number},
     )
     return {"assignment": updated}
+
+
+# ── 点4:履约交付信号写路径(系统侧,由 17track 物流同步在「已签收/Delivered」时调用)──
+# 现状根因(审计履约 62 分拖底):17track 同步只写 assignment.metadata_json.shipping,
+# 既不落 vkpi_shipments.delivered_at、也不把 assignment.stage 推进到 delivered。下游
+# observation_windows / fulfillment_observation / automation_audit 都读 delivered_at,
+# 因此长期「物流断流」、due_list 恒空。本函数只在【真实 delivered 事件】被调用,纯增量:
+#   ① upsert 一行 vkpi_shipments(把 delivered_at 真正落实);
+#   ② 通过 stage_canonical 归一把 assignment 推进到 canonical `delivered`(= assignment
+#      原始词 `arrived`),走受控词表校验,绝不裸 UPDATE 绕过。
+# 守住红线:不自动判履约/结项/付款,不触发观察扫描(只把 delivered_at 写对,让人审有据)。
+
+# assignment 原始词中「已到达 delivered 或更靠后」的集合 —— 命中即不再向前推
+# (单调:已发布/已复盘/已关闭的派单绝不被签收事件回退到 delivered)。
+# 覆盖双词表:received/delivered=已签收;content_posted/posted/published/content_published=已发布;
+# reviewed/measured=已复盘;closed/churned/cancelled/lost/released=终态。
+_DELIVERED_OR_BEYOND_ASSIGNMENT_STAGES = frozenset({
+    "arrived", "received", "delivered",
+    "content_posted", "content_published", "posted", "published",
+    "reviewed", "measured",
+    "closed", "churned", "cancelled", "lost", "released",
+})
+
+
+def _shipments_has_delivered_column(conn: Any) -> bool:
+    """vkpi_shipments.delivered_at 是否存在(DDL migrations/035 已含;防御缺列环境)。"""
+    try:
+        conn.execute("SELECT delivered_at FROM vkpi_shipments WHERE 1=0")
+        return True
+    except Exception:
+        return False
+
+
+def record_delivered_signal(
+    *,
+    project_id: int,
+    assignment_id: int,
+    tracking_number: str = "",
+    carrier: str = "",
+    raw_status: str = "Delivered",
+    delivered_at: str | None = None,
+    last_checked_at: str | None = None,
+    kol_pool_id: int | None = None,
+) -> dict[str, Any]:
+    """系统侧:把一次【真实 delivered 事件】落成可被下游读取的交付信号。
+
+    幂等 + 单调:
+      - vkpi_shipments 按 (project_id, tracking_number) upsert 一行,只在 delivered_at
+        尚未落实时写入 delivered_at(已落实则保留首签时间,只刷 last_checked_at/raw_status)。
+      - assignment.stage 仅当当前不在 delivered-或更靠后 集合时,经 stage_canonical 归一
+        推进到 `delivered`(assignment 原始词 `arrived`);否则保持不动(no regression)。
+
+    本函数【不】触发观察扫描、【不】判履约/结项/付款。返回 dict 说明实际发生了什么,
+    供调用方(17track worker)汇总;不抛 ScopeDenied(系统作业,无 human actor)。
+    """
+    conn = get_conn()
+    now = utcnow()
+    delivered_ts = str(delivered_at or now)
+    checked_ts = str(last_checked_at or now)
+    raw = str(raw_status or "Delivered")
+    tracking = str(tracking_number or "").strip()
+
+    result: dict[str, Any] = {
+        "project_id": int(project_id),
+        "assignment_id": int(assignment_id),
+        "shipment_action": "skipped",
+        "stage_action": "skipped",
+    }
+
+    # ── ① vkpi_shipments upsert(只落真实 delivered_at)──
+    if _shipments_has_delivered_column(conn):
+        existing = conn.execute(
+            """
+            SELECT id, delivered_at FROM vkpi_shipments
+            WHERE project_id=? AND COALESCE(tracking_number,'')=?
+            ORDER BY id DESC LIMIT 1
+            """,
+            (int(project_id), tracking),
+        ).fetchone()
+        meta = {
+            "source": "17track",
+            "assignment_id": int(assignment_id),
+            "kol_pool_id": int(kol_pool_id) if kol_pool_id else None,
+            "raw_status": raw,
+            "last_checked_at": checked_ts,
+        }
+        if existing is not None:
+            ex = dict(existing)
+            # 已有 delivered_at → 保留首签时间(单调),只刷元数据/last_checked_at。
+            keep_delivered = ex.get("delivered_at") or delivered_ts
+            conn.execute(
+                """
+                UPDATE vkpi_shipments
+                SET delivered_at=?, status='delivered', carrier=COALESCE(NULLIF(?,''), carrier),
+                    metadata_json=?, updated_at=?
+                WHERE id=?
+                """,
+                (keep_delivered, str(carrier or ""), _json(meta), now, int(ex["id"])),
+            )
+            result["shipment_action"] = "updated"
+            result["shipment_id"] = int(ex["id"])
+        else:
+            conn.execute(
+                """
+                INSERT INTO vkpi_shipments (
+                    project_id, sample_asset_id, carrier, tracking_number, status,
+                    shipping_cost_cents, currency, shipped_at, delivered_at, evidence_url,
+                    note, metadata_json, created_at, updated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    int(project_id),
+                    None,
+                    str(carrier or ""),
+                    tracking,
+                    "delivered",
+                    0,
+                    "USD",
+                    None,
+                    delivered_ts,
+                    "",
+                    "",
+                    _json(meta),
+                    now,
+                    now,
+                ),
+            )
+            ins = conn.execute(
+                "SELECT id FROM vkpi_shipments WHERE project_id=? AND COALESCE(tracking_number,'')=? ORDER BY id DESC LIMIT 1",
+                (int(project_id), tracking),
+            ).fetchone()
+            result["shipment_action"] = "inserted"
+            result["shipment_id"] = int(dict(ins)["id"]) if ins else None
+    else:
+        result["shipment_action"] = "no_column"
+
+    # ── ② assignment.stage 经 canonical 归一推进到 delivered(单调,不裸 UPDATE 绕校验)──
+    row = conn.execute(
+        "SELECT id, stage, stage_status, metadata_json, kol_pool_id FROM vkpi_project_kol_assignments WHERE id=? AND project_id=?",
+        (int(assignment_id), int(project_id)),
+    ).fetchone()
+    if row is None:
+        conn.commit()
+        result["stage_action"] = "assignment_missing"
+        return result
+
+    arow = dict(row)
+    current_raw = str(arow.get("stage") or "").strip().lower()
+    current_norm = normalize_stage(current_raw)
+    # 已到达 delivered 或更靠后 → 不回退(单调)。
+    if current_norm in _DELIVERED_OR_BEYOND_ASSIGNMENT_STAGES or current_raw in _DELIVERED_OR_BEYOND_ASSIGNMENT_STAGES:
+        result["stage_action"] = "already_delivered_or_beyond"
+        result["from_stage"] = current_raw
+        conn.commit()
+        return result
+
+    # canonical 归一:从 canonical 源 'delivered' 经现有归一表得到 assignment 受控原始词。
+    #   stage_canonical.to_canonical('delivered') == 'delivered'(canonical 源,单一事实源);
+    #   normalize_stage('delivered') -> 'received' -> _ASSIGNMENT_STAGE_FALLBACK_ALIASES -> 'arrived'。
+    # 不裸写:经 _CONTROLLED_ASSIGNMENT_STAGES 词表 + 单调集合双校验,任一不过即不写。
+    if stage_canonical.to_canonical("delivered") != "delivered":  # 防 canonical 源漂移
+        result["stage_action"] = "canonical_source_drift"
+        conn.commit()
+        return result
+    target_raw = normalize_stage("delivered")  # delivered -> received
+    target_raw = _ASSIGNMENT_STAGE_FALLBACK_ALIASES.get(target_raw, target_raw)  # received -> arrived
+    # 受控词表内 + 落在「delivered 或更靠后」集合(与单调守卫同一口径,杜绝词表漂移误推)。
+    if target_raw not in _CONTROLLED_ASSIGNMENT_STAGES or target_raw not in _DELIVERED_OR_BEYOND_ASSIGNMENT_STAGES:
+        result["stage_action"] = "unsupported_target"
+        result["target_raw"] = target_raw
+        conn.commit()
+        return result
+
+    metadata = _loads(arow.get("metadata_json"))
+    metadata.setdefault("ui_actions", []).append({
+        "kind": "stage_action",
+        "from_stage": current_raw,
+        "to_stage": target_raw,
+        "reason": "logistics_delivered",
+        "source": "17track",
+        "at": now,
+        "staff_id": 0,
+    })
+    conn.execute(
+        """
+        UPDATE vkpi_project_kol_assignments
+        SET stage=?, stage_status='active', metadata_json=?, updated_at=?
+        WHERE id=?
+        """,
+        (target_raw, _json(metadata), now, int(arow["id"])),
+    )
+    conn.commit()
+    result["stage_action"] = "advanced"
+    result["from_stage"] = current_raw
+    result["to_stage"] = target_raw
+    # 审计(系统作业 staff_id=0 时 log_business_event 自行 skip,不抛错)。
+    audit.log_business_event(
+        staff_id=0,
+        action_type="assignment_delivered_signal",
+        target_type="project_kol_assignment",
+        target_id=int(arow["id"]),
+        detail=f"{current_raw} -> {target_raw} (17track delivered)",
+        metadata={
+            "project_id": int(project_id),
+            "assignment_id": int(arow["id"]),
+            "kol_pool_id": arow.get("kol_pool_id"),
+            "tracking_number": tracking,
+            "source": "17track",
+        },
+    )
+    return result
 
 
 def _text(value: Any) -> str:

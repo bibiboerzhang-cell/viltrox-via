@@ -16,6 +16,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
+from app.domains.projects.workflow_evidence import record_delivered_signal
 
 logger = get_logger("viltrox.domains.logistics.seventeen_track")
 
@@ -150,7 +151,7 @@ def _candidates(conn: Any, project_id: int | None) -> list[dict[str, Any]]:
         params.append(int(project_id))
     rows = conn.execute(
         f"""
-        SELECT id, project_id, tracking_number, metadata_json
+        SELECT id, project_id, tracking_number, metadata_json, kol_pool_id
         FROM vkpi_project_kol_assignments
         WHERE {' AND '.join(clauses)}
         ORDER BY updated_at DESC LIMIT 80
@@ -263,5 +264,28 @@ def run_logistics_sync_for_job(payload: dict[str, Any], *, staff: dict[str, Any]
         )
         synced += 1
         results.append({"number": number, "status": latest_status})
+        # 点4 履约交付信号:仅在【真实已签收】时落 vkpi_shipments.delivered_at + 把派单
+        # 推进到 canonical delivered(走 service 路径,不裸 UPDATE 绕校验)。非 delivered
+        # 事件不进此分支——绝不误写。失败不影响 shipping 元数据已写成功的主流程。
+        if latest_status == "Delivered":
+            delivered_ts = str(latest_event.get("time_iso") or "") or now
+            try:
+                signal = record_delivered_signal(
+                    project_id=int(row["project_id"]),
+                    assignment_id=int(row["id"]),
+                    tracking_number=number,
+                    carrier="17track",
+                    raw_status=latest_status,
+                    delivered_at=delivered_ts,
+                    last_checked_at=now,
+                    kol_pool_id=row.get("kol_pool_id"),
+                )
+                results[-1]["delivered_signal"] = {
+                    "shipment_action": signal.get("shipment_action"),
+                    "stage_action": signal.get("stage_action"),
+                }
+            except Exception as exc:
+                logger.warning("delivered signal write failed assignment=%s: %s", row["id"], exc)
+                results[-1]["delivered_signal"] = {"error": exc.__class__.__name__}
     conn.commit()
     return {"status": "ready", "synced": synced, "total": len(rows), "results": results[:20]}
