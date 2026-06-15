@@ -8,6 +8,7 @@ from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains.access import scope
 from app.domains.projects.workflow_projects import _enrich_project_card_fields
+from app.domains.projects.stage_canonical import to_canonical, stage_label_zh
 from app.platform.db.schema import ensure_vkpi_schema
 from app.platform.db.schema_audit import ensure_vkpi_audit_schema
 from app.domains.projects.workflow_common import _int
@@ -229,6 +230,9 @@ def project_detail(project_id: int, *, staff: dict[str, Any] | None = None) -> d
         ):
             item[key] = int(item.get(key) or 0)
         item["has_video_evidence"] = bool(item.get("has_video_evidence"))
+        # Additive canonical-stage lens for the UI (raw `stage`/`stage_status` untouched).
+        item["canonical_stage"] = to_canonical(item.get("stage"), item.get("stage_status", ""))
+        item["canonical_stage_label"] = stage_label_zh(item["canonical_stage"])
     project = dict(row)
     if participating_kols:
         project["kol_count"] = len({int(item.get("kol_pool_id") or 0) for item in participating_kols if int(item.get("kol_pool_id") or 0)})
