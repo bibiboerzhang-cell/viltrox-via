@@ -4,23 +4,34 @@
 
 import React, { useState } from "react";
 import { motion } from "framer-motion";
-import { AlertTriangle, ArrowLeft, Package, Search, Send, Target, UserPlus, Users, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Package, Search, Send, Share2, Target, UserPlus, Users, X } from "lucide-react";
 import { useT } from "../../lib/i18n";
 import { CAMPAIGN_ICONS } from "../../data/campaignIcons";
 import { PLATFORM_ICONS_MAP } from "../../data/platformIconsMap";
 import { updateProject } from "../../../../../services/vkpi/projects-api";
+import { ShareModal } from "../../../shared/ShareModal";
 
 const e = React.createElement;
 
-export function ProjectDetailModal({ project, onClose, onOpenFullPage, staff = [], apiToken, onAssigned }) {
+export function ProjectDetailModal({ project, onClose, onOpenFullPage, staff = [], apiToken, onAssigned, canManage = false }) {
   const { t } = useT();
   const [activeTab, setActiveTab] = useState("kols");  // kols / pending / assets / new-kol
   const [assignBusy, setAssignBusy] = useState(false);  // 指派给员工(管理层把项目派给某员工 → 该员工 own-only 即可见)
+  const [shareOpen, setShareOpen] = useState(false);  // 分享 modal(成员管理走真后端)
   if (!project) return null;
   const IconComp = CAMPAIGN_ICONS[project.iconKey] || CAMPAIGN_ICONS.default;
   const maxFunnel = Math.max(...project.funnel.map(f => f.count), 1);
   
-  return e(motion.div, {
+  return e(React.Fragment, null,
+   shareOpen && e(ShareModal, {
+    kind: "project",
+    targetId: String(project.projectId || project.id || ""),
+    targetName: project.name,
+    staff,
+    apiToken,
+    onClose: () => setShareOpen(false),
+   }),
+   e(motion.div, {
     initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 },
     className: "v615-modal fixed inset-0 flex items-center justify-center bg-black/75 backdrop-blur-md p-4 overflow-y-auto",
     style: { zIndex: 9999 },
@@ -60,6 +71,11 @@ export function ProjectDetailModal({ project, onClose, onOpenFullPage, staff = [
               finally { setAssignBusy(false); }
             },
           }, [e("option", { key: "_", value: "" }, assignBusy ? "指派中…" : "指派给…"), ...staff.map(s => e("option", { key: s.id, value: String(s.id), style: { background: "#0a1020" } }, s.name))]),
+          canManage && apiToken && e("button", {
+            onClick: () => setShareOpen(true),
+            className: "rounded-md border border-purple-500/30 bg-purple-500/[0.08] px-2 py-1 text-[10px] text-purple-200 hover:bg-purple-500/[0.15] flex items-center gap-1",
+            title: "分享给团队成员",
+          }, e(Share2, { size: 10 }), "分享"),
           e("button", { className: "rounded-md border border-white/[0.08] bg-white/[0.04] px-2 py-1 text-[10px] text-slate-300 hover:bg-white/[0.08]" }, t("编辑")),
           e("button", { onClick: () => onOpenFullPage && onOpenFullPage(project), className: "rounded-md border border-purple-500/30 bg-purple-500/[0.08] px-2 py-1 text-[10px] text-purple-200 hover:bg-purple-500/[0.15] flex items-center gap-1" },
             "打开完整页 ", e(ArrowLeft, { size: 9, className: "rotate-180" })),
@@ -269,5 +285,6 @@ export function ProjectDetailModal({ project, onClose, onOpenFullPage, staff = [
         )
       )
     )
+   )
   );
 }

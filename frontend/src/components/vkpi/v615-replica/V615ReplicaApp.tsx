@@ -750,6 +750,8 @@ export function V615ReplicaApp(props: any = {}) {
       project: selectedProject,
       staff: uiStaff,
       apiToken,
+      // 分享按钮门控:owner/admin 才能管理成员(非授权后端 403 兜底,UI 也先隐藏)。
+      canManage: ["admin", "owner"].includes(String(currentUser?.role || "").toLowerCase()),
       onAssigned: () => { onRefreshData && onRefreshData(); },
       onClose: () => setSelectedProject(null),
       onOpenFullPage: (project) => {

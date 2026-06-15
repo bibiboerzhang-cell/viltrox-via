@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
   Activity, ArrowLeft, BarChart3, BookOpen, Calendar, CircleDot, DollarSign,
-  Edit3, MapPin, MoreHorizontal, Package, ShieldCheck, Users, X
+  Edit3, MapPin, MoreHorizontal, Package, Share2, ShieldCheck, Users, X
 } from "lucide-react";
 import {
   getEventDetail, toUiTask, toUiExpense, toUiInvite,
 } from "../../../../../services/vkpi/events-api";
+import { ShareModal } from "../../../shared/ShareModal";
 import PlaceholderTab from "../components/PlaceholderTab.js";
 import { EVENT_STATUS, EVENT_TYPES } from "../shared/constants.js";
 import { daysUntil } from "../shared/helpers.js";
@@ -20,6 +21,12 @@ const e = React.createElement;
 export default function EventDetailView({ ev, onBack, currentUser, onEdit, onDelete, onUpdateTeam, stock, setStock, staff = [], token }) {
   const [tab, setTab] = useState("overview");
   const [menuOpen, setMenuOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);  // 分享 modal(成员管理走真后端)
+
+  // 分享门控:当前登录人在真实 staff 列表里是否 admin/owner(events currentUser 不带 role,
+  // 故按 staff[].isAdmin 还原)。非管理者隐藏按钮;后端 share-members 也只放行 owner/admin。
+  const canManage = (Array.isArray(staff) ? staff : [])
+    .some((s) => String(s.id) === String(currentUser.id) && s.isAdmin);
 
   // 真后端详情:一次拉 tasks/expenses/invites,各 tab 共享 + 可 reload
   const [detail, setDetail] = useState({ tasks: [], expenses: [], invites: [] });
@@ -120,7 +127,7 @@ export default function EventDetailView({ ev, onBack, currentUser, onEdit, onDel
             e("span", null, "更新于 ", ev.updatedAt)
           )
         ),
-        // 团队 avatars + "..." 菜单
+        // 团队 avatars + 分享 + "..." 菜单
         e("div", { className: "flex items-center gap-2" },
           e("div", { className: "flex items-center gap-0.5" },
             ev.teamUserIds.slice(0, 5).map((uid, i) => {
@@ -131,6 +138,11 @@ export default function EventDetailView({ ev, onBack, currentUser, onEdit, onDel
               }, u.initial);
             })
           ),
+          canManage && token && e("button", {
+            onClick: () => setShareOpen(true),
+            title: "分享给团队成员",
+            className: "px-2.5 h-8 rounded-md border border-purple-500/30 bg-purple-500/[0.08] text-[11px] text-purple-200 hover:bg-purple-500/[0.15] flex items-center gap-1.5"
+          }, e(Share2, { size: 12 }), "分享"),
           e("div", { className: "relative" },
             e("button", { onClick: () => setMenuOpen(!menuOpen),
               className: "w-8 h-8 rounded-md hover:bg-white/[0.05] border border-white/[0.06] flex items-center justify-center text-slate-400 hover:text-white"
@@ -168,6 +180,16 @@ export default function EventDetailView({ ev, onBack, currentUser, onEdit, onDel
     tab === "kols"      && e(KolsTab, { ev, token, invites: detail.invites, loading: detailLoading, error: detailError, reload: reloadDetail }),
     tab === "materials" && e(MaterialsTab, { ev, stock }),
     tab === "onsite"    && e(PlaceholderTab, { icon: Activity, title: "现场数据 (Event 进行中才激活)", message: "到场人数 / Lead 收集 / 现场销售 / 媒体到访 / KOL 内容产出 · 真接入时实时同步现场签到 iPad" }),
-    tab === "retro"     && e(PlaceholderTab, { icon: BookOpen, title: "复盘 (Event 结束后生成)", message: "投入 vs 产出 · ROI 计算 · 高光 + 痛点 · AI 起草复盘文档" })
+    tab === "retro"     && e(PlaceholderTab, { icon: BookOpen, title: "复盘 (Event 结束后生成)", message: "投入 vs 产出 · ROI 计算 · 高光 + 痛点 · AI 起草复盘文档" }),
+
+    // 分享 modal(成员管理走真后端 share-members)
+    shareOpen && e(ShareModal, {
+      kind: "event",
+      targetId: String(ev.id),
+      targetName: ev.title,
+      staff,
+      apiToken: token,
+      onClose: () => setShareOpen(false),
+    })
   );
 }
