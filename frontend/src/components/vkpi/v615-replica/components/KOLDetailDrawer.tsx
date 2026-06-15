@@ -395,7 +395,9 @@ function RepresentativeVideoPlayerModal({ video, onClose }) {
           autoPlay: true,
           playsInline: true,
         })
-    : youtubeVideoId
+    // P11:YouTube iframe 仅在平台确为 youtube 时渲染。IG/TikTok 即便误带到 youtubeVideoId,
+    // 也绝不塞进 YouTube 播放器(否则黑屏)——无 R2 缓存时落到下方「打开原帖」兜底。
+    : (platform === "youtube" && youtubeVideoId)
       ? e("div", { className: "relative h-full w-full rounded-lg bg-black" },
           e("iframe", {
             src: embedSrc,

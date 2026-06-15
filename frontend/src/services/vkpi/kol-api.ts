@@ -29,6 +29,18 @@ export interface VkpiKolProductFitResponse {
   }>;
 }
 
+export interface VkpiMyKolAggregateResponse {
+  staff?: Row;
+  window_days?: number;
+  official_matrix?: Row;
+  // pool_favorites mirrors pool_favorites.list_favorites field names; the
+  // aggregate hands `projects` (already-parsed) rather than `projects_json`.
+  pool_favorites?: Row[];
+  projects?: Row[];
+  claims?: Row[];
+  kpi_summary?: Record<string, number>;
+}
+
 export interface VkpiKolContactsResponse {
   kol_id?: number;
   contacts?: Array<{
@@ -71,6 +83,23 @@ export interface VkpiKolLookupPayload {
 function numberValue(value: unknown): number {
   const parsed = Number(value ?? 0);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+// P5: unified MY KOL read — the single source that includes pool_favorites.
+// Employees always get their own aggregate; managers may pass staffId.
+export async function getMyKolAggregate(
+  token: string,
+  params: { staffId?: number; windowDays?: number } = {},
+) {
+  const query = new URLSearchParams();
+  if (params.staffId != null) query.set("staff_id", String(params.staffId));
+  if (params.windowDays != null) query.set("window_days", String(params.windowDays));
+  const suffix = query.toString();
+  return apiFetch<VkpiMyKolAggregateResponse>(
+    `/api/admin/vkpi/my-kol/aggregate${suffix ? `?${suffix}` : ""}`,
+    {},
+    token,
+  );
 }
 
 export async function getKolProfile(token: string, kolId: string) {

@@ -205,6 +205,42 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
       candidate_kind: "new_discovered",
     }, avatar));
   }, [poolItems, recallAvatarIndex, apiToken]);
+
+  // P7:找达人(账号 URL)结果卡点击 → 打开右侧 KOL 详情抽屉(镜像 openRecallItem)。
+  // 从 deep-crawl 结果拼 item:kol_pool_id(matched_kol_pool_id / profile_flow.kol_pool_id)+ handle/platform +
+  // 基础资料(头像/粉丝/简介/帖数,优先 profile_flow.profile_data,缺则 creator_identity / 顶层字段兜底)。
+  // 有 kol_pool_id → openItem 拉 detail_bundle 看全部;无 → 轻量 seed 只读展示。绝不编造粉丝数。
+  const openProfileItem = useCallback((result) => {
+    if (!result || typeof result !== "object") return;
+    const profileFlow = result.profile_flow && typeof result.profile_flow === "object" ? result.profile_flow : {};
+    const profileData = profileFlow.profile_data && typeof profileFlow.profile_data === "object" ? profileFlow.profile_data : {};
+    const creator = result.creator_identity && typeof result.creator_identity === "object" ? result.creator_identity : {};
+    const id = kolIdFrom({ id: result.matched_kol_pool_id ?? profileFlow.kol_pool_id });
+    const avatar = String(profileData.avatar_url || creator.avatar_url || "").trim();
+    const handle = String(profileData.handle || creator.handle || result.handle || "").trim();
+    const platform = String(profileData.platform || creator.platform || result.platform || "").trim();
+    const followers = profileData.followers ?? creator.followers ?? creator.subscriber_count ?? null;
+    const postsCount = profileData.posts_count ?? creator.posts_count ?? null;
+    const bio = String(profileData.bio || creator.bio || creator.description || "").trim();
+    const profileUrl = String(
+      profileData.profile_url || creator.profile_url || creator.channel_url || result.url?.normalized || "",
+    ).trim();
+    const matched = id ? (poolItems.find((it) => kolIdFrom(it) === id) || {}) : {};
+    void openItem(mergeAvatarSeed({
+      ...matched,
+      id: id || null,
+      kol_pool_id: id || null,
+      handle: handle || matched.handle || "未入库账号",
+      display_name: matched.display_name || handle,
+      platform: platform || matched.platform,
+      profile_type: matched.profile_type || "creator",
+      followers: followers ?? matched.followers ?? null,
+      posts_count: postsCount ?? matched.posts_count ?? null,
+      bio: bio || matched.bio,
+      profile_url: profileUrl || matched.profile_url,
+      candidate_kind: matched.candidate_kind || (id ? "existing" : "new_discovered"),
+    }, avatar));
+  }, [poolItems, recallAvatarIndex, apiToken]);
   
   // Base filter (no kind filter applied) — used for kindCounts so chips always show full pool counts.
   const filteredBase = useMemo(() => {
@@ -298,7 +334,7 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
             onTotalClick: () => setPoolModalOpen(true),
           }),
           e("div", { className: "mt-2.5 space-y-2" },
-            e(SmartKolInputPanel, { apiToken, onRecallItems: rememberRecallItems, onOpenRecallItem: openRecallItem })
+            e(SmartKolInputPanel, { apiToken, onRecallItems: rememberRecallItems, onOpenRecallItem: openRecallItem, onOpenProfile: openProfileItem })
           ),
           e("div", { className: "mt-2.5" },
             e(MarketCoverageCard, { items: poolItems })

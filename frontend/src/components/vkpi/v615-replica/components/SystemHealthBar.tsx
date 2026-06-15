@@ -154,7 +154,7 @@ export function SystemHealthBar({ apiToken }) {
     e("div", { className: "flex items-stretch flex-wrap divide-x divide-white/[0.05] border-l border-white/[0.05]" },
       e(Cell, { icon: Server, label: "队列 完成/失败/阻塞" }, queueCell),
       e(Cell, { icon: DollarSign, label: "今日 LLM 成本" }, llmCell),
-      e(Cell, { icon: Database, label: "数据新鲜度" }, freshCell),
+      // P3:数据新鲜度是系统诊断,移出业务主页(归 Settings/Diagnostics);freshCell 计算保留以备后台用。
       e(Cell, { icon: worker.online ? Activity : AlertTriangle, label: "Worker 状态", accent: workerAccent }, workerCell)
     )
   );

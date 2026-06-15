@@ -6,6 +6,7 @@ import {
   listEvents, createEvent, updateEvent, deleteEvent,
   toUiEvent, fromUiCreate, fromUiUpdate, unwrapItem,
 } from "../../../../../services/vkpi/events-api";
+import { listInventory, toUiStock } from "../../../../../services/vkpi/inventory-api";
 import { useAuth } from "../../../../../hooks/useAuth";
 import { TASKS_DATA } from "../data/tasks.js";
 import DeleteConfirmModal from "../modals/DeleteConfirmModal.js";
@@ -41,6 +42,16 @@ export default function EventsPage({ currentUser, staff = [], initialEventId = n
       .then(res => { if (alive) setEvents((res.items || []).map(toUiEvent)); })
       .catch(err => { if (alive) { setEvents([]); setLoadError(String(err && err.message ? err.message : err)); } })
       .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [token]);
+
+  // 从后端加载真·公司库存(替代旧 mock INITIAL_STOCK)。INITIAL_STOCK 仅作为
+  // fetch 返回前的占位 fallback —— 拉到真数据后整表替换;失败则静默保留 fallback。
+  useEffect(() => {
+    let alive = true;
+    listInventory(token)
+      .then(res => { if (alive && Array.isArray(res.items)) setStock(res.items.map(toUiStock)); })
+      .catch(() => { /* 静默:保留 INITIAL_STOCK fallback */ });
     return () => { alive = false; };
   }, [token]);
 
@@ -224,6 +235,6 @@ export default function EventsPage({ currentUser, staff = [], initialEventId = n
       onClose: () => setShowNew(false),
       onSubmit: handleCreateEvent,
     }),
-    showStock && e(StockManagerModal, { stock, setStock, onClose: () => setShowStock(false) })
+    showStock && e(StockManagerModal, { stock, setStock, token, onClose: () => setShowStock(false) })
   );
 }

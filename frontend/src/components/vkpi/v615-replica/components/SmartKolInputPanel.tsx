@@ -735,7 +735,7 @@ function PlanPills({ plan }: { plan: Row }) {
   );
 }
 
-function ProfileInfoCard({ data }: { data: Row }) {
+function ProfileInfoCard({ data, onOpen }: { data: Row; onOpen?: () => void }) {
   const [imgError, setImgError] = useState(false);
   const avatar = proxiedImageUrl(cleanText(data.avatar_url));
   const handle = cleanText(data.handle);
@@ -746,8 +746,17 @@ function ProfileInfoCard({ data }: { data: Row }) {
   const bio = cleanText(data.bio);
   const profileUrl = cleanText(data.profile_url);
   const showImg = Boolean(avatar) && !imgError;
+  const clickable = Boolean(onOpen);
+  // P7:可点卡片打开右侧 KOL 详情抽屉。用 div+role 而非 <button>,避免把内部的真链接 <a> 嵌进按钮(非法嵌套)。
   return (
-    <div className="mt-2 flex items-start gap-3 rounded-md border border-white/[0.07] bg-black/20 px-2.5 py-2">
+    <div
+      role={clickable ? "button" : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onClick={clickable ? onOpen : undefined}
+      onKeyDown={clickable ? (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen?.(); } } : undefined}
+      title={clickable ? "打开 KOL 详情" : undefined}
+      className={`mt-2 flex items-start gap-3 rounded-md border border-white/[0.07] bg-black/20 px-2.5 py-2${clickable ? " cursor-pointer transition-colors hover:border-cyan-300/30 hover:bg-cyan-400/[0.04] focus:outline-none focus:ring-1 focus:ring-cyan-300/30" : ""}`}
+    >
       <span
         className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full text-[14px] font-bold text-white"
         style={{ background: "linear-gradient(135deg,#7c3aed,#06b6d4)" }}
@@ -785,12 +794,16 @@ function ProfileInfoCard({ data }: { data: Row }) {
             href={profileUrl}
             target="_blank"
             rel="noreferrer noopener"
+            onClick={(event) => event.stopPropagation()}
             className="mt-1 inline-block truncate text-[10px] text-cyan-300/80 hover:text-cyan-200 hover:underline"
           >
             {profileUrl}
           </a>
         ) : null}
       </div>
+      {clickable ? (
+        <span className="shrink-0 self-center text-[9px] text-cyan-300/70">查看详情 →</span>
+      ) : null}
     </div>
   );
 }
@@ -947,12 +960,14 @@ function UrlSummary({
   canExecute,
   isExecuting,
   onExecute,
+  onOpenProfile,
 }: {
   result: VkpiKolUrlDeepCrawlResponse;
   apiToken: string;
   canExecute: boolean;
   isExecuting: boolean;
   onExecute: () => void;
+  onOpenProfile?: (result: VkpiKolUrlDeepCrawlResponse) => void;
 }) {
   const profileFlow = asRecord(result.profile_flow);
   const videoFlow = asRecord(result.video_flow);
@@ -999,6 +1014,28 @@ function UrlSummary({
       ? "识别不了这个链接。"
       : "";
 
+  // P7·账号 URL 结果卡:把后端自动抓取的基础资料(头像/粉丝/简介/帖数)合并展示。
+  // 优先 profile_flow.profile_data(execute 后写入),缺则用 creator_identity / 顶层 result 字段兜底,
+  // 缺值诚实留空,绝不编造粉丝数。点卡片打开右侧 KOL 详情抽屉(onOpenProfile)。
+  const profileData = asRecord(profileFlow.profile_data);
+  const profileBasics: Row = {
+    avatar_url: profileData.avatar_url ?? creator.avatar_url,
+    handle: profileData.handle ?? creator.handle ?? result.handle,
+    platform: profileData.platform ?? creator.platform ?? result.platform,
+    followers: profileData.followers ?? creator.followers ?? creator.subscriber_count,
+    posts_count: profileData.posts_count ?? creator.posts_count,
+    bio: profileData.bio ?? creator.bio ?? creator.description,
+    profile_url: profileData.profile_url ?? creator.profile_url ?? creator.channel_url ?? result.url?.normalized,
+  };
+  const hasProfileBasics = !isVideo && [
+    profileBasics.avatar_url,
+    profileBasics.followers,
+    profileBasics.posts_count,
+    profileBasics.bio,
+    profileBasics.handle,
+  ].some((value) => cleanText(value));
+  const canOpenProfile = !isVideo && Boolean(onOpenProfile);
+
   return (
     <div className="mt-3 rounded-lg border border-cyan-300/15 bg-cyan-950/[0.10] p-3">
       <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
@@ -1026,6 +1063,13 @@ function UrlSummary({
               <div className="truncate">身份: <span className="text-slate-200">{display(creator.channel_id || creator.handle || result.channel_id || result.handle)}</span></div>
             </div>
           )}
+          {/* P7·账号 URL 结果卡:头像 + 粉丝(+帖数/简介,有则显)+ 点开右侧详情抽屉;缺值诚实留空,不编造。 */}
+          {hasProfileBasics ? (
+            <ProfileInfoCard
+              data={profileBasics}
+              onOpen={canOpenProfile ? () => onOpenProfile?.(result) : undefined}
+            />
+          ) : null}
         </div>
         <div className="shrink-0">
           {showActionButton ? (
@@ -1087,9 +1131,6 @@ function UrlSummary({
           {disabledReason}
         </div>
       ) : null}
-      {!isVideo && Object.keys(asRecord(profileFlow.profile_data)).length ? (
-        <ProfileInfoCard data={asRecord(profileFlow.profile_data)} />
-      ) : null}
       {executeDone ? (
         <div className={`mt-2 rounded-md border px-2 py-1.5 text-[10.5px] ${
           flowStatus === "partial"
@@ -1118,10 +1159,12 @@ export function SmartKolInputPanel({
   apiToken = "",
   onRecallItems,
   onOpenRecallItem,
+  onOpenProfile,
 }: {
   apiToken?: string;
   onRecallItems?: (items: VkpiKolRecallItem[]) => void;
   onOpenRecallItem?: (item: VkpiKolRecallItem) => void;
+  onOpenProfile?: (result: VkpiKolUrlDeepCrawlResponse) => void;
 }) {
   // 挂载时回填上次激活搜索的展示态(sessionStorage),让 90s/10min 父刷新若偶发重挂本面板时
   // ①②③ 结果与轮询不凭空消失;无持久化则回到正常初始态。
@@ -1621,6 +1664,7 @@ export function SmartKolInputPanel({
           canExecute={urlCanExecute}
           isExecuting={state === "executing"}
           onExecute={() => void executeUrlAction()}
+          onOpenProfile={onOpenProfile}
         />
       ) : null}
 

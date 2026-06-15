@@ -568,18 +568,42 @@ function EmployeeKolLibrary({
 
   // C4-full(裁决重做):Pool 收藏直接并入库的关注列表——库即收藏的家,
   // 点开复用右侧内容层看"该 KOL 的视频"(Pool 行走 evidence 数据源)。
+  // P5:关注列表此前只从 dashboard 的 kolOptions 派生,收藏永远进不来。
+  // 改走统一只读端点 /api/admin/vkpi/my-kol/aggregate(pool_favorites 即真收藏源)。
+  // aggregate 返回 projects(已解析数组),回填 projects_json 以兼容下游消费。
   const [poolFavorites, setPoolFavorites] = useState<Array<Record<string, unknown>>>([]);
   const [favError, setFavError] = useState('');
+  const [favReloadTick, setFavReloadTick] = useState(0);
   const [exporting, setExporting] = useState(false);
   useEffect(() => {
     if (!apiToken) return;
     let cancelled = false;
-    import('../../../../domains/kol').then(({ listKolPoolFavorites }) =>
-      listKolPoolFavorites(apiToken).then((resp) => {
-        if (!cancelled) setPoolFavorites((resp.items || []) as Array<Record<string, unknown>>);
+    import('../../../../services/vkpi/kol-api').then(({ getMyKolAggregate }) =>
+      getMyKolAggregate(apiToken).then((resp) => {
+        if (cancelled) return;
+        const favorites = (resp.pool_favorites || []).map((fav) => {
+          const row = fav as Record<string, unknown>;
+          // 下游按 projects_json(字符串或数组)消费;aggregate 已给 projects 数组,回填之。
+          return row.projects_json != null ? row : { ...row, projects_json: row.projects ?? [] };
+        });
+        setPoolFavorites(favorites as Array<Record<string, unknown>>);
+        setFavError('');
       }),
     ).catch((err) => { if (!cancelled) setFavError(String((err as Error)?.message || '收藏读取失败').slice(0, 100)); });
     return () => { cancelled = true; };
+  }, [apiToken, favReloadTick]);
+
+  // P5:收藏在 KOL Pool 页切换,本页重获焦点/可见时重拉,保证收藏即时进库。
+  useEffect(() => {
+    if (!apiToken) return;
+    const reload = () => setFavReloadTick((tick) => tick + 1);
+    const onVisibility = () => { if (document.visibilityState === 'visible') reload(); };
+    window.addEventListener('focus', reload);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('focus', reload);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, [apiToken]);
 
   const items = useMemo(() => {
@@ -684,6 +708,8 @@ function EmployeeKolLibrary({
         window.localStorage.removeItem('vkpi:pending-mykol-pool-id');
         pendingPoolRef.current = { id: `pool:${pending}`, until: Date.now() + 15000 };
         setActiveView('watchlist');
+        // P5:跳转目标 pool 行必须在场——重拉收藏,避免刚收藏的人不在列表里。
+        setFavReloadTick((tick) => tick + 1);
       } catch { /* localStorage 不可用忽略 */ }
     };
     consume();
