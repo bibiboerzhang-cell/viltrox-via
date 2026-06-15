@@ -147,13 +147,16 @@ function fmtRoi(v: number | null): string {
 }
 
 // Card shell shared by all three regions.
-function Card(props: { children?: unknown; className?: string }, ...children) {
+function Card(props: { children?: unknown; className?: string }) {
+  // 红线(崩溃修):函数组件被 React 以 (props, legacyContext={}) 调用,绝不能用 ...children
+  // rest 参收子节点——那会把空的 legacyContext {} 当 child 渲染 → "Objects are not valid as a
+  // React child (object with keys {})" 整页崩。子节点一律走 props.children。
   return e(
     "section",
     {
       className: `rounded-2xl border border-white/[0.06] bg-white/[0.015] p-5 mb-4 ${props.className || ""}`,
     },
-    ...children,
+    (props as { children?: unknown }).children,
   );
 }
 
