@@ -239,6 +239,185 @@ async def job_confirm_partial_awards():
         logger.exception("scheduler.partial_awards_failed")
 
 
+# ──────────────────────────────────────────────
+# Projects 履约自动化(P12)+ Ops 阈值告警(A4)
+# ──────────────────────────────────────────────
+#
+# 这三条履约任务由 scheduler_tasks 注册表(迁移 130)的 enabled 开关 config-gate:
+# 注册表里对应 task_key 必须 enabled=TRUE 才真跑(种子默认 FALSE → 运营在 Ops 页显式开启)。
+# 红线对齐(与 observation_windows.py / fulfillment_observation.py 同款):只「物化观测」——
+# 开窗 / 物化内容候选 / enqueue 复盘(只排队不跑 LLM),绝不 auto-pay / auto-close /
+# auto-judge / 改 fit_score。全部 max_instances=1 + coalesce(幂等友好、不堆积)。
+
+
+def _scheduler_task_enabled(task_key: str, *, default: bool = False) -> bool:
+    """读 scheduler_tasks 注册表的 enabled 开关(config gate)。
+
+    表缺失(迁移 130 未跑)或读失败 → 返回 default(默认 False,即不跑——保守、诚实)。
+    env OPS_SCHEDULER_FORCE_ENABLE=1 可在本地/测试整体强开(绕过注册表)。
+    """
+    import os
+
+    if os.environ.get("OPS_SCHEDULER_FORCE_ENABLE", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return True
+    try:
+        from app.db.connection import get_conn, table_exists
+
+        if not table_exists("scheduler_tasks"):
+            return default
+        row = get_conn().execute(
+            "SELECT enabled FROM scheduler_tasks WHERE task_key = ?", (task_key,)
+        ).fetchone()
+        if row is None:
+            return default
+        return bool(dict(row).get("enabled"))
+    except Exception:
+        logger.debug("scheduler.registry_enabled_check_failed", exc_info=True)
+        return default
+
+
+def _scheduler_system_staff() -> dict:
+    """调度器无登录人;用系统 admin 身份让 scope.project_filter 全可见(与 sync.cron._system_staff 同款)。"""
+    return {"id": 0, "staff_id": 0, "user_id": 0, "role": "admin", "is_owner": 1, "email": ""}
+
+
+async def job_fulfillment_delivered_scan():
+    """履约:扫已签收派单 → 为其开观察窗口(scan_delivered_into_windows)。
+
+    config-gate:scheduler_tasks.project_shipment_sync。零自动裁决:只 CREATE 待人核窗口。
+    当前 vkpi_shipments 多无 delivered_at → created=[] 是诚实结果(物流断流)。
+    """
+    if not _scheduler_task_enabled("project_shipment_sync"):
+        return
+    try:
+        import asyncio
+        from app.domains.projects import observation_windows
+
+        result = await asyncio.to_thread(
+            observation_windows.scan_delivered_into_windows,
+            _scheduler_system_staff(),
+        )
+        created = len(result.get("created") or [])
+        if created or result.get("scanned_projects"):
+            logger.info(
+                "scheduler.fulfillment_delivered_scan",
+                extra={"created": created, "scanned_projects": result.get("scanned_projects")},
+            )
+    except Exception:
+        logger.exception("scheduler.fulfillment_delivered_scan_failed")
+
+
+async def job_fulfillment_content_scan():
+    """履约:对到期/活动观察窗口扫真证据 → 物化内容候选(scan_windows_for_content)。
+
+    config-gate:scheduler_tasks.project_content_observation_scan。零自动裁决:候选恒
+    status='candidate' 等人复核;rate-limit 在函数内(默认 60 min/窗口)。无证据→空(诚实)。
+    """
+    if not _scheduler_task_enabled("project_content_observation_scan"):
+        return
+    try:
+        import asyncio
+        from app.domains.projects import observation_windows
+
+        result = await asyncio.to_thread(
+            observation_windows.scan_windows_for_content,
+            _scheduler_system_staff(),
+        )
+        created = len(result.get("created_posts") or [])
+        if created or result.get("scanned_windows"):
+            logger.info(
+                "scheduler.fulfillment_content_scan",
+                extra={
+                    "created_posts": created,
+                    "scanned_windows": result.get("scanned_windows"),
+                    "rate_limited": result.get("rate_limited"),
+                },
+            )
+    except Exception:
+        logger.exception("scheduler.fulfillment_content_scan_failed")
+
+
+async def job_fulfillment_retrospective_enqueue():
+    """履约:项目到 measured/closed → enqueue 复盘聚合作业(只排队,不跑 LLM、不裁决)。
+
+    config-gate:scheduler_tasks.project_content_observation_scan(复用同一履约开关)。
+    只对 stage∈(measured/closed/retrospective_ready) 且尚无活动复盘作业的项目 enqueue;
+    enqueue_project_retrospective 内部对活动作业去重(幂等),且 worker_touched=False、
+    write_viltrox_fit_score=False。绝不 auto-pay / auto-close。
+    """
+    if not _scheduler_task_enabled("project_content_observation_scan"):
+        return
+    try:
+        import asyncio
+
+        result = await asyncio.to_thread(_enqueue_due_retrospectives)
+        if result.get("enqueued"):
+            logger.info("scheduler.fulfillment_retrospective_enqueue", extra={"result": result})
+    except Exception:
+        logger.exception("scheduler.fulfillment_retrospective_enqueue_failed")
+
+
+def _enqueue_due_retrospectives(max_projects: int = 50) -> dict:
+    """同步实现:找到 measured/closed 项目里有 ready 视频分析、且无活动复盘作业的,逐个 enqueue。
+
+    纯「物化待办」:enqueue_project_retrospective 只往 apify_jobs 插 queued 行(不跑 LLM),
+    且自带活动作业去重 → 幂等。绝不改 project.stage/closed_at、cost、fit_score。
+    """
+    from app.db.connection import get_conn
+    from app.domains.projects import retrospective_aggregate as retro
+
+    conn = get_conn()
+    # measured 是 raw stage(归一为 retrospective_ready);closed 是终态。两者都「应有复盘」。
+    rows = conn.execute(
+        """
+        SELECT id
+        FROM vkpi_projects
+        WHERE LOWER(COALESCE(stage, '')) IN ('measured', 'closed', 'retrospective_ready')
+        ORDER BY updated_at DESC
+        LIMIT ?
+        """,
+        (max(1, min(int(max_projects or 50), 200)),),
+    ).fetchall()
+
+    enqueued: list[int] = []
+    skipped: int = 0
+    for r in rows:
+        pid = int(dict(r).get("id") or 0)
+        if pid <= 0:
+            continue
+        try:
+            res = retro.enqueue_project_retrospective(pid, staff=_scheduler_system_staff())
+        except Exception:
+            logger.debug("scheduler.retrospective_enqueue_one_failed", exc_info=True)
+            continue
+        status = str(res.get("status") or "")
+        if status == "queued":
+            enqueued.append(pid)
+        else:
+            # already_queued / already_running → 去重命中(幂等),不重复排队。
+            skipped += 1
+    return {"enqueued": enqueued, "enqueued_count": len(enqueued), "skipped_existing": skipped}
+
+
+async def job_ops_threshold_alerts():
+    """Ops:读阈值(预算/队列阻塞/worker 心跳/失败率)→ emit/clear vkpi_alerts(只读,A4)。
+
+    config-gate:scheduler_tasks.task_queue_health(运维健康类)。绝不执行任何运维动作:
+    只把超阈状态写进既有 vkpi_alerts 供前端 normalizeAlerts 消费,回落自动清理。
+    """
+    if not _scheduler_task_enabled("task_queue_health"):
+        return
+    try:
+        import asyncio
+        from app.domains.ops import alerting
+
+        result = await asyncio.to_thread(alerting.generate_ops_alerts)
+        if result.get("count"):
+            logger.info("scheduler.ops_threshold_alerts", extra={"count": result.get("count")})
+    except Exception:
+        logger.exception("scheduler.ops_threshold_alerts_failed")
+
+
 async def start_scheduler() -> None:
     """在 lifespan startup 调用"""
     global _scheduler
@@ -372,6 +551,44 @@ async def start_scheduler() -> None:
         trigger=CronTrigger(hour=8, minute=0, timezone=CHINA_TZ),
         id="vkpi_morning_sync",
         name="V-KPI 08:00 China daily KOL/channel/product sync + staff top-100 digest",
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # ── Projects 履约自动化(P12)── 各 job 体内由 scheduler_tasks 注册表 enabled 开关 config-gate。
+    # 注册表种子默认全 FALSE → 运营在 Ops 页显式开启才真跑;job 体内已做 enabled 守卫,
+    # 所以这里始终注册(轻量、空跑即返回),无需依赖 import-time 配置。
+    _scheduler.add_job(
+        job_fulfillment_delivered_scan,
+        trigger=IntervalTrigger(hours=6),
+        id="fulfillment_delivered_scan",
+        name="Fulfillment: open observation windows for delivered shipments",
+        max_instances=1,
+        coalesce=True,
+    )
+    _scheduler.add_job(
+        job_fulfillment_content_scan,
+        trigger=IntervalTrigger(hours=2),
+        id="fulfillment_content_scan",
+        name="Fulfillment: scan due windows for KOL Viltrox content → candidates",
+        max_instances=1,
+        coalesce=True,
+    )
+    _scheduler.add_job(
+        job_fulfillment_retrospective_enqueue,
+        trigger=CronTrigger(hour=2, minute=30),
+        id="fulfillment_retrospective_enqueue",
+        name="Fulfillment: enqueue retrospective for measured/closed projects (no LLM)",
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # ── Ops 阈值告警(A4)── 体内由 scheduler_tasks.task_queue_health config-gate;只读 emit/clear。
+    _scheduler.add_job(
+        job_ops_threshold_alerts,
+        trigger=IntervalTrigger(minutes=15),
+        id="ops_threshold_alerts",
+        name="Ops: budget/queue/worker/failure-rate threshold alerts (read-only)",
         max_instances=1,
         coalesce=True,
     )

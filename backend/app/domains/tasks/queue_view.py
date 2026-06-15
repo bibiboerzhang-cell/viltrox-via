@@ -116,6 +116,8 @@ def _infer_kind(source: str, job_type: str = "", purpose: str = "", payload: Any
             _text(data.get("script")),
         ]
     ).lower()
+    if _text(job_type).lower() == "kol_lookup" or "kol_lookup" in haystack:
+        return "KOL查找"
     if _text(job_type).lower() == "smart_search_profile_advance" or "kol_smart_search_profile_advance" in haystack:
         return "智能查找"
     if _text(job_type).lower() == "session_advance":
@@ -157,6 +159,13 @@ def _infer_stage(status: str, kind: str, job_type: str = "", purpose: str = "", 
     if status == "queued":
         return "queued"
     data = payload if isinstance(payload, dict) else {}
+    # KOL 查找(同步路径)自带真实板内 stage(search/thinking/summarizing),直接采信,
+    # 不靠关键词反推——查找的 search 阶段不能被默认 thinking 吞掉。
+    if _text(job_type).lower() == "kol_lookup" or "kol_lookup" in _text(data.get("search_session_stage")).lower():
+        explicit = _text(data.get("stage") or data.get("search_session_stage")).lower()
+        if explicit in {"search", "thinking", "summarizing", "queued"}:
+            return explicit
+        return "search"
     haystack = " ".join(
         [
             kind,

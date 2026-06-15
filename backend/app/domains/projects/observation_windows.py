@@ -23,7 +23,7 @@ import json
 from datetime import datetime, timedelta
 from typing import Any
 
-from app.db.connection import get_conn
+from app.db.connection import get_conn, table_exists
 from app.domains.access import scope
 
 
@@ -487,4 +487,191 @@ def scan_delivered_into_windows(
         "skipped_existing": skipped_existing,
         "scope_mode": scope.scope_context(staff)["scope_mode"],
         "note": "只为人 CREATE 待核观察窗口,零自动裁决;created=[] 多因无 delivered shipment(物流断流,诚实)。",
+    }
+
+
+# 「活动」窗口(等内容、可被内容扫描覆盖)的状态集合;closed/content_missing 不再扫。
+_WINDOW_SCANNABLE_STATUSES = ("pending", "scanning", "matched")
+
+
+def _mark_window_scanned(conn: Any, window_id: int, matched: bool) -> None:
+    """只在本窗口行上记一次扫描痕迹(scan_count+1、last_scan_at、可选 status→scanning)。
+
+    红线:只动 vkpi_project_content_observation_windows 自己这一行的扫描元数据;
+    绝不改 project/assignment/cost。matched=True 时把窗口 status 抬到 'matched'(展示态,
+    仍待人确认),否则保持原 status 但翻到 'scanning' 以示已扫过(只在 pending→scanning)。
+    """
+    now = datetime.utcnow()
+    if matched:
+        conn.execute(
+            """
+            UPDATE vkpi_project_content_observation_windows
+            SET scan_count = scan_count + 1, last_scan_at = ?, status = 'matched', updated_at = ?
+            WHERE id = ?
+            """,
+            (now, now, int(window_id)),
+        )
+    else:
+        conn.execute(
+            """
+            UPDATE vkpi_project_content_observation_windows
+            SET scan_count = scan_count + 1, last_scan_at = ?,
+                status = CASE WHEN status = 'pending' THEN 'scanning' ELSE status END,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (now, now, int(window_id)),
+        )
+
+
+def scan_windows_for_content(
+    staff: dict[str, Any] | None = None,
+    max_windows: int = 200,
+    min_scan_interval_minutes: int = 60,
+) -> dict[str, Any]:
+    """内容观测扫描(content-observation-scan)的实际任务体 —— 对到期/活动窗口找真内容。
+
+    对每个活动观察窗口(pending/scanning/matched),在 **已有的真实证据表**
+    vkpi_kol_video_evidence 里找该项目(且若窗口绑定 KOL 则匹配 kol_pool_id)在窗口
+    starts_at 之后发布、is_active 的视频证据;命中即以「候选」materialize 进
+    vkpi_project_content_posts(经 record_content_candidate,unique(project_id,content_url)
+    去重),并在窗口行记一次扫描痕迹(scan_count/last_scan_at/status)。
+
+    红线(与 scan_delivered_into_windows 同款,零自动裁决):
+    - 只「物化观测」:读真证据 → CREATE 候选 + 记本窗口扫描元数据。绝不写
+      vkpi_projects.stage/closed_at、vkpi_project_kol_assignments.stage、vkpi_cost_ledger,
+      绝不碰 viltrox_fit_score / rule_v0。候选恒以 status='candidate' 入库等人复核。
+    - 数据源是系统内已落地的 KOL 视频证据(非新爬虫/非 LLM):无证据 → created=[] 是
+      诚实结果(KOL 尚未发布 Viltrox 内容,或物流断流没开窗)。
+    - rate-limit:跳过 last_scan_at 在 min_scan_interval_minutes 内刚扫过的窗口(幂等友好,
+      避免调度高频重复扫同一窗;命中去重又由 unique 约束兜底)。
+    """
+    # schema 守卫:窗口/证据表缺失(迁移 128 未跑)→ 诚实返回空,绝不报错也不编造。
+    if not table_exists("vkpi_project_content_observation_windows") or not table_exists(
+        "vkpi_kol_video_evidence"
+    ):
+        return {
+            "status": "ok",
+            "scanned_windows": 0,
+            "rate_limited": 0,
+            "created_posts": [],
+            "skipped_dupes": 0,
+            "schema_ready": False,
+            "scope_mode": scope.scope_context(staff)["scope_mode"],
+            "note": "观察窗口/证据表缺失(迁移 128/085 未应用)→ 空扫描(诚实)。",
+        }
+
+    conn = get_conn()
+    safe_max = max(1, min(int(max_windows or 200), 500))
+    interval = max(0, min(int(min_scan_interval_minutes or 0), 24 * 60))
+    scan_cutoff = datetime.utcnow() - timedelta(minutes=interval) if interval else None
+
+    scope_sql, scope_params = scope.project_filter("p", staff)
+    scope_clause = f"AND {scope_sql}" if scope_sql else ""
+    status_placeholders = ",".join(["?"] * len(_WINDOW_SCANNABLE_STATUSES))
+    rows = conn.execute(
+        f"""
+        SELECT w.id, w.project_id, w.assignment_id, w.kol_pool_id, w.starts_at, w.last_scan_at
+        FROM vkpi_project_content_observation_windows w
+        JOIN vkpi_projects p ON p.id = w.project_id
+        WHERE w.status IN ({status_placeholders})
+          {scope_clause}
+        ORDER BY w.ends_at ASC, w.id ASC
+        LIMIT ?
+        """,
+        (*_WINDOW_SCANNABLE_STATUSES, *scope_params, safe_max),
+    ).fetchall()
+
+    scanned_windows = 0
+    rate_limited = 0
+    created_posts: list[int] = []
+    skipped_dupes = 0
+    for r in rows:
+        win = dict(r)
+        window_id = int(win.get("id") or 0)
+        project_id = win.get("project_id")
+        if not window_id or not project_id:
+            continue
+        # rate-limit:本窗口在间隔内刚扫过就跳过(幂等 + 避免高频重复)。
+        last_scan = win.get("last_scan_at")
+        if scan_cutoff is not None and isinstance(last_scan, datetime):
+            if last_scan.replace(tzinfo=None) >= scan_cutoff:
+                rate_limited += 1
+                continue
+        kol_pool_id = win.get("kol_pool_id")
+        starts_at = win.get("starts_at")
+
+        ev_where = ["e.project_id = ?", "e.is_active = TRUE"]
+        ev_params: list[Any] = [int(project_id)]
+        if kol_pool_id is not None:
+            ev_where.append("e.kol_pool_id = ?")
+            ev_params.append(int(kol_pool_id))
+        if isinstance(starts_at, datetime):
+            # 只认窗口开启之后发布的内容(posted_at 是 DATE;用 >= 起始日,诚实从宽)。
+            ev_where.append("(e.posted_at IS NULL OR e.posted_at >= ?)")
+            ev_params.append(starts_at.date())
+
+        evidence_rows = conn.execute(
+            f"""
+            SELECT e.id, e.kol_pool_id, e.content_url, e.platform, e.video_title,
+                   e.posted_at, e.view_count, e.like_count, e.comment_count
+            FROM vkpi_kol_video_evidence e
+            WHERE {' AND '.join(ev_where)}
+            ORDER BY e.posted_at DESC NULLS LAST, e.id DESC
+            LIMIT 50
+            """,
+            tuple(ev_params),
+        ).fetchall()
+
+        matched_any = False
+        for ev in evidence_rows:
+            evd = dict(ev)
+            content_url = str(evd.get("content_url") or "").strip()
+            if not content_url:
+                continue
+            posted_at = evd.get("posted_at")
+            published_iso = str(posted_at) if posted_at is not None else None
+            result = record_content_candidate(
+                project_id=int(project_id),
+                assignment_id=win.get("assignment_id"),
+                kol_pool_id=evd.get("kol_pool_id") if evd.get("kol_pool_id") is not None else kol_pool_id,
+                post={
+                    "content_url": content_url,
+                    "platform": evd.get("platform") or "",
+                    "title": evd.get("video_title") or "",
+                    "published_at": published_iso,
+                    "view_count": evd.get("view_count") or 0,
+                    "like_count": evd.get("like_count") or 0,
+                    "comment_count": evd.get("comment_count") or 0,
+                    "evidence_id": evd.get("id"),
+                    "match_reason": "observation_scan: kol_video_evidence in window",
+                    "matched_terms": "viltrox_evidence",
+                },
+                staff=staff,
+            )
+            status = result.get("status")
+            if status == "created":
+                post = result.get("post") or {}
+                if post.get("id") is not None:
+                    created_posts.append(int(post["id"]))
+                matched_any = True
+            elif status == "skipped":
+                skipped_dupes += 1
+                matched_any = True  # URL 已是该项目候选 → 视为命中(窗口确有内容)。
+
+        _mark_window_scanned(conn, window_id, matched=matched_any)
+        scanned_windows += 1
+
+    conn.commit()
+    return {
+        "status": "ok",
+        "scanned_windows": scanned_windows,
+        "rate_limited": rate_limited,
+        "created_posts": created_posts,
+        "skipped_dupes": skipped_dupes,
+        "scope_mode": scope.scope_context(staff)["scope_mode"],
+        "note": (
+            "内容观测扫描:对活动窗口在真证据表(vkpi_kol_video_evidence)找内容→物化候选,零自动裁决;"
+            "created_posts=[] 多因 KOL 尚未发布内容或无窗口(诚实)。"
+        ),
     }

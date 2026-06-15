@@ -7,6 +7,7 @@ from app.api.dependencies.perms import require_tab
 from app.domains import attribution as attribution_domain
 from app.domains import kol as kol_domain
 from app.domains.access import scope
+from app.domains.kol import lookup_recovery
 from app.services.kol.account_dossier import list_kol_comments, list_kol_posts
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-kol-links"])
@@ -23,10 +24,32 @@ def natural_kol_search(body: dict, staff=Depends(require_tab("vkpi", "read"))):
 
 @router.post("/kols/lookup")
 async def lookup_kol(body: dict, staff=Depends(require_tab("vkpi", "write"))):
+    """Resolve a KOL and optionally scan/analyze.
+
+    The response carries ``search_session_id`` (and ``task_id``) so the client
+    can re-fetch the durable result via ``GET /kols/lookup/sessions/{id}`` after
+    page navigation, and the run shows up on the 任务进度 board with live stages.
+    """
     try:
         return await kol_domain.lookup_with_context(body or {}, staff=staff)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/kols/lookup/sessions/{session_id}")
+def lookup_session_recovery(session_id: int, staff=Depends(require_tab("vkpi", "read"))):
+    """Recover a lookup's durable terminal state/results after navigation.
+
+    Returns the search session (status ready/failed/partial, reason, summary,
+    items) plus the matching ``kol_lookup`` ledger stage so the UI can rehydrate
+    a result that out-lived the original request.
+    """
+    try:
+        return lookup_recovery.recover_session(int(session_id), staff=staff)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
 
 
 @router.get("/kols")

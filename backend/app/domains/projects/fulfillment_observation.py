@@ -176,3 +176,26 @@ def scan_due_into_tasks(staff: dict[str, Any] | None = None, days_overdue: int =
         "scope_mode": scope.scope_context(staff)["scope_mode"],
         "note": "只为人创建 content_due 待复核任务,零自动裁决;created=[] 多因无 delivered shipment(物流断流,诚实)。",
     }
+
+
+def compute_observation_due(
+    staff: dict[str, Any] | None = None, days_overdue: int = 7
+) -> dict[str, Any]:
+    """Job 入口(只读 compute):把 due_list() 算成一个紧凑摘要供调度器/看板消费。
+
+    幂等且零写:本函数不创建任务、不开窗、不改任何业务状态——只 READ 出「已签收满 N 天、
+    项目零内容证据」的待观察项及其计数。调度器先用它判断「有没有该观察的项目」,再决定
+    是否触发 scan_due_into_tasks(写侧)/scan_windows_for_content(物化侧)。
+    当前 vkpi_shipments 多无 delivered → count=0 是诚实结果(物流断流)。
+    """
+    due = due_list(days_overdue=days_overdue, staff=staff)
+    items = due.get("items", []) or []
+    return {
+        "status": "ok",
+        "days_overdue": due.get("days_overdue"),
+        "count": len(items),
+        "project_ids": [it.get("project_id") for it in items if it.get("project_id")],
+        "items": items,
+        "scope_mode": scope.scope_context(staff)["scope_mode"],
+        "note": due.get("note"),
+    }
