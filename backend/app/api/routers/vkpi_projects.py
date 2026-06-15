@@ -377,6 +377,58 @@ def enqueue_project_contract_polish(
         raise _scope_403(exc) from exc
 
 
+@router.get("/projects/{project_id}/members")
+def list_project_members(project_id: int, staff=Depends(require_tab("vkpi", "read"))):
+    """真·项目共享成员列表(2026-06-14)。读端按项目级 scope 把关:能看见该项目者
+    (own / 共享成员 / admin)才能列其成员名单。"""
+    from app.domains.projects import project_members
+
+    try:
+        scope.assert_project_access(int(project_id), staff)
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+    return project_members.list_members(int(project_id))
+
+
+@router.post("/projects/{project_id}/members")
+def add_project_member(project_id: int, body: dict = Body(default_factory=dict), staff=Depends(require_tab("vkpi", "write"))):
+    """把项目共享给某员工(只有项目 owner/creator 或 can_view_all 可加)。
+    body: {staff_id, role}('viewer' 只读 / 'editor' 可写)。"""
+    from app.domains.projects import project_members
+
+    try:
+        project_members.assert_can_manage_members(int(project_id), staff)
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+    target_staff_id = body.get("staff_id")
+    if target_staff_id in (None, "", 0, "0"):
+        raise HTTPException(status_code=400, detail="staff_id required")
+    result = project_members.add_member(
+        int(project_id),
+        int(target_staff_id),
+        role=str(body.get("role") or "viewer"),
+        added_by_staff_id=scope.actor_staff_id(staff) or None,
+    )
+    if result.get("status") == "error":
+        raise HTTPException(status_code=400, detail=result.get("error") or "add member failed")
+    return result
+
+
+@router.delete("/projects/{project_id}/members/{staff_id}")
+def remove_project_member(project_id: int, staff_id: int, staff=Depends(require_tab("vkpi", "write"))):
+    """撤销共享(只有项目 owner/creator 或 can_view_all 可删)。"""
+    from app.domains.projects import project_members
+
+    try:
+        project_members.assert_can_manage_members(int(project_id), staff)
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+    result = project_members.remove_member(int(project_id), int(staff_id))
+    if result.get("status") == "error":
+        raise HTTPException(status_code=400, detail=result.get("error") or "remove member failed")
+    return result
+
+
 @router.get("/projects/{project_id}")
 def project_detail(project_id: int, staff=Depends(require_tab("vkpi", "read"))):
     try:

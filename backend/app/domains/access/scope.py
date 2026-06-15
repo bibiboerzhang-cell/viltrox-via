@@ -117,6 +117,13 @@ def project_filter(alias: str, staff: dict[str, Any] | None, requested_staff_id:
     非 admin:(assigned_staff_id=自己 OR created_by_staff_id=自己) AND 非 restricted。
     归属键由管理层在设置页分配/创建项目时落;未分配的项目对该员工不可见(诚实——尚未派活)。
     admin 全可见(含 restricted);requested_staff_id 仅在 admin 下作显式按人筛选(查询语义)。
+
+    项目共享接线(2026-06-14,ADDITIVE):在 own-only 基础上「加宽」——非 admin 员工
+    还能看到「被显式共享给自己」(vkpi_project_members.staff_id=自己)的项目。这只是
+    OR 进一条新分支,绝不去掉 own-only 既有限制,也绝不扩到未共享的项目。共享放行同样
+    gate 在「非 restricted」上(与 own 子句对齐):restricted 项目仍只认 assigned/creator/
+    can_view_all,共享 viewer/editor 看不到 restricted 项目(先遮后开铁则不破)。
+    无登录人/admin 两条分支原样保留。子查询 staff_id 用参数,alias 是常量,注入安全。
     """
     prefix = f"{alias}." if alias else ""
     if can_view_all(staff):
@@ -129,8 +136,9 @@ def project_filter(alias: str, staff: dict[str, Any] | None, requested_staff_id:
         return f"(COALESCE({prefix}restricted, FALSE) = FALSE)", []
     return (
         f"(COALESCE({prefix}restricted, FALSE) = FALSE AND "
-        f"({prefix}assigned_staff_id = ? OR {prefix}created_by_staff_id = ?))",
-        [int(actor), int(actor)],
+        f"({prefix}assigned_staff_id = ? OR {prefix}created_by_staff_id = ? OR "
+        f"{prefix}id IN (SELECT project_id FROM vkpi_project_members WHERE staff_id = ?)))",
+        [int(actor), int(actor), int(actor)],
     )
 
 
@@ -168,7 +176,22 @@ def assert_project_access(project_id: int, staff: dict[str, Any] | None, *, writ
         return
     item = dict(row)
     if actor in {_int(item.get("assigned_staff_id")), _int(item.get("created_by_staff_id"))}:
+        # own(assigned/creator)= 完全权限(读写),原样保留,不收紧。
         return
+    # 项目共享接线(2026-06-14,ADDITIVE):actor 若是该项目的显式共享成员,按 role 区分:
+    #   viewer → 只读(write=False 放行,write=True 拒);editor → 读写均放行。
+    # 这是新增放行路径,不去掉下面 own/admin/非 restricted 的既有任一放行。
+    member = get_conn().execute(
+        "SELECT role FROM vkpi_project_members WHERE project_id=? AND staff_id=?",
+        (int(project_id), actor),
+    ).fetchone()
+    if member is not None:
+        role = str(dict(member).get("role") or "viewer").strip().lower()
+        if not write:
+            return
+        if role == "editor":
+            return
+        raise ScopeDenied("project scope denied")
     # PV-3 对齐(2026-06-12 添加KOL弹窗 403 案 → 全盘扫描 P0 写侧跟进):
     # 非 restricted 项目对员工读写均放行——存量项目 75% 双归属 NULL,只开读会让
     # 推进/合同/截图/留档全部 403,与旅程"员工往项目塞人"相悖(候追认)。
