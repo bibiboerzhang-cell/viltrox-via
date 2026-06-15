@@ -100,13 +100,15 @@ def test_filter_builders_return_safe_where_clauses():
     assert scope.project_filter("p", staff(id=15)) == (
         "(COALESCE(p.restricted, FALSE) = FALSE AND "
         "(p.assigned_staff_id = ? OR p.created_by_staff_id = ? OR "
-        "p.id IN (SELECT project_id FROM vkpi_project_members WHERE staff_id = ?)))",
+        "p.id IN (SELECT project_id FROM vkpi_project_members WHERE staff_id = ?) OR "
+        "COALESCE(p.is_public, FALSE) = TRUE))",
         [15, 15, 15],
     )
     assert scope.project_filter("", staff(id=15))[0] == (
         "(COALESCE(restricted, FALSE) = FALSE AND "
         "(assigned_staff_id = ? OR created_by_staff_id = ? OR "
-        "id IN (SELECT project_id FROM vkpi_project_members WHERE staff_id = ?)))"
+        "id IN (SELECT project_id FROM vkpi_project_members WHERE staff_id = ?) OR "
+        "COALESCE(is_public, FALSE) = TRUE))"
     )
     assert scope.link_filter("l", staff(id=16)) == (
         "(l.staff_id = ? OR l.created_by_staff_id = ?)",
@@ -220,7 +222,8 @@ def _seed_share_sqlite():
             id INTEGER PRIMARY KEY,
             assigned_staff_id INTEGER,
             created_by_staff_id INTEGER,
-            restricted INTEGER DEFAULT 0
+            restricted INTEGER DEFAULT 0,
+            is_public INTEGER DEFAULT 0
         )
         """
     )
@@ -234,9 +237,9 @@ def _seed_share_sqlite():
         )
         """
     )
-    # project 100 属 A,project 200 属 B(都非 restricted)。
-    conn.execute("INSERT INTO vkpi_projects (id, assigned_staff_id, created_by_staff_id, restricted) VALUES (100, 10, 10, 0)")
-    conn.execute("INSERT INTO vkpi_projects (id, assigned_staff_id, created_by_staff_id, restricted) VALUES (200, 20, 20, 0)")
+    # project 100 属 A,project 200 属 B(都非 restricted、非 public)。
+    conn.execute("INSERT INTO vkpi_projects (id, assigned_staff_id, created_by_staff_id, restricted, is_public) VALUES (100, 10, 10, 0, 0)")
+    conn.execute("INSERT INTO vkpi_projects (id, assigned_staff_id, created_by_staff_id, restricted, is_public) VALUES (200, 20, 20, 0, 0)")
     return conn
 
 
@@ -302,3 +305,66 @@ def test_assert_project_access_non_member_restricted_still_denied(monkeypatch):
 
     with pytest.raises(scope.ScopeDenied, match="project scope denied"):
         scope.assert_project_access(200, staff(id=10))
+
+
+# ---------------------------------------------------------------------------
+# 公司公共项目接线(2026-06-14,ADDITIVE,迁移 133 is_public)
+# —— public 项目对所有成员「加宽读」,但写仍严格 gate;restricted 永不因 public 可见。
+# ---------------------------------------------------------------------------
+
+
+def test_project_filter_includes_public_project_for_non_member():
+    # (f) 把 B 的项目 200 标记 is_public 后,非成员、非 owner 的员工 A 的 project_filter
+    #     经 COALESCE(is_public,FALSE)=TRUE 分支纳入 200(加宽生效,无需逐个共享/派活)。
+    conn = _seed_share_sqlite()
+    conn.execute("UPDATE vkpi_projects SET is_public = 1 WHERE id = 200")
+    visible = _visible_project_ids(conn, staff(id=10))
+    assert 100 in visible
+    assert 200 in visible  # public 项目对所有成员可见
+
+
+def test_project_filter_public_restricted_still_hidden():
+    # ADDITIVE 守护:restricted 项目即便 is_public=1 仍对非授权员工不可见(先遮后开)。
+    conn = _seed_share_sqlite()
+    conn.execute("UPDATE vkpi_projects SET is_public = 1, restricted = 1 WHERE id = 200")
+    visible = _visible_project_ids(conn, staff(id=10))
+    assert 200 not in visible
+
+
+def test_assert_project_access_public_grants_read(monkeypatch):
+    # (g) 公共项目(is_public=1、非 restricted):非 owner/非成员的员工可「读」。
+    # 注:项目侧写权另由既有 PV-3 尾部裁(非 restricted 员工可写)——本 is_public 分支
+    # 本身严格 gate 在 not write 上(只「加宽读」,绝不碰写);写不放开的纯净证明见
+    # 活动侧 test_assert_event_access_public_can_read_not_write(events 无 PV-3 旁路,
+    # 可干净证明 public 仅放行读、写仍 ScopeDenied)。
+    conn = _RoutingConn(
+        project_row={"assigned_staff_id": 20, "created_by_staff_id": 20, "restricted": 0, "is_public": 1},
+        member_row=None,
+    )
+    monkeypatch.setattr(scope, "get_conn", lambda: conn)
+
+    scope.assert_project_access(200, staff(id=99))  # read OK(公共可读)
+
+
+def test_assert_project_access_public_restricted_denied(monkeypatch):
+    # ADDITIVE 守护:public + restricted → 即便读也拒(restricted 永不因 public 可见)。
+    conn = _RoutingConn(
+        project_row={"assigned_staff_id": 20, "created_by_staff_id": 20, "restricted": 1, "is_public": 1},
+        member_row=None,
+    )
+    monkeypatch.setattr(scope, "get_conn", lambda: conn)
+
+    with pytest.raises(scope.ScopeDenied, match="project scope denied"):
+        scope.assert_project_access(200, staff(id=99))
+
+
+def test_assert_project_access_public_admin_unchanged(monkeypatch):
+    # 红线守护:admin(can_view_all)对 public 项目仍是完全读写(加宽未误伤 admin 路径)。
+    conn = _RoutingConn(
+        project_row={"assigned_staff_id": 20, "created_by_staff_id": 20, "restricted": 0, "is_public": 1},
+        member_row=None,
+    )
+    monkeypatch.setattr(scope, "get_conn", lambda: conn)
+
+    scope.assert_project_access(200, staff(role="admin", is_owner=1), write=True)
+    scope.assert_project_access(200, staff(role="manager"), write=True)

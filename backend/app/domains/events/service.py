@@ -85,10 +85,14 @@ def list_events(staff: dict[str, Any] | None, *, limit: int = 200) -> dict[str, 
         # 活动共享接线(2026-06-14,ADDITIVE):再 OR 进「被显式共享给自己」的活动
         # (vkpi_event_members.staff_id=自己)。这只是加宽一条 OR 分支,绝不去掉
         # 既有 owner/team_ids 可见性,也绝不扩到未共享的活动。镜像 131 项目共享。
+        # 公司公共活动接线(2026-06-14,ADDITIVE,迁移 133 is_public):再 OR 进
+        # 「COALESCE(is_public,FALSE)=TRUE」——public 活动对所有员工可见。只「加宽」读,
+        # 写仍由 assert_event_access 严格 gate(public 不放开写)。镜像 scope.project_filter。
         rows = conn.execute(
             "SELECT * FROM vkpi_events "
             "WHERE owner_id = ? OR team_ids @> to_jsonb(?::bigint) "
             "OR id IN (SELECT event_id FROM vkpi_event_members WHERE staff_id = ?) "
+            "OR COALESCE(is_public, FALSE) = TRUE "
             "ORDER BY start_date DESC, created_at DESC LIMIT ?",
             (sid, sid, sid, safe_limit),
         ).fetchall()

@@ -124,6 +124,12 @@ def project_filter(alias: str, staff: dict[str, Any] | None, requested_staff_id:
     gate 在「非 restricted」上(与 own 子句对齐):restricted 项目仍只认 assigned/creator/
     can_view_all,共享 viewer/editor 看不到 restricted 项目(先遮后开铁则不破)。
     无登录人/admin 两条分支原样保留。子查询 staff_id 用参数,alias 是常量,注入安全。
+
+    公司公共项目接线(2026-06-14,ADDITIVE,迁移 133 is_public):再 OR 进
+    「COALESCE(is_public,FALSE)=TRUE」——public 项目对所有成员可见(无需逐个共享/派活)。
+    同样 gate 在「非 restricted」上:restricted 项目永不因 is_public 而可见(先遮后开)。
+    is_public 不引入新参数(纯列比较),actor 三参数不变。只「加宽」读;写权仍由
+    assert_project_access 严格 gate,public 不放开写。
     """
     prefix = f"{alias}." if alias else ""
     if can_view_all(staff):
@@ -137,7 +143,8 @@ def project_filter(alias: str, staff: dict[str, Any] | None, requested_staff_id:
     return (
         f"(COALESCE({prefix}restricted, FALSE) = FALSE AND "
         f"({prefix}assigned_staff_id = ? OR {prefix}created_by_staff_id = ? OR "
-        f"{prefix}id IN (SELECT project_id FROM vkpi_project_members WHERE staff_id = ?)))",
+        f"{prefix}id IN (SELECT project_id FROM vkpi_project_members WHERE staff_id = ?) OR "
+        f"COALESCE({prefix}is_public, FALSE) = TRUE))",
         [int(actor), int(actor), int(actor)],
     )
 
@@ -166,7 +173,8 @@ def assert_project_access(project_id: int, staff: dict[str, Any] | None, *, writ
         raise ScopeDenied("project scope denied")
     row = get_conn().execute(
         """
-        SELECT assigned_staff_id, created_by_staff_id, COALESCE(restricted, FALSE) AS restricted
+        SELECT assigned_staff_id, created_by_staff_id, COALESCE(restricted, FALSE) AS restricted,
+               COALESCE(is_public, FALSE) AS is_public
         FROM vkpi_projects
         WHERE id=?
         """,
@@ -192,6 +200,13 @@ def assert_project_access(project_id: int, staff: dict[str, Any] | None, *, writ
         if role == "editor":
             return
         raise ScopeDenied("project scope denied")
+    # 公司公共项目接线(2026-06-14,ADDITIVE,迁移 133 is_public):
+    #   public(is_public=TRUE)且非 restricted 的项目 → 任何 actor 可「读」(read 放行)。
+    #   写仍严格 gate:public 不放开写,只有 own/editor-member/admin 能写(下面 restricted
+    #   尾部不放行非成员的写,且这里仅在 not write 时放行)。restricted 项目永不因 public 而
+    #   可见(与 own/member 子句对齐,先遮后开铁则不破)。
+    if not write and bool(item.get("is_public")) and not bool(item.get("restricted")):
+        return
     # PV-3 对齐(2026-06-12 添加KOL弹窗 403 案 → 全盘扫描 P0 写侧跟进):
     # 非 restricted 项目对员工读写均放行——存量项目 75% 双归属 NULL,只开读会让
     # 推进/合同/截图/留档全部 403,与旅程"员工往项目塞人"相悖(候追认)。
@@ -245,7 +260,7 @@ def assert_event_access(event_id: str, staff: dict[str, Any] | None, *, write: b
     if not actor:
         raise ScopeDenied("event scope denied")
     row = get_conn().execute(
-        "SELECT owner_id, team_ids FROM vkpi_events WHERE id=?",
+        "SELECT owner_id, team_ids, COALESCE(is_public, FALSE) AS is_public FROM vkpi_events WHERE id=?",
         (str(event_id),),
     ).fetchone()
     if not row:
@@ -270,6 +285,12 @@ def assert_event_access(event_id: str, staff: dict[str, Any] | None, *, write: b
         if role == "editor":
             return
         raise ScopeDenied("event scope denied")
+    # 公司公共活动接线(2026-06-14,ADDITIVE,迁移 133 is_public):
+    #   public(is_public=TRUE)的活动 → 任何 actor 可「读」(read 放行)。vkpi_events 无
+    #   restricted 列,故 public-read 仅 gate 在 is_public 上。写仍严格 gate:public 不放开写,
+    #   只有 owner/team/editor-member/admin 能写(仅在 not write 时放行)。
+    if not write and bool(item.get("is_public")):
+        return
     raise ScopeDenied("event scope denied")
 
 

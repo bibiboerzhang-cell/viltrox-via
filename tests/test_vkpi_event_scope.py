@@ -69,6 +69,7 @@ def _seed_events_sqlite():
             id TEXT PRIMARY KEY,
             owner_id INTEGER,
             team_ids TEXT DEFAULT '[]',
+            is_public INTEGER DEFAULT 0,
             start_date TEXT,
             created_at TEXT
         )
@@ -106,7 +107,8 @@ def _visible_event_ids_sqlite(conn, actor_staff):
         "SELECT id FROM vkpi_events "
         "WHERE owner_id = ? "
         "OR team_ids LIKE ? "
-        "OR id IN (SELECT event_id FROM vkpi_event_members WHERE staff_id = ?)",
+        "OR id IN (SELECT event_id FROM vkpi_event_members WHERE staff_id = ?) "
+        "OR COALESCE(is_public, 0) = 1",  # 公共活动「加宽读」(镜像 service.list_events 的 OR is_public)
         (sid, f"%{sid}%", sid),
     ).fetchall()
     return {r["id"] for r in rows}
@@ -202,3 +204,41 @@ def test_assert_event_access_missing_event_row_passes(monkeypatch):
     monkeypatch.setattr(scope, "get_conn", lambda: conn)
 
     scope.assert_event_access("evt_missing", staff(id=99), write=True)
+
+
+# ── (f)/(g) 公司公共活动接线(2026-06-14,ADDITIVE,迁移 133 is_public)──────────
+# public 活动对所有员工「加宽读」;写仍严格 gate;admin 不变。
+def test_list_events_includes_public_event_for_non_member():
+    # (f) 把 B 的活动 evt_B 标记 is_public 后,非 owner/非 team/非共享的员工 A 的 list
+    #     经 COALESCE(is_public,0)=1 分支纳入 evt_B(加宽生效,无需逐个共享)。
+    conn = _seed_events_sqlite()
+    conn.execute("UPDATE vkpi_events SET is_public = 1 WHERE id = 'evt_B'")
+    conn.commit()
+    visible = _visible_event_ids_sqlite(conn, staff(id=10))
+    assert "evt_A" in visible
+    assert "evt_B" in visible  # public 活动对所有员工可见
+
+
+def test_assert_event_access_public_can_read_not_write(monkeypatch):
+    # (g) 公共活动(is_public=1):非 owner/非 team/非成员的员工可「读」,不可「写」。
+    conn = _RoutingConn(
+        event_row={"owner_id": 20, "team_ids": json.dumps([20]), "is_public": 1},
+        member_row=None,
+    )
+    monkeypatch.setattr(scope, "get_conn", lambda: conn)
+
+    scope.assert_event_access("evt_B", staff(id=99))  # read OK(公共可读)
+    with pytest.raises(scope.ScopeDenied, match="event scope denied"):
+        scope.assert_event_access("evt_B", staff(id=99), write=True)  # 写仍被拒(public 不放开写)
+
+
+def test_assert_event_access_public_admin_unchanged(monkeypatch):
+    # 红线守护:admin / manager 对 public 活动仍完全读写(加宽未误伤 can_view_all 路径)。
+    conn = _RoutingConn(
+        event_row={"owner_id": 20, "team_ids": json.dumps([20]), "is_public": 1},
+        member_row=None,
+    )
+    monkeypatch.setattr(scope, "get_conn", lambda: conn)
+
+    scope.assert_event_access("evt_B", staff(role="admin", is_owner=1), write=True)
+    scope.assert_event_access("evt_B", staff(role="manager"), write=True)
