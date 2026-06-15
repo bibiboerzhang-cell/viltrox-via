@@ -80,41 +80,64 @@ def _ensure_schema() -> None:
     get_conn().commit()
 
 
+def _generate(prompt: str) -> tuple[str, str]:
+    """优先 Gemini + Google 搜索接地(拉真·当下热点/赛事);失败回退 Claude。返回 (文本, 模型标签)。"""
+    # 1) Gemini grounding —— 真·当下热点的关键。
+    try:
+        import app.core.config  # noqa: F401  触发 .env 加载(GOOGLE/GEMINI key)
+        import app.services.ai.clients.gemini_client as gc
+        from google.genai import types
+
+        from app.core.config import GEMINI_MODEL
+
+        client = getattr(gc, "gemini_client", None)
+        if client is not None:
+            cfg = types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())])
+            resp = client.models.generate_content(model=GEMINI_MODEL, contents=prompt, config=cfg)
+            text = (getattr(resp, "text", "") or "").strip()
+            if text:
+                return text, f"gemini:{GEMINI_MODEL}+google_search"
+    except Exception:
+        logger.warning("ai_today.gemini_failed_fallback_claude", exc_info=True)
+    # 2) Claude 兜底(无接地,凭模型知识)。
+    try:
+        from app.services.ai.clients.claude_client import get_claude_client
+        from app.services.ai.retry import call_ai_with_retry
+
+        client = get_claude_client()
+        resp = call_ai_with_retry(
+            "ai_today.hot",
+            lambda: client.messages.create(
+                model=CLAUDE_MODEL, max_tokens=900, messages=[{"role": "user", "content": prompt}]
+            ),
+        )
+        text = (resp.content[0].text or "").strip() if resp and getattr(resp, "content", None) else ""
+        return text, f"claude:{CLAUDE_MODEL}"
+    except Exception:
+        logger.warning("ai_today.claude_failed", exc_info=True)
+        return "", ""
+
+
 def generate_ai_today_hot() -> dict[str, Any]:
-    """每早一次:预算闸 → LLM 生成 → 存库。返回状态。"""
+    """每早一次:预算闸 → Gemini(Google 接地)生成 → 存库。返回状态。"""
     if not budget_guard.check_budget(_BUDGET_SCOPE, _EST_COST):
         logger.info("ai_today.budget_blocked", extra={"scope": _BUDGET_SCOPE})
         return {"status": "budget_blocked"}
-    try:
-        from app.services.ai.clients.claude_client import ANTHROPIC_AVAILABLE, get_claude_client
-        from app.services.ai.retry import call_ai_with_retry
-    except Exception:
-        return {"status": "llm_unavailable"}
-    if not ANTHROPIC_AVAILABLE:
-        return {"status": "llm_unavailable"}
-
     hot = _read_hot_brands()
     hot_line = ("当前竞品/行业热点信号:" + "、".join(hot)) if hot else f"行业主要竞品:{_COMPETITORS_FALLBACK}"
     prompt = (
         f"你是 Viltrox(唯卓仕,影像镜头/配件品牌)的内容策划。{hot_line}。\n"
-        "请生成今天的内容建议,务必具体、可直接执行、贴合摄影/视频创作者口味。\n"
+        "请先用 Google 搜索查清【当下(今天前后)摄影/影像圈正在火的真实热点】:正在进行或临近的\n"
+        "摄影/影视赛事、平台正流行的拍摄玩法/风格、创作者热议的话题(务必基于搜索到的真实近况,不要编)。\n"
+        "再据此生成今天的内容建议,具体可执行、贴合创作者口味、紧扣真实当下热点。\n"
         "严格只输出 JSON(不要多余文字):\n"
         '{\n'
         '  "headline": "一句今日重点决策(中文,<=28字)",\n'
         '  "shooting_plans": ["拍摄方案1:场景+用哪类镜头+卖点", "方案2", "方案3"],\n'
-        '  "hot_topics": ["创作者最近喜欢的话题1", "话题2", "话题3"]\n'
+        '  "hot_topics": ["真实当下热点/赛事/流行玩法1(尽量带时间或来源)", "热点2", "热点3"]\n'
         '}\n'
     )
-    client = get_claude_client()
-    resp = call_ai_with_retry(
-        "ai_today.hot",
-        lambda: client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=900,
-            messages=[{"role": "user", "content": prompt}],
-        ),
-    )
-    raw = resp.content[0].text.strip() if resp and getattr(resp, "content", None) else ""
+    raw, model_used = _generate(prompt)
     content = _parse_json(raw)
     if not content.get("headline") and not content.get("shooting_plans"):
         logger.warning("ai_today.parse_empty")
@@ -141,7 +164,7 @@ def generate_ai_today_hot() -> dict[str, Any]:
         ON CONFLICT (snapshot_date) DO UPDATE
           SET content_json = excluded.content_json, model = excluded.model, created_at = now()
         """,
-        (json.dumps(payload, ensure_ascii=False), str(CLAUDE_MODEL)),
+        (json.dumps(payload, ensure_ascii=False), str(model_used or "")),
     )
     conn.commit()
     logger.info("ai_today.generated", extra={"plans": len(payload["shooting_plans"]), "brands": len(hot)})

@@ -593,16 +593,16 @@ export function normalizeAiInsight(copilotBrief = {}, tasks = {}, aiTodayHot: an
       todayDecision: {
         text: String(hotContent.headline || ""),
         amount: "--",
-        reason: "Claude 据今日行业热点生成",
+        reason: "Gemini 实时搜索当下热点/赛事生成",
         primaryAction: "查看证据",
         secondaryAction: "稍后处理",
       },
       strengthenLabel: "🎬 拍摄方案",
       strengthen: list(hotContent.shooting_plans).slice(0, 3).map((p: any) => ({ text: String(p), detail: "" })),
       weaken: [],
-      todayContentLabel: "🔥 热门话题",
+      todayContentLabel: "🔥 当下热点·赛事",
       todayContent: list(hotContent.hot_topics).slice(0, 3).map((x: any) => String(x)),
-      poweredBy: "Claude · 今日热点(每早 8 点)",
+      poweredBy: "Gemini · Google 搜索接地(每早 8 点)",
       raw: hot,
     };
   }
