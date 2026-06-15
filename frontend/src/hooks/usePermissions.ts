@@ -77,6 +77,12 @@ interface UsePermissionsResult {
   hasPermissionLevel(value: string, level: PermissionLevel): boolean;
   /** Check if user can access a page (against EMPLOYEE_ALLOWED_PAGES) */
   canAccessPage(pageKey: VkpiPageKey): boolean;
+  /** 导航板块可见级别(board.<navKey>);未显式设置默认 'read'(可见) */
+  boardLevel(navKey: string): PermissionLevel;
+  /** 该成员侧栏是否能看到此板块(owner 或级别非 none) */
+  canViewBoard(navKey: string): boolean;
+  /** 该成员是否可在此板块写入(owner 或级别 write/admin) */
+  canWriteBoard(navKey: string): boolean;
   /** Get raw permission string for a key ('none'|'read'|'write'|'admin') */
   getPermissionLevel(key: PermissionKey): PermissionLevel;
   /** Check if user is a manager (can use manager view) */
@@ -199,6 +205,24 @@ export function usePermissions(): UsePermissionsResult {
     return EMPLOYEE_ALLOWED_PAGES.has(pageKey);
   };
 
+  // 导航板块授权(board.<navKey>)。未显式设置 → 默认 'read'(可见),避免现有成员
+  // 升级后侧栏突然空白。owner 永远全见。
+  const boardLevel = (navKey: string): PermissionLevel => {
+    if (isOwner()) return 'admin';
+    if (!user?.permissions) return 'read';
+    const raw = String((user.permissions as Record<string, unknown>)[`board.${navKey}`] || '').toLowerCase().trim();
+    if (['none', 'read', 'write', 'admin'].includes(raw)) return raw as PermissionLevel;
+    return 'read';
+  };
+  const canViewBoard = (navKey: string): boolean => {
+    if (isOwner()) return true;
+    return boardLevel(navKey) !== 'none';
+  };
+  const canWriteBoard = (navKey: string): boolean => {
+    if (isOwner()) return true;
+    return ['write', 'admin'].includes(boardLevel(navKey));
+  };
+
   const accountTier = (): AccountTier => {
     // 已认证(user 存在)且非管理层 = 成员;未认证 = 无身份。
     if (!user) return 'none';
@@ -210,6 +234,9 @@ export function usePermissions(): UsePermissionsResult {
     hasSystemPermission,
     hasPermissionLevel,
     canAccessPage,
+    boardLevel,
+    canViewBoard,
+    canWriteBoard,
     getPermissionLevel,
     isManager,
     isOwner,

@@ -14,6 +14,7 @@ import { DealerMapPage } from "../pages/DealerMapPage";
 import { DashboardReplicaPage } from "./DashboardReplicaPage";
 import { V615Sidebar } from "./V615Sidebar";
 import { V615Topbar } from "./V615Topbar";
+import { usePermissions } from "../../../hooks/usePermissions";
 import { AIIntelligenceCard } from "./components/AIIntelligenceCard";
 import { ActiveCampaignsCard } from "./components/ActiveCampaignsCard";
 import { Avatar } from "./components/Avatar";
@@ -104,6 +105,13 @@ export function V615ReplicaApp(props: any = {}) {
   const [collapsed, setCollapsed] = useState(stored.collapsed || false);
   const [activeNav, setActiveNav] = useState(["dashboard", "kol-pool", "my-kol", "projects", "events", "shopify", "dealers"].includes(initialNav) ? initialNav : "dashboard");
   const [theme, setTheme] = useState(stored.theme || "dark");
+
+  // 板块授权守卫:stored/程序化导航落到「被该成员隐藏」的板块时弹回 dashboard。
+  // 侧栏已隐藏入口(V615Sidebar 按 canViewBoard 过滤),此处为 stored state / 直链兜底。owner 全见不受影响。
+  const boardPerms = usePermissions();
+  useEffect(() => {
+    if (!boardPerms.canViewBoard(activeNav)) setActiveNav("dashboard");
+  }, [activeNav]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 版本徽标:启动时拉一次 /health,展示 server 短 sha 与前后端同步状态(纯只读,失败静默)
   const [versionBadge, setVersionBadge] = useState(null);

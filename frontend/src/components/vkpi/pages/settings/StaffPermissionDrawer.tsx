@@ -3,7 +3,7 @@ import type { VkpiStaffActivationLinkResponse, VkpiStaffPasswordResetLinkRespons
 import type { VkpiStaffMember } from "../../vkpiTypes";
 import { Avatar } from "../../shared/Avatar";
 import { InfoBlock } from "../../shared/InfoBlock";
-import { STAFF_ASSIGNABLE_PERMISSION_TEMPLATES, STAFF_PERMISSION_MODULES, STAFF_PERMISSION_TEMPLATES, type StaffPermissionMap } from "./staffPermissionTemplates";
+import { BOARD_PERMISSION_MODULES, STAFF_ASSIGNABLE_PERMISSION_TEMPLATES, STAFF_PERMISSION_MODULES, STAFF_PERMISSION_TEMPLATES, boardLevelFor, type StaffPermissionMap } from "./staffPermissionTemplates";
 
 const LEVELS: Array<{ key: VkpiPermissionLevel; label: string }> = [
   { key: "none", label: "无" },
@@ -21,6 +21,8 @@ function initialPermissions(member: VkpiStaffMember): StaffPermissionMap {
   const current = member.permissions || {};
   const base = Object.fromEntries(STAFF_PERMISSION_MODULES.map((module) => [module.key, normalizeLevel(current[module.key])])) as StaffPermissionMap;
   if (member.vkpiPermission && base.vkpi === "none") base.vkpi = normalizeLevel(member.vkpiPermission);
+  // 导航板块:未显式设置 → 默认可见(read),避免现有成员升级后侧栏突然空白。
+  for (const module of BOARD_PERMISSION_MODULES) base[module.key] = boardLevelFor(current, module.navKey);
   return base;
 }
 
@@ -57,6 +59,12 @@ export function StaffPermissionDrawer({
       return acc;
     }, {});
   }, []);
+  const boardGrouped = useMemo(() => {
+    return BOARD_PERMISSION_MODULES.reduce<Record<string, typeof BOARD_PERMISSION_MODULES>>((acc, module) => {
+      acc[module.group] = [...(acc[module.group] || []), module];
+      return acc;
+    }, {});
+  }, []);
 
   useEffect(() => {
     setDraft(initialPermissions(member));
@@ -70,7 +78,12 @@ export function StaffPermissionDrawer({
 
   const applyTemplate = (key: string) => {
     const template = STAFF_PERMISSION_TEMPLATES.find((item) => item.key === key);
-    if (template) setDraft({ ...template.permissions });
+    if (!template) return;
+    // 模板只覆盖 14 个 tab;板块授权保留当前选择(不被模板清空)。
+    setDraft((cur) => {
+      const boards = Object.fromEntries(BOARD_PERMISSION_MODULES.map((m) => [m.key, boardLevelFor(cur, m.navKey)]));
+      return { ...template.permissions, ...boards };
+    });
   };
 
   const save = async () => {
@@ -151,6 +164,38 @@ export function StaffPermissionDrawer({
                 <div>
                   <strong>{module.label}</strong>
                   <span>{module.key}{module.ownerOnly ? " · Owner 专属" : ""}</span>
+                </div>
+                <div className="vkpi-permission-levels">
+                  {LEVELS.map((level) => (
+                    <button
+                      type="button"
+                      className={draft[module.key] === level.key ? "is-active" : ""}
+                      key={level.key}
+                      onClick={() => updateLevel(module.key, level.key)}
+                    >
+                      {level.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        ))}
+      </section>
+
+      <section className="vkpi-staff-permission-section">
+        <div className="vkpi-staff-permission-section__head">
+          <h3>导航板块授权</h3>
+          <span>控制该成员侧栏能看到哪些板块（无 = 隐藏）。默认全部可见。</span>
+        </div>
+        {Object.entries(boardGrouped).map(([group, modules]) => (
+          <div className="vkpi-staff-permission-group" key={group}>
+            <h4>{group}</h4>
+            {modules.map((module) => (
+              <div className="vkpi-staff-permission-row" key={module.key}>
+                <div>
+                  <strong>{module.label}</strong>
+                  <span>{module.key}</span>
                 </div>
                 <div className="vkpi-permission-levels">
                   {LEVELS.map((level) => (

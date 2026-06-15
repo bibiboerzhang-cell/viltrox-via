@@ -26,6 +26,46 @@ export const STAFF_PERMISSION_MODULES: Array<{ key: string; label: string; group
   { key: "system.restart", label: "服务重启", group: "敏感", ownerOnly: true },
 ];
 
+// ── 导航板块授权(2026-06-15)─────────────────────────────────────────────
+// 把「侧栏 15 个导航板块」做成独立权限单元,key = `board.<navKey>`(前缀避开
+// 和 14 个 tab 撞名,如 analytics)。存进同一张 permissions_json(通用 map,
+// normalize_permissions 的 merge 会保留,无需迁移)。
+// 默认 'read'(可见):现有员工不会因为新增此层而突然看不到任何板块;owner 显式
+// 设 '无' 才隐藏某板块。可见性在前端强制(侧栏过滤 + 页面守卫);数据写入仍由既有
+// 14-tab 守卫保护,本层不改后端 require_tab。
+export const BOARD_PERMISSION_KEY_PREFIX = "board.";
+export const BOARD_PERMISSION_DEFAULT_LEVEL: VkpiPermissionLevel = "read";
+
+export type BoardPermissionModule = { key: string; navKey: string; label: string; group: string };
+
+export const BOARD_PERMISSION_MODULES: BoardPermissionModule[] = [
+  { navKey: "dashboard",    label: "Dashboard",     group: "板块 · 核心" },
+  { navKey: "my-kol",       label: "MY KOL",        group: "板块 · 核心" },
+  { navKey: "kol-pool",     label: "KOL Pool",      group: "板块 · 核心" },
+  { navKey: "projects",     label: "Projects",      group: "板块 · 项目" },
+  { navKey: "campaigns",    label: "Campaigns",     group: "板块 · 项目" },
+  { navKey: "events",       label: "Events",        group: "板块 · 项目" },
+  { navKey: "intelligence", label: "Intelligence",  group: "板块 · 数据" },
+  { navKey: "attribution",  label: "Attribution",   group: "板块 · 数据" },
+  { navKey: "analytics",    label: "Analytics",     group: "板块 · 数据" },
+  { navKey: "reports",      label: "Reports",       group: "板块 · 数据" },
+  { navKey: "signals",      label: "Signals",       group: "板块 · 数据" },
+  { navKey: "agents",       label: "Agents",        group: "板块 · 运营" },
+  { navKey: "p15",          label: "P15 Warehouse", group: "板块 · 运营" },
+  { navKey: "shopify",      label: "Shopify",       group: "板块 · 运营" },
+  { navKey: "dealers",      label: "Dealers",       group: "板块 · 运营" },
+].map((b) => ({ ...b, key: `${BOARD_PERMISSION_KEY_PREFIX}${b.navKey}` }));
+
+export const BOARD_NAV_KEYS = BOARD_PERMISSION_MODULES.map((m) => m.navKey);
+
+// 读某员工对某板块的级别:未显式设置 → 默认可见(read)。
+export function boardLevelFor(permissions: Record<string, unknown> | null | undefined, navKey: string): VkpiPermissionLevel {
+  const raw = permissions?.[`${BOARD_PERMISSION_KEY_PREFIX}${navKey}`];
+  const next = String(raw || "").toLowerCase();
+  if (next === "admin" || next === "write" || next === "read" || next === "none") return next as VkpiPermissionLevel;
+  return BOARD_PERMISSION_DEFAULT_LEVEL;
+}
+
 export const STAFF_PERMISSION_TEMPLATES: StaffPermissionTemplate[] = [
   {
     key: "employee_workspace",

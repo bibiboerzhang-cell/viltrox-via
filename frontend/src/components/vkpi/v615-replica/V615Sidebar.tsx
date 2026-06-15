@@ -6,6 +6,7 @@ import React from "react";
 import { Moon, PanelLeftClose, PanelLeftOpen, Sun } from "lucide-react";
 import { TaskProgressBoard } from "./components/TaskProgressBoard";
 import { NAV_ITEMS } from "./data/navItems";
+import { usePermissions } from "../../../hooks/usePermissions";
 
 const e = React.createElement;
 
@@ -19,6 +20,8 @@ export function V615Sidebar({
   versionBadge,
   apiToken,
 }: any) {
+  // 按板块授权过滤导航:成员设为「无」的板块不渲染(owner 全见)。默认可见。
+  const perms = usePermissions();
   return e("aside", {
     className: `${collapsed ? "w-[64px]" : "w-[260px]"} sticky top-0 hidden h-screen shrink-0 flex-col justify-between border-r border-white/[0.06] bg-[#050810]/85 backdrop-blur-xl transition-all duration-300 md:flex`
   },
@@ -27,7 +30,7 @@ export function V615Sidebar({
         e("div", { className: "text-2xl font-black tracking-[.18em] text-white" }, collapsed ? "V" : "VILTROX")
       ),
       e("nav", { className: `space-y-1 ${collapsed ? "px-2" : "px-3"}` },
-        NAV_ITEMS.map(({ icon: Icon, label, badge, key }) => {
+        NAV_ITEMS.filter(({ key }) => perms.canViewBoard(key)).map(({ icon: Icon, label, badge, key }) => {
           const active = activeNav === key;
           return e("button", {
             key, onClick: () => setActiveNav(key), title: collapsed ? label : undefined,
