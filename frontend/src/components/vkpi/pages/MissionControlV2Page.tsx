@@ -289,7 +289,7 @@ function EvidencePanel({ title, rows: evidenceRows, onClose }: { title: string; 
 
 export function MissionControlV2Page({
   apiToken,
-  userName = 'Viltrox 员工',
+  userName = 'Viltrox 成员',
   userRole = '营销运营',
   userAvatar,
   windowDays = 30,

@@ -256,7 +256,7 @@ export function DataQualityPage({ apiToken, viewMode }: DataQualityPageProps) {
         </div>
         <div className="vkpi-table-wrap">
           <table className="vkpi-table">
-            <thead><tr><th>级别</th><th>问题</th><th>对象</th><th>项目</th><th>员工</th><th>说明</th><th>操作</th></tr></thead>
+            <thead><tr><th>级别</th><th>问题</th><th>对象</th><th>项目</th><th>成员</th><th>说明</th><th>操作</th></tr></thead>
             <tbody>
               {issues.length ? issues.map((issue) => (
                 <tr key={issue.id}>

@@ -164,7 +164,7 @@ export function TeamPreferenceTable({ preferenceList }: { preferenceList: Row[] 
       <div className="vkpi-table-card__header"><div><h2>个人偏好列表</h2><span>{preferenceList.length} 人</span></div></div>
       <div className="vkpi-table-wrap">
         <table className="vkpi-table">
-          <thead><tr><th>员工 ID</th><th>默认入口</th><th>数据范围</th><th>表格密度</th><th>每页</th><th>更新时间</th></tr></thead>
+          <thead><tr><th>成员 ID</th><th>默认入口</th><th>数据范围</th><th>表格密度</th><th>每页</th><th>更新时间</th></tr></thead>
           <tbody>
             {preferenceList.length ? preferenceList.map((row) => {
               const prefs = (row.preferences || {}) as Row;
@@ -178,7 +178,7 @@ export function TeamPreferenceTable({ preferenceList }: { preferenceList: Row[] 
                   <td>{String(row.updated_at || "-")}</td>
                 </tr>
               );
-            }) : <tr><td className="vkpi-table-empty" colSpan={6}>暂无员工偏好记录。</td></tr>}
+            }) : <tr><td className="vkpi-table-empty" colSpan={6}>暂无成员偏好记录。</td></tr>}
           </tbody>
         </table>
       </div>
@@ -199,7 +199,7 @@ export function TeamNotificationTable({
       <div className="vkpi-table-card__header"><div><h2>通知配置列表</h2><span>{notificationList.length} 人</span></div></div>
       <div className="vkpi-table-wrap">
         <table className="vkpi-table">
-          <thead><tr><th>员工 ID</th><th>站内</th><th>邮件</th><th>日报</th><th>周报</th><th>异常</th><th>免打扰</th><th>状态</th></tr></thead>
+          <thead><tr><th>成员 ID</th><th>站内</th><th>邮件</th><th>日报</th><th>周报</th><th>异常</th><th>免打扰</th><th>状态</th></tr></thead>
           <tbody>
             {notificationList.length ? notificationList.map((row) => {
               const settings = (row.settings || {}) as Row;

@@ -106,7 +106,7 @@ export function AnalyticsMonitorPanel({
       const owned = safeNumber(response.owned_assignment_count);
       const fallback = safeNumber(response.fallback_assignment_count);
       const duplicates = safeNumber(response.duplicate_suggestion_count);
-      onMessage(`今日未联系 KOL 清单已生成：${numberFormatter.format(generated)} 条，口径 ${productSku || '全部产品'}，覆盖 ${numberFormatter.format(eligible)} 名符合分发员工；负责人分配 ${numberFormatter.format(owned)}，兜底分配 ${numberFormatter.format(fallback)}，重复 ${numberFormatter.format(duplicates)}。`);
+      onMessage(`今日未联系 KOL 清单已生成：${numberFormatter.format(generated)} 条，口径 ${productSku || '全部产品'}，覆盖 ${numberFormatter.format(eligible)} 名符合分发成员；负责人分配 ${numberFormatter.format(owned)}，兜底分配 ${numberFormatter.format(fallback)}，重复 ${numberFormatter.format(duplicates)}。`);
       const refreshedStatus = await getDailyOutreachDigestStatus(apiToken, productSku);
       setDigestStatusOverride(refreshedStatus);
       await onRefresh();
@@ -213,11 +213,11 @@ export function AnalyticsMonitorPanel({
             <button className="vkpi-mini-button" disabled={busy || !apiToken} type="button" onClick={() => void refreshDigestScope()}>刷新口径</button>
           </div>
           <div className="vkpi-digest-status-grid">
-            <InfoBlock label="活跃员工" value={numberFormatter.format(digestActiveStaffCount)} />
+            <InfoBlock label="活跃成员" value={numberFormatter.format(digestActiveStaffCount)} />
             <InfoBlock label="符合分发" value={numberFormatter.format(digestStaffCount)} tone={digestStaffCount > 0 ? 'good' : 'warn'} />
             <InfoBlock label="已生成清单" value={`${numberFormatter.format(digestGeneratedStaffCount)} / ${numberFormatter.format(digestStaffCount)}`} />
-            <InfoBlock label="有候选员工" value={`${numberFormatter.format(digestReadyStaffCount)} / ${numberFormatter.format(digestStaffCount)}`} tone={digestReadyStaffCount > 0 ? 'good' : undefined} />
-            <InfoBlock label="无候选员工" value={numberFormatter.format(digestEmptyStaffCount)} tone={digestEmptyStaffCount > 0 ? 'warn' : undefined} />
+            <InfoBlock label="有候选成员" value={`${numberFormatter.format(digestReadyStaffCount)} / ${numberFormatter.format(digestStaffCount)}`} tone={digestReadyStaffCount > 0 ? 'good' : undefined} />
+            <InfoBlock label="无候选成员" value={numberFormatter.format(digestEmptyStaffCount)} tone={digestEmptyStaffCount > 0 ? 'warn' : undefined} />
             <InfoBlock label="已排除" value={numberFormatter.format(digestExcludedStaffCount)} />
           </div>
           <div className="vkpi-digest-source-strip">
@@ -240,7 +240,7 @@ export function AnalyticsMonitorPanel({
               <InfoBlock label="上次生成" value={digestLastGeneratedAt} />
             </div>
           </details>
-          <p className="vkpi-help-text">活跃员工是启用账号；符合分发已排除测试、系统和不可分发账号；已生成清单才代表今日真正分到候选的人数。</p>
+          <p className="vkpi-help-text">活跃成员是启用账号；符合分发已排除测试、系统和不可分发账号；已生成清单才代表今日真正分到候选的人数。</p>
           <button className="vkpi-button vkpi-button--secondary" disabled={busy || !apiToken} type="button" onClick={() => void generateDigest()}>按当前口径生成 Top100</button>
         </section>
         <section className="vkpi-card vkpi-action-card">

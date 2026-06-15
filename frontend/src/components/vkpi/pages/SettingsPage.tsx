@@ -531,7 +531,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
     setActivationCopied(false);
     setEmail('');
     setName('');
-    setMessage('激活链接已生成，复制后发给员工。');
+    setMessage('激活链接已生成，复制后发给成员。');
     await onRefreshData?.();
     return response;
   };
@@ -556,7 +556,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
           });
           setEmail('');
           setName('');
-          setMessage('员工邀请已发送。');
+          setMessage('成员邀请已发送。');
         } catch (error) {
           const rawMessage = error instanceof Error ? error.message : String(error);
           if (!rawMessage.includes('Email delivery unavailable')) throw error;
@@ -566,7 +566,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
         await createManualActivationLink();
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '员工邀请失败');
+      setMessage(error instanceof Error ? error.message : '成员邀请失败');
     } finally {
       setBusy(false);
     }
@@ -595,12 +595,12 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
     setBusy(true);
     try {
       await updateStaffPermissions(apiToken, staffId, permissions);
-      setMessage('员工深度权限已保存。');
+      setMessage('成员深度权限已保存。');
       await onRefreshData?.();
       const refreshedMember = data.staffMembers.find((item) => item.id === staffId);
       if (refreshedMember) setSelectedStaffForPermissions({ ...refreshedMember, permissions });
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '员工深度权限保存失败');
+      setMessage(error instanceof Error ? error.message : '成员深度权限保存失败');
       throw error;
     } finally {
       setBusy(false);
@@ -628,7 +628,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
     setBusy(true);
     try {
       const response = await createStaffPasswordResetLink(apiToken, staffId);
-      setMessage(response.email_sent ? '密码重置邮件已发送。' : '密码重置链接已生成，请复制给员工。');
+      setMessage(response.email_sent ? '密码重置邮件已发送。' : '密码重置链接已生成，请复制给成员。');
       return response;
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '密码重置链接生成失败');
@@ -738,7 +738,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
         <div className="vkpi-settings-zone" data-zone="company">
           <header className="vkpi-settings-zone__head">
             <strong>公司管理</strong>
-            <em>仅管理员可见 · 账号权限 / 预算 / 规则 / 定时 / API 状态</em>
+            <em>仅公司账号可见 · 账号权限 / 预算 / 规则 / 定时 / API 状态</em>
           </header>
         </div>
         {renderSettingsModule('status', `${apiStatusText} · 同步 ${syncTime} / ${syncGuardText} · KOL ${kolRefreshGateText} · ${systemHealth} · 版本 ${versionSummary}`, (

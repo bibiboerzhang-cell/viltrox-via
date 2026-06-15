@@ -131,7 +131,7 @@ export function buildDashboardLeaderboard(staffRows: Row[], fallbackRows: Row[])
   const source = staffRows.length ? staffRows : fallbackRows;
   return source.slice(0, 8).map((row, index) => ({
     staffId: row.staff_id || row.id ? String(row.staff_id || row.id) : undefined,
-    name: String(row.staff_name || row.name || row.email || `员工 ${row.staff_id || index + 1}`),
+    name: String(row.staff_name || row.name || row.email || `成员 ${row.staff_id || index + 1}`),
     gmv: centsToUsd(row.gmv_cents || row.revenue_cents),
     avatar: String(row.avatar_url || ''),
     isTop: index === 0,
@@ -296,5 +296,5 @@ export function buildWeeklySummary(summary: Row, staffRows: Row[], alerts: Row[]
   const sales = centsToUsd(summary.revenue_cents || summary.all_gmv_including_company_cents);
   const cost = centsToUsd(summary.cost_cents);
   const views = numberValue(summary.total_views || summary.views || summary.view_count || summary.play_count || summary.impressions);
-  return `当前周期确认销售额为 ${money(sales)}，成本为 ${money(cost)}（镜头成本发货自动计入，员工只登记快递和推广费），已抓取播放量为 ${compact(views)}。当前范围内共有 ${staffRows.length} 名员工数据，还有 ${alerts.length} 条未处理提醒，需要在周报审批前完成复核。`;
+  return `当前周期确认销售额为 ${money(sales)}，成本为 ${money(cost)}（镜头成本发货自动计入，成员只登记快递和推广费），已抓取播放量为 ${compact(views)}。当前范围内共有 ${staffRows.length} 名成员数据，还有 ${alerts.length} 条未处理提醒，需要在周报审批前完成复核。`;
 }

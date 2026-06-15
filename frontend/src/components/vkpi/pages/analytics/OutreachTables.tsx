@@ -103,13 +103,13 @@ function assignmentDisplay(row: Row): { label: string; detail: string; tone: str
   const staffId = String(metadata.assignment_staff_id || '');
   if (!reason && !staffId) return { label: '-', detail: '未写入分配原因', tone: 'vkpi-chip--muted' };
   if (reason === 'fallback_round_robin') {
-    return { label: '兜底轮询', detail: staffId ? `员工 #${staffId}` : '无负责人 ID', tone: 'vkpi-chip--warn' };
+    return { label: '兜底轮询', detail: staffId ? `成员 #${staffId}` : '无负责人 ID', tone: 'vkpi-chip--warn' };
   }
   if (reason === 'metadata.responsible_staff_id') {
-    return { label: '负责人导入', detail: staffId ? `员工 #${staffId}` : '负责人字段未匹配', tone: 'is-success' };
+    return { label: '负责人导入', detail: staffId ? `成员 #${staffId}` : '负责人字段未匹配', tone: 'is-success' };
   }
   if (reason === 'metadata.created_by_staff_id') {
-    return { label: '导入创建人', detail: staffId ? `员工 #${staffId}` : '创建人未匹配', tone: 'is-success' };
+    return { label: '导入创建人', detail: staffId ? `成员 #${staffId}` : '创建人未匹配', tone: 'is-success' };
   }
   if (reason.startsWith('metadata.')) {
     return { label: '导入字段', detail: `${reason.replace('metadata.', '')}${staffId ? ` · #${staffId}` : ''}`, tone: 'is-success' };

@@ -38,7 +38,7 @@ export function ProjectTable({
         <thead>
           {showFinancials ? (
             <tr>
-              <th>员工</th>
+              <th>成员</th>
               <th>KOL</th>
               <th>项目</th>
               <th>阶段</th>
@@ -68,7 +68,7 @@ export function ProjectTable({
                   key={project.id}
                   className={selectedProjectId === project.id ? 'is-selected' : undefined}
                   onClick={() => onSelectProject(project)}
-                  title="点击查看员工、KOL、项目、消息、短链和归因详情"
+                  title="点击查看成员、KOL、项目、消息、短链和归因详情"
                 >
                 {showFinancials ? (
                   <td>
@@ -79,7 +79,7 @@ export function ProjectTable({
                         event.stopPropagation();
                         if (project.ownerId && onOpenStaffProfile) void onOpenStaffProfile(project.ownerId, { name: project.ownerName, avatarUrl: project.ownerAvatar });
                       }}
-                      title={project.ownerId && onOpenStaffProfile ? '打开员工详情' : undefined}
+                      title={project.ownerId && onOpenStaffProfile ? '打开成员详情' : undefined}
                     >
                       <Avatar name={project.ownerName} src={project.ownerAvatar} size="xs" />
                       <span>{project.ownerName}</span>

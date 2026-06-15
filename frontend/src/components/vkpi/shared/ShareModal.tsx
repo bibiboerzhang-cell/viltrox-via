@@ -7,7 +7,7 @@
 //   kind: 'project' | 'event'   —— 决定走哪套 API
 //   targetId: string            —— project_id / event_id
 //   targetName: string          —— 标题展示
-//   staff: UiStaff[]            —— 复用 app 已有的真实员工列表(toUiStaffList 产物),不另拉
+//   staff: UiStaff[]            —— 复用 app 已有的真实成员列表(toUiStaffList 产物),不另拉
 //   apiToken: string
 //   onClose: () => void
 //
@@ -213,7 +213,7 @@ export function ShareModal({ kind, targetId, targetName, staff = [], apiToken, o
               onChange: (ev) => setPickStaffId(ev.target.value),
               className: "flex-1 min-w-0 rounded-md border border-white/[0.08] bg-white/[0.03] px-2.5 py-1.5 text-[11px] text-slate-200 outline-none focus:border-purple-500/40",
             },
-              e("option", { value: "", style: { background: "#0b1220" } }, pickable.length ? "选择员工…" : "无可添加员工"),
+              e("option", { value: "", style: { background: "#0b1220" } }, pickable.length ? "选择成员…" : "无可添加成员"),
               ...pickable.map((s) => e("option", { key: s.id, value: String(s.id), style: { background: "#0b1220" } }, s.name))
             ),
             e("select", {

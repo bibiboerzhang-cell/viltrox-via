@@ -79,7 +79,7 @@ export function IntelligenceSourceBoard() {
       <div className="vkpi-intelligence-source-board__hero">
         <div>
           <span>趋势源 / 视频智能 / 平台建议</span>
-          <h2>智能层不只是等员工搜索，要主动发现 KOL、趋势、竞品和内容机会。</h2>
+          <h2>智能层不只是等成员搜索，要主动发现 KOL、趋势、竞品和内容机会。</h2>
           <p>这里先把未来 Agent 的输入源、量化准备度和输出路径放出来；当前只读展示，不自动调用 Google、Reddit、Gemini、GPT 或 Claude。</p>
         </div>
         <div className="vkpi-intelligence-source-board__score">

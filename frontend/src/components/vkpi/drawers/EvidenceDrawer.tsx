@@ -262,12 +262,12 @@ export function EvidenceDrawer({
             <section className="vkpi-traffic-summary">
               <span>播放量来源拆解</span>
               <strong>{hasAnyAmount ? numberFormatter.format(totalViews) : '-'}</strong>
-              <p>按 Viltrox 自营账号、员工负责 KOL、未归因内容拆开看，不再把不同业务来源混成一个证据列表。</p>
+              <p>按 Viltrox 自营账号、成员负责 KOL、未归因内容拆开看，不再把不同业务来源混成一个证据列表。</p>
             </section>
             {renderOwnedTrafficGroup(ownedRows)}
             {renderTrafficGroup(
               'KOL 合作流量',
-              '来自项目、员工负责 KOL 或合作内容的播放量。',
+              '来自项目、成员负责 KOL 或合作内容的播放量。',
               kolRows,
               '当前没有可归入 KOL 合作的播放量证据。需要内容绑定 KOL、负责人或项目。',
             )}

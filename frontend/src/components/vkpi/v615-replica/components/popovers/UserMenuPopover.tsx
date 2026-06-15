@@ -26,7 +26,7 @@ export function UserMenuPopover({ onClose, theme, onToggleTheme, anchorRef, t, u
         e("div", { className: "min-w-0 flex-1" },
           e("div", { className: "text-[12px] font-medium text-white" }, user.name),
           e("div", { className: "text-[10px] text-slate-500 flex items-center gap-1 flex-wrap" },
-            e("span", { className: "text-[9px] px-1 py-0.5 rounded bg-purple-500/15 text-purple-300" }, isAdmin ? t("Admin") : t("员工")),
+            e("span", { className: "text-[9px] px-1 py-0.5 rounded bg-purple-500/15 text-purple-300" }, isAdmin ? t("Admin") : t("成员")),
             e("span", null, "· " + user.email)
           )
         )

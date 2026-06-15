@@ -43,7 +43,7 @@ export function ProfileModal({ user, onClose, t }: any) {
         [
           { label: t("姓名"),  value: user.name, editable: true,  hint: null },
           { label: t("邮箱"),  value: user.email, editable: false, hint: t("如需修改请联系 Admin") },
-          { label: t("角色"),  value: user.role === "admin" ? t("Admin") : t("员工"), editable: false, hint: null },
+          { label: t("角色"),  value: user.role === "admin" ? t("Admin") : t("成员"), editable: false, hint: null },
           { label: t("部门"),  value: "Marketing", editable: false, hint: null },
         ].map((f, i) => e("div", { key: i },
           e("label", { className: "text-[10px] text-slate-500 mb-1 flex items-center justify-between" }, 

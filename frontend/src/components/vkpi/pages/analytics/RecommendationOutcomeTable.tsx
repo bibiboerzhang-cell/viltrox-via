@@ -40,7 +40,7 @@ export function RecommendationOutcomeTable({ outcomeSummary }: { outcomeSummary?
                 <td>${(safeNumber(row.attributed_gmv_cents) / 100).toLocaleString()}</td>
                 <td>{row.computed_roi == null ? '-' : `${safeNumber(row.computed_roi).toFixed(2)}x`}</td>
               </tr>
-            )) : <tr><td className="vkpi-table-empty" colSpan={9}>暂无推荐 outcome。推荐生成后会冻结特征，员工动作和后续销售会写入这里。</td></tr>}
+            )) : <tr><td className="vkpi-table-empty" colSpan={9}>暂无推荐 outcome。推荐生成后会冻结特征，成员动作和后续销售会写入这里。</td></tr>}
           </tbody>
         </table>
       </div>

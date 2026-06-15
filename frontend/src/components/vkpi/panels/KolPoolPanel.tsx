@@ -247,7 +247,7 @@ export function KolPoolPanel({ apiToken, onListPool, onGetItem, onGetIntelligenc
   return (
     <div className="vkpi-card vkpi-kol-pool-panel">
       <CardHeader title="KOL Pool 候选池" />
-      <p className="vkpi-muted">从 Apify / CSV / 推广计划表导入的候选资产池；它不是 Daily Top100 全量员工候选。</p>
+      <p className="vkpi-muted">从 Apify / CSV / 推广计划表导入的候选资产池；它不是 Daily Top100 全量成员候选。</p>
 
       <div className="vkpi-kol-pool-toolbar">
         <input

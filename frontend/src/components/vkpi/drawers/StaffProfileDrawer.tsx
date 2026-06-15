@@ -52,7 +52,7 @@ export function StaffProfileDrawer({
   const employeeCode = textValue(staff.employee_code || member.employeeCode || staff.email || member.email, '-');
   const costsVisible = Boolean(visibility.costs_visible);
   return (
-    <aside className="vkpi-evidence-drawer vkpi-staff-profile-drawer" role="dialog" aria-label="员工详情">
+    <aside className="vkpi-evidence-drawer vkpi-staff-profile-drawer" role="dialog" aria-label="成员详情">
       <header>
         <div>
           <span>Staff Profile</span>
@@ -69,7 +69,7 @@ export function StaffProfileDrawer({
           <span>{costsVisible ? '已授权查看成本和审计' : '需要授权查看内部成本'}</span>
         </div>
       </div>
-      {loading ? <div className="vkpi-empty-state">正在加载员工详情...</div> : null}
+      {loading ? <div className="vkpi-empty-state">正在加载成员详情...</div> : null}
       {error ? <div className="vkpi-empty-state">{error}</div> : null}
       <div className="vkpi-result-grid">
         <InfoBlock label="项目" value={numberFormatter.format(safeNumber(summary.project_count || summary.projects))} />
@@ -121,7 +121,7 @@ export function StaffProfileDrawer({
             );
           }}
         </DetailList>
-        <DetailList title="员工项目" rows={projects} empty="该员工暂无项目。">
+        <DetailList title="成员项目" rows={projects} empty="该成员暂无项目。">
           {(row) => (
             <article key={`staff-project-${String(row.id || row.project_uid || Math.random())}`}>
               <div><strong>{textValue(row.project_name || row.project_uid, '项目')}</strong><span>{stageLabels[coerceProjectStage(row.stage)] || textValue(row.stage, '-')}</span></div>

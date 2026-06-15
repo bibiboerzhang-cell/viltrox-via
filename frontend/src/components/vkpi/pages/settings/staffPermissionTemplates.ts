@@ -29,7 +29,7 @@ export const STAFF_PERMISSION_MODULES: Array<{ key: string; label: string; group
 export const STAFF_PERMISSION_TEMPLATES: StaffPermissionTemplate[] = [
   {
     key: "employee_workspace",
-    label: "成员工作台",
+    label: "成成员作台",
     detail: "官方账号矩阵和个人工作台，不开放管理后台",
     permissions: {
       overview: "none", kol_ops: "read", vkpi: "write", activities: "none",

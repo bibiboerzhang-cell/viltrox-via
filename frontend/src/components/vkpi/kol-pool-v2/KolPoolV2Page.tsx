@@ -202,7 +202,7 @@ function KolPoolDetailDrawer({
 
 export function KolPoolV2Page({
   apiToken,
-  userName = 'Viltrox 员工',
+  userName = 'Viltrox 成员',
   userRole = '营销运营',
   userAvatar,
   onSelectPage,

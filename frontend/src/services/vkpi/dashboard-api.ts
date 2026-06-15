@@ -121,7 +121,7 @@ export async function fetchVkpiDashboardData(
     : `/api/marketing/dashboard?window_days=${days}${staffQuery}`;
   const staffMembersRequest: Promise<OptionalResult<{ members?: Row[]; staff?: Row[] }>> = selfMode
     ? Promise.resolve({ data: { members: [] } })
-    : optionalFetch<{ members?: Row[]; staff?: Row[] }>("员工目录", "/api/admin/vkpi/staff-directory", token, { members: [], staff: [] });
+    : optionalFetch<{ members?: Row[]; staff?: Row[] }>("成员目录", "/api/admin/vkpi/staff-directory", token, { members: [], staff: [] });
   const productCostsRequest: Promise<OptionalResult<{ product_costs?: Row[] }>> = selfMode
     ? Promise.resolve({ data: { product_costs: [] } })
     : optionalFetch<{ product_costs?: Row[] }>("SKU 成本", "/api/marketing/product-costs?limit=200", token, { product_costs: [] });
@@ -151,7 +151,7 @@ export async function fetchVkpiDashboardData(
     optionalFetch<{ projects?: Row[]; scope?: Row }>("项目", "/api/marketing/projects?limit=100", token, { projects: [] }),
     optionalFetch<{ links?: Row[] }>("短链", "/api/marketing/links?limit=100", token, { links: [] }),
     optionalFetch<{ alerts?: Row[] }>("提醒", "/api/marketing/alerts?status=open&limit=50", token, { alerts: [] }),
-    optionalFetch<Row>("员工 KPI", `/api/marketing/staff-kpi?window=${encodeURIComponent(windowKey)}${staffQuery}`, token, { rows: [] }),
+    optionalFetch<Row>("成员 KPI", `/api/marketing/staff-kpi?window=${encodeURIComponent(windowKey)}${staffQuery}`, token, { rows: [] }),
     optionalFetch<{ attributions?: Row[] }>("销售归因", `/api/marketing/attribution?limit=200${staffQuery}`, token, { attributions: [] }),
     optionalFetch<{ items?: Row[] }>("未匹配归因", "/api/marketing/attribution/unmatched?limit=100", token, { items: [] }),
     optionalFetch<{ costs?: Row[] }>("成本", `/api/marketing/costs?limit=200${staffQuery}`, token, { costs: [] }),

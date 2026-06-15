@@ -5,7 +5,7 @@ import { EVENT_TYPES } from "../shared/constants.js";
 
 const e = React.createElement;
 export default function NewEventModal({ initialData, onClose, onSubmit, teamOptions = [], currentUserId }) {
-  // 真员工(UiStaff[])喂团队成员选择器,替换 mock TEAM。
+  // 真成员(UiStaff[])喂团队成员选择器,替换 mock TEAM。
   const team = Array.isArray(teamOptions) ? teamOptions : [];
   const isEdit = !!initialData;
   const [title, setTitle] = useState(initialData?.title || "");

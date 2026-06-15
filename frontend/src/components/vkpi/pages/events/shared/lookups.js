@@ -3,7 +3,7 @@ import { PROJECTS } from "../data/projects.js";
 import { TEAM } from "../data/team.js";
 export function ownerById(id) { return TEAM.find(t => t.id === id) || TEAM[0]; }
 export function ownerByInitial(i) { return TEAM.find(t => t.initial === i) || { initial: i, color: "#94a3b8" }; }
-// 真员工优先解析(teamUserIds 现在是真 staff id);命不中再回退旧 mock TEAM(兼容老 event 字母 id)。
+// 真成员优先解析(teamUserIds 现在是真 staff id);命不中再回退旧 mock TEAM(兼容老 event 字母 id)。
 // staff 为 UiStaff[]({id,name,color,avatar});统一返回 {id,name,color,initial} 供卡片/详情渲染。
 export function memberFromStaff(id, staff) {
   const list = Array.isArray(staff) ? staff : [];

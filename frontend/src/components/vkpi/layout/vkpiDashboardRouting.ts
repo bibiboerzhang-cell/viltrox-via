@@ -25,8 +25,8 @@ const VKPI_PAGE_KEYS = new Set<VkpiPageKey>([
   'settings',
 ]);
 
-// 员工默认可达页面(单一事实来源,2026-06-14 RBAC UX 决策):
-// - v615Replica:员工默认落地页 = 公司官方账号聚合看板 + Events / MY KOL / 项目宿主(公共资产 + 本人数据)。
+// 成员默认可达页面(单一事实来源,2026-06-14 RBAC UX 决策):
+// - v615Replica:成员默认落地页 = 公司官方账号聚合看板 + Events / MY KOL / 项目宿主(公共资产 + 本人数据)。
 // - 其余键与 EMPLOYEE_NAV_ITEMS(vkpiLayoutConstants.ts)一一对应:我的工作台 / MY KOL / 搜索红人 /
 //   我的项目 / 我的短链 / 我的归因 / 我的周报 / 个人设置。
 // 数据可见范围由 scope=self 在数据层收窄(别人的漏斗/项目/活动不可见);页面门禁只挡管理层专属页
@@ -68,7 +68,7 @@ export function normalizeVkpiPage(value: string, viewMode: 'manager' | 'employee
   return isVkpiPageKey(page) ? page : viewMode === 'employee' ? DEFAULT_EMPLOYEE_PAGE : DEFAULT_MANAGER_PAGE;
 }
 
-// 员工版页面门禁:管理层可访问全部页;员工仅 EMPLOYEE_ALLOWED_PAGES。
+// 成员版页面门禁:管理层可访问全部页;成员仅 EMPLOYEE_ALLOWED_PAGES。
 export function canAccessPage(page: VkpiPageKey, viewMode: 'manager' | 'employee'): boolean {
   if (viewMode === 'manager') {
     return VKPI_PAGE_KEYS.has(page);

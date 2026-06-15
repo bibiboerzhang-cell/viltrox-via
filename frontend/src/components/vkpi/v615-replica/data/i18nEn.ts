@@ -32,7 +32,7 @@ export const I18N_EN = {
   "切换身份(查看为)": "View As (impersonate)", "返回 Admin 视角": "Back to Admin View",
   "正在以": "Viewing as", "的身份查看": "",
   // Roles
-  "Admin": "Admin", "员工": "Staff", "管理员": "Admin",
+  "Admin": "Admin", "管理员": "Admin",
   // Modal common
   "关闭": "Close", "取消": "Cancel", "保存": "Save", "确认": "Confirm",
   // KPI cards
@@ -123,7 +123,7 @@ export const I18N_EN = {
   "@ 提及": "@ Mention",
   // Settings modal
   "系统设置稍后研究": "Settings coming soon",
-  "API Keys / Platform Crawl / Feature Flags / Budgets / 员工授权 / Audit · 占位": "API Keys / Crawl / Flags / Budgets / Permissions / Audit · placeholder",
+  "API Keys / Platform Crawl / Feature Flags / Budgets / 成员访问 / Audit · 占位": "API Keys / Crawl / Flags / Budgets / Permissions / Audit · placeholder",
   // Import tasks modal
   "把表格 / 邮件 / 文档拆解成工作提醒": "Turn tables / emails / docs into reminders",
   "上传文件": "Upload File", "邮箱关联": "Email Link", "链接导入": "Import Link",

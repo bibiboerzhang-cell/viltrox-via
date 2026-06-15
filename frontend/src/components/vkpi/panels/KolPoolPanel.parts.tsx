@@ -51,7 +51,7 @@ export function KolPoolDetailDrawer({
 }) {
   const raw = parseMaybeJson(item.raw_platform_data);
   const products = collectList(item.recommended_product_lines_json, raw, ['product', 'product_name', '产品', 'Product', 'sku', 'SKU']);
-  const owners = collectList(undefined, raw, ['owner', '负责人', 'staff', 'assignee', 'manager', '负责员工']);
+  const owners = collectList(undefined, raw, ['owner', '负责人', 'staff', 'assignee', 'manager', '负责成员']);
   const notes = collectList(undefined, raw, ['notes', '备注', 'comment', '合作备注', 'status', '状态']);
   const gaps = getDataGaps(item);
   const profileUrl = item.profile_url || getString(raw, ['profile_url', 'url', 'channelUrl', '主页', '主页 URL']);

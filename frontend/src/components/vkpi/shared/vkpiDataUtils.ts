@@ -201,7 +201,7 @@ export function lookupResultToKolDetail(result: VkpiKolLookupResult | null, fall
     scanError,
     scannedAt: textValue(snapshot.scanned_at, ''),
     country: textValue(kol.country, ''),
-    claimOwner: textValue(result.claim?.staff_name || result.claim?.staff_email, result.can_claim ? '可由当前员工认领' : '未绑定负责人'),
+    claimOwner: textValue(result.claim?.staff_name || result.claim?.staff_email, result.can_claim ? '可由当前成员认领' : '未绑定负责人'),
     claimStatus: result.can_claim ? '可认领' : result.claim ? '已认领' : '未认领',
     recentContent: posts.slice(0, 24).map((post, index) => {
       const raw = objectValue(post.raw_json);

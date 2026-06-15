@@ -397,7 +397,7 @@ export function DiscoverPage({ data, onLookupKol, onScanKolAccount, onClaimKol, 
     setBusy(true);
     try {
       await onClaimKol(selectedKol.id);
-      setNotice('红人已绑定到当前员工账号。');
+      setNotice('红人已绑定到当前成员账号。');
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '认领失败', 'error');
     } finally {

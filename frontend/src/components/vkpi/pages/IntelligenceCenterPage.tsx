@@ -444,7 +444,7 @@ export function IntelligenceCenterPage({ apiToken, viewMode }: WorkspacePageProp
       </label>
 
       {recommendationBacklogNotice ? <div className="vkpi-inline-message">{recommendationBacklogNotice}</div> : null}
-      {recommendationBacklogEmpty ? <div className="vkpi-inline-message">当前 recommendation backlog 已清空；员工侧会显示“推荐反馈已清”。</div> : null}
+      {recommendationBacklogEmpty ? <div className="vkpi-inline-message">当前 recommendation backlog 已清空；成员侧会显示“推荐反馈已清”。</div> : null}
 
       <section className="vkpi-agents-grid">
         <div className="vkpi-agents-list">

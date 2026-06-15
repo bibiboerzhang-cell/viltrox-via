@@ -147,7 +147,7 @@ export function AttributionPage({ data, viewMode, apiToken, onOpenEvidence, onCr
   };
 
   return (
-    <PageShell title="销售归因" description="把 Shopify / Amazon / 手工导入销售归因到短链、项目、红人、员工和 KPI。">
+    <PageShell title="销售归因" description="把 Shopify / Amazon / 手工导入销售归因到短链、项目、红人、成员和 KPI。">
       <section className="vkpi-card-grid vkpi-card-grid--forms">
         <section className="vkpi-card vkpi-action-card">
           <CardHeader title="Shopify 订单补录" />

@@ -146,7 +146,7 @@ export function VkpiDashboard({
   onImportAmazonRows,
   onUploadAmazonReport,
   apiToken,
-  userName = 'Viltrox 员工',
+  userName = 'Viltrox 成员',
   userRole = '营销运营',
   userAvatar,
   avatarRequired = false,
@@ -223,7 +223,7 @@ export function VkpiDashboard({
     () => data.alerts.filter((alert) => !resolvedAlertIds.has(alert.id)),
     [data.alerts, resolvedAlertIds],
   );
-  // 员工 UI = 管理层同款全量 UI(用户决策「一模一样」):两种角色共用全量导航,数据按后端 RBAC 过滤。
+  // 成员 UI = 管理层同款全量 UI(用户决策「一模一样」):两种角色共用全量导航,数据按后端 RBAC 过滤。
   const navItems = MANAGER_NAV_ITEMS;
   const selectedKolForPanel = useMemo(
     () => profileToKolDetail(projectDetailDrawer.projectKolProfile, data.selectedKol, selectedProject, data.links),
@@ -339,7 +339,7 @@ export function VkpiDashboard({
   const handleOpenStaffProfile = useCallback(async (staffId: string, fallback?: Partial<VkpiStaffMember>) => {
     const member = data.staffMembers.find((item) => item.id === staffId) || (fallback ? {
       id: staffId,
-      name: fallback.name || `员工 ${staffId}`,
+      name: fallback.name || `成员 ${staffId}`,
       email: fallback.email || '',
       role: fallback.role || '',
       active: fallback.active ?? true,
@@ -351,18 +351,18 @@ export function VkpiDashboard({
     setStaffProfileDrawerProfile(null);
     setStaffProfileDrawerError('');
     if (!apiToken) {
-      setStaffProfileDrawerError('当前前端没有登录 token，无法读取员工详情。');
+      setStaffProfileDrawerError('当前前端没有登录 token，无法读取成员详情。');
       return;
     }
     if (!staffId) {
-      setStaffProfileDrawerError('缺少员工 ID。');
+      setStaffProfileDrawerError('缺少成员 ID。');
       return;
     }
     setStaffProfileDrawerLoading(true);
     try {
       setStaffProfileDrawerProfile(await getStaffProfile(apiToken, staffId));
     } catch (error) {
-      setStaffProfileDrawerError(error instanceof Error ? error.message : '员工详情加载失败');
+      setStaffProfileDrawerError(error instanceof Error ? error.message : '成员详情加载失败');
     } finally {
       setStaffProfileDrawerLoading(false);
     }

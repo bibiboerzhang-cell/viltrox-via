@@ -16,7 +16,7 @@ export function SettingsModal({ onClose, t }: any) {
     e("div", { className: "p-8 text-center" },
       e(Settings, { size: 36, className: "mx-auto text-slate-600 mb-3" }),
       e("div", { className: "text-[12px] text-slate-300 mb-1" }, t("系统设置稍后研究")),
-      e("div", { className: "text-[10px] text-slate-500" }, t("API Keys / Platform Crawl / Feature Flags / Budgets / 员工授权 / Audit · 占位"))
+      e("div", { className: "text-[10px] text-slate-500" }, t("API Keys / Platform Crawl / Feature Flags / Budgets / 成员访问 / Audit · 占位"))
     )
   );
 }

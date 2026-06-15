@@ -96,7 +96,7 @@ function buildReportText(data: VkpiDashboardData, viewMode: 'manager' | 'employe
   const lines = [
     title,
     '',
-    isZh ? `- 视角：${viewMode === 'manager' ? '管理端' : '员工端'}` : `- View: ${viewMode}`,
+    isZh ? `- 视角：${viewMode === 'manager' ? '管理端' : '成员端'}` : `- View: ${viewMode}`,
     isZh ? `- 数据状态：${data.dataStatus} / ${data.dataNotice || '待接入'}` : `- Data status: ${data.dataStatus} / ${data.dataNotice || 'pending'}`,
     isZh ? `- 模板周期：${config.period === 'weekly' ? '周报' : '月报'} · 当前数据范围：${data.rangeLabel || `${data.windowDays || '--'} 天`}` : `- Template: ${config.period} · Current range: ${data.rangeLabel || `${data.windowDays || '--'} days`}`,
     '',
@@ -139,7 +139,7 @@ function buildReportText(data: VkpiDashboardData, viewMode: 'manager' | 'employe
     lines.push(isZh ? '## KPI Ledger' : '## KPI Ledger');
     if (data.kpiLedger.length) {
       data.kpiLedger.slice(0, 8).forEach((row, index) => {
-        lines.push(`- ${index + 1}. ${row.staffName || row.staffId || reportLabel(language, '未知员工', 'Unknown staff')} · ${row.metricLabel || row.metricKey || reportLabel(language, '动作', 'action')} · ${row.metricValue ?? '--'}`);
+        lines.push(`- ${index + 1}. ${row.staffName || row.staffId || reportLabel(language, '未知成员', 'Unknown staff')} · ${row.metricLabel || row.metricKey || reportLabel(language, '动作', 'action')} · ${row.metricValue ?? '--'}`);
       });
     } else {
       lines.push(isZh ? '- 暂无 Ledger 明细' : '- No ledger rows');
@@ -178,7 +178,7 @@ export function ReportCenterV2Page({
   apiToken,
   data,
   viewMode,
-  userName = 'Viltrox 员工',
+  userName = 'Viltrox 成员',
   userRole = '营销运营',
   userAvatar,
   onExportPDF,
@@ -351,7 +351,7 @@ export function ReportCenterV2Page({
           <div className="report-v2-ledger-list">
             {data.kpiLedger.slice(0, 8).map((row) => (
               <div key={row.id}>
-                <strong>{row.staffName || row.staffId || '未知员工'}</strong>
+                <strong>{row.staffName || row.staffId || '未知成员'}</strong>
                 <span>{row.metricLabel || row.metricKey || '动作'} · {row.metricValue ?? '--'}</span>
               </div>
             ))}

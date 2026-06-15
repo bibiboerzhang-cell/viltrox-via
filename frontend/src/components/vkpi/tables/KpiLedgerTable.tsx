@@ -5,7 +5,7 @@ export function KpiLedgerTable({ rows }: { rows: VkpiDashboardData['kpiLedger'] 
   return (
     <div className="vkpi-table-wrap">
       <table className="vkpi-table">
-        <thead><tr><th>日期</th><th>员工</th><th>项目 / 产品</th><th>KOL</th><th>指标</th><th>值</th><th>来源证据</th><th>置信度</th><th>创建</th></tr></thead>
+        <thead><tr><th>日期</th><th>成员</th><th>项目 / 产品</th><th>KOL</th><th>指标</th><th>值</th><th>来源证据</th><th>置信度</th><th>创建</th></tr></thead>
         <tbody>{rows.length ? rows.map((row) => (
           <tr key={row.id}>
             <td>{row.ledgerDate}</td>

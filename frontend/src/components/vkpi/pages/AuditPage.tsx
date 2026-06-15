@@ -127,7 +127,7 @@ export function AuditPage({ apiToken, viewMode }: AuditPageProps) {
         </div>
         <div className="vkpi-table-wrap">
           <table className="vkpi-table">
-            <thead><tr><th>时间</th><th>类型</th><th>动作</th><th>员工</th><th>对象</th><th>说明</th><th>IP</th></tr></thead>
+            <thead><tr><th>时间</th><th>类型</th><th>动作</th><th>成员</th><th>对象</th><th>说明</th><th>IP</th></tr></thead>
             <tbody>
               {events.length ? events.map((event) => (
                 <tr key={event.id}>

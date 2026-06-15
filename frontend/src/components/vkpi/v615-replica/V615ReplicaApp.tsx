@@ -1158,7 +1158,7 @@ export function V615ReplicaApp(props: any = {}) {
                   viewingAs && e("span", { className: "text-[8px] px-1 py-0.5 rounded bg-blue-500/20 text-blue-300" }, t("正在以"))
                 ),
                 e("div", { className: "text-slate-500" }, 
-                  viewingAs ? viewingAs.title : (currentUser.role === "admin" ? t("Admin") : t("员工"))
+                  viewingAs ? viewingAs.title : (currentUser.role === "admin" ? t("Admin") : t("成员"))
                 )
               ),
               e(ChevronDown, { size: 14, className: "hidden text-slate-500 sm:block" })

@@ -3,7 +3,7 @@ import { Avatar } from '../shared/Avatar';
 import { currencyFormatter } from '../shared/vkpiFormatters';
 
 export function Leaderboard({ items, onOpenStaff }: { items: VkpiLeaderboardItem[]; onOpenStaff?: (item: VkpiLeaderboardItem) => void }) {
-  const safeItems = items.length ? items : [{ name: '暂无员工数据', gmv: 0 }];
+  const safeItems = items.length ? items : [{ name: '暂无成员数据', gmv: 0 }];
   const max = Math.max(1, ...safeItems.map((item) => item.gmv));
   return (
     <div className="vkpi-leaderboard">

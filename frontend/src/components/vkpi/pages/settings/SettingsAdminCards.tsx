@@ -82,9 +82,9 @@ export function StaffInviteCard({
     <section className="vkpi-card vkpi-action-card">
       <CardHeader title="授权账户" />
       <form className="vkpi-form-stack" onSubmit={onSubmit}>
-        <input value={email} onChange={(event) => onEmailChange(event.target.value)} placeholder="员工邮箱，建议使用 @viltrox.com" />
-        <input value={name} onChange={(event) => onNameChange(event.target.value)} placeholder="员工姓名 / 拼音 ID" />
-        <select value={role} onChange={(event) => onRoleChange(event.target.value)}><option value="employee">员工 / 运营</option><option value="manager">管理层</option><option value="analyst">数据分析</option><option value="readonly">只读</option></select>
+        <input value={email} onChange={(event) => onEmailChange(event.target.value)} placeholder="成员邮箱，建议使用 @viltrox.com" />
+        <input value={name} onChange={(event) => onNameChange(event.target.value)} placeholder="成员姓名 / 拼音 ID" />
+        <select value={role} onChange={(event) => onRoleChange(event.target.value)}><option value="employee">成员 / 运营</option><option value="manager">管理层</option><option value="analyst">数据分析</option><option value="readonly">只读</option></select>
         <div className="vkpi-staff-template-row">
           {STAFF_ASSIGNABLE_PERMISSION_TEMPLATES.map((template) => (
             <button

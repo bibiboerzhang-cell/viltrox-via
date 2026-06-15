@@ -142,8 +142,8 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
   const effectiveViewMode = isManager ? viewMode : "employee";
   const scope = effectiveViewMode === "manager" ? "all" : "self";
   const userRoleLabel = isManager
-    ? effectiveViewMode === "manager" ? "管理层" : "员工视角"
-    : "员工";
+    ? effectiveViewMode === "manager" ? "管理层" : "成员视角"
+    : "成员";
   const canRenderWithoutDashboardData = getInitialVkpiPage(effectiveViewMode) === "v615Replica";
 
   const load = useCallback(async () => {
@@ -287,7 +287,7 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
   const handleClaimKol = useCallback(async (kolId: string) => {
     setMessage("正在绑定红人...");
     await claimKol(token, kolId);
-    setMessage("红人已绑定当前员工。");
+    setMessage("红人已绑定当前成员。");
     await load();
   }, [load, token]);
 
@@ -418,21 +418,21 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
   }, [load, token]);
 
   const handleInviteStaff = useCallback(async (payload: Parameters<typeof inviteMarketingStaff>[1]) => {
-    setMessage("正在授权员工账号...");
+    setMessage("正在授权成员账号...");
     await inviteMarketingStaff(token, payload);
-    setMessage("员工账号已授权。");
+    setMessage("成员账号已授权。");
     await load();
   }, [load, token]);
 
   const handleUpdateStaffPermission = useCallback(async (staffId: string, permission: "none" | "read" | "write") => {
-    setMessage("正在更新员工权限...");
+    setMessage("正在更新成员权限...");
     await updateStaffMarketingPermission(token, staffId, permission);
-    setMessage("员工权限已更新。");
+    setMessage("成员权限已更新。");
     await load();
   }, [load, token]);
 
   const handleRunKpiRollup = useCallback(async (ledgerDate?: string) => {
-    setMessage("正在计入员工 KPI 工作量...");
+    setMessage("正在计入成员 KPI 工作量...");
     await runKpiRollup(token, ledgerDate);
     setMessage("KPI 工作量已计入。");
     await load();
@@ -505,7 +505,7 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
         isRefreshing={loading}
         lastSyncedAt={lastSyncedAt}
         apiToken={token}
-        userName={user?.name || user?.email || "Viltrox 员工"}
+        userName={user?.name || user?.email || "Viltrox 成员"}
         userRole={userRoleLabel}
         userAvatar={avatarUrl || user?.avatar_url || ""}
         avatarRequired={Boolean(user?.avatar_required || !(avatarUrl || user?.avatar_url))}

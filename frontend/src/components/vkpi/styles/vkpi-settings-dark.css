@@ -217,7 +217,7 @@
   color: #d8b9ff;
 }
 
-/* ── 员工权限抽屉(从设置里打开)──────────────────────────────────── */
+/* ── 成员权限抽屉(从设置里打开)──────────────────────────────────── */
 .v615-settings-dark .vkpi-staff-permission-drawer,
 .v615-settings-dark .vkpi-staff-permission-section,
 .v615-settings-dark .vkpi-settings-secondary details,
@@ -272,7 +272,7 @@
   box-shadow: none;
 }
 
-/* B. 胶囊 / 小按钮 / 标签 / 模板片 → 暗 subtle(含「权限模板」选择片 员工工作台/KOL外联…) */
+/* B. 胶囊 / 小按钮 / 标签 / 模板片 → 暗 subtle(含「权限模板」选择片 成员工作台/KOL外联…) */
 .v615-settings-dark .vkpi-staff-template-row button,
 .v615-settings-dark .vkpi-settings-check-row label,
 .v615-settings-dark .vkpi-platform-advanced-toggle,

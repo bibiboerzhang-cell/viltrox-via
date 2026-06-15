@@ -101,7 +101,7 @@ export function SettingsModule({
   );
 }
 
-// 员工自助「我的权限」只读卡:展示自己的 {tab:level} 矩阵,改权限请联系管理层。
+// 成员自助「我的权限」只读卡:展示自己的 {tab:level} 矩阵,改权限请联系管理层。
 export function EmployeePermissionCard({ permissions }: { permissions?: Record<string, string> }) {
   const levelLabel = (level: string): string =>
     ({ none: "无权限", read: "只读", write: "可写", admin: "管理" }[String(level || "none").toLowerCase()] || "无权限");

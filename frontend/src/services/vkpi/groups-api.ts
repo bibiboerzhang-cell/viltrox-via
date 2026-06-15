@@ -8,7 +8,7 @@ function coerceMembers<T extends { member_ids?: (string | number)[] }>(payload: 
   return { ...payload, member_ids: (payload.member_ids || []).map((x) => Number(x)) };
 }
 
-// 员工分组(staff-groups)前端 API + 适配器。后端前缀 /api/admin/vkpi/staff-groups。
+// 成员分组(staff-groups)前端 API + 适配器。后端前缀 /api/admin/vkpi/staff-groups。
 // member_ids 是 bigint staff id 的 jsonb 数组(对齐 vkpi_events.team_ids)。
 // GET 需 require_tab("vkpi","read");增删改需 ("vkpi","write")。
 

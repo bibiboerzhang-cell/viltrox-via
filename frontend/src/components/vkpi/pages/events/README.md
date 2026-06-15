@@ -45,7 +45,7 @@ events/
 │   └── lookups.js                   ownerById / ownerByInitial / kolById / projectById
 │
 └── data/                            ★ 全是 mock — Codex 接入后整个目录可删
-    ├── team.js                      → GET /api/admin/users (员工列表)
+    ├── team.js                      → GET /api/admin/users (成员列表)
     ├── projects.js                  → GET /api/admin/vkpi/projects
     ├── kol-pool.js                  → GET /api/admin/vkpi/kol-pool
     ├── events.js                    → GET /api/admin/vkpi/events
@@ -87,9 +87,9 @@ function App() {
 
 **特别注意 `data/team.js`**:
 - 现在 hardcoded 4 个人 (J/M/T/K)
-- 必须改成 `GET /api/admin/users?role=internal` 拉真实员工
+- 必须改成 `GET /api/admin/users?role=internal` 拉真实成员
 - 数据结构相同: `{ id, name, initial, color, email?, role? }`
-- 当员工 > 4 个时,各处 modal 的"团队选择 chip"会自动 wrap 多行 (已用 flex-wrap)
+- 当成员 > 4 个时,各处 modal 的"团队选择 chip"会自动 wrap 多行 (已用 flex-wrap)
 
 ### P1: 写操作改 API
 
@@ -99,7 +99,7 @@ function App() {
 | 编辑 Event (右上 ... → 编辑) | `PATCH /api/admin/vkpi/events/{id}` |
 | 删除 Event | `DELETE /api/admin/vkpi/events/{id}` |
 | 加成员到 team | `POST /api/admin/vkpi/events/{id}/members` |
-| 邀请新员工 (邮箱) | `POST /api/admin/users/invite` |
+| 邀请新成员 (邮箱) | `POST /api/admin/users/invite` |
 | 录入费用 | `POST /api/admin/vkpi/events/{id}/expenses` |
 | 新建任务 | `POST /api/admin/vkpi/events/{id}/tasks` |
 | 勾选任务/checklist | `PATCH /api/admin/vkpi/events/{id}/tasks/{tid}` |
@@ -156,7 +156,7 @@ CREATE TABLE event_team_members (
 );
 ```
 
-### 邀请新员工流程
+### 邀请新成员流程
 1. 用户在 NewEventModal 团队选择 → 点 "邀请新人" (新加)
 2. 输入邮箱 → `POST /api/admin/users/invite`
 3. 后端发邮件邀请 + 创建 user (invite_status=pending)

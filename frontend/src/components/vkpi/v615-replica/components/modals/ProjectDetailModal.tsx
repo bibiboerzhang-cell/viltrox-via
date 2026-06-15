@@ -16,7 +16,7 @@ const e = React.createElement;
 export function ProjectDetailModal({ project, onClose, onOpenFullPage, staff = [], apiToken, onAssigned, canManage = false }) {
   const { t } = useT();
   const [activeTab, setActiveTab] = useState("kols");  // kols / pending / assets / new-kol
-  const [assignBusy, setAssignBusy] = useState(false);  // 指派给员工(管理层把项目派给某员工 → 该员工 own-only 即可见)
+  const [assignBusy, setAssignBusy] = useState(false);  // 指派给成员(管理层把项目派给某成员 → 该成员 own-only 即可见)
   const [shareOpen, setShareOpen] = useState(false);  // 分享 modal(成员管理走真后端)
   if (!project) return null;
   const IconComp = CAMPAIGN_ICONS[project.iconKey] || CAMPAIGN_ICONS.default;
@@ -62,7 +62,7 @@ export function ProjectDetailModal({ project, onClose, onOpenFullPage, staff = [
         ),
         e("div", { className: "flex items-center gap-1.5" },
           apiToken && staff.length > 0 && e("select", {
-            value: "", disabled: assignBusy, title: "指派给员工",
+            value: "", disabled: assignBusy, title: "指派给成员",
             className: "rounded-md border border-white/[0.08] bg-white/[0.04] px-2 py-1 text-[10px] text-slate-300 hover:bg-white/[0.08] outline-none max-w-[120px]",
             onChange: async (ev) => {
               const sid = ev.target.value; if (!sid) return;

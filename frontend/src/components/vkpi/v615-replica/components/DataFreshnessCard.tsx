@@ -1,5 +1,5 @@
 // @ts-nocheck
-// Agent-OS data-freshness 卡片(2026-06-14):KOL 池 / 员工渠道(/ 产品)的逐实体新鲜度。
+// Agent-OS data-freshness 卡片(2026-06-14):KOL 池 / 成员渠道(/ 产品)的逐实体新鲜度。
 // 数据全部来自真实只读端点 GET /api/admin/vkpi/dashboard/data-freshness;
 // 新鲜度由后端 COALESCE(last_checked, updated_at/last_seen_at/last_sync_at) 派生(127 列起始 NULL,
 // 故当前实际落在既有时间戳)。桶:fresh<3天 / aging 3-7天 / stale>7天。
@@ -121,7 +121,7 @@ export function DataFreshnessCard({ apiToken }) {
     ),
     e("div", { className: "divide-y divide-white/[0.04]" },
       e(EntityRow, { title: "KOL 池", entity: snap?.kol_pool }),
-      e(EntityRow, { title: "员工渠道", entity: snap?.channels }),
+      e(EntityRow, { title: "成员渠道", entity: snap?.channels }),
       snap?.products && e(EntityRow, { title: "产品目录", entity: snap.products })
     )
   );

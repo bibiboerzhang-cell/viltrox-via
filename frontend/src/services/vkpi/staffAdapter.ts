@@ -1,9 +1,9 @@
 import type { VkpiStaffMember } from "../../components/vkpi/vkpiTypes";
 
-// 把后端真实 17 名员工(VkpiStaffMember)适配成 TeamModal/EditGroupModal/Events 选人
+// 把后端真实 17 名成员(VkpiStaffMember)适配成 TeamModal/EditGroupModal/Events 选人
 // 所需的 UI 形态。纯函数,除类型外无依赖。
 //   isAdmin = role admin/owner;avatar = 姓名首字(CJK 取首字,latin 取前两词首字母大写);
-//   color = id 稳定哈希落入 8 色板;title = isAdmin ? '管理层' : (role || '员工');focus = ''。
+//   color = id 稳定哈希落入 8 色板;title = isAdmin ? '管理层' : (role || '成员');focus = ''。
 
 export interface UiStaff {
   id: string;
@@ -63,13 +63,13 @@ export function initials(name: string): string {
   return (words[0].slice(0, 1) + words[1].slice(0, 1)).toUpperCase();
 }
 
-/** role → 中文 title(管理层 / role 原文 / 兜底「员工」)。 */
+/** role → 中文 title(管理层 / role 原文 / 兜底「成员」)。 */
 export function titleFromRole(role: string, isAdmin: boolean): string {
   if (isAdmin) return "管理层";
-  return String(role || "").trim() || "员工";
+  return String(role || "").trim() || "成员";
 }
 
-/** 单个真实员工 → UI 选人形态。 */
+/** 单个真实成员 → UI 选人形态。 */
 export function toUiStaff(member: VkpiStaffMember): UiStaff {
   const role = String(member.role ?? "");
   const isAdmin = role === "admin" || role === "owner";
