@@ -308,7 +308,7 @@ export function ProjectDetailDrawer({
             销售 {currencyFormatter.format(revenue)}
             {showFinancials ? ` · 成本 ${currencyFormatter.format(cost)} · ROI ${roiValue == null ? '-' : `${roiValue.toFixed(2)}x`}` : ''}
           </p>
-          <em>{showFinancials ? '管理层可复核成本、订单和 ROI 证据。' : '员工视角隐藏内部镜头单价和成本明细。'}</em>
+          <em>{showFinancials ? '管理层可复核成本、订单和 ROI 证据。' : '需要授权后才能查看内部镜头单价和成本明细。'}</em>
         </article>
         <article id="project-detail-messages">
           <div><strong>KOL Profile</strong><span>{kolProfile ? '真实档案' : '未加载'}</span></div>

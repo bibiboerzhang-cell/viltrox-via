@@ -716,8 +716,8 @@ function EmployeeKolLibrary({
     <section className="mykol-panel mykol-employee-panel">
       <header className="mykol-section-head">
         <div>
-          <h2><span className="is-cyan" />{viewMode === 'manager' ? 'MY KOL 库' : '员工 KOL 库'} <em>/ 真实项目与自然人待接入</em></h2>
-          <p>{viewMode === 'manager' ? '管理层视角 · 当前用现有 KOL/project 数据过渡' : '员工视角 · 当前仅展示可见 KOL 与项目内容'}</p>
+          <h2><span className="is-cyan" />{viewMode === 'manager' ? 'MY KOL 库' : '我的 KOL 库'} <em>/ 真实项目与自然人待接入</em></h2>
+          <p>{viewMode === 'manager' ? '管理层视角 · 当前用现有 KOL/project 数据过渡' : '我的视角 · 当前仅展示可见 KOL 与项目内容'}</p>
         </div>
         <div className="mykol-chip-row">
           <span><b>{items.length}</b> Total KOL</span>
@@ -961,7 +961,7 @@ export function MyKolPage({ apiToken, viewMode, data, userName, onRefreshData }:
       <header className="mykol-hero">
         <div>
           <h1><Heart size={18} fill="currentColor" /> MY KOL <span>/ {viewMode === 'manager' ? '团队矩阵 / 账号管理' : '我的 KOL'}</span></h1>
-          <p>{viewMode === 'manager' ? `管理层视角 · ${staffCards.length || '待接入'} 名负责人 · ${data.kolOptions.length || '待接入'} 个 KOL` : `${userName || '员工'} · 只看自己负责的数据`}</p>
+          <p>{viewMode === 'manager' ? `管理层视角 · ${staffCards.length || '待接入'} 名负责人 · ${data.kolOptions.length || '待接入'} 个 KOL` : `${userName || '成员'} · 只看自己负责的数据`}</p>
         </div>
         <div className="mykol-hero-actions">
           <span className={pendingCount ? 'is-pending' : ''}><Bell size={14} /> {pendingCount ? `${pendingCount} 个待定` : '无待定'}</span>

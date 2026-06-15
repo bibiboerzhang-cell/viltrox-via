@@ -68,8 +68,8 @@ export function AuditPage({ apiToken, viewMode }: AuditPageProps) {
 
   if (viewMode !== 'manager') {
     return (
-      <PageShell title="审计" description="员工视角不显示全局审计、敏感访问、导出和设置变更记录。">
-        <section className="vkpi-card"><div className="vkpi-empty-state">该页面只对管理层开放。</div></section>
+      <PageShell title="审计" description="需要授权后才能查看全局审计、敏感访问、导出和设置变更记录。">
+        <section className="vkpi-card"><div className="vkpi-empty-state">你当前无权限。</div></section>
       </PageShell>
     );
   }

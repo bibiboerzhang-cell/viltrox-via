@@ -47,7 +47,7 @@ export function CampaignsPage({ apiToken, viewMode, data }: CampaignsPageProps) 
   useEffect(() => { void refresh(); }, [apiToken, viewMode]);
 
   if (viewMode !== 'manager') {
-    return <PageShell title="活动预算" description="该页面只对管理层开放。"><section className="vkpi-card"><div className="vkpi-empty-state">员工视角不能查看预算池、镜头单价或离职交接。</div></section></PageShell>;
+    return <PageShell title="活动预算" description="你当前无权限。"><section className="vkpi-card"><div className="vkpi-empty-state">需要授权后才能查看预算池、镜头单价或离职交接。</div></section></PageShell>;
   }
 
   const submitCampaign = async (event: React.FormEvent) => {

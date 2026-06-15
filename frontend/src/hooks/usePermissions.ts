@@ -1,4 +1,5 @@
 import { useAuth } from './useAuth';
+import { EMPLOYEE_ALLOWED_PAGES } from '../components/vkpi/layout/vkpiDashboardRouting';
 
 /**
  * Frontend RBAC hook — mirrors backend permissions.py logic.
@@ -108,18 +109,14 @@ function levelAllows(value: string, level: PermissionLevel): boolean {
 }
 
 /**
- * Employee-only pages (mirrors frontend vkpiDashboardRouting.ts EMPLOYEE_ALLOWED_PAGES).
+ * Employee-default-accessible pages.
+ *
+ * Single source of truth: imported from vkpiDashboardRouting.ts so this hook and the
+ * routing gate (canAccessPage / enforcePageAccess) can never drift apart. Includes the
+ * employee landing page (v615Replica = company official-account aggregate, a public asset)
+ * plus the curated EMPLOYEE_NAV_ITEMS keys. Data-level scoping (scope=self) hides other
+ * people's funnels / projects / activities; this set only gates manager-only pages.
  */
-const EMPLOYEE_ALLOWED_PAGES = new Set<VkpiPageKey>([
-  'command',
-  'channels',
-  'discover',
-  'projects',
-  'links',
-  'attribution',
-  'reports',
-  'settings',
-]);
 
 /**
  * OWNER_ONLY_SYSTEM_KEYS (mirrors backend permissions.py).

@@ -94,7 +94,7 @@ export function CostsPage({ data, viewMode, onUpdateCost, onApproveCost, onVoidC
     }
   };
   if (viewMode !== 'manager') {
-    return <PageShell title="成本台" description="员工视角隐藏镜头单价、内部成本和财务明细。"><section className="vkpi-card"><div className="vkpi-empty-state">当前视角无权查看成本台。</div></section></PageShell>;
+    return <PageShell title="成本台" description="需要授权后才能查看镜头单价、内部成本和财务明细。"><section className="vkpi-card"><div className="vkpi-empty-state">你当前无权限查看成本台。</div></section></PageShell>;
   }
   return (
     <PageShell title="成本台" description="管理层审核、修正、作废成本记录。镜头成本由 SKU 目录和发货动作自动计入，员工只登记快递 / 推广费。">

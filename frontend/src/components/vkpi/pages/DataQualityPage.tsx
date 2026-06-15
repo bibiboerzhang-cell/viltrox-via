@@ -169,8 +169,8 @@ export function DataQualityPage({ apiToken, viewMode }: DataQualityPageProps) {
 
   if (viewMode !== 'manager') {
     return (
-      <PageShell title="数据质量" description="员工视角不显示全局数据质量、内部成本、审计和预算信息。">
-        <section className="vkpi-card"><div className="vkpi-empty-state">该页面只对管理层开放。</div></section>
+      <PageShell title="数据质量" description="需要授权后才能查看全局数据质量、内部成本、审计和预算信息。">
+        <section className="vkpi-card"><div className="vkpi-empty-state">你当前无权限。</div></section>
       </PageShell>
     );
   }

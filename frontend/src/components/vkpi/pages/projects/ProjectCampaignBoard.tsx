@@ -411,7 +411,7 @@ export function ProjectCampaignBoard({
           <div className="vkpi-project-health-card">
             <span>{viewMode === 'manager' ? '预算消耗' : '点击'}</span>
             <strong>{viewMode === 'manager' ? formatMoney(totalCost) : formatNumber(totalClicks)}</strong>
-            <em>{viewMode === 'manager' ? `${formatMoney(totalGmv)} GMV` : '员工视角显示短链点击'}</em>
+            <em>{viewMode === 'manager' ? `${formatMoney(totalGmv)} GMV` : '我的视角显示短链点击'}</em>
           </div>
         </div>
       </div>

@@ -75,7 +75,7 @@ export function KolFunnelCard({ funnel, onOpenMyKol }) {
           }),
           // by_staff 摘要(前 3 名)
           byStaff.length > 0 && e("div", { className: "mt-2 border-t border-white/[0.06] pt-2 space-y-1" },
-            e("div", { className: "text-[9px] uppercase tracking-wider text-slate-500" }, "按成员"),
+            e("div", { className: "text-[9px] uppercase tracking-wider text-slate-500" }, "我的漏斗"),
             byStaff.slice(0, 3).map((row, index) => e("div", {
               key: row.staff_id ?? index,
               className: "flex items-center justify-between text-[10px]"

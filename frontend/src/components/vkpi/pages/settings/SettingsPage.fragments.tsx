@@ -137,16 +137,16 @@ export function EmployeeSettingsView({ message, settingsError }: { message: stri
       <section className="vkpi-card-grid vkpi-card-grid--forms">
         <section className="vkpi-card vkpi-action-card">
           <CardHeader title="当前账号" />
-          <InfoBlock label="界面" value="员工视角" />
+          <InfoBlock label="界面" value="我的视角" />
           <InfoBlock label="数据范围" value="本人项目 / 本人短链 / 本人归因" />
           <InfoBlock label="头像" value="左下角上传真人头像" />
         </section>
         <EmployeePermissionCard permissions={user?.permissions as Record<string, string> | undefined} />
         <section className="vkpi-card vkpi-action-card">
           <CardHeader title="不可见项目" />
-          <InfoBlock label="SKU 成本" value="管理层可见" />
-          <InfoBlock label="员工授权" value="管理层可见" />
-          <InfoBlock label="API Key" value="管理层可见" />
+          <InfoBlock label="SKU 成本" value="需要授权" />
+          <InfoBlock label="账号权限" value="需要授权" />
+          <InfoBlock label="API Key" value="需要授权" />
         </section>
       </section>
     </PageShell>

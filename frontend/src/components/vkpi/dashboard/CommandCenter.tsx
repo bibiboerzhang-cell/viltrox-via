@@ -237,7 +237,7 @@ function EmployeeWorkdayHero({
   ];
 
   return (
-    <section className="vkpi-employee-workday" aria-label="员工今日执行区">
+    <section className="vkpi-employee-workday" aria-label="我的今日执行区">
       <div className="vkpi-employee-workday__copy">
         <span>EMPLOYEE VIEW</span>
         <h1>我的今日工作台</h1>
@@ -432,7 +432,7 @@ export function CommandCenter({
 
   return (
     <>
-      <section className="vkpi-main-column" aria-label={viewMode === 'manager' ? '管理主控' : '员工工作台'}>
+      <section className="vkpi-main-column" aria-label={viewMode === 'manager' ? '管理主控' : '我的工作台'}>
         {viewMode === 'employee' ? (
           <EmployeeWorkdayHero
             mustActionCount={mustActionCount}

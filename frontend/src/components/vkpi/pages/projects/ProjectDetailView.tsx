@@ -997,7 +997,7 @@ export function ProjectDetailView({
             <span className="text-[10px] text-slate-600">·</span>
             <span className="text-[10.5px] text-slate-400">预算 {formatMoney(stats.cost)} · 销售 {formatMoney(stats.gmv)}</span>
             <span className="text-[10px] text-slate-600">·</span>
-            <span className="text-[10.5px] text-slate-400">{viewMode === 'manager' ? '上市推广' : '员工跟进'}</span>
+            <span className="text-[10.5px] text-slate-400">{viewMode === 'manager' ? '上市推广' : '我的跟进'}</span>
           </div>
           <div className="flex items-center gap-2 mt-3 flex-wrap">
             <button className="px-3 py-1.5 rounded-md border border-white/[0.08] bg-white/[0.02] text-[11px] text-slate-300 hover:bg-white/[0.06] hover:text-white" type="button" onClick={() => setEditOpen(true)} disabled={!onUpdateProject}>编辑</button>
