@@ -33,7 +33,7 @@ export async function saveShopifyCreds(
 ): Promise<SaveShopifyCredsResult> {
   // Do NOT log the body — it carries secrets.
   return apiFetch<SaveShopifyCredsResult>(
-    "/api/admin/vkpi/shopify/credentials",
+    "/api/admin/vkpi/shopify/creds",
     {
       method: "POST",
       body: jsonBody({

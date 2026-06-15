@@ -596,6 +596,20 @@ def shopify_provider_status(*, limit: int = 10) -> dict[str, Any]:
         os.environ.get("SHOPIFY_ADMIN_ACCESS_TOKEN") or os.environ.get("SHOPIFY_API_ACCESS_TOKEN") or ""
     ).strip()
     webhook_secret = str(os.environ.get("SHOPIFY_WEBHOOK_SECRET") or "").strip()
+    # 插 creds 即亮:env 未配时回退读 DB 里 Hub 连接区加密存的 creds(connection_status 只回 masked 布尔,
+    # 绝不取明文/不入 response),让连接徽标在同事保存钥匙后即变「已配置」,而不再只认环境变量。
+    if not (shop_domain and access_token):
+        try:
+            from app.domains.commerce import shopify_connect
+
+            db = shopify_connect.connection_status()
+            shop_domain = shop_domain or str(db.get("shop_domain") or "").strip()
+            if db.get("token_configured") and not access_token:
+                access_token = "configured_in_db"
+            if db.get("webhook_secret_configured") and not webhook_secret:
+                webhook_secret = "configured_in_db"
+        except Exception:
+            pass
     configured = bool(shop_domain and access_token)
     return {
         "provider_status": "configured" if configured else "not_configured",
