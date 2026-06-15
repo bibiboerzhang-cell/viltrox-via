@@ -129,6 +129,17 @@ def dashboard_fit_movers(
     return fit_snapshot.compute_top_movers(limit=limit)
 
 
+@router.get("/dashboard/ai-today-hot")
+def dashboard_ai_today_hot(
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """AI Today 今日热点(LLM 每早生成的拍摄方案/话题/重点决策;只读)。未生成则诚实空。"""
+    del staff
+    from app.domains.market import ai_today
+
+    return ai_today.get_ai_today_hot()
+
+
 @router.get("/dashboard/tasks")
 def dashboard_tasks(
     limit: int = Query(default=6, ge=1, le=20),

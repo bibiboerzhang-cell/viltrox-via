@@ -186,6 +186,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "147_vkpi_kol_portal_tokens.sql",
     "148_vkpi_kol_fit_snapshot.sql",
     "149_vkpi_brief_agent_schedule.sql",
+    "150_vkpi_ai_today_hot.sql",
 )
 
 try:

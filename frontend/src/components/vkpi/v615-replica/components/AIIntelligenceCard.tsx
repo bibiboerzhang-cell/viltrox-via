@@ -60,7 +60,7 @@ export function AIIntelligenceCard({ insight, onApprove, onLater, onRegenerate, 
     // ─ 加强 ─
     e("div", { className: "relative mb-2.5 border-t border-white/[0.08] pt-2.5" },
       e("div", { className: "mb-1.5 flex items-center justify-between" },
-        e("div", { className: "text-[9px] uppercase tracking-wider text-emerald-300" }, "📈 加强"),
+        e("div", { className: "text-[9px] uppercase tracking-wider text-emerald-300" }, insight.strengthenLabel || "📈 加强"),
         e("span", { className: "text-[9px] text-slate-500" }, `${insight.strengthen.length} ${t("项")}`)
       ),
       ...insight.strengthen.map((s: any, i: any) => e("div", { key: i, className: "mb-1 flex items-start gap-1.5 text-[11px]" },
@@ -89,7 +89,7 @@ export function AIIntelligenceCard({ insight, onApprove, onLater, onRegenerate, 
     
     // ─ 今天适合发 ─
     e("div", { className: "relative mb-2" },
-      e("div", { className: "mb-1.5 text-[9px] uppercase tracking-wider text-cyan-300" }, "📅 今天适合发"),
+      e("div", { className: "mb-1.5 text-[9px] uppercase tracking-wider text-cyan-300" }, insight.todayContentLabel || "📅 今天适合发"),
       ...insight.todayContent.map((c: any, i: any) => e("div", { key: i, className: "mb-1 flex items-start gap-1.5 text-[11px]" },
         e("span", { className: "text-cyan-400 mt-0.5" }, "·"),
         e("span", { className: "flex-1 text-slate-200" }, c)

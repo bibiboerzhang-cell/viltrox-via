@@ -582,7 +582,30 @@ export function normalizeCalendar(items = []) {
   return Array.from(buckets.values()).slice(0, 7);
 }
 
-export function normalizeAiInsight(copilotBrief = {}, tasks = {}) {
+export function normalizeAiInsight(copilotBrief = {}, tasks = {}, aiTodayHot: any = {}) {
+  // 2026-06-15:优先用 AI Today LLM「今日热点」(每早8点生成的拍摄方案+话题);无则回落原 copilot-brief。
+  const hot = record(aiTodayHot);
+  const hotContent = record(hot.content);
+  if (hot.available && hotContent.headline) {
+    return {
+      confidence: null,
+      updatedLabel: hotContent.generated_at ? timeLabel(hotContent.generated_at) : "今日",
+      todayDecision: {
+        text: String(hotContent.headline || ""),
+        amount: "--",
+        reason: "Claude 据今日行业热点生成",
+        primaryAction: "查看证据",
+        secondaryAction: "稍后处理",
+      },
+      strengthenLabel: "🎬 拍摄方案",
+      strengthen: list(hotContent.shooting_plans).slice(0, 3).map((p: any) => ({ text: String(p), detail: "" })),
+      weaken: [],
+      todayContentLabel: "🔥 热门话题",
+      todayContent: list(hotContent.hot_topics).slice(0, 3).map((x: any) => String(x)),
+      poweredBy: "Claude · 今日热点(每早 8 点)",
+      raw: hot,
+    };
+  }
   const brief = record(copilotBrief);
   const summary = record(brief.summary);
   const items = list(brief.items);
@@ -821,7 +844,7 @@ export function normalizeV615Dashboard(bundle: any, kolRows: any) {
     },
     calendarDays: normalizeCalendar(bundle.recentContent),
     calendarMeta: { latestDate: latestCalendarDate(bundle.recentContent) },
-    aiInsight: normalizeAiInsight(bundle.copilotBrief, bundle.tasks),
+    aiInsight: normalizeAiInsight(bundle.copilotBrief, bundle.tasks, bundle.aiTodayHot),
     signals: normalizeSignals(bundle.marketCards),
     topMovers: normalizeTopMovers(kolRows, bundle.fitMovers),
     mapHierarchy: normalizeMapHierarchy(bundle.distribution, kolRows),

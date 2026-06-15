@@ -552,6 +552,21 @@ async def job_vkpi_brief_agent():
         logger.exception("scheduler.vkpi_brief_agent_failed")
 
 
+async def job_vkpi_ai_today_hot():
+    """AI Today 今日热点(每早8点中国时区):LLM 据真实行业热点生成拍摄方案+话题。
+    红线:走预算闸(cron:ai_today_hot 硬上限)+ claude 代理;一天一次。config-gate(scheduler_tasks.vkpi_ai_today_hot)。"""
+    if not _scheduler_task_enabled("vkpi_ai_today_hot"):
+        return
+    try:
+        import asyncio
+        from app.domains.market import ai_today
+
+        result = await asyncio.to_thread(ai_today.generate_ai_today_hot)
+        logger.info("scheduler.vkpi_ai_today_hot", extra={"result": result})
+    except Exception:
+        logger.exception("scheduler.vkpi_ai_today_hot_failed")
+
+
 async def start_scheduler() -> None:
     """在 lifespan startup 调用"""
     global _scheduler
@@ -703,6 +718,15 @@ async def start_scheduler() -> None:
         trigger=CronTrigger(hour=3, minute=45),
         id="vkpi_brief_agent",
         name="AI Today brief agent daily refresh (deterministic, no LLM)",
+        max_instances=1,
+        coalesce=True,
+    )
+    # ── AI Today 今日热点(每早8点中国时区·LLM·预算闸)── config-gate(scheduler_tasks.vkpi_ai_today_hot)。
+    _scheduler.add_job(
+        job_vkpi_ai_today_hot,
+        trigger=CronTrigger(hour=8, minute=0, timezone=CHINA_TZ),
+        id="vkpi_ai_today_hot",
+        name="AI Today hot topics (08:00 China, LLM, budget-gated)",
         max_instances=1,
         coalesce=True,
     )
