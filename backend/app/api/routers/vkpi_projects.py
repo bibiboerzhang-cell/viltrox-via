@@ -11,7 +11,7 @@ from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, 
 from app.api.dependencies.perms import require_tab
 from app.core.security import get_current_user
 from app.domains import costs
-from app.domains.access import scope
+from app.domains.access import policy, scope
 from app.domains.analysis.cache_repo import get_analysis_cache_entry, list_project_video_analysis_cache
 from app.domains.projects import contract_assist
 from app.domains.projects import contracts
@@ -82,8 +82,8 @@ def analysis_cache(
     scoped_project_id = scope.resolve_analysis_target_project(target_type, target_id)
     if scoped_project_id is not None:
         try:
-            scope.assert_project_access(scoped_project_id, staff)
-        except scope.ScopeDenied as exc:
+            policy.require_project_read(scoped_project_id, staff)
+        except policy.ScopeDenied as exc:
             raise _scope_403(exc) from exc
     entry = get_analysis_cache_entry(target_type, target_id, derive_method=derive_method or None)
     result = {
@@ -309,8 +309,8 @@ def project_invoice_extract(extract_key: str, staff=Depends(require_tab("vkpi", 
     result_project_id = ((entry.get("result") or {}) if isinstance(entry.get("result"), dict) else {}).get("project_id")
     if result_project_id:
         try:
-            scope.assert_project_access(int(result_project_id), staff)
-        except scope.ScopeDenied as exc:
+            policy.require_project_read(int(result_project_id), staff)
+        except policy.ScopeDenied as exc:
             raise _scope_403(exc) from exc
     return entry
 
@@ -325,8 +325,8 @@ def project_contract_polish(polish_key: str, staff=Depends(require_tab("vkpi", "
     result_project_id = ((entry.get("result") or {}) if isinstance(entry.get("result"), dict) else {}).get("project_id")
     if result_project_id:
         try:
-            scope.assert_project_access(int(result_project_id), staff)
-        except scope.ScopeDenied as exc:
+            policy.require_project_read(int(result_project_id), staff)
+        except policy.ScopeDenied as exc:
             raise _scope_403(exc) from exc
     return entry
 
@@ -384,8 +384,8 @@ def list_project_members(project_id: int, staff=Depends(require_tab("vkpi", "rea
     from app.domains.projects import project_members
 
     try:
-        scope.assert_project_access(int(project_id), staff)
-    except scope.ScopeDenied as exc:
+        policy.require_project_read(int(project_id), staff)
+    except policy.ScopeDenied as exc:
         raise _scope_403(exc) from exc
     return project_members.list_members(int(project_id))
 
@@ -447,8 +447,8 @@ def project_video_analysis_cache(
 ):
     # 批D 权限收口(2026-06-12):原 del staff 绕过项目级 scope,改为读模式断言。
     try:
-        scope.assert_project_access(int(project_id), staff)
-    except scope.ScopeDenied as exc:
+        policy.require_project_read(int(project_id), staff)
+    except policy.ScopeDenied as exc:
         raise _scope_403(exc) from exc
     # 向后兼容:单值返回旧形状;逗号分隔的多值返回 by_method 映射,供前端一次取回拆多份(批5)。
     methods = [m.strip() for m in str(derive_method or "").split(",") if m.strip()] or ["video_analysis_final_v1"]
@@ -476,8 +476,8 @@ def generate_project_retrospective(project_id: int, staff=Depends(require_tab("v
 def project_retrospective(project_id: int, staff=Depends(require_tab("vkpi", "read"))):
     # 批D 权限收口(2026-06-12):原 del staff 绕过项目级 scope,改为读模式断言。
     try:
-        scope.assert_project_access(int(project_id), staff)
-    except scope.ScopeDenied as exc:
+        policy.require_project_read(int(project_id), staff)
+    except policy.ScopeDenied as exc:
         raise _scope_403(exc) from exc
     # R1:cache 只存 ready/stale,但失败必须读端可见 —— 回传最新 job 的终态 + last_error,
     # 否则复刻"主流程绿、富化静默失败"旧病。

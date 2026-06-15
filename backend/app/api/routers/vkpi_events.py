@@ -11,7 +11,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
-from app.domains.access import scope
+from app.domains.access import policy, scope
 from app.domains.events import event_members, service
 
 
@@ -34,20 +34,26 @@ def _scope_403(exc: Exception) -> HTTPException:
 
 
 def _assert_write(event_id: str, staff) -> None:
-    """写收口:owner / team 成员 / editor 共享成员 / admin 才可改本活动,否则 403。"""
+    """写收口:owner / team 成员 / editor 共享成员 / admin 才可改本活动,否则 403。
+
+    T2(2026-06-14):统一走 policy.require_event_write(内部仍是 scope.assert_event_access
+    write=True,零策略变更),与项目侧 policy.require_project_* 口径一致。"""
     try:
-        scope.assert_event_access(str(event_id), staff, write=True)
-    except scope.ScopeDenied as exc:
+        policy.require_event_write(str(event_id), staff)
+    except policy.ScopeDenied as exc:
         raise _scope_403(exc) from exc
 
 
 def _assert_read(event_id: str, staff) -> None:
     """读收口(P0):直连 GET /{event_id} 此前裸奔,任意 vkpi:read 员工可拉任意活动
     的预算/团队/费用/邀约。这里按活动级 scope 把关 —— owner / team / 共享成员 /
-    is_public 读 / admin 才能读,否则 403。镜像 share-members 读端 + 项目详情口径。"""
+    is_public 读 / admin 才能读,否则 403。镜像 share-members 读端 + 项目详情口径。
+
+    T2(2026-06-14):统一走 policy.require_event_read(内部仍是 scope.assert_event_access
+    read,零策略变更)。"""
     try:
-        scope.assert_event_access(str(event_id), staff)
-    except scope.ScopeDenied as exc:
+        policy.require_event_read(str(event_id), staff)
+    except policy.ScopeDenied as exc:
         raise _scope_403(exc) from exc
 
 
@@ -63,8 +69,8 @@ def list_event_share_members(event_id: str, staff=Depends(require_tab("vkpi", "r
     """真·活动共享成员列表。读端按活动级 scope 把关:能看见该活动者
     (owner / team / 共享成员 / admin)才能列其成员名单。"""
     try:
-        scope.assert_event_access(str(event_id), staff)
-    except scope.ScopeDenied as exc:
+        policy.require_event_read(str(event_id), staff)
+    except policy.ScopeDenied as exc:
         raise _scope_403(exc) from exc
     return _guard(event_members.list_members, str(event_id))
 

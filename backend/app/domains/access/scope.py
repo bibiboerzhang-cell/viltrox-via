@@ -202,16 +202,19 @@ def assert_project_access(project_id: int, staff: dict[str, Any] | None, *, writ
         raise ScopeDenied("project scope denied")
     # 公司公共项目接线(2026-06-14,ADDITIVE,迁移 133 is_public):
     #   public(is_public=TRUE)且非 restricted 的项目 → 任何 actor 可「读」(read 放行)。
-    #   写仍严格 gate:public 不放开写,只有 own/editor-member/admin 能写(下面 restricted
-    #   尾部不放行非成员的写,且这里仅在 not write 时放行)。restricted 项目永不因 public 而
-    #   可见(与 own/member 子句对齐,先遮后开铁则不破)。
+    #   写仍严格 gate:public 不放开写,只有 own/editor-member/admin 能写(下面尾部不放行
+    #   非成员的写,且这里仅在 not write 时放行)。restricted 项目永不因 public 而可见
+    #   (与 own/member 子句对齐,先遮后开铁则不破)。
     if not write and bool(item.get("is_public")) and not bool(item.get("restricted")):
         return
-    # PV-3 对齐(2026-06-12 添加KOL弹窗 403 案 → 全盘扫描 P0 写侧跟进):
-    # 非 restricted 项目对员工读写均放行——存量项目 75% 双归属 NULL,只开读会让
-    # 推进/合同/截图/留档全部 403,与旅程"员工往项目塞人"相悖(候追认)。
-    # restricted 项目仍只认 assigned/creator/全可见角色(先遮后开铁则不破)。
-    if not bool(item.get("restricted")):
+    # T2 写侧收紧(2026-06-14,推翻 PV-3 写放行):非 restricted 项目此前「读写均放行」
+    # ——任何持 vkpi:write 的员工都能改任意非受限项目,等于公共写。现只保留「读放行」:
+    #   - read(not write):非 restricted 项目对员工放行(存量 75% 双归属 NULL,只开读
+    #     不会让看板/详情全盘 403;且 list 侧 project_filter 已 own-only,这里是详情读兜底)。
+    #   - write:非 owner/creator/editor-member/admin 一律拒(上方 own/member/can_view_all
+    #     已先行放行,走到这里的写一定是无授权路径)。restricted 项目读写均只认
+    #     assigned/creator/全可见角色(先遮后开铁则不破)。
+    if not write and not bool(item.get("restricted")):
         return
     raise ScopeDenied("project scope denied")
 
