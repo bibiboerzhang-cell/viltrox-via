@@ -55,7 +55,7 @@ export function TopMoversCard({ movers, onMoverClick, onViewAll }: any) {
       ))
     ),
     e("div", { className: "mt-3 border-t border-white/[0.06] pt-2 flex items-center justify-between" },
-      e("div", { className: "text-[9px] text-slate-500" }, "按当前真实字段排序 · fit history 待接入"),
+      e("div", { className: "text-[9px] text-slate-500" }, "按 Fit 分排序 · 真实 KOL Pool(fit 变动时显 ±Δ)"),
       e("button", { onClick: onViewAll, className: "text-[10px] text-slate-300 hover:text-white" }, "View All →")
     )
   );

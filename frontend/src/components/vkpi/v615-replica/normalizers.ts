@@ -638,6 +638,7 @@ export function normalizeTopMovers(kolRows = [], fitMovers: any = null) {
   // 不足两天(warming_up)时 available=false,回落到下方 scored-only 视图(诚实,不编造)。
   const fm = record(fitMovers);
   if (fm.available && Array.isArray(fm.movers) && fm.movers.length) {
+    const mode = String(fm.mode || "movers");
     return fm.movers.slice(0, 5).map((m: any, index: number) => {
       const mr = record(m);
       const delta = number(mr.delta) ?? 0;
@@ -648,8 +649,11 @@ export function normalizeTopMovers(kolRows = [], fitMovers: any = null) {
         badgeColor: COLORS[index % COLORS.length],
         type: "pool",
         note: mr.platform || "真实 KOL Pool",
-        deltaFollower: `${delta >= 0 ? "+" : ""}${Number(delta).toFixed(1)}`,
-        deltaReach: mr.fit_now != null ? `Fit ${mr.fit_now}` : "无粉丝信号",
+        // mode=movers:显 ±Δfit(真变动);mode=top_fit:fit 静态无变动,显当前 Fit 分。
+        deltaFollower: mode === "top_fit" ? `Fit ${mr.fit_now}` : `${delta >= 0 ? "+" : ""}${Number(delta).toFixed(1)}`,
+        deltaReach: mode === "top_fit"
+          ? (mr.followers ? compact(mr.followers) : (mr.platform || "真实 KOL Pool"))
+          : (mr.fit_now != null ? `Fit ${mr.fit_now}` : "无粉丝信号"),
         raw: mr,
       };
     });

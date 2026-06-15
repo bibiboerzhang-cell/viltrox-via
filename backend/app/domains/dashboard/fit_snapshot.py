@@ -43,21 +43,53 @@ def capture_daily_snapshot() -> dict[str, Any]:
     return {"status": "ok", "rows": rows, "distinct_days": distinct_days}
 
 
+def _top_by_fit(conn: Any, lim: int) -> list[dict[str, Any]]:
+    """回落视图:当前 fit 最高的 N 个 KOL(真数据,无需历史)。delta=0,前端按 mode=top_fit 显示「Fit X」。"""
+    rows = conn.execute(
+        """
+        SELECT kol_pool_id, handle, display_name, platform, fit_score AS fit_now, followers
+        FROM vkpi_kol_fit_snapshot
+        WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM vkpi_kol_fit_snapshot)
+          AND fit_score IS NOT NULL
+        ORDER BY fit_score DESC
+        LIMIT %s
+        """,
+        (lim,),
+    ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        out.append(
+            {
+                "kol_pool_id": int(d.get("kol_pool_id") or 0),
+                "handle": str(d.get("handle") or d.get("display_name") or ""),
+                "name": str(d.get("display_name") or d.get("handle") or ""),
+                "platform": str(d.get("platform") or ""),
+                "fit_now": round(float(d.get("fit_now") or 0), 2),
+                "fit_prev": round(float(d.get("fit_now") or 0), 2),
+                "delta": 0.0,
+                "followers": int(d.get("followers") or 0),
+            }
+        )
+    return out
+
+
 def compute_top_movers(limit: int = 8) -> dict[str, Any]:
-    """最近两份快照 diff → 按 |Δfit| 排序的 Top Movers。不足两份则诚实返回空。"""
+    """有 ≥2 天历史且 fit 有变化 → 真 movers(mode=movers);否则回落到当前 fit 最高(mode=top_fit)。
+    两种都是真数据,绝不编造。fit_score 来自 rule_v0 多为静态,故 movers 罕见,top_fit 是常态展示。"""
     conn = get_conn()
     days = conn.execute(
         "SELECT COUNT(DISTINCT snapshot_date) AS d FROM vkpi_kol_fit_snapshot"
     ).fetchone()
     distinct_days = int(dict(days)["d"]) if days else 0
+    lim = max(1, min(int(limit or 8), 50))
     if distinct_days < 2:
         return {
-            "available": False,
-            "reason": "fit_history_warming_up",
+            "available": True,
+            "mode": "top_fit",
             "distinct_days": distinct_days,
-            "movers": [],
+            "movers": _top_by_fit(conn, lim),
         }
-    lim = max(1, min(int(limit or 8), 50))
     rows = conn.execute(
         """
         WITH d AS (
@@ -97,4 +129,7 @@ def compute_top_movers(limit: int = 8) -> dict[str, Any]:
                 "followers": int(d.get("followers") or 0),
             }
         )
-    return {"available": True, "distinct_days": distinct_days, "movers": movers}
+    if movers:
+        return {"available": True, "mode": "movers", "distinct_days": distinct_days, "movers": movers}
+    # 有 ≥2 天历史但 fit 无变化(rule_v0 静态)→ 回落到当前 fit 最高,避免空卡。
+    return {"available": True, "mode": "top_fit", "distinct_days": distinct_days, "movers": _top_by_fit(conn, lim)}
