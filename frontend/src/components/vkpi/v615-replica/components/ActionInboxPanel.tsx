@@ -60,6 +60,9 @@ export function ActionInboxPanel({ apiToken = "", limit = 6 }) {
   // per-id 操作态:'approve' | 'dismiss' | 'snooze' | undefined。
   const [busy, setBusy] = React.useState<Record<string, any>>({});
   const [actionError, setActionError] = React.useState("");
+  // 默认只显 3 条(避免顶掉下方 KOL 漏斗 / Active Campaigns);可展开看全部(抓取仍 limit 条)。
+  const [expanded, setExpanded] = React.useState(false);
+  const COLLAPSED_COUNT = 3;
 
   const load = React.useCallback(() => {
     if (!apiToken) {
@@ -174,7 +177,7 @@ export function ActionInboxPanel({ apiToken = "", limit = 6 }) {
     body = e(
       "div",
       { className: "flex-1 space-y-1.5 overflow-hidden" },
-      items.slice(0, limit).map((it: any) => {
+      items.slice(0, expanded ? items.length : COLLAPSED_COUNT).map((it: any) => {
         const meta = (CATEGORY_META as any)[it.category] || { label: it.category, Icon: ListChecks, color: "text-slate-300" };
         const pr = (PRIORITY_META as any)[it.priority] || PRIORITY_META.low;
         return e(
@@ -262,6 +265,18 @@ export function ActionInboxPanel({ apiToken = "", limit = 6 }) {
             : null,
         );
       }),
+      items.length > COLLAPSED_COUNT
+        ? e(
+            "button",
+            {
+              type: "button",
+              onClick: () => setExpanded((v: boolean) => !v),
+              className:
+                "mt-1 w-full rounded-md border border-white/[0.06] py-1 text-[10px] text-slate-400 transition hover:bg-white/[0.04] hover:text-slate-200",
+            },
+            expanded ? "收起" : `查看全部 ${items.length} →`,
+          )
+        : null,
     );
   }
 
