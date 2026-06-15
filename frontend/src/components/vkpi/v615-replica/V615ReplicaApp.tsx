@@ -9,6 +9,8 @@ import "./styles/mockup.css";
 import "../styles/vkpi-settings-dark.css";
 import { KOLPoolPage } from "./KOLPoolPage";
 import { ShopifyConnectPage } from "./ShopifyConnectPage";
+import { ShopifyHubPage } from "../pages/ShopifyHubPage";
+import { DealerMapPage } from "../pages/DealerMapPage";
 import { DashboardReplicaPage } from "./DashboardReplicaPage";
 import { AIIntelligenceCard } from "./components/AIIntelligenceCard";
 import { ActiveCampaignsCard } from "./components/ActiveCampaignsCard";
@@ -1247,10 +1249,11 @@ export function V615ReplicaApp(props: any = {}) {
               )
             ),
 
-            activeNav === "shopify" && e(ShopifyConnectPage, { apiToken }),
+            activeNav === "shopify" && e(ShopifyHubPage, { apiToken }),
+            activeNav === "dealers" && e(DealerMapPage, { apiToken }),
 
             // Placeholder for nav items not yet built
-            activeNav !== "dashboard" && activeNav !== "kol-pool" && activeNav !== "my-kol" && activeNav !== "projects" && activeNav !== "events" && activeNav !== "shopify" && e("div", { className: "p-8 md:p-16 flex flex-col items-center justify-center text-center min-h-[60vh]" },
+            activeNav !== "dashboard" && activeNav !== "kol-pool" && activeNav !== "my-kol" && activeNav !== "projects" && activeNav !== "events" && activeNav !== "shopify" && activeNav !== "dealers" && e("div", { className: "p-8 md:p-16 flex flex-col items-center justify-center text-center min-h-[60vh]" },
               e("div", { className: "rounded-2xl border border-white/[0.06] bg-white/[0.015] p-8 max-w-md w-full" },
                 (() => {
                   const navItem = NAV_ITEMS.find(n => n.key === activeNav);

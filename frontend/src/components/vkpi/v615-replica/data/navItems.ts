@@ -1,6 +1,6 @@
 // Verbatim from vkpi_v6.15.7_integrated.html
 
-import { BarChart3, Bot, Boxes, Briefcase, Calendar, Database, Heart, LayoutDashboard, LineChart, PackageCheck, RadioTower, Sparkles, Target, Users } from "lucide-react";
+import { BarChart3, Bot, Boxes, Briefcase, Calendar, Database, Heart, LayoutDashboard, LineChart, MapPin, PackageCheck, RadioTower, Sparkles, Target, Users } from "lucide-react";
 
 // B1 减法仪式:GEN2/Beta 徽章全挂在『此页面尚未接入』占位页上=假徽章,删。
 // 真数据徽章(Discover/Signals/Agents 计数)是想要项,等数据侧支撑后挂回(总册 D6)。
@@ -19,4 +19,5 @@ export const NAV_ITEMS = [
   { key: "agents",       icon: Bot,             label: "Agents",          badge: null },
   { key: "p15",          icon: Boxes,           label: "P15 Warehouse",   badge: null },
   { key: "shopify",      icon: PackageCheck,    label: "Shopify",         badge: null },
+  { key: "dealers",      icon: MapPin,          label: "Dealers",         badge: null },
 ];

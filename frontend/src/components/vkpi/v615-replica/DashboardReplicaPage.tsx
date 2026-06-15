@@ -255,7 +255,7 @@ export function DashboardReplicaPage(props: any) {
                       e("span", { className: "rounded border border-emerald-500/20 bg-emerald-500/[0.06] px-1 py-px text-emerald-400/80" }, "实时"),
                       e("span", null, "KOL Pool 分布")
                     ),
-                    topListData.items.slice(0, 7).map((row, i) => e(motion.div, {
+                    topListData.items.slice(0, 7).map((row: any, i: any) => e(motion.div, {
                       key: row.label,
                       initial: { opacity: 0, x: -8 }, animate: { opacity: 1, x: 0 },
                       transition: { delay: 0.3 + i * 0.04 },
@@ -300,8 +300,8 @@ export function DashboardReplicaPage(props: any) {
                   },
                     e("div", {
                       className: "relative mx-auto mb-3 h-24 w-24 rounded-full",
-                      style: { background: `conic-gradient(${revenueBySource.map((s, i, arr) => {
-                        const start = arr.slice(0, i).reduce((a, x) => a + x.pct, 0);
+                      style: { background: `conic-gradient(${revenueBySource.map((s: any, i: any, arr: any) => {
+                        const start = arr.slice(0, i).reduce((a: any, x: any) => a + x.pct, 0);
                         return `${s.color} ${start}% ${start + s.pct}%`;
                       }).join(", ")})` }
                     },
@@ -310,7 +310,7 @@ export function DashboardReplicaPage(props: any) {
                         e("span", { className: "text-[9px] text-slate-500" }, "Total")
                       )
                     ),
-                    revenueBySource.map((s) => e("div", { key: s.label, className: "mb-1.5 flex items-center justify-between text-[11px] last:mb-0" },
+                    revenueBySource.map((s: any) => e("div", { key: s.label, className: "mb-1.5 flex items-center justify-between text-[11px] last:mb-0" },
                       e("span", { className: "flex items-center text-slate-300" },
                         e("i", { className: "mr-2 inline-block h-1.5 w-1.5 rounded-full", style: { background: s.color } }),
                         s.label
@@ -350,7 +350,7 @@ export function DashboardReplicaPage(props: any) {
                       )
                     : e(SignalsAlertsCard, {
                         alerts: signals,
-                        onAlertClick: (a) => setSelectedSignal(a),
+                        onAlertClick: (a: any) => setSelectedSignal(a),
                         onViewAll: () => setShowAllSignals(true)
                       })
                 ),
@@ -368,7 +368,7 @@ export function DashboardReplicaPage(props: any) {
                 e("div", { className: "h-full" },
                   e(TopMoversCard, { 
                     movers: topMovers,
-                    onMoverClick: (m) => setSelectedMover(m),
+                    onMoverClick: (m: any) => setSelectedMover(m),
                     onViewAll: () => setShowAllMovers(true)
                   })
                 )
@@ -388,14 +388,14 @@ export function DashboardReplicaPage(props: any) {
               e(ActiveCampaignsCard, {
                 campaigns,
                 campaignsMeta,
-                onCampaignClick: (c) => setSelectedProject(c),
+                onCampaignClick: (c: any) => setSelectedProject(c),
                 onViewAll: () => onOpenProjectsList ? onOpenProjectsList() : setShowAllProjects(true)
               }),
               // 2. 7 天推广日历
               e(ContentCalendarCard, {
                 days: calendarDays,
                 latestDate: calendarMeta?.latestDate,
-                onItemClick: (item) => setSelectedPublish(item),
+                onItemClick: (item: any) => setSelectedPublish(item),
                 onViewAll: () => setShowFullCalendar(true)
               })
             )
