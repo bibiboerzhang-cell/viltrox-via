@@ -67,7 +67,13 @@ export function KOLTable({ items, onRowClick, selectedItemId, myList }) {
               e("td", { style: { position: "relative" } },
                 e(RefreshStateStripe, { state: item.refresh_state }),
                 e("div", { className: "flex items-center gap-2.5 min-w-0", style: { paddingLeft: 4 } },
-                  e(KPAvatar, { name: item.display_name || item.handle, color: item.avatar_color, size: 28 }),
+                  e(KPAvatar, {
+                  name: item.display_name || item.handle,
+                  color: item.avatar_color,
+                  size: 28,
+                  title: "查看 " + (item.handle || item.display_name || "KOL") + " 详情",
+                  onAvatarClick: () => onRowClick(item)
+                }),
                   e("div", { className: "min-w-0" },
                     e("div", { className: "flex items-center gap-1.5" },
                       e("span", { className: "text-[12px] text-white font-medium truncate max-w-[160px]" }, item.handle),
