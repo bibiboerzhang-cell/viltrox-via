@@ -374,9 +374,9 @@ export function DashboardReplicaPage(props: any) {
 
             // ─── RIGHT RAIL (今日建议 + KOL 漏斗 + Active Campaigns + 7 天日历) ───
             e("div", { className: "space-y-4" },
-              // W1 Auto-Ops 今日建议(只读 dry-run;后端按 scope 过滤)
-              e(ActionInboxPanel, { apiToken }),
-              // 0. KOL 漏斗(2026-06-12 C10/波3 R1:收藏→认领→入项目→已发布)
+              // 2026-06-15 用户要求:KOL 漏斗 / Active Campaigns / 近7天 三块上移到右栏顶部,
+              // 今日建议(Action Inbox)挪到最后(且已去掉 h-full、默认 3 条),不再把它们顶下去。
+              // 0. KOL 漏斗(收藏→认领→入项目→已发布)
               e(KolFunnelCard, {
                 funnel: kolFunnel,
                 onOpenMyKol,
@@ -394,7 +394,9 @@ export function DashboardReplicaPage(props: any) {
                 latestDate: calendarMeta?.latestDate,
                 onItemClick: (item: any) => setSelectedPublish(item),
                 onViewAll: () => setShowFullCalendar(true)
-              })
+              }),
+              // 3. W1 Auto-Ops 今日建议(只读 dry-run;后端按 scope 过滤)—— 放最后,紧凑
+              e(ActionInboxPanel, { apiToken })
             )
           )
         );

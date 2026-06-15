@@ -289,7 +289,7 @@ export function ActionInboxPanel({ apiToken = "", limit = 6 }) {
       animate: { opacity: 1, y: 0 },
       transition: { delay: 0.2 },
       className:
-        "h-full rounded-xl border border-white/[0.08] bg-white/[0.025] p-4 backdrop-blur-xl flex flex-col",
+        "rounded-xl border border-white/[0.08] bg-white/[0.025] p-4 backdrop-blur-xl flex flex-col",
     },
     // header
     e(
