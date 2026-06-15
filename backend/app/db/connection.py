@@ -177,6 +177,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "138_vkpi_shopify_orders.sql",
     "139_vkpi_isolation_perf_indexes.sql",
     "140_vkpi_worker_heartbeat.sql",
+    "141_vkpi_action_inbox.sql",
 )
 
 try:

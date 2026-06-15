@@ -1,0 +1,207 @@
+"""W1 Action Inbox 编排 — 生成(dry-run)+ 幂等落库 + run 级 ledger + scope 读取。
+
+generate_daily_action_inbox():跑 8 个 producer(各自容错)→ 幂等 UPSERT 进 vkpi_action_inbox →
+写一条 run 级 dry_run ledger(审计起点)→ commit。**绝不执行、绝不写业务表、绝不碰 viltrox_fit_score。**
+list_inbox():按 scope 读(管理层看全局,成员只看自己 owner 的;owner=NULL 的公司级动作成员不可见)。
+"""
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from app.core.logging import get_logger
+from app.db.connection import get_conn, table_exists
+from app.domains.access import scope
+from app.domains.actions.producers import PRODUCERS
+
+logger = get_logger(__name__)
+
+_TABLE = "vkpi_action_inbox"
+_LEDGER = "vkpi_action_execution_ledger"
+
+
+def _dumps(value: Any) -> str:
+    return json.dumps(value if value is not None else {}, default=str, ensure_ascii=False)
+
+
+def _loads(value: Any) -> Any:
+    if value in (None, ""):
+        return {}
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        return json.loads(value)
+    except Exception:
+        return {}
+
+
+# ── 生成(dry-run only) ───────────────────────────────────────────────
+def generate_daily_action_inbox(
+    staff: dict[str, Any] | None = None,
+    *,
+    dry_run: bool = True,
+    persist: bool = True,
+    limit_per_category: int = 25,
+) -> dict[str, Any]:
+    """聚合 8 类建议。W1 恒为 dry-run:只产建议、不执行、不写任何业务表。
+
+    persist=True 时把建议幂等写入 vkpi_action_inbox(自身台账,非业务表);已被人工
+    dismissed/snoozed/approved 的行不会被复活(UPSERT 仅刷新仍是 'suggested' 的)。
+    """
+    if not table_exists(_TABLE):
+        return {"ok": False, "reason": "migration_141_not_applied", "dry_run": True}
+
+    conn = get_conn()
+    by_category: dict[str, int] = {}
+    truncated: list[str] = []
+    suggestions: list[dict[str, Any]] = []
+
+    for category, producer in PRODUCERS.items():
+        try:
+            rows = producer(conn, limit=limit_per_category) or []
+        except Exception:
+            # 容错隔离:单类查询坏(列漂移等)→ 该类记 0,不拖垮其余 7 类。
+            logger.warning("action_inbox.producer_failed", extra={"category": category}, exc_info=True)
+            by_category[category] = 0
+            continue
+        by_category[category] = len(rows)
+        if len(rows) >= limit_per_category:
+            truncated.append(category)  # 无声截断 → 显式记录(诚实)
+        suggestions.extend(rows)
+
+    persisted = 0
+    if persist and suggestions:
+        for s in suggestions:
+            try:
+                conn.execute(
+                    f"""
+                    INSERT INTO {_TABLE}
+                      (dedupe_key, category, title, detail, priority, entity_type, entity_id,
+                       suggested_endpoint, estimated_cost_cents, writes_business_data, uses_llm,
+                       requires_approval, owner_staff_id, reason, payload_json, status, created_at, updated_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::jsonb,'suggested',NOW(),NOW())
+                    ON CONFLICT (dedupe_key) DO UPDATE SET
+                       title = EXCLUDED.title,
+                       detail = EXCLUDED.detail,
+                       priority = EXCLUDED.priority,
+                       suggested_endpoint = EXCLUDED.suggested_endpoint,
+                       estimated_cost_cents = EXCLUDED.estimated_cost_cents,
+                       writes_business_data = EXCLUDED.writes_business_data,
+                       uses_llm = EXCLUDED.uses_llm,
+                       requires_approval = EXCLUDED.requires_approval,
+                       owner_staff_id = EXCLUDED.owner_staff_id,
+                       reason = EXCLUDED.reason,
+                       payload_json = EXCLUDED.payload_json,
+                       updated_at = NOW()
+                    WHERE {_TABLE}.status = 'suggested'
+                    """,
+                    (
+                        s["dedupe_key"],
+                        s["category"],
+                        s["title"],
+                        s["detail"],
+                        s["priority"],
+                        s["entity_type"],
+                        s["entity_id"],
+                        s["suggested_endpoint"],
+                        s["estimated_cost_cents"],
+                        s["writes_business_data"],
+                        s["uses_llm"],
+                        s["requires_approval"],
+                        s["owner_staff_id"],
+                        s["reason"],
+                        _dumps(s["payload"]),
+                    ),
+                )
+                persisted += 1
+            except Exception:
+                logger.warning("action_inbox.persist_failed", extra={"dedupe_key": s.get("dedupe_key")}, exc_info=True)
+
+    total = sum(by_category.values())
+    # run 级审计:每次生成落一条 dry_run ledger(W1 起点;W2 执行器再每动作落行)。
+    if persist and table_exists(_LEDGER):
+        try:
+            conn.execute(
+                f"""
+                INSERT INTO {_LEDGER}
+                  (action_id, category, dedupe_key, actor_staff_id, mode, outcome, endpoint, cost_cents, error, detail_json, created_at)
+                VALUES (NULL, 'run', '', ?, 'dry_run', 'success', '', 0, '', ?::jsonb, NOW())
+                """,
+                (
+                    int(scope.actor_staff_id(staff)) or None,
+                    _dumps({"total": total, "persisted": persisted, "by_category": by_category, "truncated": truncated}),
+                ),
+            )
+        except Exception:
+            logger.warning("action_inbox.ledger_failed", exc_info=True)
+
+    if persist:
+        conn.commit()
+
+    return {
+        "ok": True,
+        "dry_run": True,  # W1 恒 dry-run
+        "persisted": persisted if persist else 0,
+        "generated": total,
+        "by_category": by_category,
+        "truncated_categories": truncated,
+    }
+
+
+# ── 读取(scope-gated) ────────────────────────────────────────────────
+def list_inbox(
+    staff: dict[str, Any] | None = None,
+    *,
+    status: str = "suggested",
+    category: str | None = None,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """读建议。管理层看全局;成员只看 owner_staff_id=自己 的(owner=NULL 的公司级动作成员不可见)。"""
+    if not table_exists(_TABLE):
+        return {"items": [], "available": False, "reason": "migration_141_not_applied"}
+
+    conn = get_conn()
+    safe_limit = max(1, min(int(limit or 50), 200))
+    where = ["status = ?"]
+    params: list[Any] = [status]
+
+    if not scope.can_view_all(staff):
+        # 红线4:成员看不到全局 action;只放行归属自己的。
+        where.append("owner_staff_id = ?")
+        params.append(int(scope.actor_staff_id(staff)))
+
+    if category:
+        where.append("category = ?")
+        params.append(category)
+
+    params.append(safe_limit)
+    rows = conn.execute(
+        f"""
+        SELECT id, dedupe_key, category, title, detail, priority, entity_type, entity_id,
+               suggested_endpoint, estimated_cost_cents, writes_business_data, uses_llm,
+               requires_approval, owner_staff_id, reason, payload_json, status, created_at, updated_at
+        FROM {_TABLE}
+        WHERE {' AND '.join(where)}
+        ORDER BY
+          CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
+          updated_at DESC
+        LIMIT ?
+        """,
+        tuple(params),
+    ).fetchall()
+
+    items = []
+    counts: dict[str, int] = {}
+    for r in rows:
+        row = dict(r)
+        row["payload_json"] = _loads(row.get("payload_json"))
+        counts[row["category"]] = counts.get(row["category"], 0) + 1
+        items.append(row)
+
+    return {
+        "items": items,
+        "available": True,
+        "count": len(items),
+        "by_category": counts,
+        "scope": "all" if scope.can_view_all(staff) else "own",
+    }

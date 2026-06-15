@@ -307,6 +307,30 @@ async def job_fulfillment_delivered_scan():
         logger.exception("scheduler.fulfillment_delivered_scan_failed")
 
 
+async def job_daily_action_inbox_generate():
+    """W1 Action Inbox:每天聚合 8 类待办建议(dry-run only,只产不执行不写业务表)。
+
+    config-gate:scheduler_tasks.daily_action_inbox_generate(默认 FALSE)。灰度阶梯属 low 档。
+    红线:绝不写 viltrox_fit_score(表 CHECK 兜底)、绝不触发 LLM/业务写;execute 走 W2 人审。
+    """
+    if not _scheduler_task_enabled("daily_action_inbox_generate"):
+        return
+    try:
+        import asyncio
+        from app.domains.actions import inbox
+
+        result = await asyncio.to_thread(
+            inbox.generate_daily_action_inbox,
+            _scheduler_system_staff(),
+        )
+        logger.info(
+            "scheduler.daily_action_inbox_generate",
+            extra={"generated": result.get("generated"), "by_category": result.get("by_category")},
+        )
+    except Exception:
+        logger.exception("scheduler.daily_action_inbox_generate_failed")
+
+
 async def job_fulfillment_content_scan():
     """履约:对到期/活动观察窗口扫真证据 → 物化内容候选(scan_windows_for_content)。
 
@@ -579,6 +603,17 @@ async def start_scheduler() -> None:
         trigger=CronTrigger(hour=2, minute=30),
         id="fulfillment_retrospective_enqueue",
         name="Fulfillment: enqueue retrospective for measured/closed projects (no LLM)",
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # ── Auto-Ops Action Inbox(W1)── 体内由 scheduler_tasks.daily_action_inbox_generate config-gate(默认关,low 档)。
+    # dry-run only:只产建议、不执行、不写业务表。注册表种子未开则空跑即返回。
+    _scheduler.add_job(
+        job_daily_action_inbox_generate,
+        trigger=CronTrigger(hour=7, minute=30, timezone=CHINA_TZ),
+        id="daily_action_inbox_generate",
+        name="Auto-Ops: generate daily action inbox (dry-run, 8 producers)",
         max_instances=1,
         coalesce=True,
     )
