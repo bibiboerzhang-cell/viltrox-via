@@ -95,13 +95,9 @@ export default defineConfig(({ command }) => {
               if (id.includes("d3-geo") || id.includes("topojson-client") || id.includes("d3-array")) return "vendor-geo";
               return "vendor";
             }
-            // NOTE: most vkpi route pages are already React.lazy()-split (see WorkspacePage.tsx),
-            // so they get their own async chunks automatically. We only name a few stable groups
-            // here to keep historical chunk boundaries; do NOT add page-dir rules that would force
-            // lazy route modules to merge back into eager shared chunks.
-            if (id.includes("/src/components/vkpi/pages/myKol/")) return "vkpi-my-kol";
-            if (id.includes("/src/components/vkpi/pages/projects/")) return "vkpi-projects";
-            if (id.includes("/src/components/vkpi/v615-replica/")) return "vkpi-v615";
+            // 红线(R3 修):绝不给 src 页面目录加 manualChunks 规则 —— 这些是 React.lazy() 异步路由模块,
+            // 强行塞进具名 chunk 会打乱 lazy chunk 加载图 → 运行时 RouteErrorBoundary「页面加载失败」
+            // (build 静态不报、tsc/vitest 抓不到)。只对 node_modules 分包,源码页面交给 lazy 自动分。
           },
         },
       },
