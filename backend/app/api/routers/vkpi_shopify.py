@@ -5,6 +5,9 @@
 - POST /api/admin/vkpi/shopify/orders:ingest 单条或一批订单(幂等 by shop_domain+order_id)。
 - GET  /api/admin/vkpi/shopify/gmv:按窗口 / 折扣码聚合真 GMV。
 
+例外:live-creds 管理(POST /creds + POST /webhooks/register)走 require_tab("vkpi","admin"),
+与 api_key_pool 同档的职责分离 —— 公司级 access_token / webhook_secret 仅 admin/owner 可改。
+
 在拿到 live Shopify creds 之前,表 vkpi_shopify_orders 保持空 → GMV 求和为 0 →
 Dashboard 继续诚实显示「待接入」。scaffold 是 real-data-ready 的,绝不编数。
 """
@@ -73,9 +76,13 @@ def get_gmv(
 @router.post("/creds")
 def save_shopify_creds(
     body=Body(default_factory=dict),
-    staff=Depends(require_tab("vkpi", "write")),
+    staff=Depends(require_tab("vkpi", "admin")),
 ):
-    """Persist Shopify creds (encrypted). Returns masked-only; never echoes plaintext token."""
+    """Persist Shopify creds (encrypted). Returns masked-only; never echoes plaintext token.
+
+    admin-gated (not write): mirrors api_key_pool separation-of-duties — only
+    admin/owner may manage company-wide live credentials (access_token + webhook_secret).
+    """
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="body must be an object")
     return _guard(shopify_connect.save_credentials, body, staff)
@@ -91,9 +98,13 @@ def get_shopify_creds(
 
 @router.post("/webhooks/register")
 def register_shopify_webhooks(
-    staff=Depends(require_tab("vkpi", "write")),
+    staff=Depends(require_tab("vkpi", "admin")),
 ):
-    """Register ORDERS_CREATE/UPDATED + REFUNDS_CREATE webhooks. no creds -> ok:false, no throw."""
+    """Register ORDERS_CREATE/UPDATED + REFUNDS_CREATE webhooks. no creds -> ok:false, no throw.
+
+    admin-gated (not write): consumes the live creds saved above, so it sits at
+    the same separation-of-duties bar as /creds.
+    """
     return _guard(shopify_connect.register_webhooks)
 
 
