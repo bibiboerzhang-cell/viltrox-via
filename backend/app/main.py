@@ -137,19 +137,26 @@ def _trust_db_migration_max() -> str | None:
 
 
 def _trust_worker() -> dict[str, object | None]:
-    """Worker liveness from MAX(updated_at) on apify_jobs. Online = within 10 min."""
+    """Worker 真存活:优先读 vkpi_worker_heartbeat(worker 每轮 poll 都写,空闲也写),
+    在线 = 心跳在 2 分钟内;表空/缺失才回退 MAX(updated_at) on apify_jobs(任务活动启发式)。
+    W0/T5:此前只用 apify_jobs 活动 → 空闲 worker 误判离线;现与 system_health._worker_online 同源。"""
     result: dict[str, object | None] = {"worker_heartbeat": None, "worker_online": None}
     try:
         from app.db.connection import get_conn, table_exists
 
-        if not table_exists("apify_jobs"):
-            return result
         conn = get_conn()
-        row = conn.execute("SELECT MAX(updated_at) AS latest FROM apify_jobs").fetchone()
-        latest_raw = row["latest"] if row is not None else None
-        if latest_raw in (None, ""):
+        latest_dt = None
+        window_sec = _WORKER_ONLINE_WINDOW_MIN * 60
+        if table_exists("vkpi_worker_heartbeat"):
+            row = conn.execute("SELECT MAX(last_heartbeat_at) AS latest FROM vkpi_worker_heartbeat").fetchone()
+            latest_dt = row["latest"] if row is not None else None
+            if latest_dt not in (None, ""):
+                window_sec = 120  # 真心跳每 2s 一次,2 分钟窗足够判活
+        if latest_dt in (None, "") and table_exists("apify_jobs"):
+            row = conn.execute("SELECT MAX(updated_at) AS latest FROM apify_jobs").fetchone()
+            latest_dt = row["latest"] if row is not None else None
+        if latest_dt in (None, ""):
             return result
-        latest_dt = latest_raw
         if isinstance(latest_dt, str):
             latest_dt = datetime.fromisoformat(latest_dt.strip().replace("Z", "+00:00"))
         if latest_dt.tzinfo is None:
@@ -158,7 +165,7 @@ def _trust_worker() -> dict[str, object | None]:
             latest_dt.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
         )
         age = (datetime.now(tz=timezone.utc) - latest_dt).total_seconds()
-        result["worker_online"] = bool(age <= _WORKER_ONLINE_WINDOW_MIN * 60)
+        result["worker_online"] = bool(age <= window_sec)
     except Exception:
         logger.debug("health: worker heartbeat read failed", exc_info=True)
     return result
