@@ -41,6 +41,16 @@ def _assert_write(event_id: str, staff) -> None:
         raise _scope_403(exc) from exc
 
 
+def _assert_read(event_id: str, staff) -> None:
+    """读收口(P0):直连 GET /{event_id} 此前裸奔,任意 vkpi:read 员工可拉任意活动
+    的预算/团队/费用/邀约。这里按活动级 scope 把关 —— owner / team / 共享成员 /
+    is_public 读 / admin 才能读,否则 403。镜像 share-members 读端 + 项目详情口径。"""
+    try:
+        scope.assert_event_access(str(event_id), staff)
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
 # ── Events ────────────────────────────────────────────────────────────────
 @router.get("")
 def list_events(limit: int = Query(default=200, ge=1, le=500), staff=Depends(require_tab("vkpi", "read"))):
@@ -96,6 +106,7 @@ def remove_event_share_member(event_id: str, staff_id: int, staff=Depends(requir
 
 @router.get("/{event_id}")
 def get_event(event_id: str, staff=Depends(require_tab("vkpi", "read"))):
+    _assert_read(event_id, staff)
     return _guard(service.get_event_detail, event_id, staff)
 
 

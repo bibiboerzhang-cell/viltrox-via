@@ -427,8 +427,10 @@ def _build_roster_detail(active_roster_by_scope: dict[str, int]) -> dict[str, An
     }
 
 
-def _build_evidence_active_30d_summary(*, window_days: int = 30) -> dict[str, Any]:
+def _build_evidence_active_30d_summary(*, window_days: int = 30, staff_scope_id: int | None = None) -> dict[str, Any]:
     days = max(1, min(int(window_days or 30), 90))
+    # P1 隔离:非 owner/admin 只算本人 KOL 的活跃;company(官方矩阵)是公共资产,保持全局。
+    kol_scope = f"AND e.kol_pool_id IN ({_actor_kols_sql(staff_scope_id)})" if staff_scope_id else ""
     external_rows = _fetch_dicts(
         f"""
         SELECT
@@ -441,6 +443,7 @@ def _build_evidence_active_30d_summary(*, window_days: int = 30) -> dict[str, An
           AND COALESCE(e.evidence_type, 'video') = 'video'
           AND e.publish_date IS NOT NULL
           AND e.publish_date >= NOW() - INTERVAL '{days} days'
+          {kol_scope}
         GROUP BY COALESCE(p.dashboard_account_type, 'kol')
         """
     )
@@ -492,13 +495,15 @@ def _build_evidence_active_30d_summary(*, window_days: int = 30) -> dict[str, An
     }
 
 
-def _build_evidence_metrics_summary(*, window_days: int = 30) -> dict[str, Any]:
+def _build_evidence_metrics_summary(*, window_days: int = 30, staff_scope_id: int | None = None) -> dict[str, Any]:
     active_roster_by_scope = {
-        account_type: _as_int(build_dashboard_kpi(account_type=account_type).get("active_roster"))
+        account_type: _as_int(build_dashboard_kpi(account_type=account_type, staff_scope_id=staff_scope_id).get("active_roster"))
         for account_type in ("all", "kol", "media", "company")
     }
+    # P1 隔离:非 owner/admin 的曝光/覆盖只算本人 KOL 的证据。
+    evidence_where = f"WHERE kol_pool_id IN ({_actor_kols_sql(staff_scope_id)})" if staff_scope_id else ""
     row = get_conn().execute(
-        """
+        f"""
         SELECT
             COUNT(*) AS evidence_total,
             COUNT(*) FILTER (WHERE view_count IS NOT NULL) AS view_covered,
@@ -511,6 +516,7 @@ def _build_evidence_metrics_summary(*, window_days: int = 30) -> dict[str, Any]:
             ), 0) AS total_engagement,
             MAX(metrics_scraped_at) AS last_refreshed_at
         FROM vkpi_kol_video_evidence
+        {evidence_where}
         """
     ).fetchone()
     evidence_total = _as_int(_row_value(row, "evidence_total"))
@@ -521,7 +527,7 @@ def _build_evidence_metrics_summary(*, window_days: int = 30) -> dict[str, Any]:
     view_coverage_pct = (view_covered / evidence_total) if evidence_total > 0 else 0.0
     return {
         "active_roster_by_scope": active_roster_by_scope,
-        "active_30d_by_scope": _build_evidence_active_30d_summary(window_days=window_days),
+        "active_30d_by_scope": _build_evidence_active_30d_summary(window_days=window_days, staff_scope_id=staff_scope_id),
         "total_exposure": total_views,
         "engagement": {
             "total_engagement": total_engagement,
@@ -544,7 +550,30 @@ _FUNNEL_EXCLUDED_STAGES_SQL = "('churned','cancelled','lost')"
 _FUNNEL_PUBLISHED_STAGES_SQL = "('content_posted','published')"
 
 
-def _build_funnel_summary() -> dict[str, Any]:
+def _actor_projects_sql(staff_scope_id: int) -> str:
+    """P1 隔离:某 staff「拥有」的项目 id 子查询(assigned / created / 被共享成员)。
+    staff_scope_id 已是 scope.effective_staff_id 出来的可信 int(admin→None 不会进这里),
+    内联整数安全(非注入面),与本文件既有 {days} f-string 口径一致。"""
+    sid = int(staff_scope_id)
+    return (
+        f"SELECT id FROM vkpi_projects WHERE assigned_staff_id={sid} "
+        f"OR created_by_staff_id={sid} "
+        f"OR id IN (SELECT project_id FROM vkpi_project_members WHERE staff_id={sid})"
+    )
+
+
+def _actor_kols_sql(staff_scope_id: int) -> str:
+    """P1 隔离:某 staff「拥有」的 KOL(kol_pool_id)= 本人关注(收藏)∪ 本人项目里合作的 KOL。
+    公司/官方账号属公共资产,不走此过滤(各聚合里 account_type<>'kol' / company 维度保持全局)。"""
+    sid = int(staff_scope_id)
+    return (
+        f"SELECT kol_pool_id FROM vkpi_kol_pool_favorites WHERE staff_id={sid} "
+        f"UNION SELECT a.kol_pool_id FROM vkpi_project_kol_assignments a "
+        f"WHERE a.project_id IN ({_actor_projects_sql(sid)})"
+    )
+
+
+def _build_funnel_summary(staff_scope_id: int | None = None) -> dict[str, Any]:
     """四环漏斗聚合(波3 R1 / 施工卡 C9,2026-06-12)。全部真 SQL 聚合,零估算零硬编码。
 
     输出 shape(前端 v615 normalizers.ts 消费契约——键名勿改,前端按此解析):
@@ -571,12 +600,17 @@ def _build_funnel_summary() -> dict[str, Any]:
     }
     """
     conn = get_conn()
+    # P1 隔离:非 owner/admin 只看本人收藏 + 本人项目里的 KOL;owner/admin(staff_scope_id=None)看全局。
+    fav_where = f"WHERE staff_id={int(staff_scope_id)}" if staff_scope_id else ""
+    fav_where_f = f"WHERE f.staff_id={int(staff_scope_id)}" if staff_scope_id else ""  # by_staff 多表 join 需限定别名
+    assign_where = f"WHERE project_id IN ({_actor_projects_sql(staff_scope_id)})" if staff_scope_id else ""
 
     favorites_row = conn.execute(
-        """
+        f"""
         SELECT COUNT(*) AS favorites_total,
                COUNT(DISTINCT kol_pool_id) AS favorites_kol_total
         FROM vkpi_kol_pool_favorites
+        {fav_where}
         """
     ).fetchone()
     favorites_total = _as_int(_row_value(favorites_row, "favorites_total"))
@@ -599,6 +633,7 @@ def _build_funnel_summary() -> dict[str, Any]:
                 WHERE stage IN {_FUNNEL_PUBLISHED_STAGES_SQL}
             ) AS published_total
         FROM vkpi_project_kol_assignments
+        {assign_where}
         """
     ).fetchone()
 
@@ -614,6 +649,7 @@ def _build_funnel_summary() -> dict[str, Any]:
         LEFT JOIN vkpi_project_kol_assignments a
                ON a.kol_pool_id = f.kol_pool_id
               AND COALESCE(a.stage, '') NOT IN {_FUNNEL_EXCLUDED_STAGES_SQL}
+        {fav_where_f}
         GROUP BY f.staff_id
         ORDER BY COUNT(DISTINCT f.id) DESC, f.staff_id
         """
@@ -645,8 +681,14 @@ def _build_funnel_summary() -> dict[str, Any]:
     }
 
 
-def _build_active_campaigns_summary(*, window_days: int = 30) -> dict[str, Any]:
+def _build_active_campaigns_summary(*, window_days: int = 30, staff_scope_id: int | None = None) -> dict[str, Any]:
     days = max(1, min(int(window_days or 30), 365))
+    # P1 隔离:非 owner/admin 只看本人(assigned/created/被共享)项目;owner/admin 看全部。
+    project_scope = (
+        f"AND (p.assigned_staff_id={int(staff_scope_id)} OR p.created_by_staff_id={int(staff_scope_id)} "
+        f"OR p.id IN (SELECT project_id FROM vkpi_project_members WHERE staff_id={int(staff_scope_id)}))"
+        if staff_scope_id else ""
+    )
     rows = _fetch_dicts(
         f"""
         WITH assignment_stats AS (
@@ -713,6 +755,7 @@ def _build_active_campaigns_summary(*, window_days: int = 30) -> dict[str, Any]:
               '已关闭', '已取消', '已中止', '合作中止'
             )
             AND COALESCE(p.source_type, '') <> 'codex_test'
+            {project_scope}
         )
         SELECT *
         FROM active_projects
@@ -797,11 +840,13 @@ def build_dashboard_summary(
     window_metrics = dashboard_window_metrics_contract(maturity_contract)
     official_summary = _dashboard_official_matrix_summary(limit=20)
     summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
-    summary["active_roster"] = int(build_dashboard_kpi(account_type="all").get("active_roster") or 0)
-    summary["evidence_metrics"] = _build_evidence_metrics_summary(window_days=window_days)
-    summary["active_campaigns"] = _build_active_campaigns_summary(window_days=window_days)
+    # P1 隔离:effective_staff_id 为 None=owner/admin(全局),否则=该员工(own-only)。
+    # 四聚合统一吃这把 scope —— 此前它们各自全局口径,导致小号也看到全公司数据。
+    summary["active_roster"] = int(build_dashboard_kpi(account_type="all", staff_scope_id=effective_staff_id).get("active_roster") or 0)
+    summary["evidence_metrics"] = _build_evidence_metrics_summary(window_days=window_days, staff_scope_id=effective_staff_id)
+    summary["active_campaigns"] = _build_active_campaigns_summary(window_days=window_days, staff_scope_id=effective_staff_id)
     # 波3 R1 / C9(2026-06-12):四环漏斗块(收藏→认领→进项目→已发布),shape 契约见 _build_funnel_summary docstring。
-    summary["funnel"] = _build_funnel_summary()
+    summary["funnel"] = _build_funnel_summary(staff_scope_id=effective_staff_id)
     summary["metric_scope"] = normalized_scope
     summary["scope_label"] = scope_maturity["scope_label"]
     summary["snapshot_days"] = scope_maturity["snapshot_days"]

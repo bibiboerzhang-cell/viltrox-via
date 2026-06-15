@@ -245,9 +245,24 @@ def _build_attributed_gmv_roi() -> dict[str, Any]:
 def build_dashboard_kpi(
     account_type: str = "all",
     selected_kol_ids: list[str] | tuple[str, ...] | None = None,
+    *,
+    staff_scope_id: int | None = None,
 ) -> dict[str, Any]:
     normalized = _normalize_account_type(account_type)
     where_sql, params = _account_where(normalized, selected_kol_ids)
+    if staff_scope_id:
+        # P1 隔离:非 owner/admin 的 KOL 行只算本人关注(收藏)∪ 本人项目里合作的 KOL;
+        # 公司/官方账号(account_type<>'kol')是公共资产,保持全局可见。内联可信整数,非注入面。
+        sid = int(staff_scope_id)
+        scope_clause = (
+            "(account_type <> 'kol' OR source_id IN ("
+            f"SELECT kol_pool_id FROM vkpi_kol_pool_favorites WHERE staff_id={sid} "
+            "UNION SELECT a.kol_pool_id FROM vkpi_project_kol_assignments a "
+            f"WHERE a.project_id IN (SELECT id FROM vkpi_projects WHERE assigned_staff_id={sid} "
+            f"OR created_by_staff_id={sid} OR id IN (SELECT project_id FROM vkpi_project_members WHERE staff_id={sid}))"
+            "))"
+        )
+        where_sql = (where_sql + " AND " + scope_clause) if where_sql else (" WHERE " + scope_clause)
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
     conn = get_conn()
     row = conn.execute(
