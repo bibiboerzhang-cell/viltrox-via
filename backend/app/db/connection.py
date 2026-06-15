@@ -168,6 +168,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "129_vkpi_project_content_posts.sql",
     "130_vkpi_scheduler_tasks.sql",
     "131_vkpi_project_members.sql",
+    "132_vkpi_event_members.sql",
 )
 
 try:

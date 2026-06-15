@@ -201,6 +201,78 @@ def assert_project_access(project_id: int, staff: dict[str, Any] | None, *, writ
     raise ScopeDenied("project scope denied")
 
 
+def _team_ids_for_event(row: dict[str, Any]) -> set[int]:
+    """把 vkpi_events.team_ids(jsonb 数组,psycopg 可能回字符串或 list)解析成 int 集合。"""
+    raw = row.get("team_ids")
+    if raw in (None, ""):
+        return set()
+    if isinstance(raw, (list, tuple)):
+        items = raw
+    else:
+        try:
+            import json as _json
+
+            items = _json.loads(raw)
+        except Exception:
+            return set()
+    out: set[int] = set()
+    for v in items if isinstance(items, (list, tuple)) else []:
+        iv = _int(v)
+        if iv:
+            out.add(iv)
+    return out
+
+
+def assert_event_access(event_id: str, staff: dict[str, Any] | None, *, write: bool = False) -> None:
+    """活动写权限收口(2026-06-14,镜像 assert_project_access)。
+
+    放行裁决(越上越宽):
+    - can_view_all(admin/owner/manager)→ 完全读写,原样保留(收紧写不破 admin/owner)。
+    - owner_id == actor → 完全读写(活动所有者)。
+    - team_ids 含 actor → editor 级:读写均放行。裁决(可追认):Events 是显式「多人协作」
+      模块(团队成员本就在跑这个活动),故团队成员=编辑者,可写;与项目侧 assigned/creator
+      全权对齐。若未来要更严,可把团队降为只读 + 仅 owner/editor-member 可写。
+    - vkpi_event_members 共享成员 → 按 role:viewer 只读(write=True 拒);editor 读写。
+    - 其余(含「有 vkpi:write 但与本活动无关」的员工)→ 拒。这正是收紧点:不再是任何
+      vkpi:write 都能改任意活动,只有 owner/team/editor-member/admin 能写。
+    - 活动行不存在 → 放行(交由下游 CRUD 自然空操作,避免对 404 泄露存在性;镜像项目侧)。
+
+    红线:只读 vkpi_events / vkpi_event_members;绝不碰 viltrox_fit_score / rule_v0。
+    """
+    if can_view_all(staff):
+        return
+    actor = actor_staff_id(staff)
+    if not actor:
+        raise ScopeDenied("event scope denied")
+    row = get_conn().execute(
+        "SELECT owner_id, team_ids FROM vkpi_events WHERE id=?",
+        (str(event_id),),
+    ).fetchone()
+    if not row:
+        return
+    item = dict(row)
+    if actor == _int(item.get("owner_id")):
+        # owner = 完全读写,原样放行。
+        return
+    if actor in _team_ids_for_event(item):
+        # team 成员 = editor:读写均放行(显式协作模块)。
+        return
+    # 活动共享接线(2026-06-14,ADDITIVE):actor 若是显式共享成员,按 role 区分:
+    #   viewer → 只读(write=False 放行,write=True 拒);editor → 读写均放行。
+    member = get_conn().execute(
+        "SELECT role FROM vkpi_event_members WHERE event_id=? AND staff_id=?",
+        (str(event_id), actor),
+    ).fetchone()
+    if member is not None:
+        role = str(dict(member).get("role") or "viewer").strip().lower()
+        if not write:
+            return
+        if role == "editor":
+            return
+        raise ScopeDenied("event scope denied")
+    raise ScopeDenied("event scope denied")
+
+
 def is_project_member(project_id: int, staff: dict[str, Any] | None) -> bool:
     """True 当 actor 是该项目的 assigned 或 creator(批D 收款遮蔽豁免判定用)。"""
     actor = actor_staff_id(staff)

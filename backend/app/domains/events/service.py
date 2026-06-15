@@ -82,11 +82,15 @@ def list_events(staff: dict[str, Any] | None, *, limit: int = 200) -> dict[str, 
     else:
         sid = _staff_id(staff)
         # 员工:owner_id 是自己 或 team_ids(jsonb 数组)含自己。
+        # 活动共享接线(2026-06-14,ADDITIVE):再 OR 进「被显式共享给自己」的活动
+        # (vkpi_event_members.staff_id=自己)。这只是加宽一条 OR 分支,绝不去掉
+        # 既有 owner/team_ids 可见性,也绝不扩到未共享的活动。镜像 131 项目共享。
         rows = conn.execute(
             "SELECT * FROM vkpi_events "
             "WHERE owner_id = ? OR team_ids @> to_jsonb(?::bigint) "
+            "OR id IN (SELECT event_id FROM vkpi_event_members WHERE staff_id = ?) "
             "ORDER BY start_date DESC, created_at DESC LIMIT ?",
-            (sid, sid, safe_limit),
+            (sid, sid, sid, safe_limit),
         ).fetchall()
     return {"items": [_event_row(r) for r in rows]}
 
