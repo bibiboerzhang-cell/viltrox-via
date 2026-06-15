@@ -231,6 +231,19 @@ def _runtime_trust() -> dict[str, object]:
     except Exception:
         trust["worker_sha"] = (APP_GIT_SHA or None)
         trust["worker_sha_source"] = "assumed_same_repo"
+    try:
+        _server_sha = (APP_GIT_SHA or None)
+        _client_sha = (_read_frontend_build_sha() or None)
+        trust["server_git_sha"] = _server_sha
+        trust["client_git_sha"] = _client_sha
+        if _server_sha is None or _client_sha is None:
+            trust["sha_aligned"] = None
+        else:
+            trust["sha_aligned"] = bool(_server_sha == _client_sha)
+    except Exception:
+        trust["server_git_sha"] = (APP_GIT_SHA or None)
+        trust["client_git_sha"] = None
+        trust["sha_aligned"] = None
     return trust
 
 
