@@ -98,7 +98,7 @@ def remove_event_share_member(event_id: str, staff_id: int, staff=Depends(requir
         event_members.assert_can_manage_members(str(event_id), staff)
     except scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
-    result = event_members.remove_member(str(event_id), int(staff_id))
+    result = event_members.remove_member(str(event_id), int(staff_id), removed_by_staff_id=scope.actor_staff_id(staff) or None)
     if result.get("status") == "error":
         raise HTTPException(status_code=400, detail=result.get("error") or "remove member failed")
     return result

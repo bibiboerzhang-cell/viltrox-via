@@ -173,6 +173,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "134_vkpi_single_call_budget_reseed.sql",
     "135_vkpi_inventory.sql",
     "136_vkpi_inventory_movements.sql",
+    "137_vkpi_share_audit.sql",
 )
 
 try:

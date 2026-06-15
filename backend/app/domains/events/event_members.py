@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.db.connection import get_conn
-from app.domains.access import scope
+from app.domains.access import scope, share_audit
 
 _VALID_ROLES = {"viewer", "editor"}
 
@@ -111,6 +111,8 @@ def add_member(
         )
         row = cursor.fetchone()
         conn.commit()
+        share_audit.record(target_type="event", target_id=eid, action="role_change",
+                           member_staff_id=sid, role=role_key, actor_staff_id=added_by)
         return {"status": "updated", "member": _row_to_member(row)}
 
     cursor = conn.execute(
@@ -123,11 +125,13 @@ def add_member(
     )
     row = cursor.fetchone()
     conn.commit()
+    share_audit.record(target_type="event", target_id=eid, action="share",
+                       member_staff_id=sid, role=role_key, actor_staff_id=added_by)
     return {"status": "created", "member": _row_to_member(row)}
 
 
-def remove_member(event_id: str, staff_id: int) -> dict[str, Any]:
-    """撤销共享:删一条成员行。仅触本表 —— 不改活动/任务/费用。"""
+def remove_member(event_id: str, staff_id: int, *, removed_by_staff_id: int | None = None) -> dict[str, Any]:
+    """撤销共享:删一条成员行。仅触本表 —— 不改活动/任务/费用。撤销记入分享审计(谁/何时)。"""
     eid = str(event_id or "").strip()
     sid = int(staff_id or 0)
     if not eid:
@@ -146,6 +150,8 @@ def remove_member(event_id: str, staff_id: int) -> dict[str, Any]:
         (eid, sid),
     )
     conn.commit()
+    share_audit.record(target_type="event", target_id=eid, action="revoke",
+                       member_staff_id=sid, actor_staff_id=removed_by_staff_id)
     return {"status": "removed", "event_id": eid, "staff_id": sid}
 
 

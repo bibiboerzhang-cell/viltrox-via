@@ -423,7 +423,7 @@ def remove_project_member(project_id: int, staff_id: int, staff=Depends(require_
         project_members.assert_can_manage_members(int(project_id), staff)
     except scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
-    result = project_members.remove_member(int(project_id), int(staff_id))
+    result = project_members.remove_member(int(project_id), int(staff_id), removed_by_staff_id=scope.actor_staff_id(staff) or None)
     if result.get("status") == "error":
         raise HTTPException(status_code=400, detail=result.get("error") or "remove member failed")
     return result
