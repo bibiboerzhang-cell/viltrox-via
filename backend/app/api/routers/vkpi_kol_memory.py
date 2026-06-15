@@ -14,6 +14,7 @@ from app.api.dependencies.perms import require_tab
 from app.domains.kol import lifecycle as kol_lifecycle
 from app.domains.kol import memory as kol_memory
 from app.domains.kol import video_fullscan
+from app.domains.kol import video_prescreen
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-kol-memory"])
 
@@ -75,5 +76,31 @@ def get_kol_video_fullscan_plan(
     del staff
     try:
         return video_fullscan.plan_kol_video_fullscan(int(kol_id), top_n=int(top_n))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get("/kol-memory/{kol_id}/video-prescreen")
+def get_kol_video_prescreen(
+    kol_id: int,
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    del staff
+    try:
+        return video_prescreen.prescreen_kol_videos(int(kol_id))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/kol-memory/{kol_id}/video-fullscan-enqueue")
+def enqueue_kol_video_fullscan(
+    kol_id: int,
+    top_n: int = Query(default=5, ge=1, le=50),
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    try:
+        return video_fullscan.enqueue_kol_video_fullscan(
+            int(kol_id), top_n=int(top_n), staff=staff,
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc))

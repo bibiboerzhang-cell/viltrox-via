@@ -146,3 +146,55 @@ def plan_kol_video_fullscan(kol_pool_id: int, *, top_n: int = 5) -> dict[str, An
         "provider_calls": False,
         "write_db": False,
     }
+
+
+def enqueue_kol_video_fullscan(
+    kol_pool_id: int,
+    *,
+    top_n: int = 5,
+    staff: dict | None = None,
+) -> dict[str, Any]:
+    """Materialize the plan's top-N candidates into final_v1 video deep-analysis
+    jobs via the existing enqueuer (record-only budget, zero in-request LLM).
+
+    Never touches viltrox_fit_score / rule_v0: the only DB write is the
+    ``apify_jobs`` enqueue performed inside
+    ``video_analysis_enqueue`` (which carries its own V6-Fit rollback guard).
+    """
+
+    plan = plan_kol_video_fullscan(int(kol_pool_id), top_n=int(top_n))
+    candidates = plan.get("top_candidates") or []
+    items = [
+        {"kol_pool_id": int(kol_pool_id), "evidence_id": c["evidence_id"]}
+        for c in candidates
+        if c.get("evidence_id") is not None
+    ]
+
+    from app.domains.kol import video_analysis_enqueue
+
+    if not items:
+        return {
+            "status": "no_candidates",
+            "kol_pool_id": int(kol_pool_id),
+            "plan": plan,
+            "queued": 0,
+            "provider_calls": False,
+            "write_db": False,
+        }
+
+    enqueue_result = video_analysis_enqueue.enqueue_final_v1_video_analysis_batch(
+        items=items,
+        staff=staff,
+    )
+    return {
+        "status": "enqueued",
+        "kol_pool_id": int(kol_pool_id),
+        "plan": plan,
+        "enqueue": enqueue_result,
+        "queued": enqueue_result.get("queued", 0),
+        "evidence_ids": [it["evidence_id"] for it in items],
+        "budget_gate": "record_only",
+        "provider_calls": False,
+        "write_db": enqueue_result.get("write_db", False),
+        "writes": enqueue_result.get("writes", []),
+    }
