@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Brain, Clock3, FileText, Search, Zap } from "lucide-react";
-import { getTaskQueueCompact } from "../../../../services/vkpi/tasks-api";
+import { getTaskQueueCompact, retryTask } from "../../../../services/vkpi/tasks-api";
 
 const e = React.createElement;
 const PENDING_SEARCH_SESSION_KEY = "vkpi:pendingKolSearchSessionId";
@@ -91,6 +91,44 @@ function taskRetryText(task) {
   if (categoryLabel && timeText) return `${categoryLabel} · 退避至 ${timeText}`;
   if (timeText) return `退避至 ${timeText}`;
   return categoryLabel;
+}
+
+// 失败桶分类(2026-06-15):把后端 _error_category(apify_jobs_worker.py:140-243)的细类
+// 折叠成 5 个展示桶 + 其他。apify_jobs 任务带 error_category;vkpi_async_tasks 没有,
+// 故 error_category 为空时回退按 task.error 文本关键词匹配(沿用后端同序优先级)。
+const FAIL_BUCKETS = {
+  download: { key: "download", label: "下载", tone: "#FAC775" },
+  provider: { key: "provider", label: "服务方", tone: "#FAC775" },
+  media: { key: "media", label: "媒体解析", tone: "rgba(255,255,255,0.40)" },
+  content_restricted: { key: "content_restricted", label: "内容受限", tone: "#fb7185" },
+  code_error: { key: "code_error", label: "代码错误", tone: "#fb7185" },
+  other: { key: "other", label: "其他", tone: "rgba(255,255,255,0.40)" },
+};
+
+function taskFailBucket(task) {
+  const category = String(task?.error_category || "").trim().toLowerCase();
+  if (category) {
+    if (category === "download") return FAIL_BUCKETS.download;
+    if (category === "provider_pressure" || category === "timeout" || category === "stale_running") return FAIL_BUCKETS.provider;
+    if (category === "media_resolve") return FAIL_BUCKETS.media;
+    if (
+      category === "content_restricted" ||
+      category === "content_blocked" ||
+      category === "content_unavailable" ||
+      category === "permanent" ||
+      category === "blocked"
+    ) return FAIL_BUCKETS.content_restricted;
+    if (category === "code_error") return FAIL_BUCKETS.code_error;
+    return FAIL_BUCKETS.other;
+  }
+  const text = String(task?.error || "");
+  if (!text) return FAIL_BUCKETS.other;
+  if (/429|resource_exhausted|rate limit|quota exceeded|50[0-4]|5xx|internal server error|unavailable|high demand|overloaded|timeout/i.test(text)) return FAIL_BUCKETS.provider;
+  if (/yt[-_]?dlp|download_failed|direct_video_download_failed/i.test(text)) return FAIL_BUCKETS.download;
+  if (/media_resolve/i.test(text)) return FAIL_BUCKETS.media;
+  if (/age.?restricted|private video|login required|sign in to confirm|members-only|subscriber-only|copyright|dmca|removed|terminated|not found|404|deleted|unsupported|invalid_video_url/i.test(text)) return FAIL_BUCKETS.content_restricted;
+  if (/modulenotfounderror|importerror|nameerror|attributeerror|typeerror|keyerror|indexerror|traceback|no module named|cannot import name/i.test(text)) return FAIL_BUCKETS.code_error;
+  return FAIL_BUCKETS.other;
 }
 
 function taskSearchSessionId(task) {
@@ -226,6 +264,8 @@ export function TaskProgressBoard({ apiToken = "" }) {
   const [payload, setPayload] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  // 每任务重试态:id → 'loading' | 'done' | 错误串。重试成功后 refreshQueue 让该任务离开失败桶。
+  const [retrying, setRetrying] = useState({});
   const refreshQueue = useCallback(async () => {
     if (!apiToken || (typeof document !== "undefined" && document.visibilityState === "hidden")) return;
     setLoading(true);
@@ -239,6 +279,19 @@ export function TaskProgressBoard({ apiToken = "" }) {
       setLoading(false);
     }
   }, [apiToken]);
+
+  const handleRetry = useCallback(async (task) => {
+    const id = task?.id;
+    if (!id || !apiToken) return;
+    setRetrying((s) => ({ ...s, [id]: "loading" }));
+    try {
+      await retryTask(apiToken, id);
+      setRetrying((s) => ({ ...s, [id]: "done" }));
+      void refreshQueue();
+    } catch (err) {
+      setRetrying((s) => ({ ...s, [id]: err instanceof Error ? err.message : "重试失败" }));
+    }
+  }, [apiToken, refreshQueue]);
 
   useEffect(() => {
     if (!apiToken) {
@@ -310,6 +363,9 @@ export function TaskProgressBoard({ apiToken = "" }) {
   // 账号分析等队列任务 ~8 秒即完成,若按 session 过滤会"一闪而过"再无痕迹——
   // 即使 payload 暂缺 search_session_id 也保底留在「最近完成」(无 session 时不可点开)。
   const visibleRecent = recentTasks.filter((task) => taskCanOpen(task) || task?.kind === "账号分析").slice(0, 2);
+  // 失败桶:失败任务多半不可点开(taskCanOpen=false)且非账号分析,会被 visibleRecent 滤掉,
+  // 故单独取一份(cap 4)。recentTasks 已只含 compact 端点的近窗口数据,无需再按时间过滤。
+  const failedRecent = recentTasks.filter((task) => task?.status === "failed").slice(0, 4);
   // 乱晃修复:此前挂 !loading,每 2.5s 轮询 loading 翻 true→灰条消失、翻 false→重现,整块上下跳 ~28px。
   // 改挂 !!payload——后台刷新时上次 payload 留存,灰条稳住不闪;仅首次连接(无 payload)隐藏,此时 header 已显「连接中」。
   const emptyActive = activeTotal === 0 && !!payload && !error;
@@ -384,12 +440,13 @@ export function TaskProgressBoard({ apiToken = "" }) {
       )
     ),
     // 2026-06-12 波5 R7:无 target 的条目不再假装可点 — 按钮禁用、「可打开」标签按实际情况显示
-    visibleRecent.length ? e("div", { className: "mt-3 border-t border-white/[0.08] pt-2.5" },
+    // 2026-06-15:并入失败桶 — 标题改「最近完成/失败」,失败任务按桶分类并提供重试入口。
+    (visibleRecent.length || failedRecent.length) ? e("div", { className: "mt-3 border-t border-white/[0.08] pt-2.5" },
       e("div", { className: "mb-1.5 flex items-center justify-between gap-2" },
-        e("span", { className: "text-[11px] text-white/45" }, "最近完成"),
+        e("span", { className: "text-[11px] text-white/45" }, failedRecent.length ? "最近完成/失败" : "最近完成"),
         visibleRecent.some((task) => taskCanOpen(task)) && e("span", { className: "text-[10px] text-[#5DCAA5]/80" }, "可打开")
       ),
-      e("div", { className: "flex flex-col gap-1" },
+      visibleRecent.length ? e("div", { className: "flex flex-col gap-1" },
         visibleRecent.map((task) => {
           const canOpen = taskCanOpen(task);
           return e("button", {
@@ -404,7 +461,32 @@ export function TaskProgressBoard({ apiToken = "" }) {
             canOpen && e("span", { className: "shrink-0 text-[10px] text-[#5DCAA5]" }, "打开")
           );
         })
-      )
+      ) : null,
+      failedRecent.length ? e("div", { className: `flex flex-col gap-1 ${visibleRecent.length ? "mt-1" : ""}` },
+        failedRecent.map((task) => {
+          const bucket = taskFailBucket(task);
+          const st = retrying[task.id];
+          return e("div", {
+            key: `failed-${task.id}`,
+            className: "flex min-w-0 items-center justify-between gap-2 rounded-md border border-rose-300/15 bg-rose-400/[0.05] px-2 py-1"
+          },
+            e("div", { className: "flex min-w-0 items-center gap-1.5" },
+              e("span", {
+                className: "shrink-0 rounded px-1 py-0.5 text-[9px] font-medium",
+                style: { color: bucket.tone, background: `${bucket.tone}1a`, borderColor: `${bucket.tone}33` }
+              }, bucket.label),
+              e("span", { className: "truncate text-[10.5px] text-white/65", title: task.error || "" }, taskLabel(task))
+            ),
+            e("button", {
+              type: "button",
+              disabled: st === "loading" || st === "done",
+              onClick: () => handleRetry(task),
+              className: `shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium ${st === "done" ? "border-emerald-300/20 text-emerald-300/70 cursor-default" : st === "loading" ? "border-white/10 text-white/40 cursor-wait" : "border-rose-300/25 text-rose-200/80 hover:bg-rose-400/[0.08]"}`,
+              title: typeof st === "string" && st !== "loading" && st !== "done" ? st : ""
+            }, st === "loading" ? "重试中…" : st === "done" ? "已重排" : "重试")
+          );
+        })
+      ) : null
     ) : null
   );
 }
