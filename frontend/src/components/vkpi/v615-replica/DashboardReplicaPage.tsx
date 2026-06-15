@@ -5,6 +5,7 @@ import React from "react";
 import { motion } from "framer-motion";
 import { AlertTriangle, DollarSign, Globe2, Loader2, TrendingUp } from "lucide-react";
 import { AIIntelligenceCard } from "./components/AIIntelligenceCard";
+import { ActionInboxPanel } from "./components/ActionInboxPanel";
 import { ActiveCampaignsCard } from "./components/ActiveCampaignsCard";
 import { Breadcrumb } from "./components/Breadcrumb";
 import { ContentCalendarCard } from "./components/ContentCalendarCard";
@@ -374,8 +375,10 @@ export function DashboardReplicaPage(props: any) {
               )
             ),
 
-            // ─── RIGHT RAIL (KOL 漏斗 + Active Campaigns + 7 天日历) ───
+            // ─── RIGHT RAIL (今日建议 + KOL 漏斗 + Active Campaigns + 7 天日历) ───
             e("div", { className: "space-y-4" },
+              // W1 Auto-Ops 今日建议(只读 dry-run;后端按 scope 过滤)
+              e(ActionInboxPanel, { apiToken }),
               // 0. KOL 漏斗(2026-06-12 C10/波3 R1:收藏→认领→入项目→已发布)
               e(KolFunnelCard, {
                 funnel: kolFunnel,
