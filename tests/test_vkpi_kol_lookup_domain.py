@@ -8,7 +8,11 @@ from app.domains.access import scope
 async def test_lookup_with_context_returns_plain_result_without_kol_id(monkeypatch):
     monkeypatch.setattr(lookup_domain.claims_domain, "lookup", lambda body, *, staff: {"status": "created"})
 
-    assert await lookup_domain.lookup_with_context({"handle": "x"}, staff={"id": 1}) == {"status": "created"}
+    result = await lookup_domain.lookup_with_context({"handle": "x"}, staff={"id": 1})
+    # P4/P10:lookup 现在 additive 附加 search_session_id/task_id(任务可追踪 + 切页可恢复)。
+    # 原契约保证不变:无 kol 的 plain claims 结果其 status 原样流过、不被加工出 kol。
+    assert result["status"] == "created"
+    assert "kol" not in result
 
 
 @pytest.mark.anyio
