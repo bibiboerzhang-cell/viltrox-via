@@ -175,6 +175,23 @@ def _shopify_configured() -> bool:
     return bool(shop_domain and access_token)
 
 
+def _shopify_orders_gmv_cents(conn: Any) -> int:
+    """Real GMV (cents) from the ingested Shopify order ledger, or 0.
+
+    A7 / migration 138. Returns 0 when the table is absent (migration not yet run)
+    or empty (no live creds yet) so the honest 待接入 path stays unchanged. Uses
+    the commerce domain's summarize_gmv() — single source of truth for the sum.
+    """
+    try:
+        from app.domains.commerce import shopify_orders
+
+        summary = shopify_orders.summarize_gmv()
+        return _as_int(summary.get("gmv_cents"))
+    except Exception:
+        # Table missing / serialization error -> behave as if no orders (honest).
+        return 0
+
+
 def _build_attributed_gmv_roi() -> dict[str, Any]:
     """Program-wide confirmed-Shopify GMV + ROI from the real attribution ledger.
 
@@ -191,6 +208,13 @@ def _build_attributed_gmv_roi() -> dict[str, Any]:
     (待接入 / awaiting_data).
     """
     conn = get_conn()
+
+    # A7: when the real Shopify ingest ledger (vkpi_shopify_orders, migration 138)
+    # has rows, GMV becomes real — SUM(total_price_cents) over ingested orders.
+    # Additive + safe: the table is empty until live Shopify creds land, so this
+    # branch is skipped and the EXACT honest 待接入 path below runs unchanged.
+    shopify_gmv_cents = _shopify_orders_gmv_cents(conn)
+
     gmv_row = conn.execute(
         """
         SELECT COALESCE(SUM(revenue_cents), 0) AS gmv_cents
@@ -207,8 +231,18 @@ def _build_attributed_gmv_roi() -> dict[str, Any]:
         """
     ).fetchone()
 
-    gmv_cents = _as_int(_row_value(gmv_row, "gmv_cents"))
+    attribution_gmv_cents = _as_int(_row_value(gmv_row, "gmv_cents"))
     cost_cents = _as_int(_row_value(cost_row, "cost_cents"))
+
+    # Prefer the real ingested-order ledger when it has data; otherwise fall back
+    # to the confirmed-attribution sum (which is itself 0 until attribution lands).
+    if shopify_gmv_cents > 0:
+        gmv_cents = shopify_gmv_cents
+        gmv_is_from_orders = True
+    else:
+        gmv_cents = attribution_gmv_cents
+        gmv_is_from_orders = False
+
     gmv = round(gmv_cents / 100.0, 2)
     cost = round(cost_cents / 100.0, 2)
 
@@ -217,7 +251,9 @@ def _build_attributed_gmv_roi() -> dict[str, Any]:
     if cost_cents > 0:
         avg_roi = round((gmv_cents - cost_cents) / cost_cents, 4)
 
-    if has_gmv:
+    if has_gmv and gmv_is_from_orders:
+        gmv_source = "vkpi_shopify_orders.total_price_cents[ingested]"
+    elif has_gmv:
         gmv_source = "vkpi_sales_attributions.revenue_cents[shopify,confirmed]"
     elif _shopify_configured():
         gmv_source = "awaiting_data"

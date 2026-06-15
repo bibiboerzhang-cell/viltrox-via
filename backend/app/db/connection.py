@@ -174,6 +174,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "135_vkpi_inventory.sql",
     "136_vkpi_inventory_movements.sql",
     "137_vkpi_share_audit.sql",
+    "138_vkpi_shopify_orders.sql",
 )
 
 try:
