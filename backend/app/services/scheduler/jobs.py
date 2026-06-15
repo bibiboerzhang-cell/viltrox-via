@@ -497,6 +497,21 @@ async def job_ops_threshold_alerts():
         logger.exception("scheduler.ops_threshold_alerts_failed")
 
 
+async def job_vkpi_fit_snapshot():
+    """V6 Fit Top 每日快照:只读 vkpi_kol_pool.viltrox_fit_score/followers → 历史表,供 Top Movers diff。
+    红线安全:绝不写回源列(指纹不变),零 LLM/provider。config-gate(scheduler_tasks.vkpi_fit_snapshot)。"""
+    if not _scheduler_task_enabled("vkpi_fit_snapshot"):
+        return
+    try:
+        import asyncio
+        from app.domains.dashboard import fit_snapshot
+
+        result = await asyncio.to_thread(fit_snapshot.capture_daily_snapshot)
+        logger.info("scheduler.vkpi_fit_snapshot", extra={"result": result})
+    except Exception:
+        logger.exception("scheduler.vkpi_fit_snapshot_failed")
+
+
 async def start_scheduler() -> None:
     """在 lifespan startup 调用"""
     global _scheduler
@@ -630,6 +645,15 @@ async def start_scheduler() -> None:
         trigger=CronTrigger(hour=8, minute=0, timezone=CHINA_TZ),
         id="vkpi_morning_sync",
         name="V-KPI 08:00 China daily KOL/channel/product sync + staff top-100 digest",
+        max_instances=1,
+        coalesce=True,
+    )
+    # ── V6 Fit Top 每日快照(只读,算 Top Movers)── config-gate(scheduler_tasks.vkpi_fit_snapshot)。
+    _scheduler.add_job(
+        job_vkpi_fit_snapshot,
+        trigger=CronTrigger(hour=3, minute=30),
+        id="vkpi_fit_snapshot",
+        name="V6 Fit daily snapshot (read-only, for Top Movers)",
         max_instances=1,
         coalesce=True,
     )

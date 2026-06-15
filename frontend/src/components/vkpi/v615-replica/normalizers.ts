@@ -633,7 +633,27 @@ export function normalizeSignals(marketCards = {}) {
   });
 }
 
-export function normalizeTopMovers(kolRows = []) {
+export function normalizeTopMovers(kolRows = [], fitMovers: any = null) {
+  // 2026-06-15 V6 Fit Top 真数据:优先用 fit 历史快照 diff 出的真实 Top Movers(变动方向 +/-Δfit)。
+  // 不足两天(warming_up)时 available=false,回落到下方 scored-only 视图(诚实,不编造)。
+  const fm = record(fitMovers);
+  if (fm.available && Array.isArray(fm.movers) && fm.movers.length) {
+    return fm.movers.slice(0, 5).map((m: any, index: number) => {
+      const mr = record(m);
+      const delta = number(mr.delta) ?? 0;
+      return {
+        id: mr.kol_pool_id,
+        handle: mr.handle || mr.name || `KOL ${index + 1}`,
+        badge: String(mr.handle || mr.name || "K").replace(/^@/, "")[0]?.toUpperCase() || "K",
+        badgeColor: COLORS[index % COLORS.length],
+        type: "pool",
+        note: mr.platform || "真实 KOL Pool",
+        deltaFollower: `${delta >= 0 ? "+" : ""}${Number(delta).toFixed(1)}`,
+        deltaReach: mr.fit_now != null ? `Fit ${mr.fit_now}` : "无粉丝信号",
+        raw: mr,
+      };
+    });
+  }
   // 四a:V6 Fit Top 卡只展示「真有契合分」的 KOL(scored-only)。
   // 旧口径 (v6_fit != null || followers != null) 会把只有粉丝、无评分的行也放进来,
   // 它们的 deltaFollower 落「待评估」占满卡面,把 frank_of_all_trades(95)等真分挤掉。
@@ -799,7 +819,7 @@ export function normalizeV615Dashboard(bundle: any, kolRows: any) {
     calendarMeta: { latestDate: latestCalendarDate(bundle.recentContent) },
     aiInsight: normalizeAiInsight(bundle.copilotBrief, bundle.tasks),
     signals: normalizeSignals(bundle.marketCards),
-    topMovers: normalizeTopMovers(kolRows),
+    topMovers: normalizeTopMovers(kolRows, bundle.fitMovers),
     mapHierarchy: normalizeMapHierarchy(bundle.distribution, kolRows),
     kolFunnel: normalizeKolFunnel(summary),
   };

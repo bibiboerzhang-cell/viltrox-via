@@ -117,6 +117,18 @@ def dashboard_copilot_brief(
     return dashboard_domain._build_dashboard_copilot_brief()
 
 
+@router.get("/dashboard/fit-movers")
+def dashboard_fit_movers(
+    limit: int = Query(default=8, ge=1, le=20),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """V6 Fit Top:最近两份 fit 快照 diff 出的 Top Movers(只读)。不足两天返回 warming_up,绝不编造。"""
+    del staff
+    from app.domains.dashboard import fit_snapshot
+
+    return fit_snapshot.compute_top_movers(limit=limit)
+
+
 @router.get("/dashboard/tasks")
 def dashboard_tasks(
     limit: int = Query(default=6, ge=1, le=20),
