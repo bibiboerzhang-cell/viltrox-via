@@ -61,9 +61,20 @@ def _parse_json(raw: str) -> dict[str, Any]:
             text = text.lstrip()[4:]
     try:
         obj = json.loads(text.strip())
-        return obj if isinstance(obj, dict) else {}
+        if isinstance(obj, dict):
+            return obj
     except Exception:
-        return {}
+        pass
+    # 兜底:Gemini 接地输出常带引用/前后说明文字 → 抽取第一个 { 到最后一个 } 再解析。
+    try:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            obj = json.loads(text[start : end + 1])
+            return obj if isinstance(obj, dict) else {}
+    except Exception:
+        pass
+    return {}
 
 
 def _ensure_schema() -> None:
@@ -132,6 +143,10 @@ def generate_ai_today_hot() -> dict[str, Any]:
         "影视赛事(如 LensCulture、Sony World Photography Awards、IPA 等)、Instagram/YouTube/Reddit/TikTok\n"
         "上正流行的拍摄玩法/风格、海外创作者热议的话题。**务必只取海外/英文圈内容,绝不要小红书/抖音/微博\n"
         "等中国大陆平台的热点。** 基于搜索到的真实近况,不要编。\n"
+        "**关键:热点不是越火越好,要按【与 Viltrox 产品的关联度】筛选+排序** —— Viltrox 主打大光圈定焦\n"
+        "(如 AF 27/35/56/85mm F1.x、135mm F1.8 LAB 旗舰)、变形宽荧幕电影镜、轻量广角等。优先选能直接\n"
+        "借势到这些镜头/拍法的热点(如弱光人像、电影感Vlog、复古街拍);每条 hot_topic 都要能落到一类\n"
+        "我们能借势的镜头或拍法,纯无关的热点(如纯无人机竞速)不要。\n"
         "再据此生成今天的内容建议,具体可执行、贴合海外创作者口味、紧扣真实当下热点。\n"
         "严格只输出 JSON(不要多余文字):\n"
         '{\n'

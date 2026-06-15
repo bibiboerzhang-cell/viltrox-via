@@ -71,21 +71,22 @@ export function SignalDetailModal({ alert, onClose }: any) {
         // 2. Summary
         e("div", null,
           e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500 mb-2" }, "主要内容(Claude 摘要)"),
-          e("p", { className: "text-[12px] leading-relaxed text-slate-300" }, alert.summary)
+          e("p", { className: "text-[12px] leading-relaxed text-slate-300" }, alert.summary || alert.desc || "—")
         ),
         // 3. 热度分布(横向柱状图)
         e("div", null,
           e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500 mb-2" }, "热度分布(各源 mentions)"),
           e("div", { className: "space-y-1.5" },
-            alert.sources.map((s: any, i: any) => {
-              const maxMentions = Math.max(...alert.sources.map((x: any) => x.mentions));
-              const pct = (s.mentions / maxMentions) * 100;
+            (Array.isArray(alert.sources) ? alert.sources : []).map((s: any, i: any) => {
+              const srcs = Array.isArray(alert.sources) ? alert.sources : [];
+              const maxMentions = Math.max(1, ...srcs.map((x: any) => Number(x.mentions) || 0));
+              const pct = ((Number(s.mentions) || 0) / maxMentions) * 100;
               return e("div", { key: i, className: "flex items-center gap-2 text-[11px]" },
                 e("span", { className: "w-32 text-slate-400 truncate" }, s.name),
                 e("div", { className: "flex-1 h-2 rounded-full bg-white/[0.04] overflow-hidden" },
                   e("div", { className: "h-full rounded-full", style: { width: pct + "%", background: sevColor[alert.severity] } })
                 ),
-                e("span", { className: "w-12 text-right text-slate-300 font-semibold" }, s.mentions)
+                e("span", { className: "w-12 text-right text-slate-300 font-semibold" }, Number(s.mentions) || 0)
               );
             })
           )
@@ -94,7 +95,10 @@ export function SignalDetailModal({ alert, onClose }: any) {
         e("div", null,
           e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500 mb-2" }, "对 Viltrox 的影响(Claude 分析)"),
           e("div", { className: "space-y-1" },
-            alert.impact.map((imp: any, i: any) => e("div", { key: i, className: "flex items-start gap-2 text-[11px] text-slate-300" },
+            (Array.isArray(alert.impact) && alert.impact.length
+              ? alert.impact
+              : (alert.raw && alert.raw.impact ? [{ level: "▸", text: String(alert.raw.impact) }] : [])
+            ).map((imp: any, i: any) => e("div", { key: i, className: "flex items-start gap-2 text-[11px] text-slate-300" },
               e("span", { className: "shrink-0" }, imp.level),
               e("span", null, imp.text)
             ))
@@ -104,8 +108,8 @@ export function SignalDetailModal({ alert, onClose }: any) {
         e("div", null,
           e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500 mb-2" }, "建议行动"),
           e("div", { className: "space-y-1.5" },
-            alert.actions.map((a: any, i: any) => e("div", {
-              key: i, 
+            (Array.isArray(alert.actions) ? alert.actions : []).map((a: any, i: any) => e("div", {
+              key: i,
               className: "flex items-start gap-2 rounded-md border border-white/[0.06] bg-white/[0.02] px-3 py-2 text-[11px] text-slate-300" 
             },
               e("span", { className: "shrink-0 flex items-center justify-center h-4 w-4 rounded-full bg-purple-500/20 text-[9px] font-bold text-purple-300" }, i + 1),
@@ -117,9 +121,9 @@ export function SignalDetailModal({ alert, onClose }: any) {
         e("div", null,
           e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500 mb-2" }, "原始来源链接"),
           e("div", { className: "space-y-1" },
-            alert.sources.map((s: any, i: any) => e("div", { key: i, className: "flex items-center gap-2 text-[11px] text-slate-400" },
+            (Array.isArray(alert.sources) ? alert.sources : []).map((s: any, i: any) => e("div", { key: i, className: "flex items-center gap-2 text-[11px] text-slate-400" },
               e("span", { className: "text-slate-500" }, "→"),
-              e("span", { className: "flex-1" }, `${s.name} (${s.mentions} mentions)`),
+              e("span", { className: "flex-1" }, `${s.name} (${Number(s.mentions) || 0} mentions)`),
               e("button", { className: "rounded border border-white/[0.06] px-2 py-0.5 text-[9px] text-white/25", disabled: true, title: "来源链接待接入" }, "查看")
             ))
           )
