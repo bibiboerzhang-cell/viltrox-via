@@ -183,6 +183,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "144_vkpi_dealers.sql",
     "145_vkpi_shopify_credentials.sql",
     "146_vkpi_api_key_pool.sql",
+    "147_vkpi_kol_portal_tokens.sql",
 )
 
 try:

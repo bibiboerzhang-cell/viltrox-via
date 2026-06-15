@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.routers import activities, auth, admin, audit, creator, jobs, leaderboard, media, ops, platform_ingest, sse, student_identity, uploads, verify, via, vkpi, vkpi_access, vkpi_actions, vkpi_attribution_metrics, vkpi_comment_intelligence, vkpi_audit, vkpi_budgets, vkpi_comments, vkpi_costs, vkpi_dashboard_staff, vkpi_data_quality, vkpi_dealers, vkpi_evidence_assets, vkpi_events, vkpi_inventory, vkpi_shopify, vkpi_staff_groups, vkpi_feedback, vkpi_firewall, vkpi_industry_automation, vkpi_kol_decisions, vkpi_kol_links, vkpi_kol_memory, vkpi_kol_pool, vkpi_learning, vkpi_memory, vkpi_my_kol, vkpi_operating_review, vkpi_operations, vkpi_pillars, vkpi_product_analysis, vkpi_projects, vkpi_reconciliation, vkpi_reports, vkpi_search, vkpi_settings, vkpi_sentiment, vkpi_sync, vkpi_tasks, vkpi_weekly_reports, vkpi_workflow_assets
 from app.api.routers import dashboard_account_picker
+from app.api.routers import vkpi_kol_portal
 from app.api.routers import commerce, deepsight, insights, intelligence, intelligence_admin, system_admin
 from app.core.config import (
     APP_ROLE,
@@ -732,6 +733,7 @@ app.include_router(auth.router)
 app.include_router(activities.public_router)
 app.include_router(vkpi.public_router)
 app.include_router(vkpi.webhook_router)
+app.include_router(vkpi_kol_portal.portal_public_router)
 app.include_router(student_identity.router)
 app.include_router(uploads.router)
 app.include_router(platform_ingest.router)
@@ -760,6 +762,7 @@ if IS_ADMIN_APP:
     # P2:vkpi.router 为零路由空壳(vkpi.py 仅 public_router/webhook_router 挂路由),不再 include。
     app.include_router(vkpi_access.router)
     app.include_router(vkpi_actions.router)
+    app.include_router(vkpi_kol_portal.router)
     app.include_router(vkpi_dashboard_staff.router)
     app.include_router(dashboard_account_picker.router)
     app.include_router(vkpi_attribution_metrics.router)
