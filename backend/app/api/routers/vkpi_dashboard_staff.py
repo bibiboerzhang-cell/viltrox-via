@@ -140,6 +140,17 @@ def dashboard_ai_today_hot(
     return ai_today.get_ai_today_hot()
 
 
+@router.get("/dashboard/competitor-radar")
+def dashboard_competitor_radar(
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """竞品新品雷达(Gemini+Google 接地每早查海外竞品新品;只读)。未生成则诚实空。"""
+    del staff
+    from app.domains.market import competitor_radar
+
+    return competitor_radar.get_competitor_radar()
+
+
 @router.get("/dashboard/tasks")
 def dashboard_tasks(
     limit: int = Query(default=6, ge=1, le=20),

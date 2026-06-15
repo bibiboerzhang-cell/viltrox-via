@@ -35,6 +35,7 @@ export async function fetchV615DashboardBundle(apiToken: string) {
     starredProjects,
     fitMovers,
     aiTodayHot,
+    competitorRadar,
   ] = await Promise.all([
     settle(apiFetch<Row>("/api/admin/vkpi/dashboard?window_days=30", { timeoutMs: 4000 }, apiToken), {}),
     settle(apiFetch<Row>("/api/admin/vkpi/dashboard/kol-distribution-pack?limit=250", { timeoutMs: 2500 }, apiToken), {}),
@@ -45,6 +46,7 @@ export async function fetchV615DashboardBundle(apiToken: string) {
     settle(apiFetch<{ projects?: Row[] }>("/api/admin/vkpi/projects?limit=100&starred=true", { timeoutMs: 3500 }, apiToken), { projects: [] }),
     settle(apiFetch<Row>("/api/admin/vkpi/dashboard/fit-movers?limit=8", { timeoutMs: 2500 }, apiToken), {}),
     settle(apiFetch<Row>("/api/admin/vkpi/dashboard/ai-today-hot", { timeoutMs: 2500 }, apiToken), {}),
+    settle(apiFetch<Row>("/api/admin/vkpi/dashboard/competitor-radar", { timeoutMs: 2500 }, apiToken), {}),
   ]);
 
   return {
@@ -57,6 +59,7 @@ export async function fetchV615DashboardBundle(apiToken: string) {
     starredProjects: Array.isArray(starredProjects.projects) ? starredProjects.projects : [],
     fitMovers,
     aiTodayHot,
+    competitorRadar,
   };
 }
 

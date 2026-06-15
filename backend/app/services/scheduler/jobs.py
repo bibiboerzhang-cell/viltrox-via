@@ -552,6 +552,21 @@ async def job_vkpi_brief_agent():
         logger.exception("scheduler.vkpi_brief_agent_failed")
 
 
+async def job_vkpi_competitor_radar():
+    """竞品新品雷达(每早·Gemini+Google 接地):查海外竞品新镜头/相机发布 + 对 Viltrox 影响。
+    红线:走预算闸(cron:competitor_radar)+ 代理;一天一次。config-gate(scheduler_tasks.vkpi_competitor_radar)。"""
+    if not _scheduler_task_enabled("vkpi_competitor_radar"):
+        return
+    try:
+        import asyncio
+        from app.domains.market import competitor_radar
+
+        result = await asyncio.to_thread(competitor_radar.generate_competitor_radar)
+        logger.info("scheduler.vkpi_competitor_radar", extra={"result": result})
+    except Exception:
+        logger.exception("scheduler.vkpi_competitor_radar_failed")
+
+
 async def job_vkpi_market_signal_refresh():
     """Signals & Alerts 每日刷新(竞品新品 + Reddit/Google News 热度):allowlisted 有界抓取,零 LLM/零 DB 写。
     竞品入库仍走人工审核闸(本 job 不 promote)。config-gate(scheduler_tasks.vkpi_market_signal_refresh)。"""
@@ -733,6 +748,15 @@ async def start_scheduler() -> None:
         trigger=CronTrigger(hour=3, minute=45),
         id="vkpi_brief_agent",
         name="AI Today brief agent daily refresh (deterministic, no LLM)",
+        max_instances=1,
+        coalesce=True,
+    )
+    # ── 竞品新品雷达(06:30 中国·Gemini+Google 接地·预算闸)── config-gate(scheduler_tasks.vkpi_competitor_radar)。
+    _scheduler.add_job(
+        job_vkpi_competitor_radar,
+        trigger=CronTrigger(hour=6, minute=30, timezone=CHINA_TZ),
+        id="vkpi_competitor_radar",
+        name="Competitor product radar (06:30 China, Gemini+Google grounding, budget-gated)",
         max_instances=1,
         coalesce=True,
     )

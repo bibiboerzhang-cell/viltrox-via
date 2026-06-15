@@ -634,9 +634,28 @@ export function normalizeAiInsight(copilotBrief = {}, tasks = {}, aiTodayHot: an
   };
 }
 
-export function normalizeSignals(marketCards = {}) {
+export function normalizeSignals(marketCards = {}, competitorRadar: any = null) {
+  // 2026-06-15:竞品新品雷达(Gemini+Google 接地)置顶,后接 market-intelligence 信号。
+  const radar = record(competitorRadar);
+  const radarItems = (radar.available && Array.isArray(record(radar.content).items))
+    ? list(record(radar.content).items).slice(0, 5).map((it: any, i: number) => {
+        const d = record(it);
+        const isThreat = String(d.impact || "").includes("威胁");
+        return {
+          id: `radar-${i}`,
+          severity: isThreat ? "high" : "medium",
+          title: `🛰 ${String(d.brand || "竞品")}:${String(d.title || "")}`,
+          desc: `${String(d.summary || "")}${d.impact ? " · 对我们:" + String(d.impact) : ""}`,
+          time: "今日",
+          sources: [{ name: "竞品雷达 · Gemini 接地", url: "" }],
+          totalMentions: 0,
+          trendPct: isThreat ? "威胁" : "机会",
+          raw: d,
+        };
+      })
+    : [];
   const cards = list(record(marketCards).cards);
-  return cards.slice(0, 8).map((card, index) => {
+  const signalCards = cards.slice(0, 8).map((card, index) => {
     const item = record(card);
     const evidence = list(item.evidence);
     const priority = String(item.priority || "info").toLowerCase();
@@ -654,6 +673,7 @@ export function normalizeSignals(marketCards = {}) {
       raw: item,
     };
   });
+  return [...radarItems, ...signalCards];
 }
 
 export function normalizeTopMovers(kolRows = [], fitMovers: any = null) {
@@ -845,7 +865,7 @@ export function normalizeV615Dashboard(bundle: any, kolRows: any) {
     calendarDays: normalizeCalendar(bundle.recentContent),
     calendarMeta: { latestDate: latestCalendarDate(bundle.recentContent) },
     aiInsight: normalizeAiInsight(bundle.copilotBrief, bundle.tasks, bundle.aiTodayHot),
-    signals: normalizeSignals(bundle.marketCards),
+    signals: normalizeSignals(bundle.marketCards, bundle.competitorRadar),
     topMovers: normalizeTopMovers(kolRows, bundle.fitMovers),
     mapHierarchy: normalizeMapHierarchy(bundle.distribution, kolRows),
     kolFunnel: normalizeKolFunnel(summary),
