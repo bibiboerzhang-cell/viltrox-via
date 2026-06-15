@@ -5,6 +5,21 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.db.connection import get_conn
+from app.services.cache.memory_cache import cache_get, cache_set
+
+# dashboard 聚合 30s 短缓存。键必含 staff_scope_id(见 _dash_cache_key)——
+# 公司视角(global)与每个成员各自一份,绝不把 A 的聚合喂给 B(W0 隔离红线在缓存层延续)。
+_DASH_CACHE_TTL = 30
+
+
+def _dash_cache_key(name: str, staff_scope_id: int | None, **parts: Any) -> str:
+    sid = str(staff_scope_id) if staff_scope_id else "global"
+    kp = ":".join(
+        f"{k}={','.join(map(str, v)) if isinstance(v, (list, tuple)) else v}"
+        for k, v in sorted(parts.items())
+    )
+    return f"dash:{name}:scope={sid}:{kp}"
+
 
 VALID_ACCOUNT_TYPES = {"all", "kol", "media", "company"}
 ACTIVE_ACCOUNT_SQL = """
@@ -299,7 +314,7 @@ def _build_attributed_gmv_roi() -> dict[str, Any]:
     }
 
 
-def build_dashboard_kpi(
+def _build_dashboard_kpi_impl(
     account_type: str = "all",
     selected_kol_ids: list[str] | tuple[str, ...] | None = None,
     *,
@@ -379,7 +394,7 @@ def build_dashboard_kpi(
     }
 
 
-def list_dashboard_accounts(
+def _list_dashboard_accounts_impl(
     account_type: str = "all",
     *,
     page: int = 1,
@@ -432,7 +447,7 @@ def list_dashboard_accounts(
     }
 
 
-def build_dashboard_account_map(
+def _build_dashboard_account_map_impl(
     account_type: str = "all",
     selected_kol_ids: list[str] | tuple[str, ...] | None = None,
     *,
@@ -469,3 +484,58 @@ def build_dashboard_account_map(
             for country, count in sorted(country_counts.items(), key=lambda item: (-item[1], item[0]))
         ],
     }
+
+
+# ── scope-keyed 30s 缓存包装(公开名不变;键含 staff_scope_id → 跨用户隔离在缓存层延续)──
+def build_dashboard_kpi(
+    account_type: str = "all",
+    selected_kol_ids: list[str] | tuple[str, ...] | None = None,
+    *,
+    staff_scope_id: int | None = None,
+) -> dict[str, Any]:
+    ck = _dash_cache_key("kpi", staff_scope_id, acct=account_type, sel=tuple(selected_kol_ids or ()))
+    hit = cache_get(ck)
+    if hit is not None:
+        return hit
+    result = _build_dashboard_kpi_impl(account_type, selected_kol_ids, staff_scope_id=staff_scope_id)
+    cache_set(ck, result, _DASH_CACHE_TTL)
+    return result
+
+
+def list_dashboard_accounts(
+    account_type: str = "all",
+    *,
+    page: int = 1,
+    page_size: int = 50,
+    search: str | None = None,
+    selected_kol_ids: list[str] | tuple[str, ...] | None = None,
+    staff_scope_id: int | None = None,
+) -> dict[str, Any]:
+    ck = _dash_cache_key(
+        "kols", staff_scope_id, acct=account_type, page=page, size=page_size,
+        q=(search or ""), sel=tuple(selected_kol_ids or ()),
+    )
+    hit = cache_get(ck)
+    if hit is not None:
+        return hit
+    result = _list_dashboard_accounts_impl(
+        account_type, page=page, page_size=page_size, search=search,
+        selected_kol_ids=selected_kol_ids, staff_scope_id=staff_scope_id,
+    )
+    cache_set(ck, result, _DASH_CACHE_TTL)
+    return result
+
+
+def build_dashboard_account_map(
+    account_type: str = "all",
+    selected_kol_ids: list[str] | tuple[str, ...] | None = None,
+    *,
+    staff_scope_id: int | None = None,
+) -> dict[str, Any]:
+    ck = _dash_cache_key("map", staff_scope_id, acct=account_type, sel=tuple(selected_kol_ids or ()))
+    hit = cache_get(ck)
+    if hit is not None:
+        return hit
+    result = _build_dashboard_account_map_impl(account_type, selected_kol_ids, staff_scope_id=staff_scope_id)
+    cache_set(ck, result, _DASH_CACHE_TTL)
+    return result
