@@ -724,6 +724,31 @@ export function normalizeMapHierarchy(distribution = {}, kolRows = []) {
   return Object.keys(hierarchy).length ? hierarchy : null;
 }
 
+// 真实活动 → 地图层(与 KOL 同形:{country:{lat,lng,count,cities}})。
+// 只上图带定位的活动(有 location_country 用国家质心,或显式 lat/lng);都没有则诚实不上图。
+export function normalizeEventsHierarchy(eventRows = []) {
+  const hierarchy = {};
+  for (const raw of list(eventRows)) {
+    const ev = record(raw);
+    const code = String(ev.location_country || "").trim().toUpperCase();
+    const lat = number(ev.location_lat);
+    const lng = number(ev.location_lng);
+    if (!code && (lat == null || lng == null)) continue;
+    const centroid = code ? countryCentroid(code) : null;
+    const key = code || `${lat},${lng}`;
+    const baseLat = lat != null ? lat : (centroid?.lat ?? 0);
+    const baseLng = lng != null ? lng : (centroid?.lng ?? 0);
+    if (!hierarchy[key]) hierarchy[key] = { lat: baseLat, lng: baseLng, count: 0, revenue: "", cities: {} };
+    hierarchy[key].count += 1;
+    const city = String(ev.location_city || ev.location_name || "").trim();
+    if (city && lat != null && lng != null) {
+      const c = hierarchy[key].cities[city] || (hierarchy[key].cities[city] = { lat, lng, count: 0, revenue: "", kols: [], raw: ev });
+      c.count += 1;
+    }
+  }
+  return Object.keys(hierarchy).length ? hierarchy : null;
+}
+
 // 2026-06-12 C10(波3 R1):消费后端 summary.funnel
 // shape = { favorites_total, claimed_total, in_project_total, published_total, by_staff[] }
 // 后端块未上线前 isReal=false,卡面显示「漏斗数据待后端」,绝不硬编码假数。

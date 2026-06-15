@@ -53,6 +53,7 @@ import { UserMenuPopover } from "./components/popovers/UserMenuPopover";
 import { WorkRemindersPopover } from "./components/popovers/WorkRemindersPopover";
 import { logoutV615, resolveV615Alert } from "./api";
 import { listEvents } from "../../../services/vkpi/events-api";
+import { normalizeEventsHierarchy } from "./normalizers";
 import { I18nContext, makeT } from "./lib/i18n";
 import { loadStoredState, saveStoredState } from "./lib/storage";
 import { useV615Runtime } from "./useV615Runtime";
@@ -318,6 +319,9 @@ export function V615ReplicaApp(props: any = {}) {
   const kolHierarchyReady = Boolean(
     dashboardRuntime.mapHierarchy && Object.keys(dashboardRuntime.mapHierarchy).length > 0,
   );
+  // 真实活动地图层(只上图带定位的活动;0 个带定位则诚实保持禁用)。
+  const eventsHierarchy = useMemo(() => normalizeEventsHierarchy(eventRows) || {}, [eventRows]);
+  const eventsGeoCount = Object.keys(eventsHierarchy).length;
   const runtimeViewModes = useMemo(() => ({
     ...VIEW_MODES,
     kols: {
@@ -339,11 +343,11 @@ export function V615ReplicaApp(props: any = {}) {
     },
     events: {
       ...VIEW_MODES.events,
-      desc: "events/upcoming endpoint 待接入",
-      hierarchy: {},
-      available: false,
+      desc: eventsGeoCount > 0 ? `${eventsGeoCount} 地有定位活动` : "活动填城市/国家后自动上图",
+      hierarchy: eventsHierarchy,
+      available: eventsGeoCount > 0,
     },
-  }), [dashboardRuntime.mapHierarchy, kolHierarchyReady]);
+  }), [dashboardRuntime.mapHierarchy, kolHierarchyReady, eventsHierarchy, eventsGeoCount]);
   const currentMode = viewMode ? runtimeViewModes[viewMode] : null;
   const isAvailable = currentMode?.available;
   const hierarchy = currentMode?.hierarchy || {};
@@ -650,14 +654,13 @@ export function V615ReplicaApp(props: any = {}) {
       kol_meetup: { icon: PartyPopper, color: "#fbbf24" },
       internal: { icon: Users, color: "#94a3b8" },
     };
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
+    // 时区安全:用本地 YYYY-MM-DD 字符串比较(Date.parse 把 date-only 当 UTC,
+    // 在 UTC- 时区会把"今天"的活动算成昨天而漏掉 → 之前 Upcoming(0) 的真因)。
+    const nowLocal = new Date();
+    const todayStr = `${nowLocal.getFullYear()}-${String(nowLocal.getMonth() + 1).padStart(2, "0")}-${String(nowLocal.getDate()).padStart(2, "0")}`;
     return (Array.isArray(eventRows) ? eventRows : [])
-      .filter((row) => {
-        const start = Date.parse(String(row?.start_date || ""));
-        return Number.isFinite(start) && start >= startOfToday.getTime();
-      })
-      .sort((a, b) => Date.parse(String(a.start_date)) - Date.parse(String(b.start_date)))
+      .filter((row) => String(row?.start_date || "").slice(0, 10) >= todayStr)
+      .sort((a, b) => String(a.start_date || "").localeCompare(String(b.start_date || "")))
       .slice(0, 6)
       .map((row) => {
         const visual = EVENT_TYPE_VISUAL[row.type_key] || { icon: Calendar, color: "#a855f7" };
