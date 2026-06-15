@@ -5,10 +5,11 @@ import React, { useEffect, useState } from "react";
 import { Check, List, Plus, Target, X } from "lucide-react";
 import { PopoverWrapper } from "./PopoverWrapper";
 import { REMINDER_ICON_MAP } from "../../data/reminderIconMap";
+import { ActionInboxPanel } from "../ActionInboxPanel";
 
 const e = React.createElement;
 
-export function WorkRemindersPopover({ onClose, reminders, anchorRef, t, viewingAs, onOpenImport, onViewAll, onMarkAllRead }: any) {
+export function WorkRemindersPopover({ onClose, reminders, anchorRef, t, viewingAs, onOpenImport, onViewAll, onMarkAllRead, apiToken }: any) {
   const [activeTab, setActiveTab] = useState("todo");
   const [items, setItems] = useState(reminders);
 
@@ -122,6 +123,11 @@ export function WorkRemindersPopover({ onClose, reminders, anchorRef, t, viewing
               );
             })
       ),
+      // 今日建议(Action Inbox):2026-06-15 从 Dashboard 右栏迁移至「工作提醒」,保留 approve/dismiss 全功能。
+      apiToken ? e("div", { className: "border-t border-white/[0.06] px-2 pt-2 pb-1" },
+        e("div", { className: "px-1 pb-1.5 text-[10px] font-semibold text-slate-400" }, t("今日建议")),
+        e(ActionInboxPanel, { apiToken }),
+      ) : null,
       // Bottom - 单按钮 + 导入任务
       onOpenImport && e("div", { className: "border-t border-white/[0.06] p-2" },
         e("button", { 

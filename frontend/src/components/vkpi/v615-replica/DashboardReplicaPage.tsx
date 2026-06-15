@@ -4,7 +4,6 @@ import React from "react";
 import { motion } from "framer-motion";
 import { AlertTriangle, DollarSign, Globe2, Loader2, TrendingUp } from "lucide-react";
 import { AIIntelligenceCard } from "./components/AIIntelligenceCard";
-import { ActionInboxPanel } from "./components/ActionInboxPanel";
 import { ActiveCampaignsCard } from "./components/ActiveCampaignsCard";
 import { Breadcrumb } from "./components/Breadcrumb";
 import { ContentCalendarCard } from "./components/ContentCalendarCard";
@@ -374,8 +373,8 @@ export function DashboardReplicaPage(props: any) {
 
             // ─── RIGHT RAIL (今日建议 + KOL 漏斗 + Active Campaigns + 7 天日历) ───
             e("div", { className: "space-y-4" },
-              // 2026-06-15 用户要求:KOL 漏斗 / Active Campaigns / 近7天 三块上移到右栏顶部,
-              // 今日建议(Action Inbox)挪到最后(且已去掉 h-full、默认 3 条),不再把它们顶下去。
+              // 2026-06-15:右栏只留 KOL 漏斗 / Active Campaigns / 近7天;今日建议(Action Inbox)
+              // 已迁移至顶栏「工作提醒」popover(WorkRemindersPopover),主界面更干净。
               // 0. KOL 漏斗(收藏→认领→入项目→已发布)
               e(KolFunnelCard, {
                 funnel: kolFunnel,
@@ -394,9 +393,7 @@ export function DashboardReplicaPage(props: any) {
                 latestDate: calendarMeta?.latestDate,
                 onItemClick: (item: any) => setSelectedPublish(item),
                 onViewAll: () => setShowFullCalendar(true)
-              }),
-              // 3. W1 Auto-Ops 今日建议(只读 dry-run;后端按 scope 过滤)—— 放最后,紧凑
-              e(ActionInboxPanel, { apiToken })
+              })
             )
           )
         );

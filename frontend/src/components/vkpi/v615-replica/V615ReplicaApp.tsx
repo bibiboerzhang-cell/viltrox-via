@@ -891,10 +891,10 @@ export function V615ReplicaApp(props: any = {}) {
       onOpenShortcuts: () => setShowShortcuts(true),
       onOpenFeedback: () => setShowFeedback(true),
     })),
-    e(AnimatePresence, null, showMessages && e(WorkRemindersPopover, { 
-      onClose: () => setShowMessages(false), 
+    e(AnimatePresence, null, showMessages && e(WorkRemindersPopover, {
+      onClose: () => setShowMessages(false),
       reminders: activeReminders,
-      anchorRef: messagesBtnRef, t, viewingAs,
+      anchorRef: messagesBtnRef, t, viewingAs, apiToken,
       onViewAll: () => setShowAllReminders(true),
     })),
     e(AnimatePresence, null, showNotifs && e(NotificationsPopover, { 
