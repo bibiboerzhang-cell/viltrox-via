@@ -2,7 +2,14 @@
 from __future__ import annotations
 
 from app.domains.channels.common import *
-from app.domains.channels.official import _platform_label, official_account_matrix
+from app.domains.channels.official import (
+    _platform_label,
+    official_account_matrix,
+    _extract_posts,
+    _attach_cached_item_videos,
+    _attach_post_identity,
+    _attach_media_contract,
+)
 from app.domains.channels.posts import _posts_from_package
 
 def _all_posts_for_channel(row: dict[str, Any]) -> tuple[list[dict[str, Any]], str, str]:
