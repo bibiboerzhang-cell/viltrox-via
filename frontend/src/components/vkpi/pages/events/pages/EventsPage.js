@@ -16,7 +16,7 @@ import { EVENT_STATUS, EVENT_TYPES } from "../shared/constants.js";
 import { fmtMoneyShort, sum } from "../shared/helpers.js";
 
 const e = React.createElement;
-export default function EventsPage({ currentUser, staff = [] }) {
+export default function EventsPage({ currentUser, staff = [], initialEventId = null, onConsumeInitialEvent }) {
   const { token } = useAuth();
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -43,6 +43,16 @@ export default function EventsPage({ currentUser, staff = [] }) {
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [token]);
+
+  // dashboard「查看完整报告/编辑」跳转带来的活动 id:活动加载完成后自动打开其详情,
+  // 随即清空(consume),以免返回列表再进又被自动弹回。找不到则静默忽略。
+  useEffect(() => {
+    if (!initialEventId || loading) return;
+    if (events.some(ev => String(ev.id) === String(initialEventId))) {
+      setSelectedId(String(initialEventId));
+    }
+    if (onConsumeInitialEvent) onConsumeInitialEvent();
+  }, [initialEventId, loading, events, onConsumeInitialEvent]);
 
   function handleCreateEvent(data) {
     setShowNew(false);

@@ -11,7 +11,7 @@ import { TIMELINE_STATUS } from "../../data/timelineStatus";
 
 const e = React.createElement;
 
-export function EventDetailModal({ event, onClose }) {
+export function EventDetailModal({ event, onClose, onOpenFullEvent }) {
   // V6.10: filter 持久化
   const stored = loadStoredState();
   const [filter, setFilter] = useState(stored.eventFilter || "all");
@@ -216,13 +216,18 @@ export function EventDetailModal({ event, onClose }) {
           "Template-driven · " + Object.keys(TIMELINE_CATEGORIES).length + " phases · auto-generated from event playbook"
         ),
         e("div", { className: "flex gap-2" },
-          e("button", { 
-            className: "rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-slate-300 hover:bg-white/[0.06]" 
-          , disabled: true, title: "待接入" }, "Edit Plan"),
-          e("button", { 
+          // 跳真实 Events 页并打开该活动详情(编辑 + 完整 tab 都在那里)。
+          e("button", {
+            onClick: () => { if (onOpenFullEvent) onOpenFullEvent(event); else onClose && onClose(); },
+            className: "rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-slate-300 hover:bg-white/[0.06]",
+            title: onOpenFullEvent ? "在 Events 页编辑该活动" : "待接入"
+          }, "Edit Plan"),
+          e("button", {
+            onClick: () => { if (onOpenFullEvent) onOpenFullEvent(event); else onClose && onClose(); },
             className: "rounded-lg px-3 py-1.5 text-xs text-white",
-            style: { background: event.color }
-          , disabled: true, title: "待接入" }, "View Full Report →")
+            style: { background: event.color },
+            title: onOpenFullEvent ? "查看完整活动详情" : "待接入"
+          }, "View Full Report →")
         )
       )
     )

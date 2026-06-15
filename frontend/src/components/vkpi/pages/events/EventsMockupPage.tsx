@@ -15,9 +15,11 @@ type EventsMockupPageProps = {
   userName?: string;
   staff?: UiStaff[];
   currentUser?: { id?: string | number; name?: string; avatar?: string; email?: string };
+  initialEventId?: string | null;
+  onConsumeInitialEvent?: () => void;
 };
 
-export function EventsMockupPage({ userName, staff = [], currentUser: loggedInUser }: EventsMockupPageProps) {
+export function EventsMockupPage({ userName, staff = [], currentUser: loggedInUser, initialEventId = null, onConsumeInitialEvent }: EventsMockupPageProps) {
   // Derive the events currentUser from the real logged-in user, matched against the
   // real staff list so its id lines up with event teamUserIds/ownerId (real staff ids).
   const currentUser = React.useMemo(() => {
@@ -38,7 +40,12 @@ export function EventsMockupPage({ userName, staff = [], currentUser: loggedInUs
 
   return (
     <div className="min-h-[calc(100vh-4rem)] bg-[#0a0a0d] text-white">
-      <EventsPage currentUser={currentUser} staff={staff} />
+      <EventsPage
+        currentUser={currentUser}
+        staff={staff}
+        initialEventId={initialEventId}
+        onConsumeInitialEvent={onConsumeInitialEvent}
+      />
     </div>
   );
 }

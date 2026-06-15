@@ -44,7 +44,7 @@ export function DashboardReplicaPage(props: any) {
     setVenue, setSelectedPin, viewMode, setViewMode, countryOptions, cityOptions, itemOptions, venueOptions,
     breadcrumb, goBack, topListData, setSelectedEvent, setSelectedSignal, setShowAllSignals, setShowAIConfirm,
     setAiRegenerating, aiRegenerating, setSelectedMover, setShowAllMovers, setSelectedProject, setShowAllProjects,
-    setSelectedPublish, setShowFullCalendar, onOpenProjectsList, onOpenMyKol, focusTarget, viewModes = VIEW_MODES,
+    setSelectedPublish, setShowFullCalendar, onOpenProjectsList, onOpenMyKol, onOpenEvents, focusTarget, viewModes = VIEW_MODES,
     metrics = [], campaigns = [], campaignsMeta = {}, calendarDays = [], calendarMeta = {},
     signals = [], aiInsight = EMPTY_AI_INSIGHT, topMovers = [], kolFunnel = null,
     upcomingEvents = [], revenueBySource = [], dashboardLoading = false, dashboardError = "",
@@ -230,7 +230,7 @@ export function DashboardReplicaPage(props: any) {
                   className: "absolute right-6 top-24 w-[280px]", 
                   style: { zIndex: 800 }
                 },
-                  e(UpcomingEventsCard, { events: upcomingEvents, dragConstraintsRef: globeContainerRef, onEventClick: setSelectedEvent })
+                  e(UpcomingEventsCard, { events: upcomingEvents, dragConstraintsRef: globeContainerRef, onEventClick: setSelectedEvent, onViewAll: onOpenEvents })
                 ),
 
                 // V6.3: Top List 浮动卡(可拖动 / 可缩放 / 可折叠)

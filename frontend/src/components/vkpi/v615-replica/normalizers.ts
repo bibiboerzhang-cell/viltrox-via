@@ -749,6 +749,18 @@ export function normalizeEventsHierarchy(eventRows = []) {
   return Object.keys(hierarchy).length ? hierarchy : null;
 }
 
+// 单个活动的地图落点:优先显式经纬度;否则用国家质心 + 轻抖动(同国多活动不完全重叠)。
+// 既无显式经纬度又无可识别国家 → 返回 null(诚实不上图)。
+export function eventCoords(countryCode, lat, lng, seed = "") {
+  const code = String(countryCode || "").trim().toUpperCase();
+  const latNum = number(lat);
+  const lngNum = number(lng);
+  if (latNum != null && lngNum != null) return { lat: latNum, lng: lngNum };
+  const centroid = code ? countryCentroid(code) : null;
+  if (!centroid) return null;
+  return { lat: centroid.lat + jitter(seed, 31, 1.4), lng: centroid.lng + jitter(seed, 32, 1.4) };
+}
+
 // 2026-06-12 C10(波3 R1):消费后端 summary.funnel
 // shape = { favorites_total, claimed_total, in_project_total, published_total, by_staff[] }
 // 后端块未上线前 isReal=false,卡面显示「漏斗数据待后端」,绝不硬编码假数。

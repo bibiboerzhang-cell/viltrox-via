@@ -8,7 +8,7 @@ import { Calendar, Minimize, Plus, X } from "lucide-react";
 
 const e = React.createElement;
 
-export function UpcomingEventsCard({ events, dragConstraintsRef, onEventClick }) {
+export function UpcomingEventsCard({ events, dragConstraintsRef, onEventClick, onViewAll }) {
   const [collapsed, setCollapsed] = useState(false);
   const nearestEvent = events[0];
 
@@ -121,7 +121,8 @@ export function UpcomingEventsCard({ events, dragConstraintsRef, onEventClick })
     ),
 
     events.length > 0 && e("button", {
-      onClick: () => { if (onEventClick && events[0]) onEventClick(events[0]); },
+      // 跳到完整 Events 页;无 onViewAll(老调用方)时回退到打开第一个活动。
+      onClick: () => { if (onViewAll) onViewAll(); else if (onEventClick && events[0]) onEventClick(events[0]); },
       className: "mt-2 w-full rounded-md border border-white/[0.06] bg-white/[0.02] py-1 text-[10px] text-slate-400 hover:text-white hover:border-white/[0.14]"
     }, "View all events →")
   );

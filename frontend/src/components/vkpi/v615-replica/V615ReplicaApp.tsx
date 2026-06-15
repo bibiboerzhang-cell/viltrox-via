@@ -54,7 +54,7 @@ import { WorkRemindersPopover } from "./components/popovers/WorkRemindersPopover
 import { logoutV615, resolveV615Alert } from "./api";
 import { buildApiUrl } from "../../../services/http";
 import { listEvents } from "../../../services/vkpi/events-api";
-import { normalizeEventsHierarchy } from "./normalizers";
+import { normalizeEventsHierarchy, eventCoords } from "./normalizers";
 import { I18nContext, makeT } from "./lib/i18n";
 import { loadStoredState, saveStoredState } from "./lib/storage";
 import { useV615Runtime } from "./useV615Runtime";
@@ -162,6 +162,8 @@ export function V615ReplicaApp(props: any = {}) {
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [selectedKpi, setSelectedKpi] = useState(null);
   const [previewEvent, setPreviewEvent] = useState(null);
+  // 从 dashboard「查看完整报告/编辑」跳到 Events 页时,带上要自动打开的活动 id。
+  const [pendingEventId, setPendingEventId] = useState(null);
   // 2026-06-14 诚实化:Upcoming Events 卡接真实 /api/admin/vkpi/events,不再传空数组。
   const [eventRows, setEventRows] = useState([]);
   const [kpiScope, setKpiScope] = useState(stored.kpiScope || "all");
@@ -443,13 +445,98 @@ export function V615ReplicaApp(props: any = {}) {
     ];
   }, [item, city, country, hierarchy]);
 
+  // 真实 events → 统一 UI 形态(Upcoming 卡 / 地图落点 / preview 共用同一映射)。
+  // 定义在 pins useMemo 之前:pins 在 events 视图引用 eventPins。
+  const mappedEvents = useMemo(() => {
+    const EVENT_TYPE_VISUAL = {
+      tradeshow: { icon: Ticket, color: "#a855f7" },
+      media: { icon: Camera, color: "#06b6d4" },
+      webinar: { icon: Video, color: "#10b981" },
+      kol_meetup: { icon: PartyPopper, color: "#fbbf24" },
+      internal: { icon: Users, color: "#94a3b8" },
+    };
+    const STATUS_LABEL = { planning: "筹备中", active: "进行中", done: "已结束", cancelled: "已取消" };
+    return (Array.isArray(eventRows) ? eventRows : []).map((row) => {
+      const visual = EVENT_TYPE_VISUAL[row.type_key] || { icon: Calendar, color: "#a855f7" };
+      const start = new Date(String(row.start_date));
+      const startStr = String(row.start_date || "").slice(0, 10);
+      const dateLabel = Number.isNaN(start.getTime())
+        ? startStr
+        : start.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
+      const locParts = [row.location_city, row.location_country].filter(Boolean);
+      const health = Number(row.health_score);
+      const status = String(row.status || "");
+      return {
+        id: row.id,
+        title: String(row.title || "未命名活动"),
+        date: dateLabel,
+        startDate: startStr,
+        location: String(row.location_name || locParts.join(" · ") || "地点待补"),
+        venue: String(row.location_name || locParts.join(" · ") || ""),
+        country: String(row.location_country || "").toUpperCase(),
+        city: String(row.location_city || ""),
+        lat: row.location_lat != null ? Number(row.location_lat) : null,
+        lng: row.location_lng != null ? Number(row.location_lng) : null,
+        icon: visual.icon,
+        color: visual.color,
+        // 真实 health_score 作为进度条;无则 0(不编造)。
+        materialProgress: Number.isFinite(health) ? Math.max(0, Math.min(100, health)) : 0,
+        materialStatus: STATUS_LABEL[status] || String(row.status_label || "进行中"),
+        raw: row,
+      };
+    });
+  }, [eventRows]);
+
+  // Upcoming 卡:start_date >= 今天,升序,取前 6。
+  // 时区安全:用本地 YYYY-MM-DD 字符串比较(Date.parse 把 date-only 当 UTC,
+  // 在 UTC- 时区会把"今天"的活动算成昨天而漏掉 → 之前 Upcoming(0) 的真因)。
+  const upcomingEvents = useMemo(() => {
+    const nowLocal = new Date();
+    const todayStr = `${nowLocal.getFullYear()}-${String(nowLocal.getMonth() + 1).padStart(2, "0")}-${String(nowLocal.getDate()).padStart(2, "0")}`;
+    return mappedEvents
+      .filter((ev) => String(ev.startDate || "") >= todayStr)
+      .sort((a, b) => String(a.startDate || "").localeCompare(String(b.startDate || "")))
+      .slice(0, 6);
+  }, [mappedEvents]);
+
+  // 地图落点:每个「有定位」(显式经纬度或可识别国家)的活动一个 pin,点击弹 preview。
+  // 无定位的活动诚实不上图(不会凭空造点)。country 统一大写,与 pins 过滤口径一致。
+  const eventPins = useMemo(() => {
+    return mappedEvents
+      .map((ev) => {
+        const coords = eventCoords(ev.country, ev.lat, ev.lng, ev.id || ev.title);
+        if (!coords) return null;
+        return {
+          id: ev.id,
+          name: ev.title,
+          handle: ev.title,
+          lat: coords.lat,
+          lng: coords.lng,
+          count: 1,
+          revenue: "",
+          color: ev.color,
+          scale: 0.9,
+          isEvent: true,
+          eventData: ev,
+          country: String(ev.country || "").toUpperCase(),
+          city: ev.city,
+        };
+      })
+      .filter(Boolean);
+  }, [mappedEvents]);
+
   // 计算当前要在地球上显示的 pins
   const pins = useMemo(() => {
     if (!currentMode || !isAvailable) return [];
 
-    // Events endpoint is not wired yet; do not render prototype event pins as real data.
+    // 真实活动上图:有定位的活动逐个落点(点击 → preview)。
+    // 按面包屑过滤:选了国家/城市就只显示该范围(国别码精确匹配)。
     if (currentMode.isEvents) {
-      return [];
+      return eventPins.filter((p) => {
+        if (country && String(p.country || "").toUpperCase() !== String(country).toUpperCase()) return false;
+        if (city && String(p.city || "").toLowerCase() !== String(city).toLowerCase()) return false;
+        return true;
+      });
     }
 
     // Level 0:World view — 所有国家
@@ -513,7 +600,7 @@ export function V615ReplicaApp(props: any = {}) {
     }
 
     return [];
-  }, [currentMode, isAvailable, country, city, item, venue, hierarchy]);
+  }, [currentMode, isAvailable, country, city, item, venue, hierarchy, eventPins]);
 
   // 计算 focusTarget
   const focusTarget = useMemo(() => {
@@ -670,46 +757,15 @@ export function V615ReplicaApp(props: any = {}) {
     };
   }, [apiToken]);
 
-  // 真实 events → UpcomingEventsCard 形态:start_date >= 今天,升序,取前 6。
-  const upcomingEvents = useMemo(() => {
-    const EVENT_TYPE_VISUAL = {
-      tradeshow: { icon: Ticket, color: "#a855f7" },
-      media: { icon: Camera, color: "#06b6d4" },
-      webinar: { icon: Video, color: "#10b981" },
-      kol_meetup: { icon: PartyPopper, color: "#fbbf24" },
-      internal: { icon: Users, color: "#94a3b8" },
-    };
-    // 时区安全:用本地 YYYY-MM-DD 字符串比较(Date.parse 把 date-only 当 UTC,
-    // 在 UTC- 时区会把"今天"的活动算成昨天而漏掉 → 之前 Upcoming(0) 的真因)。
-    const nowLocal = new Date();
-    const todayStr = `${nowLocal.getFullYear()}-${String(nowLocal.getMonth() + 1).padStart(2, "0")}-${String(nowLocal.getDate()).padStart(2, "0")}`;
-    return (Array.isArray(eventRows) ? eventRows : [])
-      .filter((row) => String(row?.start_date || "").slice(0, 10) >= todayStr)
-      .sort((a, b) => String(a.start_date || "").localeCompare(String(b.start_date || "")))
-      .slice(0, 6)
-      .map((row) => {
-        const visual = EVENT_TYPE_VISUAL[row.type_key] || { icon: Calendar, color: "#a855f7" };
-        const start = new Date(String(row.start_date));
-        const dateLabel = Number.isNaN(start.getTime())
-          ? String(row.start_date || "").slice(0, 10)
-          : start.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
-        const locParts = [row.location_city, row.location_country].filter(Boolean);
-        const health = Number(row.health_score);
-        return {
-          id: row.id,
-          title: String(row.title || "未命名活动"),
-          date: dateLabel,
-          location: String(row.location_name || locParts.join(" · ") || "地点待补"),
-          country: String(row.location_country || ""),
-          city: String(row.location_city || ""),
-          icon: visual.icon,
-          color: visual.color,
-          // 真实 health_score 作为进度条;无则 0(不编造)。
-          materialProgress: Number.isFinite(health) ? Math.max(0, Math.min(100, health)) : 0,
-          raw: row,
-        };
-      });
-  }, [eventRows]);
+  // mappedEvents / upcomingEvents / eventPins 已上移到 pins useMemo 之前(被 pins 引用,
+  // 必须先于其定义,否则 events 视图下 pins 工厂触发 eventPins 的 TDZ)。
+
+  // 跳到 Events 页(可选自动打开某活动详情)。复用 onOpenProjectsList 等同款 storage + setActiveNav 模式。
+  const openEventsPage = useCallback((eventId = null) => {
+    setPendingEventId(eventId ? String(eventId) : null);
+    saveStoredState({ activeNav: "events" });
+    setActiveNav("events");
+  }, []);
 
   return e(I18nContext.Provider, { value: { t, lang, setLang } },
    e("div", { className: "relative min-h-screen bg-[#050810] text-slate-200" },
@@ -729,7 +785,16 @@ export function V615ReplicaApp(props: any = {}) {
         setActiveNav("kol-pool");
       },
     })),
-    e(AnimatePresence, null, selectedEvent && e(EventDetailModal, { event: selectedEvent, onClose: () => setSelectedEvent(null) })),
+    e(AnimatePresence, null, selectedEvent && e(EventDetailModal, {
+      event: selectedEvent,
+      onClose: () => setSelectedEvent(null),
+      // 「编辑方案 / 查看完整报告」→ 跳真实 Events 页并自动打开该活动详情(含真实 tab + 编辑)。
+      onOpenFullEvent: () => {
+        const id = selectedEvent?.id || selectedEvent?.raw?.id;
+        setSelectedEvent(null);
+        openEventsPage(id);
+      },
+    })),
     e(AnimatePresence, null, selectedKpi && e(KPIDetailModal, {
       kpiId: selectedKpi,
       initialScope: kpiScope,
@@ -952,9 +1017,9 @@ export function V615ReplicaApp(props: any = {}) {
       }
     })),
     // V6.9: Event preview modal (二次点击逻辑)
-    e(AnimatePresence, null, previewEvent && e(EventPreviewModal, { 
-      event: previewEvent, 
-      allEvents: [],
+    e(AnimatePresence, null, previewEvent && e(EventPreviewModal, {
+      event: previewEvent,
+      allEvents: mappedEvents,
       onClose: () => setPreviewEvent(null),
       onViewDetails: (evt) => {
         setPreviewEvent(null);
@@ -1172,6 +1237,9 @@ export function V615ReplicaApp(props: any = {}) {
                   userName,
                   staff: uiStaff,
                   currentUser,
+                  // dashboard 跳转带来的活动 id:打开后即清空,避免返回再进又自动弹。
+                  initialEventId: pendingEventId,
+                  onConsumeInitialEvent: () => setPendingEventId(null),
                 })
               )
             ),
@@ -1228,6 +1296,8 @@ export function V615ReplicaApp(props: any = {}) {
                 saveStoredState({ activeNav: "my-kol" });
                 setActiveNav("my-kol");
               },
+              // Upcoming Events 卡「View all events →」→ 跳真实 Events 页。
+              onOpenEvents: () => openEventsPage(null),
             })
           )
         )
