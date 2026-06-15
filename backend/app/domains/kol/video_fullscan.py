@@ -84,9 +84,13 @@ def plan_kol_video_fullscan(kol_pool_id: int, *, top_n: int = 5) -> dict[str, An
     safe_top_n = max(1, min(int(top_n or 5), 50))
     conn = get_conn()
 
-    kol = conn.execute("SELECT id FROM vkpi_kol_pool WHERE id=?", (kol_pool_id,)).fetchone()
+    kol = conn.execute(
+        "SELECT id, posts_count, profile_url FROM vkpi_kol_pool WHERE id=?",
+        (kol_pool_id,),
+    ).fetchone()
     if not kol:
         raise LookupError(f"kol_pool_id not found: {kol_pool_id}")
+    kol = dict(kol)
 
     # Full (visible/metadata) layer — all active evidence (085 columns).
     rows = conn.execute(
@@ -131,11 +135,35 @@ def plan_kol_video_fullscan(kol_pool_id: int, *, top_n: int = 5) -> dict[str, An
             }
         )
 
+    # Full-scan visibility (P0-1): N = visible (already-materialized evidence),
+    # M = deep-analyzed, K = still-to-fetch. K cannot be known precisely without
+    # actually crawling the channel, so we report channel_total_known=False and
+    # surface posts_count only as a non-authoritative upper-bound *hint* (it is
+    # a platform posts count, not a YouTube video count) when present.
+    posts_count = _int_or_none(kol.get("posts_count"))
+    channel_total_hint = posts_count if (posts_count is not None and posts_count >= 0) else None
+    to_materialize_pending = (
+        max(0, channel_total_hint - total_videos) if channel_total_hint is not None else None
+    )
+
     return {
         "kol_pool_id": kol_pool_id,
         "total_videos": total_videos,
         "analyzed_count": analyzed_count,
         "pending_count": pending_count,
+        # Full-scan ledger: visible N / analyzed M / to-fetch K.
+        "materialized_visible_n": total_videos,
+        "analyzed_m": analyzed_count,
+        "to_materialize_pending": to_materialize_pending,
+        "channel_total_known": False,
+        "channel_total_hint": channel_total_hint,
+        "fullscan_note": (
+            "materialized_visible_n = evidence already in vkpi_kol_video_evidence; "
+            "K (to_materialize_pending) is unknown until a materialize run crawls "
+            "the channel. channel_total_hint is a non-authoritative platform "
+            "posts_count, not a confirmed video total. Trigger materialize via "
+            "POST /kol-memory/{id}/video-fullscan-materialize."
+        ),
         "top_candidates": top_candidates,
         "enqueue_hint": (
             "Run deep analysis per candidate via "

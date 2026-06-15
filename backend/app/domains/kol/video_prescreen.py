@@ -87,6 +87,9 @@ def prescreen_kol_videos(kol_pool_id: int) -> dict[str, Any]:
     return {
         "kol_pool_id": kol_pool_id,
         "total_videos": len(results),
+        # Full-scan visibility (P0-1): N = already-materialized evidence rows.
+        # Same meaning as plan_kol_video_fullscan.materialized_visible_n.
+        "materialized_visible_n": len(results),
         "viltrox_hit_count": hit_count,
         "results": results,
         "method": "rule_v0_keyword_prescreen",

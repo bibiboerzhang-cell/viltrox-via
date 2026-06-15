@@ -104,3 +104,25 @@ def enqueue_kol_video_fullscan(
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/kol-memory/{kol_id}/video-fullscan-materialize")
+def materialize_kol_video_fullscan(
+    kol_id: int,
+    target_n: int = Query(default=120, ge=1, le=120),
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """Trigger full video-metadata materialization for one KOL.
+
+    Reuses the existing kol_profile_deep_crawl channel to back-fill
+    vkpi_kol_video_evidence with the KOL's video metadata. Metadata only:
+    never burns LLM, never touches viltrox_fit_score / rule_v0.
+    """
+    from app.domains.kol import video_full_materialize
+
+    try:
+        return video_full_materialize.enqueue_full_materialize(
+            int(kol_id), target_n=int(target_n), staff=staff,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))

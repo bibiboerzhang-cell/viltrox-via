@@ -126,24 +126,76 @@ def _exec_deep_missing(action: dict[str, Any], staff: dict[str, Any] | None) -> 
 
 
 def _exec_failed_retry(action: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
-    """失败 apify_job 重排 → requeue(status=failed → queued)。仅 failed 行可重排。
+    """失败/受阻 apify_job 重排 → requeue(status failed|blocked → queued)。
 
-    apify_jobs.status CHECK 仅含 queued/running/done/failed(无 blocked);只 requeue failed。
-    注:前端 retryTask 走的是另一套 vkpi_tasks 队列;这里针对 apify_jobs 直接 requeue。
+    只 requeue 真 failed/blocked 行;清 last_error/last_error_category/next_retry_at
+    (与 worker _claim_job 重领时清空语义一致,让重排行能被 worker 立即重领)。
+    attempts 不在此处篡改(保留试错史,worker 重跑时按既有逻辑递增)。
+    此为 apify_jobs provider 队列(账号/视频抓取),与前端任务看板的 vkpi_tasks
+    营销队列两套互不相干(后者由 tasks.enqueue.retry_task 走 job_execution_ledger 重排)。
     """
     job_id = _entity_id_int(action)
     if not job_id:
         return {"outcome": "skipped", "reason": "failed_retry_no_job_id", "detail": {}}
     conn = get_conn()
     cursor = conn.execute(
-        "UPDATE apify_jobs SET status = 'queued', updated_at = NOW() WHERE id = ? AND status = 'failed'",
+        """
+        UPDATE apify_jobs
+        SET status = 'queued', last_error = NULL, last_error_category = NULL,
+            next_retry_at = NULL, updated_at = NOW()
+        WHERE id = ? AND status IN ('failed', 'blocked')
+        """,
         (int(job_id),),
     )
     conn.commit()
     requeued = int(getattr(cursor, "rowcount", 0) or 0) > 0
     if not requeued:
         return {"outcome": "skipped", "reason": "failed_retry_not_in_failed_state", "detail": {"job_id": job_id}}
-    return {"outcome": "success", "reason": "", "detail": {"job_id": job_id, "requeued": True}}
+    return {
+        "outcome": "success",
+        "reason": "requeued_apify_jobs",
+        "detail": {
+            "job_id": job_id,
+            "requeued": True,
+            "queue": "apify_jobs",
+            "note": (
+                "重试 apify_jobs 队列(账号/视频抓取的 provider 队列),"
+                "≠ 前端任务看板的 vkpi_tasks 营销队列"
+                "(后者由 tasks.enqueue.retry_task 走 job_execution_ledger 重排)"
+            ),
+        },
+    }
+
+
+def _exec_kol_profile(action: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
+    """KOL profile 补字段 → 入 apify_jobs profile 抓取队列(worker 异步跑,绝不同步烧 LLM)。
+
+    复用 enqueue_profile_deep_crawl_job(同 _exec_deep_missing 的 sync apify_jobs 入队器):
+    取 profile_url → 无 URL 诚实 skip(不臆造)→ 入队(max_posts=1 取轻量,profile 补字段非视频深析)。
+    LLM/视频在 worker run_profile_deep_crawl_for_job 异步跑并过预算闸。绝不写 viltrox_fit_score。
+    """
+    from app.domains.kol import url_deep_crawl
+
+    kol_pool_id = _entity_id_int(action)
+    if not kol_pool_id:
+        return {"outcome": "skipped", "reason": "kol_profile_no_kol_id", "detail": {}}
+    # 取 profile_url(profile 抓取需 URL);无 URL → 诚实 skip(不臆造 URL)。
+    row = get_conn().execute(
+        "SELECT profile_url FROM vkpi_kol_pool WHERE id = ?",
+        (int(kol_pool_id),),
+    ).fetchone()
+    url = str((dict(row).get("profile_url") if row else "") or "").strip()
+    if not url:
+        return {"outcome": "skipped", "reason": "kol_profile_no_profile_url", "detail": {"kol_pool_id": kol_pool_id}}
+    res = url_deep_crawl.enqueue_profile_deep_crawl_job(url, kol_pool_id=kol_pool_id, max_posts=1, staff=staff)
+    return {
+        "outcome": "success",
+        "reason": "",
+        "detail": {
+            "enqueue": res,
+            "note": "入 apify_jobs profile 抓取队列(worker 异步跑,绝不同步烧 LLM)",
+        },
+    }
 
 
 def _exec_project_observation(action: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
@@ -212,14 +264,13 @@ def _exec_retrospective(action: dict[str, Any], staff: dict[str, Any] | None) ->
 
 
 def _exec_skip_reminder(action: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
-    """纯提醒类(kol_profile / event_followup / inventory_low / project_shared_to_you):
+    """纯提醒类(event_followup / inventory_low / project_shared_to_you):
 
     这些 requires_approval=False 且不写业务数据,本不该进 approved 执行路径 → 防御性 skip。
-    kol_profile 当前无干净同步刷新 service(grep 0 命中 refresh_profile)→ 先 skip 待补。
+    (kol_profile 已有真入队执行器 _exec_kol_profile,不再走此 skip 分支。)
     """
     category = str(action.get("category") or "")
     reason_map = {
-        "kol_profile": "profile_refresh_no_executor",
         "event_followup": "reminder_only_no_executor",
         "inventory_low": "reminder_only_no_executor",
         "project_shared_to_you": "reminder_only_no_executor",
@@ -233,7 +284,7 @@ _DISPATCH = {
     "project_observation": _exec_project_observation,
     "content_candidate": _exec_content_candidate,
     "retrospective": _exec_retrospective,
-    "kol_profile": _exec_skip_reminder,
+    "kol_profile": _exec_kol_profile,
     "event_followup": _exec_skip_reminder,
     "inventory_low": _exec_skip_reminder,
     "project_shared_to_you": _exec_skip_reminder,

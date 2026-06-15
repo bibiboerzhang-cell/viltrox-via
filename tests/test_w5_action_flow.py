@@ -169,7 +169,8 @@ def test_action_flow_list_approve_execute_skip_and_ledger(actor_client, seeded_a
     assert appr_body.get("status") == "approved"
     assert _action_status(action_id) == "approved"
 
-    # 4. execute:kol_profile 走 _exec_skip_reminder → 防御性 skip。
+    # 4. execute:kol_profile 现走 _exec_kol_profile 真入队;此处 seed 的 action 无合法 kol_pool_id
+    #    → 防御性 skip(reason=kol_profile_no_kol_id),仍落执行台账。
     exe = actor_client.post(
         f"/api/admin/vkpi/actions/{action_id}/execute", headers=_BEARER
     )
@@ -178,7 +179,7 @@ def test_action_flow_list_approve_execute_skip_and_ledger(actor_client, seeded_a
     assert exe_body.get("ok") is False
     assert exe_body.get("outcome") == "skipped"
     assert exe_body.get("category") == "kol_profile"
-    assert exe_body.get("reason") == "profile_refresh_no_executor"
+    assert exe_body.get("reason") == "kol_profile_no_kol_id"
     assert "ledger_id" in exe_body  # 执行落了台账
 
     # skip 不改 action 终态(仍 approved,人可再处理/dismiss)。
