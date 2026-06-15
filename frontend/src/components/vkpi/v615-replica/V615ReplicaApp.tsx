@@ -12,6 +12,8 @@ import { ShopifyConnectPage } from "./ShopifyConnectPage";
 import { ShopifyHubPage } from "../pages/ShopifyHubPage";
 import { DealerMapPage } from "../pages/DealerMapPage";
 import { DashboardReplicaPage } from "./DashboardReplicaPage";
+import { V615Sidebar } from "./V615Sidebar";
+import { V615Topbar } from "./V615Topbar";
 import { AIIntelligenceCard } from "./components/AIIntelligenceCard";
 import { ActiveCampaignsCard } from "./components/ActiveCampaignsCard";
 import { Avatar } from "./components/Avatar";
@@ -100,7 +102,7 @@ export function V615ReplicaApp(props: any = {}) {
   const initialNav = normalizeReplicaNav(urlNav) || normalizeReplicaNav(stored.activeNav) || "dashboard";
   
   const [collapsed, setCollapsed] = useState(stored.collapsed || false);
-  const [activeNav, setActiveNav] = useState(["dashboard", "kol-pool", "my-kol", "projects", "events", "shopify"].includes(initialNav) ? initialNav : "dashboard");
+  const [activeNav, setActiveNav] = useState(["dashboard", "kol-pool", "my-kol", "projects", "events", "shopify", "dealers"].includes(initialNav) ? initialNav : "dashboard");
   const [theme, setTheme] = useState(stored.theme || "dark");
 
   // 版本徽标:启动时拉一次 /health,展示 server 短 sha 与前后端同步状态(纯只读,失败静默)
@@ -1034,141 +1036,20 @@ export function V615ReplicaApp(props: any = {}) {
 
     e("div", { className: "v615-shell relative mx-auto flex min-h-screen max-w-[1920px]" },
 
-      // ─── Sidebar ───
-      e("aside", {
-        className: `${collapsed ? "w-[64px]" : "w-[260px]"} sticky top-0 hidden h-screen shrink-0 flex-col justify-between border-r border-white/[0.06] bg-[#050810]/85 backdrop-blur-xl transition-all duration-300 md:flex`
-      },
-        e("div", null,
-          e("div", { className: `flex h-16 items-center ${collapsed ? "justify-center" : "px-5"}` },
-            e("div", { className: "text-2xl font-black tracking-[.18em] text-white" }, collapsed ? "V" : "VILTROX")
-          ),
-          e("nav", { className: `space-y-1 ${collapsed ? "px-2" : "px-3"}` },
-            NAV_ITEMS.map(({ icon: Icon, label, badge, key }) => {
-              const active = activeNav === key;
-              return e("button", {
-                key, onClick: () => setActiveNav(key), title: collapsed ? label : undefined,
-                className: `group flex w-full items-center ${collapsed ? "justify-center px-2" : "px-3 gap-3"} rounded-lg py-2 text-sm transition ${
-                  active ? "bg-blue-600/20 text-white" : "text-slate-400 hover:bg-white/[0.04] hover:text-white"
-                }`,
-                style: active ? { boxShadow: "inset 2px 0 0 #60a5fa" } : {},
-              },
-                e(Icon, { size: 16, className: active ? "text-blue-300" : "text-slate-500" }),
-                !collapsed && e("span", { className: "flex-1 text-left" }, label),
-                !collapsed && badge && e("span", {
-                  className: `rounded px-1.5 py-0.5 text-[10px] ${
-                    badge === "New" ? "bg-emerald-500/30 text-emerald-200" :
-                    "bg-slate-600/40 text-slate-300"
-                  }`
-                }, badge)
-              );
-            })
-          )
-        ),
-        e("div", { className: `flex flex-col gap-2 ${collapsed ? "px-2" : "px-3"} pb-4` },
-          !collapsed && e(TaskProgressBoard, { apiToken }),
-          e("button", {
-            onClick: () => setCollapsed(!collapsed),
-            className: `flex items-center ${collapsed ? "justify-center" : "gap-3 px-3"} rounded-lg py-2 text-sm text-slate-400 hover:bg-white/[0.04] hover:text-white`,
-          },
-            collapsed ? e(PanelLeftOpen, { size: 16 }) : e(PanelLeftClose, { size: 16 }),
-            !collapsed && e("span", null, "Collapse")
-          ),
-          e("button", {
-            onClick: () => setTheme(theme === "dark" ? "light" : "dark"),
-            className: `flex items-center ${collapsed ? "justify-center" : "gap-3 px-3"} rounded-lg py-2 text-sm text-slate-400 hover:bg-white/[0.04] hover:text-white`,
-          },
-            theme === "dark" ? e(Moon, { size: 16 }) : e(Sun, { size: 16 }),
-            !collapsed && e("span", null, theme === "dark" ? "Dark" : "Light")
-          ),
-          // 版本徽标:仅展开态显示一行极淡文字,折叠态隐藏以免挤压窄轨
-          !collapsed && versionBadge && versionBadge.shortSha && e("div", {
-            className: "px-3 pt-1 text-[10px] leading-tight text-slate-600 select-none",
-            title: versionBadge.hasClient
-              ? (versionBadge.inSync ? "前后端构建一致" : "前端与后端构建不一致")
-              : "前端构建标记缺失",
-          },
-            `${versionBadge.shortSha} · ${versionBadge.inSync ? "✓同步" : "⚠不一致"}`
-          )
-        )
-      ),
+      // ─── Sidebar ───(保守拆:纯展示叶子区块抽到 V615Sidebar,props 显式传递,行为不变)
+      e(V615Sidebar, {
+        collapsed, setCollapsed, activeNav, setActiveNav, theme, setTheme, versionBadge, apiToken,
+      }),
 
       // ─── Main ───
       e("main", { className: "min-w-0 flex-1" },
 
-        // Header
-        e("header", { className: "sticky top-0 z-40 flex h-16 items-center justify-between border-b border-white/[0.06] bg-[#050810]/80 px-4 backdrop-blur-xl md:px-6" },
-          e("div", { className: "text-sm font-semibold tracking-wide text-white" }, (NAV_ITEMS.find(n => n.key === activeNav)?.label) || "Dashboard"),
-          e("div", { className: "mx-4 hidden max-w-md flex-1 md:block" },
-            e("div", { className: "relative" },
-              e(Search, { size: 14, className: "absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" }),
-              e("input", {
-                placeholder: "Search anything...",
-                className: "w-full rounded-lg border border-white/[0.08] bg-white/[0.03] py-1.5 pl-9 pr-3 text-xs text-white placeholder-slate-500 focus:border-blue-500/40 focus:outline-none"
-              })
-            )
-          ),
-          e("div", { className: "flex items-center gap-2 md:gap-3" },
-            // V6.14: Help & Messages 按钮(加 onClick + ref)
-            e("button", {
-              ref: helpBtnRef,
-              onClick: () => setShowHelp(true),
-              "aria-label": "Help",
-              className: "hidden rounded-lg p-2 text-slate-400 hover:bg-white/[0.04] hover:text-white md:block"
-            }, e(HelpCircle, { size: 16 })),
-            e("button", {
-              ref: messagesBtnRef,
-              onClick: () => setShowMessages(true),
-              "aria-label": "Work Reminders",
-              className: "hidden relative rounded-lg p-2 text-slate-400 hover:bg-white/[0.04] hover:text-white md:block"
-            }, 
-              e(MessageCircle, { size: 16 }),
-              activeReminders.filter(r => r.status === "todo").length > 0 && e("span", { className: "absolute right-1 top-1 h-2 w-2 rounded-full bg-rose-500" })
-            ),
-            // V6.10: Generate Report 按钮
-            e("button", {
-              onClick: () => setReportOpen(true),
-              "aria-label": "Generate Report",
-              className: "hidden md:flex items-center gap-1.5 rounded-lg border border-purple-500/30 bg-purple-500/[0.08] px-2.5 py-1.5 text-xs text-purple-200 hover:bg-purple-500/[0.15] hover:border-purple-500/50"
-            },
-              e(FileText, { size: 13 }),
-              e("span", null, "Report")
-            ),
-            // V6.14: Notifications(加 onClick + ref)
-            e("button", {
-              ref: notifsBtnRef,
-              onClick: () => setShowNotifs(true),
-              "aria-label": "Notifications",
-              className: "relative rounded-lg p-2 text-slate-400 hover:bg-white/[0.04] hover:text-white"
-            },
-              e(Bell, { size: 16 }),
-              runtimeNotifications.filter(n => n.unread).length > 0 && e("span", { className: "absolute right-1 top-1 h-2 w-2 rounded-full bg-rose-500" })
-            ),
-            // V6.14: User Menu(整个 wrap 加 onClick + ref)
-            e("button", {
-              ref: userMenuBtnRef,
-              onClick: () => setShowUserMenu(true),
-              "aria-label": "User Menu",
-              className: "flex items-center gap-2 border-l border-white/[0.06] pl-3 rounded-r-lg hover:bg-white/[0.02] py-1 pr-2"
-            },
-              e(Avatar, {
-        src: viewingAs ? null : currentUser.avatarUrl,
-        alt: currentUser.name, size: 32, 
-        fallback: viewingAs ? viewingAs.avatar : currentUser.avatar,
-        gradient: viewingAs ? viewingAs.color : currentUser.avatarGradient
-              }),
-              e("div", { className: "hidden text-xs sm:block text-left" },
-                e("div", { className: "text-white flex items-center gap-1" }, 
-                  viewingAs ? viewingAs.name : currentUser.name,
-                  viewingAs && e("span", { className: "text-[8px] px-1 py-0.5 rounded bg-blue-500/20 text-blue-300" }, t("正在以"))
-                ),
-                e("div", { className: "text-slate-500" }, 
-                  viewingAs ? viewingAs.title : (currentUser.role === "admin" ? t("Admin") : t("成员"))
-                )
-              ),
-              e(ChevronDown, { size: 14, className: "hidden text-slate-500 sm:block" })
-            )
-          )
-        ),
+        // Header(保守拆:纯展示顶栏抽到 V615Topbar,props 显式传递,行为不变)
+        e(V615Topbar, {
+          activeNav, helpBtnRef, setShowHelp, messagesBtnRef, setShowMessages, activeReminders,
+          setReportOpen, notifsBtnRef, setShowNotifs, runtimeNotifications, userMenuBtnRef,
+          setShowUserMenu, viewingAs, currentUser, t,
+        }),
 
         // ─── ROUTING ───
         e(AnimatePresence, { mode: "wait", initial: false },
