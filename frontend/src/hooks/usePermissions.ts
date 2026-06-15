@@ -83,7 +83,17 @@ interface UsePermissionsResult {
   isManager(): boolean;
   /** Check if user is owner */
   isOwner(): boolean;
+  /**
+   * 三层账号语义(单点真源,镜像后端 scope.account_tier):
+   *   'company' = 公司账号视角(全局可见)= isManager(≈ can_view_all)
+   *   'member'  = 有身份的普通成员(可见集 = 自己负责 ∪ 被分享 ∪ 被分配)
+   *   'none'    = 未登录 / 无身份
+   * 驱动 Settings 等"个人/公司视图分层",避免各处各自用 isManager 拼判定。
+   */
+  accountTier(): AccountTier;
 }
+
+export type AccountTier = 'company' | 'member' | 'none';
 
 /**
  * Permission hierarchy validator (mirrors backend _level_allows).
@@ -189,6 +199,12 @@ export function usePermissions(): UsePermissionsResult {
     return EMPLOYEE_ALLOWED_PAGES.has(pageKey);
   };
 
+  const accountTier = (): AccountTier => {
+    // 已认证(user 存在)且非管理层 = 成员;未认证 = 无身份。
+    if (!user) return 'none';
+    return isManager() ? 'company' : 'member';
+  };
+
   return {
     hasPermission,
     hasSystemPermission,
@@ -197,5 +213,6 @@ export function usePermissions(): UsePermissionsResult {
     getPermissionLevel,
     isManager,
     isOwner,
+    accountTier,
   };
 }
