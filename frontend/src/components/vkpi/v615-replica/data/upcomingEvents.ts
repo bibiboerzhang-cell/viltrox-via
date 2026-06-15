@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 import { GraduationCap, Presentation, Users } from "lucide-react";

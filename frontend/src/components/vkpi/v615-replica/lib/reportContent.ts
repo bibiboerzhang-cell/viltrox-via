@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Report markdown content from vkpi_v6.15.7_integrated.html
 
 export function generateReportMarkdown({ period, language, sections }: any) {

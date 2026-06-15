@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 export const TEAM_MESSAGES = [

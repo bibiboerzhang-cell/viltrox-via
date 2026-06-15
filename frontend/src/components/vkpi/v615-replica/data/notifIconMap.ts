@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 import { AlertTriangle, FileText, Package, Sparkles, Target, TrendingUp, Users, Zap } from "lucide-react";

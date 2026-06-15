@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 import { BarChart3, Bot, Boxes, Briefcase, Calendar, Database, Heart, LayoutDashboard, LineChart, PackageCheck, RadioTower, Sparkles, Target, Users } from "lucide-react";
