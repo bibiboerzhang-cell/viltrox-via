@@ -380,3 +380,62 @@ def assert_staff_access(target_staff_id: int | None, staff: dict[str, Any] | Non
         return
     if target != actor_staff_id(staff):
         raise ScopeDenied("staff scope denied")
+
+
+# ── W4 三层账号语义(2026-06-14,纯 ADDITIVE) ───────────────────────────
+# 形式化三层:公司账号(全局)/ 成员(自己负责·被分享·被分配/public)/ 无权限。
+# 红线:完全建立在既有 can_view_all / actor_staff_id / project_filter 之上,
+#   不引入新角色判定、不新写 SQL、不改任何既有函数签名或行为(W2/W3 仍 import 它们)。
+def account_tier(staff: dict[str, Any] | None) -> str:
+    """三层账号语义的单点判定(纯字典,不碰 DB)。
+
+    返回值:
+      'company' = 公司账号视角(全局可见)= 既有 can_view_all 集合
+                  (owner / vkpi=admin / manager / lead);与 dashboard 的
+                  'company'/'owned_matrix' scope 对齐(dashboard/metric_maturity.py:34)。
+      'member'  = 成员视角(有身份的普通成员):可见集 = 自己负责 ∪ 被显式共享
+                  ∪ 被分配 ∪ public(由 project_filter 形式化实现)。
+      'none'    = 无身份(未登录 / 取不到 staff_id)。
+
+    ⚠️ 完全建立在 can_view_all 之上,不引入新角色判定逻辑——避免与既有授权双源。
+    """
+    if not staff:
+        return "none"
+    if can_view_all(staff):
+        return "company"
+    if actor_staff_id(staff):
+        return "member"
+    return "none"
+
+
+def member_visible_project_ids_sql(
+    alias: str, staff: dict[str, Any] | None, requested_staff_id: int | None = None
+) -> tuple[str, list[Any]]:
+    """「成员可见项目集」的 WHERE 片段 helper —— 单一真源,复用 project_filter。
+
+    返回 (sql_fragment, params),可被其它查询直接拼接。片段即 project_filter 已实现的
+    own ∪ shared(vkpi_project_members) ∪ assigned ∪ public(非 restricted)三/四分支,
+    company 视角下返回 ("", []) 表示全可见。不复制 SQL,避免「成员可见集」多源漂移。
+    """
+    return project_filter(alias, staff, requested_staff_id)
+
+
+def member_shared_project_ids(staff: dict[str, Any] | None) -> list[int]:
+    """纯读 vkpi_project_members,返回「被显式共享给当前成员」的 project_id 列表。
+
+    供 producer / 路由直接拿 id 列表用(若不想拼 JOIN)。只读、'?' 占位、无身份返回 []。
+    红线:只 SELECT 隔离的共享成员表,绝不碰 vkpi_projects 列 / viltrox_fit_score / rule_v0。
+    """
+    actor = actor_staff_id(staff)
+    if not actor:
+        return []
+    rows = get_conn().execute(
+        "SELECT project_id FROM vkpi_project_members WHERE staff_id = ?",
+        (int(actor),),
+    ).fetchall()
+    out: list[int] = []
+    for r in rows:
+        pid = _int(dict(r).get("project_id"))
+        if pid:
+            out.append(pid)
+    return out

@@ -735,6 +735,12 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
       {settingsError ? <div className="vkpi-inline-message">{settingsError}</div> : null}
       <SettingsLoadingStrip settingsLoading={settingsLoading} catalogLoading={productCatalogLoading} />
       <div className="vkpi-settings-clean">
+        <div className="vkpi-settings-zone" data-zone="company">
+          <header className="vkpi-settings-zone__head">
+            <strong>公司管理</strong>
+            <em>仅管理员可见 · 账号权限 / 预算 / 规则 / 定时 / API 状态</em>
+          </header>
+        </div>
         {renderSettingsModule('status', `${apiStatusText} · 同步 ${syncTime} / ${syncGuardText} · KOL ${kolRefreshGateText} · ${systemHealth} · 版本 ${versionSummary}`, (
           <SettingsStatusPanel
             apiStatusDetail={apiStatusDetail}
@@ -860,6 +866,12 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
             onToggleTask={(taskKey, enabled) => void toggleSchedulerTask(taskKey, enabled)}
           />
         ))}
+        <div className="vkpi-settings-zone" data-zone="personal">
+          <header className="vkpi-settings-zone__head">
+            <strong>个人偏好</strong>
+            <em>每位成员管理自己的偏好与通知</em>
+          </header>
+        </div>
         {renderSettingsModule('preference', `默认入口 ${landingPage} · 范围 ${dateRangeDefault} · 密度 ${tableDensity}`, (
           <>
             <PreferenceSettingsCard

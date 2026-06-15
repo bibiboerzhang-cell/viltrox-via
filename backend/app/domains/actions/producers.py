@@ -1,4 +1,4 @@
-"""W1 Action Inbox — 8 类建议生产者(纯 SELECT,只产不执行)。
+"""W1 Action Inbox — 9 类建议生产者(纯 SELECT,只产不执行)。
 
 每个 produce_* 函数:跑一条只读查询 → 返回 suggestion dict 列表(给 inbox.py 落库)。
 设计原则:
@@ -392,6 +392,61 @@ def produce_inventory_low(conn: Any, *, threshold: int = 5, limit: int = 25) -> 
     return out
 
 
+# ── 9. project_shared_to_you:项目被显式共享给成员,提醒查看/协作 ──────
+def produce_shared_to_you(conn: Any, *, limit: int = 25) -> list[dict[str, Any]]:
+    """W4 第 9 类(2026-06-14):为「被分享给我」的项目产纯提醒建议。
+
+    主源 = vkpi_project_members(131,live 成员关系),JOIN vkpi_projects 取项目名。
+    不用 share_audit(137 是 append-only 含 revoke 的审计日志,会把已撤销的也算进来)。
+    排除「被分享成员本人就是负责/创建人」的自分享噪音。owner_staff_id=被分享成员——
+    成员只看自己的(inbox.py own gate 据此过滤)。纯提醒:不写业务表、不烧 LLM、无端点。
+    """
+    rows = conn.execute(
+        """
+        SELECT m.project_id, m.staff_id AS member_staff_id, m.role, m.created_at AS shared_at,
+               p.project_uid, p.project_name
+        FROM vkpi_project_members m
+        JOIN vkpi_projects p ON p.id = m.project_id
+        WHERE m.staff_id IS NOT NULL
+          AND m.staff_id <> COALESCE(p.assigned_staff_id, 0)
+          AND m.staff_id <> COALESCE(p.created_by_staff_id, 0)
+        ORDER BY m.created_at DESC
+        LIMIT ?
+        """,
+        (int(limit),),
+    ).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        row = dict(r)
+        name = row.get("project_name") or row.get("project_uid")
+        role = str(row.get("role") or "viewer").strip().lower()
+        editable = "可编辑" if role == "editor" else "只读"
+        out.append(
+            make_suggestion(
+                category="project_shared_to_you",
+                dedupe_key=f"shared_to_you:project:{row['project_id']}:{row['member_staff_id']}",
+                title=f"项目已共享给你 · {name}",
+                detail=f"「{name}」以 {role}({editable})共享给你。",
+                reason="此项目被显式共享给你,可在项目跟进里查看/协作。",
+                priority="low",
+                entity_type="project",
+                entity_id=row["project_id"],
+                suggested_endpoint="",  # 纯提醒,不给执行端点
+                estimated_cost_cents=0,
+                writes_business_data=False,  # 硬约束:不写业务表
+                uses_llm=False,
+                requires_approval=False,  # 纯提醒
+                owner_staff_id=row["member_staff_id"],  # 必填=被分享成员
+                payload={
+                    "project_uid": row.get("project_uid"),
+                    "role": role,
+                    "shared_at": str(row.get("shared_at")),
+                },
+            )
+        )
+    return out
+
+
 # 编排器按此顺序遍历;键即 category,值即 producer 可调用对象。
 PRODUCERS: dict[str, Any] = {
     "kol_profile": produce_kol_profile,
@@ -402,4 +457,5 @@ PRODUCERS: dict[str, Any] = {
     "retrospective": produce_retrospective,
     "event_followup": produce_event_followup,
     "inventory_low": produce_inventory_low,
+    "project_shared_to_you": produce_shared_to_you,
 }
