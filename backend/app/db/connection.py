@@ -180,6 +180,9 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "141_vkpi_action_inbox.sql",
     "142_vkpi_project_automation_audit.sql",
     "143_vkpi_kol_memory.sql",
+    "144_vkpi_dealers.sql",
+    "145_vkpi_shopify_credentials.sql",
+    "146_vkpi_api_key_pool.sql",
 )
 
 try:
