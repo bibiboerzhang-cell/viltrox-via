@@ -87,6 +87,27 @@ def _account_where(
     return " WHERE " + " AND ".join(where), params
 
 
+def _staff_scope_clause(staff_scope_id: int | None) -> tuple[str, list[Any]]:
+    """P1 隔离的 KOL 行口径(参数化,审计 S2:不再内联整数进 SQL)。
+
+    返回 (sql 片段, params)。owner/admin(staff_scope_id=None)→('', []) 全局;
+    员工→只算本人关注(收藏)∪ 本人项目里合作的 KOL;公司/官方账号(account_type<>'kol')
+    属公共资产保持全局。供 build_dashboard_kpi / list_dashboard_accounts /
+    build_dashboard_account_map 共用同一口径。"""
+    if not staff_scope_id:
+        return "", []
+    sql = (
+        "(account_type <> 'kol' OR source_id IN ("
+        "SELECT kol_pool_id FROM vkpi_kol_pool_favorites WHERE staff_id=? "
+        "UNION SELECT a.kol_pool_id FROM vkpi_project_kol_assignments a "
+        "WHERE a.project_id IN (SELECT id FROM vkpi_projects WHERE assigned_staff_id=? "
+        "OR created_by_staff_id=? OR id IN (SELECT project_id FROM vkpi_project_members WHERE staff_id=?))"
+        "))"
+    )
+    sid = int(staff_scope_id)
+    return sql, [sid, sid, sid, sid]
+
+
 def _row_value(row: Any, key: str, default: Any = None) -> Any:
     if row is None:
         return default
@@ -286,19 +307,10 @@ def build_dashboard_kpi(
 ) -> dict[str, Any]:
     normalized = _normalize_account_type(account_type)
     where_sql, params = _account_where(normalized, selected_kol_ids)
-    if staff_scope_id:
-        # P1 隔离:非 owner/admin 的 KOL 行只算本人关注(收藏)∪ 本人项目里合作的 KOL;
-        # 公司/官方账号(account_type<>'kol')是公共资产,保持全局可见。内联可信整数,非注入面。
-        sid = int(staff_scope_id)
-        scope_clause = (
-            "(account_type <> 'kol' OR source_id IN ("
-            f"SELECT kol_pool_id FROM vkpi_kol_pool_favorites WHERE staff_id={sid} "
-            "UNION SELECT a.kol_pool_id FROM vkpi_project_kol_assignments a "
-            f"WHERE a.project_id IN (SELECT id FROM vkpi_projects WHERE assigned_staff_id={sid} "
-            f"OR created_by_staff_id={sid} OR id IN (SELECT project_id FROM vkpi_project_members WHERE staff_id={sid}))"
-            "))"
-        )
-        where_sql = (where_sql + " AND " + scope_clause) if where_sql else (" WHERE " + scope_clause)
+    scope_sql, scope_params = _staff_scope_clause(staff_scope_id)
+    if scope_sql:
+        where_sql = (where_sql + " AND " + scope_sql) if where_sql else (" WHERE " + scope_sql)
+        params = [*params, *scope_params]
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
     conn = get_conn()
     row = conn.execute(
@@ -374,12 +386,18 @@ def list_dashboard_accounts(
     page_size: int = 50,
     search: str | None = None,
     selected_kol_ids: list[str] | tuple[str, ...] | None = None,
+    staff_scope_id: int | None = None,
 ) -> dict[str, Any]:
     normalized = _normalize_account_type(account_type)
     safe_page = max(1, int(page or 1))
     safe_page_size = min(200, max(1, int(page_size or 50)))
     offset = (safe_page - 1) * safe_page_size
     where_sql, params = _account_where(normalized, selected_kol_ids, search)
+    # P1 隔离(S1 漏网修复):此前 /kols 端点不带 scope → 员工看全量。
+    scope_sql, scope_params = _staff_scope_clause(staff_scope_id)
+    if scope_sql:
+        where_sql = (where_sql + " AND " + scope_sql) if where_sql else (" WHERE " + scope_sql)
+        params = [*params, *scope_params]
     conn = get_conn()
     total_row = conn.execute(
         f"SELECT COUNT(*) AS total FROM v_dashboard_account_pool{where_sql}",
@@ -417,9 +435,16 @@ def list_dashboard_accounts(
 def build_dashboard_account_map(
     account_type: str = "all",
     selected_kol_ids: list[str] | tuple[str, ...] | None = None,
+    *,
+    staff_scope_id: int | None = None,
 ) -> dict[str, Any]:
     normalized = _normalize_account_type(account_type)
     where_sql, params = _account_where(normalized, selected_kol_ids)
+    # P1 隔离(S1 漏网修复):地图端点此前不带 scope → 员工看全量 KOL 分布。
+    scope_sql, scope_params = _staff_scope_clause(staff_scope_id)
+    if scope_sql:
+        where_sql = (where_sql + " AND " + scope_sql) if where_sql else (" WHERE " + scope_sql)
+        params = [*params, *scope_params]
     extra = " AND " if where_sql else " WHERE "
     rows = get_conn().execute(
         f"""

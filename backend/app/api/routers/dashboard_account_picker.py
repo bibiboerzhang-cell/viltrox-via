@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.api.dependencies.perms import require_tab
+from app.domains.access import scope
 from app.domains.dashboard.account_picker import (
     build_dashboard_account_map,
     build_dashboard_kpi,
@@ -27,11 +28,14 @@ def _bad_request(exc: ValueError) -> HTTPException:
 
 @router.post("/kpi")
 def dashboard_kpi(body: DashboardKpiRequest, staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
-    del staff
+    # P1 隔离漏网修复:此前 `del staff` 丢弃身份 → 员工从这条路看全量 KOL。
+    # 改为按 effective_staff_id 过滤(owner/admin→None 全局;员工→own-only),与 summary.py 同口径。
+    staff_scope_id = scope.effective_staff_id(staff)
     try:
         return build_dashboard_kpi(
             account_type=body.account_type,
             selected_kol_ids=body.selected_kol_ids,
+            staff_scope_id=staff_scope_id,
         )
     except ValueError as exc:
         raise _bad_request(exc) from exc
@@ -45,13 +49,14 @@ def dashboard_kols(
     search: str | None = Query(default=None),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict[str, Any]:
-    del staff
+    staff_scope_id = scope.effective_staff_id(staff)
     try:
         return list_dashboard_accounts(
             account_type=account_type,
             page=page,
             page_size=page_size,
             search=search,
+            staff_scope_id=staff_scope_id,
         )
     except ValueError as exc:
         raise _bad_request(exc) from exc
@@ -63,9 +68,9 @@ def dashboard_map(
     selected_kol_ids: str | None = Query(default=None),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict[str, Any]:
-    del staff
+    staff_scope_id = scope.effective_staff_id(staff)
     selected = [item.strip() for item in str(selected_kol_ids or "").split(",") if item.strip()]
     try:
-        return build_dashboard_account_map(account_type=account_type, selected_kol_ids=selected)
+        return build_dashboard_account_map(account_type=account_type, selected_kol_ids=selected, staff_scope_id=staff_scope_id)
     except ValueError as exc:
         raise _bad_request(exc) from exc
