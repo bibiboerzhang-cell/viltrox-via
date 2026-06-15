@@ -14,7 +14,6 @@ import { KolFunnelCard } from "./components/KolFunnelCard";
 import { MetricCard } from "./components/MetricCard";
 import { RealMap } from "./components/RealMap";
 import { SignalsAlertsCard } from "./components/SignalsAlertsCard";
-import { SystemHealthBar } from "./components/SystemHealthBar";
 import { TopMoversCard } from "./components/TopMoversCard";
 import { UpcomingEventsCard } from "./components/UpcomingEventsCard";
 import { KPI_SCOPES } from "./data/kpiScopes";
@@ -53,9 +52,7 @@ export function DashboardReplicaPage(props: any) {
   } = props;
   return e("div", { className: "p-4 md:p-6" },
 
-          // P5 系统健康条(真实只读端点;字段缺失显「待接入」,绝不编造)
-          e(SystemHealthBar, { apiToken }),
-
+          // 系统健康条:2026-06-15 迁移至「系统设置」页(仅主管可见),主界面保持干净。
           // 数据新鲜度:按用户要求(2026-06-14)从 dashboard 收起,仅保留后台端点
           // /dashboard/data-freshness(供 admin/Agent OS 取用),不在 dashboard 展示。
 

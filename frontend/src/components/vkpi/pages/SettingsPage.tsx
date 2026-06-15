@@ -63,6 +63,7 @@ import {
 import { SettingsStaffPanel } from './settings/SettingsStaffPanel';
 import { SettingsSkuPanel } from './settings/SettingsSkuPanel';
 import { SettingsStatusPanel } from './settings/SettingsStatusPanel';
+import { SystemHealthBar } from '../v615-replica/components/SystemHealthBar';
 import { SettingsSchedulerPanel } from './settings/SettingsSchedulerPanel';
 import {
   boolLabel,
@@ -807,6 +808,10 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
       {settingsError ? <div className="vkpi-inline-message">{settingsError}</div> : null}
       <SettingsLoadingStrip settingsLoading={settingsLoading} catalogLoading={productCatalogLoading} />
       <div className="vkpi-settings-clean">
+        {/* 系统健康条:2026-06-15 从 Dashboard 顶部迁移至此,主界面更干净;仅主管可见(此分支即 isManager)。 */}
+        <div style={{ marginBottom: 12 }}>
+          <SystemHealthBar apiToken={apiToken} />
+        </div>
         <div className="vkpi-settings-zone" data-zone="company">
           <header className="vkpi-settings-zone__head">
             <strong>公司管理</strong>
