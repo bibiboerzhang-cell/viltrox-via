@@ -85,15 +85,17 @@ def _make_client(user, staff):
 # ── (A) Action inbox: admin 全局 vs 成员 own-only ─────────────────────────────
 @pytest.fixture()
 def member_owned_action():
-    """自播一行 owner_staff_id==成员 的 suggested inbox 动作;yield 其 id;后置清理。
+    """自播成员 own 行 + 公司级行;yield 成员行 id;后置清理。
 
     用 kol_profile 类(纯提醒、requires_approval=False、不写业务数据),
-    只为给成员一行「属于自己」的可见动作 —— 证明 own-only 过滤放行的是自己的。
+    给成员一行「属于自己」的可见动作,再给 admin 一行 company/global 动作。
+    这样测试不依赖当前库里是否已有其他 suggested 动作,避免空库时 admin/member 集合相等。
     """
     from app.db.connection import get_conn
 
     conn = get_conn()
-    dedupe = f"kol_profile:w5-role:{uuid.uuid4().hex[:12]}"
+    dedupe = f"kol_profile:w5-role-member:{uuid.uuid4().hex[:12]}"
+    global_dedupe = f"kol_profile:w5-role-global:{uuid.uuid4().hex[:12]}"
     conn.execute(
         """
         INSERT INTO vkpi_action_inbox
@@ -105,6 +107,17 @@ def member_owned_action():
         """,
         (dedupe, _MEMBER_STAFF_ID),
     )
+    conn.execute(
+        """
+        INSERT INTO vkpi_action_inbox
+          (dedupe_key, category, title, detail, priority, entity_type, entity_id,
+           suggested_endpoint, requires_approval, owner_staff_id, reason,
+           payload_json, status, created_at, updated_at)
+        VALUES (?, 'kol_profile', 'W5 role-matrix global probe', 'd', 'low', 'kol', '',
+                '', true, NULL, '', '{}'::jsonb, 'suggested', NOW(), NOW())
+        """,
+        (global_dedupe,),
+    )
     conn.commit()
     row = conn.execute(
         "SELECT id FROM vkpi_action_inbox WHERE dedupe_key = ?", (dedupe,)
@@ -113,7 +126,10 @@ def member_owned_action():
     try:
         yield action_id
     finally:
-        conn.execute("DELETE FROM vkpi_action_inbox WHERE id = ?", (action_id,))
+        conn.execute(
+            "DELETE FROM vkpi_action_inbox WHERE dedupe_key IN (?, ?)",
+            (dedupe, global_dedupe),
+        )
         conn.commit()
 
 
