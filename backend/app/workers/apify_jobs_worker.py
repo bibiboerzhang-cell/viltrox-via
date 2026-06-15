@@ -59,7 +59,9 @@ PROVIDER_RETRY_JITTER_RATIO = max(0.0, min(0.5, float(os.environ.get("APIFY_WORK
 PROVIDER_RETRY_ADOPT_WINDOW_MINUTES = max(0, int(os.environ.get("APIFY_WORKER_PROVIDER_RETRY_ADOPT_WINDOW_MINUTES", "1440")))
 LLM_BUDGET_SCOPE = os.environ.get("APIFY_WORKER_LLM_BUDGET_SCOPE", "cron:vkpi_analysis_worker")
 LLM_CONCURRENCY_LIMIT = max(1, min(2, int(os.environ.get("APIFY_WORKER_LLM_CONCURRENCY", "1"))))
-LLM_MAX_OUTPUT_TOKENS = int(os.environ.get("APIFY_WORKER_LLM_MAX_OUTPUT_TOKENS", "1200"))
+# 1200 太小:6 层 final_v1 JSON(含整条 scene_timeline)会被截断,分镜只剩前 ~35s。
+# 抬到 4096 容纳整段视频的分镜时间线(完整不截断);可经 env 覆盖。
+LLM_MAX_OUTPUT_TOKENS = int(os.environ.get("APIFY_WORKER_LLM_MAX_OUTPUT_TOKENS", "4096"))
 GEMINI_QPS_LIMIT = max(0.0, float(os.environ.get("APIFY_WORKER_GEMINI_QPS", "0.05")))
 GEMINI_MIN_INTERVAL_SECONDS = max(
     0.0,
@@ -1852,6 +1854,9 @@ def _llm_budget_preflight(job: dict[str, Any], payload: dict[str, Any]) -> dict[
             max_output_tokens=LLM_MAX_OUTPUT_TOKENS,
             preferred_provider="google",
             cost_tag=LLM_BUDGET_SCOPE,
+            # 主线 enforce 口径:只对真有 caps 行的 scope 硬拦,未配额的 cost_scope
+            # (如 video_analysis_final_v1)放行,避免视频深析被「未配额=全拦」误杀。
+            require_configured=False,
         )
 
 
@@ -1900,6 +1905,7 @@ def _provider_budget_preflight(job: dict[str, Any], payload: dict[str, Any], pro
             max_output_tokens=LLM_MAX_OUTPUT_TOKENS,
             preferred_provider=provider,
             cost_tag=LLM_BUDGET_SCOPE,
+            require_configured=False,
         )
 
 

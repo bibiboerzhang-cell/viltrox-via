@@ -246,8 +246,14 @@ def budget_preflight(
     preferred_provider: str | None = None,
     cost_tag: str | None = None,
     skip_monthly_env_check: bool = False,
+    require_configured: bool = True,
 ) -> dict[str, Any]:
-    """Read-only provider-call budget preflight for operators and tests."""
+    """Read-only provider-call budget preflight for operators and tests.
+
+    require_configured=True(默认,保留旧行为)会把任何无 caps 行的 scope 当硬拦;
+    主线 enforce 应传 False,与 _budget_allows_provider 同口径——只对真有 caps 行的
+    scope(monthly_total / single_call / provider:*)硬拦,未配额的 cost_scope 放行,
+    避免「require_configured=True 会全拦死」的避雷1(如 video_analysis_final_v1 cost_scope)。"""
 
     safe_prompt = str(prompt or "")
     cost_scope = _cost_scope_for_purpose(purpose, cost_tag)
@@ -260,7 +266,7 @@ def budget_preflight(
             continue
         estimated_cost = _estimated_cost_usd(provider, prompt=safe_prompt, max_output_tokens=max_output_tokens)
         scopes = _budget_scopes_for_provider(provider, cost_scope)
-        plan = budget_guard.check_budget_scopes(scopes, estimated_cost, require_configured=True)
+        plan = budget_guard.check_budget_scopes(scopes, estimated_cost, require_configured=require_configured)
         env_allowed = bool(skip_monthly_env_check) or monthly_budget > 0 and monthly_remaining > 0
         configured = _is_provider_configured(provider)
         provider_allowed = bool(plan.get("allowed")) and configured and env_allowed and not forced_offline
