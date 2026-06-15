@@ -52,6 +52,7 @@ import { NotificationsPopover } from "./components/popovers/NotificationsPopover
 import { UserMenuPopover } from "./components/popovers/UserMenuPopover";
 import { WorkRemindersPopover } from "./components/popovers/WorkRemindersPopover";
 import { logoutV615, resolveV615Alert } from "./api";
+import { buildApiUrl } from "../../../services/http";
 import { listEvents } from "../../../services/vkpi/events-api";
 import { normalizeEventsHierarchy } from "./normalizers";
 import { I18nContext, makeT } from "./lib/i18n";
@@ -99,6 +100,30 @@ export function V615ReplicaApp(props: any = {}) {
   const [collapsed, setCollapsed] = useState(stored.collapsed || false);
   const [activeNav, setActiveNav] = useState(["dashboard", "kol-pool", "my-kol", "projects", "events", "shopify"].includes(initialNav) ? initialNav : "dashboard");
   const [theme, setTheme] = useState(stored.theme || "dark");
+
+  // 版本徽标:启动时拉一次 /health,展示 server 短 sha 与前后端同步状态(纯只读,失败静默)
+  const [versionBadge, setVersionBadge] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(buildApiUrl("/health"), { credentials: "same-origin" });
+        if (!res.ok) return;
+        const data = await res.json();
+        const build = (data && data.build) || {};
+        if (!cancelled) {
+          setVersionBadge({
+            shortSha: String(build.git_short_sha || "").slice(0, 8),
+            inSync: Boolean(build.client_matches_server),
+            hasClient: Boolean(build.client_build),
+          });
+        }
+      } catch {
+        /* /health 不可达时静默,不影响壳层 */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     const handleOpenKolSearchSession = () => {
@@ -982,6 +1007,15 @@ export function V615ReplicaApp(props: any = {}) {
           },
             theme === "dark" ? e(Moon, { size: 16 }) : e(Sun, { size: 16 }),
             !collapsed && e("span", null, theme === "dark" ? "Dark" : "Light")
+          ),
+          // 版本徽标:仅展开态显示一行极淡文字,折叠态隐藏以免挤压窄轨
+          !collapsed && versionBadge && versionBadge.shortSha && e("div", {
+            className: "px-3 pt-1 text-[10px] leading-tight text-slate-600 select-none",
+            title: versionBadge.hasClient
+              ? (versionBadge.inSync ? "前后端构建一致" : "前端与后端构建不一致")
+              : "前端构建标记缺失",
+          },
+            `${versionBadge.shortSha} · ${versionBadge.inSync ? "✓同步" : "⚠不一致"}`
           )
         )
       ),

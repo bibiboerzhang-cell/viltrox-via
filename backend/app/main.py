@@ -120,6 +120,113 @@ def _build_info(client_build: str = "") -> dict[str, str | bool]:
     }
 
 
+_WORKER_ONLINE_WINDOW_MIN = 10
+
+
+def _trust_db_migration_max() -> str | None:
+    """Last filename of the Postgres migration sequence. None on any failure."""
+    try:
+        from app.db.connection import _POSTGRES_MIGRATION_SEQUENCE
+
+        seq = _POSTGRES_MIGRATION_SEQUENCE
+        if seq:
+            return str(seq[-1])
+    except Exception:
+        logger.debug("health: db_migration_max read failed", exc_info=True)
+    return None
+
+
+def _trust_worker() -> dict[str, object | None]:
+    """Worker liveness from MAX(updated_at) on apify_jobs. Online = within 10 min."""
+    result: dict[str, object | None] = {"worker_heartbeat": None, "worker_online": None}
+    try:
+        from app.db.connection import get_conn, table_exists
+
+        if not table_exists("apify_jobs"):
+            return result
+        conn = get_conn()
+        row = conn.execute("SELECT MAX(updated_at) AS latest FROM apify_jobs").fetchone()
+        latest_raw = row["latest"] if row is not None else None
+        if latest_raw in (None, ""):
+            return result
+        latest_dt = latest_raw
+        if isinstance(latest_dt, str):
+            latest_dt = datetime.fromisoformat(latest_dt.strip().replace("Z", "+00:00"))
+        if latest_dt.tzinfo is None:
+            latest_dt = latest_dt.replace(tzinfo=timezone.utc)
+        result["worker_heartbeat"] = (
+            latest_dt.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+        )
+        age = (datetime.now(tz=timezone.utc) - latest_dt).total_seconds()
+        result["worker_online"] = bool(age <= _WORKER_ONLINE_WINDOW_MIN * 60)
+    except Exception:
+        logger.debug("health: worker heartbeat read failed", exc_info=True)
+    return result
+
+
+def _trust_scheduler() -> dict[str, int] | str:
+    """Scheduler task counts if the (optional) scheduler_tasks table exists."""
+    try:
+        from app.db.connection import get_conn, table_exists
+
+        if not table_exists("scheduler_tasks"):
+            return "not_configured"
+        conn = get_conn()
+        row = conn.execute(
+            "SELECT COUNT(*) AS total, "
+            "SUM(CASE WHEN enabled THEN 1 ELSE 0 END) AS enabled FROM scheduler_tasks"
+        ).fetchone()
+        if row is None:
+            return "not_configured"
+        total = int(row["total"] or 0)
+        enabled = int(row["enabled"] or 0)
+        return {"total": total, "enabled": enabled}
+    except Exception:
+        logger.debug("health: scheduler_tasks read failed", exc_info=True)
+        return "not_configured"
+
+
+def _trust_worker_sha() -> dict[str, str | None]:
+    """Best-effort worker SHA. If the worker stamps runtime/worker_sha use it;
+    otherwise assume the worker runs from the same repo as this server."""
+    try:
+        stamp = PROJECT_ROOT / "runtime" / "worker_sha"
+        if stamp.is_file():
+            value = stamp.read_text(encoding="utf-8").strip()
+            if value:
+                return {"worker_sha": value, "worker_sha_source": "runtime_stamp"}
+    except Exception:
+        logger.debug("health: worker_sha stamp read failed", exc_info=True)
+    return {
+        "worker_sha": (APP_GIT_SHA or None),
+        "worker_sha_source": "assumed_same_repo",
+    }
+
+
+def _runtime_trust() -> dict[str, object]:
+    """Additive runtime-trust block for /health. Never raises; each field guarded."""
+    trust: dict[str, object] = {}
+    try:
+        trust["db_migration_max"] = _trust_db_migration_max()
+    except Exception:
+        trust["db_migration_max"] = None
+    try:
+        trust.update(_trust_worker())
+    except Exception:
+        trust["worker_heartbeat"] = None
+        trust["worker_online"] = None
+    try:
+        trust["scheduler_status"] = _trust_scheduler()
+    except Exception:
+        trust["scheduler_status"] = "not_configured"
+    try:
+        trust.update(_trust_worker_sha())
+    except Exception:
+        trust["worker_sha"] = (APP_GIT_SHA or None)
+        trust["worker_sha_source"] = "assumed_same_repo"
+    return trust
+
+
 def _is_https_request(request) -> bool:
     if str(request.url.scheme).lower() == "https":
         return True
@@ -671,8 +778,19 @@ if IS_ADMIN_APP:
 @app.get("/health")
 async def health_check(request: Request, deep: bool = False):
     build = _build_info(str(request.query_params.get("client_build", "") or ""))
+    try:
+        trust = _runtime_trust()
+    except Exception:
+        logger.debug("health: runtime_trust block failed", exc_info=True)
+        trust = {}
     if not deep:
-        return {"status": "ok", "service": APP_ROLE, "version": APP_VERSION, "build": build}
+        return {
+            "status": "ok",
+            "service": APP_ROLE,
+            "version": APP_VERSION,
+            "build": build,
+            "trust": trust,
+        }
     if not _can_read_deep_health(request):
         raise HTTPException(status_code=403, detail="Deep health requires admin or ops token")
     return await build_deep_health_payload(
