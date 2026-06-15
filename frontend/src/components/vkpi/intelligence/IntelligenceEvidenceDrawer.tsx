@@ -109,7 +109,7 @@ export function IntelligenceEvidenceDrawer({ card, onClose, footerNote }: Intell
       </div>
 
       <p className="vkpi-help-text">
-        {footerNote || 'Evidence Drawer v0 只展示已有证据，不生成事实；后续外部搜索、Gemini 视频分析和 LLM 总结都会写入可追溯 evidence refs。'}
+        {footerNote || 'Evidence Drawer v0 只展示已有证据，不生成事实；后续外部搜索、视频分析和内容总结都会写入可追溯 evidence refs。'}
       </p>
     </aside>
   );

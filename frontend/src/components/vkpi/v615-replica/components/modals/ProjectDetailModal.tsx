@@ -250,7 +250,7 @@ export function ProjectDetailModal({ project, onClose, onOpenFullPage, staff = [
             ),
             e("button", { className: "rounded-md border border-white/[0.08] px-3 py-1.5 text-[10px] text-white/25", disabled: true, title: "AI 推荐待接入" }, t("AI 推荐"))
           ),
-          e("div", { className: "text-[10px] text-slate-500 mt-1 mb-1" }, t("Claude 基于品类匹配度推荐")),
+          e("div", { className: "text-[10px] text-slate-500 mt-1 mb-1" }, t("按品类匹配度推荐")),
           project.newKolSuggestions.length === 0
             ? e("div", { className: "text-center py-8 text-[11px] text-slate-500" }, "暂无推荐")
             : project.newKolSuggestions.map((k: any, i: number) => e("div", {

@@ -105,7 +105,7 @@ export function SignalsAllModal({ alerts, onClose, onAlertClick }: any) {
       // Footer
       e("div", { className: "shrink-0 px-5 py-2.5 border-t border-white/[0.06] flex items-center justify-between" },
         e("div", { className: "text-[10px] text-slate-500" }, "数据源:Google News · Reddit · NewShooter · DPReview · Brand24 · Twitter API"),
-        e("div", { className: "text-[10px] text-slate-400" }, "每小时刷新 · Claude 实时分析")
+        e("div", { className: "text-[10px] text-slate-400" }, "每小时刷新 · 多源聚合")
       )
     )
   );

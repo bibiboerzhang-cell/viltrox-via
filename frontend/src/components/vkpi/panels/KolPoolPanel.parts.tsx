@@ -527,7 +527,7 @@ function KolPoolEvidenceBody({ section, payload }: { section: string; payload: R
           );
         })}
         {!evidence.length ? (
-          <EvidenceArticle title="暂无视频分析证据" meta={stringifyValue(payload.method || 'stored_video_analysis')} value={statusLabel(payload.status)} detail="没有已存储的 analyzed=true 视频分析行；不会把 Gemini preflight 或计划字段伪装成已分析结果。" />
+          <EvidenceArticle title="暂无视频分析证据" meta={stringifyValue(payload.method || 'stored_video_analysis')} value={statusLabel(payload.status)} detail="没有已存储的 analyzed=true 视频分析行；不会把预检或计划字段伪装成已分析结果。" />
         ) : null}
       </>
     );

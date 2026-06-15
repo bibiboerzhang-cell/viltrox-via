@@ -744,7 +744,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
   const apiStatusText = providerCount
     ? `${providerConfiguredCount} / ${providerCount} 已配置`
     : '读取中';
-  const apiStatusDetail = providerNames.length ? providerNames.join(' / ') : 'Claude / Gemini / OpenAI / Apify / YouTube';
+  const apiStatusDetail = providerNames.length ? providerNames.join(' / ') : '对话引擎 / 多模态引擎 / 通用引擎 / Apify / YouTube';
   const totalBudgetUsd = budgetSettings.reduce((sum, row) => sum + numberValue(row.monthly_limit_usd), 0);
   const totalSpentUsd = budgetSettings.reduce((sum, row) => sum + numberValue(row.current_month_spent), 0);
   const dailySync = syncOverview?.daily_sync || null;

@@ -102,7 +102,7 @@ function contractStatusMeta(contract: VkpiProjectContract) {
   const extraction = String(contract.extraction_status || '').toLowerCase();
   if (status === 'confirmed') return { label: '已确认', className: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/20' };
   if (extraction === 'failed' || status === 'failed') return { label: '提取失败', className: 'bg-red-500/15 text-red-300 border-red-500/20' };
-  if (extraction === 'processing') return { label: 'Claude 提取中', className: 'bg-purple-500/15 text-purple-300 border-purple-500/20' };
+  if (extraction === 'processing') return { label: '智能提取中', className: 'bg-purple-500/15 text-purple-300 border-purple-500/20' };
   if (extraction === 'skipped') return { label: '已归档 · 未自动提取', className: 'bg-slate-500/15 text-slate-300 border-slate-500/20' };
   return { label: '待人工确认', className: 'bg-amber-500/15 text-amber-300 border-amber-500/20' };
 }
@@ -311,7 +311,7 @@ function ContractArchiveCard({
       </div>
 
       {contract.extraction_status === 'skipped' ? (
-        <div className="rounded-lg border border-slate-500/20 bg-slate-500/10 p-3 text-[11px] text-slate-300">DOC/DOCX 已归档，v1 仅自动提取 PDF。可查看原文件，或上传 PDF 版本触发 Claude 条款提取。</div>
+        <div className="rounded-lg border border-slate-500/20 bg-slate-500/10 p-3 text-[11px] text-slate-300">DOC/DOCX 已归档，v1 仅自动提取 PDF。可查看原文件，或上传 PDF 版本触发条款提取。</div>
       ) : null}
       {contract.extraction_status === 'failed' ? (
         <div className="rounded-lg border border-red-500/25 bg-red-500/10 p-3 text-[11px] text-red-300">
@@ -459,7 +459,7 @@ export function CampaignContractsTab({
       <div className="rounded-xl border border-purple-500/25 bg-purple-500/[0.06] p-3 flex items-start gap-2.5">
         <Sparkles size={14} className="text-purple-300 mt-0.5 shrink-0" />
         <div className="text-[10.5px] text-slate-300">
-          合同归档 v1 · PDF 上传后由 Claude Opus 自动提取条款；LLM 字段必须人工确认后才进入正式履约复盘口径。
+          合同归档 v1 · PDF 上传后自动提取条款；提取字段必须人工确认后才进入正式履约复盘口径。
         </div>
       </div>
 
@@ -495,7 +495,7 @@ export function CampaignContractsTab({
             </select>
           </label>
           <button className="rounded-md bg-purple-500/90 hover:bg-purple-500 text-white text-[11px] font-semibold px-3 py-2 disabled:opacity-50" type="button" onClick={() => void submitUpload()} disabled={!file || uploadBusy}>
-            {uploadBusy ? 'Claude正在提取条款' : relatedContract ? '上传签署版' : '上传归档'}
+            {uploadBusy ? '正在提取条款' : relatedContract ? '上传签署版' : '上传归档'}
           </button>
         </div>
         {fileError ? <div className="mt-2 text-[10.5px] text-red-300">{fileError}</div> : null}

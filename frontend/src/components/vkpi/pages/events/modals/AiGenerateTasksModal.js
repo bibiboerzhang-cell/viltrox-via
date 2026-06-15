@@ -69,7 +69,7 @@ export default function AiGenerateTasksModal({ ev, existingTitles, onClose, onSu
       loading
         ? e("div", { className: "py-12 flex flex-col items-center gap-3" },
             e(Sparkles, { size: 24, className: "text-purple-300 animate-pulse" }),
-            e("div", { className: "text-[11.5px] text-purple-200" }, "GPT-4o 正在生成模板任务..."),
+            e("div", { className: "text-[11.5px] text-purple-200" }, "正在生成模板任务..."),
             e("div", { className: "text-[10px] text-slate-500" }, "结合 event 类型 + 倒计时 + 历史模板")
           )
         : e(React.Fragment, null,

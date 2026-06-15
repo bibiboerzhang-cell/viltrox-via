@@ -51,7 +51,7 @@ export default function ExpenseEntryModal({ onClose, onSubmit }) {
           : e(React.Fragment, null,
               e(Camera, { size: 18, className: "text-purple-300" }),
               e("div", { className: "text-[11.5px] text-white font-medium" }, "📷 拍照 / 上传发票"),
-              e("div", { className: "text-[9.5px] text-slate-400" }, "GPT-4o / Gemini Vision 自动识别")
+              e("div", { className: "text-[9.5px] text-slate-400" }, "自动识别")
             )
       ),
       

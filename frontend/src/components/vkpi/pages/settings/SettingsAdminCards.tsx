@@ -408,7 +408,7 @@ export function SystemSummaryCards({
       </section>
       <section className="vkpi-card vkpi-action-card">
         <CardHeader title="AI 周报" />
-        <InfoBlock label="Claude API" value={claudeConfigured ? claudeStatus : "未配置"} />
+        <InfoBlock label="对话引擎 API" value={claudeConfigured ? claudeStatus : "未配置"} />
         <InfoBlock label="失败处理" value="自动 fallback 模板" />
         <InfoBlock label="记录方式" value="写入 LLM 调用审计" />
       </section>

@@ -80,7 +80,7 @@ export function IntelligenceSourceBoard() {
         <div>
           <span>趋势源 / 视频智能 / 平台建议</span>
           <h2>智能层不只是等成员搜索，要主动发现 KOL、趋势、竞品和内容机会。</h2>
-          <p>这里先把未来 Agent 的输入源、量化准备度和输出路径放出来；当前只读展示，不自动调用 Google、Reddit、Gemini、GPT 或 Claude。</p>
+          <p>这里先把未来 Agent 的输入源、量化准备度和输出路径放出来；当前只读展示，不自动调用 Google、Reddit 等多源。</p>
         </div>
         <div className="vkpi-intelligence-source-board__score">
           <b>{averageReadiness}%</b>
@@ -176,7 +176,7 @@ export function writePlatformRepairFocus(plan: PlatformAdvicePlan) {
     statusLabel: '待接入趋势源',
     statusTone: 'planned',
     readiness: `${plan.readiness}%`,
-    budgetPolicy: '先只读汇总已有内容和人工搜索；外部趋势、Gemini 和 LLM 必须走预算 ledger。',
+    budgetPolicy: '先只读汇总已有内容和人工搜索；外部趋势、视频分析与内容总结 必须走预算 ledger。',
     dataNeeded: plan.signalNeed,
     output: plan.output,
     gate: '必须能解释每条平台建议来自哪些帖子、视频、评论、趋势或 ROI 回流。',

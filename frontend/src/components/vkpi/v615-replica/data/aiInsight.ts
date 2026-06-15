@@ -3,7 +3,7 @@
 export const AI_INSIGHT = {
   confidence: 92,
   updatedLabel: "06:00 PST",
-  poweredBy: "Claude Opus 4.7",
+  poweredBy: "实时聚合",
   todayDecision: {
     text: "增加 $50k 预算 @PeterLindgren 后续内容(2 longform + 4 short)",
     reason: "135mm LAB 评测视频驱动本周 47.2% Shopify 转化(VIA-peter-10 追踪)",

@@ -98,7 +98,7 @@ export function AIIntelligenceCard({ insight, onApprove, onLater, onRegenerate, 
     
     // Footer
     e("div", { className: "relative mt-3 flex items-center justify-between border-t border-violet-500/20 pt-2.5" },
-      e("span", { className: "text-[9px] text-violet-300/70" }, "Powered by " + insight.poweredBy),
+      e("span", { className: "text-[9px] text-violet-300/70" }, insight.poweredBy),
       onRegenerate && e("button", { 
         onClick: onRegenerate,
         disabled: regenerating,

@@ -28,9 +28,9 @@ export function ProviderStatusTable({ rows, busyProvider, onProbe }: { rows: Arr
 
 function providerLabel(provider: string): string {
   const key = provider.toLowerCase();
-  if (key === 'anthropic') return 'Claude';
-  if (key === 'google') return 'Gemini';
-  if (key === 'openai') return 'OpenAI';
+  if (key === 'anthropic') return '对话引擎';
+  if (key === 'google') return '多模态引擎';
+  if (key === 'openai') return '通用引擎';
   if (key === 'apify') return 'Apify';
   if (key === 'resend') return 'Resend';
   return provider || '-';

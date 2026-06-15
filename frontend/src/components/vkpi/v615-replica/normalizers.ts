@@ -593,7 +593,7 @@ export function normalizeAiInsight(copilotBrief = {}, tasks = {}, aiTodayHot: an
       todayDecision: {
         text: String(hotContent.headline || ""),
         amount: "--",
-        reason: "Gemini 实时搜索当下热点/赛事生成",
+        reason: "据当下热点实时生成",
         primaryAction: "查看证据",
         secondaryAction: "稍后处理",
       },
@@ -602,7 +602,7 @@ export function normalizeAiInsight(copilotBrief = {}, tasks = {}, aiTodayHot: an
       weaken: [],
       todayContentLabel: "🔥 当下热点·赛事",
       todayContent: list(hotContent.hot_topics).slice(0, 3).map((x: any) => String(x)),
-      poweredBy: "Gemini · Google 搜索接地(每早 8 点)",
+      poweredBy: "每早 8 点实时更新",
       raw: hot,
     };
   }
@@ -629,7 +629,7 @@ export function normalizeAiInsight(copilotBrief = {}, tasks = {}, aiTodayHot: an
     })),
     weaken: [],
     todayContent: taskItems.slice(0, 3).map((item) => String(record(item).title || record(item).body || "任务待复核")),
-    poweredBy: brief.source || "真实 API / 无 LLM 调用",
+    poweredBy: brief.source || "实时聚合",
     raw: brief,
   };
 }
@@ -647,7 +647,7 @@ export function normalizeSignals(marketCards = {}, competitorRadar: any = null) 
           title: `🛰 ${String(d.brand || "竞品")}:${String(d.title || "")}`,
           desc: `${String(d.summary || "")}${d.impact ? " · 对我们:" + String(d.impact) : ""}`,
           time: "今日",
-          sources: [{ name: "竞品雷达 · Gemini 接地", url: "" }],
+          sources: [{ name: "竞品雷达", url: "" }],
           totalMentions: 0,
           trendPct: isThreat ? "威胁" : "机会",
           raw: d,

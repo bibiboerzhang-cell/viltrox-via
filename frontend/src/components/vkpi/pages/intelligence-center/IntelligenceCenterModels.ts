@@ -89,14 +89,14 @@ export const externalIntelligenceSources: ExternalIntelligenceSource[] = [
   },
   {
     key: 'gemini-llm-summary',
-    title: 'Gemini 视频理解 + GPT/Claude 总结',
+    title: '视频理解 + 内容总结',
     scope: '只总结已有视频、帖子、评论证据，输出平台建议和内容角度。',
     statusLabel: '预算后启用',
     tone: 'planned',
     readiness: 31,
     cadence: '单 KOL / 单视频小口',
     evidence: 'video evidence refs / provider_calls / cost ledger',
-    blocked: '不跑批量 Gemini，不让 LLM 生产事实。',
+    blocked: '不跑批量视频分析，不让模型生产事实。',
   },
 ];
 
@@ -455,7 +455,7 @@ export function platformCardFromPlan(plan: PlatformAdvicePlan): IntelligenceCard
       { label: '需要信号', source: 'trend inputs', value: plan.signalNeed },
       { label: '输出目标', source: 'planned output', value: plan.output },
       { label: '发现查询', source: 'discover focus', value: plan.query },
-      { label: '当前状态', source: 'guardrail', value: '只展示计划，不运行外部搜索、Gemini 或 LLM。' },
+      { label: '当前状态', source: 'guardrail', value: '只展示计划，不运行外部搜索、视频分析或内容总结。' },
     ],
     actions: [
       { label: '查看证据', kind: 'primary' },

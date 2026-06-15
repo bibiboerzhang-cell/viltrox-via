@@ -79,7 +79,7 @@ export const I18N_EN = {
   "已就绪": "Ready", "草稿中": "Draft", "审核中": "Review", "待办": "To Do",
   "搜索 KOL handle / 平台 / 风格": "Search KOL handle / platform / style",
   "AI 推荐": "AI Recommend",
-  "Claude 基于品类匹配度推荐": "Claude recommends by category match",
+  "按品类匹配度推荐": "Recommended by category match",
   "适合度": "Fit",
   "邀请合作 →": "Invite Collaboration →",
   "数据来自 V-KPI 后端 · 每日自动同步": "Data from V-KPI backend · Synced daily",

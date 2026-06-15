@@ -212,7 +212,7 @@ export function IntelligenceCenterPage({ apiToken, viewMode }: WorkspacePageProp
         id: 'brief-waiting',
         type: 'brief',
         title: '等待 Brief Agent 输出',
-        summary: '当前先使用 runtime/ops 的只读 Agent 输出；外部趋势和 Gemini 视频分析还未在本页自动触发。',
+        summary: '当前先使用 runtime/ops 的只读 Agent 输出；外部趋势和视频分析还未在本页自动触发。',
         entityType: 'brief_agent',
       }),
       ...(realRecommendationCards.length ? [] : [cardFromAgent(latestRecommendation, {
@@ -496,7 +496,7 @@ export function IntelligenceCenterPage({ apiToken, viewMode }: WorkspacePageProp
               <IntelligenceTaskDraftPanel draft={selectedTaskDraft} viewMode={viewMode} />
             </>
           )}
-          footerNote="本页只读展示现有 Agent 和 Market v0 输出；外部搜索、Gemini 视频分析、任务生成会在后续阶段按预算和审计接入。"
+          footerNote="本页只读展示现有 Agent 和 Market v0 输出；外部搜索、视频分析、任务生成会在后续阶段按预算和审计接入。"
           onAction={handleAction}
         />
       </section>

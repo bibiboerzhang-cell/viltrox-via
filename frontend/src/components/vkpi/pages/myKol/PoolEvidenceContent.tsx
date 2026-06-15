@@ -164,7 +164,7 @@ export function PoolEvidenceContent({ apiToken, kol, poolId, viltroxOnly, projec
       }
       setDeepState('queued');
       const rest = unanalyzed.length - batch.length;
-      setAnalyzeMsg(`已入队 ${queued}/${batch.length} 条 Gemini 深析(思考中泳道)${rest > 0 ? `;剩 ${rest} 条未析,本批析完再点继续(配额保护)` : ''}。`);
+      setAnalyzeMsg(`已入队 ${queued}/${batch.length} 条 视频深析(思考中泳道)${rest > 0 ? `;剩 ${rest} 条未析,本批析完再点继续(配额保护)` : ''}。`);
     }).catch(() => {
       setDeepState('idle');
       setAnalyzeMsg('深析入队失败——请重试或看泳道。');
@@ -236,7 +236,7 @@ export function PoolEvidenceContent({ apiToken, kol, poolId, viltroxOnly, projec
           {unanalyzed.length ? (
             <button type="button" onClick={startDeepAnalysis} disabled={deepState !== 'idle'}
               style={{ fontSize: 10, color: deepState === 'queued' ? '#86efac' : '#fbcfe8', background: 'rgba(236,72,153,0.10)', border: '1px solid rgba(236,72,153,0.3)', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>
-              {deepState === 'busy' ? '入队中…' : deepState === 'queued' ? `深析中 ${analyzedCount}/${videos.length}` : `Gemini 深析 · 前 ${Math.min(DEEP_BATCH, unanalyzed.length)}/${unanalyzed.length} 条`}
+              {deepState === 'busy' ? '入队中…' : deepState === 'queued' ? `深析中 ${analyzedCount}/${videos.length}` : `视频深析 · 前 ${Math.min(DEEP_BATCH, unanalyzed.length)}/${unanalyzed.length} 条`}
             </button>
           ) : videos.length ? (
             <span style={{ fontSize: 10, color: '#86efac' }}>✓ 全部已深析</span>
@@ -280,7 +280,7 @@ export function PoolEvidenceContent({ apiToken, kol, poolId, viltroxOnly, projec
           projects={projects}
           viltroxOnly={Boolean(viltroxOnly) && anyViltrox}
           postsOverride={poolPosts}
-          subtitle={`Pool 收藏 · Gemini 已深析 ${analyzedCount}/${videos.length}${Boolean(viltroxOnly) && !anyViltrox ? ' · 识别零命中,显示全部' : ''}`}
+          subtitle={`Pool 收藏 · 视频深析 ${analyzedCount}/${videos.length}${Boolean(viltroxOnly) && !anyViltrox ? ' · 识别零命中,显示全部' : ''}`}
           commentsFetcher={poolCommentsFetcher}
         />
       )}

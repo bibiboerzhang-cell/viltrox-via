@@ -226,7 +226,7 @@ export function ReportPanel({ onClose, data }: any) {
     contentRecs:    { label: "💡 内容改进建议",      desc: "copilot-brief / tasks 候选" },
     eventsProgress: { label: "🎪 活动进度",          desc: "events/upcoming endpoint 待接入" },
     attribution:    { label: "🔗 归因管线",          desc: "Shopify / 成本数据待接入" },
-    aiInsights:     { label: "🤖 AI 决策洞察",       desc: "真实 copilot-brief 只读" },
+    aiInsights:     { label: "决策洞察",       desc: "实时聚合" },
   } : {
     kpiOverview:    { label: "📊 KPI Overview",          desc: "Real metrics + explicit pending gaps" },
     kolVsCompany:   { label: "⚖️ Company vs KOL",         desc: "Only fields backed by current APIs" },
@@ -237,7 +237,7 @@ export function ReportPanel({ onClose, data }: any) {
     contentRecs:    { label: "💡 Content Recommendations", desc: "copilot-brief / tasks candidates" },
     eventsProgress: { label: "🎪 Events Progress",        desc: "events/upcoming endpoint pending" },
     attribution:    { label: "🔗 Attribution Pipeline",   desc: "Shopify / cost data pending" },
-    aiInsights:     { label: "🤖 AI Intelligence",        desc: "Real copilot-brief read-only" },
+    aiInsights:     { label: "Intelligence",        desc: "Real-time aggregation" },
   };
   
   return e(motion.div, {

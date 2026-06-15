@@ -328,7 +328,7 @@ export function generateReportMarkdown({ period, language, sections }: any) {
                       `- ⚪ Per-KOL ROI 下钻(待 · 6/15)\n\n` +
                       `**当前阻塞:** Shopify webhook 密钥轮转,需 Engineering 协调 IT 完成\n\n`,
           
-          aiH:        "## 🤖 十、AI 决策洞察",
+          aiH:        "## 十、决策洞察",
           aiBody:     `> **今日洞察(置信度 92%):** 135mm LAB 营销活动整体表现优于平均 23%。@PeterLindgren 评测视频驱动本周 47.2% 转化(基于 VIA-peter-10 折扣码使用追踪)。**建议:** 增加 $50k 预算扩展 @PeterLindgren 后续内容(2 条 longform + 4 条 short)。\n\n` +
                       `**热门话题:** #CineGear2025 在 Twitter/IG 上量增长明显,过去 7 天 +212% 提及量\n` +
                       `**市场机会:** FPV 无人机相关内容平均 ER 7.8%(全平台均值 3.94% 的 2.0x),AF 16mm F1.4 适配此场景\n` +
@@ -561,7 +561,7 @@ export function generateReportMarkdown({ period, language, sections }: any) {
                       `- ⚪ Per-KOL ROI drilldown (Pending · Jun 15)\n\n` +
                       `**Current Blocker:** Shopify webhook key rotation requires Engineering + IT coordination.\n\n`,
           
-          aiH:        "## 🤖 10. AI Decision Insights",
+          aiH:        "## 10. Decision Insights",
           aiBody:     `> **Today's Insight (92% confidence):** 135mm LAB campaign performing 23% above average. @PeterLindgren's review drove 47.2% of weekly conversions (tracked via VIA-peter-10 discount code). **Recommendation:** Allocate additional $50k to extend @PeterLindgren content (2 longform + 4 shorts).\n\n` +
                       `**Trending Topic:** #CineGear2025 surging on Twitter/IG, +212% mention volume over past 7 days.\n` +
                       `**Market Opportunity:** FPV drone content averages 7.8% ER (2.0x the cross-platform mean of 3.94%); AF 16mm F1.4 fits this use case.\n` +

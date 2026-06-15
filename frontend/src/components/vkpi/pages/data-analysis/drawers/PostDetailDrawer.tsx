@@ -195,7 +195,7 @@ export function PostDetailDrawer({
           {analysisError ? <p className="da-post-detail__error">{analysisError}</p> : null}
           {analysisBusy ? (
             <p className="da-post-detail__busy">
-              真实 URL 分析处理中：读取原帖 → 解析媒体 → 上传 Gemini File API → 多模型总结。视频或 Instagram 链路可能需要 30-90 秒；超过接口上限会显示失败原因。
+              真实 URL 分析处理中：读取原帖 → 解析媒体 → 上传视频 → 内容总结。视频或 Instagram 链路可能需要 30-90 秒；超过接口上限会显示失败原因。
             </p>
           ) : null}
           {structuredAnalysis ? (

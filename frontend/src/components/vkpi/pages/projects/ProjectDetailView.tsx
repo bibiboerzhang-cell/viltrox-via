@@ -525,7 +525,7 @@ export function ProjectDetailView({
       }
       // 诚实 toast(全盘扫描 P1):仅 PDF 走 Claude 提取;DOC/DOCX 归档不自动提取
       const isPdf = /\.pdf$/i.test(file.name);
-      setNotice({ tone: 'success', title: '合同已归档', body: `${isPdf ? 'Claude 提取已入队(泳道「合同提取」)' : 'DOCX 已归档(不走自动提取,金额/期限以手填为准)'}${advanced}。归档 tab 可查看。` });
+      setNotice({ tone: 'success', title: '合同已归档', body: `${isPdf ? '提取已入队(泳道「合同提取」)' : 'DOCX 已归档(不走自动提取,金额/期限以手填为准)'}${advanced}。归档 tab 可查看。` });
       // 全盘扫描 P0(A1):刷新合同列表,提取轮询才能接管新合同
       await loadContracts();
       void onProjectUpdated?.();

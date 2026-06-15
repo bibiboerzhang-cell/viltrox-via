@@ -45,7 +45,7 @@ export function generateVisualHtml({ language, period, sections }: any) {
     contentRecs: "七、内容改进建议",
     events: "八、活动进度",
     attr: "九、归因管线接入进度",
-    ai: "十、AI 决策洞察",
+    ai: "十、决策洞察",
     period: "统计周期",
     generated: "生成时间",
     activeRoster: "签约/矩阵总数",
@@ -757,7 +757,7 @@ export function generateVisualHtml({ language, period, sections }: any) {
   if (sections.aiInsights) {
     html += `<section><h2>${T.ai}</h2>`;
     html += `<div class="ai-callout">
-      <div class="ai-confidence">🤖 ${T.aiInsight}</div>
+      <div class="ai-confidence">${T.aiInsight}</div>
       <div class="ai-body">${
         lang === "zh"
           ? "135mm LAB 营销活动整体表现优于平均 23%。@PeterLindgren 评测视频驱动本周 47.2% 转化(基于 VIA-peter-10 折扣码使用追踪)。<br><br><strong>建议:</strong> 增加 $50k 预算扩展 @PeterLindgren 后续内容(2 条 longform + 4 条 short)。"

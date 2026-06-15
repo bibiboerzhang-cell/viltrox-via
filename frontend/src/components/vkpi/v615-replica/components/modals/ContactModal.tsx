@@ -139,7 +139,7 @@ export function ContactModal({ item, onClose }: any) {
               e("button", {
                 onClick: applyLocalTemplate,
                 disabled: templateApplying,
-                title: "本地模板重写: 不调用 LLM / Gemini",
+                title: "本地模板重写",
                 className: "flex items-center gap-1 px-2 py-0.5 rounded text-[10px] border border-purple-500/30 bg-purple-500/[0.1] text-purple-200 hover:bg-purple-500/[0.18] disabled:opacity-60 transition-colors"
               },
                 templateApplying 
