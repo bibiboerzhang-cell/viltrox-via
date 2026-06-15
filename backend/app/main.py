@@ -598,7 +598,9 @@ if sentry_dsn:
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=CORS_ORIGINS,
+    # T6 安全:allow_credentials=True 下 '*' 既违规又是凭据泄漏面;剥掉任何混入的通配,
+    # 强制显式 origin(与 _is_allowed_csrf_origin 的 '!= "*"' 口径一致)。
+    allow_origins=[o for o in CORS_ORIGINS if o and o != "*"],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Requested-With", "X-CSRF-Token"],

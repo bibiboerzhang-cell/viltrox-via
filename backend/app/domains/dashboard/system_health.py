@@ -16,8 +16,10 @@ from app.db.connection import get_conn, table_exists
 
 logger = get_logger(__name__)
 
-# Worker liveness heuristic:apify_jobs 的 worker 串行消费,5 分钟内有任意行被
-# 写动(claim/done/error 都会 bump updated_at)即视为在线。无心跳表故走 best-effort。
+# Worker liveness:首选真实心跳 vkpi_worker_heartbeat —— apify_jobs_worker 每轮 poll(含空闲)
+# UPSERT last_heartbeat_at,2 分钟内有心跳即在线(空闲 worker 也算在线,不再误判离线)。
+# 心跳表缺失/为空时回退到旧的 apify_jobs.updated_at 启发式(5 分钟内任意行被写动 → 视为在线)。
+_WORKER_HEARTBEAT_WINDOW_MIN = 2
 _WORKER_ONLINE_WINDOW_MIN = 5
 
 # 队列状态归一:基础迁移 095 只约束 queued/running/done/failed,097 加 blocked。
@@ -209,8 +211,45 @@ def _data_freshness(conn: Any) -> dict[str, Any]:
     }
 
 
+def _worker_online_from_heartbeat(conn: Any) -> dict[str, Any] | None:
+    """Real liveness via vkpi_worker_heartbeat (online if heartbeat within ~2 min).
+
+    Returns ``None`` when the table is absent or empty so the caller can fall back
+    to the legacy apify_jobs heuristic. Idle workers still heartbeat every poll, so
+    an idle-but-alive worker reads as online here.
+    """
+    if not table_exists("vkpi_worker_heartbeat"):
+        return None
+    try:
+        row = conn.execute(
+            "SELECT MAX(last_heartbeat_at) AS latest FROM vkpi_worker_heartbeat"
+        ).fetchone()
+    except Exception:
+        logger.debug("system-health worker-heartbeat read failed", exc_info=True)
+        return None
+    latest_raw = row["latest"] if row is not None else None
+    if latest_raw in (None, ""):
+        # 表存在但无任何心跳行 → 回退到 apify_jobs 启发式。
+        return None
+    latest_dt = _parse_dt(latest_raw)
+    online = False
+    if latest_dt is not None:
+        age = (datetime.now(tz=timezone.utc) - latest_dt).total_seconds()
+        online = age <= _WORKER_HEARTBEAT_WINDOW_MIN * 60
+    return {
+        "available": True,
+        "online": bool(online),
+        "last_heartbeat_at": _to_iso(latest_raw),
+        "window_minutes": _WORKER_HEARTBEAT_WINDOW_MIN,
+        "method": "vkpi_worker_heartbeat_within_window",
+    }
+
+
 def _worker_online(conn: Any) -> dict[str, Any]:
-    """Best-effort liveness:any apify_jobs row bumped in the last 5 minutes."""
+    """Liveness:首选 vkpi_worker_heartbeat 真实心跳;表缺失/为空时回退 apify_jobs 启发式。"""
+    heartbeat = _worker_online_from_heartbeat(conn)
+    if heartbeat is not None:
+        return heartbeat
     if not table_exists("apify_jobs"):
         return {
             "available": False,
@@ -243,7 +282,7 @@ def _worker_online(conn: Any) -> dict[str, Any]:
         "online": bool(online),
         "last_heartbeat_at": _to_iso(latest_raw),
         "window_minutes": _WORKER_ONLINE_WINDOW_MIN,
-        "method": "apify_jobs_updated_at_within_window",
+        "method": "apify_jobs_updated_at_within_window_fallback",
     }
 
 

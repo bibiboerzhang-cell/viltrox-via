@@ -131,6 +131,31 @@ def _kol_pool_row(kol_pool_id: int) -> dict[str, Any]:
     return dict(row)
 
 
+def _kol_pool_rows(kol_pool_ids: list[int]) -> dict[int, dict[str, Any]]:
+    """Batch-fetch vkpi_kol_pool rows by id in one query (N+1 avoidance).
+
+    Returns {id: row_dict}. Missing ids are simply absent from the map; the
+    caller decides how to handle a miss (the per-row path still raises via
+    _kol_pool_row when an id is not pre-fetched).
+    """
+    ids = [int(i) for i in kol_pool_ids]
+    if not ids:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    rows = get_conn().execute(
+        f"SELECT * FROM vkpi_kol_pool WHERE id IN ({placeholders})",
+        tuple(ids),
+    ).fetchall()
+    out: dict[int, dict[str, Any]] = {}
+    for raw in rows:
+        item = dict(raw)
+        try:
+            out[int(item.get("id"))] = item
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def _parse_date(value: Any) -> datetime | None:
     raw = _text(value)
     if not raw:
@@ -308,8 +333,8 @@ def _content_specialty(text: str) -> tuple[dict[str, int], int]:
     return {key: _clamp(value / total * 100) for key, value in counts.most_common(3)}, total
 
 
-def compute_block1_content(kol_pool_id: int) -> dict[str, Any]:
-    row = _kol_pool_row(kol_pool_id)
+def compute_block1_content(kol_pool_id: int, *, row: dict[str, Any] | None = None) -> dict[str, Any]:
+    row = row if row is not None else _kol_pool_row(kol_pool_id)
     posts = _posts(row)
     text = _text_blob(row, posts)
     content_count = int(row.get("posts_count") or len(posts) or 0)
@@ -343,8 +368,8 @@ def compute_block1_content(kol_pool_id: int) -> dict[str, Any]:
     }
 
 
-def compute_block2_performance(kol_pool_id: int) -> dict[str, Any]:
-    row = _kol_pool_row(kol_pool_id)
+def compute_block2_performance(kol_pool_id: int, *, row: dict[str, Any] | None = None) -> dict[str, Any]:
+    row = row if row is not None else _kol_pool_row(kol_pool_id)
     followers = int(row.get("followers") or 0)
     avg_views = int(row.get("avg_views") or 0)
     engagement = float(row.get("engagement_rate") or 0)
@@ -374,8 +399,8 @@ def compute_block2_performance(kol_pool_id: int) -> dict[str, Any]:
     }
 
 
-def compute_block3_business(kol_pool_id: int) -> dict[str, Any]:
-    row = _kol_pool_row(kol_pool_id)
+def compute_block3_business(kol_pool_id: int, *, row: dict[str, Any] | None = None) -> dict[str, Any]:
+    row = row if row is not None else _kol_pool_row(kol_pool_id)
     collaborations = _loads(row.get("brand_collaborations_json"), [])
     contact_links = _loads(row.get("other_contacts_json"), [])
     has_email = bool(_text(row.get("email")))
@@ -410,8 +435,8 @@ def compute_block3_business(kol_pool_id: int) -> dict[str, Any]:
     }
 
 
-def compute_block4_specialty(kol_pool_id: int) -> dict[str, Any]:
-    row = _kol_pool_row(kol_pool_id)
+def compute_block4_specialty(kol_pool_id: int, *, row: dict[str, Any] | None = None) -> dict[str, Any]:
+    row = row if row is not None else _kol_pool_row(kol_pool_id)
     posts = _posts(row)
     text = _text_blob(row, posts)
     cluster_counts = _keyword_counts(text, _load_clusters())
@@ -450,17 +475,24 @@ def compute_block4_specialty(kol_pool_id: int) -> dict[str, Any]:
     }
 
 
-def compose_dimensions_11(kol_pool_id: int) -> dict[str, Any]:
+def compose_dimensions_11(kol_pool_id: int, *, row: dict[str, Any] | None = None) -> dict[str, Any]:
+    # N+1 avoidance: fetch the vkpi_kol_pool row once here and thread it into all
+    # four blocks, instead of each block re-issuing SELECT * FROM vkpi_kol_pool
+    # (was 4 redundant reads per KOL). Batch callers (lists) pre-fetch all rows
+    # via _kol_pool_rows and pass `row` in, collapsing 4*N reads to one IN query.
+    # Scoring math is untouched (rule_v0): only the data-fetch pattern changes.
+    if row is None:
+        row = _kol_pool_row(int(kol_pool_id))
     payload = {
         "kol_pool_id": int(kol_pool_id),
         "provider_calls": False,
         "llm_calls": False,
         "computed_at": _utcnow(),
         "method": "rule_dimensions_11_v0",
-        "block1_content": compute_block1_content(kol_pool_id),
-        "block2_performance": compute_block2_performance(kol_pool_id),
-        "block3_business": compute_block3_business(kol_pool_id),
-        "block4_specialty": compute_block4_specialty(kol_pool_id),
+        "block1_content": compute_block1_content(kol_pool_id, row=row),
+        "block2_performance": compute_block2_performance(kol_pool_id, row=row),
+        "block3_business": compute_block3_business(kol_pool_id, row=row),
+        "block4_specialty": compute_block4_specialty(kol_pool_id, row=row),
     }
     confidence = {
         "block1_content": _mean_confidence(list((payload["block1_content"].get("confidence") or {}).values())),
@@ -542,7 +574,14 @@ def batch_preview_dimensions11(*, limit: int = 20, source_type: str = "legacy_ex
         """,
         (*params, safe_limit),
     ).fetchall()
-    items = [compose_dimensions_11(int(row["id"])) for row in rows]
+    # Batch the pool-row fetch (one IN query) instead of letting each
+    # compose_dimensions_11 re-read vkpi_kol_pool 4x per id (N+1 -> 1).
+    ordered_ids = [int(row["id"]) for row in rows]
+    pool_rows = _kol_pool_rows(ordered_ids)
+    items = [
+        compose_dimensions_11(kol_id, row=pool_rows.get(kol_id))
+        for kol_id in ordered_ids
+    ]
     return {
         "provider_calls": False,
         "llm_calls": False,
@@ -612,6 +651,9 @@ def backfill_existing_profile_deep_dimensions11(*, limit: int = 200, source_type
     include_updated_at = "updated_at" in columns
     if include_updated_at:
         set_clause += ", updated_at=?"
+    # Batch the pool-row fetch (one IN query) so each compose_dimensions_11 below
+    # reuses a pre-fetched row instead of re-reading vkpi_kol_pool 4x per id.
+    pool_rows = _kol_pool_rows([int(dict(r)["id"]) for r in rows])
     for raw_row in rows:
         row = dict(raw_row)
         match = _profile_deep_match(row, columns)
@@ -621,7 +663,7 @@ def backfill_existing_profile_deep_dimensions11(*, limit: int = 200, source_type
         attempted += 1
         where_clause, where_params, match_mode = match
         match_modes[match_mode] += 1
-        payload = compose_dimensions_11(int(row["id"]))
+        payload = compose_dimensions_11(int(row["id"]), row=pool_rows.get(int(row["id"])))
         update_params: list[Any] = [_json(payload)]
         if include_updated_at:
             update_params.append(now)

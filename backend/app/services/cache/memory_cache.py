@@ -4,9 +4,8 @@ services/cache/memory_cache.py — Redis-backed cache with memory fallback for l
 from __future__ import annotations
 
 import asyncio
-import base64
 import inspect
-import pickle
+import json
 import time
 import threading
 from functools import wraps
@@ -56,13 +55,17 @@ def _full_key(key: str) -> str:
 
 
 def _serialize(value: Any) -> bytes:
-    return pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
+    # JSON instead of pickle: avoids arbitrary-code-execution on deserialize and
+    # cross-version unpickle drift. Cached values across all call sites are
+    # dict/list/str/int/float/bool/None (JSON-safe). Anything non-JSON-safe
+    # raises TypeError/ValueError here and is handled by cache_set (skip cache).
+    return json.dumps(value).encode("utf-8")
 
 
 def _deserialize(value: bytes | None) -> Any:
     if value is None:
         return None
-    return pickle.loads(value)
+    return json.loads(value.decode("utf-8"))
 
 
 def cache_get(key: str) -> Optional[Any]:
@@ -99,10 +102,18 @@ async def cache_get_async(key: str) -> Optional[Any]:
 
 
 def cache_set(key: str, value: Any, ttl: int = REDIS_CACHE_DEFAULT_TTL_SEC) -> None:
+    # Guard: values must be JSON-serializable (see _serialize). A non-JSON-safe
+    # value (datetime/Decimal/set/custom object) would break the Redis path and,
+    # if cached in-memory, break later when Redis returns. Skip cache gracefully.
+    try:
+        serialized = _serialize(value)
+    except (TypeError, ValueError):
+        logger.warning("cache.set_skipped_non_json", extra={"key": key}, exc_info=True)
+        return
     client = _get_redis()
     if client is not None:
         try:
-            client.setex(_full_key(key), int(ttl), _serialize(value))
+            client.setex(_full_key(key), int(ttl), serialized)
             _stats["sets"] += 1
             return
         except Exception:

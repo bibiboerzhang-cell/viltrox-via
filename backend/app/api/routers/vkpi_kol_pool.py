@@ -1269,8 +1269,99 @@ def get_pool_item_llm_deep_analysis(
     return kol_llm_deep_analysis.get_kol_llm_deep_analysis(int(kol_pool_id), limit=limit)
 
 
+CONTENT_FIT_JOB_TYPE = "kol_content_fit_analysis"
+CONTENT_FIT_DERIVE_METHOD = "content_fit_v1"
+
+
+def _enqueue_content_fit_on_demand(
+    kol_pool_id: int,
+    product_sku: str | None,
+    *,
+    force: bool,
+    staff: dict | None,
+) -> dict:
+    """T4:把内容契合深析从请求路径挪到后台队列(避开 60s 超时)。
+
+    纯 DB 路径,**不**烧 LLM:已有 ready content_fit_v1 cache 且非 force → 直接返回缓存;
+    否则 INSERT 一个 kol_content_fit_analysis job(worker 端 _process_kol_content_fit_analysis
+    调 content_fit_analysis.analyze_content_fit 跑实际 LLM)→ 立即返回 {status:'queued', job_id}。
+    已有同 KOL queued/running job → 返回 already_queued(去重)。红线:零触 viltrox_fit_score。
+    """
+    from app.db.connection import get_conn
+    from app.domains.kol import content_fit_analysis as kol_content_fit
+
+    kid = int(kol_pool_id)
+    conn = get_conn()
+
+    # ① 复用已就绪缓存(非 force):零烧 LLM、零入队。
+    if not force:
+        cached = kol_content_fit.get_content_fit(kid)
+        if cached and str(cached.get("state") or "") not in ("missing", ""):
+            return cached
+
+    # ② 去重:同 KOL 已有 queued/running content_fit job → 不重复入队。
+    existing = conn.execute(
+        """
+        SELECT id, status FROM apify_jobs
+        WHERE job_type=?
+          AND status IN ('queued', 'running', 'retrying')
+          AND payload->>'kol_pool_id'=?
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        """,
+        (CONTENT_FIT_JOB_TYPE, str(kid)),
+    ).fetchone()
+    if existing:
+        row = dict(existing)
+        return {
+            "status": "already_queued" if str(row.get("status")) == "queued" else "already_running",
+            "state": "queued",
+            "kol_pool_id": kid,
+            "job_id": int(row.get("id")) if row.get("id") is not None else None,
+            "job_type": CONTENT_FIT_JOB_TYPE,
+            "viltrox_fit_score_untouched": True,
+        }
+
+    # ③ 入队:实际 LLM 深析由 worker 跑(off the request path)。
+    triggered_by_user_id = (staff or {}).get("user_id") if isinstance(staff, dict) else None
+    payload = {
+        "kol_pool_id": kid,
+        "target_type": "kol",
+        "target_id": str(kid),
+        "product_sku": str(product_sku or "") or None,
+        "derive_method": CONTENT_FIT_DERIVE_METHOD,
+        "source": "kol_pool_detail_on_demand",
+        "trigger": "content_fit_on_demand",
+        "force": bool(force),
+        "triggered_by_user_id": triggered_by_user_id,
+        "viltrox_fit_score_untouched": True,
+        "query_text": f"content fit - kol_pool #{kid}",
+    }
+    inserted = conn.execute(
+        """
+        INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
+        VALUES (?, ?::jsonb, 'queued', NOW(), NOW())
+        RETURNING id
+        """,
+        (CONTENT_FIT_JOB_TYPE, kol_search_sessions._json_dumps(payload)),
+    ).fetchone()
+    conn.commit()
+    job_id = (dict(inserted).get("id") if inserted else None)
+    return {
+        "status": "queued",
+        "state": "queued",
+        "kol_pool_id": kid,
+        "job_id": int(job_id) if job_id is not None else None,
+        "job_type": CONTENT_FIT_JOB_TYPE,
+        "force": bool(force),
+        "write_db": True,
+        "writes": ["apify_jobs"],
+        "viltrox_fit_score_untouched": True,
+    }
+
+
 @router.get("/kol-pool/{kol_pool_id}/content-fit")
-def get_pool_item_content_fit(
+async def get_pool_item_content_fit(
     kol_pool_id: int,
     analyze: bool = Query(default=False),
     force: bool = Query(default=False),
@@ -1279,21 +1370,25 @@ def get_pool_item_content_fit(
 ) -> dict:
     """地基B 内容契合深析(content_fit_v1):读该 KOL 视频画面/故事 + 评论的契合判断。
 
-    默认只读已缓存结果(不烧 LLM);analyze=true 才按需触发深析(读已有视频分析+评论
-    → llm_gateway 非 flash → 落 cache)。force=true 重算。红线:零触 viltrox_fit_score,
-    不新跑 Gemini 视频分析;无视频证据返回 status='insufficient_evidence'(诚实不杜撰)。
+    默认只读已缓存结果(不烧 LLM)。analyze=true / force=true 不再在请求内同步烧 LLM
+    (那是 60s 超时的根源):若已有 ready cache 直接返回;否则把深析**入队**(worker 端
+    跑 LLM)并立即返回 {status:'queued', job_id}。红线:零触 viltrox_fit_score,不新跑
+    Gemini 视频分析;无视频证据由 worker 落 status='insufficient_evidence'(诚实不杜撰)。
     """
     from app.domains.kol import content_fit_analysis as kol_content_fit
 
+    staff_dict = staff if isinstance(staff, dict) else None
     try:
         if analyze or force:
-            return kol_content_fit.analyze_content_fit(
+            # 重活移出请求路径:仅入队 + 立即返回(DB 路径走 threadpool,不阻塞事件循环)。
+            return await run_in_threadpool(
+                _enqueue_content_fit_on_demand,
                 int(kol_pool_id),
                 product_sku,
                 force=bool(force),
-                staff=staff if isinstance(staff, dict) else None,
+                staff=staff_dict,
             )
-        return kol_content_fit.get_content_fit(int(kol_pool_id))
+        return await run_in_threadpool(kol_content_fit.get_content_fit, int(kol_pool_id))
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

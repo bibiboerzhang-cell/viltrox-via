@@ -13,6 +13,11 @@ from app.domains.kol.history_match import _avatar_from_raw, _recent_post_summary
 
 logger = get_logger(__name__)
 
+# Hard cap on the size of any single value handed to json.loads. Without this an
+# attacker-controlled / oversized DB payload could force the parser to allocate
+# unbounded memory (DoS). 50 KB comfortably covers legitimate JSON columns.
+MAX_JSON_INPUT_BYTES = 50 * 1024
+
 SOURCE_WEIGHTS = {
     "kol_pool": 8,
     "memory_entity": 7,
@@ -75,8 +80,15 @@ def _row(row: Any) -> dict[str, Any]:
 def _json_obj(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
+    raw = str(value or "")
+    if len(raw) > MAX_JSON_INPUT_BYTES:
+        logger.warning(
+            "Skipping oversized natural-search JSON payload",
+            extra={"length": len(raw), "limit": MAX_JSON_INPUT_BYTES},
+        )
+        return {}
     try:
-        parsed = json.loads(str(value or ""))
+        parsed = json.loads(raw)
         return parsed if isinstance(parsed, dict) else {}
     except Exception:
         logger.debug("Failed to decode natural-search JSON payload", exc_info=True)

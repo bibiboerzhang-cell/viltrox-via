@@ -23,6 +23,9 @@ build/
 # ─── Secrets / env ─────────────────────────
 .env
 .env*
+.env.backup*
+backend/.env
+backend/.env*
 !.env.example
 .env.local
 .env.*.local

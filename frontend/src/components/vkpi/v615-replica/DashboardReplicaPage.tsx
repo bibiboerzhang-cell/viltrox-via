@@ -3,7 +3,7 @@
 
 import React from "react";
 import { motion } from "framer-motion";
-import { DollarSign, Globe2, Loader2, TrendingUp } from "lucide-react";
+import { AlertTriangle, DollarSign, Globe2, Loader2, TrendingUp } from "lucide-react";
 import { AIIntelligenceCard } from "./components/AIIntelligenceCard";
 import { ActiveCampaignsCard } from "./components/ActiveCampaignsCard";
 import { Breadcrumb } from "./components/Breadcrumb";
@@ -327,12 +327,31 @@ export function DashboardReplicaPage(props: any) {
               // V6.12: Bottom row 重构 — Signals + AI Today + Top Movers(三卡持平)
               e("div", { className: "grid grid-cols-1 gap-4 lg:grid-cols-3 items-stretch" },
                 // 1. Signals & Alerts (from right rail)
+                // 诚实化:绝不回退到 data/signalsAlerts.ts 的假 Sony/CineGear 信号。
+                // 信号源异常 → 显式「信号源异常」错误态;真实 API 无数据 → 卡内「暂无信号」空态。
                 e("div", { className: "h-full" },
-                  e(SignalsAlertsCard, { 
-                    alerts: signals,
-                    onAlertClick: (a) => setSelectedSignal(a),
-                    onViewAll: () => setShowAllSignals(true)
-                  })
+                  dashboardError
+                    ? e("div", {
+                        className: "h-full rounded-xl border border-red-500/20 bg-red-500/[0.04] p-4 backdrop-blur-xl flex flex-col",
+                      },
+                        e("div", { className: "mb-3 flex items-center justify-between" },
+                          e("div", { className: "flex items-center gap-2" },
+                            e(AlertTriangle, { size: 14, className: "text-red-300" }),
+                            e("h3", { className: "text-sm font-semibold text-white" }, "Signals & Alerts")
+                          ),
+                          e("span", { className: "text-[9px] text-red-300/80" }, "信号源异常")
+                        ),
+                        e("div", { className: "flex-1 flex items-center justify-center" },
+                          e("div", { className: "rounded-md border border-dashed border-red-500/20 px-3 py-8 text-center text-[11px] text-red-300/70" },
+                            "信号源异常 · 暂不可用"
+                          )
+                        )
+                      )
+                    : e(SignalsAlertsCard, {
+                        alerts: signals,
+                        onAlertClick: (a) => setSelectedSignal(a),
+                        onViewAll: () => setShowAllSignals(true)
+                      })
                 ),
                 // 2. AI Today (from right rail)
                 e("div", { className: "h-full" },

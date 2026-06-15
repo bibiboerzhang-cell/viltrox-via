@@ -39,6 +39,28 @@ MAX_VIDEO_MB = 500
 MAX_VIDEO_BYTES = MAX_VIDEO_MB * 1024 * 1024
 MAX_REWARD_IMAGE_MB = 10
 MAX_REWARD_IMAGE_BYTES = MAX_REWARD_IMAGE_MB * 1024 * 1024
+
+# Allowed file extensions per media kind. The saved extension is derived from
+# this whitelist + the detected media type — never trusted from the raw user
+# filename (which could carry e.g. ".php"/".svg" or a path-traversal payload).
+ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".webm"}
+ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+_DEFAULT_VIDEO_EXTENSION = ".mp4"
+_DEFAULT_IMAGE_EXTENSION = ".jpg"
+
+
+def _safe_extension(filename: str | None, *, kind: str) -> str:
+    """Return a whitelisted extension for the given media kind.
+
+    Uses the user-supplied extension only if it is on the allow-list for that
+    kind; otherwise falls back to a safe default derived from the media type.
+    """
+    if kind == "video":
+        allowed, default = ALLOWED_VIDEO_EXTENSIONS, _DEFAULT_VIDEO_EXTENSION
+    else:
+        allowed, default = ALLOWED_IMAGE_EXTENSIONS, _DEFAULT_IMAGE_EXTENSION
+    suffix = Path(filename or "").suffix.lower()
+    return suffix if suffix in allowed else default
 _FINGERPRINT_SEMAPHORE = asyncio.Semaphore(max(1, int(UPLOAD_FINGERPRINT_CONCURRENCY or 1)))
 _R2_SEMAPHORE = asyncio.Semaphore(max(1, int(UPLOAD_R2_CONCURRENCY or 1)))
 
@@ -84,7 +106,9 @@ async def upload_video(request: Request):
     content_type = file.content_type or ""
     if content_type and content_type not in VIDEO_MIME_TYPES and not content_type.startswith("video/"):
         return {"status": "error", "message": f"File type not allowed: {content_type}"}
-    ext = Path(file.filename or "video").suffix or ".mp4"
+    # Derive the saved extension from a whitelist (detected media kind = "video"),
+    # never trusting the raw user filename suffix.
+    ext = _safe_extension(file.filename, kind="video")
     video_id = f"vid_{uuid.uuid4().hex[:10]}"
     save_path = UPLOAD_DIR / f"{video_id}{ext}"
     try:
@@ -184,7 +208,9 @@ async def admin_upload_reward_image(request: Request, file: UploadFile = File(..
         return {"status": "error", "message": f"File type not allowed: {content_type}"}
     img_dir = UPLOAD_DIR / "reward_images"
     img_dir.mkdir(parents=True, exist_ok=True)
-    ext = Path(file.filename or "image").suffix or ".png"
+    # Derive the saved extension from a whitelist (detected media kind = "image"),
+    # never trusting the raw user filename suffix.
+    ext = _safe_extension(file.filename, kind="image")
     img_id = f"reward_{uuid.uuid4().hex[:10]}"
     save_path = img_dir / f"{img_id}{ext}"
     try:

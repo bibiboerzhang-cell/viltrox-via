@@ -48,6 +48,9 @@ STALE_RUNNING_MINUTES = max(1, int(os.environ.get("APIFY_WORKER_STALE_RUNNING_MI
 STALE_RECLAIM_SECONDS = STALE_RUNNING_MINUTES * 60
 STALE_RECLAIM_POLL_SECONDS = max(30, int(os.environ.get("APIFY_WORKER_STALE_RECLAIM_POLL_SECONDS", "60")))
 RUNNING_HEARTBEAT_SECONDS = max(10, int(os.environ.get("APIFY_WORKER_RUNNING_HEARTBEAT_SECONDS", "30")))
+# T5 真实存活:每轮 poll(含空闲)向 vkpi_worker_heartbeat UPSERT 一行,
+# system_health._worker_online 据此判在线;逻辑 worker 名可经 env 覆盖。
+WORKER_HEARTBEAT_NAME = os.environ.get("APIFY_WORKER_HEARTBEAT_NAME", "apify_jobs_worker").strip() or "apify_jobs_worker"
 MAX_JOB_ATTEMPTS = max(1, int(os.environ.get("APIFY_WORKER_MAX_ATTEMPTS", "2")))
 PROVIDER_RETRY_MAX_ATTEMPTS = max(1, int(os.environ.get("APIFY_WORKER_PROVIDER_RETRY_MAX_ATTEMPTS", "5")))
 PROVIDER_RETRY_BASE_SECONDS = max(1, int(os.environ.get("APIFY_WORKER_PROVIDER_RETRY_BASE_SECONDS", "60")))
@@ -3648,6 +3651,29 @@ def _fail_job(conn: psycopg.Connection[Any], job_id: int, exc: Exception) -> Non
     _sync_search_session_job(conn, job_id, raw_status=raw_status, reason=sync_reason)
 
 
+def _upsert_worker_heartbeat(conn: psycopg.Connection[Any]) -> None:
+    """T5:每轮 poll(含空闲)UPSERT 一行 worker 心跳。失败仅告警,绝不打断 poll 循环。
+
+    若 vkpi_worker_heartbeat 表尚未迁移(140 未跑),静默跳过 —— system_health 会回退到旧的
+    apify_jobs 启发式,不影响 worker 处理作业。
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO vkpi_worker_heartbeat (worker_name, last_heartbeat_at, pid, updated_at)
+                VALUES (%s, NOW(), %s, NOW())
+                ON CONFLICT (worker_name) DO UPDATE
+                SET last_heartbeat_at = EXCLUDED.last_heartbeat_at,
+                    pid = EXCLUDED.pid,
+                    updated_at = EXCLUDED.updated_at
+                """,
+                (WORKER_HEARTBEAT_NAME, os.getpid()),
+            )
+    except Exception as exc:
+        logger.warning("apify_jobs worker heartbeat upsert failed | name=%s error=%s", WORKER_HEARTBEAT_NAME, exc)
+
+
 def _heartbeat_running_job(job_id: int, stop_signal: threading.Event) -> None:
     while not stop_signal.wait(RUNNING_HEARTBEAT_SECONDS):
         try:
@@ -3819,7 +3845,10 @@ def run_worker() -> None:
             _reclaim_stale_running_jobs(conn)
             _adopt_recent_provider_pressure_failures(conn)
             last_reclaim = time.monotonic()
+            _upsert_worker_heartbeat(conn)
             while not _stop_event.is_set():
+                # T5:每轮 poll(含空闲)写心跳 → 空闲 worker 不再被判离线。
+                _upsert_worker_heartbeat(conn)
                 if time.monotonic() - last_reclaim >= STALE_RECLAIM_POLL_SECONDS:
                     _reclaim_stale_running_jobs(conn)
                     _adopt_recent_provider_pressure_failures(conn)
