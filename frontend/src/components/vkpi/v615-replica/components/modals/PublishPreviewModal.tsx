@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -10,10 +9,10 @@ import { PLATFORM_ICONS_MAP } from "../../data/platformIconsMap";
 
 const e = React.createElement;
 
-export function PublishPreviewModal({ item, onClose }) {
+export function PublishPreviewModal({ item, onClose }: { item?: any; onClose?: () => void }) {
   const { t } = useT();
   if (!item) return null;
-  const platCfg = PLATFORM_ICONS_MAP[item.platform] || PLATFORM_ICONS_MAP.default;
+  const platCfg = (PLATFORM_ICONS_MAP as any)[item.platform] || PLATFORM_ICONS_MAP.default;
   
   return e(motion.div, {
     initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 },
@@ -23,7 +22,7 @@ export function PublishPreviewModal({ item, onClose }) {
   },
     e(motion.div, {
       initial: { scale: 0.95, opacity: 0, y: 20 }, animate: { scale: 1, opacity: 1, y: 0 }, exit: { scale: 0.95, opacity: 0 },
-      onClick: (ev) => ev.stopPropagation(),
+      onClick: (ev: any) => ev.stopPropagation(),
       className: "relative w-full max-w-lg rounded-2xl border border-white/10 bg-[#0a1020] shadow-2xl overflow-hidden",
     },
       // Header
@@ -31,7 +30,7 @@ export function PublishPreviewModal({ item, onClose }) {
         e("div", {
           className: "shrink-0 w-9 h-9 rounded-full flex items-center justify-center text-[13px] font-bold text-white",
           style: { background: item.color || "#a855f7" }
-        }, item.kolAvatar || (item.label || "").split(" · ").pop().charAt(1) || "K"),
+        }, item.kolAvatar || ((item.label || "").split(" · ").pop() || "").charAt(1) || "K"),
         e("div", { className: "flex-1 min-w-0" },
           e("div", { className: "text-[12px] font-medium text-white truncate" }, item.kolName || item.label),
           e("div", { className: "flex items-center gap-2 text-[9px] text-slate-500 mt-0.5" },

@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -6,7 +5,7 @@ import React from "react";
 
 const e = React.createElement;
 
-export function TrendDot({ resonance }) {
+export function TrendDot({ resonance }: { resonance?: number | null }) {
   if (resonance === null || resonance === undefined) return e("span", { className: "text-slate-600" }, "—");
   const color = resonance >= 0.6 ? "#10b981" : resonance >= 0.3 ? "#fbbf24" : "#64748b";
   const label = resonance >= 0.6 ? "高" : resonance >= 0.3 ? "中" : "低";

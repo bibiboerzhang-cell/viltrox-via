@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -6,7 +5,7 @@ import React from "react";
 
 const e = React.createElement;
 
-export function KPAvatar({ name, color, size = 32, onClick = undefined, onAvatarClick = undefined, title = undefined }) {
+export function KPAvatar({ name, color, size = 32, onClick = undefined, onAvatarClick = undefined, title = undefined }: any) {
   const initial = (name || "?").trim()[0]?.toUpperCase() || "?";
   const handler = onAvatarClick || onClick;
   const interactive = typeof handler === "function";

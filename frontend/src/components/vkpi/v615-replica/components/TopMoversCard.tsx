@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -9,7 +8,7 @@ import { useT } from "../lib/i18n";
 
 const e = React.createElement;
 
-export function TopMoversCard({ movers, onMoverClick, onViewAll }) {
+export function TopMoversCard({ movers, onMoverClick, onViewAll }: any) {
   const { t } = useT();
   return e(motion.div, {
     initial: { opacity: 0, y: 8 },
@@ -27,7 +26,7 @@ export function TopMoversCard({ movers, onMoverClick, onViewAll }) {
     e("div", { className: "flex-1 space-y-2" },
       movers.length === 0
         ? e("div", { className: "rounded-md border border-dashed border-white/[0.08] px-3 py-8 text-center text-[11px] text-slate-500" }, "暂无真实 Top Movers")
-        : movers.map((m, i) => e("div", {
+        : movers.map((m: any, i: any) => e("div", {
         key: m.handle,
         onClick: () => onMoverClick && onMoverClick(m),
         className: "flex items-center gap-2.5 rounded-md py-1.5 px-2 hover:bg-white/[0.025] cursor-pointer transition-colors"

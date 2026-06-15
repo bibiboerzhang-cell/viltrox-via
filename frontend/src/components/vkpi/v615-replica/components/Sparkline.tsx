@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -6,12 +5,12 @@ import React, { useMemo } from "react";
 
 const e = React.createElement;
 
-export function Sparkline({ color, data, height = 36, width = 84 }) {
+export function Sparkline({ color, data, height = 36, width = 84 }: any) {
   const path = useMemo(() => {
     if (!data || data.length === 0) return { line: "", area: "" };
     const max = Math.max(...data), min = Math.min(...data);
     const range = max - min || 1;
-    const points = data.map((v, i) => {
+    const points = data.map((v: any, i: any) => {
       const x = (i / (data.length - 1)) * (width - 4) + 2;
       const y = height - 4 - ((v - min) / range) * (height - 8);
       return `${x.toFixed(1)},${y.toFixed(1)}`;

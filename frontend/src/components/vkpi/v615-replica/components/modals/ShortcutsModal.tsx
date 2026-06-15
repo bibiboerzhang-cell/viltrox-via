@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -9,7 +8,7 @@ import { useT } from "../../lib/i18n";
 
 const e = React.createElement;
 
-export function ShortcutsModal({ onClose }) {
+export function ShortcutsModal({ onClose }: { onClose?: () => void }) {
   const { t } = useT();
   const shortcuts = [
     { keys: ["⌘", "K"], desc: "全局搜索" },

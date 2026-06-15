@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -7,7 +6,7 @@ import { Loader2 } from "lucide-react";
 
 const e = React.createElement;
 
-export function V6FitBar({ score, size = "normal", kind = null }) {
+export function V6FitBar({ score, size = "normal", kind = null }: { score?: number | null; size?: string; kind?: any }) {
   if (score === null || score === undefined) {
     // Kind-aware placeholder: show what's blocking the score.
     if (kind === "new_discovered") return e("span", { className: "text-[10px] text-slate-500 inline-flex items-center gap-1" }, e(Loader2, { size: 9, className: "animate-spin" }), "校验中");

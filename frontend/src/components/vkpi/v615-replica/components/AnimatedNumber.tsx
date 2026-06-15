@@ -1,13 +1,10 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { animate, useMotionValue } from "framer-motion";
 
-const e = React.createElement;
-
-export function AnimatedNumber({ value, format = (v) => v }) {
+export function AnimatedNumber({ value, format = (v: any) => v }: { value: any; format?: (v: any) => any }) {
   const [display, setDisplay] = useState(0);
   const motionVal = useMotionValue(0);
   useEffect(() => {

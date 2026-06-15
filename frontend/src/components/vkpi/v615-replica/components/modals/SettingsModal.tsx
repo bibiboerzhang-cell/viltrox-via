@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -8,7 +7,7 @@ import { CenterModal } from "./CenterModal";
 
 const e = React.createElement;
 
-export function SettingsModal({ onClose, t }) {
+export function SettingsModal({ onClose, t }: any) {
   return e(CenterModal, { onClose, maxWidth: "lg" },
     e("div", { className: "px-5 py-3.5 border-b border-white/[0.06] flex items-center justify-between" },
       e("h2", { className: "text-sm font-semibold text-white" }, t("系统设置")),

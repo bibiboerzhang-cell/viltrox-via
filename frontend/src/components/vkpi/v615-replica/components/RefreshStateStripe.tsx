@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -7,8 +6,8 @@ import { REFRESH_STATE_INFO } from "../data/refreshStateInfo";
 
 const e = React.createElement;
 
-export function RefreshStateStripe({ state }) {
-  const info = REFRESH_STATE_INFO[state] || REFRESH_STATE_INFO.fresh;
+export function RefreshStateStripe({ state }: { state?: any }) {
+  const info = (REFRESH_STATE_INFO as any)[state] || REFRESH_STATE_INFO.fresh;
   if (info.stripe === "transparent") return null;
   return e("span", {
     title: info.title,

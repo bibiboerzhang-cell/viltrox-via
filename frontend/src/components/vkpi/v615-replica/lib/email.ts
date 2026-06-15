@@ -1,13 +1,7 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
-import React from "react";
-import { Camera as Instagram } from "lucide-react";
-
-const e = React.createElement;
-
-export function genEmailSubject(product, item) {
+export function genEmailSubject(product: any, item: any) {
   const handle = (item.handle || "").replace("@", "");
   if (!product) return `Viltrox × ${handle} · Collaboration`;
   if (/Cine|Cinema/i.test(product))     return `Viltrox Cine Series · ${handle} Invitation`;
@@ -17,7 +11,7 @@ export function genEmailSubject(product, item) {
   return `Viltrox × ${handle} · ${product} Collaboration`;
 }
 
-export function genEmailBody(product, item) {
+export function genEmailBody(product: any, item: any) {
   const firstName = item.display_name?.split(" ")[0] || "there";
   const recentWork = item.representative_videos?.[0]?.title || "your recent work";
   const platform = item.platform === "youtube" ? "YouTube channel"
@@ -25,7 +19,7 @@ export function genEmailBody(product, item) {
                  : item.platform === "tiktok" ? "TikTok"
                  : "channel";
   // 信号侦测
-  const usedViltroxBefore = item.devices?.has_viltrox || item.brand_collaborations?.some(b => /viltrox/i.test(b.brand));
+  const usedViltroxBefore = item.devices?.has_viltrox || item.brand_collaborations?.some((b: any) => /viltrox/i.test(b.brand));
   const isHighGeo         = (item.geo_match || 0) > 0.9;
   const hasTrend          = item.trend_hits?.length > 0;
   const hasCompetitor     = item.devices?.competitor_brands?.length > 0;
@@ -35,7 +29,7 @@ export function genEmailBody(product, item) {
     ? `Hi ${firstName},\n\nGreat to reconnect. We loved seeing "${recentWork}" — your way of working with our glass keeps raising the bar for us.`
     : `Hi ${firstName},\n\nI'm Jianbo from Viltrox. I've been following your ${platform} for a while — "${recentWork}" especially stuck with me.`;
   // ── Why you ──
-  const reasons = [];
+  const reasons: string[] = [];
   if (isHighLoyalty) reasons.push("your audience's depth and consistency");
   if (isHighGeo)     reasons.push("your reach in the markets that matter to us");
   if (hasTrend)      reasons.push(`how naturally your work taps into ${item.trend_hits[0]}`);

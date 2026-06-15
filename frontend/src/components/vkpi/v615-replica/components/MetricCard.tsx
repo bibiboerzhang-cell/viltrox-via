@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -9,7 +8,7 @@ import { useT } from "../lib/i18n";
 
 const e = React.createElement;
 
-export function MetricCard({ item, i, scope, onClick }) {
+export function MetricCard({ item, i, scope, onClick }: any) {
   const { t } = useT();
   const { label, sub, icon: Icon, format } = item;
   const scopeData = item.data[scope] || item.data.all;
@@ -21,7 +20,7 @@ export function MetricCard({ item, i, scope, onClick }) {
   const isUnavailable = isPending || isAccumulating;
   
   // Format value
-  const formatValue = (v) => {
+  const formatValue = (v: any) => {
     if (v === null || v === undefined) return "--";
     if (format === "compact") {
       if (v >= 1e9) return (v / 1e9).toFixed(2) + "B";

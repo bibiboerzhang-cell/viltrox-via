@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -9,10 +8,10 @@ import { useT } from "../../lib/i18n";
 
 const e = React.createElement;
 
-export function AllMoversModal({ movers, onClose, onMoverClick }) {
+export function AllMoversModal({ movers, onClose, onMoverClick }: any) {
   const { t } = useT();
   const [sortBy, setSortBy] = useState("reach");
-  const sorted = [...movers].sort((a, b) => {
+  const sorted = [...movers].sort((a: any, b: any) => {
     if (sortBy === "reach")     return (b.deltaReach || 0) - (a.deltaReach || 0);
     if (sortBy === "er")        return (b.er || 0) - (a.er || 0);
     if (sortBy === "followers") return (b.deltaFollowers || 0) - (a.deltaFollowers || 0);

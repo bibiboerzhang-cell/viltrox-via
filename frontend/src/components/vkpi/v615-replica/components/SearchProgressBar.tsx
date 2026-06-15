@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -8,7 +7,7 @@ import { candidateKindGroup } from "../lib/candidateKind";
 
 const e = React.createElement;
 
-export function SearchProgressBar({ items, searchActive }) {
+export function SearchProgressBar({ items, searchActive }: { items: any[]; searchActive?: boolean }) {
   // Per-kind counts derived from current dataset (in real impl, these come from SSE events).
   const counts = useMemo(() => {
     const c = { existing: 0, new_promoted: 0, new_validated: 0, new_discovered: 0, warming: 0, stale: 0 };

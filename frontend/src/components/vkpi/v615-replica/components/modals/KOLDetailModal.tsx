@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -9,7 +8,7 @@ import { useT } from "../../lib/i18n";
 
 const e = React.createElement;
 
-export function KOLDetailModal({ mover, onClose, onOpenKolPool }) {
+export function KOLDetailModal({ mover, onClose, onOpenKolPool }: { mover?: any; onClose?: () => void; onOpenKolPool?: (mover: any) => void }) {
   const { t } = useT();
   if (!mover) return null;
   // 2026-06-12 死按钮诚实化:无写接口的 CTA 一律 disabled+待接入,不再渲染假 hover
@@ -38,7 +37,7 @@ export function KOLDetailModal({ mover, onClose, onOpenKolPool }) {
   },
     e(motion.div, {
       initial: { scale: 0.95, opacity: 0, y: 20 }, animate: { scale: 1, opacity: 1, y: 0 }, exit: { scale: 0.95, opacity: 0 },
-      onClick: (ev) => ev.stopPropagation(),
+      onClick: (ev: any) => ev.stopPropagation(),
       className: "relative w-full max-w-2xl rounded-2xl border border-white/10 bg-[#0a1020] shadow-2xl overflow-hidden",
     },
       // Header

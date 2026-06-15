@@ -1,15 +1,13 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
 import React, { useState } from "react";
 import { ShieldCheck, X } from "lucide-react";
-import { Avatar } from "../Avatar";
 import { CenterModal } from "./CenterModal";
 
 const e = React.createElement;
 
-export function ProfileModal({ user, onClose, t }) {
+export function ProfileModal({ user, onClose, t }: any) {
   const [tab, setTab] = useState("basic");
   return e(CenterModal, { onClose, maxWidth: "md" },
     e("div", { className: "px-5 py-3.5 border-b border-white/[0.06] flex items-center justify-between" },

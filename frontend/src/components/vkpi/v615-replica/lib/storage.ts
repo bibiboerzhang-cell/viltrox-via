@@ -1,11 +1,7 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
-import React from "react";
 import { STORAGE_KEY } from "../data/storageKey";
-
-const e = React.createElement;
 
 export function loadStoredState() {
   try {
@@ -17,7 +13,7 @@ export function loadStoredState() {
   }
 }
 
-export function saveStoredState(patch) {
+export function saveStoredState(patch: any) {
   try {
     const current = loadStoredState();
     const next = { ...current, ...patch };

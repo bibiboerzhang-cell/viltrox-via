@@ -1,17 +1,16 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
 import React, { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
-import { Camera as Instagram, Check, Copy, Database, Download, FileText, Key, MessageCircle as Twitter, Monitor, Printer, User, X } from "lucide-react";
+import { Check, Copy, Download, FileText, Printer, X } from "lucide-react";
 import { markdownToHtml } from "../lib/markdown";
 import { generateRuntimeReportMarkdown, generateRuntimeVisualHtml } from "../lib/reportRuntime";
 import { loadStoredState, saveStoredState } from "../lib/storage";
 
 const e = React.createElement;
 
-export function ReportPanel({ onClose, data }) {
+export function ReportPanel({ onClose, data }: any) {
   // 加载上次选项
   const stored = loadStoredState();
   const [period, setPeriod] = useState(stored.reportPeriod || "monthly");
@@ -45,8 +44,8 @@ export function ReportPanel({ onClose, data }) {
     [period, language, sections, data]
   );
   
-  const toggleSection = (key) => {
-    setSections(s => ({ ...s, [key]: !s[key] }));
+  const toggleSection = (key: any) => {
+    setSections((s: any) => ({ ...s, [key]: !s[key] }));
   };
   
   // Copy to clipboard

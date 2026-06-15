@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -6,7 +5,7 @@ import React, { useState } from "react";
 
 const e = React.createElement;
 
-export function Avatar({ src, alt, size = 32, fallback, gradient }) {
+export function Avatar({ src, alt, size = 32, fallback, gradient }: any) {
   const [errored, setErrored] = useState(false);
   const initials = (fallback || (alt ? alt.replace(/^@/, "").slice(0, 2).toUpperCase() : "?"));
   if (errored || !src) {

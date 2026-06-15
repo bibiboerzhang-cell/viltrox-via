@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -7,7 +6,7 @@ import { AlertTriangle, Camera } from "lucide-react";
 
 const e = React.createElement;
 
-export function DeviceSummary({ devices }) {
+export function DeviceSummary({ devices }: { devices?: any }) {
   if (!devices || !devices.camera_body) return e("span", { className: "text-slate-600 text-[10px]" }, "—");
   const hasViltrox = devices.has_viltrox;
   const hasCompetitor = devices.competitor_brands && devices.competitor_brands.length > 0;

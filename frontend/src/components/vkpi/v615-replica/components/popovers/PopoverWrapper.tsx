@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -7,7 +6,7 @@ import { motion } from "framer-motion";
 
 const e = React.createElement;
 
-export function PopoverWrapper({ children, onClose, anchorRef, width = 280 }) {
+export function PopoverWrapper({ children, onClose, anchorRef, width = 280 }: any) {
   const [pos, setPos] = useState({ top: 60, right: 16 });
   useEffect(() => {
     if (anchorRef && anchorRef.current) {

@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -8,7 +7,7 @@ import { X } from "lucide-react";
 
 const e = React.createElement;
 
-export function PinDetailModal({ pin, mode, onClose }) {
+export function PinDetailModal({ pin, mode, onClose }: any) {
   if (!pin) return null;
   // 2026-06-12 死按钮诚实化:无后端/路由的 CTA 一律 disabled+待接入;Open in maps 接真 Google Maps 查询
   const pendingBtnFull = "w-full rounded-lg border border-white/[0.1] bg-white/[0.03] py-2 text-sm text-slate-500 opacity-60 cursor-not-allowed";
@@ -56,7 +55,7 @@ export function PinDetailModal({ pin, mode, onClose }) {
         // 如果该 KOL 有 venues,展示
         pin.venues && pin.venues.length > 0 && e("div", { key: "kk-venues", className: "mb-4" },
           e("div", { className: "mb-2 text-[10px] uppercase tracking-wider text-slate-500" }, "Frequent locations"),
-          pin.venues.map((v) => e("div", {
+          pin.venues.map((v: any) => e("div", {
             key: v.name,
             className: "mb-2 flex items-center justify-between rounded-lg border border-white/[0.06] bg-white/[0.02] p-2.5"
           },

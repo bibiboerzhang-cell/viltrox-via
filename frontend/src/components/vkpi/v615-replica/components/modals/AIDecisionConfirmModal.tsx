@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -9,7 +8,7 @@ import { useT } from "../../lib/i18n";
 
 const e = React.createElement;
 
-export function AIDecisionConfirmModal({ insight, onClose, onConfirm }) {
+export function AIDecisionConfirmModal({ insight, onClose, onConfirm }: { insight?: any; onClose?: () => void; onConfirm?: () => void }) {
   const { t } = useT();
   if (!insight) return null;
   return e(motion.div, {
@@ -20,7 +19,7 @@ export function AIDecisionConfirmModal({ insight, onClose, onConfirm }) {
   },
     e(motion.div, {
       initial: { scale: 0.95, opacity: 0, y: 20 }, animate: { scale: 1, opacity: 1, y: 0 }, exit: { scale: 0.95, opacity: 0 },
-      onClick: (ev) => ev.stopPropagation(),
+      onClick: (ev: any) => ev.stopPropagation(),
       className: "relative w-full max-w-md rounded-2xl border border-white/10 bg-[#0a1020] shadow-2xl overflow-hidden",
     },
       e("div", { className: "px-5 py-4 border-b border-white/[0.06]" },

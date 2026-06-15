@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -7,8 +6,8 @@ import { CANDIDATE_KIND_INFO } from "../data/candidateKindInfo";
 
 const e = React.createElement;
 
-export function CandidateKindChip({ kind, size = "normal", showDot = true }) {
-  const info = CANDIDATE_KIND_INFO[kind];
+export function CandidateKindChip({ kind, size = "normal", showDot = true }: { kind?: any; size?: string; showDot?: boolean }) {
+  const info = (CANDIDATE_KIND_INFO as any)[kind];
   if (!info) return null;
   const isXs = size === "xs";
   const animating = kind === "new_discovered" || kind === "existing_low_confidence";

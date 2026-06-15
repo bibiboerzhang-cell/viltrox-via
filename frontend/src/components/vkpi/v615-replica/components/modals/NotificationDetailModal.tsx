@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -10,9 +9,9 @@ import { NOTIF_ICON_MAP } from "../../data/notifIconMap";
 
 const e = React.createElement;
 
-export function NotificationDetailModal({ notification, onClose, onMarkRead }) {
+export function NotificationDetailModal({ notification, onClose, onMarkRead }: any) {
   const { t } = useT();
-  const IconComp = NOTIF_ICON_MAP[notification.iconKey] || Bell;
+  const IconComp = (NOTIF_ICON_MAP as any)[notification.iconKey] || Bell;
   const raw = notification.raw || {};
   let metadata = raw.metadata || {};
   if (!metadata || typeof metadata !== "object") metadata = {};
