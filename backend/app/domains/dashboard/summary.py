@@ -16,6 +16,7 @@ from app.domains.dashboard.recent_content import _dashboard_official_matrix_summ
 from app.domains import lineage as metric_lineage
 from app.domains.dashboard import decision_dashboard as decision_engine
 from app.domains.access import scope
+from app.domains.projects import stage_canonical
 from app.domains.projects.workflow import staff_id as resolve_staff_id
 
 
@@ -547,7 +548,11 @@ def _build_evidence_metrics_summary(*, window_days: int = 30, staff_scope_id: in
 # 四环漏斗在役口径(与 pool_favorites.list_favorites 的排除集对齐)
 _FUNNEL_EXCLUDED_STAGES_SQL = "('churned','cancelled','lost')"
 # 已发布口径(波3 R1 裁定:content_posted/published)
-_FUNNEL_PUBLISHED_STAGES_SQL = "('content_posted','published')"
+# P14:已发布/执行阶段的 raw 别名统一从 stage_canonical 取,杜绝同一项目在 funnel 与
+# active_campaigns 算法不同(此前 funnel=('content_posted','published')、active只认 content_posted、
+# canonical 还有 content_published)。现 published=(content_posted,content_published,published)。
+_FUNNEL_PUBLISHED_STAGES_SQL = stage_canonical.raw_sql_tuple("content_published")
+_EXECUTION_STAGES_SQL = stage_canonical.raw_sql_tuple("shipped", "delivered", "content_published")
 
 
 def _actor_projects_sql(staff_scope_id: int) -> str:
@@ -696,12 +701,12 @@ def _build_active_campaigns_summary(*, window_days: int = 30, staff_scope_id: in
             project_id,
             COUNT(DISTINCT kol_pool_id) AS kol_count,
             COUNT(DISTINCT kol_pool_id) FILTER (
-              WHERE stage IN ('device_sent', 'received', 'content_posted')
+              WHERE stage IN {_EXECUTION_STAGES_SQL}
             ) AS execution_kol_count,
             COUNT(DISTINCT kol_pool_id) FILTER (
-              WHERE stage = 'content_posted'
+              WHERE stage IN {_FUNNEL_PUBLISHED_STAGES_SQL}
             ) AS published_kol_count,
-            BOOL_OR(stage IN ('device_sent', 'received', 'content_posted')) AS has_execution_stage
+            BOOL_OR(stage IN {_EXECUTION_STAGES_SQL}) AS has_execution_stage
           FROM vkpi_project_kol_assignments
           GROUP BY project_id
         ),

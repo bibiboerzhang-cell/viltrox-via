@@ -735,7 +735,8 @@ export async function getKolPoolDetailBundle(
   options: { videoLimit?: number; llmLimit?: number } = {},
 ) {
   const params = new URLSearchParams({
-    video_limit: String(options.videoLimit || 3),
+    // P9:默认从 3 抬到 24,单账号详情默认展示该账号(基本)全部视频(后端 max 200,可按需再加载)。
+    video_limit: String(options.videoLimit || 24),
     llm_limit: String(options.llmLimit || 20),
   });
   return apiFetch<VkpiKolPoolDetailBundleResponse>(

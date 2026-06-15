@@ -1082,7 +1082,10 @@ async def get_item(
 @router.get("/kol-pool/{kol_pool_id}/detail-bundle")
 def get_item_detail_bundle(
     kol_pool_id: int,
-    video_limit: int = Query(default=3, ge=1, le=10),
+    # P9:此前 default=3/max=10 把账号详情抽屉钉死在"前 4 条";底层 evidence 早已物化全量,
+    # 抬到 default=24/max=200,让单账号详情默认展示该账号(基本)全部视频,前端可按需再加载。
+    # 这是 READ-ONLY 物化展示口径(便宜),不触发新的 Gemini 深析(那是另一条限量+预算闸的链)。
+    video_limit: int = Query(default=24, ge=1, le=200),
     llm_limit: int = Query(default=20, ge=1, le=50),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:

@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from typing import Any
 
@@ -37,8 +38,10 @@ DERIVE_METHOD = "content_fit_v1"
 VIDEO_DERIVE_METHOD = "video_analysis_final_v1"
 POOL_EVIDENCE_POST_TABLE = "vkpi_kol_video_evidence"
 
-# 只读这么多视频/评论进 prompt,控成本(final_v1 单条已很厚)
-MAX_VIDEOS = 8
+# 只读这么多【已深析】视频进 fit prompt,控成本(final_v1 单条已很厚)。
+# P9:8 太小→样本不足、Viltrox 识别易零命中;抬到 15(只读已有 final_v1,不新跑 Gemini;
+# fit LLM 仍走 budget_guard),可经 env 覆盖。
+MAX_VIDEOS = max(1, int(os.environ.get("VKPI_CONTENT_FIT_MAX_VIDEOS", "15")))
 MAX_COMMENTS = 30
 MAX_OUTPUT_TOKENS = 1400
 LLM_PURPOSE = "vkpi_kol_content_fit"

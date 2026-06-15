@@ -65,6 +65,7 @@ _RAW_TO_CANONICAL: dict[str, str] = {
     "delivered": "delivered",
     "content_posted": "content_published",
     "content_published": "content_published",
+    "published": "content_published",
     "content_detected": "content_detected",
     "measured": "retrospective_ready",
     "retrospective_ready": "retrospective_ready",
@@ -102,6 +103,30 @@ def to_canonical(raw_stage: str, stage_status: str = "") -> str:
     """
     clean = str(raw_stage or "").strip().lower()
     return _RAW_TO_CANONICAL.get(clean, clean)
+
+
+def raw_aliases(canonical_stage: str) -> tuple[str, ...]:
+    """All raw assignment.stage values that map to the given canonical stage.
+
+    P14:让统计/漏斗/next_action 不再各写各的 raw 串。例如 content_published 的 raw
+    别名 = (content_posted, content_published, published)。未知 canonical 原样返回。
+    """
+    cs = str(canonical_stage or "").strip().lower()
+    aliases = tuple(sorted(raw for raw, can in _RAW_TO_CANONICAL.items() if can == cs))
+    return aliases or (cs,)
+
+
+def raw_sql_tuple(*canonical_stages: str) -> str:
+    """SQL ``(...)`` 字面量,含落到给定 canonical 阶段的全部 raw 别名,供 ``stage IN <...>`` 用。
+
+    单一事实源:funnel / active_campaigns / next_action 共用同一口径,杜绝"同一项目在不同
+    聚合里算法不同"。内联可信常量(无注入面)。
+    """
+    raws: list[str] = []
+    for cs in canonical_stages:
+        raws.extend(raw_aliases(cs))
+    inner = ",".join("'" + r.replace("'", "''") + "'" for r in sorted(set(raws)))
+    return f"({inner})"
 
 
 def canonical_index(stage: str) -> int:
