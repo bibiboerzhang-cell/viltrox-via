@@ -552,6 +552,21 @@ async def job_vkpi_brief_agent():
         logger.exception("scheduler.vkpi_brief_agent_failed")
 
 
+async def job_vkpi_market_signal_refresh():
+    """Signals & Alerts 每日刷新(竞品新品 + Reddit/Google News 热度):allowlisted 有界抓取,零 LLM/零 DB 写。
+    竞品入库仍走人工审核闸(本 job 不 promote)。config-gate(scheduler_tasks.vkpi_market_signal_refresh)。"""
+    if not _scheduler_task_enabled("vkpi_market_signal_refresh"):
+        return
+    try:
+        import asyncio
+        from app.domains.market import signal_refresh
+
+        result = await asyncio.to_thread(signal_refresh.refresh_external_signals)
+        logger.info("scheduler.vkpi_market_signal_refresh", extra={"result": result})
+    except Exception:
+        logger.exception("scheduler.vkpi_market_signal_refresh_failed")
+
+
 async def job_vkpi_ai_today_hot():
     """AI Today 今日热点(每早8点中国时区):LLM 据真实行业热点生成拍摄方案+话题。
     红线:走预算闸(cron:ai_today_hot 硬上限)+ claude 代理;一天一次。config-gate(scheduler_tasks.vkpi_ai_today_hot)。"""
@@ -718,6 +733,15 @@ async def start_scheduler() -> None:
         trigger=CronTrigger(hour=3, minute=45),
         id="vkpi_brief_agent",
         name="AI Today brief agent daily refresh (deterministic, no LLM)",
+        max_instances=1,
+        coalesce=True,
+    )
+    # ── Signals & Alerts 每日刷新(07:00 中国·allowlisted 有界抓取·无 LLM)── 先于 AI Today,喂新鲜热点。
+    _scheduler.add_job(
+        job_vkpi_market_signal_refresh,
+        trigger=CronTrigger(hour=7, minute=0, timezone=CHINA_TZ),
+        id="vkpi_market_signal_refresh",
+        name="Signals & Alerts daily refresh (07:00 China, bounded, no LLM)",
         max_instances=1,
         coalesce=True,
     )
