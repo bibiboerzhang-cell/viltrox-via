@@ -63,8 +63,9 @@ export function SignalsAlertsCard({ alerts, onAlertClick, onViewAll }: any) {
         // Sources + mentions
         e("div", { className: "flex items-center justify-between text-[9px]" },
           e("div", { className: "flex items-center gap-1 text-slate-500" },
-            e("span", null, a.sources.slice(0, 3).map((s: any) => s.name).join(" · ")),
-            a.sources.length > 3 && e("span", null, ` +${a.sources.length - 3}`)
+            // 防御:sources 缺失/非数组时不再 .slice/.length 崩页。
+            e("span", null, (Array.isArray(a.sources) ? a.sources : []).slice(0, 3).map((s: any) => (typeof s === "string" ? s : s && s.name)).filter(Boolean).join(" · ")),
+            (Array.isArray(a.sources) ? a.sources.length : 0) > 3 && e("span", null, ` +${a.sources.length - 3}`)
           ),
           e("div", { className: "flex items-center gap-1.5" },
             e("span", { className: "rounded bg-white/[0.05] px-1 py-0.5 text-slate-400" }, `${a.totalMentions} mentions`),

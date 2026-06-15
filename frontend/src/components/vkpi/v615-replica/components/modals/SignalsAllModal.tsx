@@ -89,7 +89,11 @@ export function SignalsAllModal({ alerts, onClose, onAlertClick }: any) {
               e("div", { className: "text-[10px] text-slate-400 mb-1.5" }, a.desc),
               e("div", { className: "flex items-center justify-between text-[9px]" },
                 e("div", { className: "text-slate-500" },
-                  a.sources.map((s: any) => s.name).join(" · ")
+                  // 防御:某些信号没有 sources(或为字符串源)→ 不再 .map 直接崩页(RouteErrorBoundary)。
+                  (Array.isArray(a.sources) ? a.sources : [])
+                    .map((s: any) => (typeof s === "string" ? s : s && s.name))
+                    .filter(Boolean)
+                    .join(" · ")
                 ),
                 e("div", { className: "flex items-center gap-1.5" },
                   e("span", { className: "rounded bg-white/[0.05] px-1.5 py-0.5 text-slate-400" }, a.totalMentions + " mentions"),
