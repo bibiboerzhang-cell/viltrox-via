@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -7,7 +6,7 @@ import { Activity, Camera as Instagram, Key, MessageCircle as Twitter } from "lu
 
 const e = React.createElement;
 
-export function generateVisualHtml({ language, period, sections }) {
+export function generateVisualHtml({ language, period, sections }: any) {
   const lang = language || "zh";
   const isWeekly = period === "weekly";
   const today = new Date();
@@ -116,13 +115,13 @@ export function generateVisualHtml({ language, period, sections }) {
   const rosterData = isWeekly 
     ? [1038,1039,1040,1040,1041,1041,1041]
     : [1013,1015,1017,1018,1020,1022,1024,1025,1027,1029,1030,1032,1033,1034,1035,1036,1037,1038,1039,1040,1040,1040,1041,1041,1041,1041,1041,1041,1041,1041];
-  const drawTrendChart = (data, color = "#a855f7") => {
+  const drawTrendChart = (data: any, color = "#a855f7") => {
     const w = 660, h = 120, pad = 12;
     const min = Math.min(...data), max = Math.max(...data);
     const range = max - min || 1;
     const stepX = (w - pad * 2) / (data.length - 1);
-    const pts = data.map((v, i) => [pad + i * stepX, h - pad - ((v - min) / range) * (h - pad * 2)]);
-    const linePath = pts.map((p, i) => `${i === 0 ? "M" : "L"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
+    const pts = data.map((v: any, i: number) => [pad + i * stepX, h - pad - ((v - min) / range) * (h - pad * 2)]);
+    const linePath = pts.map((p: any, i: number) => `${i === 0 ? "M" : "L"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
     const areaPath = `${linePath} L${pts[pts.length-1][0]},${h-pad} L${pad},${h-pad} Z`;
     return `<svg viewBox="0 0 ${w} ${h}" style="width:100%; height:140px;" preserveAspectRatio="none">
       <defs>
@@ -140,9 +139,9 @@ export function generateVisualHtml({ language, period, sections }) {
   };
   
   // ─ 水平柱状图(Top 5 KOL) ─
-  const drawBarChart = (items, color = "#a855f7") => {
-    const max = Math.max(...items.map(x => x.value));
-    return items.map(it => {
+  const drawBarChart = (items: any, color = "#a855f7") => {
+    const max = Math.max(...items.map((x: any) => x.value));
+    return items.map((it: any) => {
       const pct = (it.value / max) * 100;
       return `
       <div style="display:flex; align-items:center; gap:12px; margin-bottom:8px;">
@@ -156,11 +155,11 @@ export function generateVisualHtml({ language, period, sections }) {
   };
   
   // ─ 饼图(SVG donut) ─
-  const drawDonut = (segments, size = 160) => {
+  const drawDonut = (segments: any, size = 160) => {
     const cx = size / 2, cy = size / 2, r = size / 2 - 8, inner = r - 22;
     let cumulative = 0;
-    const total = segments.reduce((s, x) => s + x.value, 0);
-    const arcs = segments.map(seg => {
+    const total = segments.reduce((s: any, x: any) => s + x.value, 0);
+    const arcs = segments.map((seg: any) => {
       const startAngle = (cumulative / total) * 2 * Math.PI - Math.PI / 2;
       cumulative += seg.value;
       const endAngle = (cumulative / total) * 2 * Math.PI - Math.PI / 2;

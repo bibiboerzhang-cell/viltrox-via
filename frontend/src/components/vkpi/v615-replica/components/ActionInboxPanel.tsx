@@ -1,4 +1,3 @@
-// @ts-nocheck
 // W1→W2 Action Inbox — Dashboard 右侧"今日建议"。自取数据(apiToken)。
 // W2 起可操作:approve/dismiss/snooze;execute 仍走后端 validators 双闸(approved +
 //   touches_v6_fit=False + budget + entity 存在)。approve→execute 两步,前端只触发,不绕审批。
@@ -53,13 +52,13 @@ const PRIORITY_META = {
 };
 
 export function ActionInboxPanel({ apiToken = "", limit = 6 }) {
-  const [items, setItems] = React.useState([]);
+  const [items, setItems] = React.useState<any[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState("");
   const [scope, setScope] = React.useState("");
   const [available, setAvailable] = React.useState(true);
   // per-id 操作态:'approve' | 'dismiss' | 'snooze' | undefined。
-  const [busy, setBusy] = React.useState({});
+  const [busy, setBusy] = React.useState<Record<string, any>>({});
   const [actionError, setActionError] = React.useState("");
 
   const load = React.useCallback(() => {
@@ -87,12 +86,12 @@ export function ActionInboxPanel({ apiToken = "", limit = 6 }) {
   }, [load]);
 
   // 乐观移除:成功后本地剔除该行(approve/dismiss/snooze 都让它离开 suggested 列表)。
-  const removeItem = React.useCallback((id) => {
-    setItems((prev) => prev.filter((it) => it.id !== id));
+  const removeItem = React.useCallback((id: any) => {
+    setItems((prev) => prev.filter((it: any) => it.id !== id));
   }, []);
 
   const runAction = React.useCallback(
-    (it, kind) => {
+    (it: any, kind: any) => {
       if (!apiToken || !it || busy[it.id]) return;
       // approve 二次确认:会触发后端执行链 / 烧 LLM 的明示。
       if (kind === "approve" && (it.requires_approval || it.uses_llm)) {
@@ -175,9 +174,9 @@ export function ActionInboxPanel({ apiToken = "", limit = 6 }) {
     body = e(
       "div",
       { className: "flex-1 space-y-1.5 overflow-hidden" },
-      items.slice(0, limit).map((it) => {
-        const meta = CATEGORY_META[it.category] || { label: it.category, Icon: ListChecks, color: "text-slate-300" };
-        const pr = PRIORITY_META[it.priority] || PRIORITY_META.low;
+      items.slice(0, limit).map((it: any) => {
+        const meta = (CATEGORY_META as any)[it.category] || { label: it.category, Icon: ListChecks, color: "text-slate-300" };
+        const pr = (PRIORITY_META as any)[it.priority] || PRIORITY_META.low;
         return e(
           "div",
           {

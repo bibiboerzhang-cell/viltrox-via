@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -23,7 +22,7 @@ import { proxiedImageUrl, proxiedVideoUrl } from "../../shared/mediaProxy";
 const e = React.createElement;
 
 // d1:真复制按钮(原按钮有 title 无 onClick,点击无声失败——B2 全页唯一假按钮)
-function CopyEmailButton({ email }) {
+function CopyEmailButton({ email }: any) {
   const [copied, setCopied] = React.useState(false);
   return e("button", {
     className: "ml-auto p-1 rounded hover:bg-white/[0.04] " + (copied ? "text-emerald-300" : "text-slate-400 hover:text-white"),
@@ -37,7 +36,7 @@ function CopyEmailButton({ email }) {
   }, e(copied ? Check : Link2, { size: 10 }));
 }
 
-function detailAvatarUrl(item) {
+function detailAvatarUrl(item: any) {
   if (!item || typeof item !== "object") return "";
   return proxiedImageUrl(
     item.avatar_url ||
@@ -51,7 +50,7 @@ function detailAvatarUrl(item) {
   );
 }
 
-function KOLDetailAvatar({ item, size = 44 }) {
+function KOLDetailAvatar({ item, size = 44 }: any) {
   const [failed, setFailed] = React.useState(false);
   const avatar = failed ? "" : detailAvatarUrl(item);
   if (!avatar) {
@@ -71,55 +70,55 @@ function KOLDetailAvatar({ item, size = 44 }) {
   );
 }
 
-function asArray(value) {
+function asArray(value: any) {
   return Array.isArray(value) ? value : [];
 }
 
-function numberOr(value, fallback = null) {
+function numberOr(value: any, fallback: any = null) {
   if (value === null || value === undefined) return fallback;
   if (typeof value === "string" && value.trim() === "") return fallback;
   const numeric = typeof value === "number" ? value : Number(String(value ?? "").replace(/[% ,]/g, ""));
   return Number.isFinite(numeric) ? numeric : fallback;
 }
 
-function fixedOrDash(value, digits = 2) {
+function fixedOrDash(value: any, digits = 2) {
   const numeric = numberOr(value);
   return numeric == null ? "—" : numeric.toFixed(digits);
 }
 
-function pctOrZero(value) {
+function pctOrZero(value: any) {
   return numberOr(value, 0) * 100;
 }
 
-function scoreValue(value, fallback = 0) {
+function scoreValue(value: any, fallback = 0) {
   const numeric = numberOr(value);
   if (numeric == null) return fallback;
   return Math.max(0, Math.min(100, numeric));
 }
 
-function scoreText(value) {
+function scoreText(value: any) {
   const numeric = numberOr(value);
   if (numeric == null) return "—";
   return String(Math.round(Math.max(0, Math.min(100, numeric))));
 }
 
-function recordOr(value) {
+function recordOr(value: any): any {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
-function compactText(value, max = 180) {
+function compactText(value: any, max = 180) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   if (!text) return "";
   return text.length > max ? text.slice(0, max - 1) + "…" : text;
 }
 
-function flexibleTextList(value, maxItems = 3) {
-  const out = [];
-  const push = (item) => {
+function flexibleTextList(value: any, maxItems = 3) {
+  const out: any[] = [];
+  const push = (item: any) => {
     const text = compactText(item, 220);
     if (text) out.push(text);
   };
-  const visit = (item) => {
+  const visit = (item: any) => {
     if (item === null || item === undefined || out.length >= maxItems) return;
     if (typeof item === "string" || typeof item === "number" || typeof item === "boolean") {
       push(item);
@@ -133,7 +132,7 @@ function flexibleTextList(value, maxItems = 3) {
       const record = recordOr(item);
       const parts = ["recommendation", "reason", "summary", "evidence", "rationale"]
         .map((key) => record[key])
-        .filter((part) => typeof part === "string" && part.trim());
+        .filter((part: any) => typeof part === "string" && part.trim());
       if (parts.length > 1) {
         push(parts.join(" · "));
         return;
@@ -151,12 +150,12 @@ function flexibleTextList(value, maxItems = 3) {
   return out.slice(0, maxItems);
 }
 
-function maxScore(record) {
-  const values = Object.values(recordOr(record)).map((value) => numberOr(value)).filter((value) => value != null);
+function maxScore(record: any) {
+  const values = Object.values(recordOr(record)).map((value: any) => numberOr(value)).filter((value: any) => value != null);
   return values.length ? Math.max(...values) : 0;
 }
 
-function dimensions11RadarDims(payload) {
+function dimensions11RadarDims(payload: any) {
   if (!payload || typeof payload !== "object" || payload.status === "missing" || payload.persisted === false) {
     return [];
   }
@@ -188,7 +187,7 @@ function dimensions11RadarDims(payload) {
   }));
 }
 
-function concernLabel(value) {
+function concernLabel(value: any) {
   const text = String(value || "").trim();
   const labels = {
     contact_missing: "联系方式缺失",
@@ -196,10 +195,10 @@ function concernLabel(value) {
     no_cooperation_history: "暂无合作历史",
     risk_watchlist: "风险观察名单",
   };
-  return labels[text] || text.replace(/_/g, " ");
+  return (labels as any)[text] || text.replace(/_/g, " ");
 }
 
-function videoAnalysisSources(item, representativeVideos) {
+function videoAnalysisSources(item: any, representativeVideos: any) {
   const seen = new Set();
   return [...asArray(item.video_evidence), ...representativeVideos].filter((video) => {
     if (!video || typeof video !== "object") return false;
@@ -210,12 +209,12 @@ function videoAnalysisSources(item, representativeVideos) {
   });
 }
 
-function cacheEntryOrNull(value) {
+function cacheEntryOrNull(value: any) {
   const record = recordOr(value);
   return Object.keys(record).length ? record : null;
 }
 
-function detailBundleAnalysisItems(detailBundle) {
+function detailBundleAnalysisItems(detailBundle: any) {
   const videoAnalysis = recordOr(recordOr(detailBundle).video_analysis);
   return asArray(videoAnalysis.items).map((item) => {
     const record = recordOr(item);
@@ -227,19 +226,19 @@ function detailBundleAnalysisItems(detailBundle) {
   }).filter((item) => Object.keys(item.video).length);
 }
 
-function detailBundleAnalysisSummary(detailBundle) {
+function detailBundleAnalysisSummary(detailBundle: any) {
   const summary = recordOr(recordOr(recordOr(detailBundle).video_analysis).summary);
   return Object.keys(summary).length ? summary : null;
 }
 
-function evidenceIdOf(video) {
+function evidenceIdOf(video: any) {
   if (!video || typeof video !== "object") return null;
   const value = video.evidence_id ?? video.id;
   const id = Number(value);
   return Number.isFinite(id) && id > 0 ? id : null;
 }
 
-function videoString(video, keys, fallback = "") {
+function videoString(video: any, keys: any, fallback = "") {
   const source = recordOr(video);
   for (const key of keys) {
     const value = source[key];
@@ -248,7 +247,7 @@ function videoString(video, keys, fallback = "") {
   return fallback;
 }
 
-function hostFromUrl(url) {
+function hostFromUrl(url: any) {
   try {
     const raw = String(url || "").trim();
     if (!raw) return "";
@@ -259,7 +258,7 @@ function hostFromUrl(url) {
   }
 }
 
-function parseYoutubeVideoId(url) {
+function parseYoutubeVideoId(url: any) {
   try {
     const raw = String(url || "").trim();
     if (!raw) return "";
@@ -280,7 +279,7 @@ function parseYoutubeVideoId(url) {
   }
 }
 
-function normalizedVideoPlatform(video) {
+function normalizedVideoPlatform(video: any) {
   const explicit = videoString(video, ["platform"]).toLowerCase();
   if (explicit) return explicit;
   const url = videoString(video, ["watch_url", "url", "content_url"]);
@@ -291,7 +290,7 @@ function normalizedVideoPlatform(video) {
   return "media";
 }
 
-function youtubeIdForVideo(video) {
+function youtubeIdForVideo(video: any) {
   const platform = normalizedVideoPlatform(video);
   const watchUrl = videoString(video, ["watch_url", "url", "content_url"]);
   const host = hostFromUrl(watchUrl);
@@ -299,7 +298,7 @@ function youtubeIdForVideo(video) {
   return videoString(video, ["youtube_video_id"]) || parseYoutubeVideoId(watchUrl);
 }
 
-function youtubeEmbedUrl(videoId) {
+function youtubeEmbedUrl(videoId: any) {
   const id = String(videoId || "").trim();
   if (!id) return "";
   const origin = typeof window !== "undefined" && window.location?.origin
@@ -308,7 +307,7 @@ function youtubeEmbedUrl(videoId) {
   return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?rel=0&playsinline=1&modestbranding=1${origin}`;
 }
 
-function RepresentativeVideoCard({ video, index, onOpen }) {
+function RepresentativeVideoCard({ video, index, onOpen }: any) {
   const [thumbnailFailed, setThumbnailFailed] = React.useState(false);
   const title = videoString(video, ["title", "video_title"], `代表作 ${index + 1}`);
   const views = videoString(video, ["views", "view_count"], "—");
@@ -370,7 +369,7 @@ function RepresentativeVideoCard({ video, index, onOpen }) {
   );
 }
 
-function RepresentativeVideoPlayerModal({ video, onClose }) {
+function RepresentativeVideoPlayerModal({ video, onClose }: any) {
   const title = videoString(video, ["title", "video_title"], "代表作");
   const thumbnail = proxiedImageUrl(videoString(video, ["best_thumbnail", "thumbnail_url", "youtube_thumbnail_url"]));
   const cachedVideoUrl = proxiedVideoUrl(videoString(video, ["cached_video_url"]));
@@ -380,7 +379,7 @@ function RepresentativeVideoPlayerModal({ video, onClose }) {
   const embedSrc = youtubeEmbedUrl(youtubeVideoId);
 
   React.useEffect(() => {
-    const handleKey = (event) => {
+    const handleKey = (event: any) => {
       if (event.key === "Escape") onClose?.();
     };
     window.addEventListener("keydown", handleKey);
@@ -483,7 +482,7 @@ function RepresentativeVideoPlayerModal({ video, onClose }) {
   );
 }
 
-function LlmDeepAnalysisPanel({ payload }) {
+function LlmDeepAnalysisPanel({ payload }: any) {
   if (!payload || payload.status !== "ready" || !payload.primary_result) return null;
   const primary = recordOr(payload.primary_result);
   const dimensions = recordOr(primary.llm_dimensions_11);
@@ -550,10 +549,10 @@ function LlmDeepAnalysisPanel({ payload }) {
 }
 
 // d7:历史深析放出——payload.items(≤50 条)此前仅取 primary 1 条,其余 614 条库存数据 UI 无门。
-function LlmDeepHistoryList({ payload, primary }) {
+function LlmDeepHistoryList({ payload, primary }: any) {
   const [expanded, setExpanded] = React.useState(false);
   const all = Array.isArray(payload.items) ? payload.items : [];
-  const history = all.filter((it) => it && it !== primary && it.id !== primary?.id);
+  const history = all.filter((it: any) => it && it !== primary && it.id !== primary?.id);
   if (!history.length) return null;
   return e("div", { className: "mt-2 border-t border-white/[0.05] pt-1.5" },
     e("button", {
@@ -565,7 +564,7 @@ function LlmDeepHistoryList({ payload, primary }) {
       e(ChevronsUpDownIcon, { expanded })
     ),
     expanded && e("div", { className: "mt-1.5 space-y-1" },
-      history.slice(0, 8).map((it, index) => e("div", {
+      history.slice(0, 8).map((it: any, index: number) => e("div", {
         key: it.id ?? index,
         className: "flex items-center justify-between rounded border border-white/[0.04] bg-black/15 px-2 py-1 text-[9.5px] text-slate-400",
       },
@@ -577,23 +576,23 @@ function LlmDeepHistoryList({ payload, primary }) {
   );
 }
 
-function ChevronsUpDownIcon({ expanded }) {
+function ChevronsUpDownIcon({ expanded }: any) {
   return e("span", { className: "text-[9px] text-slate-600" }, expanded ? "收起 ▲" : "展开 ▼");
 }
 
-export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", detailLoading = false, detailError = "", onClose, inMyList, onToggleMyList, onContact }) {
-  const [dimensions11, setDimensions11] = React.useState(null);
-  const [llmDeepAnalysis, setLlmDeepAnalysis] = React.useState(null);
-  const [preloadedVideoAnalysisBundles, setPreloadedVideoAnalysisBundles] = React.useState(undefined);
-  const [videoAnalysisSummary, setVideoAnalysisSummary] = React.useState(null);
-  const [videoEnqueueState, setVideoEnqueueState] = React.useState({ status: "idle", message: "" });
-  const [activeRepresentativeVideo, setActiveRepresentativeVideo] = React.useState(null);
+export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", detailLoading = false, detailError = "", onClose, inMyList, onToggleMyList, onContact }: any) {
+  const [dimensions11, setDimensions11] = React.useState<any>(null);
+  const [llmDeepAnalysis, setLlmDeepAnalysis] = React.useState<any>(null);
+  const [preloadedVideoAnalysisBundles, setPreloadedVideoAnalysisBundles] = React.useState<any>(undefined);
+  const [videoAnalysisSummary, setVideoAnalysisSummary] = React.useState<any>(null);
+  const [videoEnqueueState, setVideoEnqueueState] = React.useState<any>({ status: "idle", message: "" });
+  const [activeRepresentativeVideo, setActiveRepresentativeVideo] = React.useState<any>(null);
   // 地基B 内容契合深析(content_fit_v1):默认只读缓存;点击才按需触发深析(不烧 LLM 直到点击)。
-  const [contentFit, setContentFit] = React.useState(null);
+  const [contentFit, setContentFit] = React.useState<any>(null);
   const [contentFitBusy, setContentFitBusy] = React.useState(false);
   const [contentFitError, setContentFitError] = React.useState("");
   // W3 长期记忆(纯聚合,显式独立于 V6 Fit · 不影响排序;snapshot 不含任何 fit/score 字段)。
-  const [kolMemory, setKolMemory] = React.useState(null);
+  const [kolMemory, setKolMemory] = React.useState<any>(null);
   React.useEffect(() => {
     const bundleRecord = recordOr(detailBundle);
     if (bundleRecord.status === "ready") {
@@ -857,7 +856,7 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
           ),
         ),
         item.candidate_kind === "new_promoted" && e("button", {
-          onClick: ev => ev.stopPropagation(),
+          onClick: (ev: any) => ev.stopPropagation(),
           disabled: true,
           className: "flex items-center gap-1 rounded-md px-2.5 py-1 text-[10px] font-medium text-slate-400 shrink-0 cursor-not-allowed",
           style: { background: "rgba(148,163,184,0.14)" }
@@ -875,23 +874,23 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
       // ── Why V6 Fit = N? · 速读 4 bullets(规则生成) ──
       v6Breakdown && (() => {
         const b = v6Breakdown;
-        const dims = [
+        const dims: any[] = [
           { key: "loyalty",  Icon: Heart, color: "#86efac",
-            insight: (v) => "高忠诚度 ×" + fixedOrDash(v) + " · 老粉 " + (loyaltySignals.old_fans_pct ?? "—") + "% · 回复率 " + (loyaltySignals.creator_reply_pct ?? "—") + "%" },
+            insight: (v: any) => "高忠诚度 ×" + fixedOrDash(v) + " · 老粉 " + (loyaltySignals.old_fans_pct ?? "—") + "% · 回复率 " + (loyaltySignals.creator_reply_pct ?? "—") + "%" },
           { key: "geo_match", Icon: Target, color: "#c4b5fd",
-            insight: (v) => "海外 Geo 命中 ×" + fixedOrDash(v) + " · " + (COUNTRY_INFO[geoDistribution?.[0]?.country]?.flag || "") + " " + (geoDistribution?.[0]?.country || "—") + " 占 " + Math.round(pctOrZero(geoDistribution?.[0]?.share)) + "%" },
+            insight: (v: any) => "海外 Geo 命中 ×" + fixedOrDash(v) + " · " + ((COUNTRY_INFO as any)[geoDistribution?.[0]?.country]?.flag || "") + " " + (geoDistribution?.[0]?.country || "—") + " 占 " + Math.round(pctOrZero(geoDistribution?.[0]?.share)) + "%" },
           { key: "trend",    Icon: Flame, color: "#fda4af",
-            insight: (v) => "本周流行命中 ×" + fixedOrDash(v) + (trendHits.length ? " · #" + trendHits[0] : " · 未命中") },
-          { key: "real_er",  Icon: (v) => v >= 1 ? Check : AlertTriangle, color: (v) => v >= 1 ? "#86efac" : "#fde68a",
-            insight: (v) => "Real ER ×" + fixedOrDash(v) + " · 去水后 " + formatPercent(item.real_er_pct, 2) },
+            insight: (v: any) => "本周流行命中 ×" + fixedOrDash(v) + (trendHits.length ? " · #" + trendHits[0] : " · 未命中") },
+          { key: "real_er",  Icon: (v: any) => v >= 1 ? Check : AlertTriangle, color: (v: any) => v >= 1 ? "#86efac" : "#fde68a",
+            insight: (v: any) => "Real ER ×" + fixedOrDash(v) + " · 去水后 " + formatPercent(item.real_er_pct, 2) },
           { key: "upgrade",  Icon: Zap, color: "#fde68a",
-            insight: (v) => "升级窗口 " + (devices.upgrade_window || "—") + " · 系数 ×" + fixedOrDash(v) },
+            insight: (v: any) => "升级窗口 " + (devices.upgrade_window || "—") + " · 系数 ×" + fixedOrDash(v) },
           { key: "industry", Icon: Video, color: "#c4b5fd",
-            insight: (v) => "行业 Tier " + (item.industry_tier || "—") + " · " + (item.industry_label || "") + " ×" + fixedOrDash(v) },
+            insight: (v: any) => "行业 Tier " + (item.industry_tier || "—") + " · " + (item.industry_label || "") + " ×" + fixedOrDash(v) },
           { key: "platform_native", Icon: Activity, color: "#94a3b8",
-            insight: (v) => "平台原生度 ×" + fixedOrDash(v) },
+            insight: (v: any) => "平台原生度 ×" + fixedOrDash(v) },
           { key: "price_match", Icon: ShoppingBag, color: "#94a3b8",
-            insight: (v) => "价位匹配 ×" + fixedOrDash(v) },
+            insight: (v: any) => "价位匹配 ×" + fixedOrDash(v) },
         ];
         // 取偏离 1 最远的 top 3(最影响分数的维度)
         const scored = dims
@@ -1054,11 +1053,11 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
         if (!hasMemory) return null;
         const contentStyle = compactText(snap.content_style, 320);
         const productLines = Array.isArray(snap.recommended_product_lines)
-          ? snap.recommended_product_lines.map((x) => compactText(x, 60)).filter(Boolean)
+          ? snap.recommended_product_lines.map((x: any) => compactText(x, 60)).filter(Boolean)
           : [];
         const risk = recordOr(snap.risk);
         const riskFlags = Array.isArray(risk.risk_flags)
-          ? risk.risk_flags.map((x) => compactText(x, 80)).filter(Boolean)
+          ? risk.risk_flags.map((x: any) => compactText(x, 80)).filter(Boolean)
           : [];
         const riskVerdict = compactText(risk.final_verdict, 160);
         const fulfillment = recordOr(snap.fulfillment);
@@ -1072,7 +1071,7 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
           analyzed: "深析",
           failed: "失败",
         };
-        const formatWhen = (value) => {
+        const formatWhen = (value: any) => {
           const text = String(value || "").trim();
           if (!text) return "";
           return text.length >= 10 ? text.slice(0, 10) : text;
@@ -1109,7 +1108,7 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
             ),
             productLines.length > 0
               ? e("div", { className: "flex items-center gap-1.5 flex-wrap" },
-                  productLines.map((line, i) => e("span", {
+                  productLines.map((line: any, i: number) => e("span", {
                     key: i,
                     className: "text-[10px] px-1.5 py-0.5 rounded border border-emerald-400/15 bg-emerald-400/[0.05] text-emerald-200/90",
                   }, line))
@@ -1125,7 +1124,7 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
             (riskFlags.length > 0 || riskVerdict)
               ? e("div", { className: "space-y-1" },
                   riskFlags.length > 0 && e("div", { className: "flex items-start gap-1.5 flex-wrap" },
-                    riskFlags.map((flag, i) => e("span", {
+                    riskFlags.map((flag: any, i: number) => e("span", {
                       key: i,
                       className: "inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border border-amber-400/20 bg-amber-400/[0.06] text-amber-200/90",
                     },
@@ -1161,12 +1160,12 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
             ),
             timeline.length > 0
               ? e("div", { className: "space-y-1.5" },
-                  timeline.slice(0, 12).map((ev, i) => {
+                  timeline.slice(0, 12).map((ev: any, i: number) => {
                     const evRecord = recordOr(ev);
                     const evType = String(evRecord.event_type || "").trim();
                     return e("div", { key: i, className: "flex items-center gap-2 text-[10px]" },
                       e("span", { className: "w-1 h-1 rounded-full bg-violet-400/60 shrink-0" }),
-                      e("span", { className: "text-slate-300 w-[40px] shrink-0" }, EVENT_LABEL[evType] || evType || "事件"),
+                      e("span", { className: "text-slate-300 w-[40px] shrink-0" }, (EVENT_LABEL as any)[evType] || evType || "事件"),
                       e("span", { className: "text-slate-500 tabular-nums shrink-0" }, formatWhen(evRecord.occurred_at)),
                       evRecord.ref_type && e("span", { className: "text-slate-600 truncate" }, String(evRecord.ref_type) + (evRecord.ref_id ? " · " + String(evRecord.ref_id) : ""))
                     );
@@ -1293,8 +1292,8 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
         // Lenses
         devices.lenses.length > 0 && e("div", { className: "space-y-1 mb-2" },
           e("div", { className: "text-[10px] text-slate-500 mb-1" }, "在用镜头"),
-          devices.lenses.map((l, i) => {
-            const bi = BRAND_TIER[l.brand] || { color: "#94a3b8", label: l.brand };
+          devices.lenses.map((l: any, i: number) => {
+            const bi = (BRAND_TIER as any)[l.brand] || { color: "#94a3b8", label: l.brand };
             return e("div", { key: i, className: "flex items-center gap-2 text-[11px]" },
               e("span", {
                 className: "px-1.5 py-0.5 rounded text-[9px] font-medium uppercase tracking-wider",

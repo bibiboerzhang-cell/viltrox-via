@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Dashboard slice from vkpi_v6.15.7_integrated.html
 
 import React from "react";
@@ -82,7 +81,7 @@ export function DashboardReplicaPage(props: any) {
 
           // KPI Strip
           e("div", { className: "mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6" },
-            metrics.map((m, i) => e(MetricCard, { 
+            metrics.map((m: any, i: any) => e(MetricCard, {
               key: m.id, item: m, i, scope: kpiScope,
               onClick: () => setSelectedKpi(m.id)
             }))
@@ -106,7 +105,7 @@ export function DashboardReplicaPage(props: any) {
                 isAvailable && e(RealMap, {
                   pins, accentColor: currentMode.color,
                   defaultZoom: venue ? 17 : item ? 15 : city ? 12 : country ? 5 : 2,
-                  onPinClick: (p) => {
+                  onPinClick: (p: any) => {
                     // V6.9: Events pin → 第一次弹 preview(防误触)
                     if (p.isEvent && p.eventData) {
                       setPreviewEvent(p.eventData);
@@ -145,16 +144,17 @@ export function DashboardReplicaPage(props: any) {
                     placeholder: "Select",
                     accent: !viewMode,
                     color: currentMode?.color || "#a855f7",
-                      options: Object.entries(viewModes).map(([k, m]) => ({
+                      options: Object.entries(viewModes).map(([k, m]: [string, any]) => ({
                       key: k,
                       label: m.label,
                       sub: m.desc,
                       badge: m.available ? null : "WAITING",
                       disabled: !m.available,
                     })),
-                    onChange: (v) => {
+                    onChange: (v: any) => {
                       if (!viewModes[v].available) return;
-                      setViewMode(v); setCountry(""); setCity(""); setItem(""); setVenue("");
+                      // 切换 Viewing 时清空下层(country→city→item→venue),复用父级已传入的 handleCountryChange("")
+                      setViewMode(v); handleCountryChange("");
                     }
                   }),
 

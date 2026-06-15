@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -13,14 +12,14 @@ import { ShareModal } from "../../../shared/ShareModal";
 
 const e = React.createElement;
 
-export function ProjectDetailModal({ project, onClose, onOpenFullPage, staff = [], apiToken, onAssigned, canManage = false }) {
+export function ProjectDetailModal({ project, onClose, onOpenFullPage, staff = [], apiToken, onAssigned, canManage = false }: any) {
   const { t } = useT();
   const [activeTab, setActiveTab] = useState("kols");  // kols / pending / assets / new-kol
   const [assignBusy, setAssignBusy] = useState(false);  // 指派给成员(管理层把项目派给某成员 → 该成员 own-only 即可见)
   const [shareOpen, setShareOpen] = useState(false);  // 分享 modal(成员管理走真后端)
   if (!project) return null;
-  const IconComp = CAMPAIGN_ICONS[project.iconKey] || CAMPAIGN_ICONS.default;
-  const maxFunnel = Math.max(...project.funnel.map(f => f.count), 1);
+  const IconComp = (CAMPAIGN_ICONS as any)[project.iconKey] || CAMPAIGN_ICONS.default;
+  const maxFunnel = Math.max(...project.funnel.map((f: any) => f.count), 1);
   
   return e(React.Fragment, null,
    shareOpen && e(ShareModal, {
@@ -39,7 +38,7 @@ export function ProjectDetailModal({ project, onClose, onOpenFullPage, staff = [
   },
     e(motion.div, {
       initial: { scale: 0.95, opacity: 0, y: 20 }, animate: { scale: 1, opacity: 1, y: 0 }, exit: { scale: 0.95, opacity: 0 },
-      onClick: (ev) => ev.stopPropagation(),
+      onClick: (ev: any) => ev.stopPropagation(),
       className: "relative w-full max-w-3xl max-h-[92vh] flex flex-col rounded-2xl border border-white/10 bg-[#0a1020] shadow-2xl overflow-hidden",
     },
       // Header
@@ -64,13 +63,13 @@ export function ProjectDetailModal({ project, onClose, onOpenFullPage, staff = [
           apiToken && staff.length > 0 && e("select", {
             value: "", disabled: assignBusy, title: "指派给成员",
             className: "rounded-md border border-white/[0.08] bg-white/[0.04] px-2 py-1 text-[10px] text-slate-300 hover:bg-white/[0.08] outline-none max-w-[120px]",
-            onChange: async (ev) => {
+            onChange: async (ev: any) => {
               const sid = ev.target.value; if (!sid) return;
               setAssignBusy(true);
               try { await updateProject(apiToken, String(project.projectId || project.id || ""), { assignedStaffId: sid }); onAssigned && onAssigned(); }
               finally { setAssignBusy(false); }
             },
-          }, [e("option", { key: "_", value: "" }, assignBusy ? "指派中…" : "指派给…"), ...staff.map(s => e("option", { key: s.id, value: String(s.id), style: { background: "#0a1020" } }, s.name))]),
+          }, [e("option", { key: "_", value: "" }, assignBusy ? "指派中…" : "指派给…"), ...staff.map((s: any) => e("option", { key: s.id, value: String(s.id), style: { background: "#0a1020" } }, s.name))]),
           canManage && apiToken && e("button", {
             onClick: () => setShareOpen(true),
             className: "rounded-md border border-purple-500/30 bg-purple-500/[0.08] px-2 py-1 text-[10px] text-purple-200 hover:bg-purple-500/[0.15] flex items-center gap-1",
@@ -107,7 +106,7 @@ export function ProjectDetailModal({ project, onClose, onOpenFullPage, staff = [
             e("span", { className: "text-[9px] text-slate-500" }, "每日刷新")
           ),
           e("div", { className: "grid grid-cols-9 gap-1" },
-            project.funnel.map((f, i) => {
+            project.funnel.map((f: any, i: number) => {
               const isBottleneck = f.bottleneck;
               const isMilestone = f.milestone;
               const isEmpty = f.count === 0;
@@ -134,8 +133,8 @@ export function ProjectDetailModal({ project, onClose, onOpenFullPage, staff = [
               );
             })
           ),
-          e("div", { className: "mt-2 text-[9px] flex items-center gap-1.5", style: { color: project.funnel.some(f => f.bottleneck) ? "#fbbf24" : "rgba(255,255,255,0.5)" } },
-            project.funnel.some(f => f.bottleneck) && e(AlertTriangle, { size: 10 }),
+          e("div", { className: "mt-2 text-[9px] flex items-center gap-1.5", style: { color: project.funnel.some((f: any) => f.bottleneck) ? "#fbbf24" : "rgba(255,255,255,0.5)" } },
+            project.funnel.some((f: any) => f.bottleneck) && e(AlertTriangle, { size: 10 }),
             e("span", null, "当前瓶颈:" + project.bottleneckText)
           )
         ),
@@ -170,7 +169,7 @@ export function ProjectDetailModal({ project, onClose, onOpenFullPage, staff = [
                   e("span", null, "KOL"), e("span", null, "平台"), e("span", null, "当前阶段"), e("span", null, t("已发")), e("span", null, "曝光"), e("span", { className: "text-right" }, t("操作"))
                 ),
                 // rows
-                project.kolList.map((k, i) => e("div", {
+                project.kolList.map((k: any, i: number) => e("div", {
                   key: i,
                   className: "grid gap-2 px-3 py-2 items-center border-b border-white/[0.03] last:border-b-0 hover:bg-white/[0.02]",
                   style: { gridTemplateColumns: "2fr 1fr 1fr 0.6fr 0.8fr 0.7fr" }
@@ -195,8 +194,8 @@ export function ProjectDetailModal({ project, onClose, onOpenFullPage, staff = [
           project.pendingPublishes.length === 0
             ? e("div", { className: "text-center py-8 text-[11px] text-slate-500" }, "暂无待发布")
             : e("div", { className: "space-y-2" },
-                project.pendingPublishes.map((p, i) => {
-                  const platCfg = PLATFORM_ICONS_MAP[p.platform] || PLATFORM_ICONS_MAP.default;
+                project.pendingPublishes.map((p: any, i: number) => {
+                  const platCfg = (PLATFORM_ICONS_MAP as any)[p.platform] || PLATFORM_ICONS_MAP.default;
                   return e("div", { key: i, className: "rounded-md border border-white/[0.06] bg-white/[0.02] p-3 flex gap-3" },
                     e("div", {
                       className: "shrink-0 w-9 h-9 rounded-full flex items-center justify-center text-[12px] font-bold text-white",
@@ -223,9 +222,9 @@ export function ProjectDetailModal({ project, onClose, onOpenFullPage, staff = [
           project.assets.length === 0
             ? e("div", { className: "text-center py-8 text-[11px] text-slate-500" }, "暂无物料")
             : e("div", { className: "space-y-1.5" },
-                project.assets.map((a, i) => {
-                  const stColors = { ready: "#10b981", draft: "#fbbf24", review: "#60a5fa", todo: "#64748b" };
-                  const stLabels = { ready: "已就绪", draft: "草稿中", review: "审核中", todo: "待办" };
+                project.assets.map((a: any, i: number) => {
+                  const stColors: Record<string, string> = { ready: "#10b981", draft: "#fbbf24", review: "#60a5fa", todo: "#64748b" };
+                  const stLabels: Record<string, string> = { ready: "已就绪", draft: "草稿中", review: "审核中", todo: "待办" };
                   return e("div", { key: i, className: "flex items-center gap-2 rounded-md border border-white/[0.06] bg-white/[0.02] px-3 py-2" },
                     e("div", {
                       className: "shrink-0 w-2 h-2 rounded-full",
@@ -254,7 +253,7 @@ export function ProjectDetailModal({ project, onClose, onOpenFullPage, staff = [
           e("div", { className: "text-[10px] text-slate-500 mt-1 mb-1" }, t("Claude 基于品类匹配度推荐")),
           project.newKolSuggestions.length === 0
             ? e("div", { className: "text-center py-8 text-[11px] text-slate-500" }, "暂无推荐")
-            : project.newKolSuggestions.map((k, i) => e("div", {
+            : project.newKolSuggestions.map((k: any, i: number) => e("div", {
                 key: i, className: "rounded-md border border-white/[0.06] bg-white/[0.02] p-3 flex gap-3 hover:bg-white/[0.03]"
               },
                 e("div", {

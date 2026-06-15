@@ -1,4 +1,3 @@
-// @ts-nocheck
 import React, { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { BarChart3, Database, Download, ExternalLink, Loader2, X } from "lucide-react";
@@ -13,17 +12,17 @@ const SCOPE_OPTIONS = [
   { id: "company", label: "公司账号", desc: "Owned" },
 ];
 
-function record(value) {
+function record(value: any) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
-function number(value) {
+function number(value: any) {
   if (value === null || value === undefined || value === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function compact(value) {
+function compact(value: any) {
   const n = number(value);
   if (n == null) return "--";
   if (n >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
@@ -32,7 +31,7 @@ function compact(value) {
   return Math.round(n).toLocaleString();
 }
 
-function formatValue(metric, value) {
+function formatValue(metric: any, value: any) {
   const n = number(value);
   if (n == null) return "--";
   if (metric.format === "compact") return compact(n);
@@ -42,14 +41,14 @@ function formatValue(metric, value) {
   return n.toLocaleString();
 }
 
-function statusTone(source) {
+function statusTone(source: any) {
   if (source === "real") return { text: "text-emerald-200", bg: "bg-emerald-500/[0.12]", border: "border-emerald-400/20" };
   if (source === "accumulating") return { text: "text-cyan-200", bg: "bg-cyan-500/[0.10]", border: "border-cyan-400/20" };
   return { text: "text-amber-200", bg: "bg-amber-500/[0.10]", border: "border-amber-400/20" };
 }
 
-function sparkPath(points, width = 560, height = 128) {
-  const values = (Array.isArray(points) ? points : []).map(number).filter((v) => v != null);
+function sparkPath(points: any, width = 560, height = 128) {
+  const values = (Array.isArray(points) ? points : []).map(number).filter((v): v is number => v != null);
   if (values.length < 2) return "";
   const min = Math.min(...values);
   const max = Math.max(...values);
@@ -63,12 +62,12 @@ function sparkPath(points, width = 560, height = 128) {
     .join(" ");
 }
 
-function pct(value, digits = 1) {
+function pct(value: any, digits = 1) {
   const n = number(value);
   return n == null ? "--" : `${(n * 100).toFixed(digits)}%`;
 }
 
-function shortText(value, limit = 72) {
+function shortText(value: any, limit = 72) {
   const raw = String(value || "");
   return raw.length > limit ? `${raw.slice(0, limit - 1)}…` : raw;
 }
@@ -93,7 +92,7 @@ const MOVER_TABS = [
   { id: "by_engagement", label: "互动", metric: "engagement" },
 ];
 
-function metricLabel(tab, row) {
+function metricLabel(tab: any, row: any) {
   const value = number(row?.value);
   if (value == null) return "--";
   if (tab === "by_activity") return `${Math.round(value).toLocaleString()} 条`;
@@ -101,14 +100,14 @@ function metricLabel(tab, row) {
   return `${compact(value)} 播放`;
 }
 
-function csvCell(value) {
+function csvCell(value: any) {
   const raw = value === null || value === undefined ? "" : String(value);
   return `"${raw.replace(/"/g, '""')}"`;
 }
 
-function downloadCsv(filename, rows) {
+function downloadCsv(filename: any, rows: any) {
   if (typeof window === "undefined" || typeof document === "undefined") return;
-  const csv = rows.map((row) => row.map(csvCell).join(",")).join("\n");
+  const csv = rows.map((row: any) => row.map(csvCell).join(",")).join("\n");
   const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" });
   const url = window.URL.createObjectURL(blob);
   const anchor = document.createElement("a");
@@ -120,7 +119,7 @@ function downloadCsv(filename, rows) {
   window.URL.revokeObjectURL(url);
 }
 
-export function KPIDetailModal({ kpiId, initialScope, metrics = [], onClose, onDrillToKolPool }) {
+export function KPIDetailModal({ kpiId, initialScope, metrics = [], onClose, onDrillToKolPool }: any) {
   const { t } = useT();
   const stored = loadStoredState();
   const [timeRange, setTimeRange] = useState(stored.kpiTimeRange || "30d");
@@ -134,7 +133,7 @@ export function KPIDetailModal({ kpiId, initialScope, metrics = [], onClose, onD
     saveStoredState({ kpiScope: scope });
   }, [scope]);
 
-  const metric = useMemo(() => (metrics || []).find((item) => item.id === kpiId), [metrics, kpiId]);
+  const metric = useMemo(() => (metrics || []).find((item: any) => item.id === kpiId), [metrics, kpiId]);
   if (!kpiId || !metric) return null;
 
   const scoped = record(record(metric.data)[scope] || record(metric.data).all);
@@ -171,8 +170,8 @@ export function KPIDetailModal({ kpiId, initialScope, metrics = [], onClose, onD
       : (Array.isArray(moversTabs[moverTab]) ? moversTabs[moverTab] : []);
     const trend = record(record(rosterDetail.trend)[scope] || record(rosterDetail.trend).all);
     const trendPoints = Array.isArray(trend.points) ? trend.points : [];
-    const trendPath = scope === "company" ? sparkPath(trendPoints.map((point) => number(record(point).total_views))) : "";
-    const maxPlatform = Math.max(1, ...platformRows.map((row) => number(record(row).count) || 0));
+    const trendPath = scope === "company" ? sparkPath(trendPoints.map((point: any) => number(record(point).total_views))) : "";
+    const maxPlatform = Math.max(1, ...platformRows.map((row: any) => number(record(row).count) || 0));
     const handleExportCsv = () => {
       const headerAndSummary = [
         ["section", "name", "platform", "value", "pct", "title", "date", "url"],
@@ -185,10 +184,10 @@ export function KPIDetailModal({ kpiId, initialScope, metrics = [], onClose, onD
             ["summary", "total_views", "", companyViews, "", "", "", ""],
             ...Object.keys(COMPANY_GROUP_LABELS).map((key) => [
               "group",
-              COMPANY_GROUP_LABELS[key].label,
+              (COMPANY_GROUP_LABELS as any)[key].label,
               "",
-              number(companyGroups[key]) || 0,
-              totalPool > 0 ? pct((number(companyGroups[key]) || 0) / totalPool) : "0.0%",
+              number((companyGroups as any)[key]) || 0,
+              totalPool > 0 ? pct((number((companyGroups as any)[key]) || 0) / totalPool) : "0.0%",
               "",
               "",
               "",
@@ -199,10 +198,10 @@ export function KPIDetailModal({ kpiId, initialScope, metrics = [], onClose, onD
             ["composition", "pending", "", number(composition.pending) || 0, "", "", "", ""],
             ...Object.keys(PARTNERSHIP_LABELS).map((key) => [
               "partnership",
-              PARTNERSHIP_LABELS[key].label,
+              (PARTNERSHIP_LABELS as any)[key].label,
               "",
-              number(tiers[key]) || 0,
-              pct(tierPct[key]),
+              number((tiers as any)[key]) || 0,
+              pct((tierPct as any)[key]),
               "",
               "",
               "",
@@ -211,11 +210,11 @@ export function KPIDetailModal({ kpiId, initialScope, metrics = [], onClose, onD
       const rows = [
         ...headerAndSummary,
         ...breakdownRows,
-        ...platformRows.map((raw) => {
+        ...platformRows.map((raw: any) => {
           const row = record(raw);
           return ["platform", row.platform || "", row.platform || "", number(row.count) || 0, pct(row.pct), "", "", ""];
         }),
-        ...movers.map((raw) => {
+        ...movers.map((raw: any) => {
           const row = record(raw);
           return [
             isCompany ? "movers:company" : `movers:${moverTab}`,
@@ -345,8 +344,8 @@ export function KPIDetailModal({ kpiId, initialScope, metrics = [], onClose, onD
                 e("h3", { className: "text-sm font-semibold text-white" }, "账号分组"),
                 e("div", { className: "mt-3 grid grid-cols-3 gap-2" },
                   ["main_brand", "product_line", "regional"].map((key) => {
-                    const cfg = COMPANY_GROUP_LABELS[key];
-                    const count = number(companyGroups[key]) || 0;
+                    const cfg = (COMPANY_GROUP_LABELS as any)[key];
+                    const count = number((companyGroups as any)[key]) || 0;
                     const groupPct = totalPool > 0 ? count / totalPool : 0;
                     return e("div", { key, className: "rounded-lg border border-white/[0.07] bg-black/20 p-3" },
                       e("div", { className: "flex items-center justify-between gap-2" },
@@ -364,14 +363,14 @@ export function KPIDetailModal({ kpiId, initialScope, metrics = [], onClose, onD
                 e("h3", { className: "text-sm font-semibold text-white" }, "合作关系"),
                 e("div", { className: "mt-3 grid grid-cols-2 gap-2" },
                   ["long_term", "in_production", "one_off", "pending"].map((key) => {
-                    const cfg = PARTNERSHIP_LABELS[key];
+                    const cfg = (PARTNERSHIP_LABELS as any)[key];
                     return e("div", { key, className: "rounded-lg border border-white/[0.07] bg-black/20 p-3" },
                       e("div", { className: "flex items-center justify-between gap-2" },
                         e("span", { className: "text-[11px] font-medium text-slate-200" }, cfg.label),
-                        e("span", { className: "text-[10px] text-slate-500" }, pct(tierPct[key]))
+                        e("span", { className: "text-[10px] text-slate-500" }, pct((tierPct as any)[key]))
                       ),
-                      e("div", { className: "mt-1 text-2xl font-semibold text-white tabular-nums" }, compact(tiers[key])),
-                      e("div", { className: "mt-1 h-1.5 rounded-full bg-white/[0.06]" }, e("div", { className: "h-full rounded-full", style: { width: pct(tierPct[key]), background: cfg.color } })),
+                      e("div", { className: "mt-1 text-2xl font-semibold text-white tabular-nums" }, compact((tiers as any)[key])),
+                      e("div", { className: "mt-1 h-1.5 rounded-full bg-white/[0.06]" }, e("div", { className: "h-full rounded-full", style: { width: pct((tierPct as any)[key]), background: cfg.color } })),
                       e("p", { className: "mt-2 text-[10px] leading-snug text-slate-500" }, cfg.desc)
                     );
                   })
@@ -380,7 +379,7 @@ export function KPIDetailModal({ kpiId, initialScope, metrics = [], onClose, onD
           e("section", { className: "rounded-xl border border-white/[0.08] bg-white/[0.03] p-4" },
             e("h3", { className: "text-sm font-semibold text-white" }, "按平台"),
             e("div", { className: "mt-3 space-y-2" },
-              platformRows.map((raw) => {
+              platformRows.map((raw: any) => {
                 const row = record(raw);
                 const count = number(row.count) || 0;
                 const width = `${Math.max(4, (count / maxPlatform) * 100).toFixed(1)}%`;
@@ -412,7 +411,7 @@ export function KPIDetailModal({ kpiId, initialScope, metrics = [], onClose, onD
                 )
           ),
           e("div", { className: "mt-3 grid gap-2 md:grid-cols-2" },
-            movers.slice(0, 10).map((raw, index) => {
+            movers.slice(0, 10).map((raw: any, index: number) => {
               const row = record(raw);
               return e("div", { key: `${isCompany ? "company" : moverTab}-${row.kol_id || row.handle || index}-${index}`, className: "flex items-center justify-between gap-3 rounded-lg border border-white/[0.06] bg-black/20 px-3 py-2" },
                 e("div", { className: "min-w-0" },

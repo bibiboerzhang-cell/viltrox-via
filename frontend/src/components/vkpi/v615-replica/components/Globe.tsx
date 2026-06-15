@@ -1,16 +1,16 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
 import React, { useEffect, useRef } from "react";
+// @ts-ignore - 'three' ships no type declarations and @types/three is not installed; treat as any.
 import * as THREE from "three";
 
 const e = React.createElement;
 
-export function Globe({ pins, accentColor, onPinClick, focusTarget }) {
-  const containerRef = useRef(null);
-  const earthGroupRef = useRef(null);
-  const stateRef = useRef({ autoRotate: true, isDragging: false, targetZoom: 3.2 });
+export function Globe({ pins, accentColor, onPinClick, focusTarget }: any) {
+  const containerRef = useRef<any>(null);
+  const earthGroupRef = useRef<any>(null);
+  const stateRef = useRef<any>({ autoRotate: true, isDragging: false, targetZoom: 3.2 });
 
   useEffect(() => {
     const container = containerRef.current;
@@ -49,7 +49,7 @@ export function Globe({ pins, accentColor, onPinClick, focusTarget }) {
     let textureLoaded = false;
     NIGHT_TEXTURE_URLS.forEach((url) => {
       if (textureLoaded) return;
-      textureLoader.load(url, (texture) => {
+      textureLoader.load(url, (texture: any) => {
         if (textureLoaded) return;
         textureLoaded = true;
         texture.colorSpace = THREE.SRGBColorSpace;
@@ -76,7 +76,7 @@ export function Globe({ pins, accentColor, onPinClick, focusTarget }) {
     rim.position.set(5, 0, -5);
     scene.add(rim);
 
-    const latLngToVec3 = (lat, lng, radius = 1) => {
+    const latLngToVec3 = (lat: any, lng: any, radius = 1) => {
       const phi = (90 - lat) * (Math.PI / 180);
       const theta = (lng + 180) * (Math.PI / 180);
       return new THREE.Vector3(
@@ -89,7 +89,7 @@ export function Globe({ pins, accentColor, onPinClick, focusTarget }) {
     const pinsGroup = new THREE.Group();
     earthGroup.add(pinsGroup);
 
-    const rebuildPins = (pinData, color) => {
+    const rebuildPins = (pinData: any, color: any) => {
       while (pinsGroup.children.length) {
         const child = pinsGroup.children[0];
         pinsGroup.remove(child);
@@ -97,8 +97,8 @@ export function Globe({ pins, accentColor, onPinClick, focusTarget }) {
         child.material?.dispose();
       }
 
-      const pinObjects = [];
-      pinData.forEach((p, idx) => {
+      const pinObjects: any[] = [];
+      pinData.forEach((p: any, idx: number) => {
         const pos = latLngToVec3(p.lat, p.lng, 1.015);
         const pinColor = new THREE.Color(p.color || color);
         const sizeScale = p.scale || 1;
@@ -148,11 +148,11 @@ export function Globe({ pins, accentColor, onPinClick, focusTarget }) {
     };
 
     let pinObjects = rebuildPins(pins, accentColor);
-    container._rebuildPins = (newPins, newColor) => {
+    container._rebuildPins = (newPins: any, newColor: any) => {
       pinObjects = rebuildPins(newPins, newColor);
     };
 
-    container._focusOn = (lat, lng, zoom = 2.0) => {
+    container._focusOn = (lat: any, lng: any, zoom = 2.0) => {
       stateRef.current.autoRotate = false;
       const phi = (90 - lat) * (Math.PI / 180);
       const theta = (lng + 180) * (Math.PI / 180);
@@ -164,7 +164,7 @@ export function Globe({ pins, accentColor, onPinClick, focusTarget }) {
       const startZoom = camera.position.z;
       const t0 = performance.now();
       const dur = 1400;
-      const ease = (t) => 1 - Math.pow(1 - t, 3);
+      const ease = (t: any) => 1 - Math.pow(1 - t, 3);
 
       const animateFocus = () => {
         const t = Math.min(1, (performance.now() - t0) / dur);
@@ -196,13 +196,13 @@ export function Globe({ pins, accentColor, onPinClick, focusTarget }) {
     let prevMouse = { x: 0, y: 0 };
     let rotationVelocity = { x: 0, y: 0 };
 
-    const onMouseDown = (ev) => {
+    const onMouseDown = (ev: any) => {
       stateRef.current.isDragging = true;
       stateRef.current.autoRotate = false;
       prevMouse = { x: ev.clientX, y: ev.clientY };
       container.style.cursor = "grabbing";
     };
-    const onMouseMove = (ev) => {
+    const onMouseMove = (ev: any) => {
       if (!stateRef.current.isDragging) return;
       const dx = (ev.clientX - prevMouse.x) * 0.005;
       const dy = (ev.clientY - prevMouse.y) * 0.005;
@@ -215,11 +215,11 @@ export function Globe({ pins, accentColor, onPinClick, focusTarget }) {
       stateRef.current.isDragging = false;
       container.style.cursor = "grab";
     };
-    const onWheel = (ev) => {
+    const onWheel = (ev: any) => {
       ev.preventDefault();
       stateRef.current.targetZoom = Math.max(1.08, Math.min(6, stateRef.current.targetZoom + ev.deltaY * 0.003));
     };
-    const onClick = (ev) => {
+    const onClick = (ev: any) => {
       const rect = renderer.domElement.getBoundingClientRect();
       const mouse = new THREE.Vector2(
         ((ev.clientX - rect.left) / rect.width) * 2 - 1,
@@ -240,14 +240,14 @@ export function Globe({ pins, accentColor, onPinClick, focusTarget }) {
     container.addEventListener("click", onClick);
     container.style.cursor = "grab";
 
-    const onTouchStart = (ev) => {
+    const onTouchStart = (ev: any) => {
       if (ev.touches.length === 1) {
         stateRef.current.isDragging = true;
         stateRef.current.autoRotate = false;
         prevMouse = { x: ev.touches[0].clientX, y: ev.touches[0].clientY };
       }
     };
-    const onTouchMove = (ev) => {
+    const onTouchMove = (ev: any) => {
       if (!stateRef.current.isDragging || ev.touches.length !== 1) return;
       const dx = (ev.touches[0].clientX - prevMouse.x) * 0.005;
       const dy = (ev.touches[0].clientY - prevMouse.y) * 0.005;
@@ -262,7 +262,7 @@ export function Globe({ pins, accentColor, onPinClick, focusTarget }) {
 
     earthGroup.rotation.y = -Math.PI / 4;
 
-    let animationId;
+    let animationId: any;
     const clock = new THREE.Clock();
     const animateLoop = () => {
       animationId = requestAnimationFrame(animateLoop);

@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -22,7 +21,7 @@ import { normalizeCountryCode } from "./data/countryInfo";
 
 const e = React.createElement;
 
-function avatarCandidate(item) {
+function avatarCandidate(item: any) {
   if (!item || typeof item !== "object") return "";
   return String(
     item.avatar_url ||
@@ -36,13 +35,13 @@ function avatarCandidate(item) {
   ).trim();
 }
 
-function kolIdFrom(item) {
+function kolIdFrom(item: any) {
   const raw = item?.id ?? item?.kol_pool_id ?? item?.kolPoolId;
   const id = Number(raw);
   return Number.isFinite(id) && id > 0 ? id : null;
 }
 
-export function KOLPoolPage({ items: sourceItems = [], loading = false, error = "", apiToken = "" } = {}) {
+export function KOLPoolPage({ items: sourceItems = [], loading = false, error = "", apiToken = "" }: any = {}) {
   const [search, setSearch] = useState("");
   const [country, setCountry] = useState("");
   const [audienceType, setAudienceType] = useState("");
@@ -50,12 +49,12 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
   const [sortBy, setSortBy] = useState("v6_fit");
   const [hasViltrox, setHasViltrox] = useState(false);
   const [hasCompetitor, setHasCompetitor] = useState(false);
-  const [selectedItem, setSelectedItem] = useState(null);
-  const [selectedDetailBundle, setSelectedDetailBundle] = useState(null);
+  const [selectedItem, setSelectedItem] = useState<any>(null);
+  const [selectedDetailBundle, setSelectedDetailBundle] = useState<any>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
   const [myList, setMyList] = useState(new Set());
-  const [contactItem, setContactItem] = useState(null);
+  const [contactItem, setContactItem] = useState<any>(null);
   const [poolModalOpen, setPoolModalOpen] = useState(false);
   const [inlineListOpen, setInlineListOpen] = useState(false);
   // Search v2 state
@@ -75,11 +74,11 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
   }, [poolItems]);
 
 
-  const rememberRecallItems = useCallback((recallItems = []) => {
+  const rememberRecallItems = useCallback((recallItems: any[] = []) => {
     if (!Array.isArray(recallItems) || recallItems.length === 0) return;
     setRecallAvatarIndex((prev) => {
       const next = new Map(prev);
-      recallItems.forEach((item) => {
+      recallItems.forEach((item: any) => {
         const id = kolIdFrom(item);
         const avatar = avatarCandidate(item);
         if (id && avatar) next.set(id, avatar);
@@ -88,14 +87,14 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
     });
   }, []);
 
-  const avatarForItem = (item) => {
+  const avatarForItem = (item: any) => {
     const direct = avatarCandidate(item);
     if (direct) return direct;
     const id = kolIdFrom(item);
     return id ? recallAvatarIndex.get(id) || "" : "";
   };
 
-  const mergeAvatarSeed = (item, avatar) => {
+  const mergeAvatarSeed = (item: any, avatar: any) => {
     if (!avatar) return item;
     return {
       ...item,
@@ -119,7 +118,7 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
     return () => { cancelled = true; };
   }, [apiToken]);
 
-  const toggleMyList = (id) => {
+  const toggleMyList = (id: any) => {
     const wasIn = myList.has(id);
     setMyList(prev => {
       const next = new Set(prev);
@@ -137,7 +136,7 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
       });
     });
   };
-  const openItem = async (item) => {
+  const openItem = async (item: any) => {
     const seedAvatar = avatarForItem(item);
     const seedItem = mergeAvatarSeed(item, seedAvatar);
     setSelectedItem(seedItem);
@@ -156,7 +155,7 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
         const normalized = toV615KolPoolRows([detail.item || seedItem])[0];
         setSelectedItem(mergeAvatarSeed({ ...seedItem, ...normalized, freshness: detail.freshness, refresh: detail.refresh }, seedAvatar));
       } catch (fallbackErr) {
-        const msg = fallbackErr?.message || fallbackErr?.detail || err?.message || err?.detail || "详情接口读取失败";
+        const msg = (fallbackErr as any)?.message || (fallbackErr as any)?.detail || (err as any)?.message || (err as any)?.detail || "详情接口读取失败";
         setDetailError(String(msg).slice(0, 120));
         setSelectedItem(seedItem);
       }
@@ -165,10 +164,10 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
     }
   };
 
-  const openRecallItem = useCallback((recallItem) => {
+  const openRecallItem = useCallback((recallItem: any) => {
     if (!recallItem || typeof recallItem !== "object") return;
     const id = kolIdFrom(recallItem);
-    const matched = id ? (poolItems.find((it) => kolIdFrom(it) === id) || {}) : {};
+    const matched: any = id ? (poolItems.find((it: any) => kolIdFrom(it) === id) || {}) : {};
     const avatar = avatarCandidate(recallItem) || avatarCandidate(matched);
     // ① 库内项(有 kol_pool_id)→ openItem 设 selectedItem 并拉 detail_bundle 打开抽屉看全部信息。
     if (id) {
@@ -210,7 +209,7 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
   // 从 deep-crawl 结果拼 item:kol_pool_id(matched_kol_pool_id / profile_flow.kol_pool_id)+ handle/platform +
   // 基础资料(头像/粉丝/简介/帖数,优先 profile_flow.profile_data,缺则 creator_identity / 顶层字段兜底)。
   // 有 kol_pool_id → openItem 拉 detail_bundle 看全部;无 → 轻量 seed 只读展示。绝不编造粉丝数。
-  const openProfileItem = useCallback((result) => {
+  const openProfileItem = useCallback((result: any) => {
     if (!result || typeof result !== "object") return;
     const profileFlow = result.profile_flow && typeof result.profile_flow === "object" ? result.profile_flow : {};
     const profileData = profileFlow.profile_data && typeof profileFlow.profile_data === "object" ? profileFlow.profile_data : {};
@@ -225,7 +224,7 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
     const profileUrl = String(
       profileData.profile_url || creator.profile_url || creator.channel_url || result.url?.normalized || "",
     ).trim();
-    const matched = id ? (poolItems.find((it) => kolIdFrom(it) === id) || {}) : {};
+    const matched: any = id ? (poolItems.find((it: any) => kolIdFrom(it) === id) || {}) : {};
     void openItem(mergeAvatarSeed({
       ...matched,
       id: id || null,
@@ -244,13 +243,13 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
   
   // Base filter (no kind filter applied) — used for kindCounts so chips always show full pool counts.
   const filteredBase = useMemo(() => {
-    return poolItems.filter(it => {
+    return poolItems.filter((it: any) => {
       if (search) {
         const q = search.toLowerCase();
-        const hay = [it.handle, it.display_name, it.bio, it.country, it.devices?.camera_body, ...(it.devices?.lenses || []).map(l => l.model || "")].join(" ").toLowerCase();
+        const hay = [it.handle, it.display_name, it.bio, it.country, it.devices?.camera_body, ...(it.devices?.lenses || []).map((l: any) => l.model || "")].join(" ").toLowerCase();
         if (!hay.includes(q)) return false;
       }
-      if (country && !it.geo_distribution?.some(g => normalizeCountryCode(g.country) === country)) return false;
+      if (country && !it.geo_distribution?.some((g: any) => normalizeCountryCode(g.country) === country)) return false;
       if (audienceType && it.audience_type !== audienceType) return false;
       const trend = typeof it.trend_resonance === "number" ? it.trend_resonance : null;
       if (trendLevel && trend == null) return false;
@@ -266,16 +265,16 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
   const kindCounts = useMemo(() => {
     return {
       total:           filteredBase.length,
-      existing:        filteredBase.filter(it => candidateKindGroup(it.candidate_kind) === "existing").length,
-      lowConfidence:   filteredBase.filter(it => it.candidate_kind === "existing_low_confidence").length,
-      new:             filteredBase.filter(it => candidateKindGroup(it.candidate_kind) === "new").length,
-      newPromoted:     filteredBase.filter(it => it.candidate_kind === "new_promoted").length,
-      newDiscovered:   filteredBase.filter(it => it.candidate_kind === "new_discovered").length,
+      existing:        filteredBase.filter((it: any) => candidateKindGroup(it.candidate_kind) === "existing").length,
+      lowConfidence:   filteredBase.filter((it: any) => it.candidate_kind === "existing_low_confidence").length,
+      new:             filteredBase.filter((it: any) => candidateKindGroup(it.candidate_kind) === "new").length,
+      newPromoted:     filteredBase.filter((it: any) => it.candidate_kind === "new_promoted").length,
+      newDiscovered:   filteredBase.filter((it: any) => it.candidate_kind === "new_discovered").length,
     };
   }, [filteredBase]);
   
   const items = useMemo(() => {
-    let arr = filteredBase.filter(it => {
+    let arr = filteredBase.filter((it: any) => {
       if (myListFilter && !myList.has(it.id)) return false;
       if (!kindFilter) return true;
       if (kindFilter === "existing") return candidateKindGroup(it.candidate_kind) === "existing";
@@ -285,7 +284,7 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
     // Search v2 ordering: bring "new" candidates up so the mode quotas are visible.
     // In prod, this is computed by select_balanced_top30() on the backend; here we
     // just demonstrate the visual effect of interleaving.
-    arr.sort((a, b) => {
+    arr.sort((a: any, b: any) => {
       if (sortBy === "v6_fit")    return (b.v6_fit || 0) - (a.v6_fit || 0);
       if (sortBy === "real_er")   return (b.real_er_pct || 0) - (a.real_er_pct || 0);
       if (sortBy === "loyalty")   return (b.loyalty_score || 0) - (a.loyalty_score || 0);
@@ -326,7 +325,7 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
           ),
           e(KPIBar, {
             items: poolItems,
-            onCardClick: (k) => {
+            onCardClick: (k: any) => {
               setKindFilter(kindFilter === k ? "" : k);
               setInlineListOpen(true);
             },
@@ -378,7 +377,7 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
                   searchMode === "balanced" ? "平衡 15+15" : searchMode === "precision" ? "精准 20+10" : "探索 10+20"
                 ),
                 kindFilter && e("span", { className: "inline-flex items-center gap-1 rounded border border-purple-500/25 bg-purple-500/[0.07] px-1.5 py-0.5 text-[9.5px] text-purple-200" },
-                  kindFilter === "existing" ? "已有库" : kindFilter === "new" ? "新发现" : (CANDIDATE_KIND_INFO[kindFilter]?.short || kindFilter),
+                  kindFilter === "existing" ? "已有库" : kindFilter === "new" ? "新发现" : ((CANDIDATE_KIND_INFO as any)[kindFilter]?.short || kindFilter),
                   e("button", { onClick: () => setKindFilter(""), className: "hover:text-white" }, e(X, { size: 9 }))
                 ),
                 myListFilter && e("span", { className: "inline-flex items-center gap-1 rounded border border-amber-500/25 bg-amber-500/[0.07] px-1.5 py-0.5 text-[9.5px] text-amber-300" },
@@ -430,7 +429,7 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
         },
         inMyList: myList.has(selectedItem.id),
         onToggleMyList: toggleMyList,
-        onContact: (it) => setContactItem(it),
+        onContact: (it: any) => setContactItem(it),
       }),
       contactItem && e(ContactModal, {
         key: `kol-contact-${contactItem.id || contactItem.handle || "selected"}`,

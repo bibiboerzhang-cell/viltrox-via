@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -13,7 +12,7 @@ const e = React.createElement;
 // 刷新页面即清(内存级,后端联系人写端点落地前的最低保障)。
 const CONTACT_DRAFTS = new Map();
 
-export function ContactModal({ item, onClose }) {
+export function ContactModal({ item, onClose }: any) {
   if (!item) return null;
   const hasEmail = !!item.email;
   const recommended = item.recommended_product_lines || [];
@@ -34,7 +33,7 @@ export function ContactModal({ item, onClose }) {
   }, [item.id, tab, selectedProduct, customProduct, showCustom, subject, body, newEmail, newPlatform, newHandle]);
   
   // 切换产品时,主题立即同步;正文需要用户主动点本地模板重写才覆盖。
-  const onPickProduct = (p) => {
+  const onPickProduct = (p: any) => {
     setSelectedProduct(p);
     setShowCustom(false);
     setSubject(genEmailSubject(p, item));
@@ -56,7 +55,7 @@ export function ContactModal({ item, onClose }) {
   },
     e("div", {
       className: "w-full max-w-[520px] rounded-xl border border-white/[0.08] bg-[#0a1020] shadow-2xl overflow-hidden",
-      onClick: ev => ev.stopPropagation()
+      onClick: (ev: any) => ev.stopPropagation()
     },
       // Header
       e("div", { className: "px-5 py-3 border-b border-white/[0.06] flex items-center gap-3" },
@@ -95,7 +94,7 @@ export function ContactModal({ item, onClose }) {
           e("span", { className: "text-slate-500 w-[40px] pt-1" }, "产品"),
           e("div", { className: "flex-1 flex flex-wrap items-center gap-1.5" },
             recommended.length > 0 
-              ? recommended.map((p, i) => e("button", {
+              ? recommended.map((p: any, i: number) => e("button", {
                   key: i,
                   onClick: () => onPickProduct(p),
                   className: "px-2 py-1 rounded text-[10.5px] border transition-colors",
@@ -111,7 +110,7 @@ export function ContactModal({ item, onClose }) {
             }, "+ 自定义"),
             showCustom && e("input", {
               value: customProduct,
-              onChange: ev => { setCustomProduct(ev.target.value); setSubject(genEmailSubject(ev.target.value, item)); },
+              onChange: (ev: any) => { setCustomProduct(ev.target.value); setSubject(genEmailSubject(ev.target.value, item)); },
               placeholder: "如:Air 28mm F2.8、新品系列等",
               autoFocus: true,
               className: "px-2 py-1 rounded text-[10.5px] bg-white/[0.02] border border-purple-500/30 text-white outline-none placeholder-slate-600 min-w-[180px]"
@@ -125,7 +124,7 @@ export function ContactModal({ item, onClose }) {
         e("div", { className: "flex items-start gap-2 text-[11px]" },
           e("span", { className: "text-slate-500 w-[40px] pt-1" }, "主题"),
           e("input", {
-            value: subject, onChange: ev => setSubject(ev.target.value),
+            value: subject, onChange: (ev: any) => setSubject(ev.target.value),
             className: "flex-1 px-2 py-1 rounded bg-white/[0.02] border border-white/[0.06] text-white text-[11px] outline-none focus:border-purple-500/40"
           })
         ),
@@ -150,7 +149,7 @@ export function ContactModal({ item, onClose }) {
               )
             ),
             e("textarea", {
-              value: body, onChange: ev => setBody(ev.target.value),
+              value: body, onChange: (ev: any) => setBody(ev.target.value),
               rows: 9,
               className: "w-full px-2 py-1.5 rounded bg-white/[0.02] border text-white text-[11px] outline-none focus:border-purple-500/40 resize-none font-mono transition-all",
               style: templateApplying 
@@ -183,7 +182,7 @@ export function ContactModal({ item, onClose }) {
         e("div", { className: "flex items-center gap-2 text-[11px]" },
           e("span", { className: "text-slate-500 w-[60px]" }, "邮箱"),
           e("input", {
-            value: newEmail, onChange: ev => setNewEmail(ev.target.value),
+            value: newEmail, onChange: (ev: any) => setNewEmail(ev.target.value),
             placeholder: "name@example.com",
             className: "flex-1 px-2 py-1 rounded bg-white/[0.02] border border-white/[0.06] text-white text-[11px] outline-none focus:border-purple-500/40 placeholder-slate-600"
           })
@@ -191,7 +190,7 @@ export function ContactModal({ item, onClose }) {
         e("div", { className: "flex items-center gap-2 text-[11px]" },
           e("span", { className: "text-slate-500 w-[60px]" }, "其他渠道"),
           e("select", {
-            value: newPlatform, onChange: ev => setNewPlatform(ev.target.value),
+            value: newPlatform, onChange: (ev: any) => setNewPlatform(ev.target.value),
             className: "px-2 py-1 rounded bg-white/[0.02] border border-white/[0.06] text-white text-[11px] outline-none"
           },
             e("option", { value: "ig_dm" }, "IG DM"),
@@ -202,7 +201,7 @@ export function ContactModal({ item, onClose }) {
             e("option", { value: "wechat" }, "WeChat"),
           ),
           e("input", {
-            value: newHandle, onChange: ev => setNewHandle(ev.target.value),
+            value: newHandle, onChange: (ev: any) => setNewHandle(ev.target.value),
             placeholder: "ID / 链接 / handle",
             className: "flex-1 px-2 py-1 rounded bg-white/[0.02] border border-white/[0.06] text-white text-[11px] outline-none focus:border-purple-500/40 placeholder-slate-600"
           })

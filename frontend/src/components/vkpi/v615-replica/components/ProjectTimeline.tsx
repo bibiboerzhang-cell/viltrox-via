@@ -1,4 +1,3 @@
-// @ts-nocheck
 // W2 项目履约时间线(只读)— 建→选→寄→签→观察→发布→复盘。
 // 数据源:GET /api/admin/vkpi/projects/{id}/timeline(后端 policy.require_project_read 收口)。
 // 后端返回 stages[] 已带 {key,label_zh,index,reached,at,counts};本组件按 index 有序渲染。
@@ -32,7 +31,7 @@ const CANONICAL_STAGES = [
   { key: "closed", label_zh: "已关闭" },
 ];
 
-function fmtTs(ts) {
+function fmtTs(ts: any) {
   if (!ts) return "";
   try {
     const d = new Date(ts);
@@ -48,7 +47,7 @@ function fmtTs(ts) {
 }
 
 // counts 是 {label:count} 自由对象;过滤掉空/0,渲染为小徽标。
-function countsBadges(counts) {
+function countsBadges(counts: any) {
   if (!counts || typeof counts !== "object") return [];
   return Object.entries(counts)
     .filter(([, v]) => typeof v === "number" && v > 0)
@@ -56,7 +55,7 @@ function countsBadges(counts) {
 }
 
 export function ProjectTimeline({ apiToken = "", projectId = "" }) {
-  const [data, setData] = React.useState(null);
+  const [data, setData] = React.useState<any>(null);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState("");
 

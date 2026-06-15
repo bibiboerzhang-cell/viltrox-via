@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { METRICS } from "./data/metrics";
 import { CURRENT_USER } from "./data/currentUser";
 import { getCountryInfo } from "./data/countryInfo";
@@ -17,40 +16,40 @@ const COUNTRY_CENTROIDS = {
   ZA: [-30.6, 22.9],
 };
 
-function record(value) {
+function record(value: any): any {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
-function list(value) {
+function list(value: any): any[] {
   return Array.isArray(value) ? value : [];
 }
 
-function number(value) {
+function number(value: any) {
   if (value === null || value === undefined || value === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function int(value) {
+function int(value: any) {
   const parsed = number(value);
   return parsed == null ? null : Math.round(parsed);
 }
 
-function percent(numerator, denominator) {
+function percent(numerator: any, denominator: any) {
   const top = number(numerator);
   const bottom = number(denominator);
   if (top == null || bottom == null || bottom <= 0) return null;
   return (top / bottom) * 100;
 }
 
-function hashColor(seed) {
+function hashColor(seed: any) {
   const raw = String(seed || "");
   let hash = 0;
   for (const char of raw) hash = (hash * 31 + char.charCodeAt(0)) % COLORS.length;
   return COLORS[Math.abs(hash)];
 }
 
-function compact(value) {
+function compact(value: any) {
   const n = number(value);
   if (n == null) return DASH;
   if (n >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
@@ -59,28 +58,28 @@ function compact(value) {
   return String(Math.round(n));
 }
 
-function percentLabel(value, digits = 0) {
+function percentLabel(value: any, digits = 0) {
   const n = number(value);
   return n == null ? DASH : `${n.toFixed(digits)}%`;
 }
 
-function jitter(seed, salt, spread = 0.18) {
+function jitter(seed: any, salt: any, spread = 0.18) {
   const raw = String(seed || "");
   let hash = salt * 997;
   for (const char of raw) hash = (hash * 31 + char.charCodeAt(0)) % 100000;
   return ((hash / 100000) - 0.5) * spread;
 }
 
-function countryCentroid(code) {
+function countryCentroid(code: any) {
   const normalized = code === "UK" ? "GB" : code;
-  const pair = COUNTRY_CENTROIDS[normalized] || COUNTRY_CENTROIDS[code];
+  const pair = (COUNTRY_CENTROIDS as any)[normalized] || (COUNTRY_CENTROIDS as any)[code];
   return pair ? { lat: pair[0], lng: pair[1] } : null;
 }
 
-function asCityEntries(value) {
+function asCityEntries(value: any): any[] {
   if (Array.isArray(value)) {
     return value
-      .map((item) => {
+      .map((item: any) => {
         const row = record(item);
         const name = String(row.name || row.city || row.label || "");
         return name ? [name, row] : null;
@@ -90,8 +89,8 @@ function asCityEntries(value) {
   return Object.entries(record(value));
 }
 
-function normalizeKolPins(rows, cityLat, cityLng) {
-  return list(rows).map((raw, index) => {
+function normalizeKolPins(rows: any, cityLat?: any, cityLng?: any) {
+  return list(rows).map((raw: any, index: number) => {
     const item = record(raw);
     const seed = item.id || item.handle || item.display_name || index;
     const followers = int(item.followers);
@@ -115,7 +114,7 @@ function normalizeKolPins(rows, cityLat, cityLng) {
   });
 }
 
-function timeLabel(value) {
+function timeLabel(value: any) {
   const raw = String(value || "");
   if (!raw) return "时间待接入";
   const date = new Date(raw);
@@ -128,7 +127,7 @@ function timeLabel(value) {
   return date.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
 }
 
-function formatDay(value) {
+function formatDay(value: any) {
   const date = new Date(String(value || Date.now()));
   if (Number.isNaN(date.getTime())) return { day: DASH, weekday: DASH, today: false };
   const today = new Date();
@@ -139,7 +138,7 @@ function formatDay(value) {
   };
 }
 
-function metricData(value, color, options = {}) {
+function metricData(value: any, color: any, options: any = {}) {
   const hasValue = value !== null && value !== undefined;
   const source = options.source || (hasValue ? "real" : "pending");
   return {
@@ -154,18 +153,18 @@ function metricData(value, color, options = {}) {
   };
 }
 
-function scopeKey(scope) {
+function scopeKey(scope: any) {
   return scope === "company" ? "owned" : scope;
 }
 
-function scopeLabel(scope) {
+function scopeLabel(scope: any) {
   const key = scopeKey(scope);
   if (key === "owned") return "Owned";
   if (key === "kol") return "KOL";
   return "K + O";
 }
 
-function maturityForScope(dashboard, scope) {
+function maturityForScope(dashboard: any, scope: any) {
   const key = scopeKey(scope);
   const contract = record(dashboard.metric_contract);
   const scopes = record(contract.scopes);
@@ -173,21 +172,21 @@ function maturityForScope(dashboard, scope) {
   return record(scopes[key] || direct[key] || scopes.all || direct.all || dashboard.metric_maturity);
 }
 
-function maturityLabel(dashboard, scope) {
+function maturityLabel(dashboard: any, scope: any) {
   const maturity = maturityForScope(dashboard, scope);
   const days = int(maturity.snapshot_days) ?? 0;
   const required = int(maturity.required_days) ?? 30;
   return String(maturity.maturity_label || `累积中 ${days}/${required}`);
 }
 
-function isMaturityReady(dashboard, scope) {
+function isMaturityReady(dashboard: any, scope: any) {
   const maturity = maturityForScope(dashboard, scope);
   const days = int(maturity.snapshot_days) ?? 0;
   const required = int(maturity.required_days) ?? 30;
   return Boolean(maturity.is_ready) || days >= required;
 }
 
-function accumulatingMetricData(value, color, dashboard, scope, options = {}) {
+function accumulatingMetricData(value: any, color: any, dashboard: any, scope: any, options: any = {}) {
   const label = maturityLabel(dashboard, scope);
   return metricData(value, color, {
     ...options,
@@ -198,7 +197,7 @@ function accumulatingMetricData(value, color, dashboard, scope, options = {}) {
   });
 }
 
-function windowMetricData(value, color, dashboard, scope, options = {}) {
+function windowMetricData(value: any, color: any, dashboard: any, scope: any, options: any = {}) {
   const label = maturityLabel(dashboard, scope);
   if (value !== null && value !== undefined && isMaturityReady(dashboard, scope)) {
     return metricData(value, color, {
@@ -213,7 +212,7 @@ function windowMetricData(value, color, dashboard, scope, options = {}) {
   });
 }
 
-export function normalizeCurrentUser(apiUser, fallback = {}) {
+export function normalizeCurrentUser(apiUser: any, fallback: any = {}) {
   const user = record(apiUser);
   const name = String(user.name || user.display_name || fallback.userName || CURRENT_USER.name);
   const role = String(user.role || user.staff_role || fallback.userRole || CURRENT_USER.role);
@@ -221,7 +220,7 @@ export function normalizeCurrentUser(apiUser, fallback = {}) {
     .split(/\s+/)
     .filter(Boolean)
     .slice(0, 2)
-    .map((part) => part[0])
+    .map((part: any) => part[0])
     .join("")
     .toUpperCase() || "V";
   return {
@@ -236,7 +235,7 @@ export function normalizeCurrentUser(apiUser, fallback = {}) {
   };
 }
 
-export function normalizeAlerts(rawAlerts = []) {
+export function normalizeAlerts(rawAlerts: any[] = []) {
   const alerts = list(rawAlerts).map((raw, index) => {
     const row = record(raw);
     let metadata = record(row.metadata);
@@ -283,7 +282,7 @@ export function normalizeAlerts(rawAlerts = []) {
   };
 }
 
-export function normalizeDashboardMetrics(bundle, kolRows = []) {
+export function normalizeDashboardMetrics(bundle: any, kolRows: any = []) {
   const dashboard = record(bundle.dashboard);
   const summary = record(dashboard.summary);
   const evidenceMetrics = record(summary.evidence_metrics);
@@ -313,7 +312,7 @@ export function normalizeDashboardMetrics(bundle, kolRows = []) {
   // 防御性标注(2026-06-12 波3 R2):单条 evidence 占比 >80% 时提示数据被单源污染。
   // 数据问题本身由主控清理;这里只做卡面提示,不改数值。
   const moversTabs = record(rosterDetail.movers_tabs);
-  const maxTabValue = (rows) => list(rows).reduce((max, row) => Math.max(max, number(record(row).value) ?? 0), 0);
+  const maxTabValue = (rows: any) => list(rows).reduce((max: any, row: any) => Math.max(max, number(record(row).value) ?? 0), 0);
   const topEvidenceViews = maxTabValue(moversTabs.by_views);
   const topEvidenceEngagement = maxTabValue(moversTabs.by_engagement);
   const totalEngagement = number(evidenceEngagement.total_engagement);
@@ -361,13 +360,13 @@ export function normalizeDashboardMetrics(bundle, kolRows = []) {
 
   return METRICS.map((metric) => ({
     ...metric,
-    data: values[metric.id] || metric.data,
+    data: (values as any)[metric.id] || metric.data,
     rosterDetail: metric.id === "kol-count" ? rosterDetail : undefined,
     sub: metric.id === "exposure" && totalExposure != null ? evidenceCoverageText : metric.id === "engagement" && engagementPercent != null ? evidenceVideoText : metric.id === "exposure" ? "30d 增量，不取 lifetime" : metric.sub,
   }));
 }
 
-function emptyFunnel(projectCount) {
+function emptyFunnel(projectCount: any) {
   return ["发现", "已联系", "已回复", "已合作", "已发货", "已到货", "已发布", "已统计", "已关闭"].map((name, index) => ({
     name,
     label: `${index + 1}.${name}`,
@@ -475,7 +474,7 @@ function normalizeActiveCampaignsMeta(block = {}) {
   };
 }
 
-function timestampOrEmpty(value) {
+function timestampOrEmpty(value: any) {
   const raw = String(value || "");
   const time = raw ? Date.parse(raw) : Number.NEGATIVE_INFINITY;
   return Number.isFinite(time) ? time : Number.NEGATIVE_INFINITY;
@@ -493,7 +492,7 @@ function normalizeProjectFunnel(stageCounts = {}) {
 }
 
 function normalizeStarredCampaigns(rows = []) {
-  const latestPublishOf = (row) => String(record(row).latest_publish_date || record(row).latestEvidencePublishDate || record(row).evidencePublishDate || "");
+  const latestPublishOf = (row: any) => String(record(row).latest_publish_date || record(row).latestEvidencePublishDate || record(row).evidencePublishDate || "");
   return list(rows)
     .slice()
     .sort((a, b) => timestampOrEmpty(latestPublishOf(b)) - timestampOrEmpty(latestPublishOf(a)))
@@ -541,7 +540,7 @@ function normalizeStarredCampaigns(rows = []) {
 
 // 2026-06-12 波3 R3:recent-content 同批存在 "2026-05-28" 与 "Thu May 28" 两种日期串,
 // 直接 slice(0,10) 会把同一天拆成两桶;这里统一归一成 YYYY-MM-DD 再分桶。
-function calendarDateKey(value) {
+function calendarDateKey(value: any) {
   const raw = String(value || "").trim();
   if (!raw) return "unknown";
   const direct = raw.slice(0, 10);
@@ -664,9 +663,9 @@ export function normalizeTopMovers(kolRows = []) {
     }));
 }
 
-export function normalizeMapHierarchy(distribution = {}, kolRows = []) {
+export function normalizeMapHierarchy(distribution: any = {}, kolRows: any = []) {
   const countries = list(record(distribution).countries);
-  const hierarchy = {};
+  const hierarchy: Record<string, any> = {};
   for (const row of countries) {
     const item = record(row);
     const code = String(item.code || item.country_code || item.name || "");
@@ -717,7 +716,7 @@ export function normalizeMapHierarchy(distribution = {}, kolRows = []) {
       raw: {},
     };
     bucket.count += 1;
-    hierarchy[code].count = Math.max(int(hierarchy[code].count) || 0, Object.values(hierarchy[code].cities || {}).reduce((sum, city) => sum + (int(city.count) || 0), 0) + 1);
+    hierarchy[code].count = Math.max(int(hierarchy[code].count) || 0, (Object.values(hierarchy[code].cities || {}) as any[]).reduce((sum: any, city: any) => sum + (int(city.count) || 0), 0) + 1);
     bucket.kols.push(...normalizeKolPins([item], bucket.lat, bucket.lng));
     hierarchy[code].cities[cityName] = bucket;
   }
@@ -726,8 +725,8 @@ export function normalizeMapHierarchy(distribution = {}, kolRows = []) {
 
 // 真实活动 → 地图层(与 KOL 同形:{country:{lat,lng,count,cities}})。
 // 只上图带定位的活动(有 location_country 用国家质心,或显式 lat/lng);都没有则诚实不上图。
-export function normalizeEventsHierarchy(eventRows = []) {
-  const hierarchy = {};
+export function normalizeEventsHierarchy(eventRows: any = []) {
+  const hierarchy: Record<string, any> = {};
   for (const raw of list(eventRows)) {
     const ev = record(raw);
     const code = String(ev.location_country || "").trim().toUpperCase();
@@ -751,7 +750,7 @@ export function normalizeEventsHierarchy(eventRows = []) {
 
 // 单个活动的地图落点:优先显式经纬度;否则用国家质心 + 轻抖动(同国多活动不完全重叠)。
 // 既无显式经纬度又无可识别国家 → 返回 null(诚实不上图)。
-export function eventCoords(countryCode, lat, lng, seed = "") {
+export function eventCoords(countryCode: any, lat: any, lng: any, seed = "") {
   const code = String(countryCode || "").trim().toUpperCase();
   const latNum = number(lat);
   const lngNum = number(lng);
@@ -777,7 +776,7 @@ export function normalizeKolFunnel(summary = {}) {
   return { isReal, stages, byStaff, raw: block };
 }
 
-export function normalizeV615Dashboard(bundle, kolRows) {
+export function normalizeV615Dashboard(bundle: any, kolRows: any) {
   const dashboard = record(bundle.dashboard);
   const summary = record(dashboard.summary);
   const activeCampaignsBlock = record(summary.active_campaigns);

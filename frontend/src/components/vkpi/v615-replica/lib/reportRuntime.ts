@@ -1,16 +1,15 @@
-// @ts-nocheck
 
 const DASH = "--";
 
-function record(value) {
+function record(value: any) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
-function list(value) {
+function list(value: any) {
   return Array.isArray(value) ? value : [];
 }
 
-function esc(value) {
+function esc(value: any) {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -18,13 +17,13 @@ function esc(value) {
     .replace(/"/g, "&quot;");
 }
 
-function number(value) {
+function number(value: any) {
   if (value === null || value === undefined || value === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function compact(value) {
+function compact(value: any) {
   const n = number(value);
   if (n == null) return DASH;
   if (n >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
@@ -33,7 +32,7 @@ function compact(value) {
   return String(Math.round(n));
 }
 
-function formatMetricValue(metric, scope = "all") {
+function formatMetricValue(metric: any, scope = "all") {
   const data = record(record(metric).data?.[scope] || record(metric).data?.all);
   const value = data.value;
   if (value === null || value === undefined || data.source === "pending") return DASH;
@@ -44,7 +43,7 @@ function formatMetricValue(metric, scope = "all") {
   return Number.isFinite(Number(value)) ? Number(value).toLocaleString() : String(value);
 }
 
-function metricStatus(metric, scope = "all") {
+function metricStatus(metric: any, scope = "all") {
   const data = record(record(metric).data?.[scope] || record(metric).data?.all);
   if (data.value === null || data.value === undefined || data.source === "pending") {
     return data.waiting || data.trend || "待接入";
@@ -52,11 +51,11 @@ function metricStatus(metric, scope = "all") {
   return data.trend || "真实 API";
 }
 
-function getMetric(metrics, id) {
-  return list(metrics).find((item) => item.id === id) || {};
+function getMetric(metrics: any, id: any) {
+  return list(metrics).find((item: any) => item.id === id) || {};
 }
 
-function dateRange(period, language) {
+function dateRange(period: any, language: any) {
   const end = new Date();
   const start = new Date(end);
   start.setDate(start.getDate() - (period === "weekly" ? 7 : 30));
@@ -64,12 +63,12 @@ function dateRange(period, language) {
   return `${start.toLocaleDateString(locale, { month: "short", day: "numeric" })} - ${end.toLocaleDateString(locale, { month: "short", day: "numeric", year: "numeric" })}`;
 }
 
-function periodLabel(period, language) {
+function periodLabel(period: any, language: any) {
   if (language === "zh") return period === "weekly" ? "过去 7 天" : "过去 30 天";
   return period === "weekly" ? "Last 7 days" : "Last 30 days";
 }
 
-function platformRows(kolRows) {
+function platformRows(kolRows: any) {
   const map = new Map();
   for (const row of list(kolRows)) {
     const key = String(row.platform || "unknown").toLowerCase() || "unknown";
@@ -94,7 +93,7 @@ function platformRows(kolRows) {
     }));
 }
 
-function countryRows(kolRows) {
+function countryRows(kolRows: any) {
   const map = new Map();
   for (const row of list(kolRows)) {
     const geo = list(row.geo_distribution)[0];
@@ -108,16 +107,16 @@ function countryRows(kolRows) {
   return Array.from(map.values()).sort((a, b) => b.reach - a.reach).slice(0, 8);
 }
 
-function selectedMetrics(data) {
+function selectedMetrics(data: any) {
   const metrics = list(record(record(data).dashboard).metrics);
   return ["kol-count", "active-30d", "exposure", "engagement", "gmv", "roi"].map((id) => getMetric(metrics, id));
 }
 
-function mdTable(rows) {
-  return rows.map((row) => `| ${row.map((cell) => String(cell ?? DASH).replace(/\n/g, " ")).join(" | ")} |`).join("\n");
+function mdTable(rows: any) {
+  return rows.map((row: any) => `| ${row.map((cell: any) => String(cell ?? DASH).replace(/\n/g, " ")).join(" | ")} |`).join("\n");
 }
 
-function runtimeSummary(data) {
+function runtimeSummary(data: any) {
   const dashboard = record(data.dashboard);
   const kolRows = list(data.kolPoolRows);
   const metrics = list(dashboard.metrics);
@@ -138,7 +137,7 @@ function runtimeSummary(data) {
   };
 }
 
-export function generateRuntimeReportMarkdown({ period, language, sections, data }) {
+export function generateRuntimeReportMarkdown({ period, language, sections, data }: any) {
   const lang = language || "zh";
   const s = runtimeSummary(data || {});
   const title = lang === "zh" ? `# Viltrox 营销${period === "weekly" ? "周" : "月"}报` : `# Viltrox Marketing ${period === "weekly" ? "Weekly" : "Monthly"} Report`;
@@ -264,8 +263,8 @@ export function generateRuntimeReportMarkdown({ period, language, sections, data
   return lines.join("\n");
 }
 
-function metricCardsHtml(metrics) {
-  return selectedMetrics({ dashboard: { metrics } }).map((metric) => `
+function metricCardsHtml(metrics: any) {
+  return selectedMetrics({ dashboard: { metrics } }).map((metric: any) => `
     <div class="kpi-card ${metricStatus(metric, "all") === "真实 API" ? "" : "pending"}">
       <div class="kpi-label">${esc(metric.label || "Metric")}</div>
       <div class="kpi-value">${esc(formatMetricValue(metric, "all"))}</div>
@@ -274,7 +273,7 @@ function metricCardsHtml(metrics) {
   `).join("");
 }
 
-export function generateRuntimeVisualHtml({ period, language, sections, data }) {
+export function generateRuntimeVisualHtml({ period, language, sections, data }: any) {
   const lang = language || "zh";
   const s = runtimeSummary(data || {});
   const title = lang === "zh" ? `Viltrox 营销${period === "weekly" ? "周" : "月"}报` : `Viltrox Marketing ${period === "weekly" ? "Weekly" : "Monthly"} Report`;

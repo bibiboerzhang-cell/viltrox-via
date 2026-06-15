@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -11,7 +10,7 @@ import { TIMELINE_STATUS } from "../../data/timelineStatus";
 
 const e = React.createElement;
 
-export function EventDetailModal({ event, onClose, onOpenFullEvent }) {
+export function EventDetailModal({ event, onClose, onOpenFullEvent }: any) {
   // V6.10: filter 持久化
   const stored = loadStoredState();
   const [filter, setFilter] = useState(stored.eventFilter || "all");
@@ -23,17 +22,17 @@ export function EventDetailModal({ event, onClose, onOpenFullEvent }) {
   if (!event) return null;
   
   const timeline = event.timeline || [];
-  const filtered = filter === "all" ? timeline : timeline.filter(t => t.category === filter);
-  
+  const filtered = filter === "all" ? timeline : timeline.filter((t: any) => t.category === filter);
+
   // 计算各 category 进度
-  const stats = {};
+  const stats: Record<string, any> = {};
   Object.keys(TIMELINE_CATEGORIES).forEach(cat => {
-    const items = timeline.filter(t => t.category === cat);
-    const done = items.filter(t => t.status === "done").length;
+    const items = timeline.filter((t: any) => t.category === cat);
+    const done = items.filter((t: any) => t.status === "done").length;
     stats[cat] = { done, total: items.length, pct: items.length ? Math.round((done / items.length) * 100) : 0 };
   });
-  
-  const overallDone = timeline.filter(t => t.status === "done").length;
+
+  const overallDone = timeline.filter((t: any) => t.status === "done").length;
   const overallPct = timeline.length ? Math.round((overallDone / timeline.length) * 100) : 0;
   
   return e(motion.div, {
@@ -136,7 +135,7 @@ export function EventDetailModal({ event, onClose, onOpenFullEvent }) {
       // ─── Filter / Total ───
       e("div", { className: "flex items-center justify-between px-6 py-3 border-b border-white/[0.04]" },
         e("h3", { className: "text-sm font-semibold text-white" }, 
-          filter === "all" ? "Full Timeline" : `${TIMELINE_CATEGORIES[filter].label} Timeline`
+          filter === "all" ? "Full Timeline" : `${(TIMELINE_CATEGORIES as any)[filter].label} Timeline`
         ),
         e("div", { className: "flex items-center gap-2 text-xs text-slate-400" },
           e("span", null, `${filtered.length} items`),
@@ -153,9 +152,9 @@ export function EventDetailModal({ event, onClose, onOpenFullEvent }) {
           // 中线
           e("div", { className: "absolute left-[78px] top-0 bottom-0 w-px bg-white/[0.06]" }),
           
-          filtered.map((item, i) => {
-            const cat = TIMELINE_CATEGORIES[item.category];
-            const st = TIMELINE_STATUS[item.status];
+          filtered.map((item: any, i: number) => {
+            const cat = (TIMELINE_CATEGORIES as any)[item.category];
+            const st = (TIMELINE_STATUS as any)[item.status];
             return e(motion.div, {
               key: item.id,
               initial: { opacity: 0, x: -8 },

@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -8,7 +7,7 @@ import { COUNTRY_INFO } from "../data/countryInfo";
 
 const e = React.createElement;
 
-export function FilterBar({ search, setSearch, country, setCountry, audienceType, setAudienceType, trendLevel, setTrendLevel, sortBy, setSortBy, hasViltrox, setHasViltrox, hasCompetitor, setHasCompetitor, searchMode, setSearchMode, kindFilter, setKindFilter, kindCounts, myListFilter, setMyListFilter, myListCount }) {
+export function FilterBar({ search, setSearch, country, setCountry, audienceType, setAudienceType, trendLevel, setTrendLevel, sortBy, setSortBy, hasViltrox, setHasViltrox, hasCompetitor, setHasCompetitor, searchMode, setSearchMode, kindFilter, setKindFilter, kindCounts, myListFilter, setMyListFilter, myListCount }: any) {
   const [localApplying, setLocalApplying] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [examplesOpen, setExamplesOpen] = useState(false);
@@ -19,7 +18,7 @@ export function FilterBar({ search, setSearch, country, setCountry, audienceType
     "Real ER ≥ 5% · 升级窗口 high",
     "命中本周 #side-by-side 的全域 KOL",
   ];
-  const applyLocalSearch = (q) => {
+  const applyLocalSearch = (q?: any) => {
     if (q !== undefined) setSearch(q);
     setLocalApplying(true);
     setTimeout(() => setLocalApplying(false), 300);
@@ -56,8 +55,8 @@ export function FilterBar({ search, setSearch, country, setCountry, audienceType
             style: { color: localApplying ? "#c4b5fd" : "rgba(168,85,247,0.7)" } 
           }),
           e("input", {
-            type: "text", value: search, onChange: ev => setSearch(ev.target.value),
-            onKeyDown: ev => { if (ev.key === "Enter") applyLocalSearch(); },
+            type: "text", value: search, onChange: (ev: any) => setSearch(ev.target.value),
+            onKeyDown: (ev: any) => { if (ev.key === "Enter") applyLocalSearch(); },
             placeholder: "输入关键词、@handle 或 URL,在本地 KOL Pool 内筛选...",
             className: "w-full rounded-md border border-white/[0.075] bg-white/[0.018] py-1.5 pl-9 pr-11 text-[12px] text-white outline-none placeholder-slate-500 focus:border-purple-500/40"
           }),
@@ -155,7 +154,7 @@ export function FilterBar({ search, setSearch, country, setCountry, audienceType
       e("div", { className: "flex items-center gap-1.5" },
         e("span", { className: "text-slate-500 uppercase tracking-wider" }, "国家"),
         e("select", {
-          value: country, onChange: ev => setCountry(ev.target.value),
+          value: country, onChange: (ev: any) => setCountry(ev.target.value),
           className: "rounded-md border border-white/[0.08] bg-white/[0.02] px-2 py-1 text-[10px] text-white outline-none"
         },
           e("option", { value: "" }, "全部"),
@@ -188,7 +187,7 @@ export function FilterBar({ search, setSearch, country, setCountry, audienceType
       e("div", { className: "flex items-center gap-1.5" },
         e("span", { className: "text-slate-500 uppercase tracking-wider" }, "Trend"),
         e("select", {
-          value: trendLevel, onChange: ev => setTrendLevel(ev.target.value),
+          value: trendLevel, onChange: (ev: any) => setTrendLevel(ev.target.value),
           className: "rounded-md border border-white/[0.08] bg-white/[0.02] px-2 py-1 text-[10px] text-white outline-none"
         },
           e("option", { value: "" }, "全部"),
@@ -216,7 +215,7 @@ export function FilterBar({ search, setSearch, country, setCountry, audienceType
       e("div", { className: "flex items-center gap-1.5 ml-auto" },
         e("span", { className: "text-slate-500 uppercase tracking-wider" }, "排序"),
         e("select", {
-          value: sortBy, onChange: ev => setSortBy(ev.target.value),
+          value: sortBy, onChange: (ev: any) => setSortBy(ev.target.value),
           className: "rounded-md border border-white/[0.08] bg-white/[0.02] px-2 py-1 text-[10px] text-white outline-none"
         },
           e("option", { value: "v6_fit" }, "V6 Fit ↓"),

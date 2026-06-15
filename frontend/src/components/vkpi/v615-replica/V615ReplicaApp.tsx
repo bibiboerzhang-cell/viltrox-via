@@ -849,23 +849,25 @@ export function V615ReplicaApp(props: any = {}) {
     e(AnimatePresence, null, showAIConfirm && e(AIDecisionConfirmModal, {
       insight: dashboardRuntime.aiInsight,
       onClose: () => setShowAIConfirm(false),
-      // 2026-06-12 波5 R8:alert 假动作换成本地通知,明示未写入后端
+      // 2026-06-15 P0-3:AI 决策卡与 inbox action 无 1:1 映射,改为诚实引导到 Dashboard 右栏「今日建议」面板逐条审批(approve)
       onConfirm: () => {
         setShowAIConfirm(false);
+        saveStoredState({ activeNav: "dashboard" });
+        setActiveNav("dashboard");
         pushLocalNotification({
           id: `ai-confirm-${Date.now()}`,
           raw: {},
           iconKey: "bell",
           iconColor: "#a855f7",
-          title: "AI 建议确认仅记录在本地",
-          desc: "真实任务创建接口待接入,本次确认未写入后端",
+          title: "已转到「今日建议」",
+          desc: "AI 决策需在 Dashboard 右侧「今日建议」面板逐条审批通过(approve)后由后端执行。",
           time: "刚刚",
           unread: true,
           category: "notification",
-          severity: "medium",
+          severity: "low",
           status: "todo",
-          priority: "medium",
-          source: "ai_confirm_local",
+          priority: "low",
+          source: "ai_confirm_guide",
         });
       }
     })),

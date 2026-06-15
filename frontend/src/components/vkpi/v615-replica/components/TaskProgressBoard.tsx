@@ -1,4 +1,3 @@
-// @ts-nocheck
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Brain, Clock3, FileText, Search, Zap } from "lucide-react";
@@ -40,11 +39,11 @@ const LANES = [
   },
 ];
 
-function asArray(value) {
+function asArray(value: any) {
   return Array.isArray(value) ? value : [];
 }
 
-function taskTargetText(task) {
+function taskTargetText(task: any) {
   const target = task?.target && typeof task.target === "object" ? task.target : {};
   return String(
     target.label ||
@@ -57,15 +56,15 @@ function taskTargetText(task) {
   ).trim();
 }
 
-function taskLabel(task) {
+function taskLabel(task: any) {
   return `${task.kind || "任务"} · ${taskTargetText(task) || "未命名"}`;
 }
 
-function taskEtaText(task) {
+function taskEtaText(task: any) {
   const eta = Number(task?.eta_seconds);
   const ahead = Number(task?.ahead_count);
   if (!Number.isFinite(eta) && !Number.isFinite(ahead)) return "";
-  const parts = [];
+  const parts: any[] = [];
   if (Number.isFinite(ahead)) parts.push(ahead > 0 ? `前方 ${ahead} 个` : "下一个就是它");
   // 诊断 P1-1 a根治已落(迁移112 started_at → queue_view 用真处理时长 claim→done):ETA 恢复。
   // 无 started_at 样本时 queue_view 回退 300s 默认,不再是墙钟 7.8 天的谎言。
@@ -76,7 +75,7 @@ function taskEtaText(task) {
   return parts.join(" · ");
 }
 
-function taskRetryText(task) {
+function taskRetryText(task: any) {
   const category = String(task?.error_category || "").trim();
   const retryAt = String(task?.next_retry_at || "").trim();
   if (!category && !retryAt) return "";
@@ -105,7 +104,7 @@ const FAIL_BUCKETS = {
   other: { key: "other", label: "其他", tone: "rgba(255,255,255,0.40)" },
 };
 
-function taskFailBucket(task) {
+function taskFailBucket(task: any) {
   const category = String(task?.error_category || "").trim().toLowerCase();
   if (category) {
     if (category === "download") return FAIL_BUCKETS.download;
@@ -131,7 +130,7 @@ function taskFailBucket(task) {
   return FAIL_BUCKETS.other;
 }
 
-function taskSearchSessionId(task) {
+function taskSearchSessionId(task: any) {
   const session = task?.search_session && typeof task.search_session === "object" ? task.search_session : {};
   const raw = session.session_id || session.id || task?.target?.target_id;
   const parsed = Number(raw);
@@ -142,14 +141,14 @@ function taskSearchSessionId(task) {
       : undefined;
 }
 
-function openSearchSessionFromTask(task) {
+function openSearchSessionFromTask(task: any) {
   const sessionId = taskSearchSessionId(task);
   if (!sessionId || typeof window === "undefined") return;
   window.localStorage.setItem(PENDING_SEARCH_SESSION_KEY, String(sessionId));
   window.dispatchEvent(new CustomEvent("vkpi:open-kol-search-session", { detail: { sessionId, task } }));
 }
 
-function taskMyKolPoolId(task) {
+function taskMyKolPoolId(task: any) {
   const target = task?.target && typeof task.target === "object" ? task.target : {};
   const poolId = Number(target.target_id);
   return String(target.target_type || "") === "kol_profile" && Number.isFinite(poolId) && poolId > 0 ? poolId : undefined;
@@ -158,7 +157,7 @@ function taskMyKolPoolId(task) {
 // 2026-06-12 波5 R5:target_type=project 的任务(合同润色等同族)可回到项目详情。
 // 注意只认 target_type === 'project'(target_id 即 project_id);
 // 'project_contract' 的 target_id 是合同 id,无法可靠映射项目,保持禁用(诚实降级)。
-function taskProjectId(task) {
+function taskProjectId(task: any) {
   const target = task?.target && typeof task.target === "object" ? task.target : {};
   const projectId = Number(target.target_id);
   return String(target.target_type || "") === "project" && Number.isFinite(projectId) && projectId > 0 ? projectId : undefined;
@@ -166,7 +165,7 @@ function taskProjectId(task) {
 
 // 从哪发起回哪去(2026-06-12 裁令):账号分析(kol_profile)点开回 MY KOL 并定位该收藏行,
 // project 任务回项目详情,其余仍走 KOL Pool 查找会话。
-function openTaskOrigin(task) {
+function openTaskOrigin(task: any) {
   const poolId = taskMyKolPoolId(task);
   if (poolId && typeof window !== "undefined") {
     window.localStorage.setItem("vkpi:pending-mykol-pool-id", String(poolId));
@@ -181,23 +180,23 @@ function openTaskOrigin(task) {
   openSearchSessionFromTask(task);
 }
 
-function taskCanOpen(task) {
+function taskCanOpen(task: any) {
   return Boolean(taskMyKolPoolId(task) || taskProjectId(task) || taskSearchSessionId(task));
 }
 
-function taskInitiatorChip(task) {
+function taskInitiatorChip(task: any) {
   const initiator = task?.initiator_user_id || task?.initiator_staff_id;
   return initiator ? `用户 ${initiator}` : "";
 }
 
-function lightColor(light) {
+function lightColor(light: any) {
   const tone = String(light?.tone || "").toLowerCase();
   if (tone === "red") return "#fb7185";
   if (tone === "amber") return "#FAC775";
   return "#5DCAA5";
 }
 
-function TaskRow({ task, color, showBar }) {
+function TaskRow({ task, color, showBar }: any) {
   const rawProgress = task.progress_pct ?? task.progress;
   const hasProgress = Number.isFinite(Number(rawProgress));
   const progress = Math.max(6, Math.min(100, Number(rawProgress || 0)));
@@ -237,7 +236,7 @@ function TaskRow({ task, color, showBar }) {
   );
 }
 
-function TaskLane({ lane, tasks }) {
+function TaskLane({ lane, tasks }: any) {
   return e("section", {
     className: "rounded-lg border px-[9px] py-2",
     style: { borderColor: lane.border, background: lane.bg }
@@ -254,18 +253,18 @@ function TaskLane({ lane, tasks }) {
     ),
     e("div", { className: "flex flex-col gap-1.5" },
       tasks.length
-        ? tasks.map((task) => e(TaskRow, { key: task.id, task, color: lane.color, showBar: lane.showBar }))
+        ? tasks.map((task: any) => e(TaskRow, { key: task.id, task, color: lane.color, showBar: lane.showBar }))
         : e("span", { className: "text-[11px] leading-4 text-white/30" }, "—")
     )
   );
 }
 
 export function TaskProgressBoard({ apiToken = "" }) {
-  const [payload, setPayload] = useState(null);
+  const [payload, setPayload] = useState<any>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   // 每任务重试态:id → 'loading' | 'done' | 错误串。重试成功后 refreshQueue 让该任务离开失败桶。
-  const [retrying, setRetrying] = useState({});
+  const [retrying, setRetrying] = useState<Record<string, any>>({});
   const refreshQueue = useCallback(async () => {
     if (!apiToken || (typeof document !== "undefined" && document.visibilityState === "hidden")) return;
     setLoading(true);
@@ -280,7 +279,7 @@ export function TaskProgressBoard({ apiToken = "" }) {
     }
   }, [apiToken]);
 
-  const handleRetry = useCallback(async (task) => {
+  const handleRetry = useCallback(async (task: any) => {
     const id = task?.id;
     if (!id || !apiToken) return;
     setRetrying((s) => ({ ...s, [id]: "loading" }));
@@ -299,7 +298,7 @@ export function TaskProgressBoard({ apiToken = "" }) {
       setError("缺少 API token");
       return undefined;
     }
-    let intervalId;
+    let intervalId: any;
     const startPolling = () => {
       if (intervalId || (typeof document !== "undefined" && document.visibilityState === "hidden")) return;
       void refreshQueue();
@@ -333,8 +332,8 @@ export function TaskProgressBoard({ apiToken = "" }) {
   // 排队区按真实执行序排(后端 queue_position 按 claim 顺序;无该字段的按 created_at 升序垫后)——
   // 此前直接用合并列表(updated_at 倒序)切片,屏上 #1 可能是最后才跑的(2026-06-12 主管裁令)。
   const queuedTasks = useMemo(() => {
-    const queued = activeTasks.filter((task) => task?.status === "queued");
-    return queued.slice().sort((a, b) => {
+    const queued = activeTasks.filter((task: any) => task?.status === "queued");
+    return queued.slice().sort((a: any, b: any) => {
       const pa = Number(a?.queue_position); const pb = Number(b?.queue_position);
       if (Number.isFinite(pa) && Number.isFinite(pb)) return pa - pb;
       if (Number.isFinite(pa)) return -1;
@@ -343,19 +342,19 @@ export function TaskProgressBoard({ apiToken = "" }) {
     });
   }, [activeTasks]);
   const laneTasks = useMemo(() => {
-    const nonQueued = activeTasks.filter((task) => task?.status !== "queued");
+    const nonQueued = activeTasks.filter((task: any) => task?.status !== "queued");
     return {
-      search: nonQueued.filter((task) => task?.stage === "search"),
-      thinking: nonQueued.filter((task) => task?.stage === "thinking"),
-      summarizing: nonQueued.filter((task) => task?.stage === "summarizing"),
+      search: nonQueued.filter((task: any) => task?.stage === "search"),
+      thinking: nonQueued.filter((task: any) => task?.stage === "thinking"),
+      summarizing: nonQueued.filter((task: any) => task?.stage === "summarizing"),
     };
   }, [activeTasks]);
   const activeTotal = Number(payload?.counts?.active_total ?? activeTasks.length) || 0;
   const queueTotal = Number(payload?.counts?.queued ?? queuedTasks.length) || 0;
   const speedLight = payload?.speed_light || {};
-  const lanes = LANES.map((lane) => ({
+  const lanes = LANES.map((lane: any) => ({
     ...lane,
-    tasks: laneTasks[lane.key] || [],
+    tasks: (laneTasks as any)[lane.key] || [],
   }));
   // 主管裁令(2026-06-12):排队要能看清"前面还有谁"——放宽到 5 条(其余以 +N 计数)。
   const visibleQueue = queuedTasks.slice(0, 5);

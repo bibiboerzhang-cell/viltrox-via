@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { useEffect, useMemo, useState } from "react";
 import { getKolPoolWorkspace, listKolPool } from "../../../domains/kol";
 import { fetchV615DashboardBundle, fetchV615ShellBundle } from "./api";
@@ -11,18 +10,18 @@ const DASHBOARD_CACHE_KEY = "v615.dashboard.bundle.v1";
 const KOL_POOL_REFRESH_MS = 10 * 60 * 1000;
 const DASHBOARD_REFRESH_MS = 90 * 1000;
 
-function cacheAgeMs(savedAt) {
+function cacheAgeMs(savedAt: any) {
   const savedTime = typeof savedAt === "string" ? Date.parse(savedAt) : Number(savedAt || 0);
   return savedTime ? Date.now() - savedTime : Number.POSITIVE_INFINITY;
 }
 
-function scheduleRuntimeRefresh(work, delay = 0) {
+function scheduleRuntimeRefresh(work: any, delay = 0) {
   if (typeof window === "undefined") {
     void work();
     return () => {};
   }
-  let timeoutId;
-  let idleId;
+  let timeoutId: any;
+  let idleId: any;
   timeoutId = window.setTimeout(() => {
     if (typeof window.requestIdleCallback === "function") {
       idleId = window.requestIdleCallback(() => {
@@ -38,10 +37,10 @@ function scheduleRuntimeRefresh(work, delay = 0) {
   };
 }
 
-async function listAllKolPoolPages(apiToken) {
+async function listAllKolPoolPages(apiToken: any) {
   const pageSize = 500;
   const maxRows = 2000;
-  const pages = [];
+  const pages: any[] = [];
   for (let offset = 0; offset < maxRows; offset += pageSize) {
     const response = await listKolPool(apiToken, { limit: pageSize, offset, refreshIfStale: false });
     const items = response.items || [];
@@ -51,21 +50,21 @@ async function listAllKolPoolPages(apiToken) {
   return pages;
 }
 
-async function loadKolPoolWorkspaceRows(apiToken) {
+async function loadKolPoolWorkspaceRows(apiToken: any) {
   const response = await getKolPoolWorkspace(apiToken, { limit: 1200, offset: 0, sortBy: "fit" });
   const items = response?.list?.items || [];
   if (!Array.isArray(items)) return [];
   return items;
 }
 
-export function useV615Runtime({ apiToken, userName, userRole, userAvatar, starredProjects }) {
+export function useV615Runtime({ apiToken, userName, userRole, userAvatar, starredProjects }: any) {
   const [currentUser, setCurrentUser] = useState(() => normalizeCurrentUser(null, { userName, userRole, userAvatar }));
-  const [runtimeNotifications, setRuntimeNotifications] = useState([]);
-  const [runtimeReminders, setRuntimeReminders] = useState([]);
-  const [kolPoolRows, setKolPoolRows] = useState([]);
+  const [runtimeNotifications, setRuntimeNotifications] = useState<any[]>([]);
+  const [runtimeReminders, setRuntimeReminders] = useState<any[]>([]);
+  const [kolPoolRows, setKolPoolRows] = useState<any[]>([]);
   const [kolPoolLoading, setKolPoolLoading] = useState(false);
   const [kolPoolError, setKolPoolError] = useState("");
-  const [dashboardRaw, setDashboardRaw] = useState({});
+  const [dashboardRaw, setDashboardRaw] = useState<any>({});
   const [dashboardLoading, setDashboardLoading] = useState(false);
   const [dashboardError, setDashboardError] = useState("");
 
@@ -84,7 +83,7 @@ export function useV615Runtime({ apiToken, userName, userRole, userAvatar, starr
       .then((bundle) => {
         if (cancelled) return;
         if (bundle.user) setCurrentUser(normalizeCurrentUser(bundle.user, { userName, userRole, userAvatar }));
-        const normalized = normalizeAlerts(bundle.alerts || []);
+        const normalized = normalizeAlerts((bundle.alerts || []) as any);
         setRuntimeNotifications(normalized.notifications);
         setRuntimeReminders(normalized.reminders);
       })
@@ -131,7 +130,7 @@ export function useV615Runtime({ apiToken, userName, userRole, userAvatar, starr
       });
 
     readCachedResource(KOL_POOL_CACHE_KEY)
-      .then((cached) => {
+      .then((cached: any) => {
         if (cancelled) return;
         hasCachedValue = Array.isArray(cached?.value);
         if (hasCachedValue) {
@@ -181,7 +180,7 @@ export function useV615Runtime({ apiToken, userName, userRole, userAvatar, starr
       });
 
     readCachedResource(DASHBOARD_CACHE_KEY)
-      .then((cached) => {
+      .then((cached: any) => {
         if (cancelled) return;
         hasCachedBundle = Boolean(cached?.value);
         if (hasCachedBundle) {

@@ -1,7 +1,5 @@
-// @ts-nocheck
 // Share modal — 把 Project / Event 的成员分享接到真后端(member CRUD 已就绪)。
 // 同时被 v615 (.tsx, React.createElement 风格) 和 events (.js) 两套世界复用,
-// 故用 createElement + @ts-nocheck 保持单文件自洽、对动态 props 容差。
 //
 // props:
 //   kind: 'project' | 'event'   —— 决定走哪套 API
@@ -32,20 +30,20 @@ const e = React.createElement;
 
 const ROLE_LABEL = { viewer: "查看", editor: "编辑" };
 
-function errMessage(err) {
+function errMessage(err: any) {
   if (!err) return "操作失败";
   if (err.status === 403) return "无权限:只有项目/活动的 owner 或 admin 可以管理成员。";
   return String(err.message || err);
 }
 
-export function ShareModal({ kind, targetId, targetName, staff = [], apiToken, onClose }) {
+export function ShareModal({ kind, targetId, targetName, staff = [], apiToken, onClose }: any) {
   const api = useMemo(() => {
     return kind === "event"
       ? { list: listEventMembers, add: addEventMember, remove: removeEventMember }
       : { list: listProjectMembers, add: addProjectMember, remove: removeProjectMember };
   }, [kind]);
 
-  const [members, setMembers] = useState([]);
+  const [members, setMembers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -96,13 +94,13 @@ export function ShareModal({ kind, targetId, targetName, staff = [], apiToken, o
     [members],
   );
   const pickable = useMemo(
-    () => (Array.isArray(staff) ? staff : []).filter((s) => !memberIds.has(String(s.id))),
+    () => (Array.isArray(staff) ? staff : []).filter((s: any) => !memberIds.has(String(s.id))),
     [staff, memberIds],
   );
 
   const nameForStaff = useCallback(
-    (sid) => {
-      const s = (Array.isArray(staff) ? staff : []).find((x) => String(x.id) === String(sid));
+    (sid: any) => {
+      const s = (Array.isArray(staff) ? staff : []).find((x: any) => String(x.id) === String(sid));
       return s ? s.name : String(sid);
     },
     [staff],
@@ -113,7 +111,7 @@ export function ShareModal({ kind, targetId, targetName, staff = [], apiToken, o
     setAdding(true);
     setActionError("");
     try {
-      await api.add(apiToken, String(targetId), pickStaffId, pickRole);
+      await api.add(apiToken, String(targetId), pickStaffId, pickRole as any);
       setPickStaffId("");
       setPickRole("viewer");
       await reload();
@@ -124,7 +122,7 @@ export function ShareModal({ kind, targetId, targetName, staff = [], apiToken, o
     }
   }, [api, apiToken, targetId, pickStaffId, pickRole, adding, reload]);
 
-  const handleRemove = useCallback(async (sid) => {
+  const handleRemove = useCallback(async (sid: any) => {
     setRemovingId(String(sid));
     setActionError("");
     try {
@@ -143,7 +141,7 @@ export function ShareModal({ kind, targetId, targetName, staff = [], apiToken, o
   },
     e("div", {
       className: "rounded-2xl border border-white/[0.08] bg-[#0b1220] w-full max-w-lg max-h-[92vh] flex flex-col shadow-2xl",
-      onClick: (ev) => ev.stopPropagation(),
+      onClick: (ev: any) => ev.stopPropagation(),
     },
       // Header
       e("div", { className: "flex items-center justify-between px-5 py-4 border-b border-white/[0.06]" },
@@ -172,7 +170,7 @@ export function ShareModal({ kind, targetId, targetName, staff = [], apiToken, o
               : members.length === 0
                 ? e("div", { className: "text-center py-6 text-[11px] text-slate-500 rounded-lg border border-white/[0.04] bg-white/[0.01]" }, "还没有共享成员")
                 : e("div", { className: "space-y-1.5" },
-                    members.map((m) => {
+                    members.map((m: any) => {
                       const sid = String(m.staff_id ?? m.id ?? "");
                       const name = m.name || nameForStaff(sid);
                       const roleKey = String(m.role || "viewer");
@@ -192,7 +190,7 @@ export function ShareModal({ kind, targetId, targetName, staff = [], apiToken, o
                         e("span", {
                           className: "text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0",
                           style: { background: "rgba(168,85,247,0.15)", color: "#c4b5fd" },
-                        }, ROLE_LABEL[roleKey] || roleKey),
+                        }, (ROLE_LABEL as any)[roleKey] || roleKey),
                         e("button", {
                           onClick: () => handleRemove(sid),
                           disabled: busy,
@@ -210,15 +208,15 @@ export function ShareModal({ kind, targetId, targetName, staff = [], apiToken, o
           e("div", { className: "flex items-center gap-2" },
             e("select", {
               value: pickStaffId,
-              onChange: (ev) => setPickStaffId(ev.target.value),
+              onChange: (ev: any) => setPickStaffId(ev.target.value),
               className: "flex-1 min-w-0 rounded-md border border-white/[0.08] bg-white/[0.03] px-2.5 py-1.5 text-[11px] text-slate-200 outline-none focus:border-purple-500/40",
             },
               e("option", { value: "", style: { background: "#0b1220" } }, pickable.length ? "选择成员…" : "无可添加成员"),
-              ...pickable.map((s) => e("option", { key: s.id, value: String(s.id), style: { background: "#0b1220" } }, s.name))
+              ...pickable.map((s: any) => e("option", { key: s.id, value: String(s.id), style: { background: "#0b1220" } }, s.name))
             ),
             e("select", {
               value: pickRole,
-              onChange: (ev) => setPickRole(ev.target.value),
+              onChange: (ev: any) => setPickRole(ev.target.value),
               className: "shrink-0 rounded-md border border-white/[0.08] bg-white/[0.03] px-2.5 py-1.5 text-[11px] text-slate-200 outline-none focus:border-purple-500/40",
             },
               e("option", { value: "viewer", style: { background: "#0b1220" } }, "查看"),
