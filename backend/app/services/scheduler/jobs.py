@@ -512,6 +512,46 @@ async def job_vkpi_fit_snapshot():
         logger.exception("scheduler.vkpi_fit_snapshot_failed")
 
 
+def _run_brief_agent_daily() -> dict:
+    """AI Today 简报 Agent:确定性重建候选汇总(零 LLM/provider/写库),写 runtime/ops 供 dashboard 读。"""
+    import json as _json
+    from pathlib import Path
+
+    from app.domains.intelligence import brief_use_case
+
+    report = brief_use_case.build_brief_agent_v0(
+        kol_pool_ids="",
+        ops_dir="runtime/ops",
+        limit=8,
+        min_evidence_refs=3,
+        ref_limit=8,
+        claim_limit=12,
+        use_latest_recommendation_artifact=False,  # 每天从真实 evidence 重建(确定性),取最新
+    )
+    out = Path("runtime/ops")
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "scheduler-p7-83-brief-agent-v0.json").write_text(
+        _json.dumps(report, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8"
+    )
+    return {
+        "passed": bool(report.get("passed")),
+        "items": int(report.get("brief_item_count") or len(report.get("items") or [])),
+    }
+
+
+async def job_vkpi_brief_agent():
+    """AI Today 简报 Agent 每日刷新。确定性、零 LLM/provider/写库。config-gate(scheduler_tasks.vkpi_brief_agent)。"""
+    if not _scheduler_task_enabled("vkpi_brief_agent"):
+        return
+    try:
+        import asyncio
+
+        result = await asyncio.to_thread(_run_brief_agent_daily)
+        logger.info("scheduler.vkpi_brief_agent", extra={"result": result})
+    except Exception:
+        logger.exception("scheduler.vkpi_brief_agent_failed")
+
+
 async def start_scheduler() -> None:
     """在 lifespan startup 调用"""
     global _scheduler
@@ -654,6 +694,15 @@ async def start_scheduler() -> None:
         trigger=CronTrigger(hour=3, minute=30),
         id="vkpi_fit_snapshot",
         name="V6 Fit daily snapshot (read-only, for Top Movers)",
+        max_instances=1,
+        coalesce=True,
+    )
+    # ── AI Today 简报 Agent 每日刷新(确定性,无 LLM)── config-gate(scheduler_tasks.vkpi_brief_agent)。
+    _scheduler.add_job(
+        job_vkpi_brief_agent,
+        trigger=CronTrigger(hour=3, minute=45),
+        id="vkpi_brief_agent",
+        name="AI Today brief agent daily refresh (deterministic, no LLM)",
         max_instances=1,
         coalesce=True,
     )
