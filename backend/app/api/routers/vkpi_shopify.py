@@ -13,7 +13,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
-from app.domains.commerce import shopify_orders
+from app.domains.commerce import shopify_connect, shopify_discounts, shopify_orders
 
 
 router = APIRouter(prefix="/api/admin/vkpi/shopify", tags=["vkpi-shopify"])
@@ -66,3 +66,93 @@ def get_gmv(
         window_days=window_days,
         discount_codes=discount_code,
     )
+
+
+# --- creds-ready: connection creds (encrypted store + settings-page fill) -----
+
+@router.post("/creds")
+def save_shopify_creds(
+    body=Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+):
+    """Persist Shopify creds (encrypted). Returns masked-only; never echoes plaintext token."""
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be an object")
+    return _guard(shopify_connect.save_credentials, body, staff)
+
+
+@router.get("/creds")
+def get_shopify_creds(
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    """Masked Shopify connection status {shop_domain, token_configured, ..., source}."""
+    return _guard(shopify_connect.connection_status)
+
+
+@router.post("/webhooks/register")
+def register_shopify_webhooks(
+    staff=Depends(require_tab("vkpi", "write")),
+):
+    """Register ORDERS_CREATE/UPDATED + REFUNDS_CREATE webhooks. no creds -> ok:false, no throw."""
+    return _guard(shopify_connect.register_webhooks)
+
+
+# --- creds-ready: KOL discount codes + promo links ----------------------------
+
+@router.post("/discounts")
+def create_shopify_discount(
+    body=Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+):
+    """Create a KOL discount code + build its promo link.
+
+    body: {code, title?, value, value_type?, product_handle?, product_ids?,
+           usage_limit?, starts_at?, ends_at?, utm_campaign?, kol_id?, project_id?}
+    no creds -> {ok:false, reason:'not_configured'} (never fabricates a discount id).
+    """
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be an object")
+    code = str(body.get("code") or "").strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="code is required")
+    if body.get("value") in (None, ""):
+        raise HTTPException(status_code=400, detail="value is required")
+    return _guard(
+        shopify_discounts.create_kol_discount,
+        code=code,
+        value=body.get("value"),
+        title=body.get("title"),
+        value_type=str(body.get("value_type") or "percentage"),
+        product_handle=body.get("product_handle"),
+        product_ids=body.get("product_ids"),
+        usage_limit=body.get("usage_limit"),
+        starts_at=body.get("starts_at"),
+        ends_at=body.get("ends_at"),
+        utm_campaign=str(body.get("utm_campaign") or ""),
+        kol_id=body.get("kol_id"),
+        project_id=body.get("project_id"),
+        store_domain=body.get("store_domain"),
+    )
+
+
+@router.get("/discount-link")
+def get_shopify_discount_link(
+    product_handle: str = Query(...),
+    code: str = Query(...),
+    store_domain: str | None = Query(default=None),
+    utm_source: str = Query(default="kol"),
+    utm_medium: str = Query(default="affiliate"),
+    utm_campaign: str = Query(default=""),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    """Pure builder (no network): {discount_link}."""
+    link = _guard(
+        shopify_discounts.build_discount_link,
+        store_domain=store_domain,
+        product_handle=product_handle,
+        code=code,
+        utm_source=utm_source,
+        utm_medium=utm_medium,
+        utm_campaign=utm_campaign,
+    )
+    return {"discount_link": link}

@@ -158,6 +158,38 @@ def _find_project_by_discount(discount_codes: list[str]) -> dict[str, Any]:
     return dict(row) if row else {}
 
 
+def _find_event_by_discount(discount_codes: list[str]) -> str:
+    """Map a Shopify discount code to a vkpi_event id via vkpi_event_discount_codes.
+
+    Returns the event id (VARCHAR) or '' when unmapped. The mapping table is
+    additive (migration 144); a missing table is tolerated so attribution never
+    fails on a fresh DB.
+    """
+    if not discount_codes:
+        return ""
+    lowered = [code.lower() for code in discount_codes if code]
+    if not lowered:
+        return ""
+    placeholders = ",".join("?" for _ in lowered)
+    try:
+        row = get_conn().execute(
+            f"""
+            SELECT event_id
+            FROM vkpi_event_discount_codes
+            WHERE lower(discount_code) IN ({placeholders})
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            tuple(lowered),
+        ).fetchone()
+    except Exception:
+        return ""
+    if not row:
+        return ""
+    value = row["event_id"] if hasattr(row, "__getitem__") else None
+    return str(value or "").strip()
+
+
 def _find_link_by_utm(utm_campaign: str, product_sku: str = "") -> dict[str, Any]:
     if not utm_campaign and not product_sku:
         return {}
@@ -207,6 +239,10 @@ def _shopify_ref_context(payload: dict[str, Any]) -> dict[str, Any]:
     if not match:
         match = _find_link_by_utm(utm_campaign, product_sku)
         match_source = "utm_or_sku" if match else ""
+    # Event-level attribution rides alongside project/link matching: a discount code
+    # mapped to a vkpi_event surfaces its id into evidence_json (no schema change to
+    # vkpi_sales_attributions — keeps the fingerprint intact).
+    event_id = _find_event_by_discount(discount_codes)
     return {
         "click_id": click_id,
         "landing_site": landing,
@@ -216,6 +252,7 @@ def _shopify_ref_context(payload: dict[str, Any]) -> dict[str, Any]:
         "product_sku": product_sku,
         "match": match,
         "match_source": match_source,
+        "event_id": event_id,
     }
 
 
@@ -661,6 +698,7 @@ def ingest_shopify_order_webhook(headers: Headers, raw_body: bytes, client_host:
                 "utm_source": context.get("utm_source"),
                 "utm_campaign": context.get("utm_campaign"),
                 "discount_codes": context.get("discount_codes"),
+                "event_id": context.get("event_id") or "",
                 "landing_site": context.get("landing_site"),
                 "line_items": line_items,
                 "raw": payload,
@@ -705,6 +743,7 @@ def ingest_shopify_order_webhook(headers: Headers, raw_body: bytes, client_host:
         "topic": topic,
         "matched": bool(match),
         "match_source": context.get("match_source"),
+        "event_id": context.get("event_id") or "",
         "shopify_order_snapshot_id": snapshot_id,
         "attribution": row,
     }
