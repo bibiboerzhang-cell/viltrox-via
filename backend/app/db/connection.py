@@ -164,6 +164,9 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "125_vkpi_channel_metrics_filled.sql",
     "126_vkpi_fulfillment_observation_tasks.sql",
     "127_vkpi_data_freshness.sql",
+    "128_vkpi_project_content_observation_windows.sql",
+    "129_vkpi_project_content_posts.sql",
+    "130_vkpi_scheduler_tasks.sql",
 )
 
 try:

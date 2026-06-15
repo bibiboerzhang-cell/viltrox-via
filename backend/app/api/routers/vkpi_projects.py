@@ -204,6 +204,77 @@ def scan_due_into_tasks(
     return fulfillment_observation.scan_due_into_tasks(staff=staff, days_overdue=days_overdue)
 
 
+@router.get("/projects/observation-windows")
+def list_observation_windows(
+    status: str = Query(default="pending"),
+    project_id: int | None = Query(default=None),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    """履约观察窗口(只读):列物流签收后开的「等内容」窗口。
+
+    RBAC(PV-4):own-only 员工只见自己负责/创建项目的窗口;管理层全见。
+    空=无 delivered shipment 开窗(物流断流,诚实)。
+    """
+    from app.domains.projects import observation_windows
+
+    return observation_windows.list_windows(staff=staff, status=status, project_id=project_id)
+
+
+@router.post("/projects/observation-windows/scan-delivered")
+def scan_delivered_into_windows(
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+):
+    """履约观察窗口(SAFE 手动触发):扫已签收派单 → CREATE 待人核观察窗口。
+
+    不自动跑、不裁决——只为人建窗口。无 delivered shipment 时 created=[](物流断流,诚实)。
+    """
+    from app.domains.projects import observation_windows
+
+    days_overdue = body.get("days_overdue", 7)
+    try:
+        days_overdue = int(days_overdue)
+    except (TypeError, ValueError):
+        days_overdue = 7
+    return observation_windows.scan_delivered_into_windows(staff=staff, days_overdue=days_overdue)
+
+
+@router.get("/projects/content-posts")
+def list_content_posts(
+    status: str = Query(default="candidate"),
+    project_id: int | None = Query(default=None),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    """履约内容帖子候选(只读):列窗口内扫到的疑似内容候选。
+
+    RBAC(PV-4):own-only 员工只见自己负责/创建项目的候选;管理层全见。
+    空=无窗口/无扫到内容(诚实)。
+    """
+    from app.domains.projects import observation_windows
+
+    return observation_windows.list_content_posts(staff=staff, status=status, project_id=project_id)
+
+
+@router.patch("/projects/content-posts/{post_id}")
+def review_content_post(
+    post_id: int,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+):
+    """履约内容帖子候选(SAFE):人工复核标 matched/rejected/needs_review。
+
+    仅触帖子行 status,绝不连带改项目/派单/费用/复盘。
+    """
+    from app.domains.projects import observation_windows
+
+    return observation_windows.review_content_post(
+        post_id=post_id,
+        action=str(body.get("action") or ""),
+        staff=staff,
+        note=str(body.get("note") or ""),
+    )
+
+
 @router.post("/projects/logistics-sync/enqueue")
 def enqueue_logistics_sync(
     body: dict = Body(default_factory=dict),
