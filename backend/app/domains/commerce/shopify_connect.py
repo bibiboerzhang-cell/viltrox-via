@@ -26,7 +26,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from app.db.connection import get_conn, is_postgres_runtime
 from app.domains.projects.workflow import staff_id as resolve_staff_id
 
-_DEFAULT_API_VERSION = "2024-10"
+_DEFAULT_API_VERSION = "2026-04"  # 对齐 viltrox.com 店应用声明的 API 版本(同事可在连接表单覆盖)
 _CREDS_SINGLETON_ID = 1
 _VALID_STATUS = {"pending", "connected", "error", "revoked"}
 _SCHEMA_READY = False
