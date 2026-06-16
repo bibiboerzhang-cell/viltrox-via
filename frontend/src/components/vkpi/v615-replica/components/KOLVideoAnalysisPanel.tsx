@@ -452,6 +452,7 @@ export function KOLVideoAnalysisPanel({
   const [bundles, setBundles] = useState<AnalysisBundle[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [showAll, setShowAll] = useState(false); // C2:76条长卡默认收起,只显前3条
 
   useEffect(() => {
     let cancelled = false;
@@ -526,9 +527,18 @@ export function KOLVideoAnalysisPanel({
         <div className="rounded-md border border-white/[0.05] bg-white/[0.012] p-3 text-[10.5px] text-slate-400">读取 final_v1 / 关键帧 QA 缓存...</div>
       ) : readyBundles.length ? (
         <div className="space-y-2">
-          {readyBundles.map((bundle) => (
+          {(showAll ? readyBundles : readyBundles.slice(0, 3)).map((bundle) => (
             <AnalysisCard key={videoEvidenceId(bundle.video)} bundle={bundle} />
           ))}
+          {readyBundles.length > 3 ? (
+            <button
+              type="button"
+              onClick={() => setShowAll((v) => !v)}
+              className="w-full rounded-md border border-cyan-300/20 bg-cyan-400/[0.06] px-3 py-1.5 text-[10.5px] font-medium text-cyan-100 hover:bg-cyan-400/[0.12]"
+            >
+              {showAll ? "收起逐条分析" : `展开全部 ${readyBundles.length} 条逐视频分析 ▾`}
+            </button>
+          ) : null}
         </div>
       ) : (
         <div className="rounded-md border border-white/[0.05] bg-white/[0.012] p-3">

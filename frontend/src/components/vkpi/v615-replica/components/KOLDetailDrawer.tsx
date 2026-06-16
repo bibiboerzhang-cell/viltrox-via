@@ -574,6 +574,9 @@ function AccountDossierPanel({ apiToken, kolPoolId }: any) {
   ].map((c) => ({ ...c, value: c.value == null ? 0 : c.value }));
   const mvAvg = numberOr(coverage.marketing_value_score_avg);
   const mvMax = numberOr(coverage.marketing_value_score_max);
+  const cqAvg = numberOr(coverage.content_quality_score_avg);
+  const cqMax = numberOr(coverage.content_quality_score_max);
+  const oneLineVerdict = compactText(judgment.one_line_verdict || "", 160);
   const fit = numberOr(judgment.primary_llm_v6_fit);
   const judgmentRecs = flexibleTextList(judgment.recommendations, 3);
   const judgmentRisk = flexibleTextList(recordOr(judgment.risk).risk_flags, 3);
@@ -592,15 +595,16 @@ function AccountDossierPanel({ apiToken, kolPoolId }: any) {
       ),
       e(ChevronsUpDownIcon, { expanded: open })
     ),
+    oneLineVerdict && e("div", { className: "mt-2 rounded-md border border-cyan-300/15 bg-cyan-400/[0.06] px-2.5 py-1.5 text-[11px] font-medium leading-relaxed text-cyan-50" }, "📊 " + oneLineVerdict),
     e("div", { className: "mt-2 grid grid-cols-4 gap-1.5" },
       statCells.map((c) => e("div", { key: c.label, className: "rounded border border-white/[0.04] bg-black/15 px-2 py-1.5 text-center" },
         e("div", { className: "text-[14px] font-bold tabular-nums text-white" }, String(c.value)),
         e("div", { className: "text-[8.5px] text-slate-500" }, c.label)
       ))
     ),
-    (mvAvg != null || mvMax != null) && e("div", { className: "mt-1.5 flex items-center gap-3 text-[9.5px] text-slate-400" },
-      mvAvg != null && e("span", null, "营销分均值 ", e("span", { className: "tabular-nums text-slate-200" }, scoreText(mvAvg))),
-      mvMax != null && e("span", null, "峰值 ", e("span", { className: "tabular-nums text-slate-200" }, scoreText(mvMax))),
+    (cqAvg != null || mvAvg != null) && e("div", { className: "mt-1.5 flex flex-wrap items-center gap-3 text-[9.5px] text-slate-400" },
+      cqAvg != null && e("span", null, "内容质量 ", e("span", { className: "tabular-nums text-cyan-200 font-semibold" }, scoreText(cqAvg)), cqMax != null && e("span", { className: "text-slate-600" }, " /峰" + scoreText(cqMax))),
+      mvAvg != null && e("span", null, "投放价值 ", e("span", { className: "tabular-nums text-emerald-200 font-semibold" }, scoreText(mvAvg)), mvMax != null && e("span", { className: "text-slate-600" }, " /峰" + scoreText(mvMax))),
       Object.keys(platformCounts).length > 0 && e("span", { className: "text-slate-600" }, "· " + Object.entries(platformCounts).map(([k, v]) => `${k}:${v}`).join(" "))
     ),
     gaps.length > 0 && e("div", { className: "mt-1.5 flex flex-wrap gap-1" },
@@ -972,7 +976,7 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
           className: "flex w-full items-center justify-center gap-1.5 rounded-md border border-cyan-400/25 bg-cyan-400/[0.06] px-3 py-2 text-[11px] font-medium text-cyan-200 transition-colors hover:bg-cyan-400/[0.12] disabled:opacity-50",
         },
           e(Sparkles, { size: 12 }),
-          allVideosBusy ? "全视频入队中…" : "全视频跑(分析该 KOL 全部视频)"
+          allVideosBusy ? "深度分析入队中…" : "KOL深度分析理解(最近20条)"
         ),
         allVideosState.message && e("div", {
           className: "mt-1.5 text-[9.5px] leading-relaxed " + (allVideosState.status === "error" ? "text-rose-300" : allVideosState.status === "no_evidence" ? "text-amber-300" : "text-slate-500")
