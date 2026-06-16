@@ -3333,7 +3333,13 @@ def _claim_job(conn: psycopg.Connection[Any]) -> dict[str, Any] | None:
                 FROM apify_jobs
                 WHERE status = 'queued'
                   AND (next_retry_at IS NULL OR next_retry_at <= NOW())
-                ORDER BY COALESCE(next_retry_at, created_at), created_at, id
+                ORDER BY
+                  CASE
+                    WHEN payload->>'batch' = 'on_demand_batch' THEN 1
+                    WHEN payload->>'batch' IN ('recent', 'remaining') THEN 2
+                    ELSE 0
+                  END,
+                  COALESCE(next_retry_at, created_at), created_at, id
                 FOR UPDATE SKIP LOCKED
                 LIMIT 1
                 """

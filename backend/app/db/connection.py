@@ -202,6 +202,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "153_vkpi_report_analysis.sql",
     "154_vkpi_inventory_groups.sql",
     "155_users_last_seen.sql",
+    "156_apify_jobs_claim_priority_index.sql",
 )
 
 try:
