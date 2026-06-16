@@ -19,7 +19,6 @@ build/
 *.local
 .npm/
 .yarn/
-
 # ─── Secrets / env ─────────────────────────
 .env
 .env*
@@ -32,7 +31,6 @@ backend/.env*
 *.pem
 *.key
 *.backup
-
 # ─── SQLite DB (生产用 Postgres,DB 文件不进仓库) ─
 *.db
 *.db-wal
@@ -41,7 +39,6 @@ backend/.env*
 *.sqlite
 *.sqlite3
 *.sqlite-journal
-
 # ─── Runtime / caches ──────────────────────
 runtime/
 uploads/
@@ -66,7 +63,6 @@ kol_assets/
 .state/
 .integration/
 .codegraph/
-
 # ─── IDE / 系统 ─────────────────────────────
 .idea/
 .vscode/
@@ -74,7 +70,6 @@ kol_assets/
 *.swo
 .DS_Store
 Thumbs.db
-
 # ─── 历史备份目录 (不要再做 v2_addon/v2_final,用 Git) ─
 *backup*/
 snapshot-*/
@@ -86,8 +81,7 @@ v2/
 v2_full/
 v3/
 backup_*/
-*.backup
 *.before-*
-
 # 生成的文档/导出物(不跟踪,不挡部署)
 output/
+exports/
