@@ -894,8 +894,20 @@ def recall_kol_profiles(
     )
     # 本次 query 是否偏视频/监视器人群(用于纯平面摄影候选的诚实标注与展示降权)。纯展示判据。
     video_leaning = _is_video_leaning_product(query_meta, persona_text, product_focus)
-    query_vector, embedding_meta = _embed_query(resolved_text)
-    hits = _search_qdrant(query_vector, safe_candidate_limit)
+    # 优雅降级(稳定优先):Qdrant 向量库缺失 / embedding 失败 / 预算超限 → 返回空召回而非 503。
+    # 智能搜索仍可继续走线上发现等路径;不再因向量库不可用整条链崩。
+    recall_degraded = ""
+    try:
+        query_vector, embedding_meta = _embed_query(resolved_text)
+        hits = _search_qdrant(query_vector, safe_candidate_limit)
+    except Exception as exc:  # noqa: BLE001 — 召回不可用时降级,不让 500/503 冒泡
+        recall_degraded = (str(exc).split(":", 1)[0] or "recall_unavailable")[:80]
+        try:
+            from app.core.logging import get_logger
+            get_logger(__name__).warning("recall_degraded", extra={"reason": str(exc)[:160]})
+        except Exception:
+            pass
+        query_vector, embedding_meta, hits = [], {}, []
 
     ordered_hits: list[RecallHit] = []
     seen: set[int] = set()
@@ -1000,6 +1012,7 @@ def recall_kol_profiles(
             "creator_returned": len(selected_creator),
             "reviewer_returned": len(selected_reviewer),
             "returned_count": len(items),
+            "recall_degraded": recall_degraded,
             **embedding_meta,
         },
     }
