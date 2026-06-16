@@ -1236,8 +1236,7 @@ export function SmartKolInputPanel({
   const [discoveryPlatforms, setDiscoveryPlatforms] = useState<string[]>(["youtube", "instagram", "tiktok"]);
   // 区域语言本地化:目标市场码(空=全球英文;JP/KR/DE/… 按该区语言搜平台捞本地达人)。
   const [discoveryRegion, setDiscoveryRegion] = useState<string>("");
-  // 开闸全量(用户裁令「直接开闸全量」):深度查找默认开,文字搜索后自动触发全网发现一步到位。
-  const [deepFindOn, setDeepFindOn] = useState(true);
+  // 刀1·流3 恒开(2026-06-16):全网发现不再挂开关,任何文字搜索都自动触发(见 run() 的 queueTextAdvance)。
   // P0-6 地区口径:默认开,排除 {中国大陆 CN / 香港 HK / 台湾 TW} 三地区(按 country/market 地区判据,
   // 含 ISO 码与中文地名),其余所有国家放行(含海外中文博主)。后端参数名保留 exclude_chinese。
   const [excludeChinese, setExcludeChinese] = useState(true);
@@ -1573,9 +1572,10 @@ export function SmartKolInputPanel({
       }
       setState("ready");
       void refreshHistory();
-      // 开闸全量:文字搜索且深度查找开关开 → 自动触发全网发现(advance-job 全量,含所选平台),
-      // 一步「先库内召回 → 再全网发现」,不必再手点。护栏 enforce 兜底超支。
-      if (isText && deepFindOn) void queueTextAdvance(overrideQuery);
+      // 刀1·流3(2026-06-16)恒开:任何文字搜索都自动触发全网发现(advance-job 全量,含所选平台),
+      // 不再挂在「深度查找」开关上 →「先库内召回 → 再全网发现」一步到位,本地+线上首屏同呈。
+      // 预算护栏 enforce 兜底超支(已确认放行)。
+      if (isText) void queueTextAdvance(overrideQuery);
       // 账号 URL 自动抓资料 + 入库(不再弹「抓基础资料」二次确认)。
       if (autoProfile) void runUrlExecute(autoProfile, { auto: true });
       // 刀1·流1:video URL 自动入 evidence + 排 final_v1(不再弹「只分析此视频」二次确认)。
@@ -1827,10 +1827,9 @@ export function SmartKolInputPanel({
                 </span>
                 <div className="text-[11px] font-semibold text-emerald-100">③ 全网新发现的人{discoveryItems.length ? ` · ${discoveryItems.length} 个` : ""}</div>
               </div>
-              <label className="flex items-center gap-1 text-[10px] text-slate-400">
-                <input type="checkbox" checked={deepFindOn} onChange={(event) => setDeepFindOn(event.target.checked)} className="accent-emerald-500" />
-                默认开
-              </label>
+              <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300/25 bg-emerald-400/[0.1] px-1.5 py-0.5 text-[9px] font-medium text-emerald-200/90" title="任何文字搜索都自动从所选平台发现新号,无需手点">
+                <Sparkles size={9} /> 自动·恒开
+              </span>
             </div>
             <div className="mb-2 flex flex-wrap items-center gap-1.5">
               <span className="text-[10px] text-slate-500">发现平台</span>
@@ -1881,7 +1880,7 @@ export function SmartKolInputPanel({
                 className="ml-auto inline-flex min-h-[28px] items-center justify-center gap-1.5 rounded-md border border-emerald-300/18 bg-emerald-500/[0.12] px-2.5 text-[10px] font-medium text-emerald-100 transition-colors hover:bg-emerald-500/[0.20] disabled:cursor-not-allowed disabled:opacity-55"
               >
                 {state === "executing" ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
-                {deepFindOn ? "重新全网查找" : "立即全网查找"}
+                重新全网查找
               </button>
             </div>
             {discoveryItems.length ? (
@@ -1905,7 +1904,7 @@ export function SmartKolInputPanel({
                 <div className="mt-0.5 opacity-85">{sessionBanner.note}</div>
               </div>
             ) : (
-              <div className="rounded-md border border-dashed border-white/[0.08] px-3 py-3 text-center text-[10.5px] text-slate-500">{deepFindOn ? "深度查找默认开 · 搜索后自动从所选平台发现新号" : "点「立即全网查找」从所选平台发现新号"}</div>
+              <div className="rounded-md border border-dashed border-white/[0.08] px-3 py-3 text-center text-[10.5px] text-slate-500">全网发现恒开 · 搜索后自动从所选平台发现新号</div>
             )}
             {sessionBanner ? (
               // 诚实会话横幅:排队/查找中/已完成/部分完成/未完成 + 真原因;部分/已完成仍保留计数。
