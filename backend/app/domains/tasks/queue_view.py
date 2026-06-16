@@ -542,6 +542,39 @@ def _recent_sort_key(item: dict[str, Any]) -> str:
     return str(item.get("updated_at") or item.get("created_at") or "")
 
 
+def _true_active_counts(conn: Any) -> Counter:
+    """C1:不带 LIMIT 的真实在队计数。active 列表仅取前 safe_limit 条渲染采样,
+    但 counts.queued/running/active_total 必须反映全量(实案:234 条排队只显示~49)。
+    覆盖两个 SQL 源 —— apify_jobs 全量 + job_execution_ledger 24h 新鲜闸
+    (与各自 active 查询同条件,见 _query_apify_jobs/_query_job_execution_ledger);
+    LLM 在飞调用走窗口扫描、无独立计数源,由调用方就 active 列表内补计。"""
+    counts: Counter = Counter()
+    try:
+        for r in conn.execute(
+            """
+            SELECT status, COUNT(*) AS n FROM apify_jobs
+            WHERE status IN ('queued', 'retrying', 'processing', 'running')
+            GROUP BY status
+            """,
+        ).fetchall():
+            counts[str(r["status"] or "")] += int(r["n"] or 0)
+    except Exception:
+        pass
+    try:
+        for r in conn.execute(
+            """
+            SELECT status, COUNT(*) AS n FROM job_execution_ledger
+            WHERE status IN ('queued', 'retrying', 'processing', 'running')
+              AND updated_at >= NOW() - INTERVAL '24 hours'
+            GROUP BY status
+            """,
+        ).fetchall():
+            counts[str(r["status"] or "")] += int(r["n"] or 0)
+    except Exception:
+        pass
+    return counts
+
+
 def get_task_queue(*, limit: int = 50, recent_minutes: int = 10, include_llm_calls: bool = True, viewer: dict[str, Any] | None = None) -> dict[str, Any]:
     """Return a compact read-only projection for 2-3s polling."""
 
@@ -574,6 +607,22 @@ def get_task_queue(*, limit: int = 50, recent_minutes: int = 10, include_llm_cal
     recent_status_counts = Counter(str(item.get("status") or "") for item in recent)
     active_stage_counts = Counter(str(item.get("stage") or "") for item in active)
 
+    # C1 真实计数:active 列表已被 [:safe_limit] 截断为渲染采样,headline 计数(queued/running/
+    # active_total)须取全量,否则 234 条排队只显示 ~49。LLM 在飞调用无独立 COUNT 源,就采样列表补计。
+    true_active_counts = _true_active_counts(get_conn())
+    for item in active:
+        if str(item.get("source") or "") == "vkpi_llm_calls":
+            st = str(item.get("status") or "")
+            if st in ("queued", "retrying", "processing", "running"):
+                true_active_counts[st] += 1
+    true_queued = int(true_active_counts.get("queued", 0))
+    true_running = int(
+        true_active_counts.get("running", 0)
+        + true_active_counts.get("processing", 0)
+        + true_active_counts.get("retrying", 0)
+    )
+    true_active_total = int(sum(true_active_counts.values()))
+
     payload = {
         "status": "ready",
         "source": "apify_jobs+job_execution_ledger+vkpi_llm_calls" if include_llm_calls else "apify_jobs+job_execution_ledger",
@@ -585,11 +634,14 @@ def get_task_queue(*, limit: int = 50, recent_minutes: int = 10, include_llm_cal
             "llm_scan_limit": llm_scan_limit if include_llm_calls else 0,
         },
         "counts": {
-            "active_total": len(active),
+            # C1:headline 取全量真实计数(不受列表 LIMIT 截断);列表本身仍是 ≤limit 的采样。
+            "active_total": true_active_total,
+            "active_total_rendered": len(active),
             "recent_total": len(recent),
-            "queued": active_status_counts.get("queued", 0),
-            "running": active_status_counts.get("running", 0) + active_status_counts.get("processing", 0) + active_status_counts.get("retrying", 0),
-            "active_by_status": dict(active_status_counts),
+            "queued": true_queued,
+            "running": true_running,
+            "active_by_status": dict(true_active_counts),
+            "active_by_status_rendered": dict(active_status_counts),
             "recent_by_status": dict(recent_status_counts),
             "active_by_stage": dict(active_stage_counts),
         },
