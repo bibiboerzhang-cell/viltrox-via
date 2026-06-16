@@ -36,6 +36,8 @@ from app.domains.kol import search_sessions as kol_search_sessions
 from app.platform import llm_gateway
 from app.services.media.video_download import download_direct_video_url
 from app.services.media.video_keyframes import temporary_keyframes
+from app.domains.media.cache import cache_local_video_file
+from app.domains.kol.url_deep_crawl_helpers import _video_id as _content_url_video_id
 from app.services.ai.analyzers import gemini_video as gemini_video_analyzer
 from .apify_jobs_worker_helpers import (
     _as_dict,
@@ -133,6 +135,43 @@ def _respect_gemini_qps() -> None:
             time.sleep(wait_seconds)
             now = time.monotonic()
         _last_gemini_call_started_at = now
+
+
+def _warm_video_to_r2_from_local(
+    *,
+    job_id: Any,
+    platform: str,
+    content_url: str,
+    direct_video_url: str,
+    local_path: str,
+) -> None:
+    """C3:final_v1 已把 ins/tiktok 视频下到 tmpdir 喂 Gemini,临时目录删除前把同一份字节
+    登记进视频缓存(传 R2 + 写 sidecar),否则前端 cached_video_url 永远为空、视频播不出。
+
+    缓存 external_id 必须是 content_url 的子串(pool.py 的 JOIN:content_url LIKE %external_id%)
+    → 用 _content_url_video_id 从 URL 解析平台视频 id(tiktok 数字 id / ins shortcode)。
+    全程 try/except 兜底:R2 回灌失败绝不影响已完成的分析结果。"""
+    try:
+        platform_key = str(platform or "").strip().lower()
+        if platform_key not in {"instagram", "tiktok"} or not local_path:
+            return
+        parsed = urlparse(str(content_url or ""))
+        video_id = _content_url_video_id(platform_key, (parsed.hostname or "").lower(), parsed.path, parsed.query)
+        if not video_id:
+            logger.warning("C3 R2 回灌跳过 | job_id=%s reason=no_video_id_from_url url=%s", job_id, str(content_url)[:120])
+            return
+        result = cache_local_video_file(
+            platform_key,
+            str(video_id),
+            str(local_path),
+            source_url=str(direct_video_url or content_url or ""),
+        )
+        logger.info(
+            "C3 R2 回灌 | job_id=%s platform=%s video_id=%s status=%s backend=%s",
+            job_id, platform_key, video_id, result.get("status"), result.get("storage_backend"),
+        )
+    except Exception as exc:
+        logger.warning("C3 R2 回灌异常(不阻断分析) | job_id=%s error=%s", job_id, exc)
 
 
 def _mock_result(job: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
@@ -3131,6 +3170,15 @@ def _process_gemini_video(
                 "temporary_files_cleaned": True,
                 "download_error": download.get("error"),
             }
+            # C3:临时目录删除前,把这份已下载、已被 Gemini 分析的字节登记进视频缓存(传 R2),
+            # 令 KOL 详情页 cached_video_url 有值、视频可播。失败仅告警,不影响分析结果。
+            _warm_video_to_r2_from_local(
+                job_id=job.get("id"),
+                platform=platform,
+                content_url=str(evidence.get("content_url") or ""),
+                direct_video_url=str(resolved.get("direct_video_url") or ""),
+                local_path=str(download.get("path") or ""),
+            )
     else:
         analysis_context = _video_final_context(evidence) if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS else _video_performance_context(evidence)
         raw = _run_gemini_analyzer_with_timeout(

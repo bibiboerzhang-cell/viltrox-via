@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -507,6 +508,106 @@ def cache_video_for_item(
         tmp_path.unlink(missing_ok=True)
         sidecar_path.with_suffix(sidecar_path.suffix + ".tmp").unlink(missing_ok=True)
         return {"status": "failed", "cached": False, "platform": platform_key, "video_id": video_key, "reason": exc.__class__.__name__, "error": str(exc)[:300]}
+
+
+def cache_local_video_file(
+    platform: str,
+    video_id: str,
+    local_path: str,
+    *,
+    source_url: str = "",
+    content_type: str = "video/mp4",
+    force_refresh: bool = False,
+) -> dict[str, Any]:
+    """C3:把 worker 已下载到本地的视频文件登记进视频缓存(复制进 cache 目录 + 传 R2 + 写 sidecar),
+    令前端 cached_video_url_for_item(platform, video_id) 取到可播 URL。
+
+    与 cache_video_for_item 共享同一 sidecar 索引键(platform, video_id),但**不二次 HTTP 下载**:
+    final_v1 已把视频下到 tmpdir,直接复用那份字节,保证 R2 里就是 Gemini 分析过的同一视频
+    (URL 重下走 yt-dlp 对 tiktok/ins 反而易失败——正是当初改用 Apify 直链的原因)。
+    """
+    platform_key = str(platform or "").strip().lower()
+    video_key = str(video_id or "").strip()
+    if not platform_key or not video_key:
+        return {"status": "failed", "cached": False, "reason": "platform_video_id_required"}
+    if platform_key == "youtube":
+        return {"status": "skipped", "cached": False, "skipped": True, "skip_reason": "youtube_embed_ok"}
+    if platform_key not in ITEM_VIDEO_CACHE_PLATFORMS:
+        return {"status": "skipped", "cached": False, "skipped": True, "skip_reason": "platform_not_supported"}
+    src = Path(str(local_path or ""))
+    if not src.exists() or not src.is_file() or src.stat().st_size <= 0:
+        return {"status": "failed", "cached": False, "platform": platform_key, "video_id": video_key, "reason": "local_file_missing"}
+
+    existing = cached_video_url_for_item(platform_key, video_key)
+    if existing and not force_refresh:
+        return {"status": "cached", "cached": True, "platform": platform_key, "video_id": video_key, "cached_url": existing}
+
+    size_bytes = int(src.stat().st_size)
+    max_file_bytes = _video_max_file_bytes()
+    if size_bytes > max_file_bytes:
+        return {"status": "skipped", "cached": False, "skipped": True, "skip_reason": "too_large", "platform": platform_key, "video_id": video_key, "size_bytes": size_bytes}
+
+    # 缓存键稳定化:优先用 source_url 的 sha256(与 cache_video_for_item 的 HTTP 路径一致),
+    # 无 source_url 时退回 平台+video_id+文件内容 摘要,确保同一视频复跑命中同一 cache_path。
+    digest_seed = str(source_url or "").strip() or f"local:{platform_key}:{video_key}:{_sha256_file(src)}"
+    digest, cache_path, content_type_path = _video_cache_paths(digest_seed)
+
+    gc_result = run_video_cache_gc(target_free_bytes=max(VIDEO_CACHE_GC_RESERVE_BYTES, size_bytes))
+    if gc_result.get("free_bytes", 0) < size_bytes:
+        return {"status": "skipped", "cached": False, "skipped": True, "skip_reason": "global_cache_full", "platform": platform_key, "video_id": video_key, "gc": gc_result}
+
+    ctype = str(content_type or "video/mp4").split(";", 1)[0].strip().lower() or "video/mp4"
+    try:
+        shutil.copyfile(src, cache_path)
+        content_type_path.write_text(ctype, encoding="utf-8")
+    except Exception as exc:
+        cache_path.unlink(missing_ok=True)
+        return {"status": "failed", "cached": False, "platform": platform_key, "video_id": video_key, "reason": exc.__class__.__name__, "error": str(exc)[:300]}
+
+    cache_url = f"{PUBLIC_VIDEO_CACHE_PREFIX}/{digest}"
+    r2_result = _upload_to_r2_if_enabled(
+        media_kind="video",
+        digest=digest,
+        cache_path=cache_path,
+        content_type=ctype,
+        source_url=digest_seed,
+        platform=platform_key,
+        external_id=video_key,
+    )
+    if r2_result.get("cache_url"):
+        cache_url = str(r2_result["cache_url"])
+    sidecar = {
+        "platform": platform_key,
+        "video_id": video_key,
+        "source_url": str(source_url or ""),
+        "digest": digest,
+        "cached_url": cache_url,
+        "content_type": ctype,
+        "size_bytes": size_bytes,
+        "storage_backend": r2_result.get("storage_backend") or "local",
+        "r2_key": r2_result.get("r2_key") or "",
+        "updated_at": _utcnow(),
+    }
+    _record_media_cache_asset(
+        {
+            "media_kind": "video",
+            "platform": platform_key,
+            "external_id": video_key,
+            "source_url": digest_seed,
+            "digest": digest,
+            "checksum": _sha256_file(cache_path),
+            "content_type": ctype,
+            "size_bytes": size_bytes,
+            "storage_backend": sidecar["storage_backend"],
+            "local_path": str(cache_path),
+            "r2_key": sidecar["r2_key"],
+            "cache_url": cache_url,
+            "status": "cached",
+            "metadata": {"source": "final_v1_worker_local", "gc": gc_result, "r2_status": r2_result.get("r2_status"), "r2_error": r2_result.get("r2_error")},
+        }
+    )
+    _atomic_write_json(_video_item_sidecar_path(platform_key, video_key), sidecar)
+    return {"status": "cached", "cached": True, **sidecar}
 
 
 def _collect_image_urls(value: Any, *, key_hint: str = "", depth: int = 0) -> list[str]:

@@ -4,6 +4,7 @@ from __future__ import annotations
 from app.domains.media.cache import (
     VideoCacheCancelled,
     cache_image,
+    cache_local_video_file,
     cache_video,
     cache_video_for_item,
     cached_image_file,
@@ -22,6 +23,7 @@ __all__ = [
     "MAX_IMAGE_BYTES",
     "VideoCacheCancelled",
     "cache_image",
+    "cache_local_video_file",
     "cache_video",
     "cache_video_for_item",
     "cached_image_file",
