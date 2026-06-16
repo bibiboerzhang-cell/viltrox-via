@@ -15,6 +15,7 @@ import { ContactModal } from "./components/modals/ContactModal";
 import { KolPoolAllModal } from "./components/modals/KolPoolAllModal";
 import { favoriteKolPool, getKolPoolDetailBundle, getKolPoolItem, listKolPoolFavorites, unfavoriteKolPool } from "../../../domains/kol";
 import { toV615KolPoolRows } from "./kolPoolRuntime";
+import { listKolsNeedingAnalysis, enqueueVideoAnalysisBatch } from "../../../services/vkpi/kolPool-api";
 import { candidateKindGroup } from "./lib/candidateKind";
 import { CANDIDATE_KIND_INFO } from "./data/candidateKindInfo";
 import { normalizeCountryCode } from "./data/countryInfo";
@@ -62,6 +63,30 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
   const [kindFilter, setKindFilter] = useState("");          // "" | "existing" | "new" | specific kind
   const [myListFilter, setMyListFilter] = useState(false);   // toggle: only show items in myList
   const [recallAvatarIndex, setRecallAvatarIndex] = useState(new Map());
+  // 待分析(库内有视频证据但无 ready 深析)+ 批量入队
+  const [needsItems, setNeedsItems] = useState<any[]>([]);
+  const [needsOpen, setNeedsOpen] = useState(false);
+  const [needsLoading, setNeedsLoading] = useState(false);
+  const [needsBusy, setNeedsBusy] = useState(false);
+  const [needsMsg, setNeedsMsg] = useState("");
+  const loadNeeds = useCallback(() => {
+    if (!apiToken) return;
+    setNeedsLoading(true);
+    listKolsNeedingAnalysis(apiToken, 50)
+      .then((r: any) => setNeedsItems(Array.isArray(r.items) ? r.items : []))
+      .catch(() => setNeedsItems([]))
+      .finally(() => setNeedsLoading(false));
+  }, [apiToken]);
+  const runNeedsBatch = useCallback(() => {
+    if (!apiToken || needsBusy) return;
+    const items = needsItems.filter((it) => it.evidence_id).map((it) => ({ kol_pool_id: it.kol_pool_id, evidence_id: it.evidence_id }));
+    if (!items.length) return;
+    setNeedsBusy(true); setNeedsMsg("");
+    enqueueVideoAnalysisBatch(apiToken, items)
+      .then((r: any) => { setNeedsMsg(`已入队 ${r.queued || 0} 个(跳过 ${r.skipped || 0})· worker 串行处理中`); loadNeeds(); })
+      .catch((e2: any) => setNeedsMsg("入队失败:" + String(e2 && e2.message ? e2.message : e2)))
+      .finally(() => setNeedsBusy(false));
+  }, [apiToken, needsItems, needsBusy, loadNeeds]);
   const poolItems = Array.isArray(sourceItems) ? sourceItems : [];
   // d14:as-of 戳 = 全池 max(last_seen_at),YYYY-MM-DD。
   const dataAsOf = useMemo(() => {
@@ -334,6 +359,34 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
           }),
           e("div", { className: "mt-2.5 space-y-2" },
             e(SmartKolInputPanel, { apiToken, onRecallItems: rememberRecallItems, onOpenRecallItem: openRecallItem, onOpenProfile: openProfileItem })
+          ),
+          // 待分析:库内有视频证据但还没深析的 KOL → 批量入队
+          e("div", { className: "mt-2.5 rounded-lg border border-white/[0.06] bg-white/[0.015]" },
+            e("button", {
+              onClick: () => { const willOpen = !needsOpen; setNeedsOpen(willOpen); if (willOpen && !needsItems.length) loadNeeds(); },
+              className: "flex w-full items-center gap-2 px-3 py-2 text-[11px] text-slate-300 hover:bg-white/[0.03]"
+            },
+              e(ChevronDown, { size: 13, className: `shrink-0 transition-transform ${needsOpen ? "" : "-rotate-90"}` }),
+              e("span", { className: "flex-1 text-left font-medium" }, "待分析 · 库内有视频未深析"),
+              needsItems.length ? e("span", { className: "rounded bg-amber-500/20 px-1.5 py-0.5 text-[9px] text-amber-200" }, `${needsItems.length}${needsItems.length >= 50 ? "+" : ""}`) : null
+            ),
+            needsOpen ? e("div", { className: "px-3 pb-3" },
+              e("div", { className: "mb-2 flex items-center justify-between" },
+                e("span", { className: "text-[10px] text-slate-500" }, needsLoading ? "加载中…" : `${needsItems.length} 个 KOL 有视频但未深析`),
+                e("button", {
+                  onClick: runNeedsBatch, disabled: needsBusy || !needsItems.length,
+                  className: `rounded px-2.5 py-1 text-[10.5px] font-medium ${needsBusy || !needsItems.length ? "bg-white/[0.05] text-slate-600 cursor-not-allowed" : "bg-emerald-500/90 hover:bg-emerald-500 text-white"}`
+                }, needsBusy ? "入队中…" : `批量分析全部 (${needsItems.length})`)
+              ),
+              needsMsg ? e("div", { className: "mb-2 text-[10px] text-emerald-300" }, needsMsg) : null,
+              e("div", { className: "max-h-48 space-y-1 overflow-y-auto" },
+                needsItems.slice(0, 50).map((it: any) => e("div", { key: it.kol_pool_id, className: "flex items-center gap-2 rounded px-1.5 py-1 text-[10.5px] text-slate-300 hover:bg-white/[0.02]" },
+                  e("span", { className: "flex-1 truncate font-medium text-slate-200" }, it.handle || `#${it.kol_pool_id}`),
+                  e("span", { className: "text-slate-500" }, it.platform),
+                  e("span", { className: "w-12 text-right text-slate-600" }, `${it.evidence_count || 0} 视频`)
+                ))
+              )
+            ) : null
           ),
           e("div", { className: "mt-2.5" },
             e(MarketCoverageCard, { items: poolItems })

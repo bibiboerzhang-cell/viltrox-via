@@ -720,6 +720,35 @@ export async function enqueueVideoAnalysis(
   );
 }
 
+// 待分析:库内有视频证据但还没 ready 深析的 KOL（供「批量入队分析」）。
+export interface VkpiKolNeedsAnalysisItem {
+  kol_pool_id: number;
+  handle: string;
+  platform: string;
+  display_name?: string;
+  avatar_url?: string | null;
+  followers?: number | null;
+  evidence_id: number | null;
+  evidence_count?: number;
+}
+export async function listKolsNeedingAnalysis(token: string, limit = 50): Promise<{ items?: VkpiKolNeedsAnalysisItem[]; count?: number }> {
+  return apiFetch<{ items?: VkpiKolNeedsAnalysisItem[]; count?: number }>(
+    `/api/admin/vkpi/kol-pool/needs-analysis?limit=${encodeURIComponent(String(limit))}`,
+    {},
+    token,
+  );
+}
+export async function enqueueVideoAnalysisBatch(
+  token: string,
+  items: { kol_pool_id: number; evidence_id: number }[],
+): Promise<{ queued?: number; skipped?: number; errors?: number; results?: unknown[] }> {
+  return apiFetch<{ queued?: number; skipped?: number; errors?: number; results?: unknown[] }>(
+    "/api/admin/vkpi/kol-pool/enqueue-video-analysis-batch",
+    { method: "POST", body: jsonBody({ items }) },
+    token,
+  );
+}
+
 export async function getKolPoolItem(token: string, kolPoolId: number, refreshIfStale = true) {
   const query = new URLSearchParams({ refresh_if_stale: String(refreshIfStale) });
   return apiFetch<{ item: VkpiKolPoolItem; freshness?: VkpiKolPoolFreshness; refresh?: VkpiKolPoolRefreshState }>(

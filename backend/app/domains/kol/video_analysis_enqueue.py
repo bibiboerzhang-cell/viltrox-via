@@ -266,6 +266,32 @@ def enqueue_final_v1_video_analysis(
     )
 
 
+def list_kols_needing_video_analysis(limit: int = 50) -> dict[str, Any]:
+    """库内有视频证据、但还没有 ready 深析结果的 KOL,各带一个代表 evidence_id(供批量入队)。
+    2026-06-16:为「待分析列表 + 批量入队」提供数据源;只读,不碰 fit/评分。"""
+    conn = get_conn()
+    safe_limit = max(1, min(int(limit or 50), 200))
+    rows = conn.execute(
+        """
+        SELECT p.id AS kol_pool_id, p.handle, p.platform, p.display_name, p.avatar_url, p.followers,
+               (SELECT e.id FROM vkpi_kol_video_evidence e WHERE e.kol_pool_id = p.id ORDER BY e.id DESC LIMIT 1) AS evidence_id,
+               (SELECT COUNT(*) FROM vkpi_kol_video_evidence e WHERE e.kol_pool_id = p.id) AS evidence_count
+        FROM vkpi_kol_pool p
+        WHERE p.duplicate_of_id IS NULL
+          AND EXISTS (SELECT 1 FROM vkpi_kol_video_evidence e WHERE e.kol_pool_id = p.id)
+          AND NOT EXISTS (
+              SELECT 1 FROM vkpi_kol_llm_deep_analysis_results d
+              WHERE d.kol_pool_id = p.id AND d.status = 'ready'
+          )
+        ORDER BY p.id DESC
+        LIMIT ?
+        """,
+        (safe_limit,),
+    ).fetchall()
+    items = [dict(r) for r in rows]
+    return {"items": items, "count": len(items)}
+
+
 def enqueue_final_v1_video_analysis_batch(
     *,
     items: list[dict[str, Any]],

@@ -1055,6 +1055,19 @@ def list_kol_pool_favorites(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
+@router.get("/kol-pool/needs-analysis")
+def list_kol_pool_needs_analysis(
+    limit: int = Query(default=50, ge=1, le=200),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """库内有视频证据但还没 ready 深析的 KOL(供「待分析」列表 + 批量入队)。注册在 /{kol_pool_id} 之前避免被吞。"""
+    del staff
+    try:
+        return kol_video_analysis_enqueue.list_kols_needing_video_analysis(limit=limit)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"needs-analysis error: {exc}") from exc
+
+
 @router.get("/kol-pool/{kol_pool_id}")
 async def get_item(
     request: Request,
