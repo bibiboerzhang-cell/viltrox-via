@@ -120,6 +120,11 @@ export JWT_SECRET="${JWT_SECRET:-$INSECURE_LOCAL_JWT_SECRET}"
 export ADMIN_PASSWORD="${ADMIN_PASSWORD:-AdminPass123!}"
 export WORKER_CLUSTER_TIER="${WORKER_CLUSTER_TIER:-60}"
 
+redact_runtime_url() {
+  local value="${1:-}"
+  printf '%s' "$value" | sed -E 's#^([A-Za-z][A-Za-z0-9+.-]*://)([^/@]+@)#\1***@#'
+}
+
 # ── LLM/AI 出网代理 ───────────────────────────────────────────────────────
 # api.openai.com / generativelanguage(Gemini)/ api.anthropic.com 在本网络下不可直连
 # (SSL 握手超时 / Remote end closed connection,区域封锁),走与 yt-dlp 同一残留代理可达
@@ -142,8 +147,8 @@ if [[ "${RUNTIME_ENV_QUIET:-0}" != "1" ]]; then
   cat >&2 <<EOF
 ─── runtime_env.sh loaded ───
   ENVIRONMENT       = $ENVIRONMENT
-  DATABASE_URL      = ${DATABASE_URL//$POSTGRES_USER:*@/$POSTGRES_USER:****@}
-  REDIS_URL         = $REDIS_URL
+  DATABASE_URL      = $(redact_runtime_url "$DATABASE_URL")
+  REDIS_URL         = $(redact_runtime_url "$REDIS_URL")
   DB_RUNTIME_BACKEND = $DB_RUNTIME_BACKEND
   APP_ROLE          = ${APP_ROLE:-(unset)}
 ─────────────────────────────

@@ -13,6 +13,7 @@ SYNC_SERVICE="${SYNC_SERVICE:-vkpi-sync-daily.service}"
 ALLOW_DURING_SYNC="${ALLOW_DURING_SYNC:-0}"
 REMOTE_APP_USER="${REMOTE_APP_USER:-viltrox}"
 REMOTE_APP_GROUP="${REMOTE_APP_GROUP:-viltrox}"
+START_WORKER="${START_WORKER:-1}"
 
 sync_state="$(ssh "${SSH_TARGET}" "systemctl is-active '${SYNC_SERVICE}' 2>/dev/null || true")"
 if [ "${ALLOW_DURING_SYNC}" != "1" ] && { [ "${sync_state}" = "active" ] || [ "${sync_state}" = "activating" ]; }; then
@@ -94,6 +95,19 @@ PY
 sudo chown -R '${REMOTE_APP_USER}:${REMOTE_APP_GROUP}' '${REMOTE_ROOT}'"
 
 ssh "${SSH_TARGET}" "sudo systemctl restart '${SERVICE_NAME}' && systemctl is-active '${SERVICE_NAME}' && for attempt in \$(seq 1 30); do if curl -fsS '${HEALTH_URL}' >/tmp/vkpi-health.json; then cat /tmp/vkpi-health.json; exit 0; fi; sleep 1; done; echo 'health check failed: ${HEALTH_URL}' >&2; exit 1"
+
+if [ "${START_WORKER}" = "1" ]; then
+  ssh "${SSH_TARGET}" "cd '${REMOTE_ROOT}' && bash scripts/stop_worker.sh >/dev/null 2>&1 || true && ENVIRONMENT=production RUNTIME_ENV_KEEP_DB_URL=1 RUNTIME_ENV_QUIET=1 bash scripts/start_worker.sh && for attempt in \$(seq 1 20); do if curl -fsS '${HEALTH_URL}' >/tmp/vkpi-health.json && python3 - <<'PY'
+import json
+from pathlib import Path
+
+data = json.loads(Path('/tmp/vkpi-health.json').read_text())
+if data.get('trust', {}).get('worker_online') is True:
+    raise SystemExit(0)
+raise SystemExit(1)
+PY
+then cat /tmp/vkpi-health.json; exit 0; fi; sleep 1; done; echo 'worker health check failed: ${HEALTH_URL}' >&2; exit 1"
+fi
 
 LOCAL_ASSET="$(grep -o 'app-[A-Za-z0-9_-]*\.js' frontend/dist/index.html | head -1)"
 REMOTE_ASSET="$(ssh "${SSH_TARGET}" "cd '${REMOTE_ROOT}' && grep -o 'app-[A-Za-z0-9_-]*\\.js' frontend/dist/index.html | head -1")"
