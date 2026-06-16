@@ -955,6 +955,22 @@ def _enqueue_account_dossier_extract_after_final_v1(
     }
 
 
+def _kol_pool_id_from_evidence(conn: psycopg.Connection[Any], evidence_id: int) -> int | None:
+    """C2:从 vkpi_kol_video_evidence 反查 kol_pool_id。final_v1 deep_result 偶发 kol_pool_id 空
+    (evidence 未回填池号)但 source_evidence_id 在 → 据此补全,避免评论链静默断掉。"""
+    try:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                "SELECT kol_pool_id FROM vkpi_kol_video_evidence WHERE id=%s LIMIT 1",
+                (int(evidence_id),),
+            )
+            row = cur.fetchone() or {}
+        return _int_or_none(row.get("kol_pool_id"))
+    except Exception as exc:
+        logger.warning("C2 evidence→kol_pool_id 反查失败 | evidence_id=%s error=%s", evidence_id, exc)
+        return None
+
+
 def _enqueue_comments_collect_after_final_v1(
     conn: psycopg.Connection[Any],
     *,
@@ -962,12 +978,28 @@ def _enqueue_comments_collect_after_final_v1(
     deep_result: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
     """2026-06-16:final_v1 视频深析就绪 → 链式入队该 KOL 的评论采集(用户要求:评论也要抓)。
-    幂等:同 KOL 已有活跃 kol_pool_comments_collect 任务则复用,不重复入队。"""
+    幂等:同 KOL 已有活跃 kol_pool_comments_collect 任务则复用,不重复入队。
+    C2(2026-06-16):两处前置失败原本静默 return None(评论链 0 产出无从诊断)→ 补 warning;
+    kol_pool_id 空时增加 evidence 反查 fallback。"""
     if not deep_result or deep_result.get("status") != "ready":
+        logger.warning(
+            "C2 评论链跳过 | job_id=%s reason=deep_result_not_ready status=%s",
+            job_id,
+            (deep_result or {}).get("status"),
+        )
         return None
     kol_pool_id = _int_or_none(deep_result.get("kol_pool_id"))
     if not kol_pool_id:
-        return None
+        evidence_id = _int_or_none(deep_result.get("source_evidence_id"))
+        if evidence_id:
+            kol_pool_id = _kol_pool_id_from_evidence(conn, evidence_id)
+        if not kol_pool_id:
+            logger.warning(
+                "C2 评论链跳过 | job_id=%s reason=no_kol_pool_id source_evidence_id=%s",
+                job_id,
+                deep_result.get("source_evidence_id"),
+            )
+            return None
     with conn.transaction():
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(

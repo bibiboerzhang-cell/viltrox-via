@@ -29,6 +29,9 @@ from typing import Any
 from app.db.connection import get_conn
 from app.platform.industry_crawlers import get_crawler
 from app.domains.comments.compat import resolve_post_for_comments
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 # Default per-post max comments by platform (overridable via env)
@@ -677,6 +680,11 @@ def run_kol_pool_comments_for_job(payload: dict, *, staff: dict | None = None) -
             (kol_pool_id,),
         ).fetchall()
         evidence_ids = [int(dict(r)["id"]) for r in rows]
+    # C2 诊断:evidence 解析为空 → 该 KOL 无可采视频证据,原本静默返回 "ready" 掩盖 0 产出
+    if not evidence_ids:
+        logger.warning(
+            "C2 评论采集:kol_pool #%s 无可采 evidence(0 视频证据)→ 无评论可抓", kol_pool_id
+        )
     results = []
     new_total = 0
     for eid in evidence_ids:
@@ -690,6 +698,14 @@ def run_kol_pool_comments_for_job(payload: dict, *, staff: dict | None = None) -
         new_total += int(result.get("new_count") or 0)
         results.append({"evidence_id": int(eid), "status": result.get("status"), "new": result.get("new_count"), "error": (result.get("error") or "")[:120]})
     ok_count = sum(1 for r in results if r.get("status") == "ok")
+    # C2 诊断:逐帖结果汇总(provider not_configured / 0 新评论等原本只在 results 内,无运行级日志)
+    if results:
+        skipped = [r for r in results if r.get("status") not in ("ok",)]
+        logger.info(
+            "C2 评论采集完成 | kol_pool #%s posts=%s ok=%s new=%s skipped=%s",
+            kol_pool_id, len(results), ok_count, new_total,
+            [(r.get("evidence_id"), r.get("status"), (r.get("error") or "")[:60]) for r in skipped][:5],
+        )
     return {
         "status": "ready" if ok_count or not results else "blocked:all_posts_failed",
         "kol_pool_id": kol_pool_id,
