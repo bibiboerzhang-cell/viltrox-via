@@ -1043,6 +1043,11 @@ function UrlSummary({
   // 把该 KOL 全部历史视频 materialize,再 enqueueAllKolVideos 跑 final_v1。
   const [fullVideoState, setFullVideoState] = useState<{ status: string; msg: string }>({ status: "idle", msg: "" });
   const matchedKolId = (result as any).matched_kol_pool_id;
+  // 刀2·流2 路A:profile execute 顺带入队了 N 条代表视频 final_v1(account_dossier 据此出 LLM 账号分)。
+  // queued>0 → 深度分析进行中,据此诚实化完成横幅(头像粉丝已入库,但 LLM 分要等 worker 跑完代表视频)。
+  const repAnalysis = asRecord((result as any).representative_video_analysis);
+  const repQueued = Number(repAnalysis.queued ?? 0);
+  const deepAnalysisRunning = !isVideo && repQueued > 0;
   const discoverAllVideos = async () => {
     const url = cleanText(result.url?.input);
     if (!apiToken || !url || fullVideoState.status === "loading") return;
@@ -1168,7 +1173,11 @@ function UrlSummary({
           <span className="flex-1">
             {flowStatus === "partial"
               ? (isVideo ? "视频分析部分完成，已入库" : "资料部分抓取完成，已入库")
-              : (isVideo ? "视频分析完成，已入库" : "资料已抓取并入库")}
+              : (isVideo
+                  ? "视频分析完成，已入库"
+                  : deepAnalysisRunning
+                    ? `资料已入库 · 账号深度分析进行中(${repQueued} 条代表视频，完成后「查看完整分析」即出 LLM 账号分)`
+                    : "资料已抓取并入库")}
             {latency ? ` · 耗时 ${latency}` : ""}
           </span>
           {!isVideo ? (
