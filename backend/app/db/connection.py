@@ -200,6 +200,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "151_vkpi_market_signal_refresh.sql",
     "152_vkpi_competitor_radar.sql",
     "153_vkpi_report_analysis.sql",
+    "154_vkpi_inventory_groups.sql",
 )
 
 try:

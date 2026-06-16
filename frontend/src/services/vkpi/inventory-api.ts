@@ -121,6 +121,81 @@ export async function getInventoryMovements(
   );
 }
 
+// ── Groups 组团(逻辑分组:箱子里装了哪些;不扣库存)─────────────────────────
+export interface VkpiInventoryGroupItem {
+  id: string;
+  inventory_sku: string;
+  qty_in_group: number;
+  note?: string;
+  item_name?: string;
+  item_category?: string;
+  total_available?: number | null;
+}
+export interface VkpiInventoryGroup {
+  id: string;
+  name: string;
+  note?: string;
+  location?: string;
+  event_id?: string | null;
+  item_count?: number;
+  total_units?: number;
+  items?: VkpiInventoryGroupItem[];
+  created_at?: string;
+}
+
+export async function listInventoryGroups(token: string): Promise<{ groups?: VkpiInventoryGroup[] }> {
+  return apiFetch<{ groups?: VkpiInventoryGroup[] }>("/api/admin/vkpi/inventory/groups", {}, token);
+}
+export async function createInventoryGroup(
+  token: string,
+  payload: { name: string; note?: string; location?: string; event_id?: string; items?: { sku: string; qty?: number; note?: string }[] },
+): Promise<{ group?: VkpiInventoryGroup }> {
+  return apiFetch<{ group?: VkpiInventoryGroup }>(
+    "/api/admin/vkpi/inventory/groups",
+    { method: "POST", body: jsonBody(payload) },
+    token,
+  );
+}
+export async function updateInventoryGroup(
+  token: string, groupId: string, payload: { name?: string; note?: string; location?: string; event_id?: string },
+): Promise<{ group?: VkpiInventoryGroup }> {
+  return apiFetch<{ group?: VkpiInventoryGroup }>(
+    `/api/admin/vkpi/inventory/groups/${encodeURIComponent(groupId)}`,
+    { method: "PATCH", body: jsonBody(payload) },
+    token,
+  );
+}
+export async function deleteInventoryGroup(token: string, groupId: string): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(
+    `/api/admin/vkpi/inventory/groups/${encodeURIComponent(groupId)}`,
+    { method: "DELETE", body: jsonBody({}) },
+    token,
+  );
+}
+export async function addToInventoryGroup(
+  token: string, groupId: string, sku: string, qty = 1, note = "",
+): Promise<{ group?: VkpiInventoryGroup }> {
+  return apiFetch<{ group?: VkpiInventoryGroup }>(
+    `/api/admin/vkpi/inventory/groups/${encodeURIComponent(groupId)}/items`,
+    { method: "POST", body: jsonBody({ sku, qty, note }) },
+    token,
+  );
+}
+export async function removeFromInventoryGroup(token: string, groupId: string, itemId: string): Promise<{ group?: VkpiInventoryGroup }> {
+  return apiFetch<{ group?: VkpiInventoryGroup }>(
+    `/api/admin/vkpi/inventory/groups/${encodeURIComponent(groupId)}/items/${encodeURIComponent(itemId)}`,
+    { method: "DELETE" },
+    token,
+  );
+}
+export async function importInventoryFromCatalog(token: string): Promise<{ ok: boolean; imported: number }> {
+  return apiFetch<{ ok: boolean; imported: number }>(
+    "/api/admin/vkpi/inventory/import-from-catalog",
+    { method: "POST", body: jsonBody({}) },
+    token,
+  );
+}
+
 // ── Adapter:后端 snake_case(is_sample/created_at)↔ 前端 stock 形态(isSample)──────
 // stock.js / StockManagerModal 用 { id, name, category, qty, location, sku, note, isSample }。
 export interface UiStockItem {

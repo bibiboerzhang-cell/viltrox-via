@@ -247,6 +247,213 @@ def delete_item(sku: str, body: dict[str, Any] | None, staff: dict[str, Any] | N
     return {"ok": True, "sku": str(sku)}
 
 
+# ── Groups 组团(逻辑分组,不扣库存)─────────────────────────────────────────
+def _group_row(conn: Any, g: dict[str, Any]) -> dict[str, Any]:
+    """补上组内 items(JOIN 库存表拿 name/category/总库存,诚实显示是否充足)。"""
+    rows = conn.execute(
+        """
+        SELECT gi.id, gi.inventory_sku, gi.qty_in_group, gi.note,
+               i.name AS item_name, i.category AS item_category, i.qty AS total_available
+        FROM vkpi_inventory_group_items gi
+        LEFT JOIN vkpi_inventory i ON i.sku = gi.inventory_sku
+        WHERE gi.group_id = ?
+        ORDER BY gi.added_at ASC
+        """,
+        (str(g["id"]),),
+    ).fetchall()
+    items = [dict(r) for r in rows]
+    g = dict(g)
+    g["items"] = items
+    g["item_count"] = len(items)
+    g["total_units"] = sum(int(it.get("qty_in_group") or 0) for it in items)
+    return g
+
+
+def list_groups(event_id: str | None = None) -> dict[str, Any]:
+    """列全部组(或某 event 的组),每组带成员清单。"""
+    conn = get_conn()
+    if event_id:
+        rows = conn.execute(
+            "SELECT * FROM vkpi_inventory_groups WHERE event_id = ? ORDER BY created_at DESC",
+            (str(event_id),),
+        ).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM vkpi_inventory_groups ORDER BY created_at DESC").fetchall()
+    return {"groups": [_group_row(conn, dict(r)) for r in rows]}
+
+
+def create_group(body: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
+    """新建组(可带初始成员 items=[{sku, qty, note}])。"""
+    conn = get_conn()
+    body = body or {}
+    name = str(body.get("name") or "").strip()
+    if not name:
+        raise ValueError("group name required")
+    gid = _gen_id("grp")
+    conn.execute(
+        """
+        INSERT INTO vkpi_inventory_groups
+          (id, name, note, location, event_id, created_by_staff_id, created_at, updated_at)
+        VALUES (?,?,?,?,?,?, NOW(), NOW())
+        """,
+        (
+            gid,
+            name,
+            str(body.get("note") or ""),
+            str(body.get("location") or ""),
+            str(body.get("event_id")) if body.get("event_id") else None,
+            _staff_id(staff),
+        ),
+    )
+    for i, it in enumerate(body.get("items") or []):
+        sku = str((it or {}).get("sku") or "").strip()
+        if not sku:
+            continue
+        conn.execute(
+            "INSERT INTO vkpi_inventory_group_items (id, group_id, inventory_sku, qty_in_group, note, added_at) "
+            "VALUES (?,?,?,?,?, NOW())",
+            (f"{_gen_id('gi')}_{i}", gid, sku, max(1, int((it or {}).get("qty") or 1)), str((it or {}).get("note") or "")),
+        )
+    conn.commit()
+    row = conn.execute("SELECT * FROM vkpi_inventory_groups WHERE id = ?", (gid,)).fetchone()
+    return {"group": _group_row(conn, dict(row))}
+
+
+def update_group(group_id: str, body: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
+    """改组名/备注/位置/关联 event。"""
+    conn = get_conn()
+    body = body or {}
+    sets, vals = [], []
+    for key in ("name", "note", "location", "event_id"):
+        if key in body:
+            sets.append(f"{key} = ?")
+            vals.append(str(body[key]) if body[key] not in (None, "") else None)
+    if not sets:
+        row = conn.execute("SELECT * FROM vkpi_inventory_groups WHERE id = ?", (str(group_id),)).fetchone()
+        if not row:
+            raise ValueError(f"group not found: {group_id}")
+        return {"group": _group_row(conn, dict(row))}
+    sets.append("updated_at = NOW()")
+    vals.append(str(group_id))
+    conn.execute(f"UPDATE vkpi_inventory_groups SET {', '.join(sets)} WHERE id = ?", tuple(vals))
+    conn.commit()
+    row = conn.execute("SELECT * FROM vkpi_inventory_groups WHERE id = ?", (str(group_id),)).fetchone()
+    if not row:
+        raise ValueError(f"group not found: {group_id}")
+    return {"group": _group_row(conn, dict(row))}
+
+
+def delete_group(group_id: str, body: dict[str, Any] | None, staff: dict[str, Any] | None) -> dict[str, Any]:
+    """删组(成员行 ON DELETE CASCADE 一并删;不动各项独立库存)。"""
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM vkpi_inventory_groups WHERE id = ?", (str(group_id),)).fetchone()
+    if not row:
+        raise ValueError(f"group not found: {group_id}")
+    conn.execute("DELETE FROM vkpi_inventory_groups WHERE id = ?", (str(group_id),))
+    conn.commit()
+    return {"ok": True, "group_id": str(group_id)}
+
+
+def add_to_group(group_id: str, body: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
+    """往组里加一个 SKU × 数量(逻辑加入,不扣库存)。"""
+    conn = get_conn()
+    body = body or {}
+    sku = str(body.get("sku") or "").strip()
+    if not sku:
+        raise ValueError("sku required")
+    g = conn.execute("SELECT id FROM vkpi_inventory_groups WHERE id = ?", (str(group_id),)).fetchone()
+    if not g:
+        raise ValueError(f"group not found: {group_id}")
+    conn.execute(
+        "INSERT INTO vkpi_inventory_group_items (id, group_id, inventory_sku, qty_in_group, note, added_at) "
+        "VALUES (?,?,?,?,?, NOW())",
+        (_gen_id("gi"), str(group_id), sku, max(1, int(body.get("qty") or 1)), str(body.get("note") or "")),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM vkpi_inventory_groups WHERE id = ?", (str(group_id),)).fetchone()
+    return {"group": _group_row(conn, dict(row))}
+
+
+def remove_from_group(group_id: str, item_id: str, staff: dict[str, Any] | None) -> dict[str, Any]:
+    """从组里移除一个成员行(不动各项独立库存)。"""
+    conn = get_conn()
+    conn.execute(
+        "DELETE FROM vkpi_inventory_group_items WHERE id = ? AND group_id = ?",
+        (str(item_id), str(group_id)),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM vkpi_inventory_groups WHERE id = ?", (str(group_id),)).fetchone()
+    if not row:
+        return {"ok": True, "group_id": str(group_id)}
+    return {"group": _group_row(conn, dict(row))}
+
+
+def find_sku_groups(sku: str) -> dict[str, Any]:
+    """查某 SKU 在哪些组里(用于库存表行显示「所在分组」)。"""
+    conn = get_conn()
+    rows = conn.execute(
+        """
+        SELECT g.id AS group_id, g.name AS group_name, g.location, gi.qty_in_group
+        FROM vkpi_inventory_group_items gi
+        JOIN vkpi_inventory_groups g ON g.id = gi.group_id
+        WHERE gi.inventory_sku = ?
+        ORDER BY g.created_at DESC
+        """,
+        (str(sku),),
+    ).fetchall()
+    return {"groups": [dict(r) for r in rows]}
+
+
+# ── 从产品库批量补缺 SKU(qty=0,幂等,只增不改)──────────────────────────────
+_CAT_MAP = {
+    "lens": "lens", "lenses": "lens",
+    "lighting": "equipment", "flash": "equipment", "monitor": "equipment", "equipment": "equipment",
+    "accessories": "accessory", "accessory": "accessory", "battery": "accessory",
+    "uv filter": "accessory", "filter": "accessory", "macro extension tube": "accessory",
+}
+
+
+def import_missing_from_catalog(staff: dict[str, Any] | None) -> dict[str, Any]:
+    """把 vkpi_products 里有、vkpi_inventory 里没有的 SKU 批量补进库存(qty=0,location 待填)。
+    幂等:已存在的 sku ON CONFLICT DO NOTHING;绝不覆盖已有项的 qty/字段。"""
+    conn = get_conn()
+    # 产品库列名兼容(category_main / category)
+    cols = {c[0] for c in conn.execute(
+        "SELECT column_name FROM information_schema.columns WHERE table_name = 'vkpi_products'"
+    ).fetchall() if isinstance(c, (tuple, list))} or {
+        dict(r)["column_name"] for r in conn.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'vkpi_products'"
+        ).fetchall()
+    }
+    cat_col = "category_main" if "category_main" in cols else ("category" if "category" in cols else None)
+    name_col = "name" if "name" in cols else ("product_name" if "product_name" in cols else "sku")
+    sel = f"SELECT p.sku AS sku, p.{name_col} AS name" + (f", p.{cat_col} AS cat" if cat_col else ", '' AS cat")
+    sel += " FROM vkpi_products p LEFT JOIN vkpi_inventory i ON i.sku = p.sku WHERE i.sku IS NULL AND p.sku IS NOT NULL AND p.sku <> ''"
+    rows = conn.execute(sel).fetchall()
+    # created_by_staff_id 有 FK→staff:校验存在,否则置 NULL(批量导入容忍无效/系统身份)。
+    sid = _staff_id(staff)
+    if sid is not None and not conn.execute("SELECT 1 FROM staff WHERE id = ?", (sid,)).fetchone():
+        sid = None
+    added = 0
+    for i, r in enumerate(rows):
+        d = dict(r)
+        sku = str(d.get("sku") or "").strip()
+        if not sku:
+            continue
+        cat = _CAT_MAP.get(str(d.get("cat") or "").strip().lower(), "accessory")
+        conn.execute(
+            """
+            INSERT INTO vkpi_inventory (id, sku, name, category, qty, location, note, is_sample, created_by_staff_id, created_at, updated_at)
+            VALUES (?,?,?,?,0,'','从产品库导入·待填库存量',FALSE,?, NOW(), NOW())
+            ON CONFLICT (sku) DO NOTHING
+            """,
+            (f"{_gen_id('s')}_{i}", sku, str(d.get("name") or sku), cat, sid),
+        )
+        added += 1
+    conn.commit()
+    return {"ok": True, "imported": added}
+
+
 # ── Movements ledger ────────────────────────────────────────────────────────
 def list_movements(sku: str | None = None, limit: int = 100) -> dict[str, Any]:
     """读审计流水。sku 给定则只看该 SKU,否则全量(均按时间倒序)。"""

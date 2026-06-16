@@ -1,10 +1,12 @@
 import React, { useState } from "react";
-import { Edit3, History, Package, Plus, Search, X } from "lucide-react";
+import { Box, Download, Edit3, History, Package, Plus, Search, Trash2, X } from "lucide-react";
 import { PRODUCT_CATEGORIES } from "../shared/constants.js";
 import { useAuth } from "../../../../../hooks/useAuth";
 import {
   listInventory, createInventoryItem, updateInventoryItem, deleteInventoryItem,
   getInventoryMovements, toUiStock,
+  listInventoryGroups, createInventoryGroup, deleteInventoryGroup,
+  addToInventoryGroup, removeFromInventoryGroup, importInventoryFromCatalog,
 } from "../../../../../services/vkpi/inventory-api";
 
 const e = React.createElement;
@@ -48,6 +50,17 @@ export default function StockManagerModal({ stock, setStock, token: tokenProp, o
   const [newSku, setNewSku] = useState("");
   const [newNote, setNewNote] = useState("");
   const [newIsSample, setNewIsSample] = useState(false);
+
+  // 组团(分组)状态
+  const [groups, setGroups] = useState([]);
+  const [groupsLoading, setGroupsLoading] = useState(false);
+  const [showAddGroup, setShowAddGroup] = useState(false);
+  const [newGroupName, setNewGroupName] = useState("");
+  const [newGroupLocation, setNewGroupLocation] = useState("深圳运输仓");
+  const [expandedGroup, setExpandedGroup] = useState(null); // group id
+  const [addSkuFor, setAddSkuFor] = useState(""); // 正在给哪个组加 sku 的输入 sku
+  const [addQtyFor, setAddQtyFor] = useState(1);
+  const [importing, setImporting] = useState(false);
 
   const filtered = stock.filter(s => {
     if (catFilter !== "all" && s.category !== catFilter) return false;
@@ -130,6 +143,110 @@ export default function StockManagerModal({ stock, setStock, token: tokenProp, o
     })
       .then(() => refetch())
       .catch(e2 => { setErr("新建失败:" + String(e2 && e2.message ? e2.message : e2)); refetch(); });
+  }
+
+  // ── 组团(分组)处理 ─────────────────────────────────────────────────────
+  function loadGroups() {
+    if (!token) { setGroups([]); return; }
+    setGroupsLoading(true);
+    listInventoryGroups(token)
+      .then(res => setGroups(Array.isArray(res.groups) ? res.groups : []))
+      .catch(e2 => setErr("加载分组失败:" + String(e2 && e2.message ? e2.message : e2)))
+      .finally(() => setGroupsLoading(false));
+  }
+  function openGroups() { setView("groups"); loadGroups(); }
+
+  function createGroup() {
+    if (!newGroupName || !token) return;
+    createInventoryGroup(token, { name: newGroupName, location: newGroupLocation })
+      .then(() => { setNewGroupName(""); setShowAddGroup(false); loadGroups(); })
+      .catch(e2 => setErr("新建分组失败:" + String(e2 && e2.message ? e2.message : e2)));
+  }
+  function removeGroup(g) {
+    if (!confirm(`删除分组「${g.name}」? 组内成员关系一并删除(不影响各项独立库存).`)) return;
+    if (!token) return;
+    setGroups(prev => prev.filter(x => x.id !== g.id)); // 乐观
+    deleteInventoryGroup(token, g.id).then(() => loadGroups())
+      .catch(e2 => { setErr("删除分组失败:" + String(e2 && e2.message ? e2.message : e2)); loadGroups(); });
+  }
+  function addSkuToGroup(g) {
+    const sku = (addSkuFor || "").trim();
+    if (!sku || !token) return;
+    addToInventoryGroup(token, g.id, sku, Math.max(1, parseInt(addQtyFor) || 1))
+      .then(() => { setAddSkuFor(""); setAddQtyFor(1); loadGroups(); })
+      .catch(e2 => setErr("加入分组失败:" + String(e2 && e2.message ? e2.message : e2)));
+  }
+  function removeItemFromGroup(g, item) {
+    if (!token) return;
+    removeFromInventoryGroup(token, g.id, item.id).then(() => loadGroups())
+      .catch(e2 => setErr("移除失败:" + String(e2 && e2.message ? e2.message : e2)));
+  }
+  function runImport() {
+    if (!token || importing) return;
+    if (!confirm("从产品库把缺的 SKU 批量补进库存(数量默认 0,你再调量)? 已存在的不变.")) return;
+    setImporting(true);
+    importInventoryFromCatalog(token)
+      .then(res => { alert(`已导入 ${res.imported || 0} 个 SKU(数量 0,记得补库存量)`); refetch(); })
+      .catch(e2 => setErr("导入失败:" + String(e2 && e2.message ? e2.message : e2)))
+      .finally(() => setImporting(false));
+  }
+
+  // ── 分组视图 ─────────────────────────────────────────────────────────────
+  function renderGroups() {
+    return e(React.Fragment, null,
+      e("div", { className: "flex items-center gap-2 mb-3" },
+        e("button", { onClick: () => setShowAddGroup(!showAddGroup),
+          className: "px-2.5 py-1.5 rounded-md bg-emerald-500/90 hover:bg-emerald-500 text-white text-[11px] font-medium flex items-center gap-1" },
+          e(Plus, { size: 11 }), showAddGroup ? "取消" : "新建分组"),
+        e("div", { className: "text-[10px] text-slate-500 ml-1" }, "分组 = 哪些设备装在同一个箱子里(逻辑清单,不扣各项独立库存)")
+      ),
+      showAddGroup && e("div", { className: "rounded-lg border border-emerald-500/30 bg-emerald-500/[0.04] p-3 mb-3 flex items-center gap-2" },
+        e("input", { type: "text", value: newGroupName, onChange: ev => setNewGroupName(ev.target.value), placeholder: "分组名 (例: Pelican 大箱 1620)",
+          className: "flex-1 px-2.5 py-1.5 rounded bg-white/[0.02] border border-white/[0.06] text-[11px] text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500/40" }),
+        e("input", { type: "text", value: newGroupLocation, onChange: ev => setNewGroupLocation(ev.target.value), placeholder: "位置",
+          className: "w-32 px-2.5 py-1.5 rounded bg-white/[0.02] border border-white/[0.06] text-[11px] text-white focus:outline-none focus:border-emerald-500/40" }),
+        e("button", { onClick: createGroup, disabled: !newGroupName,
+          className: `px-3 py-1.5 rounded text-[10.5px] font-medium ${newGroupName ? "bg-emerald-500 hover:bg-emerald-400 text-white" : "bg-white/[0.05] text-slate-600 cursor-not-allowed"}` }, "保存")
+      ),
+      e("div", { className: "flex-1 overflow-y-auto space-y-2" },
+        groupsLoading
+          ? e("div", { className: "text-center py-12 text-[11px] text-slate-500" }, "加载分组中…")
+          : groups.length === 0
+            ? e("div", { className: "text-center py-12 text-[11px] text-slate-500" }, "还没有分组。点「新建分组」把同箱设备组在一起。")
+            : groups.map(g => {
+                const open = expandedGroup === g.id;
+                return e("div", { key: g.id, className: "rounded-lg border border-white/[0.06] bg-white/[0.015]" },
+                  e("div", { className: "flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-white/[0.02]", onClick: () => setExpandedGroup(open ? null : g.id) },
+                    e(Box, { size: 13, className: "text-cyan-300 shrink-0" }),
+                    e("div", { className: "flex-1 min-w-0" },
+                      e("div", { className: "text-[12px] text-white font-medium" }, g.name),
+                      e("div", { className: "text-[9.5px] text-slate-500" }, (g.location || "—") + " · " + (g.item_count || 0) + " 种 · " + (g.total_units || 0) + " 件")
+                    ),
+                    e("button", { onClick: ev => { ev.stopPropagation(); removeGroup(g); }, className: "p-1 rounded hover:bg-red-500/15 text-slate-500 hover:text-red-300", title: "删除分组" }, e(Trash2, { size: 12 }))
+                  ),
+                  open && e("div", { className: "border-t border-white/[0.05] px-3 py-2 space-y-1.5" },
+                    (g.items || []).length === 0
+                      ? e("div", { className: "text-[10px] text-slate-600" }, "这个箱子还是空的,下面加 SKU。")
+                      : (g.items || []).map(it => e("div", { key: it.id, className: "flex items-center gap-2 text-[11px]" },
+                          e("span", { className: "flex-1 text-slate-200" }, (it.item_name || it.inventory_sku)),
+                          e("span", { className: "text-slate-500 font-mono text-[10px]" }, it.inventory_sku),
+                          e("span", { className: "text-cyan-300 font-semibold w-10 text-right" }, "×" + (it.qty_in_group || 0)),
+                          e("span", { className: "text-[9px] text-slate-600 w-16 text-right" }, it.total_available != null ? ("库存 " + it.total_available) : "不在库存"),
+                          e("button", { onClick: () => removeItemFromGroup(g, it), className: "p-0.5 rounded hover:bg-red-500/15 text-slate-600 hover:text-red-300", title: "移出箱子" }, e(X, { size: 11 }))
+                        )),
+                    // 加 SKU
+                    e("div", { className: "flex items-center gap-1.5 pt-1.5 border-t border-white/[0.04]" },
+                      e("input", { type: "text", value: expandedGroup === g.id ? addSkuFor : "", onChange: ev => setAddSkuFor(ev.target.value), placeholder: "加 SKU (例: VTX-85-PRO)",
+                        className: "flex-1 px-2 py-1 rounded bg-white/[0.02] border border-white/[0.06] text-[10.5px] text-white placeholder-slate-600 font-mono focus:outline-none focus:border-emerald-500/40" }),
+                      e("input", { type: "number", value: addQtyFor, onChange: ev => setAddQtyFor(parseInt(ev.target.value) || 1), min: 1,
+                        className: "w-14 px-2 py-1 rounded bg-white/[0.02] border border-white/[0.06] text-[10.5px] text-white tabular-nums focus:outline-none focus:border-emerald-500/40" }),
+                      e("button", { onClick: () => addSkuToGroup(g), className: "px-2.5 py-1 rounded bg-cyan-500/80 hover:bg-cyan-500 text-white text-[10px] font-medium" }, "加入")
+                    )
+                  )
+                );
+              })
+      )
+    );
   }
 
   // ── 调动记录视图 ─────────────────────────────────────────────────────────
@@ -319,16 +436,27 @@ export default function StockManagerModal({ stock, setStock, token: tokenProp, o
         e("button", { onClick: onClose, className: "text-slate-500 hover:text-white" }, e(X, { size: 16 }))
       ),
 
-      // 视图切换:库存表 / 调动记录
-      e("div", { className: "flex items-center gap-0.5 rounded-md border border-white/[0.06] p-0.5 mb-3 w-fit" },
-        e("button", {
-          onClick: () => setView("stock"),
-          className: `px-3 py-1 rounded text-[10.5px] font-medium flex items-center gap-1.5 transition-all ${view === "stock" ? "bg-emerald-500/20 text-emerald-200" : "text-slate-500 hover:text-slate-300"}`
-        }, e(Package, { size: 11 }), "库存表"),
-        e("button", {
-          onClick: () => openMovements(null),
-          className: `px-3 py-1 rounded text-[10.5px] font-medium flex items-center gap-1.5 transition-all ${view === "movements" ? "bg-cyan-500/20 text-cyan-200" : "text-slate-500 hover:text-slate-300"}`
-        }, e(History, { size: 11 }), "📋 调动记录")
+      // 视图切换:库存表 / 分组 / 调动记录  +  从产品库导入
+      e("div", { className: "flex items-center justify-between mb-3" },
+        e("div", { className: "flex items-center gap-0.5 rounded-md border border-white/[0.06] p-0.5 w-fit" },
+          e("button", {
+            onClick: () => setView("stock"),
+            className: `px-3 py-1 rounded text-[10.5px] font-medium flex items-center gap-1.5 transition-all ${view === "stock" ? "bg-emerald-500/20 text-emerald-200" : "text-slate-500 hover:text-slate-300"}`
+          }, e(Package, { size: 11 }), "库存表"),
+          e("button", {
+            onClick: openGroups,
+            className: `px-3 py-1 rounded text-[10.5px] font-medium flex items-center gap-1.5 transition-all ${view === "groups" ? "bg-cyan-500/20 text-cyan-200" : "text-slate-500 hover:text-slate-300"}`
+          }, e(Box, { size: 11 }), "📦 分组"),
+          e("button", {
+            onClick: () => openMovements(null),
+            className: `px-3 py-1 rounded text-[10.5px] font-medium flex items-center gap-1.5 transition-all ${view === "movements" ? "bg-cyan-500/20 text-cyan-200" : "text-slate-500 hover:text-slate-300"}`
+          }, e(History, { size: 11 }), "📋 调动记录")
+        ),
+        view === "stock" && e("button", {
+          onClick: runImport, disabled: importing,
+          className: `px-2.5 py-1.5 rounded-md border border-white/[0.08] text-[10.5px] flex items-center gap-1.5 ${importing ? "text-slate-600 cursor-not-allowed" : "text-slate-300 hover:bg-white/[0.04]"}`,
+          title: "把产品库里有、库存表没有的 SKU 批量补进来(数量 0)"
+        }, e(Download, { size: 11 }), importing ? "导入中…" : "从产品库导入")
       ),
 
       // 聚焦某 SKU 的调动记录时的返回条
@@ -340,7 +468,7 @@ export default function StockManagerModal({ stock, setStock, token: tokenProp, o
 
       err && e("div", { className: "mb-2 px-3 py-1.5 rounded-md border border-rose-500/30 bg-rose-500/10 text-[10.5px] text-rose-200" }, "⚠ ", err),
 
-      view === "stock" ? renderStock() : renderMovements(),
+      view === "stock" ? renderStock() : view === "groups" ? renderGroups() : renderMovements(),
 
       e("div", { className: "flex items-center justify-between pt-3 mt-3 border-t border-white/[0.05]" },
         view === "stock"
