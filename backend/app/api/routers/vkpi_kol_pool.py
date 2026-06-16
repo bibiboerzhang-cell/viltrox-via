@@ -1216,6 +1216,23 @@ def enqueue_pool_video_analysis_batch(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@router.post("/kol-pool/{kol_pool_id}/enqueue-all-videos")
+def enqueue_pool_all_videos(
+    kol_pool_id: int,
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """「全视频跑」:该 KOL 全部视频证据各入队一条 final_v1;独立于 V6 Fit。"""
+    try:
+        return kol_video_analysis_enqueue.enqueue_all_kol_videos(
+            kol_pool_id=int(kol_pool_id),
+            staff=staff,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @router.get("/kol-pool/{kol_pool_id}/main-candidates")
 def get_main_candidates(
     kol_pool_id: int,

@@ -6,7 +6,7 @@ import { motion } from "framer-motion";
 import { AlertTriangle, Check, Link2, Shield, Sparkles, Video } from "lucide-react";
 import { KPAvatar } from "./KPAvatar";
 import { KOLVideoAnalysisPanel } from "./KOLVideoAnalysisPanel";
-import { enqueueVideoAnalysis, getKolPoolContentFit, getKolPoolDimensions11, getKolPoolLlmDeepAnalysis } from "../../../../services/vkpi/kolPool-api";
+import { enqueueAllKolVideos, enqueueVideoAnalysis, getKolPoolAccountDossier, getKolPoolContentFit, getKolPoolDimensions11, getKolPoolLlmDeepAnalysis } from "../../../../services/vkpi/kolPool-api";
 import { getKolMemory } from "../../../../services/vkpi/kolMemory-api";
 import { proxiedImageUrl, proxiedVideoUrl } from "../../shared/mediaProxy";
 import { asArray, compactText, fixedOrDash, numberOr, recordOr, scoreText, scoreValue } from "./KOLDetailDrawer.helpers";
@@ -436,6 +436,202 @@ function RepresentativeVideoPlayerModal({ video, onClose }: any) {
   );
 }
 
+// item3:视频 final_v1 的完整层级此前被埋——layer1_summary(内容/时间线/出现度)、
+// scores(6 维带 evidence)、recommendations 增量字段、risk.final_verdict 默认都不渲染。
+// 折叠在「完整分析」里,默认收起保持卡片简洁,展开看全量。纯展示,不杜撰(缺字段即不渲染)。
+function LlmDeepFullBreakdown({ dimensions }: any) {
+  const [open, setOpen] = React.useState(false);
+  const layer1 = recordOr(dimensions.layer1_summary);
+  const scores = recordOr(dimensions.scores);
+  const recommendations = recordOr(dimensions.recommendations);
+  const risk = recordOr(dimensions.risk);
+
+  const SCORE_LABELS: Record<string, string> = {
+    content_quality_score: "内容质量",
+    product_proof_score: "产品实证",
+    channel_value_score: "渠道价值",
+    marketing_value_score: "营销价值",
+    viewer_heart_score: "观众好感",
+    asset_reuse_score: "素材复用",
+  };
+  const scoreRows = Object.keys(SCORE_LABELS)
+    .map((key) => ({ key, label: SCORE_LABELS[key], cell: recordOr(scores[key]) }))
+    .filter((row) => row.cell && (row.cell.score != null || row.cell.evidence));
+
+  const sceneTimeline = asArray(layer1.scene_timeline)
+    .map((s: any) => recordOr(s))
+    .filter((s: any) => s.what || s.timestamp)
+    .slice(0, 8);
+
+  const contentSummary = compactText(layer1.content_summary, 600);
+  const presenceRows = [
+    { label: "品牌曝光(Viltrox)", value: layer1.brand_exposure },
+    { label: "产品出现", value: layer1.product_presence },
+    { label: "竞品出现", value: layer1.competitor_presence },
+    { label: "制作观察", value: layer1.production_observations },
+  ].map((row) => ({ ...row, text: compactText(row.value, 320) })).filter((row) => row.text);
+
+  const extraRecs = [
+    { label: "预算动作", value: recommendations.budget_action },
+    { label: "须向 KOL 索取", value: recommendations.must_request_from_kol },
+    { label: "下次 brief 调整", value: recommendations.next_brief_adjustments },
+  ].map((row) => ({ ...row, texts: flexibleTextList(row.value, 3) })).filter((row) => row.texts.length);
+
+  const finalVerdict = compactText(risk.final_verdict, 600);
+
+  const hasContent = Boolean(contentSummary) || sceneTimeline.length > 0 || presenceRows.length > 0
+    || scoreRows.length > 0 || extraRecs.length > 0 || Boolean(finalVerdict);
+  if (!hasContent) return null;
+
+  return e("div", { className: "mt-2 border-t border-white/[0.05] pt-1.5" },
+    e("button", {
+      type: "button",
+      onClick: () => setOpen((v: boolean) => !v),
+      className: "flex w-full items-center justify-between text-[9.5px] text-fuchsia-200/80 hover:text-fuchsia-100",
+    },
+      "完整分析 · 内容概览 / 6 维评分 / 完整建议",
+      e(ChevronsUpDownIcon, { expanded: open })
+    ),
+    open && e("div", { className: "mt-2 space-y-2.5" },
+      contentSummary && e("div", null,
+        e("div", { className: "mb-1 text-[9px] uppercase tracking-wider text-slate-500" }, "内容概览"),
+        e("div", { className: "text-[10px] leading-relaxed text-slate-300" }, contentSummary)
+      ),
+      sceneTimeline.length > 0 && e("div", null,
+        e("div", { className: "mb-1 text-[9px] uppercase tracking-wider text-slate-500" }, "场景时间线"),
+        e("div", { className: "space-y-1" },
+          sceneTimeline.map((s: any, i: number) => e("div", { key: i, className: "rounded border border-white/[0.04] bg-black/15 px-2 py-1" },
+            e("div", { className: "flex items-baseline gap-1.5" },
+              s.timestamp && e("span", { className: "shrink-0 text-[9px] tabular-nums text-cyan-300/80" }, String(s.timestamp)),
+              e("span", { className: "text-[10px] text-slate-300" }, compactText(s.what, 160))
+            ),
+            s.why_it_matters && e("div", { className: "mt-0.5 text-[9px] text-slate-500" }, "→ " + compactText(s.why_it_matters, 140))
+          ))
+        )
+      ),
+      presenceRows.length > 0 && e("div", { className: "grid grid-cols-1 gap-1" },
+        presenceRows.map((row) => e("div", { key: row.label, className: "rounded border border-white/[0.04] bg-black/15 px-2 py-1" },
+          e("div", { className: "text-[9px] text-slate-500" }, row.label),
+          e("div", { className: "text-[10px] leading-relaxed text-slate-300" }, row.text)
+        ))
+      ),
+      scoreRows.length > 0 && e("div", null,
+        e("div", { className: "mb-1 text-[9px] uppercase tracking-wider text-slate-500" }, "6 维评分(独立信号,非 viltrox_fit_score)"),
+        e("div", { className: "space-y-1" },
+          scoreRows.map((row) => e("div", { key: row.key, className: "rounded border border-white/[0.04] bg-black/15 px-2 py-1" },
+            e("div", { className: "flex items-center justify-between gap-2" },
+              e("span", { className: "text-[10px] text-slate-300" }, row.label),
+              e("span", { className: "text-[11px] font-semibold tabular-nums text-white" }, scoreText(row.cell.score))
+            ),
+            row.cell.evidence && e("div", { className: "mt-0.5 text-[9px] leading-relaxed text-slate-500" }, compactText(row.cell.evidence, 240))
+          ))
+        )
+      ),
+      extraRecs.length > 0 && e("div", null,
+        e("div", { className: "mb-1 text-[9px] uppercase tracking-wider text-slate-500" }, "更多建议"),
+        e("div", { className: "space-y-1" },
+          extraRecs.map((row) => e("div", { key: row.label, className: "rounded border border-white/[0.05] bg-black/20 px-2 py-1" },
+            e("div", { className: "mb-0.5 text-[9px] text-fuchsia-200" }, row.label),
+            row.texts.map((text: any, i: number) => e("div", { key: i, className: "text-[10px] leading-relaxed text-slate-300" }, text))
+          ))
+        )
+      ),
+      finalVerdict && e("div", { className: "rounded border border-amber-300/15 bg-amber-300/[0.04] px-2 py-1.5" },
+        e("div", { className: "mb-0.5 text-[9px] text-amber-200" }, "最终裁决"),
+        e("div", { className: "text-[10px] leading-relaxed text-slate-300" }, finalVerdict)
+      )
+    )
+  );
+}
+
+// item4:账号档案完整展示——读 /account-dossier(本地聚合,零 LLM/provider/写库)。
+// 展示覆盖度(视频/已分析/QA/抓取/营销分)、缺口、判断(fit+建议+风险)、最近事件。默认折叠。
+function AccountDossierPanel({ apiToken, kolPoolId }: any) {
+  const [dossier, setDossier] = React.useState<any>(null);
+  const [open, setOpen] = React.useState(false);
+  React.useEffect(() => {
+    setDossier(null);
+    if (!apiToken || !kolPoolId) return;
+    let cancelled = false;
+    void getKolPoolAccountDossier(apiToken, kolPoolId)
+      .then((payload: any) => { if (!cancelled) setDossier(payload && payload.status === "ready" ? payload : null); })
+      .catch(() => { if (!cancelled) setDossier(null); });
+    return () => { cancelled = true; };
+  }, [apiToken, kolPoolId]);
+
+  if (!dossier) return null;
+  const coverage = recordOr(dossier.coverage);
+  const judgment = recordOr(dossier.judgment);
+  const gaps = asArray(dossier.gaps).map((g: any) => compactText(typeof g === "string" ? g : (recordOr(g).label || recordOr(g).reason || ""), 60)).filter(Boolean);
+  const events = asArray(dossier.events);
+  const platformCounts = recordOr(coverage.platform_counts);
+
+  const statCells = [
+    { label: "视频证据", value: numberOr(coverage.video_evidence_count) },
+    { label: "已深析", value: numberOr(coverage.analyzed_final_v1_count) },
+    { label: "关键帧QA", value: numberOr(coverage.qa_count) },
+    { label: "抓取次数", value: numberOr(coverage.crawl_run_count) },
+  ].map((c) => ({ ...c, value: c.value == null ? 0 : c.value }));
+  const mvAvg = numberOr(coverage.marketing_value_score_avg);
+  const mvMax = numberOr(coverage.marketing_value_score_max);
+  const fit = numberOr(judgment.primary_llm_v6_fit);
+  const judgmentRecs = flexibleTextList(judgment.recommendations, 3);
+  const judgmentRisk = flexibleTextList(recordOr(judgment.risk).risk_flags, 3);
+  const recentEvents = events.slice(0, 5).map((ev: any) => recordOr(ev));
+
+  return e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
+    e("button", {
+      type: "button",
+      onClick: () => setOpen((v: boolean) => !v),
+      className: "flex w-full items-center justify-between",
+    },
+      e("div", { className: "flex items-center gap-1.5" },
+        e(UserCircle2Icon, null),
+        e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "账号档案"),
+        fit != null && e("span", { className: "rounded bg-fuchsia-500/12 px-1.5 py-0.5 text-[9px] text-fuchsia-200" }, "LLM fit " + scoreText(fit))
+      ),
+      e(ChevronsUpDownIcon, { expanded: open })
+    ),
+    e("div", { className: "mt-2 grid grid-cols-4 gap-1.5" },
+      statCells.map((c) => e("div", { key: c.label, className: "rounded border border-white/[0.04] bg-black/15 px-2 py-1.5 text-center" },
+        e("div", { className: "text-[14px] font-bold tabular-nums text-white" }, String(c.value)),
+        e("div", { className: "text-[8.5px] text-slate-500" }, c.label)
+      ))
+    ),
+    (mvAvg != null || mvMax != null) && e("div", { className: "mt-1.5 flex items-center gap-3 text-[9.5px] text-slate-400" },
+      mvAvg != null && e("span", null, "营销分均值 ", e("span", { className: "tabular-nums text-slate-200" }, scoreText(mvAvg))),
+      mvMax != null && e("span", null, "峰值 ", e("span", { className: "tabular-nums text-slate-200" }, scoreText(mvMax))),
+      Object.keys(platformCounts).length > 0 && e("span", { className: "text-slate-600" }, "· " + Object.entries(platformCounts).map(([k, v]) => `${k}:${v}`).join(" "))
+    ),
+    gaps.length > 0 && e("div", { className: "mt-1.5 flex flex-wrap gap-1" },
+      gaps.slice(0, 6).map((g: string, i: number) => e("span", { key: i, className: "rounded bg-amber-500/10 px-1.5 py-0.5 text-[8.5px] text-amber-200" }, "缺口: " + g))
+    ),
+    open && e("div", { className: "mt-2 space-y-2" },
+      judgmentRecs.length > 0 && e("div", null,
+        e("div", { className: "mb-1 text-[9px] uppercase tracking-wider text-slate-500" }, "账号级建议"),
+        judgmentRecs.map((t: string, i: number) => e("div", { key: i, className: "rounded border border-white/[0.05] bg-black/20 px-2 py-1 text-[10px] leading-relaxed text-slate-300" }, t))
+      ),
+      judgmentRisk.length > 0 && e("div", { className: "rounded border border-amber-300/15 bg-amber-300/[0.04] px-2 py-1.5" },
+        e("div", { className: "mb-1 text-[9px] text-amber-200" }, "风险旗标"),
+        judgmentRisk.map((t: string, i: number) => e("div", { key: i, className: "text-[10px] leading-relaxed text-slate-300" }, t))
+      ),
+      recentEvents.length > 0 && e("div", null,
+        e("div", { className: "mb-1 text-[9px] uppercase tracking-wider text-slate-500" }, "最近事件"),
+        e("div", { className: "space-y-1" },
+          recentEvents.map((ev: any, i: number) => e("div", { key: i, className: "flex items-center justify-between gap-2 rounded border border-white/[0.04] bg-black/15 px-2 py-1" },
+            e("span", { className: "truncate text-[10px] text-slate-300" }, compactText(recordOr(ev.summary).title || ev.event_type || "—", 40)),
+            e("span", { className: "shrink-0 text-[9px] text-slate-500" }, String(ev.status || "") + " · " + String(ev.occurred_at || "").slice(0, 10))
+          ))
+        )
+      )
+    )
+  );
+}
+
+function UserCircle2Icon() {
+  return e(Sparkles, { size: 11, className: "text-cyan-300" });
+}
+
 function LlmDeepAnalysisPanel({ payload }: any) {
   if (!payload || payload.status !== "ready" || !payload.primary_result) return null;
   const primary = recordOr(payload.primary_result);
@@ -497,6 +693,7 @@ function LlmDeepAnalysisPanel({ payload }: any) {
         e("div", { className: "mb-1 flex items-center gap-1 text-[9px] text-amber-200" }, e(AlertTriangle, { size: 9 }), "风险 / QA issues"),
         riskRows.map((text, index) => e("div", { key: index, className: "text-[10px] leading-relaxed text-slate-300" }, text))
       ),
+      e(LlmDeepFullBreakdown, { dimensions }),
       e(LlmDeepHistoryList, { payload, primary })
     )
   );
@@ -540,6 +737,8 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
   const [preloadedVideoAnalysisBundles, setPreloadedVideoAnalysisBundles] = React.useState<any>(undefined);
   const [videoAnalysisSummary, setVideoAnalysisSummary] = React.useState<any>(null);
   const [videoEnqueueState, setVideoEnqueueState] = React.useState<any>({ status: "idle", message: "" });
+  // 全视频跑:该 KOL 全部视频证据各入队一条 final_v1,发完综合评估。独立于上面的单代表作入队。
+  const [allVideosState, setAllVideosState] = React.useState<any>({ status: "idle", message: "" });
   const [activeRepresentativeVideo, setActiveRepresentativeVideo] = React.useState<any>(null);
   // 地基B 内容契合深析(content_fit_v1):默认只读缓存;点击才按需触发深析(不烧 LLM 直到点击)。
   const [contentFit, setContentFit] = React.useState<any>(null);
@@ -700,6 +899,26 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
         setVideoEnqueueState({ status: "error", message });
       });
   };
+  const allVideosBusy = allVideosState.status === "loading";
+  const handleEnqueueAllVideos = () => {
+    if (!apiToken || !item.id || allVideosBusy) return;
+    setAllVideosState({ status: "loading", message: "正在把该 KOL 的全部视频证据加入深析队列…" });
+    void enqueueAllKolVideos(apiToken, item.id)
+      .then((payload: any) => {
+        const status = String(payload?.status || "");
+        if (status === "no_evidence") {
+          setAllVideosState({ status: "no_evidence", message: payload?.reason || "该 KOL 暂无视频证据,需先发现/抓取视频再全视频分析" });
+          return;
+        }
+        const queued = Number(payload?.queued || 0);
+        const skipped = Number(payload?.skipped || 0);
+        const total = Number(payload?.evidence_total || payload?.requested || 0);
+        setAllVideosState({ status: "done", message: `全视频跑:共 ${total} 条,入队 ${queued},跳过 ${skipped}(已分析/在队);进度见左侧看板` });
+      })
+      .catch((error: any) => {
+        setAllVideosState({ status: "error", message: error?.message ? String(error.message) : "全视频入队失败" });
+      });
+  };
   const dimensions11Dims = dimensions11RadarDims(dimensions11);
   const v6Breakdown = item.v6_breakdown && typeof item.v6_breakdown === "object"
     ? item.v6_breakdown
@@ -734,6 +953,9 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
       dimensions11Dims.length > 0 && e(KOLDrawerRadar11, { dims: dimensions11Dims, dimensions11 }),
       e(LlmDeepAnalysisPanel, { payload: llmDeepAnalysis }),
 
+      // ── item4 账号档案(本地聚合,零 LLM):覆盖度/缺口/账号级判断/最近事件 ──
+      e(AccountDossierPanel, { apiToken, kolPoolId: item?.id }),
+
       // ── 长期记忆(W3)· 显式独立于 V6 Fit · 不影响排序 ──
       // 红线:本区块纯渲染聚合记忆,绝不渲染任何 viltrox/v6_fit 数值。
       e(KOLDrawerMemorySection, { kolMemory }),
@@ -741,6 +963,21 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
       // ── 联系方式 & 代表视频 ──
       e(KOLDrawerContactAndVideos, { item, representativeVideos, onOpenVideo: setActiveRepresentativeVideo }),
       e(KOLVideoAnalysisPanel, { apiToken, videos: videoAnalysisVideos, preloadedBundles: preloadedVideoAnalysisBundles, summary: videoAnalysisSummary }),
+      // ── 全视频跑:该 KOL 全部视频证据各入队一条 final_v1 → 发完综合评估 ──
+      apiToken && item?.id && e("div", { className: "px-5 py-2.5 border-b border-white/[0.06]" },
+        e("button", {
+          type: "button",
+          disabled: allVideosBusy,
+          onClick: handleEnqueueAllVideos,
+          className: "flex w-full items-center justify-center gap-1.5 rounded-md border border-cyan-400/25 bg-cyan-400/[0.06] px-3 py-2 text-[11px] font-medium text-cyan-200 transition-colors hover:bg-cyan-400/[0.12] disabled:opacity-50",
+        },
+          e(Sparkles, { size: 12 }),
+          allVideosBusy ? "全视频入队中…" : "全视频跑(分析该 KOL 全部视频)"
+        ),
+        allVideosState.message && e("div", {
+          className: "mt-1.5 text-[9.5px] leading-relaxed " + (allVideosState.status === "error" ? "text-rose-300" : allVideosState.status === "no_evidence" ? "text-amber-300" : "text-slate-500")
+        }, allVideosState.message)
+      ),
       // 地基B:内容契合深析(content_fit_v1)——基于视频画面/故事 + 评论的适配判断(胜过粉丝数)。
       e(KOLDrawerContentFit, { apiToken, item, contentFit, contentFitBusy, contentFitError, onAnalyze: handleContentFitAnalyze }),
       e(KOLDrawerDevices, { item, devices }),

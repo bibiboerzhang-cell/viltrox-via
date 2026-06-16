@@ -355,3 +355,60 @@ def enqueue_final_v1_video_analysis_batch(
         "write_db": queued > 0,
         "writes": ["apify_jobs"] if queued else [],
     }
+
+
+def list_kol_all_evidence_ids(conn: Any, kol_pool_id: int) -> list[int]:
+    """该 KOL 全部活跃视频证据 id(去重、按时间降序)。只读。"""
+    rows = conn.execute(
+        """
+        SELECT e.id AS evidence_id
+        FROM vkpi_kol_video_evidence e
+        WHERE e.kol_pool_id = ?
+          AND (e.is_active IS NULL OR e.is_active = TRUE)
+        ORDER BY e.id DESC
+        """,
+        (int(kol_pool_id),),
+    ).fetchall()
+    out: list[int] = []
+    seen: set[int] = set()
+    for row in rows:
+        eid = _int_or_none(dict(row).get("evidence_id"))
+        if eid and eid not in seen:
+            seen.add(eid)
+            out.append(eid)
+    return out
+
+
+def enqueue_all_kol_videos(
+    *,
+    kol_pool_id: int,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """「全视频跑」:该 KOL 的全部视频证据各入队一条 final_v1(非单一代表作),
+    供发完后综合评估(账号档案 worker 链路会聚合已分析视频)。已 ready / 在队的自动跳过。
+    红线:只写 apify_jobs,零触 viltrox_fit_score。"""
+    pool_id = _int_or_none(kol_pool_id)
+    if not pool_id:
+        raise ValueError("kol_pool_id required")
+    conn = get_conn()
+    evidence_ids = list_kol_all_evidence_ids(conn, pool_id)
+    if not evidence_ids:
+        return {
+            "status": "no_evidence",
+            "kol_pool_id": pool_id,
+            "derive_method": FINAL_V1_DERIVE_METHOD,
+            "requested": 0,
+            "queued": 0,
+            "skipped": 0,
+            "errors": 0,
+            "reason": "该 KOL 暂无视频证据;需先发现/抓取视频(account_deep 模式)再全视频分析。",
+            "items": [],
+            "write_db": False,
+            "writes": [],
+        }
+    items = [{"kol_pool_id": pool_id, "evidence_id": eid} for eid in evidence_ids]
+    result = enqueue_final_v1_video_analysis_batch(items=items, staff=staff)
+    result["kol_pool_id"] = pool_id
+    result["mode"] = "all_videos"
+    result["evidence_total"] = len(evidence_ids)
+    return result

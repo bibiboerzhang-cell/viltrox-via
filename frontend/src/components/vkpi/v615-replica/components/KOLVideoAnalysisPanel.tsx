@@ -196,6 +196,113 @@ function ScoreBlock({ label, score }: { label: string; score: ReturnType<typeof 
   );
 }
 
+// item3:layer3_three_values(三观)/ layer4_attribution(归因)/ layer5_recommendations(建议)
+// 此前 AnalysisCard 只画了 layer1/2/6,这三层全埋着。折叠展示,默认收起。缺字段即不渲染(不杜撰)。
+function whyActionText(value: unknown): { why: string; action: string } {
+  const r = asRecord(value);
+  return { why: textFrom(r.why), action: firstText(r.action, typeof value === "string" ? value : "") };
+}
+
+function DeepLayersSection({ layer3, layer4, layer5 }: { layer3: Record<string, unknown>; layer4: Record<string, unknown>; layer5: Record<string, unknown> }) {
+  const [open, setOpen] = useState(false);
+
+  const threeValues = [
+    { label: "素材价值", cell: asRecord(layer3.asset_value) },
+    { label: "渠道价值", cell: asRecord(layer3.channel_value) },
+    { label: "产品实证", cell: asRecord(layer3.product_proof_value) },
+  ].filter((row) => Object.keys(row.cell).length);
+
+  const attributionRisk = textFrom(layer4.attribution_risk);
+  const breakdown = Array.isArray(layer4.attribution_breakdown) ? (layer4.attribution_breakdown as unknown[]).map(asRecord) : [];
+
+  const recRows = [
+    { label: "预算动作", cell: layer5.budget_action },
+    { label: "须向 KOL 索取", cell: layer5.must_request_from_kol },
+    { label: "下次 brief 调整", cell: layer5.next_brief_adjustments },
+    { label: "合作建议", cell: layer5.cooperation_recommendation },
+    { label: "素材买断/授权", cell: layer5.buyout_or_license_recommendation },
+  ].map((row) => ({ label: row.label, ...whyActionText(row.cell) })).filter((row) => row.why || row.action);
+
+  const hasAny = threeValues.length > 0 || Boolean(attributionRisk) || breakdown.length > 0 || recRows.length > 0;
+  if (!hasAny) return null;
+
+  return (
+    <div className="mt-2 border-t border-white/[0.05] pt-2">
+      <button type="button" onClick={() => setOpen((v) => !v)} className="flex w-full items-center justify-between text-[9.5px] text-cyan-200/80 hover:text-cyan-100">
+        <span>三观 / 归因 / 建议</span>
+        <span className="text-slate-600">{open ? "收起 ▲" : "展开 ▼"}</span>
+      </button>
+      {open ? (
+        <div className="mt-2 space-y-2.5">
+          {threeValues.length ? (
+            <div>
+              <div className="mb-1 text-[9px] uppercase tracking-wider text-slate-500">三观(素材 / 渠道 / 产品实证)</div>
+              <div className="space-y-1">
+                {threeValues.map((row) => {
+                  const s = normaliseScore(row.cell);
+                  const evidence = textFrom(row.cell.evidence);
+                  return (
+                    <div key={row.label} className="rounded border border-white/[0.04] bg-black/15 px-2 py-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[10px] text-slate-300">{row.label}</span>
+                        <span className="text-[11px] font-bold tabular-nums" style={{ color: analysisScoreColor(s.score) }}>{s.score ?? "—"}</span>
+                      </div>
+                      {evidence ? <div className="mt-0.5 text-[9px] leading-relaxed text-slate-500">{compactText(evidence, 220)}</div> : null}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+
+          {attributionRisk || breakdown.length ? (
+            <div>
+              <div className="mb-1 text-[9px] uppercase tracking-wider text-slate-500">归因(效果由谁贡献)</div>
+              {attributionRisk ? (
+                <div className="mb-1 rounded border border-amber-300/15 bg-amber-300/[0.04] px-2 py-1 text-[9.5px] leading-relaxed text-slate-300">
+                  <span className="text-amber-200">风险:</span> {compactText(attributionRisk, 200)}
+                </div>
+              ) : null}
+              {breakdown.length ? (
+                <div className="space-y-1">
+                  {breakdown.slice(0, 5).map((row, i) => {
+                    const pct = Number(row.share_pct_estimate);
+                    const evidence = textFrom(row.evidence);
+                    return (
+                      <div key={i} className="rounded border border-white/[0.04] bg-black/15 px-2 py-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[10px] text-slate-300">{compactText(textFrom(row.source), 60)}</span>
+                          {Number.isFinite(pct) ? <span className="shrink-0 text-[10px] font-semibold tabular-nums text-cyan-200">{pct}%</span> : null}
+                        </div>
+                        {evidence ? <div className="mt-0.5 text-[9px] leading-relaxed text-slate-500">{compactText(evidence, 180)}</div> : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {recRows.length ? (
+            <div>
+              <div className="mb-1 text-[9px] uppercase tracking-wider text-slate-500">建议</div>
+              <div className="space-y-1">
+                {recRows.map((row) => (
+                  <div key={row.label} className="rounded border border-white/[0.05] bg-black/20 px-2 py-1">
+                    <div className="mb-0.5 text-[9px] text-cyan-200">{row.label}</div>
+                    {row.action ? <div className="text-[10px] leading-relaxed text-slate-300">{compactText(row.action, 220)}</div> : null}
+                    {row.why ? <div className="mt-0.5 text-[9px] leading-relaxed text-slate-500">因为: {compactText(row.why, 160)}</div> : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function AnalysisCard({ bundle }: { bundle: AnalysisBundle }) {
   const payload = finalV1Payload(bundle.finalEntry);
   const layer1 = asRecord(payload.layer1_visual_content);
@@ -203,6 +310,8 @@ function AnalysisCard({ bundle }: { bundle: AnalysisBundle }) {
   const sceneTimeline = sceneTimelineRows(layer1.scene_timeline);
   const layer2 = asRecord(payload.layer2_viewer_emotion);
   const layer3 = asRecord(payload.layer3_three_values);
+  const layer4 = asRecord(payload.layer4_attribution);
+  const layer5 = asRecord(payload.layer5_recommendations);
   const layer6 = asRecord(payload.layer6_flags_and_scores);
   const scores = asRecord(layer6.scores);
   const contentScore = normaliseScore(scores.content_quality_score);
@@ -289,6 +398,8 @@ function AnalysisCard({ bundle }: { bundle: AnalysisBundle }) {
         {viewerReaction ? <span className="rounded bg-purple-500/10 px-2 py-1 text-purple-200">心动: {compactText(viewerReaction, 54)}</span> : null}
         {riskText ? <span className="rounded bg-amber-500/10 px-2 py-1 text-amber-200">风险: {compactText(riskText, 60)}</span> : null}
       </div>
+
+      <DeepLayersSection layer3={layer3} layer4={layer4} layer5={layer5} />
 
       {qaHasPayload ? (
         <div className={`mt-2 rounded-md border p-2 ${qaPass === false ? "border-rose-400/20 bg-rose-500/[0.045]" : "border-emerald-400/15 bg-emerald-500/[0.035]"}`}>

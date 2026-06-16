@@ -749,6 +749,19 @@ export async function enqueueVideoAnalysisBatch(
   );
 }
 
+// 全视频跑:该 KOL 全部视频证据各入队一条 final_v1(非单一代表作),发完后综合评估。
+// 已 ready / 在队的自动跳过。红线:只写 apify_jobs,零触 viltrox_fit_score。
+export async function enqueueAllKolVideos(
+  token: string,
+  kolPoolId: string | number,
+): Promise<{ status?: string; queued?: number; skipped?: number; errors?: number; evidence_total?: number; requested?: number; reason?: string }> {
+  return apiFetch<{ status?: string; queued?: number; skipped?: number; errors?: number; evidence_total?: number; requested?: number; reason?: string }>(
+    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/enqueue-all-videos`,
+    { method: "POST" },
+    token,
+  );
+}
+
 export async function getKolPoolItem(token: string, kolPoolId: number, refreshIfStale = true) {
   const query = new URLSearchParams({ refresh_if_stale: String(refreshIfStale) });
   return apiFetch<{ item: VkpiKolPoolItem; freshness?: VkpiKolPoolFreshness; refresh?: VkpiKolPoolRefreshState }>(
@@ -821,6 +834,16 @@ export async function getKolPoolContentFit(
   const query = params.toString();
   return apiFetch<Row>(
     `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/content-fit${query ? `?${query}` : ""}`,
+    { cache: "no-store" },
+    token,
+  );
+}
+
+// item4 账号档案:只读本地聚合(零 provider/LLM/写库),返回 profile/coverage/judgment/gaps/
+// crawl_history/events。红线:diagnostics.viltrox_fit_score_write=false。
+export async function getKolPoolAccountDossier(token: string, kolPoolId: string | number) {
+  return apiFetch<Row>(
+    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/account-dossier`,
     { cache: "no-store" },
     token,
   );
