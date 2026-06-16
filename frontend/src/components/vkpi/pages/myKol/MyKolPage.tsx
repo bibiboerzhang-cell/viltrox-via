@@ -35,10 +35,9 @@ type StaffCard = {
   projects: VkpiProjectRow[];
 };
 
+// 2026-06-16:仅保留能匹配真实 staff 的展示元数据。删掉 Kevin Chen / Maya Liu / Tom Chen
+// 这三个无真实 staff 匹配的 mock —— 它们此前被渲染成空幻影负责人卡(无效账号)。
 const knownStaffDisplay = [
-  { id: 'display-kevin', name: 'Kevin Chen', role: 'Marketing Director', focus: '焦点: 全局', accent: '#fb7185' },
-  { id: 'display-maya', name: 'Maya Liu', role: 'Sr. KOL Manager', focus: '焦点: 135mm LAB · CineGear', accent: '#a855f7' },
-  { id: 'display-tom', name: 'Tom Chen', role: 'KOL Manager', focus: '焦点: 56mm 复推', accent: '#06b6d4' },
   { id: 'display-jianbo', name: 'Jianbo Z', role: 'Founder', focus: '焦点: 全局 + 战略', accent: '#10b981' },
 ];
 
