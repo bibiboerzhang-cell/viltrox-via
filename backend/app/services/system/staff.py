@@ -67,7 +67,8 @@ def list_members() -> dict:
     conn = get_conn()
     rows = conn.execute(
         """SELECT s.*, u.creator_code AS user_handle, u.email AS user_email, u.name AS user_name,
-                  u.email_verified AS user_email_verified
+                  u.email_verified AS user_email_verified, u.last_seen_at AS user_last_seen_at,
+                  (u.last_seen_at IS NOT NULL AND u.last_seen_at > now() - INTERVAL '5 minutes') AS user_online
            FROM staff s LEFT JOIN users u ON s.user_id = u.id
            ORDER BY s.active DESC, s.id"""
     ).fetchall()

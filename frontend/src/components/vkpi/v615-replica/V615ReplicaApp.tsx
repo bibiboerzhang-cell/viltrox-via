@@ -137,6 +137,22 @@ export function V615ReplicaApp(props: any = {}) {
     return () => { cancelled = true; };
   }, []);
 
+  // 在线状态(presence)心跳:挂载即打一次,之后每 60s ping /me(后端节流 >50s 才写库),
+  // 维持自己的 last_seen_at 在 5 分钟在线窗口内。纯只读副作用,失败静默。
+  useEffect(() => {
+    if (!apiToken) return;
+    let stopped = false;
+    const beat = () => {
+      fetch(buildApiUrl("/api/auth/me"), {
+        credentials: "same-origin",
+        headers: { Authorization: `Bearer ${apiToken}` },
+      }).catch(() => { /* 静默 */ });
+    };
+    beat();
+    const id = setInterval(() => { if (!stopped) beat(); }, 60000);
+    return () => { stopped = true; clearInterval(id); };
+  }, [apiToken]);
+
   useEffect(() => {
     const handleOpenKolSearchSession = () => {
       setActiveNav("kol-pool");

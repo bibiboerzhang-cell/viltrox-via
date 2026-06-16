@@ -15,6 +15,7 @@ export interface UiStaff {
   color: string;
   title: string;
   focus: string;
+  online: boolean;
 }
 
 const PALETTE = [
@@ -83,6 +84,7 @@ export function toUiStaff(member: VkpiStaffMember): UiStaff {
     color: colorFromId(String(member.id)),
     title: titleFromRole(role, isAdmin),
     focus: "",
+    online: Boolean(member.online),
   };
 }
 

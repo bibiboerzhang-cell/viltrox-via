@@ -35,6 +35,7 @@ export function buildStaffMembers(rows: Row[]): VkpiStaffMember[] {
       lastActiveAt: String(row.last_active_at || row.last_login || ''),
       invitedAt: String(row.invited_at || ''),
       acceptedAt: String(row.accepted_at || ''),
+      online: Boolean(row.user_online),
     };
   }).filter((row) => row.id || row.email);
 }

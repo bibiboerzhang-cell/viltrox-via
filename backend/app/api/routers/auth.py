@@ -256,6 +256,20 @@ def auth_me(request: Request):
     user = get_current_user(request)
     if not user:
         return {"status": "error", "message": "Not authenticated"}
+    # 2026-06-16 在线状态:/me 是前端轮询点,节流更新 last_seen_at(>50s 才写,免每次轮询都写库)。
+    try:
+        uid = int(user.get("id") or 0)
+        if uid:
+            from app.db.connection import get_conn
+            conn = get_conn()
+            conn.execute(
+                "UPDATE users SET last_seen_at = now() "
+                "WHERE id = ? AND (last_seen_at IS NULL OR last_seen_at < now() - INTERVAL '50 seconds')",
+                (uid,),
+            )
+            conn.commit()
+    except Exception:
+        pass
     return {"status": "success", "user": user}
 
 

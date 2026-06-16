@@ -67,12 +67,19 @@ export function UserMenuPopover({ onClose, theme, onToggleTheme, anchorRef, t, u
           onClick: () => { onImpersonate(s); onClose(); },
           className: "mx-2 flex w-[calc(100%-1rem)] items-center gap-2.5 rounded-lg bg-white/[0.018] px-3 py-1.5 text-left transition-colors hover:bg-white/[0.055]"
         },
-          e("div", {
-            className: "shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-bold text-white",
-            style: { background: s.color }
-          }, s.avatar),
+          e("div", { className: "relative shrink-0" },
+            e("div", {
+              className: "w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-bold text-white",
+              style: { background: s.color }
+            }, s.avatar),
+            (s.online || s.user_online) ? e("span", {
+              className: "absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full bg-emerald-400",
+              style: { boxShadow: "0 0 0 1.5px #0a1020" },
+              title: "在线"
+            }) : null
+          ),
           e("span", { className: "flex-1 text-[11px] text-slate-300" }, s.name),
-          e("span", { className: "text-[9px] text-slate-500" }, s.title)
+          (s.online || s.user_online) ? e("span", { className: "text-[8.5px] text-emerald-400" }, "在线") : e("span", { className: "text-[9px] text-slate-500" }, s.title)
         ))
       ),
       // Language only (V6.14.4: 切换主题删除 - 无 light theme)

@@ -61,13 +61,21 @@ export function TeamModal({ user, staff, groups, onClose, onImpersonate, t, onOp
                   key: s.id,
                   className: "flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-white/[0.04]"
                 },
-                  e("div", {
-                    className: "shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold text-white",
-                    style: { background: s.color }
-                  }, s.avatar),
+                  e("div", { className: "relative shrink-0" },
+                    e("div", {
+                      className: "w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold text-white",
+                      style: { background: s.color }
+                    }, s.avatar),
+                    (s.online || s.user_online) ? e("span", {
+                      className: "absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-emerald-400",
+                      style: { boxShadow: "0 0 0 2px #0a1020" },
+                      title: "在线"
+                    }) : null
+                  ),
                   e("div", { className: "flex-1 min-w-0" },
                     e("div", { className: "flex items-center gap-1.5" },
                       e("span", { className: "text-[11px] font-medium text-white" }, s.name),
+                      (s.online || s.user_online) ? e("span", { className: "text-[8px] text-emerald-400" }, "● 在线") : null,
                       (s.isAdmin || s.role === "admin" || s.role === "owner") && e("span", { className: "text-[8px] uppercase tracking-wider px-1 py-0.5 rounded bg-purple-500/15 text-purple-300" }, "Admin")
                     ),
                     e("div", { className: "text-[10px] text-slate-500" }, `${s.title} · ${s.focus}`)
@@ -98,13 +106,20 @@ export function TeamModal({ user, staff, groups, onClose, onImpersonate, t, onOp
               staff.filter((s: any) => s.id !== user.id).map((s: any) => e("div", {
                 key: s.id, className: "flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-white/[0.04]"
               },
-                e("div", {
-                  className: "shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold text-white",
-                  style: { background: s.color }
-                }, s.avatar),
+                e("div", { className: "relative shrink-0" },
+                  e("div", {
+                    className: "w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold text-white",
+                    style: { background: s.color }
+                  }, s.avatar),
+                  (s.online || s.user_online) ? e("span", {
+                    className: "absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full bg-emerald-400",
+                    style: { boxShadow: "0 0 0 1.5px #0a1020" },
+                    title: "在线"
+                  }) : null
+                ),
                 e("div", { className: "flex-1 min-w-0" },
                   e("div", { className: "text-[11px] text-white" }, s.name),
-                  e("div", { className: "text-[10px] text-slate-500" }, s.title)
+                  (s.online || s.user_online) ? e("div", { className: "text-[10px] text-emerald-400" }, "在线") : e("div", { className: "text-[10px] text-slate-500" }, s.title)
                 ),
                 e("button", { className: "text-[10px] text-white/25", disabled: true, title: "提及待接入" }, t("@ 提及"))
               ))

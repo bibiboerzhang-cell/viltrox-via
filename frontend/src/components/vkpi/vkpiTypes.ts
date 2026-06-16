@@ -584,6 +584,7 @@ export interface VkpiStaffMember {
   lastActiveAt?: string;
   invitedAt?: string;
   acceptedAt?: string;
+  online?: boolean;
 }
 
 export interface VkpiKpiLedgerEntry {
