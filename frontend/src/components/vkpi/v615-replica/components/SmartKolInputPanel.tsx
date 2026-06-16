@@ -20,6 +20,9 @@ type Mode = "idle" | "url" | "text";
 type State = "idle" | "loading" | "ready" | "executing" | "error";
 type Row = Record<string, unknown>;
 const PENDING_SEARCH_SESSION_KEY = "vkpi:pendingKolSearchSessionId";
+// 刀2·流2 路A:贴账号 URL 自动分析的代表视频条数(dossier 据此出 LLM 账号分)。2 = 信号与成本/排队的折中;
+// 想更深可在抽屉点「发现并分析全部视频」。代表视频走交互优先(并发A tier0)插队,不被批量饿死。
+const PROFILE_REP_VIDEO_LIMIT = 2;
 // 搜索展示态持久化:把当前激活搜索的 ①②③ 显示态存进 sessionStorage,挂载时回填。
 // 即便父级 90s/10min 刷新偶发重挂本面板(useState 归零),也能恢复结果,不让用户的搜索凭空消失。
 const ACTIVE_SEARCH_DISPLAY_KEY = "vkpi:activeKolSearchDisplay";
@@ -1586,10 +1589,12 @@ export function SmartKolInputPanel({
     }
   };
 
-  // URL 执行核心:source 显式传当次结果(避免 setUrlResult 后读到旧 state),auto=true 为 profile 自动跑。
-  // profile 用 mode "profile_basics"(非 "auto")——只抓基础资料 + 入库,绝不触发 representative_video
-  // final_v1 视频深析(后端 _profile_should_enqueue_representative_videos 仅认 auto/profile_with_video/
-  // account_deep);video 仍走 video_deep + 手动确认。V6 Fit 由 write_kol_profile_basics 白名单兜底不触碰。
+  // URL 执行核心:source 显式传当次结果(避免 setUrlResult 后读到旧 state),auto=true 为自动跑。
+  // 刀2·流2 路A(2026-06-16):profile 改用 mode "profile_with_video"(原 profile_basics)——抓基础资料 +
+  // 入库 + 自动跑 PROFILE_REP_VIDEO_LIMIT 条代表视频 final_v1,dossier 才出真 LLM 账号分(原 profile_basics
+  // 不分析视频→llm_v6_fit=None,只有空 dossier)。后端 _profile_should_enqueue_representative_videos 认
+  // profile_with_video;TikTok 代表视频暂被后端 skip(resolver 未修)。video 仍走 video_deep。
+  // V6 Fit 由 write_kol_profile_basics 白名单兜底不触碰 viltrox_fit_score。
   const runUrlExecute = async (source: VkpiKolUrlDeepCrawlResponse, opts: { auto?: boolean } = {}) => {
     const query = cleanText(source.url?.input || input);
     if (!apiToken || !query) return;
@@ -1597,11 +1602,13 @@ export function SmartKolInputPanel({
     setState("executing");
     setError("");
     try {
-      const executeMode = source.url_type === "video" ? "video_deep" : "profile_basics";
+      const isVideo = source.url_type === "video";
+      const executeMode = isVideo ? "video_deep" : "profile_with_video";
       const sessionId = sessionIdFrom(source.search_session);
       const response = await deepCrawlKolUrl(apiToken, query, true, {
         maxPosts: typeof sourceProfileFlow.max_posts === "number" ? sourceProfileFlow.max_posts : 3,
         mode: executeMode,
+        ...(isVideo ? {} : { representativeVideoLimit: PROFILE_REP_VIDEO_LIMIT }),
         sessionId,
         createSession: !sessionId,
         source: opts.auto ? "smart_kol_input_auto" : "smart_kol_input",

@@ -514,7 +514,7 @@ export async function deepCrawlKolUrl(
   token: string,
   url: string,
   execute = false,
-  params: { maxPosts?: number; mode?: string; timeoutMs?: number; sessionId?: number; createSession?: boolean; source?: string; forceFullHistory?: boolean } = {},
+  params: { maxPosts?: number; mode?: string; timeoutMs?: number; sessionId?: number; createSession?: boolean; source?: string; forceFullHistory?: boolean; representativeVideoLimit?: number } = {},
 ): Promise<VkpiKolUrlDeepCrawlResponse> {
   const body: Row = {
     url,
@@ -523,6 +523,8 @@ export async function deepCrawlKolUrl(
   if (typeof params.maxPosts === "number") body.max_posts = params.maxPosts;
   if (params.mode) body.mode = params.mode;
   if (params.forceFullHistory) body.force_full_history = true;  // 项⑥:account_deep 重跑全量历史视频
+  // 刀2·流2 路A:profile_with_video 模式下自动跑 N 条代表视频 final_v1,dossier 才出真 LLM 账号分。
+  if (typeof params.representativeVideoLimit === "number") body.representative_video_limit = params.representativeVideoLimit;
   if (typeof params.sessionId === "number") body.session_id = params.sessionId;
   if (typeof params.createSession === "boolean") body.create_session = params.createSession;
   if (params.source) body.source = params.source;
