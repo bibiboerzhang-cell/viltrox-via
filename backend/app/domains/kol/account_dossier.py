@@ -340,6 +340,32 @@ def get_kol_account_dossier(
         for video in videos
     ]
     marketing_scores = [score for score in scores if score is not None]
+    # C3(2026-06-16):内容质量均分/峰值,供 KOL 详情「精准分析度」头部一眼看懂(原只聚合了投放价值)。
+    cq_raw = [
+        _num(_as_dict(video.get("analysis", {})).get("scores", {}).get("content_quality_score", {}).get("score")
+             if isinstance(_as_dict(video.get("analysis", {})).get("scores", {}).get("content_quality_score"), dict)
+             else _as_dict(video.get("analysis", {})).get("scores", {}).get("content_quality_score"))
+        for video in videos
+    ]
+    content_quality_scores = [score for score in cq_raw if score is not None]
+    # 一句话总评:取主深析的建议首句(已有 _deep_recommendations,零 LLM 成本)。
+    _rec = _deep_recommendations(primary_deep)
+    one_line_verdict = ""
+    if isinstance(_rec, str):
+        one_line_verdict = _rec.strip()
+    elif isinstance(_rec, list) and _rec:
+        one_line_verdict = str(_rec[0]).strip()
+    one_line_verdict = one_line_verdict[:160]
+    # 兜底:无建议文案时用分数合成精准一句话(始终有值,符合「精准分析度」)。
+    if not one_line_verdict and (content_quality_scores or marketing_scores):
+        _parts = []
+        if content_quality_scores:
+            _parts.append(f"内容质量均分 {round(sum(content_quality_scores) / len(content_quality_scores))}")
+        if marketing_scores:
+            _parts.append(f"投放价值均分 {round(sum(marketing_scores) / len(marketing_scores))}")
+        if analyzed_count:
+            _parts.append(f"已深析 {analyzed_count} 条")
+        one_line_verdict = " · ".join(_parts)
     events = _event_items(videos=videos, crawl_runs=crawl_runs, deep_items=deep_items)[:safe_event_limit]
     gaps = []
     if not crawl_runs:
@@ -390,12 +416,15 @@ def get_kol_account_dossier(
                 "last_video_at": last_video_at,
                 "marketing_value_score_avg": round(sum(marketing_scores) / len(marketing_scores), 3) if marketing_scores else None,
                 "marketing_value_score_max": max(marketing_scores) if marketing_scores else None,
+                "content_quality_score_avg": round(sum(content_quality_scores) / len(content_quality_scores), 3) if content_quality_scores else None,
+                "content_quality_score_max": max(content_quality_scores) if content_quality_scores else None,
             },
             "judgment": {
                 "primary_llm_v6_fit": primary_deep.get("llm_v6_fit"),
                 "primary_source_evidence_id": primary_deep.get("source_evidence_id"),
                 "recommendations": _deep_recommendations(primary_deep),
                 "risk": _deep_risk(primary_deep),
+                "one_line_verdict": one_line_verdict,
             },
             "videos": videos,
             "llm_deep_analysis": deep,

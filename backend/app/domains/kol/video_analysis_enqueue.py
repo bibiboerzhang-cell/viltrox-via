@@ -379,19 +379,26 @@ def list_kol_all_evidence_ids(conn: Any, kol_pool_id: int) -> list[int]:
     return out
 
 
+# 「KOL深度分析理解」每号最多分析的视频条数(2026-06-16 裁令:全视频→最近20条,控成本+队列)。
+KOL_DEEP_ANALYSIS_VIDEO_LIMIT = 20
+
+
 def enqueue_all_kol_videos(
     *,
     kol_pool_id: int,
     staff: dict[str, Any] | None = None,
+    limit: int = KOL_DEEP_ANALYSIS_VIDEO_LIMIT,
 ) -> dict[str, Any]:
-    """「全视频跑」:该 KOL 的全部视频证据各入队一条 final_v1(非单一代表作),
+    """「KOL深度分析理解」:该 KOL 最近 N 条(默认20)视频证据各入队一条 final_v1,
     供发完后综合评估(账号档案 worker 链路会聚合已分析视频)。已 ready / 在队的自动跳过。
     红线:只写 apify_jobs,零触 viltrox_fit_score。"""
     pool_id = _int_or_none(kol_pool_id)
     if not pool_id:
         raise ValueError("kol_pool_id required")
     conn = get_conn()
-    evidence_ids = list_kol_all_evidence_ids(conn, pool_id)
+    # 取证按 e.id DESC,切最近 N 条(用户裁令:全视频→最近20条)。
+    cap = max(1, int(limit or KOL_DEEP_ANALYSIS_VIDEO_LIMIT))
+    evidence_ids = list_kol_all_evidence_ids(conn, pool_id)[:cap]
     if not evidence_ids:
         return {
             "status": "no_evidence",
