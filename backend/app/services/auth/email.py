@@ -56,7 +56,7 @@ def send_verification_email(user_id: int, email: str, name: str) -> bool:
 
 def send_password_reset_email(user_id: int, email: str, name: str) -> bool:
     token = create_email_token(user_id, "reset_password")
-    url = f"{SITE_URL}?reset_token={token}"
+    url = f"{SITE_URL.rstrip('/')}/reset?reset_token={token}"  # 2026-06-16:指向 /reset 路由(前端消费 token)
     html = (f'<div style="font-family:Inter,Arial,sans-serif;max-width:520px;margin:0 auto;padding:32px 24px">'
             f'<p style="font-size:20px;font-weight:900;color:#ff8f2a">VILTROX Creator Platform</p>'
             f'<h2 style="font-size:22px;font-weight:800">Reset your password</h2>'

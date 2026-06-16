@@ -71,6 +71,13 @@ export default function AdminRoute() {
     return () => window.removeEventListener("hashchange", handleHashChange);
   }, []);
 
+  // 2026-06-16 修复改密码:重置链接旧格式是根路径 `/?reset_token=`,前端没路由消费它(落登录页)。
+  // 这里把它重定向到 /reset 路由去设新密码。新格式 /reset?reset_token= 直接命中,不经过这里。
+  useEffect(() => {
+    const rt = new URLSearchParams(window.location.search).get("reset_token");
+    if (rt) window.location.replace(`/reset?reset_token=${encodeURIComponent(rt)}`);
+  }, []);
+
   if (isGlassDemoRequest(hashPage)) {
     return <GlassDemoPage userName="Jianbo" userRole="Marketing Director" />;
   }

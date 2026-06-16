@@ -164,7 +164,9 @@ def _staff_activation_url(token: str) -> str:
 
 def _password_reset_url(token: str) -> str:
     site_url = os.environ.get("SITE_URL", "http://localhost:5173").strip() or "http://localhost:5173"
-    return f"{site_url.rstrip('/')}?reset_token={token}"
+    # 2026-06-16:重置链接指向 /reset 路由(前端在那消费 reset_token 设新密码);
+    # 旧的根路径 ?reset_token= 前端无路由消费会落登录页(AdminRoute 已加重定向兜底)。
+    return f"{site_url.rstrip('/')}/reset?reset_token={token}"
 
 
 def _token_hint(token: str) -> str:

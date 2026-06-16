@@ -145,6 +145,14 @@ export async function createStaffPasswordResetLink(token: string, staffId: strin
   );
 }
 
+// 用重置 token + 新密码完成重置(无需登录态)。后端 /api/auth/reset-password 返回 {status,message}。
+export async function resetPassword(resetToken: string, password: string) {
+  return apiFetch<Row>(
+    "/api/auth/reset-password",
+    { method: "POST", body: jsonBody({ token: resetToken, password }) },
+  );
+}
+
 export async function getStaffProfile(token: string, staffId: string, window = "month") {
   return apiFetch<VkpiStaffProfile>(
     `/api/marketing/staff/${encodeURIComponent(staffId)}/profile?window=${encodeURIComponent(window)}&limit=120`,
