@@ -84,6 +84,23 @@ export async function getChannelPostComments(
   );
 }
 
+// 每日官号分析报告:读最新一份(播放/评论/画质/趋势/建议),与「立即生成」手动触发。
+export async function getOfficialDailyReport(token: string, channelId: number | string) {
+  return apiFetch<Row>(
+    `/api/admin/vkpi/channels/official-daily-report?channel_id=${encodeURIComponent(String(channelId))}`,
+    { timeoutMs: 8000 },
+    token,
+  );
+}
+
+export async function runOfficialDailyReport(token: string, channelId: number | string) {
+  return apiFetch<Row>(
+    `/api/admin/vkpi/channels/official-daily-report/run?channel_id=${encodeURIComponent(String(channelId))}`,
+    { method: "POST", timeoutMs: 120000 },
+    token,
+  );
+}
+
 export async function collectChannelPostComments(
   token: string,
   channelId: number | string,
