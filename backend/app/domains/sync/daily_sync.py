@@ -50,6 +50,10 @@ from app.domains import channels
 logger = get_logger(__name__)
 _GUARD_WRITE_SYNC_RUN = _guard._write_sync_run
 _GUARD_UPSERT_SYNC_HEALTH_ALERT = _guard._upsert_sync_health_alert
+# 开局捕获原始实现:_blocking_sync_run 会把 _guard._latest_sync_ack 临时改指向本模块的
+# wrapper,若 wrapper 再读 live 的 _guard._latest_sync_ack 就会自调成无限递归(RecursionError,
+# 实锤每日 official sync 崩)。与上面 _GUARD_WRITE_SYNC_RUN 同款,捕获原函数后只调它。
+_GUARD_LATEST_SYNC_ACK = _guard._latest_sync_ack
 
 
 def _with_guard_conn(func, *args, **kwargs):
@@ -70,7 +74,9 @@ def _sync_health_from_summary(summary: dict[str, Any]) -> dict[str, Any]:
 
 
 def _latest_sync_ack(scope: str = "daily_incremental_sync") -> dict[str, Any] | None:
-    return _with_guard_conn(_guard._latest_sync_ack, scope)
+    # 调捕获的原函数 _GUARD_LATEST_SYNC_ACK,而非 live 的 _guard._latest_sync_ack
+    # (后者在 _blocking_sync_run 里已被改指向本 wrapper → 会自递归)。conn 仍由 _with_guard_conn 切换。
+    return _with_guard_conn(_GUARD_LATEST_SYNC_ACK, scope)
 
 
 def _blocking_sync_run(scope: str = "daily_incremental_sync") -> dict[str, Any] | None:
