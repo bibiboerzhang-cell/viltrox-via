@@ -214,6 +214,43 @@ def official_channel_matrix(
     return channels.official_account_matrix(staff=staff, view_as_staff_id=view_as_staff_id, limit=limit)
 
 
+@router.get("/channels/official-daily-report")
+def official_channel_daily_report(
+    channel_id: int,
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    """读端:某官号最新一份每日分析报告(播放/评论/画质/趋势/建议)。无则 available=False。"""
+    from app.domains.channels import official_daily_report
+
+    rep = official_daily_report.latest_report_for_channel(int(channel_id))
+    if not rep:
+        return {"available": False, "channel_id": int(channel_id), "reason": "no_report_yet"}
+    return {"available": True, **rep}
+
+
+@router.post("/channels/official-daily-report/run")
+def official_channel_daily_report_run(
+    channel_id: int | None = None,
+    staff=Depends(require_tab("vkpi", "write")),
+):
+    """手动触发:不传 channel_id 跑全部 18 官号;传则只跑该号(运营「立即生成今日报告」)。预算闸硬限。"""
+    from datetime import date as _date
+
+    from app.domains.channels import official_daily_report
+    from app.db.connection import get_conn
+
+    rdate = _date.today().isoformat()
+    if channel_id:
+        row = get_conn().execute(
+            "SELECT id, platform, account_handle, account_display_name FROM vkpi_employee_channels WHERE id = ? AND deleted_at IS NULL",
+            (int(channel_id),),
+        ).fetchone()
+        if not row:
+            return {"ok": False, "reason": "channel_not_found"}
+        return {"ok": True, "result": official_daily_report.generate_one(dict(row), report_date=rdate, round_key="manual")}
+    return {"ok": True, "result": official_daily_report.generate_official_daily_reports(round_key="manual", report_date=rdate)}
+
+
 @router.get("/channels/metrics-filled")
 def official_channel_metrics_filled(
     channel_id: int | None = None,

@@ -38,6 +38,7 @@ except ImportError:
 
 _scheduler: Optional[Any] = None
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
+US_PACIFIC_TZ = ZoneInfo("America/Los_Angeles")  # 每日官号报告第二轮(美西早6点,自动随 PDT/PST 切换)
 
 
 # ──────────────────────────────────────────────
@@ -597,6 +598,27 @@ async def job_vkpi_ai_today_hot():
         logger.exception("scheduler.vkpi_ai_today_hot_failed")
 
 
+async def job_vkpi_official_daily_report(round_key: str = "daily"):
+    """每日官号分析报告(每天2轮:中国早8/美西早6):逐 18 官号 LLM 合成
+    播放/评论/画面质量/数据趋势/提升建议。config-gate(scheduler_tasks.vkpi_official_daily_report);
+    走预算闸 cron:official_daily_report(硬上限$4/日)+ claude 代理。"""
+    if not _scheduler_task_enabled("vkpi_official_daily_report"):
+        return
+    try:
+        import asyncio
+        from app.domains.channels import official_daily_report
+
+        result = await asyncio.to_thread(
+            official_daily_report.generate_official_daily_reports, round_key=round_key
+        )
+        logger.info(
+            "scheduler.vkpi_official_daily_report",
+            extra={"round": round_key, **{k: result.get(k) for k in ("ok", "skipped", "blocked", "failed")}},
+        )
+    except Exception:
+        logger.exception("scheduler.vkpi_official_daily_report_failed")
+
+
 async def start_scheduler() -> None:
     """在 lifespan startup 调用"""
     global _scheduler
@@ -775,6 +797,26 @@ async def start_scheduler() -> None:
         trigger=CronTrigger(hour=8, minute=0, timezone=CHINA_TZ),
         id="vkpi_ai_today_hot",
         name="AI Today hot topics (08:00 China, LLM, budget-gated)",
+        max_instances=1,
+        coalesce=True,
+    )
+    # ── 每日官号分析报告 · 每天2轮(用户2026-06-16裁令)── config-gate(scheduler_tasks.vkpi_official_daily_report)。
+    # 第1轮 中国早 8:30(排在 morning_sync 08:00 刷完后);第2轮 美西早 6:30(覆盖美洲市场过夜活跃)。
+    _scheduler.add_job(
+        job_vkpi_official_daily_report,
+        trigger=CronTrigger(hour=8, minute=30, timezone=CHINA_TZ),
+        id="vkpi_official_daily_report_asia",
+        name="Official daily report · Asia round (08:30 China, LLM, budget-gated)",
+        args=["asia_0830cn"],
+        max_instances=1,
+        coalesce=True,
+    )
+    _scheduler.add_job(
+        job_vkpi_official_daily_report,
+        trigger=CronTrigger(hour=6, minute=30, timezone=US_PACIFIC_TZ),
+        id="vkpi_official_daily_report_americas",
+        name="Official daily report · Americas round (06:30 US-Pacific, LLM, budget-gated)",
+        args=["americas_0630pt"],
         max_instances=1,
         coalesce=True,
     )
