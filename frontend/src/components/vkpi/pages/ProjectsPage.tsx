@@ -3,6 +3,7 @@ import type { VkpiDashboardData, VkpiKolOption, VkpiPageKey, VkpiProjectRow, Vkp
 import { clearProjectFocus, readProjectFocus, type IntelligenceProjectFocusPayload } from '../intelligence/intelligenceProjectFocus';
 import { useProjectDetail } from '../hooks/useProjectDetail';
 import { addKolsToProject, advanceProjectKol, getAvailableProjectKols, submitProjectKolActionStub, updateProjectFollowStatus, updateProjectKolShipping, updateProjectStar } from '../../../domains/projects';
+import { listProductCatalog } from '../../../domains/products';
 import { buildKolOptions } from '../../../domains/kol';
 import { PageShell } from './PageShell';
 import { ProjectCampaignBoard } from './projects/ProjectCampaignBoard';
@@ -115,12 +116,36 @@ export function ProjectsPage({
     if (openProjectId) setDetailProjectId(openProjectId);
   }, [openProjectId]);
 
+  // P-SKU-2(2026-06-16):接真 369 SKU 库(原 datalist 接的 productCosts/productLaunches 实库为空)。
+  // 选 SKU → 自动带出价格(catalogChoices 带 price)。非 manager 拉不到时静默回落原文本输入。
+  const [skuCatalog, setSkuCatalog] = useState<Array<{ productSku: string; productName: string; price: number | null }>>([]);
+  useEffect(() => {
+    if (!createOpen || !apiToken) return;
+    let cancelled = false;
+    void listProductCatalog(apiToken, { limit: 500 })
+      .then((resp: any) => {
+        if (cancelled) return;
+        const rows = Array.isArray(resp?.products) ? resp.products : [];
+        setSkuCatalog(rows.map((r: any) => ({
+          productSku: String(r.sku || r.product_sku || ""),
+          productName: String(r.marketing_name || r.model_name || r.product_name || r.sku || ""),
+          price: r.price_usd === null || r.price_usd === undefined || r.price_usd === "" ? null : Number(r.price_usd),
+        })).filter((x: any) => x.productSku));
+      })
+      .catch(() => { if (!cancelled) setSkuCatalog([]); });
+    return () => { cancelled = true; };
+  }, [createOpen, apiToken]);
+
   const productChoices = useMemo(() => {
-    const bySku = new Map<string, { id: string; productSku: string; productName: string; sourceLabel: string }>();
+    const bySku = new Map<string, { id: string; productSku: string; productName: string; sourceLabel: string; price?: number | null }>();
+    // 真 SKU 库优先(带价格),再补旧来源
+    skuCatalog.forEach((item) => {
+      bySku.set(item.productSku, { id: item.productSku, productSku: item.productSku, productName: item.productName, sourceLabel: '产品库', price: item.price });
+    });
     data.productCosts
       .filter((item) => item.active !== false)
       .forEach((item) => {
-        if (!item.productSku) return;
+        if (!item.productSku || bySku.has(item.productSku)) return; // 不覆盖产品库(含价格)
         bySku.set(item.productSku, {
           id: item.id || item.productSku,
           productSku: item.productSku,
@@ -139,7 +164,7 @@ export function ProjectsPage({
       });
     });
     return Array.from(bySku.values()).sort((a, b) => a.productName.localeCompare(b.productName));
-  }, [data.productCosts, data.productLaunches]);
+  }, [data.productCosts, data.productLaunches, skuCatalog]);
 
   // SKU / 产品名 → 单价(USD),供费用 tab 在 ledger 无产品成本行时做估算
   const productUnitCosts = useMemo(() => {
@@ -163,6 +188,12 @@ export function ProjectsPage({
       item.productSku.toLowerCase() === normalized
     ));
   }, [productChoices, productName]);
+
+  // P-SKU-2:命中 SKU 且库里有价 → 自动带出价格(免手输);未命中(自由文本)不动用户已输入。
+  useEffect(() => {
+    const p = (matchedProduct as any)?.price;
+    if (p != null && Number.isFinite(Number(p))) setPrice(`$${Number(p)}`);
+  }, [matchedProduct]);
 
   useEffect(() => {
     const focus = readProjectFocus();
@@ -477,7 +508,7 @@ export function ProjectsPage({
               <label>主推产品
                 <input list="vkpi-project-product-options" value={productName} onChange={(event) => setProductName(event.target.value)} placeholder="35mm F1.2 LAB FE" />
                 <datalist id="vkpi-project-product-options">
-                  {productChoices.map((product) => <option key={product.id || product.productSku} value={product.productName}>{product.productSku} · {product.sourceLabel}</option>)}
+                  {productChoices.map((product) => <option key={product.id || product.productSku} value={product.productName}>{product.productSku} · {product.sourceLabel}{(product as any).price != null ? ` · $${(product as any).price}` : ''}</option>)}
                 </datalist>
               </label>
               <label>价格
