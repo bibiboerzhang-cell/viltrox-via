@@ -5,11 +5,13 @@ import { Avatar } from "../../shared/Avatar";
 import { InfoBlock } from "../../shared/InfoBlock";
 import { BOARD_PERMISSION_MODULES, STAFF_ASSIGNABLE_PERMISSION_TEMPLATES, STAFF_PERMISSION_MODULES, STAFF_PERMISSION_TEMPLATES, boardLevelFor, type StaffPermissionMap } from "./staffPermissionTemplates";
 
+// 项⑦ 简化(2026-06-16):4 档「无/只读/可写/管理」→ 3 态「无/显示/可使用」。
+// 显示=read(能看,数据隔离已限自己),可使用=write(能操作)。后端 require_tab(tab,read/write)
+// 真 enforce(非假)。管理(admin)= owner 专属,由 ownerOnly 模块 + system gate 兜底,不在此选。
 const LEVELS: Array<{ key: VkpiPermissionLevel; label: string }> = [
   { key: "none", label: "无" },
-  { key: "read", label: "只读" },
-  { key: "write", label: "可写" },
-  { key: "admin", label: "管理" },
+  { key: "read", label: "显示" },
+  { key: "write", label: "可使用" },
 ];
 
 function normalizeLevel(value: unknown): VkpiPermissionLevel {
