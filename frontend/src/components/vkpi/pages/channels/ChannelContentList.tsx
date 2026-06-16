@@ -267,6 +267,20 @@ function CommentModal({
   );
 }
 
+// 项④ 日涨跌幅:数据已在 useOfficialChannelMatrix 解析(followersDelta/viewsDelta/postsDelta),
+// 此前 UI 没用;在累计值旁加角标。>0 绿↑ / <0 红↓ / =0 或 null 不显(gapfill 补齐日 delta=0 要跳过)。
+function deltaTag(n: number | undefined | null) {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v === 0) return null;
+  const up = v > 0;
+  const a = Math.abs(v);
+  const fmt = a >= 1000 ? (a / 1000).toFixed(a >= 10000 ? 0 : 1) + 'K' : String(a);
+  return (
+    <span style={{ color: up ? '#34d399' : '#fb7185', fontSize: '10.5px', marginLeft: '4px', fontWeight: 600 }}
+      title="较上一日">{up ? '↑' : '↓'}{fmt}</span>
+  );
+}
+
 export function ChannelContentList({ account, apiToken }: { account?: OfficialChannelAccount; apiToken?: string }) {
   const { waitForTask } = useTaskCenter();
   const [sort, setSort] = useState('latest');
@@ -424,10 +438,10 @@ export function ChannelContentList({ account, apiToken }: { account?: OfficialCh
           <div>
             <span>内容层</span>
             <h2>{account.displayName}</h2>
-            <p>@{account.handle || '-'} · {formatter.format(account.followers)} 粉丝 · {formatter.format(account.postsCount)} 内容</p>
+            <p>@{account.handle || '-'} · {formatter.format(account.followers)} 粉丝{deltaTag((account as any).followersDelta)} · {formatter.format(account.postsCount)} 内容{deltaTag((account as any).postsDelta)}</p>
           </div>
         </div>
-        <strong title={account.viewsUnavailable ? account.viewsUnavailableReason : undefined}>{accountViewsValue(account)}</strong>
+        <strong title={account.viewsUnavailable ? account.viewsUnavailableReason : undefined}>{accountViewsValue(account)}{deltaTag((account as any).viewsDelta)}</strong>
       </header>
       <div className="vkpi-channel-content-toolbar">
         <div className="vkpi-channel-content-toolbar__sort" aria-label="内容排序">

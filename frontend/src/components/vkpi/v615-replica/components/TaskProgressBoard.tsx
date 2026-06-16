@@ -280,6 +280,7 @@ export function TaskProgressBoard({ apiToken = "" }) {
   const [loading, setLoading] = useState(false);
   // 每任务重试态:id → 'loading' | 'done' | 错误串。重试成功后 refreshQueue 让该任务离开失败桶。
   const [retrying, setRetrying] = useState<Record<string, any>>({});
+  const [showAllQueue, setShowAllQueue] = useState(false);
   const refreshQueue = useCallback(async () => {
     if (!apiToken || (typeof document !== "undefined" && document.visibilityState === "hidden")) return;
     setLoading(true);
@@ -371,9 +372,10 @@ export function TaskProgressBoard({ apiToken = "" }) {
     ...lane,
     tasks: (laneTasks as any)[lane.key] || [],
   }));
-  // 主管裁令(2026-06-12):排队要能看清"前面还有谁"——放宽到 5 条(其余以 +N 计数)。
-  const visibleQueue = queuedTasks.slice(0, 5);
-  const remainingQueue = Math.max(0, queueTotal - visibleQueue.length);
+  // 主管裁令(2026-06-12):排队要能看清"前面还有谁"——默认 5 条;点「+N 更多」展开看全部(showAllQueue)。
+  const visibleQueue = showAllQueue ? queuedTasks : queuedTasks.slice(0, 5);
+  // queueTotal 受后端 LIMIT 50 截断(counts.queued 最多 ~49);展开时以本地实际拿到的 queuedTasks 为准。
+  const remainingQueue = Math.max(0, queueTotal - Math.min(visibleQueue.length, queuedTasks.length));
   // 账号分析等队列任务 ~8 秒即完成,若按 session 过滤会"一闪而过"再无痕迹——
   // 即使 payload 暂缺 search_session_id 也保底留在「最近完成」(无 session 时不可点开)。
   const visibleRecent = recentTasks.filter((task) => taskCanOpen(task) || task?.kind === "账号分析").slice(0, 2);
@@ -427,7 +429,7 @@ export function TaskProgressBoard({ apiToken = "" }) {
         ),
         e("span", { className: "text-[11px] font-medium text-white/60 tabular-nums" }, queueTotal)
       ),
-      e("div", { className: "mt-1.5 flex flex-col gap-1" },
+      e("div", { className: "mt-1.5 flex flex-col gap-1" + (showAllQueue ? " max-h-64 overflow-y-auto pr-1" : "") },
         visibleQueue.length
           ? visibleQueue.map((task, index) => e("button", {
             key: task.id,
@@ -446,11 +448,20 @@ export function TaskProgressBoard({ apiToken = "" }) {
               taskRetryText(task) && e("span", { className: "block truncate text-[10px] text-white/30" }, taskRetryText(task))
             )
           ))
-          : e("span", { className: "text-[11px] text-white/25" }, "—"),
-        remainingQueue > 0 && e("div", { className: "flex min-w-0 items-center gap-1.5 opacity-45" },
-          e("span", { className: "w-[18px] shrink-0 text-[10px] text-white/40 tabular-nums" }, `+${remainingQueue}`),
-          e("span", { className: "truncate text-[11px] text-white/60" }, "更多任务…")
-        )
+          : e("span", { className: "text-[11px] text-white/25" }, "—")
+      ),
+      // 「+N 更多任务」可点展开/收起全部排队(此前是死文字);queueTotal 受后端 LIMIT 50 截断。
+      (remainingQueue > 0 || showAllQueue) && (queuedTasks.length > 5) && e("button", {
+        type: "button",
+        onClick: () => setShowAllQueue((v) => !v),
+        className: "mt-1 flex w-full items-center gap-1.5 text-left text-white/45 hover:text-white/70 transition-colors"
+      },
+        showAllQueue
+          ? e("span", { className: "text-[10.5px]" }, "收起 ▲")
+          : e(React.Fragment, null,
+              e("span", { className: "w-[18px] shrink-0 text-[10px] text-white/40 tabular-nums" }, `+${remainingQueue}`),
+              e("span", { className: "truncate text-[11px]" }, `更多任务…(展开看全部 ${queuedTasks.length} 条) ▼`)
+            )
       )
     ),
     // 2026-06-12 波5 R7:无 target 的条目不再假装可点 — 按钮禁用、「可打开」标签按实际情况显示

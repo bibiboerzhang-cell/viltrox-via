@@ -14,7 +14,7 @@ import {
   type VkpiKolUrlDeepCrawlResponse,
 } from "../../../../domains/kol";
 import { proxiedImageUrl } from "../../shared/mediaProxy";
-import { getKolVideoAnalysisCache, type VkpiKolVideoAnalysisCacheEntry } from "../../../../services/vkpi/kolPool-api";
+import { enqueueAllKolVideos, getKolVideoAnalysisCache, type VkpiKolVideoAnalysisCacheEntry } from "../../../../services/vkpi/kolPool-api";
 
 type Mode = "idle" | "url" | "text";
 type State = "idle" | "loading" | "ready" | "executing" | "error";
@@ -1036,6 +1036,31 @@ function UrlSummary({
   ].some((value) => cleanText(value));
   const canOpenProfile = !isVideo && Boolean(onOpenProfile);
 
+  // 项⑥:profile 默认只抓资料(profile_basics),不发现视频。这个按钮用 account_deep+force_full_history
+  // 把该 KOL 全部历史视频 materialize,再 enqueueAllKolVideos 跑 final_v1。
+  const [fullVideoState, setFullVideoState] = useState<{ status: string; msg: string }>({ status: "idle", msg: "" });
+  const matchedKolId = (result as any).matched_kol_pool_id;
+  const discoverAllVideos = async () => {
+    const url = cleanText(result.url?.input);
+    if (!apiToken || !url || fullVideoState.status === "loading") return;
+    setFullVideoState({ status: "loading", msg: "正在发现该 KOL 全部历史视频…" });
+    try {
+      const r = await deepCrawlKolUrl(apiToken, url, true, {
+        mode: "account_deep", forceFullHistory: true, maxPosts: 120,
+        source: "smart_kol_input_full_video", timeoutMs: 300000,
+      });
+      const kid = (r as any).profile_flow?.kol_pool_id || matchedKolId;
+      if (kid) {
+        const enq = await enqueueAllKolVideos(apiToken, kid);
+        setFullVideoState({ status: "done", msg: `已发现并入队:${enq.queued ?? 0} 条 final_v1 排队中(进度见左侧任务板)` });
+      } else {
+        setFullVideoState({ status: "done", msg: "已发现视频并入库,稍后在抽屉查看" });
+      }
+    } catch (e: any) {
+      setFullVideoState({ status: "error", msg: e?.message ? String(e.message) : "全视频发现失败" });
+    }
+  };
+
   return (
     <div className="mt-3 rounded-lg border border-cyan-300/15 bg-cyan-950/[0.10] p-3">
       <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
@@ -1143,6 +1168,16 @@ function UrlSummary({
               : (isVideo ? "视频分析完成，已入库" : "资料已抓取并入库")}
             {latency ? ` · 耗时 ${latency}` : ""}
           </span>
+          {!isVideo ? (
+            <button
+              type="button"
+              disabled={fullVideoState.status === "loading"}
+              onClick={() => void discoverAllVideos()}
+              className="shrink-0 rounded border border-cyan-300/30 bg-cyan-400/[0.12] px-2 py-0.5 font-medium text-cyan-50 hover:bg-cyan-400/[0.2] disabled:opacity-50"
+            >
+              {fullVideoState.status === "loading" ? "发现中…" : "发现并分析全部视频"}
+            </button>
+          ) : null}
           {onOpenProfile && result.matched_kol_pool_id ? (
             <button
               type="button"
@@ -1153,6 +1188,11 @@ function UrlSummary({
             </button>
           ) : null}
         </div>
+      ) : null}
+      {fullVideoState.msg ? (
+        <div className={`mt-2 rounded-md border px-2 py-1.5 text-[10.5px] ${
+          fullVideoState.status === "error" ? "border-rose-300/20 bg-rose-500/[0.08] text-rose-100" : "border-cyan-300/20 bg-cyan-400/[0.08] text-cyan-100"
+        }`}>{fullVideoState.msg}</div>
       ) : null}
       {jobLastError ? (
         <div className="mt-2 rounded-md border border-rose-300/20 bg-rose-500/[0.08] px-2 py-1.5 text-[10.5px] text-rose-100">

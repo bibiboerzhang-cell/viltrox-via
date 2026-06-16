@@ -514,7 +514,7 @@ export async function deepCrawlKolUrl(
   token: string,
   url: string,
   execute = false,
-  params: { maxPosts?: number; mode?: string; timeoutMs?: number; sessionId?: number; createSession?: boolean; source?: string } = {},
+  params: { maxPosts?: number; mode?: string; timeoutMs?: number; sessionId?: number; createSession?: boolean; source?: string; forceFullHistory?: boolean } = {},
 ): Promise<VkpiKolUrlDeepCrawlResponse> {
   const body: Row = {
     url,
@@ -522,6 +522,7 @@ export async function deepCrawlKolUrl(
   };
   if (typeof params.maxPosts === "number") body.max_posts = params.maxPosts;
   if (params.mode) body.mode = params.mode;
+  if (params.forceFullHistory) body.force_full_history = true;  // 项⑥:account_deep 重跑全量历史视频
   if (typeof params.sessionId === "number") body.session_id = params.sessionId;
   if (typeof params.createSession === "boolean") body.create_session = params.createSession;
   if (params.source) body.source = params.source;

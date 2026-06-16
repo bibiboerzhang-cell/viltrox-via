@@ -52,6 +52,9 @@ export function StaffPermissionDrawer({
 }) {
   const [draft, setDraft] = useState<StaffPermissionMap>(() => initialPermissions(member));
   const [localMessage, setLocalMessage] = useState("");
+  // 项②:权限矩阵是「改草稿→点保存」两步式,用户点了级别按钮以为生效其实没落库 → 加「未保存」标记
+  // + 保存失败 toast(原 save() 吞异常,非 owner 403 时无任何反馈)。
+  const [dirty, setDirty] = useState(false);
   const [link, setLink] = useState<{ label: string; url: string; expires: number; sent?: boolean } | null>(null);
   const grouped = useMemo(() => {
     return STAFF_PERMISSION_MODULES.reduce<Record<string, typeof STAFF_PERMISSION_MODULES>>((acc, module) => {
@@ -70,10 +73,13 @@ export function StaffPermissionDrawer({
     setDraft(initialPermissions(member));
     setLocalMessage("");
     setLink(null);
+    setDirty(false);
   }, [member]);
 
   const updateLevel = (key: string, value: VkpiPermissionLevel) => {
     setDraft((current) => ({ ...current, [key]: value }));
+    setDirty(true);
+    setLocalMessage("");
   };
 
   const applyTemplate = (key: string) => {
@@ -88,8 +94,14 @@ export function StaffPermissionDrawer({
 
   const save = async () => {
     setLocalMessage("");
-    await onSavePermissions(member.id, draft);
-    setLocalMessage("权限已保存，刷新后仍会保留。");
+    try {
+      await onSavePermissions(member.id, draft);
+      setDirty(false);
+      setLocalMessage("权限已保存，刷新后仍会保留。");
+    } catch (err) {
+      // 原本吞异常 → 非 owner 403 时用户以为「点了无效」。明确提示。
+      setLocalMessage(err instanceof Error ? err.message : "保存失败：仅 owner 可修改权限");
+    }
   };
 
   const activation = async () => {
@@ -223,8 +235,12 @@ export function StaffPermissionDrawer({
         <div className="vkpi-staff-action-row">
           <button className="vkpi-button" type="button" disabled={busy} onClick={() => void activation()}>生成激活链接</button>
           <button className="vkpi-button" type="button" disabled={busy} onClick={() => void resetPassword()}>重置密码</button>
-          <button className="vkpi-button vkpi-button--primary" type="button" disabled={busy} onClick={() => void save()}>{busy ? "保存中" : "保存权限"}</button>
+          <button className="vkpi-button vkpi-button--primary" type="button" disabled={busy} onClick={() => void save()}
+            style={dirty ? { boxShadow: "0 0 0 2px #fbbf24", fontWeight: 700 } : undefined}>
+            {busy ? "保存中" : dirty ? "● 保存权限(未保存)" : "保存权限"}
+          </button>
         </div>
+        {dirty ? <div style={{ marginTop: 6, fontSize: "11px", color: "#fbbf24" }}>权限已改但未保存 —— 点「保存权限」才生效</div> : null}
         {link ? (
           <div className="vkpi-activation-link-panel">
             <div>
