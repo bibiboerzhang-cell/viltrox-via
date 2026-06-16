@@ -3,12 +3,17 @@ import type { VkpiStaffActivationLinkResponse, VkpiStaffPasswordResetLinkRespons
 import type { VkpiStaffMember } from "../../vkpiTypes";
 import { Avatar } from "../../shared/Avatar";
 import { InfoBlock } from "../../shared/InfoBlock";
-import { BOARD_PERMISSION_MODULES, STAFF_ASSIGNABLE_PERMISSION_TEMPLATES, STAFF_PERMISSION_MODULES, STAFF_PERMISSION_TEMPLATES, boardLevelFor, type StaffPermissionMap } from "./staffPermissionTemplates";
+import { STAFF_ASSIGNABLE_PERMISSION_TEMPLATES, STAFF_PERMISSION_MODULES, STAFF_PERMISSION_TEMPLATES, type StaffPermissionMap } from "./staffPermissionTemplates";
 
-// 项⑦ 简化(2026-06-16):4 档「无/只读/可写/管理」→ 3 态「无/显示/可使用」。
-// 显示=read(能看,数据隔离已限自己),可使用=write(能操作)。后端 require_tab(tab,read/write)
-// 真 enforce(非假)。管理(admin)= owner 专属,由 ownerOnly 模块 + system gate 兜底,不在此选。
-const LEVELS: Array<{ key: VkpiPermissionLevel; label: string }> = [
+// C7「两态·默认显示」(2026-06-16 用户拍板):去掉「无」,业务模块只在 显示/可使用 两态间选。
+// 显示=read(能看见、进得了系统),可使用=write(能操作)。后端 require_tab(tab,read/write) 真 enforce,
+// 且对非 owner 把这些模块兜底到至少 read(permissions.py DEFAULT_VISIBLE_KEYS),所以默认人人显示全部模块。
+// 敏感模块(ownerOnly:api_keys/models/members/restart)仍保留「无」可显式收回,且写级由后端降级兜底。
+const ASSIGN_LEVELS: Array<{ key: VkpiPermissionLevel; label: string }> = [
+  { key: "read", label: "显示" },
+  { key: "write", label: "可使用" },
+];
+const OWNER_LEVELS: Array<{ key: VkpiPermissionLevel; label: string }> = [
   { key: "none", label: "无" },
   { key: "read", label: "显示" },
   { key: "write", label: "可使用" },
@@ -21,10 +26,12 @@ function normalizeLevel(value: unknown): VkpiPermissionLevel {
 
 function initialPermissions(member: VkpiStaffMember): StaffPermissionMap {
   const current = member.permissions || {};
-  const base = Object.fromEntries(STAFF_PERMISSION_MODULES.map((module) => [module.key, normalizeLevel(current[module.key])])) as StaffPermissionMap;
+  // 两态默认显示:非 owner-only 模块 缺省/无 → 显示(read),与后端 floor 对齐;敏感模块保留真实值(可为无)。
+  const base = Object.fromEntries(STAFF_PERMISSION_MODULES.map((module) => {
+    const lvl = normalizeLevel(current[module.key]);
+    return [module.key, (!module.ownerOnly && lvl === "none") ? "read" : lvl];
+  })) as StaffPermissionMap;
   if (member.vkpiPermission && base.vkpi === "none") base.vkpi = normalizeLevel(member.vkpiPermission);
-  // 导航板块:未显式设置 → 默认可见(read),避免现有成员升级后侧栏突然空白。
-  for (const module of BOARD_PERMISSION_MODULES) base[module.key] = boardLevelFor(current, module.navKey);
   return base;
 }
 
@@ -64,12 +71,6 @@ export function StaffPermissionDrawer({
       return acc;
     }, {});
   }, []);
-  const boardGrouped = useMemo(() => {
-    return BOARD_PERMISSION_MODULES.reduce<Record<string, typeof BOARD_PERMISSION_MODULES>>((acc, module) => {
-      acc[module.group] = [...(acc[module.group] || []), module];
-      return acc;
-    }, {});
-  }, []);
 
   useEffect(() => {
     setDraft(initialPermissions(member));
@@ -87,11 +88,12 @@ export function StaffPermissionDrawer({
   const applyTemplate = (key: string) => {
     const template = STAFF_PERMISSION_TEMPLATES.find((item) => item.key === key);
     if (!template) return;
-    // 模板只覆盖 14 个 tab;板块授权保留当前选择(不被模板清空)。
-    setDraft((cur) => {
-      const boards = Object.fromEntries(BOARD_PERMISSION_MODULES.map((m) => [m.key, boardLevelFor(cur, m.navKey)]));
-      return { ...template.permissions, ...boards };
-    });
+    // 套模板后,非敏感模块仍兜底到至少「显示」(与两态默认显示一致)。
+    const next: StaffPermissionMap = { ...template.permissions };
+    for (const module of STAFF_PERMISSION_MODULES) {
+      if (!module.ownerOnly && normalizeLevel(next[module.key]) === "none") next[module.key] = "read";
+    }
+    setDraft(next);
   };
 
   const save = async () => {
@@ -180,39 +182,7 @@ export function StaffPermissionDrawer({
                   <span>{module.key}{module.ownerOnly ? " · Owner 专属" : ""}</span>
                 </div>
                 <div className="vkpi-permission-levels">
-                  {LEVELS.map((level) => (
-                    <button
-                      type="button"
-                      className={draft[module.key] === level.key ? "is-active" : ""}
-                      key={level.key}
-                      onClick={() => updateLevel(module.key, level.key)}
-                    >
-                      {level.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        ))}
-      </section>
-
-      <section className="vkpi-staff-permission-section">
-        <div className="vkpi-staff-permission-section__head">
-          <h3>导航板块授权</h3>
-          <span>控制该成员侧栏能看到哪些板块（无 = 隐藏）。默认全部可见。</span>
-        </div>
-        {Object.entries(boardGrouped).map(([group, modules]) => (
-          <div className="vkpi-staff-permission-group" key={group}>
-            <h4>{group}</h4>
-            {modules.map((module) => (
-              <div className="vkpi-staff-permission-row" key={module.key}>
-                <div>
-                  <strong>{module.label}</strong>
-                  <span>{module.key}</span>
-                </div>
-                <div className="vkpi-permission-levels">
-                  {LEVELS.map((level) => (
+                  {(module.ownerOnly ? OWNER_LEVELS : ASSIGN_LEVELS).map((level) => (
                     <button
                       type="button"
                       className={draft[module.key] === level.key ? "is-active" : ""}

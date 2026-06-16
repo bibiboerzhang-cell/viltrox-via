@@ -10,37 +10,53 @@ const member = {
   role: "employee",
   active: true,
   verificationStatus: "pending",
-  permissions: { vkpi: "write", kol_ops: "read", "board.shopify": "none" },
+  // overview 未设置(应被兜底为「显示」),kol_ops=read,vkpi=write
+  permissions: { vkpi: "write", kol_ops: "read" },
   vkpiPermission: "write",
 } as unknown as Parameters<typeof StaffPermissionDrawer>[0]["member"];
 
-describe("StaffPermissionDrawer 授权页冒烟", () => {
-  it("挂载不抛异常,渲染出导航板块授权区 + 15 板块 + 四档", () => {
-    expect(() =>
-      render(
-        React.createElement(StaffPermissionDrawer, {
-          member,
-          busy: false,
-          onClose: () => {},
-          onSavePermissions: vi.fn().mockResolvedValue(undefined),
-          onCreateActivationLink: vi.fn().mockResolvedValue(null),
-          onCreatePasswordResetLink: vi.fn().mockResolvedValue(null),
-        }),
-      ),
-    ).not.toThrow();
+describe("StaffPermissionDrawer 授权页冒烟(C7 两态·默认显示)", () => {
+  const renderDrawer = () =>
+    render(
+      React.createElement(StaffPermissionDrawer, {
+        member,
+        busy: false,
+        onClose: () => {},
+        onSavePermissions: vi.fn().mockResolvedValue(undefined),
+        onCreateActivationLink: vi.fn().mockResolvedValue(null),
+        onCreatePasswordResetLink: vi.fn().mockResolvedValue(null),
+      }),
+    );
 
-    // 新「导航板块授权」区 + 分组 + 代表板块都在
-    expect(screen.getByText("导航板块授权")).toBeTruthy();
-    expect(screen.getByText("板块 · 核心")).toBeTruthy();
-    expect(screen.getByText("板块 · 运营")).toBeTruthy();
-    expect(screen.getByText("Shopify")).toBeTruthy();
-    expect(screen.getByText("Dealers")).toBeTruthy();
-    // 四档按钮存在(矩阵 + 板块都用,出现多次)
-    expect(screen.getAllByText("无").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("只读").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("可写").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("管理").length).toBeGreaterThan(0);
-    // board.shopify=none 的行存在(键作为副标题渲染)
-    expect(screen.getByText("board.shopify")).toBeTruthy();
+  it("挂载不抛异常,只剩「深度授权」段,板块授权段已下线", () => {
+    expect(() => renderDrawer()).not.toThrow();
+    expect(screen.getByText("深度授权")).toBeTruthy();
+    // 导航板块授权段已移除
+    expect(screen.queryByText("导航板块授权")).toBeNull();
+    expect(screen.queryByText("板块 · 核心")).toBeNull();
+    // 代表模块仍在
+    expect(screen.getByText("V-KPI 工作台")).toBeTruthy();
+    expect(screen.getByText("API Key")).toBeTruthy();
+  });
+
+  it("业务模块两态(显示/可使用),敏感模块保留「无」", () => {
+    renderDrawer();
+    // 显示 / 可使用 两态按钮存在
+    expect(screen.getAllByText("显示").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("可使用").length).toBeGreaterThan(0);
+    // 「无」只出现在 owner-only 敏感模块(api_keys/models/members/restart 共 4 个)
+    expect(screen.getAllByText("无").length).toBe(4);
+    // 旧「只读/可写/管理」文案已彻底移除
+    expect(screen.queryByText("只读")).toBeNull();
+    expect(screen.queryByText("可写")).toBeNull();
+  });
+
+  it("未设置的业务模块默认兜底为「显示」(read),非「无」", () => {
+    renderDrawer();
+    // overview 未在 permissions 里 → 该行应高亮「显示」
+    const row = screen.getByText("overview").closest(".vkpi-staff-permission-row") as HTMLElement;
+    expect(row).toBeTruthy();
+    const active = within(row).getByText("显示");
+    expect(active.className).toContain("is-active");
   });
 });

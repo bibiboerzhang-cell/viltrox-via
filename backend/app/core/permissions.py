@@ -68,6 +68,27 @@ OWNER_ONLY_SYSTEM_KEYS = {
     "system.members",
 }
 
+_LEVEL_RANK = {"none": 0, "read": 1, "write": 2, "admin": 3}
+
+# 2026-06-16 C7「两态·默认显示」(用户拍板):授权抽屉里非 owner-only 的业务模块,
+# 对所有非 owner 成员默认至少「显示」(read)。授权只在 显示(read)/可使用(write)
+# 之间选,不再存在「无」——这既消除「某员工被显式存成 none → 入口被 AdminRoute 锁死」
+# 的坑(默认人人进得了系统、看得到全部模块),也让 owner 只需把人「升级到可使用」。
+# 注:OWNER_ONLY_SYSTEM_KEYS(api_keys/models/members/restart)不在此列,维持按需授权 +
+# 写级降级;这些 read 仅是「可见」,真正敏感写操作仍 owner 专属。
+DEFAULT_VISIBLE_KEYS = (
+    "overview",
+    "kol_ops",
+    "vkpi",
+    "activities",
+    "analytics",
+    "insights",
+    "products",
+    "runtime",
+    "system",
+    "system.usage",
+)
+
 
 def _parse_permissions(raw: Any) -> dict[str, str]:
     if isinstance(raw, dict):
@@ -203,6 +224,10 @@ def normalize_permissions(raw: Any, role: str = "readonly", *, owner: bool = Fal
             # R59-FW-PERM: write 或 admin 都触发降级
             if current in {"write", "admin"}:
                 merged[key] = "read" if key in {"system.api_keys", "system.models"} else "none"
+        # C7「两态·默认显示」:业务模块对非 owner 至少 read(none/缺省/非法值 → read)。
+        for key in DEFAULT_VISIBLE_KEYS:
+            if _LEVEL_RANK.get(str(merged.get(key, "none")).lower(), 0) < 1:
+                merged[key] = "read"
     return merged
 
 
