@@ -1132,15 +1132,26 @@ function UrlSummary({
         </div>
       ) : null}
       {executeDone ? (
-        <div className={`mt-2 rounded-md border px-2 py-1.5 text-[10.5px] ${
+        <div className={`mt-2 flex items-center gap-2 rounded-md border px-2 py-1.5 text-[10.5px] ${
           flowStatus === "partial"
             ? "border-amber-300/20 bg-amber-400/[0.10] text-amber-100"
             : "border-emerald-300/20 bg-emerald-400/[0.10] text-emerald-100"
         }`}>
-          {flowStatus === "partial"
-            ? (isVideo ? "视频分析部分完成，已入库" : "资料部分抓取完成，已入库")
-            : (isVideo ? "视频分析完成，已入库" : "资料已抓取并入库")}
-          {latency ? ` · 耗时 ${latency}` : ""}
+          <span className="flex-1">
+            {flowStatus === "partial"
+              ? (isVideo ? "视频分析部分完成，已入库" : "资料部分抓取完成，已入库")
+              : (isVideo ? "视频分析完成，已入库" : "资料已抓取并入库")}
+            {latency ? ` · 耗时 ${latency}` : ""}
+          </span>
+          {onOpenProfile && result.matched_kol_pool_id ? (
+            <button
+              type="button"
+              onClick={() => onOpenProfile(result)}
+              className="shrink-0 rounded border border-emerald-300/30 bg-emerald-400/[0.12] px-2 py-0.5 font-medium text-emerald-50 hover:bg-emerald-400/[0.2]"
+            >
+              查看完整分析 →
+            </button>
+          ) : null}
         </div>
       ) : null}
       {jobLastError ? (
