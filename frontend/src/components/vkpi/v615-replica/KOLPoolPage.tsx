@@ -189,6 +189,24 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
     }
   };
 
+  // item1:任务板「打开」video/账号任务 → 消费 pending id,按 id 拉 detail 开抽屉(池内必有,
+  // 不依赖 watchlist)。挂载即消费一次 + 监听事件(已在本页时点开也生效)。失败静默。
+  useEffect(() => {
+    const consume = () => {
+      try {
+        const pending = window.localStorage.getItem("vkpi:pending-kolpool-open-id");
+        if (!pending) return;
+        window.localStorage.removeItem("vkpi:pending-kolpool-open-id");
+        const id = Number(pending);
+        if (Number.isFinite(id) && id > 0) void openItem({ id });
+      } catch { /* localStorage 不可用忽略 */ }
+    };
+    consume();
+    window.addEventListener("vkpi:open-kol-pool-item", consume);
+    return () => window.removeEventListener("vkpi:open-kol-pool-item", consume);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiToken]);
+
   const openRecallItem = useCallback((recallItem: any) => {
     if (!recallItem || typeof recallItem !== "object") return;
     const id = kolIdFrom(recallItem);

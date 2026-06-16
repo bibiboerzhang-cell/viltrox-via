@@ -217,9 +217,13 @@ def _target_from_payload(payload: Any, *, fallback: dict[str, Any] | None = None
         handle = _text(data.get("kol_handle") or data.get("creator_handle"))
         if platform and handle:
             label = f"{platform}/{handle}"
+    # item1(2026-06-16):video/account 等任务的 KOL 主体在 payload.kol_pool_id(target_id 是
+    # video/evidence id,非 KOL)。透出供前端「打开」直达 KOL Pool 抽屉。
+    kol_pool_id = _text(data.get("kol_pool_id") or fallback.get("kol_pool_id"))
     target = {
         "target_type": target_type or None,
         "target_id": target_id or None,
+        "kol_pool_id": kol_pool_id or None,
         "source_url": source_url or None,
         "label": label[:180] if label else None,
         "platform": _text(data.get("platform") or fallback.get("platform")) or None,

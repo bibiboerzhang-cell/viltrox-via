@@ -167,13 +167,20 @@ export function V615ReplicaApp(props: any = {}) {
       if (projectId) setOpenLegacyProjectId(projectId);
       setActiveNav("projects");
     };
+    // item1(2026-06-16):video/账号档案任务点开 → 切到 KOL Pool 板块(pending id 由 board 写 localStorage,
+    // KOLPoolPage 挂载后消费并按 id 开抽屉)。
+    const handleOpenKolPoolItem = () => {
+      setActiveNav("kol-pool");
+    };
     window.addEventListener("vkpi:open-kol-search-session", handleOpenKolSearchSession);
     window.addEventListener("vkpi:open-mykol-kol", handleOpenMyKolKol);
     window.addEventListener("vkpi:open-project-task", handleOpenProjectTask);
+    window.addEventListener("vkpi:open-kol-pool-item", handleOpenKolPoolItem);
     return () => {
       window.removeEventListener("vkpi:open-kol-search-session", handleOpenKolSearchSession);
       window.removeEventListener("vkpi:open-mykol-kol", handleOpenMyKolKol);
       window.removeEventListener("vkpi:open-project-task", handleOpenProjectTask);
+      window.removeEventListener("vkpi:open-kol-pool-item", handleOpenKolPoolItem);
     };
   }, []);
   

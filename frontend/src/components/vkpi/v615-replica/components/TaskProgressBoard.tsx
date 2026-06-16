@@ -154,6 +154,14 @@ function taskMyKolPoolId(task: any) {
   return String(target.target_type || "") === "kol_profile" && Number.isFinite(poolId) && poolId > 0 ? poolId : undefined;
 }
 
+// item1:video / 账号档案等任务的 KOL 主体在 target.kol_pool_id(target_id 是 video/evidence id)。
+// 点「打开」→ 直达 KOL Pool 抽屉(池里一定有,不受 watchlist 限制)。
+function taskKolPoolId(task: any) {
+  const target = task?.target && typeof task.target === "object" ? task.target : {};
+  const poolId = Number(target.kol_pool_id);
+  return Number.isFinite(poolId) && poolId > 0 ? poolId : undefined;
+}
+
 // 2026-06-12 波5 R5:target_type=project 的任务(合同润色等同族)可回到项目详情。
 // 注意只认 target_type === 'project'(target_id 即 project_id);
 // 'project_contract' 的 target_id 是合同 id,无法可靠映射项目,保持禁用(诚实降级)。
@@ -172,6 +180,13 @@ function openTaskOrigin(task: any) {
     window.dispatchEvent(new CustomEvent("vkpi:open-mykol-kol", { detail: { kolPoolId: poolId, task } }));
     return;
   }
+  // item1:video/账号任务 → KOL Pool 抽屉(target.kol_pool_id;池内必有,不依赖 watchlist)。
+  const kolPoolId = taskKolPoolId(task);
+  if (kolPoolId && typeof window !== "undefined") {
+    window.localStorage.setItem("vkpi:pending-kolpool-open-id", String(kolPoolId));
+    window.dispatchEvent(new CustomEvent("vkpi:open-kol-pool-item", { detail: { kolPoolId, task } }));
+    return;
+  }
   const projectId = taskProjectId(task);
   if (projectId && typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("vkpi:open-project-task", { detail: { projectId: String(projectId), task } }));
@@ -181,7 +196,7 @@ function openTaskOrigin(task: any) {
 }
 
 function taskCanOpen(task: any) {
-  return Boolean(taskMyKolPoolId(task) || taskProjectId(task) || taskSearchSessionId(task));
+  return Boolean(taskMyKolPoolId(task) || taskKolPoolId(task) || taskProjectId(task) || taskSearchSessionId(task));
 }
 
 function taskInitiatorChip(task: any) {
