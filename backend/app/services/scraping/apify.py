@@ -106,10 +106,19 @@ def _first_video_url(item: dict[str, Any]) -> str:
         "videoUrlNoWaterMark",
         "video.playAddr",
         "video.downloadAddr",
+        # 2026-06-16:TikTok clockworks actor 的真字段是 videoMeta.downloadAddr(此前误写 video.downloadAddr),
+        # shouldDownloadVideos=True 时填 Apify KV 托管 URL。
+        "videoMeta.downloadAddr",
+        "videoMeta.playAddr",
         "media.videoUrl",
     )
     if direct:
         return str(direct).strip()
+    # mediaUrls:顶层字符串数组(clockworks tiktok-scraper 下载后的 Apify 托管 URL)。
+    media_urls = item.get("mediaUrls") if isinstance(item.get("mediaUrls"), list) else []
+    for murl in media_urls:
+        if isinstance(murl, str) and murl.strip():
+            return murl.strip()
     medias = item.get("medias") if isinstance(item.get("medias"), list) else []
     for media in medias:
         if not isinstance(media, dict):
@@ -384,7 +393,9 @@ async def scrape_tiktok(url: str) -> Dict[str, Any]:
         run_input = {
             "postURLs": [url],
             "resultsPerPage": 1,
-            "shouldDownloadVideos": False,
+            # 2026-06-16 修 TikTok media_resolve_failed:False 时 actor 只回元数据、不回可下载视频 URL
+            # (mediaUrls/videoMeta.downloadAddr 全空)→ 单视频解析必须 True,actor 下载视频并托管到 Apify KV。
+            "shouldDownloadVideos": True,
             "shouldDownloadCovers": False,
             "shouldDownloadSubtitles": False,
         }
