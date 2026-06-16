@@ -955,6 +955,66 @@ def _enqueue_account_dossier_extract_after_final_v1(
     }
 
 
+def _enqueue_comments_collect_after_final_v1(
+    conn: psycopg.Connection[Any],
+    *,
+    job_id: int,
+    deep_result: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """2026-06-16:final_v1 视频深析就绪 → 链式入队该 KOL 的评论采集(用户要求:评论也要抓)。
+    幂等:同 KOL 已有活跃 kol_pool_comments_collect 任务则复用,不重复入队。"""
+    if not deep_result or deep_result.get("status") != "ready":
+        return None
+    kol_pool_id = _int_or_none(deep_result.get("kol_pool_id"))
+    if not kol_pool_id:
+        return None
+    with conn.transaction():
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                SELECT id, status FROM apify_jobs
+                WHERE job_type='kol_pool_comments_collect'
+                  AND status IN ('queued', 'running')
+                  AND payload->>'kol_pool_id'=%s
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                (str(kol_pool_id),),
+            )
+            existing = cur.fetchone()
+            if existing:
+                return {
+                    "status": "already_queued" if existing["status"] == "queued" else "already_running",
+                    "job_id": int(existing["id"]),
+                    "kol_pool_id": kol_pool_id,
+                }
+            payload = {
+                "kol_pool_id": int(kol_pool_id),
+                "target_type": "kol_profile",
+                "target_id": int(kol_pool_id),
+                "evidence_ids": None,
+                "max_comments": None,
+                "query_text": f"评论采集 · kol_pool #{kol_pool_id}",
+                "source": "final_v1_worker_followup",
+                "trigger": "final_v1_done",
+                "source_job_id": int(job_id),
+            }
+            cur.execute(
+                """
+                INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
+                VALUES ('kol_pool_comments_collect', %s::jsonb, 'queued', NOW(), NOW())
+                RETURNING id, status
+                """,
+                (_json(payload),),
+            )
+            row = cur.fetchone() or {}
+    return {
+        "status": "queued",
+        "job_id": int(row["id"]) if row.get("id") is not None else None,
+        "kol_pool_id": kol_pool_id,
+    }
+
+
 def _sync_search_session_job(
     conn: psycopg.Connection[Any],
     job_id: int,
@@ -1096,6 +1156,14 @@ def _finish_skipped(conn: psycopg.Connection[Any], job_id: int, reason: str) -> 
             )
             if analysis_summary and content_fit_job:
                 analysis_summary["content_fit_job"] = content_fit_job
+            # 2026-06-16:视频深析就绪 → 链式入队评论采集(用户要求:评论也要抓)。
+            comments_collect_job = _enqueue_comments_collect_after_final_v1(
+                conn,
+                job_id=int(job_id),
+                deep_result=deep_result,
+            )
+            if analysis_summary and comments_collect_job:
+                analysis_summary["comments_collect_job"] = comments_collect_job
             if analysis_summary and deep_result:
                 analysis_summary["deep_result"] = deep_result
             if analysis_summary and account_extract_job:
