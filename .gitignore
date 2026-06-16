@@ -88,3 +88,6 @@ v3/
 backup_*/
 *.backup
 *.before-*
+
+# 生成的文档/导出物(不跟踪,不挡部署)
+output/
