@@ -29,7 +29,10 @@ def my_kol_aggregate_endpoint(
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
     """Return the single MY KOL aggregate bundle for the scoped staff member."""
-    target = scope.effective_staff_id(staff, staff_id)
+    # 修(2026-06-16):owner/manager(can_view_all=True)自查(未显式传 staff_id)时
+    # effective_staff_id 返回 None('全部'语义)→ 旧逻辑 403,导致 owner 收藏写进库却永远读不到。
+    # 自查场景回落到本人 actor id(显式传 staff_id 仍走 manager 跨看)。
+    target = scope.effective_staff_id(staff, staff_id) or scope.actor_staff_id(staff)
     if not target:
         raise HTTPException(status_code=403, detail="no staff identity in scope")
     try:
