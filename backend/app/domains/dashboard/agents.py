@@ -267,6 +267,18 @@ def _build_dashboard_copilot_brief(ops_dir: str = "runtime/ops") -> dict[str, An
     }
 
 
+def _coerce_confidence(value: Any) -> float:
+    """confidence 可能是数字 / 数字串 / 'high'|'medium'|'low' 标签 → 统一成 float,绝不抛。
+
+    旧代码 `float(item.get("confidence"))` 在 artifact 给字符串标签(如 'high')时 ValueError,
+    把整个 /dashboard/tasks 端点打 500(工作提醒卡空)。这里兜住所有形态。
+    """
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return {"high": 0.9, "medium": 0.6, "mid": 0.6, "low": 0.3}.get(str(value).strip().lower(), 0.0)
+
+
 def _build_dashboard_tasks(ops_dir: str = "runtime/ops", limit: int = 6) -> dict[str, Any]:
     path = _latest_dashboard_agent_artifact(ops_dir, "*p7-82-recommendation-agent-v0.json")
     payload = _load_dashboard_agent_json(path)
@@ -277,7 +289,7 @@ def _build_dashboard_tasks(ops_dir: str = "runtime/ops", limit: int = 6) -> dict
     artifact_stale = _artifact_is_stale(path)
     for index, candidate in enumerate(candidates[: max(1, min(20, int(limit or 6)))]):
         item = candidate if isinstance(candidate, dict) else {}
-        confidence = float(item.get("confidence") or item.get("score") or 0)
+        confidence = _coerce_confidence(item.get("confidence") or item.get("score") or 0)
         priority = "high" if confidence >= 0.75 else "mid" if confidence >= 0.45 else "low"
         title = str(item.get("title") or item.get("decision") or item.get("kol_handle") or f"推荐候选 {index + 1}")
         body = str(item.get("reason") or item.get("recommendation_reason") or item.get("summary") or "等待人工复核")
