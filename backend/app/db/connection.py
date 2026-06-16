@@ -204,6 +204,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "155_users_last_seen.sql",
     "156_apify_jobs_claim_priority_index.sql",
     "157_vkpi_official_account_daily_report.sql",
+    "158_vkpi_official_post_visual.sql",
 )
 
 try:

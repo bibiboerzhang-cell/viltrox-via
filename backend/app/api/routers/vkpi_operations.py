@@ -251,6 +251,18 @@ def official_channel_daily_report_run(
     return {"ok": True, "result": official_daily_report.generate_official_daily_reports(round_key="manual", report_date=rdate)}
 
 
+@router.post("/channels/official-visual/scan")
+def official_visual_scan(
+    max_total: int = Query(default=5, ge=1, le=30),
+    staff=Depends(require_tab("vkpi", "write")),
+):
+    """手动触发官号视频画质增量分析(Gemini final_v1,fit-safe 落 vkpi_official_post_visual)。
+    每次限量(默认5,上限30)防超时;预算闸硬限。"""
+    from app.domains.channels import official_visual_analysis
+
+    return {"ok": True, "result": official_visual_analysis.process_pending_official_visuals(max_total=int(max_total))}
+
+
 @router.get("/channels/metrics-filled")
 def official_channel_metrics_filled(
     channel_id: int | None = None,

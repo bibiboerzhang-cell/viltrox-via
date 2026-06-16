@@ -619,6 +619,22 @@ async def job_vkpi_official_daily_report(round_key: str = "daily"):
         logger.exception("scheduler.vkpi_official_daily_report_failed")
 
 
+async def job_vkpi_official_visual_scan():
+    """官号视频画质分析(增量):每轮跑少量未分析的官号视频(Gemini final_v1 → content_quality_score),
+    fit-safe 落 vkpi_official_post_visual,不进 kol_pool。config-gate(scheduler_tasks.vkpi_official_visual_scan);
+    走预算闸 cron:official_visual。每轮限量防超时/控成本,幂等可续。"""
+    if not _scheduler_task_enabled("vkpi_official_visual_scan"):
+        return
+    try:
+        import asyncio
+        from app.domains.channels import official_visual_analysis
+
+        result = await asyncio.to_thread(official_visual_analysis.process_pending_official_visuals, max_total=4)
+        logger.info("scheduler.vkpi_official_visual_scan", extra={"processed": result.get("processed")})
+    except Exception:
+        logger.exception("scheduler.vkpi_official_visual_scan_failed")
+
+
 async def start_scheduler() -> None:
     """在 lifespan startup 调用"""
     global _scheduler
@@ -817,6 +833,16 @@ async def start_scheduler() -> None:
         id="vkpi_official_daily_report_americas",
         name="Official daily report · Americas round (06:30 US-Pacific, LLM, budget-gated)",
         args=["americas_0630pt"],
+        max_instances=1,
+        coalesce=True,
+    )
+    # ── 官号视频画质分析(增量·每 30 分钟跑少量)── config-gate(scheduler_tasks.vkpi_official_visual_scan)。
+    # fit-safe:Gemini final_v1 官号视频 → content_quality_score 落 vkpi_official_post_visual,不进 kol_pool。
+    _scheduler.add_job(
+        job_vkpi_official_visual_scan,
+        trigger=IntervalTrigger(minutes=30),
+        id="vkpi_official_visual_scan",
+        name="Official post visual analysis (incremental, Gemini, budget-gated)",
         max_instances=1,
         coalesce=True,
     )

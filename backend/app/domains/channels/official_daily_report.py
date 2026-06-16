@@ -97,6 +97,20 @@ def _recent_comments(conn: Any, channel_id: int) -> dict[str, Any]:
     return {"total": int(dict(total).get("n") or 0) if total else 0, "recent": [dict(r) for r in rows]}
 
 
+def _account_visual(cid: int) -> dict[str, Any]:
+    # 画面质量:fit-safe 独立管线(official_visual_analysis)已分析的真 content_quality_score;
+    # 未分析则诚实标 pending(增量处理中,第二刀)。
+    try:
+        from app.domains.channels.official_visual_analysis import account_visual_summary
+
+        vis = account_visual_summary(cid)
+        if vis.get("available"):
+            return {"status": "ready", **vis}
+    except Exception:
+        logger.debug("official_daily_report.visual_summary_failed", exc_info=True)
+    return {"status": "pending", "note": "官号视频 Gemini 画质分析增量处理中,本号暂无已分析视频"}
+
+
 def _account_data(conn: Any, channel: dict[str, Any]) -> dict[str, Any]:
     cid = int(channel["id"])
     trend = _account_metrics_trend(conn, cid)
@@ -110,8 +124,7 @@ def _account_data(conn: Any, channel: dict[str, Any]) -> dict[str, Any]:
         "trend_7d": trend,
         "posts": posts,
         "comments": comments,
-        # 画面质量:官号内容尚未接 Gemini 视觉分析(final_v1 全是外部 KOL)→ MVP 诚实标 pending。
-        "visual_quality": {"status": "pending", "note": "官号内容的 Gemini 视觉画面质量分析待接入(第二刀)"},
+        "visual_quality": _account_visual(cid),
     }
 
 
@@ -156,7 +169,16 @@ def _report_text(data: dict[str, Any]) -> str:
     if not (comments.get("recent")):
         lines.append("  — 该账号暂无已采集评论(待补评论采集)")
     vq = data.get("visual_quality") or {}
-    lines.append(f"\n【画面质量】{vq.get('note')}(status={vq.get('status')})")
+    if vq.get("status") == "ready":
+        lines.append(
+            f"\n【画面质量(Gemini 真实分析 {vq.get('analyzed_count')} 条视频)】"
+            f"content_quality 均分 {vq.get('avg_content_quality')}(最高{vq.get('max_content_quality')}/最低{vq.get('min_content_quality')}),"
+            f"viewer_heart 均 {vq.get('avg_viewer_heart')}"
+        )
+        for s in (vq.get("top_samples") or [])[:4]:
+            lines.append(f"  «{str(s.get('title') or '')[:70]}» 画质{s.get('score')} — {str(s.get('summary') or '')[:110]}")
+    else:
+        lines.append(f"\n【画面质量】{vq.get('note')}(status={vq.get('status')})")
     return "\n".join(lines)
 
 
@@ -167,8 +189,8 @@ def _build_prompt(report_text: str, handle: str, platform: str, language: str) -
         "请生成一份【今日账号分析评估报告】,给运营看,要可执行。要求:\n"
         "- 只基于下面提供的数据做分析,绝不编造数字;标注「待接入/pending/无数据」的缺口要点明是待补,不要硬编结论。\n"
         "- 结论引用具体数字 / 帖子标题 / 评论原文。\n"
-        "- 画面质量(visual_quality)目前标 pending(官号视频尚未接 Gemini 视觉分析),据标题与播放/互动间接评估\n"
-        "  内容倾向即可,并诚实说明真画质分待接入,不要假装有视觉分析结果。\n"
+        "- 画面质量:若数据【画面质量】段含 Gemini 真实分析(content_quality 均分等),据此点评本号视频画质\n"
+        "  水平与高/低分内容差异;若标 pending,则诚实说明真画质分仍在增量分析中、据标题间接评估,不要编造。\n"
         "- 评论洞察:据评论原文归纳受众情绪(正/负/咨询)、高频诉求、负面点(如不支持某卡口、价格、缺货)。\n"
         "- 提升建议:基于本号近况给 3-5 条可执行建议(发什么内容 / 哪类帖该多发 / 怎么回应评论诉求 / 互动率怎么提)。\n"
         "- 每个文本字段控制在 3-4 句精炼输出,别长篇大论(护成本 + 防截断)。\n"
