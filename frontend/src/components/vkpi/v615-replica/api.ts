@@ -72,7 +72,7 @@ export async function fetchV615ReportAnalysis(
 ): Promise<Row> {
   return apiFetch<Row>(
     "/api/admin/vkpi/dashboard/report-analysis",
-    { method: "POST", body: jsonBody({ report_text: reportText, period, language }), timeoutMs: 45000 },
+    { method: "POST", body: jsonBody({ report_text: reportText, period, language }), timeoutMs: 120000 },
     apiToken,
   );
 }
