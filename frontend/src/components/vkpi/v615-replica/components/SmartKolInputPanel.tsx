@@ -1522,19 +1522,50 @@ export function SmartKolInputPanel({
       const responseMode = cleanText(response.mode);
       const isText = !(responseMode === "url" || cleanText(response.query_type).startsWith("url_"));
       let autoProfile: VkpiKolUrlDeepCrawlResponse | null = null;
+      let autoVideo: VkpiKolUrlDeepCrawlResponse | null = null;
       if (!isText) {
         setMode("url");
         const urlPayload = response.result as VkpiKolUrlDeepCrawlResponse;
         setUrlResult(urlPayload);
         // 账号 URL 自动入库:识别为 profile 且后端 dry-run 就绪(dry_run_ready)→ 直接自动 execute
         // (mode profile_basics:只抓基础资料 + 入库,不触发昂贵视频深析),前端随后展示 ProfileInfoCard。
-        // video URL 不自动(视频分析更重,保留手动确认)。
         if (
           urlPayload.url_type === "profile" &&
           !urlPayload.execute &&
           cleanText(asRecord(urlPayload.profile_flow).status) === "dry_run_ready"
         ) {
           autoProfile = urlPayload;
+        }
+        // 刀1·流1(2026-06-16):video URL 也自动 execute,贴视频链接不必再点「只分析此视频/建档并分析」。
+        // 门槛与 urlCanExecute 的 video 正常分支一致:创作者已解析 + 后端就绪 + 合法操作。runUrlExecute 对
+        // video 走 video_deep,入 evidence + 排 final_v1(幂等 already_analyzed/already_queued);视频/分镜随
+        // worker 完成经会话轮询自动内联回填。失败时 videoJobLastError 置位,手动重试按钮按 urlCanExecute 自然复现。
+        if (!autoProfile && urlPayload.url_type === "video" && !urlPayload.execute) {
+          const vFlow = asRecord(urlPayload.video_flow);
+          const vCreator = asRecord(urlPayload.creator_identity || vFlow.creator_identity);
+          const vStatus = cleanText(asRecord(urlPayload.profile_flow).status || vFlow.status);
+          const pOp = cleanText(asRecord(urlPayload.profile_flow).operation);
+          const rawVOp = cleanText(vFlow.operation);
+          const vOp = ["existing_creator_video_analysis", "new_creator_video_analysis"].includes(pOp)
+            ? pOp
+            : rawVOp || pOp;
+          const vCreatorResolved = Boolean(
+            cleanText(vFlow.creator_resolution_status) === "resolved" ||
+            cleanText(
+              vCreator.handle ||
+                vCreator.channel_id ||
+                vCreator.profile_url ||
+                urlPayload.handle ||
+                urlPayload.channel_id,
+            ),
+          );
+          if (
+            ["dry_run_ready", "ready_to_execute"].includes(vStatus) &&
+            vCreatorResolved &&
+            ["existing_creator_video_analysis", "new_creator_video_analysis"].includes(vOp)
+          ) {
+            autoVideo = urlPayload;
+          }
         }
       } else {
         setMode("text");
@@ -1547,6 +1578,8 @@ export function SmartKolInputPanel({
       if (isText && deepFindOn) void queueTextAdvance(overrideQuery);
       // 账号 URL 自动抓资料 + 入库(不再弹「抓基础资料」二次确认)。
       if (autoProfile) void runUrlExecute(autoProfile, { auto: true });
+      // 刀1·流1:video URL 自动入 evidence + 排 final_v1(不再弹「只分析此视频」二次确认)。
+      if (autoVideo) void runUrlExecute(autoVideo, { auto: true });
     } catch (err) {
       setState("error");
       setError(err instanceof Error ? err.message : "请求失败，请重试");
