@@ -555,7 +555,7 @@ def _profile_flow_plan(
     writer_plan = write_kol_profile_basics(kol_pool_id, profile_data, dry_run=True)
     representative_enabled = _profile_should_enqueue_representative_videos(body)
     history_enabled = _profile_should_materialize_history_videos(body)
-    incremental_state = _profile_incremental_state(kol_pool_id)
+    incremental_state = _profile_incremental_state(kol_pool_id, force_full=_profile_force_full_history(body))
     return {
         "status": "ready_to_execute" if execute else "dry_run_ready",
         "operation": "update" if kol_pool_id else "insert",
@@ -608,7 +608,7 @@ def _execute_profile_flow(
     max_posts = _max_posts(body)
     kol_pool_id = int(matches[0]["kol_pool_id"]) if len(matches) == 1 else None
     operation = "update" if kol_pool_id else "insert"
-    incremental_state = _profile_incremental_state(kol_pool_id)
+    incremental_state = _profile_incremental_state(kol_pool_id, force_full=_profile_force_full_history(body))
     conn = get_conn()
 
     crawl = _crawl_profile_basics(classified, target=target, max_posts=max_posts)
@@ -1556,7 +1556,21 @@ def _profile_video_thumbnail(item: dict[str, Any], snippet: dict[str, Any]) -> s
     return ""
 
 
-def _profile_incremental_state(kol_pool_id: int | None) -> dict[str, Any]:
+def _profile_force_full_history(body: dict[str, Any]) -> bool:
+    """强制全量历史:绕过 last_video_at 增量截断,把已爬过 KOL 的全部视频重新 materialize。
+    用于「该用户全部视频都分析」(account_deep 重跑),不改任何评分字段。"""
+    return bool((body or {}).get("force_full_history") or (body or {}).get("ignore_incremental"))
+
+
+def _profile_incremental_state(kol_pool_id: int | None, *, force_full: bool = False) -> dict[str, Any]:
+    if force_full:
+        return {
+            "enabled": True,
+            "kol_pool_id": int(kol_pool_id) if kol_pool_id else None,
+            "last_video_at": "",
+            "profile_backfilled_at": "",
+            "mode": "force_full_history",
+        }
     if not kol_pool_id:
         return {
             "enabled": True,
