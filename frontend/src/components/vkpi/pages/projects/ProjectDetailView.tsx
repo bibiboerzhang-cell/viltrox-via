@@ -7,6 +7,7 @@ import { CampaignAnalyticsTab, CampaignContractsTab, CampaignFinanceTab, Campaig
 import { AddKolModal, ContactKolModal, ContractUploadModal, GenerateContractModal, CostEntryModal, EditProjectModal, ShippingInfoModal, StageActionModal, UploadScreenshotModal, VideoUrlModal } from './ProjectDetailModals';
 import { createMarketingMessage, enqueueKolOutreachDraft, generateProjectContract, getContractTemplates, getKolOutreachDraft, type VkpiContractTemplate } from '../../../../services/vkpi/projects-api';
 import { LiveLogisticsBanner } from './LiveLogisticsBanner';
+import { ShareModal } from '../../shared/ShareModal';
 import { ProjectDetailHeaderCard, ProjectFunnel, ProjectKpiGrid, ProjectTabsBar, ProjectTaskDock } from './ProjectDetailSections';
 import { ProjectParticipationTab } from './ProjectParticipationTab';
 import {
@@ -78,6 +79,7 @@ export function ProjectDetailView({
   participatingRows = [],
   costRows = [],
   productUnitCosts = {},
+  staff = [],
   viewMode,
   onBack,
   onOpenKolProfile,
@@ -109,6 +111,7 @@ export function ProjectDetailView({
   const [tableStage, setTableStage] = useState('全部阶段');
   const [tablePlatform, setTablePlatform] = useState('全部平台');
   const [addKolOpen, setAddKolOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const [addingKols, setAddingKols] = useState(false);
   const [availableKolOptions, setAvailableKolOptions] = useState<VkpiKolOption[]>([]);
   const [loadingAvailableKols, setLoadingAvailableKols] = useState(false);
@@ -973,6 +976,7 @@ export function ProjectDetailView({
         onDeleteProject={deleteProject}
         onAddKol={() => void openAddKolModal()}
         onGenerateContract={() => void openGenerateContract()}
+        onShare={() => setShareOpen(true)}
         onOpenStaffProfile={() => project.ownerId && onOpenStaffProfile?.(project.ownerId, ownerFallback)}
         onExportKols={async () => {
           if (!apiToken || !project.id) return;
@@ -1248,6 +1252,17 @@ export function ProjectDetailView({
           busy={editingProject}
           onClose={() => setEditOpen(false)}
           onSubmit={updateProjectProfile}
+        />
+      ) : null}
+
+      {shareOpen ? (
+        <ShareModal
+          kind="project"
+          targetId={String(project.id)}
+          targetName={project.campaign || '项目'}
+          staff={staff}
+          apiToken={apiToken || ''}
+          onClose={() => setShareOpen(false)}
         />
       ) : null}
 

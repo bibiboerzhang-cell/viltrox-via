@@ -428,6 +428,7 @@ export function ProjectsPage({
             participatingRows={projectDetailState.participatingRows}
             costRows={projectDetailState.detail?.costs || []}
             productUnitCosts={productUnitCosts}
+            staff={data.staffMembers}
             viewMode={viewMode}
             onBack={() => setDetailProjectId(null)}
             onOpenKolProfile={onOpenKolProfile}

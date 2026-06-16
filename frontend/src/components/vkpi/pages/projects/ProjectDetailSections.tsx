@@ -60,6 +60,7 @@ export function ProjectDetailHeaderCard({
   onOpenStaffProfile,
   onExportKols,
   canExport,
+  onShare,
 }: {
   project: VkpiProjectRow;
   health: HealthState;
@@ -83,6 +84,7 @@ export function ProjectDetailHeaderCard({
   onOpenStaffProfile: () => void;
   onExportKols: () => void;
   canExport: boolean;
+  onShare?: () => void;
 }) {
   return (
     <>
@@ -127,6 +129,7 @@ export function ProjectDetailHeaderCard({
             {showDelete ? <button className="px-3 py-1.5 rounded-md border border-red-500/30 bg-red-500/10 text-[11px] text-red-300 hover:bg-red-500/15" type="button" onClick={onDeleteProject}>删除</button> : null}
             <button className="px-3 py-1.5 rounded-md bg-purple-500/90 hover:bg-purple-500 text-white text-[11px] font-medium flex items-center gap-1.5" type="button" onClick={onAddKol}>+ 添加 KOL</button>
             <button className="px-3 py-1.5 rounded-md border border-purple-500/40 bg-purple-500/10 hover:bg-purple-500/20 text-purple-200 text-[11px] font-medium" type="button" onClick={onGenerateContract}>生成合同</button>
+            {onShare ? <button className="px-3 py-1.5 rounded-md border border-cyan-400/30 bg-cyan-400/10 hover:bg-cyan-400/20 text-cyan-200 text-[11px] font-medium flex items-center gap-1.5" type="button" onClick={onShare}>👥 协作者</button> : null}
             <button
               className="px-3 py-1.5 rounded-md border border-white/[0.08] bg-white/[0.02] text-[11px] text-slate-300 hover:bg-white/[0.06] hover:text-white"
               type="button"
