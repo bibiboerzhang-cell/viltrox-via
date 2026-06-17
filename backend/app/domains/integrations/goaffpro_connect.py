@@ -575,16 +575,35 @@ def create_affiliate(name: str, email: str | None = None, extra: dict[str, Any] 
     # 那套)→ 当作失败,把真因透出(此前把 200 当成功 → 读不到 id → 报 resolve failed 吞了真因)。
     if isinstance(data, dict):
         soft_err = data.get("error") or data.get("errors") or data.get("message")
-        has_body = bool(data.get("id") or data.get("affiliate") or data.get("data") or data.get("ref_code"))
+        has_body = bool(
+            data.get("id") or data.get("affiliate_id") or data.get("affiliate") or data.get("data") or data.get("ref_code")
+        )
         if soft_err and not has_body:
             return {"ok": False, "affiliate": {}, "ref_code": "", "error": str(soft_err), "raw": data}
     affiliate_raw = _extract_affiliate(data)
+    # 真凶(Swagger 实证):POST /admin/affiliates 的 200 响应 = {"affiliate_id": 12345},
+    # 字段名是 **affiliate_id**,不是 id/affiliate。归一成 id 供下游 get_affiliate(?id=) 读;
+    # 读不到 affiliate_id 视为没真建成 → 透出 raw(此前读 id 永远 None → 报 no_affiliate_id)。
+    new_id = ""
+    if isinstance(data, dict):
+        new_id = str(data.get("affiliate_id") or data.get("id") or (affiliate_raw or {}).get("id") or "").strip()
+    if not new_id:
+        return {
+            "ok": False,
+            "affiliate": affiliate_raw or {},
+            "ref_code": "",
+            "error": "create returned no affiliate_id",
+            "raw": data,
+        }
+    if not (affiliate_raw or {}).get("id"):
+        affiliate_raw = dict(affiliate_raw or {}, id=new_id)
     ref_code = _read_ref_code(affiliate_raw)
     return {
         "ok": True,
         "affiliate": affiliate_raw,
         "ref_code": ref_code,
-        "raw": data,  # 真 key 后用它对照真实字段名(ref_code/coupon/link),然后删
+        "affiliate_id": new_id,
+        "raw": data,
     }
 
 
