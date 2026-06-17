@@ -19,7 +19,6 @@ export * as marketApi from "./market-api";
 export * as mediaApi from "./media-api";
 export * as productApi from "./product-api";
 export * as projectsApi from "./projects-api";
-export * as repairApi from "./repair-api";
 export * as searchApi from "./search-api";
 export * as settingsApi from "./settings-api";
 export * as staffApi from "./staff-api";
