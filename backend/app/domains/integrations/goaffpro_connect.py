@@ -44,6 +44,7 @@ _DEFAULT_API_BASE = "https://api.goaffpro.com/v1"
 _CREDS_SINGLETON_ID = 1
 _VALID_STATUS = {"pending", "connected", "error", "revoked"}
 _SCHEMA_READY = False
+_LINKS_SCHEMA_READY = False
 
 # 默认分页上限(请求骨架用;真 key 后按文档确认 limit/offset 还是 page/per_page)。
 _DEFAULT_PAGE_LIMIT = 100
@@ -137,6 +138,50 @@ def ensure_goaffpro_creds_schema() -> None:
     )
     conn.commit()
     _SCHEMA_READY = True
+
+
+def ensure_goaffpro_links_schema() -> None:
+    """SQLite-only runtime guard for D2 映射/销售表; Postgres uses migration 163.
+
+    与 ensure_goaffpro_creds_schema 同语义:Postgres 短路(走迁移),SQLite 自建同构表
+    (BIGSERIAL→INTEGER PK AUTOINCREMENT,TIMESTAMPTZ→TEXT,UNIQUE/索引保持)。
+    """
+    global _LINKS_SCHEMA_READY
+    if _LINKS_SCHEMA_READY or is_postgres_runtime():
+        return
+    conn = get_conn()
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS vkpi_goaffpro_kol_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kol_pool_id INTEGER NOT NULL UNIQUE,
+            affiliate_id TEXT NOT NULL DEFAULT '',
+            ref_code TEXT NOT NULL DEFAULT '',
+            tracking_url TEXT NOT NULL DEFAULT '',
+            coupon TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_vkpi_goaffpro_kol_links_affiliate
+            ON vkpi_goaffpro_kol_links(affiliate_id);
+        CREATE TABLE IF NOT EXISTS vkpi_goaffpro_sales (
+            sale_id TEXT PRIMARY KEY,
+            affiliate_id TEXT NOT NULL DEFAULT '',
+            kol_pool_id INTEGER,
+            total_cents INTEGER NOT NULL DEFAULT 0,
+            commission_cents INTEGER NOT NULL DEFAULT 0,
+            currency TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT '',
+            occurred_at TEXT,
+            synced_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_vkpi_goaffpro_sales_affiliate
+            ON vkpi_goaffpro_sales(affiliate_id);
+        CREATE INDEX IF NOT EXISTS idx_vkpi_goaffpro_sales_kol
+            ON vkpi_goaffpro_sales(kol_pool_id);
+        """
+    )
+    conn.commit()
+    _LINKS_SCHEMA_READY = True
 
 
 def _load_row() -> dict[str, Any]:
@@ -335,6 +380,44 @@ def _get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
     return {"ok": True, "data": data}
 
 
+def _post(path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Single POST against GOAFFPRO Admin API. creds-ready: no token -> not_configured.
+
+    Returns {ok, data?, status_code?, reason?, error?}. Never burns an LLM, never raises;
+    httpx direct. On HTTP error still tries to surface the JSON body (GOAFFPRO error msg)
+    so callers can透出 raw 给校准。
+    """
+    creds = get_credentials()
+    token = creds.get("access_token") or ""
+    if not token:
+        return {"ok": False, "reason": "not_configured"}
+    base = _norm_base(creds.get("api_base"))
+    url = f"{base}/{str(path or '').lstrip('/')}"
+    try:
+        with httpx.Client(timeout=20) as client:
+            resp = client.post(url, headers=_admin_headers(creds), json=body or {})
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPStatusError as exc:
+        body_text: Any = None
+        try:
+            body_text = exc.response.json()
+        except Exception:  # noqa: BLE001 — body may be non-JSON; keep it as text
+            try:
+                body_text = exc.response.text
+            except Exception:  # noqa: BLE001
+                body_text = None
+        return {
+            "ok": False,
+            "error": f"http {exc.response.status_code}",
+            "status_code": exc.response.status_code,
+            "raw": body_text,
+        }
+    except (httpx.HTTPError, ValueError) as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "data": data}
+
+
 def _map_affiliate(raw: dict[str, Any]) -> dict[str, Any]:
     """【待 key 校准】affiliate 字段映射 —— 按公开资料先设,真 key 一到即对账。
     GOAFFPRO 公开端点 GET /admin/affiliates,以下字段名为占位映射(id/name/email 较稳,
@@ -426,6 +509,118 @@ def list_orders(limit: int | None = None, offset: int | None = None) -> dict[str
     return {"ok": True, "orders": mapped, "count": len(mapped), "total": total}
 
 
+# --- D2 写侧:一键给 KOL 建 affiliate + 拼追踪链 + 优惠码 ----------------------
+
+# 【待 key 校准】create_affiliate body 字段:GOAFFPRO 标准 affiliate 对象按公开资料用
+# {name, email};真 key 一到即对 POST /admin/affiliates 的 Swagger 实测校准必填/可选字段名。
+def _default_store_url() -> str:
+    """追踪链拼接用的店铺根 URL,读 env GOAFFPRO_STORE_URL,缺省 https://www.viltrox.com。"""
+    return _norm_base(os.environ.get("GOAFFPRO_STORE_URL") or "https://www.viltrox.com")
+
+
+def _extract_affiliate(data: Any) -> dict[str, Any]:
+    """从 create 响应里捞出 affiliate 对象 —— 可能是裸对象,或 {affiliate:{...}}/{data:{...}}。
+    宽容提取,真 key 后用返回的 raw 锁定真实包裹键。"""
+    if isinstance(data, dict):
+        for k in ("affiliate", "data", "result"):
+            v = data.get(k)
+            if isinstance(v, dict):
+                return v
+        return data
+    return {}
+
+
+def _read_ref_code(affiliate_raw: dict[str, Any]) -> str:
+    """读 affiliate 的推荐码 —— GOAFFPRO 字段名未定,宽容多别名。真 key 后锁定。"""
+    raw = affiliate_raw or {}
+    for k in ("ref_code", "referral_code", "refcode", "coupon", "id"):
+        v = raw.get(k)
+        if v not in (None, ""):
+            return str(v)
+    return ""
+
+
+def create_affiliate(name: str, email: str | None = None, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    """POST /admin/affiliates —— 给 KOL 在 GOAFFPRO 建 affiliate(KOL 零注册)。
+
+    防御式:绝不抛、绝不烧 LLM。no creds -> {ok:False, reason:'not_configured'}。
+    返回 {ok, affiliate(原始对象), ref_code, error?, status_code?, raw?(GOAFFPRO 原始响应)}。
+    【待 key 校准】body 字段按 GOAFFPRO 标准 {name, email} 先设;ref_code/coupon/id 真实字段名
+    以响应里 raw / affiliate 对照后锁定。
+    """
+    payload: dict[str, Any] = {"name": str(name or "").strip()}
+    em = str(email or "").strip()
+    if em:
+        payload["email"] = em
+    if isinstance(extra, dict):
+        for k, v in extra.items():
+            if k not in payload:
+                payload[k] = v
+    result = _post("admin/affiliates", payload)
+    if not result.get("ok"):
+        # 透出 GOAFFPRO 原始响应(raw)便于校准必填字段。
+        out = {"ok": False, "affiliate": {}, "ref_code": ""}
+        if result.get("reason"):
+            out["reason"] = result["reason"]
+        if result.get("error"):
+            out["error"] = result["error"]
+        if result.get("status_code") is not None:
+            out["status_code"] = result["status_code"]
+        if result.get("raw") is not None:
+            out["raw"] = result["raw"]
+        return out
+    data = result.get("data")
+    affiliate_raw = _extract_affiliate(data)
+    ref_code = _read_ref_code(affiliate_raw)
+    return {
+        "ok": True,
+        "affiliate": affiliate_raw,
+        "ref_code": ref_code,
+        "raw": data,  # 真 key 后用它对照真实字段名(ref_code/coupon/link),然后删
+    }
+
+
+def referral_link(affiliate_raw: dict[str, Any] | None, ref_code: str | None = None) -> str:
+    """拼追踪链:优先读 affiliate 里现成的 referral_link/link;没有则 {store}/?ref={ref_code}。
+
+    store 读 env GOAFFPRO_STORE_URL(缺省 https://www.viltrox.com)。
+    【待 key 校准】affiliate 里现成链接的字段名(referral_link/link/url)真 key 后锁定。
+    """
+    raw = affiliate_raw or {}
+    for k in ("referral_link", "link", "referral_url", "url", "share_link"):
+        v = raw.get(k)
+        if v not in (None, ""):
+            return str(v)
+    code = str(ref_code or _read_ref_code(raw) or "").strip()
+    store = _default_store_url()
+    if not code:
+        return store
+    return f"{store}/?ref={code}"
+
+
+def to_cents(value: Any) -> int:
+    """金额→整数分(避免浮点)。GOAFFPRO total/commission 通常是十进制元;
+    宽容解析(str/float/int/None);解析失败 → 0,绝不抛。
+    【待 key 校准】若真 key 返回已是整数分,这里的 *100 需按响应口径调整。"""
+    if value in (None, ""):
+        return 0
+    try:
+        return int(round(float(value) * 100))
+    except (TypeError, ValueError):
+        return 0
+
+
+def coupon_for(affiliate_raw: dict[str, Any] | None) -> str:
+    """读 affiliate 的优惠码 —— affiliate.coupon / coupon_code,无则 ''。
+    【待 key 校准】coupon 真实字段名以响应里 raw 对照后锁定。"""
+    raw = affiliate_raw or {}
+    for k in ("coupon", "coupon_code", "discount_code", "promo_code"):
+        v = raw.get(k)
+        if v not in (None, ""):
+            return str(v)
+    return ""
+
+
 def sync_stub() -> dict[str, Any]:
     """手动 sync stub(D1 骨架)—— 只拉一页 affiliates + orders 探活,不落库、不归因。
 
@@ -448,10 +643,15 @@ def sync_stub() -> dict[str, Any]:
 
 __all__ = [
     "ensure_goaffpro_creds_schema",
+    "ensure_goaffpro_links_schema",
     "save_credentials",
     "get_credentials",
     "connection_status",
     "list_affiliates",
     "list_orders",
+    "create_affiliate",
+    "referral_link",
+    "coupon_for",
+    "to_cents",
     "sync_stub",
 ]

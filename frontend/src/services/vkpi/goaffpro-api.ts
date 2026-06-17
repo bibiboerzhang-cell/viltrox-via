@@ -140,5 +140,58 @@ export async function listGoaffproAffiliates(
   };
 }
 
+// ---------------------------------------------------------------------------
+// D2:一键给 KOL 建 affiliate + 追踪链 + 优惠码(KOL 零注册)。
+//
+// 端点确认(对照 backend/app/api/routers/vkpi_goaffpro.py):
+//   POST /kol/{kol_pool_id}/link -> {ok, linked, affiliate_id, ref_code,
+//                                     tracking_url, coupon, already_linked?, raw?}
+//                                    | {ok:false, error, reason?, status_code?, raw?}
+//   GET  /kol/{kol_pool_id}/link -> {linked:true, kol_pool_id, affiliate_id,
+//                                     ref_code, tracking_url, coupon, created_at}
+//                                    | {linked:false, kol_pool_id}
+// ---------------------------------------------------------------------------
+
+export interface GoaffproKolLink {
+  ok?: boolean;
+  linked?: boolean;
+  already_linked?: boolean;
+  kol_pool_id?: number;
+  affiliate_id?: string;
+  ref_code?: string;
+  tracking_url?: string;
+  coupon?: string;
+  created_at?: string;
+  // 出错(create_affiliate 失败)时透出,便于「联系管理员校准」调试。
+  error?: string;
+  reason?: string;
+  status_code?: number;
+  raw?: unknown;
+}
+
+// POST:生成(或幂等返回已有)KOL↔affiliate 映射 + 追踪链 + 优惠码。
+export async function generateKolGoaffproLink(
+  token: string,
+  kolPoolId: string | number,
+): Promise<GoaffproKolLink> {
+  return apiFetch<GoaffproKolLink>(
+    `/api/admin/vkpi/goaffpro/kol/${encodeURIComponent(String(kolPoolId))}/link`,
+    { method: "POST", body: jsonBody({}) },
+    token,
+  );
+}
+
+// GET:读已有 KOL↔affiliate 映射;无映射 -> {linked:false}。
+export async function getKolGoaffproLink(
+  token: string,
+  kolPoolId: string | number,
+): Promise<GoaffproKolLink> {
+  return apiFetch<GoaffproKolLink>(
+    `/api/admin/vkpi/goaffpro/kol/${encodeURIComponent(String(kolPoolId))}/link`,
+    {},
+    token,
+  );
+}
+
 // 类型导出别名,便于页面侧引用。
 export type { Row as GoaffproRow };
