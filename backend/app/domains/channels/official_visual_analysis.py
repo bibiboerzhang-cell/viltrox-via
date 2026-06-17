@@ -6,7 +6,10 @@ vkpi_official_post_visual(channel_id+post_uid),供「每日官号报告」③画
 红线(关键):**完全不进 kol_pool / 不建 evidence / 不触 viltrox_fit_score / 不动 fit 指纹**。
 官号视频与外部 KOL 评分域物理隔离。Gemini 走预算闸 cron:official_visual。
 - YouTube:analyze_youtube_with_gemini(yt-dlp+File API,prod 可达);
-- Instagram reel / TikTok video:需下载,本期标 needs_media(第二刀的下半场,复用 worker 下载路径);
+- Instagram reel / TikTok video:复用 worker 同款链路——Apify 解析 content_url 拿 direct_video_url →
+  下载到临时目录 → analyze_local_video_with_gemini 同款 Gemini final_v1(下半场已落地)。
+  每条多一次 Apify(有成本,官号≤8/号、每轮 max_total 限量),照搬 worker 的 MEDIA_RESOLVE_TIMEOUT
+  + blocked/failed 分类避免卡死。
 - 其它平台(fb/x/reddit):skip。
 增量处理:每次只跑少量(防超时/控成本),幂等可续。
 """
@@ -14,6 +17,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import tempfile
 from datetime import datetime, timezone
 from typing import Any
 
@@ -25,8 +30,14 @@ from app.domains.kol.final_v1_extract import _as_dict, _score_from_value
 logger = get_logger(__name__)
 
 _BUDGET_SCOPE = "cron:official_visual"
+# YouTube 直跑;IG/TikTok 下半场每条多一次 Apify 解析 + 下载,成本更高(诚实标注):
+# 估算 Apify 解析 ~$0.01-0.02 + Gemini final_v1 ~$0.06,合并按 needs_media 单独估。
 _EST_COST = 0.06
+_EST_COST_NEEDS_MEDIA = 0.08
 _MAX_PER_ACCOUNT = 8
+# 照搬 worker 的 MEDIA_RESOLVE_TIMEOUT:Apify 解析(拿 direct_video_url)硬超时,避免卡死。
+# 复用 worker 同名 env,缺省 90s;官号是顺序处理,超时即判 failed 跳到下一条。
+_MEDIA_RESOLVE_TIMEOUT_SECONDS = max(10, int(os.environ.get("APIFY_WORKER_MEDIA_RESOLVE_TIMEOUT_SEC", "90")))
 
 
 def _is_youtube(url: str) -> bool:
@@ -119,15 +130,104 @@ def _extract_scores(raw: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _resolve_direct_video_url(content_url: str, platform: str) -> dict[str, Any]:
+    """复用 worker 同款 Apify 解析:content_url → direct_video_url。
+    照搬 worker 的 MEDIA_RESOLVE_TIMEOUT(asyncio.wait_for 硬超时)+ blocked/failed 分类:
+    - APIFY_TOKEN 缺 → blocked(配置问题,非内容失败,不浪费 Gemini 预算);
+    - 超时 / 解析失败 / 拿不到 video_url → failed(可续,下轮重试)。
+    返回 {ok, status('ready'|'blocked'|'failed'), reason, direct_video_url}。"""
+    if not os.environ.get("APIFY_TOKEN", "").strip():
+        return {"ok": False, "status": "blocked", "reason": "apify_not_configured", "direct_video_url": ""}
+
+    from app.services.scraping import apify as apify_scraper
+
+    async def _run() -> dict[str, Any]:
+        return await asyncio.wait_for(
+            apify_scraper.scrape_with_apify(content_url, platform),
+            timeout=_MEDIA_RESOLVE_TIMEOUT_SECONDS,
+        )
+
+    try:
+        scraped = asyncio.run(_run())
+    except asyncio.TimeoutError:
+        logger.warning("official_visual.media_resolve_timeout | platform=%s timeout_sec=%s", platform, _MEDIA_RESOLVE_TIMEOUT_SECONDS)
+        return {"ok": False, "status": "failed", "reason": "media_resolve_timeout", "direct_video_url": ""}
+    except Exception as exc:
+        return {"ok": False, "status": "failed", "reason": f"media_resolve_error:{str(exc)[:160]}", "direct_video_url": ""}
+    direct_video_url = str((scraped or {}).get("video_url") or "").strip()
+    if not direct_video_url:
+        return {"ok": False, "status": "failed", "reason": str((scraped or {}).get("error") or "media_resolve_failed")[:200], "direct_video_url": ""}
+    return {"ok": True, "status": "ready", "reason": "media_resolved", "direct_video_url": direct_video_url}
+
+
+def _analyze_needs_media(conn: Any, channel: dict[str, Any], post: dict[str, Any]) -> dict[str, Any]:
+    """IG reel / TikTok video 的下半场:解析 → 下载 → 本地 Gemini final_v1(worker 同款链路)。
+    幂等地走预算闸(needs_media 单条成本更高,先 check 再跑;成功后才 record)。"""
+    from app.services.media.video_download import download_direct_video_url
+
+    cid = int(channel["id"])
+    puid = str(post.get("post_uid"))
+    platform = str(post.get("platform") or channel.get("platform") or "").lower()
+    content_url = str(post.get("post_url") or "")
+
+    if not budget_guard.check_budget(_BUDGET_SCOPE, _EST_COST_NEEDS_MEDIA):
+        return {"post_uid": puid, "status": "budget_blocked"}
+
+    resolved = _resolve_direct_video_url(content_url, platform)
+    if resolved.get("status") == "blocked":
+        # 配置问题(无 Apify token):标 skipped,可见且不重试雪崩,补上 token 后下轮自然跑。
+        _store(conn, channel_id=cid, post=post, status="skipped", error=str(resolved.get("reason") or "media_resolve_blocked"))
+        return {"post_uid": puid, "status": "skipped", "reason": str(resolved.get("reason"))}
+    if not resolved.get("ok"):
+        _store(conn, channel_id=cid, post=post, status="failed", error=str(resolved.get("reason") or "media_resolve_failed")[:300])
+        return {"post_uid": puid, "status": "failed", "error": str(resolved.get("reason"))[:200]}
+
+    try:
+        from app.services.ai.analyzers import gemini_video
+        with tempfile.TemporaryDirectory(prefix="vkpi-official-visual-") as tmpdir:
+            download = download_direct_video_url(
+                str(resolved.get("direct_video_url") or ""),
+                tmpdir,
+                referer=content_url,
+            )
+            if not download.get("success") or not download.get("path"):
+                # 照搬 worker 的 precheck_terminal:404/403/410/451 等确定不可达 → terminal 原因。
+                err = str(download.get("error") or f"direct_video_download_failed:{platform}")[:300]
+                _store(conn, channel_id=cid, post=post, status="failed", error=err)
+                return {"post_uid": puid, "status": "failed", "error": err[:200]}
+            raw = asyncio.run(
+                gemini_video.analyze_local_video_with_gemini(
+                    str(download["path"]),
+                    str(post.get("title") or ""),
+                    str(channel.get("account_handle") or ""),
+                    schema_version="final_v1",
+                )
+            )
+    except Exception as exc:
+        _store(conn, channel_id=cid, post=post, status="failed", error=str(exc)[:300])
+        return {"post_uid": puid, "status": "failed", "error": str(exc)[:200]}
+
+    if not raw or not raw.get("analyzed"):
+        _store(conn, channel_id=cid, post=post, status="failed", error=str((raw or {}).get("error") or "not_analyzed")[:300])
+        return {"post_uid": puid, "status": "failed"}
+    try:
+        budget_guard.record_cost(_BUDGET_SCOPE, _EST_COST_NEEDS_MEDIA)
+    except Exception:
+        logger.debug("official_visual.record_cost_failed", exc_info=True)
+    scores = _extract_scores(raw)
+    summary = str(_as_dict(raw.get("layer1_visual_content")).get("content_summary") or raw.get("content_summary") or "")
+    _store(conn, channel_id=cid, post=post, status="ready", scores=scores, summary=summary, model=str(raw.get("method") or "gemini"))
+    return {"post_uid": puid, "status": "ready", "scores": scores}
+
+
 def analyze_one(channel: dict[str, Any], post: dict[str, Any]) -> dict[str, Any]:
     conn = get_conn()
     cid = int(channel["id"])
     puid = str(post.get("post_uid"))
     kind = post.get("_kind") or _video_kind(channel.get("platform"), post.get("post_url"))
     if kind == "needs_media":
-        # IG reel / TikTok:本期不下载,标 skipped(needs_media),报告侧不计入真画质(第二刀下半场补)。
-        _store(conn, channel_id=cid, post=post, status="skipped", error="needs_media_download")
-        return {"post_uid": puid, "status": "skipped", "reason": "needs_media"}
+        # IG reel / TikTok 下半场:复用 worker 同款链路跑本地管线(Apify 解析→下载→本地 Gemini final_v1)。
+        return _analyze_needs_media(conn, channel, post)
     if kind != "youtube":
         _store(conn, channel_id=cid, post=post, status="skipped", error=f"unsupported:{kind}")
         return {"post_uid": puid, "status": "skipped", "reason": kind}
