@@ -5,7 +5,7 @@ import React from "react";
 import { motion } from "framer-motion";
 import { AlertTriangle, Check, Link2, Share2, Shield, Sparkles, Video } from "lucide-react";
 import { KPAvatar } from "./KPAvatar";
-import { KOLVideoAnalysisPanel } from "./KOLVideoAnalysisPanel";
+import { AnalysisCard, KOLVideoAnalysisPanel, type AnalysisBundle } from "./KOLVideoAnalysisPanel";
 import { ShareKolModal } from "../../shared/ShareKolModal";
 import { enqueueAllKolVideos, enqueueVideoAnalysis, getKolPoolAccountDossier, getKolPoolContentFit, getKolPoolDimensions11, getKolPoolLlmDeepAnalysis } from "../../../../services/vkpi/kolPool-api";
 import { getKolMemory } from "../../../../services/vkpi/kolMemory-api";
@@ -324,7 +324,30 @@ export function RepresentativeVideoCard({ video, index, onOpen }: any) {
   );
 }
 
-function RepresentativeVideoPlayerModal({ video, onClose }: any) {
+// E1:点代表作视频 → 在播放器下方内联看「该条」逐视频深析。
+// 纯只读 preloaded final_v1 缓存(detailBundle.video_analysis.items),先按 evidenceIdOf 精确匹配;
+// 代表作卡有时不带 evidence_id(loose key 回退到 url),故再按 watch_url/url/content_url 兜底匹配。
+// 命中复用 KOLVideoAnalysisPanel 的 AnalysisCard;未命中显示「该视频暂无深析」。绝不触评分。
+function videoUrlKey(video: any) {
+  return videoString(video, ["watch_url", "url", "content_url"]).toLowerCase();
+}
+
+function matchAnalysisBundle(video: any, bundles: any): AnalysisBundle | null {
+  if (!Array.isArray(bundles)) return null;
+  const targetId = evidenceIdOf(video);
+  if (targetId) {
+    const byId = bundles.find((bundle: any) => evidenceIdOf(recordOr(bundle).video) === targetId);
+    if (byId) return byId;
+  }
+  const targetUrl = videoUrlKey(video);
+  if (targetUrl) {
+    const byUrl = bundles.find((bundle: any) => videoUrlKey(recordOr(bundle).video) === targetUrl);
+    if (byUrl) return byUrl;
+  }
+  return null;
+}
+
+function RepresentativeVideoPlayerModal({ video, onClose, bundles = null, apiToken = "" }: any) {
   const title = videoString(video, ["title", "video_title"], "代表作");
   const thumbnail = proxiedImageUrl(videoString(video, ["best_thumbnail", "thumbnail_url", "youtube_thumbnail_url"]));
   const cachedVideoUrl = proxiedVideoUrl(videoString(video, ["cached_video_url"]));
@@ -332,6 +355,9 @@ function RepresentativeVideoPlayerModal({ video, onClose }: any) {
   const watchUrl = videoString(video, ["watch_url", "url", "content_url"]);
   const platform = normalizedVideoPlatform(video);
   const embedSrc = youtubeEmbedUrl(youtubeVideoId);
+  // 命中条件:既能从该视频取到 evidence_id,又在 preloaded bundles 里找到同 id 且有 final_v1 的那条。
+  const matchedBundle = matchAnalysisBundle(video, bundles);
+  const analysisBundle = matchedBundle && recordOr(matchedBundle).finalEntry ? matchedBundle : null;
 
   React.useEffect(() => {
     const handleKey = (event: any) => {
@@ -424,6 +450,19 @@ function RepresentativeVideoPlayerModal({ video, onClose }: any) {
         }, "×")
       ),
       e("div", { className: "aspect-video w-full bg-black" }, stage),
+      // E1:播放器下方内联该条逐视频深析(只读 final_v1 缓存);命中渲染 AnalysisCard,未命中给空态。
+      e("div", { className: "max-h-[42vh] overflow-y-auto border-t border-white/[0.08] px-4 py-3" },
+        e("div", { className: "mb-2 flex items-center gap-1.5" },
+          e(Sparkles, { size: 11, className: "text-cyan-300" }),
+          e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "该视频逐条深析"),
+          e("span", { className: "text-[8.5px] text-slate-600" }, "final_v1 · 只读缓存")
+        ),
+        analysisBundle
+          ? e(AnalysisCard, { bundle: analysisBundle })
+          : e("div", { className: "rounded-md border border-white/[0.05] bg-white/[0.012] p-3 text-[10.5px] text-slate-500" },
+              !apiToken ? "登录后读取该视频的深析缓存。" : "该视频暂无深析"
+            )
+      ),
       watchUrl && e("footer", { className: "flex items-center justify-between gap-3 border-t border-white/[0.08] px-4 py-2" },
         e("span", { className: "truncate text-[10px] text-slate-500" }, watchUrl),
         e("a", {
@@ -1023,6 +1062,9 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
     activeRepresentativeVideo && e(RepresentativeVideoPlayerModal, {
       video: activeRepresentativeVideo,
       onClose: () => setActiveRepresentativeVideo(null),
+      // E1:把 preloaded video_analysis bundles + token 传进播放器,内联该条逐视频深析。
+      bundles: Array.isArray(preloadedVideoAnalysisBundles) ? preloadedVideoAnalysisBundles : null,
+      apiToken,
     }),
     shareOpen && e(ShareKolModal, {
       kolPoolId: String(item?.id ?? ""),

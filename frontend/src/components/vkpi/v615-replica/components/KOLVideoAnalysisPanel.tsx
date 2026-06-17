@@ -4,7 +4,7 @@ import { getKolVideoAnalysisCache, type VkpiKolVideoAnalysisCacheEntry } from ".
 
 type VideoEvidence = Record<string, unknown>;
 
-interface AnalysisBundle {
+export interface AnalysisBundle {
   video: VideoEvidence;
   finalEntry: VkpiKolVideoAnalysisCacheEntry | null;
   qaEntry: VkpiKolVideoAnalysisCacheEntry | null;
@@ -14,7 +14,7 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
-function textFrom(value: unknown): string {
+export function textFrom(value: unknown): string {
   if (value == null) return "";
   if (typeof value === "string") return value.trim();
   if (typeof value === "number") return String(value);
@@ -29,7 +29,7 @@ function textFrom(value: unknown): string {
   return "";
 }
 
-function firstText(...values: unknown[]) {
+export function firstText(...values: unknown[]) {
   for (const value of values) {
     const text = textFrom(value);
     if (text) return text;
@@ -37,7 +37,7 @@ function firstText(...values: unknown[]) {
   return "";
 }
 
-function compactText(value: string, max = 150) {
+export function compactText(value: string, max = 150) {
   if (!value) return "暂无明确结论";
   return value.length > max ? `${value.slice(0, max)}...` : value;
 }
@@ -50,7 +50,7 @@ function formatLargeNum(value: unknown) {
   return String(Math.round(numeric));
 }
 
-function normaliseScore(value: unknown, fallback?: unknown) {
+export function normaliseScore(value: unknown, fallback?: unknown) {
   const source = value ?? fallback;
   if (typeof source === "number" && Number.isFinite(source)) return { score: Math.round(source), rationale: "", confidence: null as number | null };
   const record = asRecord(source);
@@ -63,7 +63,7 @@ function normaliseScore(value: unknown, fallback?: unknown) {
   };
 }
 
-function analysisScoreColor(score: number | null) {
+export function analysisScoreColor(score: number | null) {
   if (score == null) return "#94a3b8";
   if (score >= 80) return "#34d399";
   if (score >= 60) return "#facc15";
@@ -87,7 +87,7 @@ function sceneTimelineRows(value: unknown, max = 8) {
   }).filter((row) => row.timestamp || row.what).slice(0, max);
 }
 
-function finalV1QaPayload(entry?: VkpiKolVideoAnalysisCacheEntry | null) {
+export function finalV1QaPayload(entry?: VkpiKolVideoAnalysisCacheEntry | null) {
   const result = asRecord(entry?.result);
   const direct = asRecord(result.final_v1_keyframe_qa);
   if (Object.keys(direct).length) return direct;
@@ -97,7 +97,7 @@ function finalV1QaPayload(entry?: VkpiKolVideoAnalysisCacheEntry | null) {
   return {};
 }
 
-function qaBoolean(value: unknown) {
+export function qaBoolean(value: unknown) {
   if (typeof value === "boolean") return value;
   const text = String(value ?? "").trim().toLowerCase();
   if (["true", "1", "yes", "pass", "passed"].includes(text)) return true;
@@ -113,7 +113,7 @@ const QA_CHECK_LABELS: Record<string, string> = {
   title_image_consistency: "标题画面",
 };
 
-function qaStatusLabel(value: unknown) {
+export function qaStatusLabel(value: unknown) {
   const status = textFrom(value).toLowerCase();
   if (status === "pass") return "通过";
   if (status === "warn") return "提醒";
@@ -122,7 +122,7 @@ function qaStatusLabel(value: unknown) {
   return status || "未知";
 }
 
-function qaStatusClass(value: unknown) {
+export function qaStatusClass(value: unknown) {
   const status = textFrom(value).toLowerCase();
   if (status === "pass") return "border-emerald-400/15 bg-emerald-500/10 text-emerald-200";
   if (status === "fail") return "border-rose-400/20 bg-rose-500/12 text-rose-200";
@@ -130,7 +130,7 @@ function qaStatusClass(value: unknown) {
   return "border-white/[0.06] bg-slate-500/10 text-slate-300";
 }
 
-function qaCheckTags(checks: unknown) {
+export function qaCheckTags(checks: unknown) {
   return Object.entries(asRecord(checks)).map(([key, value]) => {
     const record = asRecord(value);
     return {
@@ -142,7 +142,7 @@ function qaCheckTags(checks: unknown) {
   });
 }
 
-function qaIssueItems(value: unknown) {
+export function qaIssueItems(value: unknown) {
   if (!Array.isArray(value)) return [];
   return value.map((item, index) => {
     const record = asRecord(item);
@@ -157,7 +157,7 @@ function qaIssueItems(value: unknown) {
   }).filter((item) => item.label || item.evidence || item.correction);
 }
 
-function qaScoreCorrectionText(value: unknown) {
+export function qaScoreCorrectionText(value: unknown) {
   const correction = asRecord(value);
   if (!Object.keys(correction).length) return "";
   const apply = qaBoolean(correction.apply);
@@ -203,7 +203,7 @@ function whyActionText(value: unknown): { why: string; action: string } {
   return { why: textFrom(r.why), action: firstText(r.action, typeof value === "string" ? value : "") };
 }
 
-function DeepLayersSection({ layer3, layer4, layer5 }: { layer3: Record<string, unknown>; layer4: Record<string, unknown>; layer5: Record<string, unknown> }) {
+export function DeepLayersSection({ layer3, layer4, layer5 }: { layer3: Record<string, unknown>; layer4: Record<string, unknown>; layer5: Record<string, unknown> }) {
   const [open, setOpen] = useState(false);
 
   const threeValues = [
@@ -303,7 +303,7 @@ function DeepLayersSection({ layer3, layer4, layer5 }: { layer3: Record<string, 
   );
 }
 
-function AnalysisCard({ bundle }: { bundle: AnalysisBundle }) {
+export function AnalysisCard({ bundle }: { bundle: AnalysisBundle }) {
   const payload = finalV1Payload(bundle.finalEntry);
   const layer1 = asRecord(payload.layer1_visual_content);
   const contentSummary = textFrom(layer1.content_summary);

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { BadgeCheck, Clock3, Database, Info, Link2, Loader2, Search, Sparkles, TrendingUp, UserPlus, Video } from "lucide-react";
+import { AlertTriangle, BadgeCheck, Clock3, Database, Info, Link2, Loader2, Search, ShieldCheck, Sparkles, TrendingUp, UserPlus, Video } from "lucide-react";
 
 import {
   deepCrawlKolUrl,
@@ -15,6 +15,22 @@ import {
 } from "../../../../domains/kol";
 import { proxiedImageUrl } from "../../shared/mediaProxy";
 import { enqueueAllKolVideos, getKolVideoAnalysisCache, type VkpiKolVideoAnalysisCacheEntry } from "../../../../services/vkpi/kolPool-api";
+// A1·复用 KOLVideoAnalysisPanel 的画面质量分 / 三观-归因-建议 / 关键帧 QA 渲染原子(纯读 final_v1/QA 缓存,绝不触 viltrox_fit_score)。
+import {
+  DeepLayersSection,
+  analysisScoreColor,
+  compactText,
+  finalV1QaPayload,
+  firstText,
+  normaliseScore,
+  qaBoolean,
+  qaCheckTags,
+  qaIssueItems,
+  qaScoreCorrectionText,
+  qaStatusClass,
+  qaStatusLabel,
+  textFrom,
+} from "./KOLVideoAnalysisPanel";
 
 type Mode = "idle" | "url" | "text";
 type State = "idle" | "loading" | "ready" | "executing" | "error";
@@ -908,11 +924,17 @@ function sceneTimelineRowsLocal(value: unknown, max = 8): { key: string; timesta
   }).filter((row) => row.timestamp || row.what).slice(0, max);
 }
 
+// A1·URL 视频内联深析。纯读 final_v1 + final_v1_keyframe_qa 两份缓存(no-store),
+// 渲染:画面质量分 layer6(content_quality_score 内容质量 / marketing_value 投放价值)、
+// 分镜时间线 layer1、三观/归因/建议 layer3-5(复用 DeepLayersSection)、关键帧 QA。
+// 绝不触 viltrox_fit_score:此处只读 final_v1/QA,从不写任何评分。
 function VideoSceneAnalysis({ apiToken, evidenceId }: { apiToken: string; evidenceId: string }) {
   const [entry, setEntry] = useState<VkpiKolVideoAnalysisCacheEntry | null>(null);
+  const [qaEntry, setQaEntry] = useState<VkpiKolVideoAnalysisCacheEntry | null>(null);
   useEffect(() => {
     let cancelled = false;
     setEntry(null);
+    setQaEntry(null);
     if (!apiToken || !evidenceId) return undefined;
     getKolVideoAnalysisCache(apiToken, evidenceId, "video_analysis_final_v1")
       .then((res) => {
@@ -922,6 +944,15 @@ function VideoSceneAnalysis({ apiToken, evidenceId }: { apiToken: string; eviden
       .catch(() => {
         // 静默降级:无缓存/读取失败则不渲染分析框,不打断视频展示。
       });
+    // 关键帧 QA 是独立 derive_method;缺它不影响 final_v1 主体渲染(独立 try)。
+    getKolVideoAnalysisCache(apiToken, evidenceId, "video_analysis_final_v1_keyframe_qa")
+      .then((res) => {
+        if (cancelled) return;
+        if (res.state === "ready" && res.entry) setQaEntry(res.entry);
+      })
+      .catch(() => {
+        // QA 缺失静默:只是少一块复核信息,不阻断主分析展示。
+      });
     return () => {
       cancelled = true;
     };
@@ -929,11 +960,49 @@ function VideoSceneAnalysis({ apiToken, evidenceId }: { apiToken: string; eviden
   const result = asRecord(entry?.result);
   const payload = asRecord(result.video_analysis_final_v1).layer1_visual_content ? asRecord(result.video_analysis_final_v1) : result;
   const layer1 = asRecord(payload.layer1_visual_content);
+  const layer2 = asRecord(payload.layer2_viewer_emotion);
+  const layer3 = asRecord(payload.layer3_three_values);
+  const layer4 = asRecord(payload.layer4_attribution);
+  const layer5 = asRecord(payload.layer5_recommendations);
+  const layer6 = asRecord(payload.layer6_flags_and_scores);
+  const scores = asRecord(layer6.scores);
+  // 画面质量分:content_quality_score=内容质量,marketing_value=投放价值(口径与 KOLVideoAnalysisPanel.AnalysisCard 一致)。
+  const contentScore = normaliseScore(scores.content_quality_score);
+  const marketingScore = normaliseScore(scores.marketing_value_score ?? layer6.marketing_value_score);
+  const verdict = textFrom(layer6.final_verdict) || marketingScore.rationale || textFrom(layer6.key_hook);
+  const viewerReaction = firstText(layer2.one_sentence_viewer_reaction, layer2.one_sentence_viewer_feeling);
+  const riskText = textFrom(layer6.risk_flags);
   const contentSummary = cleanText(layer1.content_summary);
   const sceneTimeline = sceneTimelineRowsLocal(layer1.scene_timeline);
-  if (!contentSummary && !sceneTimeline.length) return null;
+  const hasScores = contentScore.score != null || marketingScore.score != null;
+  // 关键帧 QA(复用面板口径):pass/checks/issues/纠偏建议。
+  const qaPayload = finalV1QaPayload(qaEntry);
+  const qaHasPayload = Object.keys(qaPayload).length > 0;
+  const qaPass = qaBoolean(qaPayload.qa_pass ?? asRecord(qaEntry?.result).qa_pass);
+  const qaBadgeText = qaPass === false ? "需复核" : qaPass === true ? "通过" : "未定";
+  const qaSummary = textFrom(qaPayload.summary);
+  const qaConfidence = Number(qaPayload.confidence);
+  const qaChecks = qaCheckTags(qaPayload.checks);
+  const qaIssues = qaIssueItems(qaPayload.issues);
+  const qaCorrection = qaScoreCorrectionText(qaPayload.score_correction);
+  if (!hasScores && !contentSummary && !sceneTimeline.length && !qaHasPayload) return null;
   return (
     <div className="mt-2 space-y-2">
+      {hasScores ? (
+        <div className="grid grid-cols-2 gap-2">
+          <div className="rounded-md border border-white/[0.05] bg-black/25 px-2.5 py-2">
+            <div className="mb-1 text-[9px] text-slate-500">内容质量</div>
+            <div className="text-[22px] font-bold leading-none tabular-nums" style={{ color: analysisScoreColor(contentScore.score) }}>{contentScore.score ?? "—"}</div>
+          </div>
+          <div className="rounded-md border border-white/[0.05] bg-black/25 px-2.5 py-2">
+            <div className="mb-1 text-[9px] text-slate-500">投放价值</div>
+            <div className="text-[22px] font-bold leading-none tabular-nums" style={{ color: analysisScoreColor(marketingScore.score) }}>{marketingScore.score ?? "—"}</div>
+          </div>
+        </div>
+      ) : null}
+      {verdict ? (
+        <div className="text-[10.5px] leading-relaxed text-slate-300">{compactText(verdict, 180)}</div>
+      ) : null}
       {contentSummary ? (
         <div className="rounded-md border border-white/[0.05] bg-white/[0.02] px-2.5 py-2">
           <div className="mb-1 text-[9px] uppercase tracking-wider text-slate-500">内容概述</div>
@@ -951,6 +1020,42 @@ function VideoSceneAnalysis({ apiToken, evidenceId }: { apiToken: string; eviden
               </div>
             ))}
           </div>
+        </div>
+      ) : null}
+      {viewerReaction || riskText ? (
+        <div className="flex flex-wrap gap-1.5 text-[9.5px]">
+          {viewerReaction ? <span className="rounded bg-purple-500/10 px-2 py-1 text-purple-200">心动: {compactText(viewerReaction, 54)}</span> : null}
+          {riskText ? <span className="rounded bg-amber-500/10 px-2 py-1 text-amber-200">风险: {compactText(riskText, 60)}</span> : null}
+        </div>
+      ) : null}
+      <DeepLayersSection layer3={layer3} layer4={layer4} layer5={layer5} />
+      {qaHasPayload ? (
+        <div className={`rounded-md border p-2 ${qaPass === false ? "border-rose-400/20 bg-rose-500/[0.045]" : "border-emerald-400/15 bg-emerald-500/[0.035]"}`}>
+          <div className="mb-1.5 flex items-center justify-between gap-2">
+            <span className={`inline-flex items-center gap-1 rounded px-2 py-1 text-[9px] font-medium ${qaPass === false ? "bg-rose-500/15 text-rose-200" : "bg-emerald-500/15 text-emerald-200"}`}>
+              {qaPass === false ? <AlertTriangle size={10} /> : <ShieldCheck size={10} />}
+              关键帧 QA {qaBadgeText}
+            </span>
+            {Number.isFinite(qaConfidence) ? <span className="text-[9px] text-slate-500">置信 {Math.round(qaConfidence * 100)}%</span> : null}
+          </div>
+          {qaSummary ? <div className="mb-1.5 text-[10px] leading-relaxed text-slate-200">{compactText(qaSummary, 150)}</div> : null}
+          {qaChecks.length ? (
+            <div className="mb-1.5 flex flex-wrap gap-1">
+              {qaChecks.map((check) => (
+                <span key={check.key} className={`rounded border px-1.5 py-0.5 text-[8.5px] ${qaStatusClass(check.status)}`} title={check.detail || undefined}>
+                  {check.label}: {qaStatusLabel(check.status)}
+                </span>
+              ))}
+            </div>
+          ) : null}
+          {qaIssues.slice(0, 2).map((issue) => (
+            <div key={issue.key} className="mb-1 rounded border border-white/[0.05] bg-black/20 px-2 py-1 text-[9.5px] text-slate-300">
+              <span className="text-amber-200">{issue.label}</span>
+              {issue.evidence ? <span> · {compactText(issue.evidence, 90)}</span> : null}
+              {issue.correction ? <span className="text-cyan-200"> · {compactText(issue.correction, 70)}</span> : null}
+            </div>
+          ))}
+          {qaCorrection ? <div className="text-[9.5px] text-slate-400">纠偏建议: {compactText(qaCorrection, 150)}</div> : null}
         </div>
       ) : null}
     </div>
@@ -1152,9 +1257,11 @@ function UrlSummary({
             </div>
           </div>
           {apiToken ? (
+            // A1·evidenceId 口径对齐:只用 video 证据 id 查 video 缓存。
+            // 移除 matched_kol_pool_id fallback——KOL 池 id 不是 video 证据 id,拿它查会命中错缓存。缺 evidence_id 则 VideoSceneAnalysis 自身静默不渲染。
             <VideoSceneAnalysis
               apiToken={apiToken}
-              evidenceId={String(videoFlow.evidence_id ?? result.matched_kol_pool_id ?? "").trim()}
+              evidenceId={String(videoFlow.evidence_id ?? "").trim()}
             />
           ) : null}
         </div>
