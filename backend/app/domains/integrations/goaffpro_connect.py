@@ -514,12 +514,22 @@ def _extract_list(data: Any, *keys: str) -> list[dict[str, Any]]:
     return []
 
 
-def list_affiliates(limit: int | None = None, offset: int | None = None) -> dict[str, Any]:
+def list_affiliates(limit: int | None = None, offset: int | None = None, *, fetch_all: bool = False) -> dict[str, Any]:
     """List affiliates (GET /admin/affiliates). creds-ready: no token -> not_configured.
 
     【待 key 校准】分页参数名(limit/offset vs page/per_page)与响应包裹键待真 key 锁定。
-    返回 {ok, affiliates?, count?, raw?, reason?/error?}。绝不抛、绝不烧 LLM。
+    fetch_all=True(且未显式 offset)→ 循环翻页拉全量 affiliate;否则单页(API 端点手动翻页)。
+    返回 {ok, affiliates?, count?, total?, partial?, raw?, reason?/error?}。绝不抛、绝不烧 LLM。
     """
+    if fetch_all and offset is None:
+        page = _paginate_rows("admin/affiliates", {"fields": _AFFILIATE_FIELDS}, ("affiliates", "data", "results"))
+        mapped = [_map_affiliate(r) for r in page.get("rows") or []]
+        out: dict[str, Any] = {"ok": bool(page.get("ok")), "affiliates": mapped, "count": len(mapped), "total": page.get("total")}
+        if page.get("partial"):
+            out["partial"] = True
+        if page.get("error"):
+            out["error"] = page["error"]
+        return out
     params: dict[str, Any] = {"fields": _AFFILIATE_FIELDS}
     params["limit"] = int(limit) if limit else _DEFAULT_PAGE_LIMIT
     if offset:
@@ -534,12 +544,22 @@ def list_affiliates(limit: int | None = None, offset: int | None = None) -> dict
     return {"ok": True, "affiliates": mapped, "count": len(mapped), "total": total}
 
 
-def list_orders(limit: int | None = None, offset: int | None = None) -> dict[str, Any]:
+def list_orders(limit: int | None = None, offset: int | None = None, *, fetch_all: bool = False) -> dict[str, Any]:
     """List affiliate orders (GET /admin/orders). creds-ready: no token -> not_configured.
 
     【待 key 校准】分页参数名与响应包裹键待真 key 锁定。
-    返回 {ok, orders?, count?, reason?/error?}。绝不抛、绝不烧 LLM。
+    fetch_all=True(且未显式 offset)→ 循环翻页拉**全量**(防只取一页漏账);否则单页(API 端点手动翻页)。
+    返回 {ok, orders?, count?, total?, partial?, reason?/error?}。绝不抛、绝不烧 LLM。
     """
+    if fetch_all and offset is None:
+        page = _paginate_rows("admin/orders", {"fields": _SALE_FIELDS}, ("orders", "sales", "data", "results"))
+        mapped = [_map_order(r) for r in page.get("rows") or []]
+        out: dict[str, Any] = {"ok": bool(page.get("ok")), "orders": mapped, "count": len(mapped), "total": page.get("total")}
+        if page.get("partial"):
+            out["partial"] = True
+        if page.get("error"):
+            out["error"] = page["error"]
+        return out
     params: dict[str, Any] = {"fields": _SALE_FIELDS}
     params["limit"] = int(limit) if limit else _DEFAULT_PAGE_LIMIT
     if offset:
@@ -574,13 +594,74 @@ def _soft_error(data: Any) -> str:
     return ""
 
 
+def _paginate_rows(
+    path: str,
+    base_params: dict[str, Any],
+    list_keys: tuple[str, ...],
+    *,
+    page_limit: int = _DEFAULT_PAGE_LIMIT,
+    max_pages: int = 2000,
+) -> dict[str, Any]:
+    """循环翻页拉全量(offset 递增直到本页 < page_limit)→ 返回 {ok, rows, total, partial, error}。
+
+    防漏账核心:GOAFFPRO 单页上限 _DEFAULT_PAGE_LIMIT(100),过去只取一页 → 超出永久丢、佣金少算。
+    契约:ok = 至少首页成功(有可用数据);partial = 中途某页失败(已拉到的 rows 照返,不静默截断
+    冒充全量);首页即失败 → ok=False、rows=[]。绝不抛、绝不烧 LLM。
+    """
+    rows: list[dict[str, Any]] = []
+    total: int | None = None
+    offset = 0
+    ok = False
+    partial = False
+    error = ""
+    for _ in range(max(1, int(max_pages))):
+        params = {**base_params, "limit": page_limit, "offset": offset}
+        result = _get(path, params)
+        if not result.get("ok"):
+            error = str(result.get("error") or result.get("reason") or "page fetch failed")
+            partial = True
+            break
+        data = result.get("data")
+        se = _soft_error(data)
+        if se:
+            error = se
+            partial = True
+            break
+        ok = True
+        if total is None and isinstance(data, dict):
+            total = data.get("total_results")
+        page = _extract_list(data, *list_keys)
+        rows.extend(page)
+        if len(page) < page_limit:
+            break
+        offset += page_limit
+    return {"ok": ok, "rows": rows, "total": total, "partial": partial, "error": error}
+
+
 def list_traffic(
-    affiliate_id: str | int | None = None, limit: int | None = None, offset: int | None = None
+    affiliate_id: str | int | None = None,
+    limit: int | None = None,
+    offset: int | None = None,
+    *,
+    fetch_all: bool = False,
 ) -> dict[str, Any]:
     """GET /admin/traffic(点击日志,fields 必填)。可按 affiliate_id 过滤(实测有效)。
 
-    返回 {ok, clicks?, count?, total?, reason?/error?}。total = total_results(全量点击数)。绝不抛。
+    fetch_all=True(且未显式 offset)→ 循环翻页拉全量点击行;否则单页。
+    返回 {ok, clicks?, count?, total?, partial?, reason?/error?}。total = total_results(全量点击数)。绝不抛。
     """
+    if fetch_all and offset is None:
+        bp: dict[str, Any] = {"fields": _TRAFFIC_FIELDS}
+        if affiliate_id:
+            bp["affiliate_id"] = str(affiliate_id)
+        page = _paginate_rows("admin/traffic", bp, ("traffic", "clicks", "data", "results"))
+        rows = page.get("rows") or []
+        out: dict[str, Any] = {"ok": bool(page.get("ok")), "clicks": rows, "count": len(rows), "total": page.get("total")}
+        if page.get("partial"):
+            out["partial"] = True
+        if page.get("error"):
+            out["error"] = page["error"]
+        return out
     params: dict[str, Any] = {"fields": _TRAFFIC_FIELDS}
     if affiliate_id:
         params["affiliate_id"] = str(affiliate_id)
@@ -613,11 +694,10 @@ def affiliate_attribution(affiliate_id: str | int) -> dict[str, Any]:
     tr = list_traffic(affiliate_id=aid, limit=1)
     tr_ok = bool(tr.get("ok"))
     clicks = int(tr.get("total") if tr_ok and tr.get("total") is not None else (tr.get("count") or 0))
-    od = _get("admin/orders", {"fields": _SALE_FIELDS, "affiliate_id": aid, "limit": 250})
-    od_data = od.get("data") if od.get("ok") else None
-    od_soft = _soft_error(od_data)
-    od_ok = bool(od.get("ok")) and not od_soft
-    orders_list = _extract_list(od_data, "orders", "sales", "data", "results") if od_ok else []
+    # 订单/GMV/佣金:循环翻页拉该 affiliate **全量**订单(过去只取一页 limit=250 → 订单超 250 漏算佣金)。
+    op = _paginate_rows("admin/orders", {"fields": _SALE_FIELDS, "affiliate_id": aid}, ("orders", "sales", "data", "results"))
+    od_ok = bool(op.get("ok"))
+    orders_list = op.get("rows") or []
     gmv = sum(to_cents(o.get("total") or o.get("order_total")) for o in orders_list)
     commission = sum(to_cents(o.get("commission")) for o in orders_list)
     currency = ""
@@ -625,7 +705,7 @@ def affiliate_attribution(affiliate_id: str | int) -> dict[str, Any]:
         if o.get("currency"):
             currency = str(o["currency"])
             break
-    partial = (not tr_ok) or (not od_ok)
+    partial = (not tr_ok) or (not od_ok) or bool(op.get("partial"))
     out = {
         "ok": not partial,
         "clicks": clicks,
@@ -636,7 +716,7 @@ def affiliate_attribution(affiliate_id: str | int) -> dict[str, Any]:
         "partial": partial,
     }
     if partial:
-        out["error"] = od_soft or tr.get("error") or od.get("error") or "goaffpro query failed"
+        out["error"] = op.get("error") or tr.get("error") or "goaffpro query failed"
     return out
 
 

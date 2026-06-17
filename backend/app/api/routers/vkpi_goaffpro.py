@@ -467,7 +467,8 @@ def sync_goaffpro_sales(
     no creds -> {ok:false, reason:'not_configured'}。返回 {synced, matched, unmatched}。
     """
     goaffpro_connect.ensure_goaffpro_links_schema()
-    orders = goaffpro_connect.list_orders(limit=limit)
+    # 默认拉全量(循环翻页,防只取一页漏账);显式传 limit 时才单页封顶(调用方主动限流)。
+    orders = goaffpro_connect.list_orders(limit=limit) if limit else goaffpro_connect.list_orders(fetch_all=True)
     if not orders.get("ok"):
         return {
             "ok": False,
