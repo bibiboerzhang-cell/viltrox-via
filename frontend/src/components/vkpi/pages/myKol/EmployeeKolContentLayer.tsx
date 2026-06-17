@@ -171,6 +171,7 @@ export function EmployeeKolContentLayer({
   projects,
   viltroxOnly = true,
   postsOverride,
+  analyzedCount,
   subtitle,
   commentsFetcher,
 }: {
@@ -180,6 +181,8 @@ export function EmployeeKolContentLayer({
   viltroxOnly?: boolean;
   /** Pool 收藏行旁路(C4-full):evidence 已映射好的 PostPreview 直接喂入,跳过 kol posts 接口。 */
   postsOverride?: PostPreview[];
+  /** 已深析条数(诚实空态用:0 命中时说明"共 N 条已分析"而非回退显示全部)。 */
+  analyzedCount?: number;
   subtitle?: string;
   /** Pool 收藏行评论旁路:按 post 取评论(evidence 评论表),替代 marketing kol comments 接口。 */
   commentsFetcher?: (post: PostPreview) => Promise<{ rows: Array<Record<string, unknown>>; total: number }>;
@@ -399,7 +402,10 @@ export function EmployeeKolContentLayer({
         </div>
       ) : !postState.loading ? (
         <div className="mykol-employee-content-empty">
-          {viltroxOnly ? '该 KOL 暂无已识别的 Viltrox 相关内容。' : '该 KOL 暂无已缓存内容。'}
+          {viltroxOnly
+            ? `无 Viltrox 内容（共 ${postState.total || postState.items.length} 条已采集${typeof analyzedCount === 'number' ? ` / ${analyzedCount} 条已分析` : ''}）。`
+            : '该 KOL 暂无已缓存内容。'}
+          {viltroxOnly ? <small>关掉「Viltrox 相关」可查看该 KOL 全部内容；不自动回退,避免误导。</small> : null}
           {selectedProject ? <small>项目线索：{selectedProject.campaign || selectedProject.productName || selectedProject.stage}</small> : null}
         </div>
       ) : null}

@@ -278,9 +278,10 @@ export function PoolEvidenceContent({ apiToken, kol, poolId, viltroxOnly, projec
           apiToken={apiToken}
           kol={kol}
           projects={projects}
-          viltroxOnly={Boolean(viltroxOnly) && anyViltrox}
+          viltroxOnly={Boolean(viltroxOnly)}
           postsOverride={poolPosts}
-          subtitle={`Pool 收藏 · 视频深析 ${analyzedCount}/${videos.length}${Boolean(viltroxOnly) && !anyViltrox ? ' · 识别零命中,显示全部' : ''}`}
+          analyzedCount={analyzedCount}
+          subtitle={`Pool 收藏 · 视频深析 ${analyzedCount}/${videos.length}${Boolean(viltroxOnly) && !anyViltrox ? ` · 无 Viltrox 内容(共 ${videos.length} 条已采集 / ${analyzedCount} 条已分析)` : ''}`}
           commentsFetcher={poolCommentsFetcher}
         />
       )}
