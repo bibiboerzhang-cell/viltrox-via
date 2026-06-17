@@ -29,9 +29,9 @@ function CopyValueButton({ value, label = "复制" }: any) {
   );
 }
 
-// 判定 tracking_url 是否真带追踪码(含 ?ref= / &ref= / /ref/);光店铺链 = 未追踪。
+// 判定 tracking_url 是否真带**非空**追踪码(?ref=xxx / /ref/xxx);?ref= 空值或光店铺链 = 未追踪。
 export function hasRefParam(url: any): boolean {
-  return /[?&]ref=|\/ref\//i.test(String(url || ""));
+  return /[?&]ref=[^&\s]+|\/ref\/[^/\s]+/i.test(String(url || ""));
 }
 
 // D2:追踪链 + 优惠码卡片(只读输入框 + 复制 + 「发给 KOL」提示)。

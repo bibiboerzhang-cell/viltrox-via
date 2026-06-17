@@ -230,7 +230,7 @@ export function ProjectParticipationTab({
                               <GoaffproLinkSection
                                 apiToken={apiToken}
                                 kolPoolId={row.kolPoolId}
-                                product={row.productName || row.productSku}
+                                product={row.productName?.trim() || row.productSku?.trim() || undefined}
                               />
                             </div>
                           ) : null}

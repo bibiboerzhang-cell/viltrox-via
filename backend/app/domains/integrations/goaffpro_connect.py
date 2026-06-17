@@ -505,6 +505,9 @@ def list_orders(limit: int | None = None, offset: int | None = None) -> dict[str
     if not result.get("ok"):
         return result
     data = result.get("data")
+    se = _soft_error(data)
+    if se:
+        return {"ok": False, "error": se, "raw": data, "orders": [], "count": 0}
     rows = _extract_list(data, "orders", "sales", "data", "results")
     mapped = [_map_order(r) for r in rows]
     total = data.get("total_results") if isinstance(data, dict) else None
@@ -512,6 +515,18 @@ def list_orders(limit: int | None = None, offset: int | None = None) -> dict[str
 
 
 _TRAFFIC_FIELDS = "id,affiliate_id,created_at,landing_page,referrer"
+
+_LIST_KEYS = ("affiliates", "orders", "sales", "traffic", "clicks", "products", "data", "results")
+
+
+def _soft_error(data: Any) -> str:
+    """GOAFFPRO 软失败检测:HTTP200 但 body 是 {error/errors/message} 且无任何列表内容 →
+    返回错误串(视为失败);否则 ''。修 bug:list/_get 此前把 200+{error} 当成功 → 静默丢数据。"""
+    if isinstance(data, dict):
+        se = data.get("error") or data.get("errors") or data.get("message")
+        if se and not any(isinstance(data.get(k), list) for k in _LIST_KEYS):
+            return str(se)
+    return ""
 
 
 def list_traffic(
@@ -531,6 +546,9 @@ def list_traffic(
     if not result.get("ok"):
         return result
     data = result.get("data")
+    se = _soft_error(data)
+    if se:
+        return {"ok": False, "error": se, "raw": data, "clicks": [], "count": 0}
     rows = _extract_list(data, "traffic", "clicks", "data", "results")
     total = data.get("total_results") if isinstance(data, dict) else None
     return {"ok": True, "clicks": rows, "count": len(rows), "total": total}
@@ -540,16 +558,21 @@ def affiliate_attribution(affiliate_id: str | int) -> dict[str, Any]:
     """单 affiliate 的归因汇总:点击数 + 订单数 + GMV + 佣金(实时查 traffic + orders)。
 
     点击数取 traffic 的 total_results(便宜,limit=1);订单/GMV/佣金拉该 affiliate 的订单求和。
-    返回 {ok, clicks, orders, gmv_cents, commission_cents, currency}。绝不抛。
+    返回 {ok, clicks, orders, gmv_cents, commission_cents, currency, partial?, error?}。绝不抛。
+    任一子查询失败 → partial=True + error(让调用方/前端能区分「真零」与「查询失败」,不污染汇总)。
     """
     aid = str(affiliate_id or "").strip()
     base = {"ok": False, "clicks": 0, "orders": 0, "gmv_cents": 0, "commission_cents": 0, "currency": ""}
     if not aid:
         return {**base, "reason": "missing_id"}
     tr = list_traffic(affiliate_id=aid, limit=1)
-    clicks = int(tr.get("total") if tr.get("ok") and tr.get("total") is not None else (tr.get("count") or 0))
+    tr_ok = bool(tr.get("ok"))
+    clicks = int(tr.get("total") if tr_ok and tr.get("total") is not None else (tr.get("count") or 0))
     od = _get("admin/orders", {"fields": _SALE_FIELDS, "affiliate_id": aid, "limit": 250})
-    orders_list = _extract_list(od.get("data"), "orders", "sales", "data", "results") if od.get("ok") else []
+    od_data = od.get("data") if od.get("ok") else None
+    od_soft = _soft_error(od_data)
+    od_ok = bool(od.get("ok")) and not od_soft
+    orders_list = _extract_list(od_data, "orders", "sales", "data", "results") if od_ok else []
     gmv = sum(to_cents(o.get("total") or o.get("order_total")) for o in orders_list)
     commission = sum(to_cents(o.get("commission")) for o in orders_list)
     currency = ""
@@ -557,14 +580,19 @@ def affiliate_attribution(affiliate_id: str | int) -> dict[str, Any]:
         if o.get("currency"):
             currency = str(o["currency"])
             break
-    return {
-        "ok": True,
+    partial = (not tr_ok) or (not od_ok)
+    out = {
+        "ok": not partial,
         "clicks": clicks,
         "orders": len(orders_list),
         "gmv_cents": gmv,
         "commission_cents": commission,
         "currency": currency,
+        "partial": partial,
     }
+    if partial:
+        out["error"] = od_soft or tr.get("error") or od.get("error") or "goaffpro query failed"
+    return out
 
 
 # --- D2 写侧:一键给 KOL 建 affiliate + 拼追踪链 + 优惠码 ----------------------
@@ -875,13 +903,17 @@ def _norm_token_set(text: str) -> set[str]:
     return {t for t in re.split(r"[^a-z0-9]+", str(text or "").lower()) if len(t) >= 2}
 
 
-def list_products(keyword: str | None = None, limit: int | None = None) -> dict[str, Any]:
-    """GET /admin/commissions/products —— 店铺真实产品(带 handle,≤250)。
+def list_products(
+    keyword: str | None = None, limit: int | None = None, offset: int | None = None
+) -> dict[str, Any]:
+    """GET /admin/commissions/products —— 店铺真实产品(带 handle,单页 ≤250)。
 
-    handle = Shopify 产品页别名 → 产品页 = {store}/products/{handle}。可选 keyword 过滤。
+    handle = Shopify 产品页别名 → 产品页 = {store}/products/{handle}。可选 keyword 过滤、offset 分页。
     返回 {ok, products:[{id,name,handle,...}], count, reason?/error?}。绝不抛。
     """
     params: dict[str, Any] = {"limit": int(limit) if limit else 50}
+    if offset:
+        params["offset"] = int(offset)
     kw = str(keyword or "").strip()
     if kw:
         params["keyword"] = kw
@@ -919,9 +951,15 @@ def find_product_handle(query: str) -> dict[str, Any]:
     res = list_products(keyword=keyword, limit=50)
     products = res.get("products") or [] if res.get("ok") else []
     if not products:
-        res2 = list_products(limit=250)  # 退化:拉一页全量再匹配
-        products = res2.get("products") or [] if res2.get("ok") else []
-    best, best_score = None, 0.0
+        # 退化:keyword 搜不到 → 分页拉全量(每页 250,最多 4 页=1000)再匹配,避免 >250 漏数。
+        products = []
+        for off in (0, 250, 500, 750):
+            page = list_products(limit=250, offset=off)
+            pr = page.get("products") or [] if page.get("ok") else []
+            products.extend(pr)
+            if len(pr) < 250:
+                break
+    best, best_score, best_extra = None, 0.0, -1.0
     for p in products:
         if not p.get("handle"):
             continue
@@ -930,8 +968,11 @@ def find_product_handle(query: str) -> dict[str, Any]:
             continue
         overlap = len(q_tokens & p_tokens)
         score = overlap / max(1, len(q_tokens))
-        if score > best_score:
-            best, best_score = p, score
+        # 平局判别(修 bug:同分时此前取最后遇到的,非确定性):优先 query token 覆盖该产品比例高
+        # (越精确,p_tokens 越少冗余)→ 即 overlap/len(p_tokens) 大者胜。
+        extra = overlap / max(1, len(p_tokens))
+        if score > best_score or (score == best_score and extra > best_extra):
+            best, best_score, best_extra = p, score, extra
     # 至少 2 个 token 重合或覆盖过半才认,避免乱配。
     if best and (best_score >= 0.5 or len(q_tokens & (_norm_token_set(best.get("name")) | _norm_token_set(best.get("handle")))) >= 2):
         return {"ok": True, "handle": best["handle"], "name": best.get("name"), "id": best.get("id"), "score": round(best_score, 2)}

@@ -541,29 +541,32 @@ def goaffpro_summary(
         project_kol_ids = {int(dict(r)["kol_pool_id"]) for r in rows if dict(r).get("kol_pool_id") is not None}
         if not project_kol_ids:
             return {"ok": True, "items": [], "count": 0, "totals": _empty_totals(), "note": "该项目暂无派单 KOL"}
+    # 修 bug:project_id 时把 IN(...) 过滤放进 SQL(LIMIT 之前),避免「先 LIMIT 后过滤」漏掉
+    # 排在 100 名之后的该项目 KOL。
+    where = "COALESCE(affiliate_id, '') <> '' AND COALESCE(ref_code, '') <> ''"
+    sql_params: list = []
+    if project_kol_ids is not None:
+        where += " AND kol_pool_id IN (" + ",".join(["?"] * len(project_kol_ids)) + ")"
+        sql_params.extend(sorted(project_kol_ids))
+    sql_params.append(limit)
     links = conn.execute(
-        """
+        f"""
         SELECT kol_pool_id, affiliate_id, ref_code, coupon, tracking_url
         FROM vkpi_goaffpro_kol_links
-        WHERE COALESCE(affiliate_id, '') <> '' AND COALESCE(ref_code, '') <> ''
+        WHERE {where}
         ORDER BY created_at DESC
         LIMIT ?
         """,
-        (limit,),
+        tuple(sql_params),
     ).fetchall()
 
     items: list[dict] = []
+    partial_count = 0
     for r in links:
         d = dict(r)
         aid = str(d.get("affiliate_id") or "")
         if not aid:
             continue
-        if project_kol_ids is not None:
-            try:
-                if int(d.get("kol_pool_id")) not in project_kol_ids:
-                    continue
-            except (TypeError, ValueError):
-                continue
         name_row = conn.execute(
             "SELECT display_name, handle FROM vkpi_kol_pool WHERE id = ?",
             (d.get("kol_pool_id"),),
@@ -573,6 +576,9 @@ def goaffpro_summary(
             nd = dict(name_row)
             nm = str(nd.get("display_name") or "").strip() or str(nd.get("handle") or "").strip()
         attr = goaffpro_connect.affiliate_attribution(aid)
+        is_partial = bool(attr.get("partial"))
+        if is_partial:
+            partial_count += 1
         gmv_cents = int(attr.get("gmv_cents") or 0)
         comm_cents = int(attr.get("commission_cents") or 0)
         items.append(
@@ -591,6 +597,7 @@ def goaffpro_summary(
                 "gmv_usd": round(gmv_cents / 100, 2),
                 "commission_usd": round(comm_cents / 100, 2),
                 "currency": attr.get("currency") or "",
+                "partial": is_partial,  # True = 该 KOL 数据查询失败,显示值不可靠(非真零)
             }
         )
     totals = {
@@ -600,12 +607,16 @@ def goaffpro_summary(
         "gmv_usd": round(sum(float(it.get("gmv_usd") or 0) for it in items), 2),
         "commission_usd": round(sum(float(it.get("commission_usd") or 0) for it in items), 2),
     }
+    note = None if items else "尚无已建链的 KOL;在 KOL 详情或项目里生成追踪链后出现在此。"
+    if partial_count:
+        note = f"⚠️ {partial_count} 个 KOL 的 GOAFFPRO 数据查询失败,其显示值可能偏低(非真零)。"
     return {
         "ok": True,
         "items": items,
         "count": len(items),
         "totals": totals,
-        "note": None if items else "尚无已建链的 KOL;在 KOL 详情或项目里生成追踪链后出现在此。",
+        "partial_count": partial_count,
+        "note": note,
     }
 
 

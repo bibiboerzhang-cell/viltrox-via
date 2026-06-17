@@ -1147,7 +1147,7 @@ export function ShopifyHubPage({ apiToken = "" }: { apiToken?: string } = {}) {
                   e("th", { className: "py-2 pr-3 font-medium text-right" }, "点击"),
                   e("th", { className: "py-2 pr-3 font-medium text-right" }, "订单"),
                   e("th", { className: "py-2 pr-3 font-medium text-right" }, "GMV"),
-                  e("th", { className: "py-2 font-medium text-right" }, "ROI"),
+                  e("th", { className: "py-2 font-medium text-right" }, "佣金"),
                 ),
               ),
               e(
@@ -1185,7 +1185,7 @@ export function ShopifyHubPage({ apiToken = "" }: { apiToken?: string } = {}) {
                     e(
                       "td",
                       { className: "py-2 text-right" },
-                      fmtRoi(pickNum(r as Row, ["roi"])),
+                      fmtMoney(pickNum(r as Row, ["commission_usd"])),
                     ),
                   );
                 }),

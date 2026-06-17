@@ -350,15 +350,17 @@ export function ProjectDetailView({
     return () => { cancelled = true; };
   }, [apiToken, project.id]);
   const stats = useMemo(() => {
+    // 仅当本项目有已建链 KOL(kol_count>0)才用 GOAFFPRO 覆盖;此时 GOAFFPRO 即归因真源,
+    // 三个值统一取 GOAFFPRO(0 也是真零),口径一致避免 null/0 混淆。
     if (!goaffTotals || !(goaffTotals.kol_count ?? 0)) return baseStats;
     const gmv = goaffTotals.gmv_usd ?? 0;
     const cost = baseStats.cost;
     return {
       ...baseStats,
-      clicks: goaffTotals.clicks ?? baseStats.clicks,
-      orders: goaffTotals.orders ?? baseStats.orders,
+      clicks: goaffTotals.clicks ?? 0,
+      orders: goaffTotals.orders ?? 0,
       gmv,
-      roi: gmv != null && cost ? gmv / cost : baseStats.roi,
+      roi: cost ? gmv / cost : baseStats.roi,
     };
   }, [baseStats, goaffTotals]);
   const analytics = useMemo(() => buildAnalytics(rows), [rows]);
