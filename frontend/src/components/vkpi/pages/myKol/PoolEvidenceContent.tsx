@@ -3,6 +3,7 @@ import type { VkpiKolOption, VkpiProjectRow } from '../../vkpiTypes';
 import type { PostPreview } from '../channels/myKolMatrixTypes';
 import { safeNumber } from '../../shared/vkpiDataUtils';
 import { EmployeeKolContentLayer } from './EmployeeKolContentLayer';
+import { GoaffproLinkSection } from '../../shared/GoaffproLinkSection';
 
 // C4-full(裁决重做,2026-06-12;2026-06-12 复审令拆出独立文件,行为升级三处):
 // Pool 收藏行的右侧内容层——evidence 视频走 /kol-pool/{id}/videos,渲染复用
@@ -250,6 +251,8 @@ export function PoolEvidenceContent({ apiToken, kol, poolId, viltroxOnly, projec
           {kol?.profileUrl ? <a href={kol.profileUrl} target="_blank" rel="noreferrer" style={{ fontSize: 10, color: '#67e8f9' }}>打开主页</a> : null}
         </div>
       </div>
+      {/* 生成追踪链(GOAFFPRO)——与图2 同款操作排同区,复用 KOL 详情共享区块。poolId 即真 kol_pool_id。 */}
+      <GoaffproLinkSection apiToken={apiToken} kolPoolId={poolId} />
       {analyzeMsg ? (
         <div style={{ border: analyzeState === 'error' ? '1px solid rgba(244,63,94,0.3)' : '1px solid rgba(16,185,129,0.25)', background: analyzeState === 'error' ? 'rgba(244,63,94,0.08)' : 'rgba(16,185,129,0.06)', borderRadius: 8, padding: '6px 10px', fontSize: 10, color: analyzeState === 'error' ? '#fca5a5' : '#bbf7d0', marginBottom: 8 }}>{analyzeMsg}</div>
       ) : null}
