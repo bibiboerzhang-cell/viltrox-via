@@ -208,6 +208,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "159_vkpi_kol_pool_members.sql",
     "160_vkpi_project_members_group_origin.sql",
     "161_vkpi_kol_pool_members_group_origin.sql",
+    "162_vkpi_goaffpro_credentials.sql",
 )
 
 try:

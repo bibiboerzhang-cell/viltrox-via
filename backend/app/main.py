@@ -16,7 +16,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api.routers import activities, auth, admin, audit, creator, jobs, leaderboard, media, ops, platform_ingest, sse, student_identity, uploads, verify, via, vkpi, vkpi_access, vkpi_actions, vkpi_attribution_metrics, vkpi_comment_intelligence, vkpi_audit, vkpi_budgets, vkpi_comments, vkpi_costs, vkpi_dashboard_staff, vkpi_data_quality, vkpi_dealers, vkpi_evidence_assets, vkpi_events, vkpi_inventory, vkpi_shopify, vkpi_staff_groups, vkpi_feedback, vkpi_firewall, vkpi_industry_automation, vkpi_kol_decisions, vkpi_kol_links, vkpi_kol_memory, vkpi_kol_pool, vkpi_learning, vkpi_memory, vkpi_my_kol, vkpi_operating_review, vkpi_operations, vkpi_pillars, vkpi_product_analysis, vkpi_projects, vkpi_reconciliation, vkpi_reports, vkpi_search, vkpi_settings, vkpi_sentiment, vkpi_sync, vkpi_tasks, vkpi_weekly_reports, vkpi_workflow_assets
+from app.api.routers import activities, auth, admin, audit, creator, jobs, leaderboard, media, ops, platform_ingest, sse, student_identity, uploads, verify, via, vkpi, vkpi_access, vkpi_actions, vkpi_attribution_metrics, vkpi_comment_intelligence, vkpi_audit, vkpi_budgets, vkpi_comments, vkpi_costs, vkpi_dashboard_staff, vkpi_data_quality, vkpi_dealers, vkpi_evidence_assets, vkpi_events, vkpi_inventory, vkpi_shopify, vkpi_staff_groups, vkpi_feedback, vkpi_firewall, vkpi_goaffpro, vkpi_industry_automation, vkpi_kol_decisions, vkpi_kol_links, vkpi_kol_memory, vkpi_kol_pool, vkpi_learning, vkpi_memory, vkpi_my_kol, vkpi_operating_review, vkpi_operations, vkpi_pillars, vkpi_product_analysis, vkpi_projects, vkpi_reconciliation, vkpi_reports, vkpi_search, vkpi_settings, vkpi_sentiment, vkpi_sync, vkpi_tasks, vkpi_weekly_reports, vkpi_workflow_assets
 from app.api.routers import dashboard_account_picker
 from app.api.routers import vkpi_kol_portal
 from app.api.routers import commerce, deepsight, insights, intelligence, intelligence_admin, system_admin
@@ -777,6 +777,7 @@ if IS_ADMIN_APP:
     app.include_router(vkpi_inventory.router)
     app.include_router(vkpi_dealers.router)
     app.include_router(vkpi_shopify.router)
+    app.include_router(vkpi_goaffpro.router)
     app.include_router(vkpi_staff_groups.router)
     app.include_router(vkpi_feedback.router)
     app.include_router(vkpi_firewall.router)
