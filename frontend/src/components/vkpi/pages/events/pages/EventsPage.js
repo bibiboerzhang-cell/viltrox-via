@@ -116,7 +116,11 @@ export default function EventsPage({ currentUser, staff = [], initialEventId = n
         onBack: () => setSelectedId(null),
         onEdit: () => setEditingEvent(ev),
         onDelete: () => setDeletingEvent(ev),
-        onUpdateTeam: (newTeamIds) => setEvents(prev => prev.map(x => x.id === ev.id ? { ...x, teamUserIds: newTeamIds, updatedAt: "刚刚" } : x)),
+        onUpdateTeam: (newTeamIds) => {
+          setEvents(prev => prev.map(x => x.id === ev.id ? { ...x, teamUserIds: newTeamIds, updatedAt: "刚刚" } : x)); // 乐观
+          updateEvent(token, ev.id, { team_ids: newTeamIds }) // 落库(原仅本地 state，刷新即丢=数据丢失 bug)
+            .catch(err => { setLoadError("团队更新失败:" + String(err && err.message ? err.message : err)); });
+        },
         stock, setStock,
       }),
       editingEvent && e(NewEventModal, {

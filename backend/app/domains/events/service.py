@@ -70,6 +70,37 @@ def _can_view_all(staff: dict[str, Any] | None) -> bool:
 
 
 # ── Events ────────────────────────────────────────────────────────────────
+def _merge_invited_kols(conn: Any, event_id: Any, stored_json: Any) -> list[dict[str, Any]]:
+    """回填 invited_kols_json:它建时只初始化、邀请后不更新 → KOL 计数长期偏低/为 0。
+    用真 invites 表(邀请 UI 写这里=live 源)并集建时字段去重(by kol_id),既修计数又不丢建时数据。
+    """
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def _add(kol_id: Any, status: Any = "", travel: Any = "") -> None:
+        k = str(kol_id or "").strip()
+        if not k or k in seen:
+            return
+        seen.add(k)
+        out.append({"kol_id": k, "status": str(status or "pending"), "travel_status": str(travel or "")})
+
+    try:
+        for r in conn.execute(
+            "SELECT kol_id, status, travel_status FROM vkpi_event_kol_invites WHERE event_id = ? ORDER BY created_at ASC",
+            (str(event_id),),
+        ).fetchall():
+            d = dict(r)
+            _add(d.get("kol_id"), d.get("status"), d.get("travel_status"))
+    except Exception:
+        pass
+    for k in stored_json or []:
+        if isinstance(k, dict):
+            _add(k.get("kol_id") or k.get("kolId"), k.get("status"), k.get("travel_status") or k.get("travel"))
+        elif isinstance(k, (str, int)):
+            _add(k)
+    return out
+
+
 def list_events(staff: dict[str, Any] | None, *, limit: int = 200) -> dict[str, Any]:
     """列活动:管理层看全部;员工只看自己 owner 或在 team_ids 里的。"""
     conn = get_conn()
@@ -96,7 +127,10 @@ def list_events(staff: dict[str, Any] | None, *, limit: int = 200) -> dict[str, 
             "ORDER BY start_date DESC, created_at DESC LIMIT ?",
             (sid, sid, sid, safe_limit),
         ).fetchall()
-    return {"items": [_event_row(r) for r in rows]}
+    items = [_event_row(r) for r in rows]
+    for it in items:
+        it["invited_kols_json"] = _merge_invited_kols(conn, it.get("id"), it.get("invited_kols_json"))
+    return {"items": items}
 
 
 def get_event_detail(event_id: str, staff: dict[str, Any] | None) -> dict[str, Any]:
@@ -115,8 +149,10 @@ def get_event_detail(event_id: str, staff: dict[str, Any] | None) -> dict[str, A
     invites = conn.execute(
         "SELECT * FROM vkpi_event_kol_invites WHERE event_id = ? ORDER BY created_at ASC", (str(event_id),)
     ).fetchall()
+    item = _event_row(row)
+    item["invited_kols_json"] = _merge_invited_kols(conn, event_id, item.get("invited_kols_json"))
     return {
-        "item": _event_row(row),
+        "item": item,
         "tasks": [_task_row(t) for t in tasks],
         "expenses": [dict(x) for x in expenses],
         "invites": [dict(i) for i in invites],
