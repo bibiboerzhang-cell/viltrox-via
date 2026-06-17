@@ -1542,10 +1542,38 @@ def _profile_video_url(
 
 
 def _profile_video_thumbnail(item: dict[str, Any], snippet: dict[str, Any]) -> str:
-    for key in ("thumbnail_url", "thumbnailUrl", "thumbnail", "displayUrl", "imageUrl", "coverUrl", "cover"):
+    for key in (
+        "thumbnail_url",
+        "thumbnailUrl",
+        "thumbnail",
+        "displayUrl",
+        "imageUrl",
+        "coverUrl",
+        "cover",
+        # TikTok clockworks/tiktok-scraper top-level cover variants (IG uses
+        # displayUrl above; TikTok usually nests covers under videoMeta below,
+        # but some payloads also surface these at the top level).
+        "originalCoverUrl",
+        "dynamicCover",
+    ):
         value = _metadata_text(item.get(key))
         if value.startswith("http"):
             return value
+    # TikTok clockworks actor puts the real cover under videoMeta.* (mirrors
+    # channels/official.py and account_scan_service). Top-level coverUrl is
+    # rarely populated for TikTok, which is why TikTok thumbnails were empty.
+    video_meta = item.get("videoMeta") if isinstance(item.get("videoMeta"), dict) else {}
+    for key in ("coverUrl", "originalCoverUrl", "dynamicCoverUrl", "cover"):
+        value = _metadata_text(video_meta.get(key))
+        if value.startswith("http"):
+            return value
+    # `covers` array fallback (apify.py reads covers[0]); honest empty if absent.
+    covers = item.get("covers")
+    if isinstance(covers, list):
+        for entry in covers:
+            url = _metadata_text(entry.get("url") if isinstance(entry, dict) else entry)
+            if url.startswith("http"):
+                return url
     thumbnails = snippet.get("thumbnails") if isinstance(snippet.get("thumbnails"), dict) else {}
     for key in ("maxres", "standard", "high", "medium", "default"):
         value = thumbnails.get(key)
