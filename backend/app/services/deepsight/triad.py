@@ -46,7 +46,10 @@ def _record_triad_cost(provider: str, resp: Any) -> None:
         pin, pout = _TRIAD_PRICE.get(provider, (0.0, 0.0))
         usd = ti / 1_000_000.0 * pin + to / 1_000_000.0 * pout
         if usd > 0:
-            budget_guard.record_cost(_TRIAD_SCOPE, round(usd, 6))
+            budget_guard.record_cost(
+                scope=_TRIAD_SCOPE, cost_usd=round(usd, 6),
+                tokens_in=ti, tokens_out=to, ai_provider=provider,
+            )
     except Exception:
         logger.debug("triad.record_cost_failed", exc_info=True)
 

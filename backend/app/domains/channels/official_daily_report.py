@@ -296,7 +296,7 @@ def generate_one(channel: dict[str, Any], *, report_date: str, round_key: str = 
     if not analysis["play_performance"] and not analysis["suggestions"] and not analysis["headline"]:
         return {"channel_id": int(channel["id"]), "status": "analysis_unavailable"}
     try:
-        budget_guard.record_cost(_BUDGET_SCOPE, _EST_COST)
+        budget_guard.record_cost(scope=_BUDGET_SCOPE, cost_usd=_EST_COST)
     except Exception:
         logger.debug("official_daily_report.record_cost_failed", exc_info=True)
     facts = {

@@ -67,7 +67,7 @@ def generate_competitor_radar() -> dict[str, Any]:
         return {"status": "parse_empty"}
 
     try:
-        budget_guard.record_cost(_BUDGET_SCOPE, _EST_COST)
+        budget_guard.record_cost(scope=_BUDGET_SCOPE, cost_usd=_EST_COST)
     except Exception:
         logger.debug("competitor_radar.record_cost_failed", exc_info=True)
 

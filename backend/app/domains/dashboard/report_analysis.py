@@ -184,7 +184,7 @@ def analyze(report_text: str, period: str = "monthly", language: str = "zh") -> 
         return {"available": False, "reason": "analysis_unavailable"}
 
     try:
-        budget_guard.record_cost(_BUDGET_SCOPE, _EST_COST)
+        budget_guard.record_cost(scope=_BUDGET_SCOPE, cost_usd=_EST_COST)
     except Exception:
         logger.debug("report_analysis.record_cost_failed", exc_info=True)
 

@@ -185,7 +185,10 @@ def _record_cost(cost_scope: str, tokens_in: int, tokens_out: int) -> float:
         try:
             from app.domains.costs import budget_guard
 
-            budget_guard.record_cost(cost_scope, round(cost_usd, 6))
+            budget_guard.record_cost(
+                scope=cost_scope, cost_usd=round(cost_usd, 6),
+                tokens_in=tokens_in, tokens_out=tokens_out, ai_provider="anthropic",
+            )
         except Exception:
             logger.debug("llm_batch.record_cost_failed", exc_info=True)
     return round(cost_usd, 6)

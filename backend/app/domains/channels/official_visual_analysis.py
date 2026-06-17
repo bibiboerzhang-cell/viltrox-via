@@ -214,7 +214,7 @@ def _analyze_needs_media(conn: Any, channel: dict[str, Any], post: dict[str, Any
         _store(conn, channel_id=cid, post=post, status="failed", error=str((raw or {}).get("error") or "not_analyzed")[:300])
         return {"post_uid": puid, "status": "failed"}
     try:
-        budget_guard.record_cost(_BUDGET_SCOPE, _EST_COST_NEEDS_MEDIA)
+        budget_guard.record_cost(scope=_BUDGET_SCOPE, cost_usd=_EST_COST_NEEDS_MEDIA)
     except Exception:
         logger.debug("official_visual.record_cost_failed", exc_info=True)
     scores = _extract_scores(raw)
@@ -251,7 +251,7 @@ def analyze_one(channel: dict[str, Any], post: dict[str, Any]) -> dict[str, Any]
         _store(conn, channel_id=cid, post=post, status="failed", error=str((raw or {}).get("error") or "not_analyzed")[:300])
         return {"post_uid": puid, "status": "failed"}
     try:
-        budget_guard.record_cost(_BUDGET_SCOPE, _EST_COST)
+        budget_guard.record_cost(scope=_BUDGET_SCOPE, cost_usd=_EST_COST)
     except Exception:
         logger.debug("official_visual.record_cost_failed", exc_info=True)
     scores = _extract_scores(raw)
