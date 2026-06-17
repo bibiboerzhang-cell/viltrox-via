@@ -1,7 +1,18 @@
 import { platformLabels } from '../../shared/vkpiConstants';
-import { platformFromRaw } from '../../shared/vkpiDataUtils';
+import { objectValue, platformFromRaw, textValue } from '../../shared/vkpiDataUtils';
 
 export type RecommendationAction = 'shortlist' | 'reject' | 'claim';
+
+// P-KOL-6 软提醒:后端在已被他人认领时下发 claim_staff_name（负责人名）。
+// 推荐行的 raw 是整行,认领信息可能在顶层或嵌套 kol 内,这里防御式取值。
+function claimOwnerOf(recommendation: SmartRecommendation): string {
+  const raw = recommendation.raw || {};
+  const kol = objectValue(raw.kol);
+  const name = textValue(raw.claim_staff_name || kol.claim_staff_name || raw.assigned_staff_name || kol.assigned_staff_name, '')
+    .replace(/^-$/, '')
+    .trim();
+  return name;
+}
 
 export interface SmartRecommendation {
   id: string;
@@ -84,6 +95,8 @@ export function RecommendationPanel({
         {message ? <div className="vkpi-discover-empty is-compact">{message}</div> : null}
         {recommendations.length ? recommendations.map((recommendation) => {
           const activeId = getActiveId(recommendation);
+          const claimOwner = claimOwnerOf(recommendation);
+          const claimedByOther = Boolean(claimOwner);
           const competitorTier = recommendation.competitorRiskTier;
           const competitorLabel = competitorTier
             ? `${recommendation.competitorBrand ? recommendation.competitorBrand.toUpperCase() : '竞品'} ${competitorTier}${recommendation.competitorRiskScore ? ` ${recommendation.competitorRiskScore.toFixed(1)}` : ''}`
@@ -103,10 +116,16 @@ export function RecommendationPanel({
                 <strong>{recommendation.rank}. {recommendation.handle}</strong>
                 <p>{platformLabels[platformFromRaw(recommendation.platform)] || recommendation.platform} · {recommendation.status} · {recommendation.source}</p>
                 {competitorLabel ? <span className={`vkpi-discover-rec__risk is-${competitorTier}`}>{competitorLabel}</span> : null}
+                {claimedByOther ? <span className="vkpi-discover-rec__claim" title={`已被 ${claimOwner} 认领，认领前请先沟通避免重复`}>已被 {claimOwner} 认领</span> : null}
                 <em>{recommendation.reason}</em>
                 <div className="vkpi-discover-rec__actions" onClick={(event) => event.stopPropagation()}>
                   <button type="button" onClick={() => onAction(recommendation, 'shortlist')} disabled={loading}>入选</button>
-                  <button type="button" onClick={() => onAction(recommendation, 'claim')} disabled={loading}>认领</button>
+                  <button
+                    type="button"
+                    onClick={() => onAction(recommendation, 'claim')}
+                    disabled={loading || claimedByOther}
+                    title={claimedByOther ? `已被 ${claimOwner} 认领` : undefined}
+                  >认领</button>
                   <button type="button" onClick={() => onAction(recommendation, 'reject')} disabled={loading}>拒绝</button>
                 </div>
               </div>

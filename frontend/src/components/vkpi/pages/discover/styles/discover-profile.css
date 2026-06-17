@@ -42,6 +42,24 @@
   margin-top: 7px;
 }
 
+/* P-KOL-6 软提醒:已被他人认领的角标 + 操作区行内灰字提示(不硬拦,只提示) */
+.vkpi-discover-profile-head em.vkpi-discover-claim-tag {
+  border: 1px solid rgba(217, 119, 6, 0.24);
+  border-radius: 999px;
+  padding: 1px 8px;
+  background: #fffbeb;
+  color: #b45309;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.vkpi-discover-claim-hint {
+  margin: 0;
+  color: #b45309;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
 .vkpi-discover-profile-score {
   text-align: right;
 }

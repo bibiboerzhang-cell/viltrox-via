@@ -17,6 +17,7 @@ interface UiKol {
   country: string;
   topic: string;
   riskLabel: string;
+  claimOwner?: string;
   sourceKind?: 'kol' | 'platform_search' | 'kol_pool';
   raw: Record<string, unknown>;
 }
@@ -264,6 +265,11 @@ export function ProfilePanel({
   const assessmentScore = safeNumber(selectedAssessment?.score) || selectedKol.score;
   const assessmentGrade = textValue(selectedAssessment?.grade, selectedKol.grade);
   const candidateOnly = isPlatformSearchCandidate(selectedKol);
+  // P-KOL-6 软提醒:后端 list_kols 下发 claim_staff_name（已被认领者的负责人名）。
+  // canClaim 已对任何 claimOwner 置假,这里只补「软」提示告知是谁认领,避免重复认领。
+  // 候选(未建档)不参与认领占用语义,故 candidateOnly 时不提示。
+  const claimOwnerName = textValue(selectedKol.claimOwner, '').replace(/^-$/, '').trim();
+  const claimedByOther = Boolean(claimOwnerName && !candidateOnly);
   const historicalMatch = objectValue(selectedKol.raw.historical_match || selectedKol.raw.history_match);
   const historicalCooperationCount = safeNumber(historicalMatch.cooperation_count || selectedKol.raw.cooperation_count || selectedKol.raw.history_cooperation_count);
   const historicalRecentCooperations = arrayValue(historicalMatch.recent_cooperations).map(objectValue);
@@ -295,6 +301,7 @@ export function ProfilePanel({
           <div>
             <em>{profileStatus}</em>
             <em>内容 {selectedKol.contentCountLabel}</em>
+            {claimedByOther ? <em className="vkpi-discover-claim-tag" title={`已被 ${claimOwnerName} 认领，认领前请先沟通避免重复`}>已被 {claimOwnerName} 认领</em> : null}
           </div>
         </div>
         <div className="vkpi-discover-profile-score">
@@ -469,8 +476,17 @@ export function ProfilePanel({
           <button className="vkpi-discover-btn is-primary" type="button" onClick={onOpenProject} disabled={!canCreateProject || busy}>加入项目</button>
           <button className="vkpi-discover-btn" type="button" onClick={onSendToIntelligence} disabled={!canSendToIntelligence || busy}>送智能中心复核</button>
           <button className="vkpi-discover-btn" type="button" onClick={() => void onDeepScan()} disabled={!canScan || scanBusy}>深度评估</button>
-          <button className="vkpi-discover-btn" type="button" onClick={() => void onClaim()} disabled={!canClaim || busy}>认领</button>
+          <button
+            className="vkpi-discover-btn"
+            type="button"
+            onClick={() => void onClaim()}
+            disabled={!canClaim || busy}
+            title={claimedByOther ? `已被 ${claimOwnerName} 认领` : undefined}
+          >认领</button>
         </div>
+        {claimedByOther ? (
+          <p className="vkpi-discover-claim-hint" role="status">已被 {claimOwnerName} 认领；如需接手请先与对方沟通，避免重复认领。</p>
+        ) : null}
         <textarea value={internalNote} onChange={(event) => setInternalNote(event.target.value)} placeholder="内部备注（UI 本地态，后续接消息/备注接口）" />
       </section>
     </div>
