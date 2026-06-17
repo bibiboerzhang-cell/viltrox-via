@@ -213,6 +213,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "164_vkpi_goaffpro_kol_metrics.sql",
     "165_vkpi_events_product.sql",
     "166_vkpi_llm_batches.sql",
+    "167_scheduler_task_voc.sql",
 )
 
 try:

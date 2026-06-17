@@ -241,6 +241,33 @@ async def job_vkpi_goaffpro_metrics_sync():
         logger.exception("scheduler.vkpi_goaffpro_metrics_sync_failed")
 
 
+async def job_vkpi_comment_sentiment_refresh():
+    """VoC 评论情感每日自动刷新(自家+竞品行业帖)。原链路全有、独缺触发器 → 舆情情报靠手动。
+
+    走既有 comments.intelligence.process_recent_posts(采集→情感→分类)。
+    config-gate:scheduler_tasks.vkpi_comment_sentiment_refresh(默认 OFF,运营显式开)。零触红线。
+    """
+    if not _scheduler_task_enabled("vkpi_comment_sentiment_refresh"):
+        return
+    try:
+        from app.domains.comments import intelligence
+
+        result = await asyncio.to_thread(
+            intelligence.process_recent_posts,
+            days=7,
+            limit=50,
+            collect_comments=True,
+            analyze_sentiment=True,
+            classify_pillar=True,
+        )
+        logger.info(
+            "scheduler.comment_sentiment_refresh",
+            extra={"processed": (result or {}).get("processed") if isinstance(result, dict) else None},
+        )
+    except Exception:
+        logger.exception("scheduler.comment_sentiment_refresh_failed")
+
+
 async def job_llm_batch_poll():
     """每 10 分钟轮询 Anthropic Message Batches:ended→回收 dispatch 落各自域表;超龄→标 expired。
 
@@ -836,6 +863,15 @@ async def start_scheduler() -> None:
         trigger=CronTrigger(day_of_week="mon", hour=2, minute=0),
         id="vkpi_weekly_report",
         name="V-KPI weekly manager report",
+        max_instances=1,
+        coalesce=True,
+    )
+    # ── VoC 评论情感每日刷新(config-gate,默认 OFF)──
+    _scheduler.add_job(
+        job_vkpi_comment_sentiment_refresh,
+        trigger=CronTrigger(hour=5, minute=0),
+        id="vkpi_comment_sentiment_refresh",
+        name="Daily VoC comment sentiment refresh (own + competitor)",
         max_instances=1,
         coalesce=True,
     )
