@@ -188,6 +188,12 @@ def _effective_tracking_url(link: dict) -> str:
     return stored
 
 
+def _ref_is_bad(ref_code, affiliate_id) -> bool:
+    """ref_code 失效判定:空,或等于 affiliate_id(数字编号被误当 ref 码 → 链追不到,须回查真码)。"""
+    rc = str(ref_code or "").strip()
+    return (not rc) or (rc == str(affiliate_id or "").strip())
+
+
 def _tracks_now(ref_code: str, status: str) -> bool:
     """诚实标记:ref_code 拿到=链可拼可追踪;status 仅影响佣金结算(pending 也能追踪)。"""
     return bool(ref_code) and str(status or "").lower() in ("", "approved", "active", "1", "pending")
@@ -259,8 +265,9 @@ def link_kol_affiliate(
     goaffpro_connect.ensure_goaffpro_links_schema()
     conn = get_conn()
     existing = _load_link(conn, kol_pool_id)
-    if existing and str(existing.get("ref_code") or "").strip():
-        # 已有真 ref_code → 幂等返回(用 _effective_tracking_url 修正历史光链 tracking_url)。
+    if existing and not _ref_is_bad(existing.get("ref_code"), existing.get("affiliate_id")):
+        # 已有**有效** ref_code → 幂等返回(用 _effective_tracking_url 修正历史光链 tracking_url)。
+        # ref_code 失效(空 / 等于 affiliate_id)则不走幂等,落到下面 resolve 回查真码。
         return {
             "ok": True,
             "linked": True,
@@ -317,7 +324,8 @@ def get_kol_affiliate_link(
         return {"linked": False, "kol_pool_id": kol_pool_id}
     ex_ref = str(link.get("ref_code") or "").strip()
     needs_regenerate = False
-    if not ex_ref:
+    # 失效=空 或 ref_code 等于 affiliate_id(数字编号误当 ref 码)→ 搜回真码自愈。
+    if _ref_is_bad(ex_ref, link.get("affiliate_id")):
         identity = _load_kol_identity(conn, kol_pool_id)
         email = _effective_kol_email(identity, kol_pool_id)[0] if identity else None
         res = goaffpro_connect.resolve_affiliate(
@@ -325,7 +333,7 @@ def get_kol_affiliate_link(
             email=email,  # 同 POST 的确定性占位邮箱 → 搜得到 POST 建的那个
             create=False,  # GET 只搜不建
         )
-        if res.get("ok") and res.get("ref_code"):
+        if res.get("ok") and res.get("ref_code") and not _ref_is_bad(res.get("ref_code"), res.get("affiliate_id")):
             new_url = goaffpro_connect.referral_link(res.get("affiliate"), res["ref_code"])
             new_coupon = str(link.get("coupon") or "") or str(res.get("coupon") or "")
             conn.execute(

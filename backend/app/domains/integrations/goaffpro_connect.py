@@ -617,11 +617,16 @@ def _extract_affiliate(data: Any) -> dict[str, Any]:
 
 
 def _read_ref_code(affiliate_raw: dict[str, Any]) -> str:
-    """读 affiliate 的推荐码 —— GOAFFPRO 字段名未定,宽容多别名。真 key 后锁定。"""
+    """读 affiliate 的推荐码 —— 只认真正的 ref 码字段。
+
+    修 bug(2026-06-17):此前兜底读了 coupon/id → create 当下没回 ref_code 时把**数字
+    affiliate_id 当成了 ref 码**(如 ?ref=20394702),还因 ref_code 非空跳过了回查真码(bofcjplp)
+    → 链追不到。现只读 ref_code/referral_code/refcode,读不到返 '' → 触发 get_affiliate 回查真码。
+    """
     raw = affiliate_raw or {}
-    for k in ("ref_code", "referral_code", "refcode", "coupon", "id"):
+    for k in ("ref_code", "referral_code", "refcode"):
         v = raw.get(k)
-        if v not in (None, ""):
+        if v not in (None, "") and not isinstance(v, (dict, list)):
             return str(v)
     return ""
 
