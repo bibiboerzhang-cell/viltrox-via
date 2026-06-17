@@ -2,7 +2,9 @@
 // P-GROUP-34:共享 Projects 从「文本框」改成「真多选器」——选中存项目 id 数组,
 //   后端 staff_groups/service.py 据此把「组级 shared_projects × 组成员」展开成真
 //   vkpi_project_members 行,scope.project_filter 复用现成 enforce 让组成员看到被共享项目。
-//   shared_kol_pool 仍是文本(KOL 多选留待集成者,见 integrator_notes)。
+// P-GROUP-7 扩展:共享 KOL 池同样从「文本框」改成「真多选器」——选中存 kol_pool_id 数组到
+//   permissions.shared_kol_pool_ids,后端把「组级 shared_kol_pool_ids × 组成员」展开成真
+//   vkpi_kol_pool_members 行(迁移 161),scope.member_shared_kol_ids 让组成员只读看到被共享 KOL。
 
 
 import React, { useEffect, useState } from "react";
@@ -14,6 +16,7 @@ import { apiFetch } from "../../../../../services/http";
 const e = React.createElement;
 
 type ProjectOption = { id: string; name: string };
+type KolOption = { id: string; name: string; sub: string };
 
 // 把后端项目行(p.* 形态)归一成 {id, name}:id 用 id,name 优先 project_name。
 function normalizeProjectOption(row: any): ProjectOption | null {
@@ -23,6 +26,20 @@ function normalizeProjectOption(row: any): ProjectOption | null {
   const id = String(rawId);
   const name = String(row.project_name || row.name || row.title || `项目 ${id}`);
   return { id, name };
+}
+
+// 把后端 KOL Pool 行(/api/admin/vkpi/kol-pool 的 items 形态)归一成 {id, name, sub}:
+//   id=kol_pool_id;name 优先 display_name → handle;sub 展示 平台/@handle 辅助识别。
+function normalizeKolOption(row: any): KolOption | null {
+  if (!row || typeof row !== "object") return null;
+  const rawId = row.id ?? row.kol_pool_id ?? row.pool_uid;
+  if (rawId === undefined || rawId === null || rawId === "") return null;
+  const id = String(rawId);
+  const handle = String(row.handle || "").trim();
+  const name = String(row.display_name || handle || `KOL ${id}`);
+  const platform = String(row.platform || "").trim();
+  const sub = [platform, handle ? `@${handle}` : ""].filter(Boolean).join(" · ");
+  return { id, name, sub };
 }
 
 export function EditGroupModal({ groupName = "KOL Operations", mode = "edit", staff, initialMembers, initialDesc, permissions, projects, apiToken, onClose, onSave }: any) {
@@ -38,7 +55,11 @@ export function EditGroupModal({ groupName = "KOL Operations", mode = "edit", st
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>(
     Array.isArray(permissions?.shared_projects) ? permissions.shared_projects.map((x: any) => String(x)) : []
   );
-  const [permKolPool, setPermKolPool] = useState((permissions && permissions.shared_kol_pool) || "");
+  // 共享 KOL 池初值:permissions.shared_kol_pool_ids 现存的是 kol_pool_id 数组(P-GROUP-7 扩展后);
+  //   历史文本字段 shared_kol_pool(池名)无法映射成 id,不再回填(诚实降级:旧文本不生效,需重选)。
+  const [selectedKolIds, setSelectedKolIds] = useState<string[]>(
+    Array.isArray(permissions?.shared_kol_pool_ids) ? permissions.shared_kol_pool_ids.map((x: any) => String(x)) : []
+  );
   const [permKpi, setPermKpi] = useState((permissions && permissions.kpi_goal) || "");
   const [permReminder, setPermReminder] = useState((permissions && permissions.reminder_rule) || "");
 
@@ -51,6 +72,11 @@ export function EditGroupModal({ groupName = "KOL Operations", mode = "edit", st
   });
   const [projectsLoading, setProjectsLoading] = useState(false);
   const [projectsError, setProjectsError] = useState("");
+
+  // KOL 候选列表:自取 /api/admin/vkpi/kol-pool?limit=200(零父级依赖;apiFetch 走 session cookie 兜底)。
+  const [kolOptions, setKolOptions] = useState<KolOption[]>([]);
+  const [kolsLoading, setKolsLoading] = useState(false);
+  const [kolsError, setKolsError] = useState("");
 
   useEffect(() => {
     if (Array.isArray(projects) && projects.length > 0) return; // 父级已给,跳过自取。
@@ -77,15 +103,42 @@ export function EditGroupModal({ groupName = "KOL Operations", mode = "edit", st
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    let alive = true;
+    setKolsLoading(true);
+    setKolsError("");
+    apiFetch<{ items?: any[] }>("/api/admin/vkpi/kol-pool?limit=200", { timeoutMs: 6000 }, apiToken)
+      .then((resp) => {
+        if (!alive) return;
+        const rows = Array.isArray(resp?.items) ? resp.items : [];
+        setKolOptions(rows.map(normalizeKolOption).filter(Boolean) as KolOption[]);
+      })
+      .catch(() => {
+        if (!alive) return;
+        setKolsError("KOL 列表加载失败,可稍后重试");
+      })
+      .finally(() => {
+        if (alive) setKolsLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+    // 仅挂载时取一次。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const toggleMember = (id: any) => setMembers((prev: any) => prev.includes(id) ? prev.filter((x: any) => x !== id) : [...prev, id]);
   const toggleProject = (id: string) =>
     setSelectedProjectIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  const toggleKol = (id: string) =>
+    setSelectedKolIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
   const save = () => {
     const perms = {
       // P-GROUP-34:存项目 id 数组(后端展开成真 vkpi_project_members 行)。
       shared_projects: selectedProjectIds.slice(),
-      shared_kol_pool: permKolPool.trim(),
+      // P-GROUP-7 扩展:存 kol_pool_id 数组(后端展开成真 vkpi_kol_pool_members 行)。
+      shared_kol_pool_ids: selectedKolIds.slice(),
       kpi_goal: permKpi.trim(),
       reminder_rule: permReminder.trim(),
     };
@@ -169,14 +222,47 @@ export function EditGroupModal({ groupName = "KOL Operations", mode = "edit", st
                   })
                 )
       ),
-      // 其余组级权限(KOL 池 / KPI 目标 / 提醒规则)— 仍为文本,落 permissions_json。
+      // 共享 KOL 池 — 真多选器(P-GROUP-7 扩展):勾选哪些 KOL 共享给组成员,存 kol_pool_id 数组。
+      e("div", { className: "rounded-md border border-white/[0.06] bg-white/[0.02] p-3 space-y-2.5" },
+        e("div", { className: "flex items-center justify-between mb-1" },
+          e("div", { className: "flex items-center gap-2" },
+            e(Users, { size: 11, className: "text-purple-300/80 shrink-0" }),
+            e("div", { className: "text-[11px] text-white" }, t("共享 KOL 池"))
+          ),
+          e("div", { className: "text-[9px] text-slate-600" }, `${selectedKolIds.length} ${t("已选")}`)
+        ),
+        e("div", { className: "text-[9px] text-slate-600 mb-1.5" }, t("勾选的 KOL 将共享给本组全部成员(只读)")),
+        kolsLoading
+          ? e("div", { className: "text-[10px] text-slate-500 px-1 py-2" }, t("加载 KOL 列表…"))
+          : kolsError
+            ? e("div", { className: "text-[10px] text-amber-400/80 px-1 py-2" }, kolsError)
+            : kolOptions.length === 0
+              ? e("div", { className: "text-[10px] text-slate-500 px-1 py-2" }, t("暂无可共享 KOL"))
+              : e("div", { className: "space-y-0.5 max-h-[180px] overflow-y-auto rounded-md border border-white/[0.05] bg-black/20 p-1" },
+                  kolOptions.map((k) => {
+                    const checked = selectedKolIds.includes(k.id);
+                    return e("label", {
+                      key: k.id,
+                      className: "flex items-center gap-2.5 rounded px-2 py-1 hover:bg-white/[0.03] cursor-pointer"
+                    },
+                      e("input", { type: "checkbox", checked, onChange: () => toggleKol(k.id),
+                        className: "shrink-0 accent-purple-500" }),
+                      e("div", { className: "flex-1 min-w-0" },
+                        e("div", { className: "text-[11px] text-white truncate" }, k.name),
+                        k.sub && e("div", { className: "text-[9px] text-slate-600 truncate" }, k.sub)
+                      ),
+                      e("div", { className: "shrink-0 text-[9px] text-slate-600" }, `#${k.id}`)
+                    );
+                  })
+                )
+      ),
+      // 其余组级权限(KPI 目标 / 提醒规则)— 仍为文本,落 permissions_json。
       e("div", { className: "rounded-md border border-white/[0.06] bg-white/[0.02] p-3 space-y-2.5" },
         e("div", { className: "flex items-center justify-between" },
           e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, t("组级权限")),
           e("div", { className: "text-[9px] text-slate-600" }, t("组内成员共享"))
         ),
         [
-          { icon: Users,      label: t("共享 KOL 池"),       value: permKolPool,  set: setPermKolPool,  ph: "如 Top performers(78 人)" },
           { icon: TrendingUp, label: t("共同 KPI 目标"),     value: permKpi,      set: setPermKpi,      ph: "如 Q2 新增 50 个高活 KOL" },
           { icon: Bell,       label: t("内部 @ 提醒规则"),   value: permReminder, set: setPermReminder, ph: "如 组内变更自动通知" },
         ].map((row: any, i: any) => e("div", { key: i, className: "flex items-center gap-2.5" },
