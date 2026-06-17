@@ -267,11 +267,12 @@ export async function syncGoaffproMetrics(
 // project_id → 只汇总该项目下的 KOL(供项目卡)。
 export async function getGoaffproSummary(
   token: string,
-  opts?: { limit?: number; projectId?: string | number },
+  opts?: { limit?: number; projectId?: string | number; search?: string },
 ): Promise<GoaffproSummaryResult> {
-  const limit = opts?.limit ?? 100;
+  const limit = opts?.limit ?? 200;
   const qs = new URLSearchParams({ limit: String(limit) });
   if (opts?.projectId != null && String(opts.projectId).length) qs.set("project_id", String(opts.projectId));
+  if (opts?.search && opts.search.trim()) qs.set("search", opts.search.trim());
   const res = await apiFetch<GoaffproSummaryResult>(
     `/api/admin/vkpi/goaffpro/summary?${qs.toString()}`,
     {},

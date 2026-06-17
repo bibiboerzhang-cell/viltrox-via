@@ -260,6 +260,7 @@ export function ShopifyHubPage({ apiToken = "" }: { apiToken?: string } = {}) {
   const [trackLoading, setTrackLoading] = useState(false);
   const [trackSyncing, setTrackSyncing] = useState(false);
   const [lastSynced, setLastSynced] = useState<string>("");
+  const [trackSearch, setTrackSearch] = useState("");
   const [trackErr, setTrackErr] = useState("");
 
   // ---- Loaders ----
@@ -315,7 +316,7 @@ export function ShopifyHubPage({ apiToken = "" }: { apiToken?: string } = {}) {
     }
   }, [apiToken]);
 
-  const loadTrack = useCallback(async () => {
+  const loadTrack = useCallback(async (searchArg: string = "") => {
     if (!apiToken) {
       setTrackErr("缺少 API token，无法读取归因汇总。");
       return;
@@ -323,8 +324,8 @@ export function ShopifyHubPage({ apiToken = "" }: { apiToken?: string } = {}) {
     setTrackLoading(true);
     setTrackErr("");
     try {
-      // GOAFFPRO 归因汇总(取代已退役的自建 promo attribution 端点 → 修「Not Found」)。
-      const res = await getGoaffproSummary(apiToken, { limit: 50 });
+      // GOAFFPRO 归因汇总(读缓存秒出;按 GMV 降序;可搜 KOL名/handle/ref/优惠码)。
+      const res = await getGoaffproSummary(apiToken, { limit: 200, search: searchArg });
       setRows(res.items as unknown as PromoAttributionRow[]);
       setTrackTotals(res.totals || null);
       setLastSynced(res.last_synced_at || "");
@@ -349,9 +350,9 @@ export function ShopifyHubPage({ apiToken = "" }: { apiToken?: string } = {}) {
       setTrackErr(err instanceof Error ? err.message : "同步 GOAFFPRO 指标失败");
     } finally {
       setTrackSyncing(false);
-      void loadTrack();
+      void loadTrack(trackSearch);
     }
-  }, [apiToken, trackSyncing, loadTrack]);
+  }, [apiToken, trackSyncing, loadTrack, trackSearch]);
 
   useEffect(() => {
     void loadStatus();
@@ -1128,14 +1129,34 @@ export function ShopifyHubPage({ apiToken = "" }: { apiToken?: string } = {}) {
       ),
       e(
         "p",
-        { className: "text-[12px] text-slate-400 mb-3" },
-        "按 KOL / 来源 / 产品 汇总点击、订单、GMV 与 ROI。无数据时诚实显示「待接入」，绝不编造数字。",
+        { className: "text-[11px] text-slate-500 mb-2" },
+        "按 KOL 汇总点击 / 订单 / GMV / 佣金,按 GMV 降序(头部在前)。GOAFFPRO 实时归因,读缓存秒出。",
       ),
-      // GOAFFPRO 接入 note —— 归因将由 affiliate↔KOL + 销售/佣金自动接入,字段对接中。
+      // 查询框 + 查询按钮(KOL 多时按名/handle/ref/优惠码筛选)。
       e(
         "div",
-        { className: "mb-3 rounded-lg border border-blue-500/15 bg-blue-500/[0.04] px-3 py-2 text-[12px] text-blue-200" },
-        "归因数据将由 GOAFFPRO 自动接入（affiliate ↔ KOL + 销售 / 佣金），字段对接中。",
+        { className: "flex items-center gap-2 mb-3" },
+        e("input", {
+          type: "text",
+          value: trackSearch,
+          onChange: (ev: any) => setTrackSearch(ev.target.value),
+          onKeyDown: (ev: any) => { if (ev.key === "Enter") void loadTrack(trackSearch); },
+          placeholder: "搜 KOL 名 / handle / ref 码 / 优惠码",
+          className: "flex-1 min-w-0 rounded-md border border-white/[0.08] bg-black/30 px-3 py-1.5 text-[12px] text-slate-200 placeholder:text-slate-600 focus:border-blue-500/40 focus:outline-none",
+        }),
+        e("button", {
+          type: "button",
+          onClick: () => void loadTrack(trackSearch),
+          disabled: trackLoading,
+          className: "inline-flex items-center gap-1 rounded-md border border-blue-500/30 bg-blue-500/10 px-3 py-1.5 text-[12px] text-blue-200 hover:bg-blue-500/15 disabled:opacity-50",
+        }, e(Search, { size: 13 }), "查询"),
+        trackSearch
+          ? e("button", {
+              type: "button",
+              onClick: () => { setTrackSearch(""); void loadTrack(""); },
+              className: "text-[11px] text-slate-500 hover:text-slate-300",
+            }, "清除")
+          : null,
       ),
       trackErr
         ? e(

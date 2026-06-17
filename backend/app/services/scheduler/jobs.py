@@ -916,11 +916,11 @@ async def start_scheduler() -> None:
         coalesce=True,
     )
 
-    # ── GOAFFPRO 指标缓存刷新(每 20 分钟)── 读 GOAFFPRO 点击/订单/GMV/佣金 → 缓存表,
+    # ── GOAFFPRO 指标缓存刷新(每 5 分钟)── 读 GOAFFPRO 点击/订单/GMV/佣金 → 缓存表,
     # 页面读库秒出(性能落库)。无 creds 空跑即返回;只读 GOAFFPRO + 写本地缓存表,不碰评分域。
     _scheduler.add_job(
         job_vkpi_goaffpro_metrics_sync,
-        trigger=IntervalTrigger(minutes=20),
+        trigger=IntervalTrigger(minutes=5),
         id="vkpi_goaffpro_metrics_sync",
         name="GOAFFPRO: refresh KOL metrics snapshot (clicks/orders/GMV/commission)",
         max_instances=1,

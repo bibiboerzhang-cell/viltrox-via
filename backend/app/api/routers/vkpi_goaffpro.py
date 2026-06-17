@@ -589,18 +589,18 @@ def _empty_totals() -> dict:
 
 @router.get("/summary")
 def goaffpro_summary(
-    limit: int = Query(default=100, ge=1, le=500),
+    limit: int = Query(default=200, ge=1, le=1000),
     project_id: int | None = Query(default=None, ge=1),
+    search: str | None = Query(default=None),
     staff=Depends(require_tab("vkpi", "read")),
 ):
-    """归因汇总表:每个已建链的 KOL 一行(点击/订单/GMV/佣金),实时来自 GOAFFPRO。
+    """归因汇总表:每个已建链 KOL 一行(点击/订单/GMV/佣金,读缓存秒出)。
 
-    供 Shopify Hub「数据追踪」表 + 项目卡复用。?project_id= → 只汇总该项目下的 KOL。
-    返回 {items, totals(汇总 clicks/orders/gmv_usd/commission_usd), count, note}。诚实空表带 note。
+    供数据追踪表 + 项目卡复用。?project_id= 限定项目;?search= 按 KOL名/handle/ref码/优惠码 过滤。
+    单次 JOIN(links+kol_pool+metrics),按 GMV 降序(头部 KOL 在前),上千 KOL 不卡。
     """
     goaffpro_connect.ensure_goaffpro_links_schema()
     conn = get_conn()
-    # project_id → 限定该项目下的 kol_pool_id(经 vkpi_project_kol_assignments)。
     project_kol_ids: set[int] | None = None
     if project_id is not None:
         rows = conn.execute(
@@ -610,30 +610,38 @@ def goaffpro_summary(
         project_kol_ids = {int(dict(r)["kol_pool_id"]) for r in rows if dict(r).get("kol_pool_id") is not None}
         if not project_kol_ids:
             return {"ok": True, "items": [], "count": 0, "totals": _empty_totals(), "note": "该项目暂无派单 KOL"}
-    # 修 bug:project_id 时把 IN(...) 过滤放进 SQL(LIMIT 之前),避免「先 LIMIT 后过滤」漏掉
-    # 排在 100 名之后的该项目 KOL。
-    where = "COALESCE(affiliate_id, '') <> '' AND COALESCE(ref_code, '') <> ''"
+    where = "COALESCE(l.affiliate_id, '') <> '' AND COALESCE(l.ref_code, '') <> ''"
     sql_params: list = []
     if project_kol_ids is not None:
-        where += " AND kol_pool_id IN (" + ",".join(["?"] * len(project_kol_ids)) + ")"
+        where += " AND l.kol_pool_id IN (" + ",".join(["?"] * len(project_kol_ids)) + ")"
         sql_params.extend(sorted(project_kol_ids))
+    kw = str(search or "").strip().lower()
+    if kw:
+        like = f"%{kw}%"
+        where += (
+            " AND (LOWER(COALESCE(kp.display_name,'')) LIKE ? OR LOWER(COALESCE(kp.handle,'')) LIKE ?"
+            " OR LOWER(COALESCE(l.ref_code,'')) LIKE ? OR LOWER(COALESCE(l.coupon,'')) LIKE ?)"
+        )
+        sql_params.extend([like, like, like, like])
     sql_params.append(limit)
+    # 单次 JOIN:links + kol_pool(名/头像/平台)+ metrics(缓存指标),按 GMV 降序。零逐行查询。
     links = conn.execute(
         f"""
-        SELECT kol_pool_id, affiliate_id, ref_code, coupon, tracking_url
-        FROM vkpi_goaffpro_kol_links
+        SELECT l.kol_pool_id, l.affiliate_id, l.ref_code, l.coupon, l.tracking_url,
+               kp.display_name, kp.handle, kp.avatar_url, kp.platform,
+               m.clicks AS m_clicks, m.orders AS m_orders, m.gmv_cents AS m_gmv_cents,
+               m.commission_cents AS m_commission_cents, m.commission_rate AS m_commission_rate,
+               m.status AS m_status, m.currency AS m_currency, m.partial AS m_partial,
+               m.synced_at AS m_synced_at
+        FROM vkpi_goaffpro_kol_links l
+        LEFT JOIN vkpi_kol_pool kp ON kp.id = l.kol_pool_id
+        LEFT JOIN vkpi_goaffpro_kol_metrics m ON m.affiliate_id = l.affiliate_id
         WHERE {where}
-        ORDER BY created_at DESC
+        ORDER BY COALESCE(m.gmv_cents, 0) DESC, COALESCE(m.clicks, 0) DESC, l.created_at DESC
         LIMIT ?
         """,
         tuple(sql_params),
     ).fetchall()
-
-    # 性能落库:从指标缓存表读(秒出),不再逐 KOL 实时打 GOAFFPRO 3 次。
-    metrics_by_aid: dict[str, dict] = {}
-    for mr in conn.execute("SELECT * FROM vkpi_goaffpro_kol_metrics").fetchall():
-        md = dict(mr)
-        metrics_by_aid[str(md.get("affiliate_id") or "")] = md
 
     items: list[dict] = []
     partial_count = 0
@@ -644,50 +652,44 @@ def goaffpro_summary(
         aid = str(d.get("affiliate_id") or "")
         if not aid:
             continue
-        name_row = conn.execute(
-            "SELECT display_name, handle, avatar_url, platform FROM vkpi_kol_pool WHERE id = ?",
-            (d.get("kol_pool_id"),),
-        ).fetchone()
-        nd = dict(name_row) if name_row else {}
-        handle = str(nd.get("handle") or "").strip()
-        nm = str(nd.get("display_name") or "").strip() or handle
-        m = metrics_by_aid.get(aid)
-        if m is None:
-            # 还没同步过(刚建链)→ 显 0 + stale,等下次定时/手动刷新填实。
+        handle = str(d.get("handle") or "").strip()
+        nm = str(d.get("display_name") or "").strip() or handle
+        synced_at = d.get("m_synced_at")
+        stale = synced_at in (None, "")
+        if stale:
             stale_count += 1
-            m = {}
         else:
-            sa = str(m.get("synced_at") or "")
+            sa = str(synced_at or "")
             if sa > last_synced_at:
                 last_synced_at = sa
-        is_partial = bool(m.get("partial"))
+        is_partial = bool(d.get("m_partial"))
         if is_partial:
             partial_count += 1
-        gmv_cents = int(m.get("gmv_cents") or 0)
-        comm_cents = int(m.get("commission_cents") or 0)
+        gmv_cents = int(d.get("m_gmv_cents") or 0)
+        comm_cents = int(d.get("m_commission_cents") or 0)
         items.append(
             {
                 "kol_pool_id": d.get("kol_pool_id"),
                 "kol_name": nm or f"KOL#{d.get('kol_pool_id')}",
                 "kol_handle": handle,
-                "kol_avatar": str(nd.get("avatar_url") or ""),
-                "kol_platform": str(nd.get("platform") or ""),
+                "kol_avatar": str(d.get("avatar_url") or ""),
+                "kol_platform": str(d.get("platform") or ""),
                 "affiliate_id": aid,
                 "ref_code": d.get("ref_code"),
                 "coupon": d.get("coupon"),
-                "commission_rate": str(m.get("commission_rate") or ""),
-                "status": str(m.get("status") or ""),
+                "commission_rate": str(d.get("m_commission_rate") or ""),
+                "status": str(d.get("m_status") or ""),
                 "tracking_url": d.get("tracking_url"),
                 "source_label": "GOAFFPRO",
                 "source_type": "goaffpro",
                 "product_sku": "—",
-                "clicks": int(m.get("clicks") or 0),
-                "orders": int(m.get("orders") or 0),
+                "clicks": int(d.get("m_clicks") or 0),
+                "orders": int(d.get("m_orders") or 0),
                 "gmv_usd": round(gmv_cents / 100, 2),
                 "commission_usd": round(comm_cents / 100, 2),
-                "currency": str(m.get("currency") or ""),
+                "currency": str(d.get("m_currency") or ""),
                 "partial": is_partial,
-                "stale": aid not in metrics_by_aid,  # True = 尚未同步过
+                "stale": stale,
             }
         )
     totals = {
