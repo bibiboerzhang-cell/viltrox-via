@@ -356,6 +356,58 @@
   scrollbar-color: #d8dde7 transparent;
 }
 
+/* 方案B 全宽铺开:选中 KOL 后单列堆叠,列表在上、详情全宽在下 */
+.vkpi-discover-workgrid.is-expanded {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.vkpi-discover-left__bar {
+  display: none;
+}
+
+.vkpi-discover-workgrid.is-expanded .vkpi-discover-left__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.vkpi-discover-left__bar-label {
+  color: var(--vkpi-muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.vkpi-discover-left__toggle {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+/* 列表收起:整段列表面板隐藏,只留横条 */
+.vkpi-discover-workgrid.is-list-collapsed .vkpi-discover-left > .vkpi-discover-panel {
+  display: none;
+}
+
+/* 详情铺开:解除右窄 sticky/限高,全宽展开;内部卡片用多列网格防止窄单列假设串版 */
+.vkpi-discover-workgrid.is-expanded .vkpi-discover-profile {
+  position: static;
+  max-height: none;
+  overflow: visible;
+}
+
+.vkpi-discover-workgrid.is-expanded .vkpi-discover-profile__stack {
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  align-items: start;
+  gap: 12px;
+}
+
+/* 头部卡 + 决策卡跨整行,保持主信息全宽不被挤窄 */
+.vkpi-discover-workgrid.is-expanded .vkpi-discover-profile__stack > .vkpi-discover-profile-head,
+.vkpi-discover-workgrid.is-expanded .vkpi-discover-profile__stack > .vkpi-discover-card.is-decision {
+  grid-column: 1 / -1;
+}
+
 .vkpi-discover-panel,
 .vkpi-discover-card,
 .vkpi-discover-profile-head {

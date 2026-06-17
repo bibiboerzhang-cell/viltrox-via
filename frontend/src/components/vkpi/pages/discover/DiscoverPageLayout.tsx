@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { Dispatch, FormEvent, SetStateAction } from 'react';
 import type { VkpiKolLookupResult, VkpiKolProfile, VkpiProjectRow } from '../../vkpiTypes';
 import { KolPoolPanel } from '../../panels/KolPoolPanel';
@@ -156,6 +157,12 @@ export function DiscoverPageLayout(props: DiscoverPageLayoutProps) {
     projectProductSku, setProjectProductSku, projectNote, setProjectNote,
   } = props;
 
+  // 方案B:选中 KOL 后详情区从右窄 aside 升级为主界面全宽铺开,
+  // 列表收成上方可折叠横条。pool tab 无 selectedKol 语义,不参与铺开。
+  const profileExpanded = Boolean(selectedKol) && activeTab !== 'pool';
+  const [listCollapsed, setListCollapsed] = useState(false);
+  const listIsBar = profileExpanded && listCollapsed;
+
   return (
     <PageShell
       title="红人决策中枢"
@@ -256,8 +263,23 @@ export function DiscoverPageLayout(props: DiscoverPageLayoutProps) {
             onOpenImport={() => setActiveTab('search')}
           />
         ) : (
-          <section className="vkpi-discover-workgrid">
+          <section className={`vkpi-discover-workgrid${profileExpanded ? ' is-expanded' : ''}${listIsBar ? ' is-list-collapsed' : ''}`}>
             <div className="vkpi-discover-left">
+              {profileExpanded ? (
+                <div className="vkpi-discover-left__bar">
+                  <span className="vkpi-discover-left__bar-label">
+                    {activeTab === 'search' ? '主动搜索结果' : '智能推荐'} · {visibleKols.length || smartRecommendations.length} 条
+                  </span>
+                  <button
+                    type="button"
+                    className="vkpi-discover-btn vkpi-discover-left__toggle"
+                    aria-expanded={!listCollapsed}
+                    onClick={() => setListCollapsed((value) => !value)}
+                  >
+                    {listCollapsed ? '展开列表' : '收起列表'}
+                  </button>
+                </div>
+              ) : null}
               {activeTab === 'search' ? (
                 <SearchPanel
                   localQuery={localQuery}

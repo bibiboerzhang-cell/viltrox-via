@@ -129,6 +129,19 @@
   max-height: calc(100vh - 100px);
 }
 
+/* 方案B 全宽铺开视觉层:列表横条 + 详情多列卡片网格的间距/留白 */
+.vkpi-discover-workgrid.is-expanded {
+  gap: 14px;
+}
+
+.vkpi-discover-workgrid.is-expanded .vkpi-discover-left__bar {
+  padding: 4px 2px;
+}
+
+.vkpi-discover-workgrid.is-expanded .vkpi-discover-profile__stack {
+  gap: 14px;
+}
+
 .vkpi-discover-panel,
 .vkpi-discover-card,
 .vkpi-discover-profile-head {

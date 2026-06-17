@@ -35,6 +35,15 @@
     grid-template-columns: 1fr;
   }
 
+  /* 方案B:窄屏下详情铺开网格退回单列,横条换行 */
+  .vkpi-discover-workgrid.is-expanded .vkpi-discover-profile__stack {
+    grid-template-columns: 1fr;
+  }
+
+  .vkpi-discover-left__bar {
+    flex-wrap: wrap;
+  }
+
   .vkpi-discover-filters,
   .vkpi-discover-search-history__items,
   .vkpi-discover-search-progress__steps,
