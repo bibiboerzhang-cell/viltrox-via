@@ -37,8 +37,19 @@ import {
   type GeneratePromoLinkResult,
   type PromoAttributionRow,
 } from "../../../services/vkpi/shopifyHub-api";
+import {
+  getGoaffproStatus,
+  saveGoaffproCredentials,
+  listGoaffproAffiliates,
+  type GoaffproStatus,
+  type ListGoaffproAffiliatesResult,
+} from "../../../services/vkpi/goaffpro-api";
 
 const e = React.createElement;
+
+// 自建短链生成器退役开关 —— true=Region ② 整块不渲染(代码留着,可回滚)。
+// 短链生成已迁移到 GOAFFPRO:每个 KOL 注册为 affiliate 后自动获得追踪链 + 优惠码。
+const RETIRE_SELF_LINK = true;
 
 type Row = Record<string, unknown>;
 type TabKey = "connect" | "generate" | "track";
@@ -213,6 +224,21 @@ export function ShopifyHubPage({ apiToken = "" }: { apiToken?: string } = {}) {
   const [status, setStatus] = useState<ShopifyProviderStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(false);
   const [statusErr, setStatusErr] = useState("");
+  // 自建 Shopify 连接(旧·待退役)折叠开关 —— 默认折叠,展开仍可用,不删不破坏。
+  const [legacyShopifyOpen, setLegacyShopifyOpen] = useState(false);
+
+  // --- GOAFFPRO 联盟营销接入 state(替代自建短链) ---
+  const [goaffAccessToken, setGoaffAccessToken] = useState("");
+  const [goaffPublicToken, setGoaffPublicToken] = useState("");
+  const [goaffSaving, setGoaffSaving] = useState(false);
+  const [goaffSaveMsg, setGoaffSaveMsg] = useState("");
+  const [goaffSaveErr, setGoaffSaveErr] = useState("");
+  const [goaffStatus, setGoaffStatus] = useState<GoaffproStatus | null>(null);
+  const [goaffStatusLoading, setGoaffStatusLoading] = useState(false);
+  const [goaffStatusErr, setGoaffStatusErr] = useState("");
+  const [goaffPreview, setGoaffPreview] = useState<ListGoaffproAffiliatesResult | null>(null);
+  const [goaffPreviewLoading, setGoaffPreviewLoading] = useState(false);
+  const [goaffPreviewErr, setGoaffPreviewErr] = useState("");
 
   // --- Region ② Generate state ---
   const [projects, setProjects] = useState<Row[]>([]);
@@ -248,6 +274,23 @@ export function ShopifyHubPage({ apiToken = "" }: { apiToken?: string } = {}) {
       setStatusErr(err instanceof Error ? err.message : "读取 Shopify 状态失败");
     } finally {
       setStatusLoading(false);
+    }
+  }, [apiToken]);
+
+  const loadGoaffStatus = useCallback(async () => {
+    if (!apiToken) {
+      setGoaffStatusErr("缺少 API token，无法读取 GOAFFPRO 连接状态。");
+      return;
+    }
+    setGoaffStatusLoading(true);
+    setGoaffStatusErr("");
+    try {
+      const res = await getGoaffproStatus(apiToken);
+      setGoaffStatus(res);
+    } catch (err) {
+      setGoaffStatusErr(err instanceof Error ? err.message : "读取 GOAFFPRO 状态失败");
+    } finally {
+      setGoaffStatusLoading(false);
     }
   }, [apiToken]);
 
@@ -289,9 +332,10 @@ export function ShopifyHubPage({ apiToken = "" }: { apiToken?: string } = {}) {
 
   useEffect(() => {
     void loadStatus();
+    void loadGoaffStatus();
     void loadOptions();
     void loadTrack();
-  }, [loadStatus, loadOptions, loadTrack]);
+  }, [loadStatus, loadGoaffStatus, loadOptions, loadTrack]);
 
   // ---- Actions ----
 
@@ -316,6 +360,61 @@ export function ShopifyHubPage({ apiToken = "" }: { apiToken?: string } = {}) {
       setSavingCreds(false);
     }
   }, [apiToken, storeDomain, accessToken, webhookSecret, loadStatus]);
+
+  const onSaveGoaff = useCallback(async () => {
+    if (!apiToken) {
+      setGoaffSaveErr("缺少 API token，无法保存 GOAFFPRO 凭据。");
+      return;
+    }
+    if (!goaffAccessToken.trim()) {
+      setGoaffSaveErr("请填写 access_token。");
+      return;
+    }
+    setGoaffSaving(true);
+    setGoaffSaveErr("");
+    setGoaffSaveMsg("");
+    try {
+      // 绝不 log token —— 携带 GOAFFPRO 密钥。
+      const res = await saveGoaffproCredentials(apiToken, {
+        access_token: goaffAccessToken.trim(),
+        public_token: goaffPublicToken.trim() || undefined,
+      });
+      setGoaffSaveMsg(res?.ok === false ? "保存返回未成功，请检查凭据。" : "GOAFFPRO 凭据已加密保存。");
+      // 保存后清空密码框,绝不回显明文。
+      setGoaffAccessToken("");
+      setGoaffPublicToken("");
+      await loadGoaffStatus();
+    } catch (err) {
+      setGoaffSaveErr(err instanceof Error ? err.message : "保存 GOAFFPRO 凭据失败");
+    } finally {
+      setGoaffSaving(false);
+    }
+  }, [apiToken, goaffAccessToken, goaffPublicToken, loadGoaffStatus]);
+
+  const onPreviewAffiliates = useCallback(async () => {
+    if (!apiToken) {
+      setGoaffPreviewErr("缺少 API token，无法拉取 affiliate 预览。");
+      return;
+    }
+    setGoaffPreviewLoading(true);
+    setGoaffPreviewErr("");
+    setGoaffPreview(null);
+    try {
+      const res = await listGoaffproAffiliates(apiToken, { limit: 5 });
+      setGoaffPreview(res);
+      if (res?.ok === false) {
+        setGoaffPreviewErr(
+          res.reason === "not_configured"
+            ? "尚未配置 GOAFFPRO 凭据。"
+            : res.reason || res.error || "拉取失败。",
+        );
+      }
+    } catch (err) {
+      setGoaffPreviewErr(err instanceof Error ? err.message : "拉取 affiliate 预览失败");
+    } finally {
+      setGoaffPreviewLoading(false);
+    }
+  }, [apiToken]);
 
   const onGenerate = useCallback(async () => {
     if (!apiToken) {
@@ -352,6 +451,12 @@ export function ShopifyHubPage({ apiToken = "" }: { apiToken?: string } = {}) {
   const configured = status?.provider_status === "configured";
   const env = status?.env_vars || {};
 
+  // GOAFFPRO 连接判定:status==='connected' 或 access_token_configured 为真即视为已连接。
+  const goaffConnected = Boolean(
+    goaffStatus &&
+      (goaffStatus.status === "connected" || goaffStatus.access_token_configured),
+  );
+
   // ---- Tab button ----
   function TabBtn(key: TabKey, label: string, icon) {
     const active = tab === key;
@@ -377,13 +482,278 @@ export function ShopifyHubPage({ apiToken = "" }: { apiToken?: string } = {}) {
   const regionConnect = e(
     "div",
     { className: tab === "connect" ? "" : "hidden" },
+
+    // -----------------------------------------------------------------------
+    // GOAFFPRO 联盟营销接入（主连接位）—— 替代自建短链。
+    // -----------------------------------------------------------------------
     e(
       Card,
       { className: "" },
       e(
         "div",
         { className: "flex items-center justify-between mb-3" },
-        e("h2", { className: "text-sm font-semibold text-white" }, "① 连接 Shopify"),
+        e("h2", { className: "text-sm font-semibold text-white" }, "① 连接 GOAFFPRO 联盟营销"),
+        goaffStatusLoading
+          ? e(
+              "span",
+              { className: "inline-flex items-center gap-1.5 text-[11px] text-slate-400" },
+              e(Loader2, { size: 12, className: "animate-spin" }),
+              "读取状态…",
+            )
+          : e(StatusPill, {
+              ok: goaffConnected,
+              okLabel: goaffStatus?.status === "connected" ? "已连接" : "已配置",
+              badLabel: "未连接",
+            }),
+      ),
+      e(
+        "p",
+        { className: "text-[12px] text-slate-400 mb-4" },
+        "每个 KOL = 一个 GOAFFPRO affiliate，注册后自动获得专属追踪链与优惠码；点击 / 销售 / 佣金归因由 GOAFFPRO 自动接入，无需手动生成短链。",
+      ),
+      e(
+        "div",
+        { className: "space-y-3" },
+        e(FieldInput, {
+          label: "access_token",
+          type: "password",
+          value: goaffAccessToken,
+          placeholder: "X-GOAFFPRO-ACCESS-TOKEN（管理私钥）",
+          onChange: setGoaffAccessToken,
+          hint: "GOAFFPRO 管理私钥（保存后清空，不回显）",
+        }),
+        e(FieldInput, {
+          label: "public_token",
+          type: "password",
+          value: goaffPublicToken,
+          placeholder: "可选 · X-GOAFFPRO-PUBLIC-TOKEN（公钥）",
+          onChange: setGoaffPublicToken,
+          hint: "可选公钥（保存后清空，不回显）",
+        }),
+      ),
+      e(
+        "div",
+        { className: "mt-4 flex items-center gap-3 flex-wrap" },
+        e(
+          "button",
+          {
+            type: "button",
+            onClick: () => void onSaveGoaff(),
+            disabled: goaffSaving || !goaffAccessToken.trim(),
+            className:
+              "inline-flex items-center gap-1.5 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-4 py-1.5 text-[12px] font-medium text-emerald-300 hover:bg-emerald-500/15 disabled:opacity-50",
+          },
+          goaffSaving ? e(Loader2, { size: 13, className: "animate-spin" }) : e(Plug, { size: 13 }),
+          "保存并连接",
+        ),
+        e(
+          "button",
+          {
+            type: "button",
+            onClick: () => void loadGoaffStatus(),
+            disabled: goaffStatusLoading,
+            className:
+              "inline-flex items-center gap-1.5 rounded-md border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-[11px] text-slate-300 hover:bg-white/[0.06] hover:text-white disabled:opacity-50",
+          },
+          goaffStatusLoading ? e(Loader2, { size: 12, className: "animate-spin" }) : e(RefreshCw, { size: 12 }),
+          "刷新状态",
+        ),
+        e(
+          "button",
+          {
+            type: "button",
+            onClick: () => void onPreviewAffiliates(),
+            disabled: goaffPreviewLoading,
+            className:
+              "inline-flex items-center gap-1.5 rounded-md border border-blue-500/30 bg-blue-500/10 px-3 py-1.5 text-[11px] text-blue-300 hover:bg-blue-500/15 disabled:opacity-50",
+          },
+          goaffPreviewLoading ? e(Loader2, { size: 12, className: "animate-spin" }) : e(Table2, { size: 12 }),
+          "拉取 affiliate 预览",
+        ),
+      ),
+      goaffSaveErr
+        ? e(
+            "div",
+            { className: "mt-3 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-[12px] text-red-300" },
+            goaffSaveErr,
+          )
+        : null,
+      goaffSaveMsg
+        ? e(
+            "div",
+            {
+              className:
+                "mt-3 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-[12px] text-emerald-300",
+            },
+            goaffSaveMsg,
+          )
+        : null,
+      goaffStatusErr
+        ? e(
+            "div",
+            { className: "mt-3 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-300" },
+            goaffStatusErr,
+          )
+        : null,
+      // GOAFFPRO 状态明细 + api_base（masked-only,绝不回显明文 token）。
+      goaffStatus
+        ? e(
+            "div",
+            { className: "mt-3 space-y-2" },
+            goaffStatus.api_base
+              ? e(
+                  "div",
+                  { className: "text-[12px] text-slate-300" },
+                  "api_base:",
+                  e("code", { className: "ml-2 font-mono text-blue-300" }, goaffStatus.api_base),
+                )
+              : null,
+            e(EnvRow, {
+              name: "GOAFFPRO_ACCESS_TOKEN",
+              configured: Boolean(goaffStatus.access_token_configured),
+              hint: "管理私钥（masked）",
+            }),
+            e(EnvRow, {
+              name: "GOAFFPRO_PUBLIC_TOKEN",
+              configured: Boolean(goaffStatus.public_token_configured),
+              hint: "公钥（masked · 可选）",
+            }),
+          )
+        : null,
+      // affiliate 预览 —— 校准用:显 total + 字段名/_raw_keys 便于后续 key 对接。
+      goaffPreviewErr
+        ? e(
+            "div",
+            { className: "mt-3 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-300" },
+            goaffPreviewErr,
+          )
+        : null,
+      goaffPreview && goaffPreview.ok !== false
+        ? e(
+            "div",
+            { className: "mt-3 rounded-lg border border-white/[0.06] bg-white/[0.015] px-3 py-3" },
+            e(
+              "div",
+              { className: "text-[11px] text-slate-400 mb-2" },
+              "affiliate 预览(前 ",
+              String(goaffPreview.affiliates?.length ?? 0),
+              " 条 · total = ",
+              goaffPreview.total === null || goaffPreview.total === undefined
+                ? "未知"
+                : String(goaffPreview.total),
+              ")",
+            ),
+            (goaffPreview.affiliates && goaffPreview.affiliates.length)
+              ? e(
+                  "div",
+                  { className: "space-y-2" },
+                  goaffPreview.affiliates.map((aff, i) => {
+                    const rawKeys = Array.isArray(aff?._raw_keys)
+                      ? aff._raw_keys
+                      : Object.keys(aff || {}).filter((k) => k !== "_raw_keys");
+                    return e(
+                      "div",
+                      {
+                        key: i,
+                        className: "rounded-md border border-white/[0.06] bg-black/20 px-2.5 py-2",
+                      },
+                      e(
+                        "div",
+                        { className: "text-[11px] text-slate-300" },
+                        pickStr(aff as Row, ["name", "email", "id"], `affiliate #${i + 1}`),
+                      ),
+                      e(
+                        "div",
+                        { className: "text-[10px] font-mono text-slate-500 mt-1 break-all" },
+                        "字段: ",
+                        rawKeys.join(", ") || "—",
+                      ),
+                    );
+                  }),
+                )
+              : e(
+                  "div",
+                  { className: "text-[11px] text-slate-600" },
+                  "暂无 affiliate（GOAFFPRO 端尚未注册 KOL，或字段映射待校准）。",
+                ),
+          )
+        : null,
+    ),
+
+    // 短链生成已迁移说明卡(原 Region ② 短链生成器退役后的原位说明)。
+    RETIRE_SELF_LINK
+      ? e(
+          Card,
+          { className: "border-blue-500/15 bg-blue-500/[0.03]" },
+          e(
+            "div",
+            { className: "flex items-start gap-3" },
+            e(Link2, { size: 18, className: "text-blue-300 mt-0.5 shrink-0" }),
+            e(
+              "div",
+              null,
+              e(
+                "div",
+                { className: "text-[13px] font-medium text-blue-200 mb-1" },
+                "短链生成已迁移到 GOAFFPRO",
+              ),
+              e(
+                "p",
+                { className: "text-[12px] text-slate-400" },
+                "每个 KOL 注册为 affiliate 后自动获得专属追踪链与优惠码，无需手动生成短链。原「生成推广链接」面板已退役。",
+              ),
+            ),
+          ),
+        )
+      : null,
+
+    // -----------------------------------------------------------------------
+    // 自建 Shopify(旧·待退役)—— 可折叠二级块,默认折叠,展开仍可用,不删不破坏。
+    // -----------------------------------------------------------------------
+    e(
+      "div",
+      { className: "rounded-2xl border border-white/[0.06] bg-white/[0.01] mb-4" },
+      e(
+        "button",
+        {
+          type: "button",
+          onClick: () => setLegacyShopifyOpen((v) => !v),
+          className:
+            "w-full flex items-center justify-between gap-3 px-5 py-3 text-left",
+        },
+        e(
+          "span",
+          { className: "inline-flex items-center gap-2 text-[12px] font-medium text-slate-400" },
+          e(PackageCheck, { size: 14, className: "text-slate-500" }),
+          "自建 Shopify（旧 · 待退役）",
+          e(
+            "span",
+            { className: "rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-300" },
+            "Legacy",
+          ),
+        ),
+        e(
+          "span",
+          { className: "text-[11px] text-slate-500" },
+          legacyShopifyOpen ? "收起 ▲" : "展开 ▼",
+        ),
+      ),
+      legacyShopifyOpen
+        ? e(
+            "div",
+            { className: "px-5 pb-5 pt-1 space-y-4" },
+            e(
+              "p",
+              { className: "text-[11px] text-slate-500" },
+              "自建 Shopify 直连归因已被 GOAFFPRO 取代,此处保留仅供回滚/排障,展开后仍可正常保存与查看状态。",
+            ),
+    e(
+      Card,
+      { className: "" },
+      e(
+        "div",
+        { className: "flex items-center justify-between mb-3" },
+        e("h2", { className: "text-sm font-semibold text-white" }, "自建 Shopify 连接（旧）"),
         e(StatusPill, {
           ok: configured,
           okLabel: "已配置",
@@ -515,6 +885,9 @@ export function ShopifyHubPage({ apiToken = "" }: { apiToken?: string } = {}) {
         }),
       ),
     ),
+          ) // /legacy 展开内容 div
+        : null, // legacyShopifyOpen 折叠时不渲染
+    ), // /自建 Shopify(旧·待退役)可折叠 wrapper
   );
 
   // =========================================================================
@@ -564,7 +937,9 @@ export function ShopifyHubPage({ apiToken = "" }: { apiToken?: string } = {}) {
     }),
   ];
 
-  const regionGenerate = e(
+  // 退役:RETIRE_SELF_LINK=true 时整块短链生成器不渲染(代码留着,可回滚)。
+  // 原位说明卡已在 Region ① 内通过 RETIRE_SELF_LINK 渲染。
+  const regionGenerate = RETIRE_SELF_LINK ? null : e(
     "div",
     { className: tab === "generate" ? "" : "hidden" },
     e(
@@ -680,6 +1055,12 @@ export function ShopifyHubPage({ apiToken = "" }: { apiToken?: string } = {}) {
         { className: "text-[12px] text-slate-400 mb-3" },
         "按 KOL / 来源 / 产品 汇总点击、订单、GMV 与 ROI。无数据时诚实显示「待接入」，绝不编造数字。",
       ),
+      // GOAFFPRO 接入 note —— 归因将由 affiliate↔KOL + 销售/佣金自动接入,字段对接中。
+      e(
+        "div",
+        { className: "mb-3 rounded-lg border border-blue-500/15 bg-blue-500/[0.04] px-3 py-2 text-[12px] text-blue-200" },
+        "归因数据将由 GOAFFPRO 自动接入（affiliate ↔ KOL + 销售 / 佣金），字段对接中。",
+      ),
       trackErr
         ? e(
             "div",
@@ -784,17 +1165,17 @@ export function ShopifyHubPage({ apiToken = "" }: { apiToken?: string } = {}) {
         e(
           "p",
           { className: "text-[12px] text-slate-400 mt-0.5 max-w-xl" },
-          "三区合一：连接 Shopify、生成 KOL 推广链接、追踪点击与销售归因。",
+          "连接 GOAFFPRO 联盟营销：每个 KOL 自动获得追踪链与优惠码，点击 / 销售 / 归因自动接入。",
         ),
       ),
     ),
 
-    // Tab switcher
+    // Tab switcher —— 短链生成器退役后隐藏「生成推广链接」tab(RETIRE_SELF_LINK)。
     e(
       "div",
       { className: "flex items-center gap-2 mb-5" },
       TabBtn("connect", "连接", Plug),
-      TabBtn("generate", "生成推广链接", Link2),
+      RETIRE_SELF_LINK ? null : TabBtn("generate", "生成推广链接", Link2),
       TabBtn("track", "数据追踪", Table2),
     ),
 
