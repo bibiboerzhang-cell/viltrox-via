@@ -3,7 +3,7 @@
 // 供 KOL 详情抽屉 + MY KOL 详情(PoolEvidenceContent)两处复用。
 import React from "react";
 import { AlertTriangle, Check, Link2 } from "lucide-react";
-import { generateKolGoaffproLink, getKolGoaffproLink, type GoaffproKolLink } from "../../../services/vkpi/goaffpro-api";
+import { generateKolGoaffproLink, getKolGoaffproLink, updateKolCommission, type GoaffproKolLink } from "../../../services/vkpi/goaffpro-api";
 
 const e = React.createElement;
 
@@ -52,13 +52,31 @@ function LinkRow({ label, url }: { label: string; url: string }) {
   );
 }
 
-function GoaffproLinkCard({ link, onRegenerate, regenerating }: { link: GoaffproKolLink; onRegenerate?: () => void; regenerating?: boolean }) {
+function GoaffproLinkCard({ link, onRegenerate, regenerating, apiToken, kolPoolId }: any) {
   const trackingUrl = String(link.tracking_url || "");
   const productUrl = String(link.product_url || "");
   const productName = String(link.product_name || "");
   const coupon = String(link.coupon || "");
-  const commissionRate = String((link as any).commission_rate || "");
   const statusLabel = statusBadge((link as any).status);
+  const [commissionRate, setCommissionRate] = React.useState(String((link as any).commission_rate || ""));
+  const [editing, setEditing] = React.useState(false);
+  const [editVal, setEditVal] = React.useState("");
+  const [saving, setSaving] = React.useState(false);
+  const [saveErr, setSaveErr] = React.useState("");
+  React.useEffect(() => { setCommissionRate(String((link as any).commission_rate || "")); }, [(link as any).commission_rate]);
+  const canEdit = !!(apiToken && kolPoolId);
+  const saveCommission = () => {
+    const n = parseFloat(editVal);
+    if (!canEdit || isNaN(n) || n < 0) { setSaveErr("请输入有效数字(≥0)"); return; }
+    setSaving(true); setSaveErr("");
+    void updateKolCommission(apiToken, kolPoolId, Math.round(n))
+      .then((res: any) => {
+        if (res && res.ok) { setCommissionRate(String(res.commission_rate || Math.round(n) + "%")); setEditing(false); }
+        else setSaveErr(String((res && res.error) || "保存失败"));
+      })
+      .catch((e2: any) => setSaveErr(e2 && e2.message ? String(e2.message) : "保存失败"))
+      .finally(() => setSaving(false));
+  };
   return e("div", { className: "mt-2 rounded-md border border-teal-400/20 bg-teal-400/[0.04] p-2.5 space-y-2" },
     e("div", { className: "flex items-center gap-1.5 text-[9px] uppercase tracking-wider text-teal-200/80" },
       e(Link2, { size: 10 }),
@@ -88,12 +106,32 @@ function GoaffproLinkCard({ link, onRegenerate, regenerating }: { link: Goaffpro
         e(CopyValueButton, { value: coupon, label: "复制码" })
       )
     ),
-    // 佣金比例 + 审批状态(更精准:这条链产生销售给 KOL 多少佣金 + 归因是否已生效)
-    (commissionRate || statusLabel) && e("div", { className: "flex flex-wrap items-center gap-1.5" },
-      commissionRate && e("span", { className: "rounded-md border border-amber-400/25 bg-amber-400/[0.08] px-2 py-1 text-[10px] text-amber-200" },
-        "💰 佣金比例 ", e("b", { className: "tabular-nums" }, commissionRate)
-      ),
-      statusLabel && e("span", { className: "rounded-md border px-2 py-1 text-[10px] " + statusLabel.cls }, statusLabel.text)
+    // 佣金比例(可调,改完 PATCH 推回 GOAFFPRO 总台)+ 审批状态
+    e("div", { className: "flex flex-wrap items-center gap-1.5" },
+      editing
+        ? e("span", { className: "inline-flex items-center gap-1 rounded-md border border-amber-400/30 bg-amber-400/[0.08] px-2 py-1 text-[10px] text-amber-200" },
+            "💰 佣金比例",
+            e("input", {
+              type: "number", min: 0, autoFocus: true, value: editVal,
+              onChange: (ev: any) => setEditVal(ev.target.value),
+              onKeyDown: (ev: any) => { if (ev.key === "Enter") saveCommission(); if (ev.key === "Escape") setEditing(false); },
+              className: "w-12 rounded border border-white/[0.15] bg-black/30 px-1 py-0.5 text-[10px] text-white outline-none tabular-nums",
+            }),
+            "%",
+            e("button", { type: "button", disabled: saving, onClick: saveCommission, className: "rounded bg-amber-500/80 px-1.5 py-0.5 text-[9px] font-medium text-white hover:bg-amber-500 disabled:opacity-50" }, saving ? "保存中" : "保存并推回总台"),
+            e("button", { type: "button", onClick: () => { setEditing(false); setSaveErr(""); }, className: "text-[9px] text-slate-400 hover:text-white" }, "取消")
+          )
+        : e("span", { className: "inline-flex items-center gap-1 rounded-md border border-amber-400/25 bg-amber-400/[0.08] px-2 py-1 text-[10px] text-amber-200" },
+            "💰 佣金比例 ", e("b", { className: "tabular-nums" }, commissionRate || "—"),
+            canEdit && e("button", {
+              type: "button",
+              onClick: () => { setEditing(true); setEditVal(commissionRate.replace(/[^0-9.]/g, "")); setSaveErr(""); },
+              className: "ml-1 rounded px-1 text-[9px] text-amber-300/80 hover:text-amber-100 underline decoration-dotted",
+              title: "调整佣金比例(改完推回 GOAFFPRO 总台)",
+            }, "调整")
+          ),
+      statusLabel && e("span", { className: "rounded-md border px-2 py-1 text-[10px] " + statusLabel.cls }, statusLabel.text),
+      saveErr && e("span", { className: "text-[9px] text-rose-300" }, saveErr)
     ),
     e("div", { className: "text-[9px] leading-relaxed text-teal-200/70" },
       "📨 把追踪链" + (coupon ? " + 优惠码" : "") + "发给 KOL,KOL 零注册;销售经 GOAFFPRO 归因回这条 KOL。"
@@ -188,7 +226,7 @@ export function GoaffproLinkSection({ apiToken, kolPoolId, product }: any) {
       e(Link2, { size: 12 }),
       loading ? "读取追踪链…" : generating ? "生成中…" : (needsRegen ? "🔗 重新生成追踪链(当前未带追踪码)" : "🔗 生成追踪链(GOAFFPRO)")
     ),
-    showCard && e(GoaffproLinkCard, { link: link as GoaffproKolLink, onRegenerate: handleGenerate, regenerating: generating }),
+    showCard && e(GoaffproLinkCard, { link: link as GoaffproKolLink, onRegenerate: handleGenerate, regenerating: generating, apiToken, kolPoolId }),
     error && e("div", { className: "mt-2 rounded-md border border-rose-400/20 bg-rose-400/[0.05] p-2.5" },
       e("div", { className: "flex items-start gap-1.5" },
         e(AlertTriangle, { size: 11, className: "mt-0.5 shrink-0 text-rose-300" }),

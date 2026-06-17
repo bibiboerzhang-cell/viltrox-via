@@ -419,6 +419,35 @@ def _post(path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
     return {"ok": True, "data": data}
 
 
+def _patch(path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Single PATCH against GOAFFPRO Admin API(改 affiliate:佣金/状态等)。
+    Returns {ok, data?, status_code?, error?, raw?}。绝不抛;HTTP 错误透出 body。"""
+    creds = get_credentials()
+    token = creds.get("access_token") or ""
+    if not token:
+        return {"ok": False, "reason": "not_configured"}
+    base = _norm_base(creds.get("api_base"))
+    url = f"{base}/{str(path or '').lstrip('/')}"
+    try:
+        with httpx.Client(timeout=20) as client:
+            resp = client.patch(url, headers=_admin_headers(creds), json=body or {})
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPStatusError as exc:
+        body_text: Any = None
+        try:
+            body_text = exc.response.json()
+        except Exception:  # noqa: BLE001
+            try:
+                body_text = exc.response.text
+            except Exception:  # noqa: BLE001
+                body_text = None
+        return {"ok": False, "error": f"http {exc.response.status_code}", "status_code": exc.response.status_code, "raw": body_text}
+    except (httpx.HTTPError, ValueError) as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "data": data}
+
+
 def _map_affiliate(raw: dict[str, Any]) -> dict[str, Any]:
     """【待 key 校准】affiliate 字段映射 —— 按公开资料先设,真 key 一到即对账。
     GOAFFPRO 公开端点 GET /admin/affiliates,以下字段名为占位映射(id/name/email 较稳,
@@ -933,6 +962,38 @@ def get_affiliate(affiliate_id: str | int) -> dict[str, Any]:
     }
 
 
+def update_affiliate_commission(
+    affiliate_id: str | int, amount: Any, ctype: str = "percentage", on: str = "product"
+) -> dict[str, Any]:
+    """调整 affiliate 佣金 → PATCH /admin/affiliates/{id} 推回 GOAFFPRO 总台。
+
+    Swagger 实证:commission={type:['percentage','fixed_amount'], amount:整数, on:['product','order']}。
+    amount 必须整数(百分比/固定额)。返回 {ok, commission_rate, raw, error?}。绝不抛。
+    """
+    aid = str(affiliate_id or "").strip()
+    if not aid:
+        return {"ok": False, "reason": "missing_id"}
+    try:
+        amt = int(round(float(amount)))
+    except (TypeError, ValueError):
+        return {"ok": False, "reason": "bad_amount", "error": "amount 必须是数字"}
+    if amt < 0:
+        return {"ok": False, "reason": "bad_amount", "error": "amount 不能为负"}
+    ct = ctype if ctype in ("percentage", "fixed_amount") else "percentage"
+    onv = on if on in ("product", "order") else "product"
+    commission = {"type": ct, "amount": amt, "on": onv}
+    res = _patch(f"admin/affiliates/{aid}", {"commission": commission})
+    if not res.get("ok"):
+        return {"ok": False, "error": res.get("error") or res.get("reason"), "status_code": res.get("status_code"), "raw": res.get("raw")}
+    se = _soft_error(res.get("data"))
+    if se:
+        return {"ok": False, "error": se, "raw": res.get("data")}
+    # 回读确认(PATCH 响应可能不含 commission)→ get_affiliate 拿 GOAFFPRO 总台最新值。
+    got = get_affiliate(aid)
+    rate = (got.get("commission_rate") if got.get("ok") else "") or commission_label({"commission": commission})
+    return {"ok": True, "commission_rate": rate, "raw": res.get("data")}
+
+
 def _norm_token_set(text: str) -> set[str]:
     """切词成 token 集(小写、仅字母数字、长度≥2),用于产品名模糊匹配。"""
     return {t for t in re.split(r"[^a-z0-9]+", str(text or "").lower()) if len(t) >= 2}
@@ -1059,6 +1120,8 @@ __all__ = [
     "get_affiliate",
     "search_affiliate",
     "resolve_affiliate",
+    "update_affiliate_commission",
+    "commission_label",
     "referral_link",
     "coupon_for",
     "to_cents",

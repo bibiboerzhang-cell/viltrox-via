@@ -273,5 +273,19 @@ export async function getGoaffproSummary(
   };
 }
 
+// POST:调整 KOL affiliate 佣金比例 → 后端 PATCH 推回 GOAFFPRO 总台。返回 {ok, commission_rate}。
+export async function updateKolCommission(
+  token: string,
+  kolPoolId: string | number,
+  rate: number,
+  opts?: { type?: "percentage" | "fixed_amount"; on?: "product" | "order" },
+): Promise<{ ok?: boolean; commission_rate?: string; error?: string }> {
+  return apiFetch(
+    `/api/admin/vkpi/goaffpro/kol/${encodeURIComponent(String(kolPoolId))}/commission`,
+    { method: "POST", body: jsonBody({ rate, type: opts?.type || "percentage", on: opts?.on || "product" }) },
+    token,
+  );
+}
+
 // 类型导出别名,便于页面侧引用。
 export type { Row as GoaffproRow };

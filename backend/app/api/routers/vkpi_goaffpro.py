@@ -375,6 +375,40 @@ def get_kol_affiliate_link(
     }
 
 
+@router.post("/kol/{kol_pool_id}/commission")
+def update_kol_commission(
+    kol_pool_id: int,
+    body: dict = Body(default={}),
+    staff=Depends(require_tab("vkpi", "write")),
+):
+    """调整该 KOL affiliate 的佣金比例 → PATCH 推回 GOAFFPRO 总台。
+
+    body {rate:number(整数), type?:'percentage'|'fixed_amount', on?:'product'|'order'}。
+    改完回读 GOAFFPRO 确认(总台与 V-KPI 一致)。返回 {ok, commission_rate}。
+    """
+    goaffpro_connect.ensure_goaffpro_links_schema()
+    conn = get_conn()
+    link = _load_link(conn, kol_pool_id)
+    affiliate_id = str((link or {}).get("affiliate_id") or "").strip()
+    if not affiliate_id:
+        raise HTTPException(status_code=400, detail="该 KOL 还没生成追踪链(无 affiliate),先生成再调佣金")
+    if not isinstance(body, dict) or body.get("rate") is None:
+        raise HTTPException(status_code=400, detail="rate is required")
+    res = goaffpro_connect.update_affiliate_commission(
+        affiliate_id,
+        body.get("rate"),
+        ctype=str(body.get("type") or "percentage"),
+        on=str(body.get("on") or "product"),
+    )
+    if not res.get("ok"):
+        return {
+            "ok": False,
+            "error": res.get("error") or res.get("reason") or "update commission failed",
+            "raw": res.get("raw"),
+        }
+    return {"ok": True, "commission_rate": res.get("commission_rate")}
+
+
 @router.post("/sync-sales")
 def sync_goaffpro_sales(
     limit: int | None = Query(default=None, ge=1, le=500),
