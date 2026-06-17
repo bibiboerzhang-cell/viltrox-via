@@ -164,6 +164,7 @@ export interface GoaffproKolLink {
   created_at?: string;
   status?: string;
   tracks_now?: boolean;
+  commission_rate?: string; // 佣金比例人话(如 "10%")
   // 早期废映射(GOAFFPRO 里搜不到该 affiliate)→ 前端显「重新生成」触发 POST 真建号。
   needs_regenerate?: boolean;
   created?: boolean;

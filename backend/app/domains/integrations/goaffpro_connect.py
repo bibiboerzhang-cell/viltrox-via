@@ -53,7 +53,7 @@ _DEFAULT_PAGE_LIMIT = 100
 # 2026-06-17 实测校准:GET /admin/affiliates 不带 fields 返回的 affiliate 对象为空 {},
 # 必须用 fields= 逗号分隔列名才回真字段(GOAFFPRO 列选约定)。下列字段按 GOAFFPRO 约定先设,
 # 真字段以响应里 _raw_keys 实测对照后微调(ref_code/coupon 是 KOL↔affiliate 配对键)。
-_AFFILIATE_FIELDS = "id,name,email,ref_code,coupon,status,total_sales,total_orders,total_clicks,balance,signup_date,phone"
+_AFFILIATE_FIELDS = "id,name,email,ref_code,coupon,status,commission,total_sales,total_orders,total_clicks,balance,signup_date,phone"
 # 实测:/admin/orders 返回 {error};GOAFFPRO 销售端点是 /admin/sales。
 _SALE_FIELDS = "id,affiliate_id,order_id,number,total,commission,currency,status,date,coupon,ref_code"
 
@@ -757,6 +757,34 @@ def coupon_for(affiliate_raw: dict[str, Any] | None) -> str:
     return ""
 
 
+def _fmt_num(v: Any) -> str:
+    """数字去尾零:10.0→'10',10.5→'10.5'。"""
+    try:
+        f = float(v)
+        return str(int(f)) if f == int(f) else str(f)
+    except (TypeError, ValueError):
+        return str(v or "")
+
+
+def commission_label(affiliate_raw: dict[str, Any] | None) -> str:
+    """把 affiliate 的 commission 转人话:{type:'percentage',amount:10,on:'product'} → '10%';
+    {type:'fixed_amount',amount:5} → '$5'。无则 ''。供前端「佣金比例」展示。"""
+    c = (affiliate_raw or {}).get("commission")
+    if isinstance(c, dict):
+        amt = c.get("amount")
+        if amt in (None, ""):
+            return ""
+        typ = str(c.get("type") or "").lower()
+        if typ == "percentage":
+            return f"{_fmt_num(amt)}%"
+        if typ in ("fixed_amount", "fixed", "flat"):
+            return f"${_fmt_num(amt)}"
+        return _fmt_num(amt)
+    if c not in (None, ""):
+        return str(c)
+    return ""
+
+
 def _norm_match(value: Any) -> str:
     """归一化用于宽松匹配(小写 + 仅字母数字),比对 name/email 命中。"""
     return "".join(ch for ch in str(value or "").lower() if ch.isalnum())
@@ -856,6 +884,7 @@ def resolve_affiliate(name: str, email: str | None = None, create: bool = False)
         "affiliate_id": aid,
         "ref_code": ref_code,
         "coupon": coupon,
+        "commission_rate": commission_label(hit),
         "status": status,
         "affiliate": hit,
         "created": created_flag,
@@ -898,6 +927,7 @@ def get_affiliate(affiliate_id: str | int) -> dict[str, Any]:
         "affiliate": obj,
         "ref_code": _read_ref_code(obj),
         "coupon": coupon_for(obj),
+        "commission_rate": commission_label(obj),
         "status": str((obj or {}).get("status") or ""),
         "raw": result.get("data"),
     }

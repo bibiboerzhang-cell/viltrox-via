@@ -228,8 +228,21 @@ def _store_kol_link(conn, kol_pool_id: int, res: dict) -> dict:
         "tracking_url": tracking_url,
         "coupon": coupon,
         "status": status,
+        "commission_rate": str(res.get("commission_rate") or ""),
         "tracks_now": _tracks_now(ref_code, status),
     }
+
+
+def _commission_for(affiliate_id) -> str:
+    """佣金比例(人话,如 '10%')—— best-effort 拉 affiliate 读 commission;失败返 ''。"""
+    aid = str(affiliate_id or "").strip()
+    if not aid:
+        return ""
+    try:
+        got = goaffpro_connect.get_affiliate(aid)
+        return str(got.get("commission_rate") or "") if got.get("ok") else ""
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def _product_link_fields(ref_code: str | None, product: str | None) -> dict:
@@ -276,6 +289,7 @@ def link_kol_affiliate(
             "ref_code": existing.get("ref_code"),
             "tracking_url": _effective_tracking_url(existing),
             "coupon": existing.get("coupon"),
+            "commission_rate": _commission_for(existing.get("affiliate_id")),
             "tracks_now": _tracks_now(str(existing.get("ref_code") or ""), ""),
             **_product_link_fields(existing.get("ref_code"), product),
         }
@@ -354,6 +368,7 @@ def get_kol_affiliate_link(
         "tracking_url": _effective_tracking_url(link),
         "coupon": link.get("coupon"),
         "created_at": link.get("created_at"),
+        "commission_rate": _commission_for(link.get("affiliate_id")) if not needs_regenerate else "",
         "needs_regenerate": needs_regenerate,
         "tracks_now": _tracks_now(ex_ref, ""),
         **_product_link_fields(link.get("ref_code"), product),

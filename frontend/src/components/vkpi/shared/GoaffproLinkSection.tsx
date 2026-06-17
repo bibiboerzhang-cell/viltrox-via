@@ -57,6 +57,8 @@ function GoaffproLinkCard({ link, onRegenerate, regenerating }: { link: Goaffpro
   const productUrl = String(link.product_url || "");
   const productName = String(link.product_name || "");
   const coupon = String(link.coupon || "");
+  const commissionRate = String((link as any).commission_rate || "");
+  const statusLabel = statusBadge((link as any).status);
   return e("div", { className: "mt-2 rounded-md border border-teal-400/20 bg-teal-400/[0.04] p-2.5 space-y-2" },
     e("div", { className: "flex items-center gap-1.5 text-[9px] uppercase tracking-wider text-teal-200/80" },
       e(Link2, { size: 10 }),
@@ -86,10 +88,27 @@ function GoaffproLinkCard({ link, onRegenerate, regenerating }: { link: Goaffpro
         e(CopyValueButton, { value: coupon, label: "复制码" })
       )
     ),
+    // 佣金比例 + 审批状态(更精准:这条链产生销售给 KOL 多少佣金 + 归因是否已生效)
+    (commissionRate || statusLabel) && e("div", { className: "flex flex-wrap items-center gap-1.5" },
+      commissionRate && e("span", { className: "rounded-md border border-amber-400/25 bg-amber-400/[0.08] px-2 py-1 text-[10px] text-amber-200" },
+        "💰 佣金比例 ", e("b", { className: "tabular-nums" }, commissionRate)
+      ),
+      statusLabel && e("span", { className: "rounded-md border px-2 py-1 text-[10px] " + statusLabel.cls }, statusLabel.text)
+    ),
     e("div", { className: "text-[9px] leading-relaxed text-teal-200/70" },
       "📨 把追踪链" + (coupon ? " + 优惠码" : "") + "发给 KOL,KOL 零注册;销售经 GOAFFPRO 归因回这条 KOL。"
     )
   );
+}
+
+// 审批状态→人话 + 配色(approved=归因+结算都生效;pending=能追踪但佣金待审批)。
+function statusBadge(status: any): { text: string; cls: string } | null {
+  const s = String(status || "").toLowerCase();
+  if (!s) return null;
+  if (s === "approved" || s === "active" || s === "1") return { text: "✅ 已审批 · 归因生效", cls: "border-emerald-400/25 bg-emerald-400/[0.08] text-emerald-200" };
+  if (s === "pending") return { text: "⏳ 待审批 · 能追踪,佣金待批", cls: "border-amber-400/25 bg-amber-400/[0.08] text-amber-200" };
+  if (s === "rejected") return { text: "⛔ 已拒绝", cls: "border-rose-400/25 bg-rose-400/[0.08] text-rose-200" };
+  return { text: s, cls: "border-white/[0.1] bg-white/[0.04] text-slate-300" };
 }
 
 // D2:KOL 详情「生成追踪链(GOAFFPRO)」区块。
