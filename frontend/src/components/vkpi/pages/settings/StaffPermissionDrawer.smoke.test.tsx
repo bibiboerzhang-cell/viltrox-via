@@ -44,8 +44,9 @@ describe("StaffPermissionDrawer 授权页冒烟(C7 两态·默认显示)", () =>
     // 显示 / 可使用 两态按钮存在
     expect(screen.getAllByText("显示").length).toBeGreaterThan(0);
     expect(screen.getAllByText("可使用").length).toBeGreaterThan(0);
-    // 「无」只出现在 owner-only 敏感模块(api_keys/models/members/restart 共 4 个)
-    expect(screen.getAllByText("无").length).toBe(4);
+    // 「无」出现在 owner 按需授权模块:4 个敏感(api_keys/models/members/restart)
+    // + 系统设置/用量/运行诊断 3 个 = 7(这 3 个不再默认显示,改 owner 按需)
+    expect(screen.getAllByText("无").length).toBe(7);
     // 旧「只读/可写/管理」文案已彻底移除
     expect(screen.queryByText("只读")).toBeNull();
     expect(screen.queryByText("可写")).toBeNull();

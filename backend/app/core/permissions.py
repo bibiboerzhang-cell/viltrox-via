@@ -70,12 +70,13 @@ OWNER_ONLY_SYSTEM_KEYS = {
 
 _LEVEL_RANK = {"none": 0, "read": 1, "write": 2, "admin": 3}
 
-# 2026-06-16 C7「两态·默认显示」(用户拍板):授权抽屉里非 owner-only 的业务模块,
-# 对所有非 owner 成员默认至少「显示」(read)。授权只在 显示(read)/可使用(write)
-# 之间选,不再存在「无」——这既消除「某员工被显式存成 none → 入口被 AdminRoute 锁死」
-# 的坑(默认人人进得了系统、看得到全部模块),也让 owner 只需把人「升级到可使用」。
-# 注:OWNER_ONLY_SYSTEM_KEYS(api_keys/models/members/restart)不在此列,维持按需授权 +
-# 写级降级;这些 read 仅是「可见」,真正敏感写操作仍 owner 专属。
+# 2026-06-16 C7「两态·默认显示」(用户拍板):授权抽屉里这些业务模块,对所有非 owner
+# 成员默认至少「显示」(read)。授权只在 显示(read)/可使用(write) 之间选,不再存在「无」——
+# 这既消除「某员工被显式存成 none → 入口被 AdminRoute 锁死」的坑(默认人人进得了系统、看得到
+# 工作模块),也让 owner 只需把人「升级到可使用」。
+# 2026-06-16 二次口径(用户):非 owner 默认只剩「邀请人/成员工作界面」——把 系统设置(system)/
+# 用量预算(system.usage)/运行诊断(runtime) 移出默认清单,改 owner 按需授权(抽屉里仍是三态、
+# 默认无)。OWNER_ONLY_SYSTEM_KEYS(api_keys/models/members/restart)同样不在此列。
 DEFAULT_VISIBLE_KEYS = (
     "overview",
     "kol_ops",
@@ -84,9 +85,6 @@ DEFAULT_VISIBLE_KEYS = (
     "analytics",
     "insights",
     "products",
-    "runtime",
-    "system",
-    "system.usage",
 )
 
 

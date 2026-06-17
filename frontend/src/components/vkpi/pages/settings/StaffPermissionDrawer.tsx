@@ -3,7 +3,7 @@ import type { VkpiStaffActivationLinkResponse, VkpiStaffPasswordResetLinkRespons
 import type { VkpiStaffMember } from "../../vkpiTypes";
 import { Avatar } from "../../shared/Avatar";
 import { InfoBlock } from "../../shared/InfoBlock";
-import { STAFF_ASSIGNABLE_PERMISSION_TEMPLATES, STAFF_PERMISSION_MODULES, STAFF_PERMISSION_TEMPLATES, type StaffPermissionMap } from "./staffPermissionTemplates";
+import { DEFAULT_VISIBLE_MODULE_KEYS, STAFF_ASSIGNABLE_PERMISSION_TEMPLATES, STAFF_PERMISSION_MODULES, STAFF_PERMISSION_TEMPLATES, type StaffPermissionMap } from "./staffPermissionTemplates";
 
 // C7「两态·默认显示」(2026-06-16 用户拍板):去掉「无」,业务模块只在 显示/可使用 两态间选。
 // 显示=read(能看见、进得了系统),可使用=write(能操作)。后端 require_tab(tab,read/write) 真 enforce,
@@ -26,10 +26,11 @@ function normalizeLevel(value: unknown): VkpiPermissionLevel {
 
 function initialPermissions(member: VkpiStaffMember): StaffPermissionMap {
   const current = member.permissions || {};
-  // 两态默认显示:非 owner-only 模块 缺省/无 → 显示(read),与后端 floor 对齐;敏感模块保留真实值(可为无)。
+  // 两态默认显示:仅「默认显示」业务模块 缺省/无 → 显示(read),与后端 floor 对齐;
+  // 系统/用量/运行诊断 + 敏感模块保留真实值(可为无,owner 按需授权)。
   const base = Object.fromEntries(STAFF_PERMISSION_MODULES.map((module) => {
     const lvl = normalizeLevel(current[module.key]);
-    return [module.key, (!module.ownerOnly && lvl === "none") ? "read" : lvl];
+    return [module.key, (DEFAULT_VISIBLE_MODULE_KEYS.has(module.key) && lvl === "none") ? "read" : lvl];
   })) as StaffPermissionMap;
   if (member.vkpiPermission && base.vkpi === "none") base.vkpi = normalizeLevel(member.vkpiPermission);
   return base;
@@ -88,10 +89,10 @@ export function StaffPermissionDrawer({
   const applyTemplate = (key: string) => {
     const template = STAFF_PERMISSION_TEMPLATES.find((item) => item.key === key);
     if (!template) return;
-    // 套模板后,非敏感模块仍兜底到至少「显示」(与两态默认显示一致)。
+    // 套模板后,「默认显示」业务模块仍兜底到至少「显示」(与两态默认显示一致)。
     const next: StaffPermissionMap = { ...template.permissions };
     for (const module of STAFF_PERMISSION_MODULES) {
-      if (!module.ownerOnly && normalizeLevel(next[module.key]) === "none") next[module.key] = "read";
+      if (DEFAULT_VISIBLE_MODULE_KEYS.has(module.key) && normalizeLevel(next[module.key]) === "none") next[module.key] = "read";
     }
     setDraft(next);
   };
@@ -182,7 +183,7 @@ export function StaffPermissionDrawer({
                   <span>{module.key}{module.ownerOnly ? " · Owner 专属" : ""}</span>
                 </div>
                 <div className="vkpi-permission-levels">
-                  {(module.ownerOnly ? OWNER_LEVELS : ASSIGN_LEVELS).map((level) => (
+                  {(DEFAULT_VISIBLE_MODULE_KEYS.has(module.key) ? ASSIGN_LEVELS : OWNER_LEVELS).map((level) => (
                     <button
                       type="button"
                       className={draft[module.key] === level.key ? "is-active" : ""}

@@ -9,6 +9,19 @@ export type StaffPermissionTemplate = {
   ownerOnly?: boolean;
 };
 
+// C7「两态·默认显示」业务模块(与后端 permissions.py DEFAULT_VISIBLE_KEYS 对齐):
+// 这 7 个对非 owner 默认「显示」+ 两态(显示/可使用);其余(系统/用量/运行诊断 + 4 个敏感)
+// 是 owner 按需授权,三态(无/显示/可使用)、默认无。改这里务必同步改后端那份。
+export const DEFAULT_VISIBLE_MODULE_KEYS = new Set<string>([
+  "overview",
+  "kol_ops",
+  "vkpi",
+  "activities",
+  "analytics",
+  "insights",
+  "products",
+]);
+
 export const STAFF_PERMISSION_MODULES: Array<{ key: string; label: string; group: string; ownerOnly?: boolean }> = [
   { key: "overview", label: "管理主控", group: "常用" },
   { key: "kol_ops", label: "KOL/账号管理", group: "常用" },
