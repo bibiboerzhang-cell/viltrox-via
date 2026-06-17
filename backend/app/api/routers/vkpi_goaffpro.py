@@ -221,8 +221,19 @@ def link_kol_affiliate(
     affiliate_raw = created.get("affiliate") or {}
     ref_code = str(created.get("ref_code") or "")
     affiliate_id = str(affiliate_raw.get("id") or ref_code or "")
-    tracking_url = goaffpro_connect.referral_link(affiliate_raw, ref_code)
     coupon = goaffpro_connect.coupon_for(affiliate_raw)
+    status = str(affiliate_raw.get("status") or "")
+    # GOAFFPRO 新建 affiliate 的 POST 响应当下常不返回 ref_code → 回查一次拿分配好的码,
+    # 否则 referral_link 拼出来是光店铺链(追不到 KOL)。这就是之前「生成的不是追踪链」的真因。
+    if not ref_code and affiliate_id:
+        refetched = goaffpro_connect.get_affiliate(affiliate_id)
+        if refetched.get("ok"):
+            ref_code = str(refetched.get("ref_code") or ref_code or "")
+            coupon = coupon or str(refetched.get("coupon") or "")
+            status = status or str(refetched.get("status") or "")
+            if refetched.get("affiliate"):
+                affiliate_raw = refetched["affiliate"]
+    tracking_url = goaffpro_connect.referral_link(affiliate_raw, ref_code)
 
     conn.execute(
         """
@@ -245,6 +256,9 @@ def link_kol_affiliate(
         "ref_code": ref_code,
         "tracking_url": tracking_url,
         "coupon": coupon,
+        "status": status,
+        # 诚实提示:ref_code 拿到=链可拼;但归因生效还看 GOAFFPRO 审批(status)。
+        "tracks_now": bool(ref_code) and status.lower() in ("", "approved", "active", "1"),
         "raw": created.get("raw"),  # 透出便于真 key 校准字段名
     }
 

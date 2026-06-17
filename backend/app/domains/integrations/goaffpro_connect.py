@@ -629,6 +629,32 @@ def coupon_for(affiliate_raw: dict[str, Any] | None) -> str:
     return ""
 
 
+def get_affiliate(affiliate_id: str | int) -> dict[str, Any]:
+    """回查单个 affiliate(GET /admin/affiliates/{id}),拿分配好的 ref_code/coupon/status。
+
+    为什么需要:GOAFFPRO 新建 affiliate 的 POST 响应当下常不返回 ref_code(要它分配后才有),
+    若建完立刻拼链 ref_code 为空 → 出光店铺链(追不到 KOL)。建后回查即可拿到真码
+    (实测 2421 个 affiliate 含 Pending Approval 的都带 ref_code,故回查必有)。
+    返回 {ok, affiliate, ref_code, coupon, status, reason?/error?}。绝不抛、绝不烧 LLM。
+    """
+    aid = str(affiliate_id or "").strip()
+    if not aid:
+        return {"ok": False, "reason": "missing_id"}
+    result = _get(f"admin/affiliates/{aid}", {"fields": _AFFILIATE_FIELDS})
+    if not result.get("ok"):
+        return result
+    data = result.get("data")
+    obj = _extract_affiliate(data) if isinstance(data, (dict, list)) else {}
+    return {
+        "ok": True,
+        "affiliate": obj,
+        "ref_code": _read_ref_code(obj),
+        "coupon": coupon_for(obj),
+        "status": str((obj or {}).get("status") or ""),
+        "raw": data,
+    }
+
+
 def sync_stub() -> dict[str, Any]:
     """手动 sync stub(D1 骨架)—— 只拉一页 affiliates + orders 探活,不落库、不归因。
 
@@ -658,6 +684,7 @@ __all__ = [
     "list_affiliates",
     "list_orders",
     "create_affiliate",
+    "get_affiliate",
     "referral_link",
     "coupon_for",
     "to_cents",
