@@ -31,6 +31,7 @@ import base64
 import hashlib
 import os
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -976,15 +977,21 @@ def resolve_affiliate(name: str, email: str | None = None, create: bool = False)
     ref_code = _read_ref_code(hit)
     coupon = coupon_for(hit)
     status = str(hit.get("status") or "")
-    # ref_code 还空但有 id → ?id= 回查(建完当下响应常不含 ref_code,实测回查必有)。
+    # ref_code 还空但有 id → ?id= 回查(建完当下响应常不含 ref_code)。
+    # 退避重试(修并发竞态):GOAFFPRO 异步分配 ref_code 有窗口,立即回查可能仍空 →
+    # 最多 3 次、0.6s/1.2s 退避,等它分配好,避免「建了但拿不到码 → 报失败 → 重复建」。
     if aid and not ref_code:
-        got = get_affiliate(aid)
-        if got.get("ok"):
-            ref_code = got.get("ref_code") or ref_code
-            coupon = coupon or got.get("coupon") or ""
-            status = status or got.get("status") or ""
-            if got.get("affiliate"):
-                hit = got["affiliate"]
+        for _attempt in range(3):
+            got = get_affiliate(aid)
+            if got.get("ok") and got.get("ref_code"):
+                ref_code = str(got.get("ref_code"))
+                coupon = coupon or got.get("coupon") or ""
+                status = status or got.get("status") or ""
+                if got.get("affiliate"):
+                    hit = got["affiliate"]
+                break
+            if _attempt < 2:
+                time.sleep(0.6 * (_attempt + 1))
     ok = bool(aid and ref_code)
     out = {
         "ok": ok,
