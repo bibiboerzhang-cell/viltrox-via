@@ -48,6 +48,13 @@ _SCHEMA_READY = False
 # 默认分页上限(请求骨架用;真 key 后按文档确认 limit/offset 还是 page/per_page)。
 _DEFAULT_PAGE_LIMIT = 100
 
+# 2026-06-17 实测校准:GET /admin/affiliates 不带 fields 返回的 affiliate 对象为空 {},
+# 必须用 fields= 逗号分隔列名才回真字段(GOAFFPRO 列选约定)。下列字段按 GOAFFPRO 约定先设,
+# 真字段以响应里 _raw_keys 实测对照后微调(ref_code/coupon 是 KOL↔affiliate 配对键)。
+_AFFILIATE_FIELDS = "id,name,email,ref_code,coupon,status,total_sales,total_orders,total_clicks,balance,signup_date,phone"
+# 实测:/admin/orders 返回 {error};GOAFFPRO 销售端点是 /admin/sales。
+_SALE_FIELDS = "id,affiliate_id,order_id,number,total,commission,currency,status,date,coupon,ref_code"
+
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -384,16 +391,18 @@ def list_affiliates(limit: int | None = None, offset: int | None = None) -> dict
     【待 key 校准】分页参数名(limit/offset vs page/per_page)与响应包裹键待真 key 锁定。
     返回 {ok, affiliates?, count?, raw?, reason?/error?}。绝不抛、绝不烧 LLM。
     """
-    params: dict[str, Any] = {}
+    params: dict[str, Any] = {"fields": _AFFILIATE_FIELDS}
     params["limit"] = int(limit) if limit else _DEFAULT_PAGE_LIMIT
     if offset:
         params["offset"] = int(offset)
     result = _get("admin/affiliates", params)
     if not result.get("ok"):
         return result
-    rows = _extract_list(result.get("data"), "affiliates", "data", "results")
+    data = result.get("data")
+    rows = _extract_list(data, "affiliates", "data", "results")
     mapped = [_map_affiliate(r) for r in rows]
-    return {"ok": True, "affiliates": mapped, "count": len(mapped)}
+    total = data.get("total_results") if isinstance(data, dict) else None
+    return {"ok": True, "affiliates": mapped, "count": len(mapped), "total": total}
 
 
 def list_orders(limit: int | None = None, offset: int | None = None) -> dict[str, Any]:
@@ -402,16 +411,19 @@ def list_orders(limit: int | None = None, offset: int | None = None) -> dict[str
     【待 key 校准】分页参数名与响应包裹键待真 key 锁定。
     返回 {ok, orders?, count?, reason?/error?}。绝不抛、绝不烧 LLM。
     """
-    params: dict[str, Any] = {}
+    params: dict[str, Any] = {"fields": _SALE_FIELDS}
     params["limit"] = int(limit) if limit else _DEFAULT_PAGE_LIMIT
     if offset:
         params["offset"] = int(offset)
-    result = _get("admin/orders", params)
+    # 实测 /admin/orders → {error};GOAFFPRO 销售/转化端点是 /admin/sales。
+    result = _get("admin/sales", params)
     if not result.get("ok"):
         return result
-    rows = _extract_list(result.get("data"), "orders", "data", "results")
+    data = result.get("data")
+    rows = _extract_list(data, "sales", "orders", "data", "results")
     mapped = [_map_order(r) for r in rows]
-    return {"ok": True, "orders": mapped, "count": len(mapped)}
+    total = data.get("total_results") if isinstance(data, dict) else None
+    return {"ok": True, "orders": mapped, "count": len(mapped), "total": total}
 
 
 def sync_stub() -> dict[str, Any]:
