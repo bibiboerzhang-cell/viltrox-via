@@ -14,6 +14,7 @@ function coerceMembers<T extends { member_ids?: (string | number)[] }>(payload: 
 
 export interface VkpiStaffGroupPermissions {
   shared_projects?: string[];
+  shared_kol_pool_ids?: Array<string | number>;
   shared_kol_pool?: string;
   kpi_goal?: string;
   reminder_rule?: string;
@@ -136,6 +137,7 @@ export interface UiGroup {
   member_ids: string[];
   permissions: {
     shared_projects: string[];
+    shared_kol_pool_ids: string[];
     shared_kol_pool: string;
     kpi_goal: string;
     reminder_rule: string;
@@ -162,6 +164,8 @@ export function toUiGroup(row: VkpiStaffGroup): UiGroup {
     member_ids: (Array.isArray(row.member_ids) ? row.member_ids : []).map(String),
     permissions: {
       shared_projects: Array.isArray(perms.shared_projects) ? perms.shared_projects.map(String) : [],
+      // 修复:此前漏读 shared_kol_pool_ids → 重开/再存时静默清空组的 KOL 共享(_recompute 按空集重铺)。
+      shared_kol_pool_ids: Array.isArray(perms.shared_kol_pool_ids) ? perms.shared_kol_pool_ids.map(String) : [],
       shared_kol_pool: perms.shared_kol_pool ?? "",
       kpi_goal: perms.kpi_goal ?? "",
       reminder_rule: perms.reminder_rule ?? "",
