@@ -16,6 +16,7 @@
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
@@ -146,6 +147,21 @@ def _load_kol_identity(conn, kol_pool_id: int) -> dict | None:
     return {"kol_pool_id": kol_pool_id, "name": name, "email": email}
 
 
+def _effective_kol_email(identity: dict | None, kol_pool_id: int) -> tuple[str, bool]:
+    """KOL 有真 email 用真的;没有 → 合成**确定性**占位邮箱。
+
+    为什么:实测 GOAFFPRO 建 affiliate 缺 email 会软失败(HTTP 200 + {error})。确定性
+    (基于 name + kol_pool_id)保证 POST 建 / GET 搜命中同一个邮箱 → 幂等不重复建号。
+    返回 (email, is_synthetic)。占位邮箱用 viltroxvia.com 域,用户拿到 KOL 真邮箱后可在
+    GOAFFPRO 后台改。
+    """
+    real = str((identity or {}).get("email") or "").strip()
+    if real:
+        return real, False
+    base = re.sub(r"[^a-z0-9]+", "", str((identity or {}).get("name") or "").lower())[:30] or f"kol{kol_pool_id}"
+    return f"{base}.kol{kol_pool_id}@viltroxvia.com", True
+
+
 def _load_link(conn, kol_pool_id: int) -> dict | None:
     row = conn.execute(
         """
@@ -243,10 +259,10 @@ def link_kol_affiliate(
     if not identity.get("name"):
         raise HTTPException(status_code=400, detail="kol has no display_name/handle to name the affiliate")
 
+    # 缺真 email → 合成确定性占位邮箱(GOAFFPRO 缺 email 软失败的修法)。
+    email, email_synth = _effective_kol_email(identity, kol_pool_id)
     # search-first + create-if-absent + ?id= 回查 ref_code(一站式确保 affiliate 真存在)。
-    res = goaffpro_connect.resolve_affiliate(
-        name=identity["name"], email=identity.get("email") or None, create=True
-    )
+    res = goaffpro_connect.resolve_affiliate(name=identity["name"], email=email, create=True)
     if not res.get("ok"):
         return {
             "ok": False,
@@ -257,6 +273,7 @@ def link_kol_affiliate(
         }
     out = _store_kol_link(conn, kol_pool_id, res)
     out["created"] = res.get("created", False)
+    out["email_synthetic"] = email_synth
     return out
 
 
@@ -280,9 +297,10 @@ def get_kol_affiliate_link(
     needs_regenerate = False
     if not ex_ref:
         identity = _load_kol_identity(conn, kol_pool_id)
+        email = _effective_kol_email(identity, kol_pool_id)[0] if identity else None
         res = goaffpro_connect.resolve_affiliate(
             name=(identity or {}).get("name") or "",
-            email=(identity or {}).get("email") or None,
+            email=email,  # 同 POST 的确定性占位邮箱 → 搜得到 POST 建的那个
             create=False,  # GET 只搜不建
         )
         if res.get("ok") and res.get("ref_code"):

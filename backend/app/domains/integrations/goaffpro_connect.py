@@ -571,6 +571,13 @@ def create_affiliate(name: str, email: str | None = None, extra: dict[str, Any] 
             out["raw"] = result["raw"]
         return out
     data = result.get("data")
+    # GOAFFPRO 软失败:HTTP 200 但 body 带 error/errors/message 且无 affiliate 主体(像 /admin/orders
+    # 那套)→ 当作失败,把真因透出(此前把 200 当成功 → 读不到 id → 报 resolve failed 吞了真因)。
+    if isinstance(data, dict):
+        soft_err = data.get("error") or data.get("errors") or data.get("message")
+        has_body = bool(data.get("id") or data.get("affiliate") or data.get("data") or data.get("ref_code"))
+        if soft_err and not has_body:
+            return {"ok": False, "affiliate": {}, "ref_code": "", "error": str(soft_err), "raw": data}
     affiliate_raw = _extract_affiliate(data)
     ref_code = _read_ref_code(affiliate_raw)
     return {
@@ -721,8 +728,9 @@ def resolve_affiliate(name: str, email: str | None = None, create: bool = False)
             status = status or got.get("status") or ""
             if got.get("affiliate"):
                 hit = got["affiliate"]
-    return {
-        "ok": bool(aid and ref_code),
+    ok = bool(aid and ref_code)
+    out = {
+        "ok": ok,
         "affiliate_id": aid,
         "ref_code": ref_code,
         "coupon": coupon,
@@ -730,6 +738,11 @@ def resolve_affiliate(name: str, email: str | None = None, create: bool = False)
         "affiliate": hit,
         "created": created_flag,
     }
+    if not ok:
+        # 永不再吞真因:明确标出卡在哪一步,并把 affiliate 原始体透出便于排查。
+        out["reason"] = "no_affiliate_id" if not aid else "no_ref_code"
+        out["raw"] = hit
+    return out
 
 
 def get_affiliate(affiliate_id: str | int) -> dict[str, Any]:
