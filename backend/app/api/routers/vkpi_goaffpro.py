@@ -187,6 +187,22 @@ def link_kol_affiliate(
     conn = get_conn()
     existing = _load_link(conn, kol_pool_id)
     if existing:
+        ex_ref = str(existing.get("ref_code") or "").strip()
+        ex_aid = str(existing.get("affiliate_id") or "").strip()
+        # 自愈:旧映射 ref_code 为空(早期 bug:建后未回查)→ 用 affiliate_id 回查补上,
+        # 否则点「生成追踪链」永远返回那条光链。回查到了就回填并更新映射。
+        if not ex_ref and ex_aid:
+            refetched = goaffpro_connect.get_affiliate(ex_aid)
+            if refetched.get("ok") and refetched.get("ref_code"):
+                ex_ref = str(refetched["ref_code"])
+                new_coupon = str(existing.get("coupon") or "") or str(refetched.get("coupon") or "")
+                new_url = goaffpro_connect.referral_link(refetched.get("affiliate"), ex_ref)
+                conn.execute(
+                    "UPDATE vkpi_goaffpro_kol_links SET ref_code=?, tracking_url=?, coupon=? WHERE kol_pool_id=?",
+                    (ex_ref, new_url, new_coupon, kol_pool_id),
+                )
+                conn.commit()
+                existing = dict(existing, ref_code=ex_ref, tracking_url=new_url, coupon=new_coupon)
         return {
             "ok": True,
             "linked": True,
