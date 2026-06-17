@@ -15,7 +15,7 @@ import { ContactModal } from "./components/modals/ContactModal";
 import { KolPoolAllModal } from "./components/modals/KolPoolAllModal";
 import { favoriteKolPool, getKolPoolDetailBundle, getKolPoolItem, listKolPoolFavorites, unfavoriteKolPool } from "../../../domains/kol";
 import { toV615KolPoolRows } from "./kolPoolRuntime";
-import { listKolsNeedingAnalysis, enqueueVideoAnalysisBatch } from "../../../services/vkpi/kolPool-api";
+import { listKolsNeedingAnalysis, enqueueVideoAnalysisBatch, importKolPool } from "../../../services/vkpi/kolPool-api";
 import { candidateKindGroup } from "./lib/candidateKind";
 import { CANDIDATE_KIND_INFO } from "./data/candidateKindInfo";
 import { normalizeCountryCode } from "./data/countryInfo";
@@ -143,6 +143,35 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
     return () => { cancelled = true; };
   }, [apiToken]);
 
+  // 候选(new_discovered / 未入库,无真 kol_pool_id)先建档拿真 id 再收藏,
+  // 否则收藏挂不到真 vkpi_kol_pool 行 → my_kol_aggregate._pool_favorites JOIN 不出 → MY KOL 看不见。
+  // 复用既有 importKolPool(/kol-pool/import:ON CONFLICT(platform,handle) upsert,返回真 id),不新造端点。
+  const realPoolId = (id: any) => { const n = Number(id); return Number.isFinite(n) && n > 0 ? n : null; };
+
+  // 用打开的抽屉项(selectedItem)的 identity 字段把候选落进 vkpi_kol_pool,返回真 id。
+  const materializeCandidate = async (): Promise<number | null> => {
+    const it = selectedItem || {};
+    const handle = String(it.handle || it.display_name || "").trim();
+    const platform = String(it.platform || "").trim();
+    if (!handle || !platform) return null;
+    const resp = await importKolPool(apiToken, {
+      items: [{
+        handle,
+        platform,
+        display_name: it.display_name || handle,
+        profile_url: it.profile_url || "",
+        avatar_url: avatarForItem(it) || "",
+        bio: it.bio || "",
+        followers: it.followers ?? null,
+      }],
+      sourceType: "manual",
+      sourceRef: "kol_pool_favorite_materialize",
+      platform,
+    });
+    const row = (resp.items || [])[0] as any;
+    return realPoolId(row?.id ?? row?.kol_pool_id);
+  };
+
   const toggleMyList = (id: any) => {
     const wasIn = myList.has(id);
     setMyList(prev => {
@@ -151,15 +180,44 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
       return next;
     });
     // 乐观更新 + 真持久化;失败(端点未活/网络)回滚本地态,不留假象。
-    if (!apiToken || !id) return;
-    const call = wasIn ? unfavoriteKolPool(apiToken, id) : favoriteKolPool(apiToken, id);
-    call.catch(() => {
-      setMyList(prev => {
-        const next = new Set(prev);
-        if (wasIn) next.add(id); else next.delete(id);
-        return next;
-      });
+    if (!apiToken) return;
+    const rollback = () => setMyList(prev => {
+      const next = new Set(prev);
+      if (wasIn) next.add(id); else next.delete(id);
+      return next;
     });
+    const poolId = realPoolId(id);
+
+    // 取消收藏:必须有真 id 才有可取消的持久行(候选本就没持久化)。
+    if (wasIn) {
+      if (!poolId) return;
+      unfavoriteKolPool(apiToken, poolId).catch(rollback);
+      return;
+    }
+
+    // 收藏:已有真 id → 直接收藏;否则(候选)先建档拿真 id 再收藏,并把真 id 并入本地态。
+    if (poolId) {
+      favoriteKolPool(apiToken, poolId).catch(rollback);
+      return;
+    }
+    void (async () => {
+      try {
+        const newId = await materializeCandidate();
+        if (!newId) throw new Error("materialize-failed");
+        await favoriteKolPool(apiToken, newId);
+        // 用真 id 替换乐观 Set 里的占位(候选 id 多为 null);并把 selectedItem.id 升级为真 id,
+        // 让星标状态(inMyList=myList.has(selectedItem.id))与后续 toggle 都用真 id。
+        setMyList(prev => {
+          const next = new Set(prev);
+          next.delete(id);
+          next.add(newId);
+          return next;
+        });
+        setSelectedItem((prev: any) => prev ? { ...prev, id: newId, kol_pool_id: newId } : prev);
+      } catch {
+        rollback();
+      }
+    })();
   };
   const openItem = async (item: any) => {
     const seedAvatar = avatarForItem(item);
