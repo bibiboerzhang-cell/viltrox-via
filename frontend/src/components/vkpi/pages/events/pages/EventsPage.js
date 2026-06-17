@@ -8,7 +8,6 @@ import {
 } from "../../../../../services/vkpi/events-api";
 import { listInventory, toUiStock } from "../../../../../services/vkpi/inventory-api";
 import { useAuth } from "../../../../../hooks/useAuth";
-import { TASKS_DATA } from "../data/tasks.js";
 import DeleteConfirmModal from "../modals/DeleteConfirmModal.js";
 import NewEventModal from "../modals/NewEventModal.js";
 import StockManagerModal from "../modals/StockManagerModal.js";
@@ -103,10 +102,8 @@ export default function EventsPage({ currentUser, staff = [], initialEventId = n
   const myEvents = events.filter(ev => (ev.teamUserIds || []).includes(currentUser.id));
   const activeEvents = myEvents.filter(ev => ev.status === "planning" || ev.status === "prep_ready" || ev.status === "live");
   const totalSpentThisMonth = myEvents.reduce((s, ev) => s + sum(ev.budgetByCategory, "spent"), 0);
-  const allTasks = myEvents.flatMap(ev => (TASKS_DATA[ev.id] || []).filter(t => 
-    t.owner === "All" || t.owner === currentUser.initial || (t.collaborators || []).includes(currentUser.initial)
-  ));
-  const pendingTasks = allTasks.filter(t => !t.done).length;
+  // 跨 event 的「我的待办」需逐 event 拉详情(N+1),代价过高;此处不再用 mock TASKS_DATA
+  // 充数。真实逐 event 待办计数在各 Event 详情页「概览/任务」tab 内呈现(真后端)。
   const doneEvents = myEvents.filter(ev => ev.status === "done");
   const avgRoi = doneEvents.length > 0 ? (doneEvents.reduce((s, ev) => s + (ev.roi || 0), 0) / doneEvents.length) : 0;
   
@@ -163,8 +160,8 @@ export default function EventsPage({ currentUser, staff = [], initialEventId = n
       e("div", { className: "rounded-xl border border-white/[0.06] bg-white/[0.012] p-3.5" },
         e("div", { className: "flex items-center gap-1.5 text-[10.5px] text-slate-400 mb-2" }, e(CircleDot, { size: 11, className: "text-amber-400" }), "我的待办"),
         e("div", { className: "flex items-baseline gap-1.5" },
-          e("div", { className: "text-[22px] font-bold text-white tabular-nums" }, pendingTasks),
-          e("div", { className: "text-[11px] text-slate-500" }, "项")
+          e("div", { className: "text-[22px] font-bold text-slate-500 tabular-nums" }, "—"),
+          e("div", { className: "text-[11px] text-slate-500" }, "进入 Event 查看")
         )
       ),
       e("div", { className: "rounded-xl border border-white/[0.06] bg-white/[0.012] p-3.5" },

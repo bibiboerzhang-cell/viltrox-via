@@ -3,19 +3,19 @@ import {
   AlertCircle, Briefcase, CircleDot, DollarSign, ExternalLink, MapPin, Plus,
   ShieldCheck, Users, X
 } from "lucide-react";
-import { TASKS_DATA } from "../data/tasks.js";
 import { TEAM } from "../data/team.js";
 import { daysUntil, fmtMoneyShort, healthColor, sum } from "../shared/helpers.js";
 import { ownerById, projectById } from "../shared/lookups.js";
 
 const e = React.createElement;
-export default function OverviewTab({ ev, onUpdateTeam }) {
+// tasks 由 EventDetailView 从真后端拉取后作 prop 传入(不在此独立再拉一次),
+// 概览的「任务进度 / 近期 ddl」全部基于真数据;无任务时安全降级为空。
+export default function OverviewTab({ ev, tasks = [], onUpdateTeam }) {
   const [addingTeam, setAddingTeam] = useState(false);
   const totalSpent = sum(ev.budgetByCategory, "spent");
   const days = daysUntil(ev.startDate);
   const isDone = ev.status === "done";
   const confirmedKols = ev.invitedKols.filter(k => k.status === "confirmed").length;
-  const tasks = TASKS_DATA[ev.id] || [];
   const doneTasks = tasks.filter(t => t.done).length;
   
   return e("div", { className: "p-5 space-y-4" },

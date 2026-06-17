@@ -174,7 +174,7 @@ export default function EventDetailView({ ev, onBack, currentUser, onEdit, onDel
     ),
     
     // content
-    tab === "overview"  && e(OverviewTab, { ev, onUpdateTeam }),
+    tab === "overview"  && e(OverviewTab, { ev, tasks: detail.tasks, onUpdateTeam }),
     tab === "budget"    && e(BudgetExpensesTab, { ev, currentUser, token, expenses: detail.expenses, loading: detailLoading, error: detailError, reload: reloadDetail }),
     tab === "tasks"     && e(TasksTab, { ev, currentUser, token, tasks: detail.tasks, loading: detailLoading, error: detailError, reload: reloadDetail }),
     tab === "kols"      && e(KolsTab, { ev, token, invites: detail.invites, loading: detailLoading, error: detailError, reload: reloadDetail }),
