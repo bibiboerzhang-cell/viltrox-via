@@ -510,6 +510,62 @@ def list_orders(limit: int | None = None, offset: int | None = None) -> dict[str
     return {"ok": True, "orders": mapped, "count": len(mapped), "total": total}
 
 
+_TRAFFIC_FIELDS = "id,affiliate_id,created_at,landing_page,referrer"
+
+
+def list_traffic(
+    affiliate_id: str | int | None = None, limit: int | None = None, offset: int | None = None
+) -> dict[str, Any]:
+    """GET /admin/traffic(点击日志,fields 必填)。可按 affiliate_id 过滤(实测有效)。
+
+    返回 {ok, clicks?, count?, total?, reason?/error?}。total = total_results(全量点击数)。绝不抛。
+    """
+    params: dict[str, Any] = {"fields": _TRAFFIC_FIELDS}
+    if affiliate_id:
+        params["affiliate_id"] = str(affiliate_id)
+    params["limit"] = int(limit) if limit else _DEFAULT_PAGE_LIMIT
+    if offset:
+        params["offset"] = int(offset)
+    result = _get("admin/traffic", params)
+    if not result.get("ok"):
+        return result
+    data = result.get("data")
+    rows = _extract_list(data, "traffic", "clicks", "data", "results")
+    total = data.get("total_results") if isinstance(data, dict) else None
+    return {"ok": True, "clicks": rows, "count": len(rows), "total": total}
+
+
+def affiliate_attribution(affiliate_id: str | int) -> dict[str, Any]:
+    """单 affiliate 的归因汇总:点击数 + 订单数 + GMV + 佣金(实时查 traffic + orders)。
+
+    点击数取 traffic 的 total_results(便宜,limit=1);订单/GMV/佣金拉该 affiliate 的订单求和。
+    返回 {ok, clicks, orders, gmv_cents, commission_cents, currency}。绝不抛。
+    """
+    aid = str(affiliate_id or "").strip()
+    base = {"ok": False, "clicks": 0, "orders": 0, "gmv_cents": 0, "commission_cents": 0, "currency": ""}
+    if not aid:
+        return {**base, "reason": "missing_id"}
+    tr = list_traffic(affiliate_id=aid, limit=1)
+    clicks = int(tr.get("total") if tr.get("ok") and tr.get("total") is not None else (tr.get("count") or 0))
+    od = _get("admin/orders", {"fields": _SALE_FIELDS, "affiliate_id": aid, "limit": 250})
+    orders_list = _extract_list(od.get("data"), "orders", "sales", "data", "results") if od.get("ok") else []
+    gmv = sum(to_cents(o.get("total") or o.get("order_total")) for o in orders_list)
+    commission = sum(to_cents(o.get("commission")) for o in orders_list)
+    currency = ""
+    for o in orders_list:
+        if o.get("currency"):
+            currency = str(o["currency"])
+            break
+    return {
+        "ok": True,
+        "clicks": clicks,
+        "orders": len(orders_list),
+        "gmv_cents": gmv,
+        "commission_cents": commission,
+        "currency": currency,
+    }
+
+
 # --- D2 写侧:一键给 KOL 建 affiliate + 拼追踪链 + 优惠码 ----------------------
 
 # 【待 key 校准】create_affiliate body 字段:GOAFFPRO 标准 affiliate 对象按公开资料用

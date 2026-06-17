@@ -29,7 +29,6 @@ import {
 import { getShopifyStatus, type ShopifyProviderStatus } from "../../../domains/attribution";
 import {
   generatePromoLink,
-  getPromoAttributionSummary,
   listPromoKols,
   listPromoProducts,
   listSources,
@@ -41,6 +40,7 @@ import {
   getGoaffproStatus,
   saveGoaffproCredentials,
   listGoaffproAffiliates,
+  getGoaffproSummary,
   type GoaffproStatus,
   type ListGoaffproAffiliatesResult,
 } from "../../../services/vkpi/goaffpro-api";
@@ -319,8 +319,10 @@ export function ShopifyHubPage({ apiToken = "" }: { apiToken?: string } = {}) {
     setTrackLoading(true);
     setTrackErr("");
     try {
-      const res = await getPromoAttributionSummary(apiToken, { limit: 50 });
-      setRows(res.items);
+      // GOAFFPRO 归因汇总(取代已退役的自建 promo attribution 端点 → 修「Not Found」)。
+      const res = await getGoaffproSummary(apiToken, { limit: 50 });
+      setRows(res.items as unknown as PromoAttributionRow[]);
+      if ((!res.items || res.items.length === 0) && res.note) setTrackErr(res.note);
     } catch (err) {
       // Honest: do NOT fabricate rows. Keep the table empty + show the reason.
       setRows([]);

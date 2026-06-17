@@ -489,3 +489,69 @@ def goaffpro_attribution(
         }
 
     raise HTTPException(status_code=400, detail="kol_pool_id or project_id is required")
+
+
+@router.get("/summary")
+def goaffpro_summary(
+    limit: int = Query(default=100, ge=1, le=500),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    """全局归因汇总表:每个已建链的 KOL 一行(点击/订单/GMV/佣金),实时来自 GOAFFPRO。
+
+    供 Shopify Hub「数据追踪」表 + 项目卡复用。诚实:未建链的 KOL 不出行;无数据返回空 items。
+    行字段对齐前端表:kol_name / source_label / clicks / orders / gmv_usd / commission_usd / ref_code。
+    """
+    goaffpro_connect.ensure_goaffpro_links_schema()
+    conn = get_conn()
+    links = conn.execute(
+        """
+        SELECT kol_pool_id, affiliate_id, ref_code, coupon, tracking_url
+        FROM vkpi_goaffpro_kol_links
+        WHERE COALESCE(affiliate_id, '') <> '' AND COALESCE(ref_code, '') <> ''
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+
+    items: list[dict] = []
+    for r in links:
+        d = dict(r)
+        aid = str(d.get("affiliate_id") or "")
+        if not aid:
+            continue
+        name_row = conn.execute(
+            "SELECT display_name, handle FROM vkpi_kol_pool WHERE id = ?",
+            (d.get("kol_pool_id"),),
+        ).fetchone()
+        nm = ""
+        if name_row:
+            nd = dict(name_row)
+            nm = str(nd.get("display_name") or "").strip() or str(nd.get("handle") or "").strip()
+        attr = goaffpro_connect.affiliate_attribution(aid)
+        gmv_cents = int(attr.get("gmv_cents") or 0)
+        comm_cents = int(attr.get("commission_cents") or 0)
+        items.append(
+            {
+                "kol_pool_id": d.get("kol_pool_id"),
+                "kol_name": nm or f"KOL#{d.get('kol_pool_id')}",
+                "affiliate_id": aid,
+                "ref_code": d.get("ref_code"),
+                "coupon": d.get("coupon"),
+                "tracking_url": d.get("tracking_url"),
+                "source_label": "GOAFFPRO",
+                "source_type": "goaffpro",
+                "product_sku": "—",
+                "clicks": int(attr.get("clicks") or 0),
+                "orders": int(attr.get("orders") or 0),
+                "gmv_usd": round(gmv_cents / 100, 2),
+                "commission_usd": round(comm_cents / 100, 2),
+                "currency": attr.get("currency") or "",
+            }
+        )
+    return {
+        "ok": True,
+        "items": items,
+        "count": len(items),
+        "note": None if items else "尚无已建链的 KOL;在 KOL 详情或项目里生成追踪链后出现在此。",
+    }

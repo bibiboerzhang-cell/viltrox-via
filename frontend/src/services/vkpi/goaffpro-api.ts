@@ -198,5 +198,43 @@ export async function getKolGoaffproLink(
   );
 }
 
+export interface GoaffproSummaryRow {
+  kol_pool_id?: number;
+  kol_name?: string;
+  affiliate_id?: string;
+  ref_code?: string;
+  coupon?: string;
+  tracking_url?: string;
+  source_label?: string;
+  source_type?: string;
+  product_sku?: string;
+  clicks?: number;
+  orders?: number;
+  gmv_usd?: number;
+  commission_usd?: number;
+  currency?: string;
+}
+
+export interface GoaffproSummaryResult {
+  ok?: boolean;
+  items: GoaffproSummaryRow[];
+  count?: number;
+  note?: string | null;
+}
+
+// GET:全局归因汇总(每个已建链 KOL 一行,点击/订单/GMV/佣金,实时来自 GOAFFPRO)。
+export async function getGoaffproSummary(
+  token: string,
+  opts?: { limit?: number },
+): Promise<GoaffproSummaryResult> {
+  const limit = opts?.limit ?? 100;
+  const res = await apiFetch<GoaffproSummaryResult>(
+    `/api/admin/vkpi/goaffpro/summary?limit=${encodeURIComponent(String(limit))}`,
+    {},
+    token,
+  );
+  return { items: Array.isArray(res?.items) ? res.items : [], count: res?.count, note: res?.note, ok: res?.ok };
+}
+
 // 类型导出别名,便于页面侧引用。
 export type { Row as GoaffproRow };
