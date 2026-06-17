@@ -301,5 +301,22 @@ export async function updateKolCommission(
   );
 }
 
+// POST:设/改 KOL 专属优惠码 → 后端 PATCH 推回 GOAFFPRO 总台。返回 {ok, coupon}。
+export async function updateKolCoupon(
+  token: string,
+  kolPoolId: string | number,
+  code: string,
+  opts?: { discount_value?: number; discount_type?: "percentage" | "fixed_amount" | "free_shipping" },
+): Promise<{ ok?: boolean; coupon?: string; error?: string }> {
+  return apiFetch(
+    `/api/admin/vkpi/goaffpro/kol/${encodeURIComponent(String(kolPoolId))}/coupon`,
+    {
+      method: "POST",
+      body: jsonBody({ code, discount_value: opts?.discount_value ?? 10, discount_type: opts?.discount_type || "percentage" }),
+    },
+    token,
+  );
+}
+
 // 类型导出别名,便于页面侧引用。
 export type { Row as GoaffproRow };

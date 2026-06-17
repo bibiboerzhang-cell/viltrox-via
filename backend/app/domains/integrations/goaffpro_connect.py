@@ -1072,6 +1072,36 @@ def update_affiliate_commission(
     return {"ok": True, "commission_rate": rate, "raw": res.get("data")}
 
 
+def update_affiliate_coupon(
+    affiliate_id: str | int, code: str, discount_value: Any = 10, discount_type: str = "percentage"
+) -> dict[str, Any]:
+    """设/改 affiliate 的专属优惠码 → PATCH /admin/affiliates/{id} 推回 GOAFFPRO 总台。
+
+    Swagger:coupon={code, discount_type:['percentage','fixed_amount','free_shipping'], discount_value:整数}。
+    code 顾客结账可用,自动归因该 KOL。返回 {ok, coupon, raw, error?}。绝不抛。
+    """
+    aid = str(affiliate_id or "").strip()
+    c = str(code or "").strip()
+    if not aid or not c:
+        return {"ok": False, "reason": "missing", "error": "缺少 affiliate 或优惠码"}
+    dt = discount_type if discount_type in ("percentage", "fixed_amount", "free_shipping") else "percentage"
+    coupon: dict[str, Any] = {"code": c, "discount_type": dt}
+    if dt != "free_shipping":
+        try:
+            coupon["discount_value"] = int(round(float(discount_value)))
+        except (TypeError, ValueError):
+            coupon["discount_value"] = 10
+    res = _patch(f"admin/affiliates/{aid}", {"coupon": coupon})
+    if not res.get("ok"):
+        return {"ok": False, "error": res.get("error") or res.get("reason"), "status_code": res.get("status_code"), "raw": res.get("raw")}
+    se = _soft_error(res.get("data"))
+    if se:
+        return {"ok": False, "error": se, "raw": res.get("data")}
+    got = get_affiliate(aid)
+    new_code = (got.get("coupon") if got.get("ok") else "") or c
+    return {"ok": True, "coupon": new_code, "raw": res.get("data")}
+
+
 def _norm_token_set(text: str) -> set[str]:
     """切词成 token 集(小写、仅字母数字、长度≥2),用于产品名模糊匹配。"""
     return {t for t in re.split(r"[^a-z0-9]+", str(text or "").lower()) if len(t) >= 2}
@@ -1199,6 +1229,7 @@ __all__ = [
     "search_affiliate",
     "resolve_affiliate",
     "update_affiliate_commission",
+    "update_affiliate_coupon",
     "commission_label",
     "referral_link",
     "coupon_for",

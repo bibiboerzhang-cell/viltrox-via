@@ -421,6 +421,42 @@ def update_kol_commission(
     return {"ok": True, "commission_rate": res.get("commission_rate")}
 
 
+@router.post("/kol/{kol_pool_id}/coupon")
+def update_kol_coupon(
+    kol_pool_id: int,
+    body: dict = Body(default={}),
+    staff=Depends(require_tab("vkpi", "write")),
+):
+    """设/改该 KOL 的专属优惠码 → PATCH 推回 GOAFFPRO 总台 + 更新本地映射。
+
+    body {code, discount_value?, discount_type?}。code 顾客结账用即归因该 KOL。
+    """
+    goaffpro_connect.ensure_goaffpro_links_schema()
+    conn = get_conn()
+    link = _load_link(conn, kol_pool_id)
+    affiliate_id = str((link or {}).get("affiliate_id") or "").strip()
+    if not affiliate_id:
+        raise HTTPException(status_code=400, detail="该 KOL 还没生成追踪链(无 affiliate),先生成再设优惠码")
+    code = str((body or {}).get("code") or "").strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="code is required")
+    res = goaffpro_connect.update_affiliate_coupon(
+        affiliate_id,
+        code,
+        discount_value=(body or {}).get("discount_value", 10),
+        discount_type=str((body or {}).get("discount_type") or "percentage"),
+    )
+    if not res.get("ok"):
+        return {"ok": False, "error": res.get("error") or res.get("reason"), "raw": res.get("raw")}
+    new_coupon = str(res.get("coupon") or code)
+    conn.execute(
+        "UPDATE vkpi_goaffpro_kol_links SET coupon=? WHERE kol_pool_id=?",
+        (new_coupon, kol_pool_id),
+    )
+    conn.commit()
+    return {"ok": True, "coupon": new_coupon}
+
+
 @router.post("/sync-sales")
 def sync_goaffpro_sales(
     limit: int | None = Query(default=None, ge=1, le=500),

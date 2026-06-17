@@ -123,6 +123,8 @@ export default function EventDetailView({ ev, onBack, currentUser, onEdit, onDel
             e("div", { className: "flex items-center gap-1" }, e(MapPin, { size: 11 }), ev.location.city, ", ", ev.location.country),
             e("span", { className: "text-slate-600" }, "·"),
             e("div", { className: "flex items-center gap-1" }, e(Calendar, { size: 11 }), ev.startDate, ev.startDate !== ev.endDate ? " → " + ev.endDate : ""),
+            (ev.productName || ev.productSku) && e("span", { className: "text-slate-600" }, "·"),
+            (ev.productName || ev.productSku) && e("span", { className: "rounded bg-teal-500/15 px-1.5 py-0.5 text-[10px] text-teal-200", title: "活动主推产品 · KOL 追踪链落此产品页" }, "🎯 ", ev.productName || ev.productSku),
             e("span", { className: "text-slate-600" }, "·"),
             e("span", null, "更新于 ", ev.updatedAt)
           )

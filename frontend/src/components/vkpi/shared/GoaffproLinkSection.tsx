@@ -3,7 +3,7 @@
 // 供 KOL 详情抽屉 + MY KOL 详情(PoolEvidenceContent)两处复用。
 import React from "react";
 import { AlertTriangle, Check, Link2 } from "lucide-react";
-import { generateKolGoaffproLink, getKolGoaffproLink, updateKolCommission, type GoaffproKolLink } from "../../../services/vkpi/goaffpro-api";
+import { generateKolGoaffproLink, getKolGoaffproLink, updateKolCommission, updateKolCoupon, type GoaffproKolLink } from "../../../services/vkpi/goaffpro-api";
 
 const e = React.createElement;
 
@@ -56,7 +56,6 @@ function GoaffproLinkCard({ link, onRegenerate, regenerating, apiToken, kolPoolI
   const trackingUrl = String(link.tracking_url || "");
   const productUrl = String(link.product_url || "");
   const productName = String(link.product_name || "");
-  const coupon = String(link.coupon || "");
   const statusLabel = statusBadge((link as any).status);
   const [commissionRate, setCommissionRate] = React.useState(String((link as any).commission_rate || ""));
   const [editing, setEditing] = React.useState(false);
@@ -76,6 +75,25 @@ function GoaffproLinkCard({ link, onRegenerate, regenerating, apiToken, kolPoolI
       })
       .catch((e2: any) => setSaveErr(e2 && e2.message ? String(e2.message) : "保存失败"))
       .finally(() => setSaving(false));
+  };
+  // 优惠码(可设/改,改完 PATCH 推回 GOAFFPRO 总台)
+  const [coupon, setCoupon] = React.useState(String(link.coupon || ""));
+  const [couponEditing, setCouponEditing] = React.useState(false);
+  const [couponInput, setCouponInput] = React.useState("");
+  const [couponSaving, setCouponSaving] = React.useState(false);
+  const [couponErr, setCouponErr] = React.useState("");
+  React.useEffect(() => { setCoupon(String(link.coupon || "")); }, [link.coupon]);
+  const saveCoupon = () => {
+    const c = String(couponInput || "").trim();
+    if (!canEdit || !c) { setCouponErr("请输入优惠码"); return; }
+    setCouponSaving(true); setCouponErr("");
+    void updateKolCoupon(apiToken, kolPoolId, c)
+      .then((res: any) => {
+        if (res && res.ok) { setCoupon(String(res.coupon || c)); setCouponEditing(false); }
+        else setCouponErr(String((res && res.error) || "保存失败"));
+      })
+      .catch((e2: any) => setCouponErr(e2 && e2.message ? String(e2.message) : "保存失败"))
+      .finally(() => setCouponSaving(false));
   };
   return e("div", { className: "mt-2 rounded-md border border-teal-400/20 bg-teal-400/[0.04] p-2.5 space-y-2" },
     e("div", { className: "flex items-center gap-1.5 text-[9px] uppercase tracking-wider text-teal-200/80" },
@@ -98,13 +116,36 @@ function GoaffproLinkCard({ link, onRegenerate, regenerating, apiToken, kolPoolI
     trackingUrl
       ? e(LinkRow, { label: productUrl ? "通用追踪链(落首页)" : "追踪链(发给 KOL,产生的销售自动归到该 KOL)", url: trackingUrl })
       : e("div", { className: "text-[10px] text-slate-500" }, "—（GOAFFPRO 未回追踪链）"),
-    // 优惠码(复制)
-    coupon && e("div", null,
-      e("div", { className: "mb-1 text-[9px] text-slate-500" }, "优惠码"),
-      e("div", { className: "flex items-center gap-1.5" },
-        e("code", { className: "flex-1 min-w-0 truncate rounded-md border border-white/[0.08] bg-black/30 px-2 py-1.5 text-[11px] font-semibold tabular-nums text-emerald-200" }, coupon),
-        e(CopyValueButton, { value: coupon, label: "复制码" })
-      )
+    // 优惠码(可设/改 → PATCH 推回 GOAFFPRO 总台;顾客结账用即归因该 KOL)
+    e("div", null,
+      e("div", { className: "mb-1 flex items-center gap-1.5 text-[9px] text-slate-500" },
+        "优惠码",
+        canEdit && !couponEditing && e("button", {
+          type: "button",
+          onClick: () => { setCouponEditing(true); setCouponInput(coupon); setCouponErr(""); },
+          className: "rounded px-1 text-[9px] text-emerald-300/80 hover:text-emerald-100 underline decoration-dotted",
+          title: "设/改自定义优惠码(如 EVENT2026,推回 GOAFFPRO 总台)",
+        }, coupon ? "改码" : "设码")
+      ),
+      couponEditing
+        ? e("div", { className: "flex items-center gap-1.5" },
+            e("input", {
+              type: "text", autoFocus: true, value: couponInput,
+              onChange: (ev: any) => setCouponInput(ev.target.value.toUpperCase()),
+              onKeyDown: (ev: any) => { if (ev.key === "Enter") saveCoupon(); if (ev.key === "Escape") setCouponEditing(false); },
+              placeholder: "如 EVENT2026",
+              className: "flex-1 min-w-0 rounded-md border border-white/[0.1] bg-black/30 px-2 py-1.5 text-[11px] font-semibold text-emerald-200 outline-none uppercase",
+            }),
+            e("button", { type: "button", disabled: couponSaving, onClick: saveCoupon, className: "rounded bg-emerald-500/80 px-2 py-1.5 text-[10px] font-medium text-white hover:bg-emerald-500 disabled:opacity-50" }, couponSaving ? "保存中" : "保存并推回总台"),
+            e("button", { type: "button", onClick: () => { setCouponEditing(false); setCouponErr(""); }, className: "text-[10px] text-slate-400 hover:text-white" }, "取消")
+          )
+        : (coupon
+            ? e("div", { className: "flex items-center gap-1.5" },
+                e("code", { className: "flex-1 min-w-0 truncate rounded-md border border-white/[0.08] bg-black/30 px-2 py-1.5 text-[11px] font-semibold tabular-nums text-emerald-200" }, coupon),
+                e(CopyValueButton, { value: coupon, label: "复制码" })
+              )
+            : e("div", { className: "text-[10px] text-slate-500" }, "暂无优惠码,点上方「设码」自定义")),
+      couponErr && e("div", { className: "mt-1 text-[9px] text-rose-300" }, couponErr)
     ),
     // 佣金比例(可调,改完 PATCH 推回 GOAFFPRO 总台)+ 审批状态
     e("div", { className: "flex flex-wrap items-center gap-1.5" },
