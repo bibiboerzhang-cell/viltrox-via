@@ -30,6 +30,7 @@ def staff_directory() -> dict[str, Any]:
                COALESCE(u.avatar_url, '') AS avatar_url,
                COALESCE(st.role, 'readonly') AS role,
                COALESCE(st.active, 1) AS active,
+               COALESCE(st.permissions_json, '{}') AS permissions_json,
                st.invited_at,
                st.accepted_at,
                st.last_active_at
@@ -50,6 +51,7 @@ def staff_directory() -> dict[str, Any]:
                    COALESCE(u.avatar_url, '') AS avatar_url,
                    COALESCE(u.role, 'readonly') AS role,
                    1 AS active,
+                   '{}' AS permissions_json,
                    u.created_at AS invited_at,
                    NULL AS accepted_at,
                    u.last_login AS last_active_at

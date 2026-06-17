@@ -669,9 +669,13 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
     try {
       await updateStaffPermissions(apiToken, staffId, permissions);
       setMessage('成员深度权限已保存。');
+      // 用函数式更新保留「当前选中成员」并写入刚保存的权限——不要读渲染闭包里的旧 data,
+      // 否则 onRefreshData 重拉(staff-directory 旧版不带 permissions_json)后,抽屉会被空权限覆盖、
+      // 看起来「授权全没了」。先就地保住已选成员+已存权限,再让刷新静默对齐真值。
+      setSelectedStaffForPermissions((prev) =>
+        prev && prev.id === staffId ? { ...prev, permissions } : prev,
+      );
       await onRefreshData?.();
-      const refreshedMember = data.staffMembers.find((item) => item.id === staffId);
-      if (refreshedMember) setSelectedStaffForPermissions({ ...refreshedMember, permissions });
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '成员深度权限保存失败');
       throw error;
@@ -1105,7 +1109,16 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
       </div>
       {selectedStaffForPermissions ? (
         <StaffPermissionDrawer
-          member={data.staffMembers.find((item) => item.id === selectedStaffForPermissions.id) || selectedStaffForPermissions}
+          // 取目录最新档案,但权限以「当前选中成员」为准(保存后已写入真值)——
+          // 防止 staff-directory 刷新返回的空 permissions 把刚授权的内容覆盖成空白。
+          member={(() => {
+            const fresh = data.staffMembers.find((item) => item.id === selectedStaffForPermissions.id);
+            if (!fresh) return selectedStaffForPermissions;
+            const freshPerms = fresh.permissions || {};
+            const selectedPerms = selectedStaffForPermissions.permissions || {};
+            const permissions = Object.keys(freshPerms).length ? freshPerms : selectedPerms;
+            return { ...fresh, permissions };
+          })()}
           busy={busy}
           onClose={() => setSelectedStaffForPermissions(null)}
           onSavePermissions={saveStaffPermissionMatrix}
