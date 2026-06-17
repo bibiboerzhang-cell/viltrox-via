@@ -36,8 +36,26 @@ export function hasRefParam(url: any): boolean {
 
 // D2:追踪链 + 优惠码卡片(只读输入框 + 复制 + 「发给 KOL」提示)。
 // onRegenerate:卡片右上角「重新生成」入口(始终可点,解决「链有了就不能重生」)。
+function LinkRow({ label, url }: { label: string; url: string }) {
+  return e("div", null,
+    e("div", { className: "mb-1 text-[9px] text-slate-500" }, label),
+    e("div", { className: "flex items-center gap-1.5" },
+      e("input", {
+        type: "text",
+        readOnly: true,
+        value: url,
+        onFocus: (ev: any) => ev.target.select(),
+        className: "flex-1 min-w-0 rounded-md border border-white/[0.08] bg-black/30 px-2 py-1.5 text-[10px] text-slate-200 outline-none",
+      }),
+      e(CopyValueButton, { value: url, label: "复制" })
+    )
+  );
+}
+
 function GoaffproLinkCard({ link, onRegenerate, regenerating }: { link: GoaffproKolLink; onRegenerate?: () => void; regenerating?: boolean }) {
   const trackingUrl = String(link.tracking_url || "");
+  const productUrl = String(link.product_url || "");
+  const productName = String(link.product_name || "");
   const coupon = String(link.coupon || "");
   return e("div", { className: "mt-2 rounded-md border border-teal-400/20 bg-teal-400/[0.04] p-2.5 space-y-2" },
     e("div", { className: "flex items-center gap-1.5 text-[9px] uppercase tracking-wider text-teal-200/80" },
@@ -52,22 +70,14 @@ function GoaffproLinkCard({ link, onRegenerate, regenerating }: { link: Goaffpro
         title: "重新拉取/重建该 KOL 的追踪链",
       }, regenerating ? "刷新中…" : "↻ 重新生成")
     ),
-    // 追踪链(只读输入框 + 复制)
-    e("div", null,
-      e("div", { className: "mb-1 text-[9px] text-slate-500" }, "追踪链(发给 KOL,产生的销售自动归到该 KOL)"),
-      trackingUrl
-        ? e("div", { className: "flex items-center gap-1.5" },
-            e("input", {
-              type: "text",
-              readOnly: true,
-              value: trackingUrl,
-              onFocus: (ev: any) => ev.target.select(),
-              className: "flex-1 min-w-0 rounded-md border border-white/[0.08] bg-black/30 px-2 py-1.5 text-[10px] text-slate-200 outline-none",
-            }),
-            e(CopyValueButton, { value: trackingUrl, label: "复制" })
-          )
-        : e("div", { className: "text-[10px] text-slate-500" }, "—（GOAFFPRO 未回追踪链,待真 key 校准)")
-    ),
+    // 产品页追踪链(项目/活动绑产品时;落具体产品页,转化更高,归因照样算该 KOL)
+    productUrl
+      ? e(LinkRow, { label: "🎯 产品页追踪链(落「" + (productName || "产品页") + "」· 推荐发给 KOL)", url: productUrl })
+      : null,
+    // 通用追踪链(落首页)
+    trackingUrl
+      ? e(LinkRow, { label: productUrl ? "通用追踪链(落首页)" : "追踪链(发给 KOL,产生的销售自动归到该 KOL)", url: trackingUrl })
+      : e("div", { className: "text-[10px] text-slate-500" }, "—（GOAFFPRO 未回追踪链）"),
     // 优惠码(复制)
     coupon && e("div", null,
       e("div", { className: "mb-1 text-[9px] text-slate-500" }, "优惠码"),
@@ -85,7 +95,7 @@ function GoaffproLinkCard({ link, onRegenerate, regenerating }: { link: Goaffpro
 // D2:KOL 详情「生成追踪链(GOAFFPRO)」区块。
 // 开抽屉先 GET 已有映射(有则直接显示卡,不重复生成);否则给生成按钮,点击 POST 建链。
 // 出错(ok:false)显示 error + 「联系管理员校准」,raw 折叠可见便于调试。
-export function GoaffproLinkSection({ apiToken, kolPoolId }: any) {
+export function GoaffproLinkSection({ apiToken, kolPoolId, product }: any) {
   const [link, setLink] = React.useState<GoaffproKolLink | null>(null);
   const [loading, setLoading] = React.useState(false); // GET 已有映射
   const [generating, setGenerating] = React.useState(false); // POST 建链
@@ -101,7 +111,7 @@ export function GoaffproLinkSection({ apiToken, kolPoolId }: any) {
     if (!apiToken || !kolPoolId) return;
     let cancelled = false;
     setLoading(true);
-    void getKolGoaffproLink(apiToken, kolPoolId)
+    void getKolGoaffproLink(apiToken, kolPoolId, product)
       .then((payload) => {
         if (cancelled) return;
         // 保留 linked 的 payload(即使是光链/需重生)——这样能显「重新生成」而非把按钮藏掉。
@@ -114,14 +124,14 @@ export function GoaffproLinkSection({ apiToken, kolPoolId }: any) {
       .catch(() => { if (!cancelled) setLink(null); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [apiToken, kolPoolId]);
+  }, [apiToken, kolPoolId, product]);
 
   const handleGenerate = () => {
     if (!apiToken || !kolPoolId || generating) return;
     setGenerating(true);
     setError("");
     setErrorRaw(null);
-    void generateKolGoaffproLink(apiToken, kolPoolId)
+    void generateKolGoaffproLink(apiToken, kolPoolId, product)
       .then((payload) => {
         if (payload && payload.ok && payload.tracking_url) {
           setLink(payload);

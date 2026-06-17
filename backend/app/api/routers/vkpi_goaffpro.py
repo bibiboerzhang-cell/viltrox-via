@@ -226,9 +226,28 @@ def _store_kol_link(conn, kol_pool_id: int, res: dict) -> dict:
     }
 
 
+def _product_link_fields(ref_code: str | None, product: str | None) -> dict:
+    """按产品出链:product(项目/活动的产品名或 SKU)→ Shopify handle → {store}/products/{h}?ref=。
+
+    解析不到产品 → product_url=None(调用方/前端退回首页链,仍可追踪)。
+    """
+    out: dict = {"product_url": None, "product_handle": None, "product_name": None}
+    code = str(ref_code or "").strip()
+    q = str(product or "").strip()
+    if not q or not code:
+        return out
+    found = goaffpro_connect.find_product_handle(q)
+    if found.get("ok") and found.get("handle"):
+        out["product_handle"] = found["handle"]
+        out["product_name"] = found.get("name")
+        out["product_url"] = goaffpro_connect.product_referral_link(found["handle"], code)
+    return out
+
+
 @router.post("/kol/{kol_pool_id}/link")
 def link_kol_affiliate(
     kol_pool_id: int,
+    product: str | None = Query(default=None),
     staff=Depends(require_tab("vkpi", "write")),
 ):
     """一键给 KOL 出追踪链 + 优惠码(KOL 零注册),幂等可重生。
@@ -251,6 +270,7 @@ def link_kol_affiliate(
             "tracking_url": _effective_tracking_url(existing),
             "coupon": existing.get("coupon"),
             "tracks_now": _tracks_now(str(existing.get("ref_code") or ""), ""),
+            **_product_link_fields(existing.get("ref_code"), product),
         }
 
     identity = _load_kol_identity(conn, kol_pool_id)
@@ -274,12 +294,14 @@ def link_kol_affiliate(
     out = _store_kol_link(conn, kol_pool_id, res)
     out["created"] = res.get("created", False)
     out["email_synthetic"] = email_synth
+    out.update(_product_link_fields(out.get("ref_code"), product))
     return out
 
 
 @router.get("/kol/{kol_pool_id}/link")
 def get_kol_affiliate_link(
     kol_pool_id: int,
+    product: str | None = Query(default=None),
     staff=Depends(require_tab("vkpi", "read")),
 ):
     """读 KOL↔affiliate 映射。无映射 → {linked:false}。
@@ -326,6 +348,7 @@ def get_kol_affiliate_link(
         "created_at": link.get("created_at"),
         "needs_regenerate": needs_regenerate,
         "tracks_now": _tracks_now(ex_ref, ""),
+        **_product_link_fields(link.get("ref_code"), product),
     }
 
 
@@ -555,3 +578,22 @@ def goaffpro_summary(
         "count": len(items),
         "note": None if items else "尚无已建链的 KOL;在 KOL 详情或项目里生成追踪链后出现在此。",
     }
+
+
+@router.get("/products")
+def goaffpro_products(
+    keyword: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=250),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    """列店铺真实产品(带 handle),供按产品出链的产品选择器。可 keyword 搜。"""
+    return goaffpro_connect.list_products(keyword=keyword, limit=limit)
+
+
+@router.get("/resolve-product")
+def goaffpro_resolve_product(
+    query: str = Query(..., min_length=1),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    """把产品名/SKU 解析成 Shopify handle(项目/活动绑产品出链用)。无信心匹配 → ok:false。"""
+    return goaffpro_connect.find_product_handle(query)

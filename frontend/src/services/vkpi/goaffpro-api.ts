@@ -167,6 +167,10 @@ export interface GoaffproKolLink {
   // 早期废映射(GOAFFPRO 里搜不到该 affiliate)→ 前端显「重新生成」触发 POST 真建号。
   needs_regenerate?: boolean;
   created?: boolean;
+  // 按产品出链:传 product 时后端解析 handle 后附带(解析不到则为 null,退首页链)。
+  product_url?: string | null;
+  product_handle?: string | null;
+  product_name?: string | null;
   // 出错(create_affiliate 失败)时透出,便于「联系管理员校准」调试。
   error?: string;
   reason?: string;
@@ -174,25 +178,33 @@ export interface GoaffproKolLink {
   raw?: unknown;
 }
 
-// POST:生成(或幂等返回已有)KOL↔affiliate 映射 + 追踪链 + 优惠码。
+// product 可选:传产品名/SKU → 后端解析 handle → 响应附带 product_url(按产品出链)。
+function withProduct(path: string, product?: string): string {
+  const p = String(product || "").trim();
+  return p ? `${path}?product=${encodeURIComponent(p)}` : path;
+}
+
+// POST:生成(或幂等返回已有)KOL↔affiliate 映射 + 追踪链 + 优惠码。product → 附带产品链。
 export async function generateKolGoaffproLink(
   token: string,
   kolPoolId: string | number,
+  product?: string,
 ): Promise<GoaffproKolLink> {
   return apiFetch<GoaffproKolLink>(
-    `/api/admin/vkpi/goaffpro/kol/${encodeURIComponent(String(kolPoolId))}/link`,
+    withProduct(`/api/admin/vkpi/goaffpro/kol/${encodeURIComponent(String(kolPoolId))}/link`, product),
     { method: "POST", body: jsonBody({}) },
     token,
   );
 }
 
-// GET:读已有 KOL↔affiliate 映射;无映射 -> {linked:false}。
+// GET:读已有 KOL↔affiliate 映射;无映射 -> {linked:false}。product → 附带产品链。
 export async function getKolGoaffproLink(
   token: string,
   kolPoolId: string | number,
+  product?: string,
 ): Promise<GoaffproKolLink> {
   return apiFetch<GoaffproKolLink>(
-    `/api/admin/vkpi/goaffpro/kol/${encodeURIComponent(String(kolPoolId))}/link`,
+    withProduct(`/api/admin/vkpi/goaffpro/kol/${encodeURIComponent(String(kolPoolId))}/link`, product),
     {},
     token,
   );

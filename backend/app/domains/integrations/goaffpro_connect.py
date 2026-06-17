@@ -30,6 +30,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -869,6 +870,87 @@ def get_affiliate(affiliate_id: str | int) -> dict[str, Any]:
     }
 
 
+def _norm_token_set(text: str) -> set[str]:
+    """切词成 token 集(小写、仅字母数字、长度≥2),用于产品名模糊匹配。"""
+    return {t for t in re.split(r"[^a-z0-9]+", str(text or "").lower()) if len(t) >= 2}
+
+
+def list_products(keyword: str | None = None, limit: int | None = None) -> dict[str, Any]:
+    """GET /admin/commissions/products —— 店铺真实产品(带 handle,≤250)。
+
+    handle = Shopify 产品页别名 → 产品页 = {store}/products/{handle}。可选 keyword 过滤。
+    返回 {ok, products:[{id,name,handle,...}], count, reason?/error?}。绝不抛。
+    """
+    params: dict[str, Any] = {"limit": int(limit) if limit else 50}
+    kw = str(keyword or "").strip()
+    if kw:
+        params["keyword"] = kw
+    result = _get("admin/commissions/products", params)
+    if not result.get("ok"):
+        return result
+    rows = _extract_list(result.get("data"), "products", "data", "results")
+    out = []
+    for r in rows:
+        out.append(
+            {
+                "id": r.get("id") or r.get("product_id"),
+                "name": r.get("name") or r.get("title") or "",
+                "handle": str(r.get("handle") or r.get("slug") or "").strip(),
+                "product_type": r.get("product_type") or "",
+                "vendor": r.get("vendor") or "",
+            }
+        )
+    return {"ok": True, "products": out, "count": len(out)}
+
+
+def find_product_handle(query: str) -> dict[str, Any]:
+    """把项目/活动的产品(名或 SKU)解析成 Shopify 产品 handle —— 用于按产品出链。
+
+    策略:用最具辨识度的 token(型号/焦段)做 keyword 搜 commissions/products,token 重合度最高者胜。
+    返回 {ok, handle, name, id, score} 或 {ok:False, reason}。绝不抛;解析不到调用方退首页链。
+    """
+    q = str(query or "").strip()
+    if not q:
+        return {"ok": False, "reason": "empty_query"}
+    q_tokens = _norm_token_set(q)
+    # 关键词取较独特的 token(优先含数字的,如 28mm/85mm/af),提高召回。
+    distinctive = sorted(q_tokens, key=lambda t: (not any(c.isdigit() for c in t), -len(t)))
+    keyword = distinctive[0] if distinctive else q
+    res = list_products(keyword=keyword, limit=50)
+    products = res.get("products") or [] if res.get("ok") else []
+    if not products:
+        res2 = list_products(limit=250)  # 退化:拉一页全量再匹配
+        products = res2.get("products") or [] if res2.get("ok") else []
+    best, best_score = None, 0.0
+    for p in products:
+        if not p.get("handle"):
+            continue
+        p_tokens = _norm_token_set(p.get("name")) | _norm_token_set(p.get("handle"))
+        if not p_tokens:
+            continue
+        overlap = len(q_tokens & p_tokens)
+        score = overlap / max(1, len(q_tokens))
+        if score > best_score:
+            best, best_score = p, score
+    # 至少 2 个 token 重合或覆盖过半才认,避免乱配。
+    if best and (best_score >= 0.5 or len(q_tokens & (_norm_token_set(best.get("name")) | _norm_token_set(best.get("handle")))) >= 2):
+        return {"ok": True, "handle": best["handle"], "name": best.get("name"), "id": best.get("id"), "score": round(best_score, 2)}
+    return {"ok": False, "reason": "no_confident_match", "best": best, "score": round(best_score, 2)}
+
+
+def product_referral_link(handle: str, ref_code: str | None) -> str:
+    """按产品出链:{store}/products/{handle}?ref={ref_code}。handle/code 缺 → 退首页链。"""
+    code = str(ref_code or "").strip()
+    h = str(handle or "").strip().strip("/")
+    store = _default_store_url()
+    if not h:
+        return referral_link(None, code)
+    base = f"{store}/products/{h}"
+    if not code:
+        return base
+    return f"{base}?ref={code}"
+
+
 def sync_stub() -> dict[str, Any]:
     """手动 sync stub(D1 骨架)—— 只拉一页 affiliates + orders 探活,不落库、不归因。
 
@@ -904,5 +986,10 @@ __all__ = [
     "referral_link",
     "coupon_for",
     "to_cents",
+    "list_traffic",
+    "affiliate_attribution",
+    "list_products",
+    "find_product_handle",
+    "product_referral_link",
     "sync_stub",
 ]

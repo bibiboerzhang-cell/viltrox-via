@@ -5,6 +5,7 @@ import { PlatformPill } from '../../shared/PlatformPill';
 import { primaryStageFlow, stageLabels } from '../../shared/vkpiConstants';
 import { nextProjectStage, shortDateTime } from '../../shared/vkpiDataUtils';
 import { KolStageTimeline } from './KolStageTimeline';
+import { GoaffproLinkSection } from '../../shared/GoaffproLinkSection';
 import {
   formatMoney,
   formatNumber,
@@ -14,6 +15,7 @@ import {
 } from '../../../../domains/projects';
 
 interface ProjectParticipationTabProps {
+  apiToken?: string;
   expandedRows: Set<string>;
   evidenceCountForRow: (row: VkpiProjectRow) => number;
   filteredRows: VkpiProjectRow[];
@@ -71,6 +73,7 @@ function kolProfileUrl(row: VkpiProjectRow) {
 }
 
 export function ProjectParticipationTab({
+  apiToken,
   expandedRows,
   evidenceCountForRow,
   filteredRows,
@@ -222,6 +225,15 @@ export function ProjectParticipationTab({
                               {savingShopify ? '保存中' : '保存链接'}
                             </button>
                           </div>
+                          {apiToken && row.kolPoolId ? (
+                            <div className="rounded-lg border border-teal-400/15 bg-teal-400/[0.02]">
+                              <GoaffproLinkSection
+                                apiToken={apiToken}
+                                kolPoolId={row.kolPoolId}
+                                product={row.productName || row.productSku}
+                              />
+                            </div>
+                          ) : null}
                           <KolStageTimeline
                             evidenceCount={rowEvidenceCount}
                             movingRowId={movingRowId}

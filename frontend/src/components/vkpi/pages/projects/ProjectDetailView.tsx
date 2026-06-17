@@ -1012,6 +1012,7 @@ export function ProjectDetailView({
 
       {activeTab === '参与 KOL' ? (
         <ProjectParticipationTab
+          apiToken={apiToken}
           expandedRows={expandedRows}
           evidenceCountForRow={evidenceCountForRow}
           filteredRows={filteredRows}
