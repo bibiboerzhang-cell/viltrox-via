@@ -673,14 +673,18 @@ def _norm_match(value: Any) -> str:
 
 
 def search_affiliate(in_field: str, keyword: str) -> list[dict[str, Any]]:
-    """GET /admin/affiliates/search?in=&keyword=&fields= → 返回匹配行(raw)。
+    """按字段精确查 affiliate:GET /admin/affiliates?{in_field}={keyword}&fields=(list 过滤)。
 
-    in_field ∈ name/email/...;实测 search 命中 0 时返回空列表(非报错)。绝不抛。
+    端点纠正(2026-06-17 实测):`/admin/affiliates/search?in=&keyword=` **一律返 0 不可用**(已弃);
+    而 list 端点的 `?email=`/`?ref_code=`/`?id=` 过滤精确可靠(各返 1 行命中)。in_field 用
+    email/ref_code/id 最稳(name 非文档过滤字段,可能被忽略 → 返回未过滤页,调用方需再按 name 精确比对)。
+    绝不抛。
     """
     kw = str(keyword or "").strip()
-    if not kw:
+    field = str(in_field or "").strip()
+    if not kw or not field:
         return []
-    result = _get("admin/affiliates/search", {"in": in_field, "keyword": kw, "fields": _AFFILIATE_FIELDS})
+    result = _get("admin/affiliates", {field: kw, "fields": _AFFILIATE_FIELDS})
     if not result.get("ok"):
         return []
     return _extract_list(result.get("data"), "affiliates", "data", "results")
@@ -715,25 +719,34 @@ def resolve_affiliate(name: str, email: str | None = None, create: bool = False)
             return {"ok": False, "reason": "no_name", "affiliate_id": "", "ref_code": "", "coupon": "", "status": ""}
         cr = create_affiliate(nm, em or None, extra={"status": "approved"})
         if not cr.get("ok"):
-            return {
-                "ok": False,
-                "reason": cr.get("reason") or "create_failed",
-                "error": cr.get("error"),
-                "status_code": cr.get("status_code"),
-                "raw": cr.get("raw"),
-                "affiliate_id": "",
-                "ref_code": "",
-                "coupon": "",
-                "status": "",
-            }
-        created_flag = True
-        hit = cr.get("affiliate") or {}
-        # 建完响应可能不含 id/ref_code → 回搜一次锁定真号。
-        if not str(hit.get("id") or "").strip():
-            for r in (search_affiliate("email", em) if em else []) + (search_affiliate("name", nm) if nm else []):
-                if (em and _norm_match(r.get("email")) == _norm_match(em)) or (nm and _norm_match(r.get("name")) == _norm_match(nm)):
-                    hit = r
-                    break
+            # 「already registered」= 号其实已存在(并发/邮箱去重)→ 按 email 找回,而不是报错。
+            err = str(cr.get("error") or "").lower()
+            if em and ("already" in err or "registered" in err or "exists" in err):
+                for r in search_affiliate("email", em):
+                    if _norm_match(r.get("email")) == _norm_match(em):
+                        hit = r
+                        break
+            if not hit:
+                return {
+                    "ok": False,
+                    "reason": cr.get("reason") or "create_failed",
+                    "error": cr.get("error"),
+                    "status_code": cr.get("status_code"),
+                    "raw": cr.get("raw"),
+                    "affiliate_id": "",
+                    "ref_code": "",
+                    "coupon": "",
+                    "status": "",
+                }
+        else:
+            created_flag = True
+            hit = cr.get("affiliate") or {}
+            # 建完响应可能不含 id/ref_code → 按 email 回查锁定真号。
+            if not str(hit.get("id") or "").strip() and em:
+                for r in search_affiliate("email", em):
+                    if _norm_match(r.get("email")) == _norm_match(em):
+                        hit = r
+                        break
     aid = str(hit.get("id") or "").strip()
     ref_code = _read_ref_code(hit)
     coupon = coupon_for(hit)
