@@ -125,15 +125,29 @@ _WORKER_ONLINE_WINDOW_MIN = 10
 
 
 def _trust_db_migration_max() -> str | None:
-    """Last filename of the Postgres migration sequence. None on any failure."""
+    """Highest migration version_key ACTUALLY APPLIED on the DB (schema_migrations).
+
+    2026-06-17: 改为读真实已应用集而非代码声明的序列尾——此前返回
+    _POSTGRES_MIGRATION_SEQUENCE[-1] 会在迁移应用失败时仍报最新号(假阳)。
+    DB 读失败才回退代码尾。文件名 NNN_ 三位零填充,字典序最大=数值最大。
+    """
+    try:
+        from app.db.connection import get_conn
+
+        rows = get_conn().execute("SELECT version_key FROM schema_migrations").fetchall()
+        applied = [str(dict(r).get("version_key") or "") for r in rows]
+        applied = [a for a in applied if a]
+        if applied:
+            return max(applied)
+    except Exception:
+        logger.debug("health: applied migration read failed", exc_info=True)
     try:
         from app.db.connection import _POSTGRES_MIGRATION_SEQUENCE
 
-        seq = _POSTGRES_MIGRATION_SEQUENCE
-        if seq:
-            return str(seq[-1])
+        if _POSTGRES_MIGRATION_SEQUENCE:
+            return str(_POSTGRES_MIGRATION_SEQUENCE[-1])
     except Exception:
-        logger.debug("health: db_migration_max read failed", exc_info=True)
+        logger.debug("health: db_migration_max seq read failed", exc_info=True)
     return None
 
 

@@ -179,8 +179,11 @@ def _analyze_needs_media(conn: Any, channel: dict[str, Any], post: dict[str, Any
         _store(conn, channel_id=cid, post=post, status="skipped", error=str(resolved.get("reason") or "media_resolve_blocked"))
         return {"post_uid": puid, "status": "skipped", "reason": str(resolved.get("reason"))}
     if not resolved.get("ok"):
-        _store(conn, channel_id=cid, post=post, status="failed", error=str(resolved.get("reason") or "media_resolve_failed")[:300])
-        return {"post_uid": puid, "status": "failed", "error": str(resolved.get("reason"))[:200]}
+        # 解析失败=已花过一次 Apify;IG/TikTok 解析失败多为终态(私密/删除/不支持)。标 skipped(终态)
+        # 而非 failed,避免每轮 30min 重跑 Apify 解析永久烧配额(_already 只把 ready/skipped 当终态)。
+        # yt-dlp 的 YouTube 失败仍走各自路径、不经此(yt-dlp 免费,可重试)。需重试时人工重扫/清行。
+        _store(conn, channel_id=cid, post=post, status="skipped", error=str(resolved.get("reason") or "media_resolve_failed")[:300])
+        return {"post_uid": puid, "status": "skipped", "error": str(resolved.get("reason"))[:200]}
 
     try:
         from app.services.ai.analyzers import gemini_video

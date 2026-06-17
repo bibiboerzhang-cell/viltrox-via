@@ -220,6 +220,32 @@ def my_kol_contribution_rollup_endpoint(
 # ---------------------------------------------------------------------------
 
 
+def _kol_pool_claim_owner(conn, kol_pool_id: int) -> int | None:
+    """该 kol_pool_id 的 active claim 归属人 staff_id(经 linked_main_kol_id),无则 None。"""
+    row = conn.execute(
+        """
+        SELECT c.staff_id AS sid
+        FROM vkpi_kol_pool p
+        JOIN vkpi_kol_claims c ON c.kol_id = p.linked_main_kol_id AND c.status = 'active'
+        WHERE p.id = ?
+        LIMIT 1
+        """,
+        (int(kol_pool_id),),
+    ).fetchone()
+    return _int(dict(row).get("sid")) if row else None
+
+
+def _assert_can_share_kol(conn, staff, kol_pool_id: int) -> None:
+    """归属校验:仅该 KOL 的 active claim 归属人 或 管理层(can_view_all)可共享/撤销——
+    与项目侧 assert_can_manage_members 同口径,避免任意 vkpi:write 转授/撤销他人 KOL。"""
+    if scope.can_view_all(staff):
+        return
+    actor = scope.actor_staff_id(staff)
+    owner = _kol_pool_claim_owner(conn, kol_pool_id)
+    if not actor or owner != actor:
+        raise HTTPException(status_code=403, detail="仅该 KOL 的负责人或管理层可共享/撤销")
+
+
 @router.post("/my-kol/{kol_pool_id}/share")
 def my_kol_share_endpoint(
     kol_pool_id: int,
@@ -228,7 +254,7 @@ def my_kol_share_endpoint(
 ) -> dict:
     """把某 kol_pool_id 共享给 body.staff_id(只读授予)。幂等:UNIQUE 冲突即 DO NOTHING。
 
-    shared_by 取当前操作者 staff_id(scope.actor_staff_id)。
+    归属校验:仅该 KOL 负责人/管理层可共享。shared_by 取当前操作者 staff_id。
     """
     pid = _int(kol_pool_id)
     target_staff_id = _int(body.get("staff_id"))
@@ -237,9 +263,9 @@ def my_kol_share_endpoint(
     if target_staff_id <= 0:
         raise HTTPException(status_code=400, detail="staff_id required")
 
-    shared_by = scope.actor_staff_id(staff) or None
-
     conn = get_conn()
+    _assert_can_share_kol(conn, staff, pid)
+    shared_by = scope.actor_staff_id(staff) or None
     conn.execute(
         """
         INSERT INTO vkpi_kol_pool_members (kol_pool_id, staff_id, shared_by)
@@ -272,6 +298,7 @@ def my_kol_unshare_endpoint(
         raise HTTPException(status_code=400, detail="staff_id required")
 
     conn = get_conn()
+    _assert_can_share_kol(conn, staff, pid)
     conn.execute(
         "DELETE FROM vkpi_kol_pool_members WHERE kol_pool_id = ? AND staff_id = ?",
         (pid, target_staff_id),
