@@ -290,11 +290,13 @@ export function ProjectsPage({
 
   const addKolsToCampaign = async (targetProject: VkpiProjectRow, kols: VkpiKolOption[]) => {
     if (!apiToken) throw new Error('缺少 API token，不能写入项目 KOL。');
+    // 负责人=该 KOL 的 active claim owner(后端按 vkpi_kol_claims 决定);
+    // 不再把项目负责人 targetProject.ownerId 当 assignedStaffId 强塞,传 undefined 让后端按 claim 归属。
     const result = await addKolsToProject(
       apiToken,
       targetProject.id,
       kols.map((kol) => kol.id),
-      targetProject.ownerId,
+      undefined,
     );
     setMessage(`已向「${targetProject.campaign}」写入 ${result.inserted || 0} 个 KOL，跳过 ${result.skipped_existing || 0} 个已有项。`);
     await onRefreshData?.();

@@ -830,7 +830,30 @@ def add_project_kols(project_id: int, body: dict[str, Any], *, staff: dict[str, 
     missing = [kol_pool_id for kol_pool_id in kol_pool_ids if kol_pool_id not in existing_pool_ids]
     actor_staff_id = staff_id(staff)
     requested_staff_id = _int(body.get("assigned_staff_id") or body.get("assignedStaffId"))
-    assigned_staff_id = requested_staff_id if scope.can_view_all(staff) and requested_staff_id else actor_staff_id
+    # 负责人归属(用户拍板):每个 KOL 的负责人 = 其 active claim owner(vkpi_kol_claims),
+    # 未认领 → can_view_all 且显式传了 requested_staff_id 则用之,否则归添加者 actor_staff_id;
+    # 绝不再默认项目负责人。fallback 为「无 claim 时」的兜底,真正归属在写入循环里 per-KOL 计算。
+    fallback_staff_id = requested_staff_id if scope.can_view_all(staff) and requested_staff_id else actor_staff_id
+    # claim 主键经 vkpi_kol_pool.linked_main_kol_id 关联 vkpi_kol_claims.kol_id(非 kol_pool_id),
+    # 与 _pool_claim_occupancy 的 claim 口径同源,只取 status='active' 的认领人。
+    claim_owner_by_pool: dict[int, int] = {}
+    if existing_pool_ids:
+        _claim_ph = ",".join("?" for _ in sorted(existing_pool_ids))
+        for _row in conn.execute(
+            f"""
+            SELECT p.id AS kol_pool_id, c.staff_id AS staff_id
+            FROM vkpi_kol_pool p
+            JOIN vkpi_kol_claims c ON c.kol_id = p.linked_main_kol_id AND c.status = 'active'
+            WHERE p.id IN ({_claim_ph})
+            ORDER BY c.id ASC
+            """,
+            sorted(existing_pool_ids),
+        ).fetchall():
+            _data = dict(_row)
+            _pool_id = _int(_data.get("kol_pool_id"))
+            _owner = _int(_data.get("staff_id"))
+            if _pool_id and _owner and _pool_id not in claim_owner_by_pool:
+                claim_owner_by_pool[_pool_id] = _owner
     # 乙案②(写入侧防绕过):与选择器同口径校验——被他人认领/在役跟进的 KOL 拒绝写入,
     # ValueError 带占用人姓名(路由已映 400);admin 可 body.force=true 强制,audit 留痕。
     occupancy = _pool_claim_occupancy(conn, sorted(existing_pool_ids))
@@ -878,6 +901,8 @@ def add_project_kols(project_id: int, body: dict[str, Any], *, staff: dict[str, 
     for kol_pool_id in kol_pool_ids:
         if kol_pool_id not in existing_pool_ids:
             continue
+        # per-KOL 负责人:命中 active claim → claim owner;否则兜底 fallback。
+        assigned_staff_id = claim_owner_by_pool.get(kol_pool_id) or fallback_staff_id
         row = conn.execute(
             """
             INSERT INTO vkpi_project_kol_assignments (
@@ -952,7 +977,9 @@ def add_project_kols(project_id: int, body: dict[str, Any], *, staff: dict[str, 
             detail=f"added {inserted} KOL assignments" + (f" (admin force, {len(forced_conflicts)} 个越过他人占用)" if forced_conflicts else ""),
             metadata={
                 "kol_pool_ids": [kol_pool_id for kol_pool_id in kol_pool_ids if kol_pool_id in existing_pool_ids],
-                "assigned_staff_id": assigned_staff_id or None,
+                # per-KOL 归属后,单一 assigned_staff_id 已无意义;记录无 claim 时的兜底 + 命中 claim 的明细。
+                "assigned_staff_id_fallback": fallback_staff_id or None,
+                "claim_owner_by_pool": {str(k): v for k, v in claim_owner_by_pool.items()},
                 "missing_kol_pool_ids": missing,
                 "skipped_existing": skipped_existing,
                 "force": bool(forced_conflicts),
