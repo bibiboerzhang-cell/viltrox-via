@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_permission
 from app.domains.comments.compat import admin_router_prefix
+from app.domains.comments import channel as comments_channel
 from app.domains.comments import collector as comments_collector
 
 
@@ -47,6 +48,29 @@ def api_batch_collect(
         platform=platform,
         days=days,
         limit=limit,
+        staff=staff,
+    )
+
+
+@router.post("/batch-collect-channel")
+def api_batch_collect_channel(
+    channel_id: int | None = Query(None, description="单个官号;留空=遍历全部 18 官号"),
+    posts_per_channel: int = Query(10, ge=1, le=50, description="每个官号扫描近 N 条帖子(小批)"),
+    limit_per_post: int = Query(100, ge=1, le=300, description="每帖最多采集评论数"),
+    dry_run: bool = Query(True, description="默认 True 只验成本(数 candidate/declared/cached/gap),不真抓不入队"),
+    staff: dict = Depends(require_permission("vkpi.comments.batch_collect")),
+) -> dict[str, Any]:
+    """批量采集官号评论入口(默认 dry_run 验成本)。
+
+    dry_run=True(默认):只返回 candidate_posts / declared / cached / gap 核算,不烧配额。
+    dry_run=False:对每个官号入 apify_jobs 一条任务(泳道可见),worker 逐帖复用现成采集机器。
+    X 官号缺 token 由 worker 标 not_configured 跳过非失败。
+    """
+    return comments_channel.batch_collect_channel_comments(
+        channel_id=channel_id,
+        posts_per_channel=posts_per_channel,
+        limit_per_post=limit_per_post,
+        dry_run=dry_run,
         staff=staff,
     )
 

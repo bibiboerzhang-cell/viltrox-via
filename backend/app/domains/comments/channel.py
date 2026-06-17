@@ -459,6 +459,283 @@ def _save_channel_comments(
     return max(0, channels._int(after["n"] if after else 0) - channels._int(before["n"] if before else 0))
 
 
+BATCH_OFFICIAL_COMMENTS_JOB_TYPE = "official_channel_comments_collect"
+# 默认每个官号扫描多少条近期帖子(小批,避免擅自烧配额)
+DEFAULT_BATCH_POSTS_PER_CHANNEL = 10
+MAX_BATCH_POSTS_PER_CHANNEL = 50
+
+
+def _official_comment_channels(
+    *,
+    channel_id: int | None = None,
+    staff: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """枚举要批量采评论的官号(单个 channel_id,或全部 18 官号)。
+
+    复用 channels._latest_official_channel_rows——它已经按 is_official 过滤,
+    18 官号是公司级 baseline(staff scope 不限制可见性)。
+    """
+
+    rows = channels._latest_official_channel_rows(staff=staff)
+    if channel_id is not None:
+        target = int(channel_id)
+        rows = [row for row in rows if channels._int(row.get("id")) == target]
+    return rows
+
+
+def _channel_candidate_posts(
+    row: dict[str, Any],
+    *,
+    posts_per_channel: int,
+) -> list[dict[str, Any]]:
+    """对单个官号:近 N 条帖子的 candidate 列表(纯读,不抓)。
+
+    declared = 平台声明的评论数;cached = vkpi_comments 已落库数;
+    gap = max(0, declared - cached)。只用于 dry_run 成本核算。
+    """
+
+    from app.domains.comments import collector as comments_collector
+
+    comments_collector.ensure_vkpi_comments_schema()
+    channel_id = channels._int(row.get("id"))
+    platform = str(row.get("platform") or "").lower()
+    posts, _source, _package_dir = channels._all_posts_for_channel(row)
+    limit = max(1, min(MAX_BATCH_POSTS_PER_CHANNEL, int(posts_per_channel or DEFAULT_BATCH_POSTS_PER_CHANNEL)))
+    posts = posts[:limit]
+    conn = get_conn()
+    candidates: list[dict[str, Any]] = []
+    for post in posts:
+        external_post_id = _comment_external_post_id(platform, channels._text(post.get("id")), channels._text(post.get("url")), post)
+        if not external_post_id:
+            candidates.append(
+                {
+                    "post_id": channels._text(post.get("id"), post.get("url")),
+                    "external_post_id": "",
+                    "url": channels._text(post.get("url")),
+                    "declared": channels._int(post.get("comments")),
+                    "cached": 0,
+                    "gap": 0,
+                    "status": "missing_post_id",
+                }
+            )
+            continue
+        external_ids = {external_post_id, channels._text(post.get("id")), channels._text(post.get("url"))}
+        if platform == "reddit":
+            external_ids |= {channels._reddit_external_id(value) for value in list(external_ids)}
+        external_ids = {value for value in external_ids if value}
+        cached = 0
+        if external_ids:
+            placeholders = ",".join("?" for _ in external_ids)
+            cached_row = conn.execute(
+                f"SELECT COUNT(*) AS n FROM vkpi_comments WHERE platform=? AND external_post_id IN ({placeholders})",
+                (platform, *sorted(external_ids)),
+            ).fetchone()
+            cached = channels._int(cached_row["n"] if cached_row else 0)
+        declared = channels._int(post.get("comments"))
+        gap = max(0, declared - cached)
+        candidates.append(
+            {
+                "post_id": channels._text(post.get("id"), post.get("url")),
+                "external_post_id": external_post_id,
+                "url": channels._text(post.get("url")),
+                "declared": declared,
+                "cached": cached,
+                "gap": gap,
+                "status": "cached" if cached > 0 and gap == 0 else ("gap" if gap > 0 else "none_declared"),
+            }
+        )
+    return candidates
+
+
+def batch_collect_channel_comments(
+    *,
+    channel_id: int | None = None,
+    posts_per_channel: int = DEFAULT_BATCH_POSTS_PER_CHANNEL,
+    limit_per_post: int = 100,
+    dry_run: bool = True,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """批量采集官号评论入口。
+
+    - channel_id 为空 → 遍历全部官号;否则只处理该官号。
+    - posts_per_channel:每个官号扫描近 N 条帖子(小批,默认 10,封顶 50)。
+    - dry_run=True(默认):只数 candidate_posts/declared/cached/gap,**不真抓、不入队**,
+      用于验成本,绝不擅自烧配额。
+    - dry_run=False:对每个官号入 apify_jobs 一条 job(泳道可见),worker 逐帖复用
+      collect_channel_post_comments。X 官号缺 token 由 worker 标 not_configured 跳过非失败。
+    """
+
+    rows = _official_comment_channels(channel_id=channel_id, staff=staff)
+    safe_posts = max(1, min(MAX_BATCH_POSTS_PER_CHANNEL, int(posts_per_channel or DEFAULT_BATCH_POSTS_PER_CHANNEL)))
+    safe_limit_per_post = max(1, min(MAX_CHANNEL_COMMENT_CAP, int(limit_per_post or 100)))
+
+    channel_summaries: list[dict[str, Any]] = []
+    total_candidate_posts = 0
+    total_gap = 0
+    total_declared = 0
+    total_cached = 0
+    enqueued: list[dict[str, Any]] = []
+
+    for row in rows:
+        cid = channels._int(row.get("id"))
+        platform = str(row.get("platform") or "").lower()
+        handle = channels._text(row.get("account_handle"), row.get("account_display_name"))
+        collect_supported = platform in COMMENT_COLLECT_PLATFORMS
+        candidates = _channel_candidate_posts(row, posts_per_channel=safe_posts)
+        candidate_posts = len(candidates)
+        gap = sum(channels._int(item.get("gap")) for item in candidates)
+        declared = sum(channels._int(item.get("declared")) for item in candidates)
+        cached = sum(channels._int(item.get("cached")) for item in candidates)
+        total_candidate_posts += candidate_posts
+        total_gap += gap
+        total_declared += declared
+        total_cached += cached
+
+        summary = {
+            "channel_id": cid,
+            "platform": platform,
+            "handle": handle,
+            "collect_supported": collect_supported,
+            "candidate_posts": candidate_posts,
+            "declared": declared,
+            "cached": cached,
+            "gap": gap,
+            "candidates": candidates[:20],
+        }
+
+        if not dry_run:
+            if not collect_supported:
+                summary["enqueue_status"] = "not_supported"
+            else:
+                job = _enqueue_official_channel_comments_job(
+                    channel_id=cid,
+                    posts_per_channel=safe_posts,
+                    limit_per_post=safe_limit_per_post,
+                    staff=staff,
+                )
+                summary["enqueue_status"] = job.get("status")
+                summary["job_id"] = job.get("job_id")
+                enqueued.append({"channel_id": cid, **job})
+        channel_summaries.append(summary)
+
+    return {
+        "dry_run": bool(dry_run),
+        "scope": "single" if channel_id is not None else "all_official",
+        "channels": len(rows),
+        "posts_per_channel": safe_posts,
+        "limit_per_post": safe_limit_per_post,
+        "total_candidate_posts": total_candidate_posts,
+        "total_declared": total_declared,
+        "total_cached": total_cached,
+        "total_gap": total_gap,
+        "enqueued": enqueued,
+        "results": channel_summaries,
+    }
+
+
+def _enqueue_official_channel_comments_job(
+    *,
+    channel_id: int,
+    posts_per_channel: int,
+    limit_per_post: int,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """对单个官号入 apify_jobs(泳道可见;幂等:同 channel 已有活跃任务则复用)。"""
+
+    import json as _json
+
+    conn = get_conn()
+    active = conn.execute(
+        """
+        SELECT id FROM apify_jobs
+        WHERE job_type=? AND status IN ('queued','running')
+          AND payload->>'channel_id'=? LIMIT 1
+        """,
+        (BATCH_OFFICIAL_COMMENTS_JOB_TYPE, str(int(channel_id))),
+    ).fetchone()
+    if active:
+        return {"status": "already_queued", "job_id": channels._int(dict(active)["id"])}
+    payload = {
+        "channel_id": int(channel_id),
+        "posts_per_channel": int(posts_per_channel),
+        "limit_per_post": int(limit_per_post),
+        "query_text": f"官号评论批量采集 · channel {int(channel_id)}"[:96],
+        "target_type": "official_channel",
+        "target_id": int(channel_id),
+        "triggered_by_user_id": (staff or {}).get("user_id"),
+        "staff_id": (staff or {}).get("id") or (staff or {}).get("staff_id"),
+    }
+    job = conn.execute(
+        """
+        INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
+        VALUES (?, ?::jsonb, 'queued', NOW(), NOW())
+        RETURNING id
+        """,
+        (BATCH_OFFICIAL_COMMENTS_JOB_TYPE, _json.dumps(payload, ensure_ascii=False)),
+    ).fetchone()
+    conn.commit()
+    return {"status": "queued", "job_id": channels._int(dict(job)["id"]) if job else None}
+
+
+def run_official_channel_comments_for_job(payload: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    """worker 入口:对该官号近 N 条帖子逐条采评论(复用 collect_channel_post_comments)。
+
+    X 官号缺 token → collect_channel_post_comments 返回 status=not_configured,
+    本入口标 skipped 不计 fail。
+    """
+
+    channel_id = channels._int(payload.get("channel_id"))
+    if not channel_id:
+        raise ValueError("channel_id required")
+    posts_per_channel = max(1, min(MAX_BATCH_POSTS_PER_CHANNEL, channels._int(payload.get("posts_per_channel"), DEFAULT_BATCH_POSTS_PER_CHANNEL)))
+    limit_per_post = max(1, min(MAX_CHANNEL_COMMENT_CAP, channels._int(payload.get("limit_per_post"), 100)))
+
+    row = channels._latest_channel_row(channel_id, staff=staff)
+    platform = str(row.get("platform") or "").lower()
+    posts, _source, _package_dir = channels._all_posts_for_channel(row)
+    posts = posts[:posts_per_channel]
+
+    results: list[dict[str, Any]] = []
+    new_total = 0
+    ok_count = 0
+    skipped_count = 0
+    for post in posts:
+        post_id = channels._text(post.get("id"), post.get("url"))
+        url = channels._text(post.get("url"))
+        result = collect_channel_post_comments(
+            channel_id,
+            post_id=post_id,
+            url=url,
+            limit=limit_per_post,
+            staff=staff,
+        )
+        status = str(result.get("status") or "")
+        new_count = channels._int(result.get("new_count"))
+        new_total += new_count
+        if status == "not_configured":
+            skipped_count += 1
+        elif status in ("ok", "complete", "capped", "partial", "cached_without_declared"):
+            ok_count += 1
+        results.append(
+            {
+                "post_id": post_id,
+                "status": status,
+                "new": new_count,
+                "fetched": channels._int(result.get("fetched_count")),
+            }
+        )
+    return {
+        "status": "ready",
+        "channel_id": channel_id,
+        "platform": platform,
+        "posts": len(results),
+        "ok": ok_count,
+        "skipped": skipped_count,
+        "new_comments": new_total,
+        "results": results,
+    }
+
+
 def collect_channel_post_comments(
     channel_id: int,
     *,

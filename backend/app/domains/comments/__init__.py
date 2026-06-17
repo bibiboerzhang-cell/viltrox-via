@@ -2,14 +2,17 @@
 from __future__ import annotations
 
 from app.domains.comments.channel import (
+    BATCH_OFFICIAL_COMMENTS_JOB_TYPE,
     COMMENT_COLLECT_PLATFORMS,
     MAX_CHANNEL_COMMENT_CAP,
     _comment_contract,
     _comment_external_post_id,
     _package_reddit_comments,
+    batch_collect_channel_comments,
     cache_inline_channel_comments,
     channel_post_comments,
     collect_channel_post_comments,
+    run_official_channel_comments_for_job,
 )
 from app.domains.comments.collector import (
     _record_run,
