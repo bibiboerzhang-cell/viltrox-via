@@ -484,8 +484,55 @@ export function ShopifyHubPage({ apiToken = "" }: { apiToken?: string } = {}) {
     { className: tab === "connect" ? "" : "hidden" },
 
     // -----------------------------------------------------------------------
-    // GOAFFPRO 联盟营销接入（主连接位）—— 替代自建短链。
+    // GOAFFPRO 联盟营销「连接配置」已迁至 设置 → GOAFFPRO 联盟营销（管理员配置区）。
+    // 用户拍板:token/密钥这类应在 Settings 由管理员管。这里只留一行迁移提示卡 +
+    // 只读连接状态徽标(loadGoaffStatus 仍在跑,纯只读不含配置/密码框)。
+    // 原配置卡(两个密码框 + 保存并连接 + 刷新状态 + 拉取 affiliate 预览 + *_configured 明细)
+    // 已整块抽成 settings/GoaffproConnectCard.tsx,旧实现注释保留在本段下方,可回滚。
     // -----------------------------------------------------------------------
+    e(
+      Card,
+      { className: "border-blue-500/15 bg-blue-500/[0.03]" },
+      e(
+        "div",
+        { className: "flex items-start justify-between gap-3" },
+        e(
+          "div",
+          { className: "flex items-start gap-3" },
+          e(Plug, { size: 18, className: "text-blue-300 mt-0.5 shrink-0" }),
+          e(
+            "div",
+            null,
+            e(
+              "div",
+              { className: "text-[13px] font-medium text-blue-200 mb-1" },
+              "GOAFFPRO 连接配置已移至设置",
+            ),
+            e(
+              "p",
+              { className: "text-[12px] text-slate-400" },
+              "填 token / 连接状态 / 拉取 affiliate 预览已迁到 设置 → GOAFFPRO 联盟营销（管理员配置）。token / 密钥由管理员在设置区统一管理。",
+            ),
+          ),
+        ),
+        // 只读连接状态徽标(纯展示,不含任何配置入口)。
+        goaffStatusLoading
+          ? e(
+              "span",
+              { className: "inline-flex items-center gap-1.5 text-[11px] text-slate-400 shrink-0" },
+              e(Loader2, { size: 12, className: "animate-spin" }),
+              "读取状态…",
+            )
+          : e(StatusPill, {
+              ok: goaffConnected,
+              okLabel: goaffStatus?.status === "connected" ? "已连接" : "已配置",
+              badLabel: "未连接",
+            }),
+      ),
+    ),
+
+    // ===== 旧·GOAFFPRO 配置卡(已迁至 settings/GoaffproConnectCard.tsx,注释保留可回滚)=====
+    /*
     e(
       Card,
       { className: "" },
@@ -620,7 +667,6 @@ export function ShopifyHubPage({ apiToken = "" }: { apiToken?: string } = {}) {
             }),
           )
         : null,
-      // affiliate 预览 —— 校准用:显 total + 字段名/_raw_keys 便于后续 key 对接。
       goaffPreviewErr
         ? e(
             "div",
@@ -660,7 +706,7 @@ export function ShopifyHubPage({ apiToken = "" }: { apiToken?: string } = {}) {
                       e(
                         "div",
                         { className: "text-[11px] text-slate-300" },
-                        pickStr(aff as Row, ["name", "email", "id"], `affiliate #${i + 1}`),
+                        pickStr(aff as Row, ["name", "email", "id"], "affiliate #" + (i + 1)),
                       ),
                       e(
                         "div",
@@ -679,6 +725,7 @@ export function ShopifyHubPage({ apiToken = "" }: { apiToken?: string } = {}) {
           )
         : null,
     ),
+    */
 
     // 短链生成已迁移说明卡(原 Region ② 短链生成器退役后的原位说明)。
     RETIRE_SELF_LINK

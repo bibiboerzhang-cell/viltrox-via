@@ -61,6 +61,7 @@ import {
   type SettingsModuleKey,
 } from './settings/SettingsPage.fragments';
 import { SettingsStaffPanel } from './settings/SettingsStaffPanel';
+import { GoaffproConnectCard } from './settings/GoaffproConnectCard';
 import { SettingsSkuPanel } from './settings/SettingsSkuPanel';
 import { SettingsStatusPanel } from './settings/SettingsStatusPanel';
 import { SystemHealthBar } from '../v615-replica/components/SystemHealthBar';
@@ -124,7 +125,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
   const [keyDraft, setKeyDraft] = useState<{ account_name: string; provider: string; key: string; daily_quota: string; enabled: boolean }>({ account_name: '', provider: 'gemini', key: '', daily_quota: '', enabled: true });
   const [settingsError, setSettingsError] = useState('');
   const [settingsLoading, setSettingsLoading] = useState(false);
-  const [expandedSection, setExpandedSection] = useState<'status' | 'sku' | 'staff' | 'funds' | 'rules' | 'scheduler' | 'apikeys' | 'preference' | 'notification' | null>('status');
+  const [expandedSection, setExpandedSection] = useState<'status' | 'sku' | 'staff' | 'funds' | 'rules' | 'scheduler' | 'apikeys' | 'goaffpro' | 'preference' | 'notification' | null>('status');
   const [rulesTab, setRulesTab] = useState<SettingsRulesTab>('platform');
   const [productSearch, setProductSearch] = useState('');
   const [selectedCatalogProduct, setSelectedCatalogProduct] = useState<VkpiProductCatalogItem | null>(null);
@@ -1045,6 +1046,11 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
               </tbody>
             </table>
           </div>
+        ))}
+        {/* GOAFFPRO 联盟营销连接配置 —— 从 Shopify Hub「连接」页迁来(token/密钥归管理员在设置区管)。
+            保存端点 vkpi:admin 权限,只 owner/admin 可存,放公司管理区正合适。 */}
+        {renderSettingsModule('goaffpro', '连接 token / 状态 / affiliate 预览 · 管理员配置', (
+          <GoaffproConnectCard apiToken={apiToken} />
         ))}
         <div className="vkpi-settings-zone" data-zone="personal">
           <header className="vkpi-settings-zone__head">

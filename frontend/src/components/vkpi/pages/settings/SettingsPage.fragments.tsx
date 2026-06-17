@@ -13,6 +13,7 @@ export const SETTINGS_MODULE_TITLES = {
   rules: '规则安排',
   scheduler: '定时任务 / Scheduler',
   apikeys: '多账号 API Key 池',
+  goaffpro: 'GOAFFPRO 联盟营销',
   preference: '个人偏好',
   notification: '通知配置',
 } as const;
