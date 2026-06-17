@@ -115,8 +115,27 @@ def collect_subject_footprint(kol_pool_id: int) -> dict[str, Any]:
         footprint["qdrant_point_ids"] = [r["qdrant_point_id"] for r in rows]
     except Exception:
         footprint["qdrant_point_ids"] = []
-    # R2 资产 key(外部):从 video_evidence / 资产列收集 —— TODO 按实际资产列补全
-    footprint["r2_keys"] = []  # TODO: 枚举 kol_assets / video_evidence 的 R2 object key
+    # R2 资产 key(外部,DB CASCADE 删不到):枚举该 KOL 视频在媒体缓存里的 R2 对象。
+    # vkpi_media_cache_assets 按 source_url 缓存 → JOIN 该 KOL 的 video_evidence.content_url,
+    # **精确匹配该 subject 自己的资产**(不波及他人);拿不到则空(诚实,不臆造)。
+    r2_keys: list[str] = []
+    try:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT a.r2_key
+            FROM vkpi_media_cache_assets a
+            WHERE COALESCE(a.r2_key, '') <> ''
+              AND a.source_url IN (
+                  SELECT content_url FROM vkpi_kol_video_evidence
+                  WHERE kol_pool_id = ? AND COALESCE(content_url, '') <> ''
+              )
+            """,
+            (int(kol_pool_id),),
+        ).fetchall()
+        r2_keys = [str(dict(r).get("r2_key")) for r in rows if str(dict(r).get("r2_key") or "").strip()]
+    except Exception:
+        r2_keys = []
+    footprint["r2_keys"] = r2_keys
     return footprint
 
 
