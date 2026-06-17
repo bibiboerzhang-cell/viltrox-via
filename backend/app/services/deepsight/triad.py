@@ -6,10 +6,49 @@ import re
 from typing import Any
 
 from app.core.config import CLAUDE_MODEL
+from app.core.logging import get_logger
 from app.services.ai.clients.claude_client import get_claude_client
 from app.services.ai.clients.openai_client import OPENAI_AVAILABLE, openai_client
 from app.services.ai.clients.gemini_client import GEMINI_AVAILABLE, gemini_client
 from app.services.ai.retry import call_ai_with_retry
+
+logger = get_logger("viltrox.deepsight.triad")
+
+# 三模型并发是平台最贵路径;过去只记 ai_usage_log,不进 budget_guard 月度台账 → 预算对它失明。
+# 把成本记进台账(可观测/可告警);单价为粗估(美元/百万 token),非精确账单。
+_TRIAD_SCOPE = "cron:deepsight_triad"
+_TRIAD_PRICE = {
+    "claude": (3.0, 15.0),
+    "gpt": (0.15, 0.60),
+    "gemini": (0.075, 0.30),
+}
+
+
+def _usage_tokens(resp: Any) -> tuple[int, int]:
+    """从 SDK 响应defensive 抽取 (input, output) token —— 兼容 anthropic/openai/gemini 三家字段名。"""
+    u = getattr(resp, "usage", None) or getattr(resp, "usage_metadata", None)
+    if u is None:
+        return 0, 0
+    ti = getattr(u, "input_tokens", None) or getattr(u, "prompt_tokens", None) or getattr(u, "prompt_token_count", None) or 0
+    to = getattr(u, "output_tokens", None) or getattr(u, "completion_tokens", None) or getattr(u, "candidates_token_count", None) or 0
+    try:
+        return int(ti or 0), int(to or 0)
+    except (TypeError, ValueError):
+        return 0, 0
+
+
+def _record_triad_cost(provider: str, resp: Any) -> None:
+    """成功调用后把成本记进 budget_guard 月度台账(护栏① 不再对 triad 失明)。绝不抛。"""
+    try:
+        from app.domains.costs import budget_guard
+
+        ti, to = _usage_tokens(resp)
+        pin, pout = _TRIAD_PRICE.get(provider, (0.0, 0.0))
+        usd = ti / 1_000_000.0 * pin + to / 1_000_000.0 * pout
+        if usd > 0:
+            budget_guard.record_cost(_TRIAD_SCOPE, round(usd, 6))
+    except Exception:
+        logger.debug("triad.record_cost_failed", exc_info=True)
 
 
 ROLE_PROMPTS = {
@@ -70,6 +109,7 @@ async def _ask_claude(pack: dict) -> dict:
                 lambda: client.messages.create(model=CLAUDE_MODEL, max_tokens=1600, messages=[{"role": "user", "content": prompt}]),
             )
         resp = await asyncio.to_thread(_call)
+        _record_triad_cost("claude", resp)
         text = _clean_json_text(resp.content[0].text if resp.content else "")
         return json.loads(text)
     except Exception:
@@ -92,6 +132,7 @@ async def _ask_gpt(pack: dict) -> dict:
                 ],
             )
         resp = await asyncio.to_thread(_call)
+        _record_triad_cost("gpt", resp)
         text = _clean_json_text(resp.choices[0].message.content or "")
         return json.loads(text)
     except Exception:
@@ -106,6 +147,7 @@ async def _ask_gemini(pack: dict) -> dict:
         def _call():
             return gemini_client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
         resp = await asyncio.to_thread(_call)
+        _record_triad_cost("gemini", resp)
         text = _clean_json_text(getattr(resp, "text", "") or "")
         return json.loads(text)
     except Exception:
