@@ -241,6 +241,62 @@ async def job_vkpi_goaffpro_metrics_sync():
         logger.exception("scheduler.vkpi_goaffpro_metrics_sync_failed")
 
 
+async def job_llm_batch_poll():
+    """每 10 分钟轮询 Anthropic Message Batches:ended→回收 dispatch 落各自域表;超龄→标 expired。
+
+    无 in_progress 批次 → 空跑即返回(无害)。提交端只在云端跑(本地 SDK 无代理被墙)。
+    import content_fit_batch 以触发 consumer 注册(否则 dispatch 找不到回调)。
+    """
+    try:
+        from app.domains.kol import content_fit_batch  # noqa: F401  确保 consumer 注册
+        from app.platform import llm_batch
+
+        summary = await asyncio.to_thread(llm_batch.poll_pending_batches)
+        if summary.get("collected"):
+            logger.info("scheduler.llm_batch_poll", extra=summary)
+    except Exception:
+        logger.exception("scheduler.llm_batch_poll_failed")
+
+
+async def job_vkpi_content_fit_batch_refresh():
+    """每夜把缺 content_fit_v1 的 KOL 攒成一个 Anthropic Batch 提交(50% 折扣,输出与同步一致)。
+
+    config-gate:scheduler_tasks.vkpi_content_fit_batch(默认 OFF,验证后显式开)。
+    已有 in_progress 同 consumer 批次 → 跳过(不重复提交)。绕过串行 worker、零触 viltrox_fit_score。
+    """
+    if not _scheduler_task_enabled("vkpi_content_fit_batch"):
+        return
+    try:
+        import os
+
+        from app.db.connection import get_conn
+        from app.domains.kol import content_fit_batch as cfb
+        from app.platform import llm_batch
+
+        def _submit() -> dict:
+            conn = get_conn()
+            existing = conn.execute(
+                "SELECT 1 FROM vkpi_llm_batches WHERE consumer=? AND status='in_progress' LIMIT 1",
+                (cfb.CONSUMER,),
+            ).fetchone()
+            if existing:
+                return {"skipped": "batch_in_flight"}
+            cap = int(os.environ.get("VKPI_CONTENT_FIT_BATCH_CAP", "150") or 150)
+            kids = cfb.select_kols_needing_refresh(conn, limit=cap)
+            items = [it for it in (cfb.build_item(conn, kid) for kid in kids) if it]
+            if not items:
+                return {"submitted": 0, "reason": "nothing_to_refresh"}
+            bid = llm_batch.submit_anthropic_batch(
+                items, consumer=cfb.CONSUMER, purpose="vkpi_kol_content_fit", cost_scope="vkpi_kol_content_fit"
+            )
+            return {"submitted": len(items) if bid else 0, "batch_id": bid}
+
+        summary = await asyncio.to_thread(_submit)
+        logger.info("scheduler.content_fit_batch_refresh", extra=summary)
+    except Exception:
+        logger.exception("scheduler.content_fit_batch_refresh_failed")
+
+
 # ──────────────────────────────────────────────
 # 启动/停止
 # ──────────────────────────────────────────────
@@ -780,6 +836,23 @@ async def start_scheduler() -> None:
         trigger=CronTrigger(day_of_week="mon", hour=2, minute=0),
         id="vkpi_weekly_report",
         name="V-KPI weekly manager report",
+        max_instances=1,
+        coalesce=True,
+    )
+    # ── Batch API:回收轮询(常开,空跑无害)+ content_fit 过夜批量提交(config-gate,默认 OFF)──
+    _scheduler.add_job(
+        job_llm_batch_poll,
+        trigger=IntervalTrigger(minutes=10),
+        id="llm_batch_poll",
+        name="Poll Anthropic Message Batches and dispatch results",
+        max_instances=1,
+        coalesce=True,
+    )
+    _scheduler.add_job(
+        job_vkpi_content_fit_batch_refresh,
+        trigger=CronTrigger(hour=2, minute=30),
+        id="vkpi_content_fit_batch_refresh",
+        name="Submit nightly content_fit refresh as Anthropic Batch (50% off)",
         max_instances=1,
         coalesce=True,
     )
