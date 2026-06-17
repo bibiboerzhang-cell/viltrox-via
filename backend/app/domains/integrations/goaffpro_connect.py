@@ -498,12 +498,13 @@ def list_orders(limit: int | None = None, offset: int | None = None) -> dict[str
     params["limit"] = int(limit) if limit else _DEFAULT_PAGE_LIMIT
     if offset:
         params["offset"] = int(offset)
-    # 实测 /admin/orders → {error};GOAFFPRO 销售/转化端点是 /admin/sales。
-    result = _get("admin/sales", params)
+    # 端点修正(Swagger 93 端点实证):销售/转化是 GET /admin/orders;**没有 /admin/sales**。
+    # 之前 /admin/orders 返 {error} 是漏了必填 fields=(与 affiliates 同坑),不是路径错。
+    result = _get("admin/orders", params)
     if not result.get("ok"):
         return result
     data = result.get("data")
-    rows = _extract_list(data, "sales", "orders", "data", "results")
+    rows = _extract_list(data, "orders", "sales", "data", "results")
     mapped = [_map_order(r) for r in rows]
     total = data.get("total_results") if isinstance(data, dict) else None
     return {"ok": True, "orders": mapped, "count": len(mapped), "total": total}
@@ -630,28 +631,38 @@ def coupon_for(affiliate_raw: dict[str, Any] | None) -> str:
 
 
 def get_affiliate(affiliate_id: str | int) -> dict[str, Any]:
-    """回查单个 affiliate(GET /admin/affiliates/{id}),拿分配好的 ref_code/coupon/status。
+    """回查单个 affiliate,拿分配好的 ref_code/coupon/status。
 
     为什么需要:GOAFFPRO 新建 affiliate 的 POST 响应当下常不返回 ref_code(要它分配后才有),
     若建完立刻拼链 ref_code 为空 → 出光店铺链(追不到 KOL)。建后回查即可拿到真码
     (实测 2421 个 affiliate 含 Pending Approval 的都带 ref_code,故回查必有)。
+
+    端点修正(Swagger 93 端点实证):GOAFFPRO **没有 GET /admin/affiliates/{id}**
+    (该路径只有 PATCH/DELETE)→ 取单条必须用列表端点按 id 过滤 + fields。
     返回 {ok, affiliate, ref_code, coupon, status, reason?/error?}。绝不抛、绝不烧 LLM。
     """
     aid = str(affiliate_id or "").strip()
     if not aid:
         return {"ok": False, "reason": "missing_id"}
-    result = _get(f"admin/affiliates/{aid}", {"fields": _AFFILIATE_FIELDS})
+    # GET /admin/affiliates?id={aid}&fields=... —— 必带 fields 否则返空对象。
+    result = _get("admin/affiliates", {"id": aid, "fields": _AFFILIATE_FIELDS})
     if not result.get("ok"):
         return result
-    data = result.get("data")
-    obj = _extract_affiliate(data) if isinstance(data, (dict, list)) else {}
+    rows = _extract_list(result.get("data"), "affiliates", "data", "results")
+    obj: dict[str, Any] = {}
+    for r in rows:
+        if str((r or {}).get("id") or "") == aid:
+            obj = r
+            break
+    if not obj and rows:
+        obj = rows[0]
     return {
         "ok": True,
         "affiliate": obj,
         "ref_code": _read_ref_code(obj),
         "coupon": coupon_for(obj),
         "status": str((obj or {}).get("status") or ""),
-        "raw": data,
+        "raw": result.get("data"),
     }
 
 

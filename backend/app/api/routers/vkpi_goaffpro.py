@@ -223,6 +223,9 @@ def link_kol_affiliate(
     created = goaffpro_connect.create_affiliate(
         name=identity["name"],
         email=identity.get("email") or None,
+        # 一步建成「已审批」:POST /admin/affiliates 的 status 枚举支持 approved(Swagger 实证)。
+        # 追踪本不依赖审批,但 approved = 佣金可结算 + KOL 可登面板;V-KPI 建的都是有意合作的 KOL。
+        extra={"status": "approved"},
     )
     if not created.get("ok"):
         # 透出 GOAFFPRO 原始响应便于校准(create body 字段 / 必填项)。
@@ -290,6 +293,22 @@ def get_kol_affiliate_link(
     link = _load_link(conn, kol_pool_id)
     if not link:
         return {"linked": False, "kol_pool_id": kol_pool_id}
+    # 自愈:旧映射 ref_code 为空(早期回查端点错留下的光链)→ 用 affiliate_id 回查补码 +
+    # 更新映射,这样用户不重新点「生成」也能看到真追踪链(GET 这条之前不自愈)。
+    ex_ref = str(link.get("ref_code") or "").strip()
+    ex_aid = str(link.get("affiliate_id") or "").strip()
+    if not ex_ref and ex_aid:
+        refetched = goaffpro_connect.get_affiliate(ex_aid)
+        if refetched.get("ok") and refetched.get("ref_code"):
+            ex_ref = str(refetched["ref_code"])
+            new_coupon = str(link.get("coupon") or "") or str(refetched.get("coupon") or "")
+            new_url = goaffpro_connect.referral_link(refetched.get("affiliate"), ex_ref)
+            conn.execute(
+                "UPDATE vkpi_goaffpro_kol_links SET ref_code=?, tracking_url=?, coupon=? WHERE kol_pool_id=?",
+                (ex_ref, new_url, new_coupon, kol_pool_id),
+            )
+            conn.commit()
+            link = dict(link, ref_code=ex_ref, tracking_url=new_url, coupon=new_coupon)
     return {
         "linked": True,
         "kol_pool_id": kol_pool_id,
