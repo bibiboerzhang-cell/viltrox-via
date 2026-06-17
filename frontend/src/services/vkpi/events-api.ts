@@ -29,6 +29,8 @@ export interface VkpiEvent {
   owner_id: string;
   team_ids?: string[];
   related_project_ids?: string[];
+  product_sku?: string;
+  product_name?: string;
   invited_kols_json?: Array<{
     kol_id: string;
     status: "confirmed" | "pending" | "declined" | string;
@@ -101,6 +103,8 @@ export interface VkpiEventCreatePayload {
   owner_id: string;
   team_ids?: string[];
   related_project_ids?: string[];
+  product_sku?: string;
+  product_name?: string;
   note?: string;
 }
 
@@ -122,6 +126,8 @@ export interface VkpiEventUpdatePayload {
   owner_id?: string;
   team_ids?: string[];
   related_project_ids?: string[];
+  product_sku?: string;
+  product_name?: string;
   roi?: number;
   leads?: number;
   videos?: number;
@@ -407,6 +413,8 @@ export interface UiEvent {
   ownerId: string;
   teamUserIds: string[];
   relatedProjectIds: string[];
+  productSku?: string;
+  productName?: string;
   invitedKols: unknown[];
   note: string;
   roi?: number;
@@ -451,6 +459,8 @@ export function toUiEvent(row: VkpiEvent): UiEvent {
     teamUserIds: team,
     relatedProjectIds: (Array.isArray(row.related_project_ids) ? row.related_project_ids : []).map(String),
     invitedKols: Array.isArray(row.invited_kols_json) ? row.invited_kols_json : [],
+    productSku: (row as any).product_sku || "",
+    productName: (row as any).product_name || "",
     note: row.note || "",
     roi: row.roi,
     retrospective: row.retrospective,
@@ -474,6 +484,8 @@ export function fromUiCreate(data: Record<string, any>): VkpiEventCreatePayload 
     budget_total: Number(data.budget || 0),
     team_ids: (data.teamIds || []) as string[],
     related_project_ids: (data.projectIds || []) as string[],
+    product_sku: String(data.productSku || ""),
+    product_name: String(data.productName || ""),
     note: String(data.note || ""),
     owner_id: "", // 后端忽略空串,按 require_tab 注入的登录 staff 填
   };
@@ -499,6 +511,8 @@ export function fromUiUpdate(ui: Record<string, any>): VkpiEventUpdatePayload {
   if (ui.budgetByCategory !== undefined) out.budget_json = ui.budgetByCategory;
   if (ui.teamUserIds !== undefined) out.team_ids = ui.teamUserIds;
   if (ui.relatedProjectIds !== undefined) out.related_project_ids = ui.relatedProjectIds;
+  if (ui.productSku !== undefined) out.product_sku = ui.productSku;
+  if (ui.productName !== undefined) out.product_name = ui.productName;
   if (ui.roi !== undefined) out.roi = ui.roi;
   if (ui.retrospective !== undefined) out.retrospective = ui.retrospective;
   return out;

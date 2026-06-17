@@ -133,8 +133,8 @@ def create_event(payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[
           (id, title, type_key, status, health_score, note, start_date, end_date,
            location_name, location_city, location_country, location_lat, location_lng,
            budget_total, budget_json, owner_id, team_ids, related_project_ids, invited_kols_json,
-           retrospective, created_at, updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,?::jsonb,?::jsonb,?::jsonb,?, NOW(), NOW())
+           product_sku, product_name, retrospective, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,?::jsonb,?::jsonb,?::jsonb,?,?,?, NOW(), NOW())
         """,
         (
             eid,
@@ -156,6 +156,8 @@ def create_event(payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[
             _dumps(payload.get("team_ids") or ([owner_id] if owner_id else [])),
             _dumps(payload.get("related_project_ids") or []),
             _dumps(payload.get("invited_kols_json") or []),
+            str(payload.get("product_sku") or ""),
+            str(payload.get("product_name") or ""),
             str(payload.get("retrospective") or ""),
         ),
     )
@@ -169,6 +171,7 @@ _EVENT_UPDATABLE = {
     "start_date": None, "end_date": None, "location_name": str, "location_city": str,
     "location_country": str, "location_lat": None, "location_lng": None,
     "budget_total": int, "retrospective": str, "roi": None, "leads": None, "videos": None,
+    "product_sku": str, "product_name": str,
 }
 _EVENT_JSON_FIELDS = {"budget_json", "team_ids", "related_project_ids", "invited_kols_json"}
 

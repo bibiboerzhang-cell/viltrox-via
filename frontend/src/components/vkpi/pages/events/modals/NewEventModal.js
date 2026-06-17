@@ -18,6 +18,7 @@ export default function NewEventModal({ initialData, onClose, onSubmit, teamOpti
   const [budget, setBudget] = useState(initialData?.budgetTotal || 20000);
   const [teamIds, setTeamIds] = useState(initialData?.teamUserIds || (currentUserId ? [String(currentUserId)] : (team[0] ? [String(team[0].id)] : [])));
   const [projectIds, setProjectIds] = useState(initialData?.relatedProjectIds || []);
+  const [productName, setProductName] = useState(initialData?.productName || initialData?.productSku || "");
   const [note, setNote] = useState(initialData?.note || "");
   const [autoCategories, setAutoCategories] = useState(!isEdit);
   
@@ -63,6 +64,16 @@ export default function NewEventModal({ initialData, onClose, onSubmit, teamOpti
           e("input", {
             type: "text", value: title, onChange: ev => setTitle(ev.target.value),
             placeholder: "例: CineGear LA 2026",
+            className: "w-full px-3 py-2 rounded-md bg-white/[0.02] border border-white/[0.06] text-[11.5px] text-white placeholder-slate-600 focus:outline-none focus:border-purple-500/40"
+          })
+        ),
+
+        // 主推产品(给活动 KOL 出产品页追踪链用)
+        e("div", null,
+          e("label", { className: "text-[10.5px] text-slate-400 mb-1 block" }, "主推产品（活动 KOL 追踪链落此产品页）"),
+          e("input", {
+            type: "text", value: productName, onChange: ev => setProductName(ev.target.value),
+            placeholder: "例: AF 85mm F1.8 / 留空则活动 KOL 链落首页",
             className: "w-full px-3 py-2 rounded-md bg-white/[0.02] border border-white/[0.06] text-[11.5px] text-white placeholder-slate-600 focus:outline-none focus:border-purple-500/40"
           })
         ),
@@ -158,7 +169,7 @@ export default function NewEventModal({ initialData, onClose, onSubmit, teamOpti
         e("button", { onClick: onClose, className: "px-3 py-1.5 rounded-md border border-white/[0.08] text-[11px] text-slate-300 hover:bg-white/[0.04]" }, "取消"),
         e("button", {
           disabled: !title || !startDate,
-          onClick: () => onSubmit({ title, typeKey, startDate, endDate, locName, city, country, budget, teamIds, ownerId: teamIds[0] || (currentUserId ? String(currentUserId) : (team[0]?.id || "")), projectIds, note }),
+          onClick: () => onSubmit({ title, typeKey, startDate, endDate, locName, city, country, budget, teamIds, ownerId: teamIds[0] || (currentUserId ? String(currentUserId) : (team[0]?.id || "")), projectIds, productName, note }),
           className: `px-3.5 py-1.5 rounded-md text-[11px] font-medium ${title && startDate ? "bg-purple-500 hover:bg-purple-400 text-white" : "bg-white/[0.05] text-slate-600 cursor-not-allowed"}`
         }, isEdit ? "保存修改" : "创建 Event")
       )

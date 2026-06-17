@@ -124,7 +124,7 @@ export default function KolsTab({ ev, token, invites = [], loading, error, reloa
               ),
               isLinkOpen && ik.kolId
                 ? e("div", { className: "px-2 pb-2" },
-                    e(GoaffproLinkSection, { apiToken: token, kolPoolId: ik.kolId })
+                    e(GoaffproLinkSection, { apiToken: token, kolPoolId: ik.kolId, product: (ev && (ev.productName || ev.productSku)) || undefined })
                   )
                 : null
             );
