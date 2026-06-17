@@ -587,13 +587,21 @@ def referral_link(affiliate_raw: dict[str, Any] | None, ref_code: str | None = N
     【待 key 校准】affiliate 里现成链接的字段名(referral_link/link/url)真 key 后锁定。
     """
     raw = affiliate_raw or {}
-    for k in ("referral_link", "link", "referral_url", "url", "share_link"):
-        v = raw.get(k)
-        if v not in (None, ""):
-            return str(v)
     code = str(ref_code or _read_ref_code(raw) or "").strip()
     store = _default_store_url()
+    # 2026-06-17 修:此前取第一个非空 referral_link/link/url 字段,但 GOAFFPRO 返回的
+    # url/link 常是「光店铺首页(无 ?ref=)」→ 拼出来追不到 KOL。改为:只有当现成链接
+    # 真带追踪参数(含 'ref=' 或包含该 affiliate 的 code)才用它,否则一律用 code 拼
+    # {store}/?ref={code}(GOAFFPRO 标准追踪参数)。
+    for k in ("referral_link", "referral_url", "share_link", "link", "url"):
+        v = str(raw.get(k) or "").strip()
+        if not v:
+            continue
+        low = v.lower()
+        if "ref=" in low or "/ref/" in low or (code and code.lower() in low):
+            return v
     if not code:
+        # 连追踪码都没读到(GOAFFPRO 字段名待校准)→ 退店铺首页,诚实:此时追踪不了。
         return store
     return f"{store}/?ref={code}"
 

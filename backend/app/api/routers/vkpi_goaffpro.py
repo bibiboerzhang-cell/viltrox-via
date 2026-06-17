@@ -158,6 +158,20 @@ def _load_link(conn, kol_pool_id: int) -> dict | None:
     return dict(row) if row else None
 
 
+def _effective_tracking_url(link: dict) -> str:
+    """已存映射的追踪链自愈:旧映射可能存了「光店铺首页(无 ?ref=)」——若如此,按存的
+    ref_code 用修好的 referral_link 现拼 {store}/?ref={ref_code},让历史映射也自动修正,
+    无需重建 affiliate。已是真追踪链(含 ref=)则原样返回。"""
+    stored = str(link.get("tracking_url") or "").strip()
+    low = stored.lower()
+    if stored and ("ref=" in low or "/ref/" in low):
+        return stored
+    ref_code = str(link.get("ref_code") or "").strip()
+    if ref_code:
+        return goaffpro_connect.referral_link(None, ref_code)
+    return stored
+
+
 @router.post("/kol/{kol_pool_id}/link")
 def link_kol_affiliate(
     kol_pool_id: int,
@@ -179,7 +193,7 @@ def link_kol_affiliate(
             "already_linked": True,
             "affiliate_id": existing.get("affiliate_id"),
             "ref_code": existing.get("ref_code"),
-            "tracking_url": existing.get("tracking_url"),
+            "tracking_url": _effective_tracking_url(existing),
             "coupon": existing.get("coupon"),
         }
 
@@ -251,7 +265,7 @@ def get_kol_affiliate_link(
         "kol_pool_id": kol_pool_id,
         "affiliate_id": link.get("affiliate_id"),
         "ref_code": link.get("ref_code"),
-        "tracking_url": link.get("tracking_url"),
+        "tracking_url": _effective_tracking_url(link),
         "coupon": link.get("coupon"),
         "created_at": link.get("created_at"),
     }
