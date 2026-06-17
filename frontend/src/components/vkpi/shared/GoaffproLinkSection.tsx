@@ -29,15 +29,28 @@ function CopyValueButton({ value, label = "复制" }: any) {
   );
 }
 
+// 判定 tracking_url 是否真带追踪码(含 ?ref= / &ref= / /ref/);光店铺链 = 未追踪。
+export function hasRefParam(url: any): boolean {
+  return /[?&]ref=|\/ref\//i.test(String(url || ""));
+}
+
 // D2:追踪链 + 优惠码卡片(只读输入框 + 复制 + 「发给 KOL」提示)。
-function GoaffproLinkCard({ link }: { link: GoaffproKolLink }) {
+// onRegenerate:卡片右上角「重新生成」入口(始终可点,解决「链有了就不能重生」)。
+function GoaffproLinkCard({ link, onRegenerate, regenerating }: { link: GoaffproKolLink; onRegenerate?: () => void; regenerating?: boolean }) {
   const trackingUrl = String(link.tracking_url || "");
   const coupon = String(link.coupon || "");
   return e("div", { className: "mt-2 rounded-md border border-teal-400/20 bg-teal-400/[0.04] p-2.5 space-y-2" },
     e("div", { className: "flex items-center gap-1.5 text-[9px] uppercase tracking-wider text-teal-200/80" },
       e(Link2, { size: 10 }),
       "GOAFFPRO 追踪链已就绪",
-      link.already_linked && e("span", { className: "rounded bg-teal-500/15 px-1 py-0.5 text-[8px] text-teal-200" }, "已存在")
+      link.already_linked && e("span", { className: "rounded bg-teal-500/15 px-1 py-0.5 text-[8px] text-teal-200" }, "已存在"),
+      onRegenerate && e("button", {
+        type: "button",
+        disabled: regenerating,
+        onClick: onRegenerate,
+        className: "ml-auto rounded px-1 py-0.5 text-[8px] normal-case text-slate-400 hover:text-teal-200 disabled:opacity-50",
+        title: "重新拉取/重建该 KOL 的追踪链",
+      }, regenerating ? "刷新中…" : "↻ 重新生成")
     ),
     // 追踪链(只读输入框 + 复制)
     e("div", null,
@@ -91,7 +104,8 @@ export function GoaffproLinkSection({ apiToken, kolPoolId }: any) {
     void getKolGoaffproLink(apiToken, kolPoolId)
       .then((payload) => {
         if (cancelled) return;
-        if (payload && payload.linked && payload.tracking_url) {
+        // 保留 linked 的 payload(即使是光链/需重生)——这样能显「重新生成」而非把按钮藏掉。
+        if (payload && payload.linked) {
           setLink(payload);
         } else {
           setLink(null);
@@ -128,17 +142,24 @@ export function GoaffproLinkSection({ apiToken, kolPoolId }: any) {
 
   if (!apiToken || !kolPoolId) return null;
 
+  // 光链(无 ?ref=)或后端标 needs_regenerate = 当前未真追踪 → 显「重新生成」而非藏按钮。
+  const trackingUrl = String(link?.tracking_url || "");
+  const hasRef = hasRefParam(trackingUrl);
+  const needsRegen = !!(link && (!hasRef || (link as any).needs_regenerate));
+  const showCard = !!(link && hasRef);
+  const showButton = !link || needsRegen;
+
   return e("div", { className: "px-5 py-2.5 border-b border-white/[0.06]" },
-    !link && e("button", {
+    showButton && e("button", {
       type: "button",
       disabled: loading || generating,
       onClick: handleGenerate,
       className: "flex w-full items-center justify-center gap-1.5 rounded-md border border-teal-400/25 bg-teal-400/[0.06] px-3 py-2 text-[11px] font-medium text-teal-200 transition-colors hover:bg-teal-400/[0.12] disabled:opacity-50",
     },
       e(Link2, { size: 12 }),
-      loading ? "读取追踪链…" : generating ? "生成中…" : "🔗 生成追踪链(GOAFFPRO)"
+      loading ? "读取追踪链…" : generating ? "生成中…" : (needsRegen ? "🔗 重新生成追踪链(当前未带追踪码)" : "🔗 生成追踪链(GOAFFPRO)")
     ),
-    link && e(GoaffproLinkCard, { link }),
+    showCard && e(GoaffproLinkCard, { link: link as GoaffproKolLink, onRegenerate: handleGenerate, regenerating: generating }),
     error && e("div", { className: "mt-2 rounded-md border border-rose-400/20 bg-rose-400/[0.05] p-2.5" },
       e("div", { className: "flex items-start gap-1.5" },
         e(AlertTriangle, { size: 11, className: "mt-0.5 shrink-0 text-rose-300" }),

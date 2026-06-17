@@ -172,88 +172,18 @@ def _effective_tracking_url(link: dict) -> str:
     return stored
 
 
-@router.post("/kol/{kol_pool_id}/link")
-def link_kol_affiliate(
-    kol_pool_id: int,
-    staff=Depends(require_tab("vkpi", "write")),
-):
-    """一键给 KOL 建 affiliate + 拼追踪链 + 优惠码,存映射(KOL 零注册)。
+def _tracks_now(ref_code: str, status: str) -> bool:
+    """诚实标记:ref_code 拿到=链可拼可追踪;status 仅影响佣金结算(pending 也能追踪)。"""
+    return bool(ref_code) and str(status or "").lower() in ("", "approved", "active", "1", "pending")
 
-    幂等:已存映射 → 直接返回。否则:取该 KOL 名/email → create_affiliate →
-    referral_link + coupon → 存 vkpi_goaffpro_kol_links。
-    GOAFFPRO 建 affiliate 失败 → {ok:false, error, raw}(透出 GOAFFPRO 原始响应便于校准)。
-    """
-    goaffpro_connect.ensure_goaffpro_links_schema()
-    conn = get_conn()
-    existing = _load_link(conn, kol_pool_id)
-    if existing:
-        ex_ref = str(existing.get("ref_code") or "").strip()
-        ex_aid = str(existing.get("affiliate_id") or "").strip()
-        # 自愈:旧映射 ref_code 为空(早期 bug:建后未回查)→ 用 affiliate_id 回查补上,
-        # 否则点「生成追踪链」永远返回那条光链。回查到了就回填并更新映射。
-        if not ex_ref and ex_aid:
-            refetched = goaffpro_connect.get_affiliate(ex_aid)
-            if refetched.get("ok") and refetched.get("ref_code"):
-                ex_ref = str(refetched["ref_code"])
-                new_coupon = str(existing.get("coupon") or "") or str(refetched.get("coupon") or "")
-                new_url = goaffpro_connect.referral_link(refetched.get("affiliate"), ex_ref)
-                conn.execute(
-                    "UPDATE vkpi_goaffpro_kol_links SET ref_code=?, tracking_url=?, coupon=? WHERE kol_pool_id=?",
-                    (ex_ref, new_url, new_coupon, kol_pool_id),
-                )
-                conn.commit()
-                existing = dict(existing, ref_code=ex_ref, tracking_url=new_url, coupon=new_coupon)
-        return {
-            "ok": True,
-            "linked": True,
-            "already_linked": True,
-            "affiliate_id": existing.get("affiliate_id"),
-            "ref_code": existing.get("ref_code"),
-            "tracking_url": _effective_tracking_url(existing),
-            "coupon": existing.get("coupon"),
-        }
 
-    identity = _load_kol_identity(conn, kol_pool_id)
-    if identity is None:
-        raise HTTPException(status_code=404, detail="kol_pool_id not found")
-    if not identity.get("name"):
-        # GOAFFPRO affiliate 至少需要一个 name;KOL 无名无 handle 时拒绝。
-        raise HTTPException(status_code=400, detail="kol has no display_name/handle to name the affiliate")
-
-    created = goaffpro_connect.create_affiliate(
-        name=identity["name"],
-        email=identity.get("email") or None,
-        # 一步建成「已审批」:POST /admin/affiliates 的 status 枚举支持 approved(Swagger 实证)。
-        # 追踪本不依赖审批,但 approved = 佣金可结算 + KOL 可登面板;V-KPI 建的都是有意合作的 KOL。
-        extra={"status": "approved"},
-    )
-    if not created.get("ok"):
-        # 透出 GOAFFPRO 原始响应便于校准(create body 字段 / 必填项)。
-        return {
-            "ok": False,
-            "error": created.get("error") or created.get("reason") or "create_affiliate failed",
-            "reason": created.get("reason"),
-            "status_code": created.get("status_code"),
-            "raw": created.get("raw"),
-        }
-
-    affiliate_raw = created.get("affiliate") or {}
-    ref_code = str(created.get("ref_code") or "")
-    affiliate_id = str(affiliate_raw.get("id") or ref_code or "")
-    coupon = goaffpro_connect.coupon_for(affiliate_raw)
-    status = str(affiliate_raw.get("status") or "")
-    # GOAFFPRO 新建 affiliate 的 POST 响应当下常不返回 ref_code → 回查一次拿分配好的码,
-    # 否则 referral_link 拼出来是光店铺链(追不到 KOL)。这就是之前「生成的不是追踪链」的真因。
-    if not ref_code and affiliate_id:
-        refetched = goaffpro_connect.get_affiliate(affiliate_id)
-        if refetched.get("ok"):
-            ref_code = str(refetched.get("ref_code") or ref_code or "")
-            coupon = coupon or str(refetched.get("coupon") or "")
-            status = status or str(refetched.get("status") or "")
-            if refetched.get("affiliate"):
-                affiliate_raw = refetched["affiliate"]
-    tracking_url = goaffpro_connect.referral_link(affiliate_raw, ref_code)
-
+def _store_kol_link(conn, kol_pool_id: int, res: dict) -> dict:
+    """把 resolve_affiliate 结果写入 vkpi_goaffpro_kol_links 并返回标准响应体。"""
+    affiliate_id = str(res.get("affiliate_id") or "")
+    ref_code = str(res.get("ref_code") or "")
+    coupon = str(res.get("coupon") or "")
+    status = str(res.get("status") or "")
+    tracking_url = goaffpro_connect.referral_link(res.get("affiliate"), ref_code)
     conn.execute(
         """
         INSERT INTO vkpi_goaffpro_kol_links
@@ -276,10 +206,58 @@ def link_kol_affiliate(
         "tracking_url": tracking_url,
         "coupon": coupon,
         "status": status,
-        # 诚实提示:ref_code 拿到=链可拼;但归因生效还看 GOAFFPRO 审批(status)。
-        "tracks_now": bool(ref_code) and status.lower() in ("", "approved", "active", "1"),
-        "raw": created.get("raw"),  # 透出便于真 key 校准字段名
+        "tracks_now": _tracks_now(ref_code, status),
     }
+
+
+@router.post("/kol/{kol_pool_id}/link")
+def link_kol_affiliate(
+    kol_pool_id: int,
+    staff=Depends(require_tab("vkpi", "write")),
+):
+    """一键给 KOL 出追踪链 + 优惠码(KOL 零注册),幂等可重生。
+
+    流程(2026-06-17 根因重构):已存映射且 ref_code 非空 → 直接返回。否则取 KOL 名/email →
+    resolve_affiliate(search-first:先搜已存在的,找不到再建+审批)→ ?id= 回查 ref_code →
+    存 vkpi_goaffpro_kol_links。search-first 修掉了「早期建失败留空映射 + 不能重生」的坑。
+    """
+    goaffpro_connect.ensure_goaffpro_links_schema()
+    conn = get_conn()
+    existing = _load_link(conn, kol_pool_id)
+    if existing and str(existing.get("ref_code") or "").strip():
+        # 已有真 ref_code → 幂等返回(用 _effective_tracking_url 修正历史光链 tracking_url)。
+        return {
+            "ok": True,
+            "linked": True,
+            "already_linked": True,
+            "affiliate_id": existing.get("affiliate_id"),
+            "ref_code": existing.get("ref_code"),
+            "tracking_url": _effective_tracking_url(existing),
+            "coupon": existing.get("coupon"),
+            "tracks_now": _tracks_now(str(existing.get("ref_code") or ""), ""),
+        }
+
+    identity = _load_kol_identity(conn, kol_pool_id)
+    if identity is None:
+        raise HTTPException(status_code=404, detail="kol_pool_id not found")
+    if not identity.get("name"):
+        raise HTTPException(status_code=400, detail="kol has no display_name/handle to name the affiliate")
+
+    # search-first + create-if-absent + ?id= 回查 ref_code(一站式确保 affiliate 真存在)。
+    res = goaffpro_connect.resolve_affiliate(
+        name=identity["name"], email=identity.get("email") or None, create=True
+    )
+    if not res.get("ok"):
+        return {
+            "ok": False,
+            "error": res.get("error") or res.get("reason") or "resolve_affiliate failed",
+            "reason": res.get("reason"),
+            "status_code": res.get("status_code"),
+            "raw": res.get("raw"),
+        }
+    out = _store_kol_link(conn, kol_pool_id, res)
+    out["created"] = res.get("created", False)
+    return out
 
 
 @router.get("/kol/{kol_pool_id}/link")
@@ -287,28 +265,39 @@ def get_kol_affiliate_link(
     kol_pool_id: int,
     staff=Depends(require_tab("vkpi", "read")),
 ):
-    """读 KOL↔affiliate 映射。无映射 → {linked:false}。"""
+    """读 KOL↔affiliate 映射。无映射 → {linked:false}。
+
+    自愈(只读不建号):旧映射 ref_code 为空(早期建失败/端点错留下的废映射)→ 用
+    resolve_affiliate(create=False) **搜**已存在的 affiliate 补码,搜不到则标 needs_regenerate
+    (让前端显「重新生成」按钮);GET 不创建 affiliate(建号是 POST 的副作用)。
+    """
     goaffpro_connect.ensure_goaffpro_links_schema()
     conn = get_conn()
     link = _load_link(conn, kol_pool_id)
     if not link:
         return {"linked": False, "kol_pool_id": kol_pool_id}
-    # 自愈:旧映射 ref_code 为空(早期回查端点错留下的光链)→ 用 affiliate_id 回查补码 +
-    # 更新映射,这样用户不重新点「生成」也能看到真追踪链(GET 这条之前不自愈)。
     ex_ref = str(link.get("ref_code") or "").strip()
-    ex_aid = str(link.get("affiliate_id") or "").strip()
-    if not ex_ref and ex_aid:
-        refetched = goaffpro_connect.get_affiliate(ex_aid)
-        if refetched.get("ok") and refetched.get("ref_code"):
-            ex_ref = str(refetched["ref_code"])
-            new_coupon = str(link.get("coupon") or "") or str(refetched.get("coupon") or "")
-            new_url = goaffpro_connect.referral_link(refetched.get("affiliate"), ex_ref)
+    needs_regenerate = False
+    if not ex_ref:
+        identity = _load_kol_identity(conn, kol_pool_id)
+        res = goaffpro_connect.resolve_affiliate(
+            name=(identity or {}).get("name") or "",
+            email=(identity or {}).get("email") or None,
+            create=False,  # GET 只搜不建
+        )
+        if res.get("ok") and res.get("ref_code"):
+            new_url = goaffpro_connect.referral_link(res.get("affiliate"), res["ref_code"])
+            new_coupon = str(link.get("coupon") or "") or str(res.get("coupon") or "")
             conn.execute(
-                "UPDATE vkpi_goaffpro_kol_links SET ref_code=?, tracking_url=?, coupon=? WHERE kol_pool_id=?",
-                (ex_ref, new_url, new_coupon, kol_pool_id),
+                "UPDATE vkpi_goaffpro_kol_links SET affiliate_id=?, ref_code=?, tracking_url=?, coupon=? WHERE kol_pool_id=?",
+                (str(res.get("affiliate_id") or ""), str(res["ref_code"]), new_url, new_coupon, kol_pool_id),
             )
             conn.commit()
-            link = dict(link, ref_code=ex_ref, tracking_url=new_url, coupon=new_coupon)
+            link = dict(link, affiliate_id=res.get("affiliate_id"), ref_code=res["ref_code"], tracking_url=new_url, coupon=new_coupon)
+            ex_ref = str(res["ref_code"])
+        else:
+            # 搜不到 affiliate(早期废映射)→ 让前端给「重新生成」按钮触发 POST 真建号。
+            needs_regenerate = True
     return {
         "linked": True,
         "kol_pool_id": kol_pool_id,
@@ -317,6 +306,8 @@ def get_kol_affiliate_link(
         "tracking_url": _effective_tracking_url(link),
         "coupon": link.get("coupon"),
         "created_at": link.get("created_at"),
+        "needs_regenerate": needs_regenerate,
+        "tracks_now": _tracks_now(ex_ref, ""),
     }
 
 

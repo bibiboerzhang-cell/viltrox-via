@@ -620,14 +620,116 @@ def to_cents(value: Any) -> int:
 
 
 def coupon_for(affiliate_raw: dict[str, Any] | None) -> str:
-    """读 affiliate 的优惠码 —— affiliate.coupon / coupon_code,无则 ''。
-    【待 key 校准】coupon 真实字段名以响应里 raw 对照后锁定。"""
+    """读 affiliate 的优惠码 —— 返回码字符串,无则 ''。
+
+    实测(2026-06-17 活 API):GOAFFPRO 的 coupon 是**对象** `{'code':'HUNGKAI', ...}`,
+    不是字符串;另有 `coupons` 数组。这里都兼容:dict 取 .code,list 取首个 .code。
+    """
     raw = affiliate_raw or {}
     for k in ("coupon", "coupon_code", "discount_code", "promo_code"):
         v = raw.get(k)
-        if v not in (None, ""):
+        if isinstance(v, dict):
+            c = v.get("code") or v.get("coupon") or ""
+            if c:
+                return str(c)
+        elif v not in (None, ""):
             return str(v)
+    cs = raw.get("coupons")
+    if isinstance(cs, list) and cs:
+        first = cs[0]
+        return str(first.get("code") or "") if isinstance(first, dict) else str(first or "")
     return ""
+
+
+def _norm_match(value: Any) -> str:
+    """归一化用于宽松匹配(小写 + 仅字母数字),比对 name/email 命中。"""
+    return "".join(ch for ch in str(value or "").lower() if ch.isalnum())
+
+
+def search_affiliate(in_field: str, keyword: str) -> list[dict[str, Any]]:
+    """GET /admin/affiliates/search?in=&keyword=&fields= → 返回匹配行(raw)。
+
+    in_field ∈ name/email/...;实测 search 命中 0 时返回空列表(非报错)。绝不抛。
+    """
+    kw = str(keyword or "").strip()
+    if not kw:
+        return []
+    result = _get("admin/affiliates/search", {"in": in_field, "keyword": kw, "fields": _AFFILIATE_FIELDS})
+    if not result.get("ok"):
+        return []
+    return _extract_list(result.get("data"), "affiliates", "data", "results")
+
+
+def resolve_affiliate(name: str, email: str | None = None, create: bool = False) -> dict[str, Any]:
+    """确保 KOL 有 GOAFFPRO affiliate:先按 email 搜 → 按 name 搜 → (create=True 才)建+审批,
+    然后 ?id= 回查拿 ref_code。返回 {ok, affiliate_id, ref_code, coupon, status, affiliate, created, reason?}。
+
+    为什么 search-first(2026-06-17 实测根因):早期建链可能 create 失败/没建,留下**空
+    affiliate_id 的废映射**,单靠 affiliate_id 回查补不上(实测 jianbozhang_v 在 GOAFFPRO
+    搜 0 命中却有废映射)。search 能找回已存在的,找不到再建,幂等防重复建号。绝不抛。
+    """
+    nm = str(name or "").strip()
+    em = str(email or "").strip()
+    hit: dict[str, Any] = {}
+    if em:
+        for r in search_affiliate("email", em):
+            if _norm_match(r.get("email")) == _norm_match(em):
+                hit = r
+                break
+    if not hit and nm:
+        for r in search_affiliate("name", nm):
+            if _norm_match(r.get("name")) == _norm_match(nm):
+                hit = r
+                break
+    created_flag = False
+    if not hit:
+        if not create:
+            return {"ok": False, "reason": "not_found", "affiliate_id": "", "ref_code": "", "coupon": "", "status": ""}
+        if not nm:
+            return {"ok": False, "reason": "no_name", "affiliate_id": "", "ref_code": "", "coupon": "", "status": ""}
+        cr = create_affiliate(nm, em or None, extra={"status": "approved"})
+        if not cr.get("ok"):
+            return {
+                "ok": False,
+                "reason": cr.get("reason") or "create_failed",
+                "error": cr.get("error"),
+                "status_code": cr.get("status_code"),
+                "raw": cr.get("raw"),
+                "affiliate_id": "",
+                "ref_code": "",
+                "coupon": "",
+                "status": "",
+            }
+        created_flag = True
+        hit = cr.get("affiliate") or {}
+        # 建完响应可能不含 id/ref_code → 回搜一次锁定真号。
+        if not str(hit.get("id") or "").strip():
+            for r in (search_affiliate("email", em) if em else []) + (search_affiliate("name", nm) if nm else []):
+                if (em and _norm_match(r.get("email")) == _norm_match(em)) or (nm and _norm_match(r.get("name")) == _norm_match(nm)):
+                    hit = r
+                    break
+    aid = str(hit.get("id") or "").strip()
+    ref_code = _read_ref_code(hit)
+    coupon = coupon_for(hit)
+    status = str(hit.get("status") or "")
+    # ref_code 还空但有 id → ?id= 回查(建完当下响应常不含 ref_code,实测回查必有)。
+    if aid and not ref_code:
+        got = get_affiliate(aid)
+        if got.get("ok"):
+            ref_code = got.get("ref_code") or ref_code
+            coupon = coupon or got.get("coupon") or ""
+            status = status or got.get("status") or ""
+            if got.get("affiliate"):
+                hit = got["affiliate"]
+    return {
+        "ok": bool(aid and ref_code),
+        "affiliate_id": aid,
+        "ref_code": ref_code,
+        "coupon": coupon,
+        "status": status,
+        "affiliate": hit,
+        "created": created_flag,
+    }
 
 
 def get_affiliate(affiliate_id: str | int) -> dict[str, Any]:
@@ -696,6 +798,8 @@ __all__ = [
     "list_orders",
     "create_affiliate",
     "get_affiliate",
+    "search_affiliate",
+    "resolve_affiliate",
     "referral_link",
     "coupon_for",
     "to_cents",

@@ -162,6 +162,11 @@ export interface GoaffproKolLink {
   tracking_url?: string;
   coupon?: string;
   created_at?: string;
+  status?: string;
+  tracks_now?: boolean;
+  // 早期废映射(GOAFFPRO 里搜不到该 affiliate)→ 前端显「重新生成」触发 POST 真建号。
+  needs_regenerate?: boolean;
+  created?: boolean;
   // 出错(create_affiliate 失败)时透出,便于「联系管理员校准」调试。
   error?: string;
   reason?: string;
