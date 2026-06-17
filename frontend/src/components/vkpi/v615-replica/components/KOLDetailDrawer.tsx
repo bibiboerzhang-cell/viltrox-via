@@ -3,9 +3,10 @@
 
 import React from "react";
 import { motion } from "framer-motion";
-import { AlertTriangle, Check, Link2, Shield, Sparkles, Video } from "lucide-react";
+import { AlertTriangle, Check, Link2, Share2, Shield, Sparkles, Video } from "lucide-react";
 import { KPAvatar } from "./KPAvatar";
 import { KOLVideoAnalysisPanel } from "./KOLVideoAnalysisPanel";
+import { ShareKolModal } from "../../shared/ShareKolModal";
 import { enqueueAllKolVideos, enqueueVideoAnalysis, getKolPoolAccountDossier, getKolPoolContentFit, getKolPoolDimensions11, getKolPoolLlmDeepAnalysis } from "../../../../services/vkpi/kolPool-api";
 import { getKolMemory } from "../../../../services/vkpi/kolMemory-api";
 import { proxiedImageUrl, proxiedVideoUrl } from "../../shared/mediaProxy";
@@ -735,7 +736,9 @@ function ChevronsUpDownIcon({ expanded }: any) {
   return e("span", { className: "text-[9px] text-slate-600" }, expanded ? "收起 ▲" : "展开 ▼");
 }
 
-export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", detailLoading = false, detailError = "", onClose, inMyList, onToggleMyList, onContact }: any) {
+export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", detailLoading = false, detailError = "", onClose, inMyList, onToggleMyList, onContact, staff = [] }: any) {
+  // P-GROUP-7 共享 KOL 池:把这条 My KOL(item.id = kol_pool_id)显式共享给成员(只读授予)。
+  const [shareOpen, setShareOpen] = React.useState(false);
   const [dimensions11, setDimensions11] = React.useState<any>(null);
   const [llmDeepAnalysis, setLlmDeepAnalysis] = React.useState<any>(null);
   const [preloadedVideoAnalysisBundles, setPreloadedVideoAnalysisBundles] = React.useState<any>(undefined);
@@ -982,6 +985,17 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
           className: "mt-1.5 text-[9.5px] leading-relaxed " + (allVideosState.status === "error" ? "text-rose-300" : allVideosState.status === "no_evidence" ? "text-amber-300" : "text-slate-500")
         }, allVideosState.message)
       ),
+      // ── P-GROUP-7 共享给成员:把这条 My KOL 显式共享给某成员(只读授予,落 vkpi_kol_pool_members)──
+      apiToken && item?.id && e("div", { className: "px-5 py-2.5 border-b border-white/[0.06]" },
+        e("button", {
+          type: "button",
+          onClick: () => setShareOpen(true),
+          className: "flex w-full items-center justify-center gap-1.5 rounded-md border border-purple-400/25 bg-purple-400/[0.06] px-3 py-2 text-[11px] font-medium text-purple-200 transition-colors hover:bg-purple-400/[0.12]",
+        },
+          e(Share2, { size: 12 }),
+          "共享给成员"
+        )
+      ),
       // 地基B:内容契合深析(content_fit_v1)——基于视频画面/故事 + 评论的适配判断(胜过粉丝数)。
       e(KOLDrawerContentFit, { apiToken, item, contentFit, contentFitBusy, contentFitError, onAnalyze: handleContentFitAnalyze }),
       e(KOLDrawerDevices, { item, devices }),
@@ -1009,6 +1023,13 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
     activeRepresentativeVideo && e(RepresentativeVideoPlayerModal, {
       video: activeRepresentativeVideo,
       onClose: () => setActiveRepresentativeVideo(null),
+    }),
+    shareOpen && e(ShareKolModal, {
+      kolPoolId: String(item?.id ?? ""),
+      kolName: item?.name || item?.handle || String(item?.id ?? ""),
+      staff,
+      apiToken,
+      onClose: () => setShareOpen(false),
     })
   );
 }

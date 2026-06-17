@@ -439,3 +439,25 @@ def member_shared_project_ids(staff: dict[str, Any] | None) -> list[int]:
         if pid:
             out.append(pid)
     return out
+
+
+def member_shared_kol_ids(staff: dict[str, Any] | None) -> list[int]:
+    """纯读 vkpi_kol_pool_members(迁移 159),返回「被显式共享给当前成员」的 kol_pool_id 列表。
+
+    member_shared_project_ids 的 KOL 镜像:供 My KOL 读取过滤把「共享进来的池 KOL」OR 进
+    本人可见集(只读可见,绝不改归属/收藏/认领)。只读、'?' 占位、无身份返回 []。
+    红线:只 SELECT 隔离的共享成员表(159),绝不碰 vkpi_kol_pool 列 / viltrox_fit_score / rule_v0。
+    """
+    actor = actor_staff_id(staff)
+    if not actor:
+        return []
+    rows = get_conn().execute(
+        "SELECT kol_pool_id FROM vkpi_kol_pool_members WHERE staff_id = ?",
+        (int(actor),),
+    ).fetchall()
+    out: list[int] = []
+    for r in rows:
+        kid = _int(dict(r).get("kol_pool_id"))
+        if kid:
+            out.append(kid)
+    return out

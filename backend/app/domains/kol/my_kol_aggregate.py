@@ -143,14 +143,23 @@ def _official_matrix(conn: Any, staff_id: int) -> dict[str, Any]:
 
 
 def _pool_favorites(conn: Any, staff_id: int) -> list[dict[str, Any]]:
-    """This staff's pool favorites + active project links + public contacts.
+    """This staff's pool favorites OR pool KOLs shared to them (P-GROUP-7) +
+    active project links + public contacts.
 
-    Mirrors pool_favorites.list_favorites field names; viltrox_fit_score is read
-    only. projects_json comes back as jsonb (string or list) — parsed defensively.
+    Drives off vkpi_kol_pool kp (LEFT JOIN the favorite row) so a pool KOL that
+    was *shared* to this staff via vkpi_kol_pool_members (migration 159) — but
+    never favorited by them — still surfaces in their MY KOL view. Honesty: the
+    share grant is read-only visibility; favorite_id is NULL and is_shared=true
+    for those rows (no ownership/claim is created). Mirrors
+    pool_favorites.list_favorites field names; viltrox_fit_score is read only;
+    projects_json comes back as jsonb (string or list) — parsed defensively.
     """
     rows = conn.execute(
         """
-        SELECT f.id AS favorite_id, f.kol_pool_id, f.note, f.created_at,
+        SELECT f.id AS favorite_id, kp.id AS kol_pool_id,
+               COALESCE(f.note, '') AS note,
+               COALESCE(f.created_at, sm.created_at) AS created_at,
+               (f.id IS NULL) AS is_shared,
                kp.platform, kp.handle, kp.display_name, kp.followers,
                kp.viltrox_fit_score, kp.profile_url, kp.avatar_url, kp.country,
                (
@@ -159,7 +168,7 @@ def _pool_favorites(conn: Any, staff_id: int) -> list[dict[str, Any]]:
                    'stage', a.stage, 'stage_status', a.stage_status))
                  FROM vkpi_project_kol_assignments a
                  JOIN vkpi_projects p ON p.id = a.project_id
-                 WHERE a.kol_pool_id = f.kol_pool_id
+                 WHERE a.kol_pool_id = kp.id
                    AND COALESCE(a.stage,'') NOT IN ('churned','cancelled','lost')
                    AND COALESCE(p.restricted, FALSE) = FALSE
                ) AS projects_json,
@@ -168,15 +177,18 @@ def _pool_favorites(conn: Any, staff_id: int) -> list[dict[str, Any]]:
                    'contact_type', ct.contact_type, 'contact_value', ct.contact_value,
                    'contact_source', ct.contact_source, 'consent_basis', ct.consent_basis))
                  FROM vkpi_kol_pool_contacts ct
-                 WHERE ct.kol_pool_id = f.kol_pool_id
+                 WHERE ct.kol_pool_id = kp.id
                ) AS contacts_json
-        FROM vkpi_kol_pool_favorites f
-        JOIN vkpi_kol_pool kp ON kp.id = f.kol_pool_id
-        WHERE f.staff_id = ?
+        FROM vkpi_kol_pool kp
+        LEFT JOIN vkpi_kol_pool_favorites f
+               ON f.kol_pool_id = kp.id AND f.staff_id = ?
+        LEFT JOIN vkpi_kol_pool_members sm
+               ON sm.kol_pool_id = kp.id AND sm.staff_id = ?
+        WHERE (f.id IS NOT NULL OR sm.id IS NOT NULL)
           AND kp.duplicate_of_id IS NULL
-        ORDER BY f.created_at DESC, f.id DESC
+        ORDER BY COALESCE(f.created_at, sm.created_at) DESC, kp.id DESC
         """,
-        (staff_id,),
+        (staff_id, staff_id),
     ).fetchall()
     items: list[dict[str, Any]] = []
     for raw in rows:

@@ -14,6 +14,8 @@ vi.mock("../../../../domains/channels", () => ({
 // 2) EmployeeKolLibrary 在 manager 视图下动态 import 的收藏聚合端点。
 vi.mock("../../../../services/vkpi/kol-api", () => ({
   getMyKolAggregate: vi.fn().mockResolvedValue({ pool_favorites: [] }),
+  // ContributionRollupPanel(P-KOL-5,manager 视图)挂载时会引用此导出。
+  fetchContributionRollup: vi.fn().mockResolvedValue({ rows: [], window_days: 90 }),
 }));
 
 // 3) 导出收藏名单按钮动态 import 的报表导出端点(点击才触发,桩着兜底)。

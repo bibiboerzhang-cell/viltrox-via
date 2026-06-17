@@ -82,6 +82,98 @@ def _normalize_members(value: Any) -> list[Any]:
     return out
 
 
+# ── 分组共享真生效(P-GROUP-34)─────────────────────────────────────────────
+# 把「组级 shared_projects × 组成员」展开成真 vkpi_project_members 行(标 shared_via_group_id),
+# scope.project_filter / assert_project_access 据此放行(零改 scope.py,纯复用现成 enforce)。
+# 红线:只写 vkpi_project_members,绝不碰 vkpi_projects/staff/viltrox_fit_score/rule_v0。
+#   只「加宽」分组成员对被共享项目的可见性,绝不收窄既有 own-only;restricted 项目仍只认
+#   assigned/creator/can_view_all(放行 gate 仍在 scope.py 的非 restricted 子句上)。
+def _group_origin_id(group_id: str) -> int | None:
+    """把 VARCHAR 组 id(grp_<ms>)映射成 shared_via_group_id 的 BIGINT 后缀。
+
+    取末段非数字之后的数字串(grp_1718500000000 → 1718500000000)。取不到 → None
+    (不展开,诚实降级,绝不用 0 之类伪 id 误删/误插)。
+    """
+    s = str(group_id or "")
+    digits = ""
+    for ch in reversed(s):
+        if ch.isdigit():
+            digits = ch + digits
+        else:
+            break
+    if not digits:
+        return None
+    try:
+        return int(digits)
+    except (TypeError, ValueError):
+        return None
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        iv = int(value)
+    except (TypeError, ValueError):
+        return None
+    return iv or None
+
+
+def _shared_project_ids(permissions: dict[str, Any] | None) -> list[int]:
+    """从 permissions.shared_projects 取「真项目 id」列表(去重、丢非数字)。
+
+    P-GROUP-34 后 EditGroupModal 存的是项目 id 数组;历史文本(项目名)无法映射成 id,
+    会被 _int_or_none 丢弃(诚实——旧文本不再生效,需在 UI 重选项目)。
+    """
+    perms = permissions if isinstance(permissions, dict) else {}
+    out: list[int] = []
+    for v in (perms.get("shared_projects") or []):
+        pid = _int_or_none(v)
+        if pid and pid not in out:
+            out.append(pid)
+    return out
+
+
+def _recompute_group_shared_projects(
+    conn: Any,
+    group_id: str,
+    member_ids: list[Any],
+    permissions: dict[str, Any] | None,
+) -> None:
+    """幂等重算:把本组的「组级 shared_projects × 组成员」展开成 vkpi_project_members 行。
+
+    做法(对该 group 的 origin_id):
+      1) DELETE FROM vkpi_project_members WHERE shared_via_group_id = <origin_id>
+         —— 只删本组产生的行,绝不碰 P-COLLAB-1 手动共享行(shared_via_group_id IS NULL)。
+      2) 对 (每个组成员 staff_id × 每个 shared_project_id) INSERT(shared_via_group_id=<origin_id>)。
+         vkpi_project_members 有 UNIQUE(project_id, staff_id):若该(项目,人)已存在手动共享行,
+         用 ON CONFLICT DO NOTHING 跳过(不抢手动行的 role/来源,手动优先,组共享不覆盖)。
+    改组成员/改 shared_projects/删组 都重算 —— 每次都是「先清本组再重铺」,天然幂等。
+    """
+    origin_id = _group_origin_id(group_id)
+    if origin_id is None:
+        # 取不到稳定 origin id → 不展开(避免用伪 id 误删/误插);不阻断分组本身保存。
+        return
+    conn.execute(
+        "DELETE FROM vkpi_project_members WHERE shared_via_group_id = ?",
+        (origin_id,),
+    )
+    project_ids = _shared_project_ids(permissions)
+    staff_ids = [sid for sid in (_int_or_none(m) for m in (member_ids or [])) if sid]
+    if not project_ids or not staff_ids:
+        # 无共享项目或无成员 → 上面 DELETE 已清空本组行,直接收尾(空集即「无共享」)。
+        return
+    for pid in project_ids:
+        for sid in staff_ids:
+            conn.execute(
+                """
+                INSERT INTO vkpi_project_members
+                    (project_id, staff_id, role, added_by_staff_id, shared_via_group_id)
+                VALUES (?, ?, 'viewer', NULL, ?)
+                ON CONFLICT (project_id, staff_id) DO NOTHING
+                """,
+                (pid, sid, origin_id),
+            )
+
+
 # ── Staff Groups ────────────────────────────────────────────────────────────
 def list_groups(staff: dict[str, Any] | None, *, limit: int = 200) -> dict[str, Any]:
     """列分组:全部可见(分组是协作单元,不按员工 scope 收窄)。"""
@@ -104,6 +196,7 @@ def create_group(payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[
     conn = get_conn()
     gid = str(payload.get("id") or _gen_id("grp"))
     permissions = {**_DEFAULT_PERMISSIONS, **(payload.get("permissions") or {})}
+    members = _normalize_members(payload.get("member_ids"))
     conn.execute(
         """
         INSERT INTO vkpi_staff_groups
@@ -114,11 +207,13 @@ def create_group(payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[
             gid,
             str(payload.get("name") or "未命名分组"),
             str(payload.get("description") or ""),
-            _dumps(_normalize_members(payload.get("member_ids"))),
+            _dumps(members),
             _dumps(permissions),
             _staff_id(staff),
         ),
     )
+    # 新组保存即展开「组级 shared_projects × 成员」成真访问(P-GROUP-34,幂等)。
+    _recompute_group_shared_projects(conn, gid, members, permissions)
     conn.commit()
     row = conn.execute("SELECT * FROM vkpi_staff_groups WHERE id = ?", (gid,)).fetchone()
     return {"item": _group_row(row) if row else None}
@@ -149,13 +244,22 @@ def update_group(group_id: str, payload: dict[str, Any], staff: dict[str, Any] |
     sets.append("updated_at = NOW()")
     vals.append(str(group_id))
     conn.execute(f"UPDATE vkpi_staff_groups SET {', '.join(sets)} WHERE id = ?", tuple(vals))
-    conn.commit()
     row = conn.execute("SELECT * FROM vkpi_staff_groups WHERE id = ?", (str(group_id),)).fetchone()
+    # 改组(成员/shared_projects 任一变)即按「持久化后的真状态」重算共享访问(P-GROUP-34,幂等)。
+    # 从回读行取最终 member_ids/permissions,无需分支判断 payload 改了哪个字段。
+    if row is not None:
+        parsed = _group_row(row)
+        _recompute_group_shared_projects(
+            conn, str(group_id), parsed.get("member_ids") or [], parsed.get("permissions") or {}
+        )
+    conn.commit()
     return {"item": _group_row(row) if row else None}
 
 
 def delete_group(group_id: str, staff: dict[str, Any] | None) -> dict[str, Any]:
     conn = get_conn()
+    # 删组先撤销该组展开的共享访问(只删本组 origin 的行,不碰手动共享行);幂等。
+    _recompute_group_shared_projects(conn, str(group_id), [], {})
     conn.execute("DELETE FROM vkpi_staff_groups WHERE id = ?", (str(group_id),))
     conn.commit()
     return {"ok": True, "id": str(group_id)}
@@ -167,8 +271,14 @@ def _set_members(conn: Any, group_id: str, members: list[Any]) -> dict[str, Any]
         "UPDATE vkpi_staff_groups SET member_ids = ?::jsonb, updated_at = NOW() WHERE id = ?",
         (_dumps(members), str(group_id)),
     )
-    conn.commit()
     row = conn.execute("SELECT * FROM vkpi_staff_groups WHERE id = ?", (str(group_id),)).fetchone()
+    # 增/删成员即按真状态重算共享访问(新成员获得组共享项目可见,被移除成员失去)(P-GROUP-34,幂等)。
+    if row is not None:
+        parsed = _group_row(row)
+        _recompute_group_shared_projects(
+            conn, str(group_id), parsed.get("member_ids") or [], parsed.get("permissions") or {}
+        )
+    conn.commit()
     return {"item": _group_row(row) if row else None}
 
 

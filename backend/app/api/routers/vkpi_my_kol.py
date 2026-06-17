@@ -12,7 +12,10 @@ defaulting to themselves.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from datetime import datetime, timedelta
+from typing import Any
+
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
 from app.db.connection import get_conn
@@ -20,6 +23,13 @@ from app.domains.access import scope
 from app.domains.kol import my_kol_aggregate
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-my-kol"])
+
+
+def _int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value or default)
+    except (TypeError, ValueError):
+        return default
 
 
 @router.get("/my-kol/aggregate")
@@ -46,3 +56,237 @@ def my_kol_aggregate_endpoint(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
         raise HTTPException(status_code=403, detail=str(exc) or "scope denied") from exc
+
+
+@router.get("/my-kol/contribution-rollup")
+def my_kol_contribution_rollup_endpoint(
+    window_days: int = Query(default=90, ge=1, le=365),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """P-KOL-5 管理层 KOL 贡献度聚合(每个负责人一行,各指标分列)。
+
+    只读 SELECT。按 vkpi_kol_claims.staff_id 分组,分列输出每个负责人的:
+      - staff_id / staff_name(staff→users.name)
+      - active_kol_count:在管 KOL 数(status='active' 的 claim 计数)
+      - published_count:已发布内容数(JOIN vkpi_content_posts 到该负责人在管的 KOL,
+        过去 window_days 内 published_at 命中;有真数据就出真数,无则 0)
+      - attributed_sales_usd:归因销售(SUM vkpi_sales_attributions.revenue_cents/100,
+        按 KOL 关联到该负责人在管 KOL;无归因数据则 0)
+
+    口径:active 归属由 idx_vkpi_kol_claims_one_active(WHERE status='active')保证「一个
+    KOL 一个 active 归属」,故按 claim.staff_id 聚合即等于「该负责人在管 KOL 集」,无重复计。
+
+    RBAC:require_tab('vkpi','read') 先 gate tab;管理层语义再用 scope.can_view_all
+    (owner / vkpi=admin / manager 集)二次 gate——这是「管理层 KOL 贡献度」面板,
+    普通成员看不到全员排布,返回 403。
+
+    日期 cutoff 在 Python 算后作参数传(避开 % / INTERVAL 翻译层脆弱);全程 ? 占位。
+    """
+    # 管理层 gate:复用既有 can_view_all(不引入新角色判定),非管理层拒。
+    if not scope.can_view_all(staff, domain="general"):
+        raise HTTPException(status_code=403, detail="manager scope required")
+
+    days = max(1, min(_int(window_days, 90), 365))
+    cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    conn = get_conn()
+
+    # 主聚合:一个负责人一行。
+    #   active_kol_count = 该负责人 active claim 数(=在管 KOL 数,one_active 保证不重复)。
+    #   published_count  = 这些 KOL 在 window 内的已发布内容数(LEFT JOIN,无内容则 0)。
+    # staff_name 走 staff→users.name(与 claim_listing.list_claims 同一 JOIN 口径)。
+    rows = conn.execute(
+        """
+        SELECT
+            c.staff_id AS staff_id,
+            u.name AS staff_name,
+            u.email AS staff_email,
+            COUNT(DISTINCT c.kol_id) AS active_kol_count,
+            COUNT(cp.id) AS published_count
+        FROM vkpi_kol_claims c
+        LEFT JOIN staff st ON st.id = c.staff_id
+        LEFT JOIN users u ON u.id = st.user_id
+        LEFT JOIN vkpi_content_posts cp
+            ON cp.kol_id = c.kol_id
+            AND cp.published_at IS NOT NULL
+            AND cp.published_at >= ?
+        WHERE c.status = 'active'
+        GROUP BY c.staff_id, u.name, u.email
+        ORDER BY active_kol_count DESC, c.staff_id ASC
+        """,
+        (cutoff,),
+    ).fetchall()
+
+    # 归因销售单独一支(避免与 content_posts 同表 JOIN 造成笛卡尔放大计数)。
+    #   按「该负责人在管 active KOL」关联 vkpi_sales_attributions.kol_id,SUM revenue_cents。
+    sales_rows = conn.execute(
+        """
+        SELECT
+            c.staff_id AS staff_id,
+            COALESCE(SUM(sa.revenue_cents), 0) AS revenue_cents,
+            COUNT(sa.id) AS attribution_count
+        FROM vkpi_kol_claims c
+        JOIN vkpi_sales_attributions sa ON sa.kol_id = c.kol_id
+        WHERE c.status = 'active'
+        GROUP BY c.staff_id
+        """,
+    ).fetchall()
+    sales_by_staff = {
+        _int(dict(r).get("staff_id")): dict(r) for r in sales_rows
+    }
+
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        sid = _int(item.get("staff_id"))
+        sale = sales_by_staff.get(sid)
+        revenue_cents = _int(sale.get("revenue_cents")) if sale else 0
+        attribution_count = _int(sale.get("attribution_count")) if sale else 0
+        items.append(
+            {
+                "staff_id": sid or None,
+                "staff_name": item.get("staff_name") or None,
+                "staff_email": item.get("staff_email") or None,
+                "active_kol_count": _int(item.get("active_kol_count")),
+                # 已发布数:有 content_posts 关联就给真数;否则 0(诚实,无 null 模糊)。
+                "published_count": _int(item.get("published_count")),
+                # 归因销售:有 attribution 行就出 USD;完全无归因数据时 amount=0 且
+                # has_attribution=False,前端据此显示「— / 待接入」。
+                "attributed_sales_usd": round(revenue_cents / 100.0, 2),
+                "attribution_count": attribution_count,
+                "has_attribution": attribution_count > 0,
+            }
+        )
+
+    return {
+        "items": items,
+        "window_days": days,
+        "scope": scope.scope_context(staff),
+        # 数据可得性标注:让前端诚实区分「真有 0」与「该指标尚未接入数据源」。
+        "data_notes": {
+            "published_count": "来自 vkpi_content_posts.published_at(window 内);无内容记录则为 0",
+            "attributed_sales_usd": "来自 vkpi_sales_attributions(按 KOL 关联);无归因数据时为 0 且 has_attribution=false",
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# P-GROUP-7 共享 KOL 池写端点(ADDITIVE,2026-06-16)。
+# 表 vkpi_kol_pool_members(迁移 159):把某 kol_pool_id 显式共享给某 staff_id(只读授予)。
+# scope.member_shared_kol_ids + my_kol_aggregate._pool_favorites 已据本表把「共享进来的池
+# KOL」自动并入接收方 MY KOL 视图(只读,is_shared=true)。这里只补「写/撤销/列出已共享给谁」。
+# 红线:只触 vkpi_kol_pool_members 这张隔离表;绝不读写 viltrox_fit_score / rule_v0 / 归属。
+# 全程 '?' 占位(方言层翻译);commit + 错误处理对齐 project_members。
+# ---------------------------------------------------------------------------
+
+
+@router.post("/my-kol/{kol_pool_id}/share")
+def my_kol_share_endpoint(
+    kol_pool_id: int,
+    body: dict = Body(default={}),
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """把某 kol_pool_id 共享给 body.staff_id(只读授予)。幂等:UNIQUE 冲突即 DO NOTHING。
+
+    shared_by 取当前操作者 staff_id(scope.actor_staff_id)。
+    """
+    pid = _int(kol_pool_id)
+    target_staff_id = _int(body.get("staff_id"))
+    if pid <= 0:
+        raise HTTPException(status_code=400, detail="kol_pool_id required")
+    if target_staff_id <= 0:
+        raise HTTPException(status_code=400, detail="staff_id required")
+
+    shared_by = scope.actor_staff_id(staff) or None
+
+    conn = get_conn()
+    conn.execute(
+        """
+        INSERT INTO vkpi_kol_pool_members (kol_pool_id, staff_id, shared_by)
+        VALUES (?, ?, ?)
+        ON CONFLICT (kol_pool_id, staff_id) DO NOTHING
+        """,
+        (pid, target_staff_id, shared_by),
+    )
+    conn.commit()
+    return {
+        "status": "shared",
+        "kol_pool_id": pid,
+        "staff_id": target_staff_id,
+        "shared_by": shared_by,
+    }
+
+
+@router.delete("/my-kol/{kol_pool_id}/share/{staff_id}")
+def my_kol_unshare_endpoint(
+    kol_pool_id: int,
+    staff_id: int,
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """撤销共享:删 (kol_pool_id, staff_id) 一行。仅触本表,不改归属/收藏/认领。"""
+    pid = _int(kol_pool_id)
+    target_staff_id = _int(staff_id)
+    if pid <= 0:
+        raise HTTPException(status_code=400, detail="kol_pool_id required")
+    if target_staff_id <= 0:
+        raise HTTPException(status_code=400, detail="staff_id required")
+
+    conn = get_conn()
+    conn.execute(
+        "DELETE FROM vkpi_kol_pool_members WHERE kol_pool_id = ? AND staff_id = ?",
+        (pid, target_staff_id),
+    )
+    conn.commit()
+    return {"status": "removed", "kol_pool_id": pid, "staff_id": target_staff_id}
+
+
+@router.get("/my-kol/{kol_pool_id}/share/members")
+def my_kol_share_members_endpoint(
+    kol_pool_id: int,
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """列「该 kol_pool_id 已共享给的成员」(JOIN staff→users 取展示名/邮箱),供弹窗回显。
+
+    纯 SELECT,无副作用。staff_name/email 走 staff→users(与 list_members / claim_listing 同口径)。
+    """
+    pid = _int(kol_pool_id)
+    if pid <= 0:
+        raise HTTPException(status_code=400, detail="kol_pool_id required")
+
+    conn = get_conn()
+    rows = conn.execute(
+        """
+        SELECT m.id,
+               m.kol_pool_id,
+               m.staff_id,
+               m.shared_by,
+               m.created_at,
+               COALESCE(u.name, u.email, 'Staff') AS staff_name,
+               COALESCE(u.email, '') AS email
+        FROM vkpi_kol_pool_members m
+        LEFT JOIN staff st ON st.id = m.staff_id
+        LEFT JOIN users u ON u.id = st.user_id
+        WHERE m.kol_pool_id = ?
+        ORDER BY m.created_at ASC, m.id ASC
+        """,
+        (pid,),
+    ).fetchall()
+
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        created_at = item.get("created_at")
+        if created_at is not None and not isinstance(created_at, str):
+            created_at = str(created_at)
+        items.append(
+            {
+                "id": _int(item.get("id")) or None,
+                "kol_pool_id": _int(item.get("kol_pool_id")) or None,
+                "staff_id": _int(item.get("staff_id")) or None,
+                "shared_by": _int(item.get("shared_by")) or None,
+                "created_at": created_at,
+                "name": item.get("staff_name") or None,
+                "email": item.get("email") or None,
+            }
+        )
+
+    return {"kol_pool_id": pid, "count": len(items), "items": items}

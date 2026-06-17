@@ -6,6 +6,7 @@ import { useOfficialChannelMatrix } from '../channels/useOfficialChannelMatrix';
 import type { VkpiDashboardData, VkpiKolOption, VkpiPageKey, VkpiProjectRow } from '../../vkpiTypes';
 import { platformDisplay, safeNumber } from '../../shared/vkpiDataUtils';
 import { proxiedImageUrl } from '../../shared/mediaProxy';
+import { ContributionRollupPanel } from './ContributionRollupPanel';
 import { OfficialContentLayer } from './OfficialContentLayer';
 import { EmployeeKolContentLayer } from './EmployeeKolContentLayer';
 import { PoolEvidenceContent } from './PoolEvidenceContent';
@@ -1021,6 +1022,7 @@ export function MyKolPage({ apiToken, viewMode, data, userName, onRefreshData }:
           onClearStaffFilter={() => setSelectedStaff(null)}
         />
       ) : null}
+      {viewMode === 'manager' ? <ContributionRollupPanel apiToken={apiToken || ''} viewMode={viewMode} /> : null}
     </main>
   );
 }

@@ -3,6 +3,25 @@ import type { VkpiKolLookupResult, VkpiKolProfile } from "../../components/vkpi/
 
 type Row = Record<string, unknown>;
 
+// P-KOL-5 管理层 KOL 贡献度聚合(每个负责人一行,各指标分列)。
+export interface VkpiContributionRollupItem {
+  staff_id: number | null;
+  staff_name: string | null;
+  staff_email: string | null;
+  active_kol_count: number;
+  published_count: number;
+  attributed_sales_usd: number;
+  attribution_count: number;
+  has_attribution: boolean;
+}
+
+export interface VkpiContributionRollupResponse {
+  items?: VkpiContributionRollupItem[];
+  window_days?: number;
+  scope?: Row;
+  data_notes?: Record<string, string>;
+}
+
 export interface VkpiKolAssessmentResponse {
   kol_id?: number;
   score?: number;
@@ -104,6 +123,66 @@ export async function getMyKolAggregate(
 
 export async function getKolProfile(token: string, kolId: string) {
   return apiFetch<VkpiKolProfile>(`/api/marketing/kols/${encodeURIComponent(kolId)}/profile`, {}, token);
+}
+
+// P-KOL-5: 管理层视角 KOL 贡献度聚合(只读)。每个负责人一行,各指标分列。
+// 后端用 scope.can_view_all 二次 gate;非管理层返回 403。
+export async function fetchContributionRollup(
+  token: string,
+  params: { windowDays?: number } = {},
+) {
+  const query = new URLSearchParams();
+  if (params.windowDays != null) query.set("window_days", String(params.windowDays));
+  const suffix = query.toString();
+  return apiFetch<VkpiContributionRollupResponse>(
+    `/api/admin/vkpi/my-kol/contribution-rollup${suffix ? `?${suffix}` : ""}`,
+    {},
+    token,
+  );
+}
+
+// P-GROUP-7 共享 KOL 池:把某 kol_pool_id 显式共享给某成员(只读授予)。
+//   POST   /api/admin/vkpi/my-kol/{kol_pool_id}/share          body {staff_id}
+//   DELETE /api/admin/vkpi/my-kol/{kol_pool_id}/share/{staff_id}
+//   GET    /api/admin/vkpi/my-kol/{kol_pool_id}/share/members
+export interface VkpiKolShareMember {
+  id?: number | null;
+  kol_pool_id?: number | null;
+  staff_id?: number | null;
+  shared_by?: number | null;
+  created_at?: string | null;
+  name?: string | null;
+  email?: string | null;
+}
+
+export interface VkpiKolShareMembersResponse {
+  kol_pool_id?: number;
+  count?: number;
+  items?: VkpiKolShareMember[];
+}
+
+export async function shareKolToStaff(token: string, kolPoolId: string | number, staffId: string | number) {
+  return apiFetch<{ status?: string; kol_pool_id?: number; staff_id?: number; shared_by?: number | null }>(
+    `/api/admin/vkpi/my-kol/${encodeURIComponent(String(kolPoolId))}/share`,
+    { method: "POST", body: jsonBody({ staff_id: staffId }) },
+    token,
+  );
+}
+
+export async function unshareKolFromStaff(token: string, kolPoolId: string | number, staffId: string | number) {
+  return apiFetch<{ status?: string; kol_pool_id?: number; staff_id?: number }>(
+    `/api/admin/vkpi/my-kol/${encodeURIComponent(String(kolPoolId))}/share/${encodeURIComponent(String(staffId))}`,
+    { method: "DELETE" },
+    token,
+  );
+}
+
+export async function listKolShareMembers(token: string, kolPoolId: string | number) {
+  return apiFetch<VkpiKolShareMembersResponse>(
+    `/api/admin/vkpi/my-kol/${encodeURIComponent(String(kolPoolId))}/share/members?_ts=${Date.now()}`,
+    { cache: "no-store" },
+    token,
+  );
 }
 
 export async function getKolAssessment(token: string, kolId: string) {

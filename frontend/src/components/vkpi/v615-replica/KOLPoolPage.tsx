@@ -42,7 +42,7 @@ function kolIdFrom(item: any) {
   return Number.isFinite(id) && id > 0 ? id : null;
 }
 
-export function KOLPoolPage({ items: sourceItems = [], loading = false, error = "", apiToken = "" }: any = {}) {
+export function KOLPoolPage({ items: sourceItems = [], loading = false, error = "", apiToken = "", staff = [] }: any = {}) {
   const [search, setSearch] = useState("");
   const [country, setCountry] = useState("");
   const [audienceType, setAudienceType] = useState("");
@@ -501,6 +501,7 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
         inMyList: myList.has(selectedItem.id),
         onToggleMyList: toggleMyList,
         onContact: (it: any) => setContactItem(it),
+        staff,
       }),
       contactItem && e(ContactModal, {
         key: `kol-contact-${contactItem.id || contactItem.handle || "selected"}`,

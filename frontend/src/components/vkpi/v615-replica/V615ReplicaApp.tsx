@@ -1097,6 +1097,7 @@ export function V615ReplicaApp(props: any = {}) {
               loading: kolPoolLoading,
               error: kolPoolError,
               apiToken,
+              staff: uiStaff,
             }),
 
             activeNav === "my-kol" && e(React.Suspense, {
