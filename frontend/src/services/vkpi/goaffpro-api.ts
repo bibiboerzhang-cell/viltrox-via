@@ -214,9 +214,14 @@ export async function getKolGoaffproLink(
 export interface GoaffproSummaryRow {
   kol_pool_id?: number;
   kol_name?: string;
+  kol_handle?: string;
+  kol_avatar?: string;
+  kol_platform?: string;
   affiliate_id?: string;
   ref_code?: string;
   coupon?: string;
+  commission_rate?: string;
+  status?: string;
   tracking_url?: string;
   source_label?: string;
   source_type?: string;
@@ -226,6 +231,7 @@ export interface GoaffproSummaryRow {
   gmv_usd?: number;
   commission_usd?: number;
   currency?: string;
+  partial?: boolean;
 }
 
 export interface GoaffproSummaryTotals {

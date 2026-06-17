@@ -591,14 +591,15 @@ def goaffpro_summary(
         if not aid:
             continue
         name_row = conn.execute(
-            "SELECT display_name, handle FROM vkpi_kol_pool WHERE id = ?",
+            "SELECT display_name, handle, avatar_url, platform FROM vkpi_kol_pool WHERE id = ?",
             (d.get("kol_pool_id"),),
         ).fetchone()
-        nm = ""
-        if name_row:
-            nd = dict(name_row)
-            nm = str(nd.get("display_name") or "").strip() or str(nd.get("handle") or "").strip()
+        nd = dict(name_row) if name_row else {}
+        handle = str(nd.get("handle") or "").strip()
+        nm = str(nd.get("display_name") or "").strip() or handle
         attr = goaffpro_connect.affiliate_attribution(aid)
+        # 佣金比例 + 审批状态:get_affiliate 取(N+1,待落库缓存优化)。
+        aff = goaffpro_connect.get_affiliate(aid)
         is_partial = bool(attr.get("partial"))
         if is_partial:
             partial_count += 1
@@ -608,9 +609,14 @@ def goaffpro_summary(
             {
                 "kol_pool_id": d.get("kol_pool_id"),
                 "kol_name": nm or f"KOL#{d.get('kol_pool_id')}",
+                "kol_handle": handle,
+                "kol_avatar": str(nd.get("avatar_url") or ""),
+                "kol_platform": str(nd.get("platform") or ""),
                 "affiliate_id": aid,
                 "ref_code": d.get("ref_code"),
                 "coupon": d.get("coupon"),
+                "commission_rate": str(aff.get("commission_rate") or "") if aff.get("ok") else "",
+                "status": str(aff.get("status") or "") if aff.get("ok") else "",
                 "tracking_url": d.get("tracking_url"),
                 "source_label": "GOAFFPRO",
                 "source_type": "goaffpro",

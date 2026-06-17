@@ -341,12 +341,21 @@ export function ProjectDetailView({
   const baseStats = useMemo(() => buildProjectStatsSummary(rows, detail), [rows, detail]);
   // GOAFFPRO 已是归因真源:拉本项目下已建链 KOL 的实时点击/订单/GMV,覆盖卡片(短链点击/归因销售/ROI)。
   const [goaffTotals, setGoaffTotals] = useState<GoaffproSummaryTotals | null>(null);
+  const [goaffByKol, setGoaffByKol] = useState<Record<string, { clicks: number; orders: number; gmv: number }>>({});
   useEffect(() => {
-    if (!apiToken || !project.id) { setGoaffTotals(null); return; }
+    if (!apiToken || !project.id) { setGoaffTotals(null); setGoaffByKol({}); return; }
     let cancelled = false;
     getGoaffproSummary(apiToken, { projectId: project.id })
-      .then((res) => { if (!cancelled) setGoaffTotals(res.totals ?? null); })
-      .catch(() => { if (!cancelled) setGoaffTotals(null); });
+      .then((res) => {
+        if (cancelled) return;
+        setGoaffTotals(res.totals ?? null);
+        const map: Record<string, { clicks: number; orders: number; gmv: number }> = {};
+        (res.items || []).forEach((it) => {
+          if (it.kol_pool_id != null) map[String(it.kol_pool_id)] = { clicks: it.clicks ?? 0, orders: it.orders ?? 0, gmv: it.gmv_usd ?? 0 };
+        });
+        setGoaffByKol(map);
+      })
+      .catch(() => { if (!cancelled) { setGoaffTotals(null); setGoaffByKol({}); } });
     return () => { cancelled = true; };
   }, [apiToken, project.id]);
   const stats = useMemo(() => {
@@ -1038,6 +1047,7 @@ export function ProjectDetailView({
       {activeTab === '参与 KOL' ? (
         <ProjectParticipationTab
           apiToken={apiToken}
+          goaffByKol={goaffByKol}
           expandedRows={expandedRows}
           evidenceCountForRow={evidenceCountForRow}
           filteredRows={filteredRows}

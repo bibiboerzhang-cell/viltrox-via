@@ -16,6 +16,7 @@ import {
 
 interface ProjectParticipationTabProps {
   apiToken?: string;
+  goaffByKol?: Record<string, { clicks: number; orders: number; gmv: number }>;
   expandedRows: Set<string>;
   evidenceCountForRow: (row: VkpiProjectRow) => number;
   filteredRows: VkpiProjectRow[];
@@ -74,6 +75,7 @@ function kolProfileUrl(row: VkpiProjectRow) {
 
 export function ProjectParticipationTab({
   apiToken,
+  goaffByKol = {},
   expandedRows,
   evidenceCountForRow,
   filteredRows,
@@ -182,7 +184,7 @@ export function ProjectParticipationTab({
                     <td>{row.stageDurationLabel || '-'}</td>
                     <td>{rowEvidenceCount ? `${formatNumber(rowEvidenceCount)} 条` : '0 条'}</td>
                     <td><b>{formatNumber(row.views)}</b></td>
-                    <td><b>{formatMoney(row.gmv)}</b></td>
+                    <td><b>{formatMoney(row.kolPoolId && goaffByKol[String(row.kolPoolId)] ? goaffByKol[String(row.kolPoolId)].gmv : row.gmv)}</b></td>
                     <td>
                       <span className="vkpi-campaign-evidence-chip">证据 {rowEvidenceCount}</span>
                       {trackingForRow(row).delivered ? <span className="vkpi-campaign-evidence-chip is-warn">到货</span> : null}

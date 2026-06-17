@@ -255,6 +255,7 @@ export function ShopifyHubPage({ apiToken = "" }: { apiToken?: string } = {}) {
 
   // --- Region ③ Track state ---
   const [rows, setRows] = useState<PromoAttributionRow[]>([]);
+  const [trackTotals, setTrackTotals] = useState<any>(null);
   const [trackLoading, setTrackLoading] = useState(false);
   const [trackErr, setTrackErr] = useState("");
 
@@ -322,7 +323,8 @@ export function ShopifyHubPage({ apiToken = "" }: { apiToken?: string } = {}) {
       // GOAFFPRO 归因汇总(取代已退役的自建 promo attribution 端点 → 修「Not Found」)。
       const res = await getGoaffproSummary(apiToken, { limit: 50 });
       setRows(res.items as unknown as PromoAttributionRow[]);
-      if ((!res.items || res.items.length === 0) && res.note) setTrackErr(res.note);
+      setTrackTotals(res.totals || null);
+      if (res.note) setTrackErr(res.note);
     } catch (err) {
       // Honest: do NOT fabricate rows. Keep the table empty + show the reason.
       setRows([]);
@@ -1131,64 +1133,89 @@ export function ShopifyHubPage({ apiToken = "" }: { apiToken?: string } = {}) {
           )
         : e(
             "div",
-            { className: "overflow-x-auto" },
+            null,
+            // 汇总条:总点击 / 总订单 / 总 GMV / 应付佣金(GOAFFPRO 实时合计)
+            trackTotals
+              ? e(
+                  "div",
+                  { className: "mb-3 grid grid-cols-4 gap-2" },
+                  [
+                    ["总点击", String(trackTotals.clicks ?? 0)],
+                    ["总订单", String(trackTotals.orders ?? 0)],
+                    ["总 GMV", fmtMoney(trackTotals.gmv_usd)],
+                    ["应付佣金", fmtMoney(trackTotals.commission_usd)],
+                  ].map(([label, val], i) =>
+                    e(
+                      "div",
+                      { key: i, className: "rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2" },
+                      e("div", { className: "text-[9px] text-slate-500" }, label),
+                      e("div", { className: "text-[15px] font-semibold text-white tabular-nums mt-0.5" }, val),
+                    ),
+                  ),
+                )
+              : null,
             e(
-              "table",
-              { className: "w-full text-[11px]" },
+              "div",
+              { className: "overflow-x-auto" },
               e(
-                "thead",
-                null,
+                "table",
+                { className: "w-full text-[11px]" },
                 e(
-                  "tr",
-                  { className: "text-left text-slate-500 border-b border-white/[0.06]" },
-                  e("th", { className: "py-2 pr-3 font-medium" }, "KOL"),
-                  e("th", { className: "py-2 pr-3 font-medium" }, "来源"),
-                  e("th", { className: "py-2 pr-3 font-medium" }, "产品"),
-                  e("th", { className: "py-2 pr-3 font-medium text-right" }, "点击"),
-                  e("th", { className: "py-2 pr-3 font-medium text-right" }, "订单"),
-                  e("th", { className: "py-2 pr-3 font-medium text-right" }, "GMV"),
-                  e("th", { className: "py-2 font-medium text-right" }, "佣金"),
-                ),
-              ),
-              e(
-                "tbody",
-                null,
-                rows.map((r, i) => {
-                  const sourceLabel =
-                    pickStr(r as Row, ["source_label"]) ||
-                    pickStr(r as Row, ["source_type"], "—");
-                  return e(
+                  "thead",
+                  null,
+                  e(
                     "tr",
-                    { key: i, className: "border-b border-white/[0.04] text-slate-300" },
-                    e("td", { className: "py-2 pr-3" }, pickStr(r as Row, ["kol_name"], "—")),
-                    e("td", { className: "py-2 pr-3" }, sourceLabel),
-                    e(
-                      "td",
-                      { className: "py-2 pr-3 font-mono text-slate-400" },
-                      pickStr(r as Row, ["product_sku"], "—"),
-                    ),
-                    e(
-                      "td",
-                      { className: "py-2 pr-3 text-right" },
-                      String(pickNum(r as Row, ["clicks"]) ?? 0),
-                    ),
-                    e(
-                      "td",
-                      { className: "py-2 pr-3 text-right" },
-                      String(pickNum(r as Row, ["orders"]) ?? 0),
-                    ),
-                    e(
-                      "td",
-                      { className: "py-2 pr-3 text-right" },
-                      fmtMoney(pickNum(r as Row, ["gmv_usd"])),
-                    ),
-                    e(
-                      "td",
-                      { className: "py-2 text-right" },
-                      fmtMoney(pickNum(r as Row, ["commission_usd"])),
-                    ),
-                  );
-                }),
+                    { className: "text-left text-slate-500 border-b border-white/[0.06]" },
+                    e("th", { className: "py-2 pr-3 font-medium" }, "KOL"),
+                    e("th", { className: "py-2 pr-3 font-medium" }, "ref 码"),
+                    e("th", { className: "py-2 pr-3 font-medium" }, "优惠码"),
+                    e("th", { className: "py-2 pr-3 font-medium" }, "佣金比例"),
+                    e("th", { className: "py-2 pr-3 font-medium text-right" }, "点击"),
+                    e("th", { className: "py-2 pr-3 font-medium text-right" }, "订单"),
+                    e("th", { className: "py-2 pr-3 font-medium text-right" }, "GMV"),
+                    e("th", { className: "py-2 font-medium text-right" }, "佣金"),
+                  ),
+                ),
+                e(
+                  "tbody",
+                  null,
+                  rows.map((r, i) => {
+                    const row = r as Row;
+                    const name = pickStr(row, ["kol_name"], "—");
+                    const handle = pickStr(row, ["kol_handle"], "");
+                    const platform = pickStr(row, ["kol_platform"], "");
+                    const avatar = pickStr(row, ["kol_avatar"], "");
+                    const isPartial = !!(row as any).partial;
+                    return e(
+                      "tr",
+                      { key: i, className: "border-b border-white/[0.04] text-slate-300" },
+                      e(
+                        "td",
+                        { className: "py-2 pr-3" },
+                        e(
+                          "div",
+                          { className: "flex items-center gap-2" },
+                          avatar
+                            ? e("img", { src: avatar, className: "w-6 h-6 rounded-full object-cover shrink-0", referrerPolicy: "no-referrer" })
+                            : e("div", { className: "w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0", style: { background: "linear-gradient(135deg,#a855f7,#06b6d4)" } }, (name || "K").charAt(0)),
+                          e(
+                            "div",
+                            { className: "min-w-0" },
+                            e("div", { className: "text-slate-200 truncate max-w-[150px]" }, name, isPartial ? e("span", { title: "该 KOL 数据查询失败,数值可能偏低", className: "ml-1 text-amber-300" }, "⚠") : null),
+                            (handle || platform) && e("div", { className: "text-[9px] text-slate-500 truncate max-w-[150px]" }, [platform, handle].filter(Boolean).join(" · ")),
+                          ),
+                        ),
+                      ),
+                      e("td", { className: "py-2 pr-3 font-mono text-slate-400" }, pickStr(row, ["ref_code"], "—")),
+                      e("td", { className: "py-2 pr-3 font-mono text-emerald-300" }, pickStr(row, ["coupon"], "—")),
+                      e("td", { className: "py-2 pr-3 text-amber-200" }, pickStr(row, ["commission_rate"], "—")),
+                      e("td", { className: "py-2 pr-3 text-right tabular-nums" }, String(pickNum(row, ["clicks"]) ?? 0)),
+                      e("td", { className: "py-2 pr-3 text-right tabular-nums" }, String(pickNum(row, ["orders"]) ?? 0)),
+                      e("td", { className: "py-2 pr-3 text-right tabular-nums" }, fmtMoney(pickNum(row, ["gmv_usd"]))),
+                      e("td", { className: "py-2 text-right tabular-nums" }, fmtMoney(pickNum(row, ["commission_usd"]))),
+                    );
+                  }),
+                ),
               ),
             ),
           ),
