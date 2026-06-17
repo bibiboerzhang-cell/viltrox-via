@@ -514,18 +514,33 @@ def goaffpro_attribution(
     raise HTTPException(status_code=400, detail="kol_pool_id or project_id is required")
 
 
+def _empty_totals() -> dict:
+    return {"kol_count": 0, "clicks": 0, "orders": 0, "gmv_usd": 0.0, "commission_usd": 0.0}
+
+
 @router.get("/summary")
 def goaffpro_summary(
     limit: int = Query(default=100, ge=1, le=500),
+    project_id: int | None = Query(default=None, ge=1),
     staff=Depends(require_tab("vkpi", "read")),
 ):
-    """全局归因汇总表:每个已建链的 KOL 一行(点击/订单/GMV/佣金),实时来自 GOAFFPRO。
+    """归因汇总表:每个已建链的 KOL 一行(点击/订单/GMV/佣金),实时来自 GOAFFPRO。
 
-    供 Shopify Hub「数据追踪」表 + 项目卡复用。诚实:未建链的 KOL 不出行;无数据返回空 items。
-    行字段对齐前端表:kol_name / source_label / clicks / orders / gmv_usd / commission_usd / ref_code。
+    供 Shopify Hub「数据追踪」表 + 项目卡复用。?project_id= → 只汇总该项目下的 KOL。
+    返回 {items, totals(汇总 clicks/orders/gmv_usd/commission_usd), count, note}。诚实空表带 note。
     """
     goaffpro_connect.ensure_goaffpro_links_schema()
     conn = get_conn()
+    # project_id → 限定该项目下的 kol_pool_id(经 vkpi_project_kol_assignments)。
+    project_kol_ids: set[int] | None = None
+    if project_id is not None:
+        rows = conn.execute(
+            "SELECT DISTINCT kol_pool_id FROM vkpi_project_kol_assignments WHERE project_id = ?",
+            (project_id,),
+        ).fetchall()
+        project_kol_ids = {int(dict(r)["kol_pool_id"]) for r in rows if dict(r).get("kol_pool_id") is not None}
+        if not project_kol_ids:
+            return {"ok": True, "items": [], "count": 0, "totals": _empty_totals(), "note": "该项目暂无派单 KOL"}
     links = conn.execute(
         """
         SELECT kol_pool_id, affiliate_id, ref_code, coupon, tracking_url
@@ -543,6 +558,12 @@ def goaffpro_summary(
         aid = str(d.get("affiliate_id") or "")
         if not aid:
             continue
+        if project_kol_ids is not None:
+            try:
+                if int(d.get("kol_pool_id")) not in project_kol_ids:
+                    continue
+            except (TypeError, ValueError):
+                continue
         name_row = conn.execute(
             "SELECT display_name, handle FROM vkpi_kol_pool WHERE id = ?",
             (d.get("kol_pool_id"),),
@@ -572,10 +593,18 @@ def goaffpro_summary(
                 "currency": attr.get("currency") or "",
             }
         )
+    totals = {
+        "kol_count": len(items),
+        "clicks": sum(int(it.get("clicks") or 0) for it in items),
+        "orders": sum(int(it.get("orders") or 0) for it in items),
+        "gmv_usd": round(sum(float(it.get("gmv_usd") or 0) for it in items), 2),
+        "commission_usd": round(sum(float(it.get("commission_usd") or 0) for it in items), 2),
+    }
     return {
         "ok": True,
         "items": items,
         "count": len(items),
+        "totals": totals,
         "note": None if items else "尚无已建链的 KOL;在 KOL 详情或项目里生成追踪链后出现在此。",
     }
 

@@ -10,6 +10,7 @@ import { LiveLogisticsBanner } from './LiveLogisticsBanner';
 import { ShareModal } from '../../shared/ShareModal';
 import { ProjectDetailHeaderCard, ProjectFunnel, ProjectKpiGrid, ProjectTabsBar, ProjectTaskDock } from './ProjectDetailSections';
 import { ProjectParticipationTab } from './ProjectParticipationTab';
+import { getGoaffproSummary, type GoaffproSummaryTotals } from '../../../../services/vkpi/goaffpro-api';
 import {
   confirmProjectContract,
   deleteProjectContract,
@@ -337,7 +338,29 @@ export function ProjectDetailView({
       stageDurationLabel: '刚刚',
     };
   }), [baseRows, stageOverrides]);
-  const stats = useMemo(() => buildProjectStatsSummary(rows, detail), [rows, detail]);
+  const baseStats = useMemo(() => buildProjectStatsSummary(rows, detail), [rows, detail]);
+  // GOAFFPRO 已是归因真源:拉本项目下已建链 KOL 的实时点击/订单/GMV,覆盖卡片(短链点击/归因销售/ROI)。
+  const [goaffTotals, setGoaffTotals] = useState<GoaffproSummaryTotals | null>(null);
+  useEffect(() => {
+    if (!apiToken || !project.id) { setGoaffTotals(null); return; }
+    let cancelled = false;
+    getGoaffproSummary(apiToken, { projectId: project.id })
+      .then((res) => { if (!cancelled) setGoaffTotals(res.totals ?? null); })
+      .catch(() => { if (!cancelled) setGoaffTotals(null); });
+    return () => { cancelled = true; };
+  }, [apiToken, project.id]);
+  const stats = useMemo(() => {
+    if (!goaffTotals || !(goaffTotals.kol_count ?? 0)) return baseStats;
+    const gmv = goaffTotals.gmv_usd ?? 0;
+    const cost = baseStats.cost;
+    return {
+      ...baseStats,
+      clicks: goaffTotals.clicks ?? baseStats.clicks,
+      orders: goaffTotals.orders ?? baseStats.orders,
+      gmv,
+      roi: gmv != null && cost ? gmv / cost : baseStats.roi,
+    };
+  }, [baseStats, goaffTotals]);
   const analytics = useMemo(() => buildAnalytics(rows), [rows]);
   const expenseLines = useMemo(() => buildExpenseLines(rows), [rows]);
   const stageCosts = useMemo(() => buildStageCostSummary(expenseLines), [expenseLines]);

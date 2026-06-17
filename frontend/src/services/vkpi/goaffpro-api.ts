@@ -227,25 +227,43 @@ export interface GoaffproSummaryRow {
   currency?: string;
 }
 
+export interface GoaffproSummaryTotals {
+  kol_count?: number;
+  clicks?: number;
+  orders?: number;
+  gmv_usd?: number;
+  commission_usd?: number;
+}
+
 export interface GoaffproSummaryResult {
   ok?: boolean;
   items: GoaffproSummaryRow[];
   count?: number;
+  totals?: GoaffproSummaryTotals;
   note?: string | null;
 }
 
-// GET:全局归因汇总(每个已建链 KOL 一行,点击/订单/GMV/佣金,实时来自 GOAFFPRO)。
+// GET:归因汇总(每个已建链 KOL 一行 + totals 汇总,实时来自 GOAFFPRO)。
+// project_id → 只汇总该项目下的 KOL(供项目卡)。
 export async function getGoaffproSummary(
   token: string,
-  opts?: { limit?: number },
+  opts?: { limit?: number; projectId?: string | number },
 ): Promise<GoaffproSummaryResult> {
   const limit = opts?.limit ?? 100;
+  const qs = new URLSearchParams({ limit: String(limit) });
+  if (opts?.projectId != null && String(opts.projectId).length) qs.set("project_id", String(opts.projectId));
   const res = await apiFetch<GoaffproSummaryResult>(
-    `/api/admin/vkpi/goaffpro/summary?limit=${encodeURIComponent(String(limit))}`,
+    `/api/admin/vkpi/goaffpro/summary?${qs.toString()}`,
     {},
     token,
   );
-  return { items: Array.isArray(res?.items) ? res.items : [], count: res?.count, note: res?.note, ok: res?.ok };
+  return {
+    items: Array.isArray(res?.items) ? res.items : [],
+    count: res?.count,
+    totals: res?.totals,
+    note: res?.note,
+    ok: res?.ok,
+  };
 }
 
 // 类型导出别名,便于页面侧引用。
