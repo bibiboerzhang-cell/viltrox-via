@@ -35,7 +35,13 @@ def _pricing_key(model: str) -> str:
         return "claude-haiku-4-5"
     if "sonnet" in raw or "claude" in raw:
         return "claude-sonnet-4-6"
-    return raw
+    # 未知/新模型(gpt-5.x / o-系列等无关键字命中)→ 不要落 0 价(会把成本估成 0、台账失真),
+    # 按家族给保守 tier。真上线新模型应在 PRICING_USD_PER_1M_TOKENS 补真价覆盖此兜底。
+    if "gpt" in raw or raw.startswith("o1") or raw.startswith("o3") or raw.startswith("o4"):
+        return "gpt-4o"
+    if "gemini" in raw:
+        return "gemini-2.5-flash"
+    return "claude-sonnet-4-6"
 
 
 def estimate_cost_usd(model: str, tokens_in: int = 0, tokens_out: int = 0) -> float:

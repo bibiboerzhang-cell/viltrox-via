@@ -117,9 +117,21 @@ def generate_stalled_project_alerts() -> dict[str, Any]:
     for row in rows:
         data = dict(row)
         last_touch = str(data.get("last_activity_at") or data.get("updated_at") or "")
-        # String check is intentionally conservative for local SQLite. Scheduler
-        # can replace this with DB-native interval checks in production.
         if not last_touch:
+            continue
+        # 只对「真停滞」告警:stage 距上次活动超过 N 天(原来只要 last_touch 非空就告警 →
+        # 对所有活跃项目刷噪声,运营被淹没反而忽略真危急)。upsert_alert 按 key 幂等 = 天然抑制重复。
+        import os
+        from datetime import datetime, timezone
+
+        try:
+            _dt = datetime.fromisoformat(last_touch.replace("Z", "+00:00"))
+            if _dt.tzinfo is None:
+                _dt = _dt.replace(tzinfo=timezone.utc)
+            days_stalled = (datetime.now(timezone.utc) - _dt).days
+        except (ValueError, TypeError):
+            continue
+        if days_stalled < int(os.environ.get("VKPI_STALLED_PROJECT_DAYS", "7") or 7):
             continue
         key = f"stalled-project-{data['id']}"
         created.append(
@@ -130,7 +142,7 @@ def generate_stalled_project_alerts() -> dict[str, Any]:
                 target_id=int(data["id"]),
                 staff_id=data.get("assigned_staff_id"),
                 title=f"Project may be stalled: {data.get('project_name') or data['id']}",
-                body=f"Stage {data.get('stage')} last touched at {last_touch}. Review, follow up, release, or reassign.",
+                body=f"Stage {data.get('stage')} stalled {days_stalled}d (last touched {last_touch}). Review, follow up, release, or reassign.",
                 rule_key="project.stalled_review",
             )
         )
