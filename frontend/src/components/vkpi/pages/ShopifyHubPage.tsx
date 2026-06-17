@@ -41,6 +41,7 @@ import {
   saveGoaffproCredentials,
   listGoaffproAffiliates,
   getGoaffproSummary,
+  syncGoaffproMetrics,
   type GoaffproStatus,
   type ListGoaffproAffiliatesResult,
 } from "../../../services/vkpi/goaffpro-api";
@@ -257,6 +258,8 @@ export function ShopifyHubPage({ apiToken = "" }: { apiToken?: string } = {}) {
   const [rows, setRows] = useState<PromoAttributionRow[]>([]);
   const [trackTotals, setTrackTotals] = useState<any>(null);
   const [trackLoading, setTrackLoading] = useState(false);
+  const [trackSyncing, setTrackSyncing] = useState(false);
+  const [lastSynced, setLastSynced] = useState<string>("");
   const [trackErr, setTrackErr] = useState("");
 
   // ---- Loaders ----
@@ -324,6 +327,7 @@ export function ShopifyHubPage({ apiToken = "" }: { apiToken?: string } = {}) {
       const res = await getGoaffproSummary(apiToken, { limit: 50 });
       setRows(res.items as unknown as PromoAttributionRow[]);
       setTrackTotals(res.totals || null);
+      setLastSynced(res.last_synced_at || "");
       if (res.note) setTrackErr(res.note);
     } catch (err) {
       // Honest: do NOT fabricate rows. Keep the table empty + show the reason.
@@ -333,6 +337,21 @@ export function ShopifyHubPage({ apiToken = "" }: { apiToken?: string } = {}) {
       setTrackLoading(false);
     }
   }, [apiToken]);
+
+  // 刷新 = 先同步 GOAFFPRO 指标落库,再读缓存(秒出)。
+  const refreshTrack = useCallback(async () => {
+    if (!apiToken || trackSyncing) return;
+    setTrackSyncing(true);
+    setTrackErr("");
+    try {
+      await syncGoaffproMetrics(apiToken);
+    } catch (err) {
+      setTrackErr(err instanceof Error ? err.message : "同步 GOAFFPRO 指标失败");
+    } finally {
+      setTrackSyncing(false);
+      void loadTrack();
+    }
+  }, [apiToken, trackSyncing, loadTrack]);
 
   useEffect(() => {
     void loadStatus();
@@ -1087,18 +1106,24 @@ export function ShopifyHubPage({ apiToken = "" }: { apiToken?: string } = {}) {
       e(
         "div",
         { className: "flex items-center justify-between mb-3" },
-        e("h2", { className: "text-sm font-semibold text-white" }, "③ 数据追踪"),
+        e(
+          "div",
+          { className: "flex items-center gap-2" },
+          e("h2", { className: "text-sm font-semibold text-white" }, "③ 数据追踪"),
+          lastSynced ? e("span", { className: "text-[10px] text-slate-500" }, "更新于 " + new Date(lastSynced).toLocaleString("zh-CN", { hour12: false })) : null,
+        ),
         e(
           "button",
           {
             type: "button",
-            onClick: () => void loadTrack(),
-            disabled: trackLoading,
+            onClick: () => void refreshTrack(),
+            disabled: trackLoading || trackSyncing,
+            title: "从 GOAFFPRO 拉取最新点击/订单/GMV/佣金并落库",
             className:
               "inline-flex items-center gap-1.5 rounded-md border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-[11px] text-slate-300 hover:bg-white/[0.06] hover:text-white disabled:opacity-50",
           },
-          trackLoading ? e(Loader2, { size: 12, className: "animate-spin" }) : e(RefreshCw, { size: 12 }),
-          "刷新",
+          (trackLoading || trackSyncing) ? e(Loader2, { size: 12, className: "animate-spin" }) : e(RefreshCw, { size: 12 }),
+          trackSyncing ? "同步中…" : "刷新",
         ),
       ),
       e(

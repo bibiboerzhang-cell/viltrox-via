@@ -179,6 +179,21 @@ def ensure_goaffpro_links_schema() -> None:
             ON vkpi_goaffpro_sales(affiliate_id);
         CREATE INDEX IF NOT EXISTS idx_vkpi_goaffpro_sales_kol
             ON vkpi_goaffpro_sales(kol_pool_id);
+        CREATE TABLE IF NOT EXISTS vkpi_goaffpro_kol_metrics (
+            affiliate_id TEXT PRIMARY KEY,
+            kol_pool_id INTEGER,
+            clicks INTEGER NOT NULL DEFAULT 0,
+            orders INTEGER NOT NULL DEFAULT 0,
+            gmv_cents INTEGER NOT NULL DEFAULT 0,
+            commission_cents INTEGER NOT NULL DEFAULT 0,
+            commission_rate TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT '',
+            currency TEXT NOT NULL DEFAULT '',
+            partial INTEGER NOT NULL DEFAULT 0,
+            synced_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_vkpi_goaffpro_metrics_kol
+            ON vkpi_goaffpro_kol_metrics(kol_pool_id);
         """
     )
     conn.commit()
@@ -622,6 +637,69 @@ def affiliate_attribution(affiliate_id: str | int) -> dict[str, Any]:
     if partial:
         out["error"] = od_soft or tr.get("error") or od.get("error") or "goaffpro query failed"
     return out
+
+
+def sync_kol_metrics(limit: int | None = None) -> dict[str, Any]:
+    """刷新所有已建链 KOL 的 GOAFFPRO 指标快照 → vkpi_goaffpro_kol_metrics(性能落库)。
+
+    每个 affiliate 实时查 traffic+orders(affiliate_attribution)+ affiliate(佣金/状态),
+    upsert 进缓存表。给定时任务 + 手动「刷新」调用;summary 读这张表秒出,不再逐 KOL 打 GOAFFPRO。
+    返回 {ok, synced, errors, synced_at}。绝不抛。no creds → {ok:False, reason}。
+    """
+    if connection_status().get("status") == "not_configured":
+        return {"ok": False, "reason": "not_configured", "synced": 0, "errors": 0}
+    ensure_goaffpro_links_schema()
+    conn = get_conn()
+    sql = "SELECT kol_pool_id, affiliate_id FROM vkpi_goaffpro_kol_links WHERE COALESCE(affiliate_id,'') <> ''"
+    rows = conn.execute(sql + (" LIMIT ?" if limit else ""), ((int(limit),) if limit else ())).fetchall()
+    synced = 0
+    errors = 0
+    now = _utcnow()
+    for r in rows:
+        d = dict(r)
+        aid = str(d.get("affiliate_id") or "").strip()
+        if not aid:
+            continue
+        attr = affiliate_attribution(aid)
+        aff = get_affiliate(aid)
+        partial = 1 if attr.get("partial") else 0
+        if partial:
+            errors += 1
+        conn.execute(
+            """
+            INSERT INTO vkpi_goaffpro_kol_metrics
+                (affiliate_id, kol_pool_id, clicks, orders, gmv_cents, commission_cents,
+                 commission_rate, status, currency, partial, synced_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (affiliate_id) DO UPDATE SET
+                kol_pool_id = excluded.kol_pool_id,
+                clicks = excluded.clicks,
+                orders = excluded.orders,
+                gmv_cents = excluded.gmv_cents,
+                commission_cents = excluded.commission_cents,
+                commission_rate = excluded.commission_rate,
+                status = excluded.status,
+                currency = excluded.currency,
+                partial = excluded.partial,
+                synced_at = excluded.synced_at
+            """,
+            (
+                aid,
+                d.get("kol_pool_id"),
+                int(attr.get("clicks") or 0),
+                int(attr.get("orders") or 0),
+                int(attr.get("gmv_cents") or 0),
+                int(attr.get("commission_cents") or 0),
+                str(aff.get("commission_rate") or "") if aff.get("ok") else "",
+                str(aff.get("status") or "") if aff.get("ok") else "",
+                str(attr.get("currency") or ""),
+                partial,
+                now,
+            ),
+        )
+        synced += 1
+    conn.commit()
+    return {"ok": True, "synced": synced, "errors": errors, "synced_at": now}
 
 
 # --- D2 写侧:一键给 KOL 建 affiliate + 拼追踪链 + 优惠码 ----------------------
@@ -1127,6 +1205,7 @@ __all__ = [
     "to_cents",
     "list_traffic",
     "affiliate_attribution",
+    "sync_kol_metrics",
     "list_products",
     "find_product_handle",
     "product_referral_link",

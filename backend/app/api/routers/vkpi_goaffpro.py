@@ -375,6 +375,18 @@ def get_kol_affiliate_link(
     }
 
 
+@router.post("/sync-metrics")
+def sync_goaffpro_metrics(
+    limit: int | None = Query(default=None, ge=1, le=500),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    """手动刷新 GOAFFPRO 指标缓存(点击/订单/GMV/佣金)→ vkpi_goaffpro_kol_metrics。
+
+    数据追踪/项目页的「刷新」按钮调它;之后 summary 读缓存秒出。也由定时任务每 20 分钟自动跑。
+    """
+    return goaffpro_connect.sync_kol_metrics(limit=limit)
+
+
 @router.post("/kol/{kol_pool_id}/commission")
 def update_kol_commission(
     kol_pool_id: int,
@@ -617,8 +629,16 @@ def goaffpro_summary(
         tuple(sql_params),
     ).fetchall()
 
+    # 性能落库:从指标缓存表读(秒出),不再逐 KOL 实时打 GOAFFPRO 3 次。
+    metrics_by_aid: dict[str, dict] = {}
+    for mr in conn.execute("SELECT * FROM vkpi_goaffpro_kol_metrics").fetchall():
+        md = dict(mr)
+        metrics_by_aid[str(md.get("affiliate_id") or "")] = md
+
     items: list[dict] = []
     partial_count = 0
+    stale_count = 0
+    last_synced_at = ""
     for r in links:
         d = dict(r)
         aid = str(d.get("affiliate_id") or "")
@@ -631,14 +651,20 @@ def goaffpro_summary(
         nd = dict(name_row) if name_row else {}
         handle = str(nd.get("handle") or "").strip()
         nm = str(nd.get("display_name") or "").strip() or handle
-        attr = goaffpro_connect.affiliate_attribution(aid)
-        # 佣金比例 + 审批状态:get_affiliate 取(N+1,待落库缓存优化)。
-        aff = goaffpro_connect.get_affiliate(aid)
-        is_partial = bool(attr.get("partial"))
+        m = metrics_by_aid.get(aid)
+        if m is None:
+            # 还没同步过(刚建链)→ 显 0 + stale,等下次定时/手动刷新填实。
+            stale_count += 1
+            m = {}
+        else:
+            sa = str(m.get("synced_at") or "")
+            if sa > last_synced_at:
+                last_synced_at = sa
+        is_partial = bool(m.get("partial"))
         if is_partial:
             partial_count += 1
-        gmv_cents = int(attr.get("gmv_cents") or 0)
-        comm_cents = int(attr.get("commission_cents") or 0)
+        gmv_cents = int(m.get("gmv_cents") or 0)
+        comm_cents = int(m.get("commission_cents") or 0)
         items.append(
             {
                 "kol_pool_id": d.get("kol_pool_id"),
@@ -649,18 +675,19 @@ def goaffpro_summary(
                 "affiliate_id": aid,
                 "ref_code": d.get("ref_code"),
                 "coupon": d.get("coupon"),
-                "commission_rate": str(aff.get("commission_rate") or "") if aff.get("ok") else "",
-                "status": str(aff.get("status") or "") if aff.get("ok") else "",
+                "commission_rate": str(m.get("commission_rate") or ""),
+                "status": str(m.get("status") or ""),
                 "tracking_url": d.get("tracking_url"),
                 "source_label": "GOAFFPRO",
                 "source_type": "goaffpro",
                 "product_sku": "—",
-                "clicks": int(attr.get("clicks") or 0),
-                "orders": int(attr.get("orders") or 0),
+                "clicks": int(m.get("clicks") or 0),
+                "orders": int(m.get("orders") or 0),
                 "gmv_usd": round(gmv_cents / 100, 2),
                 "commission_usd": round(comm_cents / 100, 2),
-                "currency": attr.get("currency") or "",
-                "partial": is_partial,  # True = 该 KOL 数据查询失败,显示值不可靠(非真零)
+                "currency": str(m.get("currency") or ""),
+                "partial": is_partial,
+                "stale": aid not in metrics_by_aid,  # True = 尚未同步过
             }
         )
     totals = {
@@ -671,14 +698,18 @@ def goaffpro_summary(
         "commission_usd": round(sum(float(it.get("commission_usd") or 0) for it in items), 2),
     }
     note = None if items else "尚无已建链的 KOL;在 KOL 详情或项目里生成追踪链后出现在此。"
-    if partial_count:
-        note = f"⚠️ {partial_count} 个 KOL 的 GOAFFPRO 数据查询失败,其显示值可能偏低(非真零)。"
+    if stale_count:
+        note = f"{stale_count} 个 KOL 刚建链还没同步,点「刷新」拉取最新数据。"
+    elif partial_count:
+        note = f"⚠️ {partial_count} 个 KOL 上次同步查询失败,显示值可能偏低(非真零)。"
     return {
         "ok": True,
         "items": items,
         "count": len(items),
         "totals": totals,
         "partial_count": partial_count,
+        "stale_count": stale_count,
+        "last_synced_at": last_synced_at or None,
         "note": note,
     }
 

@@ -247,7 +247,20 @@ export interface GoaffproSummaryResult {
   items: GoaffproSummaryRow[];
   count?: number;
   totals?: GoaffproSummaryTotals;
+  last_synced_at?: string | null;
+  stale_count?: number;
   note?: string | null;
+}
+
+// POST:刷新 GOAFFPRO 指标缓存(点击/订单/GMV/佣金落库)→ 之后 summary 读库秒出。
+export async function syncGoaffproMetrics(
+  token: string,
+): Promise<{ ok?: boolean; synced?: number; errors?: number; synced_at?: string }> {
+  return apiFetch(
+    `/api/admin/vkpi/goaffpro/sync-metrics`,
+    { method: "POST", body: jsonBody({}) },
+    token,
+  );
 }
 
 // GET:归因汇总(每个已建链 KOL 一行 + totals 汇总,实时来自 GOAFFPRO)。

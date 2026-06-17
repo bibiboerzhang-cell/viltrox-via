@@ -221,6 +221,26 @@ async def job_vkpi_morning_sync():
         logger.exception("scheduler.vkpi_morning_sync_failed")
 
 
+async def job_vkpi_goaffpro_metrics_sync():
+    """每 20 分钟刷新 GOAFFPRO 指标缓存(点击/订单/GMV/佣金/比例/状态)→ vkpi_goaffpro_kol_metrics。
+
+    页面(数据追踪/项目卡)读这张缓存表秒出,不再逐 KOL 实时打 GOAFFPRO(性能落库)。
+    阻塞 httpx 走线程池,不卡事件循环。no creds → 空跑即返回。
+    """
+    try:
+        import asyncio
+
+        from app.domains.integrations import goaffpro_connect
+
+        result = await asyncio.to_thread(goaffpro_connect.sync_kol_metrics)
+        logger.info(
+            "scheduler.vkpi_goaffpro_metrics_sync",
+            extra={"synced": result.get("synced"), "errors": result.get("errors"), "ok": result.get("ok")},
+        )
+    except Exception:
+        logger.exception("scheduler.vkpi_goaffpro_metrics_sync_failed")
+
+
 # ──────────────────────────────────────────────
 # 启动/停止
 # ──────────────────────────────────────────────
@@ -892,6 +912,17 @@ async def start_scheduler() -> None:
         trigger=IntervalTrigger(minutes=15),
         id="ops_threshold_alerts",
         name="Ops: budget/queue/worker/failure-rate threshold alerts (read-only)",
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # ── GOAFFPRO 指标缓存刷新(每 20 分钟)── 读 GOAFFPRO 点击/订单/GMV/佣金 → 缓存表,
+    # 页面读库秒出(性能落库)。无 creds 空跑即返回;只读 GOAFFPRO + 写本地缓存表,不碰评分域。
+    _scheduler.add_job(
+        job_vkpi_goaffpro_metrics_sync,
+        trigger=IntervalTrigger(minutes=20),
+        id="vkpi_goaffpro_metrics_sync",
+        name="GOAFFPRO: refresh KOL metrics snapshot (clicks/orders/GMV/commission)",
         max_instances=1,
         coalesce=True,
     )
