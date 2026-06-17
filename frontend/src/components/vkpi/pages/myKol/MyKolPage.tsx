@@ -7,6 +7,7 @@ import type { VkpiDashboardData, VkpiKolOption, VkpiPageKey, VkpiProjectRow } fr
 import { platformDisplay, safeNumber } from '../../shared/vkpiDataUtils';
 import { proxiedImageUrl } from '../../shared/mediaProxy';
 import { ContributionRollupPanel } from './ContributionRollupPanel';
+import { RiskIndexPanel } from './RiskIndexPanel';
 import { OfficialContentLayer } from './OfficialContentLayer';
 import { EmployeeKolContentLayer } from './EmployeeKolContentLayer';
 import { PoolEvidenceContent } from './PoolEvidenceContent';
@@ -1023,6 +1024,7 @@ export function MyKolPage({ apiToken, viewMode, data, userName, onRefreshData }:
         />
       ) : null}
       {viewMode === 'manager' ? <ContributionRollupPanel apiToken={apiToken || ''} viewMode={viewMode} /> : null}
+      {viewMode === 'manager' ? <RiskIndexPanel apiToken={apiToken || ''} /> : null}
     </main>
   );
 }

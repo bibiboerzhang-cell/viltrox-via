@@ -20,7 +20,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from app.api.dependencies.perms import require_tab
 from app.db.connection import get_conn
 from app.domains.access import scope
-from app.domains.kol import my_kol_aggregate
+from app.domains.kol import my_kol_aggregate, risk_index
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-my-kol"])
 
@@ -56,6 +56,47 @@ def my_kol_aggregate_endpoint(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
         raise HTTPException(status_code=403, detail=str(exc) or "scope denied") from exc
+
+
+@router.get("/my-kol/risk-index")
+def my_kol_risk_index_endpoint(
+    staff_id: int | None = Query(default=None, ge=1),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """C6 风险指数(候选 A·实时聚合,零新 LLM)。
+
+    对该 staff 的 MY KOL 集(收藏 + P-GROUP-7 共享进来的池 KOL,口径完全复用
+    my_kol_aggregate._pool_favorites)逐 KOL 算风险分 + 维度拆解。数据源唯一:
+    vkpi_kol_llm_deep_analysis_results.llm_dimensions_11(Gemini final_v1,
+    analysis_kind='video_final_v1' status='ready')的结构化深析信号(非关键词 SQL)。
+
+    风险 = w1*内容无深度((100-content_quality)/100) + w2*素材复用(asset_reuse,
+    方向未确认) + w3*竞品露出惩罚(否定感知文本判定,口径同 dashboard/summary.py)。
+
+    **只覆盖已深析 KOL**;未深析 KOL 返回 analyzed=false / risk_index=null
+    (前端显「未分析」灰态),绝不当 0 风险。
+
+    纯只读 SELECT(? 占位),不触 viltrox_fit_score / rule_v0 / 评分指纹,不调 LLM。
+
+    RBAC 与 aggregate 端点同口径:require_tab('vkpi','read') 先 gate;owner/manager
+    自查(未显式传 staff_id)回落本人 actor id,显式传 staff_id 走 manager 跨看;
+    非管理层只能看自己(effective_staff_id 已强制)。
+    """
+    target = scope.effective_staff_id(staff, staff_id) or scope.actor_staff_id(staff)
+    if not target:
+        raise HTTPException(status_code=403, detail="no staff identity in scope")
+    conn = get_conn()
+    try:
+        # 复用 aggregate 的 MY KOL 集解析(收藏 + 共享),保证「谁的 KOL」口径完全一致。
+        kols = my_kol_aggregate._pool_favorites(conn, int(target))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise HTTPException(status_code=403, detail=str(exc) or "scope denied") from exc
+    payload = risk_index.compute_risk_index(conn, kols)
+    payload["staff_id"] = int(target)
+    payload["scope"] = scope.scope_context(staff)
+    return payload
 
 
 @router.get("/my-kol/contribution-rollup")
