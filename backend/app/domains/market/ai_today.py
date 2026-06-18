@@ -123,7 +123,8 @@ def _generate(prompt: str) -> tuple[str, str]:
         resp = call_ai_with_retry(
             "ai_today.hot",
             lambda: client.messages.create(
-                model=CLAUDE_MODEL, max_tokens=900, messages=[{"role": "user", "content": prompt}]
+                # 900 太小:中文 JSON(headline+3方案+3热点)易超 → 截断 → 解析空 → 卡片不刷。抬到 2048。
+                model=CLAUDE_MODEL, max_tokens=2048, messages=[{"role": "user", "content": prompt}]
             ),
         )
         text = (resp.content[0].text or "").strip() if resp and getattr(resp, "content", None) else ""
