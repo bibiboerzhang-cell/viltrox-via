@@ -45,7 +45,10 @@ def generate_competitor_radar() -> dict[str, Any]:
         logger.info("competitor_radar.budget_blocked", extra={"scope": _BUDGET_SCOPE})
         return {"status": "budget_blocked"}
 
+    today_label = datetime.now(tz=timezone.utc).strftime("%Y年%m月%d日")
     prompt = (
+        f"【重要·今天的真实日期是 {today_label}】请严格按此日期判断「近期/最近」,绝不要把往年旧发布当成当下新动态;\n"
+        f"无法实时联网就别编造具体的「刚发布」事件(宁可笼统也不错报时间)。\n"
         "你是 Viltrox(唯卓仕,海外镜头/相机配件品牌)的竞品情报分析师。\n"
         "请用 Google 搜索查清【近期(过去 1–2 周到今天)海外·国际相机/镜头行业的真实竞品动态】:\n"
         "Sony / Sigma / Tamron / Nikon / Canon / Fujifilm / DJI / Panasonic 等的新镜头/相机发布、\n"

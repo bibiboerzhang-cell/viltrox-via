@@ -141,7 +141,11 @@ def generate_ai_today_hot() -> dict[str, Any]:
         return {"status": "budget_blocked"}
     hot = _read_hot_brands()
     hot_line = ("当前竞品/行业热点信号:" + "、".join(hot)) if hot else f"行业主要竞品:{_COMPETITORS_FALLBACK}"
+    today_label = datetime.now(tz=timezone.utc).strftime("%Y年%m月%d日")
     prompt = (
+        f"【重要·今天的真实日期是 {today_label}】请**严格按此日期**判断「当下/最近」热点;绝不要把往年(如 2025 年)\n"
+        f"的赛事/发布当成正在进行的当下事件。若你无法实时联网搜索,就基于这个真实日期给出贴合当前季节的通用拍摄\n"
+        f"方向,**不要编造你无法确认的、具体「正在进行」的赛事或新品发布**(宁可笼统也不要错报时间)。\n"
         f"你是 Viltrox(唯卓仕)面向【海外/国际市场】的内容策划。Viltrox 主销欧美/全球,目标受众是\n"
         f"海外摄影/视频创作者。{hot_line}。\n"
         "请先用 Google 搜索查清【当下海外·国际(非中国大陆)摄影/影像圈正在火的真实热点】:国际摄影/\n"
