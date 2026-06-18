@@ -1029,6 +1029,57 @@ def enqueue_kol_outreach_draft(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/kol-pool/outreach-optimize")
+def optimize_kol_outreach(
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """AI 优化外联文案(同步小调用):给定 KOL 名 + 主推产品 + 当前主题/正文,LLM 把这封给海外创作者的
+    合作邀约润色成更自然、更口语、更高回复率的英文。**只产文案、不发送**;失败诚实回退原文。
+    返回 {ok, subject, body, model}。走 llm_gateway(预算闸 + 代理)。零触 viltrox_fit_score。"""
+    import json as _json
+    import re as _re
+
+    from app.platform import llm_gateway
+
+    subject = str(body.get("subject") or "").strip()
+    draft = str(body.get("body") or "").strip()
+    product = str(body.get("product") or "").strip()
+    kol_name = str(body.get("kol_name") or "").strip()
+    if not draft and not subject:
+        return {"ok": False, "reason": "empty_draft", "subject": subject, "body": draft}
+
+    prompt = (
+        "你是 Viltrox(唯卓仕,海外相机镜头品牌)的 KOL 外联文案专家。把下面这封给【海外/英文圈创作者】的\n"
+        "合作邀约润色成更自然、更口语、更高回复率的**英文**(别中式生硬英文)。要求:真诚、简短、具体\n"
+        "(点出一个具体的合作点),不套路营销腔、不夸大、不编造数据。\n"
+        f"对象 KOL:{kol_name or '(未提供)'};主推产品:{product or 'Viltrox 镜头'}。\n"
+        f"当前主题:{subject or '(空)'}\n当前正文:\n{draft or '(空)'}\n\n"
+        '只输出 JSON(不要多余文字):{"subject": "优化后主题", "body": "优化后正文(英文,保留换行)"}'
+    )
+    resp = llm_gateway.invoke(
+        prompt,
+        purpose="vkpi_kol_outreach_optimize",
+        max_output_tokens=1200,
+        cost_tag="vkpi_kol_outreach_optimize",
+        staff=staff or {},
+        metadata={"kol_pool_id": int(body.get("kol_pool_id") or 0)},
+    )
+    text = str(resp.get("text") or "").strip()
+    out_subject, out_body = subject, draft  # 兜底原文
+    try:
+        cleaned = _re.sub(r"^```json\s*|```$", "", text, flags=_re.MULTILINE).strip()
+        s, e = cleaned.find("{"), cleaned.rfind("}")
+        if s != -1 and e != -1 and e > s:
+            parsed = _json.loads(cleaned[s : e + 1])
+            if isinstance(parsed, dict):
+                out_subject = str(parsed.get("subject") or subject).strip()
+                out_body = str(parsed.get("body") or draft).strip()
+    except Exception:
+        pass
+    return {"ok": bool(text), "subject": out_subject, "body": out_body, "model": resp.get("model")}
+
+
 @router.get("/kol-pool/{kol_pool_id}/outreach-draft")
 def get_kol_outreach_draft(
     kol_pool_id: int,

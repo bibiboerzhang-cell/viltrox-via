@@ -2,9 +2,10 @@
 
 
 import React, { useState } from "react";
-import { AlertTriangle, Check, ExternalLink, Loader2, Send, Sparkles, X } from "lucide-react";
+import { AlertTriangle, Check, Copy, ExternalLink, Loader2, Sparkles, Wand2, X } from "lucide-react";
 import { KPAvatar } from "../KPAvatar";
 import { genEmailBody, genEmailSubject } from "../../lib/email";
+import { apiFetch } from "../../../../../services/http";
 
 const e = React.createElement;
 
@@ -12,7 +13,7 @@ const e = React.createElement;
 // 刷新页面即清(内存级,后端联系人写端点落地前的最低保障)。
 const CONTACT_DRAFTS = new Map();
 
-export function ContactModal({ item, onClose }: any) {
+export function ContactModal({ item, onClose, apiToken }: any) {
   if (!item) return null;
   const hasEmail = !!item.email;
   const recommended = item.recommended_product_lines || [];
@@ -23,6 +24,8 @@ export function ContactModal({ item, onClose }: any) {
   const [customProduct, setCustomProduct] = useState(draft?.customProduct ?? "");
   const [showCustom, setShowCustom] = useState(draft?.showCustom ?? false);
   const [templateApplying, setTemplateApplying] = useState(false);
+  const [optimizing, setOptimizing] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [subject, setSubject] = useState(draft?.subject ?? (hasEmail ? genEmailSubject(defaultProduct, item) : ""));
   const [body, setBody] = useState(draft?.body ?? (hasEmail ? genEmailBody(defaultProduct, item) : ""));
   const [newEmail, setNewEmail] = useState(draft?.newEmail ?? "");
@@ -46,6 +49,29 @@ export function ContactModal({ item, onClose }: any) {
       setBody(genEmailBody(p, item));
       setTemplateApplying(false);
     }, 700);
+  };
+  // AI 优化:把当前草稿交给 LLM 润色成更自然/更高回复率的英文外联(只产文案,不外发)。失败保留原文。
+  const aiOptimize = async () => {
+    if (!apiToken || optimizing) return;
+    setOptimizing(true);
+    try {
+      const prod = showCustom && customProduct ? customProduct : selectedProduct;
+      const res: any = await apiFetch(
+        "/api/admin/vkpi/kol-pool/outreach-optimize",
+        { method: "POST", body: JSON.stringify({ kol_pool_id: item.id, kol_name: item.display_name || item.handle, product: prod, subject, body }) },
+        apiToken,
+      );
+      if (res && res.subject) setSubject(String(res.subject));
+      if (res && res.body) setBody(String(res.body));
+    } catch (_e) { /* 失败保留原文 */ }
+    finally { setOptimizing(false); }
+  };
+  // 复制主题+正文,去自己邮箱/DM 手动发送(本系统不替你外发=安全)。
+  const copyEmail = async () => {
+    try {
+      await navigator.clipboard.writeText(`Subject: ${subject}\n\n${body}`);
+      setCopied(true); setTimeout(() => setCopied(false), 1500);
+    } catch (_e) { /* ignore */ }
   };
   
   return e("div", {
@@ -160,10 +186,16 @@ export function ContactModal({ item, onClose }: any) {
         ),
         e("div", { className: "flex items-center gap-2 pt-2" },
           e("button", {
-            disabled: true,
-            title: "待接入: 需要真实邮件发送接口",
-            className: "flex-1 flex cursor-not-allowed items-center justify-center gap-1.5 rounded-md bg-purple-600/40 px-3 py-2 text-[11px] font-medium text-purple-100/70"
-          }, e(Send, { size: 11 }), "发送邮件 · 待接入"),
+            onClick: aiOptimize,
+            disabled: optimizing || !apiToken,
+            title: apiToken ? "用 AI 把这封外联文案润色得更自然、更高回复率(只产文案,不外发)" : "缺 API token",
+            className: "flex items-center justify-center gap-1.5 rounded-md border border-purple-500/40 bg-purple-500/[0.12] px-3 py-2 text-[11px] font-medium text-purple-100 hover:bg-purple-500/[0.2] disabled:opacity-60"
+          }, optimizing ? e(Loader2, { size: 11, className: "animate-spin" }) : e(Wand2, { size: 11 }), optimizing ? "优化中" : "AI 优化"),
+          e("button", {
+            onClick: copyEmail,
+            title: "复制主题+正文,去你的邮箱/DM 手动发送(本系统不替你外发)",
+            className: "flex-1 flex items-center justify-center gap-1.5 rounded-md bg-purple-600/80 px-3 py-2 text-[11px] font-medium text-white hover:bg-purple-600"
+          }, copied ? e(Check, { size: 11 }) : e(Copy, { size: 11 }), copied ? "已复制" : "复制文案"),
           e("button", {
             onClick: onClose,
             className: "rounded-md border border-white/[0.1] px-3 py-2 text-[11px] text-slate-400 hover:bg-white/[0.04]"

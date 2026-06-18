@@ -564,6 +564,7 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
       contactItem && e(ContactModal, {
         key: `kol-contact-${contactItem.id || contactItem.handle || "selected"}`,
         item: contactItem,
+        apiToken,
         onClose: () => setContactItem(null),
       })
     )
