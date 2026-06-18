@@ -5,10 +5,13 @@ import React from "react";
 import { motion } from "framer-motion";
 import { Activity, AlertTriangle } from "lucide-react";
 import { useT } from "../lib/i18n";
+import { freshnessLabel, nowLocal } from "../../lib/timeLocal";
 
 const e = React.createElement;
 
-export function SignalsAlertsCard({ alerts, onAlertClick, onViewAll }: any) {
+// freshnessAt = 数据真实新鲜度(UTC ts);有 → 显示"更新于 X前 · 本地时间"(按观看者浏览器时区),
+// 无 → 显示当前本地时间(实时钟)。绝不再硬编码 "Just now · Live" 这种假 live 标。
+export function SignalsAlertsCard({ alerts, onAlertClick, onViewAll, freshnessAt }: any) {
   const { t } = useT();
   const sevColor: any = {
     high:   "#ef4444",
@@ -43,7 +46,7 @@ export function SignalsAlertsCard({ alerts, onAlertClick, onViewAll }: any) {
         e("span", { className: "rounded-full p-1" },
           e(Activity, { size: 10 })
         ),
-        e("span", null, "Just now · Live")
+        e("span", null, freshnessAt ? freshnessLabel(freshnessAt) : nowLocal())
       )
     ),
     e("div", { className: "flex-1 space-y-1.5" },
