@@ -136,7 +136,7 @@ export function SignalDetailModal({ alert, onClose }: any) {
       ),
       // Footer
       e("div", { className: "shrink-0 border-t border-white/[0.06] px-5 py-2.5 flex items-center justify-between" },
-        e("div", { className: "text-[10px] text-slate-500" }, "多源聚合 · 实时更新"),
+        e("div", { className: "text-[10px] text-slate-500" }, "多源聚合 · 每日刷新"),
         e("div", { className: "flex gap-1.5" },
           e("button", {
             onClick: onClose,

@@ -589,7 +589,7 @@ export function normalizeAiInsight(copilotBrief = {}, tasks = {}, aiTodayHot: an
   if (hot.available && hotContent.headline) {
     return {
       confidence: null,
-      updatedLabel: hotContent.generated_at ? timeLabel(hotContent.generated_at) : "今日",
+      updatedLabel: hotContent.generated_at ? timeLabel(hotContent.generated_at) : "时间待接入",
       todayDecision: {
         text: String(hotContent.headline || ""),
         amount: "--",
@@ -602,7 +602,7 @@ export function normalizeAiInsight(copilotBrief = {}, tasks = {}, aiTodayHot: an
       weaken: [],
       todayContentLabel: "🔥 当下热点·赛事",
       todayContent: list(hotContent.hot_topics).slice(0, 3).map((x: any) => String(x)),
-      poweredBy: "每早 8 点实时更新",
+      poweredBy: "每日早 8 点(中国)自动更新",
       raw: hot,
     };
   }
