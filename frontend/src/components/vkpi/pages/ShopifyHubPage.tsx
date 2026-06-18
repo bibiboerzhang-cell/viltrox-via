@@ -24,6 +24,7 @@ import {
   PackageCheck,
   Plug,
   RefreshCw,
+  Search,
   Table2,
 } from "lucide-react";
 import { getShopifyStatus, type ShopifyProviderStatus } from "../../../domains/attribution";
