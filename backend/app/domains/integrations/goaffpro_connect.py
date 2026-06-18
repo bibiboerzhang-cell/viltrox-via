@@ -743,7 +743,9 @@ def sync_kol_metrics(limit: int | None = None) -> dict[str, Any]:
             continue
         attr = affiliate_attribution(aid)
         aff = get_affiliate(aid)
-        partial = 1 if attr.get("partial") else 0
+        # partial 列是 BOOLEAN(迁移164):Postgres 严格,传 int 1/0 → DatatypeMismatch;
+        # 用真 bool(SQLite 也兼容)。这是之前 vkpi_goaffpro_kol_metrics 一直空的真因(此 job 在 PG 上必崩)。
+        partial = bool(attr.get("partial"))
         if partial:
             errors += 1
         conn.execute(
