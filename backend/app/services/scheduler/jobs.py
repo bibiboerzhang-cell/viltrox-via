@@ -241,6 +241,43 @@ async def job_vkpi_goaffpro_metrics_sync():
         logger.exception("scheduler.vkpi_goaffpro_metrics_sync_failed")
 
 
+async def job_vkpi_market_intelligence_refresh():
+    """市场情报每日刷新:分类原始竞品信号→建评审包→提交为新 committed run(成为 latest_reviewed,
+    让市场情报卡刷到当下,不再停在旧 run)。纯规则分类、零 LLM。
+
+    config-gate:scheduler_tasks.vkpi_market_intelligence_refresh(默认 OFF,运营在设置页开)。
+    无 ready 候选 → write_reviewed_competitor_signals 抛 ValueError → 诚实跳过不建空 run。零触 fit_score。
+    """
+    if not _scheduler_task_enabled("vkpi_market_intelligence_refresh"):
+        return
+    try:
+        from datetime import datetime, timezone
+
+        from app.domains.market.signal_classifier import build_market_signal_classification
+        from app.domains.market.signal_review_package import build_market_signal_review_package
+        from app.domains.market.signal_review_persistence import write_reviewed_competitor_signals
+
+        def _refresh() -> dict:
+            classification = build_market_signal_classification(limit=100)
+            package = build_market_signal_review_package(classification)
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            try:
+                res = write_reviewed_competitor_signals(
+                    package,
+                    backup_ref=f"scheduler:market_intelligence_refresh:{stamp}",
+                    committed_by="scheduler",
+                )
+                return {"committed": True, "run_id": res.get("run_id"), "inserted": res.get("inserted")}
+            except ValueError as exc:
+                # 无 ready 候选 / 未过 check → 诚实跳过(不建空 run)。
+                return {"committed": False, "reason": str(exc)[:100]}
+
+        result = await asyncio.to_thread(_refresh)
+        logger.info("scheduler.vkpi_market_intelligence_refresh", extra=result)
+    except Exception:
+        logger.exception("scheduler.vkpi_market_intelligence_refresh_failed")
+
+
 async def job_vkpi_comment_sentiment_refresh():
     """VoC 评论情感每日自动刷新(自家+竞品行业帖)。原链路全有、独缺触发器 → 舆情情报靠手动。
 
@@ -872,6 +909,15 @@ async def start_scheduler() -> None:
         trigger=CronTrigger(hour=5, minute=0),
         id="vkpi_comment_sentiment_refresh",
         name="Daily VoC comment sentiment refresh (own + competitor)",
+        max_instances=1,
+        coalesce=True,
+    )
+    # ── 市场情报每日刷新(config-gate,默认 OFF;07:15 中国,排在 signal_refresh 后)──
+    _scheduler.add_job(
+        job_vkpi_market_intelligence_refresh,
+        trigger=CronTrigger(hour=7, minute=15, timezone=CHINA_TZ),
+        id="vkpi_market_intelligence_refresh",
+        name="Market intelligence daily refresh (classify signals -> new committed run)",
         max_instances=1,
         coalesce=True,
     )
