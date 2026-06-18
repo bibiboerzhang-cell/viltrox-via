@@ -106,8 +106,12 @@ def _generate(prompt: str) -> tuple[str, str]:
             cfg = types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())])
             resp = client.models.generate_content(model=GEMINI_MODEL, contents=prompt, config=cfg)
             text = (getattr(resp, "text", "") or "").strip()
-            if text:
+            # 必须能解析出非空 JSON 才算 Gemini 成功;否则(返非JSON/接地噪声/截断)落 Claude 兜底——
+            # 别像以前那样直接 return 不可解析文本 → 上层 parse_empty 不写库 → 卡片空着不刷新。
+            if text and _parse_json(text):
                 return text, f"gemini:{GEMINI_MODEL}+google_search"
+            if text:
+                logger.warning("ai_today.gemini_unparseable_fallback_claude")
     except Exception:
         logger.warning("ai_today.gemini_failed_fallback_claude", exc_info=True)
     # 2) Claude 兜底(无接地,凭模型知识)。
