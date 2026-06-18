@@ -93,8 +93,12 @@ def _ensure_schema() -> None:
 
 def _generate(prompt: str) -> tuple[str, str]:
     """优先 Gemini + Google 搜索接地(拉真·当下热点/赛事);失败回退 Claude。返回 (文本, 模型标签)。"""
-    # 1) Gemini grounding —— 真·当下热点的关键。
+    # 1) Gemini + Google 搜索接地 —— 真·当下热点的关键。Gemini 能联网,首选它拿真数据。
+    #    对 503/429 等"临时高负载"退避重试;浮动 gemini-flash-latest 持续过载时退到钉死的稳定版
+    #    (避开浮动别名撞上的忙端点),尽量拿真·联网搜索结果,少落 Claude 凭记忆猜。
     try:
+        import time
+
         import app.core.config  # noqa: F401  触发 .env 加载(GOOGLE/GEMINI key)
         import app.services.ai.clients.gemini_client as gc
         from google.genai import types
@@ -104,14 +108,31 @@ def _generate(prompt: str) -> tuple[str, str]:
         client = getattr(gc, "gemini_client", None)
         if client is not None:
             cfg = types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())])
-            resp = client.models.generate_content(model=GEMINI_MODEL, contents=prompt, config=cfg)
-            text = (getattr(resp, "text", "") or "").strip()
-            # 必须能解析出非空 JSON 才算 Gemini 成功;否则(返非JSON/接地噪声/截断)落 Claude 兜底——
-            # 别像以前那样直接 return 不可解析文本 → 上层 parse_empty 不写库 → 卡片空着不刷新。
-            if text and _parse_json(text):
-                return text, f"gemini:{GEMINI_MODEL}+google_search"
-            if text:
-                logger.warning("ai_today.gemini_unparseable_fallback_claude")
+            candidates: list[str] = []
+            for m in (GEMINI_MODEL, "gemini-2.5-flash"):  # 首选配置(可能 latest)→ 钉死稳定版
+                if m and m not in candidates:
+                    candidates.append(m)
+            for model_name in candidates:
+                for attempt in range(3):  # 每模型最多 3 次(0/1/2)
+                    try:
+                        resp = client.models.generate_content(model=model_name, contents=prompt, config=cfg)
+                        text = (getattr(resp, "text", "") or "").strip()
+                        if text and _parse_json(text):
+                            return text, f"gemini:{model_name}+google_search"
+                        break  # 有响应但不可解析 → 重试/换模型也救不了,跳出落 Claude
+                    except Exception as exc:
+                        msg = str(exc).lower()
+                        transient = any(
+                            k in msg
+                            for k in ("503", "unavailable", "429", "resource_exhausted", "overload", "high demand", "timeout", "deadline")
+                        )
+                        if attempt < 2 and transient:
+                            time.sleep(1.5 * (2 ** attempt))  # 1.5s, 3s 退避,给 Google 缓过来
+                            continue
+                        if transient:
+                            break  # 该模型重试用尽 → 换下一个候选模型
+                        raise  # 非临时错(key 无效等)→ 直接落 Claude
+            logger.warning("ai_today.gemini_unavailable_after_retries_fallback_claude")
     except Exception:
         logger.warning("ai_today.gemini_failed_fallback_claude", exc_info=True)
     # 2) Claude 兜底(无接地,凭模型知识)。
