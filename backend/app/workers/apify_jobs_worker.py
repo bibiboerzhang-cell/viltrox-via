@@ -3355,10 +3355,14 @@ def _claim_job(conn: psycopg.Connection[Any]) -> dict[str, Any] | None:
                     last_error_category=NULL,
                     next_retry_at=NULL,
                     started_at=NOW(),
+                    lease_owner=%s,
+                    lease_expires_at=NOW() + make_interval(secs => %s),
                     updated_at=NOW()
                 WHERE id=%s
                 """,
-                (job["id"],),
+                # Fabric 增量1:claim 即写显式租约(owner=worker:pid,TTL=STALE_RECLAIM_SECONDS,
+                # 与今天 reclaim 时序一致)。本增量只「写」租约,reclaim 仍判 updated_at,零行为变更。
+                (f"{WORKER_HEARTBEAT_NAME}:{os.getpid()}", STALE_RECLAIM_SECONDS, job["id"]),
             )
             claimed = dict(job)
     _sync_search_session_job(conn, int(claimed["id"]), raw_status="running")
@@ -3596,8 +3600,11 @@ def _heartbeat_running_job(job_id: int, stop_signal: threading.Event) -> None:
             with psycopg.connect(DB_RUNTIME_URL, autocommit=True) as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "UPDATE apify_jobs SET updated_at=NOW() WHERE id=%s AND status='running'",
-                        (job_id,),
+                        # Fabric 增量1:心跳同时续租约(updated_at 仍写 → 不动今天的 reclaim 判据)。
+                        "UPDATE apify_jobs SET updated_at=NOW(), "
+                        "lease_expires_at=NOW() + make_interval(secs => %s) "
+                        "WHERE id=%s AND status='running'",
+                        (STALE_RECLAIM_SECONDS, job_id),
                     )
         except Exception as exc:
             logger.warning("apify_jobs running heartbeat failed | id=%s error=%s", job_id, exc)

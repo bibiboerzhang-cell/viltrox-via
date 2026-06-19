@@ -216,6 +216,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "167_scheduler_task_voc.sql",
     "168_scheduler_task_market_intelligence.sql",
     "169_vkpi_event_materials_products.sql",
+    "170_apify_jobs_lease_hardening.sql",
 )
 
 try:
