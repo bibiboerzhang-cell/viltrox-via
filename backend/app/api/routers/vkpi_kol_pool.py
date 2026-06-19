@@ -1080,6 +1080,31 @@ def optimize_kol_outreach(
     return {"ok": bool(text), "subject": out_subject, "body": out_body, "model": resp.get("model")}
 
 
+@router.post("/kol-pool/{kol_pool_id}/contacts")
+def add_kol_manual_contact(
+    kol_pool_id: int,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """人工保存 KOL 联系方式(ContactModal「保存联系方式」)。合规留痕:source='manual'、
+    consent='manual_entry'、is_public_declared=FALSE、记操作人;写 vkpi_kol_pool_contacts 审计表 +
+    other_contacts_json 展示快照(并集去重)。纯人工录入零外调。零触 viltrox_fit_score。"""
+    from app.domains.kol import business_contact_extract
+
+    try:
+        return business_contact_extract.add_manual_contact(
+            int(kol_pool_id),
+            email=str(body.get("email") or ""),
+            platform=str(body.get("platform") or ""),
+            handle=str(body.get("handle") or ""),
+            staff=staff or {},
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"save contact error: {exc}") from exc
+
+
 @router.get("/kol-pool/{kol_pool_id}/outreach-draft")
 def get_kol_outreach_draft(
     kol_pool_id: int,

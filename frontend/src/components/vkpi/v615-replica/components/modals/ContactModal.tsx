@@ -26,6 +26,9 @@ export function ContactModal({ item, onClose, apiToken }: any) {
   const [templateApplying, setTemplateApplying] = useState(false);
   const [optimizing, setOptimizing] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [saveErr, setSaveErr] = useState("");
   const [subject, setSubject] = useState(draft?.subject ?? (hasEmail ? genEmailSubject(defaultProduct, item) : ""));
   const [body, setBody] = useState(draft?.body ?? (hasEmail ? genEmailBody(defaultProduct, item) : ""));
   const [newEmail, setNewEmail] = useState(draft?.newEmail ?? "");
@@ -73,7 +76,33 @@ export function ContactModal({ item, onClose, apiToken }: any) {
       setCopied(true); setTimeout(() => setCopied(false), 1500);
     } catch (_e) { /* ignore */ }
   };
-  
+  // 保存联系方式:写后端合规留痕(source=manual/consent=manual_entry/记操作人)+ 展示快照。
+  // 成功后关窗;KOL 列表下次刷新即显示。纯人工录入、零外调。
+  const saveContact = async () => {
+    if (saving) return;
+    const em = (newEmail || "").trim();
+    const hd = (newHandle || "").trim();
+    if (!em && !hd) { setSaveErr("请至少填写邮箱或一个渠道 handle"); return; }
+    if (!apiToken) { setSaveErr("缺少登录令牌,无法保存"); return; }
+    setSaving(true); setSaveErr("");
+    try {
+      const res: any = await apiFetch(
+        `/api/admin/vkpi/kol-pool/${item.id}/contacts`,
+        { method: "POST", body: JSON.stringify({ email: em, platform: newPlatform, handle: hd }) },
+        apiToken,
+      );
+      if (res && res.status === "saved") {
+        setSaved(true);
+        try { CONTACT_DRAFTS.delete(item.id); } catch (_e) { /* ignore */ }
+        setTimeout(() => { onClose && onClose(); }, 800);
+      } else {
+        setSaveErr(res && res.reason ? String(res.reason) : "保存失败,请重试");
+      }
+    } catch (e: any) {
+      setSaveErr(String(e && e.message ? e.message : e));
+    } finally { setSaving(false); }
+  };
+
   return e("div", {
     className: "v615-modal fixed inset-0 z-[60] flex items-center justify-center p-4",
     style: { background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)" },
@@ -245,12 +274,14 @@ export function ContactModal({ item, onClose, apiToken }: any) {
             className: "flex items-center gap-1 text-[11px] text-cyan-300 hover:text-cyan-200"
           }, e(ExternalLink, { size: 10 }), item.profile_url.replace("https://", ""))
         ),
+        saveErr && e("div", { className: "rounded-md border border-rose-500/30 bg-rose-500/10 px-2.5 py-1.5 text-[10.5px] text-rose-200" }, saveErr),
         e("div", { className: "flex items-center gap-2 pt-2" },
           e("button", {
-            disabled: true,
-            title: "待接入: 需要联系人写入接口和权限校验",
-            className: "flex-1 flex cursor-not-allowed items-center justify-center gap-1.5 rounded-md bg-purple-600/40 px-3 py-2 text-[11px] font-medium text-purple-100/70"
-          }, e(Check, { size: 11 }), "保存联系方式 · 待接入"),
+            disabled: saving || saved || (!newEmail.trim() && !newHandle.trim()),
+            onClick: saveContact,
+            title: saved ? "已保存" : "保存到 KOL 联系方式(合规留痕 · 不外发)",
+            className: `flex-1 flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-[11px] font-medium ${saving || saved || (!newEmail.trim() && !newHandle.trim()) ? "cursor-not-allowed bg-purple-600/40 text-purple-100/70" : "bg-purple-600 text-white hover:bg-purple-500"}`
+          }, e(Check, { size: 11 }), saved ? "已保存 ✓" : saving ? "保存中…" : "保存联系方式"),
           e("button", {
             onClick: onClose,
             className: "rounded-md border border-white/[0.1] px-3 py-2 text-[11px] text-slate-400 hover:bg-white/[0.04]"

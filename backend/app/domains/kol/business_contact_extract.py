@@ -212,6 +212,84 @@ def enrich_business_contacts(kol_pool_id: int, *, staff: dict[str, Any] | None =
     return {"status": "enriched", "kol_pool_id": int(kol_pool_id), "contacts": len(contacts), "source": contacts[0]["contact_source"], "apify_run_ref": apify_run_ref}
 
 
+def add_manual_contact(
+    kol_pool_id: int,
+    *,
+    email: str = "",
+    platform: str = "",
+    handle: str = "",
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """人工保存联系方式(ContactModal「保存联系方式」)。合规留痕:contact_source='manual'、
+    consent_basis='manual_entry'、is_public_declared=FALSE(员工录入,不主张公开声明)、
+    extracted_by_staff_id=操作人;写 vkpi_kol_pool_contacts 审计表 + other_contacts_json 展示快照
+    (并集去重)。无富化预算闸(纯人工录入、零外调)。红线:只写联系列,绝不触 viltrox_fit_score。"""
+    email = (email or "").strip()
+    handle = (handle or "").strip()
+    platform = (platform or "").strip()
+    if not email and not handle:
+        return {"status": "empty", "reason": "need email or handle"}
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT id, email, other_contacts_json FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)
+    ).fetchone()
+    if not row:
+        raise LookupError("kol pool item not found")
+    now = _utcnow()
+    actor = (staff or {}).get("staff_id") or (staff or {}).get("id") or (staff or {}).get("user_id")
+
+    new_entries: list[dict[str, Any]] = []
+    if email:
+        new_entries.append({"contact_type": "email", "contact_value": email, "contact_source": "manual", "label": "email"})
+    if handle:
+        new_entries.append({
+            "contact_type": "link", "contact_value": handle, "contact_source": "manual",
+            "platform": platform or "other", "label": platform or "link",
+        })
+
+    for c in new_entries:
+        conn.execute(
+            """
+            INSERT INTO vkpi_kol_pool_contacts
+                (kol_pool_id, contact_type, contact_value, contact_source, source_url,
+                 consent_basis, is_public_declared, extracted_by_staff_id, created_at)
+            VALUES (?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(kol_pool_id, contact_type, contact_value) DO NOTHING
+            """,
+            (int(kol_pool_id), c["contact_type"], c["contact_value"], "manual", "",
+             "manual_entry", False, actor, now),
+        )
+
+    # 展示快照:并集去重(by contact_value 小写),保留既有抓取来源条目
+    try:
+        existing = json.loads(row["other_contacts_json"] or "[]")
+        if not isinstance(existing, list):
+            existing = []
+    except Exception:
+        existing = []
+    seen = {str((e or {}).get("contact_value") or "").strip().lower() for e in existing if isinstance(e, dict)}
+    for c in new_entries:
+        key = c["contact_value"].strip().lower()
+        if key and key not in seen:
+            existing.append(c)
+            seen.add(key)
+
+    conn.execute(
+        """
+        UPDATE vkpi_kol_pool
+        SET email=CASE WHEN COALESCE(email,'')='' THEN ? ELSE email END,
+            other_contacts_json=?,
+            contact_source=CASE WHEN COALESCE(contact_source,'')='' THEN 'manual' ELSE contact_source END,
+            contact_first_seen_at=COALESCE(contact_first_seen_at, ?),
+            updated_at=?
+        WHERE id=?
+        """,
+        (email or "", json.dumps(existing, ensure_ascii=False), now, now, int(kol_pool_id)),
+    )
+    conn.commit()
+    return {"status": "saved", "kol_pool_id": int(kol_pool_id), "saved": len(new_entries), "contacts": existing}
+
+
 def _apify_scrape_about(*, platform: str, handle: str, profile_url: str, kol_pool_id: int, staff: dict[str, Any] | None = None) -> tuple[dict[str, Any], str]:
     """Apify 专抓 about 页(默认仅 youtube 有现成 about 抓取链路)。
 
