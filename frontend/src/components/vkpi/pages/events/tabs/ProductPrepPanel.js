@@ -1,20 +1,29 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Camera, Check, ExternalLink, Package, Plus, RefreshCw, X } from "lucide-react";
-import { PRODUCT_PREP_DATA } from "../data/product-prep.js";
+import { addEventProduct, deleteEventProduct } from "../../../../../services/vkpi/events-api";
 import AddProductPrepModal from "../modals/AddProductPrepModal.js";
 import DeleteConfirmModal from "../modals/DeleteConfirmModal.js";
 import { ITEM_STATUS, PRODUCT_CATEGORIES, PRODUCT_SOURCES } from "../shared/constants.js";
 import { ownerByInitial } from "../shared/lookups.js";
 
 const e = React.createElement;
-export default function ProductPrepPanel({ ev, stock }) {
-  const [products, setProducts] = useState(PRODUCT_PREP_DATA[ev.id] || []);
+export default function ProductPrepPanel({ ev, stock, token, products: productsProp = [], loading, error, reload }) {
+  const [products, setProducts] = useState(productsProp);
   const [addingSide, setAddingSide] = useState(null);
   const [deleting, setDeleting] = useState(null);
-  
+  const [opError, setOpError] = useState("");
+
+  // 父级 reload 后 props.products 变化 → 同步本地乐观态(镜像 TasksTab)
+  useEffect(() => { setProducts(productsProp); }, [productsProp]);
+
+  const msg = (err) => String(err && err.message ? err.message : err);
+
   function deleteProduct(id) {
-    setProducts(prev => prev.filter(p => p.id !== id));
     setDeleting(null);
+    setProducts(prev => prev.filter(p => p.id !== id));  // 乐观
+    deleteEventProduct(token, ev.id, id)
+      .then(() => reload && reload())
+      .catch(err => { setOpError("删除产品失败:" + msg(err)); reload && reload(); });
   }
   
   const have = products.filter(p => PRODUCT_SOURCES[p.source]?.side === "have");
@@ -69,6 +78,8 @@ export default function ProductPrepPanel({ ev, stock }) {
   }
   
   return e("div", { className: "p-5" },
+    (error || opError) && e("div", { className: "mb-3 px-3 py-2 rounded-lg border border-rose-500/30 bg-rose-500/10 text-[11px] text-rose-200" }, "⚠ ", opError || error),
+    loading && e("div", { className: "mb-3 px-3 py-2 rounded-lg border border-white/[0.06] bg-white/[0.02] text-[11px] text-slate-400" }, "加载产品中…"),
     // 顶部 summary
     e("div", { className: "mb-4 rounded-lg border border-purple-500/20 bg-purple-500/[0.04] p-3 flex items-center justify-between flex-wrap gap-3" },
       e("div", { className: "flex items-center gap-2" },
@@ -146,7 +157,13 @@ export default function ProductPrepPanel({ ev, stock }) {
       side: addingSide,
       stock,
       onClose: () => setAddingSide(null),
-      onSubmit: (p) => { setProducts(prev => [...prev, p]); setAddingSide(null); },
+      onSubmit: (p) => {
+        setAddingSide(null);
+        setProducts(prev => [...prev, p]);  // 乐观
+        addEventProduct(token, ev.id, p)
+          .then(() => reload && reload())
+          .catch(err => { setOpError("添加产品失败:" + msg(err)); reload && reload(); });
+      },
     }),
     deleting && e(DeleteConfirmModal, {
       title: `从清单移除 "${deleting.name}"?`,

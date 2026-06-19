@@ -1,21 +1,30 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { AlertCircle, Download, Edit3, ExternalLink, Package, Plus, X } from "lucide-react";
-import { MATERIALS_DATA } from "../data/materials.js";
+import { addEventMaterial, deleteEventMaterial } from "../../../../../services/vkpi/events-api";
 import AddMaterialModal from "../modals/AddMaterialModal.js";
 import DeleteConfirmModal from "../modals/DeleteConfirmModal.js";
 import { ITEM_STATUS, MATERIAL_CATEGORIES, MATERIAL_SOURCE } from "../shared/constants.js";
 import { ownerByInitial } from "../shared/lookups.js";
 
 const e = React.createElement;
-export default function MarketingMaterialsPanel({ ev }) {
-  const [materials, setMaterials] = useState(MATERIALS_DATA[ev.id] || []);
+export default function MarketingMaterialsPanel({ ev, token, materials: materialsProp = [], loading, error, reload }) {
+  const [materials, setMaterials] = useState(materialsProp);
   const [filter, setFilter] = useState("all");
   const [showAdd, setShowAdd] = useState(false);
   const [deleting, setDeleting] = useState(null);
-  
+  const [opError, setOpError] = useState("");
+
+  // 父级 reload 后 props.materials 变化 → 同步本地乐观态(镜像 TasksTab)
+  useEffect(() => { setMaterials(materialsProp); }, [materialsProp]);
+
+  const msg = (err) => String(err && err.message ? err.message : err);
+
   function deleteMat(id) {
-    setMaterials(prev => prev.filter(m => m.id !== id));
     setDeleting(null);
+    setMaterials(prev => prev.filter(m => m.id !== id));  // 乐观
+    deleteEventMaterial(token, ev.id, id)
+      .then(() => reload && reload())
+      .catch(err => { setOpError("删除物料失败:" + msg(err)); reload && reload(); });
   }
   
   function exportCsv() {
@@ -39,6 +48,8 @@ export default function MarketingMaterialsPanel({ ev }) {
   const readyCount = materials.filter(m => m.status === "ready" || m.status === "shipped").length;
   
   return e("div", { className: "p-5" },
+    (error || opError) && e("div", { className: "mb-3 px-3 py-2 rounded-lg border border-rose-500/30 bg-rose-500/10 text-[11px] text-rose-200" }, "⚠ ", opError || error),
+    loading && e("div", { className: "mb-3 px-3 py-2 rounded-lg border border-white/[0.06] bg-white/[0.02] text-[11px] text-slate-400" }, "加载物料中…"),
     e("div", { className: "mb-4 rounded-lg border border-purple-500/20 bg-purple-500/[0.04] p-3 flex items-center justify-between" },
       e("div", { className: "flex items-center gap-2" },
         e(Package, { size: 14, className: "text-purple-300" }),
@@ -165,7 +176,13 @@ export default function MarketingMaterialsPanel({ ev }) {
     
     showAdd && e(AddMaterialModal, {
       onClose: () => setShowAdd(false),
-      onSubmit: (m) => { setMaterials(prev => [m, ...prev]); setShowAdd(false); },
+      onSubmit: (m) => {
+        setShowAdd(false);
+        setMaterials(prev => [m, ...prev]);  // 乐观
+        addEventMaterial(token, ev.id, m)
+          .then(() => reload && reload())
+          .catch(err => { setOpError("添加物料失败:" + msg(err)); reload && reload(); });
+      },
     }),
     deleting && e(DeleteConfirmModal, {
       title: `删除物料 "${deleting.name}"?`,

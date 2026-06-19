@@ -29,7 +29,7 @@ export default function EventDetailView({ ev, onBack, currentUser, onEdit, onDel
     .some((s) => String(s.id) === String(currentUser.id) && s.isAdmin);
 
   // 真后端详情:一次拉 tasks/expenses/invites,各 tab 共享 + 可 reload
-  const [detail, setDetail] = useState({ tasks: [], expenses: [], invites: [] });
+  const [detail, setDetail] = useState({ tasks: [], expenses: [], invites: [], materials: [], products: [] });
   const [detailLoading, setDetailLoading] = useState(true);
   const [detailError, setDetailError] = useState("");
 
@@ -42,6 +42,8 @@ export default function EventDetailView({ ev, onBack, currentUser, onEdit, onDel
           tasks: (res.tasks || []).map(toUiTask),
           expenses: (res.expenses || []).map(toUiExpense),
           invites: (res.invites || []).map(toUiInvite),
+          materials: res.materials || [],  // 后端已回 camelCase,直吃
+          products: res.products || [],
         });
       })
       .catch(err => { setDetailError(String(err && err.message ? err.message : err)); })
@@ -58,6 +60,8 @@ export default function EventDetailView({ ev, onBack, currentUser, onEdit, onDel
           tasks: (res.tasks || []).map(toUiTask),
           expenses: (res.expenses || []).map(toUiExpense),
           invites: (res.invites || []).map(toUiInvite),
+          materials: res.materials || [],  // 后端已回 camelCase,直吃
+          products: res.products || [],
         });
       })
       .catch(err => { if (alive) setDetailError(String(err && err.message ? err.message : err)); })
@@ -180,7 +184,7 @@ export default function EventDetailView({ ev, onBack, currentUser, onEdit, onDel
     tab === "budget"    && e(BudgetExpensesTab, { ev, currentUser, token, expenses: detail.expenses, loading: detailLoading, error: detailError, reload: reloadDetail }),
     tab === "tasks"     && e(TasksTab, { ev, currentUser, token, tasks: detail.tasks, loading: detailLoading, error: detailError, reload: reloadDetail }),
     tab === "kols"      && e(KolsTab, { ev, token, invites: detail.invites, loading: detailLoading, error: detailError, reload: reloadDetail }),
-    tab === "materials" && e(MaterialsTab, { ev, stock }),
+    tab === "materials" && e(MaterialsTab, { ev, stock, token, materials: detail.materials, products: detail.products, loading: detailLoading, error: detailError, reload: reloadDetail }),
     tab === "onsite"    && e(PlaceholderTab, { icon: Activity, title: "现场数据 (Event 进行中才激活)", message: "到场人数 / Lead 收集 / 现场销售 / 媒体到访 / KOL 内容产出 · 真接入时实时同步现场签到 iPad" }),
     tab === "retro"     && e(PlaceholderTab, { icon: BookOpen, title: "复盘 (Event 结束后生成)", message: "投入 vs 产出 · ROI 计算 · 高光 + 痛点 · AI 起草复盘文档" }),
 

@@ -248,6 +248,8 @@ export interface VkpiEventDetail {
   tasks: VkpiEventTask[];
   expenses: VkpiEventExpense[];
   invites: VkpiEventKolInvite[];
+  materials: VkpiEventMaterial[];
+  products: VkpiEventProduct[];
 }
 
 /** GET 单活动详情(item + 内嵌 tasks/expenses/invites)。 */
@@ -390,6 +392,113 @@ export async function removeEventMember(
     {
       method: "DELETE",
     },
+    token,
+  );
+}
+
+// ── Materials / Products(活动物料 + 产品准备,逐项落库)────────────────────────
+// 后端 _material_row / _product_row 已回 camelCase 形态(trackingNo/fileUrl/arriveBy/
+// returnAfter…),前端面板直接吃,无需 adapter。
+
+export interface VkpiEventMaterial {
+  id: string;
+  category: string;
+  name: string;
+  source: string;
+  qty: number;
+  status: string;
+  owner: string;
+  note: string;
+  trackingNo: string;
+  fileUrl: string;
+  alert: string;
+  updatedAt: string;
+}
+
+export interface VkpiEventProduct {
+  id: string;
+  category: string;
+  name: string;
+  source: string;
+  qty: number;
+  status: string;
+  owner: string;
+  note: string;
+  trackingNo: string;
+  arriveBy: string;
+  returnAfter: boolean;
+}
+
+export async function addEventMaterial(
+  token: string,
+  eventId: string,
+  payload: Record<string, unknown>,
+): Promise<{ item?: VkpiEventMaterial } | VkpiEventMaterial> {
+  return apiFetch<{ item?: VkpiEventMaterial } | VkpiEventMaterial>(
+    `/api/admin/vkpi/events/${encodeURIComponent(eventId)}/materials`,
+    { method: "POST", body: jsonBody(payload) },
+    token,
+  );
+}
+
+export async function updateEventMaterial(
+  token: string,
+  eventId: string,
+  materialId: string,
+  payload: Record<string, unknown>,
+): Promise<{ item?: VkpiEventMaterial } | VkpiEventMaterial> {
+  return apiFetch<{ item?: VkpiEventMaterial } | VkpiEventMaterial>(
+    `/api/admin/vkpi/events/${encodeURIComponent(eventId)}/materials/${encodeURIComponent(materialId)}`,
+    { method: "PATCH", body: jsonBody(payload) },
+    token,
+  );
+}
+
+export async function deleteEventMaterial(
+  token: string,
+  eventId: string,
+  materialId: string,
+): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(
+    `/api/admin/vkpi/events/${encodeURIComponent(eventId)}/materials/${encodeURIComponent(materialId)}`,
+    { method: "DELETE" },
+    token,
+  );
+}
+
+export async function addEventProduct(
+  token: string,
+  eventId: string,
+  payload: Record<string, unknown>,
+): Promise<{ item?: VkpiEventProduct } | VkpiEventProduct> {
+  return apiFetch<{ item?: VkpiEventProduct } | VkpiEventProduct>(
+    `/api/admin/vkpi/events/${encodeURIComponent(eventId)}/products`,
+    { method: "POST", body: jsonBody(payload) },
+    token,
+  );
+}
+
+export async function updateEventProduct(
+  token: string,
+  eventId: string,
+  productId: string,
+  payload: Record<string, unknown>,
+): Promise<{ item?: VkpiEventProduct } | VkpiEventProduct> {
+  return apiFetch<{ item?: VkpiEventProduct } | VkpiEventProduct>(
+    `/api/admin/vkpi/events/${encodeURIComponent(eventId)}/products/${encodeURIComponent(productId)}`,
+    { method: "PATCH", body: jsonBody(payload) },
+    token,
+  );
+}
+
+export async function deleteEventProduct(
+  token: string,
+  eventId: string,
+  productId: string,
+): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(
+    `/api/admin/vkpi/events/${encodeURIComponent(eventId)}/products/${encodeURIComponent(productId)}`,
+    { method: "DELETE" },
     token,
   );
 }

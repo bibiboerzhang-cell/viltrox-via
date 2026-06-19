@@ -55,6 +55,55 @@ def _task_row(r: Any) -> dict[str, Any]:
     return row
 
 
+def _short_date(raw: Any) -> str:
+    """updated_at(datetime / ISO 串)→ 展示用 "M/D"(给物料/产品 updatedAt 列)。
+    诚实派生服务端时间,绝不硬编码「刚刚/实时」(时间机制铁律)。"""
+    if not raw:
+        return ""
+    try:
+        dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00")) if isinstance(raw, str) else raw
+        return f"{dt.month}/{dt.day}"
+    except Exception:
+        return str(raw)
+
+
+def _material_row(r: Any) -> dict[str, Any]:
+    """vkpi_event_materials 行 → 前端 MarketingMaterialsPanel 期望的 camelCase 形态。"""
+    d = dict(r)
+    return {
+        "id": d.get("id"),
+        "category": d.get("category") or "display",
+        "name": d.get("name") or "",
+        "source": d.get("source") or "ship",
+        "qty": int(d.get("qty") or 0),
+        "status": d.get("status") or "pending",
+        "owner": d.get("owner") or "",
+        "note": d.get("note") or "",
+        "trackingNo": d.get("tracking_no") or "",
+        "fileUrl": d.get("file_url") or "",
+        "alert": d.get("alert") or "",
+        "updatedAt": _short_date(d.get("updated_at")),
+    }
+
+
+def _product_row(r: Any) -> dict[str, Any]:
+    """vkpi_event_products 行 → 前端 ProductPrepPanel 期望的 camelCase 形态。"""
+    d = dict(r)
+    return {
+        "id": d.get("id"),
+        "category": d.get("category") or "lens",
+        "name": d.get("name") or "",
+        "source": d.get("source") or "new_purchase",
+        "qty": int(d.get("qty") or 0),
+        "status": d.get("status") or "ordered",
+        "owner": d.get("owner") or "",
+        "note": d.get("note") or "",
+        "trackingNo": d.get("tracking_no") or "",
+        "arriveBy": d.get("arrive_by") or "",
+        "returnAfter": bool(d.get("return_after")),
+    }
+
+
 def _staff_id(staff: dict[str, Any] | None) -> int | None:
     try:
         return scope.actor_staff_id(staff)
@@ -138,7 +187,7 @@ def get_event_detail(event_id: str, staff: dict[str, Any] | None) -> dict[str, A
     conn = get_conn()
     row = conn.execute("SELECT * FROM vkpi_events WHERE id = ?", (str(event_id),)).fetchone()
     if not row:
-        return {"item": None, "tasks": [], "expenses": [], "invites": []}
+        return {"item": None, "tasks": [], "expenses": [], "invites": [], "materials": [], "products": []}
     tasks = conn.execute(
         "SELECT * FROM vkpi_event_tasks WHERE event_id = ? ORDER BY due_date ASC NULLS LAST, created_at ASC",
         (str(event_id),),
@@ -149,6 +198,12 @@ def get_event_detail(event_id: str, staff: dict[str, Any] | None) -> dict[str, A
     invites = conn.execute(
         "SELECT * FROM vkpi_event_kol_invites WHERE event_id = ? ORDER BY created_at ASC", (str(event_id),)
     ).fetchall()
+    materials = conn.execute(
+        "SELECT * FROM vkpi_event_materials WHERE event_id = ? ORDER BY created_at ASC", (str(event_id),)
+    ).fetchall()
+    products = conn.execute(
+        "SELECT * FROM vkpi_event_products WHERE event_id = ? ORDER BY created_at ASC", (str(event_id),)
+    ).fetchall()
     item = _event_row(row)
     item["invited_kols_json"] = _merge_invited_kols(conn, event_id, item.get("invited_kols_json"))
     return {
@@ -156,6 +211,8 @@ def get_event_detail(event_id: str, staff: dict[str, Any] | None) -> dict[str, A
         "tasks": [_task_row(t) for t in tasks],
         "expenses": [dict(x) for x in expenses],
         "invites": [dict(i) for i in invites],
+        "materials": [_material_row(m) for m in materials],
+        "products": [_product_row(p) for p in products],
     }
 
 
@@ -382,3 +439,132 @@ def remove_kol(event_id: str, invite_id: str, staff: dict[str, Any] | None) -> d
     conn.execute("DELETE FROM vkpi_event_kol_invites WHERE id = ? AND event_id = ?", (str(invite_id), str(event_id)))
     conn.commit()
     return {"ok": True, "id": str(invite_id)}
+
+
+# ── Materials(活动营销物料,逐项落库)──────────────────────────────────────────
+def add_material(event_id: str, payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
+    conn = get_conn()
+    mid = str(payload.get("id") or _gen_id("mat"))
+    conn.execute(
+        """
+        INSERT INTO vkpi_event_materials
+          (id, event_id, name, category, source, qty, status, owner, note, tracking_no, file_url, alert, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?, NOW(), NOW())
+        """,
+        (
+            mid, str(event_id), str(payload.get("name") or ""), str(payload.get("category") or "display"),
+            str(payload.get("source") or "ship"), int(payload.get("qty") or 1),
+            str(payload.get("status") or "pending"), str(payload.get("owner") or ""),
+            str(payload.get("note") or ""), str(payload.get("trackingNo") or payload.get("tracking_no") or ""),
+            str(payload.get("fileUrl") or payload.get("file_url") or ""), str(payload.get("alert") or ""),
+        ),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM vkpi_event_materials WHERE id = ?", (mid,)).fetchone()
+    return {"item": _material_row(row) if row else None}
+
+
+def update_material(event_id: str, material_id: str, payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
+    conn = get_conn()
+    sets: list[str] = []
+    vals: list[Any] = []
+    for key in ("name", "category", "source", "status", "owner", "note", "alert"):
+        if key in payload:
+            sets.append(f"{key} = ?")
+            vals.append(str(payload[key]) if payload[key] is not None else "")
+    if "qty" in payload:
+        sets.append("qty = ?")
+        vals.append(int(payload.get("qty") or 0))
+    if "trackingNo" in payload or "tracking_no" in payload:
+        sets.append("tracking_no = ?")
+        vals.append(str(payload.get("trackingNo") or payload.get("tracking_no") or ""))
+    if "fileUrl" in payload or "file_url" in payload:
+        sets.append("file_url = ?")
+        vals.append(str(payload.get("fileUrl") or payload.get("file_url") or ""))
+    if not sets:
+        row = conn.execute(
+            "SELECT * FROM vkpi_event_materials WHERE id = ? AND event_id = ?", (str(material_id), str(event_id))
+        ).fetchone()
+        return {"item": _material_row(row) if row else None}
+    sets.append("updated_at = NOW()")
+    vals.extend([str(material_id), str(event_id)])
+    conn.execute(f"UPDATE vkpi_event_materials SET {', '.join(sets)} WHERE id = ? AND event_id = ?", tuple(vals))
+    conn.commit()
+    row = conn.execute("SELECT * FROM vkpi_event_materials WHERE id = ?", (str(material_id),)).fetchone()
+    return {"item": _material_row(row) if row else None}
+
+
+def delete_material(event_id: str, material_id: str, staff: dict[str, Any] | None) -> dict[str, Any]:
+    conn = get_conn()
+    conn.execute("DELETE FROM vkpi_event_materials WHERE id = ? AND event_id = ?", (str(material_id), str(event_id)))
+    conn.commit()
+    return {"ok": True, "id": str(material_id)}
+
+
+# ── Products(活动产品准备,逐项落库)──────────────────────────────────────────
+def add_product(event_id: str, payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
+    conn = get_conn()
+    pid = str(payload.get("id") or _gen_id("pp"))
+    ra = payload.get("returnAfter")
+    if ra is None:
+        ra = payload.get("return_after")
+    conn.execute(
+        """
+        INSERT INTO vkpi_event_products
+          (id, event_id, name, category, source, qty, status, owner, note, tracking_no, arrive_by, return_after, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?, NOW(), NOW())
+        """,
+        (
+            pid, str(event_id), str(payload.get("name") or ""), str(payload.get("category") or "lens"),
+            str(payload.get("source") or "new_purchase"), int(payload.get("qty") or 1),
+            str(payload.get("status") or "ordered"), str(payload.get("owner") or ""),
+            str(payload.get("note") or ""), str(payload.get("trackingNo") or payload.get("tracking_no") or ""),
+            str(payload.get("arriveBy") or payload.get("arrive_by") or ""), bool(ra or False),
+        ),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM vkpi_event_products WHERE id = ?", (pid,)).fetchone()
+    return {"item": _product_row(row) if row else None}
+
+
+def update_product(event_id: str, product_id: str, payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
+    conn = get_conn()
+    sets: list[str] = []
+    vals: list[Any] = []
+    for key in ("name", "category", "source", "status", "owner", "note"):
+        if key in payload:
+            sets.append(f"{key} = ?")
+            vals.append(str(payload[key]) if payload[key] is not None else "")
+    if "qty" in payload:
+        sets.append("qty = ?")
+        vals.append(int(payload.get("qty") or 0))
+    if "trackingNo" in payload or "tracking_no" in payload:
+        sets.append("tracking_no = ?")
+        vals.append(str(payload.get("trackingNo") or payload.get("tracking_no") or ""))
+    if "arriveBy" in payload or "arrive_by" in payload:
+        sets.append("arrive_by = ?")
+        vals.append(str(payload.get("arriveBy") or payload.get("arrive_by") or ""))
+    if "returnAfter" in payload or "return_after" in payload:
+        ra = payload.get("returnAfter")
+        if ra is None:
+            ra = payload.get("return_after")
+        sets.append("return_after = ?")
+        vals.append(bool(ra or False))
+    if not sets:
+        row = conn.execute(
+            "SELECT * FROM vkpi_event_products WHERE id = ? AND event_id = ?", (str(product_id), str(event_id))
+        ).fetchone()
+        return {"item": _product_row(row) if row else None}
+    sets.append("updated_at = NOW()")
+    vals.extend([str(product_id), str(event_id)])
+    conn.execute(f"UPDATE vkpi_event_products SET {', '.join(sets)} WHERE id = ? AND event_id = ?", tuple(vals))
+    conn.commit()
+    row = conn.execute("SELECT * FROM vkpi_event_products WHERE id = ?", (str(product_id),)).fetchone()
+    return {"item": _product_row(row) if row else None}
+
+
+def delete_product(event_id: str, product_id: str, staff: dict[str, Any] | None) -> dict[str, Any]:
+    conn = get_conn()
+    conn.execute("DELETE FROM vkpi_event_products WHERE id = ? AND event_id = ?", (str(product_id), str(event_id)))
+    conn.commit()
+    return {"ok": True, "id": str(product_id)}

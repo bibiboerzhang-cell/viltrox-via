@@ -4,7 +4,7 @@ import MarketingMaterialsPanel from "./MarketingMaterialsPanel.js";
 import ProductPrepPanel from "./ProductPrepPanel.js";
 
 const e = React.createElement;
-export default function MaterialsTab({ ev, stock }) {
+export default function MaterialsTab({ ev, stock, token, materials = [], products = [], loading, error, reload }) {
   const [sub, setSub] = useState("marketing");
   
   return e("div", null,
@@ -21,7 +21,7 @@ export default function MaterialsTab({ ev, stock }) {
         }, e(IS, { size: 11 }), s.l);
       })
     ),
-    sub === "marketing" && e(MarketingMaterialsPanel, { ev }),
-    sub === "products"  && e(ProductPrepPanel, { ev, stock })
+    sub === "marketing" && e(MarketingMaterialsPanel, { ev, token, materials, loading, error, reload }),
+    sub === "products"  && e(ProductPrepPanel, { ev, stock, token, products, loading, error, reload })
   );
 }

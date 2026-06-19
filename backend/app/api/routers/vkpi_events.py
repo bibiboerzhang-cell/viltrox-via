@@ -189,3 +189,41 @@ def invite_kol(event_id: str, body: dict, staff=Depends(require_tab("vkpi", "wri
 def remove_kol(event_id: str, invite_id: str, staff=Depends(require_tab("vkpi", "write"))):
     _assert_write(event_id, staff)
     return _guard(service.remove_kol, event_id, invite_id, staff)
+
+
+# ── Materials(活动营销物料,逐项落库)──────────────────────────────────────────
+@router.post("/{event_id}/materials")
+def add_material(event_id: str, body: dict, staff=Depends(require_tab("vkpi", "write"))):
+    _assert_write(event_id, staff)
+    return _guard(service.add_material, event_id, body or {}, staff)
+
+
+@router.patch("/{event_id}/materials/{material_id}")
+def update_material(event_id: str, material_id: str, body: dict, staff=Depends(require_tab("vkpi", "write"))):
+    _assert_write(event_id, staff)
+    return _guard(service.update_material, event_id, material_id, body or {}, staff)
+
+
+@router.delete("/{event_id}/materials/{material_id}")
+def delete_material(event_id: str, material_id: str, staff=Depends(require_tab("vkpi", "write"))):
+    _assert_write(event_id, staff)
+    return _guard(service.delete_material, event_id, material_id, staff)
+
+
+# ── Products(活动产品准备,逐项落库)──────────────────────────────────────────
+@router.post("/{event_id}/products")
+def add_product(event_id: str, body: dict, staff=Depends(require_tab("vkpi", "write"))):
+    _assert_write(event_id, staff)
+    return _guard(service.add_product, event_id, body or {}, staff)
+
+
+@router.patch("/{event_id}/products/{product_id}")
+def update_product(event_id: str, product_id: str, body: dict, staff=Depends(require_tab("vkpi", "write"))):
+    _assert_write(event_id, staff)
+    return _guard(service.update_product, event_id, product_id, body or {}, staff)
+
+
+@router.delete("/{event_id}/products/{product_id}")
+def delete_product(event_id: str, product_id: str, staff=Depends(require_tab("vkpi", "write"))):
+    _assert_write(event_id, staff)
+    return _guard(service.delete_product, event_id, product_id, staff)
