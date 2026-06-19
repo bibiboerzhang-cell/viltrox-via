@@ -852,6 +852,31 @@ export async function getKolPoolAccountDossier(token: string, kolPoolId: string 
   );
 }
 
+// P1-1 KOL 合作动作(平台为基准):读当前状态+时间线 / 记一条动作。
+export async function getKolCooperation(token: string, kolPoolId: string | number) {
+  return apiFetch<Row>(
+    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/cooperation`,
+    { cache: "no-store" },
+    token,
+  );
+}
+
+export async function recordKolCooperation(
+  token: string,
+  kolPoolId: string | number,
+  action: string,
+  note = "",
+) {
+  return apiFetch<Row>(
+    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/cooperation`,
+    {
+      method: "POST",
+      body: jsonBody({ action, note }),
+    },
+    token,
+  );
+}
+
 export async function refreshKolPoolItem(token: string, kolPoolId: number, force = false) {
   return apiFetch<VkpiKolPoolRefreshState>(
     `/api/admin/vkpi/kol-pool/${kolPoolId}/refresh`,

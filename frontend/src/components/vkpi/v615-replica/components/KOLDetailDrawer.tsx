@@ -7,7 +7,7 @@ import { AlertTriangle, Check, Link2, Share2, Shield, Sparkles, Video } from "lu
 import { KPAvatar } from "./KPAvatar";
 import { AnalysisCard, KOLVideoAnalysisPanel, type AnalysisBundle } from "./KOLVideoAnalysisPanel";
 import { ShareKolModal } from "../../shared/ShareKolModal";
-import { enqueueAllKolVideos, enqueueVideoAnalysis, getKolPoolAccountDossier, getKolPoolContentFit, getKolPoolDimensions11, getKolPoolLlmDeepAnalysis } from "../../../../services/vkpi/kolPool-api";
+import { enqueueAllKolVideos, enqueueVideoAnalysis, getKolCooperation, getKolPoolAccountDossier, getKolPoolContentFit, getKolPoolDimensions11, getKolPoolLlmDeepAnalysis, recordKolCooperation } from "../../../../services/vkpi/kolPool-api";
 import { getKolMemory } from "../../../../services/vkpi/kolMemory-api";
 import { GoaffproLinkSection } from "../../shared/GoaffproLinkSection";
 import { proxiedImageUrl, proxiedVideoUrl } from "../../shared/mediaProxy";
@@ -585,6 +585,87 @@ function LlmDeepFullBreakdown({ dimensions }: any) {
   );
 }
 
+// P1-1 合作动作(平台为基准):续约/加大投入/评估/退出 → 写 vkpi_kol_cooperation_events,
+// 当前状态=最新事件;按真 kol_pool_id 落库。零触 viltrox_fit_score。
+function CooperationPanel({ apiToken, kolPoolId }: any) {
+  const [coop, setCoop] = React.useState<any>(null);
+  const [open, setOpen] = React.useState(false);
+  const [busy, setBusy] = React.useState("");
+  const [err, setErr] = React.useState("");
+
+  const load = React.useCallback(() => {
+    if (!apiToken || !kolPoolId) return;
+    void getKolCooperation(apiToken, kolPoolId)
+      .then((payload: any) => setCoop(payload || null))
+      .catch(() => setCoop(null));
+  }, [apiToken, kolPoolId]);
+  React.useEffect(() => { setCoop(null); load(); }, [load]);
+
+  if (!apiToken || !kolPoolId) return null;
+  const status = coop?.status || "";
+  const statusLabel = coop?.status_label || "未设定";
+  const events = Array.isArray(coop?.events) ? coop.events : [];
+  const statusColor = status === "exited" ? "#f87171" : status === "scaling" ? "#34d399"
+    : status === "active" ? "#22d3ee" : status === "evaluating" ? "#fbbf24" : "#94a3b8";
+  const fmtTime = (raw: any) => {
+    if (!raw) return "";
+    const d = new Date(String(raw));
+    return Number.isNaN(d.getTime()) ? "" : `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  };
+  const act = async (action: string) => {
+    if (busy) return;
+    setBusy(action); setErr("");
+    try {
+      const res: any = await recordKolCooperation(apiToken, kolPoolId, action);
+      if (res && res.status !== undefined) setCoop(res); else load();
+    } catch (ex: any) {
+      setErr(String(ex && ex.message ? ex.message : ex));
+    } finally { setBusy(""); }
+  };
+  const ACTIONS = [
+    { k: "renew", l: "续约", c: "#22d3ee" },
+    { k: "scale_up", l: "加大投入", c: "#34d399" },
+    { k: "evaluate", l: "评估", c: "#fbbf24" },
+    { k: "exit", l: "退出合作", c: "#f87171" },
+  ];
+
+  return e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
+    e("button", {
+      type: "button",
+      onClick: () => setOpen((v: boolean) => !v),
+      className: "flex w-full items-center justify-between",
+    },
+      e("div", { className: "flex items-center gap-1.5" },
+        e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "合作动作"),
+        e("span", { className: "rounded px-1.5 py-0.5 text-[9px]", style: { background: statusColor + "1f", color: statusColor } }, statusLabel)
+      ),
+      e(ChevronsUpDownIcon, { expanded: open })
+    ),
+    e("div", { className: "mt-2 grid grid-cols-4 gap-1.5" },
+      ACTIONS.map((a) => e("button", {
+        key: a.k,
+        type: "button",
+        disabled: !!busy,
+        onClick: () => act(a.k),
+        className: "rounded border px-2 py-1.5 text-[10.5px] font-medium",
+        style: { borderColor: a.c + "55", color: a.c, background: busy === a.k ? a.c + "22" : "transparent" },
+      }, busy === a.k ? "…" : a.l))
+    ),
+    err && e("div", { className: "mt-1.5 text-[10px] text-rose-300" }, "⚠ " + err),
+    open && (events.length > 0
+      ? e("div", { className: "mt-2 space-y-1" },
+          events.slice(0, 8).map((ev: any, i: number) => e("div", {
+            key: i,
+            className: "flex items-center justify-between rounded border border-white/[0.04] bg-black/15 px-2 py-1 text-[10px]",
+          },
+            e("span", { className: "text-slate-200" }, (ev.action_label || ev.action_type) + (ev.note ? " · " + ev.note : "")),
+            e("span", { className: "text-slate-500 tabular-nums" }, fmtTime(ev.created_at))
+          ))
+        )
+      : e("div", { className: "mt-2 text-[10px] text-slate-500" }, "暂无合作记录 · 点上方动作开始"))
+  );
+}
+
 // item4:账号档案完整展示——读 /account-dossier(本地聚合,零 LLM/provider/写库)。
 // 展示覆盖度(视频/已分析/QA/抓取/营销分)、缺口、判断(fit+建议+风险)、最近事件。默认折叠。
 function AccountDossierPanel({ apiToken, kolPoolId }: any) {
@@ -1004,6 +1085,7 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
 
       // ── item4 账号档案(本地聚合,零 LLM):覆盖度/缺口/账号级判断/最近事件 ──
       e(AccountDossierPanel, { apiToken, kolPoolId: item?.id }),
+      e(CooperationPanel, { apiToken, kolPoolId: item?.id }),
 
       // ── 长期记忆(W3)· 显式独立于 V6 Fit · 不影响排序 ──
       // 红线:本区块纯渲染聚合记忆,绝不渲染任何 viltrox/v6_fit 数值。
