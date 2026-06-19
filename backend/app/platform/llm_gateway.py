@@ -94,9 +94,40 @@ def _truthy_env(name: str) -> bool:
     return str(os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+# B1 key broker:gateway provider → key 池 provider 名(google→gemini)。
+_POOL_PROVIDER = {"openai": "openai", "google": "gemini", "anthropic": "anthropic"}
+
+
+def _pooled_api_key(provider: str) -> str:
+    """B1 key broker(Fabric 增量3):从 vkpi_api_key_pool 取一个启用 key(解密明文仅运行时内存)。
+
+    只在配置了 VKPI_KEY_POOL_FERNET_KEY 时咨询 key 池(否则池里只有不可逆占位、decrypt 必 None,
+    白跑一次 DB 查询)——未配置直接回退 env,零开销、零行为变更。任何异常吞掉回 env。
+    绝不记录 key 明文。account_name 仅供后续按 key 计量(本刀只接 key 解析)。
+    """
+    pool_provider = _POOL_PROVIDER.get(provider)
+    if not pool_provider:
+        return ""
+    if not os.environ.get("VKPI_KEY_POOL_FERNET_KEY"):
+        return ""
+    try:
+        from app.domains.settings import api_key_pool
+
+        picked = api_key_pool.pick_active_key(pool_provider)
+        if picked and picked.get("key"):
+            return str(picked["key"]).strip()
+    except Exception as exc:  # noqa: BLE001 — 池任何异常都回退 env,绝不打断 LLM 调用
+        logger.warning("vkpi llm gateway key pool lookup failed for %s (fallback to env): %s", provider, exc)
+    return ""
+
+
 def _get_api_key(provider: str) -> str:
     if _truthy_env("VKPI_LLM_GATEWAY_FORCE_OFFLINE"):
         return ""
+    # B1:先咨询 key 池(配了 Fernet 才查;支持多账号轮转/分发),空/未配 → 回退 env(现状=纯 env)。
+    pooled = _pooled_api_key(provider)
+    if pooled:
+        return pooled
     if provider == "openai":
         return _read_env_key("OPENAI_API_KEY")
     if provider == "google":
