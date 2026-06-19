@@ -6,6 +6,7 @@ import { motion } from "framer-motion";
 import { Check, Copy, Download, FileText, Loader2, Printer, Wand2, X } from "lucide-react";
 import { markdownToHtml } from "../lib/markdown";
 import { generateRuntimeReportMarkdown, generateRuntimeVisualHtml } from "../lib/reportRuntime";
+import { listUpcomingEvents } from "../../../../services/vkpi/events-api";
 import { loadStoredState, saveStoredState } from "../lib/storage";
 import { fetchV615ReportAnalysis } from "../api";
 
@@ -34,15 +35,27 @@ export function ReportPanel({ onClose, data, apiToken }: any) {
   useEffect(() => { saveStoredState({ reportLanguage: language }); }, [language]);
   useEffect(() => { saveStoredState({ reportSections: sections }); }, [sections]);
   useEffect(() => { saveStoredState({ reportFormat: format }); }, [format]);
-  
+
+  // A3:报告「活动进度」接真数据 —— 拉 /events/upcoming 注入报告 data(de-fake 待接入)。
+  const [upcomingEvents, setUpcomingEvents] = useState<any[]>([]);
+  useEffect(() => {
+    if (!apiToken) return;
+    let alive = true;
+    void listUpcomingEvents(apiToken, 6)
+      .then((res: any) => { if (alive) setUpcomingEvents(Array.isArray(res?.items) ? res.items : []); })
+      .catch(() => { if (alive) setUpcomingEvents([]); });
+    return () => { alive = false; };
+  }, [apiToken]);
+  const fullData = useMemo(() => ({ ...(data || {}), upcomingEvents }), [data, upcomingEvents]);
+
   // V6.10.1: 生成报告内容 — 双语 + 全量化
   const reportContent = useMemo(
-    () => generateRuntimeReportMarkdown({ period, language, sections, data }),
-    [period, language, sections, data]
+    () => generateRuntimeReportMarkdown({ period, language, sections, data: fullData }),
+    [period, language, sections, fullData]
   );
   const visualReportHtml = useMemo(
-    () => generateRuntimeVisualHtml({ period, language, sections, data }),
-    [period, language, sections, data]
+    () => generateRuntimeVisualHtml({ period, language, sections, data: fullData }),
+    [period, language, sections, fullData]
   );
 
   // 2026-06-15:报告深度分析 —— 把拼好的全量真实数据 POST 给后端,LLM 整理成经营分析,插回报告顶部。

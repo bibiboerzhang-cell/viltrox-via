@@ -182,6 +182,49 @@ def list_events(staff: dict[str, Any] | None, *, limit: int = 200) -> dict[str, 
     return {"items": items}
 
 
+def list_upcoming_events(staff: dict[str, Any] | None, *, limit: int = 50) -> dict[str, Any]:
+    """upcoming/进行中活动(end_date >= 今天),给 dashboard 地图 + 报告「活动进度」用。
+    员工 scope 同 list_events;返回精简形(location + budget + status,无 tasks/expenses)。"""
+    conn = get_conn()
+    safe_limit = max(1, min(int(limit or 50), 200))
+    if _can_view_all(staff):
+        rows = conn.execute(
+            "SELECT * FROM vkpi_events WHERE end_date >= CURRENT_DATE "
+            "ORDER BY start_date ASC, created_at ASC LIMIT ?",
+            (safe_limit,),
+        ).fetchall()
+    else:
+        sid = _staff_id(staff)
+        rows = conn.execute(
+            "SELECT * FROM vkpi_events "
+            "WHERE end_date >= CURRENT_DATE AND ("
+            "owner_id = ? OR team_ids @> to_jsonb(?::bigint) "
+            "OR id IN (SELECT event_id FROM vkpi_event_members WHERE staff_id = ?) "
+            "OR COALESCE(is_public, FALSE) = TRUE) "
+            "ORDER BY start_date ASC, created_at ASC LIMIT ?",
+            (sid, sid, sid, safe_limit),
+        ).fetchall()
+    items: list[dict[str, Any]] = []
+    for r in rows:
+        row = _event_row(r)
+        items.append({
+            "id": row.get("id"),
+            "title": row.get("title"),
+            "type_key": row.get("type_key"),
+            "status": row.get("status"),
+            "health_score": row.get("health_score"),
+            "start_date": str(row.get("start_date") or ""),
+            "end_date": str(row.get("end_date") or ""),
+            "location_name": row.get("location_name") or "",
+            "location_city": row.get("location_city") or "",
+            "location_country": row.get("location_country") or "",
+            "location_lat": row.get("location_lat"),
+            "location_lng": row.get("location_lng"),
+            "budget_total": row.get("budget_total") or 0,
+        })
+    return {"items": items, "count": len(items)}
+
+
 def get_event_detail(event_id: str, staff: dict[str, Any] | None) -> dict[str, Any]:
     """单活动 + 内嵌 tasks/expenses/invites(供详情页一次拉取)。"""
     conn = get_conn()

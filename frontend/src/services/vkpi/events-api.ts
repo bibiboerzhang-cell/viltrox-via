@@ -201,6 +201,18 @@ export async function listEvents(
   );
 }
 
+/** upcoming/进行中活动(end_date>=今天)+ location + budget,给报告「活动进度」用。 */
+export async function listUpcomingEvents(
+  token: string,
+  limit = 50,
+): Promise<{ items?: Array<Record<string, unknown>>; count?: number }> {
+  return apiFetch<{ items?: Array<Record<string, unknown>>; count?: number }>(
+    `/api/admin/vkpi/events/upcoming?limit=${encodeURIComponent(String(limit))}`,
+    {},
+    token,
+  );
+}
+
 export async function createEvent(
   token: string,
   payload: VkpiEventCreatePayload,

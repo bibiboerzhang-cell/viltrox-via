@@ -242,7 +242,20 @@ export function generateRuntimeReportMarkdown({ period, language, sections, data
   }
 
   if (sections.eventsProgress) {
-    lines.push("## 活动进度", "", "events/upcoming endpoint 待接入。当前不展示 prototype 活动日期、地点或预算。", "");
+    const evs = Array.isArray(data?.upcomingEvents) ? data.upcomingEvents : [];
+    lines.push(lang === "zh" ? "## 活动进度" : "## Events Progress", "");
+    if (evs.length) {
+      evs.forEach((ev: any) => {
+        const r = (ev && typeof ev === "object") ? ev : {};
+        const loc = [r.location_city, r.location_country].filter(Boolean).join(", ");
+        const dates = r.start_date && r.end_date && r.start_date !== r.end_date ? `${r.start_date} → ${r.end_date}` : String(r.start_date || r.end_date || "");
+        const budget = Number(r.budget_total) > 0 ? ` · ${lang === "zh" ? "预算" : "Budget"} $${Number(r.budget_total).toLocaleString()}` : "";
+        lines.push(`- **${r.title || "—"}** — ${dates}${loc ? " · " + loc : ""} · ${r.status || ""}${budget}`);
+      });
+    } else {
+      lines.push(lang === "zh" ? "暂无 upcoming 活动(end_date ≥ 今天)。" : "No upcoming events (end_date ≥ today).");
+    }
+    lines.push("");
   }
 
   if (sections.attribution) {
@@ -321,7 +334,17 @@ export function generateRuntimeVisualHtml({ period, language, sections, data }: 
     const actions = list(s.aiInsight.strengthen);
     html += `<section><h2>内容改进建议</h2>${actions.length ? actions.slice(0, 5).map((item) => `<div class="card"><strong>${esc(item.text)}</strong><br>${esc(item.detail || "证据待展开")}</div>`).join("") : `<div class="empty">暂无可执行候选</div>`}</section>`;
   }
-  if (sections.eventsProgress) html += `<section><h2>活动进度</h2><div class="callout">events/upcoming endpoint 待接入。当前不展示 prototype 活动日期、地点或预算。</div></section>`;
+  if (sections.eventsProgress) {
+    const evs = Array.isArray(data?.upcomingEvents) ? data.upcomingEvents : [];
+    const rows = evs.map((ev: any) => {
+      const r = (ev && typeof ev === "object") ? ev : {};
+      const loc = [r.location_city, r.location_country].filter(Boolean).join(", ");
+      const dates = r.start_date && r.end_date && r.start_date !== r.end_date ? `${esc(r.start_date)} → ${esc(r.end_date)}` : esc(String(r.start_date || r.end_date || ""));
+      const budget = Number(r.budget_total) > 0 ? ` · 预算 $${Number(r.budget_total).toLocaleString()}` : "";
+      return `<div class="news-item"><span class="news-tag">${esc(String(r.status || ""))}</span><span class="news-text"><b>${esc(String(r.title || "—"))}</b> · ${dates}${loc ? " · " + esc(loc) : ""}${budget}</span></div>`;
+    }).join("");
+    html += `<section><h2>活动进度</h2>${evs.length ? rows : '<div class="callout">暂无 upcoming 活动(end_date ≥ 今天)。</div>'}</section>`;
+  }
   if (sections.attribution) html += `<section><h2>归因管线</h2><div class="pipeline-title">GMV / ROI 待 Shopify 与成本数据接入。</div></section>`;
   if (sections.aiInsights) {
     const decision = record(s.aiInsight.todayDecision);
