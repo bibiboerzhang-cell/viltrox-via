@@ -1105,6 +1105,41 @@ def add_kol_manual_contact(
         raise HTTPException(status_code=500, detail=f"save contact error: {exc}") from exc
 
 
+@router.get("/kol-pool/{kol_pool_id}/cooperation")
+def get_kol_cooperation(
+    kol_pool_id: int,
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """读 KOL 当前合作状态 + 时间线(平台为基准)。"""
+    del staff
+    from app.domains.kol import cooperation
+
+    return cooperation.get_cooperation(int(kol_pool_id))
+
+
+@router.post("/kol-pool/{kol_pool_id}/cooperation")
+def record_kol_cooperation(
+    kol_pool_id: int,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """KOL 合作动作(续约/加大投入/退出合作/评估/备注)→ 平台为基准的状态时间线。
+    action ∈ renew|scale_up|exit|evaluate|note。零触 viltrox_fit_score。"""
+    from app.domains.kol import cooperation
+
+    try:
+        return cooperation.record_action(
+            int(kol_pool_id),
+            str(body.get("action") or ""),
+            note=str(body.get("note") or ""),
+            staff=staff or {},
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.get("/kol-pool/{kol_pool_id}/outreach-draft")
 def get_kol_outreach_draft(
     kol_pool_id: int,
