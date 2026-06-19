@@ -3644,7 +3644,11 @@ def _reclaim_stale_running_jobs(conn: psycopg.Connection[Any]) -> list[dict[str,
                   next_retry_at = NULL,
                   updated_at = NOW()
                 WHERE status='running'
-                  AND updated_at < NOW() - make_interval(secs => %(stale_seconds)s)
+                  -- Fabric 增量2:判显式租约到期。向后兼容:170 之前 claim 的旧 running 行
+                  -- lease_expires_at 为 NULL → COALESCE 回退到「updated_at + stale」旧判据(与历史完全一致);
+                  -- 170 之后 claim 的行走 lease_expires_at(claim 设、heartbeat 续)。时序不变,语义更稳:
+                  -- 心跳停=租约不再续→到期被回收;owner 列让未来多机认领可区分谁的活。
+                  AND COALESCE(lease_expires_at, updated_at + make_interval(secs => %(stale_seconds)s)) < NOW()
                 RETURNING id, status, attempts, payload, last_error
                 """,
                 {"max_attempts": MAX_JOB_ATTEMPTS, "stale_seconds": STALE_RECLAIM_SECONDS},
