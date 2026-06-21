@@ -262,6 +262,13 @@ function recallResultFromSession(session: VkpiKolSearchHistoryItem): VkpiKolReca
   } satisfies VkpiKolRecallResponse;
 }
 
+// 滤掉零售/经销实体(B&H / Pro Audio / camera store 等)——不是真创作者,挂出来没意义。
+function looksLikeRetailer(item: any): boolean {
+  const sf = (item && item.source_fields && typeof item.source_fields === "object") ? item.source_fields : {};
+  const hay = `${item?.handle || ""} ${item?.display_name || ""} ${item?.why_fit || ""} ${sf.bio || sf.description || ""}`.toLowerCase();
+  return /\bb\s*&\s*h\b|b\s*and\s*h|pro\s*audio|photo\s*video|camera\s*(store|house|shop|world|land)|rental|retailer|wholesale|distributor|旗舰店|专卖|经销/.test(hay);
+}
+
 // 三框·框3:从会话抽 new_creator(Apify+平台发现)项,带头像/用户名/平台。
 function discoveryItemsFromSession(session: VkpiKolSearchHistoryItem | null): VkpiKolRecallItem[] {
   if (!session) return [];
@@ -276,7 +283,7 @@ function discoveryItemsFromSession(session: VkpiKolSearchHistoryItem | null): Vk
       display_name: cleanText(payload.display_name || payload.channel_name || payload.handle),
       platform: cleanText(payload.platform),
       profile_type: display(payload.profile_type || "creator", "creator"),
-      followers: Number(payload.followers || payload.avg_views || 0) || null,
+      followers: Number(payload.followers || payload.follower_count || payload.subscriber_count || payload.subscribers || payload.avg_views || payload.views || 0) || null,
       avatar_url: cleanText(payload.avatar_url),
       profile_url: cleanText(item.source_url || payload.profile_url || payload.source_url || payload.channel_url),
       recall_rank_score: Number(item.score ?? payload.score ?? 0),
@@ -683,7 +690,7 @@ function RecallMiniItem({
           ) : null}
         </span>
         <span className="mt-0.5 block truncate text-[9.5px] text-slate-500">
-          {display(item.platform, "unknown")} · {item.type_label || item.profile_type || "profile"}
+          {display(item.platform, "unknown")} · {item.type_label || item.profile_type || "profile"}{followers ? ` · ${followers} 粉/播` : ""}
         </span>
         {/* 三引擎徽章行:内容契合判定(已深析)+ 预估曝光 + 新人/新鲜/低合作 */}
         {(fitBadge || exposure || marks.newcomer || marks.fresh || marks.lowCollab) ? (
@@ -1461,6 +1468,7 @@ export function SmartKolInputPanel({
     // 平台筛选即时生效:按当前勾选的 discoveryPlatforms 过滤已展示的发现结果(不必重搜)。
     // platform 字段缺失的未分类项放行,避免因字段缺失误藏。全不勾选时仅余未分类项。
     return all.filter((it) => {
+      if (looksLikeRetailer(it)) return false;  // 滤掉 B&H 等零售/经销实体,非真创作者
       const p = String(it.platform || "").toLowerCase();
       return !p || discoveryPlatforms.includes(p);
     });
