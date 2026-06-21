@@ -276,6 +276,14 @@ def review_content_post(
     )
 
 
+@router.get("/projects/pipeline-readiness")
+def pipeline_readiness(staff=Depends(require_tab("vkpi", "read"))):
+    """R20 · 数据主链路 5 个手动断点的「待接」就绪度概览(只读;每环推进仍走各自人审端点)。"""
+    from app.domains.projects import pipeline_sequence
+
+    return pipeline_sequence.pipeline_readiness(staff=staff)
+
+
 @router.post("/projects/{project_id}/content-posts/advance-retrospective")
 def advance_content_posts_to_retrospective(
     project_id: int,
