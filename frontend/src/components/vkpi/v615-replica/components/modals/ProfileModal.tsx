@@ -4,11 +4,42 @@
 import React, { useState } from "react";
 import { ShieldCheck, X } from "lucide-react";
 import { CenterModal } from "./CenterModal";
+import { apiFetch } from "../../../../../services/http";
 
 const e = React.createElement;
 
-export function ProfileModal({ user, onClose, t }: any) {
+export function ProfileModal({ user, onClose, t, apiToken }: any) {
   const [tab, setTab] = useState("basic");
+  // 修改密码:接真后端 /api/auth/change-password(验当前密码→设新密码)。
+  const [curPw, setCurPw] = useState("");
+  const [newPw, setNewPw] = useState("");
+  const [confirmPw, setConfirmPw] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [pwMsg, setPwMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const changePassword = async () => {
+    if (saving) return;
+    setPwMsg(null);
+    if (!curPw || !newPw) { setPwMsg({ ok: false, text: "请填写当前密码和新密码" }); return; }
+    if (newPw.length < 8) { setPwMsg({ ok: false, text: "新密码至少 8 位" }); return; }
+    if (newPw !== confirmPw) { setPwMsg({ ok: false, text: "两次新密码不一致" }); return; }
+    setSaving(true);
+    try {
+      const res: any = await apiFetch(
+        "/api/auth/change-password",
+        { method: "POST", body: JSON.stringify({ current_password: curPw, new_password: newPw }) },
+        apiToken,
+      );
+      if (res && res.status === "success") {
+        setPwMsg({ ok: true, text: "密码已更新" });
+        setCurPw(""); setNewPw(""); setConfirmPw("");
+        setTimeout(() => { onClose && onClose(); }, 900);
+      } else {
+        setPwMsg({ ok: false, text: (res && res.message) || "修改失败" });
+      }
+    } catch (err: any) {
+      setPwMsg({ ok: false, text: String(err && err.message ? err.message : err) });
+    } finally { setSaving(false); }
+  };
   return e(CenterModal, { onClose, maxWidth: "md" },
     e("div", { className: "px-5 py-3.5 border-b border-white/[0.06] flex items-center justify-between" },
       e("h2", { className: "text-sm font-semibold text-white" }, t("个人资料")),
@@ -61,19 +92,32 @@ export function ProfileModal({ user, onClose, t }: any) {
         ))
       ),
       tab === "password" && e("div", { className: "space-y-3" },
-        ["当前密码", "新密码", "确认新密码"].map((label, i) => e("div", { key: i },
-          e("label", { className: "text-[10px] text-slate-500 mb-1 block" }, label),
-          e("input", { 
-            type: "password", placeholder: "••••••••",
+        [
+          { label: "当前密码", value: curPw, set: setCurPw },
+          { label: "新密码", value: newPw, set: setNewPw },
+          { label: "确认新密码", value: confirmPw, set: setConfirmPw },
+        ].map((f, i) => e("div", { key: i },
+          e("label", { className: "text-[10px] text-slate-500 mb-1 block" }, f.label),
+          e("input", {
+            type: "password", placeholder: "••••••••", value: f.value,
+            onChange: (ev: any) => f.set(ev.target.value),
             className: "w-full rounded-md border border-white/[0.08] bg-white/[0.025] px-3 py-1.5 text-[12px] text-white outline-none"
           })
         )),
-        e("div", { className: "text-[9px] text-slate-500" }, t("密码至少 8 位 · 含大小写字母和数字"))
+        e("div", { className: "text-[9px] text-slate-500" }, t("密码至少 8 位 · 含大小写字母和数字")),
+        pwMsg && e("div", { className: `text-[10px] ${pwMsg.ok ? "text-emerald-300" : "text-rose-300"}` }, pwMsg.text)
       )
     ),
     e("div", { className: "px-5 py-2.5 border-t border-white/[0.06] flex justify-end gap-2" },
       e("button", { onClick: onClose, className: "rounded-md border border-white/10 px-3 py-1 text-[11px] text-slate-300 hover:bg-white/[0.04]" }, t("取消")),
-      e("button", { disabled: true, title: "待接入", className: "rounded-md bg-purple-600/40 px-3 py-1 text-[11px] font-medium text-white/50 opacity-60 cursor-not-allowed" }, t("保存"))
+      tab === "password"
+        ? e("button", {
+            onClick: changePassword,
+            disabled: saving || !curPw || !newPw || !confirmPw,
+            title: "修改密码",
+            className: `rounded-md px-3 py-1 text-[11px] font-medium ${saving || !curPw || !newPw || !confirmPw ? "bg-purple-600/40 text-white/50 opacity-60 cursor-not-allowed" : "bg-purple-600 text-white hover:bg-purple-500"}`
+          }, saving ? "保存中…" : t("保存"))
+        : e("button", { disabled: true, title: "待接入(基本信息改名暂未开)", className: "rounded-md bg-purple-600/40 px-3 py-1 text-[11px] font-medium text-white/50 opacity-60 cursor-not-allowed" }, t("保存"))
     )
   );
 }
