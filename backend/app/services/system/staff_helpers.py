@@ -158,12 +158,16 @@ def _truthy(value: Any) -> bool:
 
 
 def _staff_activation_url(token: str) -> str:
-    site_url = os.environ.get("SITE_URL", "http://localhost:5173").strip() or "http://localhost:5173"
+    # A2 修:走单一配置源 config.SITE_URL(默认 https://www.viltroxvia.com),不再 localhost 兜底。
+    # 与同文件 invite 邮件(:198)一致;线上真值由 prod .env 的 SITE_URL 决定。
+    site_url = (SITE_URL or "https://www.viltroxvia.com").strip() or "https://www.viltroxvia.com"
     return f"{site_url.rstrip('/')}/activate?token={token}"
 
 
 def _password_reset_url(token: str) -> str:
-    site_url = os.environ.get("SITE_URL", "http://localhost:5173").strip() or "http://localhost:5173"
+    # A2 修:走单一配置源 config.SITE_URL(默认 https://www.viltroxvia.com),不再 localhost 兜底。
+    # 与同文件 invite 邮件(:198)一致;线上真值由 prod .env 的 SITE_URL 决定。
+    site_url = (SITE_URL or "https://www.viltroxvia.com").strip() or "https://www.viltroxvia.com"
     # 2026-06-16:重置链接指向 /reset 路由(前端在那消费 reset_token 设新密码);
     # 旧的根路径 ?reset_token= 前端无路由消费会落登录页(AdminRoute 已加重定向兜底)。
     return f"{site_url.rstrip('/')}/reset?reset_token={token}"
