@@ -597,6 +597,18 @@ function freshnessMarks(item: VkpiKolRecallItem): { newcomer: boolean; fresh: bo
   return { newcomer, fresh, lowCollab };
 }
 
+// YouTube search.list 无 @handle → 后端用 UC... channel_id 占 handle(保证非空 + 当 identity:
+// profile_url 走 /channel/{id})。但 UC... 不是可读名,卡片应显示真频道名(channel_name→display_name)。
+const YT_CHANNEL_ID_RE = /^UC[A-Za-z0-9_-]{20,}$/;
+function readableCreatorName(item: VkpiKolRecallItem): string {
+  const handle = cleanText(item.handle);
+  const displayName = cleanText(item.display_name);
+  // 优先非「频道ID」的 handle(IG/TikTok 的 @用户名)→ 再非「频道ID」的真频道名 → 兜底
+  if (handle && !YT_CHANNEL_ID_RE.test(handle)) return handle;
+  if (displayName && !YT_CHANNEL_ID_RE.test(displayName)) return displayName;
+  return handle || displayName || "";
+}
+
 function RecallMiniItem({
   item,
   index,
@@ -608,7 +620,7 @@ function RecallMiniItem({
 }) {
   const [imgError, setImgError] = useState(false);
   const avatar = proxiedImageUrl(item.avatar_url);
-  const name = display(item.handle || item.display_name || `KOL #${item.kol_pool_id}`);
+  const name = display(readableCreatorName(item) || `KOL #${item.kol_pool_id}`);
   const followers = numberLabel(item.followers);
   const score = Number(item.recall_rank_score ?? item.vector_score ?? 0);
   const relevanceFlags = Array.isArray(item.relevance_flags) ? item.relevance_flags.map(cleanText).filter(Boolean) : [];
