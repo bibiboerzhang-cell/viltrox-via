@@ -865,7 +865,7 @@ export function V615ReplicaApp(props: any = {}) {
         setActiveNav("projects");
       },
     })),
-    e(AnimatePresence, null, selectedPublish && e(PublishPreviewModal, { item: selectedPublish, onClose: () => setSelectedPublish(null) })),
+    e(AnimatePresence, null, selectedPublish && e(PublishPreviewModal, { item: selectedPublish, apiToken, onClose: () => setSelectedPublish(null) })),
     e(AnimatePresence, null, selectedMover && e(KOLDetailModal, {
       mover: selectedMover,
       apiToken,

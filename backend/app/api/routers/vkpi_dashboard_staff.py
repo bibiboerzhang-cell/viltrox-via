@@ -54,6 +54,91 @@ def team_mention(body: _MentionBody, staff=Depends(require_tab("vkpi", "write"))
     return {"status": "success", "alert_id": alert.get("id"), "target_staff_id": target_id}
 
 
+# ── #18 发布审批(PublishPreviewModal 三按钮 · 按真 source_table+source_id 落 vkpi_publish_approvals)──
+class _PublishActionBody(BaseModel):
+    source_table: str
+    source_id: str
+    platform: str = ""
+    account_handle: str = ""
+    title: str = ""
+    scheduled_publish_at: str | None = None
+
+
+def _publish_require_keys(body: "_PublishActionBody") -> tuple[str, str]:
+    st = (body.source_table or "").strip()
+    sid = str(body.source_id or "").strip()
+    if not st or not sid:
+        raise HTTPException(status_code=400, detail="source_table + source_id required")
+    return st, sid
+
+
+def _staff_pk(staff: dict):
+    try:
+        return int(staff.get("id") or staff.get("staff_id") or 0) or None
+    except Exception:
+        return None
+
+
+def _publish_upsert(body, *, status=None, approved_by=None, scheduled=None, reminded_by=None) -> int:
+    """按 (source_table, source_id) upsert 一条审批;只动本隔离表(零既有表触点)。"""
+    from app.db.connection import get_conn
+    from app.domains.alerts.common import utcnow
+
+    st, sid = _publish_require_keys(body)
+    now = utcnow()
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT id FROM vkpi_publish_approvals WHERE source_table=? AND source_id=?", (st, sid)
+    ).fetchone()
+    if not row:
+        conn.execute(
+            "INSERT INTO vkpi_publish_approvals (source_table, source_id, platform, account_handle, title) VALUES (?,?,?,?,?)",
+            (st, sid, (body.platform or "")[:80], (body.account_handle or "")[:120], (body.title or "")[:300]),
+        )
+        row = conn.execute(
+            "SELECT id FROM vkpi_publish_approvals WHERE source_table=? AND source_id=?", (st, sid)
+        ).fetchone()
+    aid = int(row["id"])
+    sets = ["updated_at=?"]
+    params = [now]
+    if status is not None:
+        sets.append("status=?"); params.append(status)
+    if approved_by is not None:
+        sets += ["approved_by=?", "approved_at=?"]; params += [approved_by, now]
+    if scheduled is not None:
+        sets.append("scheduled_publish_at=?"); params.append(scheduled)
+    if reminded_by is not None:
+        sets += ["reminder_by=?", "reminder_sent_at=?"]; params += [reminded_by, now]
+    params.append(aid)
+    conn.execute(f"UPDATE vkpi_publish_approvals SET {', '.join(sets)} WHERE id=?", tuple(params))
+    conn.commit()
+    return aid
+
+
+@router.post("/publish/approve")
+def publish_approve(body: _PublishActionBody, staff=Depends(require_tab("vkpi", "write"))) -> dict:
+    """#18 审批通过:把该日历内容条目标记 approved(按真 source_table+source_id 落库)。"""
+    aid = _publish_upsert(body, status="approved", approved_by=_staff_pk(staff))
+    return {"status": "success", "approval_id": aid, "state": "approved"}
+
+
+@router.post("/publish/reschedule")
+def publish_reschedule(body: _PublishActionBody, staff=Depends(require_tab("vkpi", "write"))) -> dict:
+    """#18 编辑时间:更新计划发布时间(ISO 字符串;Postgres 转 TIMESTAMPTZ)。"""
+    when = (body.scheduled_publish_at or "").strip()
+    if not when:
+        raise HTTPException(status_code=400, detail="scheduled_publish_at required")
+    aid = _publish_upsert(body, status="scheduled", scheduled=when)
+    return {"status": "success", "approval_id": aid, "state": "scheduled", "scheduled_publish_at": when}
+
+
+@router.post("/publish/remind")
+def publish_remind(body: _PublishActionBody, staff=Depends(require_tab("vkpi", "write"))) -> dict:
+    """#18 提醒 KOL:记一条提醒留痕(reminder_sent_at + 操作人)。"""
+    aid = _publish_upsert(body, reminded_by=_staff_pk(staff))
+    return {"status": "success", "approval_id": aid, "reminded": True}
+
+
 @router.get("/architecture")
 def architecture(staff=Depends(require_tab("vkpi", "read"))):
     return workflow.architecture_summary()
