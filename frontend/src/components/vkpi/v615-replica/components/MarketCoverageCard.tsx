@@ -9,7 +9,7 @@ import { COUNTRY_INFO, getCountryInfo, normalizeCountryCode } from "../data/coun
 
 const e = React.createElement;
 
-export function MarketCoverageCard({ items }: any) {
+export function MarketCoverageCard({ items, onGoDiscover }: any) {
   const [showAll, setShowAll] = useState(false);
   const [showGaps, setShowGaps] = useState(false);
   
@@ -102,7 +102,7 @@ export function MarketCoverageCard({ items }: any) {
           e("span", { style: { fontSize: 12 } }, g.info.flag),
           e("span", { className: "text-white font-medium w-[24px]" }, g.country),
           e("span", { className: "text-slate-400 flex-1" }, g.info.name, " · " + g.current + " KOL · 建议补 " + g.suggest + " 个"),
-          e("button", { disabled: true, title: "发现页预填待接入",  className: "px-2 py-0.5 rounded text-[10px] border border-amber-500/30 bg-amber-500/[0.08] text-amber-300 hover:bg-amber-500/[0.15]" },
+          e("button", { onClick: () => onGoDiscover?.(g.country), title: `按 ${g.info.name} 过滤并切到发现模式`,  className: "px-2 py-0.5 rounded text-[10px] border border-amber-500/30 bg-amber-500/[0.08] text-amber-300 hover:bg-amber-500/[0.15]" },
             "去发现"
           )
         ))

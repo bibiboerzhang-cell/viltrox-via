@@ -465,7 +465,7 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
             ) : null
           ),
           e("div", { className: "mt-2.5" },
-            e(MarketCoverageCard, { items: poolItems })
+            e(MarketCoverageCard, { items: poolItems, onGoDiscover: (c: string) => { setCountry(c); setSearchMode("discovery"); } })
           )
         ),
         e("section", { className: "mb-4 rounded-lg border border-white/[0.055] bg-white/[0.014]" },

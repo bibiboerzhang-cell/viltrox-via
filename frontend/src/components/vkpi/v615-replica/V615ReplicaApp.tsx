@@ -1000,6 +1000,16 @@ export function V615ReplicaApp(props: any = {}) {
         if (!apiToken) return;
         await resolveV615Alert(apiToken, id).catch(() => null);
         setRuntimeNotifications(prev => prev.map(item => item.id === id ? { ...item, unread: false, status: "done" } : item));
+      },
+      onNavigate: (linked: any) => {
+        const ty = String(linked?.type || "").toLowerCase();
+        const tab = (ty === "project" || ty === "assignment") ? "projects"
+          : (ty === "kol" || ty === "creator" || ty === "kol_pool") ? "kol-pool"
+          : (ty === "event") ? "events"
+          : "dashboard";
+        saveStoredState({ activeNav: tab });
+        setSelectedNotif(null);
+        setActiveNav(tab);
       }
     })),
     e(AnimatePresence, null, showEditGroup && e(EditGroupModal, {

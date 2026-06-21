@@ -9,7 +9,7 @@ import { NOTIF_ICON_MAP } from "../../data/notifIconMap";
 
 const e = React.createElement;
 
-export function NotificationDetailModal({ notification, onClose, onMarkRead }: any) {
+export function NotificationDetailModal({ notification, onClose, onMarkRead, onNavigate }: any) {
   const { t } = useT();
   const IconComp = (NOTIF_ICON_MAP as any)[notification.iconKey] || Bell;
   const raw = notification.raw || {};
@@ -79,9 +79,10 @@ export function NotificationDetailModal({ notification, onClose, onMarkRead }: a
           onClick: () => { onMarkRead && onMarkRead(notification.id); onClose(); },
           className: "flex-1 flex items-center justify-center gap-1.5 rounded-md border border-white/[0.12] px-3 py-2 text-[11px] text-slate-300 hover:bg-white/[0.04]"
         }, e(Check, { size: 11 }), t("标记已读")),
-        linked && e("button", { 
+        linked && e("button", {
+          onClick: () => { onNavigate && onNavigate(linked); onClose(); },
           className: "flex-1 flex items-center justify-center gap-1.5 rounded-md bg-purple-600 hover:bg-purple-500 px-3 py-2 text-[11px] font-medium text-white"
-        , disabled: true, title: "跳转待接入" }, t("跳转到关联"), e(ChevronRight, { size: 11 }))
+        , title: "跳到关联板块" }, t("跳转到关联"), e(ChevronRight, { size: 11 }))
       )
     )
   );
