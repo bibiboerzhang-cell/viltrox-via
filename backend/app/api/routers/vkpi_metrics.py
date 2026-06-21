@@ -31,3 +31,18 @@ def portfolio_metrics(
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict[str, Any]:
     return aggregation.aggregate_portfolio_metrics(window_days=window_days, staff=staff)
+
+
+@router.get("/kol/{kol_pool_id}")
+def kol_roi_metrics(
+    kol_pool_id: int,
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict[str, Any]:
+    """R16 · 单 KOL 的 ROI 汇总 + 下次推荐权重(只读展示信号,绝不并入 viltrox_fit_score)。"""
+    from app.domains.kol import roi_aggregate
+
+    return {
+        "kol_pool_id": int(kol_pool_id),
+        "roi_summary": roi_aggregate.get_kol_roi_summary(kol_pool_id, staff=staff),
+        "next_recommendation_weight": roi_aggregate.compute_next_recommendation_weight(kol_pool_id),
+    }
