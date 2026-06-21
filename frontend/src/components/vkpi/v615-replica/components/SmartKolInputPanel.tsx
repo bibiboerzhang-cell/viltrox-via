@@ -609,6 +609,23 @@ function readableCreatorName(item: VkpiKolRecallItem): string {
   return handle || displayName || "";
 }
 
+// 契合命中 tags 中文化:海外创作者发现是英文搜索词命中,这里把常见摄影/创作术语映射成中文(生僻保留原文)。
+const RELEVANCE_ZH: Record<string, string> = {
+  wedding: "婚礼", portrait: "人像", landscape: "风光", wildlife: "野生动物", travel: "旅行",
+  street: "街拍", fashion: "时尚", product: "产品", food: "美食", sports: "运动", event: "活动",
+  macro: "微距", astro: "星空", documentary: "纪实", lifestyle: "生活方式", newborn: "新生儿",
+  family: "家庭", commercial: "商业", editorial: "大片", "fine art": "艺术", boudoir: "闺房写真",
+  flash: "闪光灯", strobe: "影室灯", lighting: "灯光", "studio lighting": "影室布光", studio: "影棚",
+  softbox: "柔光箱", lens: "镜头", camera: "相机", tripod: "三脚架", gimbal: "稳定器", drone: "无人机",
+  educator: "教学", reviewer: "测评", vlogger: "Vlog", filmmaker: "影片制作", cinematographer: "摄影指导",
+  photographer: "摄影师", creator: "创作者", influencer: "达人", tutorial: "教程", "how-to": "教程",
+  bts: "幕后", videography: "视频", cinematic: "电影感", color: "调色", "color grading": "调色",
+};
+function zhTag(s: string): string {
+  const k = String(s || "").trim().toLowerCase();
+  return RELEVANCE_ZH[k] || s;
+}
+
 function RecallMiniItem({
   item,
   index,
@@ -702,7 +719,7 @@ function RecallMiniItem({
             <span className="text-[8.5px] text-slate-500">契合命中</span>
             {(fitSrc.relevance_hits as unknown[]).slice(0, 4).map((h, i) => (
               <span key={`${cleanText(h)}-${i}`} className="rounded border border-sky-300/25 bg-sky-400/[0.08] px-1 text-[8.5px] font-medium text-sky-100/90">
-                {cleanText(h)}
+                {zhTag(cleanText(h))}
               </span>
             ))}
           </span>
@@ -711,7 +728,7 @@ function RecallMiniItem({
           <span className="mt-1 flex flex-wrap gap-1">
             {relevanceFlags.map((flag) => (
               <span key={flag} className="rounded border border-amber-300/25 bg-amber-400/[0.08] px-1 text-[8.5px] font-medium text-amber-200/85">
-                {flag}
+                {zhTag(flag)}
               </span>
             ))}
           </span>

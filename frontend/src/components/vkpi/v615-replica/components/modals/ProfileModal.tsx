@@ -1,10 +1,11 @@
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { ShieldCheck, X } from "lucide-react";
 import { CenterModal } from "./CenterModal";
 import { apiFetch } from "../../../../../services/http";
+import { uploadMyAvatar, updateMyProfile } from "../../../../../services/auth.service";
 
 const e = React.createElement;
 
@@ -40,6 +41,34 @@ export function ProfileModal({ user, onClose, t, apiToken }: any) {
       setPwMsg({ ok: false, text: String(err && err.message ? err.message : err) });
     } finally { setSaving(false); }
   };
+  // 基本信息:改名(/me/profile)+ 换头像(/me/avatar),接真后端。
+  const [nameVal, setNameVal] = useState(user.name || "");
+  const [savingBasic, setSavingBasic] = useState(false);
+  const [basicMsg, setBasicMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const saveProfile = async () => {
+    if (savingBasic) return;
+    const nm = (nameVal || "").trim();
+    if (!nm) { setBasicMsg({ ok: false, text: "姓名不能为空" }); return; }
+    setSavingBasic(true); setBasicMsg(null);
+    try {
+      const res: any = await updateMyProfile(apiToken, nm);
+      if (res && (res.status === "success" || res.user)) setBasicMsg({ ok: true, text: "已保存 · 刷新生效" });
+      else setBasicMsg({ ok: false, text: (res && res.message) || "保存失败" });
+    } catch (err: any) { setBasicMsg({ ok: false, text: String(err && err.message ? err.message : err) }); }
+    finally { setSavingBasic(false); }
+  };
+  const onPickAvatar = async (ev: any) => {
+    const file = ev?.target?.files?.[0];
+    if (!file) return;
+    setBasicMsg(null); setSavingBasic(true);
+    try {
+      const res: any = await uploadMyAvatar(apiToken, file);
+      if (res && (res.status === "success" || res.user || res.token)) setBasicMsg({ ok: true, text: "头像已更新 · 刷新生效" });
+      else setBasicMsg({ ok: false, text: (res && res.message) || "上传失败" });
+    } catch (err: any) { setBasicMsg({ ok: false, text: String(err && err.message ? err.message : err) }); }
+    finally { setSavingBasic(false); if (fileRef.current) fileRef.current.value = ""; }
+  };
   return e(CenterModal, { onClose, maxWidth: "md" },
     e("div", { className: "px-5 py-3.5 border-b border-white/[0.06] flex items-center justify-between" },
       e("h2", { className: "text-sm font-semibold text-white" }, t("个人资料")),
@@ -53,9 +82,14 @@ export function ProfileModal({ user, onClose, t, apiToken }: any) {
           style: { background: user.avatarGradient }
         }, user.avatar),
         e("div", { className: "flex-1" },
-          // 2026-06-12 死按钮诚实化:更换头像 / 保存 无写接口 → disabled+待接入
-          e("button", { disabled: true, title: "待接入", className: "rounded-md border border-white/[0.12] px-3 py-1.5 text-[11px] text-slate-500 opacity-60 cursor-not-allowed" }, t("更换头像")),
-          e("div", { className: "text-[10px] text-slate-500 mt-1.5" }, "JPG / PNG · 最大 2MB")
+          // 更换头像:点 → 触发隐藏 file input → POST /api/auth/me/avatar
+          e("button", {
+            type: "button", disabled: savingBasic,
+            onClick: () => fileRef.current && fileRef.current.click(),
+            className: `rounded-md border border-white/[0.12] px-3 py-1.5 text-[11px] ${savingBasic ? "text-slate-500 opacity-60 cursor-not-allowed" : "text-slate-200 hover:bg-white/[0.04]"}`
+          }, savingBasic ? "处理中…" : t("更换头像")),
+          e("input", { ref: fileRef, type: "file", accept: "image/png,image/jpeg,image/webp", className: "hidden", onChange: onPickAvatar }),
+          e("div", { className: "text-[10px] text-slate-500 mt-1.5" }, "JPG / PNG / WebP · 最大 3MB")
         )
       ),
       // Tabs
@@ -83,13 +117,15 @@ export function ProfileModal({ user, onClose, t, apiToken }: any) {
               e(ShieldCheck, { size: 9 }), t("锁定")
             )
           ),
-          e("input", { 
-            type: "text", defaultValue: f.value,
-            disabled: !f.editable,
-            className: "w-full rounded-md border border-white/[0.08] bg-white/[0.025] px-3 py-1.5 text-[12px] text-white outline-none disabled:opacity-60 disabled:cursor-not-allowed"
-          }),
+          e("input", f.editable
+            ? { type: "text", value: nameVal, onChange: (ev: any) => setNameVal(ev.target.value),
+                className: "w-full rounded-md border border-white/[0.08] bg-white/[0.025] px-3 py-1.5 text-[12px] text-white outline-none" }
+            : { type: "text", defaultValue: f.value, disabled: true,
+                className: "w-full rounded-md border border-white/[0.08] bg-white/[0.025] px-3 py-1.5 text-[12px] text-white outline-none disabled:opacity-60 disabled:cursor-not-allowed" }
+          ),
           f.hint && e("div", { className: "text-[9px] text-slate-500 mt-1" }, f.hint)
-        ))
+        )),
+        basicMsg && e("div", { className: `text-[10px] ${basicMsg.ok ? "text-emerald-300" : "text-rose-300"}` }, basicMsg.text)
       ),
       tab === "password" && e("div", { className: "space-y-3" },
         [
@@ -117,7 +153,12 @@ export function ProfileModal({ user, onClose, t, apiToken }: any) {
             title: "修改密码",
             className: `rounded-md px-3 py-1 text-[11px] font-medium ${saving || !curPw || !newPw || !confirmPw ? "bg-purple-600/40 text-white/50 opacity-60 cursor-not-allowed" : "bg-purple-600 text-white hover:bg-purple-500"}`
           }, saving ? "保存中…" : t("保存"))
-        : e("button", { disabled: true, title: "待接入(基本信息改名暂未开)", className: "rounded-md bg-purple-600/40 px-3 py-1 text-[11px] font-medium text-white/50 opacity-60 cursor-not-allowed" }, t("保存"))
+        : e("button", {
+            onClick: saveProfile,
+            disabled: savingBasic || !nameVal.trim(),
+            title: "保存资料",
+            className: `rounded-md px-3 py-1 text-[11px] font-medium ${savingBasic || !nameVal.trim() ? "bg-purple-600/40 text-white/50 opacity-60 cursor-not-allowed" : "bg-purple-600 text-white hover:bg-purple-500"}`
+          }, savingBasic ? "保存中…" : t("保存"))
     )
   );
 }

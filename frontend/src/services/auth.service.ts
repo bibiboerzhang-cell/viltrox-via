@@ -26,3 +26,10 @@ export function uploadMyAvatar(token: string, file: File) {
     body: form,
   }, token);
 }
+
+export function updateMyProfile(token: string, name: string) {
+  return apiFetch<LoginResponse>("/api/auth/me/profile", {
+    method: "POST",
+    body: jsonBody({ name }),
+  }, token);
+}

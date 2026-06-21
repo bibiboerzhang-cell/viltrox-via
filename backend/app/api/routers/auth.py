@@ -94,6 +94,17 @@ def _update_user_avatar(user_id: int, avatar_url: str) -> dict:
     return build_login_payload(user_row)
 
 
+def _update_user_name(user_id: int, name: str) -> dict:
+    conn = get_conn()
+    conn.execute("UPDATE users SET name=? WHERE id=?", (name, int(user_id)))
+    conn.commit()
+    invalidate_user_cache(int(user_id))
+    user_row = _fetch_user_row(int(user_id))
+    if not user_row:
+        return {"status": "error", "message": "User not found"}
+    return build_login_payload(user_row)
+
+
 def _fetch_email_token(token: str, token_type: str):
     conn = get_conn()
     return conn.execute(
@@ -308,6 +319,24 @@ async def update_my_avatar(
     if not clean_url:
         return {"status": "error", "message": "Avatar file or avatar_url required"}
     payload = _update_user_avatar(user_id, clean_url)
+    if payload.get("token"):
+        apply_auth_cookie(response, str(payload["token"]))
+    return payload
+
+
+@router.post("/me/profile")
+async def update_my_profile(request: Request, response: Response):
+    """自助改名(登录用户改自己 display name)。镜像 /me/avatar:更新后重签 cookie。"""
+    user = await get_current_user_async(request)
+    if not user:
+        return {"status": "error", "message": "Not authenticated"}
+    body = await request.json()
+    name = str(body.get("name") or "").strip()
+    if not name:
+        return {"status": "error", "message": "name required"}
+    if len(name) > 80:
+        return {"status": "error", "message": "name too long (max 80)"}
+    payload = _update_user_name(int(user["id"]), name)
     if payload.get("token"):
         apply_auth_cookie(response, str(payload["token"]))
     return payload

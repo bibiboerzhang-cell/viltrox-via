@@ -129,7 +129,9 @@ export function SignalDetailModal({ alert, onClose }: any) {
             realSources.map((s: any, i: any) => e("div", { key: i, className: "flex items-center gap-2 text-[11px] text-slate-400" },
               e("span", { className: "text-slate-500" }, "→"),
               e("span", { className: "flex-1" }, s.name),
-              e("button", { className: "rounded border border-white/[0.06] px-2 py-0.5 text-[9px] text-white/25", disabled: true, title: "来源链接待接入" }, "查看")
+              s.url
+                ? e("a", { href: s.url, target: "_blank", rel: "noreferrer", className: "rounded border border-white/[0.06] px-2 py-0.5 text-[9px] text-cyan-300 hover:text-cyan-200", title: "打开来源链接" }, "查看")
+                : e("span", { className: "text-[9px] text-slate-600" }, "无链接")
             ))
           )
         )
@@ -142,7 +144,14 @@ export function SignalDetailModal({ alert, onClose }: any) {
             onClick: onClose,
             className: "rounded-md border border-white/10 bg-white/[0.03] px-3 py-1 text-[11px] text-slate-300 hover:bg-white/[0.06]"
           }, t("关闭")),
-          e("button", { className: "rounded-md px-3 py-1 text-[11px] font-medium text-white/40 bg-white/[0.06]", disabled: true, title: "待接入" }, "执行建议 →")
+          e("button", {
+            onClick: async () => {
+              const txt = [alert.title, summaryText ? "\n" + summaryText : "", actionRows.length ? "\n建议行动:\n" + actionRows.map((a: any, i: number) => `${i + 1}. ${a}`).join("\n") : ""].filter(Boolean).join("\n");
+              try { await navigator.clipboard.writeText(txt); } catch (_e) { /* ignore */ }
+            },
+            className: "rounded-md px-3 py-1 text-[11px] font-medium text-white bg-purple-600 hover:bg-purple-500",
+            title: "复制信号 + 建议行动到剪贴板,粘贴到任务/IM 去执行"
+          }, "复制建议 →")
         )
       )
     )
