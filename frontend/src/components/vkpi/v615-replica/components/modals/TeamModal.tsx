@@ -4,11 +4,25 @@
 import React from "react";
 import { Bell, Plus, Target, TrendingUp, Users, X } from "lucide-react";
 import { CenterModal } from "./CenterModal";
+import { apiFetch } from "../../../../../services/http";
 
 const e = React.createElement;
 
-export function TeamModal({ user, staff, groups, onClose, onImpersonate, t, onOpenEditGroup, onOpenNewGroup }: any) {
+export function TeamModal({ user, staff, groups, onClose, onImpersonate, t, onOpenEditGroup, onOpenNewGroup, apiToken = "" }: any) {
   const isAdmin = user.role === "admin";
+  // #19 @提及:输入一条消息 → POST /team/mention → 目标成员通知流出现一条(后端复用 vkpi_alerts)。
+  const [mentioning, setMentioning] = React.useState<any>(null);
+  const mentionMember = async (s: any) => {
+    if (!apiToken || mentioning) return;
+    const msg = (window.prompt(`给 ${s.name} 发一条提及通知:`) || "").trim();
+    if (!msg) return;
+    setMentioning(s.id);
+    try {
+      const res: any = await apiFetch("/api/admin/vkpi/team/mention", { method: "POST", body: JSON.stringify({ target_staff_id: Number(s.id), message: msg }) }, apiToken);
+      window.alert(res && res.status === "success" ? `已提及 ${s.name}` : ((res && res.detail) || "提及失败"));
+    } catch (err: any) { window.alert("提及失败:" + String(err && err.message ? err.message : err)); }
+    finally { setMentioning(null); }
+  };
   const groupList = Array.isArray(groups) ? groups : [];
   const primaryGroup = groupList[0] || null;
   const groupName = primaryGroup?.name || "KOL Operations";
@@ -121,7 +135,7 @@ export function TeamModal({ user, staff, groups, onClose, onImpersonate, t, onOp
                   e("div", { className: "text-[11px] text-white" }, s.name),
                   (s.online || s.user_online) ? e("div", { className: "text-[10px] text-emerald-400" }, "在线") : e("div", { className: "text-[10px] text-slate-500" }, s.title)
                 ),
-                e("button", { className: "text-[10px] text-white/25", disabled: true, title: "提及待接入" }, t("@ 提及"))
+                e("button", { onClick: () => mentionMember(s), disabled: !apiToken || mentioning === s.id, title: "给该成员发提及通知", className: "text-[10px] text-purple-300 hover:text-purple-200 disabled:text-white/25" }, mentioning === s.id ? "…" : t("@ 提及"))
               ))
             )
           )

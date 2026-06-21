@@ -946,7 +946,7 @@ export function V615ReplicaApp(props: any = {}) {
     // V6.14.2: 7 子 modals
     e(AnimatePresence, null, showProfile && e(ProfileModal, { user: currentUser, onClose: () => setShowProfile(false), t, apiToken })),
     e(AnimatePresence, null, showTeam && e(TeamModal, {
-      user: currentUser, staff: uiStaff, groups: staffGroups,
+      user: currentUser, staff: uiStaff, groups: staffGroups, apiToken,
       onClose: () => setShowTeam(false),
       onImpersonate: (s) => setViewingAs(s),
       onOpenEditGroup: (g) => openGroupEditor("edit", g || null),

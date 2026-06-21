@@ -22,6 +22,38 @@ def _scope_403(exc: Exception) -> HTTPException:
     return HTTPException(status_code=403, detail=str(exc) or "scope denied")
 
 
+class _MentionBody(BaseModel):
+    target_staff_id: int
+    message: str = ""
+
+
+@router.post("/team/mention")
+def team_mention(body: _MentionBody, staff=Depends(require_tab("vkpi", "write"))) -> dict:
+    """#19 团队 @提及:给目标成员写一条通知(复用 vkpi_alerts,staff_id=目标 → 出现在其通知流)。
+
+    发件人由后端从鉴权 staff 取(不信前端);每次提及用 uuid alert_key 保证是新通知而非覆盖。
+    """
+    import uuid
+    from app.domains.alerts import service as alerts_service
+
+    message = (body.message or "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="message required")
+    target_id = int(body.target_staff_id)
+    sender = str(staff.get("name") or staff.get("user_name") or staff.get("email") or "同事")
+    key = f"mention:{target_id}:{uuid.uuid4().hex[:12]}"
+    alert = alerts_service.upsert_alert(
+        alert_key=key,
+        title=f"{sender} 提及了你",
+        body=message[:500],
+        severity="info",
+        target_type="mention",
+        staff_id=target_id,
+        rule_key="team_mention",
+    )
+    return {"status": "success", "alert_id": alert.get("id"), "target_staff_id": target_id}
+
+
 @router.get("/architecture")
 def architecture(staff=Depends(require_tab("vkpi", "read"))):
     return workflow.architecture_summary()
