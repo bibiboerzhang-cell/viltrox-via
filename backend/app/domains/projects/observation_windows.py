@@ -404,6 +404,42 @@ def review_content_post(
     return {"status": "ok", "action": act, "post": _row_to_post(row)}
 
 
+def advance_matched_posts_to_retrospective_ready(
+    project_id: int,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """R12 · 把项目下 status='matched' 的内容帖批量推进到 'retrospective_ready'。
+
+    红线:只 UPDATE vkpi_project_content_posts.status,绝不连带改 project.stage / assignment /
+    cost / viltrox_fit_score。幂等:只动 matched 行(已 retrospective_ready 不重复)。
+    RBAC:own-only 员工只能推进自己可见项目的帖子;管理层全可(复用 project_filter)。
+    """
+    pid = int(project_id or 0)
+    if pid <= 0:
+        return {"status": "error", "error": "project_id required"}
+    conn = get_conn()
+    scope_sql, scope_params = scope.project_filter("p", staff)
+    scope_clause = f"AND {scope_sql}" if scope_sql else ""
+    visible = conn.execute(
+        f"SELECT p.id FROM vkpi_projects p WHERE p.id = ? {scope_clause}",
+        (pid, *scope_params),
+    ).fetchone()
+    if visible is None:
+        return {"status": "error", "error": "project not found or out of scope"}
+    updated_at = datetime.utcnow()
+    cursor = conn.execute(
+        """
+        UPDATE vkpi_project_content_posts
+        SET status = 'retrospective_ready', updated_at = ?
+        WHERE project_id = ? AND status = 'matched'
+        """,
+        (updated_at, pid),
+    )
+    conn.commit()
+    advanced = int(getattr(cursor, "rowcount", 0) or 0)
+    return {"status": "ok", "project_id": pid, "advanced_count": advanced}
+
+
 def scan_delivered_into_windows(
     staff: dict[str, Any] | None = None,
     days_overdue: int = 7,

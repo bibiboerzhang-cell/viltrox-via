@@ -276,6 +276,29 @@ def review_content_post(
     )
 
 
+@router.post("/projects/{project_id}/content-posts/advance-retrospective")
+def advance_content_posts_to_retrospective(
+    project_id: int,
+    staff=Depends(require_tab("vkpi", "write")),
+):
+    """R12 · 把项目下 matched 内容帖批量推进 retrospective_ready,并 enqueue 复盘聚合(只排队,不跑 LLM)。
+
+    仅触 content_posts.status + enqueue apify_jobs;绝不改 project.stage/cost/fit。无 matched 帖则不 enqueue。
+    """
+    from app.domains.projects import observation_windows
+
+    advanced = observation_windows.advance_matched_posts_to_retrospective_ready(project_id, staff=staff)
+    if str(advanced.get("status")) != "ok":
+        return advanced
+    result: dict = {**advanced, "retrospective": None}
+    if int(advanced.get("advanced_count") or 0) > 0:
+        try:
+            result["retrospective"] = retrospective_aggregate.enqueue_project_retrospective(project_id, staff=staff)
+        except Exception as exc:  # enqueue 失败不回滚 advance(帖已 ready,可手动再触发复盘)
+            result["retrospective_error"] = str(exc)[:200]
+    return result
+
+
 @router.post("/projects/logistics-sync/enqueue")
 def enqueue_logistics_sync(
     body: dict = Body(default_factory=dict),

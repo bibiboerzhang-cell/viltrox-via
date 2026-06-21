@@ -492,6 +492,38 @@ async def job_daily_action_inbox_generate():
         logger.exception("scheduler.daily_action_inbox_generate_failed")
 
 
+async def job_fulfillment_due_scan():
+    """R10 · 履约:已签收满 7/14/21 天仍零内容 → 物化 content_due 待人核任务(scan_due_into_tasks)。
+
+    config-gate:scheduler_tasks.fulfillment_due_scan(默认 OFF)。零自动裁决:只 CREATE 待办,
+    去重在 create_observation_task 内(同 project + content_due pending 已存在则跳过)。
+    无 delivered shipment → created=[] 是诚实结果(物流断流)。绝不触 viltrox_fit_score。
+    """
+    if not _scheduler_task_enabled("fulfillment_due_scan"):
+        return
+    try:
+        import asyncio
+        from app.domains.projects import fulfillment_observation
+
+        created_total = 0
+        scanned_total = 0
+        for days in (7, 14, 21):
+            res = await asyncio.to_thread(
+                fulfillment_observation.scan_due_into_tasks,
+                _scheduler_system_staff(),
+                days,
+            )
+            created_total += len(res.get("created") or [])
+            scanned_total += int(res.get("scanned") or 0)
+        if created_total or scanned_total:
+            logger.info(
+                "scheduler.fulfillment_due_scan",
+                extra={"created": created_total, "scanned": scanned_total},
+            )
+    except Exception:
+        logger.exception("scheduler.fulfillment_due_scan_failed")
+
+
 async def job_fulfillment_content_scan():
     """履约:对到期/活动观察窗口扫真证据 → 物化内容候选(scan_windows_for_content)。
 
@@ -1046,6 +1078,15 @@ async def start_scheduler() -> None:
         trigger=CronTrigger(hour=2, minute=30),
         id="fulfillment_retrospective_enqueue",
         name="Fulfillment: enqueue retrospective for measured/closed projects (no LLM)",
+        max_instances=1,
+        coalesce=True,
+    )
+    # R10:履约到期未发布扫描(7/14/21 天 → content_due 待办)── config-gate(fulfillment_due_scan,默认 OFF)。
+    _scheduler.add_job(
+        job_fulfillment_due_scan,
+        trigger=CronTrigger(hour=2, minute=45),
+        id="fulfillment_due_scan",
+        name="Fulfillment: scan delivered-but-no-content into content_due tasks (7/14/21d)",
         max_instances=1,
         coalesce=True,
     )

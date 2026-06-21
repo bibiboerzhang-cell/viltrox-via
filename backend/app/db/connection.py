@@ -223,6 +223,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "174_vkpi_collab_settings.sql",
     "175_enable_daily_action_inbox_generate.sql",
     "176_vkpi_search_session_approved.sql",
+    "177_scheduler_task_fulfillment_due_scan.sql",
 )
 
 try:
