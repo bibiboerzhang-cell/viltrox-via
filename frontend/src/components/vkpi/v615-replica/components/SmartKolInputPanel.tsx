@@ -1552,7 +1552,9 @@ export function SmartKolInputPanel({
     setActiveSearchSession((prev) => {
       const prevDiscovery = discoveryItemsFromSession(prev).length;
       const nextDiscovery = discoveryItemsFromSession(session).length;
-      if (prevDiscovery > 0 && nextDiscovery === 0) {
+      // 保住已点亮的框3:新快照发现项更少时(轮询时序/异步落库导致),合并后端最新 status/summary
+      // 但保留 prev 更全的 items,绝不让更稀的快照把已显示的发现项刷没。
+      if (prevDiscovery > nextDiscovery) {
         return { ...prev, status: session.status, result_summary: session.result_summary };
       }
       return session;
@@ -1636,7 +1638,15 @@ export function SmartKolInputPanel({
         const session = await getKolSearchSession(apiToken, activeSearchSessionId);
         if (cancelled) return;
         applyPolledSession(session);
-        if (isSearchSessionTerminal(session)) {
+        // 发现项异步落库:summary 已报「全网发现 N 个」但 items 尚未到 → 视为仍在写库,继续轮询,
+        // 不在 items 缺席时就宣告「已找完」(否则框3 卡在 0,正是你看到的现象)。封顶仍受 maxPollMs 兜底。
+        const summary = asRecord(session?.result_summary);
+        const expectedDiscovery = Number(asRecord(asRecord(summary.new_discovery).counts).new_creators || 0);
+        const itemsLagging =
+          expectedDiscovery > 0
+          && discoveryItemsFromSession(session).length === 0
+          && Date.now() - startedAt < maxPollMs;
+        if (isSearchSessionTerminal(session) && !itemsLagging) {
           setActiveSearchSessionId(null);
           setSessionPollNotice("已找完，结果已更新");
           void refreshHistory();
