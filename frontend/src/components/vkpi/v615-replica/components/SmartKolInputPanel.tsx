@@ -1631,6 +1631,7 @@ export function SmartKolInputPanel({
   useEffect(() => {
     if (!apiToken || !activeSearchSessionId || typeof window === "undefined") return undefined;
     let cancelled = false;
+    let terminalSince: number | null = null;  // 本会话内「首次见终态」时间(闭包,随会话重置)
     const startedAt = Date.now();
     const maxPollMs = 12 * 60 * 1000;
     const poll = async () => {
@@ -1638,21 +1639,21 @@ export function SmartKolInputPanel({
         const session = await getKolSearchSession(apiToken, activeSearchSessionId);
         if (cancelled) return;
         applyPolledSession(session);
-        // 发现项异步落库:summary 已报「全网发现 N 个」但 items 尚未到 → 视为仍在写库,继续轮询,
-        // 不在 items 缺席时就宣告「已找完」(否则框3 卡在 0,正是你看到的现象)。封顶仍受 maxPollMs 兜底。
-        const summary = asRecord(session?.result_summary);
-        const expectedDiscovery = Number(asRecord(asRecord(summary.new_discovery).counts).new_creators || 0);
-        const itemsLagging =
-          expectedDiscovery > 0
-          && discoveryItemsFromSession(session).length === 0
-          && Date.now() - startedAt < maxPollMs;
-        if (isSearchSessionTerminal(session) && !itemsLagging) {
-          setActiveSearchSessionId(null);
-          setSessionPollNotice("已找完，结果已更新");
-          void refreshHistory();
-          return;
-        }
-        if (Date.now() - startedAt > maxPollMs) {
+        // 发现项常在 session 状态置「终态」之后才异步落库 → 不能一见终态就停(否则框3 卡 0,正是你看到的)。
+        // 改:终态后宽限继续轮询,直到发现项真的到 / 宽限 30s 用尽 / 总超时,才真正宣告已找完。
+        const haveDiscovery = discoveryItemsFromSession(session).length > 0;
+        const timedOut = Date.now() - startedAt > maxPollMs;
+        if (isSearchSessionTerminal(session)) {
+          if (terminalSince == null) terminalSince = Date.now();
+          const graceUsedUp = Date.now() - terminalSince >= 30000;
+          if (haveDiscovery || graceUsedUp || timedOut) {
+            setActiveSearchSessionId(null);
+            setSessionPollNotice("已找完，结果已更新");
+            void refreshHistory();
+            return;
+          }
+          // 终态但发现项未到 + 宽限期内 → 继续轮询
+        } else if (timedOut) {
           setActiveSearchSessionId(null);
           setSessionPollNotice("仍在后台查找，可从最近历史或任务里继续查看");
           void refreshHistory();
