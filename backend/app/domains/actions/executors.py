@@ -105,6 +105,45 @@ def _entity_id_int(action: dict[str, Any]) -> int | None:
         return None
 
 
+def _record_execution_feedback(
+    action: dict[str, Any],
+    staff: dict[str, Any] | None,
+    *,
+    outcome: str,
+    detail: dict[str, Any] | None,
+) -> None:
+    """R8 · 执行成功 → 写一行 vkpi_memory_feedback 埋种(里程碑②学习闭环的历史素材)。
+
+    best-effort:写库失败只 logger.warning,绝不阻断 execute_action 返回(执行已成功)。
+    红线:feedback 仅为反馈载体,绝不读写 viltrox_fit_score / rule_v0。
+    """
+    try:
+        from app.domains.memory import feedback as memory_feedback
+
+        memory_feedback.record_feedback(
+            {
+                "feedback_type": "action_executed",
+                "entity_uid": "",  # action 实体未必有 memory entity;留空,上下文进 feedback_json
+                "rating": 1,
+                "category": str(action.get("category") or ""),
+                "action_id": int(action.get("id") or 0) or None,
+                "entity_type": str(action.get("entity_type") or ""),
+                "entity_id": str(action.get("entity_id") or ""),
+                "outcome": str(outcome),
+                "endpoint": str(action.get("suggested_endpoint") or ""),
+                "detail": detail or {},
+                "source": "action_executor",
+            },
+            staff=staff,
+        )
+    except Exception:
+        logger.warning(
+            "action_executor.memory_feedback_failed",
+            extra={"action_id": action.get("id")},
+            exc_info=True,
+        )
+
+
 # ── per-category dispatch(全部复用既有 service,签名实证) ────────────────
 def _exec_deep_missing(action: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
     """KOL 深析待跑 → 入 apify_jobs(账号深爬队列)。复用 enqueue_profile_deep_crawl_job(去重)。"""
@@ -263,16 +302,61 @@ def _exec_retrospective(action: dict[str, Any], staff: dict[str, Any] | None) ->
     return {"outcome": "success", "reason": "", "detail": {"enqueue": res}}
 
 
-def _exec_skip_reminder(action: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
-    """纯提醒类(event_followup / inventory_low / project_shared_to_you):
+def _exec_event_followup(action: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
+    """R6 · 活动收尾提醒 → 受理并留痕(ledger 自动落 who/when)。
 
-    这些 requires_approval=False 且不写业务数据,本不该进 approved 执行路径 → 防御性 skip。
-    (kol_profile 已有真入队执行器 _exec_kol_profile,不再走此 skip 分支。)
+    红线诚实:ROI/线索/复盘是真业务数值,绝不由 agent 臆造填 0;执行=「已受理此提醒」,
+    真数据仍需人工在 PATCH /events/{id} 回填。无 event_id → 诚实 skip。
+    """
+    event_id = str(action.get("entity_id") or "").strip()
+    if not event_id:
+        return {"outcome": "skipped", "reason": "event_followup_no_event_id", "detail": {}}
+    payload = action.get("payload_json") if isinstance(action.get("payload_json"), dict) else {}
+    return {
+        "outcome": "success",
+        "reason": "",
+        "detail": {
+            "acknowledged": True,
+            "event_id": event_id,
+            "missing": payload.get("missing"),
+            "next_endpoint": action.get("suggested_endpoint"),
+            "note": "已受理活动收尾提醒(进 ledger 留痕);ROI/线索/复盘真值仍需人工在 PATCH /events/{id} 回填,绝不由 agent 臆造。",
+        },
+    }
+
+
+def _exec_inventory_low(action: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
+    """R6 · 库存偏低提醒 → 受理并留痕。
+
+    红线诚实:补货是人工采购决策,绝不自动改 qty / 自动下单 / 自动花钱;执行=「已受理预警」。
+    无 inventory id → 诚实 skip。
+    """
+    inv_id = str(action.get("entity_id") or "").strip()
+    if not inv_id:
+        return {"outcome": "skipped", "reason": "inventory_low_no_id", "detail": {}}
+    payload = action.get("payload_json") if isinstance(action.get("payload_json"), dict) else {}
+    return {
+        "outcome": "success",
+        "reason": "",
+        "detail": {
+            "acknowledged": True,
+            "inventory_id": inv_id,
+            "sku": payload.get("sku"),
+            "qty": payload.get("qty"),
+            "next_endpoint": action.get("suggested_endpoint"),
+            "note": "已受理库存预警(进 ledger 留痕);补货是人工采购决策,绝不自动改 qty / 自动下单。",
+        },
+    }
+
+
+def _exec_skip_reminder(action: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
+    """纯提醒类(project_shared_to_you):requires_approval=False 且不写业务数据,
+
+    本不该进 approved 执行路径 → 防御性 skip。
+    (event_followup / inventory_low 已各有受理执行器;kol_profile 有真入队执行器。)
     """
     category = str(action.get("category") or "")
     reason_map = {
-        "event_followup": "reminder_only_no_executor",
-        "inventory_low": "reminder_only_no_executor",
         "project_shared_to_you": "reminder_only_no_executor",
     }
     return {"outcome": "skipped", "reason": reason_map.get(category, "no_executor"), "detail": {}}
@@ -285,8 +369,8 @@ _DISPATCH = {
     "content_candidate": _exec_content_candidate,
     "retrospective": _exec_retrospective,
     "kol_profile": _exec_kol_profile,
-    "event_followup": _exec_skip_reminder,
-    "inventory_low": _exec_skip_reminder,
+    "event_followup": _exec_event_followup,
+    "inventory_low": _exec_inventory_low,
     "project_shared_to_you": _exec_skip_reminder,
 }
 
@@ -344,6 +428,8 @@ def execute_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[
     )
     if outcome == "success":
         inbox.set_status(action_id, "executed")
+        # R8:成功执行 → 写回 vkpi_memory_feedback 埋种(②学习闭环);best-effort,不阻断返回。
+        _record_execution_feedback(action, staff, outcome="success", detail=detail)
         return _result(ok=True, outcome="success", category=category, ledger_id=lid, detail=detail)
     if outcome == "failed":
         inbox.set_status(action_id, "failed")

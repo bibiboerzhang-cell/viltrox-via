@@ -8,12 +8,14 @@ const approveAction = vi.fn();
 const dismissAction = vi.fn();
 const snoozeAction = vi.fn();
 const executeAction = vi.fn();
+const listRecentExecutionLedger = vi.fn(() => Promise.resolve({ items: [], available: true }));
 vi.mock("../../../../services/vkpi/actionInbox-api", () => ({
   listActionInbox: (...a: unknown[]) => listActionInbox(...a),
   approveAction: (...a: unknown[]) => approveAction(...a),
   dismissAction: (...a: unknown[]) => dismissAction(...a),
   snoozeAction: (...a: unknown[]) => snoozeAction(...a),
   executeAction: (...a: unknown[]) => executeAction(...a),
+  listRecentExecutionLedger: (...a: unknown[]) => listRecentExecutionLedger(...a),
 }));
 
 import { ActionInboxPanel } from "./ActionInboxPanel";
@@ -103,8 +105,8 @@ describe("ActionInboxPanel 渲染 smoke", () => {
     // suggested → 先点「通过」。
     fireEvent.click(await screen.findByRole("button", { name: /通过/ }));
     await waitFor(() => expect(approveAction).toHaveBeenCalledWith("tok", 1));
-    // approve 后本地转 approved → 露出「执行」按钮。
-    const execBtn = await screen.findByRole("button", { name: /执行/ });
+    // approve 后本地转 approved → 露出「执行」按钮(锚定,避免匹配 footer「执行台账」)。
+    const execBtn = await screen.findByRole("button", { name: /^执行$/ });
     // execute 二次确认:stub confirm 放行。
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     fireEvent.click(execBtn);

@@ -71,3 +71,23 @@ def execute(
     # 红线:仅 status=='approved' 执行;validators 双闸(approved+touches_v6_fit=False+
     # budget+entity 存在);未审批的写库/LLM 动作返回 outcome='skipped'。
     return executors.execute_action(action_id, staff)
+
+
+# ── R7 执行台账回读(read tab;只读 vkpi_action_execution_ledger,scope 同 inbox) ──
+@router.get("/ledger/recent")
+def recent_execution_ledger(
+    limit: int = Query(default=50, ge=1, le=200),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict[str, Any]:
+    """最近 N 条执行台账(成员仅自己 owner 的 action;管理层全局)。"""
+    return inbox.read_execution_ledger(staff, action_id=None, limit=limit)
+
+
+@router.get("/{action_id}/ledger")
+def action_execution_ledger(
+    action_id: int,
+    limit: int = Query(default=50, ge=1, le=200),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict[str, Any]:
+    """单条 action 的所有执行台账行(before/after 验收;越权/不存在 → 空)。"""
+    return inbox.read_execution_ledger(staff, action_id=action_id, limit=limit)

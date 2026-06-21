@@ -120,3 +120,51 @@ export async function executeAction(
     token,
   );
 }
+
+// ── R7 执行台账回读(只读 vkpi_action_execution_ledger;before/after 验收) ──────
+export interface ActionLedgerItem {
+  id: number;
+  action_id: number | null;
+  category: string;
+  dedupe_key: string;
+  actor_staff_id: number | null;
+  mode: string;
+  outcome: string;
+  endpoint: string;
+  cost_cents: number;
+  error: string;
+  detail_json: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface ActionLedgerResponse {
+  items: ActionLedgerItem[];
+  available: boolean;
+  count?: number;
+  by_outcome?: Record<string, number>;
+  scope?: string;
+  reason?: string;
+}
+
+export async function listRecentExecutionLedger(
+  token: string,
+  limit = 50,
+): Promise<ActionLedgerResponse> {
+  return apiFetch<ActionLedgerResponse>(
+    `/api/admin/vkpi/actions/ledger/recent?limit=${encodeURIComponent(String(limit))}`,
+    { cache: "no-store" },
+    token,
+  );
+}
+
+export async function listActionExecutionLedger(
+  token: string,
+  actionId: number,
+  limit = 50,
+): Promise<ActionLedgerResponse> {
+  return apiFetch<ActionLedgerResponse>(
+    `/api/admin/vkpi/actions/${actionId}/ledger?limit=${encodeURIComponent(String(limit))}`,
+    { cache: "no-store" },
+    token,
+  );
+}

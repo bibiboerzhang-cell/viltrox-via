@@ -346,9 +346,9 @@ def produce_event_followup(conn: Any, *, limit: int = 25) -> list[dict[str, Any]
                 entity_type="event",
                 entity_id=row["id"],
                 suggested_endpoint="PATCH /api/admin/vkpi/events/{id}",
-                writes_business_data=False,  # 纯提醒人工回填,不自动写
+                writes_business_data=False,  # 不臆造业务数值;执行=受理+留痕(真值仍人工回填)
                 uses_llm=False,
-                requires_approval=False,
+                requires_approval=True,  # R6:走 approve→execute 人审闸,执行=受理并留痕
                 owner_staff_id=int(owner) if owner not in (None, "", 0) else None,
                 payload={"missing": missing, "end_date": str(row.get("end_date"))},
             )
@@ -383,9 +383,9 @@ def produce_inventory_low(conn: Any, *, threshold: int = 5, limit: int = 25) -> 
                 entity_type="inventory",
                 entity_id=row["id"],
                 suggested_endpoint="PATCH /api/admin/vkpi/inventory/{id}",
-                writes_business_data=False,  # 纯提醒
+                writes_business_data=False,  # 不自动改 qty/下单;执行=受理+留痕(补货仍人工)
                 uses_llm=False,
-                requires_approval=False,
+                requires_approval=True,  # R6:走 approve→execute 人审闸,执行=受理并留痕
                 payload={"sku": row.get("sku"), "qty": qty, "threshold": int(threshold)},
             )
         )

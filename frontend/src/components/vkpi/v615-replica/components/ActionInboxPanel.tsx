@@ -28,6 +28,7 @@ import {
   dismissAction,
   executeAction,
   listActionInbox,
+  listRecentExecutionLedger,
   snoozeAction,
 } from "../../../../services/vkpi/actionInbox-api";
 
@@ -75,9 +76,14 @@ export function ActionInboxPanel({ apiToken = "", limit = 6 }) {
   const [error, setError] = React.useState("");
   const [scope, setScope] = React.useState("");
   const [available, setAvailable] = React.useState(true);
-  // per-id 操作态:'approve' | 'dismiss' | 'snooze' | undefined。
+  // per-id 操作态:'approve' | 'dismiss' | 'snooze' | 'execute' | undefined。
   const [busy, setBusy] = React.useState<Record<string, any>>({});
   const [actionError, setActionError] = React.useState("");
+  // R7 执行验收:成功绿色提示 + 折叠的「执行台账」(回读 vkpi_action_execution_ledger)。
+  const [okNote, setOkNote] = React.useState("");
+  const [ledgerOpen, setLedgerOpen] = React.useState(false);
+  const [ledgerItems, setLedgerItems] = React.useState<any[]>([]);
+  const [ledgerLoading, setLedgerLoading] = React.useState(false);
   // 默认只显 3 条(避免顶掉下方 KOL 漏斗 / Active Campaigns);可展开看全部(抓取仍 limit 条)。
   const [expanded, setExpanded] = React.useState(false);
   const COLLAPSED_COUNT = 3;
@@ -132,6 +138,24 @@ export function ActionInboxPanel({ apiToken = "", limit = 6 }) {
     setItems((prev) => prev.map((it: any) => (it.id === id ? { ...it, status } : it)));
   }, []);
 
+  // R7:回读最近执行台账(只读 vkpi_action_execution_ledger)。
+  const loadLedger = React.useCallback(() => {
+    if (!apiToken) return;
+    setLedgerLoading(true);
+    listRecentExecutionLedger(apiToken, 20)
+      .then((res) => setLedgerItems(Array.isArray(res?.items) ? res.items : []))
+      .catch(() => setLedgerItems([]))
+      .finally(() => setLedgerLoading(false));
+  }, [apiToken]);
+
+  const toggleLedger = React.useCallback(() => {
+    setLedgerOpen((open) => {
+      const next = !open;
+      if (next) loadLedger();
+      return next;
+    });
+  }, [loadLedger]);
+
   const runAction = React.useCallback(
     (it: any, kind: any) => {
       if (!apiToken || !it || busy[it.id]) return;
@@ -158,7 +182,13 @@ export function ActionInboxPanel({ apiToken = "", limit = 6 }) {
           if (kind === "execute") {
             const outcome = res?.outcome;
             if (outcome === "success") {
+              const cat = res?.category || it.category || "";
+              const label = (CATEGORY_META as any)[cat]?.label || cat;
+              const lid = res?.ledger_id ? ` · 台账#${res.ledger_id}` : "";
+              setOkNote(`已执行 · ${label}${lid} · 进 ledger`);
+              setActionError("");
               removeItem(it.id);
+              if (ledgerOpen) loadLedger();
               return;
             }
             // failed → 终态,移除并报因;skipped → 保留(仍 approved,可重试)并报因。
@@ -188,7 +218,7 @@ export function ActionInboxPanel({ apiToken = "", limit = 6 }) {
           }),
         );
     },
-    [apiToken, busy, removeItem, setItemStatus],
+    [apiToken, busy, removeItem, setItemStatus, ledgerOpen, loadLedger],
   );
 
   const headerRight = loading
@@ -414,6 +444,17 @@ export function ActionInboxPanel({ apiToken = "", limit = 6 }) {
       headerRight,
     ),
     body,
+    // R7 执行成功绿色提示
+    okNote
+      ? e(
+          "div",
+          {
+            className:
+              "mt-2 rounded border border-emerald-500/25 bg-emerald-500/[0.07] px-2 py-1 text-[9px] text-emerald-300/90",
+          },
+          okNote,
+        )
+      : null,
     // 操作错误提示(approve/dismiss/snooze 失败或被后端拒绝)
     actionError
       ? e(
@@ -425,12 +466,59 @@ export function ActionInboxPanel({ apiToken = "", limit = 6 }) {
           `操作未生效 · ${actionError}`,
         )
       : null,
-    // footer:数据源 + scope + 人审后执行 诚实标注
+    // R7 执行台账(折叠;回读 vkpi_action_execution_ledger,before/after 验收)
+    ledgerOpen
+      ? e(
+          "div",
+          { className: "mt-2 max-h-44 space-y-1 overflow-y-auto rounded border border-white/[0.06] bg-black/20 p-1.5" },
+          ledgerLoading
+            ? e("div", { className: "py-2 text-center text-[9px] text-slate-500" }, "加载执行台账…")
+            : ledgerItems.length === 0
+              ? e("div", { className: "py-2 text-center text-[9px] text-slate-500" }, "暂无执行记录")
+              : ledgerItems.map((l: any) =>
+                  e(
+                    "div",
+                    {
+                      key: `lg-${l.id}`,
+                      className: "flex items-center justify-between gap-2 rounded bg-white/[0.02] px-1.5 py-1",
+                    },
+                    e(
+                      "span",
+                      { className: "min-w-0 flex-1 truncate text-[9px] text-slate-300" },
+                      `${(CATEGORY_META as any)[l.category]?.label || l.category || "run"} · ${l.mode}`,
+                    ),
+                    e(
+                      "span",
+                      {
+                        className: `shrink-0 rounded px-1 text-[8px] ${
+                          l.outcome === "success"
+                            ? "text-emerald-300"
+                            : l.outcome === "failed"
+                              ? "text-red-300"
+                              : "text-slate-400"
+                        }`,
+                      },
+                      l.outcome,
+                    ),
+                  ),
+                ),
+        )
+      : null,
+    // footer:数据源 + scope + 人审后执行 诚实标注 + 执行台账开关
     e(
       "div",
       { className: "mt-3 flex items-center justify-between border-t border-white/[0.06] pt-2" },
       e("div", { className: "text-[9px] text-slate-500" }, scopeLabel ? `范围:${scopeLabel}` : "Auto-Ops · 建议"),
-      e("div", { className: "text-[9px] text-slate-500" }, "人审后执行 · 进 ledger"),
+      e(
+        "button",
+        {
+          type: "button",
+          onClick: toggleLedger,
+          className: "text-[9px] text-slate-500 transition-colors hover:text-slate-300",
+          title: "回读执行台账(谁/何时/结果/成本)",
+        },
+        ledgerOpen ? "收起台账" : "执行台账",
+      ),
     ),
   );
 }

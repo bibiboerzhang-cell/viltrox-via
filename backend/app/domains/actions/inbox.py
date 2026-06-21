@@ -207,6 +207,76 @@ def list_inbox(
     }
 
 
+# ── R7 执行台账回读(scope-gated 只读) ────────────────────────────────
+_LEDGER_COLUMNS = (
+    "id, action_id, category, dedupe_key, actor_staff_id, mode, outcome, "
+    "endpoint, cost_cents, error, detail_json, created_at"
+)
+
+
+def read_execution_ledger(
+    staff: dict[str, Any] | None = None,
+    *,
+    action_id: int | None = None,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """读 vkpi_action_execution_ledger(只读)。action_id 给定→该条 action 的所有执行行;否则最近 N 条。
+
+    scope:成员只见自己 owner 的 action 的台账;管理层全局(含 run 级 action_id=NULL 行)。
+    红线:全程只读 ledger,绝不写;不碰 viltrox_fit_score / rule_v0。
+    """
+    if not table_exists(_LEDGER):
+        return {"items": [], "available": False, "reason": "ledger_not_available"}
+    conn = get_conn()
+    safe_limit = max(1, min(int(limit or 50), 200))
+    can_all = scope.can_view_all(staff)
+
+    if action_id is not None:
+        # 单条 action:先 scope 校验可见(越权/不存在 → 空,不泄漏)。
+        if get_action(int(action_id), staff) is None:
+            return {"items": [], "available": True, "count": 0, "by_outcome": {}, "scope": "own"}
+        rows = conn.execute(
+            f"SELECT {_LEDGER_COLUMNS} FROM {_LEDGER} WHERE action_id = ? "
+            f"ORDER BY created_at DESC, id DESC LIMIT ?",
+            (int(action_id), safe_limit),
+        ).fetchall()
+    elif can_all:
+        rows = conn.execute(
+            f"SELECT {_LEDGER_COLUMNS} FROM {_LEDGER} ORDER BY created_at DESC, id DESC LIMIT ?",
+            (safe_limit,),
+        ).fetchall()
+    else:
+        # 成员:只放行自己 owner 的 action 的台账(JOIN inbox.owner_staff_id)。run 级(action_id NULL)不可见。
+        rows = conn.execute(
+            f"""
+            SELECT l.id, l.action_id, l.category, l.dedupe_key, l.actor_staff_id, l.mode,
+                   l.outcome, l.endpoint, l.cost_cents, l.error, l.detail_json, l.created_at
+            FROM {_LEDGER} l
+            JOIN {_TABLE} a ON a.id = l.action_id
+            WHERE a.owner_staff_id = ?
+            ORDER BY l.created_at DESC, l.id DESC
+            LIMIT ?
+            """,
+            (int(scope.actor_staff_id(staff)), safe_limit),
+        ).fetchall()
+
+    items = []
+    by_outcome: dict[str, int] = {}
+    for r in rows:
+        row = dict(r)
+        row["detail_json"] = _loads(row.get("detail_json"))
+        oc = str(row.get("outcome") or "")
+        by_outcome[oc] = by_outcome.get(oc, 0) + 1
+        items.append(row)
+    return {
+        "items": items,
+        "available": True,
+        "count": len(items),
+        "by_outcome": by_outcome,
+        "scope": "all" if can_all else "own",
+    }
+
+
 # ── W2 状态流转 + 单条读取(scope-gated) ────────────────────────────────
 _INBOX_COLUMNS = (
     "id, dedupe_key, category, title, detail, priority, entity_type, entity_id, "
