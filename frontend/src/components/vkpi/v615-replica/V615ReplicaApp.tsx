@@ -59,7 +59,8 @@ import { WorkRemindersPopover } from "./components/popovers/WorkRemindersPopover
 import { logoutV615, resolveV615Alert } from "./api";
 import { buildApiUrl } from "../../../services/http";
 import { listEvents } from "../../../services/vkpi/events-api";
-import { normalizeEventsHierarchy, eventCoords } from "./normalizers";
+import { getDealerLocations } from "../../../services/vkpi/dealers-api";
+import { normalizeEventsHierarchy, normalizeDealersHierarchy, eventCoords } from "./normalizers";
 import { I18nContext, makeT } from "./lib/i18n";
 import { loadStoredState, saveStoredState } from "./lib/storage";
 import { useV615Runtime } from "./useV615Runtime";
@@ -201,6 +202,7 @@ export function V615ReplicaApp(props: any = {}) {
   const [pendingEventId, setPendingEventId] = useState(null);
   // 2026-06-14 诚实化:Upcoming Events 卡接真实 /api/admin/vkpi/events,不再传空数组。
   const [eventRows, setEventRows] = useState([]);
+  const [dealerPins, setDealerPins] = useState<any[]>([]);
   const [kpiScope, setKpiScope] = useState(stored.kpiScope || "all");
   const [reportOpen, setReportOpen] = useState(urlReport === "1"); // V6.10: Report Panel
   const [selectedSignal, setSelectedSignal] = useState(null); // V6.11: Signal detail modal
@@ -385,6 +387,9 @@ export function V615ReplicaApp(props: any = {}) {
   // 真实活动地图层(只上图带定位的活动;0 个带定位则诚实保持禁用)。
   const eventsHierarchy = useMemo(() => normalizeEventsHierarchy(eventRows) || {}, [eventRows]);
   const eventsGeoCount = Object.keys(eventsHierarchy).length;
+  // 经销商地图层(主页地球):/dealers/locations 扁平 pin → US→cities 层级;0 个带经纬度则诚实禁用。
+  const dealersHierarchy = useMemo(() => normalizeDealersHierarchy(dealerPins) || {}, [dealerPins]);
+  const dealersGeoCount = Object.keys(dealersHierarchy).length;
   const runtimeViewModes = useMemo(() => ({
     ...VIEW_MODES,
     kols: {
@@ -395,9 +400,9 @@ export function V615ReplicaApp(props: any = {}) {
     },
     dealers: {
       ...VIEW_MODES.dealers,
-      desc: "Dealer locations endpoint 待接入",
-      hierarchy: {},
-      available: false,
+      desc: dealersGeoCount > 0 ? `${Object.keys((dealersHierarchy as any).US?.cities || {}).length} 城有经销商` : "经销商填经纬度后自动上图",
+      hierarchy: dealersHierarchy,
+      available: dealersGeoCount > 0,
     },
     customer: {
       ...VIEW_MODES.customer,
@@ -410,7 +415,7 @@ export function V615ReplicaApp(props: any = {}) {
       hierarchy: eventsHierarchy,
       available: eventsGeoCount > 0,
     },
-  }), [dashboardRuntime.mapHierarchy, kolHierarchyReady, eventsHierarchy, eventsGeoCount]);
+  }), [dashboardRuntime.mapHierarchy, kolHierarchyReady, eventsHierarchy, eventsGeoCount, dealersHierarchy, dealersGeoCount]);
   const currentMode = viewMode ? runtimeViewModes[viewMode] : null;
   const isAvailable = currentMode?.available;
   const hierarchy = currentMode?.hierarchy || {};
@@ -791,6 +796,16 @@ export function V615ReplicaApp(props: any = {}) {
     return () => {
       cancelled = true;
     };
+  }, [apiToken]);
+
+  // 经销商位置(主页地球 dealers 层):拉 /dealers/locations 扁平 pin;失败/无 token 静默置空。
+  useEffect(() => {
+    if (!apiToken) { setDealerPins([]); return; }
+    let cancelled = false;
+    getDealerLocations(apiToken)
+      .then((res) => { if (!cancelled) setDealerPins(Array.isArray(res?.pins) ? res.pins : []); })
+      .catch(() => { if (!cancelled) setDealerPins([]); });
+    return () => { cancelled = true; };
   }, [apiToken]);
 
   // mappedEvents / upcomingEvents / eventPins 已上移到 pins useMemo 之前(被 pins 引用,

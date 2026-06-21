@@ -815,6 +815,28 @@ export function normalizeEventsHierarchy(eventRows: any = []) {
   return Object.keys(hierarchy).length ? hierarchy : null;
 }
 
+// 经销商地图层(主页地球):把 /dealers/locations 扁平 pin 归并成 country(US)→cities 层级,
+// 形状对齐 normalizeEventsHierarchy 供同一地球消费。只上图有经纬度的(无则待 geocode 不显)。
+export function normalizeDealersHierarchy(pins: any = []) {
+  const hierarchy: Record<string, any> = {};
+  const centroid = countryCentroid("US");
+  for (const raw of list(pins)) {
+    const p = record(raw);
+    const lat = number(p.lat);
+    const lng = number(p.lng);
+    if (lat == null || lng == null) continue;
+    const key = "US";
+    if (!hierarchy[key]) hierarchy[key] = { lat: centroid?.lat ?? lat, lng: centroid?.lng ?? lng, count: 0, revenue: "", cities: {} };
+    hierarchy[key].count += 1;
+    const city = String(p.city || p.name || "").trim();
+    if (city) {
+      const c = hierarchy[key].cities[city] || (hierarchy[key].cities[city] = { lat, lng, count: 0, revenue: "", kols: [], raw: p });
+      c.count += 1;
+    }
+  }
+  return Object.keys(hierarchy).length ? hierarchy : null;
+}
+
 // 单个活动的地图落点:优先显式经纬度;否则用国家质心 + 轻抖动(同国多活动不完全重叠)。
 // 既无显式经纬度又无可识别国家 → 返回 null(诚实不上图)。
 export function eventCoords(countryCode: any, lat: any, lng: any, seed = "") {
