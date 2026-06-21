@@ -98,14 +98,23 @@ def resolve_post_for_comments(post_id: int, post_table: str = "industry_posts") 
             return None
         data = dict(row)
         external_post_id = str(data.get("content_url") or "")
-        if data.get("platform") == "youtube" and external_post_id:
+        platform = str(data.get("platform") or "").strip().lower()
+        # 硬化:平台列罕见为空时,从 content_url 兜底识别,避免 collect_post_comments
+        # 因空平台直接 skip 掉 0 评论(当前数据 platform 已填满,此为防御未来空值)。
+        if not platform and external_post_id:
+            from app.domains.projects.workflow_evidence import _detect_video_platform
+
+            detected = _detect_video_platform(external_post_id)
+            if detected and detected != "unknown":
+                platform = detected
+        if platform == "youtube" and external_post_id:
             from app.domains.kol.pool import _youtube_video_id
 
             external_post_id = _youtube_video_id(external_post_id) or external_post_id
         return {
             "id": data.get("id"),
             "account_id": None,
-            "platform": data.get("platform") or "",
+            "platform": platform,
             "external_post_id": external_post_id,
             "raw_data_json": "{}",
             "raw_data": {},
