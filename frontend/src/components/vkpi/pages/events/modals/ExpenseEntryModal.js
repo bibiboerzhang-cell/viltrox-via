@@ -133,8 +133,8 @@ export default function ExpenseEntryModal({ onClose, onSubmit }) {
       e("div", { className: "flex items-center justify-end gap-2 mt-5 pt-4 border-t border-white/[0.05]" },
         e("button", { onClick: onClose, className: "px-3 py-1.5 rounded-md border border-white/[0.08] text-[11px] text-slate-300 hover:bg-white/[0.04]" }, "取消"),
         e("button", {
-          disabled: !amount || !description,
-          onClick: () => onSubmit({ amount: parseFloat(amount), category, date, description, paidBy, paymentMethod, reimbursementStatus }),
+          disabled: !description || !(parseFloat(amount) > 0),
+          onClick: () => onSubmit({ amount: parseFloat(amount) || 0, category, date, description, paidBy, paymentMethod, reimbursementStatus }),
           className: `px-3.5 py-1.5 rounded-md text-[11px] font-medium ${amount && description ? "bg-purple-500 hover:bg-purple-400 text-white" : "bg-white/[0.05] text-slate-600 cursor-not-allowed"}`
         }, "保存")
       )

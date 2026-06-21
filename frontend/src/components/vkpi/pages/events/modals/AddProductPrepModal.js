@@ -171,7 +171,7 @@ export default function AddProductPrepModal({ side, stock = [], onClose, onSubmi
           onClick: () => onSubmit({
             id: "pp_" + Date.now(), name, category, source, qty, owner, note,
             status: side === "have" ? "ready" : "ordered",
-            arriveBy: arriveBy ? arriveBy.slice(5).replace("-", "/") : undefined,
+            arriveBy: arriveBy || undefined,
             returnAfter,
           }),
           className: `px-3.5 py-1.5 rounded-md text-[11px] font-medium ${(mode === "from_stock" ? selectedStockId : name) ? "bg-purple-500 hover:bg-purple-400 text-white" : "bg-white/[0.05] text-slate-600 cursor-not-allowed"}`

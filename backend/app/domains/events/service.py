@@ -279,8 +279,8 @@ def create_event(payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[
             str(payload.get("status") or "planning"),
             int(payload.get("health_score") or 100),
             str(payload.get("note") or ""),
-            payload.get("start_date") or str(_now().date()),
-            payload.get("end_date") or str(_now().date()),
+            _normalize_due_date(payload.get("start_date")) or str(_now().date()),
+            _normalize_due_date(payload.get("end_date")) or str(_now().date()),
             str(payload.get("location_name") or ""),
             str(payload.get("location_city") or ""),
             str(payload.get("location_country") or ""),
@@ -320,7 +320,10 @@ def update_event(event_id: str, payload: dict[str, Any], staff: dict[str, Any] |
         if key in payload:
             v = payload[key]
             sets.append(f"{key} = ?")
-            vals.append(caster(v) if (caster and v is not None) else v)
+            if key in ("start_date", "end_date"):
+                vals.append(_normalize_due_date(v))  # 同 due_date:坏日期归一/置空,不塞坏值进 DATE 列
+            else:
+                vals.append(caster(v) if (caster and v is not None) else v)
     for key in _EVENT_JSON_FIELDS:
         if key in payload:
             sets.append(f"{key} = ?::jsonb")
@@ -587,7 +590,7 @@ def add_product(event_id: str, payload: dict[str, Any], staff: dict[str, Any] | 
             str(payload.get("source") or "new_purchase"), int(payload.get("qty") or 1),
             str(payload.get("status") or "ordered"), str(payload.get("owner") or ""),
             str(payload.get("note") or ""), str(payload.get("trackingNo") or payload.get("tracking_no") or ""),
-            str(payload.get("arriveBy") or payload.get("arrive_by") or ""), bool(ra or False),
+            _normalize_due_date(payload.get("arriveBy") or payload.get("arrive_by")) or "", bool(ra or False),
         ),
     )
     conn.commit()
@@ -611,7 +614,7 @@ def update_product(event_id: str, product_id: str, payload: dict[str, Any], staf
         vals.append(str(payload.get("trackingNo") or payload.get("tracking_no") or ""))
     if "arriveBy" in payload or "arrive_by" in payload:
         sets.append("arrive_by = ?")
-        vals.append(str(payload.get("arriveBy") or payload.get("arrive_by") or ""))
+        vals.append(_normalize_due_date(payload.get("arriveBy") or payload.get("arrive_by")) or "")
     if "returnAfter" in payload or "return_after" in payload:
         ra = payload.get("returnAfter")
         if ra is None:
