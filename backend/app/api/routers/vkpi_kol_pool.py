@@ -30,6 +30,7 @@ from app.domains.kol import account_dossier as kol_account_dossier
 from app.domains.kol import account_dossier_extract as kol_account_dossier_extract
 from app.domains.kol import eleven_dimensions
 from app.domains.kol import intelligence_card as kol_intelligence_card
+from app.domains.kol import history_match as kol_history_match
 from app.domains.kol import llm_deep_analysis as kol_llm_deep_analysis
 from app.domains.kol import pool as kol_pool
 from app.domains.kol import profile_discovery as kol_profile_discovery
@@ -1683,6 +1684,29 @@ def get_pool_dimensions11_preview(
     """批量预览规则版 11 维画像；只读、不调 provider、不写库。"""
     del staff
     return eleven_dimensions.batch_preview_dimensions11(limit=limit, source_type=source_type)
+
+
+@router.get("/kol-pool/resolve")
+def resolve_kol_pool(
+    handle: str = Query(default=""),
+    platform: str = Query(default=""),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """#17 按 handle(可选 platform)解析到 vkpi 主池记录。
+
+    供 mover 预览弹窗(#5)/ KOLDetailModal 真指标(#22):用 handle 拿真 kol_pool_id +
+    真 followers/avg_views/合作摘要。命中返回 history_match 全量 payload;未命中诚实
+    返回 matched=False(前端据此走「先入库」或显空,不再编造假指标)。
+    """
+    h = (handle or "").strip()
+    plat = (platform or "").strip()
+    if not h:
+        return {"matched": False, "reason": "handle required"}
+    item = {"handle": h, "display_name": h, "platform": plat}
+    payload = kol_history_match.find_history_match(item, platform=plat)
+    if not payload:
+        return {"matched": False, "handle": h, "platform": plat}
+    return payload
 
 
 @router.post("/kol-pool/{kol_pool_id}/promote")

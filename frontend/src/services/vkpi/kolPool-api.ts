@@ -1065,6 +1065,18 @@ export async function getKolPoolSummary(token: string) {
   return apiFetch<Row>("/api/admin/vkpi/kol-pool/summary", {}, token);
 }
 
+// #17 按 handle 解析到主池真记录(供 mover 弹窗 #5 / KOLDetailModal 真指标 #22)。
+// 命中:{ matched:true, kol_pool_id, followers, avg_views, profile_url, ...合作摘要 };未命中:{ matched:false }。
+export async function resolveKolPool(token: string, handle: string, platform = "") {
+  const params = new URLSearchParams({ handle });
+  if (platform) params.set("platform", platform);
+  return apiFetch<Record<string, any>>(
+    `/api/admin/vkpi/kol-pool/resolve?${params.toString()}`,
+    {},
+    token,
+  );
+}
+
 export async function getKolPoolCompetitorDashboard(
   token: string,
   options: { brand?: string; limit?: number; sourceType?: string } = {},

@@ -868,6 +868,7 @@ export function V615ReplicaApp(props: any = {}) {
     e(AnimatePresence, null, selectedPublish && e(PublishPreviewModal, { item: selectedPublish, onClose: () => setSelectedPublish(null) })),
     e(AnimatePresence, null, selectedMover && e(KOLDetailModal, {
       mover: selectedMover,
+      apiToken,
       onClose: () => setSelectedMover(null),
       // 2026-06-12 死按钮诚实化:查看完整档案 → 跳 KOL Pool 真页
       onOpenKolPool: () => {
