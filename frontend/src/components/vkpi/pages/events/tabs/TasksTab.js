@@ -37,8 +37,10 @@ export default function TasksTab({ ev, currentUser, token, tasks = [], loading, 
       .catch(onErr("删除任务失败"));
   }
 
-  // 权限过滤: 只看跟当前用户相关的任务 (owner 或 collaborators 或 owner === All)
+  // 权限过滤: 管理层/Admin 看本活动全部任务(与后端「管理层看全部」一致);员工只看自己相关的。
+  const isManager = !!(currentUser && (currentUser.role === "admin" || currentUser.isManager || currentUser.is_owner || currentUser.isAdmin));
   const visible = tasksState.filter(t => {
+    if (isManager) return true;
     if (t.owner === "All") return true;
     if (t.owner === currentUser.initial) return true;
     if ((t.collaborators || []).includes(currentUser.initial)) return true;
@@ -96,7 +98,10 @@ export default function TasksTab({ ev, currentUser, token, tasks = [], loading, 
 
   function createTasksBulk(list) {
     setShowAi(false);
-    Promise.all((list || []).map(t => addEventTask(token, ev.id, fromUiTaskCreate(t))))
+    // 模板任务默认 owner 写死占位 "J" → 任务列表按 owner 过滤,当前用户看不到(就是「没有显示」)。
+    // 改派给当前用户,导入者立刻看得到、可再分派。
+    const mine = (list || []).map(t => ({ ...t, owner: (currentUser && currentUser.initial) || t.owner }));
+    Promise.all(mine.map(t => addEventTask(token, ev.id, fromUiTaskCreate(t))))
       .then(() => reload && reload())
       .catch(onErr("生成任务失败"));
   }
