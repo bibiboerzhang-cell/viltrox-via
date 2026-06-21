@@ -20,8 +20,11 @@ def _now() -> datetime:
 
 
 def _gen_id(prefix: str) -> str:
-    # 时间戳 + 计数避免碰撞(Date.now 在服务端无限制,这里是普通运行时)。
-    return f"{prefix}_{int(_now().timestamp() * 1000)}"
+    # 时间戳 + 随机后缀避免碰撞:批量并发建任务(Promise.all 18 条)会同毫秒撞 id
+    # → duplicate key value violates "vkpi_event_tasks_pkey"。随机段保证唯一。
+    import uuid
+
+    return f"{prefix}_{int(_now().timestamp() * 1000)}_{uuid.uuid4().hex[:6]}"
 
 
 def _loads(value: Any, default: Any) -> Any:
