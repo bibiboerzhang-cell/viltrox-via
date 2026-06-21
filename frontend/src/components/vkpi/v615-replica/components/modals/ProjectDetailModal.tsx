@@ -36,7 +36,7 @@ export function ProjectDetailModal({ project, onClose, onOpenFullPage, staff = [
   const doInvite = async () => {
     const pid = String(project.projectId || project.id || "");
     const kid = inviteFound && inviteFound.kol_pool_id;
-    if (!apiToken || !pid || !kid || inviteBusy) return;
+    if (!apiToken || !pid || kid === null || kid === undefined || inviteBusy) return;
     setInviteBusy(true); setInviteMsg(null);
     try {
       await addKolsToProject(apiToken, pid, [String(kid)]);
