@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { AlertCircle, Check, ChevronRight, Plus, ShieldCheck, Sparkles, X } from "lucide-react";
+import { AlertCircle, Check, ChevronRight, ListChecks, Plus, ShieldCheck, X } from "lucide-react";
 import {
   addEventTask, updateEventTask, deleteEventTask, fromUiTaskCreate,
 } from "../../../../../services/vkpi/events-api";
@@ -98,7 +98,7 @@ export default function TasksTab({ ev, currentUser, token, tasks = [], loading, 
     setShowAi(false);
     Promise.all((list || []).map(t => addEventTask(token, ev.id, fromUiTaskCreate(t))))
       .then(() => reload && reload())
-      .catch(onErr("AI 生成任务失败"));
+      .catch(onErr("生成任务失败"));
   }
   
   const doneCount = visible.filter(t => t.done).length;
@@ -124,7 +124,7 @@ export default function TasksTab({ ev, currentUser, token, tasks = [], loading, 
           onClick: () => setShowAi(true),
           className: "px-2.5 py-1.5 rounded-md text-[10.5px] font-medium flex items-center gap-1.5 border border-purple-500/40 hover:border-purple-500/60 text-purple-200 hover:bg-purple-500/10",
           style: { background: "linear-gradient(135deg, rgba(168,85,247,0.10), rgba(6,182,212,0.06))" }
-        }, e(Sparkles, { size: 11 }), "AI 生成任务"),
+        }, e(ListChecks, { size: 11 }), "任务模板"),
         e("button", {
           onClick: () => setShowNew(true),
           className: "px-2.5 py-1.5 rounded-md bg-purple-500/90 hover:bg-purple-500 text-white text-[10.5px] font-medium flex items-center gap-1"

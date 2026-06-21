@@ -1,27 +1,20 @@
-import React, { useEffect, useState } from "react";
-import { Sparkles, X } from "lucide-react";
+import React, { useState } from "react";
+import { ListChecks, X } from "lucide-react";
 import { AI_TASK_TEMPLATES } from "../data/ai-templates.js";
 import { EVENT_TYPES, PHASE_LABELS, TASK_KINDS } from "../shared/constants.js";
 
 const e = React.createElement;
 export default function AiGenerateTasksModal({ ev, existingTitles, onClose, onSubmit }) {
   const template = AI_TASK_TEMPLATES[ev.typeKey] || AI_TASK_TEMPLATES.tradeshow;
-  const [loading, setLoading] = useState(true);
-  const [selected, setSelected] = useState(new Set());
-  
-  useEffect(() => {
-    // 假装 LLM 生成中
-    const t = setTimeout(() => {
-      setLoading(false);
-      // 默认勾选 suggested + 跳过已存在的
-      const initial = new Set();
-      template.forEach((t, i) => {
-        if (t.suggested && !existingTitles.has(t.title)) initial.add(i);
-      });
-      setSelected(initial);
-    }, 1200);
-    return () => clearTimeout(t);
-  }, []);
+  // #23 去假 LLM:这是静态任务模板,不调用任何模型 → 即时呈现、默认勾选 suggested,不再假装"生成中"。
+  const [loading] = useState(false);
+  const [selected, setSelected] = useState(() => {
+    const initial = new Set();
+    template.forEach((t, i) => {
+      if (t.suggested && !existingTitles.has(t.title)) initial.add(i);
+    });
+    return initial;
+  });
   
   function toggle(i) {
     setSelected(prev => {
@@ -43,7 +36,7 @@ export default function AiGenerateTasksModal({ ev, existingTitles, onClose, onSu
         id: "t_ai_" + Date.now() + "_" + i,
         phase: t.phase, title: t.title, kind: t.kind || undefined,
         owner: "J", collaborators: [], dueDate: "TBD", done: false,
-        notes: "AI 生成 · 调整 ddl + 负责人",
+        notes: "模板生成 · 调整 ddl + 负责人",
       };
     });
     onSubmit(tasks);
@@ -54,10 +47,10 @@ export default function AiGenerateTasksModal({ ev, existingTitles, onClose, onSu
       e("div", { className: "flex items-center justify-between mb-4" },
         e("div", { className: "flex items-center gap-2.5" },
           e("div", { className: "w-9 h-9 rounded-lg flex items-center justify-center", style: { background: "linear-gradient(135deg, #a855f7, #06b6d4)" } },
-            e(Sparkles, { size: 16, className: "text-white" })
+            e(ListChecks,{ size: 16, className: "text-white" })
           ),
           e("div", null,
-            e("h3", { className: "text-[14px] font-semibold text-white" }, "AI 生成任务清单"),
+            e("h3", { className: "text-[14px] font-semibold text-white" }, "任务模板"),
             e("p", { className: "text-[10.5px] text-slate-500 mt-0.5" },
               "基于 ", (EVENT_TYPES[ev.typeKey] || EVENT_TYPES.other).label, " · ", ev.title, " · 时间节奏自动推荐"
             )
@@ -68,7 +61,7 @@ export default function AiGenerateTasksModal({ ev, existingTitles, onClose, onSu
       
       loading
         ? e("div", { className: "py-12 flex flex-col items-center gap-3" },
-            e(Sparkles, { size: 24, className: "text-purple-300 animate-pulse" }),
+            e(ListChecks,{ size: 24, className: "text-purple-300 animate-pulse" }),
             e("div", { className: "text-[11.5px] text-purple-200" }, "正在生成模板任务..."),
             e("div", { className: "text-[10px] text-slate-500" }, "结合 event 类型 + 倒计时 + 历史模板")
           )
@@ -113,7 +106,7 @@ export default function AiGenerateTasksModal({ ev, existingTitles, onClose, onSu
             ),
             e("div", { className: "flex items-center justify-between gap-2 mt-4 pt-3 border-t border-white/[0.05]" },
               e("div", { className: "text-[9.5px] text-slate-500" },
-                e(Sparkles, { size: 9, className: "inline mr-1 text-purple-300" }),
+                e(ListChecks,{ size: 9, className: "inline mr-1 text-purple-300" }),
                 "导入后 ddl 设为 TBD · 你可以单独调整"
               ),
               e("div", { className: "flex items-center gap-2" },
