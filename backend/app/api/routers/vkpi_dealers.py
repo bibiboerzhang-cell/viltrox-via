@@ -76,3 +76,31 @@ def scrape_enqueue_route(
         record_only=bool(record_only),
         source=source,
     )
+
+
+@router.post("")
+def create_dealer_route(
+    body=Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+):
+    """手动新增单个经销商(按 name+address 幂等 upsert)。
+
+    Body {name, address, city?, state?, lat?, lng?, source?}。Returns upsert_dealer 结果
+    (含 id / 是否已 geocode;无 lat/lng 时进 pending_geocode,地图待经纬度齐才显)。
+    """
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be an object")
+    name = str(body.get("name") or "").strip()
+    address = str(body.get("address") or "").strip()
+    if not name or not address:
+        raise HTTPException(status_code=400, detail="name + address required")
+    payload = {
+        "name": name,
+        "address": address,
+        "city": str(body.get("city") or "").strip(),
+        "state": str(body.get("state") or "").strip(),
+        "lat": body.get("lat"),
+        "lng": body.get("lng"),
+        "source": str(body.get("source") or "manual_add"),
+    }
+    return _guard(dealer_scrape.upsert_dealer, payload)

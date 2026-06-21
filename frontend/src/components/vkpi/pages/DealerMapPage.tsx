@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { RealMap } from "../v615-replica/components/RealMap";
 import {
+  createDealer,
   getDealerLocations,
   listDealers,
   scrapeDealersEnqueue,
@@ -49,6 +50,13 @@ export function DealerMapPage({ apiToken }: DealerMapPageProps) {
   const [error, setError] = useState("");
   const [scrapeMsg, setScrapeMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  // 手动新增经销商表单
+  const [addName, setAddName] = useState("");
+  const [addAddress, setAddAddress] = useState("");
+  const [addCity, setAddCity] = useState("");
+  const [addState, setAddState] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [addMsg, setAddMsg] = useState("");
 
   const load = useCallback(async () => {
     if (!apiToken) return;
@@ -107,6 +115,25 @@ export function DealerMapPage({ apiToken }: DealerMapPageProps) {
     [apiToken, load],
   );
 
+  const handleCreate = useCallback(async () => {
+    if (!apiToken || adding) return;
+    const name = addName.trim();
+    const address = addAddress.trim();
+    if (!name || !address) { setAddMsg("名称 + 地址必填"); return; }
+    setAdding(true);
+    setAddMsg("");
+    try {
+      await createDealer(apiToken, { name, address, city: addCity.trim(), state: addState.trim() });
+      setAddMsg(`已添加:${name}`);
+      setAddName(""); setAddAddress(""); setAddCity(""); setAddState("");
+      await load();
+    } catch (e) {
+      setAddMsg(e instanceof Error ? e.message : "添加失败");
+    } finally {
+      setAdding(false);
+    }
+  }, [apiToken, adding, addName, addAddress, addCity, addState, load]);
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between gap-3">
@@ -150,6 +177,19 @@ export function DealerMapPage({ apiToken }: DealerMapPageProps) {
           {error}
         </div>
       ) : null}
+
+      <div className="flex flex-wrap items-end gap-2 px-3 py-2.5 rounded-lg bg-white/[0.03] border border-white/10">
+        <div className="text-xs font-medium opacity-80 w-full mb-0.5">手动添加经销商</div>
+        <input value={addName} onChange={(e) => setAddName(e.target.value)} placeholder="名称*" className="px-2 py-1 rounded text-xs bg-white/5 border border-white/10 outline-none" style={{ minWidth: 140 }} />
+        <input value={addAddress} onChange={(e) => setAddAddress(e.target.value)} placeholder="地址*" className="px-2 py-1 rounded text-xs bg-white/5 border border-white/10 outline-none" style={{ minWidth: 200 }} />
+        <input value={addCity} onChange={(e) => setAddCity(e.target.value)} placeholder="城市" className="px-2 py-1 rounded text-xs bg-white/5 border border-white/10 outline-none" style={{ minWidth: 90 }} />
+        <input value={addState} onChange={(e) => setAddState(e.target.value)} placeholder="州" className="px-2 py-1 rounded text-xs bg-white/5 border border-white/10 outline-none" style={{ width: 60 }} />
+        <button type="button" disabled={adding || !apiToken || !addName.trim() || !addAddress.trim()} onClick={() => void handleCreate()} className="px-3 py-1 rounded text-xs disabled:opacity-50" style={{ background: ACCENT, color: "#02060f" }}>
+          {adding ? "添加中…" : "添加"}
+        </button>
+        {addMsg ? <span className="text-xs opacity-80">{addMsg}</span> : null}
+        <span className="text-[10px] opacity-50 w-full">无经纬度时进「待补 geocode」,地图待经纬度补全后显示。</span>
+      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2 relative rounded-lg overflow-hidden border border-white/10" style={{ height: 480 }}>

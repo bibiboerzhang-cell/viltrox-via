@@ -88,3 +88,15 @@ export async function scrapeDealersEnqueue(
     token,
   );
 }
+
+// 手动新增单个经销商(name+address 幂等)。无 lat/lng 时进 pending_geocode,地图待经纬度齐才显。
+export async function createDealer(
+  token: string,
+  payload: { name: string; address: string; city?: string; state?: string; lat?: number; lng?: number; source?: string },
+): Promise<Record<string, unknown>> {
+  return apiFetch<Record<string, unknown>>(
+    "/api/admin/vkpi/dealers",
+    { method: "POST", body: jsonBody(payload) },
+    token,
+  );
+}
