@@ -109,3 +109,17 @@ def industry_market_provider_preflight(
         preferred_llm_provider=preferred_provider,
         max_output_tokens=max_output_tokens,
     )
+
+
+@router.get("/industry-data/hashtag-trends/v0")
+def industry_hashtag_trends_v0(
+    limit: int = Query(default=12, ge=1, le=50),
+    days: int = Query(default=14, ge=1, le=90),
+    platform: str = Query(default=""),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    """#21 trend-pulse:近期行业帖 hashtag 实时聚合(数据稀疏时如实返回,无则空 trends)。"""
+    del staff
+    from app.domains.market import hashtag_trends
+
+    return hashtag_trends.build_hashtag_trends_v0(limit=limit, days=days, platform=platform)

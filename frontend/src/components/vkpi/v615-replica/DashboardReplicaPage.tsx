@@ -14,6 +14,7 @@ import { MetricCard } from "./components/MetricCard";
 import { RealMap } from "./components/RealMap";
 import { SignalsAlertsCard } from "./components/SignalsAlertsCard";
 import { TopMoversCard } from "./components/TopMoversCard";
+import { TrendPulseBar } from "./components/TrendPulseBar";
 import { UpcomingEventsCard } from "./components/UpcomingEventsCard";
 import { KPI_SCOPES } from "./data/kpiScopes";
 import { VIEW_MODES } from "./data/viewModes";
@@ -82,6 +83,9 @@ export function DashboardReplicaPage(props: any) {
               onClick: () => setSelectedKpi(m.id)
             }))
           ),
+
+          // #21 trend-pulse:近期行业帖热词条(自取数,稀疏如实显示)
+          e("div", { className: "mb-4" }, e(TrendPulseBar, { apiToken })),
 
           // Main row: Globe + Right rail
           e("div", { className: "grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_360px]" },
