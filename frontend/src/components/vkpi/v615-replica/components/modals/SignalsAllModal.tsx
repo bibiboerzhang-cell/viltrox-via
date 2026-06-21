@@ -12,14 +12,25 @@ export function SignalsAllModal({ alerts, onClose, onAlertClick }: any) {
   const { t } = useT();
   const [searchQuery, setSearchQuery] = useState("");
   const [sevFilter, setSevFilter] = useState("all");
+  const [timeRange, setTimeRange] = useState<"all" | "7d" | "30d">("all");  // #12 客户端时间范围(全部/本周/本月)
 
   const sevColor: any = { high: "#ef4444", medium: "#f59e0b", low: "#10b981", info: "#06b6d4" };
   const sevBg: any    = { high: "rgba(239,68,68,0.06)", medium: "rgba(245,158,11,0.06)", low: "rgba(16,185,129,0.06)", info: "rgba(6,182,212,0.06)" };
   const sevText: any  = { high: "#fca5a5", medium: "#fcd34d", low: "#6ee7b7", info: "#67e8f9" };
 
+  const RANGE_MS: any = { "7d": 7 * 86400000, "30d": 30 * 86400000 };
+  const signalTs = (a: any): number | null => {
+    const r = a && a.raw ? a.raw : {};
+    const raw = r.generated_at || r.created_at || r.detected_at || r.posted_at || r.published_at || "";
+    const ts = raw ? Date.parse(String(raw)) : NaN;
+    return Number.isFinite(ts) ? ts : null;
+  };
+  const cutoff = timeRange === "all" ? 0 : Date.now() - RANGE_MS[timeRange];
   const filtered = alerts.filter((a: any) => {
     if (sevFilter !== "all" && a.severity !== sevFilter) return false;
     if (searchQuery && !a.title.toLowerCase().includes(searchQuery.toLowerCase()) && !a.desc.toLowerCase().includes(searchQuery.toLowerCase())) return false;
+    // 有真时间戳且早于窗口才剔除;无戳/今日保留(诚实,不误删无日期信号)。
+    if (cutoff) { const ts = signalTs(a); if (ts !== null && ts < cutoff) return false; }
     return true;
   });
   
@@ -70,7 +81,11 @@ export function SignalsAllModal({ alerts, onClose, onAlertClick }: any) {
           }
         }, sev === "all" ? "全部" : sev === "high" ? "高" : sev === "medium" ? "中" : sev === "low" ? "低" : "info")),
         // sort
-        e("button", { className: "text-[10px] px-2.5 py-1 rounded border border-white/[0.06] text-white/25", disabled: true, title: "时间范围切换待接入" }, t("本周"))
+        e("button", {
+          onClick: () => setTimeRange(timeRange === "all" ? "7d" : timeRange === "7d" ? "30d" : "all"),
+          className: "text-[10px] px-2.5 py-1 rounded border transition-colors " + (timeRange === "all" ? "border-white/[0.1] text-white/50 hover:text-white/70" : "border-purple-400/40 bg-purple-500/15 text-purple-200"),
+          title: "时间范围循环:全部 → 本周(7天) → 本月(30天)"
+        }, timeRange === "all" ? "全部时间" : timeRange === "7d" ? t("本周") : "本月")
       ),
       // List
       e("div", { className: "flex-1 overflow-y-auto p-5 space-y-2" },

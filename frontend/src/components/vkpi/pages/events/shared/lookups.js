@@ -14,4 +14,17 @@ export function memberFromStaff(id, staff) {
   return { id, name: String(id), color: "#94a3b8", initial: String(id).slice(0, 1).toUpperCase() };
 }
 export function kolById(id) { return KOL_POOL.find(k => k.id === id); }
-export function projectById(id) { return PROJECTS.find(p => p.id === id); }
+// #7 真项目优先解析:EventsPage 拉到真 /projects 后 setRealProjects 喂模块缓存,projectById 命中真项目即返回
+// (新建活动关联真项目后,卡片/详情正确显名);命不中回退 mock(兼容老活动的字母 id)。统一 {id,title}。
+let _realProjects = [];
+export function setRealProjects(list) {
+  _realProjects = (Array.isArray(list) ? list : [])
+    .map(p => ({ id: String(p.id ?? p.project_uid ?? ""), title: p.project_name || p.title || p.name || String(p.id ?? "") }))
+    .filter(p => p.id);
+}
+export function projectById(id) {
+  const sid = String(id);
+  const real = _realProjects.find(p => p.id === sid);
+  if (real) return real;
+  return PROJECTS.find(p => String(p.id) === sid);
+}

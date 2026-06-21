@@ -4,7 +4,7 @@ import { PROJECTS } from "../data/projects.js";
 import { EVENT_TYPES } from "../shared/constants.js";
 
 const e = React.createElement;
-export default function NewEventModal({ initialData, onClose, onSubmit, teamOptions = [], currentUserId }) {
+export default function NewEventModal({ initialData, onClose, onSubmit, teamOptions = [], currentUserId, projects = [] }) {
   // 真成员(UiStaff[])喂团队成员选择器,替换 mock TEAM。
   const team = Array.isArray(teamOptions) ? teamOptions : [];
   const isEdit = !!initialData;
@@ -21,7 +21,12 @@ export default function NewEventModal({ initialData, onClose, onSubmit, teamOpti
   const [productName, setProductName] = useState(initialData?.productName || initialData?.productSku || "");
   const [note, setNote] = useState(initialData?.note || "");
   const [autoCategories, setAutoCategories] = useState(!isEdit);
-  
+  // #7 真项目喂选择器(EventsPage 拉 /projects 后经 props.projects 传入);空则回退 mock。统一 {id,title}。
+  const projectOptions = ((Array.isArray(projects) && projects.length) ? projects : PROJECTS).map(p => ({
+    id: String(p.id ?? p.project_uid ?? ""),
+    title: p.project_name || p.title || p.name || String(p.id ?? ""),
+  }));
+
   const toggleTeam = (id) => setTeamIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   const toggleProject = (id) => setProjectIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   
@@ -145,7 +150,7 @@ export default function NewEventModal({ initialData, onClose, onSubmit, teamOpti
         e("div", null,
           e("label", { className: "text-[10.5px] text-slate-400 mb-1.5 block" }, "关联 Project (可选, 多选)"),
           e("div", { className: "flex flex-wrap gap-1.5" },
-            PROJECTS.map(p => {
+            projectOptions.map(p => {
               const active = projectIds.includes(p.id);
               return e("button", {
                 key: p.id, onClick: () => toggleProject(p.id),

@@ -6,6 +6,8 @@ import {
   toUiEvent, fromUiCreate, fromUiUpdate, unwrapItem,
 } from "../../../../../services/vkpi/events-api";
 import { listInventory, toUiStock } from "../../../../../services/vkpi/inventory-api";
+import { apiFetch } from "../../../../../services/http";
+import { setRealProjects } from "../shared/lookups.js";
 import { useAuth } from "../../../../../hooks/useAuth";
 import DeleteConfirmModal from "../modals/DeleteConfirmModal.js";
 import NewEventModal from "../modals/NewEventModal.js";
@@ -40,6 +42,21 @@ export default function EventsPage({ currentUser, staff = [], initialEventId = n
       .then(res => { if (alive) setEvents((res.items || []).map(toUiEvent)); })
       .catch(err => { if (alive) { setEvents([]); setLoadError(String(err && err.message ? err.message : err)); } })
       .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [token]);
+
+  // #7 拉真项目喂活动「关联项目」选择器 + lookups.projectById 模块缓存(卡片/详情正确显名)。失败回退 mock。
+  const [projectOptions, setProjectOptions] = useState([]);
+  useEffect(() => {
+    let alive = true;
+    apiFetch("/api/admin/vkpi/projects?limit=200", { timeoutMs: 6000 }, token)
+      .then((resp) => {
+        if (!alive) return;
+        const items = Array.isArray(resp && resp.projects) ? resp.projects : [];
+        setProjectOptions(items);
+        setRealProjects(items);
+      })
+      .catch(() => { /* 保留 mock 兜底 */ });
     return () => { alive = false; };
   }, [token]);
 
@@ -124,6 +141,7 @@ export default function EventsPage({ currentUser, staff = [], initialEventId = n
       editingEvent && e(NewEventModal, {
         initialData: editingEvent,
         teamOptions: staff,
+        projects: projectOptions,
         onClose: () => setEditingEvent(null),
         onSubmit: data => handleUpdateEvent({ ...editingEvent, ...data, budgetTotal: data.budget,
           location: { ...editingEvent.location, name: data.locName, city: data.city, country: data.country },
@@ -231,6 +249,7 @@ export default function EventsPage({ currentUser, staff = [], initialEventId = n
     showNew && e(NewEventModal, {
       teamOptions: staff,
       currentUserId: currentUser?.id,
+      projects: projectOptions,
       onClose: () => setShowNew(false),
       onSubmit: handleCreateEvent,
     }),

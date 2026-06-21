@@ -7,7 +7,8 @@ import { AlertTriangle, ArrowLeft, Package, Search, Send, Share2, Target, UserPl
 import { useT } from "../../lib/i18n";
 import { CAMPAIGN_ICONS } from "../../data/campaignIcons";
 import { PLATFORM_ICONS_MAP } from "../../data/platformIconsMap";
-import { updateProject } from "../../../../../services/vkpi/projects-api";
+import { addKolsToProject, updateProject } from "../../../../../services/vkpi/projects-api";
+import { resolveKolPool } from "../../../../../services/vkpi/kolPool-api";
 import { ShareModal } from "../../../shared/ShareModal";
 
 const e = React.createElement;
@@ -17,6 +18,34 @@ export function ProjectDetailModal({ project, onClose, onOpenFullPage, staff = [
   const [activeTab, setActiveTab] = useState("kols");  // kols / pending / assets / new-kol
   const [assignBusy, setAssignBusy] = useState(false);  // 指派给成员(管理层把项目派给某成员 → 该成员 own-only 即可见)
   const [shareOpen, setShareOpen] = useState(false);  // 分享 modal(成员管理走真后端)
+  // #2 邀请 KOL 进项目:输入 handle → #17 resolveKolPool 拿真 kol_pool_id → addKolsToProject(真后端)。
+  const [inviteHandle, setInviteHandle] = useState("");
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const [inviteFound, setInviteFound] = useState<any>(null);
+  const [inviteMsg, setInviteMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const doResolveInvite = async () => {
+    const h = inviteHandle.trim().replace("@", "");
+    if (!apiToken || !h || inviteBusy) return;
+    setInviteBusy(true); setInviteMsg(null); setInviteFound(null);
+    try {
+      const r: any = await resolveKolPool(apiToken, h, "");
+      setInviteFound(r && r.matched ? r : { matched: false });
+    } catch (err: any) { setInviteMsg({ ok: false, text: String(err && err.message ? err.message : err) }); }
+    finally { setInviteBusy(false); }
+  };
+  const doInvite = async () => {
+    const pid = String(project.projectId || project.id || "");
+    const kid = inviteFound && inviteFound.kol_pool_id;
+    if (!apiToken || !pid || !kid || inviteBusy) return;
+    setInviteBusy(true); setInviteMsg(null);
+    try {
+      await addKolsToProject(apiToken, pid, [String(kid)]);
+      setInviteMsg({ ok: true, text: `已邀请 ${inviteFound.handle || kid} 进项目` });
+      setInviteFound(null); setInviteHandle("");
+      onAssigned && onAssigned();
+    } catch (err: any) { setInviteMsg({ ok: false, text: String(err && err.message ? err.message : err) }); }
+    finally { setInviteBusy(false); }
+  };
   if (!project) return null;
   const IconComp = (CAMPAIGN_ICONS as any)[project.iconKey] || CAMPAIGN_ICONS.default;
   const maxFunnel = Math.max(...project.funnel.map((f: any) => f.count), 1);
@@ -244,33 +273,27 @@ export function ProjectDetailModal({ project, onClose, onOpenFullPage, staff = [
               e(Search, { size: 12, className: "text-slate-500" }),
               e("input", {
                 type: "text",
-                placeholder: "搜索 KOL handle / 平台 / 风格",
+                value: inviteHandle,
+                onChange: (ev: any) => setInviteHandle(ev.target.value),
+                onKeyDown: (ev: any) => { if (ev.key === "Enter") doResolveInvite(); },
+                placeholder: "输入 KOL handle 查找并邀请(如 @creator)",
                 className: "flex-1 bg-transparent text-[11px] text-white placeholder:text-slate-500 outline-none"
               })
             ),
-            e("button", { className: "rounded-md border border-white/[0.08] px-3 py-1.5 text-[10px] text-white/25", disabled: true, title: "AI 推荐待接入" }, t("AI 推荐"))
+            e("button", { onClick: doResolveInvite, disabled: inviteBusy || !inviteHandle.trim(), className: "rounded-md border border-cyan-400/30 bg-cyan-400/[0.08] px-3 py-1.5 text-[10px] text-cyan-200 disabled:opacity-50 disabled:cursor-not-allowed" }, inviteBusy ? "查找中…" : "查找")
           ),
-          e("div", { className: "text-[10px] text-slate-500 mt-1 mb-1" }, t("按品类匹配度推荐")),
-          project.newKolSuggestions.length === 0
-            ? e("div", { className: "text-center py-8 text-[11px] text-slate-500" }, "暂无推荐")
-            : project.newKolSuggestions.map((k: any, i: number) => e("div", {
-                key: i, className: "rounded-md border border-white/[0.06] bg-white/[0.02] p-3 flex gap-3 hover:bg-white/[0.03]"
-              },
-                e("div", {
-                  className: "shrink-0 w-9 h-9 rounded-full flex items-center justify-center text-[12px] font-bold text-white",
-                  style: { background: k.color }
-                }, k.avatar),
-                e("div", { className: "flex-1 min-w-0" },
-                  e("div", { className: "flex items-center gap-2 mb-0.5" },
-                    e("span", { className: "text-[11px] font-medium text-white" }, k.handle),
-                    e("span", { className: "text-[9px] text-slate-500" }, "· " + k.platform + " · " + k.followers),
-                    e("span", { className: "text-[9px] text-emerald-300" }, "· ER " + k.er),
-                    e("span", { className: "ml-auto text-[9px] font-medium px-1.5 py-0.5 rounded", style: { background: k.fit === "高" ? "rgba(16,185,129,0.18)" : "rgba(245,158,11,0.18)", color: k.fit === "高" ? "#6ee7b7" : "#fbbf24" } }, "适合度 " + k.fit)
-                  ),
-                  e("div", { className: "text-[10px] text-slate-400 mb-1" }, k.reason),
-                  e("button", { className: "text-[10px] text-white/25", disabled: true, title: "邀请待接入" }, t("邀请合作 →"))
-                )
-              ))
+          e("div", { className: "text-[10px] text-slate-500 mt-1 mb-1" }, "按 handle 解析主池 → 邀请进本项目(接真 /projects/{id}/kols)"),
+          inviteMsg && e("div", { className: `text-[10px] ${inviteMsg.ok ? "text-emerald-300" : "text-rose-300"}` }, inviteMsg.text),
+          inviteFound && inviteFound.matched && e("div", { className: "rounded-md border border-emerald-500/20 bg-emerald-500/[0.04] p-3" },
+            e("div", { className: "flex items-center gap-2 mb-1" },
+              e("span", { className: "text-[11px] font-medium text-white" }, inviteFound.handle || `#${inviteFound.kol_pool_id}`),
+              inviteFound.platform ? e("span", { className: "text-[9px] text-slate-500" }, "· " + inviteFound.platform) : null,
+              inviteFound.followers ? e("span", { className: "text-[9px] text-amber-300/90" }, "· " + inviteFound.followers + " 粉") : null,
+              e("span", { className: "ml-auto text-[9px] text-emerald-300" }, "主池 #" + inviteFound.kol_pool_id)
+            ),
+            e("button", { onClick: doInvite, disabled: inviteBusy, className: "rounded-md bg-purple-600 hover:bg-purple-500 px-3 py-1 text-[10px] font-medium text-white disabled:opacity-50" }, inviteBusy ? "邀请中…" : "邀请合作 →")
+          ),
+          inviteFound && !inviteFound.matched && e("div", { className: "text-center py-6 text-[11px] text-slate-500" }, "未在主池找到该 handle,请先在 KOL Pool 入库")
         )
       ),
       // Footer
