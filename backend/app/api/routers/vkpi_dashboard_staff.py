@@ -139,6 +139,39 @@ def publish_remind(body: _PublishActionBody, staff=Depends(require_tab("vkpi", "
     return {"status": "success", "approval_id": aid, "reminded": True}
 
 
+@router.get("/publish/pending")
+def publish_pending(
+    status: str = Query(default="pending"),
+    limit: int = Query(default=50, ge=1, le=200),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """R19 · 列「需审批」发布条目(默认 pending),供 Command Center「待审批」整合视图消费。
+
+    只读隔离表 vkpi_publish_approvals;ActionInbox 兼容形 {items, available, count}。
+    红线:全程只读,绝不写;零触 viltrox_fit_score。
+    """
+    from app.db.connection import get_conn, table_exists
+
+    if not table_exists("vkpi_publish_approvals"):
+        return {"items": [], "available": False, "count": 0, "reason": "migration_173_not_applied"}
+    st = str(status or "pending").strip().lower()
+    if st not in {"pending", "approved", "scheduled", "all"}:
+        st = "pending"
+    conn = get_conn()
+    if st == "all":
+        rows = conn.execute(
+            "SELECT * FROM vkpi_publish_approvals ORDER BY created_at DESC LIMIT ?",
+            (int(limit),),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM vkpi_publish_approvals WHERE status=? ORDER BY created_at DESC LIMIT ?",
+            (st, int(limit)),
+        ).fetchall()
+    items = [dict(r) for r in rows]
+    return {"items": items, "available": True, "count": len(items), "status_filter": st}
+
+
 # ── #24 协作设置(ShareModal「共同目标 + 提醒规则」· per-resource · vkpi_collab_settings)──
 class _CollabBody(BaseModel):
     kind: str
