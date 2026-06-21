@@ -1065,6 +1065,15 @@ export async function getKolPoolSummary(token: string) {
   return apiFetch<Row>("/api/admin/vkpi/kol-pool/summary", {}, token);
 }
 
+// #25 发现卡英文 bio → 简体中文(gpt-4o-mini,后端预算闸+按原文缓存)。译空=失败/预算挡,前端回退原文。
+export async function translateBio(token: string, text: string) {
+  return apiFetch<{ translated: string; lang: string; cached?: boolean }>(
+    "/api/admin/vkpi/kol-pool/translate-bio",
+    { method: "POST", body: jsonBody({ text }) },
+    token,
+  );
+}
+
 // #17 按 handle 解析到主池真记录(供 mover 弹窗 #5 / KOLDetailModal 真指标 #22)。
 // 命中:{ matched:true, kol_pool_id, followers, avg_views, profile_url, ...合作摘要 };未命中:{ matched:false }。
 export async function resolveKolPool(token: string, handle: string, platform = "") {

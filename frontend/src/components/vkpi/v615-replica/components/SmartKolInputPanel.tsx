@@ -14,7 +14,7 @@ import {
   type VkpiKolUrlDeepCrawlResponse,
 } from "../../../../domains/kol";
 import { proxiedImageUrl } from "../../shared/mediaProxy";
-import { enqueueAllKolVideos, getKolVideoAnalysisCache, type VkpiKolVideoAnalysisCacheEntry } from "../../../../services/vkpi/kolPool-api";
+import { enqueueAllKolVideos, getKolVideoAnalysisCache, translateBio, type VkpiKolVideoAnalysisCacheEntry } from "../../../../services/vkpi/kolPool-api";
 // A1·复用 KOLVideoAnalysisPanel 的画面质量分 / 三观-归因-建议 / 关键帧 QA 渲染原子(纯读 final_v1/QA 缓存,绝不触 viltrox_fit_score)。
 import {
   DeepLayersSection,
@@ -783,7 +783,39 @@ function PlanPills({ plan }: { plan: Row }) {
   );
 }
 
-function ProfileInfoCard({ data, onOpen }: { data: Row; onOpen?: () => void }) {
+// #25 bio 行:英文 bio 显「译中文」按钮 → translateBio(后端预算闸+按原文缓存);译空回退原文,中文 bio 不显按钮。
+function BioLine({ bio, apiToken }: { bio: string; apiToken?: string }) {
+  const [zh, setZh] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [tried, setTried] = useState(false);
+  const translate = async (ev: any) => {
+    if (ev && ev.stopPropagation) ev.stopPropagation();
+    if (busy || tried || !apiToken || !bio) return;
+    setBusy(true);
+    try {
+      const res: any = await translateBio(apiToken, bio);
+      if (res && res.translated) setZh(res.translated);
+    } catch { /* 回退原文 */ }
+    finally { setBusy(false); setTried(true); }
+  };
+  return (
+    <div className="mt-1">
+      <p className="line-clamp-2 text-[10.5px] leading-relaxed text-slate-400">{zh || bio}</p>
+      {!zh && /[A-Za-z]/.test(bio) ? (
+        <button
+          type="button"
+          onClick={translate}
+          disabled={busy || tried}
+          className="mt-0.5 text-[9px] text-cyan-300/70 hover:text-cyan-200 disabled:text-slate-600"
+        >
+          {busy ? "翻译中…" : tried ? "(暂不可译)" : "译中文"}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function ProfileInfoCard({ data, onOpen, apiToken }: { data: Row; onOpen?: () => void; apiToken?: string }) {
   const [imgError, setImgError] = useState(false);
   const avatar = proxiedImageUrl(cleanText(data.avatar_url));
   const handle = cleanText(data.handle);
@@ -834,9 +866,7 @@ function ProfileInfoCard({ data, onOpen }: { data: Row; onOpen?: () => void }) {
             <span className="shrink-0 rounded bg-cyan-400/[0.10] px-1 text-[9px] font-semibold text-cyan-200/90">{posts} 帖</span>
           ) : null}
         </div>
-        {bio ? (
-          <p className="mt-1 line-clamp-2 text-[10.5px] leading-relaxed text-slate-400">{bio}</p>
-        ) : null}
+        {bio ? <BioLine bio={bio} apiToken={apiToken} /> : null}
         {profileUrl ? (
           <a
             href={profileUrl}
@@ -1234,6 +1264,7 @@ function UrlSummary({
           {hasProfileBasics ? (
             <ProfileInfoCard
               data={profileBasics}
+              apiToken={apiToken}
               onOpen={canOpenProfile ? () => onOpenProfile?.(result) : undefined}
             />
           ) : null}

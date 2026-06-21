@@ -1686,6 +1686,46 @@ def get_pool_dimensions11_preview(
     return eleven_dimensions.batch_preview_dimensions11(limit=limit, source_type=source_type)
 
 
+_BIO_ZH_CACHE: dict[str, str] = {}
+
+
+@router.post("/kol-pool/translate-bio")
+def translate_bio(body: dict = Body(default_factory=dict), staff=Depends(require_tab("vkpi", "read"))) -> dict:
+    """#25 发现卡英文 bio → 简体中文(gpt-4o-mini,预算闸由 llm_gateway 内置)。
+
+    进程内按原文缓存:同一 bio 第二次命中不再烧 LLM。失败/空/预算挡 → 诚实返回空译文(前端回退原文)。
+    """
+    text = str((body or {}).get("text") or "").strip()
+    if not text:
+        return {"translated": "", "lang": "zh", "cached": False, "skipped": "empty"}
+    if len(text) > 1200:
+        text = text[:1200]
+    if text in _BIO_ZH_CACHE:
+        return {"translated": _BIO_ZH_CACHE[text], "lang": "zh", "cached": True}
+    try:
+        from app.platform import llm_gateway
+
+        prompt = (
+            "Translate the following social-media creator bio into natural Simplified Chinese. "
+            "Keep @handles, brand names and URLs as-is. Return ONLY the translation, "
+            "no quotes, no explanation:\n\n" + text
+        )
+        resp = llm_gateway.invoke(
+            prompt=prompt,
+            purpose="vkpi_bio_translate",
+            preferred_provider="openai",
+            max_output_tokens=400,
+        )
+        if str(resp.get("status") or "") == "success":
+            out = str(resp.get("text") or "").strip().strip('"').strip("'").strip()
+            if out:
+                _BIO_ZH_CACHE[text] = out
+                return {"translated": out, "lang": "zh", "cached": False}
+        return {"translated": "", "lang": "zh", "cached": False, "skipped": str(resp.get("status") or "unavailable")}
+    except Exception as exc:  # noqa: BLE001 — 翻译失败不阻断,前端回退原文
+        return {"translated": "", "lang": "zh", "cached": False, "error": str(exc)}
+
+
 @router.get("/kol-pool/resolve")
 def resolve_kol_pool(
     handle: str = Query(default=""),
