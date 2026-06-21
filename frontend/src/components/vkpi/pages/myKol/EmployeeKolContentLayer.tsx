@@ -151,7 +151,7 @@ function CommentsModal({
             </article>
           )) : (
             <div className="vkpi-my-kol-content-empty">
-              <span>{loading ? '评论正文加载中。' : post.comments > 0 ? `评论数已同步：${numberFormatter.format(post.comments)} 条；正文缓存待补。` : '当前帖子暂无评论正文缓存。'}</span>
+              <span>{loading ? '评论正文加载中。' : post.comments > 0 ? `评论数已同步：${numberFormatter.format(post.comments)} 条；正文未采集 —— 点本面板上方「采集评论」抓取后即可在此查看。` : '暂无评论正文 —— 点本面板上方「采集评论」抓取后即可在此查看。'}</span>
               <button type="button" onClick={onReload} disabled={loading}>{loading ? '加载中' : '重新加载评论'}</button>
             </div>
           )}
