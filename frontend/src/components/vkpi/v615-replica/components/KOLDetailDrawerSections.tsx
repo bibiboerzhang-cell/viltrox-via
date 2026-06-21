@@ -750,7 +750,7 @@ export function KOLDrawerTextSections({ item, recommendedProductLines, potential
 }
 
 // ─── Footer actions ───
-export function KOLDrawerFooter({ item, inMyList, onToggleMyList, onContact, canEnqueueVideoAnalysis, videoEnqueueLabel, videoEnqueueTitle, videoEnqueueState, onEnqueueVideoAnalysis }: any) {
+export function KOLDrawerFooter({ item, inMyList, onToggleMyList, onContact, onPromote, promoteMsg, canEnqueueVideoAnalysis, videoEnqueueLabel, videoEnqueueTitle, videoEnqueueState, onEnqueueVideoAnalysis }: any) {
   return e("div", { className: "px-5 py-3 border-t border-white/[0.06]" },
     // 主操作 3 按钮
     e("div", { className: "flex items-center gap-2 mb-2" },
@@ -770,10 +770,10 @@ export function KOLDrawerFooter({ item, inMyList, onToggleMyList, onContact, can
         item.email ? "发起合作邀请" : "添加联系方式"
       ),
       !item.linked_main_kol_id && e("button", {
-        disabled: true,
-        className: "flex-1 flex cursor-not-allowed items-center justify-center gap-1.5 rounded-md border border-emerald-500/20 bg-emerald-500/[0.05] px-3 py-2 text-[11px] text-emerald-400/70",
-        title: "待接入: 需要主表写入 API 和权限校验"
-      }, e(Link2, { size: 11 }), "入主表 · 待接入"),
+        onClick: () => onPromote?.(item),
+        className: "flex-1 flex items-center justify-center gap-1.5 rounded-md border border-emerald-500/20 bg-emerald-500/[0.05] px-3 py-2 text-[11px] text-emerald-300 hover:bg-emerald-500/[0.12]",
+        title: promoteMsg && !promoteMsg.ok ? promoteMsg.text : "把该候选写入主表(promote)"
+      }, e(Link2, { size: 11 }), promoteMsg?.ok ? "已入主表 ✓" : "入主表"),
     ),
     // 次操作 icons
     e("div", { className: "flex items-center justify-center gap-1.5" },

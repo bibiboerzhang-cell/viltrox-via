@@ -7,7 +7,7 @@ import { AlertTriangle, Check, Link2, Share2, Shield, Sparkles, Video } from "lu
 import { KPAvatar } from "./KPAvatar";
 import { AnalysisCard, KOLVideoAnalysisPanel, type AnalysisBundle } from "./KOLVideoAnalysisPanel";
 import { ShareKolModal } from "../../shared/ShareKolModal";
-import { enqueueAllKolVideos, enqueueVideoAnalysis, getKolCooperation, getKolPoolAccountDossier, getKolPoolContentFit, getKolPoolDimensions11, getKolPoolLlmDeepAnalysis, recordKolCooperation } from "../../../../services/vkpi/kolPool-api";
+import { enqueueAllKolVideos, enqueueVideoAnalysis, getKolCooperation, getKolPoolAccountDossier, getKolPoolContentFit, getKolPoolDimensions11, getKolPoolLlmDeepAnalysis, promoteKolPoolToMain, recordKolCooperation } from "../../../../services/vkpi/kolPool-api";
 import { getKolMemory } from "../../../../services/vkpi/kolMemory-api";
 import { GoaffproLinkSection } from "../../shared/GoaffproLinkSection";
 import { proxiedImageUrl, proxiedVideoUrl } from "../../shared/mediaProxy";
@@ -876,6 +876,18 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
   const [contentFitError, setContentFitError] = React.useState("");
   // W3 长期记忆(纯聚合,显式独立于 V6 Fit · 不影响排序;snapshot 不含任何 fit/score 字段)。
   const [kolMemory, setKolMemory] = React.useState<any>(null);
+  // #1 入主表 promote:把候选写进 vkpi 主表(接已存在 /kol-pool/{id}/promote)。
+  const [promoteMsg, setPromoteMsg] = React.useState<{ ok: boolean; text: string } | null>(null);
+  const onPromote = React.useCallback(async (it: any) => {
+    if (!apiToken || !it?.id) return;
+    setPromoteMsg(null);
+    try {
+      await promoteKolPoolToMain(apiToken, Number(it.id));
+      setPromoteMsg({ ok: true, text: "已入主表" });
+    } catch (err: any) {
+      setPromoteMsg({ ok: false, text: String(err && err.message ? err.message : err) });
+    }
+  }, [apiToken]);
   React.useEffect(() => {
     const bundleRecord = recordOr(detailBundle);
     if (bundleRecord.status === "ready") {
@@ -1141,7 +1153,7 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
     
     // ─── Footer actions ───
     e(KOLDrawerFooter, {
-      item, inMyList, onToggleMyList, onContact,
+      item, inMyList, onToggleMyList, onContact, onPromote, promoteMsg,
       canEnqueueVideoAnalysis, videoEnqueueLabel, videoEnqueueTitle, videoEnqueueState,
       onEnqueueVideoAnalysis: handleVideoAnalysisEnqueue,
     })

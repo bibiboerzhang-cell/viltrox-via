@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Activity, CircleDot, DollarSign, Package, Plus, Search, Target, TrendingUp } from "lucide-react";
 import EventCard from "../components/EventCard.js";
-import { INITIAL_STOCK } from "../data/stock.js";
 import {
   listEvents, createEvent, updateEvent, deleteEvent,
   toUiEvent, fromUiCreate, fromUiUpdate, unwrapItem,
@@ -26,7 +25,7 @@ export default function EventsPage({ currentUser, staff = [], initialEventId = n
   const [editingEvent, setEditingEvent] = useState(null);
   const [deletingEvent, setDeletingEvent] = useState(null);
   const [showStock, setShowStock] = useState(false);
-  const [stock, setStock] = useState(INITIAL_STOCK);
+  const [stock, setStock] = useState([]);
   const [statusFilter, setStatusFilter] = useState("全部");
   const [typeFilter, setTypeFilter] = useState("all");
   const [search, setSearch] = useState("");
@@ -44,13 +43,12 @@ export default function EventsPage({ currentUser, staff = [], initialEventId = n
     return () => { alive = false; };
   }, [token]);
 
-  // 从后端加载真·公司库存(替代旧 mock INITIAL_STOCK)。INITIAL_STOCK 仅作为
-  // fetch 返回前的占位 fallback —— 拉到真数据后整表替换;失败则静默保留 fallback。
+  // 从后端加载真·公司库存。#8 去 mock:初始空数组,失败显空(不再回退假 INITIAL_STOCK)。
   useEffect(() => {
     let alive = true;
     listInventory(token)
       .then(res => { if (alive && Array.isArray(res.items)) setStock(res.items.map(toUiStock)); })
-      .catch(() => { /* 静默:保留 INITIAL_STOCK fallback */ });
+      .catch(() => { /* 失败保持空,前端诚实显示无库存(非假数据) */ });
     return () => { alive = false; };
   }, [token]);
 
