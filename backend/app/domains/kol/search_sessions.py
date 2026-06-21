@@ -130,6 +130,8 @@ def _row_to_session(row: Any) -> dict[str, Any]:
             "created_by": item.get("created_by"),
             "input_payload": _loads(item.get("input_payload_json"), {}),
             "result_summary": _loads(item.get("result_summary_json"), {}),
+            # R1:人审锁定的候选 kol_pool_id(迁移 176;旧行/缺列回退 [])。
+            "approved_kol_ids": _loads(item.get("approved_kol_ids"), []),
             "created_at": item.get("created_at"),
             "updated_at": item.get("updated_at"),
         }
@@ -378,6 +380,82 @@ def get_session_item(session_id: int, item_id: int) -> dict[str, Any]:
     if not row:
         raise LookupError(f"search session item not found: session={session_id} item={item_id}")
     return _row_to_item(row)
+
+
+def approve_session(
+    session_id: int,
+    *,
+    kol_pool_ids: list[Any],
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """R1:人审锁定该会话里要推进合作的候选 KOL → 写 approved_kol_ids(R2 据此建项目草案)。
+
+    只接受属于本会话候选项的 kol_pool_id(交集校验,绝不写任意 id);去重保序;replace 语义
+    (本次选择即最终锁定集)。审计落 result_summary_json.approval(谁/何时/接受几个/跳过几个)。
+    绝不触碰 vkpi_kol_pool / viltrox_fit_score / rule_v0,只写本会话 approved_kol_ids + summary 两处。
+    """
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM vkpi_kol_search_sessions WHERE id=?",
+        (int(session_id),),
+    ).fetchone()
+    if not row:
+        raise LookupError(f"search session not found: {session_id}")
+
+    # 本会话候选里所有真实 kol_pool_id(new_creator 未入池 → kol_pool_id=NULL,天然不可批准)。
+    candidate_rows = conn.execute(
+        """
+        SELECT DISTINCT kol_pool_id
+        FROM vkpi_kol_search_session_items
+        WHERE session_id=? AND kol_pool_id IS NOT NULL
+        """,
+        (int(session_id),),
+    ).fetchall()
+    candidate_ids = {
+        int(dict(r)["kol_pool_id"]) for r in candidate_rows if dict(r).get("kol_pool_id")
+    }
+
+    requested: list[int] = []
+    seen: set[int] = set()
+    for raw in _list(kol_pool_ids):
+        parsed = _int_or_none(raw)
+        if parsed and parsed not in seen:
+            seen.add(parsed)
+            requested.append(parsed)
+
+    accepted = [kid for kid in requested if kid in candidate_ids]
+    skipped = [kid for kid in requested if kid not in candidate_ids]
+
+    # 审计合并进 result_summary_json.approval(沿用既有 jsonb 合并;不另加列)。
+    summary = _loads(dict(row).get("result_summary_json"), {})
+    if not isinstance(summary, dict):
+        summary = {}
+    approved_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    summary["approval"] = {
+        "approved_kol_ids": accepted,
+        "approved_count": len(accepted),
+        "skipped_not_in_session": skipped,
+        "approved_by": _staff_user_id(staff),
+        "approved_at": approved_at,
+        "viltrox_fit_score_untouched": True,
+    }
+
+    updated = conn.execute(
+        """
+        UPDATE vkpi_kol_search_sessions
+        SET approved_kol_ids=?::jsonb,
+            result_summary_json=?::jsonb,
+            updated_at=NOW()
+        WHERE id=?
+        RETURNING *
+        """,
+        (_json_dumps(accepted), _json_dumps(summary), int(session_id)),
+    ).fetchone()
+    conn.commit()
+    session = _row_to_session(updated)
+    session["approved_count"] = len(accepted)
+    session["skipped_not_in_session"] = skipped
+    return session
 
 
 def update_session_result_summary(

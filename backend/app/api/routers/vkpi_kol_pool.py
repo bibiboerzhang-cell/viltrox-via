@@ -396,6 +396,31 @@ def get_kol_search_session(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+@router.post("/kol-search-sessions/{session_id}/approve")
+def approve_kol_search_session(
+    session_id: int,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """R1:人审锁定该会话要推进合作的候选 KOL(写 approved_kol_ids;R2 据此建项目草案)。
+
+    body: {"kol_pool_ids": [<int>, ...]}。只接受本会话候选项里的真实 kol_pool_id(交集校验)。
+    """
+    raw_ids = body.get("kol_pool_ids") if isinstance(body, dict) else None
+    if not isinstance(raw_ids, list):
+        raise HTTPException(status_code=400, detail="kol_pool_ids must be a list")
+    try:
+        return kol_search_sessions.approve_session(
+            int(session_id),
+            kol_pool_ids=raw_ids,
+            staff=staff,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @router.post("/kol-search-sessions/{session_id}/items/{item_id}/profile-crawl")
 def execute_kol_search_session_item_profile_crawl(
     session_id: int,
