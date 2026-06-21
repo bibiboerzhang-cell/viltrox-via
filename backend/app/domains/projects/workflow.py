@@ -35,6 +35,7 @@ from app.domains.projects.workflow_evidence import (
 from app.domains.projects.workflow_projects import (
     add_project_kols,
     create_project,
+    create_project_draft_from_session,
     delete_project,
     list_available_project_kols,
     list_projects,
@@ -67,6 +68,7 @@ __all__ = [
     "set_project_star",
     "add_project_kols",
     "create_project",
+    "create_project_draft_from_session",
     "update_project",
     "transition_project",
     "delete_project",

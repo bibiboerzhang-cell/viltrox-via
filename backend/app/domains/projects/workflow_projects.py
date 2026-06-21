@@ -585,6 +585,122 @@ def create_project(body: dict[str, Any], *, staff: dict[str, Any] | None = None)
     return {"id": project_id, "project_uid": project_uid, "project_name": name, "stage": stage}
 
 
+def create_project_draft_from_session(
+    session_id: int,
+    body: dict[str, Any] | None = None,
+    *,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """R2:从已批准的 smart-search 会话一键建项目草案(discovery 阶段)+ 挂选中 KOL。
+
+    选人来源:body.kol_pool_ids 覆盖,缺省取会话 approved_kol_ids(R1 锁定)。
+    brief:用 planner 的 product_positioning / target_persona(优先 body,次 会话内可得,
+    末 query_text 兜底)写进 project.metadata.brief(表无 brief 列,落 metadata_json)。
+    复用 create_project + add_project_kols;占用冲突(KOL 被他人认领)诚实降级为 warning,
+    草案照建(已 commit),KOL 可在项目详情再加。绝不触 viltrox_fit_score / rule_v0。
+    """
+    body = body or {}
+    # 懒导入:避免 projects ←→ kol 模块装载期相互牵连。
+    from app.domains.kol import search_sessions as kol_search_sessions
+
+    session = kol_search_sessions.get_session(int(session_id))  # 缺失 → LookupError
+
+    # 选人:body 覆盖 → 会话 approved_kol_ids。
+    raw_ids = body.get("kol_pool_ids")
+    if not isinstance(raw_ids, list) or not raw_ids:
+        raw_ids = session.get("approved_kol_ids") or []
+    kol_pool_ids: list[int] = []
+    seen: set[int] = set()
+    for value in raw_ids:
+        kid = _int(value)
+        if kid and kid not in seen:
+            seen.add(kid)
+            kol_pool_ids.append(kid)
+    if not kol_pool_ids:
+        raise ValueError("no approved KOLs on this session; approve candidates first")
+
+    # planner 定位/人设:body 优先 → 会话内可得 → query_text 兜底。
+    # 不在此同步跑 LLM(沿用搜索流「planner 推迟到 worker」的决策;前端建草案时已带上 plan)。
+    input_payload = session.get("input_payload") if isinstance(session.get("input_payload"), dict) else {}
+    result_summary = session.get("result_summary") if isinstance(session.get("result_summary"), dict) else {}
+    session_plan: dict[str, Any] = {}
+    for src in (result_summary.get("llm_query_plan"), input_payload.get("llm_query_plan"), input_payload):
+        if isinstance(src, dict) and (src.get("product_positioning") or src.get("target_persona")):
+            session_plan = src
+            break
+    query_text = str(session.get("query_text") or "").strip()
+    positioning = str(body.get("product_positioning") or session_plan.get("product_positioning") or "").strip()
+    persona = str(body.get("target_persona") or session_plan.get("target_persona") or query_text).strip()
+
+    # 项目名:body 优先 → 产品名/query 派生。
+    product_name = str(body.get("product_name") or "").strip()
+    project_name = str(body.get("project_name") or "").strip()
+    if not project_name:
+        base = product_name or query_text or f"Smart Search #{int(session_id)}"
+        project_name = f"{base} · 合作草案"[:200]
+
+    brief = {
+        "product_positioning": positioning,
+        "target_persona": persona,
+        "query_text": query_text,
+        "source": "smart_search",
+        "search_session_id": int(session_id),
+        "approved_kol_count": len(kol_pool_ids),
+    }
+
+    create_body = {
+        "project_name": project_name,
+        "stage": "discovery",
+        "source_type": str(body.get("source_type") or "smart_search"),
+        "product_sku": body.get("product_sku") or session_plan.get("product_sku") or "",
+        "product_name": product_name,
+        "platform": str(body.get("platform") or ""),
+        "metadata": {"brief": brief, "search_session_id": int(session_id)},
+        "note": "draft from smart-search session",
+    }
+    created = create_project(create_body, staff=staff)
+    project_id = _int(created.get("id"))
+
+    attached = 0
+    kol_attach_warning = ""
+    if project_id:
+        try:
+            res = add_project_kols(project_id, {"kol_pool_ids": kol_pool_ids}, staff=staff)
+            attached = _int(res.get("inserted")) if isinstance(res, dict) else 0
+        except ValueError as exc:
+            # 占用冲突等 → 诚实降级:草案已建,KOL 未挂,带回原因供前端提示。
+            kol_attach_warning = str(exc)
+
+    # 回写会话:链到草案项目(让会话显示已转草案);沿用既有 summary 合并,会话状态不动。
+    try:
+        kol_search_sessions.update_session_result_summary(
+            int(session_id),
+            status=str(session.get("status") or "ready"),
+            summary_patch={
+                "draft_project": {
+                    "project_id": project_id,
+                    "project_uid": created.get("project_uid"),
+                    "attached_kol_count": attached,
+                    "requested_kol_count": len(kol_pool_ids),
+                }
+            },
+        )
+    except Exception:
+        pass
+
+    return {
+        "ok": bool(project_id),
+        "project_id": project_id,
+        "project_uid": created.get("project_uid"),
+        "project_name": project_name,
+        "stage": created.get("stage"),
+        "attached_kol_count": attached,
+        "requested_kol_count": len(kol_pool_ids),
+        "kol_attach_warning": kol_attach_warning,
+        "brief": brief,
+    }
+
+
 def update_project(project_id: int, body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     """Update editable project profile fields without touching stage transitions."""
     ensure_vkpi_schema()

@@ -421,6 +421,31 @@ def approve_kol_search_session(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+@router.post("/kol-search-sessions/{session_id}/create-project-draft")
+def create_project_draft_from_kol_search_session(
+    session_id: int,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """R2:从已批准的搜索会话一键建项目草案(discovery)+ 挂选中 KOL。
+
+    选人缺省取会话 approved_kol_ids(R1);body 可带 product_positioning/target_persona/
+    project_name/product_sku/product_name/platform/kol_pool_ids 覆盖。占用冲突降级为 warning。
+    """
+    try:
+        return project_workflow.create_project_draft_from_session(
+            int(session_id),
+            body or {},
+            staff=staff,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @router.post("/kol-search-sessions/{session_id}/items/{item_id}/profile-crawl")
 def execute_kol_search_session_item_profile_crawl(
     session_id: int,
