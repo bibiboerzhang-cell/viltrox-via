@@ -97,9 +97,22 @@ def _score(prod: dict[str, Any], score_tokens: list[str]) -> tuple[int, int, int
         for key in ("sku", "model_name", "marketing_name")
     ).lower()
     blob_sp = _split_glued(blob)
-    matched = sum(1 for tok in score_tokens if tok in blob_sp or tok in blob)
-    strong = sum(1 for tok in score_tokens if len(tok) >= 3 and (tok in blob_sp or tok in blob))
-    return matched, strong, len(str(prod.get("series") or ""))
+    # 整词集合:同时用原始 blob 与拆粘连版切词。既认 "z1"(原词)又认 "65"(由 "65mm" 拆出),
+    # 又杜绝短词子串误命中——曾让 "dp"→"a(dp)018"、"18"→"(18)→018" 把 NF-NEX 转接环
+    # 错配成「EPIC 18mm 变宽」的搜索结果(generic photographer 检索词的真因)。
+    words = {w for w in re.split(r"[^a-z0-9.]+", blob) if w}
+    words |= {w for w in re.split(r"[^a-z0-9.]+", blob_sp) if w}
+
+    def _hit(tok: str) -> bool:
+        if len(tok) < 3:
+            return tok in words  # 短词:必须整词命中,不许子串
+        return tok in words or tok in blob_sp or tok in blob  # 长词:允许子串(模糊覆盖)
+
+    matched = sum(1 for tok in score_tokens if _hit(tok))
+    strong = sum(1 for tok in score_tokens if len(tok) >= 3 and _hit(tok))
+    # distinctive(strong)优先于总命中(matched):防通用/短词凑数的产品压过真正命中产品
+    # 身份词(epic/anamorphic/macro/monitor…)的产品。series 长度仅末位平手 tiebreak。
+    return strong, matched, len(str(prod.get("series") or ""))
 
 
 def _specs_line(prod: dict[str, Any]) -> str:
@@ -155,8 +168,9 @@ def resolve_product(query: str) -> dict[str, Any] | None:
         if score > best_score:
             best_score = score
             best = prod
-    # Require a real match: ≥2 token hits, or at least one distinctive (len≥3) token.
-    if not best or (best_score[0] < 2 and best_score[1] < 1):
+    # Require a real match: ≥1 distinctive (len≥3) hit, or ≥2 total hits.
+    # 注:tuple 现为 (strong, matched, series),阈值随之换序(strong=[0], matched=[1])。
+    if not best or (best_score[0] < 1 and best_score[1] < 2):
         return None
     return {
         "sku": str(best.get("sku") or ""),
