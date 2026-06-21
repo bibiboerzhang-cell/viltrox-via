@@ -32,6 +32,17 @@ def _require_manager_staff(staff: dict) -> None:
 
 def _scope_403(exc: Exception) -> HTTPException:
     return HTTPException(status_code=403, detail=str(exc) or "scope denied")
+@router.get("/attribution/gmv-summary")
+def attribution_gmv_summary(
+    limit: int = Query(default=200, ge=1, le=500),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """R15 · 自建短链归因 GMV 汇总(短链→点击→订单→GMV→佣金→转化;只读)。"""
+    from app.domains.attribution import gmv_aggregation
+
+    return gmv_aggregation.aggregate_link_gmv(staff=staff, limit=limit)
+
+
 @router.get("/attribution")
 def list_attribution(
     project_id: int | None = None,
