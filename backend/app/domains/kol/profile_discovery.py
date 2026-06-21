@@ -1225,6 +1225,51 @@ async def execute_smart_search_profile_advance_pipeline(
     }
 
 
+def _auto_enroll_discoveries(new_creators: list[dict[str, Any]]) -> int:
+    """把本次「全网新发现」的人即时轻量入库,治去重根因(用户口径:「抓到自动入库就不会再重复出现」)。
+
+    发现项原本不落库 → 下次同/近似搜索 find_history_match 命中不到 → 反复以「新人」出现在「全网新发现」。
+    这里逐个 upsert 到 vkpi_kol_pool(仅 platform/handle/avatar/bio/followers 等 profile-basics),
+    下次即被归到「库内已有」、不再重复。
+    redline-safe:走 write_kol_profile_basics——其 score 守卫会在任何 fit 变动时回滚,结构上不可能写 fit/rule_v0。
+    最佳努力:env(KOL_AUTO_ENROLL_DISCOVERY)可关、单条失败只记日志不抛、绝不阻断发现主流程。返回入库条数。
+    """
+    import os
+
+    if str(os.getenv("KOL_AUTO_ENROLL_DISCOVERY", "1")).strip().lower() in {"0", "false", "no", "off"}:
+        return 0
+    if not new_creators:
+        return 0
+    try:
+        from app.domains.kol.profile_basics import write_kol_profile_basics
+    except Exception:
+        return 0
+    enrolled = 0
+    for item in new_creators:
+        if item.get("history_kol_pool_id") or item.get("kol_pool_id"):
+            continue  # 已是库内行 → 不重复入库
+        platform = _text(item.get("platform"))
+        handle = _text(item.get("handle") or item.get("channel_handle") or item.get("username"))
+        if not platform or not handle:
+            continue
+        profile_data = {
+            "platform": platform,
+            "handle": handle,
+            "profile_url": _text(item.get("profile_url") or item.get("channel_url") or item.get("url")),
+            "avatar_url": _text(item.get("avatar_url") or item.get("avatar")),
+            "bio": _text(item.get("bio") or item.get("description") or item.get("snippet")),
+            "followers": _int(item.get("followers") or item.get("subscriber_count") or item.get("avg_views") or 0),
+        }
+        try:
+            write_kol_profile_basics(None, profile_data, dry_run=False)
+            enrolled += 1
+        except Exception as exc:
+            logger.info("auto_enroll_discovery skip handle=%r: %s", handle, str(exc)[:200])
+    if enrolled:
+        logger.info("auto_enroll_discovery enrolled=%d into vkpi_kol_pool", enrolled)
+    return enrolled
+
+
 async def discover_new_creators(
     *,
     query_text: str,
@@ -1368,6 +1413,13 @@ async def discover_new_creators(
         if len(new_creators) >= safe_limit:
             break
         new_creators.append(item)
+
+    # B 去重根治:把本次全网新发现即时轻量入库,下次同/近似搜索归「库内已有」、不再重复
+    # (用户口径:「抓到自动入库就不会再出现这个状况」)。best-effort 同步小写,失败不阻断发现。
+    try:
+        _auto_enroll_discoveries(new_creators)
+    except Exception as exc:
+        logger.info("auto_enroll_discovery batch skipped: %s", str(exc)[:200])
 
     status = "ready" if new_creators or existing_matches else "empty"
     if errors and (new_creators or existing_matches):
