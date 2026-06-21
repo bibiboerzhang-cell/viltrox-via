@@ -134,6 +134,14 @@
   background: linear-gradient(135deg, rgba(124, 58, 237, 0.22), rgba(6, 214, 214, 0.12));
 }
 
+/* 竖横区分:缩略图/视频完整展现,不裁剪不放大(9:16 竖屏整帧居中 + 暗边,横屏同样整帧)。
+   覆盖基础样式的 object-fit:cover(那个会把竖屏裁成只剩中段)。 */
+.mykol-employee-post-grid .vkpi-my-kol-content-card__media img,
+.mykol-employee-post-grid .vkpi-my-kol-content-card__media video {
+  object-fit: contain;
+  background: #0b1220;
+}
+
 .mykol-employee-post-grid .vkpi-my-kol-content-card__body h3,
 .mykol-employee-post-grid .vkpi-my-kol-content-card__body p {
   display: -webkit-box;
