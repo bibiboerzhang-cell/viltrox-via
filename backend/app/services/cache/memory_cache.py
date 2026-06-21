@@ -54,12 +54,27 @@ def _full_key(key: str) -> str:
     return f"{REDIS_CACHE_PREFIX}:{key}"
 
 
+def _json_default(o: Any) -> Any:
+    # Decimal/日期等非原生 JSON 类型 → 可缓存形态(Decimal→float,datetime→isoformat),
+    # 避免 cache_set 因 TypeError 整条跳过缓存 + 刷 set_skipped_non_json 警告
+    # (例:market-intelligence/cards 的 SUM 返回 Decimal,原先每次都不缓存)。
+    # 其余真未知类型仍抛 TypeError → cache_set 优雅跳过(保留兜底)。
+    from decimal import Decimal
+    from datetime import date, datetime
+
+    if isinstance(o, Decimal):
+        return float(o)
+    if isinstance(o, (datetime, date)):
+        return o.isoformat()
+    raise TypeError(f"Object of type {o.__class__.__name__} is not JSON serializable")
+
+
 def _serialize(value: Any) -> bytes:
     # JSON instead of pickle: avoids arbitrary-code-execution on deserialize and
     # cross-version unpickle drift. Cached values across all call sites are
-    # dict/list/str/int/float/bool/None (JSON-safe). Anything non-JSON-safe
-    # raises TypeError/ValueError here and is handled by cache_set (skip cache).
-    return json.dumps(value).encode("utf-8")
+    # dict/list/str/int/float/bool/None (JSON-safe). Decimal/datetime 经 _json_default
+    # 归一化为可缓存形态;真正非 JSON 安全的类型仍抛 → cache_set 跳过缓存。
+    return json.dumps(value, default=_json_default).encode("utf-8")
 
 
 def _deserialize(value: bytes | None) -> Any:
