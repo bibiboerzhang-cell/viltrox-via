@@ -43,6 +43,7 @@ from app.domains.intelligence import gemini_single_kol_preflight
 import app.domains.intelligence.ai_brief as ai_brief
 import app.domains.evidence.summary as evidence_summary
 from app.domains.projects import workflow as project_workflow
+from app.domains.projects import cost_estimate as project_cost_estimate
 import app.domains.sync.refresh_tier as refresh_tier
 import app.domains.tasks.enqueue as task_enqueue
 import app.domains.tasks.queue_view as task_queue_view
@@ -444,6 +445,33 @@ def create_project_draft_from_kol_search_session(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/kol-search-sessions/{session_id}/cost-estimate")
+def estimate_kol_search_session_cost(
+    session_id: int,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """R3:估算该会话候选(缺省取 approved_kol_ids;body.kol_pool_ids 覆盖)的合作预算 + 风险。
+
+    只读估算:费率档 × 平台 → 预算区间;风险只读展示信号,零触 viltrox_fit_score。
+    """
+    try:
+        session = kol_search_sessions.get_session(int(session_id))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    raw_ids = body.get("kol_pool_ids") if isinstance(body, dict) else None
+    if not isinstance(raw_ids, list) or not raw_ids:
+        raw_ids = session.get("approved_kol_ids") or []
+    posts = body.get("posts_per_creator") if isinstance(body, dict) else None
+    try:
+        ppc = int(posts) if posts is not None else 1
+    except (TypeError, ValueError):
+        ppc = 1
+    return project_cost_estimate.estimate_cost_for_kols(raw_ids, staff=staff, posts_per_creator=ppc)
 
 
 @router.post("/kol-search-sessions/{session_id}/items/{item_id}/profile-crawl")

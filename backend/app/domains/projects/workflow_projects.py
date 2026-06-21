@@ -648,6 +648,16 @@ def create_project_draft_from_session(
         "approved_kol_count": len(kol_pool_ids),
     }
 
+    # R3:成本估算 + 风险合成(确定性,零 LLM,零触 fit_score)→ 写进草案 metadata,草案即带预算。
+    cost_estimate: dict[str, Any] = {}
+    try:
+        from app.domains.projects import cost_estimate as cost_estimate_engine
+
+        cost_estimate = cost_estimate_engine.estimate_cost_for_kols(kol_pool_ids, staff=staff)
+    except Exception:
+        logger.warning("create_project_draft: cost estimate skipped", exc_info=True)
+        cost_estimate = {}
+
     create_body = {
         "project_name": project_name,
         "stage": "discovery",
@@ -655,7 +665,11 @@ def create_project_draft_from_session(
         "product_sku": body.get("product_sku") or session_plan.get("product_sku") or "",
         "product_name": product_name,
         "platform": str(body.get("platform") or ""),
-        "metadata": {"brief": brief, "search_session_id": int(session_id)},
+        "metadata": {
+            "brief": brief,
+            "search_session_id": int(session_id),
+            "cost_estimate": cost_estimate,
+        },
         "note": "draft from smart-search session",
     }
     created = create_project(create_body, staff=staff)
@@ -698,6 +712,7 @@ def create_project_draft_from_session(
         "requested_kol_count": len(kol_pool_ids),
         "kol_attach_warning": kol_attach_warning,
         "brief": brief,
+        "cost_estimate": cost_estimate,
     }
 
 
