@@ -221,6 +221,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "172_scheduler_task_content_fit_batch.sql",
     "173_vkpi_publish_approvals.sql",
     "174_vkpi_collab_settings.sql",
+    "175_enable_daily_action_inbox_generate.sql",
 )
 
 try:

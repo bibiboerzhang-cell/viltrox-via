@@ -16,6 +16,7 @@ import {
   ListChecks,
   Loader2,
   PackageOpen,
+  Play,
   RefreshCw,
   Share2,
   Sparkles,
@@ -25,11 +26,28 @@ import {
 import {
   approveAction,
   dismissAction,
+  executeAction,
   listActionInbox,
   snoozeAction,
 } from "../../../../services/vkpi/actionInbox-api";
 
 const e = React.createElement;
+
+// execute outcome 的 reason 码 → 友好中文(后端 executors/validators 的诚实回因)。
+const EXEC_REASON: Record<string, string> = {
+  not_approved: "未审批",
+  reminder_only_no_executor: "提醒类 · 无需执行,可忽略",
+  no_executor: "暂无执行器",
+  unknown_category: "未知动作类别",
+  entity_missing: "关联实体已不存在",
+  budget_hard_stop: "超出单次预算上限",
+  touches_v6_fit_violation: "命中 fit 红线,已拦截",
+  validation_failed: "执行前校验未通过",
+  deep_missing_no_profile_url: "缺主页 URL,无法深析",
+  kol_profile_no_profile_url: "缺主页 URL,无法补全",
+  failed_retry_not_in_failed_state: "任务非失败态,无需重试",
+  content_candidate_no_post_id: "缺内容贴 ID",
+};
 
 // 9 类 → 中文标签 + 图标 + 强调色
 const CATEGORY_META = {
@@ -72,11 +90,27 @@ export function ActionInboxPanel({ apiToken = "", limit = 6 }) {
     }
     setLoading(true);
     setError("");
-    listActionInbox(apiToken, { limit })
-      .then((res) => {
-        setItems(Array.isArray(res?.items) ? res.items : []);
-        setScope(res?.scope || "");
-        setAvailable(res?.available !== false);
+    // suggested = 待人审;approved = 已审批待执行(让「执行」第二步跨刷新仍可见——
+    // approved 态后端不会重新生成,只在此显式拉取)。两者按 id 去重合并。
+    Promise.all([
+      listActionInbox(apiToken, { limit }),
+      listActionInbox(apiToken, { limit, status: "approved" }),
+    ])
+      .then(([sug, appr]) => {
+        const seen = new Set<any>();
+        const merged: any[] = [];
+        for (const it of [
+          ...(Array.isArray(sug?.items) ? sug.items : []),
+          ...(Array.isArray(appr?.items) ? appr.items : []),
+        ]) {
+          if (it && !seen.has(it.id)) {
+            seen.add(it.id);
+            merged.push(it);
+          }
+        }
+        setItems(merged);
+        setScope(sug?.scope || appr?.scope || "");
+        setAvailable(sug?.available !== false);
       })
       .catch((err) => {
         setError(err?.message || "加载失败");
@@ -88,19 +122,24 @@ export function ActionInboxPanel({ apiToken = "", limit = 6 }) {
     load();
   }, [load]);
 
-  // 乐观移除:成功后本地剔除该行(approve/dismiss/snooze 都让它离开 suggested 列表)。
+  // 乐观移除:成功后本地剔除该行(dismiss/snooze/execute 成功都让它离开列表)。
   const removeItem = React.useCallback((id: any) => {
     setItems((prev) => prev.filter((it: any) => it.id !== id));
+  }, []);
+
+  // 本地置态:approve 后不移除,改 status=approved 让「执行」第二步钮露出(两步分明)。
+  const setItemStatus = React.useCallback((id: any, status: string) => {
+    setItems((prev) => prev.map((it: any) => (it.id === id ? { ...it, status } : it)));
   }, []);
 
   const runAction = React.useCallback(
     (it: any, kind: any) => {
       if (!apiToken || !it || busy[it.id]) return;
-      // approve 二次确认:会触发后端执行链 / 烧 LLM 的明示。
-      if (kind === "approve" && (it.requires_approval || it.uses_llm)) {
+      // 二次确认搬到 execute(真跑这步):approve 只是人审标记,不在此弹窗。
+      if (kind === "execute") {
         const warn = it.uses_llm
-          ? "审批通过后将执行该动作(可能调用 LLM、产生成本)。确认?"
-          : "审批通过后将执行该动作(会写入业务数据)。确认?";
+          ? "执行该动作可能调用 LLM 并产生成本。确认执行?"
+          : "执行该动作会写入业务数据。确认执行?";
         // eslint-disable-next-line no-alert
         if (typeof window !== "undefined" && !window.confirm(warn)) return;
       }
@@ -111,16 +150,36 @@ export function ActionInboxPanel({ apiToken = "", limit = 6 }) {
           ? approveAction(apiToken, it.id)
           : kind === "dismiss"
             ? dismissAction(apiToken, it.id)
-            : snoozeAction(apiToken, it.id, 1440);
+            : kind === "snooze"
+              ? snoozeAction(apiToken, it.id, 1440)
+              : executeAction(apiToken, it.id);
       call
-        .then((res) => {
+        .then((res: any) => {
+          if (kind === "execute") {
+            const outcome = res?.outcome;
+            if (outcome === "success") {
+              removeItem(it.id);
+              return;
+            }
+            // failed → 终态,移除并报因;skipped → 保留(仍 approved,可重试)并报因。
+            const why = EXEC_REASON[res?.reason] || res?.reason || "执行未生效";
+            setActionError(why);
+            if (outcome === "failed") removeItem(it.id);
+            return;
+          }
           if (res && res.ok === false) {
             setActionError(res.reason || "操作未生效");
             return;
           }
-          removeItem(it.id);
+          if (kind === "approve") {
+            // 人审通过 → 本地转 approved,露出「执行」按钮(第二步)。
+            setItemStatus(it.id, "approved");
+          } else {
+            // snooze / dismiss → 离开列表。
+            removeItem(it.id);
+          }
         })
-        .catch((err) => setActionError(err?.message || "操作失败"))
+        .catch((err: any) => setActionError(err?.message || "操作失败"))
         .finally(() =>
           setBusy((b) => {
             const next = { ...b };
@@ -129,7 +188,7 @@ export function ActionInboxPanel({ apiToken = "", limit = 6 }) {
           }),
         );
     },
-    [apiToken, busy, removeItem],
+    [apiToken, busy, removeItem, setItemStatus],
   );
 
   const headerRight = loading
@@ -143,6 +202,101 @@ export function ActionInboxPanel({ apiToken = "", limit = 6 }) {
         },
         e(RefreshCw, { size: 12 }),
       );
+
+  // 状态感知操作区:approved → 执行(第二步);suggested 可执行类 → 通过/稍后/忽略;
+  // suggested 提醒类(requires_approval=false,无执行器)→ 只「知道了/稍后」(诚实,不给执行钮)。
+  const renderActions = (it: any) => {
+    const b = busy[it.id];
+    const spin = (k: string) =>
+      b === k ? e(Loader2, { size: 9, className: "animate-spin" }) : null;
+
+    const snoozeBtn = e(
+      "button",
+      {
+        key: "snooze",
+        type: "button",
+        disabled: Boolean(b),
+        onClick: () => runAction(it, "snooze"),
+        title: "稍后再说(默认 24h)",
+        className:
+          "flex items-center gap-1 rounded border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-[9px] text-slate-300 transition-colors hover:bg-white/[0.08] disabled:opacity-40",
+      },
+      spin("snooze") || e(Clock, { size: 9 }),
+      "稍后",
+    );
+    const dismissBtn = (label: string) =>
+      e(
+        "button",
+        {
+          key: "dismiss",
+          type: "button",
+          disabled: Boolean(b),
+          onClick: () => runAction(it, "dismiss"),
+          title: "忽略此建议",
+          className:
+            "flex items-center gap-1 rounded border border-white/10 bg-white/[0.02] px-1.5 py-0.5 text-[9px] text-slate-400 transition-colors hover:bg-red-500/10 hover:text-red-300 disabled:opacity-40",
+        },
+        spin("dismiss") || e(X, { size: 9 }),
+        label,
+      );
+
+    // 已审批 → 第二步「执行」(approved 态后端不放行 dismiss,故只暴露执行)。
+    if (it.status === "approved") {
+      return e(
+        "div",
+        { className: "mt-1.5 flex items-center gap-1.5" },
+        e(
+          "button",
+          {
+            key: "execute",
+            type: "button",
+            disabled: Boolean(b),
+            onClick: () => runAction(it, "execute"),
+            title: "执行该动作(写入业务数据 / 可能调用 LLM,进 ledger)",
+            className:
+              "flex items-center gap-1 rounded border border-sky-500/30 bg-sky-500/10 px-1.5 py-0.5 text-[9px] text-sky-300 transition-colors hover:bg-sky-500/20 disabled:opacity-40",
+          },
+          spin("execute") || e(Play, { size: 9 }),
+          "执行",
+        ),
+        e("span", { key: "tag", className: "text-[8px] text-emerald-300/70" }, "已审批"),
+      );
+    }
+
+    if (it.status !== "suggested") return null;
+
+    // 提醒类:无执行器,只能确认/延后(不误导给执行钮)。
+    if (!it.requires_approval) {
+      return e(
+        "div",
+        { className: "mt-1.5 flex items-center gap-1" },
+        dismissBtn("知道了"),
+        snoozeBtn,
+      );
+    }
+
+    // 可执行类:通过(人审第一步)/ 稍后 / 忽略。
+    return e(
+      "div",
+      { className: "mt-1.5 flex items-center gap-1" },
+      e(
+        "button",
+        {
+          key: "approve",
+          type: "button",
+          disabled: Boolean(b),
+          onClick: () => runAction(it, "approve"),
+          title: "审批通过(随后点「执行」才真跑)",
+          className:
+            "flex items-center gap-1 rounded border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] text-emerald-300 transition-colors hover:bg-emerald-500/20 disabled:opacity-40",
+        },
+        spin("approve") || e(Check, { size: 9 }),
+        "通过",
+      ),
+      snoozeBtn,
+      dismissBtn("忽略"),
+    );
+  };
 
   let body;
   if (loading && items.length === 0) {
@@ -211,58 +365,8 @@ export function ActionInboxPanel({ apiToken = "", limit = 6 }) {
                 it.requires_approval && e("span", null, "· 需人工审批"),
               )
             : null,
-          // 操作区:仅 suggested 状态可操作;approve / snooze / dismiss
-          it.status === "suggested"
-            ? e(
-                "div",
-                { className: "mt-1.5 flex items-center gap-1" },
-                e(
-                  "button",
-                  {
-                    type: "button",
-                    disabled: Boolean(busy[it.id]),
-                    onClick: () => runAction(it, "approve"),
-                    title: "审批通过(随后可执行)",
-                    className:
-                      "flex items-center gap-1 rounded border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] text-emerald-300 transition-colors hover:bg-emerald-500/20 disabled:opacity-40",
-                  },
-                  busy[it.id] === "approve"
-                    ? e(Loader2, { size: 9, className: "animate-spin" })
-                    : e(Check, { size: 9 }),
-                  "通过",
-                ),
-                e(
-                  "button",
-                  {
-                    type: "button",
-                    disabled: Boolean(busy[it.id]),
-                    onClick: () => runAction(it, "snooze"),
-                    title: "稍后再说(默认 24h)",
-                    className:
-                      "flex items-center gap-1 rounded border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-[9px] text-slate-300 transition-colors hover:bg-white/[0.08] disabled:opacity-40",
-                  },
-                  busy[it.id] === "snooze"
-                    ? e(Loader2, { size: 9, className: "animate-spin" })
-                    : e(Clock, { size: 9 }),
-                  "稍后",
-                ),
-                e(
-                  "button",
-                  {
-                    type: "button",
-                    disabled: Boolean(busy[it.id]),
-                    onClick: () => runAction(it, "dismiss"),
-                    title: "忽略此建议",
-                    className:
-                      "flex items-center gap-1 rounded border border-white/10 bg-white/[0.02] px-1.5 py-0.5 text-[9px] text-slate-400 transition-colors hover:bg-red-500/10 hover:text-red-300 disabled:opacity-40",
-                  },
-                  busy[it.id] === "dismiss"
-                    ? e(Loader2, { size: 9, className: "animate-spin" })
-                    : e(X, { size: 9 }),
-                  "忽略",
-                ),
-              )
-            : null,
+          // 操作区:suggested → 通过/稍后/忽略(提醒类只「知道了/稍后」);approved → 执行。
+          renderActions(it),
         );
       }),
       items.length > COLLAPSED_COUNT
