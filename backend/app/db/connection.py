@@ -220,6 +220,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "171_vkpi_kol_cooperation.sql",
     "172_scheduler_task_content_fit_batch.sql",
     "173_vkpi_publish_approvals.sql",
+    "174_vkpi_collab_settings.sql",
 )
 
 try:

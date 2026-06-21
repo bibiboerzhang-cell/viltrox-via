@@ -139,6 +139,67 @@ def publish_remind(body: _PublishActionBody, staff=Depends(require_tab("vkpi", "
     return {"status": "success", "approval_id": aid, "reminded": True}
 
 
+# ── #24 协作设置(ShareModal「共同目标 + 提醒规则」· per-resource · vkpi_collab_settings)──
+class _CollabBody(BaseModel):
+    kind: str
+    target_id: str
+    shared_goal: str = ""
+    reminder_rule: str = ""
+
+
+@router.get("/collab-settings")
+def get_collab_settings(
+    kind: str = Query(default=""),
+    target_id: str = Query(default=""),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """读某 project/event 的协作设置;未设过诚实返回空串。"""
+    from app.db.connection import get_conn
+
+    k = (kind or "").strip()
+    tid = (target_id or "").strip()
+    if k not in {"project", "event"} or not tid:
+        return {"shared_goal": "", "reminder_rule": ""}
+    row = get_conn().execute(
+        "SELECT shared_goal, reminder_rule FROM vkpi_collab_settings WHERE kind=? AND target_id=?", (k, tid)
+    ).fetchone()
+    if not row:
+        return {"shared_goal": "", "reminder_rule": ""}
+    return {"shared_goal": row["shared_goal"] or "", "reminder_rule": row["reminder_rule"] or ""}
+
+
+@router.patch("/collab-settings")
+def patch_collab_settings(body: _CollabBody, staff=Depends(require_tab("vkpi", "write"))) -> dict:
+    """写某 project/event 的协作设置(upsert by kind+target_id);只动本隔离表。"""
+    from app.db.connection import get_conn
+    from app.domains.alerts.common import utcnow
+
+    k = (body.kind or "").strip()
+    tid = (body.target_id or "").strip()
+    if k not in {"project", "event"} or not tid:
+        raise HTTPException(status_code=400, detail="kind(project|event)+target_id required")
+    goal = (body.shared_goal or "").strip()[:500]
+    rule = (body.reminder_rule or "").strip()[:500]
+    sid = _staff_pk(staff)
+    now = utcnow()
+    conn = get_conn()
+    existing = conn.execute(
+        "SELECT id FROM vkpi_collab_settings WHERE kind=? AND target_id=?", (k, tid)
+    ).fetchone()
+    if existing:
+        conn.execute(
+            "UPDATE vkpi_collab_settings SET shared_goal=?, reminder_rule=?, updated_by=?, updated_at=? WHERE kind=? AND target_id=?",
+            (goal, rule, sid, now, k, tid),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO vkpi_collab_settings (kind, target_id, shared_goal, reminder_rule, updated_by) VALUES (?,?,?,?,?)",
+            (k, tid, goal, rule, sid),
+        )
+    conn.commit()
+    return {"status": "success", "shared_goal": goal, "reminder_rule": rule}
+
+
 @router.get("/architecture")
 def architecture(staff=Depends(require_tab("vkpi", "read"))):
     return workflow.architecture_summary()

@@ -25,6 +25,7 @@ import {
   listEventMembers,
   removeEventMember,
 } from "../../../services/vkpi/eventMembers-api";
+import { getCollabSettings, saveCollabSettings } from "../../../services/vkpi/collab-api";
 
 const e = React.createElement;
 
@@ -53,6 +54,28 @@ export function ShareModal({ kind, targetId, targetName, staff = [], apiToken, o
   const [adding, setAdding] = useState(false);
   const [removingId, setRemovingId] = useState("");
   const [actionError, setActionError] = useState("");
+  // #24 协作设置(共同目标 + 提醒规则)· per-resource · GET/PATCH /collab-settings。
+  const [collabGoal, setCollabGoal] = useState("");
+  const [collabRule, setCollabRule] = useState("");
+  const [collabBusy, setCollabBusy] = useState(false);
+  const [collabMsg, setCollabMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  useEffect(() => {
+    if (!apiToken || !targetId) return;
+    let alive = true;
+    getCollabSettings(apiToken, kind, String(targetId))
+      .then((r: any) => { if (alive && r) { setCollabGoal(r.shared_goal || ""); setCollabRule(r.reminder_rule || ""); } })
+      .catch(() => { /* 读不到保持空 */ });
+    return () => { alive = false; };
+  }, [apiToken, kind, targetId]);
+  const saveCollab = async () => {
+    if (!apiToken || !targetId || collabBusy) return;
+    setCollabBusy(true); setCollabMsg(null);
+    try {
+      await saveCollabSettings(apiToken, kind, String(targetId), collabGoal, collabRule);
+      setCollabMsg({ ok: true, text: "协作设置已保存" });
+    } catch (err: any) { setCollabMsg({ ok: false, text: String(err && err.message ? err.message : err) }); }
+    finally { setCollabBusy(false); }
+  };
 
   const reload = useCallback(() => {
     if (!apiToken || !targetId) {
@@ -235,23 +258,27 @@ export function ShareModal({ kind, targetId, targetName, staff = [], apiToken, o
             "查看 = 只读;编辑 = 可改。仅 owner / admin 可增删成员。")
         ),
 
-        // 共同目标 / 提醒规则 —— 后端尚无对应列,显式标注「后续接入」,不接假后端。
-        e("div", { className: "rounded-lg border border-white/[0.04] bg-white/[0.01] px-3 py-3 space-y-2.5 opacity-70" },
-          e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "协作设置 (可选,后续接入)"),
+        // #24 协作设置 —— 接真 /collab-settings(per-resource;共同目标 + 提醒规则)。
+        e("div", { className: "rounded-lg border border-white/[0.04] bg-white/[0.01] px-3 py-3 space-y-2.5" },
+          e("div", { className: "flex items-center justify-between" },
+            e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "协作设置 (可选)"),
+            e("button", { onClick: saveCollab, disabled: collabBusy, className: "rounded-md border border-cyan-400/30 bg-cyan-400/[0.08] px-2 py-0.5 text-[10px] text-cyan-200 disabled:opacity-50 disabled:cursor-not-allowed" }, collabBusy ? "保存中…" : "保存")
+          ),
           e("div", null,
             e("label", { className: "block text-[10px] text-slate-500 mb-1" }, "共同目标"),
             e("input", {
-              type: "text", disabled: true, placeholder: "例:本月新增 5 条合作内容",
-              className: "w-full rounded-md border border-white/[0.06] bg-white/[0.02] px-2.5 py-1.5 text-[11px] text-slate-400 placeholder-slate-600 cursor-not-allowed",
+              type: "text", value: collabGoal, onChange: (ev: any) => setCollabGoal(ev.target.value), placeholder: "例:本月新增 5 条合作内容",
+              className: "w-full rounded-md border border-white/[0.06] bg-white/[0.02] px-2.5 py-1.5 text-[11px] text-white placeholder-slate-600 outline-none focus:border-cyan-400/30",
             })
           ),
           e("div", null,
             e("label", { className: "block text-[10px] text-slate-500 mb-1" }, "提醒规则"),
             e("input", {
-              type: "text", disabled: true, placeholder: "例:逾期未推进 3 天提醒成员",
-              className: "w-full rounded-md border border-white/[0.06] bg-white/[0.02] px-2.5 py-1.5 text-[11px] text-slate-400 placeholder-slate-600 cursor-not-allowed",
+              type: "text", value: collabRule, onChange: (ev: any) => setCollabRule(ev.target.value), placeholder: "例:逾期未推进 3 天提醒成员",
+              className: "w-full rounded-md border border-white/[0.06] bg-white/[0.02] px-2.5 py-1.5 text-[11px] text-white placeholder-slate-600 outline-none focus:border-cyan-400/30",
             })
-          )
+          ),
+          collabMsg && e("div", { className: `text-[10px] ${collabMsg.ok ? "text-emerald-300" : "text-rose-300"}` }, collabMsg.text)
         )
       ),
 
