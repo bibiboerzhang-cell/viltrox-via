@@ -390,9 +390,11 @@ def approve_session(
 ) -> dict[str, Any]:
     """R1:人审锁定该会话里要推进合作的候选 KOL → 写 approved_kol_ids(R2 据此建项目草案)。
 
-    只接受属于本会话候选项的 kol_pool_id(交集校验,绝不写任意 id);去重保序;replace 语义
-    (本次选择即最终锁定集)。审计落 result_summary_json.approval(谁/何时/接受几个/跳过几个)。
-    绝不触碰 vkpi_kol_pool / viltrox_fit_score / rule_v0,只写本会话 approved_kol_ids + summary 两处。
+    只接受真实存在的 kol_pool_id(校验 vkpi_kol_pool 存在性,绝不写任意 id);去重保序;replace
+    语义(本次选择即最终锁定集)。校验口径用「池中存在」而非「会话项含该 id」——因全网新发现
+    new_creator 入池后会话项 kol_pool_id 仍为 NULL,若按会话项交集会把这些真候选全误杀。
+    审计落 result_summary_json.approval(谁/何时/接受几个/跳过几个)。绝不写 vkpi_kol_pool /
+    viltrox_fit_score / rule_v0,只读池做存在性校验 + 写本会话 approved_kol_ids + summary 两处。
     """
     conn = get_conn()
     row = conn.execute(
@@ -402,19 +404,6 @@ def approve_session(
     if not row:
         raise LookupError(f"search session not found: {session_id}")
 
-    # 本会话候选里所有真实 kol_pool_id(new_creator 未入池 → kol_pool_id=NULL,天然不可批准)。
-    candidate_rows = conn.execute(
-        """
-        SELECT DISTINCT kol_pool_id
-        FROM vkpi_kol_search_session_items
-        WHERE session_id=? AND kol_pool_id IS NOT NULL
-        """,
-        (int(session_id),),
-    ).fetchall()
-    candidate_ids = {
-        int(dict(r)["kol_pool_id"]) for r in candidate_rows if dict(r).get("kol_pool_id")
-    }
-
     requested: list[int] = []
     seen: set[int] = set()
     for raw in _list(kol_pool_ids):
@@ -423,8 +412,18 @@ def approve_session(
             seen.add(parsed)
             requested.append(parsed)
 
-    accepted = [kid for kid in requested if kid in candidate_ids]
-    skipped = [kid for kid in requested if kid not in candidate_ids]
+    # 存在性校验:只接受真实在池的 kol_pool_id(只读 vkpi_kol_pool,绝不写)。
+    valid_ids: set[int] = set()
+    if requested:
+        placeholders = ",".join("?" for _ in requested)
+        pool_rows = conn.execute(
+            f"SELECT id FROM vkpi_kol_pool WHERE id IN ({placeholders})",
+            requested,
+        ).fetchall()
+        valid_ids = {int(dict(r)["id"]) for r in pool_rows if dict(r).get("id")}
+
+    accepted = [kid for kid in requested if kid in valid_ids]
+    skipped = [kid for kid in requested if kid not in valid_ids]
 
     # 审计合并进 result_summary_json.approval(沿用既有 jsonb 合并;不另加列)。
     summary = _loads(dict(row).get("result_summary_json"), {})
@@ -434,7 +433,7 @@ def approve_session(
     summary["approval"] = {
         "approved_kol_ids": accepted,
         "approved_count": len(accepted),
-        "skipped_not_in_session": skipped,
+        "skipped_not_in_pool": skipped,
         "approved_by": _staff_user_id(staff),
         "approved_at": approved_at,
         "viltrox_fit_score_untouched": True,
@@ -454,7 +453,7 @@ def approve_session(
     conn.commit()
     session = _row_to_session(updated)
     session["approved_count"] = len(accepted)
-    session["skipped_not_in_session"] = skipped
+    session["skipped_not_in_pool"] = skipped
     return session
 
 

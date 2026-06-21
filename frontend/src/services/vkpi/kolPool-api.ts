@@ -658,6 +658,85 @@ export async function getKolSearchSession(
   );
 }
 
+// ── M1 找人闭合(R1-R4):批准锁定 → 成本估算 → 建项目草案 → 话术草案 ──────────────
+// 红线:批准只锁候选;草案/话术只「生成」不外发不承诺价格;一切走后端 require_tab + 预算闸。
+
+function _sessionPath(sessionId: string | number, suffix: string): string {
+  return `/api/admin/vkpi/kol-search-sessions/${encodeURIComponent(String(sessionId))}/${suffix}`;
+}
+
+export async function approveKolSearchSession(
+  token: string,
+  sessionId: string | number,
+  kolPoolIds: number[],
+): Promise<Row> {
+  return apiFetch<Row>(
+    _sessionPath(sessionId, "approve"),
+    { method: "POST", body: jsonBody({ kol_pool_ids: kolPoolIds }), cache: "no-store" },
+    token,
+  );
+}
+
+export async function estimateKolSearchSessionCost(
+  token: string,
+  sessionId: string | number,
+  params: { kolPoolIds?: number[]; postsPerCreator?: number } = {},
+): Promise<Row> {
+  const body: Row = {};
+  if (Array.isArray(params.kolPoolIds) && params.kolPoolIds.length) body.kol_pool_ids = params.kolPoolIds;
+  if (typeof params.postsPerCreator === "number") body.posts_per_creator = params.postsPerCreator;
+  return apiFetch<Row>(
+    _sessionPath(sessionId, "cost-estimate"),
+    { method: "POST", body: jsonBody(body), cache: "no-store" },
+    token,
+  );
+}
+
+export async function createProjectDraftFromSession(
+  token: string,
+  sessionId: string | number,
+  params: {
+    kolPoolIds?: number[];
+    projectName?: string;
+    productSku?: string;
+    productName?: string;
+    platform?: string;
+    productPositioning?: string;
+    targetPersona?: string;
+  } = {},
+): Promise<Row> {
+  const body: Row = {};
+  if (Array.isArray(params.kolPoolIds) && params.kolPoolIds.length) body.kol_pool_ids = params.kolPoolIds;
+  if (params.projectName) body.project_name = params.projectName;
+  if (params.productSku) body.product_sku = params.productSku;
+  if (params.productName) body.product_name = params.productName;
+  if (params.platform) body.platform = params.platform;
+  if (params.productPositioning) body.product_positioning = params.productPositioning;
+  if (params.targetPersona) body.target_persona = params.targetPersona;
+  return apiFetch<Row>(
+    _sessionPath(sessionId, "create-project-draft"),
+    { method: "POST", body: jsonBody(body), cache: "no-store" },
+    token,
+  );
+}
+
+export async function generateKolSearchSessionOutreach(
+  token: string,
+  sessionId: string | number,
+  params: { kolPoolIds?: number[]; productPositioning?: string; targetPersona?: string; productName?: string } = {},
+): Promise<Row> {
+  const body: Row = {};
+  if (Array.isArray(params.kolPoolIds) && params.kolPoolIds.length) body.kol_pool_ids = params.kolPoolIds;
+  if (params.productPositioning) body.product_positioning = params.productPositioning;
+  if (params.targetPersona) body.target_persona = params.targetPersona;
+  if (params.productName) body.product_name = params.productName;
+  return apiFetch<Row>(
+    _sessionPath(sessionId, "generate-outreach"),
+    { method: "POST", body: jsonBody(body), cache: "no-store" },
+    token,
+  );
+}
+
 export async function recallKolProfiles(
   token: string,
   params: {

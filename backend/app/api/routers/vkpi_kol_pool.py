@@ -44,6 +44,7 @@ import app.domains.intelligence.ai_brief as ai_brief
 import app.domains.evidence.summary as evidence_summary
 from app.domains.projects import workflow as project_workflow
 from app.domains.projects import cost_estimate as project_cost_estimate
+from app.domains.projects import outreach as project_outreach
 import app.domains.sync.refresh_tier as refresh_tier
 import app.domains.tasks.enqueue as task_enqueue
 import app.domains.tasks.queue_view as task_queue_view
@@ -472,6 +473,50 @@ def estimate_kol_search_session_cost(
     except (TypeError, ValueError):
         ppc = 1
     return project_cost_estimate.estimate_cost_for_kols(raw_ids, staff=staff, posts_per_creator=ppc)
+
+
+@router.post("/kol-search-sessions/{session_id}/generate-outreach")
+def generate_kol_search_session_outreach(
+    session_id: int,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """R4:为该会话候选(缺省 approved_kol_ids)生成合作话术 + SOW 草案。
+
+    走 llm_gateway(预算闸 + 代理);仅草案——绝不外发、不承诺价格、零触 viltrox_fit_score。
+    """
+    try:
+        session = kol_search_sessions.get_session(int(session_id))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    raw_ids = body.get("kol_pool_ids") if isinstance(body, dict) else None
+    if not isinstance(raw_ids, list) or not raw_ids:
+        raw_ids = session.get("approved_kol_ids") or []
+    # brief:body 优先 → 会话内可得 plan → query_text 兜底(与 R2 草案同口径)。
+    brief_in = body.get("brief") if isinstance(body.get("brief"), dict) else {}
+    input_payload = session.get("input_payload") if isinstance(session.get("input_payload"), dict) else {}
+    result_summary = session.get("result_summary") if isinstance(session.get("result_summary"), dict) else {}
+    plan: dict = {}
+    for src in (result_summary.get("llm_query_plan"), input_payload.get("llm_query_plan"), input_payload):
+        if isinstance(src, dict) and (src.get("product_positioning") or src.get("target_persona")):
+            plan = src
+            break
+    query_text = session.get("query_text") or ""
+    merged_brief = {
+        "query_text": query_text,
+        "product_positioning": brief_in.get("product_positioning") or body.get("product_positioning") or plan.get("product_positioning") or "",
+        "target_persona": brief_in.get("target_persona") or body.get("target_persona") or plan.get("target_persona") or query_text,
+        "search_session_id": int(session_id),
+    }
+    return project_outreach.generate_outreach(
+        raw_ids,
+        brief=merged_brief,
+        product={"product_name": body.get("product_name") or ""},
+        staff=staff,
+        preferred_provider=body.get("llm_provider"),
+    )
 
 
 @router.post("/kol-search-sessions/{session_id}/items/{item_id}/profile-crawl")

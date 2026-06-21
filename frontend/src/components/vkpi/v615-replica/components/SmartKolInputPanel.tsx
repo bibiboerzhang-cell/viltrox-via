@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, BadgeCheck, Clock3, Database, Info, Link2, Loader2, Search, ShieldCheck, Sparkles, TrendingUp, UserPlus, Video } from "lucide-react";
+import { AlertTriangle, BadgeCheck, Clock3, Database, FolderPlus, Info, Link2, Loader2, MessageSquare, Search, ShieldCheck, Sparkles, TrendingUp, UserPlus, Video } from "lucide-react";
 
 import {
   deepCrawlKolUrl,
@@ -15,6 +15,7 @@ import {
 } from "../../../../domains/kol";
 import { proxiedImageUrl } from "../../shared/mediaProxy";
 import { enqueueAllKolVideos, favoriteKolPool, getKolVideoAnalysisCache, translateBio, type VkpiKolVideoAnalysisCacheEntry } from "../../../../services/vkpi/kolPool-api";
+import { approveKolSearchSession, createProjectDraftFromSession, generateKolSearchSessionOutreach } from "../../../../services/vkpi/kolPool-api";
 // A1·复用 KOLVideoAnalysisPanel 的画面质量分 / 三观-归因-建议 / 关键帧 QA 渲染原子(纯读 final_v1/QA 缓存,绝不触 viltrox_fit_score)。
 import {
   DeepLayersSection,
@@ -1430,6 +1431,12 @@ export function SmartKolInputPanel({
   const [pickedIds, setPickedIds] = useState<Set<number>>(() => new Set());
   const [addingFav, setAddingFav] = useState(false);
   const [favNote, setFavNote] = useState("");
+  // R4 找人闭合:批准锁定 → 建项目草案(带预算/风险)→ 话术草案。仅草案,绝不外发/承诺价格。
+  const [draftBusy, setDraftBusy] = useState(false);
+  const [draftNote, setDraftNote] = useState("");
+  const [outreachBusy, setOutreachBusy] = useState(false);
+  const [outreachNote, setOutreachNote] = useState("");
+  const [outreachResult, setOutreachResult] = useState<Record<string, any> | null>(null);
 
   function togglePick(id: number) {
     setPickedIds((cur) => {
@@ -1449,6 +1456,53 @@ export function SmartKolInputPanel({
     setFavNote(ok === ids.length ? `已加入我的 MY KOL · ${ok} 人` : `加入 ${ok}/${ids.length}(其余失败,可重试)`);
     setPickedIds(new Set());
     setAddingFav(false);
+  }
+
+  // R4:批准锁定选中候选 → 一键建项目草案(草案带成本估算 + 风险;占用冲突降级为提示)。
+  async function approveAndCreateDraft() {
+    if (!apiToken || !pickedIds.size || !activeSearchSessionId) return;
+    setDraftBusy(true);
+    setDraftNote("");
+    const ids = [...pickedIds];
+    try {
+      await approveKolSearchSession(apiToken, activeSearchSessionId, ids);
+      const draft: any = await createProjectDraftFromSession(apiToken, activeSearchSessionId, { kolPoolIds: ids });
+      const ce = (draft && draft.cost_estimate) || {};
+      const total = ce.total_cents || {};
+      const lowUsd = Math.round((total.low || 0) / 100);
+      const highUsd = Math.round((total.high || 0) / 100);
+      const risk = (ce.risk && ce.risk.level) || "—";
+      const budgetStr =
+        total.low || total.high
+          ? ` · 预算 ~$${lowUsd.toLocaleString()}–$${highUsd.toLocaleString()} · 风险 ${risk}`
+          : "";
+      const warn = draft && draft.kol_attach_warning ? ` · ⚠ ${String(draft.kol_attach_warning).slice(0, 60)}` : "";
+      setDraftNote(`已建草案 ${draft?.project_uid || ""}(挂 ${draft?.attached_kol_count ?? 0}/${ids.length} 人)${budgetStr}${warn}`);
+    } catch (err: any) {
+      setDraftNote(`建草案失败 · ${err?.message || "请重试"}`);
+    } finally {
+      setDraftBusy(false);
+    }
+  }
+
+  // R4:为选中候选生成合作话术 + SOW 草案(LLM,预算闸;仅草案,人审后手动外发)。
+  async function generateOutreachForPicked() {
+    if (!apiToken || !pickedIds.size || !activeSearchSessionId) return;
+    setOutreachBusy(true);
+    setOutreachNote("");
+    setOutreachResult(null);
+    const ids = [...pickedIds];
+    try {
+      const res: any = await generateKolSearchSessionOutreach(apiToken, activeSearchSessionId, { kolPoolIds: ids });
+      setOutreachResult(res || null);
+      const n = Array.isArray(res?.messages) ? res.messages.length : 0;
+      const src = res?.llm_used ? "LLM" : "确定性模板(LLM 未启用/预算关)";
+      setOutreachNote(`已生成 ${n} 封话术草案 · ${src}${res?.truncated ? " · 已截断至上限" : ""}`);
+    } catch (err: any) {
+      setOutreachNote(`生成话术失败 · ${err?.message || "请重试"}`);
+    } finally {
+      setOutreachBusy(false);
+    }
   }
 
   const inferredMode = useMemo(() => detectMode(input), [input]);
@@ -2109,23 +2163,74 @@ export function SmartKolInputPanel({
                 重新全网查找
               </button>
             </div>
-            {pickedIds.size > 0 || favNote ? (
-              <div className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-emerald-300/25 bg-emerald-400/[0.08] px-2.5 py-1.5">
-                {pickedIds.size > 0 ? (
-                  <>
-                    <span className="text-[10.5px] font-medium text-emerald-100">已选 {pickedIds.size} 人</span>
-                    <button
-                      type="button"
-                      onClick={() => void addPickedToMyKol()}
-                      disabled={addingFav || !apiToken}
-                      className="inline-flex items-center gap-1 rounded border border-emerald-300/35 bg-emerald-500/[0.2] px-2 py-0.5 text-[10px] font-medium text-emerald-50 transition-colors hover:bg-emerald-500/[0.32] disabled:opacity-50"
-                    >
-                      {addingFav ? <Loader2 size={11} className="animate-spin" /> : <UserPlus size={11} />} 加入我的 MY KOL
-                    </button>
-                    <button type="button" onClick={() => setPickedIds(new Set())} className="text-[10px] text-slate-400 hover:text-slate-200">清空</button>
-                  </>
+            {pickedIds.size > 0 || favNote || draftNote || outreachNote ? (
+              <div className="mb-2 flex flex-col gap-1.5 rounded-md border border-emerald-300/25 bg-emerald-400/[0.08] px-2.5 py-1.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  {pickedIds.size > 0 ? (
+                    <>
+                      <span className="text-[10.5px] font-medium text-emerald-100">已选 {pickedIds.size} 人</span>
+                      <button
+                        type="button"
+                        onClick={() => void addPickedToMyKol()}
+                        disabled={addingFav || !apiToken}
+                        className="inline-flex items-center gap-1 rounded border border-emerald-300/35 bg-emerald-500/[0.2] px-2 py-0.5 text-[10px] font-medium text-emerald-50 transition-colors hover:bg-emerald-500/[0.32] disabled:opacity-50"
+                      >
+                        {addingFav ? <Loader2 size={11} className="animate-spin" /> : <UserPlus size={11} />} 加入我的 MY KOL
+                      </button>
+                      {/* R4:批准锁定 → 一键建项目草案(草案带成本估算 + 风险) */}
+                      <button
+                        type="button"
+                        onClick={() => void approveAndCreateDraft()}
+                        disabled={draftBusy || !apiToken || !activeSearchSessionId}
+                        title={activeSearchSessionId ? "批准选中候选并据此建项目草案(带预算/风险)" : "需先有搜索会话"}
+                        className="inline-flex items-center gap-1 rounded border border-sky-300/35 bg-sky-500/[0.2] px-2 py-0.5 text-[10px] font-medium text-sky-50 transition-colors hover:bg-sky-500/[0.32] disabled:opacity-50"
+                      >
+                        {draftBusy ? <Loader2 size={11} className="animate-spin" /> : <FolderPlus size={11} />} 批准并建草案
+                      </button>
+                      {/* R4:为选中候选生成合作话术 + SOW 草案(LLM·预算闸·仅草案) */}
+                      <button
+                        type="button"
+                        onClick={() => void generateOutreachForPicked()}
+                        disabled={outreachBusy || !apiToken || !activeSearchSessionId}
+                        title={activeSearchSessionId ? "为选中候选生成合作话术 + SOW 草案(人审后手动外发)" : "需先有搜索会话"}
+                        className="inline-flex items-center gap-1 rounded border border-violet-300/35 bg-violet-500/[0.2] px-2 py-0.5 text-[10px] font-medium text-violet-50 transition-colors hover:bg-violet-500/[0.32] disabled:opacity-50"
+                      >
+                        {outreachBusy ? <Loader2 size={11} className="animate-spin" /> : <MessageSquare size={11} />} 生成话术
+                      </button>
+                      <button type="button" onClick={() => setPickedIds(new Set())} className="text-[10px] text-slate-400 hover:text-slate-200">清空</button>
+                    </>
+                  ) : null}
+                  {favNote ? <span className="text-[10px] text-emerald-200/85">{favNote}</span> : null}
+                </div>
+                {draftNote ? <span className="text-[10px] text-sky-100/90">{draftNote}</span> : null}
+                {outreachNote ? <span className="text-[10px] text-violet-100/90">{outreachNote}</span> : null}
+                {outreachResult && Array.isArray(outreachResult.messages) && outreachResult.messages.length ? (
+                  <details className="mt-0.5 rounded border border-violet-300/20 bg-black/20 px-2 py-1">
+                    <summary className="cursor-pointer text-[10px] text-violet-100/90">查看话术草案({outreachResult.messages.length} 封)· 人审后手动外发</summary>
+                    <div className="mt-1 flex max-h-56 flex-col gap-1.5 overflow-y-auto">
+                      {outreachResult.messages.map((m: any, i: number) => (
+                        <div key={`om-${m.kol_pool_id || i}`} className="rounded border border-white/[0.06] bg-white/[0.02] px-2 py-1">
+                          <div className="text-[10px] font-medium text-violet-50">
+                            {m.display_name || m.handle || `KOL #${m.kol_pool_id || i + 1}`}
+                            {m.personalized === false ? <span className="ml-1 text-[8px] text-slate-400">· 模板</span> : null}
+                          </div>
+                          {m.subject ? <div className="text-[9.5px] text-slate-300">主题:{m.subject}</div> : null}
+                          <div className="whitespace-pre-line text-[9.5px] leading-relaxed text-slate-200/90">{m.body}</div>
+                        </div>
+                      ))}
+                      {outreachResult.sow_draft && outreachResult.sow_draft.scope ? (
+                        <div className="rounded border border-violet-300/20 bg-violet-500/[0.06] px-2 py-1 text-[9.5px] text-violet-100/90">
+                          <div className="font-medium">SOW 草案</div>
+                          <div className="opacity-90">范围:{outreachResult.sow_draft.scope}</div>
+                          {Array.isArray(outreachResult.sow_draft.deliverables) && outreachResult.sow_draft.deliverables.length ? (
+                            <div className="opacity-90">交付:{outreachResult.sow_draft.deliverables.join(" · ")}</div>
+                          ) : null}
+                          <div className="opacity-75">报酬:{outreachResult.sow_draft.compensation || "待人工确定(不承诺价格)"}</div>
+                        </div>
+                      ) : null}
+                    </div>
+                  </details>
                 ) : null}
-                {favNote ? <span className="text-[10px] text-emerald-200/85">{favNote}</span> : null}
               </div>
             ) : null}
             {discoveryItems.length ? (
