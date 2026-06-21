@@ -1231,7 +1231,7 @@ def _auto_enroll_discoveries(new_creators: list[dict[str, Any]]) -> int:
     发现项原本不落库 → 下次同/近似搜索 find_history_match 命中不到 → 反复以「新人」出现在「全网新发现」。
     这里逐个 upsert 到 vkpi_kol_pool(仅 platform/handle/avatar/bio/followers 等 profile-basics),
     下次即被归到「库内已有」、不再重复。
-    redline-safe:走 write_kol_profile_basics——其 score 守卫会在任何 fit 变动时回滚,结构上不可能写 fit/rule_v0。
+    redline-safe:走 write_kol_profile_basics——其 score 守卫会在任何 fit 变动时回滚,结构上不可能动评分域。
     最佳努力:env(KOL_AUTO_ENROLL_DISCOVERY)可关、单条失败只记日志不抛、绝不阻断发现主流程。返回入库条数。
     """
     import os
@@ -1261,7 +1261,11 @@ def _auto_enroll_discoveries(new_creators: list[dict[str, Any]]) -> int:
             "followers": _int(item.get("followers") or item.get("subscriber_count") or item.get("avg_views") or 0),
         }
         try:
-            write_kol_profile_basics(None, profile_data, dry_run=False)
+            res = write_kol_profile_basics(None, profile_data, dry_run=False)
+            new_id = res.get("kol_pool_id")
+            if new_id:
+                # 带回 id:前端可据此「勾选 → 加入我的 MY KOL(收藏)」,无需再 resolve handle。
+                item["kol_pool_id"] = int(new_id)
             enrolled += 1
         except Exception as exc:
             logger.info("auto_enroll_discovery skip handle=%r: %s", handle, str(exc)[:200])

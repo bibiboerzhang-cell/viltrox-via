@@ -14,7 +14,7 @@ import {
   type VkpiKolUrlDeepCrawlResponse,
 } from "../../../../domains/kol";
 import { proxiedImageUrl } from "../../shared/mediaProxy";
-import { enqueueAllKolVideos, getKolVideoAnalysisCache, translateBio, type VkpiKolVideoAnalysisCacheEntry } from "../../../../services/vkpi/kolPool-api";
+import { enqueueAllKolVideos, favoriteKolPool, getKolVideoAnalysisCache, translateBio, type VkpiKolVideoAnalysisCacheEntry } from "../../../../services/vkpi/kolPool-api";
 // A1·复用 KOLVideoAnalysisPanel 的画面质量分 / 三观-归因-建议 / 关键帧 QA 渲染原子(纯读 final_v1/QA 缓存,绝不触 viltrox_fit_score)。
 import {
   DeepLayersSection,
@@ -1426,6 +1426,30 @@ export function SmartKolInputPanel({
   // P0-6 地区口径:默认开,排除 {中国大陆 CN / 香港 HK / 台湾 TW} 三地区(按 country/market 地区判据,
   // 含 ISO 码与中文地名),其余所有国家放行(含海外中文博主)。后端参数名保留 exclude_chinese。
   const [excludeChinese, setExcludeChinese] = useState(true);
+  // 手动收藏:搜到≠自动归我。从「全网新发现」勾选若干 → 一键加入我的 MY KOL(收藏),由你挑。
+  const [pickedIds, setPickedIds] = useState<Set<number>>(() => new Set());
+  const [addingFav, setAddingFav] = useState(false);
+  const [favNote, setFavNote] = useState("");
+
+  function togglePick(id: number) {
+    setPickedIds((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+  async function addPickedToMyKol() {
+    if (!apiToken || !pickedIds.size) return;
+    setAddingFav(true);
+    setFavNote("");
+    const ids = [...pickedIds];
+    const results = await Promise.allSettled(ids.map((id) => favoriteKolPool(apiToken, id)));
+    const ok = results.filter((r) => r.status === "fulfilled").length;
+    setFavNote(ok === ids.length ? `已加入我的 MY KOL · ${ok} 人` : `加入 ${ok}/${ids.length}(其余失败,可重试)`);
+    setPickedIds(new Set());
+    setAddingFav(false);
+  }
 
   const inferredMode = useMemo(() => detectMode(input), [input]);
   const isBusy = state === "loading" || state === "executing";
@@ -2085,11 +2109,44 @@ export function SmartKolInputPanel({
                 重新全网查找
               </button>
             </div>
+            {pickedIds.size > 0 || favNote ? (
+              <div className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-emerald-300/25 bg-emerald-400/[0.08] px-2.5 py-1.5">
+                {pickedIds.size > 0 ? (
+                  <>
+                    <span className="text-[10.5px] font-medium text-emerald-100">已选 {pickedIds.size} 人</span>
+                    <button
+                      type="button"
+                      onClick={() => void addPickedToMyKol()}
+                      disabled={addingFav || !apiToken}
+                      className="inline-flex items-center gap-1 rounded border border-emerald-300/35 bg-emerald-500/[0.2] px-2 py-0.5 text-[10px] font-medium text-emerald-50 transition-colors hover:bg-emerald-500/[0.32] disabled:opacity-50"
+                    >
+                      {addingFav ? <Loader2 size={11} className="animate-spin" /> : <UserPlus size={11} />} 加入我的 MY KOL
+                    </button>
+                    <button type="button" onClick={() => setPickedIds(new Set())} className="text-[10px] text-slate-400 hover:text-slate-200">清空</button>
+                  </>
+                ) : null}
+                {favNote ? <span className="text-[10px] text-emerald-200/85">{favNote}</span> : null}
+              </div>
+            ) : null}
             {discoveryItems.length ? (
               <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                {discoveryItems.map((item, index) => (
-                  <RecallMiniItem key={`d-${item.kol_pool_id || item.handle || index}`} item={item} index={index + 1} onOpen={onOpenRecallItem} />
-                ))}
+                {discoveryItems.map((item, index) => {
+                  const pid = Number(item.kol_pool_id) || 0;
+                  const picked = pid > 0 && pickedIds.has(pid);
+                  return (
+                    <div key={`d-${item.kol_pool_id || item.handle || index}`} className="relative">
+                      <RecallMiniItem item={item} index={index + 1} onOpen={onOpenRecallItem} />
+                      {pid > 0 ? (
+                        <button
+                          type="button"
+                          onClick={(event) => { event.stopPropagation(); togglePick(pid); }}
+                          title={picked ? "已选 · 点击取消" : "勾选 → 一键加入我的 MY KOL"}
+                          className={`absolute right-1 top-1 z-10 flex h-5 w-5 items-center justify-center rounded border text-[10px] font-bold leading-none transition-colors ${picked ? "border-emerald-300/60 bg-emerald-500/90 text-white" : "border-white/25 bg-black/55 text-transparent hover:border-emerald-300/45 hover:text-emerald-200/60"}`}
+                        >✓</button>
+                      ) : null}
+                    </div>
+                  );
+                })}
               </div>
             ) : activeSearchSessionId ? (
               <div className="flex items-center gap-1.5 rounded-md border border-emerald-300/15 bg-black/15 px-2.5 py-2 text-[10.5px] text-emerald-100/80">
