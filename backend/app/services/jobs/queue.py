@@ -114,6 +114,18 @@ class RedisJobQueue(BaseJobQueue):
         now = _utcnow()
         payload_json = json.dumps(job["payload"], ensure_ascii=False)
         user_id = int(job["payload"].get("user_id") or 0)
+        # R21 留痕:谁触发(payload.staff_id 优先,回退 user_id)+ 任务链上下文(为什么)。
+        triggered_by = int(job["payload"].get("staff_id") or user_id or 0) or None
+        task_chain_json = json.dumps(
+            {
+                "job_type": job["job_type"],
+                "reason": job["payload"].get("reason"),
+                "category": job["payload"].get("category"),
+                "endpoint": job["payload"].get("endpoint"),
+            },
+            ensure_ascii=False,
+            default=str,
+        )
         columns = [
             "task_id",
             "job_type",
@@ -126,6 +138,8 @@ class RedisJobQueue(BaseJobQueue):
             "updated_at",
             "stage",
             "extra_json",
+            "triggered_by_staff_id",
+            "task_chain_json",
         ]
         values: list[Any] = [
             job["task_id"],
@@ -139,6 +153,8 @@ class RedisJobQueue(BaseJobQueue):
             now,
             "ingest",
             json.dumps({}, ensure_ascii=False),
+            triggered_by,
+            task_chain_json,
         ]
         if job.get("priority") is not None:
             columns.append("priority")
