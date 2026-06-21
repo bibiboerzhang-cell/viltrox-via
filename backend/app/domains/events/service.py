@@ -371,6 +371,31 @@ def remove_member(event_id: str, user_id: Any, staff: dict[str, Any] | None) -> 
 
 
 # ── Tasks(含 collaborators / done_by 多人协作)──────────────────────────────
+def _normalize_due_date(raw: Any) -> str | None:
+    """各种来路的日期 → ISO YYYY-MM-DD;TBD/空/无法解析 → None(绝不把坏值塞进 DATE 列)。
+
+    修因:前端曾把 due_date 传成 "06/21"(MM/DD)直进 Postgres DATE → invalid input syntax。
+    """
+    import re
+    from datetime import datetime, timezone
+
+    s = str(raw or "").strip()
+    if not s or s.upper() in {"TBD", "TBA", "N/A", "NULL"} or s in {"待定", "未定"}:
+        return None
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", s):
+        return s
+    cur_year = datetime.now(timezone.utc).year
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%m/%d/%Y", "%Y.%m.%d", "%m/%d", "%m-%d"):
+        try:
+            dt = datetime.strptime(s, fmt)
+            if fmt in ("%m/%d", "%m-%d"):
+                dt = dt.replace(year=cur_year)
+            return dt.strftime("%Y-%m-%d")
+        except Exception:
+            continue
+    return None
+
+
 def add_task(event_id: str, payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
     conn = get_conn()
     tid = str(payload.get("id") or _gen_id("tsk"))
@@ -383,7 +408,7 @@ def add_task(event_id: str, payload: dict[str, Any], staff: dict[str, Any] | Non
         (
             tid, str(event_id), str(payload.get("title") or ""), str(payload.get("phase") or "prep"),
             str(payload.get("owner") or ""), _dumps(payload.get("collaborators") or []),
-            payload.get("due_date"), str(payload.get("kind") or "task"),
+            _normalize_due_date(payload.get("due_date")), str(payload.get("kind") or "task"),
             _dumps(payload.get("checklist") or []), _dumps(payload.get("details") or {}),
         ),
     )
@@ -399,7 +424,7 @@ def update_task(event_id: str, task_id: str, payload: dict[str, Any], staff: dic
     for key in ("title", "phase", "owner", "due_date", "kind"):
         if key in payload:
             sets.append(f"{key} = ?")
-            vals.append(payload[key])
+            vals.append(_normalize_due_date(payload[key]) if key == "due_date" else payload[key])
     if "done" in payload:
         sets.append("done = ?")
         vals.append(bool(payload["done"]))
