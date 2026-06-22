@@ -93,6 +93,7 @@ export default function AiGenerateTasksModal({ ev, existingTitles, onClose, onSu
                       existed && e("span", { className: "text-[9px] text-slate-500" }, "已存在"),
                       t.kind && (() => {
                         const kc = TASK_KINDS[t.kind];
+                        if (!kc) return null;  // 未知 kind 无配置 → 不渲染标,避免 undefined.icon 崩
                         const KI = kc.icon;
                         return e("span", { className: "text-[9px] px-1 py-0.5 rounded flex items-center gap-0.5", style: { background: kc.color + "20", color: kc.color } },
                           e(KI, { size: 8 }), kc.label

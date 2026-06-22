@@ -209,6 +209,7 @@ export default function TasksTab({ ev, currentUser, token, tasks = [], loading, 
                       e("span", { className: `text-[11.5px] ${t.done ? "text-slate-500 line-through" : "text-white"}` }, t.title),
                       t.kind && (() => {
                         const kc = TASK_KINDS[t.kind];
+                        if (!kc) return null;  // 未知 kind(如通用 "task")无配置 → 不渲染标,避免 undefined.icon 整页崩
                         const KI = kc.icon;
                         return e("span", { className: "text-[9px] px-1 py-0.5 rounded font-medium flex items-center gap-0.5", style: { background: kc.color + "20", color: kc.color } },
                           e(KI, { size: 8 }), kc.label

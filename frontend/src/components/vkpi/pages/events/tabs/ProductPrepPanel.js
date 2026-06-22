@@ -30,7 +30,7 @@ export default function ProductPrepPanel({ ev, stock, token, products: productsP
   const need = products.filter(p => PRODUCT_SOURCES[p.source]?.side === "need");
   
   function renderRow(p) {
-    const cat = PRODUCT_CATEGORIES[p.category];
+    const cat = PRODUCT_CATEGORIES[p.category] || { label: p.category || "其他", icon: Package, color: "#94a3b8" };
     const CI = cat.icon;
     const src = PRODUCT_SOURCES[p.source];
     const st = ITEM_STATUS[p.status] || { label: p.status, color: "#94a3b8" };

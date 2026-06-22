@@ -61,7 +61,7 @@ export default function BudgetExpensesTab({ ev, currentUser, token, expenses: ra
         ),
         e("div", { className: "rounded-lg border border-white/[0.06] bg-white/[0.012] overflow-hidden" },
           categoryEntries.filter(([k, v]) => v.plan > 0 || v.spent > 0).map(([k, v]) => {
-            const cfg = EXPENSE_CATEGORIES[k];
+            const cfg = EXPENSE_CATEGORIES[k] || EXPENSE_CATEGORIES.other;
             const Icon = cfg.icon;
             const pct = v.plan > 0 ? Math.round(v.spent / v.plan * 100) : 0;
             const overBudget = v.spent > v.plan;
