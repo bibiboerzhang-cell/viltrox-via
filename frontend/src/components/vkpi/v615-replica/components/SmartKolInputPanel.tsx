@@ -1790,7 +1790,9 @@ export function SmartKolInputPanel({
         limit: 10,
         creatorQuota: 7,
         reviewerQuota: 3,
-        createSession: true,
+        // 不建会话:紧跟的 queueTextAdvance 会建唯一会话并落库内召回+全网发现全部项。
+        // 这里再建会话只会留下一条空会话(0 项)→ 历史里每次搜索出现两条(就是「反复重复」的真因之一)。
+        createSession: false,
         excludeChinese,
         timeoutMs: 60000,
       });
