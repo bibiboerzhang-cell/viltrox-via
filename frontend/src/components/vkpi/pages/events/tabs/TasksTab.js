@@ -154,7 +154,9 @@ export default function TasksTab({ ev, currentUser, token, tasks = [], loading, 
         const phaseTasks = visible.filter(t => t.phase === phase);
         if (phaseTasks.length === 0) return null;
         const phaseDone = phaseTasks.filter(t => t.done).length;
-        const cfg = PHASE_LABELS[phase];
+        // phases 含 "prep" 但 PHASE_LABELS 无此 key(后端无 phase 默认 'prep')→ 兜底,
+        // 否则 cfg.label(下方)对 undefined 取值会整页崩。未知 phase 用原值当标签。
+        const cfg = PHASE_LABELS[phase] || { label: phase === "prep" ? "筹备" : phase, dateRange: "" };
         const allDone = phaseDone === phaseTasks.length;
         const inProgress = phaseDone > 0 && phaseDone < phaseTasks.length;
         
