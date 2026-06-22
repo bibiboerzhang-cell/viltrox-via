@@ -21,7 +21,7 @@ except ImportError:
 
 from app.core.constants import VILTROX_CATALOG_PROMPT
 from app.services.scoring.core import compute_weighted_scores, get_vertical
-from app.services.scraping.ytdlp import YTDLP_AVAILABLE, YTDLP_PROXY, fetch_youtube_subtitles
+from app.services.scraping.ytdlp import YTDLP_AVAILABLE, YTDLP_BIN, YTDLP_PROXY, fetch_youtube_subtitles
 from app.services.scoring.creator import get_creator_profile
 from app.services.scoring.verticals import apply_learned_weights
 from app.platform import llm_gateway
@@ -1645,7 +1645,7 @@ vlog类：真实感、器材自然使用是核心
             logger.info("gemini_fileapi_download_start", extra={"url": url})
 
             dl_cmd = [
-                "yt-dlp",
+                YTDLP_BIN,  # 解析好的全路径(.venv/bin/yt-dlp);裸 'yt-dlp' 在 worker PATH 上找不到 → media_resolve_failed
                 "-f", "best[ext=mp4][height<=720]/18/best[height<=720]/best",
                 "--merge-output-format", "mp4",
                 "-o", tmp_path,

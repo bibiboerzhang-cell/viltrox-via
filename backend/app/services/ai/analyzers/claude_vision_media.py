@@ -11,7 +11,7 @@ from pathlib import Path
 
 from app.core.constants import USER_AGENT
 from app.core.logging import get_logger
-from app.services.scraping.ytdlp import YTDLP_AVAILABLE
+from app.services.scraping.ytdlp import YTDLP_AVAILABLE, YTDLP_BIN
 
 logger = get_logger(__name__)
 
@@ -115,7 +115,7 @@ def fetch_all_images_from_post(url: str, og_image: str = "") -> list[str]:
         try:
             with tempfile.TemporaryDirectory() as tmpdir:
                 cmd = [
-                    "yt-dlp",
+                    YTDLP_BIN,  # 全路径;裸 'yt-dlp' 在 worker PATH 上找不到
                     "--no-playlist",
                     "-f", "jpg/png/webp/best",
                     "--write-thumbnail",
