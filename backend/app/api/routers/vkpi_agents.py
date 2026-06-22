@@ -46,3 +46,17 @@ def read_plan(
     if item is None:
         raise HTTPException(status_code=404, detail="plan not found")
     return item
+
+
+@router.get("/kol/{kol_pool_id}/provenance")
+def kol_provenance(
+    kol_pool_id: int,
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict[str, Any]:
+    """路线3 · 系统"为什么记住这个 KOL"(视频/深析/项目/ROI/漏斗 provenance,只读)。
+
+    让 Agent 建议能引用来源(来自哪条视频 / 哪个项目),而非只看实时 query。零触 viltrox_fit_score。
+    """
+    from app.domains.memory import provenance
+
+    return provenance.get_kol_provenance(int(kol_pool_id), staff=staff)
