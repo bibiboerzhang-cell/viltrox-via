@@ -23,6 +23,12 @@ export interface ActionInboxItem {
   owner_staff_id: number | null;
   reason: string;
   payload_json: Record<string, unknown>;
+  // 路线0 决策四件套 + 验收回执(迁移179;旧行回退默认)。
+  expected_gain?: string;
+  risk_level?: "low" | "medium" | "high" | string;
+  evidence_refs_json?: Array<Record<string, unknown>>;
+  result_checklist_json?: Record<string, unknown>;
+  approval_reason?: string;
   status: string;
   created_at: string;
   updated_at: string;

@@ -70,6 +70,13 @@ const PRIORITY_META = {
   low: { label: "低", cls: "bg-slate-500/15 text-slate-300 border-slate-500/25" },
 };
 
+// 路线0:风险等级徽标(执行该动作的风险,独立于优先级)。
+const RISK_META: Record<string, { label: string; cls: string }> = {
+  high: { label: "风险高", cls: "bg-rose-500/15 text-rose-300 border-rose-500/25" },
+  medium: { label: "风险中", cls: "bg-orange-500/15 text-orange-300 border-orange-500/25" },
+  low: { label: "风险低", cls: "bg-emerald-500/12 text-emerald-300/80 border-emerald-500/20" },
+};
+
 export function ActionInboxPanel({ apiToken = "", limit = 6 }) {
   const [items, setItems] = React.useState<any[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -185,7 +192,12 @@ export function ActionInboxPanel({ apiToken = "", limit = 6 }) {
               const cat = res?.category || it.category || "";
               const label = (CATEGORY_META as any)[cat]?.label || cat;
               const lid = res?.ledger_id ? ` · 台账#${res.ledger_id}` : "";
-              setOkNote(`已执行 · ${label}${lid} · 进 ledger`);
+              // 路线0 验收回执:执行后立即反馈 几个 job / 写几行 / 是否花钱。
+              const ck: any = res?.detail?.result_checklist;
+              const ckStr = ck
+                ? ` · job ${ck.jobs_created ?? 0}/写 ${ck.rows_written ?? 0}行${ck.cost_spent_cents ? `/花 $${(Number(ck.cost_spent_cents) / 100).toFixed(2)}` : "/未花钱"}`
+                : "";
+              setOkNote(`已执行 · ${label}${ckStr}${lid}`);
               setActionError("");
               removeItem(it.id);
               if (ledgerOpen) loadLedger();
@@ -364,6 +376,9 @@ export function ActionInboxPanel({ apiToken = "", limit = 6 }) {
       items.slice(0, expanded ? items.length : COLLAPSED_COUNT).map((it: any) => {
         const meta = (CATEGORY_META as any)[it.category] || { label: it.category, Icon: ListChecks, color: "text-slate-300" };
         const pr = (PRIORITY_META as any)[it.priority] || PRIORITY_META.low;
+        const risk = (RISK_META as any)[it.risk_level] || null;
+        const ck = (it.result_checklist_json && typeof it.result_checklist_json === "object") ? it.result_checklist_json : null;
+        const costCents = Number(it.estimated_cost_cents || 0) || 0;
         return e(
           "div",
           {
@@ -380,12 +395,32 @@ export function ActionInboxPanel({ apiToken = "", limit = 6 }) {
               e("span", { className: "truncate text-[11px] font-medium text-white" }, it.title),
             ),
             e(
-              "span",
-              { className: `shrink-0 rounded border px-1 py-0.5 text-[8px] ${pr.cls}` },
-              pr.label,
+              "div",
+              { className: "flex shrink-0 items-center gap-1" },
+              risk ? e("span", { className: `rounded border px-1 py-0.5 text-[8px] ${risk.cls}` }, risk.label) : null,
+              e("span", { className: `rounded border px-1 py-0.5 text-[8px] ${pr.cls}` }, pr.label),
             ),
           ),
           e("div", { className: "mt-0.5 line-clamp-2 text-[10px] text-slate-400" }, it.detail),
+          // 路线0 决策四件套:收益 + 成本(为什么=reason 已在 detail 上方语义里;此处补收益/成本)
+          (it.expected_gain || costCents > 0)
+            ? e(
+                "div",
+                { className: "mt-1 flex items-center gap-2 text-[9px]" },
+                it.expected_gain ? e("span", { className: "truncate text-emerald-300/80" }, `收益:${it.expected_gain}`) : null,
+                costCents > 0 ? e("span", { className: "shrink-0 text-amber-300/70" }, `约 $${(costCents / 100).toFixed(2)}`) : null,
+              )
+            : null,
+          // 路线0 验收回执:已执行项展示标准化结果(几个 job / 写几行 / 是否花钱 / 失败原因)
+          (it.status === "executed" && ck)
+            ? e(
+                "div",
+                { className: "mt-1 rounded border border-emerald-500/15 bg-emerald-500/[0.05] px-1.5 py-1 text-[9px] text-emerald-300/85" },
+                `验收:${ck.outcome || "success"} · job ${ck.jobs_created ?? 0} · 写 ${ck.rows_written ?? 0} 行` +
+                  (ck.cost_spent_cents ? ` · 花 $${(Number(ck.cost_spent_cents) / 100).toFixed(2)}` : " · 未花钱") +
+                  (ck.failed_reason ? ` · ${ck.failed_reason}` : ""),
+              )
+            : null,
           // 红线提示:需人审 / 烧 LLM 的动作明示(approve 时会二次确认)
           (it.requires_approval || it.uses_llm)
             ? e(

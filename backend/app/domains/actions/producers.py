@@ -14,6 +14,22 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 
+# 路线0:每类建议的「预计收益(人话)+ 风险等级」默认(producer 可覆盖)。
+# 风险=执行该动作的风险(非优先级);收益=做了能带来什么。让每条建议都自带决策四件套。
+_CATEGORY_GAIN_RISK: dict[str, tuple[str, str]] = {
+    "kol_profile": ("补全资料后可纳入项目 / 提升触达准确度", "low"),
+    "deep_missing": ("补深析后可判断合作价值与产品契合度", "low"),
+    "failed_retry": ("重试恢复抓取,避免数据断流", "low"),
+    "project_observation": ("开观察窗后自动追踪 KOL 发布", "low"),
+    "content_candidate": ("确认内容归属后纳入 ROI / 复盘", "low"),
+    "retrospective": ("复盘沉淀经验,影响下次推荐", "low"),
+    "kol_profile_refresh": ("增量刷新画像,保持数据新鲜", "low"),
+    "event_followup": ("回填活动数据后闭环效果评估", "medium"),
+    "inventory_low": ("及时补货避免影响寄送 / 活动", "medium"),
+    "project_shared_to_you": ("查看共享项目,协作跟进", "low"),
+}
+
+
 # ── suggestion 构造 ───────────────────────────────────────────────────
 def make_suggestion(
     *,
@@ -32,8 +48,23 @@ def make_suggestion(
     requires_approval: bool = True,
     owner_staff_id: int | None = None,
     payload: dict[str, Any] | None = None,
+    expected_gain: str = "",
+    risk_level: str = "",
+    evidence_refs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """统一一条建议的结构(字段与 vkpi_action_inbox 列对齐)。touches_v6_fit 永不出现——表 CHECK 兜底。"""
+    """统一一条建议的结构(字段与 vkpi_action_inbox 列对齐)。touches_v6_fit 永不出现——表 CHECK 兜底。
+
+    路线0:决策四件套 = reason(为什么)+ estimated_cost_cents(成本)+ expected_gain(收益)+
+    risk_level(风险)+ evidence_refs(证据来源)。收益/风险缺省按 category 取合理默认;证据缺省
+    指向实体本身({type:entity_type,id:entity_id}),让每条建议都可追溯到来源数据。
+    """
+    gain_default, risk_default = _CATEGORY_GAIN_RISK.get(category, ("", "low"))
+    gain = (expected_gain or gain_default).strip()
+    rl = (risk_level or risk_default).strip().lower()
+    rl = rl if rl in ("low", "medium", "high") else "low"
+    refs = list(evidence_refs) if isinstance(evidence_refs, list) else []
+    if not refs and entity_type and str(entity_id):
+        refs = [{"type": str(entity_type), "id": str(entity_id)}]
     return {
         "category": category,
         "dedupe_key": dedupe_key,
@@ -51,6 +82,10 @@ def make_suggestion(
         "requires_approval": bool(requires_approval or uses_llm or writes_business_data),
         "owner_staff_id": int(owner_staff_id) if owner_staff_id not in (None, "", 0) else None,
         "payload": payload or {},
+        # 路线0 决策四件套(收益/风险/证据)。
+        "expected_gain": gain,
+        "risk_level": rl,
+        "evidence_refs": refs,
     }
 
 

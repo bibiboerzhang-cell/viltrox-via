@@ -422,10 +422,15 @@ def execute_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[
     reason = str(outcome_obj.get("reason") or "")
     detail = outcome_obj.get("detail") or {}
 
-    # 4. 落 ledger + 置 action 终态。
+    # 路线0:标准化验收回执(谁/几个 job / 写几行 / 失败原因 / 是否花钱)。
+    checklist = _build_result_checklist(action, outcome=outcome, reason=reason, detail=detail)
+    detail = {**detail, "result_checklist": checklist}
+
+    # 4. 落 ledger(含回执)+ 写回执到 action 行 + 置 action 终态。
     lid = _write_ledger(
         action=action, action_id=action_id, staff=staff, outcome=outcome, error=reason if outcome != "success" else "", detail=detail
     )
+    inbox.set_result_checklist(action_id, checklist)
     if outcome == "success":
         inbox.set_status(action_id, "executed")
         # R8:成功执行 → 写回 vkpi_memory_feedback 埋种(②学习闭环);best-effort,不阻断返回。
@@ -436,3 +441,40 @@ def execute_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[
         return _result(ok=False, outcome="failed", category=category, reason=reason, ledger_id=lid, detail=detail)
     # skipped:不改 action 状态(仍 approved,人可再处理或 dismiss)。
     return _result(ok=False, outcome="skipped", category=category, reason=reason, ledger_id=lid, detail=detail)
+
+
+def _build_result_checklist(
+    action: dict[str, Any], *, outcome: str, reason: str, detail: dict[str, Any] | None
+) -> dict[str, Any]:
+    """路线0:从 executor 的 detail 提炼标准化验收回执(谁都能一眼看懂执行后发生了什么)。
+
+    jobs_created:enqueue/requeue 命中算 1;rows_written:created_windows 等列表长度;
+    cost_spent_cents:仅成功且 uses_llm 才计预估成本(真实消耗仍以 cost ledger 为准);
+    wrote_business_data:仅成功且建议标记写业务表才为真。绝不臆造数字。
+    """
+    d = detail if isinstance(detail, dict) else {}
+    jobs = 0
+    enq = d.get("enqueue")
+    if isinstance(enq, dict) and (enq.get("job") or enq.get("job_id") or enq.get("id")):
+        jobs += 1
+    if isinstance(d.get("enqueue"), dict) and str(d["enqueue"].get("status") or "") in ("queued", "already_queued", "already_running"):
+        jobs = max(jobs, 1)
+    if d.get("requeued"):
+        jobs += 1
+    rows = 0
+    for key in ("created_windows", "created", "created_posts"):
+        val = d.get(key)
+        if isinstance(val, list):
+            rows += len(val)
+    success = outcome == "success"
+    uses_llm = bool(action.get("uses_llm"))
+    cost = int(action.get("estimated_cost_cents") or 0) if (success and uses_llm) else 0
+    return {
+        "outcome": outcome,
+        "wrote_business_data": bool(action.get("writes_business_data")) and success,
+        "jobs_created": jobs,
+        "rows_written": rows,
+        "cost_spent_cents": cost,
+        "failed_reason": reason if not success else "",
+        "acknowledged": bool(d.get("acknowledged")),
+    }

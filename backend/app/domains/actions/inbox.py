@@ -78,8 +78,10 @@ def generate_daily_action_inbox(
                     INSERT INTO {_TABLE}
                       (dedupe_key, category, title, detail, priority, entity_type, entity_id,
                        suggested_endpoint, estimated_cost_cents, writes_business_data, uses_llm,
-                       requires_approval, owner_staff_id, reason, payload_json, status, created_at, updated_at)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::jsonb,'suggested',NOW(),NOW())
+                       requires_approval, owner_staff_id, reason, payload_json,
+                       expected_gain, risk_level, evidence_refs_json,
+                       status, created_at, updated_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,?,?::jsonb,'suggested',NOW(),NOW())
                     ON CONFLICT (dedupe_key) DO UPDATE SET
                        title = EXCLUDED.title,
                        detail = EXCLUDED.detail,
@@ -92,6 +94,9 @@ def generate_daily_action_inbox(
                        owner_staff_id = EXCLUDED.owner_staff_id,
                        reason = EXCLUDED.reason,
                        payload_json = EXCLUDED.payload_json,
+                       expected_gain = EXCLUDED.expected_gain,
+                       risk_level = EXCLUDED.risk_level,
+                       evidence_refs_json = EXCLUDED.evidence_refs_json,
                        updated_at = NOW()
                     WHERE {_TABLE}.status = 'suggested'
                     """,
@@ -111,6 +116,9 @@ def generate_daily_action_inbox(
                         s["owner_staff_id"],
                         s["reason"],
                         _dumps(s["payload"]),
+                        s.get("expected_gain", ""),
+                        s.get("risk_level", "low"),
+                        _dumps(s.get("evidence_refs", [])),
                     ),
                 )
                 persisted += 1
@@ -179,7 +187,9 @@ def list_inbox(
         f"""
         SELECT id, dedupe_key, category, title, detail, priority, entity_type, entity_id,
                suggested_endpoint, estimated_cost_cents, writes_business_data, uses_llm,
-               requires_approval, owner_staff_id, reason, payload_json, status, created_at, updated_at
+               requires_approval, owner_staff_id, reason, payload_json,
+               expected_gain, risk_level, evidence_refs_json, result_checklist_json, approval_reason,
+               status, created_at, updated_at
         FROM {_TABLE}
         WHERE {' AND '.join(where)}
         ORDER BY
@@ -195,6 +205,8 @@ def list_inbox(
     for r in rows:
         row = dict(r)
         row["payload_json"] = _loads(row.get("payload_json"))
+        row["evidence_refs_json"] = _loads(row.get("evidence_refs_json"))
+        row["result_checklist_json"] = _loads(row.get("result_checklist_json"))
         counts[row["category"]] = counts.get(row["category"], 0) + 1
         items.append(row)
 
@@ -281,8 +293,9 @@ def read_execution_ledger(
 _INBOX_COLUMNS = (
     "id, dedupe_key, category, title, detail, priority, entity_type, entity_id, "
     "suggested_endpoint, estimated_cost_cents, writes_business_data, uses_llm, "
-    "requires_approval, owner_staff_id, reason, payload_json, status, "
-    "touches_v6_fit, created_at, updated_at"
+    "requires_approval, owner_staff_id, reason, payload_json, "
+    "expected_gain, risk_level, evidence_refs_json, result_checklist_json, approval_reason, "
+    "status, touches_v6_fit, created_at, updated_at"
 )
 
 # 人可发起的流转目标(executed/failed 仅由 executor 内部 set_status 用,不开放给 _transition)。
@@ -316,6 +329,8 @@ def get_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[str,
         if owner is None or int(owner) != int(scope.actor_staff_id(staff)):
             return None
     item["payload_json"] = _loads(item.get("payload_json"))
+    item["evidence_refs_json"] = _loads(item.get("evidence_refs_json"))
+    item["result_checklist_json"] = _loads(item.get("result_checklist_json"))
     return item
 
 
@@ -419,3 +434,20 @@ def set_status(action_id: int, status: str) -> None:
         conn.commit()
     except Exception:
         logger.warning("action_inbox.set_status_failed", extra={"action_id": action_id, "status": status}, exc_info=True)
+
+
+def set_result_checklist(action_id: int, checklist: dict[str, Any]) -> None:
+    """路线0:executor 执行后把标准化验收回执写回本 action 行(只动 result_checklist_json + updated_at)。
+
+    回执 = {outcome, wrote_business_data, jobs_created, rows_written, cost_spent_cents, failed_reason, ...}。
+    best-effort:写失败只 warning,不影响 execute_action 返回(回执也已落 ledger.detail_json)。
+    """
+    try:
+        conn = get_conn()
+        conn.execute(
+            f"UPDATE {_TABLE} SET result_checklist_json = ?::jsonb, updated_at = NOW() WHERE id = ?",
+            (_dumps(checklist or {}), int(action_id)),
+        )
+        conn.commit()
+    except Exception:
+        logger.warning("action_inbox.set_result_checklist_failed", extra={"action_id": action_id}, exc_info=True)
