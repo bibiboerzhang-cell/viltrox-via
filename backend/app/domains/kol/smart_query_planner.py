@@ -391,8 +391,10 @@ Rules:
     response = llm_gateway.invoke(
         prompt,
         purpose="kol_smart_search_query_plan",
-        # 1200 tokens:留足结构化 JSON 空间,避免 provider 思考/前言吃掉/截断输出(实测 700 截断)。
-        max_output_tokens=1200,
+        # 4096 tokens:Gemini 思考模型的「思考 token」与 JSON 输出共享 max_output_tokens 预算,
+        # 1200 仍被思考吃光 → JSON 在 ~668 字符处截断 → _extract_json 解析失败 → 退泛词
+        # (「找谁都出同一批摄影师」的真因)。4096 留足思考+完整 JSON;实测 fallback_used 消除、检索词按产品差异化。
+        max_output_tokens=4096,
         preferred_provider=str(body.get("llm_provider") or DEFAULT_PLANNER_PROVIDER),
         cost_tag="kol_smart_search_query_plan",
         metadata={
