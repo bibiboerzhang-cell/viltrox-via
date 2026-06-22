@@ -123,6 +123,15 @@ def get_event(event_id: str, staff=Depends(require_tab("vkpi", "read"))):
     return _guard(service.get_event_detail, event_id, staff)
 
 
+@router.get("/{event_id}/retrospective")
+def event_retrospective(event_id: str, staff=Depends(require_tab("vkpi", "read"))):
+    """路线4 · 活动复盘聚合(预算/任务/邀约/结果 + 待补数据,只读)。"""
+    _assert_read(event_id, staff)
+    from app.domains.events import retrospective
+
+    return _guard(retrospective.aggregate_event_retrospective, event_id, staff)
+
+
 @router.post("")
 def create_event(body: dict, staff=Depends(require_tab("vkpi", "write"))):
     return _guard(service.create_event, body or {}, staff)
