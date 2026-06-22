@@ -37,15 +37,9 @@ export default function TasksTab({ ev, currentUser, token, tasks = [], loading, 
       .catch(onErr("删除任务失败"));
   }
 
-  // 权限过滤: 管理层/Admin 看本活动全部任务(与后端「管理层看全部」一致);员工只看自己相关的。
-  const isManager = !!(currentUser && (currentUser.role === "admin" || currentUser.isManager || currentUser.is_owner || currentUser.isAdmin));
-  const visible = tasksState.filter(t => {
-    if (isManager) return true;
-    if (t.owner === "All") return true;
-    if (t.owner === currentUser.initial) return true;
-    if ((t.collaborators || []).includes(currentUser.initial)) return true;
-    return false;
-  });
+  // 任务板:能进这个 Event 就看完整任务板 → 渲染全部任务;owner 仅作每条「归属」展示,不再用来隐藏。
+  // (旧 own-only 过滤把 owner='J' 占位等"非本人"任务全藏了 → 20 项只显示 2 项、新建任务看不到 的根因)
+  const visible = tasksState;
 
   function toggleTask(id) {
     const cur = tasksState.find(t => t.id === id);
@@ -91,7 +85,9 @@ export default function TasksTab({ ev, currentUser, token, tasks = [], loading, 
 
   function createTask(t) {
     setShowNew(false);
-    addEventTask(token, ev.id, fromUiTaskCreate(t))
+    // NewTaskModal owner 默认写死 "J"(占位,无对应真人)→ 归属错人。占位/空 → 改派当前用户。
+    const owned = { ...t, owner: (t.owner && t.owner !== "J") ? t.owner : ((currentUser && currentUser.initial) || "All") };
+    addEventTask(token, ev.id, fromUiTaskCreate(owned))
       .then(() => reload && reload())
       .catch(onErr("新建任务失败"));
   }
@@ -116,7 +112,7 @@ export default function TasksTab({ ev, currentUser, token, tasks = [], loading, 
     e("div", { className: "mb-4 rounded-xl border border-purple-500/20 bg-purple-500/[0.04] p-3 flex items-center justify-between gap-3" },
       e("div", { className: "flex-1" },
         e("div", { className: "text-[11px] text-purple-200 font-semibold mb-0.5 flex items-center gap-1.5" },
-          "我的任务进度 ",
+          "任务进度 ",
           e("span", { className: "text-[9.5px] px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-200" },
             "视角: ", currentUser.name
           )
@@ -148,8 +144,8 @@ export default function TasksTab({ ev, currentUser, token, tasks = [], loading, 
     
     visible.length === 0 && e("div", { className: "rounded-lg border border-white/[0.06] bg-white/[0.012] p-10 text-center" },
       e(ShieldCheck, { size: 28, className: "text-slate-600 mx-auto mb-2" }),
-      e("div", { className: "text-[11.5px] text-slate-400" }, currentUser.name, " 没有分配到这个 Event 的任务"),
-      e("div", { className: "text-[10px] text-slate-500 mt-1" }, "你看不到其他人的任务 (权限隔离)")
+      e("div", { className: "text-[11.5px] text-slate-400" }, "这个 Event 还没有任务"),
+      e("div", { className: "text-[10px] text-slate-500 mt-1" }, "点「任务模板」一键导入,或「新建任务」手动添加")
     ),
     
     // 分阶段任务
