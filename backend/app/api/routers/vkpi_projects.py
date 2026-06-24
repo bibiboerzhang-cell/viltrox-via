@@ -284,6 +284,57 @@ def pipeline_readiness(staff=Depends(require_tab("vkpi", "read"))):
     return pipeline_sequence.pipeline_readiness(staff=staff)
 
 
+@router.get("/projects/shipping-approvals")
+def list_shipping_approvals(
+    status: str = "pending",
+    limit: int = 100,
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    """发货审批门槛:列待审/已审发货条目(成员只看自己请求的,管理层全看)。"""
+    from app.domains.projects import shipment_approval
+
+    return shipment_approval.list_pending(staff, status=status, limit=int(limit))
+
+
+@router.post("/projects/{project_id}/kols/{kol_pool_id}/shipping/request")
+def request_shipping_approval(
+    project_id: int,
+    kol_pool_id: int,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+):
+    """成员请求发货(进 pending 待管理员人审)。"""
+    from app.domains.projects import shipment_approval
+
+    return shipment_approval.request_approval(project_id, kol_pool_id, staff=staff, reason=str((body or {}).get("reason") or ""))
+
+
+@router.post("/projects/{project_id}/kols/{kol_pool_id}/shipping/approve")
+def approve_shipping(
+    project_id: int,
+    kol_pool_id: int,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+):
+    """管理层通过发货(非管理层 → admin_only)。"""
+    from app.domains.projects import shipment_approval
+
+    return shipment_approval.approve(project_id, kol_pool_id, staff=staff, reason=str((body or {}).get("reason") or ""))
+
+
+@router.post("/projects/{project_id}/kols/{kol_pool_id}/shipping/reject")
+def reject_shipping(
+    project_id: int,
+    kol_pool_id: int,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+):
+    """管理层驳回发货。"""
+    from app.domains.projects import shipment_approval
+
+    return shipment_approval.reject(project_id, kol_pool_id, staff=staff, reason=str((body or {}).get("reason") or ""))
+
+
 @router.post("/projects/{project_id}/content-posts/advance-retrospective")
 def advance_content_posts_to_retrospective(
     project_id: int,
