@@ -20,6 +20,9 @@ const AuditPage = lazy(() => import('./AuditPage').then((module) => ({ default: 
 const CampaignsPage = lazy(() => import('./CampaignsPage').then((module) => ({ default: module.CampaignsPage })));
 const CostsPage = lazy(() => import('./CostsPage').then((module) => ({ default: module.CostsPage })));
 const DataAnalysisPage = lazy(() => import('./DataAnalysisPage').then((module) => ({ default: module.DataAnalysisPage })));
+const IndustryBoardPage = lazy(() => import('./IndustryBoardPage').then((module) => ({ default: module.IndustryBoardPage })));
+const DataExportPage = lazy(() => import('./DataExportPage').then((module) => ({ default: module.DataExportPage })));
+const LearningPage = lazy(() => import('./LearningPage').then((module) => ({ default: module.LearningPage })));
 const DataQualityPage = lazy(() => import('./DataQualityPage').then((module) => ({ default: module.DataQualityPage })));
 const DiscoverPage = lazy(() => import('./DiscoverPage').then((module) => ({ default: module.DiscoverPage })));
 const IntelligenceCenterPage = lazy(() => import('./IntelligenceCenterPage').then((module) => ({ default: module.IntelligenceCenterPage })));
@@ -168,6 +171,9 @@ export function WorkspacePage(props: WorkspacePageProps) {
   if (props.page === 'productBattle' || props.page === 'analytics') page = <ProductBattlePage {...props} />;
   // 数据分析 - 双兼容: 旧 industryData 路由 + 新 dataAnalysis 路由都进 DataAnalysisPage
   if (props.page === 'dataAnalysis' || props.page === 'industryData') page = <DataAnalysisPage {...props} />;
+  if (props.page === 'industryBoard') page = <IndustryBoardPage apiToken={props.apiToken} />;
+  if (props.page === 'dataExport') page = <DataExportPage apiToken={props.apiToken} />;
+  if (props.page === 'learning') page = <LearningPage apiToken={props.apiToken} />;
   if (props.page === 'channels') page = <MyKolPage {...props} />;
   if (props.page === 'campaigns') page = <CampaignsPage {...props} />;
   if (props.page === 'dataQuality') page = <DataQualityPage {...props} />;
