@@ -411,14 +411,26 @@ export function ActionInboxPanel({ apiToken = "", limit = 6 }) {
                 costCents > 0 ? e("span", { className: "shrink-0 text-amber-300/70" }, `约 $${(costCents / 100).toFixed(2)}`) : null,
               )
             : null,
-          // 路线0 验收回执:已执行项展示标准化结果(几个 job / 写几行 / 是否花钱 / 失败原因)
+          // S1 验证计划:批准前可见"会这样验证成功"(suggested/approved 态显示首条)
+          (it.status !== "executed" && Array.isArray(it.verification_plan_json) && it.verification_plan_json.length)
+            ? e(
+                "div",
+                { className: "mt-1 flex items-start gap-1 text-[9px] text-sky-300/70" },
+                e("span", { className: "shrink-0" }, "验证:"),
+                e("span", { className: "line-clamp-1" }, it.verification_plan_json.join(" · ")),
+              )
+            : null,
+          // 路线0+S1 验收回执:已执行项展示标准化结果(job/写几行/是否花钱)+ 真 before/after delta
           (it.status === "executed" && ck)
             ? e(
                 "div",
                 { className: "mt-1 rounded border border-emerald-500/15 bg-emerald-500/[0.05] px-1.5 py-1 text-[9px] text-emerald-300/85" },
                 `验收:${ck.outcome || "success"} · job ${ck.jobs_created ?? 0} · 写 ${ck.rows_written ?? 0} 行` +
                   (ck.cost_spent_cents ? ` · 花 $${(Number(ck.cost_spent_cents) / 100).toFixed(2)}` : " · 未花钱") +
-                  (ck.failed_reason ? ` · ${ck.failed_reason}` : ""),
+                  (ck.failed_reason ? ` · ${ck.failed_reason}` : "") +
+                  (Array.isArray(ck.before_after) && ck.before_after.length
+                    ? " · " + ck.before_after.map((ba: any) => `${ba.table} ${ba.before}→${ba.after}(${ba.delta >= 0 ? "+" : ""}${ba.delta})`).join(" ")
+                    : ""),
               )
             : null,
           // 红线提示:需人审 / 烧 LLM 的动作明示(approve 时会二次确认)

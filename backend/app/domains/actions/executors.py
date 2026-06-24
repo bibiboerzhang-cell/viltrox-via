@@ -408,6 +408,10 @@ def execute_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[
         )
         return _result(ok=False, outcome="skipped", category=category, reason="unknown_category", ledger_id=lid)
 
+    # S1:执行前对 affected_tables 取真 COUNT(执行后再取一次做 before/after delta)。
+    affected_tables = action.get("affected_tables_json")
+    before_counts = _snapshot_table_counts(affected_tables)
+
     try:
         outcome_obj = handler(action, staff)
     except Exception as exc:
@@ -422,8 +426,13 @@ def execute_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[
     reason = str(outcome_obj.get("reason") or "")
     detail = outcome_obj.get("detail") or {}
 
-    # 路线0:标准化验收回执(谁/几个 job / 写几行 / 失败原因 / 是否花钱)。
-    checklist = _build_result_checklist(action, outcome=outcome, reason=reason, detail=detail)
+    # S1:执行后再取一次 COUNT → before/after delta(真验收,确认这条 action 真写了)。
+    after_counts = _snapshot_table_counts(affected_tables)
+    # 路线0+S1:标准化验收回执(谁/几个 job / 写几行 / 是否花钱 / 真 before-after delta / 失败原因)。
+    checklist = _build_result_checklist(
+        action, outcome=outcome, reason=reason, detail=detail,
+        before_counts=before_counts, after_counts=after_counts,
+    )
     detail = {**detail, "result_checklist": checklist}
 
     # 4. 落 ledger(含回执)+ 写回执到 action 行 + 置 action 终态。
@@ -443,14 +452,42 @@ def execute_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[
     return _result(ok=False, outcome="skipped", category=category, reason=reason, ledger_id=lid, detail=detail)
 
 
+_SNAPSHOT_ALLOWED_TABLES = {
+    "apify_jobs", "vkpi_kol_pool", "vkpi_project_content_observation_windows",
+    "vkpi_project_content_posts", "vkpi_action_execution_ledger",
+}
+
+
+def _snapshot_table_counts(tables: Any) -> dict[str, int]:
+    """S1:对 affected_tables 取真 COUNT(*)(只白名单表,只读,容错)。
+
+    用于执行前后对比 → before/after delta = 这条 action 真写了几行。只 COUNT 不改任何数据。
+    """
+    out: dict[str, int] = {}
+    if not isinstance(tables, list):
+        return out
+    for t in tables:
+        name = str(t or "").strip()
+        if name not in _SNAPSHOT_ALLOWED_TABLES or not table_exists(name):
+            continue
+        try:
+            row = get_conn().execute(f"SELECT COUNT(*) AS n FROM {name}").fetchone()
+            out[name] = int(dict(row).get("n") or 0) if row else 0
+        except Exception:
+            logger.debug("action_executor.snapshot_failed", extra={"table": name}, exc_info=True)
+    return out
+
+
 def _build_result_checklist(
-    action: dict[str, Any], *, outcome: str, reason: str, detail: dict[str, Any] | None
+    action: dict[str, Any], *, outcome: str, reason: str, detail: dict[str, Any] | None,
+    before_counts: dict[str, int] | None = None, after_counts: dict[str, int] | None = None,
 ) -> dict[str, Any]:
-    """路线0:从 executor 的 detail 提炼标准化验收回执(谁都能一眼看懂执行后发生了什么)。
+    """路线0+S1:从 executor 的 detail 提炼标准化验收回执(谁都能一眼看懂执行后发生了什么)。
 
     jobs_created:enqueue/requeue 命中算 1;rows_written:created_windows 等列表长度;
     cost_spent_cents:仅成功且 uses_llm 才计预估成本(真实消耗仍以 cost ledger 为准);
-    wrote_business_data:仅成功且建议标记写业务表才为真。绝不臆造数字。
+    wrote_business_data:仅成功且建议标记写业务表才为真。
+    S1 before_after:对 affected_tables 取执行前后真 COUNT delta(真验收,确认真写了)。绝不臆造数字。
     """
     d = detail if isinstance(detail, dict) else {}
     jobs = 0
@@ -477,4 +514,16 @@ def _build_result_checklist(
         "cost_spent_cents": cost,
         "failed_reason": reason if not success else "",
         "acknowledged": bool(d.get("acknowledged")),
+        # S1:真 before/after delta(每个 affected_table 执行前后行数变化)。
+        "before_after": _diff_counts(before_counts or {}, after_counts or {}),
     }
+
+
+def _diff_counts(before: dict[str, int], after: dict[str, int]) -> list[dict[str, Any]]:
+    """组装 before/after delta 列表(只对两端都取到的表)。"""
+    rows: list[dict[str, Any]] = []
+    for tbl in sorted(set(before) | set(after)):
+        b = int(before.get(tbl, 0))
+        a = int(after.get(tbl, 0))
+        rows.append({"table": tbl, "before": b, "after": a, "delta": a - b})
+    return rows

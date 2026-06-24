@@ -227,6 +227,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "178_job_execution_ledger_audit_trail.sql",
     "179_vkpi_action_inbox_decision_fields.sql",
     "180_vkpi_agent_orchestration.sql",
+    "181_vkpi_action_inbox_verification.sql",
 )
 
 try:

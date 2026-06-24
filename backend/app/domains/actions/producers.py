@@ -29,6 +29,20 @@ _CATEGORY_GAIN_RISK: dict[str, tuple[str, str]] = {
     "project_shared_to_you": ("查看共享项目,协作跟进", "low"),
 }
 
+# S1:每类建议的「执行前验证计划(怎么算成功)+ 影响表」默认(producer 可覆盖)。
+# verification_plan = 批准前看"会这样验";affected_tables = executor 据此取执行前后真 COUNT 做 before/after。
+_CATEGORY_VERIFY: dict[str, tuple[list[str], list[str]]] = {
+    "kol_profile": (["入 apify_jobs profile 抓取队列", "回来后 profile_url/email 应非空"], ["apify_jobs"]),
+    "deep_missing": (["入 apify_jobs 深析队列(去重)"], ["apify_jobs"]),
+    "failed_retry": (["失败任务回 queued 态,可被 worker 重领"], ["apify_jobs"]),
+    "project_observation": (["为已签收派单开观察窗口"], ["vkpi_project_content_observation_windows"]),
+    "content_candidate": (["内容帖候选标 matched 纳入复盘"], ["vkpi_project_content_posts"]),
+    "retrospective": (["复盘聚合作业入队(只排队不跑 LLM)"], ["apify_jobs"]),
+    "event_followup": (["受理活动收尾提醒并留痕(真数据仍人工回填)"], ["vkpi_action_execution_ledger"]),
+    "inventory_low": (["受理库存预警并留痕(补货仍人工)"], ["vkpi_action_execution_ledger"]),
+    "project_shared_to_you": (["确认已查看共享项目"], []),
+}
+
 
 # ── suggestion 构造 ───────────────────────────────────────────────────
 def make_suggestion(
@@ -51,17 +65,23 @@ def make_suggestion(
     expected_gain: str = "",
     risk_level: str = "",
     evidence_refs: list[dict[str, Any]] | None = None,
+    verification_plan: list[str] | None = None,
+    affected_tables: list[str] | None = None,
 ) -> dict[str, Any]:
     """统一一条建议的结构(字段与 vkpi_action_inbox 列对齐)。touches_v6_fit 永不出现——表 CHECK 兜底。
 
     路线0:决策四件套 = reason(为什么)+ estimated_cost_cents(成本)+ expected_gain(收益)+
-    risk_level(风险)+ evidence_refs(证据来源)。收益/风险缺省按 category 取合理默认;证据缺省
-    指向实体本身({type:entity_type,id:entity_id}),让每条建议都可追溯到来源数据。
+    risk_level(风险)+ evidence_refs(证据来源)。
+    S1:再加 verification_plan(执行前"怎么算成功")+ affected_tables(影响哪些表 → 真 before/after)。
+    缺省按 category 取合理默认,让每条建议批准前可解释、执行后可验收。
     """
     gain_default, risk_default = _CATEGORY_GAIN_RISK.get(category, ("", "low"))
     gain = (expected_gain or gain_default).strip()
     rl = (risk_level or risk_default).strip().lower()
     rl = rl if rl in ("low", "medium", "high") else "low"
+    verify_default, tables_default = _CATEGORY_VERIFY.get(category, ([], []))
+    vplan = list(verification_plan) if isinstance(verification_plan, list) and verification_plan else list(verify_default)
+    atables = list(affected_tables) if isinstance(affected_tables, list) and affected_tables else list(tables_default)
     refs = list(evidence_refs) if isinstance(evidence_refs, list) else []
     if not refs and entity_type and str(entity_id):
         refs = [{"type": str(entity_type), "id": str(entity_id)}]
@@ -86,6 +106,9 @@ def make_suggestion(
         "expected_gain": gain,
         "risk_level": rl,
         "evidence_refs": refs,
+        # S1 验证计划 + 影响表(执行前可解释 + 执行后真 before/after)。
+        "verification_plan": vplan,
+        "affected_tables": atables,
     }
 
 

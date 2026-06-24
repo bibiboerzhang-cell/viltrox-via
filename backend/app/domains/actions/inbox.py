@@ -80,8 +80,9 @@ def generate_daily_action_inbox(
                        suggested_endpoint, estimated_cost_cents, writes_business_data, uses_llm,
                        requires_approval, owner_staff_id, reason, payload_json,
                        expected_gain, risk_level, evidence_refs_json,
+                       verification_plan_json, affected_tables_json,
                        status, created_at, updated_at)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,?,?::jsonb,'suggested',NOW(),NOW())
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,?,?::jsonb,?::jsonb,?::jsonb,'suggested',NOW(),NOW())
                     ON CONFLICT (dedupe_key) DO UPDATE SET
                        title = EXCLUDED.title,
                        detail = EXCLUDED.detail,
@@ -97,6 +98,8 @@ def generate_daily_action_inbox(
                        expected_gain = EXCLUDED.expected_gain,
                        risk_level = EXCLUDED.risk_level,
                        evidence_refs_json = EXCLUDED.evidence_refs_json,
+                       verification_plan_json = EXCLUDED.verification_plan_json,
+                       affected_tables_json = EXCLUDED.affected_tables_json,
                        updated_at = NOW()
                     WHERE {_TABLE}.status = 'suggested'
                     """,
@@ -119,6 +122,8 @@ def generate_daily_action_inbox(
                         s.get("expected_gain", ""),
                         s.get("risk_level", "low"),
                         _dumps(s.get("evidence_refs", [])),
+                        _dumps(s.get("verification_plan", [])),
+                        _dumps(s.get("affected_tables", [])),
                     ),
                 )
                 persisted += 1
@@ -189,6 +194,7 @@ def list_inbox(
                suggested_endpoint, estimated_cost_cents, writes_business_data, uses_llm,
                requires_approval, owner_staff_id, reason, payload_json,
                expected_gain, risk_level, evidence_refs_json, result_checklist_json, approval_reason,
+               verification_plan_json, affected_tables_json,
                status, created_at, updated_at
         FROM {_TABLE}
         WHERE {' AND '.join(where)}
@@ -207,6 +213,8 @@ def list_inbox(
         row["payload_json"] = _loads(row.get("payload_json"))
         row["evidence_refs_json"] = _loads(row.get("evidence_refs_json"))
         row["result_checklist_json"] = _loads(row.get("result_checklist_json"))
+        row["verification_plan_json"] = _loads(row.get("verification_plan_json"))
+        row["affected_tables_json"] = _loads(row.get("affected_tables_json"))
         counts[row["category"]] = counts.get(row["category"], 0) + 1
         items.append(row)
 
@@ -295,6 +303,7 @@ _INBOX_COLUMNS = (
     "suggested_endpoint, estimated_cost_cents, writes_business_data, uses_llm, "
     "requires_approval, owner_staff_id, reason, payload_json, "
     "expected_gain, risk_level, evidence_refs_json, result_checklist_json, approval_reason, "
+    "verification_plan_json, affected_tables_json, "
     "status, touches_v6_fit, created_at, updated_at"
 )
 
@@ -331,6 +340,8 @@ def get_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[str,
     item["payload_json"] = _loads(item.get("payload_json"))
     item["evidence_refs_json"] = _loads(item.get("evidence_refs_json"))
     item["result_checklist_json"] = _loads(item.get("result_checklist_json"))
+    item["verification_plan_json"] = _loads(item.get("verification_plan_json"))
+    item["affected_tables_json"] = _loads(item.get("affected_tables_json"))
     return item
 
 

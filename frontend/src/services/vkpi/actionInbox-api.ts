@@ -29,6 +29,9 @@ export interface ActionInboxItem {
   evidence_refs_json?: Array<Record<string, unknown>>;
   result_checklist_json?: Record<string, unknown>;
   approval_reason?: string;
+  // S1:执行前验证计划 + 影响表(批准前可解释)。
+  verification_plan_json?: string[];
+  affected_tables_json?: string[];
   status: string;
   created_at: string;
   updated_at: string;
