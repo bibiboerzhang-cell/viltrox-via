@@ -1,5 +1,5 @@
 import React from "react";
-import { getReportTypes, getReport } from "../../../services/vkpi/agentOps-api";
+import { getReportTypes, getReport, downloadReport } from "../../../services/vkpi/agentOps-api";
 
 // 数据导出页:选 report 类型 → 本地数据出结构化 report(接 /metrics/report-types + /metrics/report)。
 // PDF/Excel 导出:前端把结构化数据下成 JSON(v1);PDF/Excel 渲染留后续。红线:只读。
@@ -51,7 +51,11 @@ export function DataExportPage({ apiToken = "" }: { apiToken?: string }) {
           {loading ? "生成中…" : "生成报告"}
         </button>
         {report ? (
-          <button onClick={download} className="rounded-md border border-white/10 px-3 py-1.5 text-[12px] text-slate-200 hover:bg-white/[0.06]">下载 JSON</button>
+          <>
+            <button onClick={download} className="rounded-md border border-white/10 px-3 py-1.5 text-[12px] text-slate-200 hover:bg-white/[0.06]">下载 JSON</button>
+            <button onClick={() => downloadReport(apiToken, sel, "pdf").catch((e) => setError(e?.message || "PDF 导出失败"))} className="rounded-md border border-rose-300/30 bg-rose-500/[0.12] px-3 py-1.5 text-[12px] text-rose-100 hover:bg-rose-500/[0.2]">下载 PDF</button>
+            <button onClick={() => downloadReport(apiToken, sel, "xlsx").catch((e) => setError(e?.message || "Excel 导出失败"))} className="rounded-md border border-emerald-300/30 bg-emerald-500/[0.12] px-3 py-1.5 text-[12px] text-emerald-100 hover:bg-emerald-500/[0.2]">下载 Excel</button>
+          </>
         ) : null}
       </div>
 

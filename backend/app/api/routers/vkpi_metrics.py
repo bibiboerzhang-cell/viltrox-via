@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from app.api.dependencies.perms import require_tab
 from app.domains.access import scope
@@ -86,6 +86,27 @@ def temporal_movers(
     from app.domains.market import temporal_movers as tm
 
     return tm.compute_movers(window_days=int(window_days), metric=str(metric), limit=int(limit))
+
+
+@router.get("/report/export")
+def export_report(
+    report_type: str = Query(default="industry_overview"),
+    format: str = Query(default="pdf"),
+    window_days: int = Query(default=30, ge=1, le=365),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> Response:
+    """J2 · Report Builder:report → PDF/Excel 下载(仅管理层)。"""
+    _require_admin(staff)
+    from app.domains.dashboard import report_export
+
+    out = report_export.build_report_file(report_type, fmt=str(format), window_days=int(window_days), staff=staff)
+    if not out:
+        raise HTTPException(status_code=400, detail="report render failed or unknown report_type")
+    return Response(
+        content=out["bytes"],
+        media_type=out["content_type"],
+        headers={"Content-Disposition": f'attachment; filename="{out["filename"]}"'},
+    )
 
 
 @router.get("/industry-board")

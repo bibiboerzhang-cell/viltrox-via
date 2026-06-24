@@ -47,6 +47,21 @@ export async function getReportTypes(token: string): Promise<Row> {
   return apiFetch<Row>("/api/admin/vkpi/metrics/report-types", { cache: "no-store" }, token);
 }
 
+export async function downloadReport(token: string, reportType: string, format: "pdf" | "xlsx"): Promise<void> {
+  const r = await fetch(
+    `/api/admin/vkpi/metrics/report/export?report_type=${encodeURIComponent(reportType)}&format=${format}`,
+    { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" },
+  );
+  if (!r.ok) throw new Error(`导出失败 ${r.status}`);
+  const blob = await r.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `vkpi-report-${reportType}.${format}`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export async function getReport(token: string, reportType: string, windowDays = 30): Promise<Row> {
   return apiFetch<Row>(
     `/api/admin/vkpi/metrics/report?report_type=${encodeURIComponent(reportType)}&window_days=${windowDays}`,
