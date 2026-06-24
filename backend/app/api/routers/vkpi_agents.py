@@ -59,8 +59,11 @@ def capabilities(staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
 @router.get("/learning-status")
 def learning_status(staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
     """学习闭环状态:动作沉淀 + 反馈 + 推荐漏斗 + 成熟度(只读,看"系统在学什么")。"""
+    from app.domains.access import scope
     from app.domains.memory import learning_signals
 
+    if not scope.can_view_all(staff):  # A2 防越权:系统级学习视图仅管理层
+        raise HTTPException(status_code=403, detail="仅管理层可见")
     return learning_signals.get_learning_status(staff)
 
 

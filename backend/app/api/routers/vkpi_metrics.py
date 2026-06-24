@@ -8,12 +8,19 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
+from app.domains.access import scope
 from app.domains.metrics import aggregation
 
 router = APIRouter(prefix="/api/admin/vkpi/metrics", tags=["vkpi-metrics"])
+
+
+def _require_admin(staff: Any) -> None:
+    """A2 防越权:公司级大盘/报告仅管理层可见(员工直接打端点也 403,纵深防御)。"""
+    if not scope.can_view_all(staff):
+        raise HTTPException(status_code=403, detail="仅管理层可见")
 
 
 @router.get("/project/{project_id}")
@@ -48,6 +55,7 @@ def generate_report(
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict[str, Any]:
     """G2 · 数据导出:本地数据 → 结构化 report(前端可渲染/导出 PDF/Excel)。"""
+    _require_admin(staff)
     from app.domains.dashboard import report_generator
 
     return report_generator.generate_report(report_type, staff=staff, window_days=int(window_days))
@@ -62,6 +70,7 @@ def industry_board(
 
     市场预估在真订单数据接入前诚实标 awaiting_data。只读;零触 viltrox_fit_score。
     """
+    _require_admin(staff)
     from app.domains.market import industry_board as ib
 
     return ib.get_industry_board(staff, window_days=int(window_days))
@@ -73,6 +82,7 @@ def high_value_kols(
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict[str, Any]:
     """高价值红人榜(按合作项目数 + ROI + 下次推荐权重排序;只读,喂个人工作台)。"""
+    _require_admin(staff)
     from app.domains.kol import roi_aggregate
 
     return roi_aggregate.list_high_value_kols(limit=int(limit), staff=staff)
