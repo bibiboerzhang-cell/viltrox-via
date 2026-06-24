@@ -394,6 +394,17 @@ def kol_recommendation_card(
     return recommendation_card.get_recommendation_card(int(kol_pool_id), staff=staff)
 
 
+@router.get("/kol-pool/{kol_pool_id}/twin")
+def kol_twin(
+    kol_pool_id: int,
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """C3 · KOL 数字孪生:合作判断档案(身份+为什么记住+数据等级+历史表现+学习信号+合作建议)。"""
+    from app.domains.kol import twin
+
+    return twin.get_kol_twin(int(kol_pool_id), staff=staff)
+
+
 @router.get("/kol-search-sessions/{session_id}")
 def get_kol_search_session(
     session_id: int,
