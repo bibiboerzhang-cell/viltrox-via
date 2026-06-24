@@ -35,6 +35,44 @@ def _loads(value: Any) -> Any:
         return {}
 
 
+def persist_suggestions(suggestions: list[dict[str, Any]]) -> int:
+    """把一组 make_suggestion 产物落 vkpi_action_inbox(status='suggested')。返回落库条数。
+
+    H5:供编排器把计划步骤物化成可审批的 Inbox 项复用。决策四件套缺省由表 DEFAULT 兜底。
+    ON CONFLICT(dedupe_key) 仅在 status='suggested' 时更新(不覆盖已审/已执行)。零触 viltrox_fit_score。
+    """
+    if not suggestions or not table_exists(_TABLE):
+        return 0
+    conn = get_conn()
+    n = 0
+    for s in suggestions:
+        try:
+            conn.execute(
+                f"""
+                INSERT INTO {_TABLE}
+                  (dedupe_key, category, title, detail, priority, entity_type, entity_id,
+                   suggested_endpoint, estimated_cost_cents, writes_business_data, uses_llm,
+                   requires_approval, owner_staff_id, reason, payload_json, status, created_at, updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::jsonb,'suggested',NOW(),NOW())
+                ON CONFLICT (dedupe_key) DO UPDATE SET
+                   title = EXCLUDED.title, detail = EXCLUDED.detail, updated_at = NOW()
+                WHERE {_TABLE}.status = 'suggested'
+                """,
+                (
+                    s["dedupe_key"], s["category"], s["title"], s["detail"], s["priority"],
+                    s.get("entity_type", ""), s.get("entity_id", ""), s.get("suggested_endpoint", ""),
+                    int(s.get("estimated_cost_cents", 0) or 0), s.get("writes_business_data", False),
+                    s.get("uses_llm", False), s.get("requires_approval", True), s.get("owner_staff_id"),
+                    s.get("reason", ""), _dumps(s.get("payload", {})),
+                ),
+            )
+            n += 1
+        except Exception:
+            logger.warning("action_inbox.persist_suggestion_failed", extra={"dedupe_key": s.get("dedupe_key")}, exc_info=True)
+    conn.commit()
+    return n
+
+
 # ── 生成(dry-run only) ───────────────────────────────────────────────
 def generate_daily_action_inbox(
     staff: dict[str, Any] | None = None,

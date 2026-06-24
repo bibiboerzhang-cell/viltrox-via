@@ -48,6 +48,12 @@ def read_plan(
     return item
 
 
+@router.post("/plan/{plan_id}/materialize")
+def materialize_plan(plan_id: int, staff=Depends(require_tab("vkpi", "write"))) -> dict[str, Any]:
+    """H5 · plan→action:把计划步骤物化成 Action Inbox 可审批项(零自动执行,人审后才跑)。"""
+    return orchestrator.materialize_plan_to_inbox(int(plan_id), staff=staff)
+
+
 @router.get("/capabilities")
 def capabilities(staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
     """Agent-OS 能力清单(自描述,前端发现入口):系统能干什么 + 端点 + 数据就绪度。"""

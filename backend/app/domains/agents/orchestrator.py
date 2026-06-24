@@ -94,6 +94,52 @@ def plan_goal(goal: str, *, context: dict[str, Any] | None = None, staff: dict[s
     }
 
 
+def materialize_plan_to_inbox(plan_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    """H5 · plan→action 接通:把计划的每一步物化成 Action Inbox 可审批项(零自动执行)。
+
+    红线:仅 CREATE status='suggested' 的建议;写库/烧 LLM 步骤 requires_approval=True,
+    真执行仍走人审→executor。绝不在此执行任何步骤;零触 viltrox_fit_score。
+    """
+    plan = get_plan(plan_id, staff=staff)
+    if not plan:
+        return {"status": "not_found", "plan_id": plan_id}
+    steps = plan.get("plan_json") or []
+    if not isinstance(steps, list) or not steps:
+        return {"status": "no_steps", "plan_id": plan_id}
+    from app.domains.actions import inbox, producers
+
+    actor = None
+    try:
+        actor = int(scope.actor_staff_id(staff)) or None
+    except Exception:
+        actor = None
+    suggestions = []
+    for s in steps:
+        idx = int(s.get("step_index", 0))
+        tid = str(s.get("tool_id") or "")
+        suggestions.append(producers.make_suggestion(
+            category="orchestrated_step",
+            dedupe_key=f"plan:{plan_id}:step:{idx}",
+            title=f"计划步骤 {idx + 1}:{s.get('name') or tid}",
+            detail=f"目标「{plan.get('goal') or ''}」的第 {idx + 1} 步(工具 {tid})",
+            reason=f"编排计划 #{plan_id} 的步骤;经此审批后由对应能力执行",
+            priority="medium",
+            suggested_endpoint=str(s.get("endpoint") or ""),
+            writes_business_data=bool(s.get("writes_db")),
+            uses_llm=bool(s.get("uses_llm")),
+            requires_approval=bool(s.get("requires_approval", True)),
+            owner_staff_id=actor,
+            payload={"plan_id": plan_id, "step_index": idx, "tool_id": tid},
+        ))
+    persisted = inbox.persist_suggestions(suggestions)
+    return {
+        "status": "ok",
+        "plan_id": plan_id,
+        "steps_materialized": persisted,
+        "note": "计划已物化为 Action Inbox 可审批项;每步需人审后才执行;零触 viltrox_fit_score。",
+    }
+
+
 def get_plan(plan_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """读单条计划(留痕)。缺表/不存在 → None。"""
     del staff
