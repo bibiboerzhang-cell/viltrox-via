@@ -383,6 +383,17 @@ def list_kol_search_history(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+@router.get("/kol-pool/{kol_pool_id}/recommendation-card")
+def kol_recommendation_card(
+    kol_pool_id: int,
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """KOL 推荐卡:数据完整度档(A-D)+ 为什么推荐 + 展示信号(只读;档位非 fit)。"""
+    from app.domains.kol import recommendation_card
+
+    return recommendation_card.get_recommendation_card(int(kol_pool_id), staff=staff)
+
+
 @router.get("/kol-search-sessions/{session_id}")
 def get_kol_search_session(
     session_id: int,

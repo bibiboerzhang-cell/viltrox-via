@@ -647,6 +647,18 @@ export async function listKolSearchHistory(
   );
 }
 
+// KOL 推荐卡:数据完整度档(A-D)+ 为什么推荐 + 信号(档位非 fit)。
+export async function getKolRecommendationCard(
+  token: string,
+  kolPoolId: string | number,
+): Promise<Row> {
+  return apiFetch<Row>(
+    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/recommendation-card`,
+    { cache: "no-store" },
+    token,
+  );
+}
+
 export async function getKolSearchSession(
   token: string,
   sessionId: string | number,
