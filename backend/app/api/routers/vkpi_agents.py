@@ -48,6 +48,14 @@ def read_plan(
     return item
 
 
+@router.get("/capabilities")
+def capabilities(staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
+    """Agent-OS 能力清单(自描述,前端发现入口):系统能干什么 + 端点 + 数据就绪度。"""
+    from app.domains.agents import capabilities as caps
+
+    return caps.get_capabilities(staff)
+
+
 @router.get("/learning-status")
 def learning_status(staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
     """学习闭环状态:动作沉淀 + 反馈 + 推荐漏斗 + 成熟度(只读,看"系统在学什么")。"""
