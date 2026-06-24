@@ -33,6 +33,26 @@ def portfolio_metrics(
     return aggregation.aggregate_portfolio_metrics(window_days=window_days, staff=staff)
 
 
+@router.get("/report-types")
+def report_types(staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
+    """G2 · 可生成的 report 类型清单。"""
+    from app.domains.dashboard import report_generator
+
+    return {"types": report_generator.list_report_types()}
+
+
+@router.get("/report")
+def generate_report(
+    report_type: str = Query(default="industry_overview"),
+    window_days: int = Query(default=30, ge=1, le=365),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict[str, Any]:
+    """G2 · 数据导出:本地数据 → 结构化 report(前端可渲染/导出 PDF/Excel)。"""
+    from app.domains.dashboard import report_generator
+
+    return report_generator.generate_report(report_type, staff=staff, window_days=int(window_days))
+
+
 @router.get("/industry-board")
 def industry_board(
     window_days: int = Query(default=30, ge=1, le=365),
