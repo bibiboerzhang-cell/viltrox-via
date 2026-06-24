@@ -48,6 +48,18 @@ def read_plan(
     return item
 
 
+@router.get("/recall")
+def unified_recall(
+    q: str,
+    limit: int = 10,
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict[str, Any]:
+    """B3 · 一句话跨信号召回:相关 KOL/视频/项目/活动(词法兜底,向量后端就绪自动升级)。"""
+    from app.domains.intelligence import semantic_recall
+
+    return semantic_recall.unified_recall(q, limit=int(limit), staff=staff)
+
+
 @router.post("/plan/{plan_id}/materialize")
 def materialize_plan(plan_id: int, staff=Depends(require_tab("vkpi", "write"))) -> dict[str, Any]:
     """H5 · plan→action:把计划步骤物化成 Action Inbox 可审批项(零自动执行,人审后才跑)。"""
