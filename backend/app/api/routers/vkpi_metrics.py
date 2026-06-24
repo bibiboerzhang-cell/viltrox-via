@@ -61,6 +61,20 @@ def generate_report(
     return report_generator.generate_report(report_type, staff=staff, window_days=int(window_days))
 
 
+@router.get("/movers")
+def temporal_movers(
+    window_days: int = Query(default=30, ge=1, le=365),
+    metric: str = Query(default="followers"),
+    limit: int = Query(default=10, ge=1, le=50),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict[str, Any]:
+    """B4 时间索引:窗口内哪些账号在变好/变差(risers/fallers,仅管理层)。"""
+    _require_admin(staff)
+    from app.domains.market import temporal_movers as tm
+
+    return tm.compute_movers(window_days=int(window_days), metric=str(metric), limit=int(limit))
+
+
 @router.get("/industry-board")
 def industry_board(
     window_days: int = Query(default=30, ge=1, le=365),
