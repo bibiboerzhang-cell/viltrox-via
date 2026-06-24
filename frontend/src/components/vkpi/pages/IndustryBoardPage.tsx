@@ -1,5 +1,5 @@
 import React from "react";
-import { getIndustryBoard } from "../../../services/vkpi/agentOps-api";
+import { getIndustryBoard, getMovers } from "../../../services/vkpi/agentOps-api";
 
 // 行业大盘页:商业盘 + KOL盘 + 市场盘 + 市场预估(接 GET /metrics/industry-board)。
 // 红线:只读展示;市场预估在真订单数据接入前诚实标 awaiting_data。
@@ -20,6 +20,45 @@ function Stat({ label, value, hint }: { label: string; value: React.ReactNode; h
       <div className="text-[11px] text-slate-400">{label}</div>
       <div className="mt-1 text-lg font-semibold text-white">{value}</div>
       {hint ? <div className="mt-0.5 text-[10px] text-slate-500">{hint}</div> : null}
+    </div>
+  );
+}
+
+function MoversPanel({ apiToken }: { apiToken: string }) {
+  const [data, setData] = React.useState<any>(null);
+  const [metric, setMetric] = React.useState("followers");
+  React.useEffect(() => {
+    if (!apiToken) return;
+    getMovers(apiToken, 30, metric).then((r: any) => setData(r)).catch(() => setData(null));
+  }, [apiToken, metric]);
+  const risers: any[] = data?.risers || [];
+  const fallers: any[] = data?.fallers || [];
+  const Row = ({ x, up }: { x: any; up: boolean }) => (
+    <div className="flex items-center justify-between text-[11px]">
+      <span className="truncate text-slate-200">{x.name}</span>
+      <span className={up ? "text-emerald-300" : "text-rose-300"}>
+        {up ? "▲" : "▼"} {x.pct_change != null ? `${(x.pct_change * 100).toFixed(1)}%` : `Δ${fmtNum(x.delta)}`}
+      </span>
+    </div>
+  );
+  return (
+    <div className="rounded-xl border border-white/[0.08] bg-white/[0.02] p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <div className="text-[11px] font-medium text-cyan-300/80">近 30 天 movers · 谁在变好</div>
+        <select value={metric} onChange={(e) => setMetric(e.target.value)} className="rounded border border-white/10 bg-white/[0.03] px-1.5 py-0.5 text-[10px] text-slate-300">
+          <option value="followers">粉丝</option>
+          <option value="total_views">播放</option>
+          <option value="engagement_rate">互动率</option>
+        </select>
+      </div>
+      {data?.status === "ok" ? (
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1">{risers.slice(0, 5).map((x) => <Row key={`u${x.channel_id}`} x={x} up />)}{!risers.length && <div className="text-[10px] text-slate-500">—</div>}</div>
+          <div className="space-y-1">{fallers.slice(0, 5).map((x) => <Row key={`d${x.channel_id}`} x={x} up={false} />)}{!fallers.length && <div className="text-[10px] text-slate-500">—</div>}</div>
+        </div>
+      ) : (
+        <div className="text-[10px] text-slate-500">{data ? "暂无时序数据" : "加载中…"}</div>
+      )}
     </div>
   );
 }
@@ -83,6 +122,8 @@ export function IndustryBoardPage({ apiToken = "" }: { apiToken?: string }) {
           </div>
         </div>
       ) : null}
+
+      <MoversPanel apiToken={apiToken} />
 
       <div className="text-[11px] font-medium text-amber-300/80">市场盘</div>
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">

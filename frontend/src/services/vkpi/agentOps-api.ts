@@ -35,6 +35,14 @@ export async function getHighValueKols(token: string, limit = 10): Promise<Row> 
   );
 }
 
+export async function getMovers(token: string, windowDays = 30, metric = "followers"): Promise<Row> {
+  return apiFetch<Row>(
+    `/api/admin/vkpi/metrics/movers?window_days=${windowDays}&metric=${encodeURIComponent(metric)}&limit=5`,
+    { cache: "no-store" },
+    token,
+  );
+}
+
 export async function getReportTypes(token: string): Promise<Row> {
   return apiFetch<Row>("/api/admin/vkpi/metrics/report-types", { cache: "no-store" }, token);
 }
