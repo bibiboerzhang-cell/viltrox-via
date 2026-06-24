@@ -17,6 +17,7 @@ import { VkpiSidebar } from './layout/VkpiSidebar';
 import { VkpiTopbar } from './layout/VkpiTopbar';
 import { TaskCenter, TaskCenterProvider } from '../tasks/TaskCenter';
 import { WorkspacePage } from './pages/WorkspacePage';
+import { VersionBanner } from './VersionBanner';
 import { EvidenceDrawer } from './drawers/EvidenceDrawer';
 import { ProjectDetailDrawer } from './drawers/ProjectDetailDrawer';
 import { StaffProfileDrawer } from './drawers/StaffProfileDrawer';
@@ -404,6 +405,7 @@ export function VkpiDashboard({
   if (activePage === 'v615Replica') {
     return (
       <TaskCenterProvider apiToken={apiToken}>
+        <VersionBanner />
         <V615ReplicaApp
           apiToken={apiToken}
           userName={userName}
@@ -427,6 +429,7 @@ export function VkpiDashboard({
 
   return (
     <TaskCenterProvider apiToken={apiToken}>
+    <VersionBanner />
     <div className="vkpi-app" data-testid="vkpi-dashboard">
       <VkpiSidebar
         navItems={navItems}
