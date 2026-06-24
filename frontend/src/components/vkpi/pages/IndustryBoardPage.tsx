@@ -1,5 +1,6 @@
 import React from "react";
 import { getIndustryBoard, getMovers } from "../../../services/vkpi/agentOps-api";
+import { DataStatusBadge } from "../common/DataStatusBadge";
 
 // 行业大盘页:商业盘 + KOL盘 + 市场盘 + 市场预估(接 GET /metrics/industry-board)。
 // 红线:只读展示;市场预估在真订单数据接入前诚实标 awaiting_data。
@@ -134,7 +135,10 @@ export function IndustryBoardPage({ apiToken = "" }: { apiToken?: string }) {
       </div>
 
       <div className="rounded-xl border border-violet-300/15 bg-violet-500/[0.06] p-4">
-        <div className="text-[11px] font-medium text-violet-200">市场预估</div>
+        <div className="flex items-center gap-2">
+          <div className="text-[11px] font-medium text-violet-200">市场预估</div>
+          <DataStatusBadge status={estimate.status === "ready" ? "ready" : "awaiting_data"} title="市场预估数据状态" />
+        </div>
         <div className="mt-1 text-sm text-white">
           {estimate.status === "ready" ? "数据就绪,可做提前盘判断" : "待真实订单数据(Shopify token)接入"}
         </div>
