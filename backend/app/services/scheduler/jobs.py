@@ -540,6 +540,28 @@ async def job_fulfillment_due_scan():
         _record_scheduler_run("fulfillment_due_scan", ok=False, error=str(exc)[:240])
 
 
+async def job_logistics_track_sync():
+    """E2 · 物流自动同步:周期入队 17track 同步(全部在途单号)→ delivered 后触发观察窗。
+
+    config-gate:scheduler_tasks.logistics_track_sync(默认 OFF;需配 VKPI_17TRACK_TOKEN,
+    无 token 时 enqueue 自身诚实返回 blocked,不报错)。幂等:同范围活跃任务返回 already_queued。
+    """
+    if not _scheduler_task_enabled("logistics_track_sync"):
+        return
+    try:
+        import asyncio
+        from app.domains.logistics import seventeen_track
+
+        res = await asyncio.to_thread(
+            seventeen_track.enqueue_logistics_sync_job, project_id=None, staff=_scheduler_system_staff()
+        )
+        logger.info("scheduler.logistics_track_sync", extra={"status": str(res.get("status"))})
+        _record_scheduler_run("logistics_track_sync", ok=True)
+    except Exception as exc:
+        logger.exception("scheduler.logistics_track_sync_failed")
+        _record_scheduler_run("logistics_track_sync", ok=False, error=str(exc)[:240])
+
+
 async def job_fulfillment_content_scan():
     """履约:对到期/活动观察窗口扫真证据 → 物化内容候选(scan_windows_for_content)。
 
@@ -940,6 +962,15 @@ async def start_scheduler() -> None:
         trigger=IntervalTrigger(minutes=30),
         id="vkpi_alerts",
         name="V-KPI stalled workflow alerts",
+        max_instances=1,
+        coalesce=True,
+    )
+    # ── E2 物流自动同步(config-gate,默认 OFF;需 VKPI_17TRACK_TOKEN)──
+    _scheduler.add_job(
+        job_logistics_track_sync,
+        trigger=IntervalTrigger(hours=2),
+        id="logistics_track_sync",
+        name="17track logistics auto-sync (active shipments)",
         max_instances=1,
         coalesce=True,
     )
