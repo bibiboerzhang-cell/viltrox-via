@@ -48,6 +48,14 @@ def read_plan(
     return item
 
 
+@router.get("/learning-status")
+def learning_status(staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
+    """学习闭环状态:动作沉淀 + 反馈 + 推荐漏斗 + 成熟度(只读,看"系统在学什么")。"""
+    from app.domains.memory import learning_signals
+
+    return learning_signals.get_learning_status(staff)
+
+
 @router.get("/workspace-digest")
 def workspace_digest(
     action_limit: int = 5,
