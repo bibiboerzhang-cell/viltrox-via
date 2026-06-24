@@ -33,6 +33,20 @@ def portfolio_metrics(
     return aggregation.aggregate_portfolio_metrics(window_days=window_days, staff=staff)
 
 
+@router.get("/industry-board")
+def industry_board(
+    window_days: int = Query(default=30, ge=1, le=365),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict[str, Any]:
+    """G1 · 行业大盘:商业(组合ROI/GMV/订单)+ KOL(高价值/池规模)+ 市场(竞品/产品)。
+
+    市场预估在真订单数据接入前诚实标 awaiting_data。只读;零触 viltrox_fit_score。
+    """
+    from app.domains.market import industry_board as ib
+
+    return ib.get_industry_board(staff, window_days=int(window_days))
+
+
 @router.get("/high-value-kols")
 def high_value_kols(
     limit: int = Query(default=10, ge=1, le=50),
