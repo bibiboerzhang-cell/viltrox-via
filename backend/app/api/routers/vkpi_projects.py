@@ -976,3 +976,5 @@ def add_project_shipment(project_id: int, body: dict, staff=Depends(require_tab(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
+    except ValueError as exc:  # 含 ShipmentNotApproved:发货审批未通过 → 409
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

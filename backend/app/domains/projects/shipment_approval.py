@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from app.core.logging import get_logger
@@ -15,6 +16,50 @@ from app.domains.access import scope
 logger = get_logger(__name__)
 
 _TABLE = "vkpi_shipment_approvals"
+
+
+class ShipmentNotApproved(ValueError):
+    """发货前置审批未通过 —— 调用方(发货动作)应据此拦截,不得落库发货。"""
+
+
+def _strict_enabled() -> bool:
+    """严格模式:无任何审批记录也拦发货。默认 off(向后兼容,只拦"已请求未通过")。"""
+    return str(os.getenv("SHIPMENT_APPROVAL_STRICT", "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def get_status(project_id: int, kol_pool_id: int) -> str | None:
+    """返回该 (project,kol) 的审批状态(pending/approved/rejected),无记录返回 None。"""
+    if not table_exists(_TABLE):
+        return None
+    try:
+        row = get_conn().execute(
+            f"SELECT status FROM {_TABLE} WHERE project_id = ? AND kol_pool_id = ?",
+            (int(project_id), int(kol_pool_id)),
+        ).fetchone()
+        return str(dict(row).get("status")) if row else None
+    except Exception:
+        logger.debug("shipment_approval.get_status_failed", exc_info=True)
+        return None
+
+
+def assert_shippable(project_id: int, kol_pool_id: int, *, staff: dict[str, Any] | None = None) -> None:
+    """发货前置门槛(调用方在落库发货前调用)。
+    - 已 approved → 放行;
+    - 已 pending/rejected(已发起审批但未通过)→ 拦截(人审真生效);
+    - 无审批记录 → 默认放行(向后兼容),strict 模式下拦截。
+    """
+    del staff
+    pid, kid = int(project_id or 0), int(kol_pool_id or 0)
+    if pid <= 0 or kid <= 0:
+        return  # 无法定位 KOL → 不拦(向后兼容,避免误伤旧流程)
+    status = get_status(pid, kid)
+    if status == "approved":
+        return
+    if status in {"pending", "rejected"}:
+        raise ShipmentNotApproved(f"发货被拦截:审批状态={status}(需管理员通过发货审批后再发货)")
+    if _strict_enabled():
+        raise ShipmentNotApproved("发货被拦截:严格模式下需先申请并通过发货审批")
+    return
 
 
 def _actor(staff: dict[str, Any] | None) -> int | None:

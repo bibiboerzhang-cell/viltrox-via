@@ -1166,6 +1166,10 @@ def add_project_shipment(project_id: int, body: dict[str, Any], *, staff: dict[s
     project = conn.execute("SELECT kol_id, product_sku, product_name FROM vkpi_projects WHERE id=?", (int(project_id),)).fetchone()
     if not project:
         raise LookupError("project not found")
+    # 发货审批门槛(P0):已发起审批但未通过 → 拦截发货(人审真生效)。无审批记录默认放行(向后兼容)。
+    from app.domains.projects import shipment_approval
+
+    shipment_approval.assert_shippable(int(project_id), _int(project["kol_id"]) or 0, staff=staff)
     now = utcnow()
     conn.execute(
         """
