@@ -61,6 +61,19 @@ def generate_report(
     return report_generator.generate_report(report_type, staff=staff, window_days=int(window_days))
 
 
+@router.get("/opportunities")
+def opportunities(
+    window_days: int = Query(default=30, ge=1, le=365),
+    limit: int = Query(default=10, ge=1, le=20),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict[str, Any]:
+    """③ 预测 · 机会窗:竞品热区 + 渠道动能 → 该关注什么(仅管理层;无真销量诚实标 awaiting)。"""
+    _require_admin(staff)
+    from app.domains.market import prediction
+
+    return prediction.predict_opportunities(window_days=int(window_days), limit=int(limit), staff=staff)
+
+
 @router.get("/movers")
 def temporal_movers(
     window_days: int = Query(default=30, ge=1, le=365),
