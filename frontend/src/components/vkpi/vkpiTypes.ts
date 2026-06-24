@@ -21,6 +21,7 @@ export type VkpiPageKey =
   | 'industryBoard'
   | 'dataExport'
   | 'learning'
+  | 'capabilities'
   | 'dataAnalysis'
   | 'analytics'
   | 'channels'

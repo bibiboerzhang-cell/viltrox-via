@@ -18,6 +18,7 @@ const VKPI_PAGE_KEYS = new Set<VkpiPageKey>([
   'industryBoard',
   'dataExport',
   'learning',
+  'capabilities',
   'dataAnalysis',
   'analytics',
   'channels',

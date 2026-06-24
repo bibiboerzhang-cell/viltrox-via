@@ -23,6 +23,7 @@ const DataAnalysisPage = lazy(() => import('./DataAnalysisPage').then((module) =
 const IndustryBoardPage = lazy(() => import('./IndustryBoardPage').then((module) => ({ default: module.IndustryBoardPage })));
 const DataExportPage = lazy(() => import('./DataExportPage').then((module) => ({ default: module.DataExportPage })));
 const LearningPage = lazy(() => import('./LearningPage').then((module) => ({ default: module.LearningPage })));
+const CapabilitiesPage = lazy(() => import('./CapabilitiesPage').then((module) => ({ default: module.CapabilitiesPage })));
 const DataQualityPage = lazy(() => import('./DataQualityPage').then((module) => ({ default: module.DataQualityPage })));
 const DiscoverPage = lazy(() => import('./DiscoverPage').then((module) => ({ default: module.DiscoverPage })));
 const IntelligenceCenterPage = lazy(() => import('./IntelligenceCenterPage').then((module) => ({ default: module.IntelligenceCenterPage })));
@@ -174,6 +175,7 @@ export function WorkspacePage(props: WorkspacePageProps) {
   if (props.page === 'industryBoard') page = <IndustryBoardPage apiToken={props.apiToken} />;
   if (props.page === 'dataExport') page = <DataExportPage apiToken={props.apiToken} />;
   if (props.page === 'learning') page = <LearningPage apiToken={props.apiToken} />;
+  if (props.page === 'capabilities') page = <CapabilitiesPage apiToken={props.apiToken} />;
   if (props.page === 'channels') page = <MyKolPage {...props} />;
   if (props.page === 'campaigns') page = <CampaignsPage {...props} />;
   if (props.page === 'dataQuality') page = <DataQualityPage {...props} />;
