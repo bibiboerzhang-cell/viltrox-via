@@ -98,3 +98,62 @@ def aggregate_event_retrospective(event_id: str, staff: dict[str, Any] | None = 
         "completeness": completeness,
         "note": "活动复盘只读聚合;缺 ROI/线索/视频/复盘列入待补(不填 0);真值仍需人工回填。零触 viltrox_fit_score。",
     }
+
+
+_RETRO_TABLE = "vkpi_event_retrospectives"
+
+
+def finalize_event_retrospective(event_id: str, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    """F4 · 定格复盘:聚合当前复盘 → 落库一行快照(vkpi_event_retrospectives)。
+
+    返回快照 + finalized 标记。活动不存在 → status='not_found'。零触 viltrox_fit_score。
+    """
+    snap = aggregate_event_retrospective(event_id, staff)
+    if snap.get("status") != "ok":
+        return snap
+    if not table_exists(_RETRO_TABLE):
+        return {**snap, "finalized": False, "reason": "migration_184_not_applied"}
+    actor = None
+    try:
+        from app.domains.access import scope
+
+        actor = int(scope.actor_staff_id(staff)) or None
+    except Exception:
+        actor = None
+    try:
+        conn = get_conn()
+        row = conn.execute(
+            f"INSERT INTO {_RETRO_TABLE} (event_id, snapshot_json, completeness, finalized_by) "
+            f"VALUES (?, ?::jsonb, ?, ?) RETURNING id, created_at",
+            (str(event_id), json.dumps(snap, ensure_ascii=False, default=str), float(snap.get("completeness") or 0.0), actor),
+        ).fetchone()
+        conn.commit()
+        rec = dict(row) if row else {}
+        return {**snap, "finalized": True, "retrospective_id": rec.get("id"), "finalized_at": str(rec.get("created_at") or "")}
+    except Exception:
+        logger.warning("event_retro.finalize_failed", extra={"event_id": event_id}, exc_info=True)
+        return {**snap, "finalized": False, "reason": "write_failed"}
+
+
+def get_latest_retrospective(event_id: str, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    """读最近一次定格快照;无快照则回退到实时聚合(标 source)。"""
+    del staff
+    if table_exists(_RETRO_TABLE):
+        try:
+            row = get_conn().execute(
+                f"SELECT id, snapshot_json, completeness, finalized_by, created_at FROM {_RETRO_TABLE} "
+                f"WHERE event_id = ? ORDER BY created_at DESC LIMIT 1",
+                (str(event_id),),
+            ).fetchone()
+            if row:
+                rec = dict(row)
+                return {
+                    "source": "finalized_snapshot",
+                    "retrospective_id": rec.get("id"),
+                    "finalized_at": str(rec.get("created_at") or ""),
+                    "finalized_by": rec.get("finalized_by"),
+                    "snapshot": _loads(rec.get("snapshot_json"), {}),
+                }
+        except Exception:
+            logger.debug("event_retro.read_latest_failed", exc_info=True)
+    return {"source": "live_aggregate", "snapshot": aggregate_event_retrospective(event_id, None)}

@@ -132,6 +132,24 @@ def event_retrospective(event_id: str, staff=Depends(require_tab("vkpi", "read")
     return _guard(retrospective.aggregate_event_retrospective, event_id, staff)
 
 
+@router.post("/{event_id}/retrospective/finalize")
+def event_retrospective_finalize(event_id: str, staff=Depends(require_tab("vkpi", "write"))):
+    """F4 · 定格复盘:把当前复盘聚合落库一行快照(vkpi_event_retrospectives)。"""
+    _assert_read(event_id, staff)
+    from app.domains.events import retrospective
+
+    return _guard(retrospective.finalize_event_retrospective, event_id, staff)
+
+
+@router.get("/{event_id}/retrospective/latest")
+def event_retrospective_latest(event_id: str, staff=Depends(require_tab("vkpi", "read"))):
+    """F4 · 读最近一次定格复盘快照(无则回退实时聚合)。"""
+    _assert_read(event_id, staff)
+    from app.domains.events import retrospective
+
+    return _guard(retrospective.get_latest_retrospective, event_id, staff)
+
+
 @router.post("")
 def create_event(body: dict, staff=Depends(require_tab("vkpi", "write"))):
     return _guard(service.create_event, body or {}, staff)
