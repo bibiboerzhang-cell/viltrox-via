@@ -33,6 +33,17 @@ def portfolio_metrics(
     return aggregation.aggregate_portfolio_metrics(window_days=window_days, staff=staff)
 
 
+@router.get("/high-value-kols")
+def high_value_kols(
+    limit: int = Query(default=10, ge=1, le=50),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict[str, Any]:
+    """高价值红人榜(按合作项目数 + ROI + 下次推荐权重排序;只读,喂个人工作台)。"""
+    from app.domains.kol import roi_aggregate
+
+    return roi_aggregate.list_high_value_kols(limit=int(limit), staff=staff)
+
+
 @router.get("/kol/{kol_pool_id}")
 def kol_roi_metrics(
     kol_pool_id: int,

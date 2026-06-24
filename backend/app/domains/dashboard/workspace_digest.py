@@ -30,10 +30,13 @@ def get_workspace_digest(staff: dict[str, Any] | None = None, *, action_limit: i
     from app.domains.metrics import aggregation as metrics
     from app.domains.projects import pipeline_sequence
 
+    from app.domains.kol import roi_aggregate
+
     today = _safe(lambda: inbox.list_inbox(staff, status="suggested", limit=max(1, min(int(action_limit or 5), 20))), {"items": [], "available": False})
     ledger = _safe(lambda: inbox.read_execution_ledger(staff, limit=5), {"items": [], "available": False})
     pipeline = _safe(lambda: pipeline_sequence.pipeline_readiness(staff=staff), {"breakpoints": [], "total_ready": 0})
     portfolio = _safe(lambda: metrics.aggregate_portfolio_metrics(staff=staff), {"status": "awaiting_m5"})
+    high_value = _safe(lambda: roi_aggregate.list_high_value_kols(limit=8, staff=staff), {"items": [], "available": False})
 
     return {
         "today_actions": {
@@ -50,6 +53,10 @@ def get_workspace_digest(staff: dict[str, Any] | None = None, *, action_limit: i
         "recent_executions": {
             "items": ledger.get("items", []),
             "by_outcome": ledger.get("by_outcome", {}),
+        },
+        "high_value_kols": {
+            "items": high_value.get("items", []),
+            "count": high_value.get("count", 0),
         },
         "note": "运营每日 digest;只读聚合,各块独立降级;零触 viltrox_fit_score。",
     }

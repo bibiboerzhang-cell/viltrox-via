@@ -72,6 +72,52 @@ def get_kol_roi_summary(kol_pool_id: int, *, staff: dict[str, Any] | None = None
     }
 
 
+def list_high_value_kols(*, limit: int = 10, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    """高价值红人榜:按合作项目数取候选,附 ROI + 下次推荐权重,按权重→项目数排序(只读)。
+
+    喂个人工作台。复用 get_kol_roi_summary + compute_next_recommendation_weight。零触 fit。
+    """
+    del staff
+    if not table_exists("vkpi_project_kol_assignments"):
+        return {"items": [], "available": False, "reason": "assignments_table_absent"}
+    n = max(1, min(int(limit or 10), 50))
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT kol_pool_id, COUNT(DISTINCT project_id) AS projects "
+            "FROM vkpi_project_kol_assignments GROUP BY kol_pool_id ORDER BY projects DESC LIMIT ?",
+            (n,),
+        ).fetchall()
+    except Exception:
+        logger.warning("roi.high_value_read_failed", exc_info=True)
+        return {"items": [], "available": False, "reason": "read_error"}
+    kids = [int(dict(r)["kol_pool_id"]) for r in rows if dict(r).get("kol_pool_id")]
+    proj = {int(dict(r)["kol_pool_id"]): int(dict(r)["projects"]) for r in rows if dict(r).get("kol_pool_id")}
+    names: dict[int, str] = {}
+    if kids and table_exists("vkpi_kol_pool"):
+        try:
+            ph = ",".join("?" for _ in kids)
+            for nr in conn.execute(f"SELECT id, COALESCE(display_name, handle, '') AS label FROM vkpi_kol_pool WHERE id IN ({ph})", kids).fetchall():
+                names[int(dict(nr)["id"])] = str(dict(nr).get("label") or "")
+        except Exception:
+            logger.debug("roi.high_value_names_failed", exc_info=True)
+    items: list[dict[str, Any]] = []
+    for kid in kids:
+        roi = get_kol_roi_summary(kid)
+        items.append({
+            "kol_pool_id": kid,
+            "name": names.get(kid, f"KOL #{kid}"),
+            "projects": proj.get(kid, 0),
+            "roi": roi.get("roi"),
+            "revenue_cents": roi.get("revenue_cents"),
+            "status": roi.get("status"),
+            "recommendation_weight": compute_next_recommendation_weight(kid),
+        })
+    items.sort(key=lambda x: (-(x["recommendation_weight"] or 0), -x["projects"]))
+    return {"items": items, "available": True, "count": len(items),
+            "note": "高价值红人榜:权重/ROI 为独立展示信号,绝不并入 viltrox_fit_score。"}
+
+
 def compute_next_recommendation_weight(kol_pool_id: int, *, lookback: int = 50) -> float | None:
     """据该 KOL 推荐漏斗成功度算 0-1 展示权重(独立信号,绝不并入 fit)。无 outcome → None。
 
