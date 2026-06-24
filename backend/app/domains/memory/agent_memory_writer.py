@@ -85,3 +85,96 @@ def record_kol_signal(kol_pool_id: Any, action_kind: str, *, staff: dict[str, An
         action_kind=action_kind, entity_type="kol", entity_id=kol_pool_id,
         staff=staff, reason=reason, detail=detail,
     )
+
+
+# ── B5/H4 学习闭环:结果回写 ──────────────────────────────────────────────
+_OUTCOME_TABLE = "vkpi_agent_outcome_evaluations"
+_OUTCOMES = {"success", "fail", "partial"}
+
+
+def record_outcome(
+    *,
+    entity_type: str,
+    entity_id: Any,
+    outcome: str,
+    recommend_again: bool | None = None,
+    agent_action_id: int | None = None,
+    evidence: dict[str, Any] | None = None,
+) -> int | None:
+    """写一行 vkpi_agent_outcome_evaluations(动作结果评估)→ 喂推荐权重回流。
+
+    outcome: success|fail|partial。recommend_again 缺省:fail→False,其余 True。
+    best-effort,缺表/非法 outcome → 静默跳过,绝不抛。零触 viltrox_fit_score。
+    """
+    oc = str(outcome or "").strip().lower()
+    if oc not in _OUTCOMES or not table_exists(_OUTCOME_TABLE):
+        return None
+    success = True if oc == "success" else (False if oc == "fail" else None)
+    if recommend_again is None:
+        recommend_again = oc != "fail"
+    try:
+        conn = get_conn()
+        row = conn.execute(
+            f"""
+            INSERT INTO {_OUTCOME_TABLE}
+              (agent_action_id, entity_type, entity_id, outcome, success, recommend_again, evidence_json)
+            VALUES (?,?,?,?,?,?,?::jsonb)
+            RETURNING id
+            """,
+            (
+                int(agent_action_id) if agent_action_id else None,
+                str(entity_type or ""),
+                str(entity_id or ""),
+                oc,
+                success,
+                bool(recommend_again),
+                _dumps(evidence or {}),
+            ),
+        ).fetchone()
+        conn.commit()
+        return int(dict(row)["id"]) if row else None
+    except Exception:
+        logger.warning("agent_memory_writer.record_outcome_failed", extra={"entity_id": entity_id}, exc_info=True)
+        return None
+
+
+def _truthy(v: Any) -> bool | None:
+    """兼容 BOOLEAN 跨适配器读回(可能是 bool / int 1·0 / 't'·'f')。None 保持 None(partial)。"""
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return v != 0
+    s = str(v).strip().lower()
+    if s in {"t", "true", "1", "yes"}:
+        return True
+    if s in {"f", "false", "0", "no", ""}:
+        return False
+    return None
+
+
+def recent_outcome_stats(entity_type: str, entity_id: Any, *, lookback: int = 20) -> dict[str, Any]:
+    """读某实体近期结果:{total, success, fail, recommend_again_ratio}。缺表/无记录 → total=0。"""
+    if not table_exists(_OUTCOME_TABLE):
+        return {"total": 0, "success": 0, "fail": 0, "recommend_again_ratio": None}
+    try:
+        rows = get_conn().execute(
+            f"""
+            SELECT outcome, success, recommend_again
+            FROM {_OUTCOME_TABLE}
+            WHERE entity_type = ? AND entity_id = ?
+            ORDER BY id DESC LIMIT ?
+            """,
+            (str(entity_type or ""), str(entity_id or ""), max(1, min(int(lookback or 20), 200))),
+        ).fetchall()
+    except Exception:
+        logger.debug("agent_memory_writer.recent_outcome_failed", exc_info=True)
+        return {"total": 0, "success": 0, "fail": 0, "recommend_again_ratio": None}
+    n = len(rows)
+    if not n:
+        return {"total": 0, "success": 0, "fail": 0, "recommend_again_ratio": None}
+    succ = sum(1 for r in rows if _truthy(dict(r).get("success")) is True)
+    fail = sum(1 for r in rows if _truthy(dict(r).get("success")) is False)
+    again = sum(1 for r in rows if _truthy(dict(r).get("recommend_again")) is True)
+    return {"total": n, "success": succ, "fail": fail, "recommend_again_ratio": round(again / n, 4)}

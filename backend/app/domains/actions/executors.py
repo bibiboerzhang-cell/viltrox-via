@@ -144,6 +144,30 @@ def _record_execution_feedback(
         )
 
 
+def _record_outcome_eval(action: dict[str, Any], *, outcome: str) -> None:
+    """B5/H4 学习闭环:把执行结果写进 vkpi_agent_outcome_evaluations → 回流推荐权重。
+
+    仅对有实体的动作(kol/project…)记录;success→recommend_again,fail→不再推荐。
+    best-effort:写失败只 warning,绝不阻断 execute_action 返回。零触 viltrox_fit_score。
+    """
+    entity_type = str(action.get("entity_type") or "").strip()
+    entity_id = str(action.get("entity_id") or "").strip()
+    if not entity_type or not entity_id:
+        return
+    try:
+        from app.domains.memory import agent_memory_writer
+
+        agent_memory_writer.record_outcome(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            outcome=outcome,
+            agent_action_id=int(action.get("id") or 0) or None,
+            evidence={"category": str(action.get("category") or ""), "action_id": action.get("id")},
+        )
+    except Exception:
+        logger.warning("action_executor.outcome_eval_failed", extra={"action_id": action.get("id")}, exc_info=True)
+
+
 # ── per-category dispatch(全部复用既有 service,签名实证) ────────────────
 def _exec_deep_missing(action: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
     """KOL 深析待跑 → 入 apify_jobs(账号深爬队列)。复用 enqueue_profile_deep_crawl_job(去重)。"""
@@ -444,9 +468,11 @@ def execute_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[
         inbox.set_status(action_id, "executed")
         # R8:成功执行 → 写回 vkpi_memory_feedback 埋种(②学习闭环);best-effort,不阻断返回。
         _record_execution_feedback(action, staff, outcome="success", detail=detail)
+        _record_outcome_eval(action, outcome="success")  # B5/H4 结果回写 → 推荐权重回流
         return _result(ok=True, outcome="success", category=category, ledger_id=lid, detail=detail)
     if outcome == "failed":
         inbox.set_status(action_id, "failed")
+        _record_outcome_eval(action, outcome="fail")  # B5/H4 失败也回写(下次降权)
         return _result(ok=False, outcome="failed", category=category, reason=reason, ledger_id=lid, detail=detail)
     # skipped:不改 action 状态(仍 approved,人可再处理或 dismiss)。
     return _result(ok=False, outcome="skipped", category=category, reason=reason, ledger_id=lid, detail=detail)

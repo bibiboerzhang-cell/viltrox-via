@@ -118,12 +118,8 @@ def list_high_value_kols(*, limit: int = 10, staff: dict[str, Any] | None = None
             "note": "高价值红人榜:权重/ROI 为独立展示信号,绝不并入 viltrox_fit_score。"}
 
 
-def compute_next_recommendation_weight(kol_pool_id: int, *, lookback: int = 50) -> float | None:
-    """据该 KOL 推荐漏斗成功度算 0-1 展示权重(独立信号,绝不并入 fit)。无 outcome → None。
-
-    漏斗加权:认领 0.2 + 达成合作 0.3 + 内容发布 0.5(发布最重),按样本均值,clamp[0,1]。
-    """
-    kid = int(kol_pool_id or 0)
+def _funnel_weight(kid: int, lookback: int) -> float | None:
+    """漏斗加权:认领 0.2 + 达成合作 0.3 + 内容发布 0.5(发布最重),样本均值,clamp[0,1]。"""
     if kid <= 0 or not table_exists("vkpi_recommendation_outcomes"):
         return None
     try:
@@ -132,8 +128,7 @@ def compute_next_recommendation_weight(kol_pool_id: int, *, lookback: int = 50) 
             SELECT was_claimed, agreement_reached, content_published
             FROM vkpi_recommendation_outcomes
             WHERE kol_pool_id = ?
-            ORDER BY id DESC
-            LIMIT ?
+            ORDER BY id DESC LIMIT ?
             """,
             (kid, max(1, min(int(lookback or 50), 200))),
         ).fetchall()
@@ -146,5 +141,38 @@ def compute_next_recommendation_weight(kol_pool_id: int, *, lookback: int = 50) 
     claimed = sum(1 for r in rows if dict(r).get("was_claimed"))
     agreed = sum(1 for r in rows if dict(r).get("agreement_reached"))
     published = sum(1 for r in rows if dict(r).get("content_published"))
-    weight = (0.2 * claimed + 0.3 * agreed + 0.5 * published) / n
+    return min(1.0, max(0.0, (0.2 * claimed + 0.3 * agreed + 0.5 * published) / n))
+
+
+def compute_next_recommendation_weight(kol_pool_id: int, *, lookback: int = 50) -> float | None:
+    """0-1 展示权重(独立信号,绝不并入 fit)。漏斗成功度 + Agent 结果回写融合。
+
+    B5/H4 学习闭环:除推荐漏斗外,读 vkpi_agent_outcome_evaluations 的近期成功/失败,
+    让执行结果回流到下次推荐(失败模式降权、成功模式升权)。两源都无 → None。
+    """
+    kid = int(kol_pool_id or 0)
+    if kid <= 0:
+        return None
+    base = _funnel_weight(kid, lookback)
+    # Agent 结果回写信号(成功率)。
+    try:
+        from app.domains.memory import agent_memory_writer
+
+        oc = agent_memory_writer.recent_outcome_stats("kol", kid, lookback=20)
+    except Exception:
+        oc = {"total": 0}
+    outcome_weight = None
+    if int(oc.get("total") or 0) > 0:
+        decided = int(oc.get("success") or 0) + int(oc.get("fail") or 0)
+        if decided > 0:
+            outcome_weight = int(oc.get("success") or 0) / decided
+    # 融合:两源都有 → 0.6 漏斗 + 0.4 结果回写;只一源 → 该源;都无 → None。
+    if base is not None and outcome_weight is not None:
+        weight = 0.6 * base + 0.4 * outcome_weight
+    elif base is not None:
+        weight = base
+    elif outcome_weight is not None:
+        weight = outcome_weight
+    else:
+        return None
     return round(min(1.0, max(0.0, weight)), 4)
