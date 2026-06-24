@@ -394,6 +394,14 @@ def kol_recommendation_card(
     return recommendation_card.get_recommendation_card(int(kol_pool_id), staff=staff)
 
 
+@router.get("/kol-pool/auto-poll/status")
+def kol_pool_auto_poll_status(staff=Depends(require_tab("vkpi", "read"))) -> dict:
+    """D3 · 关注 KOL 自动轮询状态:应轮询候选数 + 队列可用性(只读,全容错)。"""
+    from app.domains.kol import auto_poll
+
+    return auto_poll.auto_poll_status()
+
+
 @router.get("/kol-pool/{kol_pool_id}/twin")
 def kol_twin(
     kol_pool_id: int,

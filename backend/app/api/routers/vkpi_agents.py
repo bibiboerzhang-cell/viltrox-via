@@ -60,6 +60,30 @@ def unified_recall(
     return semantic_recall.unified_recall(q, limit=int(limit), staff=staff)
 
 
+@router.get("/token-broker/status")
+def token_broker_status(staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
+    """I1 · API Token Broker 状态:各 provider 可用/冷却/耗尽计数(只读;表内零密钥)。"""
+    from app.domains.platform import token_broker
+
+    return token_broker.broker_status()
+
+
+@router.get("/worker-lease/status")
+def worker_lease_status(staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
+    """I2 · Worker Lease 状态:leased/completed/expired/released 计数(只读)。"""
+    from app.domains.platform import worker_lease
+
+    return worker_lease.lease_status()
+
+
+@router.get("/classify-input")
+def classify_input(q: str, staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
+    """K1 · 统一智能输入分类:URL/账号/产品需求/自然语言 → kind + 建议路由(零 LLM/DB)。"""
+    from app.domains.intelligence import unified_input
+
+    return unified_input.classify_input(q)
+
+
 @router.post("/plan/{plan_id}/materialize")
 def materialize_plan(plan_id: int, staff=Depends(require_tab("vkpi", "write"))) -> dict[str, Any]:
     """H5 · plan→action:把计划步骤物化成 Action Inbox 可审批项(零自动执行,人审后才跑)。"""

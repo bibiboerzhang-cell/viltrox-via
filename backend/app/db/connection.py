@@ -232,6 +232,10 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "183_vkpi_shipment_approvals.sql",
     "184_vkpi_event_retrospectives.sql",
     "185_scheduler_task_logistics_track_sync.sql",
+    "186_vkpi_api_tokens.sql",
+    "187_vkpi_worker_leases.sql",
+    "188_scheduler_task_kol_auto_poll.sql",
+    "189_vkpi_event_evidence.sql",
 )
 
 try:

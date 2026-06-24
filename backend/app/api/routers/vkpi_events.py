@@ -132,6 +132,29 @@ def event_retrospective(event_id: str, staff=Depends(require_tab("vkpi", "read")
     return _guard(retrospective.aggregate_event_retrospective, event_id, staff)
 
 
+@router.get("/{event_id}/evidence")
+def event_evidence_list(event_id: str, staff=Depends(require_tab("vkpi", "read"))):
+    """F3 · 活动证据清单(发票/图片/合同/现场照)+ 发票金额合计(只读)。"""
+    _assert_read(event_id, staff)
+    from app.domains.events import evidence_upload
+
+    return _guard(evidence_upload.list_evidence, event_id, staff)
+
+
+@router.post("/{event_id}/evidence")
+def event_evidence_add(event_id: str, body: dict, staff=Depends(require_tab("vkpi", "write"))):
+    """F3 · 记录活动证据元数据(二进制走 R2/本地;DB 仅存元数据 + storage_ref)。"""
+    _assert_read(event_id, staff)
+    from app.domains.events import evidence_upload
+
+    b = body or {}
+    return evidence_upload.record_evidence_meta(
+        event_id, str(b.get("kind") or "other"), str(b.get("filename") or ""), str(b.get("storage_ref") or ""),
+        content_type=str(b.get("content_type") or ""), size_bytes=int(b.get("size_bytes") or 0),
+        amount_cents=b.get("amount_cents"), note=str(b.get("note") or ""), staff=staff,
+    )
+
+
 @router.post("/{event_id}/geocode")
 def event_geocode(event_id: str, body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
     """F2 · 活动地址地理编码(免 key,OSM Nominatim)→ 写回经纬度;失败提示手动填。"""
