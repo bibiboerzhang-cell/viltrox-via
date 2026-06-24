@@ -48,6 +48,17 @@ def read_plan(
     return item
 
 
+@router.get("/workspace-digest")
+def workspace_digest(
+    action_limit: int = 5,
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict[str, Any]:
+    """里程碑1 · 运营每日 digest:今日建议 + 主链路就绪 + 组合 ROI + 最近执行(只读聚合)。"""
+    from app.domains.dashboard import workspace_digest as wd
+
+    return wd.get_workspace_digest(staff, action_limit=int(action_limit))
+
+
 @router.get("/kol/{kol_pool_id}/provenance")
 def kol_provenance(
     kol_pool_id: int,
