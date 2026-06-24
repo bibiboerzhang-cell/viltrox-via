@@ -1055,6 +1055,16 @@ def add_project_kols(project_id: int, body: dict[str, Any], *, staff: dict[str, 
         ).fetchone()
         if row:
             inserted += 1
+            # S3 学习闭环:加项目 = 强信号,沉淀进 vkpi_agent_actions(best-effort,不阻断)。
+            try:
+                from app.domains.memory import agent_memory_writer
+
+                agent_memory_writer.record_kol_signal(
+                    kol_pool_id, "add_to_project", staff=staff,
+                    reason="added_to_project", detail={"project_id": int(project_id)},
+                )
+            except Exception:
+                logger.debug("add_project_kols.agent_signal_skipped", exc_info=True)
             # P0-4 触达历史回流:加入项目=一次明确触达(谁/何时/经哪个项目)。最薄记录,
             # ON CONFLICT 幂等(同人同项目同 channel 不重复堆);失败旁路不阻断 assignment 主写。
             try:

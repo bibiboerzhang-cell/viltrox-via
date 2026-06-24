@@ -228,6 +228,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "179_vkpi_action_inbox_decision_fields.sql",
     "180_vkpi_agent_orchestration.sql",
     "181_vkpi_action_inbox_verification.sql",
+    "182_vkpi_agent_actions_learning.sql",
 )
 
 try:
