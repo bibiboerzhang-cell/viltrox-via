@@ -562,6 +562,50 @@ async def job_logistics_track_sync():
         _record_scheduler_run("logistics_track_sync", ok=False, error=str(exc)[:240])
 
 
+async def job_worker_lease_expire_stale():
+    """I2 · 清扫过期 worker 租约(到期仍 leased → expired,供重派)。常开、空跑无害。"""
+    try:
+        import asyncio
+        from app.domains.platform import worker_lease
+
+        res = await asyncio.to_thread(worker_lease.expire_stale)
+        if int(res.get("expired") or 0):
+            logger.info("scheduler.worker_lease_expire", extra={"expired": res.get("expired")})
+    except Exception:
+        logger.warning("scheduler.worker_lease_expire_failed", exc_info=True)
+
+
+async def job_token_broker_reset_daily():
+    """I1 · 每日复位 token 配额用量/成本,清因耗尽的 health 态。常开、空跑无害。"""
+    try:
+        import asyncio
+        from app.domains.platform import token_broker
+
+        res = await asyncio.to_thread(token_broker.reset_daily)
+        logger.info("scheduler.token_broker_reset", extra={"reset": str(res)[:80]})
+    except Exception:
+        logger.warning("scheduler.token_broker_reset_failed", exc_info=True)
+
+
+async def job_kol_auto_poll():
+    """D3 · 关注 KOL 自动轮询:对收藏/高价值/进项目且 metadata 超 24h 的 KOL 入队轻量刷新。
+
+    config-gate:scheduler_tasks.kol_auto_poll(默认 OFF)。不真跑抓取/不烧 LLM;best-effort 入队。
+    """
+    if not _scheduler_task_enabled("kol_auto_poll"):
+        return
+    try:
+        import asyncio
+        from app.domains.kol import auto_poll
+
+        res = await asyncio.to_thread(auto_poll.enqueue_auto_poll, None)
+        logger.info("scheduler.kol_auto_poll", extra={"status": str(res.get("status")), "enqueued": res.get("enqueued_count")})
+        _record_scheduler_run("kol_auto_poll", ok=True)
+    except Exception as exc:
+        logger.exception("scheduler.kol_auto_poll_failed")
+        _record_scheduler_run("kol_auto_poll", ok=False, error=str(exc)[:240])
+
+
 async def job_fulfillment_content_scan():
     """履约:对到期/活动观察窗口扫真证据 → 物化内容候选(scan_windows_for_content)。
 
@@ -971,6 +1015,33 @@ async def start_scheduler() -> None:
         trigger=IntervalTrigger(hours=2),
         id="logistics_track_sync",
         name="17track logistics auto-sync (active shipments)",
+        max_instances=1,
+        coalesce=True,
+    )
+    # ── I2 worker 租约清扫(常开,空跑无害)──
+    _scheduler.add_job(
+        job_worker_lease_expire_stale,
+        trigger=IntervalTrigger(minutes=5),
+        id="worker_lease_expire_stale",
+        name="worker lease expire stale",
+        max_instances=1,
+        coalesce=True,
+    )
+    # ── I1 token broker 每日配额复位(常开)──
+    _scheduler.add_job(
+        job_token_broker_reset_daily,
+        trigger=CronTrigger(hour=0, minute=5),
+        id="token_broker_reset_daily",
+        name="token broker daily quota reset",
+        max_instances=1,
+        coalesce=True,
+    )
+    # ── D3 关注 KOL 自动轮询(config-gate,默认 OFF)──
+    _scheduler.add_job(
+        job_kol_auto_poll,
+        trigger=IntervalTrigger(hours=24),
+        id="kol_auto_poll",
+        name="followed-KOL auto poll (light metadata refresh)",
         max_instances=1,
         coalesce=True,
     )
