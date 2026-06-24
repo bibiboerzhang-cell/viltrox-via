@@ -119,6 +119,33 @@ def set_scheduler_task_enabled(task_key: str, enabled: bool, staff: dict[str, An
     return _row_to_dict(row)
 
 
+def record_run(task_key: str, *, ok: bool, error: str = "") -> None:
+    """S2:cron 任务每次运行后回写 last_run_at / last_success_at / last_error(让"定时真跑"可见)。
+
+    best-effort:只更新 scheduler_tasks 元数据,失败只 debug 不抛(绝不拖垮调度任务本体)。
+    表缺/行缺 → 静默跳过(诚实)。零触业务表 / viltrox_fit_score。
+    """
+    key = str(task_key or "").strip()
+    if not key or not table_exists(_TABLE):
+        return
+    try:
+        conn = get_conn()
+        now = datetime.now(tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+        if ok:
+            conn.execute(
+                f"UPDATE {_TABLE} SET last_run_at=?, last_success_at=?, last_error='' WHERE task_key=?",
+                (now, now, key),
+            )
+        else:
+            conn.execute(
+                f"UPDATE {_TABLE} SET last_run_at=?, last_error=? WHERE task_key=?",
+                (now, str(error or "")[:500], key),
+            )
+        conn.commit()
+    except Exception:
+        logger.debug("scheduler_registry: record_run failed for %s", key, exc_info=True)
+
+
 def scheduler_status(conn: Any | None = None) -> dict[str, Any]:
     """Honest counts: {total, enabled, by_risk:{low,medium,high}}.
 

@@ -417,6 +417,16 @@ def _scheduler_task_enabled(task_key: str, *, default: bool = False) -> bool:
         return default
 
 
+def _record_scheduler_run(task_key: str, *, ok: bool, error: str = "") -> None:
+    """S2:cron 任务运行后回写 last_run/last_success/last_error 到注册表(让"定时真跑"可见)。容错。"""
+    try:
+        from app.domains.ops import scheduler_registry
+
+        scheduler_registry.record_run(task_key, ok=ok, error=error)
+    except Exception:
+        logger.debug("scheduler.record_run_helper_failed", extra={"task": task_key}, exc_info=True)
+
+
 def _scheduler_system_staff() -> dict:
     """调度器无登录人;用系统 admin 身份让 scope.project_filter 全可见(与 sync.cron._system_staff 同款)。"""
     return {"id": 0, "staff_id": 0, "user_id": 0, "role": "admin", "is_owner": 1, "email": ""}
@@ -464,8 +474,10 @@ async def job_fulfillment_delivered_scan():
                     )
         except Exception:
             logger.debug("scheduler.fulfillment_delivered_scan_audit_skipped", exc_info=True)
-    except Exception:
+        _record_scheduler_run("project_shipment_sync", ok=True)
+    except Exception as exc:
         logger.exception("scheduler.fulfillment_delivered_scan_failed")
+        _record_scheduler_run("project_shipment_sync", ok=False, error=str(exc)[:240])
 
 
 async def job_daily_action_inbox_generate():
@@ -488,8 +500,10 @@ async def job_daily_action_inbox_generate():
             "scheduler.daily_action_inbox_generate",
             extra={"generated": result.get("generated"), "by_category": result.get("by_category")},
         )
-    except Exception:
+        _record_scheduler_run("daily_action_inbox_generate", ok=True)
+    except Exception as exc:
         logger.exception("scheduler.daily_action_inbox_generate_failed")
+        _record_scheduler_run("daily_action_inbox_generate", ok=False, error=str(exc)[:240])
 
 
 async def job_fulfillment_due_scan():
@@ -520,8 +534,10 @@ async def job_fulfillment_due_scan():
                 "scheduler.fulfillment_due_scan",
                 extra={"created": created_total, "scanned": scanned_total},
             )
-    except Exception:
+        _record_scheduler_run("fulfillment_due_scan", ok=True)
+    except Exception as exc:
         logger.exception("scheduler.fulfillment_due_scan_failed")
+        _record_scheduler_run("fulfillment_due_scan", ok=False, error=str(exc)[:240])
 
 
 async def job_fulfillment_content_scan():
