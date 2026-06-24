@@ -659,6 +659,14 @@ export async function getKolRecommendationCard(
   );
 }
 
+export async function getKolTwin(token: string, kolPoolId: string | number): Promise<Row> {
+  return apiFetch<Row>(
+    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/twin`,
+    { cache: "no-store" },
+    token,
+  );
+}
+
 export async function getKolSearchSession(
   token: string,
   sessionId: string | number,

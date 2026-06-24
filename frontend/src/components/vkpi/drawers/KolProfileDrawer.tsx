@@ -6,6 +6,7 @@ import { StageBadge } from '../shared/StageBadge';
 import { numberFormatter } from '../shared/vkpiFormatters';
 import { coerceProjectStage, formatMoneyCents, profileToKolDetail, safeNumber, textValue } from '../shared/vkpiDataUtils';
 import { platformLabels } from '../shared/vkpiConstants';
+import { KolTwinCard } from '../cards/KolTwinCard';
 
 export function KolProfileDrawer({
   profile,
@@ -16,6 +17,7 @@ export function KolProfileDrawer({
   error,
   onSelectProject,
   onClose,
+  apiToken,
 }: {
   profile: VkpiKolProfile | null;
   fallbackKol: VkpiKolDetail;
@@ -25,6 +27,7 @@ export function KolProfileDrawer({
   error?: string;
   onSelectProject?: (project: VkpiProjectRow) => void;
   onClose: () => void;
+  apiToken?: string;
 }) {
   const fallbackDetail: VkpiKolDetail = {
     ...fallbackKol,
@@ -67,6 +70,7 @@ export function KolProfileDrawer({
       <div className="vkpi-evidence-list">
         {loading ? <div className="vkpi-empty-state">正在加载真实 KOL 档案...</div> : null}
         {error ? <div className="vkpi-empty-state">{error}</div> : null}
+        {apiToken && kol.id ? <KolTwinCard kolPoolId={kol.id} apiToken={apiToken} /> : null}
         <article>
           <div><strong>账号概览</strong><span>{kol.scanStatus || '未抓取'}</span></div>
           <div className="vkpi-profile-card vkpi-profile-card--drawer">

@@ -596,6 +596,7 @@ export function VkpiDashboard({
             error={kolProfileDrawerError}
             onSelectProject={handleSelectProject}
             onClose={closeKolProfileDrawer}
+            apiToken={apiToken}
           />
         ) : null}
         {staffProfileDrawerMember ? (
