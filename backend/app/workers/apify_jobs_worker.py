@@ -69,6 +69,8 @@ STALE_RUNNING_MINUTES = max(1, int(os.environ.get("APIFY_WORKER_STALE_RUNNING_MI
 STALE_RECLAIM_SECONDS = STALE_RUNNING_MINUTES * 60
 STALE_RECLAIM_POLL_SECONDS = max(30, int(os.environ.get("APIFY_WORKER_STALE_RECLAIM_POLL_SECONDS", "60")))
 RUNNING_HEARTBEAT_SECONDS = max(10, int(os.environ.get("APIFY_WORKER_RUNNING_HEARTBEAT_SECONDS", "30")))
+# DB 连接瞬断后重连前等待秒数。治 6/23 那次:连接丢失 → 未捕获 → worker 永久死 3.5 天。
+WORKER_DB_RECONNECT_SECONDS = max(2, int(os.environ.get("APIFY_WORKER_DB_RECONNECT_SECONDS", "5")))
 # T5 真实存活:每轮 poll(含空闲)向 vkpi_worker_heartbeat UPSERT 一行,
 # system_health._worker_online 据此判在线;逻辑 worker 名可经 env 覆盖。
 WORKER_HEARTBEAT_NAME = os.environ.get("APIFY_WORKER_HEARTBEAT_NAME", "apify_jobs_worker").strip() or "apify_jobs_worker"
@@ -3768,37 +3770,48 @@ def run_worker() -> None:
         PROVIDER_RETRY_ADOPT_WINDOW_MINUTES,
     )
     try:
-        with psycopg.connect(DB_RUNTIME_URL, autocommit=True) as conn:
-            _reclaim_stale_running_jobs(conn)
-            _adopt_recent_provider_pressure_failures(conn)
-            last_reclaim = time.monotonic()
-            _upsert_worker_heartbeat(conn)
-            while not _stop_event.is_set():
-                # T5:每轮 poll(含空闲)写心跳 → 空闲 worker 不再被判离线。
-                _upsert_worker_heartbeat(conn)
-                if time.monotonic() - last_reclaim >= STALE_RECLAIM_POLL_SECONDS:
+        # 外层重连循环:DB 连接断/丢(6/23 'the connection is lost')→ 不让 worker 永久死,
+        # 睡几秒拿新连接重来。内层为原有的单连接 poll 循环。
+        while not _stop_event.is_set():
+            try:
+                with psycopg.connect(DB_RUNTIME_URL, autocommit=True) as conn:
                     _reclaim_stale_running_jobs(conn)
                     _adopt_recent_provider_pressure_failures(conn)
                     last_reclaim = time.monotonic()
-                job = _claim_job(conn)
-                if not job:
-                    _stop_event.wait(POLL_SECONDS)
-                    continue
-                if _stop_event.is_set():
-                    _requeue_job(conn, int(job["id"]), "worker stop requested before processing")
-                    break
-                try:
-                    with _running_job_heartbeat(int(job["id"])):
-                        _process_job(conn, job)
-                    logger.info("apify_jobs job done | id=%s", job["id"])
-                except Exception as exc:
-                    logger.error(
-                        "apify_jobs job failed | id=%s category=%s error=%s",
-                        job.get("id"),
-                        _error_category(str(exc)),
-                        _redact_sensitive_text(f"{type(exc).__name__}: {exc}"),
-                    )
-                    _fail_job(conn, int(job["id"]), exc)
+                    _upsert_worker_heartbeat(conn)
+                    while not _stop_event.is_set():
+                        # T5:每轮 poll(含空闲)写心跳 → 空闲 worker 不再被判离线。
+                        _upsert_worker_heartbeat(conn)
+                        if time.monotonic() - last_reclaim >= STALE_RECLAIM_POLL_SECONDS:
+                            _reclaim_stale_running_jobs(conn)
+                            _adopt_recent_provider_pressure_failures(conn)
+                            last_reclaim = time.monotonic()
+                        job = _claim_job(conn)
+                        if not job:
+                            _stop_event.wait(POLL_SECONDS)
+                            continue
+                        if _stop_event.is_set():
+                            _requeue_job(conn, int(job["id"]), "worker stop requested before processing")
+                            break
+                        try:
+                            with _running_job_heartbeat(int(job["id"])):
+                                _process_job(conn, job)
+                            logger.info("apify_jobs job done | id=%s", job["id"])
+                        except Exception as exc:
+                            logger.error(
+                                "apify_jobs job failed | id=%s category=%s error=%s",
+                                job.get("id"),
+                                _error_category(str(exc)),
+                                _redact_sensitive_text(f"{type(exc).__name__}: {exc}"),
+                            )
+                            _fail_job(conn, int(job["id"]), exc)
+            except (psycopg.OperationalError, psycopg.InterfaceError) as exc:
+                logger.error(
+                    "apify_jobs worker db connection lost — reconnecting in %ss | %s",
+                    WORKER_DB_RECONNECT_SECONDS,
+                    _redact_sensitive_text(f"{type(exc).__name__}: {exc}"),
+                )
+                _stop_event.wait(WORKER_DB_RECONNECT_SECONDS)
     finally:
         close_db_runtime_sync()
         logger.info("apify_jobs worker stopped")

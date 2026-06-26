@@ -272,17 +272,14 @@ def _worker_online(conn: Any) -> dict[str, Any]:
             "window_minutes": _WORKER_ONLINE_WINDOW_MIN,
         }
     latest_raw = row["latest"] if row is not None else None
-    latest_dt = _parse_dt(latest_raw)
-    online = False
-    if latest_dt is not None:
-        age = (datetime.now(tz=timezone.utc) - latest_dt).total_seconds()
-        online = age <= _WORKER_ONLINE_WINDOW_MIN * 60
+    # apify_jobs.updated_at 近期 ≠ worker 活着——入队/API 写也会 bump 它(6/26 那 4 个排队任务就是)。
+    # 心跳表缺失/读不到时,诚实报「不确定」(online=None),绝不据 updated_at 假报在线(就是之前撒谎的点)。
     return {
         "available": True,
-        "online": bool(online),
+        "online": None,
         "last_heartbeat_at": _to_iso(latest_raw),
         "window_minutes": _WORKER_ONLINE_WINDOW_MIN,
-        "method": "apify_jobs_updated_at_within_window_fallback",
+        "method": "apify_jobs_updated_at_inconclusive",
     }
 
 
