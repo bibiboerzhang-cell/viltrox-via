@@ -60,6 +60,9 @@ rsync -az ${RSYNC_DELETE_FLAG} \
   --exclude '.env' \
   --exclude '.env.*' \
   --exclude 'submissions.db' \
+  --exclude 'video-production-platform/' \
+  --exclude 'reports/vkpi_*.html' \
+  --exclude 'reports/vkpi_*.md' \
   ./ "${SSH_TARGET}:${REMOTE_ROOT}/"
 
 ssh "${SSH_TARGET}" "cd '${REMOTE_ROOT}' && printf '%s\n' '${LOCAL_GIT_SHA}' > BUILD_GIT_SHA && printf '%s\n' '${LOCAL_GIT_BRANCH}' > BUILD_GIT_BRANCH && printf '%s\n' '${LOCAL_BUILD_TIME}' > BUILD_TIME && APP_GIT_SHA='${LOCAL_GIT_SHA}' APP_GIT_SHORT_SHA='${LOCAL_GIT_SHA:0:8}' APP_GIT_BRANCH='${LOCAL_GIT_BRANCH}' APP_BUILD_TIME='${LOCAL_BUILD_TIME}' python3 - <<'PY'
