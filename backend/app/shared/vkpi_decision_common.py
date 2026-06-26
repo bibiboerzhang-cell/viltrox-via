@@ -241,6 +241,8 @@ def _summary(conn, staff_id: int | None = None) -> dict[str, Any]:
     revenue = int(sales.get("revenue_cents") or 0)
     cost = int(costs.get("cost_cents") or 0)
     today = _window_start("today")
+    # 员工视角:today_* 也按 staff 过滤,与上方 sales/cost 同口径(否则员工看到全公司当日数=数据越权)。
+    today_sa_clause = "AND sa.staff_id=?" if staff_id else ""
     today_revenue_ex_company = int(_safe_scalar(
         conn,
         """
@@ -249,8 +251,9 @@ def _summary(conn, staff_id: int | None = None) -> dict[str, Any]:
         WHERE COALESCE(NULLIF(occurred_at, ''), imported_at, created_at) >= ?
           AND ({active_filter})
           AND LOWER(COALESCE(evidence_json, '')) NOT LIKE ?
-        """.format(active_filter=_active_project_filter('sa')),
-        (today, "%company_account%"),
+          {staff_clause}
+        """.format(active_filter=_active_project_filter('sa'), staff_clause=today_sa_clause),
+        (today, "%company_account%", staff_id) if staff_id else (today, "%company_account%"),
     ) or 0)
     today_likes = int(_safe_scalar(
         conn,
@@ -268,17 +271,20 @@ def _summary(conn, staff_id: int | None = None) -> dict[str, Any]:
         FROM vkpi_sales_attributions sa
         WHERE COALESCE(occurred_at, imported_at, created_at) >= ?
           AND ({active_filter})
-        """.format(active_filter=_active_project_filter('sa')),
-        (today,),
+          {staff_clause}
+        """.format(active_filter=_active_project_filter('sa'), staff_clause=today_sa_clause),
+        (today, staff_id) if staff_id else (today,),
     ) or 0)
+    today_clicks_clause = "AND link_id IN (SELECT id FROM vkpi_links WHERE staff_id=?)" if staff_id else ""
     today_clicks = int(_safe_scalar(
         conn,
         """
         SELECT COUNT(*)
         FROM vkpi_link_clicks
         WHERE clicked_at >= ? AND COALESCE(is_bot, 0) = 0
-        """,
-        (today,),
+          {staff_clause}
+        """.format(staff_clause=today_clicks_clause),
+        (today, staff_id) if staff_id else (today,),
     ) or 0)
     return {
         "projects": int(projects.get("total") or 0),

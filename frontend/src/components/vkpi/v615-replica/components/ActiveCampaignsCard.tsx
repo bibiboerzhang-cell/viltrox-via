@@ -106,7 +106,7 @@ export function ActiveCampaignsCard({ campaigns, campaignsMeta, onCampaignClick,
               e("span", { 
                 className: "text-[9px] truncate ml-2",
                 style: { color: c.funnel.some((f: any) => f.bottleneck) ? "#fbbf24" : "rgba(255,255,255,0.45)" }
-              }, c.status === "done" ? "已完成" : c.bottleneckText.split("(")[0])
+              }, c.status === "done" ? "已完成" : (c.bottleneckText || "").split("(")[0])
             )
           )
         );

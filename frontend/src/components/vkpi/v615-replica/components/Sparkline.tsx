@@ -17,7 +17,7 @@ export function Sparkline({ color, data, height = 36, width = 84 }: any) {
     });
     return { line: `M${points.join(" L")}`, area: `M${points.join(" L")} L${width - 2},${height} L2,${height} Z` };
   }, [data, height, width]);
-  const gradId = `g-${color.replace("#", "")}-${data?.[0] ?? 0}`;
+  const gradId = `g-${(color ?? "").replace("#", "")}-${data?.[0] ?? 0}`;
   return e("svg", { viewBox: `0 0 ${width} ${height}`, style: { width, height } },
     e("defs", null,
       e("linearGradient", { id: gradId, x1: "0", y1: "0", x2: "0", y2: "1" },

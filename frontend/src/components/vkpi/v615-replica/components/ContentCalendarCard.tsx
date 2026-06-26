@@ -46,7 +46,7 @@ export function ContentCalendarCard({ days, onItemClick, onViewAll, latestDate }
         d.items.length > 0 && e("div", { className: "space-y-1 pl-9" },
           d.items.slice(0, 3).map((item: any, i: any) => e("div", {
             key: `${d.day || "day"}-${item.time || ""}-${item.label || ""}-${i}`,
-            onClick: () => onItemClick && onItemClick({ ...item, dayStr: d.day, weekday: d.weekday, label: item.label, kolName: item.label.split(" · ")[0], title: item.label.split(" · ").slice(1).join(" · ") || item.label }),
+            onClick: () => onItemClick && onItemClick({ ...item, dayStr: d.day, weekday: d.weekday, label: item.label, kolName: (item.label || "").split(" · ")[0], title: (item.label || "").split(" · ").slice(1).join(" · ") || item.label }),
             className: "flex items-center gap-1.5 text-[10px] cursor-pointer hover:bg-white/[0.02] rounded px-1"
           },
             e("span", {
