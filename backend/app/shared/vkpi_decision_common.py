@@ -248,7 +248,7 @@ def _summary(conn, staff_id: int | None = None) -> dict[str, Any]:
         """
         SELECT COALESCE(SUM(revenue_cents), 0)
         FROM vkpi_sales_attributions sa
-        WHERE COALESCE(NULLIF(occurred_at, ''), imported_at, created_at) >= ?
+        WHERE COALESCE(occurred_at, imported_at, created_at) >= ?
           AND ({active_filter})
           AND LOWER(COALESCE(evidence_json, '')) NOT LIKE ?
           {staff_clause}
