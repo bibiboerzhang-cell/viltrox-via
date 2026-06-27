@@ -394,6 +394,14 @@ def kol_recommendation_card(
     return recommendation_card.get_recommendation_card(int(kol_pool_id), staff=staff)
 
 
+@router.get("/kol-pool/unified-search")
+def kol_unified_search(q: str, external: bool = False, limit: int = 20, staff=Depends(require_tab("vkpi", "read"))) -> dict:
+    """段2 · 统一搜索响应模型:source/status/cost_gate/provider_status/candidate_ids/history_match 一个形。"""
+    from app.domains.kol import unified_search
+
+    return unified_search.unified_search(q, include_external=bool(external), limit=int(limit), staff=staff)
+
+
 @router.get("/kol-pool/discovery/providers")
 def kol_pool_discovery_providers(staff=Depends(require_tab("vkpi", "read"))) -> dict:
     """联邦发现:源注册表(自有 internal_pool 就绪;商业源 modash/hypeauditor/蝉妈妈 待 key+适配器)。"""
