@@ -394,6 +394,30 @@ def kol_recommendation_card(
     return recommendation_card.get_recommendation_card(int(kol_pool_id), staff=staff)
 
 
+@router.get("/kol-pool/discovery/providers")
+def kol_pool_discovery_providers(staff=Depends(require_tab("vkpi", "read"))) -> dict:
+    """联邦发现:源注册表(自有 internal_pool 就绪;商业源 modash/hypeauditor/蝉妈妈 待 key+适配器)。"""
+    from app.domains.discovery import federation
+
+    return {"providers": federation.list_providers()}
+
+
+@router.get("/kol-pool/discovery/federated-search")
+def kol_pool_federated_search(q: str, limit: int = 20, staff=Depends(require_tab("vkpi", "read"))) -> dict:
+    """联邦发现:跨启用源召回候选 KOL → 归一去重(商业源未配置则诚实 not_configured)。"""
+    from app.domains.discovery import federation
+
+    return federation.federated_search(q, limit=int(limit), staff=staff)
+
+
+@router.get("/kol-pool/{kol_pool_id}/enrichment")
+def kol_pool_enrichment(kol_pool_id: int, staff=Depends(require_tab("vkpi", "read"))) -> dict:
+    """KOL 外部富集证据(受众/刷粉/画像/历史;独立展示,绝不并入 viltrox_fit_score)。"""
+    from app.domains.discovery import enrichment
+
+    return enrichment.get_enrichment(int(kol_pool_id))
+
+
 @router.get("/kol-pool/auto-poll/status")
 def kol_pool_auto_poll_status(staff=Depends(require_tab("vkpi", "read"))) -> dict:
     """D3 · 关注 KOL 自动轮询状态:应轮询候选数 + 队列可用性(只读,全容错)。"""
