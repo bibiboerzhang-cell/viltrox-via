@@ -3,7 +3,9 @@
 -- Intentionally no BEGIN/COMMIT: this file is safe to dry-run inside an
 -- outer transaction with ROLLBACK before formal application.
 
-CREATE OR REPLACE VIEW v_dashboard_account_pool AS
+-- 幂等修复:同 083,先 DROP 再 CREATE(无下游依赖,已核)。此条是 v_dashboard_account_pool 的最终列集(含 evidence 字段)。
+DROP VIEW IF EXISTS v_dashboard_account_pool CASCADE;
+CREATE VIEW v_dashboard_account_pool AS
 WITH latest_official_metric AS (
   SELECT DISTINCT ON (channel_id)
     channel_id,

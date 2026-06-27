@@ -22,7 +22,10 @@ CREATE INDEX IF NOT EXISTS idx_vkpi_kol_pool_dashboard_account_type
 CREATE INDEX IF NOT EXISTS idx_vkpi_kol_pool_dashboard_tier
   ON vkpi_kol_pool(dashboard_tier);
 
-CREATE OR REPLACE VIEW v_dashboard_account_pool AS
+-- 幂等修复:CREATE OR REPLACE VIEW 改列集时报 "cannot drop columns from view";
+-- 活库视图可能已被库外/更晚迁移建成不同列集,先 DROP 再 CREATE(无下游依赖,已核)。
+DROP VIEW IF EXISTS v_dashboard_account_pool CASCADE;
+CREATE VIEW v_dashboard_account_pool AS
 WITH latest_official_metric AS (
   SELECT DISTINCT ON (channel_id)
     channel_id,

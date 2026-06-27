@@ -70,7 +70,9 @@ CREATE TRIGGER trg_sync_kol_video_summary
 AFTER INSERT OR UPDATE OR DELETE ON vkpi_kol_video_evidence
 FOR EACH ROW EXECUTE FUNCTION sync_kol_video_summary();
 
-CREATE OR REPLACE VIEW v_dashboard_kol_summary AS
+-- 幂等修复:同 083,先 DROP 再 CREATE(无下游依赖,已核),避免改列集时报 cannot drop columns from view。
+DROP VIEW IF EXISTS v_dashboard_kol_summary CASCADE;
+CREATE VIEW v_dashboard_kol_summary AS
 SELECT
   p.id,
   p.handle,
