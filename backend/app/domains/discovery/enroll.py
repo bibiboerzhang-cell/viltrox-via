@@ -5,25 +5,20 @@
 """
 from __future__ import annotations
 
-import hashlib
 from typing import Any
 
 from app.core.logging import get_logger
-from app.db.connection import get_conn, table_exists
+from app.repositories.kol_pool_repo import KolPoolRepository
 
 logger = get_logger(__name__)
 
 
-def _pool_uid(platform: str, handle: str) -> str:
-    return "disc_" + hashlib.sha1(f"{platform}:{handle}".encode("utf-8")).hexdigest()[:16]
-
-
 def enroll_candidates(candidates: list[dict[str, Any]], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
-    """把外部发现候选落 Pool(已在池/缺键 → 跳过;按 platform+handle 去重)。"""
+    """把外部发现候选落 Pool(已在池/缺键 → 跳过;按 platform+handle 去重)。L2:走 KolPoolRepository。"""
     del staff
-    if not table_exists("vkpi_kol_pool"):
+    repo = KolPoolRepository()
+    if not repo.exists():
         return {"status": "unavailable", "enrolled": 0, "skipped": 0}
-    conn = get_conn()
     enrolled, skipped, ids = 0, 0, []
     for c in candidates or []:
         if c.get("in_pool") or c.get("kol_pool_id"):
@@ -35,23 +30,17 @@ def enroll_candidates(candidates: list[dict[str, Any]], *, staff: dict[str, Any]
             skipped += 1
             continue
         try:
-            exists = conn.execute(
-                "SELECT id FROM vkpi_kol_pool WHERE platform = ? AND handle = ? LIMIT 1", (platform, handle)
-            ).fetchone()
-            if exists:
+            if repo.find_id_by_platform_handle(platform, handle) is not None:
                 skipped += 1
                 continue
-            row = conn.execute(
-                "INSERT INTO vkpi_kol_pool (pool_uid, platform, handle, display_name, profile_url, source_type, source_ref) "
-                "VALUES (?,?,?,?,?,?,?) RETURNING id",
-                (_pool_uid(platform, handle), platform, handle,
-                 str(c.get("name") or "")[:200], str(c.get("handle") or "")[:500],
-                 "discovered", str(c.get("source") or "federation")[:80]),
-            ).fetchone()
-            conn.commit()
-            if row:
+            new_id = repo.insert_discovered(
+                platform=platform, handle=handle,
+                name=str(c.get("name") or ""), profile_url=str(c.get("handle") or ""),
+                source_ref=str(c.get("source") or "federation"),
+            )
+            if new_id:
                 enrolled += 1
-                ids.append(int(dict(row)["id"]))
+                ids.append(new_id)
         except Exception:
             logger.warning("enroll.insert_failed", extra={"platform": platform, "handle": handle}, exc_info=True)
             skipped += 1
