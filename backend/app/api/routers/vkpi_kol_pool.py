@@ -418,6 +418,14 @@ def kol_pool_enrichment(kol_pool_id: int, staff=Depends(require_tab("vkpi", "rea
     return enrichment.get_enrichment(int(kol_pool_id))
 
 
+@router.post("/kol-pool/{kol_pool_id}/enrich-via-apify")
+def kol_pool_enrich_via_apify(kol_pool_id: int, staff=Depends(require_tab("vkpi", "write"))) -> dict:
+    """把 Apify 用透:抓该 KOL 公开数据 → 存富集证据(env 门控防意外计费)。"""
+    from app.domains.discovery import apify_enrich
+
+    return apify_enrich.enrich_kol(int(kol_pool_id))
+
+
 @router.get("/kol-pool/auto-poll/status")
 def kol_pool_auto_poll_status(staff=Depends(require_tab("vkpi", "read"))) -> dict:
     """D3 · 关注 KOL 自动轮询状态:应轮询候选数 + 队列可用性(只读,全容错)。"""
