@@ -1604,95 +1604,11 @@ def get_pool_item_llm_deep_analysis(
     return kol_llm_deep_analysis.get_kol_llm_deep_analysis(int(kol_pool_id), limit=limit)
 
 
-CONTENT_FIT_JOB_TYPE = "kol_content_fit_analysis"
-CONTENT_FIT_DERIVE_METHOD = "content_fit_v1"
+def _enqueue_content_fit_on_demand(kol_pool_id: int, product_sku, *, force: bool, staff) -> dict:
+    """L1:内容契合按需入队逻辑已迁 domains/kol/content_fit_enqueue;此处薄委托(端点调用不变,行为一致)。"""
+    from app.domains.kol import content_fit_enqueue
 
-
-def _enqueue_content_fit_on_demand(
-    kol_pool_id: int,
-    product_sku: str | None,
-    *,
-    force: bool,
-    staff: dict | None,
-) -> dict:
-    """T4:把内容契合深析从请求路径挪到后台队列(避开 60s 超时)。
-
-    纯 DB 路径,**不**烧 LLM:已有 ready content_fit_v1 cache 且非 force → 直接返回缓存;
-    否则 INSERT 一个 kol_content_fit_analysis job(worker 端 _process_kol_content_fit_analysis
-    调 content_fit_analysis.analyze_content_fit 跑实际 LLM)→ 立即返回 {status:'queued', job_id}。
-    已有同 KOL queued/running job → 返回 already_queued(去重)。红线:零触 viltrox_fit_score。
-    """
-    from app.db.connection import get_conn
-    from app.domains.kol import content_fit_analysis as kol_content_fit
-
-    kid = int(kol_pool_id)
-    conn = get_conn()
-
-    # ① 复用已就绪缓存(非 force):零烧 LLM、零入队。
-    if not force:
-        cached = kol_content_fit.get_content_fit(kid)
-        if cached and str(cached.get("state") or "") not in ("missing", ""):
-            return cached
-
-    # ② 去重:同 KOL 已有 queued/running content_fit job → 不重复入队。
-    existing = conn.execute(
-        """
-        SELECT id, status FROM apify_jobs
-        WHERE job_type=?
-          AND status IN ('queued', 'running', 'retrying')
-          AND payload->>'kol_pool_id'=?
-        ORDER BY created_at DESC, id DESC
-        LIMIT 1
-        """,
-        (CONTENT_FIT_JOB_TYPE, str(kid)),
-    ).fetchone()
-    if existing:
-        row = dict(existing)
-        return {
-            "status": "already_queued" if str(row.get("status")) == "queued" else "already_running",
-            "state": "queued",
-            "kol_pool_id": kid,
-            "job_id": int(row.get("id")) if row.get("id") is not None else None,
-            "job_type": CONTENT_FIT_JOB_TYPE,
-            "viltrox_fit_score_untouched": True,
-        }
-
-    # ③ 入队:实际 LLM 深析由 worker 跑(off the request path)。
-    triggered_by_user_id = (staff or {}).get("user_id") if isinstance(staff, dict) else None
-    payload = {
-        "kol_pool_id": kid,
-        "target_type": "kol",
-        "target_id": str(kid),
-        "product_sku": str(product_sku or "") or None,
-        "derive_method": CONTENT_FIT_DERIVE_METHOD,
-        "source": "kol_pool_detail_on_demand",
-        "trigger": "content_fit_on_demand",
-        "force": bool(force),
-        "triggered_by_user_id": triggered_by_user_id,
-        "viltrox_fit_score_untouched": True,
-        "query_text": f"content fit - kol_pool #{kid}",
-    }
-    inserted = conn.execute(
-        """
-        INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
-        VALUES (?, ?::jsonb, 'queued', NOW(), NOW())
-        RETURNING id
-        """,
-        (CONTENT_FIT_JOB_TYPE, kol_search_sessions._json_dumps(payload)),
-    ).fetchone()
-    conn.commit()
-    job_id = (dict(inserted).get("id") if inserted else None)
-    return {
-        "status": "queued",
-        "state": "queued",
-        "kol_pool_id": kid,
-        "job_id": int(job_id) if job_id is not None else None,
-        "job_type": CONTENT_FIT_JOB_TYPE,
-        "force": bool(force),
-        "write_db": True,
-        "writes": ["apify_jobs"],
-        "viltrox_fit_score_untouched": True,
-    }
+    return content_fit_enqueue.enqueue_content_fit_on_demand(kol_pool_id, product_sku, force=force, staff=staff)
 
 
 @router.get("/kol-pool/{kol_pool_id}/content-fit")

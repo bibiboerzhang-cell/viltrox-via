@@ -302,4 +302,91 @@ def enqueue_content_fit_for_session(
     }
 
 
-__all__ = ["enqueue_content_fit_for_session", "CONTENT_FIT_JOB_TYPE", "DEFAULT_TOP_N"]
+def enqueue_content_fit_on_demand(
+    kol_pool_id: int,
+    product_sku: str | None,
+    *,
+    force: bool,
+    staff: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """T4 · 单 KOL 内容契合深析按需入队(L1:从 vkpi_kol_pool router 抽出)。
+
+    纯 DB、不烧 LLM:已有 ready cache 且非 force → 返缓存;否则入队(worker 跑 LLM)。
+    去重:同 KOL queued/running → already_queued。红线:零触 viltrox_fit_score。
+    """
+    from app.db.connection import get_conn
+    from app.domains.kol import content_fit_analysis as kol_content_fit
+
+    kid = int(kol_pool_id)
+    conn = get_conn()
+
+    if not force:
+        cached = kol_content_fit.get_content_fit(kid)
+        if cached and str(cached.get("state") or "") not in ("missing", ""):
+            return cached
+
+    existing = conn.execute(
+        """
+        SELECT id, status FROM apify_jobs
+        WHERE job_type=?
+          AND status IN ('queued', 'running', 'retrying')
+          AND payload->>'kol_pool_id'=?
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        """,
+        (CONTENT_FIT_JOB_TYPE, str(kid)),
+    ).fetchone()
+    if existing:
+        row = dict(existing)
+        return {
+            "status": "already_queued" if str(row.get("status")) == "queued" else "already_running",
+            "state": "queued",
+            "kol_pool_id": kid,
+            "job_id": int(row.get("id")) if row.get("id") is not None else None,
+            "job_type": CONTENT_FIT_JOB_TYPE,
+            "viltrox_fit_score_untouched": True,
+        }
+
+    triggered_by_user_id = (staff or {}).get("user_id") if isinstance(staff, dict) else None
+    payload = {
+        "kol_pool_id": kid,
+        "target_type": "kol",
+        "target_id": str(kid),
+        "product_sku": str(product_sku or "") or None,
+        "derive_method": CONTENT_FIT_DERIVE_METHOD,
+        "source": "kol_pool_detail_on_demand",
+        "trigger": "content_fit_on_demand",
+        "force": bool(force),
+        "triggered_by_user_id": triggered_by_user_id,
+        "viltrox_fit_score_untouched": True,
+        "query_text": f"content fit - kol_pool #{kid}",
+    }
+    inserted = conn.execute(
+        """
+        INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
+        VALUES (?, ?::jsonb, 'queued', NOW(), NOW())
+        RETURNING id
+        """,
+        (CONTENT_FIT_JOB_TYPE, search_sessions._json_dumps(payload)),
+    ).fetchone()
+    conn.commit()
+    job_id = (dict(inserted).get("id") if inserted else None)
+    return {
+        "status": "queued",
+        "state": "queued",
+        "kol_pool_id": kid,
+        "job_id": int(job_id) if job_id is not None else None,
+        "job_type": CONTENT_FIT_JOB_TYPE,
+        "force": bool(force),
+        "write_db": True,
+        "writes": ["apify_jobs"],
+        "viltrox_fit_score_untouched": True,
+    }
+
+
+__all__ = [
+    "enqueue_content_fit_for_session",
+    "enqueue_content_fit_on_demand",
+    "CONTENT_FIT_JOB_TYPE",
+    "DEFAULT_TOP_N",
+]
