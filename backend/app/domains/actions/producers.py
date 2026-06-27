@@ -27,6 +27,7 @@ _CATEGORY_GAIN_RISK: dict[str, tuple[str, str]] = {
     "event_followup": ("回填活动数据后闭环效果评估", "medium"),
     "inventory_low": ("及时补货避免影响寄送 / 活动", "medium"),
     "project_shared_to_you": ("查看共享项目,协作跟进", "low"),
+    "discovery_enroll": ("联邦发现补人后扩充候选池,提升该类目覆盖", "low"),
 }
 
 # S1:每类建议的「执行前验证计划(怎么算成功)+ 影响表」默认(producer 可覆盖)。
@@ -41,6 +42,7 @@ _CATEGORY_VERIFY: dict[str, tuple[list[str], list[str]]] = {
     "event_followup": (["受理活动收尾提醒并留痕(真数据仍人工回填)"], ["vkpi_action_execution_ledger"]),
     "inventory_low": (["受理库存预警并留痕(补货仍人工)"], ["vkpi_action_execution_ledger"]),
     "project_shared_to_you": (["确认已查看共享项目"], []),
+    "discovery_enroll": (["联邦发现该类目 → 外部候选落 Pool(去重)", "执行后 vkpi_kol_pool 应新增 discovered 档"], ["vkpi_kol_pool"]),
 }
 
 
