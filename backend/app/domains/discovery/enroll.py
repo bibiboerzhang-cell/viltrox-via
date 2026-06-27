@@ -41,6 +41,16 @@ def enroll_candidates(candidates: list[dict[str, Any]], *, staff: dict[str, Any]
             if new_id:
                 enrolled += 1
                 ids.append(new_id)
+                try:  # P1 事件总线:新人被发现入流(best-effort)
+                    from app.domains.platform import event_ledger
+
+                    event_ledger.emit(
+                        "kol_discovered", entity_type="kol", entity_id=new_id,
+                        actor_type="agent", source=str(c.get("source") or "federation"),
+                        payload={"platform": platform, "handle": handle},
+                    )
+                except Exception:
+                    pass
         except Exception:
             logger.warning("enroll.insert_failed", extra={"platform": platform, "handle": handle}, exc_info=True)
             skipped += 1

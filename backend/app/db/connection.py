@@ -238,6 +238,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "189_vkpi_event_evidence.sql",
     "190_vkpi_discovery_federation.sql",
     "191_enable_apify_search_provider.sql",
+    "192_vkpi_event_ledger.sql",
 )
 
 try:

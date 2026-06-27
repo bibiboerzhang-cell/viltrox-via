@@ -123,7 +123,20 @@ def _decide(project_id: int, kol_pool_id: int, to_status: str, staff: dict[str, 
 
 def approve(project_id: int, kol_pool_id: int, *, staff: dict[str, Any] | None = None, reason: str = "") -> dict[str, Any]:
     """管理层通过发货。"""
-    return _decide(project_id, kol_pool_id, "approved", staff, reason)
+    res = _decide(project_id, kol_pool_id, "approved", staff, reason)
+    if isinstance(res, dict) and res.get("ok"):  # P1 事件总线:发货获批入流(best-effort)
+        try:
+            from app.domains.platform import event_ledger
+
+            event_ledger.emit(
+                "shipment_approved", entity_type="project", entity_id=int(project_id),
+                actor_type="staff", actor_id=str(_actor(staff) or ""), source="shipment_approval",
+                payload={"kol_pool_id": int(kol_pool_id)},
+                trace_id=event_ledger.new_trace_id("project", project_id, "kol", kol_pool_id),
+            )
+        except Exception:
+            pass
+    return res
 
 
 def reject(project_id: int, kol_pool_id: int, *, staff: dict[str, Any] | None = None, reason: str = "") -> dict[str, Any]:

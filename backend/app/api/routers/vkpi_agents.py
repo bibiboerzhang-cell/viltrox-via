@@ -60,6 +60,22 @@ def unified_recall(
     return semantic_recall.unified_recall(q, limit=int(limit), staff=staff)
 
 
+@router.get("/event-ledger")
+def event_ledger_recent(
+    event_type: str = "",
+    entity_type: str = "",
+    entity_id: str = "",
+    limit: int = 50,
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict[str, Any]:
+    """P1 · 统一事件总线:近期事件流 / 某实体事件流(可追溯每一步)。"""
+    from app.domains.platform import event_ledger
+
+    if entity_type and entity_id:
+        return {"available": True, "items": event_ledger.by_entity(entity_type, entity_id, limit=int(limit))}
+    return event_ledger.recent(limit=int(limit), event_type=str(event_type))
+
+
 @router.get("/token-broker/status")
 def token_broker_status(staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
     """I1 · API Token Broker 状态:各 provider 可用/冷却/耗尽计数(只读;表内零密钥)。"""

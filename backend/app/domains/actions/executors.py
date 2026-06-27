@@ -152,6 +152,21 @@ def _record_outcome_eval(action: dict[str, Any], *, outcome: str) -> None:
     """
     entity_type = str(action.get("entity_type") or "").strip()
     entity_id = str(action.get("entity_id") or "").strip()
+    # P1 事件总线:执行结果入统一事件流(best-effort,即使无实体也记)。
+    try:
+        from app.domains.platform import event_ledger
+
+        event_ledger.emit(
+            "action_executed",
+            entity_type=entity_type or "action",
+            entity_id=entity_id or str(action.get("id") or ""),
+            actor_type="agent",
+            source="action_executor",
+            payload={"category": str(action.get("category") or ""), "outcome": outcome, "action_id": action.get("id")},
+            trace_id=event_ledger.new_trace_id("action", action.get("id")),
+        )
+    except Exception:
+        logger.debug("action_executor.event_emit_failed", exc_info=True)
     if not entity_type or not entity_id:
         return
     try:

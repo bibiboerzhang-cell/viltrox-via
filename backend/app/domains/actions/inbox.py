@@ -450,7 +450,19 @@ def _transition(
 
 def approve_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     """人审通过 → status=approved(execute 仍需后端 validators 双闸)。"""
-    return _transition(action_id, "approved", staff)
+    res = _transition(action_id, "approved", staff)
+    if isinstance(res, dict) and res.get("ok"):  # P1 事件总线:行动获批入流(best-effort)
+        try:
+            from app.domains.platform import event_ledger
+
+            event_ledger.emit(
+                "action_approved", entity_type="action", entity_id=int(action_id),
+                actor_type="staff", actor_id=str((staff or {}).get("id") or ""), source="action_inbox",
+                trace_id=event_ledger.new_trace_id("action", action_id),
+            )
+        except Exception:
+            pass
+    return res
 
 
 def dismiss_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[str, Any]:
