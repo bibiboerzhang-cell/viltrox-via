@@ -241,6 +241,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "192_vkpi_event_ledger.sql",
     "193_vkpi_workflow_runs.sql",
     "194_vkpi_evals.sql",
+    "195_vkpi_tenant_kernel.sql",
 )
 
 try:

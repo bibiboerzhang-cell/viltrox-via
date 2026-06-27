@@ -60,6 +60,22 @@ def unified_recall(
     return semantic_recall.unified_recall(q, limit=int(limit), staff=staff)
 
 
+@router.get("/tenant/current")
+def tenant_current(staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
+    """轴B · 当前租户(默认 Viltrox=org1;给顶栏/health 显示)。"""
+    from app.domains.platform import tenancy
+
+    return tenancy.current_tenant(staff)
+
+
+@router.get("/organizations")
+def organizations_list(staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
+    """轴B · 租户清单。"""
+    from app.domains.platform import tenancy
+
+    return {"organizations": tenancy.list_organizations()}
+
+
 @router.post("/evals/run")
 def evals_run(staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
     """P4 · 跑业务评测套件(推荐不碰fit/召回/权重有界/事件总线/预测诚实),持久化结果。"""
