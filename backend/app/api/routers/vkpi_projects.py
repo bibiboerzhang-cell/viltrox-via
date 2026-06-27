@@ -240,6 +240,30 @@ def scan_delivered_into_windows(
     return observation_windows.scan_delivered_into_windows(staff=staff, days_overdue=days_overdue)
 
 
+@router.post("/projects/{project_id}/content-posts")
+def add_content_candidate(
+    project_id: int,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+):
+    """履约内容帖子(手动喂数):操作员手录 KOL 已发布内容 URL → candidate 入库等复核。
+
+    本地/无抓取时的内容闭环入口——scan_windows_for_content 走抓取(GFW 下不可用)时用此手录。
+    body: {assignment_id?, kol_pool_id?, content_url(必填), match_confidence?, published_at?, evidence_id?}。
+    红线:只写 vkpi_project_content_posts(status='candidate' 等人复核),绝不改项目/派单/费用/fit。
+    """
+    from app.domains.projects import observation_windows
+
+    b = body or {}
+    return observation_windows.record_content_candidate(
+        int(project_id),
+        b.get("assignment_id"),
+        b.get("kol_pool_id"),
+        {k: b.get(k) for k in ("content_url", "match_confidence", "published_at", "evidence_id")},
+        staff=staff,
+    )
+
+
 @router.get("/projects/content-posts")
 def list_content_posts(
     status: str = Query(default="candidate"),

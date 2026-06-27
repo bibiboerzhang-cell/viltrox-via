@@ -137,4 +137,13 @@ def get_run(run_id: int) -> dict[str, Any]:
     steps = [dict(r) for r in get_conn().execute(
         f"SELECT step_index, step_name, status, error, started_at, finished_at FROM {_STEPS} "
         f"WHERE run_id=? ORDER BY step_index", (int(run_id),)).fetchall()]
-    return {"status": "ok", "run": {k: row.get(k) for k in ("id", "workflow_name", "status", "current_step", "trace_id", "last_error")}, "steps": steps}
+    ckpt_n = 0
+    try:  # 可观测:有多少 checkpoint(=可从第几步恢复),best-effort
+        ckpt_n = int(dict(get_conn().execute(
+            f"SELECT COUNT(*) AS n FROM {_CKPT} WHERE run_id=?", (int(run_id),)).fetchone()).get("n") or 0)
+    except Exception:
+        pass
+    return {"status": "ok",
+            "run": {k: row.get(k) for k in ("id", "workflow_name", "status", "current_step", "trace_id", "last_error")},
+            "steps": steps, "checkpoints": ckpt_n,
+            "resumable": bool(row.get("status") == "failed" and ckpt_n > 0)}
