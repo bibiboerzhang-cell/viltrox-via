@@ -14,7 +14,7 @@ import {
   type VkpiKolUrlDeepCrawlResponse,
 } from "../../../../domains/kol";
 import { proxiedImageUrl } from "../../shared/mediaProxy";
-import { enqueueAllKolVideos, favoriteKolPool, getKolVideoAnalysisCache, translateBio, type VkpiKolVideoAnalysisCacheEntry } from "../../../../services/vkpi/kolPool-api";
+import { enqueueAllKolVideos, favoriteKolPool, getKolVideoAnalysisCache, resolveKolPool, translateBio, type VkpiKolVideoAnalysisCacheEntry } from "../../../../services/vkpi/kolPool-api";
 import { approveKolSearchSession, createProjectDraftFromSession, generateKolSearchSessionOutreach } from "../../../../services/vkpi/kolPool-api";
 // A1·复用 KOLVideoAnalysisPanel 的画面质量分 / 三观-归因-建议 / 关键帧 QA 渲染原子(纯读 final_v1/QA 缓存,绝不触 viltrox_fit_score)。
 import {
@@ -1431,6 +1431,10 @@ export function SmartKolInputPanel({
   const [pickedIds, setPickedIds] = useState<Set<number>>(() => new Set());
   const [addingFav, setAddingFav] = useState(false);
   const [favNote, setFavNote] = useState("");
+  // 新发现已被后端 _auto_enroll_discoveries 入池,但会话项 kol_pool_id 保持 NULL(不变式:
+  // 否则会话项交集会误杀这些真候选)。所以勾选时按 handle resolve 出真池 id 再收藏 —— 不回戳、无副作用。
+  const [resolvedPids, setResolvedPids] = useState<Map<string, number>>(() => new Map());
+  const [resolvingKeys, setResolvingKeys] = useState<Set<string>>(() => new Set());
   // R4 找人闭合:批准锁定 → 建项目草案(带预算/风险)→ 话术草案。仅草案,绝不外发/承诺价格。
   const [draftBusy, setDraftBusy] = useState(false);
   const [draftNote, setDraftNote] = useState("");
@@ -1445,6 +1449,35 @@ export function SmartKolInputPanel({
       else next.add(id);
       return next;
     });
+  }
+  function discoveryKey(item: any): string {
+    return `${cleanText(item?.platform).toLowerCase()}:${cleanText(item?.handle).toLowerCase().replace(/^@/, "")}`;
+  }
+  // 新发现勾选:已带 pool id 直接 toggle;否则按 handle resolve 出真池 id 再 toggle(入池记录已存在,只读不写)。
+  async function pickDiscovery(item: any) {
+    const direct = Number(item?.kol_pool_id) || 0;
+    if (direct > 0) { togglePick(direct); return; }
+    const key = discoveryKey(item);
+    const cached = resolvedPids.get(key);
+    if (cached) { togglePick(cached); return; }
+    if (resolvingKeys.has(key) || !apiToken) return;
+    const handle = cleanText(item?.handle).replace(/^@/, "");
+    if (!handle) { setFavNote("该新发现缺 handle,无法定位入库记录"); return; }
+    setResolvingKeys((cur) => new Set(cur).add(key));
+    try {
+      const resp: any = await resolveKolPool(apiToken, handle, cleanText(item?.platform));
+      const pid = Number(resp?.kol_pool_id || resp?.matched_kol_pool_id) || 0;
+      if (pid > 0) {
+        setResolvedPids((cur) => new Map(cur).set(key, pid));
+        togglePick(pid);
+      } else {
+        setFavNote(`「${handle}」尚未入库,请稍后重试或刷新发现列表`);
+      }
+    } catch {
+      setFavNote(`「${handle}」定位失败,请重试`);
+    } finally {
+      setResolvingKeys((cur) => { const next = new Set(cur); next.delete(key); return next; });
+    }
   }
   async function addPickedToMyKol() {
     if (!apiToken || !pickedIds.size) return;
@@ -2238,19 +2271,20 @@ export function SmartKolInputPanel({
             {discoveryItems.length ? (
               <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
                 {discoveryItems.map((item, index) => {
-                  const pid = Number(item.kol_pool_id) || 0;
-                  const picked = pid > 0 && pickedIds.has(pid);
+                  const key = discoveryKey(item);
+                  const effPid = Number(item.kol_pool_id) || resolvedPids.get(key) || 0;
+                  const picked = effPid > 0 && pickedIds.has(effPid);
+                  const resolving = resolvingKeys.has(key);
                   return (
                     <div key={`d-${item.kol_pool_id || item.handle || index}`} className="relative">
                       <RecallMiniItem item={item} index={index + 1} onOpen={onOpenRecallItem} />
-                      {pid > 0 ? (
-                        <button
-                          type="button"
-                          onClick={(event) => { event.stopPropagation(); togglePick(pid); }}
-                          title={picked ? "已选 · 点击取消" : "勾选 → 一键加入我的 MY KOL"}
-                          className={`absolute right-1 top-1 z-10 flex h-5 w-5 items-center justify-center rounded border text-[10px] font-bold leading-none transition-colors ${picked ? "border-emerald-300/60 bg-emerald-500/90 text-white" : "border-white/25 bg-black/55 text-transparent hover:border-emerald-300/45 hover:text-emerald-200/60"}`}
-                        >✓</button>
-                      ) : null}
+                      <button
+                        type="button"
+                        disabled={resolving}
+                        onClick={(event) => { event.stopPropagation(); void pickDiscovery(item); }}
+                        title={picked ? "已选 · 点击取消" : "勾选 → 一键加入我的 MY KOL"}
+                        className={`absolute right-1 top-1 z-10 flex h-5 w-5 items-center justify-center rounded border text-[10px] font-bold leading-none transition-colors ${picked ? "border-emerald-300/60 bg-emerald-500/90 text-white" : "border-white/25 bg-black/55 text-transparent hover:border-emerald-300/45 hover:text-emerald-200/60"}`}
+                      >{resolving ? <Loader2 size={11} className="animate-spin text-emerald-200" /> : "✓"}</button>
                     </div>
                   );
                 })}
