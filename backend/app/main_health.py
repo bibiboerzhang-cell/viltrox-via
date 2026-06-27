@@ -11,6 +11,7 @@ from app.core.config import (
     DB_TARGET_BACKEND,
     ENABLE_LOCAL_ORCHESTRATOR,
     PLATFORM_INGEST_SOURCES,
+    REDIS_URL,
     USE_REDIS_JOBS,
     WORKER_ASYNC_CONSUMERS,
     WORKER_CLUSTER_TIER,
@@ -18,6 +19,27 @@ from app.core.config import (
     WORKER_SERVICE_PROCESSES,
 )
 from app.db.connection import get_db_actor_stats, probe_postgres_connectivity
+
+
+def _probe_redis() -> dict[str, Any]:
+    """真 ping Redis(诚实健康)。配置了但不可达 → reachable=False(红),不再 fake-green。
+
+    USE_REDIS_JOBS 仅表示配置存在(REDIS_URL 设了);这里实连一次,1s 超时。
+    """
+    if not USE_REDIS_JOBS or not REDIS_URL:
+        return {"configured": False, "reachable": None}
+    try:
+        import redis as _redis
+
+        client = _redis.from_url(REDIS_URL, socket_connect_timeout=1.0, socket_timeout=1.0)
+        ok = bool(client.ping())
+        try:
+            client.close()
+        except Exception:
+            pass
+        return {"configured": True, "reachable": ok}
+    except Exception as exc:
+        return {"configured": True, "reachable": False, "error": str(exc)[:120]}
 
 
 async def build_deep_health_payload(
@@ -77,6 +99,7 @@ async def build_deep_health_payload(
         "via_event_backend": via_backend,
         "via": via_stats,
         "redis_jobs": USE_REDIS_JOBS,
+        "redis": await asyncio.to_thread(_probe_redis),
         "local_orchestrator": ENABLE_LOCAL_ORCHESTRATOR,
         "worker_role": {
             "identity": APP_ROLE,

@@ -85,3 +85,6 @@ backup_*/
 # 生成的文档/导出物(不跟踪,不挡部署)
 output/
 exports/
+
+# 非 V-KPI 子项目(独立)
+video-production-platform/
