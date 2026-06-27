@@ -60,6 +60,14 @@ def unified_recall(
     return semantic_recall.unified_recall(q, limit=int(limit), staff=staff)
 
 
+@router.post("/cycle/run")
+def agent_cycle_run(staff=Depends(require_tab("vkpi", "write"))) -> dict[str, Any]:
+    """阶段②·Agent 建议链 Durable Workflow:生成今日建议→汇总→留痕(可恢复;执行仍需人审)。"""
+    from app.domains.actions import agent_cycle_workflow
+
+    return agent_cycle_workflow.start_agent_cycle(staff)
+
+
 @router.get("/workflow/{run_id}")
 def workflow_run(run_id: int, staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
     """P2 · Durable Workflow:读一个 run 的状态 + 各 step(可观测每步为什么/到哪了)。"""
