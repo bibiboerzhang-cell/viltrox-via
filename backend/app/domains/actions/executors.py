@@ -386,8 +386,29 @@ def _exec_skip_reminder(action: dict[str, Any], staff: dict[str, Any] | None) ->
     return {"outcome": "skipped", "reason": reason_map.get(category, "no_executor"), "detail": {}}
 
 
+def _exec_discovery_enroll(action: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
+    """用透 Apify · 联邦发现补人 → 候选自动落 Pool(智能闭环"该补谁"的执行端)。
+
+    query 取自 payload.query / entity_id。落库走 enroll(去重 + source=discovered)。
+    红线:只落新档(数据薄诚实),零触 viltrox_fit_score;商业源未配置则只自有源(诚实)。
+    """
+    payload = action.get("payload_json") if isinstance(action.get("payload_json"), dict) else {}
+    query = str(payload.get("query") or action.get("entity_id") or "").strip()
+    if not query:
+        return {"outcome": "skipped", "reason": "discovery_no_query", "detail": {}}
+    from app.domains.discovery import enroll
+
+    res = enroll.federated_discover_and_enroll(query, limit=int(payload.get("limit") or 20), staff=staff)
+    return {"outcome": "success", "reason": "", "detail": {
+        "query": query, "found": res.get("found"), "enrolled": res.get("enrolled"),
+        "skipped": res.get("skipped"), "sources": res.get("sources"),
+        "note": "联邦发现→落 Pool;进 MY KOL 仍需手动勾选。",
+    }}
+
+
 _DISPATCH = {
     "deep_missing": _exec_deep_missing,
+    "discovery_enroll": _exec_discovery_enroll,
     "failed_retry": _exec_failed_retry,
     "project_observation": _exec_project_observation,
     "content_candidate": _exec_content_candidate,

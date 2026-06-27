@@ -506,8 +506,47 @@ def produce_shared_to_you(conn: Any, *, limit: int = 25) -> list[dict[str, Any]]
 
 
 # 编排器按此顺序遍历;键即 category,值即 producer 可调用对象。
+def produce_discovery_gap(conn: Any, *, limit: int = 2) -> list[dict[str, Any]]:
+    """智能闭环"该补谁":为 KOL 覆盖薄的产品类目建议联邦发现补人(执行=Apify 落 Pool)。
+
+    取产品类目 top N → 建议 discovery_enroll(requires_approval,因 Apify 有成本)。每类目一条,
+    dedupe_key 按类目去重。无 products 表 → 空(诚实)。零触 viltrox_fit_score。
+    """
+    try:
+        rows = conn.execute(
+            "SELECT category_main, COUNT(*) AS n FROM vkpi_products "
+            "WHERE category_main IS NOT NULL AND category_main <> '' "
+            "GROUP BY category_main ORDER BY n DESC LIMIT ?",
+            (max(1, min(int(limit or 2), 5)),),
+        ).fetchall()
+    except Exception:
+        return []
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        cat = str(dict(r).get("category_main") or "").strip()
+        if not cat:
+            continue
+        out.append(make_suggestion(
+            category="discovery_enroll",
+            dedupe_key=f"discovery:{cat}",
+            title=f"补人:为「{cat}」联邦发现新 KOL",
+            detail=f"用 Apify 联邦发现为产品类目「{cat}」补候选 KOL,自动落 Pool(去重)",
+            reason=f"产品类目「{cat}」需持续补充匹配 KOL(KOL 自增长链)",
+            priority="low",
+            entity_type="product_category",
+            entity_id=cat,
+            suggested_endpoint="/api/admin/vkpi/kol-pool/discovery/enroll",
+            uses_llm=False,
+            writes_business_data=True,
+            requires_approval=True,
+            payload={"query": cat, "limit": 20},
+        ))
+    return out
+
+
 PRODUCERS: dict[str, Any] = {
     "kol_profile": produce_kol_profile,
+    "discovery_enroll": produce_discovery_gap,
     "deep_missing": produce_deep_missing,
     "failed_retry": produce_failed_retry,
     "project_observation": produce_project_observation,
