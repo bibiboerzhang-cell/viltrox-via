@@ -410,6 +410,14 @@ def kol_pool_federated_search(q: str, limit: int = 20, staff=Depends(require_tab
     return federation.federated_search(q, limit=int(limit), staff=staff)
 
 
+@router.post("/kol-pool/onboarding-sweep")
+def kol_onboarding_sweep(q: str, staff=Depends(require_tab("vkpi", "write"))) -> dict:
+    """阶段②·KOL 建档 Durable Workflow:联邦发现+落库→富集→记忆(可恢复,串起 Apify 线)。"""
+    from app.domains.kol import onboarding_workflow
+
+    return onboarding_workflow.start_kol_onboarding(q, staff)
+
+
 @router.post("/kol-pool/discovery/enroll")
 def kol_pool_discovery_enroll(q: str, limit: int = 20, staff=Depends(require_tab("vkpi", "write"))) -> dict:
     """链1 KOL 自增长:联邦发现 → 外部候选自动落 Pool + 去重(进 MY KOL 仍手动勾选)。"""
