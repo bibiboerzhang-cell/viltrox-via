@@ -43,6 +43,26 @@ export async function getMovers(token: string, windowDays = 30, metric = "follow
   );
 }
 
+export async function getDiscoveryProviders(token: string): Promise<Row> {
+  return apiFetch<Row>("/api/admin/vkpi/kol-pool/discovery/providers", { cache: "no-store" }, token);
+}
+
+export async function federatedSearch(token: string, q: string, limit = 20): Promise<Row> {
+  return apiFetch<Row>(
+    `/api/admin/vkpi/kol-pool/discovery/federated-search?q=${encodeURIComponent(q)}&limit=${limit}`,
+    { cache: "no-store" },
+    token,
+  );
+}
+
+export async function discoveryEnroll(token: string, q: string, limit = 20): Promise<Row> {
+  return apiFetch<Row>(
+    `/api/admin/vkpi/kol-pool/discovery/enroll?q=${encodeURIComponent(q)}&limit=${limit}`,
+    { method: "POST", cache: "no-store" },
+    token,
+  );
+}
+
 export async function getReportTypes(token: string): Promise<Row> {
   return apiFetch<Row>("/api/admin/vkpi/metrics/report-types", { cache: "no-store" }, token);
 }

@@ -22,6 +22,7 @@ export type VkpiPageKey =
   | 'dataExport'
   | 'learning'
   | 'capabilities'
+  | 'discovery2'
   | 'dataAnalysis'
   | 'analytics'
   | 'channels'

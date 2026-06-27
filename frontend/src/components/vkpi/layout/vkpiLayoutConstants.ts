@@ -20,6 +20,7 @@ export const MANAGER_NAV_ITEMS: VkpiNavItem[] = [
   { key: 'agents', label: 'Agents 战情室', icon: 'nodes' },
   { key: 'channels', label: 'MY KOL', icon: 'heart' },
   { key: 'kolPoolV2', label: 'KOL Pool', icon: 'grid' },
+  { key: 'discovery2', label: '联邦发现', icon: 'discover' },
   { key: 'projects', label: '项目跟进', icon: 'folder' },
   { key: 'links', label: '短链与归因', icon: 'link' },
   { key: 'productBattle', label: '产品分析', icon: 'spark' },
