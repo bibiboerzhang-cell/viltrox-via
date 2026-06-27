@@ -13,7 +13,6 @@ import urllib.request
 from typing import Any
 
 from app.core.logging import get_logger
-from app.db.connection import get_conn
 
 logger = get_logger(__name__)
 
@@ -55,13 +54,12 @@ def geocode_and_update_event(event_id: str, address: str = "", staff: dict[str, 
     """对活动地理编码并写回经纬度。address 缺省时用活动 location_name/city/country 拼。"""
     del staff
     eid = str(event_id or "").strip()
-    conn = get_conn()
-    row = conn.execute(
-        "SELECT location_name, location_city, location_country FROM vkpi_events WHERE id = ?", (eid,)
-    ).fetchone()
-    if not row:
+    from app.repositories.events_repo import EventsRepository
+
+    repo = EventsRepository()
+    ev = repo.get_location_fields(eid)  # L2:走 repo
+    if not ev:
         return {"status": "not_found", "event_id": eid}
-    ev = dict(row)
     addr = str(address or "").strip() or ", ".join(
         x for x in (ev.get("location_name"), ev.get("location_city"), ev.get("location_country")) if str(x or "").strip()
     )
@@ -70,9 +68,5 @@ def geocode_and_update_event(event_id: str, address: str = "", staff: dict[str, 
     geo = geocode_address(addr)
     if not geo:
         return {"status": "geocode_failed", "address": addr, "hint": "地理编码无结果/不可达,可手动填经纬度(location_lat/lng)"}
-    conn.execute(
-        "UPDATE vkpi_events SET location_lat = ?, location_lng = ?, updated_at = NOW() WHERE id = ?",
-        (geo["lat"], geo["lng"], eid),
-    )
-    conn.commit()
+    repo.update_location(eid, geo["lat"], geo["lng"])  # L2:走 repo
     return {"status": "ok", "event_id": eid, "address": addr, **geo}

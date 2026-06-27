@@ -1163,7 +1163,9 @@ def add_project_shipment(project_id: int, body: dict[str, Any], *, staff: dict[s
     ensure_vkpi_schema()
     scope.assert_project_access(project_id, staff, write=True)
     conn = get_conn()
-    project = conn.execute("SELECT kol_id, product_sku, product_name FROM vkpi_projects WHERE id=?", (int(project_id),)).fetchone()
+    from app.repositories.projects_repo import ProjectsRepository
+
+    project = ProjectsRepository().get_sample_fields(int(project_id))  # L2:走 repo
     if not project:
         raise LookupError("project not found")
     # 发货审批门槛(P0):已发起审批但未通过 → 拦截发货(人审真生效)。无审批记录默认放行(向后兼容)。
