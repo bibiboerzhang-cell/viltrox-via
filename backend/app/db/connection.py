@@ -240,6 +240,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "191_enable_apify_search_provider.sql",
     "192_vkpi_event_ledger.sql",
     "193_vkpi_workflow_runs.sql",
+    "194_vkpi_evals.sql",
 )
 
 try:

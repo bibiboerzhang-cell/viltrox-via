@@ -60,6 +60,14 @@ def unified_recall(
     return semantic_recall.unified_recall(q, limit=int(limit), staff=staff)
 
 
+@router.post("/evals/run")
+def evals_run(staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
+    """P4 · 跑业务评测套件(推荐不碰fit/召回/权重有界/事件总线/预测诚实),持久化结果。"""
+    from app.domains.platform import evals
+
+    return evals.run_builtin_suite()
+
+
 @router.post("/cycle/run")
 def agent_cycle_run(staff=Depends(require_tab("vkpi", "write"))) -> dict[str, Any]:
     """阶段②·Agent 建议链 Durable Workflow:生成今日建议→汇总→留痕(可恢复;执行仍需人审)。"""
