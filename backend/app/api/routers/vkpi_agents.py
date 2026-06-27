@@ -60,6 +60,14 @@ def unified_recall(
     return semantic_recall.unified_recall(q, limit=int(limit), staff=staff)
 
 
+@router.get("/workflow/{run_id}")
+def workflow_run(run_id: int, staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
+    """P2 · Durable Workflow:读一个 run 的状态 + 各 step(可观测每步为什么/到哪了)。"""
+    from app.domains.platform import workflow_engine
+
+    return workflow_engine.get_run(int(run_id))
+
+
 @router.get("/event-ledger")
 def event_ledger_recent(
     event_type: str = "",
