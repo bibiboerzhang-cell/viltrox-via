@@ -237,6 +237,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "188_scheduler_task_kol_auto_poll.sql",
     "189_vkpi_event_evidence.sql",
     "190_vkpi_discovery_federation.sql",
+    "191_enable_apify_search_provider.sql",
 )
 
 try:

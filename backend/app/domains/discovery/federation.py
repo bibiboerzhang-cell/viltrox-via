@@ -39,12 +39,47 @@ def list_providers(kind: str = "") -> list[dict[str, Any]]:
         for r in rows:
             d = dict(r)
             d["enabled"] = bool(d.get("enabled") in (True, 1, "t", "true"))
-            d["adapter_ready"] = (d["name"] == "internal_pool") or (d["name"] in _CUSTOM)
+            d["adapter_ready"] = d["name"] in ("internal_pool", "apify_search") or d["name"] in _CUSTOM
             out.append(d)
         return out
     except Exception:
         logger.debug("federation.list_providers_failed", exc_info=True)
         return []
+
+
+def _apify_search(query: str, limit: int) -> tuple[list[dict[str, Any]], str]:
+    """复用我们的 Apify 做平台搜索(自持、不另花新供应商钱)。
+
+    env 门控:仅当 VKPI_APIFY_SEARCH_ACTOR 设了 actor 才跑(避免意外 Apify 计费);未设 → not_configured。
+    """
+    import os
+
+    actor = os.getenv("VKPI_APIFY_SEARCH_ACTOR", "").strip()
+    if not actor:
+        return [], "not_configured"
+    try:
+        from app.services.scraping import apify as apify_svc
+
+        if not apify_svc._apify_available() or apify_svc._client is None:
+            return [], "not_configured"
+        run = apify_svc._client.actor(actor).call(run_input={"searchQueries": [query], "maxResults": int(limit)})
+        out: list[dict[str, Any]] = []
+        for x in apify_svc._client.dataset(run["defaultDatasetId"]).iterate_items():
+            out.append({
+                "source": "apify_search",
+                "external_id": str(x.get("id") or x.get("channelId") or x.get("url") or ""),
+                "name": x.get("channelName") or x.get("title") or x.get("name") or "",
+                "platform": "youtube",
+                "followers": x.get("numberOfSubscribers") or x.get("subscribers"),
+                "handle": x.get("channelUrl") or x.get("url") or "",
+                "in_pool": False,
+            })
+            if len(out) >= limit:
+                break
+        return out, "ok"
+    except Exception:
+        logger.warning("federation.apify_search_failed", exc_info=True)
+        return [], "error"
 
 
 def _run_provider(name: str, query: str, limit: int) -> tuple[list[dict[str, Any]], str]:
@@ -58,6 +93,8 @@ def _run_provider(name: str, query: str, limit: int) -> tuple[list[dict[str, Any
             for x in r.get("results", [])
         ]
         return items, "ok"
+    if name == "apify_search":
+        return _apify_search(query, limit)
     fn = _CUSTOM.get(name)
     if fn:
         try:
