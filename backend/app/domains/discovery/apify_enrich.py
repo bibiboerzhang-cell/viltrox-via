@@ -9,7 +9,6 @@ import os
 from typing import Any
 
 from app.core.logging import get_logger
-from app.db.connection import get_conn
 
 logger = get_logger(__name__)
 
@@ -28,10 +27,11 @@ def enrich_kol(kol_pool_id: int, *, force: bool = False) -> dict[str, Any]:
         return {"status": "invalid", "reason": "kol_pool_id_required"}
     if not (force or _enabled()):
         return {"status": "disabled", "note": "设 VKPI_APIFY_ENRICH_ENABLED=1 启用(避免意外 Apify 计费)"}
-    row = get_conn().execute("SELECT profile_url, handle, platform FROM vkpi_kol_pool WHERE id = ?", (kid,)).fetchone()
-    if not row:
+    from app.repositories.kol_pool_repo import KolPoolRepository
+
+    d = KolPoolRepository().get_by_id(kid)  # L2:走 repo
+    if not d:
         return {"status": "not_found", "kol_pool_id": kid}
-    d = dict(row)
     url = str(d.get("profile_url") or d.get("handle") or "").strip()
     platform = str(d.get("platform") or "").strip().lower()
     if not url:
