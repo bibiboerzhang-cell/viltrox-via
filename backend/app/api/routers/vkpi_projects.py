@@ -284,6 +284,22 @@ def pipeline_readiness(staff=Depends(require_tab("vkpi", "read"))):
     return pipeline_sequence.pipeline_readiness(staff=staff)
 
 
+@router.post("/projects/fulfillment-sweep")
+def fulfillment_sweep(staff=Depends(require_tab("vkpi", "write"))):
+    """P2 落业务 · 履约 Durable Workflow:物流同步→签收开窗→扫内容(可恢复,每步入事件流)。"""
+    from app.domains.projects import fulfillment_workflow
+
+    return fulfillment_workflow.start_fulfillment_sweep(staff)
+
+
+@router.post("/projects/fulfillment-sweep/{run_id}/resume")
+def fulfillment_sweep_resume(run_id: int, staff=Depends(require_tab("vkpi", "write"))):
+    """续跑失败/暂停的履约 run(从 current_step 接上,不重跑前序)。"""
+    from app.domains.projects import fulfillment_workflow
+
+    return fulfillment_workflow.resume_fulfillment_sweep(int(run_id), staff)
+
+
 @router.get("/projects/shipping-approvals")
 def list_shipping_approvals(
     status: str = "pending",
