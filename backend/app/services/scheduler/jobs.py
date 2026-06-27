@@ -600,6 +600,12 @@ async def job_kol_auto_poll():
 
         res = await asyncio.to_thread(auto_poll.enqueue_auto_poll, None)
         logger.info("scheduler.kol_auto_poll", extra={"status": str(res.get("status")), "enqueued": res.get("enqueued_count")})
+        # 用透 Apify:若启用富集,顺带批量富集收藏/高价值 KOL(双门控 + 硬上限,防烧钱)。
+        from app.domains.discovery import apify_enrich
+
+        enr = await asyncio.to_thread(apify_enrich.enrich_candidates, 10)
+        if enr.get("enriched"):
+            logger.info("scheduler.kol_auto_poll_enrich", extra={"enriched": enr.get("enriched")})
         _record_scheduler_run("kol_auto_poll", ok=True)
     except Exception as exc:
         logger.exception("scheduler.kol_auto_poll_failed")

@@ -49,6 +49,15 @@ export function KolTwinCard({ kolPoolId, apiToken }: { kolPoolId?: string | numb
         <span>历史 成功 {oc.success ?? 0} / 失败 {oc.fail ?? 0}</span>
         {twin.why_remembered ? <><span>·</span><span className="truncate max-w-[180px]" title={twin.why_remembered}>{twin.why_remembered}</span></> : null}
       </div>
+      {twin.enrichment?.available ? (
+        <div className="mt-1.5 flex flex-wrap items-center gap-1 text-[10px] text-slate-500">
+          <span>外部富集:</span>
+          {(twin.enrichment.kinds || []).map((k: string) => (
+            <span key={k} className="rounded border border-white/10 px-1 py-0.5 text-sky-300/80">{k}</span>
+          ))}
+          {twin.enrichment.sources?.length ? <span className="text-slate-600">· {twin.enrichment.sources.join("/")}</span> : null}
+        </div>
+      ) : null}
     </div>
   );
 }

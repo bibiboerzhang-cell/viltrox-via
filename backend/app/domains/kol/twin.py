@@ -54,6 +54,7 @@ def get_kol_twin(kol_pool_id: int, *, staff: dict[str, Any] | None = None) -> di
     weight = _safe(lambda: roi_aggregate.compute_next_recommendation_weight(kid), None)
     outcomes = _safe(lambda: agent_memory_writer.recent_outcome_stats("kol", kid, lookback=20),
                      {"total": 0, "success": 0, "fail": 0})
+    enrichment = _safe(lambda: _enrichment_summary(kid), {})
 
     grade = str(card.get("data_grade") or "")
     suggestion = _suggestion(grade, weight if isinstance(weight, (int, float)) else None, outcomes, str(roi.get("status") or ""))
@@ -76,6 +77,20 @@ def get_kol_twin(kol_pool_id: int, *, staff: dict[str, Any] | None = None) -> di
             "recommendation_weight": weight,
             "recent_outcomes": outcomes,
         },
+        "enrichment": enrichment,
         "cooperation_suggestion": suggestion,
-        "note": "合作判断档案:聚合既有推荐卡/provenance/ROI/学习信号;只读,零触 viltrox_fit_score。",
+        "note": "合作判断档案:聚合既有推荐卡/provenance/ROI/学习信号/外部富集;只读,零触 viltrox_fit_score。",
+    }
+
+
+def _enrichment_summary(kid: int) -> dict[str, Any]:
+    """外部富集证据摘要(来源 + 各 kind 有无),给孪生卡展示。零触 viltrox_fit_score。"""
+    from app.domains.discovery import enrichment as enr
+
+    e = enr.get_enrichment(kid)
+    by_kind = e.get("by_kind") or {}
+    return {
+        "available": bool(by_kind),
+        "kinds": list(by_kind.keys()),
+        "sources": sorted({str(v.get("source") or "") for v in by_kind.values() if v.get("source")}),
     }

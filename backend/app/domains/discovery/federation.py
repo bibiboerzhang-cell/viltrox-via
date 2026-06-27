@@ -52,34 +52,53 @@ def _apify_search(query: str, limit: int) -> tuple[list[dict[str, Any]], str]:
 
     env 门控:仅当 VKPI_APIFY_SEARCH_ACTOR 设了 actor 才跑(避免意外 Apify 计费);未设 → not_configured。
     """
+    import json
     import os
 
-    actor = os.getenv("VKPI_APIFY_SEARCH_ACTOR", "").strip()
-    if not actor:
+    # 多平台:VKPI_APIFY_SEARCH_ACTORS = {"youtube":"...","tiktok":"...","instagram":"..."}(JSON);
+    # 兼容旧单一 VKPI_APIFY_SEARCH_ACTOR(当 youtube)。
+    actors: dict[str, str] = {}
+    raw = os.getenv("VKPI_APIFY_SEARCH_ACTORS", "").strip()
+    if raw:
+        try:
+            actors = {str(k): str(v) for k, v in (json.loads(raw) or {}).items() if v}
+        except Exception:
+            actors = {}
+    single = os.getenv("VKPI_APIFY_SEARCH_ACTOR", "").strip()
+    if single:
+        actors.setdefault("youtube", single)
+    if not actors:
         return [], "not_configured"
     try:
         from app.services.scraping import apify as apify_svc
 
         if not apify_svc._apify_available() or apify_svc._client is None:
             return [], "not_configured"
-        run = apify_svc._client.actor(actor).call(run_input={"searchQueries": [query], "maxResults": int(limit)})
-        out: list[dict[str, Any]] = []
-        for x in apify_svc._client.dataset(run["defaultDatasetId"]).iterate_items():
-            out.append({
-                "source": "apify_search",
-                "external_id": str(x.get("id") or x.get("channelId") or x.get("url") or ""),
-                "name": x.get("channelName") or x.get("title") or x.get("name") or "",
-                "platform": "youtube",
-                "followers": x.get("numberOfSubscribers") or x.get("subscribers"),
-                "handle": x.get("channelUrl") or x.get("url") or "",
-                "in_pool": False,
-            })
-            if len(out) >= limit:
-                break
-        return out, "ok"
     except Exception:
-        logger.warning("federation.apify_search_failed", exc_info=True)
-        return [], "error"
+        return [], "not_configured"
+    per = max(1, int(limit) // max(1, len(actors)))
+    out: list[dict[str, Any]] = []
+    for platform, actor in actors.items():
+        try:
+            run = apify_svc._client.actor(actor).call(run_input={"searchQueries": [query], "maxResults": per})
+            taken = 0
+            for x in apify_svc._client.dataset(run["defaultDatasetId"]).iterate_items():
+                out.append({
+                    "source": "apify_search",
+                    "platform": platform,
+                    "external_id": str(x.get("id") or x.get("channelId") or x.get("url") or ""),
+                    "name": x.get("channelName") or x.get("title") or x.get("name") or x.get("nickName") or "",
+                    "followers": x.get("numberOfSubscribers") or x.get("subscribers") or x.get("fans"),
+                    "handle": x.get("channelUrl") or x.get("url") or "",
+                    "in_pool": False,
+                })
+                taken += 1
+                if taken >= per:
+                    break
+        except Exception:
+            logger.warning("federation.apify_search_platform_failed", extra={"platform": platform}, exc_info=True)
+            continue
+    return (out[:limit], "ok") if out else (out, "not_configured")
 
 
 def _run_provider(name: str, query: str, limit: int) -> tuple[list[dict[str, Any]], str]:

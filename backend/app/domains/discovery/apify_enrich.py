@@ -59,3 +59,26 @@ def enrich_kol(kol_pool_id: int, *, force: bool = False) -> dict[str, Any]:
     )
     return {"status": "ok", "kol_pool_id": kid, "enrichment_id": eid, "metrics": metrics,
             "note": "Apify 公开数据已存为富集证据(confidence=0.6,独立信号,零触 viltrox_fit_score)。"}
+
+
+def enrich_candidates(limit: int = 10) -> dict[str, Any]:
+    """批量富集 D3 自动轮询候选(收藏/高价值 KOL)。env 门控 + 硬上限,防烧钱。
+
+    未启用 → disabled(零成本)。供 D3 调度 job 调用;每轮最多 limit 个(默认 10)。
+    """
+    if not _enabled():
+        return {"status": "disabled", "enriched": 0, "note": "设 VKPI_APIFY_ENRICH_ENABLED=1 启用"}
+    try:
+        from app.domains.kol import auto_poll
+
+        cands = auto_poll.select_poll_candidates(limit=max(1, min(int(limit or 10), 30)))
+    except Exception:
+        logger.warning("apify_enrich.candidates_failed", exc_info=True)
+        return {"status": "error", "enriched": 0}
+    ok = 0
+    for c in cands:
+        r = enrich_kol(int(c.get("kol_pool_id") or 0), force=True)  # force:_enabled 已确认
+        if r.get("status") == "ok":
+            ok += 1
+    return {"status": "ok", "candidates": len(cands), "enriched": ok,
+            "note": "批量富集收藏/高价值 KOL(Apify 公开数据→证据);硬上限防烧钱;零触 viltrox_fit_score。"}
