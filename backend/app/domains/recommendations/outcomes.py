@@ -334,6 +334,36 @@ def refresh_business_outcome(recommendation_id: int) -> dict[str, Any]:
     return result
 
 
+def refresh_open_outcomes(limit: int = 200) -> dict[str, Any]:
+    """批量回填业务标签:遍历近 N 条推荐,从真实业务行刷新 outcome(published/order/roi)。
+
+    持续学习的"actual_result/business_impact"那一半——把"打分→动作→结果"的结果段自动落地,
+    供调度器/事件触发周期性跑。红线:只读真实业务行促升标签,绝不伪造平台数据,零触 viltrox_fit_score。
+    """
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT id FROM vkpi_kol_recommendations WHERE kol_pool_id IS NOT NULL ORDER BY id DESC LIMIT ?",
+        (int(max(1, min(limit, 2000))),),
+    ).fetchall()
+    refreshed = 0
+    promoted = {"content_published": 0, "order_attributed": 0, "computed_roi": 0}
+    for r in rows:
+        try:
+            agg = (refresh_business_outcome(int(dict(r)["id"])) or {}).get("aggregates") or {}
+        except Exception:
+            logger.debug("refresh_open_outcomes.one_failed", exc_info=True)
+            continue
+        refreshed += 1
+        if agg.get("content_published"):
+            promoted["content_published"] += 1
+        if agg.get("order_attributed"):
+            promoted["order_attributed"] += 1
+        if agg.get("computed_roi") is not None:
+            promoted["computed_roi"] += 1
+    return {"status": "ok", "scanned": len(rows), "refreshed": refreshed, "promoted": promoted,
+            "note": "批量回填业务标签(持续学习结果段);只读真实业务行促升,零伪造、零触 viltrox_fit_score。"}
+
+
 def _loads_safe(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return value

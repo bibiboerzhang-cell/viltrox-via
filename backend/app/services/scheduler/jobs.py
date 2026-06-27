@@ -148,6 +148,22 @@ async def job_via_daily_learning():
         logger.exception("scheduler.via_learning_failed")
 
 
+async def job_vkpi_recommendation_outcomes():
+    """学习闭环·结果段:周期性回填推荐 outcome 业务标签(published/order/roi)。
+
+    把"打分→动作→结果"的结果半边持续落地:从真实业务行(项目/消息/内容/销售/成本)促升标签,
+    供下次推荐学习。红线:只读真实业务行促升,绝不伪造平台数据,零触 viltrox_fit_score。
+    """
+    try:
+        from app.domains.recommendations import outcomes
+
+        result = await asyncio.to_thread(outcomes.refresh_open_outcomes, 500)
+        logger.info("scheduler.vkpi_recommendation_outcomes",
+                    extra={"refreshed": result.get("refreshed"), "promoted": result.get("promoted")})
+    except Exception:
+        logger.exception("scheduler.vkpi_recommendation_outcomes_failed")
+
+
 async def job_vkpi_lineage_snapshot():
     """V-KPI metric lineage snapshot for dashboard drilldown evidence."""
     try:
@@ -979,6 +995,16 @@ async def start_scheduler() -> None:
             max_instances=1,
             coalesce=True,
         )
+
+    # ── Job 7b: 学习闭环·推荐 outcome 业务标签回填(每日) ──
+    _scheduler.add_job(
+        job_vkpi_recommendation_outcomes,
+        trigger=CronTrigger(hour=4, minute=40),
+        id="vkpi_recommendation_outcomes",
+        name="Refresh recommendation outcome business labels daily",
+        max_instances=1,
+        coalesce=True,
+    )
 
     # ── Job 8: confirm partial awards (三阶段发放) ──
     _scheduler.add_job(
