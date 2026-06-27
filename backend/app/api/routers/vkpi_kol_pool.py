@@ -410,6 +410,14 @@ def kol_pool_federated_search(q: str, limit: int = 20, staff=Depends(require_tab
     return federation.federated_search(q, limit=int(limit), staff=staff)
 
 
+@router.post("/kol-pool/discovery/enroll")
+def kol_pool_discovery_enroll(q: str, limit: int = 20, staff=Depends(require_tab("vkpi", "write"))) -> dict:
+    """链1 KOL 自增长:联邦发现 → 外部候选自动落 Pool + 去重(进 MY KOL 仍手动勾选)。"""
+    from app.domains.discovery import enroll
+
+    return enroll.federated_discover_and_enroll(q, limit=int(limit), staff=staff)
+
+
 @router.get("/kol-pool/{kol_pool_id}/enrichment")
 def kol_pool_enrichment(kol_pool_id: int, staff=Depends(require_tab("vkpi", "read"))) -> dict:
     """KOL 外部富集证据(受众/刷粉/画像/历史;独立展示,绝不并入 viltrox_fit_score)。"""
