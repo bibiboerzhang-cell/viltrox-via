@@ -88,3 +88,5 @@ exports/
 
 # 非 V-KPI 子项目(独立)
 video-production-platform/
+BUILD_GIT_SHA
+BUILD_TIME
