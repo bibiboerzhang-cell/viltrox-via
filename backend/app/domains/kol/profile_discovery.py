@@ -1261,11 +1261,10 @@ def _auto_enroll_discoveries(new_creators: list[dict[str, Any]]) -> int:
             "followers": _int(item.get("followers") or item.get("subscriber_count") or item.get("avg_views") or 0),
         }
         try:
-            res = write_kol_profile_basics(None, profile_data, dry_run=False)
-            new_id = res.get("kol_pool_id")
-            if new_id:
-                # 带回 id:前端可据此「勾选 → 加入我的 MY KOL(收藏)」,无需再 resolve handle。
-                item["kol_pool_id"] = int(new_id)
+            write_kol_profile_basics(None, profile_data, dry_run=False)
+            # ⚠不要把 kol_pool_id 回写到会话项! 设计不变量(search_sessions.approve_session 注释):
+            # new_creator 入池后会话项 kol_pool_id 必须保持 NULL,否则「会话项交集」会把这些真候选
+            # 全误杀 → 全网发现框整组消失(550pro2 监视器搜索 15 个新发现却 0 显示的真因)。
             enrolled += 1
         except Exception as exc:
             logger.info("auto_enroll_discovery skip handle=%r: %s", handle, str(exc)[:200])

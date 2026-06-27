@@ -1790,9 +1790,9 @@ export function SmartKolInputPanel({
         limit: 10,
         creatorQuota: 7,
         reviewerQuota: 3,
-        // 不建会话:紧跟的 queueTextAdvance 会建唯一会话并落库内召回+全网发现全部项。
-        // 这里再建会话只会留下一条空会话(0 项)→ 历史里每次搜索出现两条(就是「反复重复」的真因之一)。
-        createSession: false,
+        // createSession:true 回滚——false 会让前端 activeSearchSession 拿不到 advance 会话的全网发现项,
+        // 整组「全网新发现」消失(550pro2 监视器搜出 15 个却 0 显示的真因)。宁可历史多一条空会话,也要保显示。
+        createSession: true,
         excludeChinese,
         timeoutMs: 60000,
       });
