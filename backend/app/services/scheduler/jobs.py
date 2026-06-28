@@ -148,6 +148,32 @@ async def job_via_daily_learning():
         logger.exception("scheduler.via_learning_failed")
 
 
+async def job_vkpi_bet_review_due():
+    """cut5 · Bet Ledger 校准回路:每日扫到期未结算押注(review_at<=now, outcome=open),
+
+    逐条发 bet.review_due 事件(逼出复盘)。让"押注下了就石沉大海"变成到期主动催复盘。
+    红线:只读扫描 + 发事件;outcome/lesson 仍人工结算,LLM 永不触 viltrox_fit_score。
+    """
+    try:
+        from app.domains.market import bet_ledger
+        from app.domains.platform import event_ledger
+
+        def _scan() -> int:
+            due = bet_ledger.scan_due_bets(limit=200).get("due", [])
+            for b in due:
+                try:
+                    event_ledger.emit("bet.review_due", entity_type="bet", entity_id=b.get("id"),
+                                      source="bet_review_due_scan", payload={"hypothesis": str(b.get("hypothesis") or "")[:120]})
+                except Exception:
+                    pass
+            return len(due)
+
+        n = await asyncio.to_thread(_scan)
+        logger.info("scheduler.vkpi_bet_review_due", extra={"due": n})
+    except Exception:
+        logger.exception("scheduler.vkpi_bet_review_due_failed")
+
+
 async def job_vkpi_fulfillment_sweep():
     """cut4 · workflow_runs 事实源:每日自动起一条 durable 履约 sweep(原只能手动端点触发)。
 
@@ -1053,6 +1079,16 @@ async def start_scheduler() -> None:
         trigger=CronTrigger(hour=5, minute=30),
         id="vkpi_agent_cycle",
         name="Daily durable agent suggestion cycle (workflow_runs)",
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # ── Job 7d: Bet Ledger 到期复盘催办(每日) ──
+    _scheduler.add_job(
+        job_vkpi_bet_review_due,
+        trigger=CronTrigger(hour=6, minute=0),
+        id="vkpi_bet_review_due",
+        name="Scan due bets and emit review-due events",
         max_instances=1,
         coalesce=True,
     )

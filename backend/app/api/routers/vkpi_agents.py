@@ -92,6 +92,37 @@ def marketing_brain_scorecard(staff=Depends(require_tab("vkpi", "read"))) -> dic
     return scorecard.build_marketing_brain_scorecard(staff)
 
 
+@router.post("/bets")
+def bet_create(body: dict = Body(default_factory=dict), staff=Depends(require_tab("vkpi", "write"))) -> dict[str, Any]:
+    """cut5 · Bet Ledger:下一注概率押注。body:{hypothesis(必填), probability?, expected_gain_cents?, cost_cents?, risk_level?, evidence?, review_at?, source_action_inbox_id?}。"""
+    from app.domains.market import bet_ledger
+
+    b = body or {}
+    return bet_ledger.create_bet(
+        hypothesis=str(b.get("hypothesis") or ""), probability=b.get("probability"),
+        expected_gain_cents=int(b.get("expected_gain_cents") or 0), cost_cents=int(b.get("cost_cents") or 0),
+        risk_level=str(b.get("risk_level") or "med"), evidence=b.get("evidence") if isinstance(b.get("evidence"), dict) else {},
+        review_at=b.get("review_at"), source_action_inbox_id=b.get("source_action_inbox_id"), staff=staff)
+
+
+@router.get("/bets")
+def bet_list(outcome: str = "", limit: int = 50, staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
+    """cut5 · 押注清单 + 命中率(已结算里 won 占比)。"""
+    from app.domains.market import bet_ledger
+
+    return bet_ledger.list_bets(outcome=outcome, limit=int(limit), staff=staff)
+
+
+@router.post("/bets/{bet_id}/resolve")
+def bet_resolve(bet_id: int, body: dict = Body(default_factory=dict), staff=Depends(require_tab("vkpi", "write"))) -> dict[str, Any]:
+    """cut5 · 到期复盘:结算押注 won/lost/void + 写 lesson。body:{outcome(必填), realized_gain_cents?, lesson?}。"""
+    from app.domains.market import bet_ledger
+
+    b = body or {}
+    return bet_ledger.resolve_bet(int(bet_id), str(b.get("outcome") or ""),
+                                  realized_gain_cents=b.get("realized_gain_cents"), lesson=str(b.get("lesson") or ""), staff=staff)
+
+
 @router.get("/marketing-brain/daily")
 def marketing_brain_daily(staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
     """cut1 · Market Brain v1 日报:每日合成产品热/上升渠道/竞品动/机会窗/今日建议(只读)。"""
