@@ -40,10 +40,12 @@ def generate_daily(
 @router.post("/{action_id}/approve")
 def approve(
     action_id: int,
+    reason: str = Body(default="", embed=True),
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict[str, Any]:
     # 人审通过 → status=approved;真执行走 /execute,仍受后端 validators 双闸约束。
-    return inbox.approve_action(action_id, staff)
+    # reason 落 approval_reason(批准理由,此前死列)。
+    return inbox.approve_action(action_id, staff, reason=str(reason or ""))
 
 
 @router.post("/{action_id}/dismiss")

@@ -389,6 +389,7 @@ def _transition(
     staff: dict[str, Any] | None = None,
     *,
     snooze_until: str | None = None,
+    approval_reason: str | None = None,
 ) -> dict[str, Any]:
     """通用流转:approve/dismiss/snooze。scope 收口 + 源态白名单 + 自身行 UPDATE。
 
@@ -428,6 +429,16 @@ def _transition(
             """,
             (target, _dumps(merged), int(action_id), *allowed_from),
         )
+    elif target == "approved" and approval_reason:
+        # cut2:批准理由落 approval_reason 死列(此前无写路径)。只动本行,不碰其它。
+        cursor = conn.execute(
+            f"""
+            UPDATE {_TABLE}
+            SET status = ?, approval_reason = ?, updated_at = NOW()
+            WHERE id = ? AND status IN ({from_placeholders})
+            """,
+            (target, str(approval_reason)[:2000], int(action_id), *allowed_from),
+        )
     else:
         cursor = conn.execute(
             f"""
@@ -448,9 +459,9 @@ def _transition(
     return result
 
 
-def approve_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[str, Any]:
-    """人审通过 → status=approved(execute 仍需后端 validators 双闸)。"""
-    res = _transition(action_id, "approved", staff)
+def approve_action(action_id: int, staff: dict[str, Any] | None = None, reason: str = "") -> dict[str, Any]:
+    """人审通过 → status=approved(execute 仍需后端 validators 双闸)。reason 落 approval_reason。"""
+    res = _transition(action_id, "approved", staff, approval_reason=(str(reason).strip() or None))
     if isinstance(res, dict) and res.get("ok"):  # P1 事件总线:行动获批入流(best-effort)
         try:
             from app.domains.platform import event_ledger
