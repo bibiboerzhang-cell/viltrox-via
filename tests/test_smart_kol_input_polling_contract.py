@@ -10,8 +10,10 @@ _COMPONENTS_DIR = (
     / "frontend" / "src" / "components" / "vkpi" / "v615-replica" / "components"
 )
 SMART_PANEL = _COMPONENTS_DIR / "SmartKolInputPanel.tsx"
-# 纯函数(含 terminalSessionStatus)已抽到 helpers.ts;契约测试读两份源(定义在 helpers,调用在 tsx)。
+# 重构后纯函数簇分三处:terminalSessionStatus 在 helpers.ts;isSearchSessionTerminal +
+# 会话派生器在 Sections.tsx;轮询调用在 tsx。契约测试读全三份源,验定义+调用契约不破。
 SMART_PANEL_HELPERS = _COMPONENTS_DIR / "SmartKolInputPanel.helpers.ts"
+SMART_PANEL_SECTIONS = _COMPONENTS_DIR / "SmartKolInputPanel.Sections.tsx"
 
 
 class SmartKolInputPollingContractTests(unittest.TestCase):
@@ -21,6 +23,8 @@ class SmartKolInputPollingContractTests(unittest.TestCase):
             SMART_PANEL.read_text(encoding="utf-8")
             + "\n"
             + SMART_PANEL_HELPERS.read_text(encoding="utf-8")
+            + "\n"
+            + SMART_PANEL_SECTIONS.read_text(encoding="utf-8")
         )
 
     def test_terminal_statuses_include_partial_and_failed_states(self) -> None:

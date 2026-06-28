@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { buildApiUrl } from '../../../lib/api';
-import { frontendBuildInfo, shortBuildSha } from '../../../lib/buildInfo';
+import { frontendBuildInfo } from '../../../lib/buildInfo';
 import {
   getCommentAlertSettings,
   getControlStatus,
@@ -61,6 +61,8 @@ import {
   type SettingsModuleKey,
 } from './settings/SettingsPage.fragments';
 import { SettingsStaffPanel } from './settings/SettingsStaffPanel';
+import { SettingsApiKeyPoolPanel, SettingsZoneHeader } from './settings/SettingsPage.Sections';
+import { computeSettingsDerived, resolveDrawerMember } from './settings/SettingsPage.helpers';
 import { GoaffproConnectCard } from './settings/GoaffproConnectCard';
 import { SettingsSkuPanel } from './settings/SettingsSkuPanel';
 import { SettingsStatusPanel } from './settings/SettingsStatusPanel';
@@ -79,7 +81,6 @@ import {
   rowEnabled,
   settingChangeLine,
   summarizeSettingChange,
-  timeLabel,
 } from '../../../domains/settings';
 import type { BackendBuildInfo } from '../../../domains/settings';
 
@@ -740,54 +741,21 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
     }
   };
 
-  const providerCount = providers.length;
-  const providerConfiguredCount = providers.filter((row) => boolValue(row.configured, false)).length;
-  const providerNames = providers
-    .map((row) => String(row.label || row.provider || row.name || '').trim())
-    .filter(Boolean)
-    .slice(0, 6);
-  const apiStatusText = providerCount
-    ? `${providerConfiguredCount} / ${providerCount} 已配置`
-    : '读取中';
-  const apiStatusDetail = providerNames.length ? providerNames.join(' / ') : '对话引擎 / 多模态引擎 / 通用引擎 / Apify / YouTube';
-  const totalBudgetUsd = budgetSettings.reduce((sum, row) => sum + numberValue(row.monthly_limit_usd), 0);
-  const totalSpentUsd = budgetSettings.reduce((sum, row) => sum + numberValue(row.current_month_spent), 0);
-  const dailySync = syncOverview?.daily_sync || null;
-  const syncHealth = dailySync?.latest_summary?.health || dailySync?.latest_run?.health || {};
-  const syncRequested = numberValue(syncHealth.total_requested);
-  const syncErrors = numberValue(syncHealth.total_errors);
-  const syncFailureRate = numberValue(syncHealth.failure_rate);
-  const syncGuardText = dailySync?.ack_required ? '需 ack' : dailySync?.error ? '状态异常' : '可运行';
-  const syncLastRun = dailySync?.latest_summary || dailySync?.latest_run || null;
-  const syncLastRunStatus = String(syncLastRun?.status || (dailySync ? 'never_run' : '读取中'));
-  const syncAck = dailySync?.latest_ack || null;
-  const syncAckReason = String(syncAck?.reason || '');
-  const skuCount = productCatalog.length || data.productCosts.length;
-  const lensCount = productCatalog.filter((product) => ['Lens', 'Cine Lens'].includes(product.categoryMain)).length;
-  const lightingCount = productCatalog.filter((product) => product.categoryMain === 'Lighting/Flash').length;
-  const adapterCount = productCatalog.filter((product) => product.categoryMain === 'Adapter').length;
-  const syncTime = String(syncPolicy.daily_sync_time || '08:00');
-  const kolRefreshMode = String(kolRefresh.mode || 'searchable_records_only');
-  const kolRefreshGateEnabled = boolValue(kolRefresh.provider_gate_enabled, false);
-  const kolRefreshTotal = numberValue(kolRefresh.kol_pool_total);
-  const kolRefreshHot = numberValue(kolRefresh.hot_count);
-  const kolRefreshWarm = numberValue(kolRefresh.warm_count);
-  const kolRefreshCold = numberValue(kolRefresh.cold_count);
-  const kolRefreshActiveTasks = numberValue(kolRefresh.active_on_demand_tasks);
-  const kolRefreshBatchTargets = numberValue(kolRefreshBatchPlan.target_count);
-  const kolRefreshBatchCount = numberValue(kolRefreshBatchPlan.batch_count);
-  const kolRefreshBatchConcurrency = numberValue(kolRefreshBatchPlan.max_concurrent_runs, 2);
-  const kolRefreshGateText = kolRefreshGateEnabled ? '按需刷新已启用' : '仅记录/查询';
-  const schedulerTaskTotal = numberValue(schedulerStatus.total, schedulerTasks.length);
-  const schedulerTaskEnabled = numberValue(schedulerStatus.enabled, schedulerTasks.filter((row) => boolValue(row.enabled, false)).length);
-  const systemHealth = settingsError || providerError || rbacStatusError || dailySync?.ack_required ? '需要处理' : 'healthy';
-  const versionSummary = frontendAsset
-    ? `${frontendAsset} · ${timeLabel(versionCheckedAt)}`
-    : `${shortBuildSha(frontendBuildInfo.gitSha)} · ${timeLabel(frontendBuildInfo.builtAt)}`;
-  const inviteMode = inviteCapabilities?.email_available ? 'email' : 'manual_link';
-  const canInviteStaff = inviteMode === 'email'
-    ? Boolean(onInviteStaff)
-    : Boolean(apiToken && (inviteCapabilities?.manual_activation_link_available ?? true));
+  const {
+    apiStatusText, apiStatusDetail, totalBudgetUsd, totalSpentUsd, dailySync,
+    syncHealth, syncRequested, syncErrors, syncFailureRate, syncGuardText,
+    syncLastRun, syncLastRunStatus, syncAck, syncAckReason, skuCount, lensCount,
+    lightingCount, adapterCount, syncTime, kolRefreshMode, kolRefreshGateEnabled,
+    kolRefreshTotal, kolRefreshHot, kolRefreshWarm, kolRefreshCold,
+    kolRefreshActiveTasks, kolRefreshBatchTargets, kolRefreshBatchCount,
+    kolRefreshBatchConcurrency, kolRefreshGateText, schedulerTaskTotal,
+    schedulerTaskEnabled, systemHealth, versionSummary, inviteMode, canInviteStaff,
+  } = computeSettingsDerived({
+    providers, budgetSettings, syncOverview, productCatalog, data, syncPolicy,
+    kolRefresh, kolRefreshBatchPlan, schedulerStatus, schedulerTasks,
+    settingsError, providerError, rbacStatusError, frontendAsset,
+    versionCheckedAt, inviteCapabilities, onInviteStaff, apiToken,
+  });
   const renderSettingsModule = (
     key: SettingsModuleKey,
     subtitle: string,
@@ -817,12 +785,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
         <div style={{ marginBottom: 12 }}>
           <SystemHealthBar apiToken={apiToken} />
         </div>
-        <div className="vkpi-settings-zone" data-zone="company">
-          <header className="vkpi-settings-zone__head">
-            <strong>公司管理</strong>
-            <em>仅公司账号可见 · 账号权限 / 预算 / 规则 / 定时 / API 状态</em>
-          </header>
-        </div>
+        <SettingsZoneHeader zone="company" title="公司管理" hint="仅公司账号可见 · 账号权限 / 预算 / 规则 / 定时 / API 状态" />
         {renderSettingsModule('status', `${apiStatusText} · 同步 ${syncTime} / ${syncGuardText} · KOL ${kolRefreshGateText} · ${systemHealth} · 版本 ${versionSummary}`, (
           <SettingsStatusPanel
             apiStatusDetail={apiStatusDetail}
@@ -949,115 +912,22 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
           />
         ))}
         {renderSettingsModule('apikeys', `${apiKeyPool.length} 个账号 · 7月手动填轮转 · 密文存,前端不回显`, (
-          <div className="vkpi-settings-keypool">
-            <p className="vkpi-settings-hint">
-              本轮只预留输入位:7月由用户手动填入,系统不自动轮转(轮转 worker 未接线)。key 仅以密文入库,前端永不回显;留空表示保留已存密文不变。
-            </p>
-            <table className="vkpi-table vkpi-settings-keypool__table">
-              <thead>
-                <tr>
-                  <th>账号名</th>
-                  <th>Provider</th>
-                  <th>Key</th>
-                  <th>日额度</th>
-                  <th>启用</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                {apiKeyPool.map((row) => (
-                  <tr key={String(row.id)}>
-                    <td>{String(row.account_name ?? '')}</td>
-                    <td>{String(row.provider ?? '')}</td>
-                    <td>{row.key_prefix ? `${String(row.key_prefix)}(已存,留空不改)` : '(未填)'}</td>
-                    <td>{Number(row.daily_quota ?? 0)}</td>
-                    <td>
-                      <input
-                        type="checkbox"
-                        checked={Boolean(row.enabled)}
-                        disabled={busy}
-                        onChange={() => void toggleApiKey(row)}
-                        aria-label="启用"
-                      />
-                    </td>
-                    <td>
-                      <button type="button" className="vkpi-btn vkpi-btn--danger" disabled={busy} onClick={() => void removeApiKey(Number(row.id))}>
-                        删除
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-                <tr className="vkpi-settings-keypool__draft">
-                  <td>
-                    <input
-                      type="text"
-                      value={keyDraft.account_name}
-                      placeholder="账号名"
-                      disabled={busy}
-                      onChange={(event) => setKeyDraft({ ...keyDraft, account_name: event.target.value })}
-                    />
-                  </td>
-                  <td>
-                    <select
-                      value={keyDraft.provider}
-                      disabled={busy}
-                      onChange={(event) => setKeyDraft({ ...keyDraft, provider: event.target.value })}
-                    >
-                      {['gemini', 'openai', 'anthropic', 'apify', 'youtube', 'resend'].map((provider) => (
-                        <option key={provider} value={provider}>{provider}</option>
-                      ))}
-                    </select>
-                  </td>
-                  <td>
-                    <input
-                      type="password"
-                      value={keyDraft.key}
-                      placeholder="7月填,留空=不改"
-                      autoComplete="new-password"
-                      disabled={busy}
-                      onChange={(event) => setKeyDraft({ ...keyDraft, key: event.target.value })}
-                    />
-                  </td>
-                  <td>
-                    <input
-                      type="number"
-                      min={0}
-                      value={keyDraft.daily_quota}
-                      placeholder="0"
-                      disabled={busy}
-                      onChange={(event) => setKeyDraft({ ...keyDraft, daily_quota: event.target.value })}
-                    />
-                  </td>
-                  <td>
-                    <input
-                      type="checkbox"
-                      checked={keyDraft.enabled}
-                      disabled={busy}
-                      onChange={(event) => setKeyDraft({ ...keyDraft, enabled: event.target.checked })}
-                      aria-label="启用"
-                    />
-                  </td>
-                  <td>
-                    <button type="button" className="vkpi-btn" disabled={busy || !keyDraft.account_name.trim()} onClick={() => void saveApiKey()}>
-                      新增 / 保存
-                    </button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+          <SettingsApiKeyPoolPanel
+            apiKeyPool={apiKeyPool}
+            keyDraft={keyDraft}
+            busy={busy}
+            onKeyDraftChange={setKeyDraft}
+            onToggleApiKey={(row) => void toggleApiKey(row)}
+            onRemoveApiKey={(id) => void removeApiKey(id)}
+            onSaveApiKey={() => void saveApiKey()}
+          />
         ))}
         {/* GOAFFPRO 联盟营销连接配置 —— 从 Shopify Hub「连接」页迁来(token/密钥归管理员在设置区管)。
             保存端点 vkpi:admin 权限,只 owner/admin 可存,放公司管理区正合适。 */}
         {renderSettingsModule('goaffpro', '连接 token / 状态 / affiliate 预览 · 管理员配置', (
           <GoaffproConnectCard apiToken={apiToken} />
         ))}
-        <div className="vkpi-settings-zone" data-zone="personal">
-          <header className="vkpi-settings-zone__head">
-            <strong>个人偏好</strong>
-            <em>每位成员管理自己的偏好与通知</em>
-          </header>
-        </div>
+        <SettingsZoneHeader zone="personal" title="个人偏好" hint="每位成员管理自己的偏好与通知" />
         {renderSettingsModule('preference', `默认入口 ${landingPage} · 范围 ${dateRangeDefault} · 密度 ${tableDensity}`, (
           <>
             <PreferenceSettingsCard
@@ -1115,16 +985,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
       </div>
       {selectedStaffForPermissions ? (
         <StaffPermissionDrawer
-          // 取目录最新档案,但权限以「当前选中成员」为准(保存后已写入真值)——
-          // 防止 staff-directory 刷新返回的空 permissions 把刚授权的内容覆盖成空白。
-          member={(() => {
-            const fresh = data.staffMembers.find((item) => item.id === selectedStaffForPermissions.id);
-            if (!fresh) return selectedStaffForPermissions;
-            const freshPerms = fresh.permissions || {};
-            const selectedPerms = selectedStaffForPermissions.permissions || {};
-            const permissions = Object.keys(freshPerms).length ? freshPerms : selectedPerms;
-            return { ...fresh, permissions };
-          })()}
+          member={resolveDrawerMember(data.staffMembers, selectedStaffForPermissions)}
           busy={busy}
           onClose={() => setSelectedStaffForPermissions(null)}
           onSavePermissions={saveStaffPermissionMatrix}
