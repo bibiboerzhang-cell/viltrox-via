@@ -188,21 +188,44 @@ def _apify_actor_for(platform: str) -> str:
     return actor_id
 
 
+def _apify_proxy_config(platform: str) -> dict[str, Any]:
+    """按平台返回 Apify 代理配置。IG/TikTok 反爬重,默认走住宅代理(命中率高,能打穿
+    'Request blocked' 拦截)。env ``APIFY_<PLATFORM>_PROXY_GROUPS`` 可调以平衡成本:
+      ``RESIDENTIAL``(默认 IG/TikTok,贵但稳)/ ``DATACENTER``(便宜易被拦)/
+      逗号分隔多组 / ``off`` 或空串(不挂代理,回退 actor 默认)。YT/FB 默认不挂。
+    """
+    default_groups = {"instagram": "RESIDENTIAL", "tiktok": "RESIDENTIAL"}
+    raw = os.getenv(f"APIFY_{platform.upper()}_PROXY_GROUPS", default_groups.get(platform, "")).strip()
+    if raw.lower() in {"off", "none", ""}:
+        return {}
+    if raw.lower() in {"datacenter", "dc"}:
+        return {"useApifyProxy": True}
+    groups = [g.strip().upper() for g in raw.split(",") if g.strip()]
+    if not groups:
+        return {}
+    return {"useApifyProxy": True, "apifyProxyGroups": groups}
+
+
 def _apify_input(platform: str, video_url: str) -> dict[str, Any]:
     if platform == "youtube":
-        return {"startUrls": [{"url": video_url}], "maxResults": 1}
-    if platform == "instagram":
-        return {"directUrls": [video_url], "resultsType": "posts", "resultsLimit": 1}
-    if platform == "tiktok":
-        return {
+        payload: dict[str, Any] = {"startUrls": [{"url": video_url}], "maxResults": 1}
+    elif platform == "instagram":
+        payload = {"directUrls": [video_url], "resultsType": "posts", "resultsLimit": 1}
+    elif platform == "tiktok":
+        payload = {
             "postURLs": [video_url],
             "resultsPerPage": 1,
             "shouldDownloadVideos": False,
             "shouldDownloadCovers": False,
         }
-    if platform == "facebook":
-        return {"startUrls": [{"url": video_url}], "resultsLimit": 1}
-    raise ValueError(f"unsupported Apify platform: {platform}")
+    elif platform == "facebook":
+        payload = {"startUrls": [{"url": video_url}], "resultsLimit": 1}
+    else:
+        raise ValueError(f"unsupported Apify platform: {platform}")
+    proxy = _apify_proxy_config(platform)
+    if proxy:
+        payload["proxyConfiguration"] = proxy
+    return payload
 
 
 def _apify_item_metadata(platform: str, video_url: str, item: dict[str, Any], run_id: str) -> dict[str, Any]:
@@ -299,6 +322,23 @@ def _apify_item_metadata(platform: str, video_url: str, item: dict[str, Any], ru
     }
 
 
+def _apify_scrape_attempts() -> int:
+    """整次抓取的最大尝试数(env ``APIFY_SCRAPE_MAX_ATTEMPTS``,默认 2,夹在 1..4)。
+    平台反爬(IG/TikTok)常间歇拦截,换 session/代理重跑一次往往就过。"""
+    try:
+        return max(1, min(4, int(os.getenv("APIFY_SCRAPE_MAX_ATTEMPTS", "2"))))
+    except (TypeError, ValueError):
+        return 2
+
+
+def _apify_item_is_real(item: dict[str, Any]) -> bool:
+    """dataset item 是否为可用的真 post(有 owner 或正文),而非错误哨兵。"""
+    return bool(
+        _text(_first(item, "ownerUsername", "ownerFullName", "channelName", "authorMeta.name", "authorMeta.nickName", "pageName"))
+        or _text(_first(item, "title", "caption", "text", "shortCode"))
+    )
+
+
 def _apify_metadata(platform: str, video_url: str) -> dict[str, Any]:
     token = os.getenv("APIFY_API_TOKEN", "").strip() or os.getenv("APIFY_TOKEN", "").strip()
     if not token:
@@ -309,26 +349,27 @@ def _apify_metadata(platform: str, video_url: str) -> dict[str, Any]:
         raise RuntimeError("apify-client is not installed") from exc
     actor_id = _apify_actor_for(platform)
     client = ApifyClient(token)
-    run = client.actor(actor_id).call(run_input=_apify_input(platform, video_url), timeout_secs=300)
-    dataset_id = run.get("defaultDatasetId")
-    items = client.dataset(dataset_id).list_items(limit=5).items if dataset_id else []
-    if not items:
-        raise LookupError("Apify returned no items")
-    first = dict(items[0])
-    # Apify「软失败」:run 状态 SUCCEEDED 但 dataset item 是错误哨兵(平台反爬拦截 / 私密 / 已删),
-    # item 只有 error/errorDescription/requestErrorMessages,没有 owner 与正文。绝不能当正常 post
-    # 解析并谎报 scrape_status=success(那会让下游「找不到创作者」却显示成功,误导排查)。
-    # 抬成显式失败并带真实原因,使 _video_flow_plan 走 metadata_failed、前端诚实呈现「抓取被拦截/私密」。
-    sentinel_error = _text(first.get("errorDescription")) or _text(first.get("error"))
-    has_real_payload = bool(
-        _text(_first(first, "ownerUsername", "ownerFullName", "channelName", "authorMeta.name", "authorMeta.nickName", "pageName"))
-        or _text(_first(first, "title", "caption", "text", "shortCode"))
-    )
-    if sentinel_error and not has_real_payload:
-        raise LookupError(f"{platform}_scrape_unavailable: {sentinel_error}"[:240])
-    metadata = _apify_item_metadata(platform, video_url, first, _text(run.get("id")))
-    metadata["scrape_error"] = ""
-    return metadata
+    run_input = _apify_input(platform, video_url)
+    attempts = _apify_scrape_attempts()
+    last_reason = "Apify returned no items"
+    # 反爬重试:每次 actor.call 都是全新 session,_apify_input 已注入(默认住宅)代理组。
+    # 错误哨兵(run SUCCEEDED 但 item 只有 error/errorDescription,平台拦截/私密/已删)或空结果 → 换次重跑;
+    # 全部尝试仍失败 → 抬成显式失败带真因(绝不把失败谎报成 scrape_status=success,误导排查)。
+    for _ in range(attempts):
+        run = client.actor(actor_id).call(run_input=run_input, timeout_secs=300)
+        dataset_id = run.get("defaultDatasetId")
+        items = client.dataset(dataset_id).list_items(limit=5).items if dataset_id else []
+        if not items:
+            last_reason = "Apify returned no items"
+            continue
+        first = dict(items[0])
+        if not _apify_item_is_real(first):
+            last_reason = _text(first.get("errorDescription")) or _text(first.get("error")) or "Apify returned no usable item"
+            continue
+        metadata = _apify_item_metadata(platform, video_url, first, _text(run.get("id")))
+        metadata["scrape_error"] = ""
+        return metadata
+    raise LookupError(f"{platform}_scrape_unavailable: {last_reason}"[:240])
 
 
 def _fetch_video_metadata(video_url: str) -> dict[str, Any]:
