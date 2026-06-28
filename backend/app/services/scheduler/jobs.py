@@ -148,6 +148,37 @@ async def job_via_daily_learning():
         logger.exception("scheduler.via_learning_failed")
 
 
+async def job_vkpi_fulfillment_sweep():
+    """cut4 · workflow_runs 事实源:每日自动起一条 durable 履约 sweep(原只能手动端点触发)。
+
+    走 fulfillment_workflow.start_fulfillment_sweep:17track同步→开观察窗→扫内容,每步入 workflow_runs/
+    steps/checkpoints(失败可从中间步续跑)。让 workflow_runs 真自动累积,不再 demo 级。零触 viltrox_fit_score。
+    """
+    try:
+        from app.domains.projects import fulfillment_workflow
+
+        result = await asyncio.to_thread(fulfillment_workflow.start_fulfillment_sweep, None)
+        logger.info("scheduler.vkpi_fulfillment_sweep",
+                    extra={"run_id": result.get("run_id"), "status": result.get("status")})
+    except Exception:
+        logger.exception("scheduler.vkpi_fulfillment_sweep_failed")
+
+
+async def job_vkpi_agent_cycle():
+    """cut4 · workflow_runs 事实源:每日自动起一条 durable Agent 建议链(原只能手动触发)。
+
+    走 agent_cycle_workflow.start_agent_cycle:生成今日建议→汇总→留痕,入 workflow_runs。执行仍需人审。
+    """
+    try:
+        from app.domains.actions import agent_cycle_workflow
+
+        result = await asyncio.to_thread(agent_cycle_workflow.start_agent_cycle, None)
+        logger.info("scheduler.vkpi_agent_cycle",
+                    extra={"run_id": result.get("run_id"), "status": result.get("status")})
+    except Exception:
+        logger.exception("scheduler.vkpi_agent_cycle_failed")
+
+
 async def job_vkpi_recommendation_outcomes():
     """学习闭环·结果段:周期性回填推荐 outcome 业务标签(published/order/roi)。
 
@@ -1004,6 +1035,24 @@ async def start_scheduler() -> None:
         trigger=CronTrigger(hour=4, minute=40),
         id="vkpi_recommendation_outcomes",
         name="Refresh recommendation outcome business labels daily",
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # ── Job 7c: workflow_runs 事实源·每日自动起 durable 履约 sweep + Agent 建议链 ──
+    _scheduler.add_job(
+        job_vkpi_fulfillment_sweep,
+        trigger=CronTrigger(hour=5, minute=10),
+        id="vkpi_fulfillment_sweep",
+        name="Daily durable fulfillment sweep (workflow_runs)",
+        max_instances=1,
+        coalesce=True,
+    )
+    _scheduler.add_job(
+        job_vkpi_agent_cycle,
+        trigger=CronTrigger(hour=5, minute=30),
+        id="vkpi_agent_cycle",
+        name="Daily durable agent suggestion cycle (workflow_runs)",
         max_instances=1,
         coalesce=True,
     )
