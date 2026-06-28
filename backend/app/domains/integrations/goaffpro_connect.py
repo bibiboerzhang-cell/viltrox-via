@@ -33,7 +33,6 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
-import httpx
 from cryptography.fernet import Fernet, InvalidToken
 
 from app.db.connection import get_conn, is_postgres_runtime
@@ -356,110 +355,14 @@ def connection_status() -> dict[str, Any]:
 
 
 # --- REST client(薄封装,httpx 直连;无 creds -> not_configured,绝不抛)----------
-
-def _admin_headers(creds: dict[str, Any]) -> dict[str, str]:
-    """【待 key 校准】鉴权头按公开资料先设:
-    X-GOAFFPRO-ACCESS-TOKEN(管理私钥,主)/ X-GOAFFPRO-PUBLIC-TOKEN(公钥,辅)。
-    真 key 一到即对 Swagger 校准 header 名大小写与是否双发。
-    """
-    headers: dict[str, str] = {"Content-Type": "application/json"}
-    token = str(creds.get("access_token") or "")
-    public = str(creds.get("public_token") or "")
-    if token:
-        headers["X-GOAFFPRO-ACCESS-TOKEN"] = token
-    if public:
-        headers["X-GOAFFPRO-PUBLIC-TOKEN"] = public
-    return headers
-
-
-def _get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Single GET against GOAFFPRO Admin API. creds-ready: no token -> not_configured.
-
-    Returns {ok, data?, status_code?, reason?, error?}. Never burns an LLM; httpx direct.
-    """
-    creds = get_credentials()
-    token = creds.get("access_token") or ""
-    if not token:
-        return {"ok": False, "reason": "not_configured"}
-    base = _norm_base(creds.get("api_base"))
-    url = f"{base}/{str(path or '').lstrip('/')}"
-    try:
-        with httpx.Client(timeout=20) as client:
-            resp = client.get(url, headers=_admin_headers(creds), params=params or {})
-            resp.raise_for_status()
-            data = resp.json()
-    except httpx.HTTPStatusError as exc:
-        return {"ok": False, "error": f"http {exc.response.status_code}", "status_code": exc.response.status_code}
-    except (httpx.HTTPError, ValueError) as exc:
-        return {"ok": False, "error": str(exc)}
-    return {"ok": True, "data": data}
-
-
-def _post(path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Single POST against GOAFFPRO Admin API. creds-ready: no token -> not_configured.
-
-    Returns {ok, data?, status_code?, reason?, error?}. Never burns an LLM, never raises;
-    httpx direct. On HTTP error still tries to surface the JSON body (GOAFFPRO error msg)
-    so callers can透出 raw 给校准。
-    """
-    creds = get_credentials()
-    token = creds.get("access_token") or ""
-    if not token:
-        return {"ok": False, "reason": "not_configured"}
-    base = _norm_base(creds.get("api_base"))
-    url = f"{base}/{str(path or '').lstrip('/')}"
-    try:
-        with httpx.Client(timeout=20) as client:
-            resp = client.post(url, headers=_admin_headers(creds), json=body or {})
-            resp.raise_for_status()
-            data = resp.json()
-    except httpx.HTTPStatusError as exc:
-        body_text: Any = None
-        try:
-            body_text = exc.response.json()
-        except Exception:  # noqa: BLE001 — body may be non-JSON; keep it as text
-            try:
-                body_text = exc.response.text
-            except Exception:  # noqa: BLE001
-                body_text = None
-        return {
-            "ok": False,
-            "error": f"http {exc.response.status_code}",
-            "status_code": exc.response.status_code,
-            "raw": body_text,
-        }
-    except (httpx.HTTPError, ValueError) as exc:
-        return {"ok": False, "error": str(exc)}
-    return {"ok": True, "data": data}
-
-
-def _patch(path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Single PATCH against GOAFFPRO Admin API(改 affiliate:佣金/状态等)。
-    Returns {ok, data?, status_code?, error?, raw?}。绝不抛;HTTP 错误透出 body。"""
-    creds = get_credentials()
-    token = creds.get("access_token") or ""
-    if not token:
-        return {"ok": False, "reason": "not_configured"}
-    base = _norm_base(creds.get("api_base"))
-    url = f"{base}/{str(path or '').lstrip('/')}"
-    try:
-        with httpx.Client(timeout=20) as client:
-            resp = client.patch(url, headers=_admin_headers(creds), json=body or {})
-            resp.raise_for_status()
-            data = resp.json()
-    except httpx.HTTPStatusError as exc:
-        body_text: Any = None
-        try:
-            body_text = exc.response.json()
-        except Exception:  # noqa: BLE001
-            try:
-                body_text = exc.response.text
-            except Exception:  # noqa: BLE001
-                body_text = None
-        return {"ok": False, "error": f"http {exc.response.status_code}", "status_code": exc.response.status_code, "raw": body_text}
-    except (httpx.HTTPError, ValueError) as exc:
-        return {"ok": False, "error": str(exc)}
-    return {"ok": True, "data": data}
+# 行为不变搬到 goaffpro_connect_http.py，这里 re-export 兜住所有调用点(含
+# goaffpro_connect_affiliates 对 _get/_post/_patch 的 lazy import)。
+from app.domains.integrations.goaffpro_connect_http import (  # noqa: E402
+    _admin_headers,
+    _get,
+    _patch,
+    _post,
+)
 
 
 def list_affiliates(limit: int | None = None, offset: int | None = None, *, fetch_all: bool = False) -> dict[str, Any]:

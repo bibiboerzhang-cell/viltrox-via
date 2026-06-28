@@ -15,6 +15,7 @@ export {
   windowDays,
 } from './dashboardFormat';
 export * from './dashboardModel';
+export * from './dashboardCards';
 export * from './accountPicker';
 export * from './dashboardPlatform';
 export * from './dashboardDataModels';
