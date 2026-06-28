@@ -22,13 +22,22 @@ from app.services.intelligence.account_scan_service import search_platform_conte
 
 # P0-6:douyin 代码层硬移除出发现支持平台(不靠 env)。抖音号天然落 {中国大陆} 排除域,
 # 且无稳定海外召回价值,故从发现入口剔除;_platforms() 命中 douyin 时直接被过滤掉。
-SUPPORTED_DISCOVERY_PLATFORMS = {"youtube", "instagram", "tiktok"}
 
 
 # P0-6 地区口径:排除 {中国大陆 CN / 香港 HK / 台湾 TW},匹配中文地名 + ISO 码;
 # 其余国家(含海外中文博主)放行;空地区放行。发现侧/写入前过滤共用。
 # 发现过滤器已抽到 discovery_filters.py(行为不变,re-export 兜调用点)。
 from app.domains.kol.discovery_filters import (  # noqa: E402,F401
+    SUPPORTED_DISCOVERY_PLATFORMS,
+    _annotate_new_priority,
+    _candidate_key,
+    _discovery_brand_collab_count,
+    _int,
+    _is_discovery_garbage,
+    _new_priority_signal,
+    _platforms,
+    _staff_user_id,
+    _text,
     _CAMERA_SIGNAL_TERMS, _EXCLUDED_REGION_CITY_RE, _EXCLUDED_REGION_CODES,
     _EXCLUDED_REGION_RE, _HARD_AVOID_TERMS, _PERSONA_GENERIC_TERMS,
     _candidate_blob, _country_in_excluded_region, _detect_excluded_region,
@@ -106,132 +115,6 @@ def _localize_search_terms(en_query: str, language: str) -> str:
     except Exception:
         pass
     return q  # 翻译失败/空 → 回退英文(不缓存)
-
-
-def _is_discovery_garbage(item: dict[str, Any]) -> bool:
-    """残废发现项:无真 handle(query-as-handle 修复后兜底为 'Unknown creator'/空)→ 丢弃。"""
-    handle = str(item.get("handle") or "").strip()
-    name = str(item.get("channel_name") or "").strip()
-    return not handle and name.lower() in ("", "unknown creator")
-
-
-def _text(value: Any) -> str:
-    return str(value or "").strip()
-
-
-def _int(value: Any, default: int = 0) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
-
-
-# ── 收口路①-4:新人优先「展示排序信号」(全独立,绝不写 viltrox_fit_score / 不改 rule_v0)──────
-# 合并库内召回 + 全网发现时,给「新发现(无库内历史匹配)+ 新鲜(低合作)+ 成长期」加权;
-# 库内饱和大号(合作过载 / 老面孔大粉)降位。产出的 display_rank 仅作前端展示排序,纯透出。
-_DISCOVERY_BRAND_COLLAB_OVERLOAD_N = 6  # 与 profile_recall.BRAND_COLLAB_OVERLOAD_N 同口径
-_SATURATED_FOLLOWER_FLOOR = 500_000     # 老面孔大粉(库内已匹配 + 超大粉)视为饱和,降位
-
-
-def _discovery_brand_collab_count(item: dict[str, Any]) -> int:
-    """发现项真实合作条数(historical_match.recent_cooperations / brand_*);缺 → 0(不杜撰)。"""
-    history = item.get("historical_match") if isinstance(item.get("historical_match"), dict) else {}
-    coops = history.get("recent_cooperations")
-    if isinstance(coops, list):
-        return sum(1 for c in coops if c not in (None, "", {}, []))
-    raw = item.get("brand_collaborations") or item.get("brand_collaborations_json")
-    if isinstance(raw, list):
-        return sum(1 for c in raw if c not in (None, "", {}, []))
-    return 0
-
-
-def _new_priority_signal(item: dict[str, Any]) -> dict[str, Any]:
-    """单个发现候选的「新人优先」展示信号:(display_rank_adjust, flags, note)。
-
-    红线:adjust 只进一个独立展示字段 display_rank,绝不并入任何评分/排名分;数据缺不杜撰。
-    """
-    adjust = 0.0
-    flags: list[str] = []
-    notes: list[str] = []
-    is_new = not (item.get("history_kol_pool_id") or item.get("historical_match"))
-    followers = _int(item.get("follower_count") or item.get("followers"))
-    collab = _discovery_brand_collab_count(item)
-
-    if is_new:
-        # 全网新发现(库内无此人)= 主源,优先加权。
-        adjust += 0.20
-        flags.append("新发现")
-        notes.append("全网新发现(库内无此人)")
-    if collab and collab < 3:
-        adjust += 0.05
-        flags.append("低合作")
-        notes.append(f"合作较少({collab}),新鲜度高")
-    # 库内已匹配 + 超大粉 = 老面孔饱和,降位(让位新人)。
-    if (item.get("history_kol_pool_id") or item.get("historical_match")) and followers >= _SATURATED_FOLLOWER_FLOOR:
-        adjust -= 0.10
-        flags.append("饱和大号")
-        notes.append(f"库内已合作的大号({followers}+),降位让新人")
-    if collab >= _DISCOVERY_BRAND_COLLAB_OVERLOAD_N:
-        adjust -= 0.05
-        flags.append(f"合作{collab}+")
-        notes.append(f"合作过载({collab}),议价/独占性弱")
-    return {
-        "display_rank_adjust": round(adjust, 4),
-        "new_priority_flags": flags,
-        "new_priority_note": "；".join(notes) if notes else "",
-        "is_new_discovery": bool(is_new),
-    }
-
-
-def _annotate_new_priority(discovery: dict[str, Any] | None) -> dict[str, Any] | None:
-    """给 discover_new_creators 结果的 items/new_creators/existing_matches 逐项贴新人优先展示信号。
-    仅副本注解(就地补字段),不改顺序、不写库;前端可按 display_rank 重排展示。"""
-    if not isinstance(discovery, dict):
-        return discovery
-    for key in ("items", "new_creators", "existing_matches"):
-        seq = discovery.get(key)
-        if not isinstance(seq, list):
-            continue
-        for item in seq:
-            if isinstance(item, dict):
-                item.update(_new_priority_signal(item))
-    discovery["new_priority_signal_applied"] = True
-    discovery["new_priority_note"] = (
-        "新人优先展示信号:新发现/低合作/成长期加权,库内饱和大号降位;纯展示,绝不写 viltrox_fit_score。"
-    )
-    return discovery
-
-
-def _staff_user_id(staff: dict[str, Any] | None) -> int | None:
-    staff = staff or {}
-    for key in ("user_id", "id", "staff_id"):
-        parsed = _int(staff.get(key))
-        if parsed > 0:
-            return parsed
-    return None
-
-
-def _platforms(value: Any, fallback: str = "") -> list[str]:
-    raw_values = value if isinstance(value, list) else [value]
-    out: list[str] = []
-    for raw in raw_values:
-        text = _text(raw).lower()
-        if text in {"all", "*"}:
-            continue
-        if text in SUPPORTED_DISCOVERY_PLATFORMS and text not in out:
-            out.append(text)
-    fallback_text = _text(fallback).lower()
-    if not out and fallback_text in SUPPORTED_DISCOVERY_PLATFORMS:
-        out.append(fallback_text)
-    return out or ["youtube"]
-
-
-def _candidate_key(item: dict[str, Any], platform: str) -> str:
-    for key in ("handle", "channel_url", "source_url", "channel_name"):
-        value = _text(item.get(key)).lower()
-        if value:
-            return f"{platform}:{value}"
-    return f"{platform}:unknown:{len(str(item))}"
 
 
 def _profile_url_from_kol_pool_id(kol_pool_id: Any) -> str:
