@@ -1,0 +1,342 @@
+// @ts-nocheck
+// Presentational overlay mounts extracted verbatim from CockpitApp.tsx (行为不变抽取).
+// 这一大坨 e(AnimatePresence, ...) 模态 / popover 挂载原本平铺在容器 return 里;
+// 现以显式 props 的纯展示组件形式上移,JSX 逐字不变,所有 state / setter / 派生值由容器透传。
+// 容器本体与全部 hooks 顺序保持在 CockpitApp.tsx,行为必然不变。
+
+import React from "react";
+import { AnimatePresence } from "framer-motion";
+import { X } from "lucide-react";
+import { AIDecisionConfirmModal } from "./components/modals/AIDecisionConfirmModal";
+import { AllMoversModal } from "./components/modals/AllMoversModal";
+import { AllNotificationsModal } from "./components/modals/AllNotificationsModal";
+import { AllProjectsModal } from "./components/modals/AllProjectsModal";
+import { AllRemindersModal } from "./components/modals/AllRemindersModal";
+import { EditGroupModal } from "./components/modals/EditGroupModal";
+import { EventDetailModal } from "./components/modals/EventDetailModal";
+import { EventPreviewModal } from "./components/modals/EventPreviewModal";
+import { FeedbackModal } from "./components/modals/FeedbackModal";
+import { FullCalendarModal } from "./components/modals/FullCalendarModal";
+import { KOLDetailModal } from "./components/modals/KOLDetailModal";
+import { KPIDetailModal } from "./components/modals/KPIDetailModal";
+import { NotificationDetailModal } from "./components/modals/NotificationDetailModal";
+import { PinDetailModal } from "./components/modals/PinDetailModal";
+import { ProfileModal } from "./components/modals/ProfileModal";
+import { ProjectDetailModal } from "./components/modals/ProjectDetailModal";
+import { PublishPreviewModal } from "./components/modals/PublishPreviewModal";
+import { ReportPanel } from "./components/ReportPanel";
+import { SettingsPage } from "../pages/SettingsPage";
+import { ShortcutsModal } from "./components/modals/ShortcutsModal";
+import { SignalDetailModal } from "./components/modals/SignalDetailModal";
+import { SignalsAllModal } from "./components/modals/SignalsAllModal";
+import { TeamModal } from "./components/modals/TeamModal";
+import { HelpPopover } from "./components/popovers/HelpPopover";
+import { NotificationsPopover } from "./components/popovers/NotificationsPopover";
+import { UserMenuPopover } from "./components/popovers/UserMenuPopover";
+import { WorkRemindersPopover } from "./components/popovers/WorkRemindersPopover";
+import { logoutCockpit, resolveCockpitAlert } from "./api";
+import { saveStoredState } from "./lib/storage";
+import { createStaffGroup, updateStaffGroup } from "../../../services/vkpi/groups-api";
+
+const e = React.createElement;
+
+// 返回容器 return 里那一长串 overlay 节点(数组)。在 CockpitApp 里以 ...CockpitOverlays({...}) 展开。
+export function CockpitOverlays(p) {
+  const {
+    selectedPin, setSelectedPin, currentMode, setActiveNav,
+    selectedEvent, setSelectedEvent, openEventsPage,
+    selectedKpi, setSelectedKpi, kpiScope, dashboardRuntime,
+    reportOpen, setReportOpen, reportData, apiToken,
+    selectedSignal, setSelectedSignal,
+    selectedProject, setSelectedProject, uiStaff, currentUser, onRefreshData,
+    dashboardData, setSelectedLegacyProject, setOpenLegacyProjectId,
+    selectedPublish, setSelectedPublish,
+    selectedMover, setSelectedMover,
+    showAllSignals, setShowAllSignals,
+    showAIConfirm, setShowAIConfirm, pushLocalNotification,
+    showHelp, setShowHelp, helpBtnRef, t, setShowShortcuts, setShowFeedback,
+    showMessages, setShowMessages, activeReminders, messagesBtnRef, viewingAs, setShowAllReminders,
+    showNotifs, setShowNotifs, runtimeNotifications, notifsBtnRef, setShowAllNotifs, setSelectedNotif,
+    showUserMenu, setShowUserMenu, theme, setTheme, userMenuBtnRef, lang, setLang,
+    setViewingAs, setShowProfile, setShowTeam, setShowSettingsModal, onSignOut,
+    showProfile, showTeam, staffGroups, openGroupEditor,
+    showSettingsModal, appViewMode,
+    showShortcuts, showFeedback, handleFeedbackSubmitted,
+    showAllProjects, setShowAllProjects,
+    showAllMovers, setShowAllMovers,
+    showFullCalendar, setShowFullCalendar,
+    showAllReminders,
+    showAllNotifs,
+    selectedNotif, setRuntimeNotifications,
+    showEditGroup, setShowEditGroup, editGroupName, editGroupMode, editGroupTarget, refreshStaffGroups,
+    previewEvent, setPreviewEvent, mappedEvents,
+  } = p;
+
+  return [
+    e(AnimatePresence, { key: "ov-pin" }, selectedPin && e(PinDetailModal, {
+      pin: selectedPin,
+      mode: currentMode,
+      onClose: () => setSelectedPin(null),
+      // 2026-06-12 死按钮诚实化:View full profile → 跳 KOL Pool 真页
+      onOpenKolPool: () => {
+        setSelectedPin(null);
+        saveStoredState({ activeNav: "kol-pool" });
+        setActiveNav("kol-pool");
+      },
+    })),
+    e(AnimatePresence, { key: "ov-event" }, selectedEvent && e(EventDetailModal, {
+      event: selectedEvent,
+      onClose: () => setSelectedEvent(null),
+      // 「编辑方案 / 查看完整报告」→ 跳真实 Events 页并自动打开该活动详情(含真实 tab + 编辑)。
+      onOpenFullEvent: () => {
+        const id = selectedEvent?.id || selectedEvent?.raw?.id;
+        setSelectedEvent(null);
+        openEventsPage(id);
+      },
+    })),
+    e(AnimatePresence, { key: "ov-kpi" }, selectedKpi && e(KPIDetailModal, {
+      kpiId: selectedKpi,
+      initialScope: kpiScope,
+      metrics: dashboardRuntime.metrics,
+      onClose: () => setSelectedKpi(null),
+      onDrillToKolPool: () => {
+        saveStoredState({ activeNav: "kol-pool" });
+        setSelectedKpi(null);
+        setActiveNav("kol-pool");
+      },
+    })),
+    // V6.10: Report Panel
+    e(AnimatePresence, { key: "ov-report" }, reportOpen && e(ReportPanel, { onClose: () => setReportOpen(false), data: reportData, apiToken })),
+    // V6.11: Signal Detail Modal
+    e(AnimatePresence, { key: "ov-signal" }, selectedSignal && e(SignalDetailModal, { alert: selectedSignal, onClose: () => setSelectedSignal(null) })),
+    // V6.13: 新 modal mounts
+    e(AnimatePresence, { key: "ov-project" }, selectedProject && e(ProjectDetailModal, {
+      project: selectedProject,
+      staff: uiStaff,
+      apiToken,
+      // 分享按钮门控:owner/admin 才能管理成员(非授权后端 403 兜底,UI 也先隐藏)。
+      canManage: ["admin", "owner"].includes(String(currentUser?.role || "").toLowerCase()),
+      onAssigned: () => { onRefreshData && onRefreshData(); },
+      onClose: () => setSelectedProject(null),
+      onOpenFullPage: (project) => {
+        const projectId = String(project?.projectId || project?.id || "");
+        const row = (dashboardData.projects || []).find((item) => item.id === projectId);
+        setSelectedLegacyProject(row || null);
+        setOpenLegacyProjectId(projectId);
+        setSelectedProject(null);
+        saveStoredState({ activeNav: "projects" });
+        setActiveNav("projects");
+      },
+    })),
+    e(AnimatePresence, { key: "ov-publish" }, selectedPublish && e(PublishPreviewModal, { item: selectedPublish, apiToken, onClose: () => setSelectedPublish(null) })),
+    e(AnimatePresence, { key: "ov-mover" }, selectedMover && e(KOLDetailModal, {
+      mover: selectedMover,
+      apiToken,
+      onClose: () => setSelectedMover(null),
+      // 2026-06-12 死按钮诚实化:查看完整档案 → 跳 KOL Pool 真页
+      onOpenKolPool: () => {
+        setSelectedMover(null);
+        saveStoredState({ activeNav: "kol-pool" });
+        setActiveNav("kol-pool");
+      },
+    })),
+    e(AnimatePresence, { key: "ov-allsignals" }, showAllSignals && e(SignalsAllModal, {
+      alerts: dashboardRuntime.signals,
+      onClose: () => setShowAllSignals(false),
+      onAlertClick: (a) => { setShowAllSignals(false); setSelectedSignal(a); }
+    })),
+    e(AnimatePresence, { key: "ov-aiconfirm" }, showAIConfirm && e(AIDecisionConfirmModal, {
+      insight: dashboardRuntime.aiInsight,
+      onClose: () => setShowAIConfirm(false),
+      // 2026-06-15 P0-3:AI 决策卡与 inbox action 无 1:1 映射,改为诚实引导到 Dashboard 右栏「今日建议」面板逐条审批(approve)
+      onConfirm: () => {
+        setShowAIConfirm(false);
+        saveStoredState({ activeNav: "dashboard" });
+        setActiveNav("dashboard");
+        pushLocalNotification({
+          id: `ai-confirm-${Date.now()}`,
+          raw: {},
+          iconKey: "bell",
+          iconColor: "#a855f7",
+          title: "已转到「今日建议」",
+          desc: "AI 决策需在 Dashboard 右侧「今日建议」面板逐条审批通过(approve)后由后端执行。",
+          time: "刚刚",
+          unread: true,
+          category: "notification",
+          severity: "low",
+          status: "todo",
+          priority: "low",
+          source: "ai_confirm_guide",
+        });
+      }
+    })),
+    // V6.14.2: 顶部 4 按钮 popovers - 锚定到具体按钮 + i18n + role
+    e(AnimatePresence, { key: "ov-help" }, showHelp && e(HelpPopover, {
+      onClose: () => setShowHelp(false),
+      anchorRef: helpBtnRef, t,
+      onOpenDocs: null,
+      onOpenShortcuts: () => setShowShortcuts(true),
+      onOpenFeedback: () => setShowFeedback(true),
+    })),
+    e(AnimatePresence, { key: "ov-messages" }, showMessages && e(WorkRemindersPopover, {
+      onClose: () => setShowMessages(false),
+      reminders: activeReminders,
+      anchorRef: messagesBtnRef, t, viewingAs, apiToken,
+      onViewAll: () => setShowAllReminders(true),
+    })),
+    e(AnimatePresence, { key: "ov-notifs" }, showNotifs && e(NotificationsPopover, {
+      onClose: () => setShowNotifs(false),
+      notifications: runtimeNotifications,
+      anchorRef: notifsBtnRef, t,
+      onViewAll: () => setShowAllNotifs(true),
+      onItemClick: (n) => setSelectedNotif(n),
+    })),
+    e(AnimatePresence, { key: "ov-usermenu" }, showUserMenu && e(UserMenuPopover, {
+      onClose: () => setShowUserMenu(false),
+      theme, onToggleTheme: () => setTheme(t => t === "light" ? "dark" : "light"),
+      anchorRef: userMenuBtnRef, t, user: currentUser, staff: uiStaff, lang,
+      onToggleLang: () => setLang(l => l === "zh" ? "en" : "zh"),
+      viewingAs, onResetView: () => setViewingAs(null),
+      onOpenProfile: () => setShowProfile(true),
+      onOpenTeam: () => setShowTeam(true),
+      onOpenSettings: () => setShowSettingsModal(true),
+      onImpersonate: (s) => setViewingAs(s),
+      onLogout: async () => {
+        await logoutCockpit().catch(() => null);
+        onSignOut && onSignOut();
+      },
+    })),
+    // V6.14.2: 7 子 modals
+    e(AnimatePresence, { key: "ov-profile" }, showProfile && e(ProfileModal, { user: currentUser, onClose: () => setShowProfile(false), t, apiToken })),
+    e(AnimatePresence, { key: "ov-team" }, showTeam && e(TeamModal, {
+      user: currentUser, staff: uiStaff, groups: staffGroups, apiToken,
+      onClose: () => setShowTeam(false),
+      onImpersonate: (s) => setViewingAs(s),
+      onOpenEditGroup: (g) => openGroupEditor("edit", g || null),
+      onOpenNewGroup: () => openGroupEditor("new"),
+      t
+    })),
+    showSettingsModal && e("div", { key: "ov-settings", className: "cockpit-settings-dark fixed inset-0 z-[1000] bg-[#0a0a0d] overflow-auto" },
+      e("button", {
+        onClick: () => setShowSettingsModal(false),
+        className: "fixed top-4 right-5 z-[210] rounded-md border border-white/10 bg-white/5 p-2 text-slate-300 hover:text-white hover:bg-white/10",
+        title: t("关闭"),
+      }, e(X, { size: 18 })),
+      e(SettingsPage, {
+        data: dashboardData,
+        viewMode: appViewMode === "employee" ? "employee" : "manager",
+        apiToken,
+        onRefreshData,
+      })
+    ),
+    e(AnimatePresence, { key: "ov-shortcuts" }, showShortcuts && e(ShortcutsModal, { onClose: () => setShowShortcuts(false) })),
+    e(AnimatePresence, { key: "ov-feedback" }, showFeedback && e(FeedbackModal, { onClose: () => setShowFeedback(false), apiToken, onSubmitted: handleFeedbackSubmitted })),
+    // V6.14.4: ViewAll modals + NotifDetail + EditGroup
+    e(AnimatePresence, { key: "ov-allprojects" }, showAllProjects && e(AllProjectsModal, {
+      campaigns: dashboardRuntime.campaigns,
+      onClose: () => setShowAllProjects(false),
+      onProjectClick: (c) => setSelectedProject(c)
+    })),
+    e(AnimatePresence, { key: "ov-allmovers" }, showAllMovers && e(AllMoversModal, {
+      movers: dashboardRuntime.topMovers,
+      onClose: () => setShowAllMovers(false),
+      onMoverClick: (m) => setSelectedMover(m)
+    })),
+    e(AnimatePresence, { key: "ov-fullcal" }, showFullCalendar && e(FullCalendarModal, {
+      days: dashboardRuntime.calendarDays,
+      onClose: () => setShowFullCalendar(false),
+      onItemClick: (item) => setSelectedPublish(item)
+    })),
+    e(AnimatePresence, { key: "ov-allreminders" }, showAllReminders && e(AllRemindersModal, {
+      reminders: activeReminders,
+      onClose: () => setShowAllReminders(false),
+      viewingAs
+    })),
+    e(AnimatePresence, { key: "ov-allnotifs" }, showAllNotifs && e(AllNotificationsModal, {
+      notifications: runtimeNotifications,
+      onClose: () => setShowAllNotifs(false),
+      onNotifClick: (n) => setSelectedNotif(n)
+    })),
+    e(AnimatePresence, { key: "ov-notifdetail" }, selectedNotif && e(NotificationDetailModal, {
+      notification: selectedNotif,
+      onClose: () => setSelectedNotif(null),
+      onMarkRead: async (id) => {
+        if (!apiToken) return;
+        await resolveCockpitAlert(apiToken, id).catch(() => null);
+        setRuntimeNotifications(prev => prev.map(item => item.id === id ? { ...item, unread: false, status: "done" } : item));
+      },
+      onNavigate: (linked: any) => {
+        const ty = String(linked?.type || "").toLowerCase();
+        const tab = (ty === "project" || ty === "assignment") ? "projects"
+          : (ty === "kol" || ty === "creator" || ty === "kol_pool") ? "kol-pool"
+          : (ty === "event") ? "events"
+          : "dashboard";
+        saveStoredState({ activeNav: tab });
+        setSelectedNotif(null);
+        setActiveNav(tab);
+      }
+    })),
+    e(AnimatePresence, { key: "ov-editgroup" }, showEditGroup && e(EditGroupModal, {
+      groupName: editGroupName,
+      mode: editGroupMode,
+      staff: uiStaff,
+      initialMembers: editGroupTarget?.member_ids || [],
+      initialDesc: editGroupTarget?.description || "",
+      permissions: editGroupTarget?.permissions || null,
+      onClose: () => setShowEditGroup(false),
+      onSave: async (group) => {
+        try {
+          if (!apiToken) throw new Error("缺少 API token，不能保存分组。");
+          const body = { name: group.name, description: group.desc, member_ids: group.members, permissions: group.permissions };
+          if (group.mode === "new") {
+            await createStaffGroup(apiToken, body);
+          } else if (editGroupTarget?.id) {
+            await updateStaffGroup(apiToken, editGroupTarget.id, body);
+          }
+          await refreshStaffGroups();
+          pushLocalNotification({
+            id: `team-group-${Date.now()}`,
+            raw: group,
+            iconKey: "bell",
+            iconColor: "#a855f7",
+            title: group.mode === "new" ? `新建分组: ${group.name}` : `分组已更新: ${group.name}`,
+            desc: "已写入 staff-groups",
+            time: "刚刚",
+            unread: true,
+            category: "notification",
+            severity: "low",
+            status: "done",
+            priority: "low",
+            source: "team_group",
+          });
+        } catch (err) {
+          pushLocalNotification({
+            id: `team-group-err-${Date.now()}`,
+            raw: { error: String(err && err.message ? err.message : err) },
+            iconKey: "warning",
+            iconColor: "#ef4444",
+            title: "分组保存失败",
+            desc: String(err && err.message ? err.message : err),
+            time: "刚刚",
+            unread: true,
+            category: "notification",
+            severity: "high",
+            status: "todo",
+            priority: "high",
+            source: "team_group_error",
+          });
+        }
+      }
+    })),
+    // V6.9: Event preview modal (二次点击逻辑)
+    e(AnimatePresence, { key: "ov-preview" }, previewEvent && e(EventPreviewModal, {
+      event: previewEvent,
+      allEvents: mappedEvents,
+      onClose: () => setPreviewEvent(null),
+      onViewDetails: (evt) => {
+        setPreviewEvent(null);
+        setSelectedEvent(evt);
+      }
+    })),
+  ];
+}

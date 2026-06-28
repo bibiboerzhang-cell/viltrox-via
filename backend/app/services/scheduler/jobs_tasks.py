@@ -357,60 +357,14 @@ async def job_vkpi_comment_sentiment_refresh():
         logger.exception("scheduler.comment_sentiment_refresh_failed")
 
 
-async def job_llm_batch_poll():
-    """每 10 分钟轮询 Anthropic Message Batches:ended→回收 dispatch 落各自域表;超龄→标 expired。
-
-    无 in_progress 批次 → 空跑即返回(无害)。提交端只在云端跑(本地 SDK 无代理被墙)。
-    import content_fit_batch 以触发 consumer 注册(否则 dispatch 找不到回调)。
-    """
-    try:
-        from app.domains.kol import content_fit_batch  # noqa: F401  确保 consumer 注册
-        from app.platform import llm_batch
-
-        summary = await asyncio.to_thread(llm_batch.poll_pending_batches)
-        if summary.get("collected"):
-            logger.info("scheduler.llm_batch_poll", extra=summary)
-    except Exception:
-        logger.exception("scheduler.llm_batch_poll_failed")
-
-
-async def job_vkpi_content_fit_batch_refresh():
-    """每夜把缺 content_fit_v1 的 KOL 攒成一个 Anthropic Batch 提交(50% 折扣,输出与同步一致)。
-
-    config-gate:scheduler_tasks.vkpi_content_fit_batch(默认 OFF,验证后显式开)。
-    已有 in_progress 同 consumer 批次 → 跳过(不重复提交)。绕过串行 worker、零触 viltrox_fit_score。
-    """
-    if not _scheduler_task_enabled("vkpi_content_fit_batch"):
-        return
-    try:
-        import os
-
-        from app.db.connection import get_conn
-        from app.domains.kol import content_fit_batch as cfb
-        from app.platform import llm_batch
-
-        def _submit() -> dict:
-            conn = get_conn()
-            existing = conn.execute(
-                "SELECT 1 FROM vkpi_llm_batches WHERE consumer=? AND status='in_progress' LIMIT 1",
-                (cfb.CONSUMER,),
-            ).fetchone()
-            if existing:
-                return {"skipped": "batch_in_flight"}
-            cap = int(os.environ.get("VKPI_CONTENT_FIT_BATCH_CAP", "150") or 150)
-            kids = cfb.select_kols_needing_refresh(conn, limit=cap)
-            items = [it for it in (cfb.build_item(conn, kid) for kid in kids) if it]
-            if not items:
-                return {"submitted": 0, "reason": "nothing_to_refresh"}
-            bid = llm_batch.submit_anthropic_batch(
-                items, consumer=cfb.CONSUMER, purpose="vkpi_kol_content_fit", cost_scope="vkpi_kol_content_fit"
-            )
-            return {"submitted": len(items) if bid else 0, "batch_id": bid}
-
-        summary = await asyncio.to_thread(_submit)
-        logger.info("scheduler.content_fit_batch_refresh", extra=summary)
-    except Exception:
-        logger.exception("scheduler.content_fit_batch_refresh_failed")
+# ──────────────────────────────────────────────
+# LLM Batch 任务簇 → jobs_tasks_batch.py(行为不变搬出)
+# 原文件 re-export 兜住所有调用点。
+# ──────────────────────────────────────────────
+from .jobs_tasks_batch import (  # noqa: E402,F401
+    job_llm_batch_poll,
+    job_vkpi_content_fit_batch_refresh,
+)
 
 
 async def job_confirm_partial_awards():
@@ -806,138 +760,17 @@ async def job_ops_threshold_alerts():
         logger.exception("scheduler.ops_threshold_alerts_failed")
 
 
-async def job_vkpi_fit_snapshot():
-    """V6 Fit Top 每日快照:只读 vkpi_kol_pool.viltrox_fit_score/followers → 历史表,供 Top Movers diff。
-    红线安全:绝不写回源列(指纹不变),零 LLM/provider。config-gate(scheduler_tasks.vkpi_fit_snapshot)。"""
-    if not _scheduler_task_enabled("vkpi_fit_snapshot"):
-        return
-    try:
-        import asyncio
-        from app.domains.dashboard import fit_snapshot
-
-        result = await asyncio.to_thread(fit_snapshot.capture_daily_snapshot)
-        logger.info("scheduler.vkpi_fit_snapshot", extra={"result": result})
-    except Exception:
-        logger.exception("scheduler.vkpi_fit_snapshot_failed")
-
-
-def _run_brief_agent_daily() -> dict:
-    """AI Today 简报 Agent:确定性重建候选汇总(零 LLM/provider/写库),写 runtime/ops 供 dashboard 读。"""
-    import json as _json
-    from pathlib import Path
-
-    from app.domains.intelligence import brief_use_case
-
-    report = brief_use_case.build_brief_agent_v0(
-        kol_pool_ids="",
-        ops_dir="runtime/ops",
-        limit=8,
-        min_evidence_refs=3,
-        ref_limit=8,
-        claim_limit=12,
-        use_latest_recommendation_artifact=False,  # 每天从真实 evidence 重建(确定性),取最新
-    )
-    out = Path("runtime/ops")
-    out.mkdir(parents=True, exist_ok=True)
-    (out / "scheduler-p7-83-brief-agent-v0.json").write_text(
-        _json.dumps(report, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8"
-    )
-    return {
-        "passed": bool(report.get("passed")),
-        "items": int(report.get("brief_item_count") or len(report.get("items") or [])),
-    }
-
-
-async def job_vkpi_brief_agent():
-    """AI Today 简报 Agent 每日刷新。确定性、零 LLM/provider/写库。config-gate(scheduler_tasks.vkpi_brief_agent)。"""
-    if not _scheduler_task_enabled("vkpi_brief_agent"):
-        return
-    try:
-        import asyncio
-
-        result = await asyncio.to_thread(_run_brief_agent_daily)
-        logger.info("scheduler.vkpi_brief_agent", extra={"result": result})
-    except Exception:
-        logger.exception("scheduler.vkpi_brief_agent_failed")
-
-
-async def job_vkpi_competitor_radar():
-    """竞品新品雷达(每早·Gemini+Google 接地):查海外竞品新镜头/相机发布 + 对 Viltrox 影响。
-    红线:走预算闸(cron:competitor_radar)+ 代理;一天一次。config-gate(scheduler_tasks.vkpi_competitor_radar)。"""
-    if not _scheduler_task_enabled("vkpi_competitor_radar"):
-        return
-    try:
-        import asyncio
-        from app.domains.market import competitor_radar
-
-        result = await asyncio.to_thread(competitor_radar.generate_competitor_radar)
-        logger.info("scheduler.vkpi_competitor_radar", extra={"result": result})
-    except Exception:
-        logger.exception("scheduler.vkpi_competitor_radar_failed")
-
-
-async def job_vkpi_market_signal_refresh():
-    """Signals & Alerts 每日刷新(竞品新品 + Reddit/Google News 热度):allowlisted 有界抓取,零 LLM/零 DB 写。
-    竞品入库仍走人工审核闸(本 job 不 promote)。config-gate(scheduler_tasks.vkpi_market_signal_refresh)。"""
-    if not _scheduler_task_enabled("vkpi_market_signal_refresh"):
-        return
-    try:
-        import asyncio
-        from app.domains.market import signal_refresh
-
-        result = await asyncio.to_thread(signal_refresh.refresh_external_signals)
-        logger.info("scheduler.vkpi_market_signal_refresh", extra={"result": result})
-    except Exception:
-        logger.exception("scheduler.vkpi_market_signal_refresh_failed")
-
-
-async def job_vkpi_ai_today_hot():
-    """AI Today 今日热点(每早8点中国时区):LLM 据真实行业热点生成拍摄方案+话题。
-    红线:走预算闸(cron:ai_today_hot 硬上限)+ claude 代理;一天一次。config-gate(scheduler_tasks.vkpi_ai_today_hot)。"""
-    if not _scheduler_task_enabled("vkpi_ai_today_hot"):
-        return
-    try:
-        import asyncio
-        from app.domains.market import ai_today
-
-        result = await asyncio.to_thread(ai_today.generate_ai_today_hot)
-        logger.info("scheduler.vkpi_ai_today_hot", extra={"result": result})
-    except Exception:
-        logger.exception("scheduler.vkpi_ai_today_hot_failed")
-
-
-async def job_vkpi_official_daily_report(round_key: str = "daily"):
-    """每日官号分析报告(每天2轮:中国早8/美西早6):逐 18 官号 LLM 合成
-    播放/评论/画面质量/数据趋势/提升建议。config-gate(scheduler_tasks.vkpi_official_daily_report);
-    走预算闸 cron:official_daily_report(硬上限$4/日)+ claude 代理。"""
-    if not _scheduler_task_enabled("vkpi_official_daily_report"):
-        return
-    try:
-        import asyncio
-        from app.domains.channels import official_daily_report
-
-        result = await asyncio.to_thread(
-            official_daily_report.generate_official_daily_reports, round_key=round_key
-        )
-        logger.info(
-            "scheduler.vkpi_official_daily_report",
-            extra={"round": round_key, **{k: result.get(k) for k in ("ok", "skipped", "blocked", "failed")}},
-        )
-    except Exception:
-        logger.exception("scheduler.vkpi_official_daily_report_failed")
-
-
-async def job_vkpi_official_visual_scan():
-    """官号视频画质分析(增量):每轮跑少量未分析的官号视频(Gemini final_v1 → content_quality_score),
-    fit-safe 落 vkpi_official_post_visual,不进 kol_pool。config-gate(scheduler_tasks.vkpi_official_visual_scan);
-    走预算闸 cron:official_visual。每轮限量防超时/控成本,幂等可续。"""
-    if not _scheduler_task_enabled("vkpi_official_visual_scan"):
-        return
-    try:
-        import asyncio
-        from app.domains.channels import official_visual_analysis
-
-        result = await asyncio.to_thread(official_visual_analysis.process_pending_official_visuals, max_total=4)
-        logger.info("scheduler.vkpi_official_visual_scan", extra={"processed": result.get("processed")})
-    except Exception:
-        logger.exception("scheduler.vkpi_official_visual_scan_failed")
+# ──────────────────────────────────────────────
+# 市场情报 / AI Today / 官号日报 任务簇 → jobs_tasks_intel.py(行为不变搬出)
+# 原文件 re-export 兜住所有调用点(含私有 _run_brief_agent_daily)。
+# ──────────────────────────────────────────────
+from .jobs_tasks_intel import (  # noqa: E402,F401
+    _run_brief_agent_daily,
+    job_vkpi_ai_today_hot,
+    job_vkpi_brief_agent,
+    job_vkpi_competitor_radar,
+    job_vkpi_fit_snapshot,
+    job_vkpi_market_signal_refresh,
+    job_vkpi_official_daily_report,
+    job_vkpi_official_visual_scan,
+)
