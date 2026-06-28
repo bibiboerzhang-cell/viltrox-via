@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   fetchIntelligenceAgentsInbox,
-  getRecommendationFeedbackBacklog,
   type IntelligenceAgentInboxItem,
-} from '../../../domains/intelligence';
+} from '../../../domains/intelligence/agents';
+import { getRecommendationFeedbackBacklog } from '../../../domains/intelligence/feedback';
 import {
   getCompetitorBrainReviewSuggestions,
   getMarketExternalDailyPlanV0,

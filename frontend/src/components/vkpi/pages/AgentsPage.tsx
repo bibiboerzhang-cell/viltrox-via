@@ -7,7 +7,7 @@ import {
   intelligenceAgentFilters,
   selectFirstAvailableAgent,
   type IntelligenceAgentInboxItem,
-} from '../../../domains/intelligence';
+} from '../../../domains/intelligence/agents';
 import type { WorkspacePageProps } from './WorkspacePage';
 
 export function AgentsPage({ apiToken }: WorkspacePageProps) {
