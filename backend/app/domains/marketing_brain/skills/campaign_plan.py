@@ -57,6 +57,9 @@ _GOAL_BUDGET = {
 }
 
 
+from app.core.logging import get_logger
+logger = get_logger(__name__)
+
 def _clean_int(value: Any, default: int = 0) -> int:
     try:
         return max(0, int(value))
@@ -89,6 +92,7 @@ def _market_signals() -> dict[str, Any]:
         if isinstance(brief, dict):
             return brief
     except Exception:
+        logger.debug("suppressed exception (hardening): best-effort", exc_info=True)
         pass
     return {"status": "unavailable", "sections": {}, "coverage": "0/5"}
 
@@ -321,6 +325,7 @@ def run(
                 latency_ms=latency_ms,
             )
         except Exception:
+            logger.debug("suppressed exception (hardening): best-effort", exc_info=True)
             pass
 
     result["status"] = "ok"

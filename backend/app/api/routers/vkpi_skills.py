@@ -50,6 +50,9 @@ _SKILL_MODULES = (
 )
 
 
+from app.core.logging import get_logger
+logger = get_logger(__name__)
+
 def _build_dispatch() -> dict[str, Callable[..., dict[str, Any]]]:
     table: dict[str, Callable[..., dict[str, Any]]] = {}
     for mod in _SKILL_MODULES:
@@ -71,6 +74,7 @@ def _meta_for(skill_name: str) -> dict[str, Any]:
         if isinstance(skill, dict):
             return skill
     except Exception:
+        logger.debug("suppressed exception (hardening): best-effort", exc_info=True)
         pass
     return {}
 

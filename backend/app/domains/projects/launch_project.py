@@ -130,6 +130,7 @@ def _loads(value: Any) -> dict[str, Any]:
     try:
         parsed = json.loads(value)
     except Exception:
+        logger.debug("suppressed exception (hardening): best-effort", exc_info=True)
         return {}
     return parsed if isinstance(parsed, dict) else {}
 

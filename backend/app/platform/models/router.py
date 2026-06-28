@@ -26,6 +26,9 @@ from . import cost_policy, quality_policy, registry
 from .registry import ModelSpec
 
 
+from app.core.logging import get_logger
+logger = get_logger(__name__)
+
 @dataclass(frozen=True)
 class RouteRequest:
     """A skill's routing constraints + axis weights.
@@ -250,6 +253,7 @@ def _key_meta(row: dict[str, Any]) -> dict[str, Any]:
             parsed = json.loads(meta)
             return parsed if isinstance(parsed, dict) else {}
         except Exception:
+            logger.debug("suppressed exception (hardening): best-effort", exc_info=True)
             return {}
     # Some callers may pass an already-parsed ``metadata`` key.
     alt = row.get("metadata")
@@ -412,6 +416,7 @@ def _fetch_pool_rows(api_key_pool: Any, pool_provider: str) -> Optional[list[dic
     try:
         api_key_pool.ensure_vkpi_api_key_pool_schema()
     except Exception:
+        logger.debug("suppressed exception (hardening): best-effort", exc_info=True)
         pass
     try:
         enabled_flag = True if is_postgres_runtime() else 1

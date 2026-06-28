@@ -61,6 +61,9 @@ OUTPUT_SCHEMA: dict[str, Any] = {
 # --------------------------------------------------------------------------- #
 # 读侧归一(镜像 final_v1_extract 的取数口径,但只读、不写、不重算)
 # --------------------------------------------------------------------------- #
+from app.core.logging import get_logger
+logger = get_logger(__name__)
+
 def _as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
@@ -290,6 +293,7 @@ def _best_effort_record(
         )
     except Exception:
         # best-effort:账本落不进绝不拖垮 skill。
+        logger.debug("suppressed exception (hardening): best-effort", exc_info=True)
         pass
 
 
