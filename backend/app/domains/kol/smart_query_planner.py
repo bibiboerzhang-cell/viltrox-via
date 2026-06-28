@@ -13,6 +13,10 @@ from typing import Any
 from app.platform import llm_gateway
 from app.domains.kol import product_resolver
 
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 SUPPORTED_PLATFORMS = ("youtube", "instagram", "tiktok")
 
@@ -61,6 +65,7 @@ def _extract_json(text: str) -> dict[str, Any]:
         parsed = json.loads(raw)
         return parsed if isinstance(parsed, dict) else {}
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         pass
     match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
     if not match:
@@ -69,6 +74,7 @@ def _extract_json(text: str) -> dict[str, Any]:
         parsed = json.loads(match.group(0))
         return parsed if isinstance(parsed, dict) else {}
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         return {}
 
 

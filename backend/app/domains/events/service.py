@@ -14,6 +14,10 @@ from typing import Any
 from app.db.connection import get_conn
 from app.domains.access import scope
 
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -144,6 +148,7 @@ def _merge_invited_kols(conn: Any, event_id: Any, stored_json: Any) -> list[dict
             d = dict(r)
             _add(d.get("kol_id"), d.get("status"), d.get("travel_status"))
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         pass
     for k in stored_json or []:
         if isinstance(k, dict):

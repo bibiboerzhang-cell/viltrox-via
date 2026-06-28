@@ -39,6 +39,10 @@ from .twitch_crawler import TwitchCrawler
 from .reddit_crawler import RedditCrawler
 from .facebook_crawler import FacebookCrawler
 
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def record_apify_run_cost(
     run: Any,
@@ -87,6 +91,7 @@ def record_apify_run_cost(
         )
     except Exception:
         # 记账失败绝不阻断爬取。
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         return
 
 

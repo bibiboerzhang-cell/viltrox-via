@@ -25,6 +25,10 @@ from app.db.connection import get_conn
 from app.domains.kol import lifecycle as kol_lifecycle
 from app.platform import llm_gateway
 
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 MEMORY_METHOD = "kol_memory_pure_aggregate_v1"
 SCORE_FIELDS = ("viltrox_fit_score", "viltrox_fit_reason")
 
@@ -397,6 +401,7 @@ def rebuild_kol_memory_snapshot(kol_pool_id: int) -> dict[str, Any]:
         try:
             conn.rollback()
         except Exception:
+            logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
             pass
         raise
 
@@ -640,6 +645,7 @@ def rebuild_kol_memory_snapshot_v2(kol_pool_id: int, *, staff: dict[str, Any] | 
         try:
             conn.rollback()
         except Exception:
+            logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
             pass
         raise
 

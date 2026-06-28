@@ -141,6 +141,7 @@ async def job_vkpi_bet_review_due():
                     event_ledger.emit("bet.review_due", entity_type="bet", entity_id=b.get("id"),
                                       source="bet_review_due_scan", payload={"hypothesis": str(b.get("hypothesis") or "")[:120]})
                 except Exception:
+                    logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
                     pass
             return len(due)
 

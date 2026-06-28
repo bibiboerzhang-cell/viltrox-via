@@ -14,6 +14,10 @@ from typing import Any
 from app.db.connection import get_conn
 from app.services.cache import cache_get, cache_set
 
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 ACTIVE_STATUSES = {"queued", "retrying", "processing", "running", "in_progress", "started"}
 TERMINAL_STATUSES = {
@@ -309,6 +313,7 @@ def _avg_duration_by_job_type(conn: Any) -> dict[str, float]:
         ).fetchall()
         return {str(r["job_type"]): max(30.0, float(r["avg_sec"] or 0)) for r in rows}
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         return {}
 
 
@@ -559,6 +564,7 @@ def _true_active_counts(conn: Any) -> Counter:
         ).fetchall():
             counts[str(r["status"] or "")] += int(r["n"] or 0)
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         pass
     try:
         for r in conn.execute(
@@ -571,6 +577,7 @@ def _true_active_counts(conn: Any) -> Counter:
         ).fetchall():
             counts[str(r["status"] or "")] += int(r["n"] or 0)
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         pass
     return counts
 

@@ -73,6 +73,7 @@ def _c_event_ledger_roundtrip() -> tuple[bool, float, str]:
         get_conn().execute("DELETE FROM vkpi_event_ledger WHERE event_type='eval_probe'")
         get_conn().commit()
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         pass
     return ok, 1.0 if ok else 0.0, f"emit_id={eid} readback={bool(back)}"
 

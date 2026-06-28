@@ -17,6 +17,17 @@ from app.domains.agents import orchestrator, tool_registry
 router = APIRouter(prefix="/api/admin/vkpi/agents", tags=["vkpi-agents"])
 
 
+def _truthy(value: Any) -> bool:
+    """compat 层 BOOLEAN 读回是 int 1/0(非 Python True),`is True` 全 falsy;统一容错判真。"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "t", "yes", "y")
+    return bool(value)
+
+
 @router.post("/plan")
 def plan(
     body: dict = Body(default_factory=dict),
@@ -111,6 +122,67 @@ def bet_create(body: dict = Body(default_factory=dict), staff=Depends(require_ta
         expected_gain_cents=int(b.get("expected_gain_cents") or 0), cost_cents=int(b.get("cost_cents") or 0),
         risk_level=str(b.get("risk_level") or "med"), evidence=b.get("evidence") if isinstance(b.get("evidence"), dict) else {},
         review_at=b.get("review_at"), source_action_inbox_id=b.get("source_action_inbox_id"), staff=staff)
+
+
+@router.post("/bets/{action_id}/approve")
+def bet_approve_from_inbox(
+    action_id: int,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict[str, Any]:
+    """闭环C 收尾 · approve→真下注:把一条 inbox 'bet' 草案 approve 后真落 bet_ledger.create_bet。
+
+    双闸红线:
+    - 仅 category=='bet' 且 requires_approval 的草案可走此路;先 approve_action(走人审状态机),
+      approved 成功后才据 bet_producer 埋好的 payload 契约真 create_bet。
+    - 绝不自动烧钱:cost_cents 强制 0、expected_gain_cents 强制 0(押注是判断,不烧 LLM/Apify)。
+    - 绝不触 viltrox_fit_score:只写 vkpi_bet_ledger,不碰任何 fit 路径。
+    body(可选):{reason?}。
+    """
+    from app.domains.actions import inbox
+    from app.domains.market import bet_ledger
+
+    item = inbox.get_action(int(action_id), staff)
+    if item is None:
+        raise HTTPException(status_code=404, detail="action not found or out of scope")
+    if str(item.get("category") or "") != "bet":
+        raise HTTPException(status_code=400, detail="not a bet draft")
+    if not _truthy(item.get("requires_approval")):
+        raise HTTPException(status_code=400, detail="bet draft is not approval-gated")
+
+    payload = item.get("payload_json")
+    payload = payload if isinstance(payload, dict) else {}
+    hypothesis = str(payload.get("hypothesis") or item.get("detail") or "").strip()
+    if not hypothesis:
+        raise HTTPException(status_code=400, detail="bet draft missing hypothesis")
+
+    reason = str((body or {}).get("reason") or "").strip()
+    approved = inbox.approve_action(int(action_id), staff, reason=reason)
+    if not (isinstance(approved, dict) and approved.get("ok")):
+        # 仅 approved 才下注:状态机拒绝(非 suggested/已审/越权)→ 据实回 409。
+        raise HTTPException(status_code=409, detail={"approve_failed": approved})
+
+    # verification_date / review_at:bet_producer 已埋复盘日;create_bet 用 review_at(ISO datetime)。
+    review_at = payload.get("review_at") or payload.get("verification_date")
+    evidence = payload.get("evidence") if isinstance(payload.get("evidence"), dict) else {}
+    bet = bet_ledger.create_bet(
+        hypothesis=hypothesis,
+        probability=payload.get("probability"),
+        expected_gain_cents=0,          # 双闸:绝不自动烧钱/许诺收益
+        cost_cents=0,                   # 双闸:绝不自动烧钱
+        risk_level=str(payload.get("risk_level") or "med"),
+        evidence=evidence,
+        review_at=review_at,
+        source_action_inbox_id=int(action_id),
+        staff=staff,
+    )
+    return {
+        "status": "ok",
+        "action_id": int(action_id),
+        "approved": approved,
+        "bet": bet,
+        "verification_date": payload.get("verification_date"),
+    }
 
 
 @router.get("/bets")

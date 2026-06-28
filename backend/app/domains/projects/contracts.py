@@ -229,6 +229,7 @@ def _existing_link_keys(conn: Any, contract_id: int, project_id: int) -> dict[st
         try:
             raw = json.loads(raw or "{}")
         except Exception:
+            logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
             return {}
     if not isinstance(raw, dict):
         return {}

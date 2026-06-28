@@ -60,6 +60,7 @@ def _row_dict(row: Any) -> dict[str, Any]:
     try:
         return dict(row)
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         return {}
 
 

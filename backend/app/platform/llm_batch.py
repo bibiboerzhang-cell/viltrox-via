@@ -284,6 +284,7 @@ def _loads_map(value: Any) -> dict[str, Any]:
         out = json.loads(str(value or "{}"))
         return out if isinstance(out, dict) else {}
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         return {}
 
 

@@ -50,6 +50,7 @@ def enroll_candidates(candidates: list[dict[str, Any]], *, staff: dict[str, Any]
                         payload={"platform": platform, "handle": handle},
                     )
                 except Exception:
+                    logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
                     pass
         except Exception:
             logger.warning("enroll.insert_failed", extra={"platform": platform, "handle": handle}, exc_info=True)

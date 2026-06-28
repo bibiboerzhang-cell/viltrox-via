@@ -24,6 +24,10 @@ from app.platform.db.schema import ensure_vkpi_schema
 from app.platform.db.schema_reconciliation import ensure_vkpi_reconciliation_schema
 from app.domains.projects.workflow import staff_id
 
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -609,6 +613,7 @@ def shopify_provider_status(*, limit: int = 10) -> dict[str, Any]:
             if db.get("webhook_secret_configured") and not webhook_secret:
                 webhook_secret = "configured_in_db"
         except Exception:
+            logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
             pass
     configured = bool(shop_domain and access_token)
     return {

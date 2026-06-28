@@ -79,6 +79,7 @@ def acquire_lease(
         try:
             conn.rollback()
         except Exception:
+            logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
             pass
         return {"available": False, "reason": "error"}
 
@@ -112,6 +113,7 @@ def renew_lease(lease_token: str, ttl_seconds: int = 300) -> dict[str, Any]:
         try:
             conn.rollback()
         except Exception:
+            logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
             pass
         return {"renewed": False, "reason": "error"}
 
@@ -141,6 +143,7 @@ def complete_lease(lease_token: str, result_ref: str = "") -> dict[str, Any]:
         try:
             conn.rollback()
         except Exception:
+            logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
             pass
         return {"completed": False, "reason": "error"}
 
@@ -170,6 +173,7 @@ def release_lease(lease_token: str) -> dict[str, Any]:
         try:
             conn.rollback()
         except Exception:
+            logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
             pass
         return {"released": False, "reason": "error"}
 
@@ -195,6 +199,7 @@ def expire_stale() -> dict[str, Any]:
         try:
             conn.rollback()
         except Exception:
+            logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
             pass
         return {"expired": 0, "reason": "error"}
 

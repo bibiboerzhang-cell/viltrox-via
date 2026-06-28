@@ -31,6 +31,7 @@ def _emit(event_type: str, run: dict[str, Any], **extra: Any) -> None:
             payload={"workflow": run.get("workflow_name"), **extra}, trace_id=str(run.get("trace_id") or ""),
         )
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         pass
 
 
@@ -142,6 +143,7 @@ def get_run(run_id: int) -> dict[str, Any]:
         ckpt_n = int(dict(get_conn().execute(
             f"SELECT COUNT(*) AS n FROM {_CKPT} WHERE run_id=?", (int(run_id),)).fetchone()).get("n") or 0)
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         pass
     return {"status": "ok",
             "run": {k: row.get(k) for k in ("id", "workflow_name", "status", "current_step", "trace_id", "last_error")},

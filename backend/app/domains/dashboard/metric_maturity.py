@@ -10,6 +10,10 @@ from typing import Any
 
 from app.db.connection import get_conn
 
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 REQUIRED_SNAPSHOT_DAYS = 30
 VALID_DASHBOARD_SCOPES = {"owned", "kol", "all"}
 _SCOPE_LABELS = {
@@ -90,6 +94,7 @@ def _count_distinct_snapshot_dates(table_name: str) -> int:
         try:
             conn.rollback()  # type: ignore[name-defined]
         except Exception:
+            logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
             pass
         return 0
 
@@ -176,6 +181,7 @@ def _owned_snapshot_window_metrics() -> dict[str, Any] | None:
         try:
             conn.rollback()  # type: ignore[name-defined]
         except Exception:
+            logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
             pass
         return None
 

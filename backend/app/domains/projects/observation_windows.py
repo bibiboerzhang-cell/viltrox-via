@@ -26,6 +26,10 @@ from typing import Any
 from app.db.connection import get_conn, table_exists
 from app.domains.access import scope
 
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 # 窗口开启偏移:签收后 7 天起观察、45 天止(与迁移注释一致)。
 _WINDOW_START_OFFSET_DAYS = 7
@@ -96,6 +100,7 @@ def _emit_event(event_type: str, **kw: Any) -> None:
 
         event_ledger.emit(event_type, source="observation_windows", **kw)
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         pass
 
 

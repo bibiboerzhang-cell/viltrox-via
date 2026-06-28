@@ -17,6 +17,10 @@ from app.domains.kol.pool_common import (
 )
 from app.domains.scoring import ScoringRegistry
 
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 _YOUTUBE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
@@ -257,11 +261,13 @@ def _video_evidence_for_kol(
             try:
                 item["cached_thumbnail_url"] = cached_image_url(item["thumbnail_url"]) or None
             except Exception:
+                logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
                 pass
         if not item.get("cached_video_url") and platform and platform != "youtube":
             try:
                 item["cached_video_url"] = cached_video_url_for_item(platform, str(item.get("id") or "")) or None
             except Exception:
+                logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
                 pass
         youtube_id = _youtube_video_id(item.get("content_url")) if platform == "youtube" else ""
         youtube_thumb = _youtube_thumbnail_url(youtube_id)

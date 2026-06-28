@@ -25,6 +25,10 @@ from typing import Any
 
 from app.db.connection import get_conn
 
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 # Qdrant collection(与 profile_recall.COLLECTION_NAME 同源,避免漂移)。
 QDRANT_COLLECTION = "vkpi_kol_profile_index_v1"
 
@@ -192,5 +196,6 @@ def erase_subject(kol_pool_id: int, *, dsar_request_id: int, staff: dict[str, An
             metadata={"dsar_request_id": dsar_request_id, "receipt": receipt},
         )
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         pass
     return {"status": "done", "kol_pool_id": int(kol_pool_id), "receipt": receipt}

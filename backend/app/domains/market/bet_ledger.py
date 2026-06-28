@@ -31,6 +31,7 @@ def _emit(event_type: str, **kw: Any) -> None:
 
         event_ledger.emit(event_type, source="bet_ledger", **kw)
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         pass
 
 

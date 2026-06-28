@@ -431,6 +431,7 @@ def create_project_draft_from_session(
             },
         )
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         pass
 
     return {

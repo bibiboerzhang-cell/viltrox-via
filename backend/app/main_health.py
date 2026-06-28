@@ -20,6 +20,10 @@ from app.core.config import (
 )
 from app.db.connection import get_db_actor_stats, probe_postgres_connectivity
 
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def _probe_redis() -> dict[str, Any]:
     """真 ping Redis(诚实健康)。配置了但不可达 → reachable=False(红),不再 fake-green。
@@ -36,6 +40,7 @@ def _probe_redis() -> dict[str, Any]:
         try:
             client.close()
         except Exception:
+            logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
             pass
         return {"configured": True, "reachable": ok}
     except Exception as exc:

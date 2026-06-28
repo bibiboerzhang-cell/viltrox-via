@@ -21,6 +21,10 @@ from app.domains.kol.video_evidence_sources import (
 )
 from app.domains.projects.workflow_evidence import _fetch_video_metadata
 
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 VIDEO_EVIDENCE_METHOD = "kol_video_evidence_url_service_v1"
 SCORE_FIELDS = ("viltrox_fit_score", "viltrox_fit_reason")
 
@@ -366,6 +370,7 @@ def _commit(conn: Any) -> None:
     try:
         conn.commit()
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         pass
 
 
@@ -373,4 +378,5 @@ def _rollback(conn: Any) -> None:
     try:
         conn.rollback()
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         pass

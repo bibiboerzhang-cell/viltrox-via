@@ -19,6 +19,10 @@ from typing import Any
 from app.db.connection import get_conn
 from app.domains.costs.budget_guard import check_budget, record_cost
 
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 # Apify 专抓 about 页的单次预估成本上限(USD);超此或闸不过 → 拒抓。
 # YouTube channel-about actor 单跑约 $0.01-0.03 量级,取 0.05 保守预估。
 APIFY_ABOUT_EST_COST_USD = 0.05
@@ -324,6 +328,7 @@ def _apify_scrape_about(*, platform: str, handle: str, profile_url: str, kol_poo
                 metadata={"operation": "business_email_about_scrape", "apify_run_ref": apify_run_ref, "platform": platform},
             )
         except Exception:
+            logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
             pass
         return ({"profile": profile}, apify_run_ref)
     except Exception:

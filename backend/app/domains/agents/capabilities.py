@@ -9,6 +9,10 @@ from typing import Any
 
 from app.db.connection import get_conn, table_exists
 
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 # 能力清单(code-defined)。status: ready=可用 / awaiting_data=待真数据 / live=按库探测。
 _CAPABILITIES: list[dict[str, Any]] = [
     # ── 找人引擎 ──
@@ -58,6 +62,7 @@ def get_capabilities(staff: dict[str, Any] | None = None) -> dict[str, Any]:
                     c["status"] = "ready"
                 c["live_rows"] = int(n or 0)
             except Exception:
+                logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
                 pass
         items.append(c)
     groups: dict[str, list[dict[str, Any]]] = {}

@@ -64,6 +64,7 @@ def _parse_json(raw: str) -> dict[str, Any]:
         if isinstance(obj, dict):
             return obj
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         pass
     # 兜底:Gemini 接地输出常带引用/前后说明文字 → 抽取第一个 { 到最后一个 } 再解析。
     try:
@@ -73,6 +74,7 @@ def _parse_json(raw: str) -> dict[str, Any]:
             obj = json.loads(text[start : end + 1])
             return obj if isinstance(obj, dict) else {}
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         pass
     return {}
 

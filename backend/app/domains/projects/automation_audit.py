@@ -36,6 +36,7 @@ def _loads(value: Any) -> Any:
     try:
         return json.loads(value)
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         return {}
 
 

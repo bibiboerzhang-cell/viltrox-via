@@ -18,6 +18,10 @@ from urllib.parse import parse_qs, urlparse, urlunparse
 
 from app.domains.kol.pool_common import _first_present, _int_or_none, _json
 
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 SUPPORTED_PLATFORMS = {"youtube", "instagram", "tiktok"}
 
 
@@ -313,6 +317,7 @@ def _parse_date(value: Any) -> str:
     try:
         return datetime.fromisoformat(text.replace("Z", "+00:00")).date().isoformat()
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         pass
     match = re.search(r"(\d{4}-\d{2}-\d{2})", text)
     return match.group(1) if match else ""
@@ -433,6 +438,7 @@ def _load_json(value: Any) -> Any:
     try:
         return json.loads(str(value))
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         return {}
 
 

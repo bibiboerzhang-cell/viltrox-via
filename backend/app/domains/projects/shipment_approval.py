@@ -135,6 +135,7 @@ def approve(project_id: int, kol_pool_id: int, *, staff: dict[str, Any] | None =
                 trace_id=event_ledger.new_trace_id("project", project_id, "kol", kol_pool_id),
             )
         except Exception:
+            logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
             pass
     return res
 

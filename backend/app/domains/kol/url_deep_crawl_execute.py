@@ -301,6 +301,7 @@ def _execute_existing_creator_video_flow(
         try:
             conn.rollback()
         except Exception:
+            logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
             pass
         error = str(exc)[:500]
         status = "failed"
@@ -503,6 +504,7 @@ def _execute_new_creator_video_flow(
         try:
             conn.rollback()
         except Exception:
+            logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
             pass
         error = str(exc)[:500]
         status = "failed"
@@ -777,6 +779,7 @@ def _enqueue_account_dossier_extract_followup(
     try:
         conn.commit()
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         pass
     return {
         "status": "queued",
@@ -924,6 +927,7 @@ def _record_deep_crawl_run(
     try:
         conn.commit()
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         pass
     return int(row["id"]) if row and row["id"] is not None else None
 

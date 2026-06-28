@@ -651,9 +651,9 @@ def _main() -> None:
     args = parser.parse_args()
     try:
         payload = extract_invoice_file(args.invoice_file, model_name=args.model)
-        print(json.dumps({"status": "ok", "payload": payload}, ensure_ascii=False, default=str))
+        sys.stdout.write(json.dumps({"status": "ok", "payload": payload}, ensure_ascii=False, default=str) + "\n")
     except Exception as exc:
-        print(json.dumps({"status": "error", "error": str(exc)[:1000]}, ensure_ascii=False, default=str))
+        sys.stdout.write(json.dumps({"status": "error", "error": str(exc)[:1000]}, ensure_ascii=False, default=str) + "\n")
         raise SystemExit(1)
 
 

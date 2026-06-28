@@ -113,6 +113,7 @@ def _localize_search_terms(en_query: str, language: str) -> str:
                 _LOCALIZE_CACHE[key] = text  # QA P2:仅成功才缓存;失败不缓存,允许 LLM 恢复后重试。
                 return text
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         pass
     return q  # 翻译失败/空 → 回退英文(不缓存)
 

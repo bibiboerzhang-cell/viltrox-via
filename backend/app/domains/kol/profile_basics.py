@@ -389,6 +389,7 @@ def _commit(conn: Any) -> None:
     try:
         conn.commit()
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         pass
 
 
@@ -396,4 +397,5 @@ def _rollback(conn: Any) -> None:
     try:
         conn.rollback()
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         pass

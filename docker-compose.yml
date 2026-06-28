@@ -1,0 +1,106 @@
+# V-KPI marketing — 工程硬化③ 固定依赖 Docker Compose
+#
+# 目标:`docker compose up` 复现本地验证环境
+#   - postgres:16  → 宿主 54329 映射到容器 5432(与本地 runtime 端口口径一致)
+#   - redis        → 宿主 6380(与本地 REDIS_URL=redis://...:6380 一致)
+#   - backend      → uvicorn app.main:app,容器 8102
+#   - frontend     → vite dev server,容器 5173
+#
+# env 注入:
+#   - 公共密钥/外部 API 从宿主 .env 注入(env_file: .env)
+#   - DB/REDIS 在 compose 内强制指向 *服务名*(postgres / redis),
+#     覆盖 .env 里指向 127.0.0.1 的本地值,保证容器间互通。
+#   - ENVIRONMENT=docker(非 local),让 runtime_env.sh 以传入的 DATABASE_URL/REDIS_URL 为准,
+#     不会被 local 守门逻辑强制改回 127.0.0.1。
+#
+# 用法:
+#   docker compose up --build
+#   - 前端:http://localhost:5173
+#   - 后端:http://localhost:8102/health
+#   - PG :  127.0.0.1:54329  (user=postgres db=viltrox2)
+#   - Redis:127.0.0.1:6380
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: vkpi-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-viltrox2}
+      # 本地 runtime 用的是无密码 trust;容器内默认要求密码,
+      # 用 trust 保持与本地 `postgresql://postgres@host/viltrox2`(无口令)一致。
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "54329:5432"
+    volumes:
+      - vkpi_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-viltrox2}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: vkpi-redis
+    command: ["redis-server", "--port", "6380", "--appendonly", "yes"]
+    ports:
+      - "6380:6380"
+    volumes:
+      - vkpi_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6380", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: vkpi-backend
+    # 先吃宿主 .env(JWT/外部 API/feature flags 等),再用下面的显式值覆盖网络相关项
+    env_file:
+      - .env
+    environment:
+      ENVIRONMENT: docker
+      PYTHONPATH: /app/backend
+      PYTHONUNBUFFERED: "1"
+      # 强制指向 compose 服务名(覆盖 .env 里的 127.0.0.1 本地值)
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}@postgres:5432/${POSTGRES_DB:-viltrox2}
+      REDIS_URL: redis://redis:6380/0
+      DB_RUNTIME_BACKEND: postgres
+      APP_ROLE: ${APP_ROLE:-admin-web}
+    command: >-
+      python -m uvicorn app.main:app
+      --host 0.0.0.0 --port 8102
+      --app-dir /app/backend
+    ports:
+      - "8102:8102"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: vkpi-frontend
+    environment:
+      # vite dev server 的 API 代理目标 → backend 服务名(vite.config.ts 认这个 env)
+      VITE_API_PROXY_TARGET: http://backend:8102
+    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"]
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  vkpi_pg_data:
+  vkpi_redis_data:

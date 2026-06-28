@@ -16,7 +16,7 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from app.core.logging import get_logger
@@ -38,6 +38,26 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _coerce_today(today: date | str | None) -> date:
+    """把传入的 today(date / 'YYYY-MM-DD' 串 / None)收敛成一个 date 锚。
+
+    时间锚必须从 payload/参数传入(可测、可复现),不依赖不可控的墙钟读取;
+    缺省才退化到 _now().date()(仅作兜底,生产调用应显式传 today)。
+    """
+    if isinstance(today, date) and not isinstance(today, datetime):
+        return today
+    if isinstance(today, datetime):
+        return today.date()
+    if isinstance(today, str):
+        s = today.strip()
+        if s:
+            try:
+                return date.fromisoformat(s[:10])
+            except ValueError:
+                logger.debug("bet_producer.bad_today", extra={"today": s})
+    return _now().date()
+
+
 def _load_opportunities(*, window_days: int, limit: int) -> dict[str, Any]:
     """只读取 prediction 机会窗(含 confidence_cap)。引擎异常 → 安全空结果(诚实)。"""
     try:
@@ -56,14 +76,44 @@ def _prob_for(confidence: str, cap: str) -> float:
     return round(min(base, ceil), 2)
 
 
-def _draft_from_opportunity(opp: dict[str, Any], *, cap: str, idx: int) -> dict[str, Any]:
-    """把一个机会窗映射成 bet 草案 dict(尚未落库;字段对齐 bet_ledger.create_bet 契约)。"""
+def _opportunity_due_date(opp: dict[str, Any]) -> date | None:
+    """机会窗若自带到期日(deadline / expires_at / review_at / due_date)→ 取其 date;否则 None。
+
+    只读机会窗 payload 里已有的时间字段,不引入墙钟;无可解析值则交回默认窗口逻辑。
+    """
+    for key in ("deadline", "expires_at", "review_at", "due_date"):
+        raw = opp.get(key)
+        if not raw:
+            continue
+        s = str(raw).strip()
+        if not s:
+            continue
+        try:
+            return date.fromisoformat(s[:10])
+        except ValueError:
+            continue
+    return None
+
+
+def _draft_from_opportunity(opp: dict[str, Any], *, cap: str, idx: int, today: date) -> dict[str, Any]:
+    """把一个机会窗映射成 bet 草案 dict(尚未落库;字段对齐 bet_ledger.create_bet 契约)。
+
+    时间锚 today 由调用方传入(参数/payload),据此推出 verification_date(复盘日 = today + 窗口);
+    机会窗自带到期(deadline/expires_at/review_at)时优先采信其日期,否则用默认窗口。
+    """
     title = str(opp.get("title") or f"机会窗 #{idx}").strip()
     basis = str(opp.get("basis") or "").strip()
     action = str(opp.get("suggested_action") or "").strip()
     conf = str(opp.get("confidence") or "low").strip().lower()
     prob = _prob_for(conf, cap)
-    review_at = (_now() + timedelta(days=_DEFAULT_REVIEW_DAYS)).isoformat()
+    # verification_date:优先用机会窗自身到期(若有),否则 today + 默认复盘窗口。
+    opp_due = _opportunity_due_date(opp)
+    verify_date = opp_due or (today + timedelta(days=_DEFAULT_REVIEW_DAYS))
+    verification_date = verify_date.isoformat()
+    # review_at:bet_ledger 用的 ISO datetime(复盘日当天 00:00 UTC);与 verification_date 同一天。
+    review_at = datetime(
+        verify_date.year, verify_date.month, verify_date.day, tzinfo=timezone.utc
+    ).isoformat()
     # dedupe_key:同一机会标题在窗口内只产一注草案(幂等;避免每日重复堆叠 inbox)。
     dedupe_basis = title.lower().replace(" ", "_")[:80] or f"opp_{idx}"
     hypothesis = (
@@ -79,6 +129,7 @@ def _draft_from_opportunity(opp: dict[str, Any], *, cap: str, idx: int) -> dict[
         "dedupe_key": f"bet:opportunity:{dedupe_basis}",
         "hypothesis": hypothesis,
         "probability": prob,
+        "verification_date": verification_date,  # 复盘日(YYYY-MM-DD;锚自传入 today,非墙钟)
         "review_at": review_at,
         "risk_level": "high" if prob < 0.5 else "medium",  # 低概率押注=高风险
         "expected_gain": "命中则验证一个市场方向,沉淀 hypothesis→outcome→lesson 校准回路",
@@ -116,7 +167,7 @@ def _to_suggestion(draft: dict[str, Any]) -> dict[str, Any]:
         risk_level=str(draft.get("risk_level") or "medium"),
         evidence_refs=list(draft.get("evidence_refs") or []),
         verification_plan=[
-            f"审批通过 → bet_ledger.create_bet 写入一注(outcome=open,review_at={draft.get('review_at')})",
+            f"审批通过 → bet_ledger.create_bet 写入一注(outcome=open,复盘日={draft.get('verification_date')})",
             "到期 scan_due_bets 逼出 outcome(won/lost/void)+ lesson",
         ],
         affected_tables=["vkpi_bet_ledger"],
@@ -124,6 +175,7 @@ def _to_suggestion(draft: dict[str, Any]) -> dict[str, Any]:
             # create_bet 契约字段(审批端点据此真下注)。
             "hypothesis": draft.get("hypothesis"),
             "probability": draft.get("probability"),
+            "verification_date": draft.get("verification_date"),
             "review_at": draft.get("review_at"),
             "risk_level": draft.get("risk_level"),
             "expected_gain_cents": 0,
@@ -142,6 +194,7 @@ def produce_bet_drafts(
     window_days: int = 30,
     limit: int = 10,
     min_confidence: str = "medium",
+    today: date | str | None = None,
 ) -> dict[str, Any]:
     """闭环C 主入口:读高置信机会窗 → 生成 bet 草案 → (非 dry_run)物化成 inbox 'bet' 待审建议。
 
@@ -150,9 +203,12 @@ def produce_bet_drafts(
       **永不**直接调 bet_ledger.create_bet —— 真下注是人审后的事。
 
     min_confidence:只为 >= 此档(low<medium<high)的机会出草案,避免低信号噪音乱押。
+    today:复盘日(verification_date)的时间锚,由调用方/调度从 payload 传入('YYYY-MM-DD'/date);
+      缺省才退化到当天(仅兜底)。可测、可复现,不依赖不可控墙钟。
     """
     rank = {"low": 0, "medium": 1, "high": 2}
     floor = rank.get(str(min_confidence or "medium").strip().lower(), 1)
+    anchor = _coerce_today(today)
 
     pred = _load_opportunities(window_days=window_days, limit=limit)
     cap = str(pred.get("confidence_cap") or "medium")
@@ -168,7 +224,7 @@ def produce_bet_drafts(
         if rank.get(conf, 0) < floor:
             skipped_low_conf += 1
             continue
-        draft = _draft_from_opportunity(opp, cap=cap, idx=idx)
+        draft = _draft_from_opportunity(opp, cap=cap, idx=idx, today=anchor)
         drafts.append(draft)
         try:
             suggestions.append(_to_suggestion(draft))
@@ -191,6 +247,8 @@ def produce_bet_drafts(
         "dry_run": bool(dry_run),
         "confidence_cap": cap,
         "min_confidence": str(min_confidence or "medium").strip().lower(),
+        "today": anchor.isoformat(),
+        "default_review_days": _DEFAULT_REVIEW_DAYS,
         "candidates_seen": len(opportunities),
         "skipped_low_confidence": skipped_low_conf,
         "drafts": drafts,

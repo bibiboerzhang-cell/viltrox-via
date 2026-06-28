@@ -3,9 +3,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import sys
 from pathlib import Path
 
+from app.core.logging import get_logger
 from app.integrations.excel_import.pipeline import format_dry_run_report, run_dry_run
+
+logger = get_logger(__name__)
 
 
 def main() -> int:
@@ -15,12 +19,13 @@ def main() -> int:
 
     path = Path(args.xlsx).expanduser()
     result = run_dry_run(path)
-    print(format_dry_run_report(result))
+    sys.stdout.write(format_dry_run_report(result) + "\n")
     try:
         from app.db.connection import close_db_runtime
 
         asyncio.run(close_db_runtime())
     except Exception:
+        logger.debug("close_db_runtime failed during dry-run cleanup", exc_info=True)
         pass
     return 0
 

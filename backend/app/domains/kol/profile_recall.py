@@ -221,6 +221,10 @@ from app.domains.kol.profile_recall_product_queries import (  # noqa: E402
     resolve_query_text,
 )
 
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 @dataclass(frozen=True)
 class RecallHit:
@@ -266,6 +270,7 @@ def _openai_client():
 
             return OpenAI(api_key=api_key, http_client=httpx.Client(proxy=proxy, timeout=30.0))
         except Exception:
+            logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
             pass
     return OpenAI(api_key=api_key)
 
@@ -817,6 +822,7 @@ def recall_kol_profiles(
             from app.core.logging import get_logger
             get_logger(__name__).warning("recall_degraded", extra={"reason": str(exc)[:160]})
         except Exception:
+            logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
             pass
         query_vector, embedding_meta, hits = [], {}, []
 

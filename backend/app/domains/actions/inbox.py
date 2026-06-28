@@ -32,6 +32,7 @@ def _loads(value: Any) -> Any:
     try:
         return json.loads(value)
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         return {}
 
 
@@ -472,6 +473,7 @@ def approve_action(action_id: int, staff: dict[str, Any] | None = None, reason: 
                 trace_id=event_ledger.new_trace_id("action", action_id),
             )
         except Exception:
+            logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
             pass
     return res
 

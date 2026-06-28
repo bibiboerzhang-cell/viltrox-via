@@ -280,6 +280,7 @@ def auth_me(request: Request):
             )
             conn.commit()
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         pass
     return {"status": "success", "user": user}
 

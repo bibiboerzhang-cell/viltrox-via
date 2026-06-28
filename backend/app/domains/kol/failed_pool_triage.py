@@ -284,6 +284,7 @@ def recycle_recyclable(dry_run: bool = True, limit: int | None = None) -> dict[s
             try:
                 conn.commit()
             except Exception:  # noqa: BLE001 — autocommit 环境无 commit,忽略
+                logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
                 pass
             recycled += 1
         except Exception as exc:  # noqa: BLE001 — 单行失败不拖垮整批

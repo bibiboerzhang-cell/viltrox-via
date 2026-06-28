@@ -1,0 +1,49 @@
+# 根 build context 排除(backend/frontend Dockerfile 共用 context: .)
+# 目标:不把宿主虚拟环境、依赖缓存、密钥、海量数据塞进镜像层。
+
+# 虚拟环境 / 依赖缓存
+.venv/
+**/__pycache__/
+*.pyc
+**/node_modules/
+frontend/dist/
+frontend/coverage/
+
+# 密钥与本地 env(运行期由 compose env_file/environment 注入,不烘进镜像)
+.env
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+
+# VCS / IDE / 系统
+.git/
+.github/
+.DS_Store
+.codegraph/
+.codex-backups/
+.pytest_cache/
+.state/
+.integration/
+
+# 大体积/运行期产物(非镜像所需)
+runtime/data/
+runtime/logs/
+backups/
+artifacts/
+exports/
+output/
+reports/
+uploads/
+kol_assets/
+frames/
+creator_profiles/
+tmp/
+submissions.db
+*.sqlite3
+node_modules/
+
+# docker 自身
+docker-compose.yml
+**/Dockerfile
+.dockerignore

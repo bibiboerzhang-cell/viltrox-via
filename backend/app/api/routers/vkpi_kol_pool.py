@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 from urllib.parse import urlparse
 
+from app.core.logging import get_logger
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 
@@ -50,6 +51,8 @@ import app.domains.tasks.enqueue as task_enqueue
 from app.domains.audit.decorator import audit_action
 from app.domains.access.firewall import firewall_check
 
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-kol-pool"])
 
@@ -496,6 +499,7 @@ def optimize_kol_outreach(
                 out_subject = str(parsed.get("subject") or subject).strip()
                 out_body = str(parsed.get("body") or draft).strip()
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         pass
     return {"ok": bool(text), "subject": out_subject, "body": out_body, "model": resp.get("model")}
 

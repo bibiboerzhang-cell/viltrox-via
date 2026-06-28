@@ -104,6 +104,7 @@ def _parse_llm_json(text: str) -> dict[str, Any]:
                 parsed = json.loads(match.group(0))
                 return parsed if isinstance(parsed, dict) else {}
             except Exception:
+                logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
                 return {}
         return {}
 

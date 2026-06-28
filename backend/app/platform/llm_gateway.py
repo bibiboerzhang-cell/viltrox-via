@@ -21,9 +21,21 @@ from typing import Any, Callable
 from app.core.config import CLAUDE_MODEL
 from app.core.logging import get_logger
 from app.db.connection import get_conn
-from app.domains.costs import budget_guard
 from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
-from app.domains.projects.workflow import staff_id as resolve_staff_id
+
+
+def _budget_guard() -> Any:
+    """Lazy import: 防 platform→domain 顶层倒挂(分层硬化④)。行为不变。"""
+    from app.domains.costs import budget_guard
+
+    return budget_guard
+
+
+def resolve_staff_id(staff: Any) -> Any:
+    """Lazy import wrapper for app.domains.projects.workflow.staff_id(防顶层倒挂)。"""
+    from app.domains.projects.workflow import staff_id as _staff_id
+
+    return _staff_id(staff)
 
 
 logger = get_logger(__name__)
@@ -223,7 +235,7 @@ def _budget_allows_provider(provider: str, *, cost_scope: str, estimated_cost_us
     # cron:vkpi_sentiment / vkpi_contract_polish / vkpi_kol_outreach_draft /
     # kol_smart_search_query_plan / cron:vkpi_weekly_summary)视为放行,避免 enforce 把这些
     # 未配额功能 100% 降级 rule_v0(避雷1:require_configured=True 会全拦死)。
-    plan = budget_guard.check_budget_scopes(
+    plan = _budget_guard().check_budget_scopes(
         _budget_scopes_for_provider(provider, cost_scope),
         estimated_cost_usd,
         require_configured=False,
@@ -247,7 +259,7 @@ def _record_budget_blocked_attempt(
 
     try:
         provider_scope = _provider_budget_scope(provider)
-        budget_guard.record_cost(
+        _budget_guard().record_cost(
             scope=cost_scope or SINGLE_CALL_BUDGET_SCOPE,
             cron_task=purpose or "manual_llm",
             ai_provider=provider or "unknown",
@@ -297,7 +309,7 @@ def budget_preflight(
             continue
         estimated_cost = _estimated_cost_usd(provider, prompt=safe_prompt, max_output_tokens=max_output_tokens)
         scopes = _budget_scopes_for_provider(provider, cost_scope)
-        plan = budget_guard.check_budget_scopes(scopes, estimated_cost, require_configured=require_configured)
+        plan = _budget_guard().check_budget_scopes(scopes, estimated_cost, require_configured=require_configured)
         env_allowed = bool(skip_monthly_env_check) or monthly_budget > 0 and monthly_remaining > 0
         configured = _is_provider_configured(provider)
         provider_allowed = bool(plan.get("allowed")) and configured and env_allowed and not forced_offline
@@ -547,7 +559,7 @@ def invoke(
     budget_warnings: list[dict[str, Any]] = []
     if cost_scope:
         try:
-            if not budget_guard.check_budget(cost_scope, 0, require_configured=True):
+            if not _budget_guard().check_budget(cost_scope, 0, require_configured=True):
                 budget_warnings.append({"stage": "scope_preflight", "reason": "ai_budget_hard_stop", "cost_tag": cost_scope})
                 logger.warning(
                     "vkpi.llm_gateway.ai_budget_hard_stop_record_only",
@@ -746,7 +758,7 @@ def record_call(
     if cost_tag and (status == "success" or int(cost_cents or 0) > 0):
         try:
             provider_scope = _provider_budget_scope(provider)
-            budget_guard.record_cost(
+            _budget_guard().record_cost(
                 scope=cost_tag,
                 cron_task=purpose,
                 ai_provider=provider or "unknown",

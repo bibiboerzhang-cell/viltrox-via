@@ -15,6 +15,10 @@ from typing import Any
 
 from app.db.connection import get_conn, is_postgres_runtime
 
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -28,6 +32,7 @@ def _ensure_contact_audit_schema() -> None:
     try:
         cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(vkpi_kol_pool)").fetchall()}
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         return
     try:
         if "contact_reveal_count" not in cols:
@@ -38,6 +43,7 @@ def _ensure_contact_audit_schema() -> None:
             conn.execute("ALTER TABLE vkpi_kol_pool ADD COLUMN contact_last_revealed_by_staff_id INTEGER")
         conn.commit()
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         pass
 
 
@@ -101,6 +107,7 @@ def view_kol_contact(
             metadata={"revealed": ["email", "other_contacts_json"], "has_email": bool(real_email)},
         )
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         pass
 
     # 更新展开计数留痕(118 列;SQLite 幂等建)。审计写失败不阻断真值返回。
@@ -118,6 +125,7 @@ def view_kol_contact(
         )
         conn.commit()
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         pass
 
     return {

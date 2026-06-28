@@ -34,6 +34,10 @@ from app.domains.kol.url_deep_crawl_video_meta import (
 from app.domains.kol.video_analysis_enqueue import _enqueue_final_v1_video_analysis
 from app.domains.kol.video_evidence import ensure_video_evidence_from_url
 
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 if TYPE_CHECKING:
     from app.domains.kol.url_deep_crawl import ClassifiedUrl
 
@@ -149,6 +153,7 @@ def _execute_profile_representative_video_analysis(
             try:
                 conn.rollback()
             except Exception:
+                logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
                 pass
             errors += 1
             error = str(exc)[:500]
@@ -274,6 +279,7 @@ def _execute_profile_history_video_evidence(
             try:
                 conn.rollback()
             except Exception:
+                logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
                 pass
             errors += 1
             error = str(exc)[:500]

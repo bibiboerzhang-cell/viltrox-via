@@ -19,6 +19,10 @@ from app.domains.access import scope
 from app.domains.projects import stage_canonical
 from app.domains.projects.workflow import staff_id as resolve_staff_id
 
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 # --- KOL 榜单 Viltrox 过滤口径(本会话 2026-06-16)-------------------------------
 # 「KOL 榜单」只收 KOL 发的 Viltrox 相关视频。判定优先用结构化深析信号
@@ -155,6 +159,7 @@ def _row_dict(row: Any) -> dict[str, Any]:
     try:
         return dict(row)
     except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         return {}
 
 
