@@ -184,7 +184,7 @@ def download_video_ytdlp(url: str, output_dir: str, max_seconds: int = 120) -> d
             "ytdlp_download_complete",
             extra={
                 "platform": platform,
-                "filename": os.path.basename(video_path),
+                "file_name": os.path.basename(video_path),
                 "duration_sec": round(result["duration"]),
                 "size_mb": os.path.getsize(video_path) // 1024 // 1024,
             },

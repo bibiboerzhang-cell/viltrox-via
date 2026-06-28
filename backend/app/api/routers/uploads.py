@@ -118,7 +118,7 @@ async def upload_video(request: Request):
         return {"status": "error", "message": str(exc)}
     except Exception:
         save_path.unlink(missing_ok=True)
-        logger.exception("upload.video_save_failed", extra={"filename": file.filename or "", "content_type": content_type})
+        logger.exception("upload.video_save_failed", extra={"file_name": file.filename or "", "content_type": content_type})
         return {"status": "error", "message": "Could not persist uploaded video"}
     if not await asyncio.to_thread(validate_upload_magic, save_path, "video"):
         save_path.unlink(missing_ok=True)
@@ -220,7 +220,7 @@ async def admin_upload_reward_image(request: Request, file: UploadFile = File(..
         return {"status": "error", "message": str(exc)}
     except Exception:
         save_path.unlink(missing_ok=True)
-        logger.exception("upload.reward_image_save_failed", extra={"filename": file.filename or "", "content_type": content_type})
+        logger.exception("upload.reward_image_save_failed", extra={"file_name": file.filename or "", "content_type": content_type})
         return {"status": "error", "message": "Could not persist reward image"}
     if not await asyncio.to_thread(validate_upload_magic, save_path, "image"):
         save_path.unlink(missing_ok=True)

@@ -496,7 +496,9 @@ async def job_fulfillment_delivered_scan():
         if created or result.get("scanned_projects"):
             logger.info(
                 "scheduler.fulfillment_delivered_scan",
-                extra={"created": created, "scanned_projects": result.get("scanned_projects")},
+                # 注意:'created' 是 Python logging.LogRecord 保留字段,放进 extra 会触
+                # KeyError("Attempt to overwrite 'created'") → 整个 job 被记成 failed。改 windows_created。
+                extra={"windows_created": created, "scanned_projects": result.get("scanned_projects")},
             )
         # W2 审计:每个新开窗口落 window_open(record-only,失败不拖垮 job)。
         try:
@@ -576,7 +578,8 @@ async def job_fulfillment_due_scan():
         if created_total or scanned_total:
             logger.info(
                 "scheduler.fulfillment_due_scan",
-                extra={"created": created_total, "scanned": scanned_total},
+                # 'created' 是 logging 保留字段(见 delivered_scan 同类修复),改 created_total。
+                extra={"created_total": created_total, "scanned": scanned_total},
             )
         _record_scheduler_run("fulfillment_due_scan", ok=True)
     except Exception as exc:

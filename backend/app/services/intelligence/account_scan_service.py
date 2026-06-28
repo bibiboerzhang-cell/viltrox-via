@@ -667,7 +667,7 @@ async def scan_matrix(accounts: List[Dict[str, Any]], max_posts_per_account: int
         name = account.get("name", "")
         logger.info(
             "scanner.matrix_account_started",
-            extra={"index": index + 1, "total": len(accounts), "platform": platform, "name": name},
+            extra={"index": index + 1, "total": len(accounts), "platform": platform, "account_name": name},
         )
         try:
             result = await scan_account(platform, handle, max_posts_per_account)
