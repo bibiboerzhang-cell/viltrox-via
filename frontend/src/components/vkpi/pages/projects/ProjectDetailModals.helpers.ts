@@ -34,3 +34,13 @@ export interface PolishPreviewItem {
   original: string;
   polished: string;
 }
+
+// 合同模板槽位类型(GenerateContractModal 的 templates[].slots 元素;转发给抽出的字段区子组件用)。
+export interface ContractSlot {
+  key: string;
+  label: string;
+  group?: string;
+  type?: string;
+  options?: string[];
+  required?: boolean;
+}

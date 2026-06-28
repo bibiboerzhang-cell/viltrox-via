@@ -25,6 +25,8 @@ export {
   UploadScreenshotModal,
   VideoUrlModal,
 } from './ProjectDetailModals.Sections';
+// 合同生成 modal 内的展示型子区块(只吃 props),容器逻辑仍留本文件。
+import { GenerateContractDoneScreen, GenerateContractFields, GenerateContractTools, PolishPreviewOverlay } from './ProjectDetailModals.Sections';
 export { dateInputValue } from './ProjectDetailModals.helpers';
 
 export function AddKolModal({
@@ -723,20 +725,12 @@ export function GenerateContractModal({
 
   if (doneContractId) {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" role="presentation" onClick={onClose}>
-        <div className="rounded-2xl border border-white/[0.08] bg-[#0b1220] w-full max-w-md p-6 text-center" role="dialog" aria-label="合同已生成" onClick={(event) => event.stopPropagation()}>
-          <div className="text-[15px] font-semibold text-emerald-300 mb-1.5">✓ 合同已生成并自动归档</div>
-          <p className="text-[11px] text-slate-400 mb-4">已入「合同归档」{selectedRow ? `,关联 ${selectedRow.kolHandle || selectedRow.kolName}` : ''}——可现在下载 DOCX,或稍后到归档 tab 查看/删除。</p>
-          <div className="flex items-center justify-center gap-2.5">
-            {onDownload ? (
-              <button className="px-4 py-2 rounded-md text-[11.5px] font-medium bg-purple-500 hover:bg-purple-400 text-white" type="button" onClick={() => onDownload(doneContractId)}>
-                下载 DOCX
-              </button>
-            ) : null}
-            <button className="px-4 py-2 rounded-md border border-white/[0.08] text-[11.5px] text-slate-300 hover:bg-white/[0.04]" type="button" onClick={onClose}>完成</button>
-          </div>
-        </div>
-      </div>
+      <GenerateContractDoneScreen
+        doneContractId={doneContractId}
+        selectedRow={selectedRow}
+        onDownload={onDownload}
+        onClose={onClose}
+      />
     );
   }
 
@@ -759,82 +753,24 @@ export function GenerateContractModal({
             {rows.map((item) => <option key={item.id} value={item.id} style={{ background: '#0a0a0d' }}>{item.kolHandle || item.kolName} · {item.platform}</option>)}
           </select>
         </div>
-        <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/[0.05] px-3 py-2 mb-3">
-          <div className="flex items-center gap-2 flex-wrap">
-            <input
-              ref={invoiceFileRef}
-              type="file"
-              accept=".pdf,.png,.jpg,.jpeg"
-              className="hidden"
-              onChange={(event) => { void runInvoiceExtract(event.target.files?.[0]); event.target.value = ''; }}
-            />
-            <button
-              className="px-2.5 py-1.5 rounded-md text-[11px] font-medium bg-cyan-500/15 border border-cyan-500/35 text-cyan-200 hover:bg-cyan-500/25 disabled:opacity-50"
-              type="button"
-              onClick={() => invoiceFileRef.current?.click()}
-              disabled={invoiceState === 'uploading' || invoiceState === 'extracting' || !apiToken}
-              title={apiToken ? undefined : '缺少 API token,发票回填不可用'}
-            >
-              {invoiceState === 'uploading' ? '发票上传中…' : invoiceState === 'extracting' ? '发票解析中…(≤90s · 泳道「发票提取」可见)' : '上传发票自动回填'}
-            </button>
-            <button
-              className="px-2.5 py-1.5 rounded-md text-[11px] font-medium bg-purple-500/15 border border-purple-500/35 text-purple-200 hover:bg-purple-500/25 disabled:opacity-50"
-              type="button"
-              onClick={() => void runPolish()}
-              disabled={polishState === 'running' || !apiToken}
-              title={apiToken ? '整组润色非选择/日期类文本槽,差异预览确认后才写回' : '缺少 API token,AI 润色不可用'}
-            >
-              {polishState === 'running' ? 'AI 润色中…(≤90s · 队列可见)' : 'AI 润色(整组文本)'}
-            </button>
-            <span className="text-[10px] text-slate-500">发票 PDF/PNG/JPG → 乙方与收款信息自动回填;两者均为 LLM 产物,请人工核对</span>
-          </div>
-          {invoiceState === 'done' && invoiceFilledKeys.size ? (
-            <div className="mt-1.5 text-[10.5px] text-cyan-300">已回填 {invoiceFilledKeys.size} 个字段(高亮显示)——来自发票,请逐项核对后再生成。</div>
-          ) : null}
-          {invoiceError ? <div className="mt-1.5 text-[10.5px] text-rose-300">{invoiceError}</div> : null}
-          {polishError ? <div className="mt-1.5 text-[10.5px] text-rose-300">{polishError}</div> : null}
-        </div>
+        <GenerateContractTools
+          invoiceFileRef={invoiceFileRef}
+          invoiceState={invoiceState}
+          invoiceFilledKeys={invoiceFilledKeys}
+          invoiceError={invoiceError}
+          polishState={polishState}
+          polishError={polishError}
+          apiToken={apiToken}
+          onPickInvoice={(file) => { void runInvoiceExtract(file); }}
+          onRunPolish={() => void runPolish()}
+        />
         <div className="flex-1 overflow-y-auto -mx-1 px-1 space-y-3">
-          {grouped.map(([group, slots]) => (
-            <div key={group}>
-              <div className="text-[10.5px] text-slate-500 mb-1.5">{group}</div>
-              <div className="grid grid-cols-2 gap-2">
-                {slots.map((slot) => {
-                  const fromInvoice = invoiceFilledKeys.has(slot.key);
-                  const invoiceBorder = fromInvoice ? 'border-cyan-400/60 ring-1 ring-cyan-400/30' : 'border-white/[0.06]';
-                  return (
-                    <label className={`text-[10.5px] text-slate-400 ${slot.type === 'multiline' ? 'col-span-2' : ''}`} key={slot.key}>
-                      {slot.label}{slot.required ? <span className="text-rose-400"> *</span> : null}
-                      {slot.type === 'choice' ? (
-                        <select
-                          className={`mt-1 w-full px-2.5 py-1.5 rounded-md bg-white/[0.02] border ${invoiceBorder} text-[11px] text-white`}
-                          value={fields[slot.key] || ''}
-                          onChange={(event) => setSlotValue(slot.key, event.target.value)}
-                        >
-                          <option value="" style={{ background: '#0a0a0d' }}>请选择</option>
-                          {(slot.options || []).map((option) => <option key={option} value={option} style={{ background: '#0a0a0d' }}>{option}</option>)}
-                        </select>
-                      ) : slot.type === 'multiline' ? (
-                        <textarea
-                          className={`mt-1 w-full h-16 px-2.5 py-1.5 rounded-md bg-white/[0.02] border ${invoiceBorder} text-[11px] text-white resize-y`}
-                          value={fields[slot.key] || ''}
-                          onChange={(event) => setSlotValue(slot.key, event.target.value)}
-                        />
-                      ) : (
-                        <input
-                          className={`mt-1 w-full px-2.5 py-1.5 rounded-md bg-white/[0.02] border ${invoiceBorder} text-[11px] text-white`}
-                          type={slot.type === 'date' ? 'date' : 'text'}
-                          value={fields[slot.key] || ''}
-                          onChange={(event) => setSlotValue(slot.key, event.target.value)}
-                        />
-                      )}
-                      {fromInvoice ? <span className="block mt-0.5 text-[9.5px] text-cyan-300">来自发票,请核对</span> : null}
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
+          <GenerateContractFields
+            grouped={grouped}
+            fields={fields}
+            invoiceFilledKeys={invoiceFilledKeys}
+            setSlotValue={setSlotValue}
+          />
         </div>
         {error ? <div className="mt-2 text-[10.5px] text-rose-300">{error}</div> : null}
         <div className="flex items-center justify-between mt-3.5 pt-3 border-t border-white/[0.05]">
@@ -848,37 +784,11 @@ export function GenerateContractModal({
         </div>
 
         {polishPreview ? (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" role="presentation" onClick={() => setPolishPreview(null)}>
-            <div className="rounded-2xl border border-white/[0.08] bg-[#0b1220] w-full max-w-2xl p-5 max-h-[85vh] flex flex-col" role="dialog" aria-label="AI 润色差异预览" onClick={(event) => event.stopPropagation()}>
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <h3 className="text-[14px] font-semibold text-white">AI 润色差异预览</h3>
-                  <p className="text-[10.5px] text-slate-500 mt-0.5">LLM 产物 · 请人工确认——点「应用」才写回表单,放弃则原文不动</p>
-                </div>
-                <button className="text-slate-500 hover:text-white" type="button" onClick={() => setPolishPreview(null)}><X size={16} /></button>
-              </div>
-              <div className="flex-1 overflow-y-auto -mx-1 px-1 space-y-3">
-                {polishPreview.map((item) => (
-                  <div key={item.key} className="rounded-lg border border-white/[0.06] bg-white/[0.015] p-2.5">
-                    <div className="text-[10.5px] text-slate-400 mb-1.5 flex items-center gap-2">
-                      {item.label}
-                      <span className="text-[9px] px-1.5 py-0.5 rounded border border-purple-400/30 bg-purple-400/10 text-purple-300">LLM 产物·请人工确认</span>
-                    </div>
-                    <div className="text-[9.5px] text-slate-500 mb-0.5">原文</div>
-                    <div className="rounded-md bg-black/30 px-2 py-1.5 text-[11px] text-slate-300 whitespace-pre-wrap">{item.original}</div>
-                    <div className="text-[9.5px] text-emerald-400/80 mt-1.5 mb-0.5">润色后</div>
-                    <div className="rounded-md bg-emerald-500/[0.06] border border-emerald-500/20 px-2 py-1.5 text-[11px] text-emerald-100 whitespace-pre-wrap">{item.polished}</div>
-                  </div>
-                ))}
-              </div>
-              <div className="flex items-center justify-end gap-2 mt-3.5 pt-3 border-t border-white/[0.05]">
-                <button className="px-3 py-1.5 rounded-md border border-white/[0.08] text-[11px] text-slate-300 hover:bg-white/[0.04]" type="button" onClick={() => setPolishPreview(null)}>放弃改写</button>
-                <button className="px-3.5 py-1.5 rounded-md text-[11px] font-medium bg-emerald-500/90 hover:bg-emerald-500 text-white" type="button" onClick={applyPolish}>
-                  应用 {polishPreview.length} 处改写
-                </button>
-              </div>
-            </div>
-          </div>
+          <PolishPreviewOverlay
+            polishPreview={polishPreview}
+            onDiscard={() => setPolishPreview(null)}
+            onApply={applyPolish}
+          />
         ) : null}
       </div>
     </div>

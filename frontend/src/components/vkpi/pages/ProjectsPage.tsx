@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import type { VkpiDashboardData, VkpiKolOption, VkpiPageKey, VkpiProjectRow, VkpiProjectStage, VkpiStaffMember } from '../vkpiTypes';
+import type { VkpiKolOption, VkpiProjectRow } from '../vkpiTypes';
 import { clearProjectFocus, readProjectFocus, type IntelligenceProjectFocusPayload } from '../intelligence/intelligenceProjectFocus';
 import { useProjectDetail } from '../hooks/useProjectDetail';
 import { addKolsToProject, advanceProjectKol, getAvailableProjectKols, submitProjectKolActionStub, updateProjectFollowStatus, updateProjectKolShipping, updateProjectStar } from '../../../domains/projects';
@@ -10,62 +10,22 @@ import { ProjectCampaignBoard } from './projects/ProjectCampaignBoard';
 import { ProjectDueListCard } from './projects/ProjectDueListCard';
 import { ProjectDetailView } from './projects/ProjectDetailView';
 import { useAuth } from '../../../hooks/useAuth';
+import type { ProjectsPageProps } from './ProjectsPage.types';
+import {
+  type ImportKolRow,
+  buildImportSearchTerms,
+  findImportKolMatch,
+  lookupImportKolPoolOption,
+} from './ProjectsPage.helpers';
+import {
+  ImportKolListModal,
+  ProjectDetailError,
+  ProjectDetailSkeleton,
+  ProjectFocusBanner,
+} from './ProjectsPage.Sections';
 import './projects/projectBoard.css';
 
-interface ProjectsPageProps {
-  data: VkpiDashboardData;
-  filteredProjects: VkpiProjectRow[];
-  selectedProjectId?: string;
-  selectedProject?: VkpiProjectRow;
-  openProjectId?: string;
-  viewMode: 'manager' | 'employee';
-  onSelectProject: (project: VkpiProjectRow) => void;
-  onOpenKolProfile?: (project: VkpiProjectRow) => void | Promise<void>;
-  onOpenStaffProfile?: (staffId: string, fallback?: Partial<VkpiStaffMember>) => void | Promise<void>;
-  onLookupKol?: (payload: { platform: string; handleOrUrl: string; createIfMissing?: boolean; email?: string; contactEmail?: string; notes?: string; scanAccount?: boolean; maxPosts?: number; productSku?: string }) => Promise<{ kol?: Record<string, unknown> | null; created?: boolean }>;
-  onCreateProject?: (payload: { projectName: string; kolId?: string; productSku?: string; productName?: string; productSkus?: string[]; products?: Array<{ productSku: string; productName?: string }>; platform?: string; marketplace?: string; sourceType?: string; note?: string }) => Promise<Record<string, unknown> | void>;
-  onUpdateProject?: (projectId: string, payload: { projectName?: string; productSku?: string; productName?: string; products?: Array<{ productSku: string; productName?: string }>; platform?: string; marketplace?: string; priority?: string; shopifyLink?: string; targetPostDate?: string; dueAt?: string; note?: string }) => Promise<void>;
-  onMoveProjectStage?: (projectId: string, toStage: VkpiProjectStage, note?: string, extras?: { trackingNumber?: string; sampleStatus?: string; sourceRefType?: string; sourceRefId?: string }) => Promise<void>;
-  onDeleteProject?: (projectId: string, reason?: string) => Promise<void>;
-  onAddProjectCost?: (payload: { projectId: string; costType: string; amountUsd: number; note?: string; sourceRef?: string; metadata?: Record<string, unknown> }) => Promise<void>;
-  onUpsertProjectTerms?: (projectId: string, payload: Record<string, unknown>) => Promise<void>;
-  onAddProjectShipment?: (projectId: string, payload: Record<string, unknown>) => Promise<void>;
-  onUploadEvidenceFile?: (file: File, payload?: { entityType?: string; entityId?: string; purpose?: string }) => Promise<Record<string, unknown>>;
-  onSelectPage?: (page: VkpiPageKey) => void;
-  onToggleView?: (targetPage?: VkpiPageKey) => void;
-  onRefreshData?: () => void | Promise<void>;
-  apiToken?: string;
-}
-
 const campaignStatusOptions = ['规划中', '进行中', '收尾中', '已结束', '已取消'];
-
-function ProjectFocusBanner({
-  focus,
-  matched,
-  onDismiss,
-}: {
-  focus: IntelligenceProjectFocusPayload;
-  matched: boolean;
-  onDismiss: () => void;
-}) {
-  return (
-    <section className="vkpi-task-focus-banner is-medium" aria-live="polite">
-      <div>
-        <span>来自智能中心 / 红人搜索</span>
-        <h2>{focus.projectName}</h2>
-        <p>{focus.summary}</p>
-      </div>
-      <div className="vkpi-task-focus-banner__meta">
-        <span><b>KOL</b>{focus.kolHandle || focus.kolId || '-'}</span>
-        <span><b>产品</b>{focus.productSku || focus.productName || '-'}</span>
-        <span><b>状态</b>{matched ? '已定位项目详情' : '等待数据刷新后定位'}</span>
-      </div>
-      <div className="vkpi-task-focus-banner__actions">
-        <button className="vkpi-button vkpi-button--ghost" type="button" onClick={onDismiss}>关闭</button>
-      </div>
-    </section>
-  );
-}
 
 export function ProjectsPage({
   data,
@@ -562,257 +522,5 @@ export function ProjectsPage({
         </div>
       ) : null}
     </PageShell>
-  );
-}
-
-interface ImportKolRow {
-  platform: string;
-  handle: string;
-  name?: string;
-  email?: string;
-}
-
-function normalizeImportPlatform(value: unknown) {
-  const text = String(value || '').trim().toLowerCase();
-  if (text.includes('youtube') || text === 'yt') return 'youtube';
-  if (text.includes('instagram') || text === 'ig') return 'instagram';
-  if (text.includes('tiktok')) return 'tiktok';
-  if (text.includes('facebook')) return 'facebook';
-  if (text === 'x' || text.includes('twitter')) return 'x';
-  if (text.includes('reddit')) return 'reddit';
-  return text;
-}
-
-function normalizeImportToken(value: unknown) {
-  let token = String(value || '').trim().toLowerCase();
-  token = token.replace(/^https?:\/\/(www\.)?/, '');
-  token = token.replace(/^(instagram|youtube|tiktok|facebook|twitter|x)\.com\//, '');
-  token = token.replace(/^youtu\.be\//, '');
-  token = token.replace(/^(channel|user|c)\//, '');
-  token = token.replace(/^@+/, '');
-  token = token.replace(/[?#].*$/, '');
-  token = token.replace(/\/(videos|reels|reel|posts|post|tagged)\/?$/i, '');
-  token = token.replace(/\/+$/, '');
-  return token.replace(/[^a-z0-9\u4e00-\u9fff]+/g, '');
-}
-
-function buildImportSearchTerms(row: ImportKolRow) {
-  const rawTerms = [row.handle, row.name].map((value) => String(value || '').trim()).filter(Boolean);
-  const normalizedTerms = rawTerms.map(normalizeImportToken).filter(Boolean);
-  return Array.from(new Set([...rawTerms, ...normalizedTerms]));
-}
-
-function findImportKolMatch(row: ImportKolRow, candidates: VkpiKolOption[]) {
-  const rowPlatform = normalizeImportPlatform(row.platform);
-  const rowTokens = [row.handle, row.name].map(normalizeImportToken).filter(Boolean);
-  if (!rowTokens.length) return undefined;
-  const platformCandidates = candidates.filter((candidate) => {
-    const candidatePlatform = normalizeImportPlatform(candidate.platform);
-    return !rowPlatform || !candidatePlatform || rowPlatform === candidatePlatform;
-  });
-  const pool = platformCandidates.length ? platformCandidates : candidates;
-  return pool.find((candidate) => {
-    const candidateTokens = [candidate.handle, candidate.name, candidate.profileUrl].map(normalizeImportToken).filter(Boolean);
-    return rowTokens.some((token) => candidateTokens.includes(token));
-  });
-}
-
-async function lookupImportKolPoolOption(
-  row: ImportKolRow,
-  onLookupKol: NonNullable<ProjectsPageProps['onLookupKol']>,
-): Promise<VkpiKolOption | undefined> {
-  const handleOrUrl = String(row.handle || row.name || '').trim();
-  if (!handleOrUrl) return undefined;
-  try {
-    const result = await onLookupKol({
-      platform: normalizeImportPlatform(row.platform || 'Other') || 'Other',
-      handleOrUrl,
-      createIfMissing: false,
-      scanAccount: false,
-      maxPosts: 1,
-      contactEmail: row.email,
-    });
-    const kol = result.kol || {};
-    const rawPoolId = kol.kol_pool_id ?? kol.kolPoolId ?? kol.pool_id ?? kol.poolId;
-    const poolId = rawPoolId == null ? '' : String(rawPoolId);
-    if (!poolId || !/^\d+$/.test(poolId)) return undefined;
-    return {
-      id: poolId,
-      name: String(kol.display_name || kol.channel_name || kol.name || row.name || row.handle || `KOL ${poolId}`),
-      handle: String(kol.handle || row.handle || ''),
-      platform: platformLabel(row.platform || kol.platform || 'Other'),
-      avatar: String(kol.avatar_url || ''),
-      profileUrl: String(kol.profile_url || kol.channel_url || ''),
-      contactEmail: row.email,
-      followerLabel: '-',
-      contentCountLabel: '-',
-      claimOwner: '',
-      scanStatus: 'lookup_pool',
-    };
-  } catch {
-    return undefined;
-  }
-}
-
-function platformLabel(value: unknown): VkpiKolOption['platform'] {
-  const normalized = normalizeImportPlatform(value);
-  if (normalized === 'youtube') return 'YouTube';
-  if (normalized === 'instagram') return 'Instagram';
-  if (normalized === 'tiktok') return 'TikTok';
-  if (normalized === 'facebook') return 'Facebook';
-  if (normalized === 'x') return 'X';
-  if (normalized === 'reddit') return 'Reddit';
-  return 'Other';
-}
-
-function parseKolImportRows(raw: string, fallbackPlatform: string): ImportKolRow[] {
-  const rows: ImportKolRow[] = [];
-  const seen = new Set<string>();
-  raw
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .forEach((line, index) => {
-      const cells = line.split(/\t|,/).map((cell) => cell.trim()).filter(Boolean);
-      const normalizedHeaderCells = cells.map((cell) => cell.toLowerCase());
-      const looksLikeHeader = index === 0 && normalizedHeaderCells.some((cell) => ['platform', '平台'].includes(cell))
-        && normalizedHeaderCells.some((cell) => ['handle', '账号', 'kol', 'email', '邮箱', 'name', '名称'].includes(cell));
-      if (looksLikeHeader) return;
-      if (!cells.length) return;
-      let platform = fallbackPlatform;
-      let handle = cells[0] || '';
-      let name = '';
-      let email = '';
-      if (cells.length >= 2 && /instagram|youtube|tiktok|facebook|reddit|twitter|^x$|other/i.test(cells[0])) {
-        platform = cells[0];
-        handle = cells[1] || '';
-        name = cells[2] || '';
-        email = cells[3] || '';
-      } else {
-        name = cells[1] || '';
-        email = cells[2] || '';
-      }
-      handle = handle.trim();
-      if (!handle) return;
-      const dedupeKey = `${platform.toLowerCase()}::${handle.toLowerCase()}`;
-      if (seen.has(dedupeKey)) return;
-      seen.add(dedupeKey);
-      rows.push({ platform, handle, name, email });
-    });
-  return rows.slice(0, 50);
-}
-
-function ImportKolListModal({
-  projects,
-  selectedProject,
-  busy,
-  onClose,
-  onSubmit,
-}: {
-  projects: VkpiProjectRow[];
-  selectedProject?: VkpiProjectRow;
-  busy: boolean;
-  onClose: () => void;
-  onSubmit: (project: VkpiProjectRow, rows: ImportKolRow[]) => Promise<void>;
-}) {
-  const [projectId, setProjectId] = useState(selectedProject?.id || projects[0]?.id || '');
-  const [fallbackPlatform, setFallbackPlatform] = useState<string>(selectedProject?.platform || projects[0]?.platform || 'Instagram');
-  const [rawText, setRawText] = useState('Instagram, @creator.handle, Creator Name, creator@email.com');
-  const [error, setError] = useState('');
-  const targetProject = projects.find((project) => project.id === projectId) || projects[0];
-  const parsedRows = useMemo(() => parseKolImportRows(rawText, fallbackPlatform), [fallbackPlatform, rawText]);
-
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!targetProject) {
-      setError('请先选择目标推广。');
-      return;
-    }
-    if (!parsedRows.length) {
-      setError('没有解析到可导入的 KOL 行。');
-      return;
-    }
-    setError('');
-    await onSubmit(targetProject, parsedRows);
-  };
-
-  return (
-    <div className="vkpi-project-modal-backdrop" role="presentation">
-      <form className="vkpi-project-import-modal" onSubmit={submit} role="dialog" aria-label="导入 KOL 名单">
-        <header>
-          <div>
-            <h2>导入 KOL 名单</h2>
-            <p>从 KOL Pool 匹配账号，批量追加到目标推广；最多 50 行，不再创建孤立项目。</p>
-          </div>
-          <button type="button" onClick={onClose} disabled={busy}>关闭</button>
-        </header>
-        <div className="vkpi-project-import-grid">
-          <label>目标推广
-            <select value={projectId} onChange={(event) => setProjectId(event.target.value)}>
-              {projects.map((project) => <option key={project.id} value={project.id}>{project.campaign} · {project.kolHandle || project.kolName}</option>)}
-            </select>
-          </label>
-          <label>默认平台
-            <select value={fallbackPlatform} onChange={(event) => setFallbackPlatform(event.target.value)}>
-              {['Instagram', 'YouTube', 'TikTok', 'Facebook', 'Reddit', 'X', 'Other'].map((item) => <option key={item}>{item}</option>)}
-            </select>
-          </label>
-          <label className="is-full">名单内容
-            <textarea
-              value={rawText}
-              onChange={(event) => setRawText(event.target.value)}
-              placeholder={`支持格式：\nInstagram, @handle, Name, email@example.com\n@handle, Name, email@example.com`}
-            />
-          </label>
-        </div>
-        <div className="vkpi-project-import-preview">
-          <strong>预览 {parsedRows.length} 行</strong>
-          <div>
-            {parsedRows.slice(0, 6).map((row) => <span key={`${row.platform}-${row.handle}`}>{row.platform} · {row.handle}</span>)}
-            {parsedRows.length > 6 ? <span>还有 {parsedRows.length - 6} 行</span> : null}
-          </div>
-        </div>
-        {error ? <div className="vkpi-campaign-upload-error">{error}</div> : null}
-        <footer>
-          <button className="vkpi-project-modal-button" type="button" onClick={onClose} disabled={busy}>取消</button>
-          <button className="vkpi-project-modal-button is-primary" type="submit" disabled={busy || !parsedRows.length}>
-            {busy ? '导入中' : `导入 ${parsedRows.length} 个 KOL`}
-          </button>
-        </footer>
-      </form>
-    </div>
-  );
-}
-
-function ProjectDetailSkeleton({ onBack }: { onBack: () => void }) {
-  return (
-    <section className="vkpi-campaign-detail" aria-label="项目详情加载中">
-      <button className="vkpi-campaign-back" type="button" onClick={onBack}>← 返回项目列表</button>
-      <div className="vkpi-campaign-detail-hero vkpi-campaign-skeleton">
-        <div>
-          <span />
-          <strong />
-          <p />
-          <p />
-        </div>
-        <div />
-      </div>
-      <div className="vkpi-campaign-kpis vkpi-campaign-skeleton-kpis">
-        {Array.from({ length: 6 }).map((_, index) => <div key={index} />)}
-      </div>
-      <div className="vkpi-campaign-panel vkpi-campaign-skeleton-panel" />
-    </section>
-  );
-}
-
-function ProjectDetailError({ message, onBack }: { message: string; onBack: () => void }) {
-  return (
-    <section className="vkpi-campaign-detail" aria-label="项目详情错误">
-      <button className="vkpi-campaign-back" type="button" onClick={onBack}>← 返回项目列表</button>
-      <div className="vkpi-campaign-placeholder is-error">
-        <h3>{message}</h3>
-        <p>请返回项目列表后刷新数据，或确认该项目仍在当前账号权限范围内。</p>
-      </div>
-    </section>
   );
 }

@@ -2,29 +2,10 @@ import { apiFetch, jsonBody } from "../http";
 import type {
   Row,
   VkpiKolPoolItem,
-  VkpiKolVideoAnalysisCacheEntry,
   VkpiKolVideoAnalysisCacheResponse,
   VkpiVideoAnalysisEnqueueResponse,
-  VkpiKolLlmDeepAnalysisResult,
-  VkpiKolLlmDeepAnalysisResponse,
-  VkpiKolPoolFreshness,
   VkpiKolPoolRefreshState,
   VkpiKolPoolWorkspaceResponse,
-  VkpiKolPoolDetailBundleResponse,
-  VkpiKolPoolIntelligenceCard,
-  VkpiKolPoolEvidenceSummary,
-  VkpiKolPoolAiBrief,
-  VkpiKolPoolGeminiPreflight,
-  VkpiKolPoolGeminiGoNoGo,
-  VkpiKolRecallItem,
-  VkpiKolRecallResponse,
-  VkpiKolSearchSessionRef,
-  VkpiKolSearchSessionItem,
-  VkpiKolSearchHistoryItem,
-  VkpiKolSearchHistoryResponse,
-  VkpiKolUrlDeepCrawlResponse,
-  VkpiKolSmartSearchResponse,
-  VkpiKolSmartSearchProfileAdvanceResponse,
   VkpiKolNeedsAnalysisItem,
 } from "./kolPool-api.helpers";
 
@@ -96,284 +77,20 @@ export async function getKolPoolWorkspace(
   );
 }
 
-export async function deepCrawlKolUrl(
-  token: string,
-  url: string,
-  execute = false,
-  params: { maxPosts?: number; mode?: string; timeoutMs?: number; sessionId?: number; createSession?: boolean; source?: string; forceFullHistory?: boolean; representativeVideoLimit?: number } = {},
-): Promise<VkpiKolUrlDeepCrawlResponse> {
-  const body: Row = {
-    url,
-    execute,
-  };
-  if (typeof params.maxPosts === "number") body.max_posts = params.maxPosts;
-  if (params.mode) body.mode = params.mode;
-  if (params.forceFullHistory) body.force_full_history = true;  // 项⑥:account_deep 重跑全量历史视频
-  // 刀2·流2 路A:profile_with_video 模式下自动跑 N 条代表视频 final_v1,dossier 才出真 LLM 账号分。
-  if (typeof params.representativeVideoLimit === "number") body.representative_video_limit = params.representativeVideoLimit;
-  if (typeof params.sessionId === "number") body.session_id = params.sessionId;
-  if (typeof params.createSession === "boolean") body.create_session = params.createSession;
-  if (params.source) body.source = params.source;
-  const timeoutMs = params.timeoutMs ?? (execute ? 300000 : undefined);
-  return apiFetch<VkpiKolUrlDeepCrawlResponse>(
-    "/api/admin/vkpi/kol-url-deep-crawl",
-    {
-      method: "POST",
-      body: jsonBody(body),
-      ...(timeoutMs ? { timeoutMs } : {}),
-    },
-    token,
-  );
-}
-
-export async function smartKolSearch(
-  token: string,
-  input: string,
-  params: {
-    mode?: "auto" | "url" | "text" | "recall" | string;
-    execute?: boolean;
-    maxPosts?: number;
-    candidateLimit?: number;
-    limit?: number;
-    creatorQuota?: number;
-    reviewerQuota?: number;
-    productSku?: string;
-    sessionId?: number;
-    createSession?: boolean;
-    excludeChinese?: boolean;
-    timeoutMs?: number;
-  } = {},
-): Promise<VkpiKolSmartSearchResponse> {
-  const body: Row = {
-    input,
-    mode: params.mode || "auto",
-    create_session: params.createSession ?? true,
-  };
-  if (params.execute) body.execute = true;
-  if (typeof params.maxPosts === "number") body.max_posts = params.maxPosts;
-  if (typeof params.candidateLimit === "number") body.candidate_limit = params.candidateLimit;
-  if (typeof params.limit === "number") body.limit = params.limit;
-  if (typeof params.creatorQuota === "number") body.creator_quota = params.creatorQuota;
-  if (typeof params.reviewerQuota === "number") body.reviewer_quota = params.reviewerQuota;
-  if (params.productSku) body.product_sku = params.productSku;
-  if (typeof params.sessionId === "number") body.session_id = params.sessionId;
-  if (typeof params.excludeChinese === "boolean") body.exclude_chinese = params.excludeChinese;
-  return apiFetch<VkpiKolSmartSearchResponse>(
-    "/api/admin/vkpi/kol-smart-search",
-    {
-      method: "POST",
-      body: jsonBody(body),
-      ...(params.timeoutMs ? { timeoutMs: params.timeoutMs } : {}),
-    },
-    token,
-  );
-}
-
-export async function smartKolSearchProfileAdvanceJob(
-  token: string,
-  input: string,
-  params: {
-    candidateLimit?: number;
-    limit?: number;
-    creatorQuota?: number;
-    reviewerQuota?: number;
-    advanceLimit?: number;
-    maxPosts?: number;
-    representativeVideoLimit?: number;
-    includeNewDiscovery?: boolean;
-    newDiscoveryLimit?: number;
-    newDiscoveryPlatforms?: string[];
-    excludeChinese?: boolean;
-    market?: string;
-    timeoutMs?: number;
-  } = {},
-): Promise<VkpiKolSmartSearchProfileAdvanceResponse> {
-  const body: Row = {
-    input,
-    queue_pipeline: true,
-    include_new_discovery: params.includeNewDiscovery ?? true,
-  };
-  if (params.newDiscoveryPlatforms?.length) body.new_discovery_platforms = params.newDiscoveryPlatforms;
-  // 区域语言本地化:目标市场码(JP/KR/DE/...)→ 后端按该区语言搜平台;空=全球英文。
-  if (params.market) body.market = params.market;
-  if (typeof params.excludeChinese === "boolean") body.exclude_chinese = params.excludeChinese;
-  if (typeof params.candidateLimit === "number") body.candidate_limit = params.candidateLimit;
-  if (typeof params.limit === "number") body.limit = params.limit;
-  if (typeof params.creatorQuota === "number") body.creator_quota = params.creatorQuota;
-  if (typeof params.reviewerQuota === "number") body.reviewer_quota = params.reviewerQuota;
-  if (typeof params.advanceLimit === "number") body.advance_limit = params.advanceLimit;
-  if (typeof params.maxPosts === "number") body.max_posts = params.maxPosts;
-  if (typeof params.representativeVideoLimit === "number") body.representative_video_limit = params.representativeVideoLimit;
-  if (typeof params.newDiscoveryLimit === "number") body.new_discovery_limit = params.newDiscoveryLimit;
-  return apiFetch<VkpiKolSmartSearchProfileAdvanceResponse>(
-    "/api/admin/vkpi/kol-smart-search/profile-advance-job",
-    {
-      method: "POST",
-      body: jsonBody(body),
-      ...(params.timeoutMs ? { timeoutMs: params.timeoutMs } : {}),
-    },
-    token,
-  );
-}
-
-export async function listKolSearchHistory(
-  token: string,
-  params: { limit?: number; status?: string; queryType?: string; itemLimit?: number } = {},
-): Promise<VkpiKolSearchHistoryResponse> {
-  const query = new URLSearchParams({
-    limit: String(params.limit || 12),
-    item_limit: String(params.itemLimit ?? 5),
-  });
-  if (params.status) query.set("status", params.status);
-  if (params.queryType) query.set("query_type", params.queryType);
-  return apiFetch<VkpiKolSearchHistoryResponse>(
-    `/api/admin/vkpi/kol-search-history?${query.toString()}`,
-    { cache: "no-store" },
-    token,
-  );
-}
-
-// KOL 推荐卡:数据完整度档(A-D)+ 为什么推荐 + 信号(档位非 fit)。
-export async function getKolRecommendationCard(
-  token: string,
-  kolPoolId: string | number,
-): Promise<Row> {
-  return apiFetch<Row>(
-    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/recommendation-card`,
-    { cache: "no-store" },
-    token,
-  );
-}
-
-export async function getKolTwin(token: string, kolPoolId: string | number): Promise<Row> {
-  return apiFetch<Row>(
-    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/twin`,
-    { cache: "no-store" },
-    token,
-  );
-}
-
-export async function getKolSearchSession(
-  token: string,
-  sessionId: string | number,
-): Promise<VkpiKolSearchHistoryItem> {
-  return apiFetch<VkpiKolSearchHistoryItem>(
-    `/api/admin/vkpi/kol-search-sessions/${encodeURIComponent(String(sessionId))}`,
-    { cache: "no-store" },
-    token,
-  );
-}
-
-// ── M1 找人闭合(R1-R4):批准锁定 → 成本估算 → 建项目草案 → 话术草案 ──────────────
-// 红线:批准只锁候选;草案/话术只「生成」不外发不承诺价格;一切走后端 require_tab + 预算闸。
-
-function _sessionPath(sessionId: string | number, suffix: string): string {
-  return `/api/admin/vkpi/kol-search-sessions/${encodeURIComponent(String(sessionId))}/${suffix}`;
-}
-
-export async function approveKolSearchSession(
-  token: string,
-  sessionId: string | number,
-  kolPoolIds: number[],
-): Promise<Row> {
-  return apiFetch<Row>(
-    _sessionPath(sessionId, "approve"),
-    { method: "POST", body: jsonBody({ kol_pool_ids: kolPoolIds }), cache: "no-store" },
-    token,
-  );
-}
-
-export async function estimateKolSearchSessionCost(
-  token: string,
-  sessionId: string | number,
-  params: { kolPoolIds?: number[]; postsPerCreator?: number } = {},
-): Promise<Row> {
-  const body: Row = {};
-  if (Array.isArray(params.kolPoolIds) && params.kolPoolIds.length) body.kol_pool_ids = params.kolPoolIds;
-  if (typeof params.postsPerCreator === "number") body.posts_per_creator = params.postsPerCreator;
-  return apiFetch<Row>(
-    _sessionPath(sessionId, "cost-estimate"),
-    { method: "POST", body: jsonBody(body), cache: "no-store" },
-    token,
-  );
-}
-
-export async function createProjectDraftFromSession(
-  token: string,
-  sessionId: string | number,
-  params: {
-    kolPoolIds?: number[];
-    projectName?: string;
-    productSku?: string;
-    productName?: string;
-    platform?: string;
-    productPositioning?: string;
-    targetPersona?: string;
-  } = {},
-): Promise<Row> {
-  const body: Row = {};
-  if (Array.isArray(params.kolPoolIds) && params.kolPoolIds.length) body.kol_pool_ids = params.kolPoolIds;
-  if (params.projectName) body.project_name = params.projectName;
-  if (params.productSku) body.product_sku = params.productSku;
-  if (params.productName) body.product_name = params.productName;
-  if (params.platform) body.platform = params.platform;
-  if (params.productPositioning) body.product_positioning = params.productPositioning;
-  if (params.targetPersona) body.target_persona = params.targetPersona;
-  return apiFetch<Row>(
-    _sessionPath(sessionId, "create-project-draft"),
-    { method: "POST", body: jsonBody(body), cache: "no-store" },
-    token,
-  );
-}
-
-export async function generateKolSearchSessionOutreach(
-  token: string,
-  sessionId: string | number,
-  params: { kolPoolIds?: number[]; productPositioning?: string; targetPersona?: string; productName?: string } = {},
-): Promise<Row> {
-  const body: Row = {};
-  if (Array.isArray(params.kolPoolIds) && params.kolPoolIds.length) body.kol_pool_ids = params.kolPoolIds;
-  if (params.productPositioning) body.product_positioning = params.productPositioning;
-  if (params.targetPersona) body.target_persona = params.targetPersona;
-  if (params.productName) body.product_name = params.productName;
-  return apiFetch<Row>(
-    _sessionPath(sessionId, "generate-outreach"),
-    { method: "POST", body: jsonBody(body), cache: "no-store" },
-    token,
-  );
-}
-
-export async function recallKolProfiles(
-  token: string,
-  params: {
-    queryText?: string;
-    productSku?: string;
-    candidateLimit?: number;
-    limit?: number;
-    creatorQuota?: number;
-    reviewerQuota?: number;
-    ratioPolicy?: "soft" | string;
-    mixedPolicy?: "dominant" | string;
-    dedupe?: boolean;
-  } = {},
-): Promise<VkpiKolRecallResponse> {
-  const query = new URLSearchParams({
-    candidate_limit: String(params.candidateLimit || 50),
-    limit: String(params.limit || 10),
-    creator_quota: String(params.creatorQuota ?? 7),
-    reviewer_quota: String(params.reviewerQuota ?? 3),
-    ratio_policy: params.ratioPolicy || "soft",
-    mixed_policy: params.mixedPolicy || "dominant",
-    dedupe: String(params.dedupe ?? true),
-  });
-  if (params.queryText) query.set("query_text", params.queryText);
-  if (params.productSku) query.set("product_sku", params.productSku);
-  return apiFetch<VkpiKolRecallResponse>(
-    `/api/admin/vkpi/kol-recall?${query.toString()}`,
-    {},
-    token,
-  );
-}
+export {
+  deepCrawlKolUrl,
+  smartKolSearch,
+  smartKolSearchProfileAdvanceJob,
+  listKolSearchHistory,
+  getKolRecommendationCard,
+  getKolTwin,
+  getKolSearchSession,
+  approveKolSearchSession,
+  estimateKolSearchSessionCost,
+  createProjectDraftFromSession,
+  generateKolSearchSessionOutreach,
+  recallKolProfiles,
+} from "./kolPool-api.search";
 
 export async function getKolVideoAnalysisCache(
   token: string,
@@ -439,117 +156,22 @@ export async function enqueueAllKolVideos(
   );
 }
 
-export async function getKolPoolItem(token: string, kolPoolId: number, refreshIfStale = true) {
-  const query = new URLSearchParams({ refresh_if_stale: String(refreshIfStale) });
-  return apiFetch<{ item: VkpiKolPoolItem; freshness?: VkpiKolPoolFreshness; refresh?: VkpiKolPoolRefreshState }>(
-    `/api/admin/vkpi/kol-pool/${kolPoolId}?${query.toString()}`,
-    {},
-    token,
-  );
-}
-
-export async function getKolPoolDetailBundle(
-  token: string,
-  kolPoolId: string | number,
-  options: { videoLimit?: number; llmLimit?: number } = {},
-) {
-  const params = new URLSearchParams({
-    // P9:默认从 3 抬到 24,单账号详情默认展示该账号(基本)全部视频(后端 max 200,可按需再加载)。
-    video_limit: String(options.videoLimit || 24),
-    llm_limit: String(options.llmLimit || 20),
-  });
-  return apiFetch<VkpiKolPoolDetailBundleResponse>(
-    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/detail-bundle?${params.toString()}`,
-    { cache: "no-store" },
-    token,
-  );
-}
-
-export async function getKolPoolCompetitors(token: string, kolPoolId: string | number) {
-  return apiFetch<Row>(
-    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/competitors`,
-    {},
-    token,
-  );
-}
-
-export async function getKolPoolDimensions11(
-  token: string,
-  kolPoolId: string | number,
-  options: { requirePersisted?: boolean } = {},
-) {
-  const params = new URLSearchParams();
-  if (options.requirePersisted) params.set("require_persisted", "true");
-  const query = params.toString();
-  return apiFetch<Row>(
-    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/dimensions11${query ? `?${query}` : ""}`,
-    {},
-    token,
-  );
-}
-
-export async function getKolPoolLlmDeepAnalysis(token: string, kolPoolId: string | number, limit = 20) {
-  const params = new URLSearchParams({ limit: String(limit) });
-  return apiFetch<VkpiKolLlmDeepAnalysisResponse>(
-    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/llm-deep-analysis?${params.toString()}`,
-    { cache: "no-store" },
-    token,
-  );
-}
-
-// 地基B 内容契合深析(content_fit_v1):默认只读缓存;analyze=true 才按需触发深析(读已有
-// 视频分析+评论 → 非 flash LLM → 落 cache)。红线:零触 viltrox_fit_score,不新跑 Gemini。
-export async function getKolPoolContentFit(
-  token: string,
-  kolPoolId: string | number,
-  options: { analyze?: boolean; force?: boolean; productSku?: string } = {},
-) {
-  const params = new URLSearchParams();
-  if (options.analyze) params.set("analyze", "true");
-  if (options.force) params.set("force", "true");
-  if (options.productSku) params.set("product_sku", options.productSku);
-  const query = params.toString();
-  return apiFetch<Row>(
-    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/content-fit${query ? `?${query}` : ""}`,
-    { cache: "no-store" },
-    token,
-  );
-}
-
-// item4 账号档案:只读本地聚合(零 provider/LLM/写库),返回 profile/coverage/judgment/gaps/
-// crawl_history/events。红线:diagnostics.viltrox_fit_score_write=false。
-export async function getKolPoolAccountDossier(token: string, kolPoolId: string | number) {
-  return apiFetch<Row>(
-    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/account-dossier`,
-    { cache: "no-store" },
-    token,
-  );
-}
-
-// P1-1 KOL 合作动作(平台为基准):读当前状态+时间线 / 记一条动作。
-export async function getKolCooperation(token: string, kolPoolId: string | number) {
-  return apiFetch<Row>(
-    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/cooperation`,
-    { cache: "no-store" },
-    token,
-  );
-}
-
-export async function recordKolCooperation(
-  token: string,
-  kolPoolId: string | number,
-  action: string,
-  note = "",
-) {
-  return apiFetch<Row>(
-    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/cooperation`,
-    {
-      method: "POST",
-      body: jsonBody({ action, note }),
-    },
-    token,
-  );
-}
+export {
+  getKolPoolItem,
+  getKolPoolDetailBundle,
+  getKolPoolCompetitors,
+  getKolPoolDimensions11,
+  getKolPoolLlmDeepAnalysis,
+  getKolPoolContentFit,
+  getKolPoolAccountDossier,
+  getKolCooperation,
+  recordKolCooperation,
+  getKolPoolIntelligenceCard,
+  getKolPoolEvidenceSummary,
+  getKolPoolAiBrief,
+  getKolPoolGeminiPreflight,
+  getKolPoolGeminiGoNoGo,
+} from "./kolPool-api.detail";
 
 export async function refreshKolPoolItem(token: string, kolPoolId: number, force = false) {
   return apiFetch<VkpiKolPoolRefreshState>(
@@ -558,51 +180,6 @@ export async function refreshKolPoolItem(token: string, kolPoolId: number, force
       method: "POST",
       body: jsonBody({ force }),
     },
-    token,
-  );
-}
-
-export async function getKolPoolIntelligenceCard(token: string, kolPoolId: number | string, includeProductFit = true) {
-  const query = new URLSearchParams({ include_product_fit: String(includeProductFit) });
-  return apiFetch<VkpiKolPoolIntelligenceCard>(
-    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/intelligence-card?${query.toString()}`,
-    {},
-    token,
-  );
-}
-
-export async function getKolPoolEvidenceSummary(token: string, kolPoolId: number, includeProductFit = true) {
-  const query = new URLSearchParams({ include_product_fit: String(includeProductFit) });
-  return apiFetch<VkpiKolPoolEvidenceSummary>(
-    `/api/admin/vkpi/kol-pool/${kolPoolId}/evidence-summary?${query.toString()}`,
-    {},
-    token,
-  );
-}
-
-export async function getKolPoolAiBrief(token: string, kolPoolId: number, includeProductFit = true) {
-  const query = new URLSearchParams({ include_product_fit: String(includeProductFit) });
-  return apiFetch<VkpiKolPoolAiBrief>(
-    `/api/admin/vkpi/kol-pool/${kolPoolId}/ai-brief?${query.toString()}`,
-    {},
-    token,
-  );
-}
-
-export async function getKolPoolGeminiPreflight(token: string, kolPoolId: number, candidateLimit = 24) {
-  const query = new URLSearchParams({ candidate_limit: String(candidateLimit), include_budget_preflight: "true" });
-  return apiFetch<VkpiKolPoolGeminiPreflight>(
-    `/api/admin/vkpi/kol-pool/${kolPoolId}/gemini-preflight?${query.toString()}`,
-    {},
-    token,
-  );
-}
-
-export async function getKolPoolGeminiGoNoGo(token: string, kolPoolId: number, candidateLimit = 24) {
-  const query = new URLSearchParams({ candidate_limit: String(candidateLimit) });
-  return apiFetch<VkpiKolPoolGeminiGoNoGo>(
-    `/api/admin/vkpi/kol-pool/${kolPoolId}/gemini-go-no-go?${query.toString()}`,
-    {},
     token,
   );
 }

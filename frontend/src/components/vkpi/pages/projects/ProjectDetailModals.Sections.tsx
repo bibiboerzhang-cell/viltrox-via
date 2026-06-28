@@ -1,10 +1,10 @@
 // 从 ProjectDetailModals.tsx 抽出的独立展示型 modal 组件(函数体/JSX 逐字不变搬运)。
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type RefObject } from 'react';
 import { AlertCircle, ArrowLeft, DollarSign, FileText, ImageIcon, Package, Sparkles, Upload, Video, X } from 'lucide-react';
 import type { VkpiProjectRow } from '../../vkpiTypes';
 import { stageLabels } from '../../shared/vkpiConstants';
 import type { ScreenshotTarget } from '../../../../domains/projects';
-import { filePayload, type CostEntryType } from './ProjectDetailModals.helpers';
+import { filePayload, type ContractSlot, type CostEntryType, type PolishPreviewItem } from './ProjectDetailModals.helpers';
 
 export function UploadScreenshotModal({
   target,
@@ -490,6 +490,202 @@ export function StageActionModal({
           <button type="button" onClick={onClose} disabled={busy}>取消</button>
           <button className="is-primary" type="button" onClick={() => void submit()} disabled={busy}>{busy ? '提交中' : '确认'}</button>
         </footer>
+      </div>
+    </div>
+  );
+}
+
+// 合同生成成功画面(展示型;JSX 逐字搬自 GenerateContractModal 的 doneContractId 分支)。
+export function GenerateContractDoneScreen({
+  doneContractId,
+  selectedRow,
+  onDownload,
+  onClose,
+}: {
+  doneContractId: number;
+  selectedRow: VkpiProjectRow | null;
+  onDownload?: (contractId: number) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" role="presentation" onClick={onClose}>
+      <div className="rounded-2xl border border-white/[0.08] bg-[#0b1220] w-full max-w-md p-6 text-center" role="dialog" aria-label="合同已生成" onClick={(event) => event.stopPropagation()}>
+        <div className="text-[15px] font-semibold text-emerald-300 mb-1.5">✓ 合同已生成并自动归档</div>
+        <p className="text-[11px] text-slate-400 mb-4">已入「合同归档」{selectedRow ? `,关联 ${selectedRow.kolHandle || selectedRow.kolName}` : ''}——可现在下载 DOCX,或稍后到归档 tab 查看/删除。</p>
+        <div className="flex items-center justify-center gap-2.5">
+          {onDownload ? (
+            <button className="px-4 py-2 rounded-md text-[11.5px] font-medium bg-purple-500 hover:bg-purple-400 text-white" type="button" onClick={() => onDownload(doneContractId)}>
+              下载 DOCX
+            </button>
+          ) : null}
+          <button className="px-4 py-2 rounded-md border border-white/[0.08] text-[11.5px] text-slate-300 hover:bg-white/[0.04]" type="button" onClick={onClose}>完成</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// 发票回填 / AI 润色工具条(展示型;JSX 逐字搬自 GenerateContractModal 的工具条块)。
+export function GenerateContractTools({
+  invoiceFileRef,
+  invoiceState,
+  invoiceFilledKeys,
+  invoiceError,
+  polishState,
+  polishError,
+  apiToken,
+  onPickInvoice,
+  onRunPolish,
+}: {
+  invoiceFileRef: RefObject<HTMLInputElement | null>;
+  invoiceState: 'idle' | 'uploading' | 'extracting' | 'done' | 'failed';
+  invoiceFilledKeys: Set<string>;
+  invoiceError: string;
+  polishState: 'idle' | 'running' | 'failed';
+  polishError: string;
+  apiToken?: string;
+  onPickInvoice: (file?: File | null) => void;
+  onRunPolish: () => void;
+}) {
+  return (
+    <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/[0.05] px-3 py-2 mb-3">
+      <div className="flex items-center gap-2 flex-wrap">
+        <input
+          // prop 类型 RefObject<HTMLInputElement | null>(配 .current 使用);input ref 期望
+          // RefObject<HTMLInputElement>(@types/react 严格),此处 cast 对齐,行为不变。
+          ref={invoiceFileRef as RefObject<HTMLInputElement>}
+          type="file"
+          accept=".pdf,.png,.jpg,.jpeg"
+          className="hidden"
+          onChange={(event) => { onPickInvoice(event.target.files?.[0]); event.target.value = ''; }}
+        />
+        <button
+          className="px-2.5 py-1.5 rounded-md text-[11px] font-medium bg-cyan-500/15 border border-cyan-500/35 text-cyan-200 hover:bg-cyan-500/25 disabled:opacity-50"
+          type="button"
+          onClick={() => invoiceFileRef.current?.click()}
+          disabled={invoiceState === 'uploading' || invoiceState === 'extracting' || !apiToken}
+          title={apiToken ? undefined : '缺少 API token,发票回填不可用'}
+        >
+          {invoiceState === 'uploading' ? '发票上传中…' : invoiceState === 'extracting' ? '发票解析中…(≤90s · 泳道「发票提取」可见)' : '上传发票自动回填'}
+        </button>
+        <button
+          className="px-2.5 py-1.5 rounded-md text-[11px] font-medium bg-purple-500/15 border border-purple-500/35 text-purple-200 hover:bg-purple-500/25 disabled:opacity-50"
+          type="button"
+          onClick={onRunPolish}
+          disabled={polishState === 'running' || !apiToken}
+          title={apiToken ? '整组润色非选择/日期类文本槽,差异预览确认后才写回' : '缺少 API token,AI 润色不可用'}
+        >
+          {polishState === 'running' ? 'AI 润色中…(≤90s · 队列可见)' : 'AI 润色(整组文本)'}
+        </button>
+        <span className="text-[10px] text-slate-500">发票 PDF/PNG/JPG → 乙方与收款信息自动回填;两者均为 LLM 产物,请人工核对</span>
+      </div>
+      {invoiceState === 'done' && invoiceFilledKeys.size ? (
+        <div className="mt-1.5 text-[10.5px] text-cyan-300">已回填 {invoiceFilledKeys.size} 个字段(高亮显示)——来自发票,请逐项核对后再生成。</div>
+      ) : null}
+      {invoiceError ? <div className="mt-1.5 text-[10.5px] text-rose-300">{invoiceError}</div> : null}
+      {polishError ? <div className="mt-1.5 text-[10.5px] text-rose-300">{polishError}</div> : null}
+    </div>
+  );
+}
+
+// 合同模板字段区(展示型;JSX 逐字搬自 GenerateContractModal 的 grouped.map 槽位网格)。
+export function GenerateContractFields({
+  grouped,
+  fields,
+  invoiceFilledKeys,
+  setSlotValue,
+}: {
+  grouped: Array<[string, ContractSlot[]]>;
+  fields: Record<string, string>;
+  invoiceFilledKeys: Set<string>;
+  setSlotValue: (key: string, value: string) => void;
+}) {
+  return (
+    <>
+      {grouped.map(([group, slots]) => (
+        <div key={group}>
+          <div className="text-[10.5px] text-slate-500 mb-1.5">{group}</div>
+          <div className="grid grid-cols-2 gap-2">
+            {slots.map((slot) => {
+              const fromInvoice = invoiceFilledKeys.has(slot.key);
+              const invoiceBorder = fromInvoice ? 'border-cyan-400/60 ring-1 ring-cyan-400/30' : 'border-white/[0.06]';
+              return (
+                <label className={`text-[10.5px] text-slate-400 ${slot.type === 'multiline' ? 'col-span-2' : ''}`} key={slot.key}>
+                  {slot.label}{slot.required ? <span className="text-rose-400"> *</span> : null}
+                  {slot.type === 'choice' ? (
+                    <select
+                      className={`mt-1 w-full px-2.5 py-1.5 rounded-md bg-white/[0.02] border ${invoiceBorder} text-[11px] text-white`}
+                      value={fields[slot.key] || ''}
+                      onChange={(event) => setSlotValue(slot.key, event.target.value)}
+                    >
+                      <option value="" style={{ background: '#0a0a0d' }}>请选择</option>
+                      {(slot.options || []).map((option) => <option key={option} value={option} style={{ background: '#0a0a0d' }}>{option}</option>)}
+                    </select>
+                  ) : slot.type === 'multiline' ? (
+                    <textarea
+                      className={`mt-1 w-full h-16 px-2.5 py-1.5 rounded-md bg-white/[0.02] border ${invoiceBorder} text-[11px] text-white resize-y`}
+                      value={fields[slot.key] || ''}
+                      onChange={(event) => setSlotValue(slot.key, event.target.value)}
+                    />
+                  ) : (
+                    <input
+                      className={`mt-1 w-full px-2.5 py-1.5 rounded-md bg-white/[0.02] border ${invoiceBorder} text-[11px] text-white`}
+                      type={slot.type === 'date' ? 'date' : 'text'}
+                      value={fields[slot.key] || ''}
+                      onChange={(event) => setSlotValue(slot.key, event.target.value)}
+                    />
+                  )}
+                  {fromInvoice ? <span className="block mt-0.5 text-[9.5px] text-cyan-300">来自发票,请核对</span> : null}
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </>
+  );
+}
+
+// AI 润色差异预览浮层(展示型;JSX 逐字搬自 GenerateContractModal 的 polishPreview 分支)。
+export function PolishPreviewOverlay({
+  polishPreview,
+  onDiscard,
+  onApply,
+}: {
+  polishPreview: PolishPreviewItem[];
+  onDiscard: () => void;
+  onApply: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" role="presentation" onClick={onDiscard}>
+      <div className="rounded-2xl border border-white/[0.08] bg-[#0b1220] w-full max-w-2xl p-5 max-h-[85vh] flex flex-col" role="dialog" aria-label="AI 润色差异预览" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h3 className="text-[14px] font-semibold text-white">AI 润色差异预览</h3>
+            <p className="text-[10.5px] text-slate-500 mt-0.5">LLM 产物 · 请人工确认——点「应用」才写回表单,放弃则原文不动</p>
+          </div>
+          <button className="text-slate-500 hover:text-white" type="button" onClick={onDiscard}><X size={16} /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto -mx-1 px-1 space-y-3">
+          {polishPreview.map((item) => (
+            <div key={item.key} className="rounded-lg border border-white/[0.06] bg-white/[0.015] p-2.5">
+              <div className="text-[10.5px] text-slate-400 mb-1.5 flex items-center gap-2">
+                {item.label}
+                <span className="text-[9px] px-1.5 py-0.5 rounded border border-purple-400/30 bg-purple-400/10 text-purple-300">LLM 产物·请人工确认</span>
+              </div>
+              <div className="text-[9.5px] text-slate-500 mb-0.5">原文</div>
+              <div className="rounded-md bg-black/30 px-2 py-1.5 text-[11px] text-slate-300 whitespace-pre-wrap">{item.original}</div>
+              <div className="text-[9.5px] text-emerald-400/80 mt-1.5 mb-0.5">润色后</div>
+              <div className="rounded-md bg-emerald-500/[0.06] border border-emerald-500/20 px-2 py-1.5 text-[11px] text-emerald-100 whitespace-pre-wrap">{item.polished}</div>
+            </div>
+          ))}
+        </div>
+        <div className="flex items-center justify-end gap-2 mt-3.5 pt-3 border-t border-white/[0.05]">
+          <button className="px-3 py-1.5 rounded-md border border-white/[0.08] text-[11px] text-slate-300 hover:bg-white/[0.04]" type="button" onClick={onDiscard}>放弃改写</button>
+          <button className="px-3.5 py-1.5 rounded-md text-[11px] font-medium bg-emerald-500/90 hover:bg-emerald-500 text-white" type="button" onClick={onApply}>
+            应用 {polishPreview.length} 处改写
+          </button>
+        </div>
       </div>
     </div>
   );

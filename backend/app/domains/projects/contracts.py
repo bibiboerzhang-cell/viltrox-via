@@ -3,9 +3,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
-import os
 import re
-import tempfile
 import uuid
 from pathlib import Path
 from typing import Any
@@ -14,29 +12,38 @@ from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains import audit
 from app.domains.access import scope
-from app.domains.costs import budget_guard
 from app.domains.projects.workflow_common import _int, staff_id, utcnow
 from app.platform.db.schema import ensure_vkpi_schema
-from app.services.ai.analyzers.claude_contract_extract import (
-    DEFAULT_CONTRACT_MODEL,
-    estimate_contract_extract_cost,
-    extract_contract_pdf_with_timeout,
-)
 
 
 logger = get_logger(__name__)
-CONTRACT_DERIVE_METHOD = "claude_contract_extract_v1"
-CONTRACT_BUDGET_SCOPE = "cron:vkpi_contract_extract"
-CONTRACT_SINGLE_CALL_SCOPE = "single_call_contract"
 CONTRACT_ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx"}
 CONTRACT_EXTRACT_JOB_TYPE = "project_contract_extract"
 CONTRACT_EXTRACT_DERIVE_METHOD = "project_contract_extract_v1"
-# 签署版关联键(批E,2026-06-12):存于 raw_extracted_json,提取/失败回写时必须保留。
-CONTRACT_LINK_KEYS = ("signed_version_of", "superseded_by")
 
-
-def _json(value: Any) -> str:
-    return json.dumps(value if value is not None else {}, ensure_ascii=False, default=str)
+# Behavior-preserving move (batch refactor): extraction internals + their constants live
+# in contracts_extract.py; re-exported here (incl. private names) so call sites stay unchanged.
+from app.domains.projects.contracts_extract import (  # noqa: E402
+    CONTRACT_BUDGET_SCOPE,
+    CONTRACT_DERIVE_METHOD,
+    CONTRACT_LINK_KEYS,
+    CONTRACT_SINGLE_CALL_SCOPE,
+    _apply_extraction,
+    _assignment_context,
+    _budget_preflight,
+    _date,
+    _existing_link_keys,
+    _float_or_none,
+    _json,
+    _ledger_staff_id,
+    _list,
+    _mark_failed,
+    _record_contract_cost,
+    _run_contract_extraction_core,
+    _staff_id_by_user_id,
+    _triggered_by_user_id,
+    _valid_staff_id,
+)
 
 
 def _safe_row(row: Any) -> dict[str, Any]:
@@ -76,284 +83,6 @@ def _safe_name(name: str) -> tuple[str, str]:
     path = Path(name or "contract.pdf")
     stem = re.sub(r"[^A-Za-z0-9._-]+", "-", path.stem[:80]).strip("-") or "contract"
     return stem, path.suffix.lower()
-
-
-def _date(value: Any) -> str | None:
-    text = str(value or "").strip()
-    if not text:
-        return None
-    match = re.search(r"\d{4}-\d{2}-\d{2}", text)
-    return match.group(0) if match else None
-
-
-def _float_or_none(value: Any) -> float | None:
-    if value is None or value == "":
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _list(value: Any) -> list[Any]:
-    if isinstance(value, list):
-        return value
-    if value in (None, ""):
-        return []
-    return [value]
-
-
-def _assignment_context(conn: Any, project_id: int, assignment_id: int | None, kol_pool_id: int | None) -> dict[str, Any]:
-    context: dict[str, Any] = {"project_id": int(project_id)}
-    if assignment_id:
-        row = conn.execute(
-            """
-            SELECT a.id AS assignment_id, a.kol_pool_id, p.project_name, kp.display_name, kp.handle
-            FROM vkpi_project_kol_assignments a
-            JOIN vkpi_projects p ON p.id=a.project_id
-            LEFT JOIN vkpi_kol_pool kp ON kp.id=a.kol_pool_id
-            WHERE a.id=? AND a.project_id=?
-            """,
-            (int(assignment_id), int(project_id)),
-        ).fetchone()
-        if not row:
-            raise LookupError("assignment not found for project")
-        context.update(dict(row))
-    elif kol_pool_id:
-        row = conn.execute(
-            "SELECT id AS kol_pool_id, display_name, handle FROM vkpi_kol_pool WHERE id=?",
-            (int(kol_pool_id),),
-        ).fetchone()
-        if row:
-            context.update(dict(row))
-    context["kol_name"] = context.get("display_name") or context.get("handle") or ""
-    return context
-
-
-def _budget_preflight(file_size_bytes: int) -> dict[str, Any]:
-    estimated = estimate_contract_extract_cost(int(file_size_bytes or 0))
-    scope_plan = budget_guard.check_budget_scopes(
-        ["monthly_total", "provider:claude", CONTRACT_BUDGET_SCOPE],
-        estimated,
-        require_configured=True,
-    )
-    single = budget_guard.get_budget_status(CONTRACT_SINGLE_CALL_SCOPE, estimated_cost=0)
-    single_cap = float(single.get("cap_usd") or 0)
-    single_allowed = bool(single.get("configured")) and (single_cap <= 0 or estimated <= single_cap)
-    return {
-        "allowed": bool(scope_plan.get("allowed")) and single_allowed,
-        "estimated_cost_usd": estimated,
-        "checks": scope_plan.get("checks") or [],
-        "single_call_contract": {**single, "allowed": single_allowed, "estimated_cost_usd": estimated},
-    }
-
-
-def _staff_id_by_user_id(user_id: Any) -> int | None:
-    candidate = _int(user_id)
-    if not candidate:
-        return None
-    row = get_conn().execute(
-        "SELECT id FROM staff WHERE user_id=? ORDER BY active DESC, id DESC LIMIT 1",
-        (int(candidate),),
-    ).fetchone()
-    return int(row["id"]) if row else None
-
-
-def _valid_staff_id(value: Any) -> int | None:
-    candidate = _int(value)
-    if not candidate:
-        return None
-    row = get_conn().execute("SELECT id FROM staff WHERE id=? LIMIT 1", (int(candidate),)).fetchone()
-    return int(row["id"]) if row else None
-
-
-def _ledger_staff_id(staff: dict[str, Any] | None) -> int | None:
-    if not isinstance(staff, dict):
-        return None
-    return (
-        _valid_staff_id(staff.get("staff_id"))
-        or _staff_id_by_user_id(staff.get("user_id"))
-        or _staff_id_by_user_id(staff.get("id"))
-        or _valid_staff_id(staff.get("id"))
-    )
-
-
-def _triggered_by_user_id(staff: dict[str, Any] | None) -> int | None:
-    if not isinstance(staff, dict):
-        return None
-    user_id = _int(staff.get("user_id"))
-    if user_id:
-        return user_id
-    candidate = _int(staff.get("id") or staff.get("staff_id"))
-    if not candidate:
-        return None
-    conn = get_conn()
-    if conn.execute("SELECT id FROM users WHERE id=? LIMIT 1", (int(candidate),)).fetchone():
-        return int(candidate)
-    row = conn.execute("SELECT user_id FROM staff WHERE id=? LIMIT 1", (int(candidate),)).fetchone()
-    return _int(row["user_id"]) if row else None
-
-
-def _record_contract_cost(contract_id: int, project_id: int, staff: dict[str, Any] | None, extraction: dict[str, Any]) -> dict[str, Any]:
-    usage = extraction.get("usage_metadata") if isinstance(extraction.get("usage_metadata"), dict) else {}
-    return budget_guard.record_cost(
-        scope=CONTRACT_BUDGET_SCOPE,
-        cron_task="vkpi_contract_extract",
-        ai_provider="anthropic",
-        model_name=str(extraction.get("model") or DEFAULT_CONTRACT_MODEL),
-        cost_usd=float(extraction.get("cost_usd") or 0),
-        tokens_in=int(usage.get("input_tokens") or 0),
-        tokens_out=int(usage.get("output_tokens") or 0),
-        staff_id=_ledger_staff_id(staff),
-        metadata={
-            "project_id": int(project_id),
-            "contract_id": int(contract_id),
-            "derive_method": CONTRACT_DERIVE_METHOD,
-            "triggered_by_user_id": _triggered_by_user_id(staff),
-        },
-        triggered_by=None,
-        extra_scopes=["monthly_total", "provider:claude"],
-    )
-
-
-def _existing_link_keys(conn: Any, contract_id: int, project_id: int) -> dict[str, Any]:
-    """读 raw_extracted_json 里的签署版关联键(批E):提取/失败整体覆盖该列前 merge 回去,防丢链。"""
-    row = conn.execute(
-        "SELECT raw_extracted_json FROM vkpi_project_contracts WHERE id=? AND project_id=?",
-        (int(contract_id), int(project_id)),
-    ).fetchone()
-    if not row:
-        return {}
-    raw = dict(row).get("raw_extracted_json")
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw or "{}")
-        except Exception:
-            logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
-            return {}
-    if not isinstance(raw, dict):
-        return {}
-    return {key: raw[key] for key in CONTRACT_LINK_KEYS if raw.get(key) is not None}
-
-
-def _apply_extraction(conn: Any, contract_id: int, project_id: int, staff: dict[str, Any] | None, extraction: dict[str, Any]) -> dict[str, Any]:
-    data = extraction.get("extracted") if isinstance(extraction.get("extracted"), dict) else {}
-    confidence = data.get("field_confidence") if isinstance(data.get("field_confidence"), dict) else {}
-    # 签署版关联键保留(批E):本函数整体覆盖 raw_extracted_json,merge 回关联键。
-    data = {**data, **_existing_link_keys(conn, int(contract_id), int(project_id))}
-    deliverables = _list(data.get("deliverables"))
-    platforms = _list(data.get("platforms"))
-    must_include = _list(data.get("must_include"))
-    fee_amount = _float_or_none(data.get("fee_amount"))
-    now = utcnow()
-    # 批B #3(2026-06-12):异步提取不得覆盖人工确认——status='confirmed' 时只存提取结果
-    # (raw/confidence 提取字段),不降级状态、不覆盖人工确认过的业务字段,留 audit。
-    current = conn.execute(
-        "SELECT status FROM vkpi_project_contracts WHERE id=? AND project_id=?",
-        (int(contract_id), int(project_id)),
-    ).fetchone()
-    is_confirmed = bool(current and str(dict(current).get("status") or "") == "confirmed")
-    if is_confirmed:
-        conn.execute(
-            """
-            UPDATE vkpi_project_contracts
-            SET extraction_status='ready', raw_extracted_json=?::jsonb, field_confidence_json=?::jsonb, updated_at=?
-            WHERE id=? AND project_id=?
-            """,
-            (_json(data), _json(confidence), now, int(contract_id), int(project_id)),
-        )
-        audit.log_business_event(
-            staff_id=staff_id(staff) or None,
-            action_type="contract_extraction_preserved_confirmed",
-            target_type="project_contract",
-            target_id=int(contract_id),
-            detail="提取完成但合同已人工确认:状态保持 confirmed,仅存提取结果,不覆盖人工字段",
-            metadata={"project_id": int(project_id), "contract_id": int(contract_id), "status": "confirmed"},
-        )
-    else:
-        conn.execute(
-            """
-            UPDATE vkpi_project_contracts
-            SET status='extracted', extraction_status='ready',
-                fee_amount=?, fee_currency=?, contract_duration=?, start_date=?, end_date=?,
-                platforms_json=?::jsonb, deliverable_count=?, deliverables_json=?::jsonb,
-                must_include_json=?::jsonb, usage_rights=?, exclusivity=?, buyout_rights=?,
-                breach_terms=?, payment_terms=?, cancellation_terms=?, revision_terms=?,
-                raw_extracted_json=?::jsonb, field_confidence_json=?::jsonb,
-                promised_platforms_json=?::jsonb, promised_deliverables_json=?::jsonb,
-                promised_publish_deadline=?, promised_must_include_json=?::jsonb,
-                updated_at=?
-            WHERE id=? AND project_id=?
-            """,
-            (
-                fee_amount,
-                str(data.get("fee_currency") or "USD"),
-                str(data.get("contract_duration") or ""),
-                _date(data.get("start_date")),
-                _date(data.get("end_date")),
-                _json(platforms),
-                _int(data.get("deliverable_count")) or (len(deliverables) if deliverables else None),
-                _json(deliverables),
-                _json(must_include),
-                str(data.get("usage_rights") or ""),
-                str(data.get("exclusivity") or ""),
-                str(data.get("buyout_rights") or ""),
-                str(data.get("breach_terms") or ""),
-                str(data.get("payment_terms") or ""),
-                str(data.get("cancellation_terms") or ""),
-                str(data.get("revision_terms") or ""),
-                _json(data),
-                _json(confidence),
-                _json(platforms),
-                _json(deliverables),
-                data.get("promised_publish_deadline") or None,
-                _json(must_include),
-                now,
-                int(contract_id),
-                int(project_id),
-            ),
-        )
-    cost = _record_contract_cost(contract_id, project_id, staff, extraction)
-    conn.execute(
-        """
-        INSERT INTO vkpi_analysis_cache (
-            target_type, target_id, model, derive_method, result, cost, status,
-            triggered_by_user_id, created_at, updated_at
-        ) VALUES ('contract', ?, ?, ?, ?::jsonb, ?, 'ready', ?, ?, ?)
-        ON CONFLICT (target_type, target_id, derive_method)
-        DO UPDATE SET model=EXCLUDED.model, result=EXCLUDED.result, cost=EXCLUDED.cost,
-            status='ready', triggered_by_user_id=EXCLUDED.triggered_by_user_id, updated_at=EXCLUDED.updated_at
-        """,
-        (
-            str(contract_id),
-            str(extraction.get("model") or DEFAULT_CONTRACT_MODEL),
-            CONTRACT_DERIVE_METHOD,
-            _json({"schema_version": CONTRACT_DERIVE_METHOD, **extraction}),
-            float(extraction.get("cost_usd") or 0),
-            staff_id(staff) or None,
-            now,
-            now,
-        ),
-    )
-    conn.commit()
-    return {"extraction": extraction, "cost_ledger": cost}
-
-
-def _mark_failed(conn: Any, contract_id: int, project_id: int, error: str) -> None:
-    # 已人工确认的合同不因提取失败降级状态(批B #3),仅记 extraction_status='failed'
-    # 签署版关联键保留(批E):error 覆盖 raw_extracted_json 时 merge 回关联键。
-    error_payload = {"error": error[:1000], **_existing_link_keys(conn, int(contract_id), int(project_id))}
-    conn.execute(
-        """
-        UPDATE vkpi_project_contracts
-        SET status=CASE WHEN status='confirmed' THEN status ELSE 'needs_review' END,
-            extraction_status='failed',
-            raw_extracted_json=?::jsonb, updated_at=?
-        WHERE id=? AND project_id=?
-        """,
-        (_json(error_payload), utcnow(), int(contract_id), int(project_id)),
-    )
-    conn.commit()
 
 
 def list_contracts(project_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -462,42 +191,6 @@ def create_contract_from_file(
 
 # 批B #9(2026-06-12):同步路径 run_contract_extraction 已删——全仓无调用方
 # (F2 裁决后提取统一走 enqueue_contract_extract_job → apify worker → run_contract_extraction_for_job)。
-
-
-def _run_contract_extraction_core(
-    conn: Any,
-    project_id: int,
-    contract_id: int,
-    *,
-    contract: dict[str, Any],
-    context: dict[str, Any] | None,
-    staff: dict[str, Any] | None,
-    local_path: str | None = None,
-) -> dict[str, Any]:
-    """Heavy extraction body (R2 download → Claude subprocess → apply), called by the
-    apify worker handler (run_contract_extraction_for_job). 同步路径已删(批B #9)。
-
-    Caller guarantees the contract is a PDF and already marked extraction_status='processing'.
-    Keeps the 120s subprocess timeout; on failure marks the contract failed and re-raises.
-    """
-    temp_path = local_path
-    with tempfile.TemporaryDirectory(prefix="vkpi-contract-extract-") as tmpdir:
-        if not temp_path:
-            temp_path = str(Path(tmpdir) / Path(str(contract.get("file_name") or "contract.pdf")).name)
-            from app.services.media.r2 import download_file
-
-            download_file(str(contract.get("r2_key") or ""), temp_path)
-        try:
-            extraction = extract_contract_pdf_with_timeout(
-                temp_path,
-                context=context,
-                model_name=os.getenv("VKPI_CONTRACT_CLAUDE_MODEL", DEFAULT_CONTRACT_MODEL),
-                timeout_sec=int(os.getenv("VKPI_CONTRACT_EXTRACT_TIMEOUT_SEC", "120")),
-            )
-        except Exception as exc:
-            _mark_failed(conn, contract_id, project_id, str(exc))
-            raise
-        return _apply_extraction(conn, contract_id, project_id, staff, extraction)
 
 
 def enqueue_contract_extract_job(

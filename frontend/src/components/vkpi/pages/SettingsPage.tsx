@@ -27,12 +27,6 @@ import {
   deleteApiKey,
 } from '../../../domains/settings';
 import {
-  PreferenceSettingsCard,
-  NotificationSettingsCard,
-  TeamPreferenceTable,
-  TeamNotificationTable,
-} from './settings/SettingsPreferencePanels';
-import {
   getStaffInviteCapabilities,
   updateStaffPermissions,
   createStaffActivationLink,
@@ -49,25 +43,16 @@ import type {
 } from '../vkpiTypes';
 import { PageShell } from './PageShell';
 import { StaffPermissionDrawer } from './settings/StaffPermissionDrawer';
-import {
-  BudgetSettingsTable,
-} from './settings/SettingsControlPanels';
 import { permissionsForTemplate, vkpiPermissionFromTemplate, type StaffPermissionMap } from './settings/staffPermissionTemplates';
-import { SettingsRulesPanel, type SettingsRulesTab } from './settings/SettingsRulesPanel';
+import { type SettingsRulesTab } from './settings/SettingsRulesPanel';
 import {
   EmployeeSettingsView,
   SettingsLoadingStrip,
   SettingsModule,
   type SettingsModuleKey,
 } from './settings/SettingsPage.fragments';
-import { SettingsStaffPanel } from './settings/SettingsStaffPanel';
-import { SettingsApiKeyPoolPanel, SettingsZoneHeader } from './settings/SettingsPage.Sections';
+import { SettingsCompanyZone, SettingsPersonalZone } from './settings/SettingsPage.Zones';
 import { computeSettingsDerived, resolveDrawerMember } from './settings/SettingsPage.helpers';
-import { GoaffproConnectCard } from './settings/GoaffproConnectCard';
-import { SettingsSkuPanel } from './settings/SettingsSkuPanel';
-import { SettingsStatusPanel } from './settings/SettingsStatusPanel';
-import { SystemHealthBar } from '../cockpit/components/SystemHealthBar';
-import { SettingsSchedulerPanel } from './settings/SettingsSchedulerPanel';
 import {
   boolLabel,
   boolValue,
@@ -781,207 +766,160 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
       {settingsError ? <div className="vkpi-inline-message">{settingsError}</div> : null}
       <SettingsLoadingStrip settingsLoading={settingsLoading} catalogLoading={productCatalogLoading} />
       <div className="vkpi-settings-clean">
-        {/* 系统健康条:2026-06-15 从 Dashboard 顶部迁移至此,主界面更干净;仅主管可见(此分支即 isManager)。 */}
-        <div style={{ marginBottom: 12 }}>
-          <SystemHealthBar apiToken={apiToken} />
-        </div>
-        <SettingsZoneHeader zone="company" title="公司管理" hint="仅公司账号可见 · 账号权限 / 预算 / 规则 / 定时 / API 状态" />
-        {renderSettingsModule('status', `${apiStatusText} · 同步 ${syncTime} / ${syncGuardText} · KOL ${kolRefreshGateText} · ${systemHealth} · 版本 ${versionSummary}`, (
-          <SettingsStatusPanel
-            apiStatusDetail={apiStatusDetail}
-            apiStatusText={apiStatusText}
-            backendBuild={backendBuild}
-            dailySync={dailySync as Record<string, unknown> | null}
-            frontendAsset={frontendAsset}
-            kolRefresh={kolRefresh}
-            kolRefreshActiveTasks={kolRefreshActiveTasks}
-            kolRefreshBatchConcurrency={kolRefreshBatchConcurrency}
-            kolRefreshBatchCount={kolRefreshBatchCount}
-            kolRefreshBatchTargets={kolRefreshBatchTargets}
-            kolRefreshCold={kolRefreshCold}
-            kolRefreshGateEnabled={kolRefreshGateEnabled}
-            kolRefreshGateText={kolRefreshGateText}
-            kolRefreshHot={kolRefreshHot}
-            kolRefreshMode={kolRefreshMode}
-            kolRefreshTotal={kolRefreshTotal}
-            kolRefreshWarm={kolRefreshWarm}
-            providers={providers}
-            settingsLoading={settingsLoading}
-            syncAck={syncAck as Record<string, unknown> | null}
-            syncAckReason={syncAckReason}
-            syncErrors={syncErrors}
-            syncFailureRate={syncFailureRate}
-            syncGuardText={syncGuardText}
-            syncHealth={syncHealth}
-            syncLastRun={syncLastRun as Record<string, unknown> | null}
-            syncLastRunStatus={syncLastRunStatus}
-            syncRequested={syncRequested}
-            syncTime={syncTime}
-            systemHealth={systemHealth}
-            totalBudgetUsd={totalBudgetUsd}
-            totalSpentUsd={totalSpentUsd}
-            versionCheckedAt={versionCheckedAt}
-            onReloadVersionStatus={() => void reloadVersionStatus()}
-          />
-        ))}
-        {renderSettingsModule('sku', `${skuCount} 个 SKU · 镜头 ${lensCount} · 闪光灯 ${lightingCount} · 转接环 ${adapterCount}`, (
-          <SettingsSkuPanel
-            costSku={costSku}
-            costProductName={costProductName}
-            unitCostUsd={unitCostUsd}
-            costNote={costNote}
-            selectedCatalogProduct={selectedCatalogProduct}
-            busy={busy}
-            canUpsert={Boolean(onUpsertProductCost)}
-            productCatalog={productCatalog}
-            productCatalogLoading={productCatalogLoading}
-            productCatalogError={productCatalogError}
-            productSearch={productSearch}
-            onCostSkuChange={setCostSku}
-            onCostProductNameChange={setCostProductName}
-            onUnitCostUsdChange={setUnitCostUsd}
-            onCostNoteChange={setCostNote}
-            onProductSearchChange={setProductSearch}
-            onSelectProduct={selectCatalogProduct}
-            onSubmitProductCost={submitProductCost}
-          />
-        ))}
-        {renderSettingsModule('staff', `${data.staffMembers.length} 人 · 邀请 / 权限`, (
-          <SettingsStaffPanel
-            members={data.staffMembers}
-            email={email}
-            name={name}
-            role={role}
-            permission={permission}
-            permissionTemplate={invitePermissionTemplate}
-            busy={busy}
-            canInvite={canInviteStaff}
-            inviteMode={inviteMode}
-            inviteCapabilities={inviteCapabilities}
-            inviteCapabilitiesError={inviteCapabilitiesError}
-            activationLink={activationLink}
-            activationCopied={activationCopied}
-            onEmailChange={setEmail}
-            onNameChange={setName}
-            onRoleChange={setRole}
-            onPermissionChange={setPermission}
-            onPermissionTemplateChange={(value) => {
-              setInvitePermissionTemplate(value);
-              setPermission(vkpiPermissionFromTemplate(value));
-            }}
-            onCopyActivationLink={() => void copyActivationLink()}
-            onSubmitInvite={submitInvite}
-            onSelectStaff={openStaffPermissionDrawer}
-          />
-        ))}
-        {renderSettingsModule('funds', `$${totalSpentUsd.toLocaleString('en-US')} / $${totalBudgetUsd.toLocaleString('en-US')}`, (
-          <BudgetSettingsTable
-            budgetSettings={budgetSettings}
-            busy={busy}
-            rowEnabled={rowEnabled}
-            onSaveBudgetSetting={(event, row) => void saveBudgetSetting(event, row)}
-          />
-        ))}
-        {renderSettingsModule('rules', '功能 / 抓取 / 告警 / 同步', (
-          <SettingsRulesPanel
-            apiToken={apiToken}
-            busy={busy}
-            candidateLimitPerStaff={String(syncPolicy.candidate_limit_per_staff || 100)}
-            commentAlertSettings={commentAlertSettings}
-            failureRateThresholdLabel={percentLabel(dailySync?.failure_rate_threshold ?? 0.1)}
-            featureFlags={featureFlags}
-            platformCrawl={platformCrawl}
-            rowEnabled={rowEnabled}
-            rulesTab={rulesTab}
-            syncGuardText={syncGuardText}
-            syncTime={syncTime}
-            syncTimezone={String(syncPolicy.timezone || 'Asia/Shanghai')}
-            onRunMorningSync={() => void runMorningSync()}
-            onRulesTabChange={setRulesTab}
-            onSaveCommentAlertSettings={(event) => void saveCommentAlertSettings(event)}
-            onToggleFeatureFlag={(row) => void toggleFeatureFlag(row)}
-            onTogglePlatformCrawl={(row) => void togglePlatformCrawl(row)}
-          />
-        ))}
-        {renderSettingsModule('scheduler', `${schedulerTaskTotal} 个任务 · ${schedulerTaskEnabled} 已开启 · 仅注册可见,执行链后续接`, (
-          <SettingsSchedulerPanel
-            tasks={schedulerTasks}
-            status={schedulerStatus}
-            busy={busy}
-            onToggleTask={(taskKey, enabled) => void toggleSchedulerTask(taskKey, enabled)}
-          />
-        ))}
-        {renderSettingsModule('apikeys', `${apiKeyPool.length} 个账号 · 7月手动填轮转 · 密文存,前端不回显`, (
-          <SettingsApiKeyPoolPanel
-            apiKeyPool={apiKeyPool}
-            keyDraft={keyDraft}
-            busy={busy}
-            onKeyDraftChange={setKeyDraft}
-            onToggleApiKey={(row) => void toggleApiKey(row)}
-            onRemoveApiKey={(id) => void removeApiKey(id)}
-            onSaveApiKey={() => void saveApiKey()}
-          />
-        ))}
-        {/* GOAFFPRO 联盟营销连接配置 —— 从 Shopify Hub「连接」页迁来(token/密钥归管理员在设置区管)。
-            保存端点 vkpi:admin 权限,只 owner/admin 可存,放公司管理区正合适。 */}
-        {renderSettingsModule('goaffpro', '连接 token / 状态 / affiliate 预览 · 管理员配置', (
-          <GoaffproConnectCard apiToken={apiToken} />
-        ))}
-        <SettingsZoneHeader zone="personal" title="个人偏好" hint="每位成员管理自己的偏好与通知" />
-        {renderSettingsModule('preference', `默认入口 ${landingPage} · 范围 ${dateRangeDefault} · 密度 ${tableDensity}`, (
-          <>
-            <PreferenceSettingsCard
-              busy={busy}
-              apiToken={apiToken}
-              landingPage={landingPage}
-              dateRangeDefault={dateRangeDefault}
-              tableDensity={tableDensity}
-              rowsPerPage={rowsPerPage}
-              compactMode={compactMode}
-              rightPanelOpen={rightPanelOpen}
-              onLandingPageChange={setLandingPage}
-              onDateRangeDefaultChange={setDateRangeDefault}
-              onTableDensityChange={setTableDensity}
-              onRowsPerPageChange={setRowsPerPage}
-              onCompactModeChange={setCompactMode}
-              onRightPanelOpenChange={setRightPanelOpen}
-              onSubmit={(event) => void savePreferences(event)}
-            />
-            <TeamPreferenceTable preferenceList={preferenceList} />
-          </>
-        ))}
-        {renderSettingsModule('notification', `站内 ${inAppEnabled ? '开' : '关'} · 邮件 ${emailEnabled ? '开' : '关'} · v3 只存不发`, (
-          <>
-            <NotificationSettingsCard
-              busy={busy}
-              apiToken={apiToken}
-              emailEnabled={emailEnabled}
-              inAppEnabled={inAppEnabled}
-              dailyDigestEnabled={dailyDigestEnabled}
-              weeklySummaryEnabled={weeklySummaryEnabled}
-              stalledProjectEnabled={stalledProjectEnabled}
-              claimActivityEnabled={claimActivityEnabled}
-              attributionAlertEnabled={attributionAlertEnabled}
-              costAlertEnabled={costAlertEnabled}
-              systemAlertEnabled={systemAlertEnabled}
-              quietHoursStart={quietHoursStart}
-              quietHoursEnd={quietHoursEnd}
-              onEmailEnabledChange={setEmailEnabled}
-              onInAppEnabledChange={setInAppEnabled}
-              onDailyDigestEnabledChange={setDailyDigestEnabled}
-              onWeeklySummaryEnabledChange={setWeeklySummaryEnabled}
-              onStalledProjectEnabledChange={setStalledProjectEnabled}
-              onClaimActivityEnabledChange={setClaimActivityEnabled}
-              onAttributionAlertEnabledChange={setAttributionAlertEnabled}
-              onCostAlertEnabledChange={setCostAlertEnabled}
-              onSystemAlertEnabledChange={setSystemAlertEnabled}
-              onQuietHoursStartChange={setQuietHoursStart}
-              onQuietHoursEndChange={setQuietHoursEnd}
-              onSubmit={(event) => void saveNotifications(event)}
-            />
-            <TeamNotificationTable notificationList={notificationList} boolValue={boolValue} />
-          </>
-        ))}
+        <SettingsCompanyZone
+          renderModule={renderSettingsModule}
+          apiToken={apiToken}
+          busy={busy}
+          apiStatusText={apiStatusText}
+          apiStatusDetail={apiStatusDetail}
+          backendBuild={backendBuild}
+          dailySync={dailySync as Record<string, unknown> | null}
+          frontendAsset={frontendAsset}
+          kolRefresh={kolRefresh}
+          kolRefreshActiveTasks={kolRefreshActiveTasks}
+          kolRefreshBatchConcurrency={kolRefreshBatchConcurrency}
+          kolRefreshBatchCount={kolRefreshBatchCount}
+          kolRefreshBatchTargets={kolRefreshBatchTargets}
+          kolRefreshCold={kolRefreshCold}
+          kolRefreshGateEnabled={kolRefreshGateEnabled}
+          kolRefreshGateText={kolRefreshGateText}
+          kolRefreshHot={kolRefreshHot}
+          kolRefreshMode={kolRefreshMode}
+          kolRefreshTotal={kolRefreshTotal}
+          kolRefreshWarm={kolRefreshWarm}
+          providers={providers}
+          settingsLoading={settingsLoading}
+          syncAck={syncAck as Record<string, unknown> | null}
+          syncAckReason={syncAckReason}
+          syncErrors={syncErrors}
+          syncFailureRate={syncFailureRate}
+          syncGuardText={syncGuardText}
+          syncHealth={syncHealth}
+          syncLastRun={syncLastRun as Record<string, unknown> | null}
+          syncLastRunStatus={syncLastRunStatus}
+          syncRequested={syncRequested}
+          syncTime={syncTime}
+          systemHealth={systemHealth}
+          totalBudgetUsd={totalBudgetUsd}
+          totalSpentUsd={totalSpentUsd}
+          versionCheckedAt={versionCheckedAt}
+          versionSummary={versionSummary}
+          onReloadVersionStatus={() => void reloadVersionStatus()}
+          skuCount={skuCount}
+          lensCount={lensCount}
+          lightingCount={lightingCount}
+          adapterCount={adapterCount}
+          costSku={costSku}
+          costProductName={costProductName}
+          unitCostUsd={unitCostUsd}
+          costNote={costNote}
+          selectedCatalogProduct={selectedCatalogProduct}
+          canUpsert={Boolean(onUpsertProductCost)}
+          productCatalog={productCatalog}
+          productCatalogLoading={productCatalogLoading}
+          productCatalogError={productCatalogError}
+          productSearch={productSearch}
+          onCostSkuChange={setCostSku}
+          onCostProductNameChange={setCostProductName}
+          onUnitCostUsdChange={setUnitCostUsd}
+          onCostNoteChange={setCostNote}
+          onProductSearchChange={setProductSearch}
+          onSelectProduct={selectCatalogProduct}
+          onSubmitProductCost={submitProductCost}
+          members={data.staffMembers}
+          email={email}
+          name={name}
+          role={role}
+          permission={permission}
+          permissionTemplate={invitePermissionTemplate}
+          canInvite={canInviteStaff}
+          inviteMode={inviteMode}
+          inviteCapabilities={inviteCapabilities}
+          inviteCapabilitiesError={inviteCapabilitiesError}
+          activationLink={activationLink}
+          activationCopied={activationCopied}
+          onEmailChange={setEmail}
+          onNameChange={setName}
+          onRoleChange={setRole}
+          onPermissionChange={setPermission}
+          onPermissionTemplateChange={(value) => {
+            setInvitePermissionTemplate(value);
+            setPermission(vkpiPermissionFromTemplate(value));
+          }}
+          onCopyActivationLink={() => void copyActivationLink()}
+          onSubmitInvite={submitInvite}
+          onSelectStaff={openStaffPermissionDrawer}
+          budgetSettings={budgetSettings}
+          rowEnabled={rowEnabled}
+          onSaveBudgetSetting={(event, row) => void saveBudgetSetting(event, row)}
+          candidateLimitPerStaff={String(syncPolicy.candidate_limit_per_staff || 100)}
+          commentAlertSettings={commentAlertSettings}
+          failureRateThresholdLabel={percentLabel(dailySync?.failure_rate_threshold ?? 0.1)}
+          featureFlags={featureFlags}
+          platformCrawl={platformCrawl}
+          rulesTab={rulesTab}
+          syncTimezone={String(syncPolicy.timezone || 'Asia/Shanghai')}
+          onRunMorningSync={() => void runMorningSync()}
+          onRulesTabChange={setRulesTab}
+          onSaveCommentAlertSettings={(event) => void saveCommentAlertSettings(event)}
+          onToggleFeatureFlag={(row) => void toggleFeatureFlag(row)}
+          onTogglePlatformCrawl={(row) => void togglePlatformCrawl(row)}
+          schedulerTasks={schedulerTasks}
+          schedulerStatus={schedulerStatus}
+          schedulerTaskTotal={schedulerTaskTotal}
+          schedulerTaskEnabled={schedulerTaskEnabled}
+          onToggleSchedulerTask={(taskKey, enabled) => void toggleSchedulerTask(taskKey, enabled)}
+          apiKeyPool={apiKeyPool}
+          keyDraft={keyDraft}
+          onKeyDraftChange={setKeyDraft}
+          onToggleApiKey={(row) => void toggleApiKey(row)}
+          onRemoveApiKey={(id) => void removeApiKey(id)}
+          onSaveApiKey={() => void saveApiKey()}
+        />
+        <SettingsPersonalZone
+          renderModule={renderSettingsModule}
+          busy={busy}
+          apiToken={apiToken}
+          landingPage={landingPage}
+          dateRangeDefault={dateRangeDefault}
+          tableDensity={tableDensity}
+          rowsPerPage={rowsPerPage}
+          compactMode={compactMode}
+          rightPanelOpen={rightPanelOpen}
+          preferenceList={preferenceList}
+          onLandingPageChange={setLandingPage}
+          onDateRangeDefaultChange={setDateRangeDefault}
+          onTableDensityChange={setTableDensity}
+          onRowsPerPageChange={setRowsPerPage}
+          onCompactModeChange={setCompactMode}
+          onRightPanelOpenChange={setRightPanelOpen}
+          onSubmitPreferences={(event) => void savePreferences(event)}
+          emailEnabled={emailEnabled}
+          inAppEnabled={inAppEnabled}
+          dailyDigestEnabled={dailyDigestEnabled}
+          weeklySummaryEnabled={weeklySummaryEnabled}
+          stalledProjectEnabled={stalledProjectEnabled}
+          claimActivityEnabled={claimActivityEnabled}
+          attributionAlertEnabled={attributionAlertEnabled}
+          costAlertEnabled={costAlertEnabled}
+          systemAlertEnabled={systemAlertEnabled}
+          quietHoursStart={quietHoursStart}
+          quietHoursEnd={quietHoursEnd}
+          notificationList={notificationList}
+          boolValue={boolValue}
+          onEmailEnabledChange={setEmailEnabled}
+          onInAppEnabledChange={setInAppEnabled}
+          onDailyDigestEnabledChange={setDailyDigestEnabled}
+          onWeeklySummaryEnabledChange={setWeeklySummaryEnabled}
+          onStalledProjectEnabledChange={setStalledProjectEnabled}
+          onClaimActivityEnabledChange={setClaimActivityEnabled}
+          onAttributionAlertEnabledChange={setAttributionAlertEnabled}
+          onCostAlertEnabledChange={setCostAlertEnabled}
+          onSystemAlertEnabledChange={setSystemAlertEnabled}
+          onQuietHoursStartChange={setQuietHoursStart}
+          onQuietHoursEndChange={setQuietHoursEnd}
+          onSubmitNotifications={(event) => void saveNotifications(event)}
+        />
       </div>
       {selectedStaffForPermissions ? (
         <StaffPermissionDrawer
