@@ -1,6 +1,9 @@
 import sqlite3
 
 from app.services.kol import account_dossier
+# 重构后 _json_text_expr(方言分支)搬到 account_dossier_lookup,读该模块自己的 is_postgres_runtime;
+# 测试需在新位置也 patch,否则 SQLite 用例会走 Postgres ::text 分支炸 "unrecognized token :"。
+from app.services.kol import account_dossier_lookup
 
 
 def _conn():
@@ -98,6 +101,7 @@ def test_pool_id_does_not_fall_back_to_same_number_main_kol(monkeypatch):
     )
     monkeypatch.setattr(account_dossier, "get_conn", lambda: conn)
     monkeypatch.setattr(account_dossier, "is_postgres_runtime", lambda: False)
+    monkeypatch.setattr(account_dossier_lookup, "is_postgres_runtime", lambda: False)
 
     result = account_dossier.list_kol_posts(3603, limit=5)
 
@@ -126,6 +130,7 @@ def test_kol_route_can_prefer_same_number_main_kol(monkeypatch):
     )
     monkeypatch.setattr(account_dossier, "get_conn", lambda: conn)
     monkeypatch.setattr(account_dossier, "is_postgres_runtime", lambda: False)
+    monkeypatch.setattr(account_dossier_lookup, "is_postgres_runtime", lambda: False)
 
     result = account_dossier.list_kol_posts(3603, limit=5, prefer_main_id=True)
 
@@ -165,6 +170,7 @@ def test_pool_id_resolves_linked_main_kol_and_filters_comments_by_post_url(monke
     )
     monkeypatch.setattr(account_dossier, "get_conn", lambda: conn)
     monkeypatch.setattr(account_dossier, "is_postgres_runtime", lambda: False)
+    monkeypatch.setattr(account_dossier_lookup, "is_postgres_runtime", lambda: False)
 
     posts = account_dossier.list_kol_posts(2742, limit=5)
     comments = account_dossier.list_kol_comments(2742, limit=5, post_url="https://example.com/a/")
@@ -187,6 +193,7 @@ def test_content_post_fallback_is_sqlite_compatible(monkeypatch):
     )
     monkeypatch.setattr(account_dossier, "get_conn", lambda: conn)
     monkeypatch.setattr(account_dossier, "is_postgres_runtime", lambda: False)
+    monkeypatch.setattr(account_dossier_lookup, "is_postgres_runtime", lambda: False)
 
     result = account_dossier.list_kol_posts(3015, limit=5)
 
