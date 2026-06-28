@@ -68,9 +68,44 @@ def _recall_kind(kind: str, tokens: list[str], limit: int) -> list[dict[str, Any
     return out[:limit]
 
 
+def _vector_recall_kol(query: str, limit: int) -> list[dict[str, Any]]:
+    """KOL 向量召回(profile_recall / Qdrant + embedding)。
+
+    解决词法对中文/跨语言/语义查询返 0 的硬伤(_tokenize 把整句压成一个 token 永不匹配)。
+    任何失败(Qdrant 单进程锁被占 / 嵌入超时 / 空集)→ 返回 [],由调用方优雅降级到词法。
+    分数按召回排名给(向量已排序),语义相关项自然排在词法之上。绝不并入 viltrox_fit_score。
+    """
+    try:
+        from app.domains.kol import profile_recall
+
+        r = profile_recall.recall_kol_profiles(query_text=str(query), limit=int(limit))
+        items = r.get("items") if isinstance(r, dict) else None
+        if not items:
+            return []
+        out: list[dict[str, Any]] = []
+        for i, it in enumerate(items):
+            if not isinstance(it, dict):
+                continue
+            rid = it.get("kol_pool_id") or it.get("id")
+            title = (str(it.get("handle") or it.get("display_name") or f"kol #{rid}").strip())[:120]
+            out.append({
+                "kind": "kol", "id": rid, "title": title,
+                "score": round(max(0.1, 1.0 - i * 0.05), 4),  # 排名保序,向量项强于词法
+                "recall": "vector",
+                "platform": it.get("platform"),
+            })
+        return out[: max(1, int(limit))]
+    except Exception:
+        logger.debug("semantic_recall.vector_kol_failed", exc_info=True)
+        return []
+
+
 def unified_recall(query: str, *, kinds: tuple[str, ...] = ("kol", "video", "project", "event"),
                    limit: int = 10, staff: dict[str, Any] | None = None) -> dict[str, Any]:
-    """一句话跨信号召回。返回各信号 top 命中 + 统一排序。"""
+    """一句话跨信号召回。返回各信号 top 命中 + 统一排序。
+
+    KOL 走向量召回(语义,解中文/跨语言),失败优雅降级词法;其余信号词法。recall_method 如实标。
+    """
     del staff
     q = str(query or "").strip()
     tokens = _tokenize(q)
@@ -79,8 +114,15 @@ def unified_recall(query: str, *, kinds: tuple[str, ...] = ("kol", "video", "pro
     valid = [k for k in kinds if k in _KINDS]
     per_kind: dict[str, list[dict[str, Any]]] = {}
     flat: list[dict[str, Any]] = []
+    used_vector = False
     for k in valid:
-        items = _recall_kind(k, tokens, limit)
+        items: list[dict[str, Any]] = []
+        if k == "kol":
+            items = _vector_recall_kol(q, limit)
+            if items:
+                used_vector = True
+        if not items:
+            items = _recall_kind(k, tokens, limit)
         per_kind[k] = items
         flat.extend(items)
     flat.sort(key=lambda x: x["score"], reverse=True)
@@ -88,8 +130,8 @@ def unified_recall(query: str, *, kinds: tuple[str, ...] = ("kol", "video", "pro
         "status": "ok",
         "query": q,
         "tokens": tokens,
-        "recall_method": "lexical_v0",  # 向量后端(Qdrant/embedding)配好后此处升级为 vector
+        "recall_method": "vector_kol+lexical" if used_vector else "lexical_v0",
         "by_kind": {k: len(v) for k, v in per_kind.items()},
         "results": flat[: max(1, min(int(limit or 10), 50))],
-        "note": "跨信号词法召回(本地可跑,零成本);向量后端就绪后自动升级;绝不并入 viltrox_fit_score。",
+        "note": "KOL 向量召回(Qdrant/embedding 语义,解中文)+ 其余词法兜底;向量失败自动降级;绝不并入 viltrox_fit_score。",
     }
