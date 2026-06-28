@@ -316,11 +316,18 @@ export function UrlSummary({
   const actionLabel = isVideo
     ? retryableFailure ? "重试分析" : knownCreator ? "只分析此视频" : "建档并分析"
     : "重试抓资料";
-  const disabledReason = isVideo && !creatorResolved
-    ? "没识别到创作者，无法建档。"
-    : result.url_type === "unknown"
-      ? "识别不了这个链接。"
-      : "";
+  // 抓取软失败(平台反爬拦截 / 私密 / 已删):后端把错误哨兵抬成 metadata_failed + metadata_error,
+  // 这里诚实呈现真因,不再一概说「没识别到创作者」——否则用户会误以为是匹配问题,而非抓取被平台挡掉。
+  const scrapeUnavailable = Boolean(
+    isVideo && (cleanText(flowStatus || videoFlow.status) === "metadata_failed" || cleanText(videoFlow.metadata_error)),
+  );
+  const disabledReason = scrapeUnavailable
+    ? "这条链接抓取失败：被平台反爬拦截，或内容私密/已删，拿不到视频与创作者。换一条公开的视频链接，或稍后重试。"
+    : isVideo && !creatorResolved
+      ? "没识别到创作者，无法建档。"
+      : result.url_type === "unknown"
+        ? "识别不了这个链接。"
+        : "";
 
   // P7·账号 URL 结果卡:把后端自动抓取的基础资料(头像/粉丝/简介/帖数)合并展示。
   // 优先 profile_flow.profile_data(execute 后写入),缺则用 creator_identity / 顶层 result 字段兜底,

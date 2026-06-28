@@ -314,7 +314,19 @@ def _apify_metadata(platform: str, video_url: str) -> dict[str, Any]:
     items = client.dataset(dataset_id).list_items(limit=5).items if dataset_id else []
     if not items:
         raise LookupError("Apify returned no items")
-    metadata = _apify_item_metadata(platform, video_url, dict(items[0]), _text(run.get("id")))
+    first = dict(items[0])
+    # Apify「软失败」:run 状态 SUCCEEDED 但 dataset item 是错误哨兵(平台反爬拦截 / 私密 / 已删),
+    # item 只有 error/errorDescription/requestErrorMessages,没有 owner 与正文。绝不能当正常 post
+    # 解析并谎报 scrape_status=success(那会让下游「找不到创作者」却显示成功,误导排查)。
+    # 抬成显式失败并带真实原因,使 _video_flow_plan 走 metadata_failed、前端诚实呈现「抓取被拦截/私密」。
+    sentinel_error = _text(first.get("errorDescription")) or _text(first.get("error"))
+    has_real_payload = bool(
+        _text(_first(first, "ownerUsername", "ownerFullName", "channelName", "authorMeta.name", "authorMeta.nickName", "pageName"))
+        or _text(_first(first, "title", "caption", "text", "shortCode"))
+    )
+    if sentinel_error and not has_real_payload:
+        raise LookupError(f"{platform}_scrape_unavailable: {sentinel_error}"[:240])
+    metadata = _apify_item_metadata(platform, video_url, first, _text(run.get("id")))
     metadata["scrape_error"] = ""
     return metadata
 
