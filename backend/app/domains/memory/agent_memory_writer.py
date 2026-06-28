@@ -112,6 +112,7 @@ def record_outcome(
     success = True if oc == "success" else (False if oc == "fail" else None)
     if recommend_again is None:
         recommend_again = oc != "fail"
+    conn = None
     try:
         conn = get_conn()
         row = conn.execute(
@@ -134,6 +135,14 @@ def record_outcome(
         conn.commit()
         return int(dict(row)["id"]) if row else None
     except Exception:
+        # get_conn() 返回请求/线程作用域的共享连接:失败的 INSERT(如非法 agent_action_id
+        # 触 ForeignKeyViolation)会把当前事务标记为 aborted,不 rollback 会让同作用域后续
+        # 查询全报 "current transaction is aborted"。先回滚清状态再 best-effort 静默吞掉。
+        if conn is not None:
+            try:
+                conn.rollback()
+            except Exception:
+                logger.debug("agent_memory_writer.record_outcome_rollback_skipped", exc_info=True)
         logger.warning("agent_memory_writer.record_outcome_failed", extra={"entity_id": entity_id}, exc_info=True)
         return None
 

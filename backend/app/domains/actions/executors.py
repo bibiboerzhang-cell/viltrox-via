@@ -176,7 +176,12 @@ def _record_outcome_eval(action: dict[str, Any], *, outcome: str) -> None:
             entity_type=entity_type,
             entity_id=entity_id,
             outcome=outcome,
-            agent_action_id=int(action.get("id") or 0) or None,
+            # 红线:action["id"] 是 vkpi_action_inbox 的行号,不是 vkpi_agent_actions.id。
+            # agent_action_id FK 指向 vkpi_agent_actions(mig182),inbox 动作并不在那张表里,
+            # 误传必触 ForeignKeyViolation(每次执行污染日志)。execute_action 链路本就不产
+            # vkpi_agent_actions 留痕行,无真 id 可映射 → FK 列留空(列可空,ON DELETE SET NULL);
+            # inbox 动作号已落在 evidence.action_id,学习闭环按 entity_type/entity_id 聚合不丢信息。
+            agent_action_id=None,
             evidence={"category": str(action.get("category") or ""), "action_id": action.get("id")},
         )
     except Exception:
