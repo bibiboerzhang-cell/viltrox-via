@@ -270,10 +270,12 @@ async def job_vkpi_market_intelligence_refresh():
         from datetime import datetime, timezone
 
         from app.domains.market.signal_classifier import build_market_signal_classification
+        from app.domains.market.market_brain import mark_expired_signals
         from app.domains.market.signal_review_package import build_market_signal_review_package
         from app.domains.market.signal_review_persistence import write_reviewed_competitor_signals
 
         def _refresh() -> dict:
+            expired = mark_expired_signals()  # cut1 活体化:先治理过期信号,再采纳新信号
             classification = build_market_signal_classification(limit=100)
             package = build_market_signal_review_package(classification)
             stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -283,10 +285,10 @@ async def job_vkpi_market_intelligence_refresh():
                     backup_ref=f"scheduler:market_intelligence_refresh:{stamp}",
                     committed_by="scheduler",
                 )
-                return {"committed": True, "run_id": res.get("run_id"), "inserted": res.get("inserted")}
+                return {"committed": True, "run_id": res.get("run_id"), "inserted": res.get("inserted"), "expired_swept": expired}
             except ValueError as exc:
                 # 无 ready 候选 / 未过 check → 诚实跳过(不建空 run)。
-                return {"committed": False, "reason": str(exc)[:100]}
+                return {"committed": False, "reason": str(exc)[:100], "expired_swept": expired}
 
         result = await asyncio.to_thread(_refresh)
         logger.info("scheduler.vkpi_market_intelligence_refresh", extra=result)

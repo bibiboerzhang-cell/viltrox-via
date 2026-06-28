@@ -84,6 +84,32 @@ def evals_run(staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
     return evals.run_builtin_suite()
 
 
+@router.get("/marketing-brain/scorecard")
+def marketing_brain_scorecard(staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
+    """问题1 · AI Marketing Brain 90+ 评分卡:证据/流程/推荐/学习/市场/evals 六维只读评估。"""
+    from app.domains.intelligence import marketing_brain_scorecard as scorecard
+
+    return scorecard.build_marketing_brain_scorecard(staff)
+
+
+@router.get("/marketing-brain/daily")
+def marketing_brain_daily(staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
+    """cut1 · Market Brain v1 日报:每日合成产品热/上升渠道/竞品动/机会窗/今日建议(只读)。"""
+    from app.domains.market import market_brain
+
+    return market_brain.build_daily_brief(staff)
+
+
+@router.post("/marketing-brain/refresh")
+def marketing_brain_refresh(staff=Depends(require_tab("vkpi", "write"))) -> dict[str, Any]:
+    """cut1 · 活体化:治理过期信号 + 重出日报(运营手动刷;调度器每日自动跑)。"""
+    from app.domains.market import market_brain
+
+    expired = market_brain.mark_expired_signals()
+    brief = market_brain.build_daily_brief(staff)
+    return {"status": "ok", "expired_swept": expired, "brief": brief}
+
+
 @router.post("/cycle/run")
 def agent_cycle_run(staff=Depends(require_tab("vkpi", "write"))) -> dict[str, Any]:
     """阶段②·Agent 建议链 Durable Workflow:生成今日建议→汇总→留痕(可恢复;执行仍需人审)。"""

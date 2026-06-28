@@ -242,6 +242,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "193_vkpi_workflow_runs.sql",
     "194_vkpi_evals.sql",
     "195_vkpi_tenant_kernel.sql",
+    "196_vkpi_competitor_signal_expiry.sql",
 )
 
 try:
