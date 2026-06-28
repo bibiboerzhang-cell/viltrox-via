@@ -500,7 +500,9 @@ def _process_gemini_video(
             _block_job(conn, int(job["id"]), str(resolved.get("reason") or "media_resolve_blocked"), resolved)
             return
         if not resolved.get("ok"):
-            raise RuntimeError(f"media_resolve_failed: {resolved.get('reason') or platform}")
+            # reason 已含 media_resolve_failed:<platform>:<真因>(见 _resolve_video_media 诚实化),
+            # 不再二次包装成 "media_resolve_failed: media_resolve_failed",保留可诊断真因。
+            raise RuntimeError(str(resolved.get("reason") or f"media_resolve_failed:{platform}"))
         with tempfile.TemporaryDirectory(prefix="vkpi-analysis-video-") as tmpdir:
             download = download_direct_video_url(
                 str(resolved.get("direct_video_url") or ""),

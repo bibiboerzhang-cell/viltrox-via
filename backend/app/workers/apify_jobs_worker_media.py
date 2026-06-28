@@ -337,7 +337,12 @@ def _resolve_video_media(evidence: dict[str, Any]) -> dict[str, Any]:
     output["scraped_ok"] = bool(scraped.get("scraped_ok"))
     direct_video_url = str(scraped.get("video_url") or "").strip()
     if not direct_video_url:
-        output["reason"] = str(scraped.get("error") or "media_resolve_failed")
+        # 真因诚实化:旧码空 error 时 fallback 字面量 "media_resolve_failed",真因(反爬剥离可下载
+        # URL / 代理被挡)被吞成双重包装。分清「抓成功但无 downloadAddr」与「抓本身空/被挡」。
+        detail = str(scraped.get("error") or "").strip()
+        if not detail:
+            detail = "scraped_no_downloadable_url" if scraped.get("scraped_ok") else "scrape_empty_or_blocked"
+        output["reason"] = f"media_resolve_failed:{platform}:{detail}"[:240]
         output["status"] = "failed"
         return output
     output.update(

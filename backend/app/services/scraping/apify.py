@@ -319,6 +319,23 @@ async def scrape_youtube(url: str) -> Dict[str, Any]:
         return _empty_result(f"apify YouTube error: {e}")
 
 
+def _media_proxy_config() -> Dict[str, Any]:
+    """IG/TikTok 视频解析的 Apify 代理配置。
+
+    这两个平台用数据中心 IP 抓单视频必被反爬挡 → actor 只回元数据、不回可下载视频 URL
+    (downloadAddr/mediaUrls 全空)→ 上游 media_resolve_failed → 视频进不了 R2、播放器不渲染。
+    默认走住宅代理(命中率高,账号 SCALE 计划已具 RESIDENTIAL)。env ``APIFY_MEDIA_PROXY_GROUPS``
+    可调成本:``RESIDENTIAL``(默认)/ ``off``|空(不挂,回退 actor 默认)/ ``DATACENTER`` / 逗号分隔多组。
+    """
+    raw = os.getenv("APIFY_MEDIA_PROXY_GROUPS", "RESIDENTIAL").strip()
+    if raw.lower() in {"off", "none", ""}:
+        return {}
+    if raw.lower() in {"datacenter", "dc"}:
+        return {"useApifyProxy": True}
+    groups = [g.strip().upper() for g in raw.split(",") if g.strip()]
+    return {"useApifyProxy": True, "apifyProxyGroups": groups} if groups else {"useApifyProxy": True}
+
+
 async def scrape_instagram(url: str) -> Dict[str, Any]:
     """Fetch Instagram Reel/Post via Apify."""
     if not _apify_available():
@@ -327,11 +344,14 @@ async def scrape_instagram(url: str) -> Dict[str, Any]:
     logger.info("apify.scrape_instagram.start | url=%s", url)
 
     try:
-        run_input = {
+        run_input: Dict[str, Any] = {
             "directUrls": [url],
             "resultsLimit": 1,
             "addParentData": False,
         }
+        _proxy = _media_proxy_config()
+        if _proxy:
+            run_input["proxyConfiguration"] = _proxy
 
         run = await asyncio.to_thread(
             lambda: _client.actor("apify/instagram-scraper").call(run_input=run_input)
@@ -390,7 +410,7 @@ async def scrape_tiktok(url: str) -> Dict[str, Any]:
     logger.info("apify.scrape_tiktok.start | url=%s", url)
 
     try:
-        run_input = {
+        run_input: Dict[str, Any] = {
             "postURLs": [url],
             "resultsPerPage": 1,
             # 2026-06-16 修 TikTok media_resolve_failed:False 时 actor 只回元数据、不回可下载视频 URL
@@ -399,6 +419,10 @@ async def scrape_tiktok(url: str) -> Dict[str, Any]:
             "shouldDownloadCovers": False,
             "shouldDownloadSubtitles": False,
         }
+        # 数据中心 IP 抓 TikTok 单视频常被反爬挡(downloadAddr 空)→ 默认住宅代理拿可下载 URL。
+        _proxy = _media_proxy_config()
+        if _proxy:
+            run_input["proxyConfiguration"] = _proxy
 
         actor_id = _tiktok_actor_id()
         run = await asyncio.to_thread(lambda: _client.actor(actor_id).call(run_input=run_input))
