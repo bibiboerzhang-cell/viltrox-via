@@ -1,0 +1,1273 @@
+"""Gemini 视频分析处理簇 + 成本入账 + 结果塑形/落库,从 apify_jobs_worker.py 整簇 move 出来。
+
+函数体逐字不变 → 行为必然不变。原文件用
+`from app.workers.apify_jobs_worker_gemini import (...)` re-export 兜住所有调用点。
+依赖原文件的常量/小工具(_block_job/_load_video_evidence/...)在本模块**底部**
+lazy 形式 import(放底部避免循环导入:此时本模块所有函数已定义,原文件所需名也已先于
+其 re-export 行绑定)。红线:本簇零 fit 写;LLM 绝不写 viltrox_fit_score。
+"""
+from __future__ import annotations
+
+import asyncio
+import tempfile
+import time
+from datetime import datetime, timezone
+from typing import Any
+
+import psycopg
+
+from app.core.logging import get_logger
+from app.db.connection import db_connection_sync_scope
+from app.domains.costs import budget_guard
+from app.services.media.video_download import download_direct_video_url
+from app.services.ai.analyzers import gemini_video as gemini_video_analyzer
+from app.workers.apify_jobs_worker_helpers import (
+    _derive_method,
+    _int_or_none,
+    _json,
+    _platform_from_content_url,
+    _redact_sensitive_text,
+    _target,
+    _url_host,
+)
+from app.workers.apify_jobs_cost import (
+    _anthropic_cost,
+    _gemini_cost,
+    _openai_cost,
+)
+from app.workers.apify_jobs_video_context import (
+    _low_scores,
+    _video_final_context,
+    _video_performance_context,
+)
+from app.workers.apify_jobs_worker_session import (
+    _enqueue_account_dossier_extract_after_final_v1,
+    _enqueue_content_fit_after_final_v1,
+    _search_session_analysis_summary_from_result,
+    _sync_deep_analysis_result_from_cache,
+    _sync_search_session_job,
+)
+
+
+logger = get_logger(__name__)
+
+
+def _shape_gemini_result(
+    *,
+    job: dict[str, Any],
+    evidence: dict[str, Any],
+    raw: dict[str, Any],
+    cost: float,
+    cost_basis: str,
+    preflight_cost: float,
+    latency_ms: int,
+    derive_method: str,
+) -> dict[str, Any]:
+    if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS:
+        final = raw.get("video_analysis_final_v1") if isinstance(raw.get("video_analysis_final_v1"), dict) else {}
+        model_name = str(raw.get("model") or raw.get("method") or "gemini_video")
+        segments = raw.get("cost_segments") if isinstance(raw.get("cost_segments"), list) else None
+        shaped: dict[str, Any] = {
+            "schema_version": "video_analysis_final_v1",
+            "mock": False,
+            "analysis_method": derive_method,
+            "job_id": job.get("id"),
+            "target_type": "video",
+            "target_id": str(evidence.get("id")),
+            "source": {
+                "url": evidence.get("content_url"),
+                "title": evidence.get("title"),
+                "platform": evidence.get("platform"),
+                "creator_handle": evidence.get("creator_handle"),
+                "creator_name": evidence.get("creator_name"),
+                "project_id": evidence.get("project_id"),
+                "project_name": evidence.get("project_name"),
+                "product_name": evidence.get("product_name"),
+                "kol_pool_id": evidence.get("kol_pool_id"),
+            },
+            "performance_metrics": _video_performance_context(evidence),
+            "layer1_visual_content": final.get("layer1_visual_content") or {},
+            "layer2_viewer_emotion": final.get("layer2_viewer_emotion") or {},
+            "layer3_three_values": final.get("layer3_three_values") or {},
+            "layer4_attribution": final.get("layer4_attribution") or {},
+            "layer5_recommendations": final.get("layer5_recommendations") or {},
+            "layer6_flags_and_scores": final.get("layer6_flags_and_scores") or {},
+            "cost": {
+                "recorded_cost_usd": cost,
+                "cost_basis": cost_basis,
+                "preflight_estimated_cost_usd": preflight_cost,
+                "segments": segments
+                or [
+                    {
+                        "stage": "single_pass",
+                        "provider": "gemini",
+                        "model": model_name,
+                        "cost_usd": cost,
+                    }
+                ],
+                "usage_metadata": raw.get("usage_metadata") if isinstance(raw.get("usage_metadata"), dict) else {},
+                "latency_ms": latency_ms,
+            },
+            "raw_gemini_video": raw,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if isinstance(raw.get("final_v1_keyframe_qa"), dict):
+            shaped["keyframe_qa"] = raw.get("final_v1_keyframe_qa") or {}
+            shaped["qa_pass"] = raw.get("qa_pass")
+            shaped["frame_extraction"] = raw.get("frame_extraction") if isinstance(raw.get("frame_extraction"), dict) else {}
+            shaped["final_v1_pass"] = raw.get("final_v1_pass") if isinstance(raw.get("final_v1_pass"), dict) else {}
+        return shaped
+    if derive_method in GEMINI_VIDEO_V2_DERIVE_METHODS:
+        v2 = raw.get("video_analysis_v2") if isinstance(raw.get("video_analysis_v2"), dict) else {}
+        layer3 = dict(v2.get("layer3_integrated_judgment") or {})
+        layer3["performance_metrics"] = _video_performance_context(evidence)
+        model_name = str(raw.get("model") or raw.get("method") or "gemini_video")
+        segments = raw.get("cost_segments") if isinstance(raw.get("cost_segments"), list) else None
+        return {
+            "schema_version": "video_analysis_v2",
+            "mock": False,
+            "analysis_method": derive_method,
+            "job_id": job.get("id"),
+            "target_type": "video",
+            "target_id": str(evidence.get("id")),
+            "source": {
+                "url": evidence.get("content_url"),
+                "title": evidence.get("title"),
+                "platform": evidence.get("platform"),
+                "creator_handle": evidence.get("creator_handle"),
+                "creator_name": evidence.get("creator_name"),
+                "project_id": evidence.get("project_id"),
+                "project_name": evidence.get("project_name"),
+                "product_name": evidence.get("product_name"),
+                "kol_pool_id": evidence.get("kol_pool_id"),
+            },
+            "layer1_visual_content": v2.get("layer1_visual_content") or {},
+            "layer2_video_scores": v2.get("layer2_video_scores") or {},
+            "layer3_integrated_judgment": layer3,
+            "cost": {
+                "recorded_cost_usd": cost,
+                "cost_basis": cost_basis,
+                "preflight_estimated_cost_usd": preflight_cost,
+                "segments": segments
+                or [
+                    {
+                        "stage": "single_pass",
+                        "provider": "gemini",
+                        "model": model_name,
+                        "cost_usd": cost,
+                    }
+                ],
+                "usage_metadata": raw.get("usage_metadata") if isinstance(raw.get("usage_metadata"), dict) else {},
+                "latency_ms": latency_ms,
+            },
+            "raw_gemini_video": raw,
+            "frame_extraction": raw.get("frame_extraction") if isinstance(raw.get("frame_extraction"), dict) else {},
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    quality_scores = raw.get("quality_scores") if isinstance(raw.get("quality_scores"), dict) else {}
+    return {
+        "mock": False,
+        "analysis_method": "gemini",
+        "job_id": job.get("id"),
+        "target_type": "video",
+        "target_id": str(evidence.get("id")),
+        "source": {
+            "url": evidence.get("content_url"),
+            "title": evidence.get("title"),
+            "platform": evidence.get("platform"),
+            "creator_handle": evidence.get("creator_handle"),
+            "project_id": evidence.get("project_id"),
+            "kol_pool_id": evidence.get("kol_pool_id"),
+        },
+        "platform_algorithm_rules": {
+            "content_genre": raw.get("content_genre"),
+            "target_audience": raw.get("target_audience"),
+            "hook_analysis": raw.get("hook_analysis"),
+            "marketing_potential": raw.get("marketing_potential"),
+            "brand_integration_depth": raw.get("brand_integration_depth"),
+            "community_value": raw.get("community_value"),
+            "quality_scores": quality_scores,
+        },
+        "weak_performance_reasons": {
+            "quality_summary": raw.get("quality_summary"),
+            "vertical_quality_notes": raw.get("vertical_quality_notes"),
+            "marketing_notes": raw.get("marketing_notes"),
+            "tech_floor": raw.get("tech_floor"),
+            "low_scores": _low_scores(quality_scores),
+        },
+        "improvement_suggestions": raw.get("improvements") if isinstance(raw.get("improvements"), list) else [],
+        "raw_gemini_video": raw,
+        "cost": {
+            "recorded_cost_usd": cost,
+            "cost_basis": cost_basis,
+            "preflight_estimated_cost_usd": preflight_cost,
+            "usage_metadata": raw.get("usage_metadata") if isinstance(raw.get("usage_metadata"), dict) else {},
+            "latency_ms": latency_ms,
+        },
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _record_gemini_cost(
+    *,
+    job: dict[str, Any],
+    payload: dict[str, Any],
+    raw: dict[str, Any],
+    cost: float,
+    cost_basis: str,
+    tokens_in: int,
+    tokens_out: int,
+    latency_ms: int,
+    preflight_cost: float,
+) -> dict[str, Any]:
+    triggered_by = payload.get("triggered_by_user_id", payload.get("user_id"))
+    with db_connection_sync_scope():
+        return budget_guard.record_cost(
+            scope=LLM_BUDGET_SCOPE,
+            cron_task="vkpi_analysis_worker",
+            ai_provider="gemini",
+            model_name=str(raw.get("model") or raw.get("method") or "gemini_video"),
+            cost_usd=cost,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            metadata={
+                "status": "success" if raw.get("analyzed") else "provider_error",
+                "job_id": job.get("id"),
+                "target_type": payload.get("target_type"),
+                "target_id": str(payload.get("target_id") or ""),
+                "cost_basis": cost_basis,
+                "preflight_estimated_cost_usd": preflight_cost,
+                "latency_ms": latency_ms,
+                "triggered_by_user_id": triggered_by,
+                "error": _redact_sensitive_text(raw.get("error") or ""),
+            },
+            extra_scopes=["monthly_total", "single_call", "provider:gemini"],
+        )
+
+
+def _record_openai_cost(
+    *,
+    job: dict[str, Any],
+    payload: dict[str, Any],
+    raw: dict[str, Any],
+    cost: float,
+    cost_basis: str,
+    tokens_in: int,
+    tokens_out: int,
+    latency_ms: int,
+    preflight_cost: float,
+) -> dict[str, Any]:
+    triggered_by = payload.get("triggered_by_user_id", payload.get("user_id"))
+    with db_connection_sync_scope():
+        return budget_guard.record_cost(
+            scope=LLM_BUDGET_SCOPE,
+            cron_task="vkpi_analysis_worker",
+            ai_provider="openai",
+            model_name=str(raw.get("model") or raw.get("method") or "gpt-5.5"),
+            cost_usd=cost,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            metadata={
+                "status": "success" if raw.get("analyzed") else "provider_error",
+                "job_id": job.get("id"),
+                "target_type": payload.get("target_type"),
+                "target_id": str(payload.get("target_id") or ""),
+                "cost_basis": cost_basis,
+                "preflight_estimated_cost_usd": preflight_cost,
+                "latency_ms": latency_ms,
+                "triggered_by_user_id": triggered_by,
+                "error": _redact_sensitive_text(raw.get("error") or ""),
+            },
+            extra_scopes=["monthly_total", "single_call", "provider:openai"],
+        )
+
+
+def _record_anthropic_cost(
+    *,
+    job: dict[str, Any],
+    payload: dict[str, Any],
+    raw: dict[str, Any],
+    cost: float,
+    cost_basis: str,
+    tokens_in: int,
+    tokens_out: int,
+    latency_ms: int,
+    preflight_cost: float,
+) -> dict[str, Any]:
+    triggered_by = payload.get("triggered_by_user_id", payload.get("user_id"))
+    with db_connection_sync_scope():
+        return budget_guard.record_cost(
+            scope=LLM_BUDGET_SCOPE,
+            cron_task="vkpi_analysis_worker",
+            ai_provider="anthropic",
+            model_name=str(raw.get("model") or raw.get("method") or "claude-opus-4-8"),
+            cost_usd=cost,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            metadata={
+                "status": "success" if raw.get("analyzed") else "provider_error",
+                "job_id": job.get("id"),
+                "target_type": payload.get("target_type"),
+                "target_id": str(payload.get("target_id") or ""),
+                "cost_basis": cost_basis,
+                "preflight_estimated_cost_usd": preflight_cost,
+                "latency_ms": latency_ms,
+                "triggered_by_user_id": triggered_by,
+                "error": _redact_sensitive_text(raw.get("error") or ""),
+            },
+            extra_scopes=["monthly_total", "single_call", "provider:anthropic"],
+        )
+
+
+def _write_gemini_cache(
+    conn: psycopg.Connection[Any],
+    *,
+    job: dict[str, Any],
+    payload: dict[str, Any],
+    evidence: dict[str, Any],
+    raw: dict[str, Any],
+    cost: float,
+    cost_basis: str,
+    preflight_cost: float,
+    latency_ms: int,
+    derive_method: str,
+) -> None:
+    target_type, target_id = _target(payload)
+    triggered_by = payload.get("triggered_by_user_id", payload.get("user_id"))
+    shaped = _shape_gemini_result(
+        job=job,
+        evidence=evidence,
+        raw=raw,
+        cost=cost,
+        cost_basis=cost_basis,
+        preflight_cost=preflight_cost,
+        latency_ms=latency_ms,
+        derive_method=derive_method,
+    )
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO vkpi_analysis_cache (
+                  target_type, target_id, model, derive_method, result, cost,
+                  status, triggered_by_user_id, created_at, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s::jsonb, %s, 'ready', %s, NOW(), NOW())
+                ON CONFLICT (target_type, target_id, derive_method)
+                DO UPDATE SET
+                  model = EXCLUDED.model,
+                  result = EXCLUDED.result,
+                  cost = EXCLUDED.cost,
+                  status = 'ready',
+                  triggered_by_user_id = EXCLUDED.triggered_by_user_id,
+                  updated_at = NOW()
+                RETURNING id
+                """,
+                (
+                    target_type,
+                    target_id,
+                    str(raw.get("model") or raw.get("method") or "gemini_video"),
+                    derive_method,
+                    _json(shaped),
+                    cost,
+                    _int_or_none(triggered_by),
+                ),
+            )
+            cache_row = cur.fetchone()
+            cache_id = int(cache_row[0]) if cache_row else None
+            cur.execute(
+                """
+                UPDATE apify_jobs
+                SET status='done',
+                    last_error=NULL,
+                    last_error_category=NULL,
+                    next_retry_at=NULL,
+                    updated_at=NOW()
+                WHERE id=%s
+                """,
+                (job["id"],),
+            )
+    deep_result = _sync_deep_analysis_result_from_cache(
+        conn,
+        cache_id=cache_id,
+        derive_method=derive_method,
+        job_id=int(job["id"]),
+    )
+    account_extract_job = None
+    content_fit_job = None
+    try:
+        account_extract_job = _enqueue_account_dossier_extract_after_final_v1(
+            conn,
+            job_id=int(job["id"]),
+            deep_result=deep_result,
+        )
+        # QA P0 修:主成功路径补内容契合链式入队(此前只接在 cache-skip 路径,主路径漏接 → 发现的新人
+        # 首次 final_v1 完成拿不到内容契合)。QA P1 修:连同 account_dossier 一并兜进 try/except,
+        # 入队异常仅 warning、绝不冒泡把 final_v1 标 failed(『失败不阻断 final_v1』)。
+        content_fit_job = _enqueue_content_fit_after_final_v1(
+            conn,
+            job_id=int(job["id"]),
+            deep_result=deep_result,
+        )
+    except Exception as exc:
+        logger.warning("final_v1 followup enqueue failed (non-fatal) | job_id=%s error=%s", job.get("id"), exc)
+    analysis_summary = _search_session_analysis_summary_from_result(
+        cache_id=cache_id,
+        derive_method=derive_method,
+        target_type=target_type,
+        target_id=target_id,
+        evidence=evidence,
+        result=shaped,
+        cost=cost,
+    )
+    if analysis_summary and deep_result:
+        analysis_summary["deep_result"] = deep_result
+    if analysis_summary and account_extract_job:
+        analysis_summary["account_dossier_extract_job"] = account_extract_job
+    _sync_search_session_job(
+        conn,
+        int(job["id"]),
+        raw_status="done",
+        analysis_summary=analysis_summary,
+    )
+
+
+def _process_gemini_video_final_v1_keyframe_qa(
+    conn: psycopg.Connection[Any],
+    job: dict[str, Any],
+    payload: dict[str, Any],
+    evidence: dict[str, Any],
+    preflight_cost: float,
+) -> None:
+    if _platform_from_content_url(str(evidence.get("content_url") or "")) != "youtube":
+        raise RuntimeError("video_analysis_final_v1_keyframe_qa currently supports YouTube only")
+
+    qa_model = str(payload.get("final_v1_qa_model") or FINAL_V1_KEYFRAME_QA_MODEL).strip() or FINAL_V1_KEYFRAME_QA_MODEL
+    qa_preflight = _provider_budget_preflight(
+        job,
+        {
+            **payload,
+            "prompt": f"final_v1 keyframe QA video:{evidence.get('id')} model:{qa_model}",
+        },
+        "google",
+    )
+    qa_allowed, qa_reason, qa_estimated_cost = _provider_allowed(qa_preflight, "google")
+    _log_budget_preflight_record_only(
+        job=job,
+        provider="google",
+        allowed=qa_allowed,
+        reason=qa_reason,
+        estimated_cost=qa_estimated_cost,
+        stage="keyframe_qa",
+    )
+    if not qa_allowed:
+        # 护栏② enforce:撞 cap 不再继续——_block_job 终态(对齐 cron fallback_action=block_job)
+        _block_job(
+            conn,
+            int(job["id"]),
+            "budget_guard_blocked",
+            {
+                "provider": "google",
+                "stage": "keyframe_qa",
+                "reason_detail": qa_reason,
+                "estimated_cost_usd": qa_estimated_cost,
+            },
+        )
+        return
+
+    started = time.monotonic()
+    analysis_context = _video_final_context(evidence)
+    analyzer_payload = {
+        **payload,
+        "gemini_final_v1_models": gemini_video_analyzer.final_v1_gemini_models(
+            payload.get("gemini_final_v1_models") or FINAL_V1_GEMINI_MODELS
+        ),
+    }
+    visual_raw = _run_gemini_analyzer_with_timeout(
+        {
+            **analyzer_payload,
+            "mode": "youtube",
+            "url": str(evidence.get("content_url") or ""),
+            "title": str(evidence.get("title") or ""),
+            "creator_handle": str(evidence.get("creator_handle") or ""),
+            "schema_version": "final_v1",
+            "performance_context": analysis_context,
+        },
+        job_id=job.get("id"),
+        target_id=str(evidence.get("id")),
+        platform="youtube",
+    )
+    visual_cost, visual_basis, visual_tokens_in, visual_tokens_out = _gemini_cost(visual_raw, preflight_cost)
+    _record_gemini_cost(
+        job=job,
+        payload=payload,
+        raw=visual_raw,
+        cost=visual_cost,
+        cost_basis=visual_basis,
+        tokens_in=visual_tokens_in,
+        tokens_out=visual_tokens_out,
+        latency_ms=0,
+        preflight_cost=preflight_cost,
+    )
+    if not visual_raw.get("analyzed"):
+        raw_error = str(visual_raw.get("error") or "not_analyzed")
+        if raw_error == "gemini_call_timeout":
+            raise RuntimeError("gemini_call_timeout")
+        raise RuntimeError(f"Gemini final_v1 pass failed: {raw_error}")
+
+    final_v1 = visual_raw.get("video_analysis_final_v1") if isinstance(visual_raw.get("video_analysis_final_v1"), dict) else {}
+    layer1 = final_v1.get("layer1_visual_content") if isinstance(final_v1.get("layer1_visual_content"), dict) else {}
+    with _extract_keyframes_for_qa(evidence, layer1, limit=6, temp_prefix="vkpi-final-v1-qa-video-") as qa_frames:
+        keyframe_requests = qa_frames["keyframe_requests"]
+        frame_meta = qa_frames["frame_meta"]
+        download = qa_frames["download"]
+        qa_raw = asyncio.run(
+            gemini_video_analyzer.analyze_final_v1_keyframe_qa(
+                final_v1_result=final_v1,
+                keyframes=qa_frames["frames"],
+                title=str(evidence.get("title") or ""),
+                performance_context=analysis_context,
+                model_name=qa_model,
+            )
+        )
+
+    qa_cost, qa_basis, qa_tokens_in, qa_tokens_out = _gemini_cost(qa_raw, qa_estimated_cost)
+    _record_gemini_cost(
+        job=job,
+        payload=payload,
+        raw=qa_raw,
+        cost=qa_cost,
+        cost_basis=qa_basis,
+        tokens_in=qa_tokens_in,
+        tokens_out=qa_tokens_out,
+        latency_ms=0,
+        preflight_cost=qa_estimated_cost,
+    )
+    if not qa_raw.get("analyzed"):
+        raise RuntimeError(f"Gemini final_v1 keyframe QA failed: {qa_raw.get('error') or 'not_analyzed'}")
+
+    latency_ms = int((time.monotonic() - started) * 1000)
+    total_cost = round(visual_cost + qa_cost, 6)
+    visual_model = str(visual_raw.get("model") or visual_raw.get("method") or "final_v1_gemini")
+    combined_raw = {
+        **visual_raw,
+        "method": "final_v1_flash_keyframe_qa",
+        "model": f"{visual_model}+{qa_model}",
+        "final_v1_pass": visual_raw,
+        "final_v1_keyframe_qa": qa_raw.get("final_v1_keyframe_qa") if isinstance(qa_raw.get("final_v1_keyframe_qa"), dict) else {},
+        "qa_pass": qa_raw.get("qa_pass"),
+        "qa_method": qa_raw.get("method"),
+        "qa_model": qa_raw.get("model") or qa_model,
+        "qa_usage_metadata": qa_raw.get("usage_metadata") if isinstance(qa_raw.get("usage_metadata"), dict) else {},
+        "cost_segments": [
+            {
+                "stage": "final_v1_video_pass",
+                "provider": "gemini",
+                "model": visual_model,
+                "cost_usd": visual_cost,
+                "cost_basis": visual_basis,
+                "usage_metadata": visual_raw.get("usage_metadata") if isinstance(visual_raw.get("usage_metadata"), dict) else {},
+            },
+            {
+                "stage": "keyframe_qa_pass",
+                "provider": "gemini",
+                "model": qa_model,
+                "cost_usd": qa_cost,
+                "cost_basis": qa_basis,
+                "usage_metadata": qa_raw.get("usage_metadata") if isinstance(qa_raw.get("usage_metadata"), dict) else {},
+            },
+        ],
+        "frame_extraction": {
+            "requested": keyframe_requests,
+            "extracted_count": len(frame_meta),
+            "frames": frame_meta,
+            "download_bytes": int(download.get("bytes") or 0),
+            "temporary_files_cleaned": True,
+        },
+    }
+    _write_gemini_cache(
+        conn,
+        job=job,
+        payload=payload,
+        evidence=evidence,
+        raw=combined_raw,
+        cost=total_cost,
+        cost_basis="gemini_final_v1_keyframe_qa_segmented_model_rate",
+        preflight_cost=preflight_cost + qa_estimated_cost,
+        latency_ms=latency_ms,
+        derive_method=FINAL_V1_KEYFRAME_QA_DERIVE_METHOD,
+    )
+
+
+def _process_gemini_video_flash_pro_judge(
+    conn: psycopg.Connection[Any],
+    job: dict[str, Any],
+    payload: dict[str, Any],
+    evidence: dict[str, Any],
+    preflight_cost: float,
+) -> None:
+    if _platform_from_content_url(str(evidence.get("content_url") or "")) != "youtube":
+        raise RuntimeError("gemini_video_v2_flash_pro_judge currently supports YouTube only")
+    started = time.monotonic()
+    performance = _video_performance_context(evidence)
+    visual_payload = {**payload, "gemini_model": "gemini-3-flash-preview"}
+    with _gemini_worker_overrides(visual_payload):
+        visual_raw = asyncio.run(
+            gemini_video_analyzer.analyze_youtube_with_gemini(
+                str(evidence.get("content_url") or ""),
+                str(evidence.get("title") or ""),
+                str(evidence.get("creator_handle") or ""),
+                schema_version="v2",
+                performance_context=performance,
+            )
+        )
+    if visual_raw.get("analyzed"):
+        visual_raw["model"] = "gemini-3-flash-preview"
+        visual_raw["method"] = "gemini_direct_gemini-3-flash-preview"
+    visual_cost, visual_basis, visual_tokens_in, visual_tokens_out = _gemini_cost(visual_raw, preflight_cost)
+    _record_gemini_cost(
+        job=job,
+        payload=payload,
+        raw=visual_raw,
+        cost=visual_cost,
+        cost_basis=visual_basis,
+        tokens_in=visual_tokens_in,
+        tokens_out=visual_tokens_out,
+        latency_ms=0,
+        preflight_cost=preflight_cost,
+    )
+    if not visual_raw.get("analyzed"):
+        raise RuntimeError(f"Gemini visual pass failed: {visual_raw.get('error') or 'not_analyzed'}")
+
+    v2 = visual_raw.get("video_analysis_v2") if isinstance(visual_raw.get("video_analysis_v2"), dict) else {}
+    layer1 = v2.get("layer1_visual_content") if isinstance(v2.get("layer1_visual_content"), dict) else {}
+    with _extract_keyframes_for_qa(evidence, layer1, limit=6, temp_prefix="vkpi-scheme2-video-") as qa_frames:
+        keyframe_requests = qa_frames["keyframe_requests"]
+        frame_meta = qa_frames["frame_meta"]
+        download = qa_frames["download"]
+        judgment_raw = asyncio.run(
+            gemini_video_analyzer.analyze_v2_judgment_with_keyframes(
+                layer1_visual_content=layer1,
+                keyframes=qa_frames["frames"],
+                title=str(evidence.get("title") or ""),
+                performance_context=performance,
+                model_name="gemini-3.1-pro-preview",
+            )
+        )
+    judgment_cost, judgment_basis, judgment_tokens_in, judgment_tokens_out = _gemini_cost(judgment_raw, preflight_cost)
+    _record_gemini_cost(
+        job=job,
+        payload=payload,
+        raw=judgment_raw,
+        cost=judgment_cost,
+        cost_basis=judgment_basis,
+        tokens_in=judgment_tokens_in,
+        tokens_out=judgment_tokens_out,
+        latency_ms=0,
+        preflight_cost=preflight_cost,
+    )
+    if not judgment_raw.get("analyzed"):
+        raise RuntimeError(f"Gemini keyframe judgment failed: {judgment_raw.get('error') or 'not_analyzed'}")
+
+    latency_ms = int((time.monotonic() - started) * 1000)
+    total_cost = round(visual_cost + judgment_cost, 6)
+    raw = {
+        **judgment_raw,
+        "method": "gemini_flash_pro_judge",
+        "model": "gemini-3-flash-preview+gemini-3.1-pro-preview",
+        "visual_pass": visual_raw,
+        "cost_segments": [
+            {
+                "stage": "visual_video_pass",
+                "provider": "gemini",
+                "model": "gemini-3-flash-preview",
+                "cost_usd": visual_cost,
+                "cost_basis": visual_basis,
+                "usage_metadata": visual_raw.get("usage_metadata") if isinstance(visual_raw.get("usage_metadata"), dict) else {},
+            },
+            {
+                "stage": "judgment_pass",
+                "provider": "gemini",
+                "model": "gemini-3.1-pro-preview",
+                "cost_usd": judgment_cost,
+                "cost_basis": judgment_basis,
+                "usage_metadata": judgment_raw.get("usage_metadata") if isinstance(judgment_raw.get("usage_metadata"), dict) else {},
+            },
+        ],
+        "frame_extraction": {
+            "requested": keyframe_requests,
+            "extracted_count": len(frame_meta),
+            "frames": frame_meta,
+            "download_bytes": int(download.get("bytes") or 0),
+            "temporary_files_cleaned": True,
+        },
+    }
+    _write_gemini_cache(
+        conn,
+        job=job,
+        payload=payload,
+        evidence=evidence,
+        raw=raw,
+        cost=total_cost,
+        cost_basis="gemini_usage_metadata_segmented_model_rate",
+        preflight_cost=preflight_cost,
+        latency_ms=latency_ms,
+        derive_method="gemini_video_v2_flash_pro_judge",
+    )
+
+
+def _process_gemini_video_flash_gpt55_judge(
+    conn: psycopg.Connection[Any],
+    job: dict[str, Any],
+    payload: dict[str, Any],
+    evidence: dict[str, Any],
+    preflight_cost: float,
+) -> None:
+    if _platform_from_content_url(str(evidence.get("content_url") or "")) != "youtube":
+        raise RuntimeError("gemini_video_v2_flash_gpt55_judge currently supports YouTube only")
+    openai_preflight = _provider_budget_preflight(job, payload, "openai")
+    openai_allowed, openai_reason, openai_estimated_cost = _provider_allowed(openai_preflight, "openai")
+    _log_budget_preflight_record_only(
+        job=job,
+        provider="openai",
+        allowed=openai_allowed,
+        reason=openai_reason,
+        estimated_cost=openai_estimated_cost,
+        stage="openai_keyframe_judge",
+    )
+    if not openai_allowed:
+        _block_job(
+            conn,
+            int(job["id"]),
+            "budget_guard_blocked",
+            {
+                "provider": "openai",
+                "stage": "openai_keyframe_judge",
+                "reason_detail": openai_reason,
+                "estimated_cost_usd": openai_estimated_cost,
+            },
+        )
+        return
+
+    started = time.monotonic()
+    performance = _video_performance_context(evidence)
+    visual_payload = {**payload, "gemini_model": "gemini-3-flash-preview"}
+    with _gemini_worker_overrides(visual_payload):
+        visual_raw = asyncio.run(
+            gemini_video_analyzer.analyze_youtube_with_gemini(
+                str(evidence.get("content_url") or ""),
+                str(evidence.get("title") or ""),
+                str(evidence.get("creator_handle") or ""),
+                schema_version="v2",
+                performance_context=performance,
+            )
+        )
+    if visual_raw.get("analyzed"):
+        visual_raw["model"] = "gemini-3-flash-preview"
+        visual_raw["method"] = "gemini_direct_gemini-3-flash-preview"
+    visual_cost, visual_basis, visual_tokens_in, visual_tokens_out = _gemini_cost(visual_raw, preflight_cost)
+    _record_gemini_cost(
+        job=job,
+        payload=payload,
+        raw=visual_raw,
+        cost=visual_cost,
+        cost_basis=visual_basis,
+        tokens_in=visual_tokens_in,
+        tokens_out=visual_tokens_out,
+        latency_ms=0,
+        preflight_cost=preflight_cost,
+    )
+    if not visual_raw.get("analyzed"):
+        raise RuntimeError(f"Gemini visual pass failed: {visual_raw.get('error') or 'not_analyzed'}")
+
+    v2 = visual_raw.get("video_analysis_v2") if isinstance(visual_raw.get("video_analysis_v2"), dict) else {}
+    layer1 = v2.get("layer1_visual_content") if isinstance(v2.get("layer1_visual_content"), dict) else {}
+    with _extract_keyframes_for_qa(evidence, layer1, limit=6, temp_prefix="vkpi-scheme3a-video-") as qa_frames:
+        keyframe_requests = qa_frames["keyframe_requests"]
+        frame_meta = qa_frames["frame_meta"]
+        download = qa_frames["download"]
+        judgment_raw = asyncio.run(
+            gemini_video_analyzer.analyze_v2_judgment_with_openai_keyframes(
+                layer1_visual_content=layer1,
+                keyframes=qa_frames["frames"],
+                title=str(evidence.get("title") or ""),
+                performance_context=performance,
+                model_name="gpt-5.5",
+            )
+        )
+    judgment_cost, judgment_basis, judgment_tokens_in, judgment_tokens_out = _openai_cost(judgment_raw, openai_estimated_cost)
+    _record_openai_cost(
+        job=job,
+        payload=payload,
+        raw=judgment_raw,
+        cost=judgment_cost,
+        cost_basis=judgment_basis,
+        tokens_in=judgment_tokens_in,
+        tokens_out=judgment_tokens_out,
+        latency_ms=0,
+        preflight_cost=openai_estimated_cost,
+    )
+    if not judgment_raw.get("analyzed"):
+        raise RuntimeError(f"OpenAI keyframe judgment failed: {judgment_raw.get('error') or 'not_analyzed'}")
+
+    latency_ms = int((time.monotonic() - started) * 1000)
+    total_cost = round(visual_cost + judgment_cost, 6)
+    raw = {
+        **judgment_raw,
+        "method": "gemini_flash_gpt55_judge",
+        "model": "gemini-3-flash-preview+gpt-5.5",
+        "visual_pass": visual_raw,
+        "cost_segments": [
+            {
+                "stage": "visual_video_pass",
+                "provider": "gemini",
+                "model": "gemini-3-flash-preview",
+                "cost_usd": visual_cost,
+                "cost_basis": visual_basis,
+                "usage_metadata": visual_raw.get("usage_metadata") if isinstance(visual_raw.get("usage_metadata"), dict) else {},
+            },
+            {
+                "stage": "judgment_pass",
+                "provider": "openai",
+                "model": "gpt-5.5",
+                "cost_usd": judgment_cost,
+                "cost_basis": judgment_basis,
+                "usage_metadata": judgment_raw.get("usage_metadata") if isinstance(judgment_raw.get("usage_metadata"), dict) else {},
+            },
+        ],
+        "frame_extraction": {
+            "requested": keyframe_requests,
+            "extracted_count": len(frame_meta),
+            "frames": frame_meta,
+            "download_bytes": int(download.get("bytes") or 0),
+            "temporary_files_cleaned": True,
+        },
+    }
+    _write_gemini_cache(
+        conn,
+        job=job,
+        payload=payload,
+        evidence=evidence,
+        raw=raw,
+        cost=total_cost,
+        cost_basis="gemini_openai_usage_metadata_segmented_model_rate",
+        preflight_cost=preflight_cost + openai_estimated_cost,
+        latency_ms=latency_ms,
+        derive_method="gemini_video_v2_flash_gpt55_judge",
+    )
+
+
+def _process_gemini_video_flash_claude_judge(
+    conn: psycopg.Connection[Any],
+    job: dict[str, Any],
+    payload: dict[str, Any],
+    evidence: dict[str, Any],
+    preflight_cost: float,
+) -> None:
+    if _platform_from_content_url(str(evidence.get("content_url") or "")) != "youtube":
+        raise RuntimeError("gemini_video_v2_flash_claude_judge currently supports YouTube only")
+    anthropic_preflight = _provider_budget_preflight(job, payload, "anthropic")
+    anthropic_allowed, anthropic_reason, anthropic_estimated_cost = _provider_allowed(anthropic_preflight, "anthropic")
+    _log_budget_preflight_record_only(
+        job=job,
+        provider="anthropic",
+        allowed=anthropic_allowed,
+        reason=anthropic_reason,
+        estimated_cost=anthropic_estimated_cost,
+        stage="anthropic_keyframe_judge",
+    )
+    if not anthropic_allowed:
+        _block_job(
+            conn,
+            int(job["id"]),
+            "budget_guard_blocked",
+            {
+                "provider": "anthropic",
+                "stage": "anthropic_keyframe_judge",
+                "reason_detail": anthropic_reason,
+                "estimated_cost_usd": anthropic_estimated_cost,
+            },
+        )
+        return
+
+    started = time.monotonic()
+    performance = _video_performance_context(evidence)
+    visual_payload = {**payload, "gemini_model": "gemini-3-flash-preview"}
+    with _gemini_worker_overrides(visual_payload):
+        visual_raw = asyncio.run(
+            gemini_video_analyzer.analyze_youtube_with_gemini(
+                str(evidence.get("content_url") or ""),
+                str(evidence.get("title") or ""),
+                str(evidence.get("creator_handle") or ""),
+                schema_version="v2",
+                performance_context=performance,
+            )
+        )
+    if visual_raw.get("analyzed"):
+        visual_raw["model"] = "gemini-3-flash-preview"
+        visual_raw["method"] = "gemini_direct_gemini-3-flash-preview"
+    visual_cost, visual_basis, visual_tokens_in, visual_tokens_out = _gemini_cost(visual_raw, preflight_cost)
+    _record_gemini_cost(
+        job=job,
+        payload=payload,
+        raw=visual_raw,
+        cost=visual_cost,
+        cost_basis=visual_basis,
+        tokens_in=visual_tokens_in,
+        tokens_out=visual_tokens_out,
+        latency_ms=0,
+        preflight_cost=preflight_cost,
+    )
+    if not visual_raw.get("analyzed"):
+        raise RuntimeError(f"Gemini visual pass failed: {visual_raw.get('error') or 'not_analyzed'}")
+
+    v2 = visual_raw.get("video_analysis_v2") if isinstance(visual_raw.get("video_analysis_v2"), dict) else {}
+    layer1 = v2.get("layer1_visual_content") if isinstance(v2.get("layer1_visual_content"), dict) else {}
+    with _extract_keyframes_for_qa(evidence, layer1, limit=6, temp_prefix="vkpi-scheme3b-video-") as qa_frames:
+        keyframe_requests = qa_frames["keyframe_requests"]
+        frame_meta = qa_frames["frame_meta"]
+        download = qa_frames["download"]
+        judgment_raw = asyncio.run(
+            gemini_video_analyzer.analyze_v2_judgment_with_anthropic_keyframes(
+                layer1_visual_content=layer1,
+                keyframes=qa_frames["frames"],
+                title=str(evidence.get("title") or ""),
+                performance_context=performance,
+                model_name="claude-opus-4-8",
+            )
+        )
+    judgment_cost, judgment_basis, judgment_tokens_in, judgment_tokens_out = _anthropic_cost(judgment_raw, anthropic_estimated_cost)
+    _record_anthropic_cost(
+        job=job,
+        payload=payload,
+        raw=judgment_raw,
+        cost=judgment_cost,
+        cost_basis=judgment_basis,
+        tokens_in=judgment_tokens_in,
+        tokens_out=judgment_tokens_out,
+        latency_ms=0,
+        preflight_cost=anthropic_estimated_cost,
+    )
+    if not judgment_raw.get("analyzed"):
+        raise RuntimeError(f"Anthropic keyframe judgment failed: {judgment_raw.get('error') or 'not_analyzed'}")
+
+    latency_ms = int((time.monotonic() - started) * 1000)
+    total_cost = round(visual_cost + judgment_cost, 6)
+    raw = {
+        **judgment_raw,
+        "method": "gemini_flash_claude_judge",
+        "model": "gemini-3-flash-preview+claude-opus-4-8",
+        "visual_pass": visual_raw,
+        "cost_segments": [
+            {
+                "stage": "visual_video_pass",
+                "provider": "gemini",
+                "model": "gemini-3-flash-preview",
+                "cost_usd": visual_cost,
+                "cost_basis": visual_basis,
+                "usage_metadata": visual_raw.get("usage_metadata") if isinstance(visual_raw.get("usage_metadata"), dict) else {},
+            },
+            {
+                "stage": "judgment_pass",
+                "provider": "anthropic",
+                "model": "claude-opus-4-8",
+                "cost_usd": judgment_cost,
+                "cost_basis": judgment_basis,
+                "usage_metadata": judgment_raw.get("usage_metadata") if isinstance(judgment_raw.get("usage_metadata"), dict) else {},
+            },
+        ],
+        "frame_extraction": {
+            "requested": keyframe_requests,
+            "extracted_count": len(frame_meta),
+            "frames": frame_meta,
+            "download_bytes": int(download.get("bytes") or 0),
+            "temporary_files_cleaned": True,
+        },
+    }
+    _write_gemini_cache(
+        conn,
+        job=job,
+        payload=payload,
+        evidence=evidence,
+        raw=raw,
+        cost=total_cost,
+        cost_basis="gemini_anthropic_usage_metadata_segmented_model_rate",
+        preflight_cost=preflight_cost + anthropic_estimated_cost,
+        latency_ms=latency_ms,
+        derive_method="gemini_video_v2_flash_claude_judge",
+    )
+
+
+def _process_gemini_video(
+    conn: psycopg.Connection[Any],
+    job: dict[str, Any],
+    payload: dict[str, Any],
+    preflight_cost: float,
+) -> None:
+    target_type, target_id = _target(payload)
+    derive_method = _derive_method(payload)
+    if target_type != "video":
+        _block_job(conn, int(job["id"]), "unsupported_gemini_target_type", {"target_type": target_type})
+        return
+    evidence = _load_video_evidence(conn, target_id)
+    platform = _platform_from_content_url(str(evidence.get("content_url") or ""))
+    if platform == "unsupported":
+        _block_job(conn, int(job["id"]), "unsupported_platform", {"source_url_host": _url_host(str(evidence.get("content_url") or ""))})
+        return
+    if (
+        platform in {"instagram", "tiktok"}
+        and derive_method not in GEMINI_VIDEO_V2_DERIVE_METHODS
+        and derive_method not in GEMINI_VIDEO_FINAL_DERIVE_METHODS
+    ):
+        _block_job(conn, int(job["id"]), "unsupported_media_derive_method", {"platform": platform, "derive_method": derive_method})
+        return
+    if derive_method == FINAL_V1_KEYFRAME_QA_DERIVE_METHOD:
+        _process_gemini_video_final_v1_keyframe_qa(conn, job, payload, evidence, preflight_cost)
+        return
+    if derive_method == "gemini_video_v2_flash_pro_judge":
+        _process_gemini_video_flash_pro_judge(conn, job, payload, evidence, preflight_cost)
+        return
+    if derive_method == "gemini_video_v2_flash_gpt55_judge":
+        _process_gemini_video_flash_gpt55_judge(conn, job, payload, evidence, preflight_cost)
+        return
+    if derive_method == "gemini_video_v2_flash_claude_judge":
+        _process_gemini_video_flash_claude_judge(conn, job, payload, evidence, preflight_cost)
+        return
+    logger.info(
+        "apify_jobs gemini video start | job_id=%s target_id=%s url=%s",
+        job.get("id"),
+        target_id,
+        str(evidence.get("content_url") or "")[:120],
+    )
+    started = time.monotonic()
+    analyzer_payload = payload
+    if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS:
+        analyzer_payload = {
+            **payload,
+            "gemini_final_v1_models": gemini_video_analyzer.final_v1_gemini_models(
+                payload.get("gemini_final_v1_models") or FINAL_V1_GEMINI_MODELS
+            ),
+        }
+    if platform in {"instagram", "tiktok"}:
+        resolved = _resolve_video_media(evidence)
+        if str(resolved.get("status") or "") == "blocked":
+            _block_job(conn, int(job["id"]), str(resolved.get("reason") or "media_resolve_blocked"), resolved)
+            return
+        if not resolved.get("ok"):
+            raise RuntimeError(f"media_resolve_failed: {resolved.get('reason') or platform}")
+        with tempfile.TemporaryDirectory(prefix="vkpi-analysis-video-") as tmpdir:
+            download = download_direct_video_url(
+                str(resolved.get("direct_video_url") or ""),
+                tmpdir,
+                referer=str(evidence.get("content_url") or ""),
+            )
+            if not download.get("success") or not download.get("path"):
+                # Point 8: a terminal precheck verdict (404/403/410/451) means the
+                # direct URL is confidently unavailable. Re-raise its bare reason —
+                # which carries a content_* marker — instead of the
+                # "direct_video_download_failed:" prefix, so _error_category routes
+                # it to content_unavailable/_restricted/_blocked (a terminal,
+                # non-retried bucket) rather than the retryable "download" bucket.
+                if download.get("precheck_terminal"):
+                    raise RuntimeError(str(download.get("error") or f"content unavailable: {platform}"))
+                raise RuntimeError(f"direct_video_download_failed: {download.get('error') or platform}")
+            local_schema = "final_v1" if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS else "v2"
+            analysis_context = _video_final_context(evidence) if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS else _video_performance_context(evidence)
+            raw = _run_gemini_analyzer_with_timeout(
+                {
+                    **analyzer_payload,
+                    "mode": "local",
+                    "video_path": str(download["path"]),
+                    "title": str(evidence.get("title") or ""),
+                    "creator_handle": str(evidence.get("creator_handle") or ""),
+                    "schema_version": local_schema,
+                    "performance_context": analysis_context,
+                },
+                job_id=job.get("id"),
+                target_id=target_id,
+                platform=platform,
+            )
+            raw["media_resolution"] = {
+                "platform": platform,
+                "source_url_host": _url_host(str(evidence.get("content_url") or "")),
+                "direct_video_url_host": resolved.get("direct_video_url_host"),
+                "status": resolved.get("status"),
+            }
+            raw["local_video_input"] = {
+                "download_bytes": int(download.get("bytes") or 0),
+                "temporary_files_cleaned": True,
+                "download_error": download.get("error"),
+            }
+            # C3:临时目录删除前,把这份已下载、已被 Gemini 分析的字节登记进视频缓存(传 R2),
+            # 令 KOL 详情页 cached_video_url 有值、视频可播。失败仅告警,不影响分析结果。
+            _warm_video_to_r2_from_local(
+                job_id=job.get("id"),
+                platform=platform,
+                content_url=str(evidence.get("content_url") or ""),
+                direct_video_url=str(resolved.get("direct_video_url") or ""),
+                local_path=str(download.get("path") or ""),
+            )
+    else:
+        analysis_context = _video_final_context(evidence) if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS else _video_performance_context(evidence)
+        raw = _run_gemini_analyzer_with_timeout(
+            {
+                **analyzer_payload,
+                "mode": "youtube",
+                "url": str(evidence.get("content_url") or ""),
+                "title": str(evidence.get("title") or ""),
+                "creator_handle": str(evidence.get("creator_handle") or ""),
+                "schema_version": "final_v1"
+                if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS
+                else ("v2" if derive_method in GEMINI_VIDEO_V2_DERIVE_METHODS else "legacy"),
+                "performance_context": analysis_context
+                if derive_method in GEMINI_VIDEO_V2_DERIVE_METHODS or derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS
+                else None,
+            },
+            job_id=job.get("id"),
+            target_id=target_id,
+            platform=platform,
+        )
+    latency_ms = int((time.monotonic() - started) * 1000)
+    logger.info(
+        "apify_jobs gemini video returned | job_id=%s analyzed=%s method=%s latency_ms=%s",
+        job.get("id"),
+        bool(raw.get("analyzed")),
+        raw.get("method"),
+        latency_ms,
+    )
+    cost, cost_basis, tokens_in, tokens_out = _gemini_cost(raw, preflight_cost)
+    ledger = _record_gemini_cost(
+        job=job,
+        payload=payload,
+        raw=raw,
+        cost=cost,
+        cost_basis=cost_basis,
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
+        latency_ms=latency_ms,
+        preflight_cost=preflight_cost,
+    )
+    if not raw.get("analyzed"):
+        raw_error = str(raw.get("error") or "not_analyzed")
+        if raw_error == "gemini_call_timeout":
+            raise RuntimeError("gemini_call_timeout")
+        raise RuntimeError(f"Gemini video analysis failed: {raw_error}")
+    triggered_by = payload.get("triggered_by_user_id", payload.get("user_id"))
+    triggered_by_user_id = _int_or_none(triggered_by)
+    shaped = _shape_gemini_result(
+        job=job,
+        evidence=evidence,
+        raw={**raw, "ledger": ledger},
+        cost=cost,
+        cost_basis=cost_basis,
+        preflight_cost=preflight_cost,
+        latency_ms=latency_ms,
+        derive_method=derive_method,
+    )
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO vkpi_analysis_cache (
+                  target_type, target_id, model, derive_method, result, cost,
+                  status, triggered_by_user_id, created_at, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s::jsonb, %s, 'ready', %s, NOW(), NOW())
+                ON CONFLICT (target_type, target_id, derive_method)
+                DO UPDATE SET
+                  model = EXCLUDED.model,
+                  result = EXCLUDED.result,
+                  cost = EXCLUDED.cost,
+                  status = 'ready',
+                  triggered_by_user_id = EXCLUDED.triggered_by_user_id,
+                  updated_at = NOW()
+                RETURNING id
+                """,
+                (
+                    target_type,
+                    target_id,
+                    str(raw.get("model") or raw.get("method") or "gemini_video"),
+                    derive_method,
+                    _json(shaped),
+                    cost,
+                    triggered_by_user_id,
+                ),
+            )
+            cache_row = cur.fetchone()
+            cache_id = int(cache_row[0]) if cache_row else None
+            cur.execute(
+                """
+                UPDATE apify_jobs
+                SET status='done',
+                    last_error=NULL,
+                    last_error_category=NULL,
+                    next_retry_at=NULL,
+                    updated_at=NOW()
+                WHERE id=%s
+                """,
+                (job["id"],),
+            )
+    deep_result = _sync_deep_analysis_result_from_cache(
+        conn,
+        cache_id=cache_id,
+        derive_method=derive_method,
+        job_id=int(job["id"]),
+    )
+    account_extract_job = None
+    content_fit_job = None
+    try:
+        account_extract_job = _enqueue_account_dossier_extract_after_final_v1(
+            conn,
+            job_id=int(job["id"]),
+            deep_result=deep_result,
+        )
+        # QA P0 修:主成功路径补内容契合链式入队(此前只接在 cache-skip 路径,主路径漏接 → 发现的新人
+        # 首次 final_v1 完成拿不到内容契合)。QA P1 修:连同 account_dossier 一并兜进 try/except,
+        # 入队异常仅 warning、绝不冒泡把 final_v1 标 failed(『失败不阻断 final_v1』)。
+        content_fit_job = _enqueue_content_fit_after_final_v1(
+            conn,
+            job_id=int(job["id"]),
+            deep_result=deep_result,
+        )
+    except Exception as exc:
+        logger.warning("final_v1 followup enqueue failed (non-fatal) | job_id=%s error=%s", job.get("id"), exc)
+    analysis_summary = _search_session_analysis_summary_from_result(
+        cache_id=cache_id,
+        derive_method=derive_method,
+        target_type=target_type,
+        target_id=target_id,
+        evidence=evidence,
+        result=shaped,
+        cost=cost,
+    )
+    if analysis_summary and deep_result:
+        analysis_summary["deep_result"] = deep_result
+    if analysis_summary and account_extract_job:
+        analysis_summary["account_dossier_extract_job"] = account_extract_job
+    _sync_search_session_job(
+        conn,
+        int(job["id"]),
+        raw_status="done",
+        analysis_summary=analysis_summary,
+    )
+
+
+# 原文件留下的常量/小工具:放模块底部 import(避免循环导入;调用点均在函数体内、运行期才解析)。
+from app.workers.apify_jobs_worker import (  # noqa: E402
+    FINAL_V1_GEMINI_MODELS,
+    FINAL_V1_KEYFRAME_QA_DERIVE_METHOD,
+    FINAL_V1_KEYFRAME_QA_MODEL,
+    GEMINI_VIDEO_FINAL_DERIVE_METHODS,
+    GEMINI_VIDEO_V2_DERIVE_METHODS,
+    LLM_BUDGET_SCOPE,
+    _block_job,
+    _extract_keyframes_for_qa,
+    _gemini_worker_overrides,
+    _load_video_evidence,
+    _log_budget_preflight_record_only,
+    _provider_allowed,
+    _provider_budget_preflight,
+    _resolve_video_media,
+    _run_gemini_analyzer_with_timeout,
+    _warm_video_to_r2_from_local,
+)

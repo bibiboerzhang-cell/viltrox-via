@@ -3,162 +3,50 @@
 This module records smart URL/profile/text recall orchestration state. It only
 writes the session tables introduced by migration 103 and must not update
 vkpi_kol_pool scoring fields.
+
+Pure serde/normalization helpers live in ``search_sessions_serde`` and the
+attach-result builders live in ``search_sessions_attach``; both are re-exported
+below so all existing call sites keep importing from ``search_sessions``.
 """
 from __future__ import annotations
 
-import json
-from datetime import date, datetime
-from decimal import Decimal
+from datetime import datetime
 from typing import Any
 
 from app.db.connection import get_conn
 
+# Re-export pure serde/normalization helpers (behavior-preserving move).
+from app.domains.kol.search_sessions_serde import (
+    ITEM_STATUSES,
+    SESSION_QUERY_TYPES,
+    SESSION_STATUSES,
+    _compact_flow,
+    _compact_video_batch_flow,
+    _dict,
+    _float_or_none,
+    _int_or_none,
+    _item_counts,
+    _json_dumps,
+    _jsonable,
+    _list,
+    _loads,
+    _normalize_query_type,
+    _normalize_status,
+    _row_to_item,
+    _row_to_session,
+    _staff_user_id,
+    _text,
+)
 
-SESSION_QUERY_TYPES = {"url_video", "url_profile", "text_recall", "unknown"}
-SESSION_STATUSES = {"planned", "running", "ready", "partial", "failed", "cancelled"}
-ITEM_STATUSES = {
-    "planned",
-    "identified",
-    "matched",
-    "queued",
-    "running",
-    "ready",
-    "partial",
-    "failed",
-    "skipped",
-    "already_queued",
-    "already_analyzed",
-    "unknown",
-}
-
-
-def _text(value: Any) -> str:
-    return str(value or "").strip()
-
-
-def _int_or_none(value: Any) -> int | None:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if parsed > 0 else None
-
-
-def _float_or_none(value: Any) -> float | None:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return None
-    return parsed
-
-
-def _dict(value: Any) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
-
-
-def _list(value: Any) -> list[Any]:
-    return value if isinstance(value, list) else []
-
-
-def _jsonable(value: Any) -> Any:
-    if isinstance(value, Decimal):
-        return float(value)
-    if isinstance(value, (datetime, date)):
-        return value.isoformat()
-    if isinstance(value, dict):
-        return {str(key): _jsonable(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_jsonable(item) for item in value]
-    return value
-
-
-def _loads(value: Any, default: Any) -> Any:
-    if isinstance(value, (dict, list)):
-        return value
-    try:
-        parsed = json.loads(value or "")
-    except Exception:
-        return default
-    return parsed if parsed is not None else default
-
-
-def _json_dumps(value: Any) -> str:
-    return json.dumps(_jsonable(value or {}), ensure_ascii=False, default=str)
-
-
-def _staff_user_id(staff: dict[str, Any] | None) -> int | None:
-    staff = staff or {}
-    for key in ("user_id", "id", "staff_id"):
-        parsed = _int_or_none(staff.get(key))
-        if parsed:
-            return parsed
-    return None
-
-
-def _normalize_query_type(value: Any) -> str:
-    text = _text(value).lower()
-    return text if text in SESSION_QUERY_TYPES else "unknown"
-
-
-def _normalize_status(value: Any, *, item: bool = False) -> str:
-    text = _text(value).lower()
-    allowed = ITEM_STATUSES if item else SESSION_STATUSES
-    if text in allowed:
-        return text
-    if text in {"dry_run_ready", "resolved"}:
-        return "identified" if item else "ready"
-    if text in {"done", "completed"}:
-        return "ready"
-    if text in {"would_create", "would_reuse", "created", "reused"}:
-        return "matched" if item else "ready"
-    if text in {"error", "crawl_failed", "profile_crawl_failed", "creator_unresolved"}:
-        return "failed"
-    if text in {"unsupported_platform", "skipped_tiktok_video_resolver_known_issue"}:
-        return "skipped" if item else "partial"
-    return "unknown" if item else "planned"
-
-
-def _row_to_session(row: Any) -> dict[str, Any]:
-    item = dict(row)
-    return _jsonable(
-        {
-            "id": item.get("id"),
-            "query_text": item.get("query_text"),
-            "query_type": item.get("query_type"),
-            "source": item.get("source"),
-            "status": item.get("status"),
-            "created_by": item.get("created_by"),
-            "input_payload": _loads(item.get("input_payload_json"), {}),
-            "result_summary": _loads(item.get("result_summary_json"), {}),
-            # R1:人审锁定的候选 kol_pool_id(迁移 176;旧行/缺列回退 [])。
-            "approved_kol_ids": _loads(item.get("approved_kol_ids"), []),
-            "created_at": item.get("created_at"),
-            "updated_at": item.get("updated_at"),
-        }
-    )
-
-
-def _row_to_item(row: Any) -> dict[str, Any]:
-    item = dict(row)
-    return _jsonable(
-        {
-            "id": item.get("id"),
-            "session_id": item.get("session_id"),
-            "dedupe_key": item.get("dedupe_key"),
-            "item_type": item.get("item_type"),
-            "status": item.get("status"),
-            "stage": item.get("stage"),
-            "rank": item.get("rank"),
-            "score": item.get("score"),
-            "kol_pool_id": item.get("kol_pool_id"),
-            "evidence_id": item.get("evidence_id"),
-            "job_id": item.get("job_id"),
-            "source_url": item.get("source_url"),
-            "payload": _loads(item.get("payload_json"), {}),
-            "created_at": item.get("created_at"),
-            "updated_at": item.get("updated_at"),
-        }
-    )
+# Re-export attach-result builders (behavior-preserving move).
+from app.domains.kol.search_sessions_attach import (
+    _link_job_payloads,
+    _session_status_from_url_result,
+    _url_result_item,
+    attach_new_discovery_result,
+    attach_recall_result,
+    attach_url_result,
+)
 
 
 def create_session(
@@ -801,17 +689,6 @@ def mark_items_profile_cancelled(
     }
 
 
-def _item_counts(items: list[dict[str, Any]]) -> dict[str, Any]:
-    by_status: dict[str, int] = {}
-    by_stage: dict[str, int] = {}
-    for item in items:
-        status = _text(item.get("status")) or "unknown"
-        stage = _text(item.get("stage")) or "identified"
-        by_status[status] = by_status.get(status, 0) + 1
-        by_stage[stage] = by_stage.get(stage, 0) + 1
-    return {"by_status": by_status, "by_stage": by_stage}
-
-
 def _update_session(
     conn: Any,
     session_id: int,
@@ -918,344 +795,3 @@ def ensure_session_for_result(
         )
     return None
 
-
-def attach_url_result(session_id: int, result: dict[str, Any]) -> dict[str, Any]:
-    item = _url_result_item(int(session_id), result)
-    session_status = _session_status_from_url_result(result)
-    summary = {
-        "kind": "url_deep_crawl",
-        "url_type": result.get("url_type"),
-        "platform": result.get("platform"),
-        "execute": bool(result.get("execute")),
-        "in_pool": bool(result.get("in_pool")),
-        "matched_kol_pool_id": result.get("matched_kol_pool_id"),
-        "item_status": item.get("status"),
-        "viltrox_fit_score_untouched": result.get("viltrox_fit_score_untouched"),
-    }
-    recorded = record_items(int(session_id), [item], status=session_status, summary=summary)
-    recorded["jobs_linked"] = _link_job_payloads(int(session_id), recorded.get("items") or [])
-    return recorded
-
-
-def attach_recall_result(session_id: int, result: dict[str, Any]) -> dict[str, Any]:
-    items: list[dict[str, Any]] = []
-    rank = 1
-    buckets = _dict(result.get("buckets"))
-    for bucket_name in ("creator", "reviewer"):
-        for raw in _list(buckets.get(bucket_name)):
-            if not isinstance(raw, dict):
-                continue
-            kol_pool_id = _int_or_none(raw.get("kol_pool_id") or raw.get("id"))
-            source_url = _text(raw.get("profile_url") or raw.get("url"))
-            score = _float_or_none(raw.get("recall_rank_score") or raw.get("vector_score"))
-            items.append(
-                {
-                    "dedupe_key": f"recall:{kol_pool_id or source_url or rank}",
-                    "item_type": "recall_candidate",
-                    "status": "matched",
-                    "stage": "identified",
-                    "rank": rank,
-                    "score": score,
-                    "kol_pool_id": kol_pool_id,
-                    "source_url": source_url,
-                    "payload": {
-                        "bucket": bucket_name,
-                        "handle": raw.get("handle"),
-                        "display_name": raw.get("display_name"),
-                        "platform": raw.get("platform"),
-                        "profile_type": raw.get("profile_type"),
-                        "followers": raw.get("followers"),
-                        # 问题1 头像修:recall_candidate 会话项此前漏写 avatar_url(new_creator/existing_kol 都写了),
-                        # 致历史回填掉头像。透传 _build_item 已填的 avatar_url。
-                        "avatar_url": raw.get("avatar_url"),
-                        "recall_rank_score": raw.get("recall_rank_score"),
-                        "vector_score": raw.get("vector_score"),
-                        "type_score": raw.get("type_score"),
-                        "evidence": raw.get("evidence"),
-                    },
-                }
-            )
-            rank += 1
-    summary = {
-        "kind": "kol_recall",
-        "items_written": len(items),
-        "diagnostics": result.get("diagnostics"),
-        "query": result.get("query"),
-    }
-    return record_items(int(session_id), items, status="ready", summary=summary)
-
-
-def attach_new_discovery_result(session_id: int, result: dict[str, Any]) -> dict[str, Any]:
-    """Attach platform-discovery candidates to an existing smart-search session."""
-    items: list[dict[str, Any]] = []
-    rank = 1
-    for raw in _list(result.get("existing_matches")):
-        if not isinstance(raw, dict):
-            continue
-        kol_pool_id = _int_or_none(raw.get("history_kol_pool_id") or _dict(raw.get("historical_match")).get("kol_pool_id"))
-        source_url = _text(raw.get("channel_url") or raw.get("source_url"))
-        items.append(
-            {
-                "dedupe_key": f"existing:{kol_pool_id or source_url or rank}",
-                "item_type": "existing_kol",
-                "status": "matched",
-                "stage": "identified",
-                "rank": rank,
-                "score": _float_or_none(raw.get("history_match_confidence") or _dict(raw.get("historical_match")).get("match_confidence")),
-                "kol_pool_id": kol_pool_id,
-                "source_url": source_url,
-                "payload": {
-                    "source": "platform_discovery",
-                    "platform": raw.get("platform"),
-                    "handle": raw.get("handle"),
-                    "channel_name": raw.get("channel_name"),
-                    "sample_title": raw.get("sample_title"),
-                    "source_url": raw.get("source_url"),
-                    "channel_url": raw.get("channel_url"),
-                    "avatar_url": raw.get("avatar_url"),
-                    "historical_match": raw.get("historical_match"),
-                },
-            }
-        )
-        rank += 1
-    for raw in _list(result.get("new_creators")):
-        if not isinstance(raw, dict):
-            continue
-        source_url = _text(raw.get("channel_url") or raw.get("source_url"))
-        handle = _text(raw.get("handle") or raw.get("channel_name"))
-        platform = _text(raw.get("platform") or (result.get("platforms") or [""])[0])
-        items.append(
-            {
-                "dedupe_key": f"new:{platform}:{handle or source_url or rank}",
-                "item_type": "new_creator",
-                "status": "identified",
-                "stage": "identified",
-                "rank": rank,
-                "score": _float_or_none(raw.get("score") or raw.get("relevance_score") or raw.get("vector_score")),
-                "source_url": source_url,
-                "payload": {
-                    "source": "platform_discovery",
-                    "platform": platform,
-                    "handle": raw.get("handle"),
-                    "channel_name": raw.get("channel_name"),
-                    "sample_title": raw.get("sample_title"),
-                    "source_url": raw.get("source_url"),
-                    "channel_url": raw.get("channel_url"),
-                    "avatar_url": raw.get("avatar_url"),
-                    "thumbnail_url": raw.get("thumbnail_url"),
-                    "views": raw.get("views"),
-                    "likes": raw.get("likes"),
-                    "comments": raw.get("comments"),
-                    "avg_views": raw.get("avg_views"),
-                    "published": raw.get("published"),
-                    "search_query": raw.get("search_query") or result.get("query"),
-                    "market": raw.get("market") or result.get("market"),
-                    # 独立展示信号(绝不并入 viltrox_fit_score):persona 相关度 + 可解释命中。
-                    "relevance_score": raw.get("relevance_score"),
-                    "relevance_tier": raw.get("relevance_tier"),
-                    "relevance_hits": raw.get("relevance_hits"),
-                },
-            }
-        )
-        rank += 1
-
-    existing_summary: dict[str, Any] = {}
-    try:
-        existing_summary = _dict(get_session(int(session_id)).get("result_summary"))
-    except Exception:
-        existing_summary = {}
-    discovery_summary = {
-        "kind": "platform_discovery",
-        "query": result.get("query"),
-        "status": result.get("status"),
-        "platforms": result.get("platforms"),
-        "counts": result.get("counts"),
-        "provider_calls": result.get("provider_calls"),
-        "platform_results": result.get("platform_results"),
-        "errors": result.get("errors"),
-        "viltrox_fit_score_untouched": True,
-    }
-    summary = {
-        **existing_summary,
-        "new_discovery": discovery_summary,
-    }
-    status = "ready"
-    if result.get("status") in {"partial", "failed"}:
-        status = "partial"
-    recorded = record_items(int(session_id), items, status=status, summary=summary)
-    recorded["new_discovery"] = discovery_summary
-    return recorded
-
-
-def _session_status_from_url_result(result: dict[str, Any]) -> str:
-    if not result.get("execute"):
-        return "ready"
-    video_flow = _dict(result.get("video_flow"))
-    profile_flow = _dict(result.get("profile_flow"))
-    status = _text(video_flow.get("status") or profile_flow.get("status") or result.get("status")).lower()
-    if status == "queued":
-        return "running"
-    if status in {"already_queued"}:
-        return "running"
-    if status in {"already_analyzed", "ready"}:
-        return "ready"
-    if status in {"failed", "creator_unresolved", "profile_crawl_failed", "crawl_failed"}:
-        return "failed"
-    return "partial" if result.get("execute") else "ready"
-
-
-def _url_result_item(session_id: int, result: dict[str, Any]) -> dict[str, Any]:
-    del session_id
-    url = _dict(result.get("url"))
-    video_flow = _dict(result.get("video_flow"))
-    profile_flow = _dict(result.get("profile_flow"))
-    evidence_result = _dict(video_flow.get("evidence_result"))
-    enqueue_result = _dict(video_flow.get("enqueue_result"))
-    enqueue_job = _dict(enqueue_result.get("job"))
-    normalized_url = _text(url.get("normalized") or url.get("input") or result.get("source_url"))
-    url_type = _text(result.get("url_type"))
-    item_type = "url_video" if url_type == "video" else "url_profile" if url_type == "profile" else "unknown"
-    kol_pool_id = _int_or_none(video_flow.get("kol_pool_id") or profile_flow.get("kol_pool_id") or result.get("matched_kol_pool_id"))
-    evidence_id = _int_or_none(video_flow.get("evidence_id") or evidence_result.get("evidence_id"))
-    job_id = _int_or_none(enqueue_job.get("id") or enqueue_result.get("id") or enqueue_result.get("job_id"))
-    status = _text(video_flow.get("status") or profile_flow.get("status"))
-    if not status:
-        status = "matched" if result.get("in_pool") else "identified"
-    if status == "ready" and not result.get("execute"):
-        status = "identified"
-    stage = "analysis" if status in {"queued", "already_queued", "already_analyzed"} else "identified"
-    if profile_flow and item_type == "url_profile":
-        stage = "profile"
-    return {
-        "dedupe_key": f"{item_type}:{normalized_url or result.get('video_id') or result.get('handle') or 'unknown'}",
-        "item_type": item_type,
-        "status": _normalize_status(status, item=True),
-        "stage": stage,
-        "rank": 1,
-        "kol_pool_id": kol_pool_id,
-        "evidence_id": evidence_id,
-        "job_id": job_id,
-        "source_url": normalized_url,
-        "payload": {
-            "url_type": result.get("url_type"),
-            "platform": result.get("platform"),
-            "video_id": result.get("video_id"),
-            "handle": result.get("handle"),
-            "channel_id": result.get("channel_id"),
-            "creator_identity": result.get("creator_identity") or video_flow.get("creator_identity"),
-            "video_metadata": result.get("video_metadata") or video_flow.get("video_metadata"),
-            "profile_flow": _compact_flow(profile_flow),
-            "video_flow": _compact_flow(video_flow),
-            "in_pool": result.get("in_pool"),
-            "matched_kol_pool_id": result.get("matched_kol_pool_id"),
-            "viltrox_fit_score_untouched": result.get("viltrox_fit_score_untouched") or video_flow.get("viltrox_fit_score_untouched") or profile_flow.get("viltrox_fit_score_untouched"),
-        },
-    }
-
-
-def _link_job_payloads(session_id: int, items: list[dict[str, Any]]) -> int:
-    conn = get_conn()
-    linked = 0
-    for item in items:
-        job_id = _int_or_none(item.get("job_id"))
-        item_id = _int_or_none(item.get("id"))
-        if not job_id:
-            continue
-        row = conn.execute(
-            "SELECT id, payload FROM apify_jobs WHERE id=?",
-            (int(job_id),),
-        ).fetchone()
-        if not row:
-            continue
-        payload = _loads(dict(row).get("payload"), {})
-        if not isinstance(payload, dict):
-            payload = {}
-        payload["search_session_id"] = int(session_id)
-        if item_id:
-            payload["search_session_item_id"] = int(item_id)
-        payload["search_session_item_status"] = item.get("status")
-        payload["search_session_stage"] = item.get("stage")
-        conn.execute(
-            "UPDATE apify_jobs SET payload=?::jsonb WHERE id=?",
-            (_json_dumps(payload), int(job_id)),
-        )
-        linked += 1
-    if linked:
-        conn.commit()
-    return linked
-
-
-def _compact_video_batch_flow(flow: Any) -> dict[str, Any]:
-    if not isinstance(flow, dict):
-        return {}
-    keep = (
-        "enabled",
-        "status",
-        "limit",
-        "requested",
-        "candidate_count",
-        "skipped_by_incremental",
-        "queued",
-        "skipped",
-        "errors",
-        "materialized",
-        "reused",
-        "worker_touched",
-        "viltrox_fit_score_changed_ids",
-        "viltrox_fit_score_untouched",
-    )
-    compact = {key: flow.get(key) for key in keep if key in flow}
-    items: list[dict[str, Any]] = []
-    for raw in _list(flow.get("items"))[:12]:
-        if not isinstance(raw, dict):
-            continue
-        metadata = _dict(raw.get("metadata"))
-        evidence = _dict(raw.get("evidence_result"))
-        enqueue = _dict(raw.get("enqueue_result"))
-        items.append(
-            {
-                "status": raw.get("status"),
-                "error": raw.get("error"),
-                "title": metadata.get("title"),
-                "content_url": metadata.get("content_url"),
-                "evidence_id": evidence.get("evidence_id"),
-                "job_id": _dict(enqueue.get("job")).get("id") or enqueue.get("job_id"),
-            }
-        )
-    if items:
-        compact["items"] = items
-    return compact
-
-
-def _compact_flow(flow: dict[str, Any]) -> dict[str, Any]:
-    if not flow:
-        return {}
-    keep = (
-        "status",
-        "operation",
-        "kol_pool_id",
-        "evidence_id",
-        "run_id",
-        "worker_touched",
-        "llm_calls_performed",
-        "viltrox_fit_score_changed_ids",
-        "viltrox_fit_score_untouched",
-        "writes",
-        "error",
-        "elapsed_ms",
-    )
-    compact = {key: flow.get(key) for key in keep if key in flow}
-    representative = _compact_video_batch_flow(flow.get("representative_video_analysis"))
-    history = _compact_video_batch_flow(flow.get("history_video_evidence"))
-    if representative:
-        compact["representative_video_analysis"] = representative
-    if history:
-        compact["history_video_evidence"] = history
-    if isinstance(flow.get("account_dossier_extract_job"), dict):
-        job = _dict(flow.get("account_dossier_extract_job"))
-        compact["account_dossier_extract_job"] = {
-            key: job.get(key)
-            for key in ("status", "job_id", "kol_pool_id")
-            if key in job
-        }
-    return compact

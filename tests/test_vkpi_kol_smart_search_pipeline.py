@@ -6,8 +6,8 @@ from typing import Any
 
 import pytest
 
-from app.api.routers import vkpi_kol_pool
-from app.domains.kol import profile_discovery
+from app.api.routers import vkpi_kol_pool, vkpi_kol_pool_search
+from app.domains.kol import profile_discovery, profile_discovery_queue
 
 
 class _FakeConn:
@@ -43,19 +43,20 @@ def test_enqueue_smart_search_profile_advance_records_session_job_without_provid
     conn = _FakeConn()
     summary_updates: list[dict[str, Any]] = []
 
-    monkeypatch.setattr(profile_discovery, "get_conn", lambda: conn)
+    # 重构后 enqueue_smart_search_profile_advance 搬到 profile_discovery_queue;get_conn 在该模块命名空间读取。
+    monkeypatch.setattr(profile_discovery_queue, "get_conn", lambda: conn)
     monkeypatch.setattr(
-        profile_discovery.search_sessions,
+        profile_discovery_queue.search_sessions,
         "ensure_session_for_result",
         lambda **_kwargs: {"id": 123, "status": "planned"},
     )
     monkeypatch.setattr(
-        profile_discovery.search_sessions,
+        profile_discovery_queue.search_sessions,
         "update_session_result_summary",
         lambda session_id, **kwargs: summary_updates.append({"session_id": session_id, **kwargs}),
     )
     monkeypatch.setattr(
-        profile_discovery.search_sessions,
+        profile_discovery_queue.search_sessions,
         "get_session",
         lambda session_id: {"id": session_id, "status": "running", "items": []},
     )
@@ -119,11 +120,12 @@ def test_smart_search_profile_advance_job_queues_pipeline_instead_of_calling_rec
         called["recall"] += 1
         raise AssertionError("queue_pipeline=true must not call recall synchronously")
 
-    monkeypatch.setattr(vkpi_kol_pool.kol_profile_discovery, "enqueue_smart_search_profile_advance", fake_enqueue)
-    monkeypatch.setattr(vkpi_kol_pool.kol_profile_recall, "recall_kol_profiles", fail_recall)
+    # 重构后 smart_kol_search_profile_advance_job 搬到 vkpi_kol_pool_search;在其命名空间读 kol_profile_discovery/recall。
+    monkeypatch.setattr(vkpi_kol_pool_search.kol_profile_discovery, "enqueue_smart_search_profile_advance", fake_enqueue)
+    monkeypatch.setattr(vkpi_kol_pool_search.kol_profile_recall, "recall_kol_profiles", fail_recall)
 
     result = asyncio.run(
-        vkpi_kol_pool.smart_kol_search_profile_advance_job(
+        vkpi_kol_pool_search.smart_kol_search_profile_advance_job(
             {"input": "找适合闪光灯的 KOL"},
             staff={"id": 42},
         )

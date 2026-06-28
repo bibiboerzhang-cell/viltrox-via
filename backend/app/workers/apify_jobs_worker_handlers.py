@@ -1,0 +1,473 @@
+"""单一 job_type 处理簇(session_advance / 各 _process_* 调度入口),从 apify_jobs_worker.py
+整簇 move 出来。函数体逐字不变 → 行为必然不变;原文件 re-export 兜住所有调用点。
+
+这些 handler 互不依赖原文件留下的名字(其域内 import 均为函数内 lazy import),故本模块
+顶层直接 import 依赖,无循环导入风险。红线:本簇零 fit 写。
+"""
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+
+import psycopg
+from psycopg.rows import dict_row
+
+from app.core.logging import get_logger
+from app.db.connection import db_connection_sync_scope
+from app.domains.kol.account_dossier_extract import upsert_account_dossier_extract
+from app.domains.projects import contracts as project_contracts
+from app.domains.projects import retrospective_aggregate as project_retrospective
+from app.domains.kol import profile_discovery as kol_profile_discovery
+from app.domains.kol import search_sessions as kol_search_sessions
+from app.workers.apify_jobs_worker_helpers import (
+    _int_or_none,
+    _json,
+)
+
+
+logger = get_logger(__name__)
+
+
+def _process_session_advance(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
+    session_id = _int_or_none(payload.get("search_session_id") or payload.get("target_id"))
+    if not session_id:
+        raise ValueError("session_advance payload must include search_session_id")
+    try:
+        kol_search_sessions.update_session_result_summary(
+            int(session_id),
+            status="running",
+            summary_patch={
+                "profile_batch_advance_job": {
+                    "status": "running",
+                    "job_id": int(job["id"]),
+                    "viltrox_fit_score_untouched": True,
+                }
+            },
+        )
+        kol_search_sessions.mark_items_profile_running(
+            int(session_id),
+            job_id=int(job["id"]),
+            reason="session_advance_worker_claimed",
+        )
+        result = kol_profile_discovery.advance_search_session_items(
+            session_id=int(session_id),
+            body={**payload, "execute": True},
+        )
+    except Exception as exc:
+        try:
+            kol_search_sessions.update_session_result_summary(
+                int(session_id),
+                status="failed",
+                summary_patch={
+                    "profile_batch_advance_job": {
+                        "status": "failed",
+                        "job_id": int(job["id"]),
+                        "error": str(exc)[:1000],
+                        "viltrox_fit_score_untouched": True,
+                    }
+                },
+            )
+        except Exception as inner_exc:
+            logger.warning("session_advance failure summary update failed | job_id=%s error=%s", job.get("id"), inner_exc)
+        raise
+
+    job_status = "failed" if result.get("status") == "failed" else "done"
+    last_error = "" if job_status == "done" else str(result.get("status") or "session_advance_failed")
+    payload["session_advance_result"] = {
+        "status": result.get("status"),
+        "selected": result.get("selected"),
+        "eligible": result.get("eligible"),
+        "overflow": result.get("overflow"),
+        "counts": result.get("counts"),
+        "viltrox_fit_score_changed_ids": result.get("viltrox_fit_score_changed_ids"),
+        "viltrox_fit_score_untouched": result.get("viltrox_fit_score_untouched"),
+    }
+    payload["search_session_last_job_status"] = job_status
+    payload["search_session_last_error"] = last_error
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE apify_jobs
+                SET status=%s,
+                    last_error=NULLIF(%s, ''),
+                    payload=%s::jsonb,
+                    updated_at=NOW()
+                WHERE id=%s
+                """,
+                (job_status, last_error[:2000], _json(payload), int(job["id"])),
+            )
+
+
+def _process_smart_search_profile_advance(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
+    session_id = _int_or_none(payload.get("search_session_id") or payload.get("target_id"))
+    if not session_id:
+        raise ValueError("smart_search_profile_advance payload must include search_session_id")
+    try:
+        kol_search_sessions.update_session_result_summary(
+            int(session_id),
+            status="running",
+            summary_patch={
+                "smart_search_profile_advance_job": {
+                    "status": "running",
+                    "job_id": int(job["id"]),
+                    "query_text": payload.get("query_text"),
+                    "viltrox_fit_score_untouched": True,
+                }
+            },
+        )
+        result = asyncio.run(
+            kol_profile_discovery.execute_smart_search_profile_advance_pipeline(
+                session_id=int(session_id),
+                payload={**payload, "job_id": int(job["id"])},
+            )
+        )
+    except Exception as exc:
+        try:
+            kol_search_sessions.update_session_result_summary(
+                int(session_id),
+                status="failed",
+                summary_patch={
+                    "smart_search_profile_advance_job": {
+                        "status": "failed",
+                        "job_id": int(job["id"]),
+                        "query_text": payload.get("query_text"),
+                        "error": str(exc)[:1000],
+                        "viltrox_fit_score_untouched": True,
+                    }
+                },
+            )
+        except Exception as inner_exc:
+            logger.warning("smart_search_profile_advance failure summary update failed | job_id=%s error=%s", job.get("id"), inner_exc)
+        raise
+
+    job_status = "failed" if result.get("status") == "failed" else "done"
+    last_error = "" if job_status == "done" else str(result.get("status") or "smart_search_profile_advance_failed")
+    advance = result.get("advance") if isinstance(result.get("advance"), dict) else {}
+    new_discovery = result.get("new_discovery") if isinstance(result.get("new_discovery"), dict) else {}
+    payload["smart_search_profile_advance_result"] = {
+        "status": result.get("status"),
+        "session_id": result.get("session_id"),
+        "query": result.get("query"),
+        "recall": result.get("recall"),
+        "new_discovery_status": new_discovery.get("status") if new_discovery else "not_requested",
+        "new_discovery_counts": new_discovery.get("counts") if new_discovery else None,
+        "advance_status": advance.get("status"),
+        "advance_selected": advance.get("selected"),
+        "advance_counts": advance.get("counts"),
+        # 诚实信号:LLM planner('llm_plan')vs rule_v0 兜底('rule_v0_fallback'),源自 pipeline 返回。
+        "query_plan_source": result.get("query_plan_source"),
+        "viltrox_fit_score_changed_ids": result.get("viltrox_fit_score_changed_ids"),
+        "viltrox_fit_score_untouched": result.get("viltrox_fit_score_untouched"),
+    }
+    payload["search_session_last_job_status"] = job_status
+    payload["search_session_last_error"] = last_error
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE apify_jobs
+                SET status=%s,
+                    last_error=NULLIF(%s, ''),
+                    payload=%s::jsonb,
+                    updated_at=NOW()
+                WHERE id=%s
+                """,
+                (job_status, last_error[:2000], _json(payload), int(job["id"])),
+            )
+
+
+def _process_account_dossier_extract(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
+    kol_pool_id = _int_or_none(payload.get("target_id") or payload.get("kol_pool_id"))
+    if not kol_pool_id:
+        raise ValueError("account_dossier_extract payload must include target_id")
+    result = upsert_account_dossier_extract(conn, int(kol_pool_id))
+    job_status = "done" if result.get("status") == "ready" else "blocked"
+    last_error = "" if job_status == "done" else str(result.get("reason") or result.get("status") or "account_dossier_extract_not_ready")
+    payload["account_dossier_extract_result"] = result
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE apify_jobs
+                SET status=%s,
+                    last_error=NULLIF(%s, ''),
+                    payload=%s::jsonb,
+                    updated_at=NOW()
+                WHERE id=%s
+                """,
+                (job_status, last_error[:2000], _json(payload), int(job["id"])),
+            )
+
+
+def _resolve_job_staff(conn: psycopg.Connection[Any], payload: dict[str, Any]) -> dict[str, Any]:
+    """Build a staff dict for worker-run domain calls.
+
+    payload carries triggered_by_user_id (a *users.id*), NOT a staff.id. Paths that hit
+    llm_gateway → vkpi_llm_calls.created_by_staff_id (FK → staff.id) need the real staff.id;
+    feeding the user_id there caused job 900's ForeignKeyViolation (user 108 → no staff.id 108;
+    the real staff.id is 84). Resolve user_id → staff.id here. Keep user_id for attribution
+    columns that legitimately store users.id (e.g. vkpi_analysis_cache.triggered_by_user_id).
+    Not-found (non-staff actor, shouldn't reach these endpoints): null out so the FK records NULL
+    rather than re-raising — `workflow.staff_id()` falls back to user_id, so we must drop it too.
+    """
+    user_id = _int_or_none(payload.get("triggered_by_user_id"))
+    resolved = _int_or_none(payload.get("staff_id"))
+    if resolved is None and user_id is not None:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute("SELECT id FROM staff WHERE user_id=%s ORDER BY id LIMIT 1", (user_id,))
+            row = cur.fetchone()
+        if row:
+            resolved = _int_or_none(row.get("id"))
+    if resolved is None:
+        return {"id": None, "staff_id": None, "user_id": None}
+    return {"id": resolved, "staff_id": resolved, "user_id": user_id}
+
+
+def _process_project_contract_extract(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
+    contract_id = _int_or_none(payload.get("target_id"))
+    project_id = _int_or_none(payload.get("project_id"))
+    if not contract_id or not project_id:
+        raise ValueError("project_contract_extract payload must include target_id and project_id")
+    staff = _resolve_job_staff(conn, payload)
+    # contracts.py uses sqlite-compat '?' via its own get_conn(); run inside the sync scope so
+    # placeholders are translated and never touch this worker's raw psycopg connection.
+    # R2 ordering: the core writes domain state (extraction_status='ready'/'failed' + cache)
+    # and commits BEFORE we mark the job done; on failure it re-raises to _fail_job. Re-runs
+    # are idempotent (cache upsert + contract row UPDATE overwrite with the same result).
+    with db_connection_sync_scope():
+        project_contracts.run_contract_extraction_for_job(int(project_id), int(contract_id), staff=staff)
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE apify_jobs SET status='done', last_error=NULL, updated_at=NOW() WHERE id=%s",
+                (int(job["id"]),),
+            )
+
+
+def _process_kol_profile_deep_crawl(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
+    """队列铁律(2026-06-12):账号深爬 execute 走队列,泳道可见;内核与 HTTP execute 同一条。"""
+    from app.domains.kol import url_deep_crawl as kol_url_deep_crawl
+
+    staff = _resolve_job_staff(conn, payload)
+    with db_connection_sync_scope():
+        result = kol_url_deep_crawl.run_profile_deep_crawl_for_job(payload, staff=staff)
+    status = str((result or {}).get("status") or "")
+    ok = status in ("", "ok", "ready", "done", "executed") or bool((result or {}).get("execution"))
+    # 诚实闸(job 926 案:35mmc.com 搜索页 URL 标 done 但什么都没干):
+    # 非 profile/video 的 URL 内核走 unsupported 短路,任务必须 blocked 而非 done。
+    flow_status = str(((result or {}).get("profile_flow") or {}).get("status") or "")
+    url_type = str((result or {}).get("url_type") or "")
+    if ok and flow_status in ("unsupported", "needs_human_choice") and not (result or {}).get("video_flow"):
+        ok = False
+        status = f"url_{url_type or 'unknown'}_{flow_status}"
+    # search_session_id 回写 payload:queue_view 据此输出 search_session,
+    # 泳道「最近完成」才会保留该任务并支持点开会话详情(一闪而过案)。
+    session_id = _int_or_none((result or {}).get("search_session_id"))
+    if session_id:
+        payload["search_session_id"] = int(session_id)
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE apify_jobs SET status=%s, last_error=%s, payload=%s::jsonb, updated_at=NOW() WHERE id=%s",
+                (
+                    "done" if ok else "blocked",
+                    None if ok else (status or "deep_crawl_not_executed")[:300],
+                    _json(payload),
+                    int(job["id"]),
+                ),
+            )
+    # Lane E(用户开启口径):账号深爬完成 → 顺带提取公开商务邮箱(从刚抓的 raw 零成本提;无则按预算
+    # 决定是否 Apify 兜底。flag/预算/白名单源/consent_basis=legitimate_interest_public_business 全在
+    # enrich_business_contacts 内建)。这样 Lane D 懒抓视频时也顺带补邮箱,搜索驱动、省消耗。失败不阻断。
+    kol_pool_id = _int_or_none(payload.get("kol_pool_id"))
+    if ok and kol_pool_id:
+        try:
+            from app.domains.kol.business_contact_extract import enrich_business_contacts
+
+            with db_connection_sync_scope():
+                enrich_business_contacts(int(kol_pool_id), staff=staff)
+        except Exception as exc:
+            logger.warning("lazy email enrich after deep_crawl failed (non-fatal) | kol_pool_id=%s error=%s", kol_pool_id, exc)
+
+
+def _process_logistics_track_sync(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
+    """17track 物流同步(2026-06-12):注册+拉取轨迹写回 shipping 元数据,泳道可见。"""
+    from app.domains.logistics import seventeen_track
+
+    staff = _resolve_job_staff(conn, payload)
+    with db_connection_sync_scope():
+        result = seventeen_track.run_logistics_sync_for_job(payload, staff=staff)
+    status = str((result or {}).get("status") or "")
+    ok = status == "ready"
+    payload["logistics_sync_result"] = {k: v for k, v in (result or {}).items() if k != "results"}
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE apify_jobs SET status=%s, last_error=%s, payload=%s::jsonb, updated_at=NOW() WHERE id=%s",
+                (
+                    "done" if ok else "blocked",
+                    None if ok else (status or "logistics_sync_failed")[:300],
+                    _json(payload),
+                    int(job["id"]),
+                ),
+            )
+
+
+def _process_kol_outreach_draft(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
+    """联系草稿(2026-06-12 裁令):LLM 经队列生成外联消息,产物落 cache(kol_outreach_draft_v1)。"""
+    from app.domains.kol import outreach_draft as kol_outreach_draft
+
+    staff = _resolve_job_staff(conn, payload)
+    with db_connection_sync_scope():
+        result = kol_outreach_draft.run_outreach_draft_for_job(payload, staff=staff)
+    status = str((result or {}).get("status") or "")
+    ok = status == "ready"
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE apify_jobs SET status=%s, last_error=%s, updated_at=NOW() WHERE id=%s",
+                (
+                    "done" if ok else "blocked",
+                    None if ok else (str((result or {}).get("reason") or status or "outreach_draft_failed"))[:300],
+                    int(job["id"]),
+                ),
+            )
+
+
+def _process_kol_content_fit_analysis(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
+    """收口路①-2:内容契合深析(「思考中」)。读该 KOL 视频画面/故事 + 评论 → openai(GPT)+3重试
+    → 落独立 cache(target_type='kol'/derive_method='content_fit_v1')。
+
+    红线:零触 viltrox_fit_score;LLM/重试/cache 全由 content_fit_analysis 域内负责,本 handler
+    只做调度与状态回写。无视频证据 → status='insufficient_evidence',标 blocked(不烧 LLM,诚实)。
+    """
+    from app.domains.kol import content_fit_analysis as kol_content_fit
+
+    kol_pool_id = _int_or_none(payload.get("kol_pool_id") or payload.get("target_id"))
+    if not kol_pool_id:
+        raise ValueError("kol_content_fit_analysis payload must include kol_pool_id")
+    staff = _resolve_job_staff(conn, payload)
+    with db_connection_sync_scope():
+        result = kol_content_fit.analyze_content_fit(
+            int(kol_pool_id),
+            str(payload.get("product_sku") or "") or None,
+            staff=staff if isinstance(staff, dict) else None,
+        )
+    state = str((result or {}).get("state") or (result or {}).get("status") or "")
+    ok = state == "ready"
+    # insufficient_evidence / llm_failed 不是错误态,但也无 cache 产出 → blocked(可见、不重试雪崩)。
+    last_error = "" if ok else (str((result or {}).get("reason") or state or "content_fit_not_ready"))
+    payload["content_fit_result"] = {
+        "state": state,
+        "kol_pool_id": kol_pool_id,
+        "fit_verdict": ((result or {}).get("result") or {}).get("fit_verdict"),
+        "confidence": ((result or {}).get("result") or {}).get("confidence"),
+        "cached": (result or {}).get("cached"),
+        "viltrox_fit_score_untouched": True,
+    }
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE apify_jobs SET status=%s, last_error=NULLIF(%s, ''), payload=%s::jsonb, updated_at=NOW() WHERE id=%s",
+                (
+                    "done" if ok else "blocked",
+                    last_error[:300],
+                    _json(payload),
+                    int(job["id"]),
+                ),
+            )
+
+
+def _process_contract_invoice_extract(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
+    """发票回填提取(批E,2026-06-12):读本地存证文件 → Claude 提取收款字段 → cache(invoice)。
+    失败域内不写 cache,这里标 blocked(模式同 _process_kol_outreach_draft)。"""
+    from app.domains.projects import contract_assist
+
+    staff = _resolve_job_staff(conn, payload)
+    with db_connection_sync_scope():
+        result = contract_assist.run_invoice_extract_for_job(payload, staff=staff)
+    status = str((result or {}).get("status") or "")
+    ok = status == "ready"
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE apify_jobs SET status=%s, last_error=%s, updated_at=NOW() WHERE id=%s",
+                (
+                    "done" if ok else "blocked",
+                    None if ok else (str((result or {}).get("reason") or status or "invoice_extract_failed"))[:300],
+                    int(job["id"]),
+                ),
+            )
+
+
+def _process_contract_polish(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
+    """合同条款 LLM 润色(批E,2026-06-12):llm_gateway(preferred openai)→ cache(contract_polish)。
+    失败域内不写 cache,这里标 blocked(模式同 _process_kol_outreach_draft)。"""
+    from app.domains.projects import contract_assist
+
+    staff = _resolve_job_staff(conn, payload)
+    with db_connection_sync_scope():
+        result = contract_assist.run_contract_polish_for_job(payload, staff=staff)
+    status = str((result or {}).get("status") or "")
+    ok = status == "ready"
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE apify_jobs SET status=%s, last_error=%s, updated_at=NOW() WHERE id=%s",
+                (
+                    "done" if ok else "blocked",
+                    None if ok else (str((result or {}).get("reason") or status or "contract_polish_failed"))[:300],
+                    int(job["id"]),
+                ),
+            )
+
+
+def _process_kol_pool_comments_collect(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
+    """KOL Pool 收藏行评论采集(2026-06-12 裁令):逐帖走 collect_post_comments,泳道可见。"""
+    from app.domains.comments import collector as comments_collector
+
+    staff = _resolve_job_staff(conn, payload)
+    with db_connection_sync_scope():
+        result = comments_collector.run_kol_pool_comments_for_job(payload, staff=staff)
+    status = str((result or {}).get("status") or "")
+    ok = status == "ready"
+    payload["comments_collect_result"] = {k: v for k, v in (result or {}).items() if k != "results"}
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE apify_jobs SET status=%s, last_error=%s, payload=%s::jsonb, updated_at=NOW() WHERE id=%s",
+                (
+                    "done" if ok else "blocked",
+                    None if ok else (status or "comments_collect_failed")[:300],
+                    _json(payload),
+                    int(job["id"]),
+                ),
+            )
+
+
+def _process_project_retrospective(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
+    project_id = _int_or_none(payload.get("target_id") or payload.get("project_id"))
+    if not project_id:
+        raise ValueError("project_retrospective_aggregate payload must include target_id")
+    staff = _resolve_job_staff(conn, payload)
+    # retrospective_aggregate uses sqlite-compat '?' via its own get_conn(); run inside the sync scope.
+    # R2 ordering: the domain writes cache(project) BEFORE we mark the job done; on no-ready/failure it
+    # writes nothing to cache and we mark the job blocked (not done) so the UI/读端能区分。
+    # Never touches vkpi_kol_pool / fit_score.
+    with db_connection_sync_scope():
+        result = project_retrospective.run_project_retrospective(int(project_id), staff=staff)
+    status = str(result.get("status") or "")
+    job_status = "done" if status == "ready" else "blocked"
+    last_error = "" if job_status == "done" else (status or "project_retrospective_not_ready")
+    payload["project_retrospective_result"] = {k: v for k, v in result.items() if k != "result"}
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE apify_jobs
+                SET status=%s, last_error=NULLIF(%s, ''), payload=%s::jsonb, updated_at=NOW()
+                WHERE id=%s
+                """,
+                (job_status, last_error[:2000], _json(payload), int(job["id"])),
+            )

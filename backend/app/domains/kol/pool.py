@@ -1,9 +1,7 @@
 """Self-owned KOL pool and Apify/import adapters."""
 from __future__ import annotations
 
-import re
 import secrets
-import urllib.parse
 from typing import Any
 
 from app.db.connection import get_conn
@@ -50,99 +48,27 @@ from app.platform.db.schema_product_industry import ensure_vkpi_product_industry
 from app.domains.scoring import ScoringRegistry
 from app.domains.projects.workflow import staff_id as resolve_staff_id
 
-
-_YOUTUBE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
-
-
-def _youtube_video_id(url: Any) -> str:
-    raw = str(url or "").strip()
-    if not raw:
-        return ""
-    parsed = urllib.parse.urlparse(raw)
-    host = (parsed.hostname or "").lower()
-    path_parts = [part for part in parsed.path.split("/") if part]
-    if host.endswith("youtu.be") and path_parts:
-        candidate = path_parts[0]
-        return candidate if _YOUTUBE_ID_RE.match(candidate) else ""
-    if "youtube.com" in host:
-        query_id = urllib.parse.parse_qs(parsed.query).get("v", [""])[0]
-        if _YOUTUBE_ID_RE.match(query_id):
-            return query_id
-        for marker in ("shorts", "embed", "live"):
-            if marker in path_parts:
-                idx = path_parts.index(marker)
-                if idx + 1 < len(path_parts) and _YOUTUBE_ID_RE.match(path_parts[idx + 1]):
-                    return path_parts[idx + 1]
-    return ""
-
-
-def _youtube_thumbnail_url(video_id: str) -> str:
-    return f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg" if video_id else ""
-
-
-def _v6_breakdown_for_item(item: dict[str, Any]) -> dict[str, Any] | None:
-    """Project persisted V6 Fit into the drawer's read-only breakdown shape.
-
-    vkpi_kol_pool only persists viltrox_fit_score/reason today. The current
-    rule_v0 score is additive, while the drawer has older multiplier labels.
-    Keep those legacy multiplier slots neutral and expose the real additive
-    components under components so the UI can evolve without a write migration.
-    """
-
-    persisted_score = _float_or_none(item.get("viltrox_fit_score"))
-    if persisted_score is None:
-        return None
-    platform = _platform(item.get("platform") or "")
-    engagement = _float_or_none(item.get("engagement_rate"))
-    engagement_ratio = (engagement / 100.0) if engagement is not None and engagement > 1 else engagement
-    try:
-        scoring = ScoringRegistry.get("rule_v0").score(
-            {
-                "platform": platform,
-                "followers": _int_or_none(item.get("followers")),
-                "posts_count": _int_or_none(item.get("posts_count")),
-                "avg_views": _int_or_none(item.get("avg_views")),
-                "engagement_rate": engagement_ratio,
-                "primary_topic": item.get("primary_topic") or item.get("bio") or "",
-                "sync_status": item.get("sync_status") or "",
-            },
-            {"product_name": "Viltrox lens", "category": "camera lens", "target_platforms": [platform]},
-        )
-        components = dict(scoring.breakdown or {})
-        projected_score = float(scoring.score)
-        strengths = list(scoring.strengths or [])
-        concerns = list(scoring.concerns or [])
-    except Exception:
-        components = {}
-        projected_score = persisted_score
-        strengths = []
-        concerns = []
-
-    return {
-        "source": "rule_v0_read_projection",
-        "formula": "additive_rule_v0_projected_to_legacy_multiplier_slots",
-        "base": round(float(persisted_score), 3),
-        "industry": 1.0,
-        "upgrade": 1.0,
-        "geo_match": 1.0,
-        "real_er": 1.0,
-        "loyalty": 1.0,
-        "trend": 1.0,
-        "platform_native": 1.0,
-        "price_match": 1.0,
-        "network": 1.0,
-        "competitor_decay": 0.0,
-        "components": components,
-        "projected_rule_v0_score": round(projected_score, 3),
-        "persisted_viltrox_fit_score": round(float(persisted_score), 3),
-        "reason": item.get("viltrox_fit_reason"),
-        "strengths": strengths,
-        "concerns": concerns,
-        "provider_calls": False,
-        "llm_calls": False,
-        "write_db": False,
-        "viltrox_fit_score_write": False,
-    }
+# Read-side detail/video projections moved to pool_detail.py (behavior-preserving).
+from app.domains.kol.pool_detail import (
+    _YOUTUBE_ID_RE,
+    _youtube_video_id,
+    _youtube_thumbnail_url,
+    _v6_breakdown_for_item,
+    _video_evidence_for_kol,
+    _confidence_badge_from_dims,
+)
+# P0-3 inflation outlier detection moved to pool_inflation.py (behavior-preserving).
+from app.domains.kol.pool_inflation import (
+    _INFLATION_METHOD,
+    _INFL_HIGH_FOLLOWERS,
+    _INFL_VIEW_RATIO,
+    _INFL_ER_Z_THRESHOLD,
+    _INFL_REALER_DIVERGENCE,
+    _INFL_PEER_MIN_N,
+    _follower_bucket,
+    detect_inflation,
+    suspect_inflation_review_list,
+)
 
 
 def _whitelisted_other_contacts(raw_payload: dict[str, Any]) -> str:
@@ -545,338 +471,6 @@ def summary() -> dict[str, Any]:
     })
 
 
-# ─── P0-3 假粉/异常号规则离群(独立列;绝不触 viltrox_fit_score 写点/rule_v0)─────
-# 纯现有数据三规则,任一命中即置 suspect_inflation=TRUE + 文案 reason:
-#   R1 高粉低播:followers>=阈值 且 avg_views < followers*ratio(典型买粉号画像)。
-#   R2 ER 对同量级 peer z-score 离群:|z| 远离 → 互动率异常偏低(刷量)/偏高(刷互动)。
-#   R3 real_er(播放分母实算)与生产 ER(粉丝分母)巨大背离:abs(real_er - er) 超阈。
-# 写点仅 suspect_inflation/inflation_reason/inflation_signals_json/inflation_checked_at/
-# inflation_method 五根独立列;UPDATE 语句不含 viltrox_fit_score,rule_v0 零调用。
-_INFLATION_METHOD = "rule_outlier_v1"
-_INFL_HIGH_FOLLOWERS = 100000          # R1 起算量级
-_INFL_VIEW_RATIO = 0.01                # R1:avg_views < followers*1% 视为低播
-_INFL_ER_Z_THRESHOLD = 2.5             # R2:|z|>=2.5 视为 ER 离群
-_INFL_REALER_DIVERGENCE = 3.0          # R3:|real_er - production_er| >= 3(百分点)
-_INFL_PEER_MIN_N = 8                   # R2:同量级 peer 至少 N 个才算 z-score
-
-
-def _follower_bucket(followers: int) -> str:
-    if followers >= 1000000:
-        return "1m+"
-    if followers >= 100000:
-        return "100k_1m"
-    if followers >= 10000:
-        return "10k_100k"
-    return "lt_10k"
-
-
-def detect_inflation(*, execute: bool = False, only_id: int | None = None) -> dict[str, Any]:
-    """离线可批跑的假粉/异常号规则离群检测。
-
-    红线:只写 suspect_inflation* 独立列;绝不触 viltrox_fit_score 写点、绝不调 rule_v0。
-    默认 dry-run(execute=False),--execute/execute=True 才落库。only_id 供「发现落库时
-    顺带打」单行调用(import/enrich 后传 kol_pool_id)。
-    """
-    ensure_vkpi_product_industry_schema()
-    conn = get_conn()
-    # peer ER 统计按 follower_bucket 分桶(SQL 端聚合,避免全表入内存)
-    peer_rows = conn.execute(
-        """
-        SELECT
-            CASE
-                WHEN followers >= 1000000 THEN '1m+'
-                WHEN followers >= 100000 THEN '100k_1m'
-                WHEN followers >= 10000 THEN '10k_100k'
-                ELSE 'lt_10k'
-            END AS bucket,
-            AVG(engagement_rate) AS mean_er,
-            COUNT(engagement_rate) AS n,
-            AVG(engagement_rate * engagement_rate) AS mean_sq
-        FROM vkpi_kol_pool
-        WHERE followers IS NOT NULL AND engagement_rate IS NOT NULL
-        GROUP BY bucket
-        """
-    ).fetchall()
-    peer_stats: dict[str, dict[str, float]] = {}
-    for prow in peer_rows:
-        p = dict(prow)
-        mean = float(p.get("mean_er") or 0.0)
-        mean_sq = float(p.get("mean_sq") or 0.0)
-        n = int(p.get("n") or 0)
-        var = max(0.0, mean_sq - mean * mean)
-        peer_stats[str(p.get("bucket"))] = {"mean": mean, "std": var ** 0.5, "n": float(n)}
-
-    where = "WHERE id=?" if only_id else ""
-    args = (int(only_id),) if only_id else ()
-    rows = conn.execute(
-        f"SELECT id, followers, avg_views, engagement_rate, real_er FROM vkpi_kol_pool {where}",
-        args,
-    ).fetchall()
-
-    now = _utcnow()
-    flagged = 0
-    scanned = 0
-    results: list[dict[str, Any]] = []
-    for row in rows:
-        item = dict(row)
-        scanned += 1
-        followers = _int_or_none(item.get("followers")) or 0
-        avg_views = _int_or_none(item.get("avg_views"))
-        er = _float_or_none(item.get("engagement_rate"))
-        real_er = _float_or_none(item.get("real_er"))
-        reasons: list[str] = []
-        signals: dict[str, Any] = {}
-
-        # R1 高粉低播
-        if followers >= _INFL_HIGH_FOLLOWERS and avg_views is not None and avg_views < followers * _INFL_VIEW_RATIO:
-            pct = (avg_views / followers * 100.0) if followers else 0.0
-            reasons.append(f"高粉低播:{followers:,} 粉但均播仅 {avg_views:,}(占粉 {pct:.2f}%<1%)")
-            signals["high_followers_low_views"] = {"followers": followers, "avg_views": avg_views, "view_pct": round(pct, 4)}
-
-        # R2 ER 对同量级 peer z-score 离群
-        if er is not None:
-            bucket = _follower_bucket(followers)
-            stat = peer_stats.get(bucket)
-            if stat and stat["n"] >= _INFL_PEER_MIN_N and stat["std"] > 0:
-                z = (er - stat["mean"]) / stat["std"]
-                if abs(z) >= _INFL_ER_Z_THRESHOLD:
-                    direction = "异常偏低(疑买粉)" if z < 0 else "异常偏高(疑刷互动)"
-                    reasons.append(f"ER 对同量级 peer 离群 z={z:.1f} {direction}")
-                    signals["er_zscore"] = {"bucket": bucket, "er": round(er, 4), "peer_mean": round(stat["mean"], 4), "z": round(z, 3)}
-
-        # R3 real_er(播放分母)与生产 ER(粉丝分母)巨大背离
-        if real_er is not None and er is not None and abs(real_er - er) >= _INFL_REALER_DIVERGENCE:
-            reasons.append(f"real_er({real_er:.2f}%)与生产 ER({er:.2f}%)背离 {abs(real_er - er):.2f}pp")
-            signals["realer_divergence"] = {"real_er": round(real_er, 4), "production_er": round(er, 4), "gap": round(abs(real_er - er), 4)}
-
-        suspect = bool(reasons)
-        reason_text = "; ".join(reasons)[:1000]
-        results.append({"id": int(item["id"]), "suspect": suspect, "reason": reason_text})
-        if suspect:
-            flagged += 1
-        if execute:
-            conn.execute(
-                """
-                UPDATE vkpi_kol_pool
-                SET suspect_inflation=?,
-                    inflation_reason=?,
-                    inflation_signals_json=?,
-                    inflation_checked_at=?,
-                    inflation_method=?
-                WHERE id=?
-                """,
-                (bool(suspect), reason_text, _json(signals), now, _INFLATION_METHOD, int(item["id"])),
-            )
-    if execute:
-        conn.commit()
-        _clear_kol_pool_read_cache()
-    return {
-        "scanned": scanned,
-        "flagged": flagged,
-        "executed": bool(execute),
-        "method": _INFLATION_METHOD,
-        "viltrox_fit_score_write": False,
-        "items": results if only_id else results[:50],
-    }
-
-
-def suspect_inflation_review_list(*, limit: int = 200, offset: int = 0) -> dict[str, Any]:
-    """疑似刷量复核清单:纯只读 SELECT 已置 flag 的行,独立角标列;不触 fit_score。"""
-    ensure_vkpi_product_industry_schema()
-    safe_limit = max(1, min(500, int(limit or 200)))
-    safe_offset = max(0, int(offset or 0))
-    conn = get_conn()
-    rows = conn.execute(
-        """
-        SELECT id, pool_uid, platform, handle, display_name, followers, avg_views,
-               engagement_rate, real_er, viltrox_fit_score,
-               suspect_inflation, inflation_reason, inflation_signals_json,
-               inflation_checked_at, inflation_method
-        FROM vkpi_kol_pool
-        WHERE suspect_inflation = TRUE
-        ORDER BY COALESCE(followers, 0) DESC, inflation_checked_at DESC
-        LIMIT ? OFFSET ?
-        """,
-        (safe_limit, safe_offset),
-    ).fetchall()
-    total = conn.execute("SELECT COUNT(*) AS n FROM vkpi_kol_pool WHERE suspect_inflation = TRUE").fetchone()
-    return {
-        "total": int(total["n"] if total else 0),
-        "items": [dict(r) for r in rows],
-        "note": "独立角标,绝不参与 viltrox_fit_score;复核人工裁定后可清 flag。",
-        "viltrox_fit_score_write": False,
-    }
-
-
-def _video_evidence_for_kol(
-    kol_pool_id: int, *, limit: int = 3, only_with_cache: bool = False, include_inactive: bool = False
-) -> list[dict[str, Any]]:
-    # only_with_cache: 仅回带有 final_v1 / keyframe_qa cache 的 evidence(detail_bundle 视频分析
-    #   与展示用 videos 限 3 解耦,修「已找到 N 条 evidence 但 video_analysis 未命中」)。
-    # include_inactive: 放宽 is_active(回挂已有分析——有 cache 的 inactive evidence 也回带,
-    #   纯只读 SELECT,不复活、不改 is_active、不触 viltrox_fit_score 写点)。
-    rows = get_conn().execute(
-        """
-        SELECT
-            e.id AS evidence_id,
-            e.id,
-            e.kol_pool_id,
-            e.project_id,
-            e.content_url,
-            e.platform,
-            COALESCE(NULLIF(e.title, ''), NULLIF(e.video_title, ''), NULLIF(e.content_url, '')) AS title,
-            e.video_title,
-            e.thumbnail_url,
-            COALESCE(NULLIF(mimg.cache_url, ''), CASE WHEN COALESCE(mimg.digest, '') != '' THEN '/api/vkpi-media/image-cache/' || mimg.digest ELSE NULL END) AS cached_thumbnail_url,
-            COALESCE(NULLIF(m.cache_url, ''), CASE WHEN COALESCE(m.digest, '') != '' THEN '/api/vkpi-media/video-cache/' || m.digest ELSE NULL END) AS cached_video_url,
-            e.view_count,
-            e.like_count,
-            e.comment_count,
-            e.share_count,
-            e.duration_seconds,
-            e.publish_date,
-            e.posted_at,
-            EXISTS(
-                SELECT 1
-                FROM vkpi_analysis_cache c
-                WHERE c.target_type='video'
-                  AND c.target_id=e.id::text
-                  AND c.derive_method='video_analysis_final_v1'
-                  AND c.status='ready'
-            ) AS has_final_v1_cache,
-            fc.result #>> '{raw_gemini_video,viltrox_detected}' AS llm_viltrox_detected_text,
-            fc.result #> '{raw_gemini_video,viltrox_products_all}' AS llm_viltrox_products,
-            fc.result #> '{raw_gemini_video,competitor_mentions}' AS llm_competitor_mentions,
-            EXISTS(
-                SELECT 1
-                FROM vkpi_analysis_cache c
-                WHERE c.target_type='video'
-                  AND c.target_id=e.id::text
-                  AND c.derive_method='video_analysis_final_v1_keyframe_qa'
-                  AND c.status='ready'
-            ) AS has_keyframe_qa_cache
-        FROM vkpi_kol_video_evidence e
-        LEFT JOIN LATERAL (
-            SELECT c.result
-            FROM vkpi_analysis_cache c
-            WHERE c.target_type='video'
-              AND c.target_id=e.id::text
-              AND c.derive_method='video_analysis_final_v1'
-              AND c.status='ready'
-            ORDER BY c.id DESC
-            LIMIT 1
-        ) fc ON TRUE
-        LEFT JOIN LATERAL (
-            SELECT cache_url, digest
-            FROM vkpi_media_cache_assets asset
-            WHERE asset.media_kind='image'
-              AND asset.status='cached'
-              AND COALESCE(e.thumbnail_url, '') != ''
-              AND asset.source_url = e.thumbnail_url
-            ORDER BY asset.id DESC
-            LIMIT 1
-        ) mimg ON TRUE
-        LEFT JOIN LATERAL (
-            SELECT cache_url, digest, r2_key
-            FROM vkpi_media_cache_assets asset
-            WHERE asset.media_kind='video'
-              AND asset.status='cached'
-              AND (
-                  asset.source_url=e.content_url
-                  OR (
-                      asset.platform=LOWER(COALESCE(e.platform, ''))
-                      AND COALESCE(asset.external_id, '') != ''
-                      AND e.content_url LIKE CHR(37) || asset.external_id || CHR(37)
-                  )
-                  OR (
-                      COALESCE(asset.digest, '') != ''
-                      AND e.content_url LIKE CHR(37) || asset.digest || CHR(37)
-                  )
-              )
-            ORDER BY asset.updated_at DESC
-            LIMIT 1
-        ) m ON TRUE
-        WHERE e.kol_pool_id=?
-          AND (? OR e.is_active IS NOT FALSE)
-          AND COALESCE(e.evidence_type, 'video')='video'
-          AND (
-              NOT ?
-              OR EXISTS(
-                  SELECT 1 FROM vkpi_analysis_cache c
-                  WHERE c.target_type='video'
-                    AND c.target_id=e.id::text
-                    AND c.derive_method IN ('video_analysis_final_v1', 'video_analysis_final_v1_keyframe_qa')
-                    AND c.status='ready'
-              )
-          )
-        ORDER BY
-            has_keyframe_qa_cache DESC,
-            has_final_v1_cache DESC,
-            COALESCE(e.publish_date, e.posted_at, e.updated_at, e.created_at) DESC NULLS LAST,
-            COALESCE(e.view_count, 0) DESC,
-            e.id DESC
-        LIMIT ?
-        """,
-        # 上限 10→200(2026-06-12「全部视频」裁令:账号分析现采 12 条/E5 全量更多,硬顶 10 把列表掐断)
-        # 绑定顺序须与 WHERE 占位符一致:kol_pool_id, include_inactive, only_with_cache, LIMIT。
-        (
-            int(kol_pool_id),
-            bool(include_inactive),
-            bool(only_with_cache),
-            max(1, min(200, int(limit or 3))),
-        ),
-    ).fetchall()
-    # cache_image 只落本地文件缓存、不写 vkpi_media_cache_assets 行(asset 行历史上仅 prewarm
-    # 脚本批量写入)——上面的 image LATERAL join 对深爬暖出的缩略图永远扑空;视频按
-    # (platform, evidence_id) 键存 sidecar,join 的 source_url 匹配也兜不全。读端直查文件缓存补齐。
-    from app.domains.media.cache import cached_image_url, cached_video_url_for_item
-
-    items: list[dict[str, Any]] = []
-    for row in rows:
-        item = dict(row)
-        platform = _platform(item.get("platform") or "")
-        # Viltrox 识别以 Gemini 深析为准(2026-06-12 裁令"视频分析要给 gemini 不然区分不出"):
-        # llm_ 前缀=LLM 产物;未深析行三键为 None,前端按"未析"诚实处理。
-        detected_text = str(item.pop("llm_viltrox_detected_text", None) or "").strip().lower()
-        item["llm_viltrox_detected"] = (detected_text == "true") if detected_text in ("true", "false") else None
-        for key in ("llm_viltrox_products", "llm_competitor_mentions"):
-            value = item.get(key)
-            if isinstance(value, str):
-                try:
-                    import json as _json
-
-                    value = _json.loads(value)
-                except Exception:
-                    value = None
-            item[key] = [str(v) for v in value if v] if isinstance(value, list) else None
-        if not item.get("cached_thumbnail_url") and item.get("thumbnail_url"):
-            try:
-                item["cached_thumbnail_url"] = cached_image_url(item["thumbnail_url"]) or None
-            except Exception:
-                pass
-        if not item.get("cached_video_url") and platform and platform != "youtube":
-            try:
-                item["cached_video_url"] = cached_video_url_for_item(platform, str(item.get("id") or "")) or None
-            except Exception:
-                pass
-        youtube_id = _youtube_video_id(item.get("content_url")) if platform == "youtube" else ""
-        youtube_thumb = _youtube_thumbnail_url(youtube_id)
-        item["youtube_video_id"] = youtube_id
-        item["youtube_thumbnail_url"] = youtube_thumb
-        item["best_thumbnail"] = (
-            str(item.get("cached_thumbnail_url") or "").strip()
-            or str(item.get("thumbnail_url") or "").strip()
-            or youtube_thumb
-        )
-        item["watch_url"] = (
-            f"https://www.youtube.com/watch?v={youtube_id}"
-            if youtube_id
-            else str(item.get("cached_video_url") or "").strip() or str(item.get("content_url") or "").strip()
-        )
-        items.append(item)
-    return items
-
-
 def get_item(kol_pool_id: int) -> dict[str, Any]:
     ensure_vkpi_product_industry_schema()
     row = get_conn().execute("SELECT * FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)).fetchone()
@@ -886,26 +480,6 @@ def get_item(kol_pool_id: int) -> dict[str, Any]:
     item["v6_breakdown"] = _v6_breakdown_for_item(item)
     item["video_evidence"] = _video_evidence_for_kol(int(kol_pool_id), limit=3)
     return {"item": item}
-
-
-def _confidence_badge_from_dims(dimensions: dict[str, Any]) -> dict[str, Any]:
-    """从持久化 dimensions_11_json 抽独立置信度/数据完整度角标(只读,绝不进 fit)。"""
-    conf = dimensions.get("confidence") if isinstance(dimensions.get("confidence"), dict) else {}
-    present = sum(
-        1
-        for k in ("block1_content", "block2_performance", "block3_business", "block4_specialty")
-        if isinstance(conf.get(k), (int, float)) and float(conf.get(k) or 0) > 0
-    )
-    return {
-        "overall": float(conf.get("overall") or 0),
-        "data_completeness": float(conf.get("data_completeness")) if conf.get("data_completeness") is not None else round(present / 4.0, 3),
-        "per_block": {
-            k: float(conf.get(k) or 0)
-            for k in ("block1_content", "block2_performance", "block3_business", "block4_specialty")
-        },
-        "persisted": bool(dimensions.get("persisted")),
-        "note": "独立置信度/数据完整度角标,绝不参与 viltrox_fit_score。",
-    }
 
 
 def detail_bundle(kol_pool_id: int, *, video_limit: int = 3, llm_limit: int = 20) -> dict[str, Any]:
