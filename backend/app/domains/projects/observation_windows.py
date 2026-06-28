@@ -89,6 +89,16 @@ def _row_to_post(row: Any) -> dict[str, Any]:
     return _stringify_ts(item, ("published_at", "created_at", "updated_at"))
 
 
+def _emit_event(event_type: str, **kw: Any) -> None:
+    """cut3 · 业务主干事件埋点(best-effort,失败不影响主流程,零触 viltrox_fit_score)。"""
+    try:
+        from app.domains.platform import event_ledger
+
+        event_ledger.emit(event_type, source="observation_windows", **kw)
+    except Exception:
+        pass
+
+
 def open_window_for_delivered(
     project_id: int,
     assignment_id: int | None,
@@ -166,7 +176,10 @@ def open_window_for_delivered(
     )
     row = cursor.fetchone()
     conn.commit()
-    return {"status": "created", "window": _row_to_window(row)}
+    window = _row_to_window(row)
+    _emit_event("observation.window_created", entity_type="observation_window",
+                entity_id=window.get("id"), payload={"project_id": pid, "kol_pool_id": kpid})
+    return {"status": "created", "window": window}
 
 
 def list_windows(
@@ -304,7 +317,10 @@ def record_content_candidate(
     )
     row = cursor.fetchone()
     conn.commit()
-    return {"status": "created", "post": _row_to_post(row)}
+    post = _row_to_post(row)
+    _emit_event("content.detected", entity_type="content_post", entity_id=post.get("id"),
+                payload={"project_id": pid, "kol_pool_id": kpid, "content_url": content_url})
+    return {"status": "created", "post": post}
 
 
 def list_content_posts(
@@ -437,6 +453,9 @@ def advance_matched_posts_to_retrospective_ready(
     )
     conn.commit()
     advanced = int(getattr(cursor, "rowcount", 0) or 0)
+    if advanced > 0:
+        _emit_event("project.retrospective_ready", entity_type="project", entity_id=pid,
+                    payload={"advanced_count": advanced})
     return {"status": "ok", "project_id": pid, "advanced_count": advanced}
 
 
