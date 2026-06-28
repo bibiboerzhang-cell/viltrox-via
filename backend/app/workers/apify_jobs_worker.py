@@ -314,6 +314,7 @@ from app.workers.apify_jobs_worker_handlers import (  # noqa: E402
     _process_account_dossier_extract,
     _process_contract_invoice_extract,
     _process_contract_polish,
+    _process_kol_auto_poll,
     _process_kol_content_fit_analysis,
     _process_kol_outreach_draft,
     _process_kol_pool_comments_collect,
@@ -640,6 +641,9 @@ def _process_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> None:
         return
     if str(job.get("job_type") or "").strip().lower() == "logistics_track_sync":
         _process_logistics_track_sync(conn, job, payload)
+        return
+    if str(job.get("job_type") or "").strip().lower() == "kol_auto_poll":
+        _process_kol_auto_poll(conn, job, payload)
         return
     target_type, target_id = _target(payload)
     if not target_type or not target_id:

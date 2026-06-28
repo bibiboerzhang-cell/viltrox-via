@@ -110,6 +110,7 @@ WORKER_ROUTED_JOB_TYPES = {
     "kol_pool_comments_collect",
     "kol_outreach_draft",
     "logistics_track_sync",
+    "kol_auto_poll",  # 2026-06-28 补 worker handler 后移入(治 50 条 ValueError 失败)
 }
 
 
@@ -189,17 +190,18 @@ def test_video_job_routes_via_target_fallback():
 
 
 # ---------------------------------------------------------------------------
-# 5) GAP 钉子:kol_auto_poll 活跃但 worker 无 handler。
-#    入队器注释自称「worker 端再去真抓」,实际 worker _process_job 没接 ——
-#    落 _target 兜底分支因缺 target_type/target_id 抛 ValueError,DB 里 50 条全 failed。
-#    把现状钉成断言:补了 handler 后此测试会红,提醒把 kol_auto_poll 移进 routed 集 + 校契约。
+# 5) kol_auto_poll handler 已补(2026-06-28):此前活跃却无 handler → 落 _target 兜底
+#    因缺 target_type/target_id 抛 ValueError → DB 50 条全 failed。现 _process_job 显式
+#    分派 _process_kol_auto_poll(metadata_light → 触发轻量 profile 刷新)。本测试守住:
+#    它必须被显式路由(已进 WORKER_ROUTED_JOB_TYPES,由参数化路由测试覆盖)、且其入队
+#    payload 仍不带 target_type/target_id(正因如此才必须走专属 handler 而非兜底)。
 # ---------------------------------------------------------------------------
-def test_kol_auto_poll_worker_dispatch_gap():
+def test_kol_auto_poll_now_routed_not_target_fallback():
     src = _process_job_source()
-    assert '"kol_auto_poll"' not in src and "'kol_auto_poll'" not in src, (
-        "kol_auto_poll 现在被 worker 分派了 —— gap 已修复。请:把 'kol_auto_poll' 加进 "
-        "WORKER_ROUTED_JOB_TYPES、校准 PAYLOAD_CONTRACT、删除本 gap 测试。"
+    assert '"kol_auto_poll"' in src or "'kol_auto_poll'" in src, (
+        "kol_auto_poll 必须被 worker _process_job 显式分派(_process_kol_auto_poll),"
+        "否则会回落 _target 兜底因缺 target_type/target_id 炸 ValueError。"
     )
-    # 且其 payload 不带 target_type/target_id —— 这正是它落兜底分支必炸的根因。
+    # 其 payload 不带 target_type/target_id —— 故必须靠专属 handler,绝不能依赖兜底分支。
     auto_poll_keys = PAYLOAD_CONTRACT["kol_auto_poll"]
     assert "target_type" not in auto_poll_keys and "target_id" not in auto_poll_keys

@@ -314,6 +314,43 @@ def _process_logistics_track_sync(conn: psycopg.Connection[Any], job: dict[str, 
             )
 
 
+def _process_kol_auto_poll(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
+    """D3 关注KOL轻量轮询(metadata_light):为该 KOL 触发一次轻量 profile 刷新。
+
+    治本:此前 worker 无此 handler → kol_auto_poll job 落 _target 兜底炸
+    ValueError("payload must include target_type and target_id") → 入队 50 条全 failed。
+    payload 带 kol_pool_id(+handle/platform);取 profile_url → 入轻量 profile 抓取队列
+    (max_posts=1,只刷档案,不跑视频/不烧 LLM)。无 kol_pool_id / 无 url → 诚实 done(原因落 payload)。
+    红线:绝不触 viltrox_fit_score。SELECT/enqueue 走 compat get_conn(?),job 终态走 worker conn(%s)。
+    """
+    kid = _int_or_none(payload.get("kol_pool_id"))
+    note = "auto_poll_no_kol_id"
+    enqueue_res: Any = None
+    if kid:
+        from app.db.connection import get_conn
+        from app.domains.kol import url_deep_crawl
+
+        with db_connection_sync_scope():
+            row = get_conn().execute(
+                "SELECT profile_url FROM vkpi_kol_pool WHERE id = ?", (int(kid),)
+            ).fetchone()
+            url = str(((dict(row).get("profile_url")) if row else "") or "").strip()
+            if not url:
+                note = "auto_poll_no_profile_url"
+            else:
+                enqueue_res = url_deep_crawl.enqueue_profile_deep_crawl_job(
+                    url, kol_pool_id=int(kid), max_posts=1, staff=None
+                )
+                note = "metadata_light_refresh_enqueued"
+    payload["auto_poll_result"] = {"note": note, "kol_pool_id": kid, "enqueue": enqueue_res}
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE apify_jobs SET status='done', last_error=NULL, payload=%s::jsonb, updated_at=NOW() WHERE id=%s",
+                (_json(payload), int(job["id"])),
+            )
+
+
 def _process_kol_outreach_draft(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
     """联系草稿(2026-06-12 裁令):LLM 经队列生成外联消息,产物落 cache(kol_outreach_draft_v1)。"""
     from app.domains.kol import outreach_draft as kol_outreach_draft

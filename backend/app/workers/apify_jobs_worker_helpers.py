@@ -149,6 +149,9 @@ def _error_category(message: str) -> str:
             "attributeerror",
             "typeerror",
             "keyerror",
+            # ValueError:确定性永久校验错(如 kol_auto_poll 早期"payload must include
+            # target_type and target_id"),归 code_error 永久死,绝不当瞬时类回收重试。
+            "valueerror",
             "indexerror",
             "syntaxerror",
             "unboundlocalerror",

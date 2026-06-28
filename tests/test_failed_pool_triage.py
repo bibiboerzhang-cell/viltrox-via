@@ -134,18 +134,18 @@ class TriageReportTests(unittest.TestCase):
         # content_unavailable → permanent
         self.assertEqual(by_key[("video", "content_unavailable")]["disposition"], "permanent")
 
-    def test_dirty_unknown_redrived_to_code_error_permanent(self) -> None:
-        # GAP 取证:_error_category 的 code_error 词表**漏了 ValueError**(只有
-        # TypeError/KeyError/... 没有 ValueError),所以 kol_auto_poll 的
-        # "ValueError: payload must include..." 重派生后**仍是 unknown**。
-        # 关键安全性:unknown 默认**不可回收** → 这 50 条永久 payload 错不会被误回收。
+    def test_valueerror_redrived_to_code_error_permanent(self) -> None:
+        # 2026-06-28 修复:_error_category 的 code_error 词表已补 'valueerror'。
+        # kol_auto_poll 的 "ValueError: payload must include target_type and target_id"
+        # (此前 worker 无 handler 留下的确定性永久错)重派生为 code_error → permanent。
+        # 关键安全性:永久 payload 错归永久死,disposition!=recyclable,绝不被误回收重试。
         report, _ = self._run_report(_make_jobs())
         by_key = {(b["job_type"], b["category"]): b for b in report["buckets"]}
-        bucket = by_key[("kol_auto_poll", "unknown")]
-        self.assertEqual(bucket["disposition"], "unknown")
+        bucket = by_key[("kol_auto_poll", "code_error")]
+        self.assertEqual(bucket["disposition"], "permanent")
         self.assertFalse(bucket["recyclable"])
 
-        # 反证:换成 TypeError(在词表里)就能正确重派生为 code_error/permanent。
+        # 同源:TypeError 同样在词表里 → 也重派生为 code_error/permanent(回归对照)。
         jobs = _make_jobs()
         for j in jobs:
             if j["id"] == 5:
