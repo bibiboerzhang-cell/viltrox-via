@@ -92,6 +92,14 @@ def marketing_brain_scorecard(staff=Depends(require_tab("vkpi", "read"))) -> dic
     return scorecard.build_marketing_brain_scorecard(staff)
 
 
+@router.get("/data-catalog")
+def data_catalog(staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
+    """Data Catalog:每个指标自报来源/真假(real|awaiting_source)/新鲜度——数字可追溯真假。"""
+    from app.domains.lineage import catalog
+
+    return catalog.build_data_catalog()
+
+
 @router.post("/bets")
 def bet_create(body: dict = Body(default_factory=dict), staff=Depends(require_tab("vkpi", "write"))) -> dict[str, Any]:
     """cut5 · Bet Ledger:下一注概率押注。body:{hypothesis(必填), probability?, expected_gain_cents?, cost_cents?, risk_level?, evidence?, review_at?, source_action_inbox_id?}。"""
