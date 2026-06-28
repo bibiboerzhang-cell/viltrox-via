@@ -9,23 +9,19 @@ _COMPONENTS_DIR = (
     Path(__file__).resolve().parents[1]
     / "frontend" / "src" / "components" / "vkpi" / "v615-replica" / "components"
 )
-SMART_PANEL = _COMPONENTS_DIR / "SmartKolInputPanel.tsx"
-# 重构后纯函数簇分三处:terminalSessionStatus 在 helpers.ts;isSearchSessionTerminal +
-# 会话派生器在 Sections.tsx;轮询调用在 tsx。契约测试读全三份源,验定义+调用契约不破。
-SMART_PANEL_HELPERS = _COMPONENTS_DIR / "SmartKolInputPanel.helpers.ts"
-SMART_PANEL_SECTIONS = _COMPONENTS_DIR / "SmartKolInputPanel.Sections.tsx"
+# 瘦身重构把 SmartKolInputPanel 的纯函数/派生器/子组件拆到多个 sibling
+# (.helpers.ts / .Sections.tsx / .derivers.ts …,terminalSessionStatus / isSearchSessionTerminal
+# 等定义会随拆分迁移)。契约测试 glob 全部 SmartKolInputPanel* 源拼成一份,验定义+调用契约不破——
+# 无论以后再怎么拆,只要这些名字与调用仍在该组件家族内即通过。
+SMART_PANEL_SIBLINGS = sorted(_COMPONENTS_DIR.glob("SmartKolInputPanel*.ts")) + sorted(
+    _COMPONENTS_DIR.glob("SmartKolInputPanel*.tsx")
+)
 
 
 class SmartKolInputPollingContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.source = (
-            SMART_PANEL.read_text(encoding="utf-8")
-            + "\n"
-            + SMART_PANEL_HELPERS.read_text(encoding="utf-8")
-            + "\n"
-            + SMART_PANEL_SECTIONS.read_text(encoding="utf-8")
-        )
+        cls.source = "\n".join(p.read_text(encoding="utf-8") for p in SMART_PANEL_SIBLINGS)
 
     def test_terminal_statuses_include_partial_and_failed_states(self) -> None:
         match = re.search(r"(?:export )?function terminalSessionStatus\(value: unknown\): boolean \{(?P<body>.*?)\n\}", self.source, re.S)
