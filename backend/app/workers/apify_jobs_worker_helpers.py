@@ -275,3 +275,33 @@ def _final_v1_payload(result: Any) -> dict[str, Any]:
     if _as_dict(nested.get("layer1_visual_content")) or _as_dict(nested.get("layer6_flags_and_scores")):
         return nested
     return root
+
+
+# 通用值工具(从 apify_jobs_worker.py 搬来,与 _int_or_none 同款;worker re-import 回去)。
+def _truthy(value):
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _rate(numerator: Any, denominator: Any) -> float | None:
+    top = _int_or_none(numerator)
+    bottom = _int_or_none(denominator)
+    if top is None or bottom is None or bottom <= 0:
+        return None
+    return round(top / bottom, 6)
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _iso_or_none(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
