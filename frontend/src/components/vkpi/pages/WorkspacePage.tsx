@@ -24,6 +24,7 @@ const IndustryBoardPage = lazy(() => import('./IndustryBoardPage').then((module)
 const DataExportPage = lazy(() => import('./DataExportPage').then((module) => ({ default: module.DataExportPage })));
 const LearningPage = lazy(() => import('./LearningPage').then((module) => ({ default: module.LearningPage })));
 const CapabilitiesPage = lazy(() => import('./CapabilitiesPage').then((module) => ({ default: module.CapabilitiesPage })));
+const SkillStudioPage = lazy(() => import('./SkillStudioPage').then((module) => ({ default: module.SkillStudioPage })));
 const DiscoveryPage = lazy(() => import('./DiscoveryPage').then((module) => ({ default: module.DiscoveryPage })));
 const DataQualityPage = lazy(() => import('./DataQualityPage').then((module) => ({ default: module.DataQualityPage })));
 const DiscoverPage = lazy(() => import('./DiscoverPage').then((module) => ({ default: module.DiscoverPage })));
@@ -152,6 +153,7 @@ export function WorkspacePage(props: WorkspacePageProps) {
 
   let page = <SettingsPage {...props} />;
   if (props.page === 'agents') page = <AgentsPage {...props} />;
+  if (props.page === 'skillStudio') page = <SkillStudioPage {...props} />;
   if (props.page === 'intelligenceCenter') page = <IntelligenceCenterPage {...props} />;
   if (props.page === 'kolPoolV2') {
     page = (

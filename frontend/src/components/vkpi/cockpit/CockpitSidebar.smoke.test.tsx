@@ -26,8 +26,10 @@ const baseProps = {
 describe("CockpitSidebar 员工可见区域过滤", () => {
   beforeEach(() => canViewBoard.mockReset());
 
+  // 注:Agents/Reports 等 v2:true 项被收进默认折叠的「V2」组,缺省态不在 DOM。
+  // 冒烟只断言缺省可见的主导航(primaryItems,非 v2)板块,避免误判 V2 折叠。
   it("成员把某板块设为「无」→ 侧栏不渲染该板块,其余照常", () => {
-    canViewBoard.mockImplementation((key: string) => key !== "shopify" && key !== "agents");
+    canViewBoard.mockImplementation((key: string) => key !== "shopify" && key !== "projects");
     render(React.createElement(CockpitSidebar, baseProps));
 
     expect(screen.getByText("Dashboard")).toBeTruthy();
@@ -35,15 +37,15 @@ describe("CockpitSidebar 员工可见区域过滤", () => {
     expect(screen.getByText("KOL Pool")).toBeTruthy();
     // 被设「无」的两块:不在 DOM
     expect(screen.queryByText("Shopify")).toBeNull();
-    expect(screen.queryByText("Agents")).toBeNull();
+    expect(screen.queryByText("Projects")).toBeNull();
   });
 
-  it("owner / 全可见 → 所有板块都在", () => {
+  it("owner / 全可见 → 所有主导航板块都在", () => {
     canViewBoard.mockReturnValue(true);
     render(React.createElement(CockpitSidebar, baseProps));
 
     expect(screen.getByText("Shopify")).toBeTruthy();
-    expect(screen.getByText("Agents")).toBeTruthy();
+    expect(screen.getByText("Projects")).toBeTruthy();
     expect(screen.getByText("Dashboard")).toBeTruthy();
   });
 });

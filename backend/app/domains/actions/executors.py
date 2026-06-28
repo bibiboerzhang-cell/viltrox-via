@@ -13,6 +13,7 @@ execute_action(action_id, staff) -> {"ok":bool,"outcome":"success|failed|skipped
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from app.core.logging import get_logger
@@ -22,6 +23,11 @@ from app.domains.actions import inbox, validators
 from app.domains.projects import automation_audit
 
 logger = get_logger(__name__)
+
+# skills-wire 开关(默认 OFF):execute_action 成功后是否顺带跑对应 Skill + record_skill_run。
+# 默认关 → execute 返回契约/ledger 零变(测试与既有调用方不受 skill 的 DB 副作用污染);
+# 线上经 env VKPI_SKILLS_AUTORUN=1 开启让 Skill 真自动跑(运行经 /skills/runs 端点 + detail.skill_run 回执可见)。
+_SKILLS_AUTORUN = str(os.environ.get("VKPI_SKILLS_AUTORUN", "")).strip().lower() in ("1", "true", "yes", "on")
 
 _LEDGER = "vkpi_action_execution_ledger"
 
@@ -137,6 +143,13 @@ def _record_execution_feedback(
             staff=staff,
         )
     except Exception:
+        # record_feedback 的 INSERT 失败(如 created_by_staff_id FK 违例)会把请求/线程作用域的
+        # 共享连接标记为 aborted;不 rollback 会让同作用域后续查询全报 "transaction is aborted"
+        # (best-effort 写不该污染主链路)。先回滚清状态再静默吞掉。对齐 record_outcome 的兜底模式。
+        try:
+            get_conn().rollback()
+        except Exception:
+            logger.debug("action_executor.memory_feedback_rollback_skipped", exc_info=True)
         logger.warning(
             "action_executor.memory_feedback_failed",
             extra={"action_id": action.get("id")},
@@ -440,6 +453,120 @@ _DISPATCH = {
 }
 
 
+# ── skills-wire · 收口① 让 Skill 真跑 + 落账(best-effort,绝不阻断主执行) ──────
+# 现状:marketing_brain/skills/*.py 的 run() 写好但无真实调用点,record_skill_run 从没被调。
+# 这里把【至少 2 个 category】的成功执行接到对应 skill.run(record=True):
+#   - kol_profile     → creator_match.run(...)  (用该 KOL 的 primary_topic / 推荐产品线当 product 口径)
+#   - content_candidate → content_score.run(...) (用该内容贴的 evidence_id 当 final_v1 缓存 target_id)
+# 跑一次真 execute 成功后 → vkpi_skill_runs 真多行。
+# 铁律:model_fn 永远 None(走规则,绝不烧真 LLM);任何异常吞掉只 debug,不影响 execute_action 返回。
+
+def _kol_product_query(kol_pool_id: int) -> tuple[str, str]:
+    """从 vkpi_kol_pool 取一个「产品/选题」口径喂 creator_match。返回 (product_query, country)。
+
+    优先 recommended_product_lines_json 第一项 → 其次 primary_topic → 兜底 handle/display_name。
+    只读,绝不触 viltrox_fit_score。取不到任何信号则返回空串(skill 自会判 error,仍落一行账本)。
+    """
+    try:
+        row = get_conn().execute(
+            "SELECT primary_topic, recommended_product_lines_json, handle, display_name, country "
+            "FROM vkpi_kol_pool WHERE id = ?",
+            (int(kol_pool_id),),
+        ).fetchone()
+    except Exception:
+        return "", ""
+    if not row:
+        return "", ""
+    d = dict(row)
+    product = ""
+    raw_lines = d.get("recommended_product_lines_json")
+    try:
+        lines = raw_lines if isinstance(raw_lines, list) else (json.loads(raw_lines) if raw_lines else [])
+    except Exception:
+        lines = []
+    if isinstance(lines, list) and lines:
+        first = lines[0]
+        product = str(first.get("name") if isinstance(first, dict) else first or "").strip()
+    if not product:
+        product = str(d.get("primary_topic") or "").strip()
+    if not product:
+        product = str(d.get("handle") or d.get("display_name") or "").strip()
+    return product, str(d.get("country") or "").strip()
+
+
+def _evidence_id_for_post(post_id: int) -> str:
+    """从 vkpi_project_content_posts 取 evidence_id(content_score 用它定位 final_v1 缓存行)。"""
+    try:
+        row = get_conn().execute(
+            "SELECT evidence_id FROM vkpi_project_content_posts WHERE id = ?",
+            (int(post_id),),
+        ).fetchone()
+    except Exception:
+        return ""
+    if not row:
+        return ""
+    ev = dict(row).get("evidence_id")
+    return str(ev).strip() if ev not in (None, "") else ""
+
+
+def _maybe_run_skill(action: dict[str, Any], detail: dict[str, Any] | None) -> dict[str, Any] | None:
+    """成功执行后顺带跑对应 skill 并 record_skill_run(best-effort)。返回 skill 摘要供回执,失败返 None。
+
+    绝不烧真 LLM(model_fn=None);任何异常吞掉(只 debug),绝不影响 execute_action 主返回。
+    """
+    category = str(action.get("category") or "")
+    try:
+        if category == "kol_profile":
+            kol_pool_id = _entity_id_int(action)
+            if not kol_pool_id:
+                return None
+            product, country = _kol_product_query(kol_pool_id)
+            if not product:
+                return None
+            from app.domains.marketing_brain.skills import creator_match
+
+            out = creator_match.run(
+                {"product": product, "market": country, "limit": 10},
+                model_fn=None,
+                record=True,
+            )
+            return {
+                "skill": "creator_match",
+                "recorded": True,
+                "recommendations": len(out.get("recommendations") or []),
+                "product_query": product,
+            }
+        if category == "content_candidate":
+            payload = action.get("payload_json") if isinstance(action.get("payload_json"), dict) else {}
+            try:
+                post_id = int(payload.get("post_id"))
+            except (TypeError, ValueError):
+                post_id = 0
+            if not post_id:
+                return None
+            evidence_id = _evidence_id_for_post(post_id)
+            if not evidence_id:
+                return None
+            from app.domains.marketing_brain.skills import content_score
+
+            out = content_score.run(
+                {"analysis_cache_ref": {"target_id": evidence_id}},
+                model_fn=None,
+                record=True,
+            )
+            return {
+                "skill": "content_score",
+                "recorded": True,
+                "skill_status": out.get("status"),
+                "target_id": evidence_id,
+            }
+    except Exception:
+        # best-effort:skill 跑挂 / 账本落不进绝不拖垮主执行。
+        logger.debug("action_executor.skill_wire_failed", extra={"action_id": action.get("id"), "category": category}, exc_info=True)
+        return None
+    return None
+
+
 def execute_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     """执行一条已审批动作。双闸守门;任何异常 → outcome='failed' 不抛。"""
     # 1. scope 收口取 action(取不到/越权 → not_found)。
@@ -510,6 +637,13 @@ def execute_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[
         # R8:成功执行 → 写回 vkpi_memory_feedback 埋种(②学习闭环);best-effort,不阻断返回。
         _record_execution_feedback(action, staff, outcome="success", detail=detail)
         _record_outcome_eval(action, outcome="success")  # B5/H4 结果回写 → 推荐权重回流
+        # skills-wire(opt-in,默认 OFF 见 _SKILLS_AUTORUN):成功后顺带跑对应 Skill + record_skill_run
+        # (best-effort,不烧真 LLM)。默认关 → execute 返回/ledger 零变,不污染既有测试与调用方;
+        # 开启后回执进 detail.skill_run,运行另经 /skills/runs 端点可见。
+        if _SKILLS_AUTORUN:
+            skill_summary = _maybe_run_skill(action, detail)
+            if skill_summary:
+                detail = {**detail, "skill_run": skill_summary}
         return _result(ok=True, outcome="success", category=category, ledger_id=lid, detail=detail)
     if outcome == "failed":
         inbox.set_status(action_id, "failed")

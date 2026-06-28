@@ -29,6 +29,7 @@ export const MANAGER_NAV_ITEMS: VkpiNavItem[] = [
   { key: 'learning', label: '学习闭环', icon: 'nodes' },
   { key: 'dataExport', label: '数据导出', icon: 'report' },
   { key: 'capabilities', label: '能力总览', icon: 'spark' },
+  { key: 'skillStudio', label: 'Skill Studio', icon: 'spark' },
   { key: 'dataQuality', label: '数据质量', icon: 'report' },
   { key: 'audit', label: '审计', icon: 'table' },
   { key: 'reports', label: '报表导出', icon: 'report' },

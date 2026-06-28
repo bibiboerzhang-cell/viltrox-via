@@ -24,6 +24,9 @@ const getKolPoolContentFit = vi.fn();
 const enqueueVideoAnalysis = vi.fn();
 const getKolPoolAccountDossier = vi.fn();
 const enqueueAllKolVideos = vi.fn();
+const getKolCooperation = vi.fn();
+const recordKolCooperation = vi.fn();
+const promoteKolPoolToMain = vi.fn();
 vi.mock("../../../../services/vkpi/kolPool-api", () => ({
   getKolPoolDimensions11: (...a: unknown[]) => getKolPoolDimensions11(...a),
   getKolPoolLlmDeepAnalysis: (...a: unknown[]) => getKolPoolLlmDeepAnalysis(...a),
@@ -31,6 +34,9 @@ vi.mock("../../../../services/vkpi/kolPool-api", () => ({
   enqueueVideoAnalysis: (...a: unknown[]) => enqueueVideoAnalysis(...a),
   getKolPoolAccountDossier: (...a: unknown[]) => getKolPoolAccountDossier(...a),
   enqueueAllKolVideos: (...a: unknown[]) => enqueueAllKolVideos(...a),
+  getKolCooperation: (...a: unknown[]) => getKolCooperation(...a),
+  recordKolCooperation: (...a: unknown[]) => recordKolCooperation(...a),
+  promoteKolPoolToMain: (...a: unknown[]) => promoteKolPoolToMain(...a),
 }));
 
 const getKolMemory = vi.fn();
@@ -47,6 +53,9 @@ beforeEach(() => {
   enqueueVideoAnalysis.mockReset().mockResolvedValue({ status: "queued" });
   getKolPoolAccountDossier.mockReset().mockResolvedValue({ status: "missing" });
   enqueueAllKolVideos.mockReset().mockResolvedValue({ status: "queued" });
+  getKolCooperation.mockReset().mockResolvedValue(null);
+  recordKolCooperation.mockReset().mockResolvedValue({ status: "" });
+  promoteKolPoolToMain.mockReset().mockResolvedValue({ ok: true });
   getKolMemory.mockReset().mockResolvedValue(null);
 });
 
